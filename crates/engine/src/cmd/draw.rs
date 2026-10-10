@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use super::helpers::*;
 use super::machines::number;
+use super::pline_opts::{Outcome, PlineAsk};
 use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step, snap};
 
@@ -64,7 +65,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("ray", "Ray", run_ray)
             .menu(&["Draw", "Ray"])
             .params("{base, through}")
-            .interactive(|_| Ok(Box::new(XlineM { ray: true, base: None, fixed_angle: None }))),
+            .interactive(|_| Ok(Box::new(RayM::default()))),
         CommandSpec::new("spline", "Spline", run_spline)
             .menu(&["Draw", "Spline", "Fit Points"])
             .alias(&["spl"])
@@ -477,6 +478,8 @@ struct PlineM {
     asking_width: u8,
     /// The widths are being asked as half-widths (centre line to edge).
     half: bool,
+    /// An option asking further questions (arc mode's Angle, CEnter…, line mode's Length).
+    ask: Option<PlineAsk>,
 }
 
 impl PlineM {
@@ -519,11 +522,11 @@ impl PlineM {
         }
         Ok(())
     }
-    /// Bulge for a tangent-continuing arc from the last vertex to `p`.
-    fn tangent_bulge(&self, p: Vec2) -> f64 {
+    /// The direction the polyline runs in at its last vertex (+X before the second vertex).
+    fn tangent(&self) -> Vec2 {
         let n = self.verts.len();
-        let Some(last) = self.verts.last() else { return 0.0 };
-        let dir = if n >= 2 {
+        let Some(last) = self.verts.last() else { return Vec2::X };
+        if n >= 2 {
             let prev = self.verts.get(n - 2).copied().unwrap_or_default();
             match bulge_to_arc(prev.p, last.p, prev.bulge) {
                 Some((a, ccw)) => {
@@ -534,7 +537,12 @@ impl PlineM {
             }
         } else {
             Vec2::X
-        };
+        }
+    }
+    /// Bulge for a tangent-continuing arc from the last vertex to `p`.
+    fn tangent_bulge(&self, p: Vec2) -> f64 {
+        let Some(last) = self.verts.last() else { return 0.0 };
+        let dir = self.tangent();
         let chord = p - last.p;
         // Included angle = 2 × angle between tangent and chord.
         let ang = dir.cross(chord).atan2(dir.dot(chord));
@@ -546,7 +554,7 @@ impl Interactive for PlineM {
     fn name(&self) -> &'static str {
         "PLINE"
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
+    fn prompt(&self, s: &Session) -> Prompt {
         if self.asking_width > 0 {
             let unit = if self.half { "half-width" } else { "width" };
             let (which, w) = if self.asking_width == 1 { ("starting", self.start_w) } else { ("ending", self.end_w) };
@@ -554,6 +562,9 @@ impl Interactive for PlineM {
             return Prompt::new(format!("Specify {which} {unit}"), Accept::NUMBER).default(format!("{shown:.4}"));
         }
         let base = self.verts.last().map(|v| v.p);
+        if let (Some(a), Some(st)) = (self.ask, base) {
+            return a.prompt(st, self.tangent(), s);
+        }
         match (self.verts.len(), self.arc_mode) {
             (0, _) => Prompt::new("Specify start point", Accept::POINT),
             (n, false) => {
@@ -589,6 +600,22 @@ impl Interactive for PlineM {
                 self.end_w = self.start_w;
             }
             self.asking_width = if self.asking_width == 1 { 2 } else { 0 };
+            return Ok(Step::Continue);
+        }
+        if let (Some(a), Some(st)) = (self.ask, self.verts.last().map(|v| v.p)) {
+            match a.input(s, i, st, self.tangent())? {
+                Outcome::Ask(next) => self.ask = Some(next),
+                Outcome::Back => self.ask = None,
+                Outcome::Segment(end, bulge) => {
+                    self.ask = None;
+                    self.begin_segment();
+                    if let Some(last) = self.verts.last_mut() {
+                        last.bulge = bulge;
+                    }
+                    self.verts.push(PolyVertex::new(end));
+                    self.sync(s, false)?;
+                }
+            }
             return Ok(Step::Continue);
         }
         match i {
@@ -644,8 +671,11 @@ impl Interactive for PlineM {
                     self.asking_width = 1;
                     Ok(Step::Continue)
                 }
-                _ => {
-                    s.echo(format!("{k}: not available yet"));
+                k => {
+                    match PlineAsk::from_keyword(k, self.arc_mode) {
+                        Some(a) if !self.verts.is_empty() => self.ask = Some(a),
+                        _ => return Err(crate::EngineError::Other("Point or option keyword required.".into())),
+                    }
                     Ok(Step::Continue)
                 }
             },
@@ -655,6 +685,12 @@ impl Interactive for PlineM {
     }
     fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
         let Some(last) = self.verts.last() else { return Vec::new() };
+        if let Some(a) = self.ask {
+            return a
+                .preview(last.p, self.tangent(), c)
+                .map(|(e, b)| vec![lwpoly(vec![PolyVertex::with_bulge(last.p, b), PolyVertex::new(e)], false)])
+                .unwrap_or_default();
+        }
         if self.arc_mode {
             let b = self.tangent_bulge(c);
             vec![lwpoly(vec![PolyVertex::with_bulge(last.p, b), PolyVertex::new(c)], false)]
@@ -1098,45 +1134,31 @@ impl Interactive for PointM {
     }
 }
 
-struct XlineM {
-    ray: bool,
+/// RAY: a start point, then through points until Enter (XLINE is `draw2::XlineM2`).
+#[derive(Default)]
+struct RayM {
     base: Option<Vec2>,
-    fixed_angle: Option<f64>,
 }
 
-impl Interactive for XlineM {
+impl Interactive for RayM {
     fn name(&self) -> &'static str {
-        if self.ray { "RAY" } else { "XLINE" }
+        "RAY"
     }
     fn prompt(&self, _s: &Session) -> Prompt {
-        match (self.base, self.ray) {
-            (None, false) => Prompt::new("Specify a point", Accept::POINT).kw(&["Hor", "Ver", "Ang", "Bisect", "Offset"]),
-            (None, true) => Prompt::new("Specify start point", Accept::POINT),
-            (Some(b), _) => Prompt::new("Specify through point", Accept::POINT).base(b),
+        match self.base {
+            None => Prompt::new("Specify start point", Accept::POINT),
+            Some(b) => Prompt::new("Specify through point", Accept::POINT).base(b),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         match i {
-            Input::Keyword(k) => {
-                match k.as_str() {
-                    "Hor" => self.fixed_angle = Some(0.0),
-                    "Ver" => self.fixed_angle = Some(std::f64::consts::FRAC_PI_2),
-                    _ => s.echo(format!("{k}: not available yet")),
-                }
-                Ok(Step::Continue)
-            }
             Input::Point(p) => {
-                if let Some(a) = self.fixed_angle {
-                    s.add_entity(EntityKind::XLine(RayLine { base: v3(p), dir: v3(Vec2::from_angle(a)) }))?;
-                    return Ok(Step::Continue);
-                }
                 match self.base {
                     None => self.base = Some(p),
                     Some(b) => {
                         let d = (p - b).normalized();
                         if d != Vec2::ZERO {
-                            let rl = RayLine { base: v3(b), dir: v3(d) };
-                            s.add_entity(if self.ray { EntityKind::Ray(rl) } else { EntityKind::XLine(rl) })?;
+                            s.add_entity(EntityKind::Ray(RayLine { base: v3(b), dir: v3(d) }))?;
                         }
                     }
                 }
@@ -1147,14 +1169,8 @@ impl Interactive for XlineM {
         }
     }
     fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
-        if let Some(a) = self.fixed_angle {
-            return vec![EntityKind::XLine(RayLine { base: v3(c), dir: v3(Vec2::from_angle(a)) })];
-        }
         match self.base {
-            Some(b) if !b.near(c, 1e-12) => {
-                let rl = RayLine { base: v3(b), dir: v3((c - b).normalized()) };
-                vec![if self.ray { EntityKind::Ray(rl) } else { EntityKind::XLine(rl) }]
-            }
+            Some(b) if !b.near(c, 1e-12) => vec![EntityKind::Ray(RayLine { base: v3(b), dir: v3((c - b).normalized()) })],
             _ => Vec::new(),
         }
     }

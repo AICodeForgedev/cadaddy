@@ -17,6 +17,7 @@ mod layer;
 mod layout;
 mod modify;
 mod modify2;
+mod pline_opts;
 mod props;
 mod qselect;
 mod settings;

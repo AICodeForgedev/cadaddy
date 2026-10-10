@@ -1294,15 +1294,20 @@ fn add_xline(s: &mut Session, base: Vec2, dir: Vec2) -> Result<Handle> {
     s.add_entity(EntityKind::XLine(RayLine { base: v3(base), dir: v3(d) }))
 }
 
-/// A line-like object for XLINE Offset/Reference: (base, direction).
-fn linear_of(s: &Session, h: Handle) -> Result<(Vec2, Vec2)> {
+/// A line-like object for XLINE Offset/Reference: (base, direction). For a polyline, the
+/// segment nearest `pick` (the first without one), which must be straight.
+fn linear_of(s: &Session, h: Handle, pick: Option<Vec2>) -> Result<(Vec2, Vec2)> {
     let e = curves::entity(s, h)?;
     match &e.kind {
         EntityKind::Line(l) => Ok((l.a.xy(), (l.b.xy() - l.a.xy()).normalized())),
         EntityKind::XLine(r) | EntityKind::Ray(r) => Ok((r.base.xy(), r.dir.xy().normalized())),
         EntityKind::LwPolyline(p) => {
             let segs = Polyline { vertices: p.vertices.clone(), closed: p.closed }.segments();
-            match segs.first() {
+            let seg = match pick {
+                Some(q) => segs.iter().min_by(|a, b| a.closest(q).dist(q).total_cmp(&b.closest(q).dist(q))),
+                None => segs.first(),
+            };
+            match seg {
                 Some(cadcraft_geom::Segment::Line(l)) => Ok((l.a, l.dir())),
                 _ => Err(other("Select a line object.")),
             }
@@ -1333,7 +1338,7 @@ pub(crate) fn run_xline2(s: &mut Session, p: &Value) -> Result<Value> {
         return added(add_xline(s, v, d)?);
     }
     if let Some(h) = curves::handle_param(p, "handle") {
-        let (base, dir) = linear_of(s, h)?;
+        let (base, dir) = linear_of(s, h, None)?;
         let (nb, nd) = if let Some(t) = point_param(p, "through") {
             (t, dir)
         } else {
@@ -1458,7 +1463,7 @@ impl Interactive for XlineM2 {
             }
             (XMode::RefSelect, Input::Point(p)) => {
                 let h = curves::pick_at(s, p).ok_or_else(|| other("*Invalid selection*"))?;
-                let (_, d) = linear_of(s, h)?;
+                let (_, d) = linear_of(s, h, Some(p))?;
                 self.mode = XMode::RefAngle(d.angle());
                 Ok(Step::Continue)
             }
@@ -1491,7 +1496,7 @@ impl Interactive for XlineM2 {
             }
             (XMode::OffSelect, Input::Point(p)) => {
                 let h = curves::pick_at(s, p).ok_or_else(|| other("*Invalid selection*"))?;
-                self.line = Some(linear_of(s, h)?);
+                self.line = Some(linear_of(s, h, Some(p))?);
                 self.mode = XMode::OffSide;
                 Ok(Step::Continue)
             }
