@@ -290,11 +290,13 @@ fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str) -> String 
     let mut s = post(&st.post, &main);
     if st.tolerance && !st.limits {
         let tf = NumFormat { decimals: st.tol_decimals, zin: st.tol_zero_suppression, round: 0.0, ..nf.clone() };
+        // DIMPOST's suffix (what follows `<>`, or all of it) also goes on the tolerance values.
+        let suffix = st.post.split_once("<>").map_or(st.post.as_str(), |(_, after)| after);
         if (st.tol_plus - st.tol_minus).abs() < 1e-12 {
-            s += &format!("%%p{}", format_linear(st.tol_plus, &tf).1);
+            s += &format!("%%p{}{suffix}", format_linear(st.tol_plus, &tf).1);
         } else {
-            let plus = format_linear(st.tol_plus, &tf).1;
-            let minus = format_linear(st.tol_minus, &tf).1;
+            let plus = format_linear(st.tol_plus, &tf).1 + suffix;
+            let minus = format_linear(st.tol_minus, &tf).1 + suffix;
             let sign = |x: &str, pos: char| if x.trim_start_matches(['0', '.', ',']).is_empty() { x.to_string() } else { format!("{pos}{x}") };
             let (plus, minus) =
                 (sign(&plus, '+'), if st.tol_minus < 0.0 { format!("+{}", minus.trim_start_matches('-')) } else { sign(&minus, '-') });
