@@ -265,11 +265,23 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             let control = t.pts(10);
             let weights = t.all_f(41);
             let fit = t.pts(11);
-            let mut sp = Spline { degree, knots, control, weights, fit: fit.clone(), closed: t.i(70).unwrap_or(0) & 1 != 0 };
+            let tangent = |c: i32| t.f(c).map(|_| t.p(c).xy());
+            let fit_opts = cadcraft_geom::FitOptions {
+                knots: Default::default(),
+                start_tangent: tangent(12),
+                end_tangent: tangent(13),
+                tolerance: t.fd(44, 0.0),
+            }
+            .sanitized();
+            let closed = t.i(70).unwrap_or(0) & 1 != 0;
+            let mut sp = Spline { degree, knots, control, weights, fit: fit.clone(), closed, fit_opts };
             if !sp.is_valid() && fit.len() >= 2 {
-                sp = Spline::from_fit(&fit, sp.closed);
+                sp = Spline::fit_with(&fit, sp.closed, fit_opts);
             } else if !sp.is_valid() && sp.control.len() >= 2 {
                 sp = Spline::from_control(sp.control.clone(), degree);
+            } else if fit.len() >= 3 {
+                // DXF keeps the knots, not how they were spaced: recover it for later refits.
+                sp.fit_opts.knots = sp.infer_knot_param();
             }
             EntityKind::Spline(sp)
         }

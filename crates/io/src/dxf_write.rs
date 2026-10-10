@@ -496,6 +496,18 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(72, s.knots.len() as i64);
             w.i(73, s.control.len() as i64);
             w.i(74, s.fit.len() as i64);
+            w.f(42, 1e-10);
+            w.f(43, 1e-10);
+            // Fit data: tolerance and end tangents (the knot parametrisation is implied by the knots).
+            if !s.fit.is_empty() {
+                w.f(44, s.fit_opts.tolerance);
+                if let Some(t) = s.fit_opts.start_tangent {
+                    w.p(12, t.to3(0.0));
+                }
+                if let Some(t) = s.fit_opts.end_tangent {
+                    w.p(13, t.to3(0.0));
+                }
+            }
             for k in &s.knots {
                 w.f(40, *k);
             }

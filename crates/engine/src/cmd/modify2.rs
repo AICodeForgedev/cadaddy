@@ -649,7 +649,7 @@ fn spline_close(sp: &Spline) -> Spline {
         return sp.clone();
     }
     let mut out = if sp.fit.len() >= 2 {
-        Spline::from_fit_points_closed(&sp.fit)
+        sp.refit(&sp.fit, true)
     } else {
         let mut c = sp.control.clone();
         c.extend(sp.control.first().copied());
@@ -670,7 +670,7 @@ fn spline_open(sp: &Spline) -> Spline {
         }
         v
     };
-    if sp.fit.len() >= 2 { Spline::from_fit_points(&trim(&sp.fit)) } else { Spline::from_control(trim(&sp.control), sp.degree) }
+    if sp.fit.len() >= 2 { sp.refit(&trim(&sp.fit), false) } else { Spline::from_control(trim(&sp.control), sp.degree) }
 }
 
 pub(crate) fn spline_to_poly(sp: &Spline, precision: usize) -> LwPolyline {
@@ -696,13 +696,13 @@ fn run_splinedit(s: &mut Session, p: &Value) -> Result<Value> {
         "close" => EntityKind::Spline(spline_close(sp)),
         "open" => EntityKind::Spline(spline_open(sp)),
         "reverse" => EntityKind::Spline(curves::reverse_spline(sp)),
-        "purge" => EntityKind::Spline(Spline { fit: Vec::new(), ..sp.clone() }),
+        "purge" => EntityKind::Spline(Spline { fit: Vec::new(), fit_opts: Default::default(), ..sp.clone() }),
         "refit" => {
             let fit = points_param(p, "fit").unwrap_or_else(|| sp.fit.clone());
             if fit.len() < 2 || fit.len() > MAX_GEN {
                 return Err(other("The spline has no fit data; give `fit` points."));
             }
-            EntityKind::Spline(Spline::from_fit(&fit, sp.closed))
+            EntityKind::Spline(sp.refit(&fit, sp.closed))
         }
         "polyline" => EntityKind::LwPolyline(spline_to_poly(sp, p.get("precision").and_then(Value::as_u64).unwrap_or(10) as usize)),
         "move" => {
@@ -712,7 +712,7 @@ fn run_splinedit(s: &mut Session, p: &Value) -> Result<Value> {
             if !n.fit.is_empty() {
                 let f = n.fit.get_mut(i).ok_or_else(|| bad("splinedit", "index out of range"))?;
                 *f = to;
-                n = Spline::from_fit(&n.fit, n.closed);
+                n = n.refit(&n.fit, n.closed);
             } else {
                 let c = n.control.get_mut(i).ok_or_else(|| bad("splinedit", "index out of range"))?;
                 *c = to;

@@ -904,11 +904,7 @@ impl EntityKind {
                 p.const_width *= s;
             }
             EntityKind::Polyline3d(p) => p.points.iter_mut().for_each(t3),
-            EntityKind::Spline(sp) => {
-                for c in sp.control.iter_mut().chain(sp.fit.iter_mut()) {
-                    *c = m.apply(*c);
-                }
-            }
+            EntityKind::Spline(sp) => sp.transform(m),
             EntityKind::Ray(r) | EntityKind::XLine(r) => {
                 t3(&mut r.base);
                 r.dir = m.apply_vec(r.dir.xy()).normalized().to3(0.0);

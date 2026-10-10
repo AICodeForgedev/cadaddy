@@ -5,7 +5,7 @@
 //! undoable and reachable from scripts, the control channel and MCP.
 
 use cadcraft_doc::{DimKind, EntityKind, Handle, LwPolyline};
-use cadcraft_geom::{Arc, EPS, Mat3, Polyline, Spline, Vec2, Vec3, norm_angle};
+use cadcraft_geom::{Arc, EPS, Mat3, Polyline, Vec2, Vec3, norm_angle};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -181,7 +181,7 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
             } else {
                 let mut fit = sp.fit.clone();
                 *fit.get_mut(index)? = to;
-                *sp = Spline::from_fit(&fit, sp.closed);
+                *sp = sp.refit(&fit, sp.closed);
             }
         }
         EntityKind::Ray(r) | EntityKind::XLine(r) => {

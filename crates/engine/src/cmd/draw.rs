@@ -69,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("spline", "Spline", run_spline)
             .menu(&["Draw", "Spline", "Fit Points"])
             .alias(&["spl"])
-            .params("{fit: [[x,y],...]} | {control: [...], degree?}")
+            .params("{fit: [[x,y],...], closed?, knots?: chord|sqrt|uniform, startTangent?, endTangent? ([dx,dy]), tolerance?} | {control: [...], degree?} | {object: handle|true, handles?} (polyline to spline)")
             .interactive(|_| Ok(Box::new(SplineM::default()))),
         CommandSpec::new("donut", "Donut", run_donut)
             .menu(&["Draw", "Donut"])
@@ -255,11 +255,14 @@ fn run_ray(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_spline(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.get("object").is_some() {
+        return super::spline_opts::run_object(s, p);
+    }
     let sp = if let Some(f) = points_param(p, "fit") {
         if distinct_points(&f).len() < 2 {
             return Err(bad("spline", "need 2+ different fit points"));
         }
-        Spline::from_fit_points(&f)
+        Spline::fit_with(&f, bool_or(p, "closed", false), super::spline_opts::json_options(s, p)?)
     } else if let Some(c) = points_param(p, "control") {
         if c.len() < 2 {
             return Err(bad("spline", "need 2+ control points"));
@@ -1190,6 +1193,16 @@ struct SplineM {
     asking_method: bool,
     /// `Method` > `CV` hands over to the control-vertex machine (`spline.cv`).
     delegate: Option<Box<dyn Interactive>>,
+    /// Knots, end tangents and fit tolerance chosen so far.
+    opts: cadcraft_geom::FitOptions,
+    /// An option asking a further question (Knots, Tangency, toLerance, Object).
+    ask: Option<super::spline_opts::SplineAsk>,
+}
+
+impl SplineM {
+    fn make(&self, closed: bool) -> Spline {
+        Spline::fit_with(&self.pts, closed, self.opts)
+    }
 }
 
 impl Interactive for SplineM {
@@ -1197,12 +1210,16 @@ impl Interactive for SplineM {
         "SPLINE"
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
-        s.echo("Current settings: Method=Fit   Knots=Chord");
+        self.opts.knots = super::spline_opts::current_knots(s);
+        s.echo(format!("Current settings: Method=Fit   Knots={}", self.opts.knots.name()));
         Ok(Step::Continue)
     }
     fn prompt(&self, s: &Session) -> Prompt {
         if let Some(d) = &self.delegate {
             return d.prompt(s);
+        }
+        if let Some(a) = &self.ask {
+            return a.prompt(&self.opts, &self.pts);
         }
         if self.asking_method {
             return Prompt::new("Enter spline creation method", super::curves::KW).kw(&["Fit", "CV"]).default("Fit");
@@ -1219,6 +1236,24 @@ impl Interactive for SplineM {
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Some(d) = &mut self.delegate {
             return d.input(s, i);
+        }
+        if let Some(a) = &mut self.ask {
+            use super::spline_opts::Outcome;
+            return match a.input(s, i, &mut self.opts, &self.pts)? {
+                Outcome::Stay => Ok(Step::Continue),
+                Outcome::Back => {
+                    self.ask = None;
+                    Ok(Step::Continue)
+                }
+                Outcome::Finish => {
+                    self.ask = None;
+                    if self.pts.len() >= 2 {
+                        s.add_entity(EntityKind::Spline(self.make(false)))?;
+                    }
+                    Ok(Step::Done)
+                }
+                Outcome::Done => Ok(Step::Done),
+            };
         }
         if self.asking_method {
             match i {
@@ -1249,7 +1284,7 @@ impl Interactive for SplineM {
             }
             Input::Keyword(k) if k == "Close" => {
                 // A smooth closed (periodic) curve, not a repeat of the first point.
-                s.add_entity(EntityKind::Spline(Spline::from_fit_points_closed(&self.pts)))?;
+                s.add_entity(EntityKind::Spline(self.make(true)))?;
                 Ok(Step::Done)
             }
             Input::Keyword(k) if k == "Method" => {
@@ -1257,13 +1292,14 @@ impl Interactive for SplineM {
                 Ok(Step::Continue)
             }
             Input::Keyword(k) => {
-                // Knots, Object, start/end Tangency, toLerance: stay at this prompt.
-                s.echo(format!("{k}: not available yet"));
+                // Knots, Object, start/end Tangency, toLerance ask their own question.
+                self.ask =
+                    Some(super::spline_opts::SplineAsk::from_keyword(&k).ok_or_else(|| crate::EngineError::Other("Invalid option keyword.".into()))?);
                 Ok(Step::Continue)
             }
             Input::Enter => {
                 if self.pts.len() >= 2 {
-                    s.add_entity(EntityKind::Spline(Spline::from_fit_points(&self.pts)))?;
+                    s.add_entity(EntityKind::Spline(self.make(false)))?;
                 }
                 Ok(Step::Done)
             }
@@ -1278,9 +1314,19 @@ impl Interactive for SplineM {
         if self.pts.is_empty() {
             return Vec::new();
         }
+        let mut opts = self.opts;
         let mut pts = self.pts.clone();
-        pts.push(c);
-        vec![EntityKind::Spline(Spline::from_fit_points(&pts))]
+        match self.ask {
+            // Rubber-band the tangent being picked.
+            Some(super::spline_opts::SplineAsk::StartTangent) => opts.start_tangent = self.pts.first().map(|f| c - *f).filter(|d| d.len() > 1e-12),
+            Some(super::spline_opts::SplineAsk::EndTangent) => opts.end_tangent = self.pts.last().map(|l| c - *l).filter(|d| d.len() > 1e-12),
+            Some(_) => {}
+            None => pts.push(c),
+        }
+        if pts.len() < 2 {
+            return Vec::new();
+        }
+        vec![EntityKind::Spline(Spline::fit_with(&pts, false, opts))]
     }
 }
 

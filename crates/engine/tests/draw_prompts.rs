@@ -29,12 +29,9 @@ fn spline_close_makes_a_smooth_periodic_curve() {
 }
 
 #[test]
-fn spline_options_report_and_stay_at_the_prompt() {
+fn spline_rejects_text_and_switches_method() {
     let mut s = Session::new();
-    s.cmdline("spline k o 0,0 t 5,5 l 10,0 xyz").unwrap();
-    for k in ["Knots: not available yet", "Object: not available yet", "start Tangency: not available yet", "toLerance: not available yet"] {
-        assert!(logged(&s, k), "{k}");
-    }
+    s.cmdline("spline 0,0 5,5 10,0 xyz").unwrap();
     assert!(logged(&s, "Point or option keyword required."));
     s.cmdline("").unwrap();
     let EntityKind::Spline(sp) = last(&s) else { panic!("no spline") };
