@@ -61,7 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("pagesetup", "Page Setup Manager...", run_pagesetup)
             .menu(&["File", "Page Setup Manager..."])
             .params(
-                "{layout?: current, paper?: \"A4\"|\"A3\"|\"Letter\"|\"ANSI B\"|…, width?, height? (mm), landscape?, margins?: [l,b,r,t] mm, lineweights?, plotArea?, scale?, scaleToFit?, center?, plotStyleTable?}",
+                "{layout?: current, paper?: \"A4\"|\"A3\"|\"Letter\"|\"ANSI B\"|…, width?, height? (mm), landscape?, margins?: [l,b,r,t] mm, lineweights?, plotArea?, scale?, scaleToFit?, center?, plotStyleTable?: \"monochrome.ctb\"|\"grayscale.ctb\"|\"default.ctb\"|\"None\"|…, displayPlotStyles?: bool}",
             ),
         CommandSpec::new("plot", "Print...", |s, p| run_plot(s, p, "plot"))
             .menu(&["File", "Print..."])
@@ -692,7 +692,20 @@ fn run_viewport_set(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "pagesetup";
-    let keys = ["paper", "width", "height", "landscape", "margins", "lineweights", "plotArea", "scale", "scaleToFit", "center", "plotStyleTable"];
+    let keys = [
+        "paper",
+        "width",
+        "height",
+        "landscape",
+        "margins",
+        "lineweights",
+        "plotArea",
+        "scale",
+        "scaleToFit",
+        "center",
+        "plotStyleTable",
+        "displayPlotStyles",
+    ];
     let changes = keys.iter().any(|k| p.get(k).is_some());
     let name = match (str_param(p, "layout"), s.space()) {
         (Some(n), _) => Some(layout_name(cmd, s.doc()?, n)?),
@@ -708,6 +721,7 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({
             "layouts": d.layouts.iter().map(|l| json!({"name": l.name, "page": serde_json::to_value(&l.page).unwrap_or(Value::Null)})).collect::<Vec<_>>(),
             "papers": cadcraft_render::PAPER_SIZES.iter().map(|p| p.name).collect::<Vec<_>>(),
+            "plotStyleTables": cadcraft_doc::BUILTIN_PLOT_STYLE_TABLES,
         }));
     };
     let mut page = s.doc()?.layout(&name).map(|l| l.page.clone()).unwrap_or_default();
@@ -762,6 +776,9 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(v) = str_param(p, "plotStyleTable") {
         page.plot_style_table = v.chars().take(260).collect();
+    }
+    if let Some(v) = p.get("displayPlotStyles").and_then(Value::as_bool) {
+        page.show_plot_styles = v;
     }
     if changes {
         if let Some(l) = s.doc_mut()?.layouts.iter_mut().find(|l| l.name == name) {

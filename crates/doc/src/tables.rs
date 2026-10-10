@@ -538,6 +538,9 @@ pub struct PageSetup {
     pub plot_style_table: String,
     pub center: bool,
     pub lineweights: bool,
+    /// Draw the layout on screen (and in its PNG/SVG exports) with its plot style table
+    /// applied ("Display plot styles"; DXF plot layout flag 2).
+    pub show_plot_styles: bool,
 }
 
 impl Default for PageSetup {
@@ -555,6 +558,7 @@ impl Default for PageSetup {
             plot_style_table: String::new(),
             center: false,
             lineweights: true,
+            show_plot_styles: false,
         }
     }
 }

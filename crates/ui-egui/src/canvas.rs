@@ -191,6 +191,7 @@ fn ensure_list(app: &mut CadApp, px: f64) {
         fill: true,
         lineweights: app.session.settings.lwdisplay,
         view_height: st.paper_view().height,
+        plot_style_table: None,
     };
     let opts = cadcraft_render::Options { tolerance: 2f64.powi(band) * 0.5, ..opts };
     let space = st.space.clone();

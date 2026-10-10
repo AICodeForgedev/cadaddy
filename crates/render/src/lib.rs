@@ -14,6 +14,7 @@ mod hatch;
 mod linetype;
 mod linetype_text;
 pub mod paper;
+mod plotstyle;
 mod point;
 pub mod raster;
 pub mod units;
@@ -82,11 +83,13 @@ impl DPrim {
     }
 }
 
-/// A resolved colour: its RGB and whether it is colour 7.
+/// A resolved colour: its RGB, whether it is colour 7, and its index colour (0 = a true
+/// colour), which picks the style of a colour-dependent plot style table.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Ink {
     rgb: Rgb,
     aci7: bool,
+    aci: u8,
 }
 
 /// Resolve `c` like [`Color::resolve`], noting whether it comes out as colour 7.
@@ -98,7 +101,17 @@ fn ink(c: Color, layer: Color, block: Color) -> Ink {
         Color::ByBlock => is7(block),
         c => c == Color::Index(7),
     };
-    Ink { rgb: c.resolve(layer, block), aci7 }
+    let aci = match c {
+        Color::ByLayer => layer,
+        Color::ByBlock => block,
+        c => c,
+    };
+    let aci = match aci {
+        Color::Index(i) => i,
+        Color::True(_) => 0,
+        Color::ByLayer | Color::ByBlock => 7,
+    };
+    Ink { rgb: c.resolve(layer, block), aci7, aci }
 }
 
 impl DisplayList {
@@ -129,11 +142,14 @@ pub struct Options {
     /// Height of the visible area in world units of the space being built. Relative point
     /// sizes (`PDSIZE` <= 0) are a percentage of it; 0 = the height of the space's extents.
     pub view_height: f64,
+    /// Plot style table to draw with. When `None`, [`build`] of a layout whose page setup has
+    /// "Display plot styles" on uses the layout's table; [`build_plot`] uses none.
+    pub plot_style_table: Option<std::sync::Arc<cadcraft_doc::PlotStyleTable>>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights: false, view_height: 0.0 }
+        Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights: false, view_height: 0.0, plot_style_table: None }
     }
 }
 
@@ -172,6 +188,8 @@ struct Builder<'a> {
     opts: &'a Options,
     /// Plotting: skip layers marked "do not plot".
     plotting: bool,
+    /// The plot style table drawn with.
+    styles: Option<&'a plotstyle::Styler>,
 }
 
 /// Upper bound on the block contents drawn per display list (each block reference, MINSERT copy
@@ -181,10 +199,18 @@ struct Builder<'a> {
 pub const MAX_BLOCK_EXPANSION: usize = 2_000_000;
 
 impl Builder<'_> {
+    /// `color` and `lw` as the plot style table prints them.
+    fn styled(&self, color: Ink, lw: f32) -> (Ink, f32) {
+        match self.styles {
+            Some(s) => s.apply(color, lw, self.opts.lineweights),
+            None => (color, lw),
+        }
+    }
     fn polyline(&mut self, ctx: &Ctx, color: Ink, lw: f32, pts: &[Vec2]) {
         if pts.len() < 2 {
             return;
         }
+        let (color, lw) = self.styled(color, lw);
         let start = self.list.verts.len() as u32;
         for p in pts {
             let q = ctx.xf.apply(*p);
@@ -197,6 +223,7 @@ impl Builder<'_> {
         if tris.len() < 3 {
             return;
         }
+        let (color, _) = self.styled(color, 0.0);
         let start = self.list.tris.len() as u32;
         for p in tris {
             let q = ctx.xf.apply(*p);
@@ -226,6 +253,7 @@ impl Builder<'_> {
         }
     }
     fn point(&mut self, ctx: &Ctx, color: Ink, p: Vec2) {
+        let (color, _) = self.styled(color, 0.0);
         let q = ctx.xf.apply(p);
         self.list.bounds.add(q);
         let start = self.list.verts.len() as u32;
@@ -233,6 +261,7 @@ impl Builder<'_> {
         self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw: 0.0, kind: Kind::Point, start, len: 1 });
     }
     fn infinite(&mut self, ctx: &Ctx, color: Ink, base: Vec2, dir: Vec2, ray: bool) {
+        let (color, _) = self.styled(color, 0.0);
         let start = self.list.verts.len() as u32;
         self.list.verts.push(ctx.xf.apply(base));
         self.list.verts.push(ctx.xf.apply_vec(dir).normalized());
@@ -274,7 +303,16 @@ fn top_ctx<'a>(d: &'a Drawing, xf: Mat3, top: Handle, frozen: &'a [String], vp_c
 
 fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> DisplayList {
     let opts = &with_point_view(d, space, opts);
-    let mut b = Builder { list: DisplayList::default(), opts, plotting };
+    let table = opts.plot_style_table.clone().or_else(|| match space {
+        Space::Paper(n) if !plotting => d
+            .layout(n)
+            .filter(|l| l.page.show_plot_styles)
+            .and_then(|l| cadcraft_doc::plot_style_table(d, &l.page.plot_style_table))
+            .map(std::sync::Arc::new),
+        _ => None,
+    });
+    let styler = table.map(|t| plotstyle::Styler::new(d, t));
+    let mut b = Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref() };
     if let Space::Paper(name) = space {
         b.list.sheet = paper::sheet(d, name);
     }
@@ -340,7 +378,7 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     let mhalf = half / s;
     // Model window with slack: entity bounds are approximate (text, dimensions).
     let win = Bounds2::new(vp.view_center - mhalf, vp.view_center + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
-    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting };
+    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, styles: b.styles };
     // PSLTSCALE on: model-space dashes are scaled so they measure the same on paper as in
     // paper space, whatever the viewport scale.
     let lt_factor = if d.header.i64("PSLTSCALE", 1) != 0 { 1.0 / s } else { 1.0 };
@@ -425,7 +463,7 @@ pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents:
     } else {
         opts
     };
-    let mut b = Builder { list: DisplayList::default(), opts, plotting: false };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: None };
     for e in ents {
         entity(&mut b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
     }
@@ -479,6 +517,11 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     if !visible {
         return;
     }
+    // A plot style's linetype replaces the object's.
+    let lt = match b.styles.and_then(|s| s.linetype(rgb)) {
+        Some(over) => over,
+        None => lt,
+    };
     let tol = b.opts.tolerance / ctx.xf.scale_factor().max(1e-12);
     let lw = if b.opts.lineweights { lw } else { 0.0 };
     // Stroke a polyline with the entity's linetype.
@@ -736,7 +779,7 @@ fn mtext_color(c: Option<cadcraft_fonts::MTextColor>, rgb: Ink) -> Ink {
             u8::try_from(i).ok().filter(|i| *i > 0).map(|i| ink(Color::Index(i), Color::Index(7), Color::Index(7))).unwrap_or(rgb)
         }
         Some(cadcraft_fonts::MTextColor::Rgb(v)) => {
-            Ink { rgb: Rgb(((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8), aci7: false }
+            Ink { rgb: Rgb(((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8), aci7: false, aci: 0 }
         }
         None => rgb,
     }

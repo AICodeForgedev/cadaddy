@@ -1686,8 +1686,10 @@ fn page_setup(t: &T) -> PageSetup {
     if let Some(dev) = t.s(2).map(|s| s.trim().to_string()) {
         p.device = if dev.is_empty() || dev.eq_ignore_ascii_case("none_device") { "None".into() } else { dev };
     }
-    // Plot layout flags: 4 centred, 16 standard scale (75 = 0: scaled to fit), 128 lineweights.
+    // Plot layout flags: 2 display plot styles, 4 centred, 16 standard scale (75 = 0: scaled
+    // to fit), 128 lineweights.
     if let Some(flags) = t.i(70) {
+        p.show_plot_styles = flags & 2 != 0;
         p.center = flags & 4 != 0;
         p.lineweights = flags & 128 != 0;
         p.scale_to_fit = flags & 16 != 0 && t.i(75) == Some(0);

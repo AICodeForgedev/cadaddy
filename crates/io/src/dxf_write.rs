@@ -1859,7 +1859,12 @@ pub fn write(d: &Drawing) -> String {
         // per 143 drawing units).
         let scale = if page.scale.is_finite() && page.scale > 0.0 { page.scale } else { 1.0 };
         let standard = page.scale_to_fit || scale == 1.0;
-        let plot_flags = 512 | 32 | if standard { 16 } else { 0 } | if page.lineweights { 128 } else { 0 } | if page.center { 4 } else { 0 };
+        let plot_flags = 512
+            | 32
+            | if standard { 16 } else { 0 }
+            | if page.lineweights { 128 } else { 0 }
+            | if page.center { 4 } else { 0 }
+            | if page.show_plot_styles { 2 } else { 0 };
         let plot_type = match page.plot_area.as_str() {
             "display" => 0,
             "extents" => 1,

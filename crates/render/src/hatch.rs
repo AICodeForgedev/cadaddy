@@ -120,7 +120,9 @@ fn gradient(b: &mut Builder, ctx: &Ctx, g: &Gradient, layer: Color, tris: &[Vec2
 /// `a` blended towards `b` by `t`; colour 7 only when both ends are.
 fn mix(a: Ink, b: Ink, t: f64) -> Ink {
     let l = |x: u8, y: u8| (f64::from(x) + (f64::from(y) - f64::from(x)) * t).round().clamp(0.0, 255.0) as u8;
-    Ink { rgb: Rgb(l(a.rgb.0, b.rgb.0), l(a.rgb.1, b.rgb.1), l(a.rgb.2, b.rgb.2)), aci7: a.aci7 && b.aci7 }
+    // The plot style follows the nearer end's colour.
+    let aci = if t < 0.5 { a.aci } else { b.aci };
+    Ink { rgb: Rgb(l(a.rgb.0, b.rgb.0), l(a.rgb.1, b.rgb.1), l(a.rgb.2, b.rgb.2)), aci7: a.aci7 && b.aci7, aci }
 }
 
 /// Gradient shapes by name (the `INV` forms swap the two colours).

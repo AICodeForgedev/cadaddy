@@ -41,7 +41,7 @@ do them first.
 | F11 | Tables: no cell styles, formulas, data links, table breaking | `cmd/table.rs` | Medium | 10–15 |
 | F12 | Annotative scaling: the flag is stored, nothing scales; no scale list, no "Annotative Object Scale" commands | 4 uncovered menu items | Medium-high in layouts | 10–15 |
 | F13 | Hatch: 23 patterns (AutoCAD ~85; ours must stay original); gradients render as a flat colour; associativity not updated when the boundary moves; origin always 0,0; island style always normal; no gap tolerance, separate hatches, hatch dialog, MPolygon | `doc/src/library.rs`, `render/lib.rs:430-437`, `cmd/hatch.rs:198,201` | Medium | 15–25 |
-| F14 | **[alpha blocker]** Plot styles (CTB/STB) not applied; no plot preview, plotter devices, PUBLISH/batch plot; Print opens no plot dialog (#160, PR #200) | `palettes.rs:666` | High for sheet output | 25–35 |
+| F14 | **[alpha blocker]** Named plot styles (STB, PlotStyle property) and plot style table editing/files missing (colour-dependent tables apply to PDF plots and "Display plot styles" layouts since #410: built-in `default`/`monochrome`/`grayscale.ctb`); no plot preview, plotter devices, PUBLISH/batch plot; Print opens no plot dialog (#160, PR #200) | `palettes.rs:666` | High for sheet output | 20–30 |
 | F15 | Viewports: no polygonal, object or clipped viewports; no viewport scale control in the UI | menu items uncovered | Medium | 6–10 |
 | F16 | Groups (GROUP, GROUPEDIT, PICKSTYLE) missing; ACAD_GROUP written empty | `dxf_write.rs` | Medium | 4–6 |
 | F17 | Attributes: BATTMAN lists only; no ATTSYNC, EATTEXT, global ATTEDIT | `blocks.rs:300` | Medium | 6–10 |
