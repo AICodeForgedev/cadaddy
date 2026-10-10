@@ -460,6 +460,26 @@ pub struct MLeader {
     pub style: String,
     #[serde(default = "one")]
     pub arrow_size: f64,
+    /// Leader lines are smooth curves through their points (leader type Spline). An empty
+    /// `leaders` is a multileader without a leader line (leader type None).
+    #[serde(default)]
+    pub spline: bool,
+    /// Block content in place of the text: a block reference placed at the landing.
+    #[serde(default)]
+    pub block: Option<Insert>,
+}
+
+impl MLeader {
+    /// Each leader line as drawn: through its points to the landing, smoothed for spline leaders.
+    pub fn leader_paths(&self) -> Vec<Vec<Vec2>> {
+        self.leaders
+            .iter()
+            .map(|l| {
+                let pts: Vec<Vec2> = l.iter().map(|v| v.xy()).chain(std::iter::once(self.landing.xy())).collect();
+                if self.spline && pts.len() > 2 { GSpline::from_fit_points(&pts).tessellate(1e-3) } else { pts }
+            })
+            .collect()
+    }
 }
 /// A hatch boundary loop: closed polyline with bulges.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -831,6 +851,7 @@ impl EntityKind {
                 .leaders
                 .iter()
                 .flat_map(|l| l.windows(2).filter_map(|w| Some(Prim::Seg(Segment::Line(GLine::new(w.first()?.xy(), w.get(1)?.xy()))))))
+                .chain(m.block.iter().map(|b| Prim::Point(b.insert.xy())))
                 .collect(),
             EntityKind::Image(i) => vec![Prim::Point(i.insert.xy())],
             EntityKind::Table(t) => vec![Prim::Point(t.insert.xy())],
@@ -951,6 +972,14 @@ impl EntityKind {
                 if let Some(t) = &mut ml.text {
                     t3(&mut t.insert);
                     t.height *= s;
+                }
+                if let Some(b) = &mut ml.block {
+                    // Transformed exactly like a block reference.
+                    let mut k = EntityKind::Insert(b.clone());
+                    k.transform(m);
+                    if let EntityKind::Insert(nb) = k {
+                        *b = nb;
+                    }
                 }
             }
             EntityKind::Hatch(h) => {

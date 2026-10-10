@@ -745,7 +745,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 let le = Entity {
                     handle: Handle(u64::from_str_radix(&w.h(), 16).unwrap_or(0)),
                     common: e.common.clone(),
-                    kind: EntityKind::Leader(cadcraft_doc::Leader { vertices, arrow: true, spline: false, style: m.style.clone() }),
+                    kind: EntityKind::Leader(cadcraft_doc::Leader { vertices, arrow: true, spline: m.spline, style: m.style.clone() }),
                 };
                 entity(w, d, &le, owner, paper, cx);
             }
@@ -756,6 +756,15 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     kind: EntityKind::MText(t.clone()),
                 };
                 entity(w, d, &te, owner, paper, cx);
+            }
+            // Block content: a plain INSERT of the block.
+            if let Some(ins) = &m.block {
+                let ie = Entity {
+                    handle: Handle(u64::from_str_radix(&w.h(), 16).unwrap_or(0)),
+                    common: e.common.clone(),
+                    kind: EntityKind::Insert(ins.clone()),
+                };
+                entity(w, d, &ie, owner, paper, cx);
             }
         }
         EntityKind::Leader(l) => {

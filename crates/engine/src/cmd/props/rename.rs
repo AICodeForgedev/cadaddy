@@ -54,11 +54,15 @@ pub(super) fn block(s: &mut Session, from: &str, to: &str) -> Result<()> {
     let mut b = d.blocks.remove(&key).ok_or_else(|| bad("rename", "no such block"))?;
     Arc::make_mut(&mut b).name = to.clone();
     d.blocks.insert(to.clone(), b);
-    let uses = |k: &EntityKind| matches!(k, EntityKind::Insert(i) if i.block.eq_ignore_ascii_case(&key));
-    let fix = |k: &mut EntityKind| {
-        if let EntityKind::Insert(i) = k {
-            i.block = to.clone();
-        }
+    let uses = |k: &EntityKind| match k {
+        EntityKind::Insert(i) => i.block.eq_ignore_ascii_case(&key),
+        EntityKind::MLeader(m) => m.block.as_ref().is_some_and(|b| b.block.eq_ignore_ascii_case(&key)),
+        _ => false,
+    };
+    let fix = |k: &mut EntityKind| match k {
+        EntityKind::Insert(i) => i.block = to.clone(),
+        EntityKind::MLeader(m) => m.block.iter_mut().for_each(|b| b.block = to.clone()),
+        _ => {}
     };
     repoint(d, &uses, &fix)?;
     if d.header.str("INSNAME", "").eq_ignore_ascii_case(&key) {

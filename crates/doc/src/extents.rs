@@ -151,6 +151,10 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
             if let Some(t) = &m.text {
                 b.add(t.insert.xy());
             }
+            if let Some(ins) = &m.block {
+                let be = Entity { handle: e.handle, common: e.common.clone(), kind: EntityKind::Insert(ins.clone()) };
+                b = b.union(&bounds_in(d, &be, depth, blocks));
+            }
             b
         }
         EntityKind::Table(t) => {

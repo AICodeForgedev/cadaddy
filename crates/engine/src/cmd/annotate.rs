@@ -68,7 +68,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("mleader", "Multileader", run_mleader)
             .menu(&["Dimension", "Multileader"])
             .alias(&["mld"])
-            .params("{points: [[arrow], ..., [landing]], text}")
+            .params("{points: [[arrow], ..., [landing]] ([location] with leaderType none), text?, leaderType?: straight|spline|none, block?: name, blockAttach?: center|insertion}")
             .interactive(|s| Ok(Box::new(MLeaderM::new(s)))),
         CommandSpec::new("leader", "Leader", run_leader).alias(&["lead"]).params("{points: [[x,y]...], text?}"),
         CommandSpec::new("dimstyle.update", "Update", run_update)
@@ -489,15 +489,20 @@ fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<
         }),
         style: st.name.clone(),
         arrow_size: st.arrow_size * k,
+        spline: false,
+        block: None,
     }))
 }
 
 fn run_mleader(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = points_param(p, "points").ok_or_else(|| bad("mleader", "`points` (arrow … landing) is required"))?;
-    if pts.len() < 2 {
+    let content = super::mleader_content::json_content(s, p)?;
+    // Leader type None places the content at the one point given.
+    if pts.len() < 2 && !(content.leader == crate::LeaderType::None && pts.len() == 1) {
         return Err(bad("mleader", "need an arrowhead and a landing point"));
     }
     let k = mleader_kind(s, &pts, str_param(p, "text").unwrap_or(""), true).ok_or_else(|| bad("mleader", "bad points"))?;
+    let k = super::mleader_content::apply(s, k, &content)?;
     Ok(json!({ "handle": s.add_entity(k)?.hex() }))
 }
 
@@ -1467,6 +1472,8 @@ enum LeaderOpt {
     MaxPoints,
     FirstAngle,
     SecondAngle,
+    BlockName,
+    BlockAttach,
 }
 
 /// Upper bound for MLEADER Maxpoints.
@@ -1486,6 +1493,11 @@ struct MLeaderM {
     angles: [f64; 2],
     landing: bool,
     content: bool,
+    leader_type: crate::LeaderType,
+    /// Block content: the block (`block_name`) instead of text.
+    block: bool,
+    block_name: String,
+    block_center: bool,
 }
 
 impl MLeaderM {
@@ -1503,12 +1515,37 @@ impl MLeaderM {
             angles: o.angles,
             landing: o.landing,
             content: o.content,
+            leader_type: o.leader_type,
+            // Block content needs a block that still exists.
+            block: o.block && s.doc().is_ok_and(|d| d.block(&s.last_used.mleader_block).is_some()),
+            block_name: s.last_used.mleader_block.clone(),
+            block_center: o.block_center,
         }
     }
     /// Keep the order and Options for the next MLEADER.
     fn remember(&self, s: &mut Session) {
-        s.last_used.mleader =
-            MLeaderOptions { order: self.order, max_points: self.max_points, angles: self.angles, landing: self.landing, content: self.content };
+        s.last_used.mleader = MLeaderOptions {
+            order: self.order,
+            max_points: self.max_points,
+            angles: self.angles,
+            landing: self.landing,
+            content: self.content,
+            leader_type: self.leader_type,
+            block: self.block,
+            block_center: self.block_center,
+        };
+        s.last_used.mleader_block = self.block_name.clone();
+    }
+    /// The leader type and block content for `mleader_content::apply`.
+    fn content_spec(&self) -> super::mleader_content::Content {
+        super::mleader_content::Content {
+            leader: self.leader_type,
+            block: (self.content && self.block).then(|| (self.block_name.clone(), self.block_center)),
+        }
+    }
+    /// Leader type None: the one point placed is the content location.
+    fn no_leader(&self) -> bool {
+        self.leader_type == crate::LeaderType::None
     }
     /// The leader from arrowhead to landing, with `extra` placed next.
     fn leader(&self, extra: Option<Vec2>) -> Vec<Vec2> {
@@ -1531,11 +1568,19 @@ impl MLeaderM {
     }
     /// The text is asked now: right after the content location (Content first) or after the leader.
     fn wants_text(&self) -> bool {
-        self.content && self.text.is_none() && (self.leader_done || (self.order == LeaderOrder::Content && self.pts.len() == 1))
+        self.content
+            && !self.block
+            && self.text.is_none()
+            && (self.leader_done || (self.order == LeaderOrder::Content && self.pts.len() == 1 && !self.no_leader()))
     }
     fn finish(&self, s: &mut Session) -> Result<Step> {
+        if self.no_leader() && !self.content {
+            s.echo("A multileader needs a leader line or content; nothing was drawn.");
+            return Ok(Step::Cancel);
+        }
         let text = self.text.clone().unwrap_or_default();
         let k = mleader_kind(s, &self.leader(None), &text, self.landing).ok_or_else(|| EngineError::Other("bad leader".into()))?;
+        let k = super::mleader_content::apply(s, k, &self.content_spec())?;
         s.add_entity(k)?;
         Ok(Step::Done)
     }
@@ -1551,6 +1596,10 @@ impl MLeaderM {
             LeaderOpt::MaxPoints => Prompt::new("Enter the maximum points for leader line", Accept::NUMBER),
             LeaderOpt::FirstAngle => Prompt::new("Enter first angle constraint", Accept::NUMBER),
             LeaderOpt::SecondAngle => Prompt::new("Enter second angle constraint", Accept::NUMBER),
+            LeaderOpt::BlockName => Prompt::new("Enter block name", kw),
+            LeaderOpt::BlockAttach => {
+                Prompt::new("Specify block attachment", kw).kw(&["Center extents", "Insertion point"]).default("Center extents")
+            }
         }
     }
     /// One answer at the Options prompts; Enter keeps the current value.
@@ -1568,11 +1617,11 @@ impl MLeaderM {
             },
             (Menu, Input::Enter) => None,
             (LeaderType, Input::Keyword(k)) => {
-                match k.as_str() {
-                    "sPline" => s.echo("Spline leaders are not available yet; the leader stays straight."),
-                    "None" => s.echo("Multileaders without a leader line are not available yet."),
-                    _ => {}
-                }
+                self.leader_type = match k.as_str() {
+                    "sPline" => crate::LeaderType::Spline,
+                    "None" => crate::LeaderType::None,
+                    _ => crate::LeaderType::Straight,
+                };
                 Some(Menu)
             }
             (Landing, Input::Keyword(k)) => {
@@ -1580,11 +1629,34 @@ impl MLeaderM {
                 Some(Menu)
             }
             (ContentType, Input::Keyword(k)) => {
-                match k.as_str() {
-                    "Block" => s.echo("Block content is not available yet; the content stays multiline text."),
-                    "None" => self.content = false,
-                    _ => self.content = true,
+                self.content = k != "None";
+                self.block = false;
+                // Block content asks which block, then how it attaches.
+                if k == "Block" { Some(BlockName) } else { Some(Menu) }
+            }
+            (BlockName, Input::Text(t)) => match super::mleader_content::block_name(s, &t) {
+                Ok(n) => {
+                    self.block_name = n;
+                    self.block = true;
+                    Some(BlockAttach)
                 }
+                Err(e) => {
+                    s.echo(e.to_string());
+                    Some(BlockName)
+                }
+            },
+            (BlockName, Input::Enter) => {
+                // Enter keeps the block chosen before, if there is one.
+                if super::mleader_content::block_name(s, &self.block_name).is_ok() {
+                    self.block = true;
+                    Some(BlockAttach)
+                } else {
+                    s.echo("Requires the name of a block defined in the drawing.");
+                    Some(BlockName)
+                }
+            }
+            (BlockAttach, Input::Keyword(k)) => {
+                self.block_center = k == "Center extents";
                 Some(Menu)
             }
             (MaxPoints, Input::Text(t)) => match t.trim().parse::<usize>() {
@@ -1607,7 +1679,7 @@ impl MLeaderM {
                     Some(o)
                 }
             },
-            (Menu | LeaderType | Landing | ContentType, Input::Text(_)) => {
+            (Menu | LeaderType | Landing | ContentType | BlockAttach, Input::Text(_)) => {
                 s.echo("Invalid option keyword.");
                 Some(o)
             }
@@ -1627,6 +1699,10 @@ impl Interactive for MLeaderM {
         }
         if self.wants_text() {
             return Prompt::new("Enter leader text", Accept::TEXT);
+        }
+        if self.no_leader() && self.pts.is_empty() {
+            let what = if self.content && self.block { "Specify location of the block" } else { "Specify location of the text" };
+            return Prompt::new(what, Accept::POINT).kw(&["Options"]).default("Options");
         }
         let last = self.pts.len() + 1 >= self.max_points;
         match (self.pts.last(), self.order) {
@@ -1658,7 +1734,7 @@ impl Interactive for MLeaderM {
             Input::Point(p) => {
                 let p = self.constrained(p);
                 self.pts.push(p);
-                if self.pts.len() >= self.max_points {
+                if self.pts.len() >= self.max_points || self.no_leader() {
                     self.leader_done = true;
                 }
             }
@@ -1684,7 +1760,10 @@ impl Interactive for MLeaderM {
             return Vec::new();
         }
         let text = self.text.as_deref().unwrap_or("");
-        mleader_kind(s, &self.leader(Some(self.constrained(c))), text, self.landing).into_iter().collect()
+        mleader_kind(s, &self.leader(Some(self.constrained(c))), text, self.landing)
+            .and_then(|k| super::mleader_content::apply(s, k, &self.content_spec()).ok())
+            .into_iter()
+            .collect()
     }
 }
 

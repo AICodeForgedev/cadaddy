@@ -214,6 +214,7 @@ impl Used {
             EntityKind::MLeader(m) => {
                 self.mleader_styles.insert(up(&m.style));
                 self.text_styles.extend(m.text.iter().map(|t| up(&t.style)));
+                blocks.extend(m.block.as_ref().map(|b| b.block.clone()));
             }
             EntityKind::Table(t) => {
                 self.table_styles.insert(up(&t.style));

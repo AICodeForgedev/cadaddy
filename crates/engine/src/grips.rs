@@ -238,12 +238,16 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
                 }
             }
             if !done {
-                // The landing grip moves the landing and its text.
+                // The landing grip moves the landing and its content.
                 let ld = m.landing.xy() + delta;
                 set_xy(&mut m.landing, ld);
                 if let Some(t) = &mut m.text {
                     let q = t.insert.xy() + delta;
                     set_xy(&mut t.insert, q);
+                }
+                if let Some(b) = &mut m.block {
+                    let q = b.insert.xy() + delta;
+                    set_xy(&mut b.insert, q);
                 }
             }
         }

@@ -1428,6 +1428,7 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
         EntityKind::MLeader(m) => {
             m.leaders.iter_mut().for_each(|l| l.iter_mut().for_each(z));
             z(&mut m.landing);
+            m.block.iter_mut().for_each(|b| z(&mut b.insert));
         }
         EntityKind::Hatch(h) => h.elevation = 0.0,
         EntityKind::Solid(so) | EntityKind::Trace(so) => so.corners.iter_mut().for_each(z),

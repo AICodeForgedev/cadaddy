@@ -674,8 +674,8 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             }
         }
         EntityKind::MLeader(m) => {
-            for l in &m.leaders {
-                let pts: Vec<Vec2> = l.iter().map(|v| v.xy()).chain(std::iter::once(m.landing.xy())).collect();
+            // Straight or spline leader lines; block content draws like a block reference.
+            for pts in m.leader_paths() {
                 b.polyline(ctx, rgb, lw, &pts);
                 if let (Some(a), Some(n)) = (pts.first(), pts.get(1)) {
                     b.tris(ctx, rgb, &dim::arrow(*a, (*a - *n).normalized(), m.arrow_size));
@@ -686,6 +686,14 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 let dir = if t.insert.x >= land.x { 1.0 } else { -1.0 };
                 b.polyline(ctx, rgb, lw, &[land, land + Vec2::new(m.dogleg * dir, 0.0)]);
                 mtext(b, ctx, t, rgb, lw);
+            }
+            if let Some(ins) = &m.block {
+                if m.dogleg > 0.0 && !m.leaders.is_empty() {
+                    let land = m.landing.xy();
+                    let dir = if ins.insert.x >= land.x { 1.0 } else { -1.0 };
+                    b.polyline(ctx, rgb, lw, &[land, land + Vec2::new(m.dogleg * dir, 0.0)]);
+                }
+                insert(b, ctx, e, ins, rgb);
             }
         }
         EntityKind::Point(p) => {

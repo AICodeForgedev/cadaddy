@@ -1359,6 +1359,8 @@ fn mleader_is_written_as_leader_and_mtext() {
         text: Some(text),
         style: "Standard".into(),
         arrow_size: 2.5,
+        spline: false,
+        block: None,
     };
     d.add(&Space::Model, Default::default(), EntityKind::MLeader(m)).unwrap();
     let back = roundtrip(&d);

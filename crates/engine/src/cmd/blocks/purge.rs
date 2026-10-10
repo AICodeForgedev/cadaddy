@@ -113,6 +113,7 @@ fn used_blocks(d: &Drawing) -> HashSet<String> {
         match &e.kind {
             EntityKind::Insert(i) => frontier.push(i.block.clone()),
             EntityKind::Dimension(dm) => frontier.extend(dm.block.clone()),
+            EntityKind::MLeader(m) => frontier.extend(m.block.as_ref().map(|b| b.block.clone())),
             _ => {}
         }
     }
@@ -127,6 +128,7 @@ fn used_blocks(d: &Drawing) -> HashSet<String> {
                 match &e.kind {
                     EntityKind::Insert(i) => frontier.push(i.block.clone()),
                     EntityKind::Dimension(dm) => frontier.extend(dm.block.clone()),
+                    EntityKind::MLeader(m) => frontier.extend(m.block.as_ref().map(|b| b.block.clone())),
                     _ => {}
                 }
             }

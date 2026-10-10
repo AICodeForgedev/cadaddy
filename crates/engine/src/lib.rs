@@ -387,11 +387,20 @@ pub struct LastUsed {
     pub scale_factor: f64,
     /// MLEADER placement order and Options.
     pub mleader: MLeaderOptions,
+    /// MLEADER's block content name (Options > Content type > Block).
+    pub mleader_block: String,
 }
 
 impl Default for LastUsed {
     fn default() -> Self {
-        LastUsed { hatch_select: false, polygon_circumscribed: false, rotate_angle: 0.0, scale_factor: 1.0, mleader: MLeaderOptions::default() }
+        LastUsed {
+            hatch_select: false,
+            polygon_circumscribed: false,
+            rotate_angle: 0.0,
+            scale_factor: 1.0,
+            mleader: MLeaderOptions::default(),
+            mleader_block: String::new(),
+        }
     }
 }
 
@@ -416,11 +425,35 @@ pub struct MLeaderOptions {
     pub landing: bool,
     /// Ask for multiline text content (Content type None turns it off).
     pub content: bool,
+    /// Leader lines: straight, spline, or none (content only).
+    pub leader_type: LeaderType,
+    /// The content is a block (`LastUsed::mleader_block`) instead of multiline text.
+    pub block: bool,
+    /// The block's extents centre (not its insertion point) sits at the end of the landing.
+    pub block_center: bool,
+}
+
+/// MLEADER's leader line type (Options > Leader type).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LeaderType {
+    #[default]
+    Straight,
+    Spline,
+    None,
 }
 
 impl Default for MLeaderOptions {
     fn default() -> Self {
-        MLeaderOptions { order: LeaderOrder::Arrowhead, max_points: 2, angles: [0.0; 2], landing: true, content: true }
+        MLeaderOptions {
+            order: LeaderOrder::Arrowhead,
+            max_points: 2,
+            angles: [0.0; 2],
+            landing: true,
+            content: true,
+            leader_type: LeaderType::Straight,
+            block: false,
+            block_center: true,
+        }
     }
 }
 

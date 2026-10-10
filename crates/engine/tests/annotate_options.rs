@@ -131,9 +131,10 @@ fn mleader_options_take_effect() {
     let r = Vec2::new(10.0, 8.0).len();
     assert!(near(m.landing.xy(), Vec2::new(r, r) / 2f64.sqrt()), "{:?}", m.landing);
 
-    // Unmodelled choices say so and keep the following input.
+    // Leader type sPline keeps the following input and draws a spline leader.
     s.script("mleader o l p x 0,0 4,4 hi\n").unwrap();
-    assert!(s.log.iter().any(|l| l.contains("not available yet")), "{:?}", s.log);
-    assert_eq!(last_mleader(&s).text.unwrap().contents, "hi");
+    let m = last_mleader(&s);
+    assert!(m.spline);
+    assert_eq!(m.text.unwrap().contents, "hi");
     assert!(s.running.is_none());
 }
