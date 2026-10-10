@@ -2,7 +2,8 @@
 //! -ATTEDIT: the attributes picked by block name, tag and value specifications, edited one at a
 //! time or by replacing a string in all of them. Attribute tags match in any case, as in AutoCAD.
 
-use cadcraft_doc::{EntityKind, Handle};
+use cadcraft_doc::color::Color;
+use cadcraft_doc::{AttribProps, Common, EntityKind, Handle};
 use serde_json::{Map, Value, json};
 
 use crate::cmd::curves::KW;
@@ -136,6 +137,33 @@ fn edit(s: &mut Session, (h, k): (Handle, usize), f: impl FnOnce(&str) -> Option
     Ok(changed)
 }
 
+/// Change the properties set on attribute `k` of block reference `h`.
+fn set_props(s: &mut Session, (h, k): (Handle, usize), f: impl FnOnce(&mut AttribProps)) -> Result<()> {
+    s.doc_mut()?.modify_entity(h, |e| {
+        if let EntityKind::Insert(ins) = &mut e.kind
+            && let Some(a) = ins.attribs.get_mut(k)
+        {
+            f(&mut a.props);
+        }
+    })?;
+    Ok(())
+}
+
+/// The layer and colour attribute `k` of block reference `h` is drawn with: its own, else its
+/// definition's (layer 0 is the reference's layer).
+fn current_props(s: &Session, (h, k): (Handle, usize)) -> Option<(String, Color)> {
+    let d = s.doc().ok()?;
+    let e = d.entity(h)?;
+    let EntityKind::Insert(ins) = &e.kind else { return None };
+    let a = ins.attribs.get(k)?;
+    let def = d
+        .block(&ins.block)
+        .and_then(|b| b.entities.iter().find(|be| matches!(&be.kind, EntityKind::AttDef(ad) if ad.tag.eq_ignore_ascii_case(&a.tag))));
+    let c = a.props.over(&def.map(|de| de.common.clone()).unwrap_or_else(Common::default));
+    let layer = if c.layer == "0" { e.common.layer.clone() } else { c.layer };
+    Some((layer, c.color))
+}
+
 /// Replace every `find` in `value` with `with`, unless the result would be too long.
 fn replaced(value: &str, find: &str, with: &str) -> Option<String> {
     if find.is_empty() || !value.contains(find) {
@@ -250,6 +278,9 @@ enum Stage {
     Option,
     ValueKind,
     NewValue,
+    Layer,
+    Color,
+    TrueColor,
     Find,
     Replace,
 }
@@ -266,6 +297,9 @@ struct DashAtteditM {
     cur: usize,
     find: String,
 }
+
+/// A colour name, number or `r,g,b` (typed numbers are answers, not distances).
+const NAME: Accept = Accept { number: true, ..Accept::TEXT };
 
 fn invalid_keyword() -> EngineError {
     EngineError::Other("Invalid option keyword.".into())
@@ -313,7 +347,8 @@ impl Interactive for DashAtteditM {
     fn name(&self) -> &'static str {
         "-ATTEDIT"
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
+    fn prompt(&self, s: &Session) -> Prompt {
+        let cur = self.items.get(self.cur).and_then(|it| current_props(s, *it));
         match self.stage {
             Stage::OneAtATime => Prompt::new("Edit attributes one at a time?", KW).kw(&["Yes", "No"]).default("Y"),
             Stage::VisibleOnly => Prompt::new("Edit only attributes visible on screen?", KW).kw(&["Yes", "No"]).default("Y"),
@@ -321,9 +356,24 @@ impl Interactive for DashAtteditM {
             Stage::TagSpec => Prompt::new("Enter attribute tag specification", Accept::TEXT).default("*"),
             Stage::ValueSpec => Prompt::new("Enter attribute value specification", Accept::TEXT).default("*"),
             Stage::Select => Prompt::new("Select attributes", Accept::SELECT),
-            Stage::Option => Prompt::new("Enter an option", KW).kw(&["Value", "Next"]).default("N"),
+            Stage::Option => Prompt::new("Enter an option", KW).kw(&["Value", "Layer", "Color", "Next"]).default("N"),
             Stage::ValueKind => Prompt::new("Enter type of value modification", KW).kw(&["Change", "Replace"]).default("R"),
             Stage::NewValue => Prompt::new("Enter new attribute value", Accept::TEXT),
+            Stage::Layer => {
+                let p = Prompt::new("Enter new layer name", Accept::TEXT);
+                match cur {
+                    Some((layer, _)) => p.default(layer),
+                    None => p,
+                }
+            }
+            Stage::Color => {
+                let p = Prompt::new("Enter new color", NAME).kw(&["Truecolor", "COlorbook"]);
+                match cur {
+                    Some((_, c)) => p.default(c.name()),
+                    None => p,
+                }
+            }
+            Stage::TrueColor => Prompt::new("Red, Green, Blue", NAME),
             Stage::Find => Prompt::new("Enter string to change", Accept::TEXT),
             Stage::Replace => Prompt::new("Enter new string", Accept::TEXT),
         }
@@ -380,6 +430,8 @@ impl Interactive for DashAtteditM {
             }
             Stage::Option => match &i {
                 Input::Keyword(k) if k == "Value" => self.stage = Stage::ValueKind,
+                Input::Keyword(k) if k == "Layer" => self.stage = Stage::Layer,
+                Input::Keyword(k) if k == "Color" => self.stage = Stage::Color,
                 Input::Keyword(_) | Input::Enter => {
                     self.cur += 1;
                     if self.cur >= self.items.len() {
@@ -389,7 +441,7 @@ impl Interactive for DashAtteditM {
                 }
                 Input::Text(t) => {
                     let tl = t.trim().to_ascii_lowercase();
-                    let later = ["Position", "Height", "Angle", "Style", "Layer", "Color"];
+                    let later = ["Position", "Height", "Angle", "Style"];
                     return match later.iter().find(|k| !tl.is_empty() && k.to_ascii_lowercase().starts_with(&tl)) {
                         Some(k) => Err(EngineError::Other(format!("{k} is not available yet."))),
                         None => Err(invalid_keyword()),
@@ -408,6 +460,40 @@ impl Interactive for DashAtteditM {
                     edit(s, it, |_| Some(v))?;
                 }
                 self.show_current(s);
+                self.stage = Stage::Option;
+            }
+            Stage::Layer => {
+                let Some(t) = text else { return Ok(Step::Continue) };
+                let t = t.trim();
+                if !t.is_empty() {
+                    let name = s.doc()?.layer(t).map(|l| l.name.clone()).ok_or_else(|| EngineError::Other(format!("Cannot find layer \"{t}\".")))?;
+                    if let Some(it) = self.items.get(self.cur).copied() {
+                        set_props(s, it, |p| p.layer = Some(name))?;
+                    }
+                }
+                self.stage = Stage::Option;
+            }
+            Stage::Color | Stage::TrueColor => {
+                if self.stage == Stage::Color
+                    && let Input::Keyword(k) = &i
+                {
+                    if k == "Truecolor" {
+                        self.stage = Stage::TrueColor;
+                        return Ok(Step::Continue);
+                    }
+                    return Err(EngineError::Other("Color books are not available yet.".into()));
+                }
+                let Some(t) = text else { return Ok(Step::Continue) };
+                if !t.trim().is_empty() {
+                    let c = match (self.stage, Color::parse(&t)) {
+                        (Stage::TrueColor, Some(c @ Color::True(_))) | (Stage::Color, Some(c)) => c,
+                        (Stage::TrueColor, _) => return Err(EngineError::Other("Enter three values from 0 to 255, separated by commas.".into())),
+                        _ => return Err(EngineError::Other("Enter a color name or a number from 0 to 256.".into())),
+                    };
+                    if let Some(it) = self.items.get(self.cur).copied() {
+                        set_props(s, it, |p| p.color = Some(c))?;
+                    }
+                }
                 self.stage = Stage::Option;
             }
             Stage::Find => match text {

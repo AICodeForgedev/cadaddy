@@ -262,8 +262,14 @@ fn block_definition_properties_and_constant_attdefs_roundtrip() {
         halign: HAlign::Left,
         valign: VAlign::Baseline,
     };
-    let attdef =
-        |tag: &str, invisible: bool, constant: bool| Attrib { tag: tag.into(), text: text.clone(), invisible, constant, prompt: String::new() };
+    let attdef = |tag: &str, invisible: bool, constant: bool| Attrib {
+        tag: tag.into(),
+        text: text.clone(),
+        invisible,
+        constant,
+        prompt: String::new(),
+        props: Default::default(),
+    };
     for (i, a) in [attdef("COMPANY", false, true), attdef("SECRET", true, true), attdef("SHEET", false, false)].into_iter().enumerate() {
         b.entities.push(Entity::new(Handle(0x500 + i as u64), EntityKind::AttDef(a)));
     }
@@ -1124,11 +1130,15 @@ fn intl_sample() -> Drawing {
         }),
     )
     .unwrap();
-    let def = Attrib { tag: "图号".into(), text: intl_text("默认"), invisible: false, constant: false, prompt: String::new() };
+    let def =
+        Attrib {
+            tag: "图号".into(), text: intl_text("默认"), invisible: false, constant: false, prompt: String::new(), props: Default::default()
+        };
     let mut b = Block::new(&block);
     b.entities.push(Entity::new(Handle(0x50), EntityKind::AttDef(def)));
     d.blocks.insert(block.clone(), std::sync::Arc::new(b));
-    let att = Attrib { tag: "图号".into(), text: intl_text(INTL), invisible: false, constant: false, prompt: String::new() };
+    let att =
+        Attrib { tag: "图号".into(), text: intl_text(INTL), invisible: false, constant: false, prompt: String::new(), props: Default::default() };
     d.add(
         &Space::Model,
         on,
@@ -1369,7 +1379,14 @@ fn attdef_prompt_survives_dxf_roundtrip() {
         valign: VAlign::Baseline,
     };
     let attdef = |prompt: &str| {
-        EntityKind::AttDef(Attrib { tag: "TAG1".into(), text: text.clone(), invisible: false, constant: false, prompt: prompt.into() })
+        EntityKind::AttDef(Attrib {
+            tag: "TAG1".into(),
+            text: text.clone(),
+            invisible: false,
+            constant: false,
+            prompt: prompt.into(),
+            props: Default::default(),
+        })
     };
     d.add(&Space::Model, Default::default(), attdef("Enter value")).unwrap();
     d.add(&Space::Model, Default::default(), attdef("")).unwrap();

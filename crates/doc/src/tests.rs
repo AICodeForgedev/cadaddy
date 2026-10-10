@@ -353,6 +353,7 @@ fn attdef_in_block_is_ignored_in_insert_extents() {
             invisible: false,
             constant: false,
             prompt: String::new(),
+            props: Default::default(),
         }),
     );
     let d = drawing_with_block(attdef);

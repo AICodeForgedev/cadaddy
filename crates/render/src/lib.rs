@@ -429,16 +429,20 @@ pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents:
 }
 
 fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Ink, f32, Option<cadcraft_doc::Linetype>, f64, bool) {
+    resolve_common(ctx, &e.common, plotting)
+}
+
+/// [`resolve`] for an object's properties `c`.
+fn resolve_common(ctx: &Ctx, c: &cadcraft_doc::Common, plotting: bool) -> (Ink, f32, Option<cadcraft_doc::Linetype>, f64, bool) {
     let d = ctx.d;
     // Layer "0" inside a block takes the insert's layer.
-    let layer_name = if e.common.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { e.common.layer.as_str() };
+    let layer_name = if c.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { c.layer.as_str() };
     let layer = d.layer(layer_name);
-    let visible = e.common.visible
-        && layer.is_none_or(|l| l.visible() && (!plotting || l.plot))
-        && !ctx.frozen.iter().any(|f| f.eq_ignore_ascii_case(layer_name));
+    let visible =
+        c.visible && layer.is_none_or(|l| l.visible() && (!plotting || l.plot)) && !ctx.frozen.iter().any(|f| f.eq_ignore_ascii_case(layer_name));
     let layer_color = ctx.layer_color(layer_name).unwrap_or(Color::Index(7));
-    let rgb = ink(e.common.color, layer_color, ctx.block_color);
-    let lw = match e.common.lineweight {
+    let rgb = ink(c.color, layer_color, ctx.block_color);
+    let lw = match c.lineweight {
         Lineweight::ByLayer => layer.map(|l| l.lineweight).unwrap_or(Lineweight::Default),
         Lineweight::ByBlock => ctx.block_lw,
         x => x,
@@ -447,13 +451,13 @@ fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Ink, f32, Option<cadcraft_
         Lineweight::Mm100(v) => f32::from(v) / 100.0,
         _ => default_lineweight(d),
     };
-    let lt_name = match e.common.linetype.to_ascii_lowercase().as_str() {
+    let lt_name = match c.linetype.to_ascii_lowercase().as_str() {
         "bylayer" => layer.map(|l| l.linetype.clone()).unwrap_or_else(|| "Continuous".into()),
         "byblock" => ctx.block_ltype.clone(),
-        _ => e.common.linetype.clone(),
+        _ => c.linetype.clone(),
     };
     let lt = d.linetype(&lt_name).filter(|l| !l.pattern.is_empty()).cloned();
-    let scale = d.header.f64("LTSCALE", 1.0) * e.common.ltscale * ctx.lt_factor;
+    let scale = d.header.f64("LTSCALE", 1.0) * c.ltscale * ctx.lt_factor;
     (rgb, lw_mm, lt, scale, visible)
 }
 
@@ -954,20 +958,27 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
             }
             let (sh, _) = place_text_entity(ctx.d, &a.text, &a.text.value);
             // Properties of the attribute's definition (as AutoCAD copies them to the attribute
-            // on insertion): ByBlock = the reference's, layer 0 = the reference's layer.
+            // on insertion), except those set on the attribute itself: ByBlock = the reference's,
+            // layer 0 = the reference's layer.
             let def = ctx.d.block(&ins.block).and_then(|blk| blk.entities.iter().find(|be| attdef_tag(be, &a.tag)));
-            let (ink, lw, shown) = match def {
-                Some(def) => {
-                    let (ink, lw, _, _, shown) = resolve(&sub_ctx(ctx, e, Mat3::IDENTITY), def, b.plotting);
+            let (ink, lw, shown) = match (def, a.props.is_empty()) {
+                (None, true) => (rgb, resolve(ctx, e, b.plotting).1, true),
+                (def, _) => {
+                    let c = a.props.over(&def.map(|d| d.common.clone()).unwrap_or_else(by_block));
+                    let (ink, lw, _, _, shown) = resolve_common(&sub_ctx(ctx, e, Mat3::IDENTITY), &c, b.plotting);
                     (ink, lw, shown)
                 }
-                None => (rgb, resolve(ctx, e, b.plotting).1, true),
             };
             if shown {
                 b.shaped(ctx, ink, if b.opts.lineweights { lw } else { 0.0 }, &sh);
             }
         }
     }
+}
+
+/// Properties that follow the block reference's (an attribute without a definition).
+fn by_block() -> cadcraft_doc::Common {
+    cadcraft_doc::Common { color: Color::ByBlock, linetype: "ByBlock".into(), lineweight: Lineweight::ByBlock, ..cadcraft_doc::Common::default() }
 }
 
 /// The attribute definition with tag `tag` (any case).

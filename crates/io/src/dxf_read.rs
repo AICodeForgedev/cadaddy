@@ -90,6 +90,19 @@ fn ocs_n(n: Vec3, p: Vec3) -> Vec3 {
     if (n.z - 1.0).abs() < 1e-12 && n.x.abs() < 1e-12 && n.y.abs() < 1e-12 { p } else { cadcraft_geom::Mat4::ocs(n).apply(p) }
 }
 
+/// The properties an ATTRIB carries itself: those it has groups for. Its layer counts only when
+/// it differs from its block reference's (an attribute defined on layer 0 goes on the reference's
+/// layer, as it is drawn anyway).
+fn attrib_props(t: &T, insert_layer: &str) -> AttribProps {
+    let c = common(t);
+    AttribProps {
+        layer: t.s(8).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case(insert_layer)),
+        color: (t.i(62).is_some() || t.i(420).is_some()).then_some(c.color),
+        linetype: t.s(6).filter(|l| !l.is_empty()),
+        lineweight: t.i(370).is_some().then_some(c.lineweight),
+    }
+}
+
 fn text_from(t: &T) -> Text {
     let h = match t.i(72).unwrap_or(0) {
         1 => HAlign::Center,
@@ -303,6 +316,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             invisible: t.i(70).unwrap_or(0) & 1 != 0,
             constant: t.i(70).unwrap_or(0) & 2 != 0,
             prompt: t.s(3).unwrap_or_default(),
+            props: Default::default(),
         }),
         "INSERT" => {
             // A mirrored block reference comes with extrusion (0,0,-1): its insertion point, scale,
@@ -882,6 +896,7 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
             "INSERT" => {
                 if t.i(66) == Some(1) {
                     let mut attribs = Vec::new();
+                    let ins_layer = kindent.as_ref().map(|(c, _)| c.layer.clone()).unwrap_or_default();
                     while let Some((k2, t2)) = recs.get(i) {
                         if k2 == "ATTRIB" {
                             let tt = T(t2);
@@ -891,6 +906,7 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
                                 invisible: tt.i(70).unwrap_or(0) & 1 != 0,
                                 constant: false,
                                 prompt: String::new(),
+                                props: attrib_props(&tt, &ins_layer),
                             });
                             i += 1;
                         } else {

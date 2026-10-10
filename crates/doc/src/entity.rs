@@ -267,7 +267,43 @@ pub struct Attrib {
     pub constant: bool,
     #[serde(default)]
     pub prompt: String,
+    /// An attribute's own properties; each one left unset follows the attribute definition.
+    #[serde(default, skip_serializing_if = "AttribProps::is_empty")]
+    pub props: AttribProps,
 }
+
+/// Properties set on one attribute of a block reference (an ATTRIB's layer, colour, linetype and
+/// lineweight), overriding those of its definition.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AttribProps {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linetype: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lineweight: Option<Lineweight>,
+}
+
+impl AttribProps {
+    /// Nothing set: the attribute is drawn with its definition's properties.
+    pub fn is_empty(&self) -> bool {
+        *self == AttribProps::default()
+    }
+    /// `base` (the definition's properties) with the ones set here in place.
+    pub fn over(&self, base: &Common) -> Common {
+        Common {
+            layer: self.layer.clone().unwrap_or_else(|| base.layer.clone()),
+            color: self.color.unwrap_or(base.color),
+            linetype: self.linetype.clone().unwrap_or_else(|| base.linetype.clone()),
+            lineweight: self.lineweight.unwrap_or(base.lineweight),
+            ..base.clone()
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Insert {

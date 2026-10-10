@@ -83,7 +83,7 @@ fn dash_attedit_one_at_a_time_edits_the_selected_attributes() {
     let mut s = with_block();
     let h = handle(&insert(&mut s, 100.0, json!({"T": "abc"})));
     type_lines(&mut s, &["-attedit", "y", "", "T", "", "105,0", ""]);
-    assert!(s.prompt_text().contains("[Value/Next] <N>"), "{}", s.prompt_text());
+    assert!(s.prompt_text().contains("[Value/Layer/Color/Next] <N>"), "{}", s.prompt_text());
     // Unsupported options say so and keep the prompt.
     s.cmdline("p").unwrap();
     assert!(s.log.iter().any(|l| l.contains("Position is not available yet")), "{:?}", s.log);

@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn right_justified_attdef_is_left_of_alignment_point() {
         let text = text(HAlign::Right, VAlign::Baseline);
-        let a = crate::Attrib { tag: "HELLO".into(), text, invisible: false, constant: false, prompt: String::new() };
+        let a = crate::Attrib { tag: "HELLO".into(), text, invisible: false, constant: false, prompt: String::new(), props: Default::default() };
         let b = bounds(EntityKind::AttDef(a));
         assert!(b.min.x <= -4.4 && b.max.x < 1.0);
     }

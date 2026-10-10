@@ -170,7 +170,14 @@ pub(crate) fn insert_with(
                 t = tt;
             }
             t.value = attedit::value_for(values, &ad.tag).unwrap_or_else(|| ad.text.value.clone());
-            ins.attribs.push(Attrib { tag: ad.tag.clone(), text: t, invisible: ad.invisible, constant: false, prompt: String::new() });
+            ins.attribs.push(Attrib {
+                tag: ad.tag.clone(),
+                text: t,
+                invisible: ad.invisible,
+                constant: false,
+                prompt: String::new(),
+                props: Default::default(),
+            });
         }
     }
     s.add_entity(EntityKind::Insert(ins))
@@ -228,6 +235,7 @@ fn attdef_kind(s: &Session, tag: &str, prompt: &str, default: &str, at: Vec2, he
         invisible,
         constant: false,
         prompt: prompt.into(),
+        props: Default::default(),
     })
 }
 

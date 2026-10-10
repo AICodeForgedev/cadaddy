@@ -83,6 +83,7 @@ impl Interactive for AttdispM {
 
 /// The attributes `ins` gets from the definitions `defs` of its block `blk`: placed, styled and
 /// shown as defined, keeping the values of attributes whose tag (any case) is still defined.
+/// Properties set on single attributes (layer, colour, …) go back to the definitions', as in AutoCAD.
 fn synced(blk: &Block, defs: &[&Attrib], ins: &Insert) -> Vec<Attrib> {
     let m = ins.transform(blk.base.xy());
     defs.iter()
@@ -96,7 +97,7 @@ fn synced(blk: &Block, defs: &[&Attrib], ins: &Insert) -> Vec<Attrib> {
                 .find(|a| a.tag.eq_ignore_ascii_case(&ad.tag))
                 .map(|a| a.text.value.clone())
                 .unwrap_or_else(|| ad.text.value.clone());
-            Attrib { tag: ad.tag.clone(), text: t, invisible: ad.invisible, constant: false, prompt: String::new() }
+            Attrib { tag: ad.tag.clone(), text: t, invisible: ad.invisible, constant: false, prompt: String::new(), props: Default::default() }
         })
         .collect()
 }

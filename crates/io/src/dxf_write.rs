@@ -282,21 +282,7 @@ fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, ass
     if paper {
         w.i(67, 1);
     }
-    w.s(8, &e.common.layer);
-    if !e.common.linetype.eq_ignore_ascii_case("bylayer") {
-        w.s(6, &e.common.linetype);
-    }
-    match e.common.color {
-        Color::ByLayer => {}
-        Color::True(rgb) => {
-            w.i(62, i64::from(cadcraft_color::nearest_aci(rgb)));
-            w.i(420, i64::from(rgb.to_u32()));
-        }
-        c => w.i(62, i64::from(c.to_aci())),
-    }
-    if e.common.lineweight != Lineweight::ByLayer {
-        w.i(370, i64::from(e.common.lineweight.to_dxf()));
-    }
+    layer_and_props(w, &e.common, None);
     if (e.common.ltscale - 1.0).abs() > 1e-12 {
         w.f(48, e.common.ltscale);
     }
@@ -309,6 +295,43 @@ fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, ass
     if !subclass.is_empty() {
         w.s(100, subclass);
     }
+}
+
+/// Layer, linetype, colour and lineweight groups (8, 6, 62/420, 370). ByLayer is left out, unless
+/// it replaces something else in `base` (an attribute's definition).
+fn layer_and_props(w: &mut W, c: &Common, base: Option<&Common>) {
+    let write = |by_layer: bool, base_by_layer: fn(&Common) -> bool| !by_layer || base.is_some_and(|b| !base_by_layer(b));
+    w.s(8, &c.layer);
+    if write(c.linetype.eq_ignore_ascii_case("bylayer"), |b| b.linetype.eq_ignore_ascii_case("bylayer")) {
+        w.s(6, &c.linetype);
+    }
+    match c.color {
+        Color::ByLayer if write(true, |b| b.color == Color::ByLayer) => w.i(62, 256),
+        Color::ByLayer => {}
+        Color::True(rgb) => {
+            w.i(62, i64::from(cadcraft_color::nearest_aci(rgb)));
+            w.i(420, i64::from(rgb.to_u32()));
+        }
+        c => w.i(62, i64::from(c.to_aci())),
+    }
+    if write(c.lineweight == Lineweight::ByLayer, |b| b.lineweight == Lineweight::ByLayer) {
+        w.i(370, i64::from(c.lineweight.to_dxf()));
+    }
+}
+
+/// The properties attribute `a` of block reference `e` (of `ins`) is drawn with: its own, else its
+/// definition's; an attribute defined on layer 0 is on the reference's layer. Also the
+/// definition's properties.
+fn attrib_common(d: &Drawing, e: &Entity, ins: &Insert, a: &Attrib) -> (Common, Common) {
+    let def = d
+        .block(&ins.block)
+        .and_then(|b| b.entities.iter().find(|be| matches!(&be.kind, EntityKind::AttDef(ad) if ad.tag.eq_ignore_ascii_case(&a.tag))));
+    let base = def.map(|de| de.common.clone()).unwrap_or_default();
+    let mut c = a.props.over(&base);
+    if c.layer == "0" {
+        c.layer.clone_from(&e.common.layer);
+    }
+    (c, base)
 }
 
 /// ATTRIB/ATTDEF flags (group 70): 1 invisible, 2 constant.
@@ -553,7 +576,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     w.s(5, ah);
                     w.s(330, e.handle.hex());
                     w.s(100, "AcDbEntity");
-                    w.s(8, &e.common.layer);
+                    let (c, base) = attrib_common(d, e, i, a);
+                    layer_and_props(w, &c, Some(&base));
                     w.s(100, "AcDbText");
                     text_tags(w, &a.text, Some((&a.tag, attrib_flags(a))), None);
                 }
