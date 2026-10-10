@@ -601,6 +601,7 @@ impl Session {
             linetype: h.str("CELTYPE", "ByLayer"),
             lineweight: cadcraft_doc::Lineweight::from_dxf(h.i64("CELWEIGHT", -1) as i16),
             ltscale: h.f64("CELTSCALE", 1.0),
+            plot_style: h.str("CPLOTSTYLE", "ByLayer"),
             ..Common::default()
         }
     }

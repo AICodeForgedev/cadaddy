@@ -5,13 +5,13 @@
 //! constraints).
 //!
 //! CADCraft's own data lives under the registered application `CADCRAFT` (xdata) and the
-//! named-object-dictionary entries `CADCRAFT_CONSTRAINTS` and `CADCRAFT_LAYERSTATES`
-//! (XRECORDs). Other readers keep or ignore them.
+//! named-object-dictionary entries `CADCRAFT_CONSTRAINTS`, `CADCRAFT_LAYERSTATES` and
+//! `CADCRAFT_PLOTSTYLES` (XRECORDs). Other readers keep or ignore them.
 
 use std::collections::HashMap;
 
 use cadcraft_color::Color;
-use cadcraft_doc::{AssocSnap, Constraint, DimAssoc, DimStyle, Handle, LayerState, Parametric};
+use cadcraft_doc::{AssocSnap, Constraint, DimAssoc, DimStyle, Handle, LayerState, Parametric, PlotStyleTable};
 use cadcraft_dxf::Tag;
 use cadcraft_render::Arrowhead;
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,14 @@ pub(crate) const APP: &str = "CADCRAFT";
 pub(crate) const CONSTRAINTS_KEY: &str = "CADCRAFT_CONSTRAINTS";
 /// Named-object-dictionary key of the saved layer states XRECORD.
 pub(crate) const LAYER_STATES_KEY: &str = "CADCRAFT_LAYERSTATES";
+/// Named-object-dictionary key of the drawing's plot style tables XRECORD.
+pub(crate) const PLOT_STYLES_KEY: &str = "CADCRAFT_PLOTSTYLES";
+/// Named-object-dictionary key of the plot style names dictionary (DXF Reference): its entries
+/// name `ACDBPLACEHOLDER` objects, and layers and objects point at them with group 390.
+pub(crate) const PLOT_STYLE_NAMES_KEY: &str = "ACAD_PLOTSTYLENAME";
+/// Most plot style tables and plot style names read from a file.
+pub(crate) const MAX_PLOT_STYLE_TABLES: usize = 1000;
+pub(crate) const MAX_PLOT_STYLE_NAMES: usize = 100_000;
 
 /// Caps for hostile input.
 pub(crate) const MAX_XDATA_ITEMS: usize = 4096;
@@ -520,6 +528,36 @@ pub(crate) fn parse_layer_states(text: &str) -> Option<Vec<LayerState>> {
         return None;
     }
     Some(p.states)
+}
+
+/// The drawing's plot style tables stored in the `CADCRAFT_PLOTSTYLES` XRECORD.
+#[derive(Serialize, Deserialize)]
+struct PlotStylesPayload {
+    version: u32,
+    #[serde(default)]
+    tables: Vec<PlotStyleTable>,
+}
+
+/// JSON chunks for the plot style tables XRECORD, or `None` when the drawing keeps none.
+pub(crate) fn plot_style_chunks(tables: &[PlotStyleTable]) -> Option<Vec<String>> {
+    if tables.is_empty() {
+        return None;
+    }
+    let json = serde_json::to_string(&PlotStylesPayload { version: 1, tables: tables.to_vec() }).ok()?;
+    Some(json_chunks(&json))
+}
+
+/// Parse the plot style tables XRECORD text (tables sanitized); `None` when it is not a
+/// payload we understand.
+pub(crate) fn parse_plot_styles(text: &str) -> Option<Vec<PlotStyleTable>> {
+    if text.len() > MAX_PAYLOAD {
+        return None;
+    }
+    let p: PlotStylesPayload = serde_json::from_str(text).ok()?;
+    if p.version != 1 || p.tables.len() > MAX_PLOT_STYLE_TABLES {
+        return None;
+    }
+    Some(p.tables.into_iter().map(PlotStyleTable::sanitized).filter(|t| !t.name.is_empty()).collect())
 }
 
 /// Parse the constraint XRECORD text; `None` when it is not a payload we understand.

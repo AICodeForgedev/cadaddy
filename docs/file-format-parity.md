@@ -107,7 +107,7 @@ early (#175), but the throughput problem remains. **DWG ≈ 30% read, ≈ 15% wr
 | WMF, EPS, ACIS SAT, STL, FBX, IGES/STEP (Windows), 3DS | various | no; most are 3D and wait for M11 | 20–40 |
 | SHX fonts (`.shx`, big fonts) | read | **not parsed**: our stroke font or FONTALT stands in, so text metrics differ from AutoCAD | 8–12 |
 | Linetype (`.lin`) and hatch pattern (`.pat`) files | load user files | own built-in library only; user files can't be loaded | 3–5 |
-| Plot styles (`.ctb`, `.stb`), plotter configs (`.pc3`), `.pmp` | yes | no | 8–12 |
+| Plot styles (`.ctb`, `.stb`), plotter configs (`.pc3`), `.pmp` | yes | plot style tables in our own JSON format ([plot-styles.md](plot-styles.md)) and kept in the drawing; binary `.ctb`/`.stb` not read (no public spec); no `.pc3`/`.pmp` | 6–10 |
 | Scripts (`.scr`) | SCRIPT | script text through the CLI, MCP and control channel; no SCRIPT command reading a `.scr` file | 1–2 |
 | Aliases (`.pgp`), CUI(x), workspaces | yes | no | 6–10 |
 | AutoLISP (`.lsp`, `.fas`, `.vlx`), `.dll`/`.arx` plug-ins | yes | no | see [gaps.md](gaps.md) (M12) |

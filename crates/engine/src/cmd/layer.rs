@@ -19,7 +19,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(prompts::LayerM::default()))),
         CommandSpec::new("layer.new", "New Layer", run_new).params("{name, color?, linetype?, lineweight? (mm), current?: bool}"),
         CommandSpec::new("layer.set", "Set Layer Properties", run_set)
-            .params("{name, on?, frozen?, locked?, plot?, color?, linetype?, lineweight?, transparency?, description?, newVpFreeze?, newName?}"),
+            .params("{name, on?, frozen?, locked?, plot?, color?, linetype?, lineweight?, transparency?, description?, newVpFreeze?, plotStyle? (named plot style), newName?}"),
         CommandSpec::new("layer.current", "Make Current", run_current)
             .menu(&["Format", "Layer Tools", "Make Current"])
             .alias(&["clayer"])
@@ -73,7 +73,7 @@ fn layer_json(l: &Layer, current: bool) -> Value {
         "name": l.name, "on": l.on, "frozen": l.frozen, "locked": l.locked, "plot": l.plot,
         "color": l.color.name(), "colorRgb": l.color.resolve(Color::Index(7), Color::Index(7)).hex(),
         "linetype": l.linetype, "lineweight": l.lineweight.name(), "transparency": l.transparency,
-        "description": l.description, "current": current, "newVpFreeze": l.vp_freeze_new,
+        "description": l.description, "current": current, "newVpFreeze": l.vp_freeze_new, "plotStyle": l.plot_style,
     })
 }
 
@@ -131,6 +131,12 @@ fn apply(l: &mut Layer, p: &Value) -> Result<()> {
     }
     if let Some(v) = p.get("plot").and_then(Value::as_bool) {
         l.plot = v;
+    }
+    if let Some(v) = str_param(p, "plotStyle").map(str::trim) {
+        if v.is_empty() || v.eq_ignore_ascii_case("bylayer") || v.eq_ignore_ascii_case("byblock") {
+            return Err(bad("layer", "a layer's plot style is a style name (such as Normal)"));
+        }
+        l.plot_style = v.chars().take(255).collect();
     }
     if let Some(c) = p.get("color") {
         let c = c

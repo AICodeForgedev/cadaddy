@@ -60,3 +60,46 @@ fn page_setup_table_and_display_flag_round_trip() {
     assert!(page.show_plot_styles);
     assert!(!read_dxf(write_dxf(&layout_with_red_line()).as_bytes()).unwrap().layout("Layout1").unwrap().page.show_plot_styles);
 }
+
+#[test]
+fn named_plot_styles_round_trip_through_the_plot_style_dictionary() {
+    use cadcraft_doc::{Layer, PlotStyle, PlotStyleTable};
+    let mut d = layout_with_red_line();
+    d.layers.push(Layer { plot_style: "Black".into(), ..Layer::new("Walls") });
+    let line = |y: f64| EntityKind::Line(Line { a: Vec3::new(0.0, y, 0.0), b: Vec3::new(1.0, y, 0.0) });
+    let named = d.add(&Space::Model, Common { plot_style: "Thick".into(), ..Default::default() }, line(0.0)).unwrap();
+    let by_layer = d.add(&Space::Model, Common::default(), line(1.0)).unwrap();
+    let mut pens = PlotStyleTable::named("pens.stb", "ours", vec![PlotStyle { name: "Thick".into(), lineweight: Some(70), ..PlotStyle::default() }]);
+    pens.description = "office pens".into();
+    d.plot_style_tables.push(pens.clone());
+    let text = write_dxf(&d);
+    assert!(text.contains("ACAD_PLOTSTYLENAME") && text.contains("ACDBPLACEHOLDER") && text.contains("ACDBDICTIONARYWDFLT"));
+    assert!(text.contains("CADCRAFT_PLOTSTYLES"));
+    let back = read_dxf(text.as_bytes()).unwrap();
+    assert_eq!(back.layer("Walls").unwrap().plot_style, "Black");
+    assert_eq!(back.layer("0").unwrap().plot_style, "Normal");
+    assert_eq!(back.entity(named).unwrap().common.plot_style, "Thick");
+    assert_eq!(back.entity(by_layer).unwrap().common.plot_style, "ByLayer");
+    assert_eq!(back.plot_style_tables, vec![pens]);
+    // A drawing without named styles still writes the dictionary with Normal, and no tables.
+    let plain = write_dxf(&Drawing::new_metric());
+    assert!(plain.contains("ACAD_PLOTSTYLENAME") && !plain.contains("CADCRAFT_PLOTSTYLES"));
+}
+
+#[test]
+fn pdf_applies_a_named_table_from_the_drawing() {
+    use cadcraft_doc::{PlotStyle, PlotStyleTable};
+    let mut d = layout_with_red_line();
+    let blue = PlotStyleTable::named(
+        "blue.stb",
+        "",
+        vec![PlotStyle { name: "Blue".into(), color: Some(cadcraft_color::Rgb(0, 0, 255)), ..PlotStyle::default() }],
+    );
+    d.plot_style_tables.push(blue);
+    let space = Space::Paper("Layout1".into());
+    let h = d.space(&space).unwrap().iter().next().unwrap().handle;
+    d.modify_entity(h, |e| e.common.plot_style = "Blue".into()).unwrap();
+    d.layouts[0].page.plot_style_table = "blue.stb".into();
+    let text = pdf_text(&d, json!({}));
+    assert!(text.contains("0 0 1 RG") && !text.contains("1 0 0 RG"), "{text}");
+}

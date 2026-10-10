@@ -26,6 +26,7 @@ pub mod managers;
 pub mod menus;
 pub mod palettes;
 pub mod parametric;
+pub mod plotstyles;
 pub mod quick;
 pub mod theme;
 pub mod viewcube;

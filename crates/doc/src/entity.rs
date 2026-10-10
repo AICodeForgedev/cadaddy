@@ -94,6 +94,9 @@ pub struct Common {
     pub visible: bool,
     pub thickness: f64,
     pub extrusion: Vec3,
+    /// Named plot style: `ByLayer`, `ByBlock` or a style of the layout's named (`.stb`) plot
+    /// style table.
+    pub plot_style: String,
 }
 
 impl Default for Common {
@@ -108,6 +111,7 @@ impl Default for Common {
             visible: true,
             thickness: 0.0,
             extrusion: Vec3::Z,
+            plot_style: "ByLayer".into(),
         }
     }
 }

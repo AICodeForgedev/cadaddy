@@ -115,3 +115,45 @@ fn hostile_tables_do_not_panic() {
     let named = PlotStyleTable { kind: PlotStyleKind::Named, styles: vec![PlotStyle::object("Normal")], ..PlotStyleTable::default() };
     assert_eq!(build_plot(&d, &Space::Model, &with_table(named)).prims.len(), 4);
 }
+
+#[test]
+fn named_styles_by_layer_by_block_and_name() {
+    use cadcraft_doc::{Block, Entity, Handle, Insert, Layer};
+    let mut d = Drawing::new_metric();
+    d.layers.push(Layer { name: "Walls".into(), color: Color::Index(1), plot_style: "Black".into(), ..Layer::new("Walls") });
+    let red = |plot_style: &str| Common { layer: "Walls".into(), plot_style: plot_style.into(), ..Default::default() };
+    d.add(&Space::Model, red("ByLayer"), line(0.0)).unwrap();
+    d.add(&Space::Model, red("Normal"), line(1.0)).unwrap();
+    d.add(&Space::Model, red("Screened 50%"), line(2.0)).unwrap();
+    d.add(&Space::Model, red("No Such Style"), line(3.0)).unwrap();
+    // A ByBlock line inside a block whose reference is "Thick".
+    let mut blk = Block::new("B");
+    blk.entities.push(Entity {
+        common: Common { color: Color::Index(1), plot_style: "ByBlock".into(), ..Default::default() },
+        ..Entity::new(Handle(1), line(0.0))
+    });
+    d.blocks.insert("B".into(), Arc::new(blk));
+    let ins = EntityKind::Insert(Insert {
+        block: "B".into(),
+        insert: Vec3::new(0.0, 4.0, 0.0),
+        scale: Vec3::new(1.0, 1.0, 1.0),
+        rotation: 0.0,
+        attribs: vec![],
+        cols: 1,
+        rows: 1,
+        col_spacing: 0.0,
+        row_spacing: 0.0,
+    });
+    d.add(&Space::Model, Common { plot_style: "Thick".into(), ..Default::default() }, ins).unwrap();
+    let l = build_plot(&d, &Space::Model, &with_table(PlotStyleTable::builtin("default.stb").unwrap()));
+    let got: Vec<(Rgb, f32)> = l.prims.iter().map(|p| (p.display_rgb(Rgb(255, 255, 255)), p.lw)).collect();
+    let red_rgb = Rgb(255, 0, 0);
+    assert_eq!(
+        got,
+        [(BLACK, 0.25), (red_rgb, 0.25), (Rgb(255, 128, 128), 0.25), (red_rgb, 0.25), (red_rgb, 0.5)],
+        "ByLayer → Black, Normal, Screened 50%, unknown → Normal, ByBlock → the reference's Thick"
+    );
+    // A colour-dependent table ignores the property.
+    let ctb = build_plot(&d, &Space::Model, &with_table(PlotStyleTable::builtin("default.ctb").unwrap()));
+    assert!(ctb.prims.iter().all(|p| p.color == red_rgb));
+}

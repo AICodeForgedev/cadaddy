@@ -524,7 +524,29 @@
 	Plot style	Стиль друку
 	Plot style attached to	Стиль друку застосовано до
 	Plot style table	Таблиця стилів друку
+	Plot Style...	Стиль друку...
+	Plot Style Manager	Диспетчер стилів друку
+	Plot Style Manager...	Диспетчер стилів друку...
+	Plot Styles...	Стилі друку...
+	New CTB	Нова CTB
+	New STB	Нова STB
+	New style	Новий стиль
+	Use for this layout	Використати для цього аркуша
+	Display plot styles	Показувати стилі друку
+	No plot style tables.	Немає таблиць стилів друку.
+	A built-in table: editing it keeps an edited copy in the drawing.	Вбудована таблиця: зміни зберігаються як її копія в кресленні.
+	Keep an editable copy of this table in the drawing	Зберегти в кресленні копію цієї таблиці для редагування
+	Layout {name}: {table}	Аркуш {name}: {table}
+	Grayscale	Відтінки сірого
+	Screening	Інтенсивність
+	Use object linetype	Тип лінії об'єкта
+	Use object lineweight	Товщина лінії об'єкта
+	Remove	Вилучити
+	Add	Додати
+	Open a drawing first.	Спершу відкрийте креслення.
 	Plot table type	Тип таблиці друку
+	Color-dependent	Залежна від кольору
+	Named	Іменована
 	Plus/minus	Плюс/мінус
 	Point	Точка
 	Point Filters	Фільтри точок

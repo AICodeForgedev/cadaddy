@@ -171,6 +171,8 @@ struct Ctx<'a> {
     /// Extra linetype scale for model space seen through a viewport: 1 / viewport scale when
     /// `PSLTSCALE` is on (dashes keep their paper-space length at any viewport scale), else 1.
     lt_factor: f64,
+    /// Named plot style (table index) of the block reference being expanded, for `ByBlock`.
+    block_pstyle: Option<usize>,
 }
 
 impl Ctx<'_> {
@@ -190,6 +192,8 @@ struct Builder<'a> {
     plotting: bool,
     /// The plot style table drawn with.
     styles: Option<&'a plotstyle::Styler>,
+    /// Named plot style (table index) of the entity being drawn.
+    named: Option<usize>,
 }
 
 /// Upper bound on the block contents drawn per display list (each block reference, MINSERT copy
@@ -202,7 +206,7 @@ impl Builder<'_> {
     /// `color` and `lw` as the plot style table prints them.
     fn styled(&self, color: Ink, lw: f32) -> (Ink, f32) {
         match self.styles {
-            Some(s) => s.apply(color, lw, self.opts.lineweights),
+            Some(s) => s.apply(color, self.named, lw, self.opts.lineweights),
             None => (color, lw),
         }
     }
@@ -298,6 +302,7 @@ fn top_ctx<'a>(d: &'a Drawing, xf: Mat3, top: Handle, frozen: &'a [String], vp_c
         frozen,
         vp_colors,
         lt_factor: 1.0,
+        block_pstyle: None,
     }
 }
 
@@ -312,7 +317,7 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
         _ => None,
     });
     let styler = table.map(|t| plotstyle::Styler::new(d, t));
-    let mut b = Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref() };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref(), named: None };
     if let Space::Paper(name) = space {
         b.list.sheet = paper::sheet(d, name);
     }
@@ -378,7 +383,7 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     let mhalf = half / s;
     // Model window with slack: entity bounds are approximate (text, dimensions).
     let win = Bounds2::new(vp.view_center - mhalf, vp.view_center + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
-    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, styles: b.styles };
+    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, styles: b.styles, named: None };
     // PSLTSCALE on: model-space dashes are scaled so they measure the same on paper as in
     // paper space, whatever the viewport scale.
     let lt_factor = if d.header.i64("PSLTSCALE", 1) != 0 { 1.0 / s } else { 1.0 };
@@ -463,7 +468,7 @@ pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents:
     } else {
         opts
     };
-    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: None };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: None, named: None };
     for e in ents {
         entity(&mut b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
     }
@@ -513,12 +518,20 @@ fn default_lineweight(d: &Drawing) -> f32 {
 }
 
 fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
+    // The entity's named plot style, for everything it draws (block contents set their own).
+    let saved = b.named;
+    b.named = b.styles.and_then(|s| s.named_index(ctx, &e.common));
+    entity_parts(b, ctx, e);
+    b.named = saved;
+}
+
+fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     let (rgb, lw, lt, ltscale, visible) = resolve(ctx, e, b.plotting);
     if !visible {
         return;
     }
     // A plot style's linetype replaces the object's.
-    let lt = match b.styles.and_then(|s| s.linetype(rgb)) {
+    let lt = match b.styles.and_then(|s| s.linetype(rgb, b.named)) {
         Some(over) => over,
         None => lt,
     };
@@ -569,7 +582,7 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if let Some(blk) = dm.block.as_ref().and_then(|n| ctx.d.block(n))
                 && ctx.depth < cadcraft_doc::MAX_BLOCK_DEPTH
             {
-                let sub = sub_ctx(ctx, e, Mat3::IDENTITY);
+                let sub = Ctx { block_pstyle: b.named, ..sub_ctx(ctx, e, Mat3::IDENTITY) };
                 for be in blk.entities.iter() {
                     if !b.expand() {
                         break;
@@ -973,6 +986,7 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
         frozen: ctx.frozen,
         vp_colors: ctx.vp_colors,
         lt_factor: ctx.lt_factor,
+        block_pstyle: ctx.block_pstyle,
     }
 }
 
@@ -990,7 +1004,7 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
                 }
                 let off = Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
                 let m = Mat3::translate(off).then_before(ins.transform(blk.base.xy()));
-                let sub = sub_ctx(ctx, e, m);
+                let sub = Ctx { block_pstyle: b.named, ..sub_ctx(ctx, e, m) };
                 for be in blk.entities.iter() {
                     // Constant/visible attribute definitions inside blocks are not drawn; attribs are.
                     if matches!(be.kind, EntityKind::AttDef(_)) {

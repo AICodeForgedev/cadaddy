@@ -810,6 +810,62 @@ struct Rx {
     table_style_fix: Vec<(Handle, String)>,
     /// Upper-case xref block name → the external drawing's path (BLOCK group 1).
     xref_paths: HashMap<String, String>,
+    /// Plot style name placeholder handle (upper case) → plot style name (`ACAD_PLOTSTYLENAME`).
+    pstyles: HashMap<String, String>,
+}
+
+/// The plot style names of a file: the entries of the `ACAD_PLOTSTYLENAME` dictionary of the
+/// named object dictionary (the first object), by placeholder handle.
+fn plot_style_names(secs: &[cadcraft_dxf::Section]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Some(objects) = secs.iter().find(|s| s.name == "OBJECTS") else { return out };
+    let recs = records(&objects.tags);
+    let entries = |tags: &[Tag]| {
+        let mut v: Vec<(String, String)> = Vec::new();
+        let mut name: Option<String> = None;
+        for t in tags {
+            match t.code {
+                3 => name = Some(t.str()),
+                350 | 360 => {
+                    if let Some(n) = name.take() {
+                        v.push((n, t.str().trim().to_ascii_uppercase()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        v
+    };
+    let Some((_, root)) = recs.iter().find(|(k, _)| k == "DICTIONARY") else { return out };
+    let Some((_, dict)) = entries(root).into_iter().find(|(n, _)| n.eq_ignore_ascii_case(crate::dxf_ext::PLOT_STYLE_NAMES_KEY)) else {
+        return out;
+    };
+    let is_dict = |k: &str| k == "DICTIONARY" || k == "ACDBDICTIONARYWDFLT";
+    let Some((_, tags)) = recs.iter().find(|(k, tg)| is_dict(k) && T(tg).s(5).is_some_and(|h| h.trim().eq_ignore_ascii_case(&dict))) else {
+        return out;
+    };
+    for (n, h) in entries(tags).into_iter().take(crate::dxf_ext::MAX_PLOT_STYLE_NAMES) {
+        if !n.trim().is_empty() {
+            out.insert(h, n.chars().take(255).collect());
+        }
+    }
+    out
+}
+
+/// The named plot style an entity record points at (group 390 among its AcDbEntity groups).
+fn entity_plot_style(tags: &[Tag], rx: &Rx) -> Option<String> {
+    let mut in_entity = false;
+    for t in tags {
+        if t.code == 100 {
+            if in_entity {
+                return None;
+            }
+            in_entity = t.str() == "AcDbEntity";
+        } else if t.code == 390 && in_entity {
+            return rx.pstyles.get(&t.str().trim().to_ascii_uppercase()).cloned();
+        }
+    }
+    None
 }
 
 /// Dimension overrides and associativity, table references: data of an entity record that
@@ -851,6 +907,11 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
         let paper = t.i(67) == Some(1);
         let handle = t.s(5).and_then(|h| Handle::parse_hex(&h));
         let mut kindent = entity(kind, tags);
+        if let Some((c, _)) = kindent.as_mut()
+            && let Some(n) = entity_plot_style(tags, rx)
+        {
+            c.plot_style = n;
+        }
         // More entities from this record (the faces of a polyface or polygon mesh).
         let mut extra: Vec<EntityKind> = Vec::new();
         i += 1;
@@ -1131,6 +1192,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 if let Some(tc) = t.i(420) {
                     l.color = Color::True(Rgb::from_u32(tc as u32));
                 }
+                if let Some(n) = t.s(390).and_then(|h| rx.pstyles.get(&h.trim().to_ascii_uppercase())) {
+                    l.plot_style = n.clone();
+                }
                 let alpha = crate::dxf_ext::xdata(&tg, crate::dxf_ext::LAYER_TRANSPARENCY_APP).iter().find(|x| x.code == 1071);
                 if let Some(pct) = alpha.and_then(|x| crate::dxf_ext::transparency_from_dxf(x.i64())) {
                     l.transparency = pct;
@@ -1296,7 +1360,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     }
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
-    let mut rx = Rx::default();
+    let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
     let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Entity)>, bool)> = Vec::new();
     let mut layout_objs: Vec<(String, u32, String, PageSetup)> = Vec::new();
     let mut entities = Vec::new();
@@ -1546,6 +1610,10 @@ impl Objects {
         // Saved layer states.
         if let Some(states) = self.xrecord_text(crate::dxf_ext::LAYER_STATES_KEY).and_then(|t| crate::dxf_ext::parse_layer_states(&t)) {
             d.layer_states = states;
+        }
+        // The drawing's plot style tables.
+        if let Some(tables) = self.xrecord_text(crate::dxf_ext::PLOT_STYLES_KEY).and_then(|t| crate::dxf_ext::parse_plot_styles(&t)) {
+            d.plot_style_tables = tables;
         }
         // Multileader styles (named by their ACAD_MLEADERSTYLE dictionary entries).
         for (h, tags) in &self.mleader_styles {

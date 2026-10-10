@@ -12,6 +12,8 @@ use crate::dxf_ext::{self, DimVal, K};
 struct W {
     t: Vec<Tag>,
     next: u64,
+    /// Upper-case plot style name → its `ACDBPLACEHOLDER` handle (group 390 of layers and objects).
+    pstyles: HashMap<String, String>,
 }
 
 impl W {
@@ -145,7 +147,7 @@ fn annotative_xdata(w: &mut W) {
 
 /// Override (`ACAD` DSTYLE) and associativity (`CADCRAFT` ASSOC) xdata of a dimension.
 fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
-    let mut ov = W { t: Vec::new(), next: 0 };
+    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new() };
     let mut sah = false;
     for (k, v) in &dm.overrides {
         let Some(field) = DimStyle::field_name(k) else { continue };
@@ -291,6 +293,10 @@ fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, ass
     }
     if let Some(v) = transparency_440(e.common.transparency) {
         w.i(440, v);
+    }
+    // A named plot style (not ByLayer/ByBlock): its placeholder object.
+    if let Some(h) = w.pstyles.get(&e.common.plot_style.trim().to_ascii_uppercase()).cloned() {
+        w.s(390, h);
     }
     if !subclass.is_empty() {
         w.s(100, subclass);
@@ -1222,7 +1228,7 @@ fn record_head(w: &mut W, kind: &str, owner: &str, subclass: &str) -> String {
 /// Write a drawing as ASCII DXF.
 pub fn write(d: &Drawing) -> String {
     // Structural handles start above every entity handle.
-    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100) + 0x1000 };
+    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100) + 0x1000, pstyles: HashMap::new() };
     // Pre-allocate handles for block records.
     let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
     paper_layouts.sort_by_key(|l| l.tab_order);
@@ -1348,6 +1354,22 @@ pub fn write(d: &Drawing) -> String {
     if let Some(chunks) = dxf_ext::layer_state_chunks(&d.layer_states) {
         xrecords.push((dxf_ext::LAYER_STATES_KEY, w.h(), chunks));
     }
+    if let Some(chunks) = dxf_ext::plot_style_chunks(&d.plot_style_tables) {
+        xrecords.push((dxf_ext::PLOT_STYLES_KEY, w.h(), chunks));
+    }
+    // Plot style names used by layers and objects (Normal always), each a placeholder object.
+    let pstyle_dict = w.h();
+    let mut pstyle_names: Vec<String> = vec![cadcraft_doc::NORMAL_STYLE.to_string()];
+    let named = d.layers.iter().map(|l| l.plot_style.as_str()).chain(every.iter().map(|e| e.common.plot_style.as_str()));
+    for n in named {
+        let n = n.trim();
+        let logical = n.is_empty() || n.eq_ignore_ascii_case("bylayer") || n.eq_ignore_ascii_case("byblock");
+        if !logical && pstyle_names.len() < dxf_ext::MAX_PLOT_STYLE_NAMES && !pstyle_names.iter().any(|x| x.eq_ignore_ascii_case(n)) {
+            pstyle_names.push(n.to_string());
+        }
+    }
+    let pstyles: Vec<(String, String)> = pstyle_names.into_iter().map(|n| (n, w.h())).collect();
+    w.pstyles = pstyles.iter().map(|(n, h)| (n.to_ascii_uppercase(), h.clone())).collect();
     let model_layout = w.h();
     let layout_handles: Vec<String> = ps_brs.iter().map(|_| w.h()).collect();
 
@@ -1379,7 +1401,12 @@ pub fn write(d: &Drawing) -> String {
     // ---------------- CLASSES ----------------
     w.s(0, "SECTION");
     w.s(2, "CLASSES");
-    let mut classes = vec![("TABLESTYLE", "AcDbTableStyle", 4095, false), ("MLEADERSTYLE", "AcDbMLeaderStyle", 4095, false)];
+    let mut classes = vec![
+        ("TABLESTYLE", "AcDbTableStyle", 4095, false),
+        ("MLEADERSTYLE", "AcDbMLeaderStyle", 4095, false),
+        ("ACDBDICTIONARYWDFLT", "AcDbDictionaryWithDefault", 0, false),
+        ("ACDBPLACEHOLDER", "AcDbPlaceHolder", 0, false),
+    ];
     if !cx.tables.is_empty() {
         classes.push(("ACAD_TABLE", "AcDbTable", 1025, true));
     }
@@ -1487,6 +1514,10 @@ pub fn write(d: &Drawing) -> String {
             w.i(290, 0);
         }
         w.i(370, i64::from(l.lineweight.to_dxf()));
+        let normal = w.pstyles.get(&cadcraft_doc::NORMAL_STYLE.to_ascii_uppercase()).cloned();
+        if let Some(h) = w.pstyles.get(&l.plot_style.trim().to_ascii_uppercase()).cloned().or(normal) {
+            w.s(390, h);
+        }
         if l.transparency > 0 {
             w.s(1001, dxf_ext::LAYER_TRANSPARENCY_APP);
             w.i(1071, dxf_ext::transparency_to_dxf(l.transparency));
@@ -1770,6 +1801,8 @@ pub fn write(d: &Drawing) -> String {
     w.s(350, layout_dict.clone());
     w.s(3, "ACAD_MLEADERSTYLE");
     w.s(350, mleader_dict.clone());
+    w.s(3, dxf_ext::PLOT_STYLE_NAMES_KEY);
+    w.s(350, pstyle_dict.clone());
     w.s(3, "ACAD_TABLESTYLE");
     w.s(350, table_style_dict.clone());
     for (key, h, _) in &xrecords {
@@ -1815,7 +1848,27 @@ pub fn write(d: &Drawing) -> String {
     for (s, (_, h)) in table_styles.iter().zip(&cx.table_styles) {
         table_style_obj(&mut w, s, h, &table_style_dict);
     }
-    // Parametric constraints and parameters, saved layer states (CADCraft data).
+    // Plot style names: a dictionary with a default (Normal) of placeholder objects.
+    w.s(0, "ACDBDICTIONARYWDFLT");
+    w.s(5, pstyle_dict.clone());
+    w.group("ACAD_REACTORS", 330, &[&root_dict]);
+    w.s(330, root_dict.clone());
+    w.s(100, "AcDbDictionary");
+    w.i(281, 1);
+    for (n, h) in &pstyles {
+        w.s(3, n);
+        w.s(350, h);
+    }
+    w.s(100, "AcDbDictionaryWithDefault");
+    w.s(340, pstyles.first().map(|(_, h)| h.clone()).unwrap_or_default());
+    for (_, h) in &pstyles {
+        w.s(0, "ACDBPLACEHOLDER");
+        w.s(5, h);
+        w.group("ACAD_REACTORS", 330, &[&pstyle_dict]);
+        w.s(330, pstyle_dict.clone());
+    }
+    // Parametric constraints and parameters, saved layer states, plot style tables (CADCraft
+    // data).
     for (_, h, chunks) in &xrecords {
         w.s(0, "XRECORD");
         w.s(5, h);

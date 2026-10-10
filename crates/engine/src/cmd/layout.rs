@@ -12,6 +12,7 @@ use super::file::{base64_encode, io};
 use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
+mod plotstyle;
 mod prompts;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -79,6 +80,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("pspace", "Paper Space", run_pspace).alias(&["ps"]).noundo(),
     ]
+    .into_iter()
+    .chain(plotstyle::specs())
+    .collect()
 }
 
 // ---------- model space through viewports ----------
