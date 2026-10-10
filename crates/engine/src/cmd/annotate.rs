@@ -341,14 +341,29 @@ fn chained(s: &Session, prev: &Dimension, next: Vec2, baseline: bool) -> EntityK
     })
 }
 
+/// Most dimensions one DIMCONTINUE/DIMBASELINE call adds.
+const MAX_CHAIN: usize = 100_000;
+
 fn chain_run(s: &mut Session, p: &Value, baseline: bool) -> Result<Value> {
     let id = if baseline { "dimbaseline" } else { "dimcontinue" };
-    let pts = points_param(p, "points").ok_or_else(|| bad(id, "`points` is required"))?;
+    let pts = p.get("points").and_then(Value::as_array).ok_or_else(|| bad(id, "`points` is required"))?;
+    if pts.len() > MAX_CHAIN {
+        return Err(bad(id, format!("at most {MAX_CHAIN} `points` per call")));
+    }
+    let pts = points_param(p, "points").ok_or_else(|| bad(id, "`points` must be a list of points"))?;
+    // One snap index for the whole chain: looking up each new point's object by scanning the
+    // drawing made long chains quadratic (the added dimensions are no snap targets).
+    let snaps = if assoc_enabled(s) { Some(crate::assoc::SnapIndex::new(s.doc()?, &s.space())) } else { None };
     let mut out = Vec::new();
     for q in pts {
         let prev = last_linear(s).ok_or_else(|| bad(id, "no linear dimension to continue"))?;
-        let k = chained(s, &prev, q, baseline);
-        out.push(add_dim(s, k)?.hex());
+        let mut k = chained(s, &prev, q, baseline);
+        if let (Some(ix), EntityKind::Dimension(dm)) = (&snaps, &mut k) {
+            dm.assoc = ix.auto_assoc(&[("p13", dm.p13.xy()), ("p14", dm.p14.xy())]);
+        }
+        let h = s.add_entity(k)?;
+        s.last_dim = Some(h);
+        out.push(h.hex());
     }
     Ok(json!({ "handles": out }))
 }
