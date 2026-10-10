@@ -558,7 +558,10 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                     text_mid = tpos + u * (tw / 2.0 + gap);
                 }
             }
-            if st.center_mark != 0.0 && st.center_mark.is_finite() {
+            // The DIMCEN mark is drawn only when the dimension line is outside the circle: a
+            // radius led out to its text, never a diameter line through the centre.
+            let line_outside = radius && tpos.dist(center) >= r;
+            if line_outside && st.center_mark != 0.0 && st.center_mark.is_finite() {
                 let c = st.center_mark.abs() * k;
                 g.ext(vec![center - Vec2::X * c, center + Vec2::X * c]);
                 g.ext(vec![center - Vec2::Y * c, center + Vec2::Y * c]);
@@ -592,15 +595,21 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             g.dim(pts);
             let sp = arc.start_point();
             let ep = arc.end_point();
+            // The arc's ends with the outward tangents there, paired with leg 1 and leg 2: when
+            // the arc location is outside the leg 1 → leg 2 sweep the arc runs from leg 2 to
+            // leg 1, and each leg keeps its own extension line, DIMSE1/2 and DIMBLK1/2.
+            let (start, finish) = ((sp, -(sp - vertex).perp().normalized()), (ep, (ep - vertex).perp().normalized()));
+            let ((p1, dir1), (p2, dir2)) =
+                if cadcraft_geom::angle_in_sweep(vertex.angle_to(arc_pt), s, e) { (start, finish) } else { (finish, start) };
             if !st.suppress_ext1 {
-                g.lines.extend(ext_line(vertex + (sp - vertex).normalized() * vertex.dist(a1).min(r), sp, st, k));
+                g.lines.extend(ext_line(vertex + (p1 - vertex).normalized() * vertex.dist(a1).min(r), p1, st, k));
             }
             if !st.suppress_ext2 {
-                g.lines.extend(ext_line(vertex + (ep - vertex).normalized() * vertex.dist(a2).min(r), ep, st, k));
+                g.lines.extend(ext_line(vertex + (p2 - vertex).normalized() * vertex.dist(a2).min(r), p2, st, k));
             }
             g.line_roles.resize(g.lines.len(), LineRole::Ext);
-            end(&mut g, blk1, sp, -(sp - vertex).perp().normalized());
-            end(&mut g, blk2, ep, (ep - vertex).perp().normalized());
+            end(&mut g, blk1, p1, dir1);
+            end(&mut g, blk2, p2, dir2);
             let (tw, tht) = measure(&g.mtext);
             let mid = arc.mid_point();
             let radial = (mid - vertex).normalized();
