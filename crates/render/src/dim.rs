@@ -1,7 +1,8 @@
 //! Dimension geometry generation from definition points and a dimension style: extension
 //! lines (DIMEXO/DIMEXE, DIMSE1/2), arrowheads (DIMBLK/DIMBLK1/DIMBLK2, drawn in code) or ticks
 //! (DIMTSZ, DIMDLE), text placement (DIMTAD, DIMJUST, DIMTIH/DIMTOH, DIMGAP) and text
-//! formatting (DIMLUNIT, DIMDEC, DIMZIN, DIMRND, DIMPOST, DIMTOL/DIMLIM, DIMALT).
+//! formatting (DIMLUNIT, DIMDEC, DIMZIN, DIMRND, DIMPOST, DIMTOL/DIMLIM with DIMTZIN, DIMALT with
+//! DIMALTU/DIMALTZ/DIMALTRND).
 
 use cadcraft_doc::{DimKind, DimStyle, Dimension};
 use cadcraft_fonts::{MTextParams, TextFont};
@@ -273,7 +274,9 @@ pub fn format_linear_value(v: f64, st: &DimStyle) -> String {
 }
 
 /// The text of a linear measurement: (plain, MTEXT) with DIMPOST, tolerances/limits and
-/// alternate units, then the user's override text (`<>` = the measurement).
+/// alternate units, then the user's override text (`<>` = the measurement). DIMRND rounds the
+/// measurement (and so the limits) only: tolerances are never rounded and alternate units
+/// round by DIMALTRND.
 fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str) -> String {
     let v = meas * st.linear_factor;
     let nf = NumFormat::from_style(st);
@@ -286,7 +289,7 @@ fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str) -> String 
     };
     let mut s = post(&st.post, &main);
     if st.tolerance && !st.limits {
-        let tf = NumFormat { decimals: st.tol_decimals, ..nf.clone() };
+        let tf = NumFormat { decimals: st.tol_decimals, zin: st.tol_zero_suppression, round: 0.0, ..nf.clone() };
         if (st.tol_plus - st.tol_minus).abs() < 1e-12 {
             s += &format!("%%p{}", format_linear(st.tol_plus, &tf).1);
         } else {
@@ -299,7 +302,14 @@ fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str) -> String 
         }
     }
     if st.alt {
-        let af = NumFormat { decimals: st.alt_decimals, unit: 2, ..nf };
+        // DIMALTU 6 and 7 are architectural and fractional without stacking, 8 is decimal.
+        let (unit, frac) = match st.alt_unit {
+            u @ 1..=5 => (u, nf.frac),
+            6 => (4, 2),
+            7 => (5, 2),
+            _ => (2, nf.frac),
+        };
+        let af = NumFormat { unit, decimals: st.alt_decimals, zin: st.alt_zero_suppression, round: st.alt_round, frac, ..nf };
         let alt = format_linear(v * st.alt_factor, &af).1;
         s += &format!(" [{}]", post(&st.alt_post, &alt));
     }
@@ -589,7 +599,8 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 if cadcraft_geom::angle_in_sweep(vertex.angle_to(arc_pt), s, e) { Arc::new(vertex, r, s, e) } else { Arc::new(vertex, r, e, s) };
             let sweep = ccw_sweep(arc.start, arc.end);
             let txt = format_angle(sweep, st.angular_unit, st.angular_decimals, st.zero_suppression & 12);
-            g.mtext = apply_override(&post(&st.post, &txt), d);
+            // DIMPOST is a linear-dimension prefix/suffix; angles have their own format only.
+            g.mtext = apply_override(&txt, d);
             let mut pts = Vec::new();
             arc.tessellate(r * 1e-3, &mut pts);
             g.dim(pts);
