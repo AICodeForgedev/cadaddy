@@ -291,21 +291,20 @@ pub fn mode_matrix(mode: GripMode, base: Vec2, to: Vec2) -> Option<Mat3> {
 
 impl Session {
     /// Drag grip `grip_index` of `handle` to `new_point` in `mode` (one undo step).
-    /// The base point of the rotate/scale/mirror modes is the grip itself.
+    /// The base point of the rotate/scale/mirror modes is the grip itself. As in AutoCAD the edit
+    /// covers the selection: a stretch drags the grips of other selected objects that sit on the
+    /// same point, and the other modes transform every selected object.
     pub fn grip_edit(&mut self, handle: Handle, grip_index: usize, new_point: Vec2, mode: GripMode) -> Result<()> {
         let to = [new_point.x, new_point.y];
+        let hs: Vec<String> = std::iter::once(handle).chain(self.selection().into_iter().filter(|h| *h != handle)).map(|h| h.hex()).collect();
         let r = match mode {
-            GripMode::Stretch => self.execute("grip.move", &json!({ "handle": handle.hex(), "index": grip_index, "to": to })),
-            GripMode::Move => self.execute("grip.move", &json!({ "handles": [handle.hex()], "index": grip_index, "to": to, "mode": "move" })),
-            GripMode::Rotate => {
-                self.execute("grip.rotate", &json!({ "handles": [handle.hex()], "baseHandle": handle.hex(), "index": grip_index, "to": to }))
+            GripMode::Stretch => self.execute("grip.move", &json!({ "handle": handle.hex(), "handles": hs, "index": grip_index, "to": to })),
+            GripMode::Move => {
+                self.execute("grip.move", &json!({ "handles": hs, "baseHandle": handle.hex(), "index": grip_index, "to": to, "mode": "move" }))
             }
-            GripMode::Scale => {
-                self.execute("grip.scale", &json!({ "handles": [handle.hex()], "baseHandle": handle.hex(), "index": grip_index, "to": to }))
-            }
-            GripMode::Mirror => {
-                self.execute("grip.mirror", &json!({ "handles": [handle.hex()], "baseHandle": handle.hex(), "index": grip_index, "to": to }))
-            }
+            GripMode::Rotate => self.execute("grip.rotate", &json!({ "handles": hs, "baseHandle": handle.hex(), "index": grip_index, "to": to })),
+            GripMode::Scale => self.execute("grip.scale", &json!({ "handles": hs, "baseHandle": handle.hex(), "index": grip_index, "to": to })),
+            GripMode::Mirror => self.execute("grip.mirror", &json!({ "handles": hs, "baseHandle": handle.hex(), "index": grip_index, "to": to })),
         };
         r.map(|_| ())
     }
