@@ -13,7 +13,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("zoom", "Zoom", run_zoom)
             .menu(&["View", "Zoom", "Realtime"])
             .alias(&["z"])
-            .params("{mode: extents|all|window|previous|in|out|center|scale|object, p1?, p2?, center?, height?, factor?}")
+            .params("{mode: extents|all|window|previous|in|out|center|scale|object, p1?, p2?, center?, height?, factor?, xp?: bool (scale relative to paper space: in a viewport, `factor` paper units per model unit)}")
             .noundo()
             .transparent()
             .interactive(|_| Ok(Box::new(ZoomM::default()))),
@@ -95,9 +95,10 @@ fn fit(s: &mut Session, b: Bounds2) -> Result<()> {
         return Ok(());
     }
     let (w, h) = s.viewport_px;
-    let aspect = w / h.max(1.0);
+    let st = s.state_mut()?;
+    let aspect = st.zoom_aspect(w / h.max(1.0));
     let height = b.height().max(b.width() / aspect.max(1e-6)).max(1e-9);
-    s.state_mut()?.set_view(View { center: b.center(), height });
+    st.set_zoom_frame(View { center: b.center(), height });
     Ok(())
 }
 
@@ -128,14 +129,14 @@ pub(crate) fn zoom(s: &mut Session, p: &Value) -> Result<Value> {
         "in" | "out" => {
             let f = if mode == "in" { 2.0 } else { 0.5 };
             let st = s.state_mut()?;
-            let v = st.view();
-            st.set_view(View { center: v.center, height: v.height / f });
+            let v = st.zoom_frame();
+            st.set_zoom_frame(View { center: v.center, height: v.height / f });
         }
         "center" | "c" => {
             let c = point_req("zoom", p, "center")?;
             let st = s.state_mut()?;
-            let h = f64_or(p, "height", st.view().height);
-            st.set_view(View { center: c, height: h.max(1e-9) });
+            let h = f64_or(p, "height", st.zoom_frame().height);
+            st.set_zoom_frame(View { center: c, height: h.max(1e-9) });
         }
         "scale" | "s" => {
             let f = f64_req("zoom", p, "factor")?;
@@ -143,8 +144,13 @@ pub(crate) fn zoom(s: &mut Session, p: &Value) -> Result<Value> {
                 return Err(bad("zoom", "factor must be positive"));
             }
             let st = s.state_mut()?;
-            let v = st.view();
-            st.set_view(View { center: v.center, height: v.height / f });
+            let v = st.zoom_frame();
+            // nXP in a viewport sets its scale: `f` paper units per model unit.
+            let height = match st.zoom_viewport() {
+                Some(vp) if bool_or(p, "xp", false) => vp.height / f,
+                _ => v.height / f,
+            };
+            st.set_zoom_frame(View { center: v.center, height });
         }
         "object" | "o" => {
             let hs = targets(s, p)?;
@@ -274,12 +280,9 @@ impl Interactive for ZoomM {
                 let f = number(num)
                     .filter(|f| *f > 0.0)
                     .ok_or_else(|| crate::EngineError::Other("Requires a point, scale factor or option keyword.".into()))?;
-                if tl.ends_with('x') {
-                    zoom(s, &json!({ "mode": "scale", "factor": f }))?;
-                } else {
-                    // Plain number: scale relative to limits (approximation: like nX).
-                    zoom(s, &json!({ "mode": "scale", "factor": f }))?;
-                }
+                // nXP: relative to paper space; nX and a plain number (approximation: like nX)
+                // relative to the current view.
+                zoom(s, &json!({ "mode": "scale", "factor": f, "xp": tl.ends_with("xp") }))?;
                 Ok(Step::Done)
             }
             Input::Enter => Ok(Step::Done),

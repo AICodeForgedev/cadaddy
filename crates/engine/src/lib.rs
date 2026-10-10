@@ -227,6 +227,36 @@ impl DocState {
         }
         self.store_view(v);
     }
+    /// The active MSPACE viewport when ZOOM works on its own view, as in AutoCAD: extents and
+    /// windows fit the viewport, and zooms keep its centre. A locked viewport keeps its scale, so
+    /// zooming it moves the sheet instead (see `store_view`).
+    pub fn zoom_viewport(&self) -> Option<cadcraft_doc::Viewport> {
+        self.active_viewport().map(|(_, v)| v).filter(|v| !v.locked && v.width > 1e-12)
+    }
+    /// The view ZOOM starts from: the model view of the active unlocked viewport, else [`Self::view`].
+    pub fn zoom_frame(&self) -> View {
+        match self.zoom_viewport() {
+            Some(v) => View { center: v.view_center, height: v.view_height },
+            None => self.view(),
+        }
+    }
+    /// Width / height of the area ZOOM fits into: the active unlocked viewport, else `screen`.
+    pub fn zoom_aspect(&self, screen: f64) -> f64 {
+        self.zoom_viewport().map_or(screen, |v| v.width / v.height)
+    }
+    /// Set the view ZOOM works on (see [`Self::zoom_frame`]), recording view history.
+    pub fn set_zoom_frame(&mut self, f: View) {
+        let v = match self.zoom_viewport() {
+            // The screen view that `store_view` maps to this model view of the viewport.
+            Some(vp) => {
+                let pv = self.paper_view();
+                let k = f.height / vp.height;
+                View { center: f.center + (pv.center - vp.center.xy()) * k, height: pv.height * k }
+            }
+            None => f,
+        };
+        self.set_view(v);
+    }
     /// Set without recording view history (realtime pan/zoom frames).
     pub fn set_view_quiet(&mut self, v: View) {
         if !(v.center.is_finite() && v.height.is_finite() && v.height > 1e-12) {
@@ -1071,9 +1101,10 @@ impl Session {
         } else {
             ext
         };
-        let aspect = w / h.max(1.0);
+        let st = self.state_mut()?;
+        let aspect = st.zoom_aspect(w / h.max(1.0));
         let height = ext.height().max(ext.width() / aspect.max(1e-6)).max(1e-6) * 1.05;
-        self.state_mut()?.set_view(View { center: ext.center(), height });
+        st.set_zoom_frame(View { center: ext.center(), height });
         Ok(())
     }
 
