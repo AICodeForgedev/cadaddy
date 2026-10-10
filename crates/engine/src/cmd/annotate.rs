@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::helpers::v3;
 use super::machines::SelectRun;
 use super::*;
-use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
+use crate::{Accept, EngineError, Input, Interactive, LeaderOrder, MLeaderOptions, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -69,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Dimension", "Multileader"])
             .alias(&["mld"])
             .params("{points: [[arrow], ..., [landing]], text}")
-            .interactive(|_| Ok(Box::new(MLeaderM::default()))),
+            .interactive(|s| Ok(Box::new(MLeaderM::new(s)))),
         CommandSpec::new("leader", "Leader", run_leader).alias(&["lead"]).params("{points: [[x,y]...], text?}"),
         CommandSpec::new("dimstyle.update", "Update", run_update)
             .menu(&["Dimension", "Update"])
@@ -1455,15 +1455,6 @@ impl Interactive for ChainM {
     }
 }
 
-/// Which end of the multileader MLEADER places first.
-#[derive(Clone, Copy, Default, PartialEq)]
-enum LeaderOrder {
-    #[default]
-    Arrowhead,
-    Landing,
-    Content,
-}
-
 /// The MLEADER Options prompt being answered.
 #[derive(Clone, Copy, PartialEq)]
 enum LeaderOpt {
@@ -1495,23 +1486,28 @@ struct MLeaderM {
     content: bool,
 }
 
-impl Default for MLeaderM {
-    fn default() -> Self {
+impl MLeaderM {
+    /// Starts with the order and Options chosen the last time (as AutoCAD does).
+    fn new(s: &Session) -> Self {
+        let o = s.last_used.mleader;
+        let max_points = o.max_points.clamp(2, MAX_LEADER_POINTS);
         MLeaderM {
-            order: LeaderOrder::Arrowhead,
+            order: o.order,
             pts: Vec::new(),
             leader_done: false,
             text: None,
             opt: None,
-            max_points: 2,
-            angles: [0.0; 2],
-            landing: true,
-            content: true,
+            max_points,
+            angles: o.angles,
+            landing: o.landing,
+            content: o.content,
         }
     }
-}
-
-impl MLeaderM {
+    /// Keep the order and Options for the next MLEADER.
+    fn remember(&self, s: &mut Session) {
+        s.last_used.mleader =
+            MLeaderOptions { order: self.order, max_points: self.max_points, angles: self.angles, landing: self.landing, content: self.content };
+    }
     /// The leader from arrowhead to landing, with `extra` placed next.
     fn leader(&self, extra: Option<Vec2>) -> Vec<Vec2> {
         let mut pts = self.pts.clone();
@@ -1649,6 +1645,7 @@ impl Interactive for MLeaderM {
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Some(o) = self.opt {
             self.opt = self.option(s, o, i);
+            self.remember(s);
             return Ok(Step::Continue);
         }
         if self.wants_text() {
@@ -1663,12 +1660,15 @@ impl Interactive for MLeaderM {
                     self.leader_done = true;
                 }
             }
-            Input::Keyword(k) if self.pts.is_empty() => match k.as_str() {
-                "leader Landing first" => self.order = LeaderOrder::Landing,
-                "leader arrowHead first" => self.order = LeaderOrder::Arrowhead,
-                "Content first" => self.order = LeaderOrder::Content,
-                _ => self.opt = Some(LeaderOpt::Menu),
-            },
+            Input::Keyword(k) if self.pts.is_empty() => {
+                match k.as_str() {
+                    "leader Landing first" => self.order = LeaderOrder::Landing,
+                    "leader arrowHead first" => self.order = LeaderOrder::Arrowhead,
+                    "Content first" => self.order = LeaderOrder::Content,
+                    _ => self.opt = Some(LeaderOpt::Menu),
+                }
+                self.remember(s);
+            }
             Input::Enter if self.pts.is_empty() => self.opt = Some(LeaderOpt::Menu),
             // Enter at "next point" ends the leader at the last point.
             Input::Enter if self.pts.len() >= 2 => self.leader_done = true,

@@ -346,11 +346,42 @@ pub struct LastUsed {
     pub rotate_angle: f64,
     /// SCALE factor.
     pub scale_factor: f64,
+    /// MLEADER placement order and Options.
+    pub mleader: MLeaderOptions,
 }
 
 impl Default for LastUsed {
     fn default() -> Self {
-        LastUsed { hatch_select: false, polygon_circumscribed: false, rotate_angle: 0.0, scale_factor: 1.0 }
+        LastUsed { hatch_select: false, polygon_circumscribed: false, rotate_angle: 0.0, scale_factor: 1.0, mleader: MLeaderOptions::default() }
+    }
+}
+
+/// Which part of a multileader MLEADER places first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LeaderOrder {
+    #[default]
+    Arrowhead,
+    Landing,
+    Content,
+}
+
+/// The MLEADER placement order and the values set at its Options prompt.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MLeaderOptions {
+    pub order: LeaderOrder,
+    /// Maximum points of the leader line (2..=64).
+    pub max_points: usize,
+    /// First and second angle constraints (radians; 0 = free).
+    pub angles: [f64; 2],
+    /// Draw the landing line (dogleg).
+    pub landing: bool,
+    /// Ask for multiline text content (Content type None turns it off).
+    pub content: bool,
+}
+
+impl Default for MLeaderOptions {
+    fn default() -> Self {
+        MLeaderOptions { order: LeaderOrder::Arrowhead, max_points: 2, angles: [0.0; 2], landing: true, content: true }
     }
 }
 

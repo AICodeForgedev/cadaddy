@@ -123,7 +123,9 @@ fn mleader_options_take_effect() {
     assert_eq!(m.dogleg, 0.0);
     assert_eq!(m.text.unwrap().contents, "txt");
 
-    // First angle constraint snaps the leader to 45° steps.
+    // First angle constraint snaps the leader to 45° steps (a new session: MLEADER would keep the
+    // Maxpoints and landing chosen above).
+    let mut s = Session::new();
     s.script("mleader o f 45 x 0,0 10,8 note\n").unwrap();
     let m = last_mleader(&s);
     let r = Vec2::new(10.0, 8.0).len();
