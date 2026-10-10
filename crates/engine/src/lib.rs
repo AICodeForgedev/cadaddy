@@ -302,6 +302,29 @@ pub struct PendingWindow {
     pub during_command: bool,
 }
 
+/// Options and values the interactive commands remember for the rest of the session, offered as
+/// the `<default>` the next time they ask (as AutoCAD does). Values AutoCAD keeps in a drawing
+/// system variable (HPNAME, OFFSETDIST, FILLETRAD, CHAMFERA, POLYSIDES…) live in the drawing
+/// header instead. JSON calls never read these: their explicit parameters and documented defaults
+/// stay authoritative.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LastUsed {
+    /// HATCH/GRADIENT starts at "Select objects" instead of "Pick internal point".
+    pub hatch_select: bool,
+    /// POLYGON: circumscribed about the circle (the `C` option) instead of inscribed.
+    pub polygon_circumscribed: bool,
+    /// ROTATE angle (radians).
+    pub rotate_angle: f64,
+    /// SCALE factor.
+    pub scale_factor: f64,
+}
+
+impl Default for LastUsed {
+    fn default() -> Self {
+        LastUsed { hatch_select: false, polygon_circumscribed: false, rotate_angle: 0.0, scale_factor: 1.0 }
+    }
+}
+
 /// The editor session: open drawings, settings, the running command and the command log.
 pub struct Session {
     pub docs: Vec<DocState>,
@@ -325,6 +348,8 @@ pub struct Session {
     pub untitled_counter: u32,
     /// The last dimension created (DIMCONTINUE / DIMBASELINE).
     pub last_dim: Option<Handle>,
+    /// Options remembered between invocations of interactive commands.
+    pub last_used: LastUsed,
 }
 
 impl Default for Session {
@@ -357,6 +382,7 @@ impl Session {
             pending_window: None,
             untitled_counter: 0,
             last_dim: None,
+            last_used: LastUsed::default(),
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {
@@ -610,7 +636,7 @@ impl Session {
                     }
                 }
             }
-            Input::Text(t) | Input::Keyword(t) => {
+            Input::Text(ref t) | Input::Keyword(ref t) => {
                 let tl = t.trim().to_ascii_lowercase();
                 let d = self.doc()?;
                 let store = d.space(&space);
@@ -622,7 +648,7 @@ impl Session {
                 };
                 match picked {
                     Some(hs) => Ok(Some(Input::Pick(hs))),
-                    None => Ok(Some(Input::Text(t))),
+                    None => Ok(Some(input)),
                 }
             }
             Input::Cancel => {
@@ -726,6 +752,16 @@ impl Session {
         self.running.as_ref().map(|r| r.machine.prompt(self))
     }
 
+    /// Whether the cursor picks objects right now, so the UI shows the pick box (PICKBOX) at the
+    /// crosshair: at prompts that select objects, and with no command running when PICKFIRST is on
+    /// (noun-verb selection).
+    pub fn picking_objects(&self) -> bool {
+        match self.current_prompt() {
+            Some(p) => p.picks_objects(),
+            None => self.settings.pickfirst,
+        }
+    }
+
     /// The text shown on the command line: the active prompt, or "Command:".
     pub fn prompt_text(&self) -> String {
         match &self.running {
@@ -803,7 +839,11 @@ impl Session {
         if tt.starts_with('\'') {
             return self.start(tt);
         }
-        if let Some(k) = prompt.match_keyword(tt)
+        // At "Select objects" prompts the selection modes (Previous, Last, ALL) win over a command
+        // keyword sharing the letter (HATCH's "picK internal point" against `P`).
+        let selection_mode = prompt.accept.select && matches!(tt.to_ascii_lowercase().as_str(), "all" | "l" | "last" | "p" | "previous");
+        if !selection_mode
+            && let Some(k) = prompt.match_keyword(tt)
             && !(prompt.accept.number && tt.parse::<f64>().is_ok())
         {
             return self.input(Input::Keyword(k));
