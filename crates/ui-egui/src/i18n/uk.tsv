@@ -53,6 +53,7 @@
 	Attribute	Атрибут
 	Attribute Definition	Визначення атрибута
 	Attribute Display	Відображення атрибутів
+	Audit	Перевірка креслення
 	Auto (system language)	Авто (мова системи)
 	Auto Constrain	Автоматичні обмеження
 	AutoConstrain	Автоматичні обмеження
@@ -194,6 +195,7 @@
 	Drawing (DWG)	Креслення (DWG)
 	Drawing (DXF)	Креслення (DXF)
 	Drawing Limits	Межі креслення
+	Drawing Utilities	Утиліти креслення
 	Drawings (DWG, DXF)	Креслення (DWG, DXF)
 	Dynamic Dimensions	Динамічні розміри
 	Dynamic Input	Динамічне введення
@@ -564,6 +566,7 @@
 	Realtime	У реальному часі
 	Reassociate Dimensions	Відновити асоціативність розмірів
 	Recent	Нещодавні
+	Recover...	Відновити...
 	Rectangle	Прямокутник
 	Rectangular	Прямокутний
 	Rectangular Array	Прямокутний масив

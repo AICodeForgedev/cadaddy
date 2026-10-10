@@ -78,7 +78,15 @@ impl Prompt {
     pub fn display(&self) -> String {
         let mut s = self.message.clone();
         if !self.keywords.is_empty() {
-            s.push_str(if self.message.is_empty() { "[" } else { " or [" });
+            // A question offers its answers ("Fix any errors detected? [Yes/No]"); anything else
+            // offers options besides what it asks for ("Specify next point or [Undo]").
+            s.push_str(if self.message.is_empty() {
+                "["
+            } else if self.message.ends_with('?') {
+                " ["
+            } else {
+                " or ["
+            });
             s.push_str(&self.keywords.join("/"));
             s.push(']');
         }
@@ -226,6 +234,8 @@ mod tests {
     fn keywords() {
         let p = Prompt::new("Specify next point", Accept::POINT).kw(&["Undo", "Close"]);
         assert_eq!(p.display(), "Specify next point or [Undo/Close]:");
+        let q = Prompt::new("Erase polyline?", Accept::TEXT).kw(&["Yes", "No"]).default("No");
+        assert_eq!(q.display(), "Erase polyline? [Yes/No] <No>:");
         assert_eq!(p.match_keyword("u").as_deref(), Some("Undo"));
         assert_eq!(p.match_keyword("CL").as_deref(), Some("Close"));
         assert_eq!(p.match_keyword("x"), None);

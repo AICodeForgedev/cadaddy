@@ -3,6 +3,7 @@
 
 mod annotate;
 mod array;
+mod audit;
 mod blocks;
 pub mod clipboard;
 pub mod constraints;
@@ -152,6 +153,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
     SPECS.get_or_init(|| {
         let mut v = Vec::new();
         v.extend(file::specs());
+        v.extend(audit::specs());
         v.extend(edit::specs());
         v.extend(qselect::specs());
         v.extend(view::specs());

@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod assoc;
+pub mod audit;
 pub mod cmd;
 mod finite;
 pub mod grips;

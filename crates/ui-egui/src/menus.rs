@@ -84,6 +84,15 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             }
             Ok(Value::Null)
         }
+        // RECOVER from the menu or typed: pick the file. Without a picker the engine asks for the
+        // file name on the command line.
+        "recover" if no_path && app.services.pick_open.is_some() => {
+            if let Some(p) = app.services.pick_open.as_ref().and_then(|f| f()) {
+                let r = app.run("recover", json!({ "path": p }));
+                app.opened(r);
+            }
+            Ok(Value::Null)
+        }
         "ui.saveas" | "saveas" if no_path => {
             let title = app.session.state().map(|s| s.title.clone()).ok();
             let name = app.ui.save_format.suggested_name(title.as_deref());
