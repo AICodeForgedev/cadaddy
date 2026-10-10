@@ -165,35 +165,36 @@ pub fn select_window(d: &Drawing, space: &Space, bx: Bounds2, crossing: bool) ->
 
 pub(crate) fn select_window_with(d: &Drawing, space: &Space, ix: &Option<std::sync::Arc<SpatialIndex>>, bx: Bounds2, crossing: bool) -> Vec<Handle> {
     let Some(cands) = candidates(d, space, ix, &bx, crossing, false) else { return Vec::new() };
-    let tol = (bx.width() + bx.height()).max(1e-9) / 2000.0;
-    let mut out = Vec::new();
-    for (e, known) in cands {
-        if !selectable(d, e) {
-            continue;
-        }
-        let infinite = is_infinite(e);
-        let eb = bounds_of(d, e, known);
-        if !infinite && bx.contains_box(&eb) {
-            out.push(e.handle);
-            continue;
-        }
-        if !crossing || (!infinite && !eb.intersects(&bx)) {
-            continue;
-        }
-        let polys = hit_polylines(d, e, tol);
-        let hit = polys.iter().any(|pl| {
-            if pl.len() == 1 {
-                pl.first().is_some_and(|p| bx.contains(*p))
-            } else {
-                pl.windows(2).any(|w| w.first().zip(w.get(1)).is_some_and(|(a, b)| seg_hits_box(*a, *b, &bx)))
-            }
-        });
-        // A crossing box entirely inside a filled/text object also selects it.
-        if hit || (eb.contains_box(&bx) && matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::Insert(_))) {
-            out.push(e.handle);
-        }
+    let tol = window_tol(&bx);
+    cands.filter(|(e, known)| selectable(d, e) && in_window(d, e, *known, &bx, crossing, tol)).map(|(e, _)| e.handle).collect()
+}
+
+/// The tessellation tolerance window and crossing tests use for a box.
+pub(crate) fn window_tol(bx: &Bounds2) -> f64 {
+    (bx.width() + bx.height()).max(1e-9) / 2000.0
+}
+
+/// Whether a window box (`crossing` false: entirely inside) or a crossing box (inside or
+/// touching its geometry, not just its bounding box) selects `e`.
+pub(crate) fn in_window(d: &Drawing, e: &Entity, known: Option<Bounds2>, bx: &Bounds2, crossing: bool, tol: f64) -> bool {
+    let infinite = is_infinite(e);
+    let eb = bounds_of(d, e, known);
+    if !infinite && bx.contains_box(&eb) {
+        return true;
     }
-    out
+    if !crossing || (!infinite && !eb.intersects(bx)) {
+        return false;
+    }
+    let polys = hit_polylines(d, e, tol);
+    let hit = polys.iter().any(|pl| {
+        if pl.len() == 1 {
+            pl.first().is_some_and(|p| bx.contains(*p))
+        } else {
+            pl.windows(2).any(|w| w.first().zip(w.get(1)).is_some_and(|(a, b)| seg_hits_box(*a, *b, bx)))
+        }
+    });
+    // A crossing box entirely inside a filled/text object also selects it.
+    hit || (eb.contains_box(bx) && matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::Insert(_)))
 }
 
 /// Fence selection: entities crossed by the fence polyline.

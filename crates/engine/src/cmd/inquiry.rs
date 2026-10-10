@@ -38,7 +38,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("time", "Time", run_time).menu(&["Tools", "Inquiry", "Time"]).noundo(),
         CommandSpec::new("status", "Status", run_status).menu(&["Tools", "Inquiry", "Status"]).noundo(),
         CommandSpec::new("drawing.inspect", "Inspect Drawing", run_inspect).params("{entities?: bool, limit?: n}").noundo(),
-        CommandSpec::new("entities", "Query Entities", run_entities).params("{type?, layer?, window?: [[x,y],[x,y]], limit?, offset?}").noundo(),
+        CommandSpec::new("entities", "Query Entities", run_entities)
+            .params("{type?, layer?, window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
+            .noundo(),
         CommandSpec::new("count", "Count", run_count)
             .menu(&["Tools", "Count"])
             .params("{block?} → {blocks: {name: n}} | {block, count}, plus a `message` line")
@@ -289,24 +291,43 @@ fn run_inspect(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_entities(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "entities";
+    let given = |k: &str| p.get(k).filter(|v| !v.is_null());
+    let text = |k: &str| -> Result<Option<String>> {
+        given(k).map(|v| v.as_str().map(str::to_ascii_lowercase).ok_or_else(|| bad(CMD, format!("`{k}` must be a string")))).transpose()
+    };
+    let count = |k: &str, default: usize| -> Result<usize> {
+        given(k).map_or(Ok(default), |v| {
+            v.as_u64().map(|n| usize::try_from(n).unwrap_or(usize::MAX)).ok_or_else(|| bad(CMD, format!("`{k}` must be a whole number, 0 or more")))
+        })
+    };
+    let ty = text("type")?;
+    let layer = text("layer")?;
+    let window = given("window")
+        .map(|w| {
+            let corners: Option<Vec<Vec2>> = w.as_array().filter(|a| a.len() == 2).and_then(|a| a.iter().map(point_value).collect());
+            match corners.as_deref() {
+                Some([a, b]) => Ok(cadcraft_geom::Bounds2::new(*a, *b)),
+                _ => Err(bad(CMD, "`window` must be two corner points [[x0, y0], [x1, y1]]")),
+            }
+        })
+        .transpose()?;
+    let crossing = given("crossing").map_or(Ok(true), |v| v.as_bool().ok_or_else(|| bad(CMD, "`crossing` must be true or false")))?;
+    let limit = count("limit", 500)?;
+    let offset = count("offset", 0)?;
     let st = s.state()?;
     let d = &st.doc;
-    let ty = str_param(p, "type").map(str::to_ascii_lowercase);
-    let layer = str_param(p, "layer").map(str::to_ascii_lowercase);
-    let window = points_param(p, "window").and_then(|w| Some(cadcraft_geom::Bounds2::new(*w.first()?, *w.get(1)?)));
-    let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
-    let offset = p.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
-    let Some(store) = d.space(&st.space) else { return Ok(json!({ "entities": [] })) };
-    let matches: Vec<Value> = store
+    let Some(store) = d.space(&st.space) else { return Ok(json!({ "count": 0, "returned": 0, "entities": [] })) };
+    let tol = window.as_ref().map(crate::select::window_tol).unwrap_or(0.0);
+    let matches: Vec<&std::sync::Arc<cadcraft_doc::Entity>> = store
         .iter()
         .filter(|e| ty.as_ref().is_none_or(|t| e.kind.type_name().to_ascii_lowercase() == *t || e.kind.dxf_name().to_ascii_lowercase() == *t))
         .filter(|e| layer.as_ref().is_none_or(|l| e.common.layer.to_ascii_lowercase() == *l))
-        .filter(|e| window.is_none_or(|w| w.intersects(&cadcraft_doc::entity_bounds(d, e, 0))))
-        .skip(offset)
-        .take(limit)
-        .map(|e| entity_summary(e))
+        .filter(|e| window.as_ref().is_none_or(|w| crate::select::in_window(d, e, None, w, crossing, tol)))
         .collect();
-    Ok(json!({ "count": matches.len(), "entities": matches }))
+    let page: Vec<Value> = matches.iter().skip(offset).take(limit).map(|e| entity_summary(e)).collect();
+    // `count` is every match; `returned` is this page of them (`offset`, `limit`).
+    Ok(json!({ "count": matches.len(), "returned": page.len(), "offset": offset, "entities": page }))
 }
 
 fn run_count(s: &mut Session, p: &Value) -> Result<Value> {

@@ -79,3 +79,63 @@ fn errors_are_tool_errors_not_crashes() {
     assert_eq!(r["result"]["isError"], true);
     assert!(s.handle_line("{not json").unwrap().contains("-32700"));
 }
+
+/// Unknown tools and arguments that don't fit a tool's schema are invalid params (-32602), never
+/// guessed at; an empty batch is one Invalid Request.
+#[test]
+fn bad_tool_calls_are_invalid_params() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "circle 0,0 1"}));
+    let bad = [
+        json!({"name": "nope", "arguments": {}}),
+        json!({"name": "command_line", "arguments": {}}),
+        json!({"name": "command_line", "arguments": {"text": 5}}),
+        json!({"name": "command_line", "arguments": "circle 1,1 1"}),
+        json!({"name": "script", "arguments": {}}),
+        json!({"name": "query_entities", "arguments": {"window": [-5, -5, 5, 5]}}),
+        json!({"name": "query_entities", "arguments": {"window": [[-5, -5]]}}),
+        json!({"name": "query_entities", "arguments": {"window": {"min": [-5, -5], "max": [5, 5]}}}),
+        json!({"name": "query_entities", "arguments": {"type": 7}}),
+        json!({"name": "query_entities", "arguments": {"layer": ["0"]}}),
+        json!({"name": "query_entities", "arguments": {"offset": -1}}),
+    ];
+    for (i, params) in bad.into_iter().enumerate() {
+        let r = call(&mut s, i as u64, "tools/call", params.clone());
+        assert_eq!(r["error"]["code"], -32602, "{params} -> {r}");
+    }
+    // Nothing was typed: the circle is still the only object and no command is running.
+    let d = tool(&mut s, "inspect_drawing", json!({"entities": false}));
+    assert_eq!(d["entityCount"], 1, "{d}");
+    assert_eq!(s.handle_line("[]").map(|r| serde_json::from_str::<Value>(&r).unwrap()["error"]["code"].clone()), Some(json!(-32600)));
+}
+
+/// `count` is every match while `returned` is the page; a window matches geometry, not bounding boxes.
+#[test]
+fn query_entities_pages_and_windows_by_geometry() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    for c in ["circle 0,0 1", "circle 100,100 1", "circle 200,0 1"] {
+        tool(&mut s, "command_line", json!({"text": c}));
+    }
+    // An arc whose bounding box covers the window but whose curve stays outside it.
+    tool(&mut s, "execute", json!({"command": "arc", "params": {"p1": [40, 0], "p2": [50, 10], "p3": [60, 0]}}));
+    let r = tool(&mut s, "query_entities", json!({"type": "Circle", "limit": 1, "offset": 1}));
+    assert_eq!((r["count"].clone(), r["returned"].clone()), (json!(3), json!(1)), "{r}");
+    assert_eq!(r["entities"][0]["geometry"]["center"]["x"], 100.0, "{r}");
+    let r = tool(&mut s, "query_entities", json!({"window": [[45, 1], [55, 5]]}));
+    assert_eq!(r["count"], 0, "the arc passes above this window: {r}");
+    let r = tool(&mut s, "query_entities", json!({"window": [[-5, -5], [55, 5]]}));
+    assert_eq!(r["count"], 2, "the circle at 0,0 and the arc crossing the window: {r}");
+    let r = tool(&mut s, "query_entities", json!({"window": [[-5, -5], [55, 5]], "crossing": false}));
+    assert_eq!(r["count"], 1, "only the circle is entirely inside: {r}");
+}
+
+#[test]
+fn list_commands_filter_matches_names_not_docs() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let r = tool(&mut s, "list_commands", json!({"filter": "circle"}));
+    let ids: Vec<&str> = r.as_array().unwrap().iter().filter_map(|c| c["id"].as_str()).collect();
+    assert!(ids.contains(&"circle"), "{ids:?}");
+    assert!(!ids.contains(&"qselect"), "QSELECT only mentions circles in its docs: {ids:?}");
+    let r = tool(&mut s, "list_commands", json!({"filter": "pl"}));
+    assert!(r.as_array().unwrap().iter().any(|c| c["id"] == "pline"), "aliases and ids match");
+}
