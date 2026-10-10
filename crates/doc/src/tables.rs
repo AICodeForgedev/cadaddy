@@ -373,6 +373,17 @@ impl DimStyle {
                 }
                 _ => coerced,
             };
+            // Sizes that can't be negative (text height and tolerance scale: not zero either).
+            let x = coerced.as_f64();
+            let out_of_range = match field {
+                "textHeight" | "tolScale" => x.is_some_and(|x| x <= 0.0),
+                "scale" | "arrowSize" | "tickSize" => x.is_some_and(|x| x < 0.0),
+                _ => false,
+            };
+            if out_of_range {
+                rejected.push(k.clone());
+                continue;
+            }
             obj.insert(field.to_string(), coerced);
             match serde_json::from_value::<DimStyle>(cur.clone()) {
                 Ok(ns) => *self = ns,

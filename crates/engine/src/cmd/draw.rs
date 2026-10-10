@@ -99,6 +99,11 @@ fn run_line(s: &mut Session, p: &Value) -> Result<Value> {
     if pts.len() < 2 {
         return Err(bad("line", "need at least 2 points"));
     }
+    // A repeated point would make a zero-length line.
+    let pts = distinct_points(&pts);
+    if pts.len() < 2 {
+        return Err(bad("line", "need at least 2 different points"));
+    }
     let mut hs = Vec::new();
     for w in pts.windows(2) {
         if let [a, b] = w {
@@ -108,6 +113,7 @@ fn run_line(s: &mut Session, p: &Value) -> Result<Value> {
     if bool_or(p, "closed", false)
         && pts.len() > 2
         && let (Some(a), Some(b)) = (pts.last(), pts.first())
+        && !a.near(*b, 1e-12)
     {
         hs.push(s.add_entity(line(*a, *b))?.hex());
     }
@@ -123,29 +129,30 @@ fn vertex_value(v: &Value) -> Option<PolyVertex> {
 }
 
 fn run_pline(s: &mut Session, p: &Value) -> Result<Value> {
-    let vs: Vec<PolyVertex> = p
-        .get("vertices")
-        .or_else(|| p.get("points"))
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(vertex_value).collect())
-        .unwrap_or_default();
+    let raw = p.get("vertices").or_else(|| p.get("points")).and_then(Value::as_array);
+    for v in raw.into_iter().flatten() {
+        size_param("pline", v, "startWidth", true)?;
+        size_param("pline", v, "endWidth", true)?;
+    }
+    let vs: Vec<PolyVertex> = raw.map(|a| a.iter().filter_map(vertex_value).collect()).unwrap_or_default();
     if vs.len() < 2 {
         return Err(bad("pline", "`vertices` needs at least 2 points"));
     }
+    let width = size_param("pline", p, "width", true)?.unwrap_or(0.0);
     let mut k = lwpoly(vs, bool_or(p, "closed", false));
     if let EntityKind::LwPolyline(pl) = &mut k {
-        pl.const_width = f64_or(p, "width", 0.0).max(0.0);
+        pl.const_width = width;
     }
     added(s.add_entity(k)?)
 }
 
 fn run_circle(s: &mut Session, p: &Value) -> Result<Value> {
     let c = if let Some(center) = point_param(p, "center") {
-        let r = p
-            .get("radius")
-            .and_then(Value::as_f64)
-            .or_else(|| p.get("diameter").and_then(Value::as_f64).map(|d| d / 2.0))
-            .ok_or_else(|| bad("circle", "`radius` or `diameter` is required"))?;
+        // Checked before `Circle::new`, which would turn a negative radius positive.
+        let r = match size_param("circle", p, "radius", false)? {
+            Some(r) => r,
+            None => size_param("circle", p, "diameter", false)?.ok_or_else(|| bad("circle", "`radius` or `diameter` is required"))? / 2.0,
+        };
         Circle::new(center, r)
     } else if let (Some(a), Some(b)) = (point_param(p, "p1"), point_param(p, "p2")) {
         match point_param(p, "p3") {
@@ -155,7 +162,7 @@ fn run_circle(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         return Err(bad("circle", "give {center, radius} or {p1, p2[, p3]}"));
     };
-    if c.radius <= 0.0 || !c.radius.is_finite() {
+    if !(c.radius > 1e-12 && c.radius.is_finite()) {
         return Err(bad("circle", "radius must be positive"));
     }
     added(s.add_entity(circle(c.center, c.radius))?)
@@ -168,6 +175,11 @@ fn run_arc(s: &mut Session, p: &Value) -> Result<Value> {
         Arc::from_start_center_end(st, c, e)
     } else if let Some(c) = point_param(p, "center") {
         let r = f64_req("arc", p, "radius")?;
+        // Checked before `Arc::new`, which would turn a negative radius positive (zero is
+        // refused below).
+        if r < 0.0 {
+            return Err(bad("arc", "`radius` must be positive"));
+        }
         Arc::new(c, r, f64_req("arc", p, "start")?.to_radians(), f64_req("arc", p, "end")?.to_radians())
     } else {
         return Err(bad("arc", "give {p1,p2,p3}, {start,center,end} or {center,radius,start,end}"));
@@ -179,16 +191,23 @@ fn run_arc(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_polygon(s: &mut Session, p: &Value) -> Result<Value> {
-    let n = p.get("sides").and_then(Value::as_u64).unwrap_or(4) as usize;
+    // A `sides` that is not a whole number (e.g. -3) is refused, not replaced by the default 4.
+    let n = match p.get("sides") {
+        None | Some(Value::Null) => 4,
+        Some(v) => v.as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0),
+    };
     if !(3..=1024).contains(&n) {
         return Err(bad("polygon", "sides must be 3..1024"));
     }
     let vs = if let Some(e) = points_param(p, "edge") {
         let (Some(a), Some(b)) = (e.first(), e.get(1)) else { return Err(bad("polygon", "edge needs 2 points")) };
+        if a.near(*b, 1e-12) {
+            return Err(bad("polygon", "edge endpoints must differ"));
+        }
         polygon_from_edge(*a, *b, n)
     } else {
         let c = point_req("polygon", p, "center")?;
-        let r = f64_req("polygon", p, "radius")?;
+        let r = size_param("polygon", p, "radius", false)?.ok_or_else(|| bad("polygon", "`radius` (number) is required"))?;
         let inscribed = bool_or(p, "inscribed", true);
         // Without an angle, the bottom edge is horizontal, as with a typed radius.
         let rp = match p.get("angle").and_then(Value::as_f64).filter(|a| a.is_finite()) {
@@ -236,8 +255,8 @@ fn run_ray(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_spline(s: &mut Session, p: &Value) -> Result<Value> {
     let sp = if let Some(f) = points_param(p, "fit") {
-        if f.len() < 2 {
-            return Err(bad("spline", "need 2+ fit points"));
+        if distinct_points(&f).len() < 2 {
+            return Err(bad("spline", "need 2+ different fit points"));
         }
         Spline::from_fit_points(&f)
     } else if let Some(c) = points_param(p, "control") {
@@ -265,7 +284,12 @@ fn donut(center: Vec2, inside: f64, outside: f64) -> EntityKind {
 
 fn run_donut(s: &mut Session, p: &Value) -> Result<Value> {
     let c = point_req("donut", p, "center")?;
-    added(s.add_entity(donut(c, f64_or(p, "inside", 0.5), f64_or(p, "outside", 1.0)))?)
+    let inside = size_param("donut", p, "inside", true)?.unwrap_or(0.5);
+    let outside = size_param("donut", p, "outside", false)?.unwrap_or(1.0);
+    if inside > outside {
+        return Err(bad("donut", "`inside` must not be larger than `outside`"));
+    }
+    added(s.add_entity(donut(c, inside, outside))?)
 }
 
 /// Justification code → (halign, valign).

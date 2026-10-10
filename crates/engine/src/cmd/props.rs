@@ -854,8 +854,15 @@ fn run_mleaderstyle(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_ptype(s: &mut Session, p: &Value) -> Result<Value> {
+    // PDMODE is a shape 0..=4 plus 32 (circle) and/or 64 (square).
+    let mode = match p.get("pdmode") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_i64().filter(|m| (0..=100).contains(m) && m & !96 <= 4).ok_or_else(|| bad("ddptype", "`pdmode` must be 0..4, plus 32 and/or 64"))?,
+        ),
+    };
     let d = s.doc_mut()?;
-    if let Some(m) = p.get("pdmode").and_then(Value::as_i64) {
+    if let Some(m) = mode {
         d.header.set_i64("PDMODE", m);
     }
     if let Some(z) = p.get("pdsize").and_then(Value::as_f64) {

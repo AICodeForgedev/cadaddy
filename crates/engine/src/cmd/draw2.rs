@@ -1560,7 +1560,11 @@ pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|c| (c.first().and_then(Value::as_f64).unwrap_or(0.0), c.get(1).and_then(Value::as_f64).unwrap_or(0.0)))
         .map(|(x, y)| (if x.is_finite() { x } else { 0.0 }, if y.is_finite() { y } else { 0.0 }))
         .unwrap_or((0.0, 0.0));
-    let fillet = f64_or(p, "fillet", 0.0);
+    if ch.0 < 0.0 || ch.1 < 0.0 {
+        return Err(bad("rectang", "`chamfer` distances must be zero or positive"));
+    }
+    let fillet = size_param("rectang", p, "fillet", true)?.unwrap_or(0.0);
+    let width = size_param("rectang", p, "width", true)?.unwrap_or(0.0);
     let (w, h) = if let Some(d) = p.get("dimensions").and_then(Value::as_array) {
         let l = d.first().and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad("rectang", "dimensions: [length, width]"))?;
         let wd = d.get(1).and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad("rectang", "dimensions: [length, width]"))?;
@@ -1589,7 +1593,7 @@ pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
     if w.abs() < 1e-12 || h.abs() < 1e-12 || !w.is_finite() || !h.is_finite() {
         return Err(bad("rectang", "rectangle has no area"));
     }
-    let k = rect_kind(a, w, h, rot, fillet, ch, f64_or(p, "width", 0.0), f64_or(p, "elevation", 0.0));
+    let k = rect_kind(a, w, h, rot, fillet, ch, width, f64_or(p, "elevation", 0.0));
     let hd = s.add_entity(k)?;
     let th = f64_or(p, "thickness", 0.0);
     if th != 0.0 {

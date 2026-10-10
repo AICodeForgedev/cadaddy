@@ -206,6 +206,8 @@ impl HatchSettings {
 }
 
 fn make(s: &mut Session, p: &Value, gradient: bool) -> Result<Value> {
+    // A zero or negative pattern scale would be clamped to a near-zero spacing.
+    size_param(if gradient { "gradient" } else { "hatch" }, p, "scale", false)?;
     let st = HatchSettings::from(s, p, gradient);
     let mut loops = Vec::new();
     if let Some(pts) = points_param(p, "points") {

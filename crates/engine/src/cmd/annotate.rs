@@ -240,6 +240,9 @@ fn radial(s: &mut Session, p: &Value, diameter: bool) -> Result<Value> {
         let at = point_param(p, "at").unwrap_or(c + Vec2::from_angle(std::f64::consts::FRAC_PI_4));
         (c, c + (at - c).normalized() * r)
     };
+    if c.near(pt, 1e-12) {
+        return Err(bad(id, "`point` must differ from `center`"));
+    }
     let k = if diameter {
         dim(s, DimKind::Diameter, c + (c - pt), Vec2::ZERO, Vec2::ZERO, pt, Vec2::ZERO, "")
     } else {
@@ -281,6 +284,9 @@ fn run_angular(s: &mut Session, p: &Value) -> Result<Value> {
     let a = point_req("dimangular", p, "p1")?;
     let b = point_req("dimangular", p, "p2")?;
     let at = point_req("dimangular", p, "at")?;
+    if v.near(a, 1e-12) || v.near(b, 1e-12) {
+        return Err(bad("dimangular", "`p1` and `p2` must differ from `vertex`"));
+    }
     let k = dim(s, DimKind::Angular3P, at, a, b, v, Vec2::ZERO, "");
     Ok(json!({ "handle": add_dim(s, k)?.hex() }))
 }

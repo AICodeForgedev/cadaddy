@@ -198,6 +198,29 @@ pub(crate) fn f64_or(p: &Value, key: &str, default: f64) -> f64 {
 pub(crate) fn f64_req(cmd: &str, p: &Value, key: &str) -> Result<f64> {
     p.get(key).and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad(cmd, format!("`{key}` (number) is required")))
 }
+/// An optional size: `None` when absent or null, else a finite number above zero (or zero too
+/// with `zero_ok`). Anything else is refused, not clamped or made absolute, so a bad value never
+/// makes a degenerate object.
+pub(crate) fn size_param(cmd: &str, p: &Value, key: &str, zero_ok: bool) -> Result<Option<f64>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => match v.as_f64().filter(|x| x.is_finite()) {
+            Some(x) if x > 0.0 || (zero_ok && x == 0.0) => Ok(Some(x)),
+            _ => Err(bad(cmd, format!("`{key}` must be {}", if zero_ok { "zero or positive" } else { "positive" }))),
+        },
+    }
+}
+/// `pts` without consecutive repeats (closer than `1e-12`), as the interactive LINE ignores a
+/// point picked twice.
+pub(crate) fn distinct_points(pts: &[Vec2]) -> Vec<Vec2> {
+    let mut out: Vec<Vec2> = Vec::with_capacity(pts.len());
+    for p in pts {
+        if !out.last().is_some_and(|l| l.near(*p, 1e-12)) {
+            out.push(*p);
+        }
+    }
+    out
+}
 pub(crate) fn bool_or(p: &Value, key: &str, default: bool) -> bool {
     p.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
