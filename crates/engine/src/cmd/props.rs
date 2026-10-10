@@ -372,7 +372,7 @@ fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_linetype(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc_mut()?;
     if let Some(load) = str_param(p, "load") {
-        let lib = cadcraft_doc::library::standard_linetypes();
+        let lib = cadcraft_doc::library::standard_linetypes_for(d);
         let mut n = 0;
         for lt in lib {
             if (load == "*" || lt.name.eq_ignore_ascii_case(load)) && d.linetype(&lt.name).is_none() {

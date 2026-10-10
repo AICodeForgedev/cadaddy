@@ -4,9 +4,10 @@
 //! The names follow the industry-common names users expect (DASHED, CENTER, ANSI31…); the
 //! dash and spacing values are our own.
 
-use crate::{DashElement, Linetype};
+use crate::{DashElement, Drawing, Linetype};
 
-/// The standard linetype library (inch-based lengths; metric drawings scale with LTSCALE).
+/// The standard linetype library, defined in inches. Load it into a drawing with
+/// [`standard_linetypes_for`], which scales it for metric drawings.
 pub fn standard_linetypes() -> Vec<Linetype> {
     let s = |name: &str, desc: &str, d: &[f64]| Linetype::simple(name, desc, d);
     vec![
@@ -39,6 +40,31 @@ pub fn standard_linetypes() -> Vec<Linetype> {
         },
         s("ZIGZAG", "Zig zag /\\/\\/\\/\\/", &[0.0001, -0.2, 0.0001, -0.2]),
     ]
+}
+
+/// The standard linetypes as loaded into `d`. In a metric drawing (`MEASUREMENT` 1) every length
+/// (dashes, gaps, text and shape size, offsets) is multiplied by 25.4, so the patterns measure
+/// in millimetres what they measure in inches in an imperial drawing (DASHED: 12.7 on, 6.35
+/// off) and LTSCALE 1 suits both, as CAD programs load ISO-scaled definitions for metric
+/// drawings. Definitions already in a drawing are not changed.
+pub fn standard_linetypes_for(d: &Drawing) -> Vec<Linetype> {
+    let lib = standard_linetypes();
+    if d.header.i64("MEASUREMENT", 0) != 1 {
+        return lib;
+    }
+    lib.into_iter().map(|lt| scaled(lt, 25.4)).collect()
+}
+
+/// `lt` with every length multiplied by `k`.
+fn scaled(mut lt: Linetype, k: f64) -> Linetype {
+    for e in &mut lt.pattern {
+        e.length *= k;
+        e.offset = e.offset * k;
+        if e.text.is_some() || e.shape.is_some() {
+            e.scale *= k;
+        }
+    }
+    lt
 }
 
 /// A hatch pattern line family: angle (degrees), origin, offset (shift along, spacing), dashes.
