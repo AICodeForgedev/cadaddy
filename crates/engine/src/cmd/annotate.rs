@@ -322,7 +322,17 @@ fn last_linear(s: &Session) -> Option<Dimension> {
 
 /// Next dimension in a chain from `prev` to a new second origin.
 fn chained(s: &Session, prev: &Dimension, next: Vec2, baseline: bool) -> EntityKind {
-    let spacing = s.doc().ok().and_then(|d| d.dim_style(&prev.style).map(|st| st.baseline_spacing * st.scale.max(1e-9))).unwrap_or(0.38);
+    // DIMDLI × the overall scale of the dimension being continued: its overrides (SETVAR DIM*)
+    // included, and DIMSCALE 0 falling back to the drawing's DIMSCALE as when it is drawn.
+    let spacing = s
+        .doc()
+        .ok()
+        .map(|d| {
+            let st = d.dim_style(&prev.style).cloned().unwrap_or_default().with_overrides(&prev.overrides);
+            st.baseline_spacing * st.effective_scale(d.header.f64("DIMSCALE", 1.0))
+        })
+        .filter(|v| v.is_finite())
+        .unwrap_or(0.38);
     let dir = match prev.kind {
         DimKind::Linear { rotation } => Vec2::from_angle(rotation),
         _ => (prev.p14.xy() - prev.p13.xy()).normalized(),
@@ -671,8 +681,11 @@ fn run_dimspace(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc()?;
     let Some(EntityKind::Dimension(b)) = d.entity(base).map(|e| e.kind.clone()) else { return Err(bad("dimspace", "`base` is not a dimension")) };
     let st = d.dim_style(&b.style).cloned().unwrap_or_default().with_overrides(&b.overrides);
-    let spacing =
-        p.get("spacing").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(st.baseline_spacing * st.scale.max(1e-9) * 2.0);
+    let spacing = p
+        .get("spacing")
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .unwrap_or(st.baseline_spacing * st.effective_scale(d.header.f64("DIMSCALE", 1.0)) * 2.0);
     let dir = match b.kind {
         DimKind::Linear { rotation } => Vec2::from_angle(rotation),
         DimKind::Aligned => (b.p14.xy() - b.p13.xy()).normalized(),
