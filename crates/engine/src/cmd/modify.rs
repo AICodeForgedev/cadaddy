@@ -1545,9 +1545,11 @@ impl Interactive for SelectThen {
             // ROTATE and SCALE offer the angle/factor used last time.
             (Op::Rotate, _) => {
                 let (au, ap) = s.doc().map(|d| (d.header.i64("AUNITS", 0), d.header.i64("AUPREC", 0))).unwrap_or((0, 0));
+                // Offered as it would be typed: clockwise is positive when ANGDIR is 1.
+                let a = if s.angle_settings().clockwise { -s.last_used.rotate_angle } else { s.last_used.rotate_angle };
                 Prompt::new("Specify rotation angle", Accept::POINT_OR_NUMBER)
                     .kw(&["Copy", "Reference"])
-                    .default(crate::units::format_angle(s.last_used.rotate_angle, au, ap))
+                    .default(crate::units::format_angle(a, au, ap))
                     .base_opt(base)
             }
             (Op::Scale, _) => Prompt::new("Specify scale factor", Accept::POINT_OR_NUMBER)
@@ -1657,7 +1659,9 @@ impl Interactive for SelectThen {
             (Op::Rotate, 1, inp @ (Input::Point(_) | Input::Text(_) | Input::Enter)) => {
                 let a = match inp {
                     Input::Point(p) => self.pts[0].angle_to(p),
-                    Input::Text(t) => crate::units::parse_angle(&t)
+                    Input::Text(t) => s
+                        .angle_settings()
+                        .rotation(&t)
                         .filter(|a| a.is_finite())
                         .ok_or_else(|| EngineError::Other("Requires an angle or point.".into()))?,
                     _ => s.last_used.rotate_angle,
@@ -2286,6 +2290,7 @@ impl FilletM {
                 Err(invalid())
             }
         };
+        let au = s.angle_settings();
         let d = s.doc_mut()?;
         self.ask = None;
         match ask {
@@ -2310,7 +2315,8 @@ impl FilletM {
             }
             FilletAsk::Angle => {
                 if !text.is_empty() {
-                    let a = crate::units::parse_angle(&text)
+                    let a = au
+                        .amount(&text)
                         .filter(|a| a.is_finite() && *a >= 0.0 && *a < std::f64::consts::PI)
                         .ok_or_else(|| EngineError::Other("Requires an angle from 0 to 180 degrees.".into()))?;
                     d.header.set_f64("CHAMFERD", a);

@@ -348,7 +348,8 @@ impl HatchM {
                 }
             }
             HatchAsk::Angle => {
-                if let Some(a) = crate::units::parse_angle(t).filter(|a| a.is_finite()) {
+                // Turns the pattern from the X axis (not from ANGBASE), clockwise when ANGDIR is 1.
+                if let Some(a) = s.angle_settings().rotation(t).filter(|a| a.is_finite()) {
                     self.settings.angle = a;
                     s.doc_mut()?.header.set_f64("HPANG", a);
                 }
@@ -380,7 +381,9 @@ impl Interactive for HatchM {
             }
             Some(HatchAsk::Angle) => {
                 let (au, ap) = s.doc().map(|d| (d.header.i64("AUNITS", 0), d.header.i64("AUPREC", 0))).unwrap_or((0, 0));
-                let d = crate::units::format_angle(self.settings.angle, au, ap);
+                // Offered as it would be typed: clockwise is positive when ANGDIR is 1.
+                let a = if s.angle_settings().clockwise { -self.settings.angle } else { self.settings.angle };
+                let d = crate::units::format_angle(a, au, ap);
                 return Prompt::new("Specify an angle for the hatch pattern", Accept::NUMBER).default(d);
             }
             None => {}

@@ -847,7 +847,7 @@ impl DimText {
         let Some(a) = self.asking else { return false };
         match (a, i) {
             (DimAsk::Text, Input::Text(t)) => self.text = t.clone(),
-            (DimAsk::Angle, Input::Text(t)) => match crate::units::parse_angle(t) {
+            (DimAsk::Angle, Input::Text(t)) => match s.angle_settings().direction(t) {
                 Some(r) => self.angle = r,
                 None => {
                     s.echo("Requires a valid angle.");
@@ -912,7 +912,7 @@ impl Interactive for LinearM {
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if self.rotating {
             if let Input::Text(t) = &i {
-                let Some(r) = crate::units::parse_angle(t) else {
+                let Some(r) = s.angle_settings().direction(t) else {
                     s.echo("Requires a valid angle.");
                     return Ok(Step::Continue);
                 };
@@ -1566,7 +1566,7 @@ impl MLeaderM {
                     Some(MaxPoints)
                 }
             },
-            (FirstAngle | SecondAngle, Input::Text(t)) => match crate::units::parse_angle(&t).filter(|a| *a >= 0.0) {
+            (FirstAngle | SecondAngle, Input::Text(t)) => match s.angle_settings().amount(&t).filter(|a| *a >= 0.0) {
                 Some(a) => {
                     self.angles[usize::from(o == SecondAngle)] = a;
                     Some(Menu)
