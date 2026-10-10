@@ -378,6 +378,9 @@ fn run_baseline(s: &mut Session, p: &Value) -> Result<Value> {
 /// QDIM: continuous dimensions across the endpoints of the selected objects.
 fn run_qdim(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
+    if hs.len() > MAX_CHAIN {
+        return Err(bad("qdim", format!("at most {MAX_CHAIN} objects per call")));
+    }
     let at = point_req("qdim", p, "at")?;
     let vertical = bool_or(p, "vertical", false);
     let d = s.doc()?;
@@ -400,12 +403,23 @@ fn run_qdim(s: &mut Session, p: &Value) -> Result<Value> {
     if pts.len() < 2 {
         return Err(bad("qdim", "select objects with at least two distinct points"));
     }
+    if pts.len() > MAX_CHAIN {
+        return Err(bad("qdim", format!("at most {MAX_CHAIN} distinct points per call")));
+    }
     let rot = if vertical { std::f64::consts::FRAC_PI_2 } else { 0.0 };
+    // One snap index for all the dimensions, as DIMCONTINUE does: looking up each dimension's
+    // objects by scanning the drawing made QDIM quadratic (the added dimensions are no snap targets).
+    let snaps = if assoc_enabled(s) { Some(crate::assoc::SnapIndex::new(s.doc()?, &s.space())) } else { None };
     let mut out = Vec::new();
     for w in pts.windows(2) {
         if let [a, b] = w {
-            let k = dim(s, DimKind::Linear { rotation: rot }, at, *a, *b, Vec2::ZERO, Vec2::ZERO, "");
-            out.push(add_dim(s, k)?.hex());
+            let mut k = dim(s, DimKind::Linear { rotation: rot }, at, *a, *b, Vec2::ZERO, Vec2::ZERO, "");
+            if let (Some(ix), EntityKind::Dimension(dm)) = (&snaps, &mut k) {
+                dm.assoc = ix.auto_assoc(&[("p13", dm.p13.xy()), ("p14", dm.p14.xy())]);
+            }
+            let h = s.add_entity(k)?;
+            s.last_dim = Some(h);
+            out.push(h.hex());
         }
     }
     Ok(json!({ "handles": out }))
