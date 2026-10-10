@@ -56,7 +56,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "{handle? (default: selected viewports), scale?: paper units per model unit | \"1:50\", viewHeight?, center?: [x,y], locked?, freeze?: [layer], thaw?: [layer], colors?: {layer: color | null}}",
         ),
         CommandSpec::new("vplayer", "Viewport Layer Freeze", run_viewport_set)
-            .params("{handle?, freeze?: [layer], thaw?: [layer], colors?: {layer: color (\"red\" | 1..255 | \"r,g,b\") | null to clear}}"),
+            .params("{handle?, freeze?: [layer], thaw?: [layer], colors?: {layer: color (\"red\" | 1..255 | \"r,g,b\") | null to clear}} (typed: option prompts)")
+            .interactive(|_| Ok(Box::new(vplayer::VplayerM::default()))),
         CommandSpec::new("pagesetup", "Page Setup Manager...", run_pagesetup)
             .menu(&["File", "Page Setup Manager..."])
             .params(
@@ -589,6 +590,9 @@ fn viewport_json(h: Handle, v: &Viewport) -> Value {
         "layerColors": v.layer_colors.iter().map(|(l, c)| json!({ "layer": l, "color": c.name() })).collect::<Vec<_>>(),
     })
 }
+
+/// VPLAYER's command-line prompts.
+mod vplayer;
 
 fn run_viewport_set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "viewport.set";
