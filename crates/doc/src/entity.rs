@@ -216,6 +216,17 @@ pub struct Text {
     #[serde(default)]
     pub valign: VAlign,
 }
+impl Text {
+    /// The point the text is placed by, as the Insertion snap and the grip show it: the alignment
+    /// point (DXF group 11) of justified text, the start point (group 10) of left-baseline,
+    /// aligned and fit text.
+    pub fn justify_point(&self) -> Vec2 {
+        match (self.halign, self.valign) {
+            (HAlign::Left, VAlign::Baseline) | (HAlign::Aligned | HAlign::Fit, _) => self.insert.xy(),
+            _ => self.align_pt.unwrap_or(self.insert).xy(),
+        }
+    }
+}
 fn one() -> f64 {
     1.0
 }
@@ -977,10 +988,10 @@ impl EntityKind {
                 }
             }
             EntityKind::Ray(r) | EntityKind::XLine(r) => vec![r.base.xy(), r.base.xy() + r.dir.xy()],
-            EntityKind::Text(t) => vec![t.insert.xy()],
+            EntityKind::Text(t) => vec![t.justify_point()],
             EntityKind::MText(t) => vec![t.insert.xy()],
-            EntityKind::AttDef(a) => vec![a.text.insert.xy()],
-            EntityKind::Insert(i) => std::iter::once(i.insert.xy()).chain(i.attribs.iter().map(|a| a.text.insert.xy())).collect(),
+            EntityKind::AttDef(a) => vec![a.text.justify_point()],
+            EntityKind::Insert(i) => std::iter::once(i.insert.xy()).chain(i.attribs.iter().map(|a| a.text.justify_point())).collect(),
             EntityKind::Dimension(d) => vec![d.p13.xy(), d.p14.xy(), d.defpt.xy(), d.text_mid.xy()],
             EntityKind::Leader(l) => l.vertices.iter().map(|v| v.xy()).collect(),
             EntityKind::MLeader(m) => m.leaders.iter().flat_map(|l| l.iter().map(|v| v.xy())).chain(std::iter::once(m.landing.xy())).collect(),

@@ -22,6 +22,8 @@ pub mod mode {
     pub const PAR: u32 = 8192;
     /// Running snaps temporarily off (F3).
     pub const OFF: u32 = 16384;
+    /// Not an OSMODE bit: snaps also find hatch objects (OSNAPHATCH = 1).
+    pub const HATCH: u32 = 1 << 16;
     pub const ALL: [(u32, &str); 14] = [
         (END, "Endpoint"),
         (MID, "Midpoint"),
@@ -164,11 +166,11 @@ pub(crate) fn osnap_with(
         }
         if osmode & mode::INS != 0 {
             match &e.kind {
-                EntityKind::Text(t) => cands.push((mode::INS, t.insert.xy())),
+                EntityKind::Text(t) => cands.push((mode::INS, t.justify_point())),
                 EntityKind::MText(t) => cands.push((mode::INS, t.insert.xy())),
                 EntityKind::Insert(i) => {
                     cands.push((mode::INS, i.insert.xy()));
-                    cands.extend(i.attribs.iter().filter(|a| !a.invisible).map(|a| (mode::INS, a.text.insert.xy())));
+                    cands.extend(i.attribs.iter().filter(|a| !a.invisible).map(|a| (mode::INS, a.text.justify_point())));
                 }
                 _ => {}
             }
@@ -178,6 +180,9 @@ pub(crate) fn osnap_with(
         // A block reference snaps to the objects inside it, placed by its transform.
         if let EntityKind::Insert(ins) = &e.kind {
             block_leaves(d, ins, &Mat3::IDENTITY, 0, &mut budget, &mut |k, m| sink.object(k, Some(m)));
+        }
+        if let EntityKind::Dimension(dm) = &e.kind {
+            sink.dimension(d, dm, &mut budget);
         }
     }
     // Intersections between nearby primitives.
@@ -277,6 +282,10 @@ impl Sink<'_> {
     /// (whose primitives far from the cursor are skipped).
     fn object(&mut self, kind: &EntityKind, xf: Option<&Mat3>) {
         let osmode = self.osmode;
+        // OSNAPHATCH = 0: hatches are left out.
+        if osmode & mode::HATCH == 0 && matches!(kind, EntityKind::Hatch(_)) {
+            return;
+        }
         let at = |p: Vec2| xf.map_or(p, |m| m.apply(p));
         if osmode & mode::END != 0
             && let EntityKind::Solid(s) | EntityKind::Trace(s) = kind
@@ -373,6 +382,67 @@ impl Sink<'_> {
             }
         }
     }
+}
+
+impl Sink<'_> {
+    /// A dimension snaps to what it draws, as in AutoCAD (into its block): the objects of its
+    /// block when the drawing has one (read from a file), else the lines generated from it
+    /// (Endpoint on their ends); Node on its definition points.
+    fn dimension(&mut self, d: &Drawing, dm: &cadcraft_doc::Dimension, budget: &mut usize) {
+        match dm.block.as_ref().and_then(|n| d.block(n)) {
+            Some(blk) => {
+                // The block holds world geometry: a reference at its own base point places it as is.
+                let ins = Insert {
+                    block: blk.name.clone(),
+                    insert: blk.base,
+                    scale: cadcraft_geom::Vec3::new(1.0, 1.0, 1.0),
+                    rotation: 0.0,
+                    attribs: Vec::new(),
+                    cols: 1,
+                    rows: 1,
+                    col_spacing: 0.0,
+                    row_spacing: 0.0,
+                };
+                block_leaves(d, &ins, &Mat3::IDENTITY, 0, budget, &mut |k, m| self.object(k, Some(m)));
+            }
+            None => {
+                let g = cadcraft_render::dimension_in(d, dm);
+                for line in &g.lines {
+                    let (Some(a), Some(b)) = (line.first(), line.last()) else { continue };
+                    if self.osmode & mode::END != 0 {
+                        self.cands.extend([(mode::END, *a), (mode::END, *b)]);
+                    }
+                    if self.osmode & mode::MID != 0 && line.len() == 2 {
+                        self.cands.push((mode::MID, (*a + *b) * 0.5));
+                    }
+                    for w in line.windows(2) {
+                        if let [p, q] = w {
+                            let s = Prim::Seg(Segment::Line(cadcraft_geom::Line::new(*p, *q)));
+                            if prim_near(&s, &self.probe, self.aperture) {
+                                self.near.push(s);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if self.osmode & mode::NOD != 0 {
+            self.cands.extend(dim_def_points(dm).into_iter().map(|p| (mode::NOD, p)));
+        }
+    }
+}
+
+/// The definition points of a dimension that its kind uses.
+fn dim_def_points(dm: &cadcraft_doc::Dimension) -> Vec<Vec2> {
+    use cadcraft_doc::DimKind;
+    let pts = match dm.kind {
+        DimKind::Linear { .. } | DimKind::Aligned | DimKind::ArcLength => vec![dm.defpt, dm.p13, dm.p14],
+        DimKind::Radius | DimKind::Diameter => vec![dm.defpt, dm.p15],
+        DimKind::Angular3P => vec![dm.defpt, dm.p13, dm.p14, dm.p15],
+        DimKind::Angular => vec![dm.defpt, dm.p13, dm.p14, dm.p15, dm.p16],
+        DimKind::Ordinate { .. } => vec![dm.p13, dm.p14],
+    };
+    pts.into_iter().map(|p| p.xy()).filter(|p| p.is_finite()).collect()
 }
 
 /// Calls `f` with each object drawn by a block reference and the transform placing it, nested
@@ -684,11 +754,21 @@ pub fn polar(base: Vec2, p: Vec2, inc: f64, tol: f64) -> Option<(Vec2, f64)> {
     }
 }
 
-/// Grid snap.
-pub fn grid_snap(p: Vec2, unit: Vec2, origin: Vec2) -> Vec2 {
-    let sx = if unit.x > 1e-12 { ((p.x - origin.x) / unit.x).round() * unit.x + origin.x } else { p.x };
-    let sy = if unit.y > 1e-12 { ((p.y - origin.y) / unit.y).round() * unit.y + origin.y } else { p.y };
-    Vec2::new(sx, sy)
+/// Grid snap: the nearest point of the grid of `unit` spacing through `origin`, turned by
+/// `angle` (radians) about it.
+pub fn grid_snap(p: Vec2, unit: Vec2, origin: Vec2, angle: f64) -> Vec2 {
+    let angle = if angle.is_finite() { angle } else { 0.0 };
+    let q = (p - origin).rotate(-angle);
+    let sx = if unit.x > 1e-12 { (q.x / unit.x).round() * unit.x } else { q.x };
+    let sy = if unit.y > 1e-12 { (q.y / unit.y).round() * unit.y } else { q.y };
+    let s = origin + Vec2::new(sx, sy).rotate(angle);
+    if s.is_finite() { s } else { p }
+}
+
+/// The snap grid's origin (SNAPBASE) and rotation in radians (SNAPANG, in degrees) of a drawing.
+pub fn grid_frame(d: &Drawing) -> (Vec2, f64) {
+    let base = d.header.point("SNAPBASE").map(|p| p.xy()).filter(|p| p.is_finite()).unwrap_or(Vec2::ZERO);
+    (base, d.header.f64("SNAPANG", 0.0).to_radians())
 }
 
 #[cfg(test)]
@@ -746,7 +826,7 @@ mod tests {
         let (p, a) = polar(Vec2::ZERO, Vec2::new(5.0, 5.1), 45f64.to_radians(), 3f64.to_radians()).unwrap();
         assert!((a - PI / 4.0).abs() < 1e-12);
         assert!((p.x - p.y).abs() < 1e-9);
-        assert_eq!(grid_snap(Vec2::new(0.74, 1.26), Vec2::new(0.5, 0.5), Vec2::ZERO), Vec2::new(0.5, 1.5));
+        assert_eq!(grid_snap(Vec2::new(0.74, 1.26), Vec2::new(0.5, 0.5), Vec2::ZERO, 0.0), Vec2::new(0.5, 1.5));
     }
 
     #[test]

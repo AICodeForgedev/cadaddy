@@ -6,6 +6,7 @@ use crate::{EngineError, Result, Session};
 
 const SESSION_VARS: &[&str] = &[
     "OSMODE",
+    "OSNAPHATCH",
     "ORTHOMODE",
     "POLARMODE",
     "POLARANG",
@@ -36,6 +37,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
     let st = &s.settings;
     let v = match n.as_str() {
         "OSMODE" => json!(st.osmode),
+        "OSNAPHATCH" => json!(i32::from(st.osnaphatch)),
         "ORTHOMODE" => json!(i32::from(st.orthomode)),
         "POLARMODE" => json!(i32::from(st.polarmode)),
         "POLARANG" => json!(st.polarang.to_degrees()),
@@ -130,6 +132,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     let st = &mut s.settings;
     match n.as_str() {
         "OSMODE" => st.osmode = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & 0x7fff,
+        "OSNAPHATCH" => st.osnaphatch = as_bool(v).ok_or_else(bad)?,
         "ORTHOMODE" => st.orthomode = as_bool(v).ok_or_else(bad)?,
         "POLARMODE" => st.polarmode = as_bool(v).ok_or_else(bad)?,
         "POLARANG" => st.polarang = as_f64(v).filter(|a| *a > 0.0).ok_or_else(bad)?.to_radians(),
@@ -190,6 +193,11 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
                         _ => return Err(bad()),
                     };
                     d.header.set_i64(&n, i);
+                    return Ok(());
+                }
+                // A point variable takes `x,y` typed at the command line too.
+                Some(cadcraft_doc::HVal::Point(_)) => {
+                    d.header.set(&n, cadcraft_doc::HVal::Point(as_pt(v).ok_or_else(bad)?.to3(0.0)));
                     return Ok(());
                 }
                 _ => {}

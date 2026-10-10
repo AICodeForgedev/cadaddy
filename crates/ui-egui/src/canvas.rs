@@ -476,14 +476,16 @@ fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf) -> Vec2 {
     }
     let ap = s.aperture / xf.scale;
     if let Ok(st) = app.session.state()
-        && let Some(hit) = snap::osnap(&st.doc, &st.edit_space(), raw, ap, s.osmode, base, deferred)
+        && let Some(hit) =
+            snap::osnap(&st.doc, &st.edit_space(), raw, ap, s.osmode | if s.osnaphatch { snap::mode::HATCH } else { 0 }, base, deferred)
     {
         app.canvas.snap = Some(hit);
         return hit.point;
     }
     let mut p = raw;
     if s.snapmode {
-        p = snap::grid_snap(p, s.snapunit, Vec2::ZERO);
+        let (origin, angle) = app.session.doc().map(snap::grid_frame).unwrap_or((Vec2::ZERO, 0.0));
+        p = snap::grid_snap(p, s.snapunit, origin, angle);
     }
     if let Some(b) = base {
         if s.orthomode {
