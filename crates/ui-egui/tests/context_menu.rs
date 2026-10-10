@@ -94,3 +94,107 @@ fn clipboard_events_run_the_clipboard_commands() {
     assert_eq!(app.session.running.as_ref().map(|r| r.id.as_str()), Some("pasteclip"));
     assert!(app.session.prompt_text().contains("insertion point"));
 }
+
+/// (label, id, enabled) of the object snap menu's items (#393).
+fn snap_items(app: &CadApp) -> Vec<(String, String, bool)> {
+    let mut out = Vec::new();
+    for g in context_menu::snap_entries(app) {
+        for e in g {
+            match e {
+                Entry::Item { label, id, enabled, .. } => out.push((label, id, enabled)),
+                Entry::Sub { label, children } => {
+                    for c in children {
+                        if let Entry::Item { label: l, id, enabled, .. } = c {
+                            out.push((format!("{label}/{l}"), id, enabled));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Shift/Ctrl+right-click: the object snap menu types the same overrides as the command line.
+#[test]
+fn snap_menu_types_point_modifiers_and_snap_overrides() {
+    let mut app = CadApp::new(Session::new(), Services::default());
+    let items = snap_items(&app);
+    let labels: Vec<&str> = items.iter().map(|(l, _, _)| l.as_str()).collect();
+    for l in [
+        "From",
+        "Mid Between 2 Points",
+        "Point Filters/.X",
+        "Point Filters/.YZ",
+        "Endpoint",
+        "Midpoint",
+        "Center",
+        "Nearest",
+        "None",
+        "Osnap Settings...",
+    ] {
+        assert!(labels.contains(&l), "{l} missing from {labels:?}");
+    }
+    // No point prompt: only the settings item is available.
+    assert!(items.iter().all(|(l, _, on)| *on == (l == "Osnap Settings...")), "{items:?}");
+
+    app.cmdline("LINE 0,0 10,0");
+    app.cmdline("");
+    app.cmdline("LINE");
+    assert!(snap_items(&app).iter().all(|(_, _, on)| *on), "everything at a point prompt");
+    context_menu::choose_snap(&mut app, "_endp");
+    assert_eq!(app.session.snap_override(), Some(cadcraft_engine::snap::mode::END));
+    assert!(app.session.prompt_text().ends_with("Endpoint of:"), "{}", app.session.prompt_text());
+    app.session.input(cadcraft_engine::Input::Point(cadcraft_geom::Vec2::new(9.98, 0.02))).unwrap();
+    assert_eq!(app.session.last_point, cadcraft_geom::Vec2::new(10.0, 0.0));
+    context_menu::choose_snap(&mut app, "_non");
+    assert_eq!(app.session.snap_override(), Some(0));
+    context_menu::choose_snap(&mut app, "_from");
+    assert!(app.session.prompt_text().ends_with("Base point:"), "{}", app.session.prompt_text());
+}
+
+/// The text painted in one frame.
+fn painted(app: &mut CadApp, ctx: &egui::Context, mut events: Vec<egui::Event>, modifiers: egui::Modifiers) -> String {
+    fn collect(shape: &egui::Shape, text: &mut String) {
+        match shape {
+            egui::Shape::Text(s) => {
+                text.push_str(s.galley.text());
+                text.push('\n');
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, text)),
+            _ => {}
+        }
+    }
+    events.insert(0, egui::Event::ModifiersChanged(modifiers));
+    let input =
+        egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), events, ..Default::default() };
+    let mut output = ctx.run_ui(input, |ui| app.ui(ui));
+    output.textures_delta.clear();
+    let mut text = String::new();
+    for s in &output.shapes {
+        collect(&s.shape, &mut text);
+    }
+    text
+}
+
+/// Shift+right-click on the canvas during a command opens the snap menu instead of acting as Enter.
+#[test]
+fn shift_right_click_opens_the_snap_menu() {
+    let mut app = CadApp::new(Session::new(), Services::default());
+    let ctx = egui::Context::default();
+    app.logic(&ctx);
+    painted(&mut app, &ctx, Vec::new(), egui::Modifiers::NONE);
+    app.cmdline("LINE 0,0");
+    let at = egui::pos2(800.0, 500.0);
+    let shift = egui::Modifiers::SHIFT;
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: shift };
+    let before = painted(&mut app, &ctx, vec![egui::Event::PointerMoved(at)], shift);
+    assert!(!before.contains("Mid Between 2 Points"));
+    painted(&mut app, &ctx, vec![button(true)], shift);
+    painted(&mut app, &ctx, vec![button(false)], shift);
+    let text = painted(&mut app, &ctx, Vec::new(), egui::Modifiers::NONE);
+    for l in ["From", "Mid Between 2 Points", "Endpoint", "Perpendicular", "Osnap Settings..."] {
+        assert!(text.contains(l), "{l} missing from the painted menu:\n{text}");
+    }
+    assert!(app.session.prompt_text().contains("Specify next point"), "no Enter: {}", app.session.prompt_text());
+}

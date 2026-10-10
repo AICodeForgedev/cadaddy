@@ -285,6 +285,7 @@
 	Freeze/Thaw	Заморозити/розморозити
 	Freeze/Thaw in all viewports	Заморозити/розморозити в усіх видових екранах
 	Freeze/Thaw in the current viewport	Заморозити/розморозити в поточному видовому екрані
+	From	Від точки
 	General	Загальні
 	Geometric Center	Геометричний центр
 	Geometric Constraint	Геометричне обмеження
@@ -421,6 +422,7 @@
 	Measure Geometry	Виміряти геометрію
 	Merge Cells	Об'єднати комірки
 	Merged PRs	Об'єднані PR
+	Mid Between 2 Points	Середина між 2 точками
 	Midpoint	Середина
 	Mirror	Дзеркальне відображення
 	Model	Модель
@@ -487,6 +489,7 @@
 	Ortho (F8)	Орто (F8)
 	Ortho Mode	Режим Орто
 	Ortho Mode (F8)	Режим Орто (F8)
+	Osnap Settings...	Параметри об'єктної прив'язки...
 	Out	Віддалити
 	Override	Перевизначити
 	PAPER	АРКУШ
@@ -519,6 +522,7 @@
 	Plot table type	Тип таблиці друку
 	Plus/minus	Плюс/мінус
 	Point	Точка
+	Point Filters	Фільтри точок
 	Point Style...	Стиль точок...
 	Polar Array	Круговий масив
 	Polar Tracking	Полярне відстеження

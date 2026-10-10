@@ -63,7 +63,7 @@ Detail and evidence: [ui-parity.md](ui-parity.md).
 | U1 | Tracking leftovers: polar angles relative to the last segment (POLARMODE 1), PolarSnap, temporary tracking point (TT), Extension from ellipse and spline ends, the tracking options in Drafting Settings (object snap tracking, Extension, Parallel and Apparent Intersection landed in #379) | Medium | 3–5 |
 | U2 | Dynamic input: grip dimensional input, lock icons, DYNPROMPT options menu (pointer boxes with Tab and relative entry landed in #60) | Medium | 3–5 |
 | U3 | **[alpha blocker]** TK (temporary tracking, comes with object snap tracking, U1). FROM, M2P/MTP, `.x/.y/.xy` point filters, the `*` WCS prefix and the angle override `<a` landed at every point prompt (#392) | High | 1–2 |
-| U4 | **[alpha blocker]** Typed snap overrides (`END`, `MID` … at a prompt), Shift/Ctrl+right-click snap menu, Tab snap cycling | High | 4–6 |
+| U4 | Tab snap cycling offers the closest snap of each mode, not every candidate; the snap menu has no Temporary track point (comes with U1). Typed snap overrides (`END`, `MID` … `NON`), the Shift/Ctrl+right-click snap menu and Tab cycling landed (#393) | Low | 1–2 |
 | U5 | Hot-grip options (Base point, Copy, Undo, Reference) are shown but ignored; multiple hot grips; multifunctional grip menus (Add/Remove Vertex, Convert to Arc) | Medium-high | 6–10 |
 | U6 | Selection keywords W, C, WP, CP, F, BOX, AU, SI, M, G; lasso (press-drag windows landed in #63); selection cycling; SELECTSIMILAR; ISOLATEOBJECTS/HIDEOBJECTS | Medium-high | 6–10 |
 | U7 | Right-click context menus (canvas, selection, command, command line, palettes, tabs) | Medium-high | 6–10 |

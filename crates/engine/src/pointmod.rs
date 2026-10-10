@@ -1,6 +1,6 @@
 //! Point modifiers typed at a point prompt, as in AutoCAD: `FROM` (a base point and an offset),
 //! `M2P`/`MTP` (the midpoint between two points), the point filters `.x`, `.y`, `.z`, `.xy`,
-//! `.xz`, `.yz` and the angle override `<a`.
+//! `.xz`, `.yz`, the angle override `<a` and the object snap overrides (`END`, `MID` … `NON`).
 //!
 //! A modifier pushes a [`Frame`] onto [`Session::point_mods`]. While frames are pending the
 //! session shows their prompt ("Base point:", "<Offset>:", "First point of mid:", ".X of",
@@ -8,9 +8,11 @@
 //! point to the command. Every point prompt of every command gets them this way, from the command
 //! line and in scripts alike, and they nest (`FROM` then `M2P`).
 
+use cadcraft_doc::{Drawing, Space};
 use cadcraft_geom::Vec2;
 
 use crate::prompt::{Accept, Input, Prompt};
+use crate::snap::{SnapHit, mode};
 use crate::{Result, Session};
 
 /// The most modifiers pending at once (bounds hostile scripts such as `FROM FROM FROM …`).
@@ -71,20 +73,67 @@ pub enum Frame {
     Filter { keep: Axes, first: Option<Vec2> },
     /// `<a`: the next point lies on the line through `base` in direction `dir` (a unit vector).
     Angle { base: Vec2, dir: Vec2 },
+    /// An object snap override for the next point only: one [`mode`] bit, or 0 for `NON` (no
+    /// object snap).
+    Snap { mode: u32 },
+}
+
+/// The object snap overrides and the words they are typed as: any start of a word of three
+/// letters or more (`END`, `ENDP`, `endpoint`).
+const SNAP_WORDS: [(u32, &[&str]); 15] = [
+    (mode::END, &["endpoint"]),
+    (mode::MID, &["midpoint"]),
+    (mode::CEN, &["center", "centre"]),
+    (mode::GCEN, &["gcenter", "gcentre"]),
+    (mode::NOD, &["node"]),
+    (mode::QUA, &["quadrant"]),
+    (mode::INT, &["intersection"]),
+    (mode::APP, &["apparent", "appint"]),
+    (mode::EXT, &["extension"]),
+    (mode::INS, &["insertion"]),
+    (mode::PER, &["perpendicular"]),
+    (mode::TAN, &["tangent"]),
+    (mode::NEA, &["nearest"]),
+    (mode::PAR, &["parallel"]),
+    (0, &["none"]),
+];
+
+/// The object snap override `t` names (`_endp`, `MID`, `non` …): its mode bit, 0 for `NON`.
+pub fn parse_snap(t: &str) -> Option<u32> {
+    let b = bare(t).to_ascii_lowercase();
+    if b.len() < 3 {
+        return None;
+    }
+    SNAP_WORDS.iter().find(|(_, words)| words.iter().any(|w| w.starts_with(&b))).map(|(m, _)| *m)
+}
+
+/// The name of a snap mode ("Endpoint"), "None" for 0.
+pub fn snap_name(m: u32) -> &'static str {
+    mode::ALL.iter().find(|(b, _)| *b == m).map_or("None", |(_, n)| *n)
+}
+
+/// The candidate snaps near `cursor` for Tab cycling: the snap [`crate::snap::osnap`] picks
+/// first, then the closest snap of each other mode in `osmode`, nearest first, without repeats.
+pub fn snap_candidates(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osmode: u32, base: Option<Vec2>, deferred: bool) -> Vec<SnapHit> {
+    if osmode & !mode::HATCH == 0 || osmode & mode::OFF != 0 {
+        return Vec::new();
+    }
+    let osnap = |m: u32| crate::snap::osnap(d, space, cursor, aperture, m, base, deferred);
+    let extra = osmode & mode::HATCH;
+    let mut per_mode: Vec<SnapHit> = mode::ALL.iter().filter(|(b, _)| osmode & b != 0).filter_map(|(b, _)| osnap(*b | extra)).collect();
+    per_mode.sort_by(|a, b| a.point.dist(cursor).total_cmp(&b.point.dist(cursor)));
+    let mut out: Vec<SnapHit> = osnap(osmode).into_iter().collect();
+    for h in per_mode {
+        if !out.iter().any(|o| o.mode == h.mode && o.point.near(h.point, aperture * 1e-6)) {
+            out.push(h);
+        }
+    }
+    out
 }
 
 /// Strip the international (`_`) and transparent (`'`) prefixes a modifier may be typed with.
 fn bare(t: &str) -> &str {
     t.trim().trim_start_matches(['\'', '_'])
-}
-
-/// Whether `t` is exactly one of the prompt's keywords (the whole word or its capital-letter
-/// shortcut): a command's own keyword wins over a modifier spelled the same.
-fn exact_keyword(prompt: &Prompt, t: &str) -> bool {
-    prompt.match_keyword(t).is_some_and(|k| {
-        let short: String = k.chars().filter(|c| c.is_ascii_uppercase() || c.is_ascii_digit()).collect();
-        k.eq_ignore_ascii_case(t) || short.eq_ignore_ascii_case(t)
-    })
 }
 
 /// Whether point modifiers apply at this prompt: it asks for a point that is not an object pick.
@@ -103,13 +152,26 @@ impl Session {
             Frame::Mid { first: Some(f) } => Prompt::new("Second point of mid", point).base(f),
             Frame::Filter { keep, first: None } => Prompt::new(format!("{} of", keep.name()), point).base_opt(p.base),
             Frame::Filter { keep, first: Some(_) } => Prompt::new(format!("(need {})", keep.need()), point).base_opt(p.base),
-            Frame::Angle { .. } => p,
+            Frame::Angle { .. } | Frame::Snap { mode: 0 } => p,
+            // "Endpoint of:", keeping the base and deferral PER/TAN need.
+            Frame::Snap { mode } => Prompt { message: format!("{} of", snap_name(mode)), keywords: Vec::new(), default: None, ..p },
         })
+    }
+
+    /// The object snap override for the next pick ([`Frame::Snap`]): `Some(0)` after `NON`,
+    /// `None` when the running object snaps apply. The UI snaps the cursor with it.
+    pub fn snap_override(&self) -> Option<u32> {
+        match self.point_mods.last() {
+            Some(Frame::Snap { mode }) if self.running.is_some() => Some(*mode),
+            _ => None,
+        }
     }
 
     /// The modifier `t` names at `prompt`, if any.
     fn parse_modifier(&self, prompt: &Prompt, t: &str) -> Option<Frame> {
-        if exact_keyword(prompt, t) {
+        // The command's keywords come first (`cen` is ZOOM's or ARC's Center, `ext` ZOOM's
+        // Extents); the `_` and `'` forms (`_cen`) always name the modifier.
+        if prompt.match_keyword(t).is_some() {
             return None;
         }
         let b = bare(t);
@@ -123,6 +185,9 @@ impl Session {
         }
         if let Some(keep) = Axes::parse(b) {
             return Some(Frame::Filter { keep, first: None });
+        }
+        if let Some(mode) = parse_snap(b) {
+            return Some(Frame::Snap { mode });
         }
         match b.to_ascii_lowercase().as_str() {
             "from" | "fro" => Some(Frame::From { base: None }),
@@ -142,8 +207,13 @@ impl Session {
                 self.echo("Too many point modifiers.");
                 return Some(Ok(()));
             }
-            if let Frame::Angle { .. } = f {
-                self.echo(format!("Angle Override: {}", bare(t).trim_start_matches('<')));
+            match f {
+                Frame::Angle { .. } => self.echo(format!("Angle Override: {}", bare(t).trim_start_matches('<'))),
+                // A second snap override replaces the first.
+                Frame::Snap { .. } if matches!(self.point_mods.last(), Some(Frame::Snap { .. })) => {
+                    self.point_mods.pop();
+                }
+                _ => {}
             }
             self.point_mods.push(f);
             return Some(Ok(()));
@@ -173,6 +243,11 @@ impl Session {
         }
         match input {
             Input::Point(p) => self.modifier_point(p),
+            // A deferred tangent/perpendicular picked under a TAN/PER override.
+            Input::Deferred(d) if matches!(self.point_mods.as_slice(), [Frame::Snap { .. }]) => {
+                self.point_mods.clear();
+                self.input(Input::Deferred(d))
+            }
             Input::Deferred(d) => self.modifier_point(d.at),
             // Enter drops the modifiers and returns to the command's prompt.
             Input::Enter => {
@@ -219,6 +294,25 @@ impl Session {
                 Frame::Mid { first: Some(f) } => p = (f + p) * 0.5,
                 Frame::Filter { keep, first: Some(f) } => p = keep.combine(f, p),
                 Frame::Angle { base, dir } => p = base + dir * (p - base).dot(dir),
+                Frame::Snap { mode: 0 } => {}
+                Frame::Snap { mode } => {
+                    // Snap the point with this mode alone, within the aperture.
+                    let prompt = self.current_prompt();
+                    let space = self.space();
+                    let aperture = self.pixel_size() * self.settings.aperture.max(1.0);
+                    let hatch = if self.settings.osnaphatch { mode::HATCH } else { 0 };
+                    let base = prompt.as_ref().and_then(|q| q.base);
+                    let deferred = prompt.as_ref().is_some_and(|q| q.deferred);
+                    let hit = crate::snap::osnap(self.doc()?, &space, p, aperture, mode | hatch, base, deferred);
+                    match hit {
+                        Some(SnapHit { deferred: Some(d), .. }) if self.point_mods.is_empty() => return self.input(Input::Deferred(d)),
+                        Some(h) => p = h.point,
+                        None => {
+                            self.echo(format!("No {} found for specified point.", snap_name(mode)));
+                            return Ok(());
+                        }
+                    }
+                }
             }
         }
         self.point_mods.clear();
@@ -239,5 +333,18 @@ mod tests {
         assert_eq!((a.name().as_str(), a.need().as_str()), (".YZ", "X"));
         assert_eq!(a.combine(Vec2::new(1.0, 2.0), Vec2::new(3.0, 4.0)), Vec2::new(3.0, 2.0));
         assert!(Axes::parse(".5").is_none() && Axes::parse(".w").is_none());
+    }
+
+    #[test]
+    fn snap_words() {
+        for (t, m) in [("END", mode::END), ("_endp", mode::END), ("'_mid", mode::MID), ("cen", mode::CEN), ("gcen", mode::GCEN)] {
+            assert_eq!(parse_snap(t), Some(m), "{t}");
+        }
+        for (t, m) in [("perp", mode::PER), ("Insert", mode::INS), ("appint", mode::APP), ("NON", 0), ("none", 0)] {
+            assert_eq!(parse_snap(t), Some(m), "{t}");
+        }
+        for t in ["en", "endx", "line", "x", "no"] {
+            assert_eq!(parse_snap(t), None, "{t}");
+        }
     }
 }

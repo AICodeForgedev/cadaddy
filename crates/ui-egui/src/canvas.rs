@@ -115,6 +115,20 @@ pub struct CanvasState {
     pub param: crate::parametric::Cache,
     /// A selection window opened by a press-and-drag, to close where the button is let go.
     drag_window: bool,
+    /// The right-click that opened the shortcut menu held Shift or Ctrl: it is the object snap
+    /// menu ([`crate::context_menu`]).
+    pub snap_menu: bool,
+    /// Tab was pressed over a snap marker: show the next candidate ([`SnapCycle`]).
+    pub snap_tab: bool,
+    pub snap_cycle: Option<SnapCycle>,
+}
+
+/// Tab cycling through the candidate snaps under the cursor: where it started and which
+/// candidate shows. Moving the cursor out of the aperture ends it.
+#[derive(Clone, Copy, Debug)]
+pub struct SnapCycle {
+    anchor: Vec2,
+    index: usize,
 }
 
 /// Primitives of `list` sorted by entity handle, built on the first highlight after each list
@@ -682,6 +696,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.canvas.cursor = Some(eff);
         app.session.cursor = eff;
         app.session.cursor_deferred = app.canvas.snap.and_then(|h| h.deferred);
+        // Typed or menu snap overrides (END, NON…) and Tab cycling; a locked Dynamic Input value wins.
+        if !dyn_frame.and_then(|f| crate::dyninput::parse(&app.cmd.buffer, &f)).is_some_and(|e| e.first_locked().is_some()) {
+            override_cursor(app, w, &xf);
+        }
     } else {
         app.canvas.cursor = None;
         app.canvas.snap = None;
@@ -742,12 +760,15 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     }
     // Right-click acts as Enter while a command runs (the classic CAD default); otherwise it opens
-    // the shortcut menu (Repeat, Clipboard, …).
+    // the shortcut menu (Repeat, Clipboard, …). Shift/Ctrl+right-click opens the object snap menu.
     let idle = app.session.running.is_none();
-    if inside && pressed_secondary && !idle {
+    if inside && pressed_secondary {
+        app.canvas.snap_menu = mods.shift || mods.ctrl;
+    }
+    if inside && pressed_secondary && !idle && !app.canvas.snap_menu {
         let _ = app.session.input(Input::Enter);
     }
-    if idle {
+    if idle || app.canvas.snap_menu {
         crate::context_menu::show(app, &resp);
     }
 
@@ -974,6 +995,60 @@ fn tooltip(p: &egui::Painter, at: Pos2, text: &str) {
 
 /// Half the side of the pick box: the pick aperture (PICKBOX × 1.5 pixels, as `select::pick` is
 /// called with), so the square shows what a click hits. `None` when PICKBOX is 0 (no box).
+/// The candidate Tab has cycled to, if cycling: a Tab press starts or advances it, and the
+/// cursor leaving the aperture where it started ends it.
+fn snap_cycle(app: &mut CadApp, raw: Vec2, ap: f64) -> Option<usize> {
+    let tab = std::mem::take(&mut app.canvas.snap_tab);
+    let c = &mut app.canvas.snap_cycle;
+    if c.is_some_and(|c| c.anchor.dist(raw) > ap) {
+        *c = None;
+    }
+    if tab {
+        *c = Some(c.map_or(SnapCycle { anchor: raw, index: 1 }, |c| SnapCycle { index: c.index + 1, ..c }));
+    }
+    c.map(|c| c.index)
+}
+
+/// The cursor under a one-pick object snap override (`Session::snap_override`: END, NON…) or
+/// while Tab cycles the candidates: the snap of that mode (or the cycled candidate) replaces
+/// what the running snaps found; with none, a running snap no longer holds the cursor.
+fn override_cursor(app: &mut CadApp, raw: Vec2, xf: &Xf) {
+    let over = app.session.snap_override();
+    let ap = app.session.settings.aperture / xf.scale;
+    let cycle = snap_cycle(app, raw, ap);
+    let prompt = app.session.current_prompt();
+    let wants_point = prompt.as_ref().is_some_and(|p| p.accept.point && !p.accept.select);
+    if (over.is_none() && cycle.is_none()) || !wants_point || app.canvas.hot_grip.is_some() || app.session.pending_window.is_some() {
+        return;
+    }
+    let base = prompt.as_ref().and_then(|p| p.base);
+    let deferred = prompt.as_ref().is_some_and(|p| p.deferred);
+    let s = &app.session.settings;
+    let osmode = over.unwrap_or(s.osmode) | if s.osnaphatch { snap::mode::HATCH } else { 0 };
+    let Ok(st) = app.session.state() else { return };
+    let hit = match cycle {
+        Some(i) => {
+            let cands = cadcraft_engine::pointmod::snap_candidates(&st.doc, &st.edit_space(), raw, ap, osmode, base, deferred);
+            cands.get(i % cands.len().max(1)).copied()
+        }
+        None => snap::osnap(&st.doc, &st.edit_space(), raw, ap, osmode, base, deferred),
+    };
+    let p = match (hit, app.canvas.snap) {
+        (Some(h), _) => {
+            app.canvas.snap = Some(h);
+            h.point
+        }
+        (None, Some(_)) => {
+            app.canvas.snap = None;
+            raw
+        }
+        (None, None) => return,
+    };
+    app.canvas.cursor = Some(p);
+    app.session.cursor = p;
+    app.session.cursor_deferred = app.canvas.snap.and_then(|h| h.deferred);
+}
+
 fn pickbox_half(pickbox: f64) -> Option<f32> {
     let half = (pickbox * 1.5) as f32;
     (half.is_finite() && half >= 1.0).then_some(half)

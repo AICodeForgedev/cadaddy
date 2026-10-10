@@ -60,10 +60,13 @@ pub fn capture_tab(ctx: &egui::Context, raw: &mut egui::RawInput) {
     });
 }
 
-/// Tab on the command line: type the Dynamic Input separator (`,` or `<`) after a value, or
-/// complete a command name.
+/// Tab on the command line: cycle the object snaps under the cursor, type the Dynamic Input
+/// separator (`,` or `<`) after a value, or complete a command name.
 fn tab(app: &mut CadApp) {
-    if let Some(f) = dyn_frame(app)
+    // Over a snap marker with nothing typed, Tab cycles the candidate snaps.
+    if app.cmd.buffer.is_empty() && app.canvas.snap.is_some() {
+        app.canvas.snap_tab = true;
+    } else if let Some(f) = dyn_frame(app)
         && let Some(sep) = crate::dyninput::tab_separator(&app.cmd.buffer, &f)
     {
         app.cmd.buffer.push(sep);
