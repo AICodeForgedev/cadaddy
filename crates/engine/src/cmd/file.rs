@@ -159,10 +159,14 @@ fn store(path: &str, bytes: &[u8]) -> Result<()> {
 /// Store the bytes, then mark the drawing saved under `path`. If storing fails the drawing keeps
 /// its unsaved changes, file name and title. On the web a started download counts as saved: the
 /// browser owns the file from there (we can't see whether the user keeps it), and the name stays so
-/// a later QSAVE downloads the drawing again under it.
+/// a later QSAVE downloads the drawing again under it. An image or PDF export (SVG, PNG, PDF) only
+/// stores the file: the drawing keeps its name, title and unsaved changes, so closing still asks.
 fn commit_save(s: &mut Session, path: &str, bytes: &[u8], store: impl FnOnce(&str, &[u8]) -> Result<()>) -> Result<usize> {
     s.state()?;
     store(path, bytes)?;
+    if !is_drawing_file(path) {
+        return Ok(bytes.len());
+    }
     let st = s.state_mut()?;
     st.saved = st.doc.clone();
     st.path = Some(path.to_string());

@@ -23,7 +23,7 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         json!({"name": "new_drawing", "description": "Create a new drawing (imperial by default, or metric).",
             "inputSchema": {"type": "object", "properties": {"metric": {"type": "boolean"}}}}),
         json!({"name": "open", "description": "Open a DXF file.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}),
-        json!({"name": "save", "description": "Save the drawing (DXF; .svg/.png export by extension).", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}),
+        json!({"name": "save", "description": "Save the drawing (DXF or DWG by extension). A .svg, .png or .pdf path exports instead: the drawing keeps its name and unsaved changes.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}),
         json!({"name": "cancel", "description": "Press Escape: cancel the running command (or clear the selection).", "inputSchema": {"type": "object", "properties": {}}}),
     ];
     if has_ui {

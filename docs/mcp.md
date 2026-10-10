@@ -34,7 +34,7 @@ Example client configuration (Claude Code / Claude Desktop):
 | `inspect_drawing {entities?, limit?}` | Counts, extents, layers, styles, blocks, layouts, selection, undo history and entities. |
 | `query_entities {type?, layer?, window?}` | Filtered entities with handles and geometry. |
 | `render {width?, height?, fit?}` | A PNG image of the drawing. |
-| `new_drawing {metric?}`, `open {path}`, `save {path?}`, `cancel` | Files and Escape. |
+| `new_drawing {metric?}`, `open {path}`, `save {path?}`, `cancel` | Files and Escape. `save` to a `.svg`, `.png` or `.pdf` path exports: the drawing keeps its name and unsaved changes. |
 | `screenshot`, `ui_inspect`, `ui_click {x, y}` | Only when connected to the app. |
 
 Resources: `cadcraft://drawing` (inspect JSON) and `cadcraft://commands` (catalog).
