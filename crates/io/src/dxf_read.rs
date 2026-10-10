@@ -1076,6 +1076,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             _ => {}
         }
     }
+    let mut active_vport = false;
     for (kind, tg) in recs {
         let t = T(&tg);
         match kind.as_str() {
@@ -1143,6 +1144,19 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 match d.text_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(&name)) {
                     Some(x) => *x = st,
                     None => d.text_styles.push(st),
+                }
+            }
+            // The first *ACTIVE viewport holds the snap grid's origin and rotation (degrees).
+            "VPORT" if !active_vport && t.s(2).is_some_and(|n| n.trim().eq_ignore_ascii_case("*ACTIVE")) => {
+                active_vport = true;
+                if let (Some(x), Some(y)) = (t.f(13), t.f(23))
+                    && x.is_finite()
+                    && y.is_finite()
+                {
+                    d.header.set("SNAPBASE", HVal::Point(Vec3::new(x, y, 0.0)));
+                }
+                if let Some(a) = t.f(50).filter(|a| a.is_finite()) {
+                    d.header.set_f64("SNAPANG", a);
                 }
             }
             "VIEW" => {

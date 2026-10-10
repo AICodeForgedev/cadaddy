@@ -1367,7 +1367,8 @@ pub fn write(d: &Drawing) -> String {
     w.p2(10, Vec2::ZERO);
     w.p2(11, Vec2::new(1.0, 1.0));
     w.p2(12, if ext.is_empty() { Vec2::new(6.0, 4.5) } else { ext.center() });
-    w.p2(13, Vec2::ZERO);
+    // Snap grid origin and rotation (SNAPBASE, SNAPANG in degrees): R13+ files keep them here.
+    w.p2(13, d.header.point("SNAPBASE").map(|p| p.xy()).filter(|p| p.is_finite()).unwrap_or(Vec2::ZERO));
     w.p2(14, Vec2::new(0.5, 0.5));
     w.p2(15, Vec2::new(0.5, 0.5));
     w.p(16, Vec3::Z);
@@ -1375,6 +1376,7 @@ pub fn write(d: &Drawing) -> String {
     w.f(40, if ext.is_empty() { 9.0 } else { (ext.height() * 1.1).max(1e-6) });
     w.f(41, 1.6);
     w.f(42, 50.0);
+    w.f(50, d.header.f64("SNAPANG", 0.0));
     w.s(0, "ENDTAB");
     // LTYPE. Embedded text and shapes point at STYLE records (340), which get their handles
     // in the STYLE table below: (tag position, style name, is a shape) are filled in there.
