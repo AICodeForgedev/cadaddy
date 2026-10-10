@@ -17,7 +17,7 @@ do them first.
 | 2 | **[alpha blocker]** **No real-file test corpus and no check in AutoCAD** | All 36 file tests are synthetic; nobody has verified a CADCraft DWG/DXF opens cleanly in AutoCAD | 10–15 + human | [file formats](file-format-parity.md#tests) |
 | 3 | **[alpha blocker]** **Object snap tracking, extension, parallel, apparent-intersection snaps are fake** | Drafters place most points with tracking; the F11 button does nothing | 8–12 | [ui](ui-parity.md#tracking-polar-ortho-grid-and-snap--30) |
 | 4 | **[alpha blocker]** **DWG always saves as R2000; DXF only R2000 ASCII; no code pages** | Can't exchange at 2018 format; pre-2007 CJK/Cyrillic files are garbled | 10–15 | [file formats](file-format-parity.md) |
-| 5 | **[alpha blocker]** **Stubbed prompt options** in TRIM/EXTEND, OFFSET, ROTATE, PLINE, SPLINE, MTEXT, MLEADER, FILLET | Scripts and muscle memory hit "not available yet" in the most-used commands | 15–25 | [features](#features) |
+| 5 | **[alpha blocker]** **Stubbed prompt options** in OFFSET, ROTATE, PLINE, SPLINE, MTEXT, MLEADER, FILLET | Scripts and muscle memory hit "not available yet" in the most-used commands | 15–25 | [features](#features) |
 | 6 | **Ellipse and spline geometry is tessellated** (intersections, offsets, closest points; polyline offset ignores bulges) | Coordinates are subtly wrong; offsets of ellipses come out as polylines | 30–50 | [geometry](geometry-parity.md) |
 | 7 | **[alpha blocker]** **No xrefs, block editor, dynamic blocks or groups** | Most production drawings use them | 80–120 | [features](#features) |
 | 8 | **No autosave, crash recovery, AUDIT or RECOVER** | Work is lost if anything goes wrong; damaged files can't be repaired | 10–15 | [features](#features) |
@@ -28,7 +28,7 @@ do them first.
 
 | # | Gap | Evidence | User impact | Est. |
 |---|---|---|---|---|
-| F1 | **[alpha blocker]** Prompt options print "not available yet": TRIM/EXTEND cuTting edges, Fence, Crossing, mOde, Project, eRase; OFFSET Erase, Layer, Multiple, Undo; ROTATE Reference; PLINE Angle, CEnter, Direction, Radius, Second pt; SPLINE Method, Knots, Object, Tangency, toLerance; MTEXT Height/Justify/Line spacing/Rotation/Style/Width/Columns; MLEADER options | `cmd/modify.rs:1537,1697-1730,1807-1843`, `cmd/draw.rs:542,623,1106-1128,1297-1320`, `modify2.rs:594,786,809` | High: the commands people use most | 15–25 |
+| F1 | **[alpha blocker]** Prompt options print "not available yet": OFFSET Erase, Layer, Multiple, Undo; ROTATE Reference; PLINE Angle, CEnter, Direction, Radius, Second pt; SPLINE Method, Knots, Object, Tangency, toLerance; MTEXT Height/Justify/Line spacing/Rotation/Style/Width/Columns; MLEADER options | `cmd/modify.rs:1537,1697-1730,1807-1843`, `cmd/draw.rs:542,623,1106-1128,1297-1320`, `modify2.rs:594,786,809` | High: the commands people use most | 15–25 |
 | F2 | **[alpha blocker]** No xrefs (XATTACH, XREF palette, REFEDIT, BIND, XCLIP, overlay, paths); DXF xref blocks read with an empty path | `dxf_read.rs:923` | High: multi-file projects | 30–45 |
 | F3 | **[alpha blocker]** (block editor and REFEDIT; dynamic-block authoring is beta) No block editor (BEDIT) or dynamic blocks (parameters, actions, visibility, lookup); dynamic blocks from other files lose their behaviour | issue #185 offers help | High: standard libraries are dynamic | 50–75 |
 | F4 | No autosave (SAVETIME), crash recovery files, AUDIT, RECOVER, drawing recovery manager | no SAVETIME anywhere | High: lost work | 10–15 |

@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::helpers::*;
 use super::machines::{SelOutcome, SelectPhase, SelectRun, number};
+use super::trimextend::{self, TrimM};
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
@@ -54,16 +55,18 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["o"])
             .params("{handle, distance, side: [x,y], erase?: bool, layer?: \"source\"|\"current\"}")
             .interactive(|s| Ok(Box::new(OffsetM::new(s)))),
-        CommandSpec::new("trim", "Trim", run_trim)
+        CommandSpec::new("trim", "Trim", trimextend::run_trim)
             .menu(&["Modify", "Trim"])
             .alias(&["tr"])
-            .params("{handle, pick: [x,y], edges?: [hex]}")
-            .interactive(|_| Ok(Box::new(TrimM { extend: false }))),
-        CommandSpec::new("extend", "Extend", run_extend)
+            .params(
+                "{handle, pick: [x,y] | fence: [[x,y],...] | crossing: [[x,y],[x,y]], edges?: [hex], edgeMode?: \"extend\"|\"none\", mode?: \"quick\"|\"standard\"}",
+            )
+            .interactive(|_| Ok(Box::new(TrimM::new(false)))),
+        CommandSpec::new("extend", "Extend", trimextend::run_extend)
             .menu(&["Modify", "Extend"])
             .alias(&["ex"])
-            .params("{handle, pick: [x,y], edges?: [hex]}")
-            .interactive(|_| Ok(Box::new(TrimM { extend: true }))),
+            .params("{handle, pick: [x,y] | fence: [[x,y],...] | crossing: [[x,y],[x,y]], edges?: [hex], edgeMode?: \"extend\"|\"none\"}")
+            .interactive(|_| Ok(Box::new(TrimM::new(true)))),
         CommandSpec::new("fillet", "Fillet", run_fillet)
             .menu(&["Modify", "Fillet"])
             .alias(&["f"])
@@ -672,8 +675,18 @@ fn add_offset(s: &mut Session, src: &Entity, k: EntityKind, current_layer: bool,
 
 // ---------------- trim / extend ----------------
 
+/// The cutting (TRIM) or boundary (EXTEND) edges.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Edges<'a> {
+    /// Only these objects; `None`: every visible object.
+    pub only: Option<&'a [Handle]>,
+    /// Implied edges (EDGEMODE 1): lines and the end segments of open polylines count as running
+    /// on without end, arcs as whole circles.
+    pub implied: bool,
+}
+
 /// All primitives of the cutting edges (excluding `exclude`).
-fn edge_segments(s: &Session, edges: Option<&[Handle]>, exclude: Handle) -> Result<Vec<Segment>> {
+fn edge_segments(s: &Session, edges: Edges, exclude: Handle) -> Result<Vec<Segment>> {
     let d = s.doc()?;
     let space = s.space();
     let store = d.space(&space).ok_or(EngineError::NoDocument)?;
@@ -682,9 +695,15 @@ fn edge_segments(s: &Session, edges: Option<&[Handle]>, exclude: Handle) -> Resu
         if e.handle == exclude || !d.is_visible(e) {
             continue;
         }
-        if let Some(es) = edges
+        if let Some(es) = edges.only
             && !es.contains(&e.handle)
         {
+            continue;
+        }
+        if edges.implied
+            && let Some(segs) = implied_edge(&e.kind)
+        {
+            out.extend(segs);
             continue;
         }
         for p in e.kind.prims() {
@@ -692,6 +711,35 @@ fn edge_segments(s: &Session, edges: Option<&[Handle]>, exclude: Handle) -> Resu
         }
     }
     Ok(out)
+}
+
+/// `k` as an implied edge (EDGEMODE 1), for lines, arcs and open polylines.
+fn implied_edge(k: &EntityKind) -> Option<Vec<Segment>> {
+    const FAR: f64 = 1e8;
+    let whole = |a: &Arc| Segment::Arc { arc: Arc { start: 0.0, end: TAU - 1e-12, ..*a }, ccw: true };
+    // Run a segment on past its start and/or its end.
+    let run_on = |sg: Segment, back: bool, fwd: bool| match sg {
+        Segment::Line(l) => {
+            let d = (l.b - l.a).normalized();
+            Segment::Line(Line::new(if back { l.a - d * FAR } else { l.a }, if fwd { l.b + d * FAR } else { l.b }))
+        }
+        Segment::Arc { arc, .. } => whole(&arc),
+    };
+    match k {
+        EntityKind::Line(l) => Some(vec![run_on(Segment::Line(Line::new(l.a.xy(), l.b.xy())), true, true)]),
+        EntityKind::Arc(a) => Some(vec![whole(&Arc::new(a.center.xy(), a.radius, a.start, a.end))]),
+        EntityKind::LwPolyline(p) if !p.closed => {
+            let mut segs = Polyline { vertices: p.vertices.clone(), closed: false }.segments();
+            let last = segs.len().checked_sub(1)?;
+            for (i, sg) in segs.iter_mut().enumerate() {
+                if i == 0 || i == last {
+                    *sg = run_on(*sg, i == 0, i == last);
+                }
+            }
+            Some(segs)
+        }
+        _ => None,
+    }
 }
 
 fn prim_to_segments(p: &Prim) -> Vec<Segment> {
@@ -714,7 +762,7 @@ fn prim_to_segments(p: &Prim) -> Vec<Segment> {
 }
 
 /// Trim `h` at the piece containing `pick`. Returns the handles that replace it.
-pub(crate) fn trim(s: &mut Session, h: Handle, pick: Vec2, edges: Option<&[Handle]>) -> Result<Vec<Handle>> {
+pub(crate) fn trim(s: &mut Session, h: Handle, pick: Vec2, edges: Edges) -> Result<Vec<Handle>> {
     if super::curves::is_locked(s, h) {
         return Err(EngineError::Other("The object is on a locked layer.".into()));
     }
@@ -900,7 +948,7 @@ fn param_on(s: &Segment, p: Vec2) -> f64 {
 }
 
 /// Extend the end of `h` nearest `pick` to the nearest boundary edge.
-pub(crate) fn extend(s: &mut Session, h: Handle, pick: Vec2, edges: Option<&[Handle]>) -> Result<()> {
+pub(crate) fn extend(s: &mut Session, h: Handle, pick: Vec2, edges: Edges) -> Result<()> {
     if super::curves::is_locked(s, h) {
         return Err(EngineError::Other("The object is on a locked layer.".into()));
     }
@@ -959,26 +1007,6 @@ pub(crate) fn extend(s: &mut Session, h: Handle, pick: Vec2, edges: Option<&[Han
     };
     s.doc_mut()?.modify_entity(h, |e| e.kind = new_kind)?;
     Ok(())
-}
-
-fn edges_param(p: &Value) -> Option<Vec<Handle>> {
-    p.get("edges").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().and_then(Handle::parse_hex)).collect())
-}
-
-fn run_trim(s: &mut Session, p: &Value) -> Result<Value> {
-    let h = targets(s, p)?.first().copied().ok_or_else(|| bad("trim", "`handle` is required"))?;
-    let pick = point_req("trim", p, "pick")?;
-    let edges = edges_param(p);
-    let r = trim(s, h, pick, edges.as_deref())?;
-    Ok(json!({ "handles": r.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
-}
-
-fn run_extend(s: &mut Session, p: &Value) -> Result<Value> {
-    let h = targets(s, p)?.first().copied().ok_or_else(|| bad("extend", "`handle` is required"))?;
-    let pick = point_req("extend", p, "pick")?;
-    let edges = edges_param(p);
-    extend(s, h, pick, edges.as_deref())?;
-    ok()
 }
 
 // ---------------- fillet / chamfer ----------------
@@ -2123,65 +2151,6 @@ impl Interactive for OffsetM {
             None => crate::select::entity_distance(d, e, c, 1e-3),
         };
         offset_kind(&e.kind, dist, c).into_iter().collect()
-    }
-}
-
-struct TrimM {
-    extend: bool,
-}
-
-impl Interactive for TrimM {
-    fn name(&self) -> &'static str {
-        if self.extend { "EXTEND" } else { "TRIM" }
-    }
-    fn begin(&mut self, s: &mut Session) -> Result<Step> {
-        s.set_selection(Vec::new());
-        s.echo("Current settings: Projection=UCS, Edge=None, Mode=Quick");
-        Ok(Step::Continue)
-    }
-    fn prompt(&self, _s: &Session) -> Prompt {
-        if self.extend {
-            Prompt::new("Select object to extend or shift-select to trim", Accept::POINT).kw(&[
-                "Boundary edges",
-                "Fence",
-                "Crossing",
-                "mOde",
-                "Project",
-                "Undo",
-            ])
-        } else {
-            Prompt::new("Select object to trim or shift-select to extend", Accept::POINT).kw(&[
-                "cuTting edges",
-                "Fence",
-                "Crossing",
-                "mOde",
-                "Project",
-                "eRase",
-            ])
-        }
-    }
-    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
-        match i {
-            Input::Point(p) => {
-                let ap = s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5;
-                let space = s.space();
-                let Some(h) = crate::select::pick(s.doc()?, &space, p, ap) else {
-                    s.echo("*Invalid selection*");
-                    return Ok(Step::Continue);
-                };
-                let r = if self.extend { extend(s, h, p, None).map(|_| ()) } else { trim(s, h, p, None).map(|_| ()) };
-                if let Err(e) = r {
-                    s.echo(e.to_string());
-                }
-                Ok(Step::Continue)
-            }
-            Input::Enter => Ok(Step::Done),
-            Input::Keyword(k) => {
-                s.echo(format!("{k}: not available yet"));
-                Ok(Step::Continue)
-            }
-            _ => Ok(Step::Continue),
-        }
     }
 }
 

@@ -21,6 +21,7 @@ mod props;
 mod qselect;
 mod settings;
 mod table;
+mod trimextend;
 mod utility;
 mod view;
 
