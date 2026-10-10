@@ -1,5 +1,7 @@
 //! Object snaps (OSNAP), polar tracking and ortho.
 
+mod curves;
+
 use cadcraft_doc::{Drawing, EntityKind, Insert, MAX_BLOCK_DEPTH, Prim, Space};
 use cadcraft_geom::{Bounds2, Circle, Ellipse, Mat3, PI, Segment, Vec2, intersect_ext};
 use serde::Serialize;
@@ -211,18 +213,20 @@ pub(crate) fn osnap_with(
                     Prim::Seg(Segment::Arc { arc, .. }) => cands.push((mode::PER, Circle::new(arc.center, arc.radius).closest(bp))),
                     Prim::Circle(c) => cands.push((mode::PER, c.closest(bp))),
                     Prim::Infinite { base: b0, dir, .. } => cands.push((mode::PER, *b0 + *dir * (bp - *b0).dot(*dir))),
+                    Prim::Ellipse(e) => cands.extend(curves::ellipse_perpendiculars(e, bp).into_iter().map(|q| (mode::PER, q))),
+                    Prim::Spline(s) => cands.extend(curves::spline_perpendiculars(s, bp).into_iter().map(|q| (mode::PER, q))),
                     _ => {}
                 }
             }
             if osmode & mode::TAN != 0 {
-                let circ = match p {
-                    Prim::Seg(Segment::Arc { arc, .. }) => Some(Circle::new(arc.center, arc.radius)),
-                    Prim::Circle(c) => Some(*c),
-                    _ => None,
+                let pts = match p {
+                    Prim::Seg(Segment::Arc { arc, .. }) => Circle::new(arc.center, arc.radius).tangent_points(bp),
+                    Prim::Circle(c) => c.tangent_points(bp),
+                    Prim::Ellipse(e) => curves::ellipse_tangents(e, bp),
+                    Prim::Spline(s) => curves::spline_tangents(s, bp),
+                    _ => Vec::new(),
                 };
-                if let Some(c) = circ {
-                    cands.extend(c.tangent_points(bp).into_iter().map(|t| (mode::TAN, t)));
-                }
+                cands.extend(pts.into_iter().map(|t| (mode::TAN, t)));
             }
         }
     }
@@ -342,13 +346,22 @@ impl Sink<'_> {
                         cands.push((mode::CEN, el.center));
                     }
                     if osmode & mode::QUA != 0 {
+                        // Only the quadrant points the arc passes through.
                         for k in 0..4 {
-                            cands.push((mode::QUA, el.at_param(k as f64 * PI / 2.0)));
+                            let t = k as f64 * PI / 2.0;
+                            if cadcraft_geom::angle_in_sweep(t, el.start, el.end) {
+                                cands.push((mode::QUA, el.at_param(t)));
+                            }
                         }
                     }
                     if osmode & mode::END != 0 && !el.is_full() {
                         cands.push((mode::END, el.at_param(el.start)));
                         cands.push((mode::END, el.at_param(el.end)));
+                    }
+                    if osmode & mode::MID != 0
+                        && let Some(m) = curves::ellipse_mid(el)
+                    {
+                        cands.push((mode::MID, m));
                     }
                 }
                 Prim::Spline(s) => {
@@ -356,6 +369,11 @@ impl Sink<'_> {
                         let (lo, hi) = s.domain();
                         cands.push((mode::END, s.eval(lo)));
                         cands.push((mode::END, s.eval(hi)));
+                    }
+                    if osmode & mode::MID != 0
+                        && let Some(m) = curves::spline_mid(s)
+                    {
+                        cands.push((mode::MID, m));
                     }
                 }
                 Prim::Point(pt) => {
