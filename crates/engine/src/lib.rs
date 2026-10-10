@@ -1089,18 +1089,24 @@ impl Session {
 
     // ---------------- views ----------------
 
+    /// The limits of the space being edited: the sheet in paper space, else LIMMIN/LIMMAX.
+    pub fn zoom_limits(&self) -> Result<Bounds2> {
+        let d = self.doc()?;
+        if let Space::Paper(name) = self.space()
+            && let Some(sheet) = cadcraft_render::sheet(d, &name)
+        {
+            return Ok(sheet.bounds());
+        }
+        let lo = d.header.point("LIMMIN").map(|p| p.xy()).unwrap_or(Vec2::ZERO);
+        let hi = d.header.point("LIMMAX").map(|p| p.xy()).unwrap_or(Vec2::new(12.0, 9.0));
+        Ok(Bounds2::new(lo, hi))
+    }
+
     pub fn zoom_extents(&mut self) -> Result<()> {
         let space = self.space();
         let ext = self.doc()?.extents(&space);
         let (w, h) = self.viewport_px;
-        let ext = if ext.is_empty() {
-            let d = self.doc()?;
-            let lo = d.header.point("LIMMIN").map(|p| p.xy()).unwrap_or(Vec2::ZERO);
-            let hi = d.header.point("LIMMAX").map(|p| p.xy()).unwrap_or(Vec2::new(12.0, 9.0));
-            Bounds2::new(lo, hi)
-        } else {
-            ext
-        };
+        let ext = if ext.is_empty() { self.zoom_limits()? } else { ext };
         let st = self.state_mut()?;
         let aspect = st.zoom_aspect(w / h.max(1.0));
         let height = ext.height().max(ext.width() / aspect.max(1e-6)).max(1e-6) * 1.05;
