@@ -11,6 +11,7 @@
 pub mod assoc;
 pub mod cmd;
 pub mod grips;
+mod guard;
 pub mod prompt;
 pub mod sample;
 pub mod select;
@@ -526,7 +527,7 @@ impl Session {
         self.echo(format!("Command: {}", spec.id.to_ascii_uppercase()));
         match spec.interactive {
             Some(factory) => {
-                let machine = factory(self)?;
+                let machine = guard::Guarded::create(spec.id, factory, self)?;
                 let st = self.state()?;
                 let before = st.doc.clone();
                 let selection_before = st.selection.clone();
