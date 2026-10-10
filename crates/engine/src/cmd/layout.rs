@@ -12,11 +12,14 @@ use super::file::{base64_encode, io};
 use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
+mod prompts;
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("layout", "Layout", run_layout)
             .alias(&["lo"])
-            .params("{option: new|copy|delete|rename|set|list, name?, to?}"),
+            .params("{option: new|copy|delete|rename|set|list, name?, to?} (typed LAYOUT / -LAYOUT: option prompts)")
+            .interactive(|_| Ok(Box::new(prompts::LayoutM::default()))),
         CommandSpec::new("layout.new", "New Layout", run_new)
             .menu(&["Insert", "Layout", "New Layout"])
             .params("{name?, viewport?: bool (default true)} → {name, viewport}")
