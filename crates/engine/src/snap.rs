@@ -383,9 +383,17 @@ fn block_leaves(d: &Drawing, ins: &Insert, m: &Mat3, depth: usize, budget: &mut 
         return;
     }
     let Some(blk) = d.block(&ins.block) else { return };
+    if blk.entities.is_empty() {
+        return;
+    }
     let (cols, rows) = (ins.cols.clamp(1, 10_000), ins.rows.clamp(1, 10_000));
     for r in 0..rows {
         for c in 0..cols {
+            // Each array cell spends budget too, so a huge array of tiny blocks stays bounded.
+            if *budget == 0 {
+                return;
+            }
+            *budget -= 1;
             let off = Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
             let mm = m.then_before(Mat3::translate(off).then_before(ins.transform(blk.base.xy())));
             for be in blk.entities.iter() {
