@@ -321,7 +321,8 @@ pub(crate) fn offset_kind(k: &EntityKind, dist: f64, side: Vec2) -> Option<Entit
             let next = pts.get((n / 2 + 1).min(n.saturating_sub(1))).copied()?;
             let left = (next - mid).cross(side - mid) > 0.0;
             let off = offset_points(&pts, if left { dist } else { -dist }, sp.closed);
-            Some(EntityKind::Spline(cadcraft_geom::Spline::from_fit_points(&decimate(&off, 40))))
+            // A closed spline stays closed (periodic), smooth across its start point.
+            Some(EntityKind::Spline(cadcraft_geom::Spline::from_fit(&decimate(&off, 40), sp.closed)))
         }
         EntityKind::XLine(r) | EntityKind::Ray(r) => {
             let ln = Line::new(r.base.xy(), r.base.xy() + r.dir.xy());
