@@ -117,6 +117,9 @@ struct Ctx<'a> {
     frozen: &'a [String],
     /// Per-viewport layer colour overrides of the viewport being drawn.
     vp_colors: &'a [(String, Color)],
+    /// Extra linetype scale for model space seen through a viewport: 1 / viewport scale when
+    /// `PSLTSCALE` is on (dashes keep their paper-space length at any viewport scale), else 1.
+    lt_factor: f64,
 }
 
 impl Ctx<'_> {
@@ -230,6 +233,7 @@ fn top_ctx<'a>(d: &'a Drawing, xf: Mat3, top: Handle, frozen: &'a [String], vp_c
         top,
         frozen,
         vp_colors,
+        lt_factor: 1.0,
     }
 }
 
@@ -298,6 +302,9 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     // Model window with slack: entity bounds are approximate (text, dimensions).
     let win = Bounds2::new(vp.view_center - mhalf, vp.view_center + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
     let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting };
+    // PSLTSCALE on: model-space dashes are scaled so they measure the same on paper as in
+    // paper space, whatever the viewport scale.
+    let lt_factor = if d.header.i64("PSLTSCALE", 1) != 0 { 1.0 / s } else { 1.0 };
     for me in d.model.iter() {
         if !matches!(me.kind, EntityKind::Ray(_) | EntityKind::XLine(_) | EntityKind::Viewport(_)) {
             let eb = cadcraft_doc::entity_bounds(d, me, 0);
@@ -308,7 +315,7 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
         if matches!(me.kind, EntityKind::Viewport(_)) {
             continue;
         }
-        entity(&mut sub, &top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors), me);
+        entity(&mut sub, &Ctx { lt_factor, ..top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors) }, me);
     }
     b.list.expanded = b.list.expanded.saturating_add(sub.list.expanded);
     append_clipped(&mut b.list, &sub.list, &rect);
@@ -411,7 +418,7 @@ fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Rgb, f32, Option<cadcraft_
         _ => e.common.linetype.clone(),
     };
     let lt = d.linetype(&lt_name).filter(|l| !l.pattern.is_empty()).cloned();
-    let scale = d.header.f64("LTSCALE", 1.0) * e.common.ltscale;
+    let scale = d.header.f64("LTSCALE", 1.0) * e.common.ltscale * ctx.lt_factor;
     (rgb, lw_mm, lt, scale, visible)
 }
 
@@ -847,6 +854,7 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
         top: ctx.top,
         frozen: ctx.frozen,
         vp_colors: ctx.vp_colors,
+        lt_factor: ctx.lt_factor,
     }
 }
 
