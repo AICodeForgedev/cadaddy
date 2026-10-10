@@ -141,8 +141,11 @@
 	Cut	Вирізати
 	Cyan	Блакитний
 	Cylinder	Циліндр
+	DWG	DWG
+	DXF	DXF
 	Dark	Темна
 	Default	Типово
+	Default Save Format	Типовий формат збереження
 	Define Attributes	Визначити атрибути
 	Define Attributes...	Визначити атрибути...
 	Defined width	Задана ширина

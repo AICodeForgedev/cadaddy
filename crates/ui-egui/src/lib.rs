@@ -69,6 +69,45 @@ pub struct UiState {
     pub history_lines: usize,
     /// Interface theme: "system" (follow the OS light/dark appearance), "light" or "dark".
     pub theme: theme::ThemePref,
+    /// The format Save As suggests for a drawing that has no file yet: "dxf" or "dwg".
+    pub save_format: SaveFormat,
+}
+
+/// The default save format for new drawings, like AutoCAD's Options > Open and Save > "Save as".
+/// A drawing opened from a file keeps that file's format.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SaveFormat {
+    /// CADCraft's native format, and the default.
+    #[default]
+    Dxf,
+    Dwg,
+}
+
+impl SaveFormat {
+    pub const ALL: [SaveFormat; 2] = [SaveFormat::Dxf, SaveFormat::Dwg];
+
+    /// The file extension, which is also the saved name ("dxf" or "dwg").
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SaveFormat::Dxf => "dxf",
+            SaveFormat::Dwg => "dwg",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<SaveFormat> {
+        SaveFormat::ALL.into_iter().find(|f| f.as_str().eq_ignore_ascii_case(s.trim().trim_start_matches('.')))
+    }
+
+    /// The name Save As suggests: a title that already has an extension (a drawing opened from a
+    /// file) keeps it; an untitled drawing gets this format's extension.
+    pub fn suggested_name(self, title: Option<&str>) -> String {
+        match title.map(str::trim).filter(|t| !t.is_empty()) {
+            Some(t) if std::path::Path::new(t).extension().is_some() => t.to_owned(),
+            Some(t) => format!("{t}.{}", self.as_str()),
+            None => format!("Drawing.{}", self.as_str()),
+        }
+    }
 }
 
 impl Default for UiState {
@@ -93,6 +132,7 @@ impl Default for UiState {
             dialog: None,
             history_lines: 3,
             theme: theme::ThemePref::default(),
+            save_format: SaveFormat::default(),
         }
     }
 }
@@ -226,7 +266,12 @@ impl CadApp {
 
     /// Preferences kept across restarts, as JSON for the host's storage ([`PREFS_KEY`]).
     pub fn prefs_json(&self) -> String {
-        json!({ "theme": self.ui.theme.as_str(), "interfaceLanguage": self.ui.interface_language.code() }).to_string()
+        json!({
+            "theme": self.ui.theme.as_str(),
+            "interfaceLanguage": self.ui.interface_language.code(),
+            "saveFormat": self.ui.save_format.as_str(),
+        })
+        .to_string()
     }
 
     /// Restore preferences saved by [`Self::prefs_json`]; unknown or malformed values are ignored.
@@ -237,6 +282,9 @@ impl CadApp {
         }
         if let Some(l) = v.get("interfaceLanguage").and_then(Value::as_str).and_then(i18n::Preference::parse) {
             self.ui.interface_language = l;
+        }
+        if let Some(f) = v.get("saveFormat").and_then(Value::as_str).and_then(SaveFormat::parse) {
+            self.ui.save_format = f;
         }
     }
 
@@ -524,6 +572,36 @@ mod tests {
         frame(&mut a, &ctx, None);
         assert_eq!(Tokens::get(), Tokens::of(theme::SYSTEM_FALLBACK), "no OS appearance: the documented fallback");
         assert_eq!(a.ui.theme, ThemePref::System);
-        assert_eq!(a.prefs_json(), r#"{"interfaceLanguage":"auto","theme":"system"}"#);
+        assert_eq!(a.prefs_json(), r#"{"interfaceLanguage":"auto","saveFormat":"dxf","theme":"system"}"#);
+    }
+
+    #[test]
+    fn default_save_format_persists_and_names_new_drawings() {
+        let mut a = app();
+        assert_eq!(a.ui.save_format, SaveFormat::Dxf, "default keeps DXF, CADCraft's native format");
+        assert!(a.run("ui.saveformat", json!({ "format": "pdf" })).is_err());
+        assert_eq!(a.run("ui.saveformat", json!({ "format": "DWG" })).ok(), Some(json!({ "saveFormat": "dwg" })));
+        assert_eq!(a.run("ui.saveformat", json!({})).ok(), Some(json!({ "saveFormat": "dwg" })), "no format: report it");
+        // Saved and restored by the host; bad values are ignored.
+        let mut b = app();
+        b.load_prefs(&a.prefs_json());
+        assert_eq!(b.ui.save_format, SaveFormat::Dwg);
+        b.load_prefs(r#"{"saveFormat": "svg"}"#);
+        assert_eq!(b.ui.save_format, SaveFormat::Dwg);
+        // The menu items reach the same setting, and resetting the palettes keeps it.
+        b.start("ui.saveformat.dxf");
+        assert_eq!(b.ui.save_format, SaveFormat::Dxf);
+        b.start("ui.saveformat.dwg");
+        b.start("ui.resetpalettes");
+        assert_eq!(b.ui.save_format, SaveFormat::Dwg);
+        // Untitled drawings get the format's extension; files keep their own.
+        assert_eq!(SaveFormat::Dwg.suggested_name(Some("Drawing1")), "Drawing1.dwg");
+        assert_eq!(SaveFormat::Dxf.suggested_name(Some("Drawing1")), "Drawing1.dxf");
+        assert_eq!(SaveFormat::Dwg.suggested_name(Some("Floorplan.dxf")), "Floorplan.dxf");
+        assert_eq!(SaveFormat::Dxf.suggested_name(Some("Floorplan.DWG")), "Floorplan.DWG");
+        assert_eq!(SaveFormat::Dwg.suggested_name(None), "Drawing.dwg");
+        assert_eq!(SaveFormat::Dwg.suggested_name(Some("  ")), "Drawing.dwg");
+        let ui: UiState = serde_json::from_value(json!({ "saveFormat": "dwg" })).unwrap_or_default();
+        assert_eq!(ui.save_format, SaveFormat::Dwg);
     }
 }
