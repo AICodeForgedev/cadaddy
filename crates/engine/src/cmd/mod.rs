@@ -4,6 +4,7 @@
 mod annotate;
 mod array;
 mod blocks;
+pub mod clipboard;
 pub mod constraints;
 mod draw;
 mod draw2;

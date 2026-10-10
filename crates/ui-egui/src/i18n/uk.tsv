@@ -101,6 +101,7 @@
 	Circle	Коло
 	Circumference	Довжина кола
 	Clear	Очистити
+	Clipboard	Буфер обміну
 	Close	Закрити
 	Close All	Закрити всі
 	Closed	Замкнений
@@ -131,6 +132,7 @@
 	Copy	Копіювати
 	Copy Layout	Копіювати аркуш
 	Copy Nested Objects	Копіювати вкладені об'єкти
+	Copy Selection	Копіювати вибране
 	Copy with Base Point	Копіювати з базовою точкою
 	Count	Кількість
 	Create Block	Створити блок
@@ -164,6 +166,7 @@
 	Delta X	Різниця X
 	Delta Y	Різниця Y
 	Description	Опис
+	Deselect All	Скасувати вибір
 	Diameter	Діаметр
 	Dim style	Розмірний стиль
 	Dimension	Розміри
@@ -502,6 +505,7 @@
 	Parameters Manager	Диспетчер параметрів
 	Parametric	Параметризація
 	Paste	Вставити
+	Paste as Block	Вставити як блок
 	Paste to Original Coordinates	Вставити у вихідні координати
 	Path Array	Масив уздовж траєкторії
 	Pattern	Візерунок
@@ -576,6 +580,7 @@
 	Rename Layout	Перейменувати аркуш
 	Rename Text Style	Перейменувати текстовий стиль
 	Rename...	Перейменувати...
+	Repeat {command}	Повторити {command}
 	Requires a point (x,y, @dx,dy or @d<a).	Потрібна точка (x,y, @dx,dy або @d<a).
 	Reset Palettes	Скинути палітри
 	Restore	Відновити

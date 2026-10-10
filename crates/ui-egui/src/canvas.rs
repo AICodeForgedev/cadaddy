@@ -695,15 +695,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
     }
-    if inside && pressed_secondary {
-        // Right-click acts as Enter while a command runs (the classic CAD default).
-        if app.session.running.is_some() {
-            let _ = app.session.input(Input::Enter);
-        } else if !app.session.selection().is_empty() {
-            app.session.set_selection(Vec::new());
-        } else if let Some(last) = app.session.last_command.clone() {
-            app.start(&last);
-        }
+    // Right-click acts as Enter while a command runs (the classic CAD default); otherwise it opens
+    // the shortcut menu (Repeat, Clipboard, …).
+    let idle = app.session.running.is_none();
+    if inside && pressed_secondary && !idle {
+        let _ = app.session.input(Input::Enter);
+    }
+    if idle {
+        crate::context_menu::show(app, &resp);
     }
 
     // Hover highlight (throttled to cursor movement).

@@ -354,7 +354,7 @@ pub(crate) fn shortcut_label(s: &str, mac: bool) -> String {
     format!("{shift}{cmd}{}", s.replace("Cmd+", "").replace("Shift+", ""))
 }
 
-fn entry_ui(ui: &mut egui::Ui, e: &Entry, clicked: &mut Option<String>) {
+pub(crate) fn entry_ui(ui: &mut egui::Ui, e: &Entry, clicked: &mut Option<String>) {
     match e {
         Entry::Item { label, id, shortcut, enabled } => {
             let mut b = egui::Button::new(crate::i18n::t(label));
@@ -424,6 +424,7 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(cmd_shift, Key::C), "copybase"),
         (sc(cmd, Key::C), "copyclip"),
         (sc(cmd, Key::X), "cutclip"),
+        (sc(cmd_shift, Key::V), "pasteblock"),
         (sc(cmd, Key::V), "pasteclip"),
         (sc(cmd, Key::Num1), "ui.toggle.palettes"),
         (sc(cmd, Key::Num3), "ui.toggle.toolsets"),
@@ -438,13 +439,15 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(Modifiers::NONE, Key::F11), "otrack"),
         (sc(Modifiers::NONE, Key::F12), "dynmode"),
     ];
+    crate::clipboard::mirror(app, ctx);
     if ctx.egui_wants_keyboard_input() || app.closing.is_some() {
         return;
     }
-    let mut fire = Vec::new();
+    // Cmd/Ctrl+C, X and V arrive as clipboard events, not key presses.
+    let mut fire = crate::clipboard::shortcut_commands(app, ctx);
     ctx.input_mut(|i| {
         for (s, id) in pairs {
-            if i.consume_shortcut(s) {
+            if i.consume_shortcut(s) && !fire.contains(id) {
                 fire.push(*id);
             }
         }

@@ -350,6 +350,8 @@ pub struct Session {
     pub last_dim: Option<Handle>,
     /// Options remembered between invocations of interactive commands.
     pub last_used: LastUsed,
+    /// Where `clipboard` came from and the layers, styles and blocks its objects need.
+    pub clipboard_source: Option<cmd::clipboard::ClipSource>,
 }
 
 impl Default for Session {
@@ -383,6 +385,7 @@ impl Session {
             untitled_counter: 0,
             last_dim: None,
             last_used: LastUsed::default(),
+            clipboard_source: None,
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {

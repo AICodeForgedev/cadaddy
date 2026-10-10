@@ -187,9 +187,10 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
   shortcuts. AutoCAD for Mac's defaults are similar in number; F4 (3D osnap), F5 (isoplane), F6
   (dynamic UCS) are missing.
 - Delete erases the selection on macOS (#64); Escape cancels.
-- **No right-click context menus** anywhere: right-click is Enter, clear selection or repeat
-  (`canvas.rs:651-660`). AutoCAD has context menus on the canvas (per selection, per command),
-  the command line, palettes and tabs.
+- Right-click on the canvas is Enter while a command runs; otherwise it opens a shortcut menu
+  (Repeat, Clipboard ▸ Cut/Copy/Copy with Base Point/Paste/Paste as Block/Paste to Original
+  Coordinates, the selection's editing commands, Undo/Redo, Pan/Zoom; #325). Still missing:
+  AutoCAD's per-command menus and the menus of the command line, palettes and tabs.
 
 ## Revision history
 
