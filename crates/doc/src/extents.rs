@@ -14,10 +14,8 @@ pub const MAX_BLOCK_DEPTH: usize = 16;
 fn text_box(t: &crate::Text, len: usize) -> Bounds2 {
     use crate::{HAlign, VAlign};
     let w = t.height * 0.9 * t.width_factor.abs().max(0.01) * len.max(1) as f64;
-    let origin = match t.halign {
-        HAlign::Left | HAlign::Aligned | HAlign::Fit => t.insert,
-        _ => t.align_pt.unwrap_or(t.insert),
-    };
+    // Justified text (TL, ML and BL too) hangs from its alignment point (DXF group 11).
+    let origin = t.justify_point();
     let dx = match t.halign {
         HAlign::Left | HAlign::Aligned | HAlign::Fit => 0.0,
         HAlign::Center | HAlign::Middle => -w / 2.0,
@@ -31,7 +29,7 @@ fn text_box(t: &crate::Text, len: usize) -> Bounds2 {
         (_, VAlign::Top) => -t.height,
     };
     let local = [Vec2::new(dx, dy), Vec2::new(dx + w, dy), Vec2::new(dx + w, dy + t.height), Vec2::new(dx, dy + t.height)];
-    Bounds2::from_points(local.map(|p| origin.xy() + p.rotate(t.rotation)))
+    Bounds2::from_points(local.map(|p| origin + p.rotate(t.rotation)))
 }
 
 /// Whether an entity inside a block definition shows: its own invisible flag and its layer count,

@@ -381,8 +381,10 @@ pub fn place(font: &TextFont, s: &str, p: &TextParams) -> (Shaped, Bounds2) {
     }
     let mut sh = shape_line(font, s, height, wf, p.oblique);
     let width = sh.width;
-    let origin = match p.h {
-        Align::Left | Align::Aligned | Align::Fit => insert,
+    // Every justification but baseline-left (and aligned/fit, which span both points) is placed by
+    // its alignment point (DXF group 11); the insertion point (group 10) is then a computed point.
+    let origin = match (p.h, p.v) {
+        (Align::Left, VAlign::Baseline) | (Align::Aligned | Align::Fit, _) => insert,
         _ => p.align_pt.unwrap_or(insert),
     };
     let dx = match p.h {

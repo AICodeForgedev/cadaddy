@@ -134,9 +134,10 @@ fn mirror_text(t: &mut Text, align: Option<Vec3>, insert: Vec3) {
     let baseline_left = |t: &Text, p: Vec3| if t.valign == VAlign::Baseline { None } else { Some(p) };
     match t.halign {
         HAlign::Left => {
+            // TL/ML/BL are placed by their alignment point, baseline-left text by its start point.
             t.halign = HAlign::Right;
             t.insert = insert;
-            t.align_pt = Some(insert);
+            t.align_pt = Some(if t.valign == VAlign::Baseline { insert } else { align.unwrap_or(insert) });
         }
         HAlign::Right => {
             t.halign = HAlign::Left;

@@ -269,8 +269,13 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                     if let Some(x) = num("widthFactor").filter(|x| *x > 0.0) {
                         t.width_factor = x;
                     }
-                    if let Some(v) = p.get("position") {
-                        set_xy(&mut t.insert, v);
+                    // The position is the point the text is placed by: moving it moves the text.
+                    if let Some(to) = p.get("position").and_then(point_value) {
+                        let d = to - t.justify_point();
+                        for q in std::iter::once(&mut t.insert).chain(t.align_pt.as_mut()) {
+                            q.x += d.x;
+                            q.y += d.y;
+                        }
                     }
                 }
                 EntityKind::MText(t) => {
