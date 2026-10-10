@@ -1,6 +1,7 @@
 //! Object snaps (OSNAP), polar tracking and ortho.
 
 mod curves;
+pub mod tracking;
 
 use cadcraft_doc::{Drawing, EntityKind, Insert, MAX_BLOCK_DEPTH, Prim, Space};
 use cadcraft_geom::{Bounds2, Circle, Ellipse, Mat3, PI, Segment, Vec2, intersect_ext};
@@ -149,6 +150,54 @@ pub(crate) fn osnap_with(
     if osmode == 0 || osmode & mode::OFF != 0 {
         return None;
     }
+    let (mut cands, near_prims) = gather(d, space, ix, cursor, aperture, osmode)?;
+    // Intersections between nearby primitives; Apparent Intersection also where their extensions
+    // meet (lines extended, arcs as full circles: in 2D, the "apparent" crossing of objects
+    // that don't reach each other).
+    if osmode & (mode::INT | mode::APP) != 0 {
+        let segs: Vec<Vec<Segment>> = near_prims.iter().take(200).map(prim_segments).collect();
+        let real = if osmode & mode::INT != 0 { mode::INT } else { mode::APP };
+        for i in 0..segs.len() {
+            for j in i + 1..segs.len() {
+                // Extending a tessellated ellipse or spline chord means nothing.
+                let extend = osmode & mode::APP != 0 && [i, j].iter().all(|k| near_prims.get(*k).is_some_and(extendable));
+                for a in segs.get(i).into_iter().flatten() {
+                    for b in segs.get(j).into_iter().flatten() {
+                        for x in intersect_ext(&fix_circle(a), &fix_circle(b), false) {
+                            if x.dist(cursor) <= aperture {
+                                cands.push((real, x));
+                            }
+                        }
+                        if extend {
+                            for x in intersect_ext(a, b, true) {
+                                if x.is_finite() && x.dist(cursor) <= aperture {
+                                    cands.push((mode::APP, x));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    finish(cands, &near_prims, cursor, aperture, osmode, base, deferred)
+}
+
+/// Whether a primitive has a meaningful extension (a line, an arc, a circle, an xline or ray).
+pub(crate) fn extendable(p: &Prim) -> bool {
+    matches!(p, Prim::Seg(_) | Prim::Circle(_) | Prim::Infinite { .. })
+}
+
+/// The snap candidates of `osmode` and the primitives within `aperture` of `cursor`; `None`
+/// when the drawing can't be searched.
+pub(crate) fn gather(
+    d: &Drawing,
+    space: &Space,
+    ix: &Option<std::sync::Arc<crate::spatial::SpatialIndex>>,
+    cursor: Vec2,
+    aperture: f64,
+    osmode: u32,
+) -> Option<(Vec<(u32, Vec2)>, Vec<Prim>)> {
     let probe = Bounds2::new(cursor, cursor).expand(aperture);
     let mut cands: Vec<(u32, Vec2)> = Vec::new();
     let mut near_prims: Vec<Prim> = Vec::new();
@@ -187,26 +236,22 @@ pub(crate) fn osnap_with(
             sink.dimension(d, dm, &mut budget);
         }
     }
-    // Intersections between nearby primitives.
-    if osmode & (mode::INT | mode::APP) != 0 {
-        let segs: Vec<Vec<Segment>> = near_prims.iter().take(200).map(prim_segments).collect();
-        for i in 0..segs.len() {
-            for j in i + 1..segs.len() {
-                for a in segs.get(i).into_iter().flatten() {
-                    for b in segs.get(j).into_iter().flatten() {
-                        for x in intersect_ext(&fix_circle(a), &fix_circle(b), false) {
-                            if x.dist(cursor) <= aperture {
-                                cands.push((mode::INT, x));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    Some((cands, near_prims))
+}
+
+/// Picks the best of the gathered candidates, adding the base-dependent and deferred snaps.
+fn finish(
+    mut cands: Vec<(u32, Vec2)>,
+    near_prims: &[Prim],
+    cursor: Vec2,
+    aperture: f64,
+    osmode: u32,
+    base: Option<Vec2>,
+    deferred: bool,
+) -> Option<SnapHit> {
     // Perpendicular / tangent from the base point.
     if let Some(bp) = base {
-        for p in &near_prims {
+        for p in near_prims {
             if osmode & mode::PER != 0 {
                 match p {
                     Prim::Seg(Segment::Line(l)) => cands.push((mode::PER, l.project(bp))),
@@ -241,7 +286,7 @@ pub(crate) fn osnap_with(
     }
     if base.is_none()
         && deferred
-        && let Some(h) = deferred_hit(&near_prims, cursor, aperture, osmode)
+        && let Some(h) = deferred_hit(near_prims, cursor, aperture, osmode)
     {
         return Some(h);
     }
@@ -254,7 +299,7 @@ pub(crate) fn osnap_with(
                 nb = Some((dd, c));
             }
         };
-        for p in &near_prims {
+        for p in near_prims {
             for s in prim_segments(p) {
                 consider(fix_circle(&s).closest(cursor));
             }

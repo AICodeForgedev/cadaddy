@@ -98,7 +98,8 @@ pub struct CanvasState {
     pub snap: Option<SnapHit>,
     /// Effective cursor point after snaps/ortho/polar.
     pub cursor: Option<Vec2>,
-    pub polar_angle: Option<f64>,
+    /// The polar or object snap tracking path(s) the cursor is on.
+    pub track: Option<snap::tracking::Track>,
     pan_last: Option<Pos2>,
     /// True when the latest scroll came from a trackpad (or other precise-scrolling device):
     /// scrolling then pans and pinch zooms. A notched mouse wheel clears it so the wheel zooms.
@@ -422,6 +423,9 @@ fn draw_snap_marker(p: &egui::Painter, at: Pos2, hit: &SnapHit) {
         mode::INT | mode::APP => {
             p.line_segment([at + vec2(-s, -s), at + vec2(s, s)], st);
             p.line_segment([at + vec2(s, -s), at + vec2(-s, s)], st);
+            if hit.mode == mode::APP {
+                p.rect_stroke(Rect::from_center_size(at, vec2(2.0 * s, 2.0 * s)), 0.0, st, egui::StrokeKind::Middle);
+            }
         }
         mode::PER => {
             p.line(vec![at + vec2(-s, -s), at + vec2(-s, s), at + vec2(s, s)], st);
@@ -461,43 +465,84 @@ fn draw_snap_marker(p: &egui::Painter, at: Pos2, hit: &SnapHit) {
     p.galley(r.min + vec2(3.0, 1.0), galley, Color32::BLACK);
 }
 
-/// The rubber-band and snap-adjusted cursor point for the current prompt.
-fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf) -> Vec2 {
+/// Acquired tracking points (small `+`, `//` for a Parallel line), the dotted paths the cursor
+/// is on and the tooltip naming them ("Endpoint: 5.0000 < 90°").
+fn draw_tracking(p: &egui::Painter, xf: &Xf, acquired: &[snap::tracking::Acquired], track: Option<&snap::tracking::Track>, far: f64) {
+    use snap::tracking::{Acquired, PathShape};
+    let t = Tokens::get();
+    let st = Stroke::new(1.0, t.snap);
+    for a in acquired {
+        let c = xf.to_screen(a.at());
+        if let Acquired::Parallel { .. } = a {
+            p.line_segment([c + vec2(-5.0, 3.0), c + vec2(-1.0, -5.0)], st);
+            p.line_segment([c + vec2(1.0, 3.0), c + vec2(5.0, -5.0)], st);
+        } else {
+            p.line_segment([c + vec2(-4.0, 0.0), c + vec2(4.0, 0.0)], st);
+            p.line_segment([c + vec2(0.0, -4.0), c + vec2(0.0, 4.0)], st);
+        }
+    }
+    let Some(tr) = track else { return };
+    let mut tips = Vec::new();
+    for path in &tr.paths {
+        // Around the cursor only (a path's origin may be far off screen).
+        let pts: Vec<Pos2> = match path.shape {
+            PathShape::Ray { origin, dir } => {
+                let back = (tr.point - origin).dot(dir).clamp(0.0, far);
+                vec![xf.to_screen(tr.point - dir * back), xf.to_screen(tr.point + dir * far)]
+            }
+            PathShape::Line { dir, .. } => vec![xf.to_screen(tr.point - dir * far), xf.to_screen(tr.point + dir * far)],
+            PathShape::Circle { center, radius, .. } => {
+                let (a0, span) = (center.angle_to(tr.point), (far / radius).min(std::f64::consts::PI));
+                (0..=96).map(|i| xf.to_screen(Vec2::polar(center, radius, a0 - span + span * f64::from(i) / 48.0))).collect()
+            }
+        };
+        p.extend(Shape::dotted_line(&pts, t.snap, 6.0, 1.0));
+        let (distance, angle) = (
+            cadcraft_engine::units::format_distance(path.from.dist(tr.point), 2, 4),
+            (path.from.angle_to(tr.point).to_degrees().round() as i64).rem_euclid(360),
+        );
+        tips.push(if path.name == "Polar" {
+            crate::tf!("Polar: {distance} < {angle}°", distance = distance, angle = angle)
+        } else {
+            crate::tf!("{name}: {distance} < {angle}°", name = crate::i18n::t(path.name), distance = distance, angle = angle)
+        });
+    }
+    if let Some(o) = tr.object {
+        tips.push(crate::i18n::t(o).to_string());
+    }
+    let at = xf.to_screen(tr.point);
+    if tr.paths.len() > 1 || tr.object.is_some() {
+        p.line_segment([at + vec2(-4.0, -4.0), at + vec2(4.0, 4.0)], st);
+        p.line_segment([at + vec2(4.0, -4.0), at + vec2(-4.0, 4.0)], st);
+    }
+    tooltip(p, at + vec2(16.0, 18.0), &tips.join(", "));
+}
+
+/// The rubber-band and snap-adjusted cursor point for the current prompt (the engine's
+/// `Session::snap_cursor`: object snaps, acquiring tracking points, grid, tracking paths, ortho).
+fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf, ctx: &egui::Context) -> Vec2 {
     let prompt = app.session.current_prompt();
     let hot = app.canvas.hot_grip;
     let wants_point = hot.is_some() || prompt.as_ref().is_some_and(|p| p.accept.point && !p.accept.select);
     let base = hot.map(|g| g.base).or_else(|| prompt.as_ref().and_then(|p| p.base));
     let deferred = hot.is_none() && prompt.as_ref().is_some_and(|p| p.deferred);
-    let s = app.session.settings.clone();
     app.canvas.snap = None;
-    app.canvas.polar_angle = None;
+    app.canvas.track = None;
     if !wants_point || app.session.pending_window.is_some() {
+        if !wants_point {
+            app.session.tracking.clear();
+        }
         return raw;
     }
-    let ap = s.aperture / xf.scale;
-    if let Ok(st) = app.session.state()
-        && let Some(hit) =
-            snap::osnap(&st.doc, &st.edit_space(), raw, ap, s.osmode | if s.osnaphatch { snap::mode::HATCH } else { 0 }, base, deferred)
-    {
-        app.canvas.snap = Some(hit);
-        return hit.point;
+    let (now, shift) = ctx.input(|i| (i.time, i.modifiers.shift));
+    let q = snap::tracking::CursorQuery { base, deferred, aperture: app.session.settings.aperture / xf.scale, tol: 6.0 / xf.scale, now, shift };
+    let r = app.session.snap_cursor(raw, &q);
+    if r.wait {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(snap::tracking::DWELL / 4.0));
     }
-    let mut p = raw;
-    if s.snapmode {
-        let (origin, angle) = app.session.doc().map(snap::grid_frame).unwrap_or((Vec2::ZERO, 0.0));
-        p = snap::grid_snap(p, s.snapunit, origin, angle);
-    }
-    if let Some(b) = base {
-        if s.orthomode {
-            p = snap::ortho(b, p);
-        } else if s.polarmode
-            && let Some((q, a)) = snap::polar(b, p, s.polarang, (6.0 / xf.scale) / b.dist(p).max(1e-12))
-        {
-            p = q;
-            app.canvas.polar_angle = Some(a);
-        }
-    }
-    p
+    app.canvas.snap = r.snap;
+    app.canvas.track = r.track;
+    r.point
 }
 
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
@@ -624,7 +669,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let raw_world = hover_pos.filter(|_| inside).map(|p| xf.to_world(p));
     let dyn_frame = crate::cmdline::dyn_frame(app);
     if let Some(w) = raw_world {
-        let mut eff = effective_point(app, w, &xf);
+        let mut eff = effective_point(app, w, &xf, ui.ctx());
         // A locked Dynamic Input value (`40,` or `40<` typed) holds the cursor and overrides snaps.
         if let Some(f) = dyn_frame
             && let Some(e) = crate::dyninput::parse(&app.cmd.buffer, &f)
@@ -632,6 +677,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         {
             eff = crate::dyninput::constrain(&e, &f, eff);
             app.canvas.snap = None;
+            app.canvas.track = None;
         }
         app.canvas.cursor = Some(eff);
         app.session.cursor = eff;
@@ -706,7 +752,6 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
 
     // Hover highlight (throttled to cursor movement).
-    let prompt = app.session.current_prompt();
     // The cursor picks objects (pick box, rollover highlight): "Select objects" and single-object
     // prompts, or no command with PICKFIRST on.
     let selecting = app.session.picking_objects();
@@ -882,17 +927,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             painter.rect_stroke(r, 0.0, st, egui::StrokeKind::Middle);
         }
     }
-    // Polar tracking ray.
-    if let (Some(a), Some(c), Some(base)) = (app.canvas.polar_angle, app.canvas.cursor, prompt.as_ref().and_then(|p| p.base)) {
-        let far = base + Vec2::from_angle(a) * (view.height * 4.0);
-        let pts = [xf.to_screen(base), xf.to_screen(far)];
-        painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, Color32::from_rgb(0x4c, 0xd1, 0x37)), 3.0, 3.0));
-        let tip = crate::tf!(
-            "Polar: {distance} < {angle}°",
-            distance = cadcraft_engine::units::format_distance(base.dist(c), 2, 4),
-            angle = a.to_degrees().round() as i64
-        );
-        tooltip(&painter, xf.to_screen(c) + vec2(16.0, 18.0), &tip);
+    // Acquired tracking points and the polar / tracking paths under the cursor.
+    if app.canvas.cursor.is_some() {
+        draw_tracking(&painter, &xf, &app.session.tracking.acquired, app.canvas.track.as_ref(), view.height * 4.0);
     }
     if let (Some(hit), Some(_)) = (app.canvas.snap, app.canvas.cursor) {
         draw_snap_marker(&painter, xf.to_screen(hit.point), &hit);

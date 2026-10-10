@@ -10,6 +10,8 @@ const SESSION_VARS: &[&str] = &[
     "ORTHOMODE",
     "POLARMODE",
     "POLARANG",
+    "POLARADDANG",
+    "AUTOSNAP",
     "GRIDMODE",
     "SNAPMODE",
     "SNAPUNIT",
@@ -39,7 +41,10 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "OSMODE" => json!(st.osmode),
         "OSNAPHATCH" => json!(i32::from(st.osnaphatch)),
         "ORTHOMODE" => json!(i32::from(st.orthomode)),
-        "POLARMODE" => json!(i32::from(st.polarmode)),
+        "POLARMODE" => json!(st.polar_flags),
+        "POLARADDANG" => json!(st.polaraddang.iter().map(|a| format!("{}", (a.to_degrees() * 1e6).round() / 1e6)).collect::<Vec<_>>().join(";")),
+        // Marker, tooltip and tracking tooltip always on (1 + 4 + 32); polar 8, tracking 16.
+        "AUTOSNAP" => json!(37 + 8 * u32::from(st.polarmode) + 16 * u32::from(st.otrack)),
         "POLARANG" => json!(st.polarang.to_degrees()),
         "GRIDMODE" => json!(i32::from(st.gridmode)),
         "SNAPMODE" => json!(i32::from(st.snapmode)),
@@ -134,7 +139,19 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "OSMODE" => st.osmode = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & 0x7fff,
         "OSNAPHATCH" => st.osnaphatch = as_bool(v).ok_or_else(bad)?,
         "ORTHOMODE" => st.orthomode = as_bool(v).ok_or_else(bad)?,
-        "POLARMODE" => st.polarmode = as_bool(v).ok_or_else(bad)?,
+        "POLARMODE" => st.polar_flags = as_i(v).filter(|b| (0..=15).contains(b)).ok_or_else(bad)? as u32,
+        "POLARADDANG" => {
+            let text = v.as_str().map(str::to_string).or_else(|| as_f64(v).map(|f| f.to_string())).ok_or_else(bad)?;
+            let angles: Option<Vec<f64>> =
+                text.split(';').map(str::trim).filter(|t| !t.is_empty()).map(|t| t.parse::<f64>().ok().filter(|a| a.is_finite())).collect();
+            let angles = angles.filter(|a| a.len() <= 10).ok_or_else(bad)?;
+            st.polaraddang = angles.into_iter().map(f64::to_radians).collect();
+        }
+        "AUTOSNAP" => {
+            let bits = as_i(v).filter(|b| (0..=63).contains(b)).ok_or_else(bad)?;
+            st.polarmode = bits & 8 != 0;
+            st.otrack = bits & 16 != 0;
+        }
         "POLARANG" => st.polarang = as_f64(v).filter(|a| *a > 0.0).ok_or_else(bad)?.to_radians(),
         "GRIDMODE" => st.gridmode = as_bool(v).ok_or_else(bad)?,
         "SNAPMODE" => st.snapmode = as_bool(v).ok_or_else(bad)?,

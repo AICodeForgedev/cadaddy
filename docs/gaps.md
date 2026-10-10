@@ -1,6 +1,6 @@
 # Where CADCraft falls short of AutoCAD
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (merged main: rows closed or narrowed by #36, #38, #54, #60, #63, #129, #147, #162 and the fmt fix) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (object snap tracking, Extension, Parallel and Apparent Intersection landed, #379: top-10 row 3 and U1 narrowed) · **Target:** Autodesk AutoCAD 2027
 
 Every known shortfall, one row each, ranked within each section by user impact. This is the work
 list: agents pick from here (top of a section first), and remove or update a row in the same PR
@@ -15,7 +15,7 @@ do them first.
 |---|---|---|---|---|
 | 1 | **[alpha blocker]** **Saving drops whatever we don't model** (Unknown entities, IMAGE, layer states, block descriptions, true colours, MULTILEADER written as LEADER+MTEXT, groups, named views/UCS, foreign xdata) | Opening a colleague's DWG and saving it silently deletes content: the one thing a CAD user can't forgive | 15–25 | [file formats](file-format-parity.md) |
 | 2 | **[alpha blocker]** **No real-file test corpus and no check in AutoCAD** | All 36 file tests are synthetic; nobody has verified a CADCraft DWG/DXF opens cleanly in AutoCAD | 10–15 + human | [file formats](file-format-parity.md#tests) |
-| 3 | **[alpha blocker]** **Object snap tracking, extension, parallel, apparent-intersection snaps are fake** | Drafters place most points with tracking; the F11 button does nothing | 8–12 | [ui](ui-parity.md#tracking-polar-ortho-grid-and-snap--30) |
+| 3 | **Tracking leftovers** (object snap tracking, Extension, Parallel and Apparent Intersection landed, #379): polar angles relative to the last segment, PolarSnap, temporary tracking point | Small now; ranks lower at the next review | 3–5 | [ui](ui-parity.md#tracking-polar-ortho-grid-and-snap--70) |
 | 4 | **[alpha blocker]** **DWG always saves as R2000; DXF only R2000 ASCII; no code pages** | Can't exchange at 2018 format; pre-2007 CJK/Cyrillic files are garbled | 10–15 | [file formats](file-format-parity.md) |
 | 5 | **[alpha blocker]** **Stubbed prompt options** in OFFSET, ROTATE, PLINE, SPLINE, MTEXT, MLEADER, FILLET | Scripts and muscle memory hit "not available yet" in the most-used commands | 15–25 | [features](#features) |
 | 6 | **Ellipse and spline geometry is tessellated** (intersections, offsets, closest points; polyline offset ignores bulges) | Coordinates are subtly wrong; offsets of ellipses come out as polylines | 30–50 | [geometry](geometry-parity.md) |
@@ -60,7 +60,7 @@ Detail and evidence: [ui-parity.md](ui-parity.md).
 
 | # | Gap | User impact | Est. |
 |---|---|---|---|
-| U1 | **[alpha blocker]** Object snap tracking (acquire points, alignment paths); Extension and Parallel snaps; true apparent intersection | High | 8–12 |
+| U1 | Tracking leftovers: polar angles relative to the last segment (POLARMODE 1), PolarSnap, temporary tracking point (TT), Extension from ellipse and spline ends, the tracking options in Drafting Settings (object snap tracking, Extension, Parallel and Apparent Intersection landed in #379) | Medium | 3–5 |
 | U2 | Dynamic input: grip dimensional input, lock icons, DYNPROMPT options menu (pointer boxes with Tab and relative entry landed in #60) | Medium | 3–5 |
 | U3 | **[alpha blocker]** TK (temporary tracking, comes with object snap tracking, U1). FROM, M2P/MTP, `.x/.y/.xy` point filters, the `*` WCS prefix and the angle override `<a` landed at every point prompt (#392) | High | 1–2 |
 | U4 | **[alpha blocker]** Typed snap overrides (`END`, `MID` … at a prompt), Shift/Ctrl+right-click snap menu, Tab snap cycling | High | 4–6 |
@@ -158,6 +158,7 @@ Detail: [localization-parity.md](localization-parity.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Object snap tracking, Extension, Parallel and true Apparent Intersection landed (#379): top-10 row 3 and U1 narrowed to the leftovers |
 | 2026-10-10 | minor | Merged main: closed or narrowed rows for the Ukrainian catalog, UNITS dialog, shortcut display, dynamic input pointer boxes, press-drag windows, SETVAR DIM*, WIPEOUT and gradients, fmt |
 | 2026-10-10 | minor | Alpha blockers marked (rows failing the core-workflow gate) |
 | 2026-10-10 | major | First gaps list: ranked top 10 and every known shortfall by dimension, with evidence and estimates |

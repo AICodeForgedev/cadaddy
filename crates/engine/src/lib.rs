@@ -310,6 +310,11 @@ pub struct Settings {
     pub annoautoscale: bool,
     /// QPMODE: show the Quick Properties palette when objects are selected.
     pub qpmode: bool,
+    /// POLARMODE bits ([`snap::tracking::polarmode`]); polar tracking itself is on while
+    /// `polarmode` is (AUTOSNAP bit 8, F10).
+    pub polar_flags: u32,
+    /// POLARADDANG: additional polar tracking angles (radians), used with POLARMODE bit 4.
+    pub polaraddang: Vec<f64>,
 }
 
 impl Default for Settings {
@@ -343,6 +348,8 @@ impl Default for Settings {
             annoallvisible: true,
             annoautoscale: false,
             qpmode: false,
+            polar_flags: 0,
+            polaraddang: Vec::new(),
         }
     }
 }
@@ -433,6 +440,9 @@ pub struct Session {
     /// The deferred tangent/perpendicular snap under the cursor, if any (from the UI; lets the
     /// rubber band show the line it resolves to).
     pub cursor_deferred: Option<snap::Deferred>,
+    /// Object snap tracking: acquired points and the path under the cursor (from the UI's
+    /// [`Session::snap_cursor`] calls; direct distance entry follows the path).
+    pub tracking: snap::tracking::Tracker,
     /// Viewport size in pixels (from the UI; used for zoom and pick apertures).
     pub viewport_px: (f64, f64),
     pub clipboard: Vec<Entity>,
@@ -472,6 +482,7 @@ impl Session {
             point_mods: Vec::new(),
             cursor: Vec2::ZERO,
             cursor_deferred: None,
+            tracking: snap::tracking::Tracker::default(),
             viewport_px: (1200.0, 800.0),
             clipboard: Vec::new(),
             clipboard_base: Vec2::ZERO,
@@ -965,6 +976,10 @@ impl Session {
             if let (Some(base), Some(dist)) = (prompt.base, units::parse_distance(tt))
                 && !prompt.accept.number
             {
+                // Along the tracking path the cursor is on, from the point it comes from.
+                if let Some((from, dir)) = self.tracking.last.as_ref().filter(|t| t.point.near(self.cursor, 1e-9)).and_then(|t| t.along()) {
+                    return self.input(Input::Point(from + dir * dist));
+                }
                 let mut c = self.cursor;
                 if self.settings.orthomode {
                     c = snap::ortho(base, c);

@@ -943,6 +943,7 @@
 	{contributors} · {commits}	{contributors} · {commits}
 	{kind} (constraint {id})	{kind} (обмеження {id})
 	{kind} constraint {name} = {expression}  (double-click to edit)	Обмеження «{kind}» {name} = {expression}  (двічі клацніть для редагування)
+	{name}: {distance} < {angle}°	{name}: {distance} < {angle}°
 	ƒx  New User Parameter	ƒx  Новий параметр користувача
 	ΔLOC	Δрядків
 	−Bin	−двійк.

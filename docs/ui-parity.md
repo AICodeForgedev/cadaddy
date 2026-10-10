@@ -1,15 +1,15 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (dynamic input pointer boxes #60 and press-drag selection windows #63 landed) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (object snap tracking, Extension, Parallel and Apparent Intersection landed, #379) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How CADCraft's interaction compares with AutoCAD's: point entry, object snaps, tracking, dynamic
 input, grips, selection, the command line, chrome and navigation. A drafter's speed in AutoCAD
 comes from these, so "the command exists" isn't enough: it has to accept the same input, snap to
 the same points and respond to the same keys. Work items: [gaps.md](gaps.md#uiux).
 
-**Headline (estimated): UI/UX fidelity ≈ 43%.** The command line, point syntax, the common
-running snaps, polar/ortho and the palettes are real. Object snap tracking, extension, parallel
-and apparent-intersection snaps are toggles with no behaviour; dynamic input is a read-only
+**Headline (estimated): UI/UX fidelity ≈ 48%.** The command line, point syntax, the common
+running snaps, polar/ortho, object snap tracking and the palettes are real, and so are the
+Extension, Parallel and Apparent Intersection snaps (#379); dynamic input is a read-only
 tooltip; FROM, M2P, TK and point filters don't exist; hot-grip options are advertised but
 ignored; there are no context menus. Remaining: **≈ 110–170 Opus 5.5 hours**.
 
@@ -27,8 +27,8 @@ ignored; there are no context menus. Remaining: **≈ 110–170 Opus 5.5 hours**
 | Area | Weight | CADCraft | Weighted |
 |---|---:|---:|---:|
 | Point entry | 15% | 45% | 6.8 |
-| Object snaps | 15% | 40% | 6.0 |
-| Tracking, polar, ortho, grid/snap | 10% | 30% | 3.0 |
+| Object snaps | 15% | 45% | 6.8 |
+| Tracking, polar, ortho, grid/snap | 10% | 70% | 7.0 |
 | Dynamic input | 10% | 45% | 4.5 |
 | Grips | 10% | 40% | 4.0 |
 | Selection | 10% | 40% | 4.0 |
@@ -36,7 +36,7 @@ ignored; there are no context menus. Remaining: **≈ 110–170 Opus 5.5 hours**
 | Chrome and palettes | 10% | 45% | 4.5 |
 | Navigation | 5% | 55% | 2.8 |
 | Keyboard shortcuts, context menus | 5% | 25% | 1.3 |
-| **Total** | 100% | | **≈ 43%** |
+| **Total** | 100% | | **≈ 48%** |
 
 ## Point entry (≈ 45%)
 
@@ -54,7 +54,7 @@ ignored; there are no context menus. Remaining: **≈ 110–170 Opus 5.5 hours**
 | Angle override `<45` | yes | yes: `<a`, `<<a`, `<<<a`; a typed distance or a pick follows the angle, typed coordinates win | `pointmod.rs` |
 | Typed calculator `'CAL` | yes | no | |
 
-## Object snaps (≈ 40%)
+## Object snaps (≈ 45%)
 
 | Mode | AutoCAD | CADCraft (`snap.rs:135-334`) |
 |---|---|---|
@@ -65,28 +65,28 @@ ignored; there are no context menus. Remaining: **≈ 110–170 Opus 5.5 hours**
 | Node | points, dimension definition points, text alignment points | POINT only |
 | Quadrant | circles, arcs, ellipses | yes |
 | Intersection | every pair, extended intersection | among up to 200 nearby primitives; ellipse/spline pairs approximate ([geometry-parity.md](geometry-parity.md)) |
-| Extension | yes, with dashed extension path | **declared, never produces a point** |
+| Extension | yes, with dashed extension path | yes: rest on a line or arc end, then the line runs on (a ray) and the arc round its circle; dotted path and "Extension: d < a°" (`snap/tracking.rs`); not from ellipse, spline or polyline-arc ends |
 | Insertion | text, mtext, blocks, attributes, attdefs | TEXT, MTEXT, INSERT; no ATTDEF or MLEADER |
 | Perpendicular | every curve, deferred | lines, arcs, circles, xlines; deferred for the first point (#168) |
 | Tangent | circles, arcs, ellipses, splines, deferred | arcs and circles; deferred for the first point; **no ellipse or spline** |
 | Nearest | every curve | yes |
-| Apparent intersection | projected intersection | **same as Intersection** |
-| Parallel | yes, with parallel path | **declared, never produces a point** |
+| Apparent intersection | projected intersection | yes in 2D: where objects near the cursor would meet if extended; an object rested on sends its whole extension, so its crossing with another object snaps too (`snap.rs` `osnap_with`, `snap/tracking.rs`) |
+| Parallel | yes, with parallel path | yes: rest on a line, then a path parallel to it runs through the base point (`snap/tracking.rs`) |
 | Temporary overrides typed at a prompt (`END`, `MID`, `INT` …) | yes | **no**: the text arrives as plain input |
 | Shift/Ctrl+right-click snap menu | yes | **no** |
 | Tab to cycle candidate snaps | yes | **no** |
 | AutoSnap marker, tooltip, magnet, aperture box | yes | marker per mode and name label; aperture from APERTURE; no magnet, no aperture box |
 | OSNAPZ, 3D object snaps | yes | no |
 
-## Tracking, polar, ortho, grid and snap (≈ 30%)
+## Tracking, polar, ortho, grid and snap (≈ 70%)
 
 | Feature | AutoCAD | CADCraft |
 |---|---|---|
 | Ortho (F8) | yes | yes (`snap.rs:503`) |
-| Polar tracking increment | yes | yes, one increment, dashed ray and "Polar: d < a°" tooltip (`snap.rs:510`, `canvas.rs:838-843`) |
-| Additional polar angles, relative to last segment | yes | **no** |
+| Polar tracking increment | yes | yes, measured from ANGBASE; dotted path and "Polar: d < a°" tooltip (`snap/tracking.rs`, `canvas.rs` `draw_tracking`) |
+| Additional polar angles, relative to last segment | yes | additional angles yes (POLARADDANG with POLARMODE 4); **relative to the last segment no** |
 | Polar distance snap (PolarSnap) | yes | **no** |
-| **Object snap tracking** (acquire points, alignment paths, intersections of paths) | yes, F11 | **toggle only**: the F11 button and flag exist, nothing acquires points or draws paths |
+| **Object snap tracking** (acquire points, alignment paths, intersections of paths) | yes, F11 | yes (#379): resting on a snap point acquires it (`+`), resting again releases it, seven at most; horizontal/vertical paths, or every polar angle with POLARMODE 2; Shift to acquire with POLARMODE 8; crossings of two paths, a path and an object, and a path and a polar path snap; tooltip names each path; a typed distance (direct distance entry) runs along the path the cursor is on, measured from the point the path comes from. Engine: `Session::snap_cursor`, `snap/tracking.rs`; AUTOSNAP bits 8 and 16 |
 | Grid (rectangular, major lines, adaptive, limits) | yes | rectangular, major lines, adaptive display |
 | Snap (rectangular, isometric, polar snap) | yes | rectangular from 0,0 only (`snap.rs:531`) |
 | Isometric drafting (ISODRAFT, isoplanes F5) | yes | **status-bar toggle with no effect** |
@@ -196,5 +196,6 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Object snap tracking, Extension, Parallel, Apparent Intersection, additional polar angles (#379): tracking 30% → 70%, object snaps 40% → 45%; total 43% → 48% |
 | 2026-10-10 | minor | Dynamic input 15% → 45% (pointer boxes, #60); press-drag windows (#63); total 40% → 43% |
 | 2026-10-10 | major | First UI-parity audit: point entry, snaps, tracking, dynamic input, grips, selection, command line, chrome, navigation, keys |
