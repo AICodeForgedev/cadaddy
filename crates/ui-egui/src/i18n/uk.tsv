@@ -52,6 +52,7 @@
 	Attach	Приєднати
 	Attribute	Атрибут
 	Attribute Definition	Визначення атрибута
+	Attribute Display	Відображення атрибутів
 	Auto (system language)	Авто (мова системи)
 	Auto Constrain	Автоматичні обмеження
 	AutoConstrain	Автоматичні обмеження
@@ -846,6 +847,7 @@
 	Switch Layout	Перемкнути аркуш
 	Switch between model space in a viewport and paper space	Перемкнути між простором моделі у видовому екрані та простором аркуша
 	Symmetric	Симетрія
+	Synchronize Attributes	Синхронізувати атрибути
 	Toggle PICKADD (off: each pick replaces the selection)	Перемкнути PICKADD (вимкнено: кожен вибір замінює набір вибраних об'єктів)
 	Toggle PICKADD (on: picks add to the selection)	Перемкнути PICKADD (увімкнено: вибране додається до набору вибраних об'єктів)
 	TOP	ЗВЕРХУ

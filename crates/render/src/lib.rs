@@ -969,8 +969,10 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
         }
     }
     if b.opts.text {
+        // ATTMODE (ATTDISP): 0 shows no attributes, 1 the visible ones, 2 all of them.
+        let attmode = ctx.d.header.i64("ATTMODE", 1);
         for a in &ins.attribs {
-            if a.invisible {
+            if attmode == 0 || (a.invisible && attmode != 2) {
                 continue;
             }
             let (sh, _) = place_text_entity(ctx.d, &a.text, &a.text.value);

@@ -45,6 +45,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Modify", "Object", "Attribute", "Block Attribute Manager..."])
             .params("{name}")
             .noundo(),
+        attribs::attdisp_spec(),
+        attribs::attsync_spec(),
     ]
 }
 
@@ -753,3 +755,5 @@ impl Interactive for AttdefM {
         Ok(Step::Continue)
     }
 }
+
+mod attribs;
