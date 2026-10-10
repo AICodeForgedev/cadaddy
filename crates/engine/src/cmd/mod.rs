@@ -228,16 +228,20 @@ pub(crate) fn point_req(cmd: &str, p: &Value, key: &str) -> Result<Vec2> {
 pub(crate) fn points_param(p: &Value, key: &str) -> Option<Vec<Vec2>> {
     p.get(key)?.as_array()?.iter().map(point_value).collect()
 }
-/// Handles from `handles` (hex strings or numbers) or the current selection.
+/// Handles from `handles` (hex strings or numbers), `handle`, or else the current selection. A
+/// `handle`/`handles` that can't be read is an error, never a silent fall back to the selection.
 pub(crate) fn targets(s: &Session, p: &Value) -> Result<Vec<Handle>> {
-    if let Some(a) = p.get("handles").and_then(Value::as_array) {
-        let hs: Vec<Handle> = a.iter().filter_map(|v| v.as_str().and_then(Handle::parse_hex).or_else(|| v.as_u64().map(Handle))).collect();
-        return Ok(hs);
+    let handle = |v: &Value| v.as_str().and_then(Handle::parse_hex).or_else(|| v.as_u64().map(Handle));
+    let not_handle = |key: &str, v: &Value| EngineError::Other(format!("`{key}`: {v} is not an object handle (a hex string such as \"1A2\")"));
+    match p.get("handles") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(a)) => return a.iter().map(|v| handle(v).ok_or_else(|| not_handle("handles", v))).collect(),
+        Some(v) => return Err(EngineError::Other(format!("`handles` must be an array of object handles, got {v}"))),
     }
-    if let Some(h) = p.get("handle").and_then(|v| v.as_str().and_then(Handle::parse_hex).or_else(|| v.as_u64().map(Handle))) {
-        return Ok(vec![h]);
+    match p.get("handle") {
+        None | Some(Value::Null) => Ok(s.selection()),
+        Some(v) => Ok(vec![handle(v).ok_or_else(|| not_handle("handle", v))?]),
     }
-    Ok(s.selection())
 }
 pub(crate) fn ok() -> Result<Value> {
     Ok(Value::Null)
