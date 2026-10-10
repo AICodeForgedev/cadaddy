@@ -635,7 +635,8 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 && let (Some(a), Some(n)) = (pts.first(), pts.get(1))
             {
                 let st = ctx.d.dim_style(&l.style);
-                let size = st.map(|s| s.arrow_size).unwrap_or(0.18) * ctx.d.header.f64("DIMSCALE", 1.0);
+                // DIMASZ × DIMSCALE of the leader's style (the drawing's DIMSCALE when it is 0).
+                let size = st.map(|s| s.arrow_size).unwrap_or(0.18) * leader_scale(ctx.d, st);
                 let kind = dim::Arrowhead::parse(st.map(|s| s.arrow_block.as_str()).unwrap_or(""));
                 let g = dim::arrowhead(kind, *a, (*a - *n).normalized(), size);
                 for l in &g.lines {
@@ -782,7 +783,7 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimensio
     let g = dimension_in(d, dm);
     // DIMCLRD / DIMCLRE / DIMCLRT: ByBlock = the dimension's own colour.
     let layer_name = if e.common.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { e.common.layer.as_str() };
-    let layer_color = d.layer(layer_name).map(|l| l.color).unwrap_or(Color::Index(7));
+    let layer_color = ctx.layer_color(layer_name).unwrap_or(Color::Index(7));
     let own = match e.common.color {
         Color::ByLayer => layer_color,
         Color::ByBlock => ctx.block_color,
@@ -973,9 +974,33 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
                 continue;
             }
             let (sh, _) = place_text_entity(ctx.d, &a.text, &a.text.value);
-            b.shaped(ctx, rgb, 0.0, &sh);
+            // Properties of the attribute's definition (as AutoCAD copies them to the attribute
+            // on insertion): ByBlock = the reference's, layer 0 = the reference's layer.
+            let def = ctx.d.block(&ins.block).and_then(|blk| blk.entities.iter().find(|be| attdef_tag(be, &a.tag)));
+            let (ink, lw, shown) = match def {
+                Some(def) => {
+                    let (ink, lw, _, _, shown) = resolve(&sub_ctx(ctx, e, Mat3::IDENTITY), def, b.plotting);
+                    (ink, lw, shown)
+                }
+                None => (rgb, resolve(ctx, e, b.plotting).1, true),
+            };
+            if shown {
+                b.shaped(ctx, ink, if b.opts.lineweights { lw } else { 0.0 }, &sh);
+            }
         }
     }
+}
+
+/// The attribute definition with tag `tag` (any case).
+fn attdef_tag(e: &Entity, tag: &str) -> bool {
+    matches!(&e.kind, EntityKind::AttDef(d) if d.tag.eq_ignore_ascii_case(tag))
+}
+
+/// The overall scale of a leader drawn with dimension style `st`: its DIMSCALE, else the
+/// drawing's.
+fn leader_scale(d: &Drawing, st: Option<&cadcraft_doc::DimStyle>) -> f64 {
+    let dimscale = d.header.f64("DIMSCALE", 1.0);
+    st.map(|s| s.effective_scale(dimscale)).unwrap_or_else(|| cadcraft_doc::DimStyle::default().effective_scale(dimscale))
 }
 
 #[cfg(test)]
