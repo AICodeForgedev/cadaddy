@@ -648,6 +648,7 @@ impl Session {
                 return Err(EngineError::Internal(id.into(), msg));
             }
         };
+        cmd::groups::after_command(self, before.as_ref().map(|b| &b.0));
         cmd::constraints::after_command(self, before.as_ref().map(|b| &b.0), spec.undoable && result.is_ok());
         assoc::after_command(self, before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2));
         let result = match (result, &before) {
@@ -876,6 +877,7 @@ impl Session {
         self.pending_window = None;
         let label = find_command(&run.id).map(|c| c.label).unwrap_or("Command");
         let _ = cancelled;
+        cmd::groups::after_command(self, Some(&run.before));
         cmd::constraints::after_command(self, Some(&run.before), true);
         assoc::after_command(self, Some(&run.before), None);
         if let Ok(st) = self.state_mut()

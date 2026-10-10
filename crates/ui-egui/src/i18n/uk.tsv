@@ -309,6 +309,8 @@
 	Grip Rotate	Поворот ручками
 	Grip Scale	Масштабування ручками
 	Grip Stretch	Розтягування ручками
+	Group	Згрупувати
+	Group Edit	Редагувати групу
 	Hatch	Штрихування
 	Hatch Edit	Редагувати штрихування
 	Hatch...	Штрихування...
@@ -398,6 +400,7 @@
 	List	Список
 	List Blocks	Список блоків
 	List Dimension Styles	Список розмірних стилів
+	List Groups	Список груп
 	List Layer States	Список станів шарів
 	List Layouts	Список аркушів
 	List System Variables	Список системних змінних
@@ -900,6 +903,7 @@
 	UCS Icon	Піктограма СКК
 	Undo	Скасувати дію
 	Undo (⌘Z)	Скасувати дію (⌘Z)
+	Ungroup	Розгрупувати
 	Union	Об'єднання
 	Unisolate Layer	Скасувати ізоляцію шарів
 	Units...	Одиниці...
