@@ -37,6 +37,10 @@ pub enum Kind {
     Polyline,
     /// `tris[start..start+len]`, three vertices per triangle.
     Tris,
+    /// A wipeout: triangles laid out like [`Kind::Tris`], filled with the background colour
+    /// (paper white when plotting, the canvas colour on screen) so they hide what was drawn
+    /// before them.
+    Mask,
     /// A single point marker at `verts[start]`.
     Point,
     /// An infinite line or ray: `verts[start]` = base, `verts[start+1]` = unit direction.
@@ -103,7 +107,7 @@ impl DisplayList {
     /// The polyline points of a primitive.
     pub fn points(&self, p: &DPrim) -> &[Vec2] {
         match p.kind {
-            Kind::Tris => self.tris.get(p.start as usize..(p.start + p.len) as usize).unwrap_or(&[]),
+            Kind::Tris | Kind::Mask => self.tris.get(p.start as usize..(p.start + p.len) as usize).unwrap_or(&[]),
             _ => self.verts.get(p.start as usize..(p.start + p.len) as usize).unwrap_or(&[]),
         }
     }
@@ -361,9 +365,9 @@ fn append_clipped(dst: &mut DisplayList, src: &DisplayList, rect: &Bounds2) {
                     push_raw(dst, p, Kind::Polyline, &piece);
                 }
             }
-            Kind::Tris => {
+            Kind::Tris | Kind::Mask => {
                 let t = clip::clip_triangles(pts, rect);
-                push_raw(dst, p, Kind::Tris, &t);
+                push_raw(dst, p, p.kind, &t);
             }
             Kind::Point => {
                 if let Some(q) = pts.first()
@@ -386,13 +390,13 @@ fn append_clipped(dst: &mut DisplayList, src: &DisplayList, rect: &Bounds2) {
 fn push_raw(dst: &mut DisplayList, p: &DPrim, kind: Kind, pts: &[Vec2]) {
     let min = match kind {
         Kind::Polyline => 2,
-        Kind::Tris => 3,
+        Kind::Tris | Kind::Mask => 3,
         _ => 1,
     };
     if pts.len() < min {
         return;
     }
-    let tris = kind == Kind::Tris;
+    let tris = matches!(kind, Kind::Tris | Kind::Mask);
     let start = if tris { dst.tris.len() } else { dst.verts.len() } as u32;
     for q in pts {
         dst.bounds.add(*q);
@@ -586,11 +590,27 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             }
         }
         EntityKind::Wipeout(w) => {
-            let mut pts = w.boundary.clone();
-            if let Some(f) = pts.first().copied() {
-                pts.push(f);
+            // Hide what was drawn before it (draw order), then the frame per WIPEOUTFRAME:
+            // 0 = none, 1 = shown and plotted, 2 = shown but not plotted.
+            if b.opts.fill {
+                let n = b.list.prims.len();
+                b.tris(ctx, rgb, &fill::triangulate_evenodd(std::slice::from_ref(&w.boundary)));
+                if let Some(p) = b.list.prims.get_mut(n) {
+                    p.kind = Kind::Mask;
+                }
             }
-            b.polyline(ctx, rgb, lw, &pts);
+            let frame = match ctx.d.header.i64("WIPEOUTFRAME", 1) {
+                0 => false,
+                2 => !b.plotting,
+                _ => true,
+            };
+            if frame {
+                let mut pts = w.boundary.clone();
+                if let Some(f) = pts.first().copied() {
+                    pts.push(f);
+                }
+                b.polyline(ctx, rgb, lw, &pts);
+            }
         }
         EntityKind::Image(i) => {
             let o = i.insert.xy();

@@ -282,8 +282,10 @@ fn content_stream(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Boun
                 }
                 pending = true;
             }
-            Kind::Tris => {
+            Kind::Tris | Kind::Mask => {
                 flush(&mut c, &mut pending);
+                // A wipeout's mask is paper white.
+                let rgb = if p.kind == Kind::Mask { white } else { rgb };
                 if fill != Some(rgb) {
                     color(&mut c, rgb, "rg");
                     fill = Some(rgb);

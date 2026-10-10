@@ -278,7 +278,9 @@ fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay:
                     shapes.push(Shape::line(screen, Stroke::new(w, col)));
                 }
             }
-            Kind::Tris => {
+            Kind::Tris | Kind::Mask => {
+                // A wipeout's mask hides what was drawn before it with the background colour.
+                let col = if prim.kind == Kind::Mask { color32(bg) } else { col };
                 let mut mesh = egui::Mesh::default();
                 for tri in pts.chunks(3) {
                     if let [a, b, c] = tri {
@@ -388,7 +390,7 @@ fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, prims: &[usize
                     shapes.push(Shape::circle_stroke(xf.to_screen(*q), 3.0, Stroke::new(1.0, color)));
                 }
             }
-            Kind::Tris => {
+            Kind::Tris | Kind::Mask => {
                 // Outline triangles' bounding region lightly.
                 let bb = Bounds2::from_points(pts.iter().copied());
                 let r = Rect::from_two_pos(xf.to_screen(bb.min), xf.to_screen(bb.max));

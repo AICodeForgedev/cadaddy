@@ -48,7 +48,9 @@ pub fn export_window(d: &Drawing, space: &Space, window: Option<Bounds2>) -> Str
                 }
                 s.push_str(r#""/>"#);
             }
-            Kind::Tris => {
+            Kind::Tris | Kind::Mask => {
+                // A wipeout's mask hides what lies under it with the white background.
+                let c = if p.kind == Kind::Mask { white.hex() } else { c };
                 let _ = write!(s, r#"<path fill="{c}" d=""#);
                 for t in pts.chunks(3) {
                     if let [a, b2, cc] = t {

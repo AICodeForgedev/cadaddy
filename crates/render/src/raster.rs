@@ -89,7 +89,10 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
                     pm.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
                 }
             }
-            Kind::Tris => {
+            Kind::Tris | Kind::Mask => {
+                if p.kind == Kind::Mask {
+                    paint.set_color_rgba8(o.background.0, o.background.1, o.background.2, 255);
+                }
                 let mut pb = PathBuilder::new();
                 for t in pts.chunks(3) {
                     if let [a, b, c] = t {
