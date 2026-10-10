@@ -4,11 +4,13 @@ description = "CADCraft user interface (egui): the swappable front end"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version = "1.95"
 
 [lints]
 workspace = true
 
 [dependencies]
+craft-ui = { workspace = true }
 cadcraft-geom = { workspace = true }
 cadcraft-color = { workspace = true }
 cadcraft-doc = { workspace = true }
@@ -23,6 +25,7 @@ log = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 # Validates the canvas WGSL and its GLSL ES 3.0 (WebGL2) translation in tests (same naga wgpu uses).
 naga = { version = "30", features = ["wgsl-in", "glsl-out"] }
 

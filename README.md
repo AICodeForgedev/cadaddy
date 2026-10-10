@@ -115,6 +115,9 @@ numbers):
 
 ## Quick start
 
+Desktop and web UI builds require Rust 1.95 or later. The core workspace's declared minimum
+remains Rust 1.90.
+
 ```sh
 git clone https://github.com/storytold/cadcraft
 cd cadcraft
@@ -178,6 +181,14 @@ apps: cadcraft · cadcraft-cli · cadcraft-web
 
 Nothing below `ui-egui` knows about egui, so the front end can be replaced. `cargo xtask ci`
 checks formatting, clippy, tests, asset attribution, the crate layering and the wasm build.
+
+Drafting and layer-palette icon buttons use the pinned `craft-ui` button component for interaction,
+accessible labels and keyboard focus. CADCraft keeps its multicolor icon painter, dark palette,
+disabled tint and tool commands. The native host saves workspace visibility and toolset choices
+atomically; `CADCRAFT_CONFIG_DIR` selects an isolated profile. Compact toolbar groups move into a
+More menu, and status readouts truncate with a full-value tooltip before they reach layout tabs.
+Painted toolbar and tab controls
+have accessible labels and visible keyboard focus. Property controls remain application-specific.
 
 ## Roadmap
 
@@ -306,3 +317,5 @@ Forks and modified versions must remove them.
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
   <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
 </p>
+
+Tool Sets, Layers, and Properties can be regrouped, split, floated within the app window, closed, and reopened. The drawing canvas stays visible and cannot be closed or turned into a tab. Drag a panel header to a target edge or another header. Its context menu offers Float panel, Move to group, and Close panel. Existing panel toggles reopen panels at their saved location; Reset Panel Layout restores the app layout. Floating panels remain inside the current app window.

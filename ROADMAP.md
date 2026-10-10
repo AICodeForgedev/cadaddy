@@ -82,7 +82,17 @@ about 150–190 hours of elapsed time), CADCraft would reach broad AutoCAD parit
 
 ## Current focus
 
+The drafting and layer-palette icon-button helper uses shared `craft-ui` interaction and accessibility,
+with CADCraft's original multicolor painting and disabled appearance. This does not change drafting
+commands. The native host now restores workspace visibility, toolset choices and collapsed groups;
+malformed preference files are reported and preserved. Painted toolbar and document/toolset/layout
+tabs expose keyboard focus and labels, and the control protocol can observe Tab/Shift-Tab traversal.
+Compact windows keep toolbar command groups accessible through a More menu, while coordinates and
+transient messages share an ellipsized readout that does not cover layout names.
+
 1. Finish the alpha checklist above (release builds, AutoCAD open check, smoke test of every command, autosave/recovery, plot preview).
 2. Layer filter groups, constraint bar polish (close buttons, hover highlight).
 3. Native MULTILEADER objects in DXF; stop `*D` block duplication on re-save.
 4. Then 3D foundations (UCS, orbit, solids via truck/csgrs per plan/adr/0001).
+
+- **2026-10-10 (UI docking):** Tool Sets, Layers, and Properties can be regrouped, split, floated within the app window, closed, and reopened. The drawing canvas stays visible and cannot be closed or turned into a tab. Panel moves and reset are available as UI commands, and saved UI preferences retain arrangements. No milestone percentage change.

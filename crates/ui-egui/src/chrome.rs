@@ -54,7 +54,7 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
             );
             // Allow dragging the window by the title row.
             let tr = Rect::from_min_size(r.min, vec2(r.width(), title_h));
-            let resp = ui.interact(tr, ui.id().with("titledrag"), Sense::click_and_drag());
+            let resp = ui.interact(tr, ui.id().with("titledrag"), Sense::CLICK | Sense::DRAG);
             if resp.drag_started() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
@@ -68,7 +68,31 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
             let mut x = r.left() + if app.integrated_titlebar { 120.0 } else { 12.0 };
             let size = 26.0;
             let mut clicked = None;
-            for group in TOOLBAR {
+            let widths: Vec<_> = TOOLBAR.iter().map(|group| group.len() as f32 * (size + 6.0) - 6.0).collect();
+            let available = (row.right() - 12.0 - x).max(0.0);
+            let Some(fit) = craft_ui::layout::fit_toolbar(&widths, available, 24.0, 30.0) else {
+                // Very small windows still expose the complete command row by scrolling.
+                ui.scope_builder(egui::UiBuilder::new().max_rect(row.shrink2(vec2(4.0, 0.0))), |ui| {
+                    egui::ScrollArea::horizontal().id_salt("toolbar_small").show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for group in TOOLBAR {
+                                for (icon, cmd, tip) in *group {
+                                    if icons::button(ui, *icon, size, tip, false).clicked() {
+                                        clicked = Some(*cmd);
+                                    }
+                                }
+                                ui.add_space(18.0);
+                            }
+                        });
+                    });
+                });
+                if let Some(command) = clicked {
+                    app.start(command);
+                }
+                return;
+            };
+            for (index, _) in &fit.shown {
+                let Some(group) = TOOLBAR.get(*index) else { continue };
                 for (icon, cmd, tip) in group.iter() {
                     let br = Rect::from_min_size(pos2(x, row.center().y - size / 2.0), vec2(size, size));
                     let resp = ui.interact(br, ui.id().with(("tb", *cmd)), Sense::click());
@@ -76,12 +100,41 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
                         ui.painter().rect_filled(br, 3.0, t.control_hover.gamma_multiply(0.6));
                     }
                     icons::paint(ui.painter(), br.shrink(4.0), *icon, false);
+                    icons::describe_control(ui, &resp, tip, None, false);
                     if resp.on_hover_text(*tip).clicked() {
                         clicked = Some(*cmd);
                     }
                     x += size + 6.0;
                 }
                 x += 18.0;
+            }
+            if !fit.overflow.is_empty() {
+                let br = Rect::from_min_size(pos2(x, row.center().y - size / 2.0), vec2(fit.overflow_width, size));
+                let response = ui.interact(br, ui.id().with("toolbar_more"), Sense::click());
+                if response.hovered() {
+                    ui.painter().rect_filled(br, 3.0, t.control_hover.gamma_multiply(0.6));
+                }
+                for offset in [-5.0, 0.0, 5.0] {
+                    ui.painter().circle_filled(br.center() + vec2(offset, 0.0), 1.5, t.text);
+                }
+                icons::describe_control(ui, &response, "More toolbar commands", None, false);
+                egui::Popup::menu(&response).show(|ui| {
+                    for (position, index) in fit.overflow.iter().enumerate() {
+                        let Some(group) = TOOLBAR.get(*index) else { continue };
+                        if position > 0 {
+                            ui.separator();
+                        }
+                        for (_, command, label) in *group {
+                            let response = ui.button(*label);
+                            crate::control::record_widget(ui, &response, label, "button", None);
+                            if response.clicked() {
+                                clicked = Some(*command);
+                                ui.close();
+                            }
+                        }
+                    }
+                });
+                response.on_hover_text("More toolbar commands");
             }
             if let Some(c) = clicked {
                 app.start(c);
@@ -102,12 +155,13 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
         let plus = Rect::from_min_size(pos2(x, r.top() + 4.0), vec2(18.0, 18.0));
         let presp = ui.interact(plus, ui.id().with("tab+"), Sense::click());
         icons::paint(ui.painter(), plus.shrink(2.0), Icon::Plus, false);
+        icons::describe_control(ui, &presp, "New Drawing", None, false);
         if presp.on_hover_text("New Drawing").clicked() {
             app.start("new");
             app.ui.start_tab = false;
         }
         x += 24.0;
-        let mut tab = |ui: &mut egui::Ui, label: &str, active: bool, w: f32, id: egui::Id| -> (bool, bool) {
+        let mut tab = |ui: &mut egui::Ui, label: &str, active: bool, closable: bool, w: f32, id: egui::Id| -> (bool, bool) {
             let tr = Rect::from_min_size(pos2(x, r.top()), vec2(w, r.height()));
             let resp = ui.interact(tr, id, Sense::click());
             ui.painter().rect_filled(
@@ -129,17 +183,19 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
                 if active { t.text } else { t.text_dim },
             );
             let mut close = false;
-            if active || resp.hovered() {
+            if closable && (active || resp.hovered()) {
                 let cr = Rect::from_center_size(pos2(tr.right() - 11.0, tr.center().y), vec2(12.0, 12.0));
                 let cresp = ui.interact(cr, id.with("x"), Sense::click());
                 icons::paint(ui.painter(), cr, Icon::Close, false);
+                icons::describe_control(ui, &cresp, &format!("Close {label}"), None, false);
                 close = cresp.clicked();
             }
+            icons::describe_control(ui, &resp, label, Some(active), true);
             ui.painter().vline(tr.right(), tr.y_range(), Stroke::new(1.0, t.border));
             x += w;
             (resp.clicked(), close)
         };
-        let (c, _) = tab(ui, "Start", app.ui.start_tab || app.session.docs.is_empty(), 110.0, ui.id().with("tab_start"));
+        let (c, _) = tab(ui, "Start", app.ui.start_tab || app.session.docs.is_empty(), false, 110.0, ui.id().with("tab_start"));
         if c {
             app.ui.start_tab = true;
         }
@@ -153,7 +209,7 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
             .map(|(i, d)| (i, format!("{}{}", d.title, if d.is_dirty() { "*" } else { "" }), i == app.session.active))
             .collect();
         for (i, title, active) in titles {
-            let (c, x) = tab(ui, &title, active && !app.ui.start_tab, 170.0, ui.id().with(("tab", i)));
+            let (c, x) = tab(ui, &title, active && !app.ui.start_tab, true, 170.0, ui.id().with(("tab", i)));
             if c {
                 switch_to = Some(i);
             }
@@ -189,6 +245,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             let br = Rect::from_min_size(pos2(x, r.top() + 4.0), vec2(18.0, 18.0));
             let resp = ui.interact(br, ui.id().with(("sb", tip)), Sense::click());
             icons::paint(&p, br.shrink(2.0), icon, false);
+            icons::describe_control(ui, &resp, tip, None, false);
             if resp.on_hover_text(tip).clicked() && icon == Icon::Plus {
                 let _ = app.run("layout.new", json!({}));
             }
@@ -219,6 +276,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
                 p.rect_filled(tr, 2.0, t.control.gamma_multiply(0.5));
             }
             p.galley(pos2(tr.left() + 13.0, tr.center().y - g.size().y / 2.0), g, if active { t.text } else { t.text_dim });
+            icons::describe_control(ui, &resp, name, Some(active), true);
             if resp.clicked() {
                 switch = Some(name.clone());
             }
@@ -227,6 +285,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
                 let pr = Rect::from_min_size(pos2(x, r.top() + 5.0), vec2(16.0, 16.0));
                 let presp = ui.interact(pr, ui.id().with("layout_plus"), Sense::click());
                 icons::paint(&p, pr.shrink(2.0), Icon::Plus, false);
+                icons::describe_control(ui, &presp, "New layout", None, false);
                 if presp.on_hover_text("New layout").clicked()
                     && let Ok(v) = app.run("layout.new", json!({}))
                     && let Some(n) = v.get("name").and_then(serde_json::Value::as_str)
@@ -260,7 +319,6 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         ];
         let size = 20.0;
         let mut rx = r.right() - 8.0 - toggles.len() as f32 * (size + 4.0);
-        let coords_w = 210.0;
         // Coordinates.
         let coord = app.canvas.cursor.map(|c| {
             let (lu, lp) = app.session.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
@@ -280,16 +338,33 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             let resp = ui.interact(br, ui.id().with("mspace_toggle"), Sense::click());
             p.rect_filled(br, 3.0, if resp.hovered() { t.control_hover } else { t.toggle_on.gamma_multiply(0.25) });
             p.text(br.center(), egui::Align2::CENTER_CENTER, label, crate::theme::small(), t.text);
+            icons::describe_control(ui, &resp, label, None, false);
             if resp.on_hover_text("Switch between model space in a viewport and paper space").clicked() {
                 let _ = app.run(if model { "pspace" } else { "mspace" }, json!({}));
                 app.canvas.list = None;
             }
             coord_right = br.left() - 10.0;
         }
-        if let Some(c) = coord {
-            p.text(pos2(coord_right, r.center().y), egui::Align2::RIGHT_CENTER, c, crate::theme::body(), t.text);
+        // A transient message occupies the same bounded readout slot as coordinates.
+        // Ellipsis and a tooltip keep either value readable without covering layout tabs.
+        let message = app.status.as_ref().filter(|(_, at)| crate::now_ms() - at < 5000.0).map(|(message, _)| message);
+        let readout = message.cloned().or(coord);
+        if let Some(text) = readout {
+            let left = x + 8.0;
+            let width = (coord_right - left).max(0.0);
+            if width > 4.0 {
+                let color = if message.is_some() { t.warn } else { t.text };
+                let mut job = egui::text::LayoutJob::simple_singleline(text.clone(), crate::theme::body(), color);
+                job.wrap.max_width = width;
+                job.wrap.max_rows = 1;
+                job.wrap.break_anywhere = true;
+                let galley = p.layout_job(job);
+                let rect = Rect::from_min_max(pos2(left, r.top()), pos2(coord_right, r.bottom()));
+                let text_x = if message.is_some() { left } else { coord_right - galley.size().x };
+                p.with_clip_rect(rect).galley(pos2(text_x, r.center().y - galley.size().y / 2.0), galley, color);
+                ui.interact(rect, ui.id().with("status_readout"), Sense::hover()).on_hover_text(text);
+            }
         }
-        let _ = coords_w;
         let mut toggle_cmd = None;
         for (icon, on, cmd, tip) in toggles {
             let br = Rect::from_min_size(pos2(rx, r.center().y - size / 2.0), vec2(size, size));
@@ -304,6 +379,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
                 // Re-tint the icon blue-ish by an underline.
                 p.hline(br.x_range().shrink(4.0), br.bottom() - 1.0, Stroke::new(1.5, t.toggle_on));
             }
+            icons::describe_control(ui, &resp, tip, Some(on), false);
             if resp.on_hover_text(tip).clicked() {
                 toggle_cmd = Some(cmd);
             }
@@ -311,12 +387,6 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         if let Some(c) = toggle_cmd {
             app.start(c);
-        }
-        // Transient status message.
-        if let Some((msg, at)) = &app.status
-            && crate::now_ms() - at < 5000.0
-        {
-            p.text(pos2(x + 20.0, r.center().y), egui::Align2::LEFT_CENTER, msg, crate::theme::small(), t.warn);
         }
     });
 }

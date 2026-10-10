@@ -15,6 +15,7 @@ pub mod cmdline;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
+pub mod docking;
 pub mod gpu;
 pub mod icons;
 pub mod layers;
@@ -41,6 +42,7 @@ pub const PREFS_KEY: &str = "cadcraft.prefs";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
+    pub docking: docking::Workspace,
     pub show_toolsets: bool,
     pub show_palettes: bool,
     pub show_toolbar: bool,
@@ -66,6 +68,7 @@ pub struct UiState {
 impl Default for UiState {
     fn default() -> Self {
         UiState {
+            docking: docking::Workspace::default(),
             show_toolsets: true,
             show_palettes: true,
             show_toolbar: true,
@@ -283,6 +286,7 @@ impl CadApp {
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let t0 = now_ms();
+        control::begin_frame(ui.ctx());
         let t = theme::Tokens::get();
         chrome::title_and_toolbar(self, ui);
         if self.ui.in_window_menu {
@@ -295,15 +299,9 @@ impl CadApp {
             chrome::file_tabs(self, ui);
         }
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
-        if has_doc && self.ui.show_toolsets {
-            palettes::toolsets(self, ui);
-        }
-        if has_doc && self.ui.show_palettes {
-            palettes::right_palettes(self, ui);
-        }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             if has_doc {
-                canvas::show(self, ui);
+                docking::show(self, ui);
             } else {
                 chrome::start_page(self, ui);
             }

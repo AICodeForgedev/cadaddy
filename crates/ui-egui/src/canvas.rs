@@ -538,7 +538,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let _ = app.session.zoom_about(f64::from(zoom_pinch), xf.to_world(hp));
     }
     // Pan with the middle button (or Shift+right-drag / two-finger drag on trackpads is scroll).
-    if middle_down && let Some(hp) = hover_pos {
+    let middle_pressed = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Middle));
+    let focused = ui.input(|i| i.focused);
+    if middle_down
+        && focused
+        && (app.canvas.pan_last.is_some() || (middle_pressed && inside))
+        && let Some(hp) = hover_pos
+    {
         if let Some(last) = app.canvas.pan_last {
             let d = hp - last;
             if let Ok(st) = app.session.state_mut() {

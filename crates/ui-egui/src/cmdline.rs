@@ -207,16 +207,21 @@ pub fn submit(app: &mut CadApp) {
     app.cmdline(&text);
 }
 
+fn visible_lines(app: &CadApp, canvas: Rect, bar: Rect) -> usize {
+    let available = ((bar.top() - canvas.top() - 8.0).max(0.0) / LINE_H) as usize;
+    app.ui.history_lines.min(MAX_LINES).min(available)
+}
+
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     let t = Tokens::get();
     keyboard(app, ui.ctx());
-    let w = (canvas.width() * 0.48).clamp(360.0, 760.0);
+    let w = (canvas.width() * 0.48).clamp(360.0, 760.0).min((canvas.width() - 8.0).max(0.0));
     let h = 24.0;
     let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - h - 10.0), vec2(w, h));
     let p = ui.painter_at(canvas);
     history(app, ui, canvas, bar);
     // History lines above the bar (the expanded window replaces them).
-    let n = if app.cmd.expanded { 0 } else { app.ui.history_lines.min(MAX_LINES) };
+    let n = if app.cmd.expanded { 0 } else { visible_lines(app, canvas, bar) };
     let lines: Vec<String> = app.session.log.iter().rev().take(n).rev().cloned().collect();
     if !lines.is_empty() {
         let lh = 16.0;
@@ -324,7 +329,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
                     bar.left() + 24.0,
                     bar.top() - 6.0 - rh * sug.len() as f32 - (if lines.is_empty() { 0.0 } else { 16.0 * lines.len() as f32 + 6.0 }),
                 ),
-                vec2(300.0, rh * sug.len() as f32),
+                vec2((bar.width() - 24.0).max(0.0), rh * sug.len() as f32),
             );
             p.rect_filled(lr, 3.0, t.list_bg);
             p.rect_stroke(lr, 3.0, Stroke::new(1.0, t.cmd_border), egui::StrokeKind::Inside);
@@ -359,7 +364,7 @@ struct Zones {
 }
 
 fn zones(app: &CadApp, canvas: Rect, bar: Rect) -> Zones {
-    let n = if app.cmd.expanded { 0 } else { app.ui.history_lines.min(MAX_LINES).min(app.session.log.len()) };
+    let n = if app.cmd.expanded { 0 } else { visible_lines(app, canvas, bar).min(app.session.log.len()) };
     let lines =
         (n > 0).then(|| Rect::from_min_size(pos2(bar.left(), bar.top() - LINE_H * n as f32 - 4.0), vec2(bar.width(), LINE_H * n as f32 + 2.0)));
     let window = app.cmd.expanded.then(|| {
@@ -400,7 +405,7 @@ fn history(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect, bar: Rect) {
         && let Some(o) = ui.input(|i| i.pointer.press_origin())
         && on_grip(o)
     {
-        app.cmd.resize_from = Some((o.y, app.ui.history_lines.min(MAX_LINES)));
+        app.cmd.resize_from = Some((o.y, visible_lines(app, canvas, bar)));
     }
     if let Some((y0, n0)) = app.cmd.resize_from {
         if let (true, Some(p)) = (resp.dragged(), resp.interact_pointer_pos()) {
@@ -449,6 +454,24 @@ mod tests {
     use cadcraft_engine::Session;
     use egui::{Event, PointerButton};
 
+    #[test]
+    fn compact_canvas_contains_history_controls_without_changing_line_preference() {
+        let mut app = CadApp::new(Session::empty(), crate::Services::default());
+        app.ui.history_lines = 12;
+        for i in 0..20 {
+            app.session.echo(format!("line {i}"));
+        }
+        let canvas = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 180.0));
+        let w = (canvas.width() * 0.48).clamp(360.0, 760.0).min((canvas.width() - 8.0).max(0.0));
+        let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - 34.0), vec2(w, 24.0));
+        let z = zones(&app, canvas, bar);
+        assert!(canvas.contains_rect(bar));
+        assert!(canvas.contains_rect(z.chevron));
+        assert!(z.lines.is_some_and(|r| canvas.contains_rect(r)));
+        assert!(canvas.contains_rect(z.grip));
+        assert_eq!(app.ui.history_lines, 12);
+    }
+
     fn frame(app: &mut CadApp, ctx: &egui::Context, events: Vec<Event>) {
         let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0))), events, ..Default::default() };
         let mut out = ctx.run_ui(raw, |ui| {
@@ -473,7 +496,7 @@ mod tests {
         frame(&mut app, &ctx, Vec::new());
         frame(&mut app, &ctx, Vec::new());
         let canvas = app.canvas.rect.unwrap_or(Rect::NOTHING);
-        let w = (canvas.width() * 0.48).clamp(360.0, 760.0);
+        let w = (canvas.width() * 0.48).clamp(360.0, 760.0).min((canvas.width() - 8.0).max(0.0));
         let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - 34.0), vec2(w, 24.0));
         let z = zones(&app, canvas, bar);
         let Some(lines) = z.lines else { panic!("three history lines show by default") };

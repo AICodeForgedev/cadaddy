@@ -9,6 +9,7 @@
 //! - `engine.commands`: every command with menu path, aliases, params and enablement
 //! - `drawing.inspect {entities?, limit?}`: drawing summary and entities (verifies agent work)
 //! - `ui.inspect`: UI state, canvas rect, view, performance
+//! - `ui.elements {label?, role?, focused?}`: observed visible controls and actual egui focus
 //! - `ui.menu.list`: the menu tree; `ui.menu.invoke {command}`: like choosing a menu item
 //! - `ui.pointer {x, y, space?: "world"|"screen", button?: left|right, action?: click|move}`
 //! - `ui.click {x, y}`, `ui.move {x, y}`: real egui pointer input in screen points
@@ -44,6 +45,88 @@ impl ControlRequest {
 pub enum Outcome {
     Done(Value),
     Screenshot { path: Option<String> },
+}
+
+#[derive(Clone)]
+struct Widget {
+    id: egui::Id,
+    label: String,
+    role: &'static str,
+    rect: [f32; 4],
+    enabled: bool,
+    visible: bool,
+    selected: Option<bool>,
+}
+
+fn widgets_id() -> egui::Id {
+    egui::Id::new("cadcraft-observed-widgets")
+}
+
+pub(crate) fn begin_frame(ctx: &egui::Context) {
+    ctx.data_mut(|data| data.remove::<Vec<Widget>>(widgets_id()));
+}
+
+/// Observe a real response. This never assigns focus or changes input routing.
+pub(crate) fn record_widget(ui: &egui::Ui, response: &egui::Response, label: &str, role: &'static str, selected: Option<bool>) {
+    if !response.rect.is_finite() || !response.rect.is_positive() {
+        return;
+    }
+    let widget = Widget {
+        id: response.id,
+        label: label.chars().take(512).collect(),
+        role,
+        rect: [response.rect.left(), response.rect.top(), response.rect.width(), response.rect.height()],
+        enabled: response.enabled(),
+        visible: ui.is_rect_visible(response.rect),
+        selected,
+    };
+    ui.ctx().data_mut(|data| {
+        let widgets = data.get_temp_mut_or_default::<Vec<Widget>>(widgets_id());
+        if let Some(previous) = widgets.iter_mut().find(|previous| previous.id == widget.id) {
+            *previous = widget;
+        } else if widgets.len() < 2048 {
+            widgets.push(widget);
+        }
+    });
+}
+
+fn widgets(ctx: &egui::Context) -> Vec<Widget> {
+    ctx.data_mut(|data| data.get_temp::<Vec<Widget>>(widgets_id()).unwrap_or_default())
+}
+
+fn widget_json(widget: &Widget, focused: Option<egui::Id>) -> Value {
+    json!({
+        "id": format!("{:016x}", widget.id.value()), "label": widget.label, "role": widget.role,
+        "rect": widget.rect, "enabled": widget.enabled, "visible": widget.visible,
+        "selected": widget.selected, "focused": focused == Some(widget.id),
+    })
+}
+
+fn focus_json(ctx: &egui::Context) -> Value {
+    let focused = ctx.memory(|memory| memory.focused());
+    let observed = widgets(ctx);
+    let widget = observed.iter().find(|widget| focused == Some(widget.id));
+    json!({
+        "id": focused.map(|id| format!("{:016x}", id.value())),
+        "label": widget.map(|widget| &widget.label),
+        "role": widget.map(|widget| widget.role),
+        "keyboardInput": ctx.egui_wants_keyboard_input(),
+    })
+}
+
+fn elements(ctx: &egui::Context, params: &Value) -> Value {
+    let focused = ctx.memory(|memory| memory.focused());
+    Value::Array(
+        widgets(ctx)
+            .iter()
+            .filter(|widget| {
+                params.get("label").and_then(Value::as_str).is_none_or(|label| widget.label == label)
+                    && params.get("role").and_then(Value::as_str).is_none_or(|role| widget.role == role)
+                    && params.get("focused").and_then(Value::as_bool).is_none_or(|value| value == (focused == Some(widget.id)))
+            })
+            .map(|widget| widget_json(widget, focused))
+            .collect(),
+    )
 }
 
 fn ok(v: Value) -> Outcome {
@@ -95,6 +178,7 @@ pub fn inspect(app: &CadApp, ctx: &egui::Context) -> Value {
     json!({
         "ui": serde_json::to_value(&app.ui).unwrap_or_default(),
         "theme": if app.shown_theme() == egui::Theme::Light { "light" } else { "dark" },
+        "focus": focus_json(ctx),
         "canvasRect": app.canvas.rect.map(|c| json!([c.left(), c.top(), c.width(), c.height()])),
         "window": [r.width(), r.height()],
         "view": view.map(|v| json!({"center": [v.center.x, v.center.y], "height": v.height})),
@@ -167,6 +251,11 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
         "engine.commands" => ok(all_commands(app)),
         "drawing.inspect" | "document.inspect" => wrap(app.session.execute("drawing.inspect", p).map_err(|e| e.to_string())),
         "ui.inspect" => ok(inspect(app, ctx)),
+        "ui.elements" => ok(elements(ctx, p)),
+        "ui.focus" => {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ok(Value::Null)
+        }
         "ui.menu.list" => ok(Value::Array(
             crate::menus::tree(app).iter().map(|(m, es)| json!({"label": m, "children": es.iter().map(menu_json).collect::<Vec<_>>()})).collect(),
         )),
@@ -261,6 +350,9 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             }
             match serde_json::from_value::<crate::UiState>(cur) {
                 Ok(u) => {
+                    if let Err(error) = u.docking.validate() {
+                        return err(error);
+                    }
                     app.ui = u;
                     ok(serde_json::to_value(&app.ui).unwrap_or_default())
                 }
