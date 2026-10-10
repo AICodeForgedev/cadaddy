@@ -110,6 +110,25 @@ fn circle_circle_hits() {
 }
 
 #[test]
+fn tiny_circle_secants_and_separated_circles() {
+    let first = Circle::new(Vec2::ZERO, 1e-9);
+    // Both radii and center separation are below the old absolute tolerance.
+    let hits = circle_circle(&first, &Circle::new(Vec2::new(5e-10, 0.0), 1e-9));
+    assert_eq!(hits.len(), 2);
+    let y = (1e-18_f64 - 2.5e-10_f64.powi(2)).sqrt();
+    assert!(hits.iter().all(|p| (p.x - 2.5e-10).abs() < 1e-20 && (p.y.abs() - y).abs() < 1e-20), "{hits:?}");
+    // A half-nanometre gap is significant relative to these circles.
+    assert!(circle_circle(&first, &Circle::new(Vec2::new(2.5e-9, 0.0), 1e-9)).is_empty());
+}
+
+#[test]
+fn huge_circle_secants_remain_finite() {
+    let hits = circle_circle(&Circle::new(Vec2::ZERO, 1e160), &Circle::new(Vec2::new(1e160, 0.0), 1e160));
+    assert_eq!(hits.len(), 2);
+    assert!(hits.iter().all(|p| p.is_finite() && (p.x / 1e160 - 0.5).abs() < 1e-12 && (p.y.abs() / 1e160 - 3.0_f64.sqrt() / 2.0).abs() < 1e-12), "{hits:?}");
+}
+
+#[test]
 fn spline_interpolates_fit_points() {
     let fit = [Vec2::new(0.0, 0.0), Vec2::new(1.0, 2.0), Vec2::new(3.0, 1.0), Vec2::new(4.0, 4.0), Vec2::new(6.0, 0.0)];
     let s = Spline::from_fit_points(&fit);

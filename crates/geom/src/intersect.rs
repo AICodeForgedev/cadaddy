@@ -53,19 +53,39 @@ pub fn line_circle(l: &Line, c: &Circle) -> Vec<(Vec2, f64)> {
 
 /// Intersections of two full circles.
 pub fn circle_circle(c1: &Circle, c2: &Circle) -> Vec<Vec2> {
-    let d = c1.center.dist(c2.center);
-    if d < EPS || d > c1.radius + c2.radius + 1e-9 || d < (c1.radius - c2.radius).abs() - 1e-9 {
+    let delta = c2.center - c1.center;
+    let d = delta.len();
+    let (r1, r2) = (c1.radius, c2.radius);
+    if !(d.is_finite() && r1.is_finite() && r2.is_finite()) || d == 0.0 || r1 < 0.0 || r2 < 0.0 {
         return Vec::new();
     }
-    let a = (c1.radius * c1.radius - c2.radius * c2.radius + d * d) / (2.0 * d);
-    let h2 = c1.radius * c1.radius - a * a;
-    let dir = (c2.center - c1.center) / d;
-    let p = c1.center + dir * a;
+
+    // Work at the scale of the two circles: fixed absolute tolerances classify
+    // small secants as tangencies, and raw radius squares overflow on large drawings.
+    let scale = d.max(r1).max(r2);
+    let (ds, r1s, r2s) = (d / scale, r1 / scale, r2 / scale);
+    if ds > r1s + r2s || ds < (r1s - r2s).abs() {
+        return Vec::new();
+    }
+    let a = ((r1s - r2s) * (r1s + r2s) + ds * ds) / (2.0 * ds);
+    let h2 = (r1s - a) * (r1s + a);
+    if h2 < -1e-12 {
+        return Vec::new();
+    }
+    let dir = delta / d;
+    let p = c1.center + dir * (a * scale);
+    if !p.is_finite() {
+        return Vec::new();
+    }
     if h2 <= 1e-12 {
         return vec![p];
     }
-    let h = h2.sqrt();
-    vec![p + dir.perp() * h, p - dir.perp() * h]
+    let step = dir.perp() * (h2.sqrt() * scale);
+    let (p1, p2) = (p + step, p - step);
+    if !p1.is_finite() || !p2.is_finite() {
+        return Vec::new();
+    }
+    vec![p1, p2]
 }
 
 fn on_arc(a: &Arc, p: Vec2) -> bool {
