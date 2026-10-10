@@ -59,11 +59,7 @@ impl Bounds2 {
         // (max - min) can overflow even when both endpoints and their midpoint
         // are finite. Halve first when the endpoints have opposite signs.
         let mid = |a: f64, b: f64| {
-            if a.is_sign_negative() != b.is_sign_negative() {
-                a * 0.5 + b * 0.5
-            } else {
-                a + (b - a) * 0.5
-            }
+            if a.is_sign_negative() != b.is_sign_negative() { a * 0.5 + b * 0.5 } else { a + (b - a) * 0.5 }
         };
         Vec2::new(mid(self.min.x, self.max.x), mid(self.min.y, self.max.y))
     }
