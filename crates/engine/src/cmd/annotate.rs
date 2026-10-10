@@ -99,7 +99,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handles?}"),
         CommandSpec::new("dimtedit.right", "Right", |s, p| run_tedit(s, p, "right")).menu(&["Dimension", "Align Text", "Right"]).params("{handles?}"),
         CommandSpec::new("dimtedit", "Dimension Text Edit", run_dimtedit)
-            .params("{handles?, at?: [x,y], mode?: home|angle|left|center|right, angle?}"),
+            .alias(&["dimted"])
+            .params("{handles?, at?: [x,y], mode?: home|angle|left|center|right, angle?}")
+            .interactive(|_| Ok(Box::new(tedit::TEditM::default()))),
         CommandSpec::new("dimspace", "Dimension Space", run_dimspace)
             .menu(&["Dimension", "Dimension Space"])
             .params("{base: hex, handles: [hex], spacing?: number (default DIMDLI)}"),
@@ -1683,6 +1685,9 @@ impl Interactive for MLeaderM {
         mleader_kind(s, &self.leader(Some(self.constrained(c))), text, self.landing).into_iter().collect()
     }
 }
+
+#[path = "annotate_tedit.rs"]
+mod tedit;
 
 #[cfg(test)]
 #[path = "annotate_tests.rs"]
