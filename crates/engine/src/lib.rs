@@ -124,6 +124,35 @@ impl DocState {
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.doc, &self.saved)
     }
+    /// After undo/redo replaced the drawing (`before` is the one shown until then): if the current
+    /// layout no longer exists, follow it to its other name when it was renamed (same tab order,
+    /// a name `before` did not have), else go to the Model tab.
+    fn follow_layout(&mut self, before: &Drawing) {
+        let Space::Paper(name) = &self.space else { return };
+        if self.doc.layouts.iter().any(|l| l.name == *name) {
+            return;
+        }
+        let renamed = before
+            .layouts
+            .iter()
+            .find(|l| l.name == *name)
+            .and_then(|old| self.doc.layouts.iter().find(|l| l.tab_order == old.tab_order && !before.layouts.iter().any(|b| b.name == l.name)));
+        match renamed.map(|l| Space::Paper(l.name.clone())) {
+            Some(to) => {
+                let from = self.space.clone();
+                for (sp, _) in self.views.iter_mut() {
+                    if *sp == from {
+                        *sp = to.clone();
+                    }
+                }
+                self.space = to;
+            }
+            None => {
+                self.space = Space::Model;
+                self.mspace = None;
+            }
+        }
+    }
     /// The space edits, picks and snaps act on: model space inside an active viewport.
     pub fn edit_space(&self) -> Space {
         if self.active_viewport().is_some() { Space::Model } else { self.space.clone() }
@@ -921,6 +950,7 @@ impl Session {
         let Some(snap) = st.undo.pop() else { return Ok(None) };
         let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone() };
         st.doc = snap.doc;
+        st.follow_layout(&cur.doc);
         st.selection = Vec::new();
         st.redo.push(cur);
         st.revision += 1;
@@ -931,6 +961,7 @@ impl Session {
         let Some(snap) = st.redo.pop() else { return Ok(None) };
         let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone() };
         st.doc = snap.doc;
+        st.follow_layout(&cur.doc);
         st.selection = Vec::new();
         st.undo.push(cur);
         st.revision += 1;
