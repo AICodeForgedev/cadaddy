@@ -10,6 +10,7 @@
 
 pub mod assoc;
 pub mod cmd;
+mod finite;
 pub mod grips;
 mod guard;
 pub mod prompt;
@@ -478,6 +479,10 @@ impl Session {
         };
         cmd::constraints::after_command(self, before.as_ref().map(|b| &b.0), spec.undoable && result.is_ok());
         assoc::after_command(self, before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2));
+        let result = match (result, &before) {
+            (Ok(v), Some((doc, sel, uid))) if spec.undoable => self.refuse_non_finite(Some(*uid), doc, sel, spec.id).map(|()| v),
+            (r, _) => r,
+        };
         if spec.undoable
             && let Some((doc, sel, uid)) = before
             && let Some(st) = self.docs.iter_mut().find(|d| d.uid == uid)
@@ -679,6 +684,11 @@ impl Session {
     }
 
     fn finish(&mut self, run: Running, cancelled: bool) {
+        if find_command(&run.id).is_some_and(|c| c.undoable)
+            && let Err(e) = self.refuse_non_finite(None, &run.before, &run.selection_before, &run.id)
+        {
+            self.echo(e.to_string());
+        }
         // A command outside undo that changed the drawing (UNDO, which swapped it for an earlier
         // one) records no undo step, as in `execute`.
         if find_command(&run.id).is_some_and(|c| !c.undoable) && self.state().is_ok_and(|st| !Arc::ptr_eq(&run.before, &st.doc)) {
