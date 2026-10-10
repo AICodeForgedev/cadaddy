@@ -125,7 +125,10 @@ fn tiny_circle_secants_and_separated_circles() {
 fn huge_circle_secants_remain_finite() {
     let hits = circle_circle(&Circle::new(Vec2::ZERO, 1e160), &Circle::new(Vec2::new(1e160, 0.0), 1e160));
     assert_eq!(hits.len(), 2);
-    assert!(hits.iter().all(|p| p.is_finite() && (p.x / 1e160 - 0.5).abs() < 1e-12 && (p.y.abs() / 1e160 - 3.0_f64.sqrt() / 2.0).abs() < 1e-12), "{hits:?}");
+    assert!(
+        hits.iter().all(|p| p.is_finite() && (p.x / 1e160 - 0.5).abs() < 1e-12 && (p.y.abs() / 1e160 - 3.0_f64.sqrt() / 2.0).abs() < 1e-12),
+        "{hits:?}"
+    );
 }
 
 #[test]
