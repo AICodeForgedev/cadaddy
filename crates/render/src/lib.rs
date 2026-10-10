@@ -316,6 +316,10 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     if vp.id == 1 || !e.common.visible {
         return;
     }
+    // The viewport's layer frozen hides its contents too (layer off hides only the border).
+    if d.layer(&e.common.layer).is_some_and(|l| l.frozen) {
+        return;
+    }
     // Border (on the viewport's layer; layer off hides only the border).
     entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
     if b.list.expanded >= MAX_BLOCK_EXPANSION {
