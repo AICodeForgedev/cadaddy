@@ -16,6 +16,7 @@ pub mod paper;
 mod point;
 pub mod raster;
 pub mod units;
+mod wide;
 
 use cadcraft_color::{Color, Rgb};
 use cadcraft_doc::{Drawing, Entity, EntityKind, Handle, Lineweight, Prim, Space};
@@ -543,8 +544,21 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         }
         EntityKind::LwPolyline(p) if p.const_width > 0.0 || p.vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0) => {
             if b.opts.fill && ctx.d.header.i64("FILLMODE", 1) != 0 {
-                let tris = fill::wide_polyline(p, tol);
-                b.tris(ctx, rgb, &tris);
+                match &lt {
+                    // Dashed: each dash a filled piece of the band; dots a line across it.
+                    Some(lt) => {
+                        let min = b.opts.min_dash / ctx.xf.scale_factor().max(1e-12);
+                        let (tris, ticks) = wide::dashed(p, tol, lt, ltscale, min);
+                        b.tris(ctx, rgb, &tris);
+                        for t in &ticks {
+                            match t.as_slice() {
+                                [q] => b.point(ctx, rgb, *q),
+                                _ => b.polyline(ctx, rgb, lw, t),
+                            }
+                        }
+                    }
+                    None => b.tris(ctx, rgb, &fill::wide_polyline(p, tol)),
+                }
             } else {
                 let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
                 stroke(b, &pl.tessellate(tol));
