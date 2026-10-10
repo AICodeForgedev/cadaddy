@@ -544,19 +544,40 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let (center, r) = if radius { (a, a.dist(b)) } else { (a.mid(b), a.dist(b) / 2.0) };
             let meas = if radius { r } else { 2.0 * r };
             g.mtext = linear_text(meas, d, st, if radius { "R" } else { "%%c" });
-            let (tw, _) = measure(&g.mtext);
+            let (tw, tht) = measure(&g.mtext);
             let u = (b - center).normalized();
             let u = if u == Vec2::ZERO || !u.is_finite() { Vec2::X } else { u };
             let tip = center + u * r;
             let tpos = if d.user_text_pos { text_mid } else { tip + u * (asz.max(tsz) * 3.0) };
-            if !radius {
-                let start = center - u * r;
-                g.dim(vec![start, tip]);
-                end(&mut g, blk1, start, -u);
+            // Text placed inside the circle (a dimension line location picked inside): the text
+            // sits on the dimension line, which runs from the text out to the arrowhead (for a
+            // diameter it spans the circle, broken around the text). DIMTIH turns it horizontal.
+            let inside = d.user_text_pos && text_mid.dist(center) < r;
+            let horizontal = if inside { st.text_inside_horizontal } else { st.text_outside_horizontal };
+            if inside {
+                let tr = Vec2::from_angle(if horizontal { 0.0 } else { readable(u.angle()) });
+                let half = if tw > 0.0 { (tw * tr.dot(u).abs() + tht * tr.perp().dot(u).abs()) / 2.0 + gap } else { 0.0 };
+                let start = if radius { center } else { center - u * r };
+                let (t0, t1) = ((text_mid - start).dot(u) - half, (text_mid - start).dot(u) + half);
+                if !radius {
+                    if t0 > 0.0 {
+                        g.dim(vec![start, start + u * t0]);
+                    }
+                    end(&mut g, blk1, start, -u);
+                }
+                if t1 < tip.dist(start) {
+                    g.dim(vec![start + u * t1.max(0.0), tip]);
+                }
+            } else {
+                if !radius {
+                    let start = center - u * r;
+                    g.dim(vec![start, tip]);
+                    end(&mut g, blk1, start, -u);
+                }
+                g.dim(vec![tip, tpos]);
             }
-            g.dim(vec![tip, tpos]);
             end(&mut g, blk2, tip, u);
-            if st.text_outside_horizontal {
+            if horizontal {
                 text_angle = 0.0;
                 let sx = if u.x >= 0.0 { 1.0 } else { -1.0 };
                 if !d.user_text_pos {

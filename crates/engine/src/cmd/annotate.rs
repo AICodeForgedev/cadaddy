@@ -232,13 +232,14 @@ fn circle_of(s: &Session, h: Handle) -> Option<(Vec2, f64)> {
 
 fn radial(s: &mut Session, p: &Value, diameter: bool) -> Result<Value> {
     let id = if diameter { "dimdiameter" } else { "dimradius" };
-    let (c, pt) = if let (Some(c), Some(pt)) = (point_param(p, "center"), point_param(p, "point")) {
-        (c, pt)
+    let (c, pt, at) = if let (Some(c), Some(pt)) = (point_param(p, "center"), point_param(p, "point")) {
+        (c, pt, None)
     } else {
         let h = targets(s, p)?.first().copied().ok_or_else(|| bad(id, "`handle` of a circle/arc, or {center, point}"))?;
         let (c, r) = circle_of(s, h).ok_or_else(|| bad(id, "object is not a circle or arc"))?;
-        let at = point_param(p, "at").unwrap_or(c + Vec2::from_angle(std::f64::consts::FRAC_PI_4));
-        (c, c + (at - c).normalized() * r)
+        let at = point_param(p, "at");
+        let dir = at.unwrap_or(c + Vec2::from_angle(std::f64::consts::FRAC_PI_4));
+        (c, c + (dir - c).normalized() * r, at)
     };
     if c.near(pt, 1e-12) {
         return Err(bad(id, "`point` must differ from `center`"));
@@ -248,7 +249,23 @@ fn radial(s: &mut Session, p: &Value, diameter: bool) -> Result<Value> {
     } else {
         dim(s, DimKind::Radius, c, Vec2::ZERO, Vec2::ZERO, pt, Vec2::ZERO, "")
     };
+    let k = match at {
+        Some(at) => text_inside(k, c, c.dist(pt), at),
+        None => k,
+    };
     Ok(json!({ "handle": add_dim(s, k)?.hex() }))
+}
+
+/// A radius/diameter dimension line location picked inside the circle puts the text there, on
+/// the dimension line (outside, the text keeps its default place beyond the arrowhead).
+fn text_inside(mut k: EntityKind, c: Vec2, r: f64, at: Vec2) -> EntityKind {
+    if let EntityKind::Dimension(d) = &mut k
+        && at.dist(c) < r
+    {
+        d.text_mid = v3(at);
+        d.user_text_pos = true;
+    }
+    k
 }
 
 fn run_radius(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1018,11 +1035,12 @@ impl RadialM {
     }
     fn kind(&self, s: &Session, c: Vec2, r: f64, at: Vec2) -> EntityKind {
         let pt = c + (at - c).normalized() * r;
-        self.text.apply(if self.diameter {
+        let k = self.text.apply(if self.diameter {
             dim(s, DimKind::Diameter, c + (c - pt), Vec2::ZERO, Vec2::ZERO, pt, Vec2::ZERO, "")
         } else {
             dim(s, DimKind::Radius, c, Vec2::ZERO, Vec2::ZERO, pt, Vec2::ZERO, "")
-        })
+        });
+        text_inside(k, c, r, at)
     }
 }
 
