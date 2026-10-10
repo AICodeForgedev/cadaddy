@@ -43,15 +43,15 @@ ignored; there are no context menus. Remaining: **≈ 110–170 Opus 5.5 hours**
 | Input | AutoCAD | CADCraft | Evidence |
 |---|---|---|---|
 | `x,y[,z]`, `@dx,dy`, `@d<a`, `d<a`, `#x,y`, bare `@` | yes | yes; `#` equals absolute because there is no UCS; Z parsed then discarded | `prompt.rs:147-180` |
-| `*x,y` (WCS override) | yes | no | |
+| `*x,y` (WCS override) | yes | yes (`*x,y`, `*@dx,dy`, `@*dx,dy`); the same as the plain forms because there is no UCS | `prompt.rs` |
 | Direct distance entry | yes, honours ortho, polar and tracking paths | yes, ortho; polar only through the UI's snapped cursor | `lib.rs:782-793` |
 | Angle forms: `45d30'`, radians, grads, surveyor `N45dE` | yes | yes | `units.rs:141-197` |
 | Architectural/engineering distances `5'6-1/2"` | yes | yes | `units.rs:93-140` |
-| `FROM` (base point + offset) | yes | **no** | |
-| `M2P` / `MTP` (midpoint between two points) | yes | **no** | |
+| `FROM` (base point + offset) | yes | yes: "Base point:", "<Offset>:" with `@` measured from the base; nests with M2P and filters | `pointmod.rs` |
+| `M2P` / `MTP` (midpoint between two points) | yes | yes | `pointmod.rs` |
 | `TK` (tracking) | yes | **no** | |
-| Point filters `.x`, `.y`, `.xy`, `.z` | yes | **no** | |
-| Angle override `<45` | yes | not found | |
+| Point filters `.x`, `.y`, `.xy`, `.z` | yes | yes (`.x` … `.yz`, "(need YZ):"); Z is asked for and dropped (no 3D) | `pointmod.rs` |
+| Angle override `<45` | yes | yes: `<a`, `<<a`, `<<<a`; a typed distance or a pick follows the angle, typed coordinates win | `pointmod.rs` |
 | Typed calculator `'CAL` | yes | no | |
 
 ## Object snaps (≈ 40%)

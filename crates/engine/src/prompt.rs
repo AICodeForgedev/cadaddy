@@ -150,7 +150,9 @@ pub trait Interactive: Send {
     }
 }
 
-/// Parse a typed point: `x,y[,z]`, `@dx,dy`, `@dist<angle`, `dist<angle`, `#x,y` (absolute).
+/// Parse a typed point: `x,y[,z]`, `@dx,dy`, `@dist<angle`, `dist<angle`, `#x,y` (absolute),
+/// `*x,y` and `*@dx,dy`/`@*dx,dy` (world coordinates: the same as the plain forms, as there is no
+/// UCS yet).
 /// Relative forms use `last`. Polar angles read the default angle settings (degrees from +X,
 /// counterclockwise); `parse_point_with` reads a drawing's.
 pub fn parse_point(text: &str, last: Vec2) -> Option<Vec2> {
@@ -164,8 +166,10 @@ pub fn parse_point_with(text: &str, last: Vec2, angles: &crate::units::AngleSett
     if t.is_empty() {
         return None;
     }
+    let t = t.strip_prefix('*').map_or(t, str::trim_start);
     let (rel, body) = if let Some(b) = t.strip_prefix('@') {
-        (true, b.trim())
+        let b = b.trim();
+        (true, b.strip_prefix('*').map_or(b, str::trim_start))
     } else if let Some(b) = t.strip_prefix('#') {
         (false, b.trim())
     } else {
@@ -209,6 +213,10 @@ mod tests {
         assert!(parse_point("5<0", last).unwrap().near(Vec2::new(5.0, 0.0), 1e-9));
         assert_eq!(parse_point("#1,1", last), Some(Vec2::new(1.0, 1.0)));
         assert_eq!(parse_point("@", last), Some(last));
+        assert_eq!(parse_point("*3,4", last), Some(Vec2::new(3.0, 4.0)));
+        assert_eq!(parse_point("*@1,2", last), Some(Vec2::new(11.0, 12.0)));
+        assert_eq!(parse_point("@*1,2", last), Some(Vec2::new(11.0, 12.0)));
+        assert_eq!(parse_point("*", last), None);
         assert_eq!(parse_point("1", last), None);
         assert_eq!(parse_point("a,b", last), None);
         assert_eq!(parse_point("1,2,3,4", last), None);

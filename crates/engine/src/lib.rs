@@ -13,6 +13,7 @@ pub mod cmd;
 mod finite;
 pub mod grips;
 mod guard;
+pub mod pointmod;
 pub mod prompt;
 pub mod sample;
 pub mod select;
@@ -425,6 +426,8 @@ pub struct Session {
     pub last_command: Option<String>,
     /// LASTPOINT.
     pub last_point: Vec2,
+    /// Point modifiers pending at the current point prompt (`FROM`, `M2P`, `.x`, `<a`…).
+    pub point_mods: Vec<pointmod::Frame>,
     /// Cursor position in world coordinates (from the UI; used for direct distance entry).
     pub cursor: Vec2,
     /// The deferred tangent/perpendicular snap under the cursor, if any (from the UI; lets the
@@ -466,6 +469,7 @@ impl Session {
             log: Vec::new(),
             last_command: None,
             last_point: Vec2::ZERO,
+            point_mods: Vec::new(),
             cursor: Vec2::ZERO,
             cursor_deferred: None,
             viewport_px: (1200.0, 800.0),
@@ -693,6 +697,9 @@ impl Session {
             }
             return Ok(());
         }
+        if !self.point_mods.is_empty() {
+            return self.modifier_input(input);
+        }
         // A deferred snap is only meaningful where the prompt resolves it; elsewhere it is the
         // point it was picked at.
         let input = match input {
@@ -766,7 +773,11 @@ impl Session {
                     Err(_) => Err(EngineError::Internal(run.id.clone(), "panic".into())),
                 }
             }
-            None => run.machine.begin(self),
+            // A command starts with no modifiers pending.
+            None => {
+                self.point_mods.clear();
+                run.machine.begin(self)
+            }
         };
         // Redraw what the command has added so far (LINE adds a segment per point), not only when it ends.
         if let Ok(st) = self.state_mut()
@@ -833,6 +844,7 @@ impl Session {
 
     /// Cancel the running command (Esc). With no command, clears the selection.
     pub fn cancel(&mut self) {
+        self.point_mods.clear();
         if self.running.is_some() {
             let _ = self.feed(Some(Input::Cancel));
         } else {
@@ -927,6 +939,10 @@ impl Session {
         let tt = t.trim();
         if tt.is_empty() {
             return self.input(Input::Enter);
+        }
+        // FROM, M2P, point filters, `<a` (before `'`: `'_from` is a modifier).
+        if let Some(r) = self.typed_modifier(&prompt, tt) {
+            return r;
         }
         // Transparent command.
         if tt.starts_with('\'') {

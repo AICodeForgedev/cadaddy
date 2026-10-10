@@ -45,7 +45,8 @@ impl Interactive for Guarded {
     fn prompt(&self, s: &Session) -> Prompt {
         if self.broken.get().is_none() {
             match catch_unwind(AssertUnwindSafe(|| self.inner.prompt(s))) {
-                Ok(p) => return p,
+                // Pending point modifiers (FROM, M2P…) ask for their points in its place.
+                Ok(p) => return s.overlay_prompt(p),
                 Err(_) => self.broken.set(Some("panic in prompt")),
             }
         }

@@ -21,7 +21,7 @@ do them first.
 | 6 | **Ellipse and spline geometry is tessellated** (intersections, offsets, closest points; polyline offset ignores bulges) | Coordinates are subtly wrong; offsets of ellipses come out as polylines | 30–50 | [geometry](geometry-parity.md) |
 | 7 | **[alpha blocker]** **No xrefs, block editor, dynamic blocks or groups** | Most production drawings use them | 80–120 | [features](#features) |
 | 8 | **No autosave, crash recovery, AUDIT or RECOVER** | Work is lost if anything goes wrong; damaged files can't be repaired | 10–15 | [features](#features) |
-| 9 | **Dynamic input lacks grip input; no FROM/M2P/TK/point filters; grip options ignored** | Precision entry at the cursor is how AutoCAD is taught today | 15–25 | [ui](ui-parity.md) |
+| 9 | **Dynamic input lacks grip input; no TK; grip options ignored** (FROM, M2P/MTP, point filters, `*` and `<a` landed, #392) | Precision entry at the cursor is how AutoCAD is taught today | 12–20 | [ui](ui-parity.md) |
 | 10 | **No CI runs the Rust tests on pull requests** (`cargo fmt` on main is fixed) | open PRs land without a gate; regressions go unseen | 2–3 | [stability](#stability) |
 
 ## Features
@@ -62,7 +62,7 @@ Detail and evidence: [ui-parity.md](ui-parity.md).
 |---|---|---|---|
 | U1 | **[alpha blocker]** Object snap tracking (acquire points, alignment paths); Extension and Parallel snaps; true apparent intersection | High | 8–12 |
 | U2 | Dynamic input: grip dimensional input, lock icons, DYNPROMPT options menu (pointer boxes with Tab and relative entry landed in #60) | Medium | 3–5 |
-| U3 | **[alpha blocker]** FROM, M2P/MTP, TK, `.x/.y/.xy` point filters, `*` WCS prefix, angle override `<a` | High | 4–6 |
+| U3 | **[alpha blocker]** TK (temporary tracking, comes with object snap tracking, U1). FROM, M2P/MTP, `.x/.y/.xy` point filters, the `*` WCS prefix and the angle override `<a` landed at every point prompt (#392) | High | 1–2 |
 | U4 | **[alpha blocker]** Typed snap overrides (`END`, `MID` … at a prompt), Shift/Ctrl+right-click snap menu, Tab snap cycling | High | 4–6 |
 | U5 | Hot-grip options (Base point, Copy, Undo, Reference) are shown but ignored; multiple hot grips; multifunctional grip menus (Add/Remove Vertex, Convert to Arc) | Medium-high | 6–10 |
 | U6 | Selection keywords W, C, WP, CP, F, BOX, AU, SI, M, G; lasso (press-drag windows landed in #63); selection cycling; SELECTSIMILAR; ISOLATEOBJECTS/HIDEOBJECTS | Medium-high | 6–10 |
