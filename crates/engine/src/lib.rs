@@ -806,7 +806,7 @@ impl Session {
             return self.input(Input::Keyword(k));
         }
         if prompt.accept.point {
-            if let Some(p) = prompt::parse_point(tt, self.last_point) {
+            if let Some(p) = prompt::parse_point_with(tt, self.last_point, &self.angle_settings()) {
                 return self.input(Input::Point(p));
             }
             // Direct distance entry along the rubber band.

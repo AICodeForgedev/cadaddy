@@ -137,42 +137,111 @@ fn parse_mixed(s: &str) -> Option<f64> {
     }
 }
 
-/// Parse an angle typed by the user (degrees by default): `45`, `45d30'`, `0.5r`, `100g`, `N45dE`.
+/// How typed angles are read: the drawing's angle settings (UNITS). Bare numbers are in AUNITS,
+/// and directions are measured from ANGBASE, turning as ANGDIR says.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AngleSettings {
+    /// AUNITS: 0 decimal degrees, 1 degrees/minutes/seconds, 2 grads, 3 radians, 4 surveyor's.
+    pub aunits: i64,
+    /// ANGBASE: the direction of angle 0, in radians counterclockwise from +X (as `$ANGBASE` in DXF).
+    pub angbase: f64,
+    /// ANGDIR 1: positive angles turn clockwise.
+    pub clockwise: bool,
+}
+
+impl AngleSettings {
+    pub fn from_header(h: &cadcraft_doc::Header) -> Self {
+        AngleSettings { aunits: h.i64("AUNITS", 0), angbase: h.f64("ANGBASE", 0.0), clockwise: h.i64("ANGDIR", 0) != 0 }
+    }
+
+    /// A typed angle size in radians (included angles, sweeps, angles from an axis): a bare
+    /// number in AUNITS, or with an explicit unit: `30d`, `45d30'15"`, `0.5r`, `100g`.
+    pub fn amount(&self, s: &str) -> Option<f64> {
+        parse_units(s, self.aunits).map(|(a, _)| a)
+    }
+
+    /// A typed rotation in radians counterclockwise: the amount, turned clockwise when ANGDIR is 1.
+    pub fn rotation(&self, s: &str) -> Option<f64> {
+        self.amount(s).map(|a| if self.clockwise { -a } else { a })
+    }
+
+    /// A typed direction in radians counterclockwise from +X: the amount measured from ANGBASE in
+    /// the ANGDIR sense. Surveyor's bearings (`N45dE`) are absolute. The overrides measure from
+    /// +X counterclockwise whatever ANGBASE and ANGDIR say: `<<a` in degrees, `<<<a` in AUNITS.
+    pub fn direction(&self, s: &str) -> Option<f64> {
+        let t = s.trim();
+        if let Some(r) = t.strip_prefix("<<<") {
+            return parse_units(r, self.aunits).map(|(a, _)| a);
+        }
+        if let Some(r) = t.strip_prefix("<<") {
+            return parse_units(r, 0).map(|(a, _)| a);
+        }
+        let (a, absolute) = parse_units(t, self.aunits)?;
+        if absolute {
+            return Some(a);
+        }
+        let v = self.angbase + if self.clockwise { -a } else { a };
+        v.is_finite().then_some(v)
+    }
+}
+
+/// Parse a direction typed with the default angle settings (degrees, 0 = +X, counterclockwise):
+/// `45`, `45d30'`, `0.5r`, `100g`, `N45dE`. Typed input reads the drawing's settings instead
+/// (`Session::angle_settings`).
 pub fn parse_angle(s: &str) -> Option<f64> {
+    AngleSettings::default().direction(s)
+}
+
+/// A typed angle in radians and whether it is absolute (a surveyor's bearing).
+fn parse_units(s: &str, aunits: i64) -> Option<(f64, bool)> {
     let t = s.trim().to_ascii_lowercase();
     if t.is_empty() {
         return None;
     }
-    if let Some(r) = t.strip_suffix('r') {
-        return r.trim().parse::<f64>().ok().filter(|v| v.is_finite());
-    }
-    if let Some(g) = t.strip_suffix('g') {
-        return g.trim().parse::<f64>().ok().filter(|v| v.is_finite()).map(|v| (v * 0.9).to_radians());
-    }
-    if let Some(rest) = t.strip_prefix('n').or_else(|| t.strip_prefix('s')) {
-        let north = t.starts_with('n');
-        let (ang_s, east) = if let Some(a) = rest.strip_suffix('e') {
-            (a, true)
-        } else {
-            let a = rest.strip_suffix('w')?;
-            (a, false)
+    let num = |v: &str| v.trim().parse::<f64>().ok();
+    let v = if let Some(r) = t.strip_suffix('r') {
+        (num(r)?, false)
+    } else if let Some(g) = t.strip_suffix('g') {
+        ((num(g)? * 0.9).to_radians(), false)
+    } else if let Some(b) = bearing(&t) {
+        (b, true)
+    } else if let Some(v) = num(&t) {
+        let a = match aunits {
+            2 => (v * 0.9).to_radians(),
+            3 => v,
+            _ => v.to_radians(),
         };
-        let a = parse_dms(ang_s.trim())?;
-        let deg = match (north, east) {
-            (true, true) => 90.0 - a,
-            (true, false) => 90.0 + a,
-            (false, false) => 270.0 - a,
-            (false, true) => 270.0 + a,
-        };
-        return Some(deg.to_radians());
-    }
-    parse_dms(&t).map(f64::to_radians)
+        (a, false)
+    } else {
+        (parse_dms(&t)?.to_radians(), false)
+    };
+    v.0.is_finite().then_some(v)
 }
 
+/// A surveyor's bearing (`n45d30'e`, lower case) as radians counterclockwise from +X.
+fn bearing(t: &str) -> Option<f64> {
+    let north = t.starts_with('n');
+    let rest = t.strip_prefix('n').or_else(|| t.strip_prefix('s'))?;
+    let (ang_s, east) = match rest.strip_suffix('e') {
+        Some(a) => (a, true),
+        None => (rest.strip_suffix('w')?, false),
+    };
+    let a = parse_dms(ang_s.trim())?;
+    let deg = match (north, east) {
+        (true, true) => 90.0 - a,
+        (true, false) => 90.0 + a,
+        (false, false) => 270.0 - a,
+        (false, true) => 270.0 + a,
+    };
+    Some(deg.to_radians())
+}
+
+/// Degrees, `45d`, `45d30'` or `45d30'15"` (a leading `-` negates the whole angle).
 fn parse_dms(t: &str) -> Option<f64> {
-    if let Ok(v) = t.parse::<f64>() {
-        return v.is_finite().then_some(v);
-    }
+    let (neg, t) = match t.trim().strip_prefix('-') {
+        Some(r) => (true, r.trim()),
+        None => (false, t.trim()),
+    };
     let (d, rest) = t.split_once('d').unwrap_or((t, ""));
     let mut deg: f64 = d.trim().parse().ok()?;
     let rest = rest.trim();
@@ -186,7 +255,15 @@ fn parse_dms(t: &str) -> Option<f64> {
             deg += s.parse::<f64>().ok()? / 3600.0;
         }
     }
+    let deg = if neg { -deg } else { deg };
     deg.is_finite().then_some(deg)
+}
+
+impl crate::Session {
+    /// How typed angles are read in the current drawing (the defaults without one).
+    pub fn angle_settings(&self) -> AngleSettings {
+        self.doc().map(|d| AngleSettings::from_header(&d.header)).unwrap_or_default()
+    }
 }
 
 pub const DEG: f64 = PI / 180.0;

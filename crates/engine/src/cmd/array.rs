@@ -140,11 +140,12 @@ fn count(i: &Input, cur: u64, max: u64) -> Result<Option<u64>> {
     }
 }
 
-/// An angle in degrees typed at a prompt (Enter keeps `cur`); `None` for inputs the prompt ignores.
-fn angle(i: &Input, cur: f64) -> Result<Option<f64>> {
+/// An angle in degrees typed at a prompt in AUNITS (Enter keeps `cur`); `None` for inputs the
+/// prompt ignores.
+fn angle(i: &Input, cur: f64, au: &crate::units::AngleSettings) -> Result<Option<f64>> {
     match i {
         Input::Enter => Ok(Some(cur)),
-        Input::Text(t) => crate::units::parse_angle(t).map(|a| Some(a.to_degrees())).ok_or_else(|| other("Requires a valid angle in degrees.")),
+        Input::Text(t) => au.amount(t).map(|a| Some(a.to_degrees())).ok_or_else(|| other("Requires a valid angle in degrees.")),
         _ => Ok(None),
     }
 }
@@ -728,7 +729,7 @@ impl Interactive for PolarM {
                 None => stage,
             },
             (Between, Input::Enter) => Main,
-            (Between, _) => match angle(&i, self.between())? {
+            (Between, _) => match angle(&i, self.between(), &s.angle_settings())? {
                 Some(b) => {
                     if b.abs() < 1e-9 {
                         return Err(other("Requires a nonzero angle."));
@@ -743,7 +744,7 @@ impl Interactive for PolarM {
                 }
                 None => stage,
             },
-            (Fill, _) => match angle(&i, self.fill)? {
+            (Fill, _) => match angle(&i, self.fill, &s.angle_settings())? {
                 Some(f) => {
                     if f.abs() < 1e-9 || f.abs() > 360.0 + 1e-9 {
                         return Err(other("Requires a fill angle between -360 and 360 degrees (not 0)."));

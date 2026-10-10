@@ -57,6 +57,8 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "CURSORSIZE" => json!(st.cursorsize),
         "MAXARRAY" => json!(st.maxarray),
         "LASTPOINT" => json!([s.last_point.x, s.last_point.y, 0.0]),
+        // Held in radians (as `$ANGBASE` in DXF); reported in degrees, like POLARANG.
+        "ANGBASE" => json!(s.doc().ok()?.header.f64("ANGBASE", 0.0).to_degrees()),
         // Process-wide font substitution (profile settings, not saved in the drawing).
         "FONTALT" => json!(cadcraft_fonts::ttf::font_alt()),
         "FONTFALLBACK" => json!(cadcraft_fonts::ttf::fallback_fonts()),
@@ -150,6 +152,15 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "MAXARRAY" => st.maxarray = as_f64(v).ok_or_else(bad)?.clamp(100.0, 10_000_000.0) as u64,
         "FONTALT" => cadcraft_fonts::ttf::set_font_alt(v.as_str().ok_or_else(bad)?),
         "FONTFALLBACK" => cadcraft_fonts::ttf::set_fallback_fonts(v.as_str().ok_or_else(bad)?),
+        // A number is in degrees; text is an angle typed in AUNITS (SETVAR at the command line).
+        "ANGBASE" => {
+            let a = match v {
+                Value::String(t) => s.angle_settings().amount(t),
+                _ => as_f64(v).map(f64::to_radians),
+            };
+            let a = a.filter(|a| a.is_finite()).ok_or_else(bad)?;
+            s.doc_mut()?.header.set_f64("ANGBASE", cadcraft_geom::norm_angle(a));
+        }
         _ => {
             let d = s.doc_mut()?;
             let val = match v {
@@ -198,7 +209,9 @@ pub fn list(s: &Session) -> Value {
     }
     if let Ok(d) = s.doc() {
         for (k, v) in &d.header.vars {
-            if !k.starts_with("CADCRAFT_") {
+            if k == "ANGBASE" {
+                m.insert(k.clone(), get(s, k).unwrap_or(Value::Null));
+            } else if !k.starts_with("CADCRAFT_") {
                 m.insert(k.clone(), serde_json::to_value(v).unwrap_or(Value::Null));
             }
         }

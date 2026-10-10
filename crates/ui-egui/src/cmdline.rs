@@ -156,7 +156,7 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
                         }
                     } else {
                         let base = app.canvas.hot_grip.map(|g| g.base).unwrap_or_default();
-                        match cadcraft_engine::prompt::parse_point(&typed, base) {
+                        match cadcraft_engine::prompt::parse_point_with(&typed, base, &app.session.angle_settings()) {
                             Some(p) => crate::canvas::apply_hot_grip(app, p),
                             None => app.session.echo("Requires a point (x,y, @dx,dy or @d<a)."),
                         }

@@ -367,7 +367,10 @@ impl Interactive for SeqM {
         let val = match (&i, ask) {
             (Input::Point(q), _) => self.value_from_point(ask, *q),
             (Input::Text(t), Ask::Angle(_) | Ask::Sweep(..)) => {
-                Some(Val::N(crate::units::parse_angle(t).ok_or_else(|| other("Requires a valid angle."))?))
+                // The tangent direction is a direction; included angles are sizes.
+                let au = s.angle_settings();
+                let a = if self.v == ArcV::Sed { au.direction(t) } else { au.amount(t) };
+                Some(Val::N(a.ok_or_else(|| other("Requires a valid angle."))?))
             }
             (Input::Text(t), Ask::Dist(_)) => Some(Val::N(number(t).ok_or_else(|| other("Requires numeric distance or a point."))?)),
             (Input::Enter, _) => return Ok(Step::Cancel),
@@ -1449,7 +1452,7 @@ impl Interactive for XlineM2 {
                 Ok(Step::Continue)
             }
             (XMode::AngAsk, Input::Text(t)) => {
-                let a = crate::units::parse_angle(&t).ok_or_else(|| other("Requires a valid angle."))?;
+                let a = s.angle_settings().direction(&t).ok_or_else(|| other("Requires a valid angle."))?;
                 self.mode = XMode::Fixed(a);
                 Ok(Step::Continue)
             }
@@ -1460,7 +1463,7 @@ impl Interactive for XlineM2 {
                 Ok(Step::Continue)
             }
             (XMode::RefAngle(base), Input::Text(t)) => {
-                let a = crate::units::parse_angle(&t).ok_or_else(|| other("Requires a valid angle."))?;
+                let a = s.angle_settings().rotation(&t).ok_or_else(|| other("Requires a valid angle."))?;
                 self.mode = XMode::Fixed(base + a);
                 Ok(Step::Continue)
             }
@@ -1739,7 +1742,7 @@ impl Interactive for RectM2 {
                 RAsk::Rotation => match i {
                     Input::Keyword(_) => self.asking = Some(RAsk::RotPick1),
                     Input::Point(p) => self.rotation = self.first.map(|f| f.angle_to(p)).unwrap_or(0.0),
-                    Input::Text(t) => self.rotation = crate::units::parse_angle(&t).ok_or_else(|| other("Requires a valid angle."))?,
+                    Input::Text(t) => self.rotation = s.angle_settings().direction(&t).ok_or_else(|| other("Requires a valid angle."))?,
                     _ => {}
                 },
                 RAsk::RotPick1 => {

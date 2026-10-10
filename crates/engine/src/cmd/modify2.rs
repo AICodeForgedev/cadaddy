@@ -1001,7 +1001,8 @@ impl Interactive for LengthenM {
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         let num = |i: &Input| -> Option<f64> { if let Input::Text(t) = i { number(t) } else { None } };
-        let ang = |i: &Input| -> Option<f64> { if let Input::Text(t) = i { crate::units::parse_angle(t) } else { None } };
+        let au = s.angle_settings();
+        let ang = |i: &Input| -> Option<f64> { if let Input::Text(t) = i { au.amount(t) } else { None } };
         match (self.phase, &i) {
             (LPhase::Main, Input::Point(p)) => {
                 let h = curves::pick_at(s, *p).ok_or_else(|| other("*Invalid selection*"))?;

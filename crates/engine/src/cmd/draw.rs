@@ -956,7 +956,7 @@ impl Interactive for EllipseM {
                 Input::Point(p) if self.param => cadcraft_geom::norm_angle((p - e.center).angle() - e.major.angle()),
                 Input::Point(p) => ge.param_of(p),
                 Input::Text(t) => {
-                    let a = crate::units::parse_angle(&t).ok_or_else(|| crate::EngineError::Other("Requires an angle.".into()))?;
+                    let a = s.angle_settings().amount(&t).ok_or_else(|| crate::EngineError::Other("Requires an angle.".into()))?;
                     if self.param {
                         cadcraft_geom::norm_angle(a)
                     } else {
@@ -999,7 +999,9 @@ impl Interactive for EllipseM {
                 }
             }
             Input::Text(t) if self.pts.len() == 2 && self.rotation => {
-                let e = crate::units::parse_angle(&t)
+                let e = s
+                    .angle_settings()
+                    .amount(&t)
                     .and_then(|a| self.rotated(a))
                     .ok_or_else(|| crate::EngineError::Other("Requires an angle between 0 and 89.4 degrees.".into()))?;
                 return self.place(s, e);
@@ -1343,7 +1345,7 @@ impl Interactive for TextM {
             (Some(_), Some(_), None, Input::Enter) => self.rotation = Some(0.0),
             (Some(a), Some(_), None, Input::Point(p)) => self.rotation = Some(a.angle_to(p)),
             (Some(_), Some(_), None, Input::Text(t)) => {
-                self.rotation = Some(crate::units::parse_angle(&t).ok_or_else(|| crate::EngineError::Other("Requires an angle.".into()))?)
+                self.rotation = Some(s.angle_settings().direction(&t).ok_or_else(|| crate::EngineError::Other("Requires an angle.".into()))?)
             }
             (Some(a), Some(h), Some(r), Input::Text(t)) => {
                 let at = a + Vec2::from_angle(r - std::f64::consts::FRAC_PI_2) * (h * 5.0 / 3.0 * self.line as f64);

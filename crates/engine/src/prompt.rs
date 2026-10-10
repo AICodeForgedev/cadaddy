@@ -143,8 +143,15 @@ pub trait Interactive: Send {
 }
 
 /// Parse a typed point: `x,y[,z]`, `@dx,dy`, `@dist<angle`, `dist<angle`, `#x,y` (absolute).
-/// Relative forms use `last`.
+/// Relative forms use `last`. Polar angles read the default angle settings (degrees from +X,
+/// counterclockwise); `parse_point_with` reads a drawing's.
 pub fn parse_point(text: &str, last: Vec2) -> Option<Vec2> {
+    parse_point_with(text, last, &crate::units::AngleSettings::default())
+}
+
+/// `parse_point` with polar angles read per `angles` (AUNITS, ANGBASE, ANGDIR); `d<<a` and
+/// `d<<<a` measure from +X counterclockwise (in degrees and in AUNITS).
+pub fn parse_point_with(text: &str, last: Vec2, angles: &crate::units::AngleSettings) -> Option<Vec2> {
     let t = text.trim();
     if t.is_empty() {
         return None;
@@ -161,7 +168,8 @@ pub fn parse_point(text: &str, last: Vec2) -> Option<Vec2> {
     }
     let p = if let Some((d, a)) = body.split_once('<') {
         let dist = crate::units::parse_distance(d)?;
-        let ang = crate::units::parse_angle(a)?;
+        // `d<<a` / `d<<<a`: the override prefixes keep their `<<` / `<<<`.
+        let ang = if a.starts_with('<') { angles.direction(&format!("<{a}"))? } else { angles.direction(a)? };
         Vec2::from_angle(ang) * dist
     } else {
         let parts: Vec<&str> = body.split(',').collect();

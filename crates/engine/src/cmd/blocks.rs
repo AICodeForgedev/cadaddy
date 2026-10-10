@@ -631,7 +631,7 @@ impl Interactive for InsertM {
             }
             InsStage::PresetRotation => {
                 self.rotation = Some(match i {
-                    Input::Text(t) => crate::units::parse_angle(&t).ok_or_else(|| EngineError::Other("Requires an angle.".into()))?,
+                    Input::Text(t) => s.angle_settings().direction(&t).ok_or_else(|| EngineError::Other("Requires an angle.".into()))?,
                     Input::Enter => 0.0,
                     _ => return Ok(Step::Continue),
                 });
@@ -673,7 +673,7 @@ impl Interactive for InsertM {
                 let a = self.at.unwrap_or_default();
                 self.rotation = Some(match i {
                     Input::Point(p) => a.angle_to(p),
-                    Input::Text(t) => crate::units::parse_angle(&t).ok_or_else(|| EngineError::Other("Requires an angle.".into()))?,
+                    Input::Text(t) => s.angle_settings().direction(&t).ok_or_else(|| EngineError::Other("Requires an angle.".into()))?,
                     _ => 0.0,
                 });
                 return self.advance(s);

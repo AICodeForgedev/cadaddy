@@ -1374,8 +1374,8 @@ impl SelectThen {
     /// new angle minus the reference angle.
     fn rotate_reference(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         let Some(base) = self.pts.first().copied() else { return Ok(Step::Done) };
-        let angle =
-            |t: &str| crate::units::parse_angle(t).filter(|a| a.is_finite()).ok_or_else(|| EngineError::Other("Requires an angle or point.".into()));
+        let au = s.angle_settings();
+        let angle = |t: &str| au.direction(t).filter(|a| a.is_finite()).ok_or_else(|| EngineError::Other("Requires an angle or point.".into()));
         let two_points = |a: Vec2, p: Vec2| {
             if a.near(p, 1e-12) { Err(EngineError::Other("The two points must differ.".into())) } else { Ok(a.angle_to(p)) }
         };

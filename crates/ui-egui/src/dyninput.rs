@@ -163,7 +163,8 @@ pub fn complete(entry: &Entry<'_>, frame: &Frame, cursor: Vec2, last: Vec2) -> O
     if frame.relative() && frame.base == Some(last) {
         return Some(match entry.format {
             Format::Cartesian => format!("@{first},{second}"),
-            Format::Polar => format!("@{first}<{}", second.to_degrees()),
+            // `<<`: degrees from +X counterclockwise, as previewed, whatever ANGBASE/ANGDIR say.
+            Format::Polar => format!("@{first}<<{}", second.to_degrees()),
         });
     }
     let p = match entry.format {
