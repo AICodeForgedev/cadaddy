@@ -237,20 +237,20 @@ pub(crate) fn osnap_with(
         return Some(h);
     }
     if osmode & mode::NEA != 0 {
+        // The closest point of all nearby objects, whatever their drawing order.
         let mut nb: Option<(f64, Vec2)> = None;
+        let mut consider = |c: Vec2| {
+            let dd = c.dist(cursor);
+            if dd <= aperture && nb.is_none_or(|(bd, _)| dd < bd) {
+                nb = Some((dd, c));
+            }
+        };
         for p in &near_prims {
             for s in prim_segments(p) {
-                let c = fix_circle(&s).closest(cursor);
-                let dd = c.dist(cursor);
-                if dd <= aperture && nb.is_none_or(|(bd, _)| dd < bd) {
-                    nb = Some((dd, c));
-                }
+                consider(fix_circle(&s).closest(cursor));
             }
             if let Prim::Circle(c) = p {
-                let q = c.closest(cursor);
-                if q.dist(cursor) <= aperture {
-                    nb = Some((q.dist(cursor), q));
-                }
+                consider(c.closest(cursor));
             }
         }
         if let Some((_, p)) = nb {
