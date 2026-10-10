@@ -410,7 +410,7 @@ fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Rgb, f32, Option<cadcraft_
     };
     let lw_mm = match lw {
         Lineweight::Mm100(v) => f32::from(v) / 100.0,
-        _ => 0.25,
+        _ => default_lineweight(d),
     };
     let lt_name = match e.common.linetype.to_ascii_lowercase().as_str() {
         "bylayer" => layer.map(|l| l.linetype.clone()).unwrap_or_else(|| "Continuous".into()),
@@ -420,6 +420,15 @@ fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Rgb, f32, Option<cadcraft_
     let lt = d.linetype(&lt_name).filter(|l| !l.pattern.is_empty()).cloned();
     let scale = d.header.f64("LTSCALE", 1.0) * e.common.ltscale * ctx.lt_factor;
     (rgb, lw_mm, lt, scale, visible)
+}
+
+/// The width in mm that the "Default" lineweight stands for: `LWDEFAULT` (hundredths of a mm,
+/// 0 to 211), 0.25 mm when it is unset or out of range.
+fn default_lineweight(d: &Drawing) -> f32 {
+    match d.header.i64("LWDEFAULT", 25) {
+        v @ 0..=211 => v as f32 / 100.0,
+        _ => 0.25,
+    }
 }
 
 fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
