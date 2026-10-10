@@ -180,11 +180,14 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
         "cmdline.input" => {
             let text = s("text").unwrap_or("");
             let before = app.session.log.len();
-            app.cmdline(text);
+            let error = app.cmdline(text);
             let out: Vec<String> = app.session.log.iter().skip(before).cloned().collect();
             let mut st = cmdline_state(app);
             if let Some(o) = st.as_object_mut() {
                 o.insert("output".into(), json!(out));
+                if let Some(e) = error {
+                    o.insert("error".into(), json!(e));
+                }
             }
             ok(st)
         }

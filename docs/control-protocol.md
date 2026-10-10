@@ -43,6 +43,31 @@ The server waits up to 60 s for the app to answer a request. After that it repli
 The MCP server (`cadcraft-cli mcp --connect 127.0.0.1:PORT`) wraps this protocol; headless
 (`cadcraft-cli mcp`) it serves the same methods from an in-process session.
 
+## Command-line replies
+
+The app and the headless session reply with the same fields.
+
+`cmdline.state`, `cmdline.key` and `cmdline.input` return the command-line state:
+
+| Field | Value |
+|---|---|
+| `prompt` | The prompt text (`"Command:"` when idle). |
+| `running` | The id of the running command, or `null`. |
+| `keywords` | The current prompt's options. |
+| `accept` | The kinds of input the current prompt accepts, or `null` when idle. |
+| `buffer` | Text typed in the command line but not yet submitted (always `""` headless). |
+| `history` | The last 20 history lines. |
+| `historyExpanded` | Whether the history is expanded (always `false` headless). |
+
+`cmdline.input` adds:
+
+- `output`: the history lines the input added. This includes the error message when the line was refused.
+- `error`: the error message, only when the line was refused (unknown command, invalid input…).
+
+A refused line still replies `"ok": true`, because the text was typed. Check `error`.
+
+`app.open` without a string `path` fails with `"missing path"` before any command runs.
+
 ## Interface language
 
 Select a language with `engine.execute` and the UI command `ui.language`:

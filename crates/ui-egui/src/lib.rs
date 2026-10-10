@@ -244,19 +244,20 @@ impl CadApp {
         }
     }
 
-    /// Submit a line of command-line text.
-    pub fn cmdline(&mut self, text: &str) {
+    /// Submit a line of command-line text. A refused line is echoed to the history; the error is
+    /// also returned.
+    pub fn cmdline(&mut self, text: &str) -> Option<String> {
         if self.session.running.is_none() {
             let first = text.split_whitespace().next().unwrap_or("");
             // `cmd {json}` is a programmatic call: the engine runs it with those parameters.
             let json_form = text.trim_start().get(first.len()..).is_some_and(|rest| rest.trim_start().starts_with('{'));
             if !first.is_empty() && !json_form && menus::run_ui_command(self, &first.to_ascii_lowercase(), &Value::Null).is_some() {
-                return;
+                return None;
             }
         }
-        if let Err(e) = self.session.cmdline(text) {
-            self.session.echo(e.to_string());
-        }
+        let e = self.session.cmdline(text).err()?.to_string();
+        self.session.echo(e.clone());
+        Some(e)
     }
 
     /// The theme the interface shows now (the choice resolved against the OS appearance).

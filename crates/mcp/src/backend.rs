@@ -126,13 +126,18 @@ impl Default for Headless {
     }
 }
 
+/// The command-line state, with the same fields as the app's (`cadcraft_ui_egui::control`). There
+/// is no command-line widget here: nothing is typed (`buffer`) and the history isn't expanded.
 fn state(s: &Session) -> Value {
     let p = s.current_prompt();
     json!({
         "prompt": s.prompt_text(),
         "running": s.running.as_ref().map(|r| r.id.clone()),
         "keywords": p.as_ref().map(|p| p.keywords.clone()).unwrap_or_default(),
+        "accept": p.as_ref().map(|p| p.accept),
+        "buffer": "",
         "history": s.log.iter().rev().take(20).rev().cloned().collect::<Vec<_>>(),
+        "historyExpanded": false,
     })
 }
 
@@ -149,6 +154,11 @@ impl Backend for Headless {
             "cmdline.input" => {
                 let before = s.log.len();
                 let r = s.cmdline(&str_p("text").unwrap_or_default());
+                // Like the app: a refused line is echoed to the history (and `output`), and also
+                // reported in `error`.
+                if let Err(e) = &r {
+                    s.echo(e.to_string());
+                }
                 let out: Vec<String> = s.log.iter().skip(before).cloned().collect();
                 let mut st = state(s);
                 if let Some(o) = st.as_object_mut() {
@@ -197,7 +207,10 @@ impl Backend for Headless {
                 }
                 Ok(json!({"pngBase64": cadcraft_engine::cmd::file::base64_encode(&png), "width": w, "height": h}))
             }
-            "app.open" => s.execute("open", &json!({"path": str_p("path")})).map_err(|e| e.to_string()),
+            "app.open" => {
+                let path = str_p("path").ok_or("missing path")?;
+                s.execute("open", &json!({ "path": path })).map_err(|e| e.to_string())
+            }
             "app.save" => {
                 let id = if p.get("path").is_some() { "saveas" } else { "qsave" };
                 s.execute(id, &p).map_err(|e| e.to_string())
