@@ -33,8 +33,15 @@ pub fn standard_linetypes() -> Vec<Linetype> {
             description: "Fenceline circle ----0-----0----".into(),
             pattern: vec![
                 DashElement::dash(0.25),
+                // The text goes where its element ends: centred between the two gaps.
+                DashElement {
+                    text: Some("o".into()),
+                    style: Some("Standard".into()),
+                    scale: 0.1,
+                    offset: cadcraft_geom::Vec2::new(-0.035, -0.035),
+                    ..DashElement::dash(-0.1)
+                },
                 DashElement::dash(-0.1),
-                DashElement { text: Some("o".into()), style: Some("Standard".into()), scale: 0.1, ..DashElement::dash(-0.1) },
                 DashElement::dash(0.5),
             ],
         },

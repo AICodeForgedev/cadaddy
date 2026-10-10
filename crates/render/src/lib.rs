@@ -12,6 +12,7 @@ mod dim;
 mod fill;
 mod hatch;
 mod linetype;
+mod linetype_text;
 pub mod paper;
 mod point;
 pub mod raster;
@@ -483,6 +484,12 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                     }
                 } else {
                     b.polyline(ctx, rgb, lw, &dash);
+                }
+            }
+            // Text embedded in the linetype (shapes need SHX files and are not drawn).
+            if b.opts.text {
+                for sh in linetype_text::texts(ctx.d, pts, lt, ltscale, min) {
+                    b.shaped(ctx, rgb, lw, &sh);
                 }
             }
         }
