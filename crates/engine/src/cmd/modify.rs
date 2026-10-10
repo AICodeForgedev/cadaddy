@@ -1250,6 +1250,7 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                         style: style.text_style.clone(),
                         contents: g.value.clone(),
                         line_spacing: 1.0,
+                        line_spacing_exact: false,
                     }),
                 });
             }

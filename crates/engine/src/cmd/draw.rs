@@ -2,7 +2,7 @@
 //! SPLINE, DONUT, TEXT, MTEXT. Each has a JSON form and an interactive prompt sequence.
 
 use cadcraft_doc::{EntityKind, HAlign, MText, Point, RayLine, Text, VAlign};
-use cadcraft_geom::{Arc, Circle, Ellipse, PolyVertex, Polyline, Spline, Vec2, Vec3, arc_to_bulge, bulge_to_arc};
+use cadcraft_geom::{Arc, Circle, Ellipse, PolyVertex, Polyline, Spline, Vec2, arc_to_bulge, bulge_to_arc};
 use serde_json::{Value, json};
 
 use super::helpers::*;
@@ -84,7 +84,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("mtext", "Multiline Text", run_mtext)
             .menu(&["Draw", "Text", "Multiline Text..."])
             .alias(&["t", "mt"])
-            .params("{at, text, height?, width?, attach?: 1..9, rotation?}")
+            .params("{at, text, height?, width?, attach?: 1..9 | justify?: TL..BR, rotation?, style?, lineSpacing?, lineSpacingExact?}")
             .interactive(|_| Ok(Box::new(MTextM::default()))),
     ]
 }
@@ -352,16 +352,24 @@ fn run_mtext(s: &mut Session, p: &Value) -> Result<Value> {
     if height <= 0.0 {
         return Err(bad("mtext", "height must be positive"));
     }
-    let style = s.doc()?.header.str("TEXTSTYLE", "Standard");
+    let style = match str_param(p, "style") {
+        Some(n) => s.doc()?.text_style(n).map(|t| t.name.clone()).ok_or_else(|| bad("mtext", format!("no text style \"{n}\"")))?,
+        None => s.doc()?.header.str("TEXTSTYLE", "Standard"),
+    };
+    let attach = match str_param(p, "justify") {
+        Some(j) => super::mtext_opts::attach_code(j).ok_or_else(|| bad("mtext", "`justify` must be TL, TC, TR, ML, MC, MR, BL, BC or BR"))?,
+        None => p.get("attach").and_then(Value::as_u64).unwrap_or(1).clamp(1, 9) as u8,
+    };
     let k = EntityKind::MText(MText {
         insert: v3(at),
         height,
         width: f64_or(p, "width", 0.0).max(0.0),
-        attach: p.get("attach").and_then(Value::as_u64).unwrap_or(1).clamp(1, 9) as u8,
+        attach,
         rotation: f64_or(p, "rotation", 0.0).to_radians(),
         style,
         contents: text.replace('\n', "\\P"),
         line_spacing: f64_or(p, "lineSpacing", 1.0),
+        line_spacing_exact: bool_or(p, "lineSpacingExact", false),
     });
     added(s.add_entity(k)?)
 }
@@ -1414,16 +1422,35 @@ struct MTextM {
     /// Paragraphs typed so far: one per input line, an empty line ends the text (as on
     /// AutoCAD's command line and in scripts).
     lines: Vec<String>,
+    /// Height, justification, line spacing, rotation, style and width set by the options.
+    opts: super::mtext_opts::MTextOpts,
+    /// An option asking a further question.
+    ask: Option<super::mtext_opts::MTextAsk>,
+}
+
+impl MTextM {
+    /// The box is known: the opposite corner was picked or the Width option answered.
+    fn boxed(&self) -> bool {
+        self.second.is_some() || self.opts.width.is_some()
+    }
 }
 
 impl Interactive for MTextM {
     fn name(&self) -> &'static str {
         "MTEXT"
     }
+    fn begin(&mut self, s: &mut Session) -> Result<Step> {
+        self.opts = super::mtext_opts::MTextOpts::new(s);
+        s.echo(format!("Current text style:  \"{}\"  Text height:  {:.4}  Annotative:  No", self.opts.style, self.opts.height));
+        Ok(Step::Continue)
+    }
     fn prompt(&self, _s: &Session) -> Prompt {
-        match (self.first, self.second) {
-            (None, _) => Prompt::new("Specify first corner", Accept::POINT),
-            (Some(a), None) => Prompt::new("Specify opposite corner", Accept::POINT)
+        if let (Some(a), Some(q)) = (self.first, self.ask) {
+            return q.prompt(&self.opts, a);
+        }
+        match self.first {
+            None => Prompt::new("Specify first corner", Accept::POINT),
+            Some(a) if !self.boxed() => Prompt::new("Specify opposite corner", Accept::POINT)
                 .kw(&["Height", "Justify", "Line spacing", "Rotation", "Style", "Width", "Columns"])
                 .base(a),
             _ if self.lines.is_empty() => Prompt::new("Enter text (use \\P for new paragraphs)", Accept::TEXT),
@@ -1431,28 +1458,27 @@ impl Interactive for MTextM {
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
-        match (self.first, self.second, i) {
+        if let (Some(a), Some(q)) = (self.first, self.ask) {
+            use super::mtext_opts::Outcome;
+            self.ask = match q.input(s, i, &mut self.opts, a)? {
+                Outcome::Ask(next) => Some(next),
+                Outcome::Back | Outcome::Text => None,
+            };
+            return Ok(Step::Continue);
+        }
+        match (self.first, self.boxed(), i) {
             (None, _, Input::Point(p)) => self.first = Some(p),
-            (Some(_), None, Input::Point(p)) => self.second = Some(p),
-            (Some(_), Some(_), Input::Text(t)) if !t.is_empty() => self.lines.push(t),
-            (Some(a), Some(b), Input::Text(_) | Input::Enter) => {
+            (Some(_), false, Input::Point(p)) => self.second = Some(p),
+            (Some(_), false, Input::Keyword(k)) => {
+                self.ask =
+                    Some(super::mtext_opts::MTextAsk::from_keyword(&k).ok_or_else(|| crate::EngineError::Other("Invalid option keyword.".into()))?);
+            }
+            (Some(_), true, Input::Text(t)) if !t.is_empty() => self.lines.push(t),
+            (Some(a), true, Input::Text(_) | Input::Enter) => {
                 if self.lines.is_empty() {
                     return Ok(Step::Done);
                 }
-                let d = s.doc()?;
-                let h = d.header.f64("TEXTSIZE", 0.2);
-                let style = d.header.str("TEXTSTYLE", "Standard");
-                let tl = Vec2::new(a.x.min(b.x), a.y.max(b.y));
-                s.add_entity(EntityKind::MText(MText {
-                    insert: Vec3::new(tl.x, tl.y, 0.0),
-                    height: h,
-                    width: (a.x - b.x).abs(),
-                    attach: 1,
-                    rotation: 0.0,
-                    style,
-                    contents: self.lines.join("\\P"),
-                    line_spacing: 1.0,
-                }))?;
+                s.add_entity(EntityKind::MText(self.opts.mtext(a, self.second, self.lines.join("\\P"))))?;
                 return Ok(Step::Done);
             }
             (_, _, Input::Enter) => return Ok(Step::Done),
@@ -1461,8 +1487,14 @@ impl Interactive for MTextM {
         Ok(Step::Continue)
     }
     fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
-        match (self.first, self.second) {
-            (Some(a), None) => vec![lwpoly(rect_vertices(a, c), true)],
+        match (self.first, self.boxed(), self.ask) {
+            (Some(a), false, None) => {
+                // The box, turned by the rotation about the first corner.
+                let r = self.opts.rotation;
+                let l = (c - a).rotate(-r);
+                let corners = [Vec2::ZERO, Vec2::new(l.x, 0.0), l, Vec2::new(0.0, l.y)];
+                vec![lwpoly(corners.iter().map(|q| PolyVertex::new(a + q.rotate(r))).collect(), true)]
+            }
             _ => Vec::new(),
         }
     }

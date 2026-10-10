@@ -308,6 +308,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 style: t.s(7).unwrap_or_else(|| "Standard".into()),
                 contents,
                 line_spacing: t.fd(44, 1.0),
+                line_spacing_exact: t.i(73) == Some(2),
             })
         }
         "ATTDEF" => EntityKind::AttDef(Attrib {

@@ -252,6 +252,10 @@ pub struct MText {
     pub contents: String,
     #[serde(default = "one")]
     pub line_spacing: f64,
+    /// Line spacing style (DXF 73): Exactly (`true`) keeps `line_spacing` whatever the character
+    /// heights; At least (`false`, the default) lets taller characters push lines apart.
+    #[serde(default)]
+    pub line_spacing_exact: bool,
 }
 fn attach_tl() -> u8 {
     1

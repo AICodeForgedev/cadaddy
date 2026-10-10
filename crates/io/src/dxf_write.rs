@@ -549,6 +549,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             if t.rotation != 0.0 {
                 w.f(50, t.rotation.to_degrees());
             }
+            // Line spacing style: 1 = at least, 2 = exactly.
+            w.i(73, if t.line_spacing_exact { 2 } else { 1 });
             w.f(44, t.line_spacing);
         }
         EntityKind::Insert(i) => {
@@ -993,6 +995,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
                 style: style.text_style.clone(),
                 contents: g.value.clone(),
                 line_spacing: 1.0,
+                line_spacing_exact: false,
             }),
         });
     }
@@ -1058,6 +1061,7 @@ fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
                     style: "Standard".into(),
                     contents: cell.text.clone(),
                     line_spacing: 1.0,
+                    line_spacing_exact: false,
                 }),
             });
         }

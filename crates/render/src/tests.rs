@@ -284,6 +284,7 @@ fn truetype_mtext_and_dimension_text() {
             style: "Standard".into(),
             contents: "A{\\C1;B}\\P\\S1/2;".into(),
             line_spacing: 1.0,
+            line_spacing_exact: false,
         }),
     )
     .unwrap();
