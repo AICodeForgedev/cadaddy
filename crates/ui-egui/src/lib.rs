@@ -166,6 +166,8 @@ pub struct CadApp {
     styled: bool,
     /// The theme last installed into egui (`None` until the first frame).
     shown_theme: Option<egui::Theme>,
+    /// Whether the last applied theme was handed to egui as the System preference.
+    shown_follows_system: bool,
     pub frame_ms: f64,
     pub quit_requested: bool,
     /// The app may close although drawings have unsaved changes (they were dealt with, or the
@@ -195,6 +197,7 @@ impl CadApp {
             frame_cap: None,
             styled: false,
             shown_theme: None,
+            shown_follows_system: false,
             frame_ms: 0.0,
             quit_requested: false,
             quit_confirmed: false,
@@ -359,9 +362,11 @@ impl CadApp {
         // browser report changes as input); the saved choice itself never changes here.
         let shown = self.ui.theme.resolve(ctx.system_theme());
         theme::set_active(shown);
-        if self.shown_theme != Some(shown) {
-            theme::apply(ctx, shown);
+        let follows_system = self.ui.theme == theme::ThemePref::System;
+        if self.shown_theme != Some(shown) || self.shown_follows_system != follows_system {
+            theme::apply(ctx, shown, follows_system);
             self.shown_theme = Some(shown);
+            self.shown_follows_system = follows_system;
         }
         self.drain_control(ctx);
         if !self.synthetic.is_empty() {
@@ -580,6 +585,22 @@ mod tests {
         assert_eq!(Tokens::get(), Tokens::of(theme::SYSTEM_FALLBACK), "no OS appearance: the documented fallback");
         assert_eq!(a.ui.theme, ThemePref::System);
         assert_eq!(a.prefs_json(), r#"{"interfaceLanguage":"auto","saveFormat":"dxf","theme":"system"}"#);
+    }
+
+    #[test]
+    fn system_theme_keeps_egui_on_the_system_preference() {
+        let mut a = app();
+        a.start("ui.theme.system");
+        let ctx = egui::Context::default();
+        frame(&mut a, &ctx, Some(egui::Theme::Light));
+        // A concrete Light would pin the native window appearance and hide later OS changes.
+        assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
+        a.start("ui.theme.dark");
+        frame(&mut a, &ctx, Some(egui::Theme::Light));
+        assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::Dark);
+        a.start("ui.theme.system");
+        frame(&mut a, &ctx, Some(egui::Theme::Light));
+        assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
     }
 
     #[test]

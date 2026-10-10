@@ -284,12 +284,15 @@ fn visuals(theme: Theme) -> Visuals {
 }
 
 /// Install the styles of both themes and show `theme` (egui's own widgets, popups and menus
-/// follow it; our own painting follows [`Tokens::get`]).
-pub fn apply(ctx: &egui::Context, theme: Theme) {
+/// follow it; our own painting follows [`Tokens::get`]). `follow_system` is true for the
+/// [`ThemePref::System`] choice, whose `theme` was resolved from the OS report.
+pub fn apply(ctx: &egui::Context, theme: Theme, follow_system: bool) {
     set_active(theme);
     ctx.set_visuals_of(Theme::Dark, visuals(Theme::Dark));
     ctx.set_visuals_of(Theme::Light, visuals(Theme::Light));
-    ctx.set_theme(theme);
+    // A System choice keeps egui's own System preference: a concrete Light/Dark would pin the native
+    // window appearance (winit then stops reporting OS changes) and the app would never follow again.
+    ctx.set_theme(if follow_system { egui::ThemePreference::System } else { egui::ThemePreference::from(theme) });
     ctx.all_styles_mut(|s| {
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(6.0, 3.0);
