@@ -224,11 +224,14 @@ fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
     d.text_styles = src.text_styles.clone();
     d.dim_styles = src.dim_styles.clone();
     d.blocks = src.blocks.clone();
-    let base = point_param(p, "base").unwrap_or(Vec2::ZERO);
-    let m = Mat3::translate(-base);
+    // The base point becomes the written drawing's origin, its insertion base: by default 0,0 for
+    // objects and the block's base point for a block (`base` is then in block coordinates).
+    let base = point_param(p, "base");
+    d.header.set("INSBASE", cadcraft_doc::HVal::Point(Vec3::ZERO));
+    let m = Mat3::translate(-base.unwrap_or(Vec2::ZERO));
     let ents: Vec<Entity> = if let Some(name) = str_param(p, "name") {
         let b = src.block(name).ok_or_else(|| bad("wblock", format!("no block `{name}`")))?;
-        let m = Mat3::translate(-b.base.xy());
+        let m = Mat3::translate(-base.unwrap_or(b.base.xy()));
         b.entities
             .iter()
             .map(|e| {
