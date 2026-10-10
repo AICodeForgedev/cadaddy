@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert", "Block...", run_insert)
             .menu(&["Insert", "Block..."])
             .alias(&["i", "-insert", "ddinsert"])
-            .params("{name, at: [x,y], scale?: number | [x, y], rotation? (degrees), basePoint?: [x,y] (block coordinates), attribs?: {TAG: value}, explode?: bool}")
+            .params("{name (\"*NAME\": exploded), file?: DXF/DWG path (defines or redefines block `name`, default the file name, from its model space; base point $INSBASE), at: [x,y], scale?: number | [x, y], rotation? (degrees), basePoint?: [x,y] (block coordinates), attribs?: {TAG: value}, explode?: bool}")
             .interactive(|_| Ok(Box::new(InsertM::default()))),
         CommandSpec::new("attdef", "Define Attributes...", run_attdef)
             .menu(&["Draw", "Block", "Define Attributes..."])
@@ -186,6 +186,7 @@ fn run_block(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_insert(s: &mut Session, p: &Value) -> Result<Value> {
+    let p = &insert_file::json_params(s, p)?;
     let name = str_param(p, "name").ok_or_else(|| bad("insert", "`name` is required"))?.to_string();
     let at = point_req("insert", p, "at")?;
     // `scale`: one factor, or [x, y] for different X and Y scale factors.
@@ -414,11 +415,15 @@ impl BlockM {
     }
 }
 
+mod insert_file;
+
 /// Where the command-line INSERT is in its prompt sequence.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum InsStage {
     #[default]
     Name,
+    /// A file whose block already exists: redefine it from the file?
+    Redefine,
     Point,
     /// Basepoint: a new base point, picked on the block shown at its definition position.
     BasePoint,
@@ -444,13 +449,17 @@ struct InsertM {
     rotation: Option<f64>,
     attdefs: Vec<(String, String, String)>,
     values: serde_json::Map<String, Value>,
+    /// `*name`: insert the block's objects (one uniform scale factor, no attribute values).
+    explode: bool,
+    /// The file waiting for the Redefine answer.
+    file: Option<insert_file::FileRef>,
 }
 
 impl InsertM {
     /// After the insertion point or a scale/rotation answer: the next prompt still needed.
     fn advance(&mut self, s: &mut Session) -> Result<Step> {
         self.stage = if self.scale.is_none() {
-            InsStage::XScale
+            if self.explode { InsStage::PresetScale } else { InsStage::XScale }
         } else if self.rotation.is_none() {
             InsStage::Rotation
         } else {
@@ -460,10 +469,50 @@ impl InsertM {
             && self.values.len() >= self.attdefs.len()
             && let (Some(n), Some(a), Some(sc), Some(r)) = (self.name.clone(), self.at, self.scale, self.rotation)
         {
-            insert_with(s, &n, a, sc, r, self.base, &self.values)?;
+            let h = insert_with(s, &n, a, sc, r, self.base, &self.values)?;
+            if self.explode {
+                insert_file::explode_insert(s, h)?;
+            }
             return Ok(Step::Done);
         }
         Ok(Step::Continue)
+    }
+
+    /// Block `name` chosen: collect its attribute prompts and ask for the insertion point.
+    fn choose(&mut self, s: &mut Session, name: &str) -> Result<()> {
+        let Some(b) = s.doc()?.block(name).cloned() else {
+            s.echo(format!("Block \"{name}\" not found."));
+            return Ok(());
+        };
+        self.attdefs = if self.explode {
+            Vec::new()
+        } else {
+            b.entities
+                .iter()
+                .filter_map(|e| {
+                    if let EntityKind::AttDef(a) = &e.kind {
+                        (!a.constant).then(|| (a.tag.clone(), a.prompt.clone(), a.text.value.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        s.doc_mut()?.header.set_str("INSNAME", &b.name);
+        self.name = Some(b.name.clone());
+        self.stage = InsStage::Point;
+        Ok(())
+    }
+
+    /// Define the block from a file, then choose it; a file that can't be read is reported.
+    fn choose_file(&mut self, s: &mut Session, f: &insert_file::FileRef) -> Result<()> {
+        match f.define(s) {
+            Ok(name) => self.choose(s, &name),
+            Err(e) => {
+                s.echo(e.to_string());
+                Ok(())
+            }
+        }
     }
 
     /// Scale factors from an opposite corner: the X and Y distances from the insertion point.
@@ -491,6 +540,10 @@ impl Interactive for InsertM {
                 let last = s.doc().map(|d| d.header.str("INSNAME", "")).unwrap_or_default();
                 let p = Prompt::new("Enter block name", Accept::TEXT).kw(&["?"]);
                 if last.is_empty() { p } else { p.default(last) }
+            }
+            InsStage::Redefine => {
+                let name = self.file.as_ref().map(|f| f.name.clone()).unwrap_or_default();
+                Prompt::new(format!("Block \"{name}\" already exists. Redefine it?"), super::curves::KW).kw(&["Yes", "No"]).default("N")
             }
             InsStage::Point => Prompt::new("Specify insertion point", Accept::POINT).kw(&["Basepoint", "Scale", "Rotate"]),
             InsStage::BasePoint => Prompt::new("Specify base point", Accept::POINT),
@@ -521,24 +574,27 @@ impl Interactive for InsertM {
                     s.echo(format!("Defined blocks: {}", names.join(", ")));
                     return Ok(Step::Continue);
                 }
-                let Some(b) = s.doc()?.block(&n).cloned() else {
-                    s.echo(format!("Block \"{n}\" not found."));
-                    return Ok(Step::Continue);
-                };
-                self.attdefs = b
-                    .entities
-                    .iter()
-                    .filter_map(|e| {
-                        if let EntityKind::AttDef(a) = &e.kind {
-                            (!a.constant).then(|| (a.tag.clone(), a.prompt.clone(), a.text.value.clone()))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                s.doc_mut()?.header.set_str("INSNAME", &b.name);
-                self.name = Some(b.name.clone());
-                self.stage = InsStage::Point;
+                // `*name`: insert exploded.
+                self.explode = n.starts_with('*');
+                let n = n.strip_prefix('*').map_or(n.as_str(), str::trim).to_string();
+                match insert_file::file_ref(s, &n) {
+                    Some(f) if f.ask_redefine(s) => {
+                        self.file = Some(f);
+                        self.stage = InsStage::Redefine;
+                    }
+                    Some(f) => self.choose_file(s, &f)?,
+                    None => self.choose(s, &n)?,
+                }
+            }
+            InsStage::Redefine => {
+                // Yes defines the block from the file; No (the default) inserts the existing block.
+                let Some(f) = self.file.take() else { return Ok(Step::Continue) };
+                let yes = matches!(&i, Input::Keyword(k) | Input::Text(k) if k.trim().to_ascii_lowercase().starts_with('y'));
+                if yes {
+                    self.choose_file(s, &f)?;
+                } else {
+                    self.choose(s, &f.name)?;
+                }
             }
             InsStage::Point => match i {
                 Input::Point(p) => {
@@ -563,6 +619,10 @@ impl Interactive for InsertM {
                     _ => return Ok(Step::Continue),
                 };
                 self.scale = Some(Vec2::new(f, f));
+                // Exploded insertion asks its one scale factor after the insertion point.
+                if self.at.is_some() {
+                    return self.advance(s);
+                }
                 self.stage = InsStage::Point;
             }
             InsStage::PresetRotation => {
