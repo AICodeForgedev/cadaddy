@@ -24,8 +24,8 @@ fn contents(s: &Session, name: &str) -> Vec<String> {
 #[test]
 fn a_block_cannot_be_redefined_to_reference_itself() {
     let mut s = Session::new();
-    // Command line: the second -BLOCK selects the converted reference of B plus a new line.
-    s.script("LINE 0,0 10,0\n\n-BLOCK B 0,0 L\n\nLINE 0,0 0,10\n\n-BLOCK B 0,0 ALL\n\n").unwrap();
+    // Command line: -BLOCK redefines B (Yes) from the reference BLOCK converted plus a new line.
+    s.script("LINE 0,0 10,0\n\nBLOCK B 0,0 L\n\nLINE 0,0 0,10\n\n-BLOCK B Y 0,0 ALL\n\n").unwrap();
     assert!(s.running.is_none());
     assert!(s.log.iter().any(|l| l.contains("references itself")), "{:?}", s.log);
     assert_eq!(contents(&s, "B"), ["line"], "B keeps its original definition");

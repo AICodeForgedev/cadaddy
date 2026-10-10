@@ -510,7 +510,9 @@ impl Session {
             None => (false, name),
         };
         let lower = name.trim_start_matches(['_', '.', '-']).to_ascii_lowercase();
-        let id = cmd::resolve_alias(&lower);
+        // A command-line form with an id of its own (-ATTEDIT) is not the command it prefixes.
+        let dashed = cmd::resolve_alias(&name.trim_start_matches(['_', '.']).to_ascii_lowercase());
+        let id = if find_command(&dashed).is_some() { dashed } else { cmd::resolve_alias(&lower) };
         let spec = find_command(&id).ok_or_else(|| EngineError::UnknownCommand(name.to_string()))?;
         if transparent && spec.transparent && self.running.is_some() {
             // Transparent commands (zoom, pan…) run without cancelling the active one.

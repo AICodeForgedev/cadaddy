@@ -15,9 +15,14 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("block", "Make...", run_block)
             .menu(&["Draw", "Block", "Make..."])
-            .alias(&["b", "-block", "bmake"])
-            .params("{name, base: [x,y], handles?, keep?: \"convert\"|\"retain\"|\"delete\", description?}")
+            .alias(&["b", "bmake"])
+            .params("{name, base: [x,y], handles?, keep?: \"convert\"|\"retain\"|\"delete\" (default \"convert\"), description?}")
             .interactive(|_| Ok(Box::new(BlockM::default()))),
+        // -BLOCK erases the selected objects once the block is defined.
+        CommandSpec::new("-block", "Create Block", run_dash_block)
+            .alias(&["-b"])
+            .params("{name, base: [x,y], handles?, keep?: \"delete\"|\"retain\"|\"convert\" (default \"delete\"), description?}")
+            .interactive(|_| Ok(Box::new(BlockM { dash: true, ..BlockM::default() }))),
         CommandSpec::new("insert", "Block...", run_insert)
             .menu(&["Insert", "Block..."])
             .alias(&["i", "-insert", "ddinsert"])
@@ -348,8 +353,23 @@ fn run_battman(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------------- interactive ----------------
 
+/// -BLOCK's JSON form: BLOCK with the selection erased unless `keep` says otherwise.
+fn run_dash_block(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut p = p.clone();
+    if let Some(o) = p.as_object_mut() {
+        o.entry("keep").or_insert_with(|| json!("delete"));
+    }
+    run_block(s, &p)
+}
+
+/// BLOCK / -BLOCK at the command line. BLOCK converts the selection to a reference to the new
+/// block (the dialog's default); -BLOCK erases it.
 #[derive(Default)]
 struct BlockM {
+    /// -BLOCK: erase the selection.
+    dash: bool,
+    /// A name already in use, waiting for the answer to "Redefine it?".
+    existing: Option<String>,
     name: Option<String>,
     base: Option<Vec2>,
     sel: SelectPhase,
@@ -361,13 +381,22 @@ impl Interactive for BlockM {
     }
     fn prompt(&self, _s: &Session) -> Prompt {
         match (&self.name, self.base) {
-            (None, _) => Prompt::new("Enter block name", Accept::TEXT).kw(&["?"]),
+            (None, _) => match &self.existing {
+                Some(n) => Prompt::new(format!("Block \"{n}\" already exists. Redefine it?"), super::curves::KW).kw(&["Yes", "No"]).default("N"),
+                None => Prompt::new("Enter block name", Accept::TEXT).kw(&["?"]),
+            },
             (Some(_), None) => Prompt::new("Specify insertion base point", Accept::POINT).kw(&["Annotative"]),
             _ => self.sel.prompt(),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         match (&self.name, self.base) {
+            (None, _) if self.existing.is_some() => {
+                // Yes redefines the block; No (the default) asks for another name.
+                let yes = matches!(&i, Input::Keyword(k) | Input::Text(k) if k.trim().to_ascii_lowercase().starts_with('y'));
+                self.name = self.existing.take().filter(|_| yes);
+                Ok(Step::Continue)
+            }
             (None, _) => {
                 if let Input::Text(t) = i {
                     let n = t.trim().to_string();
@@ -376,6 +405,8 @@ impl Interactive for BlockM {
                         s.echo(format!("Defined blocks: {}", if names.is_empty() { "(none)".into() } else { names.join(", ") }));
                     } else if !valid_block_name(&n) {
                         s.echo("Invalid block name.");
+                    } else if s.doc()?.block(&n).is_some() {
+                        self.existing = Some(n);
                     } else {
                         self.name = Some(n);
                     }
@@ -406,7 +437,8 @@ impl BlockM {
     fn finish(&mut self, s: &mut Session, hs: &[Handle]) -> Result<Step> {
         let (Some(name), Some(base)) = (self.name.clone(), self.base) else { return Ok(Step::Cancel) };
         // A definition that can't be made (e.g. one that would reference itself) ends the command.
-        if let Err(e) = make_block(s, &name, base, hs, "convert", "") {
+        let keep = if self.dash { "delete" } else { "convert" };
+        if let Err(e) = make_block(s, &name, base, hs, keep, "") {
             s.echo(e.to_string());
             return Ok(Step::Done);
         }
