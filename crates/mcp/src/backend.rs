@@ -98,7 +98,13 @@ impl Backend for Remote {
         if v.get("ok").and_then(Value::as_bool) == Some(true) {
             Ok(v.get("result").cloned().unwrap_or(Value::Null))
         } else {
-            Err(v.get("error").and_then(Value::as_str).unwrap_or("error").to_string())
+            let e = v.get("error").and_then(Value::as_str).unwrap_or("error");
+            // A timeout says whether the request can still have run (#345).
+            Err(match v.get("state").and_then(Value::as_str) {
+                Some("not-run") => format!("{e}: CADCraft did not start `{method}` and won't; it is safe to send again"),
+                Some("may-have-run") => format!("{e}: `{method}` may or may not have been applied. Inspect the drawing first"),
+                _ => e.to_string(),
+            })
         }
     }
     fn has_ui(&self) -> bool {
@@ -235,5 +241,25 @@ mod tests {
         let err = remote.call("engine.execute", json!({"command": "circle", "params": {}})).unwrap_err();
         assert!(err.contains("may or may not have been applied"), "{err}");
         assert_eq!(server.join().unwrap(), 1);
+    }
+
+    /// The app's timeout reply says whether the request can still run; the error passes that on (#345).
+    #[test]
+    fn timeout_reply_says_whether_a_retry_is_safe() {
+        for (state, want) in [("not-run", "safe to send again"), ("may-have-run", "Inspect the drawing first")] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap().to_string();
+            let server = std::thread::spawn(move || {
+                let (conn, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                BufReader::new(conn.try_clone().unwrap()).read_line(&mut line).unwrap();
+                let mut out = conn;
+                writeln!(out, "{}", json!({"id": 1, "ok": false, "error": "timeout", "state": state})).unwrap();
+            });
+            let mut remote = Remote::connect(&addr).unwrap();
+            let err = remote.call("engine.execute", json!({"command": "circle", "params": {}})).unwrap_err();
+            assert!(err.starts_with("timeout") && err.contains(want), "{err}");
+            server.join().unwrap();
+        }
     }
 }

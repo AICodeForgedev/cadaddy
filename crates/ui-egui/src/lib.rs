@@ -34,7 +34,7 @@ use cadcraft_engine::Session;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub use control::{ControlRequest, ControlResponse};
+pub use control::{ControlRequest, ControlResponse, PendingReply};
 
 /// The host storage key for [`CadApp::prefs_json`].
 pub const PREFS_KEY: &str = "cadcraft.prefs";
@@ -436,6 +436,10 @@ impl CadApp {
     fn drain_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control_rx.take() else { return };
         while let Ok(req) = rx.try_recv() {
+            // Timed out while queued: the client was told it did not run (#345).
+            if !req.begin() {
+                continue;
+            }
             let reply = req.reply.clone();
             match control::handle(self, ctx, &req) {
                 control::Outcome::Done(v) => {

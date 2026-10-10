@@ -18,7 +18,10 @@
 //!   render of the drawing (no window needed; fits the drawing unless `fit` is false; replies `pngBase64`)
 //! - `app.open {path}`, `app.save {path?}`, `app.quit`
 
-use std::sync::mpsc::Sender;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
+use std::time::Duration;
 
 use cadcraft_engine::Input;
 use cadcraft_geom::Vec2;
@@ -32,12 +35,52 @@ pub struct ControlRequest {
     pub method: String,
     pub params: Value,
     pub reply: Sender<ControlResponse>,
+    state: Arc<AtomicU8>,
 }
 
+/// [`ControlRequest`] states, shared by the app and the transport waiting for the reply.
+const QUEUED: u8 = 0;
+const STARTED: u8 = 1;
+const CANCELLED: u8 = 2;
+
 impl ControlRequest {
-    pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<ControlResponse>) {
+    pub fn new(method: impl Into<String>, params: Value) -> (Self, PendingReply) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx }, rx)
+        let state = Arc::new(AtomicU8::new(QUEUED));
+        (Self { method: method.into(), params, reply: tx, state: state.clone() }, PendingReply { rx, state })
+    }
+
+    /// Mark the request as started. False when the transport already gave up on it
+    /// ([`PendingReply::wait`] timed out): the app must then skip it, since the client was told it
+    /// did not run and may send it again.
+    pub fn begin(&self) -> bool {
+        self.state.compare_exchange(QUEUED, STARTED, Ordering::AcqRel, Ordering::Acquire).is_ok()
+    }
+}
+
+/// The transport's side of a [`ControlRequest`]: waits for the reply.
+pub struct PendingReply {
+    rx: Receiver<ControlResponse>,
+    state: Arc<AtomicU8>,
+}
+
+impl PendingReply {
+    /// The reply, or after `timeout` an error that says whether the request can still have
+    /// changed anything:
+    /// - `{"ok": false, "error": "timeout", "state": "not-run"}`: the app had not started it, and
+    ///   now never will. Sending it again is safe.
+    /// - `{"ok": false, "error": "timeout", "state": "may-have-run"}`: the app had started it, so
+    ///   it may still finish and change the drawing (its late reply is discarded). Inspect before
+    ///   sending it again.
+    pub fn wait(self, timeout: Duration) -> ControlResponse {
+        if let Ok(r) = self.rx.recv_timeout(timeout) {
+            return r;
+        }
+        if self.state.compare_exchange(QUEUED, CANCELLED, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            return json!({"ok": false, "error": "timeout", "state": "not-run"});
+        }
+        // Started: a reply that arrived just now still counts.
+        self.rx.try_recv().unwrap_or_else(|_| json!({"ok": false, "error": "timeout", "state": "may-have-run"}))
     }
 }
 
@@ -354,6 +397,44 @@ mod tests {
         let kept = render_view(&far, Vec2::ZERO, 100.0, false, 800, 500);
         assert_eq!(kept.center, Vec2::ZERO);
         assert!((kept.scale - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn timed_out_request_that_never_started_is_skipped() {
+        let (req, pending) = ControlRequest::new("engine.execute", json!({}));
+        let r = pending.wait(Duration::from_millis(1));
+        assert_eq!(r, json!({"ok": false, "error": "timeout", "state": "not-run"}));
+        // The app reaches the request after the timeout: it must not run it.
+        assert!(!req.begin());
+    }
+
+    #[test]
+    fn timed_out_request_already_running_may_have_run() {
+        let (req, pending) = ControlRequest::new("engine.execute", json!({}));
+        assert!(req.begin());
+        let r = pending.wait(Duration::from_millis(1));
+        assert_eq!(r, json!({"ok": false, "error": "timeout", "state": "may-have-run"}));
+        // The late result goes nowhere (the receiver is gone); sending it doesn't fail the app.
+        assert!(req.reply.send(json!({"ok": true})).is_err());
+    }
+
+    #[test]
+    fn reply_in_time_is_returned() {
+        let (req, pending) = ControlRequest::new("engine.execute", json!({}));
+        let app = std::thread::spawn(move || {
+            assert!(req.begin());
+            let _ = req.reply.send(json!({"ok": true, "result": 1}));
+        });
+        assert_eq!(pending.wait(Duration::from_secs(30)), json!({"ok": true, "result": 1}));
+        let _ = app.join();
+    }
+
+    #[test]
+    fn reply_sent_right_at_the_timeout_still_counts() {
+        let (req, pending) = ControlRequest::new("engine.execute", json!({}));
+        assert!(req.begin());
+        let _ = req.reply.send(json!({"ok": true}));
+        assert_eq!(pending.wait(Duration::ZERO), json!({"ok": true}));
     }
 
     #[test]

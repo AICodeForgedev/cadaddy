@@ -10,6 +10,15 @@ Start the desktop app with `--control PORT` (or `CADCRAFT_CONTROL_PORT=PORT`). I
 
 Errors come back as `{"id": …, "ok": false, "error": "message"}`.
 
+The server waits up to 60 s for the app to answer a request. After that it replies with a timeout, and
+`state` tells whether sending the request again is safe:
+
+- `{"id": …, "ok": false, "error": "timeout", "state": "not-run"}`: the app had not started the request.
+  It is cancelled and will never run, so sending it again is safe.
+- `{"id": …, "ok": false, "error": "timeout", "state": "may-have-run"}`: the app had already started it.
+  It may still finish and change the drawing, and its late result is discarded. Inspect the drawing
+  (`drawing.inspect`) before sending it again.
+
 | Method | Params | What it does |
 |---|---|---|
 | `cmdline.input` | `{text}` | Type a line at the command line exactly like a user. Starts commands by name/alias and answers prompts (points `x,y`, `@dx,dy`, `@d<a`, distances, keywords, empty = Enter). Spaces act as Enter except at text prompts. |
