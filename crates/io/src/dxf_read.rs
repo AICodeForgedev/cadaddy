@@ -611,12 +611,17 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
         }
         loops.push(HatchLoop { vertices: verts, outer });
     }
+    let solid = solid || pattern.eq_ignore_ascii_case("SOLID");
+    let (scale, angle) = (t.fd(41, 1.0), t.fd(52, 0.0).to_radians());
+    // Definition lines matter only for a pattern the library doesn't define.
+    let pattern_lines =
+        if solid || cadcraft_doc::library::pattern(&pattern).is_some() { Vec::new() } else { pattern_definition(tags, scale, angle, origin) };
     Some(EntityKind::Hatch(Hatch {
         pattern: pattern.to_ascii_uppercase(),
-        solid: solid || pattern.eq_ignore_ascii_case("SOLID"),
+        solid,
         loops,
-        scale: t.fd(41, 1.0),
-        angle: t.fd(52, 0.0).to_radians(),
+        scale,
+        angle,
         associative: t.i(71).unwrap_or(0) != 0,
         style: t.i(75).unwrap_or(0) as u8,
         // The first 30 is the elevation point's z (boundary points are 2D).
@@ -624,7 +629,61 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
         gradient: gradient(tags),
         origin,
         background,
+        pattern_lines,
     }))
+}
+
+/// Upper bounds on a HATCH's pattern definition lines and on the dashes of one line.
+const MAX_PATTERN_LINES: usize = 1024;
+const MAX_PATTERN_DASHES: usize = 256;
+
+/// The pattern definition lines of a HATCH (groups 78, then per line 53 angle, 43/44 base
+/// point, 45/46 offset, 79 dash count, 49 dash lengths). A file holds them as drawn: scaled,
+/// rotated with the hatch and the offset as a world vector. They are kept the library's way
+/// (unit scale, no hatch rotation, base point relative to the hatch origin, offset as shift
+/// along the line and spacing), which the writer and the renderer turn back. Lines with
+/// non-finite values are skipped.
+fn pattern_definition(tags: &[Tag], scale: f64, angle: f64, origin: Vec2) -> Vec<cadcraft_doc::library::PatternLine> {
+    let Some(at) = tags.iter().position(|x| x.code == 78) else { return Vec::new() };
+    let scale = if scale.is_finite() && scale > 1e-9 { scale } else { 1.0 };
+    let angle = if angle.is_finite() { angle } else { 0.0 };
+    // Raw lines: angle (degrees), base, offset, dashes.
+    let mut raw: Vec<(f64, Vec2, Vec2, Vec<f64>)> = Vec::new();
+    for x in tags.iter().skip(at + 1) {
+        let cur = raw.last_mut();
+        match (x.code, cur) {
+            (53, _) => {
+                if raw.len() >= MAX_PATTERN_LINES {
+                    break;
+                }
+                raw.push((x.f64(), Vec2::ZERO, Vec2::ZERO, Vec::new()));
+            }
+            (43, Some(l)) => l.1.x = x.f64(),
+            (44, Some(l)) => l.1.y = x.f64(),
+            (45, Some(l)) => l.2.x = x.f64(),
+            (46, Some(l)) => l.2.y = x.f64(),
+            (79, Some(_)) => {}
+            (49, Some(l)) => {
+                if l.3.len() < MAX_PATTERN_DASHES {
+                    l.3.push(x.f64());
+                }
+            }
+            _ => break,
+        }
+    }
+    raw.into_iter()
+        .filter(|(a, b, o, d)| a.is_finite() && b.is_finite() && o.is_finite() && d.iter().all(|v| v.is_finite()))
+        .map(|(a, base, offset, dashes)| {
+            let local = (base - origin).rotate(-angle) * (1.0 / scale);
+            let delta = offset.rotate(-a.to_radians()) * (1.0 / scale);
+            cadcraft_doc::library::PatternLine {
+                angle: a - angle.to_degrees(),
+                origin: (local.x, local.y),
+                delta: (delta.x, delta.y),
+                dashes: dashes.into_iter().map(|d| d / scale).collect(),
+            }
+        })
+        .collect()
 }
 
 /// Hatch origin and background colour from `CADCRAFT` xdata: `1000 HATCH`, `1011` origin,

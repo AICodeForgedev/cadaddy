@@ -113,6 +113,7 @@ fn sample() -> Drawing {
             gradient: None,
             origin: Vec2::ZERO,
             background: None,
+            pattern_lines: Vec::new(),
         }),
     )
     .unwrap();
@@ -1477,6 +1478,7 @@ fn gradient_sample() -> (Drawing, Vec<Option<Gradient>>) {
             gradient: g.clone(),
             origin: Vec2::ZERO,
             background: None,
+            pattern_lines: Vec::new(),
         };
         d.add(&Space::Model, Common::default(), EntityKind::Hatch(h)).unwrap();
     }

@@ -529,30 +529,7 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 dimension(b, ctx, e, dm, lw);
             }
         }
-        EntityKind::Hatch(h) => {
-            if h.solid || h.pattern.eq_ignore_ascii_case("SOLID") || h.gradient.is_some() {
-                if b.opts.fill {
-                    let loops: Vec<Vec<Vec2>> =
-                        h.loops.iter().map(|l| Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(tol)).collect();
-                    let tris = fill::triangulate_evenodd(&loops);
-                    let c = match &h.gradient {
-                        Some(g) => ink(g.color1, Color::Index(7), ctx.block_color),
-                        None => rgb,
-                    };
-                    b.tris(ctx, c, &tris);
-                }
-            } else {
-                for seg in hatch::pattern_lines(h, tol) {
-                    if seg.len() == 1 {
-                        if let Some(p) = seg.first() {
-                            b.point(ctx, rgb, *p);
-                        }
-                    } else {
-                        b.polyline(ctx, rgb, lw, &seg);
-                    }
-                }
-            }
-        }
+        EntityKind::Hatch(h) => hatch::draw(b, ctx, e, h, rgb, lw, tol),
         EntityKind::LwPolyline(p) if p.const_width > 0.0 || p.vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0) => {
             if b.opts.fill && ctx.d.header.i64("FILLMODE", 1) != 0 {
                 match &lt {

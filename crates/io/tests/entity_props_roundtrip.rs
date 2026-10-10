@@ -83,6 +83,7 @@ fn hatch(pattern: &str, gradient: Option<Gradient>) -> Hatch {
         gradient,
         origin: Vec2::new(1.0, 2.0),
         background: Some(Color::Index(2)),
+        pattern_lines: Vec::new(),
     }
 }
 

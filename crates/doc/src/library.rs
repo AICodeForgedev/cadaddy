@@ -75,7 +75,7 @@ fn scaled(mut lt: Linetype, k: f64) -> Linetype {
 }
 
 /// A hatch pattern line family: angle (degrees), origin, offset (shift along, spacing), dashes.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PatternLine {
     pub angle: f64,
     pub origin: (f64, f64),

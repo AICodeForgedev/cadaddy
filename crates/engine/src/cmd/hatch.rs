@@ -200,6 +200,7 @@ impl HatchSettings {
             gradient: self.gradient.clone(),
             origin: Vec2::ZERO,
             background: None,
+            pattern_lines: Vec::new(),
         })
     }
 }

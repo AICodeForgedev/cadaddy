@@ -452,6 +452,10 @@ pub struct Hatch {
     pub origin: Vec2,
     #[serde(default)]
     pub background: Option<Color>,
+    /// The pattern's line families as a file defined them, for a pattern that isn't in the
+    /// standard library (unit scale and angle, like the library's; empty otherwise).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pattern_lines: Vec<crate::library::PatternLine>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
