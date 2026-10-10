@@ -935,8 +935,9 @@ fn hatch_xdata(w: &mut W, h: &Hatch) {
 
 /// Anonymous dimension blocks (`*D1`…) with the rendered geometry, as consumers expect.
 fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
-    let style = d.dim_style(&dm.style).cloned().unwrap_or_default();
-    let g = cadcraft_render::dimension_geometry(dm, &style, d.header.f64("DIMSCALE", 1.0));
+    // The dimension as drawn: its overrides, DIMSCALE (0 = the drawing's) and text font.
+    let style = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
+    let g = cadcraft_render::dimension_in(d, dm);
     let mut out = Vec::new();
     let c = Common { layer: layer.into(), color: Color::ByBlock, ..Common::default() };
     for l in &g.lines {
@@ -961,7 +962,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
             common: c,
             kind: EntityKind::MText(MText {
                 insert: g.text_pos.to3(0.0),
-                height: style.text_height * style.scale.max(1e-9),
+                height: g.text_height,
                 width: 0.0,
                 attach: 5,
                 rotation: g.text_angle,

@@ -1182,8 +1182,9 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                 .collect(),
         ),
         EntityKind::Dimension(dm) => {
-            let style = d.dim_style(&dm.style).cloned().unwrap_or_default();
-            let g = cadcraft_render::dimension_geometry(dm, &style, d.header.f64("DIMSCALE", 1.0));
+            // The dimension as drawn: its overrides, DIMSCALE (0 = the drawing's) and text font.
+            let style = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
+            let g = cadcraft_render::dimension_in(d, dm);
             let mut v: Vec<Entity> = g
                 .lines
                 .iter()
@@ -1208,21 +1209,22 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                     });
                 }
             }
-            let th = style.text_height * style.scale.max(1e-9);
-            v.push(Entity {
-                handle: Handle(0),
-                common: e.common.clone(),
-                kind: EntityKind::MText(cadcraft_doc::MText {
-                    insert: v3(g.text_pos),
-                    height: th,
-                    width: 0.0,
-                    attach: 5,
-                    rotation: 0.0,
-                    style: style.text_style.clone(),
-                    contents: g.value.clone(),
-                    line_spacing: 1.0,
-                }),
-            });
+            if !g.value.is_empty() {
+                v.push(Entity {
+                    handle: Handle(0),
+                    common: e.common.clone(),
+                    kind: EntityKind::MText(cadcraft_doc::MText {
+                        insert: v3(g.text_pos),
+                        height: g.text_height,
+                        width: 0.0,
+                        attach: 5,
+                        rotation: g.text_angle,
+                        style: style.text_style.clone(),
+                        contents: g.value.clone(),
+                        line_spacing: 1.0,
+                    }),
+                });
+            }
             Some(v)
         }
         _ => None,
