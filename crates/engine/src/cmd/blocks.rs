@@ -11,6 +11,8 @@ use super::machines::{SelOutcome, SelectPhase, number};
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
+mod attedit;
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("block", "Make...", run_block)
@@ -33,10 +35,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["att", "-attdef"])
             .params("{tag, prompt?, default?, at, height?, invisible?}")
             .interactive(|_| Ok(Box::new(AttdefM::default()))),
-        CommandSpec::new("attedit", "Single...", run_attedit)
-            .menu(&["Modify", "Object", "Attribute", "Single..."])
-            .alias(&["ate", "eattedit"])
-            .params("{handle, values: {TAG: value}}"),
+        attedit::attedit_spec(),
+        attedit::dash_attedit_spec(),
         CommandSpec::new("wblock", "Write Block", run_wblock).alias(&["w"]).params("{path, name? | handles?, base?}"),
         CommandSpec::new("base", "Base", run_base).menu(&["Draw", "Block", "Base"]).params("{at: [x,y]}"),
         CommandSpec::new("purge", "Purge", run_purge).alias(&["pu", "-purge"]).params("{} (unused blocks, layers, linetypes, styles)"),
@@ -164,7 +164,7 @@ pub(crate) fn insert_with(
             if let EntityKind::Text(tt) = k {
                 t = tt;
             }
-            t.value = values.get(&ad.tag).and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| ad.text.value.clone());
+            t.value = attedit::value_for(values, &ad.tag).unwrap_or_else(|| ad.text.value.clone());
             ins.attribs.push(Attrib { tag: ad.tag.clone(), text: t, invisible: ad.invisible, constant: false, prompt: String::new() });
         }
     }
@@ -200,7 +200,7 @@ fn run_insert(s: &mut Session, p: &Value) -> Result<Value> {
     if bool_or(p, "explode", false) {
         return s.execute("explode", &json!({ "handles": [h.hex()] }));
     }
-    Ok(json!({ "handle": h.hex() }))
+    Ok(attedit::with_unknown_tags(s, h, &vals, json!({ "handle": h.hex() })))
 }
 
 fn attdef_kind(s: &Session, tag: &str, prompt: &str, default: &str, at: Vec2, height: f64, invisible: bool) -> EntityKind {
@@ -234,23 +234,6 @@ fn run_attdef(s: &mut Session, p: &Value) -> Result<Value> {
     let h = f64_or(p, "height", s.doc()?.header.f64("TEXTSIZE", 0.2));
     let k = attdef_kind(s, tag, str_param(p, "prompt").unwrap_or(tag), str_param(p, "default").unwrap_or(""), at, h, bool_or(p, "invisible", false));
     Ok(json!({ "handle": s.add_entity(k)?.hex() }))
-}
-
-fn run_attedit(s: &mut Session, p: &Value) -> Result<Value> {
-    let h = targets(s, p)?.first().copied().ok_or_else(|| bad("attedit", "`handle` is required"))?;
-    let vals = p.get("values").and_then(Value::as_object).cloned().unwrap_or_default();
-    let mut n = 0;
-    s.doc_mut()?.modify_entity(h, |e| {
-        if let EntityKind::Insert(i) = &mut e.kind {
-            for a in &mut i.attribs {
-                if let Some(v) = vals.get(&a.tag).and_then(Value::as_str) {
-                    a.text.value = v.to_string();
-                    n += 1;
-                }
-            }
-        }
-    })?;
-    Ok(json!({ "changed": n }))
 }
 
 fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
