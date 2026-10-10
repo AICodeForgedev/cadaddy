@@ -351,7 +351,9 @@
 	Last	Останній
 	Last commit	Останній коміт
 	Layer	Шар
+	Layer Delete	Видалити шар з об'єктами
 	Layer Match	Узгодити шар
+	Layer Merge	Об'єднати шари
 	Layer Off	Вимкнути шар
 	Layer Properties	Властивості шару
 	Layer Properties Manager	Диспетчер властивостей шарів

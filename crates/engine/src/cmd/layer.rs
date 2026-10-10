@@ -51,6 +51,14 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layerstate.list", "List Layer States", run_state_list).params("{} → states").noundo(),
         CommandSpec::new("layerstate.delete", "Delete Layer State", run_state_delete).params("{name}"),
         CommandSpec::new("layerstate.rename", "Rename Layer State", run_state_rename).params("{from, to}"),
+        CommandSpec::new("laymrg", "Layer Merge", merge::run_laymrg)
+            .menu(&["Format", "Layer Tools", "Layer Merge"])
+            .params("{from: [names], to} (the from layers' objects move to `to`, then the from layers are deleted)")
+            .interactive(|_| Ok(Box::new(merge::LayerRemove::merge()))),
+        CommandSpec::new("laydel", "Layer Delete", merge::run_laydel)
+            .menu(&["Format", "Layer Tools", "Layer Delete"])
+            .params("{names: [...]} (deletes the layers and every object on them)")
+            .interactive(|_| Ok(Box::new(merge::LayerRemove::delete()))),
     ]
 }
 
@@ -404,6 +412,9 @@ fn run_state_rename(s: &mut Session, p: &Value) -> Result<Value> {
     st.name = to;
     ok()
 }
+
+// LAYMRG and LAYDEL.
+mod merge;
 
 #[cfg(test)]
 mod tests {
