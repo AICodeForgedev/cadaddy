@@ -176,12 +176,27 @@ impl Backend for Headless {
                 Ok(json!({"output": out, "state": state(s)}))
             }
             "cmdline.key" => {
-                if str_p("key").is_some_and(|k| k.eq_ignore_ascii_case("escape") || k.eq_ignore_ascii_case("esc")) {
+                let before = s.log.len();
+                let r = if str_p("key").is_some_and(|k| k.eq_ignore_ascii_case("escape") || k.eq_ignore_ascii_case("esc")) {
                     s.cancel();
+                    Ok(())
                 } else {
-                    s.input(cadcraft_engine::Input::Enter).map_err(|e| e.to_string())?;
+                    s.input(cadcraft_engine::Input::Enter)
+                };
+                // Like the app: a refused Enter is echoed to the history (and `output`), and also
+                // reported in `error`; the call itself succeeds.
+                if let Err(e) = &r {
+                    s.echo(e.to_string());
                 }
-                Ok(state(s))
+                let out: Vec<String> = s.log.iter().skip(before).cloned().collect();
+                let mut st = state(s);
+                if let Some(o) = st.as_object_mut() {
+                    o.insert("output".into(), json!(out));
+                    if let Err(e) = r {
+                        o.insert("error".into(), json!(e.to_string()));
+                    }
+                }
+                Ok(st)
             }
             "cmdline.state" => Ok(state(s)),
             "engine.commands" => {

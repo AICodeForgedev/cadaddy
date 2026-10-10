@@ -23,7 +23,7 @@ The server waits up to 60 s for the app to answer a request. After that it repli
 |---|---|---|
 | `cmdline.input` | `{text}` | Type a line at the command line exactly like a user. Starts commands by name/alias and answers prompts (points `x,y`, `@dx,dy`, `@d<a`, distances, keywords, empty = Enter). Spaces act as Enter except at text prompts. |
 | `cmdline.script` | `{text}` | Run a multi-line script (like `.scr` files). |
-| `cmdline.key` | `{key: "enter"\|"escape"}` | Press Enter or Escape. |
+| `cmdline.key` | `{key: "enter"\|"escape"}` | Press Enter or Escape. Replies like `cmdline.input`: the state, `output`, and `error` when Enter was refused. |
 | `cmdline.state` | | Current prompt, keywords, accepted input kinds, history tail. |
 | `engine.execute` | `{command, params}` | Run any command with JSON parameters. Never opens a dialog. |
 | `engine.commands` | | Every command: id, label, menu path, shortcut, aliases, params doc, enabled. |

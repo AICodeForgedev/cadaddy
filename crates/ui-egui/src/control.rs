@@ -201,13 +201,27 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             }
         }
         "cmdline.key" => {
-            match s("key").unwrap_or("enter").to_ascii_lowercase().as_str() {
-                "escape" | "esc" => app.session.cancel(),
-                _ => {
-                    let _ = app.session.input(Input::Enter);
+            let before = app.session.log.len();
+            let error = match s("key").unwrap_or("enter").to_ascii_lowercase().as_str() {
+                "escape" | "esc" => {
+                    app.session.cancel();
+                    None
+                }
+                // As pressing Enter in the command line: a refused Enter is echoed to the history.
+                _ => app.session.input(Input::Enter).err().map(|e| e.to_string()),
+            };
+            if let Some(e) = &error {
+                app.session.echo(e.clone());
+            }
+            let out: Vec<String> = app.session.log.iter().skip(before).cloned().collect();
+            let mut st = cmdline_state(app);
+            if let Some(o) = st.as_object_mut() {
+                o.insert("output".into(), json!(out));
+                if let Some(e) = error {
+                    o.insert("error".into(), json!(e));
                 }
             }
-            ok(cmdline_state(app))
+            ok(st)
         }
         "cmdline.state" => ok(cmdline_state(app)),
         "engine.commands" => ok(all_commands(app)),
