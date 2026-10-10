@@ -46,6 +46,9 @@ pub enum Kind {
 pub struct DPrim {
     pub handle: Handle,
     pub color: Rgb,
+    /// Colour 7 (directly, by layer or by block): drawn white on a dark background and black on
+    /// a light one, see [`DPrim::display_rgb`]. Other colours keep their RGB.
+    pub aci7: bool,
     /// Lineweight in mm (0 = thinnest).
     pub lw: f32,
     pub kind: Kind,
@@ -64,6 +67,32 @@ pub struct DisplayList {
     pub sheet: Option<Sheet>,
     /// Block contents expanded while building (see [`MAX_BLOCK_EXPANSION`]).
     pub expanded: usize,
+}
+
+impl DPrim {
+    /// The colour to draw with on `background`.
+    pub fn display_rgb(&self, background: Rgb) -> Rgb {
+        cadcraft_color::display_rgb(self.color, self.aci7, background)
+    }
+}
+
+/// A resolved colour: its RGB and whether it is colour 7.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Ink {
+    rgb: Rgb,
+    aci7: bool,
+}
+
+/// Resolve `c` like [`Color::resolve`], noting whether it comes out as colour 7.
+fn ink(c: Color, layer: Color, block: Color) -> Ink {
+    // ByLayer / ByBlock left unresolved (layer or block colour itself logical) mean colour 7.
+    let is7 = |c: Color| matches!(c, Color::ByLayer | Color::ByBlock | Color::Index(7));
+    let aci7 = match c {
+        Color::ByLayer => is7(layer),
+        Color::ByBlock => is7(block),
+        c => c == Color::Index(7),
+    };
+    Ink { rgb: c.resolve(layer, block), aci7 }
 }
 
 impl DisplayList {
@@ -146,7 +175,7 @@ struct Builder<'a> {
 pub const MAX_BLOCK_EXPANSION: usize = 2_000_000;
 
 impl Builder<'_> {
-    fn polyline(&mut self, ctx: &Ctx, color: Rgb, lw: f32, pts: &[Vec2]) {
+    fn polyline(&mut self, ctx: &Ctx, color: Ink, lw: f32, pts: &[Vec2]) {
         if pts.len() < 2 {
             return;
         }
@@ -156,9 +185,9 @@ impl Builder<'_> {
             self.list.bounds.add(q);
             self.list.verts.push(q);
         }
-        self.list.prims.push(DPrim { handle: ctx.top, color, lw, kind: Kind::Polyline, start, len: pts.len() as u32 });
+        self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw, kind: Kind::Polyline, start, len: pts.len() as u32 });
     }
-    fn tris(&mut self, ctx: &Ctx, color: Rgb, tris: &[Vec2]) {
+    fn tris(&mut self, ctx: &Ctx, color: Ink, tris: &[Vec2]) {
         if tris.len() < 3 {
             return;
         }
@@ -168,10 +197,10 @@ impl Builder<'_> {
             self.list.bounds.add(q);
             self.list.tris.push(q);
         }
-        self.list.prims.push(DPrim { handle: ctx.top, color, lw: 0.0, kind: Kind::Tris, start, len: tris.len() as u32 });
+        self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw: 0.0, kind: Kind::Tris, start, len: tris.len() as u32 });
     }
     /// Shaped text: strokes as polylines; TrueType glyphs filled (TEXTFILL) or outlined.
-    fn shaped(&mut self, ctx: &Ctx, color: Rgb, lw: f32, sh: &cadcraft_fonts::Shaped) {
+    fn shaped(&mut self, ctx: &Ctx, color: Ink, lw: f32, sh: &cadcraft_fonts::Shaped) {
         for s in &sh.strokes {
             self.polyline(ctx, color, lw, s);
         }
@@ -190,18 +219,18 @@ impl Builder<'_> {
             }
         }
     }
-    fn point(&mut self, ctx: &Ctx, color: Rgb, p: Vec2) {
+    fn point(&mut self, ctx: &Ctx, color: Ink, p: Vec2) {
         let q = ctx.xf.apply(p);
         self.list.bounds.add(q);
         let start = self.list.verts.len() as u32;
         self.list.verts.push(q);
-        self.list.prims.push(DPrim { handle: ctx.top, color, lw: 0.0, kind: Kind::Point, start, len: 1 });
+        self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw: 0.0, kind: Kind::Point, start, len: 1 });
     }
-    fn infinite(&mut self, ctx: &Ctx, color: Rgb, base: Vec2, dir: Vec2, ray: bool) {
+    fn infinite(&mut self, ctx: &Ctx, color: Ink, base: Vec2, dir: Vec2, ray: bool) {
         let start = self.list.verts.len() as u32;
         self.list.verts.push(ctx.xf.apply(base));
         self.list.verts.push(ctx.xf.apply_vec(dir).normalized());
-        self.list.prims.push(DPrim { handle: ctx.top, color, lw: 0.0, kind: Kind::Infinite { ray }, start, len: 2 });
+        self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw: 0.0, kind: Kind::Infinite { ray }, start, len: 2 });
     }
     /// Take one unit of the block-expansion budget; false once it is spent.
     fn expand(&mut self) -> bool {
@@ -372,7 +401,7 @@ fn push_raw(dst: &mut DisplayList, p: &DPrim, kind: Kind, pts: &[Vec2]) {
     } else {
         dst.verts.extend_from_slice(pts);
     }
-    dst.prims.push(DPrim { handle: p.handle, color: p.color, lw: p.lw, kind, start, len: pts.len() as u32 });
+    dst.prims.push(DPrim { handle: p.handle, color: p.color, aci7: p.aci7, lw: p.lw, kind, start, len: pts.len() as u32 });
 }
 
 /// Build the display list for a set of loose entities (previews, rubber bands).
@@ -393,7 +422,7 @@ pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents:
     b.list
 }
 
-fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Rgb, f32, Option<cadcraft_doc::Linetype>, f64, bool) {
+fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Ink, f32, Option<cadcraft_doc::Linetype>, f64, bool) {
     let d = ctx.d;
     // Layer "0" inside a block takes the insert's layer.
     let layer_name = if e.common.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { e.common.layer.as_str() };
@@ -402,7 +431,7 @@ fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Rgb, f32, Option<cadcraft_
         && layer.is_none_or(|l| l.visible() && (!plotting || l.plot))
         && !ctx.frozen.iter().any(|f| f.eq_ignore_ascii_case(layer_name));
     let layer_color = ctx.layer_color(layer_name).unwrap_or(Color::Index(7));
-    let rgb = e.common.color.resolve(layer_color, ctx.block_color);
+    let rgb = ink(e.common.color, layer_color, ctx.block_color);
     let lw = match e.common.lineweight {
         Lineweight::ByLayer => layer.map(|l| l.lineweight).unwrap_or(Lineweight::Default),
         Lineweight::ByBlock => ctx.block_lw,
@@ -495,7 +524,7 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                         h.loops.iter().map(|l| Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(tol)).collect();
                     let tris = fill::triangulate_evenodd(&loops);
                     let c = match &h.gradient {
-                        Some(g) => g.color1.resolve(Color::Index(7), ctx.block_color),
+                        Some(g) => ink(g.color1, Color::Index(7), ctx.block_color),
                         None => rgb,
                     };
                     b.tris(ctx, c, &tris);
@@ -674,17 +703,19 @@ pub fn layout_mtext_entity(d: &Drawing, t: &cadcraft_doc::MText) -> cadcraft_fon
     cadcraft_fonts::layout_mtext_with(&t.contents, &params)
 }
 
-fn mtext_color(c: Option<cadcraft_fonts::MTextColor>, rgb: Rgb) -> Rgb {
+fn mtext_color(c: Option<cadcraft_fonts::MTextColor>, rgb: Ink) -> Ink {
     match c {
         Some(cadcraft_fonts::MTextColor::Aci(i)) => {
-            u8::try_from(i).ok().filter(|i| *i > 0).map(|i| Color::Index(i).resolve(Color::Index(7), Color::Index(7))).unwrap_or(rgb)
+            u8::try_from(i).ok().filter(|i| *i > 0).map(|i| ink(Color::Index(i), Color::Index(7), Color::Index(7))).unwrap_or(rgb)
         }
-        Some(cadcraft_fonts::MTextColor::Rgb(v)) => Rgb(((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8),
+        Some(cadcraft_fonts::MTextColor::Rgb(v)) => {
+            Ink { rgb: Rgb(((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8), aci7: false }
+        }
         None => rgb,
     }
 }
 
-fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::MText, rgb: Rgb, lw: f32) {
+fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::MText, rgb: Ink, lw: f32) {
     let l = layout_mtext_entity(ctx.d, t);
     for p in &l.pieces {
         b.shaped(ctx, mtext_color(p.color, rgb), lw, &p.shaped);
@@ -716,9 +747,9 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimensio
         Color::ByBlock => ctx.block_color,
         c => c,
     };
-    let dim_rgb = style.dim_line_color.resolve(layer_color, own);
-    let ext_rgb = style.ext_line_color.resolve(layer_color, own);
-    let txt_rgb = style.text_color.resolve(layer_color, own);
+    let dim_rgb = ink(style.dim_line_color, layer_color, own);
+    let ext_rgb = ink(style.ext_line_color, layer_color, own);
+    let txt_rgb = ink(style.text_color, layer_color, own);
     for (l, role) in g.lines.iter().zip(g.line_roles.iter().chain(std::iter::repeat(&LineRole::Dim))) {
         b.polyline(ctx, if *role == LineRole::Ext { ext_rgb } else { dim_rgb }, lw, l);
     }
@@ -754,7 +785,7 @@ pub fn table_covered(t: &cadcraft_doc::Table) -> Vec<Vec<bool>> {
     cov
 }
 
-fn table(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::Table, rgb: Rgb, lw: f32) {
+fn table(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::Table, rgb: Ink, lw: f32) {
     let o = t.insert.xy();
     let rows = t.row_heights.len().min(10_000);
     let cols = t.col_widths.len().min(10_000);
@@ -867,7 +898,7 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
     }
 }
 
-fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rgb: Rgb) {
+fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rgb: Ink) {
     if ctx.depth >= cadcraft_doc::MAX_BLOCK_DEPTH {
         return;
     }

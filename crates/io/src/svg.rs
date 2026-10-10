@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use cadcraft_color::{Rgb, display_rgb};
+use cadcraft_color::Rgb;
 use cadcraft_doc::{Drawing, Space};
 use cadcraft_geom::Bounds2;
 use cadcraft_render::Kind;
@@ -35,7 +35,7 @@ pub fn export_window(d: &Drawing, space: &Space, window: Option<Bounds2>) -> Str
     let tx = |x: f64| x - x0;
     let ty = |y: f64| y1 - y;
     for p in &list.prims {
-        let c = display_rgb(p.color, white).hex();
+        let c = p.display_rgb(white).hex();
         let pts = list.points(p);
         match p.kind {
             Kind::Polyline => {

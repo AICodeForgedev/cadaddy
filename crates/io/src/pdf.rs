@@ -7,7 +7,7 @@
 
 use std::fmt::Write as _;
 
-use cadcraft_color::{Rgb, display_rgb};
+use cadcraft_color::Rgb;
 use cadcraft_doc::{Drawing, PageSetup, Space};
 use cadcraft_geom::{Bounds2, Vec2};
 use cadcraft_render::{Kind, Sheet, clip, paper};
@@ -238,7 +238,7 @@ fn content_stream(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Boun
         }
     };
     for p in &list.prims {
-        let rgb = display_rgb(p.color, white);
+        let rgb = p.display_rgb(white);
         let raw = list.points(p);
         if raw.iter().any(|q| !q.is_finite()) {
             continue;

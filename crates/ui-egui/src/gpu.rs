@@ -15,7 +15,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use cadcraft_color::{Rgb, display_rgb};
+use cadcraft_color::Rgb;
 use cadcraft_geom::{Bounds2, Vec2};
 use cadcraft_render::{DisplayList, Kind};
 use egui_wgpu::wgpu;
@@ -147,7 +147,7 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
         quads: Vec::new(),
     };
     for prim in &list.prims {
-        let c = display_rgb(prim.color, bg);
+        let c = prim.display_rgb(bg);
         let col = [c.0, c.1, c.2, 255];
         let pts = list.points(prim);
         match prim.kind {
@@ -515,7 +515,7 @@ mod tests {
             tris: vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)],
             ..Default::default()
         };
-        let p = |kind, start, len, lw| DPrim { handle: Handle(1), color: Rgb(255, 255, 255), lw, kind, start, len };
+        let p = |kind, start, len, lw| DPrim { handle: Handle(1), color: Rgb(255, 255, 255), aci7: true, lw, kind, start, len };
         l.prims =
             vec![p(Kind::Polyline, 0, 3, 0.0), p(Kind::Tris, 0, 3, 0.0), p(Kind::Point, 3, 1, 0.0), p(Kind::Infinite { ray: false }, 0, 2, 0.0)];
         for v in l.verts.clone() {
@@ -534,7 +534,7 @@ mod tests {
         assert_eq!(m.quad_instances(), 1, "the point marker");
         // First vertex is stored relative to the origin, so it's exactly zero.
         assert_eq!(&m.lines[0..8], &[0u8; 8]);
-        // White on a white background inverts to black (display_rgb).
+        // Colour 7 on a white background inverts to black (display_rgb).
         assert_eq!(&m.lines[8..12], &[0, 0, 0, 255]);
         let x = f32::from_le_bytes([m.lines[12], m.lines[13], m.lines[14], m.lines[15]]);
         assert_eq!(x, 1.0);

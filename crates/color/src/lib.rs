@@ -208,16 +208,16 @@ pub fn nearest_aci(c: Rgb) -> u8 {
     best.1
 }
 
-/// Canvas display colour: ACI 7 (and any near-white/near-black) flips to contrast with the
-/// background, as CAD programs do on dark or light model space.
-pub fn display_rgb(c: Rgb, background: Rgb) -> Rgb {
-    let dark_bg = background.luma() < 0.5;
-    if dark_bg && c.luma() < 0.06 {
-        Rgb(255, 255, 255)
-    } else if !dark_bg && c.luma() > 0.94 {
-        Rgb(0, 0, 0)
-    } else {
+/// Display colour of `c` on `background`. Colour 7 (`aci7`) flips to contrast with the
+/// background, white on dark and black on light (paper), as CAD programs draw it; every other
+/// colour, including a true-colour or index white or black, keeps its RGB.
+pub fn display_rgb(c: Rgb, aci7: bool, background: Rgb) -> Rgb {
+    if !aci7 {
         c
+    } else if background.luma() < 0.5 {
+        Rgb(255, 255, 255)
+    } else {
+        Rgb(0, 0, 0)
     }
 }
 
@@ -259,7 +259,10 @@ mod tests {
 
     #[test]
     fn white_flips_on_light_background() {
-        assert_eq!(display_rgb(Rgb(255, 255, 255), Rgb(255, 255, 255)), Rgb(0, 0, 0));
-        assert_eq!(display_rgb(Rgb(255, 255, 255), Rgb(33, 40, 48)), Rgb(255, 255, 255));
+        assert_eq!(display_rgb(Rgb(255, 255, 255), true, Rgb(255, 255, 255)), Rgb(0, 0, 0));
+        assert_eq!(display_rgb(Rgb(255, 255, 255), true, Rgb(33, 40, 48)), Rgb(255, 255, 255));
+        // Only colour 7 flips: ACI 255 / true-colour white and dark index colours keep their RGB.
+        assert_eq!(display_rgb(Rgb(255, 255, 255), false, Rgb(255, 255, 255)), Rgb(255, 255, 255));
+        assert_eq!(display_rgb(aci_rgb(250), false, Rgb(33, 40, 48)), aci_rgb(250));
     }
 }

@@ -1,7 +1,7 @@
 //! The drawing area: grid, entities, selection highlighting, grips, rubber bands, object-snap
 //! markers, crosshair cursor, ViewCube, UCS icon and mouse handling.
 
-use cadcraft_color::{Rgb, display_rgb};
+use cadcraft_color::Rgb;
 use cadcraft_doc::Handle;
 use cadcraft_engine::Input;
 use cadcraft_engine::snap::{self, SnapHit};
@@ -255,7 +255,7 @@ fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay:
     let mut shapes: Vec<Shape> = Vec::with_capacity(list.prims.len());
     let px = 1.0 / xf.scale;
     for prim in &list.prims {
-        let col = color32(display_rgb(prim.color, bg));
+        let col = color32(prim.display_rgb(bg));
         let pts = list.points(prim);
         match prim.kind {
             Kind::Polyline => {
@@ -351,7 +351,7 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
         if let (Kind::Infinite { ray }, Some(b), Some(d)) = (prim.kind, pts.first(), pts.get(1))
             && let Some(seg) = clip_infinite(xf, *b, *d, ray)
         {
-            shapes.push(Shape::line_segment(seg, Stroke::new(1.0, color32(display_rgb(prim.color, bg)))));
+            shapes.push(Shape::line_segment(seg, Stroke::new(1.0, color32(prim.display_rgb(bg)))));
         }
     }
     p.extend(shapes);
@@ -1138,7 +1138,7 @@ mod tests {
     use cadcraft_render::DPrim;
 
     fn list(handles: &[u64]) -> DisplayList {
-        let prim = |h| DPrim { handle: Handle(h), color: Rgb(255, 255, 255), lw: 0.0, kind: Kind::Polyline, start: 0, len: 0 };
+        let prim = |h| DPrim { handle: Handle(h), color: Rgb(255, 255, 255), aci7: true, lw: 0.0, kind: Kind::Polyline, start: 0, len: 0 };
         DisplayList { prims: handles.iter().map(|&h| prim(h)).collect(), ..Default::default() }
     }
 

@@ -1,6 +1,6 @@
 //! CPU rasteriser: draws a display list with tiny-skia (PNG export, plot preview, tests).
 
-use cadcraft_color::{Rgb, display_rgb};
+use cadcraft_color::Rgb;
 use cadcraft_geom::{Bounds2, Vec2};
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
@@ -63,7 +63,7 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
     pm.fill(tiny_skia::Color::from_rgba8(o.background.0, o.background.1, o.background.2, 255));
     let vis = view.world_bounds();
     for p in &list.prims {
-        let c = display_rgb(p.color, o.background);
+        let c = p.display_rgb(o.background);
         let mut paint = Paint::default();
         paint.set_color_rgba8(c.0, c.1, c.2, 255);
         paint.anti_alias = o.antialias;
