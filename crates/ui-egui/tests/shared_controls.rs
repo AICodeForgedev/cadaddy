@@ -115,6 +115,42 @@ fn drafting_palette_pointer_and_keyboard_start_the_same_commands() {
 }
 
 #[test]
+fn right_palettes_collapse_arrow_hides_menu() {
+    let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
+        |ui, app: &mut CadApp| {
+            app.logic(&ui.ctx().clone());
+            cadcraft_ui_egui::palettes::right_palettes(app, ui);
+        },
+        app(),
+    );
+    h.run_steps(5);
+    assert!(h.state().ui.show_palettes);
+
+    // Collapsing palettes on the right hides palettes.
+    h.get_by_label("Collapse Palettes").click();
+    h.run_steps(3);
+    assert!(!h.state().ui.show_palettes);
+}
+
+#[test]
+fn toolsets_collapse_arrow_hides_menu() {
+    let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
+        |ui, app: &mut CadApp| {
+            app.logic(&ui.ctx().clone());
+            cadcraft_ui_egui::palettes::toolsets(app, ui);
+        },
+        app(),
+    );
+    h.run_steps(5);
+    assert!(h.state().ui.show_toolsets);
+
+    // Collapsing toolsets on the left hides toolsets.
+    h.get_by_label("Collapse Tool Sets").click();
+    h.run_steps(3);
+    assert!(!h.state().ui.show_toolsets);
+}
+
+#[test]
 fn shared_controls_visuals() {
     let Some(directory) = std::env::var_os("CRAFT_UI_SUITE_SHOTS").map(std::path::PathBuf::from) else { return };
     std::fs::create_dir_all(&directory).unwrap();
