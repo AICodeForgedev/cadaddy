@@ -1,5 +1,5 @@
-//! Style and settings dialogs opened from the menus: Linetype Manager, Point Style, Table Style,
-//! Multileader Style, Page Setup Manager, Plot and Constraint Settings.
+//! Style and settings dialogs opened from the menus: Linetype Manager, Point Style, Text Style,
+//! Table Style, Multileader Style, Page Setup Manager, Plot and Constraint Settings.
 //!
 //! Typed or chosen from a menu (no parameters) these commands open their dialog; JSON calls run
 //! the command. The dialogs read the drawing and change it only through the same commands
@@ -27,6 +27,7 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
         "battman" => "battman",
         "linetype" | "lt" | "ltype" => "linetype",
         "ddptype" => "ptype",
+        "style" | "st" => "textstyle",
         "tablestyle" | "ts" => "tablestyle",
         "mleaderstyle" | "mls" => "mleaderstyle",
         "pagesetup" => "pagesetup",
@@ -47,6 +48,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, name: &str, open: &mut bool
         "battman" => battman::dialog(app, ctx, open),
         "linetype" => linetype(app, ctx, open),
         "ptype" => point_style(app, ctx, open),
+        "textstyle" => text_style(app, ctx, open),
         "tablestyle" => table_style(app, ctx, open),
         "mleaderstyle" => mleader_style(app, ctx, open),
         "pagesetup" => page_setup(app, ctx, open),
@@ -289,7 +291,7 @@ fn point_style(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action
     action
 }
 
-// ---------- Table Style and Multileader Style ----------
+// ---------- Text Style, Table Style and Multileader Style ----------
 
 /// One editable style property.
 enum Field {
@@ -301,6 +303,32 @@ enum Field {
 struct Style {
     name: String,
     fields: Vec<Field>,
+}
+
+fn text_style(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
+    let Ok(d) = app.session.doc() else {
+        no_drawing(ctx, "Text Style", open);
+        return None;
+    };
+    let mut styles: Vec<Style> = d
+        .text_styles
+        .iter()
+        .map(|s| Style {
+            name: s.name.clone(),
+            fields: vec![
+                Field::Num("height", "Height (0 = ask)", s.height),
+                Field::Num("widthFactor", "Width factor", s.width_factor),
+                Field::Bool("backwards", "Backwards", s.backwards),
+                Field::Bool("upsideDown", "Upside down", s.upside_down),
+            ],
+        })
+        .collect();
+    if styles.is_empty() {
+        let s = cadcraft_doc::TextStyle::default();
+        styles.push(Style { name: s.name, fields: Vec::new() });
+    }
+    let current = d.header.str("TEXTSTYLE", "Standard");
+    style_manager(ctx, open, "Text Style", "style", &current, &styles)
 }
 
 fn table_style(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {

@@ -12,6 +12,7 @@ fn menu_items_open_their_dialogs() {
     for (cmd, dialog) in [
         ("pagesetup", "pagesetup"),
         ("linetype", "linetype"),
+        ("style", "textstyle"),
         ("tablestyle", "tablestyle"),
         ("mleaderstyle", "mleaderstyle"),
         ("ddptype", "ptype"),
@@ -28,6 +29,11 @@ fn menu_items_open_their_dialogs() {
     app.ui.dialog = None;
     app.cmdline("LT");
     assert_eq!(app.ui.dialog.as_deref(), Some("linetype"), "typed aliases open it too");
+    for typed in ["style", "ST"] {
+        app.ui.dialog = None;
+        assert!(app.cmdline(typed).is_none(), "bare {typed} is not an error");
+        assert_eq!(app.ui.dialog.as_deref(), Some("textstyle"), "{typed}");
+    }
 }
 
 #[test]
@@ -36,6 +42,8 @@ fn json_calls_never_open_the_dialogs() {
     app.run("ddptype", json!({ "pdmode": 34, "pdsize": -5 })).unwrap();
     app.run("linetype", json!({ "load": "DASHED", "current": "DASHED" })).unwrap();
     app.run("tablestyle", json!({ "name": "Schedule", "current": false })).unwrap();
+    app.run("style", json!({ "name": "SCHEM", "font": "Arial" })).unwrap();
+    assert!(app.session.doc().unwrap().text_styles.iter().any(|s| s.name == "SCHEM"));
     assert!(app.ui.dialog.is_none());
     let d = app.session.doc().unwrap();
     assert_eq!((d.header.i64("PDMODE", 0), d.header.f64("PDSIZE", 0.0)), (34, -5.0));
