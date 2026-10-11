@@ -115,15 +115,15 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "qsave" if no_path && app.session.state().is_ok_and(|s| s.path.is_none()) => return run_ui_command(app, "ui.saveas", &Value::Null),
-        // Menu, toolbar, Cmd+P or typed: ask where to save the PDF. JSON calls (scripts, control
-        // channel, MCP) always carry params, never get here and never open a dialog.
-        "plot" | "print" | "exportpdf" if params.is_null() && app.session.state().is_ok() => {
+        // EXPORTPDF from the menu or typed: ask where to save the PDF (PLOT and PRINT open the Plot
+        // dialog, `managers::route`). JSON calls (scripts, control channel, MCP) always carry
+        // params, never get here and never open a dialog.
+        "exportpdf" if params.is_null() && app.session.state().is_ok() => {
             let pick = app.services.pick_save.as_ref()?;
             let title = app.session.state().map(|s| s.title.clone()).unwrap_or_default();
             let stem = std::path::Path::new(&title).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty());
             let Some(path) = pick(&format!("{}.pdf", stem.unwrap_or_else(|| "Drawing".into()))) else { return Some(Ok(Value::Null)) };
-            let cmd = if id == "exportpdf" { "exportpdf" } else { "plot" };
-            let r = app.session.execute(cmd, &json!({ "path": path })).map_err(|e| e.to_string());
+            let r = app.session.execute("exportpdf", &json!({ "path": path })).map_err(|e| e.to_string());
             app.session.echo(match &r {
                 Ok(_) => format!("Plotted to {path}"),
                 Err(e) => e.clone(),
@@ -530,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn print_asks_where_to_save_the_pdf() {
+    fn plot_and_print_open_the_plot_dialog_and_exportpdf_asks_for_a_file() {
         set_io(IoHooks { read: |_, _| Err("no reader in tests".into()), write: |_, _| Err("no writer in tests".into()), plot: Some(fake_plot) });
         if io().and_then(|h| h.plot).is_none() {
             return; // another test installed hooks without a plotter first
@@ -540,29 +540,33 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let (mut app, asked) = app_with_picker(Some(ps.clone()));
 
-        // Toolbar, menu and Cmd+P all start the command by name.
+        // Toolbar, menu, Cmd+P and typed PRINT open the Plot dialog; its OK asks for the file.
         app.start("plot");
+        assert_eq!(app.ui.dialog.as_deref(), Some("plot"));
+        app.ui.dialog = None;
+        app.cmdline("print");
+        assert_eq!(app.ui.dialog.as_deref(), Some("plot"));
+        assert!(asked.borrow().is_empty());
+
+        // EXPORTPDF asks where to save straight away.
+        app.start("exportpdf");
         assert_eq!(*asked.borrow(), vec!["Drawing1.pdf".to_string()]);
         assert!(std::fs::read(&path).unwrap().starts_with(b"%PDF"));
         assert!(app.session.log.iter().any(|l| l.contains(&ps)));
         let _ = std::fs::remove_file(&path);
 
-        app.cmdline("print");
-        app.start("exportpdf");
-        assert_eq!(asked.borrow().len(), 3);
-        assert!(path.exists());
-        let _ = std::fs::remove_file(&path);
-
         // Programmatic calls never open a dialog.
+        app.ui.dialog = None;
         let r = app.run("plot", json!({})).unwrap();
         assert!(r["data"].is_string());
-        assert_eq!(asked.borrow().len(), 3);
+        assert_eq!(asked.borrow().len(), 1);
+        assert!(app.ui.dialog.is_none());
     }
 
     #[test]
-    fn cancelled_print_writes_nothing() {
+    fn cancelled_export_writes_nothing() {
         let (mut app, asked) = app_with_picker(None);
-        app.start("plot");
+        app.start("exportpdf");
         assert_eq!(asked.borrow().len(), 1);
         assert!(app.session.running.is_none());
     }
