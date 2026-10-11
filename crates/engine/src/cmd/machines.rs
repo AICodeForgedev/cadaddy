@@ -12,7 +12,12 @@ pub struct SelectPhase {
     pub done: bool,
     pub single: bool,
     pub removing: bool,
+    /// What each selection so far changed, for Undo: (handles, whether they were removed).
+    pub history: Vec<(Vec<Handle>, bool)>,
 }
+
+/// Most selection steps Undo remembers.
+const MAX_SELECT_HISTORY: usize = 1000;
 
 pub enum SelOutcome {
     /// Keep prompting.
@@ -29,7 +34,7 @@ impl SelectPhase {
         let pre = s.selection();
         if !pre.is_empty() && s.settings.pickfirst {
             s.remember_selection(&pre);
-            SelectPhase { picked: pre, done: true, single: false, removing: false }
+            SelectPhase { picked: pre, done: true, ..Default::default() }
         } else {
             SelectPhase::default()
         }
@@ -50,18 +55,27 @@ impl SelectPhase {
     pub fn feed(&mut self, s: &mut Session, i: &Input) -> Result<SelOutcome> {
         match i {
             Input::Pick(hs) => {
-                let before = self.picked.len();
-                if self.removing {
+                let changed: Vec<Handle> = if self.removing {
+                    let gone: Vec<Handle> = self.picked.iter().copied().filter(|h| hs.contains(h)).collect();
                     self.picked.retain(|h| !hs.contains(h));
+                    gone
                 } else {
+                    let mut added = Vec::new();
                     for h in hs {
                         if !self.picked.contains(h) {
                             self.picked.push(*h);
+                            added.push(*h);
                         }
                     }
+                    added
+                };
+                if !changed.is_empty() {
+                    if self.history.len() >= MAX_SELECT_HISTORY {
+                        self.history.remove(0);
+                    }
+                    self.history.push((changed, self.removing));
                 }
                 let n = hs.len();
-                let _ = before;
                 if n > 0 {
                     s.echo(format!("{n} found, {} total", self.picked.len()));
                 } else {
@@ -77,6 +91,16 @@ impl SelectPhase {
                 match t.trim().to_ascii_lowercase().as_str() {
                     "r" | "remove" => self.removing = true,
                     "a" | "add" => self.removing = false,
+                    // Undo: take back the last selection that changed the set.
+                    "u" | "undo" => {
+                        match self.history.pop() {
+                            Some((hs, true)) => self.picked.extend(hs),
+                            Some((hs, false)) => self.picked.retain(|h| !hs.contains(h)),
+                            None => s.echo("Nothing to undo."),
+                        }
+                        s.echo(format!("{} total", self.picked.len()));
+                        s.set_selection(self.picked.clone());
+                    }
                     _ => s.echo("*Invalid selection*"),
                 }
                 Ok(SelOutcome::More)

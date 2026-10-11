@@ -500,6 +500,8 @@ pub struct Session {
     pub pending_window: Option<PendingWindow>,
     /// A selection mode typed at "Select objects" (W, C, F, WP, CP) collecting its points.
     pub select_mode: Option<select::SelectMode>,
+    /// SIngle typed at "Select objects": the next selection ends the prompt.
+    pub select_single: bool,
     pub untitled_counter: u32,
     /// The last dimension created (DIMCONTINUE / DIMBASELINE).
     pub last_dim: Option<Handle>,
@@ -541,6 +543,7 @@ impl Session {
             clipboard_base: Vec2::ZERO,
             pending_window: None,
             select_mode: None,
+            select_single: false,
             untitled_counter: 0,
             last_dim: None,
             last_used: LastUsed::default(),
@@ -789,7 +792,18 @@ impl Session {
         // Generic selection handling during "Select objects:" prompts.
         let input = self.preprocess_selection(input)?;
         match input {
-            Some(i) => self.feed(Some(i)),
+            Some(i) => {
+                // SIngle: the first selection that finds objects also ends the prompt.
+                let single = self.select_single && matches!(&i, Input::Pick(hs) if !hs.is_empty());
+                self.feed(Some(i))?;
+                if single {
+                    self.select_single = false;
+                    if self.current_prompt().is_some_and(|p| p.accept.select) {
+                        self.feed(Some(Input::Enter))?;
+                    }
+                }
+                Ok(())
+            }
             None => Ok(()),
         }
     }
@@ -809,6 +823,20 @@ impl Session {
             self.pending_window = None;
             self.select_mode = Some(m);
             return Ok(None);
+        }
+        if let Input::Text(t) | Input::Keyword(t) = &input
+            && !prompt.keywords.iter().any(|k| k.eq_ignore_ascii_case(t.trim()))
+        {
+            match t.trim().to_ascii_lowercase().as_str() {
+                "si" | "single" => {
+                    self.select_single = true;
+                    return Ok(None);
+                }
+                // AUto (a pick, or a window where nothing is picked) is how points always select;
+                // Multiple picks the same way until Enter.
+                "au" | "auto" | "m" | "multiple" => return Ok(None),
+                _ => {}
+            }
         }
         let space = self.space();
         match input {
@@ -854,6 +882,25 @@ impl Session {
     /// objects go to the command as a pick once the mode is complete.
     fn select_mode_input(&mut self, input: Input) -> Result<Option<Input>> {
         let Some(mut mode) = self.select_mode.take() else { return Ok(Some(input)) };
+        if mode.kind == select::SelectKind::Group {
+            return match input {
+                Input::Text(name) | Input::Keyword(name) => match select::select_group(self.doc()?, &self.space(), &name) {
+                    Some(hs) => Ok(Some(Input::Pick(hs))),
+                    None => {
+                        self.echo(format!("No group named \"{}\".", name.trim()));
+                        Ok(None)
+                    }
+                },
+                // Enter or Esc leaves the group name prompt.
+                Input::Cancel => Ok(Some(input)),
+                Input::Enter => Ok(None),
+                _ => {
+                    self.echo("Invalid group name.");
+                    self.select_mode = Some(mode);
+                    Ok(None)
+                }
+            };
+        }
         match input {
             Input::Point(p) => {
                 if mode.push(p) {
@@ -933,6 +980,9 @@ impl Session {
     }
 
     fn finish(&mut self, run: Running, cancelled: bool) {
+        // A typed selection mode or SIngle never outlives its command.
+        self.select_mode = None;
+        self.select_single = false;
         if find_command(&run.id).is_some_and(|c| c.undoable)
             && let Err(e) = self.refuse_non_finite(None, &run.before, &run.selection_before, &run.id)
         {

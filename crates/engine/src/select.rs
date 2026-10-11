@@ -284,6 +284,14 @@ pub fn select_polygon(d: &Drawing, space: &Space, poly: &[Vec2], crossing: bool)
     out
 }
 
+/// The visible objects in `space` of the group called `name` (any case), or `None` when the
+/// drawing has no such group.
+pub fn select_group(d: &Drawing, space: &Space, name: &str) -> Option<Vec<Handle>> {
+    let g = d.groups.iter().find(|g| g.name.eq_ignore_ascii_case(name.trim()))?;
+    let store = d.space(space)?;
+    Some(g.members.iter().copied().filter(|h| store.get(*h).is_some_and(|e| d.is_visible(e))).collect())
+}
+
 /// A selection mode typed at "Select objects", collecting its points before it selects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectKind {
@@ -297,6 +305,10 @@ pub enum SelectKind {
     WPolygon,
     /// `CP`: objects inside or crossing a polygon; Enter closes it.
     CPolygon,
+    /// `BOX`: two corners; left to right is a window, right to left a crossing.
+    Box,
+    /// `G`: the objects of a group, by name.
+    Group,
 }
 
 /// Most points a fence or polygon collects (typed input is hostile).
@@ -318,18 +330,21 @@ impl SelectMode {
             "f" | "fence" => SelectKind::Fence,
             "wp" | "wpolygon" => SelectKind::WPolygon,
             "cp" | "cpolygon" => SelectKind::CPolygon,
+            "box" => SelectKind::Box,
+            "g" | "group" => SelectKind::Group,
             _ => return None,
         };
         Some(SelectMode { kind, pts: Vec::new() })
     }
     fn is_box(&self) -> bool {
-        matches!(self.kind, SelectKind::Window | SelectKind::Crossing)
+        matches!(self.kind, SelectKind::Window | SelectKind::Crossing | SelectKind::Box)
     }
     /// The prompt shown while the mode collects points.
     pub fn prompt(&self) -> Prompt {
         let last = self.pts.last().copied();
         let (first, next) = match self.kind {
-            SelectKind::Window | SelectKind::Crossing => ("Specify first corner", "Specify opposite corner"),
+            SelectKind::Group => return Prompt::new("Enter group name", Accept::TEXT),
+            SelectKind::Window | SelectKind::Crossing | SelectKind::Box => ("Specify first corner", "Specify opposite corner"),
             SelectKind::Fence => ("Specify first fence point", "Specify next fence point"),
             SelectKind::WPolygon | SelectKind::CPolygon => ("Specify first polygon point", "Specify endpoint of line"),
         };
@@ -352,6 +367,7 @@ impl SelectMode {
             (SelectKind::Window | SelectKind::Crossing, [a, b, ..]) => {
                 Some(select_window(d, space, Bounds2::new(*a, *b), self.kind == SelectKind::Crossing))
             }
+            (SelectKind::Box, [a, b, ..]) => Some(select_window(d, space, Bounds2::new(*a, *b), b.x < a.x)),
             (SelectKind::Fence, pts) if pts.len() >= 2 => Some(select_fence(d, space, pts)),
             (SelectKind::WPolygon | SelectKind::CPolygon, pts) if pts.len() >= 3 => {
                 Some(select_polygon(d, space, pts, self.kind == SelectKind::CPolygon))
