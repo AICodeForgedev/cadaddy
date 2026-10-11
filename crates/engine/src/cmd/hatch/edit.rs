@@ -1,0 +1,439 @@
+//! HATCHEDIT and -HATCHEDIT: pattern, scale and angle, island style, pattern origin,
+//! associativity (unlink, or link to boundary objects), separate hatches and recreated
+//! boundaries of existing hatches.
+
+use cadcraft_doc::{Drawing, EntityKind, Handle, Hatch, HatchLoop, entity_bounds};
+use cadcraft_geom::{Bounds2, Polyline, Vec2, point_in_polygon};
+use serde_json::{Value, json};
+
+use super::assoc::{detach, same_shape};
+use super::{ORIGIN_KW, OriginMode, closed_loop, island_style};
+use crate::cmd::helpers::lwpoly;
+use crate::cmd::{bad, bool_or, point_param, str_param, targets};
+use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
+
+/// Upper bound on hatches edited by one call.
+const MAX_EDITED: usize = 10_000;
+/// Upper bound on loops looked up when linking hatches to boundary objects in one call (each
+/// lookup scans the hatch's space), and on the loops of a hatch split into separate hatches.
+const MAX_LOOPS: usize = 2000;
+
+fn hatches(s: &Session, p: &Value) -> Result<Vec<Handle>> {
+    let hs = targets(s, p)?;
+    let d = s.doc()?;
+    let out: Vec<Handle> = hs.into_iter().filter(|h| matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Hatch(_)))).take(MAX_EDITED).collect();
+    if out.is_empty() {
+        return Err(bad("hatchedit", "select one or more hatches"));
+    }
+    Ok(out)
+}
+
+fn outline(l: &HatchLoop) -> Vec<Vec2> {
+    Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(1e-3)
+}
+
+/// Link the loops of `h` to closed objects of the same shape: the `boundary` objects when given,
+/// otherwise any in the hatch's space. Returns the number of loops left without an object.
+fn link(d: &Drawing, handle: Handle, h: &mut Hatch, boundary: Option<&[Handle]>, budget: &mut usize) -> usize {
+    let space = d.space_of(handle);
+    let store = space.as_ref().and_then(|sp| d.space(sp));
+    let mut missing = 0;
+    for l in &mut h.loops {
+        if boundary.is_none() && !l.sources.is_empty() {
+            continue;
+        }
+        if *budget == 0 {
+            missing += 1;
+            continue;
+        }
+        *budget -= 1;
+        let lb = Bounds2::from_points(outline(l));
+        let eps = 1e-4 * (1.0 + lb.width() + lb.height());
+        let fits = |e: &cadcraft_doc::Entity| {
+            let eb = entity_bounds(d, e, 0);
+            e.handle != handle
+                && eb.min.dist(lb.min) <= eps
+                && eb.max.dist(lb.max) <= eps
+                && closed_loop(d, e).is_some_and(|vs| same_shape(&vs, &l.vertices))
+        };
+        let found = match boundary {
+            Some(hs) => hs.iter().filter_map(|h| d.entity(*h)).find(|e| fits(e)).map(|e| e.handle),
+            None => store.and_then(|st| st.iter().find(|e| fits(e)).map(|e| e.handle)),
+        };
+        match found {
+            Some(src) => l.sources = vec![src],
+            None => missing += 1,
+        }
+    }
+    h.associative = missing == 0 && h.loops.iter().all(|l| !l.sources.is_empty());
+    if !h.associative && missing == 0 {
+        missing = h.loops.len();
+    }
+    missing
+}
+
+/// The loops of `h` in groups that fill separate areas: each loop not inside another one
+/// (counting nesting, so an island's island starts a new area) with the islands directly in it.
+fn areas(h: &Hatch) -> Vec<Vec<HatchLoop>> {
+    let polys: Vec<Vec<Vec2>> = h.loops.iter().map(outline).collect();
+    let first: Vec<Option<Vec2>> = polys.iter().map(|p| p.first().copied()).collect();
+    let area = |i: usize| polys.get(i).map_or(0.0, |p| cadcraft_geom::shoelace(p).abs());
+    // The loops containing each loop, smallest first.
+    let parents: Vec<Vec<usize>> = (0..polys.len())
+        .map(|i| {
+            let mut ps: Vec<usize> = (0..polys.len())
+                .filter(|&j| j != i && first.get(i).copied().flatten().zip(polys.get(j)).is_some_and(|(q, pj)| point_in_polygon(pj, q)))
+                .collect();
+            ps.sort_by(|a, b| area(*a).total_cmp(&area(*b)));
+            ps
+        })
+        .collect();
+    let mut groups: Vec<(usize, Vec<HatchLoop>)> = Vec::new();
+    for (i, ps) in parents.iter().enumerate() {
+        if ps.len() % 2 == 0
+            && let Some(l) = h.loops.get(i)
+        {
+            groups.push((i, vec![HatchLoop { outer: true, ..l.clone() }]));
+        }
+    }
+    for (i, ps) in parents.iter().enumerate() {
+        if ps.len() % 2 == 1
+            && let (Some(l), Some(top)) = (h.loops.get(i), ps.first())
+            && let Some(g) = groups.iter_mut().find(|g| g.0 == *top)
+        {
+            g.1.push(HatchLoop { outer: false, ..l.clone() });
+        }
+    }
+    groups.into_iter().map(|g| g.1).collect()
+}
+
+/// Split a hatch into one hatch per separate area. Returns the new hatches.
+fn separate(s: &mut Session, handle: Handle) -> Result<Vec<Handle>> {
+    let (h, common, space) = {
+        let d = s.doc()?;
+        let Some(e) = d.entity(handle) else { return Ok(Vec::new()) };
+        let EntityKind::Hatch(h) = &e.kind else { return Ok(Vec::new()) };
+        (h.clone(), e.common.clone(), d.space_of(handle))
+    };
+    if h.loops.len() > MAX_LOOPS {
+        return Err(bad("hatchedit", format!("a hatch with more than {MAX_LOOPS} loops can't be separated")));
+    }
+    let mut groups = areas(&h).into_iter();
+    let (Some(first), Some(space)) = (groups.next(), space) else { return Ok(Vec::new()) };
+    let rest: Vec<Vec<HatchLoop>> = groups.collect();
+    if rest.is_empty() {
+        return Ok(Vec::new());
+    }
+    let d = s.doc_mut()?;
+    let mut out = Vec::new();
+    for loops in rest {
+        let mut nh = Hatch { loops, ..h.clone() };
+        nh.associative = h.associative && nh.loops.iter().all(|l| !l.sources.is_empty());
+        let n = d.add(&space, common.clone(), EntityKind::Hatch(nh))?;
+        if let Some(st) = d.space_mut(&space) {
+            st.send_to_back(n);
+        }
+        out.push(n);
+    }
+    let kept = Hatch { loops: first, ..h };
+    d.modify_entity(handle, |e| e.kind = EntityKind::Hatch(kept))?;
+    Ok(out)
+}
+
+/// Pattern, scale and angle (degrees) from the parameters.
+fn properties(h: &mut Hatch, p: &Value) {
+    if let Some(v) = str_param(p, "pattern").map(str::trim).filter(|v| !v.is_empty()) {
+        h.pattern = v.to_ascii_uppercase();
+        h.solid = h.pattern == "SOLID";
+        if !h.solid {
+            // A named pattern replaces the gradient fill; the renderer draws the gradient first when it is set.
+            h.gradient = None;
+            if cadcraft_doc::library::pattern(&h.pattern).is_some() {
+                h.pattern_lines.clear();
+            }
+        }
+    }
+    if let Some(x) = p.get("scale").and_then(Value::as_f64).filter(|x| x.is_finite() && *x > 0.0) {
+        h.scale = x;
+    }
+    if let Some(x) = p.get("angle").and_then(Value::as_f64).filter(|x| x.is_finite()) {
+        h.angle = x.to_radians();
+    }
+}
+
+pub(super) fn run_hatchedit(s: &mut Session, p: &Value) -> Result<Value> {
+    let hs = hatches(s, p)?;
+    let style = match str_param(p, "style") {
+        Some(t) => Some(island_style(t).ok_or_else(|| bad("hatchedit", "`style` is \"normal\", \"outer\" or \"ignore\""))?),
+        None => None,
+    };
+    let origin = point_param(p, "origin").filter(|o| o.is_finite());
+    let mode = match str_param(p, "originMode") {
+        Some(t) => Some(OriginMode::parse(t).ok_or_else(|| bad("hatchedit", "unknown `originMode`"))?),
+        None => None,
+    };
+    let recreate = match p.get("recreate") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => false,
+        Some(Value::Bool(true)) => true,
+        Some(Value::String(t)) if t.eq_ignore_ascii_case("polyline") => true,
+        Some(Value::String(t)) if t.eq_ignore_ascii_case("region") => {
+            return Err(bad("hatchedit", "region boundaries are not available yet; use \"polyline\""));
+        }
+        Some(_) => return Err(bad("hatchedit", "`recreate` is \"polyline\"")),
+    };
+    // Like the prompt: a pattern must be one CADCraft defines, SOLID, or the hatches' own (a
+    // pattern read from a file keeps its definition).
+    if let Some(up) = str_param(p, "pattern").map(|v| v.trim().to_ascii_uppercase()).filter(|v| !v.is_empty())
+        && up != "SOLID"
+        && cadcraft_doc::library::pattern(&up).is_none()
+    {
+        let d = s.doc()?;
+        let own = hs.iter().all(|h| matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Hatch(x)) if x.pattern == up));
+        if !own {
+            return Err(bad("hatchedit", format!("unknown pattern {up}")));
+        }
+    }
+    let boundary: Option<Vec<Handle>> = match p.get("boundary") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(a)) => Some(a.iter().filter_map(|v| v.as_str().and_then(Handle::parse_hex)).take(MAX_EDITED).collect()),
+        Some(_) => return Err(bad("hatchedit", "`boundary` is an array of object handles")),
+    };
+    let associate = bool_or(p, "associate", false);
+    let mut created = Vec::new();
+    let mut notes = Vec::new();
+    let mut budget = MAX_LOOPS;
+    for handle in &hs {
+        let Some(EntityKind::Hatch(mut h)) = s.doc()?.entity(*handle).map(|e| e.kind.clone()) else { continue };
+        properties(&mut h, p);
+        if let Some(st) = style {
+            h.style = st;
+        }
+        if origin.is_some() || mode.is_some() {
+            h.origin = mode.unwrap_or_default().origin(&h.loops, origin.unwrap_or(h.origin));
+        }
+        match p.get("associative").and_then(Value::as_bool) {
+            Some(false) => detach(&mut h),
+            Some(true) => {
+                // All loops or none: a hatch with loops left over keeps what it had.
+                let mut linked = h.clone();
+                let missing = link(s.doc()?, *handle, &mut linked, boundary.as_deref(), &mut budget);
+                if missing == 0 {
+                    h = linked;
+                } else {
+                    notes.push(format!("Hatch {}: no boundary object found for {missing} loop(s); it stays non-associative.", handle.hex()));
+                }
+            }
+            None => {}
+        }
+        if recreate {
+            let mut new = Vec::new();
+            for l in &h.loops {
+                new.push(s.add_entity(lwpoly(l.vertices.clone(), true))?);
+            }
+            if associate {
+                for (l, n) in h.loops.iter_mut().zip(&new) {
+                    l.sources = vec![*n];
+                }
+                h.associative = true;
+            }
+            created.extend(new);
+        }
+        s.doc_mut()?.modify_entity(*handle, |e| e.kind = EntityKind::Hatch(h))?;
+        if bool_or(p, "separate", false) {
+            created.extend(separate(s, *handle)?);
+        }
+    }
+    for n in &notes {
+        s.echo(n.clone());
+    }
+    Ok(json!({ "changed": hs.len(), "handles": created.iter().map(|h| h.hex()).collect::<Vec<_>>(), "messages": notes }))
+}
+
+/// What a -HATCHEDIT prompt asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ask {
+    Option,
+    Style,
+    Pattern,
+    Scale,
+    Angle,
+    Origin,
+    Recreate,
+    RecreateLink,
+    Link,
+}
+
+const OPTIONS: [&str; 7] = ["Disassociate", "Style", "Properties", "recreate Boundary", "ASsociate", "separate Hatches", "Origin"];
+
+/// -HATCHEDIT: select hatches, then one option.
+pub(crate) struct HatchEditM {
+    hatches: Vec<Handle>,
+    ask: Ask,
+    /// Properties typed so far (pattern, scale, angle in degrees).
+    props: serde_json::Map<String, Value>,
+}
+
+impl HatchEditM {
+    pub(crate) fn new(s: &Session) -> Self {
+        let hatches = s
+            .doc()
+            .map(|d| s.selection().into_iter().filter(|h| matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Hatch(_)))).collect())
+            .unwrap_or_default();
+        HatchEditM { hatches, ask: Ask::Option, props: serde_json::Map::new() }
+    }
+    fn first(&self, s: &Session) -> Option<Hatch> {
+        let d = s.doc().ok()?;
+        self.hatches.iter().find_map(|h| match &d.entity(*h)?.kind {
+            EntityKind::Hatch(x) => Some(x.clone()),
+            _ => None,
+        })
+    }
+    fn apply(&self, s: &mut Session, mut p: Value) -> Result<Step> {
+        if let Some(o) = p.as_object_mut() {
+            o.insert("handles".into(), json!(self.hatches.iter().map(|h| h.hex()).collect::<Vec<_>>()));
+        }
+        match run_hatchedit(s, &p) {
+            Ok(v) => {
+                if let Some(n) = v.get("handles").and_then(Value::as_array).map(Vec::len).filter(|n| *n > 0) {
+                    s.echo(format!("{n} object(s) created."));
+                }
+            }
+            Err(e) => s.echo(e.to_string()),
+        }
+        Ok(Step::Done)
+    }
+}
+
+impl Interactive for HatchEditM {
+    fn name(&self) -> &'static str {
+        "HATCHEDIT"
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        if self.hatches.is_empty() {
+            return Prompt::new("Select hatch object", Accept::SELECT);
+        }
+        let h = self.first(s);
+        match self.ask {
+            Ask::Option => Prompt::new("Enter a hatch option", Accept::TEXT).kw(&OPTIONS),
+            Ask::Style => {
+                let cur = match h.map_or(0, |h| h.style) {
+                    1 => "Outer",
+                    2 => "Ignore",
+                    _ => "Normal",
+                };
+                Prompt::new("Island detection style", Accept::TEXT).kw(&["Ignore", "Outer", "Normal"]).default(cur)
+            }
+            Ask::Pattern => Prompt::new("Enter a pattern name", Accept::TEXT).default(h.map(|h| h.pattern).unwrap_or_default()),
+            Ask::Scale => Prompt::new("Specify a scale for the hatch pattern", Accept::NUMBER).default(format!("{:.4}", h.map_or(1.0, |h| h.scale))),
+            Ask::Angle => Prompt::new("Specify an angle for the hatch pattern", Accept::NUMBER)
+                .default(format!("{:.0}", h.map_or(0.0, |h| h.angle.to_degrees()))),
+            Ask::Origin => Prompt::new("Specify the pattern origin", Accept::POINT).kw(&ORIGIN_KW).default("Use current"),
+            // Region boundaries come with REGION objects; polylines until then.
+            Ask::Recreate => Prompt::new("Type of boundary object", Accept::TEXT).kw(&["Polyline"]).default("Polyline"),
+            Ask::RecreateLink => Prompt::new("Associate the hatch with the new boundary?", Accept::TEXT).kw(&["Yes", "No"]).default("No"),
+            Ask::Link => Prompt::new("Select boundary objects (Enter finds them)", Accept::SELECT),
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if self.hatches.is_empty() {
+            return Ok(match i {
+                Input::Pick(hs) => {
+                    let d = s.doc()?;
+                    self.hatches = hs.into_iter().filter(|h| matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Hatch(_)))).collect();
+                    if self.hatches.is_empty() {
+                        s.echo("No hatch selected.");
+                    }
+                    Step::Continue
+                }
+                Input::Enter | Input::Cancel => Step::Done,
+                _ => Step::Continue,
+            });
+        }
+        let text = match &i {
+            Input::Keyword(t) | Input::Text(t) => Some(t.trim().to_string()),
+            _ => None,
+        };
+        match (self.ask, i) {
+            (_, Input::Cancel) => Ok(Step::Cancel),
+            (Ask::Option, Input::Enter) => Ok(Step::Done),
+            (Ask::Option, _) => {
+                match text.as_deref() {
+                    Some("Disassociate") => return self.apply(s, json!({ "associative": false })),
+                    Some("separate Hatches") => return self.apply(s, json!({ "separate": true })),
+                    Some("Style") => self.ask = Ask::Style,
+                    Some("Properties") => self.ask = Ask::Pattern,
+                    Some("recreate Boundary") => self.ask = Ask::Recreate,
+                    Some("ASsociate") => self.ask = Ask::Link,
+                    Some("Origin") => self.ask = Ask::Origin,
+                    _ => s.echo("Choose one of the options."),
+                }
+                Ok(Step::Continue)
+            }
+            (Ask::Style, Input::Enter) => Ok(Step::Done),
+            (Ask::Style, _) => match text.as_deref().and_then(island_style) {
+                Some(st) => {
+                    let name = ["normal", "outer", "ignore"].get(usize::from(st)).copied().unwrap_or("normal");
+                    self.apply(s, json!({ "style": name }))
+                }
+                None => Ok(Step::Continue),
+            },
+            (Ask::Pattern, _) => {
+                if let Some(t) = text.filter(|t| !t.is_empty()) {
+                    let up = t.to_ascii_uppercase();
+                    if cadcraft_doc::library::pattern(&up).is_none() {
+                        s.echo(format!("Unknown pattern {up}."));
+                        return Ok(Step::Continue);
+                    }
+                    self.props.insert("pattern".into(), json!(up));
+                }
+                self.ask = Ask::Scale;
+                Ok(Step::Continue)
+            }
+            (Ask::Scale, _) => {
+                if let Some(t) = text {
+                    match crate::cmd::machines::number(&t).filter(|v| v.is_finite() && *v > 0.0) {
+                        Some(v) => {
+                            self.props.insert("scale".into(), json!(v));
+                        }
+                        None => return Ok(Step::Continue),
+                    }
+                }
+                self.ask = Ask::Angle;
+                Ok(Step::Continue)
+            }
+            (Ask::Angle, _) => {
+                if let Some(t) = text {
+                    match s.angle_settings().rotation(&t).filter(|a| a.is_finite()) {
+                        Some(a) => {
+                            self.props.insert("angle".into(), json!(a.to_degrees()));
+                        }
+                        None => return Ok(Step::Continue),
+                    }
+                }
+                self.apply(s, Value::Object(self.props.clone()))
+            }
+            (Ask::Origin, Input::Point(p)) => self.apply(s, json!({ "origin": [p.x, p.y], "originMode": "current" })),
+            (Ask::Origin, Input::Enter) => Ok(Step::Done),
+            (Ask::Origin, _) => {
+                let mode = match text.as_deref() {
+                    Some("Bottom left") => "bottomLeft",
+                    Some("bottom Right") => "bottomRight",
+                    Some("Top left") => "topLeft",
+                    Some("top riGht") => "topRight",
+                    Some("Center") => "center",
+                    Some("Use current") => return Ok(Step::Done),
+                    _ => return Ok(Step::Continue),
+                };
+                self.apply(s, json!({ "originMode": mode }))
+            }
+            (Ask::Recreate, _) => {
+                self.ask = Ask::RecreateLink;
+                Ok(Step::Continue)
+            }
+            (Ask::RecreateLink, _) => self.apply(s, json!({ "recreate": "polyline", "associate": text.as_deref() == Some("Yes") })),
+            (Ask::Link, Input::Pick(hs)) => self.apply(s, json!({ "associative": true, "boundary": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() })),
+            (Ask::Link, Input::Enter) => self.apply(s, json!({ "associative": true })),
+            (Ask::Link, _) => Ok(Step::Continue),
+        }
+    }
+}

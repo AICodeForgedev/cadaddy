@@ -18,7 +18,7 @@ use std::sync::Arc;
 use cadcraft_doc::{Drawing, EntityKind, Handle, Hatch, HatchLoop, entity_bounds};
 use cadcraft_geom::{Bounds2, PolyVertex, Polyline, Vec2, region, shoelace};
 
-use super::{closed_loop, object_polys};
+use super::{closed_loop, gap_tolerance, object_polys};
 
 /// Upper bound on the source objects of one loop that are traced (hostile files).
 const MAX_SOURCES: usize = 4096;
@@ -89,16 +89,17 @@ fn refill(before: &Drawing, after: &Drawing, l: &HatchLoop) -> Refill {
     let tol = (nb.width() + nb.height()).max(1e-9) / 20000.0;
     let polys: Vec<Vec<Vec2>> = live.iter().filter_map(|h| after.entity(*h)).flat_map(|e| object_polys(after, e, tol, nb)).collect();
     let snap = ((nb.width() + nb.height()) * 1e-9).max(1e-9);
+    let gap = gap_tolerance(after);
     let found = if l.outer {
         // The face around a point inside the old loop, carried along with the objects.
         let ob = bounds_of(before, &live);
         let ob = if ob.is_empty() { nb } else { ob };
         let old = outline_of(&l.vertices, (ob.width() + ob.height()).max(1e-9) / 20000.0);
         region::interior_point(&old)
-            .and_then(|q| region::enclosing_loop(&polys, map_point(q, &ob, &nb), snap))
-            .or_else(|| region::outline(&polys, snap))
+            .and_then(|q| region::enclosing_loop_gap(&polys, map_point(q, &ob, &nb), snap, gap))
+            .or_else(|| region::outline(&polys, snap, gap))
     } else {
-        region::outline(&polys, snap)
+        region::outline(&polys, snap, gap)
     };
     match found {
         Some(pts) => Refill::Loop(pts.into_iter().map(PolyVertex::new).collect()),
@@ -107,7 +108,7 @@ fn refill(before: &Drawing, after: &Drawing, l: &HatchLoop) -> Refill {
 }
 
 /// Two loops cover the same area (same extents and area, within a small tolerance).
-fn same_shape(a: &[PolyVertex], b: &[PolyVertex]) -> bool {
+pub(super) fn same_shape(a: &[PolyVertex], b: &[PolyVertex]) -> bool {
     let pa = outline_of(a, 1e-3);
     let pb = outline_of(b, 1e-3);
     let (ba, bb) = (Bounds2::from_points(pa.iter().copied()), Bounds2::from_points(pb.iter().copied()));
@@ -119,7 +120,7 @@ fn same_shape(a: &[PolyVertex], b: &[PolyVertex]) -> bool {
     ba.min.dist(bb.min) <= eps && ba.max.dist(bb.max) <= eps && (shoelace(&pa).abs() - shoelace(&pb).abs()).abs() <= eps * (1.0 + size)
 }
 
-fn detach(h: &mut Hatch) {
+pub(super) fn detach(h: &mut Hatch) {
     h.associative = false;
     h.loops.iter_mut().for_each(|l| l.sources.clear());
 }

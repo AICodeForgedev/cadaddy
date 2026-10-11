@@ -10,15 +10,16 @@ use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 mod assoc;
+mod edit;
 pub(crate) use assoc::update as refill_associative;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("hatch", "Hatch...", run_hatch).menu(&["Draw", "Hatch..."]).alias(&["h", "bh", "-hatch"]).params("{points?: [[x,y]] (internal points) | handles?: [hex] (closed objects), pattern?: \"ANSI31\", scale?, angle? (degrees), associative?}").interactive(|s| Ok(Box::new(HatchM::new(s, false)))),
+        CommandSpec::new("hatch", "Hatch...", run_hatch).menu(&["Draw", "Hatch..."]).alias(&["h", "bh", "-hatch"]).params("{points?: [[x,y]] (internal points) | handles?: [hex] (closed objects), pattern?: \"ANSI31\", scale?, angle? (degrees), associative? (HPASSOC), separate? (HPSEPARATE: a hatch per point/object), origin?: [x,y] (HPORIGIN) | originMode?: \"current\"|\"bottomLeft\"|\"bottomRight\"|\"topLeft\"|\"topRight\"|\"center\" (HPORIGINMODE), style?: \"normal\"|\"outer\"|\"ignore\" (HPISLANDDETECTION)} — gaps up to HPGAPTOL close").interactive(|s| Ok(Box::new(HatchM::new(s, false)))),
         CommandSpec::new("gradient", "Gradient...", run_gradient).menu(&["Draw", "Gradient..."]).alias(&["gd"]).params("{points? | handles?, color1?, color2?, angle?}").interactive(|s| Ok(Box::new(HatchM::new(s, true)))),
         CommandSpec::new("boundary", "Boundary...", run_boundary).menu(&["Draw", "Boundary..."]).alias(&["bo", "bpoly"]).params("{points: [[x,y]]}").interactive(|_| Ok(Box::new(BoundaryM { region: false }))),
         CommandSpec::new("region", "Region", run_region).menu(&["Draw", "Region"]).alias(&["reg"]).params("{handles?}"),
-        CommandSpec::new("hatchedit", "Hatch Edit", run_hatchedit).menu(&["Modify", "Object", "Hatch..."]).alias(&["he"]).params("{handles?, pattern?, scale?, angle?}"),
+        CommandSpec::new("hatchedit", "Hatch Edit", edit::run_hatchedit).menu(&["Modify", "Object", "Hatch..."]).alias(&["he", "-hatchedit"]).params("{handles?, pattern?, scale?, angle?, associative?: bool (false unlinks; true links each loop to a closed object of the same shape, or to `boundary` objects), boundary?: [hex], style?, origin? | originMode?, separate?: true, recreate?: \"polyline\"|\"region\", associate?: bool (link to the recreated boundary)}").interactive(|s| Ok(Box::new(edit::HatchEditM::new(s)))),
     ]
 }
 
@@ -114,6 +115,77 @@ fn island_curve(d: &Drawing, e: &Entity) -> bool {
     ) && closed_loop(d, e).is_none()
 }
 
+/// HPGAPTOL: the widest gap between curve ends that still closes a boundary (0–5000).
+fn gap_tolerance(d: &Drawing) -> f64 {
+    let g = d.header.f64("HPGAPTOL", 0.0);
+    if g.is_finite() { g.clamp(0.0, 5000.0) } else { 0.0 }
+}
+
+/// Where a pattern starts (HPORIGINMODE): the stored origin, or a corner or the centre of the
+/// hatch's extents.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum OriginMode {
+    #[default]
+    Current,
+    BottomLeft,
+    BottomRight,
+    TopRight,
+    TopLeft,
+    Center,
+}
+
+impl OriginMode {
+    pub(crate) fn from_index(i: i64) -> Self {
+        match i {
+            1 => OriginMode::BottomLeft,
+            2 => OriginMode::BottomRight,
+            3 => OriginMode::TopRight,
+            4 => OriginMode::TopLeft,
+            5 => OriginMode::Center,
+            _ => OriginMode::Current,
+        }
+    }
+    pub(crate) fn index(self) -> i64 {
+        self as i64
+    }
+    pub(crate) fn parse(t: &str) -> Option<Self> {
+        Some(match t.trim().to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
+            "current" | "usecurrent" => OriginMode::Current,
+            "bottomleft" => OriginMode::BottomLeft,
+            "bottomright" => OriginMode::BottomRight,
+            "topright" => OriginMode::TopRight,
+            "topleft" => OriginMode::TopLeft,
+            "center" | "centre" => OriginMode::Center,
+            _ => return None,
+        })
+    }
+    /// The origin for loops: `current` when the mode keeps it.
+    pub(crate) fn origin(self, loops: &[HatchLoop], current: Vec2) -> Vec2 {
+        let b = Bounds2::from_points(loops.iter().flat_map(|l| l.vertices.iter().map(|v| v.p)).filter(|p| p.is_finite()));
+        if b.is_empty() {
+            return current;
+        }
+        match self {
+            OriginMode::Current => current,
+            OriginMode::BottomLeft => b.min,
+            OriginMode::BottomRight => Vec2::new(b.max.x, b.min.y),
+            OriginMode::TopRight => b.max,
+            OriginMode::TopLeft => Vec2::new(b.min.x, b.max.y),
+            OriginMode::Center => b.center(),
+        }
+    }
+}
+
+/// Island detection style by name (HPISLANDDETECTION 0 normal, 1 outer, 2 ignore).
+pub(crate) fn island_style(t: &str) -> Option<u8> {
+    match t.trim().to_ascii_lowercase().as_str() {
+        "normal" | "n" | "0" => Some(0),
+        "outer" | "o" | "1" => Some(1),
+        "ignore" | "i" | "2" => Some(2),
+        _ => None,
+    }
+}
+
 /// Boundary loops (outer + islands) around an internal point.
 pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
     let d = s.doc()?;
@@ -121,7 +193,8 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
     let ext = d.extents(&space);
     let tol = ((ext.width() + ext.height()) * 1e-9).max(1e-9);
     let (polys, owners) = outlines(d, &space, None);
-    let found = cadcraft_geom::region::boundary_at(&polys, p, tol).ok_or_else(|| EngineError::Other("Valid hatch boundary not found.".into()))?;
+    let found = cadcraft_geom::region::boundary_at_gap(&polys, p, tol, gap_tolerance(d))
+        .ok_or_else(|| EngineError::Other("Valid hatch boundary not found.".into()))?;
     let outer = found.outer;
     let ob = Bounds2::from_points(outer.iter().copied());
     let sources = handles_of(&owners, &found.outer_sources);
@@ -180,6 +253,11 @@ struct HatchSettings {
     angle: f64,
     gradient: Option<Gradient>,
     associative: bool,
+    /// HPSEPARATE: one hatch per picked point or selected object.
+    separate: bool,
+    origin: Vec2,
+    origin_mode: OriginMode,
+    style: u8,
 }
 
 impl HatchSettings {
@@ -203,6 +281,20 @@ impl HatchSettings {
             angle: p.get("angle").and_then(Value::as_f64).map(f64::to_radians).unwrap_or(hdr.2),
             gradient: g,
             associative: bool_or(p, "associative", s.doc().map_or(true, |d| d.header.i64("HPASSOC", 1) != 0)),
+            separate: bool_or(p, "separate", s.doc().is_ok_and(|d| d.header.i64("HPSEPARATE", 0) != 0)),
+            origin: point_param(p, "origin").filter(|o| o.is_finite()).unwrap_or_else(|| {
+                s.doc().ok().and_then(|d| d.header.point("HPORIGIN")).map(|o| o.xy()).filter(|o| o.is_finite()).unwrap_or(Vec2::ZERO)
+            }),
+            origin_mode: if point_param(p, "origin").is_some() {
+                OriginMode::Current
+            } else {
+                str_param(p, "originMode")
+                    .and_then(OriginMode::parse)
+                    .unwrap_or_else(|| OriginMode::from_index(s.doc().map_or(0, |d| d.header.i64("HPORIGINMODE", 0))))
+            },
+            style: str_param(p, "style")
+                .and_then(island_style)
+                .unwrap_or_else(|| s.doc().map_or(0, |d| d.header.i64("HPISLANDDETECTION", 0).clamp(0, 2) as u8)),
         }
     }
     fn hatch(&self, mut loops: Vec<HatchLoop>) -> EntityKind {
@@ -213,14 +305,14 @@ impl HatchSettings {
         EntityKind::Hatch(Hatch {
             pattern: if self.gradient.is_some() { "SOLID".into() } else { self.pattern.clone() },
             solid,
+            origin: self.origin_mode.origin(&loops, self.origin),
             loops,
             scale: self.scale,
             angle: self.angle,
             associative: self.associative,
-            style: 0,
+            style: self.style,
             elevation: 0.0,
             gradient: self.gradient.clone(),
-            origin: Vec2::ZERO,
             background: None,
             pattern_lines: Vec::new(),
         })
@@ -230,26 +322,50 @@ impl HatchSettings {
 fn make(s: &mut Session, p: &Value, gradient: bool) -> Result<Value> {
     // A zero or negative pattern scale would be clamped to a near-zero spacing.
     size_param(if gradient { "gradient" } else { "hatch" }, p, "scale", false)?;
+    let cmd = if gradient { "gradient" } else { "hatch" };
+    if str_param(p, "style").is_some_and(|t| island_style(t).is_none()) {
+        return Err(bad(cmd, "`style` is \"normal\", \"outer\" or \"ignore\""));
+    }
+    if str_param(p, "originMode").is_some_and(|t| OriginMode::parse(t).is_none()) {
+        return Err(bad(cmd, "unknown `originMode`"));
+    }
     let st = HatchSettings::from(s, p, gradient);
-    let mut loops = Vec::new();
+    // Loops by picked point or selected object: one hatch each when separate.
+    let mut groups: Vec<Vec<HatchLoop>> = Vec::new();
     if let Some(pts) = points_param(p, "points") {
         for q in pts {
-            loops.extend(loops_at(s, q)?);
+            groups.push(loops_at(s, q)?);
         }
     } else {
         let hs = targets(s, p)?;
-        loops = loops_from_handles(s, &hs)?;
+        if st.separate {
+            groups.extend(loops_from_handles(s, &hs)?.into_iter().map(|l| vec![HatchLoop { outer: true, ..l }]));
+        } else {
+            groups.push(loops_from_handles(s, &hs)?);
+        }
     }
-    if loops.is_empty() {
+    if groups.iter().all(Vec::is_empty) {
         return Err(bad("hatch", "give internal `points` or boundary `handles`"));
     }
-    let h = s.add_entity(st.hatch(loops))?;
-    // Hatches go under other objects (HPDRAWORDER = behind boundary).
-    let space = s.space();
-    if let Some(store) = s.doc_mut()?.space_mut(&space) {
-        store.send_to_back(h);
+    let hs = add_hatches(s, &st, groups)?;
+    let hex: Vec<String> = hs.iter().map(|h| h.hex()).collect();
+    Ok(json!({ "handle": hex.first(), "handles": hex }))
+}
+
+/// Add the hatches for groups of loops: one per group when separate, otherwise one for all.
+fn add_hatches(s: &mut Session, st: &HatchSettings, groups: Vec<Vec<HatchLoop>>) -> Result<Vec<Handle>> {
+    let groups: Vec<Vec<HatchLoop>> = if st.separate { groups } else { vec![groups.into_iter().flatten().collect()] };
+    let mut out = Vec::new();
+    for loops in groups.into_iter().filter(|g| !g.is_empty()) {
+        let h = s.add_entity(st.hatch(loops))?;
+        // Hatches go under other objects (HPDRAWORDER = behind boundary).
+        let space = s.space();
+        if let Some(store) = s.doc_mut()?.space_mut(&space) {
+            store.send_to_back(h);
+        }
+        out.push(h);
     }
-    Ok(json!({ "handle": h.hex() }))
+    Ok(out)
 }
 
 fn run_hatch(s: &mut Session, p: &Value) -> Result<Value> {
@@ -298,14 +414,8 @@ fn run_region(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "message": format!("{n} Region(s) created.") }))
 }
 
-fn run_hatchedit(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = targets(s, p)?;
-    let mut q = p.clone();
-    if let Some(o) = q.as_object_mut() {
-        o.insert("handles".into(), json!(hs.iter().map(|h| h.hex()).collect::<Vec<_>>()));
-    }
-    s.execute("properties.set", &q)
-}
+/// The origin sub-prompt's keywords (a point sets a new origin).
+const ORIGIN_KW: [&str; 6] = ["Bottom left", "bottom Right", "Top left", "top riGht", "Center", "Use current"];
 
 /// What a HATCH sub-prompt asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -313,12 +423,14 @@ enum HatchAsk {
     Pattern,
     Scale,
     Angle,
+    Origin,
 }
 
 struct HatchM {
     gradient: bool,
     settings: HatchSettings,
-    loops: Vec<HatchLoop>,
+    /// Loops by pick (one hatch each when separate).
+    loops: Vec<Vec<HatchLoop>>,
     asking: Option<HatchAsk>,
     /// "Select objects" mode instead of "Pick internal point"; the next HATCH starts in it again.
     selecting: bool,
@@ -339,15 +451,18 @@ impl HatchM {
         s.last_used.hatch_select = selecting;
     }
     fn finish(&mut self, s: &mut Session) -> Result<Step> {
-        if !self.loops.is_empty() {
-            let k = self.settings.hatch(std::mem::take(&mut self.loops));
-            let h = s.add_entity(k)?;
-            let space = s.space();
-            if let Some(store) = s.doc_mut()?.space_mut(&space) {
-                store.send_to_back(h);
-            }
-        }
+        add_hatches(s, &self.settings, std::mem::take(&mut self.loops))?;
         Ok(Step::Done)
+    }
+    fn set_origin(&mut self, s: &mut Session, origin: Option<Vec2>, mode: OriginMode) -> Result<()> {
+        let h = &mut s.doc_mut()?.header;
+        if let Some(o) = origin.filter(|o| o.is_finite()) {
+            self.settings.origin = o;
+            h.set("HPORIGIN", cadcraft_doc::HVal::Point(o.to3(0.0)));
+        }
+        self.settings.origin_mode = mode;
+        h.set_i64("HPORIGINMODE", mode.index());
+        Ok(())
     }
     fn answer(&mut self, s: &mut Session, a: HatchAsk, t: &str) -> Result<()> {
         match a {
@@ -375,6 +490,17 @@ impl HatchM {
                     self.settings.angle = a;
                     s.doc_mut()?.header.set_f64("HPANG", a);
                 }
+            }
+            HatchAsk::Origin => {
+                let mode = match t {
+                    "Bottom left" => OriginMode::BottomLeft,
+                    "bottom Right" => OriginMode::BottomRight,
+                    "Top left" => OriginMode::TopLeft,
+                    "top riGht" => OriginMode::TopRight,
+                    "Center" => OriginMode::Center,
+                    _ => OriginMode::Current,
+                };
+                self.set_origin(s, None, mode)?;
             }
         }
         Ok(())
@@ -408,17 +534,37 @@ impl Interactive for HatchM {
                 let d = crate::units::format_angle(a, au, ap);
                 return Prompt::new("Specify an angle for the hatch pattern", Accept::NUMBER).default(d);
             }
+            Some(HatchAsk::Origin) => return Prompt::new("Specify the pattern origin", Accept::POINT).kw(&ORIGIN_KW).default("Use current"),
             None => {}
         }
         if self.selecting {
-            return Prompt::new("Select objects", Accept::SELECT).kw(&["picK internal point", "Undo", "seTtings", "sCale", "Angle"]);
+            return Prompt::new("Select objects", Accept::SELECT).kw(&[
+                "picK internal point",
+                "Undo",
+                "seTtings",
+                "sCale",
+                "Angle",
+                "Origin",
+                "sEparate",
+            ]);
         }
-        Prompt::new("Pick internal point", Accept::POINT).kw(&["Select objects", "Undo", "seTtings", "Pattern", "sCale", "Angle"])
+        Prompt::new("Pick internal point", Accept::POINT).kw(&[
+            "Select objects",
+            "Undo",
+            "seTtings",
+            "Pattern",
+            "sCale",
+            "Angle",
+            "Origin",
+            "sEparate",
+        ])
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Some(a) = self.asking.take() {
-            if let Input::Text(t) | Input::Keyword(t) = &i {
-                self.answer(s, a, t)?;
+            match &i {
+                Input::Point(p) if a == HatchAsk::Origin => self.set_origin(s, Some(*p), OriginMode::Current)?,
+                Input::Text(t) | Input::Keyword(t) => self.answer(s, a, t)?,
+                _ => {}
             }
             return Ok(Step::Continue);
         }
@@ -427,7 +573,7 @@ impl Interactive for HatchM {
                 match loops_at(s, p) {
                     Ok(l) => {
                         s.echo(format!("Analyzing the selected data... {} loop(s)", l.len()));
-                        self.loops.extend(l);
+                        self.loops.push(l);
                     }
                     Err(e) => s.echo(e.to_string()),
                 }
@@ -437,7 +583,11 @@ impl Interactive for HatchM {
                 match loops_from_handles(s, &hs) {
                     Ok(l) => {
                         s.echo(format!("{} found", hs.len()));
-                        self.loops.extend(l);
+                        if self.settings.separate {
+                            self.loops.extend(l.into_iter().map(|l| vec![HatchLoop { outer: true, ..l }]));
+                        } else {
+                            self.loops.push(l);
+                        }
                     }
                     Err(e) => s.echo(e.to_string()),
                 }
@@ -451,6 +601,12 @@ impl Interactive for HatchM {
                     "Pattern" | "seTtings" => self.asking = Some(HatchAsk::Pattern),
                     "sCale" => self.asking = Some(HatchAsk::Scale),
                     "Angle" => self.asking = Some(HatchAsk::Angle),
+                    "Origin" => self.asking = Some(HatchAsk::Origin),
+                    "sEparate" => {
+                        self.settings.separate = !self.settings.separate;
+                        s.doc_mut()?.header.set_i64("HPSEPARATE", i64::from(self.settings.separate));
+                        s.echo(if self.settings.separate { "Separate hatches: on" } else { "Separate hatches: off" });
+                    }
                     _ => {}
                 }
                 Ok(Step::Continue)
@@ -464,7 +620,7 @@ impl Interactive for HatchM {
         if self.loops.is_empty() {
             return Vec::new();
         }
-        vec![self.settings.hatch(self.loops.clone())]
+        vec![self.settings.hatch(self.loops.iter().flatten().cloned().collect())]
     }
 }
 

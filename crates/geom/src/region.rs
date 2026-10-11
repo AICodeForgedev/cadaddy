@@ -20,6 +20,10 @@ pub const MAX_SEGMENTS: usize = 60_000;
 /// Upper bound on islands reported for one boundary (hostile input with many tiny shapes).
 pub const MAX_ISLANDS: usize = 4096;
 
+/// Upper bound on open curve ends considered for closing gaps, and on the pairs compared.
+const MAX_GAP_ENDS: usize = 50_000;
+const MAX_GAP_PAIRS: usize = 5_000_000;
+
 /// The closed boundary around a point and the islands inside it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Boundary {
@@ -172,6 +176,57 @@ fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
                     }
                 }
             }
+        }
+    }
+    Some(g)
+}
+
+/// The graph of the curves with gaps of up to `gap` between open ends bridged: each open end
+/// joins the nearest other open end within reach.
+fn build_gap(polys: &[Vec<Vec2>], tol: f64, gap: f64) -> Option<Graph> {
+    let mut g = build(polys, tol.max(1e-12))?;
+    if !(gap.is_finite() && gap > tol) {
+        return Some(g);
+    }
+    let mut ends: Vec<(Vec2, usize)> =
+        g.adj.iter().enumerate().filter(|(_, ns)| ns.len() == 1).filter_map(|(u, _)| Some((*g.pts.get(u)?, u))).take(MAX_GAP_ENDS).collect();
+    ends.sort_by(|a, b| a.0.x.total_cmp(&b.0.x));
+    let mut joined = vec![false; ends.len()];
+    let mut budget = MAX_GAP_PAIRS;
+    for i in 0..ends.len() {
+        let (Some(&(pu, u)), Some(false)) = (ends.get(i), joined.get(i).copied()) else { continue };
+        let lo = ends.partition_point(|e| e.0.x < pu.x - gap);
+        let mut best: Option<(f64, usize)> = None;
+        for (j, &(pv, v)) in ends.iter().enumerate().skip(lo) {
+            if pv.x > pu.x + gap || budget == 0 {
+                break;
+            }
+            budget -= 1;
+            if j == i || joined.get(j).copied().unwrap_or(true) || g.adj.get(u).is_some_and(|l| l.contains(&v)) {
+                continue;
+            }
+            let d = pu.dist(pv);
+            if d <= gap && best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, j));
+            }
+        }
+        let Some((_, j)) = best else { continue };
+        let Some(&(_, v)) = ends.get(j) else { continue };
+        let owner = g.adj.get(u).and_then(|l| l.first()).and_then(|w| g.edge_src.get(&(u.min(*w), u.max(*w))).copied());
+        if let Some(l) = g.adj.get_mut(u) {
+            l.push(v);
+        }
+        if let Some(l) = g.adj.get_mut(v) {
+            l.push(u);
+        }
+        if let Some(k) = owner {
+            g.edge_src.insert((u.min(v), u.max(v)), k);
+        }
+        if let Some(f) = joined.get_mut(i) {
+            *f = true;
+        }
+        if let Some(f) = joined.get_mut(j) {
+            *f = true;
         }
     }
     Some(g)
@@ -371,13 +426,23 @@ fn islands(g: &Graph, outer: &[usize], p: Vec2) -> Vec<Island> {
 
 /// The closed loop enclosing `p`, counter-clockwise, or `None`.
 pub fn enclosing_loop(polys: &[Vec<Vec2>], p: Vec2, tol: f64) -> Option<Vec<Vec2>> {
-    let g = build(polys, tol.max(1e-12))?;
+    enclosing_loop_gap(polys, p, tol, 0.0)
+}
+
+/// [`enclosing_loop`], with gaps of up to `gap` between curve ends closed (HPGAPTOL).
+pub fn enclosing_loop_gap(polys: &[Vec<Vec2>], p: Vec2, tol: f64, gap: f64) -> Option<Vec<Vec2>> {
+    let g = build_gap(polys, tol, gap)?;
     points(&g, &outer_face(&g, p)?)
 }
 
 /// The closed loop enclosing `p` plus the islands inside it, or `None` when `p` isn't enclosed.
 pub fn boundary_at(polys: &[Vec<Vec2>], p: Vec2, tol: f64) -> Option<Boundary> {
-    let g = build(polys, tol.max(1e-12))?;
+    boundary_at_gap(polys, p, tol, 0.0)
+}
+
+/// [`boundary_at`], with gaps of up to `gap` between curve ends closed (HPGAPTOL).
+pub fn boundary_at_gap(polys: &[Vec<Vec2>], p: Vec2, tol: f64, gap: f64) -> Option<Boundary> {
+    let g = build_gap(polys, tol, gap)?;
     let ids = outer_face(&g, p)?;
     let outer = points(&g, &ids)?;
     let islands = islands(&g, &ids, p);
@@ -390,8 +455,9 @@ pub fn boundary_at(polys: &[Vec<Vec2>], p: Vec2, tol: f64) -> Option<Boundary> {
 
 /// The outside outline of curves that together enclose an area (counter-clockwise, dangling
 /// ends removed), or `None` when they enclose nothing or form more than one separate group.
-pub fn outline(polys: &[Vec<Vec2>], tol: f64) -> Option<Vec<Vec2>> {
-    let g = build(polys, tol.max(1e-12))?;
+/// Gaps of up to `gap` between curve ends are closed (HPGAPTOL).
+pub fn outline(polys: &[Vec<Vec2>], tol: f64, gap: f64) -> Option<Vec<Vec2>> {
+    let g = build_gap(polys, tol, gap)?;
     let core = prune(&g);
     let comp = components(&core);
     let mut start: Option<usize> = None;
@@ -609,10 +675,10 @@ mod tests {
         let b = boundary_at(&polys, Vec2::new(7.0, 2.0), 1e-9).unwrap();
         assert_eq!(b.outer_sources, vec![0, 1]);
         // Four separate lines: one outline; an open U and two separate squares have none.
-        let l = outline(&lines_of(&square(5.0, 5.0, 5.0)), 1e-9).unwrap();
+        let l = outline(&lines_of(&square(5.0, 5.0, 5.0)), 1e-9, 0.0).unwrap();
         assert!((shoelace(&l) - 25.0).abs() < 1e-9);
-        assert!(outline(&[vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0)]], 1e-9).is_none());
-        assert!(outline(&[square(0.0, 0.0, 1.0), square(5.0, 5.0, 1.0)], 1e-9).is_none());
+        assert!(outline(&[vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0)]], 1e-9, 0.0).is_none());
+        assert!(outline(&[square(0.0, 0.0, 1.0), square(5.0, 5.0, 1.0)], 1e-9, 0.0).is_none());
         // An L shape: the point is inside, also for a clockwise loop.
         let l_shape =
             vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(1.0, 10.0), Vec2::new(0.0, 10.0)];
@@ -622,5 +688,27 @@ mod tests {
         assert!(point_in_polygon(&rev, interior_point(&rev).unwrap()));
         assert!(interior_point(&[Vec2::ZERO, Vec2::new(1.0, 0.0)]).is_none());
         assert!(interior_point(&[Vec2::new(f64::NAN, 0.0); 4]).is_none());
+    }
+
+    #[test]
+    fn gap_tolerance_closes_small_gaps() {
+        // Four lines with 0.5 gaps at two corners.
+        let polys = vec![
+            vec![Vec2::new(0.0, 0.0), Vec2::new(9.5, 0.0)],
+            vec![Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0)],
+            vec![Vec2::new(10.0, 10.0), Vec2::new(0.0, 10.0)],
+            vec![Vec2::new(0.0, 10.0), Vec2::new(0.0, 0.5)],
+        ];
+        let p = Vec2::new(5.0, 5.0);
+        assert!(enclosing_loop(&polys, p, 1e-9).is_none());
+        assert!(enclosing_loop_gap(&polys, p, 1e-9, 0.25).is_none(), "gap larger than the tolerance");
+        let l = enclosing_loop_gap(&polys, p, 1e-9, 0.6).unwrap();
+        assert!((shoelace(&l) - 100.0).abs() < 1e-9, "{}", shoelace(&l));
+        let b = boundary_at_gap(&polys, p, 1e-9, 0.6).unwrap();
+        assert_eq!(b.outer_sources, vec![0, 1, 2, 3]);
+        assert!(outline(&polys, 1e-9, 0.6).is_some());
+        // Hostile gaps.
+        assert!(enclosing_loop_gap(&polys, p, 1e-9, f64::NAN).is_none());
+        assert!(enclosing_loop_gap(&polys, p, 1e-9, f64::INFINITY).is_none());
     }
 }
