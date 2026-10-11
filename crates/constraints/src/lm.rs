@@ -102,50 +102,124 @@ fn solve_dense(mut a: Vec<f64>, mut b: Vec<f64>, n: usize) -> Option<Vec<f64>> {
     y.iter().all(|v| v.is_finite()).then_some(y)
 }
 
-/// Numerical rank of a row-major `rows × cols` matrix (rows normalised first).
-pub(crate) fn rank(m: &[f64], rows: usize, cols: usize) -> usize {
-    let mut a: Vec<Vec<f64>> = (0..rows)
-        .map(|i| {
-            let r: Vec<f64> = m.get(i * cols..(i + 1) * cols).map(<[f64]>::to_vec).unwrap_or_default();
-            let n = norm2(&r).sqrt();
-            if n > 1e-12 { r.iter().map(|v| v / n).collect() } else { vec![0.0; cols] }
-        })
-        .collect();
-    let mut rank = 0;
-    let mut used = vec![false; rows];
+/// Householder QR with column pivoting of the columns `cols` (each of the same length). Stops
+/// when the largest remaining column norm drops to `rel` times the first pivot's (or below
+/// `abs`). Returns the numerical rank and the Householder vectors (full length, zero above the
+/// diagonal; each reflector is `I − 2vvᵀ/(vᵀv)`).
+pub(crate) fn qr(mut cols: Vec<Vec<f64>>, rel: f64, abs: f64) -> (usize, Vec<Vec<f64>>) {
+    let m = cols.first().map_or(0, Vec::len);
+    let n = cols.len();
+    let mut refl = Vec::new();
+    let mut first = None;
+    for k in 0..m.min(n) {
+        // Pivot: the column with the largest remaining norm.
+        let mut best = (k, -1.0f64);
+        for (j, c) in cols.iter().enumerate().skip(k) {
+            let v = c.get(k..).map_or(0.0, norm2);
+            if v.is_finite() && v > best.1 {
+                best = (j, v);
+            }
+        }
+        let norm = best.1.max(0.0).sqrt();
+        let lim = first.map_or(abs, |f: f64| (f * rel).max(abs));
+        if crate::curves::not_above(norm, lim) {
+            break;
+        }
+        first.get_or_insert(norm);
+        cols.swap(k, best.0);
+        let Some(col) = cols.get(k) else { break };
+        let mut v = vec![0.0; m];
+        for i in k..m {
+            if let (Some(d), Some(s)) = (v.get_mut(i), col.get(i)) {
+                *d = *s;
+            }
+        }
+        let x0 = v.get(k).copied().unwrap_or(0.0);
+        let alpha = if x0 >= 0.0 { -norm } else { norm };
+        if let Some(d) = v.get_mut(k) {
+            *d -= alpha;
+        }
+        let vv = norm2(&v);
+        if crate::curves::not_above(vv, 0.0) {
+            break;
+        }
+        for c in cols.iter_mut().skip(k) {
+            reflect(&v, vv, c);
+        }
+        refl.push(v);
+    }
+    (refl.len(), refl)
+}
+
+fn reflect(v: &[f64], vv: f64, c: &mut [f64]) {
+    let d: f64 = v.iter().zip(c.iter()).map(|(a, b)| a * b).sum();
+    let f = 2.0 * d / vv;
+    if f != 0.0 {
+        for (ci, vi) in c.iter_mut().zip(v) {
+            *ci -= f * vi;
+        }
+    }
+}
+
+/// Rows and columns scaled to unit norm (zero ones left alone), as columns of the transpose:
+/// `out[i]` is row `i` of the row-major `rows × cols` matrix `m`.
+fn balanced_rows(m: &[f64], rows: usize, cols: usize) -> Vec<Vec<f64>> {
+    let mut r: Vec<Vec<f64>> = (0..rows).map(|i| m.get(i * cols..(i + 1) * cols).map(<[f64]>::to_vec).unwrap_or_else(|| vec![0.0; cols])).collect();
+    for row in &mut r {
+        let n = norm2(row).sqrt();
+        let f = if n > 1e-12 && n.is_finite() { 1.0 / n } else { 0.0 };
+        row.iter_mut().for_each(|v| *v *= f);
+    }
+    // Columns: unit norm, except numerical noise (an exactly zero derivative evaluated by
+    // differences), which scaling would turn into a spurious independent direction.
     for c in 0..cols {
-        let mut piv = None;
-        let mut best = 1e-7;
-        for (i, row) in a.iter().enumerate() {
-            if used.get(i).copied().unwrap_or(true) {
-                continue;
-            }
-            let v = row.get(c).copied().unwrap_or(0.0).abs();
-            if v > best {
-                best = v;
-                piv = Some(i);
-            }
-        }
-        let Some(p) = piv else { continue };
-        if let Some(u) = used.get_mut(p) {
-            *u = true;
-        }
-        rank += 1;
-        let prow = a.get(p).cloned().unwrap_or_default();
-        let pv = prow.get(c).copied().unwrap_or(1.0);
-        for (i, row) in a.iter_mut().enumerate() {
-            if i == p || used.get(i).copied().unwrap_or(true) {
-                continue;
-            }
-            let f = row.get(c).copied().unwrap_or(0.0) / pv;
-            if f != 0.0 {
-                for (v, pr) in row.iter_mut().zip(&prow) {
-                    *v -= f * pr;
-                }
+        let n = r.iter().map(|row| row.get(c).map_or(0.0, |v| v * v)).sum::<f64>().sqrt();
+        let f = if n > COL_NOISE && n.is_finite() { 1.0 / n } else { 0.0 };
+        for row in &mut r {
+            if let Some(v) = row.get_mut(c) {
+                *v *= f;
             }
         }
     }
-    rank
+    r
+}
+
+/// Column norm (after row balancing) below which a column is difference noise.
+const COL_NOISE: f64 = 1e-6;
+/// Relative threshold below which a pivot counts as zero (the Jacobian is numerical).
+const RANK_TOL: f64 = 1e-7;
+
+/// Numerical rank of a row-major `rows × cols` Jacobian (rows and columns balanced first,
+/// Householder QR with column pivoting).
+pub(crate) fn rank_qr(m: &[f64], rows: usize, cols: usize) -> usize {
+    if rows == 0 || cols == 0 {
+        return 0;
+    }
+    // QR of the transpose: its columns are the Jacobian's rows.
+    qr(balanced_rows(m, rows, cols), RANK_TOL, 1e-12).0
+}
+
+/// Rank and an orthonormal basis of the null space (each vector of length `cols`) of a
+/// row-major `rows × cols` Jacobian, in balanced column coordinates (a diagonal scaling, so
+/// which parameters a null vector moves is preserved).
+pub(crate) fn null_space(m: &[f64], rows: usize, cols: usize) -> (usize, Vec<Vec<f64>>) {
+    let (rank, refl) = if rows == 0 { (0, Vec::new()) } else { qr(balanced_rows(m, rows, cols), RANK_TOL, 1e-12) };
+    let mut basis = Vec::with_capacity(cols.saturating_sub(rank));
+    for j in rank..cols {
+        let mut e = vec![0.0; cols];
+        if let Some(v) = e.get_mut(j) {
+            *v = 1.0;
+        }
+        // Q e_j with Q = H_0 H_1 … H_{r−1}.
+        for v in refl.iter().rev() {
+            let vv = norm2(v);
+            if vv > 0.0 {
+                reflect(v, vv, &mut e);
+            }
+        }
+        basis.push(e);
+    }
+    (rank, basis)
 }
 
 /// Run the solver from `x0`. Only `free` parameters change.
@@ -241,9 +315,24 @@ mod tests {
         let y = solve_dense(vec![2.0, 1.0, 1.0, 3.0], vec![3.0, 5.0], 2).unwrap();
         assert!((y[0] - 0.8).abs() < 1e-12 && (y[1] - 1.4).abs() < 1e-12);
         assert!(solve_dense(vec![1.0, 2.0, 2.0, 4.0], vec![1.0, 1.0], 2).is_none());
-        assert_eq!(rank(&[1.0, 0.0, 0.0, 1.0, 1.0, 1.0], 3, 2), 2);
-        assert_eq!(rank(&[1.0, 2.0, 2.0, 4.0], 2, 2), 1);
-        assert_eq!(rank(&[0.0; 4], 2, 2), 0);
+        assert_eq!(rank_qr(&[1.0, 0.0, 0.0, 1.0, 1.0, 1.0], 3, 2), 2);
+        assert_eq!(rank_qr(&[1.0, 2.0, 2.0, 4.0], 2, 2), 1);
+        assert_eq!(rank_qr(&[0.0; 4], 2, 2), 0);
+        assert_eq!(rank_qr(&[1e-9, 0.0, 0.0, 1e6], 2, 2), 2, "balanced: scale does not hide rank");
+    }
+
+    #[test]
+    fn null_space_spans_free_motion() {
+        // x0 + x1 = c fixes one combination; x2 is untouched.
+        let (r, n) = null_space(&[1.0, 1.0, 0.0], 1, 3);
+        assert_eq!((r, n.len()), (1, 2));
+        for v in &n {
+            assert!((v[0] + v[1]).abs() < 1e-12);
+        }
+        // x2's own motion survives in the null space; x0 alone does not.
+        assert!(n.iter().any(|v| v[2].abs() > 0.5));
+        let (r, n) = null_space(&[], 0, 2);
+        assert_eq!((r, n.len()), (0, 2));
     }
 
     #[test]

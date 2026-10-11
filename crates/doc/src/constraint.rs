@@ -99,7 +99,8 @@ pub enum ConstraintKind {
     Horizontal,
     Vertical,
     Tangent,
-    /// G2 continuity; solved as tangency for now.
+    /// G2 continuity (common point, tangent and curvature) with a spline; tangency between
+    /// other curves.
     Smooth,
     Symmetric,
     Equal,

@@ -1,6 +1,7 @@
 //! Parametric drawing: GEOMCONSTRAINT and the GC* commands, DIMCONSTRAINT and the DC* commands,
-//! AUTOCONSTRAIN, DELCONSTRAINT, PARAMETERS, CONSTRAINTBAR, DCDISPLAY, CONSTRAINTSETTINGS and
-//! `constraints.inspect`, plus the post-command re-solve hook ([`after_command`]).
+//! AUTOCONSTRAIN, DELCONSTRAINT, PARAMETERS, CONSTRAINTBAR, DCDISPLAY, CONSTRAINTSETTINGS,
+//! `constraints.inspect` and `constraints.dof`, plus the post-command re-solve hook
+//! ([`after_command`]).
 //!
 //! The solver lives in `cadcraft-constraints`; this module turns picks and JSON parameters into
 //! constraint references and keeps the drawing's constraints satisfied after edits.
@@ -97,7 +98,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Tools", "Parametric", "Constraint Settings"])
             .alias(&["csettings"])
             .params("{infer?, distanceTolerance?, angleTolerance?, autoTypes?: [names], barsVisible?, barTransparency?, dimsVisible?}"),
-        CommandSpec::new("constraints.inspect", "Inspect Constraints", run_inspect).noundo().params("{} → constraints, glyph anchors, parameters, settings"),
+        CommandSpec::new("constraints.inspect", "Inspect Constraints", run_inspect).noundo().params("{} → constraints, glyph anchors, parameters, settings, dof"),
+        CommandSpec::new("constraints.dof", "Degrees of Freedom", run_dof)
+            .noundo()
+            .params("{handles? | handle?} (default: the selection, else every constrained object) → {dof, status: unconstrained|under|fully|over|unknown, redundant, constraints, objects: [{handle, type, params, dof, status}], message}"),
     ]
 }
 
@@ -116,6 +120,8 @@ fn h_param(p: &Value, k: &str) -> Option<Handle> {
 enum Want {
     Point,
     Line,
+    /// A line, polyline segment or ellipse (its major axis).
+    Axis,
     Curve,
     /// A line, polyline segment, circle, arc or point object.
     Object,
@@ -156,6 +162,16 @@ fn char_points(kind: &EntityKind) -> Vec<(Sub, Vec2)> {
     }
 }
 
+/// Characteristic points of an object, including the solver's points of ellipses (centre, axis
+/// ends, arc ends), splines (defining points) and block references (insertion point, the
+/// block's points).
+fn object_points(d: &Drawing, h: Handle, kind: &EntityKind) -> Vec<(Sub, Vec2)> {
+    match kind {
+        EntityKind::Ellipse(_) | EntityKind::Spline(_) | EntityKind::Insert(_) => cs::ref_points(d, h),
+        _ => char_points(kind),
+    }
+}
+
 /// Line-like parts of an object (a line, or each polyline segment).
 fn line_parts(kind: &EntityKind) -> Vec<(Sub, Vec2, Vec2)> {
     match kind {
@@ -174,6 +190,8 @@ fn object_size(kind: &EntityKind) -> f64 {
         EntityKind::Line(l) => l.a.xy().dist(l.b.xy()),
         EntityKind::Arc(a) => a.radius,
         EntityKind::Circle(c) => c.radius,
+        EntityKind::Ellipse(e) => e.major.xy().len(),
+        EntityKind::Spline(s) => s.control.first().zip(s.control.last()).map_or(0.0, |(a, b)| a.dist(*b)),
         EntityKind::LwPolyline(p) => p.vertices.windows(2).filter_map(|w| Some(w.first()?.p.dist(w.get(1)?.p))).fold(0.0, f64::max),
         _ => 0.0,
     }
@@ -195,17 +213,26 @@ fn resolve(d: &Drawing, h: Handle, hint: Hint, want: Want, aperture: f64) -> std
             };
             return best.map(|b| b.0);
         }
-        matches!(k, EntityKind::Circle(_) | EntityKind::Arc(_) | EntityKind::Point(_)).then_some(Sub::Whole)
+        matches!(
+            k,
+            EntityKind::Circle(_)
+                | EntityKind::Arc(_)
+                | EntityKind::Point(_)
+                | EntityKind::Ellipse(_)
+                | EntityKind::Spline(_)
+                | EntityKind::Insert(_)
+        )
+        .then_some(Sub::Whole)
     };
     let sub = match (hint, want) {
         (Hint::Sub(s), _) => Some(s),
-        (Hint::None, Want::Point) => char_points(k).first().map(|c| c.0),
+        (Hint::None, Want::Point) => object_points(d, h, k).first().map(|c| c.0),
         (Hint::None, _) => object(None),
         (Hint::Pick(p), Want::Point) => {
-            char_points(k).into_iter().filter(|c| c.1.is_finite()).min_by(|a, b| a.1.dist(p).total_cmp(&b.1.dist(p))).map(|c| c.0)
+            object_points(d, h, k).into_iter().filter(|c| c.1.is_finite()).min_by(|a, b| a.1.dist(p).total_cmp(&b.1.dist(p))).map(|c| c.0)
         }
         (Hint::Pick(p), Want::PointOrObject) => {
-            let near = char_points(k).into_iter().filter(|c| c.1.is_finite()).min_by(|a, b| a.1.dist(p).total_cmp(&b.1.dist(p)));
+            let near = object_points(d, h, k).into_iter().filter(|c| c.1.is_finite()).min_by(|a, b| a.1.dist(p).total_cmp(&b.1.dist(p)));
             let limit = (aperture * 2.0).max(object_size(k) * 0.15);
             match near {
                 Some((s, q)) if q.dist(p) <= limit => Some(s),
@@ -218,13 +245,17 @@ fn resolve(d: &Drawing, h: Handle, hint: Hint, want: Want, aperture: f64) -> std
     // Shape checks for clearer messages.
     let ok = match want {
         Want::Line => !line_parts(k).is_empty() && matches!(sub, Sub::Whole | Sub::Segment(_)),
-        Want::Curve => matches!(k, EntityKind::Circle(_) | EntityKind::Arc(_)),
+        Want::Axis => {
+            (!line_parts(k).is_empty() && matches!(sub, Sub::Whole | Sub::Segment(_))) || (matches!(k, EntityKind::Ellipse(_)) && sub == Sub::Whole)
+        }
+        Want::Curve => matches!(k, EntityKind::Circle(_) | EntityKind::Arc(_) | EntityKind::Ellipse(_)),
         _ => true,
     };
     if !ok {
         return Err(match want {
             Want::Line => "Select a line or polyline segment".into(),
-            _ => "Select an arc or circle".into(),
+            Want::Axis => "Select a line, polyline segment or ellipse".into(),
+            _ => "Select an arc, circle or ellipse".into(),
         });
     }
     Ok(GeomRef::new(h, sub))
@@ -233,8 +264,8 @@ fn resolve(d: &Drawing, h: Handle, hint: Hint, want: Want, aperture: f64) -> std
 /// The closest pair of characteristic points of two objects (COINCIDENT with no hints).
 fn closest_points(d: &Drawing, a: Handle, b: Handle) -> Option<(GeomRef, GeomRef)> {
     let (ea, eb) = (d.entity(a)?, d.entity(b)?);
-    let pa: Vec<_> = char_points(&ea.kind).into_iter().filter(|c| c.0 != Sub::Mid).collect();
-    let pb: Vec<_> = char_points(&eb.kind).into_iter().filter(|c| c.0 != Sub::Mid).collect();
+    let pa: Vec<_> = object_points(d, a, &ea.kind).into_iter().filter(|c| c.0 != Sub::Mid).collect();
+    let pb: Vec<_> = object_points(d, b, &eb.kind).into_iter().filter(|c| c.0 != Sub::Mid).collect();
     let mut best: Option<(f64, Sub, Sub)> = None;
     for (sa, qa) in pa.iter().take(1000) {
         for (sb, qb) in pb.iter().take(1000) {
@@ -254,7 +285,7 @@ fn wants(kind: K, n: usize) -> Vec<Want> {
             if n >= 2 {
                 vec![Want::Point; 2]
             } else {
-                vec![Want::Line]
+                vec![Want::Axis]
             }
         }
         K::Parallel | K::Perpendicular | K::Collinear => vec![Want::Line; 2],
@@ -932,13 +963,23 @@ fn run_constraintsettings(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_inspect(s: &mut Session, _p: &Value) -> Result<Value> {
     let d = s.doc()?;
+    let dof = cs::dof(d, &[]).ok().map(|r| json!({ "dof": r.dof, "status": r.status, "redundant": r.redundant, "message": r.message }));
     Ok(json!({
         "constraints": d.constraints,
         "glyphs": cs::glyphs(d),
         "parameters": cs::parameter_table(d),
         "settings": d.parametric.settings,
         "satisfied": cs::all_satisfied(d),
+        "dof": dof,
     }))
+}
+
+/// `constraints.dof`: remaining degrees of freedom of the given objects (default: the selection),
+/// or of every constrained object.
+fn run_dof(s: &mut Session, p: &Value) -> Result<Value> {
+    let hs = targets(s, p)?;
+    let r = cs::dof(s.doc()?, &hs).map_err(err)?;
+    serde_json::to_value(&r).map_err(|e| EngineError::Other(e.to_string()))
 }
 
 // ---------------- re-solve after edits ----------------

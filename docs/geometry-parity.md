@@ -116,12 +116,12 @@ lines are scanline families clipped against the tessellated loops (`render/src/h
 
 | Item | AutoCAD | CADCraft (`crates/constraints`) |
 |---|---|---|
-| Geometric constraints (12) | coincident, collinear, concentric, fix, parallel, perpendicular, horizontal, vertical, tangent, smooth (G2), symmetric, equal | all 12; **Smooth solved as tangency, not G2** |
+| Geometric constraints (12) | coincident, collinear, concentric, fix, parallel, perpendicular, horizontal, vertical, tangent, smooth (G2), symmetric, equal | all 12; Smooth is G2 (common point, tangent and curvature, `curves.rs`) between a spline and a line, arc, elliptical arc, polyline segment or spline; between two non-spline curves it stays tangency |
 | Dimensional constraints | linear, horizontal, vertical, aligned, angular, radial, diameter; dynamic and annotational; reference | distance (aligned/horizontal/vertical), angular, radius, diameter; parameters and expressions (`expr.rs`) |
-| Geometry | lines, arcs, circles, polylines, ellipses, splines, blocks | line, circle, arc, polyline, point (`model.rs:42`); **no ellipse, spline or block** |
-| Algorithm | proprietary | damped Gauss–Newton / Levenberg–Marquardt, numeric Jacobian, per connected component; MAX_ITER 200, MAX_ROWS 800 |
-| Over-constraint | refused with a message | redundancy by Jacobian rank, conflicts by removal probing (up to 48 probes) |
-| Degrees of freedom, fully constrained state | shown (constraint bars, status) | **not reported** |
+| Geometry | lines, arcs, circles, polylines, ellipses, splines, blocks | line, circle, arc, polyline, point; ellipse and elliptical arc (centre, axis ends and arc ends as points; tangent, coincident, concentric, horizontal/vertical on the major axis); spline (fit or control points as points; tangent and smooth at its ends; open clamped or fit splines); block reference (insertion point, and the block's own points riding rigidly with position and rotation) (`model.rs`) |
+| Algorithm | proprietary | damped Gauss–Newton / Levenberg–Marquardt, numeric Jacobian, per connected component; MAX_ITER 200, MAX_ROWS 800; curve–curve tangency with an ellipse through auxiliary contact parameters |
+| Over-constraint | refused with a message | redundancy by Jacobian rank (Householder QR with column pivoting, rows and columns balanced), including Fix; the message names the constraints the new one duplicates; conflicts by removal probing (up to 48 probes) |
+| Degrees of freedom, fully constrained state | shown (constraint bars, status) | `constraints.dof` and `constraints.inspect`: free parameters minus Jacobian rank per component, per-object DOF from the null space, under/fully/over-constrained status (`dof.rs`); not yet shown in the UI |
 | Inference while drawing (CONSTRAINTINFER) | yes | no |
 
 ## Tests
