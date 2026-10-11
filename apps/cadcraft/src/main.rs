@@ -73,12 +73,16 @@ impl eframe::App for App {
         self.cad.ui(ui);
         self.persist_workspace(false);
     }
+    /// A normal exit: the workspace is saved, and this run's autosave files are not needed (a
+    /// crash leaves them for recovery).
     fn on_exit(&mut self) {
         self.persist_workspace(true);
+        self.cad.shutdown_autosave();
     }
     /// Preferences (the interface theme) survive restarts; window and egui state are not kept.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(cadcraft_ui_egui::PREFS_KEY, self.cad.prefs_json());
+        storage.set_string(cadcraft_ui_egui::autosave::PREFS_KEY, cadcraft_ui_egui::autosave::prefs_json());
     }
     fn persist_egui_memory(&self) -> bool {
         false
@@ -124,7 +128,7 @@ fn filters_for_save(name: &str) -> [(&'static str, &'static str); 5] {
     filters
 }
 
-/// The per-user settings directory (today it holds `logs/`): `CADCRAFT_CONFIG_DIR` if set, else
+/// The per-user settings directory (it holds `logs/` and `autosave/`): `CADCRAFT_CONFIG_DIR` if set, else
 /// `$XDG_CONFIG_HOME/cadcraft` or `~/.config/cadcraft` on Linux and the BSDs,
 /// `~/Library/Application Support/CADCraft` on macOS, `%APPDATA%\CADCraft` on Windows.
 fn config_dir() -> Option<std::path::PathBuf> {
@@ -257,6 +261,13 @@ fn main() -> eframe::Result {
             app.system_languages = std::env::var("CADCRAFT_LOCALE").map(|s| vec![s]).unwrap_or_else(|_| sys_locale::get_locales().collect());
             if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::PREFS_KEY)) {
                 app.load_prefs(&prefs);
+            }
+            if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::autosave::PREFS_KEY)) {
+                cadcraft_ui_egui::autosave::load_prefs(&prefs);
+            }
+            // Autosave files (SAVEFILEPATH) default to `<settings dir>/autosave`.
+            if let Some(dir) = config_dir() {
+                app.enable_autosave(&dir.join("autosave"));
             }
             app.integrated_titlebar = cfg!(target_os = "macos");
             if surface.present_mode == eframe::wgpu::PresentMode::AutoNoVsync {

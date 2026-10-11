@@ -8,6 +8,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod autosave;
 pub mod canvas;
 pub mod chrome;
 pub mod clipboard;
@@ -184,6 +185,10 @@ pub struct CadApp {
     pub quit_confirmed: bool,
     /// A close request waiting for "Save changes?" answers ([`closing`]).
     pub closing: Option<closing::Closing>,
+    /// Autosave (desktop; `None` until [`Self::enable_autosave`]).
+    pub autosave: Option<cadcraft_engine::autosave::Autosaver>,
+    /// Drawing Recovery: autosave files a crashed app left behind.
+    pub recovery: autosave::Recovery,
 }
 
 impl CadApp {
@@ -211,6 +216,8 @@ impl CadApp {
             quit_requested: false,
             quit_confirmed: false,
             closing: None,
+            autosave: None,
+            recovery: autosave::Recovery::default(),
         }
     }
 
@@ -383,6 +390,7 @@ impl CadApp {
         }
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
+        self.autosave_tick(ctx);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
         for f in ctx.input(|i| i.raw.dropped_files.clone()) {
@@ -442,6 +450,7 @@ impl CadApp {
         });
         dialogs::show(self, ui.ctx());
         closing::prompt(self, ui.ctx());
+        autosave::show(self, ui.ctx());
         self.frame_ms = now_ms() - t0;
     }
 

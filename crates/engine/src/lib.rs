@@ -10,6 +10,7 @@
 
 pub mod assoc;
 pub mod audit;
+pub mod autosave;
 pub mod cmd;
 mod finite;
 pub mod grips;
