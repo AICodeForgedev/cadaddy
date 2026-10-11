@@ -241,6 +241,23 @@ fn dimstyle_commands() {
 }
 
 #[test]
+fn dimstyle_rename_updates_block_dimensions() {
+    let mut s = Session::new();
+    s.execute("dimstyle", &json!({ "name": "DS", "DIMTXT": 2 })).unwrap();
+    s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [10, 0], "at": [5, 3] })).unwrap();
+    s.execute("selectall", &json!({})).unwrap();
+    s.execute("block", &json!({ "name": "BD", "base": [0, 0], "keep": "convert" })).unwrap();
+    let in_block = |s: &Session| {
+        let b = s.doc().unwrap().block("BD").unwrap().clone();
+        b.entities.iter().find_map(|e| if let EntityKind::Dimension(d) = &e.kind { Some(d.style.clone()) } else { None }).unwrap()
+    };
+    assert_eq!(in_block(&s), "DS");
+    assert!(s.execute("dimstyle.delete", &json!({ "name": "DS" })).is_err());
+    s.execute("dimstyle.rename", &json!({ "from": "DS", "to": "DS2" })).unwrap();
+    assert_eq!(in_block(&s), "DS2");
+}
+
+#[test]
 fn dimension_overrides() {
     let mut s = Session::new();
     let d = h(&s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [10, 0], "at": [5, 2] })).unwrap());
