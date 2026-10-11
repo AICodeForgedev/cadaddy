@@ -9,6 +9,9 @@ use crate::CadApp;
 use crate::icons::{self, Icon};
 use crate::theme::Tokens;
 
+/// The QuickCalc palette.
+pub mod quickcalc;
+
 type Tool = (Icon, &'static str, &'static str);
 
 /// Tool Sets groups: (name, large tools, small tools).

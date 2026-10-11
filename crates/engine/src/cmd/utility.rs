@@ -5,17 +5,26 @@ use cadcraft_geom::{Polyline, Vec2};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{EngineError, Result, Session};
+use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("cal", "QuickCalc", run_cal)
             .menu(&["Tools", "Inquiry", "Quick"])
             .alias(&["quickcalc", "qc"])
-            .params("{expr: \"(3+4)*2^2\", vars?: {x: 1}}")
+            .params(
+                "{expr: \"(3+4)*2^2\" | \"dist([0,0],[3,4])\", vars?: {x: 1, p: [x, y]}} → {value} | {point} | \
+                 {convert: {type?: length|area|volume|angle, from, to, value}} → {value} | {units: true} → unit lists | \
+                 {pick: point|distance|angle|intersection, points}",
+            )
             .enabled(always)
             .noundo()
-            .transparent(),
+            .transparent()
+            .interactive(|_| Ok(Box::new(CalM))),
+        CommandSpec::new("quickcalc.pick", "QuickCalc Pick", run_quickcalc_pick)
+            .params("{mode: point|distance|angle|intersection, points: [[x,y],...]} → {value} | {point}")
+            .noundo()
+            .interactive(|_| Ok(Box::<PickM>::default())),
         CommandSpec::new("find", "Find...", run_find).menu(&["Edit", "Find..."]).params("{find, replace?, matchCase?: bool, wholeWord?: bool}"),
         CommandSpec::new("massprop", "Region/Mass Properties", run_massprop)
             .menu(&["Tools", "Inquiry", "Region/Mass Properties"])
@@ -29,182 +38,145 @@ pub fn specs() -> Vec<CommandSpec> {
 
 // ---------------- CAL ----------------
 
-struct Parser<'a> {
-    s: &'a [u8],
-    i: usize,
-    vars: &'a serde_json::Map<String, Value>,
-    depth: usize,
-}
+mod calc;
 
-impl Parser<'_> {
-    fn ws(&mut self) {
-        while self.s.get(self.i).is_some_and(|c| c.is_ascii_whitespace()) {
-            self.i += 1;
-        }
-    }
-    fn peek(&mut self) -> Option<u8> {
-        self.ws();
-        self.s.get(self.i).copied()
-    }
-    fn expr(&mut self) -> std::result::Result<f64, String> {
-        self.depth += 1;
-        if self.depth > 200 {
-            return Err("expression too deeply nested".into());
-        }
-        let mut v = self.term()?;
-        while let Some(c) = self.peek() {
-            match c {
-                b'+' => {
-                    self.i += 1;
-                    v += self.term()?;
-                }
-                b'-' => {
-                    self.i += 1;
-                    v -= self.term()?;
-                }
-                _ => break,
-            }
-        }
-        self.depth -= 1;
-        Ok(v)
-    }
-    fn term(&mut self) -> std::result::Result<f64, String> {
-        let mut v = self.unary()?;
-        while let Some(c) = self.peek() {
-            match c {
-                b'*' => {
-                    self.i += 1;
-                    v *= self.unary()?;
-                }
-                b'/' => {
-                    self.i += 1;
-                    let d = self.unary()?;
-                    if d == 0.0 {
-                        return Err("division by zero".into());
-                    }
-                    v /= d;
-                }
-                _ => break,
-            }
-        }
-        Ok(v)
-    }
-    fn power(&mut self) -> std::result::Result<f64, String> {
-        let b = self.atom()?;
-        if self.peek() == Some(b'^') {
-            self.i += 1;
-            let e = self.unary()?;
-            return Ok(b.powf(e));
-        }
-        Ok(b)
-    }
-    fn unary(&mut self) -> std::result::Result<f64, String> {
-        match self.peek() {
-            Some(b'-') => {
-                self.i += 1;
-                Ok(-self.unary()?)
-            }
-            Some(b'+') => {
-                self.i += 1;
-                self.unary()
-            }
-            _ => self.power(),
-        }
-    }
-    fn atom(&mut self) -> std::result::Result<f64, String> {
-        match self.peek() {
-            Some(b'(') => {
-                self.i += 1;
-                let v = self.expr()?;
-                if self.peek() != Some(b')') {
-                    return Err("missing )".into());
-                }
-                self.i += 1;
-                Ok(v)
-            }
-            Some(c) if c.is_ascii_digit() || c == b'.' => {
-                let st = self.i;
-                while self.s.get(self.i).is_some_and(|c| c.is_ascii_digit() || *c == b'.' || *c == b'e' || *c == b'E') {
-                    self.i += 1;
-                }
-                let t = std::str::from_utf8(self.s.get(st..self.i).unwrap_or(&[])).unwrap_or("");
-                t.parse::<f64>().map_err(|_| format!("bad number `{t}`"))
-            }
-            Some(c) if c.is_ascii_alphabetic() => {
-                let st = self.i;
-                while self.s.get(self.i).is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_') {
-                    self.i += 1;
-                }
-                let name = std::str::from_utf8(self.s.get(st..self.i).unwrap_or(&[])).unwrap_or("").to_ascii_lowercase();
-                if self.peek() == Some(b'(') {
-                    self.i += 1;
-                    let a = self.expr()?;
-                    let b = if self.peek() == Some(b',') {
-                        self.i += 1;
-                        Some(self.expr()?)
-                    } else {
-                        None
-                    };
-                    if self.peek() != Some(b')') {
-                        return Err("missing )".into());
-                    }
-                    self.i += 1;
-                    return Ok(match (name.as_str(), b) {
-                        ("sin", _) => a.to_radians().sin(),
-                        ("cos", _) => a.to_radians().cos(),
-                        ("tan", _) => a.to_radians().tan(),
-                        ("asin", _) => a.asin().to_degrees(),
-                        ("acos", _) => a.acos().to_degrees(),
-                        ("atan", None) => a.atan().to_degrees(),
-                        ("atan", Some(x)) => a.atan2(x).to_degrees(),
-                        ("sqrt", _) => a.sqrt(),
-                        ("sqr", _) => a * a,
-                        ("abs", _) => a.abs(),
-                        ("ln", _) => a.ln(),
-                        ("log", _) => a.log10(),
-                        ("exp", _) => a.exp(),
-                        ("round", _) => a.round(),
-                        ("trunc", _) => a.trunc(),
-                        ("r2d", _) => a.to_degrees(),
-                        ("d2r", _) => a.to_radians(),
-                        ("min", Some(x)) => a.min(x),
-                        ("max", Some(x)) => a.max(x),
-                        ("pow", Some(x)) => a.powf(x),
-                        _ => return Err(format!("unknown function `{name}`")),
-                    });
-                }
-                match name.as_str() {
-                    "pi" => Ok(std::f64::consts::PI),
-                    "e" => Ok(std::f64::consts::E),
-                    _ => self.vars.get(&name).and_then(Value::as_f64).ok_or_else(|| format!("unknown name `{name}`")),
-                }
-            }
-            _ => Err("expected a number".into()),
-        }
-    }
-}
+/// What QuickCalc's "get from the drawing" picks put on the command line before the value (the
+/// palette reads it back from there).
+const PICKED: &str = "QuickCalc: ";
 
-/// Evaluate an arithmetic expression (degrees for trig, `^` power, functions, pi).
+/// Evaluate an arithmetic expression to a number (degrees for trig, `^` power, functions, pi).
+/// Expressions with points are evaluated by [`calc::eval_val`].
 pub fn eval(expr: &str, vars: &serde_json::Map<String, Value>) -> std::result::Result<f64, String> {
-    if expr.len() > 10_000 {
-        return Err("expression too long".into());
+    match calc::eval_val(expr, vars)? {
+        calc::Val::Num(v) => Ok(v),
+        calc::Val::Pt(_) => Err("the result is a point, not a number".into()),
     }
-    let mut p = Parser { s: expr.as_bytes(), i: 0, vars, depth: 0 };
-    let v = p.expr()?;
-    if p.peek().is_some() {
-        return Err(format!("unexpected `{}`", expr.get(p.i..).unwrap_or("")));
-    }
-    if !v.is_finite() {
-        return Err("result is not a finite number".into());
-    }
-    Ok(v)
 }
 
 fn run_cal(_s: &mut Session, p: &Value) -> Result<Value> {
+    if bool_or(p, "units", false) {
+        return Ok(json!({ "units": calc::units_json() }));
+    }
+    if let Some(c) = p.get("convert").filter(|v| !v.is_null()) {
+        let text = |k: &str| c.get(k).and_then(Value::as_str).ok_or_else(|| bad("cal", format!("`convert.{k}` is required")));
+        let vars = p.get("vars").and_then(Value::as_object).cloned().unwrap_or_default();
+        let v = match c.get("value") {
+            Some(Value::String(e)) => eval(e, &vars).map_err(|m| bad("cal", m))?,
+            Some(v) => v.as_f64().ok_or_else(|| bad("cal", "`convert.value` must be a number or an expression"))?,
+            None => return Err(bad("cal", "`convert.value` is required")),
+        };
+        let (from, to) = (text("from")?, text("to")?);
+        let r = calc::convert(c.get("type").and_then(Value::as_str), from, to, v).map_err(|m| bad("cal", m))?;
+        return Ok(json!({ "value": r, "message": format!("{} {from} = {} {to}", calc::num_text(v), calc::num_text(r)) }));
+    }
+    if let Some(m) = p.get("pick").filter(|v| !v.is_null()) {
+        let mode = m.as_str().and_then(calc::Pick::parse).ok_or_else(|| bad("cal", "`pick` must be point, distance, angle or intersection"))?;
+        let pts = points_param(p, "points").ok_or_else(|| bad("cal", "`points` must be a list of [x, y] points"))?;
+        let v = mode.value(&pts).map_err(|m| bad("cal", m))?;
+        let mut r = v.json();
+        r["message"] = json!(v.text());
+        return Ok(r);
+    }
     let e = str_param(p, "expr").ok_or_else(|| bad("cal", "`expr` is required"))?;
     let vars = p.get("vars").and_then(Value::as_object).cloned().unwrap_or_default();
-    let v = eval(e, &vars).map_err(|m| bad("cal", m))?;
-    Ok(json!({ "value": v, "message": format!("{v}") }))
+    let v = calc::eval_val(e, &vars).map_err(|m| bad("cal", m))?;
+    let mut r = v.json();
+    r["message"] = json!(v.text());
+    Ok(r)
+}
+
+/// CAL at the command line: one expression, its value echoed.
+struct CalM;
+
+impl Interactive for CalM {
+    fn name(&self) -> &'static str {
+        "CAL"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        Prompt::new(">> Expression", Accept::TEXT)
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        let Input::Text(t) = i else { return Ok(Step::Done) };
+        if t.trim().is_empty() {
+            return Ok(Step::Done);
+        }
+        match calc::eval_val(&t, &serde_json::Map::new()) {
+            Ok(v) => s.echo(v.text()),
+            Err(m) => s.echo(format!("CAL: {m}")),
+        }
+        Ok(Step::Done)
+    }
+}
+
+/// QuickCalc's "get from the drawing": pick the points for a coordinate, distance, angle or
+/// intersection; the value is echoed after [`PICKED`].
+#[derive(Default)]
+struct PickM {
+    mode: Option<calc::Pick>,
+    pts: Vec<Vec2>,
+}
+
+impl PickM {
+    fn finish(&self, s: &mut Session, mode: calc::Pick) -> Result<Step> {
+        match mode.value(&self.pts) {
+            Ok(v) => s.echo(format!("{PICKED}{}", v.text())),
+            Err(m) => s.echo(format!("QuickCalc: {m}")),
+        }
+        Ok(Step::Done)
+    }
+}
+
+impl Interactive for PickM {
+    fn name(&self) -> &'static str {
+        "QUICKCALC"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        let msg = match (self.mode, self.pts.len()) {
+            (None, _) => {
+                return Prompt::new("Get from the drawing or [Point/Distance/Angle/Intersection]", Accept::POINT).kw(&[
+                    "Point",
+                    "Distance",
+                    "Angle",
+                    "Intersection",
+                ]);
+            }
+            (Some(calc::Pick::Point), _) => "Specify point",
+            (Some(calc::Pick::Intersection), 0) => "Specify first point of first line",
+            (Some(calc::Pick::Intersection), 1) => "Specify second point of first line",
+            (Some(calc::Pick::Intersection), 2) => "Specify first point of second line",
+            (Some(calc::Pick::Intersection), _) => "Specify second point of second line",
+            (Some(_), 0) => "Specify first point",
+            (Some(_), _) => "Specify second point",
+        };
+        let base = if self.pts.len() % 2 == 1 { self.pts.last().copied() } else { None };
+        Prompt::new(msg, Accept::POINT).base_opt(base)
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        match i {
+            Input::Keyword(k) if self.mode.is_none() => {
+                self.mode = calc::Pick::parse(&k);
+                Ok(Step::Continue)
+            }
+            Input::Point(p) => {
+                let mode = *self.mode.get_or_insert(calc::Pick::Point);
+                self.pts.push(p);
+                if self.pts.len() >= mode.points() { self.finish(s, mode) } else { Ok(Step::Continue) }
+            }
+            Input::Enter => Ok(Step::Done),
+            _ => Ok(Step::Continue),
+        }
+    }
+    fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
+        match self.pts.last() {
+            Some(a) if self.pts.len() % 2 == 1 => vec![super::helpers::line(*a, c)],
+            _ => Vec::new(),
+        }
+    }
+}
+
+fn run_quickcalc_pick(s: &mut Session, p: &Value) -> Result<Value> {
+    let mode = str_param(p, "mode").unwrap_or("point");
+    run_cal(s, &json!({ "pick": mode, "points": p.get("points").cloned().unwrap_or(Value::Null) }))
 }
 
 // ---------------- FIND ----------------

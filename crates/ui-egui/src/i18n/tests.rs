@@ -93,6 +93,7 @@ fn missing_marked_ui_literals(language: &str) -> BTreeSet<String> {
         include_str!("../chrome.rs"),
         include_str!("../cmdline.rs"),
         include_str!("../credits.rs"),
+        include_str!("../palettes/quickcalc.rs"),
         include_str!("../dialogs.rs"),
         include_str!("../layers.rs"),
         include_str!("../palettes.rs"),
