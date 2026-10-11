@@ -161,8 +161,8 @@ const WEIGHT_WORDS: &[&str] = &["thin", "light", "medium", "semibold", "bold", "
 #[derive(Default)]
 struct Db {
     scanned: bool,
-    /// Font files found by the scan, by lower-case file stem.
-    paths: HashMap<String, PathBuf>,
+    /// Font files found by the scan and fonts compiled into the binary, by lower-case file stem.
+    paths: HashMap<String, Source>,
     /// Loaded or registered font file bytes, by lower-case file stem.
     files: HashMap<String, Arc<Vec<u8>>>,
     /// Name lookups already answered, found or not.
@@ -187,12 +187,24 @@ struct Fallback {
     by_char: HashMap<char, Option<usize>>,
 }
 
+/// Where a font file's bytes come from.
+enum Source {
+    /// An installed font file, read on first use.
+    File(PathBuf),
+    /// A font compiled into the binary ([`crate::CRAFT_FONTS`]), copied on first use.
+    Static(&'static [u8]),
+}
+
 fn lock() -> MutexGuard<'static, Db> {
     static DB: OnceLock<Mutex<Db>> = OnceLock::new();
     let mut g = DB.get_or_init(|| Mutex::new(Db::default())).lock().unwrap_or_else(PoisonError::into_inner);
     if !g.scanned {
         g.scanned = true;
-        g.paths = scan();
+        g.paths = scan().into_iter().map(|(stem, p)| (stem, Source::File(p))).collect();
+        // Embedded craft-fonts fonts take the place of an installed file with the same stem.
+        for f in crate::CRAFT_FONTS {
+            g.paths.insert(f.stem(), Source::Static(f.bytes));
+        }
     }
     g
 }
@@ -273,7 +285,10 @@ impl Db {
         if self.loaded_bytes >= MAX_LOADED_BYTES {
             return None;
         }
-        let bytes = Arc::new(read_file(self.paths.get(stem)?)?);
+        let bytes = Arc::new(match self.paths.get(stem)? {
+            Source::File(path) => read_file(path)?,
+            Source::Static(bytes) => bytes.to_vec(),
+        });
         self.loaded_bytes = self.loaded_bytes.saturating_add(bytes.len());
         self.files.insert(stem.to_string(), bytes.clone());
         Some(bytes)
@@ -412,11 +427,15 @@ fn weight_penalty(stem: &str, want: &str) -> usize {
 /// Order font file stems for the missing-glyph search: known wide-coverage (CJK) fonts first,
 /// regular weights before bold, light and the like, then by name.
 pub(crate) fn rank_fallback(stems: &[String]) -> Vec<String> {
+    let embedded_rank = PREFERRED_FALLBACK.iter().position(|p| *p == "notosans").unwrap_or(PREFERRED_FALLBACK.len());
     let mut v: Vec<(usize, usize, String)> = stems
         .iter()
         .map(|s| {
             let n = norm(s);
             let pref = PREFERRED_FALLBACK.iter().position(|p| n.contains(p)).unwrap_or(PREFERRED_FALLBACK.len());
+            // Embedded craft-fonts fonts come right after the installed wide-coverage (CJK) fonts,
+            // before the general-purpose ones, so the bounded search always reaches them.
+            let pref = if crate::craft_fonts::is_embedded(s) { pref.min(embedded_rank) } else { pref };
             (pref, weight_penalty(s, ""), s.clone())
         })
         .collect();
@@ -429,6 +448,18 @@ pub(crate) fn rank_fallback(stems: &[String]) -> Vec<String> {
 pub fn register(name: &str, bytes: Vec<u8>) {
     let mut g = lock();
     g.files.insert(key(name), Arc::new(bytes));
+    g.resolved.clear();
+    g.fallback = Fallback::default();
+}
+
+/// Register font bytes that live for the whole process under a name; they are copied only when
+/// the font is first used, the way the embedded craft-fonts fonts are listed.
+#[cfg(test)]
+pub(crate) fn register_static(name: &str, bytes: &'static [u8]) {
+    let mut g = lock();
+    let k = key(name);
+    g.files.remove(&k);
+    g.paths.insert(k, Source::Static(bytes));
     g.resolved.clear();
     g.fallback = Fallback::default();
 }

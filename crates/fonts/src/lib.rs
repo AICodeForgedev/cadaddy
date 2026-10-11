@@ -23,6 +23,9 @@ use cadcraft_geom::{Bounds2, Vec2};
 
 pub use mtext::{MTextColor, MTextLayout, MTextParams, MTextPiece, layout_mtext, layout_mtext_with, plain_mtext};
 
+mod craft_fonts;
+pub use craft_fonts::{CRAFT_FONTS, CraftFont};
+
 /// Name of the built-in font.
 pub const BUILTIN_FONT: &str = "CADCraft Stroke";
 
