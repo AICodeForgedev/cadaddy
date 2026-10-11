@@ -1121,3 +1121,22 @@ fn press_and_drag_selection_window() {
     assert!(!s.begin_window(Vec2::new(f64::NAN, 0.0)));
     assert!(s.pending_window.is_none());
 }
+
+#[test]
+fn block_rotation_property_turns_attribute_text() {
+    let mut s = Session::new();
+    s.execute("attdef", &json!({"tag": "TAG", "at": [10, 0], "default": "D", "height": 2.5})).unwrap();
+    let def = s.doc().unwrap().model.last().unwrap().handle;
+    s.execute("block", &json!({"name": "B", "base": [0, 0], "handles": [def.hex()], "keep": "delete"})).unwrap();
+    s.execute("insert", &json!({"name": "B", "at": [0, 0], "attribs": {"TAG": "hello"}})).unwrap();
+    let h = s.doc().unwrap().model.last().unwrap().handle;
+    s.execute("properties.set", &json!({"handles": [h.hex()], "rotation": 90})).unwrap();
+    let doc = s.doc().unwrap();
+    let Some(EntityKind::Insert(i)) = doc.model.last().map(|e| &e.kind) else { panic!("no insert") };
+    let t = &i.attribs[0].text;
+    assert!((i.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+    assert!(t.insert.x.abs() < 1e-9 && (t.insert.y - 10.0).abs() < 1e-9, "text at {:?}", t.insert);
+    assert!((t.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+    assert_eq!(t.value, "hello");
+    assert!((t.height - 2.5).abs() < 1e-12);
+}

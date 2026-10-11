@@ -326,7 +326,19 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 EntityKind::Insert(i) => {
                     if let Some(x) = num("rotation") {
+                        let turn = x.to_radians() - i.rotation;
                         i.rotation = x.to_radians();
+                        // The attached text turns with the reference, around its insertion point (as ROTATE does).
+                        let base = i.insert.xy();
+                        for a in &mut i.attribs {
+                            let t = &mut a.text;
+                            for q in std::iter::once(&mut t.insert).chain(t.align_pt.as_mut()) {
+                                let r = q.xy().rotate_about(base, turn);
+                                q.x = r.x;
+                                q.y = r.y;
+                            }
+                            t.rotation = cadcraft_geom::norm_angle(t.rotation + turn);
+                        }
                     }
                     if let Some(x) = num("scale").filter(|x| *x != 0.0) {
                         // A new positive scale carries the attached attribute text with it, like SCALE about the insertion point.
