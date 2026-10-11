@@ -21,10 +21,12 @@ pub enum Preference {
     BrazilianPortuguese,
     #[serde(rename = "de")]
     German,
+    #[serde(rename = "es")]
+    Spanish,
 }
 
 impl Preference {
-    pub const ALL: [Self; 5] = [Self::Auto, Self::English, Self::Ukrainian, Self::BrazilianPortuguese, Self::German];
+    pub const ALL: [Self; 6] = [Self::Auto, Self::English, Self::Ukrainian, Self::BrazilianPortuguese, Self::German, Self::Spanish];
 
     /// The codes a preference can be given as, for messages ("auto, en or uk").
     pub fn codes() -> String {
@@ -42,6 +44,7 @@ impl Preference {
             Self::Ukrainian => "uk",
             Self::BrazilianPortuguese => "pt-BR",
             Self::German => "de",
+            Self::Spanish => "es",
         }
     }
 
@@ -52,6 +55,7 @@ impl Preference {
             Self::Ukrainian => "Українська",
             Self::BrazilianPortuguese => "Português (Brasil)",
             Self::German => "Deutsch",
+            Self::Spanish => "Español",
         }
     }
 
@@ -70,6 +74,7 @@ impl Preference {
             Self::Ukrainian => "uk",
             Self::BrazilianPortuguese => "pt-BR",
             Self::German => "de",
+            Self::Spanish => "es",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -86,7 +91,7 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 4] = [
+pub static LANGUAGES: [Language; 5] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language {
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
@@ -101,6 +106,8 @@ pub static LANGUAGES: [Language; 4] = [
     },
     // German plurals follow the English rule: one (1), other.
     Language { code: "de", name: "Deutsch", source: include_str!("de.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    // Spanish integer plurals follow the English rule too.
+    Language { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
 ];
 
 /// BCP 47 and POSIX locale tags, including `uk-UA`, `uk_UA.UTF-8` and `pt_BR.UTF-8`.

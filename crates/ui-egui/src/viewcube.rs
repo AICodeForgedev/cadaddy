@@ -90,14 +90,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, l: &Layout) {
     let lc = Color32::from_rgb(0xc8, 0xcc, 0xd2);
     let c = l.center;
     let ring = l.ring;
-    p.text(c + vec2(0.0, -ring - 1.0), egui::Align2::CENTER_CENTER, "N", f.clone(), lc);
-    p.text(c + vec2(0.0, ring + 1.0), egui::Align2::CENTER_CENTER, "S", f.clone(), lc);
-    p.text(c + vec2(ring + 1.0, 0.0), egui::Align2::CENTER_CENTER, "E", f.clone(), lc);
-    p.text(c + vec2(-ring - 1.0, 0.0), egui::Align2::CENTER_CENTER, "W", f, lc);
+    p.text(c + vec2(0.0, -ring - 1.0), egui::Align2::CENTER_CENTER, crate::tl!("N"), f.clone(), lc);
+    p.text(c + vec2(0.0, ring + 1.0), egui::Align2::CENTER_CENTER, crate::tl!("S"), f.clone(), lc);
+    p.text(c + vec2(ring + 1.0, 0.0), egui::Align2::CENTER_CENTER, crate::tl!("E"), f.clone(), lc);
+    p.text(c + vec2(-ring - 1.0, 0.0), egui::Align2::CENTER_CENTER, crate::tl!("W"), f, lc);
     let face_col = if part == Some(Part::Face) { Color32::from_rgb(0xb8, 0xbc, 0xc2) } else { Color32::from_rgb(0x9a, 0x9e, 0xa4) };
     p.rect_filled(l.face, 2.0, face_col);
     p.rect_stroke(l.face, 2.0, Stroke::new(1.0, Color32::from_rgb(0x6c, 0x70, 0x76)), egui::StrokeKind::Inside);
-    p.text(c, egui::Align2::CENTER_CENTER, "TOP", egui::FontId::proportional(13.0), Color32::from_rgb(0x50, 0x54, 0x5a));
+    p.text(c, egui::Align2::CENTER_CENTER, crate::tl!("TOP"), egui::FontId::proportional(13.0), Color32::from_rgb(0x50, 0x54, 0x5a));
     paint_home(&p, l.home, part == Some(Part::Home));
 
     let resp = match part {
