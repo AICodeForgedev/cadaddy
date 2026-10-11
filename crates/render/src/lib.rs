@@ -15,6 +15,7 @@ mod linetype;
 mod linetype_text;
 mod mline;
 pub mod paper;
+pub mod pen;
 mod plotstyle;
 mod point;
 pub mod raster;
@@ -25,6 +26,7 @@ mod wide;
 use cadcraft_color::{Color, Rgb};
 use cadcraft_doc::{Drawing, Entity, EntityKind, Handle, Lineweight, Prim, Space};
 use cadcraft_geom::{Bounds2, Mat3, Polyline, Vec2};
+use pen::Pen;
 
 pub use dim::{ArrowGeom, Arrowhead, DimGeometry, DimText, LineRole, arrowhead, dimension_geometry, dimension_geometry_with, format_linear_value};
 pub use fill::triangulate_evenodd;
@@ -77,6 +79,9 @@ pub struct DisplayList {
     pub sheet: Option<Sheet>,
     /// Block contents expanded while building (see [`MAX_BLOCK_EXPANSION`]).
     pub expanded: usize,
+    /// Plot style end, join and fill style per primitive (parallel to `prims`; missing entries
+    /// are "use object"), turned into geometry by [`pen::apply`].
+    pub pens: Vec<Pen>,
 }
 
 impl DPrim {
@@ -213,10 +218,21 @@ impl Builder<'_> {
             None => (color, lw),
         }
     }
+    /// Record the end, join and fill style `color` prints with for the primitive pushed next.
+    fn note_pen(&mut self, color: Ink) {
+        let Some(s) = self.styles else { return };
+        let pen = s.pen(color, self.named);
+        if !pen.is_object() {
+            let i = self.list.prims.len();
+            self.list.pens.resize(i, Pen::default());
+            self.list.pens.push(pen);
+        }
+    }
     fn polyline(&mut self, ctx: &Ctx, color: Ink, lw: f32, pts: &[Vec2]) {
         if pts.len() < 2 {
             return;
         }
+        self.note_pen(color);
         let (color, lw) = self.styled(color, lw);
         let start = self.list.verts.len() as u32;
         for p in pts {
@@ -230,6 +246,7 @@ impl Builder<'_> {
         if tris.len() < 3 {
             return;
         }
+        self.note_pen(color);
         let (color, _) = self.styled(color, 0.0);
         let start = self.list.tris.len() as u32;
         for p in tris {
@@ -338,6 +355,10 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
             entity(&mut b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
         }
     }
+    // A layout is drawn in paper units, so its pens become geometry now.
+    if let Some(sheet) = b.list.sheet {
+        pen::apply(&mut b.list, sheet.unit_mm);
+    }
     b.list
 }
 
@@ -411,6 +432,8 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
         }
         entity(&mut sub, &Ctx { lt_factor, ..top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors) }, me);
     }
+    // The contents are in paper units now: draw their pens before clipping.
+    pen::apply(&mut sub.list, paper::paper_unit_mm(d));
     b.list.expanded = b.list.expanded.saturating_add(sub.list.expanded);
     match &poly {
         Some(p) => append_clipped(&mut b.list, &sub.list, &Clip::Poly(p)),

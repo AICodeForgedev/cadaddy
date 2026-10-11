@@ -148,8 +148,12 @@ fn properties(h: &mut Hatch, p: &Value) {
         if !h.solid {
             // A named pattern replaces the gradient fill; the renderer draws the gradient first when it is set.
             h.gradient = None;
+            // A library pattern is drawn from the library; a loaded .pat pattern brings its lines;
+            // any other name is the hatch's own and keeps its definition.
             if cadcraft_doc::library::pattern(&h.pattern).is_some() {
                 h.pattern_lines.clear();
+            } else if let Some(user) = super::patfile::user_pattern(&h.pattern) {
+                h.pattern_lines = user.lines;
             }
         }
     }
@@ -186,6 +190,7 @@ pub(super) fn run_hatchedit(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(up) = str_param(p, "pattern").map(|v| v.trim().to_ascii_uppercase()).filter(|v| !v.is_empty())
         && up != "SOLID"
         && cadcraft_doc::library::pattern(&up).is_none()
+        && super::patfile::user_pattern(&up).is_none()
     {
         let d = s.doc()?;
         let own = hs.iter().all(|h| matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Hatch(x)) if x.pattern == up));
@@ -380,7 +385,7 @@ impl Interactive for HatchEditM {
             (Ask::Pattern, _) => {
                 if let Some(t) = text.filter(|t| !t.is_empty()) {
                     let up = t.to_ascii_uppercase();
-                    if cadcraft_doc::library::pattern(&up).is_none() {
+                    if cadcraft_doc::library::pattern(&up).is_none() && super::patfile::user_pattern(&up).is_none() {
                         s.echo(format!("Unknown pattern {up}."));
                         return Ok(Step::Continue);
                     }

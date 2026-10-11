@@ -170,6 +170,9 @@ pub fn pdf(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<Vec<u8>> {
     } else {
         Map { from: Vec2::ZERO, s: 1.0, to: Vec2::ZERO, k }
     };
+    // Plot style ends, joins and fill patterns at the plot scale (a layout's are already drawn).
+    let mut list = list;
+    cadcraft_render::pen::apply(&mut list, map.s * unit_mm);
     let media = sheet.size * k;
     let clip_pt = if fit || matches!(space, Space::Model) {
         Bounds2::new(sheet.printable.min * k, sheet.printable.max * k)

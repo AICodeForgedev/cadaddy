@@ -7,12 +7,13 @@
 //! style; layer 0 inside a block takes the reference's layer) or `ByBlock` (the block
 //! reference's); names the table lacks print as `Normal`. The
 //! style replaces or keeps the colour, turns it grey and screens it (toward the white paper),
-//! and replaces the linetype and lineweight. Colour 7 prints black, as on paper.
+//! and replaces the linetype and lineweight. Colour 7 prints black, as on paper. Its end, join
+//! and fill styles travel with each primitive ([`crate::Pen`]).
 
 use cadcraft_color::{Rgb, nearest_aci};
 use cadcraft_doc::{Common, Drawing, Linetype, PlotStyle, PlotStyleTable};
 
-use crate::{Ctx, Ink};
+use crate::{Ctx, Ink, Pen};
 
 /// A table ready for the builder: styles plus their resolved linetype overrides.
 pub(crate) struct Styler {
@@ -95,6 +96,11 @@ impl Styler {
         // Colour 7 is black on the paper the style prints on.
         let base = if ink.aci7 { Rgb(0, 0, 0) } else { ink.rgb };
         (Ink { rgb: s.apply_color(base), aci7: false, ..ink }, lw)
+    }
+
+    /// The end, join and fill style of the style that applies to `ink`.
+    pub(crate) fn pen(&self, ink: Ink, named: Option<usize>) -> Pen {
+        self.style(ink, named).map(Pen::of).unwrap_or_default()
     }
 
     /// The linetype override of the style that applies to `ink`: `None` keeps the object's,

@@ -22,7 +22,32 @@ A style can set these:
 | `lineweight` | hundredths of a millimetre, 0–211; used when lineweights are plotted | absent / `null` |
 | `end`, `join`, `fill` | line end, line join and area fill style | `object` |
 
-Colour 7 prints black. `end`, `join` and `fill` are stored but not applied yet.
+Colour 7 prints black.
+
+### Line ends, joins and fill patterns
+
+- **`end` and `join`** shape lines wider than 0.25 mm on paper (from lineweights). The line
+  is drawn as its filled outline: `butt` ends at the end point, `square` reaches half the
+  width past it, `round` adds a half circle and `diamond` a point. `miter` joins meet in a
+  point (bevelled past 10 half widths), `bevel` cuts the corner, `round` rounds it and
+  `diamond` points out one half width. `object` is round, as lines are drawn anyway.
+- **`fill`** replaces the solid fill of filled areas: 2D solids, traces, wide polylines,
+  solid hatches and filled text. `solid` and `object` keep it solid. The patterns are
+  CADCraft's own definitions, measured on paper and anchored to the sheet's origin. They
+  repeat every 1 mm:
+
+| Fill | Pattern |
+|---|---|
+| `checkerboard` | 0.5 mm squares, every other one filled |
+| `crosshatch` | horizontal and vertical bars, 0.2 mm wide |
+| `diamonds` | 0.35 mm squares turned 45°, every 0.7 mm |
+| `horizontalBars`, `verticalBars` | bars a third of the repeat wide |
+| `slantLeft`, `slantRight` | `\` and `/` bars a third of the repeat wide |
+| `squareDots` | 0.2 mm squares every 0.5 mm |
+
+Wipeouts are never patterned. A plot that would need more than two million pattern cells keeps
+the remaining areas solid. Layouts draw these while the display list is built. A model-space
+plot draws them at its plot scale.
 
 ### Built-in tables
 
