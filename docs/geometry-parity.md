@@ -121,8 +121,8 @@ lines are scanline families clipped against the tessellated loops (`render/src/h
 | Geometry | lines, arcs, circles, polylines, ellipses, splines, blocks | line, circle, arc, polyline, point; ellipse and elliptical arc (centre, axis ends and arc ends as points; tangent, coincident, concentric, horizontal/vertical on the major axis); spline (fit or control points as points; tangent and smooth at its ends; open clamped or fit splines); block reference (insertion point, and the block's own points riding rigidly with position and rotation) (`model.rs`) |
 | Algorithm | proprietary | damped Gauss–Newton / Levenberg–Marquardt, numeric Jacobian, per connected component; MAX_ITER 200, MAX_ROWS 800; curve–curve tangency with an ellipse through auxiliary contact parameters |
 | Over-constraint | refused with a message | redundancy by Jacobian rank (Householder QR with column pivoting, rows and columns balanced), including Fix; the message names the constraints the new one duplicates; conflicts by removal probing (up to 48 probes) |
-| Degrees of freedom, fully constrained state | shown (constraint bars, status) | `constraints.dof` and `constraints.inspect`: free parameters minus Jacobian rank per component, per-object DOF from the null space, under/fully/over-constrained status (`dof.rs`); not yet shown in the UI |
-| Inference while drawing (CONSTRAINTINFER) | yes | no |
+| Degrees of freedom, fully constrained state | shown (constraint bars, status) | `constraints.dof` and `constraints.inspect`: free parameters minus Jacobian rank per component, per-object DOF from the null space, under/fully/over-constrained status (`dof.rs`); a status strip on each constraint bar and the drawing's state on the canvas |
+| Inference while drawing (CONSTRAINTINFER) | yes | CONSTRAINTINFER (variable and command): after a drawing or editing command, what it placed exactly onto existing geometry (snaps, ortho, polar) gets Coincident (end, mid, centre, on object), Tangent, Perpendicular, Parallel and Horizontal/Vertical, filtered by the AutoConstrain types (`auto.rs` `infer_placed`) |
 
 ## Tests
 

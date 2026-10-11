@@ -1,4 +1,5 @@
-//! AUTOCONSTRAIN: infer constraints from geometry that already nearly satisfies them.
+//! AUTOCONSTRAIN: infer constraints from geometry that already nearly satisfies them; and
+//! CONSTRAINTINFER's inference for what a command just placed ([`infer_placed`]).
 
 use cadcraft_doc::{Constraint, ConstraintKind, Drawing, EntityKind, GeomRef, Handle, Sub};
 use cadcraft_geom::{Line, Vec2};
@@ -189,6 +190,114 @@ pub fn infer(d: &Drawing, handles: &[Handle], o: &InferOptions) -> Vec<Constrain
         }
     }
     out
+}
+
+/// Constraint types CONSTRAINTINFER applies.
+pub const INFER_TYPES: [ConstraintKind; 6] = [
+    ConstraintKind::Coincident,
+    ConstraintKind::Tangent,
+    ConstraintKind::Perpendicular,
+    ConstraintKind::Parallel,
+    ConstraintKind::Horizontal,
+    ConstraintKind::Vertical,
+];
+
+/// CONSTRAINTINFER: the constraints that the exact placement of `placed` (objects a command just
+/// drew or edited) implies against each other and `others`: end points snapped onto end points,
+/// midpoints, centres or onto objects (Coincident), tangent and perpendicular snaps, parallel
+/// lines, and horizontal/vertical lines (ortho, polar). Snapped geometry is exact, so the
+/// tolerances in `o` are expected to be tight. Only [`INFER_TYPES`] (and `o.types`, when set)
+/// are returned, each involving a placed object.
+pub fn infer_placed(d: &Drawing, placed: &[Handle], others: &[Handle], o: &InferOptions) -> Vec<Constraint> {
+    let tol = if o.distance_tolerance.is_finite() { o.distance_tolerance.clamp(0.0, 1e9) } else { 0.0 };
+    let mut all: Vec<Handle> = placed.iter().take(MAX_OBJECTS).copied().collect();
+    for h in others {
+        if all.len() >= MAX_OBJECTS {
+            break;
+        }
+        if !all.contains(h) {
+            all.push(*h);
+        }
+    }
+    let mine = |c: &Constraint| c.refs.iter().any(|r| placed.contains(&r.handle));
+    let mut out: Vec<Constraint> = infer(d, &all, o).into_iter().filter(|c| INFER_TYPES.contains(&c.kind) && mine(c)).collect();
+    // Placed end points on other objects' midpoints, centres, or on the objects themselves.
+    let allow = o.types.is_empty() || o.types.iter().any(|t| t.eq_ignore_ascii_case(ConstraintKind::Coincident.name()));
+    if !allow {
+        return out;
+    }
+    let g = collect(d, &all);
+    // Point to point (midpoint, centre) first; point on an object last, so a tangent or
+    // perpendicular snap keeps its tangency (an end on the curve it touches adds nothing then).
+    let mut extra = Vec::new();
+    let mut on = Vec::new();
+    for (rp, p) in g.points.iter().filter(|(r, _)| placed.contains(&r.handle)) {
+        if out.iter().any(|c| c.kind == ConstraintKind::Coincident && c.refs.contains(rp)) {
+            continue;
+        }
+        let target = g
+            .lines
+            .iter()
+            .filter(|(r, _, _)| r.handle != rp.handle)
+            .find_map(|(r, a, b)| {
+                let ln = Line::new(*a, *b);
+                if a.mid(*b).dist(*p) <= tol && r.sub == Sub::Whole {
+                    Some(GeomRef::new(r.handle, Sub::Mid))
+                } else {
+                    let t = ln.param_of(*p);
+                    (ln.dist(*p) <= tol && (0.0..=1.0).contains(&t) && ln.len() > tol).then_some(*r)
+                }
+            })
+            .or_else(|| {
+                g.curves.iter().filter(|(r, _, _)| r.handle != rp.handle).find_map(|(r, c, rad)| {
+                    if c.dist(*p) <= tol {
+                        Some(GeomRef::new(r.handle, Sub::Center))
+                    } else {
+                        ((c.dist(*p) - rad).abs() <= tol && on_arc(d, r.handle, *c, *p)).then_some(*r)
+                    }
+                })
+            });
+        if let Some(t) = target
+            && extra.len() + on.len() + out.len() < MAX_CANDIDATES
+        {
+            let c = Constraint { id: 0, kind: ConstraintKind::Coincident, refs: vec![*rp, t], name: String::new(), expr: String::new() };
+            if t.sub == Sub::Whole { on.push(c) } else { extra.push(c) }
+        }
+    }
+    // Perpendicular lines meeting in a T (a perpendicular snap onto the middle of a line).
+    let atol = if o.angle_tolerance.is_finite() { o.angle_tolerance.clamp(0.0, 45.0).to_radians() } else { 0.0 };
+    let allow_per = o.types.is_empty() || o.types.iter().any(|t| t.eq_ignore_ascii_case(ConstraintKind::Perpendicular.name()));
+    for (r1, a1, b1) in g.lines.iter().filter(|(r, _, _)| placed.contains(&r.handle)) {
+        for (r2, a2, b2) in g.lines.iter().filter(|(r, _, _)| r.handle != r1.handle) {
+            let (l1, l2) = (Line::new(*a1, *b1), Line::new(*a2, *b2));
+            let touches = |l: &Line, p: Vec2| l.dist(p) <= tol && (0.0..=1.0).contains(&l.param_of(p));
+            let tee = [*a1, *b1].iter().any(|p| touches(&l2, *p)) || [*a2, *b2].iter().any(|p| touches(&l1, *p));
+            let ang = ang_between(*b1 - *a1, *b2 - *a2);
+            let dup = out.iter().any(|c| c.kind == ConstraintKind::Perpendicular && c.refs.contains(r1) && c.refs.contains(r2));
+            if allow_per
+                && tee
+                && !dup
+                && (std::f64::consts::FRAC_PI_2 - ang).abs() <= atol
+                && l1.len() > tol
+                && l2.len() > tol
+                && out.len() < MAX_CANDIDATES
+            {
+                out.push(Constraint { id: 0, kind: ConstraintKind::Perpendicular, refs: vec![*r1, *r2], name: String::new(), expr: String::new() });
+            }
+        }
+    }
+    let n = out.iter().take_while(|c| c.kind == ConstraintKind::Coincident).count();
+    out.splice(n..n, extra);
+    out.extend(on);
+    out
+}
+
+/// Does `p` (on the circle) lie within the arc's sweep (always for a circle)?
+fn on_arc(d: &Drawing, h: Handle, c: Vec2, p: Vec2) -> bool {
+    match d.entity(h).map(|e| &e.kind) {
+        Some(EntityKind::Arc(a)) => cadcraft_geom::angle_in_sweep((p - c).angle(), a.start, a.end),
+        _ => true,
+    }
 }
 
 /// Infer and apply constraints over `handles`; returns the ids added. Redundant or conflicting

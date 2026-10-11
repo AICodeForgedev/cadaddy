@@ -96,6 +96,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "LASTPOINT" => json!([s.last_point.x, s.last_point.y, 0.0]),
         // Held in radians (as `$ANGBASE` in DXF); reported in degrees, like POLARANG.
         "ANGBASE" => json!(s.doc().ok()?.header.f64("ANGBASE", 0.0).to_degrees()),
+        "CONSTRAINTINFER" => json!(i32::from(s.doc().ok()?.parametric.settings.infer)),
         // Process-wide font substitution (profile settings, not saved in the drawing).
         "FONTALT" => json!(cadcraft_fonts::ttf::font_alt()),
         "FONTFALLBACK" => json!(cadcraft_fonts::ttf::fallback_fonts()),
@@ -251,6 +252,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             let a = a.filter(|a| a.is_finite()).ok_or_else(bad)?;
             s.doc_mut()?.header.set_f64("ANGBASE", cadcraft_geom::norm_angle(a));
         }
+        "CONSTRAINTINFER" => s.doc_mut()?.parametric.settings.infer = as_bool(v).ok_or_else(bad)?,
         _ => {
             if let Some(r) = table::set(s, &n, v) {
                 return r;

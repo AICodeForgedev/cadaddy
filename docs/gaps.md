@@ -51,7 +51,6 @@ do them first.
 | F22 | Inquiry: MASSPROP approximate; COUNT counts model-space inserts only; no QuickCalc palette (CAL is an evaluator); no DWG Compare | `utility.rs:203,310-352`, `inquiry.rs:305` | Low-medium | 15–25 |
 | F23 | No Sheet Set Manager, eTransmit, Share, Traces, Markup Import, Activity Insights | menu items uncovered | Low-medium (team workflows) | 40–70 |
 | F24 | No 3D: UCS, 3D views, orbit, solids, surfaces, meshes, sections, visual styles, materials, lights, rendering (150 menu items) | [parity-checklist](parity-checklist.md) | Medium (3D users) | 300–450 |
-| F25 | Constraint solver: no DOF report, Smooth not G2, no ellipse/spline/block geometry, no inference while drawing; DCANGULAR can succeed unsatisfied (#73, PR #190) | [geometry-parity](geometry-parity.md#constraint-solver--50) | Low-medium | 20–30 |
 
 ## UI/UX
 

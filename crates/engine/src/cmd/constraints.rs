@@ -98,6 +98,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Tools", "Parametric", "Constraint Settings"])
             .alias(&["csettings"])
             .params("{infer?, distanceTolerance?, angleTolerance?, autoTypes?: [names], barsVisible?, barTransparency?, dimsVisible?}"),
+        CommandSpec::new("constraintinfer", "Infer Constraints", run_constraintinfer)
+            .params("{value?: 0|1} sets CONSTRAINTINFER (no value: reports it)")
+            .interactive(|_| Ok(Box::new(InferM))),
         CommandSpec::new("constraints.inspect", "Inspect Constraints", run_inspect).noundo().params("{} → constraints, glyph anchors, parameters, settings, dof"),
         CommandSpec::new("constraints.dof", "Degrees of Freedom", run_dof)
             .noundo()
@@ -961,6 +964,51 @@ fn run_constraintsettings(s: &mut Session, p: &Value) -> Result<Value> {
     serde_json::to_value(&set).map_err(|e| EngineError::Other(e.to_string()))
 }
 
+/// CONSTRAINTINFER typed as a command: report or set the variable.
+fn run_constraintinfer(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(v) = p.get("value").filter(|v| !v.is_null()) {
+        let on =
+            v.as_bool().or_else(|| v.as_f64().filter(|f| *f == 0.0 || *f == 1.0).map(|f| f == 1.0)).or_else(|| match v.as_str().map(str::trim) {
+                Some("0") => Some(false),
+                Some("1") => Some(true),
+                _ => None,
+            });
+        let on = on.ok_or_else(|| bad("constraintinfer", "`value` must be 0 or 1"))?;
+        if s.doc()?.parametric.settings.infer != on {
+            s.doc_mut()?.parametric.settings.infer = on;
+        }
+    }
+    let on = s.doc()?.parametric.settings.infer;
+    Ok(json!({ "value": i32::from(on), "message": format!("CONSTRAINTINFER = {}", i32::from(on)) }))
+}
+
+/// `Enter new value for CONSTRAINTINFER <0>:`
+struct InferM;
+
+impl Interactive for InferM {
+    fn name(&self) -> &'static str {
+        "CONSTRAINTINFER"
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        let cur = s.doc().map(|d| i32::from(d.parametric.settings.infer)).unwrap_or(0);
+        Prompt::new("Enter new value for CONSTRAINTINFER", Accept { number: true, ..Accept::TEXT }).default(cur.to_string())
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        let text = match i {
+            Input::Enter | Input::Cancel => return Ok(Step::Done),
+            Input::Text(t) | Input::Keyword(t) => t,
+            _ => return Ok(Step::Continue),
+        };
+        match run_constraintinfer(s, &json!({ "value": text.trim() })) {
+            Ok(_) => Ok(Step::Done),
+            Err(_) => {
+                s.echo("Requires an integer between 0 and 1.");
+                Ok(Step::Continue)
+            }
+        }
+    }
+}
+
 fn run_inspect(s: &mut Session, _p: &Value) -> Result<Value> {
     let d = s.doc()?;
     let dof = cs::dof(d, &[]).ok().map(|r| json!({ "dof": r.dof, "status": r.status, "redundant": r.redundant, "message": r.message }));
@@ -984,12 +1032,103 @@ fn run_dof(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------------- re-solve after edits ----------------
 
-/// Called after every command (programmatic or interactive). When the command changed the
+/// CONSTRAINTINFER: most objects one command may place for inference to run.
+const MAX_INFER_PLACED: usize = 50;
+/// CONSTRAINTINFER: most objects scanned for what the placed ones touch.
+const MAX_INFER_SCAN: usize = 50_000;
+
+/// CONSTRAINTINFER: after a command drew or edited objects, constrain what it placed exactly onto
+/// existing geometry. Snapped points are exact, so tight tolerances find what the object snaps
+/// (running snaps, overrides, tracking) and ortho/polar established, whatever way the point came
+/// in. Commands that changed the constraints themselves are left alone.
+fn infer_after(s: &mut Session, before: &Drawing) {
+    let space = s.space();
+    let Ok(d) = s.doc() else { return };
+    let set = &d.parametric.settings;
+    if !set.infer || d.constraints != before.constraints {
+        return;
+    }
+    let Some(store) = d.space(&space) else { return };
+    let changed = |e: &Arc<cadcraft_doc::Entity>| before.entity(e.handle).is_none_or(|b| !Arc::ptr_eq(b, e) && **b != **e);
+    let placed: Vec<Handle> = store.iter().filter(|e| cs::supported(&e.kind) && changed(e)).map(|e| e.handle).take(MAX_INFER_PLACED + 1).collect();
+    if placed.is_empty() || placed.len() > MAX_INFER_PLACED {
+        return;
+    }
+    let types: Vec<String> = cs::INFER_TYPES
+        .iter()
+        .map(|k| k.name())
+        .filter(|n| set.auto_types.is_empty() || set.auto_types.iter().any(|t| t.eq_ignore_ascii_case(n)))
+        .map(str::to_string)
+        .collect();
+    if types.is_empty() {
+        return;
+    }
+    // The points the placed objects reach, and how big they are (for the tolerance).
+    let mut pts: Vec<Vec2> = Vec::new();
+    let mut dirs: Vec<Vec2> = Vec::new();
+    for h in &placed {
+        let Some(e) = d.entity(*h) else { continue };
+        pts.extend(object_points(d, *h, &e.kind).into_iter().map(|(_, p)| p).filter(|p| p.is_finite()).take(1000));
+        if let EntityKind::Line(l) = &e.kind {
+            let v = (l.b.xy() - l.a.xy()).normalized();
+            if v.x.abs() > 1e-9 && v.y.abs() > 1e-9 {
+                dirs.push(v);
+            }
+        }
+    }
+    let scale = pts.iter().fold(1.0f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
+    let tol = 1e-9 * scale;
+    // Others: what the placed points touch, and the nearest line exactly parallel to a sloped
+    // placed line (a parallel snap).
+    let mut others: Vec<Handle> = Vec::new();
+    let mut parallel: Option<(f64, Handle)> = None;
+    let near = pts.first().copied().unwrap_or_default();
+    for e in store.iter().take(MAX_INFER_SCAN) {
+        if placed.contains(&e.handle) || !cs::supported(&e.kind) || !d.is_visible(e) {
+            continue;
+        }
+        let b = cadcraft_doc::entity_bounds(d, e, 0).expand(tol);
+        if pts.iter().any(|p| b.contains(*p)) {
+            if others.len() < 150 {
+                others.push(e.handle);
+            }
+        } else if let EntityKind::Line(l) = &e.kind
+            && dirs.iter().any(|v| v.cross((l.b.xy() - l.a.xy()).normalized()).abs() <= 1e-9)
+        {
+            let dist = Line::new(l.a.xy(), l.b.xy()).dist(near);
+            if dist.is_finite() && parallel.is_none_or(|p| dist < p.0) {
+                parallel = Some((dist, e.handle));
+            }
+        }
+    }
+    others.extend(parallel.map(|p| p.1));
+    let o = cs::InferOptions { distance_tolerance: tol, angle_tolerance: 1e-7, types };
+    let cands = cs::infer_placed(d, &placed, &others, &o);
+    if cands.is_empty() {
+        return;
+    }
+    let mut nd = d.clone();
+    let opts = cs::SolveOptions { keep: others, prefer_move: placed };
+    let added = cands.into_iter().take(200).filter(|c| cs::add(&mut nd, c.clone(), &opts).is_ok()).count();
+    if added > 0
+        && let Ok(st) = s.state_mut()
+    {
+        st.doc = Arc::new(nd);
+    }
+}
+
+/// Called after every command (programmatic or interactive). With CONSTRAINTINFER on, first
+/// infer constraints for what the command placed ([`infer_after`]). When the command changed the
 /// drawing and its constraints no longer hold, re-solve them, keeping the geometry the command
 /// edited where it was put; constraints whose objects are gone are removed.
 pub fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>, ok: bool) {
     if !ok {
         return;
+    }
+    if let (Some(b), Ok(st)) = (before, s.state())
+        && !Arc::ptr_eq(b, &st.doc)
+    {
+        infer_after(s, b);
     }
     let (Some(before), Ok(st)) = (before, s.state()) else { return };
     if st.doc.constraints.is_empty() || Arc::ptr_eq(before, &st.doc) {

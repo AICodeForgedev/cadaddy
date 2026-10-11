@@ -1,6 +1,7 @@
 //! Parametric display: geometric constraint bars and dynamic dimensional constraints drawn over
 //! the canvas (from the engine's `constraints.inspect`), inline editing of a dimensional
-//! constraint's expression, and the Parameters Manager.
+//! constraint's expression, the degrees of freedom left (`constraints.dof`: a status strip on
+//! each constraint bar and a summary on the canvas), and the Parameters Manager.
 //!
 //! Every edit runs an engine command (`parameters {name, expr}` / `{delete}`); this module only
 //! draws and collects input.
@@ -30,11 +31,41 @@ pub struct Glyph {
     pub satisfied: bool,
 }
 
+/// Degrees of freedom of one constrained object (`constraints.dof`).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct ObjectDof {
+    pub handle: String,
+    pub dof: Option<usize>,
+    /// `under`, `fully`, `over` or `unknown`.
+    pub status: String,
+}
+
+/// The drawing's degrees of freedom as `constraints.dof` reports them.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct Dof {
+    pub dof: Option<usize>,
+    pub status: String,
+    pub objects: Vec<ObjectDof>,
+}
+
+/// What a DOF status reads as, and its colour (`None`: nothing to say).
+fn dof_text(status: &str, dof: Option<usize>) -> Option<(String, Color32)> {
+    match (status, dof) {
+        ("fully", _) => Some((crate::tf!("Degrees of freedom: {n}", n = 0), Color32::from_rgb(0x4c, 0xaf, 0x50))),
+        ("over", _) => Some((crate::tl!("Over-constrained").to_string(), Color32::from_rgb(0xff, 0x8a, 0x6a))),
+        ("under", Some(n)) => Some((crate::tf!("Degrees of freedom: {n}", n = n), Color32::from_rgb(0x9f, 0xb6, 0xd6))),
+        _ => None,
+    }
+}
+
 /// Per-drawing-revision cache of the constraint glyphs (inspect is not free on big drawings).
 #[derive(Default)]
 pub struct Cache {
     key: Option<(u64, u64, usize)>,
     glyphs: Vec<Glyph>,
+    dof: Dof,
     /// The dimensional constraint whose expression is being edited: (name, buffer, screen pos).
     editing: Option<(String, String, Pos2)>,
 }
@@ -51,6 +82,7 @@ fn refresh(app: &mut CadApp) {
     }
     app.canvas.param.key = key;
     app.canvas.param.glyphs.clear();
+    app.canvas.param.dof = Dof::default();
     if app.session.doc().is_ok_and(|d| d.constraints.is_empty()) {
         return;
     }
@@ -58,6 +90,10 @@ fn refresh(app: &mut CadApp) {
         && let Some(g) = v.get("glyphs")
     {
         app.canvas.param.glyphs = serde_json::from_value(g.clone()).unwrap_or_default();
+    }
+    // Every constrained object (an empty list: not the selection).
+    if let Ok(v) = app.session.execute("constraints.dof", &json!({ "handles": [] })) {
+        app.canvas.param.dof = serde_json::from_value(v).unwrap_or_default();
     }
 }
 
@@ -411,7 +447,10 @@ pub fn draw_overlay(app: &mut CadApp, ui: &mut egui::Ui, painter: &egui::Painter
             continue;
         }
         let n = kinds.len().min(16) as f32;
-        let mut r = Rect::from_min_size(sp + vec2(8.0, 8.0), vec2(n * cell + 4.0, cell + 4.0));
+        let od = app.canvas.param.dof.objects.iter().find(|o| Handle::parse_hex(&o.handle) == Some(*h));
+        let status = od.and_then(|o| dof_text(&o.status, o.dof));
+        let strip = if status.is_some() { 6.0 } else { 0.0 };
+        let mut r = Rect::from_min_size(sp + vec2(8.0, 8.0), vec2(n * cell + 4.0 + strip, cell + 4.0));
         for _ in 0..12 {
             if placed.iter().any(|p| p.intersects(r)) {
                 r = r.translate(vec2(0.0, cell + 6.0));
@@ -432,6 +471,22 @@ pub fn draw_overlay(app: &mut CadApp, ui: &mut egui::Ui, painter: &egui::Painter
             paint_glyph(painter, cr.shrink(2.0), kind, Color32::from_rgb(0x26, 0x2b, 0x33));
             resp.on_hover_text(crate::tf!("{kind} (constraint {id})", kind = crate::i18n::t(kind), id = id));
         }
+        // The object's constraint state: a coloured strip at the end of its bar.
+        if let Some((text, col)) = status {
+            let sr = Rect::from_min_max(pos2(r.right() - strip - 1.0, r.top() + 3.0), pos2(r.right() - 2.0, r.bottom() - 3.0));
+            painter.rect_filled(sr, 2.0, col.gamma_multiply(alpha.max(0.5)));
+            ui.interact(sr.expand(2.0), ui.id().with(("cbar_dof", h.0)), Sense::hover()).on_hover_text(text);
+        }
+    }
+    // The drawing's constraint state.
+    if let Some((text, col)) = dof_text(&app.canvas.param.dof.status, app.canvas.param.dof.dof)
+        && (set.bars_visible || !set.bar_exceptions.is_empty())
+    {
+        let galley = painter.layout_no_wrap(text, crate::theme::small(), col);
+        let at = pos2(xf.rect.left() + 96.0, xf.rect.bottom() - 10.0 - galley.size().y);
+        let r = Rect::from_min_size(at, galley.size() + vec2(8.0, 4.0));
+        painter.rect_filled(r, 2.0, t.canvas.gamma_multiply(0.85));
+        painter.galley(at + vec2(4.0, 2.0), galley, col);
     }
     let _ = act_take(app, act, ui);
 }
