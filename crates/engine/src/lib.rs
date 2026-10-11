@@ -485,6 +485,8 @@ pub struct Session {
     pub clipboard: Vec<Entity>,
     pub clipboard_base: Vec2,
     pub pending_window: Option<PendingWindow>,
+    /// A selection mode typed at "Select objects" (W, C, F, WP, CP) collecting its points.
+    pub select_mode: Option<select::SelectMode>,
     pub untitled_counter: u32,
     /// The last dimension created (DIMCONTINUE / DIMBASELINE).
     pub last_dim: Option<Handle>,
@@ -525,6 +527,7 @@ impl Session {
             clipboard: Vec::new(),
             clipboard_base: Vec2::ZERO,
             pending_window: None,
+            select_mode: None,
             untitled_counter: 0,
             last_dim: None,
             last_used: LastUsed::default(),
@@ -779,9 +782,20 @@ impl Session {
     }
 
     fn preprocess_selection(&mut self, input: Input) -> Result<Option<Input>> {
-        let Some(prompt) = self.current_prompt() else { return Ok(Some(input)) };
+        // The command's own prompt: a typed selection mode only applies at its "Select objects".
+        let Some(prompt) = self.running.as_ref().map(|r| r.machine.prompt(self)) else { return Ok(Some(input)) };
         if !prompt.accept.select {
             return Ok(Some(input));
+        }
+        if self.select_mode.is_some() {
+            return self.select_mode_input(input);
+        }
+        if let Input::Text(t) | Input::Keyword(t) = &input
+            && let Some(m) = select::SelectMode::from_keyword(t)
+        {
+            self.pending_window = None;
+            self.select_mode = Some(m);
+            return Ok(None);
         }
         let space = self.space();
         match input {
@@ -821,6 +835,28 @@ impl Session {
             }
             other => Ok(Some(other)),
         }
+    }
+
+    /// Input while a typed selection mode (W, C, F, WP, CP) collects its points: the selected
+    /// objects go to the command as a pick once the mode is complete.
+    fn select_mode_input(&mut self, input: Input) -> Result<Option<Input>> {
+        let Some(mut mode) = self.select_mode.take() else { return Ok(Some(input)) };
+        match input {
+            Input::Point(p) => {
+                if mode.push(p) {
+                    return Ok(mode.select(self.doc()?, &self.space()).map(Input::Pick));
+                }
+            }
+            Input::Keyword(k) if k == "Undo" => {
+                mode.pts.pop();
+            }
+            // Enter ends a fence or polygon; with too few points the mode is dropped.
+            Input::Enter => return Ok(mode.select(self.doc()?, &self.space()).map(Input::Pick)),
+            Input::Cancel | Input::Pick(_) => return Ok(Some(input)),
+            _ => self.echo("Invalid point."),
+        }
+        self.select_mode = Some(mode);
+        Ok(None)
     }
 
     fn feed(&mut self, input: Option<Input>) -> Result<()> {
@@ -896,6 +932,7 @@ impl Session {
             return;
         }
         self.pending_window = None;
+        self.select_mode = None;
         let label = find_command(&run.id).map(|c| c.label).unwrap_or("Command");
         let _ = cancelled;
         cmd::groups::after_command(self, Some(&run.before));
@@ -946,7 +983,13 @@ impl Session {
     }
 
     pub fn current_prompt(&self) -> Option<Prompt> {
-        self.running.as_ref().map(|r| r.machine.prompt(self))
+        self.running.as_ref().map(|r| {
+            let p = r.machine.prompt(self);
+            match &self.select_mode {
+                Some(m) if p.accept.select => m.prompt(),
+                _ => p,
+            }
+        })
     }
 
     /// Whether the cursor picks objects right now, so the UI shows the pick box (PICKBOX) at the
