@@ -14,6 +14,9 @@ use super::machines::{SelOutcome, SelectPhase, number};
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
+mod curve_edits;
+pub(crate) use curve_edits::join_curves;
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("pedit", "Polyline", run_pedit)
@@ -830,11 +833,13 @@ fn measure_len(k: &EntityKind) -> Option<(f64, Option<f64>)> {
             let g = Arc::new(a.center.xy(), a.radius, a.start, a.end);
             Some((g.len(), Some(g.sweep())))
         }
+        EntityKind::Ellipse(e) => Some((ellipse_of(e).length(), None)),
+        EntityKind::Spline(sp) if sp.is_valid() => Some((sp.length(), None)),
         _ => Chain::of(k).map(|c| (c.len(), None)),
     }
 }
 
-/// Lengthen a line, arc or open polyline at the end nearest `pick`.
+/// Lengthen a line, arc, open polyline, elliptical arc or open spline at the end nearest `pick`.
 pub(crate) fn lengthen_kind(k: &EntityKind, pick: Option<Vec2>, mode: LenMode) -> Result<EntityKind> {
     let too_short = || other("Lengthening would make the object zero length or negative.");
     match k {
@@ -919,7 +924,9 @@ pub(crate) fn lengthen_kind(k: &EntityKind, pick: Option<Vec2>, mode: LenMode) -
             }
             Ok(EntityKind::LwPolyline(LwPolyline { vertices: vs, ..p.clone() }))
         }
-        _ => Err(other("Select a line, arc or open polyline.")),
+        EntityKind::Ellipse(e) => curve_edits::lengthen_ellipse(e, pick, mode),
+        EntityKind::Spline(sp) => curve_edits::lengthen_spline(sp, pick, mode),
+        _ => Err(other("Select a line, arc, open polyline, elliptical arc or open spline.")),
     }
 }
 
@@ -2059,6 +2066,9 @@ pub(crate) fn trim_other(k: &EntityKind, cut: &[Segment], pick: Vec2) -> Result<
             ts.sort_by(f64::total_cmp);
             ts.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
             let tp = curves::spline_param_of(sp, pick);
+            if sp.closed {
+                return curve_edits::trim_closed_spline(sp, &ts, tp);
+            }
             let lo = ts.iter().copied().filter(|t| *t < tp).fold(lo_d, f64::max);
             let hi = ts.iter().copied().filter(|t| *t > tp).fold(hi_d, f64::min);
             if lo == lo_d && hi == hi_d {
@@ -2081,7 +2091,7 @@ pub(crate) fn trim_other(k: &EntityKind, cut: &[Segment], pick: Vec2) -> Result<
     }
 }
 
-/// Extend objects that modify.rs does not handle itself (elliptical arcs).
+/// Extend objects that modify.rs does not handle itself (elliptical arcs and open splines).
 pub(crate) fn extend_other(k: &EntityKind, cut: &[Segment], pick: Vec2) -> Result<EntityKind> {
     match k {
         EntityKind::Ellipse(e) => {
@@ -2105,6 +2115,7 @@ pub(crate) fn extend_other(k: &EntityKind, cut: &[Segment], pick: Vec2) -> Resul
             let t = t.ok_or_else(|| other("Object does not intersect an edge."))?;
             Ok(ellipse_kind(&if from_end { Ellipse { end: t, ..ge } } else { Ellipse { start: t, ..ge } }))
         }
+        EntityKind::Spline(sp) => curve_edits::extend_spline(sp, cut, pick),
         _ => Err(other("Cannot extend that object.")),
     }
 }

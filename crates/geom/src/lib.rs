@@ -11,6 +11,7 @@ mod bounds;
 mod curve;
 mod intersect;
 mod mat;
+mod nurbs;
 pub mod region;
 mod spline;
 mod spline_fit;

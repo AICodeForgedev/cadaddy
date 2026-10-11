@@ -1,6 +1,6 @@
 # Geometry parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first audit of the geometry kernel's precision against AutoCAD) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (EXTEND, JOIN and LENGTHEN on elliptical arcs and splines; a closed spline trims to one piece, #466) · **Target:** Autodesk AutoCAD 2027
 
 CAD users trust numbers: a trimmed endpoint, an offset, an intersection or an area is either right
 to the last displayed digit or the tool is unusable for production drawings. This document
@@ -76,17 +76,17 @@ constraints 10%.
 | Polyline with arcs | exact, with self-intersection trimming, OFFSETGAPTYPE (extend, fillet, chamfer) | segments offset and joined at neighbours' intersections; **arc bulges not recomputed** after endpoints move (comment at L413), **no loop cleanup**, collapsed segments not removed; OFFSETGAPTYPE only echoed |
 | Options: Through, Erase, Layer, Multiple | yes | see [gaps.md](gaps.md) |
 
-## Trim, extend, fillet, chamfer, break, join, lengthen (≈ 45%)
+## Trim, extend, fillet, chamfer, break, join, lengthen (≈ 55%)
 
 | Command | AutoCAD supports | CADCraft supports |
 |---|---|---|
-| TRIM | every curve type, quick and standard modes | line, arc, circle, polyline; ellipse and spline via sampled cutting (`modify.rs:485-656`, `modify2.rs:1996`) |
-| EXTEND | every open curve | line, arc, polyline, ellipse; **no spline** |
-| FILLET | lines, arcs, circles, polylines, ellipses, splines, xlines, rays; Trim/No trim | lines, arcs, circles (TTR circle), polyline mode; **no ellipse or spline** (`modify2.rs:1804`) |
-| CHAMFER | lines, polylines, xlines, rays | lines (`modify.rs:756`); polyline chamfer not confirmed |
+| TRIM | every curve type, quick and standard modes | line, arc, circle, polyline; ellipse and spline via sampled cutting (`modify.rs:485-656`, `modify2.rs` `trim_other`); a closed spline leaves one open spline |
+| EXTEND | every open curve | line, arc, polyline, elliptical arc, open spline (runs on along its end tangent, `modify2/curve_edits.rs`) |
+| FILLET | lines, arcs, circles, polylines, ellipses, splines, xlines, rays; Trim/No trim | lines, arcs, circles (TTR circle), polyline mode, Trim/No trim, Multiple; **no ellipse or spline**, no polyline segment with another object (`modify2.rs` `fillet_curves`) |
+| CHAMFER | lines, polylines, xlines, rays | lines, Distance/Angle, whole polylines (Polyline option); no polyline segment with another object |
 | BREAK | every curve | line, arc, circle, polyline |
-| JOIN | lines, arcs, polylines, ellipses, splines, helixes | line, arc, polyline |
-| LENGTHEN | lines, arcs, polylines, elliptical arcs, splines | line, arc, polyline |
+| JOIN | lines, arcs, polylines, ellipses, splines, helixes | line, arc, polyline into a polyline; elliptical arcs on one ellipse into a larger arc or the full ellipse (gaps close); splines with lines, arcs, polylines and elliptical arcs into one exact NURBS (degree elevation, rational arcs; `geom/src/nurbs.rs`); no helixes |
+| LENGTHEN | lines, arcs, polylines, elliptical arcs, splines | line, arc, polyline; elliptical arc (arc length along the ellipse); open spline (cut along the curve, or run on along its end tangent) |
 
 Where line and arc are supported the results are exact.
 
@@ -138,7 +138,7 @@ exist for parsing, not for numerics.
    spline/ellipse offset as fitted splines within a tolerance. 15–25 h.
 3. A tolerance context relative to the drawing's extents, and a known-answer test suite at
    origin and at 1e6–1e7 coordinates. 8–12 h.
-4. FILLET/JOIN/LENGTHEN/EXTEND for ellipses and splines; CHAMFER on polylines. 10–15 h.
+4. FILLET for ellipses and splines; FILLET/CHAMFER between a polyline segment and another object. 5–8 h.
 5. Exact areas and MASSPROP for bulge polylines, regions (2D) and hatch loops. 6–10 h.
 6. Hatch gap tolerance and curved boundaries. 8–12 h.
 7. Solver: DOF reporting, G2 Smooth, ellipse/spline geometry, constraint inference. 20–30 h.
@@ -151,3 +151,4 @@ Total ≈ 90–140 h; items 1–6 parallelise across two or three agents.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-10 | major | First geometry-precision audit: tolerances, curves, intersections, offsets, modify commands, measurement, hatch, solver |
+| 2026-10-11 | minor | EXTEND, JOIN and LENGTHEN on elliptical arcs and splines; closed splines trim to one piece; trim/extend section 45% → 55% (#466) |

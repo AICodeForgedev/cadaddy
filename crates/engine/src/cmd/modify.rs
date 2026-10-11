@@ -1392,6 +1392,9 @@ fn run_breakat(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Join lines/arcs/polylines that share endpoints into one polyline (or merge collinear lines).
 pub(crate) fn join(s: &mut Session, hs: &[Handle]) -> Result<Option<Handle>> {
+    if let Some(h) = super::modify2::join_curves(s, hs)? {
+        return Ok(Some(h));
+    }
     let d = s.doc()?;
     let mut segs: Vec<Segment> = Vec::new();
     // Source entity of each segment in `segs`, so only entities that end up in the chain are removed.
@@ -1536,10 +1539,17 @@ impl SelectThen {
             }
             Op::Join => {
                 match join(s, &self.objs) {
-                    Ok(_) => {
-                        // Objects outside the joined chain are kept, so count only the ones JOIN consumed.
-                        let n = s.doc().map(|d| self.objs.iter().filter(|h| d.entity(**h).is_none()).count()).unwrap_or(0);
-                        s.echo(format!("{n} objects joined into 1 polyline"))
+                    Ok(h) => {
+                        // Objects outside the joined chain are kept, so count only the ones JOIN consumed
+                        // (and the source object an ellipse or spline join keeps).
+                        let d = s.doc()?;
+                        let n = self.objs.iter().filter(|o| d.entity(**o).is_none() || h == Some(**o)).count();
+                        let what = match h.and_then(|h| d.entity(h)).map(|e| &e.kind) {
+                            Some(EntityKind::Spline(_)) => "spline",
+                            Some(EntityKind::Ellipse(_)) => "ellipse",
+                            _ => "polyline",
+                        };
+                        s.echo(format!("{n} objects joined into 1 {what}"))
                     }
                     Err(e) => s.echo(e.to_string()),
                 }

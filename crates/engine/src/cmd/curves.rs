@@ -535,103 +535,14 @@ pub fn kind_distance(k: &EntityKind, p: Vec2) -> f64 {
 
 // ---------------- splines ----------------
 
-/// Insert knot `t` once (Boehm), in homogeneous coordinates.
-fn insert_knot(sp: &Spline, t: f64) -> Option<Spline> {
-    if !sp.is_valid() {
-        return None;
-    }
-    let p = sp.degree;
-    let n = sp.control.len();
-    let w = |i: usize| if sp.weights.is_empty() { 1.0 } else { sp.weights.get(i).copied().unwrap_or(1.0) };
-    // Span k with knots[k] <= t < knots[k+1].
-    let (lo, hi) = sp.domain();
-    let t = t.clamp(lo, hi);
-    let mut k = p;
-    for i in p..n {
-        if sp.knots.get(i).copied()? <= t {
-            k = i;
-        }
-    }
-    let mut ctrl: Vec<(Vec2, f64)> = Vec::with_capacity(n + 1);
-    for i in 0..=n {
-        let pt = if i + p <= k {
-            let c = sp.control.get(i).copied()?;
-            (c * w(i), w(i))
-        } else if i > k {
-            let c = sp.control.get(i - 1).copied()?;
-            (c * w(i - 1), w(i - 1))
-        } else {
-            let ki = sp.knots.get(i).copied()?;
-            let kip = sp.knots.get(i + p).copied()?;
-            let a = if (kip - ki).abs() < 1e-300 { 0.0 } else { (t - ki) / (kip - ki) };
-            let c0 = sp.control.get(i - 1).copied()?;
-            let c1 = sp.control.get(i).copied()?;
-            let (h0, w0) = (c0 * w(i - 1), w(i - 1));
-            let (h1, w1) = (c1 * w(i), w(i));
-            (h0 * (1.0 - a) + h1 * a, w0 * (1.0 - a) + w1 * a)
-        };
-        ctrl.push(pt);
-    }
-    let mut knots = sp.knots.clone();
-    knots.insert(k + 1, t);
-    let rational = !sp.weights.is_empty();
-    Some(Spline {
-        degree: p,
-        knots,
-        control: ctrl.iter().map(|(h, w)| if w.abs() > 1e-300 { *h / *w } else { *h }).collect(),
-        weights: if rational { ctrl.iter().map(|(_, w)| *w).collect() } else { Vec::new() },
-        fit: Vec::new(),
-        closed: false,
-        fit_opts: Default::default(),
-    })
-}
-
 /// Split a spline at parameter `t` into (left, right). `None` at the ends.
 pub fn split_spline(sp: &Spline, t: f64) -> Option<(Spline, Spline)> {
-    let (lo, hi) = sp.domain();
-    if !(t > lo + 1e-12 && t < hi - 1e-12) {
-        return None;
-    }
-    let mut s = sp.clone();
-    s.fit.clear();
-    let mult = |s: &Spline| s.knots.iter().filter(|k| (**k - t).abs() < 1e-12).count();
-    let mut guard = 0;
-    while mult(&s) < s.degree && guard < 64 {
-        s = insert_knot(&s, t)?;
-        guard += 1;
-    }
-    let p = s.degree;
-    // Knots equal to t now have multiplicity p; first index of t:
-    let first = s.knots.iter().position(|k| (*k - t).abs() < 1e-12)?;
-    // Left: control points 0..first (count = first), knots 0..first+p ... + t
-    let left_n = first;
-    let mut lk: Vec<f64> = s.knots.get(..first)?.to_vec();
-    lk.extend(std::iter::repeat_n(t, p + 1));
-    let lc = s.control.get(..left_n)?.to_vec();
-    let lw = if s.weights.is_empty() { Vec::new() } else { s.weights.get(..left_n)?.to_vec() };
-    let right_start = first.checked_sub(1)?;
-    let mut rk = vec![t; p + 1];
-    rk.extend(s.knots.get(first + p..)?.iter().copied());
-    let rc = s.control.get(right_start..)?.to_vec();
-    let rw = if s.weights.is_empty() { Vec::new() } else { s.weights.get(right_start..)?.to_vec() };
-    let l = Spline { degree: p, knots: lk, control: lc, weights: lw, ..Spline::default() };
-    let r = Spline { degree: p, knots: rk, control: rc, weights: rw, ..Spline::default() };
-    (l.is_valid() && r.is_valid()).then_some((l, r))
+    sp.split_at(t)
 }
 
 /// The part of a spline between parameters `a < b`.
 pub fn sub_spline(sp: &Spline, a: f64, b: f64) -> Option<Spline> {
-    let (lo, hi) = sp.domain();
-    let mut s = sp.clone();
-    s.fit.clear();
-    s.closed = false;
-    if b < hi - 1e-12 {
-        s = split_spline(&s, b)?.0;
-    }
-    if a > lo + 1e-12 {
-        s = split_spline(&s, a)?.1;
-    }
-    Some(s)
+    sp.sub_between(a, b)
 }
 
 /// Parameter of the point on the spline nearest `p`.
@@ -662,21 +573,7 @@ pub fn spline_param_of(sp: &Spline, p: Vec2) -> f64 {
 
 /// Reverse a spline's direction (control, weights, fit points and knots).
 pub fn reverse_spline(sp: &Spline) -> Spline {
-    let (lo, hi) = (sp.knots.first().copied().unwrap_or(0.0), sp.knots.last().copied().unwrap_or(1.0));
-    Spline {
-        degree: sp.degree,
-        knots: sp.knots.iter().rev().map(|k| lo + hi - k).collect(),
-        control: sp.control.iter().rev().copied().collect(),
-        weights: sp.weights.iter().rev().copied().collect(),
-        fit: sp.fit.iter().rev().copied().collect(),
-        closed: sp.closed,
-        // The end tangents swap ends and turn round.
-        fit_opts: cadcraft_geom::FitOptions {
-            start_tangent: sp.fit_opts.end_tangent.map(|t| -t),
-            end_tangent: sp.fit_opts.start_tangent.map(|t| -t),
-            ..sp.fit_opts
-        },
-    }
+    sp.reversed()
 }
 
 /// Reverse an LWPOLYLINE's vertex order, keeping its shape (bulges and widths move with segments).
