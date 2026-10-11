@@ -1017,6 +1017,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         draw_viewcube(app, ui, rect);
     }
     viewport_label(&painter, rect);
+    // Typing and Escape reach the command line even when its overlay is hidden.
+    crate::cmdline::keyboard(app, ui.ctx());
     // Command line overlay.
     if app.ui.show_command_line {
         crate::cmdline::show(app, ui, full);

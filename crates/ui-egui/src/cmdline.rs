@@ -344,7 +344,6 @@ fn visible_lines(app: &CadApp, canvas: Rect, bar: Rect) -> usize {
 
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     let t = Tokens::get();
-    keyboard(app, ui.ctx());
     let w = (canvas.width() * 0.48).clamp(360.0, 760.0).min((canvas.width() - 8.0).max(0.0));
     let h = 24.0;
     let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - h - 10.0), vec2(w, h));
