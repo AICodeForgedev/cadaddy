@@ -59,6 +59,19 @@ pub fn hit_polylines(d: &Drawing, e: &Entity, tol: f64) -> Vec<Vec<Vec2>> {
                 }
                 out.push(pts);
             }
+            // A pattern hatch is also picked on its drawn pattern strokes, not only its boundary.
+            if let EntityKind::Hatch(h) = kind
+                && !h.solid
+                && h.gradient.is_none()
+                && !h.pattern.eq_ignore_ascii_case("SOLID")
+            {
+                let list = cadcraft_render::build_entities(
+                    d,
+                    std::iter::once(e),
+                    &cadcraft_render::Options { tolerance: tol, text: false, fill: false, ..Default::default() },
+                );
+                out.extend(list.prims.iter().map(|p| list.points(p).to_vec()));
+            }
             out
         }
     }
@@ -439,5 +452,55 @@ mod solid_interior_tests {
         assert!(!in_window(&d, &e, None, &empty, true, 0.01));
         let inside = Bounds2::new(Vec2::new(3.0, 3.0), Vec2::new(4.0, 4.0));
         assert!(in_window(&d, &e, None, &inside, true, 0.01));
+    }
+}
+
+#[cfg(test)]
+mod hatch_pattern_pick_tests {
+    use super::*;
+    use cadcraft_doc::{Common, Hatch, HatchLoop};
+    use cadcraft_geom::PolyVertex;
+
+    fn square(lo: f64, hi: f64, outer: bool) -> HatchLoop {
+        let vertices = [(lo, lo), (hi, lo), (hi, hi), (lo, hi)].iter().map(|&(x, y)| PolyVertex::new(Vec2::new(x, y))).collect();
+        HatchLoop { vertices, outer, sources: Vec::new() }
+    }
+
+    fn ansi31_hatch(loops: Vec<HatchLoop>) -> Drawing {
+        let mut d = Drawing::new_metric();
+        let hatch = Hatch {
+            pattern: "ANSI31".into(),
+            solid: false,
+            loops,
+            scale: 1.0,
+            angle: 0.0,
+            associative: false,
+            style: 0,
+            elevation: 0.0,
+            gradient: None,
+            origin: Vec2::ZERO,
+            background: None,
+            pattern_lines: Vec::new(),
+        };
+        d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch)).unwrap();
+        d
+    }
+
+    #[test]
+    fn pattern_hatch_is_picked_on_a_visible_stroke() {
+        let d = ansi31_hatch(vec![square(0.0, 10.0, true)]);
+        // The ANSI31 diagonal passes through the middle of the square.
+        assert!(pick(&d, &Space::Model, Vec2::new(5.0, 5.0), 0.05).is_some());
+        // The boundary is still pickable and a point outside is not.
+        assert!(pick(&d, &Space::Model, Vec2::new(5.0, 0.0), 0.05).is_some());
+        assert!(pick(&d, &Space::Model, Vec2::new(15.0, 5.0), 0.05).is_none());
+    }
+
+    #[test]
+    fn pattern_hatch_island_stays_empty() {
+        // The diagonal is clipped to [0,0]-[4,4] and [6,6]-[10,10] around the island.
+        let d = ansi31_hatch(vec![square(0.0, 10.0, true), square(4.0, 6.0, false)]);
+        assert!(pick(&d, &Space::Model, Vec2::new(1.0, 1.0), 0.05).is_some());
+        assert!(pick(&d, &Space::Model, Vec2::new(5.0, 5.0), 0.05).is_none());
     }
 }
