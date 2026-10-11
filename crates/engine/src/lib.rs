@@ -299,6 +299,10 @@ pub struct Settings {
     pub lwdisplay: bool,
     pub transparency_display: bool,
     pub selection_cycling: bool,
+    /// SELECTSIMILARMODE: what SELECTSIMILAR matches besides the object type (bits: 1 colour,
+    /// 2 layer, 4 linetype, 8 linetype scale, 16 lineweight, 32 plot style, 64 object style,
+    /// 128 name).
+    pub selectsimilarmode: u32,
     pub otrack: bool,
     /// PICKBOX in pixels.
     pub pickbox: f64,
@@ -344,6 +348,7 @@ impl Default for Settings {
             lwdisplay: false,
             transparency_display: false,
             selection_cycling: false,
+            selectsimilarmode: 130,
             otrack: true,
             pickbox: 3.0,
             aperture: 10.0,

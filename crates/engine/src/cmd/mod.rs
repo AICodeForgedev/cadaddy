@@ -25,6 +25,7 @@ mod mtext_opts;
 mod pline_opts;
 mod props;
 mod qselect;
+mod selecttools;
 mod settings;
 mod spline_opts;
 mod table;
@@ -162,6 +163,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(audit::specs());
         v.extend(edit::specs());
         v.extend(qselect::specs());
+        v.extend(selecttools::specs());
         v.extend(view::specs());
         v.extend(draw::specs());
         v.extend(draw2::specs());

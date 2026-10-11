@@ -21,6 +21,8 @@ const SESSION_VARS: &[&str] = &[
     "DYNPIFORMAT",
     "DYNPICOORDS",
     "LWDISPLAY",
+    "SELECTSIMILARMODE",
+    "OBJECTISOLATIONMODE",
     "QPMODE",
     "PICKBOX",
     "APERTURE",
@@ -58,6 +60,9 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "DYNPIFORMAT" => json!(i32::from(st.dynpi_cartesian)),
         "DYNPICOORDS" => json!(i32::from(st.dynpi_absolute)),
         "LWDISPLAY" => json!(i32::from(st.lwdisplay)),
+        "SELECTSIMILARMODE" => json!(st.selectsimilarmode),
+        // Isolation is temporary: hidden objects show again when the drawing is reopened.
+        "OBJECTISOLATIONMODE" => json!(0),
         "QPMODE" => json!(i32::from(st.qpmode)),
         "PICKBOX" => json!(st.pickbox),
         "APERTURE" => json!(st.aperture),
@@ -169,6 +174,12 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "DYNPIFORMAT" => st.dynpi_cartesian = as_bool(v).ok_or_else(bad)?,
         "DYNPICOORDS" => st.dynpi_absolute = as_bool(v).ok_or_else(bad)?,
         "LWDISPLAY" => st.lwdisplay = as_bool(v).ok_or_else(bad)?,
+        "SELECTSIMILARMODE" => st.selectsimilarmode = as_i(v).filter(|b| (0..=255).contains(b)).ok_or_else(bad)? as u32,
+        "OBJECTISOLATIONMODE" => match as_i(v) {
+            Some(0) => {}
+            Some(1) => return Err(EngineError::Other("OBJECTISOLATIONMODE 1 (isolation saved with the drawing) is not available yet".into())),
+            _ => return Err(bad()),
+        },
         "QPMODE" => st.qpmode = as_i(v).ok_or_else(bad)? > 0,
         "PICKBOX" => st.pickbox = as_f64(v).ok_or_else(bad)?.clamp(0.0, 50.0),
         "APERTURE" => st.aperture = as_f64(v).ok_or_else(bad)?.clamp(1.0, 50.0),

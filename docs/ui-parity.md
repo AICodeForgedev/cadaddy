@@ -131,8 +131,8 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 | Selection cycling (SELECTIONCYCLING) | yes | toggle nothing reads |
 | Selection preview, hover highlight | yes | hover highlight |
 | PICKADD, PICKFIRST, PICKAUTO | yes | PICKADD (Shift), PICKFIRST |
-| QSELECT, SELECTSIMILAR, FILTER | yes | QSELECT dialog; no SELECTSIMILAR or FILTER |
-| Object isolate/hide (ISOLATEOBJECTS, HIDEOBJECTS) | yes | **no** (only layer isolate) |
+| QSELECT, SELECTSIMILAR, FILTER | yes | QSELECT dialog; SELECTSIMILAR with SELECTSIMILARMODE (#428, SEttings asks for the bit code; no dialog); no FILTER |
+| Object isolate/hide (ISOLATEOBJECTS, HIDEOBJECTS) | yes | yes, temporary (OBJECTISOLATIONMODE 0; #428): Tools > Isolate, UNISOLATEOBJECTS; no status-bar button |
 | Groups selectable as one (PICKSTYLE) | yes | no |
 
 ## Command line (≈ 60%)

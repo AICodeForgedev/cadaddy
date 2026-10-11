@@ -209,6 +209,7 @@
 	Ellipse	Еліпс
 	Elliptical Arc	Еліптична дуга
 	Enable Dynamic Input (F12)	Увімкнути динамічне введення (F12)
+	End Object Isolation	Завершити ізоляцію об'єктів
 	End Width	Кінцева ширина
 	End X	Кінець X
 	End Y	Кінець Y
@@ -326,6 +327,7 @@
 	Hide All Constraint Bars	Приховати всі панелі обмежень
 	Hide All Dynamic Dimensions	Приховати всі динамічні розміри
 	Hide Layer List	Приховати список шарів
+	Hide Objects	Приховати об'єкти
 	Hide Palettes	Приховати палітри
 	Home	Початковий вид
 	Horizontal	Горизонтальність
@@ -357,6 +359,7 @@
 	Intersection	Перетин
 	Isolate	Ізолювати
 	Isolate Layer	Ізолювати шар
+	Isolate Objects	Ізолювати об'єкти
 	Isometric Drafting	Ізометричне креслення
 	Join	Об'єднати
 	Join the ArtCraft Discord…	Приєднатися до Discord ArtCraft…
@@ -645,6 +648,7 @@
 	Select 2D polyline	Виберіть 2D-полілінію
 	Select All	Вибрати все
 	Select Objects	Вибрати об'єкти
+	Select Similar	Вибрати подібні
 	Select a 2D polyline.	Виберіть 2D-полілінію.
 	Select a block reference.	Виберіть посилання на блок.
 	Select a circle or arc.	Виберіть коло або дугу.

@@ -358,7 +358,7 @@ const MAX_VIEWPORTS: usize = 256;
 /// A paper-space viewport: its border (as an ordinary entity) and model space seen through it.
 /// Viewport id 1 is the paper-space view itself and is not drawn.
 fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewport) {
-    if vp.id == 1 || !e.common.visible {
+    if vp.id == 1 || !e.common.visible || d.is_hidden_object(e.handle) {
         return;
     }
     // The viewport's layer frozen hides its contents too (layer off hides only the border).
@@ -520,6 +520,10 @@ fn default_lineweight(d: &Drawing) -> f32 {
 }
 
 fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
+    // Hidden by ISOLATEOBJECTS / HIDEOBJECTS (and so in viewports and plots too).
+    if ctx.d.is_hidden_object(e.handle) {
+        return;
+    }
     // The entity's named plot style, for everything it draws (block contents set their own).
     let saved = b.named;
     b.named = b.styles.and_then(|s| s.named_index(ctx, &e.common));
