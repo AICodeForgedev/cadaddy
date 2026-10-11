@@ -29,6 +29,9 @@ fn menu_items_open_their_dialogs() {
     app.ui.dialog = None;
     app.cmdline("LT");
     assert_eq!(app.ui.dialog.as_deref(), Some("linetype"), "typed aliases open it too");
+    app.ui.dialog = None;
+    assert!(app.cmdline("PTYPE").is_none(), "bare PTYPE is not an error");
+    assert_eq!(app.ui.dialog.as_deref(), Some("ptype"), "PTYPE opens the Point Style dialog");
     for typed in ["style", "ST"] {
         app.ui.dialog = None;
         assert!(app.cmdline(typed).is_none(), "bare {typed} is not an error");

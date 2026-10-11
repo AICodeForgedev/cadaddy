@@ -60,7 +60,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Format", "Multileader Style..."])
             .alias(&["mls"])
             .params("{name, arrowSize?, textHeight?, landingGap?, dogleg?, textStyle?, annotative?, current?} → styles"),
-        CommandSpec::new("ddptype", "Point Style...", run_ptype).menu(&["Format", "Point Style..."]).params("{pdmode, pdsize}"),
+        CommandSpec::new("ddptype", "Point Style...", run_ptype)
+            .menu(&["Format", "Point Style..."])
+            .alias(&["ptype"])
+            .params("{pdmode, pdsize}"),
         CommandSpec::new("rename", "Rename...", run_rename)
             .menu(&["Format", "Rename..."])
             .alias(&["ren", "-rename"])

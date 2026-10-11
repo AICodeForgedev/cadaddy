@@ -26,7 +26,7 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
     let dialog = match id {
         "battman" => "battman",
         "linetype" | "lt" | "ltype" => "linetype",
-        "ddptype" => "ptype",
+        "ddptype" | "ptype" => "ptype",
         "style" | "st" => "textstyle",
         "tablestyle" | "ts" => "tablestyle",
         "mleaderstyle" | "mls" => "mleaderstyle",
