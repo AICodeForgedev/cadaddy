@@ -83,7 +83,7 @@ early (#175), but the throughput problem remains. **DWG ≈ 30% read, ≈ 15% wr
 | VIEWPORT | yes | yes; frozen-layer lists kept (#150) | VP layer colour overrides lost (#99, PR #197) |
 | IMAGE | partial (no IMAGEDEF, so the file path is empty) | **dropped** | |
 | WIPEOUT | yes | yes (#147, fixes #79) | |
-| MLINE, REGION, 3DSOLID, BODY, SURFACE, MESH, TOLERANCE, SHAPE, HELIX, UNDERLAY, OLE2FRAME, LIGHT, CAMERA, SECTION, POINTCLOUD, proxy entities | kept as Unknown (raw tags) | **dropped on save** | the most serious file gap: opening and saving someone's drawing deletes what we don't model |
+| MLINE, REGION, 3DSOLID, BODY, SURFACE, MESH, TOLERANCE, SHAPE, HELIX, UNDERLAY, OLE2FRAME, LIGHT, CAMERA, SECTION, POINTCLOUD, proxy entities | kept as Unknown (raw tags) | written back as read, with their CLASS records (#528); **dropped by DWG save** (acadrust) | only their layer follows edits |
 | Header variables | all read | 36 written | AutoCAD writes about 280 |
 | Tables: LAYER (+ transparency, description), LTYPE, STYLE, DIMSTYLE, BLOCK_RECORD | yes | yes | |
 | Tables: VPORT, VIEW, UCS, APPID | **not read** | VPORT one record; VIEW and UCS empty; APPID yes | named views and UCSs lost |

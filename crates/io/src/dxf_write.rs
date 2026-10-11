@@ -2257,6 +2257,7 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     if let Some(t) = w.t.get_mut(seed_pos + 1) {
         *t = Tag::s(5, seed);
     }
+    crate::dxf_raw::finish(&mut w.t, d);
     mark_xrefs(&mut w.t, d);
     w.t
 }

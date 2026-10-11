@@ -1624,6 +1624,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     if d.layer("0").is_none() {
         d.layers.insert(0, Layer::default());
     }
+    crate::dxf_raw::read(&secs, &mut d);
     Ok(d)
 }
 

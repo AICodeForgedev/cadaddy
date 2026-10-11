@@ -328,7 +328,7 @@ fn run_bytes(s: &mut Session, p: &Value) -> Result<Value> {
     let lost = not_saved(s.doc()?);
     let bytes = write_bytes(s, "document.bytes", &format!("drawing.{fmt}"), &opts)?;
     let mut r = json!({ "data": base64_encode(&bytes), "bytes": bytes.len() });
-    if is_drawing_file(&format!("drawing.{fmt}")) {
+    if drops_unknown(&format!("drawing.{fmt}")) {
         report_not_saved(s, &mut r, &lost);
     }
     Ok(r)
@@ -355,7 +355,13 @@ pub fn not_saved_message(lost: &std::collections::BTreeMap<String, usize>) -> Op
         return None;
     }
     let list: Vec<String> = lost.iter().map(|(t, n)| format!("{n} {t}")).collect();
-    Some(format!("Not saved (CADCraft can't write these object types yet): {}", list.join(", ")))
+    Some(format!("Not saved in the DWG file (its writer can't write these object types yet; DXF keeps them): {}", list.join(", ")))
+}
+
+/// Whether saving to `path` leaves out the entities [`not_saved`] counts: DWG does (the DWG
+/// bridge drops types it doesn't know); DXF writes them back as read.
+pub fn drops_unknown(path: &str) -> bool {
+    std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("dwg"))
 }
 
 /// Whether `path` is saved as a drawing (DXF, DWG) rather than exported as an image.
@@ -377,7 +383,7 @@ fn report_not_saved(s: &mut Session, r: &mut Value, lost: &std::collections::BTr
 fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> Result<Value>) -> Result<Value> {
     let lost = s.doc().map(not_saved).unwrap_or_default();
     let mut r = run(s, p)?;
-    if r.get("path").and_then(Value::as_str).is_some_and(is_drawing_file) {
+    if r.get("path").and_then(Value::as_str).is_some_and(drops_unknown) {
         report_not_saved(s, &mut r, &lost);
     }
     Ok(r)

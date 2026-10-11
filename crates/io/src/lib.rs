@@ -2,6 +2,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+/// What a DXF file holds that CADCraft doesn't model, kept and written back (#528).
+mod dxf_raw;
+
 mod dxf_ext;
 mod dxf_image;
 mod dxf_mleader;
