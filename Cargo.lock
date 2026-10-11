@@ -554,6 +554,7 @@ dependencies = [
  "sys-locale",
  "winit",
  "winresource",
+ "zbus",
 ]
 
 [[package]]

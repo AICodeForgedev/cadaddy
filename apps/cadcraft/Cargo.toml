@@ -24,6 +24,10 @@ winresource = "0.1"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }
+# View ▸ Theme ▸ System: the desktop's light/dark choice from the XDG desktop portal
+# (desktop_theme.rs). Already in Cargo.lock through accesskit; pinned to that version so nothing
+# is built twice.
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = { workspace = true }

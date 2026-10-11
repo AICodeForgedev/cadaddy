@@ -15,6 +15,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod control_server;
+mod desktop_theme;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
@@ -27,6 +28,8 @@ use cadcraft_ui_egui::{CadApp, Services, i18n};
 
 struct App {
     cad: CadApp,
+    /// The desktop's light/dark choice where winit reports none (Linux, the BSDs).
+    desktop_theme: desktop_theme::DesktopTheme,
     workspace: workspace::Workspace,
     workspace_error: Option<String>,
     #[cfg(target_os = "macos")]
@@ -48,6 +51,14 @@ impl App {
     }
 }
 
+/// View ▸ Theme ▸ System resolves against `raw.system_theme`, which winit leaves empty on Linux
+/// and the BSDs: the desktop's answer, where it gives one, stands in for it.
+fn follow_desktop(raw: &mut egui::RawInput, desktop: Option<egui::Theme>) {
+    if desktop.is_some() {
+        raw.system_theme = desktop;
+    }
+}
+
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
@@ -66,6 +77,7 @@ impl eframe::App for App {
         }
     }
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        follow_desktop(raw, self.desktop_theme.current());
         self.cad.raw_input_hook(raw);
         cadcraft_ui_egui::cmdline::capture_tab(ctx, raw);
     }
@@ -298,7 +310,10 @@ fn main() -> eframe::Result {
             if app.session.docs.is_empty() {
                 app.session.new_drawing(false);
             }
+            let ctx = cc.egui_ctx.clone();
+            let desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());
             Ok(Box::new(App {
+                desktop_theme,
                 cad: app,
                 workspace,
                 workspace_error,
@@ -311,7 +326,7 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_dir_from, control_port_from, filters_for_save};
+    use super::{config_dir_from, control_port_from, filters_for_save, follow_desktop};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -376,5 +391,20 @@ mod tests {
             config_dir_from(env(&[("APPDATA", "C:\\Users\\u\\AppData\\Roaming")])),
             Some(PathBuf::from("C:\\Users\\u\\AppData\\Roaming").join("CADCraft"))
         );
+    }
+
+    /// View ▸ Theme ▸ System on Linux: winit reports no theme, so the desktop's answer stands in;
+    /// without one (or where winit answers and the desktop doesn't) the input is left alone.
+    #[test]
+    fn the_desktop_answers_for_the_system_theme() {
+        let mut raw = egui::RawInput::default();
+        follow_desktop(&mut raw, Some(egui::Theme::Light));
+        assert_eq!(raw.system_theme, Some(egui::Theme::Light));
+        let mut raw = egui::RawInput { system_theme: Some(egui::Theme::Dark), ..Default::default() };
+        follow_desktop(&mut raw, None);
+        assert_eq!(raw.system_theme, Some(egui::Theme::Dark));
+        let mut raw = egui::RawInput::default();
+        follow_desktop(&mut raw, None);
+        assert_eq!(raw.system_theme, None);
     }
 }
