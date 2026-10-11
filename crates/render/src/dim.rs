@@ -36,6 +36,8 @@ pub struct DimGeometry {
     pub text: Vec<Vec<Vec2>>,
     /// Text glyph outlines (TrueType), grouped per glyph.
     pub text_glyphs: Vec<Vec<Vec<Vec2>>>,
+    /// The font glyphs of `text_glyphs` (outline indices into it).
+    pub text_runs: Vec<cadcraft_fonts::TextGlyph>,
     pub text_pos: Vec2,
     pub text_angle: f64,
     pub text_height: f64,
@@ -948,6 +950,8 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
     if !g.mtext.is_empty() {
         let l = cadcraft_fonts::layout_mtext_with(&g.mtext, &params(text_mid, text_angle));
         for p in l.pieces {
+            let base = g.text_glyphs.len();
+            g.text_runs.extend(p.shaped.text.into_iter().map(|t| cadcraft_fonts::TextGlyph { outline: t.outline + base, ..t }));
             g.text.extend(p.shaped.strokes);
             g.text_glyphs.extend(p.shaped.glyphs);
         }

@@ -80,6 +80,9 @@ pub struct DisplayList {
     /// it is drawn on (block contents on layer 0: the block reference's; [`NO_LAYER`] when the
     /// layer isn't in the table), for PDF layers. Empty for other lists.
     pub prim_layers: Vec<u32>,
+    /// Plots: outline-font glyphs that a plotter can write as text instead of drawing the
+    /// filled outline primitive they stand for ([`PlotText::prim`]), in drawing order.
+    pub texts: Vec<PlotText>,
     pub bounds: Bounds2,
     /// The paper sheet when the list was built for a layout (paper space); the UI draws the
     /// white sheet, its shadow and the printable-area outline from it.
@@ -89,6 +92,28 @@ pub struct DisplayList {
     /// Plot style end, join and fill style per primitive (parallel to `prims`; missing entries
     /// are "use object"), turned into geometry by [`pen::apply`].
     pub pens: Vec<Pen>,
+}
+
+/// A glyph of plotted text: the font glyph and, in world coordinates, where it sits. It is
+/// drawn by primitive [`PlotText::prim`] (a filled outline in the primitive's colour); output
+/// with real text writes the glyph instead of that primitive.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlotText {
+    /// The filled outline primitive (index in [`DisplayList::prims`]); [`PlotText::NONE`] when
+    /// the glyph has none in the list (clipped by a viewport).
+    pub prim: u32,
+    /// Triangle vertices of the outline when it was drawn, and their bounding box (a clipped
+    /// outline has others).
+    pub verts: u32,
+    pub bounds: Bounds2,
+    /// The glyph; its origin and em axes are in world coordinates.
+    pub glyph: cadcraft_fonts::TextGlyph,
+}
+
+impl PlotText {
+    pub const NONE: u32 = u32::MAX;
+    /// [`PlotText::prim`] of a glyph cut by a viewport edge.
+    pub const CLIPPED: u32 = u32::MAX - 1;
 }
 
 impl DPrim {
@@ -272,10 +297,23 @@ impl Builder<'_> {
             return;
         }
         let fill = self.opts.fill && ctx.d.header.i64("TEXTFILL", 1) != 0;
-        for g in &sh.glyphs {
+        // Plots note which filled outlines are font glyphs (see `DisplayList::texts`).
+        let mut text = if self.plotting && fill { sh.text.iter().peekable() } else { [].iter().peekable() };
+        for (i, g) in sh.glyphs.iter().enumerate() {
             if fill {
                 let tris = fill::triangulate_evenodd(g);
+                let at = self.list.prims.len();
                 self.tris(ctx, color, &tris);
+                while text.next_if(|t| t.outline < i).is_some() {}
+                if let Some(t) = text.next_if(|t| t.outline == i)
+                    && self.list.prims.len() > at
+                    && let (Ok(prim), Ok(verts)) = (u32::try_from(at), u32::try_from(tris.len()))
+                {
+                    let xf = &ctx.xf;
+                    let glyph = cadcraft_fonts::TextGlyph { origin: xf.apply(t.origin), x: xf.apply_vec(t.x), y: xf.apply_vec(t.y), ..t.clone() };
+                    let bounds = self.list.prims.get(at).map(|p| Bounds2::from_points(self.list.points(p).iter().copied())).unwrap_or(Bounds2::EMPTY);
+                    self.list.texts.push(PlotText { prim, verts, bounds, glyph });
+                }
             } else {
                 for c in g {
                     self.polyline(ctx, color, lw, c);
@@ -441,6 +479,17 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
             continue;
         }
         entity(&mut sub, &Ctx { lt_factor, ..top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors) }, me);
+        // Plotted text glyphs move to the layout's list; their outlines carry the glyph's
+        // index there in their handle's high half until clipped (see `take_viewport_layers`).
+        for t in std::mem::take(&mut sub.list.texts) {
+            let k = b.list.texts.len() as u64 + 1;
+            if let Some(p) = sub.list.prims.get_mut(t.prim as usize)
+                && k < u64::from(u32::MAX)
+            {
+                p.handle = Handle(p.handle.0 | (k << 32));
+                b.list.texts.push(PlotText { prim: PlotText::NONE, ..t });
+            }
+        }
     }
     // The contents are in paper units now: draw their pens before clipping.
     pen::apply(&mut sub.list, paper::paper_unit_mm(d));
@@ -570,11 +619,29 @@ fn entity_layer(ctx: &Ctx, e: &Entity) -> u32 {
 /// After a viewport is appended to a plot: the layers its contents carry in their handles
 /// (see [`entity`]) go to [`DisplayList::prim_layers`], and the handles back to
 /// [`VIEWPORT_CONTENT`]. The viewport's border was tagged when it was drawn.
+///
+/// Text glyphs seen through the viewport (marked in the handles' high half) keep their outline
+/// primitive when it came through the clip whole; a glyph cut by the viewport edge stays
+/// geometry.
 fn take_viewport_layers(list: &mut DisplayList) {
     let start = list.prim_layers.len();
-    for p in list.prims.iter_mut().skip(start) {
-        list.prim_layers.push(u32::try_from(p.handle.0).unwrap_or(NO_LAYER));
-        p.handle = VIEWPORT_CONTENT;
+    for i in start..list.prims.len() {
+        let Some(p) = list.prims.get(i).copied() else { break };
+        list.prim_layers.push(u32::try_from(p.handle.0 & 0xFFFF_FFFF).unwrap_or(NO_LAYER));
+        let bounds = Bounds2::from_points(list.points(&p).iter().copied());
+        if let Some(t) = (p.handle.0 >> 32).checked_sub(1).and_then(|k| list.texts.get_mut(k as usize)) {
+            let same = |a: Vec2, b: Vec2| a.dist(b) <= 1e-9 * (1.0 + a.len());
+            let whole = t.prim == PlotText::NONE
+                && p.kind == Kind::Tris
+                && p.len == t.verts
+                && same(bounds.min, t.bounds.min)
+                && same(bounds.max, t.bounds.max);
+            // A second piece (or a cut one) means the clip changed the glyph.
+            t.prim = if whole { u32::try_from(i).unwrap_or(PlotText::NONE) } else { PlotText::CLIPPED };
+        }
+        if let Some(p) = list.prims.get_mut(i) {
+            p.handle = VIEWPORT_CONTENT;
+        }
     }
 }
 
@@ -1044,7 +1111,7 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimensio
         b.tris(ctx, dim_rgb, t);
     }
     if b.opts.text {
-        let sh = cadcraft_fonts::Shaped { strokes: g.text.clone(), glyphs: g.text_glyphs.clone(), width: 0.0 };
+        let sh = cadcraft_fonts::Shaped { strokes: g.text.clone(), glyphs: g.text_glyphs.clone(), width: 0.0, text: g.text_runs.clone() };
         b.shaped(ctx, txt_rgb, lw, &sh);
     }
 }

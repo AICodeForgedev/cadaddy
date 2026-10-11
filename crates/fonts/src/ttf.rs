@@ -35,6 +35,13 @@ pub struct Face {
     pub index: u32,
 }
 
+/// The same face of the same loaded file.
+impl PartialEq for Face {
+    fn eq(&self, other: &Face) -> bool {
+        Arc::ptr_eq(&self.bytes, &other.bytes) && self.index == other.index
+    }
+}
+
 impl std::fmt::Debug for Face {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Face").field("len", &self.bytes.len()).field("index", &self.index).finish()
@@ -578,6 +585,9 @@ pub(crate) struct GlyphOutline {
     pub(crate) cap: f64,
     /// The font maps the character (false: the missing-glyph shape).
     mapped: bool,
+    /// Its glyph id and face, for output that keeps text as text ([`crate::TextGlyph`]).
+    gid: u32,
+    face: Option<Face>,
 }
 
 /// A glyph by character (through the face's character map) or by glyph id (shaper output).
@@ -698,7 +708,8 @@ fn outline(face: &Face, k: GlyphKey) -> Arc<GlyphOutline> {
         pen.flush();
     }
     let advance = f64::from(f.glyph_metrics(Size::new(UPEM), LocationRef::default()).advance_width(gid).unwrap_or(UPEM * 0.5));
-    let g = Arc::new(GlyphOutline { contours: pen.contours, advance, cap: cap_height(&f), mapped: mapped.is_some() });
+    let (cap, mapped, gid) = (cap_height(&f), mapped.is_some(), gid.to_u32());
+    let g = Arc::new(GlyphOutline { contours: pen.contours, advance, cap, mapped, gid, face: Some(face.clone()) });
     let mut cache = glyph_cache().lock().unwrap_or_else(PoisonError::into_inner);
     if cache.len() > MAX_CACHED_GLYPHS {
         cache.clear();
@@ -720,6 +731,24 @@ fn glyph_or_fallback(face: &Face, c: char) -> Arc<GlyphOutline> {
         return g;
     }
     fallback_glyph(c).unwrap_or(g)
+}
+
+/// The [`crate::TextGlyph`] of a glyph placed like [`place_glyph`] does (its outline index is
+/// set when it is added). `None` for the missing-glyph shape.
+pub(crate) fn text_glyph(g: &GlyphOutline, c: char, x: f64, h: f64, wf: f64, shear: f64) -> Option<crate::TextGlyph> {
+    let gid = u16::try_from(g.gid).ok().filter(|_| g.mapped)?;
+    let face = g.face.clone()?;
+    // Font units at 1000 per em scale by h / cap.
+    let em = 1000.0 * h / g.cap;
+    (em.is_finite() && em > 0.0).then(|| crate::TextGlyph {
+        face,
+        gid,
+        ch: c,
+        outline: 0,
+        origin: Vec2::new(x, 0.0),
+        x: Vec2::new(em * wf, 0.0),
+        y: Vec2::new(em * shear, em),
+    })
 }
 
 /// Contours of a glyph scaled so its font's cap height is `h`, at pen position `x`.
@@ -762,7 +791,7 @@ pub fn shape(face: &Face, s: &str, height: f64, width_factor: f64, oblique: f64)
         if !c.is_whitespace() {
             let contours = place_glyph(&g, x, h, wf, shear);
             if !contours.is_empty() {
-                out.glyphs.push(contours);
+                out.push_glyph(contours, text_glyph(&g, c, x, h, wf, shear));
             }
         }
         let adv = g.advance * h / g.cap * wf;

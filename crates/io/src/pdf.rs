@@ -21,6 +21,8 @@ use serde_json::Value;
 
 use crate::{IoError, Result};
 
+mod fonts;
+
 /// PDF points per millimetre.
 const PT_PER_MM: f64 = 72.0 / 25.4;
 /// Largest sheet side we accept, in millimetres (PDF viewers cap pages at 200 inches anyway).
@@ -64,6 +66,10 @@ pub struct PdfOptions {
     /// Hyperlinks: an entity's handle and its link target (a URL). The area the entity covers
     /// on the sheet becomes a link annotation.
     pub links: Vec<(Handle, String)>,
+    /// Write text in installed TrueType fonts as filled outlines instead of as text in an
+    /// embedded font subset (like AutoCAD's PDFSHX for its own fonts). Stroke-font text is
+    /// always geometry.
+    pub text_as_geometry: bool,
 }
 
 impl Default for PdfOptions {
@@ -82,6 +88,7 @@ impl Default for PdfOptions {
             layers: true,
             include_off_layers: false,
             links: Vec::new(),
+            text_as_geometry: false,
         }
     }
 }
@@ -96,7 +103,9 @@ impl PdfOptions {
             _ => None,
         };
         PdfOptions {
-            // `layers?` (default on), `offLayers?`, `links?: [{handle, url}]`.
+            // `layers?` (default on), `offLayers?`, `links?: [{handle, url}]`, `text?: "text" |
+            // "geometry"`.
+            text_as_geometry: v.get("text").and_then(Value::as_str).is_some_and(|t| t.eq_ignore_ascii_case("geometry")),
             layers: v.get("layers").and_then(Value::as_bool).unwrap_or(true),
             include_off_layers: v.get("offLayers").and_then(Value::as_bool).unwrap_or(false),
             links: links_json(v.get("links")),
@@ -262,14 +271,18 @@ pub fn pdf_sheets(d: &Drawing, spaces: &[Space], o: &PdfOptions) -> Result<Vec<u
     };
     let pages = spaces.iter().map(|s| sheet(drawn, s, o)).collect::<Result<Vec<_>>>()?;
     let title = if o.title.is_empty() { pages.first().map(|p| p.label.clone()).unwrap_or_default() } else { o.title.clone() };
-    Ok(assemble(d, &pages, o, &title))
+    let fonts = if o.text_as_geometry { fonts::Fonts::default() } else { fonts::Fonts::collect(pages.iter().map(|p| &p.list)) };
+    Ok(assemble(d, &pages, &fonts, o, &title))
 }
 
 /// One plotted sheet, ready to be written as a page.
 struct SheetPage {
     /// Page size in points.
     media: Vec2,
-    content: String,
+    /// What it draws, the mapping to points and the plot area (points).
+    list: cadcraft_render::DisplayList,
+    map: Map,
+    clip_pt: Bounds2,
     /// The drawing layers (indices in the layer table) of the content's `/L<i>` marks.
     layers: Vec<u32>,
     /// Link annotations: rectangle in points and target.
@@ -326,9 +339,8 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<SheetPage> {
             }
         }
     }
-    let content = content_stream(&list, &map, &clip_pt, &layers);
     let links = links(&list, &map, &clip_pt, &o.links);
-    Ok(SheetPage { media, content, layers, links, label: sheet_name(space) })
+    Ok(SheetPage { media, list, map, clip_pt, layers, links, label: sheet_name(space) })
 }
 
 /// Link annotation rectangles: the area (in points) each linked entity covers on the sheet,
@@ -414,7 +426,16 @@ fn color(out: &mut String, c: Rgb, op: &str) {
 
 /// The page's marks; those of primitives on `layers` are marked as optional content
 /// (`/OC /L<layer> BDC` … `EMC`).
-fn content_stream(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Bounds2, layers: &[u32]) -> String {
+///
+/// Primitives in `texts` (filled glyph outlines) are written as text instead: the glyph in its
+/// embedded font (`/F<font>`), placed by a text matrix.
+fn content_stream(
+    list: &cadcraft_render::DisplayList,
+    map: &Map,
+    clip_pt: &Bounds2,
+    layers: &[u32],
+    texts: &std::collections::HashMap<u32, (usize, &cadcraft_render::PlotText)>,
+) -> String {
     let marked: std::collections::HashSet<u32> = layers.iter().copied().collect();
     let white = Rgb(255, 255, 255);
     let mut c = String::new();
@@ -438,8 +459,15 @@ fn content_stream(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Boun
     };
     // The PDF layer (optional content) the marks are in: `/OC /L<i> BDC` … `EMC`.
     let mut layer: Option<u32> = None;
+    // Inside a text object (`BT` … `ET`), with this font set.
+    let mut text_font: Option<Option<usize>> = None;
     for (i, p) in list.prims.iter().enumerate() {
         let want = list.prim_layers.get(i).copied().filter(|l| marked.contains(l));
+        let text = u32::try_from(i).ok().and_then(|i| texts.get(&i));
+        if text_font.is_some() && (text.is_none() || want != layer) {
+            c.push_str("ET\n");
+            text_font = None;
+        }
         if want != layer {
             flush(&mut c, &mut pending);
             if layer.is_some() {
@@ -502,6 +530,10 @@ fn content_stream(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Boun
                     color(&mut c, rgb, "rg");
                     fill = Some(rgb);
                 }
+                if let Some((font, t)) = text {
+                    glyph(&mut c, &mut text_font, *font, t, map);
+                    continue;
+                }
                 let mut any = false;
                 for t in raw.as_chunks::<3>().0 {
                     for (i, q) in t.iter().enumerate() {
@@ -533,11 +565,35 @@ fn content_stream(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Boun
         }
     }
     flush(&mut c, &mut pending);
+    if text_font.is_some() {
+        c.push_str("ET\n");
+    }
     if layer.is_some() {
         c.push_str("EMC\n");
     }
     c.push_str("Q\n");
     c
+}
+
+/// Write one glyph as text: opens a text object and sets the font when needed, then places the
+/// glyph with a text matrix (font size 1: the matrix axes are one em).
+fn glyph(c: &mut String, text_font: &mut Option<Option<usize>>, font: usize, t: &cadcraft_render::PlotText, map: &Map) {
+    if text_font.is_none() {
+        c.push_str("BT\n");
+        *text_font = Some(None);
+    }
+    if *text_font != Some(Some(font)) {
+        let _ = writeln!(c, "/F{font} 1 Tf");
+        *text_font = Some(Some(font));
+    }
+    let s = map.s * map.k;
+    let g = &t.glyph;
+    for v in [g.x.x * s, g.x.y * s, g.y.x * s, g.y.y * s] {
+        num(c, v);
+        c.push(' ');
+    }
+    pt(c, map.pt(g.origin));
+    let _ = writeln!(c, " Tm <{:04X}> Tj", g.gid);
 }
 
 /// A PDF text string: a literal with `(`, `)` and `\` escaped when it is printable ASCII,
@@ -629,7 +685,7 @@ fn refs(ids: impl IntoIterator<Item = usize>) -> String {
 /// Assemble the file: catalog, page tree, pages with their content streams and link
 /// annotations, the PDF layers (one optional content group per drawing layer used, named
 /// like it), page labels, document information, cross-reference table and trailer.
-fn assemble(d: &Drawing, pages: &[SheetPage], o: &PdfOptions, title: &str) -> Vec<u8> {
+fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptions, title: &str) -> Vec<u8> {
     let mut objs = Objects::default();
     let catalog = objs.reserve();
     let tree = objs.reserve();
@@ -637,9 +693,15 @@ fn assemble(d: &Drawing, pages: &[SheetPage], o: &PdfOptions, title: &str) -> Ve
     let mut ocg_ids: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
     let mut ocgs: Vec<(u32, usize)> = Vec::new();
     let mut kids = Vec::new();
+    // Page dictionaries are completed once the fonts are written: (page, its fonts, the rest).
+    let mut page_dicts: Vec<(usize, Vec<usize>, String, String)> = Vec::new();
     for p in pages {
         let page = objs.reserve();
-        let content = objs.add(stream(p.content.as_bytes(), o.compress, ""));
+        let texts = fonts.texts(&p.list);
+        let content = objs.add(stream(content_stream(&p.list, &p.map, &p.clip_pt, &p.layers, &texts).as_bytes(), o.compress, ""));
+        let mut used: Vec<usize> = texts.values().map(|(f, _)| *f).collect();
+        used.sort_unstable();
+        used.dedup();
         let mut props = String::new();
         for l in &p.layers {
             let Some(layer) = d.layers.get(*l as usize) else { continue };
@@ -665,10 +727,21 @@ fn assemble(d: &Drawing, pages: &[SheetPage], o: &PdfOptions, title: &str) -> Ve
         }
         let mut mb = String::new();
         pt(&mut mb, p.media);
-        let resources = if props.is_empty() { "<< >>".to_string() } else { format!("<< /Properties <<{props} >> >>") };
         let annots = if annots.is_empty() { String::new() } else { format!(" /Annots [{}]", refs(annots)) };
-        objs.set(page, format!("<< /Type /Page /Parent {tree} 0 R /MediaBox [0 0 {mb}] /Resources {resources} /Contents {content} 0 R{annots} >>"));
+        page_dicts.push((page, used, props, format!("/MediaBox [0 0 {mb}] /Contents {content} 0 R{annots}")));
         kids.push(page);
+    }
+    let font_ids = if fonts.is_empty() { Vec::new() } else { fonts.write(&mut objs, o.compress) };
+    for (page, used, props, rest) in page_dicts {
+        let mut res = String::new();
+        if !props.is_empty() {
+            let _ = write!(res, " /Properties <<{props} >>");
+        }
+        let f: Vec<String> = used.iter().filter_map(|i| Some(format!("/F{i} {} 0 R", font_ids.get(*i)?))).collect();
+        if !f.is_empty() {
+            let _ = write!(res, " /Font << {} >>", f.join(" "));
+        }
+        objs.set(page, format!("<< /Type /Page /Parent {tree} 0 R /Resources <<{res} >> {rest} >>"));
     }
     objs.set(tree, format!("<< /Type /Pages /Kids [{}] /Count {} >>", refs(kids.iter().copied()), kids.len()));
     let mut cat = format!("<< /Type /Catalog /Pages {tree} 0 R");

@@ -15,6 +15,7 @@ cadcraft-doc = { workspace = true }
 cadcraft-dxf = { workspace = true }
 cadcraft-dwg = { workspace = true }
 cadcraft-render = { workspace = true }
+cadcraft-fonts = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
