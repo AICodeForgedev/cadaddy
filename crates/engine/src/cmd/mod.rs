@@ -13,6 +13,7 @@ mod edit;
 mod exchange;
 pub mod file;
 mod gripcmds;
+mod griphot;
 pub(crate) mod groups;
 mod hatch;
 mod inquiry;

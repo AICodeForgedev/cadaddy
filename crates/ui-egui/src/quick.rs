@@ -252,7 +252,6 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
     let active = app.session.settings.qpmode
         && !sel.is_empty()
         && app.session.running.is_none()
-        && app.canvas.hot_grip.is_none()
         && !app.ui.start_tab
         && app.ui.dialog.as_deref() != Some("qselect");
     let mut st: QpState = ctx.data_mut(|d| d.get_temp(sid)).unwrap_or_default();

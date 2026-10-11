@@ -12,7 +12,7 @@
 //! - `ui.elements {label?, role?, focused?}`: observed visible controls and actual egui focus
 //! - `ui.menu.list`: the menu tree; `ui.menu.invoke {command}`: like choosing a menu item
 //! - `ui.pointer {x, y, space?: "world"|"screen", button?: left|right, action?: click|move}`
-//! - `ui.click {x, y}`, `ui.move {x, y}`: real egui pointer input in screen points
+//! - `ui.click {x, y, shift?, ctrl?}`, `ui.move {x, y}`: real egui pointer input in screen points
 //! - `ui.key {key, cmd?, shift?, alt?}`, `ui.text {text}`: synthetic keyboard input
 //! - `ui.set {...UiState fields}`, `ui.resize {width, height}`
 //! - `ui.screenshot {path?}`: PNG of the window; `ui.render {path?, width?, height?, fit?}`: headless
@@ -354,9 +354,13 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                     Some("middle") => egui::PointerButton::Middle,
                     _ => egui::PointerButton::Primary,
                 };
-                let modifiers = egui::Modifiers { shift: p.get("shift").and_then(Value::as_bool).unwrap_or(false), ..Default::default() };
+                let b = |k: &str| p.get(k).and_then(Value::as_bool).unwrap_or(false);
+                let modifiers = egui::Modifiers { shift: b("shift"), ctrl: b("ctrl"), ..Default::default() };
                 app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers });
                 app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: false, modifiers });
+                if modifiers.any() {
+                    app.synthetic.push(egui::Event::PointerMoved(pos));
+                }
             }
             ok(Value::Null)
         }

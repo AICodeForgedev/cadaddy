@@ -428,6 +428,12 @@ impl CadApp {
         if let Some(egui::Event::PointerMoved(p) | egui::Event::PointerButton { pos: p, .. }) = self.synthetic.first() {
             raw.events.push(egui::Event::PointerMoved(*p));
         }
+        // A synthetic click holds its Shift/Ctrl (Shift+click a grip); the next move lets go.
+        match self.synthetic.first() {
+            Some(egui::Event::PointerButton { modifiers, .. }) => raw.events.push(egui::Event::ModifiersChanged(*modifiers)),
+            Some(egui::Event::PointerMoved(_)) => raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::default())),
+            _ => {}
+        }
         let n = n.min(self.synthetic.len());
         raw.events.extend(self.synthetic.drain(..n));
     }

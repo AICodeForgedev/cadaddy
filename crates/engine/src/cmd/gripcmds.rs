@@ -1,6 +1,6 @@
 //! `grip.*` commands: the undoable, scriptable form of grip editing (see `crate::grips`).
 
-use cadcraft_doc::Handle;
+use cadcraft_doc::{Entity, EntityKind, Handle};
 use cadcraft_geom::{Mat3, Vec2};
 use serde_json::{Value, json};
 
@@ -14,11 +14,16 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("grip.move", "Grip Stretch", run_grip_move).params(
             "{handle?, handles?, index, to} (stretch the grip) | {handles?, index, baseHandle?, to, mode: \"move\", copy?} (move about the grip)",
         ),
-        CommandSpec::new("grip.stretch", "Grip Stretch", run_grip_stretch).params("{handle?, handles?, index, to}"),
+        CommandSpec::new("grip.stretch", "Grip Stretch", run_grip_stretch).params(
+            "{handle?, handles?, index, to} | {grips: [[handle, index], ...] (several hot grips), delta | to (+ base?), handles?, copy?}",
+        ),
         CommandSpec::new("grip.rotate", "Grip Rotate", run_grip_rotate).params("{handles?, base | baseHandle+index, angle (degrees) | to, copy?}"),
         CommandSpec::new("grip.scale", "Grip Scale", run_grip_scale).params("{handles?, base | baseHandle+index, factor | to, copy?}"),
         CommandSpec::new("grip.mirror", "Grip Mirror", run_grip_mirror)
             .params("{handles?, base | baseHandle+index, to (second mirror point), copy?}"),
+        CommandSpec::new("grip", "Grip Edit", run_grip)
+            .params("interactive: select grips, then the grip modes with [Base point/Copy/Undo/Reference/eXit]; JSON: use grip.stretch/move/rotate/scale/mirror")
+            .interactive(super::griphot::factory),
     ]
 }
 
@@ -80,7 +85,114 @@ fn apply(s: &mut Session, hs: &[Handle], m: &Mat3, copy: bool) -> Result<Value> 
 }
 
 fn run_grip_stretch(s: &mut Session, p: &Value) -> Result<Value> {
-    stretch(s, "grip.stretch", p)
+    if p.get("grips").is_none() {
+        return stretch(s, "grip.stretch", p);
+    }
+    let cmd = "grip.stretch";
+    let list = p.get("grips").and_then(Value::as_array).ok_or_else(|| bad(cmd, "`grips` must be an array of [handle, index] pairs"))?;
+    let mut hot = Vec::new();
+    for g in list.iter().take(MAX_GRIPS) {
+        let pair = || -> Option<(Handle, usize)> {
+            let h = curves::handle_value(g.get(0)?)?;
+            Some((h, usize::try_from(g.get(1)?.as_u64()?).ok()?))
+        };
+        hot.push(pair().ok_or_else(|| bad(cmd, format!("`grips`: {g} is not a [handle, index] pair")))?);
+    }
+    let &(h0, i0) = hot.first().ok_or_else(|| bad(cmd, "`grips` is empty"))?;
+    let delta = match point_param(p, "delta") {
+        Some(d) => d,
+        None => {
+            let base = match point_param(p, "base") {
+                Some(b) => b,
+                None => curves::entity(s, h0)?.kind.grips().get(i0).copied().ok_or_else(|| bad(cmd, "no such grip"))?,
+            };
+            point_req(cmd, p, "to")? - base
+        }
+    };
+    let others = if p.get("handles").is_some() { targets(s, p)? } else { s.selection() };
+    let hs = stretch_grips(s, &hot, &others, delta, bool_or(p, "copy", false))?;
+    if hs.is_empty() {
+        return Err(bad(cmd, "no grip could be stretched (locked, missing, or the result would be degenerate)"));
+    }
+    Ok(json!({ "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
+}
+
+fn run_grip(_s: &mut Session, _p: &Value) -> Result<Value> {
+    Err(bad("grip", "GRIP is interactive; use grip.stretch, grip.move, grip.rotate, grip.scale or grip.mirror"))
+}
+
+/// At most this many grips or objects take part in one multi-grip stretch.
+const MAX_GRIPS: usize = 1000;
+
+/// The objects as they'd be after moving the grips `hot` by `delta`, with the grips of `others`
+/// that sit on a hot grip's point (connected objects stay connected). Locked objects and edits
+/// that would be degenerate are left out; several hot grips of one object move together.
+pub(super) fn stretched(s: &Session, hot: &[(Handle, usize)], others: &[Handle], delta: Vec2) -> Vec<(Handle, EntityKind)> {
+    let Ok(d) = s.doc() else { return Vec::new() };
+    // Every grip to move, per object, with its target point.
+    let mut moves: Vec<(Handle, Vec<(usize, Vec2)>)> = Vec::new();
+    let mut add = |h: Handle, i: usize, to: Vec2| match moves.iter_mut().find(|(x, _)| *x == h) {
+        Some((_, v)) => {
+            if !v.iter().any(|(j, _)| *j == i) {
+                v.push((i, to));
+            }
+        }
+        None => moves.push((h, vec![(i, to)])),
+    };
+    for &(h, i) in hot.iter().take(MAX_GRIPS) {
+        let Some(from) = d.entity(h).and_then(|e| e.kind.grips().get(i).copied()) else { continue };
+        add(h, i, from + delta);
+        let tol = 1e-9 * (1.0 + from.len());
+        for &o in others.iter().take(MAX_GRIPS) {
+            if o == h {
+                continue;
+            }
+            if let Some(j) = d.entity(o).and_then(|e| e.kind.grips().iter().position(|g| g.near(from, tol))) {
+                add(o, j, from + delta);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (h, mv) in moves {
+        if curves::is_locked(s, h) {
+            continue;
+        }
+        let Some(e) = d.entity(h) else { continue };
+        let mut k = e.kind.clone();
+        let mut changed = false;
+        for (i, to) in mv {
+            if let Some(nk) = stretch_grip(&k, i, to) {
+                k = nk;
+                changed = true;
+            }
+        }
+        if changed {
+            out.push((h, k));
+        }
+    }
+    out
+}
+
+/// Stretch the grips `hot` by `delta` (see [`stretched`]). With `copy` the stretched objects are
+/// added as copies and the originals stay. Returns the edited (or new) objects.
+pub(super) fn stretch_grips(s: &mut Session, hot: &[(Handle, usize)], others: &[Handle], delta: Vec2, copy: bool) -> Result<Vec<Handle>> {
+    let edits = stretched(s, hot, others, delta);
+    let d = s.doc_mut()?;
+    let mut out = Vec::new();
+    for (h, k) in edits {
+        if copy {
+            let (Some(sp), Some(e)) = (d.space_of(h), d.entity(h).map(|e| (**e).clone())) else { continue };
+            let nh = d.new_handle();
+            if let Some(st) = d.space_mut(&sp) {
+                st.push(Entity { handle: nh, kind: k, ..e });
+                out.push(nh);
+            }
+        } else {
+            d.modify_entity(h, |e| e.kind = k)?;
+            out.push(h);
+        }
+    }
+    Ok(out)
 }
 
 fn run_grip_move(s: &mut Session, p: &Value) -> Result<Value> {

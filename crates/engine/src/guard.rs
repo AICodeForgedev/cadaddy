@@ -33,6 +33,11 @@ impl Guarded {
         Ok(Box::new(Guarded { inner, broken: Cell::new(None) }))
     }
 
+    /// Wrap a machine created by other means (the hot-grip edit).
+    pub(crate) fn wrap(inner: Box<dyn Interactive>) -> Box<dyn Interactive> {
+        Box::new(Guarded { inner, broken: Cell::new(None) })
+    }
+
     fn internal(&self, p: &(dyn Any + Send)) -> EngineError {
         EngineError::Internal(self.inner.name().to_ascii_lowercase(), message(p))
     }
