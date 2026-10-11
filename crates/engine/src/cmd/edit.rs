@@ -6,14 +6,21 @@ use serde_json::{Value, json};
 
 use super::machines::{SelOutcome, SelectPhase, SelectRun};
 use super::*;
+use crate::undoctl::Control;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         // U undoes the last operation at once (Edit > Undo, Cmd+Z); UNDO asks how many.
         CommandSpec::new("u", "Undo", run_u).menu(&["Edit", "Undo"]).key("Cmd+Z").params("{}").noundo(),
-        CommandSpec::new("undo", "Undo", run_undo).params("{count?: n}").noundo().interactive(|_| Ok(Box::new(UndoM::default()))),
-        CommandSpec::new("redo", "Redo", run_redo).menu(&["Edit", "Redo"]).key("Cmd+Shift+Z").alias(&["mredo"]).params("{count?: n}").noundo(),
+        CommandSpec::new("undo", "Undo", run_undo)
+            .params(
+                "{count?: n} | {mode: mark|begin|end} | {mode: back, confirm?: bool (no mark: undo everything; default true)} | {mode: auto, on: bool} | {mode: control, control: all|none|one|combine|layer, on?: bool (combine/layer)}",
+            )
+            .noundo()
+            .interactive(|_| Ok(Box::new(UndoM::default()))),
+        CommandSpec::new("redo", "Redo", run_redo).menu(&["Edit", "Redo"]).key("Cmd+Shift+Z").params("{count?: n}").noundo(),
+        CommandSpec::new("mredo", "Redo", run_mredo).params("{count?: n} | {all: true}").noundo().interactive(|_| Ok(Box::new(MredoM))),
         CommandSpec::new("cutclip", "Cut", run_cut)
             .menu(&["Edit", "Cut"])
             .key("Cmd+X")
@@ -67,82 +74,310 @@ fn end_running_command(s: &mut Session) {
     }
 }
 
+/// The UNDO options of the JSON form (`mode`) and the command line (keywords).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UndoMode {
+    Count,
+    Mark,
+    Back,
+    Begin,
+    End,
+    Auto,
+    Control,
+}
+
+fn undo_mode(m: &str) -> Option<UndoMode> {
+    Some(match m.trim().to_ascii_lowercase().as_str() {
+        "" | "count" => UndoMode::Count,
+        "mark" => UndoMode::Mark,
+        "back" => UndoMode::Back,
+        "begin" | "group" => UndoMode::Begin,
+        "end" => UndoMode::End,
+        "auto" => UndoMode::Auto,
+        "control" => UndoMode::Control,
+        _ => return None,
+    })
+}
+
+fn on_param(p: &Value, key: &str) -> Option<bool> {
+    let v = p.get(key)?;
+    v.as_bool().or_else(|| v.as_i64().map(|i| i != 0)).or_else(|| match v.as_str()?.trim().to_ascii_lowercase().as_str() {
+        "on" | "yes" | "y" | "true" | "1" => Some(true),
+        "off" | "no" | "n" | "false" | "0" => Some(false),
+        _ => None,
+    })
+}
+
+/// The JSON result of an UNDO option: `message` plus the new UNDOCTL bits and mark count.
+fn undo_state(s: &Session, message: impl Into<String>) -> Result<Value> {
+    let st = s.state()?;
+    Ok(json!({ "message": message.into(), "undoctl": st.undo_ctl.bits(), "marks": st.undo_marks() }))
+}
+
+fn undo_off() -> EngineError {
+    EngineError::Other("Undo is turned off (UNDO Control None); UNDO Control All turns it on.".into())
+}
+
 fn run_undo(s: &mut Session, p: &Value) -> Result<Value> {
     end_running_command(s);
-    let n = p.get("count").and_then(Value::as_u64).unwrap_or(1).clamp(1, 1000);
+    let mode = match p.get("mode") {
+        None | Some(Value::Null) => UndoMode::Count,
+        Some(v) => v.as_str().and_then(undo_mode).ok_or_else(|| bad("undo", "mode: count, mark, back, begin, end, auto or control"))?,
+    };
+    let control = s.state()?.undo_ctl.control;
+    if control != Control::All && !matches!(mode, UndoMode::Count | UndoMode::Control | UndoMode::Auto) {
+        return Err(EngineError::Other(format!("UNDO {mode:?} needs UNDO Control All.")));
+    }
+    match mode {
+        UndoMode::Count => {
+            if control == Control::None {
+                return Err(undo_off());
+            }
+            let n = p.get("count").and_then(Value::as_u64).unwrap_or(1).clamp(1, 1000);
+            // Undoing inside a BEgin group ends it: the whole group is undone as one step.
+            s.state_mut()?.end_undo_group();
+            let mut labels = Vec::new();
+            for _ in 0..n {
+                match s.undo()? {
+                    Some(l) => labels.push(l),
+                    None => break,
+                }
+            }
+            if labels.is_empty() {
+                return Ok(json!({ "message": "Everything has been undone" }));
+            }
+            Ok(json!({ "undone": labels, "message": labels.join(", ").to_string() }))
+        }
+        UndoMode::Mark => {
+            s.state_mut()?.undo_mark();
+            undo_state(s, "Mark set")
+        }
+        UndoMode::Back => undo_back(s, on_param(p, "confirm").unwrap_or(true)),
+        UndoMode::Begin => {
+            let ended = s.state_mut()?.begin_undo_group();
+            undo_state(s, if ended { "Group ended; new group begun" } else { "Group begun" })
+        }
+        UndoMode::End => {
+            let ended = s.state_mut()?.end_undo_group();
+            undo_state(s, if ended { "Group ended" } else { "No group to end" })
+        }
+        UndoMode::Auto => {
+            let on = on_param(p, "on").ok_or_else(|| bad("undo", "`on` (true/false) is required for mode auto"))?;
+            s.state_mut()?.undo_ctl.auto = on;
+            undo_state(s, format!("UNDO Auto {}", if on { "on" } else { "off" }))
+        }
+        UndoMode::Control => {
+            let c = str_param(p, "control").unwrap_or("all").trim().to_ascii_lowercase();
+            let st = s.state_mut()?;
+            let msg = match c.as_str() {
+                "all" => {
+                    st.set_undo_control(Control::All);
+                    "UNDO Control All"
+                }
+                "none" => {
+                    st.set_undo_control(Control::None);
+                    "UNDO Control None: undo is off"
+                }
+                "one" => {
+                    st.set_undo_control(Control::One);
+                    "UNDO Control One: only the last step can be undone"
+                }
+                "combine" => {
+                    st.undo_ctl.combine_view = on_param(p, "on").unwrap_or(true);
+                    "UNDO Control Combine set"
+                }
+                "layer" => {
+                    st.undo_ctl.combine_layer = on_param(p, "on").unwrap_or(true);
+                    "UNDO Control Layer set"
+                }
+                _ => return Err(bad("undo", "control: all, none, one, combine or layer")),
+            };
+            undo_state(s, msg)
+        }
+    }
+}
+
+/// UNDO Back: undo to the last mark (which goes with it), or with no mark everything when
+/// `confirm` is true.
+fn undo_back(s: &mut Session, confirm: bool) -> Result<Value> {
+    let st = s.state_mut()?;
+    st.end_undo_group();
+    let depth = st.undo.len();
+    st.undo_ctl.marks.retain(|m| *m <= depth);
+    let target = match st.undo_ctl.marks.pop() {
+        Some(m) => m,
+        None if confirm => 0,
+        None => return undo_state(s, "Nothing undone"),
+    };
     let mut labels = Vec::new();
-    for _ in 0..n {
+    // Each step pops one entry, so this ends within the stack's depth.
+    while s.state()?.undo.len() > target {
         match s.undo()? {
             Some(l) => labels.push(l),
             None => break,
         }
     }
-    if labels.is_empty() {
-        return Ok(json!({ "message": "Everything has been undone" }));
-    }
-    Ok(json!({ "undone": labels, "message": labels.join(", ").to_string() }))
+    let msg = match (labels.is_empty(), target) {
+        (true, 0) => "Everything has been undone".to_string(),
+        (true, _) => "Back at the mark".to_string(),
+        (false, _) => labels.join(", "),
+    };
+    let mut r = undo_state(s, msg)?;
+    r["undone"] = json!(labels);
+    Ok(r)
 }
 
 fn run_u(s: &mut Session, _p: &Value) -> Result<Value> {
     run_undo(s, &json!({}))
 }
 
-/// UNDO at the command line: "Enter the number of operations to undo" (default 1). Its other
-/// options are not available yet; Auto and Control still take their value, so it isn't run as a
-/// command.
+/// What the UNDO prompt machine asks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum UndoAsk {
+    /// "Enter the number of operations to undo or [Auto/Control/BEgin/End/Mark/Back]".
+    #[default]
+    Main,
+    Auto,
+    Control,
+    Combine,
+    Layer,
+    /// Back with no mark: undo everything?
+    BackAll,
+}
+
+/// UNDO at the command line: a number of operations (default 1) or Auto, Control (All, None, One,
+/// Combine, Layer), BEgin, End, Mark or Back. With Control None only Control is offered, with One
+/// a count or Control.
 #[derive(Default)]
 struct UndoM {
-    /// Auto or Control was chosen: its value is being asked for.
-    option: Option<&'static str>,
+    ask: UndoAsk,
+}
+
+impl UndoM {
+    fn finish(s: &mut Session, r: Result<Value>) -> Result<Step> {
+        match r {
+            Ok(v) => {
+                if let Some(m) = v.get("message").and_then(Value::as_str) {
+                    s.echo(m.to_string());
+                }
+            }
+            Err(e) => s.echo(e.to_string()),
+        }
+        Ok(Step::Done)
+    }
 }
 
 impl Interactive for UndoM {
     fn name(&self) -> &'static str {
         "UNDO"
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
-        match self.option {
-            Some("Auto") => Prompt::new("Enter UNDO Auto mode", Accept::TEXT).kw(&["ON", "OFF"]).default("ON"),
-            Some(_) => Prompt::new("Enter an UNDO control option", Accept::TEXT).kw(&["All", "None", "One", "Combine", "Layer"]).default("All"),
-            None => Prompt::new("Enter the number of operations to undo", Accept::NUMBER)
+    fn prompt(&self, s: &Session) -> Prompt {
+        let control = s.state().map(|st| st.undo_ctl.control).unwrap_or_default();
+        let ask = if control == Control::None && self.ask == UndoAsk::Main { UndoAsk::Control } else { self.ask };
+        let yes_no = |b: bool| if b { "Yes" } else { "No" };
+        let ctl = s.state().map(|st| st.undo_ctl.clone()).unwrap_or_default();
+        match ask {
+            UndoAsk::Auto => Prompt::new("Enter UNDO Auto mode", Accept::TEXT).kw(&["ON", "OFF"]).default(if ctl.auto { "ON" } else { "OFF" }),
+            UndoAsk::Control => {
+                Prompt::new("Enter an UNDO control option", Accept::TEXT).kw(&["All", "None", "One", "Combine", "Layer"]).default("All")
+            }
+            UndoAsk::Combine => {
+                Prompt::new("Combine zooms and pans into one undo step?", Accept::TEXT).kw(&["Yes", "No"]).default(yes_no(ctl.combine_view))
+            }
+            UndoAsk::Layer => {
+                Prompt::new("Combine layer property changes into one undo step?", Accept::TEXT).kw(&["Yes", "No"]).default(yes_no(ctl.combine_layer))
+            }
+            UndoAsk::BackAll => Prompt::new("No mark: undo everything?", Accept::TEXT).kw(&["Yes", "No"]).default("Yes"),
+            UndoAsk::Main if control == Control::One => {
+                Prompt::new("Enter the number of operations to undo", Accept::NUMBER).kw(&["Control"]).default("1")
+            }
+            UndoAsk::Main => Prompt::new("Enter the number of operations to undo", Accept::NUMBER)
                 .kw(&["Auto", "Control", "BEgin", "End", "Mark", "Back"])
                 .default("1"),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
-        if let Some(o) = self.option {
-            s.echo(format!("UNDO {o}: not available yet."));
-            return Ok(Step::Done);
+        let prompt = self.prompt(s);
+        if s.state()?.undo_ctl.control == Control::None && self.ask == UndoAsk::Main {
+            self.ask = UndoAsk::Control;
         }
-        let n = match i {
-            Input::Text(t) => {
-                t.trim().parse::<u64>().ok().filter(|n| *n >= 1).ok_or_else(|| EngineError::Other("Requires a positive integer.".into()))?
-            }
-            Input::Enter => 1,
-            Input::Keyword(k) => {
-                match k.as_str() {
-                    "Auto" => self.option = Some("Auto"),
-                    "Control" => self.option = Some("Control"),
-                    _ => {
-                        s.echo(format!("UNDO {k}: not available yet."));
-                        return Ok(Step::Done);
-                    }
-                }
-                return Ok(Step::Continue);
-            }
+        let kw = match &i {
+            Input::Cancel => return Ok(Step::Cancel),
+            Input::Enter => prompt.default.clone(),
+            Input::Keyword(k) | Input::Text(k) => prompt.match_keyword(k),
             _ => return Ok(Step::Continue),
         };
-        let r = run_undo(s, &json!({ "count": n }))?;
-        if let Some(m) = r.get("message").and_then(Value::as_str) {
-            s.echo(m.to_string());
+        let yes = kw.as_deref() == Some("Yes");
+        match self.ask {
+            UndoAsk::Main => {
+                // Enter takes the default count, not a keyword.
+                if let Some(k) = kw.as_deref().filter(|_| !matches!(i, Input::Enter)) {
+                    match k {
+                        "Auto" => self.ask = UndoAsk::Auto,
+                        "Control" => self.ask = UndoAsk::Control,
+                        "Back" if s.state()?.undo_marks() == 0 => self.ask = UndoAsk::BackAll,
+                        _ => {
+                            let r = run_undo(s, &json!({ "mode": k.to_ascii_lowercase() }));
+                            return Self::finish(s, r);
+                        }
+                    }
+                    return Ok(Step::Continue);
+                }
+                let n = match &i {
+                    Input::Text(t) => {
+                        t.trim().parse::<u64>().ok().filter(|n| *n >= 1).ok_or_else(|| EngineError::Other("Requires a positive integer.".into()))?
+                    }
+                    _ => 1,
+                };
+                let r = run_undo(s, &json!({ "count": n }));
+                Self::finish(s, r)
+            }
+            UndoAsk::Auto => {
+                let on = match kw.as_deref() {
+                    Some("ON") => true,
+                    Some("OFF") => false,
+                    _ => return Err(EngineError::Other("Enter ON or OFF.".into())),
+                };
+                let r = run_undo(s, &json!({ "mode": "auto", "on": on }));
+                Self::finish(s, r)
+            }
+            UndoAsk::Control => match kw.as_deref() {
+                Some("Combine") => {
+                    self.ask = UndoAsk::Combine;
+                    Ok(Step::Continue)
+                }
+                Some("Layer") => {
+                    self.ask = UndoAsk::Layer;
+                    Ok(Step::Continue)
+                }
+                Some(c) => {
+                    let r = run_undo(s, &json!({ "mode": "control", "control": c.to_ascii_lowercase() }));
+                    Self::finish(s, r)
+                }
+                None => Err(EngineError::Other("Enter All, None, One, Combine or Layer.".into())),
+            },
+            UndoAsk::Combine | UndoAsk::Layer => {
+                if kw.is_none() {
+                    return Err(EngineError::Other("Answer Yes or No.".into()));
+                }
+                let control = if self.ask == UndoAsk::Combine { "combine" } else { "layer" };
+                let r = run_undo(s, &json!({ "mode": "control", "control": control, "on": yes }));
+                Self::finish(s, r)
+            }
+            UndoAsk::BackAll => {
+                if kw.is_none() {
+                    return Err(EngineError::Other("Answer Yes or No.".into()));
+                }
+                let r = run_undo(s, &json!({ "mode": "back", "confirm": yes }));
+                Self::finish(s, r)
+            }
         }
-        Ok(Step::Done)
     }
 }
 
-fn run_redo(s: &mut Session, p: &Value) -> Result<Value> {
+/// Redo up to `n` undone steps.
+fn redo_steps(s: &mut Session, n: u64) -> Result<Value> {
     end_running_command(s);
-    let n = p.get("count").and_then(Value::as_u64).unwrap_or(1).clamp(1, 1000);
     let mut labels = Vec::new();
     for _ in 0..n {
         match s.redo()? {
@@ -151,6 +386,52 @@ fn run_redo(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     Ok(json!({ "redone": labels, "message": if labels.is_empty() { "Nothing to redo".to_string() } else { labels.join(", ") } }))
+}
+
+fn run_redo(s: &mut Session, p: &Value) -> Result<Value> {
+    redo_steps(s, p.get("count").and_then(Value::as_u64).unwrap_or(1).clamp(1, 1000))
+}
+
+/// MREDO: `{count}` steps, or `{all: true}` every undone step.
+fn run_mredo(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.get("all").and_then(Value::as_bool).unwrap_or(false) {
+        let n = s.state()?.redo.len() as u64;
+        return redo_steps(s, n.max(1));
+    }
+    run_redo(s, p)
+}
+
+/// MREDO at the command line: a number of actions, All or Last.
+struct MredoM;
+
+impl Interactive for MredoM {
+    fn name(&self) -> &'static str {
+        "MREDO"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        Prompt::new("Enter number of actions", Accept::NUMBER).kw(&["All", "Last"])
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        let p = match &i {
+            Input::Cancel => return Ok(Step::Cancel),
+            Input::Enter => return Ok(Step::Done),
+            Input::Keyword(k) | Input::Text(k) => match self.prompt(s).match_keyword(k).as_deref() {
+                Some("All") => json!({ "all": true }),
+                Some(_) => json!({ "count": 1 }),
+                None => {
+                    let n =
+                        k.trim().parse::<u64>().ok().filter(|n| *n >= 1).ok_or_else(|| EngineError::Other("Requires a positive integer.".into()))?;
+                    json!({ "count": n })
+                }
+            },
+            _ => return Ok(Step::Continue),
+        };
+        let r = run_mredo(s, &p)?;
+        if let Some(m) = r.get("message").and_then(Value::as_str) {
+            s.echo(m.to_string());
+        }
+        Ok(Step::Done)
+    }
 }
 
 fn copy_to_clip(s: &mut Session, hs: &[Handle], base: Option<Vec2>) -> Result<usize> {

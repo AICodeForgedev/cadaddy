@@ -22,6 +22,7 @@ pub mod select;
 pub mod snap;
 pub mod spatial;
 pub mod sysvars;
+pub mod undoctl;
 pub mod units;
 
 use std::sync::Arc;
@@ -88,6 +89,8 @@ pub struct DocState {
     pub doc: Arc<Drawing>,
     pub undo: Vec<Snapshot>,
     pub redo: Vec<Snapshot>,
+    /// UNDO marks, BEgin/End group and Control (see [`undoctl`]).
+    pub undo_ctl: undoctl::UndoCtl,
     pub selection: Vec<Handle>,
     pub previous_selection: Vec<Handle>,
     pub path: Option<String>,
@@ -114,6 +117,7 @@ impl DocState {
             doc,
             undo: Vec::new(),
             redo: Vec::new(),
+            undo_ctl: undoctl::UndoCtl::default(),
             selection: Vec::new(),
             previous_selection: Vec::new(),
             path,
@@ -698,12 +702,8 @@ impl Session {
             && let Some(st) = self.docs.iter_mut().find(|d| d.uid == uid)
             && !Arc::ptr_eq(&doc, &st.doc)
         {
-            st.undo.push(Snapshot { label: spec.label.to_string(), doc, selection: sel });
-            st.redo.clear();
+            st.push_undo(Snapshot { label: spec.label.to_string(), doc, selection: sel });
             st.revision += 1;
-            if st.undo.len() > 2000 {
-                st.undo.remove(0);
-            }
         }
         result
     }
@@ -1033,8 +1033,7 @@ impl Session {
         if let Ok(st) = self.state_mut()
             && !Arc::ptr_eq(&run.before, &st.doc)
         {
-            st.undo.push(Snapshot { label: label.to_string(), doc: run.before, selection: run.selection_before });
-            st.redo.clear();
+            st.push_undo(Snapshot { label: label.to_string(), doc: run.before, selection: run.selection_before });
             st.revision += 1;
         }
     }

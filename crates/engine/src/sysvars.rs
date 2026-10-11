@@ -18,6 +18,8 @@ const SESSION_VARS: &[&str] = &[
     "SNAPMODE",
     "SNAPUNIT",
     "GRIDUNIT",
+    "UNDOCTL",
+    "UNDOMARKS",
     "GRIDMAJOR",
     "DYNMODE",
     "DYNPIFORMAT",
@@ -96,6 +98,9 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
                 })
                 .unwrap_or_default()
         ),
+        // UNDO state of the drawing: Control/Auto/group bits and the number of marks.
+        "UNDOCTL" => json!(s.state().ok()?.undo_ctl.bits()),
+        "UNDOMARKS" => json!(s.state().ok()?.undo_marks()),
         "VIEWCTR" => {
             let v = s.state().ok()?.view();
             json!([v.center.x, v.center.y, 0.0])
@@ -138,7 +143,7 @@ fn as_pt(v: &Value) -> Option<cadcraft_geom::Vec2> {
 }
 
 /// Variables `get` reports from session or drawing state that `set` can't change.
-const READ_ONLY: &[&str] = &["CMDNAMES", "DWGNAME", "DBMOD", "CTAB", "LASTPOINT", "VIEWCTR", "VIEWSIZE", "EXTMIN", "EXTMAX"];
+const READ_ONLY: &[&str] = &["CMDNAMES", "DWGNAME", "DBMOD", "CTAB", "LASTPOINT", "VIEWCTR", "VIEWSIZE", "EXTMIN", "EXTMAX", "UNDOCTL", "UNDOMARKS"];
 
 pub fn is_read_only(name: &str) -> bool {
     READ_ONLY.iter().any(|r| r.eq_ignore_ascii_case(name.trim()))

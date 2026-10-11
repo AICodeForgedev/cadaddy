@@ -267,6 +267,8 @@ fn commit_save(s: &mut Session, path: &str, bytes: &[u8], store: impl FnOnce(&st
     st.saved = st.doc.clone();
     st.path = Some(path.to_string());
     st.title = file_name(path);
+    // A BEgin group still open when the drawing is saved ends there.
+    st.end_undo_group();
     Ok(bytes.len())
 }
 
