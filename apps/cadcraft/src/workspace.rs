@@ -78,7 +78,17 @@ fn read(path: &Path) -> Result<Option<UiState>, String> {
     }
     let workspace =
         value.get("workspace").filter(|value| value.is_object()).ok_or_else(|| format!("{}: missing workspace object", path.display()))?;
-    let mut ui: UiState = serde_json::from_value(workspace.clone()).map_err(|error| format!("{}: invalid workspace: {error}", path.display()))?;
+    // Dock schemas can evolve independently of the other saved workspace preferences.
+    // Recover only this optional field; runtime UiState deserialization remains strict.
+    let mut fields = workspace.clone();
+    let docking = fields.as_object_mut().and_then(|fields| fields.remove("docking"));
+    let mut ui: UiState = serde_json::from_value(fields).map_err(|error| format!("{}: invalid workspace: {error}", path.display()))?;
+    if let Some(docking) = docking
+        && let Ok(docking) = serde_json::from_value::<cadcraft_ui_egui::docking::Workspace>(docking)
+        && docking.validate().is_ok()
+    {
+        ui.docking = docking;
+    }
     // Old or hand-edited files cannot reopen a dialog or replace the active drawing view.
     ui.dialog = None;
     ui.start_tab = false;
@@ -264,6 +274,31 @@ mod tests {
             assert!(error.as_deref().is_some_and(|error| error.contains("left unchanged")));
             store.save_if_changed(&UiState { show_palettes: false, ..Default::default() }).unwrap();
             assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn unsupported_docking_preserves_other_workspace_preferences() {
+        let directory = temp_dir();
+        let path = directory.join("workspace.json");
+        for docking in [
+            json!({"layout":{"root":{"FuturePanelGroup":{}}},"hidden":[]}),
+            json!({"layout":false,"hidden":[]}),
+            json!({"layout":{"root":null,"floating":[]},"hidden":[["futurePanel",{}]]}),
+        ] {
+            let workspace = json!({"showToolbar":false,"showPalettes":false,"toolsetTab":"Modeling", "collapsedGroups":["Draw"], "historyLines":7,"docking":docking});
+            assert!(serde_json::from_value::<UiState>(workspace.clone()).is_err(), "runtime state must stay strict");
+            fs::write(&path, serde_json::to_vec(&json!({"version":1,"workspace":workspace})).unwrap()).unwrap();
+            let (_, restored, error) = Workspace::at(Some(path.clone()));
+            assert!(error.is_none());
+            let restored = restored.unwrap();
+            assert!(!restored.show_toolbar);
+            assert!(!restored.show_palettes);
+            assert_eq!(restored.toolset_tab, "Modeling");
+            assert_eq!(restored.collapsed_groups, ["Draw"]);
+            assert_eq!(restored.history_lines, 7);
+            assert_eq!(serde_json::to_value(restored.docking).unwrap(), serde_json::to_value(UiState::default().docking).unwrap());
         }
         fs::remove_dir_all(directory).unwrap();
     }
