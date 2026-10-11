@@ -524,9 +524,9 @@ fn acad_table(tags: &[Tag]) -> Table {
             (true, Some(rs), Some(cs)) if rs >= 1 && cs >= 1 && (rs, cs) != (1, 1) => Some((rs, cs)),
             _ => None,
         };
-        flat.push(TableCell { text, merged });
+        flat.push(TableCell { text, merged, ..TableCell::default() });
     }
-    flat.resize(rows * cols, TableCell { text: String::new(), merged: None });
+    flat.resize(rows * cols, TableCell::default());
     let cells: Vec<Vec<TableCell>> = if cols == 0 { vec![Vec::new(); rows] } else { flat.chunks(cols).map(<[TableCell]>::to_vec).collect() };
     let x = crate::dxf_ext::xdata(tags, crate::dxf_ext::APP);
     let ours = x.iter().position(|t| t.code == 1000 && t.str() == "TABLE").map(|p| x.get(p + 1..).unwrap_or(&[]));
@@ -540,7 +540,9 @@ fn acad_table(tags: &[Tag]) -> Table {
         // Other writers: a first row merged across every column reads as a title.
         None => (cols > 1 && cells.first().and_then(|r| r.first()).and_then(|c| c.merged) == Some((1, cols as u32)), false, 0.18, "Standard".into()),
     };
-    Table { insert: T(tags).p(10), col_widths, row_heights, cells, style, text_height, title, header }
+    let mut t = Table { insert: T(tags).p(10), col_widths, row_heights, cells, style, text_height, title, header, ..Table::default() };
+    crate::dxf_table::read_table_xdata(tags, &mut t);
+    t
 }
 
 fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
@@ -1779,16 +1781,7 @@ impl Objects {
         // Table styles (named by their ACAD_TABLESTYLE dictionary entries).
         for (h, tags) in &self.table_styles {
             let Some(name) = self.names.get(h).filter(|n| !n.is_empty()) else { continue };
-            let t = T(tags);
-            let def = TableStyle::default();
-            let pos = |v: f64, d: f64| if v.is_finite() && v > 0.0 { v } else { d };
-            let st = TableStyle {
-                name: name.clone(),
-                text_height: pos(t.fd(140, def.text_height), def.text_height),
-                margin: t.f(40).filter(|m| m.is_finite() && *m >= 0.0).unwrap_or(def.margin),
-                title: t.i(280).unwrap_or(0) == 0,
-                header: t.i(281).unwrap_or(0) == 0,
-            };
+            let st = crate::dxf_table::read_table_style(name, tags);
             match d.table_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(name)) {
                 Some(x) => *x = st,
                 None => d.table_styles.push(st),

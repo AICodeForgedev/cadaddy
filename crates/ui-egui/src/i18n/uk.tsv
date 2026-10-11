@@ -247,6 +247,7 @@
 	Edit	Редагування
 	Edit Attributes...	Редагувати атрибути...
 	Edit Text...	Редагувати текст...
+	Edit Table Cell	Редагувати комірку таблиці
 	Elevation	Відмітка
 	Ellipse	Еліпс
 	Elliptical Arc	Еліптична дуга
@@ -307,6 +308,7 @@
 	Exclude from new selection set	Виключити з нового набору вибраних об'єктів
 	Explode	Розчленувати
 	Export	Експортувати
+	Export Table	Експортувати таблицю
 	Export to PDF...	Експортувати в PDF...
 	Expression	Вираз
 	Extend	Подовжити
@@ -397,6 +399,7 @@
 	Insert Row	Вставити рядок
 	Insert tab	Вставити табуляцію
 	Insert this block	Вставити цей блок
+	Insert Table Formula	Вставити формулу в таблицю
 	Insertion	Точка вставлення
 	Insertion X	Вставлення X
 	Insertion Y	Вставлення Y
@@ -674,6 +677,7 @@
 	Recent Input	Нещодавнє введення
 	Recover...	Відновити...
 	Rectangle	Прямокутник
+	Recalculate Table Formulas	Перерахувати формули таблиці
 	Rectangular	Прямокутний
 	Rectangular Array	Прямокутний масив
 	Red	Червоний
@@ -795,6 +799,7 @@
 	Set Layer Properties	Задати властивості шару
 	Set Properties	Задати властивості
 	Set Table Cell	Задати комірку таблиці
+	Set Table Cell Style	Задати стиль комірки таблиці
 	Set Variable	Задати змінну
 	Set View	Задати вид
 	Share	Поділитися
@@ -1014,6 +1019,7 @@
 	Toggle PICKADD (on: picks add to the selection)	Перемкнути PICKADD (увімкнено: вибране додається до набору вибраних об'єктів)
 	TOP	ЗВЕРХУ
 	Table	Таблиця
+	Table Cell Style	Стиль комірок таблиці
 	Table Style...	Стиль таблиць...
 	Table style	Стиль таблиць
 	Table...	Таблиця...

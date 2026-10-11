@@ -23,7 +23,7 @@ fn text(value: &str) -> EntityKind {
 }
 
 fn table() -> Table {
-    let cell = |t: &str| TableCell { text: t.into(), merged: None };
+    let cell = |t: &str| TableCell { text: t.into(), merged: None, ..TableCell::default() };
     let mut cells = vec![vec![cell("Title"), cell(""), cell("")], vec![cell("A"), cell("B"), cell("C")], vec![cell("1"), cell("2"), cell("3")]];
     cells[0][0].merged = Some((1, 3));
     Table {
@@ -35,6 +35,7 @@ fn table() -> Table {
         text_height: 0.2,
         title: true,
         header: true,
+        row_styles: Default::default(),
     }
 }
 
@@ -51,7 +52,7 @@ fn sample() -> Drawing {
 }
 
 fn sched() -> TableStyle {
-    TableStyle { name: "Sched".into(), text_height: 2.5, margin: 1.0, title: false, header: false }
+    TableStyle { name: "Sched".into(), text_height: 2.5, margin: 1.0, title: false, header: false, cell_styles: Default::default() }
 }
 
 fn opts(version: Version, binary: bool) -> SaveOptions {

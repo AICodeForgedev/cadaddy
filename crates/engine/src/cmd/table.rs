@@ -1,4 +1,10 @@
-//! TABLE: create tables and edit cells, rows, columns and merges.
+//! TABLE: create tables and edit cells, rows, columns and merges; cell styles, formulas
+//! (`formula`), TABLEDIT and TABLEEXPORT (`cells`).
+
+mod cells;
+pub(crate) mod formula;
+
+pub(crate) use cells::{recalc, tablestyle_cell_style};
 
 use cadcraft_doc::{EntityKind, Handle, Table, TableCell};
 use cadcraft_geom::Vec2;
@@ -19,7 +25,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["tb"])
             .params("{at: [x,y], rows (data rows), cols, rowHeight?, colWidth?, cells?: [[text]], title?: text, header?: [text]}")
             .interactive(|s| Ok(Box::new(TableM::new(s)))),
-        CommandSpec::new("table.set", "Set Table Cell", run_set).params("{handle, row, col, text}"),
+        CommandSpec::new("table.set", "Set Table Cell", run_set)
+            .params("{handle, row, col, text? (text starting with = is a formula), formula?: \"=Sum(A2:A5)\"}"),
         CommandSpec::new("table.insertrow", "Insert Row", run_insert_row).params("{handle, row? (insert before; default: append), height?}"),
         CommandSpec::new("table.deleterow", "Delete Row", run_delete_row).params("{handle, row}"),
         CommandSpec::new("table.insertcol", "Insert Column", run_insert_col).params("{handle, col? (insert before; default: append), width?}"),
@@ -27,6 +34,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("table.merge", "Merge Cells", run_merge).params("{handle, row, col, rows, cols}"),
         CommandSpec::new("table.unmerge", "Unmerge Cells", run_unmerge).params("{handle, row, col}"),
     ]
+    .into_iter()
+    .chain(cells::specs())
+    .collect()
 }
 
 fn usize_param(p: &Value, key: &str) -> Option<usize> {
@@ -65,8 +75,9 @@ pub fn make_table(
         text_height: th,
         title: title.is_some(),
         header: header.is_some(),
+        ..Table::default()
     };
-    let empty_row = || vec![TableCell { text: String::new(), merged: None }; cols];
+    let empty_row = || vec![TableCell::default(); cols];
     if let Some(ti) = title {
         let mut r = empty_row();
         if let Some(c) = r.first_mut() {
@@ -143,6 +154,8 @@ fn edit(s: &mut Session, p: &Value, id: &str, f: impl FnOnce(&mut Table) -> std:
     };
     normalize(&mut t);
     f(&mut t).map_err(|m| bad(id, m))?;
+    let st = cadcraft_render::table_style_of(s.doc()?, &t);
+    formula::recalc(&mut t, &st);
     s.doc_mut()?.modify_entity(h, |e| e.kind = EntityKind::Table(t))?;
     Ok(json!({ "handle": h.hex() }))
 }
@@ -155,7 +168,7 @@ fn normalize(t: &mut Table) {
     t.col_widths.truncate(cols);
     t.cells.resize_with(rows, Vec::new);
     for r in &mut t.cells {
-        r.resize_with(cols, || TableCell { text: String::new(), merged: None });
+        r.resize_with(cols, TableCell::default);
     }
 }
 
@@ -200,6 +213,15 @@ fn cell_at(p: &Value, t: &Table) -> std::result::Result<(usize, usize), String> 
 
 fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let text = str_param(p, "text").unwrap_or("").to_string();
+    // A formula: the `formula` parameter, or text starting with "=".
+    let formula = match str_param(p, "formula") {
+        Some(f) => Some(f.trim().to_string()),
+        None => text.trim().starts_with('=').then(|| text.trim().to_string()),
+    };
+    if let Some(f) = &formula {
+        let f = if f.starts_with('=') { f.clone() } else { format!("={f}") };
+        formula::check(&f).map_err(|e| bad("table.set", format!("{e}: not a formula CADCraft can evaluate: {f}")))?;
+    }
     edit(s, p, "table.set", |t| {
         let (r, c) = cell_at(p, t)?;
         // Writing into a covered cell writes its merge anchor.
@@ -209,10 +231,25 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
             .map(|(ar, ac, ..)| (ar, ac))
             .unwrap_or((r, c));
         if let Some(cell) = t.cells.get_mut(r).and_then(|row| row.get_mut(c)) {
-            cell.text = text;
+            match formula {
+                Some(f) => cell.formula = Some(if f.starts_with('=') { f } else { format!("={f}") }),
+                None => {
+                    cell.formula = None;
+                    cell.text = text;
+                }
+            }
         }
         Ok(())
     })
+}
+
+/// Move the references of every formula in `t` for a row/column insertion or deletion.
+fn shift_formulas(t: &mut Table, shift: formula::Shift) {
+    for cell in t.cells.iter_mut().flatten() {
+        if let Some(f) = &mut cell.formula {
+            *f = formula::shift_refs(f, shift);
+        }
+    }
 }
 
 fn run_insert_row(s: &mut Session, p: &Value) -> Result<Value> {
@@ -236,8 +273,12 @@ fn run_insert_row(s: &mut Session, p: &Value) -> Result<Value> {
             })
             .collect();
         t.row_heights.insert(r, h);
-        t.cells.insert(r, vec![TableCell { text: String::new(), merged: None }; t.col_widths.len()]);
+        t.cells.insert(r, vec![TableCell::default(); t.col_widths.len()]);
+        if r < t.row_styles.len() {
+            t.row_styles.insert(r, String::new());
+        }
         set_anchors(t, &a);
+        shift_formulas(t, formula::Shift::InsertRow(r));
         Ok(())
     })
 }
@@ -269,10 +310,14 @@ fn run_delete_row(s: &mut Session, p: &Value) -> Result<Value> {
         }
         t.row_heights.remove(r);
         t.cells.remove(r);
+        if r < t.row_styles.len() {
+            t.row_styles.remove(r);
+        }
         if r == 0 {
             t.title = false;
         }
         set_anchors(t, &a);
+        shift_formulas(t, formula::Shift::DeleteRow(r));
         Ok(())
     })
 }
@@ -298,9 +343,10 @@ fn run_insert_col(s: &mut Session, p: &Value) -> Result<Value> {
             .collect();
         t.col_widths.insert(c, w);
         for row in &mut t.cells {
-            row.insert(c.min(row.len()), TableCell { text: String::new(), merged: None });
+            row.insert(c.min(row.len()), TableCell::default());
         }
         set_anchors(t, &a);
+        shift_formulas(t, formula::Shift::InsertCol(c));
         Ok(())
     })
 }
@@ -336,6 +382,7 @@ fn run_delete_col(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         set_anchors(t, &a);
+        shift_formulas(t, formula::Shift::DeleteCol(c));
         Ok(())
     })
 }

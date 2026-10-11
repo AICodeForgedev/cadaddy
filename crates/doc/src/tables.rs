@@ -624,13 +624,20 @@ pub struct TableStyle {
     pub margin: f64,
     pub title: bool,
     pub header: bool,
+    /// Cell styles: custom ones, and Title/Header/Data where they differ from what the text
+    /// height and margin imply ([`TableStyle::cell_style`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cell_styles: Vec<crate::CellStyle>,
 }
 
 impl Default for TableStyle {
     fn default() -> Self {
-        TableStyle { name: "Standard".into(), text_height: 0.18, margin: 0.06, title: true, header: true }
+        TableStyle { name: "Standard".into(), text_height: 0.18, margin: 0.06, title: true, header: true, cell_styles: Vec::new() }
     }
 }
+
+mod cellstyle;
+pub use cellstyle::*;
 
 /// A block definition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

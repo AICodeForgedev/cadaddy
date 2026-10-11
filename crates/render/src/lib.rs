@@ -985,89 +985,11 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimensio
     }
 }
 
-/// Covered cells of a table (inside another cell's merge, not its anchor).
-pub fn table_covered(t: &cadcraft_doc::Table) -> Vec<Vec<bool>> {
-    let rows = t.row_heights.len().min(10_000);
-    let cols = t.col_widths.len().min(10_000);
-    let mut cov = vec![vec![false; cols]; rows];
-    for (r, row) in t.cells.iter().enumerate().take(rows) {
-        for (c, cell) in row.iter().enumerate().take(cols) {
-            if let Some((rs, cs)) = cell.merged {
-                for rr in r..(r + rs.max(1) as usize).min(rows) {
-                    for cc in c..(c + cs.max(1) as usize).min(cols) {
-                        if (rr, cc) != (r, c)
-                            && let Some(x) = cov.get_mut(rr).and_then(|v| v.get_mut(cc))
-                        {
-                            *x = true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    cov
-}
+mod table;
+pub use table::{MAX_LAYOUT_CELLS, TableFill, TableGeom, TableLine, TableText, table_covered, table_geometry, table_style_of};
 
 fn table(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::Table, rgb: Ink, lw: f32) {
-    let o = t.insert.xy();
-    let rows = t.row_heights.len().min(10_000);
-    let cols = t.col_widths.len().min(10_000);
-    let xs: Vec<f64> = std::iter::once(0.0)
-        .chain(t.col_widths.iter().take(cols).scan(0.0, |a, w| {
-            *a += w;
-            Some(*a)
-        }))
-        .collect();
-    let ys: Vec<f64> = std::iter::once(0.0)
-        .chain(t.row_heights.iter().take(rows).scan(0.0, |a, h| {
-            *a += h;
-            Some(*a)
-        }))
-        .collect();
-    let cov = table_covered(t);
-    let style = ctx.d.table_styles.iter().find(|s| s.name.eq_ignore_ascii_case(&t.style)).cloned().unwrap_or_default();
-    let ts = text_style(ctx.d, "Standard");
-    let font = cadcraft_fonts::TextFont::resolve(&ts.font);
-    let x_at = |c: usize| xs.get(c).copied().unwrap_or(0.0);
-    let y_at = |r: usize| ys.get(r).copied().unwrap_or(0.0);
-    for r in 0..rows {
-        for c in 0..cols {
-            if cov.get(r).and_then(|v| v.get(c)).copied().unwrap_or(false) {
-                continue;
-            }
-            let cell = t.cells.get(r).and_then(|row| row.get(c));
-            let (rs, cs) = cell.and_then(|x| x.merged).map(|(a, b)| (a.max(1) as usize, b.max(1) as usize)).unwrap_or((1, 1));
-            let (r2, c2) = ((r + rs).min(rows), (c + cs).min(cols));
-            let (x0, x1, y0, y1) = (x_at(c), x_at(c2), y_at(r), y_at(r2));
-            let p = |x: f64, y: f64| o + Vec2::new(x, -y);
-            // Each cell draws its bottom and right edges; the outer top/left come from row 0 / col 0.
-            b.polyline(ctx, rgb, lw, &[p(x0, y1), p(x1, y1), p(x1, y0)]);
-            if r == 0 {
-                b.polyline(ctx, rgb, lw, &[p(x0, y0), p(x1, y0)]);
-            }
-            if c == 0 {
-                b.polyline(ctx, rgb, lw, &[p(x0, y0), p(x0, y1)]);
-            }
-            let Some(cell) = cell.filter(|x| !x.text.is_empty() && b.opts.text) else { continue };
-            let title = t.title && r == 0;
-            let header = t.header && r == usize::from(t.title);
-            let h = if title { t.text_height * 1.4 } else { t.text_height };
-            // Titles and headers are centred; data sits middle-left inside the cell margin.
-            let params = if title || header {
-                cadcraft_fonts::TextParams::centered(p((x0 + x1) / 2.0, (y0 + y1) / 2.0), h, 0.0)
-            } else {
-                let at = p(x0 + style.margin.max(0.0), (y0 + y1) / 2.0);
-                cadcraft_fonts::TextParams {
-                    align_pt: Some(at),
-                    h: cadcraft_fonts::Align::Left,
-                    v: cadcraft_fonts::VAlign::Middle,
-                    ..cadcraft_fonts::TextParams::new(at, h)
-                }
-            };
-            let (sh, _) = cadcraft_fonts::place(&font, &cell.text, &params);
-            b.shaped(ctx, rgb, lw, &sh);
-        }
-    }
+    table::draw(b, ctx, t, rgb, lw);
 }
 
 fn align(h: cadcraft_doc::HAlign, v: cadcraft_doc::VAlign) -> (cadcraft_fonts::Align, cadcraft_fonts::VAlign) {

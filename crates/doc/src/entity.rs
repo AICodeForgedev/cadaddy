@@ -813,12 +813,18 @@ impl Default for Image {
 pub struct Wipeout {
     pub boundary: Vec<Vec2>,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableCell {
     pub text: String,
     #[serde(default)]
     pub merged: Option<(u32, u32)>,
+    /// The cell's own cell style; empty: its row's.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub style: String,
+    /// A formula (`=Sum(A1:B3)`); `text` holds its value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -837,6 +843,9 @@ pub struct Table {
     /// The row after the title holds column headers.
     #[serde(default)]
     pub header: bool,
+    /// The cell style of each row; missing or empty: by position (Title, Header, Data).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub row_styles: Vec<String>,
 }
 fn default_text_h() -> f64 {
     0.18

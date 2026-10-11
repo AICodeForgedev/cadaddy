@@ -822,6 +822,9 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(1070, i64::from(t.header));
             w.f(1040, t.text_height);
             w.s(1000, &t.style);
+            for c in crate::dxf_table::table_xdata(t) {
+                w.s(1000, c);
+            }
         }
         EntityKind::MLeader(m) => {
             w.s(0, "MULTILEADER");
@@ -1173,58 +1176,42 @@ fn table_size(t: &Table) -> (usize, usize) {
     (t.row_heights.len().min(10_000), t.col_widths.len().min(10_000))
 }
 
-/// The anonymous `*T` block of a table: cell borders and texts, for readers that only draw
-/// the block.
+/// The anonymous `*T` block of a table: cell fills, borders and texts as its cell styles draw
+/// them, for readers that only draw the block.
 fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
-    let (rows, cols) = table_size(t);
-    let mut xs = vec![0.0];
-    for w in t.col_widths.iter().take(cols) {
-        xs.push(xs.last().copied().unwrap_or(0.0) + w);
-    }
-    let mut ys = vec![0.0];
-    for h in t.row_heights.iter().take(rows) {
-        ys.push(ys.last().copied().unwrap_or(0.0) + h);
-    }
-    let x_at = |c: usize| xs.get(c).copied().unwrap_or(0.0);
-    let y_at = |r: usize| ys.get(r).copied().unwrap_or(0.0);
-    let p = |x: f64, y: f64| Vec3::new(x, -y, 0.0);
-    let cov = cadcraft_render::table_covered(t);
-    let margin = d.table_styles.iter().find(|s| s.name.eq_ignore_ascii_case(&t.style)).map(|s| s.margin).unwrap_or(0.06).max(0.0);
+    let g = cadcraft_render::table_geometry(d, t);
     let c = Common { layer: layer.into(), color: Color::ByBlock, ..Common::default() };
     let mut out = Vec::new();
-    let mut line = |a: Vec3, b: Vec3| out.push(Entity { handle: Handle(0), common: c.clone(), kind: EntityKind::Line(Line { a, b }) });
+    for f in &g.fills {
+        let [a, b, cc, dd] = f.corners.map(|p| p.to3(0.0));
+        // SOLID corners go 1, 2, 4, 3.
+        out.push(Entity {
+            handle: Handle(0),
+            common: Common { color: f.color, ..c.clone() },
+            kind: EntityKind::Solid(Solid { corners: [a, b, dd, cc] }),
+        });
+    }
+    for l in &g.lines {
+        out.push(Entity {
+            handle: Handle(0),
+            common: Common { color: l.color, lineweight: l.lineweight, ..c.clone() },
+            kind: EntityKind::Line(Line { a: l.a.to3(0.0), b: l.b.to3(0.0) }),
+        });
+    }
     let mut texts = Vec::new();
-    for r in 0..rows {
-        for col in 0..cols {
-            if cov.get(r).and_then(|v| v.get(col)).copied().unwrap_or(false) {
-                continue;
-            }
-            let cell = t.cells.get(r).and_then(|row| row.get(col));
-            let (rs, cs) = cell.and_then(|x| x.merged).map(|(a, b)| (a.max(1) as usize, b.max(1) as usize)).unwrap_or((1, 1));
-            let (r2, c2) = ((r + rs).min(rows), (col + cs).min(cols));
-            let (x0, x1, y0, y1) = (x_at(col), x_at(c2), y_at(r), y_at(r2));
-            line(p(x0, y1), p(x1, y1));
-            line(p(x1, y1), p(x1, y0));
-            if r == 0 {
-                line(p(x0, y0), p(x1, y0));
-            }
-            if col == 0 {
-                line(p(x0, y0), p(x0, y1));
-            }
-            let Some(cell) = cell.filter(|x| !x.text.is_empty()) else { continue };
-            let title = t.title && r == 0;
-            let header = t.header && r == usize::from(t.title);
-            let (insert, attach) = if title || header { (p((x0 + x1) / 2.0, (y0 + y1) / 2.0), 5) } else { (p(x0 + margin, (y0 + y1) / 2.0), 4) };
+    for cell in &g.texts {
+        if !cell.text.is_empty() {
+            let style = if d.text_style(&cell.style).is_some() { cell.style.clone() } else { "Standard".into() };
             texts.push(Entity {
                 handle: Handle(0),
-                common: c.clone(),
+                common: Common { color: cell.color, ..c.clone() },
                 kind: EntityKind::MText(MText {
-                    insert,
-                    height: if title { t.text_height * 1.4 } else { t.text_height },
+                    insert: cell.at.to3(0.0),
+                    height: cell.height,
                     width: 0.0,
-                    attach,
+                    attach: cell.attach,
                     rotation: 0.0,
-                    style: "Standard".into(),
+                    style,
                     contents: cell.text.clone(),
                     line_spacing: 1.0,
                     line_spacing_exact: false,
@@ -2081,7 +2068,7 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
         w.s(350, h);
     }
     for (s, (_, h)) in table_styles.iter().zip(&cx.table_styles) {
-        table_style_obj(&mut w, s, h, &table_style_dict);
+        table_style_obj(&mut w, d, s, h, &table_style_dict);
     }
     // Plot style names: a dictionary with a default (Normal) of placeholder objects.
     w.s(0, "ACDBDICTIONARYWDFLT");
@@ -2292,7 +2279,7 @@ fn mark_xrefs(tags: &mut [Tag], d: &Drawing) {
 
 /// A TABLESTYLE object (DXF Reference, OBJECTS: TABLESTYLE): margins, title/header
 /// suppression and per row type (data, column header, title) text and border settings.
-fn table_style_obj(w: &mut W, s: &TableStyle, h: &str, dict: &str) {
+fn table_style_obj(w: &mut W, d: &Drawing, s: &TableStyle, h: &str, dict: &str) {
     w.s(0, "TABLESTYLE");
     w.s(5, h);
     w.group("ACAD_REACTORS", 330, &[dict]);
@@ -2305,22 +2292,17 @@ fn table_style_obj(w: &mut W, s: &TableStyle, h: &str, dict: &str) {
     w.f(41, s.margin);
     w.i(280, i64::from(!s.title));
     w.i(281, i64::from(!s.header));
-    // Data (middle left), column header and title (middle centre).
-    for (height, align) in [(s.text_height, 4), (s.text_height, 5), (s.text_height * 1.4, 5)] {
-        w.s(7, "Standard");
-        w.f(140, height);
-        w.i(170, align);
-        w.i(62, 0);
-        w.i(63, 7);
-        w.i(283, 0);
-        for c in 274..=279 {
-            w.i(c, -2);
-        }
-        for c in 284..=289 {
-            w.i(c, 1);
-        }
-        for c in 64..=69 {
-            w.i(c, 0);
+    // Data, column header and title cell styles; CADCraft's complete cell styles in xdata.
+    for kind in crate::dxf_table::CELL_TYPES {
+        let cs = s.cell_style(kind);
+        let style = if d.text_style(&cs.text_style).is_some() { cs.text_style.clone() } else { "Standard".to_string() };
+        w.t.extend(crate::dxf_table::cell_type_tags(&cs, &style));
+    }
+    let x = crate::dxf_table::cell_styles_xdata(s);
+    if !x.is_empty() {
+        w.s(1001, dxf_ext::APP);
+        for c in x {
+            w.s(1000, c);
         }
     }
 }

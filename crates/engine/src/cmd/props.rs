@@ -50,7 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("tablestyle", "Table Style...", run_tablestyle)
             .menu(&["Format", "Table Style..."])
             .alias(&["ts"])
-            .params("{name, textHeight?, margin?, title?, header?, current?} → styles"),
+            .params("{name, textHeight?, margin?, title?, header?, current?, cellStyle?: {name, …} (see tablestyle.cellstyle)} → styles"),
         CommandSpec::new("mleaderstyle", "Multileader Style...", run_mleaderstyle)
             .menu(&["Format", "Multileader Style..."])
             .alias(&["mls"])
@@ -808,6 +808,7 @@ fn run_tablestyle(s: &mut Session, p: &Value) -> Result<Value> {
                 st.header = b;
             }
         }
+        super::table::tablestyle_cell_style(d, name, p)?;
         if bool_or(p, "current", true) {
             d.header.set_str("CTABLESTYLE", name);
         }

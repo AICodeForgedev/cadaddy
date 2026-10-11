@@ -346,7 +346,7 @@ fn dimension_colours_by_role() {
 #[test]
 fn table_title_is_centred_and_merged() {
     let mut d = Drawing::new_imperial();
-    let cell = |t: &str| cadcraft_doc::TableCell { text: t.into(), merged: None };
+    let cell = |t: &str| cadcraft_doc::TableCell { text: t.into(), ..Default::default() };
     let mut title = vec![cell("TITLE"), cell(""), cell("")];
     title[0].merged = Some((1, 3));
     let t = cadcraft_doc::Table {
@@ -358,6 +358,7 @@ fn table_title_is_centred_and_merged() {
         text_height: 0.2,
         title: true,
         header: false,
+        ..Default::default()
     };
     d.add(&Space::Model, Common::default(), EntityKind::Table(t)).unwrap();
     let l = build(&d, &Space::Model, &Options::default());

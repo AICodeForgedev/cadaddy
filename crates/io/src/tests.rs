@@ -1036,7 +1036,7 @@ fn layer_states_roundtrip_next_to_constraints() {
 }
 
 fn table_sample() -> Table {
-    let cell = |t: &str| TableCell { text: t.into(), merged: None };
+    let cell = |t: &str| TableCell { text: t.into(), ..Default::default() };
     let mut rows = vec![
         vec![cell("Door schedule"), cell(""), cell("")],
         vec![cell("Mark"), cell("Size"), cell("Notes")],
@@ -1054,13 +1054,14 @@ fn table_sample() -> Table {
         text_height: 0.2,
         title: true,
         header: true,
+        ..Table::default()
     }
 }
 
 #[test]
 fn tables_roundtrip_with_title_header_and_merges() {
     let mut d = Drawing::new_imperial();
-    d.table_styles.push(TableStyle { name: "Schedule".into(), text_height: 0.25, margin: 0.1, title: false, header: true });
+    d.table_styles.push(TableStyle { name: "Schedule".into(), text_height: 0.25, margin: 0.1, title: false, header: true, ..TableStyle::default() });
     let t = table_sample();
     d.add(&Space::Model, Common::default(), EntityKind::Table(t.clone())).unwrap();
     let text = write_dxf(&d);
@@ -1287,7 +1288,7 @@ fn extension_sample() -> Drawing {
     let mut d = sample();
     d.text_styles.push(TextStyle { name: "Romans".into(), font: "romans.shx".into(), backwards: true, annotative: true, ..TextStyle::default() });
     d.dim_styles.push(full_dim_style());
-    d.table_styles.push(TableStyle { name: "Schedule".into(), text_height: 0.25, margin: 0.1, title: true, header: true });
+    d.table_styles.push(TableStyle { name: "Schedule".into(), text_height: 0.25, margin: 0.1, title: true, header: true, ..TableStyle::default() });
     d.add(&Space::Model, Common::default(), EntityKind::Table(table_sample())).unwrap();
     let l1 = d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(0.0, 30.0, 0.0), b: Vec3::new(0.0, 35.0, 0.0) })).unwrap();
     let l2 = d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(8.0, 30.0, 0.0), b: Vec3::new(8.0, 35.0, 0.0) })).unwrap();

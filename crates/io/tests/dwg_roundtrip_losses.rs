@@ -97,7 +97,7 @@ fn dwg_keeps_paper_space_entities_in_their_layout() {
 #[test]
 fn dwg_keeps_table_styles() {
     let mut d = Drawing::new_metric();
-    let sched = TableStyle { name: "Sched".into(), text_height: 2.5, margin: 1.0, title: false, header: true };
+    let sched = TableStyle { name: "Sched".into(), text_height: 2.5, margin: 1.0, title: false, header: true, ..TableStyle::default() };
     d.table_styles.push(sched.clone());
     let back = through_dwg(&d);
     assert_eq!(back.table_styles.iter().find(|s| s.name == "Sched"), Some(&sched));
