@@ -504,9 +504,10 @@ pub(crate) fn offset_kind(k: &EntityKind, dist: f64, side: Vec2) -> Option<Entit
                 ge.tessellate(e.major.xy().len() * 1e-3, &mut pts);
                 cadcraft_geom::point_in_polygon(&pts, side)
             };
+            // offset_points shifts along the left normal, which points into a counter-clockwise ellipse.
             let mut pts = Vec::new();
             ge.tessellate(e.major.xy().len() * 1e-3, &mut pts);
-            let off = offset_points(&pts, if inside { -dist } else { dist }, ge.is_full());
+            let off = offset_points(&pts, if inside { dist } else { -dist }, ge.is_full());
             Some(lwpoly(off.into_iter().map(PolyVertex::new).collect(), ge.is_full()))
         }
         EntityKind::LwPolyline(p) => {
