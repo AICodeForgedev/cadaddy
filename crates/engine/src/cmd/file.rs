@@ -37,6 +37,9 @@ pub fn io() -> Option<&'static IoHooks> {
     IO.get()
 }
 
+/// COMPARE (drawing comparison).
+pub mod compare;
+
 /// Hand finished file bytes to the user where there is no file system (the browser: a download).
 /// Arguments: file name, MIME type, bytes. `Ok` only once the delivery was actually started.
 pub type DeliverHook = fn(&str, &str, &[u8]) -> std::result::Result<(), String>;

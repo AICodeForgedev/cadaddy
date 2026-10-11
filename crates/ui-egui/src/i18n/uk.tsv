@@ -130,6 +130,7 @@
 	Chamfer	Фаска
 	Change Space	Змінити простір
 	Change to Current Layer	Перенести на поточний шар
+	Changed: {n}	Змінено: {n}
 	Circle	Коло
 	Circumference	Довжина кола
 	Clear History	Очистити журнал
@@ -141,6 +142,7 @@
 	Close All	Закрити всі
 	Close All Other Drawings	Закрити всі інші креслення
 	Closed	Замкнений
+	Close Comparison	Закрити порівняння
 	Coincident	Збіг
 	Collapse Tool Sets	Згорнути набори інструментів
 	Collinear	Колінеарність
@@ -157,6 +159,7 @@
 	Command Reference	Довідник команд
 	Commits	Коміти
 	Company	Компанія
+	Compare Drawings...	Порівняти креслення...
 	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	Автоматизоване проєктування та креслення: CAD-програма з відкритим кодом, незалежно розроблена мовою Rust.
 	Concentric	Концентричність
 	Cone	Конус
@@ -548,6 +551,7 @@
 	New from Template...	Створити із шаблону...
 	New layout	Новий аркуш
 	New state name	Назва нового стану
+	Next Change	Наступна зміна
 	No	Ні
 	No blocks defined in this drawing.	У цьому кресленні немає визначених блоків.
 	No contributor data was built into this copy.	Ця збірка не містить даних про учасників.
@@ -574,6 +578,8 @@
 	On	Увімкнено
 	On/Off	Увімкнути/вимкнути
 	One of the Crafting Apps by the ArtCraft team and community.	Одна з програм Crafting Apps від команди та спільноти ArtCraft.
+	Only in this drawing: {n}	Лише в цьому кресленні: {n}
+	Only in {name}: {n}	Лише в {name}: {n}
 	Open (⌘O)	Відкрити (⌘O)
 	Open Sample Drawing	Відкрити зразок креслення
 	Open sample drawing	Відкрити зразок креслення
@@ -667,6 +673,7 @@
 	Position Y	Позиція Y
 	Position Z	Позиція Z
 	Previous	Попередній
+	Previous Change	Попередня зміна
 	Previous Layer	Попередній шар
 	Primitives	Примітиви
 	Print	Друк
