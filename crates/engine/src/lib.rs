@@ -463,6 +463,9 @@ pub struct Session {
     pub active: usize,
     pub settings: Settings,
     pub running: Option<Running>,
+    /// The command suspended while a transparent command (`'ZOOM`, `'PAN`…) prompts inside it;
+    /// it resumes when that command ends. One level, as in AutoCAD.
+    pub suspended: Option<Running>,
     pub log: Vec<String>,
     pub last_command: Option<String>,
     /// LASTPOINT.
@@ -510,6 +513,7 @@ impl Session {
             active: 0,
             settings: Settings::default(),
             running: None,
+            suspended: None,
             log: Vec::new(),
             last_command: None,
             last_point: Vec2::ZERO,
@@ -698,19 +702,32 @@ impl Session {
                 self.echo(format!(">>{}", spec.label));
                 return self.execute(spec.id, &Value::Null).map(|_| ());
             }
+            if self.suspended.is_some() {
+                self.echo("A transparent command is already in progress.");
+                return Ok(());
+            }
         }
-        if self.running.is_some() {
+        let nested = transparent && spec.transparent && self.running.is_some() && spec.interactive.is_some();
+        if !nested && self.running.is_some() {
             self.cancel();
         }
         (spec.enabled)(self).map_err(|m| EngineError::Disabled(spec.id.into(), m))?;
-        self.last_command = Some(spec.id.to_string());
-        self.echo(format!("Command: {}", spec.id.to_ascii_uppercase()));
+        if nested {
+            // The outer command stays the one Enter repeats.
+            self.echo(format!(">>{}", spec.id.to_ascii_uppercase()));
+        } else {
+            self.last_command = Some(spec.id.to_string());
+            self.echo(format!("Command: {}", spec.id.to_ascii_uppercase()));
+        }
         match spec.interactive {
             Some(factory) => {
                 let machine = guard::Guarded::create(spec.id, factory, self)?;
                 let st = self.state()?;
                 let before = st.doc.clone();
                 let selection_before = st.selection.clone();
+                if nested {
+                    self.suspended = self.running.take();
+                }
                 self.running = Some(Running { id: spec.id.to_string(), machine, before, selection_before });
                 self.pending_window = None;
                 // Some commands complete immediately (e.g. ERASE with a pickfirst selection).
@@ -839,11 +856,13 @@ impl Session {
             }
             Ok(Step::Done) => {
                 self.finish(run, false);
+                self.resume_suspended();
                 Ok(())
             }
             Ok(Step::Cancel) => {
                 self.echo("*Cancel*");
                 self.finish(run, true);
+                self.resume_suspended();
                 Ok(())
             }
             Err(EngineError::Internal(id, m)) => {
@@ -852,6 +871,7 @@ impl Session {
                     st.doc = run.before.clone();
                 }
                 self.echo(format!("Internal error in {id}: {m}"));
+                self.resume_suspended();
                 Err(EngineError::Internal(id, m))
             }
             Err(e) => {
@@ -881,6 +901,15 @@ impl Session {
         cmd::groups::after_command(self, Some(&run.before));
         cmd::constraints::after_command(self, Some(&run.before), true);
         assoc::after_command(self, Some(&run.before), None);
+        if self.suspended.is_some() {
+            // A transparent command's changes belong to the undo step of the command it ran inside.
+            if let Ok(st) = self.state_mut()
+                && !Arc::ptr_eq(&run.before, &st.doc)
+            {
+                st.revision += 1;
+            }
+            return;
+        }
         if let Ok(st) = self.state_mut()
             && !Arc::ptr_eq(&run.before, &st.doc)
         {
@@ -890,10 +919,25 @@ impl Session {
         }
     }
 
-    /// Cancel the running command (Esc). With no command, clears the selection.
+    /// After a transparent command ends, the command it interrupted prompts again.
+    fn resume_suspended(&mut self) {
+        if let Some(outer) = self.suspended.take() {
+            self.echo(format!("Resuming {} command.", outer.id.to_ascii_uppercase()));
+            self.running = Some(outer);
+        }
+    }
+
+    /// Cancel the running command (Esc). With no command, clears the selection. Inside a
+    /// transparent command, cancels it and the command it interrupted.
     pub fn cancel(&mut self) {
         self.point_mods.clear();
         if self.running.is_some() {
+            if self.suspended.is_some() {
+                if let Some(nested) = self.running.take() {
+                    self.finish(nested, true);
+                }
+                self.running = self.suspended.take();
+            }
             let _ = self.feed(Some(Input::Cancel));
         } else {
             self.pending_window = None;
@@ -918,6 +962,7 @@ impl Session {
     /// The text shown on the command line: the active prompt, or "Command:".
     pub fn prompt_text(&self) -> String {
         match &self.running {
+            Some(r) if self.suspended.is_some() => format!(">>{} {}", r.id.to_ascii_uppercase(), r.machine.prompt(self).display()),
             Some(r) => format!("{} {}", r.id.to_ascii_uppercase(), r.machine.prompt(self).display()),
             None => "Command:".into(),
         }
