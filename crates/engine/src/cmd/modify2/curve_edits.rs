@@ -1,10 +1,13 @@
-//! EXTEND, LENGTHEN, JOIN and closed-spline TRIM for elliptical arcs and splines (#466).
+//! EXTEND, LENGTHEN, JOIN, FILLET and closed-spline TRIM for elliptical arcs and splines (#466).
 //!
 //! The curve mathematics (knot insertion, joining, tangent extensions, arc length) lives in
 //! `cadcraft_geom::Spline` / `cadcraft_geom::Ellipse`; this module applies it to entities.
 
 use cadcraft_doc::{Entity, EntityKind, Handle};
-use cadcraft_geom::{Ellipse, Line, Polyline, Segment, Spline, TAU, Vec2, intersect_ext, norm_angle};
+use cadcraft_geom::{
+    Arc, Circle, CornerFit, Ellipse, Line, Polyline, Segment, Spline, TAU, TanCurve, Vec2, angle_in_sweep, ccw_sweep, intersect_ext, norm_angle,
+    tangent_circles,
+};
 
 use super::{LenMode, curves, ellipse_kind, ellipse_of, other, set_kind};
 use crate::{Result, Session};
@@ -308,4 +311,108 @@ pub(crate) fn join_curves(s: &mut Session, hs: &[Handle]) -> Result<Option<Handl
     }
     s.set_selection(Vec::new());
     Ok(Some(keep))
+}
+
+// ---------------- FILLET with elliptical arcs and splines ----------------
+
+/// An entity as a tangency target for FILLET (lines infinite, arcs as their circle, elliptical
+/// arcs as their whole ellipse, splines within their domain).
+fn tan_curve(k: &EntityKind) -> Option<TanCurve> {
+    match k {
+        EntityKind::Line(l) => {
+            let ln = Line::new(l.a.xy(), l.b.xy());
+            (ln.len() > 1e-12).then_some(TanCurve::Line(ln))
+        }
+        EntityKind::Arc(a) => Some(TanCurve::Circle(Circle::new(a.center.xy(), a.radius))),
+        EntityKind::Circle(c) => Some(TanCurve::Circle(Circle::new(c.center.xy(), c.radius))),
+        EntityKind::Ellipse(e) => Some(TanCurve::Ellipse(Ellipse { start: 0.0, end: TAU, ..ellipse_of(e) })),
+        EntityKind::Spline(sp) if sp.is_valid() => Some(TanCurve::Spline(sp.clone())),
+        _ => None,
+    }
+}
+
+/// How a fillet operand is trimmed to the touch point (parameter `t`, point `at`): the new kind
+/// (`None` = left as it is) and the direction it arrives at the touch point. Elliptical arcs
+/// keep the side holding the pick, or extend round the ellipse from the nearer end; splines
+/// keep the side holding the pick; whole ellipses, circles and closed splines stay whole.
+fn fillet_trim(k: &EntityKind, pick: Vec2, t: f64, at: Vec2) -> Option<(Option<EntityKind>, Option<Vec2>)> {
+    match k {
+        EntityKind::Ellipse(e) => {
+            let g = ellipse_of(e);
+            if g.is_full() {
+                return Some((None, None));
+            }
+            let ta = norm_angle(t);
+            let tan = g.derivative(ta).normalized();
+            let keep_start = if angle_in_sweep(ta, g.start, g.end) {
+                angle_in_sweep(g.param_of(pick), g.start, ta)
+            } else {
+                ccw_sweep(g.end, ta) <= ccw_sweep(ta, g.start)
+            };
+            Some(if keep_start {
+                (Some(ellipse_kind(&Ellipse { end: ta, ..g })), Some(tan))
+            } else {
+                (Some(ellipse_kind(&Ellipse { start: ta, ..g })), Some(-tan))
+            })
+        }
+        EntityKind::Spline(sp) => {
+            if sp.closed {
+                return Some((None, None));
+            }
+            let (lo, hi) = sp.domain();
+            let tan = sp.unit_tangent(t);
+            Some(if curves::spline_param_of(sp, pick) <= t {
+                (Some(EntityKind::Spline(sp.sub_between(lo, t)?)), Some(tan))
+            } else {
+                (Some(EntityKind::Spline(sp.sub_between(t, hi)?)), Some(-tan))
+            })
+        }
+        _ => super::trim_for_fillet(k, pick, at),
+    }
+}
+
+/// FILLET where one or both objects are an elliptical arc or a spline: the tangent circle comes
+/// from `cadcraft_geom::tangent_circles` (the solution touching nearest the picks); each object
+/// is trimmed or extended to its touch point. Radius 0 meets them at their crossing.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn fillet_curvy(s: &mut Session, h1: Handle, p1: Vec2, h2: Handle, p2: Vec2, r: f64, e1: &Entity, e2: &Entity) -> Result<Option<Handle>> {
+    let unsupported = || other("Fillet works on lines, arcs, circles, elliptical arcs and splines (and polylines with the Polyline option).");
+    if h1 == h2 {
+        return Err(other("Cannot fillet an object to itself."));
+    }
+    if !(r.is_finite() && r >= 0.0) {
+        return Err(other("The fillet radius must be zero or more."));
+    }
+    let (Some(c1), Some(c2)) = (tan_curve(&e1.kind), tan_curve(&e2.kind)) else { return Err(unsupported()) };
+    let score = |f: &CornerFit| f.p1.dist(p1) + f.p2.dist(p2);
+    let best = tangent_circles(&c1, &c2, r, &[p1, p2])
+        .into_iter()
+        .filter(|f| score(f).is_finite())
+        .min_by(|a, b| score(a).total_cmp(&score(b)))
+        .ok_or_else(|| other(if r > 0.0 { "No fillet of that radius fits these objects." } else { "The objects do not intersect." }))?;
+    let (n1, d1) = fillet_trim(&e1.kind, p1, best.t1, best.p1).ok_or_else(unsupported)?;
+    let (n2, d2) = fillet_trim(&e2.kind, p2, best.t2, best.p2).ok_or_else(unsupported)?;
+    let new_arc = (r > 0.0).then(|| {
+        let c = best.center;
+        let (a1, a2) = (c.angle_to(best.p1), c.angle_to(best.p2));
+        let ccw = match (d1, d2) {
+            (Some(d), _) => (best.p1 - c).perp().dot(d) > 0.0,
+            (None, Some(d)) => (best.p2 - c).perp().dot(-d) > 0.0,
+            _ => ccw_sweep(a1, a2) <= std::f64::consts::PI,
+        };
+        if ccw { Arc::new(c, r, a1, a2) } else { Arc::new(c, r, a2, a1) }
+    });
+    if let Some(k) = n1 {
+        set_kind(s, h1, k)?;
+    }
+    if let Some(k) = n2 {
+        set_kind(s, h2, k)?;
+    }
+    match new_arc {
+        Some(a) => {
+            let space = s.doc()?.space_of(h1).unwrap_or_else(|| s.space());
+            Ok(Some(super::push_entity(s, &space, e1.common.clone(), crate::cmd::helpers::arc(&a))?))
+        }
+        None => Ok(None),
+    }
 }

@@ -1810,14 +1810,18 @@ fn trim_for_fillet(k: &EntityKind, pick: Vec2, t: Vec2) -> Option<(Option<Entity
     }
 }
 
-/// Fillet two curves (lines, arcs, circles) with radius `r`. Returns the new arc, if any.
+/// Fillet two curves (lines, arcs, circles; elliptical arcs and splines in `curve_edits`) with
+/// radius `r`. Returns the new arc, if any.
 pub(crate) fn fillet_curves(s: &mut Session, h1: Handle, p1: Vec2, h2: Handle, p2: Vec2, r: f64) -> Result<Option<Handle>> {
     if curves::is_locked(s, h1) || curves::is_locked(s, h2) {
         return Err(other("The object is on a locked layer."));
     }
     let e1 = curves::entity(s, h1)?;
     let e2 = curves::entity(s, h2)?;
-    let unsupported = || other("Fillet works on lines, arcs and circles (and polylines with the Polyline option).");
+    if [&e1, &e2].iter().any(|e| matches!(e.kind, EntityKind::Ellipse(_) | EntityKind::Spline(_))) {
+        return curve_edits::fillet_curvy(s, h1, p1, h2, p2, r, &e1, &e2);
+    }
+    let unsupported = || other("Fillet works on lines, arcs, circles, elliptical arcs and splines (and polylines with the Polyline option).");
     let o1 = TanObj::from_kind(&e1.kind, p1).filter(|_| matches!(e1.kind, EntityKind::Line(_) | EntityKind::Arc(_) | EntityKind::Circle(_)));
     let o2 = TanObj::from_kind(&e2.kind, p2).filter(|_| matches!(e2.kind, EntityKind::Line(_) | EntityKind::Arc(_) | EntityKind::Circle(_)));
     let (Some(o1), Some(o2)) = (o1, o2) else { return Err(unsupported()) };

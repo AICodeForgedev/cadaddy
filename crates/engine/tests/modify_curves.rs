@@ -318,6 +318,145 @@ fn hostile_curve_edits_do_not_panic() {
         }
         let _ = s.execute("extend", &json!({ "handle": target, "pick": [1e308, 1e308] }));
         let _ = s.execute("trim", &json!({ "handle": target, "pick": [-1e308, 0] }));
+        for r in [0.0, 1e-300, 1e308] {
+            let _ = s.execute("fillet", &json!({ "h1": target, "p1": [1e308, 0], "h2": sp, "p2": [0, 0], "radius": r }));
+        }
         let _ = s.execute("join", &json!({ "handles": [target, sp, e, d] }));
     }
+}
+
+// ---------------- FILLET / CHAMFER ----------------
+
+fn line_ends(s: &Session, h: &str) -> (Vec2, Vec2) {
+    match kind(s, h) {
+        EntityKind::Line(l) => (l.a.xy(), l.b.xy()),
+        k => panic!("not a line: {k:?}"),
+    }
+}
+
+/// The fillet arc made last: centre, radius and end points.
+fn last_arc(s: &Session) -> (Vec2, f64, Vec2, Vec2) {
+    match &s.doc().unwrap().model.last().unwrap().kind {
+        EntityKind::Arc(a) => {
+            let c = a.center.xy();
+            (c, a.radius, c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius)
+        }
+        k => panic!("not an arc: {k:?}"),
+    }
+}
+
+fn ellipse_point(deg: f64) -> [f64; 2] {
+    let t = deg.to_radians();
+    [4.0 * t.cos(), 2.0 * t.sin()]
+}
+
+/// The upper half of x²/16 + y²/4 = 1 and the line y = 1 across it (crossing at θ = 30°).
+fn ellipse_and_line(s: &mut Session) -> (String, String) {
+    let e = h(&s.execute("ellipse", &json!({ "center": [0, 0], "major": [4, 0], "ratio": 0.5, "start": 0, "end": 180 })).unwrap());
+    let l = h(&s.execute("line", &json!({ "points": [[-6, 1], [6, 1]] })).unwrap());
+    (e, l)
+}
+
+/// The fillet arc meets each object at a touch point, tangentially.
+fn assert_tangent(at: Vec2, center: Vec2, tangent: Vec2) {
+    assert!((at - center).normalized().dot(tangent.normalized()).abs() < 1e-6, "{at:?} {center:?} {tangent:?}");
+}
+
+#[test]
+fn fillet_line_and_elliptical_arc() {
+    let mut s = Session::new();
+    let (e, l) = ellipse_and_line(&mut s);
+    // Picks on the parts to keep: the line right of the corner, the arc below it.
+    let r = s.execute("fillet", &json!({ "h1": l, "p1": [5, 1], "h2": e, "p2": ellipse_point(5.0), "radius": 0.5 })).unwrap();
+    assert!(r["arc"].is_string(), "{r}");
+    let (c, rad, a0, a1) = last_arc(&s);
+    assert!((rad - 0.5).abs() < 1e-12 && (c.y - 0.5).abs() < 1e-9, "{c:?}");
+    // The line keeps its right end and now starts at the touch point above the centre.
+    let (la, lb) = line_ends(&s, &l);
+    assert!(lb.near(Vec2::new(6.0, 1.0), 1e-12));
+    assert!(la.near(Vec2::new(c.x, 1.0), 1e-9), "{la:?} {c:?}");
+    // The arc keeps its start and ends at the other touch point, tangent to the fillet.
+    let g = ellipse(&s, &e);
+    assert!(g.start.abs() < 1e-12, "{g:?}");
+    let te = g.at_param(g.end);
+    assert!((te.dist(c) - 0.5).abs() < 1e-9);
+    assert_tangent(te, c, g.derivative(g.end));
+    // The fillet arc runs between the two touch points.
+    assert!((a0.near(la, 1e-9) && a1.near(te, 1e-9)) || (a0.near(te, 1e-9) && a1.near(la, 1e-9)), "{a0:?} {a1:?}");
+    assert_eq!(count(&s), 3);
+}
+
+#[test]
+fn fillet_radius_zero_extends_an_elliptical_arc_to_a_line() {
+    let mut s = Session::new();
+    let e = h(&s.execute("ellipse", &json!({ "center": [0, 0], "major": [4, 0], "ratio": 0.5, "start": 0, "end": 20 })).unwrap());
+    let l = h(&s.execute("line", &json!({ "points": [[-6, 1], [6, 1]] })).unwrap());
+    s.execute("fillet", &json!({ "h1": e, "p1": ellipse_point(10.0), "h2": l, "p2": [5, 1], "radius": 0 })).unwrap();
+    assert!((ellipse(&s, &e).end - PI / 6.0).abs() < 1e-9, "{:?}", ellipse(&s, &e));
+    assert!(line_ends(&s, &l).0.near(Vec2::new(2.0 * 3f64.sqrt(), 1.0), 1e-9));
+    assert_eq!(count(&s), 2);
+}
+
+#[test]
+fn fillet_spline_and_line() {
+    let mut s = Session::new();
+    let sp = s_curve(&mut s);
+    let l = h(&s.execute("line", &json!({ "points": [[4.5, -5], [4.5, 5]] })).unwrap());
+    let before = spline(&s, &sp);
+    let pick = before.eval(0.15);
+    s.execute("fillet", &json!({ "h1": sp, "p1": [pick.x, pick.y], "h2": l, "p2": [4.5, 4], "radius": 0.3 })).unwrap();
+    let (c, rad, _, _) = last_arc(&s);
+    assert!((rad - 0.3).abs() < 1e-12);
+    // The spline keeps its start and ends at a touch point on the old curve.
+    let now = spline(&s, &sp);
+    let (a, b) = ends(&now);
+    assert!(a.near(Vec2::ZERO, 1e-9));
+    assert!((b.dist(c) - 0.3).abs() < 1e-9 && dist_to(&before, b) < 1e-9);
+    assert_tangent(b, c, now.derivative(now.domain().1));
+    // The line keeps its top and starts level with the centre.
+    let (la, lb) = line_ends(&s, &l);
+    assert!(lb.near(Vec2::new(4.5, 5.0), 1e-12) && (la.y - c.y).abs() < 1e-9 && (c.x - 4.5).abs() > 0.29);
+    // Radius 0: they meet where they cross.
+    let mut s = Session::new();
+    let sp = s_curve(&mut s);
+    let l = h(&s.execute("line", &json!({ "points": [[4.5, -5], [4.5, 5]] })).unwrap());
+    s.execute("fillet", &json!({ "h1": sp, "p1": [pick.x, pick.y], "h2": l, "p2": [4.5, 4], "radius": 0 })).unwrap();
+    assert!(ends(&spline(&s, &sp)).1.near(Vec2::new(4.5, 0.0), 1e-9));
+    assert!(line_ends(&s, &l).0.near(Vec2::new(4.5, 0.0), 1e-9));
+}
+
+#[test]
+fn fillet_at_the_command_line_with_no_trim() {
+    let mut s = Session::new();
+    let (e, l) = ellipse_and_line(&mut s);
+    let (eb, lb) = (ellipse(&s, &e), line_ends(&s, &l));
+    let [x, y] = ellipse_point(5.0);
+    s.script(&format!("FILLET T N R 0.5 5,1 {x},{y}\n")).unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert_eq!(count(&s), 3, "{:?}", s.log);
+    assert_eq!(ellipse(&s, &e), eb);
+    assert_eq!(line_ends(&s, &l), lb);
+    assert!((last_arc(&s).1 - 0.5).abs() < 1e-12);
+}
+
+#[test]
+fn fillet_failures_leave_the_drawing_alone() {
+    let mut s = Session::new();
+    let (e, l) = ellipse_and_line(&mut s);
+    let (eb, lb) = (ellipse(&s, &e), line_ends(&s, &l));
+    // Invalid radii, the same object twice: errors.
+    assert!(s.execute("fillet", &json!({ "h1": l, "p1": [5, 1], "h2": e, "p2": ellipse_point(5.0), "radius": -1 })).is_err());
+    assert!(s.execute("fillet", &json!({ "h1": e, "p1": [4, 0], "h2": e, "p2": [0, 2], "radius": 1 })).is_err());
+    assert_eq!(ellipse(&s, &e), eb);
+    assert_eq!(line_ends(&s, &l), lb);
+    // CHAMFER does not take ellipses or splines, and says so.
+    let err = s.execute("chamfer", &json!({ "h1": l, "p1": [5, 1], "h2": e, "p2": ellipse_point(5.0), "d1": 1 })).unwrap_err();
+    assert!(err.to_string().contains("cannot chamfer"), "{err}");
+    // No circle of that radius touches a spline within its ends and a far line.
+    let sp = s_curve(&mut s);
+    let far = h(&s.execute("line", &json!({ "points": [[100, -5], [100, 5]] })).unwrap());
+    let before = spline(&s, &sp);
+    let err = s.execute("fillet", &json!({ "h1": sp, "p1": [9, 0], "h2": far, "p2": [100, 0], "radius": 0.1 })).unwrap_err();
+    assert!(err.to_string().contains("No fillet"), "{err}");
+    assert_eq!(spline(&s, &sp), before);
 }
