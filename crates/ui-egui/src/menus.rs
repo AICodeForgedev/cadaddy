@@ -10,11 +10,14 @@ pub const MENUS: &[&str] = &["File", "Edit", "View", "Insert", "Format", "Tools"
 
 /// UI-only commands: (id, label, menu path, shortcut).
 pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
+    ("ui.dock", "Arrange Panel", &[], None),
+    ("ui.dock.reset", "Reset Panel Layout", &["Window", "Reset Panel Layout"], None),
     ("ui.open", "Open...", &[], Some("Cmd+O")),
     ("ui.saveas", "Save As...", &[], None),
     ("ui.sample", "Open Sample Drawing", &["Help", "Open Sample Drawing"], None),
     ("ui.toggle.toolsets", "Tool Sets", &["Window", "Tool Sets"], Some("Cmd+3")),
-    ("ui.toggle.palettes", "Properties Inspector", &["Window", "Properties Inspector"], Some("Cmd+1")),
+    ("ui.panel.properties", "Properties Inspector", &["Window", "Properties Inspector"], Some("Cmd+1")),
+    ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
     ("ui.toggle.toolbar", "Tool Bar", &["Window", "Tool Bar"], None),
     ("ui.toggle.filetabs", "File Tab", &["Window", "File Tab"], None),
@@ -60,6 +63,13 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
 fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if let Some(r) = crate::managers::route(app, id, params) {
         return Some(r);
+    }
+    if matches!(id, "ui.dock" | "ui.dock.reset") {
+        return Some(crate::docking::command(app, id == "ui.dock.reset", params));
+    }
+    if matches!(id, "ui.panel.properties" | "ui.panel.layers") {
+        let panel = if id == "ui.panel.properties" { "properties" } else { "layers" };
+        return Some(crate::docking::command(app, false, &json!({"operation":"open", "panel":panel})));
     }
     if let Some(r) = crate::plotstyles::route(app, id, params) {
         return Some(r);
@@ -128,6 +138,9 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "ui.toggle.toolsets" => {
+            if params.get("on").and_then(Value::as_bool) == Some(true) {
+                return Some(crate::docking::command(app, false, &json!({"operation":"open", "panel":"toolSets"})));
+            }
             toggle(&mut app.ui.show_toolsets, params);
             Ok(Value::Null)
         }
@@ -276,8 +289,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "properties" | "pr" | "props" | "ch" if params.is_null() => {
-            app.ui.show_palettes = true;
-            Ok(Value::Null)
+            crate::docking::command(app, false, &json!({"operation":"open", "panel":"properties"}))
         }
         _ => return None,
     };
@@ -438,7 +450,7 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(cmd, Key::X), "cutclip"),
         (sc(cmd_shift, Key::V), "pasteblock"),
         (sc(cmd, Key::V), "pasteclip"),
-        (sc(cmd, Key::Num1), "ui.toggle.palettes"),
+        (sc(cmd, Key::Num1), "ui.panel.properties"),
         (sc(cmd, Key::Num3), "ui.toggle.toolsets"),
         (sc(cmd, Key::Num9), "ui.toggle.cmdline"),
         (sc(Modifiers::NONE, Key::F1), "ui.dialog.commands"),

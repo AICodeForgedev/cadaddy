@@ -30,7 +30,7 @@ impl Param<'_> {
 
     fn spline(s: &Spline, f: impl FnOnce(&Param) -> Vec<Vec2>) -> Vec<Vec2> {
         let (lo, hi) = s.domain();
-        if !s.is_valid() || !(lo.is_finite() && hi.is_finite() && hi > lo) {
+        if !(s.is_valid() && lo.is_finite() && hi.is_finite() && hi > lo) {
             return Vec::new();
         }
         let h = (hi - lo) * 1e-7;

@@ -48,6 +48,7 @@
 	Arc	Дуга
 	Arc Length	Довжина дуги
 	Area	Площа
+	Arrange Panel	Розташувати панель
 	Array	Масив
 	Attach	Приєднати
 	Attribute	Атрибут
@@ -374,6 +375,7 @@
 	Layer contains objects (double-click to make current)	Шар містить об'єкти (двічі клацніть, щоб зробити поточним)
 	Layer is empty (double-click to make current)	Шар порожній (двічі клацніть, щоб зробити поточним)
 	Layers	Шари
+	Layers Palette	Палітра шарів
 	Layers displayed: {shown} of {total}.   Current layer: {layer}	Показано шарів: {shown} із {total}.   Поточний шар: {layer}
 	Layout	Аркуш
 	Layout list	Список аркушів
@@ -531,6 +533,7 @@
 	New CTB	Нова CTB
 	New STB	Нова STB
 	New style	Новий стиль
+	Reset Panel Layout	Скинути розташування панелей
 	Use for this layout	Використати для цього аркуша
 	Display plot styles	Показувати стилі друку
 	No plot style tables.	Немає таблиць стилів друку.

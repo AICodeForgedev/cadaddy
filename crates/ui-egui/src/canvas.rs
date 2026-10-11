@@ -629,8 +629,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     {
         let _ = app.session.zoom_about(f64::from(zoom_pinch), xf.to_world(hp));
     }
-    // Pan with the middle button (trackpads pan with a two-finger swipe, above).
-    if middle_down && let Some(hp) = hover_pos {
+    // Pan with the middle button (or Shift+right-drag / two-finger drag on trackpads is scroll).
+    let middle_pressed = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Middle));
+    let focused = ui.input(|i| i.focused);
+    if middle_down
+        && focused
+        && (app.canvas.pan_last.is_some() || (middle_pressed && inside))
+        && let Some(hp) = hover_pos
+    {
         if let Some(last) = app.canvas.pan_last {
             let d = hp - last;
             if let Ok(st) = app.session.state_mut() {
@@ -698,7 +704,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.session.cursor = eff;
         app.session.cursor_deferred = app.canvas.snap.and_then(|h| h.deferred);
         // Typed or menu snap overrides (END, NON…) and Tab cycling; a locked Dynamic Input value wins.
-        if !dyn_frame.and_then(|f| crate::dyninput::parse(&app.cmd.buffer, &f)).is_some_and(|e| e.first_locked().is_some()) {
+        if dyn_frame.and_then(|f| crate::dyninput::parse(&app.cmd.buffer, &f)).is_none_or(|e| e.first_locked().is_none()) {
             override_cursor(app, w, &xf);
         }
     } else {

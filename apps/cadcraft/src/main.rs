@@ -20,38 +20,65 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod workspace;
 
 use cadcraft_engine::Session;
 use cadcraft_ui_egui::{CadApp, Services, i18n};
 
-struct App(CadApp, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+struct App {
+    cad: CadApp,
+    workspace: workspace::Workspace,
+    workspace_error: Option<String>,
+    #[cfg(target_os = "macos")]
+    native_menu: Option<native_menu::NativeMenu>,
+}
+
+impl App {
+    fn persist_workspace(&mut self, final_attempt: bool) {
+        let result = if final_attempt { self.workspace.save_on_exit(&self.cad.ui) } else { self.workspace.save_if_changed(&self.cad.ui) };
+        if let Err(error) = result {
+            if self.workspace_error.as_ref() != Some(&error) {
+                eprintln!("CADCraft workspace: {error}");
+                self.cad.set_status(format!("Workspace could not be saved: {error}"));
+                self.workspace_error = Some(error);
+            }
+        } else {
+            self.workspace_error = None;
+        }
+    }
+}
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         {
-            if self.1.is_none() && std::env::var_os("CADCRAFT_NO_NATIVE_MENU").is_none() {
-                self.1 = Some(native_menu::NativeMenu::install(&mut self.0));
+            if self.native_menu.is_none() && std::env::var_os("CADCRAFT_NO_NATIVE_MENU").is_none() {
+                self.native_menu = Some(native_menu::NativeMenu::install(&mut self.cad));
             }
-            if let Some(m) = &mut self.1 {
-                m.poll(&mut self.0, ctx);
+            if let Some(m) = &mut self.native_menu {
+                m.poll(&mut self.cad, ctx);
             }
         }
-        self.0.logic(ctx);
-        if std::mem::take(&mut self.0.quit_requested) {
+        self.cad.logic(ctx);
+        self.persist_workspace(false);
+        if std::mem::take(&mut self.cad.quit_requested) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.0.raw_input_hook(raw);
+        self.cad.raw_input_hook(raw);
         cadcraft_ui_egui::cmdline::capture_tab(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.0.ui(ui);
+        self.cad.ui(ui);
+        self.persist_workspace(false);
+    }
+    fn on_exit(&mut self) {
+        self.persist_workspace(true);
     }
     /// Preferences (the interface theme) survive restarts; window and egui state are not kept.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        storage.set_string(cadcraft_ui_egui::PREFS_KEY, self.0.prefs_json());
+        storage.set_string(cadcraft_ui_egui::PREFS_KEY, self.cad.prefs_json());
     }
     fn persist_egui_memory(&self) -> bool {
         false
@@ -219,6 +246,14 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let mut app = CadApp::new(Session::empty(), services());
+            let (workspace, restored, workspace_error) = workspace::Workspace::load();
+            if let Some(ui) = restored {
+                app.ui = ui;
+            }
+            if let Some(error) = &workspace_error {
+                eprintln!("CADCraft workspace: {error}");
+                app.set_status(error);
+            }
             app.system_languages = std::env::var("CADCRAFT_LOCALE").map(|s| vec![s]).unwrap_or_else(|_| sys_locale::get_locales().collect());
             if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::PREFS_KEY)) {
                 app.load_prefs(&prefs);
@@ -243,11 +278,13 @@ fn main() -> eframe::Result {
             if app.session.docs.is_empty() {
                 app.session.new_drawing(false);
             }
-            Ok(Box::new(App(
-                app,
+            Ok(Box::new(App {
+                cad: app,
+                workspace,
+                workspace_error,
                 #[cfg(target_os = "macos")]
-                None,
-            )))
+                native_menu: None,
+            }))
         }),
     )
 }

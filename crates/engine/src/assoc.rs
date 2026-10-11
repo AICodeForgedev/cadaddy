@@ -274,8 +274,7 @@ pub fn recompute(dm: &Dimension, prev: Option<&Dimension>, before: &Drawing, aft
         // An ordinate's `defpt` is its fixed datum (the drawing origin); it must not follow the feature.
         let ordinate = matches!(nd.kind, DimKind::Ordinate { .. });
         for name in POINTS {
-            if !moved.iter().any(|m| m == name)
-                && !(ordinate && name == "defpt")
+            if !(moved.iter().any(|m| m == name) || ordinate && name == "defpt")
                 && !(linear && (name == "p13" || name == "p14"))
                 && let Some(slot) = def_point_mut(&mut nd, name)
             {

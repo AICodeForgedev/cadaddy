@@ -121,7 +121,7 @@ fn command_known(id: &str) -> bool {
 
 pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
-    egui::Panel::left("cc_toolsets").exact_size(220.0).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+    egui::Frame::NONE.fill(t.panel).show(ui, |ui| {
         let r = ui.max_rect();
         let p = ui.painter().clone();
         // Tabs.
@@ -140,6 +140,7 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
                 egui::FontId::proportional(13.5),
                 if active { t.text } else { t.text_dim },
             );
+            icons::describe_control(ui, &resp, crate::i18n::t(name), Some(active), true);
             if resp.clicked() {
                 app.ui.toolset_tab = name.into();
             }
@@ -149,6 +150,7 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
         let cr = Rect::from_center_size(pos2(r.right() - 14.0, r.top() + tab_h / 2.0), vec2(14.0, 14.0));
         let cresp = ui.interact(cr, ui.id().with("ts_collapse"), Sense::click());
         icons::paint(&p, cr, Icon::ChevronLeft, false);
+        icons::describe_control(ui, &cresp, "Collapse Tool Sets", None, false);
         if cresp.on_hover_text(crate::tl!("Collapse Tool Sets")).clicked() {
             app.ui.show_toolsets = false;
         }
@@ -178,6 +180,7 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
                         t.text,
                     );
                     icons::paint(pp, Rect::from_center_size(pos2(hr.right() - 12.0, hr.center().y), vec2(11.0, 11.0)), Icon::Gear, false);
+                    icons::describe_control(ui, &hresp, name, Some(!collapsed), false);
                     if hresp.clicked() {
                         toggle_group = Some(name.to_string());
                     }
@@ -291,7 +294,7 @@ pub fn right_palettes(app: &mut CadApp, ui: &mut egui::Ui) {
     });
 }
 
-fn layers_section(app: &mut CadApp, ui: &mut egui::Ui) {
+pub(crate) fn layers_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     section_header(ui, "Layers");
     // Layer tools row.
@@ -586,7 +589,7 @@ fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
     }
 }
 
-fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
+pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     properties_header(app, ui);
     let sel = app.session.selection();

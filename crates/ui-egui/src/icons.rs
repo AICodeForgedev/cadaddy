@@ -3,6 +3,7 @@
 //! Icons are line drawings on a 24×24 design grid: light strokes for existing geometry, blue for
 //! the geometry a command creates and orange dots for picked points.
 
+use craft_ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
 use egui::{Color32, Painter, Pos2, Rect, Stroke, pos2};
 
 use crate::theme::Tokens;
@@ -907,15 +908,49 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, dim: bool) {
     }
 }
 
-/// Small helper: an icon button that returns `true` when clicked.
+/// A shared button interaction with CADCraft's original multicolor icon painting.
 pub fn button(ui: &mut egui::Ui, icon: Icon, size: f32, tooltip: &str, selected: bool) -> egui::Response {
     let t = Tokens::get();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
-    if selected {
-        ui.painter().rect_filled(rect, 3.0, t.tab_active);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, 3.0, t.control_hover.gamma_multiply(0.6));
-    }
-    paint(ui.painter(), rect.shrink(size * 0.08), icon, !ui.is_enabled());
+    let visuals = |fill| ButtonVisuals { fill, stroke: Stroke::NONE, icon: t.icon };
+    let style = IconButtonStyle {
+        normal: visuals(Color32::TRANSPARENT),
+        hovered: visuals(t.control_hover.gamma_multiply(0.6)),
+        pressed: None,
+        selected: visuals(t.tab_active),
+        corner_radius: egui::CornerRadius::same(3),
+        focus_stroke: Stroke::new(1.0, t.accent),
+    };
+    let resp = IconButton::new(crate::i18n::t(tooltip), egui::vec2(size, size), &style).selected(selected).show(ui, |ui, rect, _| {
+        // A single tint would erase the blue geometry and orange picked points. Keep the
+        // original painter and its explicit dimming on the same parent-enabled UI.
+        paint(ui.painter(), rect.shrink(size * 0.08), icon, !ui.is_enabled());
+    });
+    crate::control::record_widget(ui, &resp, tooltip, "button", Some(selected));
     resp.on_hover_text(crate::i18n::t(tooltip))
+}
+
+/// Labels and focus outlines for controls whose existing geometry is painted by the app.
+/// Pointer focus is opt-in for navigation tabs; drafting buttons keep their command-line flow.
+pub fn describe_control(ui: &egui::Ui, response: &egui::Response, label: &str, selected: Option<bool>, tab: bool) {
+    let label = crate::i18n::t(label);
+    response.widget_info(|| match selected {
+        Some(selected) => egui::WidgetInfo::selected(egui::WidgetType::Button, response.enabled(), selected, label),
+        None => egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label),
+    });
+    if tab {
+        ui.ctx().accesskit_node_builder(response.id, |node| {
+            node.set_role(egui::accesskit::Role::Tab);
+            node.clear_toggled();
+            if let Some(selected) = selected {
+                node.set_selected(selected);
+            }
+        });
+        if response.clicked() {
+            response.request_focus();
+        }
+    }
+    if response.has_focus() && response.rect.width() > 4.0 && response.rect.height() > 4.0 {
+        ui.painter().rect_stroke(response.rect.shrink(2.0), 2.0, Stroke::new(1.0, Tokens::get().accent), egui::StrokeKind::Inside);
+    }
+    crate::control::record_widget(ui, response, label, if tab { "tab" } else { "button" }, selected);
 }
