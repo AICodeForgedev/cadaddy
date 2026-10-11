@@ -124,6 +124,15 @@ fn linetype(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                         action = Some(("linetype", json!({ "load": n })));
                     }
                 }
+                // The user's own .lin file (where the host has a file picker).
+                if let Some(pick) = app.services.pick_open.as_ref() {
+                    ui.separator();
+                    if ui.selectable_label(false, "From File...").clicked()
+                        && let Some(path) = pick()
+                    {
+                        action = Some(("linetype", json!({ "load": "*", "file": path })));
+                    }
+                }
             });
             let is_current = sel.eq_ignore_ascii_case(&current);
             if ui.add_enabled(!is_current, egui::Button::new("Current")).on_hover_text("Draw new objects with the selected linetype").clicked() {

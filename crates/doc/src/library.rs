@@ -6,6 +6,8 @@
 
 use crate::{DashElement, Drawing, Linetype};
 
+pub mod files;
+
 /// The standard linetype library, defined in inches. Load it into a drawing with
 /// [`standard_linetypes_for`], which scales it for metric drawings.
 pub fn standard_linetypes() -> Vec<Linetype> {
