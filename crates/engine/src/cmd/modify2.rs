@@ -34,8 +34,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Modify", "Object", "Spline"])
             .alias(&["spe"])
             .params(
-                "{handle, option: close|open|reverse|refit|purge|polyline|move|fitmove|fitadd|fitdelete|kink|tangents|tolerance|vertexmove|vertexdelete|weight, \
-                 fit?, index?, to?, before?: bool (fitadd), at? (kink), start?, end? (tangent directions; null = default), tolerance?, weight?, precision?}",
+                "{handle, option: close|open|join|reverse|refit|purge|polyline|move|fitmove|fitadd|fitdelete|kink|tangents|tolerance|vertexadd|vertexmove|vertexdelete|weight|elevate, \
+                 handles2? (join), fit?, index?, to?, before?: bool (fitadd), at? (kink, vertexadd), start?, end? (tangent directions; null = default), tolerance?, weight?, \
+                 order? (elevate), precision?}",
             )
             .interactive(|_| Ok(Box::new(SplineditM::default()))),
         CommandSpec::new("lengthen", "Lengthen", run_lengthen)

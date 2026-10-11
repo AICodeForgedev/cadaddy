@@ -1,5 +1,6 @@
-//! SPLINEDIT: Close/Open, Fit data (Add, Close/Open, Delete, Kink, Move, Purge, Tangents,
-//! toLerance), Edit vertex (Delete, Move, Weight), convert to Polyline, Reverse and Undo.
+//! SPLINEDIT: Close/Open, Join, Fit data (Add, Close/Open, Delete, Kink, Move, Purge, Tangents,
+//! toLerance), Edit vertex (Add, Delete, Elevate order, Move, Weight), convert to Polyline,
+//! Reverse and Undo.
 //!
 //! Fit-point edits rebuild the curve from the edited fit points with the spline's knot
 //! parametrisation, end tangents and fit tolerance. Control-point edits change the curve
@@ -16,6 +17,11 @@ pub(super) fn run_splinedit(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let EntityKind::Spline(sp) = &e.kind else { return Err(other("Object selected is not a spline.")) };
     let opt = str_param(p, "option").ok_or_else(|| bad("splinedit", "`option` is required"))?.to_ascii_lowercase();
+    if opt == "join" {
+        let others = targets(s, &json!({ "handles": p.get("handles2").cloned().unwrap_or(Value::Null) }))?;
+        let removed = join(s, h, sp, &others)?;
+        return Ok(json!({ "handle": h.hex(), "joined": removed.len() }));
+    }
     let k = edit(sp, &opt, p)?;
     set_kind(s, h, k)?;
     Ok(json!({ "handle": h.hex() }))
@@ -70,6 +76,11 @@ fn edit(sp: &Spline, opt: &str, p: &Value) -> Result<EntityKind> {
         "vertexmove" => spline(move_control(sp, index(p)?, point_req("splinedit", p, "to")?)?),
         "vertexdelete" => spline(delete_control(sp, index(p)?)?),
         "weight" => spline(set_weight(sp, index(p)?, f64_req("splinedit", p, "weight")?)?),
+        "vertexadd" => spline(add_control(sp, point_req("splinedit", p, "at")?)?),
+        "elevate" => {
+            let order = p.get("order").and_then(Value::as_u64).ok_or_else(|| bad("splinedit", "`order` is required"))?;
+            spline(elevate(sp, order)?)
+        }
         _ => Err(bad("splinedit", "unknown option")),
     }
 }
@@ -342,6 +353,53 @@ fn delete_control(sp: &Spline, j: usize) -> Result<Spline> {
     Ok(s)
 }
 
+// ---------------- join / add / elevate ----------------
+
+/// Join open curves that connect end to end with the spline into it (JOIN's spline rules: the
+/// source keeps its handle, the others are erased). Returns the erased objects with their
+/// spaces, so an interactive Undo can bring them back.
+fn join(s: &mut Session, h: Handle, sp: &Spline, others: &[Handle]) -> Result<Vec<(Space, Entity)>> {
+    if sp.closed {
+        return Err(other("Cannot join to a closed spline."));
+    }
+    let mut hs = vec![h];
+    hs.extend(others.iter().copied().filter(|o| *o != h));
+    if hs.len() < 2 {
+        return Err(other("Select objects to join to the spline."));
+    }
+    let d = s.doc()?;
+    let before: Vec<(Space, Entity)> = hs.iter().skip(1).filter_map(|o| Some((d.space_of(*o)?, (**d.entity(*o)?).clone()))).collect();
+    super::join_curves(s, &hs)?;
+    let d = s.doc()?;
+    Ok(before.into_iter().filter(|(_, e)| d.entity(e.handle).is_none()).collect())
+}
+
+/// A control point added by inserting a knot where the curve passes nearest `at`; the curve
+/// keeps its shape. A periodic spline is clamped at its seam first.
+fn add_control(sp: &Spline, at: Vec2) -> Result<Spline> {
+    let base = if sp.is_periodic() { sp.clamped().ok_or_else(|| other("Cannot add a control point to this spline."))? } else { sp.clone() };
+    let t = curves::spline_param_of(&base, at);
+    let mut out = base.insert_knot(t).ok_or_else(|| other("Cannot add a control point to this spline."))?;
+    out.closed = sp.closed;
+    Ok(out)
+}
+
+/// The same curve at a higher order (degree + 1), with more control points.
+fn elevate(sp: &Spline, order: u64) -> Result<Spline> {
+    // Degree 25 is the most `Spline::elevated` builds.
+    let max = 26;
+    let current = sp.degree as u64 + 1;
+    if order < current || order > max {
+        return Err(other(format!("Requires an order between {current} and {max}.")));
+    }
+    if order == current {
+        return Ok(sp.clone());
+    }
+    let mut out = sp.elevated(order as usize - 1).ok_or_else(|| other("Cannot elevate the order of this spline."))?;
+    out.closed = sp.closed;
+    Ok(out)
+}
+
 // ---------------- interactive ----------------
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -362,6 +420,9 @@ enum Sub {
     VertexDelete,
     VertexMove,
     VertexWeight,
+    VertexAdd,
+    VertexOrder,
+    Join,
     /// "Select point" from FitMove / VertexMove / VertexWeight (in `back`).
     SelectPoint,
 }
@@ -376,6 +437,9 @@ pub(super) struct SplineditM {
     mark: usize,
     before: bool,
     start_tangent: Option<Vec2>,
+    join: SelectPhase,
+    /// Objects erased by Join, with the history length after it (restored by Undo).
+    joined: Vec<(usize, Vec<(Space, Entity)>)>,
 }
 
 fn nearest(pts: &[Vec2], p: Vec2) -> Option<usize> {
@@ -465,6 +529,13 @@ impl Interactive for SplineditM {
                 .kw(&["Add", "Delete", "Elevate order", "Move", "Weight", "eXit"])
                 .default("eXit"),
             Sub::VertexDelete => Prompt::new("Specify control point <exit>", Accept::POINT),
+            Sub::VertexAdd => Prompt::new("Specify a point on the spline <exit>", Accept::POINT),
+            Sub::VertexOrder => Prompt::new("Enter new order", Accept::NUMBER).default((sp.degree + 1).to_string()),
+            Sub::Join => {
+                let mut p = self.join.prompt();
+                p.message = "Select objects to join to the spline".into();
+                p
+            }
             Sub::VertexMove => {
                 Prompt::new("Specify new location", Accept::POINT).kw(&marker).default("N").base_opt(sp.control.get(self.mark).copied())
             }
@@ -518,12 +589,44 @@ impl Interactive for SplineditM {
                     self.mark = 0;
                     self.sub = Sub::Vertex;
                 }
-                (_, "undo" | "u") => match self.history.pop() {
-                    Some(k) => set_kind(s, h, k)?,
-                    None => s.echo("All edits have been undone."),
-                },
+                (_, "join" | "j") if sp.closed => s.echo("Cannot join to a closed spline."),
+                (_, "join" | "j") => {
+                    self.join = SelectPhase::default();
+                    self.sub = Sub::Join;
+                }
+                (_, "undo" | "u") => {
+                    // Undoing a join brings the joined objects back.
+                    if let Some((at, ents)) = self.joined.last()
+                        && *at == self.history.len()
+                    {
+                        let d = s.doc_mut()?;
+                        for (space, e) in ents {
+                            if let Some(st) = d.space_mut(space) {
+                                st.push(e.clone());
+                            }
+                        }
+                        self.joined.pop();
+                    }
+                    match self.history.pop() {
+                        Some(k) => set_kind(s, h, k)?,
+                        None => s.echo("All edits have been undone."),
+                    }
+                }
                 (_, "") => {}
-                (_, k) => s.echo(format!("{k}: not available yet")),
+                _ => return Err(other("Invalid option keyword.")),
+            },
+            Sub::Join => match self.join.feed(s, &i)? {
+                SelOutcome::More => {}
+                SelOutcome::Empty => self.sub = Sub::Main,
+                SelOutcome::Done(hs) => {
+                    self.sub = Sub::Main;
+                    let before = curves::entity(s, h)?.kind;
+                    let removed = join(s, h, &sp, &hs)?;
+                    self.history.push(before);
+                    s.echo(format!("{} object(s) joined into the spline", removed.len()));
+                    self.joined.push((self.history.len(), removed));
+                    s.set_selection(vec![h]);
+                }
             },
             Sub::Precision => {
                 let precision = match &i {
@@ -647,9 +750,24 @@ impl Interactive for SplineditM {
                     self.mark = 0;
                     self.sub = Sub::VertexWeight;
                 }
+                (_, "add" | "a") => self.sub = Sub::VertexAdd,
+                (_, "elevate order" | "e") => self.sub = Sub::VertexOrder,
                 (_, "") => {}
-                (_, k) => s.echo(format!("{k}: not available yet")),
+                _ => return Err(other("Invalid option keyword.")),
             },
+            Sub::VertexAdd => match point {
+                Some(p) => self.apply(s, json!({ "option": "vertexadd", "at": [p.x, p.y] }))?,
+                None if enter => self.sub = Sub::Vertex,
+                None => {}
+            },
+            Sub::VertexOrder => {
+                if let Input::Text(t) = &i {
+                    let order =
+                        number(t).filter(|o| o.fract() == 0.0 && *o >= 1.0 && *o <= 1000.0).ok_or_else(|| other("Requires a whole number."))?;
+                    self.apply(s, json!({ "option": "elevate", "order": order as u64 }))?;
+                }
+                self.sub = Sub::Vertex;
+            }
             Sub::VertexDelete => match point {
                 Some(p) => {
                     let u = distinct(&sp);

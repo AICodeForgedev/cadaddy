@@ -7,7 +7,7 @@ use cadcraft_geom::{Spline, Vec2};
 use serde_json::{Value, json};
 
 fn h(v: &Value) -> String {
-    v["handle"].as_str().unwrap().to_string()
+    v["handle"].as_str().or_else(|| v["handles"][0].as_str()).unwrap().to_string()
 }
 
 fn kind(s: &Session, hex: &str) -> EntityKind {
@@ -297,4 +297,75 @@ fn control_edits_drop_fit_data_and_keep_closed_splines_closed() {
     let (lo, hi) = x.domain();
     assert!(x.eval(lo).near(x.eval(hi), 1e-9), "still closed");
     assert!(s.execute("splinedit", &json!({ "handle": c, "option": "vertexdelete", "index": 99 })).is_err());
+}
+
+/// Largest distance from samples of `a` to the curve `b` (a shape comparison).
+fn shape_gap(a: &Spline, b: &Spline) -> f64 {
+    let (lo, hi) = a.domain();
+    let (blo, bhi) = b.domain();
+    let bs: Vec<Vec2> = (0..=2000).map(|i| b.eval(blo + (bhi - blo) * i as f64 / 2000.0)).collect();
+    (0..=100)
+        .map(|i| a.eval(lo + (hi - lo) * i as f64 / 100.0))
+        .map(|p| bs.iter().map(|q| q.dist(p)).fold(f64::INFINITY, f64::min))
+        .fold(0.0, f64::max)
+}
+
+#[test]
+fn join_adds_connected_curves_and_undo_brings_them_back() {
+    let mut s = Session::new();
+    let sp = h(&s.execute("spline", &json!({ "fit": [[0, 0], [2, 2], [4, 0]] })).unwrap());
+    s.execute("line", &json!({ "points": [[4, 0], [8, 0]] })).unwrap();
+    s.cmdline("splinedit 0,0 j 6,0").unwrap();
+    s.cmdline("").unwrap();
+    let j = spline(&s, &sp);
+    let (lo, hi) = j.domain();
+    assert!(j.eval(lo).near(Vec2::ZERO, 1e-9) && j.eval(hi).near(Vec2::new(8.0, 0.0), 1e-9));
+    assert_eq!(s.doc().unwrap().model.len(), 1, "the line is joined in");
+    s.cmdline("u").unwrap();
+    assert_eq!(s.doc().unwrap().model.len(), 2, "undo brings the line back");
+    assert!(spline(&s, &sp).eval(spline(&s, &sp).domain().1).near(Vec2::new(4.0, 0.0), 1e-9));
+    s.cmdline("x").unwrap();
+    assert!(s.running.is_none());
+
+    // JSON; closed splines and unconnected objects are refused.
+    let l = h(&s.execute("line", &json!({ "points": [[0, 0], [-3, 0]] })).unwrap());
+    let r = s.execute("splinedit", &json!({ "handle": sp, "option": "join", "handles2": [l] })).unwrap();
+    assert_eq!(r["joined"], 1);
+    let far = h(&s.execute("line", &json!({ "points": [[50, 50], [60, 60]] })).unwrap());
+    assert!(s.execute("splinedit", &json!({ "handle": sp, "option": "join", "handles2": [far] })).is_err());
+    assert!(s.execute("splinedit", &json!({ "handle": sp, "option": "join" })).is_err());
+    let c = h(&s.execute("spline", &json!({ "fit": [[0, 0], [4, 0], [4, 4], [0, 4]], "closed": true })).unwrap());
+    assert!(s.execute("splinedit", &json!({ "handle": c, "option": "join", "handles2": [far] })).is_err());
+}
+
+#[test]
+fn edit_vertex_add_and_elevate_order_keep_the_shape() {
+    let mut s = Session::new();
+    let sp = h(&s.execute("spline", &json!({ "control": [[0, 0], [2, 3], [4, 0], [6, 3], [8, 0]] })).unwrap());
+    let before = spline(&s, &sp);
+    s.cmdline("splinedit 0,0 e a 4,1.5").unwrap();
+    let a = spline(&s, &sp);
+    assert_eq!(a.control.len(), 6);
+    assert!(shape_gap(&before, &a) < 1e-6 && shape_gap(&a, &before) < 1e-6);
+    s.cmdline("").unwrap();
+    s.cmdline("e 5").unwrap();
+    let e = spline(&s, &sp);
+    assert_eq!(e.degree, 4);
+    assert!(shape_gap(&before, &e) < 1e-6 && shape_gap(&e, &before) < 1e-6);
+    assert!(s.prompt_text().contains("vertex editing option"), "{}", s.prompt_text());
+    s.cmdline("x x").unwrap();
+    assert!(s.running.is_none());
+
+    // JSON: a periodic spline stays closed; the order only goes up, to 26 at most.
+    let c = h(&s.execute("spline", &json!({ "fit": [[0, 0], [4, 0], [4, 4], [0, 4]], "closed": true })).unwrap());
+    let cb = spline(&s, &c);
+    s.execute("splinedit", &json!({ "handle": c, "option": "vertexadd", "at": [4, 2] })).unwrap();
+    let ca = spline(&s, &c);
+    assert!(ca.closed && ca.is_valid() && shape_gap(&cb, &ca) < 1e-6 && shape_gap(&ca, &cb) < 1e-6);
+    s.execute("splinedit", &json!({ "handle": c, "option": "elevate", "order": 6 })).unwrap();
+    assert!(spline(&s, &c).closed && spline(&s, &c).degree == 5);
+    for order in [0, 3, 27, 1000] {
+        assert!(s.execute("splinedit", &json!({ "handle": c, "option": "elevate", "order": order })).is_err(), "{order}");
+    }
+    assert!(s.execute("splinedit", &json!({ "handle": c, "option": "vertexadd" })).is_err());
 }
