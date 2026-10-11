@@ -5,11 +5,14 @@
 //!   default to polar as in AutoCAD; DYNPIFORMAT = 1 makes them Cartesian).
 //! - `40,` locks X = 40 and moves to Y; `40<` locks the distance and moves to the angle. A locked
 //!   value holds the cursor.
-//! - Tab types the separator for the format on show, so `40` Tab `90` reads `40<90`.
+//! - Tab types the separator for the format on show, so `40` Tab `90` reads `40<90`; Tab after the
+//!   second value locks it too (both boxes show a lock and the cursor sits on the point).
 //! - Enter sends the entry with `@` in front when it is measured from the last point (relative is
 //!   the default; DYNPICOORDS = 1 makes it absolute), and fills an empty box from the cursor.
 //! - A plain number and Enter stays direct distance entry; `@`/`#` entries, keywords and command
 //!   names go through untouched.
+//!
+//! - Down Arrow at a prompt with options (DYNPROMPT on) lists them at the cursor ([`OptionsMenu`]).
 //!
 //! Scripts, the control channel and MCP never pass through here, so they keep the plain
 //! command-line rules.
@@ -133,10 +136,25 @@ pub fn tab_separator(text: &str, frame: &Frame) -> Option<char> {
     parse(text, frame).filter(|e| !e.split).map(|e| e.format.separator())
 }
 
-/// Hold the cursor to the locked first value.
-pub fn constrain(entry: &Entry<'_>, frame: &Frame, p: Vec2) -> Vec2 {
+/// Whether Tab locks the second value too: both values are typed.
+pub fn can_lock_second(text: &str, frame: &Frame) -> bool {
+    parse(text, frame).is_some_and(|e| e.split && e.first_locked().is_some() && e.second_value().is_some())
+}
+
+/// Hold the cursor to the locked values: the first one once a separator follows it, and both
+/// when Tab has locked the second one too (`second_locked`), which pins the cursor to the point.
+pub fn constrain(entry: &Entry<'_>, frame: &Frame, p: Vec2, second_locked: bool) -> Vec2 {
     let Some(v) = entry.first_locked() else { return p };
     let o = frame.origin();
+    if second_locked && let Some(w) = entry.second_value() {
+        let q = match entry.format {
+            Format::Cartesian => o + Vec2::new(v, w),
+            Format::Polar => o + Vec2::from_angle(w) * v,
+        };
+        if q.is_finite() {
+            return q;
+        }
+    }
     match entry.format {
         Format::Cartesian => Vec2::new(o.x + v, p.y),
         Format::Polar => {
@@ -157,7 +175,7 @@ pub fn complete(entry: &Entry<'_>, frame: &Frame, cursor: Vec2, last: Vec2) -> O
     if !entry.split {
         return None;
     }
-    let (live_first, live_second) = frame.live(entry.format, constrain(entry, frame, cursor));
+    let (live_first, live_second) = frame.live(entry.format, constrain(entry, frame, cursor, false));
     let first = entry.first_locked().unwrap_or(live_first);
     let second = entry.second_value().unwrap_or(live_second);
     if frame.relative() && frame.base == Some(last) {
@@ -172,6 +190,39 @@ pub fn complete(entry: &Entry<'_>, frame: &Frame, cursor: Vec2, last: Vec2) -> O
         Format::Polar => frame.origin() + Vec2::from_angle(second) * first,
     };
     p.is_finite().then(|| format!("#{},{}", p.x, p.y))
+}
+
+/// The Dynamic Input options menu (DYNPROMPT): Down Arrow at a prompt with keywords lists them
+/// at the cursor; the arrows move the highlight and Enter or a click sends the keyword.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OptionsMenu {
+    /// The prompt's keywords, as they were when the menu opened.
+    pub keywords: Vec<String>,
+    /// The highlighted keyword.
+    pub index: usize,
+}
+
+impl OptionsMenu {
+    /// The menu for a prompt's keywords, or `None` when it has none.
+    pub fn open(keywords: &[String]) -> Option<Self> {
+        (!keywords.is_empty()).then(|| OptionsMenu { keywords: keywords.to_vec(), index: 0 })
+    }
+    /// Move the highlight down (`step` = 1) or up (-1), wrapping around.
+    pub fn step(&mut self, step: isize) {
+        let n = self.keywords.len();
+        if n > 0 {
+            self.index = (self.index % n).checked_add_signed(step).unwrap_or(n - 1) % n;
+        }
+    }
+    /// The highlighted keyword.
+    pub fn current(&self) -> Option<&str> {
+        self.keywords.get(self.index).map(String::as_str)
+    }
+    /// Whether the menu still belongs to a prompt with these keywords (it closes when the prompt
+    /// moves on).
+    pub fn fits(&self, keywords: &[String]) -> bool {
+        self.keywords == keywords
+    }
 }
 
 #[cfg(test)]
@@ -244,12 +295,46 @@ mod tests {
         let base = Vec2::new(1.0, 1.0);
         let f = second_point(base);
         let e = parse("5<", &f).unwrap();
-        assert!(close(Some(constrain(&e, &f, Vec2::new(1.0, 100.0))), Vec2::new(1.0, 6.0)));
+        assert!(close(Some(constrain(&e, &f, Vec2::new(1.0, 100.0), false)), Vec2::new(1.0, 6.0)));
         let e = parse("3,", &f).unwrap();
-        assert_eq!(constrain(&e, &f, Vec2::new(-7.0, 9.0)), Vec2::new(4.0, 9.0));
+        assert_eq!(constrain(&e, &f, Vec2::new(-7.0, 9.0), false), Vec2::new(4.0, 9.0));
         // Still typing the first value: nothing is locked yet.
         let e = parse("3", &f).unwrap();
-        assert_eq!(constrain(&e, &f, Vec2::new(-7.0, 9.0)), Vec2::new(-7.0, 9.0));
+        assert_eq!(constrain(&e, &f, Vec2::new(-7.0, 9.0), false), Vec2::new(-7.0, 9.0));
+    }
+
+    #[test]
+    fn tab_locks_the_second_value_and_pins_the_cursor() {
+        let base = Vec2::new(1.0, 1.0);
+        let f = second_point(base);
+        // Only once both values are typed.
+        assert!(!can_lock_second("5", &f));
+        assert!(!can_lock_second("5<", &f));
+        assert!(can_lock_second("5<90", &f));
+        assert!(can_lock_second("3,4", &f));
+        let e = parse("5<90", &f).unwrap();
+        // Unlocked, the typed angle doesn't hold the cursor; locked, the cursor sits on the point.
+        assert!(close(Some(constrain(&e, &f, Vec2::new(100.0, 1.0), false)), Vec2::new(6.0, 1.0)));
+        assert!(close(Some(constrain(&e, &f, Vec2::new(100.0, 1.0), true)), Vec2::new(1.0, 6.0)));
+        let e = parse("3,4", &f).unwrap();
+        assert_eq!(constrain(&e, &f, Vec2::new(-7.0, 9.0), true), Vec2::new(4.0, 5.0));
+    }
+
+    #[test]
+    fn options_menu_cycles_the_keywords() {
+        assert_eq!(OptionsMenu::open(&[]), None);
+        let kws: Vec<String> = ["3P", "2P", "Ttr"].iter().map(|s| s.to_string()).collect();
+        let mut m = OptionsMenu::open(&kws).unwrap();
+        assert_eq!(m.current(), Some("3P"));
+        m.step(1);
+        assert_eq!(m.current(), Some("2P"));
+        m.step(1);
+        m.step(1);
+        assert_eq!(m.current(), Some("3P"), "wraps past the last");
+        m.step(-1);
+        assert_eq!(m.current(), Some("Ttr"), "wraps before the first");
+        assert!(m.fits(&kws));
+        assert!(!m.fits(&kws[..2]));
     }
 
     #[test]
@@ -277,6 +362,79 @@ mod tests {
         let e = parse("40<90", &f).unwrap();
         let t = complete(&e, &f, Vec2::ZERO, other_last).unwrap();
         assert!(close(cadcraft_engine::prompt::parse_point(&t, other_last), Vec2::new(0.0, 100.0)));
+    }
+
+    fn run_frame(app: &mut crate::CadApp, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        out.textures_delta.clear();
+    }
+
+    fn key(key: egui::Key) -> Vec<egui::Event> {
+        let m = egui::Modifiers::NONE;
+        vec![
+            egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m },
+            egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: m },
+        ]
+    }
+
+    #[test]
+    fn down_arrow_lists_the_options_and_enter_or_a_click_picks_one() {
+        let mut app = crate::CadApp::new(cadcraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        run_frame(&mut app, &ctx, Vec::new());
+        let center = app.canvas.rect.map_or(egui::pos2(700.0, 450.0), |r| r.center());
+        let hover = vec![egui::Event::PointerMoved(center)];
+        app.cmdline("circle");
+        let kws = app.session.current_prompt().unwrap().keywords;
+        assert!(kws.len() >= 2, "{kws:?}");
+        run_frame(&mut app, &ctx, hover.clone());
+        run_frame(&mut app, &ctx, key(egui::Key::ArrowDown));
+        assert_eq!(app.cmd.options.as_ref().and_then(|m| m.current()), kws.first().map(String::as_str));
+        run_frame(&mut app, &ctx, key(egui::Key::ArrowDown));
+        assert_eq!(app.cmd.options.as_ref().map(|m| m.index), Some(1));
+        // Escape closes the menu and leaves the command running.
+        run_frame(&mut app, &ctx, key(egui::Key::Escape));
+        assert!(app.cmd.options.is_none() && app.session.running.is_some());
+        // Down, Down, Enter: the second option answers the prompt.
+        run_frame(&mut app, &ctx, key(egui::Key::ArrowDown));
+        run_frame(&mut app, &ctx, key(egui::Key::ArrowDown));
+        run_frame(&mut app, &ctx, key(egui::Key::Enter));
+        assert!(app.cmd.options.is_none());
+        let after = app.session.current_prompt().map(|p| p.message).unwrap_or_default();
+        assert!(app.session.running.is_some(), "the option leads to its next prompt");
+        assert_ne!(after, "", "{after}");
+
+        // A click on a row picks it.
+        app.session.cancel();
+        app.cmdline("circle");
+        run_frame(&mut app, &ctx, hover);
+        run_frame(&mut app, &ctx, key(egui::Key::ArrowDown));
+        run_frame(&mut app, &ctx, Vec::new());
+        let (row, kw) = app.cmd.option_rows.get(1).cloned().expect("the menu is drawn at the cursor");
+        assert_eq!(Some(&kw), kws.get(1));
+        let at = row.center();
+        let click = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        run_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at)]);
+        run_frame(&mut app, &ctx, vec![click(true)]);
+        run_frame(&mut app, &ctx, vec![click(false)]);
+        assert!(app.cmd.options.is_none());
+        assert_eq!(app.session.current_prompt().map(|p| p.message), Some(after), "same option, same next prompt");
+        assert!(app.session.doc().unwrap().model.iter().next().is_none(), "the click placed no point");
+
+        // DYNPROMPT = 0: Down Arrow is left to the history.
+        app.session.cancel();
+        app.session.settings.dynprompt = false;
+        app.cmdline("circle");
+        run_frame(&mut app, &ctx, key(egui::Key::ArrowDown));
+        assert!(app.cmd.options.is_none());
     }
 
     #[test]

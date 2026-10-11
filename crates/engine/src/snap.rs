@@ -224,6 +224,12 @@ pub(crate) fn gather(
                     cands.push((mode::INS, i.insert.xy()));
                     cands.extend(i.attribs.iter().filter(|a| !a.invisible).map(|a| (mode::INS, a.text.justify_point())));
                 }
+                EntityKind::AttDef(a) => cands.push((mode::INS, a.text.justify_point())),
+                // A multileader: its text's insertion point, or its block content's.
+                EntityKind::MLeader(m) => {
+                    cands.extend(m.text.iter().map(|t| (mode::INS, t.insert.xy())));
+                    cands.extend(m.block.iter().map(|b| (mode::INS, b.insert.xy())));
+                }
                 _ => {}
             }
         }
@@ -436,11 +442,15 @@ impl Sink<'_> {
             }
             self.near.push(p);
         }
-        if osmode & mode::GCEN != 0
-            && let EntityKind::LwPolyline(pl) = kind
-            && pl.closed
-        {
-            let pts = cadcraft_geom::Polyline { vertices: pl.vertices.clone(), closed: true }.tessellate(self.aperture / 10.0);
+        if osmode & mode::GCEN != 0 {
+            // The centroid of the area a closed polyline or spline encloses.
+            let pts = match kind {
+                EntityKind::LwPolyline(pl) if pl.closed => {
+                    cadcraft_geom::Polyline { vertices: pl.vertices.clone(), closed: true }.tessellate(self.aperture / 10.0)
+                }
+                EntityKind::Spline(s) if s.closed => s.tessellate(1e-3),
+                _ => Vec::new(),
+            };
             if let Some(c) = centroid(&pts) {
                 self.cands.push((mode::GCEN, at(c)));
             }

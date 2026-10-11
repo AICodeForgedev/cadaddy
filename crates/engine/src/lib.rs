@@ -330,6 +330,9 @@ pub struct Settings {
     /// DYNPICOORDS = 1: second and next points typed into Dynamic Input are absolute instead of
     /// relative to the last point (the default).
     pub dynpi_absolute: bool,
+    /// DYNPROMPT: Dynamic Input shows the prompt beside the cursor, and Down Arrow opens the
+    /// prompt's options there (on by default).
+    pub dynprompt: bool,
     pub lwdisplay: bool,
     pub transparency_display: bool,
     pub selection_cycling: bool,
@@ -386,6 +389,7 @@ impl Default for Settings {
             dynmode: true,
             dynpi_cartesian: false,
             dynpi_absolute: false,
+            dynprompt: true,
             lwdisplay: false,
             transparency_display: false,
             selection_cycling: false,

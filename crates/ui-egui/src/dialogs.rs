@@ -115,6 +115,8 @@ fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     ui.radio_value(&mut s.dynpi_absolute, false, crate::tl!("Relative"));
                     ui.radio_value(&mut s.dynpi_absolute, true, crate::tl!("Absolute"));
                 });
+                // DYNPROMPT: the prompt and its options (Down Arrow) beside the cursor.
+                ui.checkbox(&mut s.dynprompt, crate::tl!("Show command prompting near the crosshairs"));
             });
         });
         ui.checkbox(&mut s.orthomode, crate::tl!("Ortho (F8)"));
