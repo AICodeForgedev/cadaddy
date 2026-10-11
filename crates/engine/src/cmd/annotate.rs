@@ -1,6 +1,7 @@
 //! Dimensions and leaders: DIMLINEAR, DIMALIGNED, DIMRADIUS, DIMDIAMETER, DIMANGULAR, DIMARC,
 //! DIMORDINATE, DIMCONTINUE, DIMBASELINE, QDIM, DIM (smart), MLEADER, LEADER, DIMOVERRIDE,
-//! DIMREASSOCIATE / DIMDISASSOCIATE, DIMTEDIT, DIMSPACE.
+//! DIMREASSOCIATE / DIMDISASSOCIATE, DIMTEDIT, DIMSPACE; DIMEDIT, DIMJOGGED, DIMJOGLINE,
+//! DIMBREAK and DIMINSPECT in `annotate_dimedit.rs`.
 
 use cadcraft_doc::{AssocSnap, DimAssoc, DimKind, Dimension, EntityKind, Handle, MLeader, MText, Prim};
 use cadcraft_geom::{Segment, Vec2, Vec3};
@@ -106,6 +107,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Dimension", "Dimension Space"])
             .params("{base: hex, handles: [hex], spacing?: number (default DIMDLI)}"),
     ]
+    .into_iter()
+    .chain(dimedit::specs())
+    .collect()
 }
 
 fn style(s: &Session) -> String {
@@ -129,6 +133,7 @@ fn dim(s: &Session, kind: DimKind, defpt: Vec2, p13: Vec2, p14: Vec2, p15: Vec2,
         block: None,
         overrides: s.doc().map(|d| d.dim_overrides()).unwrap_or_default(),
         assoc: Vec::new(),
+        marks: Default::default(),
     })
 }
 
@@ -371,6 +376,7 @@ fn chained(s: &Session, prev: &Dimension, next: Vec2, baseline: bool) -> EntityK
         text: String::new(),
         block: None,
         assoc: Vec::new(),
+        marks: Default::default(),
         user_text_pos: false,
         ..prev.clone()
     })
@@ -1777,6 +1783,9 @@ impl Interactive for MLeaderM {
 
 #[path = "annotate_tedit.rs"]
 mod tedit;
+
+#[path = "annotate_dimedit.rs"]
+mod dimedit;
 
 #[cfg(test)]
 #[path = "annotate_tests.rs"]

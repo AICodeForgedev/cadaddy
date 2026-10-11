@@ -393,6 +393,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 block: t.s(2).filter(|s| !s.is_empty()),
                 overrides: Default::default(),
                 assoc: Vec::new(),
+                marks: Default::default(),
             })
         }
         "LEADER" => EntityKind::Leader(Leader {
@@ -927,6 +928,16 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
             if let Some(center) = crate::dxf_ext::read_arclen(tags) {
                 dm.kind = DimKind::ArcLength;
                 dm.p15 = center;
+            }
+            dm.marks = crate::dxf_ext::read_marks(tags);
+            // Group 52: the extension lines' angle relative to the dimension line (DIMEDIT Oblique).
+            let base = match dm.kind {
+                DimKind::Linear { rotation } => Some(rotation),
+                DimKind::Aligned => Some((dm.p14.xy() - dm.p13.xy()).angle()),
+                _ => None,
+            };
+            if let (Some(base), Some(o)) = (base, T(tags).f(52).filter(|o| o.is_finite() && o.rem_euclid(180.0) != 0.0)) {
+                dm.marks.oblique = Some(cadcraft_geom::norm_angle(base + o.to_radians()));
             }
         }
         ("ACAD_TABLE", EntityKind::Table(_)) => {

@@ -317,6 +317,7 @@ fn lin_dim() -> cadcraft_doc::Dimension {
         block: None,
         overrides: Default::default(),
         assoc: Vec::new(),
+        marks: Default::default(),
     }
 }
 

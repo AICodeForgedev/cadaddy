@@ -190,9 +190,18 @@ fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
     if !dm.assoc.is_empty() {
         ours.extend(dxf_ext::assoc_xdata(&dm.assoc));
     }
+    ours.extend(dxf_ext::marks_xdata(&dm.marks));
     if !ours.is_empty() {
         w.s(1001, dxf_ext::APP);
         w.xdata(ours);
+    }
+}
+
+/// Group 52 of a linear or aligned dimension with oblique extension lines: their angle less the
+/// dimension line's (`base`), in degrees.
+fn oblique_52(w: &mut W, dm: &Dimension, base: f64) {
+    if let Some(a) = dm.marks.oblique.filter(|a| a.is_finite()) {
+        w.f(52, cadcraft_geom::norm_angle(a - base).to_degrees());
     }
 }
 
@@ -695,12 +704,16 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     w.p(13, dm.p13);
                     w.p(14, dm.p14);
                     w.f(50, rotation.to_degrees());
+                    oblique_52(w, dm, rotation);
                     w.s(100, "AcDbRotatedDimension");
                 }
                 DimKind::Aligned | DimKind::ArcLength => {
                     w.s(100, "AcDbAlignedDimension");
                     w.p(13, dm.p13);
                     w.p(14, dm.p14);
+                    if matches!(dm.kind, DimKind::Aligned) {
+                        oblique_52(w, dm, (dm.p14.xy() - dm.p13.xy()).angle());
+                    }
                 }
                 DimKind::Radius => {
                     w.s(100, "AcDbRadialDimension");

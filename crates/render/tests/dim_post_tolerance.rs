@@ -21,6 +21,7 @@ fn text(vars: serde_json::Value) -> (String, String) {
         block: None,
         overrides: Default::default(),
         assoc: Vec::new(),
+        marks: Default::default(),
     };
     let mut st = DimStyle::default();
     let rejected = st.apply_fields(vars.as_object().unwrap());

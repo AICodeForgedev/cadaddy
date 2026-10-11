@@ -93,6 +93,7 @@ fn sample() -> Drawing {
             block: None,
             overrides: Default::default(),
             assoc: Vec::new(),
+            marks: Default::default(),
         }),
     )
     .unwrap();
@@ -576,6 +577,7 @@ fn dim(kind: DimKind, p13: Vec3, p14: Vec3) -> Dimension {
         block: None,
         overrides: Default::default(),
         assoc: Vec::new(),
+        marks: Default::default(),
     }
 }
 

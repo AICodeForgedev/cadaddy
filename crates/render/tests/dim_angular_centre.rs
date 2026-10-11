@@ -22,6 +22,7 @@ fn dim(kind: DimKind) -> Dimension {
         block: None,
         overrides: Default::default(),
         assoc: Vec::new(),
+        marks: Default::default(),
     }
 }
 

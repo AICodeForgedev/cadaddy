@@ -12,6 +12,9 @@ use cadcraft_geom::{Arc, Vec2, ccw_sweep};
 
 use crate::units::{NumFormat, format_angle, format_decimal, format_linear};
 
+/// Most DIMBREAK gaps drawn per dimension.
+const MAX_BREAKS: usize = 1000;
+
 /// What a dimension line primitive is (for DIMCLRD / DIMCLRE colours).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineRole {
@@ -57,6 +60,26 @@ impl DimGeometry {
             self.lines.push(l);
             self.line_roles.push(LineRole::Ext);
         }
+    }
+    /// Leave out the parts of the lines (of `role`, or all) within `r` of `c`.
+    fn cut(&mut self, c: Vec2, r: f64, role: Option<LineRole>) {
+        if !(r > 0.0 && r.is_finite() && c.is_finite()) {
+            return;
+        }
+        let mut lines = Vec::with_capacity(self.lines.len());
+        let mut roles = Vec::with_capacity(self.lines.len());
+        let mut ext2 = Vec::new();
+        for (i, (l, rl)) in self.lines.iter().zip(&self.line_roles).enumerate() {
+            let pieces = if role.is_none_or(|x| x == *rl) { cut_polyline(l, c, r) } else { vec![l.clone()] };
+            for p in pieces {
+                if self.ext2_lines.contains(&i) {
+                    ext2.push(lines.len());
+                }
+                lines.push(p);
+                roles.push(*rl);
+            }
+        }
+        (self.lines, self.line_roles, self.ext2_lines) = (lines, roles, ext2);
     }
     /// Extension line 1 or 2 (`second`).
     fn ext_n(&mut self, l: Option<Vec<Vec2>>, second: bool) {
@@ -263,6 +286,44 @@ pub fn arrowhead(kind: Arrowhead, tip: Vec2, dir: Vec2, size: f64) -> ArrowGeom 
     g
 }
 
+/// The pieces of a polyline outside the circle (`c`, `r`).
+fn cut_polyline(l: &[Vec2], c: Vec2, r: f64) -> Vec<Vec<Vec2>> {
+    let mut out: Vec<Vec<Vec2>> = Vec::new();
+    let mut keep = |a: Vec2, b: Vec2| {
+        if a.dist(b) <= 1e-12 {
+            return;
+        }
+        match out.last_mut() {
+            Some(last) if last.last() == Some(&a) => last.push(b),
+            _ => out.push(vec![a, b]),
+        }
+    };
+    for w in l.windows(2) {
+        let (p, q) = (w[0], w[1]);
+        let dv = q - p;
+        let (qa, f) = (dv.dot(dv), p - c);
+        let (qb, qc) = (2.0 * f.dot(dv), f.dot(f) - r * r);
+        let disc = qb * qb - 4.0 * qa * qc;
+        if qa < 1e-24 || disc.is_nan() || disc <= 0.0 {
+            keep(p, q);
+            continue;
+        }
+        let sq = disc.sqrt();
+        let (t0, t1) = ((-qb - sq) / (2.0 * qa), (-qb + sq) / (2.0 * qa));
+        if t1 <= 0.0 || t0 >= 1.0 {
+            keep(p, q);
+            continue;
+        }
+        if t0 > 0.0 {
+            keep(p, p + dv * t0);
+        }
+        if t1 < 1.0 {
+            keep(p + dv * t1, q);
+        }
+    }
+    out
+}
+
 /// A closed filled arrowhead at `tip` pointing along `dir` (unit), as one triangle.
 pub fn arrow(tip: Vec2, dir: Vec2, size: f64) -> Vec<Vec2> {
     let back = tip - dir * size;
@@ -331,7 +392,15 @@ fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str) -> String 
         let alt = format_linear(v * st.alt_factor, &af).1;
         s += &format!(" [{}]", post(&st.alt_post, &alt));
     }
-    apply_override(&s, d)
+    inspected(apply_override(&s, d), d)
+}
+
+/// DIMINSPECT: the label and the rate either side of the value, two spaces apart.
+fn inspected(value: String, d: &Dimension) -> String {
+    match &d.marks.inspect {
+        Some(ins) => [ins.label.as_str(), value.as_str(), ins.rate.as_str()].iter().filter(|p| !p.is_empty()).copied().collect::<Vec<_>>().join("  "),
+        None => value,
+    }
 }
 
 /// `\H` code for stacked tolerance parts (DIMTFAC relative to the 70% stack scale).
@@ -445,11 +514,19 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 _ => (p2 - p1).normalized(),
             };
             let dir = if dir == Vec2::ZERO || !dir.is_finite() { Vec2::X } else { dir };
-            let foot = |p: Vec2| on + dir * (p - on).dot(dir);
+            // DIMEDIT Oblique: extension lines at their own angle (not along the dimension line).
+            let oblique = d.marks.oblique.map(Vec2::from_angle).filter(|e| e.is_finite() && e.cross(dir).abs() > 1e-6);
+            let foot = |p: Vec2| match oblique {
+                Some(e) => p + e * ((on - p).cross(dir) / e.cross(dir)),
+                None => on + dir * (p - on).dot(dir),
+            };
             let f1 = foot(p1);
             let f2 = foot(p2);
-            let meas = f1.dist(f2);
+            // The measurement is along the dimension direction whatever the extension lines do.
+            let meas = (p2 - p1).dot(dir).abs();
             g.mtext = linear_text(meas, d, st, "");
+            // From here on: the length drawn between the extension lines.
+            let meas = f1.dist(f2);
             if !st.suppress_ext1 {
                 g.ext_n(ext_line(p1, f1, st, k), false);
             }
@@ -607,6 +684,47 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                     g.dim(vec![base, text_mid + side * (tw / 2.0 + gap)]);
                 }
             }
+            // DIMJOGLINE: a zigzag in the dimension line, 1.5 text heights tall.
+            if let Some(j) = d.marks.jog_line {
+                let at = f1 + u * (j.xy() - f1).dot(u);
+                let h = 1.5 * th;
+                if at.is_finite() && h > 0.0 {
+                    let r = h / 2.0;
+                    g.cut(at, r, Some(LineRole::Dim));
+                    g.dim(vec![at - u * r, at - u * (r / 4.0) + n * (h / 2.0), at + u * (r / 4.0) - n * (h / 2.0), at + u * r]);
+                }
+            }
+        }
+        DimKind::Radius if d.marks.jogged.is_some() => {
+            // DIMJOGGED: from the arrowhead on the arc toward the centre, a jog at DIMJOGANG,
+            // then on to the overriding centre (parallel to the first part).
+            let center = d.defpt.xy();
+            let tip = d.p15.xy();
+            let r = center.dist(tip);
+            let j = d.marks.jogged.clone().unwrap_or_default();
+            let (o, jp) = (j.center.xy(), j.jog.xy());
+            g.mtext = linear_text(r, d, st, "R");
+            let (tw, _) = measure(&g.mtext);
+            let u = (tip - center).normalized();
+            let u = if u == Vec2::ZERO || !u.is_finite() { Vec2::X } else { u };
+            let n = u.perp();
+            let h = (o - center).dot(n);
+            let ang = if st.jog_angle.is_finite() { st.jog_angle.clamp(5.0, 90.0) } else { 45.0 }.to_radians();
+            let run = h.abs() / ang.tan().max(1e-6);
+            let tj = (jp - center).dot(u).clamp(0.0, r);
+            let (j1, j2) = (center + u * (tj + run / 2.0), center + u * (tj - run / 2.0) + n * h);
+            g.dim(vec![tip, j1, j2, o]);
+            end(&mut g, blk2, tip, u);
+            let tpos = if d.user_text_pos { text_mid } else { tip + u * (asz.max(tsz) * 3.0) };
+            if tpos.dist(center) > r {
+                g.dim(vec![tip, tpos]);
+            }
+            text_angle = if st.text_outside_horizontal { 0.0 } else { readable(u.angle()) };
+            if !d.user_text_pos {
+                let x = Vec2::from_angle(text_angle);
+                let x = if x.dot(u) >= 0.0 { x } else { -x };
+                text_mid = tpos + x * (tw / 2.0 + gap);
+            }
         }
         DimKind::Radius | DimKind::Diameter => {
             let a = d.defpt.xy();
@@ -698,7 +816,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let azin = (st.angular_zero_suppression & 3) * 4;
             let txt = format_angle(sweep, st.angular_unit, st.angular_decimals, azin);
             // DIMPOST is a linear-dimension prefix/suffix; angles have their own format only.
-            g.mtext = apply_override(&txt, d);
+            g.mtext = inspected(apply_override(&txt, d), d);
             let mut pts = Vec::new();
             arc.tessellate(r * 1e-3, &mut pts);
             g.dim(pts);
@@ -786,6 +904,46 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
     if d.text_rotation != 0.0 && d.text_rotation.is_finite() {
         text_angle = d.text_rotation;
     }
+    // DIMBREAK: gaps in the dimension and extension lines.
+    for b in d.marks.breaks.iter().take(MAX_BREAKS) {
+        g.cut(b.at.xy(), b.size / 2.0, None);
+    }
+    // DIMINSPECT: a frame round the text, with separators between label, value and rate.
+    if let Some(ins) = &d.marks.inspect
+        && ins.shape < 2
+        && !g.mtext.is_empty()
+    {
+        let (w, h) = measure(&g.mtext);
+        let (x, y) = (Vec2::from_angle(text_angle), Vec2::from_angle(text_angle).perp());
+        let at = |px: f64, py: f64| text_mid + x * px + y * py;
+        let (hw, hh) = (w / 2.0 + gap, h / 2.0 + gap);
+        // Widths of the label, value and rate as laid out: the two spaces between parts measured
+        // in "x  x", the value is what the rest leaves.
+        let gap2 = (measure("x  x").0 - 2.0 * measure("x").0).max(0.0);
+        let (wl, wr) = (measure(&ins.label).0, measure(&ins.rate).0);
+        let seps = usize::from(!ins.label.is_empty()) + usize::from(!ins.rate.is_empty());
+        let wv = (w - wl - wr - gap2 * seps as f64).max(0.0);
+        let mut left = -w / 2.0;
+        if !ins.label.is_empty() {
+            left += wl;
+            g.dim(vec![at(left + gap2 / 2.0, -hh), at(left + gap2 / 2.0, hh)]);
+            left += gap2;
+        }
+        if !ins.rate.is_empty() {
+            left += wv;
+            g.dim(vec![at(left + gap2 / 2.0, -hh), at(left + gap2 / 2.0, hh)]);
+        }
+        g.dim(vec![at(-hw, hh), at(hw, hh)]);
+        g.dim(vec![at(-hw, -hh), at(hw, -hh)]);
+        for side in [-1.0, 1.0] {
+            let ends: Vec<Vec2> = if ins.shape == 0 {
+                (0..=12).map(|i| f64::from(i) * std::f64::consts::PI / 12.0).map(|a| at(side * (hw + hh * a.sin()), hh * a.cos())).collect()
+            } else {
+                vec![at(side * hw, hh), at(side * (hw + hh), 0.0), at(side * hw, -hh)]
+            };
+            g.dim(ends);
+        }
+    }
     g.value = decode_value(&cadcraft_fonts::plain_mtext(&g.mtext));
     if !g.mtext.is_empty() {
         let l = cadcraft_fonts::layout_mtext_with(&g.mtext, &params(text_mid, text_angle));
@@ -826,6 +984,7 @@ mod tests {
             block: None,
             overrides: Default::default(),
             assoc: Vec::new(),
+            marks: Default::default(),
         }
     }
 

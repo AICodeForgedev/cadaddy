@@ -22,6 +22,7 @@ fn linear(len: f64) -> Dimension {
         block: None,
         overrides: Default::default(),
         assoc: Vec::new(),
+        marks: Default::default(),
     }
 }
 

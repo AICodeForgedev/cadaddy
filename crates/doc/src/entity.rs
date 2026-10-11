@@ -412,6 +412,89 @@ pub struct Dimension {
     /// Associativity: which definition points follow which objects.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assoc: Vec<DimAssoc>,
+    /// Oblique extension lines, jogs, breaks and inspection frames.
+    #[serde(default, skip_serializing_if = "DimMarks::is_empty")]
+    pub marks: DimMarks,
+}
+
+/// What dimension edits add to a dimension's drawing: DIMEDIT Oblique, DIMJOGLINE, DIMJOGGED,
+/// DIMBREAK and DIMINSPECT.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DimMarks {
+    /// Angle (radians) of the extension lines of a linear or aligned dimension; None =
+    /// perpendicular to the dimension line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oblique: Option<f64>,
+    /// A jog on the dimension line of a linear or aligned dimension, at this point (DIMJOGLINE).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jog_line: Option<Vec3>,
+    /// A jogged radius dimension (DIMJOGGED).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jogged: Option<JoggedRadius>,
+    /// Gaps in the dimension and extension lines (DIMBREAK).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub breaks: Vec<DimBreak>,
+    /// Inspection frame, label and rate (DIMINSPECT).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inspect: Option<Inspection>,
+}
+
+impl DimMarks {
+    pub fn is_empty(&self) -> bool {
+        *self == DimMarks::default()
+    }
+
+    /// Transform the points and angles (part of [`EntityKind::transform`]).
+    fn transform(&mut self, t3: &dyn Fn(&mut Vec3), rot: f64, s: f64, mirror: bool) {
+        if let Some(a) = &mut self.oblique {
+            *a = cadcraft_geom::norm_angle(if mirror { rot - (*a - rot) } else { *a + rot });
+        }
+        if let Some(j) = &mut self.jog_line {
+            t3(j);
+        }
+        if let Some(j) = &mut self.jogged {
+            t3(&mut j.center);
+            t3(&mut j.jog);
+        }
+        for b in &mut self.breaks {
+            t3(&mut b.at);
+            b.size *= s;
+        }
+    }
+}
+
+/// The definition of a jogged radius dimension: the dimension line starts at an overriding
+/// centre and jogs on its way to the arc.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct JoggedRadius {
+    /// Where the dimension line starts instead of the true centre.
+    pub center: Vec3,
+    /// The middle of the jog.
+    pub jog: Vec3,
+}
+
+/// A gap in a dimension's lines: everything within `size / 2` of `at` is left out.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DimBreak {
+    pub at: Vec3,
+    pub size: f64,
+    /// Made by DIMBREAK Auto (recomputed by the next Auto) rather than picked by hand.
+    pub auto: bool,
+}
+
+/// An inspection dimension (DIMINSPECT).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Inspection {
+    /// Frame shape: 0 round ends, 1 angular ends, 2 none.
+    pub shape: u8,
+    /// Text left of the value ("" = none).
+    pub label: String,
+    /// Inspection rate right of the value ("" = none).
+    pub rate: String,
 }
 
 /// A dimension definition point that follows an object (associative dimensions).
@@ -1025,6 +1108,7 @@ impl EntityKind {
                 if let DimKind::Linear { rotation } = &mut d.kind {
                     *rotation = cadcraft_geom::norm_angle(*rotation + rot);
                 }
+                d.marks.transform(&t3, rot, s, mirror);
                 d.block = None;
             }
             EntityKind::MLine(ml) => {

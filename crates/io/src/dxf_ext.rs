@@ -453,6 +453,78 @@ pub(crate) fn arclen_xdata(center: cadcraft_geom::Vec3) -> Vec<Tag> {
     vec![Tag::s(1000, "ARCLEN"), Tag::s(1002, "{"), Tag::f(1010, center.x), Tag::f(1020, center.y), Tag::f(1030, center.z), Tag::s(1002, "}")]
 }
 
+/// Dimension marks as CADCraft xdata (`1000 MARKS`, `1002 {`, items, `1002 }`): `1000 JOGLINE`
+/// and a point; `1000 JOGGED`, the centre and the jog point; `1000 BREAK`, a point, `1040` size
+/// and `1070` auto; `1000 INSPECT`, `1070` shape, `1000` label and `1000` rate. Points are
+/// `1010/1020/1030`. The oblique angle is the standard group 52 instead.
+pub(crate) fn marks_xdata(m: &cadcraft_doc::DimMarks) -> Vec<Tag> {
+    let pt = |v: &mut Vec<Tag>, p: cadcraft_geom::Vec3| v.extend([Tag::f(1010, p.x), Tag::f(1020, p.y), Tag::f(1030, p.z)]);
+    let mut v = Vec::new();
+    if let Some(j) = m.jog_line {
+        v.push(Tag::s(1000, "JOGLINE"));
+        pt(&mut v, j);
+    }
+    if let Some(j) = &m.jogged {
+        v.push(Tag::s(1000, "JOGGED"));
+        pt(&mut v, j.center);
+        pt(&mut v, j.jog);
+    }
+    for b in m.breaks.iter().take(MAX_XDATA_ITEMS / 8) {
+        v.push(Tag::s(1000, "BREAK"));
+        pt(&mut v, b.at);
+        v.extend([Tag::f(1040, b.size), Tag::i(1070, i64::from(b.auto))]);
+    }
+    if let Some(i) = &m.inspect {
+        v.extend([Tag::s(1000, "INSPECT"), Tag::i(1070, i64::from(i.shape)), Tag::s(1000, i.label.clone()), Tag::s(1000, i.rate.clone())]);
+    }
+    if v.is_empty() {
+        return v;
+    }
+    let mut out = vec![Tag::s(1000, "MARKS"), Tag::s(1002, "{")];
+    out.extend(v);
+    out.push(Tag::s(1002, "}"));
+    out
+}
+
+/// The marks written by [`marks_xdata`] (no oblique angle); empty for other writers. Damaged
+/// items are skipped.
+pub(crate) fn read_marks(tags: &[Tag]) -> cadcraft_doc::DimMarks {
+    let list = xdata_list(xdata(tags, APP), "MARKS");
+    let list = list.get(..list.len().min(MAX_XDATA_ITEMS)).unwrap_or(&[]);
+    let mut m = cadcraft_doc::DimMarks::default();
+    let num = |i: usize, code: i32| list.get(i).filter(|t| t.code == code).map(Tag::f64).filter(|x| x.is_finite());
+    let point = |i: usize| Some(cadcraft_geom::Vec3::new(num(i, 1010)?, num(i + 1, 1020)?, num(i + 2, 1030)?));
+    let text = |i: usize| list.get(i).filter(|t| t.code == 1000).map(Tag::str);
+    for (i, t) in list.iter().enumerate() {
+        if t.code != 1000 {
+            continue;
+        }
+        match t.str().as_str() {
+            "JOGLINE" => m.jog_line = point(i + 1).or(m.jog_line),
+            "JOGGED" => {
+                if let (Some(center), Some(jog)) = (point(i + 1), point(i + 4)) {
+                    m.jogged = Some(cadcraft_doc::JoggedRadius { center, jog });
+                }
+            }
+            "BREAK" => {
+                let size = list.get(i + 4).filter(|t| t.code == 1040).map(Tag::f64).filter(|x| x.is_finite() && *x > 0.0);
+                let auto = list.get(i + 5).filter(|t| t.code == 1070).is_some_and(|t| t.i64() != 0);
+                if let (Some(at), Some(size)) = (point(i + 1), size) {
+                    m.breaks.push(cadcraft_doc::DimBreak { at, size, auto });
+                }
+            }
+            "INSPECT" => {
+                let shape = list.get(i + 1).filter(|t| t.code == 1070).and_then(|t| u8::try_from(t.i64()).ok()).filter(|s| *s <= 2);
+                if let (Some(shape), Some(label), Some(rate)) = (shape, text(i + 2), text(i + 3)) {
+                    m.inspect = Some(cadcraft_doc::Inspection { shape, label, rate });
+                }
+            }
+            _ => {}
+        }
+    }
+    m
+}
+
 /// The arc centre written by [`arclen_xdata`]; None for other dimensions and other writers.
 pub(crate) fn read_arclen(tags: &[Tag]) -> Option<cadcraft_geom::Vec3> {
     let list = xdata_list(xdata(tags, APP), "ARCLEN");

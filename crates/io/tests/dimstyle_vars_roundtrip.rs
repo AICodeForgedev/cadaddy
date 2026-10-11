@@ -59,6 +59,7 @@ fn dimension(overrides: serde_json::Value) -> EntityKind {
         block: None,
         overrides: overrides.as_object().cloned().unwrap_or_default(),
         assoc: Vec::new(),
+        marks: Default::default(),
     })
 }
 
