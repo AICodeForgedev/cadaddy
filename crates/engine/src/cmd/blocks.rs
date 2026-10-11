@@ -14,6 +14,7 @@ use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 mod attedit;
+mod extract;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -49,6 +50,8 @@ pub fn specs() -> Vec<CommandSpec> {
         battman::battman_spec(),
         attribs::attdisp_spec(),
         attribs::attsync_spec(),
+        extract::dataextraction_spec(),
+        extract::eattext_spec(),
     ]
 }
 
