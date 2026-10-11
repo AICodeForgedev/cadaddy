@@ -44,7 +44,7 @@ pub fn dyn_frame(app: &CadApp) -> Option<crate::dyninput::Frame> {
     if !st.dynmode || app.session.pending_window.is_some() {
         return None;
     }
-    let p = app.session.current_prompt().filter(|p| p.accept.point && !p.accept.select)?;
+    let p = app.session.current_prompt().filter(cadcraft_engine::pointmod::accepts)?;
     Some(crate::dyninput::Frame { base: p.base, cartesian: st.dynpi_cartesian, absolute: st.dynpi_absolute })
 }
 

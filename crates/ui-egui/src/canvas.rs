@@ -533,7 +533,7 @@ fn draw_tracking(p: &egui::Painter, xf: &Xf, acquired: &[snap::tracking::Acquire
 /// `Session::snap_cursor`: object snaps, acquiring tracking points, grid, tracking paths, ortho).
 fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf, ctx: &egui::Context) -> Vec2 {
     let prompt = app.session.current_prompt();
-    let wants_point = prompt.as_ref().is_some_and(|p| p.accept.point && !p.accept.select);
+    let wants_point = prompt.as_ref().is_some_and(cadcraft_engine::pointmod::accepts);
     let base = prompt.as_ref().and_then(|p| p.base);
     let deferred = prompt.as_ref().is_some_and(|p| p.deferred);
     app.canvas.snap = None;
@@ -1106,7 +1106,7 @@ fn override_cursor(app: &mut CadApp, raw: Vec2, xf: &Xf) {
     let ap = app.session.settings.aperture / xf.scale;
     let cycle = snap_cycle(app, raw, ap);
     let prompt = app.session.current_prompt();
-    let wants_point = prompt.as_ref().is_some_and(|p| p.accept.point && !p.accept.select);
+    let wants_point = prompt.as_ref().is_some_and(cadcraft_engine::pointmod::accepts);
     if (over.is_none() && cycle.is_none()) || !wants_point || app.session.pending_window.is_some() {
         return;
     }

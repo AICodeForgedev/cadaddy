@@ -1937,6 +1937,7 @@ enum OffsetAsk {
 
 struct OffsetM {
     dist: Option<f64>,
+    distance_first: Option<Vec2>,
     through: bool,
     picked: Option<Handle>,
     ask: Option<OffsetAsk>,
@@ -1949,7 +1950,17 @@ struct OffsetM {
 impl OffsetM {
     fn new(s: &Session) -> Self {
         let _ = s;
-        OffsetM { dist: None, through: false, picked: None, ask: None, multiple: false, undo: Vec::new() }
+        OffsetM { dist: None, distance_first: None, through: false, picked: None, ask: None, multiple: false, undo: Vec::new() }
+    }
+
+    fn set_distance(&mut self, s: &mut Session, distance: f64) -> Result<()> {
+        if !(distance.is_finite() && distance > 0.0) {
+            return Err(EngineError::Other("Requires a positive distance.".into()));
+        }
+        s.doc_mut()?.header.set_f64("OFFSETDIST", distance);
+        self.dist = Some(distance);
+        self.distance_first = None;
+        Ok(())
     }
 }
 
@@ -1993,6 +2004,12 @@ impl Interactive for OffsetM {
             None => {}
         }
         let last = s.doc().map(|d| d.header.f64("OFFSETDIST", -1.0)).unwrap_or(-1.0);
+        if self.dist.is_none()
+            && !self.through
+            && let Some(base) = self.distance_first
+        {
+            return Prompt::new("Specify second point", Accept::POINT).base(base);
+        }
         match (self.dist.is_some() || self.through, self.picked) {
             (false, _) => Prompt::new("Specify offset distance", Accept::POINT_OR_NUMBER).kw(&["Through", "Erase", "Layer"]).default(if last < 0.0 {
                 "Through".to_string()
@@ -2037,14 +2054,26 @@ impl Interactive for OffsetM {
         if self.dist.is_none() && !self.through {
             match i {
                 Input::Text(t) => {
-                    let d = number(&t).filter(|d| *d > 0.0).ok_or_else(|| EngineError::Other("Requires a positive distance.".into()))?;
-                    self.dist = Some(d);
-                    s.doc_mut()?.header.set_f64("OFFSETDIST", d);
+                    let d = number(&t).ok_or_else(|| EngineError::Other("Requires a positive distance.".into()))?;
+                    self.set_distance(s, d)?;
                 }
-                Input::Keyword(k) if k == "Through" => self.through = true,
+                Input::Point(p) => {
+                    if !p.is_finite() {
+                        return Err(EngineError::Other("Invalid point.".into()));
+                    }
+                    match self.distance_first {
+                        Some(base) => self.set_distance(s, base.dist(p))?,
+                        None => self.distance_first = Some(p),
+                    }
+                }
+                Input::Keyword(k) if k == "Through" => {
+                    self.through = true;
+                    self.distance_first = None;
+                }
                 Input::Keyword(k) if k == "Erase" => self.ask = Some(OffsetAsk::Erase),
                 Input::Keyword(k) if k == "Layer" => self.ask = Some(OffsetAsk::Layer),
                 Input::Enter => {
+                    self.distance_first = None;
                     let last = s.doc()?.header.f64("OFFSETDIST", -1.0);
                     if last > 0.0 {
                         self.dist = Some(last);
@@ -2138,6 +2167,11 @@ impl Interactive for OffsetM {
         }
     }
     fn preview(&self, s: &Session, c: Vec2) -> Vec<EntityKind> {
+        if let Some(base) = self.distance_first
+            && c.is_finite()
+        {
+            return vec![line(base, c)];
+        }
         let (Some(h), Ok(d)) = (self.picked, s.doc()) else { return Vec::new() };
         let Some(e) = d.entity(h) else { return Vec::new() };
         let dist = match self.dist {
