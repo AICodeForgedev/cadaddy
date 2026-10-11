@@ -66,6 +66,7 @@
 	Batch Publish	Пакетне публікування
 	Binary assets added	Додані двійкові ресурси
 	Binary assets removed	Видалені двійкові ресурси
+	Bind...	Вбудувати...
 	Blend	Плавне з'єднання
 	Block	Блок
 	Block Attribute Manager...	Диспетчер атрибутів блоків...
@@ -157,6 +158,7 @@
 	Cyan	Блакитний
 	Cylinder	Циліндр
 	DWG	DWG
+	DWG Reference...	Посилання на DWG...
 	DXF	DXF
 	Dark	Темна
 	Data Extraction...	Вилучення даних...
@@ -286,6 +288,8 @@
 	Extend	Подовжити
 	Extension	Продовження
 	Extents	За межами об'єктів
+	External Reference	Зовнішнє посилання
+	External References	Зовнішні посилання
 	Extrude	Видавити
 	File	Файл
 	File Tab	Вкладка файлу
@@ -526,6 +530,7 @@
 	Open (⌘O)	Відкрити (⌘O)
 	Open Sample Drawing	Відкрити зразок креслення
 	Open sample drawing	Відкрити зразок креслення
+	Open Xref	Відкрити зовнішнє посилання
 	Open...	Відкрити...
 	Operator:	Оператор:
 	Orbit	Орбіта

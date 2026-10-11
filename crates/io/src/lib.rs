@@ -7,6 +7,7 @@ mod dxf_image;
 mod dxf_mleader;
 mod dxf_read;
 mod dxf_write;
+mod dxf_xref;
 pub mod pdf;
 pub mod svg;
 

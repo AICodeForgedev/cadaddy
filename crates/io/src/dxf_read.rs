@@ -1473,7 +1473,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
     let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
-    let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Entity)>, bool)> = Vec::new();
+    let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Entity)>, i64)> = Vec::new();
     let mut layout_objs: Vec<(String, u32, String, PageSetup)> = Vec::new();
     let mut entities = Vec::new();
     let mut objs = Objects::default();
@@ -1496,7 +1496,8 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
                         let name = t.s(2).unwrap_or_default();
                         let base = t.p(10);
                         let description = t.s(4).unwrap_or_default();
-                        let xref = t.i(70).unwrap_or(0) & 4 != 0;
+                        // Block flags: 4 xref, 8 overlay.
+                        let xref = t.i(70).unwrap_or(0) & 12;
                         let mut j = i + 1;
                         while recs.get(j).is_some_and(|(k, _)| k != "ENDBLK") {
                             j += 1;
@@ -1579,11 +1580,13 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         if let Some(&(units, explodable)) = rx.block_props.get(&up) {
             (b.units, b.explodable) = (units, explodable);
         }
-        if xref {
+        if xref & 4 != 0 {
             b.xref_path = Some(String::new());
-        }
-        for (_, _, e) in ents {
-            b.entities.push(e);
+            b.xref_overlay = xref & 8 != 0;
+        } else {
+            for (_, _, e) in ents {
+                b.entities.push(e);
+            }
         }
         // Array parameters, with the block names the items use (other programs may rename
         // anonymous blocks); dropped when the items no longer match them.

@@ -53,6 +53,9 @@ pub fn specs() -> Vec<CommandSpec> {
         extract::dataextraction_spec(),
         extract::eattext_spec(),
     ]
+    .into_iter()
+    .chain(xref::specs())
+    .collect()
 }
 
 fn valid_block_name(n: &str) -> bool {
@@ -418,6 +421,7 @@ impl BlockM {
 }
 
 mod insert_file;
+pub(crate) mod xref;
 
 /// Where the command-line INSERT is in its prompt sequence.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

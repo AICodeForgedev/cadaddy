@@ -1400,6 +1400,9 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
     paper_layouts.sort_by_key(|l| l.tab_order);
     let ms_br = w.h();
+    // Xrefs are saved as references: without their objects and the symbols that came with them.
+    let saved_view = crate::dxf_xref::saved_view(d);
+    let d = saved_view.as_ref().unwrap_or(d);
     let ps_brs: Vec<(String, String, &Layout)> = paper_layouts
         .iter()
         .enumerate()
@@ -2246,18 +2249,23 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
 /// Xref blocks (DXF Reference, BLOCK): bit 4 of group 70 and the external drawing's path in
 /// group 1, set on the written BLOCK records of blocks that have an `xref_path`.
 fn mark_xrefs(tags: &mut [Tag], d: &Drawing) {
-    let xrefs: HashMap<String, &str> = d.blocks.values().filter_map(|b| Some((b.name.to_ascii_uppercase(), b.xref_path.as_deref()?))).collect();
+    // Overlays add bit 8.
+    let xrefs: HashMap<String, (&str, i64)> = d
+        .blocks
+        .values()
+        .filter_map(|b| Some((b.name.to_ascii_uppercase(), (b.xref_path.as_deref()?, if b.xref_overlay { 12 } else { 4 }))))
+        .collect();
     if xrefs.is_empty() {
         return;
     }
     // Inside a BLOCK record: the path once its name (2) says it is an xref.
-    let mut block: Option<Option<&str>> = None;
+    let mut block: Option<Option<(&str, i64)>> = None;
     for t in tags.iter_mut() {
         match (t.code, block) {
             (0, _) => block = (t.str() == "BLOCK").then_some(None),
             (2, Some(None)) => block = Some(xrefs.get(&t.str().to_ascii_uppercase()).copied()),
-            (70, Some(Some(_))) => *t = Tag::i(70, t.i64() | 4),
-            (1, Some(Some(p))) => *t = Tag::s(1, p),
+            (70, Some(Some((_, flags)))) => *t = Tag::i(70, t.i64() | flags),
+            (1, Some(Some((p, _)))) => *t = Tag::s(1, p),
             _ => {}
         }
     }

@@ -645,6 +645,15 @@ pub struct Block {
     pub entities: EntityStore,
     #[serde(default)]
     pub description: String,
+    /// An xref (`xref_path`: the referenced drawing's path as the user gave it, absolute,
+    /// relative to the host drawing's folder or a bare file name) attached as an overlay (DXF
+    /// BLOCK flag 8): not loaded when the host drawing is itself referenced by another drawing.
+    /// An xref's objects come from that file and are never saved with the host.
+    #[serde(default)]
+    pub xref_overlay: bool,
+    /// Whether an xref's objects are loaded, and why not (session state; not saved).
+    #[serde(default)]
+    pub xref_status: XrefStatus,
     /// Anonymous (`*D12`, `*U3`…) blocks are generated geometry.
     #[serde(default)]
     pub anonymous: bool,
@@ -659,6 +668,35 @@ pub struct Block {
     pub array: Option<crate::ArrayParams>,
 }
 
+/// The load state of an external reference.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum XrefStatus {
+    /// Not loaded yet (read from a file, not resolved).
+    #[default]
+    NotLoaded,
+    Loaded,
+    /// Unloaded by the user (XREF Unload): kept, not drawn.
+    Unloaded,
+    /// The referenced file was not found.
+    NotFound,
+    /// The file was found but could not be loaded (unreadable, too large, a circular reference).
+    Unresolved,
+}
+
+impl XrefStatus {
+    /// The status as the External References palette shows it.
+    pub fn label(self) -> &'static str {
+        match self {
+            XrefStatus::NotLoaded => "Not loaded",
+            XrefStatus::Loaded => "Loaded",
+            XrefStatus::Unloaded => "Unloaded",
+            XrefStatus::NotFound => "Not Found",
+            XrefStatus::Unresolved => "Unresolved",
+        }
+    }
+}
+
 impl Block {
     pub fn new(name: &str) -> Self {
         Block {
@@ -666,6 +704,8 @@ impl Block {
             annotative: false,
             base: Vec3::ZERO,
             entities: EntityStore::new(),
+            xref_overlay: false,
+            xref_status: XrefStatus::NotLoaded,
             description: String::new(),
             anonymous: name.starts_with('*'),
             xref_path: None,
