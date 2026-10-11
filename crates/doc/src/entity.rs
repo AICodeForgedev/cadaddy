@@ -786,6 +786,9 @@ pub struct Table {
 fn default_text_h() -> f64 {
     0.18
 }
+mod region;
+pub use region::*;
+
 /// A raw DXF group: kept for round-tripping entities we do not model.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RawTag {
@@ -824,6 +827,7 @@ pub enum EntityKind {
     Solid(Solid),
     Trace(Solid),
     Face3d(Face3d),
+    Region(Region),
     Viewport(Viewport),
     Image(Image),
     Wipeout(Wipeout),
@@ -877,6 +881,7 @@ impl EntityKind {
             EntityKind::Solid(_) => "2D Solid",
             EntityKind::Trace(_) => "Trace",
             EntityKind::Face3d(_) => "3D Face",
+            EntityKind::Region(_) => "Region",
             EntityKind::Viewport(_) => "Viewport",
             EntityKind::Image(_) => "Raster Image",
             EntityKind::Wipeout(_) => "Wipeout",
@@ -911,6 +916,7 @@ impl EntityKind {
             EntityKind::Solid(_) => "SOLID",
             EntityKind::Trace(_) => "TRACE",
             EntityKind::Face3d(_) => "3DFACE",
+            EntityKind::Region(_) => "REGION",
             EntityKind::Viewport(_) => "VIEWPORT",
             EntityKind::Image(_) => "IMAGE",
             EntityKind::Wipeout(_) => "WIPEOUT",
@@ -958,6 +964,7 @@ impl EntityKind {
                 let pts = [c[0].xy(), c[1].xy(), c[2].xy(), c[3].xy(), c[0].xy()];
                 pts.windows(2).filter_map(|w| Some(Prim::Seg(Segment::Line(GLine::new(*w.first()?, *w.get(1)?))))).collect()
             }
+            EntityKind::Region(r) => r.segments().into_iter().map(Prim::Seg).collect(),
             EntityKind::Hatch(h) => {
                 h.loops.iter().flat_map(|l| Polyline { vertices: l.vertices.clone(), closed: true }.segments()).map(Prim::Seg).collect()
             }
@@ -1151,6 +1158,14 @@ impl EntityKind {
             }
             EntityKind::Solid(so) | EntityKind::Trace(so) => so.corners.iter_mut().for_each(t3),
             EntityKind::Face3d(f) => f.corners.iter_mut().for_each(t3),
+            EntityKind::Region(r) => {
+                for v in r.loops.iter_mut().flat_map(|l| l.vertices.iter_mut()) {
+                    v.p = m.apply(v.p);
+                    if mirror {
+                        v.bulge = -v.bulge;
+                    }
+                }
+            }
             EntityKind::Viewport(v) => {
                 t3(&mut v.center);
                 v.width *= s;
@@ -1232,6 +1247,7 @@ impl EntityKind {
             }
             EntityKind::Solid(s) | EntityKind::Trace(s) => s.corners.iter().map(|c| c.xy()).collect(),
             EntityKind::Face3d(f) => f.corners.iter().map(|c| c.xy()).collect(),
+            EntityKind::Region(r) => vec![r.bounds().center()],
             EntityKind::Viewport(v) => {
                 let c = v.center.xy();
                 let h = Vec2::new(v.width / 2.0, v.height / 2.0);

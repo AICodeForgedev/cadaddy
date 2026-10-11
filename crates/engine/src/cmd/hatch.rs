@@ -393,7 +393,7 @@ fn run_boundary(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "handles": out, "message": format!("BOUNDARY created {} polyline(s)", out.len()) }))
 }
 
-/// REGION: closed objects become closed polylines (our region representation for now).
+/// REGION: each closed object becomes a region bounded by it (and replaces it).
 fn run_region(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let mut n = 0;
@@ -405,7 +405,7 @@ fn run_region(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some((vs, common)) = vs {
             let d = s.doc_mut()?;
             d.modify_entity(h, |e| {
-                e.kind = lwpoly(vs, true);
+                e.kind = EntityKind::Region(cadcraft_doc::Region::from_loop(vs));
                 e.common = common;
             })?;
             n += 1;

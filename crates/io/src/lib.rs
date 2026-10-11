@@ -171,5 +171,8 @@ pub fn write_dxf(d: &Drawing) -> String {
     dxf_write::write(d)
 }
 
+/// Regions, written as closed polylines.
+mod dxf_region;
+
 #[cfg(test)]
 mod tests;

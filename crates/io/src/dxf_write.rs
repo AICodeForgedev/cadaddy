@@ -601,6 +601,21 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             thickness(w, e);
             text_tags(w, t, None, None);
         }
+        // Closed polylines, one per loop (`dxf_region`): REGION's own data is ACIS.
+        EntityKind::Region(r) => {
+            for (i, tags) in crate::dxf_region::polylines(r).into_iter().enumerate() {
+                w.s(0, "LWPOLYLINE");
+                if i == 0 {
+                    common(w, e, owner, paper, "AcDbPolyline");
+                } else {
+                    // The other loops get handles of their own (only the handle and properties are written).
+                    let h = Handle::parse_hex(&w.h()).unwrap_or(e.handle);
+                    let part = Entity { handle: h, common: e.common.clone(), kind: EntityKind::Point(Point { p: Vec3::ZERO, angle: 0.0 }) };
+                    common(w, &part, owner, paper, "AcDbPolyline");
+                }
+                w.t.extend(tags);
+            }
+        }
         EntityKind::AttDef(a) => {
             w.s(0, "ATTDEF");
             common(w, e, owner, paper, "AcDbText");

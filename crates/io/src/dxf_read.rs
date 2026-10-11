@@ -251,13 +251,15 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                     v.bulge = -v.bulge;
                 }
             }
-            EntityKind::LwPolyline(LwPolyline {
+            let pl = LwPolyline {
                 vertices: verts,
                 closed: flags & 1 != 0,
                 const_width: t.fd(43, 0.0),
                 elevation: t.fd(38, 0.0),
                 plinegen: flags & 128 != 0,
-            })
+            };
+            // A region CADCraft wrote as polylines (`dxf_region`).
+            crate::dxf_region::from_polyline(tags, pl)?
         }
         "SPLINE" => {
             let degree = t.i(71).unwrap_or(3).clamp(1, 10) as usize;

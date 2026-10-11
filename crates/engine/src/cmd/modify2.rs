@@ -1444,6 +1444,7 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
         EntityKind::Hatch(h) => h.elevation = 0.0,
         EntityKind::Solid(so) | EntityKind::Trace(so) => so.corners.iter_mut().for_each(z),
         EntityKind::Face3d(f) => f.corners.iter_mut().for_each(z),
+        EntityKind::Region(_) => {}
         EntityKind::Image(i) => {
             z(&mut i.insert);
             i.u.z = 0.0;

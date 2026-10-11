@@ -1219,6 +1219,19 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                 })
                 .collect(),
         ),
+        // A region explodes into its boundary's lines and arcs.
+        EntityKind::Region(r) => Some(
+            r.segments()
+                .into_iter()
+                .map(|s| {
+                    let k = match s {
+                        Segment::Line(l) => line(l.a, l.b),
+                        Segment::Arc { arc: a, .. } => arc(&a),
+                    };
+                    Entity { handle: Handle(0), common: e.common.clone(), kind: k }
+                })
+                .collect(),
+        ),
         EntityKind::Dimension(dm) => {
             // The dimension as drawn: its overrides, DIMSCALE (0 = the drawing's) and text font.
             let style = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
