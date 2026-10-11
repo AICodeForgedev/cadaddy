@@ -317,6 +317,35 @@ fn dimtedit_and_dimspace() {
 }
 
 #[test]
+fn text_style_rename_follows_block_definition_text() {
+    let mut s = Session::new();
+    s.execute("style", &json!({ "name": "SRC", "height": 1, "backwards": true })).unwrap();
+    let t = h(&s.execute("text", &json!({ "at": [0, 0], "text": "abc" })).unwrap());
+    let m = h(&s.execute("mtext", &json!({ "at": [0, 2], "text": "def", "style": "SRC" })).unwrap());
+    let a = h(&s.execute("attdef", &json!({ "tag": "TAG", "at": [0, 4] })).unwrap());
+    let hs = [t.hex(), m.hex(), a.hex()];
+    s.execute("block", &json!({ "name": "Label", "base": [0, 0], "handles": hs, "keep": "delete" })).unwrap();
+    s.execute("style.current", &json!({ "name": "Standard" })).unwrap();
+    s.execute("style.rename", &json!({ "from": "SRC", "to": "DST" })).unwrap();
+    let d = s.doc().unwrap();
+    let mut styles: Vec<String> = d
+        .block("Label")
+        .unwrap()
+        .entities
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Text(t) => Some(format!("text {}", t.style)),
+            EntityKind::MText(t) => Some(format!("mtext {}", t.style)),
+            EntityKind::AttDef(a) => Some(format!("attdef {}", a.text.style)),
+            _ => None,
+        })
+        .collect();
+    styles.sort();
+    assert_eq!(styles, ["attdef DST", "mtext DST", "text DST"]);
+    assert!(d.text_style("DST").is_some_and(|st| st.backwards));
+}
+
+#[test]
 fn dimspace_prompts_for_its_inputs() {
     let mut s = Session::new();
     let a = h(&s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [10, 0], "at": [0, 5] })).unwrap());

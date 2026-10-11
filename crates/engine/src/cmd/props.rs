@@ -605,26 +605,34 @@ fn run_style_rename(s: &mut Session, p: &Value) -> Result<Value> {
     }
     d.dim_styles.iter_mut().for_each(|x| fix(&mut x.text_style));
     d.mleader_styles.iter_mut().for_each(|x| fix(&mut x.text_style));
-    for space in
-        std::iter::once(cadcraft_doc::Space::Model).chain(d.layouts.iter().map(|l| cadcraft_doc::Space::Paper(l.name.clone())).collect::<Vec<_>>())
-    {
-        let hs: Vec<cadcraft_doc::Handle> = d.space(&space).map(|st| st.handles()).unwrap_or_default();
-        for h in hs {
-            let uses = d.entity(h).is_some_and(|e| match &e.kind {
-                EntityKind::Text(t) => t.style.eq_ignore_ascii_case(&from),
-                EntityKind::MText(t) => t.style.eq_ignore_ascii_case(&from),
-                EntityKind::AttDef(a) => a.text.style.eq_ignore_ascii_case(&from),
-                EntityKind::Insert(i) => i.attribs.iter().any(|a| a.text.style.eq_ignore_ascii_case(&from)),
-                _ => false,
-            });
-            if uses {
-                d.modify_entity(h, |e| match &mut e.kind {
-                    EntityKind::Text(t) => fix(&mut t.style),
-                    EntityKind::MText(t) => fix(&mut t.style),
-                    EntityKind::AttDef(a) => fix(&mut a.text.style),
-                    EntityKind::Insert(i) => i.attribs.iter_mut().for_each(|a| fix(&mut a.text.style)),
-                    _ => {}
-                })?;
+    let uses = |k: &EntityKind| match k {
+        EntityKind::Text(t) => t.style.eq_ignore_ascii_case(&from),
+        EntityKind::MText(t) => t.style.eq_ignore_ascii_case(&from),
+        EntityKind::AttDef(a) => a.text.style.eq_ignore_ascii_case(&from),
+        EntityKind::Insert(i) => i.attribs.iter().any(|a| a.text.style.eq_ignore_ascii_case(&from)),
+        EntityKind::MLeader(m) => m.text.iter().any(|t| t.style.eq_ignore_ascii_case(&from)),
+        _ => false,
+    };
+    let repoint = |k: &mut EntityKind| match k {
+        EntityKind::Text(t) => fix(&mut t.style),
+        EntityKind::MText(t) => fix(&mut t.style),
+        EntityKind::AttDef(a) => fix(&mut a.text.style),
+        EntityKind::Insert(i) => i.attribs.iter_mut().for_each(|a| fix(&mut a.text.style)),
+        EntityKind::MLeader(m) => m.text.iter_mut().for_each(|t| fix(&mut t.style)),
+        _ => {}
+    };
+    let mut hs: Vec<cadcraft_doc::Handle> = d.model.iter().filter(|e| uses(&e.kind)).map(|e| e.handle).collect();
+    hs.extend(d.layouts.iter().flat_map(|l| l.entities.iter().filter(|e| uses(&e.kind)).map(|e| e.handle)));
+    for h in hs {
+        d.modify_entity(h, |e| repoint(&mut e.kind))?;
+    }
+    // Block definitions too, so their text keeps resolving to the renamed style.
+    for block in d.blocks.values_mut() {
+        let hs: Vec<cadcraft_doc::Handle> = block.entities.iter().filter(|e| uses(&e.kind)).map(|e| e.handle).collect();
+        if !hs.is_empty() {
+            let b = std::sync::Arc::make_mut(block);
+            for h in hs {
+                b.entities.modify(h, |e| repoint(&mut e.kind));
             }
         }
     }
