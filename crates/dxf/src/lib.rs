@@ -166,14 +166,8 @@ const BINARY_SENTINEL: &[u8] = b"AutoCAD Binary DXF\r\n\x1a\0";
 /// tag list to a few GB; real drawings stay far below (a 10 MB DWG is typically a few million).
 pub const MAX_TAGS: usize = 50_000_000;
 
-/// Decode bytes as text: UTF-8 when valid (borrowed, no copy), otherwise Latin-1 (old ANSI_1252
-/// files).
-fn decode_text(b: &[u8]) -> std::borrow::Cow<'_, str> {
-    match std::str::from_utf8(b) {
-        Ok(s) => std::borrow::Cow::Borrowed(s),
-        Err(_) => std::borrow::Cow::Owned(b.iter().map(|&c| char::from(c)).collect()),
-    }
-}
+mod codepage;
+pub use codepage::decode_code_page;
 
 /// Parse a DXF file (ASCII or binary).
 pub fn parse(bytes: &[u8]) -> Result<Vec<Tag>> {
@@ -192,7 +186,7 @@ pub fn parse_with_limit(bytes: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
     if tags > max_tags {
         return Err(DxfError::TooLarge { tags, limit: max_tags });
     }
-    parse_ascii_with_limit(&decode_text(bytes), max_tags)
+    parse_ascii_with_limit(&codepage::decode_ascii_file(bytes), max_tags)
 }
 
 /// The four hex digits of a `\U+XXXX` escape starting at `chars[i]`, if there is one.
@@ -207,17 +201,41 @@ fn escape_at(chars: &[char], i: usize) -> Option<u32> {
     hex.iter().try_fold(0u32, |acc, c| Some(acc * 16 + c.to_digit(16)?))
 }
 
+/// The character of a `\M+nXXXX` escape starting at `chars[i]`, if there is one: `n` names a
+/// double-byte code page and `XXXX` is the character's two bytes in hex.
+fn mif_escape_at(chars: &[char], i: usize) -> Option<char> {
+    if chars.get(i) != Some(&'\\') || chars.get(i + 1) != Some(&'M') || chars.get(i + 2) != Some(&'+') {
+        return None;
+    }
+    let enc = codepage::mif_encoding(*chars.get(i + 3)?)?;
+    let hex = chars.get(i + 4..i + 8)?;
+    if !hex.iter().all(char::is_ascii_hexdigit) {
+        return None;
+    }
+    let code = hex.iter().try_fold(0u16, |acc, c| Some(acc * 16 + u16::try_from(c.to_digit(16)?).ok()?))?;
+    let bytes = code.to_be_bytes();
+    let text = enc.decode_without_bom_handling_and_without_replacement(&bytes)?;
+    let mut it = text.chars();
+    it.next().filter(|_| it.next().is_none())
+}
+
 /// Unescape the `\U+XXXX` sequences pre-R2007 DXF uses for characters outside the file's code
 /// page (four hex digits, one UTF-16 code unit; characters above U+FFFF are a surrogate pair of
-/// escapes). Malformed escapes and unpaired surrogates are kept as literal text.
+/// escapes), and the `\M+nXXXX` sequences for double-byte East Asian characters. Malformed
+/// escapes, unpaired surrogates and unknown `\M+` code pages are kept as literal text.
 fn unescape_unicode(s: &str) -> String {
-    if !s.contains("\\U+") {
+    if !s.contains("\\U+") && !s.contains("\\M+") {
         return s.to_string();
     }
     let mut out = String::with_capacity(s.len());
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;
     while let Some(&c) = chars.get(i) {
+        if let Some(ch) = mif_escape_at(&chars, i) {
+            out.push(ch);
+            i += 8;
+            continue;
+        }
         if let Some(unit) = escape_at(&chars, i) {
             if let Some(ch) = char::from_u32(unit) {
                 out.push(ch);
@@ -279,7 +297,7 @@ struct Cur<'a> {
     p: usize,
 }
 
-impl Cur<'_> {
+impl<'a> Cur<'a> {
     fn take(&mut self, n: usize) -> Result<&[u8]> {
         let end = self.p.checked_add(n).ok_or(DxfError::Eof)?;
         let s = self.b.get(self.p..end).ok_or(DxfError::Eof)?;
@@ -309,12 +327,13 @@ impl Cur<'_> {
         a.copy_from_slice(s);
         Ok(f64::from_le_bytes(a))
     }
-    fn cstr(&mut self) -> Result<String> {
+    /// The bytes of a zero-terminated string (without the zero), decoded by the caller.
+    fn cstr(&mut self) -> Result<&'a [u8]> {
         let start = self.p;
         while self.p < self.b.len() && self.b.get(self.p) != Some(&0) {
             self.p += 1;
         }
-        let s = decode_text(self.b.get(start..self.p).unwrap_or(&[])).into_owned();
+        let s = self.b.get(start..self.p).unwrap_or(&[]);
         if self.p >= self.b.len() {
             return Err(DxfError::Eof);
         }
@@ -330,6 +349,7 @@ pub fn parse_binary(b: &[u8]) -> Result<Vec<Tag>> {
 
 fn parse_binary_with_limit(b: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
     let mut c = Cur { b, p: 0 };
+    let mut text = codepage::BinaryText::default();
     let mut tags = Vec::new();
     while c.p < b.len() {
         let mut code = i32::from(c.i16()?);
@@ -337,7 +357,7 @@ fn parse_binary_with_limit(b: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
             code = i32::from(c.i16()?);
         }
         let v = match kind_of(code) {
-            Kind::Str => Value::Str(unescape_unicode(&c.cstr()?)),
+            Kind::Str => Value::Str(unescape_unicode(&text.string(code, c.cstr()?))),
             Kind::Real => Value::Real(c.f64()?),
             Kind::Int16 => Value::Int(i64::from(c.i16()?)),
             Kind::Int32 => Value::Int(i64::from(c.i32()?)),

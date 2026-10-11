@@ -40,6 +40,7 @@ skrifa = "0.47"
 harfrust = "0.12"
 unicode-bidi = "0.3.18"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+encoding_rs = "0.8.35"
 
 # ui
 craft-ui = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675", features = ["serde"] }
