@@ -4,8 +4,8 @@
 
 use super::{Builder, Ctx, Ink, fill, ink};
 use cadcraft_color::{Color, Rgb};
-use cadcraft_doc::library::pattern;
-use cadcraft_doc::{Entity, Gradient, Hatch};
+use cadcraft_doc::library::pattern_for;
+use cadcraft_doc::{Drawing, Entity, Gradient, Hatch};
 use cadcraft_geom::{Bounds2, Polyline, Vec2, point_in_polygon};
 
 /// Draw a hatch entity: `rgb` is its resolved colour, `tol` the chord tolerance.
@@ -29,7 +29,7 @@ pub(super) fn draw(b: &mut Builder, ctx: &Ctx, e: &Entity, h: &Hatch, rgb: Ink, 
     {
         b.tris(ctx, ink(bg, layer_color, ctx.block_color), &fill::triangulate_evenodd(&loops));
     }
-    for seg in pattern_lines(h, &loops) {
+    for seg in pattern_lines(ctx.d, h, &loops) {
         if seg.len() == 1 {
             if let Some(p) = seg.first() {
                 b.point(ctx, rgb, *p);
@@ -209,13 +209,18 @@ impl Field {
 /// Upper bound on the line families drawn from a pattern definition read from a file.
 const MAX_PATTERN_LINES: usize = 1024;
 
+/// Upper bound on line runs drawn for one hatch (AutoCAD's HPMAXLINES default): a pattern far
+/// too dense for its area stops here instead of exhausting memory.
+const MAX_HATCH_SEGMENTS: usize = 1_000_000;
+
 /// Hatch line runs in world coordinates (single-point runs are dots) for the fill `loops`.
-pub fn pattern_lines(h: &Hatch, loops: &[Vec<Vec2>]) -> Vec<Vec<Vec2>> {
-    // A pattern the library doesn't define draws with the lines its file defined, else as ANSI31.
-    let lines = match pattern(&h.pattern) {
-        Some(p) => p.lines,
-        None if !h.pattern_lines.is_empty() => h.pattern_lines.iter().take(MAX_PATTERN_LINES).cloned().collect(),
-        None => pattern("ANSI31").map(|p| p.lines).unwrap_or_default(),
+pub fn pattern_lines(d: &Drawing, h: &Hatch, loops: &[Vec<Vec2>]) -> Vec<Vec<Vec2>> {
+    // The lines the file defined (as its author's CAD drew them), else the library's pattern of
+    // that name, else ANSI31.
+    let lines = if h.pattern_lines.is_empty() {
+        pattern_for(d, &h.pattern).or_else(|| pattern_for(d, "ANSI31")).map(|p| p.lines).unwrap_or_default()
+    } else {
+        h.pattern_lines.iter().take(MAX_PATTERN_LINES).cloned().collect()
     };
     let scale = if h.scale.is_finite() && h.scale > 1e-9 { h.scale } else { 1.0 };
     let mut out = Vec::new();
@@ -229,7 +234,7 @@ pub fn pattern_lines(h: &Hatch, loops: &[Vec<Vec2>]) -> Vec<Vec<Vec2>> {
         }
         let dashes: Vec<f64> = fam.dashes.iter().map(|d| d * scale).collect();
         family(loops, origin, ang, delta, spacing, &dashes, &mut out);
-        if out.len() > 500_000 {
+        if out.len() >= MAX_HATCH_SEGMENTS {
             break;
         }
     }
@@ -253,6 +258,9 @@ fn family(loops: &[Vec<Vec2>], origin: Vec2, ang: f64, delta: Vec2, spacing: f64
     }
     let pat_len: f64 = dashes.iter().map(|d| d.abs()).sum();
     for k in k0..=k1 {
+        if out.len() >= MAX_HATCH_SEGMENTS {
+            return;
+        }
         let y = k as f64 * spacing;
         let mut xs: Vec<f64> = Vec::new();
         for l in &local {
@@ -279,7 +287,7 @@ fn family(loops: &[Vec<Vec2>], origin: Vec2, ang: f64, delta: Vec2, spacing: f64
             'outer: while x < *x1 {
                 for d in dashes {
                     guard += 1;
-                    if guard > 100_000 {
+                    if guard > 100_000 || out.len() >= MAX_HATCH_SEGMENTS {
                         break 'outer;
                     }
                     let len = d.abs();

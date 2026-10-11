@@ -98,9 +98,27 @@ fn custom_pattern_lines_roundtrip_scaled_and_rotated() {
 }
 
 #[test]
-fn library_patterns_keep_no_definition() {
+fn library_named_patterns_keep_the_files_definition() {
+    // The library's AR-CONC only approximates AutoCAD's: the file's own lines are kept and saved.
+    let h = first_hatch(&save(hatch("AR-CONC", 2.0, 0.0, Vec2::ZERO, custom_lines())));
+    assert!(near(&h.pattern_lines, &custom_lines()), "{:?}", h.pattern_lines);
+    // A hatch without lines of its own saves the library's definition, which reads back as lines.
     let h = first_hatch(&save(hatch("ANSI31", 1.0, 0.0, Vec2::ZERO, vec![])));
-    assert!(h.pattern_lines.is_empty());
+    assert_eq!(h.pattern_lines.len(), 1);
+}
+
+#[test]
+fn file_definition_is_drawn_instead_of_the_librarys() {
+    let prims = |lines: Vec<PatternLine>| {
+        let mut d = Drawing::new_imperial();
+        d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch("ANSI31", 1.0, 0.0, Vec2::ZERO, lines))).expect("add");
+        cadcraft_render::build(&d, &Space::Model, &cadcraft_render::Options::default()).prims.len()
+    };
+    // One horizontal family 5 units apart from y = 2.5 across the 10 × 10 square: two lines.
+    let sparse = vec![PatternLine { angle: 0.0, origin: (0.0, 2.5), delta: (0.0, 5.0), dashes: vec![] }];
+    assert_eq!(prims(sparse), 2);
+    // Without file lines, the library's ANSI31 (0.125 apart) is drawn.
+    assert!(prims(vec![]) > 100);
 }
 
 #[test]

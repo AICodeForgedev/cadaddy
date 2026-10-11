@@ -924,9 +924,12 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.f(52, h.angle.to_degrees());
                 w.f(41, h.scale);
                 w.i(77, 0);
-                let pat = cadcraft_doc::library::pattern(&h.pattern);
-                // A pattern the library doesn't define keeps the lines read from its file.
-                let lines = pat.map(|p| p.lines).unwrap_or_else(|| h.pattern_lines.clone());
+                // The lines read from the file, else the library's pattern of that name.
+                let lines = if h.pattern_lines.is_empty() {
+                    cadcraft_doc::library::pattern_for(d, &h.pattern).map(|p| p.lines).unwrap_or_default()
+                } else {
+                    h.pattern_lines.clone()
+                };
                 w.i(78, lines.len() as i64);
                 for pl in lines {
                     let ang = pl.angle.to_radians() + h.angle;
