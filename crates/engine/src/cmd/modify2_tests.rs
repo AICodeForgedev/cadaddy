@@ -174,7 +174,7 @@ fn splinedit_json_and_command_line() {
     assert!(matches!(last(&s), EntityKind::Spline(x) if x.closed));
     s.cmdline("o r u").unwrap();
     assert!(matches!(last(&s), EntityKind::Spline(x) if !x.closed && near(x.control[0], 0.0, 0.0)));
-    s.cmdline("f p p").unwrap();
+    s.cmdline("f p 4").unwrap();
     assert!(s.running.is_none());
     assert!(matches!(last(&s), EntityKind::LwPolyline(_)));
 }

@@ -98,10 +98,25 @@ const MAX_APPROX_POINTS: usize = 300;
 
 impl Spline {
     /// Build a spline through (or, with a tolerance, near) `fit`, open or closed. Closed curves
-    /// are periodic and ignore end tangents; their tolerance is kept but they still interpolate.
+    /// are periodic and ignore end tangents; a tolerance approximates them with fewer periodic
+    /// control points. A fit point given twice in a row is a kink (SPLINEDIT Fit data Kink): the
+    /// curve passes through it with a corner (a knot of full multiplicity) and the pieces on
+    /// either side are fitted on their own.
     pub fn fit_with(fit: &[Vec2], closed: bool, opts: FitOptions) -> Spline {
         let opts = opts.sanitized();
-        let mut s = if closed { closed_fit(fit, opts.knots) } else { open_fit(fit, opts) };
+        let kinked = if fit.len() <= MAX_KINK_POINTS { kinked_fit(fit, closed, opts) } else { None };
+        let mut s = match kinked {
+            Some(s) => s,
+            None => {
+                // Repeats at the ends of an open curve are no corners: fit without them.
+                let (pts, _) = kinks(fit, false);
+                let mut s = if closed { closed_fit(&pts, opts.knots, opts.tolerance) } else { open_fit(&pts, opts) };
+                if pts.len() != fit.len() && !closed {
+                    s.fit = fit.to_vec();
+                }
+                s
+            }
+        };
         s.fit_opts = if closed { FitOptions { start_tangent: None, end_tangent: None, ..opts } } else { opts };
         s
     }
@@ -401,7 +416,189 @@ fn least_squares(fit: &[Vec2], u: &[f64], m: usize, p: usize, d0: Option<Vec2>, 
     Some(Spline { degree: p, knots, control, fit: fit.to_vec(), ..Spline::default() })
 }
 
-fn closed_fit(fit: &[Vec2], kind: KnotParam) -> Spline {
+/// Fit point counts above this ignore kinks (each piece is fitted and joined separately).
+const MAX_KINK_POINTS: usize = 20_000;
+
+/// Kink positions: `fit` with consecutive repeats removed and, per kept point, whether it was
+/// repeated (a kink). A closed list's repeated closing point is not a kink.
+fn kinks(fit: &[Vec2], closed: bool) -> (Vec<Vec2>, Vec<bool>) {
+    let mut pts: Vec<Vec2> = Vec::with_capacity(fit.len());
+    let mut kink: Vec<bool> = Vec::with_capacity(fit.len());
+    for q in fit {
+        if pts.last().is_some_and(|l| l.near(*q, 1e-12)) {
+            if let Some(k) = kink.last_mut() {
+                *k = true;
+            }
+        } else {
+            pts.push(*q);
+            kink.push(false);
+        }
+    }
+    if closed && pts.len() > 3 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.near(*b, 1e-12)) {
+        pts.pop();
+        let last = kink.pop().unwrap_or(false);
+        if let Some(k) = kink.first_mut() {
+            *k |= last;
+        }
+    }
+    (pts, kink)
+}
+
+/// A curve with corners at repeated fit points: each run between kinks is fitted open (the
+/// outer ends keep the end tangents) and the cubic pieces are joined end to end. A closed curve
+/// starts and ends at its first kink. `None` without kinks.
+fn kinked_fit(fit: &[Vec2], closed: bool, opts: FitOptions) -> Option<Spline> {
+    let (mut pts, mut kink) = kinks(fit, closed);
+    let n = pts.len();
+    if n < 2 {
+        return None;
+    }
+    // Ends of an open curve are corners anyway, so only interior kinks count.
+    let interior = |i: usize| closed || (i > 0 && i + 1 < n);
+    let first = (0..n).find(|i| kink.get(*i).copied().unwrap_or(false) && interior(*i))?;
+    if closed {
+        pts.rotate_left(first);
+        kink.rotate_left(first);
+        pts.push(*pts.first()?);
+        kink.push(true);
+    }
+    let last = pts.len() - 1;
+    let mut pieces: Vec<Spline> = Vec::new();
+    let mut start = 0;
+    for i in 1..=last {
+        if i < last && !kink.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        let run = pts.get(start..=i)?;
+        let o = FitOptions {
+            start_tangent: if start == 0 && !closed { opts.start_tangent } else { None },
+            end_tangent: if i == last && !closed { opts.end_tangent } else { None },
+            ..opts
+        };
+        pieces.push(cubic(open_fit(run, o))?);
+        start = i;
+    }
+    let lens: Vec<f64> = pieces.iter().map(|p| chord_length(&p.fit).max(1e-12)).collect();
+    let total: f64 = lens.iter().sum();
+    let p = 3;
+    let mut knots: Vec<f64> = Vec::new();
+    let mut control: Vec<Vec2> = Vec::new();
+    let mut at = 0.0;
+    let count = pieces.len();
+    for (j, (piece, len)) in pieces.iter().zip(&lens).enumerate() {
+        let (lo, hi) = piece.domain();
+        let scale = len / total.max(1e-300) / (hi - lo).max(1e-300);
+        let mapped = piece.knots.iter().map(|k| at + (k - lo) * scale);
+        let keep = piece.knots.len() - usize::from(j + 1 < count);
+        knots.extend(mapped.take(keep).skip(if j == 0 { 0 } else { p + 1 }));
+        control.extend(piece.control.iter().skip(usize::from(j > 0)).copied());
+        at += len / total.max(1e-300);
+    }
+    let s = Spline { degree: p, knots, control, fit: fit.to_vec(), closed, ..Spline::default() };
+    s.is_valid().then_some(s)
+}
+
+/// A clamped, non-rational fitted piece raised to degree 3: interpolation through two or three
+/// points gives a single Bézier segment of lower degree, which is raised exactly.
+fn cubic(mut s: Spline) -> Option<Spline> {
+    if s.degree == 3 {
+        return Some(s);
+    }
+    if s.degree > 3 || s.control.len() != s.degree + 1 {
+        return None;
+    }
+    let (lo, hi) = s.domain();
+    while s.degree < 3 {
+        let p = s.degree;
+        let c = &s.control;
+        let mut q = Vec::with_capacity(p + 2);
+        q.push(*c.first()?);
+        for i in 1..=p {
+            let a = i as f64 / (p + 1) as f64;
+            q.push(*c.get(i - 1)? * a + *c.get(i)? * (1.0 - a));
+        }
+        q.push(*c.last()?);
+        s.degree = p + 1;
+        s.control = q;
+    }
+    s.knots = [lo; 4].into_iter().chain([hi; 4]).collect();
+    Some(s)
+}
+
+/// Least-squares approximation of a closed curve within `tol`: the fewest periodic control
+/// points (searched by bisection) whose curve passes within `tol` of every fit point. `None`
+/// when only interpolation meets the tolerance.
+fn approximate_closed(pts: &[Vec2], t: &[f64], p: usize, tol: f64) -> Option<Spline> {
+    let n = pts.len();
+    let (mut lo, mut hi) = (p + 1, n.checked_sub(1)?);
+    let mut best = None;
+    while lo <= hi {
+        let mid = (lo + hi) / 2;
+        match periodic_least_squares(pts, t, mid, p) {
+            Some(s) if pts.iter().zip(t).all(|(q, u)| s.eval(*u).dist(*q) <= tol) => {
+                best = Some(s);
+                hi = mid - 1;
+            }
+            _ => lo = mid + 1,
+        }
+    }
+    best
+}
+
+/// A periodic spline with `m` distinct control points (`p < m < pts.len()`) closest in the
+/// least-squares sense to `pts` at closed parameters `t`. The period's breakpoints spread over
+/// the parameters so every span holds some (the closed counterpart of `lsq_knots`).
+fn periodic_least_squares(pts: &[Vec2], t: &[f64], m: usize, p: usize) -> Option<Spline> {
+    let n = pts.len();
+    if m <= p || m >= n || t.len() != n + 1 {
+        return None;
+    }
+    let mut b = Vec::with_capacity(m + 1);
+    for j in 0..=m {
+        let jd = j as f64 * n as f64 / m as f64;
+        let i = (jd.floor() as usize).min(n - 1);
+        let a = jd - i as f64;
+        b.push((1.0 - a) * t.get(i).copied()? + a * t.get(i + 1).copied()?);
+    }
+    if b.windows(2).any(|w| w.first().zip(w.get(1)).is_none_or(|(x, y)| y - x <= 1e-12)) {
+        return None;
+    }
+    let knots = periodic_knots(&b, m, p);
+    let mut a = vec![vec![0.0; m]; m];
+    let (mut bx, mut by) = (vec![0.0; m], vec![0.0; m]);
+    for (q, u) in pts.iter().zip(t) {
+        let span = find_span(m + p - 1, p, *u, &knots);
+        let mut row = vec![0.0; m];
+        for (k, v) in basis(span, *u, p, &knots).into_iter().enumerate() {
+            if let Some(c) = (span + k).checked_sub(p).and_then(|i| row.get_mut(i % m)) {
+                *c += v;
+            }
+        }
+        for (i, ri) in row.iter().enumerate() {
+            if *ri == 0.0 {
+                continue;
+            }
+            if let (Some(x), Some(y)) = (bx.get_mut(i), by.get_mut(i)) {
+                *x += ri * q.x;
+                *y += ri * q.y;
+            }
+            if let Some(ar) = a.get_mut(i) {
+                for (cell, rj) in ar.iter_mut().zip(&row) {
+                    *cell += ri * rj;
+                }
+            }
+        }
+    }
+    let (cx, cy) = (solve(a.clone(), bx)?, solve(a, by)?);
+    let mut control: Vec<Vec2> = cx.into_iter().zip(cy).map(|(x, y)| Vec2::new(x, y)).collect();
+    if control.iter().any(|c| !c.x.is_finite() || !c.y.is_finite()) {
+        return None;
+    }
+    control.extend_from_within(..p);
+    Some(Spline { degree: p, knots, control, fit: pts.to_vec(), closed: true, ..Spline::default() })
+}
+
+fn closed_fit(fit: &[Vec2], kind: KnotParam, tol: f64) -> Spline {
     let mut pts = fit.to_vec();
     if pts.len() > 3 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.near(*b, 1e-12)) {
         pts.pop();
@@ -421,6 +618,12 @@ fn closed_fit(fit: &[Vec2], kind: KnotParam) -> Spline {
     }
     // Parameters t_0 = 0 .. t_n = 1 (t_n is the return to the first point).
     let t = params(&pts, kind, true);
+    if tol > 0.0
+        && n <= MAX_APPROX_POINTS
+        && let Some(s) = approximate_closed(&pts, &t, p, tol)
+    {
+        return s;
+    }
     let m = n + p;
     let knots = periodic_knots(&t, n, p);
     // Interpolation at t_i; control index k and k + n are the same unknown.
@@ -551,6 +754,74 @@ mod tests {
     }
 
     #[test]
+    fn tolerance_approximates_closed_curves() {
+        // Forty slightly noisy points round a circle.
+        let fit: Vec<Vec2> = (0..40)
+            .map(|i| {
+                let a = i as f64 / 40.0 * std::f64::consts::TAU;
+                let r = 5.0 + if i % 2 == 0 { 0.01 } else { -0.01 };
+                Vec2::new(a.cos() * r, a.sin() * r)
+            })
+            .collect();
+        let exact = Spline::fit_with(&fit, true, FitOptions::default());
+        let tol = 0.05;
+        let s = Spline::fit_with(&fit, true, FitOptions { tolerance: tol, ..FitOptions::default() });
+        assert!(s.is_valid() && s.is_periodic() && s.closed);
+        assert!(s.control.len() < exact.control.len(), "{} control points", s.control.len());
+        let u = params(&fit, KnotParam::Chord, true);
+        assert!(fit.iter().zip(&u).all(|(q, t)| s.eval(*t).dist(*q) <= tol + 1e-9));
+        let (lo, hi) = s.domain();
+        assert!(s.eval(lo).near(s.eval(hi), 1e-9), "still closed");
+        assert_eq!(s.fit, fit);
+        assert_eq!(s.fit_opts.tolerance, tol);
+        // Too tight a tolerance interpolates.
+        let tiny = Spline::fit_with(&fit, true, FitOptions { tolerance: 1e-9, ..FitOptions::default() });
+        assert_eq!(tiny.control.len(), exact.control.len());
+        // Every parametrisation approximates.
+        for k in KnotParam::ALL {
+            let s = Spline::fit_with(&fit, true, FitOptions { tolerance: tol, knots: k, ..FitOptions::default() });
+            assert!(s.is_valid() && s.control.len() < exact.control.len(), "{k:?}");
+        }
+    }
+
+    fn on_curve(s: &Spline, q: Vec2) -> bool {
+        let (lo, hi) = s.domain();
+        (0..=4000).any(|i| s.eval(lo + (hi - lo) * i as f64 / 4000.0).dist(q) < 1e-2)
+    }
+
+    #[test]
+    fn repeated_fit_points_make_kinks() {
+        let fit = [Vec2::new(0.0, 0.0), Vec2::new(2.0, 2.0), Vec2::new(4.0, 0.0), Vec2::new(4.0, 0.0), Vec2::new(6.0, 2.0), Vec2::new(8.0, 0.0)];
+        let s = Spline::fit_with(&fit, false, FitOptions::default());
+        assert!(s.is_valid() && s.degree == 3 && !s.closed);
+        assert_eq!(s.fit, fit, "the kink stays in the fit data");
+        assert!(fit.iter().all(|q| on_curve(&s, *q)));
+        // A knot of multiplicity 3 at the corner, where the tangent turns.
+        let k = s.knots.iter().copied().find(|k| s.knots.iter().filter(|x| (*x - k).abs() < 1e-12).count() == 3).unwrap();
+        assert!(s.eval(k).near(Vec2::new(4.0, 0.0), 1e-9));
+        let h = 1e-6;
+        let before = (s.eval(k) - s.eval(k - h)).normalized();
+        let after = (s.eval(k + h) - s.eval(k)).normalized();
+        assert!(before.dot(after) < 0.5, "a corner: {before:?} {after:?}");
+        // Two-point pieces become straight cubic pieces.
+        let l = [Vec2::ZERO, Vec2::new(1.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0)];
+        let s = Spline::fit_with(&l, false, FitOptions::default());
+        assert!(s.is_valid() && s.degree == 3 && s.control.len() == 7);
+        assert!(on_curve(&s, Vec2::new(0.5, 0.0)) && on_curve(&s, Vec2::new(1.0, 0.5)));
+        // Closed: the curve starts and ends at the kink, clamped.
+        let c = [Vec2::ZERO, Vec2::ZERO, Vec2::new(4.0, 0.0), Vec2::new(4.0, 4.0), Vec2::new(0.0, 4.0)];
+        let s = Spline::fit_with(&c, true, FitOptions::default());
+        assert!(s.is_valid() && s.closed && !s.is_periodic());
+        let (lo, hi) = s.domain();
+        assert!(s.eval(lo).near(Vec2::ZERO, 1e-9) && s.eval(hi).near(Vec2::ZERO, 1e-9));
+        assert!(c.iter().all(|q| on_curve(&s, *q)));
+        // Kinks at the ends of an open curve change nothing.
+        let e = [Vec2::ZERO, Vec2::ZERO, Vec2::new(2.0, 2.0), Vec2::new(4.0, 0.0)];
+        let plain = Spline::fit_with(&e[1..], false, FitOptions::default());
+        assert_eq!(Spline::fit_with(&e, false, FitOptions::default()).control.len(), plain.control.len());
+    }
+
+    #[test]
     fn hostile_options_never_panic() {
         let fit = pts();
         let bad = FitOptions {
@@ -572,6 +843,15 @@ mod tests {
         }
         let same = [Vec2::ZERO; 5];
         let _ = Spline::fit_with(&same, false, FitOptions { tolerance: 0.5, start_tangent: Some(Vec2::X), ..FitOptions::default() });
+        let _ = Spline::fit_with(&same, true, FitOptions { tolerance: 0.5, ..FitOptions::default() });
+        let pairs = [Vec2::ZERO, Vec2::ZERO, Vec2::X, Vec2::X, Vec2::Y, Vec2::Y];
+        for closed in [false, true] {
+            for n in 0..=pairs.len() {
+                let _ = Spline::fit_with(&pairs[..n], closed, FitOptions { tolerance: 0.1, ..FitOptions::default() });
+            }
+        }
+        let tight: Vec<Vec2> = (0..8).map(|i| Vec2::new(i as f64 * 1e-13, 0.0)).collect();
+        let _ = Spline::fit_with(&tight, true, FitOptions { tolerance: 1.0, ..FitOptions::default() });
     }
 
     #[test]
