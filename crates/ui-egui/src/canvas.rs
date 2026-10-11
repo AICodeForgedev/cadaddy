@@ -475,6 +475,11 @@ fn draw_tracking(p: &egui::Painter, xf: &Xf, acquired: &[snap::tracking::Acquire
                 let (a0, span) = (center.angle_to(tr.point), (far / radius).min(std::f64::consts::PI));
                 (0..=96).map(|i| xf.to_screen(Vec2::polar(center, radius, a0 - span + span * f64::from(i) / 48.0))).collect()
             }
+            PathShape::Ellipse { center, major, ratio, .. } => {
+                let e = cadcraft_geom::Ellipse::full(center, major, ratio);
+                let (t0, span) = (e.param_of(tr.point), (far / (major.len() * ratio.min(1.0))).min(std::f64::consts::PI));
+                (0..=96).map(|i| xf.to_screen(e.at_param(t0 - span + span * f64::from(i) / 48.0))).collect()
+            }
         };
         p.extend(Shape::dotted_line(&pts, t.snap, 6.0, 1.0));
         let (distance, angle) = (

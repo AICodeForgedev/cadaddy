@@ -327,6 +327,11 @@ pub struct Settings {
     pub polar_flags: u32,
     /// POLARADDANG: additional polar tracking angles (radians), used with POLARMODE bit 4.
     pub polaraddang: Vec<f64>,
+    /// SNAPTYPE 1: snap mode (F9) snaps along tracking paths at POLARDIST steps (PolarSnap)
+    /// instead of to the grid.
+    pub polarsnap: bool,
+    /// POLARDIST: the PolarSnap step; 0 uses the snap X spacing.
+    pub polardist: f64,
 }
 
 impl Default for Settings {
@@ -364,6 +369,8 @@ impl Default for Settings {
             qpmode: false,
             polar_flags: 0,
             polaraddang: Vec::new(),
+            polarsnap: false,
+            polardist: 0.0,
         }
     }
 }
@@ -486,6 +493,9 @@ pub struct Session {
     pub last_command: Option<String>,
     /// LASTPOINT.
     pub last_point: Vec2,
+    /// The last segment given at a point prompt (its base point and the point): polar angles
+    /// relative to the last segment (POLARMODE bit 1) are measured from it.
+    pub last_segment: Option<(Vec2, Vec2)>,
     /// Point modifiers pending at the current point prompt (`FROM`, `M2P`, `.x`, `<a`…).
     pub point_mods: Vec<pointmod::Frame>,
     /// Cursor position in world coordinates (from the UI; used for direct distance entry).
@@ -537,6 +547,7 @@ impl Session {
             log: Vec::new(),
             last_command: None,
             last_point: Vec2::ZERO,
+            last_segment: None,
             point_mods: Vec::new(),
             cursor: Vec2::ZERO,
             cursor_deferred: None,
@@ -923,12 +934,16 @@ impl Session {
     }
 
     fn feed(&mut self, input: Option<Input>) -> Result<()> {
+        let base = if matches!(input, Some(Input::Point(_))) { self.current_prompt().and_then(|p| p.base) } else { None };
         let Some(mut run) = self.running.take() else { return Ok(()) };
         let step = match input {
             Some(Input::Cancel) => Ok(Step::Cancel),
             Some(i) => {
                 if let Input::Point(p) = &i {
                     self.last_point = *p;
+                    if let Some(b) = base.filter(|b| b.is_finite() && p.is_finite() && b.dist(*p) > 1e-12) {
+                        self.last_segment = Some((b, *p));
+                    }
                     // A temporary tracking point (TT) serves one point.
                     self.tracking.release_temporary();
                 }

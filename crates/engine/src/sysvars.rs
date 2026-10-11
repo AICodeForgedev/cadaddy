@@ -11,6 +11,8 @@ const SESSION_VARS: &[&str] = &[
     "POLARMODE",
     "POLARANG",
     "POLARADDANG",
+    "POLARDIST",
+    "SNAPTYPE",
     "AUTOSNAP",
     "GRIDMODE",
     "SNAPMODE",
@@ -47,7 +49,9 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "OSNAPHATCH" => json!(i32::from(st.osnaphatch)),
         "ORTHOMODE" => json!(i32::from(st.orthomode)),
         "POLARMODE" => json!(st.polar_flags),
-        "POLARADDANG" => json!(st.polaraddang.iter().map(|a| format!("{}", (a.to_degrees() * 1e6).round() / 1e6)).collect::<Vec<_>>().join(";")),
+        "POLARADDANG" => json!(format_angle_list(&st.polaraddang)),
+        "POLARDIST" => json!(st.polardist),
+        "SNAPTYPE" => json!(i32::from(st.polarsnap)),
         // Marker, tooltip and tracking tooltip always on (1 + 4 + 32); polar 8, tracking 16.
         "AUTOSNAP" => json!(37 + 8 * u32::from(st.polarmode) + 16 * u32::from(st.otrack)),
         "POLARANG" => json!(st.polarang.to_degrees()),
@@ -140,6 +144,19 @@ pub fn is_read_only(name: &str) -> bool {
     READ_ONLY.iter().any(|r| r.eq_ignore_ascii_case(name.trim()))
 }
 
+/// POLARADDANG as typed: up to ten angles in degrees separated by `;` (radians out); `None` when
+/// any is not a number or there are too many.
+pub fn parse_angle_list(text: &str) -> Option<Vec<f64>> {
+    let angles: Option<Vec<f64>> =
+        text.split(';').map(str::trim).filter(|t| !t.is_empty()).map(|t| t.parse::<f64>().ok().filter(|a| a.is_finite())).collect();
+    Some(angles.filter(|a| a.len() <= 10)?.into_iter().map(f64::to_radians).collect())
+}
+
+/// POLARADDANG as shown: degrees separated by `;`.
+pub fn format_angle_list(angles: &[f64]) -> String {
+    angles.iter().map(|a| format!("{}", (a.to_degrees() * 1e6).round() / 1e6)).collect::<Vec<_>>().join(";")
+}
+
 pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     let n = name.trim().to_ascii_uppercase();
     if is_read_only(&n) {
@@ -154,11 +171,10 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "POLARMODE" => st.polar_flags = as_i(v).filter(|b| (0..=15).contains(b)).ok_or_else(bad)? as u32,
         "POLARADDANG" => {
             let text = v.as_str().map(str::to_string).or_else(|| as_f64(v).map(|f| f.to_string())).ok_or_else(bad)?;
-            let angles: Option<Vec<f64>> =
-                text.split(';').map(str::trim).filter(|t| !t.is_empty()).map(|t| t.parse::<f64>().ok().filter(|a| a.is_finite())).collect();
-            let angles = angles.filter(|a| a.len() <= 10).ok_or_else(bad)?;
-            st.polaraddang = angles.into_iter().map(f64::to_radians).collect();
+            st.polaraddang = parse_angle_list(&text).ok_or_else(bad)?;
         }
+        "POLARDIST" => st.polardist = as_f64(v).filter(|d| *d >= 0.0 && *d < 1e12).ok_or_else(bad)?,
+        "SNAPTYPE" => st.polarsnap = as_i(v).filter(|b| (0..=1).contains(b)).ok_or_else(bad)? == 1,
         "AUTOSNAP" => {
             let bits = as_i(v).filter(|b| (0..=63).contains(b)).ok_or_else(bad)?;
             st.polarmode = bits & 8 != 0;

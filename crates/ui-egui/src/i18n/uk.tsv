@@ -31,6 +31,7 @@
 	About CADCraft	Про CADCraft
 	Absolute	Абсолютні
 	Add Leader	Додати виноску
+	Additional angles	Додаткові кути
 	Align	Вирівняти
 	Align Text	Вирівняти текст
 	Aligned	Паралельний
@@ -312,6 +313,7 @@
 	Grid (F7)	Сітка (F7)
 	Grid Display	Відображення сітки
 	Grid On (F7)	Увімкнути сітку (F7)
+	Grid snap	Прив'язка до сітки
 	Grid spacing	Крок сітки
 	Grip Edit	Редагування ручками
 	Grip Mirror	Дзеркальне відображення ручками
@@ -494,6 +496,7 @@
 	Object Snap On (F3)	Увімкнути об'єктну прив'язку (F3)
 	Object Snap Tracking	Відстеження об'єктної прив'язки
 	Object Snap Tracking (F11)	Відстеження об'єктної прив'язки (F11)
+	Object Snap Tracking Settings	Параметри відстеження об'єктної прив'язки
 	Object type:	Тип об'єкта:
 	Off	Вимкнено
 	Offset	Зміщення
@@ -575,7 +578,10 @@
 	Polar Tracking	Полярне відстеження
 	Polar Tracking (F10)	Полярне відстеження (F10)
 	Polar Tracking On (F10)	Увімкнути полярне відстеження (F10)
+	Polar angle measurement	Вимірювання полярного кута
+	Polar distance	Полярна відстань
 	Polar: {distance} < {angle}°	Полярне: {distance} < {angle}°
+	PolarSnap	Полярна прив'язка
 	Polygon	Правильний багатокутник
 	Polygonal	Багатокутний
 	Polyline	Полілінія
@@ -624,6 +630,7 @@
 	Region	Область
 	Region/Mass Properties	Властивості області/маси
 	Relative	Відносні
+	Relative to last segment	Відносно останнього сегмента
 	Remove Leader	Видалити виноску
 	Remove the viewport override	Видалити перевизначення видового екрана
 	Rename Dimension Style	Перейменувати розмірний стиль
@@ -752,6 +759,7 @@
 	Snap On (F9)	Увімкнути крокову прив'язку (F9)
 	Snap X spacing	Крок прив'язки X
 	Snap and Grid	Крокова прив'язка та сітка
+	Snap type	Тип крокової прив'язки
 	Solid	Тіло
 	Sort	Сортування
 	Specify a point	Укажіть точку
@@ -935,6 +943,8 @@
 	Tools	Інструменти
 	Torus	Тор
 	Trace	Смуга
+	Track orthogonally only	Відстежувати лише ортогонально
+	Track using all polar angle settings	Відстежувати за всіма полярними кутами
 	Transparency	Прозорість
 	Trim	Обрізати
 	True Color	Колір RGB

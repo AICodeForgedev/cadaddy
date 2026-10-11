@@ -15,7 +15,7 @@
 //! ([`crate::Session::snap_cursor`]).
 
 use cadcraft_doc::{Drawing, Prim, Space};
-use cadcraft_geom::{Line, PI, Segment, TAU, Vec2, angle_in_sweep, intersect_ext, norm_angle};
+use cadcraft_geom::{Ellipse, Line, PI, Segment, TAU, Vec2, angle_in_sweep, intersect_ext, norm_angle};
 use serde::Serialize;
 
 use super::{SnapHit, mode};
@@ -31,7 +31,7 @@ const MAX_NEAR_PATHS: usize = 64;
 
 /// POLARMODE bits.
 pub mod polarmode {
-    /// Polar angles measured relative to the last segment (not modelled yet).
+    /// Polar angles measured relative to the last segment, when the base point ends it.
     pub const RELATIVE: u32 = 1;
     /// Object snap tracking uses every polar angle, not only horizontal and vertical.
     pub const TRACK_POLAR: u32 = 2;
@@ -52,6 +52,9 @@ pub enum PathShape {
     /// The circle an arc lies on, without the arc itself (`gap`: its start and end angles, the
     /// arc running counterclockwise from one to the other) when it is the arc's extension.
     Circle { center: Vec2, radius: f64, gap: Option<(f64, f64)> },
+    /// The ellipse an elliptical arc lies on (center, major-axis vector, ratio), without the arc
+    /// itself (`gap`: its start and end parameters).
+    Ellipse { center: Vec2, major: Vec2, ratio: f64, gap: Option<(f64, f64)> },
 }
 
 impl PathShape {
@@ -70,6 +73,7 @@ impl PathShape {
                 }
                 center + u * radius
             }
+            PathShape::Ellipse { center, major, ratio, .. } => ellipse_foot(&Ellipse::full(center, major, ratio), p),
         };
         (f.is_finite() && self.contains(f)).then_some(f)
     }
@@ -80,23 +84,60 @@ impl PathShape {
             PathShape::Ray { origin, dir } => (p - origin).dot(dir) >= -cadcraft_geom::EPS,
             PathShape::Line { .. } => true,
             PathShape::Circle { center, gap, .. } => gap.is_none_or(|(s, e)| !angle_in_sweep(center.angle_to(p), s, e)),
+            PathShape::Ellipse { center, major, ratio, gap } => {
+                gap.is_none_or(|(s, e)| !angle_in_sweep(Ellipse::full(center, major, ratio).param_of(p), s, e))
+            }
         }
     }
 
-    /// The path's line or circle as a segment to intersect (`intersect_ext` extends it).
-    fn segment(&self) -> Segment {
+    /// The path's line or circle as segments to intersect (`intersect_ext` extends a line or
+    /// circle; an ellipse is its tessellation, without the gap).
+    fn segments(&self) -> Vec<Segment> {
         match *self {
-            PathShape::Ray { origin, dir } | PathShape::Line { origin, dir } => Segment::Line(Line::new(origin, origin + dir)),
-            PathShape::Circle { center, radius, .. } => Segment::Arc { arc: cadcraft_geom::Arc::new(center, radius, 0.0, PI), ccw: true },
+            PathShape::Ray { origin, dir } | PathShape::Line { origin, dir } => vec![Segment::Line(Line::new(origin, origin + dir))],
+            PathShape::Circle { center, radius, .. } => vec![Segment::Arc { arc: cadcraft_geom::Arc::new(center, radius, 0.0, PI), ccw: true }],
+            PathShape::Ellipse { center, major, ratio, gap } => {
+                let (start, end) = gap.map_or((0.0, TAU), |(s, e)| (e, s));
+                let mut pts = Vec::new();
+                Ellipse { center, major, ratio, start, end }.tessellate(major.len() * 1e-3, &mut pts);
+                pts.windows(2).filter_map(|w| Some(Segment::Line(Line::new(*w.first()?, *w.get(1)?)))).collect()
+            }
         }
+    }
+
+    /// Whether `x`, a crossing found with `seg` (one of [`PathShape::segments`]), lies on the
+    /// path: on a tessellated ellipse it must be on that piece, not its extension.
+    fn holds(&self, seg: &Segment, x: Vec2) -> bool {
+        self.contains(x) && (!matches!(self, PathShape::Ellipse { .. }) || seg.closest(x).dist(x) <= 1e-9 * (1.0 + x.len()))
     }
 
     fn is_finite(&self) -> bool {
         match *self {
             PathShape::Ray { origin, dir } | PathShape::Line { origin, dir } => origin.is_finite() && dir.is_finite() && dir != Vec2::ZERO,
             PathShape::Circle { center, radius, .. } => center.is_finite() && radius.is_finite() && radius > cadcraft_geom::EPS,
+            PathShape::Ellipse { center, major, ratio, .. } => {
+                center.is_finite() && major.is_finite() && major.len() > cadcraft_geom::EPS && ratio.is_finite() && ratio > 1e-9 && ratio <= 1e9
+            }
         }
     }
+}
+
+/// The point of the ellipse `e` closest to `p`: the tessellated closest point, refined by a few
+/// Newton steps on the parameter.
+fn ellipse_foot(e: &Ellipse, p: Vec2) -> Vec2 {
+    let mut t = e.param_of(e.closest(p));
+    let minor = e.minor();
+    for _ in 0..8 {
+        let (d, d1) = (e.at_param(t) - p, minor * t.cos() - e.major * t.sin());
+        let d2 = e.center - e.at_param(t);
+        let (f, df) = (d.dot(d1), d1.dot(d1) + d.dot(d2));
+        let next = t - f / df;
+        if !next.is_finite() || df.abs() < 1e-300 {
+            break;
+        }
+        t = next;
+    }
+    e.at_param(t)
 }
 
 /// What sent a tracking path.
@@ -211,8 +252,19 @@ pub struct TrackConfig {
 impl TrackConfig {
     /// From the session settings and ANGBASE (radians), from which polar angles are measured.
     pub fn new(s: &crate::Settings, angbase: f64) -> Self {
-        let polar = polar_angles(s.polarang, if s.polar_flags & polarmode::ADDITIONAL != 0 { &s.polaraddang } else { &[] }, angbase);
-        let track_angles = if s.polar_flags & polarmode::TRACK_POLAR != 0 { polar.clone() } else { orthogonal() };
+        Self::relative_to(s, angbase, None)
+    }
+
+    /// As [`TrackConfig::new`]; with POLARMODE bit 1 polar angles are measured from `last`, the
+    /// direction (radians) of the last segment when the base point ends it.
+    pub fn relative_to(s: &crate::Settings, angbase: f64, last: Option<f64>) -> Self {
+        let additional: &[f64] = if s.polar_flags & polarmode::ADDITIONAL != 0 { &s.polaraddang } else { &[] };
+        let absolute = polar_angles(s.polarang, additional, angbase);
+        let polar = match last.filter(|a| a.is_finite() && s.polar_flags & polarmode::RELATIVE != 0) {
+            Some(a) => polar_angles(s.polarang, additional, a),
+            None => absolute.clone(),
+        };
+        let track_angles = if s.polar_flags & polarmode::TRACK_POLAR != 0 { absolute } else { orthogonal() };
         TrackConfig {
             otrack: s.otrack,
             osmode: s.osmode,
@@ -276,7 +328,7 @@ impl Track {
     /// straight path the cursor slides on (`None` at crossings and on arc extensions).
     pub fn along(&self) -> Option<(Vec2, Vec2)> {
         let [p] = self.paths.as_slice() else { return None };
-        if self.object.is_some() || matches!(p.shape, PathShape::Circle { .. }) {
+        if self.object.is_some() || matches!(p.shape, PathShape::Circle { .. } | PathShape::Ellipse { .. }) {
             return None;
         }
         let dir = (self.point - p.from).normalized();
@@ -465,11 +517,15 @@ impl Tracker {
                 if a.from.dist(b.from) <= cadcraft_geom::EPS {
                     continue;
                 }
-                for x in intersect_ext(&a.shape.segment(), &b.shape.segment(), true) {
-                    let dd = x.dist(cursor);
-                    if dd <= aperture && a.shape.contains(x) && b.shape.contains(x) {
-                        let object = (a.kind == PathKind::Apparent && b.kind == PathKind::Apparent).then_some("Apparent Intersection");
-                        offer(dd, Track { point: x, paths: vec![*a, *b], object }, &mut best);
+                for sa in a.shape.segments() {
+                    for sb in b.shape.segments() {
+                        for x in intersect_ext(&sa, &sb, true) {
+                            let dd = x.dist(cursor);
+                            if dd <= aperture && a.shape.holds(&sa, x) && b.shape.holds(&sb, x) {
+                                let object = (a.kind == PathKind::Apparent && b.kind == PathKind::Apparent).then_some("Apparent Intersection");
+                                offer(dd, Track { point: x, paths: vec![*a, *b], object }, &mut best);
+                            }
+                        }
                     }
                 }
             }
@@ -486,13 +542,14 @@ impl Tracker {
                 for seg in super::prim_segments(prim) {
                     let seg = super::fix_circle(&seg);
                     for (p, _, _) in &near {
-                        for x in intersect_ext(&p.shape.segment(), &seg, true) {
+                        for (ps, x) in p.shape.segments().into_iter().flat_map(|ps| intersect_ext(&ps, &seg, true).into_iter().map(move |x| (ps, x)))
+                        {
                             let on_object = seg.closest(x).dist(x) <= 1e-9 * (1.0 + x.len());
                             // Off the object, or along an object's extension: apparent.
                             let apparent = !on_object || p.kind == PathKind::Apparent;
                             let dd = x.dist(cursor);
                             if dd > aperture
-                                || !p.shape.contains(x)
+                                || !p.shape.holds(&ps, x)
                                 || x.dist(p.from) <= tol
                                 || !(on_object || extend)
                                 || !cfg.running(if apparent { mode::APP } else { mode::INT })
@@ -580,26 +637,81 @@ pub fn candidate(
     None
 }
 
-/// The line or arc endpoint nearest `p` within `aperture` and the extension path from it.
+/// The open ends of a primitive and the extension path from each: a line runs on straight, an
+/// arc or elliptical arc around its circle or ellipse, an open spline along its end tangent.
+fn extension_ends(prim: &Prim) -> Vec<(Vec2, PathShape)> {
+    match prim {
+        Prim::Seg(s) => [(s.start(), s.end()), (s.end(), s.start())]
+            .into_iter()
+            .map(|(end, other)| {
+                let shape = match s {
+                    Segment::Line(_) => PathShape::Ray { origin: end, dir: (end - other).normalized() },
+                    Segment::Arc { arc, .. } => PathShape::Circle { center: arc.center, radius: arc.radius, gap: Some((arc.start, arc.end)) },
+                };
+                (end, shape)
+            })
+            .collect(),
+        Prim::Ellipse(e) if !e.is_full() => {
+            let shape = PathShape::Ellipse { center: e.center, major: e.major, ratio: e.ratio, gap: Some((e.start, e.end)) };
+            vec![(e.at_param(e.start), shape), (e.at_param(e.end), shape)]
+        }
+        Prim::Spline(sp) if sp.is_valid() && !sp.closed => {
+            let (t0, t1) = sp.domain();
+            let h = (t1 - t0) * 1e-6;
+            if !(h.is_finite() && h > 0.0) {
+                return Vec::new();
+            }
+            let (a, b) = (sp.eval(t0), sp.eval(t1));
+            if a.dist(b) <= cadcraft_geom::EPS * (1.0 + a.len()) {
+                return Vec::new();
+            }
+            // The tangent at each end, pointing out of the curve: along the end leg of the control
+            // polygon where the knots are clamped there, else from a point just inside.
+            let n = sp.control.len();
+            let clamped = |ks: &[f64]| ks.windows(2).all(|w| w.first() == w.get(1));
+            let leg = |i: usize, j: usize, ks: Option<&[f64]>| {
+                let (p, q) = (sp.control.get(i)?, sp.control.get(j)?);
+                (ks.is_some_and(clamped) && p.dist(*q) > cadcraft_geom::EPS).then(|| (*p - *q).normalized())
+            };
+            let d = sp.degree;
+            let start = leg(0, 1, sp.knots.get(..=d)).unwrap_or_else(|| (a - sp.eval(t0 + h)).normalized());
+            let end = leg(n.saturating_sub(1), n.saturating_sub(2), sp.knots.get(n..)).unwrap_or_else(|| (b - sp.eval(t1 - h)).normalized());
+            vec![(a, PathShape::Ray { origin: a, dir: start }), (b, PathShape::Ray { origin: b, dir: end })]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The open end nearest `p` within `aperture` and the extension path from it.
 fn extension_near(prims: &[Prim], p: Vec2, aperture: f64) -> Option<(Vec2, PathShape)> {
     let mut best: Option<(f64, Vec2, PathShape)> = None;
-    for prim in prims {
-        let Prim::Seg(s) = prim else { continue };
-        for (end, other) in [(s.start(), s.end()), (s.end(), s.start())] {
-            let dd = end.dist(p);
-            if !dd.is_finite() || dd > aperture || best.as_ref().is_some_and(|(bd, ..)| *bd <= dd) {
-                continue;
-            }
-            let shape = match s {
-                Segment::Line(_) => PathShape::Ray { origin: end, dir: (end - other).normalized() },
-                Segment::Arc { arc, .. } => PathShape::Circle { center: arc.center, radius: arc.radius, gap: Some((arc.start, arc.end)) },
-            };
-            if shape.is_finite() {
-                best = Some((dd, end, shape));
-            }
+    for (end, shape) in prims.iter().flat_map(extension_ends) {
+        let dd = end.dist(p);
+        if !dd.is_finite() || dd > aperture || best.as_ref().is_some_and(|(bd, ..)| *bd <= dd) {
+            continue;
+        }
+        if shape.is_finite() && end.is_finite() {
+            best = Some((dd, end, shape));
         }
     }
     best.map(|(_, at, shape)| (at, shape))
+}
+
+/// PolarSnap: a point sliding along one straight tracking path moves to the nearest whole
+/// multiple of `step` from the point the path comes from (at least one step along a ray).
+pub fn polar_snap(t: &Track, step: f64) -> Option<Track> {
+    let [path] = t.paths.as_slice() else { return None };
+    if t.object.is_some() || !path.slides() || !(step.is_finite() && step > 1e-9) {
+        return None;
+    }
+    let (dir, min) = match path.shape {
+        PathShape::Ray { dir, .. } => (dir, 1.0),
+        PathShape::Line { dir, .. } => (dir, f64::NEG_INFINITY),
+        PathShape::Circle { .. } | PathShape::Ellipse { .. } => return None,
+    };
+    let k = ((t.point - path.from).dot(dir) / step).round().max(min);
+    let point = path.from + dir * (k * step);
+    (k.is_finite() && point.is_finite()).then(|| Track { point, ..t.clone() })
 }
 
 /// What one cursor update gives: the point to use and why.
@@ -644,7 +756,9 @@ impl crate::Session {
         if !raw.is_finite() {
             return CursorSnap { point: raw, ..Default::default() };
         }
-        let cfg = TrackConfig::new(&s, angbase);
+        // Polar angles relative to the last segment when the base point is where it ends.
+        let last = self.last_segment.filter(|(_, b)| q.base.is_some_and(|base| base.near(*b, 1e-9 * (1.0 + b.len())))).map(|(a, b)| a.angle_to(b));
+        let cfg = TrackConfig::relative_to(&s, angbase, last);
         let osmode = s.osmode | if s.osnaphatch { mode::HATCH } else { 0 };
         let hit = super::osnap(&doc, &space, raw, q.aperture, osmode, q.base, q.deferred);
         let cand = candidate(&doc, &space, raw, hit.as_ref(), q.aperture, &cfg, q.base);
@@ -654,11 +768,20 @@ impl crate::Session {
             return CursorSnap { point: h.point, snap: Some(h), track: None, wait };
         }
         let mut p = raw;
-        if s.snapmode {
+        if s.snapmode && !s.polarsnap {
             let (origin, angle) = super::grid_frame(&doc);
             p = super::grid_snap(p, s.snapunit, origin, angle);
         }
-        if let Some(t) = self.tracking.track(&doc, &space, p, q.aperture, q.tol, &cfg, q.base) {
+        if let Some(mut t) = self.tracking.track(&doc, &space, p, q.aperture, q.tol, &cfg, q.base) {
+            // PolarSnap (SNAPTYPE 1): steps of POLARDIST, or of the snap X spacing when it is 0.
+            let step = if s.polardist > 0.0 { s.polardist } else { s.snapunit.x };
+            if s.snapmode
+                && s.polarsnap
+                && let Some(snapped) = polar_snap(&t, step)
+            {
+                t = snapped;
+                self.tracking.last = Some(t.clone());
+            }
             return CursorSnap { point: t.point, snap: None, track: Some(t), wait };
         }
         if let Some(b) = q.base
