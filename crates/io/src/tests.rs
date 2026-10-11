@@ -1346,7 +1346,7 @@ fn dwg_roundtrip_keeps_extension_data() {
 }
 
 #[test]
-fn mleader_is_written_as_leader_and_mtext() {
+fn mleader_is_written_as_multileader() {
     let mut d = Drawing::new_metric();
     let text = cadcraft_doc::MText {
         insert: Vec3::new(12.0, 5.0, 0.0),
@@ -1369,10 +1369,10 @@ fn mleader_is_written_as_leader_and_mtext() {
         spline: false,
         block: None,
     };
-    d.add(&Space::Model, Default::default(), EntityKind::MLeader(m)).unwrap();
+    d.add(&Space::Model, Default::default(), EntityKind::MLeader(m.clone())).unwrap();
     let back = roundtrip(&d);
-    assert!(back.model.iter().any(|e| matches!(e.kind, EntityKind::Leader(_))));
-    assert!(back.model.iter().any(|e| matches!(&e.kind, EntityKind::MText(t) if t.contents == "Note")));
+    assert!(back.model.iter().any(|e| matches!(&e.kind, EntityKind::MLeader(x) if *x == m)));
+    assert!(!back.model.iter().any(|e| matches!(e.kind, EntityKind::Leader(_) | EntityKind::MText(_))));
 }
 
 #[test]

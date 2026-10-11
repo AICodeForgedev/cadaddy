@@ -111,6 +111,10 @@ struct Ctx {
     tables: HashMap<Handle, (String, String)>,
     /// Table style name → TABLESTYLE handle (the first is the fallback).
     table_styles: Vec<(String, String)>,
+    /// Multileader style name → MLEADERSTYLE handle (the first is the fallback).
+    mleader_styles: Vec<(String, String)>,
+    /// Upper-case block name → BLOCK_RECORD handle (multileader block content).
+    block_records: HashMap<String, String>,
     /// Raster images' IMAGEDEF, IMAGEDEF_REACTOR and dictionary handles.
     images: crate::dxf_image::Plan,
 }
@@ -123,12 +127,14 @@ impl Ctx {
         self.arrows.get(&name.trim().to_ascii_uppercase()).cloned()
     }
     fn table_style(&self, name: &str) -> String {
-        self.table_styles
-            .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(name))
-            .or_else(|| self.table_styles.first())
-            .map(|(_, h)| h.clone())
-            .unwrap_or_else(|| "0".into())
+        Self::named(&self.table_styles, name)
+    }
+    fn mleader_style(&self, name: &str) -> String {
+        Self::named(&self.mleader_styles, name)
+    }
+    /// The handle of the style `name` in `styles`, or of the first one.
+    fn named(styles: &[(String, String)], name: &str) -> String {
+        styles.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).or_else(|| styles.first()).map(|(_, h)| h.clone()).unwrap_or_else(|| "0".into())
     }
     /// A dimension variable encoded with this file's handles; integers outside the 16-bit
     /// range of their groups are dropped.
@@ -745,35 +751,14 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.s(1000, &t.style);
         }
         EntityKind::MLeader(m) => {
-            // Written as plain LEADER + MTEXT entities (MULTILEADER objects aren't supported
-            // yet), so every reader shows the annotation.
-            for arm in m.leaders.iter().take(64) {
-                let mut vertices = arm.clone();
-                vertices.push(m.landing);
-                let le = Entity {
-                    handle: Handle(u64::from_str_radix(&w.h(), 16).unwrap_or(0)),
-                    common: e.common.clone(),
-                    kind: EntityKind::Leader(cadcraft_doc::Leader { vertices, arrow: true, spline: m.spline, style: m.style.clone() }),
-                };
-                entity(w, d, &le, owner, paper, cx);
-            }
-            if let Some(t) = &m.text {
-                let te = Entity {
-                    handle: Handle(u64::from_str_radix(&w.h(), 16).unwrap_or(0)),
-                    common: e.common.clone(),
-                    kind: EntityKind::MText(t.clone()),
-                };
-                entity(w, d, &te, owner, paper, cx);
-            }
-            // Block content: a plain INSERT of the block.
-            if let Some(ins) = &m.block {
-                let ie = Entity {
-                    handle: Handle(u64::from_str_radix(&w.h(), 16).unwrap_or(0)),
-                    common: e.common.clone(),
-                    kind: EntityKind::Insert(ins.clone()),
-                };
-                entity(w, d, &ie, owner, paper, cx);
-            }
+            w.s(0, "MULTILEADER");
+            common(w, e, owner, paper, "AcDbMLeader");
+            let refs = crate::dxf_mleader::Refs {
+                style: cx.mleader_style(&m.style),
+                text_style: m.text.as_ref().and_then(|t| cx.style(&t.style)),
+                block: m.block.as_ref().and_then(|b| cx.block_records.get(&b.block.to_ascii_uppercase()).cloned()),
+            };
+            w.t.extend(crate::dxf_mleader::entity_tags(d, m, &refs));
         }
         EntityKind::Leader(l) => {
             w.s(0, "LEADER");
@@ -1270,6 +1255,7 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     user_blocks.iter_mut().for_each(|b| b.1 = format!("{:X}", 0));
     let user_blocks: Vec<(String, String, &Block)> = user_blocks.into_iter().map(|(n, _, b)| (n, w.h(), b)).collect();
     let mut cx = Ctx { paper_views: paper_views(d), ..Ctx::default() };
+    cx.block_records = user_blocks.iter().map(|(n, h, _)| (n.to_ascii_uppercase(), h.clone())).collect();
     // Dimension blocks.
     let mut dim_defs: Vec<(String, String, Vec<Entity>)> = Vec::new(); // filled below
     let mut n = 1;
@@ -1369,6 +1355,9 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     let default_table_style = [TableStyle::default()];
     let table_styles: &[TableStyle] = if d.table_styles.is_empty() { &default_table_style } else { &d.table_styles };
     cx.table_styles = table_styles.iter().map(|s| (s.name.clone(), w.h())).collect();
+    let default_mleader_style = [MLeaderStyle::default()];
+    let mleader_styles: &[MLeaderStyle] = if d.mleader_styles.is_empty() { &default_mleader_style } else { &d.mleader_styles };
+    cx.mleader_styles = mleader_styles.iter().map(|s| (s.name.clone(), w.h())).collect();
     let root_dict = w.h();
     let group_dict = w.h();
     let layout_dict = w.h();
@@ -1439,6 +1428,9 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     }
     if !cx.assoc.is_empty() {
         classes.push(("DIMASSOC", "AcDbDimAssoc", 0, false));
+    }
+    if every.iter().any(|e| matches!(e.kind, EntityKind::MLeader(_))) {
+        classes.push(("MULTILEADER", "AcDbMLeader", 1025, true));
     }
     if every.iter().any(|e| matches!(e.kind, EntityKind::Wipeout(_))) {
         classes.push(("WIPEOUT", "AcDbWipeout", 127, true));
@@ -1809,10 +1801,8 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     let group_owner = group_dict.clone();
     let written: std::collections::HashSet<String> = w.t.iter().filter(|t| t.code == 5).map(Tag::str).collect();
     let groups: Vec<(&Group, String)> = d.groups.iter().filter(|g| !g.name.is_empty()).map(|g| (g, w.h())).collect();
-    let default_mleader_style = [MLeaderStyle::default()];
-    let mleader_styles: &[MLeaderStyle] = if d.mleader_styles.is_empty() { &default_mleader_style } else { &d.mleader_styles };
     let mleader_dict = w.h();
-    let mleader_handles: Vec<String> = mleader_styles.iter().map(|_| w.h()).collect();
+    let mleader_handles: Vec<String> = cx.mleader_styles.iter().map(|(_, h)| h.clone()).collect();
     w.s(0, "SECTION");
     w.s(2, "OBJECTS");
     w.s(0, "DICTIONARY");

@@ -400,6 +400,8 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             spline: t.i(72).unwrap_or(0) != 0,
             style: t.s(3).unwrap_or_else(|| "Standard".into()),
         }),
+        // Names behind handles follow in `entity_extras` and `Objects::apply`.
+        "MULTILEADER" | "MLEADER" => EntityKind::MLeader(crate::dxf_mleader::read(tags)),
         "SOLID" | "TRACE" => {
             let corners = [t.p(10), t.p(11), t.p(12), if t.f(13).is_some() { t.p(13) } else { t.p(12) }];
             let corners = corners.map(|p| ocs(&c, p));
@@ -847,6 +849,8 @@ struct Rx {
     inserted: std::collections::HashSet<String>,
     /// Tables whose style is known only by TABLESTYLE handle: (table, style handle).
     table_style_fix: Vec<(Handle, String)>,
+    /// Multileaders' style handles and block attribute values, resolved with the objects.
+    mleader_fix: Vec<(Handle, crate::dxf_mleader::Pending)>,
     /// Upper-case xref block name → the external drawing's path (BLOCK group 1).
     xref_paths: HashMap<String, String>,
     /// Plot style name placeholder handle (upper case) → plot style name (`ACAD_PLOTSTYLENAME`).
@@ -933,6 +937,13 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
         }
         ("INSERT", EntityKind::Insert(ins)) => {
             rx.inserted.insert(ins.block.to_ascii_uppercase());
+        }
+        ("MULTILEADER" | "MLEADER", EntityKind::MLeader(m)) => {
+            let pending = crate::dxf_mleader::resolve(tags, m, &rx.styles, &rx.brs);
+            if let Some(b) = &m.block {
+                rx.inserted.insert(b.block.to_ascii_uppercase());
+            }
+            rx.mleader_fix.push((h, pending));
         }
         _ => {}
     }
@@ -1741,6 +1752,7 @@ impl Objects {
                 None => d.mleader_styles.push(st),
             }
         }
+        crate::dxf_mleader::apply(d, &rx.mleader_fix, &self.names);
         for (name, view) in &self.layout_views {
             if let Some(l) = d.layouts.iter_mut().find(|l| l.name == *name) {
                 l.view = Some(*view);

@@ -4,6 +4,7 @@
 
 mod dxf_ext;
 mod dxf_image;
+mod dxf_mleader;
 mod dxf_read;
 mod dxf_write;
 pub mod pdf;
