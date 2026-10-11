@@ -3,6 +3,9 @@
 mod curves;
 pub mod iso;
 pub mod tracking;
+mod viewport;
+
+pub use viewport::ViewportPoint;
 
 use cadcraft_doc::{Drawing, EntityKind, Insert, MAX_BLOCK_DEPTH, Prim, Space};
 use cadcraft_geom::{Bounds2, Circle, Ellipse, Mat3, PI, Segment, Vec2, intersect_ext};
@@ -52,6 +55,9 @@ pub struct SnapHit {
     pub point: Vec2,
     pub mode: u32,
     pub name: &'static str,
+    /// Model coordinates when this paper-space hit is inside a layout viewport.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub viewport: Option<ViewportPoint>,
     /// A deferred tangent/perpendicular: `point` is only provisional (the nearest point on the
     /// curve) until the other end of the line is known. See [`resolve_deferred`].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -148,10 +154,59 @@ pub(crate) fn osnap_with(
     base: Option<Vec2>,
     deferred: bool,
 ) -> Option<SnapHit> {
-    if osmode == 0 || osmode & mode::OFF != 0 {
+    if osmode == 0 || osmode & mode::OFF != 0 || !cursor.is_finite() || !(aperture.is_finite() && aperture > 0.0) {
         return None;
     }
-    let (mut cands, near_prims) = gather(d, space, ix, cursor, aperture, osmode)?;
+    let mut best = osnap_in(d, space, ix, cursor, aperture, osmode, base, deferred, &[], None);
+    let views = viewport::near(d, space, cursor, aperture);
+    if views.is_empty() {
+        return best;
+    }
+    let model = Space::Model;
+    let model_ix = crate::spatial::index(d, &model);
+    for view in views {
+        let model_cursor = view.to_model(cursor);
+        let model_aperture = aperture / view.scale;
+        let model_base = base.map(|p| view.to_model(p));
+        if !model_cursor.is_finite() || !(model_aperture.is_finite() && model_aperture > 0.0) || model_base.is_some_and(|p| !p.is_finite()) {
+            continue;
+        }
+        let hit = osnap_in(
+            d,
+            &model,
+            &model_ix,
+            model_cursor,
+            model_aperture,
+            osmode,
+            model_base,
+            deferred,
+            &view.viewport.frozen_layers,
+            Some(view.model_clip),
+        )
+        .and_then(|h| view.hit(h));
+        if let Some(hit) = hit
+            && best.as_ref().is_none_or(|b| snap_score(hit.mode, hit.point, cursor, aperture) < snap_score(b.mode, b.point, cursor, aperture))
+        {
+            best = Some(hit);
+        }
+    }
+    best
+}
+
+#[allow(clippy::too_many_arguments)]
+fn osnap_in(
+    d: &Drawing,
+    space: &Space,
+    ix: &Option<std::sync::Arc<crate::spatial::SpatialIndex>>,
+    cursor: Vec2,
+    aperture: f64,
+    osmode: u32,
+    base: Option<Vec2>,
+    deferred: bool,
+    frozen: &[String],
+    clip: Option<Bounds2>,
+) -> Option<SnapHit> {
+    let (mut cands, near_prims) = gather_in(d, space, ix, cursor, aperture, osmode, frozen)?;
     // Intersections between nearby primitives; Apparent Intersection also where their extensions
     // meet (lines extended, arcs as full circles: in 2D, the "apparent" crossing of objects
     // that don't reach each other).
@@ -181,7 +236,7 @@ pub(crate) fn osnap_with(
             }
         }
     }
-    finish(cands, &near_prims, cursor, aperture, osmode, base, deferred)
+    finish(cands, &near_prims, cursor, aperture, osmode, base, deferred, clip)
 }
 
 /// Whether a primitive has a meaningful extension (a line, an arc, a circle, an xline or ray).
@@ -199,13 +254,25 @@ pub(crate) fn gather(
     aperture: f64,
     osmode: u32,
 ) -> Option<(Vec<(u32, Vec2)>, Vec<Prim>)> {
+    gather_in(d, space, ix, cursor, aperture, osmode, &[])
+}
+
+fn gather_in(
+    d: &Drawing,
+    space: &Space,
+    ix: &Option<std::sync::Arc<crate::spatial::SpatialIndex>>,
+    cursor: Vec2,
+    aperture: f64,
+    osmode: u32,
+    frozen: &[String],
+) -> Option<(Vec<(u32, Vec2)>, Vec<Prim>)> {
     let probe = Bounds2::new(cursor, cursor).expand(aperture);
     let mut cands: Vec<(u32, Vec2)> = Vec::new();
     let mut near_prims: Vec<Prim> = Vec::new();
     let mut count = 0usize;
     let mut budget = MAX_BLOCK_LEAVES;
     for (e, known) in crate::select::candidates(d, space, ix, &probe.expand(aperture), true, false)? {
-        if !d.is_visible(e) {
+        if !d.is_visible(e) || frozen.iter().any(|l| l.eq_ignore_ascii_case(&e.common.layer)) {
             continue;
         }
         let inf = crate::select::is_infinite(e);
@@ -238,16 +305,17 @@ pub(crate) fn gather(
         sink.object(&e.kind, None);
         // A block reference snaps to the objects inside it, placed by its transform.
         if let EntityKind::Insert(ins) = &e.kind {
-            block_leaves(d, ins, &Mat3::IDENTITY, 0, &mut budget, &mut |k, m| sink.object(k, Some(m)));
+            block_leaves(d, ins, &Mat3::IDENTITY, 0, &mut budget, frozen, &mut |k, m| sink.object(k, Some(m)));
         }
         if let EntityKind::Dimension(dm) = &e.kind {
-            sink.dimension(d, dm, &mut budget);
+            sink.dimension(d, dm, &mut budget, frozen);
         }
     }
     Some((cands, near_prims))
 }
 
 /// Picks the best of the gathered candidates, adding the base-dependent and deferred snaps.
+#[allow(clippy::too_many_arguments)]
 fn finish(
     mut cands: Vec<(u32, Vec2)>,
     near_prims: &[Prim],
@@ -256,6 +324,7 @@ fn finish(
     osmode: u32,
     base: Option<Vec2>,
     deferred: bool,
+    clip: Option<Bounds2>,
 ) -> Option<SnapHit> {
     // Perpendicular / tangent from the base point.
     if let Some(bp) = base {
@@ -283,18 +352,19 @@ fn finish(
             }
         }
     }
-    let best = cands.iter().filter(|(_, p)| p.dist(cursor) <= aperture).min_by(|a, b| {
+    let visible = |p: Vec2| p.is_finite() && clip.is_none_or(|c| c.contains(p));
+    let best = cands.iter().filter(|(_, p)| visible(*p) && p.dist(cursor) <= aperture).min_by(|a, b| {
         // Prefer more specific modes when nearly equidistant.
-        let da = a.1.dist(cursor) - if a.0 == mode::INT || a.0 == mode::END { aperture * 0.15 } else { 0.0 };
-        let db = b.1.dist(cursor) - if b.0 == mode::INT || b.0 == mode::END { aperture * 0.15 } else { 0.0 };
+        let da = snap_score(a.0, a.1, cursor, aperture);
+        let db = snap_score(b.0, b.1, cursor, aperture);
         da.total_cmp(&db)
     });
     if let Some((m, p)) = best {
-        return Some(SnapHit { point: *p, mode: *m, name: name_of(*m), deferred: None });
+        return Some(SnapHit { point: *p, mode: *m, name: name_of(*m), viewport: None, deferred: None });
     }
     if base.is_none()
         && deferred
-        && let Some(h) = deferred_hit(near_prims, cursor, aperture, osmode)
+        && let Some(h) = deferred_hit(near_prims, cursor, aperture, osmode, clip)
     {
         return Some(h);
     }
@@ -303,7 +373,7 @@ fn finish(
         let mut nb: Option<(f64, Vec2)> = None;
         let mut consider = |c: Vec2| {
             let dd = c.dist(cursor);
-            if dd <= aperture && nb.is_none_or(|(bd, _)| dd < bd) {
+            if visible(c) && dd <= aperture && nb.is_none_or(|(bd, _)| dd < bd) {
                 nb = Some((dd, c));
             }
         };
@@ -316,10 +386,14 @@ fn finish(
             }
         }
         if let Some((_, p)) = nb {
-            return Some(SnapHit { point: p, mode: mode::NEA, name: "Nearest", deferred: None });
+            return Some(SnapHit { point: p, mode: mode::NEA, name: "Nearest", viewport: None, deferred: None });
         }
     }
     None
+}
+
+fn snap_score(mode: u32, point: Vec2, cursor: Vec2, aperture: f64) -> f64 {
+    point.dist(cursor) - if mode == mode::INT || mode == mode::END { aperture * 0.15 } else { 0.0 }
 }
 
 /// Upper bound on the block-reference objects one snap query looks at (hostile files).
@@ -463,7 +537,7 @@ impl Sink<'_> {
     /// A dimension snaps to what it draws, as in AutoCAD (into its block): the objects of its
     /// block when the drawing has one (read from a file), else the lines generated from it
     /// (Endpoint on their ends); Node on its definition points.
-    fn dimension(&mut self, d: &Drawing, dm: &cadcraft_doc::Dimension, budget: &mut usize) {
+    fn dimension(&mut self, d: &Drawing, dm: &cadcraft_doc::Dimension, budget: &mut usize, frozen: &[String]) {
         match dm.block.as_ref().and_then(|n| d.block(n)) {
             Some(blk) => {
                 // The block holds world geometry: a reference at its own base point places it as is.
@@ -478,7 +552,7 @@ impl Sink<'_> {
                     col_spacing: 0.0,
                     row_spacing: 0.0,
                 };
-                block_leaves(d, &ins, &Mat3::IDENTITY, 0, budget, &mut |k, m| self.object(k, Some(m)));
+                block_leaves(d, &ins, &Mat3::IDENTITY, 0, budget, frozen, &mut |k, m| self.object(k, Some(m)));
             }
             None => {
                 let g = cadcraft_render::dimension_in(d, dm);
@@ -523,7 +597,7 @@ fn dim_def_points(dm: &cadcraft_doc::Dimension) -> Vec<Vec2> {
 /// Calls `f` with each object drawn by a block reference and the transform placing it, nested
 /// references expanded (within [`MAX_BLOCK_DEPTH`] levels and `budget` objects); objects that
 /// aren't drawn (hidden, on a layer that is off or frozen, attribute definitions) are left out.
-fn block_leaves(d: &Drawing, ins: &Insert, m: &Mat3, depth: usize, budget: &mut usize, f: &mut dyn FnMut(&EntityKind, &Mat3)) {
+fn block_leaves(d: &Drawing, ins: &Insert, m: &Mat3, depth: usize, budget: &mut usize, frozen: &[String], f: &mut dyn FnMut(&EntityKind, &Mat3)) {
     if depth >= MAX_BLOCK_DEPTH {
         return;
     }
@@ -547,12 +621,14 @@ fn block_leaves(d: &Drawing, ins: &Insert, m: &Mat3, depth: usize, budget: &mut 
                 }
                 *budget -= 1;
                 // Objects on layer 0 take the reference's layer, which is visible.
-                if !be.common.visible || (be.common.layer != "0" && !d.is_visible(be)) {
+                if !be.common.visible
+                    || (be.common.layer != "0" && (!d.is_visible(be) || frozen.iter().any(|l| l.eq_ignore_ascii_case(&be.common.layer))))
+                {
                     continue;
                 }
                 match &be.kind {
                     EntityKind::AttDef(_) => {}
-                    EntityKind::Insert(inner) => block_leaves(d, inner, &mm, depth + 1, budget, f),
+                    EntityKind::Insert(inner) => block_leaves(d, inner, &mm, depth + 1, budget, frozen, f),
                     k => f(k, &mm),
                 }
             }
@@ -636,7 +712,7 @@ fn xform_ellipse(e: &Ellipse, m: &Mat3) -> Ellipse {
 }
 
 /// The nearest deferred tangent/perpendicular within `aperture` of `cursor`.
-fn deferred_hit(prims: &[Prim], cursor: Vec2, aperture: f64, osmode: u32) -> Option<SnapHit> {
+fn deferred_hit(prims: &[Prim], cursor: Vec2, aperture: f64, osmode: u32, clip: Option<Bounds2>) -> Option<SnapHit> {
     let mut best: Option<(f64, SnapHit)> = None;
     for p in prims {
         let curve = match p {
@@ -661,8 +737,8 @@ fn deferred_hit(prims: &[Prim], cursor: Vec2, aperture: f64, osmode: u32) -> Opt
             _ => continue,
         };
         let dd = at.dist(cursor);
-        if at.is_finite() && dd <= aperture && best.is_none_or(|(bd, _)| dd < bd) {
-            best = Some((dd, SnapHit { point: at, mode: m, name, deferred: Some(Deferred { mode: m, curve, at }) }));
+        if at.is_finite() && clip.is_none_or(|c| c.contains(at)) && dd <= aperture && best.is_none_or(|(bd, _)| dd < bd) {
+            best = Some((dd, SnapHit { point: at, mode: m, name, viewport: None, deferred: Some(Deferred { mode: m, curve, at }) }));
         }
     }
     best.map(|(_, h)| h)

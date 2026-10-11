@@ -349,7 +349,7 @@ impl Session {
                     let deferred = prompt.as_ref().is_some_and(|q| q.deferred);
                     let hit = crate::snap::osnap(self.doc()?, &space, p, aperture, mode | hatch, base, deferred);
                     match hit {
-                        Some(SnapHit { deferred: Some(d), .. }) if self.point_mods.is_empty() => return self.input(Input::Deferred(d)),
+                        Some(h) if self.point_mods.is_empty() => return self.input_snapped(h),
                         Some(h) => p = h.point,
                         None => {
                             self.echo(format!("No {} found for specified point.", snap_name(mode)));

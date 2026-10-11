@@ -774,9 +774,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             {
                 app.cmd.buffer.clear();
             }
-            // A deferred tangent/perpendicular goes to the command as such.
-            let input = app.canvas.snap.filter(|h| h.deferred.is_some()).map_or(Input::Point(p), |h| h.input());
-            if let Err(e) = app.session.input(input) {
+            // Preserve a snap's viewport origin for DIST, and its deferred curve where needed.
+            let result = match app.canvas.snap {
+                Some(hit) => app.session.input_snapped(hit),
+                None => app.session.input(Input::Point(p)),
+            };
+            if let Err(e) = result {
                 app.session.echo(e.to_string());
             }
         } else if let Some(g) = grip_at(app, &xf, hover_pos) {

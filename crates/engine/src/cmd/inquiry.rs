@@ -347,8 +347,10 @@ mod count;
 #[derive(Default)]
 struct DistM {
     first: Option<Vec2>,
+    first_source: Option<crate::snap::ViewportPoint>,
     /// Multiple points: the points so far, the first included.
     multi: Option<Vec<Vec2>>,
+    sources: Vec<Option<crate::snap::ViewportPoint>>,
     /// Asking for the length of a segment (the Length option).
     length: bool,
 }
@@ -390,6 +392,12 @@ fn length_input(pts: &[Vec2], i: Input) -> Result<Option<Vec2>> {
     Ok(extend_last(pts, len))
 }
 
+/// Model units apply only when every point was snapped through one and the same viewport.
+fn model_points(sources: &[Option<crate::snap::ViewportPoint>]) -> Option<Vec<Vec2>> {
+    let viewport = sources.first().copied().flatten()?.viewport;
+    sources.iter().map(|s| s.filter(|s| s.viewport == viewport).map(|s| s.point)).collect()
+}
+
 impl Interactive for DistM {
     fn name(&self) -> &'static str {
         "DIST"
@@ -413,9 +421,20 @@ impl Interactive for DistM {
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Some(pts) = &mut self.multi {
             if self.length {
-                if let Some(p) = length_input(pts, i)? {
-                    pts.push(p);
-                    s.echo(format!("Distance = {}", fmt_d(s, path_len(pts))));
+                let model = model_points(&self.sources);
+                if let Some(p) = length_input(model.as_deref().unwrap_or(pts), i)? {
+                    let source = model.as_ref().and_then(|_| self.sources.last().copied().flatten());
+                    let paper = match (source, pts.last()) {
+                        (Some(source), Some(last)) => *last + (p - source.point) * source.scale,
+                        _ => p,
+                    };
+                    if !paper.is_finite() {
+                        return Err(bad("dist", "the next point is too large"));
+                    }
+                    pts.push(paper);
+                    self.sources.push(source.map(|source| crate::snap::ViewportPoint { point: p, ..source }));
+                    let model = model_points(&self.sources);
+                    s.echo(format!("Distance = {}", fmt_d(s, path_len(model.as_deref().unwrap_or(pts)))));
                 }
                 self.length = false;
                 return Ok(Step::Continue);
@@ -423,11 +442,14 @@ impl Interactive for DistM {
             match i {
                 Input::Point(p) => {
                     pts.push(p);
-                    s.echo(format!("Distance = {}", fmt_d(s, path_len(pts))));
+                    self.sources.push(s.picked_viewport);
+                    let model = model_points(&self.sources);
+                    s.echo(format!("Distance = {}", fmt_d(s, path_len(model.as_deref().unwrap_or(pts)))));
                 }
                 Input::Keyword(k) if k == "Undo" => {
                     if pts.len() > 1 {
                         pts.pop();
+                        self.sources.pop();
                     }
                 }
                 Input::Keyword(k) if k == "Length" => self.length = true,
@@ -441,9 +463,14 @@ impl Interactive for DistM {
         match (self.first, i) {
             (None, Input::Point(p)) => {
                 self.first = Some(p);
+                self.first_source = s.picked_viewport;
                 Ok(Step::Continue)
             }
             (Some(a), Input::Point(b)) => {
+                let (a, b) = match (self.first_source, s.picked_viewport) {
+                    (Some(first), Some(second)) if first.viewport == second.viewport => (first.point, second.point),
+                    _ => (a, b),
+                };
                 let t = dist_text(s, a, b);
                 for l in t.lines() {
                     s.echo(l.to_string());
@@ -452,6 +479,7 @@ impl Interactive for DistM {
             }
             (Some(a), Input::Keyword(k)) if k == "Multiple points" => {
                 self.multi = Some(vec![a]);
+                self.sources = vec![self.first_source];
                 Ok(Step::Continue)
             }
             (_, Input::Enter) => Ok(Step::Done),
@@ -472,7 +500,8 @@ impl Interactive for DistM {
 
 impl DistM {
     fn total(&self, s: &mut Session) -> Result<Step> {
-        let d = self.multi.as_deref().map_or(0.0, path_len);
+        let model = model_points(&self.sources);
+        let d = model.as_deref().or(self.multi.as_deref()).map_or(0.0, path_len);
         s.echo(format!("Distance = {}", fmt_d(s, d)));
         Ok(Step::Done)
     }
