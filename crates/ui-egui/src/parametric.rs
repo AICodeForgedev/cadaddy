@@ -644,7 +644,9 @@ pub fn parameters_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool)
 pub fn expr_field(ui: &mut egui::Ui, id: egui::Id, value: &str) -> Option<String> {
     let mut buf = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| value.to_string());
     let resp = ui.add(egui::TextEdit::singleline(&mut buf).id(id.with("te")).desired_width(150.0));
-    if resp.has_focus() {
+    // Focus from memory: `Response::has_focus` is false while the OS window is unfocused,
+    // which dropped the pending edit (matches `palettes::edit_field`).
+    if ui.memory(|m| m.has_focus(id.with("te"))) {
         ui.data_mut(|d| d.insert_temp(id, buf.clone()));
     } else {
         ui.data_mut(|d| d.remove::<String>(id));
@@ -667,5 +669,26 @@ mod tests {
     fn number_trimming() {
         assert_eq!(trim_num(12.5, 4), "12.5");
         assert_eq!(trim_num(45.0, 2), "45");
+    }
+
+    fn frame(ctx: &egui::Context, focused: bool, events: Vec<egui::Event>) -> Option<String> {
+        let mut out = None;
+        let input = egui::RawInput { focused, events, ..Default::default() };
+        ctx.run_ui(input, |ui| out = expr_field(ui, egui::Id::new("e"), "1")).drop_without_applying_deltas();
+        out
+    }
+
+    #[test]
+    fn pending_expression_survives_window_blur() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("e");
+        frame(&ctx, true, vec![]);
+        ctx.memory_mut(|m| m.request_focus(id.with("te")));
+        frame(&ctx, true, vec![egui::Event::Text("+2".into())]);
+        frame(&ctx, false, vec![egui::Event::WindowFocused(false)]);
+        frame(&ctx, true, vec![egui::Event::WindowFocused(true)]);
+        assert_eq!(ctx.data_mut(|d| d.get_temp::<String>(id)).as_deref(), Some("1+2"));
+        let enter = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        assert_eq!(frame(&ctx, true, vec![enter]).as_deref(), Some("1+2"));
     }
 }
