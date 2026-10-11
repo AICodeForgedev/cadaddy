@@ -848,6 +848,8 @@ struct Rx {
     xref_paths: HashMap<String, String>,
     /// Plot style name placeholder handle (upper case) → plot style name (`ACAD_PLOTSTYLENAME`).
     pstyles: HashMap<String, String>,
+    /// Upper-case block name → associative array parameters from its BLOCK_RECORD.
+    block_arrays: HashMap<String, cadcraft_doc::ArrayParams>,
 }
 
 /// The plot style names of a file: the entries of the `ACAD_PLOTSTYLENAME` dictionary of the
@@ -1197,6 +1199,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             "BLOCK_RECORD" => {
                 let units = t.i(70).and_then(|u| u8::try_from(u).ok()).unwrap_or(0);
                 rx.block_props.insert(n.to_ascii_uppercase(), (units, t.i(280).unwrap_or(1) != 0));
+                if let Some(a) = crate::dxf_ext::read_array(tg) {
+                    rx.block_arrays.insert(n.to_ascii_uppercase(), a);
+                }
                 rx.brs.insert(h.trim().to_ascii_uppercase(), n);
             }
             _ => {}
@@ -1506,6 +1511,9 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         for (_, _, e) in ents {
             b.entities.push(e);
         }
+        // Array parameters, with the block names the items use (other programs may rename
+        // anonymous blocks); dropped when the items no longer match them.
+        b.array = rx.block_arrays.get(&up).cloned().and_then(|mut a| a.sync_names(b.entities.iter().map(|e| e.as_ref())).then_some(a));
         if let Some(path) = rx.xref_paths.remove(&up) {
             b.xref_path = Some(path);
         }

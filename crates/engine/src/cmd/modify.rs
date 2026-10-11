@@ -1147,6 +1147,9 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
             )
         }
         EntityKind::Insert(ins) => {
+            if let Some(items) = super::array::explode_array(d, e) {
+                return Some(items);
+            }
             let blk = d.block(&ins.block)?;
             let m = ins.transform(blk.base.xy());
             Some(

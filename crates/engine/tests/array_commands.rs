@@ -2,8 +2,8 @@
 //! option loops. Each input is its own `cmdline` call (one typed line each).
 
 use cadcraft_engine::Session;
-use cadcraft_engine::doc::EntityKind;
-use cadcraft_engine::geom::Vec2;
+use cadcraft_engine::doc::{Drawing, Entity, EntityKind};
+use cadcraft_engine::geom::{Mat3, Vec2};
 use serde_json::json;
 
 fn typed(s: &mut Session, inputs: &[&str]) {
@@ -12,16 +12,27 @@ fn typed(s: &mut Session, inputs: &[&str]) {
     }
 }
 
+/// Circle centres in model space, inside (associative) arrays too.
 fn circle_centers(s: &Session) -> Vec<Vec2> {
-    s.doc()
-        .unwrap()
-        .model
-        .iter()
-        .filter_map(|e| match &e.kind {
-            EntityKind::Circle(c) => Some(c.center.xy()),
-            _ => None,
-        })
-        .collect()
+    fn walk(d: &Drawing, e: &Entity, m: Mat3, depth: usize, out: &mut Vec<Vec2>) {
+        match &e.kind {
+            EntityKind::Circle(c) => out.push(m.apply(c.center.xy())),
+            EntityKind::Insert(i) if depth < 8 => {
+                let b = d.block(&i.block).unwrap();
+                let im = m.then_before(i.transform(b.base.xy()));
+                for be in b.entities.iter() {
+                    walk(d, be, im, depth + 1, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let d = s.doc().unwrap();
+    let mut out = Vec::new();
+    for e in d.model.iter() {
+        walk(d, e, Mat3::IDENTITY, 0, &mut out);
+    }
+    out
 }
 
 fn has(pts: &[Vec2], x: f64, y: f64) -> bool {
@@ -83,8 +94,10 @@ fn arrayrect_edits_the_array_in_a_loop_until_exit() {
     // Nothing is created before eXit.
     assert_eq!(circle_centers(&s).len(), 1);
     typed(&mut s, &["cou", "2", "3", "s", "10", "20"]);
-    // Unavailable options report and return to the loop without taking the next input.
-    typed(&mut s, &["as", "l", "cou", "2", "3"]);
+    // ASsociative asks Yes/No and returns to the loop.
+    typed(&mut s, &["as"]);
+    assert!(prompt(&s).contains("Create associative array or [Yes/No] <Yes>"), "{}", prompt(&s));
+    typed(&mut s, &["n"]);
     assert!(prompt(&s).contains("Select grip to edit array"), "{}", prompt(&s));
     typed(&mut s, &["x"]);
     assert!(s.current_prompt().is_none(), "{}", prompt(&s));
@@ -111,7 +124,7 @@ fn arrayrect_edits_the_array_in_a_loop_until_exit() {
     typed(&mut s, &["2", "1", "x"]);
     assert_eq!(circle_centers(&s).len(), 2);
 
-    // The JSON form is unchanged.
+    // The JSON form (associative by default) places the same items.
     let mut s = Session::new();
     let r = s.execute("circle", &json!({"center": [0, 0], "radius": 0.5})).unwrap();
     let r = s.execute("arrayrect", &json!({"handles": [r["handle"]], "rows": 2, "cols": 3, "rowSpacing": 4, "colSpacing": 2})).unwrap();
@@ -148,10 +161,10 @@ fn arraypolar_asks_for_the_center_then_edits_items_and_angles() {
     assert_eq!(c.len(), 4);
     assert!(has(&c, 0.0, 10.0) && !has(&c, -10.0, 0.0), "{c:?}");
 
-    // Fill angle 180 with 3 items, items not rotated: the copies only move.
+    // Fill angle 180 with 3 items, items not rotated, not associative: the copies only move.
     let mut s = Session::new();
     s.execute("line", &json!({"points": [[10, 0], [12, 0]]})).unwrap();
-    typed(&mut s, &["arraypolar", "l", "", "0,0", "i", "3", "f", "180", "rot", "n", "x"]);
+    typed(&mut s, &["arraypolar", "l", "", "0,0", "i", "3", "f", "180", "rot", "n", "as", "n", "x"]);
     assert!(s.current_prompt().is_none(), "{}", prompt(&s));
     let lines: Vec<(Vec2, Vec2)> = s
         .doc()

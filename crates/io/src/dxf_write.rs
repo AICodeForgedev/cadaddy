@@ -1701,6 +1701,10 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
         if let Some(b) = blk {
             w.i(70, i64::from(b.units));
             w.i(280, i64::from(b.explodable));
+            if let Some(a) = &b.array {
+                w.s(1001, dxf_ext::APP);
+                w.xdata(dxf_ext::array_xdata(a));
+            }
         }
     };
     br_rec(&mut w, &ms_br, "*Model_Space", Some(&model_layout), None);

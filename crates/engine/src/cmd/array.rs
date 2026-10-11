@@ -1,14 +1,20 @@
 //! Array commands: ARRAY, ARRAYRECT and ARRAYPOLAR (ARRAYPATH lives in `modify2`).
 //!
-//! Arrays are created as separate copies of the source objects (non-associative). The interactive
-//! forms select objects, then edit the array in an option loop with a live preview, and create
-//! the copies on eXit (or Enter).
+//! Arrays are associative by default (ARRAYASSOCIATIVITY): the source objects move into an
+//! anonymous source block and the array becomes one block reference to an anonymous array block
+//! holding a reference per item, with the array parameters kept on that block
+//! ([`cadcraft_doc::ArrayParams`]). With ASsociative = No the items are separate copies. The
+//! interactive forms select objects, then edit the array in an option loop with a live preview,
+//! and create the array on eXit (or Enter).
 
-use cadcraft_doc::{Drawing, EntityKind, Handle};
-use cadcraft_geom::{Bounds2, Mat3, TAU, Vec2};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use cadcraft_doc::{ArrayKind, ArrayParams, Block, Drawing, Entity, EntityKind, Handle, Insert, MAX_BLOCK_DEPTH, PolarArray, RectArray};
+use cadcraft_geom::{Bounds2, Mat3, Vec2, Vec3};
 use serde_json::{Value, json};
 
-use super::helpers::line;
+use super::helpers::{line, v3};
 use super::machines::{SelOutcome, SelectPhase, number};
 use super::modify::transform_entities;
 use super::*;
@@ -19,8 +25,7 @@ const PREVIEW_LIMIT: usize = 2000;
 /// Keyword-only prompts: each typed token is matched on its own (no free text).
 const KEYWORDS: Accept = Accept { point: false, number: false, text: false, select: false, enter: true };
 
-const NOT_ASSOCIATIVE: &str = "Associative arrays are not available yet; the array is created as separate objects.";
-const NO_LEVELS: &str = "Levels (3D arrays) are not available yet.";
+const FLAT_LEVELS: &str = "Levels need an associative array; the copies are made on one level.";
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -30,35 +35,177 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(ArrayM::default()))),
         CommandSpec::new("arrayrect", "Rectangular Array", run_arrayrect)
             .menu(&["Modify", "Array", "Rectangular Array"])
-            .params("{handles?, rows, cols, rowSpacing, colSpacing}")
+            .params(
+                "{handles?, rows, cols, rowSpacing, colSpacing, levels? (1), levelSpacing?, rowElevation?, axisAngle? (degrees), base? ([x, y], default the objects' centre), associative?: bool (default ARRAYASSOCIATIVITY, on)} → {handle (the array, when associative), created (copies)}",
+            )
             .interactive(|_| Ok(Box::new(RectM::default()))),
         CommandSpec::new("arraypolar", "Polar Array", run_arraypolar)
             .menu(&["Modify", "Array", "Polar Array"])
-            .params("{handles?, center, count, angle? (degrees, default 360), rotate?: bool}")
+            .params(
+                "{handles?, center, count, angle? (degrees, default 360), rotate?: bool, rows? (1), rowSpacing?, rowElevation?, levels? (1), levelSpacing?, base? ([x, y], default the first object's centre), associative?: bool (default ARRAYASSOCIATIVITY, on)} → {handle (the array, when associative), created (copies)}",
+            )
             .interactive(|_| Ok(Box::new(PolarM::default()))),
     ]
 }
 
 // ---------------- geometry ----------------
 
-/// Translations of the copies in a rectangular array (the source cell is skipped).
-fn rect_mats(rows: u64, cols: u64, rs: f64, cs: f64) -> impl Iterator<Item = Mat3> {
-    (0..rows)
-        .flat_map(move |r| (0..cols).map(move |c| (r, c)))
-        .filter(|rc| *rc != (0, 0))
-        .map(move |(r, c)| Mat3::translate(Vec2::new(cs * c as f64, rs * r as f64)))
+/// Array parameters around `kind` (the source block is named when the array is made).
+fn params(kind: ArrayKind, levels: u64, level_spacing: f64) -> ArrayParams {
+    ArrayParams { source: "*".into(), kind, levels: u32::try_from(levels).unwrap_or(u32::MAX), level_spacing, replaced: Vec::new() }
 }
 
-/// Transforms of the copies 1..n of a polar array filling `fill` degrees (positive = ccw).
-/// Without `rotate` each copy is moved so that `reference` travels around the circle.
-fn polar_mats(center: Vec2, n: u64, fill: f64, rotate: bool, reference: Vec2) -> impl Iterator<Item = Mat3> {
-    let total = fill.to_radians();
-    let full = (total.abs() - TAU).abs() < 1e-9;
-    let step = if full { total / n.max(1) as f64 } else { total / n.saturating_sub(1).max(1) as f64 };
-    (1..n).map(move |k| {
-        let a = step * k as f64;
-        if rotate { Mat3::rotate_about(center, a) } else { Mat3::translate(reference.rotate_about(center, a) - reference) }
-    })
+fn count32(n: u64) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// World transforms of the items of `p` with its base point at `base`, except the first item
+/// (the source objects themselves) and items above the first level (copies are flat).
+fn item_mats(p: &ArrayParams, base: Vec2) -> Vec<Mat3> {
+    p.items()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|it| it.level == 0 && (it.i, it.j) != (0, 0))
+        .map(|it| Mat3::translate(base + it.insert.xy()).then_before(Mat3::rotate(it.rotation)).then_before(Mat3::translate(-base)))
+        .collect()
+}
+
+/// How deeply block references nest in `ents` (0 without any), at most `MAX_BLOCK_DEPTH + 1`.
+fn nesting(d: &Drawing, ents: &[&Entity], memo: &mut HashMap<String, usize>, depth: usize) -> usize {
+    let mut most = 0;
+    for e in ents {
+        let EntityKind::Insert(i) = &e.kind else { continue };
+        let key = i.block.to_ascii_uppercase();
+        let n = match memo.get(&key) {
+            Some(n) => *n,
+            None if depth > MAX_BLOCK_DEPTH => MAX_BLOCK_DEPTH + 1,
+            None => {
+                // Cycles end here: a block being measured counts as too deep.
+                memo.insert(key.clone(), MAX_BLOCK_DEPTH + 1);
+                let inner: Vec<&Entity> = d.block(&i.block).map(|b| b.entities.iter().map(|e| e.as_ref()).collect()).unwrap_or_default();
+                let n = (1 + nesting(d, &inner, memo, depth + 1)).min(MAX_BLOCK_DEPTH + 1);
+                memo.insert(key, n);
+                n
+            }
+        };
+        most = most.max(n);
+    }
+    most
+}
+
+/// ARRAYASSOCIATIVITY: whether new arrays start associative (on unless set to 0).
+fn assoc_default(s: &Session) -> bool {
+    s.doc().map(|d| d.header.i64("ARRAYASSOCIATIVITY", 1) != 0).unwrap_or(true)
+}
+
+/// Make `objs` an associative array with its base point at `base`: the objects move into a new
+/// source block, the items into a new array block, and one block reference to the array block
+/// takes their place. Returns that reference.
+pub(crate) fn make_assoc(s: &mut Session, objs: &[Handle], base: Vec2, mut p: ArrayParams) -> Result<Handle> {
+    let d = s.doc()?;
+    let objs: Vec<Handle> = objs.iter().copied().filter(|h| !super::curves::is_locked(s, *h)).collect();
+    let ents: Vec<Entity> = objs.iter().filter_map(|h| d.entity(*h).map(|e| (**e).clone())).collect();
+    if ents.is_empty() {
+        return Err(other("No objects to array (objects on locked layers are left out)."));
+    }
+    // The array adds two levels of block references (array block, then source block).
+    let refs: Vec<&Entity> = ents.iter().collect();
+    if nesting(d, &refs, &mut HashMap::new(), 0) + 2 > MAX_BLOCK_DEPTH {
+        return Err(other(format!("The objects nest block references too deeply to array (more than {MAX_BLOCK_DEPTH} levels).")));
+    }
+    if !base.is_finite() {
+        return Err(other("The array base point is not a valid point."));
+    }
+    let d = s.doc_mut()?;
+    let src_name = d.anonymous_block_name("*U");
+    let mut src = Block::new(&src_name);
+    let to_local = Mat3::translate(-base);
+    for mut e in ents {
+        e.handle = d.new_handle();
+        e.kind.transform(&to_local);
+        src.entities.push(e);
+    }
+    d.blocks.insert(src_name.clone(), Arc::new(src));
+    p.source = src_name;
+    let items = p.item_entities(d).ok_or_else(|| other("The array parameters are not valid."))?;
+    let name = d.anonymous_block_name("*U");
+    let mut blk = Block::new(&name);
+    for e in items {
+        blk.entities.push(e);
+    }
+    blk.array = Some(p);
+    d.blocks.insert(name.clone(), Arc::new(blk));
+    for h in &objs {
+        d.remove_entity(*h);
+    }
+    s.add_entity(EntityKind::Insert(Insert {
+        block: name,
+        insert: v3(base),
+        scale: Vec3::new(1.0, 1.0, 1.0),
+        rotation: 0.0,
+        attribs: Vec::new(),
+        cols: 1,
+        rows: 1,
+        col_spacing: 0.0,
+        row_spacing: 0.0,
+    }))
+}
+
+/// Create the array: associative (one block reference) or separate copies. Returns the JSON
+/// result: the array's handle when associative, and the number of copies the array adds.
+fn create(s: &mut Session, objs: &[Handle], base: Vec2, p: ArrayParams, assoc: bool) -> Result<Value> {
+    let copies = p.item_count().saturating_sub(1).saturating_mul(objs.len() as u64);
+    if assoc {
+        let h = make_assoc(s, objs, base, p)?;
+        return Ok(json!({ "handle": h.hex(), "created": copies, "associative": true }));
+    }
+    if p.levels > 1 {
+        s.echo(FLAT_LEVELS);
+    }
+    let n = copy_all(s, objs, item_mats(&p, base).into_iter())?;
+    Ok(json!({ "created": n }))
+}
+
+/// EXPLODE of an associative array: every item becomes the objects of its block (the source
+/// objects, or a replacement block's reference), in world coordinates. `None` for other objects.
+pub(crate) fn explode_array(d: &Drawing, e: &Entity) -> Option<Vec<Entity>> {
+    let EntityKind::Insert(ins) = &e.kind else { return None };
+    let p = d.array_params(e)?;
+    let blk = d.block(&ins.block)?;
+    let m = ins.transform(blk.base.xy());
+    let mut out = Vec::new();
+    for item in blk.entities.iter() {
+        let item = placed(e, item, &m);
+        let source = match &item.kind {
+            EntityKind::Insert(i) if i.block.eq_ignore_ascii_case(&p.source) => d.block(&i.block).map(|b| (i.transform(b.base.xy()), b)),
+            _ => None,
+        };
+        match source {
+            Some((im, b)) => out.extend(b.entities.iter().map(|se| placed(&item, se, &im))),
+            None => out.push(item),
+        }
+    }
+    Some(out)
+}
+
+/// `child` of a block referenced by `parent`, moved by `m`, with layer 0 and ByBlock properties
+/// taken from the reference (as EXPLODE does).
+fn placed(parent: &Entity, child: &Entity, m: &Mat3) -> Entity {
+    let mut ne = child.clone();
+    ne.kind.transform(m);
+    if ne.common.layer == "0" {
+        ne.common.layer = parent.common.layer.clone();
+    }
+    if ne.common.color == cadcraft_color::Color::ByBlock {
+        ne.common.color = parent.common.color;
+    }
+    if ne.common.linetype.eq_ignore_ascii_case("ByBlock") {
+        ne.common.linetype = parent.common.linetype.clone();
+    }
+    if ne.common.lineweight == cadcraft_doc::Lineweight::ByBlock {
+        ne.common.lineweight = parent.common.lineweight;
+    }
+    ne
 }
 
 fn bounds(d: &Drawing, hs: &[Handle]) -> Bounds2 {
@@ -175,27 +322,56 @@ fn run_array(s: &mut Session, p: &Value) -> Result<Value> {
     (spec.run)(s, p)
 }
 
+/// A count parameter (at least 1).
+fn count_or(p: &Value, key: &str, default: u64) -> u64 {
+    p.get(key).and_then(Value::as_u64).unwrap_or(default).max(1)
+}
+
 fn run_arrayrect(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
-    let rows = p.get("rows").and_then(Value::as_u64).unwrap_or(3).max(1);
-    let cols = p.get("cols").and_then(Value::as_u64).unwrap_or(4).max(1);
-    check_size(s, rows.saturating_mul(cols), hs.len())?;
+    let rows = count_or(p, "rows", 3);
+    let cols = count_or(p, "cols", 4);
+    let levels = count_or(p, "levels", 1);
+    check_size(s, rows.saturating_mul(cols).saturating_mul(levels), hs.len())?;
+    let kind = ArrayKind::Rect(RectArray {
+        cols: count32(cols),
+        rows: count32(rows),
+        col_spacing: f64_or(p, "colSpacing", 1.0),
+        row_spacing: f64_or(p, "rowSpacing", 1.0),
+        axis_angle: f64_or(p, "axisAngle", 0.0).to_radians(),
+        row_elevation: f64_or(p, "rowElevation", 0.0),
+    });
     let rs = f64_or(p, "rowSpacing", 1.0);
-    let cs = f64_or(p, "colSpacing", 1.0);
-    let n = copy_all(s, &hs, rect_mats(rows, cols, rs, cs))?;
-    Ok(json!({ "created": n }))
+    let base = match point_param(p, "base") {
+        Some(b) => b,
+        None => Some(bounds(s.doc()?, &hs).center()).filter(|c| c.is_finite()).unwrap_or_default(),
+    };
+    let p2 = params(kind, levels, f64_or(p, "levelSpacing", rs));
+    let associative = bool_or(p, "associative", assoc_default(s));
+    create(s, &hs, base, p2, associative)
 }
 
 fn run_arraypolar(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let c = point_req("arraypolar", p, "center")?;
-    let n = p.get("count").and_then(Value::as_u64).unwrap_or(6).max(1);
-    check_size(s, n, hs.len())?;
-    let fill = f64_or(p, "angle", 360.0);
-    let rotate = bool_or(p, "rotate", true);
-    let reference = first_center(s.doc()?, &hs).unwrap_or(c);
-    let n = copy_all(s, &hs, polar_mats(c, n, fill, rotate, reference))?;
-    Ok(json!({ "created": n }))
+    let n = count_or(p, "count", 6);
+    let rows = count_or(p, "rows", 1);
+    let levels = count_or(p, "levels", 1);
+    check_size(s, n.saturating_mul(rows).saturating_mul(levels), hs.len())?;
+    let base = point_param(p, "base").or_else(|| s.doc().ok().and_then(|d| first_center(d, &hs))).unwrap_or(c);
+    let row_spacing = f64_or(p, "rowSpacing", 1.0);
+    let kind = ArrayKind::Polar(PolarArray {
+        center: c - base,
+        items: count32(n),
+        fill: f64_or(p, "angle", 360.0),
+        rotate: bool_or(p, "rotate", true),
+        rows: count32(rows),
+        row_spacing,
+        row_elevation: f64_or(p, "rowElevation", 0.0),
+    });
+    let p2 = params(kind, levels, f64_or(p, "levelSpacing", row_spacing));
+    let associative = bool_or(p, "associative", assoc_default(s));
+    create(s, &hs, base, p2, associative)
 }
 
 // ---------------- ARRAY ----------------
@@ -274,6 +450,7 @@ impl Interactive for ArrayM {
 enum RStage {
     #[default]
     Main,
+    Assoc,
     Base,
     /// COUnt: columns, then rows.
     CountCols,
@@ -291,18 +468,28 @@ enum RStage {
     RowsSpace,
     RowsTotal,
     RowsElev,
+    /// Levels: count, then spacing (or the total).
+    LevelsCount,
+    LevelsSpace,
+    LevelsTotal,
 }
 
-/// ARRAYRECT: select objects, then edit columns/rows/spacing in a loop; eXit creates the copies.
+/// ARRAYRECT: select objects, then edit columns/rows/levels/spacing in a loop; eXit creates the
+/// array.
 #[derive(Default)]
 struct RectM {
     sel: SelectPhase,
     objs: Vec<Handle>,
     stage: RStage,
+    assoc: bool,
     cols: u64,
     rows: u64,
+    levels: u64,
     cs: f64,
     rs: f64,
+    /// Distance between levels and the elevation added per row.
+    ls: f64,
+    elev: f64,
     /// Array base point (distances picked with a point are measured from it).
     base: Vec2,
     centroid: Vec2,
@@ -324,12 +511,26 @@ impl RectM {
             (false, true) => o * 1.5,
             _ => 1.0,
         };
-        (self.cols, self.rows, self.cs, self.rs) = (4, 3, size(w, h), size(h, w));
+        (self.cols, self.rows, self.levels, self.cs, self.rs) = (4, 3, 1, size(w, h), size(h, w));
+        (self.ls, self.elev) = (self.rs, 0.0);
+        self.assoc = assoc_default(s);
         self.centroid = if b.center().is_finite() { b.center() } else { Vec2::ZERO };
         self.base = self.centroid;
         self.stage = RStage::Main;
-        s.echo("Type = Rectangular  Associative = No");
+        s.echo(format!("Type = Rectangular  Associative = {}", yes(self.assoc)));
         Ok(Step::Continue)
+    }
+
+    fn params(&self) -> ArrayParams {
+        let kind = ArrayKind::Rect(RectArray {
+            cols: count32(self.cols),
+            rows: count32(self.rows),
+            col_spacing: self.cs,
+            row_spacing: self.rs,
+            axis_angle: 0.0,
+            row_elevation: self.elev,
+        });
+        params(kind, if self.assoc { self.levels } else { 1 }, self.ls)
     }
 
     /// A distance typed or picked (from the base point); Enter keeps `cur`.
@@ -344,8 +545,12 @@ impl RectM {
     }
 
     fn finish(&mut self, s: &mut Session) -> Result<Step> {
-        check_size(s, self.rows.saturating_mul(self.cols), self.objs.len())?;
-        copy_all(s, &self.objs, rect_mats(self.rows, self.cols, self.rs, self.cs))?;
+        let levels = if self.assoc { self.levels } else { 1 };
+        check_size(s, self.rows.saturating_mul(self.cols).saturating_mul(levels), self.objs.len())?;
+        if !self.assoc && self.levels > 1 {
+            s.echo(FLAT_LEVELS);
+        }
+        create(s, &self.objs.clone(), self.base, self.params(), self.assoc)?;
         s.set_selection(Vec::new());
         Ok(Step::Done)
     }
@@ -359,22 +564,26 @@ impl RectM {
         };
         self.stage = match k.as_str() {
             "eXit" => return self.finish(s),
+            "ASsociative" => RStage::Assoc,
             "Base point" => RStage::Base,
             "COUnt" => RStage::CountCols,
             "Spacing" => RStage::SpaceCols,
             "COLumns" => RStage::ColsCount,
             "Rows" => RStage::RowsCount,
-            "Levels" => {
-                s.echo(NO_LEVELS);
-                RStage::Main
-            }
-            _ => {
-                s.echo(NOT_ASSOCIATIVE);
-                RStage::Main
-            }
+            "Levels" => RStage::LevelsCount,
+            _ => return Err(other("Invalid option keyword.")),
         };
         Ok(Step::Continue)
     }
+}
+
+fn yes(b: bool) -> &'static str {
+    if b { "Yes" } else { "No" }
+}
+
+/// The ASsociative prompt.
+fn assoc_prompt(cur: bool) -> Prompt {
+    Prompt::new("Create associative array", KEYWORDS).kw(&["Yes", "No"]).default(yes(cur))
 }
 
 impl Interactive for RectM {
@@ -401,6 +610,7 @@ impl Interactive for RectM {
             Main => Prompt::new("Select grip to edit array", Accept::POINT)
                 .kw(&["ASsociative", "Base point", "COUnt", "Spacing", "COLumns", "Rows", "Levels", "eXit"])
                 .default("eXit"),
+            Assoc => assoc_prompt(self.assoc),
             Base => Prompt::new("Specify base point", Accept::POINT).kw(&["Key point"]).default("centroid"),
             CountCols | ColsCount => cols(),
             CountRows | RowsCount => rows(),
@@ -414,7 +624,10 @@ impl Interactive for RectM {
             ColsTotal => dist("Specify the distance between the first and last column", self.cs * self.cols.saturating_sub(1) as f64),
             RowsSpace => dist("Specify the distance between rows", self.rs).kw(&["Total"]),
             RowsTotal => dist("Specify the distance between the first and last row", self.rs * self.rows.saturating_sub(1) as f64),
-            RowsElev => Prompt::new("Specify the incrementing elevation between rows", Accept::NUMBER).default("0"),
+            RowsElev => Prompt::new("Specify the incrementing elevation between rows", Accept::NUMBER).default(fmt(self.elev)),
+            LevelsCount => Prompt::new("Enter the number of levels", Accept::NUMBER).default(self.levels.to_string()),
+            LevelsSpace => dist("Specify the distance between levels", self.ls).kw(&["Total"]),
+            LevelsTotal => dist("Specify the distance between the first and last level", self.ls * self.levels.saturating_sub(1) as f64),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
@@ -430,8 +643,16 @@ impl Interactive for RectM {
             };
         }
         let stage = self.stage;
+        let n = self.objs.len();
         let next = match (stage, &i) {
             (Main, _) => return self.main(s, i),
+            (Assoc, _) => match yes_no(&i, self.assoc) {
+                Some(a) => {
+                    self.assoc = a;
+                    Main
+                }
+                None => return Err(other("Requires Yes or No.")),
+            },
             (Base, Input::Point(p)) => {
                 self.base = *p;
                 Main
@@ -444,17 +665,24 @@ impl Interactive for RectM {
                 s.echo("Key points are not available yet; specify a point.");
                 Base
             }
-            (CountCols | ColsCount, _) => match count(&i, self.cols, max_count(s, self.rows, self.objs.len()))? {
-                Some(n) => {
-                    self.cols = n;
+            (CountCols | ColsCount, _) => match count(&i, self.cols, max_count(s, self.rows.saturating_mul(self.levels), n))? {
+                Some(c) => {
+                    self.cols = c;
                     if stage == CountCols { CountRows } else { ColsSpace }
                 }
                 None => stage,
             },
-            (CountRows | RowsCount, _) => match count(&i, self.rows, max_count(s, self.cols, self.objs.len()))? {
-                Some(n) => {
-                    self.rows = n;
+            (CountRows | RowsCount, _) => match count(&i, self.rows, max_count(s, self.cols.saturating_mul(self.levels), n))? {
+                Some(r) => {
+                    self.rows = r;
                     if stage == CountRows { Main } else { RowsSpace }
+                }
+                None => stage,
+            },
+            (LevelsCount, _) => match count(&i, self.levels, max_count(s, self.cols.saturating_mul(self.rows), n))? {
+                Some(l) => {
+                    self.levels = l;
+                    LevelsSpace
                 }
                 None => stage,
             },
@@ -464,6 +692,7 @@ impl Interactive for RectM {
             }
             (ColsSpace, Input::Keyword(_)) => ColsTotal,
             (RowsSpace, Input::Keyword(_)) => RowsTotal,
+            (LevelsSpace, Input::Keyword(_)) => LevelsTotal,
             (SpaceCols | ColsSpace, _) => match self.distance(&i, self.cs)? {
                 Some(d) => {
                     self.cs = d;
@@ -475,6 +704,16 @@ impl Interactive for RectM {
                 Some(d) => {
                     self.rs = d;
                     if stage == SpaceRows { Main } else { RowsElev }
+                }
+                None => stage,
+            },
+            (LevelsSpace, _) => match self.distance(&i, self.ls)? {
+                Some(d) => {
+                    self.ls = d;
+                    if !self.assoc && self.levels > 1 {
+                        s.echo(FLAT_LEVELS);
+                    }
+                    Main
                 }
                 None => stage,
             },
@@ -492,11 +731,19 @@ impl Interactive for RectM {
                 }
                 None => stage,
             },
+            (LevelsTotal, _) => match self.distance(&i, self.ls * self.levels.saturating_sub(1) as f64)? {
+                Some(t) => {
+                    self.ls = t / self.levels.saturating_sub(1).max(1) as f64;
+                    Main
+                }
+                None => stage,
+            },
             (RowsElev, Input::Enter) => Main,
             (RowsElev, Input::Text(t)) => match number(t) {
                 Some(z) if z.is_finite() => {
-                    if z.abs() > 1e-12 {
-                        s.echo("Row elevation increments (3D) are not available yet; the rows stay at the same elevation.");
+                    self.elev = z;
+                    if !self.assoc && z.abs() > 1e-12 {
+                        s.echo("Row elevations need an associative array; the copies stay at the same elevation.");
                     }
                     Main
                 }
@@ -529,12 +776,20 @@ impl Interactive for RectM {
         if !self.sel.done {
             return Vec::new();
         }
-        let mut out = preview_copies(s, &self.objs, rect_mats(self.rows, self.cols, self.rs, self.cs));
+        let mut out = preview_copies(s, &self.objs, item_mats(&self.params(), self.base).into_iter());
         match (self.stage, self.corner) {
             (RStage::UnitCell, Some(c)) => out.push(line(c, cursor)),
-            (RStage::SpaceCols | RStage::SpaceRows | RStage::ColsSpace | RStage::ColsTotal | RStage::RowsSpace | RStage::RowsTotal, _) => {
-                out.push(line(self.base, cursor))
-            }
+            (
+                RStage::SpaceCols
+                | RStage::SpaceRows
+                | RStage::ColsSpace
+                | RStage::ColsTotal
+                | RStage::RowsSpace
+                | RStage::RowsTotal
+                | RStage::LevelsSpace
+                | RStage::LevelsTotal,
+                _,
+            ) => out.push(line(self.base, cursor)),
             _ => {}
         }
         out
@@ -550,24 +805,41 @@ enum PStage {
     /// Base point asked from the center prompt (returns there).
     CenterBase,
     Main,
+    Assoc,
     Base,
     Items,
     Between,
     Fill,
     Rotate,
+    /// ROWs: count, then spacing (or the total), then the elevation increment.
+    RowsCount,
+    RowsSpace,
+    RowsTotal,
+    RowsElev,
+    /// Levels: count, then spacing (or the total).
+    LevelsCount,
+    LevelsSpace,
+    LevelsTotal,
 }
 
-/// ARRAYPOLAR: select objects, specify the center, then edit items/angles in a loop; eXit creates
-/// the copies.
+/// ARRAYPOLAR: select objects, specify the center, then edit items/angles/rows/levels in a loop;
+/// eXit creates the array.
 struct PolarM {
     sel: SelectPhase,
     objs: Vec<Handle>,
     stage: PStage,
+    assoc: bool,
     center: Vec2,
     items: u64,
     /// Fill angle in degrees (positive = counterclockwise).
     fill: f64,
     rotate: bool,
+    rows: u64,
+    /// Distance between rows (rings), the elevation added per row, and the distance between levels.
+    rs: f64,
+    elev: f64,
+    levels: u64,
+    ls: f64,
     /// Base point: the point non-rotated copies are moved by (default: the first object's centre).
     base: Option<Vec2>,
 }
@@ -578,10 +850,16 @@ impl Default for PolarM {
             sel: SelectPhase::default(),
             objs: Vec::new(),
             stage: PStage::Center,
+            assoc: true,
             center: Vec2::ZERO,
             items: 6,
             fill: 360.0,
             rotate: true,
+            rows: 1,
+            rs: 1.0,
+            elev: 0.0,
+            levels: 1,
+            ls: 1.0,
             base: None,
         }
     }
@@ -594,7 +872,16 @@ impl PolarM {
 
     fn ready(&mut self, s: &mut Session) -> Step {
         self.stage = PStage::Center;
-        s.echo("Type = Polar  Associative = No");
+        self.assoc = assoc_default(s);
+        // Rows and levels default to 1.5 × the selection's size apart.
+        if let Ok(d) = s.doc() {
+            let b = bounds(d, &self.objs);
+            let size = b.width().max(b.height());
+            if size.is_finite() && size > 1e-9 {
+                (self.rs, self.ls) = (size * 1.5, size * 1.5);
+            }
+        }
+        s.echo(format!("Type = Polar  Associative = {}", yes(self.assoc)));
         Step::Continue
     }
 
@@ -611,15 +898,32 @@ impl PolarM {
         }
     }
 
-    fn mats(&self, s: &Session, center: Vec2) -> impl Iterator<Item = Mat3> {
-        let reference = self.base.or_else(|| s.doc().ok().and_then(|d| first_center(d, &self.objs))).unwrap_or(center);
-        polar_mats(center, self.items, self.fill, self.rotate, reference)
+    /// The base point: picked, else the first object's centre, else the centre of the array.
+    fn base_point(&self, s: &Session, center: Vec2) -> Vec2 {
+        self.base.or_else(|| s.doc().ok().and_then(|d| first_center(d, &self.objs))).unwrap_or(center)
+    }
+
+    fn params(&self, base: Vec2, center: Vec2) -> ArrayParams {
+        let kind = ArrayKind::Polar(PolarArray {
+            center: center - base,
+            items: count32(self.items),
+            fill: self.fill,
+            rotate: self.rotate,
+            rows: count32(self.rows),
+            row_spacing: self.rs,
+            row_elevation: self.elev,
+        });
+        params(kind, if self.assoc { self.levels } else { 1 }, self.ls)
     }
 
     fn finish(&mut self, s: &mut Session) -> Result<Step> {
-        check_size(s, self.items, self.objs.len())?;
-        let mats: Vec<Mat3> = self.mats(s, self.center).collect();
-        copy_all(s, &self.objs, mats.into_iter())?;
+        let levels = if self.assoc { self.levels } else { 1 };
+        check_size(s, self.items.saturating_mul(self.rows).saturating_mul(levels), self.objs.len())?;
+        if !self.assoc && self.levels > 1 {
+            s.echo(FLAT_LEVELS);
+        }
+        let base = self.base_point(s, self.center);
+        create(s, &self.objs.clone(), base, self.params(base, self.center), self.assoc)?;
         s.set_selection(Vec::new());
         Ok(Step::Done)
     }
@@ -633,25 +937,28 @@ impl PolarM {
         };
         self.stage = match k.as_str() {
             "eXit" => return self.finish(s),
+            "ASsociative" => PStage::Assoc,
             "Base point" => PStage::Base,
             "Items" => PStage::Items,
             "Angle between" => PStage::Between,
             "Fill angle" => PStage::Fill,
             "ROTate items" => PStage::Rotate,
-            "ROWs" => {
-                s.echo("Rows in polar arrays are not available yet.");
-                PStage::Main
-            }
-            "Levels" => {
-                s.echo(NO_LEVELS);
-                PStage::Main
-            }
-            _ => {
-                s.echo(NOT_ASSOCIATIVE);
-                PStage::Main
-            }
+            "ROWs" => PStage::RowsCount,
+            "Levels" => PStage::LevelsCount,
+            _ => return Err(other("Invalid option keyword.")),
         };
         Ok(Step::Continue)
+    }
+
+    /// A distance typed or picked (from the centre); Enter keeps `cur`.
+    fn distance(&self, i: &Input, cur: f64) -> Result<Option<f64>> {
+        let d = match i {
+            Input::Enter => return Ok(Some(cur)),
+            Input::Text(t) => number(t),
+            Input::Point(p) => Some(self.center.dist(*p)),
+            _ => return Ok(None),
+        };
+        d.filter(|d| d.is_finite() && d.abs() > 1e-12).map(Some).ok_or_else(|| other("Requires a nonzero distance."))
     }
 }
 
@@ -672,16 +979,25 @@ impl Interactive for PolarM {
         if !self.sel.done {
             return self.sel.prompt();
         }
+        let dist = |m: &str, d: f64| Prompt::new(m, Accept::POINT_OR_NUMBER).default(fmt(d)).base(self.center);
         match self.stage {
             Center => Prompt::new("Specify center point of array", Accept::POINT).kw(&["Base point", "Axis of rotation"]),
             CenterBase | Base => Prompt::new("Specify base point", Accept::POINT).kw(&["Key point"]).default("centroid"),
             Main => Prompt::new("Select grip to edit array", Accept::POINT)
                 .kw(&["ASsociative", "Base point", "Items", "Angle between", "Fill angle", "ROWs", "Levels", "ROTate items", "eXit"])
                 .default("eXit"),
+            Assoc => assoc_prompt(self.assoc),
             Items => Prompt::new("Enter number of items in array", Accept::NUMBER).default(self.items.to_string()),
             Between => Prompt::new("Specify the angle between items", Accept::NUMBER).default(fmt(self.between())),
             Fill => Prompt::new("Specify the angle to fill (+=ccw, -=cw)", Accept::NUMBER).default(fmt(self.fill)),
-            Rotate => Prompt::new("Rotate arrayed items?", KEYWORDS).kw(&["Yes", "No"]).default(if self.rotate { "Yes" } else { "No" }),
+            Rotate => Prompt::new("Rotate arrayed items?", KEYWORDS).kw(&["Yes", "No"]).default(yes(self.rotate)),
+            RowsCount => Prompt::new("Enter the number of rows", Accept::NUMBER).default(self.rows.to_string()),
+            RowsSpace => dist("Specify the distance between rows", self.rs).kw(&["Total"]),
+            RowsTotal => dist("Specify the distance between the first and last row", self.rs * self.rows.saturating_sub(1) as f64),
+            RowsElev => Prompt::new("Specify the incrementing elevation between rows", Accept::NUMBER).default(fmt(self.elev)),
+            LevelsCount => Prompt::new("Enter the number of levels", Accept::NUMBER).default(self.levels.to_string()),
+            LevelsSpace => dist("Specify the distance between levels", self.ls).kw(&["Total"]),
+            LevelsTotal => dist("Specify the distance between the first and last level", self.ls * self.levels.saturating_sub(1) as f64),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
@@ -697,8 +1013,16 @@ impl Interactive for PolarM {
             };
         }
         let stage = self.stage;
+        let n = self.objs.len();
         let next = match (stage, &i) {
             (Main, _) => return self.main(s, i),
+            (Assoc, _) => match yes_no(&i, self.assoc) {
+                Some(a) => {
+                    self.assoc = a;
+                    Main
+                }
+                None => return Err(other("Requires Yes or No.")),
+            },
             (Center, Input::Point(p)) => {
                 self.center = *p;
                 Main
@@ -721,9 +1045,67 @@ impl Interactive for PolarM {
                 s.echo("Key points are not available yet; specify a point.");
                 stage
             }
-            (Items, _) => match count(&i, self.items, max_count(s, 1, self.objs.len()))? {
-                Some(n) => {
-                    self.items = n;
+            (Items, _) => match count(&i, self.items, max_count(s, self.rows.saturating_mul(self.levels), n))? {
+                Some(c) => {
+                    self.items = c;
+                    Main
+                }
+                None => stage,
+            },
+            (RowsCount, _) => match count(&i, self.rows, max_count(s, self.items.saturating_mul(self.levels), n))? {
+                Some(c) => {
+                    self.rows = c;
+                    RowsSpace
+                }
+                None => stage,
+            },
+            (LevelsCount, _) => match count(&i, self.levels, max_count(s, self.items.saturating_mul(self.rows), n))? {
+                Some(c) => {
+                    self.levels = c;
+                    LevelsSpace
+                }
+                None => stage,
+            },
+            (RowsSpace, Input::Keyword(_)) => RowsTotal,
+            (LevelsSpace, Input::Keyword(_)) => LevelsTotal,
+            (RowsSpace, _) => match self.distance(&i, self.rs)? {
+                Some(d) => {
+                    self.rs = d;
+                    RowsElev
+                }
+                None => stage,
+            },
+            (RowsTotal, _) => match self.distance(&i, self.rs * self.rows.saturating_sub(1) as f64)? {
+                Some(t) => {
+                    self.rs = t / self.rows.saturating_sub(1).max(1) as f64;
+                    RowsElev
+                }
+                None => stage,
+            },
+            (RowsElev, Input::Enter) => Main,
+            (RowsElev, Input::Text(t)) => match number(t) {
+                Some(z) if z.is_finite() => {
+                    self.elev = z;
+                    if !self.assoc && z.abs() > 1e-12 {
+                        s.echo("Row elevations need an associative array; the copies stay at the same elevation.");
+                    }
+                    Main
+                }
+                _ => return Err(other("Requires a number.")),
+            },
+            (LevelsSpace, _) => match self.distance(&i, self.ls)? {
+                Some(d) => {
+                    self.ls = d;
+                    if !self.assoc && self.levels > 1 {
+                        s.echo(FLAT_LEVELS);
+                    }
+                    Main
+                }
+                None => stage,
+            },
+            (LevelsTotal, _) => match self.distance(&i, self.ls * self.levels.saturating_sub(1) as f64)? {
+                Some(t) => {
+                    self.ls = t / self.levels.saturating_sub(1).max(1) as f64;
                     Main
                 }
                 None => stage,
@@ -774,7 +1156,8 @@ impl Interactive for PolarM {
             PStage::Center | PStage::CenterBase => cursor,
             _ => self.center,
         };
-        preview_copies(s, &self.objs, self.mats(s, center))
+        let base = self.base_point(s, center);
+        preview_copies(s, &self.objs, item_mats(&self.params(base, center), base).into_iter())
     }
 }
 
@@ -782,16 +1165,23 @@ impl Interactive for PolarM {
 mod tests {
     use super::*;
 
+    fn polar(n: u32, fill: f64) -> ArrayParams {
+        let kind = ArrayKind::Polar(PolarArray { center: -Vec2::X, items: n, fill, rotate: true, rows: 1, row_spacing: 0.0, row_elevation: 0.0 });
+        params(kind, 1, 0.0)
+    }
+
     #[test]
     fn polar_angles() {
-        // Full circle: 4 items 90° apart; partial: the last item sits at the fill angle.
-        let a: Vec<Vec2> = polar_mats(Vec2::ZERO, 4, 360.0, true, Vec2::X).map(|m| m.apply(Vec2::X)).collect();
+        // Base point (1,0) around the origin. Full circle: 4 items 90° apart; partial: the last
+        // item sits at the fill angle.
+        let at = |p: &ArrayParams| -> Vec<Vec2> { item_mats(p, Vec2::X).iter().map(|m| m.apply(Vec2::X)).collect() };
+        let a = at(&polar(4, 360.0));
         assert_eq!(a.len(), 3);
         assert!(a[0].near(Vec2::new(0.0, 1.0), 1e-9) && a[2].near(Vec2::new(0.0, -1.0), 1e-9));
-        let b: Vec<Vec2> = polar_mats(Vec2::ZERO, 3, -180.0, true, Vec2::X).map(|m| m.apply(Vec2::X)).collect();
+        let b = at(&polar(3, -180.0));
         assert!(b[0].near(Vec2::new(0.0, -1.0), 1e-9) && b[1].near(Vec2::new(-1.0, 0.0), 1e-9));
         // A full clockwise circle does not put the last item on top of the source.
-        let c: Vec<Vec2> = polar_mats(Vec2::ZERO, 4, -360.0, true, Vec2::X).map(|m| m.apply(Vec2::X)).collect();
+        let c = at(&polar(4, -360.0));
         assert!(c[2].near(Vec2::new(0.0, 1.0), 1e-9));
     }
 }

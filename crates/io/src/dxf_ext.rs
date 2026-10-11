@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use cadcraft_color::Color;
-use cadcraft_doc::{AssocSnap, Constraint, DimAssoc, DimStyle, Handle, LayerState, Parametric, PlotStyleTable};
+use cadcraft_doc::{ArrayParams, AssocSnap, Constraint, DimAssoc, DimStyle, Handle, LayerState, Parametric, PlotStyleTable};
 use cadcraft_dxf::Tag;
 use cadcraft_render::Arrowhead;
 use serde::{Deserialize, Serialize};
@@ -498,6 +498,42 @@ fn json_chunks(json: &str) -> Vec<String> {
     }
     let chars: Vec<char> = safe.chars().collect();
     chars.chunks(250).map(|c| c.iter().collect()).collect()
+}
+
+/// An associative array's parameters as CADCraft xdata on its block record: `1000 ARRAY`,
+/// `1002 {`, the JSON text in `1000` strings short enough for the 255-byte limit even when
+/// characters are written as `\U+XXXX` escapes, `1002 }`.
+pub(crate) fn array_xdata(p: &ArrayParams) -> Vec<Tag> {
+    let Ok(json) = serde_json::to_string(p) else { return Vec::new() };
+    let safe = json_chunks(&json).concat();
+    let mut v = vec![Tag::s(1000, "ARRAY"), Tag::s(1002, "{")];
+    let (mut cur, mut cost) = (String::new(), 0usize);
+    for c in safe.chars() {
+        let n = if c.is_ascii() { 1 } else { 7 * c.len_utf16() };
+        if cost + n > 240 {
+            v.push(Tag::s(1000, std::mem::take(&mut cur)));
+            cost = 0;
+        }
+        cur.push(c);
+        cost += n;
+    }
+    if !cur.is_empty() {
+        v.push(Tag::s(1000, cur));
+    }
+    v.push(Tag::s(1002, "}"));
+    v
+}
+
+/// The array parameters written by [`array_xdata`]; `None` for other records and for
+/// parameters that are not usable.
+pub(crate) fn read_array(tags: &[Tag]) -> Option<ArrayParams> {
+    let list = xdata_list(xdata(tags, APP), "ARRAY");
+    let mut text = String::new();
+    for t in list.iter().take(MAX_XDATA_ITEMS).filter(|t| t.code == 1000) {
+        text.push_str(&t.str());
+    }
+    let p: ArrayParams = serde_json::from_str(&text).ok()?;
+    p.is_valid().then_some(p)
 }
 
 /// The saved layer states stored in the `CADCRAFT_LAYERSTATES` XRECORD.
