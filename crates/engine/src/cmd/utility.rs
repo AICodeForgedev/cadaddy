@@ -1,11 +1,11 @@
 //! Utilities: CAL (expression calculator), FIND (find and replace text), MASSPROP, MEASUREGEOM.
 
 use cadcraft_doc::{EntityKind, Handle};
-use cadcraft_geom::{Polyline, Vec2};
+use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
+use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -26,10 +26,6 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo()
             .interactive(|_| Ok(Box::<PickM>::default())),
         CommandSpec::new("find", "Find...", run_find).menu(&["Edit", "Find..."]).params("{find, replace?, matchCase?: bool, wholeWord?: bool}"),
-        CommandSpec::new("massprop", "Region/Mass Properties", run_massprop)
-            .menu(&["Tools", "Inquiry", "Region/Mass Properties"])
-            .params("{handles?}")
-            .noundo(),
         CommandSpec::new("measuregeom", "Measure Geometry", run_measuregeom).params("{mode: distance|radius|angle|area, ...}").noundo(),
         CommandSpec::new("radius.measure", "Radius", run_radius).menu(&["Tools", "Inquiry", "Radius"]).params("{handle}").noundo(),
         CommandSpec::new("angle.measure", "Angle", run_angle).menu(&["Tools", "Inquiry", "Angle"]).params("{vertex, p1, p2} | {h1, h2}").noundo(),
@@ -276,69 +272,8 @@ fn run_find(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "matches": found, "total": total, "message": msg }))
 }
 
-// ---------------- MASSPROP / MEASUREGEOM ----------------
-
-/// Area, perimeter, centroid and second moments of a closed boundary.
-fn region_props(pts: &[Vec2]) -> Option<(f64, f64, Vec2, f64, f64)> {
-    let n = pts.len();
-    if n < 3 {
-        return None;
-    }
-    let (mut a, mut cx, mut cy, mut ixx, mut iyy, mut per) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
-    for i in 0..n {
-        let (p, q) = (*pts.get(i)?, *pts.get((i + 1) % n)?);
-        let c = p.cross(q);
-        a += c;
-        cx += (p.x + q.x) * c;
-        cy += (p.y + q.y) * c;
-        ixx += (p.y * p.y + p.y * q.y + q.y * q.y) * c;
-        iyy += (p.x * p.x + p.x * q.x + q.x * q.x) * c;
-        per += p.dist(q);
-    }
-    a /= 2.0;
-    if a.abs() < 1e-15 {
-        return None;
-    }
-    let c = Vec2::new(cx / (6.0 * a), cy / (6.0 * a));
-    Some((a.abs(), per, c, (ixx / 12.0).abs(), (iyy / 12.0).abs()))
-}
-
-fn closed_points(k: &EntityKind) -> Option<Vec<Vec2>> {
-    match k {
-        EntityKind::Circle(c) => {
-            let mut v = Vec::new();
-            cadcraft_geom::Circle::new(c.center.xy(), c.radius).tessellate(c.radius * 1e-5, &mut v);
-            v.pop();
-            Some(v)
-        }
-        EntityKind::LwPolyline(p) => {
-            let mut v = Polyline { vertices: p.vertices.clone(), closed: true }.tessellate(1e-5);
-            if v.len() > 1 && v.first().zip(v.last()).is_some_and(|(a, b)| a.near(*b, 1e-12)) {
-                v.pop();
-            }
-            Some(v)
-        }
-        EntityKind::Hatch(h) => h.loops.first().map(|l| Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(1e-5)),
-        _ => None,
-    }
-}
-
-fn run_massprop(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = targets(s, p)?;
-    let d = s.doc()?;
-    let mut out = Vec::new();
-    let mut lines = Vec::new();
-    for h in hs {
-        let Some(e) = d.entity(h) else { continue };
-        let Some((a, per, c, ixx, iyy)) = closed_points(&e.kind).and_then(|v| region_props(&v)) else { continue };
-        lines.push(format!("----------------   REGIONS   ----------------\nArea:                    {a:.4}\nPerimeter:               {per:.4}\nCentroid:                X: {:.4}  Y: {:.4}\nMoments of inertia:      X: {ixx:.4}  Y: {iyy:.4}", c.x, c.y));
-        out.push(json!({ "handle": h.hex(), "area": a, "perimeter": per, "centroid": [c.x, c.y], "ixx": ixx, "iyy": iyy }));
-    }
-    if out.is_empty() {
-        return Err(EngineError::Other("Select closed objects (regions, closed polylines, circles).".into()));
-    }
-    Ok(json!({ "objects": out, "message": lines.join("\n") }))
-}
+// ---------------- MEASUREGEOM ----------------
+// (MASSPROP is in `inquiry/regions.rs`.)
 
 fn run_radius(s: &mut Session, p: &Value) -> Result<Value> {
     let h = targets(s, p)?.first().copied().ok_or_else(|| bad("radius.measure", "`handle` is required"))?;
@@ -409,13 +344,5 @@ mod tests {
         assert_eq!(replace_in("Bolt bolt BOLTS", "bolt", "Pin", false, true), ("Pin Pin BOLTS".to_string(), 2));
         assert_eq!(replace_in("aaa", "a", "b", true, false), ("bbb".to_string(), 3));
         assert_eq!(replace_in("x", "", "y", true, false).1, 0);
-    }
-
-    #[test]
-    fn rectangle_mass_properties() {
-        let (a, per, c, _, _) = region_props(&[Vec2::ZERO, Vec2::new(4.0, 0.0), Vec2::new(4.0, 2.0), Vec2::new(0.0, 2.0)]).unwrap();
-        assert!((a - 8.0).abs() < 1e-12);
-        assert!((per - 12.0).abs() < 1e-12);
-        assert!(c.near(Vec2::new(2.0, 1.0), 1e-12));
     }
 }

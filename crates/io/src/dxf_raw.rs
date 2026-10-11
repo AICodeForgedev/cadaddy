@@ -23,8 +23,17 @@ use cadcraft_dxf::{Section, Tag};
 /// starts with `CADCRAFT`): they are read into the model, not kept raw. A change that starts
 /// modelling another entry adds it here. (An entry the writer writes is also never written
 /// twice: the kept one is left out.)
-const MODELLED_KEYS: &[&str] =
-    &["ACAD_GROUP", "ACAD_LAYOUT", "ACAD_MLEADERSTYLE", "ACAD_PLOTSTYLENAME", "ACAD_TABLESTYLE", "ACAD_IMAGE_DICT", "ACAD_IMAGE_VARS"];
+const MODELLED_KEYS: &[&str] = &[
+    "ACAD_GROUP",
+    "ACAD_LAYOUT",
+    "ACAD_MLEADERSTYLE",
+    "ACAD_MLINESTYLE",
+    "ACAD_PLOTSTYLENAME",
+    "ACAD_SCALELIST",
+    "ACAD_TABLESTYLE",
+    "ACAD_IMAGE_DICT",
+    "ACAD_IMAGE_VARS",
+];
 
 /// Extension dictionary entries not kept raw: dimension associativity (CADCraft reads and
 /// rewrites it), draw order and annotation scale contexts (written from their own models by the

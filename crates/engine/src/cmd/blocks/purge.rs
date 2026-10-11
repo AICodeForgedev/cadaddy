@@ -1,12 +1,12 @@
-//! PURGE / -PURGE: remove unused named objects (blocks, layers, linetypes, styles, groups) and
-//! zero-length geometry or empty text.
+//! PURGE / -PURGE: remove unused named objects (blocks, layers, linetypes, styles, multiline
+//! styles, groups) and zero-length geometry or empty text.
 //!
 //! The JSON form takes `{type?, names?}` and purges without asking. Typed, it asks for the type,
 //! the names and whether to verify each one, as AutoCAD's -PURGE does.
 
 use std::collections::{HashSet, VecDeque};
 
-use cadcraft_doc::{Drawing, EntityKind, Handle};
+use cadcraft_doc::{Drawing, EntityKind, Handle, STANDARD_MLINE_STYLE};
 use serde_json::{Map, Value, json};
 
 use super::super::qselect::wildcard;
@@ -21,6 +21,7 @@ enum Kind {
     Layers,
     Linetypes,
     MleaderStyles,
+    MlineStyles,
     TableStyles,
     TextStyles,
     ZeroLength,
@@ -43,7 +44,7 @@ const KINDS: &[(&str, &[&str], Kind)] = &[
     ("Plotstyles", &["plotstyles"], Kind::Absent),
     ("SHapes", &["shapes"], Kind::Absent),
     ("textSTyles", &["textstyles", "textstyle", "styles", "style"], Kind::TextStyles),
-    ("Mlinestyles", &["mlinestyles"], Kind::Absent),
+    ("Mlinestyles", &["mlinestyles", "mlinestyle"], Kind::MlineStyles),
     ("SEctionviewstyles", &["sectionviewstyles"], Kind::Absent),
     ("Tablestyles", &["tablestyles", "tablestyle"], Kind::TableStyles),
     ("Visualstyles", &["visualstyles"], Kind::Absent),
@@ -56,8 +57,17 @@ const KINDS: &[(&str, &[&str], Kind)] = &[
 
 /// The named kinds `All` purges, in an order where purging one frees the next (blocks free
 /// layers, layers free linetypes, dimension styles free text styles).
-const ALL: &[Kind] =
-    &[Kind::Blocks, Kind::Groups, Kind::Dimstyles, Kind::MleaderStyles, Kind::TableStyles, Kind::Layers, Kind::Linetypes, Kind::TextStyles];
+const ALL: &[Kind] = &[
+    Kind::Blocks,
+    Kind::Groups,
+    Kind::Dimstyles,
+    Kind::MleaderStyles,
+    Kind::MlineStyles,
+    Kind::TableStyles,
+    Kind::Layers,
+    Kind::Linetypes,
+    Kind::TextStyles,
+];
 
 fn norm(s: &str) -> String {
     s.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase()
@@ -77,6 +87,7 @@ fn noun(kind: Kind) -> &'static str {
         Kind::Layers => "layer",
         Kind::Linetypes => "linetype",
         Kind::MleaderStyles => "multileader style",
+        Kind::MlineStyles => "multiline style",
         Kind::TableStyles => "table style",
         Kind::TextStyles => "text style",
         Kind::ZeroLength => "zero-length object",
@@ -93,6 +104,7 @@ fn json_key(kind: Kind) -> &'static str {
         Kind::Layers => "layers",
         Kind::Linetypes => "linetypes",
         Kind::MleaderStyles => "mleaderstyles",
+        Kind::MlineStyles => "mlinestyles",
         Kind::TableStyles => "tablestyles",
         Kind::TextStyles => "textstyles",
         Kind::ZeroLength => "zeroLength",
@@ -198,6 +210,15 @@ fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
                 .map(|t| t.name.clone())
                 .collect()
         }
+        Kind::MlineStyles => {
+            let used = lower(&mut entities(d).filter_map(|e| if let EntityKind::MLine(m) = &e.kind { Some(m.style.clone()) } else { None }));
+            let cur = d.header.str("CMLSTYLE", STANDARD_MLINE_STYLE);
+            d.mline_styles
+                .iter()
+                .filter(|t| !is(&t.name, &[STANDARD_MLINE_STYLE, &cur]) && !used.contains(&t.name.to_ascii_lowercase()))
+                .map(|t| t.name.clone())
+                .collect()
+        }
         Kind::TableStyles => {
             let used = lower(&mut entities(d).filter_map(|e| if let EntityKind::Table(t) = &e.kind { Some(t.style.clone()) } else { None }));
             let cur = d.header.str("CTABLESTYLE", "Standard");
@@ -238,6 +259,7 @@ fn purge_one(s: &mut Session, kind: Kind, name: &str) -> Result<bool> {
         Kind::Linetypes => retain(&mut d.linetypes, |t| &t.name, name),
         Kind::Dimstyles => retain(&mut d.dim_styles, |t| &t.name, name),
         Kind::MleaderStyles => retain(&mut d.mleader_styles, |t| &t.name, name),
+        Kind::MlineStyles => retain(&mut d.mline_styles, |t| &t.name, name),
         Kind::TableStyles => retain(&mut d.table_styles, |t| &t.name, name),
         Kind::Groups => retain(&mut d.groups, |g| &g.name, name),
         Kind::ZeroLength | Kind::EmptyText | Kind::Absent | Kind::All => false,

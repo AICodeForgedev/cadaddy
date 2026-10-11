@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use cadcraft_color::Color;
 use cadcraft_doc::{ArrayParams, AssocSnap, Constraint, DimAssoc, DimStyle, Handle, LayerState, Parametric, PlotStyleTable};
-use cadcraft_dxf::Tag;
+use cadcraft_dxf::{Tag, Version};
 use cadcraft_render::Arrowhead;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -141,11 +141,14 @@ pub(crate) const DIM_CODES: &[(&str, i32, K)] = &[
 /// DIMSAH: separate arrow blocks in use.
 pub(crate) const DIMSAH: i32 = 173;
 
-/// Variables newer than the DXF version written (R2000): DIMFXL, DIMJOGANG, DIMARCSYM,
-/// DIMFXLON, DIMLTYPE, DIMLTEX1, DIMLTEX2. The writer puts them in a style's `CADCRAFT`
-/// "DIMVARS" xdata (`1070 <code>` then the value, like DSTYLE) instead of DIMSTYLE groups that
-/// an R2000 reader doesn't expect; the reader takes both.
+/// Variables newer than R2000: DIMFXL, DIMJOGANG, DIMARCSYM, DIMFXLON, DIMLTYPE, DIMLTEX1,
+/// DIMLTEX2. Files of [`NEWER_SINCE`] or later get them as DIMSTYLE groups; R2000 files get them
+/// in a style's `CADCRAFT` "DIMVARS" xdata (`1070 <code>` then the value, like DSTYLE) instead of
+/// groups an R2000 reader doesn't expect. The reader takes both.
 pub(crate) const NEWER_CODES: &[i32] = &[49, 50, 90, 290, 345, 346, 347];
+/// The first version with [`NEWER_CODES`] as DIMSTYLE groups: all came with AutoCAD 2006, whose
+/// files are the 2004 format (AC1018).
+pub(crate) const NEWER_SINCE: Version = Version::R2004;
 /// Xdata list name of [`NEWER_CODES`] values.
 pub(crate) const DIMVARS_LIST: &str = "DIMVARS";
 

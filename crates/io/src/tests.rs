@@ -1379,7 +1379,10 @@ fn mleader_is_written_as_multileader() {
         block: None,
     };
     d.add(&Space::Model, Default::default(), EntityKind::MLeader(m.clone())).unwrap();
-    let back = roundtrip(&d);
+    // MULTILEADER is a 2007 entity (R2000/2004 files get LEADER + MTEXT).
+    let back =
+        crate::read(&crate::write_with(&d, "x.dxf", &crate::SaveOptions { version: Some(crate::Version::R2007), binary: false }).unwrap(), "x.dxf")
+            .unwrap();
     assert!(back.model.iter().any(|e| matches!(&e.kind, EntityKind::MLeader(x) if *x == m)));
     assert!(!back.model.iter().any(|e| matches!(e.kind, EntityKind::Leader(_) | EntityKind::MText(_))));
 }
