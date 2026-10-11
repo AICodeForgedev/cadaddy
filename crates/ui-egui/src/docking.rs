@@ -13,16 +13,19 @@ pub enum Panel {
     ToolSets,
     Layers,
     Properties,
+    #[serde(rename = "externalReferences")]
+    ExternalRefs,
 }
 
 impl Panel {
-    pub const ALL: &[Self] = &[Self::Canvas, Self::ToolSets, Self::Layers, Self::Properties];
+    pub const ALL: &[Self] = &[Self::Canvas, Self::ToolSets, Self::Layers, Self::Properties, Self::ExternalRefs];
     pub fn id(self) -> &'static str {
         match self {
             Self::Canvas => "canvas",
             Self::ToolSets => "toolSets",
             Self::Layers => "layers",
             Self::Properties => "properties",
+            Self::ExternalRefs => "externalReferences",
         }
     }
     fn label(self) -> &'static str {
@@ -31,6 +34,7 @@ impl Panel {
             Self::ToolSets => "Tool Sets",
             Self::Layers => "Layers",
             Self::Properties => "Properties",
+            Self::ExternalRefs => "External References",
         }
     }
     fn default_side(self) -> Zone {
@@ -39,6 +43,7 @@ impl Panel {
             Self::ToolSets => Zone::Left,
             Self::Layers => Zone::Right,
             Self::Properties => Zone::Right,
+            Self::ExternalRefs => Zone::Right,
         }
     }
     fn parse(id: &str) -> Result<Self, String> {
@@ -349,6 +354,9 @@ pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
                     crate::shortcut_menus::palette(app, ui, crate::palettes::properties_section, crate::shortcut_menus::properties_entries)
                 });
             }
+            Panel::ExternalRefs => {
+                egui::ScrollArea::both().id_salt("dock-xrefs").auto_shrink([false, false]).show(ui, |ui| crate::xrefs::section(app, ui));
+            }
         },
     );
     // Existing panel close buttons and commands still own their visibility switches.
@@ -377,7 +385,7 @@ fn panel_limits(panel: &Panel) -> PanelLimits {
     let (min, max_width) = match panel {
         Panel::Canvas => (egui::vec2(300.0, 180.0), 1_000_000.0),
         Panel::ToolSets => (egui::vec2(220.0, 150.0), 480.0),
-        Panel::Layers | Panel::Properties => (egui::vec2(220.0, 100.0), 720.0),
+        Panel::Layers | Panel::Properties | Panel::ExternalRefs => (egui::vec2(220.0, 100.0), 720.0),
     };
     PanelLimits { min, max: egui::vec2(max_width, 1_000_000.0) }
 }

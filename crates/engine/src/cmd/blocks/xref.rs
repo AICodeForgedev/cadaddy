@@ -27,6 +27,11 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             .alias(&["xa"])
             .params("{path: DWG/DXF file (saved as given; a relative path is relative to this drawing's folder), name? (default: the file name), overlay?: bool, at?: [x,y] (default 0,0), scale?: number | [x, y], rotation? (degrees)} → {name, handle, file}")
             .interactive(|_| Ok(Box::new(XrefM::new("XATTACH", XStage::File { overlay: false })))),
+        CommandSpec::new("xref", "Reference Manager", run_xref)
+            .menu(&["Window", "Reference Manager"])
+            .alias(&["xr", "externalreferences"])
+            .params("{} → {xrefs: [{name, path, foundAt, type: Attach|Overlay, status: Loaded|Unloaded|Not Found|Unresolved|Unreferenced|Not loaded, references, objects}]} (the app opens the External References palette instead)")
+            .noundo(),
         CommandSpec::new("-xref", "External References", run_dash_xref)
             .alias(&["-xr"])
             .params("{option: \"?\"|bind|detach|path|unload|reload|overlay|attach|type, names?: \"A,B*\" (default *), path? (path, attach, overlay), insert?: bool (bind: Insert type), overlay?: bool (type), at?, scale?, rotation? (attach)}")
@@ -197,6 +202,16 @@ fn named(s: &Session, cmd: &str, p: &Value) -> Result<Vec<String>> {
         return Err(bad(cmd, format!("no xref matches \"{pattern}\"")));
     }
     Ok(names)
+}
+
+/// XREF's JSON form: the xrefs as the External References palette lists them (the palette is
+/// the app's; typed without a UI, the list is echoed).
+fn run_xref(s: &mut Session, _p: &Value) -> Result<Value> {
+    let r = run_dash_xref(s, &json!({ "option": "?" }))?;
+    if r["xrefs"].as_array().is_some_and(|a| a.is_empty()) {
+        s.echo("No xrefs are attached.");
+    }
+    Ok(r)
 }
 
 fn run_dash_xref(s: &mut Session, p: &Value) -> Result<Value> {

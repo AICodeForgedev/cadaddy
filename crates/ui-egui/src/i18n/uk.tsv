@@ -4,6 +4,29 @@
 # UTF-8: context<TAB>English source<TAB>Ukrainian translation.
 # Empty context = ordinary label; @plural = one|few|many forms with {n}.
 # Keep command IDs, keywords, technology/product names and user data unchanged.
+# External References palette (#525).
+	Apply	Застосувати
+	Attach DWG...	Приєднати DWG...
+	Bind	Вбудувати
+	Detach	Від'єднати
+	Loaded	Завантажено
+	Make it a block of this drawing, keeping its layer names	Зробити блоком цього креслення зі збереженням назв шарів
+	Make it a block of this drawing; its layers become NAME$0$LAYER	Зробити блоком цього креслення; його шари стануть NAME$0$LAYER
+	No external references are attached.	Зовнішні посилання не приєднано.
+	Not Found	Не знайдено
+	Not loaded	Не завантажено
+	Open	Відкрити
+	Overlay	Накладення
+	Reference Manager	Диспетчер посилань
+	Reference Name	Ім'я посилання
+	References: {n}	Посилань: {n}
+	Reload	Оновити
+	Reload All	Оновити всі
+	Saved Path	Збережений шлях
+	Unload	Вивантажити
+	Unloaded	Вивантажено
+	Unreferenced	Без посилань
+	Unresolved	Не розв'язано
 	  Cancel  	Скасувати
 	  OK  	Гаразд
 	 or [	 або [
