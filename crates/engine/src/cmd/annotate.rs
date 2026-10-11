@@ -59,9 +59,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["dba", "dimbase"])
             .params("{points: [[x,y]...]} (baseline from the last linear dimension)")
             .interactive(|s| Ok(Box::new(ChainM::new(s, true)))),
-        CommandSpec::new("qdim", "Quick Dimension", run_qdim)
+        CommandSpec::new("qdim", "Quick Dimension", qdim::run)
             .menu(&["Dimension", "Quick Dimension"])
-            .params("{handles?, at: [x,y], vertical?: bool}"),
+            .params(qdim::PARAMS)
+            .interactive(|_| Ok(Box::new(qdim::QDimM::new()))),
         CommandSpec::new("dim", "Dimension", run_linear)
             .menu(&["Dimension", "Dimension"])
             .params("{p1, p2, at}")
@@ -416,55 +417,9 @@ fn run_baseline(s: &mut Session, p: &Value) -> Result<Value> {
     chain_run(s, p, true)
 }
 
-/// QDIM: continuous dimensions across the endpoints of the selected objects.
-fn run_qdim(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = targets(s, p)?;
-    if hs.len() > MAX_CHAIN {
-        return Err(bad("qdim", format!("at most {MAX_CHAIN} objects per call")));
-    }
-    let at = point_req("qdim", p, "at")?;
-    let vertical = bool_or(p, "vertical", false);
-    let d = s.doc()?;
-    let mut pts: Vec<Vec2> = Vec::new();
-    for h in &hs {
-        if let Some(e) = d.entity(*h) {
-            for pr in e.kind.prims() {
-                match pr {
-                    Prim::Seg(seg) => pts.extend([seg.start(), seg.end()]),
-                    Prim::Circle(c) => pts.push(c.center),
-                    Prim::Point(q) => pts.push(q),
-                    _ => {}
-                }
-            }
-        }
-    }
-    let key = |q: &Vec2| if vertical { q.y } else { q.x };
-    pts.sort_by(|a, b| key(a).total_cmp(&key(b)));
-    pts.dedup_by(|a, b| (key(a) - key(b)).abs() < 1e-9);
-    if pts.len() < 2 {
-        return Err(bad("qdim", "select objects with at least two distinct points"));
-    }
-    if pts.len() > MAX_CHAIN {
-        return Err(bad("qdim", format!("at most {MAX_CHAIN} distinct points per call")));
-    }
-    let rot = if vertical { std::f64::consts::FRAC_PI_2 } else { 0.0 };
-    // One snap index for all the dimensions, as DIMCONTINUE does: looking up each dimension's
-    // objects by scanning the drawing made QDIM quadratic (the added dimensions are no snap targets).
-    let snaps = if assoc_enabled(s) { Some(crate::assoc::SnapIndex::new(s.doc()?, &s.space())) } else { None };
-    let mut out = Vec::new();
-    for w in pts.windows(2) {
-        if let [a, b] = w {
-            let mut k = dim(s, DimKind::Linear { rotation: rot }, at, *a, *b, Vec2::ZERO, Vec2::ZERO, "");
-            if let (Some(ix), EntityKind::Dimension(dm)) = (&snaps, &mut k) {
-                dm.assoc = ix.auto_assoc(&[("p13", dm.p13.xy()), ("p14", dm.p14.xy())]);
-            }
-            let h = s.add_entity(k)?;
-            s.last_dim = Some(h);
-            out.push(h.hex());
-        }
-    }
-    Ok(json!({ "handles": out }))
-}
+/// QDIM: its modes and prompts.
+#[path = "annotate_qdim.rs"]
+mod qdim;
 
 /// A multileader from arrowhead to landing; `landing` false leaves out the landing line (dogleg).
 fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<EntityKind> {
