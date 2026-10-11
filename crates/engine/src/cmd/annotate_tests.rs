@@ -2,7 +2,7 @@ use cadcraft_doc::{AssocSnap, DimKind, Dimension, EntityKind, Handle};
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
-use crate::Session;
+use crate::{Input, Session};
 
 fn h(v: &Value) -> Handle {
     Handle::parse_hex(v["handle"].as_str().unwrap()).unwrap()
@@ -297,6 +297,25 @@ fn dimtedit_and_dimspace() {
     assert!(dim(&s, a).overrides.is_empty() && dim(&s, a).text_rotation == 0.0);
     s.execute("dimspace", &json!({ "base": a.hex(), "handles": [b.hex()], "spacing": 0.5 })).unwrap();
     assert!((dim(&s, b).defpt.y - 1.5).abs() < 1e-9, "{:?}", dim(&s, b).defpt);
+}
+
+#[test]
+fn dimspace_prompts_for_its_inputs() {
+    let mut s = Session::new();
+    let a = h(&s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [10, 0], "at": [0, 5] })).unwrap());
+    let b = h(&s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [20, 0], "at": [0, 9] })).unwrap());
+    // The menu / typed start used to fail with "`base` dimension is required".
+    s.start("dimspace").unwrap();
+    assert!(s.prompt_text().contains("Select base dimension"), "{}", s.prompt_text());
+    s.input(Input::Pick(vec![a])).unwrap();
+    assert!(s.prompt_text().contains("Select dimensions to space"), "{}", s.prompt_text());
+    s.input(Input::Pick(vec![b])).unwrap();
+    s.input(Input::Enter).unwrap();
+    assert!(s.prompt_text().contains("Enter value"), "{}", s.prompt_text());
+    s.input(Input::Text("2".into())).unwrap();
+    assert!(s.running.is_none());
+    assert!((dim(&s, a).defpt.y - 5.0).abs() < 1e-9, "{:?}", dim(&s, a).defpt);
+    assert!((dim(&s, b).defpt.y - 7.0).abs() < 1e-9, "{:?}", dim(&s, b).defpt);
 }
 
 #[test]

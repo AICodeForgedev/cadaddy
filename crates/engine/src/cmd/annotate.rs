@@ -8,7 +8,7 @@ use cadcraft_geom::{Segment, Vec2, Vec3};
 use serde_json::{Value, json};
 
 use super::helpers::v3;
-use super::machines::SelectRun;
+use super::machines::{SelOutcome, SelectPhase, SelectRun};
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, LeaderOrder, MLeaderOptions, Prompt, Result, Session, Step};
 
@@ -106,7 +106,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(tedit::TEditM::default()))),
         CommandSpec::new("dimspace", "Dimension Space", run_dimspace)
             .menu(&["Dimension", "Dimension Space"])
-            .params("{base: hex, handles: [hex], spacing?: number (default DIMDLI)}"),
+            .params("{base: hex, handles: [hex], spacing?: number (default DIMDLI)}")
+            .interactive(|_| Ok(Box::new(DimSpaceM::default()))),
     ]
     .into_iter()
     .chain(dimedit::specs())
@@ -717,6 +718,90 @@ fn run_dimspace(s: &mut Session, p: &Value) -> Result<Value> {
         })?;
     }
     Ok(json!({ "spaced": others.len() }))
+}
+
+/// DIMSPACE at the command line: select the base dimension, select the dimensions to space, then
+/// the spacing (Enter or Auto takes the DIMDLI-based default).
+#[derive(Default)]
+struct DimSpaceM {
+    base: Option<Handle>,
+    sel: SelectPhase,
+    spacing_phase: bool,
+}
+
+impl DimSpaceM {
+    fn apply(&self, s: &mut Session, base: Handle, spacing: Option<f64>) -> Result<Step> {
+        let mut p = serde_json::Map::new();
+        p.insert("base".into(), json!(base.hex()));
+        p.insert("handles".into(), json!(self.sel.picked.iter().map(|h| h.hex()).collect::<Vec<_>>()));
+        if let Some(v) = spacing {
+            p.insert("spacing".into(), json!(v));
+        }
+        let r = run_dimspace(s, &Value::Object(p))?;
+        s.set_selection(Vec::new());
+        s.echo(format!("{} dimension(s) spaced.", r.get("spaced").and_then(Value::as_u64).unwrap_or(0)));
+        Ok(Step::Done)
+    }
+}
+
+impl Interactive for DimSpaceM {
+    fn name(&self) -> &'static str {
+        "DIMSPACE"
+    }
+    fn begin(&mut self, _s: &mut Session) -> Result<Step> {
+        self.sel = SelectPhase::single();
+        Ok(Step::Continue)
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        if self.spacing_phase {
+            return Prompt::new("Enter value", Accept::NUMBER).kw(&["Auto"]).default("Auto");
+        }
+        if self.base.is_none() {
+            return Prompt::new("Select base dimension", Accept::SELECT);
+        }
+        Prompt::new("Select dimensions to space", Accept::SELECT)
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if self.spacing_phase {
+            let Some(base) = self.base else { return Ok(Step::Cancel) };
+            return match i {
+                Input::Enter => self.apply(s, base, None),
+                Input::Keyword(k) | Input::Text(k) if k.trim().eq_ignore_ascii_case("a") || k.trim().eq_ignore_ascii_case("auto") => {
+                    self.apply(s, base, None)
+                }
+                Input::Text(t) => match super::machines::number(&t).filter(|v| v.is_finite() && *v >= 0.0) {
+                    Some(v) => self.apply(s, base, Some(v)),
+                    None => {
+                        s.echo("Requires a non-negative number or Auto.");
+                        Ok(Step::Continue)
+                    }
+                },
+                _ => Ok(Step::Continue),
+            };
+        }
+        match self.sel.feed(s, &i)? {
+            SelOutcome::More => Ok(Step::Continue),
+            SelOutcome::Empty => Ok(Step::Done),
+            SelOutcome::Done(hs) => {
+                if self.base.is_none() {
+                    match hs.first().copied().filter(|h| !dims_of(s, &[*h]).is_empty()) {
+                        Some(b) => {
+                            self.base = Some(b);
+                            self.sel = SelectPhase::default();
+                        }
+                        None => {
+                            s.echo("Select a dimension.");
+                            self.sel = SelectPhase::single();
+                        }
+                    }
+                } else {
+                    self.sel.picked = hs;
+                    self.spacing_phase = true;
+                }
+                Ok(Step::Continue)
+            }
+        }
+    }
 }
 
 /// DIMOVERRIDE at the command line: variable, value (repeat), Enter, then select dimensions.
