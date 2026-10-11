@@ -2,10 +2,11 @@
 //!
 //! Runs the same [`cadcraft_ui_egui::CadApp`] as the desktop app through eframe's web runner
 //! (wgpu: WebGPU where available, WebGL2 otherwise). Build with `trunk build --release` from this
-//! directory (output in `dist/web`). URL flags: `?webgl` forces WebGL2, `?sample` opens the sample
-//! drawing. Saving downloads the drawing through the browser (`download.rs`). With `?host=parent`
-//! (inside an `<iframe>`), a same-origin parent page sends the drawing to open and stores what
-//! CADCraft saves instead (`host.rs`).
+//! directory (output in `dist/web`). URL flags: `?webgl` forces WebGL2, `?cpu` draws the drawing
+//! with egui shapes instead of the GPU canvas, `?sample` opens the sample drawing. Saving downloads
+//! the drawing through the browser (`download.rs`). With `?host=parent` (inside an `<iframe>`), a
+//! same-origin parent page sends the drawing to open and stores what CADCraft saves instead
+//! (`host.rs`).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_arch = "wasm32")]
@@ -119,7 +120,10 @@ mod web {
                         if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::PREFS_KEY)) {
                             app.load_prefs(&prefs);
                         }
-                        if let Some(rs) = &cc.wgpu_render_state {
+                        // `?cpu`: no render state for the app, so the canvas draws with egui shapes.
+                        if !crate::wants_cpu(&query())
+                            && let Some(rs) = &cc.wgpu_render_state
+                        {
                             app.set_wgpu(rs);
                         }
                         if query().contains("sample") {
@@ -157,6 +161,12 @@ mod web {
     }
 }
 
+/// True when the URL query (`?cpu&sample`) has a `cpu` flag: the CPU canvas path is requested.
+#[cfg(any(target_arch = "wasm32", test))]
+fn wants_cpu(query: &str) -> bool {
+    query.trim_start_matches('?').split('&').any(|p| p == "cpu" || p.starts_with("cpu="))
+}
+
 #[cfg(target_arch = "wasm32")]
 mod upload;
 
@@ -168,4 +178,20 @@ fn main() {
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     eprintln!("cadcraft-web only runs in the browser: build it with `trunk build --release` in apps/cadcraft-web");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wants_cpu;
+
+    #[test]
+    fn cpu_flag_is_detected() {
+        assert!(wants_cpu("?cpu"));
+        assert!(wants_cpu("?cpu&sample"));
+        assert!(wants_cpu("?sample&cpu"));
+        assert!(!wants_cpu(""));
+        assert!(!wants_cpu("?sample"));
+        assert!(!wants_cpu("?webgl&sample"));
+        assert!(!wants_cpu("?gpucpu"));
+    }
 }
