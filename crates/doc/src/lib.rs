@@ -186,7 +186,17 @@ impl Drawing {
             let same = match (base.get(*field), &cv) {
                 // Text style and arrow block names compare without case.
                 (Some(serde_json::Value::String(a)), serde_json::Value::String(b))
-                    if matches!(*field, "textStyle" | "arrowBlock" | "arrowBlock1" | "arrowBlock2") =>
+                    if matches!(
+                        *field,
+                        "textStyle"
+                            | "arrowBlock"
+                            | "arrowBlock1"
+                            | "arrowBlock2"
+                            | "leaderArrowBlock"
+                            | "dimLinetype"
+                            | "extLinetype1"
+                            | "extLinetype2"
+                    ) =>
                 {
                     a.eq_ignore_ascii_case(b)
                 }

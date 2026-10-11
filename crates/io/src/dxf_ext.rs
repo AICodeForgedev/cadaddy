@@ -55,8 +55,12 @@ pub(crate) enum K {
     Char,
     /// Handle of a STYLE record (DIMTXSTY).
     TextStyle,
-    /// Handle of an arrowhead BLOCK_RECORD (DIMBLK, DIMBLK1, DIMBLK2).
+    /// Handle of an arrowhead BLOCK_RECORD (DIMBLK, DIMBLK1, DIMBLK2, DIMLDRBLK).
     Block,
+    /// Handle of an LTYPE record (DIMLTYPE, DIMLTEX1, DIMLTEX2); "" (ByBlock) isn't written.
+    Linetype,
+    /// An angle: degrees in the style, radians in the file (DIMJOGANG).
+    Angle,
 }
 
 /// [`DimStyle`] field (camelCase) → DIMSTYLE group code (DXF Reference, DIMSTYLE table). The
@@ -109,10 +113,38 @@ pub(crate) const DIM_CODES: &[(&str, i32, K)] = &[
     ("arrowBlock", 342, K::Block),
     ("arrowBlock1", 343, K::Block),
     ("arrowBlock2", 344, K::Block),
+    ("fixedExtLength", 49, K::Real),
+    ("jogAngle", 50, K::Angle),
+    ("angularZeroSuppression", 79, K::Int),
+    ("arcSymbol", 90, K::Int),
+    ("textVerticalPos", 145, K::Real),
+    ("forceLineInside", 172, K::Bool),
+    ("textInside", 174, K::Bool),
+    ("suppressOutsideArrows", 175, K::Bool),
+    ("textMove", 279, K::Int),
+    ("suppressDim1", 281, K::Bool),
+    ("suppressDim2", 282, K::Bool),
+    ("tolJust", 283, K::Int),
+    ("fit", 289, K::Int),
+    ("fixedExt", 290, K::Bool),
+    ("leaderArrowBlock", 341, K::Block),
+    ("dimLinetype", 345, K::Linetype),
+    ("extLinetype1", 346, K::Linetype),
+    ("extLinetype2", 347, K::Linetype),
+    ("dimLineweight", 371, K::Int),
+    ("extLineweight", 372, K::Int),
 ];
 
 /// DIMSAH: separate arrow blocks in use.
 pub(crate) const DIMSAH: i32 = 173;
+
+/// Variables newer than the DXF version written (R2000): DIMFXL, DIMJOGANG, DIMARCSYM,
+/// DIMFXLON, DIMLTYPE, DIMLTEX1, DIMLTEX2. The writer puts them in a style's `CADCRAFT`
+/// "DIMVARS" xdata (`1070 <code>` then the value, like DSTYLE) instead of DIMSTYLE groups that
+/// an R2000 reader doesn't expect; the reader takes both.
+pub(crate) const NEWER_CODES: &[i32] = &[49, 50, 90, 290, 345, 346, 347];
+/// Xdata list name of [`NEWER_CODES`] values.
+pub(crate) const DIMVARS_LIST: &str = "DIMVARS";
 
 pub(crate) fn dim_code(field: &str) -> Option<(i32, K)> {
     DIM_CODES.iter().find(|(f, _, _)| *f == field).map(|(_, c, k)| (*c, *k))
@@ -143,8 +175,11 @@ pub(crate) enum DimVal {
     Handle(String),
 }
 
-/// Encode a canonical field value. `style` / `block` map names to handles.
-pub(crate) fn encode(kind: K, v: &Value, style: &dyn Fn(&str) -> Option<String>, block: &dyn Fn(&str) -> Option<String>) -> Option<DimVal> {
+/// Name → handle lookups of the writer: text styles, arrowhead blocks and linetypes.
+pub(crate) type Lookup<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+/// Encode a canonical field value. `style` / `block` / `ltype` map names to handles.
+pub(crate) fn encode(kind: K, v: &Value, style: Lookup, block: Lookup, ltype: Lookup) -> Option<DimVal> {
     Some(match kind {
         K::Real => DimVal::Real(v.as_f64().filter(|x| x.is_finite())?),
         K::Int => DimVal::Int(v.as_i64()?),
@@ -157,12 +192,20 @@ pub(crate) fn encode(kind: K, v: &Value, style: &dyn Fn(&str) -> Option<String>,
             let name = v.as_str()?;
             DimVal::Handle(if name.trim().is_empty() { "0".to_string() } else { block(name)? })
         }
+        K::Linetype => DimVal::Handle(ltype(v.as_str().filter(|n| !n.trim().is_empty())?)?),
+        K::Angle => DimVal::Real(v.as_f64().filter(|x| x.is_finite())?.to_radians()),
     })
 }
 
-/// Decode a group value into the JSON a [`DimStyle`] field takes. `styles` / `blocks` map
-/// upper-case handles to names.
-pub(crate) fn decode(kind: K, t: &Tag, styles: &HashMap<String, String>, blocks: &HashMap<String, String>) -> Option<Value> {
+/// Decode a group value into the JSON a [`DimStyle`] field takes. `styles` / `blocks` /
+/// `ltypes` map upper-case handles to names.
+pub(crate) fn decode(
+    kind: K,
+    t: &Tag,
+    styles: &HashMap<String, String>,
+    blocks: &HashMap<String, String>,
+    ltypes: &HashMap<String, String>,
+) -> Option<Value> {
     Some(match kind {
         K::Real => {
             let x = t.f64();
@@ -180,6 +223,18 @@ pub(crate) fn decode(kind: K, t: &Tag, styles: &HashMap<String, String>, blocks:
         K::Block => {
             let h = t.str().trim().to_ascii_uppercase();
             if h.is_empty() || h == "0" { Value::String(String::new()) } else { Value::String(blocks.get(&h)?.clone()) }
+        }
+        K::Linetype => {
+            let h = t.str().trim().to_ascii_uppercase();
+            if h.is_empty() || h == "0" { Value::String(String::new()) } else { Value::String(ltypes.get(&h)?.clone()) }
+        }
+        K::Angle => {
+            // Rounded so that whole degrees come back whole.
+            let x = (t.f64().to_degrees() * 1e9).round() / 1e9;
+            if !x.is_finite() {
+                return None;
+            }
+            serde_json::json!(x)
         }
     })
 }
@@ -304,8 +359,32 @@ pub(crate) fn owner(tags: &[Tag]) -> Option<String> {
 }
 
 /// Per-dimension overrides from the `ACAD` "DSTYLE" xdata: `1070 <code>` followed by the value.
-pub(crate) fn read_dstyle(tags: &[Tag], styles: &HashMap<String, String>, blocks: &HashMap<String, String>) -> serde_json::Map<String, Value> {
-    let list = xdata_list(xdata(tags, "ACAD"), "DSTYLE");
+pub(crate) fn read_dstyle(
+    tags: &[Tag],
+    styles: &HashMap<String, String>,
+    blocks: &HashMap<String, String>,
+    ltypes: &HashMap<String, String>,
+) -> serde_json::Map<String, Value> {
+    read_dimvar_list(xdata_list(xdata(tags, "ACAD"), "DSTYLE"), styles, blocks, ltypes)
+}
+
+/// A style's [`NEWER_CODES`] variables from its `CADCRAFT` "DIMVARS" xdata.
+pub(crate) fn read_newer_dimvars(
+    tags: &[Tag],
+    styles: &HashMap<String, String>,
+    blocks: &HashMap<String, String>,
+    ltypes: &HashMap<String, String>,
+) -> serde_json::Map<String, Value> {
+    read_dimvar_list(xdata_list(xdata(tags, APP), DIMVARS_LIST), styles, blocks, ltypes)
+}
+
+/// `1070 <code>` / value pairs of dimension variables.
+fn read_dimvar_list(
+    list: &[Tag],
+    styles: &HashMap<String, String>,
+    blocks: &HashMap<String, String>,
+    ltypes: &HashMap<String, String>,
+) -> serde_json::Map<String, Value> {
     let mut out = serde_json::Map::new();
     let mut it = list.iter().take(MAX_XDATA_ITEMS * 2);
     while let Some(t) = it.next() {
@@ -315,7 +394,7 @@ pub(crate) fn read_dstyle(tags: &[Tag], styles: &HashMap<String, String>, blocks
         let code = t.i64();
         let Some(v) = it.next() else { break };
         let Some((field, kind)) = i32::try_from(code).ok().and_then(dim_field) else { continue };
-        if let Some(val) = decode(kind, v, styles, blocks).and_then(|j| canonical(field, &j)) {
+        if let Some(val) = decode(kind, v, styles, blocks, ltypes).and_then(|j| canonical(field, &j)) {
             out.insert(field.to_string(), val);
         }
     }

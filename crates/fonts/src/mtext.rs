@@ -145,6 +145,8 @@ struct Fmt {
     over: bool,
     wf: f64,
     oblique: f64,
+    /// `\A`: vertical alignment of tolerance stacks (`^`) on the line: 0 bottom, 1 centre, 2 top.
+    valign: u8,
 }
 
 /// One shaped unit of a word.
@@ -247,6 +249,7 @@ fn parse(contents: &str, base: Fmt) -> (Vec<Atom>, Vec<Fmt>) {
             over: false,
             wf: 1.0,
             oblique: 0.0,
+            valign: 1,
         });
         f(&mut n);
         if fmts.len() < 100_000 {
@@ -348,8 +351,15 @@ fn parse(contents: &str, base: Fmt) -> (Vec<Atom>, Vec<Fmt>) {
                             derive(&mut fmts, &mut cur, &|f| f.color = Some(MTextColor::Rgb(v & 0xFF_FFFF)));
                         }
                     }
+                    'A' => {
+                        let (a, n) = arg(&chars, i);
+                        i = n;
+                        if let Ok(v @ 0..=2) = a.trim().parse::<u8>() {
+                            derive(&mut fmts, &mut cur, &|f| f.valign = v);
+                        }
+                    }
                     _ => {
-                        // \A, \T, \p and unknown codes: argument up to ';'.
+                        // \T, \p and unknown codes: argument up to ';'.
                         let (_, n) = arg(&chars, i);
                         i = n;
                     }
@@ -431,8 +441,15 @@ fn seg_shape(seg: &Seg, f: &Fmt, x: f64) -> Shaped {
                     out.strokes.push(vec![Vec2::new(sx, -h * 0.1), Vec2::new(sx + h * 0.3, h * 1.1)]);
                 }
                 '^' => {
-                    out.extend(put(top, hs, Vec2::new(x, h * 0.55)));
-                    out.extend(put(bottom, hs, Vec2::new(x, h * 0.45 - hs)));
+                    // Tolerances: centred on the line, or the lower value on the baseline (\A0) or
+                    // the upper value level with the text (\A2).
+                    let (yt, yb) = match f.valign {
+                        0 => (hs + h * 0.1, 0.0),
+                        2 => (0.0, -hs - h * 0.1),
+                        _ => (h * 0.55, h * 0.45 - hs),
+                    };
+                    out.extend(put(top, hs, Vec2::new(x, yt)));
+                    out.extend(put(bottom, hs, Vec2::new(x, yb)));
                 }
                 _ => {
                     let bar = h * 0.45;
@@ -515,7 +532,7 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
     let wf = if p.width_factor.is_finite() && p.width_factor > 0.0 { p.width_factor } else { 1.0 };
     let width = if p.width.is_finite() && p.width > 0.0 { p.width } else { 0.0 };
     let rotation = if p.rotation.is_finite() { p.rotation } else { 0.0 };
-    let base = Fmt { font: p.font.clone(), height: h, color: None, under: false, over: false, wf, oblique: p.oblique };
+    let base = Fmt { font: p.font.clone(), height: h, color: None, under: false, over: false, wf, oblique: p.oblique, valign: 1 };
     let (atoms, fmts) = parse(contents, base.clone());
     let fmt = |i: usize| fmts.get(i).unwrap_or(&base);
     let mut lines: Vec<Line> = Vec::new();

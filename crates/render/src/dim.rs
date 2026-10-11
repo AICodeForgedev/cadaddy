@@ -1,8 +1,10 @@
 //! Dimension geometry generation from definition points and a dimension style: extension
 //! lines (DIMEXO/DIMEXE, DIMSE1/2), arrowheads (DIMBLK/DIMBLK1/DIMBLK2, drawn in code) or ticks
-//! (DIMTSZ, DIMDLE), text placement (DIMTAD, DIMJUST, DIMTIH/DIMTOH, DIMGAP) and text
-//! formatting (DIMLUNIT, DIMDEC, DIMZIN, DIMRND, DIMPOST, DIMTOL/DIMLIM with DIMTZIN, DIMALT with
-//! DIMALTU/DIMALTZ/DIMALTRND).
+//! (DIMTSZ, DIMDLE), fit (DIMATFIT, DIMTIX, DIMSOXD, DIMTOFL), suppressed halves (DIMSD1/2),
+//! fixed-length extension lines (DIMFXL/DIMFXLON), text placement (DIMTAD, DIMTVP, DIMJUST,
+//! DIMTIH/DIMTOH, DIMGAP, DIMTMOVE) and text formatting (DIMLUNIT, DIMDEC, DIMZIN, DIMRND,
+//! DIMPOST, DIMTOL/DIMLIM with DIMTZIN and DIMTOLJ, DIMALT with DIMALTU/DIMALTZ/DIMALTRND,
+//! DIMAZIN, DIMARCSYM).
 
 use cadcraft_doc::{DimKind, DimStyle, Dimension};
 use cadcraft_fonts::{MTextParams, TextFont};
@@ -38,6 +40,9 @@ pub struct DimGeometry {
     pub value: String,
     /// The text as MTEXT contents (stacked fractions and tolerances).
     pub mtext: String,
+    /// Indices into `lines` of the second extension line (DIMLTEX2); the other extension
+    /// lines take DIMLTEX1.
+    pub ext2_lines: Vec<usize>,
 }
 
 impl DimGeometry {
@@ -51,6 +56,15 @@ impl DimGeometry {
         if l.len() >= 2 {
             self.lines.push(l);
             self.line_roles.push(LineRole::Ext);
+        }
+    }
+    /// Extension line 1 or 2 (`second`).
+    fn ext_n(&mut self, l: Option<Vec<Vec2>>, second: bool) {
+        if let Some(l) = l.filter(|l| l.len() >= 2) {
+            if second {
+                self.ext2_lines.push(self.lines.len());
+            }
+            self.ext(l);
         }
     }
     fn fill(&mut self, tris: Vec<Vec2>) {
@@ -300,7 +314,9 @@ fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str) -> String 
             let sign = |x: &str, pos: char| if x.trim_start_matches(['0', '.', ',']).is_empty() { x.to_string() } else { format!("{pos}{x}") };
             let (plus, minus) =
                 (sign(&plus, '+'), if st.tol_minus < 0.0 { format!("+{}", minus.trim_start_matches('-')) } else { sign(&minus, '-') });
-            s += &format!("{{\\H{};\\S{plus}^{minus};}}", tol_height_code(st));
+            // DIMTOLJ: bottom / middle / top (MTEXT `\A`; middle is the default).
+            let tolj = if st.tol_just == 1 { String::new() } else { format!("\\A{};", st.tol_just.min(2)) };
+            s += &format!("{{\\H{};{tolj}\\S{plus}^{minus};}}", tol_height_code(st));
         }
     }
     if st.alt {
@@ -345,7 +361,13 @@ fn ext_line(origin: Vec2, foot: Vec2, st: &DimStyle, k: f64) -> Option<Vec<Vec2>
         return None;
     }
     let u = v / len;
-    Some(vec![origin + u * (st.ext_offset * k), foot + u * (st.ext_extend * k)])
+    let mut start = origin + u * (st.ext_offset * k);
+    // DIMFXLON: a fixed length from the dimension line toward the origin (never past the offset).
+    let fixed = st.fixed_ext_length * k;
+    if st.fixed_ext && fixed.is_finite() && fixed >= 0.0 && fixed < len - st.ext_offset * k {
+        start = foot - u * fixed;
+    }
+    Some(vec![start, foot + u * (st.ext_extend * k)])
 }
 
 /// An angle reduced to the readable range (text never upside down).
@@ -429,12 +451,10 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let meas = f1.dist(f2);
             g.mtext = linear_text(meas, d, st, "");
             if !st.suppress_ext1 {
-                g.lines.extend(ext_line(p1, f1, st, k));
-                g.line_roles.resize(g.lines.len(), LineRole::Ext);
+                g.ext_n(ext_line(p1, f1, st, k), false);
             }
             if !st.suppress_ext2 {
-                g.lines.extend(ext_line(p2, f2, st, k));
-                g.line_roles.resize(g.lines.len(), LineRole::Ext);
+                g.ext_n(ext_line(p2, f2, st, k), true);
             }
             let u = (f2 - f1).normalized();
             let u = if u == Vec2::ZERO || !u.is_finite() { dir } else { u };
@@ -443,7 +463,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let has_text = tw > 0.0;
             let tick_like = ticks || (blk1.is_tick() && blk2.is_tick());
             let aw = if tick_like { 0.0 } else { asz };
-            let arrows_inside = tick_like || meas > 2.0 * asz + 1e-9;
+            let arrows_fit = tick_like || meas > 2.0 * asz + 1e-9;
             // Text orientation: inside / outside horizontal.
             let along_ang = readable(u.angle());
             let extent = |ang: f64| {
@@ -452,13 +472,36 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 (tw * r.dot(u).abs() + tht * r.perp().dot(u).abs()) / 2.0
             };
             let inside_ang = if st.text_inside_horizontal { 0.0 } else { along_ang };
-            let centred = st.text_above == 0;
-            let fits =
-                !has_text || if centred { meas >= 2.0 * (extent(inside_ang) + gap) + 2.0 * aw } else { meas >= 2.0 * extent(inside_ang) + 2.0 * aw };
+            // DIMTVP (with DIMTAD 0) lifts the text off the line once it is 0.7 text heights or more.
+            let tvp = if st.text_above == 0 && st.text_vertical_pos.is_finite() { st.text_vertical_pos } else { 0.0 };
+            let centred = st.text_above == 0 && tvp.abs() < 0.7;
+            let text_need = if centred { 2.0 * (extent(inside_ang) + gap) } else { 2.0 * extent(inside_ang) };
+            let fits = !has_text || meas >= text_need + 2.0 * aw;
+            let text_fits = !has_text || meas >= text_need;
             let just = st.text_just.min(4);
-            let text_outside = !d.user_text_pos && has_text && !fits && just <= 2;
+            // DIMATFIT / DIMTIX: what goes outside the extension lines when text and arrows
+            // don't both fit between them. Text the user placed, or over an extension line, is
+            // not part of the fit.
+            let (text_in, arrows_inside) = if d.user_text_pos || !has_text || just >= 3 {
+                (true, arrows_fit)
+            } else if fits {
+                (true, true)
+            } else if st.text_inside {
+                (true, false)
+            } else {
+                match st.fit {
+                    0 => (false, false),
+                    1 => (text_fits, false),
+                    2 => (false, arrows_fit),
+                    _ if arrows_fit => (false, true),
+                    _ => (text_fits, false),
+                }
+            };
+            let text_outside = !text_in;
             text_angle = if text_outside { if st.text_outside_horizontal { 0.0 } else { along_ang } } else { inside_ang };
             let half = extent(text_angle);
+            // DIMSOXD: arrowheads that don't fit inside are left out.
+            let outside_arrows = !arrows_inside && !st.suppress_outside_arrows;
             // Text centre along the dimension line.
             let along_c = if text_outside {
                 f2 + u * (2.0 * asz.max(tsz) + gap + half)
@@ -483,7 +526,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 -n
             };
             let offset = match st.text_above {
-                0 => Vec2::ZERO,
+                0 => above * (tvp * th),
                 2 => side_out * off_along(side_out),
                 4 => -above * off_along(-above),
                 _ => above * off_along(above),
@@ -499,43 +542,69 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             } else if !d.user_text_pos {
                 text_mid = along_c + offset;
             }
-            // Dimension line.
+            // Dimension line. DIMSD1 / DIMSD2 leave out its first / second half (with the arrow).
             let dle = if tick_like { st.dim_line_extend * k } else { 0.0 };
-            if arrows_inside {
-                let i1 = end(&mut g, blk1, f1, -u);
-                let i2 = end(&mut g, blk2, f2, u);
-                let a = f1 - u * dle + u * i1;
-                let b = f2 + u * dle - u * i2;
+            let lo = if st.suppress_dim1 { meas / 2.0 } else { f64::NEG_INFINITY };
+            let hi = if st.suppress_dim2 { meas / 2.0 } else { f64::INFINITY };
+            let seg = |g: &mut DimGeometry, a: Vec2, b: Vec2| {
+                let (ta, tb) = ((a - f1).dot(u), (b - f1).dot(u));
+                let (t0, t1) = (ta.min(tb).max(lo), ta.max(tb).min(hi));
+                if t1 > t0 + 1e-12 {
+                    g.dim(vec![f1 + u * t0, f1 + u * t1]);
+                }
+            };
+            // The line between `a` and `b`, broken around centred text between the extension lines.
+            let inner = |g: &mut DimGeometry, a: Vec2, b: Vec2| {
                 if centred && has_text && !text_outside && just <= 2 && !d.user_text_pos {
-                    let c = along_c;
                     let h = extent(text_angle) + gap;
-                    let t0 = (c - u * h - f1).dot(u);
-                    let t1 = (c + u * h - f1).dot(u);
+                    let (t0, t1) = ((along_c - u * h - f1).dot(u), (along_c + u * h - f1).dot(u));
                     if t0 > (a - f1).dot(u) + 1e-9 {
-                        g.dim(vec![a, f1 + u * t0]);
+                        seg(g, a, f1 + u * t0);
                     }
                     if t1 < (b - f1).dot(u) - 1e-9 {
-                        g.dim(vec![f1 + u * t1, b]);
+                        seg(g, f1 + u * t1, b);
                     }
                 } else {
-                    g.dim(vec![a, b]);
+                    seg(g, a, b);
                 }
-                if text_outside {
-                    // Extend the dimension line out to the text.
-                    let to = text_mid - offset - u * (half + gap);
-                    if (to - f2).dot(u) > 0.0 {
-                        g.dim(vec![f2, f2 + u * (to - f2).dot(u)]);
-                    }
+            };
+            // Out to text outside the extension lines, from `from` along the line.
+            let to_text = |g: &mut DimGeometry, from: Vec2| {
+                let to = text_mid - offset - u * (half + gap);
+                if text_outside && (to - from).dot(u) > 0.0 {
+                    seg(g, from, from + u * (to - from).dot(u));
                 }
+            };
+            if arrows_inside {
+                let i1 = if st.suppress_dim1 { 0.0 } else { end(&mut g, blk1, f1, -u) };
+                let i2 = if st.suppress_dim2 { 0.0 } else { end(&mut g, blk2, f2, u) };
+                inner(&mut g, f1 - u * dle + u * i1, f2 + u * dle - u * i2);
+                to_text(&mut g, f2);
             } else {
-                end(&mut g, blk1, f1, u);
-                end(&mut g, blk2, f2, -u);
-                g.dim(vec![f1 - u * (asz * 2.0), f2 + u * (asz * 2.0)]);
-                if text_outside {
-                    let to = text_mid - offset - u * (half + gap);
-                    if (to - f2).dot(u) > asz * 2.0 {
-                        g.dim(vec![f2 + u * (asz * 2.0), f2 + u * (to - f2).dot(u)]);
+                let stub = asz * 2.0;
+                if outside_arrows {
+                    if !st.suppress_dim1 {
+                        end(&mut g, blk1, f1, u);
                     }
+                    if !st.suppress_dim2 {
+                        end(&mut g, blk2, f2, -u);
+                    }
+                    seg(&mut g, f1 - u * stub, f1);
+                    seg(&mut g, f2, f2 + u * stub);
+                }
+                // DIMTOFL: the line between the extension lines as well.
+                if st.force_line_inside {
+                    inner(&mut g, f1, f2);
+                }
+                to_text(&mut g, if outside_arrows { f2 + u * stub } else { f2 });
+            }
+            // DIMTMOVE 1: a leader from the dimension line to text moved off it.
+            if d.user_text_pos && st.text_move == 1 && has_text {
+                let base = f1.mid(f2);
+                let off = (text_mid - base).dot(n).abs();
+                if off > tht / 2.0 + gap + 1e-9 {
+                    let side = if (base - text_mid).dot(tr) >= 0.0 { tr } else { -tr };
+                    g.dim(vec![base, text_mid + side * (tw / 2.0 + gap)]);
                 }
             }
         }
@@ -571,10 +640,14 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                     g.dim(vec![start + u * t1.max(0.0), tip]);
                 }
             } else {
-                if !radius {
-                    let start = center - u * r;
+                // Text outside: a diameter line spans the circle and a radius line runs in to the
+                // centre only with DIMTOFL; otherwise just the leader to the text.
+                if st.force_line_inside {
+                    let start = if radius { center } else { center - u * r };
                     g.dim(vec![start, tip]);
-                    end(&mut g, blk1, start, -u);
+                    if !radius {
+                        end(&mut g, blk1, start, -u);
+                    }
                 }
                 g.dim(vec![tip, tpos]);
             }
@@ -591,9 +664,9 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                     text_mid = tpos + u * (tw / 2.0 + gap);
                 }
             }
-            // The DIMCEN mark is drawn only when the dimension line is outside the circle: a
-            // radius led out to its text, never a diameter line through the centre.
-            let line_outside = radius && tpos.dist(center) >= r;
+            // The DIMCEN mark is drawn only when no dimension line runs inside the circle (text
+            // outside without DIMTOFL), never with a line through the centre.
+            let line_outside = !st.force_line_inside && tpos.dist(center) >= r;
             if line_outside && st.center_mark != 0.0 && st.center_mark.is_finite() {
                 let c = st.center_mark.abs() * k;
                 g.ext(vec![center - Vec2::X * c, center + Vec2::X * c]);
@@ -621,7 +694,9 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let arc =
                 if cadcraft_geom::angle_in_sweep(vertex.angle_to(arc_pt), s, e) { Arc::new(vertex, r, s, e) } else { Arc::new(vertex, r, e, s) };
             let sweep = ccw_sweep(arc.start, arc.end);
-            let txt = format_angle(sweep, st.angular_unit, st.angular_decimals, st.zero_suppression & 12);
+            // DIMAZIN 1 / 2 suppress leading / trailing zeros (DIMZIN's bits 4 / 8).
+            let azin = (st.angular_zero_suppression & 3) * 4;
+            let txt = format_angle(sweep, st.angular_unit, st.angular_decimals, azin);
             // DIMPOST is a linear-dimension prefix/suffix; angles have their own format only.
             g.mtext = apply_override(&txt, d);
             let mut pts = Vec::new();
@@ -636,12 +711,11 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let ((p1, dir1), (p2, dir2)) =
                 if cadcraft_geom::angle_in_sweep(vertex.angle_to(arc_pt), s, e) { (start, finish) } else { (finish, start) };
             if !st.suppress_ext1 {
-                g.lines.extend(ext_line(vertex + (p1 - vertex).normalized() * vertex.dist(a1).min(r), p1, st, k));
+                g.ext_n(ext_line(vertex + (p1 - vertex).normalized() * vertex.dist(a1).min(r), p1, st, k), false);
             }
             if !st.suppress_ext2 {
-                g.lines.extend(ext_line(vertex + (p2 - vertex).normalized() * vertex.dist(a2).min(r), p2, st, k));
+                g.ext_n(ext_line(vertex + (p2 - vertex).normalized() * vertex.dist(a2).min(r), p2, st, k), true);
             }
-            g.line_roles.resize(g.lines.len(), LineRole::Ext);
             end(&mut g, blk1, p1, dir1);
             end(&mut g, blk2, p2, dir2);
             let (tw, tht) = measure(&g.mtext);
@@ -676,14 +750,14 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let r = c.dist(d.p13.xy());
             let arc = Arc::new(c, c.dist(d.defpt.xy()).max(1e-9), c.angle_to(d.p13.xy()), c.angle_to(d.p14.xy()));
             let meas = r * arc.sweep();
-            g.mtext = linear_text(meas, d, st, "⌒");
+            // DIMARCSYM: the arc symbol before the text (0), over it (1) or none (2).
+            g.mtext = linear_text(meas, d, st, if st.arc_symbol == 0 { "⌒" } else { "" });
             let mut pts = Vec::new();
             arc.tessellate(arc.radius * 1e-3, &mut pts);
             g.dim(pts);
-            for (p, q) in [(d.p13.xy(), arc.start_point()), (d.p14.xy(), arc.end_point())] {
-                g.lines.extend(ext_line(p, q, st, k));
+            for (i, (p, q)) in [(d.p13.xy(), arc.start_point()), (d.p14.xy(), arc.end_point())].into_iter().enumerate() {
+                g.ext_n(ext_line(p, q, st, k), i == 1);
             }
-            g.line_roles.resize(g.lines.len(), LineRole::Ext);
             end(&mut g, blk1, arc.start_point(), -(arc.start_point() - c).perp().normalized());
             end(&mut g, blk2, arc.end_point(), (arc.end_point() - c).perp().normalized());
             let m = arc.mid_point();
@@ -691,6 +765,20 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             text_angle = if st.text_inside_horizontal { 0.0 } else { readable(radial.perp().angle()) };
             if !d.user_text_pos {
                 text_mid = m + radial * (gap + th / 2.0);
+            }
+            if st.arc_symbol == 1 {
+                // A small arc over the text.
+                let (tw, tht) = measure(&g.mtext);
+                let (x, y) = (Vec2::from_angle(text_angle), Vec2::from_angle(text_angle).perp());
+                let half = (tw / 2.0).max(th / 2.0);
+                let base = text_mid + y * (tht / 2.0 + gap / 2.0);
+                let sym: Vec<Vec2> = (0..=12)
+                    .map(|i| {
+                        let t = f64::from(i) / 6.0 - 1.0;
+                        base + x * (t * half) + y * ((1.0 - t * t).max(0.0).sqrt() * th * 0.35)
+                    })
+                    .collect();
+                g.dim(sym);
             }
         }
     }

@@ -712,6 +712,7 @@ fn full_dim_style() -> DimStyle {
         angular_unit: 1,
         suppress_ext1: true,
         suppress_ext2: true,
+        ..DimStyle::default()
     }
 }
 
@@ -1328,7 +1329,9 @@ fn extension_sample_roundtrips_and_can_be_exported() {
 fn dwg_roundtrip_keeps_extension_data() {
     let d = extension_sample();
     let back = read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap();
-    assert_eq!(back.dim_style("Mech"), d.dim_style("Mech"));
+    // The bridge loses DIMFXL and DIMJOGANG (0 and its 5° minimum come back).
+    let norm = |s: Option<&DimStyle>| s.cloned().map(|s| DimStyle { fixed_ext_length: 1.0, jog_angle: 45.0, ..s });
+    assert_eq!(norm(back.dim_style("Mech")), norm(d.dim_style("Mech")));
     assert_eq!(back.constraints, d.constraints);
     assert_eq!(back.parametric, d.parametric);
     let dims =
@@ -1679,6 +1682,8 @@ fn autocad_header_dim_variables_are_not_overrides() {
             // Names as AutoCAD may spell them.
             K::Block => (1, v.as_str().unwrap().to_ascii_uppercase()),
             K::TextStyle => (7, v.as_str().unwrap().to_ascii_uppercase()),
+            K::Linetype => (6, v.as_str().unwrap().to_string()),
+            K::Angle => (40, v.as_f64().unwrap().to_radians().to_string()),
         };
         vars.push_str(&format!("  9\r\n${var}\r\n{code}\r\n{val}\r\n"));
     }

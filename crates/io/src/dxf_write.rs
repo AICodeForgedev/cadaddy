@@ -105,6 +105,8 @@ struct Ctx {
     styles: HashMap<String, String>,
     /// Upper-case arrow name (as stored in styles/overrides) → BLOCK_RECORD handle.
     arrows: HashMap<String, String>,
+    /// Upper-case linetype name → LTYPE record handle (DIMLTYPE, DIMLTEX1, DIMLTEX2).
+    ltypes: HashMap<String, String>,
     /// Associative dimension → its DIMASSOC object.
     assoc: HashMap<Handle, AssocObj>,
     /// Table → (anonymous `*T` block name, BLOCK_RECORD handle).
@@ -139,7 +141,9 @@ impl Ctx {
     /// A dimension variable encoded with this file's handles; integers outside the 16-bit
     /// range of their groups are dropped.
     fn encode(&self, kind: K, v: &serde_json::Value) -> Option<DimVal> {
-        dxf_ext::encode(kind, v, &|n| self.style(n), &|n| self.arrow(n)).filter(|x| !matches!(x, DimVal::Int(i) if i16::try_from(*i).is_err()))
+        let ltype = |n: &str| self.ltypes.get(&n.trim().to_ascii_uppercase()).cloned();
+        dxf_ext::encode(kind, v, &|n| self.style(n), &|n| self.arrow(n), &ltype)
+            .filter(|x| !matches!(x, DimVal::Int(i) if i16::try_from(*i).is_err()))
     }
 }
 
@@ -1400,12 +1404,12 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     // Arrowhead blocks: user blocks by name, otherwise generated from our own geometry.
     let mut arrow_names: Vec<String> = Vec::new();
     for s in &d.dim_styles {
-        arrow_names.extend([s.arrow_block.clone(), s.arrow_block1.clone(), s.arrow_block2.clone()]);
+        arrow_names.extend([s.arrow_block.clone(), s.arrow_block1.clone(), s.arrow_block2.clone(), s.leader_arrow_block.clone()]);
     }
     for e in &every {
         if let EntityKind::Dimension(dm) = &e.kind {
             for (k, v) in &dm.overrides {
-                let Some(f) = DimStyle::field_name(k).filter(|f| f.starts_with("arrowBlock")) else { continue };
+                let Some(f) = DimStyle::field_name(k).filter(|f| f.starts_with("arrowBlock") || *f == "leaderArrowBlock") else { continue };
                 if let Some(s) = dxf_ext::canonical(f, v).as_ref().and_then(|v| v.as_str()) {
                     arrow_names.push(s.to_string());
                 }
@@ -1588,7 +1592,8 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     let th = table_head(&mut w, "LTYPE", d.linetypes.len());
     for lt in &d.linetypes {
         let h = record_head(&mut w, "LTYPE", &th, "AcDbLinetypeTableRecord");
-        ltype_handles.entry(lt.name.to_ascii_uppercase()).or_insert(h);
+        ltype_handles.entry(lt.name.to_ascii_uppercase()).or_insert(h.clone());
+        cx.ltypes.entry(lt.name.to_ascii_uppercase()).or_insert(h);
         w.s(2, &lt.name);
         w.i(70, 0);
         w.s(3, &lt.description);
@@ -1784,9 +1789,15 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
         w.s(2, &s.name);
         w.i(70, 0);
         let v = serde_json::to_value(s).unwrap_or_default();
+        let defaults = serde_json::to_value(DimStyle::default()).unwrap_or_default();
+        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new() };
         for (field, code, kind) in dxf_ext::DIM_CODES {
-            if let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) {
+            let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
+            if !dxf_ext::NEWER_CODES.contains(code) {
                 w.dimval(*code, enc, false);
+            } else if v.get(*field) != defaults.get(*field) {
+                newer.i(1070, i64::from(*code));
+                newer.dimval(*code, enc, true);
             }
         }
         if !s.arrow_block1.trim().is_empty() || !s.arrow_block2.trim().is_empty() {
@@ -1794,6 +1805,13 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
         }
         if s.annotative {
             annotative_xdata(&mut w);
+        }
+        if !newer.t.is_empty() {
+            w.s(1001, dxf_ext::APP);
+            w.s(1000, dxf_ext::DIMVARS_LIST);
+            w.s(1002, "{");
+            w.xdata(newer.t);
+            w.s(1002, "}");
         }
     }
     w.s(0, "ENDTAB");

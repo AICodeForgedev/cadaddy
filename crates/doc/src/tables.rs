@@ -230,6 +230,49 @@ pub struct DimStyle {
     /// DIMSE1 / DIMSE2 suppress extension lines.
     pub suppress_ext1: bool,
     pub suppress_ext2: bool,
+    /// DIMSD1 / DIMSD2 suppress the first / second half of the dimension line and its arrow.
+    pub suppress_dim1: bool,
+    pub suppress_dim2: bool,
+    /// DIMATFIT, what moves outside the extension lines when text and arrows don't both fit:
+    /// 0 both, 1 arrows first, 2 text first, 3 whichever fits best.
+    pub fit: u8,
+    /// DIMTIX: text always between the extension lines.
+    pub text_inside: bool,
+    /// DIMSOXD: suppress arrowheads that don't fit between the extension lines.
+    pub suppress_outside_arrows: bool,
+    /// DIMTOFL: a dimension line between the extension lines even when the arrows are outside
+    /// (through the circle for radius and diameter dimensions with the text outside).
+    pub force_line_inside: bool,
+    /// DIMTMOVE, when the text is moved away from its default place: 0 the dimension line
+    /// moves with it, 1 a leader joins them, 2 neither.
+    pub text_move: u8,
+    /// DIMTVP: text above (+) or below (-) the dimension line by this many text heights when
+    /// DIMTAD is 0.
+    pub text_vertical_pos: f64,
+    /// DIMTOLJ, vertical place of tolerance values next to the measurement: 0 bottom,
+    /// 1 middle, 2 top.
+    pub tol_just: u8,
+    /// DIMAZIN zero suppression of angular dimensions: 1 leading, 2 trailing.
+    pub angular_zero_suppression: u8,
+    /// DIMARCSYM, arc length symbol: 0 before the text, 1 above it, 2 none.
+    pub arc_symbol: u8,
+    /// DIMLDRBLK leader arrowhead ("" = closed filled).
+    pub leader_arrow_block: String,
+    /// DIMLTYPE / DIMLTEX1 / DIMLTEX2: linetypes of the dimension line and the extension
+    /// lines ("" = ByBlock).
+    pub dim_linetype: String,
+    pub ext_linetype1: String,
+    pub ext_linetype2: String,
+    /// DIMLWD / DIMLWE: lineweights of the dimension line and the extension lines in 1/100 mm
+    /// (-1 ByLayer, -2 ByBlock, -3 default).
+    pub dim_lineweight: i16,
+    pub ext_lineweight: i16,
+    /// DIMFXLON / DIMFXL: extension lines of a fixed length, measured from the dimension line
+    /// toward the origin.
+    pub fixed_ext: bool,
+    pub fixed_ext_length: f64,
+    /// DIMJOGANG: angle (degrees) of the jog's middle segment in jogged radius dimensions.
+    pub jog_angle: f64,
 }
 
 /// DIMSTYLE system variable names and the [`DimStyle`] fields they set.
@@ -281,6 +324,26 @@ pub const DIMVARS: &[(&str, &str)] = &[
     ("DIMAUNIT", "angularUnit"),
     ("DIMSE1", "suppressExt1"),
     ("DIMSE2", "suppressExt2"),
+    ("DIMSD1", "suppressDim1"),
+    ("DIMSD2", "suppressDim2"),
+    ("DIMATFIT", "fit"),
+    ("DIMTIX", "textInside"),
+    ("DIMSOXD", "suppressOutsideArrows"),
+    ("DIMTOFL", "forceLineInside"),
+    ("DIMTMOVE", "textMove"),
+    ("DIMTVP", "textVerticalPos"),
+    ("DIMTOLJ", "tolJust"),
+    ("DIMAZIN", "angularZeroSuppression"),
+    ("DIMARCSYM", "arcSymbol"),
+    ("DIMLDRBLK", "leaderArrowBlock"),
+    ("DIMLTYPE", "dimLinetype"),
+    ("DIMLTEX1", "extLinetype1"),
+    ("DIMLTEX2", "extLinetype2"),
+    ("DIMLWD", "dimLineweight"),
+    ("DIMLWE", "extLineweight"),
+    ("DIMFXLON", "fixedExt"),
+    ("DIMFXL", "fixedExtLength"),
+    ("DIMJOGANG", "jogAngle"),
 ];
 
 impl Default for DimStyle {
@@ -335,6 +398,26 @@ impl Default for DimStyle {
             angular_unit: 0,
             suppress_ext1: false,
             suppress_ext2: false,
+            suppress_dim1: false,
+            suppress_dim2: false,
+            fit: 3,
+            text_inside: false,
+            suppress_outside_arrows: false,
+            force_line_inside: false,
+            text_move: 0,
+            text_vertical_pos: 0.0,
+            tol_just: 1,
+            angular_zero_suppression: 0,
+            arc_symbol: 0,
+            leader_arrow_block: String::new(),
+            dim_linetype: String::new(),
+            ext_linetype1: String::new(),
+            ext_linetype2: String::new(),
+            dim_lineweight: -2,
+            ext_lineweight: -2,
+            fixed_ext: false,
+            fixed_ext_length: 1.0,
+            jog_angle: 45.0,
         }
     }
 }
@@ -371,6 +454,13 @@ impl DimStyle {
                 (Value::Bool(_), Value::String(t)) => Value::Bool(matches!(t.to_ascii_lowercase().as_str(), "1" | "on" | "true" | "yes")),
                 (Value::Number(_), Value::String(t)) => match t.trim().parse::<f64>() {
                     Ok(x) => serde_json::json!(x),
+                    // Lineweight names.
+                    Err(_) if matches!(field, "dimLineweight" | "extLineweight") => match t.trim().to_ascii_lowercase().as_str() {
+                        "bylayer" => serde_json::json!(-1),
+                        "byblock" => serde_json::json!(-2),
+                        "default" => serde_json::json!(-3),
+                        _ => v.clone(),
+                    },
                     Err(_) => v.clone(),
                 },
                 (Value::Number(_), Value::Bool(b)) => serde_json::json!(u8::from(*b)),
@@ -384,6 +474,10 @@ impl DimStyle {
             };
             // Integers stored in u8 fields: round floats.
             let coerced = match (&old, &coerced) {
+                // Lineweights (i16): whole hundredths of a mm or -1/-2/-3.
+                (Value::Number(_), Value::Number(n)) if matches!(field, "dimLineweight" | "extLineweight") && !n.is_i64() => {
+                    serde_json::json!(n.as_f64().filter(|x| x.is_finite()).unwrap_or(0.0).round().clamp(-3.0, 211.0) as i64)
+                }
                 (Value::Number(o), Value::Number(n)) if o.is_u64() && !n.is_u64() => {
                     serde_json::json!(n.as_f64().filter(|x| x.is_finite()).unwrap_or(0.0).round().clamp(0.0, 255.0) as u64)
                 }
@@ -393,7 +487,11 @@ impl DimStyle {
             let x = coerced.as_f64();
             let out_of_range = match field {
                 "textHeight" | "tolScale" => x.is_some_and(|x| x <= 0.0),
-                "scale" | "arrowSize" | "tickSize" => x.is_some_and(|x| x < 0.0),
+                "scale" | "arrowSize" | "tickSize" | "fixedExtLength" => x.is_some_and(|x| x < 0.0),
+                "fit" | "angularZeroSuppression" => x.is_some_and(|x| x > 3.0),
+                "textMove" | "tolJust" | "arcSymbol" => x.is_some_and(|x| x > 2.0),
+                "dimLineweight" | "extLineweight" => x.is_some_and(|x| !(-3.0..=211.0).contains(&x)),
+                "jogAngle" => x.is_some_and(|x| !(5.0..=90.0).contains(&x)),
                 _ => false,
             };
             if out_of_range {
@@ -429,6 +527,45 @@ impl DimStyle {
         st
     }
 
+    /// DIMTMOVE 0: the dimension line of a linear or aligned dimension follows text the user
+    /// placed (`text_mid`), keeping the DIMTAD / DIMTVP offset. Other kinds, text in its
+    /// default place and other DIMTMOVE values are left alone.
+    pub fn follow_text(&self, d: &mut crate::Dimension, dimscale: f64) {
+        if self.text_move != 0 || !d.user_text_pos {
+            return;
+        }
+        let dir = match d.kind {
+            crate::DimKind::Linear { rotation } => Vec2::from_angle(rotation),
+            crate::DimKind::Aligned => (d.p14.xy() - d.p13.xy()).normalized(),
+            _ => return,
+        };
+        if dir == Vec2::ZERO || !dir.is_finite() {
+            return;
+        }
+        let n = dir.perp();
+        let k = self.effective_scale(dimscale);
+        let (th, gap) = (self.text_height * k, self.text_gap.abs() * k);
+        let above = if n.y.abs() > 1e-9 {
+            if n.y > 0.0 { n } else { -n }
+        } else if n.x < 0.0 {
+            n
+        } else {
+            -n
+        };
+        let away = if (d.defpt.xy() - d.p13.xy()).dot(n) >= 0.0 { n } else { -n };
+        let off = match self.text_above {
+            0 => above * (self.text_vertical_pos * th),
+            2 => away * (gap + th / 2.0),
+            4 => -above * (gap + th / 2.0),
+            _ => above * (gap + th / 2.0),
+        };
+        let shift = n * (d.text_mid.xy() - off - d.defpt.xy()).dot(n);
+        if shift.is_finite() {
+            d.defpt.x += shift.x;
+            d.defpt.y += shift.y;
+        }
+    }
+
     /// The ISO-25 style for metric drawings.
     pub fn iso25() -> Self {
         DimStyle {
@@ -445,6 +582,8 @@ impl DimStyle {
             center_mark: 2.5,
             zero_suppression: 8,
             baseline_spacing: 3.75,
+            force_line_inside: true,
+            tol_just: 0,
             ..Default::default()
         }
     }

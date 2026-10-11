@@ -29,21 +29,23 @@ fn dimtedit_moves_justifies_rotates_and_homes_typed_text() {
     assert!(s.running.is_none());
     let d = the_dim(&s);
     assert!(d.user_text_pos && d.text_mid.xy().dist(Vec2::new(7.0, 6.0)) < 1e-9, "{:?}", d.text_mid);
+    // DIMTMOVE 0 (the default): the dimension line moved with the text, now through y = 6.
+    assert!((d.defpt.y - 6.0).abs() < 1e-9, "{:?}", d.defpt);
 
-    s.script("dimtedit 2,3 h\n").unwrap();
+    s.script("dimtedit 2,6 h\n").unwrap();
     assert!(!the_dim(&s).user_text_pos, "Home puts the text back");
 
-    s.script("dimtedit 2,3 l\n").unwrap();
+    s.script("dimtedit 2,6 l\n").unwrap();
     assert_eq!(the_dim(&s).overrides.get("textJust").and_then(|v| v.as_i64()), Some(1));
 
-    s.script("dimtedit 2,3 a 30\n").unwrap();
+    s.script("dimtedit 2,6 a 30\n").unwrap();
     assert!(s.running.is_none());
     assert!((the_dim(&s).text_rotation - 30f64.to_radians()).abs() < 1e-9);
 
     // Something other than a dimension is refused and the prompt stays.
     s.script("line 20,20 30,20\n\ndimtedit 25,20\n").unwrap();
     assert!(s.prompt_text().contains("Select dimension"), "{}", s.prompt_text());
-    s.script("2,3 c\n").unwrap();
+    s.script("2,6 c\n").unwrap();
     assert!(s.running.is_none());
     assert_eq!(the_dim(&s).overrides.get("textJust").and_then(|v| v.as_i64()), Some(0));
 }

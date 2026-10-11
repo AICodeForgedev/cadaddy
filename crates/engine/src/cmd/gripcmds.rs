@@ -63,7 +63,15 @@ fn stretch(s: &mut Session, cmd: &str, p: &Value) -> Result<Value> {
         }
     }
     let d = s.doc_mut()?;
-    for (o, k) in &edits {
+    for (o, k) in &mut edits {
+        // A dimension's text moved by its grip: with DIMTMOVE 0 the dimension line follows.
+        if let cadcraft_doc::EntityKind::Dimension(dm) = k
+            && let Some(cadcraft_doc::EntityKind::Dimension(old)) = d.entity(*o).map(|e| &e.kind)
+            && dm.text_mid != old.text_mid
+        {
+            let st = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
+            st.follow_text(dm, d.header.f64("DIMSCALE", 1.0));
+        }
         d.modify_entity(*o, |e| e.kind = k.clone())?;
     }
     Ok(json!({ "handle": h.hex(), "handles": edits.iter().map(|(o, _)| o.hex()).collect::<Vec<_>>() }))

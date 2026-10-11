@@ -68,10 +68,16 @@ fn centre_mark_only_when_the_dimension_line_is_outside_the_circle() {
     rad.user_text_pos = true;
     rad.text_mid = Vec3::new(2.0, 0.0, 0.0);
     assert!(ext_lines(&rad, &st).is_empty());
-    // A diameter line runs through the centre: no mark, nor centre lines (negative DIMCEN).
+    // A diameter with DIMTOFL runs through the centre: no mark, nor centre lines (negative
+    // DIMCEN). Without DIMTOFL it is only led out to its text, like a radius, and has the mark.
     let mut dia = dim(DimKind::Diameter);
     dia.defpt = Vec3::new(-5.0, 0.0, 0.0);
     dia.p15 = Vec3::new(5.0, 0.0, 0.0);
-    assert!(ext_lines(&dia, &st).is_empty());
-    assert!(ext_lines(&dia, &DimStyle { center_mark: -0.5, ..DimStyle::default() }).is_empty());
+    let tofl = DimStyle { force_line_inside: true, ..DimStyle::default() };
+    assert!(ext_lines(&dia, &tofl).is_empty());
+    assert!(ext_lines(&dia, &DimStyle { center_mark: -0.5, ..tofl.clone() }).is_empty());
+    assert_eq!(ext_lines(&dia, &st).len(), 2);
+    // A radius with DIMTOFL runs in from the centre: no mark.
+    rad.user_text_pos = false;
+    assert!(ext_lines(&rad, &tofl).is_empty());
 }

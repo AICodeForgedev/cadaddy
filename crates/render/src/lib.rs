@@ -663,7 +663,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                     entity(b, &sub, be);
                 }
             } else {
-                dimension(b, ctx, e, dm, lw);
+                dimension(b, ctx, e, dm, lw, lt.as_ref(), ltscale);
             }
         }
         EntityKind::Hatch(h) => hatch::draw(b, ctx, e, h, rgb, lw, tol),
@@ -752,7 +752,8 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 let st = ctx.d.dim_style(&l.style);
                 // DIMASZ × DIMSCALE of the leader's style (the drawing's DIMSCALE when it is 0).
                 let size = st.map(|s| s.arrow_size).unwrap_or(0.18) * leader_scale(ctx.d, st);
-                let kind = dim::Arrowhead::parse(st.map(|s| s.arrow_block.as_str()).unwrap_or(""));
+                // DIMLDRBLK ("" = closed filled).
+                let kind = dim::Arrowhead::parse(st.map(|s| s.leader_arrow_block.as_str()).unwrap_or(""));
                 let g = dim::arrowhead(kind, *a, (*a - *n).normalized(), size);
                 for l in &g.lines {
                     b.polyline(ctx, rgb, lw, l);
@@ -900,7 +901,25 @@ pub fn dimension_in(d: &Drawing, dm: &cadcraft_doc::Dimension) -> DimGeometry {
     dim::dimension_geometry_with(dm, &style, d.header.f64("DIMSCALE", 1.0), &dim_text(d, &st))
 }
 
-fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimension, lw: f32) {
+/// Draw a polyline with a linetype (None: continuous).
+fn stroke_with(b: &mut Builder, ctx: &Ctx, rgb: Ink, lw: f32, lt: Option<&cadcraft_doc::Linetype>, ltscale: f64, pts: &[Vec2]) {
+    match lt {
+        Some(lt) => {
+            let min = b.opts.min_dash / ctx.xf.scale_factor().max(1e-12);
+            for dash in linetype::apply(pts, lt, ltscale, min) {
+                match dash.as_slice() {
+                    [p] => b.point(ctx, rgb, *p),
+                    _ => b.polyline(ctx, rgb, lw, &dash),
+                }
+            }
+        }
+        None => b.polyline(ctx, rgb, lw, pts),
+    }
+}
+
+/// `lw` / `lt` are the dimension's own lineweight and linetype (ByBlock in DIMLWD, DIMLWE,
+/// DIMLTYPE, DIMLTEX1 and DIMLTEX2).
+fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimension, lw: f32, lt: Option<&cadcraft_doc::Linetype>, ltscale: f64) {
     let d = ctx.d;
     let style = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
     let g = dimension_in(d, dm);
@@ -915,8 +934,37 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimensio
     let dim_rgb = ink(style.dim_line_color, layer_color, own);
     let ext_rgb = ink(style.ext_line_color, layer_color, own);
     let txt_rgb = ink(style.text_color, layer_color, own);
-    for (l, role) in g.lines.iter().zip(g.line_roles.iter().chain(std::iter::repeat(&LineRole::Dim))) {
-        b.polyline(ctx, if *role == LineRole::Ext { ext_rgb } else { dim_rgb }, lw, l);
+    let layer = d.layer(layer_name);
+    let weight = |v: i16| -> f32 {
+        if !b.opts.lineweights {
+            return 0.0;
+        }
+        match Lineweight::from_dxf(v) {
+            Lineweight::ByBlock => lw,
+            Lineweight::Mm100(x) => f32::from(x) / 100.0,
+            Lineweight::ByLayer => match layer.map(|l| l.lineweight) {
+                Some(Lineweight::Mm100(x)) => f32::from(x) / 100.0,
+                _ => default_lineweight(d),
+            },
+            Lineweight::Default => default_lineweight(d),
+        }
+    };
+    let ltype = |name: &str| -> Option<cadcraft_doc::Linetype> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "" | "byblock" => lt.cloned(),
+            "bylayer" => layer.and_then(|l| d.linetype(&l.linetype)).filter(|l| !l.pattern.is_empty()).cloned(),
+            _ => d.linetype(name.trim()).filter(|l| !l.pattern.is_empty()).cloned(),
+        }
+    };
+    let (dim_lw, ext_lw) = (weight(style.dim_lineweight), weight(style.ext_lineweight));
+    let (dim_lt, ext1_lt, ext2_lt) = (ltype(&style.dim_linetype), ltype(&style.ext_linetype1), ltype(&style.ext_linetype2));
+    for (i, (l, role)) in g.lines.iter().zip(g.line_roles.iter().chain(std::iter::repeat(&LineRole::Dim))).enumerate() {
+        let (rgb, w, t) = match role {
+            LineRole::Ext if g.ext2_lines.contains(&i) => (ext_rgb, ext_lw, ext2_lt.as_ref()),
+            LineRole::Ext => (ext_rgb, ext_lw, ext1_lt.as_ref()),
+            LineRole::Dim => (dim_rgb, dim_lw, dim_lt.as_ref()),
+        };
+        stroke_with(b, ctx, rgb, w, t, ltscale, l);
     }
     for t in &g.fills {
         b.tris(ctx, dim_rgb, t);
