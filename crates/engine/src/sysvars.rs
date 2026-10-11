@@ -279,7 +279,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
                     },
                 },
                 Value::Bool(b) => cadcraft_doc::HVal::Int(i64::from(*b)),
-                Value::Array(_) => cadcraft_doc::HVal::Point(as_pt(v).ok_or_else(bad)?.to3(0.0)),
+                Value::Array(_) | Value::Object(_) => cadcraft_doc::HVal::Point(as_pt(v).ok_or_else(bad)?.to3(0.0)),
                 _ => return Err(bad()),
             };
             // Keep the header type stable for known numeric vars.

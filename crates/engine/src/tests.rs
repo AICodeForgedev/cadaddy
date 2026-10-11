@@ -441,6 +441,19 @@ fn zoom_extents_fits_drawing() {
 }
 
 #[test]
+fn setvar_point_variables_take_point_objects() {
+    let mut s = Session::new();
+    for name in ["SNAPBASE", "LIMMIN", "LIMMAX", "INSBASE"] {
+        // GETVAR's own value (an object with z) writes back, and an {x, y} object equals the array form.
+        let got = sysvars::get(&s, name).unwrap();
+        s.execute("setvar", &json!({"name": name, "value": got})).unwrap();
+        s.execute("setvar", &json!({"name": name, "value": {"x": 5, "y": 7}})).unwrap();
+        assert_eq!(sysvars::get(&s, name), Some(json!({"x": 5.0, "y": 7.0, "z": 0.0})), "{name}");
+        assert!(s.execute("setvar", &json!({"name": name, "value": {"x": "a", "y": 1}})).is_err());
+    }
+}
+
+#[test]
 fn sysvars_roundtrip() {
     let mut s = Session::new();
     s.execute("setvar", &json!({"name": "osmode", "value": 7})).unwrap();
