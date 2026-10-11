@@ -303,6 +303,9 @@ pub struct Settings {
     pub aperture: f64,
     pub pickfirst: bool,
     pub pickadd: bool,
+    /// PICKSTYLE: bit 1 picks whole selectable groups ([`cmd::groups`]), bit 2 associative hatches
+    /// with their boundaries (stored, not used yet).
+    pub pickstyle: u8,
     pub gripsize: f64,
     pub cursorsize: f64,
     /// MAXARRAY: the most objects one array command creates (items × selected objects).
@@ -343,6 +346,7 @@ impl Default for Settings {
             aperture: 10.0,
             pickfirst: true,
             pickadd: true,
+            pickstyle: 1,
             gripsize: 5.0,
             cursorsize: 5.0,
             maxarray: 100_000,
@@ -805,10 +809,10 @@ impl Session {
                 if let Some(pw) = self.pending_window.take() {
                     let crossing = p.x < pw.corner.x;
                     let hs = select::select_window(self.doc()?, &space, Bounds2::new(pw.corner, p), crossing);
-                    return Ok(Some(Input::Pick(hs)));
+                    return Ok(Some(Input::Pick(cmd::groups::expand(self, hs))));
                 }
                 match select::pick(self.doc()?, &space, p, ap) {
-                    Some(h) => Ok(Some(Input::Pick(vec![h]))),
+                    Some(h) => Ok(Some(Input::Pick(cmd::groups::expand(self, vec![h])))),
                     None => {
                         self.pending_window = Some(PendingWindow { corner: p, during_command: true });
                         Ok(None)
@@ -826,7 +830,7 @@ impl Session {
                     _ => None,
                 };
                 match picked {
-                    Some(hs) => Ok(Some(Input::Pick(hs))),
+                    Some(hs) => Ok(Some(Input::Pick(cmd::groups::expand(self, hs)))),
                     None => Ok(Some(input)),
                 }
             }
@@ -1195,6 +1199,7 @@ impl Session {
         if let Some(pw) = self.pending_window.take() {
             let crossing = p.x < pw.corner.x;
             let hs = select::select_window(self.doc()?, &space, Bounds2::new(pw.corner, p), crossing);
+            let hs = cmd::groups::expand(self, hs);
             let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };
             if shift && pickadd {
                 sel.retain(|h| !hs.contains(h));
@@ -1207,12 +1212,14 @@ impl Session {
         let ap = self.pixel_size() * self.settings.pickbox.max(1.0) * 1.5;
         match select::pick(self.doc()?, &space, p, ap) {
             Some(h) => {
+                // With group selection the object's selectable groups come (or go) with it.
+                let hs = cmd::groups::expand(self, vec![h]);
                 let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };
                 let had = sel.contains(&h);
                 if shift && (pickadd || had) {
-                    sel.retain(|x| *x != h);
+                    sel.retain(|x| !hs.contains(x));
                 } else if !had {
-                    sel.push(h);
+                    sel.extend(hs);
                 }
                 self.set_selection(sel);
             }

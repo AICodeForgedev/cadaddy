@@ -14,11 +14,16 @@ use super::machines::{SelOutcome, SelectPhase};
 use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
+mod dash;
+mod pick;
+
+pub(crate) use pick::expand;
+
 /// The most groups one drawing holds, and the most names one call lists.
 const MAX_GROUPS: usize = 100_000;
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![
+    let mut v = vec![
         CommandSpec::new("group", "Group", run_group)
             .menu(&["Tools", "Group"])
             .alias(&["g"])
@@ -34,7 +39,10 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("groups.list", "List Groups", run_list)
             .params("{} → {groups: [{name, description, selectable, unnamed, members: [handles]}]}")
             .noundo(),
-    ]
+    ];
+    v.extend(dash::specs());
+    v.extend(pick::specs());
+    v
 }
 
 // ---------------- model helpers ----------------
