@@ -15,7 +15,9 @@ use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 mod curve_edits;
+mod fillet_pline;
 pub(crate) use curve_edits::join_curves;
+pub(crate) use fillet_pline::{ChamferDistances, fillet_pline};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

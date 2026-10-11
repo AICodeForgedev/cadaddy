@@ -2470,6 +2470,10 @@ impl ChamferCut {
 /// arc or line is added and both objects are left as they were.
 #[allow(clippy::too_many_arguments)]
 fn fillet_corner(s: &mut Session, h1: Handle, p1: Vec2, h2: Handle, p2: Vec2, r: f64, cut: Option<ChamferCut>, trim: bool) -> Result<Option<Handle>> {
+    let dist = cut.map(|c| move |u1: Vec2, u2: Vec2| c.distances(u1, u2));
+    if let Some(made) = super::modify2::fillet_pline(s, h1, p1, h2, p2, r, dist.as_ref().map(|f| f as super::modify2::ChamferDistances), trim)? {
+        return Ok(made);
+    }
     let d = s.doc()?;
     let k1 = d.entity(h1).map(|e| e.kind.clone());
     let k2 = d.entity(h2).map(|e| e.kind.clone());

@@ -460,3 +460,106 @@ fn fillet_failures_leave_the_drawing_alone() {
     assert!(err.to_string().contains("No fillet"), "{err}");
     assert_eq!(spline(&s, &sp), before);
 }
+
+// ---------------- FILLET / CHAMFER with polyline segments ----------------
+
+fn pline(s: &mut Session, pts: &[[f64; 2]], closed: bool) -> String {
+    h(&s.execute("pline", &json!({ "vertices": pts, "closed": closed })).unwrap())
+}
+
+/// Vertices as (x, y, bulge), rounded.
+fn verts(s: &Session, h: &str) -> Vec<(f64, f64, f64)> {
+    let r = |v: f64| (v * 1e9).round() / 1e9;
+    match kind(s, h) {
+        EntityKind::LwPolyline(p) => p.vertices.iter().map(|v| (r(v.p.x), r(v.p.y), r(v.bulge))).collect(),
+        k => panic!("not a polyline: {k:?}"),
+    }
+}
+
+/// Bulge of a quarter turn, counter-clockwise.
+fn quarter() -> f64 {
+    ((PI / 8.0).tan() * 1e9).round() / 1e9
+}
+
+#[test]
+fn fillet_and_chamfer_two_segments_of_one_polyline() {
+    let mut s = Session::new();
+    let p = pline(&mut s, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false);
+    s.execute("fillet", &json!({ "h1": p, "p1": [5, 0], "h2": p, "p2": [10, 5], "radius": 2 })).unwrap();
+    assert_eq!(verts(&s, &p), vec![(0.0, 0.0, 0.0), (8.0, 0.0, quarter()), (10.0, 2.0, 0.0), (10.0, 10.0, 0.0)]);
+    assert_eq!(count(&s), 1);
+    // CHAMFER: the first distance goes on the first segment picked.
+    let mut s = Session::new();
+    let p = pline(&mut s, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false);
+    s.execute("chamfer", &json!({ "h1": p, "p1": [10, 5], "h2": p, "p2": [5, 0], "d1": 1, "d2": 2 })).unwrap();
+    assert_eq!(verts(&s, &p), vec![(0.0, 0.0, 0.0), (8.0, 0.0, 0.0), (10.0, 1.0, 0.0), (10.0, 10.0, 0.0)]);
+    // One segment between them: the corner replaces it (radius 0: a sharp corner).
+    let mut s = Session::new();
+    let p = pline(&mut s, &[[0.0, 0.0], [10.0, 0.0], [11.0, 1.0], [11.0, 10.0]], false);
+    s.execute("fillet", &json!({ "h1": p, "p1": [5, 0], "h2": p, "p2": [11, 5], "radius": 0 })).unwrap();
+    assert_eq!(verts(&s, &p), vec![(0.0, 0.0, 0.0), (11.0, 0.0, 0.0), (11.0, 10.0, 0.0)]);
+    // A closed polyline's corner across its start vertex.
+    let mut s = Session::new();
+    let p = pline(&mut s, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], true);
+    s.execute("fillet", &json!({ "h1": p, "p1": [5, 0], "h2": p, "p2": [0, 5], "radius": 1 })).unwrap();
+    let v = verts(&s, &p);
+    assert_eq!(v.len(), 5, "{v:?}");
+    assert!(v.contains(&(0.0, 1.0, quarter())) && v.contains(&(1.0, 0.0, 0.0)), "{v:?}");
+    assert!(!v.iter().any(|(x, y, _)| *x == 0.0 && *y == 0.0));
+}
+
+#[test]
+fn fillet_and_chamfer_a_line_into_a_polyline() {
+    // The polyline's last segment with a line: the line joins the polyline.
+    let mut s = Session::new();
+    let p = pline(&mut s, &[[0.0, 5.0], [0.0, 0.0], [8.0, 0.0]], false);
+    let l = h(&s.execute("line", &json!({ "points": [[10, 2], [10, 10]] })).unwrap());
+    s.execute("fillet", &json!({ "h1": p, "p1": [4, 0], "h2": l, "p2": [10, 8], "radius": 1 })).unwrap();
+    assert_eq!(verts(&s, &p), vec![(0.0, 5.0, 0.0), (0.0, 0.0, 0.0), (9.0, 0.0, quarter()), (10.0, 1.0, 0.0), (10.0, 10.0, 0.0)]);
+    assert_eq!(count(&s), 1);
+    // Its first segment, the line picked first, CHAMFER distances in pick order.
+    let mut s = Session::new();
+    let p = pline(&mut s, &[[8.0, 0.0], [0.0, 0.0], [0.0, 5.0]], false);
+    let l = h(&s.execute("line", &json!({ "points": [[10, 2], [10, 10]] })).unwrap());
+    s.execute("chamfer", &json!({ "h1": l, "p1": [10, 8], "h2": p, "p2": [4, 0], "d1": 1, "d2": 2 })).unwrap();
+    assert_eq!(verts(&s, &p), vec![(10.0, 10.0, 0.0), (10.0, 1.0, 0.0), (8.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 5.0, 0.0)]);
+    assert_eq!(count(&s), 1);
+}
+
+#[test]
+fn polyline_fillets_at_the_command_line_and_with_no_trim() {
+    let mut s = Session::new();
+    let p = pline(&mut s, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false);
+    s.script("FILLET R 2 5,0 10,5\n").unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert_eq!(verts(&s, &p).len(), 4, "{:?}", s.log);
+    // No trim: the polyline stays, the arc is drawn on its own.
+    let mut s = Session::new();
+    let p = pline(&mut s, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false);
+    let before = verts(&s, &p);
+    s.script("FILLET T N R 2 5,0 10,5\n").unwrap();
+    assert_eq!(verts(&s, &p), before);
+    let (c, r, _, _) = last_arc(&s);
+    assert!(c.near(Vec2::new(8.0, 2.0), 1e-9) && (r - 2.0).abs() < 1e-9, "{c:?} {r}");
+}
+
+#[test]
+fn polyline_fillet_refusals_leave_it_alone() {
+    let mut s = Session::new();
+    let p = pline(&mut s, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 20.0]], false);
+    let before = verts(&s, &p);
+    let c = h(&s.execute("circle", &json!({ "center": [30, 0], "radius": 1 })).unwrap());
+    let l = h(&s.execute("line", &json!({ "points": [[20, -5], [20, 5]] })).unwrap());
+    for q in [
+        // Segments too far apart, the same segment, a circle, a middle segment with a line, too big.
+        json!({ "h1": p, "p1": [5, 0], "h2": p, "p2": [0, 15], "radius": 1 }),
+        json!({ "h1": p, "p1": [5, 0], "h2": p, "p2": [6, 0], "radius": 1 }),
+        json!({ "h1": p, "p1": [5, 0], "h2": c, "p2": [31, 0], "radius": 1 }),
+        json!({ "h1": p, "p1": [10, 5], "h2": l, "p2": [20, 4], "radius": 1 }),
+        json!({ "h1": p, "p1": [5, 0], "h2": p, "p2": [10, 5], "radius": 100 }),
+    ] {
+        assert!(s.execute("fillet", &q).is_err(), "{q}");
+        assert_eq!(verts(&s, &p), before);
+    }
+    assert_eq!(count(&s), 3);
+}
