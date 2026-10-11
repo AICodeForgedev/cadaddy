@@ -26,6 +26,11 @@ sync_github_name = false
 display_name = "by Truitt"
 sync_github_name = false
 
+[people.tsangiotis]
+real_name = "Tasos Sangiotis"
+display_name = "Tasos Sangiotis"
+sync_github_name = false
+
 [people.vangel76]
 sync_github_name = true
 

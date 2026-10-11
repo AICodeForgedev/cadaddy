@@ -1762,6 +1762,36 @@ fn mirrored_hatch_extrusion_flips_boundary() {
     }
 }
 
+/// The model extents of a one-loop solid HATCH whose edge boundary is `edges` (group 72 onwards).
+fn hatch_edge_extents(edges: &str) -> Bounds2 {
+    let n = edges.matches("72\n").count();
+    let text = format!(
+        "0\nSECTION\n2\nENTITIES\n0\nHATCH\n8\n0\n10\n0\n20\n0\n30\n0\n210\n0\n220\n0\n230\n1\n2\nSOLID\n70\n1\n71\n0\n\
+         91\n1\n92\n1\n93\n{n}\n{edges}97\n0\n75\n0\n76\n1\n98\n0\n0\nENDSEC\n0\nEOF\n"
+    );
+    read(text.as_bytes(), "h.dxf").unwrap().extents(&Space::Model)
+}
+
+/// Issues #492, #493, #494: a full-circle arc edge, spline edges (knots come before the control
+/// points) and clockwise ellipse edges all keep their curve.
+#[test]
+fn hatch_edges_keep_full_circles_splines_and_clockwise_ellipses() {
+    let near = |b: Bounds2, want: [f64; 4]| {
+        let got = [b.min.x, b.min.y, b.max.x, b.max.y];
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-3), "extents {got:?}, want {want:?}");
+    };
+    // #492: one arc edge from 0 to 360.
+    near(hatch_edge_extents("72\n2\n10\n0\n20\n0\n40\n5\n50\n0\n51\n360\n73\n1\n"), [-5.0, -5.0, 5.0, 5.0]);
+    // #493: a cubic Bezier through (0,0)..(4,0) peaking at y = 3, closed by a line.
+    let spline = "72\n4\n94\n3\n73\n0\n74\n0\n95\n8\n96\n4\n40\n0\n40\n0\n40\n0\n40\n0\n40\n1\n40\n1\n40\n1\n40\n1\n\
+                  10\n0\n20\n0\n10\n0\n20\n4\n10\n4\n20\n4\n10\n4\n20\n0\n97\n0\n";
+    near(hatch_edge_extents(&format!("{spline}72\n1\n10\n4\n20\n0\n11\n0\n21\n0\n")), [0.0, 0.0, 4.0, 3.0]);
+    // #494: the clockwise half-ellipse from 0 to 180 is the lower half, closed by its diameter.
+    let ellipse = |ccw| format!("72\n3\n10\n0\n20\n0\n11\n5\n21\n0\n40\n0.5\n50\n0\n51\n180\n73\n{ccw}\n72\n1\n10\n-5\n20\n0\n11\n5\n21\n0\n");
+    near(hatch_edge_extents(&ellipse(0)), [-5.0, -2.5, 5.0, 0.0]);
+    near(hatch_edge_extents(&ellipse(1)), [-5.0, 0.0, 5.0, 2.5]);
+}
+
 #[test]
 fn mirrored_text_extrusion_keeps_its_footprint() {
     // TEXT at OCS (-10,5) under extrusion (0,0,-1) starts at WCS (10,5) and runs towards -x (with
