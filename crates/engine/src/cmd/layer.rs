@@ -298,6 +298,7 @@ fn run_delete(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("layer.delete", "layer has objects on it"));
     }
     d.layers.retain(|l| !l.name.eq_ignore_ascii_case(&name));
+    merge::forget_in_viewports(d, &std::collections::HashSet::from([name.to_ascii_lowercase()]));
     ok()
 }
 

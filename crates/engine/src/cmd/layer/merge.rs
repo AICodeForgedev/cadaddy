@@ -90,7 +90,7 @@ fn on_layers<'a>(store: &'a EntityStore, set: &'a HashSet<String>) -> impl Itera
 }
 
 /// Drop the removed layers from every layout viewport's frozen list and colour overrides.
-fn forget_in_viewports(d: &mut Drawing, set: &HashSet<String>) {
+pub(super) fn forget_in_viewports(d: &mut Drawing, set: &HashSet<String>) {
     for layout in &mut d.layouts {
         let hs: Vec<Handle> = layout
             .entities

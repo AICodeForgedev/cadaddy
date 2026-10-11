@@ -148,3 +148,14 @@ fn laydel_deletes_the_layer_and_its_objects() {
     assert_eq!(r["erased"], 0);
     assert!(viewport_lists(&s).iter().all(|(f, _)| f.is_empty()));
 }
+
+#[test]
+fn layer_delete_clears_viewport_overrides_for_the_layer() {
+    let mut s = drawing();
+    s.execute("layer.delete", &json!({ "name": "C" })).unwrap();
+    assert!(s.doc().unwrap().layer("C").is_none());
+    assert_eq!(viewport_lists(&s), vec![(vec!["A".to_string()], vec!["B".to_string()])]);
+    s.execute("layer.delete", &json!({ "name": "b" })).unwrap_err();
+    s.execute("layer.new", &json!({ "name": "C" })).unwrap();
+    assert!(viewport_lists(&s).iter().all(|(f, _)| !f.contains(&"C".to_string())));
+}
