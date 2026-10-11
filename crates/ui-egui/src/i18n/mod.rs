@@ -22,6 +22,15 @@ pub enum Preference {
 impl Preference {
     pub const ALL: [Self; 3] = [Self::Auto, Self::English, Self::Ukrainian];
 
+    /// The codes a preference can be given as, for messages ("auto, en or uk").
+    pub fn codes() -> String {
+        let codes: Vec<&str> = Self::ALL.iter().map(|p| p.code()).collect();
+        match codes.split_last() {
+            Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+            _ => codes.join(""),
+        }
+    }
+
     pub fn code(self) -> &'static str {
         match self {
             Self::Auto => "auto",

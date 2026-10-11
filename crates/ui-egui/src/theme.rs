@@ -118,6 +118,8 @@ pub struct Tokens {
     pub warn: Color32,
     /// The drawing-area crosshair cursor and its pick box.
     pub crosshair: Color32,
+    /// The sheet of paper on a layout tab.
+    pub paper: Color32,
 }
 
 impl Tokens {
@@ -163,6 +165,7 @@ impl Tokens {
         list_row: Color32::from_rgb(0x3a, 0x42, 0x50),
         warn: Color32::from_rgb(0xff, 0xd0, 0x80),
         crosshair: Color32::from_rgb(0xe8, 0xe8, 0xe8),
+        paper: Color32::WHITE,
     };
 
     /// Light grey chrome with dark text. The drawing-area colours (canvas, grid, axes, selection,
@@ -204,10 +207,81 @@ impl Tokens {
         }
     }
 
-    /// The palette of the theme in use.
+    /// The palette of the theme in use, with the user's drawing-area colours ([`set_canvas`]).
     pub fn get() -> Tokens {
-        Tokens::of(active())
+        CANVAS.with(Cell::get).over(Tokens::of(active()))
     }
+
+    /// These tokens with `bg` as the model-space background: the grid, axes, crosshair and the
+    /// lines drawn on the drawing area are recomputed to stay visible on it.
+    pub fn with_model_background(self, bg: Color32) -> Tokens {
+        let light = luminance(bg) > 0.5;
+        let ink = if light { Color32::BLACK } else { Color32::WHITE };
+        Tokens {
+            canvas: bg,
+            grid_minor: mix(bg, ink, 0.05),
+            grid_major: mix(bg, ink, 0.11),
+            axis_x: mix(bg, Color32::from_rgb(0xd0, 0x30, 0x30), 0.3),
+            axis_y: mix(bg, Color32::from_rgb(0x30, 0xb0, 0x40), 0.3),
+            canvas_ink: if light { Color32::from_rgb(0x47, 0x50, 0x5c) } else { Tokens::DARK.canvas_ink },
+            crosshair: if light { Color32::from_rgb(0x20, 0x20, 0x20) } else { Tokens::DARK.crosshair },
+            ..self
+        }
+    }
+}
+
+/// The user's drawing-area preferences (Options ▸ Display and Drafting); `None` keeps the theme's
+/// colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Canvas {
+    pub model: Option<Color32>,
+    pub paper: Option<Color32>,
+    /// The side of an object snap marker, in points.
+    pub snap_marker: f32,
+}
+
+/// The default object snap marker size.
+pub const SNAP_MARKER: f32 = 11.0;
+
+impl Default for Canvas {
+    fn default() -> Self {
+        Canvas { model: None, paper: None, snap_marker: SNAP_MARKER }
+    }
+}
+
+impl Canvas {
+    fn over(self, t: Tokens) -> Tokens {
+        let t = match self.model {
+            Some(bg) => t.with_model_background(bg),
+            None => t,
+        };
+        Tokens { paper: self.paper.unwrap_or(t.paper), ..t }
+    }
+}
+
+thread_local! {
+    /// The drawing-area preferences in use on the UI thread (set by [`set_canvas`] each frame).
+    static CANVAS: Cell<Canvas> = Cell::new(Canvas::default());
+}
+
+pub fn set_canvas(c: Canvas) {
+    CANVAS.with(|v| v.set(c));
+}
+
+/// Half the side of an object snap marker, in points.
+pub fn snap_marker_half() -> f32 {
+    CANVAS.with(Cell::get).snap_marker / 2.0
+}
+
+/// Relative luminance of `c` (0 black … 1 white).
+pub fn luminance(c: Color32) -> f32 {
+    (0.299 * f32::from(c.r()) + 0.587 * f32::from(c.g()) + 0.114 * f32::from(c.b())) / 255.0
+}
+
+/// `a` moved the fraction `f` towards `b`.
+fn mix(a: Color32, b: Color32, f: f32) -> Color32 {
+    let m = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * f).round().clamp(0.0, 255.0) as u8;
+    Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
 }
 
 pub fn small() -> FontId {

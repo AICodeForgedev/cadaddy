@@ -386,7 +386,7 @@ fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, prims: &[usize
 
 fn draw_snap_marker(p: &egui::Painter, at: Pos2, hit: &SnapHit) {
     let t = Tokens::get();
-    let s = 5.5;
+    let s = crate::theme::snap_marker_half();
     let st = Stroke::new(2.0, t.snap);
     use snap::mode;
     match hit.mode {
@@ -834,14 +834,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             let b = xf_paper.to_screen(Vec2::new(sh.size.x, 0.0));
             let paper = Rect::from_two_pos(a, b);
             painter.rect_filled(paper.translate(vec2(5.0, 5.0)), 0.0, Color32::from_black_alpha(110));
-            painter.rect_filled(paper, 0.0, Color32::WHITE);
+            painter.rect_filled(paper, 0.0, t.paper);
             let pa = Rect::from_two_pos(
                 xf_paper.to_screen(Vec2::new(sh.printable.min.x, sh.printable.max.y)),
                 xf_paper.to_screen(Vec2::new(sh.printable.max.x, sh.printable.min.y)),
             );
             let pts = [pa.left_top(), pa.right_top(), pa.right_bottom(), pa.left_bottom(), pa.left_top()];
             painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, Color32::from_gray(150)), 4.0, 4.0));
-            Rgb(255, 255, 255)
+            Rgb(t.paper.r(), t.paper.g(), t.paper.b())
         }
         None => {
             draw_grid(app, &painter, &xf);
@@ -1368,7 +1368,6 @@ fn viewport_label(p: &egui::Painter, rect: Rect) {
 }
 
 fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
-    let t = Tokens::get();
     let l = crate::viewcube::Layout::new(rect);
     let (c, ring) = (l.center, l.ring);
     let p = ui.painter_at(rect);
@@ -1376,7 +1375,7 @@ fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
     // WCS pill.
     let pill = Rect::from_center_size(c + vec2(0.0, ring + 26.0), vec2(56.0, 16.0));
     p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
-    p.text(pill.center(), egui::Align2::CENTER_CENTER, crate::tl!("WCS ⌄"), crate::theme::small(), t.canvas_ink);
+    p.text(pill.center(), egui::Align2::CENTER_CENTER, crate::tl!("WCS ⌄"), crate::theme::small(), Tokens::DARK.canvas_ink);
 }
 
 /// A click on grip `g` (idle): Shift+click makes it hot or cold again; a plain click starts
