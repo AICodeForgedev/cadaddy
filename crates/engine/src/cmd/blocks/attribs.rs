@@ -107,9 +107,62 @@ fn references<'a>(ents: impl Iterator<Item = &'a Arc<Entity>>, name: &str) -> Ve
     ents.filter(|e| matches!(&e.kind, EntityKind::Insert(i) if i.block.eq_ignore_ascii_case(name))).map(|e| e.handle).collect()
 }
 
+/// Apply `f` to every reference of block `name` (in model space, layouts and other blocks);
+/// returns how many references there were.
+fn update_references(d: &mut cadcraft_doc::Drawing, name: &str, mut f: impl FnMut(&mut Insert)) -> usize {
+    let mut n = 0;
+    let mut update = |e: &mut Entity| {
+        if let EntityKind::Insert(ins) = &mut e.kind {
+            f(ins);
+        }
+    };
+    let spaces: Vec<cadcraft_doc::Space> =
+        std::iter::once(cadcraft_doc::Space::Model).chain(d.layouts.iter().map(|l| cadcraft_doc::Space::Paper(l.name.clone()))).collect();
+    for sp in spaces {
+        let Some(store) = d.space_mut(&sp) else { continue };
+        let hs = references(store.iter(), name);
+        for h in hs {
+            n += usize::from(store.modify(h, &mut update));
+        }
+    }
+    for (bname, b) in d.blocks.iter_mut() {
+        if bname.eq_ignore_ascii_case(name) {
+            continue;
+        }
+        let hs = references(b.entities.iter(), name);
+        if !hs.is_empty() {
+            let b = Arc::make_mut(b);
+            for h in hs {
+                n += usize::from(b.entities.modify(h, &mut update));
+            }
+        }
+    }
+    n
+}
+
+/// How many references block `name` has (in model space, layouts and other blocks).
+pub(super) fn reference_count(d: &cadcraft_doc::Drawing, name: &str) -> usize {
+    let spaces = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities));
+    spaces
+        .chain(d.blocks.iter().filter(|(k, _)| !k.eq_ignore_ascii_case(name)).map(|(_, b)| &b.entities))
+        .map(|st| references(st.iter(), name).len())
+        .sum()
+}
+
+/// Rename the attributes tagged `old` (any case) to `new` on every reference of block `name`, so
+/// their values survive a tag change of the definition. Returns how many references there were.
+pub(super) fn rename_tag(s: &mut Session, name: &str, old: &str, new: &str) -> Result<usize> {
+    let d = s.doc_mut()?;
+    Ok(update_references(d, name, |ins| {
+        for a in ins.attribs.iter_mut().filter(|a| a.tag.eq_ignore_ascii_case(old)) {
+            a.tag = new.to_string();
+        }
+    }))
+}
+
 /// Synchronize every reference of block `name` (in model space, layouts and other blocks).
 /// Returns the block's name as defined and how many references were updated.
-fn sync(s: &mut Session, name: &str) -> Result<(String, usize)> {
+pub(super) fn sync(s: &mut Session, name: &str) -> Result<(String, usize)> {
     let blk = s.doc()?.block(name).cloned().ok_or_else(|| EngineError::Other(format!("Block \"{name}\" not found.")))?;
     let defs: Vec<&Attrib> = blk
         .entities
@@ -120,38 +173,12 @@ fn sync(s: &mut Session, name: &str) -> Result<(String, usize)> {
         })
         .collect();
     let d = s.doc_mut()?;
-    let mut n = 0;
-    let update = |e: &mut Entity| {
-        if let EntityKind::Insert(ins) = &mut e.kind {
-            ins.attribs = synced(&blk, &defs, ins);
-        }
-    };
-    let spaces: Vec<cadcraft_doc::Space> =
-        std::iter::once(cadcraft_doc::Space::Model).chain(d.layouts.iter().map(|l| cadcraft_doc::Space::Paper(l.name.clone()))).collect();
-    for sp in spaces {
-        let Some(store) = d.space_mut(&sp) else { continue };
-        let hs = references(store.iter(), &blk.name);
-        for h in hs {
-            n += usize::from(store.modify(h, update));
-        }
-    }
-    for (bname, b) in d.blocks.iter_mut() {
-        if bname.eq_ignore_ascii_case(&blk.name) {
-            continue;
-        }
-        let hs = references(b.entities.iter(), &blk.name);
-        if !hs.is_empty() {
-            let b = Arc::make_mut(b);
-            for h in hs {
-                n += usize::from(b.entities.modify(h, update));
-            }
-        }
-    }
+    let n = update_references(d, &blk.name, |ins| ins.attribs = synced(&blk, &defs, ins));
     Ok((blk.name.clone(), n))
 }
 
 /// Whether block `name` has attribute definitions.
-fn has_attdefs(s: &Session, name: &str) -> bool {
+pub(super) fn has_attdefs(s: &Session, name: &str) -> bool {
     s.doc().ok().and_then(|d| d.block(name)).is_some_and(|b| b.entities.iter().any(|e| matches!(&e.kind, EntityKind::AttDef(a) if !a.constant)))
 }
 
@@ -171,7 +198,7 @@ fn run_attsync(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Names of the blocks with attribute definitions that match `spec` (comma-separated wildcards).
-fn blocks_with_attdefs(s: &Session, spec: &str) -> Vec<String> {
+pub(super) fn blocks_with_attdefs(s: &Session, spec: &str) -> Vec<String> {
     let Ok(d) = s.doc() else { return Vec::new() };
     d.blocks
         .values()

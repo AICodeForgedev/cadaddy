@@ -46,10 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{type?: all|blocks|dimstyles|groups|layers|linetypes|mleaderstyles|tablestyles|textstyles|zerolength|emptytext (default all: every named type), names?: \"A*,B\" (default *)} → purged")
             .interactive(|_| Ok(Box::new(purge::PurgeM::default()))),
         CommandSpec::new("blocks.list", "List Blocks", run_list).enabled(has_doc).noundo(),
-        CommandSpec::new("battman", "Block Attribute Manager...", run_battman)
-            .menu(&["Modify", "Object", "Attribute", "Block Attribute Manager..."])
-            .params("{name}")
-            .noundo(),
+        battman::battman_spec(),
         attribs::attdisp_spec(),
         attribs::attsync_spec(),
     ]
@@ -308,23 +305,6 @@ fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(
         json!({ "blocks": d.blocks.values().filter(|b| !b.anonymous).map(|b| json!({"name": b.name, "entities": b.entities.len(), "base": [b.base.x, b.base.y], "description": b.description})).collect::<Vec<_>>() }),
     )
-}
-
-fn run_battman(s: &mut Session, p: &Value) -> Result<Value> {
-    let name = str_param(p, "name").ok_or_else(|| bad("battman", "`name` is required"))?;
-    let b = s.doc()?.block(name).cloned().ok_or_else(|| bad("battman", "no such block"))?;
-    let atts: Vec<Value> = b
-        .entities
-        .iter()
-        .filter_map(|e| {
-            if let EntityKind::AttDef(a) = &e.kind {
-                Some(json!({"tag": a.tag, "prompt": a.prompt, "default": a.text.value, "invisible": a.invisible}))
-            } else {
-                None
-            }
-        })
-        .collect();
-    Ok(json!({ "block": name, "attributes": atts }))
 }
 
 // ---------------- interactive ----------------
@@ -759,3 +739,4 @@ impl Interactive for AttdefM {
 }
 
 mod attribs;
+mod battman;
