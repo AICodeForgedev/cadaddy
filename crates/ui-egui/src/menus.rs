@@ -32,6 +32,13 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.saveformat.dxf", "DXF", &["File", "Default Save Format", "DXF"], None),
     ("ui.saveformat.dwg", "DWG", &["File", "Default Save Format", "DWG"], None),
     ("ui.saveformat", "Default Save Format", &[], None),
+    ("ui.saveversion.2018", "Version 2018", &["File", "Default Save Format", "Version 2018"], None),
+    ("ui.saveversion.2013", "Version 2013", &["File", "Default Save Format", "Version 2013"], None),
+    ("ui.saveversion.2010", "Version 2010", &["File", "Default Save Format", "Version 2010"], None),
+    ("ui.saveversion.2007", "Version 2007", &["File", "Default Save Format", "Version 2007"], None),
+    ("ui.saveversion.2004", "Version 2004", &["File", "Default Save Format", "Version 2004"], None),
+    ("ui.saveversion.2000", "Version 2000", &["File", "Default Save Format", "Version 2000"], None),
+    ("ui.saveversion", "Default Save Version", &[], None),
     ("ui.toggle.menubar", "In-window Menu Bar", &["Window", "In-window Menu Bar"], None),
     ("ui.hidepalettes", "Hide Palettes", &["Window", "Hide Palettes"], None),
     ("ui.resetpalettes", "Reset Palettes", &["Window", "Reset Palettes"], None),
@@ -110,7 +117,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             let title = app.session.state().map(|s| s.title.clone()).ok();
             let name = app.ui.save_format.suggested_name(title.as_deref());
             if let Some(p) = app.services.pick_save.as_ref().and_then(|f| f(&name)) {
-                return Some(app.session.execute("saveas", &json!({ "path": p })).map_err(|e| e.to_string()));
+                return Some(app.session.execute("saveas", &saveas_params(&app.ui, &app.session, &p)).map_err(|e| e.to_string()));
             }
             Ok(Value::Null)
         }
@@ -209,6 +216,25 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             },
             None => Ok(json!({ "saveFormat": app.ui.save_format.as_str() })),
         },
+        // `{"version": "2000"…"2018"}` sets the version new drawings are saved in; without it,
+        // reports it.
+        id if id.starts_with("ui.saveversion") => {
+            let name = id
+                .strip_prefix("ui.saveversion.")
+                .map(str::to_string)
+                .or_else(|| params.get("version").map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string)));
+            match name {
+                Some(name) => match crate::SaveVersion::parse(&name) {
+                    Some(v) => {
+                        app.ui.save_version = v.year().to_string();
+                        app.session.echo(format!("New drawings will be saved as version {v}"));
+                        Ok(json!({ "saveVersion": app.ui.save_version }))
+                    }
+                    None => Err(format!("unknown version \"{}\" (2000, 2004, 2007, 2010, 2013 or 2018)", name.chars().take(40).collect::<String>())),
+                },
+                None => Ok(json!({ "saveVersion": app.ui.save_version })),
+            }
+        }
         "ui.hidepalettes" => {
             app.ui.show_palettes = false;
             app.ui.show_toolsets = false;
@@ -216,7 +242,8 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         "ui.resetpalettes" => {
             let (menu, theme, interface_language, save_format) = (app.ui.in_window_menu, app.ui.theme, app.ui.interface_language, app.ui.save_format);
-            app.ui = crate::UiState { in_window_menu: menu, theme, interface_language, save_format, ..Default::default() };
+            let save_version = std::mem::take(&mut app.ui.save_version);
+            app.ui = crate::UiState { in_window_menu: menu, theme, interface_language, save_format, save_version, ..Default::default() };
             Ok(Value::Null)
         }
         "ui.start" => {
@@ -298,6 +325,16 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         _ => return None,
     };
     Some(r)
+}
+
+/// SAVEAS parameters for a path picked in the Save dialog: a drawing that has no file yet is saved
+/// in the default save version; one opened from a file keeps that file's version.
+fn saveas_params(ui: &crate::UiState, session: &cadcraft_engine::Session, path: &str) -> Value {
+    let untitled = session.state().is_ok_and(|s| s.path.is_none());
+    match crate::SaveVersion::parse(&ui.save_version) {
+        Some(v) if untitled => json!({ "path": path, "version": v.year() }),
+        _ => json!({ "path": path }),
+    }
 }
 
 fn set_save_format(app: &mut CadApp, format: crate::SaveFormat) -> Value {

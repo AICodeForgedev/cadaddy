@@ -616,6 +616,7 @@ dependencies = [
  "cadcraft-color",
  "cadcraft-constraints",
  "cadcraft-doc",
+ "cadcraft-dxf",
  "cadcraft-fonts",
  "cadcraft-geom",
  "cadcraft-render",

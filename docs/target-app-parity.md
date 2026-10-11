@@ -92,7 +92,7 @@ area here; it is counted once, as the file-exchange discount.
 |---|---:|---|
 | Interaction fidelity (beyond the precision-input area) | ×0.90 | hot-grip options ignored, no context menus, selection keywords W/C/F/WP/CP rejected (#224), transparent 'ZOOM cancels the running command (#220), ELLIPSE/BREAK keywords ignored (#219) |
 | Stability on real machines | ×0.85 | 27 of 37 open issues are core-path bugs; about 60 correctness fixes merged on 2026-10-10 alone; lines not visible mid-command (#44); locked layers edited (#87); no CI runs the Rust tests on PRs |
-| Exchanging files with AutoCAD users | ×0.80 | saves drop unmodelled entities, images, layer states, multileader styles, true colours and more (#79, #201, #204, #208, #209, #213, #223); DWG always R2000; never checked in AutoCAD; a 10 MB DWG failed (#57) |
+| Exchanging files with AutoCAD users | ×0.80 | saves drop unmodelled entities, images, layer states, multileader styles, true colours and more (#79, #201, #204, #208, #209, #213, #223); never checked in AutoCAD; a 10 MB DWG failed (#57) |
 
 **Mainstream practitioner ≈ 45.3% × 0.90 × 0.85 × 0.80 ≈ 28%** (estimated). It is lower than
 ready for real work (≈ 38%) for CADCraft, unlike most apps: the full number credits additively

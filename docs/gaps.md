@@ -16,7 +16,7 @@ do them first.
 | 1 | **[alpha blocker]** **Saving drops whatever we don't model** (Unknown entities, IMAGE, layer states, block descriptions, true colours, MULTILEADER written as LEADER+MTEXT, groups, named views/UCS, foreign xdata) | Opening a colleague's DWG and saving it silently deletes content: the one thing a CAD user can't forgive | 15–25 | [file formats](file-format-parity.md) |
 | 2 | **[alpha blocker]** **No real-file test corpus and no check in AutoCAD** | All 36 file tests are synthetic; nobody has verified a CADCraft DWG/DXF opens cleanly in AutoCAD | 10–15 + human | [file formats](file-format-parity.md#tests) |
 | 3 | **Tracking leftovers** (object snap tracking, Extension, Parallel and Apparent Intersection landed, #379): polar angles relative to the last segment, PolarSnap, temporary tracking point | Small now; ranks lower at the next review | 3–5 | [ui](ui-parity.md#tracking-polar-ortho-grid-and-snap--70) |
-| 4 | **[alpha blocker]** **DWG always saves as R2000; DXF only R2000 ASCII; no code pages** | Can't exchange at 2018 format; pre-2007 CJK/Cyrillic files are garbled | 10–15 | [file formats](file-format-parity.md) |
+| 4 | **No code pages when reading pre-2007 files** (saving DWG/DXF at 2000–2018 and binary DXF landed, #421) | Pre-2007 CJK/Cyrillic files are garbled | 3–5 | [file formats](file-format-parity.md) |
 | 5 | **[alpha blocker]** **Stubbed prompt options** left in PEDIT Edit vertex, SPLINEDIT and MTEXT columns | Scripts and muscle memory hit "not available yet" (the most-used commands are done) | 3–6 | [features](#features) |
 | 6 | **Ellipse and spline geometry is tessellated** (intersections, offsets, closest points; polyline offset ignores bulges) | Coordinates are subtly wrong; offsets of ellipses come out as polylines | 30–50 | [geometry](geometry-parity.md) |
 | 7 | **[alpha blocker]** **No xrefs, block editor, dynamic blocks or groups** | Most production drawings use them | 80–120 | [features](#features) |
@@ -82,7 +82,7 @@ Detail: [file-format-parity.md](file-format-parity.md).
 |---|---|---|---|
 | FF1 | **[alpha blocker]** Round-trip what we don't model: keep Unknown entities and objects, foreign xdata, extension dictionaries; write IMAGE (with IMAGEDEF), VIEW/UCS/VPORT tables, groups, layer states, block descriptions, true colours (#201, #204, #208, #209, #213, #223); WIPEOUT and gradients done (#147, #162) | High | 12–20 |
 | FF2 | **[alpha blocker]** Native MULTILEADER objects (read and write) | High | 6–10 |
-| FF3 | **[alpha blocker]** Write DXF 2004–2018 and binary DXF; save DWG at a chosen version (2018 default) instead of always R2000; SAVEAS version choice (PR #198 adds DWG to the dialog) | High | 8–12 |
+| FF3 | Save-version leftovers (DXF/DWG 2000–2018, binary DXF, SAVEAS `version`/`binary` and the default save version landed, #421): no R14 DWG or R12 DXF output; the Save dialog can't pick the version per file (the file picker doesn't report the chosen type; File > Default Save Format sets it); no command-line SAVEAS format prompt | Low | 2–4 |
 | FF4 | Code pages (`$DWGCODEPAGE`, ANSI_932/936/949/950/125x) when reading pre-2007 files | Medium-high (Asia, Eastern Europe) | 3–5 |
 | FF5 | **[alpha blocker]** Real-file corpus (`storytold/cadcraft-corpus`), open → save → reopen tests, black-box check in AutoCAD | High | 10–15 + human |
 | FF6 | **[alpha blocker]** DWG throughput: a 10 MB DWG took ~2 min to fail (#57) | High for real projects | 6–10 |

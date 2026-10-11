@@ -1,14 +1,14 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (WIPEOUT and hatch gradients now written, #147, #162) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (DXF/DWG saved at a chosen version 2000–2018, binary DXF written, #421) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADCraft's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
 [target-app-parity.md](target-app-parity.md).
 
 **Headline (estimated):** file formats ≈ **30%** of AutoCAD's. Opening the commonest 2D DXF/DWG
-drawings works, but saving is lossy: everything CADCraft doesn't model is dropped, output is
-always R2000, and no test uses a real third-party file. Remaining: **≈ 170–280 Opus 5.5 hours**:
+drawings works, but saving is lossy: everything CADCraft doesn't model is dropped, and no test
+uses a real third-party file. DXF and DWG save at 2000–2018 (2018 by default, #421). Remaining: **≈ 170–280 Opus 5.5 hours**:
 ≈ 40–60 h for DXF/DWG fidelity (the part that decides beta), ≈ 110–180 h for the other formats
 below, and ≈ 20–40 h for 3D exchange formats that wait for 3D modelling.
 
@@ -31,20 +31,23 @@ below, and ≈ 20–40 h for 3D exchange formats that wait for 3D modelling.
 
 AutoCAD 2027 opens every DWG version from R2.0 onward and saves 2018 (AC1032, still the current
 DWG format), 2013, 2010, 2007, 2004, 2000 and R14. CADCraft reads DWG by converting it to DXF
-with the `acadrust` 0.6.1 crate and reading that DXF; it saves by writing its own R2000 DXF and
-converting it to DWG.
+with the `acadrust` 0.6.3 crate and reading that DXF; it saves by writing its own R2000 DXF and
+converting it to a DWG of the chosen version (#421): SAVEAS `version`, else the drawing's own
+version (the file's `$ACADVER`, 2018 for a new drawing), at least 2004 unless 2000 is asked for.
+The bridge repairs two acadrust 0.6.3 gaps in 2010+ DWG: merged table cells and table-style
+title/header suppression.
 
 | DWG version | Code | AutoCAD 2027 | CADCraft read | CADCraft write | Tested how |
 |---|---|---|---|---|---|
 | R1.0–R2.6, R9, R10, R11/R12 | MC0.0–AC1009 | read | **no** (`is_dwg` accepts only `AC10xx` magic; acadrust doesn't target pre-R13) | no | — |
 | R13 | AC1012 | read | acadrust claims support; untested | no | none |
 | R14 | AC1014 | read, write | acadrust claims support; untested | **no** | none |
-| 2000–2002 | AC1015 | read, write | yes via bridge | **yes, always this version** | synthetic round trips (`dwg_roundtrip_keeps_non_ascii_text`, `dwg_roundtrip_keeps_extension_data`) |
-| 2004–2006 | AC1018 | read, write | via bridge; untested | no (version list in `crates/dwg` is unused) | none |
-| 2007–2009 | AC1021 | read, write | via bridge; untested | no | none |
-| 2010–2012 | AC1024 | read, write | via bridge | no | one synthetic file (`ac1024_dwg_with_many_entities_opens`, made by rewriting `$ACADVER`) |
-| 2013–2017 | AC1027 | read, write | via bridge; untested | no | none |
-| 2018–2027 | AC1032 | read, write (default) | via bridge; untested on real files | no | none |
+| 2000–2002 | AC1015 | read, write | yes via bridge | yes, when asked for (no true colours, transparency or table styles: the format has none) | synthetic round trips (`dwg_at_every_version_reads_back`, `dwg_roundtrip_keeps_non_ascii_text`) |
+| 2004–2006 | AC1018 | read, write | via bridge | yes | `dwg_at_every_version_reads_back`, `dwg_roundtrip_keeps_extension_data` |
+| 2007–2009 | AC1021 | read, write | via bridge | yes | `dwg_at_every_version_reads_back` |
+| 2010–2012 | AC1024 | read, write | via bridge | yes | `dwg_at_every_version_reads_back`, `ac1024_dwg_with_many_entities_opens` |
+| 2013–2017 | AC1027 | read, write | via bridge | yes | `dwg_at_every_version_reads_back` |
+| 2018–2027 | AC1032 | read, write (default) | via bridge; untested on real files | yes (default for new drawings) | `dwg_at_every_version_reads_back` (synthetic only) |
 | Web build | — | — | **no** (error: "save as DXF") | no | — |
 
 Everything lost in the DXF read/write paths below is also lost through DWG, plus whatever
@@ -58,8 +61,8 @@ early (#175), but the throughput problem remains. **DWG ≈ 30% read, ≈ 15% wr
 |---|---|---|---|
 | R12 (AC1009), ASCII | read, write | yes: no version gating; old-style POLYLINE/VERTEX read (polyface meshes flattened to 3D polylines) | **no** |
 | R12 binary | read, write | **no** (binary parser expects R13+ 2-byte group codes) | no |
-| R13–R2018, ASCII | read, write each of 2000/2004/2007/2010/2013/2018 | yes, one reader for all versions | **R2000 (AC1015) only** |
-| R13–R2018, binary | read, write | yes | **no** (ASCII only) |
+| R13–R2018, ASCII | read, write each of 2000/2004/2007/2010/2013/2018 | yes, one reader for all versions | yes, each of 2000–2018 (#421): R2000 structure (later versions add only optional groups) with that `$ACADVER`; UTF-8 text from 2007; no CLASS instance counts (91) |
+| R13–R2018, binary | read, write | yes | yes, each of 2000–2018 (SAVEAS `binary`; a binary file stays binary on QSAVE) |
 | Code pages (`$DWGCODEPAGE`, ANSI_932/936/949/950/125x) | yes | **no**: UTF-8, else Latin-1, so pre-2007 CJK and Cyrillic files are garbled | writes `\U+` escapes (#169), which is correct |
 | `\U+`/`\M+` escapes | yes | `\U+` yes; `\M+` not checked | `\U+` yes |
 
@@ -127,5 +130,6 @@ our output in AutoCAD black-box.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | DXF (ASCII and binary) and DWG saved at 2000–2018, 2018 by default (#421) |
 | 2026-10-10 | minor | WIPEOUT and gradients written since #147/#162; other save losses remain (#201, #204, #208, #209, #213, #223) |
 | 2026-10-10 | major | First file-format parity doc: DWG and DXF version by version, per-object read/write, other formats |

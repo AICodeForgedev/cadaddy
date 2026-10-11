@@ -151,6 +151,7 @@
 	Dark	Темна
 	Default	Типово
 	Default Save Format	Типовий формат збереження
+	Default Save Version	Типова версія збереження
 	Define Attributes	Визначити атрибути
 	Define Attributes...	Визначити атрибути...
 	Defined width	Задана ширина
@@ -948,6 +949,12 @@
 	Value	Значення
 	Value:	Значення:
 	Version	Версія
+	Version 2000	Версія 2000
+	Version 2004	Версія 2004
+	Version 2007	Версія 2007
+	Version 2010	Версія 2010
+	Version 2013	Версія 2013
+	Version 2018	Версія 2018
 	Version {version}	Версія {version}
 	Vertical	Вертикальність
 	VerticalDistance	Вертикальна відстань

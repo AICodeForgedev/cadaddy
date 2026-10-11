@@ -11,7 +11,7 @@ scriptable CLI, a web build, Linux and FreeBSD builds, and a free licence.
 **Why pre-alpha:** four of AutoCAD's five core workflows fail the [alpha gate](docs/roadmap.md#alpha-gate).
 Precise drafting lacks object snap tracking and has stubbed TRIM/EXTEND/OFFSET options; blocks
 can't be edited (no block editor, REFEDIT or xrefs); plots ignore plot styles; and a DWG saved by
-CADCraft drops everything it doesn't model, is always R2000 and has never been checked in
+CADCraft drops everything it doesn't model and has never been checked in
 AutoCAD. Dimensioning passes. Ready for real work (≈ 38%) is also under the ~40% alpha bar. Beta
 is ≈ 600–930 h away.
 

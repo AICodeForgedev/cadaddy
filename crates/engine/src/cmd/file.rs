@@ -5,6 +5,7 @@
 use std::sync::OnceLock;
 
 use cadcraft_doc::Drawing;
+pub use cadcraft_dxf::Version;
 use serde_json::{Value, json};
 
 use super::*;
@@ -45,6 +46,77 @@ pub fn deliver() -> Option<DeliverHook> {
     DELIVER.get().copied()
 }
 
+/// How a drawing file is written: its version (`None`: the drawing's own, `$ACADVER`) and
+/// binary instead of ASCII DXF.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SaveAs {
+    pub version: Option<Version>,
+    pub binary: bool,
+}
+
+/// Write a drawing with [`SaveAs`] options (installed by hosts whose writer supports them).
+pub type WriteAsHook = fn(&Drawing, &str, &SaveAs) -> std::result::Result<Vec<u8>, String>;
+
+static WRITE_AS: OnceLock<WriteAsHook> = OnceLock::new();
+
+/// Install the host's writer for [`SaveAs`] options; saves that ask for none use [`IoHooks::write`].
+pub fn set_write_as(h: WriteAsHook) {
+    let _ = WRITE_AS.set(h);
+}
+pub fn write_as() -> Option<WriteAsHook> {
+    WRITE_AS.get().copied()
+}
+
+/// The versions a drawing can be saved in, for messages ("2000, 2004, …, 2018").
+fn version_list() -> String {
+    Version::ALL.iter().map(|v| v.year()).collect::<Vec<_>>().join(", ")
+}
+
+/// The `version` and `binary` parameters of a save: a version is a year (2018 or "2018"), "R2018"
+/// or an `$ACADVER` code ("AC1032").
+fn save_options(cmd: &str, p: &Value) -> Result<SaveAs> {
+    let version = match p.get("version") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let text = match v {
+                Value::String(s) => s.clone(),
+                Value::Number(n) => n.to_string(),
+                _ => String::new(),
+            };
+            let name: String = text.chars().take(40).collect();
+            Some(Version::parse(&text).ok_or_else(|| bad(cmd, format!("unknown version `{name}` (use {})", version_list())))?)
+        }
+    };
+    let binary = match p.get("binary") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad(cmd, "`binary` must be true or false")),
+    };
+    Ok(SaveAs { version, binary })
+}
+
+/// Whether `path` names a DXF file (or has no extension, which saves as DXF).
+fn is_dxf(path: &str) -> bool {
+    let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    matches!(ext.as_str(), "dxf" | "")
+}
+
+/// The drawing written to `path` with `opts`: through [`IoHooks::write`] when no option is set,
+/// else through the [`write_as`] hook.
+fn write_bytes(s: &Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Vec<u8>> {
+    let hooks = io().ok_or_else(|| bad(cmd, "file formats are not available in this build"))?;
+    if opts.binary && !is_dxf(path) {
+        return Err(bad(cmd, "binary applies to DXF files only"));
+    }
+    let r = if *opts == SaveAs::default() {
+        (hooks.write)(s.doc()?, path)
+    } else {
+        let w = write_as().ok_or_else(|| bad(cmd, "saving at a chosen version or as binary DXF is not available in this build"))?;
+        w(s.doc()?, path, opts)
+    };
+    r.map_err(|e| bad(cmd, e))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("new", "New Drawing...", run_new)
@@ -66,10 +138,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("saveas", "Save As...", run_saveas_reporting)
             .menu(&["File", "Save As..."])
             .key("Cmd+Shift+S")
-            .params("{path, format?: dxf|dwg}")
+            .params("{path, version?: 2000|2004|2007|2010|2013|2018, binary?: bool}")
             .noundo(),
         CommandSpec::new("document.switch", "Switch Drawing", run_switch).params("{index}").enabled(always).noundo(),
-        CommandSpec::new("document.bytes", "Drawing as bytes", run_bytes).params("{format?: dxf} → {data: base64}").noundo(),
+        CommandSpec::new("document.bytes", "Drawing as bytes", run_bytes)
+            .params("{format?: dxf, version?: 2000…2018, binary?: bool} → {data: base64}")
+            .noundo(),
     ]
 }
 
@@ -85,7 +159,12 @@ fn file_name(path: &str) -> String {
 pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option<String>) -> Result<usize> {
     let hooks = io().ok_or_else(|| bad("open", "file formats are not available in this build"))?;
     let d = (hooks.read)(bytes, name).map_err(|e| bad("open", e))?;
-    Ok(s.open_drawing(d, &file_name(name), path))
+    let i = s.open_drawing(d, &file_name(name), path);
+    if let Some(st) = s.docs.get_mut(i) {
+        // QSAVE keeps a binary DXF binary.
+        st.binary_dxf = cadcraft_dxf::is_binary(bytes);
+    }
+    Ok(i)
 }
 
 fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
@@ -133,9 +212,26 @@ fn run_closeall(s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 pub(crate) fn save_to(s: &mut Session, path: &str) -> Result<usize> {
-    let hooks = io().ok_or_else(|| bad("save", "file formats are not available in this build"))?;
-    let bytes = (hooks.write)(s.doc()?, path).map_err(|e| bad("save", e))?;
-    commit_save(s, path, &bytes, store)
+    let opts = SaveAs { version: None, binary: s.state()?.binary_dxf && is_dxf(path) };
+    save_as(s, "save", path, &opts)
+}
+
+/// Save to `path` with `opts`. A drawing file then keeps the version and binary choice: the
+/// version goes into the drawing's `$ACADVER`, so later saves (QSAVE) write it again.
+fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<usize> {
+    let bytes = write_bytes(s, cmd, path, opts)?;
+    let n = commit_save(s, path, &bytes, store)?;
+    if is_drawing_file(path) {
+        let st = s.state_mut()?;
+        st.binary_dxf = opts.binary;
+        if let Some(v) = opts.version
+            && st.doc.header.get("ACADVER").and_then(cadcraft_doc::HVal::as_str) != Some(v.code())
+        {
+            std::sync::Arc::make_mut(&mut st.doc).header.set_str("ACADVER", v.code());
+            st.saved = st.doc.clone();
+        }
+    }
+    Ok(n)
 }
 
 /// Put saved bytes where the user gets them: natively the file at `path` (written atomically); on
@@ -194,8 +290,22 @@ fn run_save(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_saveas(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("saveas", "`path` is required"))?.to_string();
-    let n = save_to(s, &path)?;
-    Ok(saved(&path, n))
+    let opts = save_options("saveas", p)?;
+    let n = save_as(s, "saveas", &path, &opts)?;
+    let mut r = saved(&path, n);
+    if is_drawing_file(&path) {
+        r["version"] = json!(opts.version.unwrap_or_else(|| drawing_version(s, &path)).year());
+        r["binary"] = json!(opts.binary);
+    }
+    Ok(r)
+}
+
+/// The version a drawing is saved in at `path` when none is asked for: its `$ACADVER` (2018 by
+/// default), and for DWG at least 2004 (the io layer's rule: R2000 DWG has no true colours).
+fn drawing_version(s: &Session, path: &str) -> Version {
+    let v =
+        s.doc().ok().and_then(|d| d.header.get("ACADVER").and_then(cadcraft_doc::HVal::as_str).and_then(Version::for_acadver)).unwrap_or_default();
+    if is_dxf(path) { v } else { v.max(Version::R2004) }
 }
 
 fn run_switch(s: &mut Session, p: &Value) -> Result<Value> {
@@ -209,10 +319,10 @@ fn run_switch(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_bytes(s: &mut Session, p: &Value) -> Result<Value> {
-    let hooks = io().ok_or_else(|| bad("document.bytes", "file formats are not available in this build"))?;
     let fmt = str_param(p, "format").unwrap_or("dxf");
+    let opts = save_options("document.bytes", p)?;
     let lost = not_saved(s.doc()?);
-    let bytes = (hooks.write)(s.doc()?, &format!("drawing.{fmt}")).map_err(|e| bad("document.bytes", e))?;
+    let bytes = write_bytes(s, "document.bytes", &format!("drawing.{fmt}"), &opts)?;
     let mut r = json!({ "data": base64_encode(&bytes), "bytes": bytes.len() });
     if is_drawing_file(&format!("drawing.{fmt}")) {
         report_not_saved(s, &mut r, &lost);
