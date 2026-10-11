@@ -201,6 +201,170 @@ fn pasted_arrays_get_their_own_blocks() {
     assert!(params.iter().all(|p| d.block(&p.source).is_some()));
 }
 
+/// Circle centres drawn by the array `h`, sorted.
+fn centres(s: &Session, h: &Value) -> Vec<(i64, i64)> {
+    let d = s.doc().unwrap();
+    let e = d.entity(Handle::parse_hex(h.as_str().unwrap()).unwrap()).unwrap().as_ref().clone();
+    let mut v: Vec<(i64, i64)> = circles(d, &e).iter().map(|(p, _)| ((p.x * 1000.0).round() as i64, (p.y * 1000.0).round() as i64)).collect();
+    v.sort();
+    v
+}
+
+fn lines_in(s: &Session, h: &Value) -> usize {
+    fn walk(d: &Drawing, e: &Entity, depth: usize) -> usize {
+        match &e.kind {
+            EntityKind::Line(_) => 1,
+            EntityKind::Insert(i) if depth < 8 => d.block(&i.block).unwrap().entities.iter().map(|b| walk(d, b, depth + 1)).sum(),
+            _ => 0,
+        }
+    }
+    let d = s.doc().unwrap();
+    walk(d, d.entity(Handle::parse_hex(h.as_str().unwrap()).unwrap()).unwrap(), 0)
+}
+
+fn rect_array(s: &mut Session) -> Value {
+    let h = circle(s, 0.0, 0.0);
+    s.execute("arrayrect", &json!({"handles": [h], "rows": 1, "cols": 3, "colSpacing": 2})).unwrap()["handle"].clone()
+}
+
+#[test]
+fn arrayedit_changes_parameters_of_one_array() {
+    let mut s = Session::new();
+    let a = rect_array(&mut s);
+    let b = s.execute("copy", &json!({"handles": [a], "delta": [0, 100]})).unwrap();
+    let b = s.doc().unwrap().model.iter().map(|e| json!(e.handle.hex())).find(|x| *x != a).unwrap_or(b);
+    s.execute("arrayedit", &json!({"handle": a, "cols": 2, "rows": 2, "rowSpacing": 5, "colSpacing": 3})).unwrap();
+    assert_eq!(centres(&s, &a), vec![(0, 0), (0, 5000), (3000, 0), (3000, 5000)]);
+    // The copy that shared the array's block is unchanged.
+    assert_eq!(centres(&s, &b), vec![(0, 100_000), (2000, 100_000), (4000, 100_000)]);
+    // Blocks nothing uses are gone: two arrays, each with an array block and a shared source.
+    let anon = s.doc().unwrap().blocks.keys().filter(|k| k.starts_with('*')).count();
+    assert_eq!(anon, 3);
+
+    // Polar: items, fill, rotation, centre.
+    let mut s = Session::new();
+    let h = circle(&mut s, 10.0, 0.0);
+    let p = s.execute("arraypolar", &json!({"handles": [h], "center": [0, 0], "count": 4})).unwrap()["handle"].clone();
+    s.execute("arrayedit", &json!({"handle": p, "items": 3, "angle": 180})).unwrap();
+    assert_eq!(centres(&s, &p), vec![(-10000, 0), (0, 10000), (10000, 0)]);
+    s.execute("arrayedit", &json!({"handle": p, "angleBetween": 45, "center": [0, 10]})).unwrap();
+    assert_eq!(centres(&s, &p).len(), 3);
+    assert!(centres(&s, &p).contains(&(10000, 0)));
+
+    // Bad values are refused and change nothing.
+    let before = centres(&s, &p);
+    assert!(s.execute("arrayedit", &json!({"handle": p, "items": 0})).is_err());
+    assert!(s.execute("arrayedit", &json!({"handle": p, "items": 10_000_000})).unwrap_err().to_string().contains("MAXARRAY"));
+    assert!(s.execute("arrayedit", &json!({"handle": p, "angle": 400})).is_err());
+    assert_eq!(centres(&s, &p), before);
+    let c = circle(&mut s, 50.0, 50.0);
+    assert!(s.execute("arrayedit", &json!({"handle": c, "items": 3})).is_err());
+}
+
+#[test]
+fn arrayedit_base_replace_and_reset() {
+    let mut s = Session::new();
+    let a = rect_array(&mut s);
+    // A new base point moves the reference, not the items.
+    s.execute("arrayedit", &json!({"handle": a, "base": [7, 7]})).unwrap();
+    assert_eq!(centres(&s, &a), vec![(0, 0), (2000, 0), (4000, 0)]);
+    let d = s.doc().unwrap();
+    let e = d.entity(Handle::parse_hex(a.as_str().unwrap()).unwrap()).unwrap();
+    assert!(matches!(&e.kind, EntityKind::Insert(i) if i.insert.xy().near(Vec2::new(7.0, 7.0), 1e-9)));
+    // Spacing still counts from the items.
+    s.execute("arrayedit", &json!({"handle": a, "colSpacing": 4})).unwrap();
+    assert_eq!(centres(&s, &a), vec![(0, 0), (4000, 0), (8000, 0)]);
+
+    // REPlace item 1 with a line; the line stays in the drawing.
+    let l = s.execute("line", &json!({"points": [[0, 20], [1, 20]]})).unwrap()["handles"][0].clone();
+    s.execute("arrayedit", &json!({"handle": a, "replace": {"handles": [l], "base": [0, 20], "items": [[1, 0, 0]]}})).unwrap();
+    assert_eq!(centres(&s, &a), vec![(0, 0), (8000, 0)]);
+    assert_eq!(lines_in(&s, &a), 1);
+    assert_eq!(s.doc().unwrap().model.len(), 2);
+    // Replacing with the array itself is refused.
+    assert!(s.execute("arrayedit", &json!({"handle": a, "replace": {"handles": [a], "items": [[0, 0, 0]]}})).is_err());
+    // RESet restores the item.
+    s.execute("arrayedit", &json!({"handle": a, "reset": true})).unwrap();
+    assert_eq!(centres(&s, &a).len(), 3);
+    assert_eq!(lines_in(&s, &a), 0);
+    // REPlace Source objects: every item becomes the line.
+    s.execute("arrayedit", &json!({"handle": a, "replace": {"handles": [l], "items": "source"}})).unwrap();
+    assert_eq!(centres(&s, &a).len(), 0);
+    assert_eq!(lines_in(&s, &a), 3);
+    // EXPLODE gives three lines (plus the original one).
+    s.execute("explode", &json!({"handles": [a]})).unwrap();
+    assert_eq!(s.doc().unwrap().model.iter().filter(|e| matches!(e.kind, EntityKind::Line(_))).count(), 4);
+}
+
+#[test]
+fn arrayedit_source_then_arrayclose() {
+    let mut s = Session::new();
+    let a = rect_array(&mut s);
+    // Source places the circle of item 2 (at x = 4) in the drawing.
+    let r = s.execute("arrayedit", &json!({"handle": a, "source": {"item": [2, 0, 0]}})).unwrap();
+    let placed = r["source"].as_array().unwrap().clone();
+    assert_eq!(placed.len(), 1);
+    // Only one array at a time; other edits wait for ARRAYCLOSE.
+    assert!(s.execute("arrayedit", &json!({"handle": a, "cols": 5})).is_err());
+    // Move the circle up by 1 and draw a line next to it: both become the source.
+    s.execute("move", &json!({"handles": placed, "delta": [0, 1]})).unwrap();
+    s.execute("line", &json!({"points": [[4, 3], [5, 3]]})).unwrap();
+    s.execute("arrayclose", &json!({})).unwrap();
+    assert_eq!(centres(&s, &a), vec![(0, 1000), (2000, 1000), (4000, 1000)]);
+    assert_eq!(lines_in(&s, &a), 3);
+    assert_eq!(s.doc().unwrap().model.len(), 1);
+
+    // Discard: the placed objects go, the array stays as it was.
+    s.execute("arrayedit", &json!({"handle": a, "source": {}})).unwrap();
+    assert_eq!(s.doc().unwrap().model.len(), 3);
+    s.execute("arrayclose", &json!({"save": false})).unwrap();
+    assert_eq!(s.doc().unwrap().model.len(), 1);
+    assert_eq!(centres(&s, &a).len(), 3);
+    assert!(s.execute("arrayclose", &json!({})).is_err());
+
+    // Saving an empty source is refused; the edit stays open.
+    let r = s.execute("arrayedit", &json!({"handle": a, "source": {}})).unwrap();
+    s.execute("erase", &json!({"handles": r["source"]})).unwrap();
+    assert!(s.execute("arrayclose", &json!({})).is_err());
+    s.execute("arrayclose", &json!({"save": false})).unwrap();
+    assert_eq!(centres(&s, &a).len(), 3);
+}
+
+#[test]
+fn typed_arrayedit() {
+    let mut s = Session::new();
+    let a = rect_array(&mut s);
+    typed(&mut s, &["arrayedit", "l"]);
+    let p = s.prompt_text();
+    assert!(p.contains("Enter an option or [Source/REPlace/Base point/Rows/Columns/Levels/RESet/eXit] <eXit>"), "{p}");
+    typed(&mut s, &["c", "4", "t", "9", "r", "2", "5", ""]);
+    assert!(s.prompt_text().contains("Enter an option"), "{}", s.prompt_text());
+    assert_eq!(centres(&s, &a).len(), 8);
+    assert!(centres(&s, &a).contains(&(9000, 5000)), "{:?}", centres(&s, &a));
+    typed(&mut s, &["x"]);
+    assert!(s.current_prompt().is_none(), "{}", s.prompt_text());
+    // One undo step takes the whole edit back.
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(centres(&s, &a).len(), 3);
+
+    // REPlace with a typed pick of item 2, then Source on item 0 and ARRAYCLOSE.
+    s.execute("line", &json!({"points": [[0, 20], [1, 20]]})).unwrap();
+    s.set_selection(Vec::new());
+    typed(&mut s, &["arrayedit", "1,0"]);
+    typed(&mut s, &["rep", "l", "", ""]);
+    assert!(s.prompt_text().contains("Select an item in array to replace or [Source objects]"), "{}", s.prompt_text());
+    typed(&mut s, &["4,0", "", "x"]);
+    assert_eq!(centres(&s, &a).len(), 2);
+    assert_eq!(lines_in(&s, &a), 1);
+    typed(&mut s, &["arrayedit", "1,0", "s", "0,0"]);
+    assert!(s.current_prompt().is_none(), "{}", s.prompt_text());
+    typed(&mut s, &["arrayclose"]);
+    assert!(s.prompt_text().contains("Save changes to array? [Yes/No] <Yes>"), "{}", s.prompt_text());
+    typed(&mut s, &[""]);
+    assert!(s.current_prompt().is_none(), "{}", s.prompt_text());
+    assert_eq!(centres(&s, &a).len(), 2);
+}
+
 #[test]
 fn json_arrays_follow_arrayassociativity() {
     // With ARRAYASSOCIATIVITY 0 the JSON form makes copies unless `associative` asks otherwise.

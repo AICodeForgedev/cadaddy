@@ -37,6 +37,23 @@ pub struct ArrayParams {
     /// Items that refer to another block than the source (ARRAYEDIT REPlace).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub replaced: Vec<ReplacedItem>,
+    /// The source objects are out for editing (ARRAYEDIT Source, until ARRAYCLOSE). Not saved:
+    /// a drawing saved meanwhile keeps the objects as separate objects.
+    #[serde(skip)]
+    pub editing: Option<SourceEdit>,
+}
+
+/// ARRAYEDIT Source in progress: the array's source objects placed in the drawing for editing.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SourceEdit {
+    /// The array (block reference) being edited.
+    pub array: crate::Handle,
+    /// The item the objects were placed at: (i, j, level).
+    pub item: (u32, u32, u32),
+    /// The objects placed for editing.
+    pub objects: Vec<crate::Handle>,
+    /// Objects with this handle or above were drawn while editing; they join the source too.
+    pub first_new: u64,
 }
 
 /// Rectangular or polar placement.
@@ -272,6 +289,7 @@ mod tests {
             levels: 2,
             level_spacing: 5.0,
             replaced: Vec::new(),
+            editing: None,
         }
     }
 
@@ -299,6 +317,7 @@ mod tests {
             levels: 1,
             level_spacing: 0.0,
             replaced: Vec::new(),
+            editing: None,
         };
         let items = p.items().unwrap_or_default();
         assert_eq!(items.len(), 8);

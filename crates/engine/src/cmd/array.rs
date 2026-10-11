@@ -20,6 +20,8 @@ use super::modify::transform_entities;
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
+mod edit;
+
 /// Most preview entities drawn while the array is edited.
 const PREVIEW_LIMIT: usize = 2000;
 /// Keyword-only prompts: each typed token is matched on its own (no free text).
@@ -46,13 +48,16 @@ pub fn specs() -> Vec<CommandSpec> {
             )
             .interactive(|_| Ok(Box::new(PolarM::default()))),
     ]
+    .into_iter()
+    .chain(edit::specs())
+    .collect()
 }
 
 // ---------------- geometry ----------------
 
 /// Array parameters around `kind` (the source block is named when the array is made).
 fn params(kind: ArrayKind, levels: u64, level_spacing: f64) -> ArrayParams {
-    ArrayParams { source: "*".into(), kind, levels: u32::try_from(levels).unwrap_or(u32::MAX), level_spacing, replaced: Vec::new() }
+    ArrayParams { source: "*".into(), kind, levels: u32::try_from(levels).unwrap_or(u32::MAX), level_spacing, replaced: Vec::new(), editing: None }
 }
 
 fn count32(n: u64) -> u32 {
