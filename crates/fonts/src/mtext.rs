@@ -571,7 +571,7 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
             }
             Atom::Word(segs) => {
                 let ww: f64 = segs.iter().map(|(sg, f)| seg_width(sg, fmt(*f))).sum();
-                let sw = pending_space.map(|f| text_width(&fmt(f).font, " ", fmt(f).height, fmt(f).wf)).unwrap_or(0.0);
+                let sw = pending_space.map(|f| crate::space_width(&fmt(f).font, fmt(f).height, fmt(f).wf)).unwrap_or(0.0);
                 if width > 0.0 && !line.items.is_empty() && line.width + sw + ww > width + 1e-9 {
                     finish(&mut lines, &mut line, fmt(last_fmt), para);
                 } else if !line.items.is_empty() || pending_space.is_some() {
@@ -691,6 +691,12 @@ mod tests {
         let l = layout_mtext("AB", Vec2::new(5.0, 5.0), 1.0, 0.0, 5, 0.0, 1.0);
         let c = l.bounds.center();
         assert!((c.x - 5.0).abs() < 1e-9 && (c.y - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stroke_word_space_matches_text() {
+        let l = layout_mtext("A B", Vec2::ZERO, 1.0, 0.0, 1, 0.0, 1.0);
+        assert!((l.bounds.width() - crate::line_width("A B", 1.0, 1.0)).abs() < 1e-9);
     }
 
     fn lay(s: &str, width: f64) -> MTextLayout {

@@ -426,7 +426,7 @@ pub(super) fn layout(contents: &str, p: &MTextParams, base: &Fmt) -> MTextLayout
     let paras = Paragraphs::scan(contents);
     let (atoms, fmts) = parse(contents, base.clone());
     let fmt = |i: usize| fmts.get(i).unwrap_or(base);
-    let space_w = |f: usize| crate::text_width(&fmt(f).font, " ", fmt(f).height, fmt(f).wf);
+    let space_w = |f: usize| crate::space_width(&fmt(f).font, fmt(f).height, fmt(f).wf);
 
     let mut lines: Vec<PLine> = Vec::new();
     let mut k = 0usize;
