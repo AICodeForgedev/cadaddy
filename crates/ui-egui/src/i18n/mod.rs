@@ -17,10 +17,12 @@ pub enum Preference {
     English,
     #[serde(rename = "uk")]
     Ukrainian,
+    #[serde(rename = "pt-BR")]
+    BrazilianPortuguese,
 }
 
 impl Preference {
-    pub const ALL: [Self; 3] = [Self::Auto, Self::English, Self::Ukrainian];
+    pub const ALL: [Self; 4] = [Self::Auto, Self::English, Self::Ukrainian, Self::BrazilianPortuguese];
 
     /// The codes a preference can be given as, for messages ("auto, en or uk").
     pub fn codes() -> String {
@@ -36,6 +38,7 @@ impl Preference {
             Self::Auto => "auto",
             Self::English => "en",
             Self::Ukrainian => "uk",
+            Self::BrazilianPortuguese => "pt-BR",
         }
     }
 
@@ -44,6 +47,7 @@ impl Preference {
             Self::Auto => t("Auto (system language)"),
             Self::English => "English",
             Self::Ukrainian => "Українська",
+            Self::BrazilianPortuguese => "Português (Brasil)",
         }
     }
 
@@ -60,6 +64,7 @@ impl Preference {
         match self {
             Self::English => "en",
             Self::Ukrainian => "uk",
+            Self::BrazilianPortuguese => "pt-BR",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -69,18 +74,33 @@ pub struct Language {
     pub code: &'static str,
     pub name: &'static str,
     pub source: &'static str,
+    /// Index of the `@plural` form for an integer count.
+    pub plural: fn(u64) -> usize,
+    /// Number of `|`-separated forms every `@plural` row must carry.
+    pub plural_forms: usize,
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 2] = [
-    Language { code: "en", name: "English", source: "", catalog: OnceLock::new() },
-    Language { code: "uk", name: "Українська", source: include_str!("uk.tsv"), catalog: OnceLock::new() },
+pub static LANGUAGES: [Language; 3] = [
+    Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    Language {
+        code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
+    },
+    Language {
+        code: "pt-BR",
+        name: "Português (Brasil)",
+        source: include_str!("pt_br.tsv"),
+        plural: plural_pt,
+        plural_forms: 2,
+        catalog: OnceLock::new(),
+    },
 ];
 
-/// BCP 47 and POSIX locale tags, including `uk-UA` and `uk_UA.UTF-8`.
+/// BCP 47 and POSIX locale tags, including `uk-UA`, `uk_UA.UTF-8` and `pt_BR.UTF-8`.
+/// A catalog is chosen by the tag's primary language, so any `pt-*` tag selects `pt-BR`.
 pub fn locale_language(tag: &str) -> Option<&'static str> {
     let primary = tag.trim().split(['-', '_', '.', '@']).next()?;
-    LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(primary)).map(|l| l.code)
+    LANGUAGES.iter().find(|l| l.code.split('-').next().is_some_and(|p| p.eq_ignore_ascii_case(primary))).map(|l| l.code)
 }
 
 thread_local! {
@@ -170,10 +190,20 @@ pub fn plural_uk(n: u64) -> usize {
     }
 }
 
+/// Portuguese integer plurals (CLDR `pt`): one (0, 1), other (2 and up).
+pub fn plural_pt(n: u64) -> usize {
+    usize::from(n > 1)
+}
+
+fn plural_en(n: u64) -> usize {
+    usize::from(n != 1)
+}
+
 pub fn count(n: u64, one: &str, other: &str) -> String {
     let language = CURRENT.get();
     let source = catalog(language).and_then(|c| c.get(&("@plural", one))).copied();
-    let form = source.and_then(|s| s.split('|').nth(plural_uk(n))).unwrap_or(if n == 1 { one } else { other });
+    let plural = LANGUAGES.iter().find(|l| l.code == language).map_or(plural_en as fn(u64) -> usize, |l| l.plural);
+    let form = source.and_then(|s| s.split('|').nth(plural(n))).unwrap_or(if n == 1 { one } else { other });
     format(form, &[("n", n.to_string())])
 }
 
