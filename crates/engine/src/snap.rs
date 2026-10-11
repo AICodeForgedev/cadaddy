@@ -219,6 +219,7 @@ pub(crate) fn gather(
             match &e.kind {
                 EntityKind::Text(t) => cands.push((mode::INS, t.justify_point())),
                 EntityKind::MText(t) => cands.push((mode::INS, t.insert.xy())),
+                EntityKind::Tolerance(t) => cands.push((mode::INS, t.insert.xy())),
                 EntityKind::Insert(i) => {
                     cands.push((mode::INS, i.insert.xy()));
                     cands.extend(i.attribs.iter().filter(|a| !a.invisible).map(|a| (mode::INS, a.text.justify_point())));

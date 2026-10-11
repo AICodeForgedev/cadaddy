@@ -9,6 +9,7 @@
 mod constraint;
 mod entity;
 mod extents;
+mod gdt;
 mod header;
 pub mod library;
 mod plotstyle;
@@ -22,6 +23,7 @@ pub use cadcraft_geom as geom;
 pub use constraint::*;
 pub use entity::*;
 pub use extents::{MAX_BLOCK_DEPTH, entity_bounds};
+pub use gdt::*;
 pub use header::{HVal, Header};
 pub use plotstyle::*;
 pub use store::EntityStore;

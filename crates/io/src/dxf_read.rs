@@ -442,6 +442,16 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         }
         // The file path comes from the IMAGEDEF object (`dxf_image::resolve`).
         "IMAGE" => EntityKind::Image(crate::dxf_image::read_entity(tags)),
+        "TOLERANCE" => {
+            let dir = t.p(11);
+            let dir = if dir.xy().is_finite() && dir.xy().len() > 1e-12 { dir } else { Vec3::new(1.0, 0.0, 0.0) };
+            EntityKind::Tolerance(Tolerance {
+                insert: t.p(10),
+                dir,
+                style: t.s(3).unwrap_or_else(|| "Standard".into()),
+                text: t.s(1).unwrap_or_default().chars().take(MAX_FRAME_CHARS).collect(),
+            })
+        }
         other => EntityKind::Unknown(Unknown {
             dxf_type: other.to_string(),
             tags: tags.iter().map(|tg| RawTag { code: tg.code, value: tg.str() }).collect(),

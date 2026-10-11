@@ -1439,6 +1439,10 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
             i.v.z = 0.0;
         }
         EntityKind::Table(t) => z(&mut t.insert),
+        EntityKind::Tolerance(t) => {
+            z(&mut t.insert);
+            t.dir.z = 0.0;
+        }
         EntityKind::Spline(_) | EntityKind::Viewport(_) | EntityKind::Wipeout(_) | EntityKind::Unknown(_) => {}
     }
 }

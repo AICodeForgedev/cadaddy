@@ -705,6 +705,7 @@ pub enum EntityKind {
     Image(Image),
     Wipeout(Wipeout),
     Table(Table),
+    Tolerance(crate::Tolerance),
     Unknown(Unknown),
 }
 
@@ -755,6 +756,7 @@ impl EntityKind {
             EntityKind::Image(_) => "Raster Image",
             EntityKind::Wipeout(_) => "Wipeout",
             EntityKind::Table(_) => "Table",
+            EntityKind::Tolerance(_) => "Tolerance",
             EntityKind::Unknown(_) => "Proxy",
         }
     }
@@ -786,6 +788,7 @@ impl EntityKind {
             EntityKind::Image(_) => "IMAGE",
             EntityKind::Wipeout(_) => "WIPEOUT",
             EntityKind::Table(_) => "ACAD_TABLE",
+            EntityKind::Tolerance(_) => "TOLERANCE",
             EntityKind::Unknown(u) => u.dxf_type.as_str(),
         }
     }
@@ -859,6 +862,7 @@ impl EntityKind {
                 .collect(),
             EntityKind::Image(i) => vec![Prim::Point(i.insert.xy())],
             EntityKind::Table(t) => vec![Prim::Point(t.insert.xy())],
+            EntityKind::Tolerance(t) => vec![Prim::Point(t.insert.xy())],
             EntityKind::Unknown(_) => Vec::new(),
         }
     }
@@ -1018,6 +1022,12 @@ impl EntityKind {
                 t.row_heights.iter_mut().for_each(|h| *h *= s);
                 t.text_height *= s;
             }
+            EntityKind::Tolerance(t) => {
+                t3(&mut t.insert);
+                // Like text with MIRRTEXT = 0: a mirrored frame keeps reading left to right.
+                let a = if mirror { t.rotation() } else { t.rotation() + rot };
+                t.dir = Vec2::from_angle(cadcraft_geom::norm_angle(a)).to3(0.0);
+            }
             EntityKind::Unknown(_) => {}
         }
     }
@@ -1082,6 +1092,7 @@ impl EntityKind {
             EntityKind::Image(i) => vec![i.insert.xy()],
             EntityKind::Wipeout(w) => w.boundary.clone(),
             EntityKind::Table(t) => vec![t.insert.xy()],
+            EntityKind::Tolerance(t) => vec![t.insert.xy()],
             EntityKind::Unknown(_) => Vec::new(),
         }
     }

@@ -177,7 +177,11 @@ fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
                 .collect()
         }
         Kind::Dimstyles => {
-            let used = lower(&mut entities(d).filter_map(|e| if let EntityKind::Dimension(dm) = &e.kind { Some(dm.style.clone()) } else { None }));
+            let used = lower(&mut entities(d).filter_map(|e| match &e.kind {
+                EntityKind::Dimension(dm) => Some(dm.style.clone()),
+                EntityKind::Tolerance(t) => Some(t.style.clone()),
+                _ => None,
+            }));
             let cur = d.header.str("DIMSTYLE", "Standard");
             d.dim_styles
                 .iter()

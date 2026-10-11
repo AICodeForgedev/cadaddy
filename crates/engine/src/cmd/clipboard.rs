@@ -211,6 +211,9 @@ impl Used {
             EntityKind::Leader(l) => {
                 self.dim_styles.insert(up(&l.style));
             }
+            EntityKind::Tolerance(t) => {
+                self.dim_styles.insert(up(&t.style));
+            }
             EntityKind::MLeader(m) => {
                 self.mleader_styles.insert(up(&m.style));
                 self.text_styles.extend(m.text.iter().map(|t| up(&t.style)));

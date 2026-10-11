@@ -693,6 +693,7 @@ fn dims_using(d: &cadcraft_doc::Drawing, name: &str) -> Vec<(cadcraft_doc::Space
                 let uses = match &e.kind {
                     EntityKind::Dimension(dm) => dm.style.eq_ignore_ascii_case(name),
                     EntityKind::Leader(l) => l.style.eq_ignore_ascii_case(name),
+                    EntityKind::Tolerance(t) => t.style.eq_ignore_ascii_case(name),
                     _ => false,
                 };
                 if uses {
@@ -723,6 +724,7 @@ fn run_dimstyle_rename(s: &mut Session, p: &Value) -> Result<Value> {
         d.modify_entity(h, |e| match &mut e.kind {
             EntityKind::Dimension(dm) => dm.style = to.clone(),
             EntityKind::Leader(l) => l.style = to.clone(),
+            EntityKind::Tolerance(t) => t.style = to.clone(),
             _ => {}
         })?;
     }

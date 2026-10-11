@@ -17,6 +17,7 @@ pub mod paper;
 mod plotstyle;
 mod point;
 pub mod raster;
+mod tolerance;
 pub mod units;
 mod wide;
 
@@ -27,6 +28,7 @@ use cadcraft_geom::{Bounds2, Mat3, Polyline, Vec2};
 pub use dim::{ArrowGeom, Arrowhead, DimGeometry, DimText, LineRole, arrowhead, dimension_geometry, dimension_geometry_with, format_linear_value};
 pub use fill::triangulate_evenodd;
 pub use paper::{PAPER_SIZES, PaperSize, Sheet, paper_size, sheet};
+pub use tolerance::{gdt_points, tolerance_in};
 
 /// Handle carried by model-space geometry drawn inside a paper-space viewport (it belongs to no
 /// single paper-space entity, so selection highlighting never matches it).
@@ -669,6 +671,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             b.polyline(ctx, rgb, lw, &[o + u, o + v]);
         }
         EntityKind::Table(t) => table(b, ctx, t, rgb, lw),
+        EntityKind::Tolerance(t) => tolerance::draw(b, ctx, e, t, lw, tol),
         EntityKind::Leader(l) => {
             let pts: Vec<Vec2> = l.vertices.iter().map(|v| v.xy()).collect();
             stroke(b, &pts);

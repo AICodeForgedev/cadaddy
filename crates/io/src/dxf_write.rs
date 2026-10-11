@@ -924,6 +924,14 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.p2(14, Vec2::new((q.x - o.x) / sx - 0.5, 0.5 - (q.y - o.y) / sy));
             }
         }
+        EntityKind::Tolerance(t) => {
+            w.s(0, "TOLERANCE");
+            common(w, e, owner, paper, "AcDbFcf");
+            w.s(3, &t.style);
+            w.p(10, t.insert);
+            w.s(1, &t.text);
+            w.p(11, t.dir);
+        }
         // Entity types CADCraft doesn't model aren't written; the save command reports them.
         EntityKind::Unknown(_) => {}
     }
