@@ -328,6 +328,17 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                         i.rotation = x.to_radians();
                     }
                     if let Some(x) = num("scale").filter(|x| *x != 0.0) {
+                        // A new positive scale carries the attached attribute text with it, like SCALE about the insertion point.
+                        if x > 0.0 && i.scale.x > 0.0 {
+                            let m = cadcraft_geom::Mat3::scale_about(i.insert.xy(), x / i.scale.x);
+                            for a in &mut i.attribs {
+                                let mut k = EntityKind::Text(a.text.clone());
+                                k.transform(&m);
+                                if let EntityKind::Text(t) = k {
+                                    a.text = t;
+                                }
+                            }
+                        }
                         i.scale = Vec3::new(x, x, x);
                     }
                 }
