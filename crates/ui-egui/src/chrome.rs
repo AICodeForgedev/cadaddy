@@ -7,6 +7,8 @@ use crate::CadApp;
 use crate::icons::{self, Icon};
 use crate::theme::Tokens;
 
+pub mod annoscale;
+
 const TOOLBAR: &[&[(Icon, &str, &str, Option<&str>)]] = &[
     &[
         (Icon::New, "new", "New Drawing", Some("Cmd+N")),
@@ -361,6 +363,8 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         });
         // MODEL / PAPER (layouts only): toggles MSPACE and PSPACE like AutoCAD's status button.
         let mut coord_right = rx - 8.0;
+        // The annotation scale list (model space).
+        coord_right = annoscale::status(app, ui, coord_right, r.center().y);
         if matches!(app.session.layout_space(), cadcraft_doc::Space::Paper(_)) {
             let model = app.session.state().is_ok_and(|st| st.mspace.is_some());
             let label = if model { "MODEL" } else { "PAPER" };

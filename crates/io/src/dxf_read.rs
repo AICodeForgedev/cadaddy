@@ -1617,6 +1617,8 @@ fn apply_sortents(
 struct Objects {
     /// Dictionary entry handle (upper case) → entry name.
     names: HashMap<String, String>,
+    /// SCALE objects (the annotation scale list), in file order.
+    scales: Vec<cadcraft_doc::AnnoScale>,
     /// XRECORD handle (upper case) → its groups.
     xrecords: HashMap<String, Vec<Tag>>,
     /// TABLESTYLE objects: (handle, groups).
@@ -1639,6 +1641,13 @@ impl Objects {
     fn add(&mut self, kind: &str, tags: &[Tag]) {
         let h = T(tags).s(5).map(|h| h.trim().to_ascii_uppercase()).unwrap_or_default();
         match kind {
+            "SCALE" if self.scales.len() < cadcraft_doc::MAX_SCALES => {
+                if let Some(s) = crate::dxf_ext::read_scale(tags)
+                    && !self.scales.iter().any(|x| x.name.eq_ignore_ascii_case(&s.name))
+                {
+                    self.scales.push(s);
+                }
+            }
             "DICTIONARY" => {
                 let mut name: Option<String> = None;
                 for t in tags {
@@ -1724,6 +1733,16 @@ impl Objects {
             d.constraints = c;
             d.parametric = p;
         }
+        // The annotation scale list (a metric drawing without one gets the metric defaults),
+        // then CADCraft's annotative scaling record.
+        if !self.scales.is_empty() {
+            d.scales = self.scales.clone();
+        } else if d.header.i64("MEASUREMENT", 0) == 1 {
+            d.scales = cadcraft_doc::metric_scales();
+        }
+        if let Some(p) = self.xrecord_text(crate::dxf_ext::ANNOTATION_KEY).and_then(|t| crate::dxf_ext::parse_anno(&t)) {
+            crate::dxf_ext::apply_anno(d, p);
+        }
         // Saved layer states.
         if let Some(states) = self.xrecord_text(crate::dxf_ext::LAYER_STATES_KEY).and_then(|t| crate::dxf_ext::parse_layer_states(&t)) {
             d.layer_states = states;
@@ -1746,7 +1765,7 @@ impl Objects {
                 landing_gap: num(42, def.landing_gap, 0.0),
                 dogleg: num(43, def.dogleg, 0.0),
                 text_style: text_style.unwrap_or(def.text_style),
-                annotative: false,
+                annotative: t.i(296).unwrap_or(0) != 0,
             };
             match d.mleader_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(name)) {
                 Some(x) => *x = st,
