@@ -430,6 +430,7 @@
 	Loaded linetypes	Завантажені типи ліній
 	Lock	Заблокувати
 	Lock Layer	Заблокувати шар
+	Lock viewport	Заблокувати видовий екран
 	Lock/Unlock	Заблокувати/розблокувати
 	Loft	Тіло за перерізами
 	MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.	MIT OR Apache-2.0. Не пов'язано з Autodesk, Inc.
@@ -965,6 +966,7 @@
 	Unisolate Layer	Скасувати ізоляцію шарів
 	Units...	Одиниці...
 	Unlock Layer	Розблокувати шар
+	Unlock viewport	Розблокувати видовий екран
 	Unmerge Cells	Розділити комірки
 	Unsaved Layer State	Незбережений стан шарів
 	Up	Угору
@@ -992,6 +994,8 @@
 	Viewport	Видовий екран
 	Viewport Layer Freeze	Заморозити шар у видовому екрані
 	Viewport Properties	Властивості видового екрана
+	Viewport is locked	Видовий екран заблоковано
+	Viewport scale	Масштаб видового екрана
 	Viewport {id}	Видовий екран {id}
 	Viewports	Видові екрани
 	W	Зх

@@ -33,6 +33,7 @@ pub mod plotstyles;
 pub mod quick;
 pub mod theme;
 pub mod viewcube;
+pub mod vpscale;
 
 pub mod exchange;
 

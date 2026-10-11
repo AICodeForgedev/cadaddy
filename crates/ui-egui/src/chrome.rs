@@ -373,6 +373,8 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
                 app.canvas.list = None;
             }
             coord_right = br.left() - 10.0;
+            // Scale and lock of the active or selected viewport.
+            coord_right = crate::vpscale::status(app, ui, coord_right + 4.0, r.center().y) - 10.0;
         }
         // A transient message occupies the same bounded readout slot as coordinates.
         // Ellipsis and a tooltip keep either value readable without covering layout tabs.

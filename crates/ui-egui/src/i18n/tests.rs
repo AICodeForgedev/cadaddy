@@ -72,6 +72,7 @@ fn every_marked_ui_literal_has_a_translation() {
         include_str!("../palettes.rs"),
         include_str!("../parametric.rs"),
         include_str!("../quick.rs"),
+        include_str!("../vpscale.rs"),
     ];
     let mut missing = BTreeSet::new();
     for source in sources {
