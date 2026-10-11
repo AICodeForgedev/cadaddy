@@ -9,6 +9,7 @@ pub mod clipboard;
 pub mod constraints;
 mod draw;
 mod draw2;
+mod draworder;
 mod edit;
 mod exchange;
 pub mod file;
@@ -172,6 +173,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(hatch::specs());
         v.extend(blocks::specs());
         v.extend(modify::specs());
+        v.extend(draworder::specs());
         v.extend(array::specs());
         v.extend(modify2::specs());
         v.extend(groups::specs());

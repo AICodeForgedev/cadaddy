@@ -35,6 +35,7 @@
 	Align Text	Вирівняти текст
 	Aligned	Паралельний
 	All	Усі
+	All Annotation Objects	Усі об'єкти анотацій
 	All Used Layers	Усі використані шари
 	All files	Усі файли
 	Angle	Кут
@@ -79,6 +80,8 @@
 	Box	Паралелепіпед
 	Break	Розірвати
 	Break At Point	Розірвати в точці
+	Bring Above Objects	Над об'єктами
+	Bring Annotations to Front	Анотації на передній план
 	Bring to Front	На передній план
 	ByBlock	За блоком
 	ByColor	За кольором
@@ -173,6 +176,7 @@
 	Diameter	Діаметр
 	Dim style	Розмірний стиль
 	Dimension	Розміри
+	Dimension Objects Only	Лише розміри
 	Dimension Space	Відстань між розмірами
 	Dimension Style Override	Перевизначення розмірного стилю
 	Dimension Style...	Розмірний стиль...
@@ -388,6 +392,7 @@
 	Layout	Аркуш
 	Layout list	Список аркушів
 	Leader	Виноска
+	Leaders Only	Лише виноски
 	Left	Ліворуч
 	Length	Довжина
 	Length X	Довжина X
@@ -542,6 +547,9 @@
 	New STB	Нова STB
 	New style	Новий стиль
 	Reset Panel Layout	Скинути розташування панелей
+	Send Hatches to Back	Штрихування на задній план
+	Send Under Objects	Під об'єкти
+	Text Objects Only	Лише текстові об'єкти
 	Use for this layout	Використати для цього аркуша
 	Display plot styles	Показувати стилі друку
 	No plot style tables.	Немає таблиць стилів друку.

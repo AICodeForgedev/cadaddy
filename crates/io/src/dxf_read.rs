@@ -1499,6 +1499,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
             d.model.push(e);
         }
     }
+    apply_sortents(&mut d, &objs.sortents, &rx.brs, &paper_block_for, &first_layout);
     objs.apply(&mut d, &rx);
     crate::dxf_image::resolve(&secs, &mut d);
     // Keep handles unique against the header's seed.
@@ -1510,6 +1511,57 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         d.layers.insert(0, Layer::default());
     }
     Ok(d)
+}
+
+/// A SORTENTSTABLE (DXF Reference, OBJECTS section): after its AcDbSortentsTable marker, the
+/// owning block record (330), then pairs of an entity handle (331) and the sort handle (5) it is
+/// drawn by.
+fn sortents_table(tags: &[Tag]) -> Option<(String, HashMap<Handle, u64>)> {
+    let start = tags.iter().position(|t| t.code == 100 && t.str() == "AcDbSortentsTable")?;
+    let tail = tags.get(start + 1..)?;
+    let owner = tail.iter().find(|t| t.code == 330)?.str().trim().to_ascii_uppercase();
+    let mut map = HashMap::new();
+    let mut ent: Option<Handle> = None;
+    for t in tail {
+        match t.code {
+            331 => ent = Handle::parse_hex(&t.str()),
+            5 => {
+                if let (Some(e), Some(k)) = (ent.take(), Handle::parse_hex(&t.str()))
+                    && map.len() < MAX_OBJECTS
+                {
+                    map.insert(e, k.0);
+                }
+            }
+            _ => {}
+        }
+    }
+    (!map.is_empty()).then_some((owner, map))
+}
+
+/// Draw each space with a SORTENTSTABLE in sort-handle order: an entity listed in the table by
+/// its sort handle, any other by its own handle.
+fn apply_sortents(
+    d: &mut Drawing,
+    tables: &[(String, HashMap<Handle, u64>)],
+    brs: &HashMap<String, String>,
+    paper_for: &HashMap<String, String>,
+    first_layout: &str,
+) {
+    for (owner, map) in tables {
+        let Some(name) = brs.get(owner) else { continue };
+        let up = name.to_ascii_uppercase();
+        let key = |e: &Entity| map.get(&e.handle).copied().unwrap_or(e.handle.0);
+        if up == "*MODEL_SPACE" {
+            d.model.sort_by_key(key);
+        } else if up.starts_with("*PAPER_SPACE") {
+            let lname = paper_for.get(&up).map(String::as_str).unwrap_or(first_layout);
+            if let Some(l) = d.layouts.iter_mut().find(|l| l.name == lname) {
+                l.entities.sort_by_key(key);
+            }
+        } else if let Some(b) = d.blocks.get_mut(name.as_str()) {
+            std::sync::Arc::make_mut(b).entities.sort_by_key(key);
+        }
+    }
 }
 
 /// Non-graphical objects applied once every entity is placed.
@@ -1529,6 +1581,8 @@ struct Objects {
     groups: Vec<(String, Vec<Tag>)>,
     /// Saved paper-space views of layouts: (layout name, view).
     layout_views: Vec<(String, (Vec2, f64))>,
+    /// SORTENTSTABLE objects: (owning block record handle, entity handle → sort handle).
+    sortents: Vec<(String, HashMap<Handle, u64>)>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -1560,6 +1614,11 @@ impl Objects {
             "DIMASSOC" if self.dimassocs.len() < MAX_OBJECTS => self.dimassocs.push(tags.to_vec()),
             "MLEADERSTYLE" if self.mleader_styles.len() < MAX_OBJECTS => self.mleader_styles.push((h, tags.to_vec())),
             "GROUP" if self.groups.len() < MAX_OBJECTS => self.groups.push((h, tags.to_vec())),
+            "SORTENTSTABLE" if self.sortents.len() < MAX_OBJECTS => {
+                if let Some(t) = sortents_table(tags) {
+                    self.sortents.push(t);
+                }
+            }
             "LAYOUT" if self.layout_views.len() < MAX_OBJECTS => {
                 let start = tags.iter().position(|x| x.code == 100 && x.str() == "AcDbLayout").unwrap_or(0);
                 if let (Some(name), Some(view)) = (T(tags.get(start..).unwrap_or(&[])).s(1), layout_view(tags)) {

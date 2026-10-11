@@ -189,6 +189,70 @@ impl EntityStore {
             None => false,
         }
     }
+    /// Move `h` directly above (`above`) or under `anchor` in the draw order. False (and nothing
+    /// moves) when either is absent or they are the same object.
+    pub fn move_next_to(&mut self, h: Handle, anchor: Handle, above: bool) -> bool {
+        if h == anchor || !self.contains(anchor) {
+            return false;
+        }
+        let Some(e) = self.remove(h) else { return false };
+        let at = self.chunk_id(anchor).and_then(|id| Some((id, self.chunk_pos(id)?)));
+        let Some((id, pos)) = at else {
+            // Unreachable in practice (the anchor was present); keep the object on top.
+            self.push(Arc::unwrap_or_clone(e));
+            return false;
+        };
+        let Some(c) = self.chunks.get_mut(pos) else {
+            // Unreachable in practice too; never lose the object.
+            self.push(Arc::unwrap_or_clone(e));
+            return false;
+        };
+        let chunk = Arc::make_mut(c);
+        let i = chunk.items.iter().position(|x| x.handle == anchor).unwrap_or(chunk.items.len());
+        let i = if above { (i + 1).min(chunk.items.len()) } else { i };
+        chunk.items.insert(i, e);
+        let split = chunk.items.len() > 2 * CHUNK_MAX;
+        self.set_index(h, Some(id));
+        self.len += 1;
+        if split {
+            self.split_chunk(pos);
+        }
+        true
+    }
+    /// Split an oversized chunk in two, keeping the order.
+    fn split_chunk(&mut self, pos: usize) {
+        let mut fresh = self.new_chunk();
+        let Some(c) = self.chunks.get_mut(pos) else { return };
+        let chunk = Arc::make_mut(c);
+        let tail = chunk.items.split_off(chunk.items.len() / 2);
+        let new = Arc::make_mut(&mut fresh);
+        new.items = tail;
+        let (id, moved): (u32, Vec<Handle>) = (new.id, new.items.iter().map(|e| e.handle).collect());
+        self.chunks.insert(pos + 1, fresh);
+        for h in moved {
+            self.set_index(h, Some(id));
+        }
+    }
+    /// Reorder the whole store by a key (stable: equal keys keep their order).
+    pub fn sort_by_key<K: Ord>(&mut self, mut key: impl FnMut(&Entity) -> K) {
+        let mut items: Vec<Arc<Entity>> = self.iter().cloned().collect();
+        items.sort_by_cached_key(|e| key(e));
+        *self = EntityStore::default();
+        for e in items {
+            let needs_new = self.chunks.last().is_none_or(|c| c.items.len() >= CHUNK_MAX);
+            if needs_new {
+                let c = self.new_chunk();
+                self.chunks.push(c);
+            }
+            let h = e.handle;
+            let Some(last) = self.chunks.last_mut() else { return };
+            let chunk = Arc::make_mut(last);
+            chunk.items.push(e);
+            let id = chunk.id;
+            self.set_index(h, Some(id));
+            self.len += 1;
+        }
+    }
     /// True when `other` shares every chunk with `self` (same draw order, same entities). Holding
     /// a clone of a store makes this exact: any edit to the original copies the touched chunk.
     pub fn same_as(&self, other: &EntityStore) -> bool {
@@ -255,5 +319,49 @@ mod tests {
         s.send_to_back(Handle(5));
         assert_eq!(s.iter().next().map(|e| e.handle), Some(Handle(5)));
         assert_eq!(s.len(), 5);
+    }
+
+    fn order(s: &EntityStore) -> Vec<u64> {
+        s.iter().map(|e| e.handle.0).collect()
+    }
+
+    #[test]
+    fn move_next_to_and_sort() {
+        let mut s = EntityStore::new();
+        for h in 1..=5 {
+            s.push(ent(h));
+        }
+        assert!(s.move_next_to(Handle(1), Handle(3), true));
+        assert_eq!(order(&s), [2, 3, 1, 4, 5]);
+        assert!(s.move_next_to(Handle(5), Handle(2), false));
+        assert_eq!(order(&s), [5, 2, 3, 1, 4]);
+        assert!(!s.move_next_to(Handle(5), Handle(5), true));
+        assert!(!s.move_next_to(Handle(5), Handle(99), true));
+        assert!(!s.move_next_to(Handle(99), Handle(5), true));
+        assert_eq!(order(&s), [5, 2, 3, 1, 4]);
+        assert_eq!(s.len(), 5);
+        s.sort_by_key(|e| e.handle.0 % 2);
+        assert_eq!(order(&s), [2, 4, 5, 3, 1]);
+        assert!(s.get(Handle(3)).is_some());
+    }
+
+    #[test]
+    fn move_next_to_splits_big_chunks() {
+        let mut s = EntityStore::new();
+        for h in 1..=3000 {
+            s.push(ent(h));
+        }
+        // Pile everything into the first chunk, under handle 1.
+        for h in 1500..=3000 {
+            assert!(s.move_next_to(Handle(h), Handle(1), true));
+        }
+        assert_eq!(s.len(), 3000);
+        assert!(s.chunks.iter().all(|c| c.items.len() <= 2 * CHUNK_MAX));
+        let o = order(&s);
+        assert_eq!(o.first(), Some(&1));
+        assert_eq!(o.get(1), Some(&3000));
+        for h in 1..=3000 {
+            assert_eq!(s.get(Handle(h)).map(|e| e.handle.0), Some(h));
+        }
     }
 }

@@ -1,5 +1,5 @@
 //! Modify commands: ERASE, MOVE, COPY, ROTATE, SCALE, MIRROR, OFFSET, TRIM, EXTEND, FILLET,
-//! CHAMFER, EXPLODE, STRETCH, DRAWORDER, BREAK, JOIN (arrays: `array`).
+//! CHAMFER, EXPLODE, STRETCH, BREAK, JOIN (arrays: `array`; draw order: `draworder`).
 
 use cadcraft_doc::{Entity, EntityKind, Handle, Prim};
 use cadcraft_geom::{
@@ -8,7 +8,7 @@ use cadcraft_geom::{
 use serde_json::{Value, json};
 
 use super::helpers::*;
-use super::machines::{SelOutcome, SelectPhase, SelectRun, number};
+use super::machines::{SelOutcome, SelectPhase, number};
 use super::trimextend::{self, TrimM};
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
@@ -82,14 +82,6 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["x"])
             .params("{handles?}")
             .interactive(|_| Ok(Box::new(SelectThen::new(Op::Explode)))),
-        CommandSpec::new("draworder.front", "Bring to Front", run_front)
-            .menu(&["Tools", "Draw Order", "Bring to Front"])
-            .params("{handles?}")
-            .interactive(|_| Ok(Box::new(SelectRun::new("draworder.front", "DRAWORDER")))),
-        CommandSpec::new("draworder.back", "Send to Back", run_back)
-            .menu(&["Tools", "Draw Order", "Send to Back"])
-            .params("{handles?}")
-            .interactive(|_| Ok(Box::new(SelectRun::new("draworder.back", "DRAWORDER")))),
         CommandSpec::new("break", "Break", run_break)
             .menu(&["Modify", "Break"])
             .alias(&["br"])
@@ -1288,30 +1280,6 @@ fn run_explode(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let r = explode(s, &hs)?;
     Ok(json!({ "handles": r.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
-}
-
-fn run_front(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = targets(s, p)?;
-    let space = s.space();
-    let d = s.doc_mut()?;
-    if let Some(st) = d.space_mut(&space) {
-        for h in hs {
-            st.bring_to_front(h);
-        }
-    }
-    ok()
-}
-
-fn run_back(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = targets(s, p)?;
-    let space = s.space();
-    let d = s.doc_mut()?;
-    if let Some(st) = d.space_mut(&space) {
-        for h in hs.into_iter().rev() {
-            st.send_to_back(h);
-        }
-    }
-    ok()
 }
 
 /// Break `h` between two points (or at one point when p1 == p2).
