@@ -1218,6 +1218,15 @@ fn header(tags: &[Tag], d: &mut Drawing) {
                 vals.push(v);
                 i += 1;
             }
+            // Legacy files keep spacing in HEADER; modern *ACTIVE VPORT entries override it.
+            if matches!(name.as_str(), "SNAPUNIT" | "GRIDUNIT") {
+                let (Some(x), Some(y)) = (vals.iter().find(|t| t.code == 10), vals.iter().find(|t| t.code == 20)) else { continue };
+                let p = Vec2::new(x.f64(), y.f64());
+                if p.is_finite() && if name == "GRIDUNIT" { p.x >= 0.0 && p.y >= 0.0 } else { p.x > 0.0 && p.y > 0.0 } {
+                    d.header.set(&name, HVal::Point(p.to3(0.0)));
+                }
+                continue;
+            }
             let hv = match vals.as_slice() {
                 [x, y, z] if x.code == 10 => HVal::Point(Vec3::new(x.f64(), y.f64(), z.f64())),
                 [x, y] if x.code == 10 => HVal::Point(Vec3::new(x.f64(), y.f64(), 0.0)),
@@ -1374,10 +1383,18 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     None => d.text_styles.push(st),
                 }
             }
-            // The first *ACTIVE viewport holds the snap grid's origin and rotation (degrees).
+            // The first *ACTIVE viewport holds the current snap/grid settings.
             "VPORT" if !active_vport && t.s(2).is_some_and(|n| n.trim().eq_ignore_ascii_case("*ACTIVE")) => {
                 active_vport = true;
                 vport_record(d, &t);
+                for (name, code) in [("SNAPUNIT", 14), ("GRIDUNIT", 15)] {
+                    if let (Some(x), Some(y)) = (t.f(code), t.f(code + 10)) {
+                        let p = Vec2::new(x, y);
+                        if p.is_finite() && if name == "GRIDUNIT" { p.x >= 0.0 && p.y >= 0.0 } else { p.x > 0.0 && p.y > 0.0 } {
+                            d.header.set(name, HVal::Point(p.to3(0.0)));
+                        }
+                    }
+                }
                 if let (Some(x), Some(y)) = (t.f(13), t.f(23))
                     && x.is_finite()
                     && y.is_finite()

@@ -116,9 +116,7 @@ pub fn reset(s: &mut Session) {
     st.polaraddang = d.polaraddang;
     st.orthomode = d.orthomode;
     st.snapmode = d.snapmode;
-    st.snapunit = d.snapunit;
     st.gridmode = d.gridmode;
-    st.gridunit = d.gridunit;
     st.gridmajor = d.gridmajor;
     st.dynmode = d.dynmode;
     st.dynpi_cartesian = d.dynpi_cartesian;

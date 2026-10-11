@@ -181,13 +181,14 @@ fn adaptive(unit: f64, scale: f64, min_px: f64) -> f64 {
 
 fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
     let t = Tokens::get();
-    let s = &app.session.settings;
+    let s = app.session.drafting_settings();
     let wb = xf.world_bounds();
     if s.gridmode && s.isodraft {
         draw_iso_grid(app, p, xf);
     } else if s.gridmode {
         let major_n = f64::from(s.gridmajor.max(1));
-        let minor = adaptive(s.gridunit.x, xf.scale, 8.0);
+        let unit = if s.gridunit.x == 0.0 { s.snapunit.x } else { s.gridunit.x };
+        let minor = adaptive(unit, xf.scale, 8.0);
         let major = minor * major_n;
         let mut lines = Vec::new();
         let x0 = (wb.min.x / minor).floor() as i64;
@@ -231,7 +232,7 @@ fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
 fn draw_iso_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
     use cadcraft_engine::snap::iso;
     let t = Tokens::get();
-    let s = &app.session.settings;
+    let s = app.session.drafting_settings();
     let mut d = s.gridunit.y.max(1e-12);
     for _ in 0..40 {
         if d * 0.866 * xf.scale >= 8.0 {

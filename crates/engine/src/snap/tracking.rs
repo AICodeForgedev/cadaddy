@@ -749,7 +749,8 @@ impl crate::Session {
     /// acquires it for tracking), then grid snap, then tracking paths (polar, object snap
     /// tracking, Extension, Parallel, Apparent Intersection), then ortho.
     pub fn snap_cursor(&mut self, raw: Vec2, q: &CursorQuery) -> CursorSnap {
-        let s = self.settings.clone();
+        // Snap and grid spacing are the drawing's (SNAPUNIT/GRIDUNIT live in its header).
+        let s = self.drafting_settings();
         let angbase = self.angle_settings().angbase;
         let Ok(st) = self.state() else { return CursorSnap { point: raw, ..Default::default() } };
         let (doc, space) = (st.doc.clone(), st.edit_space());
@@ -772,7 +773,7 @@ impl crate::Session {
         let mut p = raw;
         if s.snapmode && !s.polarsnap {
             let (origin, angle) = super::grid_frame(&doc);
-            p = super::grid_snap(p, s.snapunit, origin, angle);
+            p = super::grid_snap(p, doc.header.snap_unit(), origin, angle);
         }
         if let Some(mut t) = self.tracking.track(&doc, &space, p, q.aperture, q.tol, &cfg, q.base) {
             // PolarSnap (SNAPTYPE 1): steps of POLARDIST, or of the snap X spacing when it is 0.

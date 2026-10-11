@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use cadcraft_geom::Vec3;
+use cadcraft_geom::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
 /// A header variable value.
@@ -76,6 +76,20 @@ impl Header {
             _ => None,
         }
     }
+    /// Drawing snap spacing; malformed or missing values use the drafting default.
+    pub fn snap_unit(&self) -> Vec2 {
+        self.spacing("SNAPUNIT", false)
+    }
+    /// Drawing grid spacing. A zero component follows the corresponding snap spacing.
+    pub fn grid_unit(&self) -> Vec2 {
+        self.spacing("GRIDUNIT", true)
+    }
+    fn spacing(&self, name: &str, allow_zero: bool) -> Vec2 {
+        self.point(name)
+            .map(|p| p.xy())
+            .filter(|p| p.is_finite() && if allow_zero { p.x >= 0.0 && p.y >= 0.0 } else { p.x > 0.0 && p.y > 0.0 })
+            .unwrap_or(Vec2::new(0.5, 0.5))
+    }
     pub fn set_f64(&mut self, name: &str, v: f64) {
         self.set(name, HVal::Real(v));
     }
@@ -118,6 +132,8 @@ impl Header {
         // Snap grid origin and rotation (SNAPANG in degrees).
         h.set("SNAPBASE", HVal::Point(Vec3::ZERO));
         h.set_f64("SNAPANG", 0.0);
+        h.set("SNAPUNIT", HVal::Point(Vec3::new(0.5, 0.5, 0.0)));
+        h.set("GRIDUNIT", HVal::Point(Vec3::new(0.5, 0.5, 0.0)));
         // Annotation scale of model space; annotative objects of other scales show (1) or not.
         h.set_str("CANNOSCALE", "1:1");
         h.set_i64("ANNOALLVISIBLE", 1);

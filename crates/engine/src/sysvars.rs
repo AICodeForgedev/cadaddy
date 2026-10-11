@@ -75,8 +75,11 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "SNAPMODE" => json!(i32::from(st.snapmode)),
         "SNAPSTYL" => json!(i32::from(st.isodraft)),
         "SNAPISOPAIR" => json!(st.isoplane.index()),
-        "SNAPUNIT" => json!([st.snapunit.x, st.snapunit.y]),
-        "GRIDUNIT" => json!([st.gridunit.x, st.gridunit.y]),
+        "SNAPUNIT" | "GRIDUNIT" => {
+            let settings = s.drafting_settings();
+            let unit = if n == "SNAPUNIT" { settings.snapunit } else { settings.gridunit };
+            json!([unit.x, unit.y])
+        }
         "GRIDMAJOR" => json!(st.gridmajor),
         "DYNDIGRIP" => json!(st.dyndigrip),
         "DYNDIVIS" => json!(st.dyndivis),
@@ -221,8 +224,12 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "SNAPMODE" => st.snapmode = as_bool(v).ok_or_else(bad)?,
         "SNAPSTYL" => st.isodraft = as_i(v).filter(|b| (0..=1).contains(b)).ok_or_else(bad)? == 1,
         "SNAPISOPAIR" => st.isoplane = as_i(v).and_then(crate::snap::iso::IsoPlane::from_index).ok_or_else(bad)?,
-        "SNAPUNIT" => st.snapunit = as_pt(v).filter(|p| p.x > 0.0 && p.y > 0.0).ok_or_else(bad)?,
-        "GRIDUNIT" => st.gridunit = as_pt(v).filter(|p| p.x > 0.0 && p.y > 0.0).ok_or_else(bad)?,
+        "SNAPUNIT" | "GRIDUNIT" => {
+            let unit = as_pt(v)
+                .filter(|p| p.is_finite() && if n == "GRIDUNIT" { p.x >= 0.0 && p.y >= 0.0 } else { p.x > 0.0 && p.y > 0.0 })
+                .ok_or_else(bad)?;
+            s.doc_mut()?.header.set(&n, cadcraft_doc::HVal::Point(unit.to3(0.0)));
+        }
         "GRIDMAJOR" => st.gridmajor = as_f64(v).ok_or_else(bad)?.clamp(1.0, 100.0) as u32,
         "DYNDIGRIP" => st.dyndigrip = as_i(v).filter(|i| (0..=31).contains(i)).and_then(|i| u32::try_from(i).ok()).ok_or_else(bad)?,
         "DYNDIVIS" => st.dyndivis = as_i(v).filter(|i| (0..=2).contains(i)).and_then(|i| u8::try_from(i).ok()).ok_or_else(bad)?,
@@ -329,7 +336,7 @@ pub fn list(s: &Session) -> Value {
     }
     if let Ok(d) = s.doc() {
         for (k, v) in &d.header.vars {
-            if k == "ANGBASE" {
+            if matches!(k.as_str(), "ANGBASE" | "SNAPUNIT" | "GRIDUNIT") {
                 m.insert(k.clone(), get(s, k).unwrap_or(Value::Null));
             } else if !k.starts_with("CADCRAFT_") {
                 m.insert(k.clone(), serde_json::to_value(v).unwrap_or(Value::Null));
