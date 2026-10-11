@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (Ukrainian catalog landed, #36: first string catalog) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (right-to-left drawing text and Arabic-script shaping, #287) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How far CADCraft's interface and drawing text are from AutoCAD's languages. Summarised in
 [ROADMAP.md](../ROADMAP.md#languages); work items in [gaps.md](gaps.md#localization).
@@ -31,9 +31,11 @@ shaping and right-to-left text through TrueType, vertical SHX text styles.
   and `crates/ui-egui` (grep, 2026-10-10).
 - **Drawing text:** TrueType/OpenType/`.ttc` through `skrifa` with per-character font fallback
   and FONTALT, so CJK characters render (#173). DXF text is written with `\U+` escapes so
-  non-ASCII survives in R2000 files (#169). Glyphs are placed one per code point: there is **no
-  shaping** (Arabic joining, Devanagari conjuncts), **no bidi** (right-to-left order) and **no
-  vertical text**. SHX fonts are not read; our stroke font stands in.
+  non-ASCII survives in R2000 files (#169). Lines with right-to-left text get the Unicode
+  Bidirectional Algorithm and OpenType shaping with `harfrust` (Arabic, Persian and Urdu joining,
+  lam-alef, ZWNJ, marks; Hebrew), in TEXT and MTEXT including wrapping (#287). Left-to-right lines
+  are still placed one glyph per code point: **no shaping** for Devanagari and other Indic
+  scripts, and **no vertical text**. SHX fonts are not read; our stroke font stands in.
 - **Text input:** egui/winit IME. Several upstream IME fixes are queued as PRs (#110–#119:
   macOS Korean, emoji picker, Windows caret placement, X11 and Wayland), so CJK input is not yet
   reliable on every platform.
@@ -52,7 +54,7 @@ plus native review by a human; extending the catalog to the remaining English-on
 | Simplified Chinese | zh-Hans | 0 (0%) | 0% | CJK glyphs render via fallback; IME fixes pending (#110–#119); no vertical text | no | none | 8–12 h (includes extending the catalog, 4–6 h) |
 | Spanish | es | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
 | Hindi | hi | 0 (0%) | 0% | Devanagari: no shaping | no | none | 3–5 h + 15–25 h shaping (shared with Arabic) |
-| Arabic | ar | 0 (0%) | 0% | No shaping, no RTL layout or bidi text | no | none | 3–5 h + shaping + 15–25 h RTL UI |
+| Arabic | ar | 0 (0%) | 0% | Drawing text shaped and laid out right to left (#287); the UI is not mirrored | no | none | 3–5 h + 15–25 h RTL UI |
 | French | fr | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
 | Portuguese | pt | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
 | Indonesian | id | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
@@ -74,5 +76,6 @@ each language, which needs humans. Translations parallelise fully once the catal
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Right-to-left drawing text: bidi and Arabic-script shaping in TEXT and MTEXT (#287) |
 | 2026-10-10 | minor | Ukrainian catalog landed on main (#36): catalog infrastructure exists, Ukrainian partial; total hours 70–110 → 60–100 |
 | 2026-10-10 | major | First localization measurement against AutoCAD 2027 for Mac's bundle localizations |

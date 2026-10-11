@@ -152,6 +152,26 @@ run) an environment variable, steer this:
 
 `.` clears either one.
 
+**Your own fonts.** Any `.ttf`, `.otf` or `.ttc` font works: install it in the system font folder
+(Windows `C:\Windows\Fonts` or per-user fonts, macOS `/Library/Fonts` or `~/Library/Fonts`,
+Linux and the BSDs `/usr/share/fonts`, `/usr/local/share/fonts`, `~/.local/share/fonts` or
+`~/.fonts`) and name it in a text style (`STYLE`, or `style {"name":"FA","font":"Vazirmatn"}`)
+by file name (`Vazirmatn-Regular.ttf`) or family name (`Vazirmatn`), or inline in MTEXT with
+`\fVazirmatn;`. Restart CADCraft after installing a font: the font folders are scanned once.
+
+**Right-to-left text (Persian, Arabic, Urdu, Hebrew).** TEXT and MTEXT lines are laid out with the
+Unicode Bidirectional Algorithm (the paragraph direction comes from its first letter, so numbers
+and Latin words inside Persian text keep their own order), and Arabic-script text is shaped with
+OpenType (contextual letter forms, lam-alef and other ligatures, ZWNJ / ZWJ, mark positioning).
+Justification (left, centre, right, MTEXT attachment and wrapping) still refers to the text's box.
+Our stroke font has no Arabic letters, so Persian in a stroke-font style is drawn from an
+installed font that has them: Vazirmatn, Noto Naskh Arabic, Noto Sans Arabic, Segoe UI, Tahoma,
+Arial and DejaVu Sans are looked for first. To choose the font, install a free Persian font such
+as [Vazirmatn](https://github.com/rastikerdar/vazirmatn) (SIL Open Font License) and either use it
+in the text style or set `FONTFALLBACK` (`CADCRAFT_FONTFALLBACK="Vazirmatn"`). Formatting changes
+inside a word (an MTEXT colour change in the middle of a Persian word) break the joining at that
+point.
+
 ### Logs
 
 The desktop app writes its `log` records to standard error and to `logs/cadcraft.log` in the
