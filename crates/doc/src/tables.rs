@@ -620,6 +620,36 @@ pub struct NamedView {
     pub layout: Option<String>,
 }
 
+/// One tiled model space viewport of a [`VportConfig`] (a VPORT table record): its corners as
+/// fractions of the drawing area (0,0 lower left to 1,1 upper right) and its view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VportTile {
+    pub min: Vec2,
+    pub max: Vec2,
+    pub center: Vec2,
+    pub height: f64,
+    /// Width / height of the tile on screen when it was saved (0: unknown).
+    #[serde(default)]
+    pub aspect: f64,
+}
+
+/// A model space viewport configuration (VPORTS): `*Active` is the one shown, other names are
+/// saved configurations. The first tile is the current one.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct VportConfig {
+    pub name: String,
+    pub tiles: Vec<VportTile>,
+}
+
+impl VportConfig {
+    /// The name of the configuration shown.
+    pub const ACTIVE: &'static str = "*Active";
+    pub fn is_active(&self) -> bool {
+        self.name.eq_ignore_ascii_case(Self::ACTIVE)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ucs {

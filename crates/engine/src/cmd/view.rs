@@ -10,6 +10,9 @@ use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step, View};
 
 mod named_views;
+mod vports;
+
+pub(super) use vports::{model_vports, tile_model};
 
 pub fn specs() -> Vec<CommandSpec> {
     let mut v = vec![
@@ -98,6 +101,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layout.set", "Switch Layout", run_layout_set).params("{name: \"Model\" | layout name}").noundo(),
     ];
     v.extend(named_views::specs());
+    v.extend(vports::specs());
     v
 }
 

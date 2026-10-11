@@ -1297,6 +1297,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             // The first *ACTIVE viewport holds the snap grid's origin and rotation (degrees).
             "VPORT" if !active_vport && t.s(2).is_some_and(|n| n.trim().eq_ignore_ascii_case("*ACTIVE")) => {
                 active_vport = true;
+                vport_record(d, &t);
                 if let (Some(x), Some(y)) = (t.f(13), t.f(23))
                     && x.is_finite()
                     && y.is_finite()
@@ -1364,8 +1365,43 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     None => d.dim_styles.push(st),
                 }
             }
+            "VPORT" => vport_record(d, &t),
             _ => {}
         }
+    }
+    // One *Active viewport is no tiling: the view is the editor's (it zooms to the extents).
+    d.vports.retain(|c| c.tiles.len() > usize::from(c.is_active()));
+}
+
+/// Most tiles a viewport configuration keeps.
+const MAX_VPORT_TILES: usize = 64;
+
+/// A VPORT record: one tile of the configuration it names (`*ACTIVE` the one shown). Corners
+/// are fractions of the drawing area; unusable tiles are skipped.
+fn vport_record(d: &mut Drawing, t: &T) {
+    let name = t.s(2).map(|n| n.trim().to_string()).unwrap_or_default();
+    let (min, max, center) = (t.p(10).xy(), t.p(11).xy(), t.p(12).xy());
+    let height = t.fd(40, 0.0);
+    let unit = |v: f64| v.is_finite() && (-1e-9..=1.0 + 1e-9).contains(&v);
+    let ok = [min.x, min.y, max.x, max.y].into_iter().all(unit)
+        && max.x > min.x + 1e-6
+        && max.y > min.y + 1e-6
+        && center.is_finite()
+        && height.is_finite()
+        && height > 0.0;
+    if name.is_empty() || !ok {
+        return;
+    }
+    let aspect = t.f(41).filter(|a| a.is_finite() && *a > 0.0).unwrap_or(0.0);
+    let clamp = |p: Vec2| Vec2::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
+    let tile = VportTile { min: clamp(min), max: clamp(max), center, height, aspect };
+    let name = if name.eq_ignore_ascii_case(VportConfig::ACTIVE) { VportConfig::ACTIVE.to_string() } else { name };
+    let room = d.vports.len() < MAX_OBJECTS;
+    match d.vports.iter_mut().find(|c| c.name.eq_ignore_ascii_case(&name)) {
+        Some(c) if c.tiles.len() < MAX_VPORT_TILES => c.tiles.push(tile),
+        Some(_) => {}
+        None if room => d.vports.push(VportConfig { name, tiles: vec![tile] }),
+        None => {}
     }
 }
 

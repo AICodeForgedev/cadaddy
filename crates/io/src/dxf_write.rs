@@ -1210,6 +1210,45 @@ fn paper_view(w: &mut W, d: &Drawing, e: &Entity, owner: &str, cx: &Ctx) {
     w.s(1000, dxf_ext::PAPER_VIEW);
 }
 
+/// The VPORT table: the `*Active` model space tiles (one viewport on the extents when there is no
+/// tiled configuration) and the saved configurations, each tile a record, the current one first.
+fn vport_table(w: &mut W, d: &Drawing, ext: Bounds2) {
+    let single = VportTile {
+        min: Vec2::ZERO,
+        max: Vec2::new(1.0, 1.0),
+        center: if ext.is_empty() { Vec2::new(6.0, 4.5) } else { ext.center() },
+        height: if ext.is_empty() { 9.0 } else { (ext.height() * 1.1).max(1e-6) },
+        aspect: 1.6,
+    };
+    let tiled = d.vports.iter().find(|c| c.is_active() && c.tiles.len() > 1);
+    let mut records: Vec<(&str, &VportTile)> = match tiled {
+        Some(c) => c.tiles.iter().map(|t| (VportConfig::ACTIVE, t)).collect(),
+        None => vec![(VportConfig::ACTIVE, &single)],
+    };
+    records.extend(d.vports.iter().filter(|c| !c.is_active() && !c.name.is_empty()).flat_map(|c| c.tiles.iter().map(|t| (c.name.as_str(), t))));
+    let th = table_head(w, "VPORT", records.len());
+    let finite = |p: Vec2, or: Vec2| if p.is_finite() { p } else { or };
+    for (name, t) in records {
+        record_head(w, "VPORT", &th, "AcDbViewportTableRecord");
+        w.s(2, name);
+        w.i(70, 0);
+        w.p2(10, finite(t.min, Vec2::ZERO));
+        w.p2(11, finite(t.max, Vec2::new(1.0, 1.0)));
+        w.p2(12, finite(t.center, Vec2::ZERO));
+        // Snap grid origin and rotation (SNAPBASE, SNAPANG in degrees): R13+ files keep them here.
+        w.p2(13, d.header.point("SNAPBASE").map(|p| p.xy()).filter(|p| p.is_finite()).unwrap_or(Vec2::ZERO));
+        w.p2(14, Vec2::new(0.5, 0.5));
+        w.p2(15, Vec2::new(0.5, 0.5));
+        w.p(16, Vec3::Z);
+        w.p(17, Vec3::ZERO);
+        w.f(40, if t.height.is_finite() && t.height > 0.0 { t.height } else { 1.0 });
+        w.f(41, if t.aspect.is_finite() && t.aspect > 0.0 { t.aspect } else { 1.0 });
+        w.f(42, 50.0);
+        w.f(50, d.header.f64("SNAPANG", 0.0));
+    }
+    w.s(0, "ENDTAB");
+}
+
 fn table_head(w: &mut W, name: &str, count: usize) -> String {
     let h = w.h();
     w.s(0, "TABLE");
@@ -1462,25 +1501,7 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     // ---------------- TABLES ----------------
     w.s(0, "SECTION");
     w.s(2, "TABLES");
-    // VPORT
-    let th = table_head(&mut w, "VPORT", 1);
-    record_head(&mut w, "VPORT", &th, "AcDbViewportTableRecord");
-    w.s(2, "*Active");
-    w.i(70, 0);
-    w.p2(10, Vec2::ZERO);
-    w.p2(11, Vec2::new(1.0, 1.0));
-    w.p2(12, if ext.is_empty() { Vec2::new(6.0, 4.5) } else { ext.center() });
-    // Snap grid origin and rotation (SNAPBASE, SNAPANG in degrees): R13+ files keep them here.
-    w.p2(13, d.header.point("SNAPBASE").map(|p| p.xy()).filter(|p| p.is_finite()).unwrap_or(Vec2::ZERO));
-    w.p2(14, Vec2::new(0.5, 0.5));
-    w.p2(15, Vec2::new(0.5, 0.5));
-    w.p(16, Vec3::Z);
-    w.p(17, Vec3::ZERO);
-    w.f(40, if ext.is_empty() { 9.0 } else { (ext.height() * 1.1).max(1e-6) });
-    w.f(41, 1.6);
-    w.f(42, 50.0);
-    w.f(50, d.header.f64("SNAPANG", 0.0));
-    w.s(0, "ENDTAB");
+    vport_table(&mut w, d, ext);
     // LTYPE. Embedded text and shapes point at STYLE records (340), which get their handles
     // in the STYLE table below: (tag position, style name, is a shape) are filled in there.
     let mut ltype_handles: HashMap<String, String> = HashMap::new();

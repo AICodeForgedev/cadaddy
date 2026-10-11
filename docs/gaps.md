@@ -67,7 +67,7 @@ Detail and evidence: [ui-parity.md](ui-parity.md).
 | U8 | Snaps missing on some objects: MID on circles/ellipses/splines; NOD on dimension points; INS on ATTDEF/MLEADER; TAN on ellipses/splines; GCEN on splines | Medium | 4–6 |
 | U9 | Isometric snap/grid and ISODRAFT (dead toggle). Polar additional angles, angles relative to the last segment and PolarSnap landed (#441) | Medium | 2–4 |
 | U10 | UNDO Mark/Back/BEgin/End/Auto; SETVAR coverage (~60 of ~1,000 variables) | Medium | 6–10 |
-| U11 | Zoom Realtime and Dynamic, ZOOMFACTOR; named views (VIEW); tiled model viewports | Medium | 6–8 |
+| U11 | MVIEW Restore (a saved viewport configuration into a layout); VIEW Orthographic, UCS and background settings; view twist is kept but not shown (Zoom Realtime and Dynamic, ZOOMFACTOR, named views (VIEW) and tiled model viewports with saved configurations (VPORTS) landed in #463) | Low | 1–2 |
 | U12 | Workspaces, navigation bar, CUI customisation, alias editor, ViewCube drag (#7) | Low-medium | 15–25 |
 | U13 | Window controls misaligned on macOS (#161); `.dxf` from Finder fails to open (#158) | Medium | 2–4 |
 

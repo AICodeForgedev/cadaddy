@@ -67,6 +67,8 @@ pub struct Drawing {
     pub model: EntityStore,
     pub layouts: Vec<Layout>,
     pub views: Vec<NamedView>,
+    /// Model space viewport configurations (VPORTS): the tiles shown and named ones.
+    pub vports: Vec<VportConfig>,
     pub ucss: Vec<Ucs>,
     pub layer_states: Vec<LayerState>,
     pub groups: Vec<Group>,
@@ -125,6 +127,7 @@ impl Drawing {
             model: EntityStore::new(),
             layouts: vec![Layout::new("Layout1", 1), Layout::new("Layout2", 2)],
             views: Vec::new(),
+            vports: Vec::new(),
             ucss: Vec::new(),
             layer_states: Vec::new(),
             groups: Vec::new(),

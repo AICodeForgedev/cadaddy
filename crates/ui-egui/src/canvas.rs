@@ -531,8 +531,12 @@ fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf, ctx: &egui::Context) ->
 
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
-    let rect = ui.available_rect_before_wrap();
-    let resp = ui.interact(rect, ui.id().with("canvas"), Sense::click_and_drag());
+    let full = ui.available_rect_before_wrap();
+    // Tiled model viewports (VPORTS): the current tile is the drawing area below; `draw_tiles`
+    // draws the others.
+    let tiles = tile_rects(app, full);
+    let rect = tiles.iter().find(|(_, tile)| tile.active).map_or(full, |(r, _)| *r);
+    let resp = ui.interact(full, ui.id().with("canvas"), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     app.canvas.rect = Some(rect);
     app.session.viewport_px = (f64::from(rect.width()).max(1.0), f64::from(rect.height()).max(1.0));
@@ -626,6 +630,18 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // ZOOM Realtime: dragging up zooms in, down zooms out.
     if resp.dragged_by(egui::PointerButton::Primary) && app.session.realtime_zoom_active() {
         let _ = app.session.realtime_zoom(f64::from(resp.drag_delta().y));
+    }
+    // A click in another tile makes it current (or answers -VPORTS Join's prompts).
+    if pressed_primary
+        && let Some(hp) = hover_pos
+        && !rect.contains(hp)
+        && let Some(i) = tiles.iter().position(|(r, _)| r.contains(hp))
+    {
+        if let Err(e) = app.session.click_tile(i) {
+            app.session.echo(e.to_string());
+        }
+        ui.ctx().request_repaint();
+        return;
     }
     // Re-read the view after navigation.
     let view = app.session.state().map(|s| s.view()).unwrap_or(view);
@@ -934,6 +950,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if let (Some(hit), Some(_)) = (app.canvas.snap, app.canvas.cursor) {
         draw_snap_marker(&painter, xf.to_screen(hit.point), &hit);
     }
+    draw_tiles(app, ui, &tiles);
     // UCS icon, ViewCube and viewport label.
     if app.ui.show_ucs_icon {
         draw_ucs_icon(&painter, rect);
@@ -945,7 +962,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     viewport_label(&painter, rect);
     // Command line overlay.
     if app.ui.show_command_line {
-        crate::cmdline::show(app, ui, rect);
+        crate::cmdline::show(app, ui, full);
     }
     // Crosshair cursor.
     if inside {
@@ -963,6 +980,39 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // No continuous repaint while hovering: input events repaint by themselves. Repainting every
     // frame kept a vsync swapchain's queue full (every frame waited behind queued ones) and would
     // spin the CPU with the low-latency present mode (`gpu::surface_config`).
+}
+
+/// The model space tiles on screen (none without tiling): each tile's rectangle in `full`.
+fn tile_rects(app: &CadApp, full: Rect) -> Vec<(Rect, cadcraft_engine::ModelTile)> {
+    let x = |f: f64| full.left() + full.width() * f.clamp(0.0, 1.0) as f32;
+    let y = |f: f64| full.bottom() - full.height() * f.clamp(0.0, 1.0) as f32;
+    app.session
+        .model_tiles()
+        .into_iter()
+        .map(|t| (Rect::from_min_max(pos2(x(t.min.x), y(t.max.y)), pos2(x(t.max.x), y(t.min.y))).shrink(1.0), t))
+        .collect()
+}
+
+/// The tiles other than the current one (each with its own view, clipped to it), then the
+/// tile borders: thin, and heavy around the current tile.
+fn draw_tiles(app: &CadApp, ui: &egui::Ui, tiles: &[(Rect, cadcraft_engine::ModelTile)]) {
+    let t = Tokens::get();
+    let bg = Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b());
+    for (r, tile) in tiles.iter().filter(|(r, tile)| !tile.active && r.width() >= 1.0 && r.height() >= 1.0) {
+        let p = ui.painter_at(*r);
+        let xf = Xf { rect: *r, center: tile.view.center, scale: f64::from(r.height()) / tile.view.height.max(1e-12) };
+        p.rect_filled(*r, 0.0, t.canvas);
+        draw_grid(app, &p, &xf);
+        if let Some(list) = &app.canvas.list {
+            draw_list(&p, &xf, list, bg, app.session.settings.lwdisplay);
+        }
+        viewport_label(&p, *r);
+    }
+    let p = ui.painter();
+    for (r, tile) in tiles {
+        let (w, c) = if tile.active { (2.0, t.accent) } else { (1.0, t.border) };
+        p.rect_stroke(*r, 0.0, Stroke::new(w, c), egui::StrokeKind::Outside);
+    }
 }
 
 fn tooltip(p: &egui::Painter, at: Pos2, text: &str) {
