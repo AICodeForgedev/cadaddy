@@ -16,6 +16,9 @@ pub struct CmdLine {
     typed_since_selection: bool,
     pub history: Vec<String>,
     pub history_pos: Option<usize>,
+    /// What was typed at command prompts (not command names), oldest first: the in-command
+    /// shortcut menu's Recent Input.
+    pub recent_input: Vec<String>,
     /// The expanded history window is open (F2, the chevron, or a click on the history lines).
     pub expanded: bool,
     /// Dragging the history's top edge: (pointer y, line count) when the drag started.
@@ -221,6 +224,7 @@ pub fn submit(app: &mut CadApp) {
             app.cmd.history.remove(0);
         }
     }
+    crate::context_menu::note_input(app, &text);
     if text.is_empty() {
         if let Err(e) = app.session.input(Input::Enter) {
             app.session.echo(e.to_string());

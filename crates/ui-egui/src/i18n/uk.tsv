@@ -213,6 +213,7 @@
 	Dynamic Input (F12)	Динамічне введення (F12)
 	E	Сх
 	Edit	Редагування
+	Edit Attributes...	Редагувати атрибути...
 	Edit Text...	Редагувати текст...
 	Elevation	Відмітка
 	Ellipse	Еліпс
@@ -224,6 +225,7 @@
 	End Y	Кінець Y
 	End angle	Кінцевий кут
 	Endpoint	Кінцева точка
+	Enter	Ввід
 	Enter Top, Zero or Bottom.	Введіть Top, Zero або Bottom.
 	Enter a fit data option	Введіть параметр апроксимації
 	Enter a pattern name	Введіть назву візерунка
@@ -591,6 +593,7 @@
 	Polygonal	Багатокутний
 	Polygonal Viewport	Багатокутний видовий екран
 	Polyline	Полілінія
+	Polyline Edit	Редагувати полілінію
 	Position X	Позиція X
 	Position Y	Позиція Y
 	Position Z	Позиція Z
@@ -623,6 +626,8 @@
 	Realtime	У реальному часі
 	Reassociate Dimensions	Відновити асоціативність розмірів
 	Recent	Нещодавні
+	Recent Commands	Нещодавні команди
+	Recent Input	Нещодавнє введення
 	Recover...	Відновити...
 	Rectangle	Прямокутник
 	Rectangular	Прямокутний
@@ -764,6 +769,7 @@
 	Snap Mode	Режим крокової прив'язки
 	Snap Mode (F9)	Режим крокової прив'язки (F9)
 	Snap On (F9)	Увімкнути крокову прив'язку (F9)
+	Snap Overrides	Перевизначення прив'язок
 	Snap X spacing	Крок прив'язки X
 	Snap and Grid	Крокова прив'язка та сітка
 	Snap type	Тип крокової прив'язки
@@ -898,6 +904,7 @@
 	Specify width for rectangles	Укажіть ширину прямокутників
 	Sphere	Сфера
 	Spline	Сплайн
+	Spline Edit	Редагувати сплайн
 	Stack (type 1/2 then select)	Дріб (введіть 1/2, потім виділіть)
 	Standard	Стандартний
 	Start	Початок

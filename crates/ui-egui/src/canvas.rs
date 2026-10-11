@@ -757,13 +757,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
     }
-    // Right-click acts as Enter while a command runs (the classic CAD default); otherwise it opens
-    // the shortcut menu (Repeat, Clipboard, …). Shift/Ctrl+right-click opens the object snap menu.
+    // Right-click acts as Enter while a command runs (the classic CAD default; held, it opens the
+    // command menu); otherwise it opens the shortcut menu (Repeat, Clipboard, …).
+    // Shift/Ctrl+right-click opens the object snap menu.
     let idle = app.session.running.is_none();
     if inside && pressed_secondary {
         app.canvas.snap_menu = mods.shift || mods.ctrl;
     }
-    if inside && pressed_secondary && !idle && !app.canvas.snap_menu {
+    if crate::context_menu::in_command(app, ui, inside, pressed_secondary) {
         let _ = app.session.input(Input::Enter);
     }
     // Right-click on a grip with options (polyline vertex, line end…) opens the grip menu.
