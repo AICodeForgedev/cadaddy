@@ -184,6 +184,16 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         .transpose()?;
     let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).ok_or_else(|| bad("properties.set", "bad lineweight"))).transpose()?;
     let d = s.doc_mut()?;
+    // An explicit object linetype must be ByLayer, ByBlock or a loaded definition (as `linetype current` requires).
+    let linetype = str_param(p, "linetype")
+        .map(|n| {
+            if n.eq_ignore_ascii_case("ByLayer") || n.eq_ignore_ascii_case("ByBlock") {
+                Ok(n.to_string())
+            } else {
+                d.linetype(n).map(|t| t.name.clone()).ok_or_else(|| bad("properties.set", format!("linetype `{n}` is not loaded")))
+            }
+        })
+        .transpose()?;
     if let Some(l) = str_param(p, "layer") {
         d.ensure_layer(l);
     }
@@ -203,8 +213,8 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(c) = color {
                 e.common.color = c;
             }
-            if let Some(lt) = str_param(p, "linetype") {
-                e.common.linetype = lt.to_string();
+            if let Some(lt) = &linetype {
+                e.common.linetype.clone_from(lt);
             }
             if let Some(w) = lw {
                 e.common.lineweight = w;
@@ -975,4 +985,27 @@ fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad("rename", "unsupported table")),
     }
     ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::Session;
+
+    #[test]
+    fn properties_set_rejects_unloaded_linetype() {
+        let mut s = Session::new();
+        s.execute("linetype", &json!({ "load": "DASHED" })).unwrap();
+        s.execute("line", &json!({ "points": [[0, 0], [50, 0]] })).unwrap();
+        let h = s.doc().unwrap().model.last().unwrap().handle.hex();
+        s.execute("properties.set", &json!({ "handles": [h], "linetype": "DASHED" })).unwrap();
+        assert!(s.execute("properties.set", &json!({ "handles": [h], "linetype": "NOPE" })).is_err());
+        let lt = |s: &Session| s.doc().unwrap().model.last().unwrap().common.linetype.clone();
+        assert_eq!(lt(&s), "DASHED");
+        for ok in ["ByBlock", "ByLayer"] {
+            s.execute("properties.set", &json!({ "handles": [h], "linetype": ok })).unwrap();
+            assert_eq!(lt(&s), ok);
+        }
+    }
 }
