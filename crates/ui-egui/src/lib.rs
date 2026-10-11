@@ -33,6 +33,8 @@ pub mod quick;
 pub mod theme;
 pub mod viewcube;
 
+pub mod exchange;
+
 use std::sync::mpsc::Receiver;
 
 use cadcraft_engine::Session;
