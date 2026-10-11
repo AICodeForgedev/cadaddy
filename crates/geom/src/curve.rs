@@ -141,17 +141,29 @@ impl Circle {
         Circle { center, radius: radius.abs() }
     }
     pub fn from_3_points(p1: Vec2, p2: Vec2, p3: Vec2) -> Option<Circle> {
-        let d = 2.0 * (p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y));
-        if d.abs() < 1e-12 {
+        // Work in point-relative coordinates. Absolute coordinate squares lose the small
+        // differences between points in drawings far from the origin.
+        if !p1.is_finite() || !p2.is_finite() || !p3.is_finite() {
             return None;
         }
-        let s1 = p1.len2();
-        let s2 = p2.len2();
-        let s3 = p3.len2();
-        let ux = (s1 * (p2.y - p3.y) + s2 * (p3.y - p1.y) + s3 * (p1.y - p2.y)) / d;
-        let uy = (s1 * (p3.x - p2.x) + s2 * (p1.x - p3.x) + s3 * (p2.x - p1.x)) / d;
-        let c = Vec2::new(ux, uy);
-        Some(Circle::new(c, c.dist(p1)))
+        let u = p2 - p1;
+        let v = p3 - p1;
+        let det = 2.0 * u.cross(v);
+        // The collinearity threshold must scale with the triangle, not drawing units.
+        if !det.is_finite() || det.abs() <= 1e-12 * (u.len() * v.len()).max(1e-300) {
+            return None;
+        }
+        let u2 = u.len2();
+        let v2 = v.len2();
+        let c = p1 + Vec2::new((u2 * v.y - v2 * u.y) / det, (v2 * u.x - u2 * v.x) / det);
+        if !c.is_finite() {
+            return None;
+        }
+        let radius = c.dist(p1);
+        if !radius.is_finite() {
+            return None;
+        }
+        Some(Circle::new(c, radius))
     }
     pub fn from_2_points(p1: Vec2, p2: Vec2) -> Circle {
         Circle::new(p1.mid(p2), p1.dist(p2) / 2.0)
@@ -244,9 +256,17 @@ impl Ellipse {
         }
     }
     pub fn bounds(&self) -> Bounds2 {
-        let mut pts = Vec::new();
-        self.tessellate(self.major.len() * 1e-4, &mut pts);
-        Bounds2::from_points(pts)
+        // Sampled bounds can cut off the true extrema, especially on a small arc or
+        // a large drawing. The derivative of each coordinate gives two exact
+        // candidate parameters (opposite sides of the ellipse).
+        let minor = self.minor();
+        let mut bounds = Bounds2::from_points([self.at_param(self.start), self.at_param(self.end)]);
+        for angle in [minor.x.atan2(self.major.x), minor.x.atan2(self.major.x) + PI, minor.y.atan2(self.major.y), minor.y.atan2(self.major.y) + PI] {
+            if angle_in_sweep(angle, self.start, self.end) {
+                bounds.add(self.at_param(angle));
+            }
+        }
+        bounds
     }
     /// Parameter of the point on the ellipse nearest the direction of `p` (approximate).
     pub fn param_of(&self, p: Vec2) -> f64 {
@@ -489,8 +509,31 @@ impl Polyline {
     }
     /// Signed area (CCW positive) of a closed polyline including bulge areas.
     pub fn area(&self) -> f64 {
-        let pts = self.tessellate(1e-4);
-        shoelace(&pts)
+        // Integrate the chords exactly and add the signed circular-segment area
+        // for every bulge. A tessellated shoelace loses precision on large arcs.
+        // Working relative to the first vertex avoids cancellation when a small
+        // shape is located far from the drawing origin.
+        let Some(first) = self.vertices.first() else {
+            return 0.0;
+        };
+        let origin = first.p;
+        let n = self.vertices.len();
+        let mut twice_area = 0.0;
+        for i in 0..n {
+            let (Some(a), Some(b)) = (self.vertices.get(i), self.vertices.get((i + 1) % n)) else {
+                continue;
+            };
+            twice_area += (a.p - origin).cross(b.p - origin);
+            // Open polylines keep their historical implicit straight closing edge.
+            // The final vertex's bulge is only used for an explicit closing segment.
+            if (i + 1 < n || self.closed)
+                && let Some((arc, ccw)) = bulge_to_arc(a.p, b.p, a.bulge)
+            {
+                let sweep = if ccw { arc.sweep() } else { -arc.sweep() };
+                twice_area += arc.radius * arc.radius * (sweep - sweep.sin());
+            }
+        }
+        twice_area / 2.0
     }
     pub fn closest(&self, p: Vec2) -> Option<Vec2> {
         let mut best: Option<(f64, Vec2)> = None;
@@ -515,10 +558,15 @@ pub fn shoelace(pts: &[Vec2]) -> f64 {
     if n < 3 {
         return 0.0;
     }
+    let Some(origin) = pts.first().copied() else {
+        return 0.0;
+    };
+    // Measure about a local origin so a small polygon at a large world
+    // coordinate does not lose its area to cancellation of huge products.
     let mut s = 0.0;
     for i in 0..n {
         if let (Some(a), Some(b)) = (pts.get(i), pts.get((i + 1) % n)) {
-            s += a.cross(*b);
+            s += (*a - origin).cross(*b - origin);
         }
     }
     s / 2.0

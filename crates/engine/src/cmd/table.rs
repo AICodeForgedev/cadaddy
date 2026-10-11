@@ -118,11 +118,12 @@ fn run_table(s: &mut Session, p: &Value) -> Result<Value> {
     if rows > MAX_ROWS || cols > MAX_COLS || cols == 0 {
         return Err(bad("table", format!("rows must be ≤ {MAX_ROWS} and columns 1..={MAX_COLS}")));
     }
-    let pos = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0);
+    let row_height = size_param("table", p, "rowHeight", false)?;
+    let col_width = size_param("table", p, "colWidth", false)?;
     let header: Option<Vec<String>> =
         p.get("header").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect());
     let st = style_of(s);
-    let t = make_table(&st, at, rows, cols, pos("rowHeight"), pos("colWidth"), str_param(p, "title"), header, &cells);
+    let t = make_table(&st, at, rows, cols, row_height, col_width, str_param(p, "title"), header, &cells);
     let h = s.add_entity(EntityKind::Table(t))?;
     Ok(json!({ "handle": h.hex() }))
 }

@@ -26,6 +26,26 @@ fn line_via_command_line() {
 }
 
 #[test]
+fn edits_while_a_command_runs_redraw() {
+    // The canvas rebuilds when (revision, doc pointer) changes; each new segment must change it (issue #4).
+    fn key(s: &Session) -> (u64, usize) {
+        let st = s.state().unwrap();
+        (st.revision, Arc::as_ptr(&st.doc) as usize)
+    }
+    let mut s = Session::new();
+    for (cmd, pts) in [("line", ["0,0", "10,0", "10,5", "0,5"]), ("pline", ["20,0", "30,0", "30,5", "20,5"])] {
+        s.cmdline(cmd).unwrap();
+        s.cmdline(pts[0]).unwrap();
+        for p in &pts[1..] {
+            let before = key(&s);
+            s.cmdline(p).unwrap();
+            assert_ne!(key(&s), before, "{cmd}: segment to {p} not redrawn");
+        }
+        s.cmdline("").unwrap();
+    }
+}
+
+#[test]
 fn line_undo_option_and_aliases() {
     let mut s = Session::new();
     s.cmdline("l 0,0 5,5 10,0 u").unwrap();
@@ -323,6 +343,45 @@ fn copy_rotate_scale_mirror() {
 }
 
 #[test]
+fn scale_reference_typed_and_picked() {
+    // Issue #17: SCALE ▸ Reference scales by new length / reference length.
+    fn end(s: &Session) -> Vec2 {
+        let e = s.doc().unwrap().model.iter().next().unwrap();
+        let EntityKind::Line(l) = &e.kind else { panic!("expected a line") };
+        l.b.xy()
+    }
+    let mut s = Session::new();
+    s.execute("line", &json!({"points": [[0, 0], [56, 0]]})).unwrap();
+    // Typed lengths: 56 → 100.
+    for t in ["scale", "all", "", "0,0", "r"] {
+        s.cmdline(t).unwrap();
+    }
+    assert_eq!(s.current_prompt().unwrap().message, "Specify reference length");
+    s.cmdline("56").unwrap();
+    assert_eq!(s.current_prompt().unwrap().message, "Specify new length");
+    s.cmdline("100").unwrap();
+    assert!(s.running.is_none());
+    assert!(end(&s).near(Vec2::new(100.0, 0.0), 1e-9));
+    // Reference from two points, a zero new length is rejected, new length picked from the base point.
+    for t in ["scale", "all", "", "0,0", "r", "0,0", "100,0"] {
+        s.cmdline(t).unwrap();
+    }
+    s.cmdline("0").unwrap();
+    assert!(s.running.is_some());
+    s.cmdline("0,25").unwrap();
+    assert!(s.running.is_none());
+    assert!(end(&s).near(Vec2::new(25.0, 0.0), 1e-9));
+    // A zero reference length is rejected and asked again.
+    for t in ["scale", "all", "", "0,0", "r", "0"] {
+        s.cmdline(t).unwrap();
+    }
+    assert_eq!(s.current_prompt().unwrap().message, "Specify reference length");
+    s.cmdline("25").unwrap();
+    s.cmdline("50").unwrap();
+    assert!(end(&s).near(Vec2::new(50.0, 0.0), 1e-9));
+}
+
+#[test]
 fn layers_and_properties() {
     let mut s = Session::new();
     s.execute("layer.new", &json!({"name": "Walls", "color": "red", "current": true})).unwrap();
@@ -390,6 +449,69 @@ fn sysvars_roundtrip() {
     assert_eq!(s.doc().unwrap().header.f64("LTSCALE", 0.0), 2.5);
     assert!(s.execute("setvar", &json!({"name": "ORTHOMODE", "value": "x"})).is_err());
     assert_eq!(sysvars::get(&s, "orthomode"), Some(json!(0)));
+    // FONTALT is a process-wide font setting, not a drawing header variable.
+    s.execute("setvar", &json!({"name": "FONTALT", "value": "no-such-font-130"})).unwrap();
+    assert_eq!(sysvars::get(&s, "fontalt"), Some(json!("no-such-font-130")));
+    assert!(s.doc().unwrap().header.get("FONTALT").is_none());
+    assert!(s.execute("setvar", &json!({"name": "FONTALT", "value": 3})).is_err());
+    s.execute("setvar", &json!({"name": "FONTALT", "value": "."})).unwrap();
+    assert_eq!(sysvars::get(&s, "FONTALT"), Some(json!("")));
+}
+
+#[test]
+fn setvar_at_command_line() {
+    let mut s = Session::new();
+    // One line, as typed in issue #30: Space separates the inputs.
+    s.cmdline("SETVAR LUNITS 4").unwrap();
+    assert!(s.running.is_none());
+    assert_eq!(s.doc().unwrap().header.i64("LUNITS", 0), 4);
+    // Step by step, offering the current value as the default.
+    s.cmdline("setvar").unwrap();
+    s.cmdline("luprec").unwrap();
+    assert_eq!(s.current_prompt().unwrap().default.as_deref(), Some("4"));
+    s.cmdline("2").unwrap();
+    assert!(s.running.is_none());
+    assert_eq!(s.doc().unwrap().header.i64("LUPREC", 0), 2);
+    // Enter keeps the value.
+    s.cmdline("set osmode").unwrap();
+    s.cmdline("").unwrap();
+    assert!(s.running.is_none());
+    // A value of the wrong type re-prompts and changes nothing.
+    s.cmdline("SETVAR LUNITS abc").unwrap();
+    assert!(s.running.is_some());
+    assert_eq!(s.doc().unwrap().header.i64("LUNITS", 0), 4);
+    s.cancel();
+    // Unknown and read-only names end the command without creating or changing anything.
+    s.cmdline("SETVAR NOSUCHVAR 1").unwrap();
+    assert!(sysvars::get(&s, "NOSUCHVAR").is_none());
+    s.cmdline("SETVAR DWGNAME").unwrap();
+    assert!(s.running.is_none());
+    assert!(s.execute("setvar", &json!({"name": "dbmod", "value": 0})).is_err());
+    // `?` lists the variables.
+    s.cmdline("SETVAR ?").unwrap();
+    assert!(s.running.is_none());
+}
+
+#[test]
+fn setvar_keeps_header_types() {
+    let mut s = Session::new();
+    assert!(s.execute("setvar", &json!({"name": "LUNITS", "value": "x"})).is_err());
+    assert!(s.execute("setvar", &json!({"name": "LUNITS", "value": 2.5})).is_err());
+    s.execute("setvar", &json!({"name": "LUNITS", "value": 3.0})).unwrap();
+    assert_eq!(s.doc().unwrap().header.get("LUNITS"), Some(&cadcraft_doc::HVal::Int(3)));
+    assert!(s.execute("setvar", &json!({"name": "LTSCALE", "value": "big"})).is_err());
+    assert_eq!(s.doc().unwrap().header.f64("LTSCALE", 0.0), 1.0);
+}
+
+#[test]
+fn dynamic_input_pointer_settings() {
+    let mut s = Session::new();
+    assert_eq!(sysvars::get(&s, "DYNPIFORMAT"), Some(json!(0)));
+    assert_eq!(sysvars::get(&s, "dynpicoords"), Some(json!(0)));
+    s.execute("setvar", &json!({"name": "dynpiformat", "value": 1})).unwrap();
+    s.execute("setvar", &json!({"name": "DYNPICOORDS", "value": 1})).unwrap();
+    assert!(s.settings.dynpi_cartesian && s.settings.dynpi_absolute);
+    assert!(s.execute("setvar", &json!({"name": "DYNPIFORMAT", "value": "x"})).is_err());
 }
 
 #[test]
@@ -399,6 +521,13 @@ fn script_runs_commands() {
     assert_eq!(kinds(&s), vec!["Line", "Line", "Circle", "Text"]);
     let t = s.doc().unwrap().model.last().unwrap();
     assert!(matches!(&t.kind, EntityKind::Text(t) if t.value == "Hello world"));
+}
+
+#[test]
+fn script_splits_line_at_keyword_prompt() {
+    let mut s = Session::new();
+    s.script("POLYGON 6 200,20 I 15").unwrap();
+    assert_eq!(kinds(&s), vec!["Polyline"]);
 }
 
 #[test]
@@ -442,6 +571,11 @@ fn hostile_params_never_panic() {
 fn every_interactive_command_starts_and_cancels() {
     for c in command_specs().iter().filter(|c| c.interactive.is_some()) {
         let mut s = Session::new();
+        if (c.enabled)(&s).is_err() {
+            // Unavailable in a new drawing (e.g. pasting with an empty clipboard): refused.
+            assert!(s.start(c.id).is_err() && s.running.is_none(), "{}", c.id);
+            continue;
+        }
         s.start(c.id).unwrap();
         let _ = s.prompt_text();
         let _ = s.preview(Vec2::new(1.0, 1.0));
@@ -468,7 +602,7 @@ fn count_from_the_menu_shows_its_result() {
     s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap();
     s.execute("selectall", &json!({})).unwrap();
     s.cmdline("block Valve 0,0").unwrap();
-    s.cmdline("insert Valve 10,0 1 0").unwrap();
+    s.cmdline("insert Valve 10,0 1 1 0").unwrap();
     s.start("count").unwrap();
     let n = s.log.len();
     assert_eq!(&s.log[n - 3..], ["Block references in model space:", "  Valve: 2", "  Total: 2"]);
@@ -685,7 +819,7 @@ fn block_insert_with_attributes() {
     assert!(s.running.is_none());
     assert!(s.doc().unwrap().block("Valve").is_some());
     assert_eq!(s.doc().unwrap().model.len(), 1, "originals converted to one insert");
-    s.cmdline("insert Valve 10,0 2 90 V-101").unwrap();
+    s.cmdline("insert Valve 10,0 2 2 90 V-101").unwrap();
     let ins: Vec<_> =
         s.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::Insert(i) = &e.kind { Some(i.clone()) } else { None }).collect();
     assert_eq!(ins.len(), 2);
@@ -866,4 +1000,89 @@ fn arc_refuses_zero_radius() {
         EntityKind::Arc(a) => assert_eq!((a.radius, a.start, a.end), (5.0, 0.0, std::f64::consts::FRAC_PI_2)),
         other => panic!("{other:?}"),
     }
+}
+
+/// The single polyline in a fresh drawing after typing `script`, then pressing Enter.
+fn typed_pline(script: &str) -> cadcraft_doc::LwPolyline {
+    let mut s = Session::new();
+    for line in script.split('\n') {
+        s.cmdline(line).unwrap();
+    }
+    s.cmdline("").unwrap();
+    let d = s.doc().unwrap();
+    let mut it = d.model.iter();
+    let pl = match &it.next().unwrap().kind {
+        EntityKind::LwPolyline(p) => p.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert!(it.next().is_none(), "one polyline");
+    pl
+}
+
+/// (const_width, [(start_width, end_width) per vertex]).
+fn widths(p: &cadcraft_doc::LwPolyline) -> (f64, Vec<(f64, f64)>) {
+    (p.const_width, p.vertices.iter().map(|v| (v.start_width, v.end_width)).collect())
+}
+
+#[test]
+fn pline_halfwidth_is_centre_to_edge() {
+    // #83: half-width 0.5 at both prompts is a band 1.0 wide; Width keeps the total width.
+    assert_eq!(typed_pline("pline 0,0 h 0.5 0.5 10,0").const_width, 1.0);
+    assert_eq!(typed_pline("pline 0,0 w 0.5 0.5 10,0").const_width, 0.5);
+    assert_eq!(typed_pline("pline 0,0 w 1 1 10,0").const_width, 1.0);
+    // The ending half-width defaults to the starting one.
+    assert_eq!(typed_pline("pline 0,0 h 0.5\n\n10,0").const_width, 1.0);
+    // A half-width taper.
+    assert_eq!(widths(&typed_pline("pline 0,0 h 0.5 0.1 10,0")), (0.0, vec![(1.0, 0.2), (0.0, 0.0)]));
+}
+
+#[test]
+fn pline_width_answers_taper_the_next_segment() {
+    // #104: the starting and ending widths are the segment's own, not one constant width.
+    assert_eq!(widths(&typed_pline("pline 0,0 w 1 0.2 10,0")), (0.0, vec![(1.0, 0.2), (0.0, 0.0)]));
+    assert_eq!(widths(&typed_pline("pline 0,0 w 0.2 1 10,0")), (0.0, vec![(0.2, 1.0), (0.0, 0.0)]));
+    // Equal answers, or Enter at the ending prompt, stay one constant width.
+    assert_eq!(widths(&typed_pline("pline 0,0 w 1 1 10,0")), (1.0, vec![(0.0, 0.0), (0.0, 0.0)]));
+    assert_eq!(widths(&typed_pline("pline 0,0 w 1\n\n10,0")), (1.0, vec![(0.0, 0.0), (0.0, 0.0)]));
+    // After a taper, later segments are uniform at the ending width.
+    let p = typed_pline("pline 0,0 w 1 0.2 10,0 20,0 30,0");
+    assert_eq!(widths(&p), (0.0, vec![(1.0, 0.2), (0.2, 0.2), (0.2, 0.2), (0.0, 0.0)]));
+    // A width set mid-polyline applies from that segment on; the closing segment takes it too.
+    let p = typed_pline("pline 0,0 10,0 w 2 2 10,10 c");
+    assert!(p.closed);
+    assert_eq!(widths(&p), (0.0, vec![(0.0, 0.0), (2.0, 2.0), (2.0, 2.0)]));
+    // Undo drops the taper with its segment.
+    let p = typed_pline("pline 0,0 10,0 w 1 0.2 20,0 u");
+    assert_eq!(widths(&p), (0.0, vec![(0.0, 0.0), (0.0, 0.0)]));
+}
+
+#[test]
+fn press_and_drag_selection_window() {
+    let mut s = Session::new();
+    s.cmdline("line 0,0 10,0").unwrap();
+    s.cmdline("").unwrap();
+    s.cmdline("circle 50,50 1").unwrap();
+    // No command: a drag from (-1,-1) to (11,1) is a window around the line only.
+    assert!(s.begin_window(Vec2::new(-1.0, -1.0)));
+    s.idle_click(Vec2::new(11.0, 1.0), false).unwrap();
+    assert_eq!(s.selection().len(), 1);
+    assert!(s.pending_window.is_none());
+    // Dragging right to left is a crossing window: it also catches the circle it touches.
+    s.set_selection(Vec::new());
+    assert!(s.begin_window(Vec2::new(60.0, 60.0)));
+    s.idle_click(Vec2::new(50.0, 40.0), false).unwrap();
+    assert_eq!(s.selection().len(), 1);
+    // A command asking for objects: the window feeds its selection.
+    s.set_selection(Vec::new());
+    s.cmdline("erase").unwrap();
+    assert!(s.begin_window(Vec2::new(-1.0, -1.0)));
+    s.input(Input::Point(Vec2::new(11.0, 1.0))).unwrap();
+    s.input(Input::Enter).unwrap();
+    assert_eq!(kinds(&s), vec!["Circle"]);
+    // A drawing command never opens one, and neither does a hostile point.
+    s.cmdline("line").unwrap();
+    assert!(!s.begin_window(Vec2::ZERO));
+    s.cancel();
+    assert!(!s.begin_window(Vec2::new(f64::NAN, 0.0)));
+    assert!(s.pending_window.is_none());
 }

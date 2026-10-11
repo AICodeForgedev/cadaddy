@@ -146,6 +146,7 @@ pub fn bracket() -> Drawing {
             gradient: None,
             origin: Vec2::ZERO,
             background: None,
+            pattern_lines: Vec::new(),
         })
     };
     add(on("Hatch"), hatch(Vec2::new(sx, c.y + 0.875), Vec2::new(sx + 0.5, y0 + h)));
@@ -207,7 +208,7 @@ pub fn bracket() -> Drawing {
     add(on("Notes"), text(Vec2::new(4.1, -0.3), 0.16, "FRONT VIEW"));
     add(
         on("Notes"),
-        EntityKind::MText(MText { insert: v3(Vec2::new(14.2, 6.2)), height: 0.12, width: 3.4, attach: 1, rotation: 0.0, style: "Standard".into(), contents: "NOTES:\\P1. MATERIAL: 6061-T6 ALUMINUM.\\P2. BREAK ALL SHARP EDGES 0.02 MAX.\\P3. BORE %%c1.750 THRU, H7.\\P4. FINISH: CLEAR ANODIZE.".into(), line_spacing: 1.0 }),
+        EntityKind::MText(MText { insert: v3(Vec2::new(14.2, 6.2)), height: 0.12, width: 3.4, attach: 1, rotation: 0.0, style: "Standard".into(), contents: "NOTES:\\P1. MATERIAL: 6061-T6 ALUMINUM.\\P2. BREAK ALL SHARP EDGES 0.02 MAX.\\P3. BORE %%c1.750 THRU, H7.\\P4. FINISH: CLEAR ANODIZE.".into(), line_spacing: 1.0, line_spacing_exact: false }),
     );
     let tb0 = Vec2::new(14.0, -0.5);
     add(on("Title"), lwpoly(rect_vertices(tb0, tb0 + Vec2::new(4.0, 2.0)), true));

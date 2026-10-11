@@ -1,7 +1,8 @@
 //! Dimension geometry generation from definition points and a dimension style: extension
 //! lines (DIMEXO/DIMEXE, DIMSE1/2), arrowheads (DIMBLK/DIMBLK1/DIMBLK2, drawn in code) or ticks
 //! (DIMTSZ, DIMDLE), text placement (DIMTAD, DIMJUST, DIMTIH/DIMTOH, DIMGAP) and text
-//! formatting (DIMLUNIT, DIMDEC, DIMZIN, DIMRND, DIMPOST, DIMTOL/DIMLIM, DIMALT).
+//! formatting (DIMLUNIT, DIMDEC, DIMZIN, DIMRND, DIMPOST, DIMTOL/DIMLIM with DIMTZIN, DIMALT with
+//! DIMALTU/DIMALTZ/DIMALTRND).
 
 use cadcraft_doc::{DimKind, DimStyle, Dimension};
 use cadcraft_fonts::{MTextParams, TextFont};
@@ -273,7 +274,9 @@ pub fn format_linear_value(v: f64, st: &DimStyle) -> String {
 }
 
 /// The text of a linear measurement: (plain, MTEXT) with DIMPOST, tolerances/limits and
-/// alternate units, then the user's override text (`<>` = the measurement).
+/// alternate units, then the user's override text (`<>` = the measurement). DIMRND rounds the
+/// measurement (and so the limits) only: tolerances are never rounded and alternate units
+/// round by DIMALTRND.
 fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str) -> String {
     let v = meas * st.linear_factor;
     let nf = NumFormat::from_style(st);
@@ -286,12 +289,14 @@ fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str) -> String 
     };
     let mut s = post(&st.post, &main);
     if st.tolerance && !st.limits {
-        let tf = NumFormat { decimals: st.tol_decimals, ..nf.clone() };
+        let tf = NumFormat { decimals: st.tol_decimals, zin: st.tol_zero_suppression, round: 0.0, ..nf.clone() };
+        // DIMPOST's suffix (what follows `<>`, or all of it) also goes on the tolerance values.
+        let suffix = st.post.split_once("<>").map_or(st.post.as_str(), |(_, after)| after);
         if (st.tol_plus - st.tol_minus).abs() < 1e-12 {
-            s += &format!("%%p{}", format_linear(st.tol_plus, &tf).1);
+            s += &format!("%%p{}{suffix}", format_linear(st.tol_plus, &tf).1);
         } else {
-            let plus = format_linear(st.tol_plus, &tf).1;
-            let minus = format_linear(st.tol_minus, &tf).1;
+            let plus = format_linear(st.tol_plus, &tf).1 + suffix;
+            let minus = format_linear(st.tol_minus, &tf).1 + suffix;
             let sign = |x: &str, pos: char| if x.trim_start_matches(['0', '.', ',']).is_empty() { x.to_string() } else { format!("{pos}{x}") };
             let (plus, minus) =
                 (sign(&plus, '+'), if st.tol_minus < 0.0 { format!("+{}", minus.trim_start_matches('-')) } else { sign(&minus, '-') });
@@ -299,7 +304,14 @@ fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str) -> String 
         }
     }
     if st.alt {
-        let af = NumFormat { decimals: st.alt_decimals, unit: 2, ..nf };
+        // DIMALTU 6 and 7 are architectural and fractional without stacking, 8 is decimal.
+        let (unit, frac) = match st.alt_unit {
+            u @ 1..=5 => (u, nf.frac),
+            6 => (4, 2),
+            7 => (5, 2),
+            _ => (2, nf.frac),
+        };
+        let af = NumFormat { unit, decimals: st.alt_decimals, zin: st.alt_zero_suppression, round: st.alt_round, frac, ..nf };
         let alt = format_linear(v * st.alt_factor, &af).1;
         s += &format!(" [{}]", post(&st.alt_post, &alt));
     }
@@ -363,7 +375,7 @@ pub fn dimension_geometry(d: &Dimension, st: &DimStyle, dimscale: f64) -> DimGeo
 /// Generate the geometry of a dimension. The dimension's own overrides are applied to `st`.
 pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font: &DimText) -> DimGeometry {
     let st = &st.with_overrides(&d.overrides);
-    let k = if st.scale > 0.0 && st.scale.is_finite() { st.scale } else { dimscale.max(1e-9) };
+    let k = st.effective_scale(dimscale);
     let asz = st.arrow_size * k;
     let th = if font.fixed_height > 0.0 { font.fixed_height } else { st.text_height * k };
     let gap = st.text_gap.abs() * k;
@@ -534,19 +546,40 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let (center, r) = if radius { (a, a.dist(b)) } else { (a.mid(b), a.dist(b) / 2.0) };
             let meas = if radius { r } else { 2.0 * r };
             g.mtext = linear_text(meas, d, st, if radius { "R" } else { "%%c" });
-            let (tw, _) = measure(&g.mtext);
+            let (tw, tht) = measure(&g.mtext);
             let u = (b - center).normalized();
             let u = if u == Vec2::ZERO || !u.is_finite() { Vec2::X } else { u };
             let tip = center + u * r;
             let tpos = if d.user_text_pos { text_mid } else { tip + u * (asz.max(tsz) * 3.0) };
-            if !radius {
-                let start = center - u * r;
-                g.dim(vec![start, tip]);
-                end(&mut g, blk1, start, -u);
+            // Text placed inside the circle (a dimension line location picked inside): the text
+            // sits on the dimension line, which runs from the text out to the arrowhead (for a
+            // diameter it spans the circle, broken around the text). DIMTIH turns it horizontal.
+            let inside = d.user_text_pos && text_mid.dist(center) < r;
+            let horizontal = if inside { st.text_inside_horizontal } else { st.text_outside_horizontal };
+            if inside {
+                let tr = Vec2::from_angle(if horizontal { 0.0 } else { readable(u.angle()) });
+                let half = if tw > 0.0 { (tw * tr.dot(u).abs() + tht * tr.perp().dot(u).abs()) / 2.0 + gap } else { 0.0 };
+                let start = if radius { center } else { center - u * r };
+                let (t0, t1) = ((text_mid - start).dot(u) - half, (text_mid - start).dot(u) + half);
+                if !radius {
+                    if t0 > 0.0 {
+                        g.dim(vec![start, start + u * t0]);
+                    }
+                    end(&mut g, blk1, start, -u);
+                }
+                if t1 < tip.dist(start) {
+                    g.dim(vec![start + u * t1.max(0.0), tip]);
+                }
+            } else {
+                if !radius {
+                    let start = center - u * r;
+                    g.dim(vec![start, tip]);
+                    end(&mut g, blk1, start, -u);
+                }
+                g.dim(vec![tip, tpos]);
             }
-            g.dim(vec![tip, tpos]);
             end(&mut g, blk2, tip, u);
-            if st.text_outside_horizontal {
+            if horizontal {
                 text_angle = 0.0;
                 let sx = if u.x >= 0.0 { 1.0 } else { -1.0 };
                 if !d.user_text_pos {
@@ -558,7 +591,10 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                     text_mid = tpos + u * (tw / 2.0 + gap);
                 }
             }
-            if st.center_mark != 0.0 && st.center_mark.is_finite() {
+            // The DIMCEN mark is drawn only when the dimension line is outside the circle: a
+            // radius led out to its text, never a diameter line through the centre.
+            let line_outside = radius && tpos.dist(center) >= r;
+            if line_outside && st.center_mark != 0.0 && st.center_mark.is_finite() {
                 let c = st.center_mark.abs() * k;
                 g.ext(vec![center - Vec2::X * c, center + Vec2::X * c]);
                 g.ext(vec![center - Vec2::Y * c, center + Vec2::Y * c]);
@@ -586,21 +622,28 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 if cadcraft_geom::angle_in_sweep(vertex.angle_to(arc_pt), s, e) { Arc::new(vertex, r, s, e) } else { Arc::new(vertex, r, e, s) };
             let sweep = ccw_sweep(arc.start, arc.end);
             let txt = format_angle(sweep, st.angular_unit, st.angular_decimals, st.zero_suppression & 12);
-            g.mtext = apply_override(&post(&st.post, &txt), d);
+            // DIMPOST is a linear-dimension prefix/suffix; angles have their own format only.
+            g.mtext = apply_override(&txt, d);
             let mut pts = Vec::new();
             arc.tessellate(r * 1e-3, &mut pts);
             g.dim(pts);
             let sp = arc.start_point();
             let ep = arc.end_point();
+            // The arc's ends with the outward tangents there, paired with leg 1 and leg 2: when
+            // the arc location is outside the leg 1 → leg 2 sweep the arc runs from leg 2 to
+            // leg 1, and each leg keeps its own extension line, DIMSE1/2 and DIMBLK1/2.
+            let (start, finish) = ((sp, -(sp - vertex).perp().normalized()), (ep, (ep - vertex).perp().normalized()));
+            let ((p1, dir1), (p2, dir2)) =
+                if cadcraft_geom::angle_in_sweep(vertex.angle_to(arc_pt), s, e) { (start, finish) } else { (finish, start) };
             if !st.suppress_ext1 {
-                g.lines.extend(ext_line(vertex + (sp - vertex).normalized() * vertex.dist(a1).min(r), sp, st, k));
+                g.lines.extend(ext_line(vertex + (p1 - vertex).normalized() * vertex.dist(a1).min(r), p1, st, k));
             }
             if !st.suppress_ext2 {
-                g.lines.extend(ext_line(vertex + (ep - vertex).normalized() * vertex.dist(a2).min(r), ep, st, k));
+                g.lines.extend(ext_line(vertex + (p2 - vertex).normalized() * vertex.dist(a2).min(r), p2, st, k));
             }
             g.line_roles.resize(g.lines.len(), LineRole::Ext);
-            end(&mut g, blk1, sp, -(sp - vertex).perp().normalized());
-            end(&mut g, blk2, ep, (ep - vertex).perp().normalized());
+            end(&mut g, blk1, p1, dir1);
+            end(&mut g, blk2, p2, dir2);
             let (tw, tht) = measure(&g.mtext);
             let mid = arc.mid_point();
             let radial = (mid - vertex).normalized();

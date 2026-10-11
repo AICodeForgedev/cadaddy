@@ -115,6 +115,9 @@ impl Header {
         h.set_f64("ELEVATION", 0.0);
         h.set_i64("LWDISPLAY", 0);
         h.set("INSBASE", HVal::Point(Vec3::ZERO));
+        // Snap grid origin and rotation (SNAPANG in degrees).
+        h.set("SNAPBASE", HVal::Point(Vec3::ZERO));
+        h.set_f64("SNAPANG", 0.0);
         h
     }
 

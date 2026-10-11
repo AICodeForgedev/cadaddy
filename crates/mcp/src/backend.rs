@@ -98,7 +98,13 @@ impl Backend for Remote {
         if v.get("ok").and_then(Value::as_bool) == Some(true) {
             Ok(v.get("result").cloned().unwrap_or(Value::Null))
         } else {
-            Err(v.get("error").and_then(Value::as_str).unwrap_or("error").to_string())
+            let e = v.get("error").and_then(Value::as_str).unwrap_or("error");
+            // A timeout says whether the request can still have run (#345).
+            Err(match v.get("state").and_then(Value::as_str) {
+                Some("not-run") => format!("{e}: CADCraft did not start `{method}` and won't; it is safe to send again"),
+                Some("may-have-run") => format!("{e}: `{method}` may or may not have been applied. Inspect the drawing first"),
+                _ => e.to_string(),
+            })
         }
     }
     fn has_ui(&self) -> bool {
@@ -120,13 +126,18 @@ impl Default for Headless {
     }
 }
 
+/// The command-line state, with the same fields as the app's (`cadcraft_ui_egui::control`). There
+/// is no command-line widget here: nothing is typed (`buffer`) and the history isn't expanded.
 fn state(s: &Session) -> Value {
     let p = s.current_prompt();
     json!({
         "prompt": s.prompt_text(),
         "running": s.running.as_ref().map(|r| r.id.clone()),
         "keywords": p.as_ref().map(|p| p.keywords.clone()).unwrap_or_default(),
+        "accept": p.as_ref().map(|p| p.accept),
+        "buffer": "",
         "history": s.log.iter().rev().take(20).rev().cloned().collect::<Vec<_>>(),
+        "historyExpanded": false,
     })
 }
 
@@ -143,6 +154,11 @@ impl Backend for Headless {
             "cmdline.input" => {
                 let before = s.log.len();
                 let r = s.cmdline(&str_p("text").unwrap_or_default());
+                // Like the app: a refused line is echoed to the history (and `output`), and also
+                // reported in `error`.
+                if let Err(e) = &r {
+                    s.echo(e.to_string());
+                }
                 let out: Vec<String> = s.log.iter().skip(before).cloned().collect();
                 let mut st = state(s);
                 if let Some(o) = st.as_object_mut() {
@@ -160,12 +176,27 @@ impl Backend for Headless {
                 Ok(json!({"output": out, "state": state(s)}))
             }
             "cmdline.key" => {
-                if str_p("key").is_some_and(|k| k.eq_ignore_ascii_case("escape") || k.eq_ignore_ascii_case("esc")) {
+                let before = s.log.len();
+                let r = if str_p("key").is_some_and(|k| k.eq_ignore_ascii_case("escape") || k.eq_ignore_ascii_case("esc")) {
                     s.cancel();
+                    Ok(())
                 } else {
-                    s.input(cadcraft_engine::Input::Enter).map_err(|e| e.to_string())?;
+                    s.input(cadcraft_engine::Input::Enter)
+                };
+                // Like the app: a refused Enter is echoed to the history (and `output`), and also
+                // reported in `error`; the call itself succeeds.
+                if let Err(e) = &r {
+                    s.echo(e.to_string());
                 }
-                Ok(state(s))
+                let out: Vec<String> = s.log.iter().skip(before).cloned().collect();
+                let mut st = state(s);
+                if let Some(o) = st.as_object_mut() {
+                    o.insert("output".into(), json!(out));
+                    if let Err(e) = r {
+                        o.insert("error".into(), json!(e.to_string()));
+                    }
+                }
+                Ok(st)
             }
             "cmdline.state" => Ok(state(s)),
             "engine.commands" => {
@@ -191,7 +222,10 @@ impl Backend for Headless {
                 }
                 Ok(json!({"pngBase64": cadcraft_engine::cmd::file::base64_encode(&png), "width": w, "height": h}))
             }
-            "app.open" => s.execute("open", &json!({"path": str_p("path")})).map_err(|e| e.to_string()),
+            "app.open" => {
+                let path = str_p("path").ok_or("missing path")?;
+                s.execute("open", &json!({ "path": path })).map_err(|e| e.to_string())
+            }
             "app.save" => {
                 let id = if p.get("path").is_some() { "saveas" } else { "qsave" };
                 s.execute(id, &p).map_err(|e| e.to_string())
@@ -235,5 +269,25 @@ mod tests {
         let err = remote.call("engine.execute", json!({"command": "circle", "params": {}})).unwrap_err();
         assert!(err.contains("may or may not have been applied"), "{err}");
         assert_eq!(server.join().unwrap(), 1);
+    }
+
+    /// The app's timeout reply says whether the request can still run; the error passes that on (#345).
+    #[test]
+    fn timeout_reply_says_whether_a_retry_is_safe() {
+        for (state, want) in [("not-run", "safe to send again"), ("may-have-run", "Inspect the drawing first")] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap().to_string();
+            let server = std::thread::spawn(move || {
+                let (conn, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                BufReader::new(conn.try_clone().unwrap()).read_line(&mut line).unwrap();
+                let mut out = conn;
+                writeln!(out, "{}", json!({"id": 1, "ok": false, "error": "timeout", "state": state})).unwrap();
+            });
+            let mut remote = Remote::connect(&addr).unwrap();
+            let err = remote.call("engine.execute", json!({"command": "circle", "params": {}})).unwrap_err();
+            assert!(err.starts_with("timeout") && err.contains(want), "{err}");
+            server.join().unwrap();
+        }
     }
 }

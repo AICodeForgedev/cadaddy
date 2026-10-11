@@ -68,11 +68,25 @@ impl Prompt {
         self.default = Some(d.into());
         self
     }
+    /// The prompt picks objects: a "Select objects" prompt, or a point prompt whose click selects
+    /// one object ("Select object to offset", "Select first line"…, the commands that pick a
+    /// single object themselves). The UI shows the pick box there.
+    pub fn picks_objects(&self) -> bool {
+        self.accept.select || (self.accept.point && self.message.starts_with("Select"))
+    }
     /// "Specify next point or [Undo/Close] <default>:".
     pub fn display(&self) -> String {
         let mut s = self.message.clone();
         if !self.keywords.is_empty() {
-            s.push_str(if self.message.is_empty() { "[" } else { " or [" });
+            // A question offers its answers ("Fix any errors detected? [Yes/No]"); anything else
+            // offers options besides what it asks for ("Specify next point or [Undo]").
+            s.push_str(if self.message.is_empty() {
+                "["
+            } else if self.message.ends_with('?') {
+                " ["
+            } else {
+                " or ["
+            });
             s.push_str(&self.keywords.join("/"));
             s.push(']');
         }
@@ -89,16 +103,18 @@ impl Prompt {
             return None;
         }
         let tl = t.to_ascii_lowercase();
-        for k in &self.keywords {
+        let keys = self.keywords.iter().map(|k| {
             let shortcut: String = k.chars().filter(|c| c.is_ascii_uppercase() || c.is_ascii_digit()).collect::<String>().to_ascii_lowercase();
             let shortcut =
                 if shortcut.is_empty() { k.chars().next().map(|c| c.to_ascii_lowercase().to_string()).unwrap_or_default() } else { shortcut };
-            let kl = k.to_ascii_lowercase();
-            if tl == kl || tl == shortcut || (tl.len() >= shortcut.len() && kl.starts_with(&tl)) {
-                return Some(k.clone());
-            }
-        }
-        None
+            (k, k.to_ascii_lowercase(), shortcut)
+        });
+        // A whole keyword or its capital-letter shortcut wins over a prefix of another keyword
+        // (`M` is Multiple, not a prefix of mEthod).
+        keys.clone()
+            .find(|(_, kl, sc)| tl == *kl || tl == *sc)
+            .or_else(|| keys.clone().find(|(_, kl, sc)| tl.len() >= sc.len() && kl.starts_with(&tl)))
+            .map(|(k, _, _)| k.clone())
     }
 }
 
@@ -142,15 +158,26 @@ pub trait Interactive: Send {
     }
 }
 
-/// Parse a typed point: `x,y[,z]`, `@dx,dy`, `@dist<angle`, `dist<angle`, `#x,y` (absolute).
-/// Relative forms use `last`.
+/// Parse a typed point: `x,y[,z]`, `@dx,dy`, `@dist<angle`, `dist<angle`, `#x,y` (absolute),
+/// `*x,y` and `*@dx,dy`/`@*dx,dy` (world coordinates: the same as the plain forms, as there is no
+/// UCS yet).
+/// Relative forms use `last`. Polar angles read the default angle settings (degrees from +X,
+/// counterclockwise); `parse_point_with` reads a drawing's.
 pub fn parse_point(text: &str, last: Vec2) -> Option<Vec2> {
+    parse_point_with(text, last, &crate::units::AngleSettings::default())
+}
+
+/// `parse_point` with polar angles read per `angles` (AUNITS, ANGBASE, ANGDIR); `d<<a` and
+/// `d<<<a` measure from +X counterclockwise (in degrees and in AUNITS).
+pub fn parse_point_with(text: &str, last: Vec2, angles: &crate::units::AngleSettings) -> Option<Vec2> {
     let t = text.trim();
     if t.is_empty() {
         return None;
     }
+    let t = t.strip_prefix('*').map_or(t, str::trim_start);
     let (rel, body) = if let Some(b) = t.strip_prefix('@') {
-        (true, b.trim())
+        let b = b.trim();
+        (true, b.strip_prefix('*').map_or(b, str::trim_start))
     } else if let Some(b) = t.strip_prefix('#') {
         (false, b.trim())
     } else {
@@ -161,7 +188,8 @@ pub fn parse_point(text: &str, last: Vec2) -> Option<Vec2> {
     }
     let p = if let Some((d, a)) = body.split_once('<') {
         let dist = crate::units::parse_distance(d)?;
-        let ang = crate::units::parse_angle(a)?;
+        // `d<<a` / `d<<<a`: the override prefixes keep their `<<` / `<<<`.
+        let ang = if a.starts_with('<') { angles.direction(&format!("<{a}"))? } else { angles.direction(a)? };
         Vec2::from_angle(ang) * dist
     } else {
         let parts: Vec<&str> = body.split(',').collect();
@@ -193,6 +221,10 @@ mod tests {
         assert!(parse_point("5<0", last).unwrap().near(Vec2::new(5.0, 0.0), 1e-9));
         assert_eq!(parse_point("#1,1", last), Some(Vec2::new(1.0, 1.0)));
         assert_eq!(parse_point("@", last), Some(last));
+        assert_eq!(parse_point("*3,4", last), Some(Vec2::new(3.0, 4.0)));
+        assert_eq!(parse_point("*@1,2", last), Some(Vec2::new(11.0, 12.0)));
+        assert_eq!(parse_point("@*1,2", last), Some(Vec2::new(11.0, 12.0)));
+        assert_eq!(parse_point("*", last), None);
         assert_eq!(parse_point("1", last), None);
         assert_eq!(parse_point("a,b", last), None);
         assert_eq!(parse_point("1,2,3,4", last), None);
@@ -202,6 +234,8 @@ mod tests {
     fn keywords() {
         let p = Prompt::new("Specify next point", Accept::POINT).kw(&["Undo", "Close"]);
         assert_eq!(p.display(), "Specify next point or [Undo/Close]:");
+        let q = Prompt::new("Erase polyline?", Accept::TEXT).kw(&["Yes", "No"]).default("No");
+        assert_eq!(q.display(), "Erase polyline? [Yes/No] <No>:");
         assert_eq!(p.match_keyword("u").as_deref(), Some("Undo"));
         assert_eq!(p.match_keyword("CL").as_deref(), Some("Close"));
         assert_eq!(p.match_keyword("x"), None);

@@ -30,14 +30,19 @@ Example client configuration (Claude Code / Claude Desktop):
 | `command_line {text}` | Type at the command line exactly like a person: `line 0,0 @10,0 @0,5 c`, `circle 5,2 1`, `offset 0.5`, `zoom e`. Spaces act as Enter; empty text is Enter. Returns the new prompt, keywords and output. |
 | `script {text}` | A multi-line script (like `.scr` files). |
 | `execute {command, params}` | Any command with JSON parameters, never a dialog. `list_commands` shows ids and parameter docs. |
-| `list_commands {filter?}` | The command catalog. |
+| `list_commands {filter?}` | The command catalog; `filter` matches part of a command's id, label or an alias. |
 | `inspect_drawing {entities?, limit?}` | Counts, extents, layers, styles, blocks, layouts, selection, undo history and entities. |
-| `query_entities {type?, layer?, window?}` | Filtered entities with handles and geometry. |
+| `query_entities {type?, layer?, window?, crossing?, limit?, offset?}` | Filtered entities with handles and geometry. `window` `[[x0,y0],[x1,y1]]` finds objects whose geometry is inside it or crosses it (`crossing: false`: entirely inside). `count` is every match, `returned` the page (`offset`, `limit`, default 500). |
 | `render {width?, height?, fit?}` | A PNG image of the drawing. |
-| `new_drawing {metric?}`, `open {path}`, `save {path?}`, `cancel` | Files and Escape. |
+| `new_drawing {metric?}`, `open {path}`, `save {path?}`, `cancel` | Files and Escape. `save` to a `.svg`, `.png` or `.pdf` path exports: the drawing keeps its name and unsaved changes. |
 | `screenshot`, `ui_inspect`, `ui_click {x, y}` | Only when connected to the app. |
 
 Resources: `cadcraft://drawing` (inspect JSON) and `cadcraft://commands` (catalog).
+
+Arguments are checked against each tool's input schema. An unknown tool, `arguments` that aren't an
+object, a missing required argument or one of the wrong type is a JSON-RPC error `-32602` (invalid
+params), so `command_line {}` never presses Enter by accident. A tool that runs and fails (a bad
+point, an unknown command) returns a result with `isError: true` and the message.
 
 ## A typical session
 

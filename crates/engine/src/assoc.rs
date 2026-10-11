@@ -96,12 +96,8 @@ pub fn find_snap(d: &Drawing, space: &Space, p: Vec2) -> Option<(Handle, AssocSn
     let store = d.space(space)?;
     let mut best: Option<(usize, Handle, AssocSnap)> = None;
     for e in store.iter() {
-        for (rank, (snap, q)) in candidates(&e.kind).into_iter().enumerate() {
-            let rank = match snap {
-                AssocSnap::Mid => 100 + rank,
-                AssocSnap::Center => 50 + rank,
-                _ => rank.min(1),
-            };
+        for (i, (snap, q)) in candidates(&e.kind).into_iter().enumerate() {
+            let rank = snap_rank(&snap, i);
             if close(p, q) && best.as_ref().is_none_or(|b| rank < b.0) {
                 best = Some((rank, e.handle, snap));
             }
@@ -110,9 +106,59 @@ pub fn find_snap(d: &Drawing, space: &Space, p: Vec2) -> Option<(Handle, AssocSn
     best.map(|(_, h, s)| (h, s))
 }
 
+/// Preference of the `i`-th candidate snap of an object (lower wins): endpoints and vertices,
+/// then centres, then midpoints.
+fn snap_rank(snap: &AssocSnap, i: usize) -> usize {
+    match snap {
+        AssocSnap::Mid => 100 + i,
+        AssocSnap::Center => 50 + i,
+        _ => i.min(1),
+    }
+}
+
 /// Associations for named definition points found at their positions.
 pub fn auto_assoc(d: &Drawing, space: &Space, pts: &[(&str, Vec2)]) -> Vec<DimAssoc> {
     pts.iter().filter_map(|(name, p)| find_snap(d, space, *p).map(|(handle, snap)| DimAssoc { point: (*name).into(), handle, snap })).collect()
+}
+
+/// The snap candidates of one space, sorted by x, for many [`find_snap`] lookups in a row: a
+/// lookup is a binary search instead of a scan of the whole space. Dimensions add no candidates,
+/// so the index stays valid while a command adds dimensions (DIMCONTINUE/DIMBASELINE chains).
+pub struct SnapIndex {
+    /// (point, rank, position in space order, object, snap).
+    pts: Vec<(Vec2, usize, usize, Handle, AssocSnap)>,
+}
+
+impl SnapIndex {
+    pub fn new(d: &Drawing, space: &Space) -> Self {
+        let mut pts = Vec::new();
+        for e in d.space(space).into_iter().flat_map(|st| st.iter()) {
+            for (i, (snap, q)) in candidates(&e.kind).into_iter().enumerate() {
+                if q.is_finite() {
+                    pts.push((q, snap_rank(&snap, i), pts.len(), e.handle, snap));
+                }
+            }
+        }
+        pts.sort_by(|a, b| a.0.x.total_cmp(&b.0.x));
+        SnapIndex { pts }
+    }
+
+    /// The same snap as [`find_snap`] (lowest rank, then the first in space order).
+    pub fn find(&self, p: Vec2) -> Option<(Handle, AssocSnap)> {
+        if !p.is_finite() {
+            return None;
+        }
+        let tol = 1e-6 * (1.0 + p.x.abs().max(p.y.abs()));
+        let lo = self.pts.partition_point(|c| c.0.x < p.x - tol);
+        let hi = self.pts.partition_point(|c| c.0.x <= p.x + tol);
+        let hit = self.pts.get(lo..hi)?.iter().filter(|c| close(p, c.0)).min_by_key(|c| (c.1, c.2))?;
+        Some((hit.3, hit.4.clone()))
+    }
+
+    /// [`auto_assoc`] through the index.
+    pub fn auto_assoc(&self, pts: &[(&str, Vec2)]) -> Vec<DimAssoc> {
+        pts.iter().filter_map(|(name, p)| self.find(*p).map(|(handle, snap)| DimAssoc { point: (*name).into(), handle, snap })).collect()
+    }
 }
 
 /// A circle or arc (centre, radius) by handle.

@@ -110,6 +110,28 @@ fn circle_circle_hits() {
 }
 
 #[test]
+fn tiny_circle_secants_and_separated_circles() {
+    let first = Circle::new(Vec2::ZERO, 1e-9);
+    // Both radii and center separation are below the old absolute tolerance.
+    let hits = circle_circle(&first, &Circle::new(Vec2::new(5e-10, 0.0), 1e-9));
+    assert_eq!(hits.len(), 2);
+    let y = (1e-18_f64 - 2.5e-10_f64.powi(2)).sqrt();
+    assert!(hits.iter().all(|p| (p.x - 2.5e-10).abs() < 1e-20 && (p.y.abs() - y).abs() < 1e-20), "{hits:?}");
+    // A half-nanometre gap is significant relative to these circles.
+    assert!(circle_circle(&first, &Circle::new(Vec2::new(2.5e-9, 0.0), 1e-9)).is_empty());
+}
+
+#[test]
+fn huge_circle_secants_remain_finite() {
+    let hits = circle_circle(&Circle::new(Vec2::ZERO, 1e160), &Circle::new(Vec2::new(1e160, 0.0), 1e160));
+    assert_eq!(hits.len(), 2);
+    assert!(
+        hits.iter().all(|p| p.is_finite() && (p.x / 1e160 - 0.5).abs() < 1e-12 && (p.y.abs() / 1e160 - 3.0_f64.sqrt() / 2.0).abs() < 1e-12),
+        "{hits:?}"
+    );
+}
+
+#[test]
 fn spline_interpolates_fit_points() {
     let fit = [Vec2::new(0.0, 0.0), Vec2::new(1.0, 2.0), Vec2::new(3.0, 1.0), Vec2::new(4.0, 4.0), Vec2::new(6.0, 0.0)];
     let s = Spline::from_fit_points(&fit);
@@ -121,6 +143,29 @@ fn spline_interpolates_fit_points() {
     }
     assert!(s.eval(0.0).near(fit[0], 1e-9));
     assert!(s.eval(1.0).near(fit[4], 1e-9));
+}
+
+#[test]
+fn closed_spline_is_smooth_at_the_seam() {
+    let fit = [Vec2::new(0.0, 0.0), Vec2::new(4.0, 0.0), Vec2::new(4.0, 3.0), Vec2::new(0.0, 3.0)];
+    let s = Spline::from_fit_points_closed(&fit);
+    assert!(s.is_valid() && s.closed && s.is_periodic());
+    assert_eq!(s.fit.len(), 4, "the first fit point is not repeated");
+    let (lo, hi) = s.domain();
+    assert!(s.eval(lo).near(fit[0], 1e-9) && s.eval(hi).near(fit[0], 1e-9));
+    let pts = s.tessellate(1e-4);
+    for f in fit {
+        assert!(pts.iter().any(|p| p.dist(f) < 0.05), "fit point {f:?} missed");
+    }
+    // Same tangent leaving and arriving at the seam (an open fit through a repeated point has a corner there).
+    let h = 1e-6;
+    let out = (s.eval(lo + h) - s.eval(lo)).normalized();
+    let back = (s.eval(hi) - s.eval(hi - h)).normalized();
+    assert!(out.near(back, 1e-4), "kink at the seam: {out:?} vs {back:?}");
+    // A repeated closing point is dropped.
+    let mut dup = fit.to_vec();
+    dup.push(fit[0]);
+    assert_eq!(Spline::from_fit_points_closed(&dup).fit.len(), 4);
 }
 
 #[test]
@@ -180,4 +225,99 @@ fn common_tangents_of_two_circles() {
     // A zero-radius circle (a point): the tangents from that point.
     let z = a.common_tangents(&Circle::new(Vec2::new(30.0, 0.0), 0.0));
     assert!(!z.is_empty() && z.iter().all(|(p, q)| close(dist(a.center, *p, *q), 10.0) && q.near(Vec2::new(30.0, 0.0), 1e-9)));
+}
+
+#[test]
+fn circle_three_points_preserves_large_world_coordinates() {
+    // A unit circle near a survey coordinate. The absolute-square formula suffers
+    // catastrophic cancellation and returns a center tens of millions of units away.
+    let origin = 1.0e12;
+    let c = Circle::from_3_points(Vec2::new(origin + 1.0, origin), Vec2::new(origin, origin + 1.0), Vec2::new(origin - 1.0, origin)).unwrap();
+    assert!(c.center.near(Vec2::new(origin, origin), 1e-3), "{c:?}");
+    assert!((c.radius - 1.0).abs() < 1e-3, "{c:?}");
+}
+
+#[test]
+fn circle_three_points_accepts_small_valid_triangles() {
+    let r = 1.0e-7;
+    let c = Circle::from_3_points(Vec2::new(r, 0.0), Vec2::new(0.0, r), Vec2::new(-r, 0.0)).unwrap();
+    assert!(c.center.near(Vec2::ZERO, 1e-12), "{c:?}");
+    assert!((c.radius - r).abs() < 1e-12, "{c:?}");
+    assert!(Circle::from_3_points(Vec2::ZERO, Vec2::new(r, 0.0), Vec2::new(2.0 * r, 0.0)).is_none());
+    assert!(Circle::from_3_points(Vec2::ZERO, Vec2::X, Vec2::new(f64::NAN, 0.0)).is_none());
+}
+
+#[test]
+fn ellipse_bounds_find_analytic_extrema() {
+    // A tilted ellipse's extrema generally fall between tessellated samples.
+    let center = Vec2::new(7.0, -11.0);
+    let e = Ellipse::full(center, Vec2::new(3.0, 4.0), 0.5);
+    let bounds = e.bounds();
+    let dx = 13.0_f64.sqrt(); // hypot(major.x, minor.x)
+    let dy = 18.25_f64.sqrt(); // hypot(major.y, minor.y)
+    assert!((bounds.min.x - (center.x - dx)).abs() < 1e-12);
+    assert!((bounds.max.x - (center.x + dx)).abs() < 1e-12);
+    assert!((bounds.min.y - (center.y - dy)).abs() < 1e-12);
+    assert!((bounds.max.y - (center.y + dy)).abs() < 1e-12);
+}
+
+#[test]
+fn elliptical_arc_bounds_exclude_extrema_outside_the_sweep() {
+    let e = Ellipse { center: Vec2::ZERO, major: Vec2::new(3.0, 4.0), ratio: 0.5, start: 0.0, end: PI / 4.0 };
+    let bounds = e.bounds();
+    assert!((bounds.max.x - 3.0).abs() < 1e-12);
+    assert!((bounds.min.x - e.at_param(e.end).x).abs() < 1e-12);
+    assert!((bounds.min.y - e.at_param(e.end).y).abs() < 1e-12);
+    assert!((bounds.max.y - 18.25_f64.sqrt()).abs() < 1e-12);
+}
+
+#[test]
+fn polyline_area_is_exact_for_bulge_segments() {
+    // One semicircular arc from left to right plus a straight closing edge.
+    let mut p = Polyline::from_points(&[Vec2::new(0.0, 0.0), Vec2::new(2.0, 0.0)], true);
+    p.vertices[0].bulge = 1.0;
+    assert!((p.area() - PI / 2.0).abs() < 1e-12, "{}", p.area());
+    p.vertices[0].bulge = -1.0;
+    assert!((p.area() + PI / 2.0).abs() < 1e-12, "{}", p.area());
+}
+
+#[test]
+fn polyline_area_is_stable_far_from_the_origin() {
+    let o = 1.0e12;
+    let p = Polyline::from_points(&[Vec2::new(o, o), Vec2::new(o + 10.0, o), Vec2::new(o + 10.0, o + 10.0), Vec2::new(o, o + 10.0)], true);
+    assert!((p.area() - 100.0).abs() < 1e-12, "{}", p.area());
+    // An open polyline's measured area retains the implicit straight closing edge.
+    let mut open = p;
+    open.closed = false;
+    assert!((open.area() - 100.0).abs() < 1e-12);
+}
+
+#[test]
+fn shoelace_preserves_small_polygon_area_at_large_coordinates() {
+    let o = 1.0e12;
+    let corners = [Vec2::new(o, o), Vec2::new(o + 10.0, o), Vec2::new(o + 10.0, o + 10.0), Vec2::new(o, o + 10.0)];
+    assert_eq!(shoelace(&corners), 100.0);
+    assert_eq!(shoelace(&corners.iter().rev().copied().collect::<Vec<_>>()), -100.0);
+}
+
+#[test]
+fn near_tangent_long_line_does_not_invent_a_circle_hit() {
+    let c = Circle::new(Vec2::ZERO, 1.0);
+    let far = 1.0e8;
+    let outside = Line::new(Vec2::new(-far, 1.0 + 1e-9), Vec2::new(far, 1.0 + 1e-9));
+    assert!(line_circle(&outside, &c).is_empty());
+    let tangent = Line::new(Vec2::new(-far, 1.0), Vec2::new(far, 1.0));
+    let hits = line_circle(&tangent, &c);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].0.near(Vec2::new(0.0, 1.0), 1e-9));
+}
+
+#[test]
+fn long_secant_keeps_both_intersections() {
+    let c = Circle::new(Vec2::ZERO, 2.0);
+    let l = Line::new(Vec2::new(-1.0e8, 0.0), Vec2::new(1.0e8, 0.0));
+    let hits = line_circle(&l, &c);
+    assert_eq!(hits.len(), 2);
+    assert!(hits[0].0.near(Vec2::new(-2.0, 0.0), 1e-8), "{hits:?}");
+    assert!(hits[1].0.near(Vec2::new(2.0, 0.0), 1e-8), "{hits:?}");
 }

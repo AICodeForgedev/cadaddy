@@ -10,11 +10,20 @@ Start the desktop app with `--control PORT` (or `CADCRAFT_CONTROL_PORT=PORT`). I
 
 Errors come back as `{"id": …, "ok": false, "error": "message"}`.
 
+The server waits up to 60 s for the app to answer a request. After that it replies with a timeout, and
+`state` tells whether sending the request again is safe:
+
+- `{"id": …, "ok": false, "error": "timeout", "state": "not-run"}`: the app had not started the request.
+  It is cancelled and will never run, so sending it again is safe.
+- `{"id": …, "ok": false, "error": "timeout", "state": "may-have-run"}`: the app had already started it.
+  It may still finish and change the drawing, and its late result is discarded. Inspect the drawing
+  (`drawing.inspect`) before sending it again.
+
 | Method | Params | What it does |
 |---|---|---|
 | `cmdline.input` | `{text}` | Type a line at the command line exactly like a user. Starts commands by name/alias and answers prompts (points `x,y`, `@dx,dy`, `@d<a`, distances, keywords, empty = Enter). Spaces act as Enter except at text prompts. |
 | `cmdline.script` | `{text}` | Run a multi-line script (like `.scr` files). |
-| `cmdline.key` | `{key: "enter"\|"escape"}` | Press Enter or Escape. |
+| `cmdline.key` | `{key: "enter"\|"escape"}` | Press Enter or Escape. Replies like `cmdline.input`: the state, `output`, and `error` when Enter was refused. |
 | `cmdline.state` | | Current prompt, keywords, accepted input kinds, history tail. |
 | `engine.execute` | `{command, params}` | Run any command with JSON parameters. Never opens a dialog. |
 | `engine.commands` | | Every command: id, label, menu path, shortcut, aliases, params doc, enabled. |
@@ -26,11 +35,11 @@ Errors come back as `{"id": …, "ok": false, "error": "message"}`.
 | `ui.click` / `ui.move` | `{x, y, button?, shift?}` | Real egui pointer events in screen points (reach every widget). |
 | `ui.drag` | `{x, y, to: [x, y], button?}` | Real press, move and release (drag the command line's top edge, the ViewCube ring…). |
 | `ui.key` / `ui.text` | `{key, cmd?, shift?, alt?}` / `{text}` | Synthetic keyboard input. |
-| `ui.set` | UiState fields | Show/hide palettes, toolbars, command line, ViewCube…; `theme: "system"\|"light"\|"dark"` (also `engine.execute` with `ui.theme {theme}`); `ui.inspect` reports the theme shown (`theme`: light/dark). |
+| `ui.set` | UiState fields | Show/hide palettes, toolbars, command line, ViewCube…; `theme: "system"\|"light"\|"dark"` (also `engine.execute` with `ui.theme {theme}`); `ui.inspect` reports the theme shown (`theme`: light/dark). `saveFormat: "dxf"\|"dwg"` (also `ui.saveformat {format}`) is the format Save As suggests for new drawings. |
 | `ui.resize` | `{width, height}` | Resize the window. |
 | `ui.focus` | | Activate the native window. Does not assign focus to a widget. |
 | `ui.screenshot` | `{path?}` | PNG of the window (needs a presented frame). |
-| `ui.render` | `{path?, width?, height?}` | Headless render of the current view of the drawing. |
+| `ui.render` | `{path?, width?, height?, fit?}` | Headless render. `fit` (default true) frames the whole drawing; `false` uses the current view. Replies `{pngBase64, width, height, bytes, path?}`. |
 | `app.open` / `app.save` / `app.quit` | `{path}` | File operations. |
 
 The MCP server (`cadcraft-cli mcp --connect 127.0.0.1:PORT`) wraps this protocol; headless
@@ -70,3 +79,41 @@ A center `move` can include `before` (panel ID or null to append) for tab order.
 The equivalent `{"action": ...}` form accepts a serialized shared docking action;
 this is also the form emitted by the renderer. Protected-canvas and app-specific panel
 rules apply equally to both forms.
+
+## Command-line replies
+
+The app and the headless session reply with the same fields.
+
+`cmdline.state`, `cmdline.key` and `cmdline.input` return the command-line state:
+
+| Field | Value |
+|---|---|
+| `prompt` | The prompt text (`"Command:"` when idle). |
+| `running` | The id of the running command, or `null`. |
+| `keywords` | The current prompt's options. |
+| `accept` | The kinds of input the current prompt accepts, or `null` when idle. |
+| `buffer` | Text typed in the command line but not yet submitted (always `""` headless). |
+| `history` | The last 20 history lines. |
+| `historyExpanded` | Whether the history is expanded (always `false` headless). |
+
+`cmdline.input` adds:
+
+- `output`: the history lines the input added. This includes the error message when the line was refused.
+- `error`: the error message, only when the line was refused (unknown command, invalid input…).
+
+A refused line still replies `"ok": true`, because the text was typed. Check `error`.
+
+`app.open` without a string `path` fails with `"missing path"` before any command runs.
+
+## Interface language
+
+Select a language with `engine.execute` and the UI command `ui.language`:
+
+```json
+{"id":1,"method":"engine.execute","params":{"command":"ui.language","params":{"lang":"uk"}}}
+```
+
+Supported values are `auto`, `en` and `uk`. `ui.set` also accepts
+`{"interfaceLanguage":"uk"}`; `ui.inspect` reports the saved choice in its UI state.
+Invalid choices leave the current language unchanged. Menus, command labels and prompt text
+returned by the control channel retain their English source text. See [localization.md](localization.md).

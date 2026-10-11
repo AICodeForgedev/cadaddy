@@ -3,11 +3,12 @@
 //! One page per plot: model-space extents fitted to a sheet, or a layout at 1:1 on its paper
 //! (paper units are millimetres in metric drawings, inches otherwise). Lines are stroked paths
 //! (`m`/`l`/`S`), fills are `f` paths, colours are RGB with colour 7 printing black on white
-//! paper, and line widths come from lineweights when enabled.
+//! paper, and line widths come from lineweights when enabled. The page setup's plot style
+//! table (or the `plotStyleTable` option) sets the printed colours, linetypes and lineweights.
 
 use std::fmt::Write as _;
 
-use cadcraft_color::{Rgb, display_rgb};
+use cadcraft_color::Rgb;
 use cadcraft_doc::{Drawing, PageSetup, Space};
 use cadcraft_geom::{Bounds2, Vec2};
 use cadcraft_render::{Kind, Sheet, clip, paper};
@@ -24,6 +25,8 @@ const MAX_SHEET_MM: f64 = 5080.0;
 /// model space).
 #[derive(Clone, Debug, Default)]
 pub struct PdfOptions {
+    /// Plot style table name, replacing the page setup's (`"None"` plots without one).
+    pub plot_style_table: Option<String>,
     /// Paper name from [`cadcraft_render::PAPER_SIZES`] (`"A4"`, `"Letter"`, `"ANSI B"`…).
     pub paper: Option<String>,
     /// Custom paper size in millimetres (portrait width, height).
@@ -52,6 +55,7 @@ impl PdfOptions {
             _ => None,
         };
         PdfOptions {
+            plot_style_table: v.get("plotStyleTable").and_then(Value::as_str).map(|s| s.chars().take(260).collect()),
             paper: v.get("paper").and_then(Value::as_str).map(str::to_string),
             paper_mm,
             landscape: v.get("landscape").and_then(Value::as_bool),
@@ -100,6 +104,9 @@ pub fn page_for(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<PageSetup>
     if let Some(l) = o.landscape {
         page.landscape = l;
     }
+    if let Some(t) = &o.plot_style_table {
+        page.plot_style_table = t.clone();
+    }
     page.width_mm = page.width_mm.clamp(1.0, MAX_SHEET_MM);
     page.height_mm = page.height_mm.clamp(1.0, MAX_SHEET_MM);
     Ok(page)
@@ -130,7 +137,8 @@ pub fn pdf(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<Vec<u8>> {
         Space::Paper(_) => page.lineweights,
         Space::Model => true,
     });
-    let ropts = cadcraft_render::Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights };
+    let plot_style_table = cadcraft_doc::plot_style_table(d, &page.plot_style_table).map(std::sync::Arc::new);
+    let ropts = cadcraft_render::Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights, view_height: 0.0, plot_style_table };
     let k = unit_mm * PT_PER_MM;
     let window = o.window.filter(|w| matches!(space, Space::Model) && !w.is_empty());
     let fit = window.is_some() || o.fit.unwrap_or(matches!(space, Space::Model));
@@ -138,7 +146,9 @@ pub fn pdf(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<Vec<u8>> {
     let est = plot_scale(&window.unwrap_or_else(|| d.extents(space)), &sheet, fit, o.scale);
     let tol = 0.05 / unit_mm / est.max(1e-300);
     let tolerance = if tol.is_finite() && tol > 0.0 { tol } else { ropts.tolerance };
-    let list = cadcraft_render::build_plot(d, space, &cadcraft_render::Options { tolerance, ..ropts });
+    // Relative point sizes follow the plotted window (else the extents).
+    let view_height = window.map(|w| w.height()).unwrap_or(0.0);
+    let list = cadcraft_render::build_plot(d, space, &cadcraft_render::Options { tolerance, view_height, ..ropts });
     let b = window.unwrap_or(list.bounds);
     let s = plot_scale(&b, &sheet, fit, o.scale);
     let map = if fit || matches!(space, Space::Model) {
@@ -236,7 +246,7 @@ fn content_stream(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Boun
         }
     };
     for p in &list.prims {
-        let rgb = display_rgb(p.color, white);
+        let rgb = p.display_rgb(white);
         let raw = list.points(p);
         if raw.iter().any(|q| !q.is_finite()) {
             continue;
@@ -280,8 +290,10 @@ fn content_stream(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Boun
                 }
                 pending = true;
             }
-            Kind::Tris => {
+            Kind::Tris | Kind::Mask => {
                 flush(&mut c, &mut pending);
+                // A wipeout's mask is paper white.
+                let rgb = if p.kind == Kind::Mask { white } else { rgb };
                 if fill != Some(rgb) {
                     color(&mut c, rgb, "rg");
                     fill = Some(rgb);

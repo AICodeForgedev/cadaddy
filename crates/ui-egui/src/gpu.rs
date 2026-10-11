@@ -7,15 +7,17 @@
 //! follows the view (see [`choose_origin`]).
 //!
 //! Batches: filled triangles (TriangleList), 1-px hairlines (LineList), and instanced screen-space
-//! quads for wide lineweights and point markers. Fills are drawn first, then lines on top. The
-//! shader only uses vertex buffers and one uniform buffer, so it runs on WebGPU and WebGL2.
+//! quads for wide lineweights and point markers. Fills are drawn first, then lines on top. A
+//! wipeout starts a new draw-order group (see [`MeshData::breaks`]): its background-coloured mask
+//! is drawn after everything before it and under everything after it. The shader only uses
+//! vertex buffers and one uniform buffer, so it runs on WebGPU and WebGL2.
 //!
 //! Infinite lines (xline/ray) and all overlays stay egui shapes (see `canvas.rs`), and the
 //! canvas falls back to the CPU path when no wgpu render state was handed to the app.
 
 use std::sync::{Arc, Mutex};
 
-use cadcraft_color::{Rgb, display_rgb};
+use cadcraft_color::Rgb;
 use cadcraft_geom::{Bounds2, Vec2};
 use cadcraft_render::{DisplayList, Kind};
 use egui_wgpu::wgpu;
@@ -98,6 +100,9 @@ pub struct MeshData {
     pub lines: Vec<u8>,
     pub tris: Vec<u8>,
     pub quads: Vec<u8>,
+    /// Draw-order breaks, one before each wipeout mask: the fill vertices, line vertices and
+    /// quad instances drawn before it. Each group is drawn fills, lines, quads in turn.
+    pub breaks: Vec<[usize; 3]>,
 }
 
 impl MeshData {
@@ -145,9 +150,10 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
         lines: Vec::with_capacity(list.segment_count().saturating_mul(2 * VERTEX_SIZE)),
         tris: Vec::with_capacity(list.tris.len().saturating_mul(VERTEX_SIZE)),
         quads: Vec::new(),
+        breaks: Vec::new(),
     };
     for prim in &list.prims {
-        let c = display_rgb(prim.color, bg);
+        let c = prim.display_rgb(bg);
         let col = [c.0, c.1, c.2, 255];
         let pts = list.points(prim);
         match prim.kind {
@@ -172,6 +178,14 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
                 for t in pts.as_chunks::<3>().0 {
                     for q in t {
                         push_vertex(&mut m.tris, rel(*q, origin), col);
+                    }
+                }
+            }
+            Kind::Mask => {
+                m.breaks.push([m.tri_vertices(), m.line_vertices(), m.quad_instances()]);
+                for t in pts.as_chunks::<3>().0 {
+                    for q in t {
+                        push_vertex(&mut m.tris, rel(*q, origin), [bg.0, bg.1, bg.2, 255]);
                     }
                 }
             }
@@ -236,6 +250,7 @@ struct Resources {
     lines: Vec<Batch>,
     tris: Vec<Batch>,
     quads: Vec<Batch>,
+    breaks: Vec<[usize; 3]>,
 }
 
 const UNIFORM_SIZE: u64 = 48;
@@ -388,6 +403,7 @@ impl Resources {
             lines: Vec::new(),
             tris: Vec::new(),
             quads: Vec::new(),
+            breaks: Vec::new(),
         }
     }
 }
@@ -430,6 +446,7 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
                 res.lines = upload(device, "cad_lines", &m.lines, VERTEX_SIZE, usage);
                 res.tris = upload(device, "cad_fills", &m.tris, VERTEX_SIZE, usage);
                 res.quads = upload(device, "cad_quads", &m.quads, INSTANCE_SIZE, usage);
+                res.breaks = m.breaks;
                 res.key = Some(self.key);
             }
         }
@@ -455,22 +472,45 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         // Whole-screen device pixels; egui already set the scissor to the canvas clip rect.
         pass.set_viewport(0.0, 0.0, sw as f32, sh as f32, 0.0, 1.0);
         pass.set_bind_group(0, &res.bind_group, &[]);
-        pass.set_pipeline(&res.tri_pipeline);
-        for b in &res.tris {
-            pass.set_vertex_buffer(0, b.buffer.slice(..));
-            pass.draw(0..b.count, 0..1);
-        }
-        pass.set_pipeline(&res.line_pipeline);
-        for b in &res.lines {
-            pass.set_vertex_buffer(0, b.buffer.slice(..));
-            pass.draw(0..b.count, 0..1);
-        }
-        pass.set_pipeline(&res.quad_pipeline);
-        for b in &res.quads {
-            pass.set_vertex_buffer(0, b.buffer.slice(..));
-            pass.draw(0..6, 0..b.count);
+        // Draw-order groups split at each wipeout; without wipeouts there is one group.
+        let total = |bs: &[Batch]| bs.iter().map(|b| b.count as usize).sum::<usize>();
+        let all = [total(&res.tris), total(&res.lines), total(&res.quads)];
+        let mut from = [0usize; 3];
+        for to in res.breaks.iter().copied().chain(std::iter::once(all)) {
+            for (i, (pipeline, batches)) in
+                [(&res.tri_pipeline, &res.tris), (&res.line_pipeline, &res.lines), (&res.quad_pipeline, &res.quads)].into_iter().enumerate()
+            {
+                let parts = batch_ranges(batches.iter().map(|b| b.count), from[i]..to[i]);
+                if parts.is_empty() {
+                    continue;
+                }
+                pass.set_pipeline(pipeline);
+                for (j, r) in parts {
+                    let Some(b) = batches.get(j) else { continue };
+                    pass.set_vertex_buffer(0, b.buffer.slice(..));
+                    // Quads are instanced: six vertices per instance.
+                    if i == 2 { pass.draw(0..6, r) } else { pass.draw(r, 0..1) }
+                }
+            }
+            from = to;
         }
     }
+}
+
+/// For batches holding `counts` vertices (or instances) each: the batch indices and the ranges
+/// within them that cover `range` of the batches laid end to end.
+fn batch_ranges(counts: impl IntoIterator<Item = u32>, range: std::ops::Range<usize>) -> Vec<(usize, std::ops::Range<u32>)> {
+    let mut out = Vec::new();
+    let mut off = 0usize;
+    for (j, n) in counts.into_iter().enumerate() {
+        let n = n as usize;
+        let (lo, hi) = (range.start.max(off), range.end.min(off + n));
+        if lo < hi {
+            out.push((j, (lo - off) as u32..(hi - off) as u32));
+        }
+        off += n;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -515,7 +555,7 @@ mod tests {
             tris: vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)],
             ..Default::default()
         };
-        let p = |kind, start, len, lw| DPrim { handle: Handle(1), color: Rgb(255, 255, 255), lw, kind, start, len };
+        let p = |kind, start, len, lw| DPrim { handle: Handle(1), color: Rgb(255, 255, 255), aci7: true, lw, kind, start, len };
         l.prims =
             vec![p(Kind::Polyline, 0, 3, 0.0), p(Kind::Tris, 0, 3, 0.0), p(Kind::Point, 3, 1, 0.0), p(Kind::Infinite { ray: false }, 0, 2, 0.0)];
         for v in l.verts.clone() {
@@ -534,7 +574,7 @@ mod tests {
         assert_eq!(m.quad_instances(), 1, "the point marker");
         // First vertex is stored relative to the origin, so it's exactly zero.
         assert_eq!(&m.lines[0..8], &[0u8; 8]);
-        // White on a white background inverts to black (display_rgb).
+        // Colour 7 on a white background inverts to black (display_rgb).
         assert_eq!(&m.lines[8..12], &[0, 0, 0, 255]);
         let x = f32::from_le_bytes([m.lines[12], m.lines[13], m.lines[14], m.lines[15]]);
         assert_eq!(x, 1.0);
@@ -579,5 +619,28 @@ mod tests {
         assert!((o.x - 123_456.7).abs() <= 32.0 && (o.y - 654_321.2).abs() <= 32.0);
         assert_eq!(choose_origin(&Bounds2::EMPTY, Vec2::new(1.0, 1.0), 1.0), Vec2::ZERO);
         assert_eq!(choose_origin(&b, Vec2::new(f64::NAN, 0.0), 1.0), b.center());
+    }
+
+    #[test]
+    fn wipeout_masks_start_a_draw_order_group() {
+        let mut l = list();
+        if let Some(p) = l.prims.get_mut(1) {
+            p.kind = Kind::Mask;
+        }
+        let bg = Rgb(10, 20, 30);
+        let m = build_mesh(&l, Vec2::ZERO, bg, false);
+        // The polyline's two segments come before the mask; the point marker after it.
+        assert_eq!(m.breaks, vec![[0, 4, 0]]);
+        assert_eq!(m.tri_vertices(), 3);
+        assert_eq!(&m.tris[8..12], &[10, 20, 30, 255], "the mask takes the background colour");
+        assert_eq!(m.quad_instances(), 1);
+    }
+
+    #[test]
+    fn batch_ranges_cover_a_range_across_batches() {
+        assert_eq!(batch_ranges([4, 4, 4], 2..9), vec![(0, 2..4), (1, 0..4), (2, 0..1)]);
+        assert_eq!(batch_ranges([4, 4], 4..8), vec![(1, 0..4)]);
+        assert!(batch_ranges([4, 4], 3..3).is_empty());
+        assert!(batch_ranges([], 0..5).is_empty());
     }
 }

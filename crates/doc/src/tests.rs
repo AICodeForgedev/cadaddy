@@ -37,6 +37,49 @@ fn hidden_layers_excluded_from_extents() {
 }
 
 #[test]
+fn rays_and_xlines_do_not_stretch_extents() {
+    // ZOOM Extents ignores infinite lines; real drawings carry stray rays millions of units away.
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), line((0.0, 0.0), (1.0, 1.0))).unwrap();
+    let far = Vec3::new(-1_977_989.0, -1_952_638.0, 0.0);
+    d.add(&Space::Model, Common::default(), EntityKind::Ray(RayLine { base: far, dir: Vec3::new(-0.7, -0.7, 0.0) })).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::XLine(RayLine { base: far, dir: Vec3::new(1.0, 0.0, 0.0) })).unwrap();
+    let b = d.extents(&Space::Model);
+    assert_eq!((b.min, b.max), (Vec2::ZERO, Vec2::new(1.0, 1.0)));
+}
+
+#[test]
+fn inserts_of_missing_or_empty_blocks_do_not_stretch_extents() {
+    // An unloaded xref or a purged definition draws nothing, so its insertion point is not an extent.
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), line((0.0, 0.0), (1.0, 1.0))).unwrap();
+    let ins = |block: &str, x: f64, y: f64| {
+        EntityKind::Insert(Insert {
+            block: block.into(),
+            insert: Vec3::new(x, y, 0.0),
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs: vec![],
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+        })
+    };
+    d.blocks.insert("Empty".into(), std::sync::Arc::new(Block::new("Empty")));
+    d.add(&Space::Model, Common::default(), ins("Missing", -125_319.0, -79_990.0)).unwrap();
+    d.add(&Space::Model, Common::default(), ins("Empty", 55_652.0, -3_448_576.0)).unwrap();
+    let b = d.extents(&Space::Model);
+    assert_eq!((b.min, b.max), (Vec2::ZERO, Vec2::new(1.0, 1.0)));
+    // A block with geometry still counts.
+    let mut full = Block::new("Full");
+    full.entities.push(Entity::new(Handle(1), line((0.0, 0.0), (2.0, 2.0))));
+    d.blocks.insert("Full".into(), std::sync::Arc::new(full));
+    d.add(&Space::Model, Common::default(), ins("Full", 10.0, 10.0)).unwrap();
+    assert_eq!(d.extents(&Space::Model).max, Vec2::new(12.0, 12.0));
+}
+
+#[test]
 fn transform_arc_mirror_keeps_shape() {
     let mut k = EntityKind::Arc(Arc { center: Vec3::ZERO, radius: 1.0, start: 0.0, end: std::f64::consts::FRAC_PI_2 });
     k.transform(&Mat3::mirror(Vec2::ZERO, Vec2::Y));
@@ -186,4 +229,238 @@ fn wide_arc_segment_extents_reach_the_outer_edge() {
         let over = (got - want) * outward;
         assert!(over > -1e-6 && over < 1e-3, "got {b:?}, exact {exact:?}");
     }
+}
+
+fn plain_insert(block: &str) -> EntityKind {
+    EntityKind::Insert(Insert {
+        block: block.into(),
+        insert: Vec3::ZERO,
+        scale: Vec3::new(1.0, 1.0, 1.0),
+        rotation: 0.0,
+        attribs: vec![],
+        cols: 1,
+        rows: 1,
+        col_spacing: 0.0,
+        row_spacing: 0.0,
+    })
+}
+
+fn on_layer(layer: &str, kind: EntityKind, h: u64) -> Entity {
+    Entity { handle: Handle(h), common: Common { layer: layer.into(), ..Default::default() }, kind }
+}
+
+/// Model space with one insert of a block holding a near line (0,0)-(1,1) plus `extra`.
+fn drawing_with_block(extra: Entity) -> Drawing {
+    let mut d = Drawing::new_imperial();
+    let mut blk = Block::new("B");
+    blk.entities.push(Entity::new(Handle(1), line((0.0, 0.0), (1.0, 1.0))));
+    blk.entities.push(extra);
+    d.blocks.insert("B".into(), std::sync::Arc::new(blk));
+    d.add(&Space::Model, Common::default(), plain_insert("B")).unwrap();
+    d
+}
+
+fn far_line(layer: &str) -> Entity {
+    on_layer(layer, line((5000.0, 5000.0), (6000.0, 6000.0)), 2)
+}
+
+fn extents_pair(d: &Drawing) -> (Vec2, Vec2) {
+    let b = d.extents(&Space::Model);
+    (b.min, b.max)
+}
+
+#[test]
+fn block_entity_with_invisible_flag_is_ignored_in_insert_extents() {
+    let mut far = far_line("0");
+    far.common.visible = false;
+    let d = drawing_with_block(far);
+    assert_eq!(extents_pair(&d), (Vec2::ZERO, Vec2::new(1.0, 1.0)));
+    // Control: the same entity visible does count.
+    let d = drawing_with_block(far_line("0"));
+    assert_eq!(d.extents(&Space::Model).max, Vec2::new(6000.0, 6000.0));
+}
+
+#[test]
+fn block_entity_on_off_or_frozen_layer_is_ignored() {
+    for frozen in [false, true] {
+        let mut d = drawing_with_block(far_line("Hidden"));
+        assert!(d.layer("Hidden").is_none(), "block contents do not create layers");
+        let mut layer = Layer::new("Hidden");
+        if frozen {
+            layer.frozen = true;
+        } else {
+            layer.on = false;
+        }
+        d.layers.push(layer);
+        assert_eq!(extents_pair(&d), (Vec2::ZERO, Vec2::new(1.0, 1.0)), "frozen = {frozen}");
+        // Turned back on, it counts again.
+        let l = d.layer_mut("Hidden").unwrap();
+        l.on = true;
+        l.frozen = false;
+        assert_eq!(d.extents(&Space::Model).max, Vec2::new(6000.0, 6000.0));
+    }
+}
+
+#[test]
+fn block_entity_on_layer_zero_counts_even_if_layer_zero_is_off_or_missing() {
+    // Layer "0" takes the insert's layer, which the caller has already checked; so it counts here.
+    // The insert itself sits on layer "Vis".
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common { layer: "Vis".into(), ..Default::default() }, plain_insert("B")).unwrap();
+    let mut blk = Block::new("B");
+    blk.entities.push(far_line("0"));
+    d.blocks.insert("B".into(), std::sync::Arc::new(blk));
+    // Layer 0 switched off.
+    d.layer_mut("0").unwrap().on = false;
+    assert_eq!(d.extents(&Space::Model).max, Vec2::new(6000.0, 6000.0));
+    // Layer 0 frozen.
+    let l = d.layer_mut("0").unwrap();
+    l.on = true;
+    l.frozen = true;
+    assert_eq!(d.extents(&Space::Model).max, Vec2::new(6000.0, 6000.0));
+    // Layer 0 not defined at all.
+    d.layers.retain(|l| l.name != "0");
+    assert!(d.layer("0").is_none());
+    assert_eq!(d.extents(&Space::Model).max, Vec2::new(6000.0, 6000.0));
+}
+
+#[test]
+fn block_entity_on_undefined_layer_counts() {
+    // An unknown layer name is not hidden (is_none_or).
+    let d = drawing_with_block(far_line("Nowhere"));
+    assert!(d.layer("Nowhere").is_none());
+    assert_eq!(d.extents(&Space::Model).max, Vec2::new(6000.0, 6000.0));
+}
+
+#[test]
+fn attdef_in_block_is_ignored_in_insert_extents() {
+    let attdef = Entity::new(
+        Handle(2),
+        EntityKind::AttDef(Attrib {
+            tag: "TAG".into(),
+            text: Text {
+                insert: Vec3::new(5000.0, 5000.0, 0.0),
+                align_pt: None,
+                height: 1.0,
+                value: "x".into(),
+                rotation: 0.0,
+                width_factor: 1.0,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign: HAlign::Left,
+                valign: VAlign::Baseline,
+            },
+            invisible: false,
+            constant: false,
+            prompt: String::new(),
+            props: Default::default(),
+        }),
+    );
+    let d = drawing_with_block(attdef);
+    assert_eq!(extents_pair(&d), (Vec2::ZERO, Vec2::new(1.0, 1.0)));
+}
+
+fn text_kind(value: &str) -> EntityKind {
+    EntityKind::Text(Text {
+        insert: Vec3::new(10.0, 10.0, 0.0),
+        align_pt: None,
+        height: 2.0,
+        value: value.into(),
+        rotation: 0.0,
+        width_factor: 1.0,
+        oblique: 0.0,
+        style: "Standard".into(),
+        halign: HAlign::Left,
+        valign: VAlign::Baseline,
+    })
+}
+
+fn mtext_kind(contents: &str) -> EntityKind {
+    EntityKind::MText(MText {
+        insert: Vec3::new(10.0, 10.0, 0.0),
+        height: 2.0,
+        width: 0.0,
+        attach: 1,
+        rotation: 0.0,
+        style: "Standard".into(),
+        contents: contents.into(),
+        line_spacing: 1.0,
+        line_spacing_exact: false,
+    })
+}
+
+#[test]
+fn blank_text_and_mtext_have_no_bounds() {
+    let d = Drawing::new_imperial();
+    for s in ["", " ", "   ", "\t \n", "\\~", " \\~ \\~", "\u{a0}"] {
+        for kind in [text_kind(s), mtext_kind(s)] {
+            let b = entity_bounds(&d, &Entity::new(Handle(1), kind), 0);
+            assert!(b.is_empty(), "{s:?} should have empty bounds");
+        }
+    }
+    // Blank texts do not stretch the drawing extents either.
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), line((0.0, 0.0), (1.0, 1.0))).unwrap();
+    d.add(&Space::Model, Common::default(), text_kind(" \\~")).unwrap();
+    d.add(&Space::Model, Common::default(), mtext_kind("")).unwrap();
+    assert_eq!(extents_pair(&d), (Vec2::ZERO, Vec2::new(1.0, 1.0)));
+}
+
+#[test]
+fn non_blank_text_and_mtext_have_bounds() {
+    let d = Drawing::new_imperial();
+    for kind in [text_kind("Hi"), text_kind(" a "), mtext_kind("Hi"), mtext_kind("a\\Pb"), mtext_kind("\\~x")] {
+        let b = entity_bounds(&d, &Entity::new(Handle(1), kind.clone()), 0);
+        assert!(!b.is_empty(), "{kind:?} should have bounds");
+    }
+}
+
+#[test]
+fn invisible_dimblock_entity_is_ignored_in_dimension_extents() {
+    // Dynamic blocks keep dimensional constraints on layer *ADSK_CONSTRAINTS (group 60 = 1).
+    let dim = |d: &mut Drawing, far: Entity| {
+        let mut blk = Block::new("*D1");
+        blk.entities.push(Entity::new(Handle(1), line((0.0, 0.0), (1.0, 0.0))));
+        blk.entities.push(far);
+        d.blocks.insert("*D1".into(), std::sync::Arc::new(blk));
+        d.add(
+            &Space::Model,
+            Common::default(),
+            EntityKind::Dimension(Dimension {
+                kind: DimKind::Linear { rotation: 0.0 },
+                defpt: Vec3::new(1.0, 1.0, 0.0),
+                text_mid: Vec3::new(0.5, 1.0, 0.0),
+                p13: Vec3::ZERO,
+                p14: Vec3::new(1.0, 0.0, 0.0),
+                p15: Vec3::ZERO,
+                p16: Vec3::ZERO,
+                text: String::new(),
+                style: "Standard".into(),
+                measurement: 1.0,
+                text_rotation: 0.0,
+                user_text_pos: false,
+                block: Some("*D1".into()),
+                overrides: Default::default(),
+                assoc: vec![],
+            }),
+        )
+        .unwrap();
+    };
+    // Invisible flag.
+    let mut d = Drawing::new_imperial();
+    let mut hidden = on_layer("*ADSK_CONSTRAINTS", line((5000.0, 5000.0), (6000.0, 6000.0)), 2);
+    hidden.common.visible = false;
+    dim(&mut d, hidden);
+    assert!(d.extents(&Space::Model).max.x < 100.0);
+    // Hidden by its layer state.
+    let mut d = Drawing::new_imperial();
+    let mut l = Layer::new("*ADSK_CONSTRAINTS");
+    l.on = false;
+    d.layers.push(l);
+    dim(&mut d, on_layer("*ADSK_CONSTRAINTS", line((5000.0, 5000.0), (6000.0, 6000.0)), 2));
+    assert!(d.extents(&Space::Model).max.x < 100.0);
+    // Control: a visible far entity does count.
+    let mut d = Drawing::new_imperial();
+    dim(&mut d, far_line("0"));
+    assert_eq!(d.extents(&Space::Model).max, Vec2::new(6000.0, 6000.0));
 }

@@ -920,18 +920,19 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, size: f32, tooltip: &str, selected:
         corner_radius: egui::CornerRadius::same(3),
         focus_stroke: Stroke::new(1.0, t.accent),
     };
-    let resp = IconButton::new(tooltip, egui::vec2(size, size), &style).selected(selected).show(ui, |ui, rect, _| {
+    let resp = IconButton::new(crate::i18n::t(tooltip), egui::vec2(size, size), &style).selected(selected).show(ui, |ui, rect, _| {
         // A single tint would erase the blue geometry and orange picked points. Keep the
         // original painter and its explicit dimming on the same parent-enabled UI.
         paint(ui.painter(), rect.shrink(size * 0.08), icon, !ui.is_enabled());
     });
     crate::control::record_widget(ui, &resp, tooltip, "button", Some(selected));
-    resp.on_hover_text(tooltip)
+    resp.on_hover_text(crate::i18n::t(tooltip))
 }
 
 /// Labels and focus outlines for controls whose existing geometry is painted by the app.
 /// Pointer focus is opt-in for navigation tabs; drafting buttons keep their command-line flow.
 pub fn describe_control(ui: &egui::Ui, response: &egui::Response, label: &str, selected: Option<bool>, tab: bool) {
+    let label = crate::i18n::t(label);
     response.widget_info(|| match selected {
         Some(selected) => egui::WidgetInfo::selected(egui::WidgetType::Button, response.enabled(), selected, label),
         None => egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label),

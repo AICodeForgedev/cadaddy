@@ -12,9 +12,13 @@ mod dim;
 mod fill;
 mod hatch;
 mod linetype;
+mod linetype_text;
 pub mod paper;
+mod plotstyle;
+mod point;
 pub mod raster;
 pub mod units;
+mod wide;
 
 use cadcraft_color::{Color, Rgb};
 use cadcraft_doc::{Drawing, Entity, EntityKind, Handle, Lineweight, Prim, Space};
@@ -35,6 +39,10 @@ pub enum Kind {
     Polyline,
     /// `tris[start..start+len]`, three vertices per triangle.
     Tris,
+    /// A wipeout: triangles laid out like [`Kind::Tris`], filled with the background colour
+    /// (paper white when plotting, the canvas colour on screen) so they hide what was drawn
+    /// before them.
+    Mask,
     /// A single point marker at `verts[start]`.
     Point,
     /// An infinite line or ray: `verts[start]` = base, `verts[start+1]` = unit direction.
@@ -45,6 +53,9 @@ pub enum Kind {
 pub struct DPrim {
     pub handle: Handle,
     pub color: Rgb,
+    /// Colour 7 (directly, by layer or by block): drawn white on a dark background and black on
+    /// a light one, see [`DPrim::display_rgb`]. Other colours keep their RGB.
+    pub aci7: bool,
     /// Lineweight in mm (0 = thinnest).
     pub lw: f32,
     pub kind: Kind,
@@ -61,6 +72,46 @@ pub struct DisplayList {
     /// The paper sheet when the list was built for a layout (paper space); the UI draws the
     /// white sheet, its shadow and the printable-area outline from it.
     pub sheet: Option<Sheet>,
+    /// Block contents expanded while building (see [`MAX_BLOCK_EXPANSION`]).
+    pub expanded: usize,
+}
+
+impl DPrim {
+    /// The colour to draw with on `background`.
+    pub fn display_rgb(&self, background: Rgb) -> Rgb {
+        cadcraft_color::display_rgb(self.color, self.aci7, background)
+    }
+}
+
+/// A resolved colour: its RGB, whether it is colour 7, and its index colour (0 = a true
+/// colour), which picks the style of a colour-dependent plot style table.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Ink {
+    rgb: Rgb,
+    aci7: bool,
+    aci: u8,
+}
+
+/// Resolve `c` like [`Color::resolve`], noting whether it comes out as colour 7.
+fn ink(c: Color, layer: Color, block: Color) -> Ink {
+    // ByLayer / ByBlock left unresolved (layer or block colour itself logical) mean colour 7.
+    let is7 = |c: Color| matches!(c, Color::ByLayer | Color::ByBlock | Color::Index(7));
+    let aci7 = match c {
+        Color::ByLayer => is7(layer),
+        Color::ByBlock => is7(block),
+        c => c == Color::Index(7),
+    };
+    let aci = match c {
+        Color::ByLayer => layer,
+        Color::ByBlock => block,
+        c => c,
+    };
+    let aci = match aci {
+        Color::Index(i) => i,
+        Color::True(_) => 0,
+        Color::ByLayer | Color::ByBlock => 7,
+    };
+    Ink { rgb: c.resolve(layer, block), aci7, aci }
 }
 
 impl DisplayList {
@@ -70,7 +121,7 @@ impl DisplayList {
     /// The polyline points of a primitive.
     pub fn points(&self, p: &DPrim) -> &[Vec2] {
         match p.kind {
-            Kind::Tris => self.tris.get(p.start as usize..(p.start + p.len) as usize).unwrap_or(&[]),
+            Kind::Tris | Kind::Mask => self.tris.get(p.start as usize..(p.start + p.len) as usize).unwrap_or(&[]),
             _ => self.verts.get(p.start as usize..(p.start + p.len) as usize).unwrap_or(&[]),
         }
     }
@@ -88,11 +139,17 @@ pub struct Options {
     /// Highlighted (selected) handles are not special here; the canvas overlays them.
     pub fill: bool,
     pub lineweights: bool,
+    /// Height of the visible area in world units of the space being built. Relative point
+    /// sizes (`PDSIZE` <= 0) are a percentage of it; 0 = the height of the space's extents.
+    pub view_height: f64,
+    /// Plot style table to draw with. When `None`, [`build`] of a layout whose page setup has
+    /// "Display plot styles" on uses the layout's table; [`build_plot`] uses none.
+    pub plot_style_table: Option<std::sync::Arc<cadcraft_doc::PlotStyleTable>>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights: false }
+        Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights: false, view_height: 0.0, plot_style_table: None }
     }
 }
 
@@ -111,6 +168,11 @@ struct Ctx<'a> {
     frozen: &'a [String],
     /// Per-viewport layer colour overrides of the viewport being drawn.
     vp_colors: &'a [(String, Color)],
+    /// Extra linetype scale for model space seen through a viewport: 1 / viewport scale when
+    /// `PSLTSCALE` is on (dashes keep their paper-space length at any viewport scale), else 1.
+    lt_factor: f64,
+    /// Named plot style (table index) of the block reference being expanded, for `ByBlock`.
+    block_pstyle: Option<usize>,
 }
 
 impl Ctx<'_> {
@@ -128,35 +190,54 @@ struct Builder<'a> {
     opts: &'a Options,
     /// Plotting: skip layers marked "do not plot".
     plotting: bool,
+    /// The plot style table drawn with.
+    styles: Option<&'a plotstyle::Styler>,
+    /// Named plot style (table index) of the entity being drawn.
+    named: Option<usize>,
 }
 
+/// Upper bound on the block contents drawn per display list (each block reference, MINSERT copy
+/// and entity drawn inside a block counts one). Nested, self-referencing or arrayed block
+/// references in a hostile file would otherwise expand exponentially (`MAX_BLOCK_DEPTH` only
+/// bounds the depth); past the limit the remaining block contents are not drawn.
+pub const MAX_BLOCK_EXPANSION: usize = 2_000_000;
+
 impl Builder<'_> {
-    fn polyline(&mut self, ctx: &Ctx, color: Rgb, lw: f32, pts: &[Vec2]) {
+    /// `color` and `lw` as the plot style table prints them.
+    fn styled(&self, color: Ink, lw: f32) -> (Ink, f32) {
+        match self.styles {
+            Some(s) => s.apply(color, self.named, lw, self.opts.lineweights),
+            None => (color, lw),
+        }
+    }
+    fn polyline(&mut self, ctx: &Ctx, color: Ink, lw: f32, pts: &[Vec2]) {
         if pts.len() < 2 {
             return;
         }
+        let (color, lw) = self.styled(color, lw);
         let start = self.list.verts.len() as u32;
         for p in pts {
             let q = ctx.xf.apply(*p);
             self.list.bounds.add(q);
             self.list.verts.push(q);
         }
-        self.list.prims.push(DPrim { handle: ctx.top, color, lw, kind: Kind::Polyline, start, len: pts.len() as u32 });
+        self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw, kind: Kind::Polyline, start, len: pts.len() as u32 });
     }
-    fn tris(&mut self, ctx: &Ctx, color: Rgb, tris: &[Vec2]) {
+    fn tris(&mut self, ctx: &Ctx, color: Ink, tris: &[Vec2]) {
         if tris.len() < 3 {
             return;
         }
+        let (color, _) = self.styled(color, 0.0);
         let start = self.list.tris.len() as u32;
         for p in tris {
             let q = ctx.xf.apply(*p);
             self.list.bounds.add(q);
             self.list.tris.push(q);
         }
-        self.list.prims.push(DPrim { handle: ctx.top, color, lw: 0.0, kind: Kind::Tris, start, len: tris.len() as u32 });
+        self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw: 0.0, kind: Kind::Tris, start, len: tris.len() as u32 });
     }
     /// Shaped text: strokes as polylines; TrueType glyphs filled (TEXTFILL) or outlined.
-    fn shaped(&mut self, ctx: &Ctx, color: Rgb, lw: f32, sh: &cadcraft_fonts::Shaped) {
+    fn shaped(&mut self, ctx: &Ctx, color: Ink, lw: f32, sh: &cadcraft_fonts::Shaped) {
         for s in &sh.strokes {
             self.polyline(ctx, color, lw, s);
         }
@@ -175,18 +256,25 @@ impl Builder<'_> {
             }
         }
     }
-    fn point(&mut self, ctx: &Ctx, color: Rgb, p: Vec2) {
+    fn point(&mut self, ctx: &Ctx, color: Ink, p: Vec2) {
+        let (color, _) = self.styled(color, 0.0);
         let q = ctx.xf.apply(p);
         self.list.bounds.add(q);
         let start = self.list.verts.len() as u32;
         self.list.verts.push(q);
-        self.list.prims.push(DPrim { handle: ctx.top, color, lw: 0.0, kind: Kind::Point, start, len: 1 });
+        self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw: 0.0, kind: Kind::Point, start, len: 1 });
     }
-    fn infinite(&mut self, ctx: &Ctx, color: Rgb, base: Vec2, dir: Vec2, ray: bool) {
+    fn infinite(&mut self, ctx: &Ctx, color: Ink, base: Vec2, dir: Vec2, ray: bool) {
+        let (color, _) = self.styled(color, 0.0);
         let start = self.list.verts.len() as u32;
         self.list.verts.push(ctx.xf.apply(base));
         self.list.verts.push(ctx.xf.apply_vec(dir).normalized());
-        self.list.prims.push(DPrim { handle: ctx.top, color, lw: 0.0, kind: Kind::Infinite { ray }, start, len: 2 });
+        self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw: 0.0, kind: Kind::Infinite { ray }, start, len: 2 });
+    }
+    /// Take one unit of the block-expansion budget; false once it is spent.
+    fn expand(&mut self) -> bool {
+        self.list.expanded = self.list.expanded.saturating_add(1);
+        self.list.expanded <= MAX_BLOCK_EXPANSION
     }
 }
 
@@ -213,11 +301,23 @@ fn top_ctx<'a>(d: &'a Drawing, xf: Mat3, top: Handle, frozen: &'a [String], vp_c
         top,
         frozen,
         vp_colors,
+        lt_factor: 1.0,
+        block_pstyle: None,
     }
 }
 
 fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> DisplayList {
-    let mut b = Builder { list: DisplayList::default(), opts, plotting };
+    let opts = &with_point_view(d, space, opts);
+    let table = opts.plot_style_table.clone().or_else(|| match space {
+        Space::Paper(n) if !plotting => d
+            .layout(n)
+            .filter(|l| l.page.show_plot_styles)
+            .and_then(|l| cadcraft_doc::plot_style_table(d, &l.page.plot_style_table))
+            .map(std::sync::Arc::new),
+        _ => None,
+    });
+    let styler = table.map(|t| plotstyle::Styler::new(d, t));
+    let mut b = Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref(), named: None };
     if let Space::Paper(name) = space {
         b.list.sheet = paper::sheet(d, name);
     }
@@ -238,6 +338,18 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
     b.list
 }
 
+/// `opts` with a view height for relative point sizes: the extents height when none is given
+/// and points draw as figures sized relative to the view.
+fn with_point_view(d: &Drawing, space: &Space, opts: &Options) -> Options {
+    let mut o = opts.clone();
+    let relative = d.header.f64("PDSIZE", 0.0) <= 0.0 && point::sized(d.header.i64("PDMODE", 0));
+    if !(o.view_height.is_finite() && o.view_height > 0.0) && relative {
+        let ext = d.extents(space);
+        o.view_height = if ext.is_empty() { 0.0 } else { ext.height().max(ext.width() * 1e-3) };
+    }
+    o
+}
+
 /// Upper bound on viewports drawn per layout (hostile files).
 const MAX_VIEWPORTS: usize = 256;
 
@@ -247,8 +359,15 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     if vp.id == 1 || !e.common.visible {
         return;
     }
+    // The viewport's layer frozen hides its contents too (layer off hides only the border).
+    if d.layer(&e.common.layer).is_some_and(|l| l.frozen) {
+        return;
+    }
     // Border (on the viewport's layer; layer off hides only the border).
     entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
+    if b.list.expanded >= MAX_BLOCK_EXPANSION {
+        return;
+    }
     let center = vp.center.xy();
     let ok = |v: f64| v.is_finite() && v > 0.0;
     if !(ok(vp.width) && ok(vp.height) && ok(vp.view_height) && center.is_finite() && vp.view_center.is_finite()) {
@@ -264,7 +383,10 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     let mhalf = half / s;
     // Model window with slack: entity bounds are approximate (text, dimensions).
     let win = Bounds2::new(vp.view_center - mhalf, vp.view_center + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
-    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting };
+    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, styles: b.styles, named: None };
+    // PSLTSCALE on: model-space dashes are scaled so they measure the same on paper as in
+    // paper space, whatever the viewport scale.
+    let lt_factor = if d.header.i64("PSLTSCALE", 1) != 0 { 1.0 / s } else { 1.0 };
     for me in d.model.iter() {
         if !matches!(me.kind, EntityKind::Ray(_) | EntityKind::XLine(_) | EntityKind::Viewport(_)) {
             let eb = cadcraft_doc::entity_bounds(d, me, 0);
@@ -275,8 +397,9 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
         if matches!(me.kind, EntityKind::Viewport(_)) {
             continue;
         }
-        entity(&mut sub, &top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors), me);
+        entity(&mut sub, &Ctx { lt_factor, ..top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors) }, me);
     }
+    b.list.expanded = b.list.expanded.saturating_add(sub.list.expanded);
     append_clipped(&mut b.list, &sub.list, &rect);
 }
 
@@ -290,9 +413,9 @@ fn append_clipped(dst: &mut DisplayList, src: &DisplayList, rect: &Bounds2) {
                     push_raw(dst, p, Kind::Polyline, &piece);
                 }
             }
-            Kind::Tris => {
+            Kind::Tris | Kind::Mask => {
                 let t = clip::clip_triangles(pts, rect);
-                push_raw(dst, p, Kind::Tris, &t);
+                push_raw(dst, p, p.kind, &t);
             }
             Kind::Point => {
                 if let Some(q) = pts.first()
@@ -315,13 +438,13 @@ fn append_clipped(dst: &mut DisplayList, src: &DisplayList, rect: &Bounds2) {
 fn push_raw(dst: &mut DisplayList, p: &DPrim, kind: Kind, pts: &[Vec2]) {
     let min = match kind {
         Kind::Polyline => 2,
-        Kind::Tris => 3,
+        Kind::Tris | Kind::Mask => 3,
         _ => 1,
     };
     if pts.len() < min {
         return;
     }
-    let tris = kind == Kind::Tris;
+    let tris = matches!(kind, Kind::Tris | Kind::Mask);
     let start = if tris { dst.tris.len() } else { dst.verts.len() } as u32;
     for q in pts {
         dst.bounds.add(*q);
@@ -331,52 +454,87 @@ fn push_raw(dst: &mut DisplayList, p: &DPrim, kind: Kind, pts: &[Vec2]) {
     } else {
         dst.verts.extend_from_slice(pts);
     }
-    dst.prims.push(DPrim { handle: p.handle, color: p.color, lw: p.lw, kind, start, len: pts.len() as u32 });
+    dst.prims.push(DPrim { handle: p.handle, color: p.color, aci7: p.aci7, lw: p.lw, kind, start, len: pts.len() as u32 });
 }
 
 /// Build the display list for a set of loose entities (previews, rubber bands).
 pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents: I, opts: &Options) -> DisplayList {
-    let mut b = Builder { list: DisplayList::default(), opts, plotting: false };
+    let ents: Vec<&Entity> = ents.into_iter().collect();
+    // Only previews holding points need the model extents for relative point sizes.
+    let with_view;
+    let opts = if ents.iter().any(|e| matches!(e.kind, EntityKind::Point(_))) {
+        with_view = with_point_view(d, &Space::Model, opts);
+        &with_view
+    } else {
+        opts
+    };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: None, named: None };
     for e in ents {
         entity(&mut b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
     }
     b.list
 }
 
-fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Rgb, f32, Option<cadcraft_doc::Linetype>, f64, bool) {
+fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Ink, f32, Option<cadcraft_doc::Linetype>, f64, bool) {
+    resolve_common(ctx, &e.common, plotting)
+}
+
+/// [`resolve`] for an object's properties `c`.
+fn resolve_common(ctx: &Ctx, c: &cadcraft_doc::Common, plotting: bool) -> (Ink, f32, Option<cadcraft_doc::Linetype>, f64, bool) {
     let d = ctx.d;
     // Layer "0" inside a block takes the insert's layer.
-    let layer_name = if e.common.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { e.common.layer.as_str() };
+    let layer_name = if c.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { c.layer.as_str() };
     let layer = d.layer(layer_name);
-    let visible = e.common.visible
-        && layer.is_none_or(|l| l.visible() && (!plotting || l.plot))
-        && !ctx.frozen.iter().any(|f| f.eq_ignore_ascii_case(layer_name));
+    let visible =
+        c.visible && layer.is_none_or(|l| l.visible() && (!plotting || l.plot)) && !ctx.frozen.iter().any(|f| f.eq_ignore_ascii_case(layer_name));
     let layer_color = ctx.layer_color(layer_name).unwrap_or(Color::Index(7));
-    let rgb = e.common.color.resolve(layer_color, ctx.block_color);
-    let lw = match e.common.lineweight {
+    let rgb = ink(c.color, layer_color, ctx.block_color);
+    let lw = match c.lineweight {
         Lineweight::ByLayer => layer.map(|l| l.lineweight).unwrap_or(Lineweight::Default),
         Lineweight::ByBlock => ctx.block_lw,
         x => x,
     };
     let lw_mm = match lw {
         Lineweight::Mm100(v) => f32::from(v) / 100.0,
-        _ => 0.25,
+        _ => default_lineweight(d),
     };
-    let lt_name = match e.common.linetype.to_ascii_lowercase().as_str() {
+    let lt_name = match c.linetype.to_ascii_lowercase().as_str() {
         "bylayer" => layer.map(|l| l.linetype.clone()).unwrap_or_else(|| "Continuous".into()),
         "byblock" => ctx.block_ltype.clone(),
-        _ => e.common.linetype.clone(),
+        _ => c.linetype.clone(),
     };
     let lt = d.linetype(&lt_name).filter(|l| !l.pattern.is_empty()).cloned();
-    let scale = d.header.f64("LTSCALE", 1.0) * e.common.ltscale;
+    let scale = d.header.f64("LTSCALE", 1.0) * c.ltscale * ctx.lt_factor;
     (rgb, lw_mm, lt, scale, visible)
 }
 
+/// The width in mm that the "Default" lineweight stands for: `LWDEFAULT` (hundredths of a mm,
+/// 0 to 211), 0.25 mm when it is unset or out of range.
+fn default_lineweight(d: &Drawing) -> f32 {
+    match d.header.i64("LWDEFAULT", 25) {
+        v @ 0..=211 => v as f32 / 100.0,
+        _ => 0.25,
+    }
+}
+
 fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
+    // The entity's named plot style, for everything it draws (block contents set their own).
+    let saved = b.named;
+    b.named = b.styles.and_then(|s| s.named_index(ctx, &e.common));
+    entity_parts(b, ctx, e);
+    b.named = saved;
+}
+
+fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     let (rgb, lw, lt, ltscale, visible) = resolve(ctx, e, b.plotting);
     if !visible {
         return;
     }
+    // A plot style's linetype replaces the object's.
+    let lt = match b.styles.and_then(|s| s.linetype(rgb, b.named)) {
+        Some(over) => over,
+        None => lt,
+    };
     let tol = b.opts.tolerance / ctx.xf.scale_factor().max(1e-12);
     let lw = if b.opts.lineweights { lw } else { 0.0 };
     // Stroke a polyline with the entity's linetype.
@@ -390,6 +548,12 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                     }
                 } else {
                     b.polyline(ctx, rgb, lw, &dash);
+                }
+            }
+            // Text embedded in the linetype (shapes need SHX files and are not drawn).
+            if b.opts.text {
+                for sh in linetype_text::texts(ctx.d, pts, lt, ltscale, min) {
+                    b.shaped(ctx, rgb, lw, &sh);
                 }
             }
         }
@@ -418,42 +582,35 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if let Some(blk) = dm.block.as_ref().and_then(|n| ctx.d.block(n))
                 && ctx.depth < cadcraft_doc::MAX_BLOCK_DEPTH
             {
-                let sub = sub_ctx(ctx, e, Mat3::IDENTITY);
+                let sub = Ctx { block_pstyle: b.named, ..sub_ctx(ctx, e, Mat3::IDENTITY) };
                 for be in blk.entities.iter() {
+                    if !b.expand() {
+                        break;
+                    }
                     entity(b, &sub, be);
                 }
             } else {
                 dimension(b, ctx, e, dm, lw);
             }
         }
-        EntityKind::Hatch(h) => {
-            if h.solid || h.pattern.eq_ignore_ascii_case("SOLID") || h.gradient.is_some() {
-                if b.opts.fill {
-                    let loops: Vec<Vec<Vec2>> =
-                        h.loops.iter().map(|l| Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(tol)).collect();
-                    let tris = fill::triangulate_evenodd(&loops);
-                    let c = match &h.gradient {
-                        Some(g) => g.color1.resolve(Color::Index(7), ctx.block_color),
-                        None => rgb,
-                    };
-                    b.tris(ctx, c, &tris);
-                }
-            } else {
-                for seg in hatch::pattern_lines(h, tol) {
-                    if seg.len() == 1 {
-                        if let Some(p) = seg.first() {
-                            b.point(ctx, rgb, *p);
-                        }
-                    } else {
-                        b.polyline(ctx, rgb, lw, &seg);
-                    }
-                }
-            }
-        }
+        EntityKind::Hatch(h) => hatch::draw(b, ctx, e, h, rgb, lw, tol),
         EntityKind::LwPolyline(p) if p.const_width > 0.0 || p.vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0) => {
             if b.opts.fill && ctx.d.header.i64("FILLMODE", 1) != 0 {
-                let tris = fill::wide_polyline(p, tol);
-                b.tris(ctx, rgb, &tris);
+                match &lt {
+                    // Dashed: each dash a filled piece of the band; dots a line across it.
+                    Some(lt) => {
+                        let min = b.opts.min_dash / ctx.xf.scale_factor().max(1e-12);
+                        let (tris, ticks) = wide::dashed(p, tol, lt, ltscale, min);
+                        b.tris(ctx, rgb, &tris);
+                        for t in &ticks {
+                            match t.as_slice() {
+                                [q] => b.point(ctx, rgb, *q),
+                                _ => b.polyline(ctx, rgb, lw, t),
+                            }
+                        }
+                    }
+                    None => b.tris(ctx, rgb, &fill::wide_polyline(p, tol)),
+                }
             } else {
                 let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
                 stroke(b, &pl.tessellate(tol));
@@ -481,11 +638,27 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             }
         }
         EntityKind::Wipeout(w) => {
-            let mut pts = w.boundary.clone();
-            if let Some(f) = pts.first().copied() {
-                pts.push(f);
+            // Hide what was drawn before it (draw order), then the frame per WIPEOUTFRAME:
+            // 0 = none, 1 = shown and plotted, 2 = shown but not plotted.
+            if b.opts.fill {
+                let n = b.list.prims.len();
+                b.tris(ctx, rgb, &fill::triangulate_evenodd(std::slice::from_ref(&w.boundary)));
+                if let Some(p) = b.list.prims.get_mut(n) {
+                    p.kind = Kind::Mask;
+                }
             }
-            b.polyline(ctx, rgb, lw, &pts);
+            let frame = match ctx.d.header.i64("WIPEOUTFRAME", 1) {
+                0 => false,
+                2 => !b.plotting,
+                _ => true,
+            };
+            if frame {
+                let mut pts = w.boundary.clone();
+                if let Some(f) = pts.first().copied() {
+                    pts.push(f);
+                }
+                b.polyline(ctx, rgb, lw, &pts);
+            }
         }
         EntityKind::Image(i) => {
             let o = i.insert.xy();
@@ -503,7 +676,8 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 && let (Some(a), Some(n)) = (pts.first(), pts.get(1))
             {
                 let st = ctx.d.dim_style(&l.style);
-                let size = st.map(|s| s.arrow_size).unwrap_or(0.18) * ctx.d.header.f64("DIMSCALE", 1.0);
+                // DIMASZ × DIMSCALE of the leader's style (the drawing's DIMSCALE when it is 0).
+                let size = st.map(|s| s.arrow_size).unwrap_or(0.18) * leader_scale(ctx.d, st);
                 let kind = dim::Arrowhead::parse(st.map(|s| s.arrow_block.as_str()).unwrap_or(""));
                 let g = dim::arrowhead(kind, *a, (*a - *n).normalized(), size);
                 for l in &g.lines {
@@ -513,8 +687,8 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             }
         }
         EntityKind::MLeader(m) => {
-            for l in &m.leaders {
-                let pts: Vec<Vec2> = l.iter().map(|v| v.xy()).chain(std::iter::once(m.landing.xy())).collect();
+            // Straight or spline leader lines; block content draws like a block reference.
+            for pts in m.leader_paths() {
                 b.polyline(ctx, rgb, lw, &pts);
                 if let (Some(a), Some(n)) = (pts.first(), pts.get(1)) {
                     b.tris(ctx, rgb, &dim::arrow(*a, (*a - *n).normalized(), m.arrow_size));
@@ -526,8 +700,27 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 b.polyline(ctx, rgb, lw, &[land, land + Vec2::new(m.dogleg * dir, 0.0)]);
                 mtext(b, ctx, t, rgb, lw);
             }
+            if let Some(ins) = &m.block {
+                if m.dogleg > 0.0 && !m.leaders.is_empty() {
+                    let land = m.landing.xy();
+                    let dir = if ins.insert.x >= land.x { 1.0 } else { -1.0 };
+                    b.polyline(ctx, rgb, lw, &[land, land + Vec2::new(m.dogleg * dir, 0.0)]);
+                }
+                insert(b, ctx, e, ins, rgb);
+            }
         }
-        EntityKind::Point(p) => b.point(ctx, rgb, p.p.xy()),
+        EntityKind::Point(p) => {
+            // Relative sizes follow the view: undo the block / viewport scale.
+            let view = b.opts.view_height / ctx.xf.scale_factor().max(1e-12);
+            let size = point::size(ctx.d.header.f64("PDSIZE", 0.0), view);
+            let fig = point::figure(ctx.d.header.i64("PDMODE", 0), size, p.p.xy(), p.angle, tol);
+            if fig.dot {
+                b.point(ctx, rgb, p.p.xy());
+            }
+            for l in &fig.lines {
+                b.polyline(ctx, rgb, lw, l);
+            }
+        }
         kind => {
             for prim in kind.prims() {
                 match prim {
@@ -601,17 +794,19 @@ pub fn layout_mtext_entity(d: &Drawing, t: &cadcraft_doc::MText) -> cadcraft_fon
     cadcraft_fonts::layout_mtext_with(&t.contents, &params)
 }
 
-fn mtext_color(c: Option<cadcraft_fonts::MTextColor>, rgb: Rgb) -> Rgb {
+fn mtext_color(c: Option<cadcraft_fonts::MTextColor>, rgb: Ink) -> Ink {
     match c {
         Some(cadcraft_fonts::MTextColor::Aci(i)) => {
-            u8::try_from(i).ok().filter(|i| *i > 0).map(|i| Color::Index(i).resolve(Color::Index(7), Color::Index(7))).unwrap_or(rgb)
+            u8::try_from(i).ok().filter(|i| *i > 0).map(|i| ink(Color::Index(i), Color::Index(7), Color::Index(7))).unwrap_or(rgb)
         }
-        Some(cadcraft_fonts::MTextColor::Rgb(v)) => Rgb(((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8),
+        Some(cadcraft_fonts::MTextColor::Rgb(v)) => {
+            Ink { rgb: Rgb(((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8), aci7: false, aci: 0 }
+        }
         None => rgb,
     }
 }
 
-fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::MText, rgb: Rgb, lw: f32) {
+fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::MText, rgb: Ink, lw: f32) {
     let l = layout_mtext_entity(ctx.d, t);
     for p in &l.pieces {
         b.shaped(ctx, mtext_color(p.color, rgb), lw, &p.shaped);
@@ -637,15 +832,15 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimensio
     let g = dimension_in(d, dm);
     // DIMCLRD / DIMCLRE / DIMCLRT: ByBlock = the dimension's own colour.
     let layer_name = if e.common.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { e.common.layer.as_str() };
-    let layer_color = d.layer(layer_name).map(|l| l.color).unwrap_or(Color::Index(7));
+    let layer_color = ctx.layer_color(layer_name).unwrap_or(Color::Index(7));
     let own = match e.common.color {
         Color::ByLayer => layer_color,
         Color::ByBlock => ctx.block_color,
         c => c,
     };
-    let dim_rgb = style.dim_line_color.resolve(layer_color, own);
-    let ext_rgb = style.ext_line_color.resolve(layer_color, own);
-    let txt_rgb = style.text_color.resolve(layer_color, own);
+    let dim_rgb = ink(style.dim_line_color, layer_color, own);
+    let ext_rgb = ink(style.ext_line_color, layer_color, own);
+    let txt_rgb = ink(style.text_color, layer_color, own);
     for (l, role) in g.lines.iter().zip(g.line_roles.iter().chain(std::iter::repeat(&LineRole::Dim))) {
         b.polyline(ctx, if *role == LineRole::Ext { ext_rgb } else { dim_rgb }, lw, l);
     }
@@ -681,7 +876,7 @@ pub fn table_covered(t: &cadcraft_doc::Table) -> Vec<Vec<bool>> {
     cov
 }
 
-fn table(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::Table, rgb: Rgb, lw: f32) {
+fn table(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::Table, rgb: Ink, lw: f32) {
     let o = t.insert.xy();
     let rows = t.row_heights.len().min(10_000);
     let cols = t.col_widths.len().min(10_000);
@@ -790,25 +985,33 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
         top: ctx.top,
         frozen: ctx.frozen,
         vp_colors: ctx.vp_colors,
+        lt_factor: ctx.lt_factor,
+        block_pstyle: ctx.block_pstyle,
     }
 }
 
-fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rgb: Rgb) {
+fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rgb: Ink) {
     if ctx.depth >= cadcraft_doc::MAX_BLOCK_DEPTH {
         return;
     }
     if let Some(blk) = ctx.d.block(&ins.block) {
         let cols = ins.cols.clamp(1, 10_000);
         let rows = ins.rows.clamp(1, 10_000);
-        for r in 0..rows {
+        'copies: for r in 0..rows {
             for c in 0..cols {
+                if !b.expand() {
+                    break 'copies;
+                }
                 let off = Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
                 let m = Mat3::translate(off).then_before(ins.transform(blk.base.xy()));
-                let sub = sub_ctx(ctx, e, m);
+                let sub = Ctx { block_pstyle: b.named, ..sub_ctx(ctx, e, m) };
                 for be in blk.entities.iter() {
                     // Constant/visible attribute definitions inside blocks are not drawn; attribs are.
                     if matches!(be.kind, EntityKind::AttDef(_)) {
                         continue;
+                    }
+                    if !b.expand() {
+                        break 'copies;
                     }
                     entity(b, &sub, be);
                 }
@@ -816,14 +1019,47 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
         }
     }
     if b.opts.text {
+        // ATTMODE (ATTDISP): 0 shows no attributes, 1 the visible ones, 2 all of them.
+        let attmode = ctx.d.header.i64("ATTMODE", 1);
         for a in &ins.attribs {
-            if a.invisible {
+            if attmode == 0 || (a.invisible && attmode != 2) {
                 continue;
             }
             let (sh, _) = place_text_entity(ctx.d, &a.text, &a.text.value);
-            b.shaped(ctx, rgb, 0.0, &sh);
+            // Properties of the attribute's definition (as AutoCAD copies them to the attribute
+            // on insertion), except those set on the attribute itself: ByBlock = the reference's,
+            // layer 0 = the reference's layer.
+            let def = ctx.d.block(&ins.block).and_then(|blk| blk.entities.iter().find(|be| attdef_tag(be, &a.tag)));
+            let (ink, lw, shown) = match (def, a.props.is_empty()) {
+                (None, true) => (rgb, resolve(ctx, e, b.plotting).1, true),
+                (def, _) => {
+                    let c = a.props.over(&def.map(|d| d.common.clone()).unwrap_or_else(by_block));
+                    let (ink, lw, _, _, shown) = resolve_common(&sub_ctx(ctx, e, Mat3::IDENTITY), &c, b.plotting);
+                    (ink, lw, shown)
+                }
+            };
+            if shown {
+                b.shaped(ctx, ink, if b.opts.lineweights { lw } else { 0.0 }, &sh);
+            }
         }
     }
+}
+
+/// Properties that follow the block reference's (an attribute without a definition).
+fn by_block() -> cadcraft_doc::Common {
+    cadcraft_doc::Common { color: Color::ByBlock, linetype: "ByBlock".into(), lineweight: Lineweight::ByBlock, ..cadcraft_doc::Common::default() }
+}
+
+/// The attribute definition with tag `tag` (any case).
+fn attdef_tag(e: &Entity, tag: &str) -> bool {
+    matches!(&e.kind, EntityKind::AttDef(d) if d.tag.eq_ignore_ascii_case(tag))
+}
+
+/// The overall scale of a leader drawn with dimension style `st`: its DIMSCALE, else the
+/// drawing's.
+fn leader_scale(d: &Drawing, st: Option<&cadcraft_doc::DimStyle>) -> f64 {
+    let dimscale = d.header.f64("DIMSCALE", 1.0);
+    st.map(|s| s.effective_scale(dimscale)).unwrap_or_else(|| cadcraft_doc::DimStyle::default().effective_scale(dimscale))
 }
 
 #[cfg(test)]

@@ -1,7 +1,10 @@
 //! Object snaps (OSNAP), polar tracking and ortho.
 
-use cadcraft_doc::{Drawing, EntityKind, Prim, Space};
-use cadcraft_geom::{Bounds2, Circle, PI, Segment, Vec2, intersect_ext};
+mod curves;
+pub mod tracking;
+
+use cadcraft_doc::{Drawing, EntityKind, Insert, MAX_BLOCK_DEPTH, Prim, Space};
+use cadcraft_geom::{Bounds2, Circle, Ellipse, Mat3, PI, Segment, Vec2, intersect_ext};
 use serde::Serialize;
 
 /// OSMODE bits.
@@ -22,6 +25,8 @@ pub mod mode {
     pub const PAR: u32 = 8192;
     /// Running snaps temporarily off (F3).
     pub const OFF: u32 = 16384;
+    /// Not an OSMODE bit: snaps also find hatch objects (OSNAPHATCH = 1).
+    pub const HATCH: u32 = 1 << 16;
     pub const ALL: [(u32, &str); 14] = [
         (END, "Endpoint"),
         (MID, "Midpoint"),
@@ -145,10 +150,59 @@ pub(crate) fn osnap_with(
     if osmode == 0 || osmode & mode::OFF != 0 {
         return None;
     }
+    let (mut cands, near_prims) = gather(d, space, ix, cursor, aperture, osmode)?;
+    // Intersections between nearby primitives; Apparent Intersection also where their extensions
+    // meet (lines extended, arcs as full circles: in 2D, the "apparent" crossing of objects
+    // that don't reach each other).
+    if osmode & (mode::INT | mode::APP) != 0 {
+        let segs: Vec<Vec<Segment>> = near_prims.iter().take(200).map(prim_segments).collect();
+        let real = if osmode & mode::INT != 0 { mode::INT } else { mode::APP };
+        for i in 0..segs.len() {
+            for j in i + 1..segs.len() {
+                // Extending a tessellated ellipse or spline chord means nothing.
+                let extend = osmode & mode::APP != 0 && [i, j].iter().all(|k| near_prims.get(*k).is_some_and(extendable));
+                for a in segs.get(i).into_iter().flatten() {
+                    for b in segs.get(j).into_iter().flatten() {
+                        for x in intersect_ext(&fix_circle(a), &fix_circle(b), false) {
+                            if x.dist(cursor) <= aperture {
+                                cands.push((real, x));
+                            }
+                        }
+                        if extend {
+                            for x in intersect_ext(a, b, true) {
+                                if x.is_finite() && x.dist(cursor) <= aperture {
+                                    cands.push((mode::APP, x));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    finish(cands, &near_prims, cursor, aperture, osmode, base, deferred)
+}
+
+/// Whether a primitive has a meaningful extension (a line, an arc, a circle, an xline or ray).
+pub(crate) fn extendable(p: &Prim) -> bool {
+    matches!(p, Prim::Seg(_) | Prim::Circle(_) | Prim::Infinite { .. })
+}
+
+/// The snap candidates of `osmode` and the primitives within `aperture` of `cursor`; `None`
+/// when the drawing can't be searched.
+pub(crate) fn gather(
+    d: &Drawing,
+    space: &Space,
+    ix: &Option<std::sync::Arc<crate::spatial::SpatialIndex>>,
+    cursor: Vec2,
+    aperture: f64,
+    osmode: u32,
+) -> Option<(Vec<(u32, Vec2)>, Vec<Prim>)> {
     let probe = Bounds2::new(cursor, cursor).expand(aperture);
     let mut cands: Vec<(u32, Vec2)> = Vec::new();
     let mut near_prims: Vec<Prim> = Vec::new();
     let mut count = 0usize;
+    let mut budget = MAX_BLOCK_LEAVES;
     for (e, known) in crate::select::candidates(d, space, ix, &probe.expand(aperture), true, false)? {
         if !d.is_visible(e) {
             continue;
@@ -163,18 +217,142 @@ pub(crate) fn osnap_with(
         }
         if osmode & mode::INS != 0 {
             match &e.kind {
-                EntityKind::Text(t) => cands.push((mode::INS, t.insert.xy())),
+                EntityKind::Text(t) => cands.push((mode::INS, t.justify_point())),
                 EntityKind::MText(t) => cands.push((mode::INS, t.insert.xy())),
-                EntityKind::Insert(i) => cands.push((mode::INS, i.insert.xy())),
+                EntityKind::Insert(i) => {
+                    cands.push((mode::INS, i.insert.xy()));
+                    cands.extend(i.attribs.iter().filter(|a| !a.invisible).map(|a| (mode::INS, a.text.justify_point())));
+                }
                 _ => {}
             }
         }
-        if osmode & mode::END != 0
-            && let EntityKind::Solid(s) | EntityKind::Trace(s) = &e.kind
-        {
-            cands.extend(s.corners.iter().map(|c| (mode::END, c.xy())));
+        let mut sink = Sink { osmode, aperture, probe, cands: &mut cands, near: &mut near_prims };
+        sink.object(&e.kind, None);
+        // A block reference snaps to the objects inside it, placed by its transform.
+        if let EntityKind::Insert(ins) = &e.kind {
+            block_leaves(d, ins, &Mat3::IDENTITY, 0, &mut budget, &mut |k, m| sink.object(k, Some(m)));
         }
-        for p in e.kind.prims() {
+        if let EntityKind::Dimension(dm) = &e.kind {
+            sink.dimension(d, dm, &mut budget);
+        }
+    }
+    Some((cands, near_prims))
+}
+
+/// Picks the best of the gathered candidates, adding the base-dependent and deferred snaps.
+fn finish(
+    mut cands: Vec<(u32, Vec2)>,
+    near_prims: &[Prim],
+    cursor: Vec2,
+    aperture: f64,
+    osmode: u32,
+    base: Option<Vec2>,
+    deferred: bool,
+) -> Option<SnapHit> {
+    // Perpendicular / tangent from the base point.
+    if let Some(bp) = base {
+        for p in near_prims {
+            if osmode & mode::PER != 0 {
+                match p {
+                    Prim::Seg(Segment::Line(l)) => cands.push((mode::PER, l.project(bp))),
+                    Prim::Seg(Segment::Arc { arc, .. }) => cands.push((mode::PER, Circle::new(arc.center, arc.radius).closest(bp))),
+                    Prim::Circle(c) => cands.push((mode::PER, c.closest(bp))),
+                    Prim::Infinite { base: b0, dir, .. } => cands.push((mode::PER, *b0 + *dir * (bp - *b0).dot(*dir))),
+                    Prim::Ellipse(e) => cands.extend(curves::ellipse_perpendiculars(e, bp).into_iter().map(|q| (mode::PER, q))),
+                    Prim::Spline(s) => cands.extend(curves::spline_perpendiculars(s, bp).into_iter().map(|q| (mode::PER, q))),
+                    _ => {}
+                }
+            }
+            if osmode & mode::TAN != 0 {
+                let pts = match p {
+                    Prim::Seg(Segment::Arc { arc, .. }) => Circle::new(arc.center, arc.radius).tangent_points(bp),
+                    Prim::Circle(c) => c.tangent_points(bp),
+                    Prim::Ellipse(e) => curves::ellipse_tangents(e, bp),
+                    Prim::Spline(s) => curves::spline_tangents(s, bp),
+                    _ => Vec::new(),
+                };
+                cands.extend(pts.into_iter().map(|t| (mode::TAN, t)));
+            }
+        }
+    }
+    let best = cands.iter().filter(|(_, p)| p.dist(cursor) <= aperture).min_by(|a, b| {
+        // Prefer more specific modes when nearly equidistant.
+        let da = a.1.dist(cursor) - if a.0 == mode::INT || a.0 == mode::END { aperture * 0.15 } else { 0.0 };
+        let db = b.1.dist(cursor) - if b.0 == mode::INT || b.0 == mode::END { aperture * 0.15 } else { 0.0 };
+        da.total_cmp(&db)
+    });
+    if let Some((m, p)) = best {
+        return Some(SnapHit { point: *p, mode: *m, name: name_of(*m), deferred: None });
+    }
+    if base.is_none()
+        && deferred
+        && let Some(h) = deferred_hit(near_prims, cursor, aperture, osmode)
+    {
+        return Some(h);
+    }
+    if osmode & mode::NEA != 0 {
+        // The closest point of all nearby objects, whatever their drawing order.
+        let mut nb: Option<(f64, Vec2)> = None;
+        let mut consider = |c: Vec2| {
+            let dd = c.dist(cursor);
+            if dd <= aperture && nb.is_none_or(|(bd, _)| dd < bd) {
+                nb = Some((dd, c));
+            }
+        };
+        for p in near_prims {
+            for s in prim_segments(p) {
+                consider(fix_circle(&s).closest(cursor));
+            }
+            if let Prim::Circle(c) = p {
+                consider(c.closest(cursor));
+            }
+        }
+        if let Some((_, p)) = nb {
+            return Some(SnapHit { point: p, mode: mode::NEA, name: "Nearest", deferred: None });
+        }
+    }
+    None
+}
+
+/// Upper bound on the block-reference objects one snap query looks at (hostile files).
+const MAX_BLOCK_LEAVES: usize = 20_000;
+
+/// Collects snap candidates and the primitives near the cursor.
+struct Sink<'a> {
+    osmode: u32,
+    aperture: f64,
+    probe: Bounds2,
+    cands: &'a mut Vec<(u32, Vec2)>,
+    near: &'a mut Vec<Prim>,
+}
+
+impl Sink<'_> {
+    /// The snap points of one object; `xf` places an object from inside a block reference
+    /// (whose primitives far from the cursor are skipped).
+    fn object(&mut self, kind: &EntityKind, xf: Option<&Mat3>) {
+        let osmode = self.osmode;
+        // OSNAPHATCH = 0: hatches are left out.
+        if osmode & mode::HATCH == 0 && matches!(kind, EntityKind::Hatch(_)) {
+            return;
+        }
+        let at = |p: Vec2| xf.map_or(p, |m| m.apply(p));
+        if osmode & mode::END != 0
+            && let EntityKind::Solid(s) | EntityKind::Trace(s) = kind
+        {
+            self.cands.extend(s.corners.iter().map(|c| (mode::END, at(c.xy()))));
+        }
+        for p in kind.prims() {
+            let p = match xf {
+                Some(m) => {
+                    let p = xform_prim(&p, m);
+                    if !prim_near(&p, &self.probe, self.aperture) {
+                        continue;
+                    }
+                    p
+                }
+                None => p,
+            };
+            let cands = &mut *self.cands;
             match &p {
                 Prim::Seg(s) => {
                     if osmode & mode::END != 0 {
@@ -213,13 +391,22 @@ pub(crate) fn osnap_with(
                         cands.push((mode::CEN, el.center));
                     }
                     if osmode & mode::QUA != 0 {
+                        // Only the quadrant points the arc passes through.
                         for k in 0..4 {
-                            cands.push((mode::QUA, el.at_param(k as f64 * PI / 2.0)));
+                            let t = k as f64 * PI / 2.0;
+                            if cadcraft_geom::angle_in_sweep(t, el.start, el.end) {
+                                cands.push((mode::QUA, el.at_param(t)));
+                            }
                         }
                     }
                     if osmode & mode::END != 0 && !el.is_full() {
                         cands.push((mode::END, el.at_param(el.start)));
                         cands.push((mode::END, el.at_param(el.end)));
+                    }
+                    if osmode & mode::MID != 0
+                        && let Some(m) = curves::ellipse_mid(el)
+                    {
+                        cands.push((mode::MID, m));
                     }
                 }
                 Prim::Spline(s) => {
@@ -228,109 +415,212 @@ pub(crate) fn osnap_with(
                         cands.push((mode::END, s.eval(lo)));
                         cands.push((mode::END, s.eval(hi)));
                     }
+                    if osmode & mode::MID != 0
+                        && let Some(m) = curves::spline_mid(s)
+                    {
+                        cands.push((mode::MID, m));
+                    }
                 }
                 Prim::Point(pt) => {
-                    if osmode & mode::NOD != 0 && matches!(e.kind, EntityKind::Point(_)) {
+                    if osmode & mode::NOD != 0 && matches!(kind, EntityKind::Point(_)) {
                         cands.push((mode::NOD, *pt));
                     }
                 }
                 Prim::Infinite { base, .. } => {
-                    if osmode & mode::END != 0 && matches!(e.kind, EntityKind::Ray(_)) {
+                    if osmode & mode::END != 0 && matches!(kind, EntityKind::Ray(_)) {
                         cands.push((mode::END, *base));
                     }
                 }
                 Prim::Fill(_) => {}
             }
-            near_prims.push(p);
+            self.near.push(p);
         }
         if osmode & mode::GCEN != 0
-            && let EntityKind::LwPolyline(pl) = &e.kind
+            && let EntityKind::LwPolyline(pl) = kind
             && pl.closed
         {
-            let pts = cadcraft_geom::Polyline { vertices: pl.vertices.clone(), closed: true }.tessellate(aperture / 10.0);
+            let pts = cadcraft_geom::Polyline { vertices: pl.vertices.clone(), closed: true }.tessellate(self.aperture / 10.0);
             if let Some(c) = centroid(&pts) {
-                cands.push((mode::GCEN, c));
+                self.cands.push((mode::GCEN, at(c)));
             }
         }
     }
-    // Intersections between nearby primitives.
-    if osmode & (mode::INT | mode::APP) != 0 {
-        let segs: Vec<Vec<Segment>> = near_prims.iter().take(200).map(prim_segments).collect();
-        for i in 0..segs.len() {
-            for j in i + 1..segs.len() {
-                for a in segs.get(i).into_iter().flatten() {
-                    for b in segs.get(j).into_iter().flatten() {
-                        for x in intersect_ext(&fix_circle(a), &fix_circle(b), false) {
-                            if x.dist(cursor) <= aperture {
-                                cands.push((mode::INT, x));
+}
+
+impl Sink<'_> {
+    /// A dimension snaps to what it draws, as in AutoCAD (into its block): the objects of its
+    /// block when the drawing has one (read from a file), else the lines generated from it
+    /// (Endpoint on their ends); Node on its definition points.
+    fn dimension(&mut self, d: &Drawing, dm: &cadcraft_doc::Dimension, budget: &mut usize) {
+        match dm.block.as_ref().and_then(|n| d.block(n)) {
+            Some(blk) => {
+                // The block holds world geometry: a reference at its own base point places it as is.
+                let ins = Insert {
+                    block: blk.name.clone(),
+                    insert: blk.base,
+                    scale: cadcraft_geom::Vec3::new(1.0, 1.0, 1.0),
+                    rotation: 0.0,
+                    attribs: Vec::new(),
+                    cols: 1,
+                    rows: 1,
+                    col_spacing: 0.0,
+                    row_spacing: 0.0,
+                };
+                block_leaves(d, &ins, &Mat3::IDENTITY, 0, budget, &mut |k, m| self.object(k, Some(m)));
+            }
+            None => {
+                let g = cadcraft_render::dimension_in(d, dm);
+                for line in &g.lines {
+                    let (Some(a), Some(b)) = (line.first(), line.last()) else { continue };
+                    if self.osmode & mode::END != 0 {
+                        self.cands.extend([(mode::END, *a), (mode::END, *b)]);
+                    }
+                    if self.osmode & mode::MID != 0 && line.len() == 2 {
+                        self.cands.push((mode::MID, (*a + *b) * 0.5));
+                    }
+                    for w in line.windows(2) {
+                        if let [p, q] = w {
+                            let s = Prim::Seg(Segment::Line(cadcraft_geom::Line::new(*p, *q)));
+                            if prim_near(&s, &self.probe, self.aperture) {
+                                self.near.push(s);
                             }
                         }
                     }
                 }
             }
         }
+        if self.osmode & mode::NOD != 0 {
+            self.cands.extend(dim_def_points(dm).into_iter().map(|p| (mode::NOD, p)));
+        }
     }
-    // Perpendicular / tangent from the base point.
-    if let Some(bp) = base {
-        for p in &near_prims {
-            if osmode & mode::PER != 0 {
-                match p {
-                    Prim::Seg(Segment::Line(l)) => cands.push((mode::PER, l.project(bp))),
-                    Prim::Seg(Segment::Arc { arc, .. }) => cands.push((mode::PER, Circle::new(arc.center, arc.radius).closest(bp))),
-                    Prim::Circle(c) => cands.push((mode::PER, c.closest(bp))),
-                    Prim::Infinite { base: b0, dir, .. } => cands.push((mode::PER, *b0 + *dir * (bp - *b0).dot(*dir))),
-                    _ => {}
-                }
+}
+
+/// The definition points of a dimension that its kind uses.
+fn dim_def_points(dm: &cadcraft_doc::Dimension) -> Vec<Vec2> {
+    use cadcraft_doc::DimKind;
+    let pts = match dm.kind {
+        DimKind::Linear { .. } | DimKind::Aligned | DimKind::ArcLength => vec![dm.defpt, dm.p13, dm.p14],
+        DimKind::Radius | DimKind::Diameter => vec![dm.defpt, dm.p15],
+        DimKind::Angular3P => vec![dm.defpt, dm.p13, dm.p14, dm.p15],
+        DimKind::Angular => vec![dm.defpt, dm.p13, dm.p14, dm.p15, dm.p16],
+        DimKind::Ordinate { .. } => vec![dm.p13, dm.p14],
+    };
+    pts.into_iter().map(|p| p.xy()).filter(|p| p.is_finite()).collect()
+}
+
+/// Calls `f` with each object drawn by a block reference and the transform placing it, nested
+/// references expanded (within [`MAX_BLOCK_DEPTH`] levels and `budget` objects); objects that
+/// aren't drawn (hidden, on a layer that is off or frozen, attribute definitions) are left out.
+fn block_leaves(d: &Drawing, ins: &Insert, m: &Mat3, depth: usize, budget: &mut usize, f: &mut dyn FnMut(&EntityKind, &Mat3)) {
+    if depth >= MAX_BLOCK_DEPTH {
+        return;
+    }
+    let Some(blk) = d.block(&ins.block) else { return };
+    if blk.entities.is_empty() {
+        return;
+    }
+    let (cols, rows) = (ins.cols.clamp(1, 10_000), ins.rows.clamp(1, 10_000));
+    for r in 0..rows {
+        for c in 0..cols {
+            // Each array cell spends budget too, so a huge array of tiny blocks stays bounded.
+            if *budget == 0 {
+                return;
             }
-            if osmode & mode::TAN != 0 {
-                let circ = match p {
-                    Prim::Seg(Segment::Arc { arc, .. }) => Some(Circle::new(arc.center, arc.radius)),
-                    Prim::Circle(c) => Some(*c),
-                    _ => None,
-                };
-                if let Some(c) = circ {
-                    cands.extend(c.tangent_points(bp).into_iter().map(|t| (mode::TAN, t)));
+            *budget -= 1;
+            let off = Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
+            let mm = m.then_before(Mat3::translate(off).then_before(ins.transform(blk.base.xy())));
+            for be in blk.entities.iter() {
+                if *budget == 0 {
+                    return;
+                }
+                *budget -= 1;
+                // Objects on layer 0 take the reference's layer, which is visible.
+                if !be.common.visible || (be.common.layer != "0" && !d.is_visible(be)) {
+                    continue;
+                }
+                match &be.kind {
+                    EntityKind::AttDef(_) => {}
+                    EntityKind::Insert(inner) => block_leaves(d, inner, &mm, depth + 1, budget, f),
+                    k => f(k, &mm),
                 }
             }
         }
     }
-    let best = cands.iter().filter(|(_, p)| p.dist(cursor) <= aperture).min_by(|a, b| {
-        // Prefer more specific modes when nearly equidistant.
-        let da = a.1.dist(cursor) - if a.0 == mode::INT || a.0 == mode::END { aperture * 0.15 } else { 0.0 };
-        let db = b.1.dist(cursor) - if b.0 == mode::INT || b.0 == mode::END { aperture * 0.15 } else { 0.0 };
-        da.total_cmp(&db)
-    });
-    if let Some((m, p)) = best {
-        return Some(SnapHit { point: *p, mode: *m, name: name_of(*m), deferred: None });
-    }
-    if base.is_none()
-        && deferred
-        && let Some(h) = deferred_hit(&near_prims, cursor, aperture, osmode)
-    {
-        return Some(h);
-    }
-    if osmode & mode::NEA != 0 {
-        let mut nb: Option<(f64, Vec2)> = None;
-        for p in &near_prims {
-            for s in prim_segments(p) {
-                let c = fix_circle(&s).closest(cursor);
-                let dd = c.dist(cursor);
-                if dd <= aperture && nb.is_none_or(|(bd, _)| dd < bd) {
-                    nb = Some((dd, c));
-                }
+}
+
+/// Whether `p` comes within `aperture` of the box `probe`.
+fn prim_near(p: &Prim, probe: &Bounds2, aperture: f64) -> bool {
+    let b = match p {
+        Prim::Seg(s) => s.bounds(),
+        Prim::Circle(c) => c.bounds(),
+        Prim::Ellipse(e) => e.bounds(),
+        Prim::Spline(s) => Bounds2::from_points(s.control.iter().copied()),
+        Prim::Point(q) => Bounds2::new(*q, *q),
+        Prim::Infinite { .. } => return true,
+        Prim::Fill(f) => Bounds2::from_points(f.iter().copied()),
+    };
+    b.expand(aperture).intersects(probe)
+}
+
+/// The rotation-and-uniform-scale factor of `m`'s linear part (mirroring allowed), or `None`
+/// when it distorts shapes (non-uniform scale or shear).
+fn similarity_scale(m: &Mat3) -> Option<f64> {
+    let (u, v) = (Vec2::new(m.a, m.b), Vec2::new(m.c, m.d));
+    let (lu, lv) = (u.len(), v.len());
+    let tol = 1e-9 * lu.max(lv);
+    ((lu - lv).abs() <= tol && u.dot(v).abs() <= tol * lu.max(lv) && lu > 0.0).then_some(lu)
+}
+
+/// `p` placed by the affine transform `m`, exactly: circles and arcs under a non-uniform scale
+/// become ellipses and elliptical arcs.
+fn xform_prim(p: &Prim, m: &Mat3) -> Prim {
+    let mirror = m.is_mirroring();
+    match p {
+        Prim::Seg(Segment::Line(l)) => Prim::Seg(Segment::Line(cadcraft_geom::Line::new(m.apply(l.a), m.apply(l.b)))),
+        Prim::Seg(Segment::Arc { arc, ccw }) => match similarity_scale(m) {
+            Some(s) => {
+                let c = m.apply(arc.center);
+                let (a0, a1) = (c.angle_to(m.apply(arc.start_point())), c.angle_to(m.apply(arc.end_point())));
+                let (start, end) = if mirror { (a1, a0) } else { (a0, a1) };
+                Prim::Seg(Segment::Arc { arc: cadcraft_geom::Arc::new(c, arc.radius * s, start, end), ccw: *ccw != mirror })
             }
-            if let Prim::Circle(c) = p {
-                let q = c.closest(cursor);
-                if q.dist(cursor) <= aperture {
-                    nb = Some((q.dist(cursor), q));
-                }
+            None => {
+                let e = Ellipse { center: arc.center, major: Vec2::X * arc.radius, ratio: 1.0, start: arc.start, end: arc.end };
+                Prim::Ellipse(xform_ellipse(&e, m))
             }
+        },
+        Prim::Circle(c) => match similarity_scale(m) {
+            Some(s) => Prim::Circle(Circle::new(m.apply(c.center), c.radius * s)),
+            None => Prim::Ellipse(xform_ellipse(&Ellipse::full(c.center, Vec2::X * c.radius, 1.0), m)),
+        },
+        Prim::Ellipse(e) => Prim::Ellipse(xform_ellipse(e, m)),
+        Prim::Spline(s) => {
+            let mut s = s.clone();
+            s.control.iter_mut().chain(s.fit.iter_mut()).for_each(|q| *q = m.apply(*q));
+            Prim::Spline(s)
         }
-        if let Some((_, p)) = nb {
-            return Some(SnapHit { point: p, mode: mode::NEA, name: "Nearest", deferred: None });
-        }
+        Prim::Point(q) => Prim::Point(m.apply(*q)),
+        Prim::Infinite { base, dir, ray } => Prim::Infinite { base: m.apply(*base), dir: m.apply_vec(*dir).normalized(), ray: *ray },
+        Prim::Fill(f) => Prim::Fill(f.iter().map(|q| m.apply(*q)).collect()),
     }
-    None
+}
+
+/// The image of an ellipse (or elliptical arc) under an affine transform: the conjugate
+/// semi-diameters `A·major`, `A·minor` give the new principal axes; parameters shift with them
+/// (and reverse under a mirroring transform).
+fn xform_ellipse(e: &Ellipse, m: &Mat3) -> Ellipse {
+    let center = m.apply(e.center);
+    let (am, an) = (m.apply_vec(e.major), m.apply_vec(e.minor()));
+    // |am·cos t + an·sin t| is largest at t0: the new major axis.
+    let t0 = 0.5 * (2.0 * am.dot(an)).atan2(am.dot(am) - an.dot(an));
+    let (s0, c0) = t0.sin_cos();
+    let (u, v) = (am * c0 + an * s0, an * c0 - am * s0);
+    let ratio = if u.len() > 0.0 { (v.len() / u.len()).min(1.0) } else { 1.0 };
+    if e.is_full() {
+        return Ellipse::full(center, u, ratio);
+    }
+    let (start, end) = if u.cross(v) >= 0.0 { (e.start - t0, e.end - t0) } else { (t0 - e.end, t0 - e.start) };
+    Ellipse { center, major: u, ratio, start: cadcraft_geom::norm_angle(start), end: cadcraft_geom::norm_angle(end) }
 }
 
 /// The nearest deferred tangent/perpendicular within `aperture` of `cursor`.
@@ -527,11 +817,21 @@ pub fn polar(base: Vec2, p: Vec2, inc: f64, tol: f64) -> Option<(Vec2, f64)> {
     }
 }
 
-/// Grid snap.
-pub fn grid_snap(p: Vec2, unit: Vec2, origin: Vec2) -> Vec2 {
-    let sx = if unit.x > 1e-12 { ((p.x - origin.x) / unit.x).round() * unit.x + origin.x } else { p.x };
-    let sy = if unit.y > 1e-12 { ((p.y - origin.y) / unit.y).round() * unit.y + origin.y } else { p.y };
-    Vec2::new(sx, sy)
+/// Grid snap: the nearest point of the grid of `unit` spacing through `origin`, turned by
+/// `angle` (radians) about it.
+pub fn grid_snap(p: Vec2, unit: Vec2, origin: Vec2, angle: f64) -> Vec2 {
+    let angle = if angle.is_finite() { angle } else { 0.0 };
+    let q = (p - origin).rotate(-angle);
+    let sx = if unit.x > 1e-12 { (q.x / unit.x).round() * unit.x } else { q.x };
+    let sy = if unit.y > 1e-12 { (q.y / unit.y).round() * unit.y } else { q.y };
+    let s = origin + Vec2::new(sx, sy).rotate(angle);
+    if s.is_finite() { s } else { p }
+}
+
+/// The snap grid's origin (SNAPBASE) and rotation in radians (SNAPANG, in degrees) of a drawing.
+pub fn grid_frame(d: &Drawing) -> (Vec2, f64) {
+    let base = d.header.point("SNAPBASE").map(|p| p.xy()).filter(|p| p.is_finite()).unwrap_or(Vec2::ZERO);
+    (base, d.header.f64("SNAPANG", 0.0).to_radians())
 }
 
 #[cfg(test)]
@@ -589,7 +889,7 @@ mod tests {
         let (p, a) = polar(Vec2::ZERO, Vec2::new(5.0, 5.1), 45f64.to_radians(), 3f64.to_radians()).unwrap();
         assert!((a - PI / 4.0).abs() < 1e-12);
         assert!((p.x - p.y).abs() < 1e-9);
-        assert_eq!(grid_snap(Vec2::new(0.74, 1.26), Vec2::new(0.5, 0.5), Vec2::ZERO), Vec2::new(0.5, 1.5));
+        assert_eq!(grid_snap(Vec2::new(0.74, 1.26), Vec2::new(0.5, 0.5), Vec2::ZERO, 0.0), Vec2::new(0.5, 1.5));
     }
 
     #[test]

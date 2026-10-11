@@ -25,40 +25,67 @@ pub fn line_circle(l: &Line, c: &Circle) -> Vec<(Vec2, f64)> {
     let d = l.b - l.a;
     let f = l.a - c.center;
     let a = d.dot(d);
-    if a < EPS * EPS {
+    if !(a >= EPS * EPS && a.is_finite() && c.radius.is_finite() && f.is_finite()) {
         return Vec::new();
     }
-    let b = 2.0 * f.dot(d);
-    let cc = f.dot(f) - c.radius * c.radius;
-    let disc = b * b - 4.0 * a * cc;
-    if disc < -1e-12 * a {
+    // The quadratic discriminant subtracts two O(length^4) numbers. For a
+    // long construction line nearly tangent to a small circle, that loses the
+    // gap entirely and reports a false intersection. Measure from the closest
+    // point on the infinite line instead.
+    let t = -f.dot(d) / a;
+    let nearest = f + d * t;
+    let delta = c.radius * c.radius - nearest.len2();
+    let tolerance = 1e-12 * c.radius * c.radius;
+    if !delta.is_finite() || delta < -tolerance {
         return Vec::new();
     }
-    if disc.abs() <= 1e-12 * a {
-        let t = -b / (2.0 * a);
-        return vec![(l.at(t), t)];
+    let foot = c.center + nearest;
+    if delta <= tolerance {
+        return vec![(foot, t)];
     }
-    let sq = disc.max(0.0).sqrt();
-    let t1 = (-b - sq) / (2.0 * a);
-    let t2 = (-b + sq) / (2.0 * a);
-    vec![(l.at(t1), t1), (l.at(t2), t2)]
+    let offset = (delta / a).sqrt();
+    let (t1, t2) = (t - offset, t + offset);
+    let step = d * offset;
+    // Construct the intersections around the foot, not from a tiny change
+    // to t on a very long line (which loses the small distance again).
+    vec![(foot - step, t1), (foot + step, t2)]
 }
 
 /// Intersections of two full circles.
 pub fn circle_circle(c1: &Circle, c2: &Circle) -> Vec<Vec2> {
-    let d = c1.center.dist(c2.center);
-    if d < EPS || d > c1.radius + c2.radius + 1e-9 || d < (c1.radius - c2.radius).abs() - 1e-9 {
+    let delta = c2.center - c1.center;
+    let d = delta.len();
+    let (r1, r2) = (c1.radius, c2.radius);
+    if !(d.is_finite() && r1.is_finite() && r2.is_finite()) || d == 0.0 || r1 < 0.0 || r2 < 0.0 {
         return Vec::new();
     }
-    let a = (c1.radius * c1.radius - c2.radius * c2.radius + d * d) / (2.0 * d);
-    let h2 = c1.radius * c1.radius - a * a;
-    let dir = (c2.center - c1.center) / d;
-    let p = c1.center + dir * a;
+
+    // Work at the scale of the two circles: fixed absolute tolerances classify
+    // small secants as tangencies, and raw radius squares overflow on large drawings.
+    let scale = d.max(r1).max(r2);
+    let (ds, r1s, r2s) = (d / scale, r1 / scale, r2 / scale);
+    if ds > r1s + r2s || ds < (r1s - r2s).abs() {
+        return Vec::new();
+    }
+    let a = ((r1s - r2s) * (r1s + r2s) + ds * ds) / (2.0 * ds);
+    let h2 = (r1s - a) * (r1s + a);
+    if h2 < -1e-12 {
+        return Vec::new();
+    }
+    let dir = delta / d;
+    let p = c1.center + dir * (a * scale);
+    if !p.is_finite() {
+        return Vec::new();
+    }
     if h2 <= 1e-12 {
         return vec![p];
     }
-    let h = h2.sqrt();
-    vec![p + dir.perp() * h, p - dir.perp() * h]
+    let step = dir.perp() * (h2.sqrt() * scale);
+    let (p1, p2) = (p + step, p - step);
+    if !p1.is_finite() || !p2.is_finite() {
+        return Vec::new();
+    }
+    vec![p1, p2]
 }
 
 fn on_arc(a: &Arc, p: Vec2) -> bool {

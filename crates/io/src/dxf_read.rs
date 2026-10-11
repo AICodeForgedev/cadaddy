@@ -83,10 +83,23 @@ fn common(t: &T) -> Common {
 
 /// Apply the OCS → WCS transform for 2D entities with a non-default extrusion.
 fn ocs(c: &Common, p: Vec3) -> Vec3 {
-    if (c.extrusion.z - 1.0).abs() < 1e-12 && c.extrusion.x.abs() < 1e-12 && c.extrusion.y.abs() < 1e-12 {
-        p
-    } else {
-        cadcraft_geom::Mat4::ocs(c.extrusion).apply(p)
+    ocs_n(c.extrusion, p)
+}
+
+fn ocs_n(n: Vec3, p: Vec3) -> Vec3 {
+    if (n.z - 1.0).abs() < 1e-12 && n.x.abs() < 1e-12 && n.y.abs() < 1e-12 { p } else { cadcraft_geom::Mat4::ocs(n).apply(p) }
+}
+
+/// The properties an ATTRIB carries itself: those it has groups for. Its layer counts only when
+/// it differs from its block reference's (an attribute defined on layer 0 goes on the reference's
+/// layer, as it is drawn anyway).
+fn attrib_props(t: &T, insert_layer: &str) -> AttribProps {
+    let c = common(t);
+    AttribProps {
+        layer: t.s(8).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case(insert_layer)),
+        color: (t.i(62).is_some() || t.i(420).is_some()).then_some(c.color),
+        linetype: t.s(6).filter(|l| !l.is_empty()),
+        lineweight: t.i(370).is_some().then_some(c.lineweight),
     }
 }
 
@@ -106,7 +119,7 @@ fn text_from(t: &T) -> Text {
         _ => VAlign::Baseline,
     };
     let align = if t.f(11).is_some() { Some(t.p(11)) } else { None };
-    Text {
+    let mut text = Text {
         insert: t.p(10),
         align_pt: if h == HAlign::Left && v == VAlign::Baseline { None } else { align },
         height: t.fd(40, 0.2).max(1e-9),
@@ -117,11 +130,50 @@ fn text_from(t: &T) -> Text {
         style: t.s(7).unwrap_or_else(|| "Standard".into()),
         halign: h,
         valign: v,
+    };
+    let n = Vec3::new(t.fd(210, 0.0), t.fd(220, 0.0), t.fd(230, 1.0));
+    if n.z < 0.0 {
+        mirror_text(&mut text, align.map(|a| ocs_n(n, a)), ocs_n(n, t.p(10)));
+    }
+    text
+}
+
+/// TEXT / ATTRIB / ATTDEF with extrusion (0,0,-1): the points are OCS and the text runs from its
+/// insertion point towards -x in the WCS, with mirrored glyphs. CADCraft draws text readable
+/// (MIRRTEXT = 0), so it keeps the mirrored footprint: the direction turns to -rotation and
+/// left/right justification swap ends (start ↔ end point).
+fn mirror_text(t: &mut Text, align: Option<Vec3>, insert: Vec3) {
+    t.rotation = cadcraft_geom::norm_angle(-t.rotation);
+    let baseline_left = |t: &Text, p: Vec3| if t.valign == VAlign::Baseline { None } else { Some(p) };
+    match t.halign {
+        HAlign::Left => {
+            // TL/ML/BL are placed by their alignment point, baseline-left text by its start point.
+            t.halign = HAlign::Right;
+            t.insert = insert;
+            t.align_pt = Some(if t.valign == VAlign::Baseline { insert } else { align.unwrap_or(insert) });
+        }
+        HAlign::Right => {
+            t.halign = HAlign::Left;
+            t.insert = align.unwrap_or(insert);
+            t.align_pt = baseline_left(t, t.insert);
+        }
+        HAlign::Aligned | HAlign::Fit => {
+            t.insert = align.unwrap_or(insert);
+            t.align_pt = Some(insert);
+        }
+        HAlign::Center | HAlign::Middle => {
+            t.insert = insert;
+            t.align_pt = align;
+        }
     }
 }
 
 /// Parse one entity record. POLYLINE/INSERT followers are handled by the caller.
 fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
+    // The paper-space viewport our writer adds (dxf_write::paper_view) stays implicit.
+    if kind == "VIEWPORT" && crate::dxf_ext::is_paper_view(tags) {
+        return None;
+    }
     let t = T(tags);
     let c = common(&t);
     let k = match kind {
@@ -139,13 +191,24 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             }
             EntityKind::Arc(a)
         }
-        "ELLIPSE" => EntityKind::Ellipse(Ellipse {
-            center: t.p(10),
-            major: t.p(11),
-            ratio: t.fd(40, 1.0).clamp(1e-9, 1.0),
-            start: t.fd(41, 0.0),
-            end: t.fd(42, std::f64::consts::TAU),
-        }),
+        "ELLIPSE" => {
+            let mut e = Ellipse {
+                center: t.p(10),
+                major: t.p(11),
+                ratio: t.fd(40, 1.0).clamp(1e-9, 1.0),
+                start: t.fd(41, 0.0),
+                end: t.fd(42, std::f64::consts::TAU),
+            };
+            if c.extrusion.z < 0.0 && (cadcraft_geom::ccw_sweep(e.start, e.end) - std::f64::consts::TAU).abs() > 1e-9 {
+                // Centre and major axis are WCS, but the minor axis is extrusion × major: with (0,0,-1)
+                // it points the other way, so parameter t lands where -t does in the XY plane. A full
+                // ellipse is symmetric and stays as it is.
+                let (s, e2) = (-e.end, -e.start);
+                e.start = cadcraft_geom::norm_angle(s);
+                e.end = cadcraft_geom::norm_angle(e2);
+            }
+            EntityKind::Ellipse(e)
+        }
         "LWPOLYLINE" => {
             let mut verts = Vec::new();
             let mut cur: Option<PolyVertex> = None;
@@ -202,11 +265,23 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             let control = t.pts(10);
             let weights = t.all_f(41);
             let fit = t.pts(11);
-            let mut sp = Spline { degree, knots, control, weights, fit: fit.clone(), closed: t.i(70).unwrap_or(0) & 1 != 0 };
+            let tangent = |c: i32| t.f(c).map(|_| t.p(c).xy());
+            let fit_opts = cadcraft_geom::FitOptions {
+                knots: Default::default(),
+                start_tangent: tangent(12),
+                end_tangent: tangent(13),
+                tolerance: t.fd(44, 0.0),
+            }
+            .sanitized();
+            let closed = t.i(70).unwrap_or(0) & 1 != 0;
+            let mut sp = Spline { degree, knots, control, weights, fit: fit.clone(), closed, fit_opts };
             if !sp.is_valid() && fit.len() >= 2 {
-                sp = Spline::from_fit_points(&fit);
+                sp = Spline::fit_with(&fit, sp.closed, fit_opts);
             } else if !sp.is_valid() && sp.control.len() >= 2 {
                 sp = Spline::from_control(sp.control.clone(), degree);
+            } else if fit.len() >= 3 {
+                // DXF keeps the knots, not how they were spaced: recover it for later refits.
+                sp.fit_opts.knots = sp.infer_knot_param();
             }
             EntityKind::Spline(sp)
         }
@@ -220,19 +295,32 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 contents.push_str(&tg.str());
             }
             contents.push_str(&t.s(1).unwrap_or_default());
-            let rotation = match (t.f(11), t.f(21)) {
+            let mut rotation = match (t.f(11), t.f(21)) {
                 (Some(x), Some(y)) if x != 0.0 || y != 0.0 => Vec2::new(x, y).angle(),
                 _ => t.fd(50, 0.0).to_radians(),
             };
+            let mut attach = t.i(71).unwrap_or(1).clamp(1, 9) as u8;
+            if c.extrusion.z < 0.0 {
+                // Insertion point and direction are WCS, but the line height runs along extrusion ×
+                // direction: under (0,0,-1) the glyphs are mirrored. Drawn readable (MIRRTEXT = 0) with
+                // the same footprint, the text turns round and left/right attachment swap.
+                rotation = cadcraft_geom::norm_angle(rotation + std::f64::consts::PI);
+                attach = match attach {
+                    1 | 4 | 7 => attach + 2,
+                    3 | 6 | 9 => attach - 2,
+                    a => a,
+                };
+            }
             EntityKind::MText(MText {
                 insert: t.p(10),
                 height: t.fd(40, 0.2).max(1e-9),
                 width: t.fd(41, 0.0).max(0.0),
-                attach: t.i(71).unwrap_or(1).clamp(1, 9) as u8,
+                attach,
                 rotation,
                 style: t.s(7).unwrap_or_else(|| "Standard".into()),
                 contents,
                 line_spacing: t.fd(44, 1.0),
+                line_spacing_exact: t.i(73) == Some(2),
             })
         }
         "ATTDEF" => EntityKind::AttDef(Attrib {
@@ -241,18 +329,39 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             invisible: t.i(70).unwrap_or(0) & 1 != 0,
             constant: t.i(70).unwrap_or(0) & 2 != 0,
             prompt: t.s(3).unwrap_or_default(),
+            props: Default::default(),
         }),
-        "INSERT" => EntityKind::Insert(Insert {
-            block: t.s(2).unwrap_or_default(),
-            insert: t.p(10),
-            scale: Vec3::new(t.fd(41, 1.0), t.fd(42, 1.0), t.fd(43, 1.0)),
-            rotation: t.fd(50, 0.0).to_radians(),
-            attribs: Vec::new(),
-            cols: t.i(70).unwrap_or(1).clamp(1, 10_000) as u32,
-            rows: t.i(71).unwrap_or(1).clamp(1, 10_000) as u32,
-            col_spacing: t.fd(44, 0.0),
-            row_spacing: t.fd(45, 0.0),
-        }),
+        "INSERT" => {
+            // A mirrored block reference comes with extrusion (0,0,-1): its insertion point, scale,
+            // rotation and column spacing are in that OCS, where x runs the other way. In the WCS that
+            // is the mirrored point, a negative x scale, the opposite rotation and a negative column
+            // spacing. Noise of up to 1e-3 in the extrusion's x/y moves the projection by ~1e-7 of the
+            // size, so it still counts as mirrored. A truly tilted extrusion (block plane not parallel
+            // to XY) needs the full 3D block transform, which Insert cannot hold; it is left as read.
+            let n = c.extrusion;
+            let mirrored = n.z < 0.0 && n.x.hypot(n.y) <= 1e-3 * n.z.abs();
+            let mut p = t.p(10);
+            let mut scale = Vec3::new(t.fd(41, 1.0), t.fd(42, 1.0), t.fd(43, 1.0));
+            let mut rotation = t.fd(50, 0.0).to_radians();
+            let mut col_spacing = t.fd(44, 0.0);
+            if mirrored {
+                p = ocs(&c, p);
+                scale.x = -scale.x;
+                rotation = -rotation;
+                col_spacing = -col_spacing;
+            }
+            EntityKind::Insert(Insert {
+                block: t.s(2).unwrap_or_default(),
+                insert: p,
+                scale,
+                rotation,
+                attribs: Vec::new(),
+                cols: t.i(70).unwrap_or(1).clamp(1, 10_000) as u32,
+                rows: t.i(71).unwrap_or(1).clamp(1, 10_000) as u32,
+                col_spacing,
+                row_spacing: t.fd(45, 0.0),
+            })
+        }
         "DIMENSION" => {
             let ty = t.i(70).unwrap_or(0) & 0x0f;
             let kind = match ty {
@@ -263,12 +372,14 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 4 => DimKind::Radius,
                 5 => DimKind::Angular3P,
                 6 => DimKind::Ordinate { x_type: t.i(70).unwrap_or(0) & 64 != 0 },
+                8 => DimKind::ArcLength,
                 _ => DimKind::Aligned,
             };
             EntityKind::Dimension(Dimension {
                 kind,
                 defpt: t.p(10),
-                text_mid: t.p(11),
+                // The text midpoint is the one OCS point of a DIMENSION.
+                text_mid: if c.extrusion.z < 0.0 { ocs(&c, t.p(11)) } else { t.p(11) },
                 p13: t.p(13),
                 p14: t.p(14),
                 p15: t.p(15),
@@ -295,7 +406,20 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             if kind == "SOLID" { EntityKind::Solid(Solid { corners }) } else { EntityKind::Trace(Solid { corners }) }
         }
         "3DFACE" => EntityKind::Face3d(Face3d { corners: [t.p(10), t.p(11), t.p(12), t.p(13)], hidden_edges: t.i(70).unwrap_or(0) as u8 }),
-        "HATCH" => hatch(tags, &t)?,
+        "HATCH" => {
+            let mut k = hatch(tags, &t)?;
+            if c.extrusion.z < 0.0
+                && let EntityKind::Hatch(h) = &mut k
+            {
+                // Boundary in the mirrored OCS, like LWPOLYLINE; the pattern direction mirrors too.
+                for v in h.loops.iter_mut().flat_map(|l| l.vertices.iter_mut()) {
+                    v.p.x = -v.p.x;
+                    v.bulge = -v.bulge;
+                }
+                h.angle = cadcraft_geom::norm_angle(std::f64::consts::PI - h.angle);
+            }
+            k
+        }
         "ACAD_TABLE" => EntityKind::Table(acad_table(tags)),
         "VIEWPORT" => EntityKind::Viewport(Viewport {
             center: t.p(10),
@@ -306,18 +430,18 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             id: t.i(69).unwrap_or(0) as u32,
             locked: t.i(90).unwrap_or(0) & 16384 != 0,
             frozen_layers: crate::dxf_ext::read_frozen(tags),
-            layer_colors: Vec::new(),
+            layer_colors: crate::dxf_ext::read_layer_colors(tags),
         }),
         "WIPEOUT" => {
             let o = t.p(10);
             let u = t.p(11);
             let v = t.p(12);
-            let pts: Vec<Vec2> = t.pts(14).into_iter().map(|q| o.xy() + u.xy() * (q.x + 0.5) + v.xy() * (q.y + 0.5)).collect();
+            // Clip vertices are in pixel space: origin at the image's top-left corner, y pointing down.
+            let pts: Vec<Vec2> = t.pts(14).into_iter().map(|q| o.xy() + u.xy() * (q.x + 0.5) + v.xy() * (0.5 - q.y)).collect();
             EntityKind::Wipeout(Wipeout { boundary: pts })
         }
-        "IMAGE" => {
-            EntityKind::Image(Image { insert: t.p(10), u: t.p(11), v: t.p(12), size: Vec2::new(t.fd(13, 1.0), t.fd(23, 1.0)), path: String::new() })
-        }
+        // The file path comes from the IMAGEDEF object (`dxf_image::resolve`).
+        "IMAGE" => EntityKind::Image(crate::dxf_image::read_entity(tags)),
         other => EntityKind::Unknown(Unknown {
             dxf_type: other.to_string(),
             tags: tags.iter().map(|tg| RawTag { code: tg.code, value: tg.str() }).collect(),
@@ -392,6 +516,7 @@ fn acad_table(tags: &[Tag]) -> Table {
 }
 
 fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
+    let (origin, background) = hatch_xdata(tags);
     let pattern = t.s(2).unwrap_or_else(|| "SOLID".into());
     let solid = t.i(70).unwrap_or(0) == 1;
     let n_loops = t.i(91).unwrap_or(0).clamp(0, 100_000) as usize;
@@ -514,19 +639,158 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
         }
         loops.push(HatchLoop { vertices: verts, outer });
     }
+    let solid = solid || pattern.eq_ignore_ascii_case("SOLID");
+    let (scale, angle) = (t.fd(41, 1.0), t.fd(52, 0.0).to_radians());
+    // Definition lines matter only for a pattern the library doesn't define.
+    let pattern_lines =
+        if solid || cadcraft_doc::library::pattern(&pattern).is_some() { Vec::new() } else { pattern_definition(tags, scale, angle, origin) };
     Some(EntityKind::Hatch(Hatch {
         pattern: pattern.to_ascii_uppercase(),
-        solid: solid || pattern.eq_ignore_ascii_case("SOLID"),
+        solid,
         loops,
-        scale: t.fd(41, 1.0),
-        angle: t.fd(52, 0.0).to_radians(),
+        scale,
+        angle,
         associative: t.i(71).unwrap_or(0) != 0,
         style: t.i(75).unwrap_or(0) as u8,
-        elevation: 0.0,
-        gradient: None,
-        origin: Vec2::ZERO,
-        background: None,
+        // The first 30 is the elevation point's z (boundary points are 2D).
+        elevation: t.f(30).filter(|z| z.is_finite()).unwrap_or(0.0),
+        gradient: gradient(tags),
+        origin,
+        background,
+        pattern_lines,
     }))
+}
+
+/// Upper bounds on a HATCH's pattern definition lines and on the dashes of one line.
+const MAX_PATTERN_LINES: usize = 1024;
+const MAX_PATTERN_DASHES: usize = 256;
+
+/// The pattern definition lines of a HATCH (groups 78, then per line 53 angle, 43/44 base
+/// point, 45/46 offset, 79 dash count, 49 dash lengths). A file holds them as drawn: scaled,
+/// rotated with the hatch and the offset as a world vector. They are kept the library's way
+/// (unit scale, no hatch rotation, base point relative to the hatch origin, offset as shift
+/// along the line and spacing), which the writer and the renderer turn back. Lines with
+/// non-finite values are skipped.
+fn pattern_definition(tags: &[Tag], scale: f64, angle: f64, origin: Vec2) -> Vec<cadcraft_doc::library::PatternLine> {
+    let Some(at) = tags.iter().position(|x| x.code == 78) else { return Vec::new() };
+    let scale = if scale.is_finite() && scale > 1e-9 { scale } else { 1.0 };
+    let angle = if angle.is_finite() { angle } else { 0.0 };
+    // Raw lines: angle (degrees), base, offset, dashes.
+    let mut raw: Vec<(f64, Vec2, Vec2, Vec<f64>)> = Vec::new();
+    for x in tags.iter().skip(at + 1) {
+        let cur = raw.last_mut();
+        match (x.code, cur) {
+            (53, _) => {
+                if raw.len() >= MAX_PATTERN_LINES {
+                    break;
+                }
+                raw.push((x.f64(), Vec2::ZERO, Vec2::ZERO, Vec::new()));
+            }
+            (43, Some(l)) => l.1.x = x.f64(),
+            (44, Some(l)) => l.1.y = x.f64(),
+            (45, Some(l)) => l.2.x = x.f64(),
+            (46, Some(l)) => l.2.y = x.f64(),
+            (79, Some(_)) => {}
+            (49, Some(l)) => {
+                if l.3.len() < MAX_PATTERN_DASHES {
+                    l.3.push(x.f64());
+                }
+            }
+            _ => break,
+        }
+    }
+    raw.into_iter()
+        .filter(|(a, b, o, d)| a.is_finite() && b.is_finite() && o.is_finite() && d.iter().all(|v| v.is_finite()))
+        .map(|(a, base, offset, dashes)| {
+            let local = (base - origin).rotate(-angle) * (1.0 / scale);
+            let delta = offset.rotate(-a.to_radians()) * (1.0 / scale);
+            cadcraft_doc::library::PatternLine {
+                angle: a - angle.to_degrees(),
+                origin: (local.x, local.y),
+                delta: (delta.x, delta.y),
+                dashes: dashes.into_iter().map(|d| d / scale).collect(),
+            }
+        })
+        .collect()
+}
+
+/// Hatch origin and background colour from `CADCRAFT` xdata: `1000 HATCH`, `1011` origin,
+/// `1000` background colour name (empty for none). Defaults when absent.
+fn hatch_xdata(tags: &[Tag]) -> (Vec2, Option<Color>) {
+    let x = crate::dxf_ext::xdata(tags, crate::dxf_ext::APP);
+    let Some(at) = x.windows(2).position(|w| matches!(w, [m, o] if m.code == 1000 && m.str() == "HATCH" && o.code == 1011)) else {
+        return (Vec2::ZERO, None);
+    };
+    let val = |k: usize, code: i32| x.get(at + k).filter(|t| t.code == code);
+    let coord = |k: usize, code: i32| val(k, code).map(Tag::f64).filter(|v| v.is_finite()).unwrap_or(0.0);
+    let origin = Vec2::new(coord(1, 1011), coord(2, 1021));
+    (origin, val(4, 1000).and_then(|t| Color::parse(&t.str())))
+}
+
+/// Gradient values missing from a file fall back to the GRADIENT command's defaults.
+fn default_gradient() -> Gradient {
+    Gradient { name: "LINEAR".into(), color1: Color::Index(5), color2: Color::Index(7), angle: 0.0, centered: true }
+}
+
+/// A hatch's gradient fill: the native groups when present (another program may have edited
+/// them), otherwise CADCraft's `GRADIENT` xdata (kept by R2000 files and DWG conversions).
+fn gradient(tags: &[Tag]) -> Option<Gradient> {
+    if tags.iter().any(|x| x.code == 450) { native_gradient(tags) } else { xdata_gradient(tags) }
+}
+
+/// `CADCRAFT` xdata: `1000 GRADIENT`, then name, 1040 angle, 1070 centered, colour 1 and 2 names.
+fn xdata_gradient(tags: &[Tag]) -> Option<Gradient> {
+    let x = crate::dxf_ext::xdata(tags, crate::dxf_ext::APP);
+    let at = x.iter().position(|t| t.code == 1000 && t.str() == "GRADIENT")?;
+    let o = x.get(at + 1..).unwrap_or(&[]);
+    let d = default_gradient();
+    let strs: Vec<String> = o.iter().filter(|t| t.code == 1000).take(3).map(Tag::str).collect();
+    let color = |i: usize, d: Color| strs.get(i).and_then(|s| Color::parse(s)).unwrap_or(d);
+    Some(Gradient {
+        name: strs.first().cloned().unwrap_or(d.name),
+        color1: color(1, d.color1),
+        color2: color(2, d.color2),
+        angle: o.iter().find(|t| t.code == 1040).map(Tag::f64).filter(|a| a.is_finite()).unwrap_or(d.angle),
+        centered: o.iter().find(|t| t.code == 1070).map_or(d.centered, |t| t.i64() != 0),
+    })
+}
+
+/// DXF Reference HATCH groups 450–470, when 450 says gradient. Each 463 starts a colour record
+/// whose 63 (ACI) and 421 (true colour) groups follow.
+fn native_gradient(tags: &[Tag]) -> Option<Gradient> {
+    let start = tags.iter().position(|x| x.code == 450)?;
+    if tags.get(start)?.i64() != 1 {
+        return None;
+    }
+    let mut g = default_gradient();
+    // Per colour record: (ACI, true colour); a true colour wins over its ACI fallback.
+    let mut colors: [(Option<Color>, Option<Rgb>); 2] = [(None, None); 2];
+    let mut slot: Option<usize> = None;
+    for x in tags.iter().skip(start + 1).take_while(|x| x.code != 1001) {
+        let rec = slot.and_then(|s| colors.get_mut(s));
+        match x.code {
+            460 => g.angle = Some(x.f64()).filter(|a| a.is_finite()).unwrap_or(0.0),
+            461 => g.centered = x.f64().abs() < 1e-9,
+            463 => slot = Some(slot.map_or(0, |s| s.saturating_add(1))),
+            63 => {
+                if let Some(r) = rec {
+                    r.0 = Some(Color::from_aci(i16::try_from(x.i64()).unwrap_or(256)));
+                }
+            }
+            421 => {
+                if let Some(r) = rec {
+                    r.1 = Some(Rgb::from_u32(u32::try_from(x.i64() & 0xff_ffff).unwrap_or(0)));
+                }
+            }
+            470 => g.name = x.str(),
+            _ => {}
+        }
+    }
+    let [c1, c2] = colors;
+    let pick = |(aci, rgb): (Option<Color>, Option<Rgb>), d: Color| rgb.map(Color::True).or(aci).unwrap_or(d);
+    g.color1 = pick(c1, g.color1);
+    g.color2 = pick(c2, g.color2);
+    Some(g)
 }
 
 /// Handle maps and references gathered while reading.
@@ -536,12 +800,72 @@ struct Rx {
     styles: HashMap<String, String>,
     /// BLOCK_RECORD handle (upper case) → block name.
     brs: HashMap<String, String>,
+    /// Upper-case block name → (insertion units, explodable) from its BLOCK_RECORD.
+    block_props: HashMap<String, (u8, bool)>,
     /// Upper-case names of anonymous `*T` blocks drawn by ACAD_TABLE entities.
     table_blocks: std::collections::HashSet<String>,
     /// Upper-case block names used by INSERTs.
     inserted: std::collections::HashSet<String>,
     /// Tables whose style is known only by TABLESTYLE handle: (table, style handle).
     table_style_fix: Vec<(Handle, String)>,
+    /// Upper-case xref block name → the external drawing's path (BLOCK group 1).
+    xref_paths: HashMap<String, String>,
+    /// Plot style name placeholder handle (upper case) → plot style name (`ACAD_PLOTSTYLENAME`).
+    pstyles: HashMap<String, String>,
+}
+
+/// The plot style names of a file: the entries of the `ACAD_PLOTSTYLENAME` dictionary of the
+/// named object dictionary (the first object), by placeholder handle.
+fn plot_style_names(secs: &[cadcraft_dxf::Section]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Some(objects) = secs.iter().find(|s| s.name == "OBJECTS") else { return out };
+    let recs = records(&objects.tags);
+    let entries = |tags: &[Tag]| {
+        let mut v: Vec<(String, String)> = Vec::new();
+        let mut name: Option<String> = None;
+        for t in tags {
+            match t.code {
+                3 => name = Some(t.str()),
+                350 | 360 => {
+                    if let Some(n) = name.take() {
+                        v.push((n, t.str().trim().to_ascii_uppercase()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        v
+    };
+    let Some((_, root)) = recs.iter().find(|(k, _)| k == "DICTIONARY") else { return out };
+    let Some((_, dict)) = entries(root).into_iter().find(|(n, _)| n.eq_ignore_ascii_case(crate::dxf_ext::PLOT_STYLE_NAMES_KEY)) else {
+        return out;
+    };
+    let is_dict = |k: &str| k == "DICTIONARY" || k == "ACDBDICTIONARYWDFLT";
+    let Some((_, tags)) = recs.iter().find(|(k, tg)| is_dict(k) && T(tg).s(5).is_some_and(|h| h.trim().eq_ignore_ascii_case(&dict))) else {
+        return out;
+    };
+    for (n, h) in entries(tags).into_iter().take(crate::dxf_ext::MAX_PLOT_STYLE_NAMES) {
+        if !n.trim().is_empty() {
+            out.insert(h, n.chars().take(255).collect());
+        }
+    }
+    out
+}
+
+/// The named plot style an entity record points at (group 390 among its AcDbEntity groups).
+fn entity_plot_style(tags: &[Tag], rx: &Rx) -> Option<String> {
+    let mut in_entity = false;
+    for t in tags {
+        if t.code == 100 {
+            if in_entity {
+                return None;
+            }
+            in_entity = t.str() == "AcDbEntity";
+        } else if t.code == 390 && in_entity {
+            return rx.pstyles.get(&t.str().trim().to_ascii_uppercase()).cloned();
+        }
+    }
+    None
 }
 
 /// Dimension overrides and associativity, table references: data of an entity record that
@@ -551,6 +875,10 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
         ("DIMENSION", EntityKind::Dimension(dm)) => {
             dm.overrides = crate::dxf_ext::read_dstyle(tags, &rx.styles, &rx.brs);
             dm.assoc = crate::dxf_ext::read_assoc(tags);
+            if let Some(center) = crate::dxf_ext::read_arclen(tags) {
+                dm.kind = DimKind::ArcLength;
+                dm.p15 = center;
+            }
         }
         ("ACAD_TABLE", EntityKind::Table(_)) => {
             let t = T(tags);
@@ -579,15 +907,27 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
         let paper = t.i(67) == Some(1);
         let handle = t.s(5).and_then(|h| Handle::parse_hex(&h));
         let mut kindent = entity(kind, tags);
+        if let Some((c, _)) = kindent.as_mut()
+            && let Some(n) = entity_plot_style(tags, rx)
+        {
+            c.plot_style = n;
+        }
+        // More entities from this record (the faces of a polyface or polygon mesh).
+        let mut extra: Vec<EntityKind> = Vec::new();
         i += 1;
         match kind.as_str() {
             "POLYLINE" => {
                 let flags = t.i(70).unwrap_or(0);
                 let mut pts: Vec<(Vec3, f64, f64, f64)> = Vec::new();
+                // Polyface face records (VERTEX 70 bit 128 without 64): vertex indices 71–74.
+                let mut faces: Vec<[i64; 4]> = Vec::new();
                 while let Some((k2, t2)) = recs.get(i) {
                     if k2 == "VERTEX" {
                         let tt = T(t2);
-                        if tt.i(70).unwrap_or(0) & 16 == 0 {
+                        let vflags = tt.i(70).unwrap_or(0);
+                        if vflags & 128 != 0 && vflags & 64 == 0 {
+                            faces.push([71, 72, 73, 74].map(|c| tt.i(c).unwrap_or(0)));
+                        } else if vflags & 16 == 0 {
                             pts.push((tt.p(10), tt.fd(42, 0.0), tt.fd(40, 0.0), tt.fd(41, 0.0)));
                         }
                         i += 1;
@@ -599,11 +939,26 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
                     }
                 }
                 let c = common(&t);
-                let k = if flags & (8 | 16 | 64) != 0 {
+                let k = if flags & (16 | 64) != 0 {
+                    // Polyface (64) and polygon (16) meshes become 3D faces; the first takes the
+                    // polyline's place.
+                    let verts: Vec<Vec3> = pts.iter().map(|p| p.0).collect();
+                    let mut fs = if flags & 64 != 0 { polyface_faces(&verts, &faces) } else { mesh_faces(&verts, &t, flags) }
+                        .into_iter()
+                        .map(EntityKind::Face3d);
+                    let Some(first) = fs.next() else { continue };
+                    extra.extend(fs);
+                    first
+                } else if flags & 8 != 0 {
                     EntityKind::Polyline3d(Polyline3d { points: pts.iter().map(|p| p.0).collect(), closed: flags & 1 != 0 })
                 } else {
+                    // A 2D polyline's vertices are in its OCS: mirrored like LWPOLYLINE.
+                    let m = if c.extrusion.z < 0.0 { -1.0 } else { 1.0 };
                     EntityKind::LwPolyline(LwPolyline {
-                        vertices: pts.iter().map(|p| PolyVertex { p: p.0.xy(), bulge: p.1, start_width: p.2, end_width: p.3 }).collect(),
+                        vertices: pts
+                            .iter()
+                            .map(|p| PolyVertex { p: Vec2::new(m * p.0.x, p.0.y), bulge: m * p.1, start_width: p.2, end_width: p.3 })
+                            .collect(),
                         closed: flags & 1 != 0,
                         const_width: t.fd(40, 0.0).min(t.fd(41, 0.0)).max(0.0),
                         elevation: t.p(10).z,
@@ -615,6 +970,7 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
             "INSERT" => {
                 if t.i(66) == Some(1) {
                     let mut attribs = Vec::new();
+                    let ins_layer = kindent.as_ref().map(|(c, _)| c.layer.clone()).unwrap_or_default();
                     while let Some((k2, t2)) = recs.get(i) {
                         if k2 == "ATTRIB" {
                             let tt = T(t2);
@@ -624,6 +980,7 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
                                 invisible: tt.i(70).unwrap_or(0) & 1 != 0,
                                 constant: false,
                                 prompt: String::new(),
+                                props: attrib_props(&tt, &ins_layer),
                             });
                             i += 1;
                         } else {
@@ -650,7 +1007,10 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
                 None => d.new_handle(),
             };
             entity_extras(kind, tags, h, &mut k, rx);
+            let more: Vec<_> =
+                extra.into_iter().map(|f| (owner.clone(), paper, Entity { handle: d.new_handle(), common: c.clone(), kind: f })).collect();
             out.push((owner, paper, Entity { handle: h, common: c, kind: k }));
+            out.extend(more);
         }
     }
     // Assign fresh handles to duplicates (hostile files).
@@ -659,6 +1019,59 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
         if !seen.insert(e.handle) {
             e.handle = d.new_handle();
             seen.insert(e.handle);
+        }
+    }
+    out
+}
+
+/// Faces of a polyface mesh: each face record names three or four vertices by 1-based index;
+/// a negative index hides the edge that starts at that vertex. Faces with fewer vertices or
+/// an index outside the vertex list are skipped.
+fn polyface_faces(verts: &[Vec3], faces: &[[i64; 4]]) -> Vec<Face3d> {
+    let mut out = Vec::new();
+    for f in faces {
+        let mut corners: Vec<Vec3> = Vec::with_capacity(4);
+        let mut hidden = 0u8;
+        let mut ok = true;
+        for &ix in f.iter().filter(|&&ix| ix != 0) {
+            let at = usize::try_from(ix.unsigned_abs()).ok().and_then(|n| n.checked_sub(1));
+            let Some(p) = at.and_then(|n| verts.get(n)) else {
+                ok = false;
+                break;
+            };
+            if ix < 0 {
+                hidden |= 1 << corners.len();
+            }
+            corners.push(*p);
+        }
+        match (ok, corners.as_slice()) {
+            // A triangle's closing edge is the 3DFACE's fourth (the third is degenerate).
+            (true, [a, b, c]) => out.push(Face3d { corners: [*a, *b, *c, *c], hidden_edges: hidden | if hidden & 4 != 0 { 8 } else { 0 } }),
+            (true, [a, b, c, d]) => out.push(Face3d { corners: [*a, *b, *c, *d], hidden_edges: hidden }),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Quads of an M×N polygon mesh (71/72, or the smoothed 73/74 when the vertex count matches
+/// those), closed in M by bit 1 and in N by bit 32. Vertices run row by row.
+fn mesh_faces(verts: &[Vec3], t: &T, flags: i64) -> Vec<Face3d> {
+    let dims = |a: i32, b: i32| Some((usize::try_from(t.i(a)?).ok()?, usize::try_from(t.i(b)?).ok()?));
+    let fits = |(m, n): (usize, usize)| m >= 2 && n >= 2 && m.checked_mul(n).is_some_and(|mn| mn <= verts.len());
+    let exact = |(m, n): (usize, usize)| fits((m, n)) && m * n == verts.len();
+    let Some((m, n)) = [dims(71, 72), dims(73, 74)].into_iter().flatten().find(|d| exact(*d)).or_else(|| dims(71, 72).filter(|d| fits(*d))) else {
+        return Vec::new();
+    };
+    let at = |i: usize, j: usize| verts.get((i % m) * n + j % n).copied();
+    let rows = if flags & 1 != 0 { m } else { m - 1 };
+    let cols = if flags & 32 != 0 { n } else { n - 1 };
+    let mut out = Vec::new();
+    for i in 0..rows {
+        for j in 0..cols {
+            if let (Some(a), Some(b), Some(c), Some(d)) = (at(i, j), at(i, j + 1), at(i + 1, j + 1), at(i + 1, j)) {
+                out.push(Face3d { corners: [a, b, c, d], hidden_edges: 0 });
+            }
         }
     }
     out
@@ -689,6 +1102,14 @@ fn header(tags: &[Tag], d: &mut Drawing) {
                 },
                 _ => continue,
             };
+            // $DIMDSEP holds a character code; the dimension style holds the character.
+            let hv = match hv {
+                HVal::Int(n) if name == "DIMDSEP" => match u32::try_from(n).ok().and_then(char::from_u32).filter(|c| !c.is_control()) {
+                    Some(c) => HVal::Str(c.to_string()),
+                    None => continue,
+                },
+                hv => hv,
+            };
             d.header.set(&name, hv);
         } else {
             i += 1;
@@ -702,8 +1123,33 @@ fn annotative(tags: &[Tag]) -> bool {
     list.iter().filter(|t| t.code == 1070).nth(1).is_some_and(|t| t.i64() != 0)
 }
 
+/// A text style's font: CADCraft's own font name from `CADCRAFT` xdata (`1000 FONT`, name)
+/// while the font file is still the `txt` written for other readers, otherwise the file.
+fn style_font(tags: &[Tag], file: String) -> String {
+    let x = crate::dxf_ext::xdata(tags, crate::dxf_ext::APP);
+    let own = x.windows(2).find_map(|w| match w {
+        [m, n] if m.code == 1000 && m.str() == "FONT" && n.code == 1000 => Some(n.str()),
+        _ => None,
+    });
+    let stem = file.trim().to_ascii_lowercase();
+    match own {
+        Some(name) if !name.trim().is_empty() && (stem == "txt" || stem == "txt.shx") => name,
+        _ => file,
+    }
+}
+
 fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
     let recs = records(tags);
+    // STYLE handle → name, or the shape file of an unnamed shape style (linetype elements).
+    let ltype_styles: HashMap<String, String> = recs
+        .iter()
+        .filter(|(k, _)| k == "STYLE")
+        .filter_map(|(_, tg)| {
+            let t = T(tg);
+            let name = t.s(2).filter(|n| !n.trim().is_empty());
+            Some((t.s(5)?.trim().to_ascii_uppercase(), name.or_else(|| t.s(3))?))
+        })
+        .collect();
     // Handle maps first: DIMSTYLE records refer to text styles and arrow blocks by handle.
     for (kind, tg) in &recs {
         let t = T(tg);
@@ -713,11 +1159,14 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 rx.styles.insert(h.trim().to_ascii_uppercase(), n);
             }
             "BLOCK_RECORD" => {
+                let units = t.i(70).and_then(|u| u8::try_from(u).ok()).unwrap_or(0);
+                rx.block_props.insert(n.to_ascii_uppercase(), (units, t.i(280).unwrap_or(1) != 0));
                 rx.brs.insert(h.trim().to_ascii_uppercase(), n);
             }
             _ => {}
         }
     }
+    let mut active_vport = false;
     for (kind, tg) in recs {
         let t = T(&tg);
         match kind.as_str() {
@@ -743,6 +1192,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 if let Some(tc) = t.i(420) {
                     l.color = Color::True(Rgb::from_u32(tc as u32));
                 }
+                if let Some(n) = t.s(390).and_then(|h| rx.pstyles.get(&h.trim().to_ascii_uppercase())) {
+                    l.plot_style = n.clone();
+                }
                 let alpha = crate::dxf_ext::xdata(&tg, crate::dxf_ext::LAYER_TRANSPARENCY_APP).iter().find(|x| x.code == 1071);
                 if let Some(pct) = alpha.and_then(|x| crate::dxf_ext::transparency_from_dxf(x.i64())) {
                     l.transparency = pct;
@@ -760,7 +1212,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 if name.is_empty() || d.linetype(&name).is_some() {
                     continue;
                 }
-                let pattern = tg.iter().filter(|x| x.code == 49).map(|x| DashElement::dash(x.f64())).collect();
+                let pattern = ltype_pattern(&tg, &ltype_styles);
                 d.linetypes.push(Linetype { name, description: t.s(3).unwrap_or_default(), pattern });
             }
             "STYLE" => {
@@ -772,7 +1224,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 let gen_flags = t.i(71).unwrap_or(0);
                 let st = TextStyle {
                     name: name.clone(),
-                    font: t.s(3).unwrap_or_default(),
+                    font: style_font(&tg, t.s(3).unwrap_or_default()),
                     big_font: t.s(4).unwrap_or_default(),
                     height: t.fd(40, 0.0),
                     width_factor: t.fd(41, 1.0),
@@ -785,6 +1237,55 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 match d.text_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(&name)) {
                     Some(x) => *x = st,
                     None => d.text_styles.push(st),
+                }
+            }
+            // The first *ACTIVE viewport holds the snap grid's origin and rotation (degrees).
+            "VPORT" if !active_vport && t.s(2).is_some_and(|n| n.trim().eq_ignore_ascii_case("*ACTIVE")) => {
+                active_vport = true;
+                if let (Some(x), Some(y)) = (t.f(13), t.f(23))
+                    && x.is_finite()
+                    && y.is_finite()
+                {
+                    d.header.set("SNAPBASE", HVal::Point(Vec3::new(x, y, 0.0)));
+                }
+                if let Some(a) = t.f(50).filter(|a| a.is_finite()) {
+                    d.header.set_f64("SNAPANG", a);
+                }
+            }
+            "VIEW" => {
+                let name = t.s(2).unwrap_or_default();
+                let (h, w) = (t.fd(40, 0.0), t.fd(41, 0.0));
+                if name.is_empty() || !(h.is_finite() && w.is_finite() && h > 0.0 && w > 0.0) || d.views.len() >= MAX_OBJECTS {
+                    continue;
+                }
+                let center = t.p(10).xy();
+                if !(center.x.is_finite() && center.y.is_finite()) {
+                    continue;
+                }
+                let x = crate::dxf_ext::xdata(&tg, crate::dxf_ext::APP);
+                let layer_state = x
+                    .iter()
+                    .position(|t| t.code == 1000 && t.str() == "LAYERSTATE")
+                    .and_then(|i| x.get(i + 1))
+                    .filter(|t| t.code == 1000)
+                    .map(Tag::str);
+                let v = NamedView { name: name.clone(), center, height: h, width: w, layer_state };
+                match d.views.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
+                    Some(x) => *x = v,
+                    None => d.views.push(v),
+                }
+            }
+            "UCS" => {
+                let name = t.s(2).unwrap_or_default();
+                let (origin, x_axis, y_axis) = (t.p(10), t.p(11), t.p(12));
+                let finite = [origin, x_axis, y_axis].iter().all(|p| p.x.is_finite() && p.y.is_finite() && p.z.is_finite());
+                if name.is_empty() || !finite || d.ucss.len() >= MAX_OBJECTS {
+                    continue;
+                }
+                let u = Ucs { name: name.clone(), origin, x_axis, y_axis };
+                match d.ucss.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
+                    Some(x) => *x = u,
+                    None => d.ucss.push(u),
                 }
             }
             "DIMSTYLE" => {
@@ -813,6 +1314,43 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
     }
 }
 
+/// The dash elements of an LTYPE record with their embedded text and shapes (DXF Reference,
+/// LTYPE): each `49` length starts an element; `74` type flags (1 absolute rotation, 2 text,
+/// 4 shape), `75` shape number, `340` STYLE, `46` scale, `50` rotation (radians), `44`/`45`
+/// offset and `9` text follow it.
+fn ltype_pattern(tags: &[Tag], styles: &HashMap<String, String>) -> Vec<DashElement> {
+    let mut out: Vec<DashElement> = Vec::new();
+    for t in tags.iter().take_while(|t| t.code < 1000) {
+        if t.code == 49 {
+            out.push(DashElement::dash(t.f64()));
+            continue;
+        }
+        let Some(el) = out.last_mut() else { continue };
+        let complex = el.text.is_some() || el.shape.is_some();
+        let v = t.f64();
+        match t.code {
+            74 => {
+                let flags = t.i64();
+                el.absolute = flags & 1 != 0;
+                if flags & 2 != 0 {
+                    el.text = Some(String::new());
+                } else if flags & 4 != 0 {
+                    el.shape = Some(0);
+                }
+            }
+            75 if el.shape.is_some() => el.shape = Some(u16::try_from(t.i64()).unwrap_or(0)),
+            340 if complex => el.style = styles.get(&t.str().trim().to_ascii_uppercase()).filter(|n| !n.trim().is_empty()).cloned(),
+            9 if el.text.is_some() => el.text = Some(t.str()),
+            46 if complex && v.is_finite() => el.scale = v,
+            50 if complex && v.is_finite() => el.rotation = v,
+            44 if complex && v.is_finite() => el.offset.x = v,
+            45 if complex && v.is_finite() => el.offset.y = v,
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Read a DXF file into a drawing.
 pub fn read(bytes: &[u8]) -> Result<Drawing> {
     let tags = cadcraft_dxf::parse(bytes).map_err(|e| IoError::Format(e.to_string()))?;
@@ -822,8 +1360,8 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     }
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
-    let mut rx = Rx::default();
-    let mut blocks: Vec<(String, Vec3, Vec<(Option<String>, bool, Entity)>, bool)> = Vec::new();
+    let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
+    let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Entity)>, bool)> = Vec::new();
     let mut layout_objs: Vec<(String, u32, String, PageSetup)> = Vec::new();
     let mut entities = Vec::new();
     let mut objs = Objects::default();
@@ -833,12 +1371,19 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
             "TABLES" => tables(&s.tags, &mut d, &mut rx),
             "BLOCKS" => {
                 let recs = records(&s.tags);
+                for (k, tg) in &recs {
+                    let t = T(tg);
+                    if k == "BLOCK" && t.i(70).unwrap_or(0) & 4 != 0 {
+                        rx.xref_paths.insert(t.s(2).unwrap_or_default().to_ascii_uppercase(), t.s(1).unwrap_or_default());
+                    }
+                }
                 let mut i = 0;
                 while let Some((k, tg)) = recs.get(i) {
                     if k == "BLOCK" {
                         let t = T(tg);
                         let name = t.s(2).unwrap_or_default();
                         let base = t.p(10);
+                        let description = t.s(4).unwrap_or_default();
                         let xref = t.i(70).unwrap_or(0) & 4 != 0;
                         let mut j = i + 1;
                         while recs.get(j).is_some_and(|(k, _)| k != "ENDBLK") {
@@ -846,7 +1391,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
                         }
                         let body = recs.get(i + 1..j).unwrap_or(&[]);
                         let ents = parse_entities(body, &mut d, &mut rx);
-                        blocks.push((name, base, ents, xref));
+                        blocks.push((name, base, description, ents, xref));
                         i = j + 1;
                     } else {
                         i += 1;
@@ -890,7 +1435,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     }
     let first_layout = d.layouts.first().map(|l| l.name.clone()).unwrap_or_else(|| "Layout1".into());
     // Blocks: model/paper space blocks hold entities in newer files.
-    for (name, base, ents, xref) in blocks {
+    for (name, base, description, ents, xref) in blocks {
         let up = name.to_ascii_uppercase();
         if up == "*MODEL_SPACE" {
             for (_, _, e) in ents {
@@ -915,11 +1460,18 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         }
         let mut b = Block::new(&name);
         b.base = base;
+        b.description = description;
+        if let Some(&(units, explodable)) = rx.block_props.get(&up) {
+            (b.units, b.explodable) = (units, explodable);
+        }
         if xref {
             b.xref_path = Some(String::new());
         }
         for (_, _, e) in ents {
             b.entities.push(e);
+        }
+        if let Some(path) = rx.xref_paths.remove(&up) {
+            b.xref_path = Some(path);
         }
         d.blocks.insert(name, std::sync::Arc::new(b));
     }
@@ -938,6 +1490,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         }
     }
     objs.apply(&mut d, &rx);
+    crate::dxf_image::resolve(&secs, &mut d);
     // Keep handles unique against the header's seed.
     let seed = d.header.str("HANDSEED", "");
     if let Some(h) = Handle::parse_hex(&seed) {
@@ -960,6 +1513,12 @@ struct Objects {
     table_styles: Vec<(String, Vec<Tag>)>,
     /// DIMASSOC objects.
     dimassocs: Vec<Vec<Tag>>,
+    /// MLEADERSTYLE objects: (handle, groups).
+    mleader_styles: Vec<(String, Vec<Tag>)>,
+    /// GROUP objects: (handle, groups).
+    groups: Vec<(String, Vec<Tag>)>,
+    /// Saved paper-space views of layouts: (layout name, view).
+    layout_views: Vec<(String, (Vec2, f64))>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -989,8 +1548,30 @@ impl Objects {
             }
             "TABLESTYLE" if self.table_styles.len() < MAX_OBJECTS => self.table_styles.push((h, tags.to_vec())),
             "DIMASSOC" if self.dimassocs.len() < MAX_OBJECTS => self.dimassocs.push(tags.to_vec()),
+            "MLEADERSTYLE" if self.mleader_styles.len() < MAX_OBJECTS => self.mleader_styles.push((h, tags.to_vec())),
+            "GROUP" if self.groups.len() < MAX_OBJECTS => self.groups.push((h, tags.to_vec())),
+            "LAYOUT" if self.layout_views.len() < MAX_OBJECTS => {
+                let start = tags.iter().position(|x| x.code == 100 && x.str() == "AcDbLayout").unwrap_or(0);
+                if let (Some(name), Some(view)) = (T(tags.get(start..).unwrap_or(&[])).s(1), layout_view(tags)) {
+                    self.layout_views.push((name, view));
+                }
+            }
             _ => {}
         }
+    }
+
+    /// The text of the CADCraft XRECORD stored under `key` in a dictionary (its 1/3 strings).
+    fn xrecord_text(&self, key: &str) -> Option<String> {
+        let h = self.names.iter().find(|(_, n)| n.as_str() == key).map(|(h, _)| h)?;
+        let tags = self.xrecords.get(h)?;
+        let mut text = String::new();
+        for t in tags.iter().filter(|t| t.code == 1 || t.code == 3) {
+            if text.len() > crate::dxf_ext::MAX_PAYLOAD {
+                break;
+            }
+            text.push_str(&t.str());
+        }
+        Some(text)
     }
 
     fn apply(self, d: &mut Drawing, rx: &Rx) {
@@ -1022,18 +1603,58 @@ impl Objects {
             }
         }
         // Parametric constraints and parameters.
-        let key = self.names.iter().find(|(_, n)| n.as_str() == crate::dxf_ext::CONSTRAINTS_KEY).map(|(h, _)| h.clone());
-        if let Some(tags) = key.and_then(|k| self.xrecords.get(&k)) {
-            let mut text = String::new();
-            for t in tags.iter().filter(|t| t.code == 1 || t.code == 3) {
-                if text.len() > crate::dxf_ext::MAX_PAYLOAD {
-                    break;
-                }
-                text.push_str(&t.str());
+        if let Some((c, p)) = self.xrecord_text(crate::dxf_ext::CONSTRAINTS_KEY).and_then(|t| crate::dxf_ext::parse_constraints(&t)) {
+            d.constraints = c;
+            d.parametric = p;
+        }
+        // Saved layer states.
+        if let Some(states) = self.xrecord_text(crate::dxf_ext::LAYER_STATES_KEY).and_then(|t| crate::dxf_ext::parse_layer_states(&t)) {
+            d.layer_states = states;
+        }
+        // The drawing's plot style tables.
+        if let Some(tables) = self.xrecord_text(crate::dxf_ext::PLOT_STYLES_KEY).and_then(|t| crate::dxf_ext::parse_plot_styles(&t)) {
+            d.plot_style_tables = tables;
+        }
+        // Multileader styles (named by their ACAD_MLEADERSTYLE dictionary entries).
+        for (h, tags) in &self.mleader_styles {
+            let Some(name) = self.names.get(h).filter(|n| !n.is_empty()) else { continue };
+            let t = T(tags);
+            let def = MLeaderStyle::default();
+            let num = |code: i32, d: f64, min: f64| t.f(code).filter(|v| v.is_finite() && *v >= min).unwrap_or(d);
+            let text_style = t.s(342).and_then(|sh| rx.styles.get(&sh.trim().to_ascii_uppercase()).cloned()).filter(|n| !n.is_empty());
+            let st = MLeaderStyle {
+                name: name.clone(),
+                arrow_size: num(44, def.arrow_size, 0.0),
+                text_height: t.f(45).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(def.text_height),
+                landing_gap: num(42, def.landing_gap, 0.0),
+                dogleg: num(43, def.dogleg, 0.0),
+                text_style: text_style.unwrap_or(def.text_style),
+            };
+            match d.mleader_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(name)) {
+                Some(x) => *x = st,
+                None => d.mleader_styles.push(st),
             }
-            if let Some((c, p)) = crate::dxf_ext::parse_constraints(&text) {
-                d.constraints = c;
-                d.parametric = p;
+        }
+        for (name, view) in &self.layout_views {
+            if let Some(l) = d.layouts.iter_mut().find(|l| l.name == *name) {
+                l.view = Some(*view);
+            }
+        }
+        // Groups (named by their ACAD_GROUP dictionary entries); members that exist.
+        for (h, tags) in &self.groups {
+            let Some(name) = self.names.get(h).filter(|n| !n.is_empty()) else { continue };
+            let t = T(tags);
+            let members: Vec<Handle> = tags
+                .iter()
+                .filter(|x| x.code == 340)
+                .filter_map(|x| Handle::parse_hex(&x.str()))
+                .filter(|m| d.entity(*m).is_some())
+                .take(MAX_OBJECTS)
+                .collect();
+            let g = Group { name: name.clone(), description: t.s(300).unwrap_or_default(), selectable: t.i(71).unwrap_or(1) != 0, members };
+            match d.groups.iter_mut().find(|x| x.name.eq_ignore_ascii_case(name)) {
+                Some(x) => *x = g,
+                None => d.groups.push(g),
             }
         }
         // Standard associativity, for dimensions without CADCraft's exact links.
@@ -1143,5 +1764,38 @@ fn page_setup(t: &T) -> PageSetup {
     if let Some(name) = t.s(4).filter(|n| !n.is_empty()) {
         p.paper = name.replace('_', " ");
     }
+    if let Some(dev) = t.s(2).map(|s| s.trim().to_string()) {
+        p.device = if dev.is_empty() || dev.eq_ignore_ascii_case("none_device") { "None".into() } else { dev };
+    }
+    // Plot layout flags: 2 display plot styles, 4 centred, 16 standard scale (75 = 0: scaled
+    // to fit), 128 lineweights.
+    if let Some(flags) = t.i(70) {
+        p.show_plot_styles = flags & 2 != 0;
+        p.center = flags & 4 != 0;
+        p.lineweights = flags & 128 != 0;
+        p.scale_to_fit = flags & 16 != 0 && t.i(75) == Some(0);
+    }
+    // Custom scale: 142 paper units per 143 drawing units; 147 is the scale factor.
+    let pos = |v: Option<f64>| v.filter(|v| v.is_finite() && *v > 0.0);
+    let ratio = pos(t.f(142)).zip(pos(t.f(143))).map(|(n, d)| n / d);
+    if let Some(s) = pos(ratio).or_else(|| pos(t.f(147))) {
+        p.scale = s;
+    }
+    p.plot_area = match t.i(74) {
+        Some(0) => "display",
+        Some(1) => "extents",
+        Some(2) => "limits",
+        Some(4) => "window",
+        _ => "layout",
+    }
+    .into();
+    p.plot_style_table = t.s(7).unwrap_or_default();
     p
+}
+
+/// A layout's saved paper-space view (centre, height) from CADCraft xdata.
+fn layout_view(tags: &[Tag]) -> Option<(Vec2, f64)> {
+    let list = crate::dxf_ext::xdata_list(crate::dxf_ext::xdata(tags, crate::dxf_ext::APP), "PSVIEW");
+    let g = |c: i32| list.iter().find(|t| t.code == c).map(Tag::f64).filter(|v| v.is_finite());
+    Some((Vec2::new(g(1010)?, g(1020)?), g(1040)?))
 }

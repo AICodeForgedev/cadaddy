@@ -86,6 +86,7 @@ fn hatch_pattern_and_solid() {
         gradient: None,
         origin: Vec2::ZERO,
         background: None,
+        pattern_lines: Vec::new(),
     };
     d.add(&Space::Model, Common::default(), EntityKind::Hatch(h.clone())).unwrap();
     let l = build(&d, &Space::Model, &Options::default());
@@ -283,6 +284,7 @@ fn truetype_mtext_and_dimension_text() {
             style: "Standard".into(),
             contents: "A{\\C1;B}\\P\\S1/2;".into(),
             line_spacing: 1.0,
+            line_spacing_exact: false,
         }),
     )
     .unwrap();

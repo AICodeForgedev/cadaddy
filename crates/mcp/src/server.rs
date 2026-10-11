@@ -62,6 +62,8 @@ impl Server {
             return None;
         }
         let reply = match serde_json::from_str::<Value>(line) {
+            // JSON-RPC 2.0: an empty batch is one Invalid Request, not silence.
+            Ok(Value::Array(batch)) if batch.is_empty() => Some(error(Value::Null, INVALID_REQUEST, "empty batch")),
             Ok(Value::Array(batch)) => {
                 let replies: Vec<Value> = batch.into_iter().filter_map(|m| self.handle(m)).collect();
                 (!replies.is_empty()).then_some(Value::Array(replies))
@@ -110,8 +112,8 @@ impl Server {
             "tools/list" => Ok(tool_definitions(self.backend.has_ui())),
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing tool `name`".to_string()))?;
-                let args = params.get("arguments").cloned().unwrap_or(json!({}));
-                Ok(call_tool(self.backend.as_mut(), name, &args))
+                let args = params.get("arguments").unwrap_or(&Value::Null);
+                call_tool(self.backend.as_mut(), name, args).map_err(|m| (INVALID_PARAMS, m))
             }
             "resources/list" => Ok(json!({"resources": [
                 {"uri": "cadcraft://drawing", "name": "Active drawing", "mimeType": "application/json"},

@@ -2,23 +2,32 @@
 //! AutoCAD's menu bar so the catalog doubles as the parity metric.
 
 mod annotate;
+mod array;
+mod audit;
 mod blocks;
+pub mod clipboard;
 pub mod constraints;
 mod draw;
 mod draw2;
 mod edit;
 pub mod file;
 mod gripcmds;
+pub(crate) mod groups;
 mod hatch;
 mod inquiry;
 mod layer;
 mod layout;
+mod mleader_content;
 mod modify;
 mod modify2;
+mod mtext_opts;
+mod pline_opts;
 mod props;
 mod qselect;
 mod settings;
+mod spline_opts;
 mod table;
+mod trimextend;
 mod utility;
 mod view;
 
@@ -148,6 +157,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
     SPECS.get_or_init(|| {
         let mut v = Vec::new();
         v.extend(file::specs());
+        v.extend(audit::specs());
         v.extend(edit::specs());
         v.extend(qselect::specs());
         v.extend(view::specs());
@@ -157,7 +167,9 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(hatch::specs());
         v.extend(blocks::specs());
         v.extend(modify::specs());
+        v.extend(array::specs());
         v.extend(modify2::specs());
+        v.extend(groups::specs());
         v.extend(gripcmds::specs());
         v.extend(layer::specs());
         v.extend(layout::specs());
@@ -196,6 +208,29 @@ pub(crate) fn f64_or(p: &Value, key: &str, default: f64) -> f64 {
 pub(crate) fn f64_req(cmd: &str, p: &Value, key: &str) -> Result<f64> {
     p.get(key).and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad(cmd, format!("`{key}` (number) is required")))
 }
+/// An optional size: `None` when absent or null, else a finite number above zero (or zero too
+/// with `zero_ok`). Anything else is refused, not clamped or made absolute, so a bad value never
+/// makes a degenerate object.
+pub(crate) fn size_param(cmd: &str, p: &Value, key: &str, zero_ok: bool) -> Result<Option<f64>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => match v.as_f64().filter(|x| x.is_finite()) {
+            Some(x) if x > 0.0 || (zero_ok && x == 0.0) => Ok(Some(x)),
+            _ => Err(bad(cmd, format!("`{key}` must be {}", if zero_ok { "zero or positive" } else { "positive" }))),
+        },
+    }
+}
+/// `pts` without consecutive repeats (closer than `1e-12`), as the interactive LINE ignores a
+/// point picked twice.
+pub(crate) fn distinct_points(pts: &[Vec2]) -> Vec<Vec2> {
+    let mut out: Vec<Vec2> = Vec::with_capacity(pts.len());
+    for p in pts {
+        if !out.last().is_some_and(|l| l.near(*p, 1e-12)) {
+            out.push(*p);
+        }
+    }
+    out
+}
 pub(crate) fn bool_or(p: &Value, key: &str, default: bool) -> bool {
     p.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
@@ -226,16 +261,20 @@ pub(crate) fn point_req(cmd: &str, p: &Value, key: &str) -> Result<Vec2> {
 pub(crate) fn points_param(p: &Value, key: &str) -> Option<Vec<Vec2>> {
     p.get(key)?.as_array()?.iter().map(point_value).collect()
 }
-/// Handles from `handles` (hex strings or numbers) or the current selection.
+/// Handles from `handles` (hex strings or numbers), `handle`, or else the current selection. A
+/// `handle`/`handles` that can't be read is an error, never a silent fall back to the selection.
 pub(crate) fn targets(s: &Session, p: &Value) -> Result<Vec<Handle>> {
-    if let Some(a) = p.get("handles").and_then(Value::as_array) {
-        let hs: Vec<Handle> = a.iter().filter_map(|v| v.as_str().and_then(Handle::parse_hex).or_else(|| v.as_u64().map(Handle))).collect();
-        return Ok(hs);
+    let handle = |v: &Value| v.as_str().and_then(Handle::parse_hex).or_else(|| v.as_u64().map(Handle));
+    let not_handle = |key: &str, v: &Value| EngineError::Other(format!("`{key}`: {v} is not an object handle (a hex string such as \"1A2\")"));
+    match p.get("handles") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(a)) => return a.iter().map(|v| handle(v).ok_or_else(|| not_handle("handles", v))).collect(),
+        Some(v) => return Err(EngineError::Other(format!("`handles` must be an array of object handles, got {v}"))),
     }
-    if let Some(h) = p.get("handle").and_then(|v| v.as_str().and_then(Handle::parse_hex).or_else(|| v.as_u64().map(Handle))) {
-        return Ok(vec![h]);
+    match p.get("handle") {
+        None | Some(Value::Null) => Ok(s.selection()),
+        Some(v) => Ok(vec![handle(v).ok_or_else(|| not_handle("handle", v))?]),
     }
-    Ok(s.selection())
 }
 pub(crate) fn ok() -> Result<Value> {
     Ok(Value::Null)

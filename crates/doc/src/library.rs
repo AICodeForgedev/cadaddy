@@ -4,9 +4,10 @@
 //! The names follow the industry-common names users expect (DASHED, CENTER, ANSI31…); the
 //! dash and spacing values are our own.
 
-use crate::{DashElement, Linetype};
+use crate::{DashElement, Drawing, Linetype};
 
-/// The standard linetype library (inch-based lengths; metric drawings scale with LTSCALE).
+/// The standard linetype library, defined in inches. Load it into a drawing with
+/// [`standard_linetypes_for`], which scales it for metric drawings.
 pub fn standard_linetypes() -> Vec<Linetype> {
     let s = |name: &str, desc: &str, d: &[f64]| Linetype::simple(name, desc, d);
     vec![
@@ -32,8 +33,15 @@ pub fn standard_linetypes() -> Vec<Linetype> {
             description: "Fenceline circle ----0-----0----".into(),
             pattern: vec![
                 DashElement::dash(0.25),
+                // The text goes where its element ends: centred between the two gaps.
+                DashElement {
+                    text: Some("o".into()),
+                    style: Some("Standard".into()),
+                    scale: 0.1,
+                    offset: cadcraft_geom::Vec2::new(-0.035, -0.035),
+                    ..DashElement::dash(-0.1)
+                },
                 DashElement::dash(-0.1),
-                DashElement { text: Some("o".into()), scale: 0.1, ..DashElement::dash(-0.1) },
                 DashElement::dash(0.5),
             ],
         },
@@ -41,8 +49,33 @@ pub fn standard_linetypes() -> Vec<Linetype> {
     ]
 }
 
+/// The standard linetypes as loaded into `d`. In a metric drawing (`MEASUREMENT` 1) every length
+/// (dashes, gaps, text and shape size, offsets) is multiplied by 25.4, so the patterns measure
+/// in millimetres what they measure in inches in an imperial drawing (DASHED: 12.7 on, 6.35
+/// off) and LTSCALE 1 suits both, as CAD programs load ISO-scaled definitions for metric
+/// drawings. Definitions already in a drawing are not changed.
+pub fn standard_linetypes_for(d: &Drawing) -> Vec<Linetype> {
+    let lib = standard_linetypes();
+    if d.header.i64("MEASUREMENT", 0) != 1 {
+        return lib;
+    }
+    lib.into_iter().map(|lt| scaled(lt, 25.4)).collect()
+}
+
+/// `lt` with every length multiplied by `k`.
+fn scaled(mut lt: Linetype, k: f64) -> Linetype {
+    for e in &mut lt.pattern {
+        e.length *= k;
+        e.offset = e.offset * k;
+        if e.text.is_some() || e.shape.is_some() {
+            e.scale *= k;
+        }
+    }
+    lt
+}
+
 /// A hatch pattern line family: angle (degrees), origin, offset (shift along, spacing), dashes.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PatternLine {
     pub angle: f64,
     pub origin: (f64, f64),

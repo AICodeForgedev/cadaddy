@@ -329,7 +329,7 @@ pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
         ui,
         &workspace.layout,
         &style,
-        |panel| panel.label().into(),
+        |panel| crate::i18n::t(panel.label()).into(),
         permissions,
         panel_limits,
         |ui, panel| match panel {

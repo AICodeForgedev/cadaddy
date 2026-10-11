@@ -5,7 +5,7 @@
 //! undoable and reachable from scripts, the control channel and MCP.
 
 use cadcraft_doc::{DimKind, EntityKind, Handle, LwPolyline};
-use cadcraft_geom::{Arc, EPS, Mat3, Polyline, Spline, Vec2, Vec3, norm_angle};
+use cadcraft_geom::{Arc, EPS, Mat3, Polyline, Vec2, Vec3, norm_angle};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -181,10 +181,7 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
             } else {
                 let mut fit = sp.fit.clone();
                 *fit.get_mut(index)? = to;
-                let closed = sp.closed;
-                let mut n = Spline::from_fit_points(&fit);
-                n.closed = closed;
-                *sp = n;
+                *sp = sp.refit(&fit, sp.closed);
             }
         }
         EntityKind::Ray(r) | EntityKind::XLine(r) => {
@@ -241,12 +238,16 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
                 }
             }
             if !done {
-                // The landing grip moves the landing and its text.
+                // The landing grip moves the landing and its content.
                 let ld = m.landing.xy() + delta;
                 set_xy(&mut m.landing, ld);
                 if let Some(t) = &mut m.text {
                     let q = t.insert.xy() + delta;
                     set_xy(&mut t.insert, q);
+                }
+                if let Some(b) = &mut m.block {
+                    let q = b.insert.xy() + delta;
+                    set_xy(&mut b.insert, q);
                 }
             }
         }
@@ -294,21 +295,20 @@ pub fn mode_matrix(mode: GripMode, base: Vec2, to: Vec2) -> Option<Mat3> {
 
 impl Session {
     /// Drag grip `grip_index` of `handle` to `new_point` in `mode` (one undo step).
-    /// The base point of the rotate/scale/mirror modes is the grip itself.
+    /// The base point of the rotate/scale/mirror modes is the grip itself. As in AutoCAD the edit
+    /// covers the selection: a stretch drags the grips of other selected objects that sit on the
+    /// same point, and the other modes transform every selected object.
     pub fn grip_edit(&mut self, handle: Handle, grip_index: usize, new_point: Vec2, mode: GripMode) -> Result<()> {
         let to = [new_point.x, new_point.y];
+        let hs: Vec<String> = std::iter::once(handle).chain(self.selection().into_iter().filter(|h| *h != handle)).map(|h| h.hex()).collect();
         let r = match mode {
-            GripMode::Stretch => self.execute("grip.move", &json!({ "handle": handle.hex(), "index": grip_index, "to": to })),
-            GripMode::Move => self.execute("grip.move", &json!({ "handles": [handle.hex()], "index": grip_index, "to": to, "mode": "move" })),
-            GripMode::Rotate => {
-                self.execute("grip.rotate", &json!({ "handles": [handle.hex()], "baseHandle": handle.hex(), "index": grip_index, "to": to }))
+            GripMode::Stretch => self.execute("grip.move", &json!({ "handle": handle.hex(), "handles": hs, "index": grip_index, "to": to })),
+            GripMode::Move => {
+                self.execute("grip.move", &json!({ "handles": hs, "baseHandle": handle.hex(), "index": grip_index, "to": to, "mode": "move" }))
             }
-            GripMode::Scale => {
-                self.execute("grip.scale", &json!({ "handles": [handle.hex()], "baseHandle": handle.hex(), "index": grip_index, "to": to }))
-            }
-            GripMode::Mirror => {
-                self.execute("grip.mirror", &json!({ "handles": [handle.hex()], "baseHandle": handle.hex(), "index": grip_index, "to": to }))
-            }
+            GripMode::Rotate => self.execute("grip.rotate", &json!({ "handles": hs, "baseHandle": handle.hex(), "index": grip_index, "to": to })),
+            GripMode::Scale => self.execute("grip.scale", &json!({ "handles": hs, "baseHandle": handle.hex(), "index": grip_index, "to": to })),
+            GripMode::Mirror => self.execute("grip.mirror", &json!({ "handles": hs, "baseHandle": handle.hex(), "index": grip_index, "to": to })),
         };
         r.map(|_| ())
     }

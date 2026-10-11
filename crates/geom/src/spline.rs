@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::spline_fit::FitOptions;
 use crate::{Bounds2, Vec2};
 
 /// A (possibly rational) B-spline curve, DXF SPLINE style.
@@ -15,6 +16,10 @@ pub struct Spline {
     pub fit: Vec<Vec2>,
     #[serde(default)]
     pub closed: bool,
+    /// How the curve was built from `fit` (knot parametrisation, end tangents, fit tolerance), so
+    /// edits to the fit points rebuild it the same way.
+    #[serde(default)]
+    pub fit_opts: FitOptions,
 }
 
 impl Spline {
@@ -23,68 +28,31 @@ impl Spline {
         let n = control.len();
         let degree = degree.clamp(1, n.saturating_sub(1).max(1));
         let knots = clamped_uniform_knots(n, degree);
-        Spline { degree, knots, control, weights: Vec::new(), fit: Vec::new(), closed: false }
+        Spline { degree, knots, control, weights: Vec::new(), fit: Vec::new(), closed: false, fit_opts: FitOptions::default() }
     }
 
     /// Cubic interpolation through fit points (chord-length parametrisation, natural-ish ends
     /// via a clamped knot vector: solve the banded system for control points).
     pub fn from_fit_points(fit: &[Vec2]) -> Spline {
-        let n = fit.len();
-        if n < 2 {
-            return Spline {
-                degree: 1,
-                knots: vec![0.0, 0.0, 1.0, 1.0],
-                control: fit.to_vec(),
-                weights: Vec::new(),
-                fit: fit.to_vec(),
-                closed: false,
-            };
-        }
-        if n == 2 {
-            let mut s = Spline::from_control(fit.to_vec(), 1);
-            s.fit = fit.to_vec();
-            return s;
-        }
-        let degree = 3.min(n - 1);
-        // Chord-length parameters.
-        let mut u = vec![0.0; n];
-        let mut total = 0.0;
-        for i in 1..n {
-            total += fit.get(i).zip(fit.get(i - 1)).map(|(a, b)| a.dist(*b)).unwrap_or(0.0).max(1e-12);
-            if let Some(x) = u.get_mut(i) {
-                *x = total;
-            }
-        }
-        for x in u.iter_mut() {
-            *x /= total.max(1e-300);
-        }
-        // Knots by averaging.
-        let mut knots = vec![0.0; degree + 1];
-        for j in 1..n.saturating_sub(degree) {
-            let s: f64 = (j..j + degree).filter_map(|i| u.get(i)).sum();
-            knots.push(s / degree as f64);
-        }
-        knots.extend(std::iter::repeat_n(1.0, degree + 1));
-        // Basis matrix N[i][j] = N_j(u_i).
-        let mut m = vec![vec![0.0; n]; n];
-        for (i, ui) in u.iter().enumerate() {
-            let span = find_span(n - 1, degree, *ui, &knots);
-            let b = basis(span, *ui, degree, &knots);
-            for (k, v) in b.iter().enumerate() {
-                if let Some(cell) = m.get_mut(i).and_then(|r| r.get_mut(span + k - degree)) {
-                    *cell = *v;
-                }
-            }
-        }
-        let xs: Vec<f64> = fit.iter().map(|p| p.x).collect();
-        let ys: Vec<f64> = fit.iter().map(|p| p.y).collect();
-        let (Some(cx), Some(cy)) = (solve(m.clone(), xs), solve(m, ys)) else {
-            let mut s = Spline::from_control(fit.to_vec(), degree);
-            s.fit = fit.to_vec();
-            return s;
-        };
-        let control = cx.into_iter().zip(cy).map(|(x, y)| Vec2::new(x, y)).collect();
-        Spline { degree, knots, control, weights: Vec::new(), fit: fit.to_vec(), closed: false }
+        Spline::fit_with(fit, false, FitOptions::default())
+    }
+
+    /// Smooth closed (periodic) cubic interpolation through fit points. Chord-length parameters
+    /// include the closing chord; the knot vector is the periodic (unclamped) extension and the
+    /// first `degree` control points repeat at the end, so the curve has continuous tangent and
+    /// curvature at the seam. A repeated closing fit point is dropped.
+    pub fn from_fit_points_closed(fit: &[Vec2]) -> Spline {
+        Spline::fit_with(fit, true, FitOptions::default())
+    }
+
+    /// Interpolation through fit points, open or closed (see `from_fit_points_closed`).
+    pub fn from_fit(fit: &[Vec2], closed: bool) -> Spline {
+        Spline::fit_with(fit, closed, FitOptions::default())
+    }
+
+    /// Closed with an unclamped (periodic) knot vector, as DXF flags it (group 70 bit 2).
+    pub fn is_periodic(&self) -> bool {
+        self.closed && self.knots.first() != self.knots.get(self.degree)
     }
 
     pub fn is_valid(&self) -> bool {
@@ -148,7 +116,7 @@ pub(crate) fn clamped_uniform_knots(n: usize, degree: usize) -> Vec<f64> {
     k
 }
 
-fn find_span(n: usize, p: usize, u: f64, knots: &[f64]) -> usize {
+pub(crate) fn find_span(n: usize, p: usize, u: f64, knots: &[f64]) -> usize {
     let kn = knots.get(n + 1).copied().unwrap_or(1.0);
     if u >= kn {
         return n;
@@ -173,7 +141,7 @@ fn find_span(n: usize, p: usize, u: f64, knots: &[f64]) -> usize {
     mid
 }
 
-fn basis(span: usize, u: f64, p: usize, knots: &[f64]) -> Vec<f64> {
+pub(crate) fn basis(span: usize, u: f64, p: usize, knots: &[f64]) -> Vec<f64> {
     let mut n = vec![0.0; p + 1];
     let mut left = vec![0.0; p + 1];
     let mut right = vec![0.0; p + 1];
@@ -198,7 +166,7 @@ fn basis(span: usize, u: f64, p: usize, knots: &[f64]) -> Vec<f64> {
 
 /// Gaussian elimination with partial pivoting.
 #[allow(clippy::needless_range_loop)]
-fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
+pub(crate) fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     let n = b.len();
     for c in 0..n {
         let piv = (c..n).max_by(|&i, &j| a[i][c].abs().total_cmp(&a[j][c].abs()))?;

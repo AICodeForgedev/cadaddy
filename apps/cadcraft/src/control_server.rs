@@ -14,11 +14,11 @@ pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("cadcraft: control server failed to bind 127.0.0.1:{port}: {e}");
+            log::error!("control server failed to bind 127.0.0.1:{port}: {e}");
             return rx;
         }
     };
-    eprintln!("cadcraft: control server listening on 127.0.0.1:{port}");
+    log::info!("control server listening on 127.0.0.1:{port}");
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let tx = tx.clone();
@@ -42,12 +42,14 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context) {
                 let id = msg.get("id").cloned().unwrap_or(Value::Null);
                 let method = msg.get("method").and_then(Value::as_str).unwrap_or("").to_string();
                 let params = msg.get("params").cloned().unwrap_or(json!({}));
-                let (req, rrx) = ControlRequest::new(method, params);
+                let (req, pending) = ControlRequest::new(method, params);
                 if tx.send(req).is_err() {
                     break;
                 }
                 ctx.request_repaint();
-                let mut r = rrx.recv_timeout(Duration::from_secs(60)).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"}));
+                // On timeout the request is cancelled if the app hasn't started it, and the reply's
+                // `state` says whether it can still have run.
+                let mut r = pending.wait(Duration::from_secs(60));
                 if let Some(o) = r.as_object_mut() {
                     o.insert("id".into(), id);
                 }

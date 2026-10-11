@@ -94,6 +94,9 @@ pub struct Common {
     pub visible: bool,
     pub thickness: f64,
     pub extrusion: Vec3,
+    /// Named plot style: `ByLayer`, `ByBlock` or a style of the layout's named (`.stb`) plot
+    /// style table.
+    pub plot_style: String,
 }
 
 impl Default for Common {
@@ -108,6 +111,7 @@ impl Default for Common {
             visible: true,
             thickness: 0.0,
             extrusion: Vec3::Z,
+            plot_style: "ByLayer".into(),
         }
     }
 }
@@ -216,6 +220,17 @@ pub struct Text {
     #[serde(default)]
     pub valign: VAlign,
 }
+impl Text {
+    /// The point the text is placed by, as the Insertion snap and the grip show it: the alignment
+    /// point (DXF group 11) of justified text, the start point (group 10) of left-baseline,
+    /// aligned and fit text.
+    pub fn justify_point(&self) -> Vec2 {
+        match (self.halign, self.valign) {
+            (HAlign::Left, VAlign::Baseline) | (HAlign::Aligned | HAlign::Fit, _) => self.insert.xy(),
+            _ => self.align_pt.unwrap_or(self.insert).xy(),
+        }
+    }
+}
 fn one() -> f64 {
     1.0
 }
@@ -241,6 +256,10 @@ pub struct MText {
     pub contents: String,
     #[serde(default = "one")]
     pub line_spacing: f64,
+    /// Line spacing style (DXF 73): Exactly (`true`) keeps `line_spacing` whatever the character
+    /// heights; At least (`false`, the default) lets taller characters push lines apart.
+    #[serde(default)]
+    pub line_spacing_exact: bool,
 }
 fn attach_tl() -> u8 {
     1
@@ -256,7 +275,43 @@ pub struct Attrib {
     pub constant: bool,
     #[serde(default)]
     pub prompt: String,
+    /// An attribute's own properties; each one left unset follows the attribute definition.
+    #[serde(default, skip_serializing_if = "AttribProps::is_empty")]
+    pub props: AttribProps,
 }
+
+/// Properties set on one attribute of a block reference (an ATTRIB's layer, colour, linetype and
+/// lineweight), overriding those of its definition.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AttribProps {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linetype: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lineweight: Option<Lineweight>,
+}
+
+impl AttribProps {
+    /// Nothing set: the attribute is drawn with its definition's properties.
+    pub fn is_empty(&self) -> bool {
+        *self == AttribProps::default()
+    }
+    /// `base` (the definition's properties) with the ones set here in place.
+    pub fn over(&self, base: &Common) -> Common {
+        Common {
+            layer: self.layer.clone().unwrap_or_else(|| base.layer.clone()),
+            color: self.color.unwrap_or(base.color),
+            linetype: self.linetype.clone().unwrap_or_else(|| base.linetype.clone()),
+            lineweight: self.lineweight.unwrap_or(base.lineweight),
+            ..base.clone()
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Insert {
@@ -409,6 +464,26 @@ pub struct MLeader {
     pub style: String,
     #[serde(default = "one")]
     pub arrow_size: f64,
+    /// Leader lines are smooth curves through their points (leader type Spline). An empty
+    /// `leaders` is a multileader without a leader line (leader type None).
+    #[serde(default)]
+    pub spline: bool,
+    /// Block content in place of the text: a block reference placed at the landing.
+    #[serde(default)]
+    pub block: Option<Insert>,
+}
+
+impl MLeader {
+    /// Each leader line as drawn: through its points to the landing, smoothed for spline leaders.
+    pub fn leader_paths(&self) -> Vec<Vec<Vec2>> {
+        self.leaders
+            .iter()
+            .map(|l| {
+                let pts: Vec<Vec2> = l.iter().map(|v| v.xy()).chain(std::iter::once(self.landing.xy())).collect();
+                if self.spline && pts.len() > 2 { GSpline::from_fit_points(&pts).tessellate(1e-3) } else { pts }
+            })
+            .collect()
+    }
 }
 /// A hatch boundary loop: closed polyline with bulges.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -441,6 +516,10 @@ pub struct Hatch {
     pub origin: Vec2,
     #[serde(default)]
     pub background: Option<Color>,
+    /// The pattern's line families as a file defined them, for a pattern that isn't in the
+    /// standard library (unit scale and angle, like the library's; empty otherwise).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pattern_lines: Vec<crate::library::PatternLine>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -491,10 +570,68 @@ pub struct Viewport {
 #[serde(rename_all = "camelCase")]
 pub struct Image {
     pub insert: Vec3,
+    /// One pixel's width (U) and height (V) vectors in drawing units.
     pub u: Vec3,
     pub v: Vec3,
+    /// Image size in pixels.
     pub size: Vec2,
+    /// The image file (its IMAGEDEF object's path).
     pub path: String,
+    /// The image definition's name (its key in the drawing's image dictionary).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// Clip boundary in pixel coordinates (origin at the top-left corner of the image, y down):
+    /// two opposite corners of a rectangle, or a polygon's vertices. Empty: the whole image.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clip: Vec<Vec2>,
+    /// The clip boundary is applied.
+    #[serde(default)]
+    pub clipping: bool,
+    /// Display flags: 1 show the image, 2 show it when not aligned with the screen, 4 use the
+    /// clip boundary, 8 transparency on.
+    #[serde(default = "image_display")]
+    pub display: u16,
+    /// Brightness, contrast and fade, 0..=100.
+    #[serde(default = "image_fifty")]
+    pub brightness: u8,
+    #[serde(default = "image_fifty")]
+    pub contrast: u8,
+    #[serde(default)]
+    pub fade: u8,
+    /// The definition's default size of one pixel and its resolution unit (0 none, 2 cm, 5 inch).
+    #[serde(default = "image_pixel")]
+    pub pixel_size: Vec2,
+    #[serde(default)]
+    pub resolution_units: u8,
+}
+fn image_display() -> u16 {
+    7
+}
+fn image_fifty() -> u8 {
+    50
+}
+fn image_pixel() -> Vec2 {
+    Vec2::new(1.0, 1.0)
+}
+impl Default for Image {
+    fn default() -> Self {
+        Image {
+            insert: Vec3::ZERO,
+            u: Vec3::new(1.0, 0.0, 0.0),
+            v: Vec3::new(0.0, 1.0, 0.0),
+            size: Vec2::new(1.0, 1.0),
+            path: String::new(),
+            name: String::new(),
+            clip: Vec::new(),
+            clipping: false,
+            display: image_display(),
+            brightness: image_fifty(),
+            contrast: image_fifty(),
+            fade: 0,
+            pixel_size: image_pixel(),
+            resolution_units: 0,
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Wipeout {
@@ -718,6 +855,7 @@ impl EntityKind {
                 .leaders
                 .iter()
                 .flat_map(|l| l.windows(2).filter_map(|w| Some(Prim::Seg(Segment::Line(GLine::new(w.first()?.xy(), w.get(1)?.xy()))))))
+                .chain(m.block.iter().map(|b| Prim::Point(b.insert.xy())))
                 .collect(),
             EntityKind::Image(i) => vec![Prim::Point(i.insert.xy())],
             EntityKind::Table(t) => vec![Prim::Point(t.insert.xy())],
@@ -791,11 +929,7 @@ impl EntityKind {
                 p.const_width *= s;
             }
             EntityKind::Polyline3d(p) => p.points.iter_mut().for_each(t3),
-            EntityKind::Spline(sp) => {
-                for c in sp.control.iter_mut().chain(sp.fit.iter_mut()) {
-                    *c = m.apply(*c);
-                }
-            }
+            EntityKind::Spline(sp) => sp.transform(m),
             EntityKind::Ray(r) | EntityKind::XLine(r) => {
                 t3(&mut r.base);
                 r.dir = m.apply_vec(r.dir.xy()).normalized().to3(0.0);
@@ -842,6 +976,14 @@ impl EntityKind {
                 if let Some(t) = &mut ml.text {
                     t3(&mut t.insert);
                     t.height *= s;
+                }
+                if let Some(b) = &mut ml.block {
+                    // Transformed exactly like a block reference.
+                    let mut k = EntityKind::Insert(b.clone());
+                    k.transform(m);
+                    if let EntityKind::Insert(nb) = k {
+                        *b = nb;
+                    }
                 }
             }
             EntityKind::Hatch(h) => {
@@ -919,10 +1061,10 @@ impl EntityKind {
                 }
             }
             EntityKind::Ray(r) | EntityKind::XLine(r) => vec![r.base.xy(), r.base.xy() + r.dir.xy()],
-            EntityKind::Text(t) => vec![t.insert.xy()],
+            EntityKind::Text(t) => vec![t.justify_point()],
             EntityKind::MText(t) => vec![t.insert.xy()],
-            EntityKind::AttDef(a) => vec![a.text.insert.xy()],
-            EntityKind::Insert(i) => std::iter::once(i.insert.xy()).chain(i.attribs.iter().map(|a| a.text.insert.xy())).collect(),
+            EntityKind::AttDef(a) => vec![a.text.justify_point()],
+            EntityKind::Insert(i) => std::iter::once(i.insert.xy()).chain(i.attribs.iter().map(|a| a.text.justify_point())).collect(),
             EntityKind::Dimension(d) => vec![d.p13.xy(), d.p14.xy(), d.defpt.xy(), d.text_mid.xy()],
             EntityKind::Leader(l) => l.vertices.iter().map(|v| v.xy()).collect(),
             EntityKind::MLeader(m) => m.leaders.iter().flat_map(|l| l.iter().map(|v| v.xy())).chain(std::iter::once(m.landing.xy())).collect(),

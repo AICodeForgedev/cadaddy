@@ -1,5 +1,7 @@
 //! Approximate entity bounds (used for extents, zoom and selection pre-filtering).
 
+use std::collections::HashMap;
+
 use cadcraft_geom::{Arc, Bounds2, EPS, Polyline, Vec2, bulge_to_arc};
 
 use crate::{Drawing, Entity, EntityKind, LwPolyline, Prim};
@@ -12,10 +14,8 @@ pub const MAX_BLOCK_DEPTH: usize = 16;
 fn text_box(t: &crate::Text, len: usize) -> Bounds2 {
     use crate::{HAlign, VAlign};
     let w = t.height * 0.9 * t.width_factor.abs().max(0.01) * len.max(1) as f64;
-    let origin = match t.halign {
-        HAlign::Left | HAlign::Aligned | HAlign::Fit => t.insert,
-        _ => t.align_pt.unwrap_or(t.insert),
-    };
+    // Justified text (TL, ML and BL too) hangs from its alignment point (DXF group 11).
+    let origin = t.justify_point();
     let dx = match t.halign {
         HAlign::Left | HAlign::Aligned | HAlign::Fit => 0.0,
         HAlign::Center | HAlign::Middle => -w / 2.0,
@@ -29,11 +29,37 @@ fn text_box(t: &crate::Text, len: usize) -> Bounds2 {
         (_, VAlign::Top) => -t.height,
     };
     let local = [Vec2::new(dx, dy), Vec2::new(dx + w, dy), Vec2::new(dx + w, dy + t.height), Vec2::new(dx, dy + t.height)];
-    Bounds2::from_points(local.map(|p| origin.xy() + p.rotate(t.rotation)))
+    Bounds2::from_points(local.map(|p| origin + p.rotate(t.rotation)))
+}
+
+/// Whether an entity inside a block definition shows: its own invisible flag and its layer count,
+/// as when drawing. Dimensional constraints of dynamic blocks (layer `*ADSK_CONSTRAINTS`) and the
+/// entities a visibility state hides are invisible this way, and they sit far from the block's
+/// geometry in real drawings. Layer "0" takes the insert's layer, which the caller has checked.
+fn in_block_visible(d: &Drawing, e: &Entity) -> bool {
+    // Attribute definitions are not drawn in an insert (its attribs are, see below).
+    !matches!(e.kind, EntityKind::AttDef(_))
+        && e.common.visible
+        && (e.common.layer == "0" || d.layer(&e.common.layer).is_none_or(crate::Layer::visible))
+}
+
+/// A text that draws no glyph (empty, or only blanks and non-breaking spaces) takes no room.
+fn blank(s: &str) -> bool {
+    s.replace("\\~", " ").chars().all(char::is_whitespace)
 }
 
 pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
+    bounds_in(d, e, depth, &mut HashMap::new())
+}
+
+/// [`entity_bounds`] with the bounds of block contents (in block coordinates) already computed,
+/// by block name: every further reference to a block reuses them instead of expanding the block
+/// again, so nested or self-referencing blocks cost one pass over each definition instead of one
+/// per reference (which grows exponentially with the nesting depth).
+fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String, Bounds2>) -> Bounds2 {
     match &e.kind {
+        EntityKind::Text(t) if blank(&t.value) => Bounds2::EMPTY,
+        EntityKind::MText(t) if blank(&t.contents) => Bounds2::EMPTY,
         EntityKind::Text(t) => text_box(t, t.value.chars().count()),
         EntityKind::AttDef(a) => text_box(&a.text, a.tag.chars().count()),
         EntityKind::MText(t) => {
@@ -60,14 +86,23 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
             if depth >= MAX_BLOCK_DEPTH {
                 return Bounds2::EMPTY;
             }
-            let Some(blk) = d.block(&ins.block) else { return Bounds2::from_points([ins.insert.xy()]) };
+            // A reference to a missing block (an unloaded xref, a purged definition) or to an empty
+            // one draws nothing, so it contributes nothing: ZOOM Extents must not fly off to its
+            // insertion point. Attributes below still count.
+            let Some(blk) = d.block(&ins.block) else { return Bounds2::EMPTY };
             let m = ins.transform(blk.base.xy());
-            let mut inner = Bounds2::EMPTY;
-            for be in blk.entities.iter() {
-                inner = inner.union(&entity_bounds(d, be, depth + 1));
-            }
-            let mut b =
-                if inner.is_empty() { Bounds2::from_points([ins.insert.xy()]) } else { Bounds2::from_points(inner.corners().map(|c| m.apply(c))) };
+            let inner = match blocks.get(&blk.name) {
+                Some(b) => *b,
+                None => {
+                    let mut inner = Bounds2::EMPTY;
+                    for be in blk.entities.iter().filter(|be| in_block_visible(d, be)) {
+                        inner = inner.union(&bounds_in(d, be, depth + 1, blocks));
+                    }
+                    blocks.insert(blk.name.clone(), inner);
+                    inner
+                }
+            };
+            let mut b = if inner.is_empty() { Bounds2::EMPTY } else { Bounds2::from_points(inner.corners().map(|c| m.apply(c))) };
             if ins.cols > 1 || ins.rows > 1 {
                 let off = Vec2::new(ins.col_spacing * f64::from(ins.cols.saturating_sub(1)), ins.row_spacing * f64::from(ins.rows.saturating_sub(1)))
                     .rotate(ins.rotation);
@@ -93,13 +128,20 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
                 b.add(dm.text_mid.xy());
             }
             // Room for text and arrows.
-            let th = d.dim_style(&dm.style).map(|s| s.text_height * s.scale.max(1e-9)).unwrap_or(0.18) * d.header.f64("DIMSCALE", 1.0).max(1e-9);
+            // The same scale the dimension's geometry uses.
+            let th = d
+                .dim_style(&dm.style)
+                .map(|s| {
+                    let s = s.with_overrides(&dm.overrides);
+                    s.text_height * s.effective_scale(d.header.f64("DIMSCALE", 1.0))
+                })
+                .unwrap_or(0.18 * d.header.f64("DIMSCALE", 1.0).max(1e-9));
             b = b.expand(th * 2.5);
             if let Some(blk) = dm.block.as_ref().and_then(|n| d.block(n))
                 && depth < MAX_BLOCK_DEPTH
             {
-                for be in blk.entities.iter() {
-                    b = b.union(&entity_bounds(d, be, depth + 1));
+                for be in blk.entities.iter().filter(|be| in_block_visible(d, be)) {
+                    b = b.union(&bounds_in(d, be, depth + 1, blocks));
                 }
             }
             b
@@ -108,6 +150,10 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
             let mut b = Bounds2::from_points(m.leaders.iter().flatten().map(|v| v.xy()).chain(std::iter::once(m.landing.xy())));
             if let Some(t) = &m.text {
                 b.add(t.insert.xy());
+            }
+            if let Some(ins) = &m.block {
+                let be = Entity { handle: e.handle, common: e.common.clone(), kind: EntityKind::Insert(ins.clone()) };
+                b = b.union(&bounds_in(d, &be, depth, blocks));
             }
             b
         }
@@ -132,14 +178,9 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
                     Prim::Ellipse(e) => e.bounds(),
                     Prim::Spline(s) => s.bounds(),
                     Prim::Point(p) => Bounds2::from_points([p]),
-                    // Infinite lines don't contribute to extents (as in ZOOM Extents).
-                    Prim::Infinite { base, ray, .. } => {
-                        if ray {
-                            Bounds2::from_points([base])
-                        } else {
-                            Bounds2::EMPTY
-                        }
-                    }
+                    // Infinite lines don't contribute to extents, rays included (as in ZOOM Extents;
+                    // real drawings carry stray rays millions of units away).
+                    Prim::Infinite { .. } => Bounds2::EMPTY,
                     Prim::Fill(pts) => Bounds2::from_points(pts),
                 };
                 b = b.union(&pb);
@@ -246,7 +287,7 @@ mod tests {
     #[test]
     fn right_justified_attdef_is_left_of_alignment_point() {
         let text = text(HAlign::Right, VAlign::Baseline);
-        let a = crate::Attrib { tag: "HELLO".into(), text, invisible: false, constant: false, prompt: String::new() };
+        let a = crate::Attrib { tag: "HELLO".into(), text, invisible: false, constant: false, prompt: String::new(), props: Default::default() };
         let b = bounds(EntityKind::AttDef(a));
         assert!(b.min.x <= -4.4 && b.max.x < 1.0);
     }

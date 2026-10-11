@@ -12,6 +12,7 @@ fn harness() -> Harness<'static, CadApp> {
     app.ui.in_window_menu = false;
     let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
         |ui, app: &mut CadApp| {
+            ui.ctx().set_os(egui::os::OperatingSystem::Mac);
             app.logic(&ui.ctx().clone());
             app.ui(ui);
         },

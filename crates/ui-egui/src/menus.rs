@@ -18,6 +18,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.toggle.toolsets", "Tool Sets", &["Window", "Tool Sets"], Some("Cmd+3")),
     ("ui.panel.properties", "Properties Inspector", &["Window", "Properties Inspector"], Some("Cmd+1")),
     ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
+    ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
     ("ui.toggle.toolbar", "Tool Bar", &["Window", "Tool Bar"], None),
     ("ui.toggle.filetabs", "File Tab", &["Window", "File Tab"], None),
     ("ui.toggle.statusbar", "Status Bar", &["Window", "Status Bar"], None),
@@ -28,6 +29,9 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.theme.light", "Light", &["View", "Interface Theme", "Light"], None),
     ("ui.theme.dark", "Dark", &["View", "Interface Theme", "Dark"], None),
     ("ui.theme", "Interface Theme", &[], None),
+    ("ui.saveformat.dxf", "DXF", &["File", "Default Save Format", "DXF"], None),
+    ("ui.saveformat.dwg", "DWG", &["File", "Default Save Format", "DWG"], None),
+    ("ui.saveformat", "Default Save Format", &[], None),
     ("ui.toggle.menubar", "In-window Menu Bar", &["Window", "In-window Menu Bar"], None),
     ("ui.hidepalettes", "Hide Palettes", &["Window", "Hide Palettes"], None),
     ("ui.resetpalettes", "Reset Palettes", &["Window", "Reset Palettes"], None),
@@ -41,6 +45,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.dialog.commands", "Command Reference", &["Help", "CADCraft Help"], Some("F1")),
     ("ui.toggle.history", "Command History", &["Window", "Command History"], Some("F2")),
     ("ui.cmdline.lines", "Command Line History Lines", &[], None),
+    ("ui.dialog.language", "Interface Language", &["Edit", "Interface Language"], None),
+    ("ui.language", "Language", &[], None),
     ("ui.noop", "", &[], None),
     ("ui.quit", "Quit CADCraft", &[], Some("Cmd+Q")),
 ];
@@ -51,6 +57,10 @@ pub fn is_ui_command(id: &str) -> bool {
 
 /// Run a UI-only command. `None` if `id` isn't one.
 pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    crate::i18n::with_language(app.language(), || run_ui_command_inner(app, id, params))
+}
+
+fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if let Some(r) = crate::managers::route(app, id, params) {
         return Some(r);
     }
@@ -61,6 +71,9 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
         let panel = if id == "ui.panel.properties" { "properties" } else { "layers" };
         return Some(crate::docking::command(app, false, &json!({"operation":"open", "panel":panel})));
     }
+    if let Some(r) = crate::plotstyles::route(app, id, params) {
+        return Some(r);
+    }
     let toggle = |b: &mut bool, p: &Value| {
         *b = p.get("on").and_then(Value::as_bool).unwrap_or(!*b);
     };
@@ -70,6 +83,13 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
     let no_path =
         if id.starts_with("ui.") { params.is_null() || (params.get("path").is_none() && params.get("data").is_none()) } else { params.is_null() };
     let r = match id {
+        "ui.language" => {
+            let Some(preference) = params.get("lang").and_then(Value::as_str).and_then(crate::i18n::Preference::parse) else {
+                return Some(Err("language must be auto, en or uk".into()));
+            };
+            app.ui.interface_language = preference;
+            Ok(json!({"interfaceLanguage": preference.code()}))
+        }
         "ui.open" | "open" if no_path => {
             let picked = app.services.pick_open.as_ref().and_then(|f| f());
             if let Some(p) = picked {
@@ -77,15 +97,39 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             }
             Ok(Value::Null)
         }
+        // RECOVER from the menu or typed: pick the file. Without a picker the engine asks for the
+        // file name on the command line.
+        "recover" if no_path && app.services.pick_open.is_some() => {
+            if let Some(p) = app.services.pick_open.as_ref().and_then(|f| f()) {
+                let r = app.run("recover", json!({ "path": p }));
+                app.opened(r);
+            }
+            Ok(Value::Null)
+        }
         "ui.saveas" | "saveas" if no_path => {
-            let name = app.session.state().map(|s| s.title.clone()).unwrap_or_else(|_| "Drawing.dxf".into());
-            let name = if name.contains('.') { name } else { format!("{name}.dxf") };
+            let title = app.session.state().map(|s| s.title.clone()).ok();
+            let name = app.ui.save_format.suggested_name(title.as_deref());
             if let Some(p) = app.services.pick_save.as_ref().and_then(|f| f(&name)) {
                 return Some(app.session.execute("saveas", &json!({ "path": p })).map_err(|e| e.to_string()));
             }
             Ok(Value::Null)
         }
         "qsave" if no_path && app.session.state().is_ok_and(|s| s.path.is_none()) => return run_ui_command(app, "ui.saveas", &Value::Null),
+        // Menu, toolbar, Cmd+P or typed: ask where to save the PDF. JSON calls (scripts, control
+        // channel, MCP) always carry params, never get here and never open a dialog.
+        "plot" | "print" | "exportpdf" if params.is_null() && app.session.state().is_ok() => {
+            let pick = app.services.pick_save.as_ref()?;
+            let title = app.session.state().map(|s| s.title.clone()).unwrap_or_default();
+            let stem = std::path::Path::new(&title).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty());
+            let Some(path) = pick(&format!("{}.pdf", stem.unwrap_or_else(|| "Drawing".into()))) else { return Some(Ok(Value::Null)) };
+            let cmd = if id == "exportpdf" { "exportpdf" } else { "plot" };
+            let r = app.session.execute(cmd, &json!({ "path": path })).map_err(|e| e.to_string());
+            app.session.echo(match &r {
+                Ok(_) => format!("Plotted to {path}"),
+                Err(e) => e.clone(),
+            });
+            r
+        }
         "ui.sample" => {
             let d = cadcraft_engine::sample::default_sample();
             app.session.open_drawing(d, "Bracket", None);
@@ -120,6 +164,10 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             toggle(&mut app.ui.show_command_line, params);
             Ok(Value::Null)
         }
+        "ui.toggle.systemcursor" => {
+            toggle(&mut app.ui.system_cursor, params);
+            Ok(Value::Null)
+        }
         "ui.toggle.viewcube" => {
             toggle(&mut app.ui.show_viewcube, params);
             Ok(Value::Null)
@@ -144,14 +192,27 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             },
             None => Ok(theme_json(app)),
         },
+        "ui.saveformat.dxf" | "ui.saveformat.dwg" => {
+            let format = crate::SaveFormat::parse(id.trim_start_matches("ui.saveformat.")).unwrap_or_default();
+            Ok(set_save_format(app, format))
+        }
+        // `{"format": "dxf"|"dwg"}` sets the default save format for new drawings; without it,
+        // reports it.
+        "ui.saveformat" => match params.get("format").and_then(Value::as_str) {
+            Some(name) => match crate::SaveFormat::parse(name) {
+                Some(format) => Ok(set_save_format(app, format)),
+                None => Err(format!("unknown save format \"{name}\" (dxf or dwg)")),
+            },
+            None => Ok(json!({ "saveFormat": app.ui.save_format.as_str() })),
+        },
         "ui.hidepalettes" => {
             app.ui.show_palettes = false;
             app.ui.show_toolsets = false;
             Ok(Value::Null)
         }
         "ui.resetpalettes" => {
-            let (menu, theme) = (app.ui.in_window_menu, app.ui.theme);
-            app.ui = crate::UiState { in_window_menu: menu, theme, ..Default::default() };
+            let (menu, theme, interface_language, save_format) = (app.ui.in_window_menu, app.ui.theme, app.ui.interface_language, app.ui.save_format);
+            app.ui = crate::UiState { in_window_menu: menu, theme, interface_language, save_format, ..Default::default() };
             Ok(Value::Null)
         }
         "ui.start" => {
@@ -171,7 +232,8 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             }
             Ok(json!({ "lines": app.ui.history_lines }))
         }
-        "ui.dialog.layers"
+        "ui.dialog.language"
+        | "ui.dialog.layers"
         | "ui.dialog.blocks"
         | "ui.dialog.dsettings"
         | "ui.dialog.about"
@@ -208,6 +270,10 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             app.ui.dialog = Some("qselect".into());
             Ok(Value::Null)
         }
+        "units" | "un" if params.is_null() => {
+            app.ui.dialog = Some("units".into());
+            Ok(Value::Null)
+        }
         "parameters" | "par" if params.is_null() => {
             app.ui.dialog = Some("parameters".into());
             Ok(Value::Null)
@@ -228,6 +294,12 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
         _ => return None,
     };
     Some(r)
+}
+
+fn set_save_format(app: &mut CadApp, format: crate::SaveFormat) -> Value {
+    app.ui.save_format = format;
+    app.session.echo(format!("New drawings will be saved as {}", format.as_str().to_ascii_uppercase()));
+    json!({ "saveFormat": format.as_str() })
 }
 
 fn set_theme(app: &mut CadApp, pref: crate::theme::ThemePref) -> Result<Value, String> {
@@ -295,12 +367,23 @@ pub fn tree(app: &CadApp) -> Vec<(String, Vec<Entry>)> {
     out
 }
 
-fn entry_ui(ui: &mut egui::Ui, e: &Entry, clicked: &mut Option<String>) {
+/// Turn a registry shortcut ("Cmd+Shift+Z") into the form shown on this platform: macOS symbols ("⇧⌘Z") or
+/// Windows/Linux text ("Ctrl+Shift+Z"). `mac` comes from the runtime OS (`ctx.os()`), so the web build is right too.
+pub(crate) fn shortcut_label(s: &str, mac: bool) -> String {
+    if !mac {
+        return s.replace("Cmd+", "Ctrl+");
+    }
+    let shift = if s.contains("Shift+") { "⇧" } else { "" };
+    let cmd = if s.contains("Cmd+") { "⌘" } else { "" };
+    format!("{shift}{cmd}{}", s.replace("Cmd+", "").replace("Shift+", ""))
+}
+
+pub(crate) fn entry_ui(ui: &mut egui::Ui, e: &Entry, clicked: &mut Option<String>) {
     match e {
         Entry::Item { label, id, shortcut, enabled } => {
-            let mut b = egui::Button::new(label);
+            let mut b = egui::Button::new(crate::i18n::t(label));
             if let Some(s) = shortcut {
-                b = b.shortcut_text(s.replace("Cmd+", "⌘").replace("Shift+", "⇧"));
+                b = b.shortcut_text(shortcut_label(s, ui.ctx().os().is_mac()));
             }
             if ui.add_enabled(*enabled, b).clicked() {
                 *clicked = Some(id.clone());
@@ -308,7 +391,7 @@ fn entry_ui(ui: &mut egui::Ui, e: &Entry, clicked: &mut Option<String>) {
             }
         }
         Entry::Sub { label, children } => {
-            ui.menu_button(label, |ui| {
+            ui.menu_button(crate::i18n::t(label), |ui| {
                 for c in children {
                     entry_ui(ui, c, clicked);
                 }
@@ -326,7 +409,7 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 for (name, entries) in &tree {
-                    ui.menu_button(name, |ui| {
+                    ui.menu_button(crate::i18n::t(name), |ui| {
                         for e in entries {
                             entry_ui(ui, e, &mut clicked);
                         }
@@ -354,18 +437,20 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
     let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
     let pairs: &[(KeyboardShortcut, &str)] = &[
         (sc(cmd_shift, Key::Z), "redo"),
-        (sc(cmd, Key::Z), "undo"),
+        (sc(cmd, Key::Z), "u"),
         (sc(cmd, Key::Y), "redo"),
         (sc(cmd, Key::N), "new"),
         (sc(cmd, Key::O), "ui.open"),
         (sc(cmd_shift, Key::S), "ui.saveas"),
         (sc(cmd, Key::S), "qsave"),
+        (sc(cmd, Key::P), "plot"),
         (sc(cmd, Key::A), "selectall"),
         (sc(cmd_shift, Key::C), "copybase"),
         (sc(cmd, Key::C), "copyclip"),
         (sc(cmd, Key::X), "cutclip"),
+        (sc(cmd_shift, Key::V), "pasteblock"),
         (sc(cmd, Key::V), "pasteclip"),
-        (sc(cmd, Key::Num1), "ui.toggle.palettes"),
+        (sc(cmd, Key::Num1), "ui.panel.properties"),
         (sc(cmd, Key::Num3), "ui.toggle.toolsets"),
         (sc(cmd, Key::Num9), "ui.toggle.cmdline"),
         (sc(Modifiers::NONE, Key::F1), "ui.dialog.commands"),
@@ -378,13 +463,15 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(Modifiers::NONE, Key::F11), "otrack"),
         (sc(Modifiers::NONE, Key::F12), "dynmode"),
     ];
+    crate::clipboard::mirror(app, ctx);
     if ctx.egui_wants_keyboard_input() || app.closing.is_some() {
         return;
     }
-    let mut fire = Vec::new();
+    // Cmd/Ctrl+C, X and V arrive as clipboard events, not key presses.
+    let mut fire = crate::clipboard::shortcut_commands(app, ctx);
     ctx.input_mut(|i| {
         for (s, id) in pairs {
-            if i.consume_shortcut(s) {
+            if i.consume_shortcut(s) && !fire.contains(id) {
                 fire.push(*id);
             }
         }
@@ -406,5 +493,114 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         } else {
             activate(app, id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use cadcraft_engine::Session;
+    use cadcraft_engine::cmd::file::{IoHooks, io, set_io};
+    use serde_json::{Value, json};
+
+    use crate::{CadApp, Services};
+
+    fn fake_plot(_: &cadcraft_doc::Drawing, _: &cadcraft_doc::Space, _: &Value) -> Result<Vec<u8>, String> {
+        Ok(b"%PDF-1.4 test".to_vec())
+    }
+
+    /// An app whose save dialog records the suggested name and answers `answer`.
+    fn app_with_picker(answer: Option<String>) -> (CadApp, Rc<RefCell<Vec<String>>>) {
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&asked);
+        let services = Services {
+            pick_open: None,
+            pick_save: Some(Box::new(move |name: &str| {
+                log.borrow_mut().push(name.to_string());
+                answer.clone()
+            })),
+        };
+        (CadApp::new(Session::new(), services), asked)
+    }
+
+    #[test]
+    fn print_asks_where_to_save_the_pdf() {
+        set_io(IoHooks { read: |_, _| Err("no reader in tests".into()), write: |_, _| Err("no writer in tests".into()), plot: Some(fake_plot) });
+        if io().and_then(|h| h.plot).is_none() {
+            return; // another test installed hooks without a plotter first
+        }
+        let path = std::env::temp_dir().join(format!("cadcraft-print-test-{}.pdf", std::process::id()));
+        let ps = path.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&path);
+        let (mut app, asked) = app_with_picker(Some(ps.clone()));
+
+        // Toolbar, menu and Cmd+P all start the command by name.
+        app.start("plot");
+        assert_eq!(*asked.borrow(), vec!["Drawing1.pdf".to_string()]);
+        assert!(std::fs::read(&path).unwrap().starts_with(b"%PDF"));
+        assert!(app.session.log.iter().any(|l| l.contains(&ps)));
+        let _ = std::fs::remove_file(&path);
+
+        app.cmdline("print");
+        app.start("exportpdf");
+        assert_eq!(asked.borrow().len(), 3);
+        assert!(path.exists());
+        let _ = std::fs::remove_file(&path);
+
+        // Programmatic calls never open a dialog.
+        let r = app.run("plot", json!({})).unwrap();
+        assert!(r["data"].is_string());
+        assert_eq!(asked.borrow().len(), 3);
+    }
+
+    #[test]
+    fn cancelled_print_writes_nothing() {
+        let (mut app, asked) = app_with_picker(None);
+        app.start("plot");
+        assert_eq!(asked.borrow().len(), 1);
+        assert!(app.session.running.is_none());
+    }
+}
+
+#[cfg(test)]
+mod shortcut_label_tests {
+    use super::shortcut_label;
+
+    #[test]
+    fn shortcut_label_per_platform() {
+        assert_eq!(shortcut_label("Cmd+Shift+Z", true), "⇧⌘Z");
+        assert_eq!(shortcut_label("Cmd+Z", true), "⌘Z");
+        assert_eq!(shortcut_label("Cmd+Shift+Z", false), "Ctrl+Shift+Z");
+        assert_eq!(shortcut_label("Cmd+Z", false), "Ctrl+Z");
+        assert_eq!(shortcut_label("Shift+F3", false), "Shift+F3");
+        assert_eq!(shortcut_label("Shift+F3", true), "⇧F3");
+        assert_eq!(shortcut_label("F1", false), "F1");
+        assert_eq!(shortcut_label("F1", true), "F1");
+    }
+}
+
+#[cfg(test)]
+mod units_dialog_tests {
+    use cadcraft_engine::Session;
+    use serde_json::json;
+
+    use crate::{CadApp, Services};
+
+    #[test]
+    fn units_typed_opens_dialog_json_runs_command() {
+        let mut app = CadApp::new(Session::new(), Services::default());
+        app.cmdline("UNITS");
+        assert_eq!(app.ui.dialog.as_deref(), Some("units"));
+        app.ui.dialog = None;
+        app.start("un");
+        assert_eq!(app.ui.dialog.as_deref(), Some("units"));
+        app.ui.dialog = None;
+        let r = app.run("units", json!({ "lunits": 4, "luprec": 3, "insunits": 4 })).unwrap();
+        assert_eq!(r["lunits"], 4);
+        assert!(app.ui.dialog.is_none(), "JSON calls never open dialogs");
+        let h = &app.session.doc().unwrap().header;
+        assert_eq!((h.i64("LUNITS", 0), h.i64("LUPREC", 0), h.i64("INSUNITS", 0)), (4, 3, 4));
     }
 }

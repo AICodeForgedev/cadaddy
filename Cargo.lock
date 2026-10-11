@@ -4,9 +4,9 @@ version = 4
 
 [[package]]
 name = "acadrust"
-version = "0.6.1"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1db2bd3da02ed787f3f5c8afba8779dd104b4459b78bb1431b1a0211cc3719f0"
+checksum = "7df99ae4f5a6d0147907f9976fe1dd166d01e72ab1a93820b50242937c5797e6"
 dependencies = [
  "anyhow",
  "bitflags 2.13.2",
@@ -540,7 +540,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cadcraft"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cadcraft-engine",
  "cadcraft-io",
@@ -551,12 +551,14 @@ dependencies = [
  "muda",
  "rfd",
  "serde_json",
+ "sys-locale",
+ "winit",
  "winresource",
 ]
 
 [[package]]
 name = "cadcraft-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cadcraft-engine",
  "cadcraft-io",
@@ -567,14 +569,14 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-color"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "cadcraft-constraints"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cadcraft-doc",
  "cadcraft-geom",
@@ -584,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-doc"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cadcraft-color",
  "cadcraft-geom",
@@ -595,21 +597,21 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-dwg"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "acadrust",
 ]
 
 [[package]]
 name = "cadcraft-dxf"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "cadcraft-engine"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cadcraft-color",
  "cadcraft-constraints",
@@ -626,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-fonts"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cadcraft-geom",
  "skrifa 0.47.0",
@@ -634,14 +636,14 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-geom"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "cadcraft-io"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cadcraft-color",
  "cadcraft-doc",
@@ -657,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-mcp"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cadcraft-engine",
  "cadcraft-io",
@@ -668,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-render"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cadcraft-color",
  "cadcraft-doc",
@@ -680,7 +682,7 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-ui-egui"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cadcraft-color",
  "cadcraft-doc",
@@ -701,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-web"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cadcraft-engine",
  "cadcraft-io",
@@ -3491,6 +3493,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sys-locale"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4672,7 +4683,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "serde_json",
 ]

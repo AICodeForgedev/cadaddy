@@ -10,7 +10,9 @@ use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("undo", "Undo", run_undo).menu(&["Edit", "Undo"]).key("Cmd+Z").alias(&["u"]).params("{count?: n}").noundo(),
+        // U undoes the last operation at once (Edit > Undo, Cmd+Z); UNDO asks how many.
+        CommandSpec::new("u", "Undo", run_u).menu(&["Edit", "Undo"]).key("Cmd+Z").params("{}").noundo(),
+        CommandSpec::new("undo", "Undo", run_undo).params("{count?: n}").noundo().interactive(|_| Ok(Box::new(UndoM::default()))),
         CommandSpec::new("redo", "Redo", run_redo).menu(&["Edit", "Redo"]).key("Cmd+Shift+Z").alias(&["mredo"]).params("{count?: n}").noundo(),
         CommandSpec::new("cutclip", "Cut", run_cut)
             .menu(&["Edit", "Cut"])
@@ -32,11 +34,23 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("pasteclip", "Paste", run_paste)
             .menu(&["Edit", "Paste"])
             .key("Cmd+V")
-            .params("{at?: [x,y]} (default: same offset as copied)")
-            .interactive(|_| Ok(Box::new(PasteM { orig: false }))),
-        CommandSpec::new("pasteorig", "Paste to Original Coordinates", run_pasteorig).menu(&["Edit", "Paste to Original Coordinates"]).params("{}"),
+            .params("{at?: [x,y]} (where the base point lands; default: the original coordinates)")
+            .enabled(clipboard::has_clip)
+            .interactive(|_| Ok(Box::new(PasteM { mode: PasteMode::Clip }))),
+        CommandSpec::new("pasteblock", "Paste as Block", run_pasteblock)
+            .menu(&["Edit", "Paste as Block"])
+            .key("Cmd+Shift+V")
+            .params("{at?: [x,y]} (insertion point; default: the original coordinates)")
+            .enabled(clipboard::has_clip)
+            .interactive(|_| Ok(Box::new(PasteM { mode: PasteMode::Block }))),
+        CommandSpec::new("pasteorig", "Paste to Original Coordinates", run_pasteorig)
+            .menu(&["Edit", "Paste to Original Coordinates"])
+            .params("{} (only into a drawing other than the one copied from)")
+            .enabled(clipboard::can_paste_orig)
+            .interactive(|_| Ok(Box::new(PasteM { mode: PasteMode::Orig }))),
         CommandSpec::new("erase.selection", "Clear", run_clear).menu(&["Edit", "Clear"]).key("Delete").enabled(has_selection).params("{}"),
         CommandSpec::new("selectall", "Select All", run_selectall).menu(&["Edit", "Select All"]).key("Cmd+A").alias(&["ai_selall"]).noundo(),
+        CommandSpec::new("ai_deselect", "Deselect All", run_deselect).params("{}").noundo(),
         CommandSpec::new("select", "Select", run_select)
             .params("{handles: [hex]} | {window: [[x,y],[x,y]], crossing?: bool} | {at: [x,y]} | {clear: true} | {add?: bool}")
             .noundo()
@@ -69,6 +83,63 @@ fn run_undo(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "undone": labels, "message": labels.join(", ").to_string() }))
 }
 
+fn run_u(s: &mut Session, _p: &Value) -> Result<Value> {
+    run_undo(s, &json!({}))
+}
+
+/// UNDO at the command line: "Enter the number of operations to undo" (default 1). Its other
+/// options are not available yet; Auto and Control still take their value, so it isn't run as a
+/// command.
+#[derive(Default)]
+struct UndoM {
+    /// Auto or Control was chosen: its value is being asked for.
+    option: Option<&'static str>,
+}
+
+impl Interactive for UndoM {
+    fn name(&self) -> &'static str {
+        "UNDO"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        match self.option {
+            Some("Auto") => Prompt::new("Enter UNDO Auto mode", Accept::TEXT).kw(&["ON", "OFF"]).default("ON"),
+            Some(_) => Prompt::new("Enter an UNDO control option", Accept::TEXT).kw(&["All", "None", "One", "Combine", "Layer"]).default("All"),
+            None => Prompt::new("Enter the number of operations to undo", Accept::NUMBER)
+                .kw(&["Auto", "Control", "BEgin", "End", "Mark", "Back"])
+                .default("1"),
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if let Some(o) = self.option {
+            s.echo(format!("UNDO {o}: not available yet."));
+            return Ok(Step::Done);
+        }
+        let n = match i {
+            Input::Text(t) => {
+                t.trim().parse::<u64>().ok().filter(|n| *n >= 1).ok_or_else(|| EngineError::Other("Requires a positive integer.".into()))?
+            }
+            Input::Enter => 1,
+            Input::Keyword(k) => {
+                match k.as_str() {
+                    "Auto" => self.option = Some("Auto"),
+                    "Control" => self.option = Some("Control"),
+                    _ => {
+                        s.echo(format!("UNDO {k}: not available yet."));
+                        return Ok(Step::Done);
+                    }
+                }
+                return Ok(Step::Continue);
+            }
+            _ => return Ok(Step::Continue),
+        };
+        let r = run_undo(s, &json!({ "count": n }))?;
+        if let Some(m) = r.get("message").and_then(Value::as_str) {
+            s.echo(m.to_string());
+        }
+        Ok(Step::Done)
+    }
+}
+
 fn run_redo(s: &mut Session, p: &Value) -> Result<Value> {
     end_running_command(s);
     let n = p.get("count").and_then(Value::as_u64).unwrap_or(1).clamp(1, 1000);
@@ -86,9 +157,9 @@ fn copy_to_clip(s: &mut Session, hs: &[Handle], base: Option<Vec2>) -> Result<us
     let d = s.doc()?;
     let ents: Vec<Entity> = hs.iter().filter_map(|h| d.entity(*h).map(|e| (**e).clone())).collect();
     let b = ents.iter().fold(Bounds2::EMPTY, |acc, e| acc.union(&entity_bounds(d, e, 0)));
-    s.clipboard_base = base.unwrap_or(b.min);
+    let base = base.unwrap_or(if b.min.is_finite() { b.min } else { Vec2::ZERO });
     let n = ents.len();
-    s.clipboard = ents;
+    clipboard::copy(s, ents, base)?;
     Ok(n)
 }
 
@@ -106,7 +177,8 @@ fn run_copybase(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_cut(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = targets(s, p)?;
+    let mut hs = targets(s, p)?;
+    hs.retain(|h| !super::curves::is_locked(s, *h));
     let n = copy_to_clip(s, &hs, None)?;
     let d = s.doc_mut()?;
     for h in &hs {
@@ -116,23 +188,10 @@ fn run_cut(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "cut": n }))
 }
 
-pub(crate) fn paste(s: &mut Session, offset: Vec2) -> Result<Vec<Handle>> {
-    let clip = s.clipboard.clone();
-    let space = s.space();
-    let m = Mat3::translate(offset);
-    let d = s.doc_mut()?;
-    let mut out = Vec::new();
-    for mut e in clip {
-        e.handle = d.new_handle();
-        e.kind.transform(&m);
-        d.ensure_layer(&e.common.layer);
-        out.push(e.handle);
-        if let Some(st) = d.space_mut(&space) {
-            st.push(e);
-        }
-    }
-    s.set_selection(out.clone());
-    Ok(out)
+/// Paste the clipboard moved by `offset` (the clipboard brings the layers, styles and blocks its
+/// objects need).
+fn paste(s: &mut Session, offset: Vec2) -> Result<Vec<Handle>> {
+    clipboard::paste(s, &Mat3::translate(offset))
 }
 
 fn run_paste(s: &mut Session, p: &Value) -> Result<Value> {
@@ -147,13 +206,24 @@ fn run_paste(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "handles": r.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
 }
 
+fn run_pasteblock(s: &mut Session, p: &Value) -> Result<Value> {
+    let at = point_param(p, "at").unwrap_or(s.clipboard_base);
+    let h = clipboard::paste_block(s, at)?;
+    let block = match s.doc()?.entity(h).map(|e| &e.kind) {
+        Some(cadcraft_doc::EntityKind::Insert(i)) => i.block.clone(),
+        _ => String::new(),
+    };
+    Ok(json!({ "handle": h.hex(), "block": block }))
+}
+
 fn run_pasteorig(s: &mut Session, _p: &Value) -> Result<Value> {
     let r = paste(s, Vec2::ZERO)?;
     Ok(json!({ "handles": r.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
 }
 
 fn run_clear(s: &mut Session, _p: &Value) -> Result<Value> {
-    let hs = s.selection();
+    let mut hs = s.selection();
+    hs.retain(|h| !super::curves::is_locked(s, *h));
     let d = s.doc_mut()?;
     let mut n = 0;
     for h in hs {
@@ -175,6 +245,11 @@ fn run_selectall(s: &mut Session, _p: &Value) -> Result<Value> {
     let n = hs.len();
     s.set_selection(hs);
     Ok(json!({ "selected": n }))
+}
+
+fn run_deselect(s: &mut Session, _p: &Value) -> Result<Value> {
+    s.set_selection(Vec::new());
+    Ok(json!({ "selected": 0 }))
 }
 
 fn run_select(s: &mut Session, p: &Value) -> Result<Value> {
@@ -202,20 +277,34 @@ fn run_select(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "selected": sel.len(), "handles": sel.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum PasteMode {
+    /// PASTECLIP: at an insertion point.
+    Clip,
+    /// PASTEBLOCK: as a block, at an insertion point.
+    Block,
+    /// PASTEORIG: at the original coordinates, without asking.
+    Orig,
+}
+
 struct PasteM {
-    orig: bool,
+    mode: PasteMode,
 }
 
 impl Interactive for PasteM {
     fn name(&self) -> &'static str {
-        "PASTECLIP"
+        match self.mode {
+            PasteMode::Clip => "PASTECLIP",
+            PasteMode::Block => "PASTEBLOCK",
+            PasteMode::Orig => "PASTEORIG",
+        }
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
         if s.clipboard.is_empty() {
             s.echo("Clipboard is empty.");
             return Ok(Step::Done);
         }
-        if self.orig {
+        if self.mode == PasteMode::Orig {
             paste(s, Vec2::ZERO)?;
             return Ok(Step::Done);
         }
@@ -226,6 +315,10 @@ impl Interactive for PasteM {
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         match i {
+            Input::Point(p) if self.mode == PasteMode::Block => {
+                clipboard::paste_block(s, p)?;
+                Ok(Step::Done)
+            }
             Input::Point(p) => {
                 let base = s.clipboard_base;
                 paste(s, p - base)?;

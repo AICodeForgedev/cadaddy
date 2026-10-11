@@ -582,6 +582,7 @@ fn insert_knot(sp: &Spline, t: f64) -> Option<Spline> {
         weights: if rational { ctrl.iter().map(|(_, w)| *w).collect() } else { Vec::new() },
         fit: Vec::new(),
         closed: false,
+        fit_opts: Default::default(),
     })
 }
 
@@ -613,8 +614,8 @@ pub fn split_spline(sp: &Spline, t: f64) -> Option<(Spline, Spline)> {
     rk.extend(s.knots.get(first + p..)?.iter().copied());
     let rc = s.control.get(right_start..)?.to_vec();
     let rw = if s.weights.is_empty() { Vec::new() } else { s.weights.get(right_start..)?.to_vec() };
-    let l = Spline { degree: p, knots: lk, control: lc, weights: lw, fit: Vec::new(), closed: false };
-    let r = Spline { degree: p, knots: rk, control: rc, weights: rw, fit: Vec::new(), closed: false };
+    let l = Spline { degree: p, knots: lk, control: lc, weights: lw, ..Spline::default() };
+    let r = Spline { degree: p, knots: rk, control: rc, weights: rw, ..Spline::default() };
     (l.is_valid() && r.is_valid()).then_some((l, r))
 }
 
@@ -669,6 +670,12 @@ pub fn reverse_spline(sp: &Spline) -> Spline {
         weights: sp.weights.iter().rev().copied().collect(),
         fit: sp.fit.iter().rev().copied().collect(),
         closed: sp.closed,
+        // The end tangents swap ends and turn round.
+        fit_opts: cadcraft_geom::FitOptions {
+            start_tangent: sp.fit_opts.end_tangent.map(|t| -t),
+            end_tangent: sp.fit_opts.start_tangent.map(|t| -t),
+            ..sp.fit_opts
+        },
     }
 }
 

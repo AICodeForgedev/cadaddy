@@ -38,8 +38,11 @@ pub struct Island {
     pub sources: Vec<usize>,
 }
 
-fn key(p: Vec2, q: f64) -> (i64, i64) {
-    ((p.x / q).round() as i64, (p.y / q).round() as i64)
+fn key(p: Vec2, origin: Vec2, q: f64) -> (i64, i64) {
+    // The drawing may be georeferenced far from (0, 0). Quantizing absolute
+    // coordinates saturates i64 and aliases distinct vertices into one key.
+    // Shift to the bounds origin before converting to tolerance-sized bins.
+    (((p.x - origin.x) / q).round() as i64, ((p.y - origin.y) / q).round() as i64)
 }
 
 struct Graph {
@@ -129,7 +132,7 @@ fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
     let mut g = Graph { pts: Vec::new(), adj: Vec::new(), src: Vec::with_capacity(n) };
     let mut index: HashMap<(i64, i64), usize> = HashMap::new();
     let mut vid = |p: Vec2, g: &mut Graph| -> usize {
-        let k = key(p, tol);
+        let k = key(p, bb.min, tol);
         *index.entry(k).or_insert_with(|| {
             g.pts.push(p);
             g.adj.push(Vec::new());
@@ -381,6 +384,23 @@ mod tests {
     fn finds_square_around_point() {
         let l = enclosing_loop(&[square(0.0, 0.0, 10.0)], Vec2::new(5.0, 5.0), 1e-9).unwrap();
         assert!((shoelace(&l) - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn boundaries_at_large_world_coordinates_keep_distinct_vertices() {
+        // Absolute-position / tolerance is beyond i64::MAX for this normal
+        // georeferenced drawing; the old key collapsed every square corner.
+        let origin = 1e12;
+        let outline = square(origin, origin, 100.0);
+        let picked = Vec2::new(origin + 50.0, origin + 50.0);
+        let found = enclosing_loop(&[outline], picked, 1e-9).expect("large-coordinate boundary");
+        assert_eq!(found.len(), 4);
+        assert!((shoelace(&found) - 10_000.0).abs() < 1e-5);
+
+        // Island detection uses the same graph and must preserve its loop.
+        let result = boundary_at(&[square(origin, origin, 100.0)], picked, 1e-9).expect("boundary with islands");
+        assert_eq!(result.outer.len(), 4);
+        assert!(result.islands.is_empty());
     }
 
     #[test]

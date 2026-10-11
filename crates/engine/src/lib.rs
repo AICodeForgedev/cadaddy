@@ -9,8 +9,12 @@
 #![forbid(unsafe_code)]
 
 pub mod assoc;
+pub mod audit;
 pub mod cmd;
+mod finite;
 pub mod grips;
+mod guard;
+pub mod pointmod;
 pub mod prompt;
 pub mod sample;
 pub mod select;
@@ -122,6 +126,35 @@ impl DocState {
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.doc, &self.saved)
     }
+    /// After undo/redo replaced the drawing (`before` is the one shown until then): if the current
+    /// layout no longer exists, follow it to its other name when it was renamed (same tab order,
+    /// a name `before` did not have), else go to the Model tab.
+    fn follow_layout(&mut self, before: &Drawing) {
+        let Space::Paper(name) = &self.space else { return };
+        if self.doc.layouts.iter().any(|l| l.name == *name) {
+            return;
+        }
+        let renamed = before
+            .layouts
+            .iter()
+            .find(|l| l.name == *name)
+            .and_then(|old| self.doc.layouts.iter().find(|l| l.tab_order == old.tab_order && !before.layouts.iter().any(|b| b.name == l.name)));
+        match renamed.map(|l| Space::Paper(l.name.clone())) {
+            Some(to) => {
+                let from = self.space.clone();
+                for (sp, _) in self.views.iter_mut() {
+                    if *sp == from {
+                        *sp = to.clone();
+                    }
+                }
+                self.space = to;
+            }
+            None => {
+                self.space = Space::Model;
+                self.mspace = None;
+            }
+        }
+    }
     /// The space edits, picks and snaps act on: model space inside an active viewport.
     pub fn edit_space(&self) -> Space {
         if self.active_viewport().is_some() { Space::Model } else { self.space.clone() }
@@ -196,6 +229,36 @@ impl DocState {
         }
         self.store_view(v);
     }
+    /// The active MSPACE viewport when ZOOM works on its own view, as in AutoCAD: extents and
+    /// windows fit the viewport, and zooms keep its centre. A locked viewport keeps its scale, so
+    /// zooming it moves the sheet instead (see `store_view`).
+    pub fn zoom_viewport(&self) -> Option<cadcraft_doc::Viewport> {
+        self.active_viewport().map(|(_, v)| v).filter(|v| !v.locked && v.width > 1e-12)
+    }
+    /// The view ZOOM starts from: the model view of the active unlocked viewport, else [`Self::view`].
+    pub fn zoom_frame(&self) -> View {
+        match self.zoom_viewport() {
+            Some(v) => View { center: v.view_center, height: v.view_height },
+            None => self.view(),
+        }
+    }
+    /// Width / height of the area ZOOM fits into: the active unlocked viewport, else `screen`.
+    pub fn zoom_aspect(&self, screen: f64) -> f64 {
+        self.zoom_viewport().map_or(screen, |v| v.width / v.height)
+    }
+    /// Set the view ZOOM works on (see [`Self::zoom_frame`]), recording view history.
+    pub fn set_zoom_frame(&mut self, f: View) {
+        let v = match self.zoom_viewport() {
+            // The screen view that `store_view` maps to this model view of the viewport.
+            Some(vp) => {
+                let pv = self.paper_view();
+                let k = f.height / vp.height;
+                View { center: f.center + (pv.center - vp.center.xy()) * k, height: pv.height * k }
+            }
+            None => f,
+        };
+        self.set_view(v);
+    }
     /// Set without recording view history (realtime pan/zoom frames).
     pub fn set_view_quiet(&mut self, v: View) {
         if !(v.center.is_finite() && v.height.is_finite() && v.height > 1e-12) {
@@ -217,10 +280,18 @@ pub struct Settings {
     pub gridmode: bool,
     pub snapmode: bool,
     pub snapunit: Vec2,
+    /// OSNAPHATCH: object snaps find hatch objects (off by default, as in AutoCAD).
+    pub osnaphatch: bool,
     pub gridunit: Vec2,
     /// Major grid line every N minor lines (GRIDMAJOR).
     pub gridmajor: u32,
     pub dynmode: bool,
+    /// DYNPIFORMAT = 1: Dynamic Input shows second and next points as Cartesian `x,y` instead of
+    /// polar `distance<angle` (the default).
+    pub dynpi_cartesian: bool,
+    /// DYNPICOORDS = 1: second and next points typed into Dynamic Input are absolute instead of
+    /// relative to the last point (the default).
+    pub dynpi_absolute: bool,
     pub lwdisplay: bool,
     pub transparency_display: bool,
     pub selection_cycling: bool,
@@ -233,11 +304,18 @@ pub struct Settings {
     pub pickadd: bool,
     pub gripsize: f64,
     pub cursorsize: f64,
+    /// MAXARRAY: the most objects one array command creates (items × selected objects).
+    pub maxarray: u64,
     pub isodraft: bool,
     pub annoallvisible: bool,
     pub annoautoscale: bool,
     /// QPMODE: show the Quick Properties palette when objects are selected.
     pub qpmode: bool,
+    /// POLARMODE bits ([`snap::tracking::polarmode`]); polar tracking itself is on while
+    /// `polarmode` is (AUTOSNAP bit 8, F10).
+    pub polar_flags: u32,
+    /// POLARADDANG: additional polar tracking angles (radians), used with POLARMODE bit 4.
+    pub polaraddang: Vec<f64>,
 }
 
 impl Default for Settings {
@@ -250,9 +328,12 @@ impl Default for Settings {
             gridmode: true,
             snapmode: false,
             snapunit: Vec2::new(0.5, 0.5),
+            osnaphatch: false,
             gridunit: Vec2::new(0.5, 0.5),
             gridmajor: 5,
             dynmode: true,
+            dynpi_cartesian: false,
+            dynpi_absolute: false,
             lwdisplay: false,
             transparency_display: false,
             selection_cycling: false,
@@ -263,10 +344,13 @@ impl Default for Settings {
             pickadd: true,
             gripsize: 5.0,
             cursorsize: 5.0,
+            maxarray: 100_000,
             isodraft: false,
             annoallvisible: true,
             annoautoscale: false,
             qpmode: false,
+            polar_flags: 0,
+            polaraddang: Vec::new(),
         }
     }
 }
@@ -286,6 +370,93 @@ pub struct PendingWindow {
     pub during_command: bool,
 }
 
+/// Options and values the interactive commands remember for the rest of the session, offered as
+/// the `<default>` the next time they ask (as AutoCAD does). Values AutoCAD keeps in a drawing
+/// system variable (HPNAME, OFFSETDIST, FILLETRAD, CHAMFERA, POLYSIDES…) live in the drawing
+/// header instead. JSON calls never read these: their explicit parameters and documented defaults
+/// stay authoritative.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LastUsed {
+    /// HATCH/GRADIENT starts at "Select objects" instead of "Pick internal point".
+    pub hatch_select: bool,
+    /// POLYGON: circumscribed about the circle (the `C` option) instead of inscribed.
+    pub polygon_circumscribed: bool,
+    /// ROTATE angle (radians).
+    pub rotate_angle: f64,
+    /// SCALE factor.
+    pub scale_factor: f64,
+    /// MLEADER placement order and Options.
+    pub mleader: MLeaderOptions,
+    /// MLEADER's block content name (Options > Content type > Block).
+    pub mleader_block: String,
+}
+
+impl Default for LastUsed {
+    fn default() -> Self {
+        LastUsed {
+            hatch_select: false,
+            polygon_circumscribed: false,
+            rotate_angle: 0.0,
+            scale_factor: 1.0,
+            mleader: MLeaderOptions::default(),
+            mleader_block: String::new(),
+        }
+    }
+}
+
+/// Which part of a multileader MLEADER places first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LeaderOrder {
+    #[default]
+    Arrowhead,
+    Landing,
+    Content,
+}
+
+/// The MLEADER placement order and the values set at its Options prompt.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MLeaderOptions {
+    pub order: LeaderOrder,
+    /// Maximum points of the leader line (2..=64).
+    pub max_points: usize,
+    /// First and second angle constraints (radians; 0 = free).
+    pub angles: [f64; 2],
+    /// Draw the landing line (dogleg).
+    pub landing: bool,
+    /// Ask for multiline text content (Content type None turns it off).
+    pub content: bool,
+    /// Leader lines: straight, spline, or none (content only).
+    pub leader_type: LeaderType,
+    /// The content is a block (`LastUsed::mleader_block`) instead of multiline text.
+    pub block: bool,
+    /// The block's extents centre (not its insertion point) sits at the end of the landing.
+    pub block_center: bool,
+}
+
+/// MLEADER's leader line type (Options > Leader type).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LeaderType {
+    #[default]
+    Straight,
+    Spline,
+    None,
+}
+
+impl Default for MLeaderOptions {
+    fn default() -> Self {
+        MLeaderOptions {
+            order: LeaderOrder::Arrowhead,
+            max_points: 2,
+            angles: [0.0; 2],
+            landing: true,
+            content: true,
+            leader_type: LeaderType::Straight,
+            block: false,
+            block_center: true,
+        }
+    }
+}
+
 /// The editor session: open drawings, settings, the running command and the command log.
 pub struct Session {
     pub docs: Vec<DocState>,
@@ -296,11 +467,16 @@ pub struct Session {
     pub last_command: Option<String>,
     /// LASTPOINT.
     pub last_point: Vec2,
+    /// Point modifiers pending at the current point prompt (`FROM`, `M2P`, `.x`, `<a`…).
+    pub point_mods: Vec<pointmod::Frame>,
     /// Cursor position in world coordinates (from the UI; used for direct distance entry).
     pub cursor: Vec2,
     /// The deferred tangent/perpendicular snap under the cursor, if any (from the UI; lets the
     /// rubber band show the line it resolves to).
     pub cursor_deferred: Option<snap::Deferred>,
+    /// Object snap tracking: acquired points and the path under the cursor (from the UI's
+    /// [`Session::snap_cursor`] calls; direct distance entry follows the path).
+    pub tracking: snap::tracking::Tracker,
     /// Viewport size in pixels (from the UI; used for zoom and pick apertures).
     pub viewport_px: (f64, f64),
     pub clipboard: Vec<Entity>,
@@ -309,6 +485,10 @@ pub struct Session {
     pub untitled_counter: u32,
     /// The last dimension created (DIMCONTINUE / DIMBASELINE).
     pub last_dim: Option<Handle>,
+    /// Options remembered between invocations of interactive commands.
+    pub last_used: LastUsed,
+    /// Where `clipboard` came from and the layers, styles and blocks its objects need.
+    pub clipboard_source: Option<cmd::clipboard::ClipSource>,
 }
 
 impl Default for Session {
@@ -333,14 +513,18 @@ impl Session {
             log: Vec::new(),
             last_command: None,
             last_point: Vec2::ZERO,
+            point_mods: Vec::new(),
             cursor: Vec2::ZERO,
             cursor_deferred: None,
+            tracking: snap::tracking::Tracker::default(),
             viewport_px: (1200.0, 800.0),
             clipboard: Vec::new(),
             clipboard_base: Vec2::ZERO,
             pending_window: None,
             untitled_counter: 0,
             last_dim: None,
+            last_used: LastUsed::default(),
+            clipboard_source: None,
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {
@@ -417,6 +601,7 @@ impl Session {
             linetype: h.str("CELTYPE", "ByLayer"),
             lineweight: cadcraft_doc::Lineweight::from_dxf(h.i64("CELWEIGHT", -1) as i16),
             ltscale: h.f64("CELTSCALE", 1.0),
+            plot_style: h.str("CPLOTSTYLE", "ByLayer"),
             ..Common::default()
         }
     }
@@ -464,8 +649,13 @@ impl Session {
                 return Err(EngineError::Internal(id.into(), msg));
             }
         };
+        cmd::groups::after_command(self, before.as_ref().map(|b| &b.0));
         cmd::constraints::after_command(self, before.as_ref().map(|b| &b.0), spec.undoable && result.is_ok());
         assoc::after_command(self, before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2));
+        let result = match (result, &before) {
+            (Ok(v), Some((doc, sel, uid))) if spec.undoable => self.refuse_non_finite(Some(*uid), doc, sel, spec.id).map(|()| v),
+            (r, _) => r,
+        };
         if spec.undoable
             && let Some((doc, sel, uid)) = before
             && let Some(st) = self.docs.iter_mut().find(|d| d.uid == uid)
@@ -498,7 +688,9 @@ impl Session {
             None => (false, name),
         };
         let lower = name.trim_start_matches(['_', '.', '-']).to_ascii_lowercase();
-        let id = cmd::resolve_alias(&lower);
+        // A command-line form with an id of its own (-ATTEDIT) is not the command it prefixes.
+        let dashed = cmd::resolve_alias(&name.trim_start_matches(['_', '.']).to_ascii_lowercase());
+        let id = if find_command(&dashed).is_some() { dashed } else { cmd::resolve_alias(&lower) };
         let spec = find_command(&id).ok_or_else(|| EngineError::UnknownCommand(name.to_string()))?;
         if transparent && spec.transparent && self.running.is_some() {
             // Transparent commands (zoom, pan…) run without cancelling the active one.
@@ -515,7 +707,7 @@ impl Session {
         self.echo(format!("Command: {}", spec.id.to_ascii_uppercase()));
         match spec.interactive {
             Some(factory) => {
-                let machine = factory(self)?;
+                let machine = guard::Guarded::create(spec.id, factory, self)?;
                 let st = self.state()?;
                 let before = st.doc.clone();
                 let selection_before = st.selection.clone();
@@ -551,6 +743,9 @@ impl Session {
                 return self.start(&last);
             }
             return Ok(());
+        }
+        if !self.point_mods.is_empty() {
+            return self.modifier_input(input);
         }
         // A deferred snap is only meaningful where the prompt resolves it; elsewhere it is the
         // point it was picked at.
@@ -588,7 +783,7 @@ impl Session {
                     }
                 }
             }
-            Input::Text(t) | Input::Keyword(t) => {
+            Input::Text(ref t) | Input::Keyword(ref t) => {
                 let tl = t.trim().to_ascii_lowercase();
                 let d = self.doc()?;
                 let store = d.space(&space);
@@ -600,7 +795,7 @@ impl Session {
                 };
                 match picked {
                     Some(hs) => Ok(Some(Input::Pick(hs))),
-                    None => Ok(Some(Input::Text(t))),
+                    None => Ok(Some(input)),
                 }
             }
             Input::Cancel => {
@@ -625,8 +820,18 @@ impl Session {
                     Err(_) => Err(EngineError::Internal(run.id.clone(), "panic".into())),
                 }
             }
-            None => run.machine.begin(self),
+            // A command starts with no modifiers pending.
+            None => {
+                self.point_mods.clear();
+                run.machine.begin(self)
+            }
         };
+        // Redraw what the command has added so far (LINE adds a segment per point), not only when it ends.
+        if let Ok(st) = self.state_mut()
+            && !Arc::ptr_eq(&run.before, &st.doc)
+        {
+            st.revision += 1;
+        }
         match step {
             Ok(Step::Continue) => {
                 self.running = Some(run);
@@ -659,9 +864,21 @@ impl Session {
     }
 
     fn finish(&mut self, run: Running, cancelled: bool) {
+        if find_command(&run.id).is_some_and(|c| c.undoable)
+            && let Err(e) = self.refuse_non_finite(None, &run.before, &run.selection_before, &run.id)
+        {
+            self.echo(e.to_string());
+        }
+        // A command outside undo that changed the drawing (UNDO, which swapped it for an earlier
+        // one) records no undo step, as in `execute`.
+        if find_command(&run.id).is_some_and(|c| !c.undoable) && self.state().is_ok_and(|st| !Arc::ptr_eq(&run.before, &st.doc)) {
+            self.pending_window = None;
+            return;
+        }
         self.pending_window = None;
         let label = find_command(&run.id).map(|c| c.label).unwrap_or("Command");
         let _ = cancelled;
+        cmd::groups::after_command(self, Some(&run.before));
         cmd::constraints::after_command(self, Some(&run.before), true);
         assoc::after_command(self, Some(&run.before), None);
         if let Ok(st) = self.state_mut()
@@ -675,6 +892,7 @@ impl Session {
 
     /// Cancel the running command (Esc). With no command, clears the selection.
     pub fn cancel(&mut self) {
+        self.point_mods.clear();
         if self.running.is_some() {
             let _ = self.feed(Some(Input::Cancel));
         } else {
@@ -685,6 +903,16 @@ impl Session {
 
     pub fn current_prompt(&self) -> Option<Prompt> {
         self.running.as_ref().map(|r| r.machine.prompt(self))
+    }
+
+    /// Whether the cursor picks objects right now, so the UI shows the pick box (PICKBOX) at the
+    /// crosshair: at prompts that select objects, and with no command running when PICKFIRST is on
+    /// (noun-verb selection).
+    pub fn picking_objects(&self) -> bool {
+        match self.current_prompt() {
+            Some(p) => p.picks_objects(),
+            None => self.settings.pickfirst,
+        }
     }
 
     /// The text shown on the command line: the active prompt, or "Command:".
@@ -760,23 +988,35 @@ impl Session {
         if tt.is_empty() {
             return self.input(Input::Enter);
         }
+        // FROM, M2P, point filters, `<a` (before `'`: `'_from` is a modifier).
+        if let Some(r) = self.typed_modifier(&prompt, tt) {
+            return r;
+        }
         // Transparent command.
         if tt.starts_with('\'') {
             return self.start(tt);
         }
-        if let Some(k) = prompt.match_keyword(tt)
+        // At "Select objects" prompts the selection modes (Previous, Last, ALL) win over a command
+        // keyword sharing the letter (HATCH's "picK internal point" against `P`).
+        let selection_mode = prompt.accept.select && matches!(tt.to_ascii_lowercase().as_str(), "all" | "l" | "last" | "p" | "previous");
+        if !selection_mode
+            && let Some(k) = prompt.match_keyword(tt)
             && !(prompt.accept.number && tt.parse::<f64>().is_ok())
         {
             return self.input(Input::Keyword(k));
         }
         if prompt.accept.point {
-            if let Some(p) = prompt::parse_point(tt, self.last_point) {
+            if let Some(p) = prompt::parse_point_with(tt, self.last_point, &self.angle_settings()) {
                 return self.input(Input::Point(p));
             }
             // Direct distance entry along the rubber band.
             if let (Some(base), Some(dist)) = (prompt.base, units::parse_distance(tt))
                 && !prompt.accept.number
             {
+                // Along the tracking path the cursor is on, from the point it comes from.
+                if let Some((from, dir)) = self.tracking.last.as_ref().filter(|t| t.point.near(self.cursor, 1e-9)).and_then(|t| t.along()) {
+                    return self.input(Input::Point(from + dir * dist));
+                }
                 let mut c = self.cursor;
                 if self.settings.orthomode {
                     c = snap::ortho(base, c);
@@ -803,7 +1043,8 @@ impl Session {
             }
             let mut rest = line;
             loop {
-                let text_prompt = self.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point);
+                // Free text only when the prompt has no keywords; otherwise split so `I 15` reaches the keyword and the value.
+                let text_prompt = self.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && p.keywords.is_empty());
                 if text_prompt || self.running.is_none() && rest.contains('{') {
                     self.cmdline(rest)?;
                     break;
@@ -838,6 +1079,7 @@ impl Session {
         let Some(snap) = st.undo.pop() else { return Ok(None) };
         let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone() };
         st.doc = snap.doc;
+        st.follow_layout(&cur.doc);
         st.selection = Vec::new();
         st.redo.push(cur);
         st.revision += 1;
@@ -848,6 +1090,7 @@ impl Session {
         let Some(snap) = st.redo.pop() else { return Ok(None) };
         let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone() };
         st.doc = snap.doc;
+        st.follow_layout(&cur.doc);
         st.selection = Vec::new();
         st.undo.push(cur);
         st.revision += 1;
@@ -855,6 +1098,19 @@ impl Session {
     }
 
     // ---------------- picking without a command ----------------
+
+    /// Open a selection window with one corner at `corner`, for press-and-drag selection
+    /// (AutoCAD's PICKDRAG = 2: a drag opens the window wherever it starts, even over an object;
+    /// the next point, where the drag ends, closes it). Only while objects are being selected: no
+    /// command running, or a command asking for objects. Returns whether a window was opened.
+    pub fn begin_window(&mut self, corner: Vec2) -> bool {
+        let during_command = self.running.is_some();
+        if !corner.is_finite() || (during_command && !self.current_prompt().is_some_and(|p| p.accept.select)) {
+            return false;
+        }
+        self.pending_window = Some(PendingWindow { corner, during_command });
+        true
+    }
 
     /// A click with no command running: pick/toggle objects or start a selection window.
     ///
@@ -901,21 +1157,28 @@ impl Session {
 
     // ---------------- views ----------------
 
+    /// The limits of the space being edited: the sheet in paper space, else LIMMIN/LIMMAX.
+    pub fn zoom_limits(&self) -> Result<Bounds2> {
+        let d = self.doc()?;
+        if let Space::Paper(name) = self.space()
+            && let Some(sheet) = cadcraft_render::sheet(d, &name)
+        {
+            return Ok(sheet.bounds());
+        }
+        let lo = d.header.point("LIMMIN").map(|p| p.xy()).unwrap_or(Vec2::ZERO);
+        let hi = d.header.point("LIMMAX").map(|p| p.xy()).unwrap_or(Vec2::new(12.0, 9.0));
+        Ok(Bounds2::new(lo, hi))
+    }
+
     pub fn zoom_extents(&mut self) -> Result<()> {
         let space = self.space();
         let ext = self.doc()?.extents(&space);
         let (w, h) = self.viewport_px;
-        let ext = if ext.is_empty() {
-            let d = self.doc()?;
-            let lo = d.header.point("LIMMIN").map(|p| p.xy()).unwrap_or(Vec2::ZERO);
-            let hi = d.header.point("LIMMAX").map(|p| p.xy()).unwrap_or(Vec2::new(12.0, 9.0));
-            Bounds2::new(lo, hi)
-        } else {
-            ext
-        };
-        let aspect = w / h.max(1.0);
+        let ext = if ext.is_empty() { self.zoom_limits()? } else { ext };
+        let st = self.state_mut()?;
+        let aspect = st.zoom_aspect(w / h.max(1.0));
         let height = ext.height().max(ext.width() / aspect.max(1e-6)).max(1e-6) * 1.05;
-        self.state_mut()?.set_view(View { center: ext.center(), height });
+        st.set_zoom_frame(View { center: ext.center(), height });
         Ok(())
     }
 

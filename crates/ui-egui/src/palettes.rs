@@ -133,8 +133,14 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
             let active = app.ui.toolset_tab == name;
             let resp = ui.interact(tr, ui.id().with(("ts", name)), Sense::click());
             p.rect_filled(tr, 0.0, if active { t.tab_active } else { t.chrome });
-            p.text(tr.center(), egui::Align2::CENTER_CENTER, name, egui::FontId::proportional(13.5), if active { t.text } else { t.text_dim });
-            icons::describe_control(ui, &resp, name, Some(active), true);
+            p.text(
+                tr.center(),
+                egui::Align2::CENTER_CENTER,
+                crate::i18n::t(name),
+                egui::FontId::proportional(13.5),
+                if active { t.text } else { t.text_dim },
+            );
+            icons::describe_control(ui, &resp, crate::i18n::t(name), Some(active), true);
             if resp.clicked() {
                 app.ui.toolset_tab = name.into();
             }
@@ -145,7 +151,7 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
         let cresp = ui.interact(cr, ui.id().with("ts_collapse"), Sense::click());
         icons::paint(&p, cr, Icon::ChevronLeft, false);
         icons::describe_control(ui, &cresp, "Collapse Tool Sets", None, false);
-        if cresp.on_hover_text("Collapse Tool Sets").clicked() {
+        if cresp.on_hover_text(crate::tl!("Collapse Tool Sets")).clicked() {
             app.ui.show_toolsets = false;
         }
         let body = Rect::from_min_max(pos2(r.left(), r.top() + tab_h), r.max);
@@ -166,7 +172,13 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
                         if collapsed { Icon::ChevronRight } else { Icon::ChevronDown },
                         false,
                     );
-                    pp.text(pos2(hr.left() + 22.0, hr.center().y), egui::Align2::LEFT_CENTER, *name, egui::FontId::proportional(12.5), t.text);
+                    pp.text(
+                        pos2(hr.left() + 22.0, hr.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        crate::i18n::t(name),
+                        egui::FontId::proportional(12.5),
+                        t.text,
+                    );
                     icons::paint(pp, Rect::from_center_size(pos2(hr.right() - 12.0, hr.center().y), vec2(11.0, 11.0)), Icon::Gear, false);
                     icons::describe_control(ui, &hresp, name, Some(!collapsed), false);
                     if hresp.clicked() {
@@ -242,7 +254,13 @@ pub const MODELING: &[(&str, &[Tool], &[Tool])] = &[
 fn section_header(ui: &mut egui::Ui, title: &str) -> Rect {
     let t = Tokens::get();
     let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
-    ui.painter().text(pos2(hr.left() + 10.0, hr.center().y), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(14.0), t.text);
+    ui.painter().text(
+        pos2(hr.left() + 10.0, hr.center().y),
+        egui::Align2::LEFT_CENTER,
+        crate::i18n::t(title),
+        egui::FontId::proportional(14.0),
+        t.text,
+    );
     hr
 }
 
@@ -362,7 +380,13 @@ pub(crate) fn layers_section(app: &mut CadApp, ui: &mut egui::Ui) {
         let w = ui.available_width() - 10.0;
         let (rect, _) = ui.allocate_exact_size(vec2(w, 24.0), Sense::hover());
         ui.painter().rect_filled(rect, 3.0, t.control);
-        ui.painter().text(pos2(rect.left() + 8.0, rect.center().y), egui::Align2::LEFT_CENTER, "Unsaved Layer State", crate::theme::body(), t.text);
+        ui.painter().text(
+            pos2(rect.left() + 8.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            crate::tl!("Unsaved Layer State"),
+            crate::theme::body(),
+            t.text,
+        );
         icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.right() - 12.0, rect.center().y), vec2(12.0, 12.0)), Icon::ChevronDown, false);
     });
     ui.add_space(4.0);
@@ -376,7 +400,7 @@ pub(crate) fn layers_section(app: &mut CadApp, ui: &mut egui::Ui) {
             if app.ui.show_layer_list { Icon::ChevronDown } else { Icon::ChevronRight },
             false,
         );
-        ui.painter().text(pos2(rect.left() + 20.0, rect.center().y), egui::Align2::LEFT_CENTER, label, crate::theme::body(), t.text);
+        ui.painter().text(pos2(rect.left() + 20.0, rect.center().y), egui::Align2::LEFT_CENTER, crate::i18n::t(label), crate::theme::body(), t.text);
         if resp.clicked() {
             app.ui.show_layer_list = !app.ui.show_layer_list;
         }
@@ -414,8 +438,11 @@ pub(crate) fn layers_section(app: &mut CadApp, ui: &mut egui::Ui) {
 fn prop_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
     let t = Tokens::get();
     ui.horizontal(|ui| {
-        let (lr, _) = ui.allocate_exact_size(vec2(118.0, 22.0), Sense::hover());
-        ui.painter().text(pos2(lr.right() - 6.0, lr.center().y), egui::Align2::RIGHT_CENTER, label, crate::theme::body(), t.text_dim);
+        let mut job = egui::text::LayoutJob::simple(crate::i18n::t(label).to_string(), crate::theme::body(), t.text_dim, 106.0);
+        job.halign = egui::Align::RIGHT;
+        let galley = ui.painter().layout_job(job);
+        let (lr, _) = ui.allocate_exact_size(vec2(118.0, galley.size().y.max(22.0)), Sense::hover());
+        ui.painter().galley(pos2(lr.right() - 6.0, lr.center().y - galley.size().y / 2.0), galley, t.text_dim);
         add(ui);
     });
 }
@@ -463,10 +490,12 @@ fn edit_field(ui: &mut egui::Ui, id: egui::Id, value: String) -> Option<String> 
 
 /// A drop-down of `items` showing `current`; returns the item clicked.
 fn pick_menu(ui: &mut egui::Ui, current: &str, items: impl IntoIterator<Item = String>) -> Option<String> {
+    // Names are the drawing's own; only the ByLayer/ByBlock keywords are translated.
+    let shown = |s: &str| if ["ByLayer", "ByBlock"].contains(&s) { crate::i18n::t(s).to_string() } else { s.to_string() };
     let mut out = None;
-    ui.menu_button(current.to_string(), |ui| {
+    ui.menu_button(shown(current), |ui| {
         for it in items {
-            if ui.button(&it).clicked() {
+            if ui.button(shown(&it)).clicked() {
                 out = Some(it);
                 ui.close();
             }
@@ -477,12 +506,12 @@ fn pick_menu(ui: &mut egui::Ui, current: &str, items: impl IntoIterator<Item = S
 
 /// A greyed value with no command behind it yet: visibly inert, never a silent dead button.
 fn unavailable(ui: &mut egui::Ui, text: &str) {
-    value_box(ui, text, false, false).on_hover_text("Not available yet");
+    value_box(ui, crate::i18n::t(text), false, false).on_hover_text(crate::tl!("Not available yet"));
 }
 
 /// A greyed value computed from the geometry.
 fn read_only(ui: &mut egui::Ui, text: &str) {
-    value_box(ui, text, false, false).on_hover_text("Read-only");
+    value_box(ui, crate::i18n::t(text), false, false).on_hover_text(crate::tl!("Read-only"));
 }
 
 /// The Properties header: All/My, the selection-type filter and the PICKADD / Select Objects /
@@ -496,9 +525,9 @@ fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
     let half = Rect::from_min_size(seg.min, vec2(35.0, 18.0));
     let my = half.translate(vec2(35.0, 0.0));
     ui.painter().rect_filled(if app.ui.properties_all { half } else { my }, 3.0, t.control);
-    ui.painter().text(half.center(), egui::Align2::CENTER_CENTER, "All", crate::theme::small(), t.text);
-    ui.painter().text(my.center(), egui::Align2::CENTER_CENTER, "My", crate::theme::small(), t.text_faint);
-    ui.interact(my, ui.id().with("prop_my"), Sense::hover()).on_hover_text("My properties: not available yet");
+    ui.painter().text(half.center(), egui::Align2::CENTER_CENTER, crate::tl!("All"), crate::theme::small(), t.text);
+    ui.painter().text(my.center(), egui::Align2::CENTER_CENTER, crate::tl!("My"), crate::theme::small(), t.text_faint);
+    ui.interact(my, ui.id().with("prop_my"), Sense::hover()).on_hover_text(crate::tl!("My properties: not available yet"));
     let sel = app.session.selection();
     let pickadd = app.session.settings.pickadd;
     let Ok(d) = app.session.doc() else { return };
@@ -515,10 +544,10 @@ fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     let count: usize = types.iter().map(|(_, hs)| hs.len()).sum();
     let header = match (count, types.as_slice()) {
-        (0, _) => "No selection".to_string(),
-        (1, [(n, _)]) => n.to_string(),
-        (n, [(ty, _)]) => format!("{ty} ({n})"),
-        (n, _) => format!("All ({n})"),
+        (0, _) => crate::tl!("No selection").to_string(),
+        (1, [(n, _)]) => crate::i18n::t(n).to_string(),
+        (n, [(ty, _)]) => format!("{} ({n})", crate::i18n::t(ty)),
+        (n, _) => format!("{} ({n})", crate::tl!("All")),
     };
     let mut run: Option<(&str, Value)> = None;
     let mut start: Option<&str> = None;
@@ -531,20 +560,24 @@ fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
             // Narrow the selection to one object type.
             egui::Popup::from_toggle_button_response(&resp).width(w - 10.0).close_behavior(egui::PopupCloseBehavior::CloseOnClick).show(|ui| {
                 for (ty, hs) in &types {
-                    if ui.button(format!("{ty} ({})", hs.len())).clicked() {
+                    if ui.button(format!("{} ({})", crate::i18n::t(ty), hs.len())).clicked() {
                         run = Some(("select", json!({ "handles": hs })));
                     }
                 }
             });
         }
-        let tip = if pickadd { "Toggle PICKADD (on: picks add to the selection)" } else { "Toggle PICKADD (off: each pick replaces the selection)" };
+        let tip = if pickadd {
+            crate::tl!("Toggle PICKADD (on: picks add to the selection)")
+        } else {
+            crate::tl!("Toggle PICKADD (off: each pick replaces the selection)")
+        };
         if icons::button(ui, Icon::PickAdd, 22.0, tip, pickadd).clicked() {
             run = Some(("setvar", json!({ "name": "PICKADD", "value": i32::from(!pickadd) })));
         }
-        if icons::button(ui, Icon::SelectObjects, 22.0, "Select Objects", false).clicked() {
+        if icons::button(ui, Icon::SelectObjects, 22.0, crate::tl!("Select Objects"), false).clicked() {
             start = Some("select");
         }
-        if icons::button(ui, Icon::QuickSelect, 22.0, "Quick Select", false).clicked() {
+        if icons::button(ui, Icon::QuickSelect, 22.0, crate::tl!("Quick Select"), false).clicked() {
             start = Some("ui.dialog.qselect");
         }
     });
@@ -574,7 +607,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         let mut action: Option<(&str, Value)> = None;
         let mut act = |c: &'static str, p: Value| action = Some((c, p));
         prop_row(ui, "Color", |ui| {
-            ui.menu_button(format!("■ {}", Color::from_aci(h.i64("CECOLOR", 256) as i16).name()), |ui| {
+            ui.menu_button(format!("■ {}", crate::i18n::t(&Color::from_aci(h.i64("CECOLOR", 256) as i16).name())), |ui| {
                 for (n, c) in [
                     ("ByLayer", 256),
                     ("ByBlock", 0),
@@ -586,7 +619,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                     ("Magenta", 6),
                     ("White", 7),
                 ] {
-                    if ui.button(n).clicked() {
+                    if ui.button(crate::i18n::t(n)).clicked() {
                         act("color", json!({ "color": c }));
                         ui.close();
                     }
@@ -615,9 +648,9 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         });
         prop_row(ui, "Lineweight", |ui| {
-            ui.menu_button(cadcraft_doc::Lineweight::from_dxf(h.i64("CELWEIGHT", -1) as i16).name(), |ui| {
+            ui.menu_button(crate::i18n::t(&cadcraft_doc::Lineweight::from_dxf(h.i64("CELWEIGHT", -1) as i16).name()), |ui| {
                 for n in ["ByLayer", "ByBlock", "Default"] {
-                    if ui.button(n).clicked() {
+                    if ui.button(crate::i18n::t(n)).clicked() {
                         act("lweight", json!({ "lineweight": n }));
                         ui.close();
                     }
@@ -666,10 +699,39 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 act("setvar", json!({ "name": "TEXTSIZE", "value": f }));
             }
         });
-        prop_row(ui, "Plot style", |ui| unavailable(ui, "ByColor"));
-        prop_row(ui, "Plot style table", |ui| unavailable(ui, "None"));
-        prop_row(ui, "Plot style attached to", |ui| read_only(ui, "Model"));
-        prop_row(ui, "Plot table type", |ui| read_only(ui, "Not available"));
+        // The current layout's plot style table; named tables give the current plot style.
+        let layout = match app.session.layout_space() {
+            cadcraft_doc::Space::Paper(n) => d.layout(&n).map(|l| (n.clone(), l.page.plot_style_table.clone())),
+            cadcraft_doc::Space::Model => None,
+        };
+        let table = layout.as_ref().and_then(|(_, t)| cadcraft_doc::plot_style_table(d, t));
+        match table.as_ref().filter(|t| !t.is_color_dependent()) {
+            Some(t) => prop_row(ui, "Plot style", |ui| {
+                let items = ["ByLayer", "ByBlock"].map(String::from).into_iter().chain(t.styles.iter().map(|s| s.name.clone()));
+                if let Some(n) = pick_menu(ui, &h.str("CPLOTSTYLE", "ByLayer"), items) {
+                    act("plotstyle", json!({ "name": n }));
+                }
+            }),
+            None => prop_row(ui, "Plot style", |ui| read_only(ui, "ByColor")),
+        }
+        match &layout {
+            Some((name, current)) => prop_row(ui, "Plot style table", |ui| {
+                let shown = if current.trim().is_empty() { "None".to_string() } else { current.clone() };
+                let items = std::iter::once("None".to_string()).chain(cadcraft_doc::plot_style_table_names(d));
+                if let Some(n) = pick_menu(ui, &shown, items) {
+                    act("pagesetup", json!({ "layout": name, "plotStyleTable": n }));
+                }
+            }),
+            None => prop_row(ui, "Plot style table", |ui| unavailable(ui, "None")),
+        }
+        let attached = layout.as_ref().map(|(n, _)| n.clone()).unwrap_or_else(|| "Model".into());
+        prop_row(ui, "Plot style attached to", |ui| read_only(ui, &attached));
+        let kind = match &table {
+            Some(t) if t.is_color_dependent() => "Color-dependent",
+            Some(_) => "Named",
+            None => "Not available",
+        };
+        prop_row(ui, "Plot table type", |ui| read_only(ui, kind));
         if let Some((c, p)) = action {
             let _ = app.run(c, p);
         }
@@ -698,11 +760,11 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let group = |ui: &mut egui::Ui, title: &str| {
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
         ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), 2.0, t.chrome_dark);
-        ui.painter().text(pos2(r.left() + 12.0, r.center().y), egui::Align2::LEFT_CENTER, title, crate::theme::small(), t.text_dim);
+        ui.painter().text(pos2(r.left() + 12.0, r.center().y), egui::Align2::LEFT_CENTER, crate::i18n::t(title), crate::theme::small(), t.text_dim);
     };
     group(ui, "General");
     prop_row(ui, "Color", |ui| {
-        ui.menu_button(format!("■ {color}"), |ui| {
+        ui.menu_button(format!("■ {}", crate::i18n::t(&color)), |ui| {
             for (n, c) in [
                 ("ByLayer", 256),
                 ("ByBlock", 0),
@@ -716,7 +778,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 ("Color 8", 8),
                 ("Color 9", 9),
             ] {
-                if ui.button(n).clicked() {
+                if ui.button(crate::i18n::t(n)).clicked() {
                     set = Some(json!({ "handles": ids, "color": c }));
                     ui.close();
                 }
@@ -734,12 +796,12 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         });
     });
     prop_row(ui, "Linetype", |ui| {
-        ui.menu_button(linetype.clone(), |ui| {
+        ui.menu_button(if ["ByLayer", "ByBlock", "*VARIES*"].contains(&linetype.as_str()) { crate::i18n::t(&linetype) } else { &linetype }, |ui| {
             for l in std::iter::once("ByLayer".to_string())
                 .chain(std::iter::once("ByBlock".to_string()))
                 .chain(linetypes.iter().filter(|l| !["ByLayer", "ByBlock"].contains(&l.as_str())).cloned())
             {
-                if ui.button(&l).clicked() {
+                if ui.button(if ["ByLayer", "ByBlock"].contains(&l.as_str()) { crate::i18n::t(&l) } else { &l }).clicked() {
                     set = Some(json!({ "handles": ids, "linetype": l }));
                     ui.close();
                 }
@@ -754,9 +816,9 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     });
     prop_row(ui, "Lineweight", |ui| {
-        ui.menu_button(lw.clone(), |ui| {
+        ui.menu_button(crate::i18n::t(&lw), |ui| {
             for n in ["ByLayer", "ByBlock", "Default"] {
-                if ui.button(n).clicked() {
+                if ui.button(crate::i18n::t(n)).clicked() {
                     set = Some(json!({ "handles": ids, "lineweight": n }));
                     ui.close();
                 }
@@ -770,9 +832,9 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         });
     });
     prop_row(ui, "Transparency", |ui| {
-        ui.menu_button(tr.clone(), |ui| {
+        ui.menu_button(crate::i18n::t(&tr), |ui| {
             for v in ["ByLayer", "ByBlock"] {
-                if ui.button(v).clicked() {
+                if ui.button(crate::i18n::t(v)).clicked() {
                     set = Some(json!({ "handles": ids, "transparency": v }));
                     ui.close();
                 }
@@ -783,7 +845,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             let cur = tr.parse::<u8>().ok();
             let mut pct = ui.data_mut(|d| d.get_temp::<u8>(tid)).or(cur).unwrap_or(0);
             ui.horizontal(|ui| {
-                ui.label("Percent");
+                ui.label(crate::tl!("Percent"));
                 let r = ui.add(egui::DragValue::new(&mut pct).range(0..=90).speed(0.5));
                 if r.dragged() || r.has_focus() {
                     ui.data_mut(|d| d.insert_temp(tid, pct));
@@ -897,7 +959,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 prop_row(ui, "Closed", |ui| {
                     let mut c = pl.closed;
                     let label = if c { "Yes" } else { "No" };
-                    if ui.checkbox(&mut c, label).changed() {
+                    if ui.checkbox(&mut c, crate::i18n::t(label)).changed() {
                         set = Some(json!({ "handles": ids, "closed": c }));
                     }
                 });

@@ -144,6 +144,47 @@ fn angular_between_lines_follows_rotation() {
 }
 
 #[test]
+fn interactive_angular_picks_polyline_segments() {
+    // Rectangle sides are polyline segments, not lines (issue #10).
+    let mut s = Session::new();
+    s.cmdline("rectang 0,0 10,5").unwrap();
+    s.cmdline("dimangular").unwrap();
+    s.cmdline("5,0").unwrap();
+    s.cmdline("0,2").unwrap();
+    s.cmdline("2,2").unwrap();
+    assert!(s.running.is_none());
+    let d = s.last_dim.unwrap();
+    assert_eq!(cadcraft_render::dimension_in(s.doc().unwrap(), &dim(&s, d)).value, "90°");
+    // A polyline arc segment works like an arc.
+    s.cmdline("pline 20,0 30,0 a 30,10").unwrap();
+    s.cmdline("").unwrap();
+    s.cmdline("dimangular").unwrap();
+    let (cx, cy) = (30.0 + 5.0 * std::f64::consts::FRAC_1_SQRT_2, 5.0 - 5.0 * std::f64::consts::FRAC_1_SQRT_2);
+    s.cmdline(&format!("{cx},{cy}")).unwrap();
+    s.cmdline("40,5").unwrap();
+    assert!(s.running.is_none());
+    let d2 = s.last_dim.unwrap();
+    assert_ne!(d, d2);
+    assert_eq!(cadcraft_render::dimension_in(s.doc().unwrap(), &dim(&s, d2)).value, "180°");
+}
+
+#[test]
+fn interactive_angular_picks_circle() {
+    // Circle: the pick is the first endpoint, the center the vertex.
+    let mut s = Session::new();
+    s.cmdline("circle 0,0 5").unwrap();
+    s.cmdline("dimangular").unwrap();
+    s.cmdline("5,0").unwrap();
+    assert!(s.current_prompt().unwrap().message.contains("Specify second angle endpoint"));
+    s.cmdline("0,8").unwrap();
+    s.cmdline("3,3").unwrap();
+    assert!(s.running.is_none());
+    let dm = dim(&s, s.last_dim.unwrap());
+    assert!(near(dm.p15.xy(), Vec2::ZERO), "vertex at the center");
+    assert_eq!(cadcraft_render::dimension_in(s.doc().unwrap(), &dm).value, "90°");
+}
+
+#[test]
 fn erase_disassociate_and_reassociate() {
     let mut s = Session::new();
     let l = line(&mut s, [0.0, 0.0], [4.0, 0.0]);
@@ -382,4 +423,88 @@ fn mtext_rejects_nonpositive_height() {
     assert!(s.doc().unwrap().model.is_empty());
     s.execute("mtext", &json!({ "at": [0, 0], "text": "hi", "height": 2 })).unwrap();
     assert_eq!(s.doc().unwrap().model.len(), 1);
+}
+
+#[test]
+fn setvar_dim_variables_apply_to_new_dimensions() {
+    // Issue #66: a DIM* variable set with SETVAR is a style override that new dimensions take on.
+    let mut s = Session::new();
+    let linear = |s: &mut Session, y: f64| h(&s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [100, 0], "at": [50, y] })).unwrap());
+    let text_height = |s: &Session, hd: Handle| {
+        let d = s.doc().unwrap();
+        let dm = dim(s, hd);
+        let st = d.dim_style(&dm.style).cloned().unwrap();
+        cadcraft_render::dimension_geometry(&dm, &st, d.header.f64("DIMSCALE", 1.0)).text_height
+    };
+    let first = linear(&mut s, -20.0);
+    let base = text_height(&s, first);
+    s.execute("setvar", &json!({ "name": "DIMSCALE", "value": 24 })).unwrap();
+    let scaled = linear(&mut s, -40.0);
+    assert!((text_height(&s, scaled) / base - 24.0).abs() < 1e-9);
+    assert_eq!(dim(&s, scaled).overrides.get("scale"), Some(&json!(24.0)));
+    assert!(dim(&s, first).overrides.is_empty(), "existing dimensions keep their size");
+    assert!((text_height(&s, first) - base).abs() < 1e-12);
+    // Extents use the same scale as the geometry: room for 2.5 text heights beyond the points.
+    let d = s.doc().unwrap();
+    let margin = |hd: Handle, span: f64| (cadcraft_doc::entity_bounds(d, d.entity(hd).unwrap(), 0).height() - span) / 2.0;
+    assert!((margin(first, 20.0) - 2.5 * base).abs() < 1e-9);
+    assert!((margin(scaled, 40.0) - 2.5 * text_height(&s, scaled)).abs() < 1e-9);
+
+    // Making a style current clears the overrides.
+    s.execute("dimstyle.current", &json!({ "name": "Standard" })).unwrap();
+    assert_eq!(crate::sysvars::get(&s, "DIMSCALE"), Some(json!(1.0)));
+    let plain = linear(&mut s, -60.0);
+    assert!(dim(&s, plain).overrides.is_empty());
+
+    // Editing the current style updates the variables, so the issue's workaround keeps working.
+    s.execute("dimstyle", &json!({ "name": "Standard", "DIMSCALE": 24 })).unwrap();
+    assert_eq!(crate::sysvars::get(&s, "DIMSCALE"), Some(json!(24.0)));
+    let restyled = linear(&mut s, -80.0);
+    assert!(dim(&s, restyled).overrides.is_empty());
+    assert!((text_height(&s, restyled) / base - 24.0).abs() < 1e-9);
+
+    // A DIM* variable the header doesn't carry reads from the style and can be overridden too.
+    let dec = crate::sysvars::get(&s, "DIMDEC").unwrap();
+    assert_eq!(dec, json!(s.doc().unwrap().dim_style("Standard").unwrap().decimals));
+    s.execute("setvar", &json!({ "name": "DIMDEC", "value": 1 })).unwrap();
+    let one = linear(&mut s, -100.0);
+    let one = dim(&s, one);
+    assert_eq!(one.overrides.get("decimals"), Some(&json!(1)));
+    assert_eq!(cadcraft_render::dimension_in(s.doc().unwrap(), &one).value, "100.0");
+
+    // DIMSCALE 0 (AutoCAD: scale to the layout viewport) never shrinks a dimension to nothing.
+    s.execute("setvar", &json!({ "name": "DIMSCALE", "value": 0 })).unwrap();
+    let zero = linear(&mut s, -120.0);
+    assert!((text_height(&s, zero) - base).abs() < 1e-12);
+}
+
+#[test]
+fn linetype_rename_updates_references() {
+    fn line(s: &mut Session, y: f64) -> Handle {
+        let r = s.execute("line", &json!({ "points": [[0.0, y], [10.0, y]] })).unwrap();
+        Handle::parse_hex(r["handles"][0].as_str().unwrap()).unwrap()
+    }
+    let mut s = Session::new();
+    s.execute("linetype", &json!({ "load": "DASHED" })).unwrap();
+    s.execute("layer.new", &json!({ "name": "A", "linetype": "DASHED", "current": true })).unwrap();
+    let by_layer = line(&mut s, 0.0);
+    s.execute("linetype", &json!({ "current": "DASHED" })).unwrap();
+    let explicit = line(&mut s, 2.0);
+    let in_block = line(&mut s, 4.0);
+    s.execute("block", &json!({ "name": "B", "base": [0, 0], "handles": [in_block.hex()], "keep": "delete" })).unwrap();
+    s.execute("rename", &json!({ "table": "linetype", "from": "DASHED", "to": "MYDASH" })).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.linetype("DASHED").is_none());
+    assert!(d.linetype("MYDASH").is_some());
+    assert_eq!(d.layers.iter().find(|l| l.name == "A").unwrap().linetype, "MYDASH");
+    assert_eq!(d.layers.iter().find(|l| l.name == "0").unwrap().linetype, "Continuous");
+    assert_eq!(d.entity(by_layer).unwrap().common.linetype, "ByLayer");
+    assert_eq!(d.entity(explicit).unwrap().common.linetype, "MYDASH");
+    let block: Vec<&str> = d.blocks["B"].entities.iter().map(|e| e.common.linetype.as_str()).collect();
+    assert_eq!(block, ["MYDASH"]);
+    assert_eq!(d.header.str("CELTYPE", ""), "MYDASH");
+    // An existing target name and the reserved linetypes are refused.
+    assert!(s.execute("rename", &json!({ "table": "linetype", "from": "MYDASH", "to": "Continuous" })).is_err());
+    assert!(s.execute("rename", &json!({ "table": "linetype", "from": "ByLayer", "to": "X" })).is_err());
+    assert_eq!(s.doc().unwrap().entity(by_layer).unwrap().common.linetype, "ByLayer");
 }

@@ -13,7 +13,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("zoom", "Zoom", run_zoom)
             .menu(&["View", "Zoom", "Realtime"])
             .alias(&["z"])
-            .params("{mode: extents|all|window|previous|in|out|center|scale|object, p1?, p2?, center?, height?, factor?}")
+            .params("{mode: extents|all|window|previous|in|out|center|scale|object, p1?, p2?, center?, height?, factor?, xp?: bool (scale relative to paper space: in a viewport, `factor` paper units per model unit), limits?: bool (scale relative to the limits)} (center: `height`, or `factor` with `xp`/`limits`)")
             .noundo()
             .transparent()
             .interactive(|_| Ok(Box::new(ZoomM::default()))),
@@ -95,9 +95,10 @@ fn fit(s: &mut Session, b: Bounds2) -> Result<()> {
         return Ok(());
     }
     let (w, h) = s.viewport_px;
-    let aspect = w / h.max(1.0);
+    let st = s.state_mut()?;
+    let aspect = st.zoom_aspect(w / h.max(1.0));
     let height = b.height().max(b.width() / aspect.max(1e-6)).max(1e-9);
-    s.state_mut()?.set_view(View { center: b.center(), height });
+    st.set_zoom_frame(View { center: b.center(), height });
     Ok(())
 }
 
@@ -106,10 +107,7 @@ pub(crate) fn zoom(s: &mut Session, p: &Value) -> Result<Value> {
     match mode.as_str() {
         "extents" | "e" => s.zoom_extents()?,
         "all" | "a" => {
-            let d = s.doc()?;
-            let lo = d.header.point("LIMMIN").map(|p| p.xy()).unwrap_or(Vec2::ZERO);
-            let hi = d.header.point("LIMMAX").map(|p| p.xy()).unwrap_or(Vec2::new(12.0, 9.0));
-            let b = ext_bounds(s)?.union(&Bounds2::new(lo, hi));
+            let b = ext_bounds(s)?.union(&s.zoom_limits()?);
             fit(s, b.expand(b.height().max(b.width()) * 0.02))?;
         }
         "window" | "w" => {
@@ -128,23 +126,19 @@ pub(crate) fn zoom(s: &mut Session, p: &Value) -> Result<Value> {
         "in" | "out" => {
             let f = if mode == "in" { 2.0 } else { 0.5 };
             let st = s.state_mut()?;
-            let v = st.view();
-            st.set_view(View { center: v.center, height: v.height / f });
+            let v = st.zoom_frame();
+            st.set_zoom_frame(View { center: v.center, height: v.height / f });
         }
         "center" | "c" => {
             let c = point_req("zoom", p, "center")?;
-            let st = s.state_mut()?;
-            let h = f64_or(p, "height", st.view().height);
-            st.set_view(View { center: c, height: h.max(1e-9) });
+            let cur = s.state()?.zoom_frame().height;
+            let h = if p.get("factor").is_some() { factor_height(s, p, cur)? } else { f64_or(p, "height", cur) };
+            s.state_mut()?.set_zoom_frame(View { center: c, height: h.max(1e-9) });
         }
         "scale" | "s" => {
-            let f = f64_req("zoom", p, "factor")?;
-            if f <= 0.0 {
-                return Err(bad("zoom", "factor must be positive"));
-            }
-            let st = s.state_mut()?;
-            let v = st.view();
-            st.set_view(View { center: v.center, height: v.height / f });
+            let v = s.state()?.zoom_frame();
+            let height = factor_height(s, p, v.height)?;
+            s.state_mut()?.set_zoom_frame(View { center: v.center, height });
         }
         "object" | "o" => {
             let hs = targets(s, p)?;
@@ -156,6 +150,54 @@ pub(crate) fn zoom(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.touch();
     Ok(Value::Null)
+}
+
+/// The view height for a zoom `factor`: relative to the current height `cur` (nX), to paper space
+/// with `xp` (nXP; in a viewport `factor` paper units per model unit, elsewhere like nX), or to
+/// the limits with `limits` (a plain n: 1 fits the limits).
+fn factor_height(s: &Session, p: &Value, cur: f64) -> Result<f64> {
+    let f = f64_req("zoom", p, "factor")?;
+    if f <= 0.0 {
+        return Err(bad("zoom", "factor must be positive"));
+    }
+    let st = s.state()?;
+    if bool_or(p, "xp", false)
+        && let Some(vp) = st.zoom_viewport()
+    {
+        return Ok(vp.height / f);
+    }
+    if bool_or(p, "limits", false) {
+        let lim = s.zoom_limits()?;
+        let (w, h) = s.viewport_px;
+        let aspect = st.zoom_aspect(w / h.max(1.0)).max(1e-6);
+        return Ok(lim.height().max(lim.width() / aspect).max(1e-9) / f);
+    }
+    Ok(cur / f)
+}
+
+/// A typed zoom factor: `n` (relative to the limits), `nX` (to the current view) or `nXP` (to
+/// paper space), as `zoom` scale parameters.
+fn typed_factor(t: &str) -> Option<Value> {
+    let tl = t.trim().to_ascii_lowercase();
+    let (num, rel) = if let Some(n) = tl.strip_suffix("xp") {
+        (n, "xp")
+    } else if let Some(n) = tl.strip_suffix('x') {
+        (n, "x")
+    } else {
+        (tl.as_str(), "limits")
+    };
+    let f = number(num.trim()).filter(|f| *f > 0.0)?;
+    Some(json!({ "factor": f, "xp": rel == "xp", "limits": rel == "limits" }))
+}
+
+fn with_mode(mut p: Value, mode: &str, center: Option<Vec2>) -> Value {
+    if let Some(o) = p.as_object_mut() {
+        o.insert("mode".into(), json!(mode));
+        if let Some(c) = center {
+            o.insert("center".into(), json!([c.x, c.y]));
+        }
+    }
+    p
 }
 
 fn run_zoom(s: &mut Session, p: &Value) -> Result<Value> {
@@ -226,13 +268,33 @@ fn run_layout_set(s: &mut Session, p: &Value) -> Result<Value> {
 struct ZoomM {
     window: bool,
     first: Option<Vec2>,
+    stage: ZoomStage,
+}
+
+/// The Center and Scale options' own prompts.
+#[derive(Clone, Copy, Default)]
+enum ZoomStage {
+    #[default]
+    Main,
+    Center,
+    CenterHeight(Vec2),
+    Scale,
 }
 
 impl Interactive for ZoomM {
     fn name(&self) -> &'static str {
         "ZOOM"
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
+    fn prompt(&self, s: &Session) -> Prompt {
+        match self.stage {
+            ZoomStage::Main => {}
+            ZoomStage::Center => return Prompt::new("Specify center point", Accept::POINT),
+            ZoomStage::CenterHeight(_) => {
+                let h = s.state().map(|st| st.zoom_frame().height).unwrap_or(1.0);
+                return Prompt::new("Enter magnification or height", Accept::NUMBER).default(format!("{h:.4}"));
+            }
+            ZoomStage::Scale => return Prompt::new("Enter a scale factor (nX or nXP)", Accept::NUMBER),
+        }
         match (self.window, self.first) {
             (false, None) => Prompt::new("Specify corner of window, enter a scale factor (nX or nXP)", Accept::POINT_OR_NUMBER)
                 .kw(&["All", "Center", "Dynamic", "Extents", "Previous", "Scale", "Window", "Object"])
@@ -242,18 +304,63 @@ impl Interactive for ZoomM {
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        let bad_factor = || crate::EngineError::Other("Requires a scale factor (n, nX or nXP).".into());
+        match (self.stage, &i) {
+            (_, Input::Cancel) | (ZoomStage::Main, _) => {}
+            (ZoomStage::Center, Input::Point(c)) => {
+                self.stage = ZoomStage::CenterHeight(*c);
+                return Ok(Step::Continue);
+            }
+            (ZoomStage::Center, Input::Enter) => return Ok(Step::Done),
+            (ZoomStage::Center, _) => return Err(crate::EngineError::Other("Requires a point.".into())),
+            (ZoomStage::CenterHeight(c), Input::Enter) => {
+                zoom(s, &json!({ "mode": "center", "center": [c.x, c.y] }))?;
+                return Ok(Step::Done);
+            }
+            (ZoomStage::CenterHeight(c), Input::Text(t)) => {
+                let tl = t.trim().to_ascii_lowercase();
+                // A plain number is the new view height; nX / nXP a magnification.
+                let p = if tl.ends_with('x') || tl.ends_with("xp") {
+                    typed_factor(&tl).ok_or_else(bad_factor)?
+                } else {
+                    json!({ "height": number(&tl).filter(|h| *h > 0.0).ok_or_else(bad_factor)? })
+                };
+                zoom(s, &with_mode(p, "center", Some(c)))?;
+                return Ok(Step::Done);
+            }
+            (ZoomStage::Scale, Input::Text(t)) => {
+                zoom(s, &with_mode(typed_factor(t).ok_or_else(bad_factor)?, "scale", None))?;
+                return Ok(Step::Done);
+            }
+            (ZoomStage::Scale, Input::Enter) => return Ok(Step::Done),
+            (_, _) => return Err(bad_factor()),
+        }
         match i {
             Input::Keyword(k) => {
                 let mode = match k.as_str() {
                     "All" => "all",
                     "Extents" => "extents",
                     "Previous" => "previous",
+                    "Dynamic" => {
+                        // Dynamic zoom drags a view box; without one it asks for a window.
+                        s.echo("Dynamic zoom: specify the new view as a window.");
+                        self.window = true;
+                        return Ok(Step::Continue);
+                    }
                     "Window" => {
                         self.window = true;
                         return Ok(Step::Continue);
                     }
+                    "Center" => {
+                        self.stage = ZoomStage::Center;
+                        return Ok(Step::Continue);
+                    }
+                    "Scale" => {
+                        self.stage = ZoomStage::Scale;
+                        return Ok(Step::Continue);
+                    }
                     "Object" => "object",
-                    _ => "extents",
+                    _ => return Err(crate::EngineError::Other("Invalid option keyword.".into())),
                 };
                 zoom(s, &json!({ "mode": mode }))?;
                 Ok(Step::Done)
@@ -269,17 +376,9 @@ impl Interactive for ZoomM {
                 }
             },
             Input::Text(t) => {
-                let tl = t.trim().to_ascii_lowercase();
-                let num = tl.trim_end_matches("xp").trim_end_matches('x');
-                let f = number(num)
-                    .filter(|f| *f > 0.0)
-                    .ok_or_else(|| crate::EngineError::Other("Requires a point, scale factor or option keyword.".into()))?;
-                if tl.ends_with('x') {
-                    zoom(s, &json!({ "mode": "scale", "factor": f }))?;
-                } else {
-                    // Plain number: scale relative to limits (approximation: like nX).
-                    zoom(s, &json!({ "mode": "scale", "factor": f }))?;
-                }
+                // nX: relative to the current view; nXP: to paper space; n: to the limits.
+                let p = typed_factor(&t).ok_or_else(|| crate::EngineError::Other("Requires a point, scale factor or option keyword.".into()))?;
+                zoom(s, &with_mode(p, "scale", None))?;
                 Ok(Step::Done)
             }
             Input::Enter => Ok(Step::Done),

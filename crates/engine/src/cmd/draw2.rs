@@ -367,7 +367,10 @@ impl Interactive for SeqM {
         let val = match (&i, ask) {
             (Input::Point(q), _) => self.value_from_point(ask, *q),
             (Input::Text(t), Ask::Angle(_) | Ask::Sweep(..)) => {
-                Some(Val::N(crate::units::parse_angle(t).ok_or_else(|| other("Requires a valid angle."))?))
+                // The tangent direction is a direction; included angles are sizes.
+                let au = s.angle_settings();
+                let a = if self.v == ArcV::Sed { au.direction(t) } else { au.amount(t) };
+                Some(Val::N(a.ok_or_else(|| other("Requires a valid angle."))?))
             }
             (Input::Text(t), Ask::Dist(_)) => Some(Val::N(number(t).ok_or_else(|| other("Requires numeric distance or a point."))?)),
             (Input::Enter, _) => return Ok(Step::Cancel),
@@ -1291,15 +1294,20 @@ fn add_xline(s: &mut Session, base: Vec2, dir: Vec2) -> Result<Handle> {
     s.add_entity(EntityKind::XLine(RayLine { base: v3(base), dir: v3(d) }))
 }
 
-/// A line-like object for XLINE Offset/Reference: (base, direction).
-fn linear_of(s: &Session, h: Handle) -> Result<(Vec2, Vec2)> {
+/// A line-like object for XLINE Offset/Reference: (base, direction). For a polyline, the
+/// segment nearest `pick` (the first without one), which must be straight.
+fn linear_of(s: &Session, h: Handle, pick: Option<Vec2>) -> Result<(Vec2, Vec2)> {
     let e = curves::entity(s, h)?;
     match &e.kind {
         EntityKind::Line(l) => Ok((l.a.xy(), (l.b.xy() - l.a.xy()).normalized())),
         EntityKind::XLine(r) | EntityKind::Ray(r) => Ok((r.base.xy(), r.dir.xy().normalized())),
         EntityKind::LwPolyline(p) => {
             let segs = Polyline { vertices: p.vertices.clone(), closed: p.closed }.segments();
-            match segs.first() {
+            let seg = match pick {
+                Some(q) => segs.iter().min_by(|a, b| a.closest(q).dist(q).total_cmp(&b.closest(q).dist(q))),
+                None => segs.first(),
+            };
+            match seg {
                 Some(cadcraft_geom::Segment::Line(l)) => Ok((l.a, l.dir())),
                 _ => Err(other("Select a line object.")),
             }
@@ -1330,7 +1338,7 @@ pub(crate) fn run_xline2(s: &mut Session, p: &Value) -> Result<Value> {
         return added(add_xline(s, v, d)?);
     }
     if let Some(h) = curves::handle_param(p, "handle") {
-        let (base, dir) = linear_of(s, h)?;
+        let (base, dir) = linear_of(s, h, None)?;
         let (nb, nd) = if let Some(t) = point_param(p, "through") {
             (t, dir)
         } else {
@@ -1449,18 +1457,18 @@ impl Interactive for XlineM2 {
                 Ok(Step::Continue)
             }
             (XMode::AngAsk, Input::Text(t)) => {
-                let a = crate::units::parse_angle(&t).ok_or_else(|| other("Requires a valid angle."))?;
+                let a = s.angle_settings().direction(&t).ok_or_else(|| other("Requires a valid angle."))?;
                 self.mode = XMode::Fixed(a);
                 Ok(Step::Continue)
             }
             (XMode::RefSelect, Input::Point(p)) => {
                 let h = curves::pick_at(s, p).ok_or_else(|| other("*Invalid selection*"))?;
-                let (_, d) = linear_of(s, h)?;
+                let (_, d) = linear_of(s, h, Some(p))?;
                 self.mode = XMode::RefAngle(d.angle());
                 Ok(Step::Continue)
             }
             (XMode::RefAngle(base), Input::Text(t)) => {
-                let a = crate::units::parse_angle(&t).ok_or_else(|| other("Requires a valid angle."))?;
+                let a = s.angle_settings().rotation(&t).ok_or_else(|| other("Requires a valid angle."))?;
                 self.mode = XMode::Fixed(base + a);
                 Ok(Step::Continue)
             }
@@ -1488,7 +1496,7 @@ impl Interactive for XlineM2 {
             }
             (XMode::OffSelect, Input::Point(p)) => {
                 let h = curves::pick_at(s, p).ok_or_else(|| other("*Invalid selection*"))?;
-                self.line = Some(linear_of(s, h)?);
+                self.line = Some(linear_of(s, h, Some(p))?);
                 self.mode = XMode::OffSide;
                 Ok(Step::Continue)
             }
@@ -1557,7 +1565,11 @@ pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|c| (c.first().and_then(Value::as_f64).unwrap_or(0.0), c.get(1).and_then(Value::as_f64).unwrap_or(0.0)))
         .map(|(x, y)| (if x.is_finite() { x } else { 0.0 }, if y.is_finite() { y } else { 0.0 }))
         .unwrap_or((0.0, 0.0));
-    let fillet = f64_or(p, "fillet", 0.0);
+    if ch.0 < 0.0 || ch.1 < 0.0 {
+        return Err(bad("rectang", "`chamfer` distances must be zero or positive"));
+    }
+    let fillet = size_param("rectang", p, "fillet", true)?.unwrap_or(0.0);
+    let width = size_param("rectang", p, "width", true)?.unwrap_or(0.0);
     let (w, h) = if let Some(d) = p.get("dimensions").and_then(Value::as_array) {
         let l = d.first().and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad("rectang", "dimensions: [length, width]"))?;
         let wd = d.get(1).and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad("rectang", "dimensions: [length, width]"))?;
@@ -1586,7 +1598,7 @@ pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
     if w.abs() < 1e-12 || h.abs() < 1e-12 || !w.is_finite() || !h.is_finite() {
         return Err(bad("rectang", "rectangle has no area"));
     }
-    let k = rect_kind(a, w, h, rot, fillet, ch, f64_or(p, "width", 0.0), f64_or(p, "elevation", 0.0));
+    let k = rect_kind(a, w, h, rot, fillet, ch, width, f64_or(p, "elevation", 0.0));
     let hd = s.add_entity(k)?;
     let th = f64_or(p, "thickness", 0.0);
     if th != 0.0 {
@@ -1739,7 +1751,7 @@ impl Interactive for RectM2 {
                 RAsk::Rotation => match i {
                     Input::Keyword(_) => self.asking = Some(RAsk::RotPick1),
                     Input::Point(p) => self.rotation = self.first.map(|f| f.angle_to(p)).unwrap_or(0.0),
-                    Input::Text(t) => self.rotation = crate::units::parse_angle(&t).ok_or_else(|| other("Requires a valid angle."))?,
+                    Input::Text(t) => self.rotation = s.angle_settings().direction(&t).ok_or_else(|| other("Requires a valid angle."))?,
                     _ => {}
                 },
                 RAsk::RotPick1 => {
@@ -2352,7 +2364,7 @@ impl Interactive for SplineCvM {
 fn add_center_line(s: &mut Session, a: Vec2, b: Vec2) -> Result<Handle> {
     let d = s.doc_mut()?;
     if d.linetype("CENTER").is_none()
-        && let Some(lt) = cadcraft_doc::library::standard_linetypes().into_iter().find(|l| l.name == "CENTER")
+        && let Some(lt) = cadcraft_doc::library::standard_linetypes_for(d).into_iter().find(|l| l.name == "CENTER")
     {
         d.linetypes.push(lt);
     }

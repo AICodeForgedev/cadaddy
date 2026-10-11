@@ -15,11 +15,14 @@
 //! - `ui.click {x, y}`, `ui.move {x, y}`: real egui pointer input in screen points
 //! - `ui.key {key, cmd?, shift?, alt?}`, `ui.text {text}`: synthetic keyboard input
 //! - `ui.set {...UiState fields}`, `ui.resize {width, height}`
-//! - `ui.screenshot {path?}`: PNG of the window; `ui.render {path, width?, height?}`: headless
-//!   render of the drawing (no window needed)
+//! - `ui.screenshot {path?}`: PNG of the window; `ui.render {path?, width?, height?, fit?}`: headless
+//!   render of the drawing (no window needed; fits the drawing unless `fit` is false; replies `pngBase64`)
 //! - `app.open {path}`, `app.save {path?}`, `app.quit`
 
-use std::sync::mpsc::Sender;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
+use std::time::Duration;
 
 use cadcraft_engine::Input;
 use cadcraft_geom::Vec2;
@@ -33,12 +36,52 @@ pub struct ControlRequest {
     pub method: String,
     pub params: Value,
     pub reply: Sender<ControlResponse>,
+    state: Arc<AtomicU8>,
 }
 
+/// [`ControlRequest`] states, shared by the app and the transport waiting for the reply.
+const QUEUED: u8 = 0;
+const STARTED: u8 = 1;
+const CANCELLED: u8 = 2;
+
 impl ControlRequest {
-    pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<ControlResponse>) {
+    pub fn new(method: impl Into<String>, params: Value) -> (Self, PendingReply) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx }, rx)
+        let state = Arc::new(AtomicU8::new(QUEUED));
+        (Self { method: method.into(), params, reply: tx, state: state.clone() }, PendingReply { rx, state })
+    }
+
+    /// Mark the request as started. False when the transport already gave up on it
+    /// ([`PendingReply::wait`] timed out): the app must then skip it, since the client was told it
+    /// did not run and may send it again.
+    pub fn begin(&self) -> bool {
+        self.state.compare_exchange(QUEUED, STARTED, Ordering::AcqRel, Ordering::Acquire).is_ok()
+    }
+}
+
+/// The transport's side of a [`ControlRequest`]: waits for the reply.
+pub struct PendingReply {
+    rx: Receiver<ControlResponse>,
+    state: Arc<AtomicU8>,
+}
+
+impl PendingReply {
+    /// The reply, or after `timeout` an error that says whether the request can still have
+    /// changed anything:
+    /// - `{"ok": false, "error": "timeout", "state": "not-run"}`: the app had not started it, and
+    ///   now never will. Sending it again is safe.
+    /// - `{"ok": false, "error": "timeout", "state": "may-have-run"}`: the app had started it, so
+    ///   it may still finish and change the drawing (its late reply is discarded). Inspect before
+    ///   sending it again.
+    pub fn wait(self, timeout: Duration) -> ControlResponse {
+        if let Ok(r) = self.rx.recv_timeout(timeout) {
+            return r;
+        }
+        if self.state.compare_exchange(QUEUED, CANCELLED, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            return json!({"ok": false, "error": "timeout", "state": "not-run"});
+        }
+        // Started: a reply that arrived just now still counts.
+        self.rx.try_recv().unwrap_or_else(|_| json!({"ok": false, "error": "timeout", "state": "may-have-run"}))
     }
 }
 
@@ -221,11 +264,14 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
         "cmdline.input" => {
             let text = s("text").unwrap_or("");
             let before = app.session.log.len();
-            app.cmdline(text);
+            let error = app.cmdline(text);
             let out: Vec<String> = app.session.log.iter().skip(before).cloned().collect();
             let mut st = cmdline_state(app);
             if let Some(o) = st.as_object_mut() {
                 o.insert("output".into(), json!(out));
+                if let Some(e) = error {
+                    o.insert("error".into(), json!(e));
+                }
             }
             ok(st)
         }
@@ -239,13 +285,27 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             }
         }
         "cmdline.key" => {
-            match s("key").unwrap_or("enter").to_ascii_lowercase().as_str() {
-                "escape" | "esc" => app.session.cancel(),
-                _ => {
-                    let _ = app.session.input(Input::Enter);
+            let before = app.session.log.len();
+            let error = match s("key").unwrap_or("enter").to_ascii_lowercase().as_str() {
+                "escape" | "esc" => {
+                    app.session.cancel();
+                    None
+                }
+                // As pressing Enter in the command line: a refused Enter is echoed to the history.
+                _ => app.session.input(Input::Enter).err().map(|e| e.to_string()),
+            };
+            if let Some(e) = &error {
+                app.session.echo(e.clone());
+            }
+            let out: Vec<String> = app.session.log.iter().skip(before).cloned().collect();
+            let mut st = cmdline_state(app);
+            if let Some(o) = st.as_object_mut() {
+                o.insert("output".into(), json!(out));
+                if let Some(e) = error {
+                    o.insert("error".into(), json!(e));
                 }
             }
-            ok(cmdline_state(app))
+            ok(st)
         }
         "cmdline.state" => ok(cmdline_state(app)),
         "engine.commands" => ok(all_commands(app)),
@@ -371,18 +431,19 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             let Ok(st) = app.session.state() else { return err("no drawing") };
             let list = cadcraft_render::build(&st.doc, &st.space, &cadcraft_render::Options::default());
             let v = st.view();
-            let view = cadcraft_render::raster::View { center: v.center, scale: f64::from(h) / v.height.max(1e-12), width: w, height: h };
+            let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(true);
+            let view = render_view(&list.bounds, v.center, v.height, fit, w, h);
             let Some(png) = cadcraft_render::raster::render_png(&list, &view, &cadcraft_render::raster::RasterOptions::default()) else {
                 return err("render failed");
             };
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(path) = s("path") {
-                return match std::fs::write(path, &png) {
-                    Ok(()) => ok(json!({"path": path, "bytes": png.len()})),
-                    Err(e) => err(e),
-                };
+                if let Err(e) = std::fs::write(path, &png) {
+                    return err(e);
+                }
+                return ok(render_reply(&png, w, h, Some(path)));
             }
-            ok(json!({"bytes": png.len()}))
+            ok(render_reply(&png, w, h, None))
         }
         "app.open" => {
             let Some(path) = s("path") else { return err("missing path") };
@@ -390,12 +451,32 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
         }
         "app.save" => wrap(app.run(if s("path").is_some() { "saveas" } else { "qsave" }, p.clone())),
         "app.quit" => {
+            // Programmatic calls never open dialogs: quit without the unsaved-changes prompt.
+            app.quit_confirmed = true;
             app.quit_requested = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             ok(Value::Null)
         }
         other => err(format!("unknown method `{other}`")),
     }
+}
+
+/// The raster view for `ui.render`: fitted to the drawing's bounds, or the current screen view.
+fn render_view(bounds: &cadcraft_geom::Bounds2, center: Vec2, height: f64, fit: bool, w: u32, h: u32) -> cadcraft_render::raster::View {
+    if fit {
+        cadcraft_render::raster::View::fit(bounds, w, h, 0.05)
+    } else {
+        cadcraft_render::raster::View { center, scale: f64::from(h) / height.max(1e-12), width: w, height: h }
+    }
+}
+
+/// The `ui.render` reply, matching the headless backend (`pngBase64`, `width`, `height`), plus `bytes` and `path`.
+fn render_reply(png: &[u8], w: u32, h: u32, path: Option<&str>) -> Value {
+    let mut v = json!({"pngBase64": cadcraft_engine::cmd::file::base64_encode(png), "width": w, "height": h, "bytes": png.len()});
+    if let (Some(path), Some(o)) = (path, v.as_object_mut()) {
+        o.insert("path".to_string(), json!(path));
+    }
+    v
 }
 
 /// Save a screenshot PNG.
@@ -410,5 +491,69 @@ pub fn save_screenshot(image: &egui::ColorImage, path: Option<&str>) -> Value {
     match img.save(&path) {
         Ok(()) => json!({"ok": true, "result": {"path": path, "width": w, "height": h}}),
         Err(e) => json!({"ok": false, "error": e.to_string()}),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_view_fit_finds_offscreen_drawing() {
+        let far = cadcraft_geom::Bounds2::new(Vec2::new(9000.0, 9000.0), Vec2::new(9100.0, 9050.0));
+        let fitted = render_view(&far, Vec2::ZERO, 100.0, true, 800, 500);
+        assert_eq!(fitted.center, far.center());
+        let kept = render_view(&far, Vec2::ZERO, 100.0, false, 800, 500);
+        assert_eq!(kept.center, Vec2::ZERO);
+        assert!((kept.scale - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn timed_out_request_that_never_started_is_skipped() {
+        let (req, pending) = ControlRequest::new("engine.execute", json!({}));
+        let r = pending.wait(Duration::from_millis(1));
+        assert_eq!(r, json!({"ok": false, "error": "timeout", "state": "not-run"}));
+        // The app reaches the request after the timeout: it must not run it.
+        assert!(!req.begin());
+    }
+
+    #[test]
+    fn timed_out_request_already_running_may_have_run() {
+        let (req, pending) = ControlRequest::new("engine.execute", json!({}));
+        assert!(req.begin());
+        let r = pending.wait(Duration::from_millis(1));
+        assert_eq!(r, json!({"ok": false, "error": "timeout", "state": "may-have-run"}));
+        // The late result goes nowhere (the receiver is gone); sending it doesn't fail the app.
+        assert!(req.reply.send(json!({"ok": true})).is_err());
+    }
+
+    #[test]
+    fn reply_in_time_is_returned() {
+        let (req, pending) = ControlRequest::new("engine.execute", json!({}));
+        let app = std::thread::spawn(move || {
+            assert!(req.begin());
+            let _ = req.reply.send(json!({"ok": true, "result": 1}));
+        });
+        assert_eq!(pending.wait(Duration::from_secs(30)), json!({"ok": true, "result": 1}));
+        let _ = app.join();
+    }
+
+    #[test]
+    fn reply_sent_right_at_the_timeout_still_counts() {
+        let (req, pending) = ControlRequest::new("engine.execute", json!({}));
+        assert!(req.begin());
+        let _ = req.reply.send(json!({"ok": true}));
+        assert_eq!(pending.wait(Duration::ZERO), json!({"ok": true}));
+    }
+
+    #[test]
+    fn render_reply_has_base64_width_height_and_keeps_old_keys() {
+        let r = render_reply(b"abc", 7, 5, Some("x.png"));
+        assert_eq!(r["pngBase64"], "YWJj");
+        assert_eq!(r["width"], 7);
+        assert_eq!(r["height"], 5);
+        assert_eq!(r["bytes"], 3);
+        assert_eq!(r["path"], "x.png");
+        assert!(render_reply(b"abc", 7, 5, None).get("path").is_none());
     }
 }

@@ -79,7 +79,43 @@ mod native {
             ));
         }
         written.map_err(|e| format!("DWG→DXF: {e}"))?;
-        Ok(out.buf)
+        Ok(add_header_vars(out.buf, &doc.header))
+    }
+
+    /// Header variables the DWG reader fills in but acadrust's DXF writer (0.6.3) leaves out of
+    /// the HEADER section: (name, group code, value).
+    fn unwritten_header_vars(h: &acadrust::document::HeaderVariables) -> [(&'static str, i32, String); 7] {
+        [
+            ("$ANGBASE", 50, h.angle_base.to_string()),
+            ("$ANGDIR", 70, h.angle_direction.to_string()),
+            ("$FILLETRAD", 40, h.fillet_radius.to_string()),
+            ("$CHAMFERA", 40, h.chamfer_distance_a.to_string()),
+            ("$CHAMFERB", 40, h.chamfer_distance_b.to_string()),
+            ("$ELEVATION", 40, h.elevation.to_string()),
+            ("$THICKNESS", 40, h.thickness.to_string()),
+        ]
+    }
+
+    /// Add the [`unwritten_header_vars`] to the HEADER section of acadrust's DXF text, before its
+    /// ENDSEC; a variable the writer already wrote is left alone. Text of another layout than
+    /// acadrust's (`  0\r\nSECTION\r\n  2\r\nHEADER\r\n` … `  0\r\nENDSEC\r\n`) is returned unchanged.
+    fn add_header_vars(mut dxf: Vec<u8>, h: &acadrust::document::HeaderVariables) -> Vec<u8> {
+        const START: &[u8] = b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n";
+        const END: &[u8] = b"\r\n  0\r\nENDSEC\r\n";
+        if !dxf.starts_with(START) {
+            return dxf;
+        }
+        let Some(end) = dxf.windows(END.len()).position(|w| w == END).map(|p| p + 2) else { return dxf };
+        let section = dxf.get(..end).unwrap_or_default();
+        let mut add = String::new();
+        for (name, code, value) in unwritten_header_vars(h) {
+            let written = section.windows(name.len() + 2).any(|w| w.starts_with(name.as_bytes()) && w.ends_with(b"\r\n"));
+            if !written && value.parse::<f64>().is_ok_and(f64::is_finite) {
+                add.push_str(&format!("  9\r\n{name}\r\n{code:>3}\r\n{value}\r\n"));
+            }
+        }
+        dxf.splice(end..end, add.into_bytes());
+        dxf
     }
 
     /// Collects the DXF text and fails the write once it would grow past `limit`.
@@ -104,12 +140,22 @@ mod native {
         }
     }
 
-    /// Convert DXF bytes into a DWG file.
+    /// Oldest DWG version written; older DXF input is written as this version.
+    const MIN_DWG_VERSION: acadrust::DxfVersion = acadrust::DxfVersion::AC1018;
+
+    /// Convert DXF bytes into a DWG file of the DXF's version, and at least AutoCAD 2004
+    /// (AC1018).
     pub fn dxf_to_dwg(dxf: &[u8]) -> Result<Vec<u8>, String> {
         let data = dxf.to_vec();
-        let doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
+        let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
             .map_err(|_| "the DXF→DWG conversion failed".to_string())?
             .map_err(|e| format!("DXF: {e}"))?;
+        // Write at least AutoCAD 2004 (AC1018) DWG: R2000 DWG has no true colours, transparency,
+        // table styles or gradients, and readers can't tell its layouts apart reliably. The DXF
+        // stays R2000; only the DWG is newer.
+        if doc.version < MIN_DWG_VERSION {
+            doc.version = MIN_DWG_VERSION;
+        }
         acadrust::DwgWriter::write_to_vec(&doc).map_err(|e| format!("DWG write: {e}"))
     }
 }
