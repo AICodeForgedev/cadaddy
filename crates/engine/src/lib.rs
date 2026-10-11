@@ -398,6 +398,8 @@ pub struct LastUsed {
     pub rotate_angle: f64,
     /// SCALE factor.
     pub scale_factor: f64,
+    /// MATCHPROP Settings: the properties it copies.
+    pub matchprop: cmd::MatchProps,
     /// MLEADER placement order and Options.
     pub mleader: MLeaderOptions,
     /// MLEADER's block content name (Options > Content type > Block).
@@ -411,6 +413,7 @@ impl Default for LastUsed {
             polygon_circumscribed: false,
             rotate_angle: 0.0,
             scale_factor: 1.0,
+            matchprop: cmd::MatchProps::default(),
             mleader: MLeaderOptions::default(),
             mleader_block: String::new(),
         }

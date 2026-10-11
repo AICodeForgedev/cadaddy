@@ -1,6 +1,9 @@
 //! Properties: per-object property edits, current properties, MATCHPROP, linetypes, units, RENAME.
 
+mod matchprop;
 mod rename;
+
+pub use matchprop::MatchProps;
 
 use cadcraft_color::Color;
 use cadcraft_doc::{EntityKind, Lineweight, Transparency};
@@ -14,7 +17,11 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
         CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>}"),
-        CommandSpec::new("matchprop", "Match Properties", run_matchprop).menu(&["Modify", "Match Properties"]).alias(&["ma", "painter"]).params("{source, targets: [hex]}"),
+        CommandSpec::new("matchprop", "Match Properties", matchprop::run_matchprop)
+            .menu(&["Modify", "Match Properties"])
+            .alias(&["ma", "painter"])
+            .params("{source, targets?: [hex] (default: selection), properties?: [name] | {name: bool} (default: all; names: color, layer, linetype, ltscale, lineweight, transparency, thickness, plotStyle, dimension, text, hatch, polyline, viewport, table, multileader)} → {changed}")
+            .interactive(|_| Ok(Box::new(matchprop::MatchPropM::new()))),
         CommandSpec::new("color", "Color...", run_color).menu(&["Format", "Color..."]).alias(&["col", "colour"]).params("{color: \"ByLayer\" | \"red\" | 1..255 | \"r,g,b\"}"),
         CommandSpec::new("linetype", "Linetype...", run_linetype).menu(&["Format", "Linetype..."]).alias(&["lt", "ltype"]).params("{current?: name, load?: name | \"*\"}"),
         CommandSpec::new("lweight", "Lineweight...", run_lweight).menu(&["Format", "Lineweight..."]).alias(&["lw", "lineweight"]).params("{lineweight: mm | ByLayer}"),
@@ -339,29 +346,6 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         })?;
     }
     Ok(json!({ "changed": hs.len() }))
-}
-
-fn run_matchprop(s: &mut Session, p: &Value) -> Result<Value> {
-    let src =
-        p.get("source").and_then(Value::as_str).and_then(cadcraft_doc::Handle::parse_hex).ok_or_else(|| bad("matchprop", "`source` is required"))?;
-    let tg: Vec<cadcraft_doc::Handle> = p
-        .get("targets")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|v| v.as_str().and_then(cadcraft_doc::Handle::parse_hex)).collect())
-        .unwrap_or_default();
-    let d = s.doc_mut()?;
-    let c = d.entity(src).map(|e| e.common.clone()).ok_or_else(|| bad("matchprop", "no such source"))?;
-    for h in &tg {
-        d.modify_entity(*h, |e| {
-            e.common.layer = c.layer.clone();
-            e.common.color = c.color;
-            e.common.linetype = c.linetype.clone();
-            e.common.lineweight = c.lineweight;
-            e.common.ltscale = c.ltscale;
-            e.common.transparency = c.transparency;
-        })?;
-    }
-    Ok(json!({ "changed": tg.len() }))
 }
 
 fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
