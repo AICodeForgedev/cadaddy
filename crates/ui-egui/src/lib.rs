@@ -77,6 +77,9 @@ pub struct UiState {
     /// "Drafting" or "Modeling".
     pub toolset_tab: String,
     pub collapsed_groups: Vec<String>,
+    /// Tools the user took out of the Tool Sets palette (command ids); each category's gear
+    /// menu puts them back.
+    pub hidden_tools: Vec<String>,
     pub properties_all: bool,
     /// Show an in-window menu bar (platforms without a native menu bar, or on request).
     pub in_window_menu: bool,
@@ -150,6 +153,7 @@ impl Default for UiState {
             system_cursor: std::env::var("CADCRAFT_SYSTEM_CURSOR").is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "off")),
             toolset_tab: "Drafting".into(),
             collapsed_groups: Vec::new(),
+            hidden_tools: Vec::new(),
             properties_all: true,
             in_window_menu: !cfg!(target_os = "macos"),
             start_tab: false,
