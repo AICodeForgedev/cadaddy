@@ -74,15 +74,15 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("pagesetup", "Page Setup Manager...", run_pagesetup)
             .menu(&["File", "Page Setup Manager..."])
             .params(
-                "{layout?: current, paper?: \"A4\"|\"A3\"|\"Letter\"|\"ANSI B\"|…, width?, height? (mm), landscape?, margins?: [l,b,r,t] mm, lineweights?, plotArea?, scale?, scaleToFit?, center?, plotStyleTable?: \"monochrome.ctb\"|\"grayscale.ctb\"|\"default.ctb\"|\"None\"|…, displayPlotStyles?: bool}",
+                "{layout?: current, device?: plotter name (PLOTTERMANAGER) | \"None\", paper?: the device's paper | \"A4\"|\"A3\"|\"Letter\"|\"ANSI B\"|…, width?, height? (mm), landscape?, margins?: [l,b,r,t] mm, lineweights?, plotArea?, scale?, scaleToFit?, center?, plotStyleTable?: \"monochrome.ctb\"|\"grayscale.ctb\"|\"default.ctb\"|\"None\"|…, displayPlotStyles?: bool}",
             ),
-        CommandSpec::new("plot", "Print...", |s, p| run_plot(s, p, "plot"))
+        CommandSpec::new("plot", "Print...", |s, p| run_plot(s, &super::plotters::plot_options(s, p, "plot")?, "plot"))
             .menu(&["File", "Print..."])
             .key("Cmd+P")
             .alias(&["print"])
             .params("{path? (else returns base64 `data`), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", lineweights?: bool, plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]]} (typed or from the menu: the Plot dialog)")
             .noundo(),
-        CommandSpec::new("exportpdf", "Export to PDF...", |s, p| run_plot(s, p, "exportpdf"))
+        CommandSpec::new("exportpdf", "Export to PDF...", |s, p| run_plot(s, &super::plotters::plot_options(s, p, "exportpdf")?, "exportpdf"))
             .menu(&["File", "Export to PDF..."])
             .params("{path? (else returns base64 `data`), layout?, paper?, landscape?, fit?, scale?, lineweights?, plotArea?, window?} (as PLOT)")
             .noundo(),
@@ -94,6 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
     .into_iter()
     .chain(plotstyle::specs())
+    .chain(super::plotters::specs())
     .collect()
 }
 
@@ -620,6 +621,7 @@ fn run_viewport_set(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "pagesetup";
     let keys = [
+        "device",
         "paper",
         "width",
         "height",
@@ -649,10 +651,13 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
             "layouts": d.layouts.iter().map(|l| json!({"name": l.name, "page": serde_json::to_value(&l.page).unwrap_or(Value::Null)})).collect::<Vec<_>>(),
             "papers": cadcraft_render::PAPER_SIZES.iter().map(|p| p.name).collect::<Vec<_>>(),
             "plotStyleTables": cadcraft_doc::BUILTIN_PLOT_STYLE_TABLES,
+            "devices": super::plotters::device_names(),
         }));
     };
     let mut page = s.doc()?.layout(&name).map(|l| l.page.clone()).unwrap_or_default();
-    if let Some(paper) = p.get("paper") {
+    // A plotter's own papers (with their printable areas) come first.
+    let device_paper = super::plotters::page_device(cmd, p, &mut page)?;
+    if let Some(paper) = p.get("paper").filter(|_| !device_paper) {
         let n = paper.as_str().ok_or_else(|| bad(cmd, "`paper` must be a paper name"))?;
         let ps = cadcraft_render::paper_size(n).ok_or_else(|| {
             let known: Vec<&str> = cadcraft_render::PAPER_SIZES.iter().filter_map(|p| p.aliases.first().copied()).collect();

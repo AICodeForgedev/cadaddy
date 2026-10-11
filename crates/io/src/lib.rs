@@ -13,6 +13,7 @@ mod dxf_table;
 mod dxf_write;
 mod dxf_xref;
 pub mod pdf;
+pub mod plotter;
 pub mod svg;
 
 /// Multilines and their styles (MLINE, MLINESTYLE).

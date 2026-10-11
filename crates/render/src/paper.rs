@@ -26,7 +26,7 @@ const fn inch(name: &'static str, aliases: &'static [&'static str], w: f64, h: f
     PaperSize { name, aliases, width_mm: w * 25.4, height_mm: h * 25.4, imperial: true }
 }
 
-/// Common ISO and ANSI/ARCH sheet sizes.
+/// Common ISO (A0–A6, B0–B5) and ANSI/ARCH sheet sizes (ISO 216, ANSI/ASME Y14.1).
 pub const PAPER_SIZES: &[PaperSize] = &[
     iso("ISO A0 (841.00 x 1189.00 MM)", &["A0", "ISO A0"], 841.0, 1189.0),
     iso("ISO A1 (594.00 x 841.00 MM)", &["A1", "ISO A1"], 594.0, 841.0),
@@ -34,6 +34,11 @@ pub const PAPER_SIZES: &[PaperSize] = &[
     iso("ISO A3 (297.00 x 420.00 MM)", &["A3", "ISO A3"], 297.0, 420.0),
     iso("ISO A4 (210.00 x 297.00 MM)", &["A4", "ISO A4"], 210.0, 297.0),
     iso("ISO A5 (148.00 x 210.00 MM)", &["A5", "ISO A5"], 148.0, 210.0),
+    iso("ISO A6 (105.00 x 148.00 MM)", &["A6", "ISO A6"], 105.0, 148.0),
+    iso("ISO B0 (1000.00 x 1414.00 MM)", &["B0", "ISO B0"], 1000.0, 1414.0),
+    iso("ISO B1 (707.00 x 1000.00 MM)", &["B1", "ISO B1"], 707.0, 1000.0),
+    iso("ISO B2 (500.00 x 707.00 MM)", &["B2", "ISO B2"], 500.0, 707.0),
+    iso("ISO B3 (353.00 x 500.00 MM)", &["B3", "ISO B3"], 353.0, 500.0),
     iso("ISO B4 (250.00 x 353.00 MM)", &["B4", "ISO B4"], 250.0, 353.0),
     iso("ISO B5 (176.00 x 250.00 MM)", &["B5", "ISO B5"], 176.0, 250.0),
     inch("ANSI A (8.50 x 11.00 Inches)", &["ANSI A", "Letter", "A-size"], 8.5, 11.0),
@@ -49,6 +54,14 @@ pub const PAPER_SIZES: &[PaperSize] = &[
     inch("ARCH E1 (30.00 x 42.00 Inches)", &["ARCH E1"], 30.0, 42.0),
     inch("ARCH E (36.00 x 48.00 Inches)", &["ARCH E"], 36.0, 48.0),
 ];
+
+impl PaperSize {
+    /// Margins (left, bottom, right, top; mm) of the printable area the built-in plot devices
+    /// give this size: 5 mm on ISO sheets, a quarter inch on inch sheets.
+    pub fn margins_mm(&self) -> [f64; 4] {
+        if self.imperial { [6.35; 4] } else { [5.0; 4] }
+    }
+}
 
 /// Look up a paper size by canonical name or alias (case- and space-insensitive).
 pub fn paper_size(name: &str) -> Option<&'static PaperSize> {

@@ -14,6 +14,7 @@ mod gdt;
 mod header;
 pub mod library;
 mod plotstyle;
+mod plotter;
 mod store;
 mod tables;
 
@@ -28,6 +29,7 @@ pub use extents::{MAX_BLOCK_DEPTH, entity_bounds};
 pub use gdt::*;
 pub use header::{HVal, Header};
 pub use plotstyle::*;
+pub use plotter::*;
 pub use store::EntityStore;
 pub use tables::*;
 

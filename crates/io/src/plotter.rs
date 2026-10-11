@@ -1,0 +1,166 @@
+//! The plot hook the apps install ([`plot`]): PDF, PNG or SVG output of a plotter configuration (`output`), on the
+//! device's paper (`width`/`height`, `margins` in mm) at its `resolution`.
+//!
+//! PDF goes to [`crate::pdf`]. PNG draws the sheet on white paper at the device resolution
+//! (capped at [`MAX_PNG_PIXELS`]), with the plot style table and lineweights as PDF uses them.
+//! SVG shows the sheet of a layout or the model-space extents.
+
+use std::sync::Arc;
+
+use cadcraft_color::Rgb;
+use cadcraft_doc::{Drawing, Space};
+use cadcraft_geom::{Bounds2, Vec2};
+use cadcraft_render::{Sheet, paper, raster};
+use serde_json::Value;
+
+use crate::{IoError, PdfOptions, Result, pdf};
+
+/// Largest PNG plot (pixels); larger sheets are drawn at a lower resolution.
+pub const MAX_PNG_PIXELS: f64 = 40.0e6;
+
+/// Plot `space` with JSON options (the engine's `plot` hook): PDF unless `output` is `png` or
+/// `svg`. `margins: [l, b, r, t]` (mm) replaces a layout's printable area for this plot.
+pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
+    let margins = margins(opts.get("margins"));
+    let with_margins;
+    let d = match (space, margins) {
+        (Space::Paper(n), Some(m)) => {
+            let mut c = d.clone();
+            if let Some(l) = c.layouts.iter_mut().find(|l| l.name.eq_ignore_ascii_case(n)) {
+                l.page.margins_mm = m;
+            }
+            with_margins = c;
+            &with_margins
+        }
+        _ => d,
+    };
+    match opts.get("output").and_then(Value::as_str).map(str::to_ascii_lowercase).as_deref() {
+        None | Some("pdf") => pdf::plot(d, space, opts),
+        Some("png") => png(d, space, opts, margins),
+        Some("svg") => svg(d, space, opts),
+        Some(other) => Err(IoError::Unsupported(other.to_string())),
+    }
+}
+
+/// `[l, b, r, t]` margins in mm (finite, 0–1000), else `None`.
+fn margins(v: Option<&Value>) -> Option<[f64; 4]> {
+    let a: Vec<f64> = v?.as_array()?.iter().filter_map(Value::as_f64).collect();
+    match a[..] {
+        [l, b, r, t] if a.iter().all(|x| x.is_finite() && (0.0..=1000.0).contains(x)) => Some([l, b, r, t]),
+        _ => None,
+    }
+}
+
+/// The sheet a plot draws on, and whether the drawing is fitted to its printable area (model
+/// space, or a layout asked to `fit`).
+fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, margins: Option<[f64; 4]>) -> Result<(Sheet, cadcraft_doc::PageSetup)> {
+    let mut page = pdf::page_for(d, space, o)?;
+    if let (Space::Model, Some(m)) = (space, margins) {
+        page.margins_mm = m;
+    }
+    Ok((Sheet::from_page(&page, paper::paper_unit_mm(d)), page))
+}
+
+/// Paper units per drawing unit fitting `b` into the printable area (or the `scale` option).
+fn fit_scale(b: &Bounds2, sheet: &Sheet, o: &PdfOptions) -> f64 {
+    if let Some(s) = o.scale.filter(|s| s.is_finite() && *s > 0.0)
+        && o.fit == Some(false)
+    {
+        return s;
+    }
+    if b.is_empty() {
+        return 1.0;
+    }
+    let s = (sheet.printable.width() / b.width().max(1e-12)).min(sheet.printable.height() / b.height().max(1e-12));
+    if s.is_finite() && s > 0.0 { s } else { 1.0 }
+}
+
+fn png(d: &Drawing, space: &Space, opts: &Value, margins: Option<[f64; 4]>) -> Result<Vec<u8>> {
+    let o = PdfOptions::from_json(opts);
+    let (sheet, page) = sheet(d, space, &o, margins)?;
+    let dpi = opts.get("resolution").and_then(Value::as_f64).filter(|r| r.is_finite()).unwrap_or(300.0).clamp(50.0, 2400.0);
+    // Pixels per paper unit, lowered so the image stays within the caps.
+    let mut k = sheet.unit_mm / 25.4 * dpi;
+    let (w, h) = (sheet.size.x * k, sheet.size.y * k);
+    let shrink = (MAX_PNG_PIXELS / (w * h).max(1.0)).sqrt().min(16384.0 / w.max(h).max(1.0)).min(1.0);
+    if !(shrink.is_finite() && shrink > 0.0) {
+        return Err(IoError::Format("the sheet is too large to plot as an image".into()));
+    }
+    k *= shrink;
+    let px = |v: f64| (v * k).round().clamp(1.0, 16384.0) as u32;
+    let (width, height) = (px(sheet.size.x), px(sheet.size.y));
+    let lineweights = o.lineweights.unwrap_or(match space {
+        Space::Paper(_) => page.lineweights,
+        Space::Model => true,
+    });
+    let table = cadcraft_doc::plot_style_table(d, &page.plot_style_table).map(Arc::new);
+    // Paper units per drawing unit: 1 for a layout at 1:1, the fitted scale for model space.
+    let fit = matches!(space, Space::Model) || o.fit == Some(true);
+    let window = o.window.filter(|w| matches!(space, Space::Model) && !w.is_empty());
+    let est = if fit { fit_scale(&window.unwrap_or_else(|| d.extents(space)), &sheet, &o) } else { 1.0 };
+    // Chord tolerance: a fifth of a pixel.
+    let tolerance = (0.2 / (k * est)).max(1e-9);
+    let ropts = cadcraft_render::Options { tolerance, lineweights, plot_style_table: table, ..cadcraft_render::Options::default() };
+    let list = cadcraft_render::build_plot(d, space, &ropts);
+    let half = Vec2::new(f64::from(width), f64::from(height)) / (2.0 * k);
+    let view = if fit {
+        let b = window.unwrap_or(list.bounds);
+        let s = fit_scale(&b, &sheet, &o);
+        let from = if b.is_empty() { Vec2::ZERO } else { b.center() };
+        // The world point at the image centre, with `from` on the printable area's centre.
+        let center = from + (half - sheet.printable.center()) / s;
+        raster::View { center, scale: k * s, width, height }
+    } else {
+        raster::View { center: half, scale: k, width, height }
+    };
+    let px_per_mm = if lineweights { (k / sheet.unit_mm) as f32 } else { 0.0 };
+    let ro = raster::RasterOptions { background: Rgb(255, 255, 255), hairline: 1.0, px_per_mm, antialias: true };
+    raster::render_png(&list, &view, &ro).ok_or_else(|| IoError::Format("render failed".into()))
+}
+
+fn svg(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
+    let o = PdfOptions::from_json(opts);
+    let window = match space {
+        Space::Paper(_) => Some(sheet(d, space, &o, None)?.0.bounds()),
+        Space::Model => o.window.filter(|w| !w.is_empty()),
+    };
+    Ok(crate::svg::export_window(d, space, window).into_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadcraft_doc::{Common, EntityKind, Line};
+    use cadcraft_geom::Vec3;
+    use serde_json::json;
+
+    /// Width and height from a PNG's header.
+    fn png_size(b: &[u8]) -> (u32, u32) {
+        let be = |i: usize| u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        (be(16), be(20))
+    }
+
+    fn drawing() -> Drawing {
+        let mut d = Drawing::new_metric();
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(100.0, 50.0, 0.0) })).unwrap();
+        d
+    }
+
+    #[test]
+    fn png_and_svg_devices() {
+        let d = drawing();
+        let a4 = json!({"output": "png", "resolution": 100, "width": 210, "height": 297, "landscape": true, "margins": [5, 5, 5, 5]});
+        let png = plot(&d, &Space::Model, &a4).unwrap();
+        assert_eq!(png_size(&png), (1169, 827), "A4 landscape at 100 dpi");
+        // Huge sheets at a high resolution are capped.
+        let big = json!({"output": "png", "resolution": 2400, "width": 841, "height": 1189});
+        let (w, h) = png_size(&plot(&d, &Space::Model, &big).unwrap());
+        assert!(f64::from(w) * f64::from(h) <= MAX_PNG_PIXELS * 1.01 && w <= 16384 && h <= 16384);
+        let layout = Space::Paper(d.layouts[0].name.clone());
+        let svg = String::from_utf8(plot(&d, &layout, &json!({"output": "svg"})).unwrap()).unwrap();
+        assert!(svg.starts_with("<svg"));
+        assert!(plot(&d, &layout, &json!({"output": "png", "resolution": f64::NAN, "margins": [1, 2, 3]})).is_ok());
+        assert!(plot(&d, &Space::Model, &json!({"output": "dwf"})).is_err());
+        assert!(plot(&d, &Space::Model, &json!({})).unwrap().starts_with(b"%PDF"));
+    }
+}

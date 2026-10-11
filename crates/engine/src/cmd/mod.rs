@@ -27,6 +27,7 @@ mod modify2;
 mod mtext_opts;
 mod overkill;
 mod pline_opts;
+pub mod plotters;
 mod props;
 pub use props::MatchProps;
 mod qselect;
