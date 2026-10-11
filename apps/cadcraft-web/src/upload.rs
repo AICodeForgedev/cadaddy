@@ -96,6 +96,20 @@ impl Inbox {
         });
     }
 
+    /// A file read elsewhere (sent by the page embedding CADCraft): opened on the next frame like
+    /// a picked file, or refused when too large to open.
+    pub fn receive(&self, name: String, bytes: Vec<u8>) {
+        match CadApp::open_size_error(&name, bytes.len() as u64) {
+            Some(e) => self.push(Err(e)),
+            None => self.push(Ok((name, bytes))),
+        }
+    }
+
+    /// A file from elsewhere refused before it was read (`error` says why).
+    pub fn refuse(&self, error: String) {
+        self.push(Err(error));
+    }
+
     fn push(&self, upload: Upload) {
         let mut files = self.files.take();
         files.push(upload);
