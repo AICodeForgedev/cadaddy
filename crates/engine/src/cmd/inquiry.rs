@@ -43,9 +43,16 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("entities", "Query Entities", run_entities)
             .params("{type?, layer?, window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
             .noundo(),
-        CommandSpec::new("count", "Count", run_count)
+        CommandSpec::new("countlist", "Count List", count::run_countlist)
+            .params("{space?: all (default)|current|model|<layout>, nested?: bool} → per-block counts, as COUNT")
+            .noundo(),
+        CommandSpec::new("counttable", "Count Table", count::run_counttable)
+            .params("{at: [x,y], space?: current (default)|model|all|<layout>, nested?: bool} → {handle}: a table of the block counts")
+            .interactive(|_| Ok(count::table_machine())),
+        CommandSpec::new("count", "Count", count::run_count)
             .menu(&["Tools", "Count"])
-            .params("{block?} → {blocks: {name: n}} | {block, count}, plus a `message` line")
+            .params(count::PARAMS)
+            .interactive(|_| Ok(count::machine()))
             .noundo(),
     ];
     v.extend(regions::specs());
@@ -335,31 +342,7 @@ fn run_entities(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "count": matches.len(), "returned": page.len(), "offset": offset, "entities": page }))
 }
 
-fn run_count(s: &mut Session, p: &Value) -> Result<Value> {
-    let d = s.doc()?;
-    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
-    for e in d.model.iter() {
-        if let EntityKind::Insert(i) = &e.kind {
-            *counts.entry(i.block.clone()).or_default() += 1;
-        }
-    }
-    // `message` is what the command line shows when COUNT is typed or chosen from the menu.
-    if let Some(b) = str_param(p, "block") {
-        let n = counts.get(b).copied().unwrap_or(0);
-        return Ok(json!({ "block": b, "count": n, "message": format!("Block {b}: {n} in model space.") }));
-    }
-    let message = if counts.is_empty() {
-        "No block references in model space.".to_string()
-    } else {
-        let mut m = String::from("Block references in model space:");
-        for (name, n) in &counts {
-            m.push_str(&format!("\n  {name}: {n}"));
-        }
-        m.push_str(&format!("\n  Total: {}", counts.values().sum::<usize>()));
-        m
-    };
-    Ok(json!({ "blocks": counts, "message": message }))
-}
+mod count;
 
 #[derive(Default)]
 struct DistM {
