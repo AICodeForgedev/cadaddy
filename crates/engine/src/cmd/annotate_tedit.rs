@@ -15,6 +15,11 @@ pub(super) struct TEditM {
 }
 
 impl TEditM {
+    /// Align Text > Angle: select the dimension (or use the preselected one), then ask for the angle.
+    pub(super) fn angle() -> Self {
+        Self { dim: None, asking_angle: true }
+    }
+
     fn run(&self, s: &mut Session, mut p: Value) -> Result<Step> {
         let Some(h) = self.dim else { return Ok(Step::Cancel) };
         if let Some(o) = p.as_object_mut() {

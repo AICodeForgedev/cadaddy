@@ -49,3 +49,22 @@ fn dimtedit_moves_justifies_rotates_and_homes_typed_text() {
     assert!(s.running.is_none());
     assert_eq!(the_dim(&s).overrides.get("textJust").and_then(|v| v.as_i64()), Some(0));
 }
+
+#[test]
+fn align_text_angle_menu_entry_asks_for_the_angle() {
+    let mut s = Session::new();
+    s.script("dimlinear 0,0 10,0 5,3\n").unwrap();
+    let h = s.doc().unwrap().model.iter().find(|e| matches!(e.kind, EntityKind::Dimension(_))).unwrap().handle;
+    // With the dimension preselected, the menu entry (started with no parameters) asks for the angle.
+    s.set_selection(vec![h]);
+    s.start("dimtedit.angle").unwrap();
+    assert!(s.prompt_text().contains("Specify angle for dimension text"), "{}", s.prompt_text());
+    s.script("30\n").unwrap();
+    assert!(s.running.is_none());
+    assert!((the_dim(&s).text_rotation - 30f64.to_radians()).abs() < 1e-9);
+
+    // Without a selection it asks for the dimension first.
+    s.set_selection(vec![]);
+    s.start("dimtedit.angle").unwrap();
+    assert!(s.prompt_text().contains("Select dimension"), "{}", s.prompt_text());
+}

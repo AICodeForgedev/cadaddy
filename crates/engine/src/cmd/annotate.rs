@@ -94,7 +94,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("dimtedit.home", "Home", |s, p| run_tedit(s, p, "home")).menu(&["Dimension", "Align Text", "Home"]).params("{handles?}"),
         CommandSpec::new("dimtedit.angle", "Angle", |s, p| run_tedit(s, p, "angle"))
             .menu(&["Dimension", "Align Text", "Angle"])
-            .params("{handles?, angle: degrees}"),
+            .params("{handles?, angle: degrees}")
+            .interactive(|_| Ok(Box::new(tedit::TEditM::angle()))),
         CommandSpec::new("dimtedit.left", "Left", |s, p| run_tedit(s, p, "left")).menu(&["Dimension", "Align Text", "Left"]).params("{handles?}"),
         CommandSpec::new("dimtedit.center", "Center", |s, p| run_tedit(s, p, "center"))
             .menu(&["Dimension", "Align Text", "Center"])
