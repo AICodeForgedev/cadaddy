@@ -48,6 +48,33 @@ fn blank(s: &str) -> bool {
     s.replace("\\~", " ").chars().all(char::is_whitespace)
 }
 
+/// Approximate box of an MTEXT, from its attachment point, width and line count.
+fn mtext_box(t: &crate::MText) -> Bounds2 {
+    let lines = t.contents.split("\\P").count().max(1);
+    let longest = t.contents.split("\\P").map(|l| l.chars().count()).max().unwrap_or(1);
+    let mut w = if t.width > 0.0 { t.width } else { t.height * 0.8 * longest as f64 };
+    let mut h = t.height * 1.66 * lines as f64;
+    if let Some(c) = t.columns.as_ref().filter(|_| t.width > 0.0) {
+        // Columns side by side, the text flowing down each in turn.
+        w = c.total_width(t.width);
+        h = if c.max_height() > 0.0 { c.max_height() } else { h };
+    }
+    let (dx, dy) = match t.attach {
+        2 | 5 | 8 => (-w / 2.0, 0.0),
+        3 | 6 | 9 => (-w, 0.0),
+        _ => (0.0, 0.0),
+    };
+    let top = match t.attach {
+        4..=6 => h / 2.0,
+        7..=9 => h,
+        _ => 0.0,
+    };
+    let o = t.insert.xy();
+    let pts = [Vec2::new(dx, top + dy), Vec2::new(dx + w, top + dy), Vec2::new(dx + w, top - h + dy), Vec2::new(dx, top - h + dy)]
+        .map(|p| o + p.rotate(t.rotation));
+    Bounds2::from_points(pts)
+}
+
 pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
     // A top-level annotative object measures as it draws at the current annotation scale.
     if depth == 0 {
@@ -71,31 +98,7 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
         EntityKind::MText(t) if blank(&t.contents) => Bounds2::EMPTY,
         EntityKind::Text(t) => text_box(t, t.value.chars().count()),
         EntityKind::AttDef(a) => text_box(&a.text, a.tag.chars().count()),
-        EntityKind::MText(t) => {
-            let lines = t.contents.split("\\P").count().max(1);
-            let longest = t.contents.split("\\P").map(|l| l.chars().count()).max().unwrap_or(1);
-            let mut w = if t.width > 0.0 { t.width } else { t.height * 0.8 * longest as f64 };
-            let mut h = t.height * 1.66 * lines as f64;
-            if let Some(c) = t.columns.as_ref().filter(|_| t.width > 0.0) {
-                // Columns side by side, the text flowing down each in turn.
-                w = c.total_width(t.width);
-                h = if c.max_height() > 0.0 { c.max_height() } else { h };
-            }
-            let (dx, dy) = match t.attach {
-                2 | 5 | 8 => (-w / 2.0, 0.0),
-                3 | 6 | 9 => (-w, 0.0),
-                _ => (0.0, 0.0),
-            };
-            let top = match t.attach {
-                4..=6 => h / 2.0,
-                7..=9 => h,
-                _ => 0.0,
-            };
-            let o = t.insert.xy();
-            let pts = [Vec2::new(dx, top + dy), Vec2::new(dx + w, top + dy), Vec2::new(dx + w, top - h + dy), Vec2::new(dx, top - h + dy)]
-                .map(|p| o + p.rotate(t.rotation));
-            Bounds2::from_points(pts)
-        }
+        EntityKind::MText(t) => mtext_box(t),
         EntityKind::Insert(ins) => {
             if depth >= MAX_BLOCK_DEPTH {
                 return Bounds2::EMPTY;
@@ -164,6 +167,9 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
             let mut b = Bounds2::from_points(m.leaders.iter().flatten().map(|v| v.xy()).chain(std::iter::once(m.landing.xy())));
             if let Some(t) = &m.text {
                 b.add(t.insert.xy());
+                if !blank(&t.contents) {
+                    b = b.union(&mtext_box(t));
+                }
             }
             if let Some(ins) = &m.block {
                 let be = Entity { handle: e.handle, common: e.common.clone(), kind: EntityKind::Insert(ins.clone()) };
@@ -306,5 +312,37 @@ mod tests {
         let a = crate::Attrib { tag: "HELLO".into(), text, invisible: false, constant: false, prompt: String::new(), props: Default::default() };
         let b = bounds(EntityKind::AttDef(a));
         assert!(b.min.x <= -4.4 && b.max.x < 1.0);
+    }
+
+    #[test]
+    fn multileader_text_is_inside_its_bounds() {
+        let mtext = crate::MText {
+            insert: Vec3::new(25.45, 0.0, 0.0),
+            height: 5.0,
+            width: 0.0,
+            attach: 4,
+            rotation: 0.0,
+            style: "Standard".into(),
+            contents: "N".into(),
+            line_spacing: 1.0,
+            line_spacing_exact: false,
+            columns: None,
+        };
+        let ml = crate::MLeader {
+            leaders: vec![vec![Vec3::new(0.0, 0.0, 0.0)]],
+            landing: Vec3::new(25.0, 0.0, 0.0),
+            dogleg: 0.45,
+            text: Some(mtext.clone()),
+            style: "Standard".into(),
+            arrow_size: 1.0,
+            spline: false,
+            block: None,
+        };
+        let b = bounds(EntityKind::MLeader(ml.clone()));
+        // The glyph spans x 25.45..28.78, y -2.5..2.5.
+        assert!(b.min.x <= 0.0 && b.max.x >= 28.79 && b.min.y <= -2.5 && b.max.y >= 2.5);
+        let mut empty = ml;
+        empty.text = Some(crate::MText { contents: " ".into(), ..mtext });
+        assert!(bounds(EntityKind::MLeader(empty)).max.x < 26.0);
     }
 }
