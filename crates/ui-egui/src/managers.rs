@@ -501,7 +501,8 @@ fn page_setup(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action 
             });
             let Some((_, name, page)) = layouts.iter().find(|l| l.1 == sel) else { return };
             right.label(RichText::new(format!("Page setup of {name}")).strong());
-            let rows = PageRows { areas: &["layout", "extents", "display", "limits"], scale: true, center: true };
+            // Layout plotting always prints the whole sheet, so only that area is offered.
+            let rows = PageRows { areas: &["layout"], scale: true, center: true };
             egui::Grid::new("pagesetup_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(right, |ui| {
                 if let Some((k, v)) = page_rows(ui, egui::Id::new(("pagesetup", name)), page, &rows) {
                     action = Some(("pagesetup", json!({ "layout": name, k: v })));
