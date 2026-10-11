@@ -75,7 +75,10 @@ name. Detail and gaps: [file-format-parity.md](file-format-parity.md).
   `engine.execute`, `ui.screenshot`, `ui.render` …); see [control-protocol.md](control-protocol.md).
 - **MCP:** `cadcraft-cli mcp` (headless) or `--connect HOST:PORT` (drive the running app); see
   [mcp.md](mcp.md).
-- **CLI:** `cadcraft-cli run --script … --export out.png` for headless batch work.
+- **CLI:** `cadcraft-cli run --script … --export out.png` for headless batch work. A reader that
+  closes stdout early (`… | head`) drops the rest of the output but keeps the work — later
+  commands, `--save`, `--export` — and the exit status still reports failures; another stdout
+  write error is reported and makes it 1.
 
 ## Safety
 

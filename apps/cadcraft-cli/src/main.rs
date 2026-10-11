@@ -11,12 +11,48 @@
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// `println!` that doesn't panic when stdout is closed (`cadcraft-cli commands | head`) with
+/// "failed printing to stdout: Broken pipe (os error 32)". Once stdout has failed, later output is
+/// dropped and the work goes on: see `stdout_failed`.
+macro_rules! outln {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        if !$crate::stdout_gone() {
+            if let Err(e) = writeln!(std::io::stdout(), $($arg)*) {
+                $crate::stdout_failed(e);
+            }
+        }
+    }};
+}
+
 use std::process::ExitCode;
 
 use cadcraft_engine::doc::Space;
 use cadcraft_engine::geom::{Bounds2, Vec2};
 use cadcraft_engine::{Session, View};
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set once a write to stdout has failed; later output is dropped.
+static STDOUT_GONE: AtomicBool = AtomicBool::new(false);
+/// Set when stdout failed for a reason other than a closed reader: the exit status becomes 1.
+static STDOUT_ERROR: AtomicBool = AtomicBool::new(false);
+
+fn stdout_gone() -> bool {
+    STDOUT_GONE.load(Ordering::Relaxed)
+}
+
+/// stdout went away. The program doesn't stop there: the rest of `run` (later `--cmd` results,
+/// `--save`, `--export`) still happens, so `cadcraft-cli run … --save out.dxf | head` keeps the
+/// drawing. A reader that stopped early (a closed pipe) is not an error, as in ripgrep; any other
+/// write error is reported and makes the exit status 1.
+fn stdout_failed(e: std::io::Error) {
+    if STDOUT_GONE.swap(true, Ordering::Relaxed) || e.kind() == std::io::ErrorKind::BrokenPipe {
+        return;
+    }
+    eprintln!("cadcraft-cli: can't write to stdout: {e}");
+    STDOUT_ERROR.store(true, Ordering::Relaxed);
+}
 
 const USAGE: &str = "usage:
   cadcraft-cli info FILE.dxf
@@ -172,7 +208,7 @@ fn info(path: &str) -> Result<(), String> {
     let mut s = Session::empty();
     open(&mut s, path)?;
     let v = s.execute("drawing.inspect", &json!({ "entities": false })).map_err(|e| e.to_string())?;
-    println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+    outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
     Ok(())
 }
 
@@ -277,7 +313,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 let params: Value = serde_json::from_str(json).map_err(|e| format!("--cmd {id}: {e}"))?;
                 let r = s.execute(id, &params).map_err(|e| e.to_string())?;
                 if !r.is_null() {
-                    println!("{r}");
+                    outln!("{r}");
                 }
             }
         }
@@ -430,10 +466,10 @@ fn perf(args: &[String]) -> Result<(), String> {
     let back = cadcraft_io::read(&bytes, "perf.dxf").map_err(|e| e.to_string())?;
     rows.push(("DXF read".into(), ms(t), format!("{} entities", back.entity_count())));
 
-    println!("{:<40} {:>12}  notes", "operation", "ms");
-    println!("{}", "-".repeat(80));
+    outln!("{:<40} {:>12}  notes", "operation", "ms");
+    outln!("{}", "-".repeat(80));
     for (name, t, note) in rows {
-        println!("{name:<40} {t:>12.2}  {note}");
+        outln!("{name:<40} {t:>12.2}  {note}");
     }
     Ok(())
 }
@@ -521,6 +557,11 @@ mod mcp_args_tests {
 }
 
 fn main() -> ExitCode {
+    let code = cli();
+    if STDOUT_ERROR.load(Ordering::Relaxed) { ExitCode::FAILURE } else { code }
+}
+
+fn cli() -> ExitCode {
     install_io();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest: Vec<String> = args.iter().skip(1).cloned().collect();
@@ -538,11 +579,11 @@ fn main() -> ExitCode {
                 .filter(|c| f.as_ref().is_none_or(|f| c.id.contains(f.as_str()) || c.label.to_ascii_lowercase().contains(f.as_str())))
                 .map(|c| serde_json::to_value(c.info(&s)).unwrap_or_default())
                 .collect();
-            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
         }),
         Some("mcp") => mcp(&rest),
         Some("--version" | "-V") => {
-            println!("cadcraft-cli {}", env!("CARGO_PKG_VERSION"));
+            outln!("cadcraft-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         _ => Err(USAGE.into()),
