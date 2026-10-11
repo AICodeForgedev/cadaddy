@@ -38,6 +38,11 @@ fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         let s = &mut app.session.settings;
         ui.heading(crate::tl!("Snap and Grid"));
         ui.checkbox(&mut s.snapmode, crate::tl!("Snap On (F9)"));
+        // SNAPSTYL: the isometric snap and grid (ISODRAFT).
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut s.isodraft, false, crate::tl!("Rectangular snap"));
+            ui.radio_value(&mut s.isodraft, true, crate::tl!("Isometric snap"));
+        });
         ui.horizontal(|ui| {
             ui.label(crate::tl!("Snap X spacing"));
             ui.add(egui::DragValue::new(&mut s.snapunit.x).speed(0.05).range(0.0001..=1e6));

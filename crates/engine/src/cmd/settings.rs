@@ -5,6 +5,8 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
+pub(super) mod iso;
+
 fn toggle(s: &mut Session, p: &Value, get: fn(&mut crate::Settings) -> &mut bool, name: &str) -> Result<Value> {
     let v = get(&mut s.settings);
     *v = p.get("on").and_then(Value::as_bool).unwrap_or(!*v);
@@ -56,11 +58,19 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(always)
             .noundo()
             .transparent(),
-        CommandSpec::new("isodraft", "Isometric Drafting", |s, p| toggle(s, p, |st| &mut st.isodraft, "Isodraft"))
-            .params("{on?: bool}")
+        CommandSpec::new("isodraft", "Isometric Drafting", iso::run_isodraft)
+            .params("{on?: bool, plane?: \"left\"|\"top\"|\"right\"|\"orthographic\"} (neither: toggle)")
             .enabled(always)
             .noundo()
-            .transparent(),
+            .transparent()
+            .interactive(|_| Ok(Box::new(iso::IsodraftM))),
+        CommandSpec::new("isoplane", "Isometric Plane", iso::run_isoplane)
+            .key("F5")
+            .params("{plane?: \"left\"|\"top\"|\"right\"} (none: the next plane)")
+            .enabled(always)
+            .noundo()
+            .transparent()
+            .interactive(|_| Ok(Box::new(iso::IsoplaneM))),
         CommandSpec::new("transparencydisplay", "Show/Hide Transparency", |s, p| toggle(s, p, |st| &mut st.transparency_display, "Transparency"))
             .params("{on?: bool}")
             .enabled(always)

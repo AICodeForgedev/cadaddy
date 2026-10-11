@@ -361,7 +361,10 @@ pub struct Settings {
     pub cursorsize: f64,
     /// MAXARRAY: the most objects one array command creates (items × selected objects).
     pub maxarray: u64,
+    /// SNAPSTYL 1: isometric snap and grid, ortho and crosshair along the isometric plane's axes.
     pub isodraft: bool,
+    /// SNAPISOPAIR: the current isometric plane (ISOPLANE, F5).
+    pub isoplane: snap::iso::IsoPlane,
     pub annoallvisible: bool,
     pub annoautoscale: bool,
     /// QPMODE: show the Quick Properties palette when objects are selected.
@@ -413,6 +416,7 @@ impl Default for Settings {
             cursorsize: 5.0,
             maxarray: 100_000,
             isodraft: false,
+            isoplane: snap::iso::IsoPlane::Left,
             annoallvisible: true,
             annoautoscale: false,
             qpmode: false,
@@ -1255,7 +1259,7 @@ impl Session {
             {
                 let mut c = self.cursor;
                 if self.settings.orthomode {
-                    c = snap::ortho(base, c);
+                    c = snap::iso::constrain(&self.settings, base, c);
                 }
                 let dir = (c - base).normalized();
                 let dir = if dir == Vec2::ZERO { Vec2::X } else { dir };

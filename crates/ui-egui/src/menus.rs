@@ -517,6 +517,8 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(Modifiers::NONE, Key::F1), "ui.dialog.commands"),
         (sc(Modifiers::NONE, Key::F2), "ui.toggle.history"),
         (sc(Modifiers::NONE, Key::F3), "osnap"),
+        (sc(Modifiers::NONE, Key::F5), "isoplane"),
+        (sc(cmd, Key::E), "isoplane"),
         (sc(Modifiers::NONE, Key::F7), "grid"),
         (sc(Modifiers::NONE, Key::F8), "ortho"),
         (sc(Modifiers::NONE, Key::F9), "snap"),
@@ -538,6 +540,13 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         }
     });
     for id in fire {
+        // ISOPLANE (F5, Ctrl+E) switches the plane without cancelling the active command.
+        if id == "isoplane" {
+            if let Some(m) = app.session.execute(id, &json!({})).ok().and_then(|v| v.get("message").and_then(Value::as_str).map(str::to_string)) {
+                app.session.echo(m);
+            }
+            continue;
+        }
         // Toggles run transparently (they don't cancel the active command).
         let transparent = ["osnap", "grid", "ortho", "snap", "polar", "otrack", "dynmode", "pickstyle"].contains(&id);
         if transparent || id.starts_with("ui.") {

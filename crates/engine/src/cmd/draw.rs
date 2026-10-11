@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("ellipse", "Ellipse", run_ellipse)
             .menu(&["Draw", "Ellipse", "Center"])
             .alias(&["el"])
-            .params("{center, major: [dx,dy], ratio, start?, end? (degrees)}")
+            .params("{center, major: [dx,dy], ratio, start?, end? (degrees)} | {isocircle: {center, radius | diameter, plane?}}")
             .interactive(|_| Ok(Box::new(EllipseM::default()))),
         CommandSpec::new("point", "Point", run_point)
             .menu(&["Draw", "Point", "Single Point"])
@@ -225,6 +225,9 @@ fn run_polygon(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_ellipse(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.get("isocircle").is_some() {
+        return super::settings::iso::run_isocircle(s, p);
+    }
     let c = point_req("ellipse", p, "center")?;
     let m = point_req("ellipse", p, "major")?;
     let ratio = f64_req("ellipse", p, "ratio")?;
@@ -955,6 +958,8 @@ struct EllipseM {
     /// The `Parameter` option: arc start/end values are ellipse parameters, not true angles.
     param: bool,
     start: Option<f64>,
+    /// The Isocircle option (isometric snap style) in progress.
+    iso: Option<super::settings::iso::IsoCircle>,
 }
 
 impl EllipseM {
@@ -1005,7 +1010,7 @@ impl Interactive for EllipseM {
     fn name(&self) -> &'static str {
         "ELLIPSE"
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
+    fn prompt(&self, s: &Session) -> Prompt {
         if let Some(e) = &self.ellipse {
             let msg = match (self.start.is_none(), self.param) {
                 (true, false) => "Specify start angle",
@@ -1015,7 +1020,11 @@ impl Interactive for EllipseM {
             };
             return Prompt::new(msg, Accept::POINT_OR_NUMBER).kw(if self.param { &["Angle"] } else { &["Parameter"] }).base(e.center);
         }
+        if let Some(iso) = &self.iso {
+            return iso.prompt();
+        }
         match (self.center_mode, self.pts.len()) {
+            (false, 0) if s.settings.isodraft => Prompt::new("Specify axis endpoint of ellipse", Accept::POINT).kw(&["Arc", "Center", "Isocircle"]),
             (false, 0) => Prompt::new("Specify axis endpoint of ellipse", Accept::POINT).kw(&["Arc", "Center"]),
             (false, 1) => Prompt::new("Specify other endpoint of axis", Accept::POINT).base_opt(self.pts.first().copied()),
             (true, 0) => Prompt::new("Specify center of ellipse", Accept::POINT),
@@ -1067,7 +1076,14 @@ impl Interactive for EllipseM {
                 }
             }
         }
+        if let Some(iso) = &mut self.iso {
+            return match iso.input(s, i)? {
+                Some(e) => self.place(s, e),
+                None => Ok(Step::Continue),
+            };
+        }
         match i {
+            Input::Keyword(k) if k == "Isocircle" && self.pts.is_empty() => self.iso = Some(Default::default()),
             Input::Keyword(k) if k == "Center" => self.center_mode = true,
             Input::Keyword(k) if k == "Arc" => self.arc_mode = true,
             Input::Keyword(k) if k == "Rotation" && self.pts.len() == 2 => self.rotation = true,
@@ -1103,7 +1119,10 @@ impl Interactive for EllipseM {
         }
         Ok(Step::Continue)
     }
-    fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
+    fn preview(&self, s: &Session, c: Vec2) -> Vec<EntityKind> {
+        if let Some(iso) = &self.iso {
+            return iso.preview(s, c).map(|e| super::settings::iso::ellipse_entity(&e)).into_iter().collect();
+        }
         if self.pts.len() < 2 {
             return self.pts.first().map(|a| vec![line(*a, c)]).unwrap_or_default();
         }

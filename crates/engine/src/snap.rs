@@ -1,6 +1,7 @@
 //! Object snaps (OSNAP), polar tracking and ortho.
 
 mod curves;
+pub mod iso;
 pub mod tracking;
 
 use cadcraft_doc::{Drawing, EntityKind, Insert, MAX_BLOCK_DEPTH, Prim, Space};

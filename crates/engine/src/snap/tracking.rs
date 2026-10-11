@@ -767,6 +767,8 @@ impl crate::Session {
             self.tracking.last = None;
             return CursorSnap { point: h.point, snap: Some(h), track: None, wait };
         }
+        // Isometric snap (SNAPSTYL 1): its lattice in place of the rectangular grid.
+        let (raw, s) = super::iso::grid_snap(&doc, s, raw);
         let mut p = raw;
         if s.snapmode && !s.polarsnap {
             let (origin, angle) = super::grid_frame(&doc);
@@ -787,7 +789,7 @@ impl crate::Session {
         if let Some(b) = q.base
             && s.orthomode
         {
-            p = super::ortho(b, p);
+            p = super::iso::ortho(&self.settings, b, p);
         }
         CursorSnap { point: p, snap: None, track: None, wait }
     }
