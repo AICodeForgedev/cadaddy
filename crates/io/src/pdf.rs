@@ -1,9 +1,9 @@
 //! Vector PDF plotting (PLOT / EXPORTPDF): a minimal PDF writer of our own (pure Rust, no file
 //! access, so it runs on the web too).
 //!
-//! One page per sheet: model-space extents fitted to a sheet, or a layout at 1:1 on its paper
-//! (paper units are millimetres in metric drawings, inches otherwise). Lines are stroked paths
-//! (`m`/`l`/`S`), fills are `f` paths, colours are RGB with colour 7 printing black on white
+//! One page per sheet: model-space extents fitted to a sheet, or a layout at 1:1 (or the given
+//! `scale`) on its paper (paper units are millimetres in metric drawings, inches otherwise).
+//! Lines are stroked paths (`m`/`l`/`S`), fills are `f` paths, colours are RGB with colour 7 printing black on white
 //! paper, and line widths come from lineweights when enabled. The page setup's plot style
 //! table (or the `plotStyleTable` option) sets the printed colours, linetypes and lineweights.
 //!
@@ -318,7 +318,7 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<SheetPage> {
         let from = if b.is_empty() { Vec2::ZERO } else { b.center() };
         Map { from, s, to: sheet.printable.center(), k }
     } else {
-        Map { from: Vec2::ZERO, s: 1.0, to: Vec2::ZERO, k }
+        Map { from: Vec2::ZERO, s, to: Vec2::ZERO, k }
     };
     // Plot style ends, joins and fill patterns at the plot scale (a layout's are already drawn).
     let mut list = list;

@@ -339,7 +339,7 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     let (from, k, to) = if fit || space == Space::Model {
         (if b.is_empty() { Vec2::ZERO } else { b.center() }, plot_scale(&b, &sheet, fit, scale), sheet.printable.center())
     } else {
-        (Vec2::ZERO, 1.0, Vec2::ZERO)
+        (Vec2::ZERO, plot_scale(&b, &sheet, fit, scale), Vec2::ZERO)
     };
     let world = Bounds2::new((Vec2::ZERO - to) / k + from, (sheet.size - to) / k + from);
     if ![world.min.x, world.min.y, world.max.x, world.max.y].iter().all(|v| v.is_finite()) {
@@ -574,6 +574,17 @@ mod tests {
         for p in [json!({ "scale": -1, "fit": false }), json!({ "scale": 1e-300, "fit": false }), json!({ "width": -5 }), json!({ "width": 1e30 })] {
             let _ = s.execute("preview", &p);
         }
+    }
+
+    #[test]
+    fn preview_applies_an_explicit_layout_scale() {
+        let mut s = Session::new();
+        s.execute("layout.set", &json!({ "name": "Layout1" })).unwrap();
+        s.execute("line", &json!({ "points": [[1.0, 1.0], [5.0, 1.0]] })).unwrap();
+        let png = |s: &mut Session, p: Value| s.execute("preview", &p).unwrap()["data"].as_str().unwrap_or_default().to_string();
+        let default = png(&mut s, json!({ "layout": "Layout1", "width": 200 }));
+        assert_eq!(png(&mut s, json!({ "layout": "Layout1", "width": 200, "fit": false, "scale": 1 })), default, "scale 1 is the 1:1 default");
+        assert_ne!(png(&mut s, json!({ "layout": "Layout1", "width": 200, "fit": false, "scale": 0.5 })), default, "scale 0.5 is not 1:1");
     }
 
     #[test]
