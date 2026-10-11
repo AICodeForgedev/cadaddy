@@ -310,6 +310,7 @@
 	Grid spacing	Крок сітки
 	Grip Edit	Редагування ручками
 	Grip Mirror	Дзеркальне відображення ручками
+	Grip Option	Опція ручки
 	Grip Rotate	Поворот ручками
 	Grip Scale	Масштабування ручками
 	Grip Stretch	Розтягування ручками
@@ -1012,3 +1013,8 @@
 	Batch Publish...	Пакетна публікація...
 	Drawing Recovery Manager...	Диспетчер відновлення креслень...
 	Tolerance...	Допуск...
+	Add Vertex	Додати вершину
+	Remove Vertex	Видалити вершину
+	Convert to Arc	Перетворити на дугу
+	Convert to Line	Перетворити на відрізок
+	Stretch Vertex	Розтягнути вершину

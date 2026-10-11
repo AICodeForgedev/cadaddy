@@ -51,7 +51,7 @@ fn base_point_copy_and_undo_make_one_undo_step() {
     s.set_selection(vec![a]);
     let undo = s.state().unwrap().undo.len();
     s.start_grip_edit(&[(a, grip_index(&s, a, 10.0, 0.0))]).unwrap();
-    assert!(s.prompt_text().contains("** STRETCH ** Specify stretch point or [Base point/Copy/Undo/eXit]"), "{}", s.prompt_text());
+    assert!(s.prompt_text().contains("** STRETCH ** Specify stretch point or [Base point/Copy/Undo/Lengthen/eXit]"), "{}", s.prompt_text());
 
     // Base point 0,0, then Copy: each point stretches a new copy by (point - base).
     typed(&mut s, &["B", "0,0", "C", "5,5", "0,5", "0,9"]);
@@ -191,4 +191,137 @@ fn bad_grips_are_errors_not_panics() {
     assert!(s.running.is_none());
     let (p, q) = ends(&s, a);
     assert!(p.is_finite() && q.is_finite());
+}
+
+// ---------------- multifunctional grips ----------------
+
+fn pline(s: &mut Session, pts: &[[f64; 2]], closed: bool) -> Handle {
+    s.execute("pline", &json!({ "vertices": pts, "closed": closed })).unwrap();
+    s.doc().unwrap().model.iter().last().unwrap().handle
+}
+
+fn vertices(s: &Session, h: Handle) -> Vec<(Vec2, f64)> {
+    match &s.doc().unwrap().entity(h).unwrap().kind {
+        EntityKind::LwPolyline(p) => p.vertices.iter().map(|v| (v.p, v.bulge)).collect(),
+        k => panic!("not a polyline: {k:?}"),
+    }
+}
+
+#[test]
+fn polyline_vertex_options() {
+    let mut s = Session::new();
+    let h = pline(&mut s, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false);
+    s.set_selection(vec![h]);
+    let undo = s.state().unwrap().undo.len();
+    s.start_grip_edit(&[(h, grip_index(&s, h, 10.0, 0.0))]).unwrap();
+    assert!(s.prompt_text().contains("[Base point/Copy/Undo/Add vertex/Remove vertex/eXit]"), "{}", s.prompt_text());
+    // Add vertex after the hot vertex.
+    typed(&mut s, &["A"]);
+    assert!(s.prompt_text().contains("** ADD VERTEX ** Specify new vertex point"), "{}", s.prompt_text());
+    typed(&mut s, &["15,5"]);
+    assert!(s.running.is_none());
+    let v: Vec<Vec2> = vertices(&s, h).into_iter().map(|v| v.0).collect();
+    assert_eq!(v.len(), 4);
+    assert!(near(v[2], 15.0, 5.0), "{v:?}");
+    assert_eq!(s.state().unwrap().undo.len(), undo + 1);
+
+    // Remove vertex acts at once.
+    s.start_grip_edit(&[(h, grip_index(&s, h, 15.0, 5.0))]).unwrap();
+    typed(&mut s, &["R"]);
+    assert!(s.running.is_none());
+    assert_eq!(vertices(&s, h).len(), 3);
+
+    // Add vertex from a segment midpoint: the new vertex goes on that segment.
+    s.start_grip_edit(&[(h, grip_index(&s, h, 5.0, 0.0))]).unwrap();
+    typed(&mut s, &["A", "5,-3"]);
+    let v: Vec<Vec2> = vertices(&s, h).into_iter().map(|v| v.0).collect();
+    assert!(v.len() == 4 && near(v[1], 5.0, -3.0), "{v:?}");
+
+    // Enter at an option prompt goes back to STRETCH.
+    s.start_grip_edit(&[(h, 0)]).unwrap();
+    typed(&mut s, &["A", ""]);
+    assert!(s.prompt_text().contains("** STRETCH **"), "{}", s.prompt_text());
+    typed(&mut s, &["X"]);
+    assert_eq!(vertices(&s, h).len(), 4);
+}
+
+#[test]
+fn polyline_segment_converts_to_arc_and_back() {
+    let mut s = Session::new();
+    let h = pline(&mut s, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false);
+    s.set_selection(vec![h]);
+    let mid = grip_index(&s, h, 5.0, 0.0);
+    s.start_grip_edit(&[(h, mid)]).unwrap();
+    assert!(s.prompt_text().contains("Add vertex/conVert to arc/eXit"), "{}", s.prompt_text());
+    typed(&mut s, &["V", "5,3"]);
+    let b = vertices(&s, h)[0].1;
+    assert!(b.abs() > 0.1, "an arc segment: bulge {b}");
+    // The arc's midpoint grip now offers Convert to Line.
+    let g = s.grips_of(h).unwrap();
+    assert!(near(g[mid], 5.0, 3.0), "{g:?}");
+    s.start_grip_edit(&[(h, mid)]).unwrap();
+    assert!(s.prompt_text().contains("conVert to line"), "{}", s.prompt_text());
+    typed(&mut s, &["V"]);
+    assert!(s.running.is_none());
+    assert_eq!(vertices(&s, h)[0].1, 0.0);
+}
+
+#[test]
+fn line_and_arc_lengthen_and_radius() {
+    let mut s = Session::new();
+    let a = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+    s.set_selection(vec![a]);
+    s.start_grip_edit(&[(a, 2)]).unwrap();
+    assert!(s.prompt_text().contains("Undo/Lengthen/eXit"), "{}", s.prompt_text());
+    // A picked point is projected onto the line.
+    typed(&mut s, &["L", "15,3"]);
+    assert!(near(ends(&s, a).1, 15.0, 0.0), "{:?}", ends(&s, a));
+    // A typed value is the change in length; from the start grip.
+    s.start_grip_edit(&[(a, 0)]).unwrap();
+    typed(&mut s, &["L", "-5"]);
+    assert!(near(ends(&s, a).0, 5.0, 0.0), "{:?}", ends(&s, a));
+    // Shortening past the other end is refused (re-prompts).
+    s.start_grip_edit(&[(a, 2)]).unwrap();
+    typed(&mut s, &["L", "-50"]);
+    assert!(s.running.is_some());
+    s.cancel();
+    assert!(near(ends(&s, a).1, 15.0, 0.0));
+
+    // Arc: Radius from the midpoint grip, Lengthen from an end grip.
+    s.execute("arc", &json!({ "center": [0, 0], "radius": 5, "start": 0, "end": 90 })).unwrap();
+    let arc = s.doc().unwrap().model.iter().last().unwrap().handle;
+    s.set_selection(vec![arc]);
+    s.start_grip_edit(&[(arc, 1)]).unwrap();
+    assert!(s.prompt_text().contains("Undo/Radius/eXit"), "{}", s.prompt_text());
+    typed(&mut s, &["R", "8"]);
+    s.start_grip_edit(&[(arc, 2)]).unwrap();
+    typed(&mut s, &["L", "-1,0.0001"]);
+    match &s.doc().unwrap().entity(arc).unwrap().kind {
+        EntityKind::Arc(k) => {
+            assert!((k.radius - 8.0).abs() < 1e-9, "{k:?}");
+            assert!((k.end.to_degrees() - 180.0).abs() < 0.01, "{k:?}");
+        }
+        k => panic!("{k:?}"),
+    }
+}
+
+#[test]
+fn grip_option_json_form() {
+    let mut s = Session::new();
+    let h = pline(&mut s, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false);
+    s.execute("grip.option", &json!({ "handle": h.hex(), "index": 0, "option": "addVertex", "to": [-5, 0] })).unwrap();
+    assert_eq!(vertices(&s, h).len(), 4);
+    s.execute("grip.option", &json!({ "handle": h.hex(), "index": 0, "option": "removeVertex" })).unwrap();
+    assert_eq!(vertices(&s, h).len(), 3);
+    // Options that don't apply, unknown options and hostile values are errors, not panics.
+    for p in [
+        json!({ "handle": h.hex(), "index": 0, "option": "radius", "value": 3 }),
+        json!({ "handle": h.hex(), "index": 0, "option": "explode" }),
+        json!({ "handle": h.hex(), "index": 99, "option": "addVertex", "to": [1, 1] }),
+        json!({ "handle": h.hex(), "index": 1, "option": "toArc", "to": [1e308, 1e308] }),
+        json!({ "handle": h.hex(), "index": 1, "option": "toArc" }),
+        json!({ "index": 1, "option": "toLine" }),
+    ] {
+        assert!(s.execute("grip.option", &p).is_err(), "{p}");
+    }
 }

@@ -15,7 +15,7 @@ use super::gripcmds::stretch_grips;
 use super::helpers::line;
 use super::machines::number;
 use super::modify::transform_entities;
-use crate::grips::{GripMode, mode_matrix};
+use crate::grips::{GripAction, GripMode, grip_action, grip_actions, mode_matrix};
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Running, Session, Step};
 
 /// At most this many grips are hot at once (input-derived: a cap on the work per edit).
@@ -34,6 +34,8 @@ enum Ask {
     RefSecond(Vec2),
     /// Reference: the new angle/length (the reference value is known).
     RefNew(f64),
+    /// A multifunctional grip option that takes a point or value (Add Vertex, Lengthen…).
+    Action(GripAction),
 }
 
 pub(crate) struct GripEdit {
@@ -158,6 +160,52 @@ impl GripEdit {
         }
     }
 
+    /// The multifunctional options of the hot grip (one hot grip, in STRETCH mode).
+    fn actions(&self, s: &Session) -> Vec<GripAction> {
+        match self.hot.as_slice() {
+            [(h, i)] if self.mode == GripMode::Stretch => {
+                s.doc().ok().and_then(|d| d.entity(*h)).map(|e| grip_actions(&e.kind, *i)).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// The object after the multifunctional `action` with the point `to` or value `value`.
+    fn acted(&self, s: &Session, action: GripAction, to: Option<Vec2>, value: Option<f64>) -> Option<(Handle, EntityKind)> {
+        let &(h, i) = self.hot.first()?;
+        let e = s.doc().ok()?.entity(h)?;
+        grip_action(&e.kind, i, action, to, value).map(|k| (h, k))
+    }
+
+    /// Apply a multifunctional option; the grip edit ends.
+    fn act(&mut self, s: &mut Session, action: GripAction, to: Option<Vec2>, value: Option<f64>) -> Result<Step> {
+        if self.hot.first().is_some_and(|(h, _)| super::curves::is_locked(s, *h)) {
+            return Err(other("The object is on a locked layer."));
+        }
+        let (h, k) = self.acted(s, action, to, value).ok_or_else(|| other("That would make a degenerate object."))?;
+        s.doc_mut()?.modify_entity(h, |e| e.kind = k)?;
+        Ok(Step::Done)
+    }
+
+    fn action_input(&mut self, s: &mut Session, action: GripAction, i: Input) -> Result<Step> {
+        match i {
+            Input::Point(p) => self.act(s, action, Some(p), None),
+            Input::Deferred(d) => self.act(s, action, Some(d.at), None),
+            Input::Text(t) if matches!(action, GripAction::Lengthen | GripAction::Radius) => {
+                let v = number(&t).filter(|v| v.is_finite()).ok_or_else(|| other("Requires a number or point."))?;
+                self.act(s, action, None, Some(v))
+            }
+            Input::Keyword(k) if k == "eXit" => Ok(Step::Done),
+            // Enter goes back to STRETCH.
+            Input::Enter => {
+                self.ask = Ask::Mode;
+                s.echo(self.label());
+                Ok(Step::Continue)
+            }
+            _ => Err(other("Requires a point.")),
+        }
+    }
+
     /// Edit with the dragged point `to` (STRETCH) or the transform `m` (the other modes).
     fn edit(&mut self, s: &mut Session, to: Vec2, m: Option<Mat3>) -> Result<Step> {
         let before = s.state()?.doc.clone();
@@ -204,7 +252,15 @@ impl GripEdit {
                     Ok(Step::Continue)
                 }
                 "eXit" => Ok(Step::Done),
-                _ => Ok(Step::Continue),
+                other_kw => match self.actions(s).into_iter().find(|a| a.keyword() == other_kw) {
+                    Some(a) if a.needs_point() => {
+                        self.ask = Ask::Action(a);
+                        s.echo(a.title());
+                        Ok(Step::Continue)
+                    }
+                    Some(a) => self.act(s, a, None, None),
+                    None => Ok(Step::Continue),
+                },
             },
             // Enter cycles the modes; after copies it ends the edit.
             Input::Enter => {
@@ -282,7 +338,7 @@ impl Interactive for GripEdit {
         Ok(Step::Continue)
     }
 
-    fn prompt(&self, _s: &Session) -> Prompt {
+    fn prompt(&self, s: &Session) -> Prompt {
         if self.picking {
             let msg = if self.hot.is_empty() { "Select grip" } else { "Select grip or <edit the hot grips>" };
             return Prompt::new(msg, Accept::POINT);
@@ -295,6 +351,16 @@ impl Interactive for GripEdit {
             Ask::RefSecond(a) => Prompt::new("Specify second point", Accept::POINT).base(a),
             Ask::RefNew(_) if self.mode == GripMode::Rotate => Prompt::new("Specify new angle", Accept::POINT_OR_NUMBER).base(base),
             Ask::RefNew(_) => Prompt::new("Specify new length", Accept::POINT_OR_NUMBER).base(base),
+            Ask::Action(a) => {
+                let (msg, accept) = match a {
+                    GripAction::AddVertex => ("Specify new vertex point", Accept::POINT),
+                    GripAction::ToArc => ("Specify a point on the arc", Accept::POINT),
+                    GripAction::Lengthen => ("Specify end point or length change", Accept::POINT_OR_NUMBER),
+                    GripAction::Radius => ("Specify radius", Accept::POINT_OR_NUMBER),
+                    GripAction::RemoveVertex | GripAction::ToLine => ("", Accept::POINT),
+                };
+                Prompt::new(format!("{} {msg}", a.title()), accept).kw(&["eXit"]).base(base)
+            }
             Ask::Mode => {
                 let (msg, accept, kw): (&str, Accept, &[&str]) = match self.mode {
                     GripMode::Stretch => ("** STRETCH ** Specify stretch point", Accept::POINT, &["Base point", "Copy", "Undo", "eXit"]),
@@ -307,7 +373,13 @@ impl Interactive for GripEdit {
                     }
                     GripMode::Mirror => ("** MIRROR ** Specify second point", Accept::POINT, &["Base point", "Copy", "Undo", "eXit"]),
                 };
-                Prompt::new(msg, accept).kw(kw).base(base)
+                let mut p = Prompt::new(msg, accept).kw(kw).base(base);
+                // A single hot grip's multifunctional options (Add vertex, Lengthen…) before eXit.
+                let at = p.keywords.len().saturating_sub(1);
+                for (n, a) in self.actions(s).into_iter().enumerate() {
+                    p.keywords.insert(at + n, a.keyword().to_string());
+                }
+                p
             }
         }
     }
@@ -348,6 +420,7 @@ impl Interactive for GripEdit {
                 }
                 _ => Err(other("Requires a point.")),
             },
+            Ask::Action(a) => self.action_input(s, a, i),
             _ => self.reference_input(s, i),
         }
     }
@@ -357,6 +430,11 @@ impl Interactive for GripEdit {
             return Vec::new();
         }
         let base = match self.ask {
+            Ask::Action(a) => {
+                let mut out: Vec<EntityKind> = self.acted(s, a, Some(c), None).map(|(_, k)| k).into_iter().collect();
+                out.push(line(self.base, c));
+                return out;
+            }
             Ask::Mode | Ask::RefNew(_) => self.base,
             Ask::RefSecond(a) => return vec![line(a, c)],
             Ask::Base | Ask::RefFirst => return Vec::new(),

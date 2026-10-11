@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::curves;
 use super::*;
-use crate::grips::{GripMode, mode_matrix, stretch_grip};
+use crate::grips::{GripAction, GripMode, grip_action, mode_matrix, stretch_grip};
 use crate::{EngineError, Result, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -21,6 +21,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("grip.scale", "Grip Scale", run_grip_scale).params("{handles?, base | baseHandle+index, factor | to, copy?}"),
         CommandSpec::new("grip.mirror", "Grip Mirror", run_grip_mirror)
             .params("{handles?, base | baseHandle+index, to (second mirror point), copy?}"),
+        CommandSpec::new("grip.option", "Grip Option", run_grip_option).params(
+            "{handle, index, option: addVertex|removeVertex|toArc|toLine|lengthen|radius, to? (point), value? (lengthen: length change; radius)}",
+        ),
         CommandSpec::new("grip", "Grip Edit", run_grip)
             .params("interactive: select grips, then the grip modes with [Base point/Copy/Undo/Reference/eXit]; JSON: use grip.stretch/move/rotate/scale/mirror")
             .interactive(super::griphot::factory),
@@ -115,6 +118,27 @@ fn run_grip_stretch(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "no grip could be stretched (locked, missing, or the result would be degenerate)"));
     }
     Ok(json!({ "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
+}
+
+/// A multifunctional grip option (polyline Add/Remove Vertex, Convert to Arc/Line; line and arc
+/// Lengthen; arc Radius), as the grip menu runs it.
+fn run_grip_option(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "grip.option";
+    let h = curves::handle_param(p, "handle").ok_or_else(|| bad(cmd, "`handle` is required"))?;
+    let i = index_param(cmd, p)?;
+    let action: GripAction = p
+        .get("option")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .ok_or_else(|| bad(cmd, "`option` must be addVertex, removeVertex, toArc, toLine, lengthen or radius"))?;
+    if curves::is_locked(s, h) {
+        return Err(EngineError::Other("The object is on a locked layer.".into()));
+    }
+    let e = curves::entity(s, h)?;
+    let value = p.get("value").and_then(Value::as_f64);
+    let k = grip_action(&e.kind, i, action, point_param(p, "to"), value)
+        .ok_or_else(|| bad(cmd, "that option doesn't apply to this grip, or the result would be degenerate"))?;
+    s.doc_mut()?.modify_entity(h, |e| e.kind = k)?;
+    Ok(json!({ "handle": h.hex() }))
 }
 
 fn run_grip(_s: &mut Session, _p: &Value) -> Result<Value> {

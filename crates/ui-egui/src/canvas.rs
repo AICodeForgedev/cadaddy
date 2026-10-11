@@ -69,6 +69,8 @@ pub struct CanvasState {
     pub hot_grips: Vec<(Handle, usize)>,
     /// A GRIP edit was running last frame (its grips go cold when it ends).
     grip_editing: bool,
+    /// The grip whose menu (Stretch, Add Vertex, Lengthen…) a right-click opened.
+    grip_menu: Option<(Handle, usize)>,
     /// Zoom to extents once the canvas size is known (after opening a drawing).
     pub zoom_pending: bool,
     pub build_ms: f64,
@@ -736,7 +738,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if inside && pressed_secondary && !idle && !app.canvas.snap_menu {
         let _ = app.session.input(Input::Enter);
     }
-    if idle || app.canvas.snap_menu {
+    // Right-click on a grip with options (polyline vertex, line end…) opens the grip menu.
+    if inside && pressed_secondary && idle && !app.canvas.snap_menu {
+        app.canvas.grip_menu = grip_at(app, &xf, hover_pos).filter(|g| !grip_options(app, *g).is_empty());
+    }
+    if idle && !app.canvas.snap_menu && app.canvas.grip_menu.is_some() {
+        grip_menu(app, &resp);
+    } else if idle || app.canvas.snap_menu {
         crate::context_menu::show(app, &resp);
     }
 
@@ -1203,6 +1211,48 @@ fn click_grip(app: &mut CadApp, g: (Handle, usize), shift: bool) {
     hot.insert(0, g);
     let hs = hot.clone();
     if let Err(e) = app.session.start_grip_edit(&hs) {
+        app.canvas.hot_grips.clear();
+        app.session.echo(e.to_string());
+    }
+}
+
+/// The multifunctional options of grip `g` (Add Vertex, Lengthen…; empty: Stretch only).
+fn grip_options(app: &CadApp, (h, i): (Handle, usize)) -> Vec<cadcraft_engine::grips::GripAction> {
+    let Ok(st) = app.session.state() else { return Vec::new() };
+    st.doc.entity(h).map(|e| cadcraft_engine::grips::grip_actions(&e.kind, i)).unwrap_or_default()
+}
+
+/// The menu of a multifunctional grip: Stretch and its options. A choice makes the grip hot and
+/// runs the option at the grip prompt, as typing its keyword would.
+fn grip_menu(app: &mut CadApp, resp: &egui::Response) {
+    let Some(g) = app.canvas.grip_menu else { return };
+    let options = grip_options(app, g);
+    let mut chosen: Option<Option<cadcraft_engine::grips::GripAction>> = None;
+    let open = resp
+        .context_menu(|ui| {
+            let vertex = options.contains(&cadcraft_engine::grips::GripAction::RemoveVertex);
+            if ui.button(crate::i18n::t(if vertex { "Stretch Vertex" } else { "Stretch" })).clicked() {
+                chosen = Some(None);
+                ui.close();
+            }
+            for a in &options {
+                if ui.button(crate::i18n::t(a.label())).clicked() {
+                    chosen = Some(Some(*a));
+                    ui.close();
+                }
+            }
+        })
+        .is_some();
+    if !open || chosen.is_some() {
+        app.canvas.grip_menu = None;
+    }
+    let Some(choice) = chosen else { return };
+    app.canvas.hot_grips = vec![g];
+    let r = app.session.start_grip_edit(&[g]).and_then(|()| match choice {
+        Some(a) => app.session.input(Input::Keyword(a.keyword().to_string())),
+        None => Ok(()),
+    });
+    if let Err(e) = r {
         app.canvas.hot_grips.clear();
         app.session.echo(e.to_string());
     }
