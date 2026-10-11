@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (right-to-left drawing text and Arabic-script shaping, #287) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (German catalog landed: second non-English language, per-language plural rules) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How far CADCraft's interface and drawing text are from AutoCAD's languages. Summarised in
 [ROADMAP.md](../ROADMAP.md#languages); work items in [gaps.md](gaps.md#localization).
@@ -23,7 +23,8 @@ shaping and right-to-left text through TrueType, vertical SHX text styles.
 - **A display-time string catalog** (`crates/ui-egui/src/i18n/`, landed with #36): a TSV per
   language (context, English source, translation, `@plural` rows), Edit → Interface Language with
   Auto (system language), live switching, a saved choice, and tests for coverage, placeholders
-  and plurals ([localization.md](localization.md)). The Ukrainian catalog has **936 rows**,
+  and plurals ([localization.md](localization.md)). The Ukrainian and German catalogs have
+  **989 rows** each,
   covering menus, command labels, tool groups and tooltips, the Start page, tabs, status
   controls, object snaps, drafting prompts, property labels and dialogs. Engine diagnostics,
   CLI/MCP responses and command history stay English, and uncatalogued text falls back to
@@ -44,7 +45,7 @@ shaping and right-to-left text through TrueType, vertical SHX text styles.
 
 Order and columns from craftrules' progress-docs standard. Every UI percentage is **measured**
 from the catalogs (0 rows for every language without a catalog file). Hours are **estimated**:
-about 3–5 h per language for an Opus 5.5 agent to translate the ~940 catalog rows and fix layout,
+about 3–5 h per language for an Opus 5.5 agent to translate the ~990 catalog rows and fix layout,
 plus native review by a human; extending the catalog to the remaining English-only strings
 (engine diagnostics, uncatalogued text) is about 4–6 h, counted once in the first row.
 
@@ -59,23 +60,24 @@ plus native review by a human; extending the catalog to the remaining English-on
 | Portuguese | pt | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
 | Indonesian | id | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
 | Japanese | ja | 0 (0%) | 0% | CJK glyphs render; IME pending; no vertical text | no | none | 4–6 h |
-| German | de | 0 (0%) | 0% | Latin: yes (long strings will need layout checks) | no | none | 3–5 h |
+| German | de | 989 catalog rows (≈ 100% of the catalog; ≈ 80% of all UI strings, estimated: engine diagnostics and uncatalogued text stay English) | dialogs and tooltips yes; command reference searchable in German | Latin: yes (bundled egui fonts cover ä ö ü Ä Ö Ü ß; long strings will need layout checks) | no native review | partial | 1–2 h |
 | Korean | ko | 0 (0%) | 0% | Hangul renders; macOS Korean IME fixes pending (#118, #119) | no | none | 4–6 h |
 | Vietnamese | vi | 0 (0%) | 0% | Latin with stacked diacritics: renders per code point, untested | no | none | 3–5 h |
-| Ukrainian | uk | 936 catalog rows (≈ 100% of the catalog; ≈ 80% of all UI strings, estimated: engine diagnostics and uncatalogued text stay English) | dialogs and tooltips yes; command reference searchable in Ukrainian | Cyrillic: yes (bundled egui fonts) | translated by a contributor; no second review | partial | 2–4 h |
+| Ukrainian | uk | 989 catalog rows (≈ 100% of the catalog; ≈ 80% of all UI strings, estimated: engine diagnostics and uncatalogued text stay English) | dialogs and tooltips yes; command reference searchable in Ukrainian | Cyrillic: yes (bundled egui fonts) | translated by a contributor; no second review | partial | 2–4 h |
 
-Other languages shipped: Ukrainian (partial). AutoCAD for Mac ships 7 non-English languages
-(zh-Hans, es, fr, ja, de, ko, it); CADCraft ships none of those, and Ukrainian, which AutoCAD
-for Mac doesn't ship.
+Other languages shipped: Ukrainian, Brazilian Portuguese and German (all partial). AutoCAD for Mac ships 7
+non-English languages (zh-Hans, es, fr, ja, de, ko, it); of those, CADCraft now ships German,
+and additionally Ukrainian, which AutoCAD for Mac doesn't ship.
 
-**Total to put all twelve at `full`:** about 60–100 Opus 5.5 hours (catalog extension 4–6 h,
-eleven translations 35–55 h, complex-script shaping and RTL 30–45 h), plus native-speaker review for
+**Total to put all twelve at `full`:** about 55–95 Opus 5.5 hours (catalog extension 4–6 h,
+ten translations 30–50 h, complex-script shaping and RTL 30–45 h), plus native-speaker review for
 each language, which needs humans. Translations parallelise fully once the catalog exists.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | German catalog landed: `de` preference and catalog, per-language plural rules; non-English languages 1 → 2; total hours 60–100 → 55–95 |
 | 2026-10-10 | minor | Right-to-left drawing text: bidi and Arabic-script shaping in TEXT and MTEXT (#287) |
 | 2026-10-10 | minor | Ukrainian catalog landed on main (#36): catalog infrastructure exists, Ukrainian partial; total hours 70–110 → 60–100 |
 | 2026-10-10 | major | First localization measurement against AutoCAD 2027 for Mac's bundle localizations |

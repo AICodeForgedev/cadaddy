@@ -1,6 +1,8 @@
 # Interface languages
 
 Choose **Edit → Interface Language** and select **Auto (system language)**, **English**,
+**Українська**, or **Deutsch**. The interface updates without restarting, including the native
+macOS menus.
 **Українська**, or **Português (Brasil)**. The interface updates without restarting, including the native macOS menus.
 The choice is saved with the other interface preferences (`cadcraft.prefs`, beside the theme):
 eframe storage on the desktop, browser local storage on the web. Installations without a saved
@@ -8,6 +10,10 @@ choice use Auto.
 
 Auto uses the first supported language in the operating system's preferred locales, or the
 browser's `navigator.languages` on the web. Ukrainian tags such as `uk-UA` and `uk_UA.UTF-8`
+resolve to `uk`, German tags such as `de-DE` and `de_AT.UTF-8` resolve to `de`; unsupported
+languages fall back to English. Set `CADCRAFT_LOCALE=uk-UA` to
+override the desktop's locale for a launch. An explicit saved English, Ukrainian or German
+choice takes precedence over that override.
 resolve to `uk`, and Portuguese tags such as `pt-BR` and `pt_BR.UTF-8` resolve to `pt-BR`;
 unsupported languages fall back to English. Set `CADCRAFT_LOCALE=uk-UA` to
 override the desktop's locale for a launch. An explicit saved English, Ukrainian or Brazilian Portuguese choice
@@ -20,11 +26,17 @@ Automation can select the language through the existing control channel:
 ```
 
 The `ui.set` method also accepts `{"interfaceLanguage":"uk"}`. Supported values are `auto`,
+`en`, `uk`, and `de`; invalid values are rejected without changing the current selection.
+Resetting palettes keeps the language choice.
 `en`, `uk`, and `pt-BR`; invalid values are rejected without changing the current selection. Resetting
 palettes keeps the language choice.
 
 ## Translation coverage
 
+Ukrainian and German cover command and menu labels, tool groups and tooltips, the Start page,
+file and model-space tabs, status controls, object snaps, drafting prompts, property labels,
+dialogs, and the About window's controls. The command reference can be searched by English
+command ID, English label, or translated label.
 The Ukrainian and Brazilian Portuguese catalogs cover command and menu labels, tool groups and tooltips, the Start page, file and
 model-space tabs, status controls, object snaps, drafting prompts, property labels, dialogs,
 and the About window's controls. The command reference can be searched by English command
@@ -37,8 +49,9 @@ by the engine. CLI/MCP/control responses, engine diagnostics and command history
 English. Uncatalogued text also falls back to English. Number formatting and the operating
 system's own file-picker controls follow the existing behavior.
 
-The bundled egui fonts cover Ukrainian, including `Ґґ Єє Іі Її`; the translation adds no font
-assets and works on the web without system fonts.
+The bundled egui fonts cover Ukrainian, including `Ґґ Єє Іі Її`, and German, including
+`ÄÖÜ äöü ß`; the translations add no font
+assets and work on the web without system fonts.
 
 ## Adding translations
 
@@ -47,8 +60,12 @@ The implementation follows the display-time catalog pattern used by
 [PdfCraft #106](https://github.com/storytold/pdfcraft/pull/106), and
 [FilmCraft #238](https://github.com/storytold/filmcraft/pull/238). Its code is local to CADCraft.
 
+- `crates/ui-egui/src/i18n/uk.tsv` and `crates/ui-egui/src/i18n/de.tsv` are UTF-8 with three
+  tab-separated columns:
 - `crates/ui-egui/src/i18n/uk.tsv` and `pt_br.tsv` are UTF-8 with three tab-separated columns:
   `context`, `English source`, and `translation`. Ordinary labels have an empty context.
+  `@plural` entries hold Ukrainian `one|few|many` forms for integer counts; German uses
+  `one|other|other` (singular/plural only, so the third form repeats the plural).
   `@plural` entries hold the language's plural forms for integer counts: Ukrainian
   `one|few|many`, Brazilian Portuguese `one|other` (0 and 1 are `one`).
 - Register a new catalog in `i18n::LANGUAGES`, add its preference variant and code/name,
