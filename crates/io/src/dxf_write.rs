@@ -549,6 +549,36 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.p(11, f.to3(0.0));
             }
         }
+        EntityKind::Helix(h) => {
+            // A cubic spline through points on the helix, then the helix data (DXF Reference).
+            w.s(0, "HELIX");
+            common(w, e, owner, paper, "AcDbSpline");
+            let (s, z) = h.spline3();
+            w.i(70, 0);
+            w.i(71, s.degree as i64);
+            w.i(72, s.knots.len() as i64);
+            w.i(73, s.control.len() as i64);
+            w.i(74, 0);
+            w.f(42, 1e-10);
+            w.f(43, 1e-10);
+            for k in &s.knots {
+                w.f(40, *k);
+            }
+            for (c, z) in s.control.iter().zip(&z) {
+                w.p(10, c.to3(*z));
+            }
+            w.s(100, "AcDbHelix");
+            w.i(90, 29);
+            w.i(91, 63);
+            w.p(10, h.center);
+            w.p(11, h.start_point());
+            w.p(12, Vec3::Z);
+            w.f(40, h.base_radius);
+            w.f(41, h.turns);
+            w.f(42, h.turn_height());
+            w.i(290, i64::from(h.ccw));
+            w.i(280, h.constrain.to_dxf());
+        }
         EntityKind::Ray(r) | EntityKind::XLine(r) => {
             let ray = matches!(e.kind, EntityKind::Ray(_));
             w.s(0, if ray { "RAY" } else { "XLINE" });
@@ -1564,6 +1594,9 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     ];
     if !cx.tables.is_empty() {
         classes.push(("ACAD_TABLE", "AcDbTable", 1025, true));
+    }
+    if every.iter().any(|e| matches!(e.kind, EntityKind::Helix(_))) {
+        classes.push(("HELIX", "AcDbHelix", 4095, true));
     }
     if !cx.assoc.is_empty() {
         classes.push(("DIMASSOC", "AcDbDimAssoc", 0, false));

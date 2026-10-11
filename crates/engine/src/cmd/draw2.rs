@@ -2,7 +2,7 @@
 //! options, DIVIDE/MEASURE, REVCLOUD, WIPEOUT, XLINE options, 3DPOLY, MLINE, HELIX, spline by
 //! control vertices, CENTERMARK and CENTERLINE. Each has a JSON form and a prompt sequence.
 
-use cadcraft_doc::{EntityKind, Handle, Point, Polyline3d, RayLine, Wipeout};
+use cadcraft_doc::{EntityKind, Handle, Helix, HelixConstrain, Point, Polyline3d, RayLine, Wipeout};
 use cadcraft_geom::{Arc, Circle, Ellipse, Line, PolyVertex, Polyline, Spline, TAU, Vec2, Vec3, norm_angle, shoelace};
 use serde_json::{Value, json};
 
@@ -117,7 +117,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(Poly3dM::default()))),
         CommandSpec::new("helix", "Helix", run_helix)
             .menu(&["Draw", "Helix"])
-            .params("{center, baseRadius, topRadius?, height?, turns?, ccw?} (3D polyline approximation)")
+            .params("{center, baseRadius, topRadius?, height?, turns?, ccw?, startAngle? (degrees)} → {handle}")
             .interactive(|_| Ok(Box::new(HelixM::default()))),
         CommandSpec::new("spline.cv", "Control Vertices", run_spline_cv)
             .menu(&["Draw", "Spline", "Control Vertices"])
@@ -1892,19 +1892,10 @@ impl Interactive for Poly3dM {
 // HELIX (3D polyline approximation)
 // =====================================================================================
 
-pub(crate) fn helix_points(c: Vec2, rb: f64, rt: f64, height: f64, turns: f64, ccw: bool, a0: f64) -> Vec<Vec3> {
-    let turns = turns.clamp(1e-3, 500.0);
-    let n = ((turns * 36.0).ceil() as usize).clamp(8, MAX_GEN);
-    let sign = if ccw { 1.0 } else { -1.0 };
-    (0..=n)
-        .map(|i| {
-            let t = i as f64 / n as f64;
-            let a = a0 + sign * TAU * turns * t;
-            let r = rb + (rt - rb) * t;
-            let p = Vec2::polar(c, r, a);
-            Vec3::new(p.x, p.y, height * t)
-        })
-        .collect()
+/// A helix entity (base centre `c`, radii, height, turns, twist, start angle).
+fn helix_kind(c: Vec2, rb: f64, rt: f64, height: f64, turns: f64, ccw: bool, a0: f64) -> EntityKind {
+    let h = Helix { center: c.to3(0.0), base_radius: rb, top_radius: rt, height, turns, start_angle: a0, ccw, constrain: HelixConstrain::Height };
+    EntityKind::Helix(h.sanitized())
 }
 
 fn run_helix(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1915,8 +1906,11 @@ fn run_helix(s: &mut Session, p: &Value) -> Result<Value> {
     if !(rb > 0.0 && rt >= 0.0 && turns > 0.0 && turns <= 500.0) {
         return Err(bad("helix", "radii must be positive and turns in (0, 500]"));
     }
-    let pts = helix_points(c, rb, rt, f64_or(p, "height", 1.0), turns, bool_or(p, "ccw", true), f64_or(p, "startAngle", 0.0).to_radians());
-    added(s.add_entity(EntityKind::Polyline3d(Polyline3d { points: pts, closed: false }))?)
+    let height = f64_or(p, "height", 1.0);
+    if height.abs() > 1e12 || rb > 1e12 || rt > 1e12 {
+        return Err(bad("helix", "sizes are out of range"));
+    }
+    added(s.add_entity(helix_kind(c, rb, rt, height, turns, bool_or(p, "ccw", true), f64_or(p, "startAngle", 0.0).to_radians()))?)
 }
 
 #[derive(Default)]
@@ -1938,8 +1932,10 @@ impl HelixM {
     fn create(&self, s: &mut Session, height: f64) -> Result<Step> {
         let (Some(c), Some(rb)) = (self.center, self.rb) else { return Ok(Step::Cancel) };
         let rt = self.rt.unwrap_or(rb);
-        let pts = helix_points(c, rb, rt, height, self.turns(), !self.cw, self.start.unwrap_or(0.0));
-        s.add_entity(EntityKind::Polyline3d(Polyline3d { points: pts, closed: false }))?;
+        if !height.is_finite() || height.abs() > 1e12 {
+            return Err(other("Requires a distance."));
+        }
+        s.add_entity(helix_kind(c, rb, rt, height, self.turns(), !self.cw, self.start.unwrap_or(0.0)))?;
         Ok(Step::Done)
     }
 }
@@ -2067,8 +2063,7 @@ impl Interactive for HelixM {
         match (self.center, self.rb, self.rt) {
             (Some(ct), None, _) => vec![circle(ct, ct.dist(c))],
             (Some(ct), Some(rb), None) => {
-                let pts = helix_points(ct, rb, ct.dist(c), 0.0, self.turns(), !self.cw, self.start.unwrap_or(0.0));
-                vec![EntityKind::Polyline3d(Polyline3d { points: pts, closed: false })]
+                vec![helix_kind(ct, rb, ct.dist(c), 0.0, self.turns(), !self.cw, self.start.unwrap_or(0.0))]
             }
             _ => Vec::new(),
         }

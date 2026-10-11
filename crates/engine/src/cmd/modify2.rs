@@ -1402,6 +1402,7 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
             z(&mut e.center);
             z(&mut e.major);
         }
+        EntityKind::Helix(h) => *k = EntityKind::Spline(h.spline()),
         EntityKind::LwPolyline(p) => p.elevation = 0.0,
         EntityKind::Polyline3d(p) => {
             *k = lwpoly(p.points.iter().map(|q| PolyVertex::new(q.xy())).collect(), p.closed);

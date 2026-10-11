@@ -285,6 +285,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             }
             EntityKind::Spline(sp)
         }
+        "HELIX" => EntityKind::Helix(helix(tags)),
         "RAY" => EntityKind::Ray(RayLine { base: t.p(10), dir: t.p(11) }),
         "XLINE" => EntityKind::XLine(RayLine { base: t.p(10), dir: t.p(11) }),
         "TEXT" => EntityKind::Text(text_from(&t)),
@@ -1985,4 +1986,49 @@ fn layout_view(tags: &[Tag]) -> Option<(Vec2, f64)> {
     let list = crate::dxf_ext::xdata_list(crate::dxf_ext::xdata(tags, crate::dxf_ext::APP), "PSVIEW");
     let g = |c: i32| list.iter().find(|t| t.code == c).map(Tag::f64).filter(|v| v.is_finite());
     Some((Vec2::new(g(1010)?, g(1020)?), g(1040)?))
+}
+
+/// A HELIX (DXF Reference): the axis base point, start point, axis, radius, turns, turn height,
+/// handedness and constraint after the AcDbHelix marker; the top radius is how far the end of its
+/// spline (AcDbSpline: the last control point, else fit point) lies from the axis.
+fn helix(tags: &[Tag]) -> Helix {
+    let hs = tags.iter().position(|t| t.code == 100 && t.str() == "AcDbHelix").unwrap_or(tags.len());
+    let ss = tags.iter().position(|t| t.code == 100 && t.str() == "AcDbSpline").unwrap_or(0).min(hs);
+    let spline = tags.get(ss..hs).unwrap_or(&[]);
+    let t = T(tags.get(hs..).unwrap_or(&[]));
+    // The last point of the spline (3D) with group `code`.
+    let last = |code: i32| {
+        let i = spline.iter().rposition(|g| g.code == code)?;
+        let f = |c: i32| spline.get(i..).and_then(|r| r.iter().find(|g| g.code == c)).map(Tag::f64).unwrap_or(0.0);
+        Some(Vec3::new(f(code), f(code + 10), f(code + 20)))
+    };
+    let center = t.p(10);
+    let start = t.p(11);
+    let axis = t.p(12);
+    let axis = if axis.is_finite() && axis.len() > 1e-12 { axis.normalized() } else { Vec3::Z };
+    // Distance from the axis.
+    let radius = |p: Vec3| {
+        let v = Vec3::new(p.x - center.x, p.y - center.y, p.z - center.z);
+        let along = v.dot(axis);
+        Vec3::new(v.x - axis.x * along, v.y - axis.y * along, v.z - axis.z * along).len()
+    };
+    let base_radius = t.f(40).filter(|r| r.is_finite() && *r >= 0.0).unwrap_or_else(|| radius(start));
+    let turns = t.fd(41, 1.0);
+    let end = last(10).or_else(|| last(11));
+    let height = match (t.f(42), end) {
+        (Some(th), _) if th.is_finite() => th * turns,
+        (_, Some(e)) => e.z - center.z,
+        _ => 0.0,
+    };
+    Helix {
+        center,
+        base_radius,
+        top_radius: end.map(radius).unwrap_or(base_radius),
+        height,
+        turns,
+        start_angle: center.xy().angle_to(start.xy()),
+        ccw: t.i(290).unwrap_or(1) != 0,
+        constrain: HelixConstrain::from_dxf(t.i(280).unwrap_or(2)),
+    }
+    .sanitized()
 }

@@ -184,6 +184,19 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
                 *sp = sp.refit(&fit, sp.closed);
             }
         }
+        // Centre, base radius (and start angle), top radius.
+        EntityKind::Helix(h) => match index {
+            0 => return Some(translated(kind, delta)),
+            1 => {
+                let r = h.center.xy().dist(to);
+                if r <= EPS {
+                    return None;
+                }
+                h.base_radius = r;
+                h.start_angle = h.center.xy().angle_to(to);
+            }
+            _ => h.top_radius = h.center.xy().dist(to),
+        },
         EntityKind::Ray(r) | EntityKind::XLine(r) => {
             if index == 0 {
                 return Some(translated(kind, delta));

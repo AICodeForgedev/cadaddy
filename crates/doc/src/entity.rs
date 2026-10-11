@@ -244,6 +244,9 @@ fn one() -> f64 {
 fn standard() -> String {
     "Standard".into()
 }
+
+mod helix;
+pub use helix::*;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MText {
@@ -723,6 +726,7 @@ pub enum EntityKind {
     LwPolyline(LwPolyline),
     Polyline3d(Polyline3d),
     Spline(GSpline),
+    Helix(Helix),
     Ray(RayLine),
     XLine(RayLine),
     Text(Text),
@@ -775,6 +779,7 @@ impl EntityKind {
             EntityKind::LwPolyline(_) => "Polyline",
             EntityKind::Polyline3d(_) => "3D Polyline",
             EntityKind::Spline(_) => "Spline",
+            EntityKind::Helix(_) => "Helix",
             EntityKind::Ray(_) => "Ray",
             EntityKind::XLine(_) => "Xline",
             EntityKind::Text(_) => "Text",
@@ -808,6 +813,7 @@ impl EntityKind {
             EntityKind::LwPolyline(_) => "LWPOLYLINE",
             EntityKind::Polyline3d(_) => "POLYLINE",
             EntityKind::Spline(_) => "SPLINE",
+            EntityKind::Helix(_) => "HELIX",
             EntityKind::Ray(_) => "RAY",
             EntityKind::XLine(_) => "XLINE",
             EntityKind::Text(_) => "TEXT",
@@ -857,6 +863,7 @@ impl EntityKind {
                 v
             }
             EntityKind::Spline(s) => vec![Prim::Spline(s.clone())],
+            EntityKind::Helix(h) => vec![Prim::Spline(h.spline())],
             EntityKind::Ray(r) => vec![Prim::Infinite { base: r.base.xy(), dir: r.dir.xy().normalized(), ray: true }],
             EntityKind::XLine(r) => vec![Prim::Infinite { base: r.base.xy(), dir: r.dir.xy().normalized(), ray: false }],
             EntityKind::Solid(s) | EntityKind::Trace(s) => {
@@ -973,6 +980,16 @@ impl EntityKind {
             }
             EntityKind::Polyline3d(p) => p.points.iter_mut().for_each(t3),
             EntityKind::Spline(sp) => sp.transform(m),
+            EntityKind::Helix(h) => {
+                let sp = m.apply(h.start_point().xy());
+                t3(&mut h.center);
+                h.base_radius *= s;
+                h.top_radius *= s;
+                h.height *= s;
+                h.start_angle = h.center.xy().angle_to(sp);
+                // Mirrored, the twist turns the other way.
+                h.ccw ^= mirror;
+            }
             EntityKind::Ray(r) | EntityKind::XLine(r) => {
                 t3(&mut r.base);
                 r.dir = m.apply_vec(r.dir.xy()).normalized().to3(0.0);
@@ -1115,6 +1132,7 @@ impl EntityKind {
                     s.fit.clone()
                 }
             }
+            EntityKind::Helix(h) => vec![h.center.xy(), h.start_point().xy(), h.end_point().xy()],
             EntityKind::Ray(r) | EntityKind::XLine(r) => vec![r.base.xy(), r.base.xy() + r.dir.xy()],
             EntityKind::Text(t) => vec![t.justify_point()],
             EntityKind::MText(t) => vec![t.insert.xy()],

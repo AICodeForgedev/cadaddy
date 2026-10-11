@@ -531,9 +531,9 @@ fn helix_json_and_command_line() {
     let mut s = Session::new();
     s.execute("helix", &json!({"center": [0, 0], "baseRadius": 2, "topRadius": 1, "height": 6, "turns": 2})).unwrap();
     match last(&s) {
-        EntityKind::Polyline3d(p) => {
-            assert!(near(p.points[0].xy(), 2.0, 0.0));
-            let top = p.points.last().unwrap();
+        EntityKind::Helix(h) => {
+            assert!(near(h.start_point().xy(), 2.0, 0.0));
+            let top = h.end_point();
             assert!((top.z - 6.0).abs() < 1e-9 && near(top.xy(), 1.0, 0.0));
         }
         k => panic!("{k:?}"),
@@ -542,10 +542,10 @@ fn helix_json_and_command_line() {
     s.cmdline("helix 0,0 1 2 t 4 w cw 5").unwrap();
     assert!(s.running.is_none(), "{}", s.prompt_text());
     match last(&s) {
-        EntityKind::Polyline3d(p) => {
-            let top = p.points.last().unwrap();
+        EntityKind::Helix(h) => {
+            let top = h.end_point();
             assert!((top.z - 5.0).abs() < 1e-9 && near(top.xy(), 2.0, 0.0));
-            assert!(p.points[1].y < 0.0, "clockwise twist");
+            assert!(!h.ccw && h.point_at(0.05).y < 0.0, "clockwise twist");
         }
         k => panic!("{k:?}"),
     }
