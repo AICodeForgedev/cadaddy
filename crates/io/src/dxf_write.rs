@@ -1555,6 +1555,9 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     // The drawing's own next handle: table records and objects are numbered above it, so
     // reading it back (instead of $HANDSEED) keeps their handles across saves (#495).
     xrecords.push((dxf_ext::HANDSEED_KEY, w.h(), vec![format!("{:X}", d.handseed)]));
+    if let Some(name) = d.header.get("CMLEADERSTYLE").and_then(HVal::as_str) {
+        xrecords.push((dxf_ext::MLEADER_STYLE_KEY, w.h(), vec![name.to_string()]));
+    }
     if let Some(chunks) = dxf_ext::constraint_chunks(&d.constraints, &d.parametric) {
         xrecords.push((dxf_ext::CONSTRAINTS_KEY, w.h(), chunks));
     }
@@ -1601,11 +1604,6 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
         w.p(10, ext.max.to3(0.0));
     }
     header_vars(&mut w, d);
-    // The current multileader style (an R2007 variable; older readers skip it).
-    if let Some(name) = d.header.get("CMLEADERSTYLE").and_then(HVal::as_str) {
-        w.s(9, "$CMLEADERSTYLE");
-        w.s(2, name);
-    }
     let seed_pos = w.t.len();
     w.s(9, "$HANDSEED");
     w.s(5, "0");
@@ -2255,8 +2253,43 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
         *t = Tag::s(5, seed);
     }
     crate::dxf_raw::finish(&mut w.t, d);
+    add_class_instance_counts(&mut w.t);
     mark_xrefs(&mut w.t, d);
     w.t
+}
+
+/// Write DXF Reference group 91 on every CLASS record. Count records after `dxf_raw::finish`
+/// restores foreign classes and objects so every class gets its actual instance count.
+fn add_class_instance_counts(tags: &mut Vec<Tag>) {
+    let mut counts: HashMap<String, i64> = HashMap::new();
+    for t in tags.iter().filter(|t| t.code == 0) {
+        let kind = t.str();
+        if kind != "CLASS" {
+            *counts.entry(kind.to_ascii_uppercase()).or_default() += 1;
+        }
+    }
+
+    let mut start = 0;
+    while start < tags.len() {
+        if tags.get(start).is_none_or(|t| t.code != 0 || t.str() != "CLASS") {
+            start += 1;
+            continue;
+        }
+        let end = tags[start + 1..].iter().position(|t| t.code == 0).map_or(tags.len(), |i| start + 1 + i);
+        let name = tags[start + 1..end].iter().find(|t| t.code == 1).map(Tag::str).unwrap_or_default().to_ascii_uppercase();
+        let count = counts.get(&name).copied().unwrap_or(0);
+        let inserted = if let Some(i) = tags[start + 1..end].iter().position(|t| t.code == 91) {
+            tags[start + 1 + i] = Tag::i(91, count);
+            false
+        } else if let Some(i) = tags[start + 1..end].iter().position(|t| t.code == 90) {
+            tags.insert(start + 2 + i, Tag::i(91, count));
+            true
+        } else {
+            false
+        };
+        // Inserting the group shifts the next record's start by one.
+        start = end + usize::from(inserted);
+    }
 }
 
 /// Xref blocks (DXF Reference, BLOCK): bit 4 of group 70 and the external drawing's path in

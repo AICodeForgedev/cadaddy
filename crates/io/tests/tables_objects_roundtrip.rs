@@ -73,7 +73,11 @@ fn multileader_styles_and_current_style_round_trip() {
     };
     d.mleader_styles.push(callout);
     d.header.set_str("CMLEADERSTYLE", "Callout");
-    let r = round_trip(&d);
+    let text = write_dxf(&d);
+    let tags = cadcraft_dxf::parse(text.as_bytes()).expect("parse written DXF");
+    let header = cadcraft_dxf::sections(&tags).into_iter().find(|s| s.name == "HEADER").expect("HEADER");
+    assert!(header.tags.iter().all(|t| t.code != 9 || t.str() != "$CMLEADERSTYLE"));
+    let r = read_dxf(text.as_bytes()).expect("reopen");
     assert_eq!(r.mleader_styles, d.mleader_styles);
     assert_eq!(r.header.str("CMLEADERSTYLE", ""), "Callout");
 }

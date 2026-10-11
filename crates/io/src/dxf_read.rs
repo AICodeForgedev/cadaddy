@@ -1843,6 +1843,9 @@ impl Objects {
     }
 
     fn apply(self, d: &mut Drawing, rx: &Rx) {
+        if let Some(style) = self.xrecord_text(crate::dxf_ext::MLEADER_STYLE_KEY).filter(|s| !s.trim().is_empty()) {
+            d.header.set_str("CMLEADERSTYLE", &style);
+        }
         // Table styles (named by their ACAD_TABLESTYLE dictionary entries).
         for (h, tags) in &self.table_styles {
             let Some(name) = self.names.get(h).filter(|n| !n.is_empty()) else { continue };

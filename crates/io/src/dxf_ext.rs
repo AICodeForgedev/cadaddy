@@ -6,7 +6,8 @@
 //!
 //! CADCraft's own data lives under the registered application `CADCRAFT` (xdata) and the
 //! named-object-dictionary entries `CADCRAFT_CONSTRAINTS`, `CADCRAFT_LAYERSTATES`,
-//! `CADCRAFT_PLOTSTYLES` and `CADCRAFT_HANDSEED` (XRECORDs). Other readers keep or ignore them.
+//! `CADCRAFT_PLOTSTYLES`, `CADCRAFT_HANDSEED` and `CADCRAFT_MLEADERSTYLE` (XRECORDs). Other
+//! readers keep or ignore them.
 
 use std::collections::HashMap;
 
@@ -32,6 +33,8 @@ pub(crate) const ANNOTATION_KEY: &str = "CADCRAFT_ANNOTATION";
 pub(crate) const PLOT_STYLE_NAMES_KEY: &str = "ACAD_PLOTSTYLENAME";
 /// Named-object-dictionary key of the XRECORD holding the drawing's next entity handle (hex).
 pub(crate) const HANDSEED_KEY: &str = "CADCRAFT_HANDSEED";
+/// Named-object-dictionary key of the XRECORD holding the current multileader style.
+pub(crate) const MLEADER_STYLE_KEY: &str = "CADCRAFT_MLEADERSTYLE";
 /// Most plot style tables and plot style names read from a file.
 pub(crate) const MAX_PLOT_STYLE_TABLES: usize = 1000;
 pub(crate) const MAX_PLOT_STYLE_NAMES: usize = 100_000;

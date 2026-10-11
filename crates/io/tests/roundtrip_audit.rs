@@ -879,6 +879,21 @@ fn saving_twice_writes_the_same_records() {
 }
 
 #[test]
+fn class_records_have_instance_counts_for_generated_and_preserved_records() {
+    let (_, a, b) = saves(&fixture());
+    for out in [&a, &b] {
+        let counts = out.counts();
+        for class in out.in_section("CLASSES", "CLASS") {
+            let name = s(class, 1);
+            let instance_count = class.iter().find(|t| t.code == 91).map(Tag::i64);
+            assert_eq!(instance_count, counts.get(&name).map(|n| *n as i64), "CLASS {name}");
+        }
+        assert!(out.in_section("CLASSES", "CLASS").iter().any(|c| s(c, 1) == "ACME_OBJECT"));
+        assert_eq!(counts.get("ACME_OBJECT"), Some(&1));
+    }
+}
+
+#[test]
 fn erased_entities_take_their_extension_data_with_them() {
     let mut d = read_dxf(fixture().as_bytes()).expect("read");
     let line = cadcraft_doc::Handle::parse_hex("2A").expect("handle");
