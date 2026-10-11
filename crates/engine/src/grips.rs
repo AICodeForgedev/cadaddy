@@ -84,6 +84,20 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
     let from = *grips.get(index)?;
     let delta = to - from;
     let mut k = kind.clone();
+    // The further parts of a broken table move on their own.
+    if index > 0
+        && let EntityKind::Table(t) = &mut k
+        && let Some(b) = &mut t.breaks
+    {
+        let i = index - 1;
+        if b.offsets.len() <= i {
+            b.offsets.resize(i + 1, Vec2::ZERO);
+        }
+        if let Some(o) = b.offsets.get_mut(i) {
+            *o += delta;
+        }
+        return Some(k);
+    }
     match &mut k {
         EntityKind::Line(l) => match index {
             0 => set_xy(&mut l.a, to),

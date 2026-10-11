@@ -846,6 +846,12 @@ pub struct Table {
     /// The cell style of each row; missing or empty: by position (Title, Header, Data).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub row_styles: Vec<String>,
+    /// Table breaking (TABLEBREAK): the table drawn in several parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub breaks: Option<crate::TableBreak>,
+    /// The CSV file the cells come from (DATALINK).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_link: Option<crate::DataLink>,
 }
 fn default_text_h() -> f64 {
     0.18
@@ -1245,6 +1251,12 @@ impl EntityKind {
             }
             EntityKind::Wipeout(w) => w.boundary.iter_mut().for_each(|p| *p = m.apply(*p)),
             EntityKind::Table(t) => {
+                if let Some(b) = &mut t.breaks {
+                    b.height *= s;
+                    b.spacing *= s;
+                    b.heights.iter_mut().for_each(|h| *h *= s);
+                    b.offsets.iter_mut().for_each(|o| *o = m.apply_vec(*o));
+                }
                 t3(&mut t.insert);
                 t.col_widths.iter_mut().for_each(|w| *w *= s);
                 t.row_heights.iter_mut().for_each(|h| *h *= s);
@@ -1262,6 +1274,10 @@ impl EntityKind {
 
     /// Grip points (editable defining points), in display order.
     pub fn grips(&self) -> Vec<Vec2> {
+        // A broken table has a grip for each part.
+        if let EntityKind::Table(t) = self {
+            return t.grip_points();
+        }
         match self {
             EntityKind::Line(l) => vec![l.a.xy(), l.a.xy().mid(l.b.xy()), l.b.xy()],
             EntityKind::Point(p) => vec![p.p.xy()],

@@ -233,6 +233,8 @@ impl Default for Table {
             title: false,
             header: false,
             row_styles: Vec::new(),
+            breaks: None,
+            data_link: None,
         }
     }
 }

@@ -1,6 +1,7 @@
 //! TABLE: create tables and edit cells, rows, columns and merges; cell styles, formulas
 //! (`formula`), TABLEDIT and TABLEEXPORT (`cells`).
 
+mod breaks;
 mod cells;
 pub(crate) mod formula;
 
@@ -36,6 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
     .into_iter()
     .chain(cells::specs())
+    .chain(breaks::specs())
     .collect()
 }
 

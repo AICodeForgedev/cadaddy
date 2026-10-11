@@ -110,8 +110,61 @@ struct Anchor {
     style: usize,
 }
 
-/// Lay out table `t` of drawing `d`.
+/// Lay out table `t` of drawing `d`, every part of a broken table.
 pub fn table_geometry(d: &Drawing, t: &Table) -> TableGeom {
+    let parts = t.parts();
+    if parts.len() <= 1 {
+        return layout(d, t);
+    }
+    let mut g = TableGeom::default();
+    for p in parts {
+        let mut pg = layout(d, &part_table(t, &p.rows, p.origin));
+        for tx in &mut pg.texts {
+            tx.row = p.rows.get(tx.row).copied().unwrap_or(tx.row);
+        }
+        g.fills.extend(pg.fills);
+        g.lines.extend(pg.lines);
+        g.texts.extend(pg.texts);
+    }
+    g
+}
+
+/// One part of a broken table as a table of its own: its rows (with their cell styles) at
+/// `origin`; merges are cut at the part's edge.
+fn part_table(t: &Table, rows: &[usize], origin: Vec2) -> Table {
+    let cols = t.col_widths.len();
+    let mut cells: Vec<Vec<cadcraft_doc::TableCell>> = rows.iter().map(|r| t.cells.get(*r).cloned().unwrap_or_default()).collect();
+    for (i, row) in cells.iter_mut().enumerate() {
+        row.resize_with(cols, Default::default);
+        for cell in row.iter_mut() {
+            if let Some((rs, cs)) = cell.merged {
+                // Rows of the merge that follow in this part.
+                let start = rows.get(i).copied().unwrap_or(0);
+                let mut n = 1u32;
+                while n < rs && rows.get(i + n as usize).is_some_and(|r| *r == start + n as usize) {
+                    n += 1;
+                }
+                cell.merged = (n > 1 || cs > 1).then_some((n, cs));
+            }
+        }
+    }
+    Table {
+        insert: origin.to3(t.insert.z),
+        col_widths: t.col_widths.clone(),
+        row_heights: rows.iter().map(|r| t.row_heights.get(*r).copied().unwrap_or(0.0)).collect(),
+        row_styles: rows.iter().map(|r| t.row_style(*r).to_string()).collect(),
+        cells,
+        style: t.style.clone(),
+        text_height: t.text_height,
+        title: false,
+        header: false,
+        breaks: None,
+        data_link: None,
+    }
+}
+
+/// Lay out one part.
+fn layout(d: &Drawing, t: &Table) -> TableGeom {
     let st = table_style_of(d, t);
     let rows = t.row_heights.len().min(10_000);
     let cols = t.col_widths.len().min(10_000);

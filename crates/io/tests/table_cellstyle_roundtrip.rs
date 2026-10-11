@@ -39,6 +39,7 @@ fn sample() -> (Drawing, Table) {
         title: true,
         header: true,
         row_styles: vec![String::new(), String::new(), String::new(), "Totals".into()],
+        ..Table::default()
     };
     d.add(&Space::Model, Common::default(), EntityKind::Table(t.clone())).unwrap();
     (d, t)
@@ -106,4 +107,20 @@ fn hostile_table_xdata_is_ignored() {
     let t = first_table(&back);
     assert!(t.row_styles.is_empty());
     assert_eq!(t.cells[3][1].text, "1.000");
+}
+
+#[test]
+fn breaks_and_data_links_roundtrip_and_the_block_draws_the_parts() {
+    let (mut d, mut t) = sample();
+    t.breaks =
+        Some(TableBreak { enabled: true, height: 1.5, spacing: 0.5, offsets: vec![cadcraft_geom::Vec2::new(0.0, -1.0)], ..TableBreak::default() });
+    t.data_link = Some(DataLink { path: "costs.csv".into(), start_row: 1 });
+    let h = d.model.iter().next().unwrap().handle;
+    d.modify_entity(h, |e| e.kind = EntityKind::Table(t.clone())).unwrap();
+    let bytes = cadcraft_io::write(&d, "t.dxf").unwrap();
+    let back = cadcraft_io::read(&bytes, "t.dxf").unwrap();
+    assert_eq!(first_table(&back), t);
+    // Two parts: the block repeats the header row (Item / Cost).
+    let text = String::from_utf8(bytes).unwrap();
+    assert_eq!(text.lines().filter(|l| l.trim() == "Item").count(), 3, "two in the block, one in the table cells");
 }

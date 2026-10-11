@@ -8,7 +8,7 @@
 //! row and cell styles and the formulas go into CADCraft xdata (`TABLEX`, JSON).
 
 use cadcraft_color::Color;
-use cadcraft_doc::{CellBorder, CellStyle, Lineweight, MAX_CELL_STYLES, Table, TableStyle};
+use cadcraft_doc::{CellBorder, CellStyle, DataLink, Lineweight, MAX_CELL_STYLES, MAX_TABLE_PARTS, Table, TableBreak, TableStyle};
 use cadcraft_dxf::Tag;
 use serde::{Deserialize, Serialize};
 
@@ -178,11 +178,17 @@ struct TableExtra {
     /// (row, col, cell style, formula).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     cells: Vec<(usize, usize, String, Option<String>)>,
+    /// Table breaking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    breaks: Option<TableBreak>,
+    /// The data link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    link: Option<DataLink>,
 }
 
 /// The xdata strings of a table's extra data (marker first), or nothing for a plain table.
 pub(crate) fn table_xdata(t: &Table) -> Vec<String> {
-    let mut x = TableExtra { v: 1, rows: t.row_styles.clone(), cells: Vec::new() };
+    let mut x = TableExtra { v: 1, rows: t.row_styles.clone(), cells: Vec::new(), breaks: t.breaks.clone(), link: t.data_link.clone() };
     for (r, row) in t.cells.iter().enumerate() {
         for (c, cell) in row.iter().enumerate() {
             if !cell.style.is_empty() || cell.formula.is_some() {
@@ -190,7 +196,7 @@ pub(crate) fn table_xdata(t: &Table) -> Vec<String> {
             }
         }
     }
-    if x.rows.is_empty() && x.cells.is_empty() {
+    if x.rows.is_empty() && x.cells.is_empty() && x.breaks.is_none() && x.link.is_none() {
         return Vec::new();
     }
     let Ok(json) = serde_json::to_string(&x) else { return Vec::new() };
@@ -208,6 +214,12 @@ pub(crate) fn read_table_xdata(tags: &[Tag], t: &mut Table) {
             cell.formula = formula.filter(|f| f.chars().count() <= 1024);
         }
     }
+    t.breaks = x.breaks.map(|mut b| {
+        b.heights.truncate(MAX_TABLE_PARTS);
+        b.offsets.truncate(MAX_TABLE_PARTS);
+        b
+    });
+    t.data_link = x.link.filter(|l| !l.path.trim().is_empty() && l.path.len() <= 4096);
 }
 
 #[cfg(test)]

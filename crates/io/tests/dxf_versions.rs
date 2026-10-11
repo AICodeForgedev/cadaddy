@@ -36,6 +36,8 @@ fn table() -> Table {
         title: true,
         header: true,
         row_styles: Default::default(),
+        breaks: Default::default(),
+        data_link: Default::default(),
     }
 }
 

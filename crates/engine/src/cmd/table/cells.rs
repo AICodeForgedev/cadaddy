@@ -412,22 +412,7 @@ fn cell_under(s: &Session, p: Vec2) -> Option<(Handle, usize, usize)> {
 
 /// The cell of `t` containing `p`.
 pub(crate) fn cell_of(t: &Table, p: Vec2) -> Option<(usize, usize)> {
-    let o = t.insert.xy();
-    let (x, y) = (p.x - o.x, o.y - p.y);
-    if !(x.is_finite() && y.is_finite()) || x < 0.0 || y < 0.0 {
-        return None;
-    }
-    let find = |sizes: &[f64], v: f64| {
-        let mut acc = 0.0;
-        for (i, s) in sizes.iter().enumerate() {
-            acc += s;
-            if v <= acc {
-                return Some(i);
-            }
-        }
-        None
-    };
-    Some((find(&t.row_heights, y)?, find(&t.col_widths, x)?))
+    t.cell_at_point(p)
 }
 
 fn run_tabledit(s: &mut Session, p: &Value) -> Result<Value> {
