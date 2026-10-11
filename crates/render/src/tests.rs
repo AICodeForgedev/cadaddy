@@ -77,7 +77,7 @@ fn hatch_pattern_and_solid() {
     let h = Hatch {
         pattern: "ANSI31".into(),
         solid: false,
-        loops: vec![HatchLoop { vertices: sq.clone(), outer: true }],
+        loops: vec![HatchLoop { vertices: sq.clone(), outer: true, sources: Vec::new() }],
         scale: 1.0,
         angle: 0.0,
         associative: false,

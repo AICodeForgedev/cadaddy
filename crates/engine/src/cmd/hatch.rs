@@ -9,6 +9,9 @@ use super::helpers::lwpoly;
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
+mod assoc;
+pub(crate) use assoc::update as refill_associative;
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("hatch", "Hatch...", run_hatch).menu(&["Draw", "Hatch..."]).alias(&["h", "bh", "-hatch"]).params("{points?: [[x,y]] (internal points) | handles?: [hex] (closed objects), pattern?: \"ANSI31\", scale?, angle? (degrees), associative?}").interactive(|s| Ok(Box::new(HatchM::new(s, false)))),
@@ -37,22 +40,36 @@ fn outlines(d: &Drawing, space: &Space, near: Option<Bounds2>) -> (Vec<Vec<Vec2>
         {
             continue;
         }
-        let mut polys = crate::select::hit_polylines(d, e, tol);
-        if matches!(e.kind, EntityKind::XLine(_) | EntityKind::Ray(_)) {
-            // Clip infinite lines to a generous box around the extents.
-            let r = (ext.width() + ext.height()).max(1.0) * 4.0;
-            for pl in &mut polys {
-                if let [a, b] = pl.as_slice() {
-                    let m = a.mid(*b);
-                    let dir = (*b - *a).normalized();
-                    *pl = vec![m - dir * r, m + dir * r];
-                }
-            }
-        }
+        let polys = object_polys(d, e, tol, ext);
         owners.extend(std::iter::repeat_n(e.handle, polys.len()));
         out.extend(polys);
     }
     (out, owners)
+}
+
+/// An object's outline as polylines (tolerance `tol`), infinite lines clipped to a generous
+/// box around the extents `ext`.
+fn object_polys(d: &Drawing, e: &Entity, tol: f64, ext: Bounds2) -> Vec<Vec<Vec2>> {
+    let mut polys = crate::select::hit_polylines(d, e, tol);
+    if matches!(e.kind, EntityKind::XLine(_) | EntityKind::Ray(_)) {
+        let r = (ext.width() + ext.height()).max(1.0) * 4.0;
+        for pl in &mut polys {
+            if let [a, b] = pl.as_slice() {
+                let m = a.mid(*b);
+                let dir = (*b - *a).normalized();
+                *pl = vec![m - dir * r, m + dir * r];
+            }
+        }
+    }
+    polys
+}
+
+/// The objects behind input polylines (indices into `owners`), without repeats.
+fn handles_of(owners: &[Handle], idx: &[usize]) -> Vec<Handle> {
+    let mut hs: Vec<Handle> = idx.iter().filter_map(|&i| owners.get(i).copied()).collect();
+    hs.sort_unstable();
+    hs.dedup();
+    hs
 }
 
 /// Closed loops of entities that are closed curves (for islands and "select objects").
@@ -107,7 +124,8 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
     let found = cadcraft_geom::region::boundary_at(&polys, p, tol).ok_or_else(|| EngineError::Other("Valid hatch boundary not found.".into()))?;
     let outer = found.outer;
     let ob = Bounds2::from_points(outer.iter().copied());
-    let mut loops = vec![HatchLoop { vertices: outer.iter().map(|q| PolyVertex::new(*q)).collect(), outer: true }];
+    let sources = handles_of(&owners, &found.outer_sources);
+    let mut loops = vec![HatchLoop { vertices: outer.iter().map(|q| PolyVertex::new(*q)).collect(), outer: true, sources }];
     // Islands: closed objects entirely inside the outer loop that don't contain the pick point.
     if let Some(store) = d.space(&space) {
         for e in store.iter() {
@@ -123,7 +141,7 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
                 let inside = pts.iter().all(|q| point_in_polygon(&outer, *q) || outer.iter().any(|o| o.near(*q, tol * 10.0)));
                 let same_as_outer = (cadcraft_geom::shoelace(&pts).abs() - cadcraft_geom::shoelace(&outer).abs()).abs() < tol.max(1e-6) * 1000.0;
                 if inside && !same_as_outer && !point_in_polygon(&pts, p) {
-                    loops.push(HatchLoop { vertices: vs, outer: false });
+                    loops.push(HatchLoop { vertices: vs, outer: false, sources: vec![e.handle] });
                 }
             }
         }
@@ -134,7 +152,8 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
         let open_curves = !island.sources.is_empty()
             && island.sources.iter().all(|&i| owners.get(i).and_then(|h| d.entity(*h)).is_some_and(|e| island_curve(d, e)));
         if open_curves {
-            loops.push(HatchLoop { vertices: island.outline.into_iter().map(PolyVertex::new).collect(), outer: false });
+            let sources = handles_of(&owners, &island.sources);
+            loops.push(HatchLoop { vertices: island.outline.into_iter().map(PolyVertex::new).collect(), outer: false, sources });
         }
     }
     Ok(loops)
@@ -145,7 +164,7 @@ pub(crate) fn loops_from_handles(s: &Session, hs: &[Handle]) -> Result<Vec<Hatch
     let mut loops = Vec::new();
     for h in hs {
         if let Some(vs) = d.entity(*h).and_then(|e| closed_loop(d, e)) {
-            loops.push(HatchLoop { vertices: vs, outer: loops.is_empty() });
+            loops.push(HatchLoop { vertices: vs, outer: loops.is_empty(), sources: vec![*h] });
         }
     }
     if loops.is_empty() {
@@ -183,10 +202,13 @@ impl HatchSettings {
             scale: f64_or(p, "scale", hdr.1).max(1e-9),
             angle: p.get("angle").and_then(Value::as_f64).map(f64::to_radians).unwrap_or(hdr.2),
             gradient: g,
-            associative: bool_or(p, "associative", true),
+            associative: bool_or(p, "associative", s.doc().map_or(true, |d| d.header.i64("HPASSOC", 1) != 0)),
         }
     }
-    fn hatch(&self, loops: Vec<HatchLoop>) -> EntityKind {
+    fn hatch(&self, mut loops: Vec<HatchLoop>) -> EntityKind {
+        if !self.associative {
+            loops.iter_mut().for_each(|l| l.sources.clear());
+        }
         let solid = self.gradient.is_some() || self.pattern == "SOLID";
         EntityKind::Hatch(Hatch {
             pattern: if self.gradient.is_some() { "SOLID".into() } else { self.pattern.clone() },

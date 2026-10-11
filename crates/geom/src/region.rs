@@ -27,6 +27,8 @@ pub struct Boundary {
     pub outer: Vec<Vec2>,
     /// Groups of curves inside `outer` that don't touch it and don't surround the point.
     pub islands: Vec<Island>,
+    /// Indices into the input polylines that make up `outer`, ascending.
+    pub outer_sources: Vec<usize>,
 }
 
 /// One island: the outside outline of a connected group of curves.
@@ -50,6 +52,8 @@ struct Graph {
     adj: Vec<Vec<usize>>,
     /// (graph vertex, input polyline) for every input segment: which curve touches which group.
     src: Vec<(usize, usize)>,
+    /// The input polyline of every edge (lower vertex index first).
+    edge_src: HashMap<(usize, usize), usize>,
 }
 
 fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
@@ -129,7 +133,7 @@ fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
             }
         }
     }
-    let mut g = Graph { pts: Vec::new(), adj: Vec::new(), src: Vec::with_capacity(n) };
+    let mut g = Graph { pts: Vec::new(), adj: Vec::new(), src: Vec::with_capacity(n), edge_src: HashMap::new() };
     let mut index: HashMap<(i64, i64), usize> = HashMap::new();
     let mut vid = |p: Vec2, g: &mut Graph| -> usize {
         let k = key(p, bb.min, tol);
@@ -153,6 +157,9 @@ fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
                 let u = vid(line.at(*t0), &mut g);
                 let v = vid(line.at(*t1), &mut g);
                 if u != v {
+                    if let Some(k) = owner.get(i) {
+                        g.edge_src.entry((u.min(v), u.max(v))).or_insert(*k);
+                    }
                     if let Some(l) = g.adj.get_mut(u)
                         && !l.contains(&v)
                     {
@@ -284,7 +291,25 @@ fn prune(g: &Graph) -> Graph {
             }
         }
     }
-    Graph { pts: g.pts.clone(), adj, src: Vec::new() }
+    Graph { pts: g.pts.clone(), adj, src: Vec::new(), edge_src: HashMap::new() }
+}
+
+/// The outline of the outside of a group of curves on cycles, traced counter-clockwise from its
+/// leftmost (then lowest) vertex `u`, giving up after `steps` edges.
+fn outside(core: &Graph, u: usize, steps: usize) -> Option<Vec<Vec2>> {
+    let pu = *core.pts.get(u)?;
+    // Every neighbour lies to the right of the leftmost vertex; the one turned furthest
+    // counter-clockwise has the outside of the group on its left.
+    let signed = |w: &usize| {
+        core.pts.get(*w).map(|q| {
+            let a = (*q - pu).angle();
+            if a > crate::PI { a - crate::TAU } else { a }
+        })
+    };
+    let w = core.adj.get(u).into_iter().flatten().filter_map(|w| Some((signed(w)?, *w))).max_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, w)| w)?;
+    let mut lp = trace(core, u, w, steps).and_then(|ids| points(core, &ids))?;
+    lp.reverse();
+    Some(lp)
 }
 
 /// Outlines of the groups of curves inside the face `outer` (vertex indices into `g`).
@@ -329,21 +354,8 @@ fn islands(g: &Graph, outer: &[usize], p: Vec2) -> Vec<Island> {
         if !ob.contains(pu) || !point_in_polygon(&outer_pts, pu) {
             continue;
         }
-        // Every neighbour lies to the right of the leftmost vertex; the one turned furthest
-        // counter-clockwise has the outside of the group on its left.
-        let signed = |w: &usize| {
-            core.pts.get(*w).map(|q| {
-                let a = (*q - pu).angle();
-                if a > crate::PI { a - crate::TAU } else { a }
-            })
-        };
-        let Some(w) = core.adj.get(u).into_iter().flatten().filter_map(|w| Some((signed(w)?, *w))).max_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, w)| w)
-        else {
-            continue;
-        };
         let steps = edges.get(&c).copied().unwrap_or(0).saturating_add(4);
-        let Some(mut lp) = trace(&core, u, w, steps).and_then(|ids| points(&core, &ids)) else { continue };
-        lp.reverse();
+        let Some(lp) = outside(&core, u, steps) else { continue };
         let area = shoelace(&lp);
         let ib = Bounds2::from_points(lp.iter().copied());
         if lp.len() < 3 || !area.is_finite() || area <= 0.0 || !ob.contains_box(&ib) || point_in_polygon(&lp, p) {
@@ -369,7 +381,66 @@ pub fn boundary_at(polys: &[Vec<Vec2>], p: Vec2, tol: f64) -> Option<Boundary> {
     let ids = outer_face(&g, p)?;
     let outer = points(&g, &ids)?;
     let islands = islands(&g, &ids, p);
-    Some(Boundary { outer, islands })
+    let mut outer_sources: Vec<usize> =
+        ids.iter().zip(ids.iter().cycle().skip(1)).filter_map(|(&u, &v)| g.edge_src.get(&(u.min(v), u.max(v))).copied()).collect();
+    outer_sources.sort_unstable();
+    outer_sources.dedup();
+    Some(Boundary { outer, islands, outer_sources })
+}
+
+/// The outside outline of curves that together enclose an area (counter-clockwise, dangling
+/// ends removed), or `None` when they enclose nothing or form more than one separate group.
+pub fn outline(polys: &[Vec<Vec2>], tol: f64) -> Option<Vec<Vec2>> {
+    let g = build(polys, tol.max(1e-12))?;
+    let core = prune(&g);
+    let comp = components(&core);
+    let mut start: Option<usize> = None;
+    let mut group: Option<usize> = None;
+    let mut edges = 0usize;
+    for (u, ns) in core.adj.iter().enumerate() {
+        if ns.is_empty() {
+            continue;
+        }
+        let c = comp.get(u).copied()?;
+        if group.is_some_and(|g| g != c) {
+            return None;
+        }
+        group = Some(c);
+        edges = edges.saturating_add(ns.len());
+        let q = core.pts.get(u)?;
+        if start.and_then(|s| core.pts.get(s)).is_none_or(|b| q.x < b.x || (q.x == b.x && q.y < b.y)) {
+            start = Some(u);
+        }
+    }
+    let lp = outside(&core, start?, edges.saturating_add(4))?;
+    (lp.len() >= 3 && shoelace(&lp) > 0.0).then_some(lp)
+}
+
+/// A point strictly inside a closed polygon (either orientation), for re-finding the face a
+/// loop encloses: the middle of the widest span of a horizontal line through it.
+pub fn interior_point(poly: &[Vec2]) -> Option<Vec2> {
+    let b = Bounds2::from_points(poly.iter().copied().filter(|p| p.is_finite()));
+    if poly.len() < 3 || b.is_empty() || b.height() <= 0.0 {
+        return None;
+    }
+    let mut best: Option<(f64, Vec2)> = None;
+    for f in [0.5, 0.381_966, 0.618_034, 0.25, 0.75] {
+        let y = b.min.y + b.height() * f;
+        let mut xs: Vec<f64> = Vec::new();
+        for (a, c) in poly.iter().zip(poly.iter().cycle().skip(1)) {
+            if (a.y > y) != (c.y > y) {
+                xs.push(a.x + (c.x - a.x) * (y - a.y) / (c.y - a.y));
+            }
+        }
+        xs.sort_by(f64::total_cmp);
+        for [x0, x1] in xs.as_chunks::<2>().0 {
+            let width = x1 - x0;
+            if width.is_finite() && best.is_none_or(|(bw, _)| width > bw) {
+                best = Some((width, Vec2::new((x0 + x1) / 2.0, y)));
+            }
+        }
+    }
+    best.filter(|(w, _)| *w > 0.0).map(|(_, p)| p)
 }
 
 #[cfg(test)]
@@ -528,5 +599,28 @@ mod tests {
         }
         let b = boundary_at(&many, Vec2::new(-0.5, -0.5), 1e-9).unwrap();
         assert!(b.islands.len() <= MAX_ISLANDS);
+    }
+
+    #[test]
+    fn outer_sources_outline_and_interior_point() {
+        // A square cut by a diagonal: the triangle picked is made of the square and the diagonal;
+        // a far-away line takes no part.
+        let polys = vec![square(0.0, 0.0, 10.0), vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 10.0)], vec![Vec2::new(30.0, 0.0), Vec2::new(40.0, 0.0)]];
+        let b = boundary_at(&polys, Vec2::new(7.0, 2.0), 1e-9).unwrap();
+        assert_eq!(b.outer_sources, vec![0, 1]);
+        // Four separate lines: one outline; an open U and two separate squares have none.
+        let l = outline(&lines_of(&square(5.0, 5.0, 5.0)), 1e-9).unwrap();
+        assert!((shoelace(&l) - 25.0).abs() < 1e-9);
+        assert!(outline(&[vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0)]], 1e-9).is_none());
+        assert!(outline(&[square(0.0, 0.0, 1.0), square(5.0, 5.0, 1.0)], 1e-9).is_none());
+        // An L shape: the point is inside, also for a clockwise loop.
+        let l_shape =
+            vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(1.0, 10.0), Vec2::new(0.0, 10.0)];
+        let p = interior_point(&l_shape).unwrap();
+        assert!(point_in_polygon(&l_shape, p));
+        let rev: Vec<Vec2> = l_shape.iter().rev().copied().collect();
+        assert!(point_in_polygon(&rev, interior_point(&rev).unwrap()));
+        assert!(interior_point(&[Vec2::ZERO, Vec2::new(1.0, 0.0)]).is_none());
+        assert!(interior_point(&[Vec2::new(f64::NAN, 0.0); 4]).is_none());
     }
 }

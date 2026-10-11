@@ -336,10 +336,13 @@ pub fn update(after: &mut Arc<Drawing>, before: &Drawing) -> usize {
 /// finishes. `uid` (when known) is the document the command started in.
 pub fn after_command(s: &mut crate::Session, before: Option<&Arc<Drawing>>, uid: Option<u64>) {
     let Some(before) = before else { return };
+    let mut notes = Vec::new();
     if let Ok(st) = s.state_mut()
         && uid.is_none_or(|u| u == st.uid)
         && !Arc::ptr_eq(before, &st.doc)
     {
         update(&mut st.doc, before);
+        notes = crate::cmd::hatch::refill_associative(&mut st.doc, before);
     }
+    notes.into_iter().for_each(|n| s.echo(n));
 }

@@ -16,7 +16,7 @@ pub mod file;
 mod gripcmds;
 mod griphot;
 pub(crate) mod groups;
-mod hatch;
+pub(crate) mod hatch;
 mod inquiry;
 mod layer;
 mod layout;

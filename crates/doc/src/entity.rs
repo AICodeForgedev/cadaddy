@@ -491,6 +491,10 @@ pub struct HatchLoop {
     pub vertices: Vec<PolyVertex>,
     #[serde(default)]
     pub outer: bool,
+    /// The objects the loop was made from (DXF group 97 count, 330 handles): an associative
+    /// hatch re-fills the loop from them when they change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<Handle>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

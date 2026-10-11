@@ -647,7 +647,30 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
         if verts.len() > 1 && verts.first().map(|f| f.p).zip(verts.last().map(|l| l.p)).is_some_and(|(a, b)| a.near(b, 1e-9)) {
             verts.pop();
         }
-        loops.push(HatchLoop { vertices: verts, outer });
+        // 97: number of source boundary objects, then their handles (330). A spline edge's fit
+        // data count is a 97 too, followed by its fit points instead.
+        let mut sources = Vec::new();
+        for _ in 0..2 {
+            while get(i).is_some_and(|x| !matches!(x.code, 97 | 92 | 75)) {
+                i += 1;
+            }
+            if get(i).is_none_or(|x| x.code != 97) {
+                break;
+            }
+            let n = get(i).map(Tag::i64).unwrap_or(0).clamp(0, MAX_HATCH_SOURCES as i64) as usize;
+            i += 1;
+            if get(i).is_some_and(|x| !matches!(x.code, 330 | 92 | 75)) {
+                continue;
+            }
+            while sources.len() < n
+                && let Some(x) = get(i).filter(|x| x.code == 330)
+            {
+                sources.extend(Handle::parse_hex(&x.str()).filter(|h| h.0 != 0));
+                i += 1;
+            }
+            break;
+        }
+        loops.push(HatchLoop { vertices: verts, outer, sources });
     }
     let solid = solid || pattern.eq_ignore_ascii_case("SOLID");
     let (scale, angle) = (t.fd(41, 1.0), t.fd(52, 0.0).to_radians());
@@ -670,6 +693,9 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
         pattern_lines,
     }))
 }
+
+/// Upper bound on the source boundary objects of one HATCH loop.
+const MAX_HATCH_SOURCES: usize = 4096;
 
 /// Upper bounds on a HATCH's pattern definition lines and on the dashes of one line.
 const MAX_PATTERN_LINES: usize = 1024;

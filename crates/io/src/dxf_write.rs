@@ -833,7 +833,12 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                         w.f(42, v.bulge);
                     }
                 }
-                w.i(97, 0);
+                // Source boundary objects of an associative hatch (the ones still in the drawing).
+                let sources: Vec<String> = l.sources.iter().filter(|s| h.associative && d.entity(**s).is_some()).map(|s| s.hex()).collect();
+                w.i(97, sources.len() as i64);
+                for s in &sources {
+                    w.s(330, s);
+                }
             }
             w.i(75, i64::from(h.style));
             w.i(76, 1);
