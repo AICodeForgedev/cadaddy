@@ -472,6 +472,26 @@ fn sysvars_roundtrip() {
 }
 
 #[test]
+fn setvar_clayer_keeps_numeric_layer_name() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "10"})).unwrap();
+    s.execute("setvar", &json!({"name": "CLAYER", "value": "10"})).unwrap();
+    assert_eq!(sysvars::get(&s, "CLAYER"), Some(json!("10")));
+    let c = s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap();
+    let h = cadcraft_doc::Handle::parse_hex(c["handle"].as_str().unwrap()).unwrap();
+    assert_eq!(s.doc().unwrap().entity(h).unwrap().common.layer, "10");
+    s.execute("setvar", &json!({"name": "CLAYER", "value": "0"})).unwrap();
+    assert_eq!(sysvars::get(&s, "CLAYER"), Some(json!("0")));
+    // Typed at the command line too.
+    s.cmdline("SETVAR CLAYER 10").unwrap();
+    assert!(s.running.is_none());
+    assert_eq!(sysvars::get(&s, "CLAYER"), Some(json!("10")));
+    // Numeric variables still parse typed text.
+    s.execute("setvar", &json!({"name": "LUNITS", "value": "3"})).unwrap();
+    assert_eq!(sysvars::get(&s, "LUNITS"), Some(json!(3)));
+}
+
+#[test]
 fn setvar_at_command_line() {
     let mut s = Session::new();
     // One line, as typed in issue #30: Space separates the inputs.

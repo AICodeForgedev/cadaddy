@@ -297,6 +297,16 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
                     d.header.set_i64(&n, i);
                     return Ok(());
                 }
+                // A text variable (CLAYER...) keeps what was typed, so a layer named `10` stays a string.
+                Some(cadcraft_doc::HVal::Str(_)) => {
+                    let text = match v {
+                        Value::String(t) => t.clone(),
+                        Value::Number(x) => x.to_string(),
+                        _ => return Err(bad()),
+                    };
+                    d.header.set(&n, cadcraft_doc::HVal::Str(text));
+                    return Ok(());
+                }
                 // A point variable takes `x,y` typed at the command line too.
                 Some(cadcraft_doc::HVal::Point(_)) => {
                     d.header.set(&n, cadcraft_doc::HVal::Point(as_pt(v).ok_or_else(bad)?.to3(0.0)));
