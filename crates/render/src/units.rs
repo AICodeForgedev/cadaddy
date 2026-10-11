@@ -193,7 +193,14 @@ pub fn format_angle(rad: f64, unit: u8, decimals: u8, zin: u8) -> String {
     let deg = rad.to_degrees();
     match unit {
         1 => {
-            let total = (deg * 3600.0).round().max(0.0) as i64;
+            // Round at the displayed precision before splitting into degrees/minutes/seconds.
+            let seconds_per_unit = match decimals {
+                0 => 3600,
+                1 | 2 => 60,
+                _ => 1,
+            };
+            let units = (deg * (3600 / seconds_per_unit) as f64).round().max(0.0) as i64;
+            let total = units.saturating_mul(seconds_per_unit);
             let (d, m, s) = (total / 3600, (total / 60) % 60, total % 60);
             match decimals {
                 0 => format!("{d}°"),
@@ -281,6 +288,33 @@ mod tests {
         assert_eq!(format_angle(45.5f64.to_radians(), 1, 4, 0), "45°30'0\"");
         assert_eq!(format_angle(std::f64::consts::FRAC_PI_2, 2, 1, 0), "100.0g");
         assert_eq!(format_angle(1.0, 3, 2, 0), "1.00r");
+    }
+
+    #[test]
+    fn dms_rounds_at_displayed_precision() {
+        assert_eq!(format_angle(45.75f64.to_radians(), 1, 0, 0), "46°");
+        for decimals in [1, 2] {
+            assert_eq!(format_angle(45.5125f64.to_radians(), 1, decimals, 0), "45°31'");
+            assert_eq!(format_angle(45.999f64.to_radians(), 1, decimals, 0), "46°0'");
+        }
+        assert_eq!(format_angle(45.5125f64.to_radians(), 1, 3, 0), "45°30'45\"");
+        assert_eq!(format_angle(45.9999f64.to_radians(), 1, 4, 0), "46°0'0\"");
+    }
+
+    #[test]
+    fn dms_carries_and_non_negative_sweeps() {
+        let near_thirty = (29.0 + 59.0 / 60.0 + 40.0 / 3600.0_f64).to_radians();
+        let near_minute = (29.0 + 40.0 / 3600.0_f64).to_radians();
+        for decimals in 0..=4 {
+            let (degree, minute, negative) = match decimals {
+                0 => ("30°", "29°", "0°"),
+                1 | 2 => ("30°0'", "29°1'", "0°0'"),
+                _ => ("29°59'40\"", "29°0'40\"", "0°0'0\""),
+            };
+            assert_eq!(format_angle(near_thirty, 1, decimals, 0), degree);
+            assert_eq!(format_angle(near_minute, 1, decimals, 0), minute);
+            assert_eq!(format_angle(-45.75f64.to_radians(), 1, decimals, 0), negative);
+        }
     }
 
     #[test]
