@@ -9,6 +9,9 @@
 
 use std::fmt::Write as _;
 
+mod version;
+pub use version::Version;
+
 #[derive(Debug, thiserror::Error)]
 pub enum DxfError {
     #[error("not a DXF file")]
@@ -359,6 +362,9 @@ fn parse_binary_with_limit(b: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
             break;
         }
     }
+    if tags.is_empty() {
+        return Err(DxfError::NotDxf);
+    }
     Ok(tags)
 }
 
@@ -376,10 +382,18 @@ pub fn format_real(v: f64) -> String {
 /// The output is pure ASCII: non-ASCII characters in strings are written as `\U+XXXX` escapes,
 /// the pre-R2007 convention, so it is correct whatever `$DWGCODEPAGE` the header declares.
 pub fn write_ascii(tags: &[Tag]) -> String {
+    write_ascii_as(tags, false)
+}
+
+/// Write tags as ASCII DXF with text in UTF-8 (`utf8`, the R2007+ convention: non-ASCII
+/// characters as they are) or escaped as `\U+XXXX` (older versions, see [`write_ascii`]). Line
+/// breaks inside strings become spaces either way.
+pub fn write_ascii_as(tags: &[Tag], utf8: bool) -> String {
     let mut out = String::with_capacity(tags.len() * 16);
     for t in tags {
         let _ = write!(out, "{:>3}\r\n", t.code);
         match &t.value {
+            Value::Str(s) if utf8 => out.extend(s.chars().map(|c| if matches!(c, '\r' | '\n') { ' ' } else { c })),
             Value::Str(s) => escape_unicode(s, &mut out),
             Value::Real(r) => out.push_str(&format_real(*r)),
             Value::Int(i) => out.push_str(&i.to_string()),
@@ -389,6 +403,86 @@ pub fn write_ascii(tags: &[Tag]) -> String {
         out.push_str("\r\n");
     }
     out
+}
+
+/// Write tags as binary DXF (DXF Reference, "Binary DXF Files", R13+ layout): the sentinel,
+/// then per tag a 2-byte little-endian group code and the value in the binary form of the code's
+/// [`Kind`]: a zero-terminated string, an 8-byte real, a 2-, 4- or 8-byte integer, a 1-byte
+/// boolean, or a binary chunk (one length byte, then up to 255 bytes; longer data is split into
+/// several groups of the same code). Strings are UTF-8 when `utf8` (R2007+), otherwise escaped as
+/// in [`write_ascii`]. A tag's value is converted to its code's kind, so a number written as text
+/// is stored as a number; a code outside the 16-bit range is skipped.
+pub fn write_binary(tags: &[Tag], utf8: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(BINARY_SENTINEL.len() + tags.len() * 12);
+    out.extend_from_slice(BINARY_SENTINEL);
+    for t in tags {
+        let Ok(code) = i16::try_from(t.code) else { continue };
+        let code_bytes = code.to_le_bytes();
+        match kind_of(t.code) {
+            Kind::Str => {
+                out.extend_from_slice(&code_bytes);
+                let s = match &t.value {
+                    Value::Str(s) => s.clone(),
+                    v => v.as_str(),
+                };
+                let mut text = String::with_capacity(s.len());
+                if utf8 {
+                    text.extend(s.chars().map(|c| if matches!(c, '\r' | '\n') { ' ' } else { c }));
+                } else {
+                    escape_unicode(&s, &mut text);
+                }
+                out.extend(text.bytes().filter(|&b| b != 0));
+                out.push(0);
+            }
+            Kind::Real => {
+                out.extend_from_slice(&code_bytes);
+                out.extend_from_slice(&t.value.as_f64().to_le_bytes());
+            }
+            Kind::Int16 => {
+                out.extend_from_slice(&code_bytes);
+                let v = t.value.as_i64().clamp(i64::from(i16::MIN), i64::from(i16::MAX));
+                out.extend_from_slice(&i16::try_from(v).unwrap_or_default().to_le_bytes());
+            }
+            Kind::Int32 => {
+                out.extend_from_slice(&code_bytes);
+                let v = t.value.as_i64().clamp(i64::from(i32::MIN), i64::from(i32::MAX));
+                out.extend_from_slice(&i32::try_from(v).unwrap_or_default().to_le_bytes());
+            }
+            Kind::Int64 => {
+                out.extend_from_slice(&code_bytes);
+                out.extend_from_slice(&t.value.as_i64().to_le_bytes());
+            }
+            Kind::Bool => {
+                out.extend_from_slice(&code_bytes);
+                out.push(u8::from(t.value.as_i64() != 0));
+            }
+            Kind::Hex => {
+                let bytes = hex_bytes(&t.value.as_str());
+                // An empty chunk is still one group, as in ASCII.
+                let mut chunks: Vec<&[u8]> = bytes.chunks(255).collect();
+                if chunks.is_empty() {
+                    chunks.push(&[]);
+                }
+                for chunk in chunks {
+                    out.extend_from_slice(&code_bytes);
+                    out.push(u8::try_from(chunk.len()).unwrap_or(u8::MAX));
+                    out.extend_from_slice(chunk);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The bytes of hex text, two digits each; anything that isn't a pair of hex digits is skipped.
+fn hex_bytes(s: &str) -> Vec<u8> {
+    let digits: Vec<u8> = s.bytes().filter_map(|b| char::from(b).to_digit(16).and_then(|d| u8::try_from(d).ok())).collect();
+    digits.as_chunks::<2>().0.iter().map(|[hi, lo]| (hi << 4) | lo).collect()
+}
+
+/// Whether `bytes` are a binary DXF file (they start with the binary sentinel).
+pub fn is_binary(bytes: &[u8]) -> bool {
+    bytes.starts_with(BINARY_SENTINEL)
 }
 
 /// Escape a string for a pre-R2007 DXF, whose text is in the `$DWGCODEPAGE` code page: ASCII

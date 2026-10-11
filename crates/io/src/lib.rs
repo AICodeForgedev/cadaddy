@@ -12,7 +12,23 @@ pub mod svg;
 use cadcraft_doc::{Drawing, Space};
 use cadcraft_geom::Bounds2;
 
+pub use cadcraft_dxf::Version;
 pub use pdf::{PdfOptions, pdf, plot};
+
+/// How a drawing is saved as DXF or DWG.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SaveOptions {
+    /// The file version; `None` saves in the drawing's own version ([`save_version`]).
+    pub version: Option<Version>,
+    /// Binary instead of ASCII DXF (DXF only; DWG is always binary).
+    pub binary: bool,
+}
+
+/// The version a drawing is saved in when none is asked for: the version of the file it was
+/// read from (`$ACADVER`, the nearest one CADCraft writes), and 2018 for a new drawing.
+pub fn save_version(d: &Drawing) -> Version {
+    d.header.get("ACADVER").and_then(cadcraft_doc::HVal::as_str).and_then(Version::for_acadver).unwrap_or_default()
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
@@ -42,9 +58,35 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
 }
 
 /// Write a drawing in the format chosen by the name's extension. Images (PNG, SVG, PDF) show
-/// model space fitted to its extents.
+/// model space fitted to its extents. DXF and DWG are written in the drawing's version
+/// ([`save_version`]), DXF as ASCII.
 pub fn write(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     write_framed(d, name, None)
+}
+
+/// Like [`write`], with the DXF/DWG version and binary DXF chosen by `opts`. Binary applies to
+/// DXF only; asking for it with another format is an error.
+pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>> {
+    let version = opts.version.unwrap_or_else(|| save_version(d));
+    match ext(name).as_str() {
+        "dxf" | "" => {
+            let tags = dxf_write::tags(d, version);
+            Ok(if opts.binary {
+                cadcraft_dxf::write_binary(&tags, version.utf8())
+            } else {
+                cadcraft_dxf::write_ascii_as(&tags, version.utf8()).into_bytes()
+            })
+        }
+        // The DWG bridge reads our R2000 DXF and writes the DWG at the version asked for. Without
+        // one, at least 2004: R2000 DWG has no true colours, transparency, table styles or
+        // gradients, so a drawing from an R2000 DXF doesn't lose them by default.
+        "dwg" if !opts.binary => {
+            let version = opts.version.unwrap_or_else(|| version.max(Version::R2004));
+            cadcraft_dwg::dxf_to_dwg_as(dxf_write::write(d).as_bytes(), version.code()).map_err(IoError::Format)
+        }
+        e if opts.binary => Err(IoError::Format(format!("binary output is for DXF files, not `{e}`"))),
+        _ => write_framed(d, name, None),
+    }
 }
 
 /// Like [`write`], but image formats (PNG, SVG, PDF) show `window` (a model-space rectangle in
@@ -58,8 +100,7 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
         check_window(w)?;
     }
     match ext(name).as_str() {
-        "dxf" | "" => Ok(dxf_write::write(d).into_bytes()),
-        "dwg" => cadcraft_dwg::dxf_to_dwg(dxf_write::write(d).as_bytes()).map_err(IoError::Format),
+        "dxf" | "" | "dwg" => write_with(d, name, &SaveOptions::default()),
         "svg" => Ok(svg::export_window(d, &Space::Model, window).into_bytes()),
         "png" => png_framed(d, &Space::Model, 2400, 1600, window),
         "pdf" => pdf::pdf(d, &Space::Model, &PdfOptions { compress: true, window, ..PdfOptions::default() }),
@@ -120,6 +161,7 @@ pub fn png_view(extents: &Bounds2, width: u32, height: u32, window: Option<Bound
 pub fn read_dxf(bytes: &[u8]) -> Result<Drawing> {
     dxf_read::read(bytes)
 }
+/// The drawing as R2000 ASCII DXF, whatever its own version ([`write_with`] chooses one).
 pub fn write_dxf(d: &Drawing) -> String {
     dxf_write::write(d)
 }

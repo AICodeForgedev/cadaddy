@@ -64,9 +64,11 @@ mod native {
         if bytes.len() > limits.max_dwg_bytes {
             return Err(format!("DWG: the file is {}, larger than the {} CADCraft opens", mb(bytes.len() as u64), mb(limits.max_dwg_bytes as u64)));
         }
-        let doc = std::panic::catch_unwind(|| acadrust::DwgReader::from_stream(Cursor::new(bytes)).read())
+        let mut doc = std::panic::catch_unwind(|| acadrust::DwgReader::from_stream(Cursor::new(bytes)).read())
             .map_err(|_| "the DWG reader failed on this file".to_string())?
             .map_err(|e| format!("DWG: {e}"))?;
+        table_merges(&mut doc);
+        table_style_rows(&mut doc, false);
         let mut out = CappedWriter { buf: Vec::new(), limit: limits.max_dxf_bytes, exceeded: false };
         let written = std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DxfWriter::new(&doc).write_to_writer(&mut out)))
             .map_err(|_| "the DWG→DXF conversion failed on this file".to_string())?;
@@ -80,6 +82,65 @@ mod native {
         }
         written.map_err(|e| format!("DWG→DXF: {e}"))?;
         Ok(add_header_vars(out.buf, &doc.header))
+    }
+
+    /// Merged table cells onto the cells. acadrust 0.6.3 reads a 2010+ (AC1024+) DWG table's
+    /// merged cells into the table's `merged_ranges` only, while its DXF writer writes each cell's
+    /// own merge groups (173, 175, 176), so without this the merges would be lost. Tables whose
+    /// cells already carry merges are left alone. Each range's first cell gets the span; the
+    /// cells it covers are marked merged with no span of their own, as CADCraft's DXF writer does.
+    fn table_merges(doc: &mut acadrust::CadDocument) {
+        for e in doc.entities_mut() {
+            let acadrust::entities::EntityType::Table(t) = e else { continue };
+            if t.merged_ranges.is_empty() || t.rows.iter().flat_map(|r| &r.cells).any(|c| c.merge_width > 1 || c.merge_height > 1) {
+                continue;
+            }
+            let (rows, cols) = (t.rows.len(), t.columns.len());
+            // A real table has at most one merge per cell; more ranges than that come from a
+            // damaged file and would only make this rows × cols × ranges.
+            let max_ranges = rows.saturating_mul(cols).min(1 << 16);
+            for r in t.merged_ranges.iter().take(max_ranges).cloned().collect::<Vec<_>>() {
+                // Clamp to the table: the ranges come from the file.
+                let (bottom, right) = (r.bottom_row.min(rows.saturating_sub(1)), r.right_col.min(cols.saturating_sub(1)));
+                if r.top_row > bottom || r.left_col > right || rows == 0 || cols == 0 || (r.top_row, r.left_col) == (bottom, right) {
+                    continue;
+                }
+                let span = |n: usize| i32::try_from(n + 1).unwrap_or(i32::MAX);
+                for (ri, row) in t.rows.iter_mut().enumerate().take(bottom + 1).skip(r.top_row) {
+                    for (ci, cell) in row.cells.iter_mut().enumerate().take(right + 1).skip(r.left_col) {
+                        cell.merged = 1;
+                        let first = (ri, ci) == (r.top_row, r.left_col);
+                        cell.merge_width = if first { span(right - r.left_col) } else { 0 };
+                        cell.merge_height = if first { span(bottom - r.top_row) } else { 0 };
+                    }
+                }
+            }
+        }
+    }
+
+    /// Table styles' title and header suppression between the two places acadrust 0.6.3 keeps
+    /// it. 2010+ (AC1024+) DWG stores it only in the style's flags (title 1, header 2), while
+    /// acadrust's DXF reader and writer use the `title_suppressed`/`header_suppressed` fields
+    /// (groups 280, 281). `to_flags` copies the fields into the flags before a DWG is written;
+    /// otherwise the flags are copied into the fields after one is read. Older versions store
+    /// both and are left alone.
+    fn table_style_rows(doc: &mut acadrust::CadDocument, to_flags: bool) {
+        use acadrust::objects::{ObjectType, TableStyleFlags};
+        if doc.version < acadrust::DxfVersion::AC1024 {
+            return;
+        }
+        for o in doc.objects.values_mut() {
+            let ObjectType::TableStyle(s) = o else { continue };
+            for (bit, suppressed) in
+                [(TableStyleFlags::TITLE_SUPPRESSED, &mut s.title_suppressed), (TableStyleFlags::HEADER_SUPPRESSED, &mut s.header_suppressed)]
+            {
+                if to_flags {
+                    s.flags.set(bit, *suppressed);
+                } else {
+                    *suppressed = s.flags.contains(bit);
+                }
+            }
+        }
     }
 
     /// Header variables the DWG reader fills in but acadrust's DXF writer (0.6.3) leaves out of
@@ -146,22 +207,53 @@ mod native {
     /// Convert DXF bytes into a DWG file of the DXF's version, and at least AutoCAD 2004
     /// (AC1018).
     pub fn dxf_to_dwg(dxf: &[u8]) -> Result<Vec<u8>, String> {
+        convert(dxf, None)
+    }
+
+    /// Convert DXF bytes into a DWG file of `version`, a code from [`super::VERSIONS`] ("AC1032"),
+    /// whatever version the DXF declares.
+    pub fn dxf_to_dwg_as(dxf: &[u8], version: &str) -> Result<Vec<u8>, String> {
+        let v = match version.trim().to_ascii_uppercase().as_str() {
+            "AC1015" => acadrust::DxfVersion::AC1015,
+            "AC1018" => acadrust::DxfVersion::AC1018,
+            "AC1021" => acadrust::DxfVersion::AC1021,
+            "AC1024" => acadrust::DxfVersion::AC1024,
+            "AC1027" => acadrust::DxfVersion::AC1027,
+            "AC1032" => acadrust::DxfVersion::AC1032,
+            _ => return Err(super::unsupported(version)),
+        };
+        convert(dxf, Some(v))
+    }
+
+    fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>) -> Result<Vec<u8>, String> {
         let data = dxf.to_vec();
         let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
             .map_err(|_| "the DXF→DWG conversion failed".to_string())?
             .map_err(|e| format!("DXF: {e}"))?;
-        // Write at least AutoCAD 2004 (AC1018) DWG: R2000 DWG has no true colours, transparency,
-        // table styles or gradients, and readers can't tell its layouts apart reliably. The DXF
-        // stays R2000; only the DWG is newer.
-        if doc.version < MIN_DWG_VERSION {
-            doc.version = MIN_DWG_VERSION;
+        match version {
+            Some(v) => doc.version = v,
+            // Without a version asked for, write at least AutoCAD 2004 (AC1018) DWG: R2000 DWG
+            // has no true colours, transparency, table styles or gradients. The DXF stays R2000;
+            // only the DWG is newer.
+            None if doc.version < MIN_DWG_VERSION => doc.version = MIN_DWG_VERSION,
+            None => {}
         }
-        acadrust::DwgWriter::write_to_vec(&doc).map_err(|e| format!("DWG write: {e}"))
+        table_style_rows(&mut doc, true);
+        std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
+            .map_err(|_| "the DWG writer failed on this drawing".to_string())?
+            .map_err(|e| format!("DWG write: {e}"))
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{dwg_to_dxf, dwg_to_dxf_with, dxf_to_dwg};
+pub use native::{dwg_to_dxf, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as};
+
+/// The error for a DWG version CADCraft can't write.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn unsupported(version: &str) -> String {
+    let list: Vec<&str> = VERSIONS.iter().map(|(_, year)| *year).collect();
+    format!("DWG version `{version}` can't be written (CADCraft writes {})", list.join(", "))
+}
 
 #[cfg(target_arch = "wasm32")]
 pub fn dwg_to_dxf(_bytes: &[u8]) -> Result<Vec<u8>, String> {
@@ -173,6 +265,10 @@ pub fn dwg_to_dxf_with(_bytes: &[u8], _limits: Limits) -> Result<Vec<u8>, String
 }
 #[cfg(target_arch = "wasm32")]
 pub fn dxf_to_dwg(_dxf: &[u8]) -> Result<Vec<u8>, String> {
+    Err("DWG files can't be written in the web build yet; save as DXF".into())
+}
+#[cfg(target_arch = "wasm32")]
+pub fn dxf_to_dwg_as(_dxf: &[u8], _version: &str) -> Result<Vec<u8>, String> {
     Err("DWG files can't be written in the web build yet; save as DXF".into())
 }
 

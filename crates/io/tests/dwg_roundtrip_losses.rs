@@ -56,8 +56,8 @@ fn viewport_ids(l: &Layout) -> Vec<u32> {
     l.entities.iter().filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some(v.id) } else { None }).collect()
 }
 
-/// True colours (entity and layer) and entity transparency: the DWG is written as AutoCAD 2004
-/// (R2000 DWG has neither), while the DXF stays R2000.
+/// True colours (entity and layer) and entity transparency: a new drawing's DWG is written as
+/// AutoCAD 2018 (R2000 DWG has neither), while the DXF the bridge reads stays R2000.
 #[test]
 fn dwg_keeps_true_colours_and_transparency() {
     let mut d = Drawing::new_metric();
@@ -69,7 +69,7 @@ fn dwg_keeps_true_colours_and_transparency() {
     );
 
     let dwg = cadcraft_io::write(&d, "x.dwg").unwrap();
-    assert_eq!(cadcraft_dwg::version(&dwg).as_deref(), Some("AC1018"));
+    assert_eq!(cadcraft_dwg::version(&dwg).as_deref(), Some("AC1032"));
     let header = records(&cadcraft_io::write_dxf(&d), "SECTION");
     assert_eq!(header.first().and_then(|h| group(h, "1")), Some("AC1015"), "the DXF stays R2000");
 
