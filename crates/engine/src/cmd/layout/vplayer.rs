@@ -112,12 +112,7 @@ fn viewport_at(s: &Session, p: Vec2) -> Option<Handle> {
         Some((_, vp)) => vp.center.xy() + (p - vp.view_center) * (vp.height / vp.view_height),
         None => p,
     };
-    super::layout_viewports(s)
-        .ok()?
-        .into_iter()
-        .rev()
-        .find(|(_, v)| (at.x - v.center.x).abs() <= v.width / 2.0 && (at.y - v.center.y).abs() <= v.height / 2.0)
-        .map(|(h, _)| h)
+    super::viewports::viewport_at(s, at)
 }
 
 fn active(s: &Session) -> Option<Handle> {

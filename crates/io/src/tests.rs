@@ -499,6 +499,8 @@ fn pdf_layout_one_to_one_with_viewport() {
             locked: false,
             frozen_layers: Vec::new(),
             layer_colors: Vec::new(),
+            clip: None,
+            on: true,
         }),
     )
     .unwrap();
@@ -600,6 +602,8 @@ fn viewport_frozen_layers_roundtrip() {
             locked: true,
             frozen_layers: frozen,
             layer_colors: Vec::new(),
+            clip: None,
+            on: true,
         })
     };
     d.add(&paper, Common::default(), vp(2, vec!["Walls".into(), "A B".into()])).unwrap();
@@ -633,6 +637,8 @@ fn viewport_layer_colors_roundtrip() {
             locked: false,
             frozen_layers: frozen,
             layer_colors: colors,
+            clip: None,
+            on: true,
         })
     };
     let colors = vec![("Walls".to_string(), Color::Index(5)), ("A B".to_string(), Color::True(cadcraft_color::Rgb(255, 128, 0)))];

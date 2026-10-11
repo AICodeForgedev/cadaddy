@@ -59,6 +59,8 @@ fn dimensions_take_the_viewport_layer_colour() {
         locked: false,
         frozen_layers: Vec::new(),
         layer_colors: vec![("a".into(), Color::Index(3))],
+        clip: None,
+        on: true,
     };
     d.add(&Space::Paper("Layout1".into()), Common::default(), EntityKind::Viewport(vp)).unwrap();
     let l = build(&d, &Space::Paper("Layout1".into()), &Options::default());

@@ -508,6 +508,18 @@ fn references(d: &mut Drawing, out: &mut Vec<Issue>) {
                             "those entries removed",
                         ));
                     }
+                    if let Some(b) = vp.clip
+                        && (b == e.handle || !all.contains(&b))
+                    {
+                        vp.clip = None;
+                        out.push(issue(
+                            "danglingReference",
+                            &label,
+                            Some(e.handle),
+                            "viewport's clip boundary doesn't exist".into(),
+                            "the viewport is rectangular again",
+                        ));
+                    }
                 }
                 _ => {}
             }

@@ -637,6 +637,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         Err(_) => (xf, None),
     };
+    // A clipped active viewport's outline (picks and its heavy border follow it).
+    let active_clip = app.session.state().ok().and_then(|st| st.active_viewport().and_then(|(h, v)| cadcraft_render::viewport_clip(&st.doc, h, &v)));
     // Double-click a viewport to work inside it; double-click the sheet outside it to return.
     if inside
         && dbl_primary
@@ -645,7 +647,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && let Some(hp) = hover_pos
     {
         let pp = xf_paper.to_world(hp);
-        let in_active = active_vp.as_ref().is_some_and(|v| (pp.x - v.center.x).abs() <= v.width / 2.0 && (pp.y - v.center.y).abs() <= v.height / 2.0);
+        let in_rect = |v: &cadcraft_doc::Viewport| (pp.x - v.center.x).abs() <= v.width / 2.0 && (pp.y - v.center.y).abs() <= v.height / 2.0;
+        let in_active = active_vp.as_ref().is_some_and(|v| active_clip.as_ref().map_or(in_rect(v), |c| c.contains(pp)));
         if !in_active {
             app.canvas.hot_grips.clear();
             if app.run("mspace", serde_json::json!({"at": [pp.x, pp.y]})).is_err() && active_vp.is_some() {
@@ -808,7 +811,17 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             xf_paper.to_screen(Vec2::new(vp.center.x - vp.width / 2.0, vp.center.y + vp.height / 2.0)),
             xf_paper.to_screen(Vec2::new(vp.center.x + vp.width / 2.0, vp.center.y - vp.height / 2.0)),
         );
-        painter.rect_stroke(r, 0.0, Stroke::new(3.0, Color32::from_rgb(0x2a, 0x2a, 0x2a)), egui::StrokeKind::Middle);
+        let heavy = Stroke::new(3.0, Color32::from_rgb(0x2a, 0x2a, 0x2a));
+        match &active_clip {
+            Some(c) => {
+                let mut pts: Vec<egui::Pos2> = c.polygon().iter().map(|q| xf_paper.to_screen(*q)).collect();
+                pts.extend(pts.first().copied());
+                painter.add(egui::Shape::line(pts, heavy));
+            }
+            None => {
+                painter.rect_stroke(r, 0.0, heavy, egui::StrokeKind::Middle);
+            }
+        }
         if let Ok(st) = app.session.state() {
             let mut hs = sel.clone();
             hs.extend(app.canvas.hover.filter(|h| !sel.contains(h)));

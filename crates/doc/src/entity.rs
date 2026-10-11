@@ -569,6 +569,30 @@ pub struct Viewport {
     /// Per-viewport layer colour overrides (VP Color in the Layer Properties Manager).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layer_colors: Vec<(String, Color)>,
+    /// The paper-space entity whose outline clips the viewport (a closed polyline, circle,
+    /// ellipse or spline; DXF group 340). `None`: the rectangle `center`/`width`/`height`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip: Option<Handle>,
+    /// Display on (MVIEW ON/OFF). An off viewport shows its border but no model space.
+    #[serde(default = "yes")]
+    pub on: bool,
+}
+impl Default for Viewport {
+    fn default() -> Self {
+        Viewport {
+            center: Vec3::ZERO,
+            width: 1.0,
+            height: 1.0,
+            view_center: Vec2::ZERO,
+            view_height: 1.0,
+            id: 0,
+            locked: false,
+            frozen_layers: Vec::new(),
+            layer_colors: Vec::new(),
+            clip: None,
+            on: true,
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

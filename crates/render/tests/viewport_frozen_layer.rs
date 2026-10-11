@@ -19,6 +19,8 @@ fn drawing() -> Drawing {
         locked: false,
         frozen_layers: Vec::new(),
         layer_colors: Vec::new(),
+        clip: None,
+        on: true,
     };
     d.add(&Space::Paper("Layout1".into()), Common { layer: "VPORTS".into(), ..Default::default() }, EntityKind::Viewport(vp)).unwrap();
     d

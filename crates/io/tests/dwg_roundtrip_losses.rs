@@ -26,6 +26,8 @@ fn viewport(id: u32) -> EntityKind {
         locked: false,
         frozen_layers: vec![],
         layer_colors: vec![],
+        clip: None,
+        on: true,
     })
 }
 

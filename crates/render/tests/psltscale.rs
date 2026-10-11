@@ -23,6 +23,8 @@ fn drawing(psltscale: i64) -> Drawing {
         locked: false,
         frozen_layers: Vec::new(),
         layer_colors: Vec::new(),
+        clip: None,
+        on: true,
     };
     d.add(&Space::Paper("Layout1".into()), Common::default(), EntityKind::Viewport(vp)).unwrap();
     d

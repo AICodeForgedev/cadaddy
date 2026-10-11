@@ -11,9 +11,11 @@ use serde_json::{Value, json};
 use super::file::{base64_encode, io};
 use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
+use viewports::MviewM;
 
 mod plotstyle;
 mod prompts;
+mod viewports;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -31,8 +33,18 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layout.list", "List Layouts", run_list).params("→ [{name, tabOrder, page, viewports}]").noundo(),
         CommandSpec::new("mview", "Viewports", run_mview)
             .alias(&["mv"])
-            .params("{p1?, p2? (default: printable area), count?: 1-4, arrangement?: vertical|horizontal|left|right|above|below, layout?}")
+            .params(
+                "{option?: fit|polygonal|object|on|off|lock|restore, p1?, p2? (default: printable area), count?: 1-4, arrangement?: vertical|horizontal|left|right|above|below, points?: [[x,y]…] + bulges? (polygonal), object? (closed object to clip by), handles? + locked? (on/off/lock), layout?}",
+            )
             .interactive(|_| Ok(Box::new(MviewM::new(1, true)))),
+        CommandSpec::new("mview.polygonal", "Polygonal Viewport", |s, p| run_mview(s, &viewports::with(p.clone(), "option", json!("polygonal"))))
+            .menu(&["View", "Viewports", "Polygonal Viewport"])
+            .params("{points: [[x,y]…] (at least three), bulges?, layout?}")
+            .interactive(|_| Ok(Box::new(MviewM::polygonal()))),
+        CommandSpec::new("vpclip", "Clip Viewport", viewports::run_vpclip)
+            .menu(&["Modify", "Clip", "Viewport"])
+            .params("{handle?: viewport (default: selected or active), object?: closed object | points?: [[x,y]…] + bulges?, delete?: bool, layout?}")
+            .interactive(|_| Ok(Box::new(viewports::VpclipM::default()))),
         CommandSpec::new("vports", "New Viewports...", run_mview)
             .menu(&["View", "Viewports", "New Viewports..."])
             .params("{count?: 1-4, arrangement?, p1?, p2?, layout?}")
@@ -97,7 +109,7 @@ fn layout_viewports(s: &Session) -> Result<Vec<(Handle, Viewport)>> {
         .map(|st| {
             st.iter()
                 .filter_map(|e| match &e.kind {
-                    EntityKind::Viewport(v) if v.id != 1 && v.height > 1e-12 && v.view_height > 1e-12 => Some((e.handle, v.clone())),
+                    EntityKind::Viewport(v) if v.id != 1 && v.on && v.height > 1e-12 && v.view_height > 1e-12 => Some((e.handle, v.clone())),
                     _ => None,
                 })
                 .collect()
@@ -112,11 +124,7 @@ fn run_mspace(s: &mut Session, p: &Value) -> Result<Value> {
     let pick = if let Some(h) = want {
         vps.iter().find(|(x, _)| *x == h).map(|(h, _)| *h).ok_or_else(|| bad("mspace", "`handle` is not a viewport in this layout"))?
     } else if let Some(a) = at {
-        vps.iter()
-            .rev()
-            .find(|(_, v)| (a.x - v.center.x).abs() <= v.width / 2.0 && (a.y - v.center.y).abs() <= v.height / 2.0)
-            .map(|(h, _)| *h)
-            .ok_or_else(|| bad("mspace", "no viewport at that point"))?
+        viewports::viewport_at(s, a).ok_or_else(|| bad("mspace", "no viewport at that point"))?
     } else {
         let last = s.state()?.mspace;
         match last.filter(|h| vps.iter().any(|(x, _)| x == h)).or_else(|| vps.first().map(|(h, _)| *h)) {
@@ -424,31 +432,10 @@ fn add_viewports(s: &mut Session, space: &Space, rect: Bounds2, count: usize, ar
     }
     let common = s.current_common();
     let d = s.doc_mut()?;
-    let mut id = d
-        .layouts
-        .iter()
-        .flat_map(|l| l.entities.iter())
-        .filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some(v.id) } else { None })
-        .max()
-        .unwrap_or(1)
-        .max(1);
     let mut out = Vec::new();
-    // Layers marked "New VP Freeze" start frozen in new viewports.
-    let vp_frozen: Vec<String> = d.layers.iter().filter(|l| l.vp_freeze_new).map(|l| l.name.clone()).collect();
     for r in split(rect, count, arrangement) {
-        let (view_center, view_height) = fit_view(d, r.width(), r.height());
-        id = id.saturating_add(1);
-        let vp = Viewport {
-            center: r.center().to3(0.0),
-            width: r.width(),
-            height: r.height(),
-            view_center,
-            view_height,
-            id,
-            locked: false,
-            frozen_layers: vp_frozen.clone(),
-            layer_colors: Vec::new(),
-        };
+        let id = viewports::next_viewport_id(d);
+        let vp = viewports::new_viewport(d, r, id);
         out.push(d.add(space, common.clone(), EntityKind::Viewport(vp))?);
     }
     Ok(out)
@@ -467,6 +454,9 @@ fn mview(s: &mut Session, p: &Value, count: usize, cmd: &str) -> Result<Value> {
 }
 
 fn run_mview(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(r) = viewports::mview_option(s, p) {
+        return r;
+    }
     let count = match p.get("count") {
         None | Some(Value::Null) => 1,
         Some(v) => v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad("mview", "count must be 1, 2, 3 or 4"))?,
@@ -476,79 +466,6 @@ fn run_mview(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_mview_n(s: &mut Session, p: &Value, n: usize) -> Result<Value> {
     mview(s, p, n, "vports")
-}
-
-/// MVIEW / VPORTS prompts: first corner (or Fit, or a viewport count), opposite corner.
-struct MviewM {
-    count: usize,
-    /// Offer the 2/3/4 keywords (MVIEW) rather than a fixed count (View > Viewports > n).
-    choose: bool,
-    first: Option<Vec2>,
-}
-
-impl MviewM {
-    fn new(count: usize, choose: bool) -> Self {
-        MviewM { count, choose, first: None }
-    }
-    fn create(&self, s: &mut Session, rect: Option<Bounds2>) -> Result<Step> {
-        let mut p = json!({ "count": self.count });
-        if let (Some(r), Some(o)) = (rect, p.as_object_mut()) {
-            o.insert("p1".into(), json!([r.min.x, r.min.y]));
-            o.insert("p2".into(), json!([r.max.x, r.max.y]));
-        }
-        let r = mview(s, &p, self.count, "mview")?;
-        let n = r.get("viewports").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
-        s.echo(format!("{n} viewport(s) created, zoomed to the model extents."));
-        Ok(Step::Done)
-    }
-}
-
-impl Interactive for MviewM {
-    fn name(&self) -> &'static str {
-        "MVIEW"
-    }
-    fn begin(&mut self, s: &mut Session) -> Result<Step> {
-        if s.space() == Space::Model {
-            s.echo("** Command not allowed in Model Tab ** (switch to a layout first)");
-            return Ok(Step::Done);
-        }
-        Ok(Step::Continue)
-    }
-    fn prompt(&self, _s: &Session) -> Prompt {
-        match self.first {
-            None if self.choose && self.count == 1 => {
-                Prompt::new("Specify corner of viewport", Accept::POINT).kw(&["Fit", "2", "3", "4"]).default("Fit")
-            }
-            None => Prompt::new("Specify first corner", Accept::POINT).kw(&["Fit"]).default("Fit"),
-            Some(a) => Prompt::new("Specify opposite corner", Accept::POINT).base(a),
-        }
-    }
-    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
-        match (self.first, i) {
-            (None, Input::Enter) => self.create(s, None),
-            (None, Input::Keyword(k)) | (None, Input::Text(k)) => match k.trim().to_ascii_lowercase().as_str() {
-                "fit" | "f" => self.create(s, None),
-                n @ ("2" | "3" | "4") if self.choose => {
-                    self.count = n.parse().unwrap_or(1);
-                    Ok(Step::Continue)
-                }
-                _ => Err(crate::EngineError::Other("Requires a point or option keyword.".into())),
-            },
-            (None, Input::Point(p)) => {
-                self.first = Some(p);
-                Ok(Step::Continue)
-            }
-            (Some(a), Input::Point(b)) => self.create(s, Some(Bounds2::new(a, b))),
-            _ => Ok(Step::Continue),
-        }
-    }
-    fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
-        let Some(a) = self.first else { return Vec::new() };
-        split(Bounds2::new(a, c), self.count, "")
-            .into_iter()
-            .map(|r| super::helpers::lwpoly(super::helpers::rect_vertices(r.min, r.max), true))
-            .collect()
-    }
 }
 
 /// A plot scale: a number (paper units per model unit) or `"a:b"` / `"a/b"`.
@@ -590,6 +507,8 @@ fn viewport_json(h: Handle, v: &Viewport) -> Value {
         "viewHeight": v.view_height,
         "scale": if v.view_height > 0.0 { v.height / v.view_height } else { 0.0 },
         "locked": v.locked,
+        "on": v.on,
+        "clip": v.clip.map(|h| h.hex()),
         "frozenLayers": v.frozen_layers,
         "layerColors": v.layer_colors.iter().map(|(l, c)| json!({ "layer": l, "color": c.name() })).collect::<Vec<_>>(),
     })
@@ -982,9 +901,10 @@ mod tests {
         let v = viewports(&s, "Layout1");
         assert_eq!(v.len(), 1);
         assert!((v[0].1.width - 5.0).abs() < 1e-9 && (v[0].1.height - 3.0).abs() < 1e-9);
-        // MVIEW 2 → Fit (Enter).
+        // MVIEW 2 → arrangement (Enter: Vertical) → Fit (Enter).
         s.cmdline("mview").unwrap();
         s.cmdline("2").unwrap();
+        s.cmdline("").unwrap();
         s.cmdline("").unwrap();
         assert!(s.running.is_none());
         assert_eq!(viewports(&s, "Layout1").len(), 3);

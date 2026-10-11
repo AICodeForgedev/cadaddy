@@ -107,6 +107,8 @@
 	Circle	Коло
 	Circumference	Довжина кола
 	Clear	Очистити
+	Clip	Обрізати
+	Clip Viewport	Обрізати видовий екран
 	Clipboard	Буфер обміну
 	Close	Закрити
 	Close All	Закрити всі
@@ -584,6 +586,7 @@
 	PolarSnap	Полярна прив'язка
 	Polygon	Правильний багатокутник
 	Polygonal	Багатокутний
+	Polygonal Viewport	Багатокутний видовий екран
 	Polyline	Полілінія
 	Position X	Позиція X
 	Position Y	Позиція Y
