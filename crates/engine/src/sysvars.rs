@@ -17,6 +17,7 @@ const SESSION_VARS: &[&str] = &[
     "POLARDIST",
     "SNAPTYPE",
     "AUTOSNAP",
+    "QNEWTEMPLATE",
     "GRIDMODE",
     "SNAPMODE",
     "SNAPUNIT",
@@ -106,6 +107,8 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "CMDNAMES" => json!(s.running.as_ref().map(|r| r.id.to_ascii_uppercase()).unwrap_or_default()),
         "DWGNAME" => json!(s.state().map(|d| d.title.clone()).unwrap_or_default()),
         "DBMOD" => json!(s.state().map(|d| i32::from(d.is_dirty())).unwrap_or(0)),
+        // The template NEW/QNEW start from (a profile setting, like FONTALT; "" = none).
+        "QNEWTEMPLATE" => json!(crate::cmd::file::qnew_template()),
         "CTAB" => json!(
             s.state()
                 .map(|d| match &d.space {
@@ -208,6 +211,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             st.polarmode = bits & 8 != 0;
             st.otrack = bits & 16 != 0;
         }
+        "QNEWTEMPLATE" => crate::cmd::file::set_qnew_template(v.as_str().ok_or_else(bad)?),
         "POLARANG" => st.polarang = as_f64(v).filter(|a| *a > 0.0).ok_or_else(bad)?.to_radians(),
         "GRIDMODE" => st.gridmode = as_bool(v).ok_or_else(bad)?,
         "SNAPMODE" => st.snapmode = as_bool(v).ok_or_else(bad)?,

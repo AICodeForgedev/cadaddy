@@ -51,3 +51,10 @@ fn save_lists_the_entities_the_file_does_not_keep() {
     let r = s.execute("document.bytes", &json!({})).unwrap();
     assert!(r.get("notSaved").is_none() && s.log.len() == n);
 }
+
+#[test]
+fn templates_report_what_dwg_does_not_keep() {
+    use cadcraft_engine::cmd::file::drops_unknown;
+    assert!(drops_unknown("a.dwg") && drops_unknown("B.DWT"));
+    assert!(!drops_unknown("a.dxf"));
+}

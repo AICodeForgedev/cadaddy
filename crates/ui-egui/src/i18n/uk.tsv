@@ -147,6 +147,7 @@
 	Color 9	Колір 9
 	Color Index	Індекс кольору
 	Color...	Колір...
+	Command Aliases	Псевдоніми команд
 	Command History	Історія команд
 	Clear Command History	Очистити історію команд
 	Command Line	Командний рядок
@@ -240,6 +241,7 @@
 	Drawing (DWG)	Креслення (DWG)
 	Drawing (DXF)	Креслення (DXF)
 	Drawing Limits	Межі креслення
+	Drawing Template (DWT)	Шаблон креслення (DWT)
 	Drawing Utilities	Утиліти креслення
 	Drawings (DWG, DXF)	Креслення (DWG, DXF)
 	Dynamic	Динамічно
@@ -533,6 +535,7 @@
 	New Layout	Новий аркуш
 	New VP Freeze	Заморозити в нових ВЕ
 	New Viewports...	Нові видові екрани...
+	New from Template...	Створити із шаблону...
 	New layout	Новий аркуш
 	New state name	Назва нового стану
 	No	Ні
@@ -694,6 +697,7 @@
 	Regen All	Регенерувати все
 	Region	Область
 	Region/Mass Properties	Властивості області/маси
+	Reinitialize	Переініціалізувати
 	Relative	Відносні
 	Relative to last segment	Відносно останнього сегмента
 	Remove Leader	Видалити виноску

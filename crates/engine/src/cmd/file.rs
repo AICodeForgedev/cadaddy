@@ -2,6 +2,9 @@
 //! registered by the host (desktop/CLI) via [`crate::cmd::file::set_io`]. On the web, where there is
 //! no file system, saved files reach the user through the host's [`crate::cmd::file::set_deliver`].
 
+mod pgp;
+mod template;
+
 use std::sync::OnceLock;
 
 use cadcraft_doc::Drawing;
@@ -10,6 +13,9 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::{Result, Session};
+
+pub(crate) use pgp::{specs as alias_specs, user_alias};
+pub use template::{qnew_template, set_qnew_template};
 
 /// Plot a space to PDF bytes with JSON options (`{paper?, landscape?, fit?, lineweights?, …}`).
 pub type PlotHook = fn(&Drawing, &cadcraft_doc::Space, &Value) -> std::result::Result<Vec<u8>, String>;
@@ -123,7 +129,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["File", "New Drawing..."])
             .key("Cmd+N")
             .alias(&["qnew"])
-            .params("{metric?: bool}")
+            .params("{metric?: bool, template?: path to a .dwt/.dxf template (\".\" for none; default QNEWTEMPLATE)}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("open", "Open...", run_open)
@@ -148,6 +154,9 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn run_new(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(r) = template::run_new(s, p)? {
+        return Ok(r);
+    }
     let i = s.new_drawing(bool_or(p, "metric", false));
     Ok(json!({ "index": i, "title": s.docs.get(i).map(|d| d.title.clone()) }))
 }
@@ -361,13 +370,14 @@ pub fn not_saved_message(lost: &std::collections::BTreeMap<String, usize>) -> Op
 /// Whether saving to `path` leaves out the entities [`not_saved`] counts: DWG does (the DWG
 /// bridge drops types it doesn't know); DXF writes them back as read.
 pub fn drops_unknown(path: &str) -> bool {
-    std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("dwg"))
+    // Templates (.dwt) are written as DWG too.
+    std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("dwg") || e.eq_ignore_ascii_case("dwt"))
 }
 
 /// Whether `path` is saved as a drawing (DXF, DWG) rather than exported as an image.
 fn is_drawing_file(path: &str) -> bool {
     let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    matches!(ext.as_str(), "dxf" | "dwg" | "")
+    matches!(ext.as_str(), "dxf" | "dwg" | "dwt" | "")
 }
 
 /// Say on the command line what the file couldn't keep, and list it in the result's `notSaved`.
