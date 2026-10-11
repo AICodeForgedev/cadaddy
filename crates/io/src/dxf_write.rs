@@ -96,6 +96,8 @@ struct OsnapRef {
 /// Handles and names the entity writer needs from the rest of the file.
 #[derive(Default)]
 struct Ctx {
+    /// Multiline styles: MLINESTYLE handles and their dictionary.
+    mlines: crate::dxf_mline::Plan,
     /// First viewport of each layout that has no paper-space viewport (id 1) → the layout's index;
     /// [`paper_view`] writes that layout's paper-space viewport ahead of it.
     paper_views: HashMap<Handle, usize>,
@@ -207,6 +209,9 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("ATTMODE", 70),
     ("TEXTSIZE", 40),
     ("TRACEWID", 40),
+    ("CMLSTYLE", 2),
+    ("CMLJUST", 70),
+    ("CMLSCALE", 40),
     ("TEXTSTYLE", 7),
     ("CLAYER", 8),
     ("CELTYPE", 6),
@@ -478,6 +483,11 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     w.f(42, v.bulge);
                 }
             }
+        }
+        EntityKind::MLine(m) => {
+            w.s(0, "MLINE");
+            common(w, e, owner, paper, "AcDbMline");
+            w.t.extend(crate::dxf_mline::entity_tags(m, &cx.mlines.handle(&m.style)));
         }
         EntityKind::Polyline3d(p) => {
             w.s(0, "POLYLINE");
@@ -1460,6 +1470,7 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     }
     // Image definitions (IMAGEDEF objects) of raster images anywhere in the drawing.
     cx.images = crate::dxf_image::plan(every.iter().copied(), || w.h());
+    cx.mlines = crate::dxf_mline::plan(d, every.iter().copied(), || w.h());
     // DIMASSOC objects of associative dimensions in model and paper space.
     for st in &all_spaces {
         for e in st.iter() {
@@ -1952,6 +1963,8 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     w.s(350, layout_dict.clone());
     w.s(3, "ACAD_MLEADERSTYLE");
     w.s(350, mleader_dict.clone());
+    w.s(3, "ACAD_MLINESTYLE");
+    w.s(350, cx.mlines.dict.clone());
     w.s(3, dxf_ext::PLOT_STYLE_NAMES_KEY);
     w.s(350, pstyle_dict.clone());
     w.s(3, "ACAD_TABLESTYLE");
@@ -1988,6 +2001,8 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     for (s, h) in mleader_styles.iter().zip(&mleader_handles) {
         mleader_style_obj(&mut w, s, h, &mleader_dict, byblock_ltype.as_deref(), cx.style(&s.text_style));
     }
+    // Multiline styles.
+    w.t.extend(crate::dxf_mline::objects(&cx.mlines, &root_dict));
     // Table styles.
     w.s(0, "DICTIONARY");
     w.s(5, table_style_dict.clone());

@@ -13,6 +13,7 @@ mod fill;
 mod hatch;
 mod linetype;
 mod linetype_text;
+mod mline;
 pub mod paper;
 mod plotstyle;
 mod point;
@@ -667,6 +668,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             }
         }
         EntityKind::Hatch(h) => hatch::draw(b, ctx, e, h, rgb, lw, tol),
+        EntityKind::MLine(m) => mline::draw(b, ctx, e, m, rgb, lw, tol),
         EntityKind::LwPolyline(p) if p.const_width > 0.0 || p.vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0) => {
             if b.opts.fill && ctx.d.header.i64("FILLMODE", 1) != 0 {
                 match &lt {

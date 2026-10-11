@@ -7,7 +7,7 @@ use cadcraft_dxf::{Tag, records, sections};
 use cadcraft_geom::Vec2;
 
 /// A small DXF as another program writes it: a line, an image on layer `Pics` pointing at an
-/// IMAGEDEF named `logo`, and an MLINE (a type CADCraft doesn't model).
+/// IMAGEDEF named `logo`, and an MLINE without vertices.
 fn foreign_dxf() -> String {
     let groups: &[(i32, &str)] = &[
         (0, "SECTION"),

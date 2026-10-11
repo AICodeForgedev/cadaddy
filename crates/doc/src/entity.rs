@@ -6,6 +6,9 @@ use cadcraft_geom::{
 };
 use serde::{Deserialize, Serialize};
 
+mod mline;
+pub use mline::*;
+
 /// A database handle (DXF group 5), unique per drawing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Handle(pub u64);
@@ -727,6 +730,7 @@ pub enum EntityKind {
     AttDef(Attrib),
     Insert(Insert),
     Dimension(Dimension),
+    MLine(MLine),
     Leader(Leader),
     MLeader(MLeader),
     Hatch(Hatch),
@@ -778,6 +782,7 @@ impl EntityKind {
             EntityKind::AttDef(_) => "Attribute Definition",
             EntityKind::Insert(_) => "Block Reference",
             EntityKind::Dimension(_) => "Dimension",
+            EntityKind::MLine(_) => "MLine",
             EntityKind::Leader(_) => "Leader",
             EntityKind::MLeader(_) => "Multileader",
             EntityKind::Hatch(_) => "Hatch",
@@ -810,6 +815,7 @@ impl EntityKind {
             EntityKind::AttDef(_) => "ATTDEF",
             EntityKind::Insert(_) => "INSERT",
             EntityKind::Dimension(_) => "DIMENSION",
+            EntityKind::MLine(_) => "MLINE",
             EntityKind::Leader(_) => "LEADER",
             EntityKind::MLeader(_) => "MULTILEADER",
             EntityKind::Hatch(_) => "HATCH",
@@ -886,6 +892,7 @@ impl EntityKind {
             EntityKind::AttDef(a) => vec![Prim::Point(a.text.insert.xy())],
             EntityKind::Insert(i) => vec![Prim::Point(i.insert.xy())],
             EntityKind::Dimension(d) => vec![Prim::Point(d.defpt.xy())],
+            EntityKind::MLine(m) => m.segments().into_iter().map(Prim::Seg).collect(),
             EntityKind::MLeader(m) => m
                 .leaders
                 .iter()
@@ -1003,6 +1010,12 @@ impl EntityKind {
                 }
                 d.block = None;
             }
+            EntityKind::MLine(ml) => {
+                ml.vertices.iter_mut().for_each(|v| t3(&mut v.p));
+                ml.vertices.iter_mut().flat_map(|v| v.cuts.iter_mut()).for_each(|c| (c.start, c.end) = (c.start * s, c.end * s));
+                // Mirrored, the elements change sides.
+                ml.scale *= if mirror { -s } else { s };
+            }
             EntityKind::Leader(l) => l.vertices.iter_mut().for_each(t3),
             EntityKind::MLeader(ml) => {
                 for l in &mut ml.leaders {
@@ -1108,6 +1121,7 @@ impl EntityKind {
             EntityKind::AttDef(a) => vec![a.text.justify_point()],
             EntityKind::Insert(i) => std::iter::once(i.insert.xy()).chain(i.attribs.iter().map(|a| a.text.justify_point())).collect(),
             EntityKind::Dimension(d) => vec![d.p13.xy(), d.p14.xy(), d.defpt.xy(), d.text_mid.xy()],
+            EntityKind::MLine(m) => m.points(),
             EntityKind::Leader(l) => l.vertices.iter().map(|v| v.xy()).collect(),
             EntityKind::MLeader(m) => m.leaders.iter().flat_map(|l| l.iter().map(|v| v.xy())).chain(std::iter::once(m.landing.xy())).collect(),
             EntityKind::Hatch(h) => {

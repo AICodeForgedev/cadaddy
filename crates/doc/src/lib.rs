@@ -63,6 +63,8 @@ pub struct Drawing {
     pub dim_styles: Vec<DimStyle>,
     pub mleader_styles: Vec<MLeaderStyle>,
     pub table_styles: Vec<TableStyle>,
+    /// Multiline styles (MLSTYLE); STANDARD is always there.
+    pub mline_styles: Vec<MLineStyle>,
     pub blocks: BTreeMap<String, std::sync::Arc<Block>>,
     pub model: EntityStore,
     pub layouts: Vec<Layout>,
@@ -123,6 +125,7 @@ impl Drawing {
             dim_styles: vec![DimStyle::default()],
             mleader_styles: vec![MLeaderStyle::default()],
             table_styles: vec![TableStyle::default()],
+            mline_styles: vec![MLineStyle::default()],
             blocks: BTreeMap::new(),
             model: EntityStore::new(),
             layouts: vec![Layout::new("Layout1", 1), Layout::new("Layout2", 2)],

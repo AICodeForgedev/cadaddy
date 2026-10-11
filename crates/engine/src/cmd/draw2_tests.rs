@@ -504,23 +504,26 @@ fn poly3d_json_and_command_line() {
 
 #[test]
 fn mline_json_and_command_line() {
+    // Element offsets from the vertex path, sorted.
+    let offs = |k: EntityKind| match k {
+        EntityKind::MLine(m) => {
+            let mut o = m.offsets();
+            o.sort_by(f64::total_cmp);
+            o
+        }
+        k => panic!("{k:?}"),
+    };
     let mut s = Session::new();
-    let r = s.execute("mline", &json!({"points": [[0, 0], [10, 0], [10, 10]], "scale": 2, "justification": "zero"})).unwrap();
-    assert_eq!(r["handles"].as_array().unwrap().len(), 2);
-    let ys: Vec<f64> =
-        s.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::LwPolyline(p) = &e.kind { Some(p.vertices[0].p.y) } else { None }).collect();
-    assert!(ys.contains(&1.0) && ys.contains(&-1.0), "{ys:?}");
+    s.execute("mline", &json!({"points": [[0, 0], [10, 0], [10, 10]], "scale": 2, "justification": "zero"})).unwrap();
+    assert_eq!(offs(last(&s)), vec![-1.0, 1.0]);
     assert!(s.execute("mline", &json!({"points": [[0, 0], [1, 0]], "justification": "middle"})).is_err());
     let mut s = Session::new();
     s.cmdline("mline j b s 3 0,0 10,0 10,5").unwrap();
     s.cmdline("").unwrap();
     assert!(s.running.is_none());
-    let ys: Vec<f64> =
-        s.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::LwPolyline(p) = &e.kind { Some(p.vertices[0].p.y) } else { None }).collect();
-    assert_eq!(ys.len(), 2);
-    assert!(ys.contains(&0.0) && ys.contains(&3.0), "{ys:?}");
+    assert_eq!(offs(last(&s)), vec![0.0, 3.0]);
     s.cmdline("mline 0,20 5,20 5,25 c").unwrap();
-    assert!(matches!(last(&s), EntityKind::LwPolyline(p) if p.closed));
+    assert!(matches!(last(&s), EntityKind::MLine(m) if m.closed && m.vertices.len() == 3));
 }
 
 #[test]

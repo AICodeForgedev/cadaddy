@@ -333,7 +333,7 @@ fn run_bytes(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Entities a DXF or DWG file doesn't keep: those of object types CADCraft doesn't model
-/// (MLINE, 3DSOLID, MULTILEADER… read from other programs' files and kept in the drawing, but
+/// (3DSOLID, MULTILEADER… read from other programs' files and kept in the drawing, but
 /// not written), counted by DXF type across model space, layouts and block definitions.
 pub fn not_saved(d: &Drawing) -> std::collections::BTreeMap<String, usize> {
     let mut out: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();

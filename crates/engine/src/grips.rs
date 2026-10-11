@@ -224,6 +224,7 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
             d.block = None;
         }
         EntityKind::Leader(l) => set_xy(l.vertices.get_mut(index)?, to),
+        EntityKind::MLine(m) => set_xy(&mut m.vertices.get_mut(index)?.p, to),
         EntityKind::MLeader(m) => {
             let mut idx = 0usize;
             let mut done = false;

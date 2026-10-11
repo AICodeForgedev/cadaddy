@@ -12,8 +12,10 @@ use super::machines::number;
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
+pub(crate) mod mline;
+
 pub fn specs() -> Vec<CommandSpec> {
-    vec![
+    let mut v = vec![
         CommandSpec::new("arc.sce", "Start, Center, End", run_arc_variant)
             .menu(&["Draw", "Arc", "Start, Center, End"])
             .params("{start, center, end}")
@@ -113,11 +115,6 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["3p"])
             .params("{points: [[x,y,z?],...], closed?}")
             .interactive(|_| Ok(Box::new(Poly3dM::default()))),
-        CommandSpec::new("mline", "Multiline", run_mline)
-            .menu(&["Draw", "Multiline"])
-            .alias(&["ml"])
-            .params("{points, scale?, justification?: top|zero|bottom, closed?} (two offset polylines)")
-            .interactive(|s| Ok(Box::new(MlineM::new(s)))),
         CommandSpec::new("helix", "Helix", run_helix)
             .menu(&["Draw", "Helix"])
             .params("{center, baseRadius, topRadius?, height?, turns?, ccw?} (3D polyline approximation)")
@@ -134,7 +131,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Draw", "Center Line"])
             .params("{h1, h2} (two lines)")
             .interactive(|_| Ok(Box::new(CenterM { first: None, mark: false }))),
-    ]
+    ];
+    v.extend(mline::specs());
+    v
 }
 
 fn added(h: Handle) -> Result<Value> {
@@ -1886,187 +1885,6 @@ impl Interactive for Poly3dM {
     }
     fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
         self.pts.last().map(|l| vec![line(*l, c)]).unwrap_or_default()
-    }
-}
-
-// =====================================================================================
-// MLINE (two offset polylines)
-// =====================================================================================
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Just {
-    Top,
-    Zero,
-    Bottom,
-}
-
-fn mline_offsets(j: Just, scale: f64) -> [f64; 2] {
-    match j {
-        Just::Top => [0.0, -scale],
-        Just::Zero => [scale / 2.0, -scale / 2.0],
-        Just::Bottom => [scale, 0.0],
-    }
-}
-
-fn mline_kinds(pts: &[Vec2], closed: bool, j: Just, scale: f64) -> Vec<EntityKind> {
-    if pts.len() < 2 {
-        return Vec::new();
-    }
-    let pl = Polyline::from_points(pts, closed);
-    mline_offsets(j, scale)
-        .iter()
-        .filter_map(|d| {
-            let vs = if d.abs() < 1e-15 { Some(pl.vertices.clone()) } else { super::modify::offset_polyline(&pl, *d) };
-            vs.map(|vs| lwpoly(vs, closed))
-        })
-        .collect()
-}
-
-fn just_of(s: &str) -> Option<Just> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "t" | "top" => Some(Just::Top),
-        "z" | "zero" => Some(Just::Zero),
-        "b" | "bottom" => Some(Just::Bottom),
-        _ => None,
-    }
-}
-
-fn mline_defaults(s: &Session) -> (Just, f64) {
-    let d = s.doc().ok();
-    let metric = d.is_some_and(|d| d.header.i64("MEASUREMENT", 0) == 1);
-    let scale = d.map(|d| d.header.f64("CMLSCALE", if metric { 20.0 } else { 1.0 })).unwrap_or(1.0);
-    let j = match d.map(|d| d.header.i64("CMLJUST", 0)).unwrap_or(0) {
-        1 => Just::Zero,
-        2 => Just::Bottom,
-        _ => Just::Top,
-    };
-    (j, scale)
-}
-
-fn run_mline(s: &mut Session, p: &Value) -> Result<Value> {
-    let pts = points_param(p, "points").ok_or_else(|| bad("mline", "`points` (2 or more) is required"))?;
-    if pts.len() < 2 || pts.len() > MAX_GEN {
-        return Err(bad("mline", "need 2 or more points"));
-    }
-    let (dj, ds) = mline_defaults(s);
-    let j = match str_param(p, "justification") {
-        Some(t) => just_of(t).ok_or_else(|| bad("mline", "justification must be top, zero or bottom"))?,
-        None => dj,
-    };
-    let scale = f64_or(p, "scale", ds);
-    let mut hs = Vec::new();
-    for k in mline_kinds(&pts, bool_or(p, "closed", false), j, scale) {
-        hs.push(s.add_entity(k)?.hex());
-    }
-    Ok(json!({ "handles": hs }))
-}
-
-struct MlineM {
-    pts: Vec<Vec2>,
-    just: Just,
-    scale: f64,
-    asking: u8, // 0 none, 1 justification, 2 scale
-}
-
-impl MlineM {
-    fn new(s: &Session) -> Self {
-        let (just, scale) = mline_defaults(s);
-        MlineM { pts: Vec::new(), just, scale, asking: 0 }
-    }
-    fn finish(&self, s: &mut Session, closed: bool) -> Result<Step> {
-        for k in mline_kinds(&self.pts, closed, self.just, self.scale) {
-            s.add_entity(k)?;
-        }
-        Ok(Step::Done)
-    }
-}
-
-impl Interactive for MlineM {
-    fn name(&self) -> &'static str {
-        "MLINE"
-    }
-    fn begin(&mut self, s: &mut Session) -> Result<Step> {
-        let j = match self.just {
-            Just::Top => "Top",
-            Just::Zero => "Zero",
-            Just::Bottom => "Bottom",
-        };
-        s.echo(format!("Current settings: Justification = {j}, Scale = {:.2}, Style = STANDARD", self.scale));
-        Ok(Step::Continue)
-    }
-    fn prompt(&self, _s: &Session) -> Prompt {
-        match self.asking {
-            1 => return Prompt::new("Enter justification type", curves::KW).kw(&["Top", "Zero", "Bottom"]).default("top"),
-            2 => return Prompt::new("Enter mline scale", Accept::NUMBER).default(format!("{:.2}", self.scale)),
-            _ => {}
-        }
-        match self.pts.len() {
-            0 => Prompt::new("Specify start point", Accept::POINT).kw(&["Justification", "Scale", "STyle"]),
-            1 => Prompt::new("Specify next point", Accept::POINT).base_opt(self.pts.last().copied()),
-            2 => Prompt::new("Specify next point", Accept::POINT).kw(&["Undo"]).base_opt(self.pts.last().copied()),
-            _ => Prompt::new("Specify next point", Accept::POINT).kw(&["Close", "Undo"]).base_opt(self.pts.last().copied()),
-        }
-    }
-    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
-        if self.asking == 1 {
-            if let Input::Keyword(k) | Input::Text(k) = &i {
-                self.just = just_of(k).ok_or_else(|| other("Enter Top, Zero or Bottom."))?;
-                s.doc_mut()?.header.set_i64(
-                    "CMLJUST",
-                    match self.just {
-                        Just::Top => 0,
-                        Just::Zero => 1,
-                        Just::Bottom => 2,
-                    },
-                );
-            }
-            self.asking = 0;
-            return Ok(Step::Continue);
-        }
-        if self.asking == 2 {
-            if let Input::Text(t) = &i {
-                self.scale = number(t).filter(|v| v.is_finite()).ok_or_else(|| other("Requires a number."))?;
-                s.doc_mut()?.header.set_f64("CMLSCALE", self.scale);
-            }
-            self.asking = 0;
-            return Ok(Step::Continue);
-        }
-        match i {
-            Input::Keyword(k) => {
-                match k.as_str() {
-                    "Justification" => self.asking = 1,
-                    "Scale" => self.asking = 2,
-                    "Undo" => {
-                        self.pts.pop();
-                    }
-                    "Close" => return self.finish(s, true),
-                    _ => s.echo("Only the STANDARD multiline style is available."),
-                }
-                Ok(Step::Continue)
-            }
-            Input::Point(p) => {
-                if self.pts.last().is_none_or(|l| !l.near(p, 1e-12)) && self.pts.len() < MAX_GEN {
-                    self.pts.push(p);
-                }
-                Ok(Step::Continue)
-            }
-            Input::Enter => {
-                if self.pts.len() >= 2 {
-                    self.finish(s, false)
-                } else {
-                    Ok(Step::Cancel)
-                }
-            }
-            _ => Ok(Step::Continue),
-        }
-    }
-    fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
-        if self.pts.is_empty() || self.asking != 0 {
-            return Vec::new();
-        }
-        let mut pts = self.pts.clone();
-        pts.push(c);
-        mline_kinds(&pts, false, self.just, self.scale)
     }
 }
 

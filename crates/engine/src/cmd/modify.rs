@@ -1191,6 +1191,7 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                 })
                 .collect(),
         ),
+        EntityKind::MLine(m) => Some(super::draw2::mline::explode(e, m)),
         EntityKind::MText(m) => Some(
             cadcraft_fonts::plain_mtext(&m.contents)
                 .split('\n')

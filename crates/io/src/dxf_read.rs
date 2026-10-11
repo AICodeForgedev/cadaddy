@@ -407,6 +407,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             let corners = corners.map(|p| ocs(&c, p));
             if kind == "SOLID" { EntityKind::Solid(Solid { corners }) } else { EntityKind::Trace(Solid { corners }) }
         }
+        "MLINE" => EntityKind::MLine(crate::dxf_mline::read_entity(tags)),
         "3DFACE" => EntityKind::Face3d(Face3d { corners: [t.p(10), t.p(11), t.p(12), t.p(13)], hidden_edges: t.i(70).unwrap_or(0) as u8 }),
         "HATCH" => {
             let mut k = hatch(tags, &t)?;
@@ -1597,6 +1598,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     apply_sortents(&mut d, &objs.sortents, &rx.brs, &paper_block_for, &first_layout);
     objs.apply(&mut d, &rx);
     crate::dxf_image::resolve(&secs, &mut d);
+    crate::dxf_mline::resolve(&secs, &mut d);
     // Keep handles unique against the header's seed.
     let seed = d.header.str("HANDSEED", "");
     if let Some(h) = own_seed.or_else(|| Handle::parse_hex(&seed)) {

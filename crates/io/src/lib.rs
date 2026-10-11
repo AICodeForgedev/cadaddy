@@ -10,6 +10,9 @@ mod dxf_write;
 pub mod pdf;
 pub mod svg;
 
+/// Multilines and their styles (MLINE, MLINESTYLE).
+mod dxf_mline;
+
 use cadcraft_doc::{Drawing, Space};
 use cadcraft_geom::Bounds2;
 
