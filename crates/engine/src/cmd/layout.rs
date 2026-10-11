@@ -718,8 +718,47 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- plotting ----------
 
+/// Most sheets in one plot (the PDF writer's own limit, `cadcraft_io::pdf::MAX_PAGES`).
+const MAX_PLOT_SHEETS: usize = 256;
+
+/// The sheets of a multi-sheet plot, as canonical names: the `layouts` list (`"Model"` or layout
+/// names, any case) or `"all"` (Model if it has objects, then every layout in tab order).
+fn plot_sheets(cmd: &str, d: &cadcraft_doc::Drawing, v: &Value) -> Result<Vec<String>> {
+    let names: Vec<String> = match v {
+        Value::String(a) if a.eq_ignore_ascii_case("all") => {
+            let mut layouts: Vec<_> = d.layouts.iter().collect();
+            layouts.sort_by_key(|l| l.tab_order);
+            let model = (!d.model.is_empty()).then(|| "Model".to_string());
+            model.into_iter().chain(layouts.iter().map(|l| l.name.clone())).collect()
+        }
+        Value::Array(a) => a
+            .iter()
+            .map(|n| match n.as_str() {
+                Some(n) if n.eq_ignore_ascii_case("model") => Ok("Model".to_string()),
+                Some(n) => layout_name(cmd, d, n),
+                None => Err(bad(cmd, "`layouts` must be a list of layout names or \"all\"")),
+            })
+            .collect::<Result<_>>()?,
+        _ => return Err(bad(cmd, "`layouts` must be a list of layout names or \"all\"")),
+    };
+    if names.is_empty() {
+        return Err(bad(cmd, "there are no sheets to plot"));
+    }
+    if names.len() > MAX_PLOT_SHEETS {
+        return Err(bad(cmd, format!("at most {MAX_PLOT_SHEETS} sheets fit in one PDF")));
+    }
+    Ok(names)
+}
+
+/// PLOT / EXPORTPDF. Besides the page setup overrides, the plotter takes `layouts?: [name |
+/// "Model"] | "all"` (several sheets in one PDF, one page each, labelled with the layout names),
+/// `layers?: bool` (drawing layers as PDF layers, default on), `offLayers?: bool` (layers that
+/// are off on hidden PDF layers), `links?: [{handle, url}]` (hyperlinks) and `title?`.
 fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let hook = io().and_then(|h| h.plot).ok_or_else(|| bad(cmd, "plotting is not available in this build"))?;
+    // Checked here for a clear error; the plotter resolves the names the same way.
+    let sheets = p.get("layouts").map(|v| plot_sheets(cmd, s.doc()?, v)).transpose()?;
+
     let space = match str_param(p, "layout") {
         Some(n) if n.eq_ignore_ascii_case("model") => Space::Model,
         Some(n) => Space::Paper(layout_name(cmd, s.doc()?, n)?),
@@ -736,10 +775,12 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         }
     }
     let bytes = hook(s.doc()?, &space, &opts).map_err(|e| bad(cmd, e))?;
-    let layout = match &space {
-        Space::Model => "Model".to_string(),
-        Space::Paper(n) => n.clone(),
+    let layout = match (&sheets, &space) {
+        (Some(names), _) => names.first().cloned().unwrap_or_default(),
+        (None, Space::Model) => "Model".to_string(),
+        (None, Space::Paper(n)) => n.clone(),
     };
+    let pages = sheets.as_ref().map_or(1, Vec::len);
     match str_param(p, "path") {
         Some(_path) => {
             #[cfg(not(target_arch = "wasm32"))]
@@ -748,12 +789,12 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
                 let tmp = format!("{path}.cadcraft-tmp");
                 std::fs::write(&tmp, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
                 std::fs::rename(&tmp, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-                Ok(json!({ "path": path, "bytes": bytes.len(), "layout": layout }))
+                Ok(json!({ "path": path, "bytes": bytes.len(), "layout": layout, "pages": pages }))
             }
             #[cfg(target_arch = "wasm32")]
             Err(bad(cmd, "paths are not available on the web; omit `path` to get the PDF as base64 `data`"))
         }
-        None => Ok(json!({ "data": base64_encode(&bytes), "bytes": bytes.len(), "layout": layout })),
+        None => Ok(json!({ "data": base64_encode(&bytes), "bytes": bytes.len(), "layout": layout, "pages": pages })),
     }
 }
 

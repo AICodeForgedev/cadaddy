@@ -1,15 +1,20 @@
-//! Vector PDF plotting (PLOT / EXPORTPDF): a minimal PDF 1.4 writer of our own.
+//! Vector PDF plotting (PLOT / EXPORTPDF): a minimal PDF writer of our own (pure Rust, no file
+//! access, so it runs on the web too).
 //!
-//! One page per plot: model-space extents fitted to a sheet, or a layout at 1:1 on its paper
+//! One page per sheet: model-space extents fitted to a sheet, or a layout at 1:1 on its paper
 //! (paper units are millimetres in metric drawings, inches otherwise). Lines are stroked paths
 //! (`m`/`l`/`S`), fills are `f` paths, colours are RGB with colour 7 printing black on white
 //! paper, and line widths come from lineweights when enabled. The page setup's plot style
 //! table (or the `plotStyleTable` option) sets the printed colours, linetypes and lineweights.
+//!
+//! Several sheets go into one file ([`pdf_sheets`], the `layouts` option), each page labelled
+//! with its layout name. Drawing layers become PDF layers (optional content groups) that a PDF
+//! viewer can switch on and off, and entity hyperlinks become link annotations.
 
 use std::fmt::Write as _;
 
 use cadcraft_color::Rgb;
-use cadcraft_doc::{Drawing, PageSetup, Space};
+use cadcraft_doc::{Drawing, Handle, PageSetup, Space};
 use cadcraft_geom::{Bounds2, Vec2};
 use cadcraft_render::{Kind, Sheet, clip, paper};
 use serde_json::Value;
@@ -20,10 +25,17 @@ use crate::{IoError, Result};
 const PT_PER_MM: f64 = 72.0 / 25.4;
 /// Largest sheet side we accept, in millimetres (PDF viewers cap pages at 200 inches anyway).
 const MAX_SHEET_MM: f64 = 5080.0;
+/// Most sheets (pages) in one file.
+pub const MAX_PAGES: usize = 256;
+/// Most PDF layers in one file; objects on further layers print without one.
+const MAX_LAYERS: usize = 4096;
+/// Most link annotations in one file, and the longest link target (bytes).
+const MAX_LINKS: usize = 10_000;
+const MAX_URL: usize = 2048;
 
 /// Plot settings. `None` fields fall back to the layout's page setup (or sensible defaults for
 /// model space).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct PdfOptions {
     /// Plot style table name, replacing the page setup's (`"None"` plots without one).
     pub plot_style_table: Option<String>,
@@ -44,6 +56,34 @@ pub struct PdfOptions {
     /// Model space only: plot this rectangle (drawing units), fitted to the printable area,
     /// instead of the extents. Ignored for layouts.
     pub window: Option<Bounds2>,
+    /// Drawing layers become PDF layers (optional content groups). Default on.
+    pub layers: bool,
+    /// With `layers`: objects on layers that are off are included on PDF layers that start
+    /// hidden (frozen layers are never included). Default off: they aren't plotted.
+    pub include_off_layers: bool,
+    /// Hyperlinks: an entity's handle and its link target (a URL). The area the entity covers
+    /// on the sheet becomes a link annotation.
+    pub links: Vec<(Handle, String)>,
+}
+
+impl Default for PdfOptions {
+    fn default() -> Self {
+        PdfOptions {
+            plot_style_table: None,
+            paper: None,
+            paper_mm: None,
+            landscape: None,
+            fit: None,
+            scale: None,
+            lineweights: None,
+            compress: false,
+            title: String::new(),
+            window: None,
+            layers: true,
+            include_off_layers: false,
+            links: Vec::new(),
+        }
+    }
 }
 
 impl PdfOptions {
@@ -56,6 +96,10 @@ impl PdfOptions {
             _ => None,
         };
         PdfOptions {
+            // `layers?` (default on), `offLayers?`, `links?: [{handle, url}]`.
+            layers: v.get("layers").and_then(Value::as_bool).unwrap_or(true),
+            include_off_layers: v.get("offLayers").and_then(Value::as_bool).unwrap_or(false),
+            links: links_json(v.get("links")),
             plot_style_table: v.get("plotStyleTable").and_then(Value::as_str).map(|s| s.chars().take(260).collect()),
             paper: v.get("paper").and_then(Value::as_str).map(str::to_string),
             paper_mm,
@@ -84,7 +128,48 @@ fn window(v: Option<&Value>) -> Option<Bounds2> {
 
 /// Plot with JSON options (the engine's `plot` hook).
 pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
-    pdf(d, space, &PdfOptions::from_json(opts))
+    // `layouts: [name | "Model"] | "all"` plots those sheets into one file, one page each,
+    // instead of `space`; "all" = Model if it has objects, then the layouts in tab order.
+    let o = PdfOptions::from_json(opts);
+    match opts.get("layouts") {
+        Some(Value::String(a)) if a.eq_ignore_ascii_case("all") => {
+            let mut layouts: Vec<_> = d.layouts.iter().collect();
+            layouts.sort_by_key(|l| l.tab_order);
+            let model = (!d.model.is_empty()).then_some(Space::Model);
+            let spaces: Vec<Space> = model.into_iter().chain(layouts.iter().map(|l| Space::Paper(l.name.clone()))).collect();
+            pdf_sheets(d, &spaces, &o)
+        }
+        Some(v) => {
+            let names = v.as_array().ok_or_else(|| IoError::Format("`layouts` must be a list of layout names".into()))?;
+            if names.len() > MAX_PAGES {
+                return Err(IoError::Format(format!("at most {MAX_PAGES} sheets fit in one PDF")));
+            }
+            let spaces = names
+                .iter()
+                .map(|n| match n.as_str() {
+                    Some(n) if n.eq_ignore_ascii_case("model") => Ok(Space::Model),
+                    Some(n) => d.layout(n).map(|l| Space::Paper(l.name.clone())).ok_or_else(|| IoError::Format(format!("no layout `{n}`"))),
+                    None => Err(IoError::Format("`layouts` must be a list of layout names".into())),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            pdf_sheets(d, &spaces, &o)
+        }
+        None => pdf(d, space, &o),
+    }
+}
+
+/// `[{handle: "1A" | 26, url}]` → (handle, url) pairs; malformed entries are skipped.
+fn links_json(v: Option<&Value>) -> Vec<(Handle, String)> {
+    let Some(a) = v.and_then(Value::as_array) else { return Vec::new() };
+    a.iter()
+        .take(MAX_LINKS)
+        .filter_map(|l| {
+            let h = l.get("handle")?;
+            let h = h.as_str().and_then(Handle::parse_hex).or_else(|| h.as_u64().map(Handle))?;
+            let url = l.get("url")?.as_str()?.trim();
+            (!url.is_empty()).then(|| (h, url.to_string()))
+        })
+        .collect()
 }
 
 /// The page setup a plot of `space` uses, with overrides applied.
@@ -143,6 +228,58 @@ impl Map {
 
 /// Write a one-page vector PDF of a space.
 pub fn pdf(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<Vec<u8>> {
+    pdf_sheets(d, std::slice::from_ref(space), o)
+}
+
+/// The name of a sheet: `Model` or the layout's.
+fn sheet_name(space: &Space) -> String {
+    match space {
+        Space::Model => "Model".to_string(),
+        Space::Paper(n) => n.clone(),
+    }
+}
+
+/// Write a vector PDF with one page per space (at most [`MAX_PAGES`]), each labelled with its
+/// layout name. The options apply to every sheet; layouts use their own page setups.
+pub fn pdf_sheets(d: &Drawing, spaces: &[Space], o: &PdfOptions) -> Result<Vec<u8>> {
+    if spaces.is_empty() {
+        return Err(IoError::Format("there are no sheets to plot".into()));
+    }
+    if spaces.len() > MAX_PAGES {
+        return Err(IoError::Format(format!("at most {MAX_PAGES} sheets fit in one PDF")));
+    }
+    // Layers that are off plot on PDF layers that start hidden: draw them from a copy with them on.
+    let with_off;
+    let drawn = if o.layers && o.include_off_layers && d.layers.iter().any(|l| !l.on && !l.frozen) {
+        let mut c = d.clone();
+        for l in c.layers.iter_mut().filter(|l| !l.frozen) {
+            l.on = true;
+        }
+        with_off = c;
+        &with_off
+    } else {
+        d
+    };
+    let pages = spaces.iter().map(|s| sheet(drawn, s, o)).collect::<Result<Vec<_>>>()?;
+    let title = if o.title.is_empty() { pages.first().map(|p| p.label.clone()).unwrap_or_default() } else { o.title.clone() };
+    Ok(assemble(d, &pages, o, &title))
+}
+
+/// One plotted sheet, ready to be written as a page.
+struct SheetPage {
+    /// Page size in points.
+    media: Vec2,
+    content: String,
+    /// The drawing layers (indices in the layer table) of the content's `/L<i>` marks.
+    layers: Vec<u32>,
+    /// Link annotations: rectangle in points and target.
+    links: Vec<(Bounds2, String)>,
+    /// Page label: the layout name.
+    label: String,
+}
+
+/// Plot one space.
+fn sheet(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<SheetPage> {
     let page = page_for(d, space, o)?;
     let unit_mm = paper::paper_unit_mm(d);
     let sheet = Sheet::from_page(&page, unit_mm);
@@ -179,16 +316,51 @@ pub fn pdf(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<Vec<u8>> {
     } else {
         Bounds2::new(Vec2::ZERO, media)
     };
-    let content = content_stream(&list, &map, &clip_pt);
-    let title = if o.title.is_empty() {
-        match space {
-            Space::Model => "Model".to_string(),
-            Space::Paper(n) => n.clone(),
+    // The layers drawn on, in order of first use.
+    let mut layers: Vec<u32> = Vec::new();
+    if o.layers {
+        let mut seen = std::collections::HashSet::new();
+        for l in &list.prim_layers {
+            if (*l as usize) < d.layers.len() && layers.len() < MAX_LAYERS && seen.insert(*l) {
+                layers.push(*l);
+            }
         }
-    } else {
-        o.title.clone()
-    };
-    Ok(assemble(media, content.as_bytes(), o.compress, &title))
+    }
+    let content = content_stream(&list, &map, &clip_pt, &layers);
+    let links = links(&list, &map, &clip_pt, &o.links);
+    Ok(SheetPage { media, content, layers, links, label: sheet_name(space) })
+}
+
+/// Link annotation rectangles: the area (in points) each linked entity covers on the sheet,
+/// clipped to the plot area.
+fn links(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Bounds2, links: &[(Handle, String)]) -> Vec<(Bounds2, String)> {
+    if links.is_empty() {
+        return Vec::new();
+    }
+    let mut areas: std::collections::HashMap<Handle, Bounds2> = std::collections::HashMap::new();
+    for p in &list.prims {
+        if matches!(p.kind, Kind::Infinite { .. }) || !links.iter().any(|(h, _)| *h == p.handle) {
+            continue;
+        }
+        let b = areas.entry(p.handle).or_insert(Bounds2::EMPTY);
+        for q in list.points(p) {
+            let q = map.pt(*q);
+            if q.is_finite() {
+                b.add(q);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (h, url) in links {
+        let Some(b) = areas.get(h).filter(|b| !b.is_empty()) else { continue };
+        // A little slack so thin lines are easy to click.
+        let b = b.expand(2.0);
+        let r = Bounds2 { min: b.min.max(clip_pt.min), max: b.max.min(clip_pt.max) };
+        if r.min.x < r.max.x && r.min.y < r.max.y {
+            out.push((r, url.clone()));
+        }
+    }
+    out
 }
 
 /// Paper units per drawing unit for a plot.
@@ -240,7 +412,10 @@ fn color(out: &mut String, c: Rgb, op: &str) {
     out.push('\n');
 }
 
-fn content_stream(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Bounds2) -> String {
+/// The page's marks; those of primitives on `layers` are marked as optional content
+/// (`/OC /L<layer> BDC` … `EMC`).
+fn content_stream(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Bounds2, layers: &[u32]) -> String {
+    let marked: std::collections::HashSet<u32> = layers.iter().copied().collect();
     let white = Rgb(255, 255, 255);
     let mut c = String::new();
     c.push_str("q\n1 J 1 j\n");
@@ -261,7 +436,20 @@ fn content_stream(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Boun
             *pending = false;
         }
     };
-    for p in &list.prims {
+    // The PDF layer (optional content) the marks are in: `/OC /L<i> BDC` … `EMC`.
+    let mut layer: Option<u32> = None;
+    for (i, p) in list.prims.iter().enumerate() {
+        let want = list.prim_layers.get(i).copied().filter(|l| marked.contains(l));
+        if want != layer {
+            flush(&mut c, &mut pending);
+            if layer.is_some() {
+                c.push_str("EMC\n");
+            }
+            if let Some(l) = want {
+                let _ = writeln!(c, "/OC /L{l} BDC");
+            }
+            layer = want;
+        }
         let rgb = p.display_rgb(white);
         let raw = list.points(p);
         if raw.iter().any(|q| !q.is_finite()) {
@@ -345,59 +533,174 @@ fn content_stream(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Boun
         }
     }
     flush(&mut c, &mut pending);
+    if layer.is_some() {
+        c.push_str("EMC\n");
+    }
     c.push_str("Q\n");
     c
 }
 
-/// A PDF literal string with `(`, `)` and `\` escaped; non-ASCII becomes `?`.
+/// A PDF text string: a literal with `(`, `)` and `\` escaped when it is printable ASCII,
+/// else UTF-16BE with a byte order mark (hex). At most 1000 characters.
 fn pdf_string(s: &str) -> String {
-    let mut out = String::from("(");
-    for ch in s.chars().take(200) {
-        match ch {
-            '(' | ')' | '\\' => {
+    let s: String = s.chars().take(1000).collect();
+    if s.chars().all(|c| c.is_ascii() && !c.is_ascii_control()) {
+        let mut out = String::from("(");
+        for ch in s.chars() {
+            if matches!(ch, '(' | ')' | '\\') {
                 out.push('\\');
-                out.push(ch);
             }
-            c if c.is_ascii() && !c.is_ascii_control() => out.push(c),
-            _ => out.push('?'),
+            out.push(ch);
         }
+        out.push(')');
+        return out;
     }
-    out.push(')');
+    let mut out = String::from("<FEFF");
+    for u in s.encode_utf16() {
+        let _ = write!(out, "{u:04X}");
+    }
+    out.push('>');
     out
 }
 
-/// Assemble the file: header, five objects, cross-reference table and trailer.
-fn assemble(media: Vec2, content: &[u8], compress: bool, title: &str) -> Vec<u8> {
-    let mut out: Vec<u8> = Vec::with_capacity(content.len() + 1024);
+/// A link target as a PDF URI string: 7-bit ASCII (other bytes percent-encoded), `(`, `)` and
+/// `\` escaped. `None` for script and data URLs, which a plot never carries.
+fn uri_string(url: &str) -> Option<String> {
+    let url = url.trim();
+    let scheme = url.split(':').next().unwrap_or("").to_ascii_lowercase();
+    if url.is_empty() || url.len() > MAX_URL || matches!(scheme.as_str(), "javascript" | "vbscript" | "data") {
+        return None;
+    }
+    let mut out = String::from("(");
+    for b in url.bytes() {
+        match b {
+            b'(' | b')' | b'\\' => {
+                out.push('\\');
+                out.push(char::from(b));
+            }
+            0x21..=0x7E => out.push(char::from(b)),
+            _ => {
+                let _ = write!(out, "%{b:02X}");
+            }
+        }
+    }
+    out.push(')');
+    Some(out)
+}
+
+/// A stream object body, Flate-compressed when asked.
+fn stream(data: &[u8], compress: bool, extra: &str) -> Vec<u8> {
+    let (data, filter) = if compress { (miniz_oxide::deflate::compress_to_vec_zlib(data, 6), " /Filter /FlateDecode") } else { (data.to_vec(), "") };
+    let mut out = format!("<< /Length {}{filter}{extra} >>\nstream\n", data.len()).into_bytes();
+    out.extend_from_slice(&data);
+    out.extend_from_slice(b"\nendstream");
+    out
+}
+
+/// PDF objects being written: bodies by object number - 1.
+#[derive(Default)]
+struct Objects {
+    bodies: Vec<Vec<u8>>,
+}
+
+impl Objects {
+    /// Reserve an object number (its body is set later).
+    fn reserve(&mut self) -> usize {
+        self.bodies.push(Vec::new());
+        self.bodies.len()
+    }
+    fn set(&mut self, n: usize, body: impl Into<Vec<u8>>) {
+        if let Some(b) = n.checked_sub(1).and_then(|i| self.bodies.get_mut(i)) {
+            *b = body.into();
+        }
+    }
+    fn add(&mut self, body: impl Into<Vec<u8>>) -> usize {
+        let n = self.reserve();
+        self.set(n, body);
+        n
+    }
+}
+
+/// `n 0 R` references, space-separated.
+fn refs(ids: impl IntoIterator<Item = usize>) -> String {
+    ids.into_iter().map(|i| format!("{i} 0 R")).collect::<Vec<_>>().join(" ")
+}
+
+/// Assemble the file: catalog, page tree, pages with their content streams and link
+/// annotations, the PDF layers (one optional content group per drawing layer used, named
+/// like it), page labels, document information, cross-reference table and trailer.
+fn assemble(d: &Drawing, pages: &[SheetPage], o: &PdfOptions, title: &str) -> Vec<u8> {
+    let mut objs = Objects::default();
+    let catalog = objs.reserve();
+    let tree = objs.reserve();
+    // Optional content groups shared by all pages, by layer index: (layer, object).
+    let mut ocg_ids: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    let mut ocgs: Vec<(u32, usize)> = Vec::new();
+    let mut kids = Vec::new();
+    for p in pages {
+        let page = objs.reserve();
+        let content = objs.add(stream(p.content.as_bytes(), o.compress, ""));
+        let mut props = String::new();
+        for l in &p.layers {
+            let Some(layer) = d.layers.get(*l as usize) else { continue };
+            let id = match ocg_ids.get(l) {
+                Some(id) => *id,
+                None => {
+                    let id = objs.add(format!("<< /Type /OCG /Name {} >>", pdf_string(&layer.name)));
+                    ocg_ids.insert(*l, id);
+                    ocgs.push((*l, id));
+                    id
+                }
+            };
+            let _ = write!(props, " /L{l} {id} 0 R");
+        }
+        let mut annots = Vec::new();
+        for (r, url) in &p.links {
+            let Some(uri) = uri_string(url) else { continue };
+            let mut rect = String::new();
+            pt(&mut rect, r.min);
+            rect.push(' ');
+            pt(&mut rect, r.max);
+            annots.push(objs.add(format!("<< /Type /Annot /Subtype /Link /Rect [{rect}] /Border [0 0 0] /A << /S /URI /URI {uri} >> >>")));
+        }
+        let mut mb = String::new();
+        pt(&mut mb, p.media);
+        let resources = if props.is_empty() { "<< >>".to_string() } else { format!("<< /Properties <<{props} >> >>") };
+        let annots = if annots.is_empty() { String::new() } else { format!(" /Annots [{}]", refs(annots)) };
+        objs.set(page, format!("<< /Type /Page /Parent {tree} 0 R /MediaBox [0 0 {mb}] /Resources {resources} /Contents {content} 0 R{annots} >>"));
+        kids.push(page);
+    }
+    objs.set(tree, format!("<< /Type /Pages /Kids [{}] /Count {} >>", refs(kids.iter().copied()), kids.len()));
+    let mut cat = format!("<< /Type /Catalog /Pages {tree} 0 R");
+    if !ocgs.is_empty() {
+        // Optional content needs PDF 1.5; the catalog's version overrides the header's.
+        let off: Vec<usize> = ocgs.iter().filter(|(l, _)| d.layers.get(*l as usize).is_some_and(|l| !l.on)).map(|(_, id)| *id).collect();
+        let all = refs(ocgs.iter().map(|(_, id)| *id));
+        let _ = write!(cat, " /Version /1.5 /OCProperties << /OCGs [{all}] /D << /Name (Layers) /Order [{all}] /OFF [{}] >> >>", refs(off));
+        if pages.len() == 1 {
+            cat.push_str(" /PageMode /UseOC");
+        }
+    }
+    let labels: Vec<String> = pages.iter().enumerate().map(|(i, p)| format!("{i} << /P {} >>", pdf_string(&p.label))).collect();
+    let _ = write!(cat, " /PageLabels << /Nums [{}] >> >>", labels.join(" "));
+    objs.set(catalog, cat);
+    let info = objs.add(format!("<< /Producer (CADCraft) /Creator (CADCraft) /Title {} >>", pdf_string(title)));
+    let size: usize = objs.bodies.iter().map(Vec::len).sum();
+    let mut out: Vec<u8> = Vec::with_capacity(size + 64 * objs.bodies.len() + 256);
     out.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
-    let mut offsets: Vec<usize> = Vec::new();
-    let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
+    let mut offsets = Vec::with_capacity(objs.bodies.len());
+    for (i, body) in objs.bodies.iter().enumerate() {
         offsets.push(out.len());
-        let n = offsets.len();
-        out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
         out.extend_from_slice(body);
         out.extend_from_slice(b"\nendobj\n");
-    };
-    obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
-    obj(&mut out, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
-    let mut mb = String::new();
-    num(&mut mb, media.x);
-    mb.push(' ');
-    num(&mut mb, media.y);
-    obj(&mut out, format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {mb}] /Resources << >> /Contents 4 0 R >>").as_bytes());
-    let (data, filter) =
-        if compress { (miniz_oxide::deflate::compress_to_vec_zlib(content, 6), " /Filter /FlateDecode") } else { (content.to_vec(), "") };
-    let mut stream = format!("<< /Length {}{filter} >>\nstream\n", data.len()).into_bytes();
-    stream.extend_from_slice(&data);
-    stream.extend_from_slice(b"\nendstream");
-    obj(&mut out, &stream);
-    obj(&mut out, format!("<< /Producer (CADCraft) /Creator (CADCraft) /Title {} >>", pdf_string(title)).as_bytes());
+    }
     let xref = out.len();
     let mut x = format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1);
     for o in &offsets {
         let _ = writeln!(x, "{o:010} 00000 n ");
     }
-    let _ = write!(x, "trailer\n<< /Size {} /Root 1 0 R /Info 5 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1);
+    let _ = write!(x, "trailer\n<< /Size {} /Root {catalog} 0 R /Info {info} 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1);
     out.extend_from_slice(x.as_bytes());
     out
 }

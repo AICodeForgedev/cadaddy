@@ -37,6 +37,9 @@ pub use tolerance::{gdt_points, tolerance_in};
 /// single paper-space entity, so selection highlighting never matches it).
 pub const VIEWPORT_CONTENT: Handle = Handle(0);
 
+/// [`DisplayList::prim_layers`] of a primitive whose layer isn't in the layer table.
+pub const NO_LAYER: u32 = u32::MAX;
+
 /// What a display-list primitive draws.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
@@ -73,6 +76,10 @@ pub struct DisplayList {
     pub prims: Vec<DPrim>,
     pub verts: Vec<Vec2>,
     pub tris: Vec<Vec2>,
+    /// Plots ([`build_plot`]): for each primitive, the index in [`Drawing::layers`] of the layer
+    /// it is drawn on (block contents on layer 0: the block reference's; [`NO_LAYER`] when the
+    /// layer isn't in the table), for PDF layers. Empty for other lists.
+    pub prim_layers: Vec<u32>,
     pub bounds: Bounds2,
     /// The paper sheet when the list was built for a layout (paper space); the UI draws the
     /// white sheet, its shadow and the printable-area outline from it.
@@ -349,6 +356,9 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
                 if viewports < MAX_VIEWPORTS {
                     viewports += 1;
                     viewport(&mut b, d, e, vp);
+                    if plotting {
+                        take_viewport_layers(&mut b.list);
+                    }
                 }
                 continue;
             }
@@ -550,6 +560,24 @@ pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents:
     b.list
 }
 
+/// The layer `e` is drawn on, as an index in the layer table: layer 0 inside a block is the
+/// block reference's layer.
+fn entity_layer(ctx: &Ctx, e: &Entity) -> u32 {
+    let name = if e.common.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { e.common.layer.as_str() };
+    ctx.d.layers.iter().position(|l| l.name.eq_ignore_ascii_case(name)).and_then(|i| u32::try_from(i).ok()).unwrap_or(NO_LAYER)
+}
+
+/// After a viewport is appended to a plot: the layers its contents carry in their handles
+/// (see [`entity`]) go to [`DisplayList::prim_layers`], and the handles back to
+/// [`VIEWPORT_CONTENT`]. The viewport's border was tagged when it was drawn.
+fn take_viewport_layers(list: &mut DisplayList) {
+    let start = list.prim_layers.len();
+    for p in list.prims.iter_mut().skip(start) {
+        list.prim_layers.push(u32::try_from(p.handle.0).unwrap_or(NO_LAYER));
+        p.handle = VIEWPORT_CONTENT;
+    }
+}
+
 fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Ink, f32, Option<cadcraft_doc::Linetype>, f64, bool) {
     resolve_common(ctx, &e.common, plotting)
 }
@@ -602,6 +630,19 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     b.named = b.styles.and_then(|s| s.named_index(ctx, &e.common));
     entity_parts(b, ctx, e);
     b.named = saved;
+    if b.plotting && b.list.prim_layers.len() < b.list.prims.len() {
+        // What it drew that its block contents didn't claim is on its own layer.
+        let layer = entity_layer(ctx, e);
+        let from = b.list.prim_layers.len();
+        b.list.prim_layers.resize(b.list.prims.len(), layer);
+        if ctx.top == VIEWPORT_CONTENT {
+            // Model space seen through a viewport is clipped into the layout's list; the layer
+            // travels in the handle until then (see [`take_viewport_layers`]).
+            for p in b.list.prims.iter_mut().skip(from) {
+                p.handle = Handle(u64::from(layer));
+            }
+        }
+    }
 }
 
 fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
