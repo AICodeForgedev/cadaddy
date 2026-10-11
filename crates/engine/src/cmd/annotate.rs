@@ -466,7 +466,8 @@ fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<
     let d = s.doc().ok()?;
     let cur = d.header.str("CMLEADERSTYLE", "Standard");
     let st = d.mleader_styles.iter().find(|m| m.name.eq_ignore_ascii_case(&cur)).or(d.mleader_styles.first()).cloned().unwrap_or_default();
-    let k = d.header.f64("DIMSCALE", 1.0);
+    // An annotative style's sizes are paper sizes: the annotation scale applies when drawn.
+    let k = if st.annotative { 1.0 } else { d.header.f64("DIMSCALE", 1.0) };
     let th = st.text_height * k;
     let dir = if arrow_pts.first().is_some_and(|a| a.x > landing_pt.x) { -1.0 } else { 1.0 };
     let attach = if dir > 0.0 { 4 } else { 6 };

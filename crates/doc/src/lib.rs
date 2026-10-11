@@ -77,6 +77,8 @@ pub struct Drawing {
     pub constraints: Vec<Constraint>,
     /// User parameters and parametric settings.
     pub parametric: Parametric,
+    /// The annotation scale list (SCALELISTEDIT).
+    pub scales: Vec<AnnoScale>,
     /// Next free handle.
     pub handseed: u64,
     /// Objects hidden for this session by ISOLATEOBJECTS / HIDEOBJECTS. Never written to a file:
@@ -101,6 +103,7 @@ impl Drawing {
     pub fn new_metric() -> Self {
         let mut d = Drawing::bare();
         d.header = Header::metric();
+        d.scales = metric_scales();
         d.dim_styles.push(DimStyle::iso25());
         d.header.set_str("DIMSTYLE", "ISO-25");
         d
@@ -128,6 +131,7 @@ impl Drawing {
             plot_style_tables: Vec::new(),
             constraints: Vec::new(),
             parametric: Parametric::default(),
+            scales: imperial_scales(),
             handseed: 0x100,
             hidden_objects: BTreeSet::new(),
         }
@@ -316,6 +320,9 @@ impl Drawing {
         }
     }
 }
+
+mod anno;
+pub use anno::*;
 
 #[cfg(test)]
 mod tests;

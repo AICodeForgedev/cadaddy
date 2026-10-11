@@ -21,7 +21,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("block", "Make...", run_block)
             .menu(&["Draw", "Block", "Make..."])
             .alias(&["b", "bmake"])
-            .params("{name, base: [x,y], handles?, keep?: \"convert\"|\"retain\"|\"delete\" (default \"convert\"), description?}")
+            .params("{name, base: [x,y], handles?, keep?: \"convert\"|\"retain\"|\"delete\" (default \"convert\"), description?, annotative?}")
             .interactive(|_| Ok(Box::new(BlockM::default()))),
         // -BLOCK erases the selected objects once the block is defined.
         CommandSpec::new("-block", "Create Block", run_dash_block)
@@ -189,6 +189,17 @@ fn run_block(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let keep = str_param(p, "keep").unwrap_or("convert").to_string();
     let r = make_block(s, &name, base, &hs, &keep, str_param(p, "description").unwrap_or(""))?;
+    // An annotative block: its references (the converted selection too) are annotative.
+    if bool_or(p, "annotative", false) {
+        let d = s.doc_mut()?;
+        let cur = d.current_anno_scale();
+        if let Some(b) = d.blocks.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(&name)).map(|(_, b)| b) {
+            Arc::make_mut(b).annotative = true;
+        }
+        if let Some(h) = r {
+            d.modify_entity(h, |e| cadcraft_doc::set_annotative(e, true, &cur))?;
+        }
+    }
     Ok(json!({ "block": name, "insert": r.map(|h| h.hex()) }))
 }
 

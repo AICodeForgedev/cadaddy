@@ -49,6 +49,14 @@ fn blank(s: &str) -> bool {
 }
 
 pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
+    // A top-level annotative object measures as it draws at the current annotation scale.
+    if depth == 0 {
+        match d.anno_draw(e) {
+            crate::AnnoDraw::Plain => {}
+            crate::AnnoDraw::Hidden => return Bounds2::EMPTY,
+            crate::AnnoDraw::Scaled(f) => return bounds_in(d, &crate::anno_scaled(e, f), 0, &mut HashMap::new()),
+        }
+    }
     bounds_in(d, e, depth, &mut HashMap::new())
 }
 

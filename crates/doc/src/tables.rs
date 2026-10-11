@@ -459,11 +459,21 @@ pub struct MLeaderStyle {
     pub landing_gap: f64,
     pub dogleg: f64,
     pub text_style: String,
+    /// New multileaders of this style are annotative.
+    pub annotative: bool,
 }
 
 impl Default for MLeaderStyle {
     fn default() -> Self {
-        MLeaderStyle { name: "Standard".into(), arrow_size: 0.18, text_height: 0.18, landing_gap: 0.09, dogleg: 0.36, text_style: "Standard".into() }
+        MLeaderStyle {
+            name: "Standard".into(),
+            arrow_size: 0.18,
+            text_height: 0.18,
+            landing_gap: 0.09,
+            dogleg: 0.36,
+            text_style: "Standard".into(),
+            annotative: false,
+        }
     }
 }
 
@@ -488,6 +498,9 @@ impl Default for TableStyle {
 #[serde(rename_all = "camelCase")]
 pub struct Block {
     pub name: String,
+    /// References to this block are annotative.
+    #[serde(default)]
+    pub annotative: bool,
     pub base: Vec3,
     #[serde(skip)]
     pub entities: EntityStore,
@@ -511,6 +524,7 @@ impl Block {
     pub fn new(name: &str) -> Self {
         Block {
             name: name.into(),
+            annotative: false,
             base: Vec3::ZERO,
             entities: EntityStore::new(),
             description: String::new(),

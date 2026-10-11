@@ -1746,6 +1746,7 @@ impl Objects {
                 landing_gap: num(42, def.landing_gap, 0.0),
                 dogleg: num(43, def.dogleg, 0.0),
                 text_style: text_style.unwrap_or(def.text_style),
+                annotative: false,
             };
             match d.mleader_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(name)) {
                 Some(x) => *x = st,

@@ -71,6 +71,8 @@ pub struct SpatialIndex {
     blocks: BTreeMap<String, Arc<Block>>,
     dim_styles: Vec<DimStyle>,
     dimscale: f64,
+    /// Annotation scale factor and ANNOALLVISIBLE: annotative objects measure at that scale.
+    anno: (u64, bool),
     /// (draw index of the chunk's first entity, chunk), in draw order.
     chunks: Vec<(u32, Arc<ChunkIx>)>,
     /// Chunk serial → draw offset.
@@ -79,6 +81,11 @@ pub struct SpatialIndex {
     /// Draw indices of xlines and rays.
     infinite: Vec<u32>,
     len: usize,
+}
+
+/// What annotative objects' bounds depend on besides the objects themselves.
+fn anno_key(d: &Drawing) -> (u64, bool) {
+    (d.current_anno_scale().factor().to_bits(), d.anno_all_visible())
 }
 
 impl SpatialIndex {
@@ -138,6 +145,7 @@ impl SpatialIndex {
             blocks: d.blocks.clone(),
             dim_styles: d.dim_styles.clone(),
             dimscale: d.header.f64("DIMSCALE", 1.0),
+            anno: anno_key(d),
             chunks,
             offsets,
             tree,
@@ -151,6 +159,7 @@ impl SpatialIndex {
             && self.blocks.iter().zip(&d.blocks).all(|((ka, a), (kb, b))| ka == kb && Arc::ptr_eq(a, b))
             && self.dimscale.to_bits() == d.header.f64("DIMSCALE", 1.0).to_bits()
             && self.dim_styles == d.dim_styles
+            && self.anno == anno_key(d)
     }
 
     fn matches(&self, d: &Drawing, store: &EntityStore) -> bool {
@@ -271,6 +280,7 @@ mod tests {
         let mut d = Drawing::new_imperial();
         let mut blk = Block {
             name: "B".into(),
+            annotative: false,
             base: Vec3::default(),
             entities: EntityStore::new(),
             description: String::new(),

@@ -54,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("mleaderstyle", "Multileader Style...", run_mleaderstyle)
             .menu(&["Format", "Multileader Style..."])
             .alias(&["mls"])
-            .params("{name, arrowSize?, textHeight?, landingGap?, dogleg?, textStyle?, current?} → styles"),
+            .params("{name, arrowSize?, textHeight?, landingGap?, dogleg?, textStyle?, annotative?, current?} → styles"),
         CommandSpec::new("ddptype", "Point Style...", run_ptype).menu(&["Format", "Point Style..."]).params("{pdmode, pdsize}"),
         CommandSpec::new("rename", "Rename...", run_rename)
             .menu(&["Format", "Rename..."])
@@ -76,6 +76,12 @@ pub(super) fn entity_props(d: &cadcraft_doc::Drawing, e: &cadcraft_doc::Entity) 
         "transparency": transparency_value(e.common.transparency),
         "visible": e.common.visible,
     });
+    if cadcraft_doc::can_be_annotative(&e.kind)
+        && let Some(o) = v.as_object_mut()
+    {
+        o.insert("annotative".into(), json!(cadcraft_doc::is_annotative(e)));
+        o.insert("annotativeScales".into(), json!(e.common.anno_scales.iter().map(|s| s.name.clone()).collect::<Vec<_>>()));
+    }
     let geo = serde_json::to_value(&e.kind).unwrap_or(Value::Null);
     if let (Some(o), Some(g)) = (v.as_object_mut(), geo.as_object()) {
         o.insert("geometry".into(), Value::Object(g.clone()));
@@ -188,8 +194,13 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let dim_style = str_param(p, "dimStyle")
         .map(|n| d.dim_style(n).map(|st| st.name.clone()).ok_or_else(|| bad("properties.set", format!("dimension style `{n}` not found"))))
         .transpose()?;
+    let anno_scale = d.current_anno_scale();
     for h in &hs {
         d.modify_entity(*h, |e| {
+            // Annotative: Yes supports the current annotation scale; No drops every scale.
+            if let Some(a) = p.get("annotative").and_then(Value::as_bool) {
+                cadcraft_doc::set_annotative(e, a, &anno_scale);
+            }
             if let Some(l) = str_param(p, "layer") {
                 e.common.layer = l.to_string();
             }
@@ -830,6 +841,9 @@ fn run_mleaderstyle(s: &mut Session, p: &Value) -> Result<Value> {
             }
             if let Some(t) = str_param(p, "textStyle") {
                 st.text_style = t.to_string();
+            }
+            if let Some(a) = p.get("annotative").and_then(Value::as_bool) {
+                st.annotative = a;
             }
         }
         if bool_or(p, "current", true) {

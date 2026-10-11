@@ -62,8 +62,15 @@ fn linetype_text_and_shape_elements_round_trip() {
 fn multileader_styles_and_current_style_round_trip() {
     let mut d = Drawing::new_imperial();
     d.text_styles.push(TextStyle { name: "Slanted".into(), oblique: 0.2, ..TextStyle::default() });
-    let callout =
-        MLeaderStyle { name: "Callout".into(), arrow_size: 2.0, text_height: 3.0, landing_gap: 1.0, dogleg: 5.0, text_style: "Slanted".into() };
+    let callout = MLeaderStyle {
+        name: "Callout".into(),
+        arrow_size: 2.0,
+        text_height: 3.0,
+        landing_gap: 1.0,
+        dogleg: 5.0,
+        text_style: "Slanted".into(),
+        annotative: false,
+    };
     d.mleader_styles.push(callout);
     d.header.set_str("CMLEADERSTYLE", "Callout");
     let r = round_trip(&d);

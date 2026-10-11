@@ -1134,6 +1134,15 @@ fn run_chamfer(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------------- explode / array / order / break / join ----------------
 
 pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<Entity>> {
+    // An annotative object explodes into plain objects as it draws at the current annotation scale.
+    if cadcraft_doc::is_annotative(e) {
+        let mut se = match d.anno_draw(e) {
+            cadcraft_doc::AnnoDraw::Scaled(f) => cadcraft_doc::anno_scaled(e, f),
+            _ => e.clone(),
+        };
+        se.common.anno_scales.clear();
+        return explode_kind(d, &se);
+    }
     match &e.kind {
         EntityKind::LwPolyline(p) => {
             let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };

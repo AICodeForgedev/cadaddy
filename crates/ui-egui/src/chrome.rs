@@ -329,6 +329,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         // Right side: toggles, right-aligned.
         let s = app.session.settings.clone();
+        let anno_all = app.session.doc().is_ok_and(|d| d.anno_all_visible());
         use cadcraft_engine::snap::mode;
         let toggles: Vec<(Icon, bool, &str, &str)> = vec![
             (Icon::Grid, s.gridmode, "grid", "Grid (F7)"),
@@ -342,7 +343,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             (Icon::Transparency, s.transparency_display, "transparencydisplay", "Show/Hide Transparency"),
             (Icon::DynInput, s.dynmode, "dynmode", "Dynamic Input (F12)"),
             (Icon::QuickProps, s.qpmode, "qpmode", "Quick Properties"),
-            (Icon::Annotation, s.annoallvisible, "ui.noop", "Annotation Visibility"),
+            (Icon::Annotation, anno_all, "annovisible.toggle", "Annotation Visibility"),
             (Icon::Workspace, false, "ui.noop", "Workspace Switching"),
             (Icon::Gear, false, "ui.dialog.dsettings", "Drafting Settings"),
         ];

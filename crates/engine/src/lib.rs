@@ -656,6 +656,12 @@ impl Session {
         if let Some(rgb) = true_color {
             common.color = cadcraft_color::Color::True(cadcraft_color::Rgb::from_u32(rgb as u32));
         }
+        // Text, dimensions, multileaders, hatches and block references of annotative styles are
+        // annotative, supporting the current annotation scale.
+        let d = self.doc()?;
+        if d.annotative_by_style(&kind) {
+            common.anno_scales = vec![d.current_anno_scale()];
+        }
         let h = self.doc_mut()?.add(&space, common, kind)?;
         Ok(h)
     }

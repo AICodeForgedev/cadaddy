@@ -97,6 +97,9 @@ pub struct Common {
     /// Named plot style: `ByLayer`, `ByBlock` or a style of the layout's named (`.stb`) plot
     /// style table.
     pub plot_style: String,
+    /// The annotation scales an annotative object supports (empty: not annotative).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub anno_scales: Vec<crate::AnnoScale>,
 }
 
 impl Default for Common {
@@ -112,6 +115,7 @@ impl Default for Common {
             thickness: 0.0,
             extrusion: Vec3::Z,
             plot_style: "ByLayer".into(),
+            anno_scales: Vec::new(),
         }
     }
 }

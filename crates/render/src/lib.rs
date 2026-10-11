@@ -581,6 +581,24 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
 }
 
 fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
+    // A top-level annotative object draws at the view's annotation scale: a viewport's scale for
+    // model space seen through it, else the drawing's (CANNOSCALE in model space, 1:1 on paper).
+    if ctx.depth == 0 && cadcraft_doc::is_annotative(e) {
+        let mode = if ctx.top == VIEWPORT_CONTENT {
+            cadcraft_doc::anno_draw(e, 1.0 / ctx.xf.scale_factor().max(1e-12), ctx.d.anno_all_visible())
+        } else {
+            ctx.d.anno_draw(e)
+        };
+        match mode {
+            cadcraft_doc::AnnoDraw::Hidden => return,
+            cadcraft_doc::AnnoDraw::Scaled(f) => {
+                let mut scaled = cadcraft_doc::anno_scaled(e, f);
+                scaled.common.anno_scales.clear();
+                return entity_parts(b, ctx, &scaled);
+            }
+            cadcraft_doc::AnnoDraw::Plain => {}
+        }
+    }
     let (rgb, lw, lt, ltscale, visible) = resolve(ctx, e, b.plotting);
     if !visible {
         return;
