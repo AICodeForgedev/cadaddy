@@ -122,6 +122,7 @@ fn snap_menu_types_point_modifiers_and_snap_overrides() {
     let items = snap_items(&app);
     let labels: Vec<&str> = items.iter().map(|(l, _, _)| l.as_str()).collect();
     for l in [
+        "Temporary track point",
         "From",
         "Mid Between 2 Points",
         "Point Filters/.X",
@@ -151,6 +152,9 @@ fn snap_menu_types_point_modifiers_and_snap_overrides() {
     assert_eq!(app.session.snap_override(), Some(0));
     context_menu::choose_snap(&mut app, "_from");
     assert!(app.session.prompt_text().ends_with("Base point:"), "{}", app.session.prompt_text());
+    app.cmdline("");
+    context_menu::choose_snap(&mut app, "_tt");
+    assert!(app.session.prompt_text().ends_with("Specify temporary OTRACK point:"), "{}", app.session.prompt_text());
 }
 
 /// The text painted in one frame.

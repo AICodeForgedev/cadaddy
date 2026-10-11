@@ -926,6 +926,8 @@ impl Session {
             Some(i) => {
                 if let Input::Point(p) = &i {
                     self.last_point = *p;
+                    // A temporary tracking point (TT) serves one point.
+                    self.tracking.release_temporary();
                 }
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.machine.input(self, i)));
                 match r {
@@ -1172,14 +1174,17 @@ impl Session {
             if let Some(p) = prompt::parse_point_with(tt, self.last_point, &self.angle_settings()) {
                 return self.input(Input::Point(p));
             }
+            // Direct distance entry along the tracking path the cursor is on, from the point it
+            // comes from (an acquired or temporary tracking point needs no base point).
+            if let Some(dist) = units::parse_distance(tt).filter(|_| !prompt.accept.number)
+                && let Some((from, dir)) = self.tracking.last.as_ref().filter(|t| t.point.near(self.cursor, 1e-9)).and_then(|t| t.along())
+            {
+                return self.input(Input::Point(from + dir * dist));
+            }
             // Direct distance entry along the rubber band.
             if let (Some(base), Some(dist)) = (prompt.base, units::parse_distance(tt))
                 && !prompt.accept.number
             {
-                // Along the tracking path the cursor is on, from the point it comes from.
-                if let Some((from, dir)) = self.tracking.last.as_ref().filter(|t| t.point.near(self.cursor, 1e-9)).and_then(|t| t.along()) {
-                    return self.input(Input::Point(from + dir * dist));
-                }
                 let mut c = self.cursor;
                 if self.settings.orthomode {
                     c = snap::ortho(base, c);

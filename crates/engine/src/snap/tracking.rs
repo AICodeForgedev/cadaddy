@@ -152,13 +152,16 @@ pub enum Acquired {
     Parallel { at: Vec2, dir: Vec2 },
     /// An object rested on with Apparent Intersection running, and its whole extension.
     Apparent { at: Vec2, shape: PathShape },
+    /// A temporary tracking point (`TT`): it sends alignment paths even with OTRACK off, and is
+    /// released once the command takes a point.
+    Temporary { at: Vec2 },
 }
 
 impl Acquired {
     /// Where the acquisition marker goes.
     pub fn at(&self) -> Vec2 {
         match *self {
-            Acquired::Point { at, .. } | Acquired::Parallel { at, .. } | Acquired::Apparent { at, .. } => at,
+            Acquired::Point { at, .. } | Acquired::Parallel { at, .. } | Acquired::Apparent { at, .. } | Acquired::Temporary { at } => at,
         }
     }
 
@@ -171,6 +174,7 @@ impl Acquired {
                 a.cross(*b).abs() < 1e-9 && (*p - *q).cross(*a).abs() <= 1e-9 * (1.0 + p.len())
             }
             (Acquired::Apparent { shape: a, .. }, Acquired::Apparent { shape: b, .. }) => same_shape(a, b),
+            (Acquired::Temporary { at: a }, Acquired::Temporary { at: b }) => near(*a, *b),
             _ => false,
         }
     }
@@ -313,6 +317,22 @@ impl Tracker {
         }
     }
 
+    /// Acquire a temporary tracking point (`TT`), unless it is already acquired.
+    pub fn acquire_temporary(&mut self, at: Vec2) {
+        if !at.is_finite() {
+            return;
+        }
+        let cand = Acquired::Temporary { at };
+        if !self.acquired.iter().any(|a| a.same(&cand)) {
+            self.toggle(cand);
+        }
+    }
+
+    /// Release the temporary tracking points (the command took a point).
+    pub fn release_temporary(&mut self) {
+        self.acquired.retain(|a| !matches!(a, Acquired::Temporary { .. }));
+    }
+
     /// The cursor is over `cand` (or nothing) at `now` seconds: acquires or releases it once it
     /// has rested there for [`DWELL`] seconds, or at once when `shift` is held in Shift-to-acquire
     /// mode. Returns true while an acquisition is pending (the UI should redraw again soon).
@@ -382,6 +402,10 @@ impl Tracker {
                     if cfg.running(mode::APP) {
                         out.push(Path { shape, kind: PathKind::Apparent, from: at, name: "Apparent Intersection" });
                     }
+                }
+                Acquired::Temporary { at } => {
+                    let name = "Temporary track point";
+                    out.extend(cfg.track_angles.iter().map(|a| Path { shape: ray(at, *a), kind: PathKind::Alignment, from: at, name }));
                 }
             }
         }

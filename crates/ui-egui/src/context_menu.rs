@@ -67,14 +67,15 @@ const FILTERS: &[&str] = &[".X", ".Y", ".Z", ".XY", ".XZ", ".YZ"];
 /// The id of the Osnap Settings item (the Drafting Settings dialog).
 const OSNAP_SETTINGS: &str = "dsettings";
 
-/// The object snap menu (Shift/Ctrl+right-click): From, Mid Between 2 Points, Point Filters, the
-/// snap modes, None and Osnap Settings. An item's id is the text it types; the modifiers are
-/// only available at a point prompt.
+/// The object snap menu (Shift/Ctrl+right-click): Temporary track point, From, Mid Between 2
+/// Points, Point Filters, the snap modes, None and Osnap Settings. An item's id is the text it
+/// types; the modifiers are only available at a point prompt.
 pub fn snap_entries(app: &CadApp) -> Vec<Vec<Entry>> {
     let on = app.session.current_prompt().is_some_and(|p| cadcraft_engine::pointmod::accepts(&p));
     let typed = |label: &str, id: &str| Entry::Item { label: label.into(), id: id.into(), shortcut: None, enabled: on };
     let name = |m: u32| mode::ALL.iter().find(|(b, _)| *b == m).map_or("", |(_, n)| *n);
     let mut groups = vec![vec![
+        typed("Temporary track point", "_tt"),
         typed("From", "_from"),
         typed("Mid Between 2 Points", "_m2p"),
         Entry::Sub { label: "Point Filters".into(), children: FILTERS.iter().map(|f| typed(f, &f.to_ascii_lowercase())).collect() },

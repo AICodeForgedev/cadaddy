@@ -60,10 +60,9 @@ Detail and evidence: [ui-parity.md](ui-parity.md).
 
 | # | Gap | User impact | Est. |
 |---|---|---|---|
-| U1 | Tracking leftovers: polar angles relative to the last segment (POLARMODE 1), PolarSnap, temporary tracking point (TT), Extension from ellipse and spline ends, the tracking options in Drafting Settings (object snap tracking, Extension, Parallel and Apparent Intersection landed in #379) | Medium | 3–5 |
+| U1 | Tracking leftovers: polar angles relative to the last segment (POLARMODE 1), PolarSnap, Extension from ellipse and spline ends, the tracking options in Drafting Settings (object snap tracking, Extension, Parallel and Apparent Intersection landed in #379; the temporary tracking point TT in #441) | Medium | 2–4 |
 | U2 | Dynamic input: grip dimensional input, lock icons, DYNPROMPT options menu (pointer boxes with Tab and relative entry landed in #60) | Medium | 3–5 |
-| U3 | **[alpha blocker]** TK (temporary tracking, comes with object snap tracking, U1). FROM, M2P/MTP, `.x/.y/.xy` point filters, the `*` WCS prefix and the angle override `<a` landed at every point prompt (#392) | High | 1–2 |
-| U4 | Tab snap cycling offers the closest snap of each mode, not every candidate; the snap menu has no Temporary track point (comes with U1). Typed snap overrides (`END`, `MID` … `NON`), the Shift/Ctrl+right-click snap menu and Tab cycling landed (#393) | Low | 1–2 |
+| U4 | Tab snap cycling offers the closest snap of each mode, not every candidate. Typed snap overrides (`END`, `MID` … `NON`), the Shift/Ctrl+right-click snap menu and Tab cycling landed (#393), the menu's Temporary track point in #441 | Low | 1 |
 | U5 | Hot-grip options (Base point, Copy, Undo, Reference) are shown but ignored; multiple hot grips; multifunctional grip menus (Add/Remove Vertex, Convert to Arc) | Medium-high | 6–10 |
 | U6 | Selection: lasso; selection cycling (a list of overlapping objects, SELECTIONCYCLING); the CLass keyword; isolation saved with the drawing (OBJECTISOLATIONMODE 1) and the status-bar isolate button. Press-drag windows (#63), the W, C, F, WP and CP keywords (#226), BOX, AUto, SIngle, Multiple, Group, Add, Remove and Undo, SELECTSIMILAR, and ISOLATEOBJECTS/HIDEOBJECTS/UNISOLATEOBJECTS (#428) landed | Medium | 3–5 |
 | U7 | Right-click context menus (canvas, selection, command, command line, palettes, tabs) | Medium-high | 6–10 |

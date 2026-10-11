@@ -1,6 +1,7 @@
 //! Point modifiers typed at a point prompt, as in AutoCAD: `FROM` (a base point and an offset),
 //! `M2P`/`MTP` (the midpoint between two points), the point filters `.x`, `.y`, `.z`, `.xy`,
-//! `.xz`, `.yz`, the angle override `<a` and the object snap overrides (`END`, `MID` … `NON`).
+//! `.xz`, `.yz`, the angle override `<a`, the object snap overrides (`END`, `MID` … `NON`), the
+//! temporary tracking point `TT` and tracking `TK`.
 //!
 //! A modifier pushes a [`Frame`] onto [`Session::point_mods`]. While frames are pending the
 //! session shows their prompt ("Base point:", "<Offset>:", "First point of mid:", ".X of",
@@ -76,6 +77,12 @@ pub enum Frame {
     /// An object snap override for the next point only: one [`mode`] bit, or 0 for `NON` (no
     /// object snap).
     Snap { mode: u32 },
+    /// `TT`: the point given is acquired for object snap tracking (it sends alignment paths) and
+    /// the prompt below asks again.
+    TempTrack,
+    /// `TK` (tracking): a run of points, each straight across or up from the one before; Enter
+    /// ends it and hands down the last.
+    Track { last: Option<Vec2> },
 }
 
 /// The object snap overrides and the words they are typed as: any start of a word of three
@@ -152,6 +159,9 @@ impl Session {
             Frame::Mid { first: Some(f) } => Prompt::new("Second point of mid", point).base(f),
             Frame::Filter { keep, first: None } => Prompt::new(format!("{} of", keep.name()), point).base_opt(p.base),
             Frame::Filter { keep, first: Some(_) } => Prompt::new(format!("(need {})", keep.need()), point).base_opt(p.base),
+            Frame::TempTrack => Prompt::new("Specify temporary OTRACK point", point),
+            Frame::Track { last: None } => Prompt::new("First tracking point", point),
+            Frame::Track { last: Some(l) } => Prompt::new("Next point (Press ENTER to end tracking)", point).base(l),
             Frame::Angle { .. } | Frame::Snap { mode: 0 } => p,
             // "Endpoint of:", keeping the base and deferral PER/TAN need.
             Frame::Snap { mode } => Prompt { message: format!("{} of", snap_name(mode)), keywords: Vec::new(), default: None, ..p },
@@ -189,9 +199,14 @@ impl Session {
         if let Some(mode) = parse_snap(b) {
             return Some(Frame::Snap { mode });
         }
-        match b.to_ascii_lowercase().as_str() {
+        let b = b.to_ascii_lowercase();
+        match b.as_str() {
             "from" | "fro" => Some(Frame::From { base: None }),
             "m2p" | "mtp" => Some(Frame::Mid { first: None }),
+            "tt" => Some(Frame::TempTrack),
+            // TK, or TRACKING from three letters (TRA, TRACK).
+            "tk" => Some(Frame::Track { last: None }),
+            _ if b.len() >= 3 && "tracking".starts_with(&b) => Some(Frame::Track { last: None }),
             _ => None,
         }
     }
@@ -217,6 +232,16 @@ impl Session {
             }
             self.point_mods.push(f);
             return Some(Ok(()));
+        }
+        // A distance at "Next point" of TK: straight across or up from the last tracking point,
+        // the way the cursor lies from it.
+        if let Some(Frame::Track { last: Some(l) }) = self.point_mods.last().copied()
+            && crate::prompt::parse_point_with(t, self.last_point, &self.angle_settings()).is_none()
+            && let Some(d) = crate::units::parse_distance(t)
+        {
+            let dir = (crate::snap::ortho(l, self.cursor) - l).normalized();
+            let dir = if dir == Vec2::ZERO || !dir.is_finite() { Vec2::X } else { dir };
+            return Some(self.modifier_point(l + dir * d));
         }
         if let Some(Frame::Angle { base, dir }) = self.point_mods.last().copied() {
             // Typed coordinates are explicit: they win over the override.
@@ -249,11 +274,18 @@ impl Session {
                 self.input(Input::Deferred(d))
             }
             Input::Deferred(d) => self.modifier_point(d.at),
-            // Enter drops the modifiers and returns to the command's prompt.
-            Input::Enter => {
-                self.point_mods.clear();
-                Ok(())
-            }
+            // Enter ends tracking with its last point; otherwise it drops the modifiers and
+            // returns to the command's prompt.
+            Input::Enter => match self.point_mods.last().copied() {
+                Some(Frame::Track { last: Some(l) }) => {
+                    self.point_mods.pop();
+                    self.modifier_point(l)
+                }
+                _ => {
+                    self.point_mods.clear();
+                    Ok(())
+                }
+            },
             Input::Cancel => {
                 self.point_mods.clear();
                 self.input(Input::Cancel)
@@ -287,6 +319,18 @@ impl Session {
                 }
                 Frame::Filter { keep, first: None } => {
                     self.point_mods.push(Frame::Filter { keep, first: Some(p) });
+                    return Ok(());
+                }
+                Frame::TempTrack => {
+                    self.tracking.acquire_temporary(p);
+                    self.last_point = p;
+                    return Ok(());
+                }
+                Frame::Track { last } => {
+                    // Each point after the first goes straight across or up from the last one.
+                    let q = last.map_or(p, |l| crate::snap::ortho(l, p));
+                    self.point_mods.push(Frame::Track { last: Some(q) });
+                    self.last_point = q;
                     return Ok(());
                 }
                 // The offset point is already measured from the base (`@` reads the last point).
