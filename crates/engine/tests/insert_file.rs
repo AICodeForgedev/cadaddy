@@ -150,3 +150,27 @@ fn a_drawing_file_becomes_a_block_with_its_insbase_and_tables() {
     assert!(s.prompt_text().contains("block name"), "{}", s.prompt_text());
     assert_eq!(inserts(&s).len(), n);
 }
+
+#[test]
+fn exploded_json_insert_is_one_undo_step() {
+    for params in [json!({ "name": "*B", "at": [5, 5] }), json!({ "name": "B", "at": [5, 5], "explode": true })] {
+        let mut s = Session::new();
+        s.execute("line", &json!({ "points": [[0, 0], [10, 0]] })).unwrap();
+        s.execute("block", &json!({ "name": "B", "base": [0, 0], "keep": "delete", "handles": ["100"] })).unwrap();
+        let undo = s.state().unwrap().undo.len();
+        s.execute("insert", &params).unwrap();
+        assert_eq!(lines(&s), vec![(5.0, 5.0, 15.0, 5.0)], "{params}");
+        assert_eq!(s.state().unwrap().undo.len(), undo + 1, "{params}");
+
+        s.execute("undo", &json!({})).unwrap();
+        assert!(lines(&s).is_empty(), "{params}");
+        assert!(inserts(&s).is_empty(), "{params}");
+        assert!(s.doc().unwrap().block("B").is_some(), "{params}");
+
+        // The second undo reverts the block creation, not a leftover EXPLODE step.
+        s.execute("undo", &json!({})).unwrap();
+        assert!(inserts(&s).is_empty(), "{params}");
+        assert!(s.doc().unwrap().block("B").is_none(), "{params}");
+        assert_eq!(lines(&s), vec![(0.0, 0.0, 10.0, 0.0)], "{params}");
+    }
+}
