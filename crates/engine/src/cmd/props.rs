@@ -182,16 +182,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         .get("transparency")
         .map(|v| parse_transparency(v).ok_or_else(|| bad("properties.set", "transparency must be ByLayer, ByBlock or a percentage from 0 to 90")))
         .transpose()?;
-    let lw = p.get("lineweight").map(|v| match v.as_str().map(str::to_ascii_lowercase).as_deref() {
-        Some("bylayer") => Lineweight::ByLayer,
-        Some("byblock") => Lineweight::ByBlock,
-        Some("default") => Lineweight::Default,
-        _ => Lineweight::Mm100(
-            (v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim_end_matches("mm").trim().parse().ok())).unwrap_or(0.25) * 100.0)
-                .round()
-                .clamp(0.0, 211.0) as u16,
-        ),
-    });
+    let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).ok_or_else(|| bad("properties.set", "bad lineweight"))).transpose()?;
     let d = s.doc_mut()?;
     if let Some(l) = str_param(p, "layer") {
         d.ensure_layer(l);
@@ -732,6 +723,7 @@ fn block_dims_using(d: &cadcraft_doc::Drawing, name: &str) -> Vec<(String, cadcr
             let uses = match &e.kind {
                 EntityKind::Dimension(dm) => dm.style.eq_ignore_ascii_case(name),
                 EntityKind::Leader(l) => l.style.eq_ignore_ascii_case(name),
+                EntityKind::Tolerance(t) => t.style.eq_ignore_ascii_case(name),
                 _ => false,
             };
             if uses {

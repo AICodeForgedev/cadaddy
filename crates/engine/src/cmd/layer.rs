@@ -107,7 +107,7 @@ pub fn used_layers(d: &cadcraft_doc::Drawing) -> std::collections::HashSet<Strin
     set
 }
 
-fn parse_lw(v: &Value) -> Option<Lineweight> {
+pub(super) fn parse_lw(v: &Value) -> Option<Lineweight> {
     if let Some(f) = v.as_f64() {
         return Some(Lineweight::Mm100((f * 100.0).round().clamp(0.0, 211.0) as u16));
     }
