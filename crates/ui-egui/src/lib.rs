@@ -31,6 +31,7 @@ pub mod palettes;
 pub mod parametric;
 pub mod plotstyles;
 pub mod quick;
+pub mod shortcut_menus;
 pub mod theme;
 pub mod viewcube;
 pub mod vpscale;

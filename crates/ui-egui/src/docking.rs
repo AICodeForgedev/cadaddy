@@ -345,10 +345,9 @@ pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
                     .show(ui, |ui| crate::palettes::layers_section(app, ui));
             }
             Panel::Properties => {
-                egui::ScrollArea::vertical()
-                    .id_salt("dock-properties")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| crate::palettes::properties_section(app, ui));
+                egui::ScrollArea::vertical().id_salt("dock-properties").auto_shrink([false, false]).show(ui, |ui| {
+                    crate::shortcut_menus::palette(app, ui, crate::palettes::properties_section, crate::shortcut_menus::properties_entries)
+                });
             }
         },
     );

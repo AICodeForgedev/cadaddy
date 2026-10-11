@@ -112,6 +112,7 @@
 	Clipboard	Буфер обміну
 	Close	Закрити
 	Close All	Закрити всі
+	Close All Other Drawings	Закрити всі інші креслення
 	Closed	Замкнений
 	Coincident	Збіг
 	Collapse Tool Sets	Згорнути набори інструментів
@@ -122,6 +123,7 @@
 	Color Index	Індекс кольору
 	Color...	Колір...
 	Command History	Історія команд
+	Clear Command History	Очистити історію команд
 	Command Line	Командний рядок
 	Command Line History Lines	Рядки історії командного рядка
 	Command Reference	Довідник команд
@@ -138,6 +140,8 @@
 	Contributors	Учасники
 	Control Vertices	Керувальні вершини
 	Copy	Копіювати
+	Copy Full File Path	Копіювати повний шлях до файлу
+	Copy History	Копіювати історію
 	Copy Layout	Копіювати аркуш
 	Copy Nested Objects	Копіювати вкладені об'єкти
 	Copy Selection	Копіювати вибране
@@ -302,6 +306,7 @@
 	Freeze/Thaw in all viewports	Заморозити/розморозити в усіх видових екранах
 	Freeze/Thaw in the current viewport	Заморозити/розморозити в поточному видовому екрані
 	From	Від точки
+	From Template...	З шаблону...
 	General	Загальні
 	Geometric Center	Геометричний центр
 	Geometric Constraint	Геометричне обмеження
@@ -396,6 +401,7 @@
 	Layer is empty (double-click to make current)	Шар порожній (двічі клацніть, щоб зробити поточним)
 	Layers	Шари
 	Layers Palette	Палітра шарів
+	Hide Palette	Сховати палітру
 	Layers displayed: {shown} of {total}.   Current layer: {layer}	Показано шарів: {shown} із {total}.   Поточний шар: {layer}
 	Layout	Аркуш
 	Layout list	Список аркушів
@@ -413,6 +419,7 @@
 	Lines +/−	Рядки +/−
 	Lines added	Додані рядки
 	Lines deleted	Видалені рядки
+	Lines of Command History	Рядки історії команд
 	Linetype	Тип лінії
 	Linetype Scale	Масштаб типу лінії
 	Linetype scale	Масштаб типу лінії
@@ -948,6 +955,7 @@
 	Text override	Перевизначення тексту
 	Text style	Текстовий стиль
 	Thaw All Layers	Розморозити всі шари
+	Thaw Layer	Розморозити шар
 	There is nothing here yet.	Тут поки що нічого немає.
 	Thickness	Висота видавлювання
 	Time	Час
@@ -964,6 +972,7 @@
 	True Color	Колір RGB
 	Turn All Layers On	Увімкнути всі шари
 	Turn Off Layer	Вимкнути шар
+	Turn On Layer	Увімкнути шар
 	Turn Quick Properties off (QPMODE)	Вимкнути швидкі властивості (QPMODE)
 	Type	Тип
 	Type a command	Введіть команду

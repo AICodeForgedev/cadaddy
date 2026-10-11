@@ -52,6 +52,12 @@ impl CadApp {
         }
     }
 
+    /// Close every drawing but the one at `keep`, asking about each one with unsaved changes.
+    pub fn request_close_others(&mut self, keep: usize) {
+        let uids = self.session.docs.iter().enumerate().filter(|(i, _)| *i != keep).map(|(_, d)| d.uid).collect();
+        self.begin_close(uids);
+    }
+
     /// Close every drawing as the user asked for it, asking about each one with unsaved changes.
     pub fn request_close_all(&mut self) {
         let uids = self.session.docs.iter().map(|d| d.uid).collect();

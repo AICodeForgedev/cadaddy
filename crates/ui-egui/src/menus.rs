@@ -52,6 +52,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.dialog.commands", "Command Reference", &["Help", "CADCraft Help"], Some("F1")),
     ("ui.toggle.history", "Command History", &["Window", "Command History"], Some("F2")),
     ("ui.cmdline.lines", "Command Line History Lines", &[], None),
+    ("ui.cmdline.clear", "Clear Command History", &[], None),
     ("ui.dialog.language", "Interface Language", &["Edit", "Interface Language"], None),
     ("ui.language", "Language", &[], None),
     ("ui.noop", "", &[], None),
@@ -262,6 +263,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 app.ui.history_lines = n.min(crate::cmdline::MAX_LINES as u64) as usize;
             }
             Ok(json!({ "lines": app.ui.history_lines }))
+        }
+        "ui.cmdline.clear" => {
+            app.session.log.clear();
+            Ok(Value::Null)
         }
         "ui.dialog.language"
         | "ui.dialog.layers"
