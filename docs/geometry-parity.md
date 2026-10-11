@@ -97,7 +97,7 @@ Where line and arc are supported the results are exact.
 | Closest point: line, arc, circle, polyline | exact | exact |
 | Closest point: ellipse, spline | exact to tolerance | **sampled** (`curve.rs:264`, `curves.rs:637`) |
 | Tangent points, common tangents | every curve | circles and arcs only (`curve.rs:170-183`) |
-| AREA: circle, ellipse | exact | exact area (ellipse perimeter by Ramanujan, not exact) |
+| AREA: circle, ellipse | exact | exact area (ellipse perimeter by Ramanujan, not exact); an open elliptical arc has no area, like an arc |
 | AREA: polyline with arcs | exact (bulge segments) | **tessellated at 1e-4** (`curve.rs:491`) |
 | MASSPROP (regions: area, perimeter, centroid, moments) | exact on regions and solids | shoelace over a tessellated circle, polyline or first hatch loop (`utility.rs:310-352`); no regions |
 | LIST/DIST/ID precision | full double | full double |

@@ -1,6 +1,7 @@
 //! AREA's Object / Add area / Subtract area and DIST's Multiple points, typed as at the command line.
 
 use cadcraft_engine::Session;
+use serde_json::json;
 
 fn run(lines: &[&str]) -> (Session, Vec<String>) {
     let mut s = Session::new();
@@ -47,4 +48,21 @@ fn dist_multiple_points_sums_the_segments() {
     let (s, log) = run(&["dist", "0,0", "m", "3,4", "3,10", ""]);
     assert!(has(&log, "Distance = 11.0000"), "{log:?}");
     assert!(s.running.is_none(), "{}", s.prompt_text());
+}
+
+#[test]
+fn area_of_an_open_elliptical_arc_is_refused_and_a_full_ellipse_is_measured() {
+    for end in [90, 45] {
+        let mut s = Session::new();
+        let r = s.execute("ellipse", &json!({"center": [0, 0], "major": [4, 0], "ratio": 0.5, "start": 0, "end": end})).unwrap();
+        assert!(s.execute("area", &json!({"handle": r["handle"]})).is_err());
+    }
+    let mut s = Session::new();
+    let r = s.execute("ellipse", &json!({"center": [0, 0], "major": [4, 0], "ratio": 0.5})).unwrap();
+    let a = s.execute("area", &json!({"handle": r["handle"]})).unwrap();
+    assert!((a["area"].as_f64().unwrap() - 8.0 * std::f64::consts::PI).abs() < 1e-9, "{a}");
+    // Object selection of the quarter ellipse says it has no area.
+    let (_, log) = run(&["ellipse a c 0,0 4,0 2 0 90", "area", "o", "4,0"]);
+    assert!(has(&log, "no area"), "{log:?}");
+    assert!(!has(&log, "Area = "), "{log:?}");
 }

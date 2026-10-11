@@ -212,6 +212,10 @@ fn object_area(s: &Session, h: Handle) -> Result<(f64, f64)> {
             (g.area().abs(), g.len())
         }
         EntityKind::Ellipse(el) => {
+            let arc = cadcraft_geom::Ellipse { center: el.center.xy(), major: el.major.xy(), ratio: el.ratio, start: el.start, end: el.end };
+            if !arc.is_full() {
+                return Err(bad("area", "object has no area"));
+            }
             let a = el.major.xy().len();
             let b = a * el.ratio;
             (cadcraft_geom::PI * a * b, cadcraft_geom::PI * (3.0 * (a + b) - ((3.0 * a + b) * (a + 3.0 * b)).sqrt()))
