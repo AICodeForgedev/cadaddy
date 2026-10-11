@@ -122,7 +122,8 @@ fn editing_with_snaps_infers_and_constraint_commands_do_not() {
     // Many objects at once (an array) are not inferred.
     let n = kinds(&s).len();
     let before = s.doc().unwrap().model.len();
-    s.execute("arrayrect", &json!({ "handles": [ls[0].hex()], "rows": 1, "cols": 60, "rowSpacing": 1, "colSpacing": 0.5 })).unwrap();
+    s.execute("arrayrect", &json!({ "handles": [ls[0].hex()], "rows": 1, "cols": 60, "rowSpacing": 1, "colSpacing": 0.5, "associative": false }))
+        .unwrap();
     assert!(s.doc().unwrap().model.len() > before + 50);
     assert_eq!(kinds(&s).len(), n);
 }
