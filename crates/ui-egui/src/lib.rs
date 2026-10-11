@@ -22,6 +22,7 @@ pub mod docking;
 
 pub mod dyninput;
 pub mod gpu;
+pub mod grip_dyn;
 pub mod i18n;
 pub mod icons;
 pub mod layers;

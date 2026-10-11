@@ -379,7 +379,11 @@ impl Interactive for GripEdit {
                 for (n, a) in self.actions(s).into_iter().enumerate() {
                     p.keywords.insert(at + n, a.keyword().to_string());
                 }
-                p
+                // One hot grip being stretched: its dimensions can be typed (grip dimensional input).
+                match self.hot.as_slice() {
+                    [g] if self.mode == GripMode::Stretch => p.grip(*g),
+                    _ => p,
+                }
             }
         }
     }

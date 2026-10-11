@@ -41,11 +41,20 @@ pub struct Prompt {
     /// prompt (a point with no base yet, e.g. the first point of a line). Elsewhere a deferred
     /// pick arrives as the plain point it was picked at.
     pub deferred: bool,
+    /// The grip this prompt stretches (one hot grip at the STRETCH prompt), as (object, grip
+    /// index): Dynamic Input shows its dimensions ([`crate::grip_dims`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grip: Option<(Handle, usize)>,
 }
 
 impl Prompt {
     pub fn new(message: impl Into<String>, accept: Accept) -> Self {
-        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None, deferred: false }
+        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None, deferred: false, grip: None }
+    }
+    /// The grip being stretched (the `grip` field).
+    pub fn grip(mut self, g: (Handle, usize)) -> Self {
+        self.grip = Some(g);
+        self
     }
     pub fn kw(mut self, k: &[&str]) -> Self {
         self.keywords = k.iter().map(|s| s.to_string()).collect();

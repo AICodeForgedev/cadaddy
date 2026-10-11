@@ -13,6 +13,7 @@ pub mod audit;
 pub mod autosave;
 pub mod cmd;
 mod finite;
+pub mod grip_dims;
 pub mod grips;
 mod guard;
 pub mod pointmod;
@@ -324,6 +325,12 @@ pub struct Settings {
     /// -VIEW sEttings > Layer snapshot: named views save the layer settings with them.
     pub view_layer_snapshot: bool,
     pub dynmode: bool,
+    /// DYNDIGRIP: which dimensions grip dimensional input shows while a grip is stretched (bits:
+    /// 1 resulting length, 2 length change, 4 absolute angle, 8 angle change, 16 radius); read
+    /// when DYNDIVIS = 2.
+    pub dyndigrip: u32,
+    /// DYNDIVIS: how many of them: 0 the first, 1 the first two (default), 2 all DYNDIGRIP asks for.
+    pub dyndivis: u8,
     /// DYNPIFORMAT = 1: Dynamic Input shows second and next points as Cartesian `x,y` instead of
     /// polar `distance<angle` (the default).
     pub dynpi_cartesian: bool,
@@ -387,6 +394,8 @@ impl Default for Settings {
             zoomfactor: 60,
             view_layer_snapshot: true,
             dynmode: true,
+            dyndigrip: 31,
+            dyndivis: 1,
             dynpi_cartesian: false,
             dynpi_absolute: false,
             dynprompt: true,

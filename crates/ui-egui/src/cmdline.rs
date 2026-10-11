@@ -74,6 +74,10 @@ pub fn capture_tab(ctx: &egui::Context, raw: &mut egui::RawInput) {
 /// Tab on the command line: cycle the object snaps under the cursor, type the Dynamic Input
 /// separator (`,` or `<`) after a value, or complete a command name.
 fn tab(app: &mut CadApp) {
+    // Grip dimensional input: Tab locks the typed value and moves to the next field.
+    if crate::grip_dyn::tab(app) {
+        return;
+    }
     // Over a snap marker with nothing typed, Tab cycles the candidate snaps.
     if app.cmd.buffer.is_empty() && app.canvas.snap.is_some() {
         app.canvas.snap_tab = true;
@@ -300,6 +304,10 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
 }
 
 pub fn submit(app: &mut CadApp) {
+    // Grip dimensional input: the typed lengths and angles place the grip.
+    if crate::grip_dyn::submit(app) {
+        return;
+    }
     // Dynamic Input: a split entry (`40,30`, `40<90`, `40,`) is completed from the cursor and
     // measured from the last point.
     if let Some(f) = dyn_frame(app) {

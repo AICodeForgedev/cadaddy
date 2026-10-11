@@ -67,6 +67,8 @@ pub struct CanvasState {
     /// Hot grips (object, grip index): the ones Shift+clicked while idle, then the ones the
     /// running GRIP edit works on (the engine's grip modes take them from there).
     pub hot_grips: Vec<(Handle, usize)>,
+    /// Grip dimensional input: the value fields of the grip being stretched.
+    pub grip_dyn: crate::grip_dyn::GripDyn,
     /// A GRIP edit was running last frame (its grips go cold when it ends).
     grip_editing: bool,
     /// The grip whose menu (Stretch, Add Vertex, Lengthen…) a right-click opened.
@@ -692,12 +694,26 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             app.canvas.snap = None;
             app.canvas.track = None;
         }
+        // Grip dimensional input: typed lengths and angles hold the grip and override snaps.
+        let grip_held = crate::grip_dyn::constrain(app, eff);
+        if let Some(q) = grip_held {
+            eff = q;
+            app.canvas.snap = None;
+            app.canvas.track = None;
+        }
         app.canvas.cursor = Some(eff);
         app.session.cursor = eff;
         app.session.cursor_deferred = app.canvas.snap.and_then(|h| h.deferred);
         // Typed or menu snap overrides (END, NON…) and Tab cycling; a locked Dynamic Input value wins.
         if dyn_frame.and_then(|f| crate::dyninput::parse(&app.cmd.buffer, &f)).is_none_or(|e| e.first_locked().is_none()) {
             override_cursor(app, w, &xf);
+        }
+        // Typed grip dimensions win over snap overrides too.
+        if let Some(q) = grip_held {
+            app.canvas.cursor = Some(q);
+            app.session.cursor = q;
+            app.canvas.snap = None;
+            app.session.cursor_deferred = None;
         }
     } else {
         app.canvas.cursor = None;
@@ -987,7 +1003,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         if app.session.settings.dynmode
             && let Some(hp) = hover_pos
         {
-            dynamic_input(app, &painter, hp);
+            // A stretched grip shows its dimensions instead of the pointer boxes.
+            if !crate::grip_dyn::draw(app, &painter) {
+                dynamic_input(app, &painter, hp);
+            }
         }
     }
     // No continuous repaint while hovering: input events repaint by themselves. Repainting every
