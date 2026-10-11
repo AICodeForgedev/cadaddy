@@ -448,6 +448,7 @@ fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<
             contents: text.replace('\n', "\\P"),
             line_spacing: 1.0,
             line_spacing_exact: false,
+            columns: None,
         }),
         style: st.name.clone(),
         arrow_size: st.arrow_size * k,
@@ -494,6 +495,7 @@ fn run_leader(s: &mut Session, p: &Value) -> Result<Value> {
                 contents: t.into(),
                 line_spacing: 1.0,
                 line_spacing_exact: false,
+                columns: None,
             }))?
             .hex(),
         );

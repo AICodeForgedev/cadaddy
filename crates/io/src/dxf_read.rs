@@ -9,6 +9,8 @@ use cadcraft_geom::{PolyVertex, Spline, Vec2, Vec3};
 
 use crate::{IoError, Result};
 
+pub(crate) mod mtext_dxf;
+
 /// Value lookup helpers over an entity's tags.
 struct T<'a>(&'a [Tag]);
 
@@ -298,9 +300,11 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 contents.push_str(&tg.str());
             }
             contents.push_str(&t.s(1).unwrap_or_default());
+            let contents = mtext_dxf::decode_contents(&contents);
+            let columns = mtext_dxf::read_columns(tags);
             let mut rotation = match (t.f(11), t.f(21)) {
                 (Some(x), Some(y)) if x != 0.0 || y != 0.0 => Vec2::new(x, y).angle(),
-                _ => t.fd(50, 0.0).to_radians(),
+                _ => T(mtext_dxf::before_columns(tags)).fd(50, 0.0).to_radians(),
             };
             let mut attach = t.i(71).unwrap_or(1).clamp(1, 9) as u8;
             if c.extrusion.z < 0.0 {
@@ -317,13 +321,17 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             EntityKind::MText(MText {
                 insert: t.p(10),
                 height: t.fd(40, 0.2).max(1e-9),
-                width: t.fd(41, 0.0).max(0.0),
+                width: match &columns {
+                    Some((_, w)) if t.fd(41, 0.0) <= 0.0 => *w,
+                    _ => t.fd(41, 0.0).max(0.0),
+                },
                 attach,
                 rotation,
                 style: t.s(7).unwrap_or_else(|| "Standard".into()),
                 contents,
                 line_spacing: t.fd(44, 1.0),
                 line_spacing_exact: t.i(73) == Some(2),
+                columns: columns.map(|(c, _)| c),
             })
         }
         "ATTDEF" => EntityKind::AttDef(Attrib {

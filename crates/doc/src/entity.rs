@@ -270,9 +270,64 @@ pub struct MText {
     /// heights; At least (`false`, the default) lets taller characters push lines apart.
     #[serde(default)]
     pub line_spacing_exact: bool,
+    /// Columns the text flows through, each `width` wide (DXF 75/76/78/79/48/49/50); `None`:
+    /// one column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub columns: Option<MTextColumns>,
 }
 fn attach_tl() -> u8 {
     1
+}
+
+/// Static columns: a fixed number of columns of one height. Dynamic columns: as many columns
+/// as the text needs, of one height (auto height) or each its own (manual heights).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MTextColumnType {
+    #[default]
+    Static,
+    Dynamic,
+}
+
+/// MTEXT columns (MTEXT Columns option, DXF Reference MTEXT groups 75–79, 48–50).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MTextColumns {
+    #[serde(rename = "type")]
+    pub kind: MTextColumnType,
+    /// Number of columns (static columns: the columns there are).
+    pub count: u16,
+    /// Space between two columns.
+    pub gutter: f64,
+    /// Height of every column (static, and dynamic with auto height).
+    pub height: f64,
+    /// Dynamic columns: one height for all columns (`height`) instead of `heights`.
+    pub auto_height: bool,
+    /// Dynamic columns with manual heights: the height of each column.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub heights: Vec<f64>,
+    /// Columns run right to left.
+    pub flow_reversed: bool,
+}
+
+impl MTextColumns {
+    /// The width of `count` columns of `column_width` and their gutters.
+    pub fn total_width(&self, column_width: f64) -> f64 {
+        let n = f64::from(self.count.max(1));
+        column_width * n + self.gutter.max(0.0) * (n - 1.0)
+    }
+
+    /// The tallest column.
+    pub fn max_height(&self) -> f64 {
+        self.heights.iter().copied().fold(self.height, f64::max).max(0.0)
+    }
+
+    /// Scale every length (SCALE, block insertion).
+    pub fn scale(&mut self, s: f64) {
+        self.gutter *= s;
+        self.height *= s;
+        self.heights.iter_mut().for_each(|h| *h *= s);
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1090,6 +1145,9 @@ impl EntityKind {
                 t3(&mut t.insert);
                 t.height *= s;
                 t.width *= s;
+                if let Some(c) = &mut t.columns {
+                    c.scale(s);
+                }
                 t.rotation = cadcraft_geom::norm_angle(t.rotation + rot);
             }
             EntityKind::Insert(i) => {

@@ -108,6 +108,7 @@
 	Bring Above Objects	Над об'єктами
 	Bring Annotations to Front	Анотації на передній план
 	Bring to Front	На передній план
+	Bulleted list	Маркований список
 	ByBlock	За блоком
 	ByColor	За кольором
 	ByLayer	За шаром
@@ -394,6 +395,7 @@
 	Insert Block	Вставити блок
 	Insert Column	Вставити стовпець
 	Insert Row	Вставити рядок
+	Insert tab	Вставити табуляцію
 	Insert this block	Вставити цей блок
 	Insertion	Точка вставлення
 	Insertion X	Вставлення X
@@ -535,6 +537,7 @@
 	None	Немає
 	Not available	Недоступно
 	Not available yet	Поки недоступно
+	Numbered list	Нумерований список
 	OK	Гаразд
 	Object	Об'єкт
 	Object Snap	Об'єктна прив'язка

@@ -630,7 +630,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(71, i64::from(t.attach));
             w.i(72, 1);
             // Long contents go in 250-char 3-chunks, the remainder in 1.
-            let chars: Vec<char> = t.contents.chars().collect();
+            let chars: Vec<char> = crate::dxf_read::mtext_dxf::encode_contents(&t.contents).chars().collect();
             let chunks: Vec<String> = chars.chunks(250).map(|c| c.iter().collect()).collect();
             let n = chunks.len();
             for (i, c) in chunks.iter().enumerate() {
@@ -646,6 +646,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             // Line spacing style: 1 = at least, 2 = exactly.
             w.i(73, if t.line_spacing_exact { 2 } else { 1 });
             w.f(44, t.line_spacing);
+            w.t.extend(crate::dxf_read::mtext_dxf::column_tags(t));
         }
         EntityKind::Insert(i) => {
             w.s(0, "INSERT");
@@ -1160,6 +1161,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
                 contents: g.value.clone(),
                 line_spacing: 1.0,
                 line_spacing_exact: false,
+                columns: None,
             }),
         });
     }
@@ -1226,6 +1228,7 @@ fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
                     contents: cell.text.clone(),
                     line_spacing: 1.0,
                     line_spacing_exact: false,
+                    columns: None,
                 }),
             });
         }

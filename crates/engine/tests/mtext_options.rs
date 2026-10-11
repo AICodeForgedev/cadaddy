@@ -113,15 +113,14 @@ fn style_and_columns() {
     s.cmdline("?").unwrap();
     assert!(logged(&s, "Text styles: Standard, Notes"));
     s.cmdline("").unwrap();
-    // Columns: No is accepted; Dynamic and Static say they're not available, the text stays one column.
-    s.cmdline("c d").unwrap();
-    assert!(logged(&s, "Text columns are not available yet"));
+    // Columns: No keeps one column (Dynamic and Static are in mtext_columns.rs).
     s.cmdline("c n 20,-10").unwrap();
     s.cmdline("One column").unwrap();
     s.cmdline("").unwrap();
     let t = last_mtext(&s);
     assert_eq!(t.contents, "One column");
     assert_eq!(t.style, "Standard");
+    assert!(t.columns.is_none());
 }
 
 #[test]

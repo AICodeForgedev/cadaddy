@@ -53,6 +53,7 @@ fn sample() -> Drawing {
             contents: "line one\\Pline two".into(),
             line_spacing: 1.0,
             line_spacing_exact: false,
+            columns: None,
         }),
     )
     .unwrap();
@@ -1139,6 +1140,7 @@ fn intl_sample() -> Drawing {
             contents: format!("{INTL}\\P第二行 Ünïcødé"),
             line_spacing: 1.0,
             line_spacing_exact: false,
+            columns: None,
         }),
     )
     .unwrap();
@@ -1363,6 +1365,7 @@ fn mleader_is_written_as_multileader() {
         style: "Standard".into(),
         line_spacing: 1.0,
         line_spacing_exact: false,
+        columns: None,
     };
     let m = cadcraft_doc::MLeader {
         leaders: vec![vec![Vec3::new(0.0, 0.0, 0.0)]],

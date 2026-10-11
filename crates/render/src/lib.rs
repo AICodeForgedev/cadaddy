@@ -867,6 +867,14 @@ pub fn layout_mtext_entity(d: &Drawing, t: &cadcraft_doc::MText) -> cadcraft_fon
         font: cadcraft_fonts::TextFont::resolve(&ts.font),
         width_factor: ts.width_factor,
         oblique: ts.oblique,
+        columns: t.columns.as_ref().map(|c| cadcraft_fonts::MTextColumnSpec {
+            dynamic: c.kind == cadcraft_doc::MTextColumnType::Dynamic,
+            count: usize::from(c.count.max(1)),
+            gutter: c.gutter,
+            height: c.height,
+            heights: if c.kind == cadcraft_doc::MTextColumnType::Dynamic && !c.auto_height { c.heights.clone() } else { Vec::new() },
+            reversed: c.flow_reversed,
+        }),
     };
     cadcraft_fonts::layout_mtext_with(&t.contents, &params)
 }

@@ -4,6 +4,8 @@ use cadcraft_geom::{Bounds2, Vec2};
 
 use crate::{Shaped, TextFont, shape_line, text_width};
 
+pub(crate) mod para;
+
 /// Strip MTEXT formatting codes to plain text with `\n` paragraph breaks.
 /// Stacked fractions `\S1/2;` become `1/2`; `\~` is a space; braces are dropped.
 pub fn plain_mtext(s: &str) -> String {
@@ -99,6 +101,8 @@ pub struct MTextParams {
     pub font: TextFont,
     pub width_factor: f64,
     pub oblique: f64,
+    /// Columns the text flows through (each `width` wide); `None`: one column.
+    pub columns: Option<para::MTextColumnSpec>,
 }
 
 impl MTextParams {
@@ -113,6 +117,7 @@ impl MTextParams {
             font: TextFont::Stroke,
             width_factor: 1.0,
             oblique: 0.0,
+            columns: None,
         }
     }
 }
@@ -534,6 +539,9 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
     let rotation = if p.rotation.is_finite() { p.rotation } else { 0.0 };
     let base = Fmt { font: p.font.clone(), height: h, color: None, under: false, over: false, wf, oblique: p.oblique, valign: 1 };
     let (atoms, fmts) = parse(contents, base.clone());
+    if para::needed(contents, p) {
+        return para::layout(contents, p, &base);
+    }
     let fmt = |i: usize| fmts.get(i).unwrap_or(&base);
     let mut lines: Vec<Line> = Vec::new();
     let mut line = Line::default();

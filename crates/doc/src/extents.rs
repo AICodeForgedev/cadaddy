@@ -73,8 +73,13 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
         EntityKind::MText(t) => {
             let lines = t.contents.split("\\P").count().max(1);
             let longest = t.contents.split("\\P").map(|l| l.chars().count()).max().unwrap_or(1);
-            let w = if t.width > 0.0 { t.width } else { t.height * 0.8 * longest as f64 };
-            let h = t.height * 1.66 * lines as f64;
+            let mut w = if t.width > 0.0 { t.width } else { t.height * 0.8 * longest as f64 };
+            let mut h = t.height * 1.66 * lines as f64;
+            if let Some(c) = t.columns.as_ref().filter(|_| t.width > 0.0) {
+                // Columns side by side, the text flowing down each in turn.
+                w = c.total_width(t.width);
+                h = if c.max_height() > 0.0 { c.max_height() } else { h };
+            }
             let (dx, dy) = match t.attach {
                 2 | 5 | 8 => (-w / 2.0, 0.0),
                 3 | 6 | 9 => (-w, 0.0),

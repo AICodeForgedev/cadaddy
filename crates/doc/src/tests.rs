@@ -386,6 +386,7 @@ fn mtext_kind(contents: &str) -> EntityKind {
         contents: contents.into(),
         line_spacing: 1.0,
         line_spacing_exact: false,
+        columns: None,
     })
 }
 

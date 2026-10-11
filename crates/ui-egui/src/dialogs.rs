@@ -387,6 +387,14 @@ fn insert_block(app: &mut CadApp, name: &str) {
     }
 }
 
+/// The editor's lines as a list: a hanging indent of three text heights with a tab stop there
+/// (`\pxi-3,l3,t3;`) and each line a bullet or its number and a tab.
+fn as_list(buf: &str, numbered: bool) -> String {
+    let lines: Vec<String> =
+        buf.split('\n').enumerate().map(|(i, l)| if numbered { format!("{}.\t{l}", i + 1) } else { format!("•\t{l}") }).collect();
+    format!("\\pxi-3,l3,t3;{}", lines.join("\n"))
+}
+
 /// The multiline text editor shown while MTEXT asks for its contents.
 fn mtext_editor(app: &mut CadApp, ctx: &egui::Context) {
     let active = app.session.running.as_ref().is_some_and(|r| r.id == "mtext")
@@ -425,6 +433,16 @@ fn mtext_editor(app: &mut CadApp, ctx: &egui::Context) {
                 }
                 if ui.button("⌀").on_hover_text(crate::tl!("Diameter")).clicked() {
                     buf.push_str("%%c");
+                }
+                ui.separator();
+                if ui.button("⇥").on_hover_text(crate::tl!("Insert tab")).clicked() {
+                    buf.push('\t');
+                }
+                if ui.button("•≡").on_hover_text(crate::tl!("Bulleted list")).clicked() {
+                    buf = as_list(&buf, false);
+                }
+                if ui.button("1≡").on_hover_text(crate::tl!("Numbered list")).clicked() {
+                    buf = as_list(&buf, true);
                 }
             });
             let r = ui.add(
