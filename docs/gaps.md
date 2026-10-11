@@ -83,7 +83,7 @@ Detail: [file-format-parity.md](file-format-parity.md).
 | FF4 | Code pages (`$DWGCODEPAGE`, ANSI_932/936/949/950/125x) when reading pre-2007 files | Medium-high (Asia, Eastern Europe) | 3–5 |
 | FF5 | **[alpha blocker]** Real-file corpus (`storytold/cadcraft-corpus`), open → save → reopen tests, black-box check in AutoCAD | High | 10–15 + human |
 | FF6 | **[alpha blocker]** DWG throughput: a 10 MB DWG took ~2 min to fail (#57) | High for real projects | 6–10 |
-| FF7 | `*D` dimension blocks duplicate on re-save; handles regenerate every save | Medium | 3–5 |
+| FF7 | Table record and object handles from other programs' files are renumbered on the first save (entity handles are kept; `*D` blocks no longer duplicate and once reopened, CADCraft's own files keep every handle across saves, #495) | Low | 4–6 |
 | FF8 | SHX fonts (shape and big fonts) not read | Medium-high (text metrics differ) | 8–12 |
 | FF9 | Templates (DWT), user `.lin`/`.pat` files, `.ctb`/`.stb`, `.pc3`, `.pgp` | Medium | 20–30 |
 | FF10 | PDF: text as real fonts, layers (OCG), multi-sheet; PDF import and underlays; raster image attach | Medium | 30–50 |

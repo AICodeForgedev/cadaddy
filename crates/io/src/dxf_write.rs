@@ -39,7 +39,7 @@ impl W {
     }
     fn h(&mut self) -> String {
         let h = format!("{:X}", self.next);
-        self.next += 1;
+        self.next = self.next.saturating_add(1);
         h
     }
     /// A `102 {NAME` … `102 }` group of handles.
@@ -992,6 +992,65 @@ fn hatch_xdata(w: &mut W, h: &Hatch) {
     w.s(1000, h.background.map(Color::name).unwrap_or_default());
 }
 
+/// What happens to the anonymous `*D` blocks read from a file (#495): a dimension that still
+/// names its block regenerates its geometry under that name, keeping the block's entity
+/// handles, and `*D` blocks nothing else references are not written again.
+struct DimBlockPlan {
+    /// Dimension (model or paper space) → the read block whose name and handles it reuses.
+    reuse: HashMap<Handle, std::sync::Arc<Block>>,
+    /// Upper-case names of `*D` blocks not written as ordinary blocks.
+    skip: std::collections::HashSet<String>,
+}
+
+fn is_dim_block(name: &str) -> bool {
+    name.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("*D"))
+}
+
+fn dim_block_plan(d: &Drawing) -> DimBlockPlan {
+    let spaces: Vec<&EntityStore> = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).collect();
+    // Block names other objects use: inserts and multileader contents anywhere, and dimensions
+    // inside block definitions (their blocks are written as read).
+    let mut used = std::collections::HashSet::new();
+    let note = |e: &Entity, dims: bool, used: &mut std::collections::HashSet<String>| match &e.kind {
+        EntityKind::Insert(i) => {
+            used.insert(i.block.to_ascii_uppercase());
+        }
+        EntityKind::MLeader(m) => used.extend(m.block.as_ref().map(|b| b.block.to_ascii_uppercase())),
+        EntityKind::Dimension(dm) if dims => used.extend(dm.block.as_ref().map(|n| n.to_ascii_uppercase())),
+        _ => {}
+    };
+    for e in spaces.iter().flat_map(|s| s.iter()) {
+        note(e, false, &mut used);
+    }
+    for e in d.blocks.values().flat_map(|b| b.entities.iter()) {
+        note(e, true, &mut used);
+    }
+    let skip = d.blocks.keys().filter(|n| is_dim_block(n)).map(|n| n.to_ascii_uppercase()).filter(|n| !used.contains(n)).collect();
+    let mut plan = DimBlockPlan { reuse: HashMap::new(), skip };
+    let mut claimed = std::collections::HashSet::new();
+    for e in spaces.iter().flat_map(|s| s.iter()) {
+        let EntityKind::Dimension(dm) = &e.kind else { continue };
+        let Some(b) = dm.block.as_deref().filter(|n| is_dim_block(n)).and_then(|n| d.block(n)) else { continue };
+        let key = b.name.to_ascii_uppercase();
+        if plan.skip.contains(&key) && claimed.insert(key) {
+            plan.reuse.insert(e.handle, b.clone());
+        }
+    }
+    plan
+}
+
+/// Give regenerated dimension geometry the handles of the block it replaces, in order; the rest
+/// keep handle 0 and get fresh ones.
+fn reuse_handles(ents: &mut [Entity], old: &Block, taken: &mut std::collections::HashSet<Handle>) {
+    let mut handles = old.entities.iter().map(|e| e.handle).filter(|h| h.0 != 0);
+    for e in ents.iter_mut() {
+        match handles.by_ref().find(|h| taken.insert(*h)) {
+            Some(h) => e.handle = h,
+            None => break,
+        }
+    }
+}
+
 /// Anonymous dimension blocks (`*D1`…) with the rendered geometry, as consumers expect.
 fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
     // The dimension as drawn: its overrides, DIMSCALE (0 = the drawing's) and text font.
@@ -1279,7 +1338,7 @@ pub fn write(d: &Drawing) -> String {
 /// The drawing's DXF tags, declaring `version` in `$ACADVER`.
 pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     // Structural handles start above every entity handle.
-    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100) + 0x1000, pstyles: HashMap::new() };
+    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new() };
     // Pre-allocate handles for block records.
     let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
     paper_layouts.sort_by_key(|l| l.tab_order);
@@ -1290,7 +1349,13 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
         .map(|(i, l)| (if i == 0 { "*Paper_Space".to_string() } else { format!("*Paper_Space{}", i - 1) }, String::new(), *l))
         .collect();
     let ps_brs: Vec<(String, String, &Layout)> = ps_brs.into_iter().map(|(n, _, l)| (n, w.h(), l)).collect();
-    let mut user_blocks: Vec<(String, String, &Block)> = d.blocks.values().map(|b| (b.name.clone(), String::new(), b.as_ref())).collect();
+    let dim_plan = dim_block_plan(d);
+    let mut user_blocks: Vec<(String, String, &Block)> = d
+        .blocks
+        .values()
+        .filter(|b| !dim_plan.skip.contains(&b.name.to_ascii_uppercase()))
+        .map(|b| (b.name.clone(), String::new(), b.as_ref()))
+        .collect();
     user_blocks.iter_mut().for_each(|b| b.1 = format!("{:X}", 0));
     let user_blocks: Vec<(String, String, &Block)> = user_blocks.into_iter().map(|(n, _, b)| (n, w.h(), b)).collect();
     let mut cx = Ctx { paper_views: paper_views(d), ..Ctx::default() };
@@ -1298,17 +1363,28 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     // Dimension blocks.
     let mut dim_defs: Vec<(String, String, Vec<Entity>)> = Vec::new(); // filled below
     let mut n = 1;
+    let mut reused_handles = std::collections::HashSet::new();
     let all_spaces: Vec<&EntityStore> = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).collect();
     for st in &all_spaces {
         for e in st.iter() {
             if let EntityKind::Dimension(dm) = &e.kind {
-                let mut name = format!("*D{n}");
-                while d.block(&name).is_some() {
-                    n += 1;
-                    name = format!("*D{n}");
-                }
-                n += 1;
-                let ents = dim_block_entities(d, dm, &e.common.layer);
+                let reused = dim_plan.reuse.get(&e.handle);
+                let mut ents = dim_block_entities(d, dm, &e.common.layer);
+                let name = match reused {
+                    Some(b) => {
+                        reuse_handles(&mut ents, b, &mut reused_handles);
+                        b.name.clone()
+                    }
+                    None => {
+                        let mut name = format!("*D{n}");
+                        while d.block(&name).is_some() {
+                            n += 1;
+                            name = format!("*D{n}");
+                        }
+                        n += 1;
+                        name
+                    }
+                };
                 let brh = w.h();
                 cx.dim_blocks.insert(e.handle, name.clone());
                 dim_defs.push((name, brh, ents));
@@ -1403,6 +1479,9 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     let table_style_dict = w.h();
     // CADCraft data in XRECORDs of the named object dictionary: (key, handle, text chunks).
     let mut xrecords: Vec<(&str, String, Vec<String>)> = Vec::new();
+    // The drawing's own next handle: table records and objects are numbered above it, so
+    // reading it back (instead of $HANDSEED) keeps their handles across saves (#495).
+    xrecords.push((dxf_ext::HANDSEED_KEY, w.h(), vec![format!("{:X}", d.handseed)]));
     if let Some(chunks) = dxf_ext::constraint_chunks(&d.constraints, &d.parametric) {
         xrecords.push((dxf_ext::CONSTRAINTS_KEY, w.h(), chunks));
     }
@@ -1800,9 +1879,9 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     }
     // Generated geometry entities (dimension, arrowhead and table blocks) need handles.
     for (_, _, ents) in dim_defs.iter_mut().chain(arrow_defs.iter_mut()).chain(table_defs.iter_mut()) {
-        for e in ents.iter_mut() {
+        for e in ents.iter_mut().filter(|e| e.handle.0 == 0) {
             e.handle = Handle(w.next);
-            w.next += 1;
+            w.next = w.next.saturating_add(1);
         }
     }
     for (n, h, ents) in &dim_defs {

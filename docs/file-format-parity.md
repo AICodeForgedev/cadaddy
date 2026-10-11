@@ -73,7 +73,7 @@ early (#175), but the throughput problem remains. **DWG ≈ 30% read, ≈ 15% wr
 | LINE, POINT, CIRCLE, ARC, ELLIPSE, LWPOLYLINE (widths, bulges, elevation), SPLINE, RAY, XLINE | yes | yes | round-trip tests |
 | POLYLINE 2D/3D | yes | yes (as LWPOLYLINE / 3D POLYLINE) | polyface and polygon meshes flattened: lossy |
 | TEXT, MTEXT, ATTDEF, INSERT + ATTRIB | yes | yes | ATTDEF prompt kept (#137) |
-| DIMENSION (all 7 kinds) | yes | yes, with anonymous `*D` blocks | `*D` blocks duplicate on re-save (known); DIMASSOC objects written |
+| DIMENSION (all 7 kinds) | yes | yes, with anonymous `*D` blocks | a reopened dimension's `*D` block is regenerated under its name, unreferenced ones dropped (#495); DIMASSOC objects written |
 | LEADER | yes | yes | |
 | MULTILEADER | **no** (becomes Unknown) | **no**: our MLeaders are written as LEADER + MTEXT | MULTILEADER is AutoCAD's default leader since 2008 |
 | HATCH pattern / solid | yes | yes | |
@@ -90,7 +90,7 @@ early (#175), but the throughput problem remains. **DWG ≈ 30% read, ≈ 15% wr
 | Objects: LAYOUT, DICTIONARY, XRECORD, TABLESTYLE, DIMASSOC | yes | yes | |
 | Objects: GROUP, MLINESTYLE, MLEADERSTYLE, IMAGEDEF, SCALE, VISUALSTYLE, PLOTSETTINGS, materials, field objects | ignored | not written (ACAD_GROUP empty) | groups lost |
 | Foreign xdata, extension dictionaries, reactors | **not kept** | — | third-party application data lost |
-| Handles and owners | regenerated | consistent | handles change on every save |
+| Handles and owners | entity handles kept; others regenerated | consistent | stable across CADCraft re-saves (#495); other programs' table and object handles renumbered once |
 
 **DXF ≈ 50% read, ≈ 30% write** (estimated; weights: common 2D entities 50%, annotation objects
 20%, tables/objects 15%, foreign data preservation 15%).

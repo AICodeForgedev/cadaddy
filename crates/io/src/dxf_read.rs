@@ -1508,6 +1508,9 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
             _ => {}
         }
     }
+    // A file CADCraft wrote names its own next handle (#495): its table records and objects
+    // are numbered above it and rebuilt on save, so following $HANDSEED would drift every save.
+    let own_seed = objs.xrecord_text(crate::dxf_ext::HANDSEED_KEY).and_then(|t| Handle::parse_hex(t.trim()));
     // Layouts.
     let mut paper_block_for: HashMap<String, String> = HashMap::new();
     layout_objs.sort_by_key(|l| l.1);
@@ -1588,7 +1591,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     crate::dxf_image::resolve(&secs, &mut d);
     // Keep handles unique against the header's seed.
     let seed = d.header.str("HANDSEED", "");
-    if let Some(h) = Handle::parse_hex(&seed) {
+    if let Some(h) = own_seed.or_else(|| Handle::parse_hex(&seed)) {
         d.bump_handseed(Handle(h.0.saturating_sub(1)));
     }
     if d.layer("0").is_none() {
