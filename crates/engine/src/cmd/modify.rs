@@ -93,7 +93,6 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["j"])
             .params("{handles?}")
             .interactive(|_| Ok(Box::new(SelectThen::new(Op::Join)))),
-        CommandSpec::new("overkill", "Delete Duplicate Objects", run_overkill).menu(&["Modify", "Delete Duplicate Objects"]).params("{handles?}"),
     ]
 }
 
@@ -1468,24 +1467,6 @@ fn run_join(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let r = join(s, &hs)?;
     Ok(json!({ "handle": r.map(|h| h.hex()) }))
-}
-
-fn run_overkill(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = if p.get("handles").is_some() { targets(s, p)? } else { s.doc()?.space(&s.space()).map(|st| st.handles()).unwrap_or_default() };
-    let d = s.doc()?;
-    let mut seen: Vec<(String, String)> = Vec::new();
-    let mut dup = Vec::new();
-    for h in hs {
-        let Some(e) = d.entity(h) else { continue };
-        let key = (serde_json::to_string(&e.kind).unwrap_or_default(), serde_json::to_string(&e.common).unwrap_or_default());
-        if seen.contains(&key) {
-            dup.push(h);
-        } else {
-            seen.push(key);
-        }
-    }
-    let n = erase(s, &dup)?;
-    Ok(json!({ "deleted": n, "message": format!("{n} duplicate(s) deleted") }))
 }
 
 // ---------------- interactive ----------------

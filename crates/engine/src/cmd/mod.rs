@@ -24,6 +24,7 @@ mod mleader_content;
 mod modify;
 mod modify2;
 mod mtext_opts;
+mod overkill;
 mod pline_opts;
 mod props;
 pub use props::MatchProps;
@@ -172,6 +173,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(draw2::specs());
         v.extend(annotate::specs());
         v.extend(hatch::specs());
+        v.extend(overkill::specs());
         v.extend(blocks::specs());
         v.extend(modify::specs());
         v.extend(draworder::specs());
