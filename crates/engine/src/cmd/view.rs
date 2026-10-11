@@ -1,4 +1,5 @@
-//! View menu: ZOOM, PAN, REGEN, REDRAW, layout switching.
+//! View menu: ZOOM (with Realtime and Dynamic), PAN, REGEN, REDRAW, named views (VIEW), layout
+//! switching.
 
 use cadcraft_doc::{Space, entity_bounds};
 use cadcraft_geom::{Bounds2, Vec2};
@@ -8,15 +9,28 @@ use super::machines::{SelectRun, number};
 use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step, View};
 
+mod named_views;
+
 pub fn specs() -> Vec<CommandSpec> {
-    vec![
+    let mut v = vec![
         CommandSpec::new("zoom", "Zoom", run_zoom)
-            .menu(&["View", "Zoom", "Realtime"])
             .alias(&["z"])
-            .params("{mode: extents|all|window|previous|in|out|center|scale|object, p1?, p2?, center?, height?, factor?, xp?: bool (scale relative to paper space: in a viewport, `factor` paper units per model unit), limits?: bool (scale relative to the limits)} (center: `height`, or `factor` with `xp`/`limits`)")
+            .params("{mode: extents|all|window|previous|in|out|center|dynamic|scale|realtime|object, p1?, p2?, center?, height?, factor?, xp?: bool (scale relative to paper space: in a viewport, `factor` paper units per model unit), limits?: bool (scale relative to the limits)} (center/dynamic: `center` + `height`, or `factor` with `xp`/`limits`; realtime: `factor` about the view centre; typed: Enter at the first prompt starts Realtime)")
             .noundo()
             .transparent()
             .interactive(|_| Ok(Box::new(ZoomM::default()))),
+        CommandSpec::new("zoom.realtime", "Zoom Realtime", |s, p| zoom(s, &with_mode(p.clone(), "realtime", None)))
+            .menu(&["View", "Zoom", "Realtime"])
+            .params("{factor} (> 1 zooms in, about the view centre); interactive: drag up to zoom in, down to zoom out, Esc or Enter ends")
+            .noundo()
+            .transparent()
+            .interactive(|_| Ok(Box::new(ZoomM { start: ZoomStart::Realtime, ..Default::default() }))),
+        CommandSpec::new("zoom.dynamic", "Zoom Dynamic", |s, p| zoom(s, &with_mode(p.clone(), "dynamic", None)))
+            .menu(&["View", "Zoom", "Dynamic"])
+            .params("{center, height}; interactive: a view box over the drawing extents, a point places it, the next sizes it, Enter accepts")
+            .noundo()
+            .transparent()
+            .interactive(|_| Ok(Box::new(ZoomM { start: ZoomStart::Dynamic, ..Default::default() }))),
         CommandSpec::new("zoom.previous", "Zoom Previous", |s, _| zoom(s, &json!({"mode":"previous"})))
             .menu(&["View", "Zoom", "Previous"])
             .noundo()
@@ -82,7 +96,9 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .noundo(),
         CommandSpec::new("layout.set", "Switch Layout", run_layout_set).params("{name: \"Model\" | layout name}").noundo(),
-    ]
+    ];
+    v.extend(named_views::specs());
+    v
 }
 
 fn ext_bounds(s: &Session) -> Result<Bounds2> {
@@ -129,7 +145,7 @@ pub(crate) fn zoom(s: &mut Session, p: &Value) -> Result<Value> {
             let v = st.zoom_frame();
             st.set_zoom_frame(View { center: v.center, height: v.height / f });
         }
-        "center" | "c" => {
+        "center" | "c" | "dynamic" | "d" => {
             let c = point_req("zoom", p, "center")?;
             let cur = s.state()?.zoom_frame().height;
             let h = if p.get("factor").is_some() { factor_height(s, p, cur)? } else { f64_or(p, "height", cur) };
@@ -139,6 +155,14 @@ pub(crate) fn zoom(s: &mut Session, p: &Value) -> Result<Value> {
             let v = s.state()?.zoom_frame();
             let height = factor_height(s, p, v.height)?;
             s.state_mut()?.set_zoom_frame(View { center: v.center, height });
+        }
+        "realtime" => {
+            let v = s.state()?.zoom_frame();
+            let f = f64_req("zoom", p, "factor")?;
+            if f <= 0.0 {
+                return Err(bad("zoom", "factor must be positive"));
+            }
+            s.state_mut()?.set_zoom_frame(View { center: v.center, height: (v.height / f).clamp(1e-9, 1e12) });
         }
         "object" | "o" => {
             let hs = targets(s, p)?;
@@ -269,9 +293,19 @@ struct ZoomM {
     window: bool,
     first: Option<Vec2>,
     stage: ZoomStage,
+    /// Where the command starts (View > Zoom > Realtime / Dynamic skip the first prompt).
+    start: ZoomStart,
 }
 
-/// The Center and Scale options' own prompts.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum ZoomStart {
+    #[default]
+    Prompt,
+    Realtime,
+    Dynamic,
+}
+
+/// The Center, Scale, Realtime and Dynamic options' own prompts.
 #[derive(Clone, Copy, Default)]
 enum ZoomStage {
     #[default]
@@ -279,15 +313,95 @@ enum ZoomStage {
     Center,
     CenterHeight(Vec2),
     Scale,
+    Realtime,
+    Dynamic(DynBox),
+}
+
+/// The prompt of Zoom Realtime; [`Session::realtime_zoom_active`] recognises the mode by it.
+const REALTIME_PROMPT: &str = "Drag up to zoom in or down to zoom out; press Esc or Enter to exit";
+
+/// Zoom Dynamic: the view box shown over the drawing extents. A point places the box, the next
+/// one sizes it (its left edge stays), and so on; Enter shows what the box holds.
+#[derive(Clone, Copy)]
+struct DynBox {
+    /// The screen view and the zoom frame before the overview.
+    screen: View,
+    frame: View,
+    /// The drawing extents (the limits when empty).
+    extents: Bounds2,
+    center: Vec2,
+    height: f64,
+    /// Width / height of the area being zoomed.
+    aspect: f64,
+    /// The next point sizes the box (else it places it).
+    sizing: bool,
+}
+
+impl DynBox {
+    fn rect(c: Vec2, h: f64, aspect: f64) -> Bounds2 {
+        let half = Vec2::new(h * aspect / 2.0, h / 2.0);
+        Bounds2::new(c - half, c + half)
+    }
+    /// The box a point `p` makes: centred on it, or (sizing) reaching it from the left edge.
+    fn moved(&self, p: Vec2) -> (Vec2, f64) {
+        if !self.sizing {
+            return (p, self.height);
+        }
+        let left = self.center.x - self.height * self.aspect / 2.0;
+        let w = (p.x - left).max(self.height * self.aspect * 1e-3).max(1e-9);
+        (Vec2::new(left + w / 2.0, self.center.y), w / self.aspect)
+    }
+}
+
+impl ZoomM {
+    /// Start Realtime: one view history entry for the whole drag session (Zoom Previous).
+    fn realtime(&mut self, s: &mut Session) -> Result<Step> {
+        let st = s.state_mut()?;
+        let v = st.view();
+        st.view_history.push(v);
+        if st.view_history.len() > 50 {
+            st.view_history.remove(0);
+        }
+        self.stage = ZoomStage::Realtime;
+        Ok(Step::Continue)
+    }
+    /// Start Dynamic: zoom out to show the extents and the current view, and put the view box
+    /// where the view was. (Esc leaves the overview; Zoom Previous returns.)
+    fn dynamic(&mut self, s: &mut Session) -> Result<Step> {
+        let (w, h) = s.viewport_px;
+        let st = s.state()?;
+        let (screen, frame) = (st.view(), st.zoom_frame());
+        let aspect = st.zoom_aspect(w / h.max(1.0)).max(1e-6);
+        let ext = ext_bounds(s)?;
+        let extents = if ext.is_empty() { s.zoom_limits()? } else { ext };
+        let all = extents.union(&DynBox::rect(frame.center, frame.height, aspect));
+        fit(s, all.expand(all.height().max(all.width()) * 0.05))?;
+        s.touch();
+        self.stage = ZoomStage::Dynamic(DynBox { screen, frame, extents, center: frame.center, height: frame.height, aspect, sizing: false });
+        Ok(Step::Continue)
+    }
 }
 
 impl Interactive for ZoomM {
     fn name(&self) -> &'static str {
         "ZOOM"
     }
+    fn begin(&mut self, s: &mut Session) -> Result<Step> {
+        match self.start {
+            ZoomStart::Prompt => Ok(Step::Continue),
+            ZoomStart::Realtime => self.realtime(s),
+            ZoomStart::Dynamic => self.dynamic(s),
+        }
+    }
     fn prompt(&self, s: &Session) -> Prompt {
         match self.stage {
             ZoomStage::Main => {}
+            ZoomStage::Realtime => return Prompt::new(REALTIME_PROMPT, Accept { enter: true, ..Accept::default() }),
+            ZoomStage::Dynamic(b) if b.sizing => {
+                let left = Vec2::new(b.center.x - b.height * b.aspect / 2.0, b.center.y);
+                return Prompt::new("Specify size of view box", Accept::POINT).default("accept").base(left);
+            }
+            ZoomStage::Dynamic(_) => return Prompt::new("Specify center of view box", Accept::POINT).default("accept"),
             ZoomStage::Center => return Prompt::new("Specify center point", Accept::POINT),
             ZoomStage::CenterHeight(_) => {
                 let h = s.state().map(|st| st.zoom_frame().height).unwrap_or(1.0);
@@ -307,6 +421,26 @@ impl Interactive for ZoomM {
         let bad_factor = || crate::EngineError::Other("Requires a scale factor (n, nX or nXP).".into());
         match (self.stage, &i) {
             (_, Input::Cancel) | (ZoomStage::Main, _) => {}
+            (ZoomStage::Realtime, Input::Enter) => return Ok(Step::Done),
+            (ZoomStage::Realtime, _) => return Ok(Step::Continue),
+            (ZoomStage::Dynamic(b), Input::Enter) => {
+                // Back to the view before the overview without a history entry, then zoom from it.
+                let st = s.state_mut()?;
+                st.set_view_quiet(b.screen);
+                if st.view_history.last() == Some(&b.screen) {
+                    st.view_history.pop();
+                }
+                st.set_zoom_frame(View { center: b.center, height: b.height });
+                s.touch();
+                return Ok(Step::Done);
+            }
+            (ZoomStage::Dynamic(mut b), Input::Point(p)) => {
+                (b.center, b.height) = b.moved(*p);
+                b.sizing = !b.sizing;
+                self.stage = ZoomStage::Dynamic(b);
+                return Ok(Step::Continue);
+            }
+            (ZoomStage::Dynamic(_), _) => return Err(crate::EngineError::Other("Requires a point, or Enter to accept the view.".into())),
             (ZoomStage::Center, Input::Point(c)) => {
                 self.stage = ZoomStage::CenterHeight(*c);
                 return Ok(Step::Continue);
@@ -341,12 +475,7 @@ impl Interactive for ZoomM {
                     "All" => "all",
                     "Extents" => "extents",
                     "Previous" => "previous",
-                    "Dynamic" => {
-                        // Dynamic zoom drags a view box; without one it asks for a window.
-                        s.echo("Dynamic zoom: specify the new view as a window.");
-                        self.window = true;
-                        return Ok(Step::Continue);
-                    }
+                    "Dynamic" => return self.dynamic(s),
                     "Window" => {
                         self.window = true;
                         return Ok(Step::Continue);
@@ -381,12 +510,63 @@ impl Interactive for ZoomM {
                 zoom(s, &with_mode(p, "scale", None))?;
                 Ok(Step::Done)
             }
+            // Enter at the first prompt: Realtime (the default), as in AutoCAD.
+            Input::Enter if !self.window && self.first.is_none() => self.realtime(s),
             Input::Enter => Ok(Step::Done),
             _ => Ok(Step::Continue),
         }
     }
     fn preview(&self, _s: &Session, c: Vec2) -> Vec<cadcraft_doc::EntityKind> {
-        self.first.map(|a| vec![super::helpers::lwpoly(super::helpers::rect_vertices(a, c), true)]).unwrap_or_default()
+        use super::helpers::{line, lwpoly, rect_vertices};
+        let rect = |r: Bounds2| lwpoly(rect_vertices(r.min, r.max), true);
+        if let ZoomStage::Dynamic(b) = self.stage {
+            // The extents, the view before, and the box: where it is and where the cursor puts it.
+            let (center, height) = b.moved(c);
+            let next = DynBox::rect(center, height, b.aspect);
+            let mut out = vec![
+                rect(b.extents),
+                rect(DynBox::rect(b.frame.center, b.frame.height, b.aspect)),
+                rect(DynBox::rect(b.center, b.height, b.aspect)),
+                rect(next),
+            ];
+            if !b.sizing {
+                out.push(line(next.min, next.max));
+                out.push(line(Vec2::new(next.min.x, next.max.y), Vec2::new(next.max.x, next.min.y)));
+            }
+            return out;
+        }
+        self.first.map(|a| vec![rect(Bounds2::new(a, c))]).unwrap_or_default()
+    }
+}
+
+impl Session {
+    /// ZOOM is in its Realtime mode: the UI turns vertical drags into [`Session::realtime_zoom`].
+    pub fn realtime_zoom_active(&self) -> bool {
+        self.running.as_ref().is_some_and(|r| r.id.starts_with("zoom")) && self.current_prompt().is_some_and(|p| p.message == REALTIME_PROMPT)
+    }
+    /// One step of a Realtime zoom drag of `dy` pixels (down is positive): dragging up half the
+    /// drawing area's height zooms in 2x, down zooms out, about the centre of the view. Does
+    /// nothing outside Realtime.
+    pub fn realtime_zoom(&mut self, dy: f64) -> Result<()> {
+        if !self.realtime_zoom_active() || !dy.is_finite() {
+            return Ok(());
+        }
+        let half = (self.viewport_px.1 / 2.0).max(1.0);
+        let f = 2f64.powf((-dy / half).clamp(-16.0, 16.0));
+        let st = self.state_mut()?;
+        let v = st.view();
+        st.set_view_quiet(View { center: v.center, height: (v.height / f).clamp(1e-9, 1e12) });
+        self.touch();
+        Ok(())
+    }
+    /// The zoom of a mouse wheel scroll by `delta` points (up zooms in): ZOOMFACTOR scales it
+    /// (60, the default, zooms about 18% per wheel step).
+    pub fn wheel_zoom_factor(&self, delta: f64) -> f64 {
+        if !delta.is_finite() {
+            return 1.0;
+        }
+        let k = f64::from(self.settings.zoomfactor.clamp(3, 100)) / 60.0;
+        (delta / 300.0 * k).clamp(-40.0, 40.0).exp()
     }
 }
 

@@ -600,15 +600,24 @@ impl Layout {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A named view (VIEW table): the centre and size of the area shown, in model space or a layout.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NamedView {
     pub name: String,
     pub center: Vec2,
     pub height: f64,
     pub width: f64,
+    /// The layer state restored with the view (its layer snapshot).
     #[serde(default)]
     pub layer_state: Option<String>,
+    /// View twist (radians, counterclockwise); kept for files, not applied to the 2D display.
+    #[serde(default)]
+    pub twist: f64,
+    /// The layout a paper space view belongs to (`None`: a model space view; an empty name: a
+    /// paper space view whose layout is not known).
+    #[serde(default)]
+    pub layout: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -586,7 +586,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             && let Some(hp) = hover_pos
         {
             // Zoom with the mouse wheel about the cursor.
-            let f = (f64::from(scroll.y) / 300.0).exp();
+            let f = app.session.wheel_zoom_factor(f64::from(scroll.y));
             let about = xf.to_world(hp);
             let _ = app.session.zoom_about(f, about);
         }
@@ -622,6 +622,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     if dbl_middle && inside {
         let _ = app.session.zoom_extents();
+    }
+    // ZOOM Realtime: dragging up zooms in, down zooms out.
+    if resp.dragged_by(egui::PointerButton::Primary) && app.session.realtime_zoom_active() {
+        let _ = app.session.realtime_zoom(f64::from(resp.drag_delta().y));
     }
     // Re-read the view after navigation.
     let view = app.session.state().map(|s| s.view()).unwrap_or(view);

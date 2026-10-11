@@ -42,10 +42,11 @@ fn zoom_center_scale_dynamic_and_paper_space_all() {
     s.cmdline("ZOOM S 2").unwrap();
     assert!(near(view(&s).height, 148.5), "{:?}", view(&s));
 
-    // Dynamic asks for a window instead of zooming to the extents.
-    s.script("ZOOM D 0,0 160,90\n").unwrap();
+    // Dynamic: a point places the view box (the size of the view before), Enter shows it (#463).
+    s.script("ZOOM D 80,45\n\n").unwrap();
+    assert!(s.current_prompt().is_none());
     let v = view(&s);
-    assert!(v.center.near(Vec2::new(80.0, 45.0), 1e-9) && near(v.height, 90.0), "{v:?}");
+    assert!(v.center.near(Vec2::new(80.0, 45.0), 1e-9) && near(v.height, 148.5), "{v:?}");
 
     // Paper space: All and Extents (no paper objects) fit the sheet, not the model limits.
     s.execute("layout.set", &json!({ "name": "Layout1" })).unwrap();

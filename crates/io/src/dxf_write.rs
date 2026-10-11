@@ -1620,7 +1620,7 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     for v in &d.views {
         record_head(&mut w, "VIEW", &th, "AcDbViewTableRecord");
         w.s(2, &v.name);
-        w.i(70, 0);
+        w.i(70, i64::from(v.layout.is_some()));
         w.f(40, v.height);
         w.p2(10, v.center);
         w.f(41, v.width);
@@ -1629,14 +1629,19 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
         w.f(42, 50.0);
         w.f(43, 0.0);
         w.f(44, 0.0);
-        w.f(50, 0.0);
+        w.f(50, if v.twist.is_finite() { v.twist.to_degrees() } else { 0.0 });
         w.i(71, 0);
         w.i(281, 0);
         w.i(72, 0);
-        if let Some(ls) = &v.layer_state {
+        let xdata = [("LAYERSTATE", v.layer_state.as_deref()), ("LAYOUT", v.layout.as_deref().filter(|l| !l.is_empty()))];
+        if xdata.iter().any(|(_, x)| x.is_some()) {
             w.s(1001, dxf_ext::APP);
-            w.s(1000, "LAYERSTATE");
-            w.s(1000, dxf_ext::xdata_str(ls));
+            for (key, value) in xdata {
+                if let Some(value) = value {
+                    w.s(1000, key);
+                    w.s(1000, dxf_ext::xdata_str(value));
+                }
+            }
         }
     }
     w.s(0, "ENDTAB");

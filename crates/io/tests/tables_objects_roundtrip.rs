@@ -106,7 +106,14 @@ fn layout_page_setup_and_paper_view_round_trip() {
 fn named_views_ucss_and_groups_round_trip() {
     let mut d = Drawing::new_imperial();
     let line = d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(10.0, 0.0, 0.0) })).expect("line");
-    d.views.push(NamedView { name: "Front".into(), center: Vec2::new(5.0, 5.0), height: 20.0, width: 30.0, layer_state: Some("Plan".into()) });
+    d.views.push(NamedView {
+        name: "Front".into(),
+        center: Vec2::new(5.0, 5.0),
+        height: 20.0,
+        width: 30.0,
+        layer_state: Some("Plan".into()),
+        ..Default::default()
+    });
     d.ucss.push(Ucs { name: "Tilted".into(), origin: Vec3::new(1.0, 2.0, 0.0), x_axis: Vec3::new(0.6, 0.8, 0.0), y_axis: Vec3::new(-0.8, 0.6, 0.0) });
     d.groups.push(Group { name: "G1".into(), description: "grp".into(), selectable: false, members: vec![line] });
     // A member that no longer exists is not written.

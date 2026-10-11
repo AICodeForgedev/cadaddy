@@ -207,6 +207,7 @@
 	Drawing Limits	Межі креслення
 	Drawing Utilities	Утиліти креслення
 	Drawings (DWG, DXF)	Креслення (DWG, DXF)
+	Dynamic	Динамічно
 	Dynamic Dimensions	Динамічні розміри
 	Dynamic Input	Динамічне введення
 	Dynamic Input (F12)	Динамічне введення (F12)
@@ -470,6 +471,7 @@
 	N	Пн
 	Name	Назва
 	Name (A–Z)	Назва (А–Я)
+	Named Views...	Іменовані види...
 	Nearest	Найближча точка
 	New	Створити
 	New (metric)	Створити (метричне)
@@ -1011,11 +1013,13 @@
 	Yes	Так
 	Zoom	Масштабування виду
 	Zoom All	Показати все
+	Zoom Dynamic	Динамічне масштабування
 	Zoom Extents	Показати межі об'єктів
 	Zoom In	Наблизити
 	Zoom Object	Показати об'єкт
 	Zoom Out	Віддалити
 	Zoom Previous	Попередній масштаб
+	Zoom Realtime	Масштабування в реальному часі
 	Zoom Window	Масштабувати рамкою
 	error	помилка
 	{contributors} · {commits}	{contributors} · {commits}

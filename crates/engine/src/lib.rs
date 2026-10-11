@@ -293,6 +293,10 @@ pub struct Settings {
     pub gridunit: Vec2,
     /// Major grid line every N minor lines (GRIDMAJOR).
     pub gridmajor: u32,
+    /// ZOOMFACTOR: how far one mouse wheel step zooms (3..=100).
+    pub zoomfactor: u32,
+    /// -VIEW sEttings > Layer snapshot: named views save the layer settings with them.
+    pub view_layer_snapshot: bool,
     pub dynmode: bool,
     /// DYNPIFORMAT = 1: Dynamic Input shows second and next points as Cartesian `x,y` instead of
     /// polar `distance<angle` (the default).
@@ -351,6 +355,8 @@ impl Default for Settings {
             osnaphatch: false,
             gridunit: Vec2::new(0.5, 0.5),
             gridmajor: 5,
+            zoomfactor: 60,
+            view_layer_snapshot: true,
             dynmode: true,
             dynpi_cartesian: false,
             dynpi_absolute: false,
