@@ -157,6 +157,9 @@ mod tests {
         app.cmdline("pre");
         assert_eq!(app.ui.dialog.as_deref(), Some("preview"));
         app.ui.dialog = None;
+        app.start("preview");
+        assert_eq!(app.ui.dialog.as_deref(), Some("preview"));
+        app.ui.dialog = None;
 
         let _ = app.run("export", json!({ "format": "svg" }));
         let _ = app.run("import", json!({}));

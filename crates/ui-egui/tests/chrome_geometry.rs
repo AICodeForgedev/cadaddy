@@ -84,3 +84,11 @@ fn compact_toolbar_overflow_keeps_help_reachable() {
     h.run_steps(3);
     assert_eq!(h.state().ui.dialog.as_deref(), Some("about"));
 }
+
+#[test]
+fn toolbar_plot_preview_opens_dialog() {
+    let mut h = harness(1200.0, 760.0, 1.0, false);
+    h.get_by_label("Plot Preview").click();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.dialog.as_deref(), Some("preview"));
+}
