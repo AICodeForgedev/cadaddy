@@ -12,7 +12,7 @@ pub use cadcraft_dxf::Version;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{Result, Session};
+use crate::{Accept, Input, Prompt, Result, Session, Step};
 
 pub(crate) use pgp::{specs as alias_specs, user_alias};
 pub use template::{qnew_template, set_qnew_template};
@@ -153,7 +153,67 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("document.bytes", "Drawing as bytes", run_bytes)
             .params("{format?: dxf, version?: 2000…2018, binary?: bool} → {data: base64}")
             .noundo(),
+        CommandSpec::new("script", "Run Script...", run_script)
+            .menu(&["Tools", "Run Script..."])
+            .alias(&["scr"])
+            .params("{path: script (.scr) file} | {data: base64} → {lines}")
+            .noundo()
+            .interactive(|_| Ok(Box::new(ScriptM))),
     ]
+}
+
+/// SCRIPT: run the lines of a `.scr` file through [`Session::script`] — the same execution the
+/// CLI, MCP and the control channel already use, now reachable from the command line and menus.
+fn run_script(s: &mut Session, p: &Value) -> Result<Value> {
+    let text = if let Some(_path) = str_param(p, "path") {
+        #[cfg(not(target_arch = "wasm32"))]
+        let path = _path;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let bytes = std::fs::read(path).map_err(|e| bad("script", format!("{path}: {e}")))?;
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+        #[cfg(target_arch = "wasm32")]
+        return Err(bad("script", "paths are not available on the web; pass `data`"));
+    } else {
+        let data = str_param(p, "data").ok_or_else(|| bad("script", "`path` or `data` (base64) is required"))?;
+        let bytes = base64_decode(data).ok_or_else(|| bad("script", "invalid base64"))?;
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+    let lines = text.lines().count();
+    s.script(&text)?;
+    Ok(json!({ "lines": lines }))
+}
+
+/// SCRIPT typed at the command line or chosen from the menu: asks for the script file by name
+/// (the prompt form; the menu item runs this same machine).
+struct ScriptM;
+
+impl Interactive for ScriptM {
+    fn name(&self) -> &'static str {
+        "SCRIPT"
+    }
+    fn prompt(&self, _: &Session) -> Prompt {
+        Prompt::new("Enter name of script file", Accept::TEXT)
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if matches!(i, Input::Cancel | Input::Enter) {
+            return Ok(Step::Cancel);
+        }
+        let Input::Text(t) = i else { return Ok(Step::Continue) };
+        let t = t.trim();
+        if t.is_empty() {
+            return Ok(Step::Cancel);
+        }
+        match run_script(s, &json!({ "path": t })) {
+            Ok(_) => Ok(Step::Done),
+            Err(EngineError::BadParams { msg, .. }) => {
+                s.echo(msg);
+                Ok(Step::Done)
+            }
+            Err(e) => Err(e),
+        }
+    }
 }
 
 fn run_new(s: &mut Session, p: &Value) -> Result<Value> {
@@ -463,6 +523,56 @@ mod tests {
 
     fn active_title(s: &Session) -> String {
         s.state().unwrap().title.clone()
+    }
+
+    fn temp_script(name: &str, text: &str) -> String {
+        let path = std::env::temp_dir().join(format!("cadcraft-script-{}-{name}", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn script_command_runs_a_scr_file() {
+        let path = temp_script("run.scr", "; a comment\ncircle 50,25 20\nrectang 0,0 100,60\n");
+        let mut s = Session::new();
+        let r = s.execute("script", &json!({ "path": path })).unwrap();
+        assert_eq!(r["lines"], 3);
+        assert_eq!(s.state().unwrap().doc.model.len(), 2, "the comment is skipped, circle and rectang draw");
+    }
+
+    #[test]
+    fn script_command_reports_a_missing_file() {
+        let mut s = Session::new();
+        let e = s.execute("script", &json!({ "path": "no/such/script.scr" })).unwrap_err().to_string();
+        assert!(e.contains("no/such/script.scr"), "{e}");
+        assert_eq!(s.state().unwrap().doc.model.len(), 0);
+    }
+
+    /// A script that runs itself must be refused, not recurse until the stack dies.
+    #[test]
+    fn a_script_cannot_start_a_script() {
+        let inner = temp_script("inner.scr", "circle 0,0 1\n");
+        let outer = temp_script("outer.scr", &format!("script {}\ncircle 0,0 2\n", json!({ "path": inner })));
+        let mut s = Session::new();
+        let e = s.execute("script", &json!({ "path": outer })).unwrap_err().to_string();
+        assert!(e.contains("already running"), "{e}");
+    }
+
+    #[test]
+    fn typed_script_prompts_for_the_file_then_runs_or_reports_it() {
+        let good = temp_script("typed.scr", "circle 0,0 1\n");
+        let mut s = Session::new();
+        s.cmdline("script").unwrap();
+        assert!(s.running.is_some(), "SCRIPT asks for the file name");
+        s.cmdline(&good).unwrap();
+        assert!(s.running.is_none());
+        assert_eq!(s.state().unwrap().doc.model.len(), 1);
+
+        // A file that cannot be read: the error is echoed, the command still ends.
+        s.cmdline("script").unwrap();
+        s.cmdline("no/such/script.scr").unwrap();
+        assert!(s.running.is_none());
+        assert!(s.log.iter().any(|l| l.contains("no/such/script.scr")), "{:?}", s.log);
     }
 
     #[test]

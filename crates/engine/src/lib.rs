@@ -542,6 +542,8 @@ pub struct Session {
     pub active: usize,
     pub settings: Settings,
     pub running: Option<Running>,
+    /// A script is running ([`Session::script`]); a SCRIPT command inside it is refused.
+    in_script: bool,
     /// The command suspended while a transparent command (`'ZOOM`, `'PAN`…) prompts inside it;
     /// it resumes when that command ends. One level, as in AutoCAD.
     pub suspended: Option<Running>,
@@ -603,6 +605,7 @@ impl Session {
             active: 0,
             settings: Settings::default(),
             running: None,
+            in_script: false,
             suspended: None,
             log: Vec::new(),
             last_command: None,
@@ -1310,7 +1313,20 @@ impl Session {
     /// Run a script, as AutoCAD reads one: a space or a line end ends an input, and an empty
     /// input (two spaces in a row, a space at the end of a line, an empty line) is Enter. At
     /// free-text prompts spaces are part of the text. Lines starting with `;` are comments.
+    ///
+    /// A script cannot run a script: the SCRIPT command (or another `cmd {json}` call) inside a
+    /// running one is refused, so two files that run each other cannot recurse until the stack dies.
     pub fn script(&mut self, text: &str) -> Result<()> {
+        if self.in_script {
+            return Err(EngineError::BadParams { cmd: "script".into(), msg: "a script is already running; nested scripts are not supported".into() });
+        }
+        self.in_script = true;
+        let r = self.script_lines(text);
+        self.in_script = false;
+        r
+    }
+
+    fn script_lines(&mut self, text: &str) -> Result<()> {
         for line in text.lines() {
             // Trailing spaces are inputs (Enter); other trailing whitespace (`\r`) is not.
             let line = line.trim_end_matches(|c: char| c.is_whitespace() && c != ' ');
