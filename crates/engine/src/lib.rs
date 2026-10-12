@@ -38,7 +38,7 @@ pub use cadcraft_doc as doc;
 pub use cadcraft_geom as geom;
 pub use cadcraft_render as render;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
-pub use prompt::{Accept, Input, Interactive, Prompt, Step};
+pub use prompt::{Accept, Drag, Input, Interactive, Prompt, Step};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -1181,6 +1181,16 @@ impl Session {
         let Some(r) = &self.running else { return Vec::new() };
         let common = self.current_common();
         r.machine.preview(self, cursor).into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }).collect()
+    }
+
+    /// The active command's preview as a transform of existing objects (see
+    /// [`Interactive::drag`]), with its extra rubber-band geometry as entities.
+    pub fn drag(&self, cursor: Vec2) -> Option<(Drag, Vec<Entity>)> {
+        let r = self.running.as_ref()?;
+        let d = r.machine.drag(self, cursor)?;
+        let common = self.current_common();
+        let extra = d.extra.iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k.clone() }).collect();
+        Some((d, extra))
     }
 
     /// Process one line typed at the command line (Enter pressed). Spaces separate inputs as in a

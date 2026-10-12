@@ -1927,6 +1927,21 @@ impl Interactive for SelectThen {
         out.push(line(base, c));
         out
     }
+    fn drag(&self, _s: &Session, c: Vec2) -> Option<crate::prompt::Drag> {
+        // Mirror stays on `preview`: MIRRTEXT keeps text readable, which a plain matrix can't.
+        if (self.op == Op::Rotate && self.reference) || !self.sel.done {
+            return None;
+        }
+        let base = self.pts.first().copied()?;
+        let matrix = match self.op {
+            Op::Move | Op::Copy => Mat3::translate(c - base),
+            Op::Rotate => Mat3::rotate_about(base, base.angle_to(c)),
+            Op::Scale if !self.reference => Mat3::scale_about(base, base.dist(c).max(1e-9)),
+            Op::Scale => Mat3::scale_about(base, self.ref_len.and_then(|r| positive_length(Some(base.dist(c) / r)))?),
+            _ => return None,
+        };
+        Some(crate::prompt::Drag { handles: self.objs.clone(), matrix, extra: vec![line(base, c)] })
+    }
 }
 
 /// An OFFSET option prompt opened from "Specify offset distance".
@@ -2729,6 +2744,12 @@ impl Interactive for DisplaceM {
             return Vec::new();
         }
         self.inner.preview(s, c)
+    }
+    fn drag(&self, s: &Session, c: Vec2) -> Option<crate::prompt::Drag> {
+        if self.displacement {
+            return None;
+        }
+        self.inner.drag(s, c)
     }
 }
 

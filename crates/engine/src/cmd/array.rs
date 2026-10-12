@@ -447,6 +447,9 @@ impl Interactive for ArrayM {
     fn preview(&self, s: &Session, cursor: Vec2) -> Vec<EntityKind> {
         self.inner.as_ref().map(|m| m.preview(s, cursor)).unwrap_or_default()
     }
+    fn drag(&self, s: &Session, cursor: Vec2) -> Option<crate::prompt::Drag> {
+        self.inner.as_ref().and_then(|m| m.drag(s, cursor))
+    }
 }
 
 // ---------------- ARRAYRECT ----------------

@@ -1,7 +1,7 @@
 //! Interactive commands: prompts, inputs and the command-line coordinate grammar.
 
 use cadcraft_doc::{EntityKind, Handle};
-use cadcraft_geom::Vec2;
+use cadcraft_geom::{Mat3, Vec2};
 use serde::Serialize;
 
 use crate::{Result, Session};
@@ -165,6 +165,21 @@ pub trait Interactive: Send {
     fn preview(&self, _s: &Session, _cursor: Vec2) -> Vec<EntityKind> {
         Vec::new()
     }
+    /// The preview as existing objects under one transform, when it is that (MOVE, COPY,
+    /// ROTATE, SCALE). The UI then draws them from geometry uploaded once instead of rebuilding
+    /// the transformed copies every frame; `None` falls back to [`Interactive::preview`].
+    fn drag(&self, _s: &Session, _cursor: Vec2) -> Option<Drag> {
+        None
+    }
+}
+
+/// See [`Interactive::drag`].
+#[derive(Clone, Debug)]
+pub struct Drag {
+    pub handles: Vec<Handle>,
+    pub matrix: Mat3,
+    /// Rubber-band geometry drawn as well (the base-to-cursor line).
+    pub extra: Vec<EntityKind>,
 }
 
 /// Parse a typed point: `x,y[,z]`, `@dx,dy`, `@dist<angle`, `dist<angle`, `#x,y` (absolute),
