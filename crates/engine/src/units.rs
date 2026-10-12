@@ -65,10 +65,24 @@ pub fn format_angle(a: f64, aunits: i64, auprec: i64) -> String {
     let deg = cadcraft_geom::norm_angle(a).to_degrees();
     match aunits {
         1 => {
-            let d = deg.floor();
-            let m = ((deg - d) * 60.0).floor();
-            let s = (deg - d - m / 60.0) * 3600.0;
-            format!("{}d{}'{:.*}\"", d as i64, m as i64, prec.saturating_sub(4), s)
+            // Round at the displayed precision before splitting, carrying through a full turn.
+            let scale = 10i64.pow(prec.saturating_sub(4) as u32);
+            let seconds_per_unit = match prec {
+                0 => 3600,
+                1 | 2 => 60,
+                _ => 1,
+            };
+            let units = (deg * (3600 / seconds_per_unit * scale) as f64).round() as i64;
+            let total = units * seconds_per_unit % (360 * 3600 * scale);
+            let (d, m) = (total / (3600 * scale), (total / (60 * scale)) % 60);
+            match prec {
+                0 => format!("{d}d"),
+                1 | 2 => format!("{d}d{m}'"),
+                _ => {
+                    let s = (total % (60 * scale)) as f64 / scale as f64;
+                    format!("{d}d{m}'{:.*}\"", prec.saturating_sub(4), s)
+                }
+            }
         }
         2 => format!("{:.*}g", prec, deg / 0.9),
         3 => format!("{:.*}r", prec, cadcraft_geom::norm_angle(a)),
@@ -278,6 +292,36 @@ mod tests {
         assert_eq!(format_distance(18.5, 4, 4), "1'-6 1/2\"");
         assert_eq!(format_distance(6.25, 5, 2), "6 1/4");
         assert_eq!(format_distance(30.0, 3, 2), "2'-6.00\"");
+    }
+
+    #[test]
+    fn dms_display_precision() {
+        let angle = (12.0 + 34.0 / 60.0 + 56.78912 / 3600.0_f64).to_radians();
+        let expected = ["13d", "12d35'", "12d35'", "12d34'57\"", "12d34'57\"", "12d34'56.8\"", "12d34'56.79\"", "12d34'56.789\"", "12d34'56.7891\""];
+        for (prec, expected) in expected.into_iter().enumerate() {
+            assert_eq!(format_angle(angle, 1, prec as i64), expected, "AUPREC {prec}");
+        }
+    }
+
+    #[test]
+    fn dms_rounding_carries() {
+        let dms = |d: f64, m: f64, s: f64| (d + m / 60.0 + s / 3600.0).to_radians();
+        let negative = (-0.0001_f64).to_radians();
+        let cases = [
+            (dms(29.0, 59.0, 59.6), 0, "30d"),
+            (dms(29.0, 59.0, 59.6), 2, "30d0'"),
+            (dms(29.0, 59.0, 59.6), 4, "30d0'0\""),
+            (dms(29.0, 0.0, 59.99996), 2, "29d1'"),
+            (dms(29.0, 0.0, 59.99996), 4, "29d1'0\""),
+            (dms(29.0, 59.0, 59.99996), 5, "30d0'0.0\""),
+            (dms(29.0, 59.0, 59.99996), 8, "30d0'0.0000\""),
+            (negative, 0, "0d"),
+            (negative, 4, "0d0'0\""),
+            (negative, 5, "359d59'59.6\""),
+        ];
+        for (angle, prec, expected) in cases {
+            assert_eq!(format_angle(angle, 1, prec), expected, "AUPREC {prec}");
+        }
     }
 
     #[test]
