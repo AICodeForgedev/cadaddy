@@ -154,13 +154,31 @@ pub(crate) fn osnap_with(
     base: Option<Vec2>,
     deferred: bool,
 ) -> Option<SnapHit> {
+    osnap_with_neighborhood(d, space, ix, cursor, aperture, osmode, base, deferred).0
+}
+
+/// Find the best object snap and retain the local-space primitives gathered for that query.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn osnap_with_neighborhood(
+    d: &Drawing,
+    space: &Space,
+    ix: &Option<std::sync::Arc<crate::spatial::SpatialIndex>>,
+    cursor: Vec2,
+    aperture: f64,
+    osmode: u32,
+    base: Option<Vec2>,
+    deferred: bool,
+) -> (Option<SnapHit>, Option<Vec<Prim>>) {
     if osmode == 0 || osmode & mode::OFF != 0 || !cursor.is_finite() || !(aperture.is_finite() && aperture > 0.0) {
-        return None;
+        return (None, None);
     }
-    let mut best = osnap_in(d, space, ix, cursor, aperture, osmode, base, deferred, &[], None);
+    let (mut best, near_prims) = match osnap_in_with_prims(d, space, ix, cursor, aperture, osmode, base, deferred, &[], None) {
+        Some((hit, prims)) => (hit, Some(prims)),
+        None => (None, None),
+    };
     let views = viewport::near(d, space, cursor, aperture);
     if views.is_empty() {
-        return best;
+        return (best, near_prims);
     }
     let model = Space::Model;
     let model_ix = crate::spatial::index(d, &model);
@@ -190,7 +208,7 @@ pub(crate) fn osnap_with(
             best = Some(hit);
         }
     }
-    best
+    (best, near_prims)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -206,6 +224,22 @@ fn osnap_in(
     frozen: &[String],
     clip: Option<Bounds2>,
 ) -> Option<SnapHit> {
+    osnap_in_with_prims(d, space, ix, cursor, aperture, osmode, base, deferred, frozen, clip).and_then(|(hit, _)| hit)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn osnap_in_with_prims(
+    d: &Drawing,
+    space: &Space,
+    ix: &Option<std::sync::Arc<crate::spatial::SpatialIndex>>,
+    cursor: Vec2,
+    aperture: f64,
+    osmode: u32,
+    base: Option<Vec2>,
+    deferred: bool,
+    frozen: &[String],
+    clip: Option<Bounds2>,
+) -> Option<(Option<SnapHit>, Vec<Prim>)> {
     let (mut cands, near_prims) = gather_in(d, space, ix, cursor, aperture, osmode, frozen)?;
     // Intersections between nearby primitives; Apparent Intersection also where their extensions
     // meet (lines extended, arcs as full circles: in 2D, the "apparent" crossing of objects
@@ -236,7 +270,8 @@ fn osnap_in(
             }
         }
     }
-    finish(cands, &near_prims, cursor, aperture, osmode, base, deferred, clip)
+    let hit = finish(cands, &near_prims, cursor, aperture, osmode, base, deferred, clip);
+    Some((hit, near_prims))
 }
 
 /// Whether a primitive has a meaningful extension (a line, an arc, a circle, an xline or ray).

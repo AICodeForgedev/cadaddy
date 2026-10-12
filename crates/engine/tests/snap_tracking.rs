@@ -1,9 +1,9 @@
 //! Object snap tracking (OTRACK, F11) and the Extension, Parallel and Apparent Intersection
 //! snaps, driven through `Session::snap_cursor` as the UI does, without the UI.
 
-use cadcraft_doc::EntityKind;
+use cadcraft_doc::{Common, EntityKind, Insert, Line, Space};
 use cadcraft_engine::Session;
-use cadcraft_engine::geom::Vec2;
+use cadcraft_engine::geom::{Vec2, Vec3};
 use cadcraft_engine::snap::tracking::{Acquired, CursorQuery, CursorSnap, DWELL, MAX_ACQUIRED, PathKind, polar_angles};
 use cadcraft_engine::snap::{self, mode};
 use serde_json::json;
@@ -25,6 +25,28 @@ fn line(s: &mut Session, a: (f64, f64), b: (f64, f64)) {
     s.execute("line", &json!({ "points": [[a.0, a.1], [b.0, b.1]] })).unwrap();
 }
 
+fn insert_block(s: &mut Session, name: &str, at: Vec2) -> String {
+    s.doc_mut()
+        .unwrap()
+        .add(
+            &Space::Model,
+            Common::default(),
+            EntityKind::Insert(Insert {
+                block: name.into(),
+                insert: Vec3::new(at.x, at.y, 0.0),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                rotation: 0.0,
+                attribs: Vec::new(),
+                cols: 1,
+                rows: 1,
+                col_spacing: 0.0,
+                row_spacing: 0.0,
+            }),
+        )
+        .unwrap()
+        .hex()
+}
+
 fn setvar(s: &mut Session, name: &str, value: serde_json::Value) {
     s.execute("setvar", &json!({ "name": name, "value": value })).unwrap();
 }
@@ -35,6 +57,45 @@ fn query(base: Option<Vec2>, now: f64) -> CursorQuery {
 
 fn at(s: &mut Session, cursor: Vec2, base: Option<Vec2>) -> CursorSnap {
     s.snap_cursor(cursor, &query(base, 100.0))
+}
+
+#[test]
+fn default_cursor_tracking_acquires_nested_block_geometry() {
+    let mut s = session(mode::END | mode::CEN | mode::INT | mode::EXT);
+    assert!(s.settings.otrack);
+    let line = s
+        .doc_mut()
+        .unwrap()
+        .add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(10.0, 0.0, 0.0) }))
+        .unwrap()
+        .hex();
+    s.execute("block", &json!({ "name": "INNER", "base": [0, 0], "handles": [line], "keep": "delete" })).unwrap();
+    let inner = insert_block(&mut s, "INNER", Vec2::ZERO);
+    s.execute("block", &json!({ "name": "OUTER", "base": [0, 0], "handles": [inner], "keep": "delete" })).unwrap();
+    insert_block(&mut s, "OUTER", Vec2::ZERO);
+
+    rest(&mut s, v(10.02, 0.02), None);
+
+    assert_eq!(s.tracking.acquired.len(), 1);
+    assert!(matches!(
+        s.tracking.acquired.first(),
+        Some(Acquired::Point { at, name, ext: Some(_) }) if at.near(v(10.0, 0.0), 1e-9) && *name == "Endpoint"
+    ));
+}
+
+#[test]
+fn osnaphatch_geometry_is_not_used_for_tracking_extension() {
+    let mut s = session(mode::END | mode::EXT);
+    s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 5] })).unwrap();
+    let boundary = s.doc().unwrap().model.iter().last().unwrap().handle.hex();
+    s.execute("hatch", &json!({ "handles": [boundary] })).unwrap();
+    s.execute("erase", &json!({ "handles": [boundary] })).unwrap();
+    setvar(&mut s, "OSNAPHATCH", json!(1));
+
+    rest(&mut s, v(10.02, 4.98), None);
+
+    assert_eq!(s.tracking.acquired.len(), 1);
+    assert!(matches!(s.tracking.acquired.first(), Some(Acquired::Point { ext: None, .. })));
 }
 
 /// Rest the cursor at `p` long enough to acquire (or release) what is there, then move off.

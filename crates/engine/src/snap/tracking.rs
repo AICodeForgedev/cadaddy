@@ -587,14 +587,42 @@ pub fn candidate(
     cfg: &TrackConfig,
     base: Option<Vec2>,
 ) -> Option<Acquired> {
-    let nothing_to_acquire = !cfg.otrack && !cfg.running(mode::EXT | mode::PAR | mode::APP);
-    if nothing_to_acquire || !(cursor.is_finite() && aperture.is_finite() && aperture > 0.0) {
+    if !can_acquire(cursor, aperture, cfg) {
         return None;
     }
     let ix = crate::spatial::index(d, space);
     let prims = super::gather(d, space, &ix, cursor, aperture, mode::NEA).map(|(_, p)| p).unwrap_or_default();
+    candidate_from_prims(cursor, hit, aperture, cfg, base, &prims)
+}
+
+pub(crate) fn candidate_with_prims(
+    cursor: Vec2,
+    hit: Option<&SnapHit>,
+    aperture: f64,
+    cfg: &TrackConfig,
+    base: Option<Vec2>,
+    prims: &[Prim],
+) -> Option<Acquired> {
+    if !can_acquire(cursor, aperture, cfg) {
+        return None;
+    }
+    candidate_from_prims(cursor, hit, aperture, cfg, base, prims)
+}
+
+fn can_acquire(cursor: Vec2, aperture: f64, cfg: &TrackConfig) -> bool {
+    (cfg.otrack || cfg.running(mode::EXT | mode::PAR | mode::APP)) && cursor.is_finite() && aperture.is_finite() && aperture > 0.0
+}
+
+fn candidate_from_prims(
+    cursor: Vec2,
+    hit: Option<&SnapHit>,
+    aperture: f64,
+    cfg: &TrackConfig,
+    base: Option<Vec2>,
+    prims: &[Prim],
+) -> Option<Acquired> {
     let hit = hit.filter(|h| h.deferred.is_none() && h.mode != mode::NEA && h.point.is_finite());
-    let ext_end = if cfg.running(mode::EXT) { extension_near(&prims, hit.map_or(cursor, |h| h.point), aperture) } else { None };
+    let ext_end = if cfg.running(mode::EXT) { extension_near(prims, hit.map_or(cursor, |h| h.point), aperture) } else { None };
     if let Some((at, ext)) = ext_end
         && hit.is_none_or(|h| h.point.dist(at) <= cadcraft_geom::EPS * (1.0 + at.len()))
     {
@@ -761,8 +789,12 @@ impl crate::Session {
         let last = self.last_segment.filter(|(_, b)| q.base.is_some_and(|base| base.near(*b, 1e-9 * (1.0 + b.len())))).map(|(a, b)| a.angle_to(b));
         let cfg = TrackConfig::relative_to(&s, angbase, last);
         let osmode = s.osmode | if s.osnaphatch { mode::HATCH } else { 0 };
-        let hit = super::osnap(&doc, &space, raw, q.aperture, osmode, q.base, q.deferred);
-        let cand = candidate(&doc, &space, raw, hit.as_ref(), q.aperture, &cfg, q.base);
+        let ix = crate::spatial::index(&doc, &space);
+        let (hit, near_prims) = super::osnap_with_neighborhood(&doc, &space, &ix, raw, q.aperture, osmode, q.base, q.deferred);
+        let cand = match (osmode & mode::HATCH, near_prims.as_deref()) {
+            (0, Some(prims)) => candidate_with_prims(raw, hit.as_ref(), q.aperture, &cfg, q.base, prims),
+            _ => candidate(&doc, &space, raw, hit.as_ref(), q.aperture, &cfg, q.base),
+        };
         let wait = self.tracking.hover(cand, q.now, cfg.shift_acquire, q.shift);
         if let Some(h) = hit {
             self.tracking.last = None;
