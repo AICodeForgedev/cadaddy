@@ -11,6 +11,7 @@
 use std::sync::{Mutex, OnceLock};
 
 use cadcraft_doc::{DevicePaper, Orientation, PageSetup, PlotOutput, PlotterConfig};
+use cadcraft_geom::{Bounds2, Vec2};
 use serde_json::{Value, json};
 
 use super::*;
@@ -233,7 +234,7 @@ fn unknown_device(cmd: &str, name: &str) -> EngineError {
 /// paper's printable area. A device change also takes the device's default orientation unless
 /// `landscape` is given. Returns whether the paper was set here (else `paper`, if any, is a
 /// standard size for the caller to look up).
-pub(crate) fn page_device(cmd: &str, p: &Value, page: &mut PageSetup) -> Result<bool> {
+pub fn page_device(cmd: &str, p: &Value, page: &mut PageSetup) -> Result<bool> {
     let given = match p.get("device") {
         Some(v) => Some(v.as_str().ok_or_else(|| bad(cmd, "`device` must be a plotter name"))?.trim()),
         None => None,
@@ -325,10 +326,74 @@ pub(crate) fn plot_options(s: &Session, p: &Value, cmd: &str) -> Result<Value> {
     Ok(out)
 }
 
+// ---------- PLOTWINDOW ----------
+
+fn run_plotwindow(s: &mut Session, p: &Value) -> Result<Value> {
+    let (a, b) = (point_req("plotwindow", p, "p1")?, point_req("plotwindow", p, "p2")?);
+    set_plot_window(s, a, b)
+}
+
+fn set_plot_window(s: &mut Session, a: Vec2, b: Vec2) -> Result<Value> {
+    let w = Bounds2::new(a, b);
+    if !(w.width() > 0.0 && w.height() > 0.0) {
+        return Err(bad("plotwindow", "the window needs a width and a height"));
+    }
+    s.plot_window = Some(w);
+    Ok(json!({ "window": [[w.min.x, w.min.y], [w.max.x, w.max.y]] }))
+}
+
+/// PLOTWINDOW: two corners picked in the drawing, with the window's rectangle following the cursor.
+#[derive(Default)]
+struct PlotWindowM {
+    first: Option<Vec2>,
+}
+
+impl Interactive for PlotWindowM {
+    fn name(&self) -> &'static str {
+        "PLOTWINDOW"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        match self.first {
+            None => Prompt::new("Specify first corner", Accept::POINT),
+            Some(a) => Prompt::new("Specify opposite corner", Accept::POINT).base(a),
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        match (i, self.first) {
+            (Input::Point(p), None) => {
+                self.first = Some(p);
+                Ok(Step::Continue)
+            }
+            (Input::Point(p), Some(a)) => {
+                set_plot_window(s, a, p)?;
+                Ok(Step::Done)
+            }
+            (Input::Cancel, _) => Ok(Step::Cancel),
+            _ => Ok(Step::Continue),
+        }
+    }
+    fn preview(&self, _s: &Session, c: Vec2) -> Vec<cadcraft_doc::EntityKind> {
+        let Some(a) = self.first else { return Vec::new() };
+        let corners = [a, Vec2::new(c.x, a.y), c, Vec2::new(a.x, c.y), a];
+        corners
+            .windows(2)
+            .filter_map(|w| match w {
+                [p, q] => Some(super::helpers::line(*p, *q)),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 // ---------- PLOTTERMANAGER ----------
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec::new("plotwindow", "Plot Window", run_plotwindow)
+            .params("{p1: [x,y], p2: [x,y]} (typed: two corners): the window the Plot dialog's \"Window <\" plots, kept in the session")
+            .enabled(has_doc)
+            .noundo()
+            .interactive(|_| Ok(Box::new(PlotWindowM::default()))),
         CommandSpec::new("plottermanager", "Plotter Manager...", run_plottermanager)
             .menu(&["File", "Plotter Manager..."])
             .params(

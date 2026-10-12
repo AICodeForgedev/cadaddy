@@ -172,3 +172,21 @@ fn hostile_names_and_values_are_refused() {
         assert!(s.execute("plottermanager", &p).is_err(), "{p}");
     }
 }
+
+#[test]
+fn plotwindow_keeps_the_picked_window_for_the_plot_dialog() {
+    let mut s = Session::new();
+    // Typed: two corners, with the window's rectangle following the cursor after the first.
+    s.cmdline("plotwindow").unwrap();
+    assert_eq!(s.current_prompt().unwrap().message, "Specify first corner");
+    s.cmdline("10,20").unwrap();
+    assert_eq!(s.preview(cadcraft_engine::geom::Vec2::new(40.0, 5.0)).len(), 4, "the rubber-band rectangle");
+    s.cmdline("40,5").unwrap();
+    assert!(s.running.is_none());
+    let w = s.plot_window.expect("the picked window");
+    assert_eq!((w.min.x, w.min.y, w.max.x, w.max.y), (10.0, 5.0, 40.0, 20.0));
+    // JSON, and a window without area is refused.
+    let r = s.execute("plotwindow", &json!({"p1": [0, 0], "p2": [3, 4]})).unwrap();
+    assert_eq!(r["window"], json!([[0.0, 0.0], [3.0, 4.0]]));
+    assert!(s.execute("plotwindow", &json!({"p1": [0, 0], "p2": [3, 0]})).is_err());
+}

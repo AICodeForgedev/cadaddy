@@ -584,6 +584,8 @@ pub struct Session {
     pub last_used: LastUsed,
     /// Where `clipboard` came from and the layers, styles and blocks its objects need.
     pub clipboard_source: Option<cmd::clipboard::ClipSource>,
+    /// The window last picked with PLOTWINDOW (the Plot dialog's "Window <").
+    pub plot_window: Option<cadcraft_geom::Bounds2>,
 }
 
 impl Default for Session {
@@ -627,6 +629,7 @@ impl Session {
             last_dim: None,
             last_used: LastUsed::default(),
             clipboard_source: None,
+            plot_window: None,
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {

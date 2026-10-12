@@ -484,6 +484,7 @@ fn page_setup(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action 
         .or_else(|| layouts.first().map(|l| l.1.clone()))
         .unwrap_or_default();
     let mut action = None;
+    let choices = PageChoices::new(ctx, d);
     egui::Window::new("Page Setup Manager").open(open).default_size(vec2(560.0, 300.0)).resizable(true).show(ctx, |ui| {
         if layouts.is_empty() {
             ui.label("This drawing has no layouts.");
@@ -504,7 +505,7 @@ fn page_setup(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action 
             // Layout plotting always prints the whole sheet, so only that area is offered.
             let rows = PageRows { areas: &["layout"], scale: true, center: true };
             egui::Grid::new("pagesetup_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(right, |ui| {
-                if let Some((k, v)) = page_rows(ui, egui::Id::new(("pagesetup", name)), page, &rows) {
+                if let Some((k, v)) = page_rows(ui, egui::Id::new(("pagesetup", name)), page, &rows, &choices) {
                     action = Some(("pagesetup", json!({ "layout": name, k: v })));
                 }
             });
@@ -522,6 +523,43 @@ struct PageRows {
     areas: &'static [&'static str],
     scale: bool,
     center: bool,
+}
+
+/// The devices and plot style tables the page-setup rows offer.
+struct PageChoices {
+    devices: std::sync::Arc<Vec<cadcraft_doc::PlotterConfig>>,
+    styles: Vec<String>,
+}
+
+impl PageChoices {
+    fn new(ctx: &egui::Context, d: &cadcraft_doc::Drawing) -> Self {
+        PageChoices { devices: device_choices(ctx), styles: cadcraft_doc::plot_style_table_names(d) }
+    }
+}
+
+/// The plotter devices (built-in, then the user's files), read again at most every 2 s: the
+/// dialogs ask every frame and user devices are files.
+fn device_choices(ctx: &egui::Context) -> std::sync::Arc<Vec<cadcraft_doc::PlotterConfig>> {
+    type Cached = (f64, std::sync::Arc<Vec<cadcraft_doc::PlotterConfig>>);
+    let now = crate::now_ms();
+    if let Some((at, list)) = temp::<Cached>(ctx, "plot_devices")
+        && now - at < 2000.0
+    {
+        return list;
+    }
+    let list = std::sync::Arc::new(cadcraft_engine::cmd::plotters::devices());
+    set_temp::<Cached>(ctx, "plot_devices", (now, list.clone()));
+    list
+}
+
+/// A page setup's device, or `"None"` (plot to PDF on the page's paper).
+fn device_label(page: &cadcraft_doc::PageSetup) -> &str {
+    if page.device.trim().is_empty() { "None" } else { page.device.as_str() }
+}
+
+/// A page setup's plot style table, or `"None"`.
+fn style_label(page: &cadcraft_doc::PageSetup) -> &str {
+    if cadcraft_doc::no_plot_style_table(&page.plot_style_table) { "None" } else { page.plot_style_table.as_str() }
 }
 
 fn area_label(a: &str) -> &str {
@@ -544,17 +582,51 @@ fn parse_ratio(t: &str) -> Option<f64> {
     (v.is_finite() && v > 0.0).then_some(v)
 }
 
-/// The page-setup rows (paper, orientation, plot area, fit, scale, center, lineweights) shared by
-/// the Page Setup Manager and the Plot dialog, inside a two-column grid. Returns the setting the
-/// user changed as a `pagesetup` parameter (`paper`, `landscape`, `plotArea`, `scaleToFit`,
-/// `scale`, `center` or `lineweights`).
-fn page_rows(ui: &mut egui::Ui, salt: egui::Id, page: &cadcraft_doc::PageSetup, rows: &PageRows) -> Option<(&'static str, Value)> {
+/// The page-setup rows (device, paper, orientation, plot area, fit, scale, center, lineweights,
+/// plot style table) shared by the Page Setup Manager and the Plot dialog, inside a two-column
+/// grid. Returns the setting the user changed as a `pagesetup` parameter (`device`, `paper`,
+/// `landscape`, `plotArea`, `scaleToFit`, `scale`, `center`, `lineweights` or `plotStyleTable`).
+fn page_rows(
+    ui: &mut egui::Ui,
+    salt: egui::Id,
+    page: &cadcraft_doc::PageSetup,
+    rows: &PageRows,
+    choices: &PageChoices,
+) -> Option<(&'static str, Value)> {
     let mut change = None;
+    ui.label("Printer/plotter");
+    egui::ComboBox::from_id_salt(salt.with("device")).selected_text(device_label(page)).width(190.0).show_ui(ui, |ui| {
+        if ui.selectable_label(device_label(page) == "None", "None").on_hover_text("PDF on the paper chosen below").clicked()
+            && device_label(page) != "None"
+        {
+            change = Some(("device", json!("None")));
+        }
+        for dev in choices.devices.iter() {
+            let on = dev.name.eq_ignore_ascii_case(&page.device);
+            if ui.selectable_label(on, &dev.name).on_hover_text(format!("{} ({})", dev.description, dev.output.as_str().to_uppercase())).clicked()
+                && !on
+            {
+                change = Some(("device", json!(dev.name)));
+            }
+        }
+    });
+    ui.end_row();
+    // The device's papers, else the standard sizes.
+    let device = choices.devices.iter().find(|dv| dv.name.eq_ignore_ascii_case(&page.device));
     ui.label("Paper size");
-    egui::ComboBox::from_id_salt(salt.with("paper")).selected_text(page.paper.as_str()).width(190.0).show_ui(ui, |ui| {
-        for p in cadcraft_render::PAPER_SIZES {
-            if ui.selectable_label(p.name == page.paper, p.name).clicked() && p.name != page.paper {
-                change = Some(("paper", json!(p.name)));
+    egui::ComboBox::from_id_salt(salt.with("paper")).selected_text(page.paper.as_str()).width(190.0).show_ui(ui, |ui| match device {
+        Some(dev) => {
+            for p in &dev.papers {
+                if ui.selectable_label(p.name == page.paper, &p.name).clicked() && p.name != page.paper {
+                    change = Some(("paper", json!(p.name)));
+                }
+            }
+        }
+        None => {
+            for p in cadcraft_render::PAPER_SIZES {
+                if ui.selectable_label(p.name == page.paper, p.name).clicked() && p.name != page.paper {
+                    change = Some(("paper", json!(p.name)));
+                }
             }
         }
     });
@@ -611,19 +683,42 @@ fn page_rows(ui: &mut egui::Ui, salt: egui::Id, page: &cadcraft_doc::PageSetup, 
         change = Some(("lineweights", json!(lw)));
     }
     ui.end_row();
+    ui.label("Plot style table");
+    egui::ComboBox::from_id_salt(salt.with("styles")).selected_text(style_label(page)).width(190.0).show_ui(ui, |ui| {
+        if ui.selectable_label(style_label(page) == "None", "None").clicked() && style_label(page) != "None" {
+            change = Some(("plotStyleTable", json!("None")));
+        }
+        for name in &choices.styles {
+            let on = name.eq_ignore_ascii_case(&page.plot_style_table);
+            if ui.selectable_label(on, name).clicked() && !on {
+                change = Some(("plotStyleTable", json!(name)));
+            }
+        }
+    });
+    ui.end_row();
     change
 }
 
 /// Apply a [`page_rows`] change to a page setup held by a dialog.
+/// Device and paper changes follow PAGESETUP's rules (`plotters::page_device`): a device brings
+/// its papers, orientation and printable areas.
 fn apply_page_change(page: &mut cadcraft_doc::PageSetup, key: &str, v: &Value) {
+    use cadcraft_engine::cmd::plotters::page_device;
     match key {
+        "device" => {
+            let _ = page_device("plot", &json!({ "device": v }), page);
+        }
         "paper" => {
-            if let Some(ps) = v.as_str().and_then(cadcraft_render::paper_size) {
+            // A device's paper, else a standard size (no device).
+            if !page_device("plot", &json!({ "paper": v }), page).unwrap_or(false)
+                && let Some(ps) = v.as_str().and_then(cadcraft_render::paper_size)
+            {
                 page.paper = ps.name.into();
                 page.width_mm = ps.width_mm;
                 page.height_mm = ps.height_mm;
             }
         }
+        "plotStyleTable" => page.plot_style_table = v.as_str().unwrap_or_default().chars().take(260).collect(),
         "plotArea" => page.plot_area = v.as_str().unwrap_or("extents").into(),
         "scale" => page.scale = v.as_f64().filter(|s| s.is_finite() && *s > 0.0).unwrap_or(page.scale),
         _ => {
@@ -643,6 +738,31 @@ fn apply_page_change(page: &mut cadcraft_doc::PageSetup, key: &str, v: &Value) {
 
 /// Bumped each time PLOT opens its dialog, so it starts again from the page setup.
 static PLOT_GEN: AtomicU32 = AtomicU32::new(0);
+
+/// Set while PLOTWINDOW picks the Plot dialog's window ("Window <").
+const PICKING_WINDOW: &str = "plot_picking_window";
+/// Set by Print... in a preview opened from the Plot dialog: plot as soon as the dialog is back.
+pub(crate) const PLOT_NOW: &str = "plot_now";
+
+/// Every frame: once PLOTWINDOW (started by the Plot dialog's "Window <") ends, bring the dialog
+/// back with its settings, plotting the picked window (unchanged if the pick was cancelled).
+pub fn plot_window_resume(app: &mut CadApp, ctx: &egui::Context) {
+    if temp::<bool>(ctx, PICKING_WINDOW) != Some(true) || app.session.running.is_some() {
+        return;
+    }
+    set_temp(ctx, PICKING_WINDOW, false);
+    if let (Some(w), Some(mut st)) = (app.session.plot_window.take(), temp::<PlotState>(ctx, "plot_state")) {
+        st.window = [w.min.x, w.min.y, w.max.x, w.max.y];
+        st.page.plot_area = "window".into();
+        set_temp(ctx, "plot_state", st);
+    }
+    app.ui.dialog = Some("plot".into());
+}
+
+/// Set a flag the Plot dialog reads (see [`PLOT_NOW`]).
+pub(crate) fn set_flag(ctx: &egui::Context, id: &str, on: bool) {
+    set_temp(ctx, id, on);
+}
 
 /// Plot areas for model space (a layout always plots its sheet).
 const MODEL_AREAS: &[&str] = &["extents", "display", "limits", "window"];
@@ -677,8 +797,9 @@ fn plot_page(d: &cadcraft_doc::Drawing, target: &str) -> cadcraft_doc::PageSetup
     page
 }
 
-/// The `plot` parameters for the dialog's settings (without the output path).
-fn plot_params(st: &PlotState) -> Value {
+/// The `plot` parameters for the dialog's settings (without the output path). `preview_dpi`
+/// asks for a PNG at that resolution instead of the device's output, on the same sheet.
+fn plot_params(st: &PlotState, preview_dpi: Option<f64>) -> Value {
     let page = &st.page;
     let mut p = json!({
         "layout": st.target,
@@ -687,11 +808,33 @@ fn plot_params(st: &PlotState) -> Value {
         "lineweights": page.lineweights,
     });
     if let Some(o) = p.as_object_mut() {
-        if cadcraft_render::paper_size(&page.paper).is_some() {
-            o.insert("paper".into(), json!(page.paper));
-        } else {
-            o.insert("width".into(), json!(page.width_mm));
-            o.insert("height".into(), json!(page.height_mm));
+        let device = device_label(page) != "None";
+        match preview_dpi {
+            // The page's own sheet, so a device's paper and printable area show as they plot.
+            Some(dpi) => {
+                o.insert("device".into(), json!("None"));
+                o.insert("output".into(), json!("png"));
+                o.insert("resolution".into(), json!(dpi));
+                o.insert("width".into(), json!(page.width_mm));
+                o.insert("height".into(), json!(page.height_mm));
+                o.insert("margins".into(), json!(page.margins_mm));
+            }
+            None if device => {
+                o.insert("device".into(), json!(page.device));
+                o.insert("paper".into(), json!(page.paper));
+            }
+            None if cadcraft_render::paper_size(&page.paper).is_some() => {
+                o.insert("device".into(), json!("None"));
+                o.insert("paper".into(), json!(page.paper));
+            }
+            None => {
+                o.insert("device".into(), json!("None"));
+                o.insert("width".into(), json!(page.width_mm));
+                o.insert("height".into(), json!(page.height_mm));
+            }
+        }
+        if style_label(page) != "None" {
+            o.insert("plotStyleTable".into(), json!(page.plot_style_table));
         }
         if st.target == "Model" {
             o.insert("plotArea".into(), json!(page.plot_area));
@@ -732,12 +875,13 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
         PlotState { generation, page: plot_page(d, &target), target, window: [ext.min.x, ext.min.y, ext.max.x, ext.max.y] }
     });
     let model = st.target == "Model";
-    let (mut ok, mut cancel, mut action) = (false, false, None);
+    let choices = PageChoices::new(ctx, d);
+    // Print... in a preview opened from here plots with these settings.
+    let mut ok = temp::<bool>(ctx, PLOT_NOW) == Some(true);
+    set_temp(ctx, PLOT_NOW, false);
+    let (mut cancel, mut action, mut pick, mut preview) = (false, None, false, false);
     egui::Window::new("Plot").open(open).collapsible(false).resizable(false).show(ctx, |ui| {
         egui::Grid::new("plot_target").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-            ui.label("Printer/plotter");
-            ui.label("PDF (vector)").on_hover_text("CADCraft plots to vector PDF files");
-            ui.end_row();
             ui.label("Layout");
             egui::ComboBox::from_id_salt("plot_layout").selected_text(st.target.as_str()).width(190.0).show_ui(ui, |ui| {
                 for n in &targets {
@@ -757,7 +901,7 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                 } else {
                     PageRows { areas: &["layout"], scale: false, center: false }
                 };
-                if let Some((k, v)) = page_rows(ui, egui::Id::new(("plot", st.target.as_str())), &st.page, &rows) {
+                if let Some((k, v)) = page_rows(ui, egui::Id::new(("plot", st.target.as_str())), &st.page, &rows, &choices) {
                     apply_page_change(&mut st.page, k, &v);
                 }
                 if model && st.page.plot_area == "window" {
@@ -776,6 +920,9 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                         });
                         ui.end_row();
                     }
+                    ui.label("");
+                    pick = ui.button("Window <").on_hover_text("Pick the window's corners in the drawing").clicked();
+                    ui.end_row();
                 }
             });
             sheet_sketch(ui, &st.page, &t);
@@ -789,22 +936,42 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                     json!({ "layout": st.target, "paper": page.paper, "landscape": page.landscape, "scaleToFit": page.scale_to_fit, "lineweights": page.lineweights }),
                 ));
             }
+            preview = ui.button("Preview").on_hover_text("The sheet as these settings plot it").clicked();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 cancel = ui.button("Cancel").clicked();
-                ok = ui.button("OK").clicked();
+                ok |= ui.button("OK").clicked();
             });
         });
     });
+    // The output file type follows the device.
+    let ext = choices.devices.iter().find(|dv| dv.name.eq_ignore_ascii_case(&st.page.device)).map_or("pdf", |dv| dv.output.as_str());
     set_temp(ctx, "plot_state", st.clone());
     if cancel {
         *open = false;
     }
+    if pick {
+        // The dialog comes back with these settings and the picked window (`plot_window_resume`).
+        set_temp(ctx, PICKING_WINDOW, true);
+        *open = false;
+        app.start("plotwindow");
+        return action;
+    }
+    if preview {
+        // A sheet about 1600 pixels on its long side.
+        let long_in = st.page.width_mm.max(st.page.height_mm).max(1.0) / 25.4;
+        let mut info = format!("{} · {}", st.target, st.page.paper);
+        if st.page.landscape {
+            info.push_str(" · landscape");
+        }
+        crate::exchange::preview_plot(app, ctx, plot_params(&st, Some((1600.0 / long_in).clamp(50.0, 300.0))), info);
+        return action;
+    }
     if ok {
-        let mut params = plot_params(&st);
+        let mut params = plot_params(&st, None);
         if let Some(pick) = app.services.pick_save.as_ref() {
             let title = app.session.state().map(|s| s.title.clone()).unwrap_or_default();
             let stem = std::path::Path::new(&title).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty());
-            let suggested = format!("{}-{}.pdf", stem.unwrap_or_else(|| "Drawing".into()), st.target);
+            let suggested = format!("{}-{}.{ext}", stem.unwrap_or_else(|| "Drawing".into()), st.target);
             // Cancelling the file dialog keeps the Plot dialog open with its settings.
             let Some(path) = pick(&suggested) else { return action };
             if let Some(o) = params.as_object_mut() {
@@ -909,4 +1076,67 @@ fn constraint_settings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -
         });
     });
     action
+}
+
+#[cfg(test)]
+mod plot_dialog_tests {
+    use super::*;
+    use cadcraft_engine::Session;
+
+    fn state(target: &str) -> PlotState {
+        let d = cadcraft_doc::Drawing::new_metric();
+        PlotState { generation: 0, page: plot_page(&d, target), target: target.into(), window: [0.0, 0.0, 10.0, 10.0] }
+    }
+
+    #[test]
+    fn a_device_brings_its_papers_and_the_plot_names_them() {
+        let mut st = state("Model");
+        apply_page_change(&mut st.page, "device", &json!("CADCraft PNG"));
+        assert_eq!(st.page.device, "CADCraft PNG");
+        let dev = cadcraft_engine::cmd::plotters::find_device("CADCraft PNG").unwrap();
+        assert!(dev.papers.iter().any(|p| p.name == st.page.paper), "a paper of the device: {}", st.page.paper);
+        assert!(st.page.margins_mm.iter().any(|m| *m > 0.0), "the paper's printable area");
+        apply_page_change(&mut st.page, "plotStyleTable", &json!("monochrome.ctb"));
+        let p = plot_params(&st, None);
+        assert_eq!((p["device"].as_str(), p["paper"].as_str()), (Some("CADCraft PNG"), Some(st.page.paper.as_str())));
+        assert_eq!(p["plotStyleTable"], json!("monochrome.ctb"));
+        // The preview plots the same sheet to PNG, whatever the device.
+        let q = plot_params(&st, Some(150.0));
+        assert_eq!((q["output"].as_str(), q["device"].as_str()), (Some("png"), Some("None")));
+        assert_eq!(q["width"].as_f64(), Some(st.page.width_mm));
+        assert_eq!(q["margins"], json!(st.page.margins_mm));
+        // Back to no device: a standard paper, no device sent.
+        apply_page_change(&mut st.page, "device", &json!("None"));
+        apply_page_change(&mut st.page, "paper", &json!("A3"));
+        let p = plot_params(&st, None);
+        let a3 = cadcraft_render::paper_size("A3").unwrap().name;
+        assert_eq!((p["device"].as_str(), p["paper"].as_str()), (Some("None"), Some(a3)));
+        apply_page_change(&mut st.page, "plotStyleTable", &json!("None"));
+        assert!(plot_params(&st, None).get("plotStyleTable").is_none());
+    }
+
+    #[test]
+    fn window_pick_brings_the_dialog_back_with_the_picked_window() {
+        let ctx = egui::Context::default();
+        let mut app = CadApp::new(Session::new(), crate::Services::default());
+        set_temp(&ctx, "plot_state", state("Model"));
+        set_temp(&ctx, PICKING_WINDOW, true);
+        app.start("plotwindow");
+        plot_window_resume(&mut app, &ctx);
+        assert_eq!(app.ui.dialog, None, "still picking");
+        app.session.cmdline("2,3").unwrap();
+        app.session.cmdline("12,9").unwrap();
+        plot_window_resume(&mut app, &ctx);
+        assert_eq!(app.ui.dialog.as_deref(), Some("plot"));
+        let st = temp::<PlotState>(&ctx, "plot_state").unwrap();
+        assert_eq!((st.page.plot_area.as_str(), st.window), ("window", [2.0, 3.0, 12.0, 9.0]));
+        // A cancelled pick brings the dialog back unchanged.
+        app.ui.dialog = None;
+        set_temp(&ctx, PICKING_WINDOW, true);
+        app.start("plotwindow");
+        app.session.input(cadcraft_engine::Input::Cancel).ok();
+        plot_window_resume(&mut app, &ctx);
+        assert_eq!(app.ui.dialog.as_deref(), Some("plot"));
+        assert_eq!(temp::<PlotState>(&ctx, "plot_state").unwrap().window, [2.0, 3.0, 12.0, 9.0]);
+    }
 }

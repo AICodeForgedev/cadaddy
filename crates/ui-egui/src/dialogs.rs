@@ -29,7 +29,8 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }
-    if !open {
+    // A dialog that closed by opening another (Plot Preview back to Plot) keeps the new one.
+    if !open && app.ui.dialog.as_deref() == Some(d.as_str()) {
         app.ui.dialog = None;
     }
 }

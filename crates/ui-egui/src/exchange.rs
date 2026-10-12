@@ -59,8 +59,34 @@ struct Preview {
     shown: Result<(TextureHandle, String), String>,
 }
 
-/// Render the plot preview of the current layout (or model) as a texture.
+/// A preview the Plot dialog asked for: its PLOT parameters (PNG output) and a caption.
+#[derive(Clone)]
+struct FromPlot {
+    params: Value,
+    info: String,
+}
+
+const FROM_PLOT: &str = "cc_plot_preview_from_plot";
+
+/// Show the Plot dialog's settings as they plot (PLOT with `params`, a PNG); Print... and Close
+/// return to the dialog.
+pub(crate) fn preview_plot(app: &mut CadApp, ctx: &egui::Context, params: Value, info: String) {
+    PREVIEW_GEN.fetch_add(1, Ordering::Relaxed);
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(FROM_PLOT), FromPlot { params, info }));
+    app.ui.dialog = Some("preview".into());
+}
+
+/// Render the plot preview of the current layout (or model), or of the Plot dialog's settings,
+/// as a texture.
 fn render(app: &mut CadApp, ctx: &egui::Context) -> Result<(TextureHandle, String), String> {
+    if let Some(f) = ctx.data(|d| d.get_temp::<FromPlot>(egui::Id::new(FROM_PLOT))) {
+        let r = app.session.execute("plot", &f.params).map_err(|e| e.to_string())?;
+        let png = r["data"].as_str().and_then(cadcraft_engine::cmd::file::base64_decode).ok_or("the preview has no image")?;
+        let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png).map_err(|e| e.to_string())?.to_rgba8();
+        let size = [img.width() as usize, img.height() as usize];
+        let tex = ctx.load_texture("plot-preview", egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()), egui::TextureOptions::LINEAR);
+        return Ok((tex, f.info));
+    }
     let r = app.session.execute("preview", &json!({ "width": 1600 })).map_err(|e| e.to_string())?;
     let png = r["data"].as_str().and_then(cadcraft_engine::cmd::file::base64_decode).ok_or("the preview has no image")?;
     let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png).map_err(|e| e.to_string())?.to_rgba8();
@@ -111,10 +137,18 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     if close || print {
         *open = false;
     }
+    let from_plot = ctx.data(|d| d.get_temp::<FromPlot>(egui::Id::new(FROM_PLOT))).is_some();
     if !*open {
-        ctx.data_mut(|d| d.remove::<Preview>(id));
+        ctx.data_mut(|d| {
+            d.remove::<Preview>(id);
+            d.remove::<FromPlot>(egui::Id::new(FROM_PLOT));
+        });
     }
-    if print {
+    if from_plot && !*open {
+        // Back to the Plot dialog with its settings; Print... plots them.
+        crate::managers::set_flag(ctx, crate::managers::PLOT_NOW, print);
+        app.ui.dialog = Some("plot".into());
+    } else if print {
         app.start("plot");
     }
 }
