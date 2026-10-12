@@ -89,6 +89,7 @@ Detail: [file-format-parity.md](file-format-parity.md).
 | FF11 | DWF/DWFx, DGN, WMF, EPS, ACIS/STL and other exchange formats | Low-medium | 50–100 |
 | FF12 | DWG in the web build | Medium | 6–10 |
 | FF13 | R12 binary DXF, pre-R13 DWG | Low | 10–20 |
+| FF14 | **SVG import** (Inkscape .svg/.svgz) | Medium | 4–8 |
 
 ## Hardware
 

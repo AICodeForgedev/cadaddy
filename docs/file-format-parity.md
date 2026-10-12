@@ -113,6 +113,7 @@ early (#175), but the throughput problem remains. **DWG ≈ 30% read, ≈ 15% wr
 | Plot styles (`.ctb`, `.stb`), plotter configs (`.pc3`), `.pmp` | yes | plot style tables in our own JSON format ([plot-styles.md](plot-styles.md)) and kept in the drawing; binary `.ctb`/`.stb` not read (no public spec); no `.pc3`/`.pmp` | 6–10 |
 | Scripts (`.scr`) | SCRIPT | script text through the CLI, MCP and control channel; no SCRIPT command reading a `.scr` file | 1–2 |
 | Aliases (`.pgp`), CUI(x), workspaces | yes | no | 6–10 |
+| **SVG import** (Inkscape .svg/.svgz) | yes (via scripts) | partial (module compiled, 11 tests pass, dispatch works, open-dialoog filter updated) | 2–4 |
 | AutoLISP (`.lsp`, `.fas`, `.vlx`), `.dll`/`.arx` plug-ins | yes | no | see [gaps.md](gaps.md) (M12) |
 | Data extraction (`.csv`, `.xls`) and data links | yes | no | 6–10 |
 | eTransmit (`.zip` packages) | yes | no | 4–6 |

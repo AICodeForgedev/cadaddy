@@ -1,4 +1,4 @@
-//! CADCraft file formats: DXF read/write, SVG, PNG and PDF export (plotting).
+//! CADCraft file formats: DXF/DWG read, SVG and SVGZ import, SVG/PNG/PDF export (plotting).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -15,6 +15,7 @@ mod dxf_xref;
 pub mod pdf;
 pub mod plotter;
 pub mod svg;
+mod svg_read;
 
 /// Multilines and their styles (MLINE, MLINESTYLE).
 mod dxf_mline;
@@ -54,13 +55,15 @@ fn ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
 
-/// Read a drawing; the format comes from the content (DXF ASCII/binary) or the name.
+/// Read a drawing; the format comes from the content (DXF ASCII/binary, DWG) or the name
+/// (SVG and gzip-compressed SVGZ).
 pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
     if cadcraft_dwg::is_dwg(bytes) {
         let dxf = cadcraft_dwg::dwg_to_dxf(bytes).map_err(IoError::Format)?;
         return dxf_read::read(&dxf).map_err(|e| IoError::Format(format!("{e} (in the DXF converted from this DWG)")));
     }
     match ext(name).as_str() {
+        "svg" | "svgz" => svg_read::read(bytes),
         "dxf" | "" => dxf_read::read(bytes),
         e if bytes.len() > 4 => dxf_read::read(bytes).map_err(|_| IoError::Unsupported(e.to_string())),
         e => Err(IoError::Unsupported(e.to_string())),

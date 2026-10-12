@@ -660,6 +660,7 @@ dependencies = [
  "cadcraft-geom",
  "cadcraft-render",
  "miniz_oxide 0.8.9",
+ "quick-xml",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

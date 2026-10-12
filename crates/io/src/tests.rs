@@ -1824,3 +1824,164 @@ fn mirrored_mtext_extrusion_keeps_its_footprint() {
     let b = cadcraft_render::build(&d, &Space::Model, &cadcraft_render::Options::default()).bounds;
     assert!(b.min.x > -0.2 && b.max.x > 0.5 && b.min.y > -0.2 && b.max.y > 0.5, "box right of and above (0,0): {b:?}");
 }
+
+// --- SVG import ---
+
+/// One 20mm×10mm page whose user units are millimetres; the reader flips Y, so a point at
+/// SVG y lands at `10 - y` in the drawing.
+const SVG_PAGE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="20mm" height="10mm" viewBox="0 0 20 10">"#;
+
+fn kinds(d: &Drawing) -> Vec<&'static str> {
+    d.model.iter().map(|e| e.kind.type_name()).collect()
+}
+
+fn gzip_of(data: &[u8]) -> Vec<u8> {
+    let mut crc: u32 = 0xffff_ffff;
+    for b in data {
+        crc ^= u32::from(*b);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320u32 & 0u32.wrapping_sub(crc & 1));
+        }
+    }
+    let mut out = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
+    out.extend_from_slice(&miniz_oxide::deflate::compress_to_vec(data, 6));
+    out.extend_from_slice(&(!crc).to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out
+}
+
+#[test]
+fn svg_shapes_become_entities_in_millimetres() {
+    let svg = format!(
+        "{SVG_PAGE}<rect x=\"1\" y=\"1\" width=\"4\" height=\"3\"/><circle cx=\"10\" cy=\"5\" r=\"2\"/>\
+         <ellipse cx=\"10\" cy=\"5\" rx=\"4\" ry=\"2\"/><line x1=\"0\" y1=\"0\" x2=\"20\" y2=\"10\"/>\
+         <polyline points=\"0,0 5,0 5,5\"/><polygon points=\"0,0 2,0 1,1\"/></svg>"
+    );
+    let d = read(svg.as_bytes(), "shapes.svg").unwrap();
+    assert_eq!(kinds(&d), ["Polyline", "Circle", "Ellipse", "Line", "Polyline", "Polyline"]);
+    let r = first(&d, |k| if let EntityKind::LwPolyline(p) = k { Some(p.clone()) } else { None });
+    assert!(r.closed);
+    let got: Vec<Vec2> = r.vertices.iter().map(|v| v.p).collect();
+    let want = [Vec2::new(1.0, 9.0), Vec2::new(5.0, 9.0), Vec2::new(5.0, 6.0), Vec2::new(1.0, 6.0)];
+    for (g, w) in got.iter().zip(want.iter()) {
+        assert!((*g - *w).len() < 1e-9, "{g:?} vs {w:?}");
+    }
+    let c = first(&d, |k| if let EntityKind::Circle(c) = k { Some(c.clone()) } else { None });
+    assert!((c.radius - 2.0).abs() < 1e-9 && (c.center.x - 10.0).abs() < 1e-9 && (c.center.y - 5.0).abs() < 1e-9, "{c:?}");
+    let e = first(&d, |k| if let EntityKind::Ellipse(e) = k { Some(e.clone()) } else { None });
+    let major = Vec2::new(e.major.x - e.center.x, e.major.y - e.center.y);
+    assert!((major.len() - 4.0).abs() < 1e-9 && (e.ratio - 0.5).abs() < 1e-9, "{e:?}");
+    let l = first(&d, |k| if let EntityKind::Line(l) = k { Some(l.clone()) } else { None });
+    assert!((l.a.y - 10.0).abs() < 1e-9 && (l.b.y).abs() < 1e-9, "{l:?}");
+}
+
+#[test]
+fn svg_path_lines_curves_and_arcs() {
+    let svg = format!("{SVG_PAGE}<path d=\"M1 1 L5 1 C6 1 7 2 8 3\"/><path d=\"M0 0 A5 5 0 0 1 10 0 Z\"/></svg>");
+    let d = read(svg.as_bytes(), "paths.svg").unwrap();
+    assert_eq!(kinds(&d), ["Polyline", "Spline", "Polyline"]);
+    let line_run = first(&d, |k| if let EntityKind::LwPolyline(p) = k { Some(p.clone()) } else { None });
+    assert!(!line_run.closed && line_run.vertices.len() == 2, "{line_run:?}");
+    let spline = first(&d, |k| if let EntityKind::Spline(s) = k { Some(s.clone()) } else { None });
+    assert!(spline.is_valid(), "{spline:?}");
+    let arc = d
+        .model
+        .iter()
+        .find_map(|e| match &e.kind {
+            EntityKind::LwPolyline(p) if p.vertices.first().is_some_and(|v| v.bulge != 0.0) => Some(p.clone()),
+            _ => None,
+        })
+        .expect("an arc becomes a bulge vertex");
+    assert!(arc.closed && arc.vertices.len() == 2, "{arc:?}");
+    let bulge = arc.vertices[0].bulge;
+    assert!((bulge.abs() - 1.0).abs() < 1e-6, "semicircle bulge is ±1, got {bulge}");
+}
+
+#[test]
+fn svg_group_transforms_apply() {
+    let svg = format!("{SVG_PAGE}<g transform=\"translate(5,2)\"><line x1=\"0\" y1=\"0\" x2=\"10\" y2=\"0\"/></g></svg>");
+    let d = read(svg.as_bytes(), "t.svg").unwrap();
+    let l = first(&d, |k| if let EntityKind::Line(l) = k { Some(l.clone()) } else { None });
+    assert!((l.a - Vec3::new(5.0, 8.0, 0.0)).len() < 1e-9, "{l:?}");
+    assert!((l.b - Vec3::new(15.0, 8.0, 0.0)).len() < 1e-9, "{l:?}");
+}
+
+#[test]
+fn svg_viewbox_scaling_and_mm_units() {
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="20mm" height="10mm" viewBox="0 0 200 100"><circle cx="100" cy="50" r="50"/></svg>"#;
+    let d = read(svg.as_bytes(), "vb.svg").unwrap();
+    let c = first(&d, |k| if let EntityKind::Circle(c) = k { Some(c.clone()) } else { None });
+    assert!((c.radius - 5.0).abs() < 1e-9, "{c:?}");
+    assert!((c.center.x - 10.0).abs() < 1e-9 && (c.center.y - 5.0).abs() < 1e-9, "{c:?}");
+}
+
+#[test]
+fn svg_inkscape_layers_are_kept() {
+    let svg = format!(
+        "{SVG_PAGE}<g inkscape:groupmode=\"layer\" inkscape:label=\"Cut\"><rect x=\"0\" y=\"0\" width=\"2\" height=\"2\"/></g>\
+         <g inkscape:groupmode=\"layer\" inkscape:label=\"Engrave\"><circle cx=\"5\" cy=\"5\" r=\"1\"/></g></svg>",
+        SVG_PAGE = SVG_PAGE.replace("<svg ", "<svg xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" ")
+    );
+    let d = read(svg.as_bytes(), "layers.svg").unwrap();
+    let layers: Vec<&str> = d.layers.iter().map(|l| l.name.as_str()).collect();
+    assert!(layers.contains(&"Cut") && layers.contains(&"Engrave"), "{layers:?}");
+    let per_layer = |name: &str| d.model.iter().filter(|e| e.common.layer == name).count();
+    assert_eq!(per_layer("Cut"), 1);
+    assert_eq!(per_layer("Engrave"), 1);
+}
+
+#[test]
+fn svg_hidden_and_defs_subtrees_are_skipped() {
+    let svg = format!(
+        "{SVG_PAGE}<defs><rect x=\"0\" y=\"0\" width=\"9\" height=\"9\"/></defs><text x=\"0\" y=\"0\">hi</text>\
+         <rect x=\"0\" y=\"0\" width=\"1\" height=\"1\" display=\"none\"/><rect x=\"0\" y=\"0\" width=\"1\" height=\"1\" style=\"fill:red;display:none\"/>\
+         <rect x=\"1\" y=\"1\" width=\"2\" height=\"2\"/></svg>"
+    );
+    let d = read(svg.as_bytes(), "skip.svg").unwrap();
+    assert_eq!(kinds(&d), ["Polyline"]);
+}
+
+#[test]
+fn svgz_gunzips_to_the_same_drawing() {
+    let svg = format!("{SVG_PAGE}<rect x=\"1\" y=\"1\" width=\"4\" height=\"3\"/></svg>");
+    let plain = read(svg.as_bytes(), "a.svg").unwrap();
+    let packed = read(&gzip_of(svg.as_bytes()), "a.svgz").unwrap();
+    assert_eq!(kinds(&plain), kinds(&packed));
+    assert_eq!(plain.model.iter().map(|e| &e.kind).collect::<Vec<_>>(), packed.model.iter().map(|e| &e.kind).collect::<Vec<_>>());
+}
+
+#[test]
+fn svg_read_dispatches_by_extension() {
+    let svg = format!("{SVG_PAGE}<circle cx=\"5\" cy=\"5\" r=\"1\"/></svg>");
+    assert!(read(svg.as_bytes(), "a.svg").is_ok());
+    assert!(read(&gzip_of(svg.as_bytes()), "a.svgz").is_ok());
+}
+
+#[test]
+fn svg_hostile_input_errors_without_panicking() {
+    let deep = format!("{SVG_PAGE}{}<line x1=\"0\" y1=\"0\" x2=\"1\" y2=\"1\"/>{}</svg>", "<g>".repeat(200), "</g>".repeat(200));
+    for (bytes, name) in [
+        (b"not xml at all".to_vec(), "a.svg"),
+        (Vec::new(), "a.svg"),
+        (b"<svg><rect x=\"1e309\" width=\"NaN\" height=\"inf\"/></svg>".to_vec(), "a.svg"),
+        (deep.clone().into_bytes(), "a.svg"),
+        (b"<svg><path d=\"M0 0 X5 5\"/></svg>".to_vec(), "a.svg"),
+        (b"<svg><path d=\"M0 0 L\"/></svg>".to_vec(), "a.svg"),
+        (b"<svg><path d=\"M0 0 A1 1 0 5 1 2 2\"/></svg>".to_vec(), "a.svg"),
+        (b"<svg><polyline points=\"1 2 3\"/></svg>".to_vec(), "a.svg"),
+        (b"<svg><g transform=\"bogus(1)\"><rect width=\"1\" height=\"1\"/></g></svg>".to_vec(), "a.svg"),
+        (vec![0x1f, 0x8b, 8, 0, b'j', b'u', b'n', b'k', 0, 0, 0, 0, 0, 0, 0, 0], "a.svgz"),
+        (vec![0xff, 0xfe, 0x00, 0x01, 0x02, 0x03], "a.svg"),
+    ] {
+        let _ = read(&bytes, name);
+    }
+    let deep = read(deep.as_bytes(), "a.svg");
+    assert!(deep.is_err(), "200 nested groups are refused, not walked");
+}
+
+#[test]
+fn svg_no_geometry_yields_an_empty_drawing() {
+    let svg = format!("{SVG_PAGE}</svg>");
+    let d = read(svg.as_bytes(), "empty.svg").unwrap();
+    assert!(kinds(&d).is_empty());
+}

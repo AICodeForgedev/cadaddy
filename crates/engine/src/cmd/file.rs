@@ -171,6 +171,9 @@ fn file_name(path: &str) -> String {
 pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option<String>) -> Result<usize> {
     let hooks = io().ok_or_else(|| bad("open", "file formats are not available in this build"))?;
     let d = (hooks.read)(bytes, name).map_err(|e| bad("open", e))?;
+    // A file that isn't a drawing (an imported SVG) gives the drawing no file name: QSAVE then
+    // asks where to save instead of exporting over the original.
+    let path = path.filter(|p| is_drawing_file(p));
     let i = s.open_drawing(d, &file_name(name), path);
     if let Some(st) = s.docs.get_mut(i) {
         // QSAVE keeps a binary DXF binary.
