@@ -114,7 +114,13 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 return Some(Err(format!("language must be {}", crate::i18n::Preference::codes())));
             };
             app.ui.interface_language = preference;
-            Ok(json!({"interfaceLanguage": preference.code()}))
+            let shown = app.language();
+            if shown != preference.resolve(&app.system_languages) {
+                app.set_status(
+                    "No Chinese font is installed, so the interface stays in English. Install one (Noto Sans CJK, for example) to use Chinese.",
+                );
+            }
+            Ok(json!({"interfaceLanguage": preference.code(), "shown": shown}))
         }
         "ui.open" | "open" if no_path => {
             let picked = app.services.pick_open.as_ref().and_then(|f| f());

@@ -115,7 +115,7 @@ Select a language with `engine.execute` and the UI command `ui.language`:
 {"id":1,"method":"engine.execute","params":{"command":"ui.language","params":{"lang":"uk"}}}
 ```
 
-Supported values are `auto`, `en`, `uk`, `pt-BR`, `de`, `es`, `cs`, `ru` and `fr`. `ui.set` also accepts
+Supported values are `auto`, `en`, `uk`, `pt-BR`, `de`, `es`, `cs`, `ru`, `fr` and `zh` (Chinese needs an installed CJK font; without one the result's `shown` is `en`). `ui.set` also accepts
 `{"interfaceLanguage":"uk"}`; `ui.inspect` reports the saved choice in its UI state.
 Invalid choices leave the current language unchanged. Menus, command labels and prompt text
 returned by the control channel retain their English source text. See [localization.md](localization.md).

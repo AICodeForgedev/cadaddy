@@ -39,7 +39,7 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
 /// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
 /// command doesn't require a row in every language.
 const REQUIRED: &[&str] = &["uk"];
-const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr"];
+const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh"];
 
 fn check(language: &str, what: &str, missing: Vec<String>) {
     if REQUIRED.contains(&language) {
@@ -523,4 +523,21 @@ fn russian_and_french_plurals() {
             assert_eq!(count(n, "{n} contributor", "{n} contributors"), format!("{n} {word}"));
         }
     });
+}
+
+/// Chinese shows only with an installed CJK font (none is bundled); without one the interface
+/// stays English instead of drawing boxes, and choosing it says why.
+#[test]
+fn chinese_needs_an_installed_cjk_font() {
+    assert_eq!(locale_language("zh-CN"), Some("zh"));
+    let mut app = CadApp::new(Session::new(), Services::default());
+    let r = app.run("ui.language", json!({"lang": "zh"})).unwrap();
+    assert_eq!(r["interfaceLanguage"], "zh");
+    let font = crate::theme::cjk_font();
+    assert_eq!(app.language(), if font.is_some() { "zh" } else { "en" });
+    assert_eq!(r["shown"], app.language());
+    assert!(crate::theme::can_show("uk") && crate::theme::can_show("en"));
+    if font.is_none() {
+        assert!(app.status.as_ref().is_some_and(|(s, _)| s.contains("No Chinese font")));
+    }
 }

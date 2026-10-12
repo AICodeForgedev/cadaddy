@@ -302,7 +302,7 @@ pub fn mono() -> FontId {
 }
 
 /// Load a system UI font at run time when one is installed (not bundled), else keep egui's.
-pub fn install_fonts(ctx: &egui::Context) {
+pub fn install_fonts(ctx: &egui::Context, cjk: bool) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let candidates: &[&str] = if cfg!(target_os = "macos") {
@@ -327,10 +327,70 @@ pub fn install_fonts(ctx: &egui::Context) {
                 break;
             }
         }
+        // Chinese: an installed CJK font after the Latin ones, so Latin text keeps its look.
+        if let Some(bytes) = cjk.then(cjk_font).flatten().and_then(|p| read_capped(p, MAX_UI_FONT_BYTES)) {
+            fonts.font_data.insert("system-cjk".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+            for family in [FontFamily::Proportional, FontFamily::Monospace] {
+                if let Some(f) = fonts.families.get_mut(&family) {
+                    f.push("system-cjk".into());
+                }
+            }
+        }
         ctx.set_fonts(fonts);
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = ctx;
+    let _ = (ctx, cjk);
+}
+
+/// Largest interface font file read (CJK collections are 15–60 MB).
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_UI_FONT_BYTES: u64 = 96 * 1024 * 1024;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_capped(path: &std::path::Path, max: u64) -> Option<Vec<u8>> {
+    let len = std::fs::metadata(path).ok()?.len();
+    if len == 0 || len > max {
+        return None;
+    }
+    std::fs::read(path).ok()
+}
+
+/// An installed font with Chinese characters, for the Chinese interface; fonts are never bundled
+/// (only looked for where the OS or common packages put them). Checked once.
+pub fn cjk_font() -> Option<&'static std::path::Path> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static FOUND: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+        FOUND
+            .get_or_init(|| {
+                let candidates: &[&str] = if cfg!(target_os = "macos") {
+                    &["/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/STHeiti Light.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc"]
+                } else if cfg!(windows) {
+                    &["C:\\Windows\\Fonts\\msyh.ttc", "C:\\Windows\\Fonts\\msyh.ttf", "C:\\Windows\\Fonts\\simsun.ttc"]
+                } else {
+                    &[
+                        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+                        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+                        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+                        "/usr/local/share/fonts/noto/NotoSansCJK-Regular.ttc",
+                        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+                        "/usr/share/fonts/wqy-microhei/wqy-microhei.ttc",
+                        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+                        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+                    ]
+                };
+                candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
+            })
+            .as_deref()
+    }
+    #[cfg(target_arch = "wasm32")]
+    None
+}
+
+/// Whether the interface can show `language`: Chinese needs an installed CJK font.
+pub fn can_show(language: &str) -> bool {
+    !language.starts_with("zh") || cjk_font().is_some()
 }
 
 /// egui's visuals for `theme`, from its tokens.

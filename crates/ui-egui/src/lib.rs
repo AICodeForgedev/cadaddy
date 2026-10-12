@@ -195,7 +195,8 @@ pub struct CadApp {
     /// Caps the frame rate when presenting without vsync (see [`gpu::FrameCap`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub frame_cap: Option<gpu::FrameCap>,
-    styled: bool,
+    /// Interface fonts installed, and whether with a CJK font (`None` until the first frame).
+    fonts_cjk: Option<bool>,
     /// The theme last installed into egui (`None` until the first frame).
     shown_theme: Option<egui::Theme>,
     /// Whether the last applied theme was handed to egui as the System preference.
@@ -237,7 +238,7 @@ impl CadApp {
             synthetic: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             frame_cap: None,
-            styled: false,
+            fonts_cjk: None,
             shown_theme: None,
             shown_follows_system: false,
             frame_ms: 0.0,
@@ -251,8 +252,11 @@ impl CadApp {
         }
     }
 
+    /// The interface language shown: the chosen one, or English when this computer has no font
+    /// for it (Chinese without an installed CJK font would be boxes).
     pub fn language(&self) -> &'static str {
-        self.ui.interface_language.resolve(&self.system_languages)
+        let l = self.ui.interface_language.resolve(&self.system_languages);
+        if theme::can_show(l) { l } else { "en" }
     }
 
     /// Draw the canvas on the GPU with the app's wgpu render state (eframe's
@@ -410,9 +414,10 @@ impl CadApp {
         if ctx.input(|i| i.viewport().close_requested()) && self.request_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
-        if !self.styled {
-            theme::install_fonts(ctx);
-            self.styled = true;
+        let cjk = self.language().starts_with("zh");
+        if self.fonts_cjk != Some(cjk) {
+            theme::install_fonts(ctx, cjk);
+            self.fonts_cjk = Some(cjk);
         }
         // Resolved every frame, so a System choice follows the OS appearance live (winit and the
         // browser report changes as input); the saved choice itself never changes here.
