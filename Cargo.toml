@@ -34,6 +34,7 @@ rayon = "1"
 
 # rendering / formats
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd", "png-format"] }
+lyon_tessellation = "1.0.22"
 skrifa = "0.47"
 # Text shaping (OpenType GSUB/GPOS, HarfBuzz port on read-fonts; the version egui's epaint uses)
 # and the Unicode Bidirectional Algorithm for right-to-left drawing text.

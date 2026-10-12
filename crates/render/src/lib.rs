@@ -19,6 +19,7 @@ pub mod pen;
 mod plotstyle;
 mod point;
 pub mod raster;
+mod text;
 mod tolerance;
 pub mod units;
 mod wide;
@@ -172,7 +173,8 @@ impl DisplayList {
 pub struct Options {
     /// Chord tolerance in world units (about half a pixel at the current zoom).
     pub tolerance: f64,
-    /// Dashes shorter than this (world units) are drawn as continuous lines.
+    /// Two pixels in world units: shorter dashes are continuous and filled font text uses
+    /// screen-size detail. Zero keeps full detail (plots and image/vector exports).
     pub min_dash: f64,
     /// Draw text (off for very coarse previews).
     pub text: bool,
@@ -289,6 +291,9 @@ impl Builder<'_> {
         self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw, kind: Kind::Polyline, start, len: pts.len() as u32 });
     }
     fn tris(&mut self, ctx: &Ctx, color: Ink, tris: &[Vec2]) {
+        self.tris_at(ctx, color, tris, ctx.xf);
+    }
+    fn tris_at(&mut self, ctx: &Ctx, color: Ink, tris: &[Vec2], xf: Mat3) {
         if tris.len() < 3 {
             return;
         }
@@ -296,7 +301,7 @@ impl Builder<'_> {
         let (color, _) = self.styled(color, 0.0);
         let start = self.list.tris.len() as u32;
         for p in tris {
-            let q = ctx.xf.apply(*p);
+            let q = xf.apply(*p);
             self.list.bounds.add(q);
             self.list.tris.push(q);
         }
@@ -312,16 +317,26 @@ impl Builder<'_> {
         }
         let fill = self.opts.fill && ctx.d.header.i64("TEXTFILL", 1) != 0;
         // Plots note which filled outlines are font glyphs (see `DisplayList::texts`).
-        let mut text = if self.plotting && fill { sh.text.iter().peekable() } else { [].iter().peekable() };
+        let mut text = sh.text.iter().peekable();
+        let pixel = if self.plotting { 0.0 } else { self.opts.min_dash * 0.5 };
         for (i, g) in sh.glyphs.iter().enumerate() {
             if fill {
-                let tris = fill::triangulate_evenodd(g);
-                let at = self.list.prims.len();
-                self.tris(ctx, color, &tris);
                 while text.next_if(|t| t.outline < i).is_some() {}
-                if let Some(t) = text.next_if(|t| t.outline == i)
+                let glyph = text.next_if(|t| t.outline == i);
+                let at = self.list.prims.len();
+                let len = if let Some(t) = glyph {
+                    let xf = crate::text::placement(t, ctx.xf);
+                    let mesh = crate::text::mesh(t, xf, pixel);
+                    self.tris_at(ctx, color, &mesh.triangles, xf);
+                    mesh.triangles.len()
+                } else {
+                    let tris = fill::triangulate_evenodd(g);
+                    self.tris(ctx, color, &tris);
+                    tris.len()
+                };
+                if let Some(t) = glyph.filter(|_| self.plotting)
                     && self.list.prims.len() > at
-                    && let (Ok(prim), Ok(verts)) = (u32::try_from(at), u32::try_from(tris.len()))
+                    && let (Ok(prim), Ok(verts)) = (u32::try_from(at), u32::try_from(len))
                 {
                     let xf = &ctx.xf;
                     let glyph = cadcraft_fonts::TextGlyph { origin: xf.apply(t.origin), x: xf.apply_vec(t.x), y: xf.apply_vec(t.y), ..t.clone() };

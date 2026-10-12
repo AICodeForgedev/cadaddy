@@ -580,7 +580,7 @@ pub fn fallback_for(c: char) -> Option<Face> {
 /// font's cap height.
 #[derive(Default)]
 pub(crate) struct GlyphOutline {
-    pub(crate) contours: Vec<Vec<Vec2>>,
+    pub(crate) contours: Arc<[Vec<Vec2>]>,
     pub(crate) advance: f64,
     pub(crate) cap: f64,
     /// The font maps the character (false: the missing-glyph shape).
@@ -691,6 +691,12 @@ pub(crate) fn glyph_by_id(face: &Face, gid: u32) -> Arc<GlyphOutline> {
     outline(face, GlyphKey::Id(gid))
 }
 
+/// Closed, flattened contours of a glyph at 1000 font units per em. Shared with the outline
+/// cache so renderers can tessellate once before applying each occurrence's affine placement.
+pub fn glyph_contours(face: &Face, gid: u16) -> Arc<[Vec<Vec2>]> {
+    glyph_by_id(face, u32::from(gid)).contours.clone()
+}
+
 fn outline(face: &Face, k: GlyphKey) -> Arc<GlyphOutline> {
     let key = (face.bytes.as_ptr() as usize, face.bytes.len(), face.index, k);
     if let Some(g) = glyph_cache().lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
@@ -709,7 +715,7 @@ fn outline(face: &Face, k: GlyphKey) -> Arc<GlyphOutline> {
     }
     let advance = f64::from(f.glyph_metrics(Size::new(UPEM), LocationRef::default()).advance_width(gid).unwrap_or(UPEM * 0.5));
     let (cap, mapped, gid) = (cap_height(&f), mapped.is_some(), gid.to_u32());
-    let g = Arc::new(GlyphOutline { contours: pen.contours, advance, cap, mapped, gid, face: Some(face.clone()) });
+    let g = Arc::new(GlyphOutline { contours: pen.contours.into(), advance, cap, mapped, gid, face: Some(face.clone()) });
     let mut cache = glyph_cache().lock().unwrap_or_else(PoisonError::into_inner);
     if cache.len() > MAX_CACHED_GLYPHS {
         cache.clear();
