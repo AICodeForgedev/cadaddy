@@ -44,6 +44,25 @@ pub(crate) fn names() -> Vec<String> {
     v
 }
 
+/// A pattern offered for new hatches: a library pattern or one a `.pat` file loaded.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PatternChoice {
+    pub name: String,
+    pub description: String,
+    /// The line families at unit scale (none for SOLID).
+    pub lines: Vec<PatternLine>,
+}
+
+/// Every pattern offered for new hatches, in the order of [`names`], for a pattern picker.
+pub fn pattern_choices() -> Vec<PatternChoice> {
+    let mut v: Vec<PatternChoice> = standard_patterns()
+        .into_iter()
+        .map(|p| PatternChoice { name: p.name.to_string(), description: p.description.to_string(), lines: p.lines })
+        .collect();
+    v.extend(store().iter().map(|p| PatternChoice { name: p.name.clone(), description: p.description.clone(), lines: p.lines.clone() }));
+    v
+}
+
 /// Add the patterns of a `.pat` file's text (a pattern loaded before under the same name is
 /// replaced). Returns the names added and the file's problems.
 pub(crate) fn load(text: &str) -> (Vec<String>, Vec<String>) {

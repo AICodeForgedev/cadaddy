@@ -10,7 +10,7 @@ use super::assoc::{detach, same_shape};
 use super::{ORIGIN_KW, OriginMode, closed_loop, island_style};
 use crate::cmd::helpers::lwpoly;
 use crate::cmd::{bad, bool_or, point_param, str_param, targets};
-use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
+use crate::{Accept, Input, Interactive, Picker, Prompt, Result, Session, Step};
 
 /// Upper bound on hatches edited by one call.
 const MAX_EDITED: usize = 10_000;
@@ -328,7 +328,10 @@ impl Interactive for HatchEditM {
                 };
                 Prompt::new("Island detection style", Accept::TEXT).kw(&["Ignore", "Outer", "Normal"]).default(cur)
             }
-            Ask::Pattern => Prompt::new("Enter a pattern name", Accept::TEXT).default(h.map(|h| h.pattern).unwrap_or_default()),
+            Ask::Pattern => {
+                let current = h.map(|h| h.pattern).unwrap_or_default();
+                Prompt::new("Enter a pattern name", Accept::TEXT).default(current.clone()).picker(Picker::HatchPattern(current))
+            }
             Ask::Scale => Prompt::new("Specify a scale for the hatch pattern", Accept::NUMBER).default(format!("{:.4}", h.map_or(1.0, |h| h.scale))),
             Ask::Angle => Prompt::new("Specify an angle for the hatch pattern", Accept::NUMBER)
                 .default(format!("{:.0}", h.map_or(0.0, |h| h.angle.to_degrees()))),

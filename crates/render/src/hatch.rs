@@ -349,6 +349,41 @@ pub fn pattern_lines(d: &Drawing, h: &Hatch, loops: &[Vec<Vec2>], px: f64, view:
     out
 }
 
+/// Repeats of a pattern across a swatch ([`pattern_swatch`]).
+const SWATCH_REPEATS: f64 = 6.0;
+/// Most runs a swatch holds.
+const MAX_SWATCH_RUNS: usize = 4000;
+
+/// A preview of a pattern for a pattern picker: the runs of its line families `lines` inside the
+/// `side` × `side` square with a corner at the origin, at a scale that shows a few repeats of the
+/// pattern (each family's line spacing or dash repeat, whichever is longer). Empty for a pattern
+/// with no lines (SOLID).
+pub fn pattern_swatch(lines: &[PatternLine], side: f64) -> Vec<Vec<Vec2>> {
+    let repeat =
+        lines.iter().map(|l| l.delta.1.abs().max(l.dashes.iter().map(|d| d.abs()).sum::<f64>())).filter(|r| r.is_finite()).fold(0.0, f64::max);
+    if !side.is_finite() || side <= 0.0 || repeat < 1e-9 {
+        return Vec::new();
+    }
+    let h = Hatch {
+        pattern: String::new(),
+        solid: false,
+        loops: Vec::new(),
+        scale: side / (SWATCH_REPEATS * repeat),
+        angle: 0.0,
+        associative: false,
+        style: 0,
+        elevation: 0.0,
+        gradient: None,
+        origin: Vec2::ZERO,
+        background: None,
+        pattern_lines: lines.to_vec(),
+    };
+    let square = vec![Vec2::new(0.0, 0.0), Vec2::new(side, 0.0), Vec2::new(side, side), Vec2::new(0.0, side)];
+    let mut runs = pattern_lines(&Drawing::default(), &h, &[square], 0.0, None);
+    runs.truncate(MAX_SWATCH_RUNS);
+    runs
+}
+
 /// One pattern line family, scaled and placed: parallel lines `spacing` apart through `origin`
 /// at angle `ang`, each shifted along itself by `delta`'s along-line part from the last.
 struct Family<'a> {

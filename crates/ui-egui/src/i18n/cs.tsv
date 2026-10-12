@@ -1206,3 +1206,5 @@ menu	View	Zobrazení
 menu	Draw	Kreslení
 menu	Dimension	Kótování
 menu	Modify	Modifikace
+	Hatch Pattern	Vzor šrafy
+	Search for pattern	Hledat vzor

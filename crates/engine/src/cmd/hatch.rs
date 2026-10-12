@@ -1,6 +1,7 @@
 //! HATCH, GRADIENT, BOUNDARY, REGION: boundaries from pick points or selected closed objects.
 
 mod patfile;
+pub use patfile::{PatternChoice, pattern_choices};
 pub(super) use patfile::{lines_for, run_patterns};
 
 use cadcraft_color::Color;
@@ -10,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::helpers::lwpoly;
 use super::*;
-use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
+use crate::{Accept, EngineError, Input, Interactive, Picker, Prompt, Result, Session, Step};
 
 mod assoc;
 mod edit;
@@ -582,7 +583,11 @@ impl Interactive for HatchM {
     fn prompt(&self, s: &Session) -> Prompt {
         // The sub-prompts offer the current value: Enter keeps it.
         match self.asking {
-            Some(HatchAsk::Pattern) => return Prompt::new("Enter a pattern name", Accept::TEXT).default(self.settings.pattern.clone()),
+            Some(HatchAsk::Pattern) => {
+                return Prompt::new("Enter a pattern name", Accept::TEXT)
+                    .default(self.settings.pattern.clone())
+                    .picker(Picker::HatchPattern(self.settings.pattern.clone()));
+            }
             Some(HatchAsk::Scale) => {
                 return Prompt::new("Specify a scale for the hatch pattern", Accept::NUMBER).default(format!("{:.4}", self.settings.scale));
             }
@@ -596,8 +601,10 @@ impl Interactive for HatchM {
             Some(HatchAsk::Origin) => return Prompt::new("Specify the pattern origin", Accept::POINT).kw(&ORIGIN_KW).default("Use current"),
             None => {}
         }
+        // The pattern picker stays offered while boundaries are picked: a choice sets the pattern.
+        let picker = |p: Prompt| if self.gradient { p } else { p.picker(Picker::HatchPattern(self.settings.pattern.clone())) };
         if self.selecting {
-            return Prompt::new("Select objects", Accept::SELECT).kw(&[
+            return picker(Prompt::new("Select objects", Accept::SELECT).kw(&[
                 "picK internal point",
                 "Undo",
                 "seTtings",
@@ -605,9 +612,9 @@ impl Interactive for HatchM {
                 "Angle",
                 "Origin",
                 "sEparate",
-            ]);
+            ]));
         }
-        Prompt::new("Pick internal point", Accept::POINT).kw(&[
+        picker(Prompt::new("Pick internal point", Accept::POINT).kw(&[
             "Select objects",
             "Undo",
             "seTtings",
@@ -616,7 +623,7 @@ impl Interactive for HatchM {
             "Angle",
             "Origin",
             "sEparate",
-        ])
+        ]))
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Some(a) = self.asking.take() {
@@ -668,6 +675,11 @@ impl Interactive for HatchM {
                     }
                     _ => {}
                 }
+                Ok(Step::Continue)
+            }
+            // A pattern chosen in the picker while boundaries are picked.
+            Input::Text(t) if !self.gradient => {
+                self.answer(s, HatchAsk::Pattern, &t)?;
                 Ok(Step::Continue)
             }
             // Enter ends boundary picking in either mode and creates the hatch.
@@ -736,6 +748,43 @@ mod tests {
         assert_eq!(hatch.pattern, "ANSI31");
         assert!(!hatch.solid);
         assert!(hatch.gradient.is_none());
+    }
+
+    #[test]
+    fn the_pattern_picker_is_offered_and_its_choice_sets_the_pattern() {
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        s.start("hatch").unwrap();
+        let picker = s.current_prompt().and_then(|p| p.picker);
+        assert_eq!(picker, Some(Picker::HatchPattern(HatchSettings::from(&s, &Value::Null, false).pattern)));
+        // A choice made in the picker while boundaries are picked.
+        s.input(Input::Text("AR-CONC".into())).unwrap();
+        assert_eq!(s.current_prompt().and_then(|p| p.picker), Some(Picker::HatchPattern("AR-CONC".into())));
+        // And at the pattern prompt.
+        s.input(Input::Keyword("Pattern".into())).unwrap();
+        assert!(s.current_prompt().unwrap().picker.is_some());
+        s.input(Input::Text("BRICK".into())).unwrap();
+        s.input(Input::Point(Vec2::new(5.0, 5.0))).unwrap();
+        s.input(Input::Enter).unwrap();
+        assert_eq!(only_hatch(&s).1.pattern, "BRICK");
+        // An unknown name keeps the pattern.
+        s.start("hatch").unwrap();
+        s.input(Input::Text("NO-SUCH".into())).unwrap();
+        assert_eq!(s.current_prompt().and_then(|p| p.picker), Some(Picker::HatchPattern("BRICK".into())));
+        // GRADIENT offers no pattern picker.
+        s.cancel();
+        s.start("gradient").unwrap();
+        assert!(s.current_prompt().unwrap().picker.is_none());
+    }
+
+    #[test]
+    fn pattern_choices_list_the_library_with_its_lines() {
+        let all = pattern_choices();
+        assert_eq!(all.first().map(|c| c.name.as_str()), Some("SOLID"));
+        assert!(all[0].lines.is_empty());
+        let ansi31 = all.iter().find(|c| c.name == "ANSI31").unwrap();
+        assert_eq!(ansi31.lines.len(), 1);
+        assert!(!ansi31.description.is_empty());
     }
 
     #[test]

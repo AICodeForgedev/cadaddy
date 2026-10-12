@@ -166,6 +166,23 @@ fn pattern_lines_from_a_file_are_drawn_for_unknown_names() {
 }
 
 #[test]
+fn pattern_swatches_stay_in_their_square_and_show_a_few_repeats() {
+    for p in cadcraft_doc::library::standard_patterns() {
+        let runs = cadcraft_render::pattern_swatch(&p.lines, 1.0);
+        if p.lines.is_empty() {
+            assert!(runs.is_empty(), "{}", p.name);
+            continue;
+        }
+        assert!(runs.len() >= 3, "{} has {} runs", p.name, runs.len());
+        assert!(runs.len() <= 4000, "{} has {} runs", p.name, runs.len());
+        for v in runs.iter().flatten() {
+            assert!((-1e-9..=1.0 + 1e-9).contains(&v.x) && (-1e-9..=1.0 + 1e-9).contains(&v.y), "{} at {v:?}", p.name);
+        }
+    }
+    assert!(cadcraft_render::pattern_swatch(&[], 1.0).is_empty());
+}
+
+#[test]
 fn brick_joints_are_drawn_once_half_a_brick_apart_course_to_course() {
     let l = draw(hatch("BRICK", vec![square(0.0, 2.0)]), "0");
     // Vertical joints: (x, course) for every vertical segment, rounded.

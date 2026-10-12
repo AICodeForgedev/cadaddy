@@ -45,15 +45,32 @@ pub struct Prompt {
     /// index): Dynamic Input shows its dimensions ([`crate::grip_dims`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grip: Option<(Handle, usize)>,
+    /// A visual chooser the UI can show for this prompt; a choice made in it is entered as
+    /// [`Input::Text`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picker: Option<Picker>,
+}
+
+/// A visual chooser for a prompt ([`Prompt::picker`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Picker {
+    /// A hatch pattern by name (see [`crate::pattern_choices`]); holds the current pattern.
+    HatchPattern(String),
 }
 
 impl Prompt {
     pub fn new(message: impl Into<String>, accept: Accept) -> Self {
-        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None, deferred: false, grip: None }
+        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None, deferred: false, grip: None, picker: None }
     }
     /// The grip being stretched (the `grip` field).
     pub fn grip(mut self, g: (Handle, usize)) -> Self {
         self.grip = Some(g);
+        self
+    }
+    /// The visual chooser the UI can show (the `picker` field).
+    pub fn picker(mut self, p: Picker) -> Self {
+        self.picker = Some(p);
         self
     }
     pub fn kw(mut self, k: &[&str]) -> Self {
