@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("mview", "Viewports", run_mview)
             .alias(&["mv"])
             .params(
-                "{option?: fit|polygonal|object|on|off|lock|restore, p1?, p2? (default: printable area), count?: 1-4, arrangement?: vertical|horizontal|left|right|above|below, points?: [[x,y]…] + bulges? (polygonal), object? (closed object to clip by), handles? + locked? (on/off/lock), layout?}",
+                "{option?: fit|polygonal|object|on|off|lock|restore, p1?, p2? (default: printable area), count?: 1-4, arrangement?: vertical|horizontal|left|right|above|below, points?: [[x,y]…] + bulges? (polygonal), object? (closed object to clip by), handles? + locked? (on/off/lock), name? (restore: a model space viewport configuration, default *Active; its viewports fill p1-p2 or the printable area), layout?}",
             )
             .interactive(|_| Ok(Box::new(MviewM::new(1, true)))),
         CommandSpec::new("mview.polygonal", "Polygonal Viewport", |s, p| run_mview(s, &viewports::with(p.clone(), "option", json!("polygonal"))))

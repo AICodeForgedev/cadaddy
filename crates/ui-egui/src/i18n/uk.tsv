@@ -1202,3 +1202,10 @@
 	Multiline...	Мультилінія...
 	Multiline Style...	Стиль мультилінії...
 	Solid Editing	Редагування тіл
+	Default save version	Типова версія збереження
+	Automatic save every	Автозбереження кожні
+	min	хв
+	Automatic save file location	Папка файлів автозбереження
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	Креслення, що ще не мають файлу, зберігаються в типовій версії. 0 хвилин вимикає автозбереження.
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	Клік правою кнопкою з урахуванням часу: швидкий клік — Enter, утримання відкриває меню
+	Turned off, a right-click while a command runs always opens the shortcut menu.	Якщо вимкнено, клік правою кнопкою під час команди завжди відкриває контекстне меню.

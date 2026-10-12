@@ -70,6 +70,12 @@ pub struct PdfOptions {
     /// embedded font subset (like AutoCAD's PDFSHX for its own fonts). Stroke-font text is
     /// always geometry.
     pub text_as_geometry: bool,
+    /// Margins (left, bottom, right, top; mm) of the plot device's paper, bounding the printable
+    /// area of a model-space plot. `None` keeps the page setup's (none for model space).
+    pub margins: Option<[f64; 4]>,
+    /// Entity hyperlinks read from a drawing file (`PE_URL` extended data) become link
+    /// annotations too, after [`PdfOptions::links`]. Default on.
+    pub hyperlinks: bool,
 }
 
 impl Default for PdfOptions {
@@ -89,13 +95,15 @@ impl Default for PdfOptions {
             include_off_layers: false,
             links: Vec::new(),
             text_as_geometry: false,
+            margins: None,
+            hyperlinks: true,
         }
     }
 }
 
 impl PdfOptions {
     /// Parse `{paper?, width?, height?, landscape?, fit?, scale?, lineweights?, compress?, title?,
-    /// window?: [[x1, y1], [x2, y2]]}`.
+    /// window?: [[x1, y1], [x2, y2]], margins?: [l, b, r, t] (mm), hyperlinks?: bool}`.
     pub fn from_json(v: &Value) -> PdfOptions {
         let num = |k: &str| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite());
         let paper_mm = match (num("width"), num("height")) {
@@ -119,7 +127,18 @@ impl PdfOptions {
             compress: v.get("compress").and_then(Value::as_bool).unwrap_or(true),
             title: v.get("title").and_then(Value::as_str).unwrap_or("").to_string(),
             window: window(v.get("window")),
+            margins: margins(v.get("margins")),
+            hyperlinks: v.get("hyperlinks").and_then(Value::as_bool).unwrap_or(true),
         }
+    }
+}
+
+/// `[l, b, r, t]` margins in mm (finite, 0–1000), else `None`.
+pub(crate) fn margins(v: Option<&Value>) -> Option<[f64; 4]> {
+    let a: Vec<f64> = v?.as_array()?.iter().take(5).filter_map(Value::as_f64).collect();
+    match a[..] {
+        [l, b, r, t] if a.iter().all(|x| x.is_finite() && (0.0..=1000.0).contains(x)) => Some([l, b, r, t]),
+        _ => None,
     }
 }
 
@@ -214,6 +233,10 @@ pub fn page_for(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<PageSetup>
     if let Some(t) = &o.plot_style_table {
         page.plot_style_table = t.clone();
     }
+    // The plot device's margins bound a model-space plot (a layout's come with its page setup).
+    if let (Space::Model, Some(m)) = (space, o.margins) {
+        page.margins_mm = m;
+    }
     page.width_mm = page.width_mm.clamp(1.0, MAX_SHEET_MM);
     page.height_mm = page.height_mm.clamp(1.0, MAX_SHEET_MM);
     Ok(page)
@@ -269,7 +292,8 @@ pub fn pdf_sheets(d: &Drawing, spaces: &[Space], o: &PdfOptions) -> Result<Vec<u
     } else {
         d
     };
-    let pages = spaces.iter().map(|s| sheet(drawn, s, o)).collect::<Result<Vec<_>>>()?;
+    let links = all_links(d, o);
+    let pages = spaces.iter().map(|s| sheet(drawn, s, o, &links)).collect::<Result<Vec<_>>>()?;
     let title = if o.title.is_empty() { pages.first().map(|p| p.label.clone()).unwrap_or_default() } else { o.title.clone() };
     let fonts = if o.text_as_geometry { fonts::Fonts::default() } else { fonts::Fonts::collect(pages.iter().map(|p| &p.list)) };
     Ok(assemble(d, &pages, &fonts, o, &title))
@@ -292,7 +316,7 @@ struct SheetPage {
 }
 
 /// Plot one space.
-fn sheet(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<SheetPage> {
+fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String)]) -> Result<SheetPage> {
     let page = page_for(d, space, o)?;
     let unit_mm = paper::paper_unit_mm(d);
     let sheet = Sheet::from_page(&page, unit_mm);
@@ -348,8 +372,38 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<SheetPage> {
             }
         }
     }
-    let links = links(&list, &map, &clip_pt, &o.links);
+    let links = links(&list, &map, &clip_pt, links_to);
     Ok(SheetPage { media, list, map, clip_pt, layers, links, label: sheet_name(space) })
+}
+
+/// The hyperlinks to plot: the options' own, then (with [`PdfOptions::hyperlinks`]) those the
+/// drawing file gave its entities as `PE_URL` extended data, at most [`MAX_LINKS`] in all.
+fn all_links(d: &Drawing, o: &PdfOptions) -> Vec<(Handle, String)> {
+    let mut out: Vec<(Handle, String)> = o.links.iter().take(MAX_LINKS).cloned().collect();
+    if !o.hyperlinks {
+        return out;
+    }
+    let given: std::collections::HashSet<Handle> = out.iter().map(|(h, _)| *h).collect();
+    for (h, extra) in &d.foreign.entities {
+        if out.len() >= MAX_LINKS {
+            break;
+        }
+        if given.contains(h) {
+            continue;
+        }
+        if let Some(url) = pe_url(&extra.xdata) {
+            out.push((*h, url));
+        }
+    }
+    out
+}
+
+/// The link target of `PE_URL` extended data: the first string (group 1000) after
+/// `1001 PE_URL`, before the next application's data.
+fn pe_url(xdata: &[cadcraft_doc::RawTag]) -> Option<String> {
+    let start = xdata.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case("PE_URL"))?;
+    let url = xdata.get(start + 1..)?.iter().take_while(|t| t.code != 1001).find(|t| t.code == 1000)?.value.trim();
+    (!url.is_empty() && url.len() <= MAX_URL).then(|| url.to_string())
 }
 
 /// Link annotation rectangles: the area (in points) each linked entity covers on the sheet,

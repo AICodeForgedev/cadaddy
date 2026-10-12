@@ -11,10 +11,17 @@
 //! | `theme` | `"system"`, `"light"` or `"dark"` |
 //! | `interfaceLanguage` | `"auto"`, `"en"` or `"uk"` |
 //! | `saveFormat` | `"dxf"` or `"dwg"`: the format Save As suggests for new drawings |
+//! | `saveVersion` | `"2000"` … `"2018"`: the version drawings with no file yet are saved in |
+//! | `SAVETIME` | minutes between automatic saves, 0–600 (0: off) |
+//! | `SAVEFILEPATH` | the folder automatic saves go to |
+//! | `timeSensitiveRightClick` | while a command runs, a quick right-click is Enter and holding the button opens the shortcut menu (default); `false`: a right-click always opens the menu |
 //! | `systemCursor` | keep the system cursor visible over the drawing area |
 //! | `historyLines` | command-line history lines, 0–12 |
 //! | `modelBackground`, `paperBackground` | `"#rrggbb"`, or `null` for the default |
 //! | `snapMarkerSize` | object snap marker size in points, 5–31 |
+//!
+//! SAVETIME and SAVEFILEPATH are the engine's autosave settings, kept with the autosave state
+//! rather than in the profile.
 //!
 //! The profile variables and the interface preferences survive restarts: the host saves
 //! [`CadApp::profile_json`] under [`PROFILE_KEY`] next to the interface prefs and restores it with
@@ -36,6 +43,9 @@ pub const PROFILE_KEY: &str = "cadcraft.profile";
 /// The largest saved profile [`CadApp::load_profile`] reads.
 const MAX_PROFILE_BYTES: usize = 64 * 1024;
 
+/// The longest SAVEFILEPATH the JSON form accepts.
+const MAX_PATH_CHARS: usize = 1024;
+
 /// Object snap marker sizes the Options dialog offers, in points.
 pub const SNAP_MARKER_SIZES: std::ops::RangeInclusive<f32> = 5.0..=31.0;
 
@@ -48,11 +58,14 @@ pub struct UiOptions {
     pub paper_background: Option<Color32>,
     /// Object snap marker size in points.
     pub snap_marker_size: f32,
+    /// While a command runs: a quick right-click is Enter and a held one opens the shortcut menu
+    /// (AutoCAD's time-sensitive right-click). Off: a right-click always opens the menu.
+    pub time_sensitive_right_click: bool,
 }
 
 impl Default for UiOptions {
     fn default() -> Self {
-        UiOptions { model_background: None, paper_background: None, snap_marker_size: theme::SNAP_MARKER }
+        UiOptions { model_background: None, paper_background: None, snap_marker_size: theme::SNAP_MARKER, time_sensitive_right_click: true }
     }
 }
 
@@ -106,6 +119,10 @@ struct UiChanges {
     model_background: Option<Option<Color32>>,
     paper_background: Option<Option<Color32>>,
     snap_marker_size: Option<f32>,
+    save_version: Option<crate::SaveVersion>,
+    savetime: Option<u32>,
+    savefilepath: Option<String>,
+    time_sensitive_right_click: Option<bool>,
 }
 
 fn color_param(key: &str, v: &Value) -> Result<Option<Color32>, String> {
@@ -137,6 +154,23 @@ fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
             let n = v.as_f64().filter(|n| SNAP_MARKER_SIZES.contains(&(*n as f32)) && n.is_finite()).ok_or("snapMarkerSize must be from 5 to 31")?;
             c.snap_marker_size = Some(n as f32);
         }
+        "saveVersion" => {
+            let name = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+            c.save_version = Some(crate::SaveVersion::parse(name.trim()).ok_or("saveVersion must be 2000, 2004, 2007, 2010, 2013 or 2018")?);
+        }
+        "timeSensitiveRightClick" => c.time_sensitive_right_click = Some(v.as_bool().ok_or("timeSensitiveRightClick must be true or false")?),
+        k if k.eq_ignore_ascii_case("SAVETIME") => {
+            let max = cadcraft_engine::autosave::MAX_SAVETIME;
+            let n = v
+                .as_f64()
+                .filter(|n| n.is_finite() && (0.0..=f64::from(max)).contains(n))
+                .ok_or_else(|| format!("SAVETIME must be from 0 to {max} minutes"))?;
+            c.savetime = Some(n.round() as u32);
+        }
+        k if k.eq_ignore_ascii_case("SAVEFILEPATH") => {
+            let p = v.as_str().map(str::trim).filter(|p| p.chars().count() <= MAX_PATH_CHARS && !p.chars().any(char::is_control));
+            c.savefilepath = Some(p.ok_or("SAVEFILEPATH must be a folder path")?.to_string());
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -154,6 +188,10 @@ fn ui_json(app: &CadApp) -> Map<String, Value> {
     m.insert("modelBackground".into(), color_json(o.model_background));
     m.insert("paperBackground".into(), color_json(o.paper_background));
     m.insert("snapMarkerSize".into(), json!(o.snap_marker_size));
+    m.insert("saveVersion".into(), json!(app.ui.save_version));
+    m.insert("SAVETIME".into(), json!(cadcraft_engine::autosave::savetime()));
+    m.insert("SAVEFILEPATH".into(), json!(cadcraft_engine::autosave::savefilepath()));
+    m.insert("timeSensitiveRightClick".into(), json!(o.time_sensitive_right_click));
     m
 }
 
@@ -206,6 +244,18 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
     if let Some(n) = ui.snap_marker_size {
         app.options.snap_marker_size = n;
     }
+    if let Some(v) = ui.save_version {
+        app.ui.save_version = v.year().to_string();
+    }
+    if let Some(m) = ui.savetime {
+        cadcraft_engine::autosave::set_savetime(m);
+    }
+    if let Some(p) = &ui.savefilepath {
+        cadcraft_engine::autosave::set_savefilepath(p);
+    }
+    if let Some(b) = ui.time_sensitive_right_click {
+        app.options.time_sensitive_right_click = b;
+    }
     Ok(report(app))
 }
 
@@ -214,6 +264,7 @@ fn reset_ui(app: &mut CadApp) {
     let d = crate::UiState::default();
     app.ui.theme = d.theme;
     app.ui.save_format = d.save_format;
+    app.ui.save_version = d.save_version;
     app.ui.system_cursor = d.system_cursor;
     app.ui.history_lines = d.history_lines;
     app.options = UiOptions::default();
@@ -232,6 +283,7 @@ impl CadApp {
             "modelBackground": color_json(self.options.model_background),
             "paperBackground": color_json(self.options.paper_background),
             "snapMarkerSize": self.options.snap_marker_size,
+            "timeSensitiveRightClick": self.options.time_sensitive_right_click,
         })
         .to_string()
     }
@@ -247,7 +299,7 @@ impl CadApp {
             cadcraft_engine::cmd::options::restore(&mut self.session, vars);
         }
         let mut c = UiChanges::default();
-        for key in ["systemCursor", "modelBackground", "paperBackground", "snapMarkerSize"] {
+        for key in ["systemCursor", "modelBackground", "paperBackground", "snapMarkerSize", "timeSensitiveRightClick"] {
             if let Some(value) = v.get(key) {
                 let _ = parse_ui(key, value, &mut c);
             }
@@ -264,6 +316,9 @@ impl CadApp {
         }
         if let Some(n) = c.snap_marker_size {
             self.options.snap_marker_size = n;
+        }
+        if let Some(b) = c.time_sensitive_right_click {
+            self.options.time_sensitive_right_click = b;
         }
     }
 }

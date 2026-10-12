@@ -185,8 +185,47 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
             }
         });
         ui.end_row();
+
+        ui.label(crate::tl!("Default save version"));
+        let current = crate::SaveVersion::parse(&app.ui.save_version).unwrap_or_default();
+        let mut version = current;
+        egui::ComboBox::from_id_salt("options_save_version").selected_text(version.year()).show_ui(ui, |ui| {
+            for v in crate::SaveVersion::ALL {
+                ui.selectable_value(&mut version, v, v.year());
+            }
+        });
+        if version != current {
+            changes.insert("saveVersion".into(), json!(version.year()));
+        }
+        ui.end_row();
+
+        ui.label(crate::tl!("Automatic save every"));
+        let mut minutes = cadcraft_engine::autosave::savetime();
+        let max = cadcraft_engine::autosave::MAX_SAVETIME;
+        if ui.add(egui::DragValue::new(&mut minutes).range(0..=max).suffix(format!(" {}", crate::tl!("min")))).changed() {
+            changes.insert("SAVETIME".into(), json!(minutes));
+        }
+        ui.end_row();
+
+        ui.label(crate::tl!("Automatic save file location"));
+        // Edited as text; the folder changes when the field loses focus.
+        let id = egui::Id::new("cc_options_savefilepath");
+        let current = cadcraft_engine::autosave::savefilepath();
+        let mut path = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| current.clone());
+        let r = ui.add(egui::TextEdit::singleline(&mut path).desired_width(330.0));
+        if r.changed() {
+            ui.data_mut(|d| d.insert_temp(id, path.clone()));
+        }
+        if r.lost_focus() {
+            ui.data_mut(|d| d.remove::<String>(id));
+            if path.trim() != current {
+                changes.insert("SAVEFILEPATH".into(), json!(path.trim()));
+            }
+        }
+        ui.end_row();
     });
     hint(ui, crate::tl!("A drawing opened from a file keeps that file's format."));
+    hint(ui, crate::tl!("Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off."));
 }
 
 fn drafting(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>, start: &mut Option<&'static str>) {
@@ -283,6 +322,12 @@ fn preferences(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>
         ui.end_row();
     });
     hint(ui, crate::tl!("An array that would create more objects than this is refused."));
+    ui.add_space(6.0);
+    let mut timed = app.options.time_sensitive_right_click;
+    if ui.checkbox(&mut timed, crate::tl!("Time-sensitive right-click: a quick click is Enter, holding opens the menu")).changed() {
+        changes.insert("timeSensitiveRightClick".into(), json!(timed));
+    }
+    hint(ui, crate::tl!("Turned off, a right-click while a command runs always opens the shortcut menu."));
 }
 
 fn profiles(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {

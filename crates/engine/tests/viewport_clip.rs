@@ -162,8 +162,8 @@ fn on_off_lock_restore_and_arrangements() {
     assert!(viewport(&s, &vh).locked, "{:?}", s.log);
     s.execute("mview", &json!({"option": "lock", "locked": false, "handles": [vh]})).unwrap();
     assert!(!viewport(&s, &vh).locked);
-    // Restore needs named viewport configurations.
-    assert!(s.execute("mview", &json!({"option": "restore"})).is_err());
+    // Restore needs a viewport configuration that exists (followups_626.rs covers the rest).
+    assert!(s.execute("mview", &json!({"option": "restore", "name": "none saved"})).is_err());
     // 3 viewports arranged Above: the large one on top.
     s.cmdline("mview 3 a 200,0 300,100").unwrap();
     let vps = layout_viewports(&s);

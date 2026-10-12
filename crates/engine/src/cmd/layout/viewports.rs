@@ -1,22 +1,25 @@
 //! Clipped viewports and MVIEW's options: polygonal and object viewports (MVIEW Polygonal /
-//! Object), VPCLIP, ON/OFF, Lock and Restore, and the typed MVIEW prompts.
+//! Object), VPCLIP, ON/OFF, Lock and Restore (a model space viewport configuration as layout
+//! viewports), and the typed MVIEW prompts.
 //!
 //! A clipped viewport keeps its rectangle as the boundary's extents and points at a paper-space
 //! entity (a closed polyline, circle, ellipse or spline) whose outline clips what it shows
 //! ([`Viewport::clip`], DXF group 340).
 
-use cadcraft_doc::{Drawing, EntityKind, Handle, Space, Viewport};
+use cadcraft_doc::{Drawing, EntityKind, Handle, Space, Viewport, VportConfig, VportTile};
 use cadcraft_geom::{Bounds2, PolyVertex, Vec2};
 use serde_json::{Value, json};
 
 use super::super::curves::{self, handle_value};
 use super::super::helpers::{lwpoly, rect_vertices};
-use super::super::{bad, bool_or, points_param, str_param, targets};
-use super::{fit_view, layout_viewports, mview, split, target_layout};
+use super::super::{bad, bool_or, point_param, points_param, str_param, targets};
+use super::{fit_view, layout_viewports, mview, printable, split, target_layout};
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 /// Most vertices a typed or JSON polygonal boundary may have.
 const MAX_VERTICES: usize = 10_000;
+/// Most viewports MVIEW Restore creates (a configuration read from a file may hold more tiles).
+const MAX_RESTORED: usize = 64;
 
 /// The polygon outline's extents of a closed paper-space entity usable as a clip boundary.
 fn boundary_bounds(k: &EntityKind) -> Option<Bounds2> {
@@ -210,6 +213,66 @@ fn mview_lock(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "viewports": hs.iter().map(|h| h.hex()).collect::<Vec<_>>(), "locked": locked }))
 }
 
+/// Where tile `t` of a viewport configuration lands when the whole configuration fills `r`; `None`
+/// for a tile with no usable area (configurations come from files).
+fn tile_rect(t: &VportTile, r: Bounds2) -> Option<Bounds2> {
+    let f = |v: f64| v.is_finite().then(|| v.clamp(0.0, 1.0));
+    let (x0, y0, x1, y1) = (f(t.min.x)?, f(t.min.y)?, f(t.max.x)?, f(t.max.y)?);
+    if x1 - x0 < 1e-6 || y1 - y0 < 1e-6 {
+        return None;
+    }
+    let at = |x: f64, y: f64| Vec2::new(r.min.x + x * r.width(), r.min.y + y * r.height());
+    Some(Bounds2::new(at(x0, y0), at(x1, y1)))
+}
+
+/// The view a restored tile shows in a viewport of size `r`: its saved centre, and its height
+/// grown when the viewport is narrower than the tile was, so the whole saved view still shows.
+fn tile_view(t: &VportTile, r: Bounds2) -> Option<(Vec2, f64)> {
+    if !(t.center.is_finite() && t.height.is_finite() && t.height > 0.0) {
+        return None;
+    }
+    let aspect = r.width() / r.height().max(1e-12);
+    let h = if t.aspect.is_finite() && t.aspect > 0.0 && aspect > 0.0 { t.height.max(t.height * t.aspect / aspect) } else { t.height };
+    (h.is_finite() && h > 0.0).then_some((t.center, h))
+}
+
+/// MVIEW Restore: `{name? (default *Active), p1?, p2? (default: the printable area), layout?}`.
+/// One viewport per tile of the model space viewport configuration, arranged as the tiles are
+/// over the window, each showing its tile's view.
+fn mview_restore(s: &mut Session, p: &Value) -> Result<Value> {
+    let space = target_layout(s, "mview", p)?;
+    let Space::Paper(layout) = &space else { return Err(bad("mview", "not a layout")) };
+    let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(VportConfig::ACTIVE).to_string();
+    let tiles = super::super::view::config_tiles(s, &name)
+        .ok_or_else(|| EngineError::Other(format!("Could not find viewport configuration \"{}\".", name.chars().take(64).collect::<String>())))?;
+    let rect = match (point_param(p, "p1"), point_param(p, "p2")) {
+        (Some(a), Some(b)) => Bounds2::new(a, b),
+        _ => printable(s, layout)?,
+    };
+    if rect.is_empty() || !rect.min.is_finite() || !rect.max.is_finite() || rect.width() < 1e-6 || rect.height() < 1e-6 {
+        return Err(bad("mview", "the viewport has no area"));
+    }
+    if rect.width() > 1e7 || rect.height() > 1e7 {
+        return Err(bad("mview", "the viewport is too large"));
+    }
+    let common = s.current_common();
+    let d = s.doc_mut()?;
+    let mut out = Vec::new();
+    for t in tiles.iter().take(MAX_RESTORED) {
+        let Some(r) = tile_rect(t, rect) else { continue };
+        let id = next_viewport_id(d);
+        let mut vp = new_viewport(d, r, id);
+        if let Some((c, h)) = tile_view(t, r) {
+            (vp.view_center, vp.view_height) = (c, h);
+        }
+        out.push(d.add(&space, common.clone(), EntityKind::Viewport(vp))?);
+    }
+    if out.is_empty() {
+        return Err(EngineError::Other(format!("Viewport configuration \"{name}\" has no viewports to restore.")));
+    }
+    Ok(json!({ "configuration": name, "viewports": handles_json(&out) }))
+}
+
 /// MVIEW's options other than corners and Fit; `None` when `option` is not one of them.
 pub(super) fn mview_option(s: &mut Session, p: &Value) -> Option<Result<Value>> {
     let opt = str_param(p, "option")?.trim().to_ascii_lowercase();
@@ -219,7 +282,7 @@ pub(super) fn mview_option(s: &mut Session, p: &Value) -> Option<Result<Value>> 
         "on" => mview_on(s, p, true),
         "off" => mview_on(s, p, false),
         "lock" | "l" => mview_lock(s, p),
-        "restore" | "r" => Err(bad("mview", "named viewport configurations are not available yet")),
+        "restore" | "r" => mview_restore(s, p),
         "fit" | "f" | "corners" | "" => return None,
         _ => Err(bad("mview", "option must be fit, polygonal, object, on, off, lock or restore")),
     })
@@ -471,6 +534,10 @@ enum Stage {
     Polygon(PolygonInput),
     Object,
     Lock,
+    /// Restore: the configuration's name, then where its viewports go.
+    RestoreName,
+    RestoreCorner(String),
+    RestoreOpposite(String, Vec2),
     /// ON/OFF (Some(on)) or Lock (None, with the chosen state) on picked viewports.
     Select {
         on: Option<bool>,
@@ -507,6 +574,18 @@ impl MviewM {
         s.echo(format!("{n} viewport(s) created, zoomed to the model extents."));
         Ok(Step::Done)
     }
+    /// MVIEW Restore with the typed name, over `rect` (None: Fit).
+    fn restore(s: &mut Session, name: &str, rect: Option<Bounds2>) -> Result<Step> {
+        let mut p = json!({ "option": "restore", "name": name });
+        if let Some(r) = rect {
+            p = with(p, "p1", json!([r.min.x, r.min.y]));
+            p = with(p, "p2", json!([r.max.x, r.max.y]));
+        }
+        let r = mview_restore(s, &p)?;
+        let n = r.get("viewports").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+        s.echo(format!("{n} viewport(s) restored from \"{name}\"."));
+        Ok(Step::Done)
+    }
     fn corner_keyword(&mut self, s: &mut Session, k: &str) -> Result<Step> {
         if k == "fit" || k == "f" {
             return self.create(s, None);
@@ -524,7 +603,7 @@ impl MviewM {
             "lock" | "l" => Stage::Lock,
             "object" | "o" => Stage::Object,
             "polygonal" | "p" => Stage::Polygon(PolygonInput::default()),
-            "restore" | "r" => return Err(EngineError::Other("Named viewport configurations are not available yet.".into())),
+            "restore" | "r" => Stage::RestoreName,
             _ => return Err(EngineError::Other("Requires a point or option keyword.".into())),
         };
         Ok(Step::Continue)
@@ -562,6 +641,9 @@ impl Interactive for MviewM {
             Stage::Polygon(pi) => pi.prompt(),
             Stage::Object => Prompt::new("Select object to clip viewport", Accept::POINT),
             Stage::Lock => Prompt::new("Lock the view of viewports?", curves::KW).kw(&["ON", "OFF"]),
+            Stage::RestoreName => Prompt::new("Enter viewport configuration name", Accept::TEXT).kw(&["?"]).default(VportConfig::ACTIVE),
+            Stage::RestoreCorner(_) => Prompt::new("Specify first corner", Accept::POINT).kw(&["Fit"]).default("Fit"),
+            Stage::RestoreOpposite(_, a) => Prompt::new("Specify opposite corner", Accept::POINT).base(*a),
             Stage::Select { .. } => Prompt::new("Select viewports", Accept::POINT),
         }
     }
@@ -653,6 +735,53 @@ impl Interactive for MviewM {
                 };
                 Ok(Step::Continue)
             }
+            Stage::RestoreName => {
+                let name = match &i {
+                    Input::Enter => VportConfig::ACTIVE.to_string(),
+                    Input::Text(t) | Input::Keyword(t) if !t.trim().is_empty() => t.trim().to_string(),
+                    _ => {
+                        self.stage = Stage::RestoreName;
+                        return Ok(Step::Continue);
+                    }
+                };
+                self.stage = Stage::RestoreName;
+                if name == "?" {
+                    let names = super::super::view::config_names(s);
+                    s.echo(if names.is_empty() { "No saved viewport configurations.".to_string() } else { names.join(", ") });
+                    return Ok(Step::Continue);
+                }
+                if super::super::view::config_tiles(s, &name).is_none() {
+                    return Err(EngineError::Other(format!(
+                        "Could not find viewport configuration \"{}\".",
+                        name.chars().take(64).collect::<String>()
+                    )));
+                }
+                self.stage = Stage::RestoreCorner(name);
+                Ok(Step::Continue)
+            }
+            Stage::RestoreCorner(name) => match i {
+                Input::Enter => Self::restore(s, &name, None),
+                Input::Keyword(k) | Input::Text(k) if matches!(k.trim().to_ascii_lowercase().as_str(), "fit" | "f") => Self::restore(s, &name, None),
+                Input::Point(a) => {
+                    self.stage = Stage::RestoreOpposite(name, a);
+                    Ok(Step::Continue)
+                }
+                Input::Keyword(_) | Input::Text(_) => {
+                    self.stage = Stage::RestoreCorner(name);
+                    Err(EngineError::Other("Requires a point or option keyword.".into()))
+                }
+                _ => {
+                    self.stage = Stage::RestoreCorner(name);
+                    Ok(Step::Continue)
+                }
+            },
+            Stage::RestoreOpposite(name, a) => match i {
+                Input::Point(b) => Self::restore(s, &name, Some(Bounds2::new(a, b))),
+                _ => {
+                    self.stage = Stage::RestoreOpposite(name, a);
+                    Ok(Step::Continue)
+                }
+            },
             Stage::Select { on, locked, mut picked } => match i {
                 Input::Enter => {
                     if picked.is_empty() {
@@ -673,12 +802,22 @@ impl Interactive for MviewM {
             },
         }
     }
-    fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
+    fn preview(&self, s: &Session, c: Vec2) -> Vec<EntityKind> {
         match &self.stage {
             Stage::Opposite(a) => {
                 split(Bounds2::new(*a, c), self.count, &self.arrangement).into_iter().map(|r| lwpoly(rect_vertices(r.min, r.max), true)).collect()
             }
             Stage::Polygon(pi) => pi.preview(c),
+            Stage::RestoreOpposite(name, a) => {
+                let r = Bounds2::new(*a, c);
+                super::super::view::config_tiles(s, name)
+                    .unwrap_or_default()
+                    .iter()
+                    .take(MAX_RESTORED)
+                    .filter_map(|t| tile_rect(t, r))
+                    .map(|r| lwpoly(rect_vertices(r.min, r.max), true))
+                    .collect()
+            }
             _ => Vec::new(),
         }
     }

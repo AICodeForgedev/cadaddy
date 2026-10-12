@@ -19,9 +19,10 @@ use crate::{IoError, PdfOptions, Result, pdf};
 pub const MAX_PNG_PIXELS: f64 = 40.0e6;
 
 /// Plot `space` with JSON options (the engine's `plot` hook): PDF unless `output` is `png` or
-/// `svg`. `margins: [l, b, r, t]` (mm) replaces a layout's printable area for this plot.
+/// `svg`. `margins: [l, b, r, t]` (mm) bound the printable area of this plot (model space or a
+/// layout).
 pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
-    let margins = margins(opts.get("margins"));
+    let margins = pdf::margins(opts.get("margins"));
     let with_margins;
     let d = match (space, margins) {
         (Space::Paper(n), Some(m)) => {
@@ -36,28 +37,15 @@ pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     };
     match opts.get("output").and_then(Value::as_str).map(str::to_ascii_lowercase).as_deref() {
         None | Some("pdf") => pdf::plot(d, space, opts),
-        Some("png") => png(d, space, opts, margins),
+        Some("png") => png(d, space, opts),
         Some("svg") => svg(d, space, opts),
         Some(other) => Err(IoError::Unsupported(other.to_string())),
     }
 }
 
-/// `[l, b, r, t]` margins in mm (finite, 0–1000), else `None`.
-fn margins(v: Option<&Value>) -> Option<[f64; 4]> {
-    let a: Vec<f64> = v?.as_array()?.iter().filter_map(Value::as_f64).collect();
-    match a[..] {
-        [l, b, r, t] if a.iter().all(|x| x.is_finite() && (0.0..=1000.0).contains(x)) => Some([l, b, r, t]),
-        _ => None,
-    }
-}
-
-/// The sheet a plot draws on, and whether the drawing is fitted to its printable area (model
-/// space, or a layout asked to `fit`).
-fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, margins: Option<[f64; 4]>) -> Result<(Sheet, cadcraft_doc::PageSetup)> {
-    let mut page = pdf::page_for(d, space, o)?;
-    if let (Space::Model, Some(m)) = (space, margins) {
-        page.margins_mm = m;
-    }
+/// The sheet a plot draws on (a model-space plot's printable area inside the device margins).
+fn sheet(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<(Sheet, cadcraft_doc::PageSetup)> {
+    let page = pdf::page_for(d, space, o)?;
     Ok((Sheet::from_page(&page, paper::paper_unit_mm(d)), page))
 }
 
@@ -75,9 +63,9 @@ fn fit_scale(b: &Bounds2, sheet: &Sheet, o: &PdfOptions) -> f64 {
     if s.is_finite() && s > 0.0 { s } else { 1.0 }
 }
 
-fn png(d: &Drawing, space: &Space, opts: &Value, margins: Option<[f64; 4]>) -> Result<Vec<u8>> {
+fn png(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     let o = PdfOptions::from_json(opts);
-    let (sheet, page) = sheet(d, space, &o, margins)?;
+    let (sheet, page) = sheet(d, space, &o)?;
     let dpi = opts.get("resolution").and_then(Value::as_f64).filter(|r| r.is_finite()).unwrap_or(300.0).clamp(50.0, 2400.0);
     // Pixels per paper unit, lowered so the image stays within the caps.
     let mut k = sheet.unit_mm / 25.4 * dpi;
@@ -101,11 +89,14 @@ fn png(d: &Drawing, space: &Space, opts: &Value, margins: Option<[f64; 4]>) -> R
     // Chord tolerance: a fifth of a pixel.
     let tolerance = (0.2 / (k * est)).max(1e-9);
     let ropts = cadcraft_render::Options { tolerance, lineweights, plot_style_table: table, ..cadcraft_render::Options::default() };
-    let list = cadcraft_render::build_plot(d, space, &ropts);
+    let mut list = cadcraft_render::build_plot(d, space, &ropts);
     let half = Vec2::new(f64::from(width), f64::from(height)) / (2.0 * k);
+    let b = window.unwrap_or(list.bounds);
+    let s = if fit { fit_scale(&b, &sheet, &o) } else { 1.0 };
+    // Plot style ends, joins and fill patterns at the plot scale, as PDF draws them (a layout's
+    // are already drawn).
+    cadcraft_render::pen::apply(&mut list, s * sheet.unit_mm);
     let view = if fit {
-        let b = window.unwrap_or(list.bounds);
-        let s = fit_scale(&b, &sheet, &o);
         let from = if b.is_empty() { Vec2::ZERO } else { b.center() };
         // The world point at the image centre, with `from` on the printable area's centre.
         let center = from + (half - sheet.printable.center()) / s;
@@ -120,11 +111,25 @@ fn png(d: &Drawing, space: &Space, opts: &Value, margins: Option<[f64; 4]>) -> R
 
 fn svg(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     let o = PdfOptions::from_json(opts);
-    let window = match space {
-        Space::Paper(_) => Some(sheet(d, space, &o, None)?.0.bounds()),
-        Space::Model => o.window.filter(|w| !w.is_empty()),
+    let Space::Model = space else {
+        let window = sheet(d, space, &o)?.0.bounds();
+        return Ok(crate::svg::export_window(d, space, Some(window)).into_bytes());
     };
-    Ok(crate::svg::export_window(d, space, window).into_bytes())
+    // Model space as plotted: the plot style table, lineweights, and the table's ends, joins and
+    // fills at the scale that fits the window (or the extents) on the device's paper.
+    let (sheet, page) = sheet(d, space, &o)?;
+    let window = o.window.filter(|w| !w.is_empty());
+    let table = cadcraft_doc::plot_style_table(d, &page.plot_style_table).map(Arc::new);
+    let lineweights = o.lineweights.unwrap_or(true);
+    let est = fit_scale(&window.unwrap_or_else(|| d.extents(space)), &sheet, &o);
+    // Chord tolerance: about 0.05 mm on paper.
+    let tolerance = (0.05 / (sheet.unit_mm * est)).max(1e-9);
+    let tolerance = if tolerance.is_finite() { tolerance } else { cadcraft_render::Options::default().tolerance };
+    let ropts = cadcraft_render::Options { tolerance, lineweights, plot_style_table: table, ..cadcraft_render::Options::default() };
+    let mut list = cadcraft_render::build_plot(d, space, &ropts);
+    let s = fit_scale(&window.unwrap_or(list.bounds), &sheet, &o);
+    cadcraft_render::pen::apply(&mut list, s * sheet.unit_mm);
+    Ok(crate::svg::export_list(&list, window).into_bytes())
 }
 
 #[cfg(test)]

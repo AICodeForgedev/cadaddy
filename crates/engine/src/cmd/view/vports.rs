@@ -71,6 +71,22 @@ fn with_option(p: &Value, option: &str) -> Value {
     p
 }
 
+/// The tiles of viewport configuration `name` (any case), for MVIEW Restore: `*Active` is the
+/// model space as shown now (one full tile with the model view when it isn't tiled), any other
+/// name a saved configuration. `None` when there is no such configuration.
+pub(in crate::cmd) fn config_tiles(s: &Session, name: &str) -> Option<Vec<VportTile>> {
+    let name = name.trim();
+    if name.eq_ignore_ascii_case(VportConfig::ACTIVE) {
+        return Some(live(s.state().ok()?, s.viewport_px).0);
+    }
+    s.doc().ok()?.vports.iter().find(|c| !c.is_active() && c.name.eq_ignore_ascii_case(name)).map(|c| c.tiles.clone())
+}
+
+/// The saved viewport configurations' names.
+pub(in crate::cmd) fn config_names(s: &Session) -> Vec<String> {
+    s.doc().map(|d| d.vports.iter().filter(|c| !c.is_active()).map(|c| c.name.clone()).collect()).unwrap_or_default()
+}
+
 // ---------------- tile state ----------------
 
 type Rect = (Vec2, Vec2);

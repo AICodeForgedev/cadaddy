@@ -12,7 +12,7 @@ use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step, View};
 mod named_views;
 mod vports;
 
-pub(super) use vports::{model_vports, tile_model};
+pub(super) use vports::{config_names, config_tiles, model_vports, tile_model};
 
 pub fn specs() -> Vec<CommandSpec> {
     let mut v = vec![
