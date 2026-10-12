@@ -1,6 +1,8 @@
 //! The floating command line: history, the active prompt with clickable keywords, typed input
 //! (keyboard focus stays on the drawing — typing anywhere goes here) and AutoComplete.
 
+use std::collections::HashSet;
+
 use cadcraft_engine::Input;
 use egui::{Key, Pos2, Rect, Sense, Stroke, pos2, vec2};
 
@@ -90,25 +92,76 @@ fn tab(app: &mut CadApp) {
     {
         // Both values typed: Tab locks the second one as well.
         app.cmd.locked_second = Some(app.cmd.buffer.clone());
-    } else if let Some((id, _)) = suggestions(&app.cmd.buffer).first() {
-        app.cmd.buffer = id.clone();
+    } else if let Some(s) = suggestions(&app.cmd.buffer).first() {
+        app.cmd.buffer = s.id.clone();
     }
 }
 
+/// An AutoComplete suggestion for the command line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Suggestion {
+    /// Command identifier (uppercase, e.g. "RECTANG"), used for buffer completion and execution.
+    pub id: String,
+    /// Display text shown in the AutoComplete list (e.g. "REC (RECTANG)" or "RECOVER").
+    pub display: String,
+    /// Human-readable command label (e.g. "Rectangle").
+    pub label: &'static str,
+}
+
 /// Matching command names/aliases for AutoComplete.
-fn suggestions(prefix: &str) -> Vec<(String, &'static str)> {
+fn suggestions(prefix: &str) -> Vec<Suggestion> {
     if prefix.is_empty() || prefix.contains(' ') {
         return Vec::new();
     }
     let p = prefix.to_ascii_lowercase();
-    let mut v: Vec<(String, &'static str)> = cadcraft_engine::command_specs()
-        .iter()
-        .filter(|c| !c.id.contains('.') && (c.id.starts_with(&p) || c.aliases.iter().any(|a| *a == p)))
-        .map(|c| (c.id.to_ascii_uppercase(), c.label))
-        .collect();
-    v.sort_by_key(|(id, _)| (id.len(), id.clone()));
-    v.truncate(8);
-    v
+
+    let mut out: Vec<Suggestion> = Vec::new();
+    let mut seen_ids: HashSet<&'static str> = HashSet::new();
+
+    // 1. Exact match: alias resolution or exact command name match.
+    let resolved = cadcraft_engine::cmd::resolve_alias(&p);
+    if let Some(spec) = cadcraft_engine::cmd::find_command(&resolved)
+        && !spec.id.contains('.')
+    {
+        let display =
+            if spec.id == p { spec.id.to_ascii_uppercase() } else { format!("{} ({})", p.to_ascii_uppercase(), spec.id.to_ascii_uppercase()) };
+        out.push(Suggestion { id: spec.id.to_ascii_uppercase(), display, label: spec.label });
+        seen_ids.insert(spec.id);
+    }
+
+    // 2. Command ID prefix matches (excluding already matched exact command).
+    let mut id_matches: Vec<&'static cadcraft_engine::CommandSpec> =
+        cadcraft_engine::command_specs().iter().filter(|c| !c.id.contains('.') && !seen_ids.contains(c.id) && c.id.starts_with(&p)).collect();
+    id_matches.sort_by_key(|c| (c.id.len(), c.id));
+    for c in id_matches {
+        out.push(Suggestion { id: c.id.to_ascii_uppercase(), display: c.id.to_ascii_uppercase(), label: c.label });
+        seen_ids.insert(c.id);
+    }
+
+    // 3. Command alias prefix matches (for commands not yet added).
+    let mut alias_matches: Vec<(&'static str, &'static cadcraft_engine::CommandSpec)> = Vec::new();
+    for c in cadcraft_engine::command_specs() {
+        if c.id.contains('.') || seen_ids.contains(c.id) {
+            continue;
+        }
+        let matching_alias = c.aliases.iter().copied().filter(|a| a.starts_with(&p)).min_by_key(|a| (a.len(), *a));
+        if let Some(alias) = matching_alias {
+            alias_matches.push((alias, c));
+        }
+    }
+    alias_matches.sort_by_key(|(alias, c)| (alias.len(), *alias, c.id));
+    for (alias, c) in alias_matches {
+        if seen_ids.insert(c.id) {
+            out.push(Suggestion {
+                id: c.id.to_ascii_uppercase(),
+                display: format!("{} ({})", alias.to_ascii_uppercase(), c.id.to_ascii_uppercase()),
+                label: c.label,
+            });
+        }
+    }
+
+    out.truncate(8);
+    out
 }
 
 impl CmdLine {
@@ -462,23 +515,23 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
             );
             p.rect_filled(lr, 3.0, t.list_bg);
             p.rect_stroke(lr, 3.0, Stroke::new(1.0, t.cmd_border), egui::StrokeKind::Inside);
-            for (i, (id, label)) in sug.iter().enumerate() {
+            for (i, s) in sug.iter().enumerate() {
                 let r = Rect::from_min_size(pos2(lr.left(), lr.top() + rh * i as f32), vec2(lr.width(), rh));
                 let resp = ui.interact(r, ui.id().with(("sug", i)), Sense::click());
                 if resp.hovered() || i == 0 {
                     p.rect_filled(r.shrink(1.0), 2.0, if resp.hovered() { t.cmd_keyword_hover } else { t.list_row });
                 }
-                p.text(Pos2::new(r.left() + 8.0, r.center().y), egui::Align2::LEFT_CENTER, id, crate::theme::body(), t.text);
+                p.text(Pos2::new(r.left() + 8.0, r.center().y), egui::Align2::LEFT_CENTER, &s.display, crate::theme::body(), t.text);
                 p.text(
                     Pos2::new(r.right() - 8.0, r.center().y),
                     egui::Align2::RIGHT_CENTER,
-                    crate::i18n::t(label),
+                    crate::i18n::t(s.label),
                     crate::theme::small(),
                     t.text_faint,
                 );
                 if resp.clicked() {
                     app.cmd.buffer.clear();
-                    app.start(&id.to_ascii_lowercase());
+                    app.start(&s.id.to_ascii_lowercase());
                 }
             }
         }
@@ -713,5 +766,54 @@ mod delete_key_tests {
         assert!(c.typed_since_selection);
         c.watch_selection(&[Handle(1), Handle(2)]);
         assert!(!c.typed_since_selection);
+    }
+}
+
+#[cfg(test)]
+mod autocomplete_tests {
+    use super::*;
+
+    #[test]
+    fn exact_alias_is_first_suggestion_with_alias_display() {
+        let rec = suggestions("rec");
+        assert!(!rec.is_empty());
+        assert_eq!(rec[0].id, "RECTANG");
+        assert_eq!(rec[0].display, "REC (RECTANG)");
+        assert_eq!(rec[0].label, "Rectangle");
+        // RECOVER should follow RECTANG, not precede it
+        assert!(rec.iter().any(|s| s.id == "RECOVER"));
+        assert_eq!(rec[1].id, "RECOVER");
+        assert_eq!(rec[1].display, "RECOVER");
+
+        let l = suggestions("l");
+        assert_eq!(l[0].id, "LINE");
+        assert_eq!(l[0].display, "L (LINE)");
+
+        let c = suggestions("c");
+        assert_eq!(c[0].id, "CIRCLE");
+        assert_eq!(c[0].display, "C (CIRCLE)");
+
+        let co = suggestions("co");
+        assert_eq!(co[0].id, "COPY");
+        assert_eq!(co[0].display, "CO (COPY)");
+    }
+
+    #[test]
+    fn prefix_without_alias_shows_command_id() {
+        let rect = suggestions("rect");
+        assert_eq!(rect[0].id, "RECTANG");
+        assert_eq!(rect[0].display, "RECTANG");
+
+        let line = suggestions("line");
+        assert_eq!(line[0].id, "LINE");
+        assert_eq!(line[0].display, "LINE");
+    }
+
+    #[test]
+    fn tab_autocompletes_alias_to_resolved_command() {
+        let mut app = CadApp::new(cadcraft_engine::Session::empty(), crate::Services::default());
+        app.cmd.buffer = "rec".to_string();
+        tab(&mut app);
+        assert_eq!(app.cmd.buffer, "RECTANG");
     }
 }
