@@ -60,12 +60,39 @@ pub(super) fn draw(b: &mut Builder, ctx: &Ctx, e: &Entity, h: &Hatch, rgb: Ink, 
 /// every loop with every other); past it all loops are kept (odd parity).
 const MAX_ISLAND_WORK: usize = 20_000_000;
 
+/// True when two polygons have the same vertices (ignoring cyclic shift and winding order).
+fn same_polygon(a: &[Vec2], b: &[Vec2]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let n = a.len();
+    if n == 0 {
+        return true;
+    }
+    let near = |p1: Vec2, p2: Vec2| p1.near(p2, 1e-4);
+    (0..n).any(|k| (0..n).all(|i| near(a[i], b[(i + k) % n]))) || (0..n).any(|k| (0..n).all(|i| near(a[i], b[(k + n - (i % n)) % n])))
+}
+
+fn dedup_polygons(loops: &mut Vec<Vec<Vec2>>) {
+    let mut unique: Vec<Vec<Vec2>> = Vec::with_capacity(loops.len());
+    for l in loops.drain(..) {
+        if l.len() < 3 {
+            continue;
+        }
+        if !unique.iter().any(|u| same_polygon(u, &l)) {
+            unique.push(l);
+        }
+    }
+    *loops = unique;
+}
+
 /// The tessellated boundary loops that take part in the fill under the hatch's island
 /// detection style (DXF group 75), filled with odd parity: 0 normal keeps every loop (islands
 /// within islands alternate), 1 outer keeps the outermost loops and their first islands, 2
 /// ignore keeps only the outermost loops. Nesting depth = how many other loops enclose a loop.
 pub(crate) fn fill_loops(h: &Hatch, tol: f64) -> Vec<Vec<Vec2>> {
-    let loops: Vec<Vec<Vec2>> = h.loops.iter().map(|l| Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(tol)).collect();
+    let mut loops: Vec<Vec<Vec2>> = h.loops.iter().map(|l| Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(tol)).collect();
+    dedup_polygons(&mut loops);
     let max_depth = match h.style {
         1 => 1,
         2 => 0,
@@ -429,5 +456,46 @@ impl Family<'_> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadcraft_doc::{Hatch, HatchLoop};
+    use cadcraft_geom::PolyVertex;
+
+    #[test]
+    fn fill_loops_deduplicates_coincident_loops() {
+        let loop1 = HatchLoop {
+            vertices: vec![
+                PolyVertex::new(Vec2::new(0.0, 0.0)),
+                PolyVertex::new(Vec2::new(10.0, 0.0)),
+                PolyVertex::new(Vec2::new(10.0, 10.0)),
+                PolyVertex::new(Vec2::new(0.0, 10.0)),
+            ],
+            outer: true,
+            sources: vec![],
+        };
+        let loop2 = loop1.clone();
+        let hatch = Hatch {
+            origin: Vec2::ZERO,
+            pattern: "SOLID".into(),
+            solid: true,
+            loops: vec![loop1, loop2],
+            scale: 1.0,
+            angle: 0.0,
+            associative: false,
+            style: 0,
+            elevation: 0.0,
+            gradient: None,
+            background: None,
+            pattern_lines: vec![],
+        };
+        let loops = fill_loops(&hatch, 1e-4);
+        assert_eq!(loops.len(), 1, "fill_loops must deduplicate duplicate loops");
+        let tris = fill::triangulate_evenodd(&loops);
+        let area: f64 = tris.chunks(3).map(|t| ((t[1] - t[0]).cross(t[2] - t[0]) / 2.0).abs()).sum();
+        assert!((area - 100.0).abs() < 1e-6, "triangulated area must be 100.0, not zero");
     }
 }

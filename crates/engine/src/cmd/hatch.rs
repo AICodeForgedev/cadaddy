@@ -355,9 +355,63 @@ fn make(s: &mut Session, p: &Value, gradient: bool) -> Result<Value> {
     Ok(json!({ "handle": hex.first(), "handles": hex }))
 }
 
+/// True when two loops have the same vertex sequence (ignoring cyclic shift and winding order).
+fn same_loop(a: &HatchLoop, b: &HatchLoop) -> bool {
+    if a.vertices.len() != b.vertices.len() {
+        return false;
+    }
+    let n = a.vertices.len();
+    if n == 0 {
+        return true;
+    }
+    let near = |v1: &PolyVertex, v2: &PolyVertex| v1.p.near(v2.p, 1e-6) && (v1.bulge - v2.bulge).abs() < 1e-6;
+    (0..n).any(|k| (0..n).all(|i| near(&a.vertices[i], &b.vertices[(i + k) % n])))
+        || (0..n).any(|k| {
+            (0..n).all(|i| {
+                let j = (k + n - (i % n)) % n;
+                let prev_j = (j + n - 1) % n;
+                a.vertices[i].p.near(b.vertices[j].p, 1e-6) && (a.vertices[i].bulge + b.vertices[prev_j].bulge).abs() < 1e-6
+            })
+        })
+}
+
+/// Deduplicate boundary loops that describe the same boundary.
+fn dedup_loops(loops: &mut Vec<HatchLoop>) {
+    let mut unique: Vec<HatchLoop> = Vec::with_capacity(loops.len());
+    for l in loops.drain(..) {
+        if let Some(existing) = unique.iter_mut().find(|u| same_loop(u, &l)) {
+            for s in l.sources {
+                if !existing.sources.contains(&s) {
+                    existing.sources.push(s);
+                }
+            }
+            existing.outer = existing.outer || l.outer;
+        } else {
+            unique.push(l);
+        }
+    }
+    *loops = unique;
+}
+
 /// Add the hatches for groups of loops: one per group when separate, otherwise one for all.
 fn add_hatches(s: &mut Session, st: &HatchSettings, groups: Vec<Vec<HatchLoop>>) -> Result<Vec<Handle>> {
-    let groups: Vec<Vec<HatchLoop>> = if st.separate { groups } else { vec![groups.into_iter().flatten().collect()] };
+    let groups: Vec<Vec<HatchLoop>> = if st.separate {
+        let mut unique_groups: Vec<Vec<HatchLoop>> = Vec::new();
+        for mut g in groups {
+            dedup_loops(&mut g);
+            if g.is_empty() {
+                continue;
+            }
+            if !unique_groups.iter().any(|u| u.len() == g.len() && u.iter().zip(&g).all(|(a, b)| same_loop(a, b))) {
+                unique_groups.push(g);
+            }
+        }
+        unique_groups
+    } else {
+        let mut all: Vec<HatchLoop> = groups.into_iter().flatten().collect();
+        dedup_loops(&mut all);
+        vec![all]
+    };
     let mut out = Vec::new();
     for loops in groups.into_iter().filter(|g| !g.is_empty()) {
         let h = s.add_entity(st.hatch(loops))?;
@@ -682,5 +736,59 @@ mod tests {
         assert_eq!(hatch.pattern, "ANSI31");
         assert!(!hatch.solid);
         assert!(hatch.gradient.is_none());
+    }
+
+    #[test]
+    fn repeated_picks_and_handles_in_one_region_do_not_produce_duplicate_loops() {
+        // One internal point
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        s.execute("hatch", &json!({ "points": [[5, 5]], "pattern": "SOLID" })).unwrap();
+        let (_, h1) = only_hatch(&s);
+        assert_eq!(h1.loops.len(), 1);
+
+        // Two different points in the same rectangle
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        s.execute("hatch", &json!({ "points": [[2, 2], [8, 8]], "pattern": "SOLID" })).unwrap();
+        let (_, h2) = only_hatch(&s);
+        assert_eq!(h2.loops.len(), 1, "two points in same region must deduplicate loops");
+
+        // The same point twice
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        s.execute("hatch", &json!({ "points": [[5, 5], [5, 5]], "pattern": "SOLID" })).unwrap();
+        let (_, h3) = only_hatch(&s);
+        assert_eq!(h3.loops.len(), 1, "identical points must deduplicate loops");
+
+        // Three points in the same rectangle
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        s.execute("hatch", &json!({ "points": [[2, 2], [5, 5], [8, 8]], "pattern": "SOLID" })).unwrap();
+        let (_, h4) = only_hatch(&s);
+        assert_eq!(h4.loops.len(), 1);
+
+        // Same boundary handle twice
+        let mut s = Session::new();
+        let r = s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        let handle = r["handle"].as_str().unwrap();
+        s.execute("hatch", &json!({ "handles": [handle, handle], "pattern": "SOLID" })).unwrap();
+        let (_, h5) = only_hatch(&s);
+        assert_eq!(h5.loops.len(), 1, "repeated boundary handle must deduplicate loops");
+
+        // Two points in disjoint rectangles: both regions preserved
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        s.execute("rectang", &json!({ "p1": [20, 0], "p2": [30, 10] })).unwrap();
+        s.execute("hatch", &json!({ "points": [[5, 5], [25, 5]], "pattern": "SOLID" })).unwrap();
+        let (_, h6) = only_hatch(&s);
+        assert_eq!(h6.loops.len(), 2, "disjoint rectangles must both be kept");
+
+        // Gradient with duplicate points in the same rectangle
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        s.execute("gradient", &json!({ "points": [[2, 2], [8, 8]], "color1": "1", "color2": "3" })).unwrap();
+        let (_, hg) = only_hatch(&s);
+        assert_eq!(hg.loops.len(), 1, "gradient with repeated picks in same region must deduplicate loops");
     }
 }
