@@ -385,3 +385,201 @@ fn table_title_is_centred_and_merged() {
     let b = Bounds2::from_points(text);
     assert!((b.center().x - 3.0).abs() < 0.05, "{b:?}");
 }
+
+// ---------- hatch level of detail (on-screen builds, issue #544) ----------
+
+fn pattern_hatch(pattern: &str, scale: f64, (x0, y0, x1, y1): (f64, f64, f64, f64)) -> Hatch {
+    let sq = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| PolyVertex::new(Vec2::new(x, y)));
+    Hatch {
+        pattern: pattern.into(),
+        solid: false,
+        loops: vec![HatchLoop { vertices: sq.to_vec(), outer: true, sources: Vec::new() }],
+        scale,
+        angle: 0.0,
+        associative: false,
+        style: 0,
+        elevation: 0.0,
+        gradient: None,
+        origin: Vec2::ZERO,
+        background: None,
+        pattern_lines: Vec::new(),
+    }
+}
+
+fn drawing_with(h: Hatch) -> Drawing {
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), EntityKind::Hatch(h)).unwrap();
+    d
+}
+
+fn loops_of(h: &Hatch) -> Vec<Vec<Vec2>> {
+    crate::hatch::fill_loops(h, 0.001)
+}
+
+/// On-screen options for a view where one pixel is `px` drawing units.
+fn screen(px: f64, view: Option<Bounds2>) -> Options {
+    Options { tolerance: px / 2.0, min_dash: px * 2.0, view, ..Default::default() }
+}
+
+#[test]
+fn dense_hatch_on_screen_is_one_solid_fill() {
+    // ANSI31 at scale 0.01: lines 0.00125 apart over a 4x4 square. On a 1000 px view of it a
+    // pixel is 0.004, so the lines run together: one solid fill. Plots keep every line.
+    let d = drawing_with(pattern_hatch("ANSI31", 0.01, (0.0, 0.0, 4.0, 4.0)));
+    let plot = build(&d, &Space::Model, &Options::default());
+    assert!(plot.prims.len() > 4000, "plots keep every line: {}", plot.prims.len());
+    let l = build(&d, &Space::Model, &screen(0.004, None));
+    assert_eq!(l.prims.len(), 1);
+    assert_eq!(l.prims[0].kind, Kind::Tris);
+}
+
+#[test]
+fn sparse_dots_keep_their_look_when_lines_are_close() {
+    // Dot rows half a pixel apart but dots five pixels apart along them: not solid colour.
+    let fam = |dashes: &[f64]| cadcraft_doc::library::PatternLine { angle: 0.0, origin: (0.0, 0.0), delta: (0.0, 0.5), dashes: dashes.to_vec() };
+    let sparse = Hatch { pattern_lines: vec![fam(&[0.0, -5.0])], ..pattern_hatch("MYDOTS", 1.0, (0.0, 0.0, 40.0, 40.0)) };
+    assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &sparse, 1.0));
+    // Dots closer than a pixel along rows closer than a pixel: solid.
+    let dense = Hatch { pattern_lines: vec![fam(&[0.0, -0.5])], ..sparse.clone() };
+    assert!(crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &dense, 1.0));
+    // A family with only gaps draws nothing, so it never reads as solid.
+    let blank = Hatch { pattern_lines: vec![fam(&[-0.5])], ..sparse.clone() };
+    assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &blank, 1.0));
+    assert!(crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &blank, &loops_of(&blank), 1.0, None).is_empty());
+    // Full detail is never solid.
+    assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &dense, 0.0));
+}
+
+#[test]
+fn scattered_dot_pattern_reads_solid_once_dots_fill_the_pixels() {
+    // AR-SAND at scale 3/16 (the library pattern is drawn 16x coarser since #643, so this is the
+    // geometry of the old scale 3): three dot families, no single one dense enough on its own at
+    // 0.5 per pixel, but together about four dots on every pixel. Zoomed in 4x the dots stand apart.
+    let h = pattern_hatch("AR-SAND", 3.0 / 16.0, (0.0, 0.0, 100.0, 100.0));
+    assert!(crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, 0.5));
+    assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, 0.125));
+}
+
+#[test]
+fn normal_zoom_pattern_is_unchanged() {
+    // Lines and dash repeats a few pixels long or more: the level of detail changes nothing.
+    for (pattern, px) in [("ANSI31", 0.05), ("ANSI33", 0.05), ("AR-CONC", 0.02), ("AR-SAND", 0.01), ("DOTS", 0.01)] {
+        let h = pattern_hatch(pattern, 1.0, (0.0, 0.0, 6.0, 4.0));
+        let loops = loops_of(&h);
+        let full = crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, 0.0, None);
+        assert!(!full.is_empty(), "{pattern}");
+        assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, px), "{pattern}");
+        assert_eq!(crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, None), full, "{pattern}");
+        // A view covering the whole hatch changes nothing either.
+        let all = Bounds2::new(Vec2::new(-1.0, -1.0), Vec2::new(7.0, 5.0));
+        assert_eq!(crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, Some(&all)), full, "{pattern}");
+    }
+}
+
+#[test]
+fn dash_repeat_under_two_pixels_is_one_run() {
+    // ANSI33's dashed family repeats every 0.1875: at 0.1 per pixel it reads as a continuous line,
+    // drawn as one run per span covering the same length as the full-detail span.
+    let h = pattern_hatch("ANSI33", 1.0, (0.0, 0.0, 6.0, 4.0));
+    let loops = loops_of(&h);
+    let full = crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, 0.0, None);
+    let lod = crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, 0.1, None);
+    assert!(lod.len() < full.len(), "{} vs {}", lod.len(), full.len());
+    assert!(lod.iter().all(|r| r.len() == 2));
+    // The continuous family: identical runs in both.
+    let solid_runs = |v: &[Vec<Vec2>]| v.iter().filter(|r| r.len() == 2).count();
+    assert!(solid_runs(&lod) > 0 && solid_runs(&full) > solid_runs(&lod));
+}
+
+#[test]
+fn hatch_pattern_only_inside_the_view() {
+    // A 40x40 ANSI31 hatch looked at through a 2x2 view in a corner, at full pixel detail.
+    let d = drawing_with(pattern_hatch("ANSI31", 1.0, (0.0, 0.0, 40.0, 40.0)));
+    let full = build(&d, &Space::Model, &Options::default());
+    let far = Some(Bounds2::new(Vec2::new(100.0, 100.0), Vec2::new(110.0, 110.0)));
+    assert_eq!(build(&d, &Space::Model, &Options { view: far, ..Default::default() }).prims.len(), 0);
+    let corner = Bounds2::new(Vec2::new(0.0, 0.0), Vec2::new(2.0, 2.0));
+    let part = build(&d, &Space::Model, &Options { view: Some(corner), ..Default::default() });
+    assert!(!part.prims.is_empty() && part.prims.len() * 10 < full.prims.len(), "{} of {}", part.prims.len(), full.prims.len());
+    // Runs are cut in the family's rotated frame: a 2x2 view at 45° reaches 1 unit out, plus one
+    // line spacing (0.125 × √2 along an axis) from rounding the line range outwards.
+    let near = corner.expand(1.0 + 0.125 * 2f64.sqrt() + 1e-9);
+    assert!(part.verts.iter().all(|p| near.contains(*p)));
+    // Nothing is lost inside the view: the drawn length within an inner box is the same.
+    let inner = Bounds2::new(Vec2::new(0.2, 0.2), Vec2::new(1.8, 1.8));
+    let (a, b) = (length_inside(&full, &inner), length_inside(&part, &inner));
+    assert!(a > 1.0 && (a - b).abs() < 1e-9, "{a} vs {b}");
+}
+
+/// Total length of a display list's polylines inside an axis-aligned box (Liang–Barsky).
+fn length_inside(l: &DisplayList, bx: &Bounds2) -> f64 {
+    let mut total = 0.0;
+    for p in l.prims.iter().filter(|p| p.kind == Kind::Polyline) {
+        for w in l.points(p).windows(2) {
+            let (p0, d) = (w[0], w[1] - w[0]);
+            let (mut t0, mut t1) = (0.0f64, 1.0f64);
+            let mut ok = true;
+            for (pp, q) in [(-d.x, p0.x - bx.min.x), (d.x, bx.max.x - p0.x), (-d.y, p0.y - bx.min.y), (d.y, bx.max.y - p0.y)] {
+                if pp == 0.0 {
+                    ok &= q >= 0.0;
+                } else if pp < 0.0 {
+                    t0 = t0.max(q / pp);
+                } else {
+                    t1 = t1.min(q / pp);
+                }
+            }
+            if ok && t1 > t0 {
+                total += d.len() * (t1 - t0);
+            }
+        }
+    }
+    total
+}
+
+#[test]
+fn big_hatch_seen_through_a_wide_view_is_drawn() {
+    // ANSI31 (0.125 apart) over ±1e5 seen through a 3000-unit view: about 34,000 lines in the
+    // family's rotated frame, past the 20,000-line guard of a whole-hatch sweep, but still drawn
+    // when the sweep is limited to the view.
+    let d = drawing_with(pattern_hatch("ANSI31", 1.0, (-1e5, -1e5, 1e5, 1e5)));
+    let view = Some(Bounds2::new(Vec2::new(-1500.0, -1500.0), Vec2::new(1500.0, 1500.0)));
+    let l = build(&d, &Space::Model, &Options { view, ..Default::default() });
+    assert!(l.prims.len() > 20_000, "{}", l.prims.len());
+}
+
+#[test]
+fn hatch_in_a_squashed_block_keeps_lines_that_show() {
+    // A block hatch inserted 100x wider than tall: along x its lines are spread far apart on
+    // screen, so it is drawn with lines, not merged into a fill.
+    let mut d = Drawing::new_imperial();
+    let mut blk = cadcraft_doc::Block::new("B");
+    let mut e = cadcraft_doc::Entity::new(cadcraft_doc::Handle(1), EntityKind::Hatch(pattern_hatch("ANSI31", 1.0, (0.0, 0.0, 4.0, 4.0))));
+    e.common = Common::default();
+    blk.entities.push(e);
+    d.blocks.insert("B".into(), std::sync::Arc::new(blk));
+    let ins = cadcraft_doc::Insert {
+        block: "B".into(),
+        insert: Vec3::new(0.0, 0.0, 0.0),
+        scale: Vec3::new(100.0, 1.0, 1.0),
+        rotation: 0.0,
+        attribs: vec![],
+        cols: 1,
+        rows: 1,
+        col_spacing: 0.0,
+        row_spacing: 0.0,
+    };
+    d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).unwrap();
+    // One pixel = 1 unit: 0.125 spacing × 100 along x is far more than a pixel.
+    let l = build(&d, &Space::Model, &screen(1.0, None));
+    assert!(l.prims.iter().all(|p| p.kind != Kind::Tris), "merged into a fill");
+    assert!(l.prims.len() > 10, "{}", l.prims.len());
+}
+
+#[test]
+fn max_scale_is_the_most_stretched_axis() {
+    let m = Mat3::scale(1.0, 0.1);
+    assert!((max_scale(&m) - 1.0).abs() < 1e-12);
+    let r = Mat3::rotate(0.7).then(Mat3::scale(2.0, 2.0));
+    assert!((max_scale(&r) - 2.0).abs() < 1e-12);
+    assert!((max_scale(&Mat3::IDENTITY) - 1.0).abs() < 1e-12);
+}

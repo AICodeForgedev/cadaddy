@@ -38,7 +38,10 @@ impl Xf {
 #[derive(Default)]
 pub struct CanvasState {
     pub list: Option<DisplayList>,
-    key: (u64, u64, i32, bool, usize),
+    key: (u64, u64, i32, i32, bool, usize),
+    /// The area `list` was built for (hatch patterns exist only inside it); a view leaving it
+    /// rebuilds the list.
+    window: Option<Bounds2>,
     /// Bumped whenever `list` is rebuilt (identifies it for [`PrimIndex`]).
     list_gen: u64,
     prim_index: PrimIndex,
@@ -142,30 +145,56 @@ fn color32(c: Rgb) -> Color32 {
     Color32::from_rgb(c.0, c.1, c.2)
 }
 
-fn ensure_list(app: &mut CadApp, px: f64) {
+/// Rebuild the display list when needed. `px`: drawing units per pixel in the current view;
+/// `views`: every area on screen that shows the list (the current view, other model tiles) with
+/// its drawing units per pixel.
+fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
     let Ok(st) = app.session.state() else { return };
-    // Rebuild when the drawing changes or the zoom moves by more than 2x (tessellation band).
-    let band = px.max(1e-300).log2().floor() as i32;
-    let key = (st.uid, st.revision, band, app.session.settings.lwdisplay, std::sync::Arc::as_ptr(&st.doc) as usize);
-    if app.canvas.list.is_some() && app.canvas.key == key {
+    // Rebuild when the drawing changes, the zoom moves by more than 2x (tessellation band) or a
+    // view leaves the area the list was built for.
+    let band = |px: f64| px.max(1e-300).log2().floor() as i32;
+    // Hatch level of detail follows the finest view showing the list.
+    let lod_band = views.iter().map(|v| band(v.1)).fold(band(px), i32::min);
+    let key = (st.uid, st.revision, band(px), lod_band, app.session.settings.lwdisplay, std::sync::Arc::as_ptr(&st.doc) as usize);
+    let visible = views.iter().fold(Bounds2::EMPTY, |acc, v| acc.union(&v.0));
+    let inside = app.canvas.window.is_none_or(|w| visible.is_empty() || w.contains_box(&visible));
+    if app.canvas.list.is_some() && app.canvas.key == key && inside {
         return;
     }
     let t0 = crate::now_ms();
     let opts = cadcraft_render::Options {
-        tolerance: px * 0.5 * 2f64.powi(band) / px.max(1e-300) * px.min(1.0e300),
-        min_dash: px * 2.0,
+        tolerance: 2f64.powi(band(px)) * 0.5,
+        // Two pixels at the band's finest zoom: the list serves every zoom in the band, so its
+        // level of detail must hold at the finest one.
+        min_dash: 2f64.powi(lod_band) * 2.0,
         text: true,
         fill: true,
         lineweights: app.session.settings.lwdisplay,
         view_height: st.paper_view().height,
         plot_style_table: None,
+        view: build_window(views),
     };
-    let opts = cadcraft_render::Options { tolerance: 2f64.powi(band) * 0.5, ..opts };
     let space = st.space.clone();
     app.canvas.list = Some(cadcraft_render::build(&st.doc, &space, &opts));
     app.canvas.key = key;
+    app.canvas.window = opts.view;
     app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);
     app.canvas.build_ms = crate::now_ms() - t0;
+}
+
+/// The area a display list is built for: each view with half its larger side of margin all
+/// round (panning by up to that much doesn't rebuild), joined. `None` (everything) when a view
+/// isn't usable.
+fn build_window(views: &[(Bounds2, f64)]) -> Option<Bounds2> {
+    let mut w = Bounds2::EMPTY;
+    for (v, _) in views {
+        let side = v.width().max(v.height());
+        if v.is_empty() || !side.is_finite() {
+            return None;
+        }
+        w = w.union(&v.expand(side * 0.5));
+    }
+    (!w.is_empty()).then_some(w)
 }
 
 /// Grid spacing adapted to the zoom: multiply the unit until lines are at least `min_px` apart.
@@ -330,7 +359,7 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        (c.key, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay).hash(&mut h);
+        (c.key, c.list_gen, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay).hash(&mut h);
         h.finish()
     };
     if c.mesh_key != Some(key) {
@@ -852,7 +881,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // ---------- paint ----------
     painter.rect_filled(rect, 0.0, t.canvas);
     let t0 = crate::now_ms();
-    ensure_list(app, 1.0 / xf_paper.scale);
+    let mut views = vec![(xf_paper.world_bounds(), 1.0 / xf_paper.scale)];
+    views.extend(tiles.iter().filter(|(r, tile)| !tile.active && r.width() >= 1.0 && r.height() >= 1.0).map(|(r, tile)| {
+        let xf = tile_xf(*r, tile);
+        (xf.world_bounds(), 1.0 / xf.scale)
+    }));
+    ensure_list(app, 1.0 / xf_paper.scale, &views);
     let sheet = app.canvas.list.as_ref().and_then(|l| l.sheet);
     let bg = match sheet {
         Some(sh) => {
@@ -1056,6 +1090,11 @@ fn tile_rects(app: &CadApp, full: Rect) -> Vec<(Rect, cadcraft_engine::ModelTile
         .collect()
 }
 
+/// The world ↔ screen transform of a model tile drawn in `r`.
+fn tile_xf(r: Rect, tile: &cadcraft_engine::ModelTile) -> Xf {
+    Xf { rect: r, center: tile.view.center, scale: f64::from(r.height()) / tile.view.height.max(1e-12) }
+}
+
 /// The tiles other than the current one (each with its own view, clipped to it), then the
 /// tile borders: thin, and heavy around the current tile.
 fn draw_tiles(app: &CadApp, ui: &egui::Ui, tiles: &[(Rect, cadcraft_engine::ModelTile)]) {
@@ -1063,7 +1102,7 @@ fn draw_tiles(app: &CadApp, ui: &egui::Ui, tiles: &[(Rect, cadcraft_engine::Mode
     let bg = Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b());
     for (r, tile) in tiles.iter().filter(|(r, tile)| !tile.active && r.width() >= 1.0 && r.height() >= 1.0) {
         let p = ui.painter_at(*r);
-        let xf = Xf { rect: *r, center: tile.view.center, scale: f64::from(r.height()) / tile.view.height.max(1e-12) };
+        let xf = tile_xf(*r, tile);
         p.rect_filled(*r, 0.0, t.canvas);
         draw_grid(app, &p, &xf);
         if let Some(list) = &app.canvas.list {

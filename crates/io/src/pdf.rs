@@ -301,7 +301,16 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<SheetPage> {
         Space::Model => true,
     });
     let plot_style_table = cadcraft_doc::plot_style_table(d, &page.plot_style_table).map(std::sync::Arc::new);
-    let ropts = cadcraft_render::Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights, view_height: 0.0, plot_style_table };
+    let ropts = cadcraft_render::Options {
+        tolerance: 0.001,
+        min_dash: 0.0,
+        text: true,
+        fill: true,
+        lineweights,
+        view_height: 0.0,
+        plot_style_table,
+        view: None,
+    };
     let k = unit_mm * PT_PER_MM;
     let window = o.window.filter(|w| matches!(space, Space::Model) && !w.is_empty());
     let fit = o.fit.unwrap_or(window.is_some() || matches!(space, Space::Model));

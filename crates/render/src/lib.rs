@@ -185,12 +185,26 @@ pub struct Options {
     /// Plot style table to draw with. When `None`, [`build`] of a layout whose page setup has
     /// "Display plot styles" on uses the layout's table; [`build_plot`] uses none.
     pub plot_style_table: Option<std::sync::Arc<cadcraft_doc::PlotStyleTable>>,
+    /// The area being looked at (world units of the space being built), for on-screen builds:
+    /// hatch patterns are only generated inside it. `None` = everywhere (plots, exports, picks).
+    pub view: Option<Bounds2>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights: false, view_height: 0.0, plot_style_table: None }
+        Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights: false, view_height: 0.0, plot_style_table: None, view: None }
     }
+}
+
+/// The largest axis scale of a transform's linear part (its largest singular value): a length
+/// `l` in the transform's own units measures at most `l * max_scale` after it, in any direction.
+/// A uniform scale gives its factor, where [`Mat3::scale_factor`] gives the mean of the axes.
+fn max_scale(m: &Mat3) -> f64 {
+    let (a, b, c, d) = (m.a, m.b, m.c, m.d);
+    let e = (a * a + b * b + c * c + d * d) / 2.0;
+    let f = (((a * a + b * b - c * c - d * d) / 2.0).powi(2) + (a * c + b * d).powi(2)).sqrt();
+    let s = (e + f).max(0.0).sqrt();
+    if s.is_finite() { s } else { 0.0 }
 }
 
 /// Graphics state inherited through block references.

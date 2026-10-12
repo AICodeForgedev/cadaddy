@@ -1,10 +1,16 @@
 //! Hatch drawing: island detection picks the boundary loops that take part, then a solid,
 //! gradient or background fill (even-odd triangles) and the pattern lines (each pattern line
 //! family swept across the boundary, even-odd clipped, then dashed).
+//!
+//! On-screen builds get a level of detail (`Options::min_dash` > 0 is two pixels, `Options::view`
+//! the area being looked at): a pattern whose lines run together on screen is drawn as a solid
+//! fill of its boundary ([`reads_solid`]), a dash or dot repeat under two pixels as a continuous
+//! line (as linetypes already are), and nothing is generated outside the view. Plots, exports and
+//! picks pass `min_dash = 0` and `view = None` and get every line.
 
-use super::{Builder, Ctx, Ink, fill, ink};
+use super::{Builder, Ctx, Ink, fill, ink, max_scale};
 use cadcraft_color::{Color, Rgb};
-use cadcraft_doc::library::pattern_for;
+use cadcraft_doc::library::{PatternLine, pattern_for};
 use cadcraft_doc::{Drawing, Entity, Gradient, Hatch};
 use cadcraft_geom::{Bounds2, Polyline, Vec2, point_in_polygon};
 
@@ -14,7 +20,12 @@ pub(super) fn draw(b: &mut Builder, ctx: &Ctx, e: &Entity, h: &Hatch, rgb: Ink, 
     // Gradient and background colours given ByLayer follow the hatch's own layer.
     let layer = if e.common.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { e.common.layer.as_str() };
     let layer_color = ctx.layer_color(layer).unwrap_or(Color::Index(7));
-    if h.solid || h.pattern.eq_ignore_ascii_case("SOLID") || h.gradient.is_some() {
+    // Level of detail: a pixel in the hatch's own units, along its most stretched axis (so lines
+    // that show apart in any direction are never merged); 0 = full detail.
+    let stretch = max_scale(&ctx.xf);
+    let px = if stretch > 1e-12 { b.opts.min_dash / 2.0 / stretch } else { 0.0 };
+    let dense = b.opts.fill && reads_solid(ctx.d, h, px);
+    if h.solid || h.pattern.eq_ignore_ascii_case("SOLID") || h.gradient.is_some() || dense {
         if b.opts.fill {
             let tris = fill::triangulate_evenodd(&loops);
             match &h.gradient {
@@ -29,7 +40,12 @@ pub(super) fn draw(b: &mut Builder, ctx: &Ctx, e: &Entity, h: &Hatch, rgb: Ink, 
     {
         b.tris(ctx, ink(bg, layer_color, ctx.block_color), &fill::triangulate_evenodd(&loops));
     }
-    for seg in pattern_lines(ctx.d, h, &loops) {
+    // The area being looked at, in the hatch's units.
+    let view = b.opts.view.and_then(|v| {
+        let inv = ctx.xf.inverse()?;
+        Some(Bounds2::from_points(v.corners().iter().map(|p| inv.apply(*p))))
+    });
+    for seg in pattern_lines(ctx.d, h, &loops, px, view.as_ref()) {
         if seg.len() == 1 {
             if let Some(p) = seg.first() {
                 b.point(ctx, rgb, *p);
@@ -208,21 +224,86 @@ impl Field {
 
 /// Upper bound on the line families drawn from a pattern definition read from a file.
 const MAX_PATTERN_LINES: usize = 1024;
+/// Upper bound on the runs of one hatch (AutoCAD's HPMAXLINES default), checked as runs are made
+/// (a hostile or mis-scaled pattern can't exhaust memory). A view-limited build makes at most the
+/// runs of a full build, so it never leaves out runs that a full build draws.
+const MAX_RUNS: usize = 1_000_000;
+/// Upper bound on the lines one family sweeps over the whole hatch; past it the family is left
+/// out (a full-detail build of a pattern far too fine for its area).
+const MAX_FAMILY_LINES: i64 = 20_000;
+/// The same bound when the sweep is limited to a view: the count then follows the view's size
+/// on screen, and lines closer than a pixel already read as solid, so only very large displays
+/// come near it.
+const MAX_VIEW_FAMILY_LINES: i64 = 100_000;
+/// Line families closer than this on screen (pixels) run together: the hatch reads as solid.
+pub const SOLID_SPACING_PX: f64 = 1.0;
+/// Average marks per pixel from which a pattern reads as solid (scattered marks leave about
+/// e^-2 ≈ 14% of the pixels empty there).
+pub const SOLID_COVERAGE: f64 = 2.0;
 
-/// Upper bound on line runs drawn for one hatch (AutoCAD's HPMAXLINES default): a pattern far
-/// too dense for its area stops here instead of exhausting memory.
-const MAX_HATCH_SEGMENTS: usize = 1_000_000;
-
-/// Hatch line runs in world coordinates (single-point runs are dots) for the fill `loops`.
-pub fn pattern_lines(d: &Drawing, h: &Hatch, loops: &[Vec<Vec2>]) -> Vec<Vec<Vec2>> {
-    // The lines the file defined (as its author's CAD drew them), else the library's pattern of
-    // that name, else ANSI31.
-    let lines = if h.pattern_lines.is_empty() {
+/// The line families a hatch draws with: the lines its file defined (as its author's CAD drew
+/// them), else the library's pattern of that name as drawn in `d`, else ANSI31.
+fn lines_of(d: &Drawing, h: &Hatch) -> Vec<PatternLine> {
+    if h.pattern_lines.is_empty() {
         pattern_for(d, &h.pattern).or_else(|| pattern_for(d, "ANSI31")).map(|p| p.lines).unwrap_or_default()
     } else {
         h.pattern_lines.iter().take(MAX_PATTERN_LINES).cloned().collect()
-    };
-    let scale = if h.scale.is_finite() && h.scale > 1e-9 { h.scale } else { 1.0 };
+    }
+}
+
+/// The hatch's pattern scale (1 when unusable).
+fn scale_of(h: &Hatch) -> f64 {
+    if h.scale.is_finite() && h.scale > 1e-9 { h.scale } else { 1.0 }
+}
+
+/// True when, at `px` hatch units per pixel, the pattern covers its area on screen, so drawing
+/// it line by line would fill (nearly) every pixel anyway. Each line, dash or dot is drawn at
+/// least a pixel wide, so that is the case when
+/// - some line family has its lines closer than [`SOLID_SPACING_PX`] and no gap along them a
+///   pixel or longer (continuous lines, or a repeat that reads as a continuous line), or
+/// - the families together put on average [`SOLID_COVERAGE`] or more marks on every pixel
+///   (dense dot or dash patterns made of several families).
+///
+/// A sparse dot or dash pattern keeps its look. `px <= 0` (full detail) is never solid.
+pub fn reads_solid(d: &Drawing, h: &Hatch, px: f64) -> bool {
+    if !(px.is_finite() && px > 0.0) {
+        return false;
+    }
+    let scale = scale_of(h);
+    let mut coverage = 0.0;
+    for f in lines_of(d, h) {
+        let spacing = (f.delta.1 * scale).abs();
+        if !(spacing.is_finite() && spacing > 0.0) {
+            continue;
+        }
+        let pat_len: f64 = f.dashes.iter().map(|d| (d * scale).abs()).sum();
+        // The share of a line inked on screen (a dash or dot is at least a pixel long there).
+        let ink: f64 = f.dashes.iter().filter(|d| **d >= 0.0).map(|d| (d * scale).max(px)).sum();
+        let inked = if f.dashes.is_empty() || (ink > 0.0 && pat_len < 2.0 * px) {
+            1.0
+        } else if pat_len > 0.0 {
+            (ink / pat_len).min(1.0)
+        } else {
+            0.0
+        };
+        let gap = f.dashes.iter().filter(|d| **d < 0.0).map(|d| (d * scale).abs()).fold(0.0, f64::max);
+        let draws = f.dashes.is_empty() || ink > 0.0;
+        if spacing < SOLID_SPACING_PX * px && draws && (inked >= 1.0 || gap < px) {
+            return true;
+        }
+        coverage += inked * px / spacing;
+    }
+    coverage.is_finite() && coverage >= SOLID_COVERAGE
+}
+
+/// Hatch line runs in world coordinates (single-point runs are dots) for the fill `loops`.
+/// `px`: a pixel in the hatch's units for the level of detail (a dash or dot repeat under two
+/// pixels is one continuous run); 0 = full detail, as plots, exports and picks use. `view`: only
+/// the part of the hatch inside it is generated; `None` = all of it.
+pub fn pattern_lines(d: &Drawing, h: &Hatch, loops: &[Vec<Vec2>], px: f64, view: Option<&Bounds2>) -> Vec<Vec<Vec2>> {
+    let lines = lines_of(d, h);
+    let scale = scale_of(h);
+    let px = if px.is_finite() && px > 0.0 { px } else { 0.0 };
     let mut out = Vec::new();
     for fam in &lines {
         let ang = fam.angle.to_radians() + h.angle;
@@ -233,77 +314,118 @@ pub fn pattern_lines(d: &Drawing, h: &Hatch, loops: &[Vec<Vec2>]) -> Vec<Vec<Vec
             continue;
         }
         let dashes: Vec<f64> = fam.dashes.iter().map(|d| d * scale).collect();
-        family(loops, origin, ang, delta, spacing, &dashes, &mut out);
-        if out.len() >= MAX_HATCH_SEGMENTS {
+        Family { origin, ang, delta, spacing, dashes: &dashes }.sweep(loops, px, view, &mut out);
+        if out.len() >= MAX_RUNS {
             break;
         }
     }
     out
 }
 
-fn family(loops: &[Vec<Vec2>], origin: Vec2, ang: f64, delta: Vec2, spacing: f64, dashes: &[f64], out: &mut Vec<Vec<Vec2>>) {
-    // Work in a frame where the family's lines are horizontal.
-    let to_local = |p: Vec2| (p - origin).rotate(-ang);
-    let to_world = |p: Vec2| origin + p.rotate(ang);
-    let local: Vec<Vec<Vec2>> = loops.iter().map(|l| l.iter().map(|p| to_local(*p)).collect()).collect();
-    let bb = Bounds2::from_points(local.iter().flatten().copied());
-    if bb.is_empty() {
-        return;
+/// One pattern line family, scaled and placed: parallel lines `spacing` apart through `origin`
+/// at angle `ang`, each shifted along itself by `delta`'s along-line part from the last.
+struct Family<'a> {
+    origin: Vec2,
+    ang: f64,
+    delta: Vec2,
+    spacing: f64,
+    dashes: &'a [f64],
+}
+
+impl Family<'_> {
+    /// Into the frame where the family's lines are horizontal.
+    fn to_local(&self, p: Vec2) -> Vec2 {
+        (p - self.origin).rotate(-self.ang)
     }
-    let shift_per_line = delta.rotate(-ang).x;
-    let k0 = (bb.min.y / spacing).floor() as i64;
-    let k1 = (bb.max.y / spacing).ceil() as i64;
-    if k1.saturating_sub(k0) > 20_000 {
-        return;
+    fn to_world(&self, p: Vec2) -> Vec2 {
+        self.origin + p.rotate(self.ang)
     }
-    let pat_len: f64 = dashes.iter().map(|d| d.abs()).sum();
-    for k in k0..=k1 {
-        if out.len() >= MAX_HATCH_SEGMENTS {
+
+    fn sweep(&self, loops: &[Vec<Vec2>], px: f64, view: Option<&Bounds2>, out: &mut Vec<Vec<Vec2>>) {
+        let local: Vec<Vec<Vec2>> = loops.iter().map(|l| l.iter().map(|p| self.to_local(*p)).collect()).collect();
+        let bb = Bounds2::from_points(local.iter().flatten().copied());
+        if bb.is_empty() {
             return;
         }
-        let y = k as f64 * spacing;
-        let mut xs: Vec<f64> = Vec::new();
-        for l in &local {
-            let n = l.len();
-            for i in 0..n {
-                let (Some(a), Some(b)) = (l.get(i), l.get((i + 1) % n)) else { continue };
-                if (a.y > y) != (b.y > y) {
-                    xs.push(a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y));
+        // The lines and spans swept: the boundary's extent, cut to the view's (its corners in
+        // this frame) when there is one.
+        let (mut lo, mut hi) = (bb.min, bb.max);
+        if let Some(v) = view {
+            let vb = Bounds2::from_points(v.corners().iter().map(|p| self.to_local(*p)));
+            if vb.is_empty() || !vb.intersects(&bb) {
+                return;
+            }
+            lo = Vec2::new(lo.x.max(vb.min.x), lo.y.max(vb.min.y));
+            hi = Vec2::new(hi.x.min(vb.max.x), hi.y.min(vb.max.y));
+        }
+        let shift_per_line = self.delta.rotate(-self.ang).x;
+        let k0 = (lo.y / self.spacing).floor() as i64;
+        let k1 = (hi.y / self.spacing).ceil() as i64;
+        let max_lines = if view.is_some() { MAX_VIEW_FAMILY_LINES } else { MAX_FAMILY_LINES };
+        if k1.saturating_sub(k0) > max_lines {
+            return;
+        }
+        let pat_len: f64 = self.dashes.iter().map(|d| d.abs()).sum();
+        // Level of detail: a whole repeat under two pixels reads as a continuous line (when the
+        // family draws anything at all).
+        let draws = self.dashes.iter().any(|d| *d >= 0.0);
+        let solid_line = self.dashes.is_empty() || pat_len < 1e-12 || (px > 0.0 && pat_len < 2.0 * px && draws);
+        for k in k0..=k1 {
+            if out.len() >= MAX_RUNS {
+                return;
+            }
+            let y = k as f64 * self.spacing;
+            let mut xs: Vec<f64> = Vec::new();
+            for l in &local {
+                let n = l.len();
+                for i in 0..n {
+                    let (Some(a), Some(b)) = (l.get(i), l.get((i + 1) % n)) else { continue };
+                    if (a.y > y) != (b.y > y) {
+                        xs.push(a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y));
+                    }
+                }
+            }
+            xs.sort_by(f64::total_cmp);
+            let offset = shift_per_line * k as f64;
+            for span in xs.chunks(2) {
+                let [x0, x1] = span else { continue };
+                let (x0, x1) = if view.is_some() { (x0.max(lo.x), x1.min(hi.x)) } else { (*x0, *x1) };
+                if view.is_some() && x1 <= x0 {
+                    continue;
+                }
+                if solid_line {
+                    out.push(vec![self.to_world(Vec2::new(x0, y)), self.to_world(Vec2::new(x1, y))]);
+                } else {
+                    self.dash(x0, x1, y, offset, pat_len, out);
                 }
             }
         }
-        xs.sort_by(f64::total_cmp);
-        let offset = shift_per_line * k as f64;
-        for span in xs.chunks(2) {
-            let [x0, x1] = span else { continue };
-            if dashes.is_empty() || pat_len < 1e-12 {
-                out.push(vec![to_world(Vec2::new(*x0, y)), to_world(Vec2::new(*x1, y))]);
-                continue;
-            }
-            // Dash phase anchored at x = offset.
-            let start_rep = ((x0 - offset) / pat_len).floor();
-            let mut x = offset + start_rep * pat_len;
-            let mut guard = 0;
-            'outer: while x < *x1 {
-                for d in dashes {
-                    guard += 1;
-                    if guard > 100_000 || out.len() >= MAX_HATCH_SEGMENTS {
-                        break 'outer;
+    }
+
+    /// The dashes and dots of the span `x0..x1` of the line at `y`, phase anchored at x = `offset`.
+    fn dash(&self, x0: f64, x1: f64, y: f64, offset: f64, pat_len: f64, out: &mut Vec<Vec<Vec2>>) {
+        let start_rep = ((x0 - offset) / pat_len).floor();
+        let mut x = offset + start_rep * pat_len;
+        let mut guard = 0;
+        'outer: while x < x1 {
+            for d in self.dashes {
+                guard += 1;
+                if guard > 100_000 || out.len() >= MAX_RUNS {
+                    break 'outer;
+                }
+                let len = d.abs();
+                if *d > 0.0 {
+                    let a = x.max(x0);
+                    let b = (x + len).min(x1);
+                    if b > a {
+                        out.push(vec![self.to_world(Vec2::new(a, y)), self.to_world(Vec2::new(b, y))]);
                     }
-                    let len = d.abs();
-                    if *d > 0.0 {
-                        let a = x.max(*x0);
-                        let b = (x + len).min(*x1);
-                        if b > a {
-                            out.push(vec![to_world(Vec2::new(a, y)), to_world(Vec2::new(b, y))]);
-                        }
-                    } else if *d == 0.0 && x >= *x0 && x <= *x1 {
-                        out.push(vec![to_world(Vec2::new(x, y))]);
-                    }
-                    x += len;
-                    if x >= *x1 {
-                        break 'outer;
-                    }
+                } else if *d == 0.0 && x >= x0 && x <= x1 {
+                    out.push(vec![self.to_world(Vec2::new(x, y))]);
+                }
+                x += len;
+                if x >= x1 {
+                    break 'outer;
                 }
             }
         }
