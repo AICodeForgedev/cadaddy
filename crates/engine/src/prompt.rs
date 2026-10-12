@@ -178,8 +178,11 @@ pub trait Interactive: Send {
 pub struct Drag {
     pub handles: Vec<Handle>,
     pub matrix: Mat3,
-    /// Rubber-band geometry drawn as well (the base-to-cursor line).
+    /// Rubber-band geometry drawn as well (the base-to-cursor line), and dragged objects the
+    /// matrix can't draw (text MIRROR keeps readable), already transformed.
     pub extra: Vec<EntityKind>,
+    /// The dragged objects are the clipboard's ([`Session::clipboard`]), not `handles`.
+    pub clipboard: bool,
 }
 
 /// Parse a typed point: `x,y[,z]`, `@dx,dy`, `@dist<angle`, `dist<angle`, `#x,y` (absolute),

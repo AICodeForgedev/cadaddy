@@ -609,6 +609,12 @@ impl Interactive for PasteM {
             _ => Ok(Step::Continue),
         }
     }
+    fn drag(&self, s: &Session, c: Vec2) -> Option<crate::prompt::Drag> {
+        if self.mode == PasteMode::Orig || s.clipboard.is_empty() {
+            return None;
+        }
+        Some(crate::prompt::Drag { handles: Vec::new(), matrix: Mat3::translate(c - s.clipboard_base), extra: Vec::new(), clipboard: true })
+    }
     fn preview(&self, s: &Session, c: Vec2) -> Vec<cadcraft_doc::EntityKind> {
         let m = Mat3::translate(c - s.clipboard_base);
         s.clipboard

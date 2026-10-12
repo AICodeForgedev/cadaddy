@@ -426,22 +426,35 @@ fn draw_highlight_gpu(
 /// zoom band changes), and each frame only the transform in the view uniform moves. Rebuilding
 /// the transformed copies as egui shapes every frame was slow with heavy selections and could
 /// overflow the GPU buffer limit.
-fn draw_drag_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, doc: &cadcraft_doc::Drawing, drag: &cadcraft_engine::Drag, bg: Rgb) {
+/// `clipboard` is the session's clipboard and its serial (dragged when `drag.clipboard`, by PASTE).
+fn draw_drag_gpu(
+    c: &mut CanvasState,
+    p: &egui::Painter,
+    xf: &Xf,
+    doc: &cadcraft_doc::Drawing,
+    drag: &cadcraft_engine::Drag,
+    clipboard: (&[cadcraft_doc::Entity], u64),
+    bg: Rgb,
+) {
     // Tessellate for a power-of-two zoom band so zooming mid-drag rebuilds only every 2x.
     let band = xf.scale.max(1e-300).log2().round() as i32;
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         (c.key, band, bg.0, bg.1, bg.2, &drag.handles).hash(&mut h);
+        if drag.clipboard {
+            clipboard.1.hash(&mut h);
+        }
         h.finish()
     };
     if c.drag_key != Some(key) {
         let band_scale = 2f64.powi(band);
-        let list = cadcraft_render::build_entities(
-            doc,
-            drag.handles.iter().filter_map(|h| doc.entity(*h)).map(|e| e.as_ref()),
-            &cadcraft_render::Options { tolerance: 0.5 / band_scale, min_dash: 2.0 / band_scale, ..Default::default() },
-        );
+        let opts = cadcraft_render::Options { tolerance: 0.5 / band_scale, min_dash: 2.0 / band_scale, ..Default::default() };
+        let list = if drag.clipboard {
+            cadcraft_render::build_entities(doc, clipboard.0.iter(), &opts)
+        } else {
+            cadcraft_render::build_entities(doc, drag.handles.iter().filter_map(|h| doc.entity(*h)).map(|e| e.as_ref()), &opts)
+        };
         let origin = if list.bounds.is_empty() { Vec2::ZERO } else { list.bounds.center() };
         let mesh = crate::gpu::build_mesh(&list, origin, bg, false);
         if let Ok(mut slot) = c.drag_slot.lock() {
@@ -1174,13 +1187,15 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     }
     // Rubber band preview of the active command.
-    let drag = match (app.canvas.cursor, app.canvas.gpu.is_some() && sheet.is_none()) {
+    // `xf` is the space being edited: paper space, or model space inside the active viewport.
+    let drag = match (app.canvas.cursor, app.canvas.gpu.is_some()) {
         (Some(c), true) => app.session.drag(c),
         _ => None,
     };
     if let Some((drag, extra)) = drag {
         if let Ok(st) = app.session.state() {
-            draw_drag_gpu(&mut app.canvas, &painter, &xf, &st.doc, &drag, bg);
+            let serial = app.session.clipboard_source.as_ref().map_or(0, |c| c.serial);
+            draw_drag_gpu(&mut app.canvas, &painter, &xf, &st.doc, &drag, (&app.session.clipboard, serial), bg);
             let list = cadcraft_render::build_entities(
                 &st.doc,
                 extra.iter(),
