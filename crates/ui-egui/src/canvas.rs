@@ -697,6 +697,31 @@ fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf, ctx: &egui::Context) ->
     r.point
 }
 
+/// The vertical wheel scroll this frame that zooms, in points, read from the raw wheel events so
+/// each notch zooms by its whole step at once, as in standard CAD (#660). egui's smoothed delta
+/// spreads a notch over several frames, so quick notches lag behind the wheel. Units convert to
+/// points as egui does (a line is `line_scroll_speed` points, a page the view's height), and
+/// events egui turns into a pinch zoom (⌘/Ctrl) or a sideways scroll (⇧) are left out, as it does.
+fn wheel_zoom_points(events: &[egui::Event], opts: &egui::InputOptions, page: f32) -> f32 {
+    let points: f32 = events
+        .iter()
+        .filter_map(|e| match e {
+            egui::Event::MouseWheel { unit, delta, modifiers, .. }
+                if !modifiers.matches_any(opts.zoom_modifier) && !modifiers.matches_any(opts.horizontal_scroll_modifier) =>
+            {
+                let per = match unit {
+                    egui::MouseWheelUnit::Point => 1.0,
+                    egui::MouseWheelUnit::Line => opts.line_scroll_speed,
+                    egui::MouseWheelUnit::Page => page,
+                };
+                Some(delta.y * per)
+            }
+            _ => None,
+        })
+        .sum();
+    if points.is_finite() { points } else { 0.0 }
+}
+
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     let full = ui.available_rect_before_wrap();
@@ -743,25 +768,28 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
     });
-    if inside && scroll != egui::Vec2::ZERO {
-        if app.canvas.scroll_pans {
-            // Two-finger swipe pans: the drawing follows the fingers, like a middle-drag.
-            // Pinch (and Cmd+scroll) still zoom via `zoom_delta` below.
-            if let Ok(st) = app.session.state_mut() {
-                let v = st.view();
-                st.set_view_quiet(cadcraft_engine::View {
-                    center: v.center - Vec2::new(f64::from(scroll.x) / scale, -f64::from(scroll.y) / scale),
-                    height: v.height,
-                });
-            }
-        } else if scroll.y.abs() > 0.0
-            && let Some(hp) = hover_pos
-        {
-            // Zoom with the mouse wheel about the cursor.
-            let f = app.session.wheel_zoom_factor(f64::from(scroll.y));
-            let about = xf.to_world(hp);
-            let _ = app.session.zoom_about(f, about);
+    if inside && app.canvas.scroll_pans && scroll != egui::Vec2::ZERO {
+        // Two-finger swipe pans: the drawing follows the fingers, like a middle-drag.
+        // Pinch (and Cmd+scroll) still zoom via `zoom_delta` below.
+        if let Ok(st) = app.session.state_mut() {
+            let v = st.view();
+            st.set_view_quiet(cadcraft_engine::View {
+                center: v.center - Vec2::new(f64::from(scroll.x) / scale, -f64::from(scroll.y) / scale),
+                height: v.height,
+            });
         }
+    }
+    let opts = ui.ctx().options(|o| o.input_options);
+    let wheel = ui.input(|i| wheel_zoom_points(&i.raw.events, &opts, rect.height()));
+    if inside
+        && !app.canvas.scroll_pans
+        && wheel != 0.0
+        && let Some(hp) = hover_pos
+    {
+        // Zoom with the mouse wheel about the cursor, each notch at once.
+        let f = app.session.wheel_zoom_factor(f64::from(wheel));
+        let about = xf.to_world(hp);
+        let _ = app.session.zoom_about(f, about);
     }
     let zoom_pinch = ui.input(|i| i.zoom_delta());
     if inside
@@ -1702,6 +1730,49 @@ mod tests {
         // A rebuilt list (new generation) is re-indexed.
         let b = list(&[3, 9]);
         assert_eq!(ix.prims(2, &b, &hs(&[9, 3])), vec![0, 1]);
+    }
+
+    fn wheel(unit: egui::MouseWheelUnit, dy: f32, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::MouseWheel { unit, delta: vec2(0.0, dy), phase: egui::TouchPhase::Move, modifiers }
+    }
+
+    /// Wheel events convert to points as egui does; ⌘/Ctrl (egui's pinch zoom) and ⇧ (a sideways
+    /// scroll) don't zoom here, and every notch of the frame counts (#660).
+    #[test]
+    fn wheel_zoom_reads_every_notch_of_the_frame() {
+        use egui::{Modifiers, MouseWheelUnit as U};
+        let o = egui::InputOptions::default();
+        let none = Modifiers::NONE;
+        assert_eq!(wheel_zoom_points(&[wheel(U::Line, 1.0, none)], &o, 500.0), o.line_scroll_speed);
+        assert_eq!(wheel_zoom_points(&[wheel(U::Line, -2.0, none)], &o, 500.0), -2.0 * o.line_scroll_speed);
+        assert_eq!(wheel_zoom_points(&[wheel(U::Point, 7.5, none)], &o, 500.0), 7.5);
+        assert_eq!(wheel_zoom_points(&[wheel(U::Page, 1.0, none)], &o, 500.0), 500.0);
+        // Three quick notches in one frame zoom three steps at once.
+        let three = [wheel(U::Line, 1.0, none), wheel(U::Line, 1.0, none), wheel(U::Line, 1.0, none)];
+        assert_eq!(wheel_zoom_points(&three, &o, 500.0), 3.0 * o.line_scroll_speed);
+        assert_eq!(wheel_zoom_points(&[wheel(U::Line, 1.0, Modifiers::COMMAND)], &o, 500.0), 0.0);
+        assert_eq!(wheel_zoom_points(&[wheel(U::Line, 1.0, Modifiers::SHIFT)], &o, 500.0), 0.0);
+        assert_eq!(wheel_zoom_points(&[wheel(U::Line, f32::NAN, none)], &o, 500.0), 0.0);
+        assert_eq!(wheel_zoom_points(&[egui::Event::PointerGone], &o, 500.0), 0.0);
+    }
+
+    /// The frame a notch arrives, egui's smoothed scroll holds only part of it (the rest trickles
+    /// in over later frames, which made quick notches lag), while the raw reading zooms the
+    /// whole notch at once (#660).
+    #[test]
+    fn a_wheel_notch_zooms_whole_in_its_own_frame() {
+        let ctx = egui::Context::default();
+        let o = ctx.options(|o| o.input_options);
+        let input = egui::RawInput { events: vec![wheel(egui::MouseWheelUnit::Line, 1.0, egui::Modifiers::NONE)], ..Default::default() };
+        let mut seen = (0.0, 0.0);
+        ctx.run_ui(input, |ui| {
+            seen = ui.input(|i| (i.smooth_scroll_delta.y, wheel_zoom_points(&i.raw.events, &o, 500.0)));
+        })
+        .textures_delta
+        .clear();
+        let (smoothed, raw) = seen;
+        assert_eq!(raw, o.line_scroll_speed, "the whole notch");
+        assert!(smoothed < raw, "egui's smoothed delta lags behind: {smoothed} of {raw}");
     }
 }
 
