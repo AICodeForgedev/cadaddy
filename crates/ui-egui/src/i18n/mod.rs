@@ -25,10 +25,24 @@ pub enum Preference {
     Spanish,
     #[serde(rename = "cs")]
     Czech,
+    #[serde(rename = "ru")]
+    Russian,
+    #[serde(rename = "fr")]
+    French,
 }
 
 impl Preference {
-    pub const ALL: [Self; 7] = [Self::Auto, Self::English, Self::Ukrainian, Self::BrazilianPortuguese, Self::German, Self::Spanish, Self::Czech];
+    pub const ALL: [Self; 9] = [
+        Self::Auto,
+        Self::English,
+        Self::Ukrainian,
+        Self::BrazilianPortuguese,
+        Self::German,
+        Self::Spanish,
+        Self::Czech,
+        Self::Russian,
+        Self::French,
+    ];
 
     /// The codes a preference can be given as, for messages ("auto, en or uk").
     pub fn codes() -> String {
@@ -48,6 +62,8 @@ impl Preference {
             Self::German => "de",
             Self::Spanish => "es",
             Self::Czech => "cs",
+            Self::Russian => "ru",
+            Self::French => "fr",
         }
     }
 
@@ -60,6 +76,8 @@ impl Preference {
             Self::German => "Deutsch",
             Self::Spanish => "Español",
             Self::Czech => "Čeština",
+            Self::Russian => "Русский",
+            Self::French => "Français",
         }
     }
 
@@ -80,6 +98,8 @@ impl Preference {
             Self::German => "de",
             Self::Spanish => "es",
             Self::Czech => "cs",
+            Self::Russian => "ru",
+            Self::French => "fr",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -96,7 +116,7 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 6] = [
+pub static LANGUAGES: [Language; 8] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language {
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
@@ -114,6 +134,10 @@ pub static LANGUAGES: [Language; 6] = [
     // Spanish integer plurals follow the English rule too.
     Language { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language { code: "cs", name: "Čeština", source: include_str!("cs.tsv"), plural: plural_cs, plural_forms: 3, catalog: OnceLock::new() },
+    // Russian integer plurals follow the Ukrainian rule: one (1, 21), few (2–4), many.
+    Language { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new() },
+    // French integer plurals (CLDR `fr`): one (0, 1), other, the Portuguese rule.
+    Language { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_pt, plural_forms: 2, catalog: OnceLock::new() },
 ];
 
 /// BCP 47 and POSIX locale tags, including `uk-UA`, `uk_UA.UTF-8` and `pt_BR.UTF-8`.

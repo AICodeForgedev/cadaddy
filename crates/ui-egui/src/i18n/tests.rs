@@ -39,7 +39,7 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
 /// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
 /// command doesn't require a row in every language.
 const REQUIRED: &[&str] = &["uk"];
-const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs"];
+const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr"];
 
 fn check(language: &str, what: &str, missing: Vec<String>) {
     if REQUIRED.contains(&language) {
@@ -146,14 +146,18 @@ fn locale_and_saved_preference_resolution() {
     for tag in ["de", "de-DE", "de_DE.UTF-8", "DE-at", "de-CH"] {
         assert_eq!(locale_language(tag), Some("de"), "{tag}");
     }
-    for tag in ["ua", "ukulele", "ru-RU", "", "garbage", "💙"] {
+    for (tag, code) in [("ru", "ru"), ("ru-RU", "ru"), ("ru_RU.UTF-8", "ru"), ("fr", "fr"), ("fr-FR", "fr"), ("fr_CA.UTF-8", "fr")] {
+        assert_eq!(locale_language(tag), Some(code), "{tag}");
+    }
+    for tag in ["ua", "ukulele", "pl-PL", "", "garbage", "💙"] {
         assert_eq!(locale_language(tag), None, "{tag}");
     }
     for tag in ["pt", "pt-BR", "pt_BR.UTF-8", "PT-br", "pt-PT"] {
         assert_eq!(locale_language(tag), Some("pt-BR"), "{tag}");
     }
     assert_eq!(locale_language("ptolemy"), None);
-    assert_eq!(Preference::Auto.resolve(&["fr-FR".into(), "pt-BR".into()]), "pt-BR");
+    assert_eq!(Preference::Auto.resolve(&["pl-PL".into(), "pt-BR".into()]), "pt-BR");
+    assert_eq!(Preference::Auto.resolve(&["fr-FR".into(), "pt-BR".into()]), "fr");
     for tag in ["es", "es-ES", "es_MX.UTF-8", "ES-ar"] {
         assert_eq!(locale_language(tag), Some("es"), "{tag}");
     }
@@ -501,6 +505,21 @@ fn default_fonts_cover_czech_letters_and_typographic_quotes() {
             for c in &letters {
                 assert!(font.characters().contains_key(c), "missing {c} in {family:?}");
             }
+        }
+    });
+}
+
+#[test]
+fn russian_and_french_plurals() {
+    with_language("ru", || {
+        for (n, word) in [(1, "участник"), (2, "участника"), (5, "участников"), (21, "участник"), (22, "участника"), (11, "участников")]
+        {
+            assert_eq!(count(n, "{n} contributor", "{n} contributors"), format!("{n} {word}"));
+        }
+    });
+    with_language("fr", || {
+        for (n, word) in [(0, "contributeur"), (1, "contributeur"), (2, "contributeurs"), (10, "contributeurs")] {
+            assert_eq!(count(n, "{n} contributor", "{n} contributors"), format!("{n} {word}"));
         }
     });
 }

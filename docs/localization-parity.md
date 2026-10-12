@@ -56,7 +56,8 @@ plus native review by a human; extending the catalog to the remaining English-on
 | Spanish | es | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
 | Hindi | hi | 0 (0%) | 0% | Devanagari: no shaping | no | none | 3–5 h + 15–25 h shaping (shared with Arabic) |
 | Arabic | ar | 0 (0%) | 0% | Drawing text shaped and laid out right to left (#287); the UI is not mirrored | no | none | 3–5 h + 15–25 h RTL UI |
-| French | fr | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
+| French | fr | ≈ 900 catalog rows (gaps reported, English fallback) | partial | Latin: yes | contributed by @pechnikov2026-star (#624); no native review yet | partial | 2–4 h |
+| Russian | ru | ≈ 900 catalog rows (gaps reported, English fallback) | partial | Cyrillic: yes (bundled egui fonts) | contributed by @pechnikov2026-star (#624); no native review yet | partial | 2–4 h |
 | Portuguese | pt | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
 | Indonesian | id | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
 | Japanese | ja | 0 (0%) | 0% | CJK glyphs render; IME pending; no vertical text | no | none | 4–6 h |
@@ -66,7 +67,7 @@ plus native review by a human; extending the catalog to the remaining English-on
 | Ukrainian | uk | 989 catalog rows (≈ 100% of the catalog; ≈ 80% of all UI strings, estimated: engine diagnostics and uncatalogued text stay English) | dialogs and tooltips yes; command reference searchable in Ukrainian | Cyrillic: yes (bundled egui fonts) | translated by a contributor; no second review | partial | 2–4 h |
 | Czech | cs | 1,202 catalog rows; reference catalog and marked UI literals covered | dialogs and tooltips yes; contextual menu headings; command reference searchable in Czech | Latin: yes (bundled egui proportional and monospace fonts; Czech letters and quotes tested) | AI-assisted by @Losminek; independent review pass; not yet proofread by a native speaker | complete current catalog; English-only interface gaps remain | native review + shared English-only UI work |
 
-Other languages shipped: Ukrainian, Brazilian Portuguese, German and Czech. Czech covers the
+Other languages shipped: Ukrainian, Brazilian Portuguese, German, Czech, Russian and French. Czech covers the
 reference catalog and marked UI literals; engine diagnostics and uncatalogued text remain English. AutoCAD for Mac ships 7
 non-English languages (zh-Hans, es, fr, ja, de, ko, it); of those, CADCraft now ships German,
 and additionally Ukrainian, which AutoCAD for Mac doesn't ship.
