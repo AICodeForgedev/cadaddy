@@ -192,55 +192,59 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
             app.ui.start_tab = false;
         }
         x += 24.0;
-        let mut tab = |ui: &mut egui::Ui, label: &str, active: bool, closable: bool, w: f32, id: egui::Id| -> (bool, bool, egui::Response) {
-            let tr = Rect::from_min_size(pos2(x, r.top()), vec2(w, r.height()));
-            let resp = ui.interact(tr, id, Sense::click());
-            ui.painter().rect_filled(
-                tr,
-                0.0,
-                if active {
-                    t.tab_active
-                } else if resp.hovered() {
-                    t.chrome
-                } else {
-                    t.chrome_dark
-                },
-            );
-            ui.painter().text(
-                pos2(tr.left() + 8.0, tr.center().y),
-                egui::Align2::LEFT_CENTER,
-                label,
-                crate::theme::body(),
-                if active { t.text } else { t.text_dim },
-            );
-            let mut close = false;
-            if closable && (active || resp.hovered()) {
-                let cr = Rect::from_center_size(pos2(tr.right() - 11.0, tr.center().y), vec2(12.0, 12.0));
-                let cresp = ui.interact(cr, id.with("x"), Sense::click());
-                icons::paint(ui.painter(), cr, Icon::Close, false);
-                icons::describe_control(ui, &cresp, &format!("Close {label}"), None, false);
-                close = cresp.clicked();
-            }
-            icons::describe_control(ui, &resp, label, Some(active), true);
-            ui.painter().vline(tr.right(), tr.y_range(), Stroke::new(1.0, t.border));
-            x += w;
-            (resp.clicked(), close, resp)
-        };
-        let (c, _, _) = tab(ui, crate::tl!("Start"), app.ui.start_tab || app.session.docs.is_empty(), false, 110.0, ui.id().with("tab_start"));
+        // `label` is the drawing's name; `dirty` adds the unsaved-changes mark, kept visible when a
+        // long name is cut short.
+        let mut tab =
+            |ui: &mut egui::Ui, label: &str, dirty: bool, active: bool, closable: bool, w: f32, id: egui::Id| -> (bool, bool, egui::Response) {
+                let tr = Rect::from_min_size(pos2(x, r.top()), vec2(w, r.height()));
+                let resp = ui.interact(tr, id, Sense::click());
+                ui.painter().rect_filled(
+                    tr,
+                    0.0,
+                    if active {
+                        t.tab_active
+                    } else if resp.hovered() {
+                        t.chrome
+                    } else {
+                        t.chrome_dark
+                    },
+                );
+                // The name ends in "…" when it doesn't fit before the close button (#513).
+                let color = if active { t.text } else { t.text_dim };
+                let mark = if dirty { "*" } else { "" };
+                let text_w = (w - 8.0 - if closable { 24.0 } else { 8.0 }).max(0.0);
+                let mark_w = ui.painter().layout_no_wrap(mark.to_string(), crate::theme::body(), color).size().x;
+                let (galley, cut) = elided(ui.painter(), label, crate::theme::body(), color, text_w - mark_w);
+                let pos = pos2(tr.left() + 8.0, tr.center().y - galley.size().y / 2.0);
+                let name_w = galley.size().x;
+                ui.painter().galley(pos, galley, color);
+                if dirty {
+                    ui.painter().text(pos2(pos.x + name_w, tr.center().y), egui::Align2::LEFT_CENTER, mark, crate::theme::body(), color);
+                }
+                let resp = if cut { resp.on_hover_text(format!("{label}{mark}")) } else { resp };
+                let mut close = false;
+                if closable && (active || resp.hovered()) {
+                    let cr = Rect::from_center_size(pos2(tr.right() - 11.0, tr.center().y), vec2(12.0, 12.0));
+                    let cresp = ui.interact(cr, id.with("x"), Sense::click());
+                    icons::paint(ui.painter(), cr, Icon::Close, false);
+                    icons::describe_control(ui, &cresp, &format!("Close {label}"), None, false);
+                    close = cresp.clicked();
+                }
+                icons::describe_control(ui, &resp, label, Some(active), true);
+                ui.painter().vline(tr.right(), tr.y_range(), Stroke::new(1.0, t.border));
+                x += w;
+                (resp.clicked(), close, resp)
+            };
+        let (c, _, _) = tab(ui, crate::tl!("Start"), false, app.ui.start_tab || app.session.docs.is_empty(), false, 110.0, ui.id().with("tab_start"));
         if c {
             app.ui.start_tab = true;
         }
         let mut switch_to = None;
         let mut close = None;
-        let titles: Vec<(usize, String, bool)> = app
-            .session
-            .docs
-            .iter()
-            .enumerate()
-            .map(|(i, d)| (i, format!("{}{}", d.title, if d.is_dirty() { "*" } else { "" }), i == app.session.active))
-            .collect();
-        for (i, title, active) in titles {
-            let (c, x, resp) = tab(ui, &title, active && !app.ui.start_tab, true, 170.0, ui.id().with(("tab", i)));
+        let titles: Vec<(usize, String, bool, bool)> =
+            app.session.docs.iter().enumerate().map(|(i, d)| (i, d.title.clone(), d.is_dirty(), i == app.session.active)).collect();
+        for (i, title, dirty, active) in titles {
+            let (c, x, resp) = tab(ui, &title, dirty, active && !app.ui.start_tab, true, 170.0, ui.id().with(("tab", i)));
             crate::shortcut_menus::attach(app, &resp, |app| crate::shortcut_menus::drawing_tab_entries(app, i));
             if c {
                 switch_to = Some(i);
@@ -257,6 +261,16 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
             app.request_close(Some(i));
         }
     });
+}
+
+/// `text` laid out on one line no wider than `max_width`, ending in "…" when it had to be cut;
+/// and whether it was.
+fn elided(p: &egui::Painter, text: &str, font: egui::FontId, color: egui::Color32, max_width: f32) -> (std::sync::Arc<egui::Galley>, bool) {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
+    job.wrap = egui::text::TextWrapping { max_width: max_width.max(0.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    let galley = p.layout_job(job);
+    let cut = galley.elided;
+    (galley, cut)
 }
 
 /// Status bar: layout tabs on the left, coordinates and drafting toggles on the right.
