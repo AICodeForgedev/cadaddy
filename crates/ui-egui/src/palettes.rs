@@ -1039,6 +1039,9 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             }
             EntityKind::Insert(i) => {
                 prop_row(ui, "Name", |ui| read_only(ui, &i.block));
+                prop_row(ui, "Position X", |ui| read_only(ui, &format!("{:.4}", i.insert.x)));
+                prop_row(ui, "Position Y", |ui| read_only(ui, &format!("{:.4}", i.insert.y)));
+                prop_row(ui, "Position Z", |ui| read_only(ui, &format!("{:.4}", i.insert.z)));
                 num(ui, "Rotation", "rotation", i.rotation.to_degrees(), &mut set, &ids);
                 num(ui, "Scale", "scale", i.scale.x, &mut set, &ids);
             }
