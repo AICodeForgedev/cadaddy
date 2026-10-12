@@ -45,3 +45,6 @@ sync_github_name = true
 [people.WladmirJunior]
 real_name = "Wladmir Júnior"
 sync_github_name = true
+
+[people.Losminek]
+sync_github_name = true

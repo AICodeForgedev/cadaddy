@@ -456,7 +456,7 @@ pub(crate) fn entry_ui(ui: &mut egui::Ui, e: &Entry, clicked: &mut Option<String
             }
         }
         Entry::Sub { label, children } => {
-            ui.menu_button(crate::i18n::t(label), |ui| {
+            ui.menu_button(crate::i18n::menu(label), |ui| {
                 for c in children {
                     entry_ui(ui, c, clicked);
                 }
@@ -474,7 +474,7 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 for (name, entries) in &tree {
-                    ui.menu_button(crate::i18n::t(name), |ui| {
+                    ui.menu_button(crate::i18n::menu(name), |ui| {
                         for e in entries {
                             entry_ui(ui, e, &mut clicked);
                         }

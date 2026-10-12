@@ -9,7 +9,7 @@
 //! | name | value |
 //! |---|---|
 //! | `theme` | `"system"`, `"light"` or `"dark"` |
-//! | `interfaceLanguage` | `"auto"`, `"en"` or `"uk"` |
+//! | `interfaceLanguage` | `"auto"`, `"en"`, `"uk"`, `"pt-BR"`, `"de"`, `"es"` or `"cs"` |
 //! | `saveFormat` | `"dxf"` or `"dwg"`: the format Save As suggests for new drawings |
 //! | `saveVersion` | `"2000"` … `"2018"`: the version drawings with no file yet are saved in |
 //! | `SAVETIME` | minutes between automatic saves, 0–600 (0: off) |

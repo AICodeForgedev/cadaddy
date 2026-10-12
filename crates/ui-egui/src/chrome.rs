@@ -165,7 +165,7 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
                         }
                     }
                 });
-                response.on_hover_text("More toolbar commands");
+                response.on_hover_text(crate::tl!("More toolbar commands"));
             }
             if let Some(c) = clicked {
                 app.start(c);

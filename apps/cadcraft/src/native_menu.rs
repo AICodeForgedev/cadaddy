@@ -57,7 +57,7 @@ impl NativeMenu {
         items.insert("cc-settings".into(), ("options".into(), "Settings...".into(), settings));
         let _ = menu.append(&app_menu);
         for (title, entries) in menus::tree(app) {
-            let sub = Submenu::new(i18n::tr(language, &title), true);
+            let sub = Submenu::new(i18n::tr_menu(language, &title), true);
             build(&sub, &entries, &mut items, &mut submenus, &mut counter, language);
             let _ = menu.append(&sub);
             submenus.push((title, sub));
@@ -87,7 +87,7 @@ impl NativeMenu {
                 item.set_text(i18n::tr(language, label));
             }
             for (label, submenu) in &self.submenus {
-                submenu.set_text(i18n::tr(language, label));
+                submenu.set_text(i18n::tr_menu(language, label));
             }
         }
         let now = cadcraft_ui_egui::now_ms();
@@ -113,7 +113,7 @@ fn build(
     for e in entries {
         match e {
             Entry::Sub { label, children } => {
-                let sub = Submenu::new(i18n::tr(language, label), true);
+                let sub = Submenu::new(i18n::tr_menu(language, label), true);
                 build(&sub, children, items, submenus, counter, language);
                 let _ = parent.append(&sub);
                 submenus.push((label.clone(), sub));
