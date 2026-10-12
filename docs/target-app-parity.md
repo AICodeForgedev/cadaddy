@@ -1,6 +1,6 @@
 # Target-app parity: CADCraft vs AutoCAD 2027
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (merged main: dynamic input pointer boxes, Ukrainian catalog, DXF fixes; numbers updated) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (feature-area evidence refreshed for merged work; numbers not re-measured) · **Target:** Autodesk AutoCAD 2027
 
 The authoritative assessment of how close CADCraft is to AutoCAD, and how much Opus 5.5 work
 remains. [ROADMAP.md](../ROADMAP.md) summarises it, [gaps.md](gaps.md) lists every shortfall,
@@ -146,18 +146,18 @@ presence: an option that prints "not available yet" doesn't count.
 
 | Area | Weight | Parity | Remaining (Opus 5.5 h) | Evidence and main gaps | Doc |
 |---|---:|---:|---|---|---|
-| Draw (2D) | 13% | 60% | 15–25 | ARC 11/11 methods, CIRCLE 6/6, RECTANG all options, REVCLOUD, WIPEOUT, XLINE; PLINE Angle/CEnter/Direction/Radius missing; SPLINE options ignored; MLINE and REGION are polylines; HELIX approximate | [gaps](gaps.md#features) |
-| Modify | 15% | 50% | 40–60 | TRIM/EXTEND standard mode, Fence, Crossing, Project, eRase stubs; OFFSET Erase/Layer/Multiple stubs; ROTATE Reference stub; arrays non-associative (no ARRAYEDIT, interactive rectangular array fixed 3×4); MATCHPROP JSON only | [gaps](gaps.md#features) |
+| Draw (2D) | 13% | 60% | 15–25 | ARC 11/11 methods, CIRCLE 6/6, RECTANG all options, REVCLOUD, WIPEOUT, XLINE; PLINE arc options and SPLINE options done (#397, #408); MLINE, REGION and HELIX are objects (#510); isometric drafting (#556) | [gaps](gaps.md#features) |
+| Modify | 15% | 50% | 40–60 | TRIM/EXTEND, OFFSET, ROTATE, PEDIT and SPLINEDIT options done (#397, #558, #559); associative arrays with ARRAYEDIT (#448), no array grips; MATCHPROP picker and Settings (#439) | [gaps](gaps.md#features) |
 | Geometry precision | 10% | 40% | 70–110 | exact for lines/arcs/circles; ellipse and spline intersections, offsets, closest points tessellated; absolute tolerances; polyline offset doesn't recompute bulges | [geometry-parity](geometry-parity.md) |
 | Layers and properties | 7% | 70% | 10–15 | Layer Properties Manager with filters, states, VP overrides; QSELECT; Quick Properties; transparency; linetype manager thin; 19 linetypes of ~45 | [gaps](gaps.md#features) |
-| Dimensions | 9% | 45% | 25–35 | all core DIM types and associativity; 43 of ~80 DIMSTYLE variables; no DIMSTYLE manager dialog, smart DIM, DIMJOGGED, DIMBREAK, DIMJOGLINE, oblique, TOLERANCE/GD&T, inspection; alt units thin | [gaps](gaps.md#features) |
-| Text and MTEXT | 6% | 35% | 30–45 | TrueType, formatting codes, stacking; editor is a dialog, not in-place; most MTEXT prompt options ignored; no columns, bullets, tabs, fields, spell check, SHX, annotative behaviour | [gaps](gaps.md#features) |
-| Leaders, tables, fields | 4% | 25% | 25–35 | basic MLEADER and TABLE; leader options ignored, no MLEADEREDIT/ALIGN/COLLECT, no block content; no formulas, data links, FIELD | [gaps](gaps.md#features) |
-| Hatch and gradients | 5% | 35% | 15–25 | pick points with islands; 23 patterns of ~85; gradients render flat; associativity flag not acted on; no origin, gap tolerance, separate hatches, hatch dialog | [gaps](gaps.md#features) |
-| Blocks, attributes, xrefs, groups | 9% | 25% | 80–120 | static blocks and attributes; no BEDIT, dynamic blocks, xrefs, REFEDIT, XCLIP, GROUP, ATTSYNC, EATTEXT, DesignCenter | [gaps](gaps.md#features) |
-| Layouts, viewports, plotting | 9% | 35% | 35–50 | layouts, rectangular viewports, per-VP layers, page setups, PDF, plot styles (CTB/STB); no plot preview, devices, PUBLISH, polygonal/object viewports, annotative scales | [gaps](gaps.md#features) |
-| Inquiry and utilities | 4% | 30% | 30–45 | DIST, AREA, ID, LIST, MEASUREGEOM, CAL, FIND, COUNT; no autosave/recovery, AUDIT, RECOVER, OPTIONS, SPELL, QuickCalc, DWG Compare, ETRANSMIT | [gaps](gaps.md#features) |
-| Parametric constraints | 2% | 50% | 20–30 | all 12 geometric and the dimensional constraints, own solver; no DOF report, no G2 Smooth, no ellipse/spline geometry, no inference | [geometry-parity](geometry-parity.md#constraint-solver--50) |
+| Dimensions | 9% | 45% | 25–35 | all core DIM types and associativity; style variables, DIMJOGGED, DIMJOGLINE, DIMBREAK, DIMEDIT, DIMINSPECT, QDIM modes (#507) and TOLERANCE (#420); no DIMSTYLE manager dialog or smart DIM | [gaps](gaps.md#features) |
+| Text and MTEXT | 6% | 35% | 30–45 | TrueType, formatting codes, stacking; MTEXT prompt options (#408), indents, tabs, bullets, numbering and columns (#547), annotative scaling (#468); editor is a dialog, not in place; no fields or SPELL (open PR #551), no SHX | [gaps](gaps.md#features) |
+| Leaders, tables, fields | 4% | 25% | 25–35 | MLEADER options and block content (#408), native MULTILEADER in DXF (#459); tables with cell styles, formulas, breaking and CSV data links (#534); no MLEADEREDIT/ALIGN/COLLECT, no FIELD | [gaps](gaps.md#features) |
+| Hatch and gradients | 5% | 35% | 15–25 | pick points with islands; 23 patterns of ~85; gradients render flat; origin, gap tolerance, separate hatches, island styles and HATCHEDIT options (#451); no hatch dialog | [gaps](gaps.md#features) |
+| Blocks, attributes, xrefs, groups | 9% | 25% | 80–120 | static blocks and attributes; ATTSYNC, BATTMAN editing, DATAEXTRACTION/EATTEXT (#433); xrefs (#525); groups (#417); no BEDIT, dynamic blocks, REFEDIT, XCLIP, DesignCenter | [gaps](gaps.md#features) |
+| Layouts, viewports, plotting | 9% | 35% | 35–50 | layouts, per-VP layers, page setups, plot styles (CTB/STB), Plot dialog (#160), Plot Preview and PUBLISH (#186), plotter devices (#564), PDF with text, layers and sheets (#567, #571), polygonal/object/clipped viewports (#453), annotative scales (#468); no MVIEW Restore, no system printers | [gaps](gaps.md#features) |
+| Inquiry and utilities | 4% | 30% | 30–45 | DIST, AREA, ID, LIST, MEASUREGEOM, CAL, FIND, COUNT across layouts, QuickCalc, COMPARE (#563), MASSPROP on regions (#510), autosave/recovery, AUDIT, RECOVER (#406), OPTIONS (#23); no SPELL (open PR #551), ETRANSMIT | [gaps](gaps.md#features) |
+| Parametric constraints | 2% | 50% | 20–30 | all 12 geometric and the dimensional constraints, own solver; DOF report, G2 Smooth, ellipse/spline/block geometry and CONSTRAINTINFER landed (#546) | [geometry-parity](geometry-parity.md#constraint-solver--50) |
 | 3D modelling, visualisation, rendering | 5% | 2% | 300–450 | no UCS, 3D views, orbit, solids, surfaces, meshes, sections, visual styles, materials, lights or rendering; 150 of the 491 menu items | [gaps](gaps.md#features) |
 | Collaboration and cloud (Sheet Set Manager, Share, Traces, Markup Import, Activity Insights, DWG Compare) | 2% | 5% | 40–70 | none of these exist | [gaps](gaps.md#features) |
 | **Features dimension** | 100% | **≈ 41%** | **735–1,115** | | |
@@ -223,6 +223,7 @@ DWG/DXF corpus (files from people who own them); black-box checks in AutoCAD of 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Evidence text of the feature-area rows refreshed for merged work (#397, #406, #408, #417, #420, #433, #448, #451, #453, #459, #468, #507, #510, #525, #534, #546, #547, #558, #563, #564, #567, #571); parity percentages and hours not re-measured |
 | 2026-10-10 | minor | Merged main: dynamic input pointer boxes (#60) lift UI/UX to 43%, Ukrainian catalog (#36) lifts localization to 5%; ready 37% → 38%, mainstream 27% → 28%, essentials 45% → 46% |
 | 2026-10-10 | minor | Readiness-by-audience table: hours to ~95% for full (1,150–1,850 h), mainstream (570–880 h) and essentials (140–225 h); full number confirmed as an additive weighted sum, unchanged |
 | 2026-10-10 | minor | Mainstream-practitioner (≈ 27%) and essentials-user (≈ 45%) numbers with written weights, discounts and user evidence |

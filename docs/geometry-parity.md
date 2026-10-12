@@ -1,6 +1,6 @@
 # Geometry parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (FILLET, EXTEND, JOIN and LENGTHEN on elliptical arcs and splines; FILLET/CHAMFER with polyline segments; a closed spline trims to one piece, #466) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (constraint solver: DOF report, G2 Smooth, ellipse/spline/block geometry, CONSTRAINTINFER, #546) · **Target:** Autodesk AutoCAD 2027
 
 CAD users trust numbers: a trimmed endpoint, an offset, an intersection or an area is either right
 to the last displayed digit or the tool is unusable for production drawings. This document
@@ -140,7 +140,7 @@ exist for parsing, not for numerics.
    origin and at 1e6–1e7 coordinates. 8–12 h.
 4. Exact areas and MASSPROP for bulge polylines, regions (2D) and hatch loops. 6–10 h.
 5. Hatch gap tolerance and curved boundaries. 8–12 h.
-6. Solver: DOF reporting, G2 Smooth, ellipse/spline geometry, constraint inference. 20–30 h.
+6. ~~Solver: DOF reporting, G2 Smooth, ellipse/spline geometry, constraint inference.~~ Done (#546).
 7. Spline fit options (end tangents, knot parameterisation, fit tolerance, periodic). 6–10 h.
 
 Total ≈ 90–140 h; items 1–6 parallelise across two or three agents.
@@ -153,3 +153,4 @@ Total ≈ 90–140 h; items 1–6 parallelise across two or three agents.
 | 2026-10-11 | minor | EXTEND, JOIN and LENGTHEN on elliptical arcs and splines; closed splines trim to one piece; trim/extend section 45% → 55% (#466) |
 | 2026-10-11 | minor | FILLET with elliptical arcs and splines; trim/extend section 55% → 65% (#466) |
 | 2026-10-11 | minor | FILLET/CHAMFER with polyline segments (same polyline, end segment with a line); section 65% → 70% (#466) |
+| 2026-10-11 | minor | Constraint solver (#546): DOF report, G2 Smooth, ellipse/spline/block geometry, CONSTRAINTINFER |
