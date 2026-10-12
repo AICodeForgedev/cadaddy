@@ -164,3 +164,33 @@ fn pattern_lines_from_a_file_are_drawn_for_unknown_names() {
     let p = l.prims.iter().find(|p| p.kind == Kind::Polyline).map(|p| l.points(p)).expect("lines");
     assert!(((p[1] - p[0]).angle().to_degrees().rem_euclid(180.0) - 45.0).abs() < 1e-6);
 }
+
+#[test]
+fn brick_joints_are_drawn_once_half_a_brick_apart_course_to_course() {
+    let l = draw(hatch("BRICK", vec![square(0.0, 2.0)]), "0");
+    // Vertical joints: (x, course) for every vertical segment, rounded.
+    let mut joints: Vec<(i64, i64)> = l
+        .prims
+        .iter()
+        .filter(|p| p.kind == Kind::Polyline)
+        .filter_map(|p| match l.points(p) {
+            [a, b] if (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() > 1e-9 => {
+                Some(((a.x * 1000.0).round() as i64, ((a.y + b.y) / 2.0 / 0.25).floor() as i64))
+            }
+            _ => None,
+        })
+        .collect();
+    let n = joints.len();
+    joints.sort_unstable();
+    joints.dedup();
+    assert_eq!(joints.len(), n, "a joint drawn twice");
+    // Within a course joints are a brick (0.5) apart; the next course is offset half a brick.
+    let xs = |course: i64| joints.iter().filter(|j| j.1 == course).map(|j| j.0).collect::<Vec<_>>();
+    for course in 0..4 {
+        let x = xs(course);
+        assert!(x.len() >= 3, "course {course}: {x:?}");
+        assert!(x.windows(2).all(|w| w[1] - w[0] == 500), "course {course}: {x:?}");
+        let next = xs(course + 1);
+        assert!(next.iter().all(|nx| (nx - x[0]).rem_euclid(500) == 250), "courses {course}/{}: {x:?} {next:?}", course + 1);
+    }
+}

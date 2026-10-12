@@ -153,9 +153,11 @@ pub fn standard_patterns() -> Vec<HatchPattern> {
             name: "BRICK",
             description: "Brick or masonry-type surface",
             lines: vec![
+                // Running bond: courses 0.25 high, bricks 0.5 long. Each vertical family draws the
+                // joints of every other course, 0.5 apart; the second is offset half a brick.
                 pl(0.0, (0.0, 0.0), (0.0, 0.25), &[]),
-                pl(90.0, (0.0, 0.0), (0.25, 0.25), &[0.25, -0.25]),
-                pl(90.0, (0.25, 0.0), (0.25, 0.25), &[-0.25, 0.25]),
+                pl(90.0, (0.0, 0.0), (0.0, 0.5), &[0.25, -0.25]),
+                pl(90.0, (0.25, 0.0), (0.0, 0.5), &[-0.25, 0.25]),
             ],
         },
         HatchPattern {
