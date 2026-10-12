@@ -62,6 +62,9 @@ pub struct CanvasState {
     hl_origin: Vec2,
     /// Selected infinite lines (clipped and drawn on the CPU each frame).
     hl_infinite: Vec<usize>,
+    /// The highlight geometry of the active viewport's model space, with the key it was built for
+    /// (see [`viewport_highlight_tolerance`]).
+    vp_hl: Option<(u64, DisplayList)>,
     /// Indices of infinite-line primitives in `list` (drawn on the CPU in GPU mode).
     infinite: Vec<usize>,
     /// Milliseconds spent converting the display list to vertex data (last rebuild).
@@ -191,6 +194,13 @@ fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
     app.canvas.window = opts.view;
     app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);
     app.canvas.build_ms = crate::now_ms() - t0;
+}
+
+/// Tessellation tolerance for the highlights inside the active viewport: `scale` (pixels per
+/// drawing unit) snapped to its 2x zoom band, as in [`ensure_list`], so zooming and panning
+/// inside the band doesn't rebuild the geometry.
+fn viewport_highlight_tolerance(scale: f64) -> f64 {
+    2f64.powi((1.0 / scale.max(1e-300)).log2().floor() as i32) * 0.5
 }
 
 /// The area a display list is built for: each view with half its larger side of margin all
@@ -1078,14 +1088,26 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             hs.extend(app.canvas.hover.filter(|h| !sel.contains(h)));
             let ents: Vec<_> = hs.iter().filter_map(|h| st.doc.model.get(*h)).map(|e| e.as_ref()).collect();
             if !ents.is_empty() {
-                let list = cadcraft_render::build_entities(&st.doc, ents, &cadcraft_render::Options { tolerance: 0.5 / scale, ..Default::default() });
-                let clipped = painter.with_clip_rect(r.intersect(rect));
-                if let Some(h) = app.canvas.hover
-                    && !sel.contains(&h)
-                {
-                    draw_highlight(&clipped, &xf, &list, &prims_of(&list, &[h]), t.hover, 2.0, false);
+                let tolerance = viewport_highlight_tolerance(scale);
+                let key = {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    (st.uid, st.revision, std::sync::Arc::as_ptr(&st.doc) as usize, tolerance.to_bits(), &hs).hash(&mut h);
+                    h.finish()
+                };
+                if app.canvas.vp_hl.as_ref().is_none_or(|(k, _)| *k != key) {
+                    let built = cadcraft_render::build_entities(&st.doc, ents, &cadcraft_render::Options { tolerance, ..Default::default() });
+                    app.canvas.vp_hl = Some((key, built));
                 }
-                draw_highlight(&clipped, &xf, &list, &prims_of(&list, &sel), t.selection, 1.5, true);
+                if let Some((_, list)) = &app.canvas.vp_hl {
+                    let clipped = painter.with_clip_rect(r.intersect(rect));
+                    if let Some(h) = app.canvas.hover
+                        && !sel.contains(&h)
+                    {
+                        draw_highlight(&clipped, &xf, list, &prims_of(list, &[h]), t.hover, 2.0, false);
+                    }
+                    draw_highlight(&clipped, &xf, list, &prims_of(list, &sel), t.selection, 1.5, true);
+                }
             }
         }
     } else if let CanvasState { list: Some(list), list_gen, prim_index, hover, gpu, hl_key, hl_slot, hl_origin, hl_infinite, .. } = &mut app.canvas {
@@ -1716,6 +1738,15 @@ mod tests {
 
     fn hs(v: &[u64]) -> Vec<Handle> {
         v.iter().map(|&h| Handle(h)).collect()
+    }
+
+    #[test]
+    fn viewport_highlight_tolerance_is_constant_within_a_zoom_band() {
+        assert_eq!(viewport_highlight_tolerance(4.0), viewport_highlight_tolerance(3.0));
+        assert_ne!(viewport_highlight_tolerance(4.0), viewport_highlight_tolerance(1.5));
+        for s in [0.3, 1.0, 3.0, 4.0, 250.0] {
+            assert!(viewport_highlight_tolerance(s) <= 0.5 / s);
+        }
     }
 
     #[test]
