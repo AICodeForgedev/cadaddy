@@ -693,6 +693,7 @@ dependencies = [
  "cadcraft-fonts",
  "cadcraft-geom",
  "lyon_tessellation",
+ "rayon",
  "serde_json",
  "tiny-skia",
 ]

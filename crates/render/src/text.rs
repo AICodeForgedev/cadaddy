@@ -1,7 +1,7 @@
 //! Filled font glyphs: bounded font-unit meshes shared across placements and zoom rebuilds.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 
 use cadcraft_fonts::{TextGlyph, ttf};
 use cadcraft_geom::{Bounds2, Mat3, Vec2};
@@ -43,9 +43,10 @@ struct Cache {
     bytes: usize,
 }
 
-fn cache() -> &'static Mutex<Cache> {
-    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(Cache::default()))
+/// A read-write lock: display lists are built on all cores and nearly every lookup is a hit.
+fn cache() -> &'static RwLock<Cache> {
+    static CACHE: OnceLock<RwLock<Cache>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(Cache::default()))
 }
 
 /// World-space placement of font units, including the block/viewport transform.
@@ -70,7 +71,7 @@ fn detail(xf: Mat3, pixel: f64) -> Detail {
 pub(super) fn mesh(g: &TextGlyph, xf: Mat3, pixel: f64) -> Arc<Mesh> {
     let detail = detail(xf, pixel);
     let key = (g.face.bytes.as_ptr() as usize, g.face.bytes.len(), g.face.index, g.gid, detail);
-    if let Some(entry) = cache().lock().unwrap_or_else(PoisonError::into_inner).entries.get(&key) {
+    if let Some(entry) = cache().read().unwrap_or_else(PoisonError::into_inner).entries.get(&key) {
         return entry.mesh.clone();
     }
     let contours = ttf::glyph_contours(&g.face, g.gid);
@@ -98,7 +99,7 @@ pub(super) fn mesh(g: &TextGlyph, xf: Mat3, pixel: f64) -> Arc<Mesh> {
         .saturating_add(mesh.contours.len().saturating_mul(std::mem::size_of::<Vec<Vec2>>()))
         .saturating_add(std::mem::size_of::<Entry>() + std::mem::size_of::<Key>() + std::mem::size_of::<Mesh>());
     if bytes <= MAX_CACHE_BYTES {
-        let mut c = cache().lock().unwrap_or_else(PoisonError::into_inner);
+        let mut c = cache().write().unwrap_or_else(PoisonError::into_inner);
         if c.entries.len() >= MAX_ENTRIES || c.bytes.saturating_add(bytes) > MAX_CACHE_BYTES {
             c.entries.clear();
             c.bytes = 0;

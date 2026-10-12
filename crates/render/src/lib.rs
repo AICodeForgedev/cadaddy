@@ -250,6 +250,8 @@ struct Builder<'a> {
     styles: Option<&'a plotstyle::Styler>,
     /// Named plot style (table index) of the entity being drawn.
     named: Option<usize>,
+    /// The block-expansion budget shared by the parts of a list built in parallel.
+    shared_budget: Option<&'a std::sync::atomic::AtomicUsize>,
 }
 
 /// Upper bound on the block contents drawn per display list (each block reference, MINSERT copy
@@ -368,7 +370,10 @@ impl Builder<'_> {
     /// Take one unit of the block-expansion budget; false once it is spent.
     fn expand(&mut self) -> bool {
         self.list.expanded = self.list.expanded.saturating_add(1);
-        self.list.expanded <= MAX_BLOCK_EXPANSION
+        match self.shared_budget {
+            Some(spent) => spent.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < MAX_BLOCK_EXPANSION,
+            None => self.list.expanded <= MAX_BLOCK_EXPANSION,
+        }
     }
 }
 
@@ -411,12 +416,17 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
         _ => None,
     });
     let styler = table.map(|t| plotstyle::Styler::new(d, t));
-    let mut b = Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref(), named: None };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref(), named: None, shared_budget: None };
     if let Space::Paper(name) = space {
         b.list.sheet = paper::sheet(d, name);
     }
     if let Some(store) = d.space(space) {
         let paper = matches!(space, Space::Paper(_));
+        #[cfg(not(target_arch = "wasm32"))]
+        if !paper && !plotting && b.styles.is_none() && store.len() >= 2 * PARALLEL_CHUNK {
+            build_parallel(&mut b, d, store);
+            return b.list;
+        }
         let mut viewports = 0usize;
         for e in store.iter() {
             if paper && let EntityKind::Viewport(vp) = &e.kind {
@@ -437,6 +447,66 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
         pen::apply(&mut b.list, sheet.unit_mm);
     }
     b.list
+}
+
+/// Top-level entities per task when a display list is built on all cores.
+#[cfg(not(target_arch = "wasm32"))]
+const PARALLEL_CHUNK: usize = 256;
+
+/// Build model space for the screen on all cores: the entities are split into chunks built
+/// side by side, then joined in drawing order, so the list is the same as a one-thread build.
+/// The canvas rebuilds the whole list at every 2x zoom step, on the UI thread; one core made
+/// that a visible stall on real drawings. Plots, layouts and plot styles keep the one-thread
+/// path (they run once, and their pens and per-primitive layers are built along the way).
+#[cfg(not(target_arch = "wasm32"))]
+fn build_parallel(b: &mut Builder, d: &Drawing, store: &cadcraft_doc::EntityStore) {
+    use rayon::prelude::*;
+    let ents: Vec<&std::sync::Arc<Entity>> = store.iter().collect();
+    let budget = std::sync::atomic::AtomicUsize::new(0);
+    let (opts, plotting) = (b.opts, b.plotting);
+    let parts: Vec<DisplayList> = ents
+        .par_chunks(PARALLEL_CHUNK)
+        .map(|chunk| {
+            let mut part = Builder { list: DisplayList::default(), opts, plotting, styles: None, named: None, shared_budget: Some(&budget) };
+            for e in chunk {
+                entity(&mut part, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
+            }
+            part.list
+        })
+        .collect();
+    // One allocation per array for the joined list.
+    b.list.prims.reserve(parts.iter().map(|p| p.prims.len()).sum());
+    b.list.verts.reserve(parts.iter().map(|p| p.verts.len()).sum());
+    b.list.tris.reserve(parts.iter().map(|p| p.tris.len()).sum());
+    for part in parts {
+        append(&mut b.list, part);
+    }
+}
+
+/// Append `src` to `dst`: its primitives index into `dst`'s vertex and triangle arrays.
+#[cfg(not(target_arch = "wasm32"))]
+fn append(dst: &mut DisplayList, src: DisplayList) {
+    let (verts, tris, prims) = (dst.verts.len() as u32, dst.tris.len() as u32, dst.prims.len() as u32);
+    // Pens are parallel to the primitives, with missing entries meaning "use object".
+    if !src.pens.is_empty() {
+        dst.pens.resize(dst.prims.len(), Pen::default());
+    }
+    dst.prims.extend(src.prims.into_iter().map(|mut p| {
+        p.start += if matches!(p.kind, Kind::Tris | Kind::Mask) { tris } else { verts };
+        p
+    }));
+    dst.verts.extend(src.verts);
+    dst.tris.extend(src.tris);
+    dst.prim_layers.extend(src.prim_layers);
+    dst.texts.extend(src.texts.into_iter().map(|mut t| {
+        if t.prim < PlotText::CLIPPED {
+            t.prim += prims;
+        }
+        t
+    }));
+    dst.pens.extend(src.pens);
+    dst.bounds = dst.bounds.union(&src.bounds);
+    dst.expanded = dst.expanded.saturating_add(src.expanded);
 }
 
 /// `opts` with a view height for relative point sizes: the extents height when none is given
@@ -493,7 +563,7 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     let mcenter = vp.view_center + (rect.center() - center) / s;
     // Model window with slack: entity bounds are approximate (text, dimensions).
     let win = Bounds2::new(mcenter - mhalf, mcenter + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
-    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, styles: b.styles, named: None };
+    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, styles: b.styles, named: None, shared_budget: None };
     // PSLTSCALE on: model-space dashes are scaled so they measure the same on paper as in
     // paper space, whatever the viewport scale.
     let lt_factor = if d.header.i64("PSLTSCALE", 1) != 0 { 1.0 / s } else { 1.0 };
@@ -631,7 +701,7 @@ pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents:
     } else {
         opts
     };
-    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: None, named: None };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: None, named: None, shared_budget: None };
     for e in ents {
         entity(&mut b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
     }

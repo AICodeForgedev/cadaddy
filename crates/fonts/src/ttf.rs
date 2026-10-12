@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 
 use cadcraft_geom::Vec2;
 use skrifa::instance::{LocationRef, Size};
@@ -598,12 +598,13 @@ enum GlyphKey {
 }
 
 /// Cached glyph outlines keyed by (font bytes address, length, face, glyph). Fonts live for the
-/// whole process in the font table, so the address identifies them.
+/// whole process in the font table, so the address identifies them. A read-write lock: display
+/// lists are built on all cores and nearly every lookup is a hit, which a mutex serialized.
 type GlyphCache = HashMap<(usize, usize, u32, GlyphKey), Arc<GlyphOutline>>;
 
-fn glyph_cache() -> &'static Mutex<GlyphCache> {
-    static C: OnceLock<Mutex<GlyphCache>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(HashMap::new()))
+fn glyph_cache() -> &'static RwLock<GlyphCache> {
+    static C: OnceLock<RwLock<GlyphCache>> = OnceLock::new();
+    C.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 const MAX_CACHED_GLYPHS: usize = 40_000;
@@ -699,7 +700,7 @@ pub fn glyph_contours(face: &Face, gid: u16) -> Arc<[Vec<Vec2>]> {
 
 fn outline(face: &Face, k: GlyphKey) -> Arc<GlyphOutline> {
     let key = (face.bytes.as_ptr() as usize, face.bytes.len(), face.index, k);
-    if let Some(g) = glyph_cache().lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
+    if let Some(g) = glyph_cache().read().unwrap_or_else(PoisonError::into_inner).get(&key) {
         return g.clone();
     }
     let Some(f) = face.font() else { return Arc::new(GlyphOutline { cap: 1.0, ..Default::default() }) };
@@ -716,7 +717,7 @@ fn outline(face: &Face, k: GlyphKey) -> Arc<GlyphOutline> {
     let advance = f64::from(f.glyph_metrics(Size::new(UPEM), LocationRef::default()).advance_width(gid).unwrap_or(UPEM * 0.5));
     let (cap, mapped, gid) = (cap_height(&f), mapped.is_some(), gid.to_u32());
     let g = Arc::new(GlyphOutline { contours: pen.contours.into(), advance, cap, mapped, gid, face: Some(face.clone()) });
-    let mut cache = glyph_cache().lock().unwrap_or_else(PoisonError::into_inner);
+    let mut cache = glyph_cache().write().unwrap_or_else(PoisonError::into_inner);
     if cache.len() > MAX_CACHED_GLYPHS {
         cache.clear();
     }
