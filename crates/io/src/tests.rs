@@ -1985,3 +1985,30 @@ fn svg_no_geometry_yields_an_empty_drawing() {
     let d = read(svg.as_bytes(), "empty.svg").unwrap();
     assert!(kinds(&d).is_empty());
 }
+
+/// An application data group inside a kept XRECORD — the AcDs thumbnail schema's
+/// `{ATTRRECORD 341 h 2 name 280 1 291 1 ATTRRECORD}` — is written back as read. It used to be
+/// collapsed into a handle list: the handle came out under group 291 (a bool) and the name and
+/// flags were dropped, which strict DXF readers (ezdxf) reject outright.
+#[test]
+fn kept_xrecord_application_group_roundtrips_as_read() {
+    let dxf = "0\nSECTION\n2\nOBJECTS\n\
+0\nDICTIONARY\n5\nC\n330\n0\n100\nAcDbDictionary\n3\nTD_SCHEMA\n350\n20\n\
+0\nXRECORD\n5\n20\n330\nC\n100\nAcDbXrecord\n280\n1\n1\nAcDb_Thumbnail_Schema\n\
+102\n{ATTRRECORD\n341\n21\n2\nAcDbDs::TreatedAsObjectData\n280\n1\n291\n1\n102\nATTRRECORD}\n\
+0\nXRECORD\n5\n21\n330\n20\n100\nAcDbXrecord\n280\n1\n1\nTarget\n\
+0\nENDSEC\n0\nEOF\n";
+    let d = read_dxf(dxf.as_bytes()).expect("read");
+    let out = write_dxf(&d);
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    let at = lines.iter().position(|l| *l == "{ATTRRECORD").expect("group kept");
+    // The group keeps its own shape: a reference under 341, then the name, flag and bool.
+    assert_eq!(lines[at + 1], "341", "reference group code: {:?}", &lines[at..at + 12]);
+    assert!(lines[at + 2] != "0" && !lines[at + 2].is_empty());
+    assert_eq!(&lines[at + 3..at + 5], &["2", "AcDbDs::TreatedAsObjectData"]);
+    assert_eq!(&lines[at + 5..at + 7], &["280", "1"]);
+    assert_eq!(&lines[at + 7..at + 9], &["291", "1"]);
+    assert_eq!(&lines[at + 9..at + 11], &["102", "ATTRRECORD}"]);
+    // And no handle is written under a bool code anywhere.
+    assert!(!out.contains("291\n2"), "no handle may be written under a bool code");
+}

@@ -598,6 +598,19 @@ impl Map<'_> {
         while let Some(r) = o.tags.get(i) {
             i += 1;
             if r.code == 102 && r.value.trim().starts_with('{') {
+                // A `{NAME` group is a handle list (`{ACAD_REACTORS 330 … }`) only when every
+                // group inside it is a reference. Application data groups also use 102 brackets
+                // with mixed values and their own closing form — the AcDs thumbnail schema's
+                // `{ATTRRECORD 341 h 2 name 280 1 291 1 ATTRRECORD}` — and collapsing those into
+                // a handle list rewrote the handle under the LAST code read (291, a bool) and
+                // dropped the rest, which strict DXF readers reject. Those are written as read,
+                // references remapped, by the plain path below.
+                let end = (i..o.tags.len()).find(|&k| o.tags[k].code == 102).unwrap_or(o.tags.len());
+                let inner = &o.tags[i..end];
+                if !inner.is_empty() && !inner.iter().all(|n| is_pointer(n.code)) {
+                    out.push(tag(r));
+                    continue;
+                }
                 let name = r.value.trim().trim_start_matches('{').to_string();
                 let mut hs = Vec::new();
                 let mut code = 330;
