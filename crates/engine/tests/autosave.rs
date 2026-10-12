@@ -198,6 +198,13 @@ fn autosave_files_are_written_in_the_background_and_removed_on_exit() {
     assert!(dir.join(format!("{}.lock", a.instance)).exists());
     assert!(autosave::recoverable(&dir, "someone-else").is_empty());
 
+    // After a GPU error a change made a moment ago is autosaved right away, not SAVETIME later.
+    assert!(a.tick(&s).is_none(), "no change waiting");
+    draw(&mut s);
+    assert!(a.tick(&s).is_some(), "SAVETIME (3 minutes) is not up yet");
+    assert_eq!(a.save_now(&s), 1);
+    assert_eq!(a.save_now(&s), 0, "being written or written: nothing more to save");
+
     a.shutdown();
     assert!(!std::path::Path::new(&path).exists());
     assert!(!dir.join(format!("{}.lock", a.instance)).exists());

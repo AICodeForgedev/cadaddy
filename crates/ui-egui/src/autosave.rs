@@ -29,6 +29,14 @@ pub fn load_prefs(json: &str) {
     }
 }
 
+/// What the GPU error notice says (see [`gpu_notice`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GpuNotice {
+    pub fault: crate::gpu::GpuFault,
+    /// Drawings autosaved because of it (0: nothing unsaved, or autosave is off).
+    pub autosaved: usize,
+}
+
 /// Drawing Recovery: autosave files left behind by an app that stopped, listed once at start.
 #[derive(Clone, Debug, Default)]
 pub struct Recovery {
@@ -79,6 +87,19 @@ impl CadApp {
         if let Some(wait) = self.autosave.as_mut().and_then(|s| s.tick(&self.session)) {
             _ctx.request_repaint_after(wait);
         }
+    }
+
+    /// Every frame: after a GPU error or device loss, autosave unsaved drawings at once (the
+    /// session may not survive it) and show [`gpu_notice`].
+    pub fn gpu_fault_tick(&mut self, ctx: &egui::Context) {
+        let Some(fault) = self.gpu_faults.take() else { return };
+        #[cfg(not(target_arch = "wasm32"))]
+        let saved = self.autosave.as_mut().map_or(0, |a| a.save_now(&self.session));
+        #[cfg(target_arch = "wasm32")]
+        let saved = 0;
+        let autosaved = self.gpu_notice.as_ref().map_or(0, |n| n.autosaved) + saved;
+        self.gpu_notice = Some(GpuNotice { fault, autosaved });
+        ctx.request_repaint();
     }
 
     /// The app closes normally: this app's autosave files are not needed any more.
@@ -160,6 +181,48 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     }
     if open.is_some() || discard.is_some() || later {
         ctx.request_repaint();
+    }
+}
+
+/// The notice after a GPU error or device loss: what happened, what was autosaved, and what to
+/// do. Not modal, so drawings can still be saved while the device works.
+pub fn gpu_notice(app: &mut CadApp, ctx: &egui::Context) {
+    let Some(n) = &app.gpu_notice else { return };
+    let t = Tokens::get();
+    let mut dismiss = false;
+    egui::Window::new("Graphics error")
+        .id(egui::Id::new("cc_gpu_notice"))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_TOP, vec2(0.0, 48.0))
+        .show(ctx, |ui| {
+            ui.set_width(440.0);
+            if n.fault.lost {
+                ui.label("The graphics device stopped working (a driver reset or a GPU that stopped responding). CADCraft can't draw again until it restarts.");
+            } else {
+                let times = if n.fault.errors == 1 { String::new() } else { format!(" ({} times)", n.fault.errors) };
+                ui.label(format!("The graphics driver reported an error{times}. CADCraft kept running, but the drawing may not display correctly."));
+            }
+            ui.add_space(4.0);
+            match n.autosaved {
+                0 => ui.label("Nothing needed autosaving."),
+                1 => ui.label("A recovery copy of the open drawing with unsaved changes was autosaved."),
+                k => ui.label(format!("Recovery copies of {k} drawings with unsaved changes were autosaved.")),
+            };
+            ui.label(RichText::new("Save your work and restart CADCraft. Recovery copies are offered at the next start if needed.").strong());
+            ui.add_space(4.0);
+            ui.collapsing("Details", |ui| {
+                ui.label(RichText::new(&n.fault.message).color(t.text_dim).monospace());
+            });
+            // A row just as tall as the button (a plain right-to-left layout takes the rest).
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), 0.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Dismiss").clicked() {
+                    dismiss = true;
+                }
+            });
+        });
+    if dismiss {
+        app.gpu_notice = None;
     }
 }
 

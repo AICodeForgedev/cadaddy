@@ -494,9 +494,79 @@ fn upload(device: &wgpu::Device, label: &str, bytes: &[u8], stride: usize, usage
         .collect()
 }
 
-/// Create the canvas pipelines in the renderer's callback resources. Call once with the app's
-/// render state (eframe `CreationContext::wgpu_render_state`).
-pub fn install(rs: &egui_wgpu::RenderState) -> GpuTarget {
+/// GPU trouble wgpu reported: uncaptured errors (validation, out of memory) and the device being
+/// lost (a driver reset or a hung GPU). wgpu's default handler panics on the first uncaptured
+/// error, closing the app with any unsaved work (#602); the handlers [`install`] registers record
+/// them here instead, and the app autosaves and tells the user (see `CadApp::gpu_fault_tick`).
+#[derive(Debug, Default)]
+pub struct GpuFaults {
+    state: Mutex<FaultState>,
+}
+
+#[derive(Debug, Default)]
+struct FaultState {
+    errors: u64,
+    errors_seen: u64,
+    lost: bool,
+    lost_seen: bool,
+    last: String,
+}
+
+/// What [`GpuFaults::take`] reports.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GpuFault {
+    /// Uncaptured errors so far (an invalid resource can fail again every frame).
+    pub errors: u64,
+    /// The device was lost: nothing more can be drawn until the app restarts.
+    pub lost: bool,
+    /// The latest error or device-lost message.
+    pub message: String,
+}
+
+impl GpuFaults {
+    /// Errors logged in full before only every 1000th is (a repeating error would flood the log).
+    const LOGGED: u64 = 10;
+
+    pub fn error(&self, message: String) {
+        let Ok(mut s) = self.state.lock() else { return };
+        s.errors += 1;
+        if s.errors <= Self::LOGGED || s.errors % 1000 == 0 {
+            log::error!("wgpu error #{}: {message}", s.errors);
+        }
+        s.last = message;
+    }
+
+    pub fn device_lost(&self, reason: wgpu::DeviceLostReason, message: String) {
+        // `Destroyed` is the device being dropped on purpose (the app closing), not a failure.
+        if reason == wgpu::DeviceLostReason::Destroyed {
+            return;
+        }
+        log::error!("wgpu device lost ({reason:?}): {message}");
+        let Ok(mut s) = self.state.lock() else { return };
+        s.lost = true;
+        s.last = message;
+    }
+
+    /// Faults reported since the last call, if any.
+    pub fn take(&self) -> Option<GpuFault> {
+        let Ok(mut s) = self.state.lock() else { return None };
+        if s.errors == s.errors_seen && s.lost == s.lost_seen {
+            return None;
+        }
+        s.errors_seen = s.errors;
+        s.lost_seen = s.lost;
+        Some(GpuFault { errors: s.errors, lost: s.lost, message: s.last.clone() })
+    }
+}
+
+/// Create the canvas pipelines in the renderer's callback resources, and report wgpu errors and
+/// device loss to `faults` instead of panicking. Call once with the app's render state (eframe
+/// `CreationContext::wgpu_render_state`).
+pub fn install(rs: &egui_wgpu::RenderState, faults: &Arc<GpuFaults>) -> GpuTarget {
+    let f = Arc::clone(faults);
+    rs.device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| f.error(e.to_string())));
+    let f = Arc::clone(faults);
+    rs.device.set_device_lost_callback(move |reason, message| f.device_lost(reason, message));
     let target = GpuTarget { format: rs.target_format };
     let res = Resources::new(&rs.device, target);
     rs.renderer.write().callback_resources.insert(res);

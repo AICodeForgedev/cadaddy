@@ -211,6 +211,10 @@ pub struct CadApp {
     pub autosave: Option<cadcraft_engine::autosave::Autosaver>,
     /// Drawing Recovery: autosave files a crashed app left behind.
     pub recovery: autosave::Recovery,
+    /// GPU errors and device loss reported by wgpu ([`gpu::GpuFaults`]).
+    pub gpu_faults: std::sync::Arc<gpu::GpuFaults>,
+    /// The notice shown after one (see [`autosave::gpu_notice`]).
+    pub gpu_notice: Option<autosave::GpuNotice>,
 }
 
 impl CadApp {
@@ -242,6 +246,8 @@ impl CadApp {
             closing: None,
             autosave: None,
             recovery: autosave::Recovery::default(),
+            gpu_faults: std::sync::Arc::default(),
+            gpu_notice: None,
         }
     }
 
@@ -252,7 +258,7 @@ impl CadApp {
     /// Draw the canvas on the GPU with the app's wgpu render state (eframe's
     /// `CreationContext::wgpu_render_state`). Without it the canvas draws on the CPU.
     pub fn set_wgpu(&mut self, rs: &egui_wgpu::RenderState) {
-        self.canvas.gpu = Some(gpu::install(rs));
+        self.canvas.gpu = Some(gpu::install(rs, &self.gpu_faults));
     }
 
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
@@ -425,6 +431,7 @@ impl CadApp {
         }
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
+        self.gpu_fault_tick(ctx);
         self.autosave_tick(ctx);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
@@ -492,6 +499,7 @@ impl CadApp {
         dialogs::show(self, ui.ctx());
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
+        autosave::gpu_notice(self, ui.ctx());
         self.frame_ms = now_ms() - t0;
     }
 

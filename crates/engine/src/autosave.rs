@@ -162,6 +162,12 @@ impl Autosaver {
     /// `dir`: write drawings changed `minutes` ago or earlier and not autosaved since, delete the
     /// files of drawings that were saved (no unsaved changes left) or closed.
     pub fn plan(&mut self, s: &Session, now: f64, minutes: u32, dir: &str) -> Vec<Job> {
+        self.plan_with(s, now, minutes, dir, false)
+    }
+
+    /// [`Autosaver::plan`], with `urgent` writing every drawing with changes not yet autosaved
+    /// now instead of `minutes` after the change (autosave still off when `minutes` is 0).
+    fn plan_with(&mut self, s: &Session, now: f64, minutes: u32, dir: &str, urgent: bool) -> Vec<Job> {
         let mut jobs = Vec::new();
         let live: HashSet<u64> = s.docs.iter().map(|d| d.uid).collect();
         let busy = &self.busy;
@@ -193,7 +199,7 @@ impl Autosaver {
                 continue;
             }
             let since = *t.since.get_or_insert(now);
-            if minutes == 0 || dir.trim().is_empty() || now - since < f64::from(minutes) * 60.0 {
+            if minutes == 0 || dir.trim().is_empty() || (!urgent && now - since < f64::from(minutes) * 60.0) {
                 continue;
             }
             let path = t
@@ -349,6 +355,20 @@ mod native {
             self.perform(jobs);
             self.heartbeat(&dir, now);
             self.next_due(now, minutes).map(Duration::from_secs_f64)
+        }
+
+        /// Autosave every drawing with changes not yet autosaved right away, without waiting for
+        /// SAVETIME (the app may not survive what just happened, e.g. a GPU error). Returns how
+        /// many drawings are being written.
+        pub fn save_now(&mut self, s: &Session) -> usize {
+            let now = self.start.elapsed().as_secs_f64();
+            let jobs = self.plan_with(s, now, savetime(), &savefilepath(), true);
+            let writes = jobs.iter().filter(|j| matches!(j, Job::Write { .. })).count();
+            self.perform(jobs);
+            // The lock file marks the files as this running app's (Drawing Recovery skips them).
+            self.last_beat = None;
+            self.heartbeat(&savefilepath(), now);
+            writes
         }
 
         /// Carry out jobs from [`Autosaver::plan`]: writes on a background thread, deletes now.
