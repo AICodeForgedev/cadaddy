@@ -994,3 +994,21 @@
 	Hide Others	Andere ausblenden
 	Accessibility	Bedienungshilfen
 	Show System Cursor	Systemzeiger anzeigen
+	3D Mouse...	3D-Maus...
+	3D Mouse	3D-Maus
+	Calibrate 3D Mouse	3D-Maus kalibrieren
+	3D Mouse Navigation	Navigation mit der 3D-Maus
+	3D mouse input is unavailable on this platform	3D-Mauseingabe ist auf dieser Plattform nicht verfügbar
+	No supported 3D mouse found	Keine unterstützte 3D-Maus gefunden
+	Release the 3D mouse to calibrate its resting position	3D-Maus loslassen, um ihre Ruheposition zu kalibrieren
+	3D mouse connected	3D-Maus verbunden
+	3D mouse busy, possibly 3DxWare or missing device permissions	3D-Maus belegt, möglicherweise durch 3DxWare oder fehlende Geräteberechtigungen
+	3D mouse disconnected	3D-Maus getrennt
+	3D mouse input could not be started	3D-Mauseingabe konnte nicht gestartet werden
+	Enable 3D mouse navigation	Navigation mit der 3D-Maus aktivieren
+	Pan sensitivity	Empfindlichkeit beim Verschieben
+	Zoom sensitivity	Zoom-Empfindlichkeit
+	Reverse zoom direction	Zoomrichtung umkehren
+	Calibrate	Kalibrieren
+	Move sideways to pan; push/pull or twist to zoom.	Seitlich bewegen zum Verschieben; drücken, ziehen oder drehen zum Zoomen.
+	Left device button: zoom extents. Right device button: calibrate.	Linke Gerätetaste: auf Grenzen zoomen. Rechte Gerätetaste: kalibrieren.

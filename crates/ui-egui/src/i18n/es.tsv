@@ -994,3 +994,21 @@
 	Hide Others	Ocultar otros
 	Accessibility	Accesibilidad
 	Show System Cursor	Mostrar cursor del sistema
+	3D Mouse...	Ratón 3D...
+	3D Mouse	Ratón 3D
+	Calibrate 3D Mouse	Calibrar ratón 3D
+	3D Mouse Navigation	Navegación con ratón 3D
+	3D mouse input is unavailable on this platform	El ratón 3D no está disponible en esta plataforma
+	No supported 3D mouse found	No se encontró un ratón 3D compatible
+	Release the 3D mouse to calibrate its resting position	Suelta el ratón 3D para calibrar su posición de reposo
+	3D mouse connected	Ratón 3D conectado
+	3D mouse busy, possibly 3DxWare or missing device permissions	Ratón 3D ocupado, posiblemente por 3DxWare o por falta de permisos del dispositivo
+	3D mouse disconnected	Ratón 3D desconectado
+	3D mouse input could not be started	No se pudo iniciar el ratón 3D
+	Enable 3D mouse navigation	Activar navegación con ratón 3D
+	Pan sensitivity	Sensibilidad de desplazamiento
+	Zoom sensitivity	Sensibilidad de zoom
+	Reverse zoom direction	Invertir dirección del zoom
+	Calibrate	Calibrar
+	Move sideways to pan; push/pull or twist to zoom.	Mueve el mando lateralmente para desplazar; empuja, tira o gira para hacer zoom.
+	Left device button: zoom extents. Right device button: calibrate.	Botón izquierdo del dispositivo: zoom a la extensión. Botón derecho: calibrar.

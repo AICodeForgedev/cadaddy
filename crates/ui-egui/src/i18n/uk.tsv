@@ -1203,6 +1203,24 @@
 	Multiline...	Мультилінія...
 	Multiline Style...	Стиль мультилінії...
 	Solid Editing	Редагування тіл
+	3D Mouse...	3D-миша...
+	3D Mouse	3D-миша
+	Calibrate 3D Mouse	Калібрувати 3D-мишу
+	3D Mouse Navigation	Навігація за допомогою 3D-миші
+	3D mouse input is unavailable on this platform	Введення з 3D-миші недоступне на цій платформі
+	No supported 3D mouse found	Сумісну 3D-мишу не знайдено
+	Release the 3D mouse to calibrate its resting position	Відпустіть 3D-мишу, щоб відкалібрувати її положення спокою
+	3D mouse connected	3D-мишу підключено
+	3D mouse busy, possibly 3DxWare or missing device permissions	3D-миша зайнята, можливо, через 3DxWare або недостатні права доступу до пристрою
+	3D mouse disconnected	3D-мишу відключено
+	3D mouse input could not be started	Не вдалося запустити введення з 3D-миші
+	Enable 3D mouse navigation	Увімкнути навігацію 3D-мишею
+	Pan sensitivity	Чутливість панорамування
+	Zoom sensitivity	Чутливість масштабування
+	Reverse zoom direction	Змінити напрямок масштабування
+	Calibrate	Калібрувати
+	Move sideways to pan; push/pull or twist to zoom.	Рухайте вбік для панорамування; натискайте, тягніть або обертайте для масштабування.
+	Left device button: zoom extents. Right device button: calibrate.	Ліва кнопка пристрою: масштабування до меж. Права кнопка: калібрування.
 	More toolbar commands	Інші команди панелі інструментів
 	Default save version	Типова версія збереження
 	Automatic save every	Автозбереження кожні
