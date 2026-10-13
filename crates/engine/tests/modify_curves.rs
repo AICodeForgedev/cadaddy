@@ -263,6 +263,26 @@ fn join_merges_elliptical_arcs_on_one_ellipse() {
 }
 
 #[test]
+fn join_names_an_elliptical_arc_twice_without_losing_it() {
+    // The same arc twice is one object: nothing to join, and the arc stays.
+    let mut s = Session::new();
+    let a = arc_on_ellipse(&mut s, 0.0, 90.0);
+    let before = ellipse(&s, &a);
+    assert!(s.execute("join", &json!({ "handles": [a, a] })).is_err());
+    assert_eq!(count(&s), 1);
+    assert_eq!(ellipse(&s, &a), before);
+    // Repeating the source next to a second arc still merges the two into the source.
+    let mut s = Session::new();
+    let a = arc_on_ellipse(&mut s, 0.0, 90.0);
+    let b = arc_on_ellipse(&mut s, 90.0, 180.0);
+    let r = s.execute("join", &json!({ "handles": [a, a, b] })).unwrap();
+    assert_eq!(h(&r), a);
+    let m = ellipse(&s, &a);
+    assert!(m.start.abs() < 1e-9 && (m.end - PI).abs() < 1e-9, "{m:?}");
+    assert_eq!(count(&s), 1);
+}
+
+#[test]
 fn join_makes_one_spline_from_lines_arcs_polylines_and_splines() {
     let mut s = Session::new();
     let sp = s_curve(&mut s);

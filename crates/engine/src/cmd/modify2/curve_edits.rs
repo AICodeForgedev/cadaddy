@@ -228,6 +228,9 @@ fn ends(sp: &Spline) -> (Vec2, Vec2) {
 /// larger arc or the full ellipse (gaps between them close). Otherwise the objects joined end
 /// to end with the first one become one spline. The first joined object keeps its handle.
 pub(crate) fn join_curves(s: &mut Session, hs: &[Handle]) -> Result<Option<Handle>> {
+    // A handle named twice is one object: a repeat would join it with itself or remove the result.
+    let mut seen = std::collections::HashSet::new();
+    let hs: Vec<Handle> = hs.iter().copied().filter(|h| seen.insert(*h)).collect();
     let d = s.doc()?;
     let ents: Vec<Entity> = hs.iter().filter_map(|h| d.entity(*h).map(|e| (**e).clone())).collect();
     if !ents.iter().any(|e| matches!(e.kind, EntityKind::Ellipse(_) | EntityKind::Spline(_))) {
