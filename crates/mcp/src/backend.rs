@@ -21,13 +21,49 @@ pub struct Remote {
     addr: String,
     conn: Option<(BufReader<TcpStream>, TcpStream)>,
     next_id: u64,
+    /// Open the app when nothing answers (see [`Remote::lazy`]).
+    launch: bool,
 }
+
+/// How long a launched app has to open its control port.
+const LAUNCH_WAIT: Duration = Duration::from_secs(30);
 
 impl Remote {
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1 };
+        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, launch: false };
         r.reconnect()?;
         Ok(r)
+    }
+    /// The app at `addr`, reached at the first call instead of now, so an MCP client can start
+    /// the server before the app is open. With `launch`, a call that finds nothing at `addr`
+    /// opens the app with that control port first (macOS) and waits for it.
+    pub fn lazy(addr: &str, launch: bool) -> Self {
+        Self { addr: addr.to_string(), conn: None, next_id: 1, launch }
+    }
+    /// Connect, opening the app first when asked to and nothing answers.
+    fn reach(&mut self) -> std::io::Result<()> {
+        let first = match self.reconnect() {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+        if !self.launch || !matches!(first.kind(), std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::TimedOut) {
+            return Err(not_open(&self.addr, first));
+        }
+        launch_app(&self.addr)?;
+        let start = std::time::Instant::now();
+        while start.elapsed() < LAUNCH_WAIT {
+            std::thread::sleep(Duration::from_millis(500));
+            if self.reconnect().is_ok() {
+                return Ok(());
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!(
+                "CADCraft was opened but its control port {} did not answer; if it was already open without the port, quit it and try again",
+                self.addr
+            ),
+        ))
     }
     fn reconnect(&mut self) -> std::io::Result<()> {
         self.conn = None;
@@ -49,7 +85,7 @@ impl Remote {
     /// On failure the flag says whether the request may already have reached the server.
     fn roundtrip(&mut self, line: &str) -> Result<String, (std::io::Error, bool)> {
         if self.conn.is_none() {
-            self.reconnect().map_err(|e| (e, false))?;
+            self.reach().map_err(|e| (e, false))?;
         }
         let Some((reader, writer)) = self.conn.as_mut() else { return Err((std::io::Error::other("not connected"), false)) };
         let sent = writer.write_all(line.as_bytes()).and_then(|()| writer.write_all(b"\n")).and_then(|()| writer.flush());
@@ -69,6 +105,27 @@ impl Remote {
                 Err((e, true))
             }
         }
+    }
+}
+
+/// The error for an app that doesn't answer: what to do about it.
+fn not_open(addr: &str, e: std::io::Error) -> std::io::Error {
+    std::io::Error::new(
+        e.kind(),
+        format!(
+            "CADCraft is not answering at {addr} ({e}). Open CADCraft with its control port (`--control PORT` or CADCRAFT_CONTROL_PORT), then try again"
+        ),
+    )
+}
+
+/// Open the app with the control port of `addr` (macOS: `open -a CADCraft`).
+fn launch_app(addr: &str) -> std::io::Result<()> {
+    let port = addr.rsplit(':').next().filter(|p| p.parse::<u16>().is_ok()).ok_or_else(|| std::io::Error::other(format!("no port in {addr}")))?;
+    if cfg!(target_os = "macos") {
+        let ok = std::process::Command::new("open").args(["-a", "CADCraft", "--args", "--control", port]).status()?.success();
+        if ok { Ok(()) } else { Err(std::io::Error::other("could not open CADCraft (is it in Applications?)")) }
+    } else {
+        Err(std::io::Error::other(format!("CADCraft is not running; start it with `cadcraft --control {port}`")))
     }
 }
 

@@ -139,3 +139,35 @@ fn list_commands_filter_matches_names_not_docs() {
     let r = tool(&mut s, "list_commands", json!({"filter": "pl"}));
     assert!(r.as_array().unwrap().iter().any(|c| c["id"] == "pline"), "aliases and ids match");
 }
+
+#[test]
+fn a_lazy_bridge_starts_without_the_app_and_says_how_to_open_it() {
+    // Nothing listens on a port that was just freed.
+    let addr = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().to_string()
+    };
+    let mut s = Server::new(Box::new(crate::Remote::lazy(&addr, false)));
+    let init = call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    assert_eq!(init["result"]["serverInfo"]["name"], "cadcraft");
+    let tools = call(&mut s, 2, "tools/list", json!({}));
+    assert!(tools["result"]["tools"].as_array().unwrap().iter().any(|t| t["name"] == "screenshot"));
+    let r = call(&mut s, 3, "tools/call", json!({"name": "command_line", "arguments": {"text": "line 0,0 1,1"}}));
+    assert_eq!(r["result"]["isError"], json!(true));
+    let msg = r["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(msg.contains("not answering") && msg.contains("--control"), "{msg}");
+
+    // Once the app listens, the next call reaches it.
+    let listener = std::net::TcpListener::bind(&addr).unwrap();
+    let app = std::thread::spawn(move || {
+        use std::io::{BufRead, Write};
+        let (sock, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(sock.try_clone().unwrap()).read_line(&mut line).unwrap();
+        let id = serde_json::from_str::<Value>(&line).unwrap()["id"].clone();
+        writeln!(&sock, "{}", json!({"id": id, "ok": true, "result": {"prompt": "Command:"}})).unwrap();
+    });
+    let r = call(&mut s, 4, "tools/call", json!({"name": "command_line", "arguments": {"text": ""}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    app.join().unwrap();
+}

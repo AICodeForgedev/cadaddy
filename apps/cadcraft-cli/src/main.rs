@@ -5,7 +5,7 @@
 //! cadcraft-cli convert IN.dxf OUT.(dxf|svg|png) [--window x0,y0,x1,y1 | --view extents|current]
 //! cadcraft-cli run [FILE|--sample|--metric] [--script TEXT|--script-file F.scr] [--cmd 'id {json}']... [--save OUT] [--export OUT.png] [--window ... | --view ...]
 //! cadcraft-cli commands [FILTER]                   command catalog (JSON)
-//! cadcraft-cli mcp [--connect HOST:PORT]           MCP server on stdio (headless or bridged to the app)
+//! cadcraft-cli mcp [--connect HOST:PORT [--lazy] [--launch]]  MCP server on stdio (headless or bridged to the app)
 //! cadcraft-cli perf [N]                            timing table on a synthetic N-entity drawing
 //! cadcraft-cli perf FILE                           canvas display-list build of a drawing, zoomed in step by step
 //! cadcraft-cli sample (bracket|floorplan) OUT       write a built-in sample drawing
@@ -60,7 +60,7 @@ const USAGE: &str = "usage:
   cadcraft-cli convert IN.dxf OUT.(dxf|dwg|svg|png|pdf) [FRAMING]
   cadcraft-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
   cadcraft-cli commands [FILTER]
-  cadcraft-cli mcp [--connect HOST:PORT]
+  cadcraft-cli mcp [--connect HOST:PORT [--lazy] [--launch]]
   cadcraft-cli perf [N | FILE]
   cadcraft-cli sample (bracket|floorplan) OUT.(dxf|dwg|svg|png)
   cadcraft-cli --version
@@ -524,37 +524,47 @@ fn perf(args: &[String]) -> Result<(), String> {
 enum McpTarget {
     /// An in-process drawing session (no `--connect`).
     Headless,
-    /// The running app's control channel at `HOST:PORT`.
-    Connect(String),
+    /// The running app's control channel at `HOST:PORT`; `lazy`: reached at the first call;
+    /// `launch`: opened then if it isn't running.
+    Connect { addr: String, lazy: bool, launch: bool },
 }
 
 /// Parses the arguments after `mcp`. `--connect` must be followed by a `HOST:PORT`; a missing,
 /// empty or flag-like value is an error, never a silent fall back to a headless session (#103).
 fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
-    let mut target = McpTarget::Headless;
+    let mut addr: Option<String> = None;
+    let (mut lazy, mut launch) = (false, false);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--connect" => {
-                let addr = it
+                let a = it
                     .next()
                     .map(|v| v.trim())
                     .filter(|v| !v.is_empty() && !v.starts_with('-'))
                     .ok_or("--connect needs HOST:PORT (the app's --control port, e.g. 127.0.0.1:7979)")?;
-                if target != McpTarget::Headless {
+                if addr.is_some() {
                     return Err("--connect given more than once".into());
                 }
-                target = McpTarget::Connect(addr.to_string());
+                addr = Some(a.to_string());
             }
+            "--lazy" => lazy = true,
+            "--launch" => launch = true,
             other => return Err(format!("mcp: unknown argument {other}\n{USAGE}")),
         }
     }
-    Ok(target)
+    match addr {
+        // `--launch` connects at the first call too (the app opens then).
+        Some(addr) => Ok(McpTarget::Connect { addr, lazy: lazy || launch, launch }),
+        None if lazy || launch => Err("--lazy and --launch need --connect HOST:PORT".into()),
+        None => Ok(McpTarget::Headless),
+    }
 }
 
 fn mcp(args: &[String]) -> Result<(), String> {
     let backend: Box<dyn cadcraft_mcp::Backend> = match parse_mcp_args(args)? {
-        McpTarget::Connect(addr) => match cadcraft_mcp::Remote::connect(&addr) {
+        McpTarget::Connect { addr, lazy: true, launch } => Box::new(cadcraft_mcp::Remote::lazy(&addr, launch)),
+        McpTarget::Connect { addr, .. } => match cadcraft_mcp::Remote::connect(&addr) {
             Ok(r) => Box::new(r),
             Err(e) => return Err(format!("cadcraft-cli: cannot connect to {addr}: {e}")),
         },
@@ -580,8 +590,14 @@ mod mcp_args_tests {
 
     #[test]
     fn mcp_connect_with_address_selects_remote() {
-        assert_eq!(parse_mcp_args(&args(&["--connect", "127.0.0.1:7979"])), Ok(McpTarget::Connect("127.0.0.1:7979".into())));
-        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979"])), Ok(McpTarget::Connect("localhost:7979".into())));
+        let to = |addr: &str, lazy, launch| Ok(McpTarget::Connect { addr: addr.into(), lazy, launch });
+        assert_eq!(parse_mcp_args(&args(&["--connect", "127.0.0.1:7979"])), to("127.0.0.1:7979", false, false));
+        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979"])), to("localhost:7979", false, false));
+        assert_eq!(parse_mcp_args(&args(&["--lazy", "--connect", "localhost:7979"])), to("localhost:7979", true, false));
+        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979", "--launch"])), to("localhost:7979", true, true));
+        // Without an app to reach they mean nothing: never a headless session.
+        assert!(parse_mcp_args(&args(&["--lazy"])).is_err());
+        assert!(parse_mcp_args(&args(&["--launch"])).is_err());
     }
 
     #[test]
