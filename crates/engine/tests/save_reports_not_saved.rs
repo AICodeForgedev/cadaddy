@@ -58,3 +58,27 @@ fn templates_report_what_dwg_does_not_keep() {
     assert!(drops_unknown("a.dwg") && drops_unknown("B.DWT"));
     assert!(!drops_unknown("a.dxf"));
 }
+
+#[test]
+fn solids_whose_geometry_the_data_store_keeps_are_not_reported_from_2013() {
+    use cadcraft_engine::cmd::file::{Version, not_saved_as};
+    use cadcraft_engine::doc::Handle;
+    use cadcraft_engine::doc::foreign::Foreign;
+    let mut d = Drawing::new_imperial();
+    let kept = d.add(&Space::Model, Common::default(), unknown("3DSOLID")).unwrap();
+    d.add(&Space::Model, Common::default(), unknown("3DSOLID")).unwrap();
+    d.add(&Space::Model, Common::default(), unknown("REGION")).unwrap();
+    let record = |h: Handle| {
+        vec![
+            RawTag { code: 0, value: "ACDSRECORD".into() },
+            RawTag { code: 320, value: h.hex() },
+            RawTag { code: 2, value: "ASM_Data".into() },
+            RawTag { code: 310, value: "00".into() },
+        ]
+    };
+    d.foreign = std::sync::Arc::new(Foreign { data_store: record(kept), ..Foreign::default() });
+    // The solid with a data store record keeps its geometry from 2013 on; the others don't.
+    assert_eq!(not_saved_as(&d, Version::R2018), [("3DSOLID".to_string(), 1), ("REGION".to_string(), 1)].into_iter().collect());
+    // Before 2013 a file has no data store: every solid loses its geometry.
+    assert_eq!(not_saved_as(&d, Version::R2010), [("3DSOLID".to_string(), 2), ("REGION".to_string(), 1)].into_iter().collect());
+}

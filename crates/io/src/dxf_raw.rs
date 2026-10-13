@@ -450,9 +450,51 @@ pub(crate) fn read(secs: &[Section], d: &mut Drawing) {
             f.targets.insert(h, k.clone());
         }
     }
+    // The data store (ACDSDATA): the ACIS geometry of solids, regions and bodies from 2013 on.
+    if let Some(ds) = secs.iter().find(|s| s.name.eq_ignore_ascii_case("ACDSDATA")) {
+        f.data_store = ds.tags.iter().take(MAX_DATA_STORE_GROUPS).map(raw).collect();
+    }
     if !f.is_empty() {
         d.foreign = Arc::new(f);
     }
+}
+
+/// Most groups of a data store section kept (a damaged file's can be endless).
+const MAX_DATA_STORE_GROUPS: usize = 1 << 26;
+
+/// Write the drawing's kept data store section (ACDSDATA) before the end of `tags`, without the
+/// records of entities that are no longer written. Only for files of AutoCAD 2013 and later
+/// (`modern`), whose solids, regions and bodies keep their geometry there; the DWG bridge reads it
+/// too. Nothing is written when no record's entity remains.
+pub(crate) fn data_store(tags: &mut Vec<Tag>, d: &Drawing, modern: bool) {
+    let ds = &d.foreign.data_store;
+    if !modern || ds.is_empty() {
+        return;
+    }
+    let written: HashSet<String> = tags.iter().filter(|t| t.code == 5).map(|t| norm(&t.str())).collect();
+    // The section's own groups before its first record, then its schemas and records.
+    let mut out: Vec<Tag> = vec![Tag::s(0, "SECTION"), Tag::s(2, "ACDSDATA")];
+    let first = ds.iter().position(|t| t.code == 0).unwrap_or(ds.len());
+    out.extend(ds.iter().take(first).map(tag));
+    let mut records = 0usize;
+    let mut i = first;
+    while i < ds.len() {
+        let end = ds.iter().skip(i + 1).position(|t| t.code == 0).map_or(ds.len(), |k| i + 1 + k);
+        let rec = ds.get(i..end).unwrap_or(&[]);
+        let is_record = rec.first().is_some_and(|t| t.value.trim().eq_ignore_ascii_case("ACDSRECORD"));
+        let owner = rec.iter().find(|t| t.code == 320).map(|t| norm(&t.value));
+        if !is_record || owner.as_ref().is_some_and(|h| written.contains(h)) {
+            records += usize::from(is_record);
+            out.extend(rec.iter().map(tag));
+        }
+        i = end;
+    }
+    if records == 0 {
+        return;
+    }
+    out.push(Tag::s(0, "ENDSEC"));
+    let at = tags.iter().rposition(|t| t.code == 0 && t.str() == "EOF").unwrap_or(tags.len());
+    tags.splice(at..at, out);
 }
 
 /// Drop a dictionary's modelled entries (key and handle) from its groups.
