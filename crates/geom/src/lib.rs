@@ -75,4 +75,6 @@ pub fn arc_segments(radius: f64, sweep: f64, tol: f64) -> usize {
 }
 
 #[cfg(test)]
+mod property_tests;
+#[cfg(test)]
 mod tests;
