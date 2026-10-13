@@ -100,6 +100,8 @@ const MAX_FALLBACK_BYTES: usize = 160 << 20;
 const MAX_FALLBACK_FACES: usize = 256;
 /// Files loaded by one family-name lookup.
 const MAX_FAMILY_FILES: usize = 6;
+/// Further files a family-name lookup loads: those starting with the name's first word.
+const MAX_FIRST_WORD_FILES: usize = 24;
 /// Total bytes of system font files loaded from disk: a drawing naming many styles can't pull
 /// every installed font into memory.
 const MAX_LOADED_BYTES: usize = 256 << 20;
@@ -311,22 +313,15 @@ impl Db {
         self.by_family(k)
     }
 
-    /// A face whose family or full name is `k`, among files with a similar stem.
+    /// A face whose family or full name is `k`, among files with a similar stem, then among the
+    /// files whose stem begins with the name's first word (`GOST.TTF` for "GOST type A").
     fn by_family(&mut self, k: &str) -> Option<Face> {
         let want = norm(k);
         if want.len() < 5 {
             return None;
         }
-        let mut stems: Vec<(usize, usize, String)> = self
-            .paths
-            .keys()
-            .chain(self.files.keys())
-            .map(|s| (weight_penalty(s, &want), common_prefix(&norm(s), &want), s.clone()))
-            .filter(|(_, p, _)| *p >= 5)
-            .collect();
-        stems.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
-        stems.dedup_by(|a, b| a.2 == b.2);
-        for (_, _, stem) in stems.into_iter().take(MAX_FAMILY_FILES) {
+        let stems: Vec<String> = self.paths.keys().chain(self.files.keys()).cloned().collect();
+        for stem in family_candidates(&stems, &want, &norm(k.split_whitespace().next().unwrap_or(""))) {
             let Some(bytes) = self.file(&stem) else { continue };
             if let Some(face) = faces(&bytes).into_iter().find(|f| f.names().iter().any(|n| *n == want || format!("{n}regular") == want)) {
                 return Some(face);
@@ -419,6 +414,25 @@ impl Db {
 /// Lower-case, without spaces, hyphens and underscores.
 fn norm(s: &str) -> String {
     s.chars().filter(|c| !matches!(c, ' ' | '-' | '_')).flat_map(char::to_lowercase).collect()
+}
+
+/// The font file stems to check for the family `want` (normalised), best first: those sharing a
+/// long prefix with it ([`MAX_FAMILY_FILES`]), then those starting with its `first` word
+/// ([`MAX_FIRST_WORD_FILES`]).
+fn family_candidates(stems: &[String], want: &str, first: &str) -> Vec<String> {
+    let mut by_prefix: Vec<(usize, usize, String)> =
+        stems.iter().map(|s| (weight_penalty(s, want), common_prefix(&norm(s), want), s.clone())).filter(|(_, p, _)| *p >= 5).collect();
+    by_prefix.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
+    by_prefix.dedup_by(|a, b| a.2 == b.2);
+    let mut out: Vec<String> = by_prefix.into_iter().take(MAX_FAMILY_FILES).map(|(_, _, s)| s).collect();
+    if first.chars().count() >= 4 {
+        let mut by_word: Vec<(usize, usize, String)> =
+            stems.iter().filter(|s| norm(s).starts_with(first) && !out.contains(s)).map(|s| (weight_penalty(s, want), s.len(), s.clone())).collect();
+        by_word.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        by_word.dedup_by(|a, b| a.2 == b.2);
+        out.extend(by_word.into_iter().take(MAX_FIRST_WORD_FILES).map(|(_, _, s)| s));
+    }
+    out
 }
 
 fn common_prefix(a: &str, b: &str) -> usize {
@@ -847,4 +861,20 @@ pub fn layout_line(face: &Face, s: &str, height: f64, width_factor: f64, oblique
     let mut strokes: Vec<Vec<Vec2>> = sh.glyphs.into_iter().flatten().collect();
     strokes.extend(sh.strokes);
     Some(Run { strokes, width: sh.width })
+}
+
+#[cfg(test)]
+mod family_tests {
+    use super::*;
+
+    #[test]
+    fn a_family_is_looked_for_in_files_starting_with_its_first_word() {
+        let stems: Vec<String> = ["gost", "gost2304a", "gost common", "arial", "isocpeur"].map(String::from).to_vec();
+        let c = family_candidates(&stems, &norm("gost type a"), "gost");
+        assert!(c.contains(&"gost".to_string()), "GOST.TTF holds \"GOST type A\": {c:?}");
+        assert!(!c.contains(&"arial".to_string()));
+        assert!(family_candidates(&stems, &norm("gost type a"), "go").is_empty(), "too short a word matches nothing");
+        let many: Vec<String> = (0..100).map(|i| format!("gost{i:03}")).collect();
+        assert!(family_candidates(&many, "gosttypea", "gost").len() <= MAX_FAMILY_FILES + MAX_FIRST_WORD_FILES);
+    }
 }

@@ -1277,8 +1277,16 @@ fn annotative(tags: &[Tag]) -> bool {
 }
 
 /// A text style's font: CADCraft's own font name from `CADCRAFT` xdata (`1000 FONT`, name)
-/// while the font file is still the `txt` written for other readers, otherwise the file.
+/// while the font file is still the `txt` written for other readers; the TrueType family of the
+/// style's `ACAD` xdata (`1000` typeface) when it has no font file (how AutoCAD stores TrueType
+/// styles); otherwise the file.
 fn style_font(tags: &[Tag], file: String) -> String {
+    if file.trim().is_empty()
+        && let Some(face) =
+            crate::dxf_ext::xdata(tags, "ACAD").iter().find(|t| t.code == 1000).map(|t| t.str().trim().to_string()).filter(|f| !f.is_empty())
+    {
+        return face;
+    }
     let x = crate::dxf_ext::xdata(tags, crate::dxf_ext::APP);
     let own = x.windows(2).find_map(|w| match w {
         [m, n] if m.code == 1000 && m.str() == "FONT" && n.code == 1000 => Some(n.str()),
