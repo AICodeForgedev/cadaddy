@@ -1207,6 +1207,15 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             return;
         }
     }
+    // Double-click text to edit it, as in AutoCAD: TEXTEDIT with that object already picked.
+    if inside
+        && dbl_primary
+        && app.session.running.is_none()
+        && let Some(hp) = hover_pos
+        && edit_text_at(app, xf.to_world(hp))
+    {
+        return;
+    }
 
     // Double-click a hatch (no command running) to edit it in the Hatch Edit dialog. The click is
     // used up: it must not also start a grip edit on the hatch's centre grip below.
@@ -1627,6 +1636,23 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 }
 
 /// The model space tiles on screen (none without tiling): each tile's rectangle in `full`.
+/// Start TEXTEDIT on the text, mtext or attribute definition at `p` (the objects its shortcut menu
+/// offers Edit Text for); false when there is none.
+fn edit_text_at(app: &mut CadApp, p: Vec2) -> bool {
+    use cadcraft_engine::doc::EntityKind;
+    let is_text = cadcraft_engine::cmd::curves::pick_at(&app.session, p).and_then(|h| {
+        app.session.doc().ok()?.entity(h).map(|e| matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_)))
+    });
+    if is_text != Some(true) {
+        return false;
+    }
+    app.start("textedit");
+    if let Err(e) = app.session.input(Input::Point(p)) {
+        app.session.echo(e.to_string());
+    }
+    true
+}
+
 fn tile_rects(app: &CadApp, full: Rect) -> Vec<(Rect, cadcraft_engine::ModelTile)> {
     let x = |f: f64| full.left() + full.width() * f.clamp(0.0, 1.0) as f32;
     let y = |f: f64| full.bottom() - full.height() * f.clamp(0.0, 1.0) as f32;
