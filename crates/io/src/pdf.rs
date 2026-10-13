@@ -198,6 +198,30 @@ pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     // `layouts: [name | "Model"] | "all"` plots those sheets into one file, one page each,
     // instead of `space`; "all" = Model if it has objects, then the layouts in tab order.
     let o = PdfOptions::from_json(opts);
+    // `pages: [{window: [[x1,y1],[x2,y2]], paper?, landscape?, scale?}]` plots model space once
+    // per window, one page each (a book of sheet frames), instead of `space`.
+    if let Some(pages) = opts.get("pages") {
+        let list = pages.as_array().ok_or_else(|| IoError::Format("`pages` must be a list of {window, paper?, landscape?}".into()))?;
+        if list.len() > MAX_PAGES {
+            return Err(IoError::Format(format!("at most {MAX_PAGES} sheets fit in one PDF")));
+        }
+        let items = list
+            .iter()
+            .map(|pg| {
+                let w = window(pg.get("window")).ok_or_else(|| IoError::Format("each page needs a `window` with two corners".into()))?;
+                let mut po = PdfOptions::from_json(&serde_json::json!({
+                    "paper": pg.get("paper"), "landscape": pg.get("landscape"), "scale": pg.get("scale"),
+                    "plotStyleTable": opts.get("plotStyleTable"), "lineweights": opts.get("lineweights"),
+                    "margins": opts.get("margins"), "text": opts.get("text"),
+                }));
+                po.window = Some(w);
+                po.fit = Some(true);
+                po.compress = o.compress;
+                Ok((Space::Model, po))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return pdf_items(d, &items, &o);
+    }
     match opts.get("layouts") {
         Some(Value::String(a)) if a.eq_ignore_ascii_case("all") => {
             let mut layouts: Vec<_> = d.layouts.iter().collect();
@@ -313,15 +337,21 @@ fn sheet_name(space: &Space) -> String {
 /// Write a vector PDF with one page per space (at most [`MAX_PAGES`]), each labelled with its
 /// layout name. The options apply to every sheet; layouts use their own page setups.
 pub fn pdf_sheets(d: &Drawing, spaces: &[Space], o: &PdfOptions) -> Result<Vec<u8>> {
-    if let Some(offset) = o.offset
-        && !valid_plot_offset(offset)
-    {
+    let items: Vec<(Space, PdfOptions)> = spaces.iter().take(MAX_PAGES + 1).map(|s| (s.clone(), o.clone())).collect();
+    pdf_items(d, &items, o)
+}
+
+/// Write a vector PDF with one page per `(space, options)` item (at most [`MAX_PAGES`]): each
+/// page plots with its own options (window, paper, orientation); `o` supplies the file-wide
+/// ones (compression, title, layers, links).
+pub fn pdf_items(d: &Drawing, items: &[(Space, PdfOptions)], o: &PdfOptions) -> Result<Vec<u8>> {
+    if items.iter().any(|(_, io)| io.offset.is_some_and(|offset| !valid_plot_offset(offset))) {
         return Err(IoError::Format("plot offset must contain two finite values within ±100000 mm".into()));
     }
-    if spaces.is_empty() {
+    if items.is_empty() {
         return Err(IoError::Format("there are no sheets to plot".into()));
     }
-    if spaces.len() > MAX_PAGES {
+    if items.len() > MAX_PAGES {
         return Err(IoError::Format(format!("at most {MAX_PAGES} sheets fit in one PDF")));
     }
     // Layers that are off plot on PDF layers that start hidden: draw them from a copy with them on.
@@ -337,7 +367,7 @@ pub fn pdf_sheets(d: &Drawing, spaces: &[Space], o: &PdfOptions) -> Result<Vec<u
         d
     };
     let links = all_links(d, o);
-    let pages = spaces.iter().map(|s| sheet(drawn, s, o, &links)).collect::<Result<Vec<_>>>()?;
+    let pages = items.iter().map(|(s, po)| sheet(drawn, s, po, &links)).collect::<Result<Vec<_>>>()?;
     let title = if o.title.is_empty() { pages.first().map(|p| p.label.clone()).unwrap_or_default() } else { o.title.clone() };
     let fonts = if o.text_as_geometry { fonts::Fonts::default() } else { fonts::Fonts::collect(pages.iter().map(|p| &p.list)) };
     Ok(assemble(d, &pages, &fonts, o, &title))

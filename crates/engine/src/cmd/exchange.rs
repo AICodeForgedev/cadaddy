@@ -49,6 +49,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["File", "Batch Publish..."])
             .params("{path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf per sheet; else returns base64 `data` per sheet), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order)} → {sheets: [{layout, bytes, path? | data}]}")
             .noundo(),
+        CommandSpec::new("pdfbook", "Sheet Books to PDF...", run_pdfbook)
+            .menu(&["File", "Sheet Books to PDF..."])
+            .alias(&["printpdf", "pdfb"])
+            .params("{path?: \"DIR/NAME^NAME2.pdf\" (default: the drawing's file; a `^` splits the name into one book name per row of frames; else returns base64 `data` per book), names?: [book names], frameHeight?: mm (default 297), unit?: mm per drawing unit (default 1)} → {books: [{name, pages, bytes, path? | data}], skipped}: closed polylines of the frame height in model space are sheet frames; each row (same lower edge, bottom to top) is one PDF, its frames left to right one page each on the paper (ISO A-series, either orientation) they match")
+            .noundo(),
         CommandSpec::new("attach", "Attach", |_, _| {
             Err(EngineError::Other("ATTACH is not available yet: raster images and PDF/DWF/DGN underlays can't be shown yet".into()))
         })
@@ -421,6 +426,122 @@ fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "sheets": out, "message": message }))
 }
 
+// ---------- PDFBOOK ----------
+
+/// Frame sizes match a paper to this many millimetres.
+const FRAME_TOL_MM: f64 = 0.5;
+/// Most frames one PDFBOOK looks at.
+const MAX_FRAMES: usize = 100_000;
+
+/// A sheet frame found in model space.
+struct Frame {
+    window: Bounds2,
+    paper: &'static str,
+    landscape: bool,
+}
+
+/// The ISO/ANSI paper a frame of `w` x `h` mm fits (either orientation), and whether it is landscape.
+fn paper_for(w: f64, h: f64) -> Option<(&'static str, bool)> {
+    cadcraft_render::PAPER_SIZES.iter().find_map(|p| {
+        let (pw, ph) = (p.width_mm, p.height_mm);
+        if (pw - w).abs() <= FRAME_TOL_MM && (ph - h).abs() <= FRAME_TOL_MM {
+            Some((p.name, false))
+        } else if (ph - w).abs() <= FRAME_TOL_MM && (pw - h).abs() <= FRAME_TOL_MM {
+            Some((p.name, true))
+        } else {
+            None
+        }
+    })
+}
+
+/// Sheet frames grouped into books: rows of equal lower edge, bottom to top, each left to right.
+fn frame_books(d: &Drawing, frame_height: f64, unit: f64) -> (Vec<Vec<Frame>>, usize) {
+    let mut found: Vec<(i64, f64, Frame)> = Vec::new();
+    let mut skipped = 0;
+    for e in d.model.iter().take(MAX_FRAMES) {
+        let EntityKind::LwPolyline(pl) = &e.kind else { continue };
+        if !pl.closed {
+            continue;
+        }
+        let b = cadcraft_doc::entity_bounds(d, e, 0);
+        if b.is_empty() || !b.width().is_finite() || !b.height().is_finite() {
+            continue;
+        }
+        let (w, h) = (b.width() * unit, b.height() * unit);
+        if (h - frame_height).abs() > 0.0005 {
+            continue;
+        }
+        match paper_for(w, h) {
+            Some((paper, landscape)) => {
+                let row = (b.min.y * 1000.0).round();
+                if row.is_finite() && row.abs() < 9e15 {
+                    found.push((row as i64, b.min.x, Frame { window: b, paper, landscape }));
+                }
+            }
+            None => skipped += 1,
+        }
+    }
+    found.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    let mut books: Vec<Vec<Frame>> = Vec::new();
+    let mut last = None;
+    for (row, _, f) in found {
+        if last != Some(row) {
+            books.push(Vec::new());
+            last = Some(row);
+        }
+        if let Some(b) = books.last_mut() {
+            b.push(f);
+        }
+    }
+    (books, skipped)
+}
+
+fn run_pdfbook(s: &mut Session, p: &Value) -> Result<Value> {
+    if io().and_then(|h| h.plot).is_none() {
+        return Err(bad("pdfbook", "plotting is not available in this build"));
+    }
+    let num = |k: &str, default: f64| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(default);
+    let (frame_height, unit) = (num("frameHeight", 297.0), num("unit", 1.0));
+    let (books, skipped) = frame_books(s.doc()?, frame_height, unit);
+    if books.is_empty() {
+        return Err(bad("pdfbook", format!("no closed polylines {frame_height} mm high (sheet frames) in model space")));
+    }
+    let target = str_param(p, "path").map(str::to_string).or_else(|| s.state().ok().and_then(|st| st.path.clone()));
+    let pb = target.as_deref().map(std::path::Path::new);
+    let dir = pb.and_then(std::path::Path::parent).map(std::path::Path::to_path_buf).unwrap_or_default();
+    let stem = pb
+        .and_then(std::path::Path::file_stem)
+        .map(|x| x.to_string_lossy().to_string())
+        .filter(|x| !x.is_empty())
+        .unwrap_or_else(|| "Drawing".into());
+    let names: Vec<String> = match p.get("names").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(|n| n.as_str().map(str::to_string)).collect(),
+        None => stem.split('^').map(str::to_string).collect(),
+    };
+    let write = pb.is_some();
+    let mut out = Vec::new();
+    for (i, frames) in books.iter().enumerate() {
+        // A row without its own name is numbered after the drawing.
+        let name = names.get(i).map(|n| file_part(n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("{}-{}", file_part(&stem), i + 1));
+        let pages: Vec<Value> = frames
+            .iter()
+            .map(|f| json!({ "window": [[f.window.min.x, f.window.min.y], [f.window.max.x, f.window.max.y]], "paper": f.paper, "landscape": f.landscape }))
+            .collect();
+        let mut q = json!({ "layout": "Model", "pages": pages, "margins": [0, 0, 0, 0] });
+        if write {
+            q["path"] = json!(dir.join(format!("{name}.pdf")).to_string_lossy());
+        }
+        let mut r = s.execute("plot", &q).map_err(|e| bad("pdfbook", format!("{name}: {e}")))?;
+        if let Some(o) = r.as_object_mut() {
+            o.insert("name".into(), json!(name));
+            o.insert("pages".into(), json!(frames.len()));
+        }
+        out.push(r);
+    }
+    let message = format!("Plotted {} book(s), {} sheet(s)", out.len(), books.iter().map(Vec::len).sum::<usize>());
+    Ok(json!({ "books": out, "skipped": skipped, "message": message }))
+}
+
 #[cfg(test)]
 mod tests {
     use cadcraft_doc::{Block, Circle, Common, Handle, Insert, Layer, Line};
@@ -585,6 +706,39 @@ mod tests {
         let default = png(&mut s, json!({ "layout": "Layout1", "width": 200 }));
         assert_eq!(png(&mut s, json!({ "layout": "Layout1", "width": 200, "fit": false, "scale": 1 })), default, "scale 1 is the 1:1 default");
         assert_ne!(png(&mut s, json!({ "layout": "Layout1", "width": 200, "fit": false, "scale": 0.5 })), default, "scale 0.5 is not 1:1");
+    }
+
+    #[test]
+    fn pdfbook_collects_frames_into_one_pdf_per_row() {
+        our_hooks();
+        if io().and_then(|h| h.plot).is_none() {
+            return;
+        }
+        let mut s = Session::new();
+        // Row 1 (y = 0): A4, A3 landscape (drawn right to left); row 2 (y = 400): one A4; a stray rectangle.
+        for c in ["pline 210,0 420,0 420,297 210,297 c", "pline 0,0 210,0 210,297 0,297 c", "pline 420,0 840,0 840,297 420,297 c"] {
+            s.cmdline(c).unwrap();
+            s.cmdline("").unwrap();
+        }
+        s.cmdline("pline 0,400 210,400 210,697 0,697 c").unwrap();
+        s.cmdline("").unwrap();
+        s.cmdline("pline 0,900 50,900 50,950 0,950 c").unwrap();
+        s.cmdline("").unwrap();
+        let r = s.execute("pdfbook", &json!({ "path": temp("a^b.pdf").to_string_lossy() }));
+        let r = r.unwrap();
+        let books = r["books"].as_array().unwrap();
+        assert_eq!(books.len(), 2);
+        assert_eq!(books[0]["pages"], 3);
+        assert_eq!(books[1]["pages"], 1);
+        let first = temp("a.pdf");
+        let text = String::from_utf8(std::fs::read(&first).unwrap()).unwrap();
+        let (a4, a3) = (text.find("ISO A4").unwrap(), text.find("ISO A3").unwrap());
+        assert!(a4 < a3, "frames go left to right: {text}");
+        assert!(text.contains("\"landscape\":true"));
+        let _ = std::fs::remove_file(first);
+        let _ = std::fs::remove_file(temp("b.pdf"));
+        // No frames: an error, not a panic.
+        assert!(Session::new().execute("pdfbook", &json!({})).is_err());
     }
 
     #[test]
