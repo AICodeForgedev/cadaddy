@@ -56,6 +56,9 @@ pub use control::{ControlRequest, ControlResponse, PendingReply};
 /// The host storage key for [`CadApp::prefs_json`].
 pub const PREFS_KEY: &str = "cadcraft.prefs";
 
+/// How many recently opened drawings are kept (AutoCAD's default for its file history).
+pub const RECENT_FILES: usize = 9;
+
 /// Persisted UI state (serde, so automation can read and set it).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -96,6 +99,8 @@ pub struct UiState {
     /// The version Save As writes for a drawing that has no file yet ("2000" … "2018"); a
     /// drawing opened from a file keeps that file's version.
     pub save_version: String,
+    /// Drawings opened from a path, newest first (File ▸ Open Recent and the Start page).
+    pub recent_files: Vec<String>,
 }
 
 /// A DXF/DWG file version (2000 … 2018).
@@ -165,6 +170,7 @@ impl Default for UiState {
             theme: theme::ThemePref::default(),
             save_format: SaveFormat::default(),
             save_version: SaveVersion::default().year().to_string(),
+            recent_files: Vec::new(),
         }
     }
 }
@@ -341,6 +347,9 @@ impl CadApp {
         if self.spacemouse.settings != spacemouse::Settings::default() {
             prefs["spacemouse"] = json!(self.spacemouse.settings);
         }
+        if !self.ui.recent_files.is_empty() {
+            prefs["recentFiles"] = json!(self.ui.recent_files);
+        }
         prefs.to_string()
     }
 
@@ -361,6 +370,9 @@ impl CadApp {
         }
         if let Some(v) = v.get("saveVersion").and_then(Value::as_str).and_then(SaveVersion::parse) {
             self.ui.save_version = v.year().to_string();
+        }
+        if let Some(files) = v.get("recentFiles").and_then(Value::as_array) {
+            self.ui.recent_files = files.iter().filter_map(Value::as_str).filter(|p| !p.is_empty()).take(RECENT_FILES).map(str::to_string).collect();
         }
     }
 
@@ -435,12 +447,25 @@ impl CadApp {
     }
 
     fn opened(&mut self, r: Result<Value, String>) {
-        if let Err(e) = r {
-            self.set_status(e);
-        } else {
-            self.ui.start_tab = false;
-            self.canvas.zoom_pending = true;
+        match r {
+            Err(e) => self.set_status(e),
+            Ok(v) => {
+                self.ui.start_tab = false;
+                self.canvas.zoom_pending = true;
+                let doc = v.get("index").and_then(Value::as_u64).and_then(|i| self.session.docs.get(usize::try_from(i).ok()?));
+                if let Some(path) = doc.and_then(|d| d.path.clone()) {
+                    self.remember_recent(path);
+                }
+            }
         }
+    }
+
+    /// Put `path` first in File ▸ Open Recent and on the Start page.
+    fn remember_recent(&mut self, path: String) {
+        let recent = &mut self.ui.recent_files;
+        recent.retain(|p| *p != path);
+        recent.insert(0, path);
+        recent.truncate(RECENT_FILES);
     }
 
     /// Per-frame logic before layout.

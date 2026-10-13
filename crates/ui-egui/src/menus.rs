@@ -8,6 +8,11 @@ use crate::CadApp;
 /// The top-level menus, in order.
 pub const MENUS: &[&str] = &["File", "Edit", "View", "Insert", "Format", "Tools", "Draw", "Dimension", "Modify", "Window", "Help"];
 
+/// File ▸ Open Recent: one `ui.recent.<n>` item per recent file, then Clear Recent Files.
+pub const OPEN_RECENT: &str = "Open Recent";
+const RECENT_ITEM: &str = "ui.recent.";
+const RECENT_CLEAR: &str = "ui.recent.clear";
+
 /// UI-only commands: (id, label, menu path, shortcut).
 pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.spacemouse", "3D Mouse...", &["Tools", "3D Mouse..."], None),
@@ -108,6 +113,15 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     // never open a picker.
     let no_path =
         if id.starts_with("ui.") { params.is_null() || (params.get("path").is_none() && params.get("data").is_none()) } else { params.is_null() };
+    if id == RECENT_CLEAR {
+        app.ui.recent_files.clear();
+        return Some(Ok(Value::Null));
+    }
+    if let Some(i) = id.strip_prefix(RECENT_ITEM).and_then(|n| n.parse::<usize>().ok()) {
+        let Some(path) = app.ui.recent_files.get(i).cloned() else { return Some(Err(format!("no recent file {i}"))) };
+        app.open_path(&path);
+        return Some(Ok(Value::Null));
+    }
     let r = match id {
         "ui.language" => {
             let Some(preference) = params.get("lang").and_then(Value::as_str).and_then(crate::i18n::Preference::parse) else {
@@ -451,7 +465,30 @@ pub fn tree(app: &CadApp) -> Vec<(String, Vec<Entry>)> {
             add(menu, label, id, *sc, true);
         }
     }
+    if let Some((_, file)) = out.iter_mut().find(|(m, _)| m == "File") {
+        let at = file.iter().position(|e| matches!(e, Entry::Item { id, .. } if id == "open")).map_or(0, |i| i + 1);
+        file.insert(at, Entry::Sub { label: OPEN_RECENT.into(), children: recent_entries(app) });
+    }
     out
+}
+
+/// The items of File ▸ Open Recent: the recent files by name, newest first, then Clear Recent Files.
+pub fn recent_entries(app: &CadApp) -> Vec<Entry> {
+    let mut entries: Vec<Entry> = app
+        .ui
+        .recent_files
+        .iter()
+        .enumerate()
+        .map(|(i, path)| Entry::Item { label: file_name(path), id: format!("{RECENT_ITEM}{i}"), shortcut: None, enabled: true })
+        .collect();
+    let enabled = !app.ui.recent_files.is_empty();
+    entries.push(Entry::Item { label: "Clear Recent Files".into(), id: RECENT_CLEAR.into(), shortcut: None, enabled });
+    entries
+}
+
+/// The file name of `path` (the whole path when it has none).
+pub(crate) fn file_name(path: &str) -> String {
+    std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().to_string())
 }
 
 /// Turn a registry shortcut ("Cmd+Shift+Z") into the form shown on this platform: macOS symbols ("⇧⌘Z") or

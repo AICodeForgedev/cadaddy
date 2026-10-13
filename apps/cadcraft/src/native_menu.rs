@@ -16,6 +16,9 @@ pub struct NativeMenu {
     predefined: Vec<(&'static str, PredefinedMenuItem)>,
     language: &'static str,
     last_refresh: f64,
+    /// The recent files File ▸ Open Recent lists now (it is rebuilt when they change).
+    recent: Vec<String>,
+    counter: usize,
 }
 
 /// Accelerator for "Cmd+Shift+S" (modifier-less shortcuts stay in the app so typing works).
@@ -63,7 +66,25 @@ impl NativeMenu {
             submenus.push((title, sub));
         }
         menu.init_for_nsapp();
-        Self { _menu: menu, items, submenus, predefined, language, last_refresh: 0.0 }
+        Self { _menu: menu, items, submenus, predefined, language, last_refresh: 0.0, recent: app.ui.recent_files.clone(), counter }
+    }
+
+    /// Rebuild File ▸ Open Recent after a drawing was opened or the list was cleared: the native
+    /// menu is built once, and its items name the files by position.
+    fn refresh_recent(&mut self, app: &CadApp) {
+        if self.recent == app.ui.recent_files {
+            return;
+        }
+        self.recent = app.ui.recent_files.clone();
+        let Some(sub) = self.submenus.iter().find(|(label, _)| label == menus::OPEN_RECENT).map(|(_, s)| s.clone()) else { return };
+        for _ in sub.items() {
+            sub.remove_at(0);
+        }
+        let ids: Vec<String> = self.items.iter().filter(|(_, (cmd, _, _))| cmd.starts_with("ui.recent.")).map(|(id, _)| id.clone()).collect();
+        for id in ids {
+            self.items.remove(&id);
+        }
+        build(&sub, &menus::recent_entries(app), &mut self.items, &mut self.submenus, &mut self.counter, self.language);
     }
 
     pub fn poll(&mut self, app: &mut CadApp, ctx: &egui::Context) {
@@ -77,6 +98,7 @@ impl NativeMenu {
                 ctx.request_repaint();
             }
         }
+        self.refresh_recent(app);
         let language = app.language();
         if self.language != language {
             self.language = language;
