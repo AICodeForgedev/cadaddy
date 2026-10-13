@@ -15,6 +15,7 @@ use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, St
 
 mod attedit;
 mod extract;
+pub(crate) mod refedit;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -55,6 +56,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
     .into_iter()
     .chain(xref::specs())
+    .chain(refedit::specs())
     .collect()
 }
 
@@ -96,6 +98,9 @@ pub(crate) fn make_block(s: &mut Session, name: &str, base: Vec2, hs: &[Handle],
     }
     if references_block(d, &ents, name) {
         return Err(bad("block", format!("Block \"{name}\" references itself.")));
+    }
+    if d.refedit.as_ref().is_some_and(|r| r.block.eq_ignore_ascii_case(name)) {
+        return Err(bad("block", format!("Block \"{name}\" is being edited in place; finish with REFCLOSE first.")));
     }
     // Block names are case-insensitive: redefining keeps the existing definition's name.
     let name = d.blocks.keys().find(|k| k.eq_ignore_ascii_case(name)).cloned().unwrap_or_else(|| name.to_string());

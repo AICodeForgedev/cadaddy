@@ -821,6 +821,11 @@ impl Session {
                 return Err(EngineError::Internal(id.into(), msg));
             }
         };
+        let violation = before.as_ref().and_then(|b| cmd::blocks::refedit::after_command(self, &b.0, spec.id));
+        let result = match (violation, result) {
+            (Some(m), Ok(_)) => Err(EngineError::Other(m)),
+            (_, r) => r,
+        };
         cmd::groups::after_command(self, before.as_ref().map(|b| &b.0));
         cmd::constraints::after_command(self, before.as_ref().map(|b| &b.0), spec.undoable && result.is_ok());
         assoc::after_command(self, before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2));
@@ -1160,6 +1165,9 @@ impl Session {
         self.select_mode = None;
         let label = find_command(&run.id).map(|c| c.label).unwrap_or("Command");
         let _ = cancelled;
+        if let Some(m) = cmd::blocks::refedit::after_command(self, &run.before, &run.id) {
+            self.echo(m);
+        }
         cmd::groups::after_command(self, Some(&run.before));
         cmd::constraints::after_command(self, Some(&run.before), true);
         assoc::after_command(self, Some(&run.before), None);

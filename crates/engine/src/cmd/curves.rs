@@ -36,9 +36,9 @@ pub fn handle_param(p: &serde_json::Value, key: &str) -> Option<Handle> {
     p.get(key).and_then(handle_value)
 }
 
-/// Is the entity on a locked layer?
+/// Is the entity on a locked layer, or outside the working set while a block reference is edited in place (REFEDIT)?
 pub fn is_locked(s: &Session, h: Handle) -> bool {
-    s.doc().ok().is_some_and(|d| d.entity(h).and_then(|e| d.layer(&e.common.layer)).is_some_and(|l| l.locked))
+    s.doc().ok().is_some_and(|d| d.entity(h).and_then(|e| d.layer(&e.common.layer)).is_some_and(|l| l.locked) || super::blocks::refedit::locked(d, h))
 }
 
 // ---------------- arc constructions ----------------

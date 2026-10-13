@@ -658,6 +658,11 @@
 	Select a line, arc, circle, polyline, ellipse or spline as the path.	Sélectionner une ligne, un arc, un cercle, une polyligne, une ellipse ou une spline comme trajectoire.
 	Select a line, circle, arc or polyline segment.	Sélectionner une ligne, un cercle, un arc ou un segment de polyligne.
 	Select a line.	Sélectionner une ligne.
+	Add to Working Set	Ajouter au jeu de travail
+	Edit Reference In-Place	Modifier la référence sur place
+	Save Reference Edits	Enregistrer les modifications de la référence
+	Working Set	Jeu de travail
+	Xref and Block In-place Editing	Édition sur place des xrefs et des blocs
 	Select a polyline.	Sélectionner une polyligne.
 	Select a text, mtext, attribute definition or dimension.	Sélectionner un texte, un texte multiligne, une définition d'attribut ou une cote.
 	Select an annotation object	Sélectionner un objet d'annotation

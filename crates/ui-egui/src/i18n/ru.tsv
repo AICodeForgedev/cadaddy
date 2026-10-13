@@ -658,6 +658,11 @@
 	Select a line, arc, circle, polyline, ellipse or spline as the path.	Выберите отрезок, дугу, круг, полилинию, эллипс или сплайн в качестве траектории.
 	Select a line, circle, arc or polyline segment.	Выберите отрезок, круг, дугу или сегмент полилинии.
 	Select a line.	Выберите отрезок.
+	Add to Working Set	Добавить в рабочий набор
+	Edit Reference In-Place	Редактировать ссылку на месте
+	Save Reference Edits	Сохранить изменения ссылки
+	Working Set	Рабочий набор
+	Xref and Block In-place Editing	Редактирование xref и блоков на месте
 	Select a polyline.	Выберите полилинию.
 	Select a text, mtext, attribute definition or dimension.	Выберите текст, многострочный текст, определение атрибута или размер.
 	Select an annotation object	Выберите аннотационный объект

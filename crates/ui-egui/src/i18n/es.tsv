@@ -813,6 +813,11 @@
 	Relative	Relativas
 	Remove Leader	Eliminar directriz
 	Remove the viewport override	Eliminar modificación de la ventana gráfica
+	Add to Working Set	Añadir al conjunto de trabajo
+	Edit Reference In-Place	Editar referencia in situ
+	Save Reference Edits	Guardar cambios de la referencia
+	Working Set	Conjunto de trabajo
+	Xref and Block In-place Editing	Edición in situ de xrefs y bloques
 	Rename Dimension Style	Renombrar estilo de cota
 	Rename Layer	Renombrar capa
 	Rename Layer State	Renombrar estado de capas

@@ -817,6 +817,11 @@
 	Select objects to array.	Виберіть об'єкти для масиву.
 	Select objects to stretch by crossing-window or crossing-polygon...	Виберіть об'єкти для розтягування січною рамкою або січним багатокутником...
 	Select objects:	Виберіть об'єкти:
+	Add to Working Set	Додати до робочого набору
+	Edit Reference In-Place	Редагувати посилання на місці
+	Save Reference Edits	Зберегти зміни посилання
+	Working Set	Робочий набір
+	Xref and Block In-place Editing	Редагування xref і блоків на місці
 	Select one polyline (Multiple is available through the JSON form).	Виберіть одну полілінію (Multiple доступно через JSON).
 	Select path curve	Виберіть криву траєкторії
 	Select point or object	Виберіть точку або об'єкт

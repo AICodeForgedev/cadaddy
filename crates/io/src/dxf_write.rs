@@ -1461,6 +1461,9 @@ pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> String {
 /// The drawing's DXF tags, declaring `version` in `$ACADVER`, with what `target` (the version the
 /// file ends up in: `version`, or the DWG version the bridge writes) has.
 fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
+    // An in-place block edit in progress is not written: the drawing as before it.
+    let committed = d.committed();
+    let d: &Drawing = &committed;
     // Structural handles start above every entity handle.
     let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new() };
     // Pre-allocate handles for block records.
