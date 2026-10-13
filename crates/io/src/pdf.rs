@@ -50,6 +50,10 @@ pub struct PdfOptions {
     pub fit: Option<bool>,
     /// Plot scale in paper units per drawing unit (when not fitting).
     pub scale: Option<f64>,
+    /// Model-space plot placement. `None` keeps the legacy centered behavior.
+    pub center: Option<bool>,
+    /// Model-space X/Y plot offset in millimetres from the printable area's lower-left corner.
+    pub offset: Option<[f64; 2]>,
     /// Plot object lineweights. Default: the layout's setting; on for model space.
     pub lineweights: Option<bool>,
     /// Flate-compress the content stream.
@@ -87,6 +91,8 @@ impl Default for PdfOptions {
             landscape: None,
             fit: None,
             scale: None,
+            center: None,
+            offset: None,
             lineweights: None,
             compress: false,
             title: String::new(),
@@ -102,8 +108,9 @@ impl Default for PdfOptions {
 }
 
 impl PdfOptions {
-    /// Parse `{paper?, width?, height?, landscape?, fit?, scale?, lineweights?, compress?, title?,
-    /// window?: [[x1, y1], [x2, y2]], margins?: [l, b, r, t] (mm), hyperlinks?: bool}`.
+    /// Parse `{paper?, width?, height?, landscape?, fit?, scale?, center?, offset?: [x,y] mm,
+    /// lineweights?, compress?, title?, window?: [[x1, y1], [x2, y2]], margins?: [l, b, r, t] (mm),
+    /// hyperlinks?: bool}`.
     pub fn from_json(v: &Value) -> PdfOptions {
         let num = |k: &str| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite());
         let paper_mm = match (num("width"), num("height")) {
@@ -123,6 +130,8 @@ impl PdfOptions {
             landscape: v.get("landscape").and_then(Value::as_bool),
             fit: v.get("fit").and_then(Value::as_bool),
             scale: num("scale").filter(|s| *s > 0.0),
+            center: v.get("center").and_then(Value::as_bool),
+            offset: offset(v.get("offset")),
             lineweights: v.get("lineweights").and_then(Value::as_bool),
             compress: v.get("compress").and_then(Value::as_bool).unwrap_or(true),
             title: v.get("title").and_then(Value::as_str).unwrap_or("").to_string(),
@@ -131,6 +140,35 @@ impl PdfOptions {
             hyperlinks: v.get("hyperlinks").and_then(Value::as_bool).unwrap_or(true),
         }
     }
+}
+
+fn offset(v: Option<&Value>) -> Option<[f64; 2]> {
+    let a = v?.as_array()?;
+    if a.len() != 2 {
+        return None;
+    }
+    let x = a.first()?.as_f64()?;
+    let y = a.get(1)?.as_f64()?;
+    valid_plot_offset([x, y]).then_some([x, y])
+}
+
+fn valid_plot_offset(offset: [f64; 2]) -> bool {
+    offset.iter().all(|v| v.is_finite() && v.abs() <= paper::MAX_PLOT_OFFSET_MM)
+}
+
+/// Reject malformed offsets at the JSON plotting boundary, before a permissive option parser
+/// could treat them as absent.
+pub(crate) fn validate_plot_offset_json(v: &Value) -> Result<()> {
+    if let Some(raw) = v.get("offset")
+        && offset(Some(raw)).is_none()
+    {
+        return Err(IoError::Format(format!(
+            "plot offset must contain exactly two finite values from -{} to {} mm",
+            paper::MAX_PLOT_OFFSET_MM,
+            paper::MAX_PLOT_OFFSET_MM
+        )));
+    }
+    Ok(())
 }
 
 /// `[l, b, r, t]` margins in mm (finite, 0–1000), else `None`.
@@ -156,6 +194,7 @@ fn window(v: Option<&Value>) -> Option<Bounds2> {
 
 /// Plot with JSON options (the engine's `plot` hook).
 pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
+    validate_plot_offset_json(opts)?;
     // `layouts: [name | "Model"] | "all"` plots those sheets into one file, one page each,
     // instead of `space`; "all" = Model if it has objects, then the layouts in tab order.
     let o = PdfOptions::from_json(opts);
@@ -274,6 +313,11 @@ fn sheet_name(space: &Space) -> String {
 /// Write a vector PDF with one page per space (at most [`MAX_PAGES`]), each labelled with its
 /// layout name. The options apply to every sheet; layouts use their own page setups.
 pub fn pdf_sheets(d: &Drawing, spaces: &[Space], o: &PdfOptions) -> Result<Vec<u8>> {
+    if let Some(offset) = o.offset
+        && !valid_plot_offset(offset)
+    {
+        return Err(IoError::Format("plot offset must contain two finite values within ±100000 mm".into()));
+    }
     if spaces.is_empty() {
         return Err(IoError::Format("there are no sheets to plot".into()));
     }
@@ -348,8 +392,8 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
     let b = window.unwrap_or(list.bounds);
     let s = plot_scale(&b, &sheet, fit, o.scale);
     let map = if fit || matches!(space, Space::Model) {
-        let from = if b.is_empty() { Vec2::ZERO } else { b.center() };
-        Map { from, s, to: sheet.printable.center(), k }
+        let (from, to) = placement(space, &b, fit, &sheet, o);
+        Map { from, s, to, k }
     } else {
         Map { from: Vec2::ZERO, s, to: Vec2::ZERO, k }
     };
@@ -374,6 +418,30 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
     }
     let links = links(&list, &map, &clip_pt, links_to);
     Ok(SheetPage { media, list, map, clip_pt, layers, links, label: sheet_name(space) })
+}
+
+/// Source and destination origins for the shared model-space PDF/PNG placement behavior.
+pub(crate) fn placement(space: &Space, bounds: &Bounds2, fit: bool, sheet: &Sheet, o: &PdfOptions) -> (Vec2, Vec2) {
+    if matches!(space, Space::Model) {
+        let from = if bounds.is_empty() {
+            Vec2::ZERO
+        } else if o.center.unwrap_or(true) {
+            bounds.center()
+        } else {
+            bounds.min
+        };
+        let to = if o.center.unwrap_or(true) {
+            sheet.printable.center()
+        } else {
+            let offset = o.offset.unwrap_or([0.0, 0.0]);
+            sheet.printable.min + Vec2::new(offset[0] / sheet.unit_mm, offset[1] / sheet.unit_mm)
+        };
+        (from, to)
+    } else if fit {
+        (if bounds.is_empty() { Vec2::ZERO } else { bounds.center() }, sheet.printable.center())
+    } else {
+        (Vec2::ZERO, Vec2::ZERO)
+    }
 }
 
 /// The hyperlinks to plot: the options' own, then (with [`PdfOptions::hyperlinks`]) those the

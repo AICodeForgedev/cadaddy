@@ -6,6 +6,9 @@
 use cadcraft_doc::{Drawing, PageSetup};
 use cadcraft_geom::{Bounds2, Vec2};
 
+/// Maximum model-space plot offset accepted by the PLOT command, in millimetres.
+pub const MAX_PLOT_OFFSET_MM: f64 = 100_000.0;
+
 /// A standard paper size (portrait: `width_mm <= height_mm`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaperSize {

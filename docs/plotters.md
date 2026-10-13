@@ -101,6 +101,11 @@ In the file name, characters other than letters, digits, spaces and `-_()+,` bec
   - The device sets the output and resolution.
   - `paper` (one of the device's papers) sets the size and margins for this plot.
   - A model-space plot without `paper` uses the device's default paper and orientation.
+  - For Model plots, `center` defaults to `true`, preserving the existing centered output. Set
+    `center: false` with `offset: [x, y]` to place the plotted bounds' lower-left corner from the
+    printable area's lower-left origin; offsets are millimetres, default to `[0, 0]`, and are
+    bounded to ±100,000 mm. PDF and PNG support these controls. SVG plots keep their extents view;
+    an active offset is rejected rather than ignored. Layout plots do not use model offsets.
   - `exportpdf` takes the same options and always writes PDF.
 
 Model-space PDF plots don't apply the paper's margins yet. They fit the drawing inside the

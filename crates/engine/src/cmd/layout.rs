@@ -80,11 +80,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["File", "Print..."])
             .key("Cmd+P")
             .alias(&["print"])
-            .params("{path? (else returns base64 `data`), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", lineweights?: bool, plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]]} (typed or from the menu: the Plot dialog)")
+            .params("{path? (else returns base64 `data`), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?: bool, plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]]} (typed or from the menu: the Plot dialog)")
             .noundo(),
         CommandSpec::new("exportpdf", "Export to PDF...", |s, p| run_plot(s, &super::plotters::plot_options(s, p, "exportpdf")?, "exportpdf"))
             .menu(&["File", "Export to PDF..."])
-            .params("{path? (else returns base64 `data`), layout?, paper?, landscape?, fit?, scale?, lineweights?, plotArea?, window?} (as PLOT)")
+            .params("{path? (else returns base64 `data`), layout?, paper?, landscape?, fit?, scale?, center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?, plotArea?, window?} (as PLOT)")
             .noundo(),
         CommandSpec::new("mspace", "Model Space (in viewport)", run_mspace)
             .alias(&["ms"])
@@ -774,6 +774,28 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         None => s.space(),
     };
     let mut opts = if p.is_object() { p.clone() } else { json!({}) };
+    if let Some(raw) = p.get("offset") {
+        let values = raw
+            .as_array()
+            .filter(|values| values.len() == 2)
+            .ok_or_else(|| bad(cmd, "`offset` must contain exactly two finite millimetre values within ±100000"))?;
+        let x = values.first().and_then(Value::as_f64);
+        let y = values.get(1).and_then(Value::as_f64);
+        if !x.zip(y).is_some_and(|(x, y)| {
+            x.is_finite()
+                && y.is_finite()
+                && x.abs() <= cadcraft_render::paper::MAX_PLOT_OFFSET_MM
+                && y.abs() <= cadcraft_render::paper::MAX_PLOT_OFFSET_MM
+        }) {
+            return Err(bad(cmd, "`offset` must contain exactly two finite millimetre values within ±100000"));
+        }
+    }
+    if matches!(space, Space::Model)
+        && opts.get("output").and_then(Value::as_str).is_some_and(|output| output.eq_ignore_ascii_case("svg"))
+        && opts.get("center").and_then(Value::as_bool) == Some(false)
+    {
+        return Err(bad(cmd, "model-space plot offsets are not supported for SVG; choose PDF/PNG or center the plot"));
+    }
     if let Some(o) = opts.as_object_mut() {
         if let Some(v) = p.get("scale") {
             let k = parse_scale(v).ok_or_else(|| bad(cmd, "`scale` must be positive: paper units per drawing unit, or a ratio such as \"1:50\""))?;
@@ -1055,12 +1077,20 @@ mod tests {
         assert!(text.starts_with("%PDF") && text.contains("Paper(\"Layout1\")") && text.contains("A4"));
         let r = s.execute("exportpdf", &json!({})).unwrap();
         assert_eq!(r["layout"], "Model");
+        let baseline = String::from_utf8(super::super::file::base64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap();
+        assert!(!baseline.contains("\"center\"") && !baseline.contains("\"offset\""), "omitted options remain omitted: {baseline}");
         assert!(s.execute("plot", &json!({"layout": "Nope"})).is_err());
         // Plot area and a ratio scale reach the plotter as a model-space window and a number.
         let opts = |r: Value| String::from_utf8(super::super::file::base64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap();
         let p = json!({"layout": "Model", "plotArea": "window", "window": [[10, 0], [0, 5]], "fit": false, "scale": "1:2"});
         let text = opts(s.execute("plot", &p).unwrap());
         assert!(text.contains(r#""window":[[0.0,0.0],[10.0,5.0]]"#) && text.contains(r#""scale":0.5"#), "{text}");
+        let text = opts(s.execute("plot", &json!({"layout": "Model", "center": false, "offset": [12.5, -7.0]})).unwrap());
+        assert!(text.contains(r#""center":false"#) && text.contains(r#""offset":[12.5,-7.0]"#), "{text}");
+        for offset in [json!([1]), json!([1, 2, 3]), json!([f64::NAN, 0]), json!([100_001, 0])] {
+            assert!(s.execute("plot", &json!({"layout": "Model", "center": false, "offset": offset})).is_err());
+        }
+        assert!(s.execute("plot", &json!({"layout": "Model", "output": "svg", "center": false, "offset": [0, 0]})).is_err());
         assert!(opts(s.execute("plot", &json!({"layout": "Model", "plotArea": "limits"})).unwrap()).contains(r#""window":[[0.0,0.0],"#));
         assert!(s.execute("plot", &json!({"layout": "Model", "plotArea": "window"})).is_err(), "window needs corners");
         assert!(s.execute("plot", &json!({"layout": "Layout1", "plotArea": "display"})).is_err(), "layouts plot their sheet");

@@ -22,6 +22,13 @@ pub const MAX_PNG_PIXELS: f64 = 40.0e6;
 /// `svg`. `margins: [l, b, r, t]` (mm) bound the printable area of this plot (model space or a
 /// layout).
 pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
+    pdf::validate_plot_offset_json(opts)?;
+    if matches!(space, Space::Model)
+        && opts.get("output").and_then(Value::as_str).is_some_and(|output| output.eq_ignore_ascii_case("svg"))
+        && opts.get("center").and_then(Value::as_bool) == Some(false)
+    {
+        return Err(IoError::Format("model-space plot offsets are not supported for SVG; choose PDF/PNG or center the plot".into()));
+    }
     let margins = pdf::margins(opts.get("margins"));
     let with_margins;
     let d = match (space, margins) {
@@ -97,9 +104,9 @@ fn png(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     // are already drawn).
     cadcraft_render::pen::apply(&mut list, s * sheet.unit_mm);
     let view = if fit {
-        let from = if b.is_empty() { Vec2::ZERO } else { b.center() };
-        // The world point at the image centre, with `from` on the printable area's centre.
-        let center = from + (half - sheet.printable.center()) / s;
+        let (from, to) = pdf::placement(space, &b, true, &sheet, &o);
+        // The world point at the image centre, mapped through the same paper origin as PDF.
+        let center = from + (half - to) / s;
         raster::View { center, scale: k * s, width, height }
     } else {
         raster::View { center: half, scale: k, width, height }
@@ -136,7 +143,7 @@ fn svg(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use cadcraft_doc::{Common, EntityKind, Line};
-    use cadcraft_geom::Vec3;
+    use cadcraft_geom::{Bounds2, Vec2, Vec3};
     use serde_json::json;
 
     /// Width and height from a PNG's header.
@@ -167,5 +174,75 @@ mod tests {
         assert!(plot(&d, &layout, &json!({"output": "png", "resolution": f64::NAN, "margins": [1, 2, 3]})).is_ok());
         assert!(plot(&d, &Space::Model, &json!({"output": "dwf"})).is_err());
         assert!(plot(&d, &Space::Model, &json!({})).unwrap().starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn model_plot_placement_preserves_centering_and_applies_mm_offsets() {
+        let model = Space::Model;
+        let bounds = Bounds2::new(Vec2::new(10.0, 20.0), Vec2::new(110.0, 70.0));
+        let metric = drawing();
+        let metric_sheet = Sheet::from_page(&pdf::page_for(&metric, &model, &PdfOptions::default()).unwrap(), 1.0);
+        let centered = PdfOptions::from_json(&json!({"center": true}));
+        assert_eq!(pdf::placement(&model, &bounds, true, &metric_sheet, &PdfOptions::default()), (bounds.center(), metric_sheet.printable.center()));
+        assert_eq!(pdf::placement(&model, &bounds, true, &metric_sheet, &centered), (bounds.center(), metric_sheet.printable.center()));
+        let moved = PdfOptions::from_json(&json!({"center": false, "offset": [10.0, 20.0]}));
+        assert_eq!(pdf::placement(&model, &bounds, true, &metric_sheet, &moved), (bounds.min, metric_sheet.printable.min + Vec2::new(10.0, 20.0)));
+        let origin = PdfOptions::from_json(&json!({"center": false}));
+        assert_eq!(pdf::placement(&model, &bounds, true, &metric_sheet, &origin), (bounds.min, metric_sheet.printable.min));
+        let negative = PdfOptions::from_json(&json!({"center": false, "offset": [-10.0, -20.0]}));
+        assert_eq!(pdf::placement(&model, &bounds, true, &metric_sheet, &negative), (bounds.min, metric_sheet.printable.min - Vec2::new(10.0, 20.0)));
+
+        let imperial = Drawing::new_imperial();
+        let imperial_sheet = Sheet::from_page(&pdf::page_for(&imperial, &model, &PdfOptions::default()).unwrap(), 25.4);
+        assert_eq!(
+            pdf::placement(&model, &bounds, true, &imperial_sheet, &moved),
+            (bounds.min, imperial_sheet.printable.min + Vec2::new(10.0 / 25.4, 20.0 / 25.4))
+        );
+        assert_eq!(
+            pdf::placement(&model, &bounds, true, &imperial_sheet, &negative),
+            (bounds.min, imperial_sheet.printable.min - Vec2::new(10.0 / 25.4, 20.0 / 25.4))
+        );
+    }
+
+    #[test]
+    fn plot_offsets_keep_default_bytes_and_match_across_pdf_and_png() {
+        let d = drawing();
+        let model = Space::Model;
+        let pdf_default = plot(&d, &model, &json!({})).unwrap();
+        let pdf_centered = plot(&d, &model, &json!({"center": true})).unwrap();
+        assert_eq!(pdf_default, pdf_centered, "explicit center preserves legacy PDF bytes");
+
+        let png_options = json!({"output": "png", "resolution": 100, "width": 210, "height": 297, "landscape": true, "margins": [5, 5, 5, 5]});
+        let png_default = plot(&d, &model, &png_options).unwrap();
+        let mut centered_png = png_options.clone();
+        centered_png["center"] = json!(true);
+        assert_eq!(png_default, plot(&d, &model, &centered_png).unwrap(), "explicit center preserves legacy PNG bytes");
+
+        let mut pdf_moved = json!({"center": false, "offset": [10.0, 20.0]});
+        let moved_pdf = plot(&d, &model, &pdf_moved).unwrap();
+        assert_ne!(pdf_default, moved_pdf);
+        pdf_moved["output"] = json!("png");
+        pdf_moved["resolution"] = json!(100);
+        pdf_moved["width"] = json!(210);
+        pdf_moved["height"] = json!(297);
+        pdf_moved["landscape"] = json!(true);
+        pdf_moved["margins"] = json!([5, 5, 5, 5]);
+        let moved_png = plot(&d, &model, &pdf_moved).unwrap();
+        assert_ne!(png_default, moved_png);
+
+        let layout = Space::Paper(d.layouts[0].name.clone());
+        assert_eq!(plot(&d, &layout, &json!({})).unwrap(), plot(&d, &layout, &json!({"center": false, "offset": [10.0, 20.0]})).unwrap());
+    }
+
+    #[test]
+    fn invalid_and_unsupported_plot_offsets_are_reported() {
+        let d = drawing();
+        let model = Space::Model;
+        for offset in [json!([1]), json!([1, 2, 3]), json!([1, "2"]), json!([f64::NAN, 2]), json!([100_001, 0])] {
+            assert!(plot(&d, &model, &json!({"offset": offset})).is_err());
+        }
+        let err = plot(&d, &model, &json!({"output": "svg", "center": false, "offset": [0, 0]})).unwrap_err();
+        assert!(err.to_string().contains("not supported for SVG"));
+        assert!(plot(&d, &model, &json!({"output": "svg", "center": true})).unwrap().starts_with(b"<svg"));
     }
 }
