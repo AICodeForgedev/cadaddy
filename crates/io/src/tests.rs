@@ -625,6 +625,130 @@ fn viewport_frozen_layers_roundtrip() {
     assert!(frozen.contains(&(3, Vec::new())), "{frozen:?}");
 }
 
+/// A layout with viewport 2 frozen on `Walls` and `A B` (both real layers), and its written DXF as
+/// (code, value) pairs.
+fn frozen_vp_dxf() -> (Drawing, Vec<(String, String)>) {
+    let mut d = sample();
+    d.layers.push(Layer { name: "A B".into(), ..Layer::default() });
+    let paper = Space::Paper("Layout1".into());
+    let vp = EntityKind::Viewport(Viewport {
+        center: Vec3::new(5.0, 4.0, 0.0),
+        width: 8.0,
+        height: 6.0,
+        view_center: Vec2::new(5.0, 2.5),
+        view_height: 12.0,
+        id: 2,
+        locked: false,
+        frozen_layers: vec!["Walls".into(), "A B".into()],
+        layer_colors: Vec::new(),
+        clip: None,
+        on: true,
+    });
+    d.add(&paper, Common::default(), vp).unwrap();
+    let text = write_dxf(&d);
+    let lines: Vec<&str> = text.lines().collect();
+    let pairs = lines.chunks(2).map(|c| (c[0].trim().to_string(), c.get(1).copied().unwrap_or("").to_string())).collect();
+    (d, pairs)
+}
+
+/// The pair range of the VIEWPORT record whose group 69 is `id`.
+fn vp_record(p: &[(String, String)], id: &str) -> std::ops::Range<usize> {
+    let starts: Vec<usize> = (0..p.len()).filter(|&i| p[i].0 == "0").collect();
+    for w in starts.windows(2) {
+        let r = w[0]..w[1];
+        if p[w[0]].1 == "VIEWPORT" && p[r.clone()].iter().any(|(c, v)| c == "69" && v.trim() == id) {
+            return r;
+        }
+    }
+    panic!("no VIEWPORT {id}");
+}
+
+fn layer_handle(p: &[(String, String)], name: &str) -> String {
+    let starts: Vec<usize> = (0..p.len()).filter(|&i| p[i].0 == "0").collect();
+    for w in starts.windows(2) {
+        let rec = &p[w[0]..w[1]];
+        if rec[0].1 == "LAYER" && rec.iter().any(|(c, v)| c == "2" && v == name) {
+            return rec.iter().find(|(c, _)| c == "5").unwrap().1.clone();
+        }
+    }
+    panic!("no LAYER {name}");
+}
+
+fn viewport_frozen(d: &Drawing, id: u32) -> Vec<String> {
+    d.layouts
+        .iter()
+        .flat_map(|l| l.entities.iter())
+        .find_map(|e| match &e.kind {
+            EntityKind::Viewport(v) if v.id == id => Some(v.frozen_layers.clone()),
+            _ => None,
+        })
+        .expect("viewport")
+}
+
+fn join(p: &[(String, String)]) -> String {
+    p.iter()
+        .map(|(c, v)| {
+            format!(
+                "{c}
+{v}
+"
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn viewport_frozen_layers_written_as_341_handles() {
+    let (_, p) = frozen_vp_dxf();
+    let r = vp_record(&p, "2");
+    let rec = &p[r];
+    let h341: Vec<&str> = rec.iter().filter(|(c, _)| c == "341").map(|(_, v)| v.as_str()).collect();
+    assert_eq!(h341, vec![layer_handle(&p, "Walls").as_str(), layer_handle(&p, "A B").as_str()]);
+    let last341 = rec.iter().rposition(|(c, _)| c == "341").unwrap();
+    let x = rec.iter().position(|(c, _)| c == "1001").expect("xdata");
+    assert!(last341 < x, "341 must precede the xdata");
+}
+
+#[test]
+fn viewport_frozen_layers_read_from_341_without_xdata() {
+    let (_, p) = frozen_vp_dxf();
+    let r = vp_record(&p, "2");
+    // Strip the CADCraft xdata, and add a 341 to a handle that names no layer.
+    let x = p[r.clone()].iter().position(|(c, _)| c == "1001").unwrap() + r.start;
+    let mut q: Vec<(String, String)> = p[..r.start].to_vec();
+    let mut head = p[r.start..x].to_vec();
+    head.push(("341".into(), "FFFFF".into()));
+    q.extend(head);
+    q.extend(p[r.end..].iter().cloned());
+    let back = read_dxf(join(&q).as_bytes()).unwrap();
+    assert_eq!(viewport_frozen(&back, 2), vec!["Walls".to_string(), "A B".to_string()]);
+}
+
+#[test]
+fn viewport_frozen_xdata_wins_over_341() {
+    let (_, p) = frozen_vp_dxf();
+    let r = vp_record(&p, "2");
+    // Point every 341 at layer 0: the xdata list must still be what is read.
+    let zero = layer_handle(&p, "0");
+    let mut q = p.clone();
+    for t in &mut q[r] {
+        if t.0 == "341" {
+            t.1 = zero.clone();
+        }
+    }
+    let back = read_dxf(join(&q).as_bytes()).unwrap();
+    assert_eq!(viewport_frozen(&back, 2), vec!["Walls".to_string(), "A B".to_string()]);
+}
+
+#[test]
+fn viewport_frozen_layers_survive_dwg() {
+    let (d, _) = frozen_vp_dxf();
+    let dwg = write(&d, "t.dwg").unwrap();
+    let back = read(&dwg, "t.dwg").unwrap();
+    assert_eq!(viewport_frozen(&back, 2), vec!["Walls".to_string(), "A B".to_string()]);
+    // Survives via the CADCraft xdata: the DWG converter does not yet carry group 341 itself.
+}
+
 #[test]
 fn viewport_layer_colors_roundtrip() {
     let mut d = sample();

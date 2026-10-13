@@ -926,6 +926,8 @@ struct Rx {
     pstyles: HashMap<String, String>,
     /// Upper-case block name → associative array parameters from its BLOCK_RECORD.
     block_arrays: HashMap<String, cadcraft_doc::ArrayParams>,
+    /// LAYER record handle (upper case) → layer name (VIEWPORT group 341 frozen layers).
+    layers: HashMap<String, String>,
 }
 
 /// The plot style names of a file: the entries of the `ACAD_PLOTSTYLENAME` dictionary of the
@@ -1023,6 +1025,15 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
                 rx.inserted.insert(b.block.to_ascii_uppercase());
             }
             rx.mleader_fix.push((h, pending));
+        }
+        // CADCraft's VPFROZEN xdata wins; otherwise AutoCAD's group 341 layer handles.
+        ("VIEWPORT", EntityKind::Viewport(v)) if v.frozen_layers.is_empty() => {
+            v.frozen_layers = tags
+                .iter()
+                .take_while(|t| t.code < 1000)
+                .filter(|t| t.code == 341)
+                .filter_map(|t| rx.layers.get(&t.str().trim().to_ascii_uppercase()).cloned())
+                .collect();
         }
         _ => {}
     }
@@ -1310,6 +1321,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             }
             "LTYPE" => {
                 rx.ltypes.insert(h.trim().to_ascii_uppercase(), n);
+            }
+            "LAYER" => {
+                rx.layers.insert(h.trim().to_ascii_uppercase(), n);
             }
             _ => {}
         }
