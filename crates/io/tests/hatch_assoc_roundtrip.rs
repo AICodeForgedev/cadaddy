@@ -103,3 +103,55 @@ fn sources_after_spline_fit_data_and_hostile_counts() {
     assert_eq!(hatches(&back)[0].loops[0].sources, vec![Handle(0x1F)]);
     assert!(hatches(&with(&poly_loop, "97\n-5\n"))[0].loops[0].sources.is_empty());
 }
+
+/// The groups of the first record of type `kind` with handle `h`.
+fn record(p: &[(i32, String)], kind: &str, h: Handle) -> Vec<(i32, String)> {
+    let starts: Vec<usize> = p.iter().enumerate().filter(|(_, (c, _))| *c == 0).map(|(i, _)| i).collect();
+    starts
+        .iter()
+        .enumerate()
+        .map(|(n, &s)| p[s..starts.get(n + 1).copied().unwrap_or(p.len())].to_vec())
+        .find(|r| r.first().is_some_and(|(_, v)| v == kind) && r.get(1) == Some(&(5, h.hex())))
+        .unwrap_or_default()
+}
+
+/// An associative hatch inside a block keeps its boundary object, and the boundary carries the
+/// hatch as a persistent reactor (as AutoCAD writes them), so a stretched boundary still drags
+/// the fill along in AutoCAD (dynamic blocks).
+#[test]
+fn a_hatch_in_a_block_keeps_its_boundary_and_the_boundary_its_reactor() {
+    let mut d = Drawing::new_imperial();
+    let mut b = Block::new("Tag");
+    let outline = d.new_handle();
+    let fill = d.new_handle();
+    let k = EntityKind::LwPolyline(LwPolyline { vertices: square(0.0, 10.0), closed: true, const_width: 0.0, elevation: 0.0, plinegen: false });
+    b.entities.push(Entity::new(outline, k));
+    let loops = vec![HatchLoop { vertices: square(0.0, 10.0), outer: true, sources: vec![outline] }];
+    b.entities.push(Entity::new(fill, EntityKind::Hatch(hatch(loops, true))));
+    d.blocks.insert("Tag".into(), std::sync::Arc::new(b));
+    // A model-space hatch whose source is in the block is not linked to it.
+    let stray = vec![HatchLoop { vertices: square(0.0, 10.0), outer: true, sources: vec![outline] }];
+    let other = d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch(stray, true))).expect("add");
+    let p = pairs(&write_dxf(&d));
+    let poly = record(&p, "LWPOLYLINE", outline);
+    let reactors = ["{ACAD_REACTORS", &fill.hex(), "}"].map(String::from);
+    assert!(poly.windows(3).any(|w| w.iter().map(|(_, v)| v.clone()).eq(reactors.iter().cloned())), "{poly:?}");
+    assert!(!poly.iter().any(|(c, v)| *c == 330 && *v == other.hex()), "{poly:?}");
+    let h = record(&p, "HATCH", fill);
+    let at = h.iter().position(|(c, _)| *c == 97).expect("97");
+    assert_eq!(h[at..at + 2], [(97, "1".to_string()), (330, outline.hex())]);
+    assert!(record(&p, "HATCH", other).contains(&(97, "0".to_string())));
+    // Read back, from DXF and from DWG.
+    let back = read_dxf(join(&p).as_bytes()).expect("read");
+    let dwg = cadcraft_io::write(&d, "x.dwg").expect("dwg");
+    let from_dwg = cadcraft_io::read(&dwg, "x.dwg").expect("read dwg");
+    for (what, back) in [("dxf", &back), ("dwg", &from_dwg)] {
+        let blk = back.block("Tag").expect("block");
+        let sources: Vec<Vec<Handle>> = blk
+            .entities
+            .iter()
+            .filter_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some(h.loops.iter().flat_map(|l| l.sources.clone()).collect()) } else { None })
+            .collect();
+        assert_eq!(sources, vec![vec![outline]], "{what}");
+    }
+}
