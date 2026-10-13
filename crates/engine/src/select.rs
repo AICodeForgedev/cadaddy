@@ -91,7 +91,7 @@ pub fn entity_distance(d: &Drawing, e: &Entity, p: Vec2, tol: f64) -> f64 {
     let filled = matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) | EntityKind::Table(_))
         || matches!(e.kind, EntityKind::Tolerance(_))
         || matches!(&e.kind, EntityKind::Hatch(h) if h.solid);
-    if filled && entity_bounds(d, e, 0).contains(p) {
+    if (filled && entity_bounds(d, e, 0).contains(p)) || in_text(d, e, p) {
         best = 0.0;
     }
     // A SOLID fills its polygon, not its bounding rectangle (half of which is empty for a triangle).
@@ -99,6 +99,39 @@ pub fn entity_distance(d: &Drawing, e: &Entity, p: Vec2, tol: f64) -> f64 {
         best = 0.0;
     }
     best
+}
+
+/// Whether `p` is on the text of a dimension or multileader: inside the box around its words,
+/// turned with the text, as plain text is hit anywhere inside its box. Their other geometry is
+/// hit along its lines, so without this the cursor found the object only between the letters'
+/// edges and the lines.
+fn in_text(d: &Drawing, e: &Entity, p: Vec2) -> bool {
+    match &e.kind {
+        // A dimension with a block (as AutoCAD saves them) is drawn from that block: its text is
+        // the text there, not the text the dimension's own geometry would place.
+        EntityKind::Dimension(dm) => match dm.block.as_ref().and_then(|n| d.block(n)) {
+            Some(blk) => blk.entities.iter().any(|be| match &be.kind {
+                EntityKind::MText(t) => in_box(cadcraft_render::layout_mtext_entity(d, t).strokes.into_iter().flatten(), t.rotation, p),
+                EntityKind::Text(_) => entity_bounds(d, be, 0).contains(p),
+                _ => false,
+            }),
+            None => {
+                let g = cadcraft_render::dimension_in(d, dm);
+                in_box(g.text.iter().flatten().chain(g.text_glyphs.iter().flatten().flatten()).copied(), g.text_angle, p)
+            }
+        },
+        EntityKind::MLeader(m) => {
+            m.text.as_ref().is_some_and(|t| in_box(cadcraft_render::layout_mtext_entity(d, t).strokes.into_iter().flatten(), t.rotation, p))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `p` is inside the box around `pts` turned by `angle` (the box of text set at `angle`).
+fn in_box(pts: impl Iterator<Item = Vec2>, angle: f64, p: Vec2) -> bool {
+    let turn = |q: Vec2| q.rotate(-angle);
+    let b = Bounds2::from_points(pts.filter(|q| q.is_finite()).map(turn));
+    !b.is_empty() && b.contains(turn(p))
 }
 
 fn selectable(d: &Drawing, e: &Entity) -> bool {
