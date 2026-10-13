@@ -159,7 +159,7 @@ fn a_selected_block_reference_offers_the_block_editor() {
     app.run("block", json!({ "name": "Door", "base": [0, 0], "handles": [l] })).unwrap();
     select_all(&mut app);
     let g = vec![context_menu::object_entries(&app)];
-    assert_eq!(labels(&g), ["Block Editor"]);
+    assert_eq!(labels(&g), ["Block Editor", "Edit Reference In-Place"]);
     // Choosing it opens the Block Editor on that block; its own menu then saves and closes it.
     cadcraft_ui_egui::menus::activate(&mut app, "bedit");
     assert_eq!(app.session.state().unwrap().block_editor(), Some("Door"));
