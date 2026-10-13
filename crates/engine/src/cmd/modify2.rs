@@ -454,10 +454,17 @@ impl Interactive for PeditM {
         let sel = s.selection();
         if let [h] = sel.as_slice() {
             let k = curves::entity(s, *h)?.kind;
-            if matches!(k, EntityKind::LwPolyline(_)) {
-                self.h = Some(*h);
-                self.original = self.poly(s).map(|p| p.vertices);
-                self.phase = PPhase::Main;
+            match k {
+                EntityKind::LwPolyline(_) => {
+                    self.h = Some(*h);
+                    self.original = self.poly(s).map(|p| p.vertices);
+                    self.phase = PPhase::Main;
+                }
+                EntityKind::Line(_) | EntityKind::Arc(_) => {
+                    self.h = Some(*h);
+                    self.phase = PPhase::Convert;
+                }
+                _ => {}
             }
         }
         Ok(Step::Continue)
