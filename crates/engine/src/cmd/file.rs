@@ -228,18 +228,65 @@ fn file_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string())
 }
 
-pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option<String>) -> Result<usize> {
+/// A file read and decoded but not yet added to a [`Session`]. Reading is the slow part of OPEN and
+/// needs no session, so a host can do it on a worker thread and hand the result to
+/// [`finish_open`] on the thread that owns the session.
+pub struct ReadFile {
+    drawing: Drawing,
+    binary_dxf: bool,
+    name: String,
+    path: Option<String>,
+}
+
+/// Read and decode `path` (the slow half of `OPEN {path}`). Needs no session; runs anywhere.
+pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let r = std::panic::catch_unwind(|| {
+            let bytes = std::fs::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
+            read_bytes(&bytes, path, Some(path.to_string()))
+        });
+        match r {
+            Ok(r) => r.map_err(|e| e.to_string()),
+            Err(_) => Err(bad("open", format!("{path}: the file could not be read")).to_string()),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        Err(bad("open", "paths are not available on the web; pass `data`").to_string())
+    }
+}
+
+/// Add a [`read_file`] result to the session as the active drawing: the fast half of OPEN.
+pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
+    let ReadFile { drawing, binary_dxf, name, path } = f;
+    let i = add_read(s, drawing, binary_dxf, &name, path);
+    super::blocks::xref::after_open(s, i);
+    Ok(json!({ "index": i, "entities": s.docs.get(i).map(|d| d.doc.entity_count()) }))
+}
+
+fn read_bytes(bytes: &[u8], name: &str, path: Option<String>) -> Result<ReadFile> {
     let hooks = io().ok_or_else(|| bad("open", "file formats are not available in this build"))?;
-    let d = (hooks.read)(bytes, name).map_err(|e| bad("open", e))?;
+    let drawing = (hooks.read)(bytes, name).map_err(|e| bad("open", e))?;
     // A file that isn't a drawing (an imported SVG) gives the drawing no file name: QSAVE then
     // asks where to save instead of exporting over the original.
     let path = path.filter(|p| is_drawing_file(p));
-    let i = s.open_drawing(d, &file_name(name), path);
+    Ok(ReadFile { drawing, binary_dxf: cadcraft_dxf::is_binary(bytes), name: name.to_string(), path })
+}
+
+fn add_read(s: &mut Session, drawing: Drawing, binary_dxf: bool, name: &str, path: Option<String>) -> usize {
+    let i = s.open_drawing(drawing, &file_name(name), path);
     if let Some(st) = s.docs.get_mut(i) {
         // QSAVE keeps a binary DXF binary.
-        st.binary_dxf = cadcraft_dxf::is_binary(bytes);
+        st.binary_dxf = binary_dxf;
     }
-    Ok(i)
+    i
+}
+
+pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option<String>) -> Result<usize> {
+    let ReadFile { drawing, binary_dxf, name, path } = read_bytes(bytes, name, path)?;
+    Ok(add_read(s, drawing, binary_dxf, &name, path))
 }
 
 fn run_open(s: &mut Session, p: &Value) -> Result<Value> {

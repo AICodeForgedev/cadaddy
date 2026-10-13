@@ -693,6 +693,20 @@ impl Session {
         }
     }
 
+    /// Add a file read off-thread with [`cmd::file::read_file`] as the active drawing (OPEN's fast
+    /// half). A panic while adding it is reported as an error, never propagated.
+    pub fn finish_open(&mut self, f: cmd::file::ReadFile) -> Result<Value> {
+        let n = self.docs.len();
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cmd::file::finish_open(self, f))) {
+            Ok(r) => r,
+            Err(_) => {
+                self.docs.truncate(n);
+                self.active = self.active.min(self.docs.len().saturating_sub(1));
+                Err(EngineError::Internal("open".into(), "panic".into()))
+            }
+        }
+    }
+
     pub fn state(&self) -> Result<&DocState> {
         self.docs.get(self.active).ok_or(EngineError::NoDocument)
     }

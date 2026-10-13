@@ -32,6 +32,7 @@ pub mod icons;
 pub mod layers;
 pub mod managers;
 pub mod menus;
+pub mod opening;
 pub mod options;
 pub mod palettes;
 pub mod parametric;
@@ -187,6 +188,8 @@ pub struct CadApp {
     pub spacemouse: spacemouse::State,
     pub cmd: cmdline::CmdLine,
     pub status: Option<(String, f64)>,
+    /// Drawings being read on worker threads ([`opening`]).
+    pub opening: opening::Opening,
     pub integrated_titlebar: bool,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
@@ -233,6 +236,7 @@ impl CadApp {
             spacemouse: spacemouse::State::default(),
             cmd: cmdline::CmdLine::default(),
             status: None,
+            opening: opening::Opening::default(),
             integrated_titlebar: false,
             control_rx: None,
             pending_shots: Vec::new(),
@@ -364,9 +368,34 @@ impl CadApp {
         self.status = Some((s.into(), now_ms()));
     }
 
+    /// Open the drawing at `path`. Natively the file is read on a worker thread while an
+    /// "Opening ..." card shows ([`opening`]); [`Self::finish_opening`] adds it when ready. On the
+    /// web it opens at once.
     pub fn open_path(&mut self, path: &str) {
-        let r = self.run("open", json!({ "path": path }));
-        self.opened(r);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.opening.start(path);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let r = self.run("open", json!({ "path": path }));
+            self.opened(r);
+        }
+    }
+
+    /// Add the files whose background read has finished; report the ones that failed as a failed
+    /// OPEN is reported. Called every frame.
+    pub fn finish_opening(&mut self) {
+        for (_, outcome) in self.opening.poll() {
+            let r = match outcome {
+                Ok(f) => self.session.finish_open(f).map_err(|e| e.to_string()),
+                Err(e) => Err(e),
+            };
+            if let Err(e) = &r {
+                self.session.echo(e.clone());
+            }
+            self.opened(r);
+        }
     }
 
     /// The largest file [`Self::open_bytes`] opens. A drawing opened from its contents (the
@@ -437,6 +466,8 @@ impl CadApp {
             self.shown_follows_system = follows_system;
         }
         self.drain_control(ctx);
+        self.finish_opening();
+        self.opening.show(ctx);
         if !self.synthetic.is_empty() {
             ctx.request_repaint();
         }
