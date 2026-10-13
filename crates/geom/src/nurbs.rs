@@ -49,6 +49,21 @@ fn gauss(a: f64, b: f64, f: impl Fn(f64) -> f64) -> f64 {
     GAUSS.iter().map(|(x, w)| w * f(m + h * x)).sum::<f64>() * h
 }
 
+/// Most halvings `adaptive_gauss` makes of one panel: with `param_at_length`'s 60 bisections
+/// this bounds the work a hostile spline can ask for.
+const MAX_GAUSS_DEPTH: usize = 10;
+
+/// `gauss` over [a, b], halving until the two halves agree with the whole: a fixed panel count
+/// is far off on a tight bend, and the arc-length inverse must agree with the measure.
+fn adaptive_gauss(a: f64, b: f64, whole: f64, f: &impl Fn(f64) -> f64, depth: usize) -> f64 {
+    let m = (a + b) / 2.0;
+    let (l, r) = (gauss(a, m, f), gauss(m, b, f));
+    if depth == 0 || !(l + r).is_finite() || (l + r - whole).abs() <= 1e-10 * (l + r).abs() {
+        return l + r;
+    }
+    adaptive_gauss(a, m, l, f, depth - 1) + adaptive_gauss(m, b, r, f, depth - 1)
+}
+
 /// Clamped knots over Bézier pieces meeting at `breaks`, for degree `p`.
 fn bezier_knots(breaks: &[f64], p: usize) -> Vec<f64> {
     let mut k = Vec::with_capacity(breaks.len() * p + 2);
@@ -455,14 +470,20 @@ impl Spline {
         out
     }
 
-    /// Arc length between parameters `a` and `b` (Gauss–Legendre over each knot span).
+    /// Arc length of one integration panel.
+    fn panel_length(&self, a: f64, b: f64) -> f64 {
+        let speed = |t: f64| self.derivative(t).len();
+        adaptive_gauss(a, b, gauss(a, b, speed), &speed, MAX_GAUSS_DEPTH)
+    }
+
+    /// Arc length between parameters `a` and `b` (adaptive Gauss–Legendre over each knot span).
     pub fn length_between(&self, a: f64, b: f64) -> f64 {
         if !self.is_valid() || !(a.is_finite() && b.is_finite()) {
             return 0.0;
         }
         let (lo, hi) = self.domain();
         let (a, b) = (a.min(b).clamp(lo, hi), a.max(b).clamp(lo, hi));
-        let l: f64 = self.length_intervals(a, b).into_iter().map(|(x, y)| gauss(x, y, |t| self.derivative(t).len())).sum();
+        let l: f64 = self.length_intervals(a, b).into_iter().map(|(x, y)| self.panel_length(x, y)).sum();
         if l.is_finite() { l } else { 0.0 }
     }
 
@@ -480,7 +501,6 @@ impl Spline {
         if !self.is_valid() || !len.is_finite() || len == 0.0 {
             return from;
         }
-        let speed = |t: f64| self.derivative(t).len();
         let (a, b, target) = if len > 0.0 { (from, hi, len) } else { (lo, from, -len) };
         let mut ivs = self.length_intervals(a, b);
         if len < 0.0 {
@@ -488,7 +508,7 @@ impl Spline {
         }
         let mut acc = 0.0;
         for (x0, x1) in ivs {
-            let l = gauss(x0, x1, speed);
+            let l = self.panel_length(x0, x1);
             if acc + l >= target && l > 0.0 {
                 // Bisect inside this interval, measuring from its near end.
                 let rest = target - acc;
@@ -496,7 +516,7 @@ impl Spline {
                 let (mut s0, mut s1) = (near, far);
                 for _ in 0..60 {
                     let m = (s0 + s1) / 2.0;
-                    let lm = gauss(near.min(m), near.max(m), speed);
+                    let lm = self.panel_length(near.min(m), near.max(m));
                     if lm < rest {
                         s0 = m;
                     } else {
@@ -693,6 +713,23 @@ mod tests {
         let t = q.param_at_length(hi, -std::f64::consts::PI / 2.0);
         assert!(q.eval(t).near(Vec2::new(-2f64.sqrt(), 2f64.sqrt()), 1e-6));
         assert_eq!(q.param_at_length(lo, 1e9), hi);
+    }
+
+    #[test]
+    fn spline_arc_length_on_a_tight_bend() {
+        // One Bezier span that turns sharply: four fixed Gauss panels come out 0.3% short, and
+        // the inverse disagrees with the measure (#705). Reference by composite Simpson.
+        let pts = [(2.164, -9.484), (8.964, -13.012), (-16.428, -1.276), (18.58, -18.08)];
+        let s = Spline::from_control(pts.iter().map(|&(x, y)| Vec2::new(x, y)).collect(), 3);
+        let (lo, hi) = s.domain();
+        assert!((s.length() - 26.708_124_545_291_4).abs() < 1e-6, "{}", s.length());
+        for frac in [0.25, 0.5, 0.9] {
+            let want = s.length() * frac;
+            let t = s.param_at_length(lo, want);
+            assert!((s.length_between(lo, t) - want).abs() < 1e-6, "{frac}: {}", s.length_between(lo, t));
+            let t = s.param_at_length(hi, -want);
+            assert!((s.length_between(t, hi) - want).abs() < 1e-6, "{frac}: {}", s.length_between(t, hi));
+        }
     }
 
     #[test]

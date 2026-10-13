@@ -198,6 +198,27 @@ fn lengthen_open_splines() {
 }
 
 #[test]
+fn shortening_a_tightly_bent_spline_reaches_the_requested_length() {
+    // #705: a fixed quadrature left this cubic 0.137 longer than asked, whatever the mode.
+    let control = json!([[2.164, -9.484], [8.964, -13.012], [-16.428, -1.276], [18.58, -18.08]]);
+    let half = 26.708_124_545_291_4 / 2.0;
+    for mode in [json!({ "total": half }), json!({ "delta": -half }), json!({ "percent": 50 })] {
+        let mut s = Session::new();
+        let sp = h(&s.execute("spline", &json!({ "degree": 3, "control": control })).unwrap());
+        let before = spline(&s, &sp);
+        assert!((length(&mut s, &sp) - 2.0 * half).abs() < 1e-6, "{mode}");
+        let mut q = mode.clone();
+        q["handle"] = json!(sp);
+        s.execute("lengthen", &q).unwrap();
+        let got = length(&mut s, &sp);
+        assert!((got - half).abs() < 1e-6, "{mode}: {got}");
+        let now = spline(&s, &sp);
+        assert!(ends(&now).0.near(ends(&before).0, 1e-9), "{mode}");
+        assert!(dist_to(&before, ends(&now).1) < 1e-9, "{mode}: the new end lies on the old curve");
+    }
+}
+
+#[test]
 fn lengthen_at_the_command_line_on_an_elliptical_arc() {
     let mut s = Session::new();
     let e = quarter_ellipse(&mut s);
