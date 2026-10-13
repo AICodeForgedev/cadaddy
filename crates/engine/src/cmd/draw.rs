@@ -271,7 +271,7 @@ fn run_spline(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Spline::fit_with(&f, bool_or(p, "closed", false), super::spline_opts::json_options(s, p)?)
     } else if let Some(c) = points_param(p, "control") {
-        if c.len() < 2 {
+        if c.len() < 2 || c.len() > super::curves::MAX_GEN {
             return Err(bad("spline", "need 2+ control points"));
         }
         // Degree 1..=10 as at the Degree prompt, `spline.cv` and DXF input (tessellation grows
