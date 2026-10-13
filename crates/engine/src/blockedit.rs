@@ -8,6 +8,11 @@
 //! Layer, style and block table changes made in the editor belong to the drawing too, as in
 //! AutoCAD: saving keeps the editor's tables and only puts back what is the drawing's own (its
 //! model and paper space objects, groups, constraints, tiled viewports and hidden objects).
+//!
+//! The editor can also open on the drawing itself ([`CURRENT_DRAWING`], AutoCAD's
+//! `<Current Drawing>`): a dynamic block's own drawing, whose model space holds the block's
+//! objects and authoring elements. Its objects are edited where they are; BSAVE keeps the
+//! changes as the drawing's, BCLOSE without saving puts the drawing back as it was.
 
 use std::sync::Arc;
 
@@ -18,6 +23,25 @@ use crate::{DocState, EngineError, Result, Snapshot};
 
 /// The undo step a save into the block records in the drawing.
 const UNDO_LABEL: &str = "Block Editor";
+
+/// The name the Block Editor gives the drawing itself (BEDIT `<Current Drawing>`).
+pub const CURRENT_DRAWING: &str = "<Current Drawing>";
+
+/// Whether block `name` (or `*Model_Space`, a drawing's own) carries dynamic block data from
+/// another program: parameters and actions in the `ACAD_ENHANCEDBLOCK` dictionary of its
+/// BLOCK_RECORD table entry.
+pub fn has_dynamic_data(d: &Drawing, name: &str) -> bool {
+    let key = ("BLOCK_RECORD".to_string(), name.to_ascii_uppercase());
+    let Some(xdict) = d.foreign.records.get(&key).and_then(|x| x.xdict) else { return false };
+    d.foreign.objects.iter().any(|o| o.handle == xdict && o.tags.iter().any(|t| t.code == 3 && t.value.eq_ignore_ascii_case("ACAD_ENHANCEDBLOCK")))
+}
+
+/// Whether drawing `d` has authoring elements: it is a dynamic block's own drawing, its model
+/// space carrying the block's parameters and actions (AutoCAD offers to open it in the Block
+/// Editor).
+pub fn has_authoring_elements(d: &Drawing) -> bool {
+    has_dynamic_data(d, "*Model_Space")
+}
 
 /// The Block Editor open in a drawing.
 #[derive(Clone, Debug)]
@@ -34,6 +58,8 @@ pub struct BlockEdit {
     original: EntityStore,
     /// The block's base point, at the origin in the editor.
     base: Vec2,
+    /// The editor is open on the drawing itself ([`CURRENT_DRAWING`]).
+    pub current: bool,
 }
 
 /// Why a block can't be opened in the Block Editor, if it can't.
@@ -106,6 +132,13 @@ impl BlockEdit {
     /// The drawing with the editor's objects saved into block `name` (the edited block, or a new
     /// name for BSAVEAS), from `editor`, the editor's drawing.
     pub fn compose(&self, editor: &Drawing, name: &str) -> Result<Drawing> {
+        // The drawing itself: the editor's drawing is the drawing.
+        if self.current {
+            if !name.eq_ignore_ascii_case(CURRENT_DRAWING) {
+                return Err(EngineError::Other("The current drawing can't be saved as a block from the Block Editor; use WBLOCK or BLOCK.".into()));
+            }
+            return Ok(editor.clone());
+        }
         if refers_to(editor, &editor.model, name) {
             return Err(EngineError::Other(format!("Block \"{name}\" can't contain a reference to itself.")));
         }
@@ -177,6 +210,19 @@ impl DocState {
         if let Some(open) = self.block_editor() {
             return Err(EngineError::Other(format!("The Block Editor is already open on \"{open}\"; close it first (BCLOSE).")));
         }
+        if name.trim().eq_ignore_ascii_case(CURRENT_DRAWING) {
+            let host = Box::new(self.clone());
+            let editor = self.doc.clone();
+            self.enter_block_editor(BlockEdit {
+                name: CURRENT_DRAWING.into(),
+                host,
+                saved: editor,
+                original: EntityStore::new(),
+                base: Vec2::ZERO,
+                current: true,
+            });
+            return Ok(());
+        }
         let block = match self.doc.block(name) {
             None if create => Arc::new(cadcraft_doc::Block::new(name)),
             _ => {
@@ -196,6 +242,13 @@ impl DocState {
         let host = Box::new(self.clone());
         let editor = Arc::new(d);
         self.doc = editor.clone();
+        self.enter_block_editor(BlockEdit { name: block.name.clone(), host, saved: editor, original: block.entities.clone(), base, current: false });
+        Ok(())
+    }
+
+    /// Start editing in the Block Editor `be` (the drawing is already the editor's): a fresh
+    /// undo history, nothing selected, model space.
+    fn enter_block_editor(&mut self, be: BlockEdit) {
         self.undo.clear();
         self.redo.clear();
         self.undo_ctl = Default::default();
@@ -206,9 +259,8 @@ impl DocState {
         self.tiles = Default::default();
         self.views.clear();
         self.view_history.clear();
-        self.block_edit = Some(BlockEdit { name: block.name.clone(), host, saved: editor, original: block.entities.clone(), base });
+        self.block_edit = Some(be);
         self.revision += 1;
-        Ok(())
     }
 
     /// Save the Block Editor's objects into the block (BSAVE), or into a new block `as_name`

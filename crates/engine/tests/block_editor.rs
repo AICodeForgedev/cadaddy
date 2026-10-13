@@ -328,3 +328,45 @@ fn bedit_can_start_a_new_block() {
     }
     assert!(s.state().unwrap().block_editor().is_none());
 }
+
+#[test]
+fn the_current_drawing_opens_in_the_block_editor() {
+    use cadcraft_engine::blockedit::{CURRENT_DRAWING, has_authoring_elements};
+    use cadcraft_engine::doc::foreign::{Foreign, ForeignExtra, ForeignObject};
+    use cadcraft_engine::doc::{Handle, RawTag};
+    let mut s = Session::new();
+    line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+    // A dynamic block's own drawing: model space's record carries ACAD_ENHANCEDBLOCK.
+    let mut d = s.doc().unwrap().clone();
+    assert!(!has_authoring_elements(&d));
+    let mut f = Foreign::default();
+    let tag = |code, value: &str| RawTag { code, value: value.into() };
+    f.records.insert(("BLOCK_RECORD".into(), "*MODEL_SPACE".into()), ForeignExtra { xdict: Some(Handle(0xF00)), ..Default::default() });
+    f.objects.push(ForeignObject { handle: Handle(0xF00), kind: "DICTIONARY".into(), tags: vec![tag(3, "ACAD_ENHANCEDBLOCK"), tag(360, "F01")] });
+    d.foreign = std::sync::Arc::new(f);
+    assert!(has_authoring_elements(&d));
+    s.open_drawing(d, "symbol", None);
+
+    // Opened on the drawing itself: its objects are there to edit, and it says it is dynamic.
+    let r = s.execute("bedit", &json!({ "name": "<current drawing>", "create": true })).unwrap();
+    assert_eq!(r, json!({ "block": CURRENT_DRAWING, "new": false }));
+    assert_eq!(editor(&s).as_deref(), Some(CURRENT_DRAWING));
+    assert_eq!(s.doc().unwrap().model.len(), 1);
+    assert!(s.log.iter().any(|l| l.contains("dynamic block")), "{:?}", s.log);
+    // A block of it can't be saved under another name here.
+    assert!(s.execute("bsaveas", &json!({ "name": "Copy" })).is_err());
+    // BCLOSE without saving puts the drawing back.
+    line(&mut s, [0.0, 5.0], [10.0, 5.0]);
+    s.execute("bclose", &json!({ "save": false })).unwrap();
+    assert_eq!(editor(&s), None);
+    assert_eq!(s.doc().unwrap().model.len(), 1);
+
+    // Saved, the change is the drawing's: one undo step takes it back.
+    s.execute("bedit", &json!({ "name": CURRENT_DRAWING })).unwrap();
+    line(&mut s, [0.0, 5.0], [10.0, 5.0]);
+    s.execute("bclose", &json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().model.len(), 2);
+    assert!(s.doc().unwrap().block(CURRENT_DRAWING).is_none(), "no block is made");
+    s.undo().unwrap();
+    assert_eq!(s.doc().unwrap().model.len(), 1);
+}

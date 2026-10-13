@@ -16,14 +16,14 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bedit", "Block Editor", run_bedit)
             .menu(&["Tools", "Block Editor"])
             .alias(&["be", "-bedit"])
-            .params("{name? | handle? (a block reference: edits its block); default the one selected block reference, create?: bool (a name no block has yet starts a new block; BSAVE creates it)} → {block, new}")
+            .params("{name? (\"<Current Drawing>\": the drawing itself, a dynamic block's own drawing) | handle? (a block reference: edits its block); default the one selected block reference, create?: bool (a name no block has yet starts a new block; BSAVE creates it)} → {block, new}")
             .enabled(not_editing)
             .noundo()
             .interactive(|_| Ok(Box::new(BeditM))),
         CommandSpec::new("bsave", "Save Block", run_bsave).params("{} → {block}").enabled(editing).noundo(),
         CommandSpec::new("bsaveas", "Save Block As", run_bsaveas)
             .params("{name, replace?: bool (redefine an existing block of that name)} → {block}")
-            .enabled(editing)
+            .enabled(editing_a_block)
             .noundo()
             .interactive(|_| Ok(Box::new(BsaveasM::default()))),
         CommandSpec::new("bclose", "Close Block Editor", run_bclose)
@@ -39,6 +39,17 @@ fn editing(s: &Session) -> std::result::Result<(), String> {
         Ok(st) if st.block_edit.is_some() => Ok(()),
         Ok(_) => Err("The Block Editor is not open.".into()),
         Err(e) => Err(e.to_string()),
+    }
+}
+
+/// The Block Editor is open on a block (not on the drawing itself, which BSAVEAS can't save as one).
+fn editing_a_block(s: &Session) -> std::result::Result<(), String> {
+    editing(s)?;
+    match s.state() {
+        Ok(st) if st.block_edit.as_ref().is_some_and(|b| b.current) => {
+            Err("The Block Editor is open on the current drawing; there is no block to save under another name.".into())
+        }
+        _ => Ok(()),
     }
 }
 
@@ -95,18 +106,9 @@ fn dynamic_definition(d: &Drawing, name: &str) -> Option<String> {
     (kind == "BLOCK_RECORD").then(|| d.block(block).map(|b| b.name.clone())).flatten()
 }
 
-/// Whether block `name` carries dynamic block data from another program (parameters and actions
-/// in its `ACAD_ENHANCEDBLOCK` dictionary), which CADCraft keeps but can't edit yet. The dictionary
-/// hangs off the block's BLOCK_RECORD table entry.
-fn has_dynamic_data(d: &Drawing, name: &str) -> bool {
-    let key = ("BLOCK_RECORD".to_string(), name.to_ascii_uppercase());
-    let Some(xdict) = d.foreign.records.get(&key).and_then(|x| x.xdict) else { return false };
-    d.foreign.objects.iter().any(|o| o.handle == xdict && o.tags.iter().any(|t| t.code == 3 && t.value.eq_ignore_ascii_case("ACAD_ENHANCEDBLOCK")))
-}
-
 /// Open the Block Editor on block `name` and frame its objects.
 fn open(s: &mut Session, name: &str, create: bool) -> Result<Value> {
-    let new = create && s.doc()?.block(name).is_none();
+    let new = create && !name.eq_ignore_ascii_case(crate::blockedit::CURRENT_DRAWING) && s.doc()?.block(name).is_none();
     s.state_mut()?.open_block_editor(name, create)?;
     let name = s.state()?.block_editor().unwrap_or(name).to_string();
     // The block's objects with room around them (and the editor's bar above them).
@@ -118,7 +120,9 @@ fn open(s: &mut Session, name: &str, create: bool) -> Result<Value> {
     } else {
         format!("Block Editor: editing \"{name}\". BSAVE saves it into the drawing; BCLOSE closes the editor.")
     });
-    if s.state().is_ok_and(|st| st.block_edit.as_ref().is_some_and(|be| has_dynamic_data(&be.host.doc, &be.name))) {
+    let dynamic =
+        |be: &crate::blockedit::BlockEdit| crate::blockedit::has_dynamic_data(&be.host.doc, if be.current { "*Model_Space" } else { &be.name });
+    if s.state().is_ok_and(|st| st.block_edit.as_ref().is_some_and(dynamic)) {
         s.echo("This is a dynamic block: its parameters and actions are kept but can't be edited in CADCraft yet.");
     }
     Ok(json!({ "block": name, "new": new }))
@@ -145,7 +149,8 @@ fn run_bedit(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let create = bool_or(p, "create", false);
     let name = name.trim();
-    if create && s.doc()?.block(name).is_none() && !super::valid_block_name(name) {
+    let current = name.eq_ignore_ascii_case(crate::blockedit::CURRENT_DRAWING);
+    if create && !current && s.doc()?.block(name).is_none() && !super::valid_block_name(name) {
         return Err(bad("bedit", format!("\"{name}\" is not a valid block name")));
     }
     open(s, name, create)

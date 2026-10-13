@@ -42,11 +42,12 @@ fn bedit_without_a_selected_reference_opens_the_dialog() {
     let mut app = app_with_blocks();
     app.cmdline("BEDIT");
     assert_eq!(app.ui.dialog.as_deref(), Some("bedit"));
-    // Blocks sorted by name, case-insensitively; the first is offered.
-    assert_eq!(bedit::editable_blocks(app.session.doc().unwrap()), ["door", "Window"]);
-    assert_eq!(app.bedit.name, "door");
+    // The drawing itself, then the blocks sorted by name, case-insensitively; the first is offered.
+    assert_eq!(bedit::editable_blocks(app.session.doc().unwrap()), ["<Current Drawing>", "door", "Window"]);
+    assert_eq!(app.bedit.name, "<Current Drawing>");
     assert!(app.session.state().unwrap().block_editor().is_none(), "the dialog changes nothing by itself");
 
+    app.bedit.name = "door".into();
     let ctx = egui::Context::default();
     app.logic(&ctx);
     painted(&mut app, &ctx);
@@ -102,4 +103,61 @@ fn a_selected_reference_and_json_calls_skip_the_dialog() {
     app.run("bedit", json!({ "name": "door" })).unwrap();
     assert!(app.ui.dialog.is_none(), "JSON calls never open dialogs");
     assert_eq!(app.session.state().unwrap().block_editor(), Some("door"));
+}
+
+/// What the stand-in reader opens: for a file saying "authoring", a dynamic block's own drawing
+/// as AutoCAD saves one (model space's block record has an extension dictionary holding an
+/// `ACAD_ENHANCEDBLOCK` evaluation graph); otherwise a plain drawing. Both have one line.
+fn read(bytes: &[u8], _name: &str) -> Result<cadcraft_engine::doc::Drawing, String> {
+    use cadcraft_engine::doc::foreign::{Foreign, ForeignExtra, ForeignObject};
+    use cadcraft_engine::doc::{Common, EntityKind, Handle, Line, RawTag, Space};
+    use cadcraft_engine::geom::Vec3;
+    let mut d = cadcraft_engine::doc::Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(10.0, 0.0, 0.0) })).map_err(|e| e.to_string())?;
+    if bytes == b"authoring" {
+        let mut f = Foreign::default();
+        let tag = |code, value: &str| RawTag { code, value: value.into() };
+        f.records.insert(("BLOCK_RECORD".into(), "*MODEL_SPACE".into()), ForeignExtra { xdict: Some(Handle(0xF00)), ..Default::default() });
+        f.objects.push(ForeignObject { handle: Handle(0xF00), kind: "DICTIONARY".into(), tags: vec![tag(3, "ACAD_ENHANCEDBLOCK"), tag(360, "F01")] });
+        d.foreign = std::sync::Arc::new(f);
+    }
+    Ok(d)
+}
+
+#[test]
+fn opening_a_drawing_with_authoring_elements_offers_the_block_editor() {
+    use cadcraft_engine::cmd::file::{IoHooks, set_io};
+    set_io(IoHooks { read, write: |_, _| Ok(Vec::new()), plot: None });
+    let dir = std::env::temp_dir().join(format!("cadcraft-authoring-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let symbol = dir.join("Symbol.dxf");
+    std::fs::write(&symbol, "authoring").unwrap();
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.open_path(&symbol.to_string_lossy());
+    assert_eq!(app.ui.dialog.as_deref(), Some("authoring"));
+    let ctx = egui::Context::default();
+    app.logic(&ctx);
+    painted(&mut app, &ctx);
+    let text = painted(&mut app, &ctx);
+    assert!(text.contains("Symbol.dxf contains authoring elements. Open in Block Editor?"), "{text}");
+    for s in ["Yes", "No", "Cancel"] {
+        assert!(
+            text.contains(s),
+            "{s} missing from:
+{text}"
+        );
+    }
+    // Yes is BEDIT on the drawing itself.
+    app.run("bedit", json!({ "name": "<Current Drawing>" })).unwrap();
+    assert_eq!(app.session.state().unwrap().block_editor(), Some("<Current Drawing>"));
+    assert_eq!(app.session.doc().unwrap().model.len(), 1);
+
+    // A drawing without authoring elements opens without asking.
+    let plain = dir.join("Plain.dxf");
+    std::fs::write(&plain, "plain").unwrap();
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.open_path(&plain.to_string_lossy());
+    assert!(app.session.state().unwrap().path.is_some(), "opened");
+    assert!(app.ui.dialog.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
 }

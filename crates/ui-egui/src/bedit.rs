@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use cadcraft_color::Rgb;
+use cadcraft_engine::blockedit::CURRENT_DRAWING;
 use cadcraft_engine::doc::{Drawing, EntityKind};
 use cadcraft_geom::Vec2;
 use cadcraft_render::DisplayList;
@@ -32,7 +33,56 @@ pub fn editable_blocks(d: &Drawing) -> Vec<String> {
     let mut names: Vec<String> =
         d.blocks.values().filter(|b| !b.anonymous && !b.name.starts_with('*') && b.xref_path.is_none()).map(|b| b.name.clone()).collect();
     names.sort_by_key(|n| n.to_lowercase());
+    // The drawing itself comes first, as in AutoCAD.
+    names.insert(0, CURRENT_DRAWING.to_string());
     names
+}
+
+/// Opening a drawing with authoring elements (a dynamic block's own drawing) asks whether to
+/// open it in the Block Editor, as AutoCAD does: Yes edits the drawing itself in the Block
+/// Editor, No opens it as usual, Cancel closes it again.
+pub fn authoring_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
+    let name = app
+        .session
+        .state()
+        .ok()
+        .and_then(|st| st.path.clone())
+        .and_then(|p| std::path::Path::new(&p).file_name().map(|f| f.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| crate::i18n::t("This drawing").to_string());
+    let mut choice: Option<&str> = None;
+    egui::Window::new(crate::tl!("Open in Block Editor"))
+        .id(egui::Id::new("Open in Block Editor"))
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(format!("{name} {}", crate::i18n::t("contains authoring elements. Open in Block Editor?")));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(crate::tl!("Yes")).clicked() {
+                    choice = Some("yes");
+                }
+                if ui.button(crate::tl!("No")).clicked() {
+                    choice = Some("no");
+                }
+                if ui.button(crate::tl!("Cancel")).clicked() {
+                    choice = Some("cancel");
+                }
+            });
+        });
+    let Some(c) = choice else { return };
+    *open = false;
+    let r = match c {
+        "yes" => app.run("bedit", json!({ "name": CURRENT_DRAWING })).map(|_| ()),
+        "cancel" => app.run("close", Value::Null).map(|_| ()),
+        _ => Ok(()),
+    };
+    if let Err(e) = r {
+        app.session.echo(e);
+    }
 }
 
 /// BEDIT typed or from a menu without parameters opens the dialog, unless exactly one block
@@ -67,16 +117,14 @@ fn preview(app: &mut CadApp, name: &str) -> Option<Arc<DisplayList>> {
     {
         return Some(list.clone());
     }
-    let block = st.doc.block(name)?;
-    let rough = cadcraft_render::build_entities(&st.doc, block.entities.iter().map(|e| e.as_ref()), &cadcraft_render::Options::default());
+    // The drawing itself shows its model space.
+    let entities = if name.eq_ignore_ascii_case(CURRENT_DRAWING) { &st.doc.model } else { &st.doc.block(name)?.entities };
+    let rough = cadcraft_render::build_entities(&st.doc, entities.iter().map(|e| e.as_ref()), &cadcraft_render::Options::default());
     let size = rough.bounds.width().max(rough.bounds.height());
     // About half a pixel of the preview's 200 points.
     let opts = cadcraft_render::Options { tolerance: (size / 400.0).max(1e-9), ..Default::default() };
-    let list = Arc::new(if rough.bounds.is_empty() {
-        rough
-    } else {
-        cadcraft_render::build_entities(&st.doc, block.entities.iter().map(|e| e.as_ref()), &opts)
-    });
+    let list =
+        Arc::new(if rough.bounds.is_empty() { rough } else { cadcraft_render::build_entities(&st.doc, entities.iter().map(|e| e.as_ref()), &opts) });
     app.bedit.preview = Some((key, list.clone()));
     Some(list)
 }
@@ -139,9 +187,6 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     egui::ScrollArea::vertical().id_salt("bedit-blocks").max_height(250.0).min_scrolled_height(250.0).show(ui, |ui| {
                         ui.set_width(222.0);
                         ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
-                            if names.is_empty() {
-                                ui.label(RichText::new(crate::tl!("No blocks defined in this drawing.")).color(t.text_dim));
-                            }
                             for n in &names {
                                 let row = ui.selectable_label(existing.as_deref() == Some(n.as_str()), n);
                                 if row.clicked() {

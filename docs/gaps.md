@@ -152,6 +152,7 @@ Detail: [localization-parity.md](localization-parity.md).
 | 2026-10-12 | trivial | F13: HATCHEDIT refuses a bad scale or angle before editing (#724) |
 | 2026-10-12 | minor | F3: dynamic block references show their grips (distance arrows, position squares, visibility/lookup lists, per visibility state) and drag them (`blocks.reference.grips`, `blocks.reference.grip`) |
 | 2026-10-12 | minor | Multiline attributes read, drawn and saved (they lost their text before): F17 narrowed to creating them |
+| 2026-10-13 | minor | F3: opening a dynamic block's own drawing (authoring elements in model space) offers the Block Editor on `<Current Drawing>`, as AutoCAD does |
 | 2026-10-12 | minor | Edit Block Definition dialog (block list, preview, description; a new name starts a new block): F3 text updated, hours unchanged |
 | 2026-10-12 | minor | Block Editor (BEDIT, BSAVE, BSAVEAS, BCLOSE) for static blocks landed: rows 4 (65–100 → 55–90 h) and F3 (50–75 → 40–65 h) narrowed to REFEDIT and dynamic blocks |
 | 2026-10-12 | minor | SCRIPT command reading `.scr` files landed (runs a file through the same script engine as CLI/MCP; nested scripts refused): E2 removed |

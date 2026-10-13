@@ -54,7 +54,9 @@ pub(super) fn paint(app: &mut CadApp, ctx: &egui::Context, p: &egui::Painter, xf
                     if ui.add_enabled(unsaved, egui::Button::new(crate::tl!("Save Block"))).clicked() {
                         action = Some(("bsave", false));
                     }
-                    if ui.button(crate::tl!("Save Block As")).clicked() {
+                    // The drawing itself has no block to save under another name.
+                    let current = name == cadcraft_engine::blockedit::CURRENT_DRAWING;
+                    if ui.add_enabled(!current, egui::Button::new(crate::tl!("Save Block As"))).clicked() {
                         action = Some(("bsaveas", true));
                     }
                     if ui.button(crate::tl!("Close Block Editor")).clicked() {

@@ -507,6 +507,10 @@ impl CadApp {
                 if let Some(w) = v.get("warnings").and_then(Value::as_array).and_then(|w| w.first()).and_then(Value::as_str) {
                     self.set_status(w.to_string());
                 }
+                // A dynamic block's own drawing: ask whether to open it in the Block Editor.
+                if self.session.state().is_ok_and(|st| cadcraft_engine::blockedit::has_authoring_elements(&st.doc)) {
+                    self.ui.dialog = Some("authoring".into());
+                }
             }
         }
     }
