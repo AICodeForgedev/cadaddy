@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (code pages, #505; native MULTILEADER, #459; foreign data kept, #528; PDF text, layers and sheets, #567, #571; templates and user files, #552; plotter devices, #564) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (the Model layout's plot type is written as extents, not "Layout information") · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADCraft's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -134,6 +134,7 @@ our output in AutoCAD black-box.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | DXF/DWG save: the Model layout's plot settings are written as CADCraft plots model space, drawing extents scaled to fit (PLOTSETTINGS 74 = 1, 75 = 0), instead of plot type 5 "Layout information", which other programs' Plot dialogs can't use for model space |
 | 2026-10-11 | minor | Rows refreshed for merged work: code pages and `\M+` (#505), MULTILEADER (#459), IMAGE, MLINE/HELIX/REGION/TOLERANCE, VPORT/VIEW/UCS tables, modelled and raw objects, foreign data (#528), DWT templates and user `.lin`/`.pat`/`.pgp` files (#552), PDF output (#567, #571), plotter devices (#564), data extraction (#433, #534); weighted percentages not re-measured |
 | 2026-10-11 | minor | DXF (ASCII and binary) and DWG saved at 2000–2018, 2018 by default (#421) |
 | 2026-10-10 | minor | WIPEOUT and gradients written since #147/#162; other save losses remain (#201, #204, #208, #209, #213, #223) |
