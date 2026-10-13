@@ -1072,12 +1072,16 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                     group(ui, "Custom");
                     for p in &props {
                         prop_row(ui, &p.name, |ui| {
-                            if p.editable && !p.choices.is_empty() {
-                                if let Some(v) = pick_menu(ui, &p.value, p.choices.iter().cloned()) {
-                                    custom_set = Some(json!({ "handle": e.handle.hex(), "name": p.name, "value": v }));
+                            let picked = match (p.editable, p.choices.is_empty()) {
+                                (true, false) => pick_menu(ui, &p.value, p.choices.iter().cloned()),
+                                (true, true) => edit_field(ui, ui.id().with(("dynprop", e.handle, &p.name)), p.value.clone()),
+                                (false, _) => {
+                                    read_only(ui, &p.value);
+                                    None
                                 }
-                            } else {
-                                read_only(ui, &p.value);
+                            };
+                            if let Some(v) = picked.filter(|v| *v != p.value) {
+                                custom_set = Some(json!({ "handle": e.handle.hex(), "name": p.name, "value": v }));
                             }
                         });
                     }

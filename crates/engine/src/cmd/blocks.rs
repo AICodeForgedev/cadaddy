@@ -52,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(has_doc)
             .noundo(),
         CommandSpec::new("blocks.reference.set", "Set Dynamic Property", run_reference_set)
-            .params("{handle (a dynamic block reference), name (a custom property: a visibility state or a lookup), value} → {properties}")
+            .params("{handle (a dynamic block reference), name (a custom property as Properties names it: a visibility state, a lookup, a distance or \"Position1 X\"), value (lengths in drawing units)} → {properties}")
             .enabled(has_doc),
         CommandSpec::new("purge", "Purge", purge::run)
             .alias(&["pu", "-purge"])
