@@ -1,7 +1,7 @@
 //! MTEXT columns and paragraph formatting from the command line, scripts and the JSON form
 //! (#532).
 
-use cadcraft_doc::{EntityKind, MText, MTextColumnType};
+use cadcraft_doc::{EntityKind, MLeader, MText, MTextColumnType, MTextColumns};
 use cadcraft_engine::Session;
 use serde_json::json;
 
@@ -78,4 +78,50 @@ fn columns_shape_the_drawn_text_and_its_extents() {
     let e = d.model.iter().last().unwrap();
     let b = cadcraft_doc::entity_bounds(d, e, 0);
     assert!((b.width() - 34.0).abs() < 1e-9 && (b.height() - 6.0).abs() < 1e-9, "{b:?}");
+}
+
+#[test]
+fn scale_scales_multileader_text_width_and_columns() {
+    // #709: SCALE 2 on a multileader's text doubles its width and column lengths like it does
+    // for a standalone MTEXT, not only its height.
+    let text = MText {
+        insert: Default::default(),
+        height: 2.0,
+        width: 10.0,
+        attach: 1,
+        rotation: 0.0,
+        style: "Standard".into(),
+        contents: "hello world".into(),
+        line_spacing: 1.0,
+        line_spacing_exact: false,
+        columns: Some(MTextColumns {
+            kind: MTextColumnType::Static,
+            count: 2,
+            gutter: 1.0,
+            height: 5.0,
+            auto_height: true,
+            heights: vec![3.0, 4.0],
+            flow_reversed: false,
+        }),
+    };
+    let mut s = Session::new();
+    let ml = MLeader {
+        leaders: Vec::new(),
+        landing: Default::default(),
+        dogleg: 1.0,
+        text: Some(text),
+        style: "Standard".into(),
+        arrow_size: 1.0,
+        spline: false,
+        block: None,
+    };
+    let h = s.add_entity(EntityKind::MLeader(ml)).unwrap();
+    s.execute("scale", &json!({ "handles": [h.hex()], "base": [0, 0], "factor": 2 })).unwrap();
+    let t = match &s.doc().unwrap().entity(h).unwrap().kind {
+        EntityKind::MLeader(m) => m.text.clone().unwrap(),
+        k => panic!("{k:?}"),
+    };
+    let c = t.columns.unwrap();
+    assert_eq!((t.height, t.width), (4.0, 20.0));
+    assert_eq!((c.kind, c.count, c.gutter, c.height, c.heights), (MTextColumnType::Static, 2, 2.0, 10.0, vec![6.0, 8.0]));
 }

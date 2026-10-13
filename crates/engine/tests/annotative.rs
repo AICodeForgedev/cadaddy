@@ -283,3 +283,56 @@ fn hostile_parameters_are_refused() {
         assert!(s.execute("scalelistedit", &p).is_err(), "{p}");
     }
 }
+
+#[test]
+fn annotative_mtext_columns_follow_the_scale() {
+    // #708: at 1:2, two columns 10 wide with a gutter of 1 and a height of 20 on paper draw 20
+    // wide, 2 apart and 40 tall: the box is 42 × 40, not 41 × 20.
+    let mut s = Session::new();
+    setvar(&mut s, "CANNOSCALE", json!("1:2"));
+    let r = s
+        .execute(
+            "mtext",
+            &json!({ "at": [0, 0], "height": 1, "width": 10, "text": "a\\Pb\\Pc", "columns": { "type": "static", "count": 2, "gutter": 1, "height": 20 } }),
+        )
+        .unwrap();
+    let h = Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap();
+    s.execute("properties.set", &json!({ "handles": [h.hex()], "annotative": true })).unwrap();
+    assert_eq!(scales(&s, h), ["1:2"]);
+    let v = |s: &mut Session, name: &str| s.execute("getvar", &json!({ "name": name })).unwrap()["value"].clone();
+    assert_eq!(v(&mut s, "EXTMIN"), json!([0.0, -40.0, 0.0]));
+    assert_eq!(v(&mut s, "EXTMAX"), json!([42.0, 0.0, 0.0]));
+    // Dynamic columns with manual heights, and the text of a multileader, scale the same way.
+    let mut e = entity(&s, h);
+    if let EntityKind::MText(t) = &mut e.kind
+        && let Some(c) = &mut t.columns
+    {
+        c.heights = vec![3.0, 5.0];
+    }
+    let mtext = match &e.kind {
+        EntityKind::MText(t) => t.clone(),
+        k => panic!("{k:?}"),
+    };
+    let ml = Entity {
+        kind: EntityKind::MLeader(cadcraft_engine::doc::MLeader {
+            leaders: Vec::new(),
+            landing: Default::default(),
+            dogleg: 1.0,
+            text: Some(mtext),
+            style: "Standard".into(),
+            arrow_size: 1.0,
+            spline: false,
+            block: None,
+        }),
+        ..e.clone()
+    };
+    for e in [e, ml] {
+        let t = match cadcraft_engine::doc::anno_scaled(&e, 2.0).kind {
+            EntityKind::MText(t) => t,
+            EntityKind::MLeader(m) => m.text.unwrap(),
+            k => panic!("{k:?}"),
+        };
+        let c = t.columns.unwrap();
+        assert_eq!((t.height, t.width, c.count, c.gutter, c.height, c.heights), (2.0, 20.0, 2, 2.0, 40.0, vec![6.0, 10.0]));
+    }
+}

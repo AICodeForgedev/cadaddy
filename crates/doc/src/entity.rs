@@ -1212,6 +1212,10 @@ impl EntityKind {
                 if let Some(t) = &mut ml.text {
                     t3(&mut t.insert);
                     t.height *= s;
+                    t.width *= s;
+                    if let Some(c) = &mut t.columns {
+                        c.scale(s);
+                    }
                 }
                 if let Some(b) = &mut ml.block {
                     // Transformed exactly like a block reference.
