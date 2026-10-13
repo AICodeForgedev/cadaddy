@@ -79,6 +79,10 @@ impl Default for View {
     }
 }
 
+fn usable_view(v: &View) -> bool {
+    v.center.is_finite() && v.height.is_finite() && v.height > 1e-12
+}
+
 /// Tiled model viewports (VPORTS): the session side of the drawing's `*Active` configuration.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ModelTiles {
@@ -220,7 +224,9 @@ impl DocState {
         }
     }
     /// Map a requested screen view to the paper view, or (in MSPACE) to the viewport's model view.
-    fn store_view(&mut self, v: View) {
+    /// A finite request can still map to a view too large to represent: then nothing changes and
+    /// this returns false.
+    fn store_view(&mut self, v: View) -> bool {
         if let Some((h, vp)) = self.active_viewport() {
             let pv = self.paper_view();
             let k = v.height / pv.height.max(1e-12);
@@ -228,10 +234,17 @@ impl DocState {
                 // A locked viewport keeps its scale: pan/zoom the sheet instead.
                 let k0 = vp.view_height / vp.height;
                 let pc = vp.center.xy() + (v.center - vp.view_center) / k0;
-                self.put_paper_view(View { center: pc, height: v.height / k0 });
+                let paper = View { center: pc, height: v.height / k0 };
+                if !usable_view(&paper) {
+                    return false;
+                }
+                self.put_paper_view(paper);
             } else {
                 let center = v.center - (pv.center - vp.center.xy()) * k;
                 let height = vp.height * k;
+                if !usable_view(&View { center, height }) {
+                    return false;
+                }
                 let doc = Arc::make_mut(&mut self.doc);
                 if let Some(store) = doc.space_mut(&self.space.clone()) {
                     store.modify(h, |e| {
@@ -242,9 +255,10 @@ impl DocState {
                     });
                 }
             }
-            return;
+            return true;
         }
         self.put_paper_view(v);
+        true
     }
     fn put_paper_view(&mut self, v: View) {
         match self.views.iter_mut().find(|(s, _)| *s == self.space) {
@@ -252,18 +266,23 @@ impl DocState {
             None => self.views.push((self.space.clone(), v)),
         }
     }
-    pub fn set_view(&mut self, v: View) {
-        if !(v.center.is_finite() && v.height.is_finite() && v.height > 1e-12) {
-            return;
+    /// Set the view, recording view history. Returns false, changing nothing, when the view (or,
+    /// in MSPACE, the viewport view it maps to) isn't finite with a positive height.
+    pub fn set_view(&mut self, v: View) -> bool {
+        if !usable_view(&v) {
+            return false;
         }
         let old = self.view();
+        if !self.store_view(v) {
+            return false;
+        }
         if old != v {
             self.view_history.push(old);
             if self.view_history.len() > 50 {
                 self.view_history.remove(0);
             }
         }
-        self.store_view(v);
+        true
     }
     /// The active MSPACE viewport when ZOOM works on its own view, as in AutoCAD: extents and
     /// windows fit the viewport, and zooms keep its centre. A locked viewport keeps its scale, so

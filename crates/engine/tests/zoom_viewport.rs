@@ -67,6 +67,24 @@ fn zoom_inside_a_viewport_acts_on_the_viewport() {
 }
 
 #[test]
+fn a_view_too_large_for_the_viewport_is_refused_and_keeps_the_viewport() {
+    // A small paper view makes a finite but huge request map to an infinite model view (#714).
+    let (mut s, h) = session();
+    s.execute("pspace", &json!({})).unwrap();
+    s.execute("view.set", &json!({"center": [70, 60], "height": 0.5})).unwrap();
+    s.execute("mspace", &json!({"handle": h})).unwrap();
+    let before = viewport(&s, &h);
+    assert!(s.execute("view.set", &json!({"center": [0, 0], "height": 1e308})).is_err());
+    let after = viewport(&s, &h);
+    assert_eq!(after, before);
+    assert!(after.view_center.is_finite() && after.view_height.is_finite());
+    // A representable view still applies.
+    s.execute("view.set", &json!({"center": [0, 0], "height": 1})).unwrap();
+    let v = viewport(&s, &h);
+    assert!(v.view_height.is_finite() && v.view_height != before.view_height, "{}", v.view_height);
+}
+
+#[test]
 fn zoom_in_a_locked_viewport_or_on_the_model_tab_is_unchanged() {
     // A locked viewport keeps its view: ZOOM moves the sheet instead.
     let (mut s, h) = session();
