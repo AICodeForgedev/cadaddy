@@ -536,7 +536,8 @@ pub(super) fn layout(contents: &str, p: &MTextParams, base: &Fmt) -> MTextLayout
         let lh = if l.max_h > 0.0 { l.max_h } else { h };
         let new_para = prev_para != Some(l.para);
         let before = if new_para && prev_para.is_some() { paras.props(l.para).before * h } else { 0.0 };
-        let pitch = |first: bool| if first { lh } else { lh * 5.0 / 3.0 * ls + before };
+        let step_h = if p.line_spacing_exact { h } else { lh };
+        let pitch = |first: bool| if first { lh } else { step_h * 5.0 / 3.0 * ls + before };
         let hc = col_height(c);
         if !first_in_col && c + 1 < max_cols && (force || (hc > 0.0 && y + pitch(false) > hc + 1e-9)) {
             c += 1;

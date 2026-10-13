@@ -634,3 +634,31 @@ fn max_scale_is_the_most_stretched_axis() {
     assert!((max_scale(&r) - 2.0).abs() < 1e-12);
     assert!((max_scale(&Mat3::IDENTITY) - 1.0).abs() < 1e-12);
 }
+
+#[test]
+fn mtext_exact_spacing_ignores_taller_lines() {
+    // #711: a doubled middle line pushes the next baseline down with At least, not with Exactly.
+    let mtext = |contents: &str, line_spacing: f64, line_spacing_exact: bool| cadcraft_doc::MText {
+        insert: Vec3::ZERO,
+        height: 1.0,
+        width: 10.0,
+        attach: 1,
+        rotation: 0.0,
+        style: "Standard".into(),
+        contents: contents.into(),
+        line_spacing,
+        line_spacing_exact,
+        columns: None,
+    };
+    let d = Drawing::new_imperial();
+    let height = |contents: &str, ls: f64, exact: bool| layout_mtext_entity(&d, &mtext(contents, ls, exact)).bounds.height();
+    // The plain layout and the paragraph layout (`\p`) both honour the style.
+    for mixed in ["A\\P{\\H2x;BB}\\PCC", "\\pxi1;A\\P{\\H2x;BB}\\PCC"] {
+        assert!((height(mixed, 1.0, false) - (1.0 + 2.0 * 5.0 / 3.0 + 5.0 / 3.0)).abs() < 1e-9, "{mixed}: at least");
+        assert!((height(mixed, 1.0, true) - (1.0 + 2.0 * 5.0 / 3.0)).abs() < 1e-9, "{mixed}: exactly");
+        assert!((height(mixed, 2.0, true) - (1.0 + 2.0 * 5.0 / 3.0 * 2.0)).abs() < 1e-9, "{mixed}: exactly, factor 2");
+    }
+    for exact in [false, true] {
+        assert!((height("A\\PBB\\PCC", 1.0, exact) - (1.0 + 2.0 * 5.0 / 3.0)).abs() < 1e-9, "uniform lines, exact {exact}");
+    }
+}

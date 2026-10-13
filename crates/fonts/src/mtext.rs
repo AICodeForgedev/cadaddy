@@ -97,6 +97,9 @@ pub struct MTextParams {
     pub attach: u8,
     pub rotation: f64,
     pub line_spacing: f64,
+    /// Exactly: every line pitch is `line_spacing` times the entity height, whatever the line's
+    /// tallest character; At least (`false`): taller characters push lines apart.
+    pub line_spacing_exact: bool,
     /// Base font (the text style's), switched inline by `\f` / `\F`.
     pub font: TextFont,
     pub width_factor: f64,
@@ -114,6 +117,7 @@ impl MTextParams {
             attach: 1,
             rotation: 0.0,
             line_spacing: 1.0,
+            line_spacing_exact: false,
             font: TextFont::Stroke,
             width_factor: 1.0,
             oblique: 0.0,
@@ -618,7 +622,13 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
     let mut y = 0.0;
     for (i, l) in lines.iter().enumerate() {
         let lh = if l.max_h > 0.0 { l.max_h } else { h };
-        y -= if i == 0 { lh } else { lh * 5.0 / 3.0 * ls };
+        y -= if i == 0 {
+            lh
+        } else if p.line_spacing_exact {
+            h * 5.0 / 3.0 * ls
+        } else {
+            lh * 5.0 / 3.0 * ls
+        };
         baselines.push(y);
     }
     let block_h = -y;

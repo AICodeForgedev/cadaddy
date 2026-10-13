@@ -1185,6 +1185,7 @@ pub fn layout_mtext_entity(d: &Drawing, t: &cadcraft_doc::MText) -> cadcraft_fon
         attach: t.attach,
         rotation: t.rotation,
         line_spacing: t.line_spacing,
+        line_spacing_exact: t.line_spacing_exact,
         font: cadcraft_fonts::TextFont::resolve(&ts.font),
         width_factor: ts.width_factor,
         oblique: ts.oblique,
