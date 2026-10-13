@@ -615,7 +615,7 @@ fn clip_infinite(xf: &Xf, base: Vec2, dir: Vec2, ray: bool) -> Option<[Pos2; 2]>
     Some([xf.to_screen(a), xf.to_screen(b)])
 }
 
-/// Draw a display list. `highlight`: draw these handles brighter (hover) or dashed (selected).
+/// Draw a display list.
 pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay: bool) {
     let vis = xf.world_bounds();
     let mut shapes: Vec<Shape> = Vec::with_capacity(list.prims.len());
@@ -680,7 +680,7 @@ pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb,
     p.extend(shapes);
 }
 
-/// Draw the selection highlight (dashed, `width` points) through the GPU: its vertex data is
+/// Draw the selection highlight (as `look` says) through the GPU: its vertex data is
 /// rebuilt only when the display list, the selection or the vertex origin changes. Dashing every
 /// selected line and tessellating it as egui shapes each frame made large selections sluggish.
 /// `prims`: the selection's primitives in `list`, asked for only when the vertex data is rebuilt.
@@ -694,7 +694,7 @@ fn draw_highlight_gpu(
     prims: impl FnOnce() -> Vec<usize>,
     sel: &[Handle],
     color: Color32,
-    width: f32,
+    look: Look,
     hl: (&mut Option<u64>, &crate::gpu::MeshSlot, &mut Vec2, &mut Vec<usize>),
     stencil: crate::gpu::Stencil,
 ) {
@@ -703,12 +703,12 @@ fn draw_highlight_gpu(
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        (list_gen, sel, origin.x.to_bits(), origin.y.to_bits(), color.to_array(), width.to_bits()).hash(&mut h);
+        (list_gen, sel, origin.x.to_bits(), origin.y.to_bits(), color.to_array(), look.width.to_bits(), look.dashed).hash(&mut h);
         h.finish()
     };
     if *hl_key != Some(key) {
         let prims = prims();
-        let mesh = crate::gpu::build_highlight_mesh(list, &prims, origin, color.to_array(), width);
+        let mesh = crate::gpu::build_highlight_mesh(list, &prims, origin, color.to_array(), look.width, look.dashed);
         *hl_infinite = prims.into_iter().filter(|&i| list.prims.get(i).is_some_and(|p| matches!(p.kind, Kind::Infinite { .. }))).collect();
         if let Ok(mut slot) = hl_slot.lock() {
             *slot = Some(mesh);
@@ -727,7 +727,7 @@ fn draw_highlight_gpu(
             center: [center.x, center.y],
             layer: crate::gpu::LAYER_HIGHLIGHT,
             xform: crate::gpu::IDENTITY_XFORM,
-            dash: 10.0,
+            dash: if look.dashed { 10.0 } else { 0.0 },
             stencil,
         },
     ));
@@ -845,30 +845,49 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
     p.extend(shapes);
 }
 
+/// How a highlight is drawn: lines `width` points wide, and either solid with fills filled or
+/// dashed with fills outlined.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Look {
+    pub width: f32,
+    pub dashed: bool,
+}
+
+impl Look {
+    /// Selected objects (HIGHLIGHT, SELECTIONEFFECT); `None`: not highlighted.
+    pub(crate) fn selection(s: &cadcraft_engine::Settings) -> Option<Look> {
+        s.highlight.then_some(Look { width: 1.5, dashed: s.selectioneffect == 0 })
+    }
+    /// The object under the cursor (PREVIEWEFFECT: 0 dashed, 1 thicker, 2 both).
+    pub(crate) fn preview(s: &cadcraft_engine::Settings) -> Look {
+        Look { width: if s.previeweffect == 0 { 1.0 } else { 2.0 }, dashed: s.previeweffect != 1 }
+    }
+}
+
 /// Draw selected/hovered entities as highlight overlays: `prims` are indices into `list` (from
-/// [`PrimIndex::prims`], or all of a [`VpHighlight`] list).
-fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, prims: &[usize], color: Color32, width: f32, dashed: bool) {
+/// [`PrimIndex::prims`], [`prims_of`], or all of a [`VpHighlight`] list), redrawn in `color` as `look` says. A wipeout is always
+/// outlined, since filling it would hide the drawing under it.
+pub(crate) fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, prims: &[usize], color: Color32, look: Look) {
+    let stroke = Stroke::new(look.width, color);
+    let line = |pts: Vec<Pos2>, out: &mut Vec<Shape>| {
+        if look.dashed {
+            out.extend(Shape::dashed_line(&pts, stroke, 6.0, 4.0));
+        } else {
+            out.push(Shape::line(pts, stroke));
+        }
+    };
     let mut shapes = Vec::new();
+    let mut fill = egui::Mesh::default();
+    let fill_color = color.gamma_multiply(crate::gpu::HIGHLIGHT_FILL_ALPHA);
     for prim in prims.iter().filter_map(|&i| list.prims.get(i)) {
         let pts = list.points(prim);
         match prim.kind {
-            Kind::Polyline => {
-                let screen: Vec<Pos2> = pts.iter().map(|q| xf.to_screen(*q)).collect();
-                if dashed {
-                    shapes.extend(Shape::dashed_line(&screen, Stroke::new(width, color), 6.0, 4.0));
-                } else {
-                    shapes.push(Shape::line(screen, Stroke::new(width, color)));
-                }
-            }
+            Kind::Polyline => line(pts.iter().map(|q| xf.to_screen(*q)).collect(), &mut shapes),
             Kind::Infinite { ray } => {
                 if let (Some(b), Some(d)) = (pts.first(), pts.get(1))
                     && let Some(seg) = clip_infinite(xf, *b, *d, ray)
                 {
-                    if dashed {
-                        shapes.extend(Shape::dashed_line(&seg, Stroke::new(width, color), 6.0, 4.0));
-                    } else {
-                        shapes.push(Shape::line_segment(seg, Stroke::new(width, color)));
-                    }
+                    line(seg.to_vec(), &mut shapes);
                 }
             }
             Kind::Point => {
@@ -876,15 +895,32 @@ fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, prims: &[usize
                     shapes.push(Shape::circle_stroke(xf.to_screen(*q), 3.0, Stroke::new(1.0, color)));
                 }
             }
+            Kind::Tris if !look.dashed => {
+                for q in pts.as_chunks::<3>().0.iter().flatten() {
+                    let i = fill.vertices.len() as u32;
+                    fill.colored_vertex(xf.to_screen(*q), fill_color);
+                    fill.indices.push(i);
+                }
+            }
             Kind::Tris | Kind::Mask => {
-                // Outline triangles' bounding region lightly.
-                let bb = Bounds2::from_points(pts.iter().copied());
-                let r = Rect::from_two_pos(xf.to_screen(bb.min), xf.to_screen(bb.max));
-                shapes.push(Shape::rect_stroke(r, 0.0, Stroke::new(1.0, color), egui::StrokeKind::Middle));
+                for outline in list.fill_outlines(prim) {
+                    line(outline.iter().map(|q| xf.to_screen(*q)).collect(), &mut shapes);
+                }
             }
         }
     }
+    if !fill.is_empty() {
+        shapes.push(Shape::mesh(fill));
+    }
     p.extend(shapes);
+}
+
+/// The fill of a selection window or crossing area (SELECTIONAREA, WINDOWAREACOLOR,
+/// CROSSINGAREACOLOR, SELECTIONAREAOPACITY); `None` when areas aren't filled.
+fn selection_area_fill(s: &cadcraft_engine::Settings, crossing: bool) -> Option<Color32> {
+    let aci = if crossing { s.crossingareacolor } else { s.windowareacolor };
+    let c = cadcraft_color::aci_rgb(aci);
+    s.selectionarea.then(|| Color32::from_rgb(c.0, c.1, c.2).gamma_multiply(f32::from(s.selectionareaopacity.min(100)) / 100.0))
 }
 
 fn draw_snap_marker(p: &egui::Painter, at: Pos2, hit: &SnapHit) {
@@ -1402,13 +1438,15 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 
     // Hover highlight (throttled to cursor movement).
     // The cursor picks objects (pick box, rollover highlight): "Select objects" and single-object
-    // prompts, or no command with PICKFIRST on.
-    let selecting = app.session.picking_objects();
+    // prompts, or no command with PICKFIRST on; SELECTIONPREVIEW says in which of those it shows.
+    let selecting = app.session.previews_selection();
     if inside && selecting && app.session.pending_window.is_none() {
         if hover_pos != app.canvas.hover_at
             && let (Some(w), Ok(st)) = (raw_world, app.session.state())
         {
-            app.canvas.hover = cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale);
+            let filter = app.session.settings.previewfilter;
+            app.canvas.hover = cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale)
+                .filter(|h| st.doc.entity(*h).is_none_or(|e| !cadcraft_engine::select::preview_filtered(&st.doc, e, filter)));
             app.canvas.hover_at = hover_pos;
         }
     } else {
@@ -1450,6 +1488,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     };
     let sel = app.session.selection();
+    // How the object under the cursor and the selected ones are highlighted (PREVIEWEFFECT,
+    // HIGHLIGHT, SELECTIONEFFECT); with HIGHLIGHT off only their grips show.
+    let (preview_look, selection_look) = (Look::preview(&app.session.settings), Look::selection(&app.session.settings));
     // The active viewport's contents, drawn apart from the layout's list, under its own objects.
     // `masked`: its outline is in the stencil buffer this frame.
     let mut masked = false;
@@ -1494,9 +1535,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             {
                 c.vp_hover.update(st, &[h], scale);
                 let list = &c.vp_hover.list;
-                draw_highlight(&clipped, &xf, list, &(0..list.prims.len()).collect::<Vec<_>>(), t.hover, 2.0, false);
+                draw_highlight(&clipped, &xf, list, &(0..list.prims.len()).collect::<Vec<_>>(), t.hover, preview_look);
             }
-            if !sel.is_empty() {
+            if let Some(look) = selection_look
+                && !sel.is_empty()
+            {
                 c.vp_sel.update(st, &sel, scale);
                 let list = &c.vp_sel.list;
                 let all = || (0..list.prims.len()).collect::<Vec<_>>();
@@ -1506,10 +1549,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                     let list_id = c.vp_sel.list_gen | 1 << 63;
                     let stencil = if masked { crate::gpu::Stencil::Inside } else { crate::gpu::Stencil::Off };
                     let hl = (&mut c.hl_key, &c.hl_slot, &mut c.hl_origin, &mut c.hl_infinite);
-                    draw_highlight_gpu(&clipped, &xf, list, list_id, all, &sel, t.selection, 1.5, hl, stencil);
-                    draw_highlight(&clipped, &xf, list, &c.hl_infinite, t.selection, 1.5, true);
+                    draw_highlight_gpu(&clipped, &xf, list, list_id, all, &sel, t.selection, look, hl, stencil);
+                    draw_highlight(&clipped, &xf, list, &c.hl_infinite, t.selection, look);
                 } else {
-                    draw_highlight(&clipped, &xf, list, &all(), t.selection, 1.5, true);
+                    draw_highlight(&clipped, &xf, list, &all(), t.selection, look);
                 }
             }
         }
@@ -1517,26 +1560,28 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         if let Some(h) = *hover
             && !sel.contains(&h)
         {
-            draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &[h]), t.hover, 2.0, false);
+            draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &[h]), t.hover, preview_look);
         }
-        if gpu.is_some() && !sel.is_empty() {
-            let list_id = *list_gen;
-            let hl = (hl_key, &*hl_slot, hl_origin, &mut *hl_infinite);
-            draw_highlight_gpu(
-                &painter,
-                &xf,
-                list,
-                list_id,
-                || prim_index.prims(list_id, list, &sel),
-                &sel,
-                t.selection,
-                1.5,
-                hl,
-                crate::gpu::Stencil::Off,
-            );
-            draw_highlight(&painter, &xf, list, hl_infinite, t.selection, 1.5, true);
-        } else {
-            draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &sel), t.selection, 1.5, true);
+        if let Some(look) = selection_look {
+            if gpu.is_some() && !sel.is_empty() {
+                let list_id = *list_gen;
+                let hl = (hl_key, &*hl_slot, hl_origin, &mut *hl_infinite);
+                draw_highlight_gpu(
+                    &painter,
+                    &xf,
+                    list,
+                    list_id,
+                    || prim_index.prims(list_id, list, &sel),
+                    &sel,
+                    t.selection,
+                    look,
+                    hl,
+                    crate::gpu::Stencil::Off,
+                );
+                draw_highlight(&painter, &xf, list, hl_infinite, t.selection, look);
+            } else {
+                draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &sel), t.selection, look);
+            }
         }
     }
     app.canvas.draw_ms = crate::now_ms() - t0;
@@ -1565,6 +1610,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     app.canvas.grip_editing = grip_edit;
     if (!app.session.prompting() || grip_edit)
+        && app.session.shows_grips(sel.len())
         && let Ok(st) = app.session.state()
     {
         let gs = app.session.settings.gripsize as f32;
@@ -1630,7 +1676,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let b = xf.to_screen(c);
         let r = Rect::from_two_pos(a, b);
         let crossing = c.x < pw.corner.x;
-        painter.rect_filled(r, 0.0, if crossing { t.crossing_fill } else { t.window_fill });
+        if let Some(fill) = selection_area_fill(&app.session.settings, crossing) {
+            painter.rect_filled(r, 0.0, fill);
+        }
         let st = Stroke::new(1.0, if crossing { t.crossing_stroke } else { t.window_stroke });
         if crossing {
             let pts = vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
@@ -2166,7 +2214,11 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)
     let hp = hover?;
     let st = app.session.state().ok()?;
     let gs = app.session.settings.gripsize as f32 + 3.0;
-    for h in app.session.selection().iter().take(200) {
+    let sel = app.session.selection();
+    if !app.session.shows_grips(sel.len()) {
+        return None;
+    }
+    for h in sel.iter().take(200) {
         let e = st.doc.entity(*h)?;
         if st.doc.layer(&e.common.layer).is_some_and(|l| l.locked) {
             continue;
@@ -2203,6 +2255,19 @@ pub(crate) mod tests {
         for s in [0.3, 1.0, 3.0, 4.0, 250.0] {
             assert!(viewport_highlight_tolerance(s) <= 0.5 / s);
         }
+    }
+
+    #[test]
+    fn selection_area_fill_follows_the_area_effect_settings() {
+        let mut s = cadcraft_engine::Settings::default();
+        // Window: ACI 150 at 25 %; crossing: ACI 100.
+        let rgb = |c: Rgb| Color32::from_rgb(c.0, c.1, c.2);
+        assert_eq!(selection_area_fill(&s, false), Some(rgb(cadcraft_color::aci_rgb(150)).gamma_multiply(0.25)));
+        assert_eq!(selection_area_fill(&s, true), Some(rgb(cadcraft_color::aci_rgb(100)).gamma_multiply(0.25)));
+        s.selectionareaopacity = 100;
+        assert_eq!(selection_area_fill(&s, false), Some(rgb(cadcraft_color::aci_rgb(150))));
+        s.selectionarea = false;
+        assert_eq!(selection_area_fill(&s, false), None, "Indicate selection area off: no fill");
     }
 
     #[test]

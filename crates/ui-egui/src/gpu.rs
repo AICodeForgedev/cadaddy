@@ -207,10 +207,11 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
     m
 }
 
-/// Vertex data drawing primitives `prims` of `list` as `width`-point lines in `color` (the
-/// selection highlight; dashed by the callback's `dash`). Fills are outlined by their bounding
-/// box, as on the CPU path; infinite lines are left to the CPU (they are clipped per frame).
-pub fn build_highlight_mesh(list: &DisplayList, prims: &[usize], origin: Vec2, color: [u8; 4], width: f32) -> MeshData {
+/// Vertex data drawing primitives `prims` of `list` in `color` (the selection highlight), as on
+/// the CPU path: lines `width` points wide, and fills filled, or with `dashed` (SELECTIONEFFECT 0;
+/// the callback's `dash` dashes the lines) outlined. A wipeout is always outlined, since filling it
+/// would hide the drawing; infinite lines are left to the CPU (they are clipped per frame).
+pub fn build_highlight_mesh(list: &DisplayList, prims: &[usize], origin: Vec2, color: [u8; 4], width: f32, dashed: bool) -> MeshData {
     let mut m = MeshData::default();
     for prim in prims.iter().filter_map(|&i| list.prims.get(i)) {
         let pts = list.points(prim);
@@ -230,14 +231,20 @@ pub fn build_highlight_mesh(list: &DisplayList, prims: &[usize], origin: Vec2, c
                     push_instance(&mut m.quads, p, p, color, 3.0, 0.0);
                 }
             }
+            Kind::Tris if !dashed => {
+                let fill = translucent(color, HIGHLIGHT_FILL_ALPHA);
+                for t in pts.as_chunks::<3>().0 {
+                    for q in t {
+                        push_vertex(&mut m.tris, rel(*q, origin), fill);
+                    }
+                }
+            }
             Kind::Tris | Kind::Mask => {
-                let bb = Bounds2::from_points(pts.iter().copied());
-                if !bb.is_empty() {
-                    let c = [bb.min, Vec2::new(bb.max.x, bb.min.y), bb.max, Vec2::new(bb.min.x, bb.max.y), bb.min];
+                for line in list.fill_outlines(prim) {
                     let mut run = 0.0;
-                    for s in c.windows(2) {
+                    for s in line.windows(2) {
                         if let [a, b] = s {
-                            push_instance(&mut m.quads, rel(*a, origin), rel(*b, origin), color, 1.0, run as f32);
+                            push_instance(&mut m.quads, rel(*a, origin), rel(*b, origin), color, width, run as f32);
                             run += a.dist(*b);
                         }
                     }
@@ -313,6 +320,17 @@ pub const LAYER_HIGHLIGHT: usize = 2;
 pub const LAYER_VIEWPORT: usize = 3;
 /// The outline of the active viewport when it is clipped (stencil only, see [`Stencil`]).
 pub const LAYER_MASK: usize = 4;
+
+/// Opacity of filled areas in the selection and hover highlight: see-through, so the lines and
+/// text on (and under) a highlighted hatch stay visible, as the reference app's dot pattern does.
+pub const HIGHLIGHT_FILL_ALPHA: f32 = 0.5;
+
+/// `c` at `alpha` opacity, premultiplied (as the pipelines blend).
+fn translucent(c: [u8; 4], alpha: f32) -> [u8; 4] {
+    let a = alpha.clamp(0.0, 1.0);
+    let m = |v: u8| (f32::from(v) * a).round() as u8;
+    [m(c[0]), m(c[1]), m(c[2]), m(c[3])]
+}
 pub const IDENTITY_XFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
 struct Batch {
@@ -793,7 +811,7 @@ mod tests {
     fn highlight_dashes_run_on_along_each_polyline() {
         let l = list();
         // The 3-point polyline (two unit segments) and the point marker.
-        let m = build_highlight_mesh(&l, &[0, 2], Vec2::new(1e6, 1e6), [1, 2, 3, 255], 1.5);
+        let m = build_highlight_mesh(&l, &[0, 2], Vec2::new(1e6, 1e6), [1, 2, 3, 255], 1.5, true);
         assert_eq!(m.quad_instances(), 3);
         let start = |i: usize| {
             let o = i * INSTANCE_SIZE + 24;
@@ -801,6 +819,31 @@ mod tests {
         };
         assert_eq!([start(0), start(1), start(2)], [0.0, 1.0, 0.0]);
         assert!(m.lines.is_empty() && m.tris.is_empty());
+    }
+
+    #[test]
+    fn highlight_fills_fills_and_outlines_wipeouts() {
+        let mut l = list();
+        // The filled triangle (0,0) (1,0) (0,1) is filled in the highlight colour...
+        let m = build_highlight_mesh(&l, &[1], Vec2::ZERO, [1, 2, 3, 255], 1.5, false);
+        assert_eq!((m.tri_vertices(), m.quad_instances()), (3, 0));
+        assert_eq!(&m.tris[8..12], &[1, 1, 2, 128], "in the highlight colour, see-through (premultiplied)");
+        // ...or, dashed (SELECTIONEFFECT 0), outlined by its three edges, the dash running on.
+        let m = build_highlight_mesh(&l, &[1], Vec2::ZERO, [1, 2, 3, 255], 1.5, true);
+        assert_eq!((m.tri_vertices(), m.quad_instances()), (0, 3));
+        let start = |i: usize| {
+            let o = i * INSTANCE_SIZE + 24;
+            f32::from_le_bytes([m.quads[o], m.quads[o + 1], m.quads[o + 2], m.quads[o + 3]])
+        };
+        let mut runs = [start(0), start(1), start(2)];
+        runs.sort_by(f32::total_cmp);
+        assert!(runs[0] == 0.0 && runs[1] > 0.9 && runs[2] > runs[1] + 0.9, "{runs:?}");
+        // A wipeout would hide the drawing if filled: outlined either way.
+        if let Some(p) = l.prims.get_mut(1) {
+            p.kind = Kind::Mask;
+        }
+        let m = build_highlight_mesh(&l, &[1], Vec2::ZERO, [1, 2, 3, 255], 1.5, false);
+        assert_eq!((m.tri_vertices(), m.quad_instances()), (0, 3));
     }
 
     #[test]

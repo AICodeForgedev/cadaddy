@@ -152,7 +152,7 @@ fn clipped_viewport_contents_draw_only_inside_their_outline() {
         ..Default::default()
     };
     let slot: MeshSlot = Arc::default();
-    *slot.lock().unwrap() = Some(gpu::build_highlight_mesh(&line, &[0], Vec2::ZERO, [0, 0, 0, 255], 3.0));
+    *slot.lock().unwrap() = Some(gpu::build_highlight_mesh(&line, &[0], Vec2::ZERO, [0, 0, 0, 255], 3.0, false));
     let highlight = CanvasCallback { slot, layer: LAYER_HIGHLIGHT, ..callback(&line, LAYER_HIGHLIGHT, 6, Stencil::Inside) };
     let px = render(&rs, &[callback(&fan(&circle), LAYER_MASK, 1, Stencil::Mask), highlight]);
     assert!(dark(&px, 32, 32) && dark(&px, 20, 32) && dark(&px, 44, 32), "inside the circle");

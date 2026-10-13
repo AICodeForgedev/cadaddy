@@ -209,6 +209,18 @@ pub(crate) fn pick_with(d: &Drawing, space: &Space, ix: &Option<std::sync::Arc<S
     best.map(|(_, h)| h)
 }
 
+/// Whether PREVIEWFILTER keeps `e` from being highlighted under the cursor: bits 1 objects on
+/// locked layers, 2 xrefs, 4 tables, 8 multiline text, 16 hatches, 32 objects in groups.
+pub fn preview_filtered(d: &Drawing, e: &Entity, filter: u8) -> bool {
+    let on = |bit: u8| filter & bit != 0;
+    (on(1) && d.layer(&e.common.layer).is_some_and(|l| l.locked))
+        || (on(2) && matches!(&e.kind, EntityKind::Insert(i) if d.block(&i.block).is_some_and(|b| b.xref_path.is_some())))
+        || (on(4) && matches!(e.kind, EntityKind::Table(_)))
+        || (on(8) && matches!(e.kind, EntityKind::MText(_)))
+        || (on(16) && matches!(e.kind, EntityKind::Hatch(_)))
+        || (on(32) && d.groups.iter().any(|g| g.members.contains(&e.handle)))
+}
+
 fn seg_hits_box(a: Vec2, b: Vec2, bx: &Bounds2) -> bool {
     if bx.contains(a) || bx.contains(b) {
         return true;

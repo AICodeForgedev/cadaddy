@@ -188,3 +188,63 @@ fn every_tab_renders() {
     assert_eq!(options::PROFILE_KEY, "cadcraft.profile");
     let _: Value = serde_json::from_str(&a.profile_json()).unwrap();
 }
+
+#[test]
+fn selection_highlight_settings_set_save_and_show_in_the_selection_tab() {
+    let mut a = app();
+    let r = a.run("options", json!({"selectionColor": "#FF8000", "SELECTIONEFFECT": 0, "SELECTIONPREVIEW": 1, "PREVIEWEFFECT": 1})).unwrap();
+    assert_eq!((r["selectionColor"].clone(), r["SELECTIONEFFECT"].clone(), r["PREVIEWEFFECT"].clone()), (json!("#ff8000"), json!(0), json!(1)));
+    // The colour reaches the drawing area's palette.
+    cadcraft_ui_egui::theme::set_canvas(a.options.canvas());
+    assert_eq!(Tokens::get().selection, Color32::from_rgb(0xff, 0x80, 0x00));
+    for bad in [json!({"selectionColor": "orange"}), json!({"SELECTIONEFFECT": 3}), json!({"SELECTIONPREVIEW": 9})] {
+        assert!(a.run("options", bad.clone()).is_err(), "{bad}");
+    }
+
+    let mut b = app();
+    b.load_profile(&a.profile_json());
+    assert_eq!(b.options.selection_color, Some(Color32::from_rgb(0xff, 0x80, 0x00)));
+    assert_eq!((b.session.settings.selectioneffect, b.session.settings.selectionpreview, b.session.settings.previeweffect), (0, 1, 1));
+    a.run("options", json!({"selectionColor": null})).unwrap();
+    assert_eq!(a.options.selection_color, None);
+    cadcraft_ui_egui::theme::set_canvas(cadcraft_ui_egui::theme::Canvas::default());
+
+    // The Selection tab is laid out as AutoCAD's.
+    let ctx = egui::Context::default();
+    a.cmdline("options");
+    a.ui.dialog = Some("options:selection".into());
+    let text = render(&mut a, &ctx);
+    for label in [
+        "Selection modes",
+        "Object grouping",
+        "Selection effect color",
+        "Grips",
+        "Show grips",
+        "Object selection limit for display of grips",
+        "Selection preview",
+        "When a command is active",
+        "When no command is active",
+        "Visual Effect Settings...",
+    ] {
+        assert!(text.contains(label), "{label} missing from:\n{text}");
+    }
+    // HIGHLIGHT, SELECTIONEFFECT and PREVIEWEFFECT are typed, not offered (as in AutoCAD), so
+    // the highlight can't be switched off or changed by accident.
+    for label in ["Highlight selected objects", "Preview effect", "Dashed"] {
+        assert!(!text.contains(label), "{label} offered");
+    }
+    // Visual Effect Settings: the selection area and the preview filter.
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("cc_options_visual_effects"), true));
+    let text = render(&mut a, &ctx);
+    for label in [
+        "Selection Area Effect",
+        "Indicate selection area",
+        "Window selection color:",
+        "Selection area opacity:",
+        "Selection Preview Filter",
+        "Objects on locked layers",
+        "Hatches",
+    ] {
+        assert!(text.contains(label), "{label} missing from:\n{text}");
+    }
+}

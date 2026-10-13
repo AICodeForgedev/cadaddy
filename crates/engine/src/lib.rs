@@ -403,6 +403,32 @@ pub struct Settings {
     pub annoautoscale: bool,
     /// QPMODE: show the Quick Properties palette when objects are selected.
     pub qpmode: bool,
+    /// HIGHLIGHT: selected objects are highlighted (their grips show either way). Not saved:
+    /// every session starts with it on, as in AutoCAD, so it can't stay off unnoticed.
+    pub highlight: bool,
+    /// SELECTIONEFFECT: how selected objects are highlighted: 0 dashed, 1 redrawn in the
+    /// selection colour.
+    pub selectioneffect: u8,
+    /// SELECTIONPREVIEW bits: the object under the cursor is highlighted (1) when no command is
+    /// active, (2) when a command asks for objects.
+    pub selectionpreview: u8,
+    /// PREVIEWEFFECT: how that object is highlighted: 0 dashed, 1 thicker, 2 dashed and thicker.
+    pub previeweffect: u8,
+    /// PREVIEWFILTER bits: objects the cursor never highlights: 1 on locked layers, 2 xrefs,
+    /// 4 tables, 8 multiline text, 16 hatches, 32 in groups.
+    pub previewfilter: u8,
+    /// GRIPS: selected objects show their grips (0 off; AutoCAD's 2, more grips on polylines,
+    /// shows them as 1 does).
+    pub grips: u8,
+    /// GRIPOBJLIMIT: no grips while more objects than this are selected (0: no limit).
+    pub gripobjlimit: u32,
+    /// SELECTIONAREA: the selection window and crossing areas are filled.
+    pub selectionarea: bool,
+    /// WINDOWAREACOLOR, CROSSINGAREACOLOR: their colours (ACI 1-255).
+    pub windowareacolor: u8,
+    pub crossingareacolor: u8,
+    /// SELECTIONAREAOPACITY: their opacity, 0-100.
+    pub selectionareaopacity: u8,
     /// POLARMODE bits ([`snap::tracking::polarmode`]); polar tracking itself is on while
     /// `polarmode` is (AUTOSNAP bit 8, F10).
     pub polar_flags: u32,
@@ -455,6 +481,17 @@ impl Default for Settings {
             annoallvisible: true,
             annoautoscale: false,
             qpmode: false,
+            highlight: true,
+            selectioneffect: 1,
+            selectionpreview: 3,
+            previeweffect: 2,
+            previewfilter: 3,
+            grips: 1,
+            gripobjlimit: 100,
+            selectionarea: true,
+            windowareacolor: 150,
+            crossingareacolor: 100,
+            selectionareaopacity: 25,
             polar_flags: 0,
             polaraddang: Vec::new(),
             polarsnap: false,
@@ -1325,6 +1362,21 @@ impl Session {
             Some(p) => p.picks_objects(),
             None => self.settings.pickfirst,
         }
+    }
+
+    /// Whether the object under the cursor is highlighted (SELECTIONPREVIEW): the cursor picks
+    /// objects ([`Self::picking_objects`]) and the bit for a command asking for them (2) or for
+    /// no command (1) is on.
+    pub fn previews_selection(&self) -> bool {
+        let bit = if self.current_prompt().is_some() { 2 } else { 1 };
+        self.picking_objects() && self.settings.selectionpreview & bit != 0
+    }
+
+    /// Whether selected objects show grips while `selected` objects are selected (GRIPS,
+    /// GRIPOBJLIMIT).
+    pub fn shows_grips(&self, selected: usize) -> bool {
+        let limit = self.settings.gripobjlimit;
+        self.settings.grips > 0 && (limit == 0 || selected <= limit as usize)
     }
 
     /// The text shown on the command line: the active prompt, or "Command:".

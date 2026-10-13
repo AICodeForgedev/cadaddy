@@ -98,8 +98,6 @@ pub struct Tokens {
     pub compare_this: Color32,
     pub compare_other: Color32,
     pub compare_area: Color32,
-    pub window_fill: Color32,
-    pub crossing_fill: Color32,
     pub window_stroke: Color32,
     pub crossing_stroke: Color32,
     pub cmd_bg: Color32,
@@ -158,8 +156,6 @@ impl Tokens {
         compare_this: Color32::from_rgb(0x4c, 0xd9, 0x7b),
         compare_other: Color32::from_rgb(0xff, 0x5c, 0x5c),
         compare_area: Color32::from_rgb(0xff, 0xb4, 0x3c),
-        window_fill: Color32::from_rgba_premultiplied(0x18, 0x30, 0x60, 0x50),
-        crossing_fill: Color32::from_rgba_premultiplied(0x18, 0x48, 0x18, 0x50),
         window_stroke: Color32::from_rgb(0x6f, 0xa8, 0xff),
         crossing_stroke: Color32::from_rgb(0x7f, 0xe0, 0x7f),
         cmd_bg: Color32::from_rgba_premultiplied(0x34, 0x3c, 0x4a, 0xf0),
@@ -248,6 +244,8 @@ pub struct Canvas {
     pub paper: Option<Color32>,
     /// The side of an object snap marker, in points.
     pub snap_marker: f32,
+    /// The colour selected objects are highlighted in.
+    pub selection: Option<Color32>,
 }
 
 /// The default object snap marker size.
@@ -255,7 +253,7 @@ pub const SNAP_MARKER: f32 = 11.0;
 
 impl Default for Canvas {
     fn default() -> Self {
-        Canvas { model: None, paper: None, snap_marker: SNAP_MARKER }
+        Canvas { model: None, paper: None, snap_marker: SNAP_MARKER, selection: None }
     }
 }
 
@@ -265,7 +263,7 @@ impl Canvas {
             Some(bg) => t.with_model_background(bg),
             None => t,
         };
-        Tokens { paper: self.paper.unwrap_or(t.paper), ..t }
+        Tokens { paper: self.paper.unwrap_or(t.paper), selection: self.selection.unwrap_or(t.selection), ..t }
     }
 }
 

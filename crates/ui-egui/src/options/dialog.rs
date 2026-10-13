@@ -285,40 +285,160 @@ fn drafting(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>, s
 fn selection(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
     let t = Tokens::get();
     let st = &app.session.settings;
-    grid(ui, "options_selection", |ui| {
-        ui.label(crate::tl!("Pickbox size"));
-        ui.horizontal(|ui| {
+    let mut effects = ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new(VISUAL_EFFECTS)).unwrap_or(false));
+    ui.columns(2, |cols| {
+        let [left, right] = cols else { return };
+        // Left: how objects are picked.
+        heading(left, crate::tl!("Pickbox size"));
+        left.horizontal(|ui| {
             let mut pickbox = st.pickbox;
             if ui.add(egui::Slider::new(&mut pickbox, 0.0..=50.0).integer().suffix(" px")).changed() {
                 changes.insert("PICKBOX".into(), json!(pickbox));
             }
             preview_square(ui, (pickbox * 3.0) as f32, t.crosshair);
         });
-        ui.end_row();
+        left.add_space(8.0);
+        heading(left, crate::tl!("Selection modes"));
+        let mut pickfirst = st.pickfirst;
+        if left.checkbox(&mut pickfirst, crate::tl!("Select objects first, then choose a command")).changed() {
+            changes.insert("PICKFIRST".into(), json!(i32::from(pickfirst)));
+        }
+        let mut shift_adds = !st.pickadd;
+        if left.checkbox(&mut shift_adds, crate::tl!("Hold Shift to add to the selection")).changed() {
+            changes.insert("PICKADD".into(), json!(i32::from(!shift_adds)));
+        }
+        let mut grouping = st.pickstyle & 1 != 0;
+        if left.checkbox(&mut grouping, crate::tl!("Object grouping")).changed() {
+            changes.insert("PICKSTYLE".into(), json!((st.pickstyle & !1) | u8::from(grouping)));
+        }
+        let mut qp = st.qpmode;
+        if left.checkbox(&mut qp, crate::tl!("Show Quick Properties for selected objects")).changed() {
+            changes.insert("QPMODE".into(), json!(i32::from(qp)));
+        }
+        left.add_space(4.0);
+        left.label(crate::tl!("Selection effect color"));
+        color_row(left, app.options.selection_color, crate::theme::Tokens::of(crate::theme::active()).selection, "selectionColor", changes);
 
-        ui.label(crate::tl!("Grip size"));
-        ui.horizontal(|ui| {
+        // Right: grips and the preview under the cursor.
+        heading(right, crate::tl!("Grip size"));
+        right.horizontal(|ui| {
             let mut grip = st.gripsize;
             if ui.add(egui::Slider::new(&mut grip, 1.0..=20.0).integer().suffix(" px")).changed() {
                 changes.insert("GRIPSIZE".into(), json!(grip));
             }
             preview_square(ui, (grip * 2.0) as f32, t.grip);
         });
-        ui.end_row();
+        right.add_space(8.0);
+        heading(right, crate::tl!("Grips"));
+        let mut grips = st.grips > 0;
+        if right.checkbox(&mut grips, crate::tl!("Show grips")).changed() {
+            changes.insert("GRIPS".into(), json!(u8::from(grips)));
+        }
+        right.horizontal(|ui| {
+            let mut limit = st.gripobjlimit;
+            if ui.add_enabled(st.grips > 0, egui::DragValue::new(&mut limit).range(0..=32_767)).changed() {
+                changes.insert("GRIPOBJLIMIT".into(), json!(limit));
+            }
+            ui.label(crate::tl!("Object selection limit for display of grips"));
+        });
+        right.add_space(8.0);
+        heading(right, crate::tl!("Preview"));
+        right.label(crate::tl!("Selection preview"));
+        let (mut asking, mut idle) = (st.selectionpreview & 2 != 0, st.selectionpreview & 1 != 0);
+        let a = right.checkbox(&mut asking, crate::tl!("When a command is active")).changed();
+        let b = right.checkbox(&mut idle, crate::tl!("When no command is active")).changed();
+        if a || b {
+            changes.insert("SELECTIONPREVIEW".into(), json!(u8::from(idle) | (u8::from(asking) << 1)));
+        }
+        if right.button(crate::tl!("Visual Effect Settings...")).clicked() {
+            effects = true;
+        }
     });
-    ui.add_space(6.0);
-    let mut pickfirst = st.pickfirst;
-    if ui.checkbox(&mut pickfirst, crate::tl!("Select objects first, then choose a command")).changed() {
-        changes.insert("PICKFIRST".into(), json!(i32::from(pickfirst)));
+    if effects {
+        visual_effects(ui.ctx(), st, &mut effects, changes);
     }
-    let mut shift_adds = !st.pickadd;
-    if ui.checkbox(&mut shift_adds, crate::tl!("Hold Shift to add to the selection")).changed() {
-        changes.insert("PICKADD".into(), json!(i32::from(!shift_adds)));
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(VISUAL_EFFECTS), effects));
+}
+
+/// Whether the Visual Effect Settings window is open (egui temp data).
+const VISUAL_EFFECTS: &str = "cc_options_visual_effects";
+
+fn heading(ui: &mut egui::Ui, text: &str) {
+    ui.label(RichText::new(text).strong());
+}
+
+/// Visual Effect Settings: the selection area (window and crossing fills) and the objects the
+/// cursor never highlights (PREVIEWFILTER). Changes apply at once, as on the Options tabs.
+fn visual_effects(ctx: &egui::Context, st: &cadcraft_engine::Settings, open: &mut bool, changes: &mut Map<String, Value>) {
+    let mut close = false;
+    egui::Window::new(crate::tl!("Visual Effect Settings"))
+        .id(egui::Id::new("cc_visual_effects"))
+        .open(open)
+        .resizable(false)
+        .collapsible(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            ui.columns(2, |cols| {
+                let [left, right] = cols else { return };
+                heading(left, crate::tl!("Selection Area Effect"));
+                let mut area = st.selectionarea;
+                if left.checkbox(&mut area, crate::tl!("Indicate selection area")).changed() {
+                    changes.insert("SELECTIONAREA".into(), json!(i32::from(area)));
+                }
+                left.add_enabled_ui(st.selectionarea, |ui| {
+                    ui.label(crate::tl!("Window selection color:"));
+                    aci_row(ui, st.windowareacolor, "WINDOWAREACOLOR", changes);
+                    ui.label(crate::tl!("Crossing selection color:"));
+                    aci_row(ui, st.crossingareacolor, "CROSSINGAREACOLOR", changes);
+                    ui.label(crate::tl!("Selection area opacity:"));
+                    let mut opacity = st.selectionareaopacity;
+                    if ui.add(egui::Slider::new(&mut opacity, 0..=100)).changed() {
+                        changes.insert("SELECTIONAREAOPACITY".into(), json!(opacity));
+                    }
+                });
+
+                heading(right, crate::tl!("Selection Preview Filter"));
+                right.label(crate::tl!("Exclude:"));
+                for (bit, label) in [
+                    (1u8, crate::tl!("Objects on locked layers")),
+                    (2, crate::tl!("Xrefs")),
+                    (4, crate::tl!("Tables")),
+                    (32, crate::tl!("Groups")),
+                    (8, crate::tl!("Multiline text")),
+                    (16, crate::tl!("Hatches")),
+                ] {
+                    let mut on = st.previewfilter & bit != 0;
+                    if right.checkbox(&mut on, label).changed() {
+                        changes.insert("PREVIEWFILTER".into(), json!(if on { st.previewfilter | bit } else { st.previewfilter & !bit }));
+                    }
+                }
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(crate::tl!("Close")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+    if close {
+        *open = false;
     }
-    let mut qp = st.qpmode;
-    if ui.checkbox(&mut qp, crate::tl!("Show Quick Properties for selected objects")).changed() {
-        changes.insert("QPMODE".into(), json!(i32::from(qp)));
-    }
+}
+
+/// A colour by its index (ACI 1-255): a swatch and the number; a change goes into `changes`.
+fn aci_row(ui: &mut egui::Ui, current: u8, key: &str, changes: &mut Map<String, Value>) {
+    ui.horizontal(|ui| {
+        let c = cadcraft_color::aci_rgb(current);
+        let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
+        ui.painter().rect_filled(r, 2.0, Color32::from_rgb(c.0, c.1, c.2));
+        let mut v = current;
+        if ui.add(egui::DragValue::new(&mut v).range(1..=255).prefix(format!("{} ", crate::tl!("Color")))).changed() {
+            changes.insert(key.into(), json!(v));
+        }
+    });
 }
 
 fn preferences(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {

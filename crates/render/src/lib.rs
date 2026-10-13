@@ -14,6 +14,7 @@ mod hatch;
 mod linetype;
 mod linetype_text;
 mod mline;
+mod outline;
 pub mod paper;
 pub mod pen;
 mod plotstyle;
@@ -165,6 +166,14 @@ impl DisplayList {
         match p.kind {
             Kind::Tris | Kind::Mask => self.tris.get(p.start as usize..(p.start + p.len) as usize).unwrap_or(&[]),
             _ => self.verts.get(p.start as usize..(p.start + p.len) as usize).unwrap_or(&[]),
+        }
+    }
+    /// The boundary of a filled primitive ([`Kind::Tris`], [`Kind::Mask`]) as closed polylines,
+    /// for highlighting it; empty for other kinds.
+    pub fn fill_outlines(&self, p: &DPrim) -> Vec<Vec<Vec2>> {
+        match p.kind {
+            Kind::Tris | Kind::Mask => outline::fill_outlines(self.points(p)),
+            _ => Vec::new(),
         }
     }
 }

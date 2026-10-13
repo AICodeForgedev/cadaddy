@@ -37,6 +37,17 @@ const SESSION_VARS: &[&str] = &[
     "SELECTSIMILARMODE",
     "OBJECTISOLATIONMODE",
     "QPMODE",
+    "HIGHLIGHT",
+    "SELECTIONEFFECT",
+    "SELECTIONPREVIEW",
+    "PREVIEWEFFECT",
+    "PREVIEWFILTER",
+    "GRIPS",
+    "GRIPOBJLIMIT",
+    "SELECTIONAREA",
+    "WINDOWAREACOLOR",
+    "CROSSINGAREACOLOR",
+    "SELECTIONAREAOPACITY",
     "PICKBOX",
     "APERTURE",
     "PICKFIRST",
@@ -93,6 +104,17 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         // Isolation is temporary: hidden objects show again when the drawing is reopened.
         "OBJECTISOLATIONMODE" => json!(0),
         "QPMODE" => json!(i32::from(st.qpmode)),
+        "HIGHLIGHT" => json!(i32::from(st.highlight)),
+        "SELECTIONEFFECT" => json!(st.selectioneffect),
+        "SELECTIONPREVIEW" => json!(st.selectionpreview),
+        "PREVIEWEFFECT" => json!(st.previeweffect),
+        "PREVIEWFILTER" => json!(st.previewfilter),
+        "GRIPS" => json!(st.grips),
+        "GRIPOBJLIMIT" => json!(st.gripobjlimit),
+        "SELECTIONAREA" => json!(i32::from(st.selectionarea)),
+        "WINDOWAREACOLOR" => json!(st.windowareacolor),
+        "CROSSINGAREACOLOR" => json!(st.crossingareacolor),
+        "SELECTIONAREAOPACITY" => json!(st.selectionareaopacity),
         "PICKBOX" => json!(st.pickbox),
         "APERTURE" => json!(st.aperture),
         "PICKFIRST" => json!(i32::from(st.pickfirst)),
@@ -159,6 +181,10 @@ fn as_bool(v: &Value) -> Option<bool> {
 /// QPMODE is -1/0 (off), 1 or 2 (on) in AutoCAD; booleans work too.
 fn as_i(v: &Value) -> Option<i64> {
     v.as_i64().or_else(|| v.as_bool().map(i64::from)).or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+}
+/// A whole number from 0 to `max` (a mode or a small bitcode).
+fn small(v: &Value, max: u8) -> Option<u8> {
+    as_i(v).filter(|n| (0..=i64::from(max)).contains(n)).and_then(|n| u8::try_from(n).ok())
 }
 fn as_f64(v: &Value) -> Option<f64> {
     v.as_f64().or_else(|| v.as_str().and_then(crate::units::parse_distance)).filter(|f| f.is_finite())
@@ -242,6 +268,17 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             _ => return Err(bad()),
         },
         "QPMODE" => st.qpmode = as_i(v).ok_or_else(bad)? > 0,
+        "HIGHLIGHT" => st.highlight = as_bool(v).ok_or_else(bad)?,
+        "SELECTIONEFFECT" => st.selectioneffect = small(v, 1).ok_or_else(bad)?,
+        "SELECTIONPREVIEW" => st.selectionpreview = small(v, 3).ok_or_else(bad)?,
+        "PREVIEWEFFECT" => st.previeweffect = small(v, 2).ok_or_else(bad)?,
+        "PREVIEWFILTER" => st.previewfilter = small(v, 63).ok_or_else(bad)?,
+        "GRIPS" => st.grips = small(v, 2).ok_or_else(bad)?,
+        "GRIPOBJLIMIT" => st.gripobjlimit = as_i(v).filter(|n| (0..=32_767).contains(n)).and_then(|n| u32::try_from(n).ok()).ok_or_else(bad)?,
+        "SELECTIONAREA" => st.selectionarea = as_bool(v).ok_or_else(bad)?,
+        "WINDOWAREACOLOR" => st.windowareacolor = small(v, 255).filter(|c| *c >= 1).ok_or_else(bad)?,
+        "CROSSINGAREACOLOR" => st.crossingareacolor = small(v, 255).filter(|c| *c >= 1).ok_or_else(bad)?,
+        "SELECTIONAREAOPACITY" => st.selectionareaopacity = small(v, 100).ok_or_else(bad)?,
         "PICKBOX" => st.pickbox = as_f64(v).ok_or_else(bad)?.clamp(0.0, 50.0),
         "APERTURE" => st.aperture = as_f64(v).ok_or_else(bad)?.clamp(1.0, 50.0),
         "PICKFIRST" => st.pickfirst = as_bool(v).ok_or_else(bad)?,

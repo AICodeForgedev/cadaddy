@@ -19,6 +19,7 @@
 //! | `systemCursor` | keep the system cursor visible over the drawing area |
 //! | `historyLines` | command-line history lines, 0–12 |
 //! | `modelBackground`, `paperBackground` | `"#rrggbb"`, or `null` for the default |
+//! | `selectionColor` | the colour selected objects are highlighted in: `"#rrggbb"`, or `null` for the theme's |
 //! | `snapMarkerSize` | object snap marker size in points, 5–31 |
 //!
 //! SAVETIME and SAVEFILEPATH are the engine's autosave settings, kept with the autosave state
@@ -60,6 +61,8 @@ pub struct UiOptions {
     pub paper_background: Option<Color32>,
     /// Object snap marker size in points.
     pub snap_marker_size: f32,
+    /// The selection highlight colour; `None` keeps the theme's.
+    pub selection_color: Option<Color32>,
     /// While a command runs: a quick right-click is Enter and a held one opens the shortcut menu
     /// (AutoCAD's time-sensitive right-click). Off: a right-click always opens the menu.
     pub time_sensitive_right_click: bool,
@@ -67,14 +70,25 @@ pub struct UiOptions {
 
 impl Default for UiOptions {
     fn default() -> Self {
-        UiOptions { model_background: None, paper_background: None, snap_marker_size: theme::SNAP_MARKER, time_sensitive_right_click: true }
+        UiOptions {
+            model_background: None,
+            paper_background: None,
+            snap_marker_size: theme::SNAP_MARKER,
+            selection_color: None,
+            time_sensitive_right_click: true,
+        }
     }
 }
 
 impl UiOptions {
     /// What the drawing area paints with.
     pub fn canvas(&self) -> theme::Canvas {
-        theme::Canvas { model: self.model_background, paper: self.paper_background, snap_marker: self.snap_marker_size }
+        theme::Canvas {
+            model: self.model_background,
+            paper: self.paper_background,
+            snap_marker: self.snap_marker_size,
+            selection: self.selection_color,
+        }
     }
 }
 
@@ -121,6 +135,7 @@ struct UiChanges {
     history_lines: Option<usize>,
     model_background: Option<Option<Color32>>,
     paper_background: Option<Option<Color32>>,
+    selection_color: Option<Option<Color32>>,
     snap_marker_size: Option<f32>,
     save_version: Option<crate::SaveVersion>,
     savetime: Option<u32>,
@@ -154,6 +169,7 @@ fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
         }
         "modelBackground" => c.model_background = Some(color_param(key, v)?),
         "paperBackground" => c.paper_background = Some(color_param(key, v)?),
+        "selectionColor" => c.selection_color = Some(color_param(key, v)?),
         "snapMarkerSize" => {
             let n = v.as_f64().filter(|n| SNAP_MARKER_SIZES.contains(&(*n as f32)) && n.is_finite()).ok_or("snapMarkerSize must be from 5 to 31")?;
             c.snap_marker_size = Some(n as f32);
@@ -192,6 +208,7 @@ fn ui_json(app: &CadApp) -> Map<String, Value> {
     m.insert("historyLines".into(), json!(app.ui.history_lines));
     m.insert("modelBackground".into(), color_json(o.model_background));
     m.insert("paperBackground".into(), color_json(o.paper_background));
+    m.insert("selectionColor".into(), color_json(o.selection_color));
     m.insert("snapMarkerSize".into(), json!(o.snap_marker_size));
     m.insert("saveVersion".into(), json!(app.ui.save_version));
     m.insert("SAVETIME".into(), json!(cadcraft_engine::autosave::savetime()));
@@ -249,6 +266,9 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
     if let Some(c) = ui.paper_background {
         app.options.paper_background = c;
     }
+    if let Some(c) = ui.selection_color {
+        app.options.selection_color = c;
+    }
     if let Some(n) = ui.snap_marker_size {
         app.options.snap_marker_size = n;
     }
@@ -291,6 +311,7 @@ impl CadApp {
             "systemCursor": self.ui.system_cursor,
             "modelBackground": color_json(self.options.model_background),
             "paperBackground": color_json(self.options.paper_background),
+            "selectionColor": color_json(self.options.selection_color),
             "snapMarkerSize": self.options.snap_marker_size,
             "timeSensitiveRightClick": self.options.time_sensitive_right_click,
         })
@@ -308,7 +329,7 @@ impl CadApp {
             cadcraft_engine::cmd::options::restore(&mut self.session, vars);
         }
         let mut c = UiChanges::default();
-        for key in ["systemCursor", "modelBackground", "paperBackground", "snapMarkerSize", "timeSensitiveRightClick"] {
+        for key in ["systemCursor", "modelBackground", "paperBackground", "selectionColor", "snapMarkerSize", "timeSensitiveRightClick"] {
             if let Some(value) = v.get(key) {
                 let _ = parse_ui(key, value, &mut c);
             }
@@ -322,6 +343,9 @@ impl CadApp {
         }
         if let Some(bg) = c.paper_background {
             self.options.paper_background = bg;
+        }
+        if let Some(sel) = c.selection_color {
+            self.options.selection_color = sel;
         }
         if let Some(n) = c.snap_marker_size {
             self.options.snap_marker_size = n;

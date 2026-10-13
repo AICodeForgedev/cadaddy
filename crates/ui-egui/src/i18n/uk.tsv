@@ -945,21 +945,32 @@
 	Command line history	Історія командного рядка
 	Copy as JSON	Копіювати як JSON
 	Crosshair size	Розмір перехрестя
+	Crossing selection color:	Колір секучого вибору:
 	Display	Відображення
+	Exclude:	Виключити:
 	Grip size	Розмір ручок
+	Grips	Ручки
+	Groups	Групи
+	Hatches	Штрихування
 	Hold Shift to add to the selection	Утримувати Shift, щоб додати до вибору
+	Indicate selection area	Показувати область вибору
 	Interface language	Мова інтерфейсу
 	Interface theme	Тема інтерфейсу
 	Keep the system cursor visible over the drawing area	Показувати системний курсор над областю креслення
 	Largest array	Найбільший масив
 	Layout paper	Папір аркуша
 	Model background	Тло простору моделі
+	Multiline text	Багаторядковий текст
+	Object grouping	Групування об'єктів
+	Object selection limit for display of grips	Межа кількості вибраних об'єктів для показу ручок
 	Object snap aperture	Апертура об'єктної прив'язки
 	Object snap marker size	Розмір маркера об'єктної прив'язки
+	Objects on locked layers	Об'єкти на заблокованих шарах
 	Open and Save	Відкриття та збереження
 	Options	Параметри
 	Options...	Параметри...
 	Pickbox size	Розмір прицілу вибору
+	Preview	Попередній перегляд
 	Profiles	Профілі
 	Reset keeps the interface language.	Скидання не змінює мову інтерфейсу.
 	Reset to Defaults	Скинути до типових
@@ -967,11 +978,25 @@
 	Screen magnifiers, screen readers and recorders follow the system cursor.	Екранні лупи, програми читання з екрана та запису стежать за системним курсором.
 	Select objects first, then choose a command	Спочатку вибирати об'єкти, потім команду
 	Selection	Вибір
+	Selection Area Effect	Ефект області вибору
+	Selection Preview Filter	Фільтр попереднього перегляду вибору
+	Selection area opacity:	Непрозорість області вибору:
+	Selection effect color	Колір ефекту вибору
+	Selection modes	Режими вибору
+	Selection preview	Попередній перегляд вибору
 	Settings...	Налаштування...
 	Show Quick Properties for selected objects	Показувати швидкі властивості вибраних об'єктів
+	Show grips	Показувати ручки
 	Snap, grid, polar tracking and Dynamic Input:	Крок, сітка, полярне відстеження та динамічне введення:
+	Tables	Таблиці
 	The aperture is how near the cursor must come to a point for an object snap to find it.	Апертура — це наскільки близько курсор має підійти до точки, щоб об'єктна прив'язка її знайшла.
 	User Preferences	Налаштування користувача
+	Visual Effect Settings	Параметри візуальних ефектів
+	Visual Effect Settings...	Параметри візуальних ефектів...
+	When a command is active	Коли команда активна
+	When no command is active	Коли жодна команда не активна
+	Window selection color:	Колір вибору рамкою:
+	Xrefs	Зовнішні посилання
 	objects	об'єктів
 	Specify inside diameter of donut	Укажіть внутрішній діаметр кільця
 	Specify leader arrowhead location	Укажіть розташування стрілки виноски
@@ -1298,7 +1323,6 @@
 	Open in Block Editor	Відкрити в редакторі блоків
 	This drawing	Це креслення
 	contains authoring elements. Open in Block Editor?	містить елементи розробки. Відкрити в редакторі блоків?
-	Preview	Попередній перегляд
 	New block	Новий блок
 	Italic	Курсив
 	Underline	Підкреслений
