@@ -36,6 +36,7 @@ pub use store::EntityStore;
 pub use tables::*;
 
 /// File data CADCraft doesn't model, kept for saving (#528).
+pub mod dynblock;
 pub mod foreign;
 
 #[derive(Debug, thiserror::Error)]

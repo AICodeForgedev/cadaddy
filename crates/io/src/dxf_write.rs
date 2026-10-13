@@ -1506,7 +1506,21 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
 /// The R2000 DXF the DWG bridge converts to a `dwg` version DWG: its entity types are the DWG
 /// version's (MULTILEADER from 2007).
 pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> String {
-    cadcraft_dxf::write_ascii(&tags_for(d, Version::R2000, dwg))
+    let mut tags = tags_for(d, Version::R2000, dwg);
+    bridge_markers(&mut tags);
+    cadcraft_dxf::write_ascii(&tags)
+}
+
+/// Subclass markers the DWG bridge knows by another spelling (it matches them exactly):
+/// AutoCAD writes a dynamic block lookup parameter's as `AcDbBlockLookUpParameter`, the bridge
+/// reads `AcDbBlockLookupParameter`; otherwise the parameter loses its name and its lookup
+/// action in the DWG, and AutoCAD's lookups stop working.
+fn bridge_markers(tags: &mut [Tag]) {
+    for t in tags.iter_mut().filter(|t| t.code == 100) {
+        if t.str().trim().eq_ignore_ascii_case("AcDbBlockLookupParameter") {
+            *t = Tag::s(100, "AcDbBlockLookupParameter");
+        }
+    }
 }
 
 /// The drawing's DXF tags, declaring `version` in `$ACADVER`, with what `target` (the version the
