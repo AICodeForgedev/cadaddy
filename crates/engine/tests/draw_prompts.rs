@@ -44,6 +44,25 @@ fn spline_rejects_text_and_switches_method() {
     assert!(sp.fit.is_empty() && sp.control.len() == 4);
 }
 
+#[test]
+fn circle_radius_point_on_the_centre_is_refused() {
+    for input in ["circle 2,3 2,3", "circle 2,3 d 2,3"] {
+        let mut s = Session::new();
+        s.cmdline(input).unwrap();
+        assert_eq!(s.doc().unwrap().model.len(), 0, "{input}: no circle");
+        assert!(logged(&s, "Value must be positive and nonzero."), "{input}: {:?}", s.log);
+        assert!(s.running.is_some(), "{input}: still at the radius prompt");
+        s.cmdline("4").unwrap();
+        assert!(s.running.is_none(), "{input}: a positive value finishes");
+        assert_eq!(s.doc().unwrap().model.len(), 1, "{input}: one circle");
+        let want = if input.contains(" d ") { 2.0 } else { 4.0 };
+        assert!(
+            matches!(last(&s), EntityKind::Circle(c) if c.center.xy().near(Vec2::new(2.0, 3.0), 1e-9) && (c.radius - want).abs() < 1e-9),
+            "{input}: the centre is kept"
+        );
+    }
+}
+
 /// The two lowest vertices of a closed polyline share their y (the bottom edge is horizontal).
 fn bottom_y(k: &EntityKind) -> Option<f64> {
     let EntityKind::LwPolyline(p) = k else { return None };

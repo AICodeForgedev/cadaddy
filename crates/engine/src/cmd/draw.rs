@@ -780,6 +780,9 @@ impl Interactive for CircleM {
                 Ok(Step::Continue)
             }
             Input::Point(p) => {
+                if self.mode == 0 && self.pts.first().is_some_and(|c| c.near(p, 1e-12)) {
+                    return Err(crate::EngineError::Other("Value must be positive and nonzero.".into()));
+                }
                 self.pts.push(p);
                 let done = match self.mode {
                     0 if self.pts.len() == 2 => {
