@@ -910,12 +910,18 @@ fn trim_polyline(p: &cadcraft_doc::LwPolyline, cut: &[Segment], pick: Vec2) -> R
     let mut out = Vec::new();
     if p.closed {
         // Keep the complementary run from hi around to lo.
+        // The pick lies before the first cut or after the last: the piece wraps past the start
+        // vertex, so the run to keep is the stretch between the first and the last cut.
         let (lo, hi) = (
             if lo.is_finite() { lo } else { ts.last().copied().unwrap_or(0.0) - total },
             if hi.is_finite() { hi } else { ts.first().copied().unwrap_or(total) + total },
         );
         let doubled: Vec<Segment> = segs.iter().chain(segs.iter()).copied().collect();
-        let (a, b) = if hi > total { (hi - total, lo + total) } else { (hi, lo + total) };
+        let (a, mut b) = if hi > total { (hi - total, lo) } else { (hi, lo + total) };
+        // A single cut leaves the whole outline, opened there.
+        if b <= a + 1e-9 {
+            b += total;
+        }
         out.push(mk(sub_polyline(&doubled, a, b)));
     } else {
         if lo.is_finite() {
