@@ -1,6 +1,6 @@
 # Geometry parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (property-based and hostile-input test suite for geometry landed) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (re-audit against main e707ab4d: polyline offset bulges, HPGAPTOL, MASSPROP on regions, spline fit cap, test counts; percentages not re-measured) · **Target:** Autodesk AutoCAD 2027
 
 CAD users trust numbers: a trimmed endpoint, an offset, an intersection or an area is either right
 to the last displayed digit or the tool is unusable for production drawings. This document
@@ -10,8 +10,8 @@ in [ui-parity.md](ui-parity.md); dimension and hatch behaviour in [gaps.md](gaps
 
 **Headline (estimated): geometry ≈ 40% (weighted below: 41%), of which the constraint solver ≈ 50%.** Everything built
 from lines, arcs and circles is exact. Ellipses and splines are handled by tessellating them, so
-intersections, offsets, trims and snaps on them are approximations; polyline offsets don't
-recompute arc bulges or clean up loops; tolerances are absolute, so very large or very small
+intersections, offsets, trims and snaps on them are approximations; polyline offsets recompute
+arc bulges (#825) but don't clean up loops; tolerances are absolute, so very large or very small
 drawings behave differently from mid-sized ones. 3D geometry doesn't exist. Remaining:
 **≈ 90–140 Opus 5.5 hours** for 2D precision and the solver, plus the 3D kernel (M11, see
 [target-app-parity.md](target-app-parity.md)).
@@ -47,7 +47,7 @@ constraints 10%.
 | Circle, arc, bulge polyline | yes | yes, exact |
 | Ellipse, elliptical arc | yes | yes (center, major axis, ratio, parameters) |
 | Spline: CV form, rational, any degree | yes | yes: rational B-spline, basis-function evaluation |
-| Spline: fit points | degree 3 with end tangents, knot parameterisation (chord, square root, uniform), fit tolerance | cubic, chord-length, averaged knots, dense solve; **no end tangents, no knot parameterisation choice, no fit tolerance** (`geom/src/spline.rs:31-88`) |
+| Spline: fit points | degree 3 with end tangents, knot parameterisation (chord, square root, uniform), fit tolerance | cubic, chord-length, averaged knots, dense solve (above 4,096 fit points the points are used as control points instead, #773); **no end tangents, no knot parameterisation choice, no fit tolerance** (`geom/src/spline.rs:31-88`) |
 | Spline: closed/periodic | periodic | "closed" appends the first point and refits; **not periodic** (`modify2.rs:647`) |
 | Spline editing: knot insertion, split, refine, rebuild, convert to polyline | SPLINEDIT, grips | knot insertion and splitting (`curves.rs:539-622`); refine/rebuild partial |
 | Helix | yes | **no** |
@@ -73,7 +73,7 @@ constraints 10%.
 | Circle, arc | exact | exact (radius change) |
 | Ellipse | spline approximation within tolerance | **a polyline** from tessellation at 1e-3 × major axis |
 | Spline | spline approximation within tolerance | tessellate at 1e-3, offset vertices along normals, keep about 40 points, refit: **lossy** |
-| Polyline with arcs | exact, with self-intersection trimming, OFFSETGAPTYPE (extend, fillet, chamfer) | segments offset and joined at neighbours' intersections; **arc bulges not recomputed** after endpoints move (comment at L413), **no loop cleanup**, collapsed segments not removed; OFFSETGAPTYPE only echoed |
+| Polyline with arcs | exact, with self-intersection trimming, OFFSETGAPTYPE (extend, fillet, chamfer) | segments offset and joined at neighbours' intersections; arc bulges are recomputed from the joined endpoints (#825), **no loop cleanup**, collapsed segments not removed; OFFSETGAPTYPE only echoed |
 | Options: Through, Erase, Layer, Multiple | yes | see [gaps.md](gaps.md) |
 
 ## Trim, extend, fillet, chamfer, break, join, lengthen (≈ 70%)
@@ -99,7 +99,7 @@ Where line and arc are supported the results are exact.
 | Tangent points, common tangents | every curve | circles and arcs only (`curve.rs:170-183`) |
 | AREA: circle, ellipse | exact | exact area (ellipse perimeter by Ramanujan, not exact); an open elliptical arc has no area, like an arc |
 | AREA: polyline with arcs | exact (bulge segments) | **tessellated at 1e-4** (`curve.rs:491`) |
-| MASSPROP (regions: area, perimeter, centroid, moments) | exact on regions and solids | shoelace over a tessellated circle, polyline or first hatch loop (`utility.rs:310-352`); no regions |
+| MASSPROP (regions: area, perimeter, centroid, moments) | exact on regions and solids | works on regions (#510, `inquiry/regions.rs`); other objects not re-checked in this pass (shoelace over a tessellated circle, polyline or first hatch loop on 2026-10-10) |
 | LIST/DIST/ID precision | full double | full double |
 
 ## Hatch boundaries (≈ 45%)
@@ -107,7 +107,7 @@ Where line and arc are supported the results are exact.
 `geom/src/region.rs`: curves are polygonised, crossings split on a grid, vertices merged at
 `tol`, a ray picks the edge and the face is traced by sharpest left turn; islands by
 connectivity (including islands made of separate lines, #163). Caps: 60,000 segments, 4,096
-islands. Missing: **gap tolerance (HPGAPTOL)**, true arcs and curves in boundaries (boundaries
+islands. Gap tolerance (HPGAPTOL) bridges gaps between open curve ends only (`build_gap`). Missing: true arcs and curves in boundaries (boundaries
 come out tessellated, so a hatched circle's boundary is a polygon), island detection modes
 beyond the default, boundary sets, and retained associative boundaries for every case. Pattern
 lines are scanline families clipped against the tessellated loops (`render/src/hatch.rs`).
@@ -126,7 +126,7 @@ lines are scanline families clipped against the tessellated loops (`render/src/h
 
 ## Tests
 
-`#[test]` counts on 2026-10-10: geom 28, constraints 22, render 50, engine 174. A property-based
+`#[test]` counts (occurrences under `crates/<name>`) on 2026-10-13: geom 84, constraints 36, render 134, engine 948 (2026-10-10, counted differently: geom 28, constraints 22, render 50, engine 174). A property-based
 and hostile-input suite for geometry numerics landed 2026-10-12 (`crates/geom/src/property_tests.rs`):
 a deterministic xorshift generator (no new dependency) drives a few thousand cases per property —
 intersections lie on both curves and are symmetric, circle pairs match the closed form, closest
@@ -140,7 +140,7 @@ coordinates to 1e-9 relative.
 
 1. Exact ellipse and spline intersection and closest point (subdivision + Newton with a
    relative tolerance); use them in snaps, TRIM, EXTEND, BREAK. 15–25 h.
-2. Polyline offset with bulge recomputation, self-intersection cleanup and OFFSETGAPTYPE;
+2. Polyline offset with self-intersection cleanup and OFFSETGAPTYPE (bulge recomputation done, #825);
    spline/ellipse offset as fitted splines within a tolerance. 15–25 h.
 3. A tolerance context relative to the drawing's extents, and a known-answer test suite at
    origin and at 1e6–1e7 coordinates. 8–12 h.
@@ -155,6 +155,7 @@ Total ≈ 90–140 h; items 1–6 parallelise across two or three agents.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Re-audit against main e707ab4d: polyline offset recomputes arc bulges (#825); spline fits above 4,096 points use control points (#773); HPGAPTOL bridges open ends; MASSPROP on regions; test counts re-measured; percentages not re-measured |
 | 2026-10-12 | trivial | TRIM on a closed polyline keeps only the complementary run when the pick lies past the last cut (#726) |
 | 2026-10-12 | minor | Property-based and hostile-input tests for geometry numerics landed (`crates/geom/src/property_tests.rs`): intersections, closest points, three-point arcs, bounds, vector identities; hostile f64s never panic; known answers at 1e6–1e7 |
 | 2026-10-10 | major | First geometry-precision audit: tolerances, curves, intersections, offsets, modify commands, measurement, hatch, solver |

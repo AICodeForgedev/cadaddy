@@ -2,16 +2,18 @@
 
 **Stage: pre-alpha** · next: alpha, ~2 points (38% → 40% ready for real work) and ~125–190 Opus 5.5 hours away (the four failing core workflows of the [alpha gate](docs/roadmap.md#alpha-gate))
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (hours to ~95% for each readiness number) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (re-audit against main e707ab4d: why-pre-alpha text, languages, upcoming list and progress log; headline numbers not re-measured) · **Target:** Autodesk AutoCAD 2027
 
 CADCraft targets full parity with AutoCAD (2D drafting first, then annotation, layouts and
 plotting, DWG, parametrics and 3D), plus what AutoCAD doesn't have: agent control over MCP, a
 scriptable CLI, a web build, Linux and FreeBSD builds, and a free licence.
 
 **Why pre-alpha:** four of AutoCAD's five core workflows fail the [alpha gate](docs/roadmap.md#alpha-gate).
-Precise drafting lacks object snap tracking and has stubbed TRIM/EXTEND/OFFSET options; blocks
-can't be edited in a block editor (REFEDIT edits them in place, xrefs not yet); plots ignore plot styles; and a DWG saved by
-CADCraft drops everything it doesn't model and has never been checked in
+Precise drafting still has approximate ellipse and spline intersections and a few stubbed prompt options
+(object snap tracking, TRIM/EXTEND/OFFSET options and typed snap overrides have landed); dynamic blocks can't be
+authored and xrefs can't be edited in place or clipped (the Block Editor, REFEDIT and dynamic block editing have landed);
+plots go only to PDF, PNG and SVG files (plot styles and the Plot dialog have landed); and a DWG saved by
+CADCraft drops what acadrust doesn't model and has never been checked in
 AutoCAD. Dimensioning passes. Ready for real work (≈ 38%) is also under the ~40% alpha bar. Beta
 is ≈ 600–930 h away.
 
@@ -80,44 +82,45 @@ Hours are Opus 5.5 agent wall-clock hours, calibrated on this repo's own build: 
 
 ## Languages
 
-AutoCAD 2027 for Mac ships 8 interface languages; CADCraft ships English plus partial
-Ukrainian and German. Detail: [localization-parity.md](docs/localization-parity.md).
+AutoCAD 2027 for Mac ships 8 interface languages; CADCraft ships English plus twelve partial
+catalogs (Ukrainian, Brazilian Portuguese, German, Spanish, Czech, Russian, French, Simplified Chinese, Italian, Korean, Swedish and Arabic). Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Status | UI translated |
 |---|---|---:|
 | English | full | 100% |
-| Simplified Chinese | none | 0% |
-| Spanish | none | 0% |
+| Simplified Chinese | partial | 1,112 catalog rows |
+| Spanish | partial | 1,239 catalog rows |
 | Hindi | none | 0% |
-| Arabic | none | 0% |
-| French | none | 0% |
-| Portuguese | none | 0% |
+| Arabic | partial | 1,229 catalog rows |
+| French | partial | 1,003 catalog rows |
+| Portuguese (Brazilian) | partial | 1,240 catalog rows |
 | Indonesian | none | 0% |
 | Japanese | none | 0% |
-| German | partial | ≈ 100% of the catalog (989 rows) |
-| Korean | none | 0% |
+| German | partial | 1,030 catalog rows |
+| Korean | partial | 1,235 catalog rows |
 | Vietnamese | none | 0% |
 
-Other languages shipped: Ukrainian and German (989 catalog rows each; Ukrainian landed with #36), Brazilian Portuguese, Spanish, Czech, Russian, French, Simplified Chinese and Italian (1,227 rows, 2026-10-12); engine messages stay English.
+Other languages shipped: Ukrainian (1,322 rows, the reference catalog, #36), Czech (1,214), Russian (1,004), Italian (1,231) and Swedish (1,235), counted 2026-10-13; engine messages stay English. Each catalog lags the reference by 86–319 rows added since it landed ([localization-parity.md](docs/localization-parity.md)).
 
 ## Upcoming
 
 Ranked; detail and the full beta checklist in [docs/roadmap.md](docs/roadmap.md).
 
-1. Gate and land: fix fmt on main, run `cargo xtask ci` on every PR, land the 47 open PRs (15–25 h).
-2. Stop losing data on save; native MULTILEADER; save DWG/DXF at a chosen version (30–45 h).
+1. Gate and land: run `cargo xtask ci` on every PR (open PR #847; fmt on main is fixed), land the 89 open PRs (15–25 h).
+2. Stop losing data on save (DXF done, #528; native MULTILEADER, #459, and the save version, #421, done; through DWG, acadrust still drops some content) (30–45 h).
 3. Real-file DWG/DXF corpus and a black-box check in AutoCAD (10–15 h + owner).
-4. Precision input: object snap tracking, extension/parallel snaps, FROM/M2P/TK, snap overrides,
-   editable dynamic input (25–35 h).
-5. Unstub prompt options in TRIM/EXTEND, OFFSET, ROTATE, PLINE, SPLINE, MTEXT, MLEADER (15–25 h).
-6. Autosave, recovery, AUDIT, RECOVER (10–15 h).
+4. ~~Precision input: object snap tracking, extension/parallel snaps, FROM/M2P/TK, snap overrides,
+   editable dynamic input.~~ Done (#379, #441, #60, #519; `snap/tracking.rs`, `pointmod.rs`, `dyninput.rs`).
+5. ~~Unstub prompt options in TRIM/EXTEND, OFFSET, ROTATE, PLINE, SPLINE, MTEXT, MLEADER.~~ Done (#397, #408, #547); the stubs left are in gaps F1.
+6. ~~Autosave, recovery, AUDIT, RECOVER.~~ Done on the desktop (#406, #416); the web build has no autosave (gaps F4).
 7. Exact ellipse/spline geometry and correct polyline offsets (30–50 h).
-8. Xrefs, block editor, groups, then dynamic blocks (80–120 h).
+8. Xrefs, block editor, groups, then dynamic blocks (80–120 h): xrefs (#525), groups (#417), the Block Editor (#824, #833, #885), REFEDIT (#818) and dynamic block references (#838–#883) landed; left: dynamic-block authoring, XCLIP, editing an xref in place.
 
 ## Progress log
 
 | Date | Entry |
 |---|---|
+| 2026-10-13 | Re-audit against main: 102 PRs merged on 2026-10-13 alone (132 since 2026-10-12), among them REFEDIT, REFSET and REFCLOSE (#818), the Block Editor (#824, #833, #885), dynamic block references (#838, #853, #860, #878, #883), AutoLISP (#855), MLEADEREDIT/ALIGN/COLLECT (#816), the in-place MTEXT editor (#792), object transparency (#764), Hatch and Gradient dialogs (#753), Open Recent (#864), damaged DWGs opened partially (#859), ACIS data kept on save (#781), zoom and pan regenerated in the background (#903) and the Arabic, Swedish, Korean, Italian, Chinese and Spanish catalogs. Headline percentages and hours are from 2026-10-10 and were not re-measured. |
 | 2026-10-12 | TRIM: a pick after a closed polyline's last cut keeps only the complementary run instead of an extra circuit of the outline (#726) |
 | 2026-10-12 | HATCHEDIT refuses an explicit bad `scale` or `angle` before it edits anything, so a rejected request leaves the drawing, undo and redo as they were (#724) |
 | 2026-10-10 | Merged main: Ukrainian interface (#36, first string catalog), Dynamic Input pointer boxes with Tab and relative entry (#60), press-drag selection windows (#63), WIPEOUT and hatch gradients kept through DXF/DWG save (#147, #162), SETVAR DIM* as style overrides (#129), UNITS dialog (#38), close-window save prompt (#47), DIMANGULAR on circles (#20), cargo fmt fixed on main. UI/UX 40% → 43% (dynamic input 15% → 45%), localization 3% → 5%; ready for real work ≈ 37% → 38% (weighted 37.2% → 37.7%), mainstream 27% → 28%, essentials 45% → 46%. Beta is now ~37 points away; hours unchanged within rounding. |
@@ -133,6 +136,7 @@ Ranked; detail and the full beta checklist in [docs/roadmap.md](docs/roadmap.md)
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Re-audit against main e707ab4d: why-pre-alpha text, languages table and note (twelve catalogs), upcoming list (items 4–6 struck, 1, 2 and 8 updated), progress-log entry; headline numbers unchanged |
 | 2026-10-12 | trivial | Progress log: closed-polyline TRIM (#726) |
 | 2026-10-12 | trivial | Progress log: HATCHEDIT numeric validation (#724) |
 | 2026-10-10 | minor | Merged main's changes (Ukrainian catalog, dynamic input pointer boxes, DXF fixes); UI/UX and localization numbers updated |

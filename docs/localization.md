@@ -33,8 +33,8 @@ dialogs, and the About window's controls. The command reference can be searched 
 command ID, English label, or translated label. Ukrainian has enforced coverage;
 missing entries in the other catalogs are reported by tests and fall back to English.
 
-Czech has 1,202 catalog rows, covering the reference catalog and every marked UI
-literal, including Options. Four `menu` entries distinguish menu headings from object/command
+Czech has 1,214 catalog rows (counted 2026-10-13), covering the reference catalog and every marked UI
+literal when it landed, including Options. Four `menu` entries distinguish menu headings from object/command
 labels: **Zobrazení / Pohled**, **Kreslení / Kreslit**, **Kótování / Kóta**, and **Modifikace / Upravit**.
 The translation is AI-assisted work by @Losminek, reviewed against Czech desktop and CAD UI
 conventions and an independent review pass; it has not yet been proofread by a native speaker.
@@ -46,12 +46,20 @@ The translations are original, AI-assisted Korean CAD terminology (for example, 
 치수, 모깎기, 모따기, 간격띄우기 and 객체 스냅). Independent native proofreading and
 platform-specific layout/IME validation remain follow-up work.
 
-Brazilian Portuguese has 1,231 catalog rows and also covers the reference catalog and every marked UI
-literal: commands, menus, tool groups and tooltips, object snaps, drafting prompts, dialogs and
-Preferences; its gaps are now zero. Its plural rule is `one|other` (0 and 1 are `one`), as CLDR defines
+Brazilian Portuguese has 1,240 catalog rows and also covered the reference catalog and every marked UI
+literal when it landed (#791): commands, menus, tool groups and tooltips, object snaps, drafting prompts, dialogs and
+Preferences. Its plural rule is `one|other` (0 and 1 are `one`), as CLDR defines
 for `pt`, and the catalog's accented letters (`Á Â Í Ó Ú à á â ã ç é ê í ó ô õ ú`) render in the
 bundled fonts. The original catalog was contributed by @WladmirJunior; the remaining rows were completed
 by @RicSchonfelder with AI assistance and have not yet been proofread by a native speaker.
+
+The other catalogs, with their rows counted on 2026-10-13: Ukrainian 1,322 (the reference), Spanish 1,239,
+Italian 1,231, Swedish 1,235, Arabic 1,229, Simplified Chinese 1,112, German 1,030, Russian 1,004 and French 1,003.
+Strings added to the Ukrainian catalog since a language's last update (for example the 3D Mouse dialog and the
+Block Editor prompt) show in English there; [localization-parity.md](localization-parity.md) lists the count per language.
+Arabic uses the six CLDR plural forms and a font chain for Arabic script (Noto Sans Arabic, Segoe UI/Tahoma, Geeza Pro);
+the interface is not mirrored. CJK interface fonts load in every language, so Chinese, Japanese and Korean file, layout
+and layer names don't show as boxes (#861).
 
 Drawing titles, layer/layout/block/style names, parameter names and expressions, text in a
 drawing, and command-line input are user data and retain their original spelling. Clickable
@@ -90,9 +98,10 @@ The implementation follows the display-time catalog pattern used by
   Optional `menu` entries translate menu headings via `i18n::menu` / `i18n::tr_menu`;
   without one, the ordinary translation is used.
 - `@plural` entries hold the language's forms for integer counts: Ukrainian `one|few|many`,
-  German and Spanish `one|other`, Brazilian Portuguese `one|other` (0 and 1 are `one`),
-  Czech `one|few|other` (1; 2–4; everything else, including 0, 11, 21 and 22).
-  Korean has one form (`other`) for all integer counts.
+  German, Spanish, Italian, Swedish and Simplified Chinese `one|other`, Brazilian Portuguese and French `one|other` (0 and 1 are `one`),
+  Russian `one|few|many` (as Ukrainian), Czech `one|few|other` (1; 2–4; everything else, including 0, 11, 21 and 22).
+  Korean has one form (`other`) for all integer counts; Arabic has six (`plural_arabic`).
+  (The rules are the `plural` and `plural_forms` fields of `LANGUAGES` in `i18n/mod.rs`.)
   The API takes `u64`, so fractional counts are not accepted.
 - Register a new catalog in `i18n::LANGUAGES`, add its preference variant and code/name,
   and set its integer plural rule and form count on the `Language` row.
