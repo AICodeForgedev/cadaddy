@@ -17,15 +17,11 @@ struct W {
     next: u64,
     /// Upper-case plot style name → its `ACDBPLACEHOLDER` handle (group 390 of layers and objects).
     pstyles: HashMap<String, String>,
-<<<<<<< HEAD
     /// Upper-case layer name → its LAYER table record handle (group 341 of viewports).
     layers: HashMap<String, String>,
-||||||| 00c7613f
-=======
     /// Persistent reactors of boundary objects: each source object of an associative hatch →
     /// the hatches (groups `{ACAD_REACTORS 330 …}`), from [`hatch_reactors`].
     reactors: HashMap<Handle, Vec<String>>,
->>>>>>> pr/871
 }
 
 impl W {
@@ -205,13 +201,7 @@ fn annotative_xdata(w: &mut W) {
 
 /// Override (`ACAD` DSTYLE) and associativity (`CADCRAFT` ASSOC) xdata of a dimension.
 fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
-<<<<<<< HEAD
-    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new() };
-||||||| 00c7613f
-    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new() };
-=======
-    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), reactors: HashMap::new() };
->>>>>>> pr/871
+    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
     let mut sah = false;
     for (k, v) in &dm.overrides {
         let Some(field) = DimStyle::field_name(k) else { continue };
@@ -1521,13 +1511,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     let committed = d.committed();
     let d: &Drawing = &committed;
     // Structural handles start above every entity handle.
-<<<<<<< HEAD
-    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new(), layers: HashMap::new() };
-||||||| 00c7613f
-    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new() };
-=======
-    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new(), reactors: hatch_reactors(d) };
->>>>>>> pr/871
+    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new(), layers: HashMap::new(), reactors: hatch_reactors(d) };
     // Pre-allocate handles for block records.
     let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
     paper_layouts.sort_by_key(|l| l.tab_order);
@@ -1994,13 +1978,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.i(70, 0);
         let v = serde_json::to_value(s).unwrap_or_default();
         let defaults = serde_json::to_value(DimStyle::default()).unwrap_or_default();
-<<<<<<< HEAD
-        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new() };
-||||||| 00c7613f
-        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new() };
-=======
-        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), reactors: HashMap::new() };
->>>>>>> pr/871
+        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
             if !dxf_ext::NEWER_CODES.contains(code) {
