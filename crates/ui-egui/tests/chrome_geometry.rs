@@ -61,7 +61,11 @@ fn status_labels_never_overlap_at_standard_and_compact_sizes() {
                     visible_text(&shape.shape, shape.clip_rect, &mut texts);
                 }
                 texts.retain(|(_, rect)| rect.center().y > height - 26.0);
-                assert!(texts.iter().any(|(text, _)| text == "Layout2"));
+                // The current tab is always drawn; the others move to the layout list when the bar is narrow.
+                assert!(texts.iter().any(|(text, _)| text == "Model"));
+                if width >= 1200.0 {
+                    assert!(texts.iter().any(|(text, _)| text == "Layout2"));
+                }
                 for (i, (first, first_rect)) in texts.iter().enumerate() {
                     for (second, second_rect) in texts.iter().skip(i + 1) {
                         if first_rect.intersects(*second_rect) {
