@@ -66,7 +66,7 @@ impl Vec2 {
         self + (o - self) * t
     }
     pub fn mid(self, o: Vec2) -> Vec2 {
-        self.lerp(o, 0.5)
+        Vec2::new(self.x.midpoint(o.x), self.y.midpoint(o.y))
     }
     pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite()
@@ -204,6 +204,18 @@ impl Neg for Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn midpoint_handles_finite_coordinate_extremes() {
+        for (a, b, expected) in [
+            (Vec2::new(-1e308, 1e308), Vec2::new(1e308, -1e308), Vec2::ZERO),
+            (Vec2::new(1e308, -1e308), Vec2::new(1.6e308, -1.6e308), Vec2::new(1.3e308, -1.3e308)),
+            (Vec2::new(f64::from_bits(1), 0.0), Vec2::new(f64::from_bits(1), 0.0), Vec2::new(f64::from_bits(1), 0.0)),
+        ] {
+            assert_eq!(a.mid(b), expected);
+            assert_eq!(b.mid(a), expected);
+        }
+    }
 
     #[test]
     fn near_uses_finite_nonnegative_tolerance_without_squaring() {
