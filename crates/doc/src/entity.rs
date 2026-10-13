@@ -831,6 +831,10 @@ pub struct TableCell {
     /// A formula (`=Sum(A1:B3)`); `text` holds its value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub formula: Option<String>,
+    /// The cell's own text height (DXF 140 in the cell record), before the table's scale;
+    /// `None`: its cell style's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_height: Option<f64>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

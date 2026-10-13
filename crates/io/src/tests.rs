@@ -1375,6 +1375,8 @@ fn hostile_extension_data_never_panics() {
         // Tables: enormous or negative counts, cells without bodies, spans past the edge.
         ent("0\nACAD_TABLE\n2\n*T1\n100\nAcDbTable\n91\n999999999\n92\n999999999\n171\n1\n0\nACAD_TABLE\n100\nAcDbTable\n91\n-4\n92\n3\n171\n"),
         ent("0\nACAD_TABLE\n100\nAcDbTable\n91\n2\n92\n2\n141\nnan\n142\n-1\n171\n1\n173\n1\n175\n99999\n176\n-3\n1\nx\n171\n171\n171\n171\n171\n2\nzzz\n1001\nCADCRAFT\n1000\nTABLE\n1040\n-1\n"),
+        // Cell text heights (140): junk, huge, unbalanced value block.
+        ent("0\nACAD_TABLE\n100\nAcDbTable\n91\n1\n92\n3\n171\n1\n140\nnan\n171\n1\n140\n-5\n301\nCELL_VALUE\n140\n1e308\n171\n1\n304\nACVALUE_END\n140\n1e999\n1\nx\n"),
         // DIMASSOC pointing at nothing, or at a non-dimension.
         format!(
             "{}{}",
@@ -2135,4 +2137,24 @@ fn kept_xrecord_application_group_roundtrips_as_read() {
     assert_eq!(&lines[at + 9..at + 11], &["102", "ATTRRECORD}"]);
     // And no handle is written under a bool code anywhere.
     assert!(!out.contains("291\n2"), "no handle may be written under a bool code");
+}
+
+#[test]
+fn foreign_table_reads_cell_text_height_and_keeps_style_scale() {
+    // A table from another writer: no CADCraft xdata; cell 1 sets 140 before its value block
+    // (the cell's text height), cell 2 only has a 140 inside the value block (a number).
+    let dxf = "0\nSECTION\n2\nENTITIES\n0\nACAD_TABLE\n100\nAcDbTable\n91\n1\n92\n2\n141\n300\n142\n900\n142\n900\n\
+        171\n1\n140\n150\n301\nCELL_VALUE\n1\nA\n304\nACVALUE_END\n\
+        171\n1\n301\nCELL_VALUE\n140\n42\n1\nB\n304\nACVALUE_END\n0\nENDSEC\n0\nEOF\n";
+    let d = read_dxf(dxf.as_bytes()).unwrap();
+    let t = first(&d, |k| if let EntityKind::Table(x) = k { Some(x.clone()) } else { None });
+    assert_eq!(t.cells[0][0].text_height, Some(150.0));
+    assert_eq!(t.cells[0][1].text_height, None);
+    // No scale of its own: the table takes its style's height.
+    assert_eq!(t.text_height, TableStyle::default().text_height);
+    // Written back and read again.
+    let back = roundtrip(&d);
+    let t2 = first(&back, |k| if let EntityKind::Table(x) = k { Some(x.clone()) } else { None });
+    assert_eq!(t2.cells[0][0].text_height, Some(150.0));
+    assert_eq!(t2.cells[0][1].text_height, None);
 }

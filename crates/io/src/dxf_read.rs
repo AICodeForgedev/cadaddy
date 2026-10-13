@@ -527,7 +527,18 @@ fn acad_table(tags: &[Tag]) -> Table {
             (true, Some(rs), Some(cs)) if rs >= 1 && cs >= 1 && (rs, cs) != (1, 1) => Some((rs, cs)),
             _ => None,
         };
-        flat.push(TableCell { text, merged, ..TableCell::default() });
+        // The cell's own text height: 140 outside the value block (301 … 304), where it is a number.
+        let mut in_value = false;
+        let mut text_height = None;
+        for x in cell {
+            match x.code {
+                301 => in_value = true,
+                304 => in_value = false,
+                140 if !in_value => text_height = Some(x.f64()).filter(|h| h.is_finite() && *h > 0.0 && *h < 1e9),
+                _ => {}
+            }
+        }
+        flat.push(TableCell { text, merged, text_height, ..TableCell::default() });
     }
     flat.resize(rows * cols, TableCell::default());
     let cells: Vec<Vec<TableCell>> = if cols == 0 { vec![Vec::new(); rows] } else { flat.chunks(cols).map(<[TableCell]>::to_vec).collect() };
@@ -541,7 +552,8 @@ fn acad_table(tags: &[Tag]) -> Table {
             (flags.first().is_some_and(|v| *v != 0), flags.get(1).is_some_and(|v| *v != 0), h, style)
         }
         // Other writers: a first row merged across every column reads as a title.
-        None => (cols > 1 && cells.first().and_then(|r| r.first()).and_then(|c| c.merged) == Some((1, cols as u32)), false, 0.18, "Standard".into()),
+        // Their text height is resolved to the table style's once the styles are read (`apply`).
+        None => (cols > 1 && cells.first().and_then(|r| r.first()).and_then(|c| c.merged) == Some((1, cols as u32)), false, 0.0, "Standard".into()),
     };
     let mut t = Table { insert: T(tags).p(10), col_widths, row_heights, cells, style, text_height, title, header, ..Table::default() };
     crate::dxf_table::read_table_xdata(tags, &mut t);
@@ -1012,8 +1024,8 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
                 rx.table_blocks.insert(b.to_ascii_uppercase());
             }
             let ours = crate::dxf_ext::xdata(tags, crate::dxf_ext::APP).iter().any(|t| t.code == 1000 && t.str() == "TABLE");
-            if !ours && let Some(sh) = t.s(342) {
-                rx.table_style_fix.push((h, sh.trim().to_ascii_uppercase()));
+            if !ours {
+                rx.table_style_fix.push((h, t.s(342).map(|sh| sh.trim().to_ascii_uppercase()).unwrap_or_default()));
             }
         }
         ("INSERT", EntityKind::Insert(ins)) => {
@@ -1894,13 +1906,24 @@ impl Objects {
             }
         }
         for (h, sh) in &rx.table_style_fix {
-            if let Some(name) = self.names.get(sh) {
-                let _ = d.modify_entity(*h, |e| {
-                    if let EntityKind::Table(t) = &mut e.kind {
-                        t.style = name.clone();
+            let name = self.names.get(sh).cloned();
+            // A table from another writer has no scale of its own: its text height is its
+            // style's, so every cell style height applies as it is.
+            let height = {
+                let style = name.as_deref().unwrap_or("Standard");
+                d.table_styles
+                    .iter()
+                    .find(|s| s.name.eq_ignore_ascii_case(style))
+                    .map_or(cadcraft_doc::TableStyle::default().text_height, |s| s.text_height)
+            };
+            let _ = d.modify_entity(*h, |e| {
+                if let EntityKind::Table(t) = &mut e.kind {
+                    if let Some(name) = name {
+                        t.style = name;
                     }
-                });
-            }
+                    t.text_height = height;
+                }
+            });
         }
         // Parametric constraints and parameters.
         if let Some((c, p)) = self.xrecord_text(crate::dxf_ext::CONSTRAINTS_KEY).and_then(|t| crate::dxf_ext::parse_constraints(&t)) {

@@ -856,6 +856,9 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     w.i(91, 0);
                     w.i(178, 0);
                     w.f(145, 0.0);
+                    if let Some(h) = cell.and_then(|x| x.text_height).filter(|h| h.is_finite() && *h > 0.0) {
+                        w.f(140, h);
+                    }
                     // Long text: 250-character code-2 chunks, the rest in code 1.
                     let chars: Vec<char> = cell.map(|x| x.text.chars().collect()).unwrap_or_default();
                     let chunks: Vec<String> = chars.chunks(250).map(|c| c.iter().collect()).collect();

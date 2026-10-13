@@ -85,6 +85,8 @@ pub fn table_style_of(d: &Drawing, t: &Table) -> TableStyle {
 /// The scale of a table relative to its style: SCALE changes the table's text height, and every
 /// cell style height and margin follows.
 fn style_scale(st: &TableStyle, t: &Table) -> f64 {
+    // A table from another writer is resolved to its style's height on reading (scale 1); a
+    // non-positive height here is the same "no scale of its own".
     let k = t.text_height / st.text_height;
     if k.is_finite() && k > 0.0 { k } else { 1.0 }
 }
@@ -312,7 +314,7 @@ fn layout(d: &Drawing, t: &Table) -> TableGeom {
             col: a.col,
             at: p(x, y),
             attach,
-            height: cs.text_height,
+            height: cell.text_height.filter(|h| h.is_finite() && *h > 0.0).map_or(cs.text_height, |h| h * k),
             color: cs.text_color,
             style: cs.text_style.clone(),
             text: cell.text.clone(),
@@ -352,27 +354,18 @@ pub(crate) fn draw(b: &mut Builder, ctx: &Ctx, t: &Table, rgb: Ink, lw: f32) {
     for tx in &g.texts {
         let ts = crate::text_style(ctx.d, &tx.style);
         let font = cadcraft_fonts::TextFont::resolve(&ts.font);
-        let h = match (tx.attach - 1) % 3 {
-            0 => cadcraft_fonts::Align::Left,
-            // Middle centre is TEXT's "Middle" (centred both ways).
-            1 if tx.attach == 5 => cadcraft_fonts::Align::Middle,
-            1 => cadcraft_fonts::Align::Center,
-            _ => cadcraft_fonts::Align::Right,
-        };
-        let v = match (tx.attach - 1) / 3 {
-            0 => cadcraft_fonts::VAlign::Top,
-            1 => cadcraft_fonts::VAlign::Middle,
-            _ => cadcraft_fonts::VAlign::Bottom,
-        };
-        let params = cadcraft_fonts::TextParams {
-            align_pt: Some(tx.at),
-            h,
-            v,
+        // Cell content is MTEXT (`\P`, `{\Q15;…}`, `\F…;`): laid out as such, at the cell's
+        // alignment point (its numbering is MTEXT's attachment).
+        let mp = cadcraft_fonts::MTextParams {
+            attach: tx.attach,
+            font,
             width_factor: ts.width_factor,
             oblique: ts.oblique,
-            ..cadcraft_fonts::TextParams::new(tx.at, tx.height)
+            ..cadcraft_fonts::MTextParams::new(tx.at, tx.height)
         };
-        let (sh, _) = cadcraft_fonts::place(&font, &tx.text, &params);
-        b.shaped(ctx, style_ink(tx.color, rgb), lw, &sh);
+        let layout = cadcraft_fonts::layout_mtext_with(&tx.text, &mp);
+        for piece in &layout.pieces {
+            b.shaped(ctx, style_ink(tx.color, rgb), lw, &piece.shaped);
+        }
     }
 }
