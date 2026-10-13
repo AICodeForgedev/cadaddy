@@ -39,7 +39,7 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
 /// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
 /// command doesn't require a row in every language.
 const REQUIRED: &[&str] = &["uk"];
-const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko"];
+const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv"];
 
 fn check(language: &str, what: &str, missing: Vec<String>) {
     if REQUIRED.contains(&language) {
@@ -778,4 +778,109 @@ fn korean_ui_fonts_cover_catalog_and_language_picker_in_both_families() {
         missing
     });
     assert!(missing.is_empty(), "missing Korean UI glyphs: {}", missing.join(", "));
+}
+
+#[test]
+fn swedish_locales_preferences_and_plural_forms() {
+    for tag in ["sv", "sv-SE", "sv_SE.UTF-8", "SV-se", " sv-SE ", "sv-FI"] {
+        assert_eq!(locale_language(tag), Some("sv"), "{tag}");
+    }
+    // `se` is Northern Sami and `swe` the three-letter code; neither picks Swedish.
+    for tag in ["se", "swe", "svenska"] {
+        assert_eq!(locale_language(tag), None, "{tag}");
+    }
+    assert_eq!(Preference::parse("sv"), Some(Preference::Swedish));
+    assert_eq!(Preference::Swedish.name(), "Svenska");
+    assert_eq!(Preference::Swedish.resolve(&["en-US".into()]), "sv");
+    assert_eq!(Preference::Auto.resolve(&["pl-PL".into(), "sv-SE".into(), "en-US".into()]), "sv");
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.ui.interface_language = Preference::Swedish;
+    let mut restored = CadApp::new(Session::new(), Services::default());
+    restored.load_prefs(&app.prefs_json());
+    assert_eq!(restored.ui.interface_language, Preference::Swedish);
+    with_language("sv", || {
+        for n in [0, 1, 2, 5, 21, u64::MAX] {
+            // `bidragsgivare` is the same in the singular and the plural; `commit` takes an -s.
+            assert_eq!(count(n, "{n} contributor", "{n} contributors"), format!("{n} bidragsgivare"));
+            let commit = if n == 1 { "commit" } else { "commits" };
+            assert_eq!(count(n, "{n} commit", "{n} commits"), format!("{n} {commit}"));
+        }
+        assert_eq!(format("Current: {color}", &[("color", "{n} Open".into())]), "Aktuell: {n} Open");
+    });
+}
+
+#[test]
+fn swedish_menu_headings_keep_object_labels() {
+    with_language("sv", || {
+        assert_eq!(menu("Dimension"), "Måttsättning");
+        assert_eq!(t("Dimension"), "Mått");
+        assert_eq!(menu("View"), "Visa");
+        assert_eq!(menu("Draw"), "Rita");
+        assert_eq!(menu("Modify"), "Ändra");
+        assert_eq!(menu("Edit"), "Redigera");
+        assert_eq!(menu("File"), "Arkiv");
+    });
+}
+
+#[test]
+fn live_swedish_switch_preserves_drawing_command_and_saved_choice() {
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.ui.in_window_menu = true;
+    app.session.state_mut().unwrap().title = "Open".into();
+    let ctx = egui::Context::default();
+    app.logic(&ctx);
+    assert!(render(&mut app, &ctx).contains("Properties"));
+    app.start("line");
+    let prompt = crate::control::cmdline_state(&app);
+    let commands = crate::control::all_commands(&app);
+    app.run("ui.language", json!({"lang":"sv"})).unwrap();
+    let text = render(&mut app, &ctx);
+    for label in ["Egenskaper", "Arkiv", "Visa", "Rita", "Måttsättning", "Ange första punkten"] {
+        assert!(text.contains(label), "missing {label}: {text}");
+    }
+    assert_eq!(app.language(), "sv");
+    assert_eq!(app.session.state().unwrap().title, "Open");
+    assert_eq!(crate::control::cmdline_state(&app), prompt);
+    assert_eq!(crate::control::all_commands(&app), commands);
+    app.run("ui.language", json!({"lang":"en"})).unwrap();
+    assert!(render(&mut app, &ctx).contains("Properties"));
+}
+
+#[test]
+fn swedish_dialogs_render_with_stable_ids() {
+    for (dialog, heading) in [
+        ("dsettings", "Ritinställningar"),
+        ("about", "Om CADCraft"),
+        ("blocks", "Block"),
+        ("layers", "Hantera lageregenskaper"),
+        ("qselect", "Snabbmarkering"),
+        ("parameters", "Hantera parametrar"),
+        ("language", "Svenska"),
+        ("options:preferences", "Användarinställningar"),
+    ] {
+        let mut app = CadApp::new(Session::new(), Services::default());
+        app.ui.interface_language = Preference::Swedish;
+        app.ui.dialog = Some(dialog.into());
+        let ctx = egui::Context::default();
+        app.logic(&ctx);
+        let text = render(&mut app, &ctx);
+        assert!(text.contains(heading), "{dialog}: {text}");
+        assert_eq!(app.ui.dialog.as_deref(), Some(dialog));
+    }
+}
+
+#[test]
+fn default_fonts_cover_swedish_letters_and_quotes() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    let letters: BTreeSet<_> = "ÅÄÖÉåäöé”–".chars().collect();
+    ctx.fonts_mut(|view| {
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let mut font = view.fonts.font(&family);
+            for c in &letters {
+                assert!(font.characters().contains_key(c), "missing {c} in {family:?}");
+            }
+        }
+    });
 }

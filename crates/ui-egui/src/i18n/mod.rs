@@ -35,10 +35,12 @@ pub enum Preference {
     Italian,
     #[serde(rename = "ko")]
     Korean,
+    #[serde(rename = "sv")]
+    Swedish,
 }
 
 impl Preference {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Auto,
         Self::English,
         Self::Ukrainian,
@@ -51,6 +53,7 @@ impl Preference {
         Self::Chinese,
         Self::Italian,
         Self::Korean,
+        Self::Swedish,
     ];
 
     /// The codes a preference can be given as, for messages ("auto, en or uk").
@@ -76,6 +79,7 @@ impl Preference {
             Self::Chinese => "zh",
             Self::Italian => "it",
             Self::Korean => "ko",
+            Self::Swedish => "sv",
         }
     }
 
@@ -99,6 +103,7 @@ impl Preference {
                     "Korean"
                 }
             }
+            Self::Swedish => "Svenska",
         }
     }
 
@@ -124,6 +129,7 @@ impl Preference {
             Self::Chinese => "zh",
             Self::Italian => "it",
             Self::Korean => "ko",
+            Self::Swedish => "sv",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -140,7 +146,7 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 11] = [
+pub static LANGUAGES: [Language; 12] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language {
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
@@ -169,6 +175,8 @@ pub static LANGUAGES: [Language; 11] = [
     Language { code: "it", name: "Italiano", source: include_str!("it.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     // Korean has one integer plural form and needs a Hangul-capable interface font.
     Language { code: "ko", name: "한국어", source: include_str!("ko.tsv"), plural: plural_ko, plural_forms: 1, catalog: OnceLock::new() },
+    // Swedish plurals follow the English rule: one (1), other.
+    Language { code: "sv", name: "Svenska", source: include_str!("sv.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
 ];
 
 /// BCP 47 and POSIX locale tags, including `uk-UA`, `uk_UA.UTF-8` and `pt_BR.UTF-8`.
