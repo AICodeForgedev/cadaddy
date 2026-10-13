@@ -364,9 +364,9 @@ fn trim(v: f64) -> String {
 
 /// The JSON form's paragraph formatting: `list` (`bullet`, `number`, `lower`, `upper`: each
 /// paragraph labelled, with a hanging `indent`), or `indent` / `firstIndent` / `rightIndent`
-/// (text heights), `tabs` (tab stops in text heights) and `align` (`left`, `center`, `right`,
+/// (drawing units; a list's default is 3 text heights), `tabs` (tab stops, drawing units) and `align` (`left`, `center`, `right`,
 /// `justify`, `distributed`) as a `\p` code in front of the text.
-pub(super) fn json_paragraphs(p: &serde_json::Value, text: String) -> Result<String> {
+pub(super) fn json_paragraphs(p: &serde_json::Value, text: String, height: f64) -> Result<String> {
     use cadcraft_fonts::{ListStyle, ParaAlign, ParaProps, TabKind};
     let bad = |m: &str| super::bad("mtext", m);
     let num = |k: &str| -> Result<Option<f64>> {
@@ -384,7 +384,7 @@ pub(super) fn json_paragraphs(p: &serde_json::Value, text: String) -> Result<Str
             _ => return Err(bad("`list` must be bullet, number, lower or upper")),
         };
         let paras: Vec<&str> = text.split("\\P").collect();
-        return Ok(cadcraft_fonts::list_contents(&paras, style, num("indent")?.unwrap_or(3.0)));
+        return Ok(cadcraft_fonts::list_contents(&paras, style, num("indent")?.unwrap_or(3.0 * height)));
     }
     let mut props = ParaProps {
         left: num("indent")?.unwrap_or(0.0).max(0.0),

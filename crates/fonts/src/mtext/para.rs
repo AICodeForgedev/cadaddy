@@ -56,8 +56,9 @@ pub enum ParaAlign {
     Distributed,
 }
 
-/// Paragraph properties set by `\p…;`, in multiples of the MTEXT's text height. They stay in
-/// effect for the following paragraphs until another `\p` changes them.
+/// Paragraph properties set by `\p…;`. Indents and tab stops are in drawing units (as in
+/// AutoCAD files: `\pi4.86;` indents the first line by 4.86 units), space before and after in
+/// text heights. They stay in effect for the following paragraphs until another `\p` changes them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ParaProps {
     /// `i`: first-line indent, relative to the left indent (negative: a hanging indent).
@@ -84,7 +85,7 @@ const MAX_STATES: usize = 10_000;
 const MAX_COLUMNS: usize = 1_000;
 /// Default tab interval, in text heights, past the last tab stop.
 pub const DEFAULT_TAB: f64 = 4.0;
-/// Largest indent, tab position or spacing accepted, in text heights.
+/// Largest indent, tab position or spacing accepted.
 const MAX_UNITS: f64 = 10_000.0;
 
 fn units(s: &str) -> Option<f64> {
@@ -240,7 +241,7 @@ impl ListStyle {
     }
 }
 
-/// Paragraphs as a list: a hanging indent of `indent` text heights with a tab stop there, and
+/// Paragraphs as a list: a hanging indent of `indent` drawing units with a tab stop there, and
 /// each paragraph its label and a tab (`\pxi-3,l3,t3;1.<tab>First\P2.<tab>Second`).
 pub fn list_contents(paragraphs: &[&str], style: ListStyle, indent: f64) -> String {
     let indent = if indent.is_finite() && indent > 0.0 { indent.min(MAX_UNITS) } else { 3.0 };
@@ -405,8 +406,8 @@ fn split_tabs(segs: &[(Seg, usize)]) -> Vec<Part> {
 /// then every [`DEFAULT_TAB`] text heights.
 fn next_tab(x: f64, pp: &ParaProps, h: f64) -> (f64, TabKind) {
     let eps = 1e-9;
-    let mut best: Option<(f64, TabKind)> = pp.tabs.iter().map(|(p, k)| (p * h, *k)).find(|(p, _)| *p > x + eps);
-    let hang = pp.left * h;
+    let mut best: Option<(f64, TabKind)> = pp.tabs.iter().map(|(p, k)| (*p, *k)).find(|(p, _)| *p > x + eps);
+    let hang = pp.left;
     if hang > x + eps && best.is_none_or(|(p, _)| hang < p) {
         best = Some((hang, TabKind::Left));
     }
@@ -432,7 +433,7 @@ pub(super) fn layout(contents: &str, p: &MTextParams, base: &Fmt) -> MTextLayout
     let mut k = 0usize;
     let first_start = |k: usize| {
         let pp = paras.props(k);
-        ((pp.left + pp.first) * h).max(0.0)
+        (pp.left + pp.first).max(0.0)
     };
     let mut line = PLine { width: first_start(0), ..Default::default() };
     let mut pending_space: Option<usize> = None;
@@ -448,8 +449,8 @@ pub(super) fn layout(contents: &str, p: &MTextParams, base: &Fmt) -> MTextLayout
     };
     for a in &atoms {
         let pp = paras.props(k);
-        let avail = if width > 0.0 { (width - pp.right * h).max(0.0) } else { f64::INFINITY };
-        let left = (pp.left * h).max(0.0);
+        let avail = if width > 0.0 { (width - pp.right).max(0.0) } else { f64::INFINITY };
+        let left = pp.left.max(0.0);
         match a {
             Atom::Space(f) => {
                 if !line.items.is_empty() || pending_space.is_some() {
@@ -567,7 +568,7 @@ pub(super) fn layout(contents: &str, p: &MTextParams, base: &Fmt) -> MTextLayout
         Some(_) => (0..n_cols).map(col_height).fold(content_h, f64::max),
         None => content_h,
     };
-    let col_w = if width > 0.0 { width } else { lines.iter().map(|l| l.width + paras.props(l.para).right * h).fold(0.0, f64::max) };
+    let col_w = if width > 0.0 { width } else { lines.iter().map(|l| l.width + paras.props(l.para).right).fold(0.0, f64::max) };
     let gutter = cols.map(|s| s.gutter).filter(|g| g.is_finite() && *g >= 0.0).unwrap_or(0.0);
     let total_w = col_w * n_cols as f64 + gutter * n_cols.saturating_sub(1) as f64;
     let attach = p.attach.clamp(1, 9) - 1;
@@ -590,7 +591,7 @@ pub(super) fn layout(contents: &str, p: &MTextParams, base: &Fmt) -> MTextLayout
         let pp = paras.props(l.para);
         let slot = if reversed { n_cols.saturating_sub(1).saturating_sub(c) } else { c };
         let col_x = box_x0 + slot as f64 * (col_w + gutter);
-        let right_edge = col_w - pp.right * h;
+        let right_edge = col_w - pp.right;
         let free = right_edge - l.width;
         let align = match pp.align {
             ParaAlign::Default => [ParaAlign::Left, ParaAlign::Center, ParaAlign::Right].get(usize::from(acol)).copied().unwrap_or_default(),

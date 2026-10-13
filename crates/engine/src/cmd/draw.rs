@@ -378,7 +378,7 @@ fn run_mtext(s: &mut Session, p: &Value) -> Result<Value> {
         attach,
         rotation: f64_or(p, "rotation", 0.0).to_radians(),
         style,
-        contents: super::mtext_opts::json_paragraphs(p, text.replace('\n', "\\P"))?,
+        contents: super::mtext_opts::json_paragraphs(p, text.replace('\n', "\\P"), height)?,
         line_spacing: f64_or(p, "lineSpacing", 1.0),
         line_spacing_exact: bool_or(p, "lineSpacingExact", false),
         columns: super::mtext_opts::json_columns(p, height, width)?,

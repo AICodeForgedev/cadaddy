@@ -714,6 +714,14 @@ mod tests {
     }
 
     #[test]
+    fn indents_are_drawing_units() {
+        // An AutoCAD file's `\pi4.8634;` on 4.6652 high text in a 50.2 wide box indents the
+        // first line by 4.8634 units: the text still fits on one line.
+        let l = layout_mtext("\\pi4.8634;AAA BBB CCC", Vec2::ZERO, 4.6652, 50.2, 1, 0.0, 1.0);
+        assert_eq!(l.lines, vec!["AAA BBB CCC"]);
+    }
+
+    #[test]
     fn paragraphs_make_lines() {
         let l = lay("one\\Ptwo\\P\\Pfour", 0.0);
         assert_eq!(l.lines, vec!["one", "two", "", "four"]);

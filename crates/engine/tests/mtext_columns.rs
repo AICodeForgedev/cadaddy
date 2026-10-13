@@ -46,7 +46,7 @@ fn dynamic_columns_and_defaults() {
 #[test]
 fn json_columns_and_lists() {
     let mut s = Session::new();
-    s.execute("mtext", &json!({"at": [0, 0], "text": "one\ntwo\nthree", "width": 5, "list": "number", "columns": {"type": "static", "count": 2, "gutter": 1, "height": 2}}))
+    s.execute("mtext", &json!({"at": [0, 0], "text": "one\ntwo\nthree", "height": 1, "width": 5, "list": "number", "columns": {"type": "static", "count": 2, "gutter": 1, "height": 2}}))
         .unwrap();
     let t = last_mtext(&s);
     assert_eq!(t.contents, "\\pxi-3,l3,t3;1.\tone\\P2.\ttwo\\P3.\tthree");

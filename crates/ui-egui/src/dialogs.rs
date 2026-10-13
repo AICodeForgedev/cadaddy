@@ -403,12 +403,15 @@ fn insert_block(app: &mut CadApp, name: &str) {
     }
 }
 
-/// The editor's lines as a list: a hanging indent of three text heights with a tab stop there
-/// (`\pxi-3,l3,t3;`) and each line a bullet or its number and a tab.
-fn as_list(buf: &str, numbered: bool) -> String {
+/// The editor's lines as a list: a hanging indent of three text heights (`height` is one, in
+/// drawing units, as `\p` indents are) with a tab stop there, and each line a bullet or its
+/// number and a tab.
+fn as_list(buf: &str, numbered: bool, height: f64) -> String {
     let lines: Vec<String> =
         buf.split('\n').enumerate().map(|(i, l)| if numbered { format!("{}.\t{l}", i + 1) } else { format!("•\t{l}") }).collect();
-    format!("\\pxi-3,l3,t3;{}", lines.join("\n"))
+    let indent = format!("{:.6}", 3.0 * height);
+    let indent = indent.trim_end_matches('0').trim_end_matches('.');
+    format!("\\pxi-{indent},l{indent},t{indent};{}", lines.join("\n"))
 }
 
 /// The multiline text editor shown while MTEXT asks for its contents.
@@ -455,10 +458,10 @@ fn mtext_editor(app: &mut CadApp, ctx: &egui::Context) {
                     buf.push('\t');
                 }
                 if ui.button("•≡").on_hover_text(crate::tl!("Bulleted list")).clicked() {
-                    buf = as_list(&buf, false);
+                    buf = as_list(&buf, false, h);
                 }
                 if ui.button("1≡").on_hover_text(crate::tl!("Numbered list")).clicked() {
-                    buf = as_list(&buf, true);
+                    buf = as_list(&buf, true, h);
                 }
             });
             let r = ui.add(
