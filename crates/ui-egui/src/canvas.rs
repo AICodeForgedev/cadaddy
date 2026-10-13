@@ -1191,7 +1191,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // Double-click a viewport to work inside it; double-click the sheet outside it to return.
     if inside
         && dbl_primary
-        && app.session.running.is_none()
+        && !app.session.prompting()
         && matches!(app.session.layout_space(), cadcraft_doc::Space::Paper(_))
         && let Some(hp) = hover_pos
     {
@@ -1321,7 +1321,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && !middle_down
         && let Some(p) = app.canvas.cursor
     {
-        if app.session.running.is_some() {
+        if app.session.prompting() {
             // Ctrl held while picking the point of a grip edit makes copies (the Copy option).
             if mods.ctrl && app.session.running.as_ref().is_some_and(|r| r.id == "grip") {
                 let _ = app.session.input(Input::Keyword("Copy".into()));
@@ -1364,7 +1364,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             && let Some(end) = ui.input(|i| i.pointer.interact_pos())
         {
             let end = xf.to_world(end);
-            let done = if app.session.running.is_some() { app.session.input(Input::Point(end)) } else { app.session.idle_click(end, mods.shift) };
+            let done = if app.session.prompting() { app.session.input(Input::Point(end)) } else { app.session.idle_click(end, mods.shift) };
             if let Err(e) = done {
                 app.session.echo(e.to_string());
             }
@@ -1373,7 +1373,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // Right-click acts as Enter while a command runs (the classic CAD default; held, it opens the
     // command menu); otherwise it opens the shortcut menu (Repeat, Clipboard, …).
     // Shift/Ctrl+right-click opens the object snap menu.
-    let idle = app.session.running.is_none();
+    let idle = !app.session.prompting();
     if inside && pressed_secondary {
         app.canvas.snap_menu = mods.shift || mods.ctrl;
     }
@@ -1545,11 +1545,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     // Grips on selected objects (when idle or editing grips).
     let grip_edit = app.session.running.as_ref().is_some_and(|r| r.id == "grip");
-    if (!grip_edit && (app.canvas.grip_editing || app.session.running.is_some())) || sel.is_empty() {
+    if (!grip_edit && (app.canvas.grip_editing || app.session.prompting())) || sel.is_empty() {
         app.canvas.hot_grips.clear();
     }
     app.canvas.grip_editing = grip_edit;
-    if (app.session.running.is_none() || grip_edit)
+    if (!app.session.prompting() || grip_edit)
         && let Ok(st) = app.session.state()
     {
         let gs = app.session.settings.gripsize as f32;
@@ -1595,7 +1595,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             );
             draw_list(&painter, &xf, &list, bg, false);
         }
-    } else if let (Some(c), true) = (app.canvas.cursor, app.session.running.is_some()) {
+    } else if let (Some(c), true) = (app.canvas.cursor, app.session.prompting()) {
         let ents = app.session.preview(c);
         if !ents.is_empty()
             && let Ok(st) = app.session.state()

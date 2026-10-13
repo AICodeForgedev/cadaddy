@@ -218,7 +218,7 @@ pub fn choose(app: &mut CadApp, id: &str) {
 /// prompts; command names are the history's).
 pub fn note_input(app: &mut CadApp, text: &str) {
     let t = text.trim();
-    if app.session.running.is_none() || t.is_empty() {
+    if !app.session.prompting() || t.is_empty() {
         return;
     }
     let recent = &mut app.cmd.recent_input;
@@ -320,7 +320,7 @@ pub fn in_command(app: &mut CadApp, ui: &egui::Ui, inside: bool, right_clicked: 
     {
         ctx.data_mut(|d| d.insert_temp(press_id, Press(now, p)));
     }
-    let running = app.session.running.is_some() && !app.canvas.snap_menu;
+    let running = app.session.prompting() && !app.canvas.snap_menu;
     let mut open = false;
     if released && let Some(Press(t0, p0)) = ctx.data_mut(|d| d.remove_temp::<Press>(press_id)) {
         // A drag isn't a click; a click held long enough asks for the menu.

@@ -759,6 +759,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 DimKind::ArcLength => 1,
             };
             w.i(70, ty | 32 | if dm.user_text_pos { 128 } else { 0 });
+            // The actual measurement (read-only in DXF): AutoLISP's entget shows it.
+            w.f(42, g.measurement);
             if !dm.text.is_empty() {
                 w.s(1, &dm.text);
             }
@@ -2590,4 +2592,24 @@ fn scale_list(w: &mut W, scales: &[(&cadcraft_doc::AnnoScale, String)], dict: &s
 
 fn cadcraft_fonts_name() -> &'static str {
     "CADCraft Stroke"
+}
+
+/// One entity's DXF groups, as the writer stores them, without its `0` group: its type name
+/// and the groups of its record (an entity written as several records, a POLYLINE and its
+/// VERTEXes, gives its first). Handles of objects outside the entity (owner, styles) are left
+/// out. AutoLISP's `entget` is built on it.
+pub fn entity_groups(d: &Drawing, e: &Entity) -> (String, Vec<Tag>) {
+    let mut w = W {
+        t: Vec::new(),
+        next: d.handseed.max(0x100).saturating_add(0x1000),
+        pstyles: HashMap::new(),
+        layers: HashMap::new(),
+        reactors: HashMap::new(),
+    };
+    let cx = Ctx { target: Version::R2018, ..Ctx::default() };
+    let paper = d.space_of(e.handle).is_some_and(|s| !matches!(s, cadcraft_doc::Space::Model));
+    entity(&mut w, d, e, "0", paper, &cx);
+    let mut tags = w.t.into_iter();
+    let kind = tags.next().filter(|t| t.code == 0).map(|t| t.value.as_str()).unwrap_or_default();
+    (kind, tags.take_while(|t| t.code != 0).filter(|t| t.code != 330).collect())
 }

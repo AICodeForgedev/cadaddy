@@ -21,6 +21,7 @@ pub(crate) mod hatch;
 mod inquiry;
 mod layer;
 mod layout;
+mod lisp;
 mod mleader_content;
 mod mleader_edit;
 mod modify;
@@ -200,6 +201,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(table::specs());
         v.extend(tolerance::specs());
         v.extend(constraints::specs());
+        v.extend(lisp::specs());
         v
     })
 }

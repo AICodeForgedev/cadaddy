@@ -39,6 +39,8 @@ pub struct DimGeometry {
     /// The font glyphs of `text_glyphs` (outline indices into it).
     pub text_runs: Vec<cadcraft_fonts::TextGlyph>,
     pub text_pos: Vec2,
+    /// The measured value (DXF group 42): a length, or the angle in radians.
+    pub measurement: f64,
     pub text_angle: f64,
     pub text_height: f64,
     /// Plain text of the dimension.
@@ -527,6 +529,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             // The measurement is along the dimension direction whatever the extension lines do.
             let meas = (p2 - p1).dot(dir).abs();
             g.mtext = linear_text(meas, d, st, "");
+            g.measurement = meas;
             // From here on: the length drawn between the extension lines.
             let meas = f1.dist(f2);
             if !st.suppress_ext1 {
@@ -739,6 +742,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let (center, r) = if radius { (a, a.dist(b)) } else { (a.mid(b), a.dist(b) / 2.0) };
             let meas = if radius { r } else { 2.0 * r };
             g.mtext = linear_text(meas, d, st, if radius { "R" } else { "%%c" });
+            g.measurement = meas;
             let (tw, tht) = measure(&g.mtext);
             let u = (b - center).normalized();
             let u = if u == Vec2::ZERO || !u.is_finite() { Vec2::X } else { u };
@@ -818,6 +822,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let arc =
                 if cadcraft_geom::angle_in_sweep(vertex.angle_to(arc_pt), s, e) { Arc::new(vertex, r, s, e) } else { Arc::new(vertex, r, e, s) };
             let sweep = ccw_sweep(arc.start, arc.end);
+            g.measurement = sweep;
             // DIMAZIN 1 / 2 suppress leading / trailing zeros (DIMZIN's bits 4 / 8).
             let azin = (st.angular_zero_suppression & 3) * 4;
             let txt = format_angle(sweep, st.angular_unit, st.angular_decimals, azin);
@@ -858,6 +863,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let origin = d.defpt.xy();
             let meas = if x_type { (feature.x - origin.x).abs() } else { (feature.y - origin.y).abs() };
             g.mtext = linear_text(meas, d, st, "");
+            g.measurement = meas;
             let (tw, _) = measure(&g.mtext);
             g.dim(vec![feature, leader_end]);
             if x_type {
@@ -876,6 +882,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let meas = r * arc.sweep();
             // DIMARCSYM: the arc symbol before the text (0), over it (1) or none (2).
             g.mtext = linear_text(meas, d, st, if st.arc_symbol == 0 { "⌒" } else { "" });
+            g.measurement = meas;
             let mut pts = Vec::new();
             arc.tessellate(arc.radius * 1e-3, &mut pts);
             g.dim(pts);
@@ -1010,6 +1017,7 @@ mod tests {
     fn horizontal_measures_dx() {
         let g = dimension_geometry(&lin((0.0, 0.0), (10.0, 3.0), (0.0, 5.0), 0.0), &DimStyle::default(), 1.0);
         assert_eq!(g.value, "10.0000");
+        assert_eq!(g.measurement, 10.0);
         assert!(!g.text.is_empty());
         assert_eq!(g.fills.len(), 2);
         assert_eq!(g.lines_of(LineRole::Ext).count(), 2);
@@ -1019,6 +1027,7 @@ mod tests {
     fn vertical_measures_dy() {
         let g = dimension_geometry(&lin((0.0, 0.0), (10.0, 3.0), (15.0, 0.0), std::f64::consts::FRAC_PI_2), &DimStyle::default(), 1.0);
         assert_eq!(g.value, "3.0000");
+        assert!((g.measurement - 3.0).abs() < 1e-12, "{}", g.measurement);
     }
 
     #[test]

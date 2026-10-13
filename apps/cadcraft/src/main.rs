@@ -115,6 +115,11 @@ pub fn install_io() {
     cadcraft_engine::cmd::file::set_write_as(|d, name, o| {
         cadcraft_io::write_with(d, name, &cadcraft_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
+    // AutoLISP's entget, entmake and entmod see entities as DXF groups.
+    cadcraft_engine::cmd::file::set_entity_codec(cadcraft_engine::cmd::file::EntityCodec {
+        groups: cadcraft_io::entity_groups,
+        entity: cadcraft_io::entity_from_groups,
+    });
 }
 
 fn services() -> Services {
@@ -322,6 +327,13 @@ fn main() -> eframe::Result {
             // Autosave files (SAVEFILEPATH) default to `<settings dir>/autosave`.
             if let Some(dir) = config_dir() {
                 app.enable_autosave(&dir.join("autosave"));
+                // Startup LISP (acad.lsp, acaddoc.lsp) is read from `<settings>/support`; the
+                // folder is made so it is there to put them in.
+                let support = dir.join("support");
+                if let Err(e) = std::fs::create_dir_all(&support) {
+                    log::warn!("no LISP support folder {}: {e}", support.display());
+                }
+                app.session.set_lisp_support_dir(Some(support));
             }
             app.integrated_titlebar = cfg!(target_os = "macos");
             if surface.present_mode == eframe::wgpu::PresentMode::AutoNoVsync {

@@ -373,7 +373,7 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             }
             let r = match s("button").unwrap_or("left") {
                 "right" => app.session.input(Input::Enter),
-                _ if app.session.running.is_some() => app.session.input(Input::Point(wp)),
+                _ if app.session.prompting() => app.session.input(Input::Point(wp)),
                 _ => app.session.idle_click(wp, p.get("shift").and_then(Value::as_bool).unwrap_or(false)),
             };
             match r {

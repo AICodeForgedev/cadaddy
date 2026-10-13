@@ -37,6 +37,24 @@ pub fn io() -> Option<&'static IoHooks> {
     IO.get()
 }
 
+/// An entity as DXF groups and back, for AutoLISP's `entget`, `entmake` and `entmod`
+/// (installed by the app with the DXF reader and writer, a lower layer).
+pub struct EntityCodec {
+    /// The entity's type name and the groups of its record, without its `0` group.
+    pub groups: fn(&Drawing, &cadcraft_doc::Entity) -> (String, Vec<cadcraft_dxf::Tag>),
+    /// An entity from a type name and groups.
+    pub entity: fn(&str, &[cadcraft_dxf::Tag]) -> Option<(cadcraft_doc::Common, cadcraft_doc::EntityKind)>,
+}
+
+static CODEC: OnceLock<EntityCodec> = OnceLock::new();
+
+pub fn set_entity_codec(c: EntityCodec) {
+    let _ = CODEC.set(c);
+}
+pub fn entity_codec() -> Option<&'static EntityCodec> {
+    CODEC.get()
+}
+
 /// COMPARE (drawing comparison).
 pub mod compare;
 

@@ -318,7 +318,7 @@ impl CadApp {
     /// Submit a line of command-line text. A refused line is echoed to the history; the error is
     /// also returned.
     pub fn cmdline(&mut self, text: &str) -> Option<String> {
-        if self.session.running.is_none() {
+        if !self.session.prompting() {
             let first = text.split_whitespace().next().unwrap_or("");
             // `cmd {json}` is a programmatic call: the engine runs it with those parameters.
             let json_form = text.trim_start().get(first.len()..).is_some_and(|rest| rest.trim_start().starts_with('{'));
@@ -384,6 +384,14 @@ impl CadApp {
     /// "Opening ..." card shows ([`opening`]); [`Self::finish_opening`] adds it when ready. On the
     /// web it opens at once.
     pub fn open_path(&mut self, path: &str) {
+        // A LISP file (dropped on the window): loaded as APPLOAD loads it.
+        if is_lisp_file(path) {
+            match cadcraft_engine::lisp::builtins::read_text_file(path) {
+                Some(text) => self.load_lisp(path, &text),
+                None => self.open_failed(format!("APPLOAD: can't read {path}")),
+            }
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.opening.start(path);
@@ -410,6 +418,14 @@ impl CadApp {
         }
     }
 
+    /// Load a LISP file: its routine runs and may wait for the user (APPLOAD typed or from the
+    /// menu runs this way too).
+    fn load_lisp(&mut self, name: &str, text: &str) {
+        if let Err(e) = self.session.lisp_load(name, text, false) {
+            self.session.echo(e.to_string());
+        }
+    }
+
     /// The largest file [`Self::open_bytes`] opens. A drawing opened from its contents (the
     /// browser, where files have no path) is held in memory several times over while it is decoded,
     /// so it is capped below the DWG reader's own limit instead of running out of memory.
@@ -432,6 +448,9 @@ impl CadApp {
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) {
         if let Some(e) = Self::open_size_error(name, bytes.len() as u64) {
             return self.open_failed(e);
+        }
+        if is_lisp_file(name) {
+            return self.load_lisp(name, &String::from_utf8_lossy(bytes));
         }
         let data = cadcraft_engine::cmd::file::base64_encode(bytes);
         let r = self.run("open", json!({ "data": data, "name": name }));
@@ -475,6 +494,11 @@ impl CadApp {
 
     /// Per-frame logic before layout.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // A long LISP routine runs a slice per frame, so the window stays live (and Esc stops it).
+        self.session.lisp_tick();
+        if self.session.lisp_busy() {
+            ctx.request_repaint();
+        }
         // Closing the window (title bar, File ▸ Exit, Cmd+Q) with unsaved changes asks first.
         if ctx.input(|i| i.viewport().close_requested()) && self.request_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -662,6 +686,11 @@ pub fn now_ms() -> f64 {
     {
         0.0
     }
+}
+
+/// A LISP source file, by its name.
+fn is_lisp_file(name: &str) -> bool {
+    std::path::Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case("lsp"))
 }
 
 #[cfg(test)]

@@ -57,7 +57,7 @@ remaining gaps are known bugs and edge features (≈ 75% ready for real work).
 | Xrefs, block editor, dynamic blocks, groups, attribute tools | not started | 90–135 |
 | Plot styles, plot preview, PUBLISH, non-rectangular viewports | partial | 30–45 |
 | Autosave, recovery, AUDIT/RECOVER, Options dialog, templates, SHX, user `.lin`/`.pat` | partial | 40–60 |
-| AutoLISP core subset and SCRIPT | not started | 40–70 |
+| AutoLISP core subset and SCRIPT | done (AutoLISP #758, SCRIPT #693); Visual LISP, DCL and reactors to come | 30–50 |
 | Catalog plus AutoCAD for Mac's languages | not started | 30–45 |
 | Stability: CI gate, issue backlog, command smoke sweep, geometry fuzzing | partial | 30–50 |
 | Platforms: web open/save, Windows/Linux runtime checks; performance at 1M entities and large DWG | partial | 20–35 |

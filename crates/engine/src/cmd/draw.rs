@@ -1438,11 +1438,22 @@ struct TextM {
     justify: (HAlign, VAlign),
     asking_justify: bool,
     line: usize,
+    /// Run by a LISP routine (`command`): one line of text ends the command, as AutoLISP's
+    /// `command` runs TEXT; typed and in scripts each line asks for the next.
+    single_line: bool,
 }
 
 impl TextM {
-    fn new(_s: &Session) -> Self {
-        TextM { at: None, height: None, rotation: None, justify: (HAlign::Left, VAlign::Baseline), asking_justify: false, line: 0 }
+    fn new(s: &Session) -> Self {
+        TextM {
+            at: None,
+            height: None,
+            rotation: None,
+            justify: (HAlign::Left, VAlign::Baseline),
+            asking_justify: false,
+            line: 0,
+            single_line: s.lisp_running(),
+        }
     }
 }
 
@@ -1503,6 +1514,9 @@ impl Interactive for TextM {
                 let k = make_text(s, at, &t, h, r, self.justify);
                 s.add_entity(k)?;
                 self.line += 1;
+                if self.single_line {
+                    return Ok(Step::Done);
+                }
             }
             (Some(_), Some(_), Some(_), Input::Enter) => return Ok(Step::Done),
             _ => {}

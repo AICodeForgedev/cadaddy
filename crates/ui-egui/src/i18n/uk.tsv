@@ -321,6 +321,7 @@
 	Equal	Рівність
 	Erase	Стерти
 	Evaluate	Обчислити
+	Evaluate LISP	Обчислити LISP
 	Exclude from new selection set	Виключити з нового набору вибраних об'єктів
 	Explode	Розчленувати
 	Export	Експортувати
@@ -500,6 +501,7 @@
 	List Text Styles	Список текстових стилів
 	Load all	Завантажити всі
 	Load...	Завантажити...
+	Load Application...	Завантажити застосунок...
 	Loaded linetypes	Завантажені типи ліній
 	Lock	Заблокувати
 	Lock Layer	Заблокувати шар

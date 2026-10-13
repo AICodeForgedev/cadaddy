@@ -2232,3 +2232,9 @@ fn helix(tags: &[Tag]) -> Helix {
     }
     .sanitized()
 }
+
+/// An entity from the groups of a DXF record of type `kind` (without its `0` group), as the
+/// reader makes it. AutoLISP's `entmake` and `entmod` are built on it.
+pub fn entity_from_groups(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
+    entity(&kind.to_ascii_uppercase(), tags)
+}

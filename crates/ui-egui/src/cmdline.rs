@@ -312,7 +312,7 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
                         mac,
                         press,
                         &app.cmd.buffer,
-                        app.session.running.is_some(),
+                        app.session.prompting(),
                         !app.session.selection().is_empty(),
                         app.cmd.typed_since_selection,
                     );
@@ -345,7 +345,7 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
                     }
                 }
                 Key::Tab => tab(app),
-                Key::Delete if app.cmd.buffer.is_empty() && app.session.running.is_none() => {
+                Key::Delete if app.cmd.buffer.is_empty() && !app.session.prompting() => {
                     let _ = app.run("erase.selection", serde_json::json!({}));
                 }
                 _ => {}
@@ -374,7 +374,7 @@ pub fn submit(app: &mut CadApp) {
     let text = std::mem::take(&mut app.cmd.buffer);
     app.cmd.locked_second = None;
     app.cmd.history_pos = None;
-    if !text.trim().is_empty() && app.session.running.is_none() {
+    if !text.trim().is_empty() && !app.session.prompting() {
         app.cmd.history.push(text.clone());
         if app.cmd.history.len() > 200 {
             app.cmd.history.remove(0);
@@ -428,11 +428,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
             let gw = g.size().x;
             p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text_faint);
             x += gw;
-            let g = p.layout_no_wrap(crate::i18n::t(&pr.message).to_string(), font.clone(), t.text);
+            // A LISP `get…` prompt shows as the routine wrote it (no keywords, default or colon added).
+            let message = if pr.raw { pr.display() } else { crate::i18n::t(&pr.message).to_string() };
+            let g = p.layout_no_wrap(message, font.clone(), t.text);
             let gw = g.size().x;
             p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
             x += gw;
-            if !pr.keywords.is_empty() {
+            if !pr.raw && !pr.keywords.is_empty() {
                 let g = p.layout_no_wrap(if pr.message.is_empty() { " [".into() } else { crate::tl!(" or [").into() }, font.clone(), t.text);
                 let gw = g.size().x;
                 p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
@@ -463,16 +465,20 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
                 p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
                 x += gw;
             }
-            if let Some(d) = &pr.default {
+            if let Some(d) = pr.default.as_ref().filter(|_| !pr.raw) {
                 let g = p.layout_no_wrap(format!(" <{d}>"), font.clone(), t.text);
                 let gw = g.size().x;
                 p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
                 x += gw;
             }
-            let g = p.layout_no_wrap(": ".into(), font.clone(), t.text);
-            let gw = g.size().x;
-            p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
-            x += gw;
+            if !pr.raw {
+                let g = p.layout_no_wrap(": ".into(), font.clone(), t.text);
+                let gw = g.size().x;
+                p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
+                x += gw;
+            } else if !pr.message.ends_with(' ') {
+                x += 4.0;
+            }
         }
         None => {
             if app.cmd.buffer.is_empty() {
@@ -502,7 +508,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
         false,
     );
     // AutoComplete list.
-    if app.session.running.is_none() {
+    if !app.session.prompting() {
         let sug = suggestions(&app.cmd.buffer);
         if !sug.is_empty() {
             let rh = 20.0;
@@ -564,7 +570,7 @@ fn zones(app: &CadApp, canvas: Rect, bar: Rect) -> Zones {
     let top = window.or(lines).map_or(bar.top(), |r| r.top());
     let grip = Rect::from_min_max(pos2(bar.left(), top - 3.0), pos2(bar.right(), top + 3.0));
     let mut all = bar.union(grip);
-    if app.session.running.is_none() {
+    if !app.session.prompting() {
         let k = suggestions(&app.cmd.buffer).len();
         if k > 0 {
             let above = if n == 0 { 0.0 } else { LINE_H * n as f32 + 6.0 };

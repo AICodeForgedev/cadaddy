@@ -22,7 +22,7 @@ pub(crate) struct Guarded {
     broken: Cell<Option<&'static str>>,
 }
 
-fn message(p: &(dyn Any + Send)) -> String {
+pub(crate) fn message(p: &(dyn Any + Send)) -> String {
     p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into())
 }
 

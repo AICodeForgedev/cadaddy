@@ -16,6 +16,7 @@ mod finite;
 pub mod grip_dims;
 pub mod grips;
 mod guard;
+pub mod lisp;
 pub mod pointmod;
 pub mod prompt;
 mod recent;
@@ -376,6 +377,8 @@ pub struct Settings {
     /// APERTURE in pixels.
     pub aperture: f64,
     pub pickfirst: bool,
+    /// ACADLSPASDOC: acad.lsp loads into every drawing, not once per session.
+    pub acadlspasdoc: bool,
     pub pickadd: bool,
     /// PICKSTYLE: bit 1 picks whole selectable groups ([`cmd::groups`]), bit 2 associative hatches
     /// with their boundaries (stored, not used yet).
@@ -433,6 +436,7 @@ impl Default for Settings {
             pickbox: 3.0,
             aperture: 10.0,
             pickfirst: true,
+            acadlspasdoc: false,
             pickadd: true,
             pickstyle: 1,
             gripsize: 5.0,
@@ -611,6 +615,10 @@ pub struct Session {
     pub clipboard_source: Option<cmd::clipboard::ClipSource>,
     /// The window last picked with PLOTWINDOW (the Plot dialog's "Window <").
     pub plot_window: Option<cadcraft_geom::Bounds2>,
+    /// AutoLISP: each drawing's symbols and the routine running ([`lisp`]).
+    lisp: lisp::LispState,
+    /// How the last LISP run ended (its value or error message).
+    lisp_last: Option<std::result::Result<lisp::value::Value, String>>,
     /// What the last HATCHPICK kept (the Hatch and Gradient dialog's picks).
     pub hatch_picks: Option<cmd::hatch::HatchPicks>,
 }
@@ -658,6 +666,8 @@ impl Session {
             last_used: LastUsed::default(),
             clipboard_source: None,
             plot_window: None,
+            lisp: lisp::LispState::default(),
+            lisp_last: None,
             hatch_picks: None,
         }
     }
@@ -831,12 +841,16 @@ impl Session {
             (Ok(v), Some((doc, sel, uid))) if spec.undoable => self.refuse_non_finite(Some(*uid), doc, sel, spec.id).map(|()| v),
             (r, _) => r,
         };
+        let grouped = self.lisp_groups_undo();
         if spec.undoable
             && let Some((doc, sel, uid)) = before
             && let Some(st) = self.docs.iter_mut().find(|d| d.uid == uid)
             && !Arc::ptr_eq(&doc, &st.doc)
         {
-            st.push_undo(Snapshot { label: spec.label.to_string(), doc, selection: sel });
+            // Inside a LISP routine the routine's single undo step records it.
+            if !grouped {
+                st.push_undo(Snapshot { label: spec.label.to_string(), doc, selection: sel });
+            }
             st.revision += 1;
         }
         result
@@ -864,6 +878,15 @@ impl Session {
         let dashed = cmd::resolve_alias(&name.trim_start_matches(['_', '.']).to_ascii_lowercase());
         let id = if find_command(&dashed).is_some() { dashed } else { cmd::resolve_alias(&lower) };
         let Some(spec) = find_command(&id) else {
+            // A command defined in LISP: (defun c:NAME …).
+            if !transparent && let Some(f) = self.lisp_command(&lower) {
+                if self.running.is_some() {
+                    self.cancel();
+                }
+                self.last_command = Some(lower.clone());
+                self.echo(format!("Command: {}", lower.to_ascii_uppercase()));
+                return self.lisp_run_command(&lower, f);
+            }
             // A bare system variable name (ORTHOMODE, GRIDMODE…) acts as SETVAR on that variable.
             let var = lower.to_ascii_uppercase();
             if !name.starts_with(['_', '.', '-']) && sysvars::get(self, &var).is_some() {
@@ -943,8 +966,18 @@ impl Session {
     }
 
     /// Give an input to the running command. With no command running, `Enter` repeats the last
-    /// command (as in AutoCAD) and points do nothing.
+    /// command (as in AutoCAD) and points do nothing. A LISP routine waiting in a `get…`
+    /// function takes the input instead; one paused in `command` carries on after it.
     pub fn input(&mut self, input: Input) -> Result<()> {
+        if self.lisp_input(input.clone()) {
+            return Ok(());
+        }
+        let r = self.input_to_command(input);
+        self.lisp_after_command_input();
+        r
+    }
+
+    fn input_to_command(&mut self, input: Input) -> Result<()> {
         if self.running.is_none() {
             if input == Input::Enter
                 && let Some(last) = self.last_command.clone()
@@ -1181,8 +1214,9 @@ impl Session {
             self.echo(m);
         }
         self.after_command(Some(&run.before), None, true);
-        if self.suspended.is_some() {
-            // A transparent command's changes belong to the undo step of the command it ran inside.
+        // A transparent command's changes belong to the command it ran inside, and a command a
+        // LISP routine ran belongs to the routine's single undo step.
+        if self.suspended.is_some() || self.lisp_groups_undo() {
             if let Ok(st) = self.state_mut()
                 && !Arc::ptr_eq(&run.before, &st.doc)
             {
@@ -1223,6 +1257,15 @@ impl Session {
     /// transparent command, cancels it and the command it interrupted.
     pub fn cancel(&mut self) {
         self.point_mods.clear();
+        // Esc stops a LISP routine waiting for input, and the command it paused in.
+        if self.lisp_waiting() {
+            if self.running.is_some() {
+                let _ = self.feed(Some(Input::Cancel));
+            }
+            self.echo("*Cancel*");
+            self.lisp_abort("Function cancelled");
+            return;
+        }
         if self.running.is_some() {
             if self.suspended.is_some() {
                 if let Some(nested) = self.running.take() {
@@ -1238,6 +1281,9 @@ impl Session {
     }
 
     pub fn current_prompt(&self) -> Option<Prompt> {
+        if let Some(p) = self.lisp_prompt() {
+            return Some(p);
+        }
         self.running.as_ref().map(|r| {
             let p = r.machine.prompt(self);
             match &self.select_mode {
@@ -1259,6 +1305,9 @@ impl Session {
 
     /// The text shown on the command line: the active prompt, or "Command:".
     pub fn prompt_text(&self) -> String {
+        if let Some(p) = self.lisp_prompt() {
+            return p.display();
+        }
         match &self.running {
             Some(r) if self.suspended.is_some() => format!(">>{} {}", r.id.to_ascii_uppercase(), r.machine.prompt(self).display()),
             Some(r) => format!("{} {}", r.id.to_ascii_uppercase(), r.machine.prompt(self).display()),
@@ -1268,9 +1317,13 @@ impl Session {
 
     /// Rubber-band preview entities for the cursor.
     pub fn preview(&self, cursor: Vec2) -> Vec<Entity> {
-        let Some(r) = &self.running else { return Vec::new() };
         let common = self.current_common();
-        r.machine.preview(self, cursor).into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }).collect()
+        let kinds = match (self.lisp_preview(cursor), &self.running) {
+            (Some(k), _) => k,
+            (None, Some(r)) => r.machine.preview(self, cursor),
+            (None, None) => Vec::new(),
+        };
+        kinds.into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }).collect()
     }
 
     /// The active command's preview as a transform of existing objects (see
@@ -1328,14 +1381,17 @@ impl Session {
                 return self.typed(rest);
             }
             first = false;
-            let (tok, more) = match rest.split_once([' ', '\t']) {
-                Some((tok, more)) => (tok, Some(more)),
-                None => (rest, None),
-            };
-            if self.running.is_some() {
+            let (tok, more) = next_token(rest);
+            if self.running.is_some() || self.lisp_prompt().is_some() {
                 self.typed(tok)?;
             } else if tok.trim().is_empty() {
                 self.input(Input::Enter)?;
+            } else if lisp_expression(tok) {
+                // `(expression)` or `!variable` at Command: evaluates LISP and shows the value.
+                let src = tok.trim().strip_prefix('!').unwrap_or(tok.trim()).to_string();
+                if let Err(e) = self.lisp_eval(&src, true, false, Vec::new()) {
+                    self.echo(e.to_string());
+                }
             } else {
                 self.start(tok)?;
             }
@@ -1361,11 +1417,40 @@ impl Session {
         if tt.starts_with('\'') {
             return self.start(tt);
         }
+        // A LISP expression typed at a command's prompt: its value is the answer.
+        // Not at a free-text prompt: there the text is the answer (CAL takes "(3+4)*2").
+        if lisp_expression(tt) && !prompt.accept.text && self.lisp_prompt().is_none() && !self.lisp_groups_undo() {
+            let src = tt.strip_prefix('!').unwrap_or(tt).to_string();
+            let v = match self.lisp_eval(&src, false, true, Vec::new()) {
+                Ok(Some(Ok(v))) => v,
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    self.echo(e.to_string());
+                    return Ok(());
+                }
+            };
+            return match v {
+                lisp::value::Value::Nil => Ok(()),
+                lisp::value::Value::Int(i) => self.typed(&i.to_string()),
+                lisp::value::Value::Real(r) => self.typed(&format!("{r}")),
+                lisp::value::Value::Str(s) => self.typed(&s),
+                other => match other.as_point() {
+                    Some(p) => self.input(Input::Point(Vec2::new(p[0], p[1]))),
+                    None => {
+                        self.echo(format!("Invalid input: {}", lisp::value::to_text(&other, true)));
+                        Ok(())
+                    }
+                },
+            };
+        }
         // At "Select objects" prompts the selection modes (Previous, Last, ALL) win over a command
         // keyword sharing the letter (HATCH's "picK internal point" against `P`).
         let selection_mode = prompt.accept.select && matches!(tt.to_ascii_lowercase().as_str(), "all" | "l" | "last" | "p" | "previous");
+        // A leading underscore asks for a keyword by its English name, whatever the interface
+        // language (`_M`, `_Yes`): scripts and LISP routines write them that way. (Snap
+        // overrides such as `_cen` were taken above.)
         if !selection_mode
-            && let Some(k) = prompt.match_keyword(tt)
+            && let Some(k) = prompt.match_keyword(tt).or_else(|| tt.strip_prefix('_').and_then(|r| prompt.match_keyword(r)))
             && !(prompt.accept.number && tt.parse::<f64>().is_ok())
         {
             return self.input(Input::Keyword(k));
@@ -1573,6 +1658,52 @@ impl Session {
             "selection": self.selection().iter().map(|h| h.hex()).collect::<Vec<_>>(),
             "settings": self.drafting_settings(),
         })
+    }
+}
+
+/// Typed text that is LISP: `(expression)` or `!variable`.
+fn lisp_expression(t: &str) -> bool {
+    let t = t.trim();
+    t.starts_with('(') || (t.starts_with('!') && t.len() > 1)
+}
+
+/// The next command-line input in `rest` and what follows it: up to a space or tab, except that
+/// a LISP expression runs to its closing parenthesis (spaces and quoted strings inside it).
+fn next_token(rest: &str) -> (&str, Option<&str>) {
+    let lead = rest.len() - rest.trim_start_matches('!').len();
+    if rest.get(lead..).is_some_and(|r| r.starts_with('(')) {
+        let (mut depth, mut in_str, mut escaped) = (0i32, false, false);
+        for (i, c) in rest.char_indices().skip(lead) {
+            if in_str {
+                match (escaped, c) {
+                    (true, _) => escaped = false,
+                    (false, '\\') => escaped = true,
+                    (false, '"') => in_str = false,
+                    _ => {}
+                }
+                continue;
+            }
+            match c {
+                '"' => in_str = true,
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let end = i + 1;
+                        // As after any input, a space ends it and a trailing one is Enter.
+                        let more = rest.get(end..).filter(|m| !m.is_empty()).map(|m| m.strip_prefix([' ', '\t']).unwrap_or(m));
+                        return (&rest[..end], more);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Unbalanced: all of it (the reader reports the error).
+        return (rest, None);
+    }
+    match rest.split_once([' ', '\t']) {
+        Some((tok, more)) => (tok, Some(more)),
+        None => (rest, None),
     }
 }
 

@@ -53,6 +53,10 @@ pub struct Prompt {
     /// [`Input::Text`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub picker: Option<Picker>,
+    /// Shown as written, without keywords, a default or a colon added: an AutoLISP `get…`
+    /// prompt (the routine writes all of it).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub raw: bool,
 }
 
 /// Parse `@distance<angle` (relative polar), returning `(distance, angle in radians)`.
@@ -122,6 +126,9 @@ impl Prompt {
     }
     /// "Specify next point or [Undo/Close] <default>:".
     pub fn display(&self) -> String {
+        if self.raw {
+            return self.message.trim_matches(['\n', '\r']).to_string();
+        }
         let mut s = self.message.clone();
         if !self.keywords.is_empty() {
             // A question offers its answers ("Fix any errors detected? [Yes/No]"); anything else
