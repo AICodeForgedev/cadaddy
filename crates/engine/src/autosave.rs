@@ -122,8 +122,9 @@ pub struct Autosaver {
     docs: HashMap<u64, Tracked>,
     /// Drawings whose autosave is being written right now.
     busy: HashSet<u64>,
+    /// Writes in progress; each tells whether its file was written.
     #[cfg(not(target_arch = "wasm32"))]
-    running: Vec<(u64, std::thread::JoinHandle<()>)>,
+    running: Vec<(u64, std::thread::JoinHandle<bool>)>,
     #[cfg(not(target_arch = "wasm32"))]
     start: std::time::Instant,
     #[cfg(not(target_arch = "wasm32"))]
@@ -341,14 +342,7 @@ mod native {
         /// Returns how long until the next autosave is due, so the host can wake up for it.
         pub fn tick(&mut self, s: &Session) -> Option<Duration> {
             let now = self.start.elapsed().as_secs_f64();
-            let busy = &mut self.busy;
-            self.running.retain(|(uid, h)| {
-                let running = !h.is_finished();
-                if !running {
-                    busy.remove(uid);
-                }
-                running
-            });
+            self.reap();
             let dir = savefilepath();
             let minutes = savetime();
             let jobs = self.plan(s, now, minutes, &dir);
@@ -371,6 +365,26 @@ mod native {
             writes
         }
 
+        /// Take in the writes that have finished ([`Autosaver::tick`] does this first). A drawing
+        /// whose write failed is no longer counted as autosaved: the next plan restarts its clock,
+        /// so it is tried again SAVETIME later even if it doesn't change.
+        pub fn reap(&mut self) {
+            let (done, running) = std::mem::take(&mut self.running).into_iter().partition::<Vec<_>, _>(|(_, h)| h.is_finished());
+            self.running = running;
+            for (uid, h) in done {
+                self.busy.remove(&uid);
+                if !h.join().unwrap_or(false) {
+                    self.unwritten(uid);
+                }
+            }
+        }
+
+        fn unwritten(&mut self, uid: u64) {
+            if let Some(t) = self.docs.get_mut(&uid) {
+                t.written = None;
+            }
+        }
+
         /// Carry out jobs from [`Autosaver::plan`]: writes on a background thread, deletes now.
         pub fn perform(&mut self, jobs: Vec<Job>) {
             for job in jobs {
@@ -382,15 +396,24 @@ mod native {
                             continue;
                         };
                         let spawned = std::thread::Builder::new().name("autosave".into()).spawn(move || match write_file(write, &doc, &path) {
-                            Ok(()) => log::info!("autosaved {path}"),
-                            Err(e) => log::warn!("autosave {path}: {e}"),
+                            Ok(()) => {
+                                log::info!("autosaved {path}");
+                                true
+                            }
+                            Err(e) => {
+                                log::warn!("autosave {path}: {e}");
+                                false
+                            }
                         });
                         match spawned {
                             Ok(h) => {
                                 self.busy.insert(uid);
                                 self.running.push((uid, h));
                             }
-                            Err(e) => log::warn!("autosave: {e}"),
+                            Err(e) => {
+                                log::warn!("autosave: {e}");
+                                self.unwritten(uid);
+                            }
                         }
                     }
                 }

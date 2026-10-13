@@ -212,6 +212,58 @@ fn autosave_files_are_written_in_the_background_and_removed_on_exit() {
 }
 
 #[test]
+fn a_failed_autosave_is_tried_again_without_another_change() {
+    hooks();
+    let root = temp_dir("retry");
+    // The folder can't be created while a file holds its name: the write fails (#717).
+    let out = root.join("out");
+    std::fs::write(&out, b"not a folder").unwrap();
+    let dir = out.to_string_lossy().to_string();
+    let mut s = Session::new();
+    draw(&mut s);
+    let mut a = Autosaver::new("31-e");
+    a.plan(&s, 0.0, 1, &dir);
+    let jobs = a.plan(&s, 60.0, 1, &dir);
+    let path = writes(&jobs).pop().unwrap();
+    a.perform(jobs);
+
+    // Once the write has failed, the unchanged drawing waits SAVETIME again.
+    let mut rearmed = false;
+    for _ in 0..500 {
+        a.reap();
+        assert!(writes(&a.plan(&s, 120.0, 1, &dir)).is_empty());
+        if a.next_due(120.0, 1) == Some(60.0) {
+            rearmed = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(rearmed, "a failed autosave must be tried again");
+
+    std::fs::remove_file(&out).unwrap();
+    let jobs = a.plan(&s, 180.0, 1, &dir);
+    assert_eq!(writes(&jobs), vec![path.clone()]);
+    a.perform(jobs);
+    for _ in 0..500 {
+        if std::path::Path::new(&path).exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(std::fs::read(&path).unwrap().ends_with(b"EOF\n"));
+
+    // A write that succeeded is not repeated.
+    for _ in 0..50 {
+        a.reap();
+        assert!(writes(&a.plan(&s, 1e4, 1, &dir)).is_empty());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(a.next_due(1e4, 1), None);
+    a.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn recover_as_copy_opens_an_unsaved_untitled_drawing() {
     hooks();
     let mut s = Session::new();
