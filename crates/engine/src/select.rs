@@ -362,7 +362,7 @@ pub enum SelectKind {
 }
 
 /// Most points a fence or polygon collects (typed input is hostile).
-const MAX_MODE_POINTS: usize = 10_000;
+pub(crate) const MAX_MODE_POINTS: usize = 10_000;
 
 /// A typed selection mode in progress and the points given so far.
 #[derive(Clone, Debug, PartialEq)]
