@@ -980,6 +980,41 @@ fn oversized_dwg_and_dxf_are_rejected_early() {
     assert_eq!(e.to_string(), "drawing too large: 60 DXF group codes, more than the 50 CADCraft reads");
 }
 
+/// Issue #800: one unreadable object record doesn't fail the whole DWG. The reader skips it, the
+/// rest opens, and the drawing's read notes say how many records were left out and of which
+/// types, so a partial read never passes for a complete one. A complete read has no notes.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn damaged_dwg_opens_partially_and_says_what_it_left_out() {
+    let mut dxf = String::from("0\nSECTION\n2\nENTITIES\n");
+    for i in 0..200 {
+        dxf += &format!("0\nLINE\n8\n0\n10\n{i}\n20\n0\n11\n{i}\n21\n10\n");
+    }
+    dxf += "0\nENDSEC\n0\nEOF\n";
+    let d = read(dxf.as_bytes(), "lines.dxf").unwrap();
+    let dwg = crate::write_with(&d, "lines.dwg", &crate::SaveOptions { version: Some(crate::Version::R2000), binary: false }).unwrap();
+    let whole = read(&dwg, "lines.dwg").unwrap();
+    assert_eq!((whole.entity_count(), whole.read_notes.len()), (200, 0));
+
+    // Damage a few bytes at a time across the objects area: every damaged copy that still reads
+    // as a DWG either reads whole or notes what it left out.
+    let mut partial = 0;
+    for at in (dwg.len() / 4..dwg.len() * 3 / 5).step_by(97) {
+        let mut b = dwg.clone();
+        b[at..at + 6].iter_mut().for_each(|x| *x ^= 0xA5);
+        let Ok(d) = read(&b, "damaged.dwg") else { continue };
+        if d.entity_count() < 200 {
+            assert_eq!(d.read_notes.len(), 1, "{} lines read, no note", d.entity_count());
+        }
+        if let [note] = d.read_notes.as_slice() {
+            assert!(note.starts_with("DWG: ") && note.contains(" couldn't be read and "), "{note}");
+            assert!(note.ends_with("saving over the original file would lose it") || note.ends_with("would lose them"), "{note}");
+            partial += 1;
+        }
+    }
+    assert!(partial > 0, "no damaged copy read partially");
+}
+
 #[test]
 fn dimension_associativity_roundtrips() {
     let mut d = Drawing::new_imperial();

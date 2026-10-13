@@ -61,12 +61,30 @@ mod native {
     /// guard: the input size before the DWG reader runs, the DXF size while it is written, so a
     /// runaway conversion stops at the limit instead of filling memory first.
     pub fn dwg_to_dxf_with(bytes: &[u8], limits: Limits) -> Result<Vec<u8>, String> {
+        dwg_to_dxf_noted(bytes, limits).map(|(dxf, _)| dxf)
+    }
+
+    /// [`dwg_to_dxf_with`], also returning notes on what the read left out. The reader runs in
+    /// failsafe mode: an object record it can't decode is skipped instead of failing the whole
+    /// file, and the notes say how many were skipped and of which types, so a partial read never
+    /// passes for a complete one.
+    pub fn dwg_to_dxf_noted(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), String> {
         if bytes.len() > limits.max_dwg_bytes {
             return Err(format!("DWG: the file is {}, larger than the {} CADCraft opens", mb(bytes.len() as u64), mb(limits.max_dwg_bytes as u64)));
         }
-        let mut doc = std::panic::catch_unwind(|| acadrust::DwgReader::from_stream(Cursor::new(bytes)).read())
-            .map_err(|_| "the DWG reader failed on this file".to_string())?
-            .map_err(|e| format!("DWG: {e}"))?;
+        let outcome = std::panic::catch_unwind(|| {
+            acadrust::DwgReader::from_stream_with_options(Cursor::new(bytes), acadrust::DwgReadOptions::failsafe()).read_with_stats()
+        })
+        .map_err(|_| "the DWG reader failed on this file".to_string())?
+        .map_err(|e| format!("DWG: {e}"))?;
+        // Failsafe skips records, not whole files: when the objects stream itself couldn't be
+        // read (a damaged header or section map, or not a DWG at all), nothing was read.
+        if !outcome.stats.record_stream_read {
+            let why = outcome.stats.diagnostics.first().map(|d| d.message.trim_start_matches("Failsafe: ").to_string());
+            return Err(format!("DWG: {}", why.unwrap_or_else(|| "the file's objects couldn't be read".to_string())));
+        }
+        let notes = read_notes(&outcome.stats);
+        let mut doc = outcome.document;
         table_merges(&mut doc);
         table_style_rows(&mut doc, false);
         let mut out = CappedWriter { buf: Vec::new(), limit: limits.max_dxf_bytes, exceeded: false };
@@ -81,7 +99,111 @@ mod native {
             ));
         }
         written.map_err(|e| format!("DWG→DXF: {e}"))?;
-        Ok(add_header_vars(out.buf, &doc.header))
+        Ok((add_header_vars(out.buf, &doc.header), notes))
+    }
+
+    /// Most record types named in the skipped-records note.
+    const NOTE_TYPES: usize = 6;
+
+    /// The note on object records a failsafe read skipped: how many, and how many of each type
+    /// (most first), or nothing when the read was complete.
+    pub(crate) fn read_notes(stats: &acadrust::ReadStats) -> Vec<String> {
+        let skipped = stats.skipped_source_records;
+        if skipped == 0 {
+            return Vec::new();
+        }
+        let label = |t: Option<&str>| match t.map(str::parse::<i16>) {
+            Some(Ok(code)) => type_name(code).map_or_else(|| format!("type {code}"), str::to_string),
+            Some(Err(_)) => t.unwrap_or_default().to_string(),
+            None => "unknown".to_string(),
+        };
+        let mut by_type: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for d in stats.diagnostics.iter().filter(|d| d.record_handle.is_some()) {
+            *by_type.entry(label(d.record_type.as_deref())).or_default() += 1;
+        }
+        let mut types: Vec<(String, usize)> = by_type.into_iter().collect();
+        types.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let mut list: Vec<String> = types.iter().take(NOTE_TYPES).map(|(t, n)| format!("{t} × {n}")).collect();
+        if types.len() > NOTE_TYPES {
+            list.push(format!("{} more types", types.len() - NOTE_TYPES));
+        }
+        let of = if stats.source_records > 0 { format!(" of {}", stats.source_records) } else { String::new() };
+        let records = if skipped == 1 && of.is_empty() { "object record" } else { "object records" };
+        let (were, them) = if skipped == 1 { ("was", "it") } else { ("were", "them") };
+        let which = if list.is_empty() { String::new() } else { format!(" ({})", list.join(", ")) };
+        vec![format!(
+            "DWG: {skipped}{of} {records} couldn't be read and {were} left out{which}; \
+             saving over the original file would lose {them}"
+        )]
+    }
+
+    /// The DXF name of a DWG object type code with a fixed number (classes, 500 and up, are
+    /// numbered per file).
+    fn type_name(code: i16) -> Option<&'static str> {
+        Some(match code {
+            1 => "TEXT",
+            2 => "ATTRIB",
+            3 => "ATTDEF",
+            4 => "BLOCK",
+            5 => "ENDBLK",
+            6 => "SEQEND",
+            7 => "INSERT",
+            8 => "MINSERT",
+            10..=14 => "VERTEX",
+            15 | 16 | 29 | 30 => "POLYLINE",
+            17 => "ARC",
+            18 => "CIRCLE",
+            19 => "LINE",
+            20..=26 => "DIMENSION",
+            27 => "POINT",
+            28 => "3DFACE",
+            31 => "SOLID",
+            32 => "TRACE",
+            33 => "SHAPE",
+            34 => "VIEWPORT",
+            35 => "ELLIPSE",
+            36 => "SPLINE",
+            37 => "REGION",
+            38 => "3DSOLID",
+            39 => "BODY",
+            40 => "RAY",
+            41 => "XLINE",
+            42 => "DICTIONARY",
+            43 => "OLEFRAME",
+            44 => "MTEXT",
+            45 => "LEADER",
+            46 => "TOLERANCE",
+            47 => "MLINE",
+            48 => "BLOCK_CONTROL",
+            49 => "BLOCK_RECORD",
+            50 => "LAYER_CONTROL",
+            51 => "LAYER",
+            52 => "STYLE_CONTROL",
+            53 => "STYLE",
+            56 => "LTYPE_CONTROL",
+            57 => "LTYPE",
+            60 => "VIEW_CONTROL",
+            61 => "VIEW",
+            62 => "UCS_CONTROL",
+            63 => "UCS",
+            64 => "VPORT_CONTROL",
+            65 => "VPORT",
+            66 => "APPID_CONTROL",
+            67 => "APPID",
+            68 => "DIMSTYLE_CONTROL",
+            69 => "DIMSTYLE",
+            70 => "VX_CONTROL",
+            71 => "VX_TABLE_RECORD",
+            72 => "GROUP",
+            73 => "MLINESTYLE",
+            74 => "OLE2FRAME",
+            77 => "LWPOLYLINE",
+            78 => "HATCH",
+            79 => "XRECORD",
+            80 => "ACDBPLACEHOLDER",
+            82 => "LAYOUT",
+            _ => return None,
+        })
     }
 
     /// Merged table cells onto the cells. acadrust 0.6.3 reads a 2010+ (AC1024+) DWG table's
@@ -141,6 +263,44 @@ mod native {
                 }
             }
         }
+    }
+
+    /// Leave out what acadrust can't write as this DWG version: other programs' custom entities
+    /// and objects without raw DWG data of that version. acadrust 0.6.4 refuses the whole file
+    /// for one of them (0.6.3 left them out); CADCraft already tells the user which entity types
+    /// a DWG doesn't keep (`not_saved`), so the rest of the drawing is written. Returns how many.
+    fn drop_unwritable(doc: &mut acadrust::CadDocument) -> usize {
+        let version = doc.version;
+        let unwritable: Vec<acadrust::Handle> = doc
+            .entities()
+            .filter_map(|e| match e {
+                acadrust::entities::EntityType::Unknown(u)
+                    if u.raw_dwg_data.is_none() || u.dwg_source_version.is_some_and(|v| v != version) || version == acadrust::DxfVersion::AC1009 =>
+                {
+                    Some(u.common.handle)
+                }
+                _ => None,
+            })
+            .collect();
+        for h in &unwritable {
+            doc.remove_entity(*h);
+        }
+        let objects: Vec<acadrust::Handle> = doc
+            .objects
+            .iter()
+            .filter_map(|(h, o)| match o {
+                acadrust::objects::ObjectType::Unknown { raw_dwg_data, raw_dwg_version, .. }
+                    if raw_dwg_data.is_none() || raw_dwg_version.is_some_and(|v| v != version) || version == acadrust::DxfVersion::AC1009 =>
+                {
+                    Some(*h)
+                }
+                _ => None,
+            })
+            .collect();
+        for h in &objects {
+            doc.objects.remove(h);
+        }
+        unwritable.len() + objects.len()
     }
 
     /// Header variables the DWG reader fills in but acadrust's DXF writer (0.6.3) leaves out of
@@ -239,6 +399,7 @@ mod native {
             None => {}
         }
         table_style_rows(&mut doc, true);
+        drop_unwritable(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
             .map_err(|e| format!("DWG write: {e}"))
@@ -246,7 +407,7 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{dwg_to_dxf, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as};
+pub use native::{dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as};
 
 /// The error for a DWG version CADCraft can't write.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -257,6 +418,10 @@ fn unsupported(version: &str) -> String {
 
 #[cfg(target_arch = "wasm32")]
 pub fn dwg_to_dxf(_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    Err("DWG files can't be opened in the web build yet; save as DXF".into())
+}
+#[cfg(target_arch = "wasm32")]
+pub fn dwg_to_dxf_noted(_bytes: &[u8], _limits: Limits) -> Result<(Vec<u8>, Vec<String>), String> {
     Err("DWG files can't be opened in the web build yet; save as DXF".into())
 }
 #[cfg(target_arch = "wasm32")]

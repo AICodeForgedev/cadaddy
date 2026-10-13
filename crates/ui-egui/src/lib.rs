@@ -456,6 +456,11 @@ impl CadApp {
                 if let Some(path) = doc.and_then(|d| d.path.clone()) {
                     self.remember_recent(path);
                 }
+                // A partial read (DWG records left out) shows in the status bar too, not only on
+                // the command line.
+                if let Some(w) = v.get("warnings").and_then(Value::as_array).and_then(|w| w.first()).and_then(Value::as_str) {
+                    self.set_status(w.to_string());
+                }
             }
         }
     }

@@ -1514,7 +1514,13 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     let committed = d.committed();
     let d: &Drawing = &committed;
     // Structural handles start above every entity handle.
-    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new(), layers: HashMap::new(), reactors: hatch_reactors(d) };
+    let mut w = W {
+        t: Vec::new(),
+        next: d.handseed.max(0x100).saturating_add(0x1000),
+        pstyles: HashMap::new(),
+        layers: HashMap::new(),
+        reactors: hatch_reactors(d),
+    };
     // Pre-allocate handles for block records.
     let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
     paper_layouts.sort_by_key(|l| l.tab_order);

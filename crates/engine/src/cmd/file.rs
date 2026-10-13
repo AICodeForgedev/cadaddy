@@ -138,7 +138,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("open", "Open...", run_open)
             .menu(&["File", "Open..."])
             .key("Cmd+O")
-            .params("{path} | {data: base64, name}")
+            .params("{path} | {data: base64, name} → {index, entities?, warnings: what reading left out}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("close", "Close", run_close).menu(&["File", "Close"]).key("Cmd+W").params("{index?}").noundo(),
@@ -263,7 +263,7 @@ pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
     let ReadFile { drawing, binary_dxf, name, path } = f;
     let i = add_read(s, drawing, binary_dxf, &name, path);
     super::blocks::xref::after_open(s, i);
-    Ok(json!({ "index": i, "entities": s.docs.get(i).map(|d| d.doc.entity_count()) }))
+    Ok(opened(s, i, true))
 }
 
 fn read_bytes(bytes: &[u8], name: &str, path: Option<String>) -> Result<ReadFile> {
@@ -276,10 +276,14 @@ fn read_bytes(bytes: &[u8], name: &str, path: Option<String>) -> Result<ReadFile
 }
 
 fn add_read(s: &mut Session, drawing: Drawing, binary_dxf: bool, name: &str, path: Option<String>) -> usize {
+    let notes = drawing.read_notes.clone();
     let i = s.open_drawing(drawing, &file_name(name), path);
     if let Some(st) = s.docs.get_mut(i) {
         // QSAVE keeps a binary DXF binary.
         st.binary_dxf = binary_dxf;
+    }
+    for note in notes {
+        s.echo(note);
     }
     i
 }
@@ -287,6 +291,17 @@ fn add_read(s: &mut Session, drawing: Drawing, binary_dxf: bool, name: &str, pat
 pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option<String>) -> Result<usize> {
     let ReadFile { drawing, binary_dxf, name, path } = read_bytes(bytes, name, path)?;
     Ok(add_read(s, drawing, binary_dxf, &name, path))
+}
+
+/// OPEN's reply: the drawing's index and what reading it left out.
+fn opened(s: &Session, i: usize, entities: bool) -> Value {
+    let d = s.docs.get(i).map(|st| &st.doc);
+    let warnings = d.map(|d| d.read_notes.clone()).unwrap_or_default();
+    if entities {
+        json!({ "index": i, "entities": d.map(|d| d.entity_count()), "warnings": warnings })
+    } else {
+        json!({ "index": i, "warnings": warnings })
+    }
 }
 
 fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
@@ -298,7 +313,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
             let bytes = std::fs::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
             let i = open_bytes(s, &bytes, path, Some(path.to_string()))?;
             super::blocks::xref::after_open(s, i);
-            return Ok(json!({ "index": i, "entities": s.docs.get(i).map(|d| d.doc.entity_count()) }));
+            return Ok(opened(s, i, true));
         }
         #[cfg(target_arch = "wasm32")]
         return Err(bad("open", "paths are not available on the web; pass `data`"));
@@ -308,7 +323,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").unwrap_or("Drawing.dxf");
     let i = open_bytes(s, &bytes, name, None)?;
     super::blocks::xref::after_open(s, i);
-    Ok(json!({ "index": i }))
+    Ok(opened(s, i, false))
 }
 
 fn run_close(s: &mut Session, p: &Value) -> Result<Value> {

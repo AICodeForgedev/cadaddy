@@ -523,8 +523,11 @@ fn acad_table(tags: &[Tag]) -> Table {
         let mut text: String = cell.iter().filter(|x| x.code == 2 || x.code == 3).map(Tag::str).collect();
         text.push_str(&c.s(1).unwrap_or_default());
         let span = |code: i32| c.i(code).and_then(|v| u32::try_from(v).ok());
-        let merged = match (c.i(173).unwrap_or(0) != 0, span(176), span(175)) {
-            (true, Some(rs), Some(cs)) if rs >= 1 && cs >= 1 && (rs, cs) != (1, 1) => Some((rs, cs)),
+        // A merge starts at the cell whose span (rows 176, columns 175) is more than one cell.
+        // Its own merged flag (173) varies by writer: CADCraft sets it, while AutoCAD-style
+        // writers (acadrust 0.6.4) set it only on the cells the merge covers, whose span is 0.
+        let merged = match (span(176), span(175)) {
+            (Some(rs), Some(cs)) if rs >= 1 && cs >= 1 && (rs, cs) != (1, 1) => Some((rs, cs)),
             _ => None,
         };
         // The cell's own text height: 140 outside the value block (301 … 304), where it is a number.

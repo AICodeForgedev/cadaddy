@@ -117,6 +117,9 @@ pub struct Drawing {
     /// Objects hidden for this session by ISOLATEOBJECTS / HIDEOBJECTS. Never written to a file:
     /// a drawing opens with everything shown again.
     pub hidden_objects: BTreeSet<Handle>,
+    /// What reading the file left out (a DWG's object records the reader couldn't decode), told
+    /// to the user when the drawing opens. Never written to a file.
+    pub read_notes: Vec<String>,
     /// The in-place block reference edit in progress (REFEDIT). Never written to a file; files are
     /// written from [`Drawing::committed`].
     pub refedit: Option<RefEdit>,
@@ -173,6 +176,7 @@ impl Drawing {
             scales: imperial_scales(),
             handseed: 0x100,
             hidden_objects: BTreeSet::new(),
+            read_notes: Vec::new(),
             refedit: None,
         }
     }

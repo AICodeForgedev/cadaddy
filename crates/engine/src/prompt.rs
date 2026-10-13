@@ -58,7 +58,7 @@ pub struct Prompt {
 /// Parse `@distance<angle` (relative polar), returning `(distance, angle in radians)`.
 /// Returns `None` for any other form.
 pub fn parse_polar_text(text: &str, angles: &crate::units::AngleSettings) -> Option<(f64, f64)> {
-    let body = text.trim().strip_prefix('@')?;   // relative form only
+    let body = text.trim().strip_prefix('@')?; // relative form only
     let (d, a) = body.split_once('<')?;
     let dist = d.trim().parse::<f64>().ok()?;
     let angle = angles.amount(a.trim())?;
