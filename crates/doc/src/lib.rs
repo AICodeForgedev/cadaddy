@@ -123,6 +123,9 @@ pub struct Drawing {
     /// The in-place block reference edit in progress (REFEDIT). Never written to a file; files are
     /// written from [`Drawing::committed`].
     pub refedit: Option<RefEdit>,
+    /// Records of the file this drawing was read from that the reader could not place (a damaged
+    /// file), counted by the section they came from. Never written to a file.
+    pub skipped_records: BTreeMap<String, usize>,
 }
 
 impl Default for Drawing {
@@ -178,6 +181,7 @@ impl Drawing {
             hidden_objects: BTreeSet::new(),
             read_notes: Vec::new(),
             refedit: None,
+            skipped_records: BTreeMap::new(),
         }
     }
 

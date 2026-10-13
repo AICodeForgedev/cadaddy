@@ -267,8 +267,22 @@ fn convert(args: &[String]) -> Result<(), String> {
     check_framed_output(framing, Some(o))?;
     let mut s = Session::empty();
     open(&mut s, i)?;
+    if let Some(m) = skipped_message(s.doc().map_err(|e| e.to_string())?, i) {
+        eprintln!("{m}");
+    }
     let window = export_window(&s, framing, None)?;
     export_framed(&s, o, window)
+}
+
+/// The warning for the records of `path` the reader could not place, or `None` when there are none.
+fn skipped_message(d: &cadcraft_engine::doc::Drawing, path: &str) -> Option<String> {
+    let n = d.skipped_records.values().fold(0usize, |a, n| a.saturating_add(*n));
+    if n == 0 {
+        return None;
+    }
+    let list: Vec<String> = d.skipped_records.iter().map(|(section, n)| format!("{section}: {n}")).collect();
+    let records = if n == 1 { "record" } else { "records" };
+    Some(format!("{path}: {n} {records} could not be read and are left out ({})", list.join(", ")))
 }
 
 fn run(args: &[String]) -> Result<(), String> {

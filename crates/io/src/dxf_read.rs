@@ -1054,8 +1054,9 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
     }
 }
 
-/// Parse a run of entity records (ENTITIES section or a block's body) into entities.
-fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> Vec<(Option<String>, bool, Entity)> {
+/// Parse a run of entity records (ENTITIES section or a block's body) into entities. Records that
+/// can't be placed are counted in `skipped`.
+fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx, skipped: &mut usize) -> Vec<(Option<String>, bool, Entity)> {
     let mut out = Vec::new();
     let mut i = 0;
     while let Some((kind, tags)) = recs.get(i) {
@@ -1103,7 +1104,10 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
                     let mut fs = if flags & 64 != 0 { polyface_faces(&verts, &faces) } else { mesh_faces(&verts, &t, flags) }
                         .into_iter()
                         .map(EntityKind::Face3d);
-                    let Some(first) = fs.next() else { continue };
+                    let Some(first) = fs.next() else {
+                        *skipped = skipped.saturating_add(1);
+                        continue;
+                    };
                     extra.extend(fs);
                     first
                 } else if flags & 8 != 0 {
@@ -1152,7 +1156,12 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
                     }
                 }
             }
-            "SEQEND" | "VERTEX" | "ATTRIB" => continue,
+            // A VERTEX or ATTRIB with no POLYLINE or INSERT before it; a stray SEQEND holds nothing.
+            "VERTEX" | "ATTRIB" => {
+                *skipped = skipped.saturating_add(1);
+                continue;
+            }
+            "SEQEND" => continue,
             _ => {}
         }
         if let Some((c, mut k)) = kindent {
@@ -1168,6 +1177,10 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
                 extra.into_iter().map(|f| (owner.clone(), paper, Entity { handle: d.new_handle(), common: c.clone(), kind: f })).collect();
             out.push((owner, paper, Entity { handle: h, common: c, kind: k }));
             out.extend(more);
+        } else if kind == "HATCH" {
+            // Without boundary data. The other records `entity` returns nothing for are read
+            // elsewhere (the writer's paper viewport, the loops of a region).
+            *skipped = skipped.saturating_add(1);
         }
     }
     // Assign fresh handles to duplicates (hostile files).
@@ -1606,6 +1619,8 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
             d.bump_handseed(h);
         }
     }
+    let mut skipped = std::collections::BTreeMap::new();
+    count_skipped(&mut skipped, "(no section)", outside_sections(&tags));
     for s in &secs {
         match s.name.as_str() {
             "HEADER" => header(&s.tags, &mut d),
@@ -1618,6 +1633,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
                         rx.xref_paths.insert(t.s(2).unwrap_or_default().to_ascii_uppercase(), t.s(1).unwrap_or_default());
                     }
                 }
+                let mut n = 0;
                 let mut i = 0;
                 while let Some((k, tg)) = recs.get(i) {
                     if k == "BLOCK" {
@@ -1632,16 +1648,25 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
                             j += 1;
                         }
                         let body = recs.get(i + 1..j).unwrap_or(&[]);
-                        let ents = parse_entities(body, &mut d, &mut rx);
+                        let ents = parse_entities(body, &mut d, &mut rx, &mut n);
                         blocks.push((name, base, description, ents, xref));
                         i = j + 1;
                     } else {
+                        // A record outside any BLOCK ... ENDBLK pair.
+                        if k != "ENDBLK" {
+                            n = n.saturating_add(1);
+                        }
                         i += 1;
                     }
                 }
+                count_skipped(&mut skipped, "BLOCKS", n);
             }
             // A damaged file may split its entities over several ENTITIES sections (#865).
-            "ENTITIES" => entities.extend(parse_entities(&records(&s.tags), &mut d, &mut rx)),
+            "ENTITIES" => {
+                let mut n = 0;
+                entities.extend(parse_entities(&records(&s.tags), &mut d, &mut rx, &mut n));
+                count_skipped(&mut skipped, "ENTITIES", n);
+            }
             "OBJECTS" => {
                 for (k, tg) in records(&s.tags) {
                     objs.add(&k, &tg);
@@ -1753,7 +1778,32 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         d.layers.insert(0, Layer::default());
     }
     crate::dxf_raw::read(&secs, &mut d);
+    d.skipped_records = skipped;
     Ok(d)
+}
+
+fn count_skipped(skipped: &mut std::collections::BTreeMap<String, usize>, section: &str, n: usize) {
+    if n > 0 {
+        let c = skipped.entry(section.to_string()).or_insert(0);
+        *c = c.saturating_add(n);
+    }
+}
+
+/// Records between sections, which [`sections`] passes over: everything after an ENDSEC up to the
+/// next SECTION. Stray ENDSECs and the EOF hold nothing and don't count.
+fn outside_sections(tags: &[Tag]) -> usize {
+    let mut inside = false;
+    let mut n = 0usize;
+    for t in tags.iter().filter(|t| t.code == 0) {
+        match t.str().as_str() {
+            "SECTION" => inside = true,
+            "ENDSEC" => inside = false,
+            "EOF" => {}
+            _ if !inside => n = n.saturating_add(1),
+            _ => {}
+        }
+    }
+    n
 }
 
 /// A SORTENTSTABLE (DXF Reference, OBJECTS section): after its AcDbSortentsTable marker, the
