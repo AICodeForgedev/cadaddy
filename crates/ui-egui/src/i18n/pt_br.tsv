@@ -27,22 +27,34 @@
 	<> Not Equal	<> Diferente de
 	= Equals	= Igual a
 	> Greater than	> Maior que
+	A drawing opened from a file keeps that file's format.	Um desenho aberto de um arquivo mantém o formato desse arquivo.
+	A variable name starts with a letter and has only letters, digits and _	Um nome de variável começa com uma letra e contém apenas letras, dígitos e _
 	About	Sobre
 	About CADCraft	Sobre o CADCraft
 	Absolute	Absoluto
+	Add Current Scale	Adicionar escala atual
 	Add Leader	Adicionar linha de chamada
+	Add Vertex	Adicionar vértice
+	Add/Delete Scales...	Adicionar/excluir escalas...
+	Additional angles	Ângulos adicionais
 	Align	Alinhar
 	Align Text	Alinhar texto
 	Aligned	Alinhada
 	All	Tudo
+	All Annotation Objects	Todos os objetos de anotação
+	All Scales	Todas as escalas
 	All Used Layers	Todas as camadas em uso
 	All files	Todos os arquivos
+	An array that would create more objects than this is refused.	Uma matriz que criaria mais objetos do que isso é recusada.
 	Angle	Ângulo
 	Angular	Angular
 	Annotation Visibility	Visibilidade de anotações
 	Annotation scale	Escala de anotação
+	Annotative Object Scale	Escala do objeto anotativo
+	Annotative Update	Atualização anotativa
 	Apparent Intersection	Interseção aparente
 	Append to current selection set	Acrescentar ao conjunto de seleção atual
+	Apply	Aplicar
 	Apply to:	Aplicar a:
 	Apply true color	Aplicar cor verdadeira
 	Arc	Arco
@@ -51,6 +63,7 @@
 	Arrange Panel	Organizar painel
 	Array	Matriz
 	Attach	Anexar
+	Attach DWG...	Anexar DWG...
 	Attribute	Atributo
 	Attribute Definition	Definição de atributo
 	Attribute Display	Exibição de atributos
@@ -58,12 +71,18 @@
 	Auto (system language)	Automático (idioma do sistema)
 	Auto Constrain	Restringir automaticamente
 	AutoConstrain	Restringir automaticamente
+	Automatic save every	Salvamento automático a cada
+	Automatic save file location	Local dos arquivos de salvamento automático
 	Axis, End	Eixo, extremidade
+	B	N
 	Base	Base
 	Baseline	Linha de base
 	Batch Publish	Publicação em lote
+	Batch Publish...	Publicação em lote...
 	Binary assets added	Recursos binários adicionados
 	Binary assets removed	Recursos binários removidos
+	Bind	Vincular
+	Bind...	Vincular...
 	Blend	Mesclar
 	Block	Bloco
 	Block Attribute Manager...	Gerenciador de atributos de bloco...
@@ -79,11 +98,16 @@
 	Box	Caixa
 	Break	Quebrar
 	Break At Point	Quebrar no ponto
+	Bring Above Objects	Trazer acima dos objetos
+	Bring Annotations to Front	Trazer anotações para frente
 	Bring to Front	Trazer para a frente
+	Bulleted list	Lista com marcas
 	ByBlock	PorBloco
 	ByColor	PorCor
 	ByLayer	PorCamada
+	CADCraft	CADCraft
 	CADCraft Help	Ajuda do CADCraft
+	CADCraft keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	O CADCraft mantém estas preferências, modos de referência a objetos e alternâncias de desenho na sua conta de usuário e as restaura ao iniciar.
 	Cancel	Cancelar
 	Cartesian (x, y)	Cartesiano (x, y)
 	Center	Centro
@@ -100,12 +124,21 @@
 	Chamfer	Chanfro
 	Change Space	Alterar espaço
 	Change to Current Layer	Mover para a camada atual
+	Changed: {n}	Alterados: {n}
+	Changes apply at once and are kept for next time.	As alterações são aplicadas de imediato e mantidas para a próxima vez.
 	Circle	Círculo
 	Circumference	Circunferência
 	Clear	Limpar
+	Clear Command History	Limpar histórico de comandos
+	Clear History	Limpar histórico
+	Clip	Recortar
+	Clip Viewport	Recortar janela gráfica
 	Clipboard	Área de transferência
 	Close	Fechar
 	Close All	Fechar tudo
+	Close All Other Drawings	Fechar todos os outros desenhos
+	Close Array Editing	Fechar edição de matriz
+	Close Comparison	Fechar comparação
 	Closed	Fechada
 	Coincident	Coincidente
 	Collapse Palettes	Recolher paletas
@@ -116,12 +149,15 @@
 	Color 9	Cor 9
 	Color Index	Índice de cor
 	Color...	Cor...
+	Command Aliases	Sinônimos de comandos
 	Command History	Histórico de comandos
 	Command Line	Linha de comando
 	Command Line History Lines	Linhas do histórico da linha de comando
 	Command Reference	Referência de comandos
+	Command line history	Histórico da linha de comando
 	Commits	Commits
 	Company	Empresa
+	Compare Drawings...	Comparar desenhos...
 	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	Projeto e desenho assistidos por computador: um aplicativo CAD de código aberto, desenvolvido em clean-room e escrito em Rust puro.
 	Concentric	Concêntrico
 	Cone	Cone
@@ -132,15 +168,25 @@
 	Continue	Continuar
 	Contributors	Colaboradores
 	Control Vertices	Vértices de controle
+	Convert	Converter
+	Convert to Arc	Converter em arco
+	Convert to Line	Converter em linha
 	Copy	Copiar
+	Copy Full File Path	Copiar caminho completo do arquivo
+	Copy History	Copiar histórico
 	Copy Layout	Copiar layout
 	Copy Nested Objects	Copiar objetos aninhados
 	Copy Selection	Copiar seleção
+	Copy as JSON	Copiar como JSON
 	Copy with Base Point	Copiar com ponto base
 	Count	Contagem
+	Count List	Lista de contagem
+	Count Table	Tabela de contagem
 	Create Block	Criar bloco
 	Creates a user parameter	Cria um parâmetro de usuário
+	Crosshair size	Tamanho da mira
 	Ctrl+Enter to finish	Ctrl+Enter para concluir
+	Current Scale Only	Somente escala atual
 	Current layer	Camada atual
 	Current selection	Seleção atual
 	Current: {color}	Atual: {color}
@@ -148,17 +194,25 @@
 	Cyan	Ciano
 	Cylinder	Cilindro
 	DWG	DWG
+	DWG Reference...	Referência DWG...
 	DXF	DXF
 	Dark	Escuro
+	Data Extraction...	Extração de dados...
+	Data Link...	Vínculo de dados...
 	Default	Padrão
 	Default Save Format	Formato de salvamento padrão
+	Default Save Version	Versão de salvamento padrão
+	Default save version	Versão de salvamento padrão
 	Define Attributes	Definir atributos
 	Define Attributes...	Definir atributos...
 	Defined width	Largura definida
 	Degree	Grau
+	Degrees of Freedom	Graus de liberdade
+	Degrees of freedom: {n}	Graus de liberdade: {n}
 	Delete	Excluir
 	Delete Column	Excluir coluna
 	Delete Constraints	Excluir restrições
+	Delete Current Scale	Excluir escala atual
 	Delete Dimension Style	Excluir estilo de cota
 	Delete Duplicate Objects	Excluir objetos duplicados
 	Delete Layer	Excluir camada
@@ -170,9 +224,13 @@
 	Delta Y	Delta Y
 	Description	Descrição
 	Deselect All	Desmarcar tudo
+	Detach	Desanexar
 	Diameter	Diâmetro
 	Dim style	Estilo de cota
 	Dimension	Cota
+	Dimension Break	Quebra de cota
+	Dimension Edit	Editar cota
+	Dimension Objects Only	Somente objetos de cota
 	Dimension Space	Espaçar cotas
 	Dimension Style Override	Substituição de estilo de cota
 	Dimension Style...	Estilo de cota...
@@ -182,6 +240,7 @@
 	Dimensional Constraint Parameters	Parâmetros de restrição dimensional
 	Dimensional Constraints	Restrições dimensionais
 	Disassociate Dimensions	Desassociar cotas
+	Display	Exibição
 	Display name	Nome de exibição
 	Distance	Distância
 	Divide	Dividir
@@ -197,23 +256,32 @@
 	Drawing (DWG)	Desenho (DWG)
 	Drawing (DXF)	Desenho (DXF)
 	Drawing Limits	Limites do desenho
+	Drawing Recovery Manager...	Gerenciador de recuperação de desenhos...
+	Drawing Template (DWT)	Modelo de desenho (DWT)
 	Drawing Utilities	Utilitários de desenho
 	Drawings (DWG, DXF)	Desenhos (DWG, DXF)
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	Desenhos ainda sem arquivo são salvos na versão padrão. 0 minutos desativa o salvamento automático.
+	Dynamic	Dinâmico
 	Dynamic Dimensions	Cotas dinâmicas
 	Dynamic Input	Entrada dinâmica
 	Dynamic Input (F12)	Entrada dinâmica (F12)
 	E	L
 	Edit	Editar
+	Edit Array	Editar matriz
+	Edit Attributes...	Editar atributos...
+	Edit Table Cell	Editar célula da tabela
 	Edit Text...	Editar texto...
 	Elevation	Elevação
 	Ellipse	Elipse
 	Elliptical Arc	Arco elíptico
 	Enable Dynamic Input (F12)	Ativar entrada dinâmica (F12)
+	End Object Isolation	Encerrar isolamento de objetos
 	End Width	Largura final
 	End X	X final
 	End Y	Y final
 	End angle	Ângulo final
 	Endpoint	Extremidade
+	Enter	Enter
 	Enter Top, Zero or Bottom.	Digite Superior, Zero ou Inferior.
 	Enter a fit data option	Digite uma opção de dados de ajuste
 	Enter a pattern name	Digite o nome de um padrão
@@ -260,14 +328,19 @@
 	Entire drawing	Desenho inteiro
 	Equal	Igual
 	Erase	Apagar
+	Evaluate	Avaliar
 	Exclude from new selection set	Excluir do novo conjunto de seleção
 	Explode	Decompor
 	Export	Exportar
+	Export Table	Exportar tabela
 	Export to PDF...	Exportar para PDF...
+	Export...	Exportar...
 	Expression	Expressão
 	Extend	Estender
 	Extension	Extensão
 	Extents	Extensão total
+	External Reference	Referência externa
+	External References	Referências externas
 	Extrude	Extrudar
 	File	Arquivo
 	File Tab	Guia de arquivo
@@ -290,6 +363,7 @@
 	Freeze/Thaw in all viewports	Congelar/descongelar em todos os viewports
 	Freeze/Thaw in the current viewport	Congelar/descongelar no viewport atual
 	From	De
+	From Template...	A partir de modelo...
 	General	Geral
 	Geometric Center	Centro geométrico
 	Geometric Constraint	Restrição geométrica
@@ -297,6 +371,7 @@
 	Geometry	Geometria
 	Get Variable	Obter variável
 	Get View	Obter vista
+	Get from the Drawing	Obter do desenho
 	Global	Global
 	Global width	Largura global
 	Grab bag	Lista
@@ -306,15 +381,22 @@
 	Grid (F7)	Grade (F7)
 	Grid Display	Exibição da grade
 	Grid On (F7)	Grade ativada (F7)
+	Grid snap	Forçar cursor à grade
 	Grid spacing	Espaçamento da grade
+	Grip Edit	Editar com pinça
 	Grip Mirror	Espelhar por pegador
+	Grip Option	Opção de pinça
 	Grip Rotate	Girar por pegador
 	Grip Scale	Escalar por pegador
 	Grip Stretch	Esticar por pegador
+	Grip size	Tamanho da pinça
 	Group	Grupo
 	Group Edit	Editar grupo
+	Group Options	Opções de grupo
+	Group Selection	Seleção de grupo
 	Hatch	Hachura
 	Hatch Edit	Editar hachura
+	Hatch Patterns	Padrões de hachura
 	Hatch...	Hachura...
 	Height	Altura
 	Height: {height}	Altura: {height}
@@ -324,24 +406,32 @@
 	Hide All Constraint Bars	Ocultar todas as barras de restrição
 	Hide All Dynamic Dimensions	Ocultar todas as cotas dinâmicas
 	Hide Layer List	Ocultar lista de camadas
+	Hide Objects	Ocultar objetos
+	Hide Palette	Ocultar paleta
 	Hide Palettes	Ocultar paletas
+	History	Histórico
+	Hold Shift to add to the selection	Mantenha Shift pressionado para adicionar à seleção
 	Home	Vista inicial
 	Horizontal	Horizontal
 	HorizontalDistance	DistânciaHorizontal
 	How to apply:	Como aplicar:
 	ID Point	Coordenadas do ponto
 	Import	Importar
+	Import...	Importar...
 	In	Aproximar
 	In-window Menu Bar	Barra de menus na janela
 	Include in new selection set	Incluir no novo conjunto de seleção
 	Increment angle	Ângulo de incremento
 	Index Color	Cor indexada
 	Index color: {index}	Cor indexada: {index}
+	Infer Constraints	Inferir restrições
 	Inquiry	Consulta
 	Insert	Inserir
 	Insert Block	Inserir bloco
 	Insert Column	Inserir coluna
 	Insert Row	Inserir linha
+	Insert Table Formula	Inserir fórmula de tabela
+	Insert tab	Inserir tabulação
 	Insert this block	Inserir este bloco
 	Insertion	Inserção
 	Insertion X	Inserção X
@@ -349,17 +439,27 @@
 	Insertion Z	Inserção Z
 	Inspect Constraints	Inspecionar restrições
 	Inspect Drawing	Inspecionar desenho
+	Inspection	Inspeção
 	Interface Language	Idioma da interface
 	Interface Theme	Tema da interface
+	Interface language	Idioma da interface
+	Interface theme	Tema da interface
 	Intersect	Interseção
 	Intersection	Interseção
 	Isolate	Isolar
 	Isolate Layer	Isolar camada
+	Isolate Objects	Isolar objetos
 	Isometric Drafting	Desenho isométrico
+	Isometric Plane	Plano isométrico
+	Isometric snap	Forçar cursor isométrico
+	Jogged	Com desvio
+	Jogged Linear	Linear com desvio
 	Join	Unir
 	Join the ArtCraft Discord…	Entrar no Discord do ArtCraft…
 	Join us on Discord	Junte-se a nós no Discord
+	Keep the system cursor visible over the drawing area	Manter o cursor do sistema visível sobre a área de desenho
 	Language	Idioma
+	Largest array	Matriz maior
 	Last	Último
 	Last commit	Último commit
 	Layer	Camada
@@ -380,7 +480,9 @@
 	Layers displayed: {shown} of {total}.   Current layer: {layer}	Camadas exibidas: {shown} de {total}.   Camada atual: {layer}
 	Layout	Layout
 	Layout list	Lista de layouts
+	Layout paper	Papel da apresentação
 	Leader	Linha de chamada
+	Leaders Only	Somente linhas de chamada
 	Left	Esquerda
 	Length	Comprimento
 	Length X	Comprimento X
@@ -393,9 +495,12 @@
 	Lines +/−	Linhas +/−
 	Lines added	Linhas adicionadas
 	Lines deleted	Linhas excluídas
+	Lines of Command History	Linhas do histórico de comandos
 	Linetype	Tipo de linha
 	Linetype Scale	Escala do tipo de linha
 	Linetype scale	Escala do tipo de linha
+	Loaded	Carregada
+	Lock viewport	Bloquear janela gráfica
 	Ltscale	Escala do tipo de linha
 	Linetype...	Tipo de linha...
 	Lineweight	Espessura de linha
@@ -422,6 +527,8 @@
 	Major line every	Linha principal a cada
 	Make Current	Tornar atual
 	Make Object's Layer Current	Tornar atual a camada do objeto
+	Make it a block of this drawing, keeping its layer names	Torná-lo um bloco deste desenho, mantendo os nomes das camadas
+	Make it a block of this drawing; its layers become NAME$0$LAYER	Torná-lo um bloco deste desenho; suas camadas passam a NAME$0$LAYER
 	Make...	Criar...
 	Match Layer	Corresponder camada
 	Match Properties	Copiar propriedades
@@ -435,16 +542,20 @@
 	Mirror	Espelhar
 	Model	Modelo
 	Model Space (in viewport)	Espaço do modelo (no viewport)
+	Model background	Plano de fundo do modelo
 	Modeling	Modelagem
 	Models	Modelos
 	Modify	Modificar
+	More toolbar commands	Mais comandos da barra de ferramentas
 	Move	Mover
 	Multileader	Linha de chamada múltipla
 	Multileader Style...	Estilo de linha de chamada múltipla...
 	Multileader style	Estilo de linha de chamada múltipla
 	Multiline	Multilinha
+	Multiline Style...	Estilo de linha múltipla...
 	Multiline Text	Texto multilinha
 	Multiline Text...	Texto multilinha...
+	Multiline...	Linha múltipla...
 	Multiple	Múltiplo
 	Multiple Point	Ponto múltiplo
 	My	Minhas
@@ -452,6 +563,7 @@
 	N	N
 	Name	Nome
 	Name (A–Z)	Nome (A–Z)
+	Named Views...	Vistas nomeadas...
 	Nearest	Mais próximo
 	New	Novo
 	New (metric)	Novo (métrico)
@@ -462,18 +574,24 @@
 	New Layout	Novo layout
 	New VP Freeze	Congelar em novo VP
 	New Viewports...	Novos viewports...
+	New from Template...	Novo a partir de modelo...
 	New layout	Novo layout
 	New state name	Nome do novo estado
+	Next Change	Próxima alteração
 	No	Não
 	No blocks defined in this drawing.	Nenhum bloco definido neste desenho.
 	No contributor data was built into this copy.	Nenhum dado de colaboradores foi incluído nesta cópia.
+	No external references are attached.	Nenhuma referência externa está anexada.
 	No model credits were built into this copy.	Nenhum crédito de modelos foi incluído nesta cópia.
 	No saved layer states	Nenhum estado de camada salvo
 	No selection	Nenhuma seleção
 	Node	Nó
 	None	Nenhum
+	Not Found	Não encontrado
 	Not available	Não disponível
 	Not available yet	Ainda não disponível
+	Not loaded	Não carregada
+	Numbered list	Lista numerada
 	OK	OK
 	Object	Objeto
 	Object Snap	Snap a objetos
@@ -481,17 +599,28 @@
 	Object Snap On (F3)	Snap a objetos ativado (F3)
 	Object Snap Tracking	Rastreamento de snap a objetos
 	Object Snap Tracking (F11)	Rastreamento de snap a objetos (F11)
+	Object Snap Tracking Settings	Configurações de rastreamento de referência a objetos
+	Object snap aperture	Abertura de referência a objetos
+	Object snap marker size	Tamanho do marcador de referência a objetos
 	Object type:	Tipo de objeto:
+	Oblique	Oblíqua
 	Off	Desativado
 	Offset	Deslocar
 	On	Ativado
 	On/Off	Ativar/desativar
 	One of the Crafting Apps by the ArtCraft team and community.	Um dos Crafting Apps da equipe e da comunidade ArtCraft.
+	Only in this drawing: {n}	Somente neste desenho: {n}
+	Only in {name}: {n}	Somente em {name}: {n}
+	Open	Abrir
 	Open (⌘O)	Abrir (⌘O)
 	Open Sample Drawing	Abrir desenho de exemplo
+	Open Xref	Abrir referência externa
+	Open and Save	Abrir e salvar
 	Open sample drawing	Abrir desenho de exemplo
 	Open...	Abrir...
 	Operator:	Operador:
+	Options	Opções
+	Options...	Opções...
 	Orbit	Órbita
 	Ordinate	Ordenada
 	Ortho (F8)	Orto (F8)
@@ -499,9 +628,15 @@
 	Ortho Mode (F8)	Modo orto (F8)
 	Osnap Settings...	Configurações de snap a objetos...
 	Out	Afastar
+	Over-constrained	Sobre-restrito
+	Overlay	Sobreposição
 	Override	Substituir
 	PAPER	PAPEL
+	Paste to Command Line	Colar na linha de comando
 	Percent	Porcentagem
+	Pickbox size	Tamanho da caixa de seleção
+	Plotter Manager	Gerenciador de plotagem
+	Plotter Manager...	Gerenciador de plotagem...
 	Polar (distance < angle)	Polar (distância < ângulo)
 	PRs	PRs
 	Page Setup Manager	Gerenciador de configurações de página
@@ -535,7 +670,74 @@
 	New CTB	Novo CTB
 	New STB	Novo STB
 	New style	Novo estilo
+	Polar angle measurement	Medição de ângulo polar
+	Polar distance	Distância polar
+	PolarSnap	Forçar cursor polar
+	Polygonal Viewport	Janela gráfica poligonal
+	Polyline Edit	Editar polilinha
+	Previous Change	Alteração anterior
+	Profiles	Perfis
+	QuickCalc Pick	Designar para cálculo rápido
+	Recalculate Table Formulas	Recalcular fórmulas da tabela
+	Recent Commands	Comandos recentes
+	Recent Input	Entradas recentes
+	Rectangular snap	Forçar cursor retangular
+	Reference Manager	Gerenciador de referências
+	Reference Name	Nome da referência
+	References: {n}	Referências: {n}
+	Reinitialize	Reinicializar
+	Relative to last segment	Relativo ao último segmento
+	Reload	Recarregar
+	Reload All	Recarregar tudo
+	Remove Vertex	Remover vértice
 	Reset Panel Layout	Redefinir layout dos painéis
+	Reset keeps the interface language.	A redefinição mantém o idioma da interface.
+	Reset to Defaults	Redefinir para os padrões
+	SVG drawings (SVG, SVGZ)	Desenhos SVG (SVG, SVGZ)
+	Save new drawings as	Salvar novos desenhos como
+	Saved Path	Caminho salvo
+	Scale List...	Lista de escalas...
+	Screen magnifiers, screen readers and recorders follow the system cursor.	Ampliadores de tela, leitores de tela e gravadores acompanham o cursor do sistema.
+	Select Similar	Selecionar semelhantes
+	Select objects first, then choose a command	Selecione os objetos primeiro e depois escolha um comando
+	Selection	Seleção
+	Send Hatches to Back	Enviar hachuras para trás
+	Send Under Objects	Enviar sob os objetos
+	Set Current Viewport	Definir janela gráfica atual
+	Set Table Cell Style	Definir estilo da célula da tabela
+	Settings...	Configurações...
+	Show Annotative Objects	Mostrar objetos anotativos
+	Show Quick Properties for selected objects	Mostrar propriedades rápidas para os objetos selecionados
+	Show and hide the tools of this category	Mostrar e ocultar as ferramentas desta categoria
+	Show command prompting near the crosshairs	Mostrar o prompt de comando perto da mira
+	Show in Tool Sets	Mostrar em conjuntos de ferramentas
+	Snap Overrides	Substituições de referência a objetos
+	Snap type	Tipo de referência a objetos
+	Snap, grid, polar tracking and Dynamic Input:	Referência a objetos, grade, rastreamento polar e entrada dinâmica:
+	Solid Editing	Edição de sólidos
+	Spline Edit	Editar spline
+	Stretch Vertex	Esticar vértice
+	Synchronize Multiple-scale Positions	Sincronizar posições de múltiplas escalas
+	Table Breaks	Divisões de tabela
+	Table Cell Style	Estilo da célula da tabela
+	Temporary track point	Ponto de rastreamento temporário
+	Text Objects Only	Somente objetos de texto
+	Thaw Layer	Ativar camada
+	The aperture is how near the cursor must come to a point for an object snap to find it.	A abertura é a distância a que o cursor deve chegar de um ponto para que uma referência a objetos o encontre.
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	Clique direito sensível ao tempo: um clique rápido é Enter; mantê-lo pressionado abre o menu
+	To	A
+	Tolerance...	Tolerância...
+	Track orthogonally only	Rastrear somente ortogonalmente
+	Track using all polar angle settings	Rastrear usando todas as configurações de ângulo polar
+	Turn On Layer	Ligar camada
+	Turned off, a right-click while a command runs always opens the shortcut menu.	Se desativado, um clique direito enquanto um comando está em execução sempre abre o menu de atalho.
+	Units Conversion	Conversão de unidades
+	Unload	Descarregar
+	Unloaded	Descarregada
+	Unlock viewport	Desbloquear janela gráfica
+	Unreferenced	Sem referência
+	Unresolved	Não resolvida
+	Update Data Links	Atualizar vínculos de dados
 	Use for this layout	Usar neste layout
 	Display plot styles	Exibir estilos de plotagem
 	No plot style tables.	Nenhuma tabela de estilos de plotagem.
@@ -947,12 +1149,20 @@
 	Use System Setting	Usar configuração do sistema
 	User	Usuário
 	User Parameters	Parâmetros do usuário
+	User Preferences	Preferências do usuário
 	Username	Nome de usuário
 	VP Color	Cor do VP
 	VP Freeze	Congelar no VP
 	Value	Valor
 	Value:	Valor:
+	Variables	Variáveis
 	Version	Versão
+	Version 2000	Versão 2000
+	Version 2004	Versão 2004
+	Version 2007	Versão 2007
+	Version 2010	Versão 2010
+	Version 2013	Versão 2013
+	Version 2018	Versão 2018
 	Version {version}	Versão {version}
 	Vertical	Vertical
 	VerticalDistance	DistânciaVertical
@@ -961,8 +1171,11 @@
 	Viewport	Viewport
 	Viewport Layer Freeze	Congelamento de camada no viewport
 	Viewport Properties	Propriedades do viewport
+	Viewport is locked	A janela gráfica está bloqueada
+	Viewport scale	Escala da janela gráfica
 	Viewport {id}	Viewport {id}
 	Viewports	Viewports
+	Volume	Volume
 	W	O
 	WCS ⌄	SCM ⌄
 	White	Branco
@@ -971,18 +1184,24 @@
 	Wipeout	Máscara
 	Workspace Switching	Troca de espaço de trabalho
 	Write Block	Gravar bloco
+	X	X
 	Xline	Linha infinita
+	Y	Y
 	Yellow	Amarelo
 	Yes	Sim
 	Zoom	Zoom
 	Zoom All	Zoom total
+	Zoom Dynamic	Zoom dinâmico
 	Zoom Extents	Zoom extensão
 	Zoom In	Aumentar zoom
 	Zoom Object	Zoom no objeto
 	Zoom Out	Diminuir zoom
 	Zoom Previous	Zoom anterior
+	Zoom Realtime	Zoom em tempo real
 	Zoom Window	Zoom janela
 	error	erro
+	min	min
+	objects	objetos
 	{contributors} · {commits}	{contributors} · {commits}
 	{kind} (constraint {id})	{kind} (restrição {id})
 	{kind} constraint {name} = {expression}  (double-click to edit)	Restrição {kind} {name} = {expression}  (clique duas vezes para editar)
@@ -1000,5 +1219,24 @@
 	Hide Others	Ocultar outros
 	Accessibility	Acessibilidade
 	Show System Cursor	Exibir cursor do sistema
+	3D Mouse...	Mouse 3D...
+	3D Mouse	Mouse 3D
+	Calibrate 3D Mouse	Calibrar mouse 3D
+	3D Mouse Navigation	Navegação com mouse 3D
+	3D mouse input is unavailable on this platform	A entrada do mouse 3D não está disponível nesta plataforma
+	No supported 3D mouse found	Nenhum mouse 3D compatível encontrado
+	Release the 3D mouse to calibrate its resting position	Solte o mouse 3D para calibrar sua posição de repouso
+	3D mouse connected	Mouse 3D conectado
+	3D mouse busy, possibly 3DxWare or missing device permissions	Mouse 3D ocupado, possivelmente pelo 3DxWare ou por permissões de dispositivo ausentes
+	3D mouse disconnected	Mouse 3D desconectado
+	3D mouse input could not be started	Não foi possível iniciar a entrada do mouse 3D
+	Enable 3D mouse navigation	Ativar navegação com mouse 3D
+	Pan sensitivity	Sensibilidade de deslocamento
+	Zoom sensitivity	Sensibilidade do zoom
+	Reverse zoom direction	Inverter a direção do zoom
+	Calibrate	Calibrar
+	Move sideways to pan; push/pull or twist to zoom.	Mova lateralmente para deslocar; empurre/puxe ou gire para ampliar.
+	Left device button: zoom extents. Right device button: calibrate.	Botão esquerdo do dispositivo: zoom à extensão. Botão direito do dispositivo: calibrar.
 	Hatch Pattern	Padrão de hachura
 	Search for pattern	Pesquisar padrão
+	Run Script...	Executar script...

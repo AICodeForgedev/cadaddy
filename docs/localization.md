@@ -38,6 +38,13 @@ labels: **Zobrazení / Pohled**, **Kreslení / Kreslit**, **Kótování / Kóta*
 The translation is AI-assisted work by @Losminek, reviewed against Czech desktop and CAD UI
 conventions and an independent review pass; it has not yet been proofread by a native speaker.
 
+Brazilian Portuguese has 1,231 catalog rows and also covers the reference catalog and every marked UI
+literal: commands, menus, tool groups and tooltips, object snaps, drafting prompts, dialogs and
+Preferences; its gaps are now zero. Its plural rule is `one|other` (0 and 1 are `one`), as CLDR defines
+for `pt`, and the catalog's accented letters (`Á Â Í Ó Ú à á â ã ç é ê í ó ô õ ú`) render in the
+bundled fonts. The original catalog was contributed by @WladmirJunior; the remaining rows were completed
+by @RicSchonfelder with AI assistance and have not yet been proofread by a native speaker.
+
 Drawing titles, layer/layout/block/style names, parameter names and expressions, text in a
 drawing, and command-line input are user data and retain their original spelling. Clickable
 command keywords retain their English spelling so the text shown matches the input accepted

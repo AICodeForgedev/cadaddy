@@ -379,6 +379,22 @@ fn default_fonts_cover_every_german_special_letter_in_the_catalog() {
 }
 
 #[test]
+fn default_fonts_cover_every_brazilian_portuguese_letter_in_the_catalog() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    let letters: BTreeSet<_> = include_str!("pt_br.tsv").chars().filter(|c| ('\u{00c0}'..='\u{00ff}').contains(c)).collect();
+    ctx.fonts_mut(|view| {
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let mut font = view.fonts.font(&family);
+            for c in &letters {
+                assert!(font.characters().contains_key(c), "missing {c} in {family:?}");
+            }
+        }
+    });
+}
+
+#[test]
 fn default_fonts_cover_every_ukrainian_letter_in_the_catalog() {
     let ctx = egui::Context::default();
     // Use only egui's bundled fonts, exactly as the web build does (no system-font loader).
