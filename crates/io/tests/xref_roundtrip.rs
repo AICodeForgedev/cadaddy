@@ -1,6 +1,7 @@
 //! External references in DXF (#525): an xref is saved as a BLOCK flagged 4 (and 8 for an
 //! overlay) with its path and no objects, and the symbols it brought (`xref|name`) are not saved
-//! as the drawing's own; loading them again is the engine's job when the drawing opens.
+//! as the drawing's own; loading them again is the engine's job when the drawing opens. Its layers
+//! are saved, as xref-dependent records with the host's settings (#886).
 
 use std::sync::Arc;
 
@@ -73,11 +74,38 @@ fn xrefs_are_saved_as_references_without_their_objects() {
 fn xref_dependent_symbols_are_not_saved() {
     let r = roundtrip(&host());
     assert!(r.blocks.keys().all(|n| !n.contains('|')), "{:?}", r.blocks.keys().collect::<Vec<_>>());
-    assert!(r.layers.iter().all(|l| !l.name.contains('|')));
     assert!(r.linetypes.iter().all(|l| !l.name.contains('|')));
     assert!(r.text_styles.iter().all(|t| !t.name.contains('|')));
     assert!(r.dim_styles.iter().all(|t| !t.name.contains('|')));
     assert!(r.layer("Doors").is_some(), "the drawing's own symbols are");
+}
+
+#[test]
+fn xref_layers_are_saved_as_dependent_layer_records() {
+    // #886: an xref's layers keep the host's settings (AutoCAD's VISRETAIN = 1). DXF Reference,
+    // LAYER group 70: 16 = externally dependent on an xref, 32 = with 16, the xref is resolved.
+    let mut d = host();
+    let walls = d.layer_mut("SITE|Walls").expect("walls");
+    walls.color = Color::Index(252);
+    walls.frozen = true;
+    let text = write_dxf(&d);
+    let tags = parse_ascii(&text).expect("parse");
+    let layers: Vec<(String, i64)> = sections(&tags)
+        .iter()
+        .filter(|s| s.name == "TABLES")
+        .flat_map(|s| records(&s.tags))
+        .filter(|(k, _)| k == "LAYER")
+        .map(|(_, t)| {
+            let get = |c: i32| t.iter().find(|x| x.code == c);
+            (get(2).map(Tag::str).unwrap_or_default(), get(70).map(Tag::i64).unwrap_or(0))
+        })
+        .collect();
+    let flags = |n: &str| layers.iter().find(|l| l.0 == n).map(|l| l.1);
+    assert_eq!(flags("SITE|Walls"), Some(1 | 16 | 32), "{layers:?}");
+    assert_eq!(flags("Doors"), Some(0), "the drawing's own layers aren't dependent");
+    let r = read_dxf(text.as_bytes()).expect("reopen");
+    let walls = r.layer("SITE|Walls").expect("saved");
+    assert_eq!((walls.color, walls.frozen), (Color::Index(252), true));
 }
 
 /// The BLOCK records of a written file as (name, flags, path).

@@ -9,7 +9,7 @@ use cadcraft_engine::Session;
 use cadcraft_engine::cmd::file::{IoHooks, set_io};
 use cadcraft_engine::doc::color::Color;
 use cadcraft_engine::doc::geom::Vec3;
-use cadcraft_engine::doc::{Block, Circle, Drawing, Entity, EntityKind, Handle, Insert, Layer, Line, MAX_BLOCK_DEPTH, XrefStatus};
+use cadcraft_engine::doc::{Block, Circle, Drawing, Entity, EntityKind, Handle, Insert, Layer, Line, Linetype, MAX_BLOCK_DEPTH, XrefStatus};
 use serde_json::json;
 
 fn hooks() {
@@ -118,12 +118,14 @@ fn attach_loads_the_file_and_saving_keeps_only_the_reference() {
     let ext = d.extents(&cadcraft_engine::doc::Space::Model);
     assert!(ext.max.x >= 110.0 - 1e-9, "the xref is drawn where it was placed: {ext:?}");
 
-    // Saved: the xref block with its path and no objects, and none of its symbols.
+    // Saved: the xref block with its path and no objects, and none of its symbols but its layers
+    // (their settings in the host are the host's, #886).
     s.execute("qsave", &json!({})).unwrap();
     let saved = cadcraft_io::read(&std::fs::read(&host).unwrap(), "host.dxf").unwrap();
     let b = saved.block("site").unwrap();
     assert_eq!((b.xref_path.as_deref(), b.entities.len()), (Some("site.dxf"), 0));
-    assert!(saved.layers.iter().all(|l| !l.name.contains('|')));
+    assert_eq!(saved.layer("site|Walls").map(|l| l.color), Some(Color::Index(1)));
+    assert!(saved.linetypes.iter().all(|t| !t.name.contains('|')), "only the ones its layers use");
     assert!(saved.blocks.keys().all(|n| !n.contains('|')));
 
     // Reopened: loaded again from the file.
@@ -132,6 +134,37 @@ fn attach_loads_the_file_and_saving_keeps_only_the_reference() {
     assert_eq!(status(&t, "site"), Some(XrefStatus::Loaded));
     assert_eq!(objects(&t, "site"), 2);
     assert!(has_layer(&t, "site|Walls"));
+}
+
+#[test]
+fn xref_layer_overrides_survive_save_and_reopen_in_dxf_and_dwg() {
+    // #886: a colour and a freeze set in the host on the xref's layers are the host's (AutoCAD,
+    // VISRETAIN = 1), so they come back after saving and reopening instead of the xref's own.
+    hooks();
+    let dir = folder("overrides");
+    let mut x = site();
+    x.linetypes.push(Linetype::simple("Dashed", "Dashed", &[0.5, -0.25]));
+    x.layers.push(Layer { name: "Doors".into(), color: Color::Index(3), linetype: "Dashed".into(), ..Layer::default() });
+    save(&x, &dir.join("site.dxf"));
+    for ext in ["dxf", "dwg"] {
+        let host = dir.join(format!("host.{ext}"));
+        save(&host_with(&[("site.dxf", false)]), &host);
+        let mut s = Session::new();
+        open(&mut s, &host);
+        let d = s.doc_mut().unwrap();
+        d.layer_mut("site|Walls").unwrap().color = Color::Index(252);
+        d.layer_mut("site|Doors").unwrap().frozen = true;
+        s.execute("qsave", &json!({})).unwrap();
+
+        let mut t = Session::new();
+        open(&mut t, &host);
+        assert_eq!(status(&t, "site"), Some(XrefStatus::Loaded), "{ext}");
+        let d = t.doc().unwrap();
+        assert_eq!(d.layer("site|Walls").map(|l| l.color), Some(Color::Index(252)), "{ext}: the host's colour, not the xref's red");
+        assert_eq!(d.layer("site|Doors").map(|l| (l.frozen, l.color)), Some((true, Color::Index(3))), "{ext}: frozen in the host");
+        assert_eq!(d.layer("site|Doors").map(|l| l.linetype.as_str()), Some("site|Dashed"), "{ext}: its linetype is still the xref's");
+        assert!(d.linetype("site|Dashed").is_some(), "{ext}");
+    }
 }
 
 #[test]
