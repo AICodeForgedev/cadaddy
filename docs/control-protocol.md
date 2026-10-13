@@ -1,7 +1,8 @@
 # CADCraft control protocol
 
 Start the desktop app with `--control PORT` (or `CADCRAFT_CONTROL_PORT=PORT`). It listens on
-`127.0.0.1:PORT` for JSON lines: one request per line, one reply per line.
+`127.0.0.1:PORT` for JSON lines: one request per line, one reply per line. A port given with
+`--control` wins over the variable; a bare `--control` keeps the variable's port.
 
 ```json
 {"id": 1, "method": "cmdline.input", "params": {"text": "circle 0,0 5"}}
