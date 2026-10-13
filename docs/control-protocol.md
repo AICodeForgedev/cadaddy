@@ -21,13 +21,16 @@ The server waits up to 60 s for the app to answer a request. After that it repli
   It may still finish and change the drawing, and its late result is discarded. Inspect the drawing
   (`drawing.inspect`) before sending it again.
 
+The table below describes top-level control-protocol methods: names for the request's `method`
+field. `engine.commands` returns a separate command catalog, not a list of additional methods.
+
 | Method | Params | What it does |
 |---|---|---|
 | `cmdline.input` | `{text}` | Type a line at the command line exactly like a user. Starts commands by name/alias and answers prompts (points `x,y`, `@dx,dy`, `@d<a`, distances, keywords, empty = Enter). Spaces act as Enter except at text prompts. |
 | `cmdline.script` | `{text}` | Run a multi-line script (like `.scr` files). |
 | `cmdline.key` | `{key: "enter"\|"escape"}` | Press Enter or Escape. Replies like `cmdline.input`: the state, `output`, and `error` when Enter was refused. |
 | `cmdline.state` | | Current prompt, keywords, accepted input kinds, history tail. |
-| `engine.execute` | `{command, params}` | Run any command with JSON parameters. Never opens a dialog. |
+| `engine.execute` | `{command, params}` | Run any command with JSON parameters. Never opens a dialog. `command` is an alias of this method, with the same parameters and result. |
 | `engine.commands` | | Every command: id, label, menu path, shortcut, aliases, params doc, enabled. |
 | `drawing.inspect` | `{entities?, limit?}` | Drawing summary (counts, extents, layers, styles, blocks, layouts, selection, undo) and entities with handles and geometry. |
 | `ui.inspect` | | UI state, canvas rect, view, cursor and snap, performance counters; `closePrompt`: the drawing a "Save changes?" prompt is asking about (null when none); and actual egui keyboard focus (`focus.id`, `focus.label`, `focus.role`). |
@@ -46,8 +49,38 @@ The server waits up to 60 s for the app to answer a request. After that it repli
 | `control.methods` | | Every method this server answers: `{method, params, description}`. Headless (`cadcraft-cli mcp`) lists only the methods it serves. |
 | `ping` | | Replies `"pong"`. A cheap health check. |
 
+To run a command listed by `engine.commands`, put its id in `params.command` and its arguments
+in the nested `params.params` object, using `engine.execute` as the top-level method. This
+includes `open` and `document.bytes`, and the UI commands in the desktop app's catalog.
+`drawing.inspect` is also an engine command, but has an explicit top-level method; a dotted
+command id alone does not make it a protocol method.
+
+For example, inspect the drawing and list commands directly, then open a drawing and get its
+DXF bytes through `engine.execute` (one request per line):
+
+```json
+{"id":2,"method":"drawing.inspect","params":{}}
+{"id":3,"method":"engine.commands","params":{}}
+{"id":4,"method":"engine.execute","params":{"command":"open","params":{"path":"examples/apartment.dxf"}}}
+{"id":5,"method":"engine.execute","params":{"command":"document.bytes","params":{}}}
+```
+
+The `open` example assumes the app was started from the repository root; otherwise use a path
+to an existing drawing accessible to the app. `document.bytes` defaults to DXF and returns
+base64-encoded bytes in the result's `data` field. The `command` alias can be used identically:
+
+```json
+{"id":6,"method":"command","params":{"command":"document.bytes","params":{}}}
+```
+
+Sending `open` or `document.bytes` as the top-level `method` returns an `unknown method` error:
+the protocol dispatches methods explicitly and does not fall through to the command registry.
+`app.open` is a top-level convenience method for opening a drawing with `{path}`.
+
 The MCP server (`cadcraft-cli mcp --connect 127.0.0.1:PORT`) wraps this protocol; headless
 (`cadcraft-cli mcp`) it serves the same methods from an in-process session.
+MCP tool names are another interface: `execute` maps to `engine.execute`, `list_commands` to
+`engine.commands`, and the MCP `open` tool to `app.open`. See [mcp.md](mcp.md).
 
 `ui.key` queues real egui key events; its reply acknowledges the queue. Poll `ui.inspect` or
 `ui.elements` for the resulting focus or state before sending the next action. Use Tab and
