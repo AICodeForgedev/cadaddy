@@ -302,9 +302,12 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             contents.push_str(&t.s(1).unwrap_or_default());
             let contents = mtext_dxf::decode_contents(&contents);
             let columns = mtext_dxf::read_columns(tags);
-            let mut rotation = match (t.f(11), t.f(21)) {
+            // The direction comes from the MTEXT's own groups only: in an R2018+ embedded object
+            // (group 101), 11 is the insertion point, not the X-axis direction (#667).
+            let own = T(mtext_dxf::before_columns(tags));
+            let mut rotation = match (own.f(11), own.f(21)) {
                 (Some(x), Some(y)) if x != 0.0 || y != 0.0 => Vec2::new(x, y).angle(),
-                _ => T(mtext_dxf::before_columns(tags)).fd(50, 0.0).to_radians(),
+                _ => own.fd(50, 0.0).to_radians(),
             };
             let mut attach = t.i(71).unwrap_or(1).clamp(1, 9) as u8;
             if c.extrusion.z < 0.0 {
