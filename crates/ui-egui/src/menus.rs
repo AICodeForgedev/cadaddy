@@ -29,6 +29,10 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
     ("ui.panel.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
+    ("ui.animations.system", "Use System Setting", &["View", "Accessibility", "Animation Effects", "Use System Setting"], None),
+    ("ui.animations.on", "On", &["View", "Accessibility", "Animation Effects", "On"], None),
+    ("ui.animations.off", "Off", &["View", "Accessibility", "Animation Effects", "Off"], None),
+    ("ui.animations", "Animation Effects", &[], None),
     ("ui.toggle.toolbar", "Tool Bar", &["Window", "Tool Bar"], None),
     ("ui.toggle.filetabs", "File Tab", &["Window", "File Tab"], None),
     ("ui.toggle.statusbar", "Status Bar", &["Window", "Status Bar"], None),
@@ -249,6 +253,18 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             },
             None => Ok(theme_json(app)),
         },
+        "ui.animations.system" | "ui.animations.on" | "ui.animations.off" => {
+            let pref = crate::animation::AnimationPref::parse(id.trim_start_matches("ui.animations.")).unwrap_or_default();
+            Ok(set_animations(app, pref))
+        }
+        // `{"animations": "system"|"on"|"off"}` sets the choice; without it, reports it.
+        "ui.animations" => match params.get("animations").and_then(Value::as_str) {
+            Some(name) => match crate::animation::AnimationPref::parse(name) {
+                Some(pref) => Ok(set_animations(app, pref)),
+                None => Err(format!("unknown animations choice \"{}\" (system, on or off)", name.chars().take(40).collect::<String>())),
+            },
+            None => Ok(animations_json(app)),
+        },
         "ui.saveformat.dxf" | "ui.saveformat.dwg" => {
             let format = crate::SaveFormat::parse(id.trim_start_matches("ui.saveformat.")).unwrap_or_default();
             Ok(set_save_format(app, format))
@@ -288,8 +304,8 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         "ui.resetpalettes" => {
             let (menu, theme, interface_language, save_format) = (app.ui.in_window_menu, app.ui.theme, app.ui.interface_language, app.ui.save_format);
-            let save_version = std::mem::take(&mut app.ui.save_version);
-            app.ui = crate::UiState { in_window_menu: menu, theme, interface_language, save_format, save_version, ..Default::default() };
+            let (animations, save_version) = (app.ui.animations, std::mem::take(&mut app.ui.save_version));
+            app.ui = crate::UiState { in_window_menu: menu, theme, animations, interface_language, save_format, save_version, ..Default::default() };
             Ok(Value::Null)
         }
         "ui.start" => {
@@ -416,6 +432,22 @@ fn theme_json(app: &CadApp) -> Value {
         p => p.resolve(None),
     };
     json!({ "theme": app.ui.theme.as_str(), "shown": if shown == egui::Theme::Light { "light" } else { "dark" } })
+}
+
+fn set_animations(app: &mut CadApp, pref: crate::animation::AnimationPref) -> Value {
+    app.ui.animations = pref;
+    let shown = if app.shows_animations() { "on" } else { "off" };
+    app.session.echo(match pref {
+        crate::animation::AnimationPref::System => format!("Animation effects follow the system setting ({shown})"),
+        _ => format!("Animation effects are {shown}"),
+    });
+    animations_json(app)
+}
+
+/// The animation effects choice and whether the interface animates with it (System resolves
+/// against the OS setting).
+fn animations_json(app: &CadApp) -> Value {
+    json!({ "animations": app.ui.animations.as_str(), "shown": app.shows_animations() })
 }
 
 /// A menu entry.

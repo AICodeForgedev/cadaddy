@@ -1124,7 +1124,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let about = xf.to_world(hp);
         let _ = app.session.zoom_about(f, about);
     }
-    let zoom_pinch = ui.input(|i| i.zoom_delta());
+    let zoom_pinch = ui.input(|i| crate::animation::zoom_delta(i, &opts, app.shows_animations()));
     if inside
         && (zoom_pinch - 1.0).abs() > 1e-4
         && let Some(hp) = hover_pos

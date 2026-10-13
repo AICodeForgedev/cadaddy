@@ -8,6 +8,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod animation;
 pub mod autosave;
 pub mod canvas;
 pub mod chrome;
@@ -94,6 +95,9 @@ pub struct UiState {
     pub history_lines: usize,
     /// Interface theme: "system" (follow the OS light/dark appearance), "light" or "dark".
     pub theme: theme::ThemePref,
+    /// Animation effects (dialog and menu fades, smoothed scrolling): "system" (follow the OS
+    /// setting), "on" or "off".
+    pub animations: animation::AnimationPref,
     /// The format Save As suggests for a drawing that has no file yet: "dxf" or "dwg".
     pub save_format: SaveFormat,
     /// The version Save As writes for a drawing that has no file yet ("2000" … "2018"); a
@@ -168,6 +172,7 @@ impl Default for UiState {
             dialog: None,
             history_lines: 3,
             theme: theme::ThemePref::default(),
+            animations: animation::AnimationPref::default(),
             save_format: SaveFormat::default(),
             save_version: SaveVersion::default().year().to_string(),
             recent_files: Vec::new(),
@@ -184,6 +189,9 @@ pub struct Services {
 
 pub struct CadApp {
     pub system_languages: Vec<String>,
+    /// Whether the operating system shows animations, as the host reads it; `None` when the OS
+    /// states nothing or the host cannot ask ([`animation`]).
+    pub system_animations: Option<bool>,
     pub session: Session,
     pub ui: UiState,
     /// The interface's own preferences from the Options dialog ([`options`]).
@@ -211,6 +219,8 @@ pub struct CadApp {
     shown_theme: Option<egui::Theme>,
     /// Whether the last applied theme was handed to egui as the System preference.
     shown_follows_system: bool,
+    /// Whether egui was last told to animate (`None` until the first frame).
+    shown_animations: Option<bool>,
     pub frame_ms: f64,
     pub quit_requested: bool,
     /// The app may close although drawings have unsaved changes (they were dealt with, or the
@@ -234,6 +244,7 @@ impl CadApp {
     pub fn new(session: Session, services: Services) -> Self {
         CadApp {
             system_languages: Vec::new(),
+            system_animations: None,
             session,
             ui: UiState::default(),
             options: options::UiOptions::default(),
@@ -254,6 +265,7 @@ impl CadApp {
             fonts_cjk: None,
             shown_theme: None,
             shown_follows_system: false,
+            shown_animations: None,
             frame_ms: 0.0,
             quit_requested: false,
             quit_confirmed: false,
@@ -336,10 +348,17 @@ impl CadApp {
         self.shown_theme.unwrap_or_else(|| self.ui.theme.resolve(None))
     }
 
+    /// Whether the interface shows animation effects now (the choice resolved against the OS
+    /// setting).
+    pub fn shows_animations(&self) -> bool {
+        self.ui.animations.resolve(self.system_animations)
+    }
+
     /// Preferences kept across restarts, as JSON for the host's storage ([`PREFS_KEY`]).
     pub fn prefs_json(&self) -> String {
         let mut prefs = json!({
             "theme": self.ui.theme.as_str(),
+            "animations": self.ui.animations.as_str(),
             "interfaceLanguage": self.ui.interface_language.code(),
             "saveFormat": self.ui.save_format.as_str(),
             "saveVersion": self.ui.save_version,
@@ -361,6 +380,9 @@ impl CadApp {
         }
         if let Some(t) = v.get("theme").and_then(Value::as_str).and_then(theme::ThemePref::parse) {
             self.ui.theme = t;
+        }
+        if let Some(a) = v.get("animations").and_then(Value::as_str).and_then(animation::AnimationPref::parse) {
+            self.ui.animations = a;
         }
         if let Some(l) = v.get("interfaceLanguage").and_then(Value::as_str).and_then(i18n::Preference::parse) {
             self.ui.interface_language = l;
@@ -518,6 +540,15 @@ impl CadApp {
             theme::apply(ctx, shown, follows_system);
             self.shown_theme = Some(shown);
             self.shown_follows_system = follows_system;
+        }
+        // Resolved every frame too, so a System choice follows the OS setting live.
+        let animate = self.shows_animations();
+        if self.shown_animations != Some(animate) {
+            animation::apply(ctx, animate);
+            self.shown_animations = Some(animate);
+        }
+        if !animate {
+            animation::unsmooth_scroll(ctx);
         }
         self.drain_control(ctx);
         self.finish_opening();
@@ -750,7 +781,7 @@ mod tests {
         frame(&mut a, &ctx, None);
         assert_eq!(Tokens::get(), Tokens::of(theme::SYSTEM_FALLBACK), "no OS appearance: the documented fallback");
         assert_eq!(a.ui.theme, ThemePref::System);
-        assert_eq!(a.prefs_json(), r#"{"interfaceLanguage":"auto","saveFormat":"dxf","saveVersion":"2018","theme":"system"}"#);
+        assert_eq!(a.prefs_json(), r#"{"animations":"system","interfaceLanguage":"auto","saveFormat":"dxf","saveVersion":"2018","theme":"system"}"#);
     }
 
     #[test]

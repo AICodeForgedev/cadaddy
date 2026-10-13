@@ -22,6 +22,7 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod spacemouse;
+mod system_animations;
 mod workspace;
 
 use cadcraft_engine::Session;
@@ -32,6 +33,8 @@ struct App {
     spacemouse: spacemouse::SpaceMouse,
     /// The desktop's light/dark choice where winit reports none (Linux, the BSDs).
     desktop_theme: desktop_theme::DesktopTheme,
+    /// Whether the OS shows animations, for the System choice of View ▸ Accessibility ▸ Animation Effects.
+    system_animations: system_animations::SystemAnimations,
     workspace: workspace::Workspace,
     workspace_error: Option<String>,
     #[cfg(target_os = "macos")]
@@ -72,6 +75,7 @@ impl eframe::App for App {
                 m.poll(&mut self.cad, ctx);
             }
         }
+        self.cad.system_animations = self.system_animations.current();
         self.cad.logic(ctx);
         self.spacemouse.poll(&mut self.cad, ctx);
         self.persist_workspace(false);
@@ -357,8 +361,11 @@ fn main() -> eframe::Result {
             }
             let ctx = cc.egui_ctx.clone();
             let desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());
+            let ctx = cc.egui_ctx.clone();
+            let system_animations = system_animations::SystemAnimations::start(move || ctx.request_repaint());
             Ok(Box::new(App {
                 desktop_theme,
+                system_animations,
                 cad: app,
                 spacemouse: spacemouse::SpaceMouse::start(cc.egui_ctx.clone()),
                 workspace,

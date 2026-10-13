@@ -8,6 +8,7 @@ use egui::{Color32, RichText, Sense, Stroke, vec2};
 use serde_json::{Map, Value, json};
 
 use crate::CadApp;
+use crate::animation::AnimationPref;
 use crate::theme::{ThemePref, Tokens};
 
 /// The tabs: (id in the dialog name, label).
@@ -100,6 +101,14 @@ fn theme_label(t: ThemePref) -> &'static str {
     }
 }
 
+fn animations_label(a: AnimationPref) -> &'static str {
+    match a {
+        AnimationPref::System => crate::tl!("Use System Setting"),
+        AnimationPref::On => crate::tl!("On"),
+        AnimationPref::Off => crate::tl!("Off"),
+    }
+}
+
 /// A colour button, its hex value and a Default button; a change goes into `changes` under `key`.
 fn color_row(ui: &mut egui::Ui, current: Option<Color32>, default: Color32, key: &str, changes: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
@@ -137,6 +146,18 @@ fn display(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         });
         if theme != app.ui.theme {
             changes.insert("theme".into(), json!(theme.as_str()));
+        }
+        ui.end_row();
+
+        ui.label(crate::tl!("Animation effects"));
+        let mut animations = app.ui.animations;
+        egui::ComboBox::from_id_salt("options_animations").selected_text(animations_label(animations)).show_ui(ui, |ui| {
+            for a in AnimationPref::ALL {
+                ui.selectable_value(&mut animations, a, animations_label(a));
+            }
+        });
+        if animations != app.ui.animations {
+            changes.insert("animations".into(), json!(animations.as_str()));
         }
         ui.end_row();
 

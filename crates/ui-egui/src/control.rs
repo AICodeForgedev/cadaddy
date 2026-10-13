@@ -258,6 +258,7 @@ pub fn inspect(app: &CadApp, ctx: &egui::Context) -> Value {
     json!({
         "ui": serde_json::to_value(&app.ui).unwrap_or_default(),
         "theme": if app.shown_theme() == egui::Theme::Light { "light" } else { "dark" },
+        "animations": app.shows_animations(),
         "focus": focus_json(ctx),
         "canvasRect": app.canvas.rect.map(|c| json!([c.left(), c.top(), c.width(), c.height()])),
         "window": [r.width(), r.height()],
