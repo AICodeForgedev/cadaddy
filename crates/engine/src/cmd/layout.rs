@@ -136,6 +136,7 @@ fn run_mspace(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.state_mut()?;
     st.mspace = Some(pick);
     st.selection.clear();
+    s.pending_window = None;
     s.echo("MSPACE");
     Ok(json!({ "viewport": pick.hex() }))
 }
@@ -147,6 +148,7 @@ fn run_pspace(s: &mut Session, _p: &Value) -> Result<Value> {
     let st = s.state_mut()?;
     st.mspace = None;
     st.selection.clear();
+    s.pending_window = None;
     Ok(json!({ "space": "paper" }))
 }
 

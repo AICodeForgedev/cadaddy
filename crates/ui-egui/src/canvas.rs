@@ -1286,9 +1286,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let in_active = active_vp.as_ref().is_some_and(|v| active_clip.as_ref().map_or(in_rect(v), |c| c.contains(pp)));
         if !in_active {
             app.canvas.hot_grips.clear();
+            app.session.pending_window = None;
+            app.canvas.drag_window = false;
             if app.run("mspace", serde_json::json!({"at": [pp.x, pp.y]})).is_err() && active_vp.is_some() {
                 let _ = app.run("pspace", serde_json::json!({}));
             }
+            app.session.pending_window = None;
+            app.canvas.drag_window = false;
             app.canvas.list = None;
             return;
         }
@@ -1400,7 +1404,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             None => app.cmd.options = None,
         }
     }
-    let pressed_primary = pressed_primary && !picked && !hatch_dialog;
+    // A double-click with no command running (on a layout viewport, say) leaves no selection
+    // window behind; while a command asks for points, every click still counts (#815).
+    let idle_dbl = dbl_primary && app.session.running.is_none();
+    if idle_dbl {
+        app.session.pending_window = None;
+        app.canvas.drag_window = false;
+    }
+    let pressed_primary = pressed_primary && !picked && !hatch_dialog && !idle_dbl;
     // Clicks.
     if inside
         && pressed_primary

@@ -279,6 +279,7 @@ fn run_layout_set(s: &mut Session, p: &Value) -> Result<Value> {
         let l = s.doc()?.layout(name).ok_or_else(|| bad("layout.set", format!("no layout `{name}`")))?;
         Space::Paper(l.name.clone())
     };
+    s.pending_window = None;
     let st = s.state_mut()?;
     st.space = space.clone();
     st.mspace = None;

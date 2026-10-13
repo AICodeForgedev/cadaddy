@@ -49,6 +49,9 @@ sync_github_name = true
 [people.Losminek]
 sync_github_name = true
 
+[people.GJoe2]
+sync_github_name = true
+
 [people.cyfung1031]
 real_name = "Chester Fung"
 display_name = "Chester Fung"
