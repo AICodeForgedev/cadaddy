@@ -453,17 +453,16 @@ fn all_links(d: &Drawing, o: &PdfOptions) -> Vec<(Handle, String)> {
         return out;
     }
     let given: std::collections::HashSet<Handle> = out.iter().map(|(h, _)| *h).collect();
-    for (h, extra) in &d.foreign.entities {
-        if out.len() >= MAX_LINKS {
-            break;
-        }
-        if given.contains(h) {
-            continue;
-        }
-        if let Some(url) = pe_url(&extra.xdata) {
-            out.push((*h, url));
-        }
-    }
+    let mut read: Vec<(Handle, String)> = std::iter::once(&d.model)
+        .chain(d.layouts.iter().map(|l| &l.entities))
+        .chain(d.blocks.values().map(|b| &b.entities))
+        .flat_map(|s| s.iter())
+        .filter(|e| !given.contains(&e.handle))
+        .filter_map(|e| Some((e.handle, pe_url(&e.common.xdata)?)))
+        .collect();
+    read.sort_by_key(|(h, _)| *h);
+    read.dedup_by_key(|(h, _)| *h);
+    out.extend(read.into_iter().take(MAX_LINKS.saturating_sub(out.len())));
     out
 }
 

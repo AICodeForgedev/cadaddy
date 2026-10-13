@@ -1301,9 +1301,15 @@ fn explode(s: &mut Session, hs: &[Handle]) -> Result<Vec<Handle>> {
         }
         let Some(e) = s.doc()?.entity(*h).map(|e| (**e).clone()) else { continue };
         let Some(parts) = explode_kind(s.doc()?, &e) else { continue };
+        // The pieces of an object are new objects: its xdata goes with it. A block reference's
+        // pieces are copies of the block's objects and keep theirs.
+        let own_pieces = !matches!(e.kind, EntityKind::Insert(_));
         let d = s.doc_mut()?;
         d.remove_entity(*h);
         for mut p in parts {
+            if own_pieces {
+                p.common.xdata.clear();
+            }
             p.handle = d.new_handle();
             out.push(p.handle);
             if let Some(st) = d.space_mut(&space) {

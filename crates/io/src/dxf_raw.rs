@@ -12,6 +12,7 @@
 //! dropped (from reactor lists and dictionaries) or written as the null handle `0`; objects whose
 //! owner is gone go with it.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -301,6 +302,28 @@ fn all_entities(d: &Drawing) -> impl Iterator<Item = &Entity> {
         .flat_map(|s| s.iter().map(|e| e.as_ref()))
 }
 
+/// Give each entity the xdata read for it (`xdata` by entity handle).
+fn put_xdata(d: &mut Drawing, mut xdata: HashMap<Handle, Vec<RawTag>>) {
+    if xdata.is_empty() {
+        return;
+    }
+    let mut give = |store: &mut cadcraft_doc::EntityStore| {
+        let hs: Vec<Handle> = store.iter().map(|e| e.handle).filter(|h| xdata.contains_key(h)).collect();
+        for h in hs {
+            if let Some(xd) = xdata.remove(&h) {
+                store.modify(h, |e| e.common.xdata = xd);
+            }
+        }
+    };
+    give(&mut d.model);
+    for l in &mut d.layouts {
+        give(&mut l.entities);
+    }
+    for b in d.blocks.values_mut() {
+        give(&mut Arc::make_mut(b).entities);
+    }
+}
+
 /// Keep what `secs` holds that the reader did not model in `d.foreign`.
 pub(crate) fn read(secs: &[Section], d: &mut Drawing) {
     let get = |name: &str| secs.iter().find(|s| s.name == name).map(|s| split(&s.tags)).unwrap_or_default();
@@ -401,17 +424,25 @@ pub(crate) fn read(secs: &[Section], d: &mut Drawing) {
         f.objects.push(ForeignObject { handle: h, kind: kind.clone(), tags });
     }
     // Extras of entities, tables, table records and blocks.
+    let mut xdata_of: HashMap<Handle, Vec<RawTag>> = HashMap::new();
     for (kind, _, t) in blocks.iter().chain(&entities) {
         if matches!(kind.as_str(), "BLOCK" | "ENDBLK") {
             continue;
         }
         let Some(h) = head(t).handle else { continue };
         let Some(&unknown) = ents.get(&h) else { continue };
-        let x = extra(kind, t, true, unknown, &kept);
-        if let (Some(hh), false) = (handle(&h), x.is_empty()) {
+        let mut x = extra(kind, t, true, unknown, &kept);
+        let Some(hh) = handle(&h) else { continue };
+        // Xdata belongs to the entity itself (it follows the entity's copies).
+        let xd = std::mem::take(&mut x.xdata);
+        if !xd.is_empty() {
+            xdata_of.entry(hh).or_insert(xd);
+        }
+        if !x.is_empty() {
             f.entities.entry(hh).or_insert(x);
         }
     }
+    put_xdata(d, xdata_of);
     for (kind, _, t) in tables.iter().chain(blocks.iter().filter(|(k, _, _)| k == "BLOCK")) {
         let Some(key) = head(t).handle.and_then(|h| ids.get(&h).cloned()) else { continue };
         let x = extra(kind, t, kind == "BLOCK", false, &kept);
@@ -439,6 +470,9 @@ pub(crate) fn read(secs: &[Section], d: &mut Drawing) {
     for x in f.entities.values().chain(f.records.values()) {
         note(&x.xdata);
         note(&x.props);
+    }
+    for e in all_entities(d) {
+        note(&e.common.xdata);
     }
     for e in all_entities(d) {
         if let EntityKind::Unknown(u) = &e.kind {
@@ -689,16 +723,32 @@ impl Map<'_> {
 }
 
 /// The extras of a written record, if the drawing keeps any for it.
-fn extra_for<'a>(f: &'a Foreign, rec: &Rec, body: &[Tag], block: &str) -> Option<&'a ForeignExtra> {
+fn extra_for<'a>(f: &'a Foreign, xd: &XdataOf, rec: &Rec, body: &[Tag], block: &str) -> Option<Cow<'a, ForeignExtra>> {
     match (rec.sec.as_str(), rec.kind.as_str()) {
-        ("BLOCKS", "BLOCK") => f.records.get(&("BLOCK".to_string(), block.to_string())),
+        ("BLOCKS", "BLOCK") => f.records.get(&("BLOCK".to_string(), block.to_string())).map(Cow::Borrowed),
         ("BLOCKS", "ENDBLK") => None,
-        ("ENTITIES" | "BLOCKS", _) => f.entities.get(&handle(&head(body).handle?)?),
+        ("ENTITIES" | "BLOCKS", _) => entity_extra(f, xd, handle(&head(body).handle?)?),
         ("TABLES", kind) => {
             let name = up(&val(body, 2).unwrap_or_default());
-            f.records.get(&(kind.to_string(), name))
+            f.records.get(&(kind.to_string(), name)).map(Cow::Borrowed)
         }
         _ => None,
+    }
+}
+
+/// Entities' own xdata ([`cadcraft_doc::Common::xdata`]), by handle.
+type XdataOf<'a> = HashMap<Handle, &'a [RawTag]>;
+
+/// The extras of entity `h`: what the drawing keeps for it, with the entity's own xdata.
+fn entity_extra<'a>(f: &'a Foreign, xd: &XdataOf, h: Handle) -> Option<Cow<'a, ForeignExtra>> {
+    let kept = f.entities.get(&h);
+    match xd.get(&h) {
+        None => kept.map(Cow::Borrowed),
+        Some(xdata) => {
+            let mut x = kept.cloned().unwrap_or_default();
+            x.xdata = xdata.to_vec();
+            Some(Cow::Owned(x))
+        }
     }
 }
 
@@ -711,7 +761,8 @@ fn unknown_handles(d: &Drawing) -> HashSet<String> {
 pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
     let f = d.foreign.as_ref();
     let unknown = unknown_handles(d);
-    if f.is_empty() && unknown.is_empty() {
+    let xd: XdataOf = all_entities(d).filter(|e| !e.common.xdata.is_empty()).map(|e| (e.handle, e.common.xdata.as_slice())).collect();
+    if f.is_empty() && unknown.is_empty() && xd.is_empty() {
         return;
     }
     let recs = written_records(tags);
@@ -742,7 +793,7 @@ pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
         if r.kind == "BLOCK" {
             block = up(&val(body(r), 2).unwrap_or_default());
         }
-        if let Some(x) = extra_for(f, r, body(r), &block)
+        if let Some(x) = extra_for(f, &xd, r, body(r), &block)
             && let Some(xd) = x.xdict
             && head(body(r)).xdict.is_none()
         {
@@ -750,7 +801,7 @@ pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
         }
     }
     for (_, t) in planned.values().flatten() {
-        let x = head(t.get(1..).unwrap_or(&[])).handle.and_then(|h| handle(&h)).and_then(|h| f.entities.get(&h));
+        let x = head(t.get(1..).unwrap_or(&[])).handle.and_then(|h| handle(&h)).and_then(|h| entity_extra(f, &xd, h));
         attached.extend(x.and_then(|x| x.xdict).map(Handle::hex));
     }
     // Which kept objects are written: those whose owner chain ends at a written owner.
@@ -822,17 +873,17 @@ pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
         for (sec, t) in planned.get(&r.start).into_iter().flatten() {
             let (Some(zero), Some(ub)) = (t.first(), t.get(1..)) else { continue };
             let ur = Rec { sec: sec.clone(), kind: zero.str(), start: 0, end: 0 };
-            let x = head(ub).handle.and_then(|h| handle(&h)).and_then(|h| f.entities.get(&h));
+            let x = head(ub).handle.and_then(|h| handle(&h)).and_then(|h| entity_extra(f, &xd, h));
             out.push(zero.clone());
-            record(&map, &ur, ub, x, true, false, &mut out);
+            record(&map, &ur, ub, x.as_deref(), true, false, &mut out);
         }
         out.extend(tags.get(r.start).cloned());
-        let x = extra_for(f, r, b, &block);
+        let x = extra_for(f, &xd, r, b, &block);
         if x.is_none() && Some(r.start) != root {
             out.extend(b.iter().cloned());
             continue;
         }
-        record(&map, r, b, x, false, Some(r.start) == root, &mut out);
+        record(&map, r, b, x.as_deref(), false, Some(r.start) == root, &mut out);
     }
     add_appids(&mut out);
     let top = max_handle(&out).saturating_add(1);

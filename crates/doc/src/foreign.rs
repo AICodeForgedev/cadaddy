@@ -34,7 +34,8 @@ pub struct ForeignExtra {
     pub xdict: Option<Handle>,
     /// Objects of [`Foreign::objects`] that react to it (persistent reactors).
     pub reactors: Vec<Handle>,
-    /// Other applications' extended data: groups from `1001` on.
+    /// Other applications' extended data of a table record or block: groups from `1001` on. An
+    /// entity's is part of the entity ([`crate::Common::xdata`]), so it follows the entity's copies.
     pub xdata: Vec<RawTag>,
     /// The colour book colour (group 430) and the true colour (group 420) it was read with: it is
     /// written back while the colour is unchanged.
