@@ -194,6 +194,11 @@ pub fn anno_scaled(e: &Entity, f: f64) -> Entity {
                 a.text.insert = o + (a.text.insert - o) * f;
                 a.text.align_pt = a.text.align_pt.map(|p| o + (p - o) * f);
                 a.text.height *= f;
+                if let Some(ml) = &mut a.multiline {
+                    ml.mtext.insert = o + (ml.mtext.insert - o) * f;
+                    ml.mtext.height *= f;
+                    ml.mtext.width *= f;
+                }
             }
         }
         _ => {}

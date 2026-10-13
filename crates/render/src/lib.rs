@@ -1401,7 +1401,9 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
             if attmode == 0 || (a.invisible && attmode != 2) {
                 continue;
             }
-            let (sh, _) = place_text_entity(ctx.d, &a.text, &a.text.value);
+            // A multiline attribute is drawn as its multiline text.
+            let multiline = a.multiline_text();
+            let sh = if multiline.is_none() { Some(place_text_entity(ctx.d, &a.text, &a.text.value).0) } else { None };
             // Properties of the attribute's definition (as AutoCAD copies them to the attribute
             // on insertion), except those set on the attribute itself: ByBlock = the reference's,
             // layer 0 = the reference's layer.
@@ -1415,7 +1417,12 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
                 }
             };
             if shown {
-                b.shaped(ctx, ink, if b.opts.lineweights { lw } else { 0.0 }, &sh);
+                let lw = if b.opts.lineweights { lw } else { 0.0 };
+                match (&multiline, &sh) {
+                    (Some(m), _) => mtext(b, ctx, m, ink, lw),
+                    (None, Some(sh)) => b.shaped(ctx, ink, lw, sh),
+                    (None, None) => {}
+                }
             }
         }
     }

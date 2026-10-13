@@ -98,6 +98,7 @@ fn spline_leader_with_block_content_and_attributes() {
             constant: false,
             prompt: "Number".into(),
             props: Default::default(),
+            multiline: None,
         }),
     ));
     d.blocks.insert(blk.name.clone(), std::sync::Arc::new(blk));
@@ -110,7 +111,15 @@ fn spline_leader_with_block_content_and_attributes() {
     k.transform(&xf);
     let EntityKind::Text(mut placed) = k else { unreachable!() };
     placed.value = "42".into();
-    ins.attribs.push(Attrib { tag: "NUM".into(), text: placed, invisible: false, constant: false, prompt: String::new(), props: Default::default() });
+    ins.attribs.push(Attrib {
+        tag: "NUM".into(),
+        text: placed,
+        invisible: false,
+        constant: false,
+        prompt: String::new(),
+        props: Default::default(),
+        multiline: None,
+    });
     let m = MLeader {
         leaders: vec![vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(4.0, 5.0, 0.0), Vec3::new(8.0, 4.0, 0.0)]],
         landing: Vec3::new(10.0, 3.0, 0.0),

@@ -113,7 +113,15 @@ fn text(x: f64, value: &str) -> Text {
 }
 
 fn attdef(handle: u64, tag: &str, x: f64, common: Common) -> Entity {
-    let a = Attrib { tag: tag.into(), text: text(x, tag), invisible: false, constant: false, prompt: String::new(), props: Default::default() };
+    let a = Attrib {
+        tag: tag.into(),
+        text: text(x, tag),
+        invisible: false,
+        constant: false,
+        prompt: String::new(),
+        props: Default::default(),
+        multiline: None,
+    };
     Entity { common, ..Entity::new(Handle(handle), EntityKind::AttDef(a)) }
 }
 
@@ -146,6 +154,7 @@ fn attributes_draw_with_their_own_properties() {
             constant: false,
             prompt: String::new(),
             props: Default::default(),
+            multiline: None,
         })
         .to_vec();
     let ins = Insert {

@@ -273,6 +273,7 @@ fn block_definition_properties_and_constant_attdefs_roundtrip() {
         constant,
         prompt: String::new(),
         props: Default::default(),
+        multiline: None,
     };
     for (i, a) in [attdef("COMPANY", false, true), attdef("SECRET", true, true), attdef("SHEET", false, false)].into_iter().enumerate() {
         b.entities.push(Entity::new(Handle(0x500 + i as u64), EntityKind::AttDef(a)));
@@ -1304,15 +1305,27 @@ fn intl_sample() -> Drawing {
         }),
     )
     .unwrap();
-    let def =
-        Attrib {
-            tag: "图号".into(), text: intl_text("默认"), invisible: false, constant: false, prompt: String::new(), props: Default::default()
-        };
+    let def = Attrib {
+        tag: "图号".into(),
+        text: intl_text("默认"),
+        invisible: false,
+        constant: false,
+        prompt: String::new(),
+        props: Default::default(),
+        multiline: None,
+    };
     let mut b = Block::new(&block);
     b.entities.push(Entity::new(Handle(0x50), EntityKind::AttDef(def)));
     d.blocks.insert(block.clone(), std::sync::Arc::new(b));
-    let att =
-        Attrib { tag: "图号".into(), text: intl_text(INTL), invisible: false, constant: false, prompt: String::new(), props: Default::default() };
+    let att = Attrib {
+        tag: "图号".into(),
+        text: intl_text(INTL),
+        invisible: false,
+        constant: false,
+        prompt: String::new(),
+        props: Default::default(),
+        multiline: None,
+    };
     d.add(
         &Space::Model,
         on,
@@ -1571,6 +1584,7 @@ fn attdef_prompt_survives_dxf_roundtrip() {
             constant: false,
             prompt: prompt.into(),
             props: Default::default(),
+            multiline: None,
         })
     };
     d.add(&Space::Model, Default::default(), attdef("Enter value")).unwrap();

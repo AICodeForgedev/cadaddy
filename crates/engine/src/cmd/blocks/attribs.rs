@@ -97,7 +97,15 @@ fn synced(blk: &Block, defs: &[&Attrib], ins: &Insert) -> Vec<Attrib> {
                 .find(|a| a.tag.eq_ignore_ascii_case(&ad.tag))
                 .map(|a| a.text.value.clone())
                 .unwrap_or_else(|| ad.text.value.clone());
-            Attrib { tag: ad.tag.clone(), text: t, invisible: ad.invisible, constant: false, prompt: String::new(), props: Default::default() }
+            Attrib {
+                tag: ad.tag.clone(),
+                text: t,
+                invisible: ad.invisible,
+                constant: false,
+                prompt: String::new(),
+                props: Default::default(),
+                multiline: ad.multiline.as_ref().map(|ml| ml.transformed(&m)),
+            }
         })
         .collect()
 }

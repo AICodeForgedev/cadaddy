@@ -349,6 +349,68 @@ pub struct Attrib {
     /// An attribute's own properties; each one left unset follows the attribute definition.
     #[serde(default, skip_serializing_if = "AttribProps::is_empty")]
     pub props: AttribProps,
+    /// A multiline attribute (DXF attribute type 2, or 4 for a definition): its text as
+    /// multiline text. `text.value` holds the plain text, which value edits change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multiline: Option<MultilineAttrib>,
+}
+
+/// The multiline text of a multiline attribute.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultilineAttrib {
+    pub mtext: MText,
+    /// The plain text `mtext`'s contents read as: an attribute whose value differs was edited
+    /// since, and its value replaces the contents.
+    pub read_as: String,
+}
+
+impl MultilineAttrib {
+    /// This text placed by `m` (a block reference's transform, for its attribute made from a
+    /// definition).
+    pub fn transformed(&self, m: &Mat3) -> MultilineAttrib {
+        let mut k = EntityKind::MText(self.mtext.clone());
+        k.transform(m);
+        let mtext = if let EntityKind::MText(t) = k { t } else { self.mtext.clone() };
+        MultilineAttrib { mtext, read_as: self.read_as.clone() }
+    }
+}
+
+impl Attrib {
+    /// Move a multiline attribute's text by `m` along with the attribute (nothing for others).
+    pub fn transform_multiline(&mut self, m: &Mat3) {
+        if let Some(ml) = &mut self.multiline {
+            *ml = ml.transformed(m);
+        }
+    }
+
+    /// A multiline attribute's text as drawn and saved: its multiline text, with the contents
+    /// replaced by the value when the value was edited since it was read.
+    pub fn multiline_text(&self) -> Option<MText> {
+        let m = self.multiline.as_ref()?;
+        let mut t = m.mtext.clone();
+        if self.text.value != m.read_as {
+            t.contents = mtext_literal(&self.text.value);
+        }
+        Some(t)
+    }
+}
+
+/// `s` as MTEXT contents that read back as `s`: backslashes and braces escaped, line breaks as
+/// paragraph breaks.
+pub fn mtext_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '{' => out.push_str("\\{"),
+            '}' => out.push_str("\\}"),
+            '\n' => out.push_str("\\P"),
+            '\r' => {}
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Properties set on one attribute of a block reference (an ATTRIB's layer, colour, linetype and
@@ -1165,7 +1227,10 @@ impl EntityKind {
                 r.dir = m.apply_vec(r.dir.xy()).normalized().to3(0.0);
             }
             EntityKind::Text(t) => transform_text(t, m, s, rot, mirror),
-            EntityKind::AttDef(a) => transform_text(&mut a.text, m, s, rot, mirror),
+            EntityKind::AttDef(a) => {
+                transform_text(&mut a.text, m, s, rot, mirror);
+                a.transform_multiline(m);
+            }
             EntityKind::MText(t) => {
                 t3(&mut t.insert);
                 t.height *= s;
@@ -1187,6 +1252,7 @@ impl EntityKind {
                 }
                 for a in &mut i.attribs {
                     transform_text(&mut a.text, m, s, rot, false);
+                    a.transform_multiline(m);
                 }
                 i.col_spacing *= s;
                 i.row_spacing *= s;

@@ -341,6 +341,12 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                                 q.y = r.y;
                             }
                             t.rotation = cadcraft_geom::norm_angle(t.rotation + turn);
+                            if let Some(ml) = &mut a.multiline {
+                                let r = ml.mtext.insert.xy().rotate_about(base, turn);
+                                ml.mtext.insert.x = r.x;
+                                ml.mtext.insert.y = r.y;
+                                ml.mtext.rotation = cadcraft_geom::norm_angle(ml.mtext.rotation + turn);
+                            }
                         }
                     }
                     if let Some(x) = num("scale").filter(|x| *x != 0.0) {
@@ -353,6 +359,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                                 if let EntityKind::Text(t) = k {
                                     a.text = t;
                                 }
+                                a.transform_multiline(&m);
                             }
                         }
                         i.scale = Vec3::new(x, x, x);

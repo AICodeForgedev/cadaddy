@@ -1315,6 +1315,9 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
         EntityKind::AttDef(a) => {
             z(&mut a.text.insert);
             a.text.align_pt.iter_mut().for_each(z);
+            if let Some(ml) = &mut a.multiline {
+                z(&mut ml.mtext.insert);
+            }
         }
         EntityKind::MText(t) => z(&mut t.insert),
         EntityKind::Insert(i) => {
@@ -1322,6 +1325,9 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
             for a in &mut i.attribs {
                 z(&mut a.text.insert);
                 a.text.align_pt.iter_mut().for_each(z);
+                if let Some(ml) = &mut a.multiline {
+                    z(&mut ml.mtext.insert);
+                }
             }
         }
         EntityKind::Dimension(d) => {

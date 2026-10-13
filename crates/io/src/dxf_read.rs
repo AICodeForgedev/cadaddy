@@ -105,6 +105,69 @@ fn attrib_props(t: &T, insert_layer: &str) -> AttribProps {
     }
 }
 
+/// An ATTRIB's or ATTDEF's groups split at its embedded multiline text (`101 Embedded Object`):
+/// the attribute's own groups and, for a multiline attribute, the MTEXT groups after the marker.
+fn split_embedded(tags: &[Tag]) -> (&[Tag], Option<&[Tag]>) {
+    match tags.iter().position(|t| t.code == 101) {
+        Some(i) => (tags.get(..i).unwrap_or(tags), tags.get(i + 1..)),
+        None => (tags, None),
+    }
+}
+
+/// A multiline attribute's text, from the MTEXT groups embedded in it.
+fn multiline_attrib(embedded: Option<&[Tag]>, c: &Common) -> Option<MultilineAttrib> {
+    let mtext = mtext_from(embedded.filter(|e| !e.is_empty())?, c);
+    let read_as = cadcraft_fonts::plain_mtext(&mtext.contents);
+    Some(MultilineAttrib { mtext, read_as })
+}
+
+/// Multiline text from MTEXT groups (an MTEXT entity's, or a multiline attribute's embedded ones).
+fn mtext_from(tags: &[Tag], c: &Common) -> MText {
+    let t = T(tags);
+    // Contents: code 3 chunks followed by code 1.
+    let mut contents = String::new();
+    for tg in tags.iter().filter(|x| x.code == 3) {
+        contents.push_str(&tg.str());
+    }
+    contents.push_str(&t.s(1).unwrap_or_default());
+    let contents = mtext_dxf::decode_contents(&contents);
+    let columns = mtext_dxf::read_columns(tags);
+    // The direction comes from the MTEXT's own groups only: in an R2018+ embedded object
+    // (group 101), 11 is the insertion point, not the X-axis direction (#667, as in #834).
+    let own = T(mtext_dxf::before_columns(tags));
+    let mut rotation = match (own.f(11), own.f(21)) {
+        (Some(x), Some(y)) if x != 0.0 || y != 0.0 => Vec2::new(x, y).angle(),
+        _ => own.fd(50, 0.0).to_radians(),
+    };
+    let mut attach = t.i(71).unwrap_or(1).clamp(1, 9) as u8;
+    if c.extrusion.z < 0.0 {
+        // Insertion point and direction are WCS, but the line height runs along extrusion ×
+        // direction: under (0,0,-1) the glyphs are mirrored. Drawn readable (MIRRTEXT = 0) with
+        // the same footprint, the text turns round and left/right attachment swap.
+        rotation = cadcraft_geom::norm_angle(rotation + std::f64::consts::PI);
+        attach = match attach {
+            1 | 4 | 7 => attach + 2,
+            3 | 6 | 9 => attach - 2,
+            a => a,
+        };
+    }
+    MText {
+        insert: t.p(10),
+        height: t.fd(40, 0.2).max(1e-9),
+        width: match &columns {
+            Some((_, w)) if t.fd(41, 0.0) <= 0.0 => *w,
+            _ => t.fd(41, 0.0).max(0.0),
+        },
+        attach,
+        rotation,
+        style: t.s(7).unwrap_or_else(|| "Standard".into()),
+        contents,
+        line_spacing: t.fd(44, 1.0),
+        line_spacing_exact: t.i(73) == Some(2),
+        columns: columns.map(|(c, _)| c),
+    }
+}
+
 fn text_from(t: &T) -> Text {
     let h = match t.i(72).unwrap_or(0) {
         1 => HAlign::Center,
@@ -293,58 +356,26 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         "RAY" => EntityKind::Ray(RayLine { base: t.p(10), dir: t.p(11) }),
         "XLINE" => EntityKind::XLine(RayLine { base: t.p(10), dir: t.p(11) }),
         "TEXT" => EntityKind::Text(text_from(&t)),
-        "MTEXT" => {
-            // Contents: code 3 chunks followed by code 1.
-            let mut contents = String::new();
-            for tg in tags.iter().filter(|x| x.code == 3) {
-                contents.push_str(&tg.str());
+        "MTEXT" => EntityKind::MText(mtext_from(tags, &c)),
+        "ATTDEF" => {
+            // A multiline definition has its text as embedded MTEXT after its own groups.
+            let (own, embedded) = split_embedded(tags);
+            let multiline = multiline_attrib(embedded, &c);
+            let own = T(own);
+            let mut text = text_from(&own);
+            if let Some(m) = &multiline {
+                text.value.clone_from(&m.read_as);
             }
-            contents.push_str(&t.s(1).unwrap_or_default());
-            let contents = mtext_dxf::decode_contents(&contents);
-            let columns = mtext_dxf::read_columns(tags);
-            // The direction comes from the MTEXT's own groups only: in an R2018+ embedded object
-            // (group 101), 11 is the insertion point, not the X-axis direction (#667).
-            let own = T(mtext_dxf::before_columns(tags));
-            let mut rotation = match (own.f(11), own.f(21)) {
-                (Some(x), Some(y)) if x != 0.0 || y != 0.0 => Vec2::new(x, y).angle(),
-                _ => own.fd(50, 0.0).to_radians(),
-            };
-            let mut attach = t.i(71).unwrap_or(1).clamp(1, 9) as u8;
-            if c.extrusion.z < 0.0 {
-                // Insertion point and direction are WCS, but the line height runs along extrusion ×
-                // direction: under (0,0,-1) the glyphs are mirrored. Drawn readable (MIRRTEXT = 0) with
-                // the same footprint, the text turns round and left/right attachment swap.
-                rotation = cadcraft_geom::norm_angle(rotation + std::f64::consts::PI);
-                attach = match attach {
-                    1 | 4 | 7 => attach + 2,
-                    3 | 6 | 9 => attach - 2,
-                    a => a,
-                };
-            }
-            EntityKind::MText(MText {
-                insert: t.p(10),
-                height: t.fd(40, 0.2).max(1e-9),
-                width: match &columns {
-                    Some((_, w)) if t.fd(41, 0.0) <= 0.0 => *w,
-                    _ => t.fd(41, 0.0).max(0.0),
-                },
-                attach,
-                rotation,
-                style: t.s(7).unwrap_or_else(|| "Standard".into()),
-                contents,
-                line_spacing: t.fd(44, 1.0),
-                line_spacing_exact: t.i(73) == Some(2),
-                columns: columns.map(|(c, _)| c),
+            EntityKind::AttDef(Attrib {
+                tag: own.s(2).unwrap_or_default(),
+                text,
+                invisible: own.i(70).unwrap_or(0) & 1 != 0,
+                constant: own.i(70).unwrap_or(0) & 2 != 0,
+                prompt: own.s(3).unwrap_or_default(),
+                props: Default::default(),
+                multiline,
             })
         }
-        "ATTDEF" => EntityKind::AttDef(Attrib {
-            tag: t.s(2).unwrap_or_default(),
-            text: text_from(&t),
-            invisible: t.i(70).unwrap_or(0) & 1 != 0,
-            constant: t.i(70).unwrap_or(0) & 2 != 0,
-            prompt: t.s(3).unwrap_or_default(),
-            props: Default::default(),
-        }),
         "INSERT" => {
             // A mirrored block reference comes with extrusion (0,0,-1): its insertion point, scale,
             // rotation and column spacing are in that OCS, where x runs the other way. In the WCS that
@@ -1135,13 +1166,22 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx, ski
                     while let Some((k2, t2)) = recs.get(i) {
                         if k2 == "ATTRIB" {
                             let tt = T(t2);
+                            // A multiline attribute has its text as embedded MTEXT after its own groups.
+                            let (own, embedded) = split_embedded(t2);
+                            let multiline = multiline_attrib(embedded, &common(&tt));
+                            let own = T(own);
+                            let mut text = text_from(&own);
+                            if let Some(m) = &multiline {
+                                text.value.clone_from(&m.read_as);
+                            }
                             attribs.push(Attrib {
-                                tag: tt.s(2).unwrap_or_default(),
-                                text: text_from(&tt),
-                                invisible: tt.i(70).unwrap_or(0) & 1 != 0,
+                                tag: own.s(2).unwrap_or_default(),
+                                text,
+                                invisible: own.i(70).unwrap_or(0) & 1 != 0,
                                 constant: false,
                                 prompt: String::new(),
                                 props: attrib_props(&tt, &ins_layer),
+                                multiline,
                             });
                             i += 1;
                         } else {
