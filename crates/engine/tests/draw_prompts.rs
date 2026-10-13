@@ -66,6 +66,20 @@ fn polygon_typed_radius_has_a_horizontal_bottom_edge() {
 }
 
 #[test]
+fn polygon_edge_endpoints_must_differ() {
+    let mut s = Session::new();
+    s.cmdline("polygon 4 e 1,1 1,1").unwrap();
+    assert_eq!(s.doc().unwrap().model.len(), 0, "no polygon");
+    assert!(logged(&s, "Edge endpoints must differ."), "{:?}", s.log);
+    assert!(s.running.is_some(), "still at the second endpoint prompt");
+    s.cmdline("3,1").unwrap();
+    assert!(s.running.is_none(), "a distinct endpoint finishes");
+    let EntityKind::LwPolyline(p) = last(&s) else { panic!("no polygon") };
+    assert!(p.closed && p.vertices.len() == 4);
+    assert!(p.vertices.iter().any(|v| v.p.near(Vec2::new(3.0, 1.0), 1e-9)), "the edge runs from 1,1 to 3,1");
+}
+
+#[test]
 fn circle_center_prompt_rejects_garbage() {
     let mut s = Session::new();
     s.cmdline("circle d").unwrap();

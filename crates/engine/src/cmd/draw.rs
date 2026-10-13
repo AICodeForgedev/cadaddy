@@ -895,6 +895,9 @@ impl Interactive for PolygonM {
         let n = self.sides.unwrap_or(4);
         if self.edge {
             if let Input::Point(p) = i {
+                if self.edge_pts.first().is_some_and(|a| a.near(p, 1e-12)) {
+                    return Err(crate::EngineError::Other("Edge endpoints must differ.".into()));
+                }
                 self.edge_pts.push(p);
                 if self.edge_pts.len() == 2 {
                     s.add_entity(lwpoly(polygon_from_edge(self.edge_pts[0], self.edge_pts[1], n), true))?;
