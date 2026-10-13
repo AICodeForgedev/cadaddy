@@ -1231,6 +1231,38 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         hatch_dialog = true;
     }
 
+    // While a command asks for a point, every click places one, however fast the drafting (#815).
+    // egui drops a click whose button comes up a few pixels from where it went down (a drag to it),
+    // and eframe hands a slow frame's clicks over together, which egui reports as one.
+    let point_prompt = app.session.current_prompt().is_some_and(|p| cadcraft_engine::pointmod::accepts(&p))
+        && app.session.pending_window.is_none()
+        && !app.session.realtime_zoom_active();
+    let pressed_primary = pressed_primary || (point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary));
+    if point_prompt && inside && pressed_primary && !middle_down && app.cmd.options.is_none() && app.cmd.buffer.is_empty() {
+        let releases: Vec<egui::Pos2> = ui.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, .. } => Some(*pos),
+                    _ => None,
+                })
+                .collect()
+        });
+        // The last one is placed below, at the cursor, like any click.
+        if let Some((_, earlier)) = releases.split_last() {
+            for pos in earlier.iter().filter(|p| rect.contains(**p)) {
+                let w = effective_point(app, xf.to_world(*pos), &xf, ui.ctx());
+                let result = match app.canvas.snap {
+                    Some(hit) => app.session.input_snapped(hit),
+                    None => app.session.input(Input::Point(w)),
+                };
+                if let Err(e) = result {
+                    app.session.echo(e.to_string());
+                }
+            }
+        }
+    }
+
     let raw_world = hover_pos.filter(|_| inside).map(|p| xf.to_world(p));
     let dyn_frame = crate::cmdline::dyn_frame(app);
     if let Some(w) = raw_world {
