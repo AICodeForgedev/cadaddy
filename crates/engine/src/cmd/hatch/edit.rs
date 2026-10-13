@@ -2,12 +2,13 @@
 //! associativity (unlink, or link to boundary objects), separate hatches and recreated
 //! boundaries of existing hatches.
 
-use cadcraft_doc::{Drawing, EntityKind, Handle, Hatch, HatchLoop, entity_bounds};
+use cadcraft_color::Color;
+use cadcraft_doc::{Drawing, EntityKind, Gradient, Handle, Hatch, HatchLoop, entity_bounds};
 use cadcraft_geom::{Bounds2, Polyline, Vec2, point_in_polygon};
 use serde_json::{Value, json};
 
 use super::assoc::{detach, same_shape};
-use super::{ORIGIN_KW, OriginMode, closed_loop, island_style};
+use super::{GRADIENT_NAMES, ORIGIN_KW, OriginMode, closed_loop, gradient_name, island_style};
 use crate::cmd::helpers::lwpoly;
 use crate::cmd::{bad, bool_or, point_param, str_param, targets};
 use crate::{Accept, Input, Interactive, Picker, Prompt, Result, Session, Step};
@@ -165,6 +166,87 @@ fn properties(h: &mut Hatch, p: &Value) {
     }
 }
 
+/// HATCHEDIT's `gradient`: the fields to change, all checked before any hatch is touched.
+struct GradientEdit {
+    name: Option<&'static str>,
+    color1: Option<Color>,
+    color2: Option<Color>,
+    /// Radians.
+    angle: Option<f64>,
+    centered: Option<bool>,
+}
+
+impl GradientEdit {
+    /// Make `h` a gradient fill (from the default LINEAR blue-to-white one when it has none) and
+    /// set the given fields.
+    fn apply(&self, h: &mut Hatch) {
+        let mut g = h.gradient.clone().unwrap_or(Gradient {
+            name: "LINEAR".into(),
+            color1: Color::Index(5),
+            color2: Color::Index(7),
+            angle: 0.0,
+            centered: true,
+        });
+        if let Some(n) = self.name {
+            g.name = n.into();
+        }
+        if let Some(c) = self.color1 {
+            g.color1 = c;
+        }
+        if let Some(c) = self.color2 {
+            g.color2 = c;
+        }
+        if let Some(a) = self.angle {
+            g.angle = a;
+        }
+        if let Some(c) = self.centered {
+            g.centered = c;
+        }
+        h.gradient = Some(g);
+        h.pattern = "SOLID".into();
+        h.solid = true;
+        h.pattern_lines.clear();
+    }
+}
+
+fn gradient_edit(p: &Value) -> Result<Option<GradientEdit>> {
+    let g = match p.get("gradient") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Object(g)) => g,
+        Some(_) => return Err(bad("hatchedit", "`gradient` is an object {name?, color1?, color2?, angle?, centered?}")),
+    };
+    let field = |k: &str| g.get(k).filter(|v| !v.is_null());
+    let name = match field("name") {
+        None => None,
+        Some(v) => Some(
+            v.as_str()
+                .and_then(gradient_name)
+                .ok_or_else(|| bad("hatchedit", format!("unknown gradient `name`; use one of {}", GRADIENT_NAMES.join(", "))))?,
+        ),
+    };
+    let color = |k: &str| -> Result<Option<Color>> {
+        match field(k) {
+            None => Ok(None),
+            Some(v) => v
+                .as_str()
+                .and_then(Color::parse)
+                .map(Some)
+                .ok_or_else(|| bad("hatchedit", format!("`gradient.{k}` is a colour such as \"5\", \"red\" or \"255,128,0\""))),
+        }
+    };
+    let angle = match field("angle") {
+        None => None,
+        Some(v) => Some(
+            v.as_f64().map(f64::to_radians).filter(|a| a.is_finite()).ok_or_else(|| bad("hatchedit", "`gradient.angle` is a number of degrees"))?,
+        ),
+    };
+    let centered = match field("centered") {
+        None => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| bad("hatchedit", "`gradient.centered` is true or false"))?),
+    };
+    Ok(Some(GradientEdit { name, color1: color("color1")?, color2: color("color2")?, angle, centered }))
+}
+
 pub(super) fn run_hatchedit(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = hatches(s, p)?;
     let style = match str_param(p, "style") {
@@ -185,6 +267,10 @@ pub(super) fn run_hatchedit(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Some(_) => return Err(bad("hatchedit", "`recreate` is \"polyline\"")),
     };
+    let grad = gradient_edit(p)?;
+    if grad.is_some() && str_param(p, "pattern").map(|v| v.trim().to_ascii_uppercase()).is_some_and(|v| !v.is_empty() && v != "SOLID") {
+        return Err(bad("hatchedit", "give `pattern` or `gradient`, not both"));
+    }
     // Like the prompt: a pattern must be one CADCraft defines, SOLID, or the hatches' own (a
     // pattern read from a file keeps its definition).
     if let Some(up) = str_param(p, "pattern").map(|v| v.trim().to_ascii_uppercase()).filter(|v| !v.is_empty())
@@ -210,6 +296,9 @@ pub(super) fn run_hatchedit(s: &mut Session, p: &Value) -> Result<Value> {
     for handle in &hs {
         let Some(EntityKind::Hatch(mut h)) = s.doc()?.entity(*handle).map(|e| e.kind.clone()) else { continue };
         properties(&mut h, p);
+        if let Some(g) = &grad {
+            g.apply(&mut h);
+        }
         if let Some(st) = style {
             h.style = st;
         }

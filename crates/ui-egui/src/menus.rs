@@ -355,6 +355,16 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some("dsettings".into());
             Ok(Value::Null)
         }
+        // Typed or from a menu (no parameters): the Hatch and Gradient dialog (HPDLGMODE 1) and the
+        // Hatch Edit dialog. -HATCH, -HATCHEDIT and JSON calls keep the command line and the JSON form.
+        "hatch" | "h" | "bh" | "gradient" | "gd" if params.is_null() && crate::hatchdlg::dialog_on(app) => {
+            crate::hatchdlg::open_create(app, matches!(id, "gradient" | "gd"));
+            Ok(Value::Null)
+        }
+        "hatchedit" | "he" if params.is_null() && app.session.state().is_ok() => {
+            crate::hatchdlg::open_edit(app);
+            Ok(Value::Null)
+        }
         "properties" | "pr" | "props" | "ch" if params.is_null() => {
             crate::docking::command(app, false, &json!({"operation":"open", "panel":"properties"}))
         }

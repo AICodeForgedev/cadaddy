@@ -638,6 +638,8 @@ fn hostile_params_never_panic() {
             json!({"points": [[1e308, -1e308], ["a"]]}),
             json!({"handles": ["zz", 99999]}),
             json!({"radius": -1, "center": [0, 0]}),
+            json!({"gradient": {"name": 5, "color1": [1], "angle": "x", "centered": "y"}}),
+            json!({"points": [[0, 0]], "handles": ["1"], "gradient": "x", "name": "RAINBOW"}),
         ] {
             let _ = s.execute(c.id, &p);
         }

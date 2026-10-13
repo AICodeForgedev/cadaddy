@@ -96,6 +96,7 @@ fn missing_marked_ui_literals(language: &str) -> BTreeSet<String> {
         include_str!("../palettes/quickcalc.rs"),
         include_str!("../palettes/patterns.rs"),
         include_str!("../dialogs.rs"),
+        include_str!("../hatchdlg.rs"),
         include_str!("../layers.rs"),
         include_str!("../canvas/compare.rs"),
         include_str!("../palettes.rs"),
@@ -348,6 +349,7 @@ fn dialogs_render_in_ukrainian_and_keep_their_source_ids() {
         ("qselect", "Швидкий вибір"),
         ("parameters", "Диспетчер параметрів"),
         ("language", "Мова інтерфейсу"),
+        ("hatch", "Штрихування та градієнт"),
     ] {
         let mut app = CadApp::new(Session::new(), Services::default());
         app.ui.interface_language = Preference::Ukrainian;
@@ -540,4 +542,9 @@ fn chinese_needs_an_installed_cjk_font() {
     if font.is_none() {
         assert!(app.status.as_ref().is_some_and(|(s, _)| s.contains("No Chinese font")));
     }
+}
+
+#[test]
+fn hatch_dialog_extents_label_says_extents_in_ukrainian() {
+    assert_eq!(tr("uk", "Default to boundary extents"), "Типово за габаритами контуру");
 }

@@ -37,7 +37,7 @@ use serde_json::Value;
 pub use cadcraft_doc as doc;
 pub use cadcraft_geom as geom;
 pub use cadcraft_render as render;
-pub use cmd::hatch::{PatternChoice, pattern_choices};
+pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use prompt::{Accept, Drag, Input, Interactive, Picker, Prompt, Step};
 
@@ -606,6 +606,8 @@ pub struct Session {
     pub clipboard_source: Option<cmd::clipboard::ClipSource>,
     /// The window last picked with PLOTWINDOW (the Plot dialog's "Window <").
     pub plot_window: Option<cadcraft_geom::Bounds2>,
+    /// What the last HATCHPICK kept (the Hatch and Gradient dialog's picks).
+    pub hatch_picks: Option<cmd::hatch::HatchPicks>,
 }
 
 impl Default for Session {
@@ -650,6 +652,7 @@ impl Session {
             last_used: LastUsed::default(),
             clipboard_source: None,
             plot_window: None,
+            hatch_picks: None,
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {

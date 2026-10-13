@@ -19,6 +19,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod docking;
+pub mod hatchdlg;
 pub mod spacemouse;
 // The External References palette.
 pub mod xrefs;
@@ -216,6 +217,8 @@ pub struct CadApp {
     pub gpu_faults: std::sync::Arc<gpu::GpuFaults>,
     /// The notice shown after one (see [`autosave::gpu_notice`]).
     pub gpu_notice: Option<autosave::GpuNotice>,
+    /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
+    pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
 }
 
 impl CadApp {
@@ -249,6 +252,7 @@ impl CadApp {
             recovery: autosave::Recovery::default(),
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
+            hatch_dlg: None,
         }
     }
 
@@ -438,6 +442,7 @@ impl CadApp {
         self.issue_screenshots(ctx);
         self.gpu_fault_tick(ctx);
         managers::plot_window_resume(self, ctx);
+        hatchdlg::resume(self);
         self.autosave_tick(ctx);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]

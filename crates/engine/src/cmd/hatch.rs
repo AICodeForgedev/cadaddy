@@ -15,15 +15,22 @@ use crate::{Accept, EngineError, Input, Interactive, Picker, Prompt, Result, Ses
 
 mod assoc;
 mod edit;
+mod pick;
 pub(crate) use assoc::update as refill_associative;
+pub use pick::{HatchPicks, PickMode};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("hatch", "Hatch...", run_hatch).menu(&["Draw", "Hatch..."]).alias(&["h", "bh", "-hatch"]).params("{points?: [[x,y]] (internal points) | handles?: [hex] (closed objects), pattern?: \"ANSI31\", scale?, angle? (degrees), associative? (HPASSOC), separate? (HPSEPARATE: a hatch per point/object), origin?: [x,y] (HPORIGIN) | originMode?: \"current\"|\"bottomLeft\"|\"bottomRight\"|\"topLeft\"|\"topRight\"|\"center\" (HPORIGINMODE), style?: \"normal\"|\"outer\"|\"ignore\" (HPISLANDDETECTION)} — gaps up to HPGAPTOL close").interactive(|s| Ok(Box::new(HatchM::new(s, false)))),
-        CommandSpec::new("gradient", "Gradient...", run_gradient).menu(&["Draw", "Gradient..."]).alias(&["gd"]).params("{points? | handles?, color1?, color2?, angle?}").interactive(|s| Ok(Box::new(HatchM::new(s, true)))),
+        CommandSpec::new("hatch", "Hatch...", run_hatch).menu(&["Draw", "Hatch..."]).alias(&["h", "bh", "-hatch"]).params("{points?: [[x,y]] (internal points) and/or handles?: [hex] (closed objects), pattern?: \"ANSI31\", scale?, angle? (degrees), associative? (HPASSOC), separate? (HPSEPARATE: a hatch per point/object), origin?: [x,y] (HPORIGIN) | originMode?: \"current\"|\"bottomLeft\"|\"bottomRight\"|\"topLeft\"|\"topRight\"|\"center\" (HPORIGINMODE), style?: \"normal\"|\"outer\"|\"ignore\" (HPISLANDDETECTION)} — gaps up to HPGAPTOL close").interactive(|s| Ok(Box::new(HatchM::new(s, false)))),
+        CommandSpec::new("gradient", "Gradient...", run_gradient).menu(&["Draw", "Gradient..."]).alias(&["gd"]).params("{points? and/or handles?, name?: \"LINEAR\"|\"CYLINDER\"|\"CURVED\"|\"SPHERICAL\"|\"HEMISPHERICAL\" or INV… (colours swapped), color1?, color2?, angle? (degrees), centered? (default true)}").interactive(|s| Ok(Box::new(HatchM::new(s, true)))),
         CommandSpec::new("boundary", "Boundary...", run_boundary).menu(&["Draw", "Boundary..."]).alias(&["bo", "bpoly"]).params("{points: [[x,y]]}").interactive(|_| Ok(Box::new(BoundaryM { region: false }))),
         CommandSpec::new("region", "Region", run_region).menu(&["Draw", "Region"]).alias(&["reg"]).params("{handles?}"),
-        CommandSpec::new("hatchedit", "Hatch Edit", edit::run_hatchedit).menu(&["Modify", "Object", "Hatch..."]).alias(&["he", "-hatchedit"]).params("{handles?, pattern?, scale?, angle?, associative?: bool (false unlinks; true links each loop to a closed object of the same shape, or to `boundary` objects), boundary?: [hex], style?, origin? | originMode?, separate?: true, recreate?: \"polyline\"|\"region\", associate?: bool (link to the recreated boundary)}").interactive(|s| Ok(Box::new(edit::HatchEditM::new(s)))),
+        CommandSpec::new("hatchedit", "Hatch Edit", edit::run_hatchedit).menu(&["Modify", "Object", "Hatch..."]).alias(&["he", "-hatchedit"]).params("{handles?, pattern?, scale?, angle?, gradient?: {name?, color1?, color2?, angle? (degrees), centered?} (makes or changes a gradient fill; `pattern` turns it back), associative?: bool (false unlinks; true links each loop to a closed object of the same shape, or to `boundary` objects), boundary?: [hex], style?, origin? | originMode?, separate?: true, recreate?: \"polyline\"|\"region\", associate?: bool (link to the recreated boundary)}").interactive(|s| Ok(Box::new(edit::HatchEditM::new(s)))),
+        CommandSpec::new("hatchpick", "Hatch Pick", pick::run_hatchpick)
+            .params("{points?: [[x,y]] (internal points), handles?: [hex] (closed objects)} (typed: Points, Objects, oRigin or Hatch, then the picks): the Hatch and Gradient dialog's picks, kept in the session; changes nothing")
+            .enabled(has_doc)
+            .noundo()
+            .interactive(|_| Ok(Box::new(pick::HatchPickM::default()))),
     ]
 }
 
@@ -250,6 +257,17 @@ pub(crate) fn loops_from_handles(s: &Session, hs: &[Handle]) -> Result<Vec<Hatch
     Ok(loops)
 }
 
+/// Gradient fills by name: the shapes the renderer draws (`render/src/hatch.rs`); the INV forms
+/// swap the two colours.
+pub(crate) const GRADIENT_NAMES: [&str; 10] =
+    ["LINEAR", "CYLINDER", "CURVED", "SPHERICAL", "HEMISPHERICAL", "INVLINEAR", "INVCYLINDER", "INVCURVED", "INVSPHERICAL", "INVHEMISPHERICAL"];
+
+/// A gradient name as stored (upper case), or None when it isn't one of [`GRADIENT_NAMES`].
+pub(crate) fn gradient_name(t: &str) -> Option<&'static str> {
+    let up = t.trim().to_ascii_uppercase();
+    GRADIENT_NAMES.iter().copied().find(|n| *n == up)
+}
+
 #[derive(Clone)]
 struct HatchSettings {
     pattern: String,
@@ -273,11 +291,11 @@ impl HatchSettings {
         ));
         let pattern = str_param(p, "pattern").map(str::to_ascii_uppercase).unwrap_or(hdr.0);
         let g = gradient.then(|| Gradient {
-            name: str_param(p, "name").unwrap_or("LINEAR").to_string(),
+            name: str_param(p, "name").and_then(gradient_name).unwrap_or("LINEAR").to_string(),
             color1: str_param(p, "color1").and_then(Color::parse).unwrap_or(Color::Index(5)),
             color2: str_param(p, "color2").and_then(Color::parse).unwrap_or(Color::Index(7)),
             angle: f64_or(p, "angle", 0.0).to_radians(),
-            centered: true,
+            centered: bool_or(p, "centered", true),
         });
         HatchSettings {
             pattern,
@@ -333,14 +351,21 @@ fn make(s: &mut Session, p: &Value, gradient: bool) -> Result<Value> {
     if str_param(p, "originMode").is_some_and(|t| OriginMode::parse(t).is_none()) {
         return Err(bad(cmd, "unknown `originMode`"));
     }
+    if gradient && str_param(p, "name").is_some_and(|t| gradient_name(t).is_none()) {
+        return Err(bad(cmd, format!("unknown gradient `name`; use one of {}", GRADIENT_NAMES.join(", "))));
+    }
     let st = HatchSettings::from(s, p, gradient);
     // Loops by picked point or selected object: one hatch each when separate.
     let mut groups: Vec<Vec<HatchLoop>> = Vec::new();
-    if let Some(pts) = points_param(p, "points") {
-        for q in pts {
-            groups.push(loops_at(s, q)?);
-        }
-    } else {
+    // Internal points and boundary objects can come together (the dialog's Pick points and
+    // Select objects); points alone don't fall back to the selection.
+    let pts = points_param(p, "points");
+    let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+    let objects = pts.is_none() || given("handles") || given("handle");
+    for q in pts.into_iter().flatten() {
+        groups.push(loops_at(s, q)?);
+    }
+    if objects {
         let hs = targets(s, p)?;
         if st.separate {
             groups.extend(loops_from_handles(s, &hs)?.into_iter().map(|l| vec![HatchLoop { outer: true, ..l }]));

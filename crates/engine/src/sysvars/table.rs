@@ -55,6 +55,8 @@ const HEADER: &[(&str, Kind, Def)] = &[
     ("DONUTOD", Kind::Real { min: 0.0, strict: true }, Def::Real(1.0)),
     ("EDGEMODE", Kind::Choice(&[0, 1]), Def::Int(0)),
     ("HPANG", Kind::Angle, Def::Real(0.0)),
+    // 1: HATCH and GRADIENT typed or from a menu open the Hatch and Gradient dialog; 0: the command line.
+    ("HPDLGMODE", Kind::Choice(&[0, 1]), Def::Int(1)),
     ("HPNAME", Kind::Pattern, Def::Str("ANSI31")),
     ("HPSCALE", Kind::Real { min: 0.0, strict: true }, Def::Real(1.0)),
     ("INSNAME", Kind::Name, Def::Str("")),

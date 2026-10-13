@@ -1233,3 +1233,34 @@
 	Hatch Pattern	Зразок штрихування
 	Search for pattern	Пошук зразка
 	Run Script...	Виконати сценарій...
+	Hatch Pick	Вибір для штрихування
+# Hatch and Gradient dialog
+	Hatch and Gradient	Штрихування та градієнт
+	Color 1	Колір 1
+	Color 2	Колір 2
+	Shape	Форма
+	Curved	Вигнутий
+	Spherical	Сферичний
+	Hemispherical	Напівсферичний
+	Inverted	Інвертований
+	Centered	По центру
+	Hatch origin	Початок штрихування
+	Use current origin	Використати поточний початок
+	Specified origin	Заданий початок
+	Click to set new origin	Клацніть, щоб задати новий початок
+	Default to boundary extents	Типово за габаритами контуру
+	Bottom left	Унизу ліворуч
+	Bottom right	Унизу праворуч
+	Top left	Угорі ліворуч
+	Top right	Угорі праворуч
+	Boundaries	Контури
+	Add: Pick points	Додати: вказати точки
+	Add: Select objects	Додати: вибрати об'єкти
+	Boundaries picked: {n}	Вибрано контурів: {n}
+	Associative	Асоціативне
+	Create separate hatches	Створити окремі штрихування
+	Island detection	Виявлення островів
+	Normal	Звичайне
+	Outer	Зовнішнє
+	Ignore	Ігнорувати
+	Origin: {x}, {y}	Початок: {x}, {y}
