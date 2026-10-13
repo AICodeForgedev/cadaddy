@@ -826,9 +826,7 @@ impl Session {
             (Some(m), Ok(_)) => Err(EngineError::Other(m)),
             (_, r) => r,
         };
-        cmd::groups::after_command(self, before.as_ref().map(|b| &b.0));
-        cmd::constraints::after_command(self, before.as_ref().map(|b| &b.0), spec.undoable && result.is_ok());
-        assoc::after_command(self, before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2));
+        self.after_command(before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2), spec.undoable && result.is_ok());
         let result = match (result, &before) {
             (Ok(v), Some((doc, sel, uid))) if spec.undoable => self.refuse_non_finite(Some(*uid), doc, sel, spec.id).map(|()| v),
             (r, _) => r,
@@ -1182,9 +1180,7 @@ impl Session {
         if let Some(m) = cmd::blocks::refedit::after_command(self, &run.before, &run.id) {
             self.echo(m);
         }
-        cmd::groups::after_command(self, Some(&run.before));
-        cmd::constraints::after_command(self, Some(&run.before), true);
-        assoc::after_command(self, Some(&run.before), None);
+        self.after_command(Some(&run.before), None, true);
         if self.suspended.is_some() {
             // A transparent command's changes belong to the undo step of the command it ran inside.
             if let Ok(st) = self.state_mut()
@@ -1202,7 +1198,20 @@ impl Session {
         }
     }
 
-    /// After a transparent command ends, the command it interrupted prompts again.
+    /// The post-command passes, in order, run after every command — by [`Session::execute`] and
+    /// when an interactive command finishes — so their edits land in the command's own undo step:
+    /// group membership is pruned, constraints are inferred, purged and re-solved, and
+    /// associative dimensions and hatches follow their sources. A new pass is added here, once.
+    ///
+    /// `before` is the drawing the command started from; `uid` (when known) is the document it
+    /// started in, so associativity is not applied across a document switch; `ok` is false for a
+    /// failed or non-undoable programmatic command, which skips the constraint pass.
+    fn after_command(&mut self, before: Option<&Arc<Drawing>>, uid: Option<u64>, ok: bool) {
+        cmd::groups::after_command(self, before);
+        cmd::constraints::after_command(self, before, ok);
+        assoc::after_command(self, before, uid);
+    }
+
     fn resume_suspended(&mut self) {
         if let Some(outer) = self.suspended.take() {
             self.echo(format!("Resuming {} command.", outer.id.to_ascii_uppercase()));
