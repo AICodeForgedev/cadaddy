@@ -799,6 +799,21 @@ mod tests {
     }
 
     #[test]
+    fn hatchedit_solid_replaces_gradient() {
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        s.execute("gradient", &json!({ "points": [[5, 5]], "color1": "1", "color2": "3" })).unwrap();
+        let (h, before) = only_hatch(&s);
+        assert!(before.gradient.is_some());
+        s.execute("hatchedit", &json!({ "handles": [h.clone()], "pattern": "SOLID" })).unwrap();
+        let (h2, hatch) = only_hatch(&s);
+        assert_eq!(h2, h);
+        assert!(hatch.solid);
+        assert!(hatch.gradient.is_none(), "SOLID is a plain fill, not the gradient");
+        assert_eq!(hatch.loops, before.loops);
+    }
+
+    #[test]
     fn the_pattern_picker_is_offered_and_its_choice_sets_the_pattern() {
         let mut s = Session::new();
         s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();

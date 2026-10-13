@@ -146,9 +146,10 @@ fn properties(h: &mut Hatch, p: &Value) {
     if let Some(v) = str_param(p, "pattern").map(str::trim).filter(|v| !v.is_empty()) {
         h.pattern = v.to_ascii_uppercase();
         h.solid = h.pattern == "SOLID";
+        // A named pattern, SOLID included, replaces the gradient fill; the renderer draws the
+        // gradient first when it is set.
+        h.gradient = None;
         if !h.solid {
-            // A named pattern replaces the gradient fill; the renderer draws the gradient first when it is set.
-            h.gradient = None;
             // A library pattern is drawn from the library; a loaded .pat pattern brings its lines;
             // any other name is the hatch's own and keeps its definition.
             if cadcraft_doc::library::pattern(&h.pattern).is_some() {
