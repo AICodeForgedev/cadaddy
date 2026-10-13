@@ -83,6 +83,7 @@ mod tests {
             let sample = match f.scripts.first().copied() {
                 Some("Jpan") => '\u{3042}',
                 Some("Arab") => '\u{0628}',
+                Some("Hang" | "Kore") => '가',
                 _ => 'A',
             };
             assert!(face.is_some_and(|x| x.has_glyph(sample)), "{} lacks {sample}", f.family);

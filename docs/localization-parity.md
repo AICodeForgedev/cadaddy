@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (Czech catalog added: reference/literal coverage, Czech plurals and menu headings) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (complete current Korean catalog; locale/preferences/live-switch support and Hangul font coverage) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How far CADCraft's interface and drawing text are from AutoCAD's languages. Summarised in
 [ROADMAP.md](../ROADMAP.md#languages); work items in [gaps.md](gaps.md#localization).
@@ -62,16 +62,16 @@ plus native review by a human; extending the catalog to the remaining English-on
 | Indonesian | id | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
 | Japanese | ja | 0 (0%) | 0% | CJK glyphs render; IME pending; no vertical text | no | none | 4–6 h |
 | German | de | 989 catalog rows (≈ 100% of the catalog; ≈ 80% of all UI strings, estimated: engine diagnostics and uncatalogued text stay English) | dialogs and tooltips yes; command reference searchable in German | Latin: yes (bundled egui fonts cover ä ö ü Ä Ö Ü ß; long strings will need layout checks) | no native review | partial | 1–2 h |
-| Korean | ko | 0 (0%) | 0% | Hangul renders; macOS Korean IME fixes pending (#118, #119) | no | none | 4–6 h |
+| Korean | ko | 1,235 rows (1,229 ordinary, 4 menu, 2 count); full existing catalog union and marked UI coverage | dialogs, tooltips, Options and translated command-reference labels | UI requires catalog-covering installed or optional craft-fonts Hang/Kore face; English fallback without one; IME fixes still pending | original AI-assisted translation; independent native proofreading pending | complete current catalog; English-only interface gaps remain | native review + platform layout/IME validation |
 | Vietnamese | vi | 0 (0%) | 0% | Latin with stacked diacritics: renders per code point, untested | no | none | 3–5 h |
 | Ukrainian | uk | 989 catalog rows (≈ 100% of the catalog; ≈ 80% of all UI strings, estimated: engine diagnostics and uncatalogued text stay English) | dialogs and tooltips yes; command reference searchable in Ukrainian | Cyrillic: yes (bundled egui fonts) | translated by a contributor; no second review | partial | 2–4 h |
 | Czech | cs | 1,202 catalog rows; reference catalog and marked UI literals covered | dialogs and tooltips yes; contextual menu headings; command reference searchable in Czech | Latin: yes (bundled egui proportional and monospace fonts; Czech letters and quotes tested) | AI-assisted by @Losminek; independent review pass; not yet proofread by a native speaker | complete current catalog; English-only interface gaps remain | native review + shared English-only UI work |
 | Italian | it | 1,227 catalog rows; reference catalog and marked UI literals covered | dialogs and tooltips yes; contextual menu headings (Visualizza / Vista, Edita / Modifica); command reference searchable in Italian | Latin: yes (bundled egui fonts; accented letters tested) | AI-assisted by Emanuele Bottelli (Claude), written from the English strings with Italian desktop-CAD vocabulary; no native proofreading pass yet | complete current catalog; English-only interface gaps remain | native review + shared English-only UI work |
 
-Other languages shipped: Ukrainian, Brazilian Portuguese, German, Czech, Russian, French and Italian. Czech and
+Other languages shipped: Ukrainian, Brazilian Portuguese, German, Czech, Russian, French, Italian and Korean. Czech and
 Brazilian Portuguese cover the reference catalog and every marked UI literal; engine diagnostics and uncatalogued text
 remain English. AutoCAD for Mac ships 7
-non-English languages (zh-Hans, es, fr, ja, de, ko, it); of those, CADCraft now ships German,
+non-English languages (zh-Hans, es, fr, ja, de, ko, it); of those, CADCraft now ships German and Korean,
 and additionally Ukrainian, which AutoCAD for Mac doesn't ship.
 
 **Total to put all twelve at `full`:** about 55–95 Opus 5.5 hours (catalog extension 4–6 h,
@@ -82,6 +82,7 @@ each language, which needs humans. Translations parallelise fully once the catal
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Korean added: full 1,235-row existing catalog union, single count form, locale/persistence/live-switch tests, and validated Hangul UI fonts; native review and platform verification pending |
 | 2026-10-12 | minor | Italian added: 1,227 rows, one/other plurals, two `menu` headings, locale/preference/plural/font tests; AI-assisted, native proofreading pending |
 | 2026-10-12 | minor | Brazilian Portuguese catalog completed by @RicSchonfelder: 238 rows added (1,231 total), now covering the reference catalog and every marked UI literal, gaps 0; bundled-font glyph test for the catalog's accented letters |
 | 2026-10-11 | minor | Czech added: 1,202 rows, one/few/other plurals, locale/preferences/menu/font/render tests; independent review pass; native proofreading pending |

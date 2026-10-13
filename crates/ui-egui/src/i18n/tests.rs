@@ -39,7 +39,7 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
 /// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
 /// command doesn't require a row in every language.
 const REQUIRED: &[&str] = &["uk"];
-const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it"];
+const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko"];
 
 fn check(language: &str, what: &str, missing: Vec<String>) {
     if REQUIRED.contains(&language) {
@@ -601,4 +601,181 @@ fn chinese_needs_an_installed_cjk_font() {
 #[test]
 fn hatch_dialog_extents_label_says_extents_in_ukrainian() {
     assert_eq!(tr("uk", "Default to boundary extents"), "Типово за габаритами контуру");
+}
+
+#[test]
+fn korean_representative_translations_remain_available() {
+    let ko = catalog("ko").unwrap();
+    // Fixed regression examples; new source strings remain reported, not required for Korean.
+    assert!(REPORTED.contains(&"ko"));
+    for (context, source, expected) in [
+        ("", "File", "파일"),
+        ("menu", "View", "보기"),
+        ("menu", "Draw", "그리기"),
+        ("menu", "Dimension", "치수"),
+        ("menu", "Modify", "수정"),
+        ("", "Options...", "옵션..."),
+        ("", "User Preferences", "사용자 기본 설정"),
+        ("", "Interface Language", "인터페이스 언어"),
+        ("", "Properties", "특성"),
+        ("", "Degree", "도 기호"),
+        ("", "Style: Standard", "스타일: Standard"),
+        ("", "WCS ⌄", "WCS 선택"),
+        ("@plural", "{n} contributor", "기여자 {n}명"),
+        ("@plural", "{n} commit", "커밋 {n}개"),
+    ] {
+        assert_eq!(ko.get(&(context, source)).copied(), Some(expected), "{context}: {source}");
+    }
+    assert_eq!(tr("ko", "future untranslated label"), "future untranslated label");
+}
+
+#[test]
+fn korean_locale_saved_preference_and_single_count_form() {
+    for tag in ["ko", "ko-KR", "ko_KR.UTF-8", "KO-kr", " ko-KR ", "ko_KR@euro"] {
+        assert_eq!(locale_language(tag), Some("ko"), "{tag}");
+    }
+    for tag in ["kr", "korean", "kotlin"] {
+        assert_eq!(locale_language(tag), None, "{tag}");
+    }
+    assert_eq!(Preference::parse("ko"), Some(Preference::Korean));
+    assert_eq!(Preference::Korean.resolve(&["en-US".into()]), "ko");
+    assert_eq!(Preference::Auto.resolve(&["pl-PL".into(), "ko-KR".into(), "en-US".into()]), "ko");
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.system_languages = vec!["ko-KR".into()];
+    app.run("ui.language", json!({"lang": "ko"})).unwrap();
+    let mut restored = CadApp::new(Session::new(), Services::default());
+    restored.system_languages = vec!["en-US".into()];
+    restored.load_prefs(&app.prefs_json());
+    assert_eq!(restored.ui.interface_language, Preference::Korean);
+    assert_eq!(restored.language(), app.language());
+    with_language("ko", || {
+        for n in [0, 1, 2, 5, 11, 21, 101, u64::MAX] {
+            assert_eq!(plural_ko(n), 0);
+            assert_eq!(count(n, "{n} contributor", "{n} contributors"), format!("기여자 {n}명"));
+        }
+        assert_eq!(format("Current: {color}", &[("color", "{n} Open".into())]), "현재: {n} Open");
+    });
+}
+
+#[test]
+fn korean_live_switch_keeps_automation_and_drawing_and_falls_back_without_font() {
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.ui.in_window_menu = true;
+    app.session.state_mut().unwrap().title = "Open".into();
+    let ctx = egui::Context::default();
+    app.logic(&ctx);
+    assert!(render(&mut app, &ctx).contains("Properties"));
+    app.start("line");
+    let prompt = crate::control::cmdline_state(&app);
+    let commands = crate::control::all_commands(&app);
+    let result = app.run("ui.language", json!({"lang": "ko"})).unwrap();
+    let supported = crate::theme::can_show("ko");
+    assert_eq!(result["shown"], if supported { "ko" } else { "en" });
+    assert_eq!(app.ui.interface_language, Preference::Korean);
+    app.logic(&ctx);
+    assert_eq!(app.fonts_language, Some(app.language()));
+    let text = render(&mut app, &ctx);
+    if supported {
+        for label in ["특성", "파일", "첫 번째 점 지정"] {
+            assert!(text.contains(label), "missing {label}: {text}");
+        }
+    } else {
+        assert!(text.contains("Properties"));
+        assert!(app.status.as_ref().is_some_and(|(s, _)| s.contains("No font covers the Korean interface")));
+        assert_eq!(Preference::Korean.name(), "Korean");
+    }
+    assert_eq!(app.session.state().unwrap().title, "Open");
+    assert_eq!(crate::control::cmdline_state(&app), prompt);
+    assert_eq!(crate::control::all_commands(&app), commands);
+    assert_eq!(t("Properties"), "Properties");
+    assert!(app.run("ui.language", json!({"lang": "bad"})).is_err());
+    app.run("ui.resetpalettes", json!({})).unwrap();
+    assert_eq!(app.ui.interface_language, Preference::Korean);
+    // The general ui.set route uses the same saved preference and font installation.
+    let (request, _) = crate::ControlRequest::new("ui.set", json!({"interfaceLanguage": "zh"}));
+    let _ = crate::control::handle(&mut app, &ctx, &request);
+    assert_eq!(app.ui.interface_language, Preference::Chinese);
+    app.logic(&ctx);
+    assert_eq!(app.fonts_language, Some(if crate::theme::can_show("zh") { "zh" } else { "en" }));
+    render(&mut app, &ctx);
+    let (request, _) = crate::ControlRequest::new("ui.set", json!({"interfaceLanguage": "ko"}));
+    let _ = crate::control::handle(&mut app, &ctx, &request);
+    assert_eq!(app.ui.interface_language, Preference::Korean);
+    app.logic(&ctx);
+    assert_eq!(app.fonts_language, Some(app.language()));
+    let text = render(&mut app, &ctx);
+    assert!(text.contains(if supported { "특성" } else { "Properties" }));
+    let (request, _) = crate::ControlRequest::new("ui.set", json!({"interfaceLanguage": "en"}));
+    let _ = crate::control::handle(&mut app, &ctx, &request);
+    app.logic(&ctx);
+    assert_eq!(app.fonts_language, Some("en"));
+    assert_eq!(app.ui.interface_language, Preference::English);
+    assert!(render(&mut app, &ctx).contains("Properties"));
+    assert_eq!(crate::menus::tree(&app).first().unwrap().0, "File");
+}
+
+#[test]
+fn korean_dialogs_keep_source_ids() {
+    if !crate::theme::can_show("ko") {
+        return; // The fallback path is covered above; do not claim glyph rendering here.
+    }
+    for (dialog, source) in [
+        ("dsettings", "Drafting Settings"),
+        ("about", "About CADCraft"),
+        ("commands", "Command Reference"),
+        ("blocks", "Blocks"),
+        ("layers", "Layer Properties Manager"),
+        ("qselect", "Quick Select"),
+        ("parameters", "Parameters Manager"),
+        ("language", "Interface Language"),
+        ("options:preferences", "User Preferences"),
+    ] {
+        let mut app = CadApp::new(Session::new(), Services::default());
+        app.ui.interface_language = Preference::Korean;
+        app.ui.dialog = Some(dialog.into());
+        let ctx = egui::Context::default();
+        app.logic(&ctx);
+        let text = render(&mut app, &ctx);
+        assert!(text.contains(tr("ko", source)), "{dialog}: {text}");
+        if dialog == "language" {
+            assert!(text.contains("한국어"), "{dialog}: {text}");
+        }
+        assert_eq!(app.ui.dialog.as_deref(), Some(dialog));
+    }
+}
+
+#[test]
+fn korean_ui_fonts_cover_catalog_and_language_picker_in_both_families() {
+    if !crate::theme::can_show("ko") {
+        return;
+    }
+    let letters: BTreeSet<_> = include_str!("ko.tsv")
+        .lines()
+        .filter_map(|line| line.split('\t').nth(2))
+        .flat_map(str::chars)
+        .chain("한국어".chars())
+        .filter(|c| !c.is_ascii())
+        .collect();
+    // The picker shows 한국어 in an English interface only when the CJK fonts loaded in every
+    // language cover Hangul; the Korean interface itself always does, with a fallback font.
+    let ctx = egui::Context::default();
+    let english = crate::theme::cjk_covers_hangul();
+    assert_eq!(with_language("en", || Preference::Korean.name()), if english { "한국어" } else { "Korean" });
+    assert_eq!(with_language("ko", || Preference::Korean.name()), "한국어");
+    crate::theme::install_fonts(&ctx, if english { "en" } else { "ko" });
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    let missing = ctx.fonts_mut(|view| {
+        let mut missing = Vec::new();
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let mut font = view.fonts.font(&family);
+            for c in &letters {
+                if !font.characters().contains_key(c) {
+                    missing.push(format!("{family:?}: {c} (U+{:04X})", u32::from(*c)));
+                }
+            }
+        }
+        missing
+    });
+    assert!(missing.is_empty(), "missing Korean UI glyphs: {}", missing.join(", "));
 }
