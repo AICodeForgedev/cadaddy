@@ -111,8 +111,8 @@ pub fn submit(app: &mut CadApp) -> bool {
     true
 }
 
-fn format(kind: GripDimKind, v: f64) -> String {
-    if kind.is_angle() { format!("{}°", (v.to_degrees() * 10.0).round() / 10.0) } else { cadcraft_engine::units::format_distance(v, 2, 4) }
+fn format(kind: GripDimKind, v: f64, (lu, lp): (i64, i64)) -> String {
+    if kind.is_angle() { format!("{}°", (v.to_degrees() * 10.0).round() / 10.0) } else { cadcraft_engine::units::format_distance(v, lu, lp) }
 }
 
 /// Draw the fields for the stretched grip at the cursor; `false` when there are none (the
@@ -128,6 +128,7 @@ pub fn draw(app: &mut CadApp, p: &egui::Painter) -> bool {
     let line = Stroke::new(1.0, t.text_dim);
     let st = app.canvas.grip_dyn.clone();
     let cs = xf.to_screen(c);
+    let units = crate::canvas::length_units(&app.session);
     let mut offset_rank = 0.0;
     for (i, d) in dims.iter().enumerate() {
         let a = xf.to_screen(d.anchor);
@@ -138,7 +139,7 @@ pub fn draw(app: &mut CadApp, p: &egui::Painter) -> bool {
         } else if let Some(l) = locked {
             l.to_owned()
         } else {
-            format(d.kind, d.value(c))
+            format(d.kind, d.value(c), units)
         };
         // Where the field sits: beside the measured length, or on the angle's arc.
         let at = if d.kind.is_angle() {
@@ -275,5 +276,24 @@ mod tests {
         app.session.input(Input::Point(Vec2::new(10.0, 10.0))).unwrap();
         let lines = app.session.doc().unwrap().model.iter().filter(|e| matches!(e.kind, EntityKind::Line(_))).count();
         assert_eq!(lines, 2, "Copy mode stretched a copy");
+    }
+
+    /// The grip's length fields read the drawing's length units (LUNITS/LUPREC) (#841).
+    #[test]
+    fn length_fields_follow_the_drawing_units() {
+        let mut app = CadApp::new(cadcraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("units", &serde_json::json!({"lunits": 4, "luprec": 4})).unwrap();
+        let r = app.session.execute("line", &serde_json::json!({"points": [[0, 0], [10, 0]]})).unwrap();
+        let h = Handle::parse_hex(r["handles"][0].as_str().unwrap()).unwrap();
+        let ctx = egui::Context::default();
+        crate::canvas::tests::painted_text(&mut app, &ctx, pos2(700.0, 450.0));
+        let at = app.canvas.xf.unwrap().to_screen(Vec2::ZERO) + vec2(130.0, -70.0);
+        app.session.start_grip_edit(&[(h, 2)]).unwrap();
+        crate::canvas::tests::painted_text(&mut app, &ctx, at);
+        let text = crate::canvas::tests::painted_text(&mut app, &ctx, at);
+        let c = app.canvas.cursor.unwrap();
+        let arch = |v: f64| cadcraft_engine::units::format_distance(v, 4, 4);
+        assert!(arch(c.len()) != arch(c.x) && arch(c.len()) != arch(c.y), "{c:?}");
+        assert!(text.contains(&arch(c.len())), "no {} in:\n{text}", arch(c.len()));
     }
 }

@@ -1786,7 +1786,7 @@ fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
         && let Some(c) = app.canvas.cursor
     {
         let message = if show_prompt { crate::i18n::t(&prompt.message) } else { "" };
-        let r = dynamic_input_boxes(p, at, message, &f, &e, c, app.cmd.second_locked(), options);
+        let r = dynamic_input_boxes(p, at, message, &f, &e, c, app.cmd.second_locked(), options, length_units(&app.session));
         options_menu(app, p, r, hover);
         return;
     }
@@ -1800,16 +1800,11 @@ fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
         text = format!(
             "{}   {}  <  {}°",
             crate::i18n::t(&prompt.message),
-            cadcraft_engine::units::format_distance(base.dist(c), 2, 4),
+            distance_text(&app.session, base.dist(c)),
             (base.angle_to(c).to_degrees() * 10.0).round() / 10.0
         );
     } else if let Some(c) = app.canvas.cursor {
-        text = format!(
-            "{}   {}, {}",
-            crate::i18n::t(&prompt.message),
-            cadcraft_engine::units::format_distance(c.x, 2, 4),
-            cadcraft_engine::units::format_distance(c.y, 2, 4)
-        );
+        text = format!("{}   {}, {}", crate::i18n::t(&prompt.message), distance_text(&app.session, c.x), distance_text(&app.session, c.y));
     }
     let t = Tokens::get();
     let galley = p.layout_no_wrap(text, crate::theme::small(), t.text);
@@ -1820,6 +1815,17 @@ fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
         options_hint(p, r);
     }
     options_menu(app, p, r, hover);
+}
+
+/// The drawing's length units: (LUNITS, LUPREC).
+pub(crate) fn length_units(session: &cadcraft_engine::Session) -> (i64, i64) {
+    session.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4))
+}
+
+/// A distance in the drawing's length units.
+fn distance_text(session: &cadcraft_engine::Session, v: f64) -> String {
+    let (lu, lp) = length_units(session);
+    cadcraft_engine::units::format_distance(v, lu, lp)
 }
 
 /// Room for the down-arrow sign that a prompt has options.
@@ -1886,11 +1892,12 @@ fn dynamic_input_boxes(
     cursor: Vec2,
     second_locked: bool,
     options: bool,
+    (lu, lp): (i64, i64),
 ) -> Rect {
     use crate::dyninput::Format;
     let t = Tokens::get();
     let font = crate::theme::small();
-    let dist = |v: f64| cadcraft_engine::units::format_distance(v, 2, 4);
+    let dist = |v: f64| cadcraft_engine::units::format_distance(v, lu, lp);
     let (live_first, live_second) = f.live(e.format, cursor);
     let live_second = match e.format {
         Format::Cartesian => dist(live_second),
@@ -2102,7 +2109,7 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use cadcraft_render::DPrim;
 
@@ -2209,6 +2216,57 @@ mod tests {
         let (smoothed, raw) = seen;
         assert_eq!(raw, o.line_scroll_speed, "the whole notch");
         assert!(smoothed < raw, "egui's smoothed delta lags behind: {smoothed} of {raw}");
+    }
+
+    /// The text painted by one frame of the app at `pointer`.
+    pub(crate) fn painted_text(app: &mut CadApp, ctx: &egui::Context, pointer: Pos2) -> String {
+        fn collect(shape: &Shape, text: &mut String) {
+            match shape {
+                Shape::Text(s) => {
+                    text.push_str(s.galley.text());
+                    text.push('\n');
+                }
+                Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, text)),
+                _ => {}
+            }
+        }
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0))),
+            events: vec![egui::Event::PointerMoved(pointer)],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        out.textures_delta.clear();
+        let mut text = String::new();
+        out.shapes.iter().for_each(|s| collect(&s.shape, &mut text));
+        text
+    }
+
+    /// The Dynamic Input distance box shows the cursor's live distance in the drawing's length
+    /// units (LUNITS/LUPREC), as DIST and the status bar do (#841).
+    #[test]
+    fn dynamic_input_distance_follows_the_drawing_units() {
+        let mut app = CadApp::new(cadcraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("units", &serde_json::json!({"lunits": 4, "luprec": 4})).unwrap();
+        let ctx = egui::Context::default();
+        painted_text(&mut app, &ctx, pos2(700.0, 450.0));
+        app.session.cmdline("line").unwrap();
+        app.session.input(Input::Point(Vec2::ZERO)).unwrap();
+        let at = app.canvas.xf.unwrap().to_screen(Vec2::ZERO) + vec2(130.0, -70.0);
+        painted_text(&mut app, &ctx, at);
+        let text = painted_text(&mut app, &ctx, at);
+        let c = app.canvas.cursor.unwrap();
+        let arch = |v: f64| cadcraft_engine::units::format_distance(v, 4, 4);
+        // The status bar shows X and Y in the same units: the distance must be neither.
+        assert!(arch(c.len()) != arch(c.x) && arch(c.len()) != arch(c.y), "{c:?}");
+        assert!(text.contains(&arch(c.len())), "no {} in:\n{text}", arch(c.len()));
+        // Without the value boxes (a window corner pending) the tooltip shows the distance too.
+        app.session.pending_window = Some(cadcraft_engine::PendingWindow { corner: Vec2::ZERO, during_command: true });
+        let text = painted_text(&mut app, &ctx, at);
+        assert!(text.contains(&format!("   {}  <", arch(c.len()))), "no {} in:\n{text}", arch(c.len()));
     }
 }
 
