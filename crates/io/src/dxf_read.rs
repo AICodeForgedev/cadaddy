@@ -1603,7 +1603,8 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
                     }
                 }
             }
-            "ENTITIES" => entities = parse_entities(&records(&s.tags), &mut d, &mut rx),
+            // A damaged file may split its entities over several ENTITIES sections (#865).
+            "ENTITIES" => entities.extend(parse_entities(&records(&s.tags), &mut d, &mut rx)),
             "OBJECTS" => {
                 for (k, tg) in records(&s.tags) {
                     objs.add(&k, &tg);
