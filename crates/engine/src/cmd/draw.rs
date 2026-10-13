@@ -937,11 +937,17 @@ impl Interactive for PolygonM {
                 s.last_used.polygon_circumscribed = !ins;
             }
             (Some(c), Some(ins), Input::Point(p)) => {
+                if c.near(p, 1e-12) {
+                    return Err(crate::EngineError::Other("Value must be positive and nonzero.".into()));
+                }
                 s.add_entity(lwpoly(polygon_vertices(c, n, p, ins), true))?;
                 return Ok(Step::Done);
             }
             (Some(c), Some(ins), Input::Text(t)) => {
                 let r = number(&t).ok_or_else(|| crate::EngineError::Other("Requires numeric distance or point.".into()))?;
+                if !r.is_finite() || r <= 0.0 {
+                    return Err(crate::EngineError::Other("Value must be positive and nonzero.".into()));
+                }
                 let rp = polygon_typed_radius_point(c, n, r, ins);
                 s.add_entity(lwpoly(polygon_vertices(c, n, rp, ins), true))?;
                 return Ok(Step::Done);
