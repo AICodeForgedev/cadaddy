@@ -727,6 +727,10 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     w.s(100, "AcDbEntity");
                     let (c, base) = attrib_common(d, e, i, a);
                     layer_and_props(w, &c, Some(&base));
+                    // Hidden with its definition (a dynamic block's visibility state hides it).
+                    if !base.visible {
+                        w.i(60, 1);
+                    }
                     w.s(100, "AcDbText");
                     text_tags(w, &a.text, Some((&a.tag, attrib_flags(a))), None);
                 }

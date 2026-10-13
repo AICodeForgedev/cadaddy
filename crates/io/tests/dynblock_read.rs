@@ -650,3 +650,54 @@ fn dynamic_block_references_survive_a_save() {
         assert_eq!(props(&again, hx), props(&d, hx), "{hx}");
     }
 }
+
+fn block_of(d: &cadcraft_doc::Drawing, h: &str) -> String {
+    match d.entity(Handle::parse_hex(h).unwrap()).map(|e| &e.kind) {
+        Some(cadcraft_doc::EntityKind::Insert(i)) => i.block.clone(),
+        _ => panic!("no reference {h}"),
+    }
+}
+
+#[test]
+fn changing_the_visibility_state_makes_a_new_anonymous_block() {
+    let mut d = read_dxf(with_references().as_bytes()).unwrap();
+    // Door's own reference to Closed: the swing (lines 31, 32) hidden, the leaf (30) shown.
+    cadcraft_doc::dynblock::set_property(&mut d, h("80"), "visibility1", "closed").unwrap();
+    let name = block_of(&d, "80");
+    assert!(name.starts_with("*U") && name != "*U1" && name != "*U2", "{name}");
+    let shown: Vec<bool> = d.block(&name).unwrap().entities.iter().map(|e| e.common.visible).collect();
+    assert_eq!(shown, [true, false, false]);
+    assert!(d.block("Door").unwrap().entities.iter().all(|e| e.common.visible), "the dynamic block is unchanged");
+    let (def, p) = props(&d, "80");
+    assert_eq!((def.as_str(), p[0].1.as_str()), ("Door", "Closed"));
+
+    // A reference with values of its own (an anonymous block) back to Open: its value record is
+    // updated, and its old anonymous block, used by nothing else, goes.
+    cadcraft_doc::dynblock::set_property(&mut d, h("81"), "Visibility1", "Open").unwrap();
+    assert_eq!(props(&d, "81").1[0].1, "Open");
+    assert!(d.block("*U1").is_none(), "the old anonymous block is dropped");
+    assert_eq!(props(&d, "81").1[1].1, "60.0000", "its other values stay");
+
+    // Both survive a save.
+    let again = read_dxf(write_dxf(&d).as_bytes()).unwrap();
+    assert_eq!(props(&again, "80").1[0].1, "Closed");
+    assert_eq!(props(&again, "81").1[0].1, "Open");
+    let shown: Vec<bool> = again.block(&block_of(&again, "80")).unwrap().entities.iter().map(|e| e.common.visible).collect();
+    assert_eq!(shown, [true, false, false]);
+}
+
+#[test]
+fn what_can_not_be_changed_yet_is_refused_and_changes_nothing() {
+    let mut d = read_dxf(with_references().as_bytes()).unwrap();
+    let before = d.clone();
+    // Size's table sets Width (a distance), which needs the stretch action.
+    let ps = cadcraft_doc::dynblock::custom_properties(&d, h("80")).unwrap().1;
+    let editable: Vec<(&str, bool)> = ps.iter().map(|p| (p.name.as_str(), p.editable)).collect();
+    assert_eq!(editable, [("Visibility1", true), ("Width", false), ("Size", false)]);
+    for (name, value) in [("Size", "Narrow"), ("Width", "30"), ("Visibility1", "Ajar"), ("Nope", "x"), ("", "")] {
+        assert!(cadcraft_doc::dynblock::set_property(&mut d, h("80"), name, value).is_err(), "{name}={value}");
+    }
+    assert!(cadcraft_doc::dynblock::set_property(&mut d, h("30"), "Visibility1", "Open").is_err(), "not a reference");
+    assert!(cadcraft_doc::dynblock::set_property(&mut d, h("FFFF"), "Visibility1", "Open").is_err());
+    assert_eq!(d, before);
+}

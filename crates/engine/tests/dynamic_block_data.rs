@@ -96,7 +96,7 @@ fn a_reference_to_a_dynamic_block_reports_its_custom_properties() {
     let r = s.execute("blocks.reference", &json!({ "handle": insert })).unwrap();
     assert_eq!(r["definition"], "Door");
     assert_eq!(r["values"], json!({}));
-    assert_eq!(r["properties"], json!([{ "name": "Visibility1", "value": "Open", "choices": ["Open", "Closed"] }]));
+    assert_eq!(r["properties"], json!([{ "name": "Visibility1", "value": "Open", "choices": ["Open", "Closed"], "editable": true }]));
 
     // A plain block's reference, objects that aren't references and bad parameters.
     let l = s.execute("line", &json!({ "points": [[0, 0], [1, 1]] })).unwrap()["handles"][0].clone();
@@ -106,5 +106,35 @@ fn a_reference_to_a_dynamic_block_reports_its_custom_properties() {
     assert!(s.execute("blocks.reference", &json!({ "handle": l })).is_err());
     for p in [json!({}), json!({ "handle": "zz" }), json!({ "handle": "FFFFFF" }), json!(null)] {
         assert!(s.execute("blocks.reference", &p).is_err(), "{p}");
+    }
+}
+
+#[test]
+fn a_visibility_state_is_changed_in_one_undo_step() {
+    let mut s = session();
+    let insert = s.doc().unwrap().model.handles()[0].hex();
+    let r = s.execute("blocks.reference.set", &json!({ "handle": insert, "name": "Visibility1", "value": "Closed" })).unwrap();
+    assert_eq!(r["properties"][0]["value"], "Closed");
+    let block = |s: &Session| match s.doc().unwrap().model.iter().next().map(|e| e.kind.clone()) {
+        Some(cadcraft_engine::doc::EntityKind::Insert(i)) => i.block,
+        other => panic!("{other:?}"),
+    };
+    assert!(block(&s).starts_with("*U"));
+    // Still a reference to Door, in its new state.
+    let r = s.execute("blocks.reference", &json!({ "handle": insert })).unwrap();
+    assert_eq!((r["definition"].clone(), r["properties"][0]["value"].clone()), (json!("Door"), json!("Closed")));
+
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(block(&s), "Door");
+    let r = s.execute("blocks.reference", &json!({ "handle": insert })).unwrap();
+    assert_eq!(r["properties"][0]["value"], "Open");
+
+    for p in [
+        json!({ "handle": insert, "name": "Visibility1", "value": "Ajar" }),
+        json!({ "handle": insert, "name": "Visibility1" }),
+        json!({ "name": "Visibility1", "value": "Open" }),
+        json!({ "handle": insert, "value": "Open" }),
+    ] {
+        assert!(s.execute("blocks.reference.set", &p).is_err(), "{p}");
     }
 }

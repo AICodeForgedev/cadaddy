@@ -51,6 +51,9 @@ pub struct CustomProperty {
     /// The values it may be set to, when it is a choice (visibility states, lookup values, a
     /// distance's list).
     pub choices: Vec<String>,
+    /// CADCraft can change it ([`super::set_property`]): a visibility state, or a lookup whose
+    /// tables set only visibility states.
+    pub editable: bool,
 }
 
 fn objects(d: &Drawing) -> HashMap<Handle, &ForeignObject> {
@@ -234,26 +237,44 @@ pub fn custom_properties(d: &Drawing, insert: Handle) -> Option<(String, Vec<Cus
                     _ => (*b, *e),
                 };
                 let choices = if values.is_list() { values.list.iter().map(|x| number(d, x * sx)).collect() } else { Vec::new() };
-                out.push(CustomProperty { name: label.clone(), value: number(d, (e - b).len() * sx), choices });
+                out.push(CustomProperty { name: label.clone(), value: number(d, (e - b).len() * sx), choices, editable: false });
             }
             ParameterKind::Point { at, label, .. } => {
                 let at = match v {
                     Some(Value::Point { at }) => *at,
                     _ => *at,
                 };
-                out.push(CustomProperty { name: format!("{label} X"), value: number(d, (at.x - base.x) * sx), choices: Vec::new() });
-                out.push(CustomProperty { name: format!("{label} Y"), value: number(d, (at.y - base.y) * sy), choices: Vec::new() });
+                out.push(CustomProperty { name: format!("{label} X"), value: number(d, (at.x - base.x) * sx), choices: Vec::new(), editable: false });
+                out.push(CustomProperty { name: format!("{label} Y"), value: number(d, (at.y - base.y) * sy), choices: Vec::new(), editable: false });
             }
             ParameterKind::Visibility { label, states, .. } => {
                 let value = cur.property(p.node, "VisibilityState").unwrap_or_default();
-                out.push(CustomProperty { name: label.clone(), value, choices: states.iter().map(|s| s.name.clone()).collect() });
+                out.push(CustomProperty { name: label.clone(), value, choices: states.iter().map(|s| s.name.clone()).collect(), editable: true });
             }
             ParameterKind::Lookup { label, .. } => {
                 let (value, choices) = cur.lookup(p.node);
-                out.push(CustomProperty { name: label.clone(), value, choices });
+                let editable = lookup_sets_only_visibility(&m, p.node);
+                out.push(CustomProperty { name: label.clone(), value, choices, editable });
             }
             _ => {}
         }
     }
     Some((r.definition, out))
+}
+
+/// Whether every lookup table that sets lookup parameter `node` sets nothing but visibility
+/// states with it (what [`super::set_property`] can apply so far).
+fn lookup_sets_only_visibility(m: &DynamicBlock, node: i32) -> bool {
+    let mut any = false;
+    for a in &m.actions {
+        let ActionKind::Lookup { columns, rows } = &a.kind else { continue };
+        if rows.is_empty() || !columns.iter().any(|c| c.lookup && c.node == node) {
+            continue;
+        }
+        any = true;
+        if !columns.iter().all(|c| matches!(c.property.to_ascii_lowercase().as_str(), "lookupstring" | "visibilitystate")) {
+            return false;
+        }
+    }
+    any
 }

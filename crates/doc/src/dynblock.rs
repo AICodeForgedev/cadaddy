@@ -19,7 +19,9 @@ use serde::Serialize;
 use crate::foreign::ForeignObject;
 use crate::{Drawing, Handle, RawTag};
 
+mod apply;
 mod reference;
+pub use apply::set_property;
 pub use reference::{CustomProperty, Reference, Value, custom_properties, reference};
 
 /// Most objects one evaluation graph is read with.
