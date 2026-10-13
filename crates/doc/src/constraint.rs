@@ -35,7 +35,7 @@ impl Sub {
             "mid" | "midpoint" | "m" => Sub::Mid,
             "center" | "centre" | "c" => Sub::Center,
             _ => {
-                for (p, vertex) in [("vertex", true), ("segment", false), ("seg", false), ("v", true)] {
+                for (p, vertex) in [("vertex", true), ("segment", false), ("seg", false), ("s", false), ("v", true)] {
                     if let Some(n) = l.strip_prefix(p) {
                         let i: u32 = n.trim().parse().ok()?;
                         return Some(if vertex { Sub::Vertex(i) } else { Sub::Segment(i) });
