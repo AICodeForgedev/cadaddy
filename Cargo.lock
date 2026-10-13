@@ -645,6 +645,7 @@ dependencies = [
 name = "cadcraft-fonts"
 version = "0.6.2"
 dependencies = [
+ "cadcraft-dxf",
  "cadcraft-geom",
  "harfrust",
  "skrifa 0.47.0",
