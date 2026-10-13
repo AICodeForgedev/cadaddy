@@ -511,6 +511,18 @@ fn scattered_dot_pattern_reads_solid_once_dots_fill_the_pixels() {
     assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, 0.125));
 }
 
+/// Same polylines up to float noise: the view-limited path rotates into the family frame and back,
+/// so a start point can differ by ~1e-16 between platforms (#804). Structure must match exactly.
+fn assert_lines_close(a: &[Vec<Vec2>], b: &[Vec<Vec2>], what: &str) {
+    assert_eq!(a.len(), b.len(), "{what}: line count");
+    for (i, (ra, rb)) in a.iter().zip(b).enumerate() {
+        assert_eq!(ra.len(), rb.len(), "{what}: run {i} length");
+        for (pa, pb) in ra.iter().zip(rb) {
+            assert!((pa.x - pb.x).abs() < 1e-9 && (pa.y - pb.y).abs() < 1e-9, "{what}: run {i}: {pa:?} vs {pb:?}");
+        }
+    }
+}
+
 #[test]
 fn normal_zoom_pattern_is_unchanged() {
     // Lines and dash repeats a few pixels long or more: the level of detail changes nothing.
@@ -520,10 +532,12 @@ fn normal_zoom_pattern_is_unchanged() {
         let full = crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, 0.0, None);
         assert!(!full.is_empty(), "{pattern}");
         assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, px), "{pattern}");
-        assert_eq!(crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, None), full, "{pattern}");
+        let same_res = crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, None);
+        assert_lines_close(&same_res, &full, pattern);
         // A view covering the whole hatch changes nothing either.
         let all = Bounds2::new(Vec2::new(-1.0, -1.0), Vec2::new(7.0, 5.0));
-        assert_eq!(crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, Some(&all)), full, "{pattern}");
+        let in_view = crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, Some(&all));
+        assert_lines_close(&in_view, &full, pattern);
     }
 }
 
