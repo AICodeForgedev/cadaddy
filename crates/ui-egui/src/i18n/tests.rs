@@ -39,7 +39,7 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
 /// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
 /// command doesn't require a row in every language.
 const REQUIRED: &[&str] = &["uk"];
-const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh"];
+const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it"];
 
 fn check(language: &str, what: &str, missing: Vec<String>) {
     if REQUIRED.contains(&language) {
@@ -523,6 +523,41 @@ fn russian_and_french_plurals() {
     with_language("fr", || {
         for (n, word) in [(0, "contributeur"), (1, "contributeur"), (2, "contributeurs"), (10, "contributeurs")] {
             assert_eq!(count(n, "{n} contributor", "{n} contributors"), format!("{n} {word}"));
+        }
+    });
+}
+
+#[test]
+fn italian_locales_plurals_and_accents() {
+    for tag in ["it", "it-IT", "it_IT.UTF-8", "IT-ch", " it-CH ", "it_IT@euro"] {
+        assert_eq!(locale_language(tag), Some("it"), "{tag}");
+    }
+    assert_eq!(locale_language("italic"), None);
+    assert_eq!(Preference::parse("it"), Some(Preference::Italian));
+    assert_eq!(Preference::Auto.resolve(&["it-IT".into(), "en-US".into()]), "it");
+    assert_eq!(Preference::Italian.resolve(&["uk-UA".into()]), "it");
+    with_language("it", || {
+        for (n, word) in [(0, "collaboratori"), (1, "collaboratore"), (2, "collaboratori"), (21, "collaboratori")] {
+            assert_eq!(count(n, "{n} contributor", "{n} contributors"), format!("{n} {word}"));
+        }
+        assert_eq!(t("Draw"), "Disegna");
+        assert_eq!(tr_menu("it", "Modify"), "Edita");
+        assert_eq!(tr("it", "Modify"), "Modifica");
+        assert_eq!(tr_menu("it", "View"), "Visualizza");
+        assert_eq!(tr("it", "View"), "Vista");
+    });
+    // Italian accented letters (à è é ì ò ù and capitals) come from the bundled egui fonts.
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    let letters: BTreeSet<_> = include_str!("it.tsv").chars().filter(|c| ('\u{00c0}'..='\u{00ff}').contains(c)).collect();
+    assert!(letters.contains(&'à') && letters.contains(&'è'));
+    ctx.fonts_mut(|view| {
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let mut font = view.fonts.font(&family);
+            for c in &letters {
+                assert!(font.characters().contains_key(c), "missing {c} in {family:?}");
+            }
         }
     });
 }
