@@ -108,9 +108,34 @@ pub struct MeshData {
     /// Draw-order breaks, one before each wipeout mask: the fill vertices, line vertices and
     /// quad instances drawn before it. Each group is drawn fills, lines, quads in turn.
     pub breaks: Vec<[usize; 3]>,
+    /// The vertex buffers already created from this data (see [`MeshData::upload_now`]); the
+    /// paint callback then only swaps them in.
+    uploaded: Option<Uploaded>,
+}
+
+/// GPU buffers made ahead of the frame that draws them.
+struct Uploaded {
+    lines: Vec<Batch>,
+    tris: Vec<Batch>,
+    quads: Vec<Batch>,
 }
 
 impl MeshData {
+    /// Create the vertex buffers now, on the calling thread, and let the CPU copy go. Making a
+    /// buffer zero-fills and copies it: about 0.35 s for a million-primitive drawing, which a
+    /// background rebuild does off the UI thread (see `canvas::rebuild`).
+    pub fn upload_now(&mut self, device: &wgpu::Device) {
+        let usage = wgpu::BufferUsages::VERTEX;
+        self.uploaded = Some(Uploaded {
+            lines: upload(device, "cad_lines", &self.lines, VERTEX_SIZE, usage),
+            tris: upload(device, "cad_fills", &self.tris, VERTEX_SIZE, usage),
+            quads: upload(device, "cad_quads", &self.quads, INSTANCE_SIZE, usage),
+        });
+        self.lines = Vec::new();
+        self.tris = Vec::new();
+        self.quads = Vec::new();
+    }
+
     pub fn line_vertices(&self) -> usize {
         self.lines.len() / VERTEX_SIZE
     }
@@ -163,6 +188,7 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
         tris: Vec::with_capacity(list.tris.len().saturating_mul(VERTEX_SIZE)),
         quads: Vec::new(),
         breaks: Vec::new(),
+        uploaded: None,
     };
     for prim in &list.prims {
         let col = premultiplied(prim.display_rgb(bg), prim.alpha());
@@ -678,11 +704,13 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         let Some(res) = res.layers.get_mut(self.layer) else { return Vec::new() };
         if res.key != Some(self.key) {
             let pending = self.slot.lock().ok().and_then(|mut s| s.take());
-            if let Some(m) = pending {
-                let usage = wgpu::BufferUsages::VERTEX;
-                res.lines = upload(device, "cad_lines", &m.lines, VERTEX_SIZE, usage);
-                res.tris = upload(device, "cad_fills", &m.tris, VERTEX_SIZE, usage);
-                res.quads = upload(device, "cad_quads", &m.quads, INSTANCE_SIZE, usage);
+            if let Some(mut m) = pending {
+                if m.uploaded.is_none() {
+                    m.upload_now(device);
+                }
+                if let Some(u) = m.uploaded {
+                    (res.lines, res.tris, res.quads) = (u.lines, u.tris, u.quads);
+                }
                 res.breaks = m.breaks;
                 res.key = Some(self.key);
             }

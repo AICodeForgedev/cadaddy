@@ -13,8 +13,14 @@ use cadcraft_color::{Color, Rgb};
 use cadcraft_doc::library::{PatternLine, pattern_for};
 use cadcraft_doc::{Drawing, Entity, Gradient, Hatch};
 use cadcraft_geom::{Bounds2, Polyline, Vec2, point_in_polygon};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Draw a hatch entity: `rgb` is its resolved colour, `tol` the chord tolerance.
+/// Whether a build's cancel flag has been set.
+fn is_set(cancel: Option<&AtomicBool>) -> bool {
+    cancel.is_some_and(|c| c.load(Ordering::Relaxed))
+}
+
 pub(super) fn draw(b: &mut Builder, ctx: &Ctx, e: &Entity, h: &Hatch, rgb: Ink, lw: f32, tol: f64) {
     let loops = fill_loops(h, tol);
     // Gradient and background colours given ByLayer follow the hatch's own layer.
@@ -45,7 +51,7 @@ pub(super) fn draw(b: &mut Builder, ctx: &Ctx, e: &Entity, h: &Hatch, rgb: Ink, 
         let inv = ctx.xf.inverse()?;
         Some(Bounds2::from_points(v.corners().iter().map(|p| inv.apply(*p))))
     });
-    for seg in pattern_lines(ctx.d, h, &loops, px, view.as_ref()) {
+    for seg in pattern_lines_until(ctx.d, h, &loops, px, view.as_ref(), b.opts.cancel.as_deref()) {
         if seg.len() == 1 {
             if let Some(p) = seg.first() {
                 b.point(ctx, rgb, *p);
@@ -328,6 +334,19 @@ pub fn reads_solid(d: &Drawing, h: &Hatch, px: f64) -> bool {
 /// pixels is one continuous run); 0 = full detail, as plots, exports and picks use. `view`: only
 /// the part of the hatch inside it is generated; `None` = all of it.
 pub fn pattern_lines(d: &Drawing, h: &Hatch, loops: &[Vec<Vec2>], px: f64, view: Option<&Bounds2>) -> Vec<Vec<Vec2>> {
+    pattern_lines_until(d, h, loops, px, view, None)
+}
+
+/// [`pattern_lines`] that stops early (with what it has) once `cancel` is set: a dense pattern
+/// over a large area is where most of a cancelled build's time would go.
+pub(crate) fn pattern_lines_until(
+    d: &Drawing,
+    h: &Hatch,
+    loops: &[Vec<Vec2>],
+    px: f64,
+    view: Option<&Bounds2>,
+    cancel: Option<&AtomicBool>,
+) -> Vec<Vec<Vec2>> {
     let lines = lines_of(d, h);
     let scale = scale_of(h);
     let px = if px.is_finite() && px > 0.0 { px } else { 0.0 };
@@ -341,8 +360,8 @@ pub fn pattern_lines(d: &Drawing, h: &Hatch, loops: &[Vec<Vec2>], px: f64, view:
             continue;
         }
         let dashes: Vec<f64> = fam.dashes.iter().map(|d| d * scale).collect();
-        Family { origin, ang, delta, spacing, dashes: &dashes }.sweep(loops, px, view, &mut out);
-        if out.len() >= MAX_RUNS {
+        Family { origin, ang, delta, spacing, dashes: &dashes }.sweep(loops, px, view, cancel, &mut out);
+        if out.len() >= MAX_RUNS || is_set(cancel) {
             break;
         }
     }
@@ -403,7 +422,7 @@ impl Family<'_> {
         self.origin + p.rotate(self.ang)
     }
 
-    fn sweep(&self, loops: &[Vec<Vec2>], px: f64, view: Option<&Bounds2>, out: &mut Vec<Vec<Vec2>>) {
+    fn sweep(&self, loops: &[Vec<Vec2>], px: f64, view: Option<&Bounds2>, cancel: Option<&AtomicBool>, out: &mut Vec<Vec<Vec2>>) {
         let local: Vec<Vec<Vec2>> = loops.iter().map(|l| l.iter().map(|p| self.to_local(*p)).collect()).collect();
         let bb = Bounds2::from_points(local.iter().flatten().copied());
         if bb.is_empty() {
@@ -437,7 +456,7 @@ impl Family<'_> {
         let draws = self.dashes.iter().any(|d| *d >= 0.0);
         let solid_line = self.dashes.is_empty() || pat_len < 1e-12 || (px > 0.0 && pat_len < 2.0 * px && draws);
         for k in k0..=k1 {
-            if out.len() >= MAX_RUNS {
+            if out.len() >= MAX_RUNS || is_set(cancel) {
                 return;
             }
             let y = k as f64 * self.spacing;

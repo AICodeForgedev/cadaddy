@@ -905,3 +905,22 @@ fn table_cell_text_height_scales_with_the_table() {
     assert_eq!(height(2.0, Some(150.0)), Some(300.0));
     assert_eq!(height(2.0, None), Some(base * 2.0));
 }
+
+#[test]
+fn cancelled_build_stops_early() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    let d = sample();
+    let set = Some(Arc::new(AtomicBool::new(true)));
+    let full = build(&d, &Space::Model, &Options::default());
+    assert!(!full.prims.is_empty());
+    let opts = Options { cancel: set.clone(), ..Default::default() };
+    assert!(opts.cancelled());
+    assert!(build(&d, &Space::Model, &opts).prims.is_empty(), "no entity is drawn once cancelled");
+    // A hatch sweep stops at its next pattern line.
+    let h = pattern_hatch("ANSI31", 1.0, (0.0, 0.0, 6.0, 4.0));
+    let loops = loops_of(&h);
+    let drawing = cadcraft_doc::Drawing::new_imperial();
+    assert!(!crate::hatch::pattern_lines_until(&drawing, &h, &loops, 0.0, None, None).is_empty());
+    assert!(crate::hatch::pattern_lines_until(&drawing, &h, &loops, 0.0, None, set.as_deref()).is_empty());
+}

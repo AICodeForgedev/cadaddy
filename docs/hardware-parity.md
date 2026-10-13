@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first hardware assessment) · **Target:** Autodesk AutoCAD 2027 (Mac and Windows)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (zoom and pan regenerate in the background) · **Target:** Autodesk AutoCAD 2027 (Mac and Windows)
 
 The hardware AutoCAD uses and how CADCraft compares, per platform. Work items:
 [gaps.md](gaps.md#hardware).
@@ -37,8 +37,16 @@ From the earlier roadmap (measured by the agents that built it, 2026-10-06, `cad
 canvas draws a frame in about 4 ms. Nothing has been compared with AutoCAD on the same machine,
 and 1M-entity drawings are untested. A 10 MB DWG took about two minutes to fail (#57).
 
+Zoom and pan no longer freeze the window (2026-10-13). On a hatched 12k-entity architect's DWG
+(about 340k display primitives) each zoom step used to block the UI for 2–4.5 s while the
+display list, its vertex data and its GPU buffers were rebuilt. These rebuilds now run on a
+worker thread while the previous list is drawn, so the longest stall is 26–64 ms (M-series Mac).
+Edits still rebuild on the UI thread (about 1.8 s on that drawing): per-entity caching is the
+next step.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Zoom and pan regenerate in the background: 2–4.5 s stalls down to 26–64 ms on a hatched DWG |
 | 2026-10-10 | major | First hardware parity doc: GPU backends per platform, input devices, displays, plotters |

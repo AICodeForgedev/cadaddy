@@ -297,6 +297,7 @@ impl CadApp {
     /// `NativeOptions::stencil_buffer`); clipped viewports are clipped with it.
     pub fn set_wgpu(&mut self, rs: &egui_wgpu::RenderState, stencil: Option<egui_wgpu::wgpu::TextureFormat>) {
         self.canvas.gpu = Some(gpu::install(rs, &self.gpu_faults, stencil));
+        self.canvas.gpu_device = Some(rs.device.clone());
     }
 
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
@@ -669,9 +670,12 @@ impl CadApp {
 
     fn issue_screenshots(&mut self, ctx: &egui::Context) {
         let now = now_ms();
+        // Wait for a background rebuild for the current view, so the shot shows the drawing at
+        // that view, but not past the reply's deadline.
+        let building = self.canvas.building();
         self.queued_shots.retain_mut(|(token, at, frames)| {
             *frames += 1;
-            if now >= *at && *frames >= 3 {
+            if now >= *at && *frames >= 3 && (!building || now >= *at + SHOT_REBUILD_WAIT_MS) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(*token)));
                 false
             } else {
@@ -716,6 +720,10 @@ impl CadApp {
         });
     }
 }
+
+/// How long a control-channel screenshot waits for a background rebuild before it is taken
+/// anyway (the reply itself times out after 8 s).
+const SHOT_REBUILD_WAIT_MS: f64 = 6000.0;
 
 pub fn now_ms() -> f64 {
     #[cfg(not(target_arch = "wasm32"))]

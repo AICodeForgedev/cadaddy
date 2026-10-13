@@ -222,6 +222,17 @@ pub struct Options {
     /// A layout viewport whose model-space contents are left out (its border is still drawn):
     /// the canvas draws the active viewport's contents itself, see [`viewport_content`].
     pub skip_viewport: Option<Handle>,
+    /// Set from another thread to stop the build early (the canvas cancels a background
+    /// rebuild the view no longer needs). A cancelled build returns a partial list, which the
+    /// caller must discard; see [`Options::cancelled`].
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl Options {
+    /// Whether [`Options::cancel`] has been set.
+    pub fn cancelled(&self) -> bool {
+        self.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+    }
 }
 
 impl Default for Options {
@@ -237,6 +248,7 @@ impl Default for Options {
             view: None,
             skip_viewport: None,
             transparency: false,
+            cancel: None,
         }
     }
 }
@@ -531,8 +543,8 @@ const PARALLEL_CHUNK: usize = 256;
 
 /// Build model space for the screen on all cores: the entities are split into chunks built
 /// side by side, then joined in drawing order, so the list is the same as a one-thread build.
-/// The canvas rebuilds the whole list at every 2x zoom step, on the UI thread; one core made
-/// that a visible stall on real drawings. Plots, layouts and plot styles keep the one-thread
+/// The canvas rebuilds the whole list at every 2x zoom step (in the background since zooming
+/// stopped blocking the UI) and after every edit; one core made both slow on real drawings. Plots, layouts and plot styles keep the one-thread
 /// path (they run once, and their pens and per-primitive layers are built along the way).
 #[cfg(not(target_arch = "wasm32"))]
 fn build_parallel(b: &mut Builder, d: &Drawing, store: &cadcraft_doc::EntityStore) {
@@ -991,8 +1003,9 @@ fn default_lineweight(d: &Drawing) -> f32 {
 }
 
 fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
-    // Hidden by ISOLATEOBJECTS / HIDEOBJECTS (and so in viewports and plots too).
-    if ctx.d.is_hidden_object(e.handle) {
+    // Hidden by ISOLATEOBJECTS / HIDEOBJECTS (and so in viewports and plots too). A cancelled
+    // build stops here (block contents come through here too).
+    if ctx.d.is_hidden_object(e.handle) || b.opts.cancelled() {
         return;
     }
     // The entity's named plot style and transparency (set by `entity_parts`), for everything it

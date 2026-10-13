@@ -178,7 +178,9 @@ pub(crate) fn zoom(s: &mut Session, p: &Value) -> Result<Value> {
         }
         _ => return Err(bad("zoom", "unknown mode")),
     }
-    s.touch();
+    // No `touch`: a zoom changes the view, not the drawing. The canvas follows the view by
+    // itself and regenerates in the background (AutoCAD redraws instead of regenerating);
+    // zooming an unlocked viewport changes the drawing, which shows on its own.
     Ok(Value::Null)
 }
 
@@ -385,7 +387,6 @@ impl ZoomM {
         let extents = if ext.is_empty() { s.zoom_limits()? } else { ext };
         let all = extents.union(&DynBox::rect(frame.center, frame.height, aspect));
         fit(s, all.expand(all.height().max(all.width()) * 0.05))?;
-        s.touch();
         self.stage = ZoomStage::Dynamic(DynBox { screen, frame, extents, center: frame.center, height: frame.height, aspect, sizing: false });
         Ok(Step::Continue)
     }
@@ -440,7 +441,6 @@ impl Interactive for ZoomM {
                     st.view_history.pop();
                 }
                 st.set_zoom_frame(View { center: b.center, height: b.height });
-                s.touch();
                 return Ok(Step::Done);
             }
             (ZoomStage::Dynamic(mut b), Input::Point(p)) => {

@@ -35,18 +35,32 @@ impl Xf {
     }
 }
 
+/// What a display list was built from: drawing uid, revision, tessellation band, hatch level of
+/// detail band, lineweight display, document and active viewport view (see [`ensure_list`]).
+type ListKey = (u64, u64, i32, i32, bool, bool, usize, u64);
+
+/// Whether two list keys are for the same drawing content (they may differ only in the view).
+fn same_content(a: &ListKey, b: &ListKey) -> bool {
+    (a.0, a.1, a.4, a.5, a.6, a.7) == (b.0, b.1, b.4, b.5, b.6, b.7)
+}
+
 #[derive(Default)]
 pub struct CanvasState {
     pub list: Option<DisplayList>,
-    key: (u64, u64, i32, i32, bool, bool, usize, u64),
+    key: ListKey,
     /// The area `list` was built for (hatch patterns exist only inside it); a view leaving it
     /// rebuilds the list.
     window: Option<Bounds2>,
+    /// A rebuild for a new view running on a worker thread (see [`rebuild`]); `list` is drawn
+    /// meanwhile.
+    job: Option<rebuild::Job>,
     /// Bumped whenever `list` is rebuilt (identifies it for [`PrimIndex`]).
     list_gen: u64,
     prim_index: PrimIndex,
     /// Set when the app runs on wgpu: entities are drawn by [`crate::gpu`]; otherwise on the CPU.
     pub gpu: Option<crate::gpu::GpuTarget>,
+    /// The wgpu device, for background rebuilds to create their buffers (see [`rebuild`]).
+    pub gpu_device: Option<egui_wgpu::wgpu::Device>,
     /// The mesh last handed to the GPU (see [`crate::gpu::CanvasCallback::key`]).
     mesh_key: Option<u64>,
     mesh_slot: crate::gpu::MeshSlot,
@@ -121,6 +135,30 @@ impl CanvasState {
     /// times they have been built.
     pub fn viewport_content(&self) -> Option<(Bounds2, u64)> {
         self.vp.key.and(self.vp.paper_bounds()).map(|b| (b, self.vp.builds))
+    }
+
+    /// Whether a rebuild for the current view is still running in the background (the canvas
+    /// shows the previous list until it lands).
+    pub fn building(&self) -> bool {
+        self.job.is_some()
+    }
+
+    /// Put a finished background build in place, with its GPU vertex data when it has some.
+    fn install(&mut self, key: ListKey, window: Option<Bounds2>, built: rebuild::Built) {
+        self.list_gen = self.list_gen.wrapping_add(1);
+        if let Some(m) = built.mesh {
+            if let Ok(mut slot) = self.mesh_slot.lock() {
+                *slot = Some(m.data);
+            }
+            self.mesh_key = Some(list_mesh_key(&key, self.list_gen, m.origin, m.bg, m.lwdisplay));
+            self.mesh_origin = m.origin;
+            self.mesh_ms = m.ms;
+            self.infinite = m.infinite;
+        }
+        self.list = Some(built.list);
+        self.key = key;
+        self.window = window;
+        self.build_ms = built.build_ms;
     }
 }
 
@@ -198,10 +236,14 @@ fn prim_color32(prim: &cadcraft_render::DPrim, bg: Rgb) -> Color32 {
     Color32::from_rgba_unmultiplied(c.0, c.1, c.2, prim.alpha())
 }
 
-/// Rebuild the display list when needed. `px`: drawing units per pixel in the current view;
-/// `views`: every area on screen that shows the list (the current view, other model tiles) with
-/// its drawing units per pixel.
-fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
+/// Rebuild the display list when needed. `xf`: the current view; `views`: every area on screen
+/// that shows the list (the current view, other model tiles) with its drawing units per pixel.
+///
+/// A rebuild only the view asks for (a new zoom band, a pan out of the built area) runs in the
+/// background while the current list is drawn (see [`rebuild`]); a changed drawing, or no list
+/// yet, is built at once.
+fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::Context) {
+    let px = 1.0 / xf.scale;
     let Ok(st) = app.session.state() else { return };
     // Rebuild when the drawing changes, the zoom moves by more than 2x (tessellation band) or a
     // view leaves the area the list was built for.
@@ -224,22 +266,41 @@ fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
         }
         s.finish()
     };
-    let settings = &app.session.settings;
-    let key = (
-        st.uid,
-        st.revision,
-        band(px),
-        lod_band,
-        settings.lwdisplay,
-        settings.transparency_display,
-        std::sync::Arc::as_ptr(&st.doc) as usize,
-        vp_view,
-    );
+    let (lwdisplay, transparency_display) = (app.session.settings.lwdisplay, app.session.settings.transparency_display);
+    let key: ListKey =
+        (st.uid, st.revision, band(px), lod_band, lwdisplay, transparency_display, std::sync::Arc::as_ptr(&st.doc) as usize, vp_view);
+    // A background build that finished: use it unless the drawing has changed since it started
+    // (or the list was dropped to force a rebuild).
+    if let Some(job) = &app.canvas.job {
+        match job.poll() {
+            rebuild::Poll::Pending => {}
+            rebuild::Poll::Done(built) => {
+                let (job_key, window) = (job.key, job.window);
+                app.canvas.job = None;
+                if app.canvas.list.is_some() && same_content(&job_key, &key) {
+                    app.canvas.install(job_key, window, *built);
+                }
+            }
+            rebuild::Poll::Lost => {
+                log::warn!("canvas: a background rebuild failed; rebuilding on the UI thread");
+                app.canvas.job = None;
+                app.canvas.list = None;
+            }
+        }
+    }
     let visible = views.iter().fold(Bounds2::EMPTY, |acc, v| acc.union(&v.0));
     let inside = app.canvas.window.is_none_or(|w| visible.is_empty() || w.contains_box(&visible));
     if app.canvas.list.is_some() && app.canvas.key == key && inside {
         return;
     }
+    // Only the view moved: keep drawing the current list and build the new one in the background.
+    let view_only = app.canvas.list.is_some() && same_content(&app.canvas.key, &key);
+    if view_only && app.canvas.job.as_ref().is_some_and(|j| j.serves(&key, &visible)) {
+        return;
+    }
+    // A build for another view, or for a drawing that has since changed, is no longer wanted:
+    // dropping it cancels it.
+    app.canvas.job = None;
     let t0 = crate::now_ms();
     let opts = cadcraft_render::Options {
         tolerance: 2f64.powi(band(px)) * 0.5,
@@ -248,13 +309,31 @@ fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
         min_dash: 2f64.powi(lod_band) * 2.0,
         text: true,
         fill: true,
-        lineweights: app.session.settings.lwdisplay,
+        lineweights: lwdisplay,
         view_height: st.paper_view().height,
         plot_style_table: None,
         view: build_window(views),
         transparency: app.session.settings.transparency_display,
         skip_viewport: split,
+        cancel: None,
     };
+    if view_only {
+        let t = Tokens::get();
+        let mesh = app.canvas.gpu.is_some().then(|| rebuild::MeshRequest {
+            view_center: xf.center,
+            view_height: f64::from(xf.rect.height()) / xf.scale.max(1e-300),
+            model_bg: Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b()),
+            paper_bg: Rgb(t.paper.r(), t.paper.g(), t.paper.b()),
+            lwdisplay,
+            device: app.canvas.gpu_device.clone(),
+        });
+        let window = opts.view;
+        let req = rebuild::Request { doc: st.doc.clone(), space: st.space.clone(), opts: opts.clone(), mesh };
+        if let Some(job) = rebuild::spawn(req, key, window, ctx) {
+            app.canvas.job = Some(job);
+            return;
+        }
+    }
     let space = st.space.clone();
     app.canvas.list = Some(cadcraft_render::build(&st.doc, &space, &opts));
     app.canvas.key = key;
@@ -397,6 +476,7 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
             view: Some(area),
             skip_viewport: None,
             transparency,
+            cancel: None,
         };
         c.list = cadcraft_render::viewport_content(&st.doc, &st.space, h, area, &opts);
         c.key = Some(key);
@@ -840,17 +920,20 @@ fn draw_drag_gpu(
     ));
 }
 
+/// Identifies the GPU vertex data of list `key` / `list_gen` converted at `origin` against `bg`.
+fn list_mesh_key(key: &ListKey, list_gen: u64, origin: Vec2, bg: Rgb, lwdisplay: bool) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (key, list_gen, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay).hash(&mut h);
+    h.finish()
+}
+
 /// Draw the display list through the GPU paint callback (uploading it when it changed), plus
 /// the infinite lines, which are clipped to the view on the CPU every frame.
 fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdisplay: bool) {
     let Some(list) = &c.list else { return };
     let origin = crate::gpu::choose_origin(&list.bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
-    let key = {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        (c.key, c.list_gen, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay).hash(&mut h);
-        h.finish()
-    };
+    let key = list_mesh_key(&c.key, c.list_gen, origin, bg, lwdisplay);
     if c.mesh_key != Some(key) {
         let t0 = crate::now_ms();
         let mesh = crate::gpu::build_mesh(list, origin, bg, lwdisplay);
@@ -1517,7 +1600,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let xf = tile_xf(*r, tile);
         (xf.world_bounds(), 1.0 / xf.scale)
     }));
-    ensure_list(app, 1.0 / xf_paper.scale, &views);
+    ensure_list(app, &xf_paper, &views, ui.ctx());
     let sheet = app.canvas.list.as_ref().and_then(|l| l.sheet);
     let bg = match sheet {
         Some(sh) => {
@@ -2522,6 +2605,9 @@ pub(crate) mod tests {
 mod blockedit;
 /// The COMPARE overlay.
 mod compare;
+
+/// Background rebuilds of the display list for a new view.
+mod rebuild;
 
 #[cfg(test)]
 mod hatch_pick_tests {
