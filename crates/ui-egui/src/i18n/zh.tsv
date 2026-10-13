@@ -1019,3 +1019,100 @@
 	Left device button: zoom extents. Right device button: calibrate.	左侧设备按钮：范围缩放。右侧设备按钮：校准。
 	Left device button: zoom extents. Right device button: calibrate.	左侧设备按钮：范围缩放。右侧设备按钮：校准。
 	Not a number or distance: {text}	不是数字或距离：{text}
+	Left device button: zoom extents. Right device button: calibrate.	左侧设备按钮：范围缩放。右侧设备按钮：校准。
+	Plotter Manager...	绘图仪管理器...
+	Import...	导入...
+	Export...	导出...
+	Batch Publish...	批量发布...
+	New from Template...	根据样板新建...
+	Show Annotative Objects	显示注释性对象
+	Current Scale Only	仅当前比例
+	All Scales	所有比例
+	Dynamic	动态
+	DWG Reference...	DWG 参照...
+	Data Link...	数据链接...
+	Multiline Style...	多线样式...
+	Scale List...	比例列表...
+	Run Script...	运行脚本...
+	Data Extraction...	数据提取...
+	Open Xref	打开外部参照
+	Compare Drawings...	比较图形...
+	Isolate Objects	隔离对象
+	Hide Objects	隐藏对象
+	End Object Isolation	结束对象隔离
+	Options...	选项...
+	Bring Above Objects	置于对象之上
+	Send Under Objects	置于对象之下
+	Bring Annotations to Front	将注释置于顶层
+	Send Hatches to Back	将填充置于底层
+	Text Objects Only	仅文字对象
+	Dimension Objects Only	仅标注对象
+	Leaders Only	仅引线
+	All Annotation Objects	所有注释对象
+	Oblique	倾斜
+	Jogged	折弯
+	Jogged Linear	折弯线性
+	Dimension Break	标注打断
+	Inspection	检查
+	Tolerance...	公差...
+	Annotative Object Scale	注释性对象比例
+	Add/Delete Scales...	添加/删除比例...
+	Add Current Scale	添加当前比例
+	Delete Current Scale	删除当前比例
+	Synchronize Multiple-scale Positions	同步多比例位置
+	Clip	剪裁
+	Solid Editing	实体编辑
+	Multiline...	多线...
+	External Reference	外部参照
+	Bind...	绑定...
+	Reference Manager	参照管理器
+	Options	选项
+	Display	显示
+	Open and Save	打开和保存
+	Selection	选择
+	User Preferences	用户偏好
+	Profiles	配置文件
+	Interface theme	界面主题
+	Model background	模型背景
+	Layout paper	布局图纸
+	Crosshair size	十字光标大小
+	Command line history	命令行历史
+	Keep the system cursor visible over the drawing area	在绘图区域保持系统光标可见
+	Screen magnifiers, screen readers and recorders follow the system cursor.	屏幕放大镜、屏幕阅读器和录制软件将跟随系统光标。
+	Changes apply at once and are kept for next time.	更改立即生效并将为下次保留。
+	Save new drawings as	将新图形保存为
+	Default save version	默认保存版本
+	Automatic save every	自动保存间隔
+	Automatic save file location	自动保存文件位置
+	A drawing opened from a file keeps that file's format.	从文件打开的图形会保持该文件的格式。
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	尚无文件的图形将以默认版本保存。设为 0 分钟则关闭自动保存。
+	Object snap marker size	对象捕捉标记大小
+	Object snap aperture	对象捕捉靶框大小
+	The aperture is how near the cursor must come to a point for an object snap to find it.	靶框决定了光标必须离对象捕捉点多近才能被识别。
+	Snap, grid, polar tracking and Dynamic Input:	捕捉、栅格、极轴追踪和动态输入:
+	Pickbox size	拾取框大小
+	Grip size	夹点大小
+	Select objects first, then choose a command	先选择对象，然后选择命令
+	Hold Shift to add to the selection	按住 Shift 键添加到选择
+	Show Quick Properties for selected objects	显示所选对象的快速特性
+	Largest array	最大阵列数
+	An array that would create more objects than this is refused.	将拒绝创建超出此对象数量的阵列。
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	时间敏感右键：快速点击相当于回车，按住不放打开菜单
+	Turned off, a right-click while a command runs always opens the shortcut menu.	关闭后，在命令运行期间右键单击总是打开快捷菜单。
+	CADCraft keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADCraft 会为你的用户账号保留这些偏好设置、对象捕捉模式和绘图切换开关，并在启动时恢复它们。
+	Reset to Defaults	恢复默认设置
+	Copy as JSON	复制为 JSON
+	Reset keeps the interface language.	重置时会保留界面语言。
+	Rectangular snap	矩形捕捉
+	Isometric snap	等轴测捕捉
+	Snap type	捕捉类型
+	Grid snap	栅格捕捉
+	PolarSnap	极轴捕捉
+	Polar distance	极轴距离
+	Additional angles	附加角
+	Object Snap Tracking Settings	对象捕捉追踪设置
+	Track orthogonally only	仅正交追踪
+	Track using all polar angle settings	使用所有极轴角设置追踪
+	Polar angle measurement	极轴角测量
+	Relative to last segment	相对于上一线段
+	Show command prompting near the crosshairs	在光标附近显示命令提示
