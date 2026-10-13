@@ -463,3 +463,29 @@ fn set_parameter_rejects_out_of_domain_dimension() {
     set_parameter(&mut d, "rad1", "2", &opts).unwrap();
     assert!(all_satisfied(&d));
 }
+
+/// The solver may meet a coincidence with a negative arc radius; the stored arc must still put
+/// the referenced point where the solver did (issue #703), through `add` and through `solve`.
+#[test]
+fn arc_solved_with_a_negative_radius_keeps_its_points() {
+    use std::f64::consts::FRAC_PI_2;
+    // (arc centre, radius, start, end, point): a semicircle with the point behind it, and the
+    // asymmetric case from the issue.
+    let cases = [((0.0, 0.0), 1.0, -FRAC_PI_2, FRAC_PI_2, (-5.0, 0.0)), ((6.694, -0.686), 0.62075, 3.4824, 1.1766, (-7.562, 4.946))];
+    for (c, r, a0, a1, p) in cases {
+        for through_solve in [false, true] {
+            let mut d = Drawing::default();
+            let a = arc(&mut d, c, r, a0, a1);
+            let q = add_e(&mut d, EntityKind::Point(DPoint { p: v(p.0, p.1), angle: 0.0 }));
+            let k = con(ConstraintKind::Coincident, &[s(a, Sub::Mid), w(q)]);
+            if through_solve {
+                d.constraints.push(Constraint { id: 1, ..k });
+                solve(&mut d, &SolveOptions::default()).unwrap();
+            } else {
+                ok(&mut d, k);
+            }
+            assert!(all_satisfied(&d), "{c:?} solve {through_solve}: {:?}", residuals(&d));
+            assert!(circ(&d, a).1 > 0.0);
+        }
+    }
+}

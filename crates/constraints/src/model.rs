@@ -500,11 +500,14 @@ impl Model {
                 }
                 (EntityKind::Arc(a), Shape::Arc) => {
                     if let [cx, cy, r, s0, s1] = new {
+                        // A negative radius puts every point opposite its angle: turning both
+                        // ends half a turn keeps the same points with a positive radius.
+                        let turn = if *r < 0.0 { std::f64::consts::PI } else { 0.0 };
                         a.center.x = *cx;
                         a.center.y = *cy;
                         a.radius = r.abs().max(1e-12);
-                        a.start = cadcraft_geom::norm_angle(*s0);
-                        a.end = cadcraft_geom::norm_angle(*s1);
+                        a.start = cadcraft_geom::norm_angle(*s0 + turn);
+                        a.end = cadcraft_geom::norm_angle(*s1 + turn);
                     }
                 }
                 (EntityKind::LwPolyline(p), Shape::Poly { n, .. }) if p.vertices.len() == n => {
