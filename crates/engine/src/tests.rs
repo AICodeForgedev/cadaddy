@@ -1259,3 +1259,84 @@ fn block_rotation_property_turns_attribute_text() {
     assert_eq!(t.value, "hello");
     assert!((t.height - 2.5).abs() < 1e-12);
 }
+
+#[test]
+fn bare_variable_name_runs_setvar() {
+    let mut s = Session::new();
+    s.cmdline("pickadd").unwrap();
+    assert!(s.current_prompt().is_some());
+    s.cmdline("0").unwrap();
+    assert!(s.current_prompt().is_none());
+    assert_eq!(crate::sysvars::get(&s, "PICKADD"), Some(json!(0)));
+    // Not a command and not a variable: still an error.
+    assert!(s.cmdline("nosuchthing").is_err());
+    // A dash or dot prefix never means a variable.
+    assert!(s.cmdline("-pickadd").is_err());
+}
+
+fn setvar_prompt_open(s: &Session) -> bool {
+    s.running.as_ref().is_some_and(|r| r.id == "setvar")
+}
+
+#[test]
+fn every_variable_name_starts_setvar_unless_it_is_a_command() {
+    let mut s = Session::new();
+    let names: Vec<String> = match crate::sysvars::list(&s) {
+        Value::Object(m) => m.keys().cloned().collect(),
+        _ => Vec::new(),
+    };
+    assert!(names.len() > 50, "expected the full variable list, got {}", names.len());
+    let (mut prompted, mut read_only, mut commands) = (0, 0, 0);
+    for n in &names {
+        s.cancel();
+        let lower = n.to_ascii_lowercase();
+        let is_command = crate::cmd::find_command(&crate::cmd::resolve_alias(&lower)).is_some();
+        let result = s.cmdline(&lower);
+        if is_command {
+            // A real command keeps its name (it may refuse to run without parameters, as a bare
+            // CLAYER does); the variable is reached with SETVAR.
+            assert!(!setvar_prompt_open(&s), "{n} is a command but started SETVAR");
+            commands += 1;
+        } else if let Err(e) = result {
+            panic!("{n}: {e}");
+        } else if setvar_prompt_open(&s) {
+            prompted += 1;
+        } else {
+            // A read-only variable prints its value and ends.
+            assert!(s.current_prompt().is_none(), "{n}: neither SETVAR nor finished");
+            read_only += 1;
+        }
+    }
+    s.cancel();
+    assert!(prompted > 50 && read_only > 0, "prompted {prompted}, read-only {read_only}, commands {commands}");
+}
+
+#[test]
+fn hostile_variable_like_input_never_panics() {
+    let mut s = Session::new();
+    let long = "a".repeat(1 << 20);
+    for t in [
+        "'",
+        "''",
+        "'''pickadd",
+        "\0pickadd",
+        "pickadd\0",
+        " ",
+        "\t",
+        "pick add",
+        "PICKADD\u{0}0",
+        "ｐｉｃｋａｄｄ",
+        "pickadd;0",
+        "ÿ",
+        &long,
+        "pickadd\n0",
+        "'\u{202e}pickadd",
+    ] {
+        s.cancel();
+        let _ = s.cmdline(t);
+    }
+    s.cancel();
+    // The session is still usable afterwards.
+    s.cmdline("pickadd").unwrap();
+    assert!(setvar_prompt_open(&s));
+}
