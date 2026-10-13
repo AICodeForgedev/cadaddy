@@ -92,6 +92,12 @@ pub struct CanvasState {
     grip_editing: bool,
     /// The grip whose menu (Stretch, Add Vertex, Lengthen…) a right-click opened.
     grip_menu: Option<(Handle, usize)>,
+    /// Dynamic block grips of the selection (cached), the one being dragged, and the list grip
+    /// whose choices are open (and whether it opened this frame).
+    pub(crate) dyn_grips: crate::dyngrips::Cache,
+    pub(crate) dyn_hot: Option<(Handle, i32, cadcraft_engine::doc::dynblock::GripPart)>,
+    pub(crate) dyn_menu: Option<(Handle, cadcraft_engine::doc::dynblock::DynGrip)>,
+    pub(crate) dyn_menu_fresh: bool,
     /// Zoom to extents once the canvas size is known (after opening a drawing).
     pub zoom_pending: bool,
     pub build_ms: f64,
@@ -1340,6 +1346,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             if let Err(e) = result {
                 app.session.echo(e.to_string());
             }
+        } else if let Some(g) = crate::dyngrips::at(app, &xf, hover_pos) {
+            crate::dyngrips::click(app, g);
         } else if let Some(g) = grip_at(app, &xf, hover_pos) {
             click_grip(app, g, mods.shift);
         } else if let Err(e) = app.session.idle_click(raw_world.unwrap_or(p), mods.shift) {
@@ -1355,6 +1363,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
         && rect.contains(origin)
         && grip_at(app, &xf, Some(origin)).is_none()
+        && crate::dyngrips::at(app, &xf, Some(origin)).is_none()
     {
         app.canvas.drag_window = app.session.begin_window(xf.to_world(origin));
     }
@@ -1384,6 +1393,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if inside && pressed_secondary && idle && !app.canvas.snap_menu {
         app.canvas.grip_menu = grip_at(app, &xf, hover_pos).filter(|g| !grip_options(app, *g).is_empty());
     }
+    crate::dyngrips::menu(app, ui.ctx(), &xf);
     if idle && !app.canvas.snap_menu && app.canvas.grip_menu.is_some() {
         grip_menu(app, &resp);
     } else if idle || app.canvas.snap_menu {
@@ -1548,6 +1558,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if (!grip_edit && (app.canvas.grip_editing || app.session.prompting())) || sel.is_empty() {
         app.canvas.hot_grips.clear();
     }
+    if !grip_edit {
+        app.canvas.dyn_hot = None;
+    }
     app.canvas.grip_editing = grip_edit;
     if (!app.session.prompting() || grip_edit)
         && let Ok(st) = app.session.state()
@@ -1577,6 +1590,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
             }
         }
+        crate::dyngrips::draw(app, &painter, &xf, rect, hover_pos);
     }
     // Rubber band preview of the active command.
     // `xf` is the space being edited: paper space, or model space inside the active viewport.

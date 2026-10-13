@@ -20,8 +20,10 @@ use crate::foreign::ForeignObject;
 use crate::{Drawing, Handle, RawTag};
 
 mod apply;
+mod grips;
 mod reference;
-pub use apply::set_property;
+pub use apply::{drag_grip, set_property};
+pub use grips::{DynGrip, GripPart, GripShape, grips};
 pub use reference::{CustomProperty, Reference, Value, custom_properties, reference};
 
 /// Most objects one evaluation graph is read with.
@@ -46,6 +48,10 @@ pub struct DynamicBlock {
     pub actions: Vec<Action>,
     /// Graph members of types not modelled here (grips, constraints…), by DXF type.
     pub other: Vec<String>,
+    /// The grip objects by graph id (parameters name their grips by id; visibility states list
+    /// the grips shown in them by object).
+    #[serde(skip)]
+    pub grip_objects: Vec<(i32, Handle)>,
 }
 
 /// One parameter: a property a reference to the block can change.
@@ -344,11 +350,14 @@ pub fn dynamic_block(d: &Drawing, name: &str) -> Option<DynamicBlock> {
         let kind = o.kind.to_ascii_uppercase();
         if kind.ends_with("PARAMETER") {
             let show_properties = Cursor::new(section(&secs, "AcDbBlockParameter")).int(280) != 0;
-            let grips = grips(&secs);
+            let grips = grip_ids(&secs);
             out.parameters.push(Parameter { node, handle: o.handle, element, show_properties, kind: parameter(&kind, &secs), grips });
         } else if kind.ends_with("ACTION") {
             out.actions.push(action(o.handle, node, element, &kind, &secs));
         } else {
+            if kind.ends_with("GRIP") {
+                out.grip_objects.push((node, o.handle));
+            }
             out.other.push(o.kind.clone());
         }
     }
@@ -357,7 +366,7 @@ pub fn dynamic_block(d: &Drawing, name: &str) -> Option<DynamicBlock> {
 
 /// A parameter's grip ids: after a two-point parameter's points, the grip count (170) and the
 /// base and end grips (91); after a one-point parameter's point, its grip (93).
-fn grips(secs: &[(&str, &[RawTag])]) -> Vec<i32> {
+fn grip_ids(secs: &[(&str, &[RawTag])]) -> Vec<i32> {
     let two = section(secs, "AcDbBlock2PtParameter");
     if !two.is_empty() {
         let mut c = Cursor::new(two);

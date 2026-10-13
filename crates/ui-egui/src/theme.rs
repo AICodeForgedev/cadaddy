@@ -91,6 +91,8 @@ pub struct Tokens {
     pub hover: Color32,
     pub grip: Color32,
     pub grip_hot: Color32,
+    /// Grips of dynamic block references (AutoCAD's GRIPDYNCOLOR).
+    pub grip_dyn: Color32,
     pub snap: Color32,
     /// COMPARE: objects only in this drawing, only in the other one, and the areas of change.
     pub compare_this: Color32,
@@ -151,6 +153,7 @@ impl Tokens {
         hover: Color32::from_rgb(0x9c, 0xc6, 0xff),
         grip: Color32::from_rgb(0x2f, 0x6b, 0xff),
         grip_hot: Color32::from_rgb(0xff, 0x3b, 0x3b),
+        grip_dyn: Color32::from_rgb(0x26, 0xc6, 0xe8),
         snap: Color32::from_rgb(0x2f, 0xd0, 0x62),
         compare_this: Color32::from_rgb(0x4c, 0xd9, 0x7b),
         compare_other: Color32::from_rgb(0xff, 0x5c, 0x5c),

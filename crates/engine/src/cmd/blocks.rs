@@ -14,6 +14,7 @@ use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 mod attedit;
+mod dyngrip;
 mod extract;
 pub(crate) mod refedit;
 
@@ -53,6 +54,13 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("blocks.reference.set", "Set Dynamic Property", run_reference_set)
             .params("{handle (a dynamic block reference), name (a custom property as Properties names it: a visibility state, a lookup, a distance or \"Position1 X\"), value (lengths in drawing units)} → {properties}")
+            .enabled(has_doc),
+        CommandSpec::new("blocks.reference.grips", "Dynamic Block Grips", dyngrip::run_grips)
+            .params("{handle} → [{node, part: base|end|at, shape: linear|point|list, at: [x,y], dir: [x,y], property, choices?}] (empty: not a dynamic block reference)")
+            .enabled(has_doc)
+            .noundo(),
+        CommandSpec::new("blocks.reference.grip", "Drag Dynamic Grip", dyngrip::run_grip)
+            .params("{handle, node (the parameter's graph id), part: base|end|at, to: [x,y] (drawing coordinates)} → {properties}: a distance's arrow changes the distance (snapped to its values), a position's square moves it")
             .enabled(has_doc),
         CommandSpec::new("purge", "Purge", purge::run)
             .alias(&["pu", "-purge"])

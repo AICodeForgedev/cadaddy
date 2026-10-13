@@ -303,6 +303,60 @@ pub fn set_property(d: &mut Drawing, insert: Handle, name: &str, value: &str) ->
     apply(d, insert, &r.definition, &r.values, &plan.set, p.node)
 }
 
+/// Drag grip `part` of parameter `node` of dynamic block reference `insert` to `to` (drawing
+/// coordinates), as AutoCAD's dynamic grips do: a distance's end grip (or base grip) changes the
+/// distance by the drag along the parameter, snapped to its value set (both ends move when the
+/// distance is measured from its midpoint); a position grip moves the position. The actions and
+/// lookups follow as for [`set_property`].
+pub fn drag_grip(d: &mut Drawing, insert: Handle, node: i32, part: super::GripPart, to: Vec2) -> Result<(), String> {
+    use super::GripPart;
+    if !to.is_finite() {
+        return Err("Invalid point.".into());
+    }
+    let r = reference(d, insert).ok_or("Not a dynamic block reference.")?;
+    let m = dynamic_block(d, &r.definition).ok_or("Not a dynamic block reference.")?;
+    let EntityKind::Insert(ins) = &d.entity(insert).ok_or("No such object.")?.kind else { return Err("Not a block reference.".into()) };
+    let base = d.block(&r.definition).map(|b| b.base.xy()).unwrap_or_default();
+    let q = ins.transform(base).inverse().ok_or("The reference has a zero scale.")?.apply(to);
+    let p = m.parameters.iter().find(|p| p.node == node).ok_or("The reference has no such parameter.")?;
+    let mut plan = Plan::default();
+    match (&p.kind, part) {
+        (ParameterKind::Linear { values, from_midpoint, label, .. }, GripPart::Base | GripPart::End) => {
+            let Some(Val::Points(b, e)) = current(&m, &r.values, node) else { return Err(format!("{label} has no points.")) };
+            let len = (e - b).len();
+            if len < 1e-12 {
+                return Err(format!("{label} has no direction."));
+            }
+            let u = (e - b) * (1.0 / len);
+            let q = Vec3::new(q.x, q.y, b.z);
+            let raw = if *from_midpoint {
+                2.0 * (q - (b + e) * 0.5).dot(u).abs()
+            } else if part == GripPart::End {
+                (q - b).dot(u)
+            } else {
+                (e - q).dot(u)
+            };
+            let dist = allowed(values, raw);
+            if !(raw > 0.0 && dist > 0.0 && dist.is_finite()) {
+                return Err(format!("{label} must be more than 0."));
+            }
+            let (b2, e2) = match (from_midpoint, part) {
+                (true, _) => linear_points(b, e, dist, true),
+                (false, GripPart::Base) => (e - u * dist, e),
+                (false, _) => (b, b + u * dist),
+            };
+            plan.set.insert(node, Val::Points(b2, e2));
+            plan.chain(&m, &r.values, node, "UpdatedDistance")?;
+        }
+        (ParameterKind::Point { label, .. }, GripPart::At) => {
+            let Some(Val::Point(at)) = current(&m, &r.values, node) else { return Err(format!("{label} has no position.")) };
+            plan.set.insert(node, Val::Point(Vec3::new(q.x, q.y, at.z)));
+        }
+        _ => return Err("That grip can't be dragged.".into()),
+    }
+    apply(d, insert, &r.definition, &r.values, &plan.set, node)
+}
+
 /// The change of each parameter value an action can follow, by parameter graph id and the
 /// connection's name ("EndXDelta", "XDelta"…), from `old` and `new` values.
 fn delta(old: &Val, new: &Val, connection: &str) -> f64 {

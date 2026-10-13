@@ -19,409 +19,11 @@ fn dxf(src: &str) -> String {
     out
 }
 
-const FIXTURE: &str = "
-0 SECTION
-2 HEADER
-9 $ACADVER
-1 AC1032
-9 $HANDSEED
-5 200
-0 ENDSEC
-0 SECTION
-2 TABLES
-0 TABLE
-2 BLOCK_RECORD
-5 1
-330 0
-100 AcDbSymbolTable
-70 3
-0 BLOCK_RECORD
-5 1F
-330 1
-100 AcDbSymbolTableRecord
-100 AcDbBlockTableRecord
-2 *Model_Space
-340 0
-0 BLOCK_RECORD
-5 1E
-330 1
-100 AcDbSymbolTableRecord
-100 AcDbBlockTableRecord
-2 *Paper_Space
-340 0
-0 BLOCK_RECORD
-5 1D
-102 {ACAD_XDICTIONARY
-360 60
-102 }
-330 1
-100 AcDbSymbolTableRecord
-100 AcDbBlockTableRecord
-2 Door
-340 0
-70 0
-280 1
-281 1
-0 ENDTAB
-0 ENDSEC
-0 SECTION
-2 BLOCKS
-0 BLOCK
-5 20
-330 1F
-100 AcDbEntity
-8 0
-100 AcDbBlockBegin
-2 *Model_Space
-70 0
-10 0
-20 0
-30 0
-3 *Model_Space
-1
-0 ENDBLK
-5 21
-330 1F
-100 AcDbEntity
-8 0
-100 AcDbBlockEnd
-0 BLOCK
-5 24
-330 1D
-100 AcDbEntity
-8 0
-100 AcDbBlockBegin
-2 Door
-70 0
-10 0
-20 0
-30 0
-3 Door
-1
-0 LINE
-5 30
-330 1D
-100 AcDbEntity
-8 0
-100 AcDbLine
-10 0
-20 0
-30 0
-11 36
-21 0
-31 0
-0 LINE
-5 31
-330 1D
-100 AcDbEntity
-8 0
-100 AcDbLine
-10 0
-20 0
-30 0
-11 0
-21 36
-31 0
-0 LINE
-5 32
-330 1D
-100 AcDbEntity
-8 0
-100 AcDbLine
-10 0
-20 0
-30 0
-11 25
-21 25
-31 0
-0 ENDBLK
-5 25
-330 1D
-100 AcDbEntity
-8 0
-100 AcDbBlockEnd
-0 ENDSEC
-0 SECTION
-2 ENTITIES
-0 ENDSEC
-0 SECTION
-2 OBJECTS
-0 DICTIONARY
-5 C
-330 0
-100 AcDbDictionary
-281 1
-0 DICTIONARY
-5 60
-330 1D
-100 AcDbDictionary
-280 1
-281 1
-3 ACAD_ENHANCEDBLOCK
-360 61
-0 ACAD_EVALUATION_GRAPH
-5 61
-102 {ACAD_REACTORS
-330 60
-102 }
-330 60
-100 AcDbEvalGraph
-96 6
-97 6
-91 0
-93 32
-95 1
-360 62
-92 -1
-92 -1
-92 -1
-92 -1
-91 1
-93 32
-95 2
-360 63
-92 -1
-92 -1
-92 -1
-92 -1
-91 2
-93 32
-95 3
-360 64
-92 -1
-92 -1
-92 -1
-92 -1
-91 3
-93 32
-95 4
-360 65
-92 -1
-92 -1
-92 -1
-92 -1
-91 4
-93 32
-95 5
-360 66
-92 -1
-92 -1
-92 -1
-92 -1
-91 5
-93 32
-95 6
-360 67
-92 -1
-92 -1
-92 -1
-92 -1
-0 BLOCKVISIBILITYPARAMETER
-5 62
-330 61
-100 AcDbEvalExpr
-90 1
-98 33
-99 232
-100 AcDbBlockElement
-300 Visibility State
-98 33
-99 232
-1071 0
-100 AcDbBlockParameter
-280 1
-281 0
-100 AcDbBlock1PtParameter
-1010 18
-1020 40
-1030 0
-93 0
-170 0
-171 0
-100 AcDbBlockVisibilityParameter
-281 1
-301 Visibility1
-302 Door swing shown or not
-91 0
-93 2
-331 31
-331 32
-92 2
-303 Open
-94 2
-332 31
-332 32
-95 1
-333 63
-303 Closed
-94 0
-95 0
-0 BLOCKLINEARPARAMETER
-5 63
-330 61
-100 AcDbEvalExpr
-90 2
-98 33
-99 232
-100 AcDbBlockElement
-300 Linear
-98 33
-99 232
-1071 0
-100 AcDbBlockParameter
-280 1
-281 0
-100 AcDbBlock2PtParameter
-1010 0
-1020 -4
-1030 0
-1011 36
-1021 -4
-1031 0
-170 4
-91 0
-91 0
-91 0
-91 0
-171 0
-172 0
-173 0
-174 0
-177 0
-100 AcDbBlockLinearParameter
-305 Width
-306 Door leaf width
-140 0
-307
-96 8
-141 0
-142 0
-143 0
-175 3
-144 30
-144 32
-144 36
-0 BLOCKSTRETCHACTION
-5 64
-330 61
-100 AcDbEvalExpr
-90 3
-98 33
-99 232
-100 AcDbBlockElement
-300 Stretch
-98 33
-99 232
-1071 0
-100 AcDbBlockAction
-70 0
-71 1
-330 30
-1010 40
-1020 -8
-1030 0
-100 AcDbBlockStretchAction
-92 2
-93 2
-301 EndXDelta
-302 EndYDelta
-72 2
-1011 34
-1021 -2
-1011 38
-1021 2
-73 1
-331 30
-74 1
-94 1
-75 0
-140 1
-141 0
-280 0
-0 BLOCKLOOKUPPARAMETER
-5 65
-330 61
-100 AcDbEvalExpr
-90 4
-98 33
-99 232
-100 AcDbBlockElement
-300 Lookup
-98 33
-99 232
-1071 0
-100 AcDbBlockParameter
-280 1
-281 0
-100 AcDbBlock1PtParameter
-1010 -6
-1020 40
-1030 0
-93 0
-170 0
-171 0
-100 AcDbBlockLookUpParameter
-94 5
-303 Size
-304 Standard door sizes
-0 BLOCKLOOKUPACTION
-5 66
-330 61
-100 AcDbEvalExpr
-90 5
-98 33
-99 232
-100 AcDbBlockElement
-300 Lookup1
-98 33
-99 232
-1071 0
-100 AcDbBlockAction
-70 0
-71 0
-1010 -4
-1020 38
-1030 0
-100 AcDbBlockLookupAction
-92 2
-93 2
-301
-302 30
-302 Narrow
-302 36
-302 Wide
-303
-94 2
-95 1
-96 0
-282 0
-305 Custom
-281 0
-304 UpdatedDistance
-303
-94 4
-95 1
-96 0
-282 1
-305 Custom
-281 1
-304 lookupString
-280 1
-0 BLOCKFLIPGRIP
-5 67
-330 61
-100 AcDbEvalExpr
-90 6
-98 33
-99 232
-100 AcDbBlockElement
-300 Grip
-98 33
-99 232
-1071 0
-0 ENDSEC
-0 EOF
-";
+/// The DOOR drawing as `code value` lines (shared with the engine's dynamic grip tests), with
+/// LF line ends whatever a checkout gave the file.
+fn fixture() -> String {
+    include_str!("data/dynblock_door.txt").replace("\r\n", "\n")
+}
 
 fn h(hex: &str) -> Handle {
     Handle::parse_hex(hex).unwrap()
@@ -429,7 +31,7 @@ fn h(hex: &str) -> Handle {
 
 #[test]
 fn a_dynamic_block_reads_its_parameters_and_actions() {
-    let d = read_dxf(dxf(FIXTURE).as_bytes()).unwrap();
+    let d = read_dxf(dxf(&fixture()).as_bytes()).unwrap();
     assert_eq!(d.block("DOOR").unwrap().entities.len(), 3);
     let m = dynamic_block(&d, "door").expect("Door is a dynamic block");
     assert!(dynamic_block(&d, "*Model_Space").is_none(), "model space has no graph here");
@@ -471,7 +73,7 @@ fn a_dynamic_block_reads_its_parameters_and_actions() {
 
 #[test]
 fn a_saved_drawing_keeps_the_dynamic_block_as_read() {
-    let d = read_dxf(dxf(FIXTURE).as_bytes()).unwrap();
+    let d = read_dxf(dxf(&fixture()).as_bytes()).unwrap();
     let before = dynamic_block(&d, "Door").unwrap();
     let again = read_dxf(write_dxf(&d).as_bytes()).unwrap();
     // The objects may get new handles on save; the block's objects keep theirs, and the graph's
@@ -486,8 +88,13 @@ fn a_saved_drawing_keeps_the_dynamic_block_as_read() {
 
 /// The model with each parameter and action object named by its graph id instead of its handle.
 fn by_node(mut m: DynamicBlock) -> DynamicBlock {
-    let ids: std::collections::HashMap<Handle, i32> =
-        m.parameters.iter().map(|p| (p.handle, p.node)).chain(m.actions.iter().map(|a| (a.handle, a.node))).collect();
+    let ids: std::collections::HashMap<Handle, i32> = m
+        .parameters
+        .iter()
+        .map(|p| (p.handle, p.node))
+        .chain(m.actions.iter().map(|a| (a.handle, a.node)))
+        .chain(m.grip_objects.iter().map(|(n, h)| (*h, *n)))
+        .collect();
     let id = |h: &Handle| Handle(ids.get(h).copied().unwrap_or(-1) as u64);
     for p in &mut m.parameters {
         p.handle = id(&p.handle);
@@ -500,6 +107,7 @@ fn by_node(mut m: DynamicBlock) -> DynamicBlock {
     for a in &mut m.actions {
         a.handle = id(&a.handle);
     }
+    m.grip_objects = m.grip_objects.iter().map(|(n, h)| (*n, id(h))).collect();
     m
 }
 
@@ -507,7 +115,7 @@ fn by_node(mut m: DynamicBlock) -> DynamicBlock {
 fn damaged_dynamic_block_data_is_skipped_not_trusted() {
     // Counts far beyond the groups present, values that aren't numbers, a graph member that
     // doesn't exist and a dictionary entry with no graph: reading must not panic or hang.
-    let src = FIXTURE
+    let src = fixture()
         .replace("93 2\n331 31", "93 999999999\n331 31")
         .replace("92 2\n303 Open", "92 -7\n303 Open")
         .replace("175 3", "175 2147483647")
@@ -523,7 +131,7 @@ fn damaged_dynamic_block_data_is_skipped_not_trusted() {
     assert!(m.other.is_empty(), "a member that doesn't exist is skipped");
 
     let tags = |v: &[(i32, &str)]| v.iter().map(|(c, s)| RawTag { code: *c, value: (*s).into() }).collect::<Vec<_>>();
-    let mut d = read_dxf(dxf(FIXTURE).as_bytes()).unwrap();
+    let mut d = read_dxf(dxf(&fixture()).as_bytes()).unwrap();
     let f = std::sync::Arc::make_mut(&mut d.foreign);
     if let Some(dict) = f.objects.iter_mut().find(|o| o.handle == h("60")) {
         dict.tags = tags(&[(100, "AcDbDictionary"), (3, "ACAD_ENHANCEDBLOCK")]);
@@ -574,7 +182,7 @@ fn with_references() -> String {
         ]
         .concat()
     };
-    let src = dxf(FIXTURE);
+    let src = dxf(&fixture());
     let lines = |s: String| dxf(&s);
     src.replace("0\nENDTAB\n", &format!("{}0\nENDTAB\n", lines(record("A1", "*U1") + &record("B1", "*U2"))))
         .replace(
@@ -742,8 +350,8 @@ fn a_lookup_value_sets_its_distance() {
 #[test]
 fn connections_are_read_in_either_group_order() {
     // AutoCAD writes 92 301 93 302; the DWG bridge 92 93 301 302.
-    let src = FIXTURE.replace("92 2\n93 2\n301 EndXDelta\n302 EndYDelta", "92 2\n301 EndXDelta\n93 2\n302 EndYDelta");
-    assert_ne!(src, FIXTURE);
+    let src = fixture().replace("92 2\n93 2\n301 EndXDelta\n302 EndYDelta", "92 2\n301 EndXDelta\n93 2\n302 EndYDelta");
+    assert_ne!(src, fixture());
     let d = read_dxf(dxf(&src).as_bytes()).unwrap();
     let m = dynamic_block(&d, "Door").unwrap();
     assert_eq!(m.actions[0].connections, [(2, "EndXDelta".to_string()), (2, "EndYDelta".to_string())]);
@@ -753,7 +361,7 @@ fn connections_are_read_in_either_group_order() {
 fn parameters_in_a_stretch_selection_are_carried_along() {
     // A point parameter (Position1 at (35, 0), inside the stretch frame) in the stretch's selection.
     let point = "0 BLOCKPOINTPARAMETER\n5 68\n330 61\n100 AcDbEvalExpr\n90 7\n98 33\n99 232\n100 AcDbBlockElement\n300 Point\n98 33\n99 232\n1071 0\n100 AcDbBlockParameter\n280 1\n281 0\n100 AcDbBlock1PtParameter\n1010 35\n1020 0\n1030 0\n93 12\n170 0\n171 0\n100 AcDbBlockPointParameter\n303 Position1\n304\n1011 35\n1021 4\n1031 0\n";
-    let src = FIXTURE
+    let src = fixture()
         .replace("71 1\n330 30\n1010 40", "71 2\n330 30\n330 68\n1010 40")
         .replace("91 5\n93 32\n95 6\n360 67", "91 5\n93 32\n95 6\n360 67\n92 -1\n92 -1\n92 -1\n92 -1\n91 6\n93 32\n95 7\n360 68")
         .replace("0 BLOCKFLIPGRIP", &format!("{point}0 BLOCKFLIPGRIP"));
@@ -845,4 +453,86 @@ fn a_change_is_recorded_in_the_references_history_and_data() {
     assert_eq!(cache_entry(&again, "81", "ACAD_ENHANCEDBLOCKHISTORY"), saved);
     let saved = pairs(&[(1070, "3"), (1071, "2"), (300, "Width"), (40, "32.0"), (1071, "1"), (300, "Visibility1"), (1, "Open")]);
     assert_eq!(cache_entry(&again, "80", "ACAD_ENHANCEDBLOCKHISTORY"), saved);
+}
+
+/// Door with grips: Width's end grip (graph id 9, an object shown in the Open state; its base
+/// grip 8 has no object) and the visibility parameter's grip (10).
+fn with_grips() -> cadcraft_doc::Drawing {
+    let grip = "0 BLOCKLINEARGRIP\n5 68\n330 61\n100 AcDbEvalExpr\n90 9\n98 33\n99 232\n100 AcDbBlockElement\n300 End Grip\n98 33\n99 232\n1071 0\n";
+    let src = fixture()
+        .replace("170 4\n91 0\n91 0\n", "170 4\n91 8\n91 9\n")
+        .replace("1030 0\n93 0\n170 0\n171 0\n100 AcDbBlockVisibilityParameter", "1030 0\n93 10\n170 0\n171 0\n100 AcDbBlockVisibilityParameter")
+        .replace("91 5\n93 32\n95 6\n360 67", "91 5\n93 32\n95 6\n360 67\n92 -1\n92 -1\n92 -1\n92 -1\n91 6\n93 32\n95 9\n360 68")
+        .replace("95 1\n333 63\n", "95 2\n333 63\n333 68\n")
+        .replace("0 BLOCKFLIPGRIP", &format!("{grip}0 BLOCKFLIPGRIP"));
+    assert_eq!(src.matches("91 9\n").count(), 1, "the fixture changed");
+    read_dxf(dxf(&src).as_bytes()).unwrap()
+}
+
+/// A reference to Door at (100, 0), scale 1.
+fn door_at_100(d: &mut cadcraft_doc::Drawing) -> Handle {
+    let ins = cadcraft_doc::Insert {
+        block: "Door".into(),
+        insert: cadcraft_doc::geom::Vec3::new(100.0, 0.0, 0.0),
+        scale: cadcraft_doc::geom::Vec3::new(1.0, 1.0, 1.0),
+        rotation: 0.0,
+        attribs: Vec::new(),
+        cols: 1,
+        rows: 1,
+        col_spacing: 0.0,
+        row_spacing: 0.0,
+    };
+    d.add(&cadcraft_doc::Space::Model, cadcraft_doc::Common::default(), cadcraft_doc::EntityKind::Insert(ins)).unwrap()
+}
+
+#[test]
+fn dynamic_references_show_the_grips_of_their_state() {
+    use cadcraft_doc::dynblock::{GripPart, GripShape, grips};
+    let mut d = with_grips();
+    let r = door_at_100(&mut d);
+    let g = grips(&d, r);
+    let summary: Vec<(i32, GripPart, GripShape, (f64, f64), (f64, f64))> =
+        g.iter().map(|g| (g.node, g.part, g.shape, (g.at.x, g.at.y), (g.dir.x, g.dir.y))).collect();
+    // The visibility grip (always), Width's end arrow pointing along it (its base grip has no
+    // object, so it isn't shown).
+    assert_eq!(
+        summary,
+        [(1, GripPart::At, GripShape::List, (118.0, 40.0), (0.0, 0.0)), (2, GripPart::End, GripShape::Linear, (136.0, -4.0), (1.0, 0.0))]
+    );
+    assert_eq!(g[0].choices, ["Open", "Closed"]);
+    assert_eq!(g[1].property, "Width");
+    // Closed lists no grips: only the visibility grip is left.
+    cadcraft_doc::dynblock::set_property(&mut d, r, "Visibility1", "Closed").unwrap();
+    assert_eq!(grips(&d, r).iter().map(|g| g.node).collect::<Vec<_>>(), [1]);
+    // Not a dynamic block reference: no grips.
+    assert!(grips(&d, h("30")).is_empty());
+}
+
+#[test]
+fn dragging_a_distance_grip_changes_the_distance() {
+    use cadcraft_doc::dynblock::{GripPart, drag_grip};
+    use cadcraft_doc::geom::Vec2;
+    let mut d = with_grips();
+    let r = door_at_100(&mut d);
+    // The end arrow dragged to x = 130.4 (off the parameter's line too): Width 30.4 snaps to 30,
+    // the stretch follows and so does the lookup.
+    drag_grip(&mut d, r, 2, GripPart::End, Vec2::new(130.4, 7.0)).unwrap();
+    assert_eq!(line_ends(&d, &r.hex())[0], (30.0, 0.0));
+    let p = cadcraft_doc::dynblock::custom_properties(&d, r).unwrap().1;
+    assert_eq!((p[1].value.as_str(), p[2].value.as_str()), ("30.0000", "Narrow"));
+    // The base grip: the distance from the new base to the end (32 here).
+    drag_grip(&mut d, r, 2, GripPart::Base, Vec2::new(98.0, -4.0)).unwrap();
+    assert_eq!(cadcraft_doc::dynblock::custom_properties(&d, r).unwrap().1[1].value, "32.0000");
+    // Past the other end, a non-finite point, a grip that doesn't drag: refused, nothing changes.
+    let before = d.clone();
+    for (node, part, to) in [
+        (2, GripPart::End, Vec2::new(50.0, 0.0)),
+        (2, GripPart::End, Vec2::new(f64::NAN, 0.0)),
+        (1, GripPart::At, Vec2::new(120.0, 40.0)),
+        (99, GripPart::End, Vec2::new(130.0, 0.0)),
+    ] {
+        assert!(drag_grip(&mut d, r, node, part, to).is_err(), "{node} {part:?} {to:?}");
+    }
+    assert!(drag_grip(&mut d, h("30"), 2, GripPart::End, Vec2::new(130.0, 0.0)).is_err(), "not a reference");
+    assert_eq!(d, before);
 }

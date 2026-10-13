@@ -141,6 +141,7 @@ our output in AutoCAD black-box.
 | 2026-10-12 | minor | DXF/DWG save: the Model layout's plot settings are written as CADCraft plots model space, drawing extents scaled to fit (PLOTSETTINGS 74 = 1, 75 = 0), instead of plot type 5 "Layout information", which other programs' Plot dialogs can't use for model space |
 | 2026-10-12 | minor | VIEWPORT frozen layers also written and read as AutoCAD's group 341 layer handles, so third-party viewers honour per-viewport freezing in DXF (DWG converter gap noted) |
 | 2026-10-12 | minor | HATCH: associative hatches inside blocks keep their source objects; boundaries carry `{ACAD_REACTORS}` |
+| 2026-10-12 | minor | Dynamic block grips: grip objects read by graph id; a drag is saved as AutoCAD saves a Properties change |
 | 2026-10-12 | minor | Dynamic block references: visibility states can be changed and are saved as AutoCAD saves them |
 | 2026-10-12 | minor | Dynamic block references: definition, values and custom properties read (`blocks.reference`, Properties ▸ Custom) |
 | 2026-10-12 | minor | Dynamic block data row: parameters and actions read into a model (`blocks.dynamic`); kept by DXF and DWG save |

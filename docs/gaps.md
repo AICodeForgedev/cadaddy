@@ -151,6 +151,7 @@ Detail: [localization-parity.md](localization-parity.md).
 | 2026-10-13 | minor | STRETCH takes crossing and window polygons (CP, WP), BOX and a fence (F), typed and as JSON (`polygon`, `fence`): F1 narrowed |
 | 2026-10-12 | minor | Property-based and hostile-input tests for geometry numerics landed (deterministic xorshift generator, no new dependency; known answers at 1e6–1e7 coordinates): S6 removed |
 | 2026-10-12 | trivial | F13: HATCHEDIT refuses a bad scale or angle before editing (#724) |
+| 2026-10-12 | minor | F3: dynamic block references show their grips (distance arrows, position squares, visibility/lookup lists, per visibility state) and drag them (`blocks.reference.grips`, `blocks.reference.grip`) |
 | 2026-10-12 | minor | SCRIPT command reading `.scr` files landed (runs a file through the same script engine as CLI/MCP; nested scripts refused): E2 removed |
 | 2026-10-11 | minor | Refreshed for merged features: code pages (#505), tracking leftovers (#441), dynamic input/grip input (#519, #425) and SPLINEDIT Join/Add/Elevate (#559) closed their top-10 rows (top 10 now has 6 rows until the next review re-ranks); MULTILEADER (#459) and xrefs (#525) narrowed rows 1 and 4; F1 narrowed to the remaining stubs (#558, #559, #547); F5, F7, F9, F12, F14, F15, F17, F20, F22, U5, U7, U10, FF2, FF4, FF10 narrowed; F18, U2, U8, U9 removed (done); U13, S3, S4, P1 updated for merged fixes |
 | 2026-10-11 | minor | German interface catalog landed: L1 row count 936 → 989, L2 narrowed (de done; 40–60 → 35–55 h) |
