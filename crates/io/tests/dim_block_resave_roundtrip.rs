@@ -194,3 +194,48 @@ fn dwg_reopen_and_save_keeps_one_block_per_dimension() {
     }
     assert!(saves.windows(2).all(|w| w[0] == w[1]), "DWG reopen-and-save changed the file");
 }
+
+#[test]
+fn an_unedited_dimension_keeps_the_block_it_was_read_with() {
+    use cadcraft_doc::{Circle, Point};
+    let mut d = Drawing::new_metric();
+    // The block another program drew: geometry CADCraft never generates (a circle) and the
+    // definition point on Defpoints.
+    let mut b = Block::new("*D3");
+    for kind in [
+        EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(10.0, 0.0, 0.0) }),
+        EntityKind::Circle(Circle { center: Vec3::new(5.0, 3.0, 0.0), radius: 0.25 }),
+        EntityKind::Point(Point { p: Vec3::new(0.0, 0.0, 0.0), angle: 0.0 }),
+    ] {
+        let h = d.new_handle();
+        b.entities.push(Entity::new(h, kind));
+    }
+    let kept: Vec<Handle> = b.entities.iter().map(|e| e.handle).collect();
+    d.blocks.insert("*D3".into(), Arc::new(b));
+    let mut dm = linear([0.0, 0.0], [10.0, 0.0], [5.0, 3.0]);
+    dm.block = Some("*D3".into());
+    let h = d.add(&Space::Model, Common::default(), EntityKind::Dimension(dm)).unwrap();
+
+    // Saved untouched: the same block, entity for entity, over a DXF and a DWG round trip.
+    let circles = |d: &Drawing| {
+        let Some(EntityKind::Dimension(dm)) = d.entity(h).map(|e| &e.kind) else { panic!("dimension lost") };
+        let blk = d.block(dm.block.as_deref().unwrap()).unwrap();
+        (blk.entities.iter().filter(|e| matches!(e.kind, EntityKind::Circle(_))).count(), blk.entities.iter().map(|e| e.handle).collect::<Vec<_>>())
+    };
+    let back = cadcraft_io::read_dxf(cadcraft_io::write_dxf(&d).as_bytes()).unwrap();
+    assert_eq!(circles(&back), (1, kept.clone()));
+    let dwg = cadcraft_io::read(&cadcraft_io::write(&d, "a.dwg").unwrap(), "a.dwg").unwrap();
+    assert_eq!(circles(&dwg).0, 1);
+
+    // Edited (edits drop the link): regenerated from the dimension, so no circle.
+    let mut edited = back.clone();
+    edited
+        .modify_entity(h, |e| {
+            if let EntityKind::Dimension(dm) = &mut e.kind {
+                dm.block = None;
+            }
+        })
+        .unwrap();
+    let again = cadcraft_io::read_dxf(cadcraft_io::write_dxf(&edited).as_bytes()).unwrap();
+    assert_eq!(circles(&again).0, 0);
+}

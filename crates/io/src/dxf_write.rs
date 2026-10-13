@@ -1496,13 +1496,24 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         for e in st.iter() {
             if let EntityKind::Dimension(dm) = &e.kind {
                 let reused = dim_plan.reuse.get(&e.handle);
-                let mut ents = dim_block_entities(d, dm, &e.common.layer);
+                let ents: Vec<Entity>;
                 let name = match reused {
+                    // A dimension still linked to the block it was read with hasn't changed since
+                    // (edits drop the link, and the screen draws that block): the block is written
+                    // as read, so other programs show it as they drew it.
+                    Some(b) if !b.entities.is_empty() => {
+                        ents = b.entities.iter().map(|x| x.as_ref().clone()).collect();
+                        reused_handles.extend(ents.iter().map(|x| x.handle).filter(|h| h.0 != 0));
+                        b.name.clone()
+                    }
                     Some(b) => {
-                        reuse_handles(&mut ents, b, &mut reused_handles);
+                        let mut fresh = dim_block_entities(d, dm, &e.common.layer);
+                        reuse_handles(&mut fresh, b, &mut reused_handles);
+                        ents = fresh;
                         b.name.clone()
                     }
                     None => {
+                        ents = dim_block_entities(d, dm, &e.common.layer);
                         let mut name = format!("*D{n}");
                         while d.block(&name).is_some() {
                             n += 1;
