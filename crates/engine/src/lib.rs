@@ -660,6 +660,7 @@ impl Session {
         let d = if metric { Drawing::new_metric() } else { Drawing::new_imperial() };
         let mut st = DocState::new(d, &format!("Drawing{}", self.untitled_counter), None);
         st.set_view_quiet(if metric { View { center: Vec2::new(210.0, 148.5), height: 297.0 } } else { View::default() });
+        self.end_running();
         self.docs.push(st);
         self.active = self.docs.len() - 1;
         self.active
@@ -673,9 +674,17 @@ impl Session {
                 height: (ext.height().max(ext.width() * self.viewport_px.1 / self.viewport_px.0.max(1.0)) * 1.1).max(1e-6),
             });
         }
+        self.end_running();
         self.docs.push(st);
         self.active = self.docs.len() - 1;
         self.active
+    }
+    /// A command still waiting for input belongs to the drawing it started in: end it there
+    /// before another drawing becomes current, so its undo step lands in that drawing.
+    fn end_running(&mut self) {
+        if self.running.is_some() {
+            self.cancel();
+        }
     }
 
     pub fn state(&self) -> Result<&DocState> {
