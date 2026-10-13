@@ -90,7 +90,7 @@ fn dedup_polygons(loops: &mut Vec<Vec<Vec2>>) {
 /// detection style (DXF group 75), filled with odd parity: 0 normal keeps every loop (islands
 /// within islands alternate), 1 outer keeps the outermost loops and their first islands, 2
 /// ignore keeps only the outermost loops. Nesting depth = how many other loops enclose a loop.
-pub(crate) fn fill_loops(h: &Hatch, tol: f64) -> Vec<Vec<Vec2>> {
+pub fn fill_loops(h: &Hatch, tol: f64) -> Vec<Vec<Vec2>> {
     let mut loops: Vec<Vec<Vec2>> = h.loops.iter().map(|l| Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(tol)).collect();
     dedup_polygons(&mut loops);
     let max_depth = match h.style {

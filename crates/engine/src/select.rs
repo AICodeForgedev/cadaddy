@@ -89,9 +89,16 @@ pub fn entity_distance(d: &Drawing, e: &Entity, p: Vec2, tol: f64) -> f64 {
     let polys = hit_polylines(d, e, tol);
     let mut best = polys.iter().map(|pl| dist_to_polyline(pl, p)).fold(f64::INFINITY, f64::min);
     let filled = matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) | EntityKind::Table(_))
-        || matches!(e.kind, EntityKind::Tolerance(_))
-        || matches!(&e.kind, EntityKind::Hatch(h) if h.solid);
+        || matches!(e.kind, EntityKind::Tolerance(_));
     if (filled && entity_bounds(d, e, 0).contains(p)) || in_text(d, e, p) {
+        best = 0.0;
+    }
+    // A solid hatch fills its loops with odd parity under its island style, as it is drawn, not
+    // its bounding rectangle.
+    if let EntityKind::Hatch(h) = &e.kind
+        && h.solid
+        && cadcraft_render::hatch_fill_loops(h, tol).iter().filter(|l| point_in_polygon(l, p)).count() % 2 == 1
+    {
         best = 0.0;
     }
     // A SOLID fills its polygon, not its bounding rectangle (half of which is empty for a triangle).
@@ -552,5 +559,52 @@ mod hatch_pattern_pick_tests {
         let d = ansi31_hatch(vec![square(0.0, 10.0, true), square(4.0, 6.0, false)]);
         assert!(pick(&d, &Space::Model, Vec2::new(1.0, 1.0), 0.05).is_some());
         assert!(pick(&d, &Space::Model, Vec2::new(5.0, 5.0), 0.05).is_none());
+    }
+
+    fn solid_hatch(loops: Vec<HatchLoop>, style: u8) -> Drawing {
+        let mut d = Drawing::new_metric();
+        let hatch = Hatch {
+            pattern: "SOLID".into(),
+            solid: true,
+            loops,
+            scale: 1.0,
+            angle: 0.0,
+            associative: false,
+            style,
+            elevation: 0.0,
+            gradient: None,
+            origin: Vec2::ZERO,
+            background: None,
+            pattern_lines: Vec::new(),
+        };
+        d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch)).unwrap();
+        d
+    }
+
+    #[test]
+    fn solid_hatch_is_picked_inside_its_fill_not_its_bounding_rectangle() {
+        let tri = HatchLoop {
+            vertices: [(0.0, 0.0), (10.0, 0.0), (0.0, 10.0)].iter().map(|&(x, y)| PolyVertex::new(Vec2::new(x, y))).collect(),
+            outer: true,
+            sources: Vec::new(),
+        };
+        let d = solid_hatch(vec![tri], 0);
+        // The empty corner of the bounding rectangle, 5.66 from the hypotenuse.
+        assert!(pick(&d, &Space::Model, Vec2::new(9.0, 9.0), 0.25).is_none());
+        assert!(pick(&d, &Space::Model, Vec2::new(2.0, 2.0), 0.25).is_some());
+        // Outside the fill but within the aperture of the hypotenuse.
+        assert!(pick(&d, &Space::Model, Vec2::new(5.1, 5.1), 0.25).is_some());
+    }
+
+    #[test]
+    fn solid_hatch_island_follows_the_island_style() {
+        let loops = || vec![square(0.0, 10.0, true), square(4.0, 6.0, false)];
+        // Normal style leaves the island empty, as it is drawn.
+        let d = solid_hatch(loops(), 0);
+        assert!(pick(&d, &Space::Model, Vec2::new(5.0, 5.0), 0.05).is_none());
+        assert!(pick(&d, &Space::Model, Vec2::new(2.0, 2.0), 0.05).is_some());
+        // Ignore style fills over the island.
+        let d = solid_hatch(loops(), 2);
+        assert!(pick(&d, &Space::Model, Vec2::new(5.0, 5.0), 0.05).is_some());
     }
 }
