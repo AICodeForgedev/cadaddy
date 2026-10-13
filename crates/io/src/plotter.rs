@@ -76,10 +76,7 @@ fn png(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     k *= shrink;
     let px = |v: f64| (v * k).round().clamp(1.0, 16384.0) as u32;
     let (width, height) = (px(sheet.size.x), px(sheet.size.y));
-    let lineweights = o.lineweights.unwrap_or(match space {
-        Space::Paper(_) => page.lineweights,
-        Space::Model => true,
-    });
+    let lineweights = o.lineweights.unwrap_or(if space.is_paper() { page.lineweights } else { true });
     let table = cadcraft_doc::plot_style_table(d, &page.plot_style_table).map(Arc::new);
     // Paper units per drawing unit: 1 for a layout at 1:1, the fitted scale for model space.
     let fit = matches!(space, Space::Model) || o.fit == Some(true);

@@ -474,10 +474,7 @@ fn page_setup(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action 
     };
     let mut layouts: Vec<(u32, String, cadcraft_doc::PageSetup)> = d.layouts.iter().map(|l| (l.tab_order, l.name.clone(), l.page.clone())).collect();
     layouts.sort_by_key(|l| l.0);
-    let shown = match app.session.layout_space() {
-        cadcraft_doc::Space::Paper(n) => Some(n),
-        cadcraft_doc::Space::Model => None,
-    };
+    let shown = app.session.layout_space().layout().map(str::to_string);
     let mut sel = temp::<String>(ctx, "pagesetup_sel")
         .filter(|s| layouts.iter().any(|l| l.1 == *s))
         .or(shown)
@@ -900,10 +897,7 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
     targets.extend(layouts.into_iter().map(|l| l.1));
     let generation = PLOT_GEN.load(Ordering::Relaxed);
     let mut st = temp::<PlotState>(ctx, "plot_state").filter(|s| s.generation == generation && targets.contains(&s.target)).unwrap_or_else(|| {
-        let target = match app.session.layout_space() {
-            cadcraft_doc::Space::Paper(n) => n,
-            cadcraft_doc::Space::Model => "Model".into(),
-        };
+        let target = app.session.layout_space().tab_name().to_string();
         let mut ext = d.extents(&cadcraft_doc::Space::Model);
         if ext.is_empty() {
             ext = cadcraft_geom::Bounds2::new(cadcraft_geom::Vec2::ZERO, cadcraft_geom::Vec2::new(12.0, 9.0));

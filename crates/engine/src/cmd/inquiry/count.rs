@@ -74,10 +74,7 @@ impl Scope {
     }
     /// The top-level objects in scope, each with the name of its space.
     fn objects<'a>(&self, d: &'a Drawing) -> Vec<(String, &'a std::sync::Arc<Entity>)> {
-        let name = |sp: &Space| match sp {
-            Space::Model => "Model".to_string(),
-            Space::Paper(n) => n.clone(),
-        };
+        let name = |sp: &Space| sp.tab_name().to_string();
         let mut out = Vec::new();
         let mut add = |sp: &Space| {
             if let Some(store) = d.space(sp) {

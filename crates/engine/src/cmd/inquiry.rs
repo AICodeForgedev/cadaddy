@@ -283,7 +283,7 @@ fn run_inspect(s: &mut Session, p: &Value) -> Result<Value> {
         "title": st.title,
         "path": st.path,
         "dirty": st.is_dirty(),
-        "space": match &space { cadcraft_doc::Space::Model => "Model".to_string(), cadcraft_doc::Space::Paper(n) => n.clone() },
+        "space": space.tab_name(),
         "entityCount": d.entity_count(),
         "counts": counts,
         "extents": if ext.is_empty() { Value::Null } else { json!([[ext.min.x, ext.min.y], [ext.max.x, ext.max.y]]) },

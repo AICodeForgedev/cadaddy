@@ -260,10 +260,10 @@ fn run_delete(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
-    let from = match (str_param(p, "from"), s.layout_space()) {
+    let from = match (str_param(p, "from"), s.layout_space().layout()) {
         (Some(f), _) => f.to_string(),
-        (None, Space::Paper(n)) => n,
-        (None, Space::Model) => return Err(bad("layout.rename", "`from` is required in the Model tab")),
+        (None, Some(n)) => n.to_string(),
+        (None, None) => return Err(bad("layout.rename", "`from` is required in the Model tab")),
     };
     let from = layout_name("layout.rename", s.doc()?, &from)?;
     let to = str_param(p, "to").ok_or_else(|| bad("layout.rename", "`to` is required"))?;
@@ -636,10 +636,9 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
         "displayPlotStyles",
     ];
     let changes = keys.iter().any(|k| p.get(k).is_some());
-    let name = match (str_param(p, "layout"), s.space()) {
-        (Some(n), _) => Some(layout_name(cmd, s.doc()?, n)?),
-        (None, Space::Paper(n)) => Some(n),
-        (None, Space::Model) => None,
+    let name = match str_param(p, "layout") {
+        Some(n) => Some(layout_name(cmd, s.doc()?, n)?),
+        None => s.space().layout().map(str::to_string),
     };
     let Some(name) = name else {
         if changes {
@@ -806,10 +805,9 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         }
     }
     let bytes = hook(s.doc()?, &space, &opts).map_err(|e| bad(cmd, e))?;
-    let layout = match (&sheets, &space) {
-        (Some(names), _) => names.first().cloned().unwrap_or_default(),
-        (None, Space::Model) => "Model".to_string(),
-        (None, Space::Paper(n)) => n.clone(),
+    let layout = match &sheets {
+        Some(names) => names.first().cloned().unwrap_or_default(),
+        None => space.tab_name().to_string(),
     };
     let pages = sheets.as_ref().map_or(1, Vec::len);
     match str_param(p, "path") {

@@ -549,3 +549,14 @@ fn invisible_dimblock_entity_is_ignored_in_dimension_extents() {
     dim(&mut d, far_line("0"));
     assert_eq!(d.extents(&Space::Model).max, Vec2::new(6000.0, 6000.0));
 }
+
+#[test]
+fn space_names_its_tab() {
+    assert!(!Space::Model.is_paper());
+    assert_eq!(Space::Model.layout(), None);
+    assert_eq!(Space::Model.tab_name(), "Model");
+    let p = Space::Paper("Sheet A".into());
+    assert!(p.is_paper());
+    assert_eq!(p.layout(), Some("Sheet A"));
+    assert_eq!(p.tab_name(), "Sheet A");
+}

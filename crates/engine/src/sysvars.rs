@@ -116,14 +116,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "DBMOD" => json!(s.state().map(|d| i32::from(d.is_dirty())).unwrap_or(0)),
         // The template NEW/QNEW start from (a profile setting, like FONTALT; "" = none).
         "QNEWTEMPLATE" => json!(crate::cmd::file::qnew_template()),
-        "CTAB" => json!(
-            s.state()
-                .map(|d| match &d.space {
-                    cadcraft_doc::Space::Model => "Model".to_string(),
-                    cadcraft_doc::Space::Paper(n) => n.clone(),
-                })
-                .unwrap_or_default()
-        ),
+        "CTAB" => json!(s.state().map(|d| d.space.tab_name().to_string()).unwrap_or_default()),
         // UNDO state of the drawing: Control/Auto/group bits and the number of marks.
         "UNDOCTL" => json!(s.state().ok()?.undo_ctl.bits()),
         "UNDOMARKS" => json!(s.state().ok()?.undo_marks()),

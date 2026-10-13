@@ -87,10 +87,7 @@ impl LayoutM {
         let pats: Vec<&str> = pat.split(',').map(str::trim).filter(|p| !p.is_empty()).take(1000).collect();
         let pats = if pats.is_empty() { vec!["*"] } else { pats };
         let names: Vec<String> = ls.iter().filter(|l| pats.iter().any(|p| wildcard(p, &l.name))).map(|l| l.name.clone()).collect();
-        let current = match s.layout_space() {
-            Space::Paper(n) => n,
-            Space::Model => "Model".into(),
-        };
+        let current = s.layout_space().tab_name().to_string();
         s.echo(format!("Active Layout: {current}"));
         if names.is_empty() {
             s.echo(format!("No layout matches \"{pat}\"."));
@@ -131,10 +128,7 @@ impl Interactive for LayoutM {
             Stage::RenameFrom => with_cur(Prompt::new("Enter layout to rename", Accept::TEXT)),
             Stage::RenameTo(_) => Prompt::new("Enter new layout name", Accept::TEXT),
             Stage::Set => {
-                let tab = match s.layout_space() {
-                    Space::Paper(n) => n,
-                    Space::Model => "Model".into(),
-                };
+                let tab = s.layout_space().tab_name().to_string();
                 Prompt::new("Enter layout to make current", Accept::TEXT).default(tab)
             }
             Stage::List => Prompt::new("Enter layout name(s) to list", Accept::TEXT).default("*"),
@@ -199,10 +193,7 @@ impl Interactive for LayoutM {
             Stage::Set => {
                 let n = match name {
                     Some(n) => n,
-                    None => match s.layout_space() {
-                        Space::Paper(n) => n,
-                        Space::Model => "Model".into(),
-                    },
+                    None => s.layout_space().tab_name().to_string(),
                 };
                 let set = find_command("layout.set").ok_or_else(|| EngineError::UnknownCommand("layout.set".into()))?;
                 (set.run)(s, &json!({ "name": n })).map_err(retry)?;

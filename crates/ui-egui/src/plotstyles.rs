@@ -51,10 +51,8 @@ fn window(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
         return None;
     };
     let names = cadcraft_doc::plot_style_table_names(d);
-    let layout = match app.session.layout_space() {
-        cadcraft_doc::Space::Paper(n) => d.layout(&n).map(|l| (n.clone(), l.page.plot_style_table.clone(), l.page.show_plot_styles)),
-        cadcraft_doc::Space::Model => None,
-    };
+    let space = app.session.layout_space();
+    let layout = space.layout().and_then(|n| d.layout(n).map(|l| (n.to_string(), l.page.plot_style_table.clone(), l.page.show_plot_styles)));
     let mut sel = temp::<String>(ctx, "pstyle_sel")
         .filter(|s| names.iter().any(|n| n.eq_ignore_ascii_case(s)))
         .or_else(|| layout.as_ref().map(|l| l.1.clone()).filter(|n| names.iter().any(|x| x.eq_ignore_ascii_case(n))))

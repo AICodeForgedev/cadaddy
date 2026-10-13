@@ -286,9 +286,9 @@ pub(crate) fn plot_options(s: &Session, p: &Value, cmd: &str) -> Result<Value> {
     let layout = match str_param(p, "layout") {
         Some(n) if n.eq_ignore_ascii_case("model") => None,
         Some(n) => s.doc()?.layout(n).map(|l| l.page.clone()),
-        None => match s.space() {
-            cadcraft_doc::Space::Paper(n) => s.doc()?.layout(&n).map(|l| l.page.clone()),
-            cadcraft_doc::Space::Model => None,
+        None => match s.space().layout() {
+            Some(n) => s.doc()?.layout(n).map(|l| l.page.clone()),
+            None => None,
         },
     };
     let dev = match given {

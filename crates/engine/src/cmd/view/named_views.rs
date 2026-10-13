@@ -152,10 +152,10 @@ fn restore(s: &mut Session, name: &str) -> Result<Value> {
     match &v.layout {
         Some(l) => {
             // A paper space view: its layout (an unknown one: the current or first layout).
-            let target = match (l.is_empty(), s.layout_space()) {
+            let target = match (l.is_empty(), s.layout_space().layout()) {
                 (false, _) => l.clone(),
-                (true, Space::Paper(cur)) => cur,
-                (true, Space::Model) => s.doc()?.layouts.iter().min_by_key(|x| x.tab_order).map(|x| x.name.clone()).unwrap_or_default(),
+                (true, Some(cur)) => cur.to_string(),
+                (true, None) => s.doc()?.layouts.iter().min_by_key(|x| x.tab_order).map(|x| x.name.clone()).unwrap_or_default(),
             };
             if s.doc()?.layout(&target).is_none() {
                 return Err(EngineError::Other(format!("View \"{}\" belongs to layout \"{target}\", which does not exist.", v.name)));

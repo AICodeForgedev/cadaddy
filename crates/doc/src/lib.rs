@@ -61,6 +61,26 @@ pub enum Space {
     Paper(String),
 }
 
+impl Space {
+    /// Whether this is a layout's paper space.
+    pub fn is_paper(&self) -> bool {
+        matches!(self, Space::Paper(_))
+    }
+
+    /// The layout whose paper space this is; `None` for model space.
+    pub fn layout(&self) -> Option<&str> {
+        match self {
+            Space::Paper(n) => Some(n),
+            Space::Model => None,
+        }
+    }
+
+    /// The tab name (CTAB): `Model`, or the layout's name.
+    pub fn tab_name(&self) -> &str {
+        self.layout().unwrap_or("Model")
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Drawing {
     pub header: Header,

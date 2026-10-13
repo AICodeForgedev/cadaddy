@@ -292,9 +292,9 @@ fn plot_scale(b: &Bounds2, sheet: &Sheet, fit: bool, scale: Option<f64>) -> f64 
 fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     let space = plot_space("preview", s, p)?;
     let d = s.doc()?;
-    let mut page = match &space {
-        Space::Paper(n) => d.layout(n).map(|l| l.page.clone()).unwrap_or_default(),
-        Space::Model => {
+    let mut page = match space.layout() {
+        Some(n) => d.layout(n).map(|l| l.page.clone()).unwrap_or_default(),
+        None => {
             // Model space plots on A4 (metric) or ANSI A, like the PDF plotter.
             let mut page = PageSetup::default();
             if paper::paper_unit_mm(d) == 1.0
@@ -317,10 +317,7 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
         page.landscape = l;
     }
     let sheet = Sheet::from_page(&page, paper::paper_unit_mm(d));
-    let lineweights = p.get("lineweights").and_then(Value::as_bool).unwrap_or(match space {
-        Space::Paper(_) => page.lineweights,
-        Space::Model => true,
-    });
+    let lineweights = p.get("lineweights").and_then(Value::as_bool).unwrap_or(if space.is_paper() { page.lineweights } else { true });
     let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(matches!(space, Space::Model));
     let scale = p.get("scale").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0);
     let width = p.get("width").and_then(Value::as_u64).unwrap_or(PREVIEW_PX).clamp(16, MAX_PREVIEW_PX);
@@ -360,10 +357,7 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
         antialias: true,
     };
     let png = cadcraft_render::raster::render_png(&list, &view, &ro).ok_or_else(|| bad("preview", "rendering the preview failed"))?;
-    let layout = match &space {
-        Space::Model => "Model".to_string(),
-        Space::Paper(n) => n.clone(),
-    };
+    let layout = space.tab_name();
     Ok(json!({ "data": base64_encode(&png), "width": w, "height": h, "layout": layout, "paper": page.paper, "landscape": page.landscape }))
 }
 
