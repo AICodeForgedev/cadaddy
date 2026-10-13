@@ -1028,3 +1028,9 @@
 	Search for pattern	Muster suchen
 	Not a number or distance: {text}	Keine Zahl und keine Entfernung: {text}
 	Query Texts	Texte abfragen
+	Italic	Kursiv
+	Underline	Unterstrichen
+	Overline	Überstrichen
+	Justify	Blocksatz
+	Text color	Textfarbe
+	Click the ruler to add a tab stop, right-click to remove one	Klick auf das Lineal setzt einen Tabstopp, Rechtsklick entfernt ihn

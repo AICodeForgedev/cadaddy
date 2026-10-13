@@ -84,6 +84,15 @@ impl Interactive for Guarded {
             None
         })
     }
+    fn editing_mtext(&self) -> Option<cadcraft_doc::MText> {
+        if self.broken.get().is_some() {
+            return None;
+        }
+        catch_unwind(AssertUnwindSafe(|| self.inner.editing_mtext())).unwrap_or_else(|_| {
+            self.broken.set(Some("panic in prompt"));
+            None
+        })
+    }
 }
 
 #[cfg(test)]

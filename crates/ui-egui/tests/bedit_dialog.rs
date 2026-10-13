@@ -134,6 +134,13 @@ fn opening_a_drawing_with_authoring_elements_offers_the_block_editor() {
     std::fs::write(&symbol, "authoring").unwrap();
     let mut app = CadApp::new(Session::new(), Services::default());
     app.open_path(&symbol.to_string_lossy());
+    // The file is read in the background (#797): wait for it to be added.
+    let t = std::time::Instant::now();
+    while app.opening.busy() && t.elapsed() < std::time::Duration::from_secs(10) {
+        app.finish_opening();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.finish_opening();
     assert_eq!(app.ui.dialog.as_deref(), Some("authoring"));
     let ctx = egui::Context::default();
     app.logic(&ctx);
@@ -157,6 +164,13 @@ fn opening_a_drawing_with_authoring_elements_offers_the_block_editor() {
     std::fs::write(&plain, "plain").unwrap();
     let mut app = CadApp::new(Session::new(), Services::default());
     app.open_path(&plain.to_string_lossy());
+    // The file is read in the background (#797): wait for it to be added.
+    let t = std::time::Instant::now();
+    while app.opening.busy() && t.elapsed() < std::time::Duration::from_secs(10) {
+        app.finish_opening();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.finish_opening();
     assert!(app.session.state().unwrap().path.is_some(), "opened");
     assert!(app.ui.dialog.is_none());
     let _ = std::fs::remove_dir_all(&dir);

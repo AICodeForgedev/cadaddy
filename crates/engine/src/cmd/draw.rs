@@ -1602,6 +1602,10 @@ impl Interactive for MTextM {
         }
         Ok(Step::Continue)
     }
+    fn editing_mtext(&self) -> Option<MText> {
+        let a = self.first?;
+        (self.boxed() && self.ask.is_none()).then(|| self.opts.mtext(a, self.second, String::new()))
+    }
     fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
         match (self.first, self.boxed(), self.ask) {
             (Some(a), false, None) => {
