@@ -697,7 +697,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 }
             }
         }
-        DimKind::Radius if d.marks.jogged.is_some() => {
+        DimKind::Radius if d.marks.jogged.is_some() => 'jogged: {
             // DIMJOGGED: from the arrowhead on the arc toward the centre, a jog at DIMJOGANG,
             // then on to the overriding centre (parallel to the first part).
             let center = d.defpt.xy();
@@ -706,6 +706,10 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let j = d.marks.jogged.clone().unwrap_or_default();
             let (o, jp) = (j.center.xy(), j.jog.xy());
             g.mtext = linear_text(r, d, st, "R");
+            // A NaN or infinite radius leaves no line to draw (and NaN is no bound for `clamp`).
+            if !r.is_finite() {
+                break 'jogged;
+            }
             let (tw, _) = measure(&g.mtext);
             let u = (tip - center).normalized();
             let u = if u == Vec2::ZERO || !u.is_finite() { Vec2::X } else { u };
@@ -1282,5 +1286,21 @@ mod tests {
         }
         let z = lin((0.0, 0.0), (0.0, 0.0), (0.0, 0.0), 0.0);
         let _ = dimension_geometry(&z, &DimStyle::default(), 1.0);
+    }
+
+    #[test]
+    fn jogged_radius_with_nan_radius_draws_no_lines() {
+        let mut d = lin((0.0, 0.0), (0.0, 0.0), (0.0, 0.0), 0.0);
+        d.kind = DimKind::Radius;
+        d.p15 = Vec3::new(10.0, 0.0, 0.0);
+        d.marks.jogged = Some(cadcraft_doc::JoggedRadius { center: Vec3::new(0.0, -4.0, 0.0), jog: Vec3::new(5.0, -2.0, 0.0) });
+        // Finite control: the jogged line runs from the arrowhead on the arc to the override centre.
+        let g = dimension_geometry(&d, &DimStyle::default(), 1.0);
+        let jog = g.lines.iter().find(|l| l.len() == 4).expect("jogged dimension line");
+        assert!(jog[0].near(Vec2::new(10.0, 0.0), 1e-9) && jog[3].near(Vec2::new(0.0, -4.0), 1e-9));
+        // A NaN in the tip makes the radius NaN: nothing usable to draw, and no panic.
+        d.p15 = Vec3::new(f64::NAN, 0.0, 0.0);
+        let g = dimension_geometry(&d, &DimStyle::default(), 1.0);
+        assert!(g.lines.is_empty() && g.fills.is_empty(), "{:?}", g.lines);
     }
 }
