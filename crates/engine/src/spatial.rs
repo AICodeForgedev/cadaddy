@@ -73,6 +73,8 @@ pub struct SpatialIndex {
     dimscale: f64,
     /// Annotation scale factor and ANNOALLVISIBLE: annotative objects measure at that scale.
     anno: (u64, bool),
+    /// Layers turned off or frozen: block contents on them take no room in their inserts.
+    hidden_layers: Vec<String>,
     /// (draw index of the chunk's first entity, chunk), in draw order.
     chunks: Vec<(u32, Arc<ChunkIx>)>,
     /// Chunk serial → draw offset.
@@ -88,6 +90,10 @@ fn anno_key(d: &Drawing) -> (u64, bool) {
     (d.current_anno_scale().factor().to_bits(), d.anno_all_visible())
 }
 
+fn hidden_layers(d: &Drawing) -> impl Iterator<Item = &str> {
+    d.layers.iter().filter(|l| !l.visible()).map(|l| l.name.as_str())
+}
+
 impl SpatialIndex {
     /// Build an index over a store (no caching).
     pub fn build(d: &Drawing, store: &EntityStore) -> SpatialIndex {
@@ -95,7 +101,7 @@ impl SpatialIndex {
     }
 
     /// Build, reusing `prev` for chunks the two stores share (only when the bounds context —
-    /// blocks, dimension styles, DIMSCALE — is the same).
+    /// blocks, dimension styles, DIMSCALE, hidden layers — is the same).
     fn build_from(d: &Drawing, store: &EntityStore, prev: Option<&SpatialIndex>) -> SpatialIndex {
         let prev = prev.filter(|p| p.same_context(d));
         let old: std::collections::HashMap<usize, Arc<ChunkIx>> =
@@ -146,6 +152,7 @@ impl SpatialIndex {
             dim_styles: d.dim_styles.clone(),
             dimscale: d.header.f64("DIMSCALE", 1.0),
             anno: anno_key(d),
+            hidden_layers: hidden_layers(d).map(str::to_owned).collect(),
             chunks,
             offsets,
             tree,
@@ -160,6 +167,7 @@ impl SpatialIndex {
             && self.dimscale.to_bits() == d.header.f64("DIMSCALE", 1.0).to_bits()
             && self.dim_styles == d.dim_styles
             && self.anno == anno_key(d)
+            && self.hidden_layers.iter().map(String::as_str).eq(hidden_layers(d))
     }
 
     fn matches(&self, d: &Drawing, store: &EntityStore) -> bool {
@@ -462,6 +470,49 @@ mod tests {
             .push(Entity::new(cadcraft_doc::Handle(2_000_000), EntityKind::Circle(cadcraft_doc::Circle { center: v3(0.0, 0.0), radius: 50.0 })));
         d.blocks.insert("B".into(), Arc::new(blk));
         assert!(!Arc::ptr_eq(&before, &index(&d, &Space::Model).unwrap()));
+    }
+
+    /// Hiding a layer used inside a block shrinks its inserts' bounds without touching the
+    /// space or the block table: the index must not be reused (issue #716).
+    #[test]
+    fn index_follows_layer_visibility_inside_blocks() {
+        let mut d = Drawing::new_imperial();
+        let mut blk = (**drawing(1, 0).blocks.get("B").unwrap()).clone();
+        let big = Common { layer: "HID".into(), ..Common::default() };
+        blk.entities.push(Entity {
+            handle: cadcraft_doc::Handle(2_000_000),
+            common: big,
+            kind: EntityKind::Circle(cadcraft_doc::Circle { center: v3(0.0, 0.0), radius: 50.0 }),
+        });
+        d.blocks.insert("B".into(), Arc::new(blk));
+        d.ensure_layer("HID");
+        for i in 0..MIN_INDEXED {
+            let x = 1000.0 + i as f64;
+            d.add(&Space::Model, Common::default(), EntityKind::Line(cadcraft_doc::Line { a: v3(x, 0.0), b: v3(x, 1.0) })).unwrap();
+        }
+        let insert = Insert {
+            block: "B".into(),
+            insert: v3(0.0, 0.0),
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs: Vec::new(),
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+        };
+        let h = d.add(&Space::Model, Common::default(), EntityKind::Insert(insert)).unwrap();
+        let small = Bounds2::new(Vec2::new(-2.0, -2.0), Vec2::new(2.0, 2.0));
+        let shown = SpatialIndex::build(&d, &d.model);
+        assert!(select::select_window(&d, &Space::Model, small, false).is_empty());
+
+        d.layer_mut("HID").unwrap().on = false;
+        assert!(!shown.matches(&d, &d.model));
+        let reused = SpatialIndex::build_from(&d, &d.model, Some(&shown));
+        let fresh = SpatialIndex::build(&d, &d.model);
+        let last = u32::try_from(MIN_INDEXED).unwrap();
+        assert_eq!(reused.bounds(last), fresh.bounds(last));
+        assert_eq!(select::select_window(&d, &Space::Model, small, false), vec![h]);
     }
 
     #[test]
