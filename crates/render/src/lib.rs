@@ -191,11 +191,24 @@ pub struct Options {
     /// The area being looked at (world units of the space being built), for on-screen builds:
     /// hatch patterns are only generated inside it. `None` = everywhere (plots, exports, picks).
     pub view: Option<Bounds2>,
+    /// A layout viewport whose model-space contents are left out (its border is still drawn):
+    /// the canvas draws the active viewport's contents itself, see [`viewport_content`].
+    pub skip_viewport: Option<Handle>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights: false, view_height: 0.0, plot_style_table: None, view: None }
+        Options {
+            tolerance: 0.001,
+            min_dash: 0.0,
+            text: true,
+            fill: true,
+            lineweights: false,
+            view_height: 0.0,
+            plot_style_table: None,
+            view: None,
+            skip_viewport: None,
+        }
     }
 }
 
@@ -408,15 +421,7 @@ fn top_ctx<'a>(d: &'a Drawing, xf: Mat3, top: Handle, frozen: &'a [String], vp_c
 
 fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> DisplayList {
     let opts = &with_point_view(d, space, opts);
-    let table = opts.plot_style_table.clone().or_else(|| match space {
-        Space::Paper(n) if !plotting => d
-            .layout(n)
-            .filter(|l| l.page.show_plot_styles)
-            .and_then(|l| cadcraft_doc::plot_style_table(d, &l.page.plot_style_table))
-            .map(std::sync::Arc::new),
-        _ => None,
-    });
-    let styler = table.map(|t| plotstyle::Styler::new(d, t));
+    let styler = style_table(d, space, opts, plotting).map(|t| plotstyle::Styler::new(d, t));
     let mut b = Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref(), named: None, shared_budget: None };
     if let Space::Paper(name) = space {
         b.list.sheet = paper::sheet(d, name);
@@ -510,6 +515,19 @@ fn append(dst: &mut DisplayList, src: DisplayList) {
     dst.expanded = dst.expanded.saturating_add(src.expanded);
 }
 
+/// The plot style table a build draws with: the one in `opts`, else (on screen) the layout's
+/// when its page setup has "Display plot styles" on.
+fn style_table(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Option<std::sync::Arc<cadcraft_doc::PlotStyleTable>> {
+    opts.plot_style_table.clone().or_else(|| match space {
+        Space::Paper(n) if !plotting => d
+            .layout(n)
+            .filter(|l| l.page.show_plot_styles)
+            .and_then(|l| cadcraft_doc::plot_style_table(d, &l.page.plot_style_table))
+            .map(std::sync::Arc::new),
+        _ => None,
+    })
+}
+
 /// `opts` with a view height for relative point sizes: the extents height when none is given
 /// and points draw as figures sized relative to the view.
 fn with_point_view(d: &Drawing, space: &Space, opts: &Options) -> Options {
@@ -530,11 +548,7 @@ const MAX_VIEWPORTS: usize = 256;
 /// model space through its clip boundary's outline (the boundary entity draws itself, so the
 /// rectangle is not drawn); a viewport turned off shows only its border.
 fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewport) {
-    if vp.id == 1 || !e.common.visible || d.is_hidden_object(e.handle) {
-        return;
-    }
-    // The viewport's layer frozen hides its contents too (layer off hides only the border).
-    if d.layer(&e.common.layer).is_some_and(|l| l.frozen) {
+    if !viewport_shown(d, e, vp) {
         return;
     }
     let poly = viewport_clip(d, e.handle, vp);
@@ -542,6 +556,57 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     if poly.is_none() {
         entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
     }
+    if b.opts.skip_viewport == Some(e.handle) {
+        return;
+    }
+    match &poly {
+        Some(p) => contents(b, d, vp, p.bounds(), &Clip::Poly(p)),
+        None => {
+            if let Some(rect) = viewport_rect(vp) {
+                contents(b, d, vp, rect, &Clip::Rect(rect));
+            }
+        }
+    }
+}
+
+/// Whether a viewport draws anything: id 1 is the paper-space view itself, and a hidden viewport
+/// or one on a frozen layer shows neither its border nor its contents.
+fn viewport_shown(d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewport) -> bool {
+    vp.id != 1 && e.common.visible && !d.is_hidden_object(e.handle) && !d.layer(&e.common.layer).is_some_and(|l| l.frozen)
+}
+
+/// A viewport's rectangle on paper; `None` for an unusable size or centre.
+fn viewport_rect(vp: &cadcraft_doc::Viewport) -> Option<Bounds2> {
+    let center = vp.center.xy();
+    let ok = |v: f64| v.is_finite() && v > 0.0;
+    (ok(vp.width) && ok(vp.height) && center.is_finite()).then(|| {
+        let half = Vec2::new(vp.width / 2.0, vp.height / 2.0);
+        Bounds2::new(center - half, center + half)
+    })
+}
+
+/// Model space seen through the layout viewport `handle` of `space`, in paper units, clipped to
+/// `area` (paper units) instead of to the viewport: what [`build`] draws inside that viewport,
+/// over an area the caller chooses. The canvas builds the active viewport this way for an area
+/// around it and draws it clipped to the viewport, so panning and zooming inside it moves the
+/// geometry instead of rebuilding the layout (see [`Options::skip_viewport`]). Empty when the
+/// viewport shows nothing.
+pub fn viewport_content(d: &Drawing, space: &Space, handle: Handle, area: Bounds2, opts: &Options) -> DisplayList {
+    let Some(e) = d.space(space).and_then(|s| s.get(handle)) else { return DisplayList::default() };
+    let EntityKind::Viewport(vp) = &e.kind else { return DisplayList::default() };
+    if !viewport_shown(d, e, vp) || area.is_empty() || !(area.min.is_finite() && area.max.is_finite()) {
+        return DisplayList::default();
+    }
+    let opts = &with_point_view(d, space, opts);
+    let styler = style_table(d, space, opts, false).map(|t| plotstyle::Styler::new(d, t));
+    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: styler.as_ref(), named: None, shared_budget: None };
+    contents(&mut b, d, vp, area, &Clip::Rect(area));
+    b.list
+}
+
+/// Model space seen through `vp`, in paper units, appended to `b`'s list clipped to `clip`;
+/// `area` (the clip's bounds on paper) picks the model objects to draw.
+fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bounds2, clip: &Clip) {
     if b.list.expanded >= MAX_BLOCK_EXPANSION || !vp.on {
         return;
     }
@@ -554,50 +619,75 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     if !ok(s) {
         return;
     }
-    let half = Vec2::new(vp.width / 2.0, vp.height / 2.0);
-    let rect = match &poly {
-        Some(p) => p.bounds(),
-        None => Bounds2::new(center - half, center + half),
-    };
     let xf = Mat3::translate(center).then_before(Mat3::scale(s, s)).then_before(Mat3::translate(-vp.view_center));
-    let mhalf = Vec2::new(rect.width(), rect.height()) / (2.0 * s);
-    let mcenter = vp.view_center + (rect.center() - center) / s;
+    let mhalf = Vec2::new(area.width(), area.height()) / (2.0 * s);
+    let mcenter = vp.view_center + (area.center() - center) / s;
     // Model window with slack: entity bounds are approximate (text, dimensions).
     let win = Bounds2::new(mcenter - mhalf, mcenter + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
-    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, styles: b.styles, named: None, shared_budget: None };
     // PSLTSCALE on: model-space dashes are scaled so they measure the same on paper as in
     // paper space, whatever the viewport scale.
     let lt_factor = if d.header.i64("PSLTSCALE", 1) != 0 { 1.0 / s } else { 1.0 };
-    for me in d.model.iter() {
-        if !matches!(me.kind, EntityKind::Ray(_) | EntityKind::XLine(_) | EntityKind::Viewport(_)) {
-            let eb = cadcraft_doc::entity_bounds(d, me, 0);
-            if !eb.is_empty() && !eb.intersects(&win) {
-                continue;
-            }
-        }
+    let ctx = || Ctx { lt_factor, ..top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors) };
+    let seen = |me: &Entity| {
         if matches!(me.kind, EntityKind::Viewport(_)) {
-            continue;
+            return false;
         }
-        entity(&mut sub, &Ctx { lt_factor, ..top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors) }, me);
-        // Plotted text glyphs move to the layout's list; their outlines carry the glyph's
-        // index there in their handle's high half until clipped (see `take_viewport_layers`).
-        for t in std::mem::take(&mut sub.list.texts) {
-            let k = b.list.texts.len() as u64 + 1;
-            if let Some(p) = sub.list.prims.get_mut(t.prim as usize)
-                && k < u64::from(u32::MAX)
-            {
-                p.handle = Handle(p.handle.0 | (k << 32));
-                b.list.texts.push(PlotText { prim: PlotText::NONE, ..t });
+        if matches!(me.kind, EntityKind::Ray(_) | EntityKind::XLine(_)) {
+            return true;
+        }
+        let eb = cadcraft_doc::entity_bounds(d, me, 0);
+        eb.is_empty() || eb.intersects(&win)
+    };
+    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, styles: b.styles, named: None, shared_budget: None };
+    #[cfg(not(target_arch = "wasm32"))]
+    let parallel = !b.plotting && b.styles.is_none() && d.model.len() >= 2 * PARALLEL_CHUNK;
+    #[cfg(target_arch = "wasm32")]
+    let parallel = false;
+    if parallel {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // As `build_parallel`: chunks built side by side, joined in drawing order.
+            use rayon::prelude::*;
+            let ents: Vec<&std::sync::Arc<Entity>> = d.model.iter().collect();
+            let budget = std::sync::atomic::AtomicUsize::new(0);
+            let opts = b.opts;
+            let parts: Vec<DisplayList> = ents
+                .par_chunks(PARALLEL_CHUNK)
+                .map(|chunk| {
+                    let mut part =
+                        Builder { list: DisplayList::default(), opts, plotting: false, styles: None, named: None, shared_budget: Some(&budget) };
+                    let c = ctx();
+                    for me in chunk.iter().filter(|me| seen(me)) {
+                        entity(&mut part, &c, me);
+                    }
+                    part.list
+                })
+                .collect();
+            for part in parts {
+                append(&mut sub.list, part);
             }
+        }
+    } else {
+        let c = ctx();
+        for me in d.model.iter().filter(|me| seen(me)) {
+            entity(&mut sub, &c, me);
+        }
+    }
+    // Plotted text glyphs move to the layout's list; their outlines carry the glyph's index there
+    // in their handle's high half until clipped (see `take_viewport_layers`).
+    for t in std::mem::take(&mut sub.list.texts) {
+        let k = b.list.texts.len() as u64 + 1;
+        if let Some(p) = sub.list.prims.get_mut(t.prim as usize)
+            && k < u64::from(u32::MAX)
+        {
+            p.handle = Handle(p.handle.0 | (k << 32));
+            b.list.texts.push(PlotText { prim: PlotText::NONE, ..t });
         }
     }
     // The contents are in paper units now: draw their pens before clipping.
     pen::apply(&mut sub.list, paper::paper_unit_mm(d));
     b.list.expanded = b.list.expanded.saturating_add(sub.list.expanded);
-    match &poly {
-        Some(p) => append_clipped(&mut b.list, &sub.list, &Clip::Poly(p)),
-        None => append_clipped(&mut b.list, &sub.list, &Clip::Rect(rect)),
-    }
+    append_clipped(&mut b.list, &sub.list, clip);
 }
 
 /// The clip region of a clipped viewport: the outline of its clip boundary entity, when that

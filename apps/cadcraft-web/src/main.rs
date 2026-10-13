@@ -124,7 +124,9 @@ mod web {
                         if !crate::wants_cpu(&query())
                             && let Some(rs) = &cc.wgpu_render_state
                         {
-                            app.set_wgpu(rs);
+                            // eframe's web runner has no stencil buffer: clipped layout
+                            // viewports stay in the layout's display list.
+                            app.set_wgpu(rs, None);
                         }
                         if query().contains("sample") {
                             let _ = app.run("ui.sample", serde_json::json!({}));

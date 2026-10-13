@@ -93,6 +93,9 @@ impl FrameCap {
 #[derive(Clone, Copy, Debug)]
 pub struct GpuTarget {
     pub format: wgpu::TextureFormat,
+    /// The stencil buffer format of the render pass, when it has one (the native window asks
+    /// for one): clipped viewports are clipped with it.
+    pub stencil: Option<wgpu::TextureFormat>,
 }
 
 /// CPU-side vertex data for one display list, waiting to be uploaded.
@@ -276,13 +279,28 @@ pub struct CanvasCallback {
     pub scale: f32,
     /// Canvas rect centre in points.
     pub center: [f32; 2],
-    /// Which buffers to draw: [`LAYER_DRAWING`] or [`LAYER_DRAG`].
+    /// Which buffers to draw: [`LAYER_DRAWING`], [`LAYER_DRAG`], [`LAYER_HIGHLIGHT`] or
+    /// [`LAYER_VIEWPORT`].
     pub layer: usize,
     /// Affine transform applied to the origin-relative positions before `offset`: the linear
     /// part (a, b, c, d as in `Mat3`) and the translation. [`IDENTITY_XFORM`] for the drawing.
     pub xform: [f32; 6],
     /// Dash period in points for wide lines (0 = solid): the selection highlight.
     pub dash: f32,
+    /// How the draw uses the stencil buffer.
+    pub stencil: Stencil,
+}
+
+/// How a [`CanvasCallback`] uses the stencil buffer ([`GpuTarget::stencil`]): a clipped
+/// viewport's outline is drawn as a triangle fan that flips a stencil bit ([`Stencil::Mask`],
+/// even-odd, as the outline clips on the CPU), then its contents draw only where the bit is set
+/// ([`Stencil::Inside`]). The stencil is cleared every frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Stencil {
+    #[default]
+    Off,
+    Mask,
+    Inside,
 }
 
 /// The drawing's display list.
@@ -291,6 +309,10 @@ pub const LAYER_DRAWING: usize = 0;
 pub const LAYER_DRAG: usize = 1;
 /// The selection highlight, rebuilt only when the selection or the drawing changes.
 pub const LAYER_HIGHLIGHT: usize = 2;
+/// Model space seen through the active layout viewport, moved to its current view each frame.
+pub const LAYER_VIEWPORT: usize = 3;
+/// The outline of the active viewport when it is clipped (stencil only, see [`Stencil`]).
+pub const LAYER_MASK: usize = 4;
 pub const IDENTITY_XFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
 struct Batch {
@@ -313,8 +335,18 @@ struct Resources {
     line_pipeline: wgpu::RenderPipeline,
     tri_pipeline: wgpu::RenderPipeline,
     quad_pipeline: wgpu::RenderPipeline,
+    /// With a stencil buffer: the pipelines of [`Stencil::Mask`] and [`Stencil::Inside`].
+    clipped: Option<ClipPipelines>,
     linear_out: bool,
     layers: Vec<Layer>,
+}
+
+struct ClipPipelines {
+    /// Flips the stencil bit under each triangle; draws no colour.
+    mask: wgpu::RenderPipeline,
+    line: wgpu::RenderPipeline,
+    tri: wgpu::RenderPipeline,
+    quad: wgpu::RenderPipeline,
 }
 
 const UNIFORM_SIZE: u64 = 80;
@@ -446,7 +478,31 @@ impl Resources {
             });
             Layer { uniform, bind_group, key: None, lines: Vec::new(), tris: Vec::new(), quads: Vec::new(), breaks: Vec::new() }
         };
-        let pipeline = |label: &str, vs: &str, topology: wgpu::PrimitiveTopology, buffer: wgpu::VertexBufferLayout<'static>| {
+        // A render pass with a stencil buffer needs every pipeline to name its format; only the
+        // clipped-viewport pipelines read or write it.
+        let face = |compare, pass_op| wgpu::StencilFaceState {
+            compare,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op,
+        };
+        let stencil_state = |s: Stencil| {
+            target.stencil.map(|format| {
+                let stencil = match s {
+                    Stencil::Off => wgpu::StencilState::default(),
+                    Stencil::Mask => {
+                        let f = face(wgpu::CompareFunction::Always, wgpu::StencilOperation::Invert);
+                        wgpu::StencilState { front: f, back: f, read_mask: 1, write_mask: 1 }
+                    }
+                    Stencil::Inside => {
+                        let f = face(wgpu::CompareFunction::Equal, wgpu::StencilOperation::Keep);
+                        wgpu::StencilState { front: f, back: f, read_mask: 1, write_mask: 0 }
+                    }
+                };
+                wgpu::DepthStencilState { format, depth_write_enabled: None, depth_compare: None, stencil, bias: wgpu::DepthBiasState::default() }
+            })
+        };
+        let pipeline = |label: &str, vs: &str, topology: wgpu::PrimitiveTopology, buffer: wgpu::VertexBufferLayout<'static>, s: Stencil| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -457,7 +513,7 @@ impl Resources {
                     compilation_options: Default::default(),
                 },
                 primitive: wgpu::PrimitiveState { topology, ..Default::default() },
-                depth_stencil: None,
+                depth_stencil: stencil_state(s),
                 multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
@@ -465,7 +521,7 @@ impl Resources {
                     targets: &[Some(wgpu::ColorTargetState {
                         format: target.format,
                         blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
+                        write_mask: if s == Stencil::Mask { wgpu::ColorWrites::empty() } else { wgpu::ColorWrites::ALL },
                     })],
                     compilation_options: Default::default(),
                 }),
@@ -473,12 +529,19 @@ impl Resources {
                 cache: None,
             })
         };
+        use wgpu::PrimitiveTopology::{LineList, TriangleList};
         Resources {
-            line_pipeline: pipeline("cad_lines", "vs_line", wgpu::PrimitiveTopology::LineList, vertex_layout()),
-            tri_pipeline: pipeline("cad_fills", "vs_line", wgpu::PrimitiveTopology::TriangleList, vertex_layout()),
-            quad_pipeline: pipeline("cad_quads", "vs_quad", wgpu::PrimitiveTopology::TriangleList, instance_layout()),
+            line_pipeline: pipeline("cad_lines", "vs_line", LineList, vertex_layout(), Stencil::Off),
+            tri_pipeline: pipeline("cad_fills", "vs_line", TriangleList, vertex_layout(), Stencil::Off),
+            quad_pipeline: pipeline("cad_quads", "vs_quad", TriangleList, instance_layout(), Stencil::Off),
+            clipped: target.stencil.map(|_| ClipPipelines {
+                mask: pipeline("cad_clip_mask", "vs_line", TriangleList, vertex_layout(), Stencil::Mask),
+                line: pipeline("cad_clip_lines", "vs_line", LineList, vertex_layout(), Stencil::Inside),
+                tri: pipeline("cad_clip_fills", "vs_line", TriangleList, vertex_layout(), Stencil::Inside),
+                quad: pipeline("cad_clip_quads", "vs_quad", TriangleList, instance_layout(), Stencil::Inside),
+            }),
             linear_out: target.format.is_srgb(),
-            layers: vec![layer(), layer(), layer()],
+            layers: (0..=LAYER_MASK).map(|_| layer()).collect(),
         }
     }
 }
@@ -561,16 +624,17 @@ impl GpuFaults {
 
 /// Create the canvas pipelines in the renderer's callback resources, and report wgpu errors and
 /// device loss to `faults` instead of panicking. Call once with the app's render state (eframe
-/// `CreationContext::wgpu_render_state`).
-pub fn install(rs: &egui_wgpu::RenderState, faults: &Arc<GpuFaults>) -> GpuTarget {
+/// `CreationContext::wgpu_render_state`) and the format of its render pass's stencil buffer,
+/// if it has one (eframe `NativeOptions::stencil_buffer`).
+pub fn install(rs: &egui_wgpu::RenderState, faults: &Arc<GpuFaults>, stencil: Option<wgpu::TextureFormat>) -> GpuTarget {
     let f = Arc::clone(faults);
     rs.device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| f.error(e.to_string())));
     let f = Arc::clone(faults);
     rs.device.set_device_lost_callback(move |reason, message| f.device_lost(reason, message));
-    let target = GpuTarget { format: rs.target_format };
+    let target = GpuTarget { format: rs.target_format, stencil: stencil.filter(|s| s.has_stencil_aspect()) };
     let res = Resources::new(&rs.device, target);
     rs.renderer.write().callback_resources.insert(res);
-    log::info!("gpu canvas: target {:?}", rs.target_format);
+    log::info!("gpu canvas: target {:?}, stencil {:?}", rs.target_format, target.stencil);
     target
 }
 
@@ -623,14 +687,24 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         // Whole-screen device pixels; egui already set the scissor to the canvas clip rect.
         pass.set_viewport(0.0, 0.0, sw as f32, sh as f32, 0.0, 1.0);
         pass.set_bind_group(0, &res.bind_group, &[]);
+        let (tri, line, quad) = match (self.stencil, &shared.clipped) {
+            (Stencil::Off, _) => (&shared.tri_pipeline, &shared.line_pipeline, &shared.quad_pipeline),
+            // The outline is all triangles.
+            (Stencil::Mask, Some(c)) => (&c.mask, &c.mask, &c.mask),
+            (Stencil::Inside, Some(c)) => (&c.tri, &c.line, &c.quad),
+            // No stencil buffer: the canvas never asks for these.
+            (_, None) => return,
+        };
+        if self.stencil != Stencil::Off {
+            pass.set_stencil_reference(1);
+        }
+        let mask = self.stencil == Stencil::Mask;
         // Draw-order groups split at each wipeout; without wipeouts there is one group.
         let total = |bs: &[Batch]| bs.iter().map(|b| b.count as usize).sum::<usize>();
-        let all = [total(&res.tris), total(&res.lines), total(&res.quads)];
+        let all = [total(&res.tris), if mask { 0 } else { total(&res.lines) }, if mask { 0 } else { total(&res.quads) }];
         let mut from = [0usize; 3];
         for to in res.breaks.iter().copied().chain(std::iter::once(all)) {
-            for (i, (pipeline, batches)) in
-                [(&shared.tri_pipeline, &res.tris), (&shared.line_pipeline, &res.lines), (&shared.quad_pipeline, &res.quads)].into_iter().enumerate()
-            {
+            for (i, (pipeline, batches)) in [(tri, &res.tris), (line, &res.lines), (quad, &res.quads)].into_iter().enumerate() {
                 let parts = batch_ranges(batches.iter().map(|b| b.count), from[i]..to[i]);
                 if parts.is_empty() {
                     continue;

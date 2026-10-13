@@ -264,9 +264,11 @@ impl CadApp {
     }
 
     /// Draw the canvas on the GPU with the app's wgpu render state (eframe's
-    /// `CreationContext::wgpu_render_state`). Without it the canvas draws on the CPU.
-    pub fn set_wgpu(&mut self, rs: &egui_wgpu::RenderState) {
-        self.canvas.gpu = Some(gpu::install(rs, &self.gpu_faults));
+    /// `CreationContext::wgpu_render_state`). Without it the canvas draws on the CPU. `stencil`:
+    /// the format of the render pass's stencil buffer when the app asked for one (eframe
+    /// `NativeOptions::stencil_buffer`); clipped viewports are clipped with it.
+    pub fn set_wgpu(&mut self, rs: &egui_wgpu::RenderState, stencil: Option<egui_wgpu::wgpu::TextureFormat>) {
+        self.canvas.gpu = Some(gpu::install(rs, &self.gpu_faults, stencil));
     }
 
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {

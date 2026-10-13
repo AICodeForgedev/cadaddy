@@ -183,6 +183,57 @@ fn layout_viewport_frozen_layer_and_id1() {
     assert!(!build(&d, &Space::Model, &Options::default()).prims.is_empty());
 }
 
+/// The points of each primitive drawn through a viewport.
+fn viewport_points(l: &DisplayList) -> Vec<Vec<Vec2>> {
+    l.prims.iter().filter(|p| p.handle == VIEWPORT_CONTENT).map(|p| l.points(p).to_vec()).collect()
+}
+
+#[test]
+fn viewport_contents_can_be_left_out_and_built_for_any_area() {
+    let d = layout_with_viewport(vp(Vec2::new(5.0, 4.0), 4.0, 4.0, Vec2::new(5.0, 5.0), 8.0, 2));
+    let paper = Space::Paper("Layout1".into());
+    let h = d.space(&paper).unwrap().iter().find(|e| matches!(e.kind, EntityKind::Viewport(_))).unwrap().handle;
+    let opts = Options { tolerance: 0.01, ..Default::default() };
+    // Left out of the layout: only the border remains.
+    let skipped = build(&d, &paper, &Options { skip_viewport: Some(h), ..opts.clone() });
+    assert!(viewport_points(&skipped).is_empty());
+    assert!(skipped.prims.iter().any(|p| p.handle == h));
+    // Built for the viewport's own rectangle: what the layout draws there.
+    let rect = Bounds2::new(Vec2::new(3.0, 2.0), Vec2::new(7.0, 6.0));
+    let full = build(&d, &paper, &opts);
+    assert!(!viewport_points(&full).is_empty());
+    assert_eq!(viewport_points(&viewport_content(&d, &paper, h, rect, &opts)), viewport_points(&full));
+    // Built for a larger area, clipped to it instead of the viewport: the line y=0 (paper y=1.5,
+    // below the viewport) is there.
+    let wide = viewport_content(&d, &paper, h, rect.expand(2.0), &opts);
+    assert!(viewport_points(&wide).iter().any(|pts| pts.iter().all(|q| (q.y - 1.5).abs() < 1e-9)));
+    // Not a viewport, or an empty or non-finite area: nothing.
+    assert!(viewport_content(&d, &paper, Handle(0xDEAD), rect, &opts).prims.is_empty());
+    assert!(viewport_content(&d, &paper, h, Bounds2::EMPTY, &opts).prims.is_empty());
+    let nan = Bounds2::new(Vec2::new(f64::NAN, 0.0), Vec2::new(1.0, 1.0));
+    assert!(viewport_content(&d, &paper, h, nan, &opts).prims.is_empty());
+}
+
+#[test]
+fn viewport_contents_built_on_all_cores_match_one_thread() {
+    // Enough model objects for the parallel path; plots build on one thread.
+    let mut d = layout_with_viewport(vp(Vec2::new(5.0, 4.0), 8.0, 6.0, Vec2::new(30.0, 30.0), 60.0, 2));
+    for i in 0..1200 {
+        let (x, y) = (f64::from(i % 40) * 1.5, f64::from(i / 40) * 2.0);
+        let line = EntityKind::Line(cadcraft_doc::Line { a: Vec3::new(x, y, 0.0), b: Vec3::new(x + 1.0, y + 1.5, 0.0) });
+        d.add(&Space::Model, Common::default(), line).unwrap();
+    }
+    let paper = Space::Paper("Layout1".into());
+    let screen = build(&d, &paper, &Options::default());
+    let plot = build_plot(&d, &paper, &Options::default());
+    let pts = |l: &DisplayList| -> Vec<Vec<Vec2>> {
+        let border: Vec<Handle> = d.space(&paper).unwrap().iter().map(|e| e.handle).collect();
+        l.prims.iter().filter(|p| !border.contains(&p.handle)).map(|p| l.points(p).to_vec()).collect()
+    };
+    assert!(pts(&screen).len() > 1000);
+    assert_eq!(pts(&screen), pts(&plot));
+}
+
 #[test]
 fn hostile_viewports_do_not_panic() {
     for v in [

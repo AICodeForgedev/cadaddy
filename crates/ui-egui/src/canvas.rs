@@ -38,7 +38,7 @@ impl Xf {
 #[derive(Default)]
 pub struct CanvasState {
     pub list: Option<DisplayList>,
-    key: (u64, u64, i32, i32, bool, usize),
+    key: (u64, u64, i32, i32, bool, usize, u64),
     /// The area `list` was built for (hatch patterns exist only inside it); a view leaving it
     /// rebuilds the list.
     window: Option<Bounds2>,
@@ -62,9 +62,11 @@ pub struct CanvasState {
     hl_origin: Vec2,
     /// Selected infinite lines (clipped and drawn on the CPU each frame).
     hl_infinite: Vec<usize>,
-    /// The highlight geometry of the active viewport's model space, with the key it was built for
-    /// (see [`viewport_highlight_tolerance`]).
-    vp_hl: Option<(u64, DisplayList)>,
+    /// The selection and hover highlights inside the active MSPACE viewport (see [`VpHighlight`]).
+    vp_sel: VpHighlight,
+    vp_hover: VpHighlight,
+    /// Model space seen through the active MSPACE viewport (see [`VpContent`]).
+    vp: VpContent,
     /// Indices of infinite-line primitives in `list` (drawn on the CPU in GPU mode).
     infinite: Vec<usize>,
     /// Milliseconds spent converting the display list to vertex data (last rebuild).
@@ -107,6 +109,15 @@ pub struct CanvasState {
     pub snap_cycle: Option<SnapCycle>,
 }
 
+impl CanvasState {
+    /// The active MSPACE viewport's contents when they are drawn apart from the layout's list
+    /// (see [`VpContent`]): where they are on paper at the viewport's current view, and how many
+    /// times they have been built.
+    pub fn viewport_content(&self) -> Option<(Bounds2, u64)> {
+        self.vp.key.and(self.vp.paper_bounds()).map(|b| (b, self.vp.builds))
+    }
+}
+
 /// Tab cycling through the candidate snaps under the cursor: where it started and which
 /// candidate shows. Moving the cursor out of the aperture ends it.
 #[derive(Clone, Copy, Debug)]
@@ -146,7 +157,9 @@ impl PrimIndex {
     }
 }
 
-/// Indices of the primitives in `list` drawn for `handles` (a scan; for small lists).
+/// Indices of the primitives in `list` drawn for `handles` (a scan: the reference [`PrimIndex`]
+/// is tested against).
+#[cfg(test)]
 fn prims_of(list: &DisplayList, handles: &[Handle]) -> Vec<usize> {
     if handles.is_empty() {
         return Vec::new();
@@ -169,7 +182,23 @@ fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
     let band = |px: f64| px.max(1e-300).log2().floor() as i32;
     // Hatch level of detail follows the finest view showing the list.
     let lod_band = views.iter().map(|v| band(v.1)).fold(band(px), i32::min);
-    let key = (st.uid, st.revision, band(px), lod_band, app.session.settings.lwdisplay, std::sync::Arc::as_ptr(&st.doc) as usize);
+    // The active MSPACE viewport's contents are drawn apart (see `VpContent`), so panning and
+    // zooming inside it leave this list alone. Without a stencil buffer a clipped viewport's
+    // contents stay in the list, which then follows its view: realtime navigation changes it
+    // without a new revision.
+    let split = split_viewport(st, stencil_clip(app)).map(|(h, ..)| h);
+    let vp_view = {
+        use std::hash::{Hash, Hasher};
+        let mut s = std::collections::hash_map::DefaultHasher::new();
+        split.hash(&mut s);
+        if split.is_none()
+            && let Some((h, vp)) = st.active_viewport()
+        {
+            (h, vp.view_center.x.to_bits(), vp.view_center.y.to_bits(), vp.view_height.to_bits()).hash(&mut s);
+        }
+        s.finish()
+    };
+    let key = (st.uid, st.revision, band(px), lod_band, app.session.settings.lwdisplay, std::sync::Arc::as_ptr(&st.doc) as usize, vp_view);
     let visible = views.iter().fold(Bounds2::EMPTY, |acc, v| acc.union(&v.0));
     let inside = app.canvas.window.is_none_or(|w| visible.is_empty() || w.contains_box(&visible));
     if app.canvas.list.is_some() && app.canvas.key == key && inside {
@@ -187,6 +216,7 @@ fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
         view_height: st.paper_view().height,
         plot_style_table: None,
         view: build_window(views),
+        skip_viewport: split,
     };
     let space = st.space.clone();
     app.canvas.list = Some(cadcraft_render::build(&st.doc, &space, &opts));
@@ -196,11 +226,283 @@ fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
     app.canvas.build_ms = crate::now_ms() - t0;
 }
 
+/// The active MSPACE viewport when its contents are drawn apart from the layout's list (see
+/// [`VpContent`]), with its clip outline when it is clipped. A clipped viewport is clipped with
+/// the GPU's stencil buffer (`stencil`); without one its contents stay in the list.
+fn split_viewport(
+    st: &cadcraft_engine::DocState,
+    stencil: bool,
+) -> Option<(Handle, cadcraft_doc::Viewport, Option<cadcraft_render::clip::PolyClip>)> {
+    let (h, vp) = st.active_viewport()?;
+    let clip = cadcraft_render::viewport_clip(&st.doc, h, &vp);
+    (clip.is_none() || stencil).then_some((h, vp, clip))
+}
+
+/// Whether the canvas can clip a viewport to any outline (a GPU with a stencil buffer).
+fn stencil_clip(app: &CadApp) -> bool {
+    app.canvas.gpu.is_some_and(|g| g.stencil.is_some())
+}
+
+/// How long the view inside the active viewport stays still before a zoomed [`VpContent`] is
+/// rebuilt at the exact view (dash lengths and curve detail follow the viewport's scale).
+const VP_SETTLE_MS: f64 = 150.0;
+
+/// Model space seen through the active MSPACE viewport, drawn apart from the layout's list. It is
+/// built for an area around the viewport at one view and drawn clipped to the viewport, moved
+/// and scaled to the current view, so panning and zooming inside the viewport redraw without
+/// rebuilding anything. It is rebuilt when the drawing changes, when the zoom has moved 2x from
+/// the view it was built for, when the view leaves the area, and once a zoom comes to rest.
+#[derive(Default)]
+struct VpContent {
+    list: DisplayList,
+    /// What the list was built from: drawing, revision, document, viewport, tessellation band
+    /// and lineweight display.
+    key: Option<(u64, u64, usize, Handle, i32, bool)>,
+    /// The viewport's view (centre, height) the list was built for, and the paper area it covers.
+    view: (Vec2, f64),
+    area: Bounds2,
+    /// The view on the previous frame and when it last changed (ms).
+    last_view: (Vec2, f64),
+    moved_at: f64,
+    /// Scale and offset drawing the list at the viewport's current view (see [`vp_motion`]).
+    motion: Option<(f64, Vec2)>,
+    /// Bumped on each rebuild.
+    builds: u64,
+    mesh_key: Option<u64>,
+    mesh_slot: crate::gpu::MeshSlot,
+    mesh_origin: Vec2,
+    /// A clipped viewport's outline on the GPU (see [`draw_vp_mask`]).
+    mask_key: Option<u64>,
+    mask_slot: crate::gpu::MeshSlot,
+    mask_origin: Vec2,
+}
+
+impl VpContent {
+    /// Where the contents are on paper at the viewport's current view.
+    fn paper_bounds(&self) -> Option<Bounds2> {
+        let (k, b) = self.motion?;
+        (!self.list.bounds.is_empty()).then(|| Bounds2::new(self.list.bounds.min * k + b, self.list.bounds.max * k + b))
+    }
+}
+
+/// How a list built for view `built` (centre, height) of viewport `vp` maps to its current
+/// view, as `p = k·p0 + b` on paper. A model point m is at p0 = c + s0 (m − c0) in the list and
+/// belongs at p = c + s (m − vc), with c the viewport's centre and s, s0 paper units per model
+/// unit, so k = s / s0 and b = c (1 − k) + s (c0 − vc).
+fn vp_motion(vp: &cadcraft_doc::Viewport, built: (Vec2, f64)) -> Option<(f64, Vec2)> {
+    let (s, k) = (vp.height / vp.view_height, built.1 / vp.view_height);
+    let b = vp.center.xy() * (1.0 - k) + (built.0 - vp.view_center) * s;
+    (k.is_finite() && k > 0.0 && b.is_finite()).then_some((k, b))
+}
+
+/// How to draw the active viewport's [`VpContent`] this frame.
+struct VpFrame {
+    /// Draws the list at the viewport's current view.
+    xf: Xf,
+    /// The viewport's rectangle (a clipped one's outline bounds) on screen.
+    on_screen: Rect,
+    /// A clipped viewport's outline on paper, masked with the stencil buffer.
+    outline: Option<Vec<Vec2>>,
+}
+
+/// Build or reuse the active viewport's [`VpContent`] for this frame.
+fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Option<VpFrame> {
+    let lwdisplay = app.session.settings.lwdisplay;
+    let stencil = stencil_clip(app);
+    let c = &mut app.canvas.vp;
+    let Some((st, (h, vp, clip))) = app.session.state().ok().and_then(|st| Some((st, split_viewport(st, stencil)?))) else {
+        // Not working in a viewport drawn apart: let the geometry go.
+        if c.key.is_some() {
+            *c = VpContent::default();
+        }
+        return None;
+    };
+    let half = Vec2::new(vp.width / 2.0, vp.height / 2.0);
+    let rect = match &clip {
+        Some(p) => p.bounds(),
+        None => Bounds2::new(vp.center.xy() - half, vp.center.xy() + half),
+    };
+    let px = 1.0 / xf_paper.scale.max(1e-300);
+    let band = px.max(1e-300).log2().floor() as i32;
+    let key = (st.uid, st.revision, std::sync::Arc::as_ptr(&st.doc) as usize, h, band, lwdisplay);
+    let now = crate::now_ms();
+    let view = (vp.view_center, vp.view_height);
+    if view != c.last_view {
+        c.last_view = view;
+        c.moved_at = now;
+    }
+    let rebuild = match vp_motion(&vp, c.view).filter(|_| c.key == Some(key)) {
+        Some((k, b)) => {
+            // The viewport in the list's own coordinates.
+            let visible = Bounds2::new((rect.min - b) / k, (rect.max - b) / k);
+            let zoomed = (k - 1.0).abs() > 1e-9;
+            let still = now - c.moved_at;
+            if zoomed && still < VP_SETTLE_MS {
+                ctx.request_repaint_after(std::time::Duration::from_millis((VP_SETTLE_MS - still).max(1.0) as u64));
+            }
+            !(0.5..2.0).contains(&k) || !c.area.contains_box(&visible) || (zoomed && still >= VP_SETTLE_MS)
+        }
+        None => true,
+    };
+    if rebuild {
+        let t0 = crate::now_ms();
+        // The viewport with half its larger side of margin all round: panning by up to that much
+        // only moves the geometry.
+        let area = rect.expand(rect.width().max(rect.height()) * 0.5);
+        let opts = cadcraft_render::Options {
+            tolerance: 2f64.powi(band) * 0.5,
+            min_dash: 2f64.powi(band) * 2.0,
+            text: true,
+            fill: true,
+            lineweights: lwdisplay,
+            view_height: st.paper_view().height,
+            plot_style_table: None,
+            view: Some(area),
+            skip_viewport: None,
+        };
+        c.list = cadcraft_render::viewport_content(&st.doc, &st.space, h, area, &opts);
+        c.key = Some(key);
+        c.view = view;
+        c.area = area;
+        c.builds = c.builds.wrapping_add(1);
+        app.canvas.build_ms = crate::now_ms() - t0;
+    }
+    let c = &mut app.canvas.vp;
+    let (k, b) = vp_motion(&vp, c.view)?;
+    c.motion = Some((k, b));
+    // Paper p = k·p0 + b, so the list is drawn by the paper transform scaled by k about b.
+    let xf = Xf { rect: xf_paper.rect, center: (xf_paper.center - b) / k, scale: xf_paper.scale * k };
+    let on_screen = Rect::from_two_pos(xf_paper.to_screen(Vec2::new(rect.min.x, rect.max.y)), xf_paper.to_screen(Vec2::new(rect.max.x, rect.min.y)));
+    Some(VpFrame { xf, on_screen, outline: clip.map(|p| p.polygon().to_vec()) })
+}
+
+/// Draw the active viewport's contents (see [`VpContent`]) as [`ensure_vp_content`] set out;
+/// `p` clips them to the viewport's rectangle, and a clipped viewport's outline is masked with
+/// the stencil buffer first.
+fn draw_vp_content(c: &mut VpContent, gpu: bool, p: &egui::Painter, f: &VpFrame, xf_paper: &Xf, bg: Rgb, lwdisplay: bool) {
+    let xf = &f.xf;
+    if !gpu {
+        draw_list(p, xf, &c.list, bg, lwdisplay);
+        return;
+    }
+    let mut stencil = crate::gpu::Stencil::Off;
+    if let Some(outline) = &f.outline {
+        draw_vp_mask(c, p, outline, xf_paper);
+        stencil = crate::gpu::Stencil::Inside;
+    }
+    let origin = crate::gpu::choose_origin(&c.list.bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (c.builds, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay).hash(&mut h);
+        h.finish()
+    };
+    if c.mesh_key != Some(key) {
+        let mesh = crate::gpu::build_mesh(&c.list, origin, bg, lwdisplay);
+        if let Ok(mut slot) = c.mesh_slot.lock() {
+            *slot = Some(mesh);
+        }
+        c.mesh_key = Some(key);
+        c.mesh_origin = origin;
+    }
+    let center = xf.rect.center();
+    p.add(egui_wgpu::Callback::new_paint_callback(
+        xf.rect,
+        crate::gpu::CanvasCallback {
+            key,
+            slot: c.mesh_slot.clone(),
+            offset: [(c.mesh_origin.x - xf.center.x) as f32, (c.mesh_origin.y - xf.center.y) as f32],
+            scale: xf.scale as f32,
+            center: [center.x, center.y],
+            layer: crate::gpu::LAYER_VIEWPORT,
+            xform: crate::gpu::IDENTITY_XFORM,
+            dash: 0.0,
+            stencil,
+        },
+    ));
+}
+
+/// Mask a clipped viewport's `outline` (paper units) in the stencil buffer: a triangle fan from
+/// its first point, each triangle flipping the stencil bit, leaves the bit set inside the outline
+/// (even-odd, concave or not), with no triangulation.
+fn draw_vp_mask(c: &mut VpContent, p: &egui::Painter, outline: &[Vec2], xf_paper: &Xf) {
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        outline.iter().for_each(|q| (q.x.to_bits(), q.y.to_bits()).hash(&mut h));
+        h.finish()
+    };
+    if c.mask_key != Some(key) {
+        let mut fan = DisplayList::default();
+        if let Some((&first, rest)) = outline.split_first() {
+            for w in rest.windows(2) {
+                if let [a, b] = w {
+                    fan.tris.extend_from_slice(&[first, *a, *b]);
+                }
+            }
+        }
+        fan.bounds = Bounds2::from_points(outline.iter().copied());
+        let len = u32::try_from(fan.tris.len()).unwrap_or(0);
+        fan.prims.push(cadcraft_render::DPrim { handle: Handle(0), color: Rgb(0, 0, 0), aci7: false, lw: 0.0, kind: Kind::Tris, start: 0, len });
+        let origin = if fan.bounds.is_empty() { Vec2::ZERO } else { fan.bounds.center() };
+        if let Ok(mut slot) = c.mask_slot.lock() {
+            *slot = Some(crate::gpu::build_mesh(&fan, origin, Rgb(0, 0, 0), false));
+        }
+        c.mask_key = Some(key);
+        c.mask_origin = origin;
+    }
+    let center = xf_paper.rect.center();
+    p.add(egui_wgpu::Callback::new_paint_callback(
+        xf_paper.rect,
+        crate::gpu::CanvasCallback {
+            key,
+            slot: c.mask_slot.clone(),
+            offset: [(c.mask_origin.x - xf_paper.center.x) as f32, (c.mask_origin.y - xf_paper.center.y) as f32],
+            scale: xf_paper.scale as f32,
+            center: [center.x, center.y],
+            layer: crate::gpu::LAYER_MASK,
+            xform: crate::gpu::IDENTITY_XFORM,
+            dash: 0.0,
+            stencil: crate::gpu::Stencil::Mask,
+        },
+    ));
+}
+
 /// Tessellation tolerance for the highlights inside the active viewport: `scale` (pixels per
 /// drawing unit) snapped to its 2x zoom band, as in [`ensure_list`], so zooming and panning
 /// inside the band doesn't rebuild the geometry.
 fn viewport_highlight_tolerance(scale: f64) -> f64 {
     2f64.powi((1.0 / scale.max(1e-300)).log2().floor() as i32) * 0.5
+}
+
+/// The selected or the hovered objects tessellated in model units for the active MSPACE
+/// viewport, whose contents can't be looked up by handle in the layout's lists. The selection and
+/// the hover are kept apart, so moving the cursor over objects doesn't tessellate the selection
+/// again; each is rebuilt only when the drawing, the objects or the zoom band change.
+#[derive(Default)]
+struct VpHighlight {
+    key: Option<u64>,
+    list: DisplayList,
+    /// Bumped on each rebuild (identifies `list` for [`draw_highlight_gpu`]).
+    list_gen: u64,
+}
+
+impl VpHighlight {
+    fn update(&mut self, st: &cadcraft_engine::DocState, handles: &[Handle], scale: f64) {
+        let tolerance = viewport_highlight_tolerance(scale);
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (st.uid, st.revision, std::sync::Arc::as_ptr(&st.doc) as usize, tolerance.to_bits(), handles).hash(&mut h);
+            h.finish()
+        };
+        if self.key != Some(key) {
+            let ents = handles.iter().filter_map(|h| st.doc.model.get(*h)).map(|e| e.as_ref());
+            self.list = cadcraft_render::build_entities(&st.doc, ents, &cadcraft_render::Options { tolerance, ..Default::default() });
+            self.key = Some(key);
+            self.list_gen = self.list_gen.wrapping_add(1);
+        }
+    }
 }
 
 /// The area a display list is built for: each view with half its larger side of margin all
@@ -375,17 +677,20 @@ fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay:
 /// Draw the selection highlight (dashed, `width` points) through the GPU: its vertex data is
 /// rebuilt only when the display list, the selection or the vertex origin changes. Dashing every
 /// selected line and tessellating it as egui shapes each frame made large selections sluggish.
+/// `prims`: the selection's primitives in `list`, asked for only when the vertex data is rebuilt.
+/// `stencil`: [`crate::gpu::Stencil::Inside`] keeps it inside a clipped viewport's outline.
 #[allow(clippy::too_many_arguments)]
 fn draw_highlight_gpu(
     p: &egui::Painter,
     xf: &Xf,
     list: &DisplayList,
     list_gen: u64,
-    prim_index: &mut PrimIndex,
+    prims: impl FnOnce() -> Vec<usize>,
     sel: &[Handle],
     color: Color32,
     width: f32,
     hl: (&mut Option<u64>, &crate::gpu::MeshSlot, &mut Vec2, &mut Vec<usize>),
+    stencil: crate::gpu::Stencil,
 ) {
     let (hl_key, hl_slot, hl_origin, hl_infinite) = hl;
     let origin = crate::gpu::choose_origin(&list.bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
@@ -396,7 +701,7 @@ fn draw_highlight_gpu(
         h.finish()
     };
     if *hl_key != Some(key) {
-        let prims = prim_index.prims(list_gen, list, sel);
+        let prims = prims();
         let mesh = crate::gpu::build_highlight_mesh(list, &prims, origin, color.to_array(), width);
         *hl_infinite = prims.into_iter().filter(|&i| list.prims.get(i).is_some_and(|p| matches!(p.kind, Kind::Infinite { .. }))).collect();
         if let Ok(mut slot) = hl_slot.lock() {
@@ -417,6 +722,7 @@ fn draw_highlight_gpu(
             layer: crate::gpu::LAYER_HIGHLIGHT,
             xform: crate::gpu::IDENTITY_XFORM,
             dash: 10.0,
+            stencil,
         },
     ));
 }
@@ -479,6 +785,7 @@ fn draw_drag_gpu(
             layer: crate::gpu::LAYER_DRAG,
             xform: [m.a as f32, m.b as f32, m.c as f32, m.d as f32, t.x as f32, t.y as f32],
             dash: 0.0,
+            stencil: crate::gpu::Stencil::Off,
         },
     ));
 }
@@ -517,6 +824,7 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
             layer: crate::gpu::LAYER_DRAWING,
             xform: crate::gpu::IDENTITY_XFORM,
             dash: 0.0,
+            stencil: crate::gpu::Stencil::Off,
         },
     ));
     let mut shapes = Vec::new();
@@ -532,7 +840,7 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
 }
 
 /// Draw selected/hovered entities as highlight overlays: `prims` are indices into `list` (from
-/// [`PrimIndex::prims`] or [`prims_of`]).
+/// [`PrimIndex::prims`], or all of a [`VpHighlight`] list).
 fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, prims: &[usize], color: Color32, width: f32, dashed: bool) {
     let mut shapes = Vec::new();
     for prim in prims.iter().filter_map(|&i| list.prims.get(i)) {
@@ -1088,6 +1396,15 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     };
     let sel = app.session.selection();
+    // The active viewport's contents, drawn apart from the layout's list, under its own objects.
+    // `masked`: its outline is in the stencil buffer this frame.
+    let mut masked = false;
+    if let Some(f) = ensure_vp_content(app, &xf_paper, ui.ctx()) {
+        let gpu = app.canvas.gpu.is_some();
+        let clipped = painter.with_clip_rect(f.on_screen.intersect(rect));
+        draw_vp_content(&mut app.canvas.vp, gpu, &clipped, &f, &xf_paper, bg, app.session.settings.lwdisplay);
+        masked = gpu && f.outline.is_some();
+    }
     if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);
     } else if let Some(list) = &app.canvas.list {
@@ -1111,29 +1428,34 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
         if let Ok(st) = app.session.state() {
-            let mut hs = sel.clone();
-            hs.extend(app.canvas.hover.filter(|h| !sel.contains(h)));
-            let ents: Vec<_> = hs.iter().filter_map(|h| st.doc.model.get(*h)).map(|e| e.as_ref()).collect();
-            if !ents.is_empty() {
-                let tolerance = viewport_highlight_tolerance(scale);
-                let key = {
-                    use std::hash::{Hash, Hasher};
-                    let mut h = std::collections::hash_map::DefaultHasher::new();
-                    (st.uid, st.revision, std::sync::Arc::as_ptr(&st.doc) as usize, tolerance.to_bits(), &hs).hash(&mut h);
-                    h.finish()
-                };
-                if app.canvas.vp_hl.as_ref().is_none_or(|(k, _)| *k != key) {
-                    let built = cadcraft_render::build_entities(&st.doc, ents, &cadcraft_render::Options { tolerance, ..Default::default() });
-                    app.canvas.vp_hl = Some((key, built));
-                }
-                if let Some((_, list)) = &app.canvas.vp_hl {
-                    let clipped = painter.with_clip_rect(r.intersect(rect));
-                    if let Some(h) = app.canvas.hover
-                        && !sel.contains(&h)
-                    {
-                        draw_highlight(&clipped, &xf, list, &prims_of(list, &[h]), t.hover, 2.0, false);
-                    }
-                    draw_highlight(&clipped, &xf, list, &prims_of(list, &sel), t.selection, 1.5, true);
+            // A clipped viewport's outline bounds (its outline is masked when `masked`).
+            let bounds = active_clip.as_ref().map_or(r, |c| {
+                let b = c.bounds();
+                Rect::from_two_pos(xf_paper.to_screen(Vec2::new(b.min.x, b.max.y)), xf_paper.to_screen(Vec2::new(b.max.x, b.min.y)))
+            });
+            let clipped = painter.with_clip_rect(bounds.intersect(rect));
+            let c = &mut app.canvas;
+            if let Some(h) = c.hover
+                && !sel.contains(&h)
+            {
+                c.vp_hover.update(st, &[h], scale);
+                let list = &c.vp_hover.list;
+                draw_highlight(&clipped, &xf, list, &(0..list.prims.len()).collect::<Vec<_>>(), t.hover, 2.0, false);
+            }
+            if !sel.is_empty() {
+                c.vp_sel.update(st, &sel, scale);
+                let list = &c.vp_sel.list;
+                let all = || (0..list.prims.len()).collect::<Vec<_>>();
+                if c.gpu.is_some() {
+                    // Shares the GPU highlight layer with the layout's own selection; the high bit
+                    // keeps this list's generations apart from the layout list's.
+                    let list_id = c.vp_sel.list_gen | 1 << 63;
+                    let stencil = if masked { crate::gpu::Stencil::Inside } else { crate::gpu::Stencil::Off };
+                    let hl = (&mut c.hl_key, &c.hl_slot, &mut c.hl_origin, &mut c.hl_infinite);
+                    draw_highlight_gpu(&clipped, &xf, list, list_id, all, &sel, t.selection, 1.5, hl, stencil);
+                    draw_highlight(&clipped, &xf, list, &c.hl_infinite, t.selection, 1.5, true);
+                } else {
+                    draw_highlight(&clipped, &xf, list, &all(), t.selection, 1.5, true);
                 }
             }
         }
@@ -1144,7 +1466,20 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &[h]), t.hover, 2.0, false);
         }
         if gpu.is_some() && !sel.is_empty() {
-            draw_highlight_gpu(&painter, &xf, list, *list_gen, prim_index, &sel, t.selection, 1.5, (hl_key, hl_slot, hl_origin, &mut *hl_infinite));
+            let list_id = *list_gen;
+            let hl = (hl_key, &*hl_slot, hl_origin, &mut *hl_infinite);
+            draw_highlight_gpu(
+                &painter,
+                &xf,
+                list,
+                list_id,
+                || prim_index.prims(list_id, list, &sel),
+                &sel,
+                t.selection,
+                1.5,
+                hl,
+                crate::gpu::Stencil::Off,
+            );
             draw_highlight(&painter, &xf, list, hl_infinite, t.selection, 1.5, true);
         } else {
             draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &sel), t.selection, 1.5, true);
@@ -1785,6 +2120,36 @@ mod tests {
         for s in [0.3, 1.0, 3.0, 4.0, 250.0] {
             assert!(viewport_highlight_tolerance(s) <= 0.5 / s);
         }
+    }
+
+    #[test]
+    fn viewport_highlight_is_tessellated_once_per_selection_and_zoom_band() {
+        use cadcraft_doc::{Circle, Common, Drawing, EntityKind, Space};
+        let mut d = Drawing::new_imperial();
+        let circle = |r| EntityKind::Circle(Circle { center: cadcraft_geom::Vec3::new(0.0, 0.0, 0.0), radius: r });
+        let a = d.add(&Space::Model, Common::default(), circle(10.0)).unwrap();
+        let b = d.add(&Space::Model, Common::default(), circle(5.0)).unwrap();
+        let st = cadcraft_engine::DocState::new(d, "highlight", None);
+        let points = |l: &DisplayList| l.prims.iter().map(|p| l.points(p).len()).sum::<usize>();
+        let (mut sel, mut hover) = (VpHighlight::default(), VpHighlight::default());
+        sel.update(&st, &[a], 10.0);
+        let (first, segments) = (sel.list_gen, points(&sel.list));
+        assert!(!sel.list.prims.is_empty());
+        // Every frame of a pan, zooming within the 2x band, and the hover moving: the same list.
+        sel.update(&st, &[a], 10.0);
+        sel.update(&st, &[a], 12.0);
+        hover.update(&st, &[b], 12.0);
+        hover.update(&st, &[a], 12.0);
+        assert_eq!(sel.list_gen, first);
+        // Zooming in past the band tessellates finer.
+        sel.update(&st, &[a], 40.0);
+        assert_ne!(sel.list_gen, first);
+        assert!(points(&sel.list) > segments);
+        // A different selection is rebuilt.
+        let zoomed = sel.list_gen;
+        sel.update(&st, &[a, b], 40.0);
+        assert_ne!(sel.list_gen, zoomed);
+        assert_eq!(sel.list.prims.iter().map(|p| p.handle).collect::<std::collections::BTreeSet<_>>().len(), 2);
     }
 
     #[test]
