@@ -984,6 +984,27 @@ fn line_first_point_deferred_tangent() {
 }
 
 #[test]
+fn line_deferred_tangent_with_typed_polar() {
+    let mut s = Session::new();
+    s.cmdline("circle 0,0 5").unwrap();
+    s.execute("osnap", &json!({"modes": ["tan"]})).unwrap();
+    s.cmdline("line").unwrap();
+    snap_click(&mut s, Vec2::new(0.1, 5.2)); // deferred TAN, near the top of the circle
+    s.cmdline("@150<218").unwrap();
+    s.cmdline("").unwrap();
+    let ends = line_ends(&s);
+    assert_eq!(ends.len(), 1);
+    let (a, b) = ends[0];
+    // The start is the tangent point on the circle.
+    assert!((a.len() - 5.0).abs() < 1e-9, "start not on circle: {a:?}");
+    // The typed direction and distance are exact.
+    let v = b - a;
+    assert!((v.len() - 150.0).abs() < 1e-9, "length was {}", v.len());
+    let angle = v.y.atan2(v.x).to_degrees().rem_euclid(360.0);
+    assert!((angle - 218.0).abs() < 1e-9, "angle was {angle}");
+}
+
+#[test]
 fn line_belt_tangent_to_tangent() {
     let mut s = Session::new();
     s.cmdline("circle 0,0 10").unwrap();

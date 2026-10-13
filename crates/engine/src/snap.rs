@@ -96,6 +96,21 @@ pub struct Deferred {
     pub at: Vec2,
 }
 
+/// The point on `curve` whose tangent has direction `dir`, picking the solution
+/// nearest `hint`. Used to resolve a deferred TAN first point when the next point
+/// is typed as `@distance<angle`.
+pub fn tangent_point_in_direction(curve: &SnapCurve, dir: f64, hint: Vec2) -> Option<Vec2> {
+    match curve {
+        SnapCurve::Circle { center, radius } => {
+            let n = dir + std::f64::consts::FRAC_PI_2;
+            let c1 = *center + Vec2::new(n.cos(), n.sin()) * *radius;
+            let c2 = *center - Vec2::new(n.cos(), n.sin()) * *radius;
+            Some(if c1.dist(hint) < c2.dist(hint) { c1 } else { c2 })
+        }
+        _ => None,
+    }
+}
+
 /// One end of a line being solved: a known point or a deferred snap.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LineEnd {

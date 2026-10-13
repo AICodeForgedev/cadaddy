@@ -428,7 +428,21 @@ impl Interactive for LineM {
             && let Some(first) = self.first
         {
             match i {
-                Input::Point(p) => return self.resolve_first(s, first, snap::LineEnd::Point(p)),
+                Input::Point(p) => {
+                    // A deferred TAN first point with a typed `@d<a` next point: resolve
+                    // exactly from the direction and distance the user gave.
+                    if let Some((dist, ang)) = s.last_polar.take()
+                        && let Some(t) = snap::tangent_point_in_direction(&first.curve, ang, first.at)
+                    {
+                        let e = t + Vec2::new(ang.cos(), ang.sin()) * dist;
+                        self.handles.push(s.add_entity(line(t, e))?);
+                        self.pts = vec![t, e];
+                        s.last_point = e;
+                        self.first = None;
+                        return Ok(Step::Continue);
+                    }
+                    return self.resolve_first(s, first, snap::LineEnd::Point(p));
+                }
                 Input::Deferred(d) => return self.resolve_first(s, first, snap::LineEnd::Deferred(d)),
                 _ => {}
             }

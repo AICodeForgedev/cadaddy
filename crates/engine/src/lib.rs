@@ -574,6 +574,11 @@ pub struct Session {
     /// The last segment given at a point prompt (its base point and the point): polar angles
     /// relative to the last segment (POLARMODE bit 1) are measured from it.
     pub last_segment: Option<(Vec2, Vec2)>,
+    /// The last typed `@distance<angle` input, as `(distance, angle in radians)`.
+    /// Set by [`Session::typed`] and consumed by commands that resolve a deferred
+    /// tangent first point (e.g. [`cmd::draw::LineM`]) when the next point is typed
+    /// rather than clicked. Cleared at [`Session::start`].
+    pub last_polar: Option<(f64, f64)>,
     /// Point modifiers pending at the current point prompt (`FROM`, `M2P`, `.x`, `<a`…).
     pub point_mods: Vec<pointmod::Frame>,
     /// Cursor position in world coordinates (from the UI; used for direct distance entry).
@@ -635,6 +640,7 @@ impl Session {
             last_command: None,
             last_point: Vec2::ZERO,
             last_segment: None,
+            last_polar: None,
             point_mods: Vec::new(),
             cursor: Vec2::ZERO,
             cursor_deferred: None,
@@ -830,6 +836,7 @@ impl Session {
 
     /// Start a command by name or alias as if typed at the command line.
     pub fn start(&mut self, name: &str) -> Result<()> {
+        self.last_polar = None;
         let name = name.trim();
         let (transparent, name) = match name.strip_prefix('\'') {
             Some(n) => (true, n),
@@ -1320,6 +1327,7 @@ impl Session {
         }
         if prompt.accept.point {
             if let Some(p) = prompt::parse_point_with(tt, self.last_point, &self.angle_settings()) {
+                self.last_polar = prompt::parse_polar_text(tt, &self.angle_settings());
                 return self.input(Input::Point(p));
             }
             // Direct distance entry along the tracking path the cursor is on, from the point it
