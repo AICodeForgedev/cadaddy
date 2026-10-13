@@ -497,8 +497,12 @@ impl Spline {
     /// backward for negative), clamped to the domain.
     pub fn param_at_length(&self, from: f64, len: f64) -> f64 {
         let (lo, hi) = self.domain();
+        if !self.is_valid() {
+            // Checked before `clamp`: an invalid spline's bounds may be reversed or NaN.
+            return if from.is_finite() { from } else { lo };
+        }
         let from = if from.is_finite() { from.clamp(lo, hi) } else { lo };
-        if !self.is_valid() || !len.is_finite() || len == 0.0 {
+        if !len.is_finite() || len == 0.0 {
             return from;
         }
         let (a, b, target) = if len > 0.0 { (from, hi, len) } else { (lo, from, -len) };
@@ -729,6 +733,22 @@ mod tests {
             assert!((s.length_between(lo, t) - want).abs() < 1e-6, "{frac}: {}", s.length_between(lo, t));
             let t = s.param_at_length(hi, -want);
             assert!((s.length_between(t, hi) - want).abs() < 1e-6, "{frac}: {}", s.length_between(t, hi));
+        }
+    }
+
+    #[test]
+    fn param_at_length_on_invalid_domain_does_not_panic() {
+        // Reversed bounds (knots out of order) and a NaN bound both make the spline invalid; a
+        // finite start must come back unchanged rather than reach `clamp` with bad bounds.
+        let mut reversed = cubic();
+        reversed.knots.reverse();
+        assert!(!reversed.is_valid() && reversed.domain().0 > reversed.domain().1);
+        let mut nan = cubic();
+        nan.knots[nan.degree] = f64::NAN;
+        assert!(!nan.is_valid() && nan.domain().0.is_nan());
+        for s in [reversed, nan] {
+            assert_eq!(s.param_at_length(0.5, 1.0), 0.5);
+            assert_eq!(s.param_at_length(0.5, -1.0), 0.5);
         }
     }
 
