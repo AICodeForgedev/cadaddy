@@ -131,7 +131,18 @@ fn launch_app(addr: &str) -> std::io::Result<()> {
 
 /// Methods that only read state, so resending them after a lost reply cannot change the drawing twice.
 fn is_read_only(method: &str) -> bool {
-    matches!(method, "drawing.inspect" | "document.inspect" | "engine.commands" | "cmdline.state" | "ui.inspect" | "ui.render" | "ui.screenshot")
+    matches!(
+        method,
+        "drawing.inspect"
+            | "document.inspect"
+            | "engine.commands"
+            | "cmdline.state"
+            | "control.methods"
+            | "ping"
+            | "ui.inspect"
+            | "ui.render"
+            | "ui.screenshot"
+    )
 }
 
 impl Backend for Remote {
@@ -171,6 +182,23 @@ impl Backend for Remote {
         format!("connected to CADCraft at {}", self.addr)
     }
 }
+
+/// What the headless `control.methods` replies: the methods [`Headless`] answers, a subset of the
+/// app's (`docs/control-protocol.md`).
+const HEADLESS_METHODS: &[(&str, &str, &str)] = &[
+    ("cmdline.input", "{text}", "Type a line at the command line exactly like a user (commands, prompts, keywords; empty = Enter)."),
+    ("cmdline.script", "{text}", "Run a multi-line script, like a .scr file."),
+    ("cmdline.key", "{key: \"enter\"|\"escape\"}", "Press Enter or Escape at the command line."),
+    ("cmdline.state", "", "Current prompt, keywords, accepted input kinds and history tail."),
+    ("engine.execute", "{command, params}", "Run any command with JSON parameters. Never opens a dialog."),
+    ("engine.commands", "", "Every command: id, label, menu path, shortcut, aliases, params doc, enabled."),
+    ("drawing.inspect", "{entities?, limit?}", "Drawing summary and entities with handles and geometry."),
+    ("ui.render", "{path?, width?, height?, fit?}", "Render the drawing; replies pngBase64."),
+    ("app.open", "{path}", "Open a drawing."),
+    ("app.save", "{path?}", "Save the drawing (Save As with a path)."),
+    ("control.methods", "", "This list."),
+    ("ping", "", "Replies \"pong\"."),
+];
 
 /// An in-process headless session (no window).
 pub struct Headless {
@@ -288,7 +316,12 @@ impl Backend for Headless {
                 s.execute(id, &p).map_err(|e| e.to_string())
             }
             "ui.screenshot" => Err("no UI in headless mode; use render".into()),
-            other => Err(format!("unknown method `{other}`")),
+            "control.methods" => Ok(HEADLESS_METHODS
+                .iter()
+                .map(|(method, params, description)| json!({"method": method, "params": params, "description": description}))
+                .collect()),
+            "ping" => Ok(json!("pong")),
+            other => Err(format!("unknown method `{other}`; `control.methods` lists them (docs/control-protocol.md)")),
         }
     }
     fn has_ui(&self) -> bool {

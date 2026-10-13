@@ -9,7 +9,8 @@ Start the desktop app with `--control PORT` (or `CADCRAFT_CONTROL_PORT=PORT`). I
 {"id": 1, "ok": true, "result": {"prompt": "Command:", "output": ["Command: CIRCLE"], ...}}
 ```
 
-Errors come back as `{"id": …, "ok": false, "error": "message"}`.
+Errors come back as `{"id": …, "ok": false, "error": "message"}`. An unknown method's error points
+to `control.methods`, which lists the methods the server answers.
 
 The server waits up to 60 s for the app to answer a request. After that it replies with a timeout, and
 `state` tells whether sending the request again is safe:
@@ -42,6 +43,8 @@ The server waits up to 60 s for the app to answer a request. After that it repli
 | `ui.screenshot` | `{path?}` | PNG of the window (needs a presented frame). |
 | `ui.render` | `{path?, width?, height?, fit?}` | Headless render. `fit` (default true) frames the whole drawing; `false` uses the current view. Replies `{pngBase64, width, height, bytes, path?}`. |
 | `app.open` / `app.save` / `app.quit` | `{path}` | File operations. |
+| `control.methods` | | Every method this server answers: `{method, params, description}`. Headless (`cadcraft-cli mcp`) lists only the methods it serves. |
+| `ping` | | Replies `"pong"`. A cheap health check. |
 
 The MCP server (`cadcraft-cli mcp --connect 127.0.0.1:PORT`) wraps this protocol; headless
 (`cadcraft-cli mcp`) it serves the same methods from an in-process session.

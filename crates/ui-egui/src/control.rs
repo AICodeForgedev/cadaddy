@@ -18,6 +18,7 @@
 //! - `ui.screenshot {path?}`: PNG of the window; `ui.render {path?, width?, height?, fit?}`: headless
 //!   render of the drawing (no window needed; fits the drawing unless `fit` is false; replies `pngBase64`)
 //! - `app.open {path}`, `app.save {path?}`, `app.quit`
+//! - `control.methods`: this list, with params and a description; `ping`: replies `"pong"`
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -183,6 +184,42 @@ fn wrap(r: Result<Value, String>) -> Outcome {
         Ok(v) => ok(v),
         Err(e) => err(e),
     }
+}
+
+/// What `control.methods` replies: method, params, description. Keep in step with `handle` and the
+/// table in `docs/control-protocol.md` (`tests/control_methods.rs` checks the table).
+const METHODS: &[(&str, &str, &str)] = &[
+    ("cmdline.input", "{text}", "Type a line at the command line exactly like a user (commands, prompts, keywords; empty = Enter)."),
+    ("cmdline.script", "{text}", "Run a multi-line script, like a .scr file."),
+    ("cmdline.key", "{key: \"enter\"|\"escape\"}", "Press Enter or Escape at the command line."),
+    ("cmdline.state", "", "Current prompt, keywords, accepted input kinds and history tail."),
+    ("engine.execute", "{command, params}", "Run any command with JSON parameters. Never opens a dialog."),
+    ("engine.commands", "", "Every command: id, label, menu path, shortcut, aliases, params doc, enabled."),
+    ("drawing.inspect", "{entities?, limit?}", "Drawing summary and entities with handles and geometry."),
+    ("ui.inspect", "", "UI state, canvas rect, view, cursor and snap, performance, keyboard focus."),
+    ("ui.elements", "{label?, role?, focused?}", "Observed visible controls with their egui id, rectangle, state and focus."),
+    ("ui.menu.list", "", "The menu tree."),
+    ("ui.menu.invoke", "{command}", "Invoke a menu item like a click (interactive)."),
+    ("ui.pointer", "{x, y, space?, button?, action?}", "Click or move in the drawing area (world coordinates by default). Right button = Enter."),
+    ("ui.click", "{x, y, button?, shift?, ctrl?}", "Real egui click in screen points."),
+    ("ui.move", "{x, y}", "Real egui pointer move in screen points."),
+    ("ui.drag", "{x, y, to: [x, y], button?}", "Real press, move and release."),
+    ("ui.key", "{key, cmd?, shift?, alt?}", "Synthetic key press."),
+    ("ui.text", "{text}", "Synthetic text input."),
+    ("ui.set", "UiState fields", "Change UI state: palettes, toolbars, command line, theme…"),
+    ("ui.resize", "{width, height}", "Resize the window."),
+    ("ui.focus", "", "Activate the native window."),
+    ("ui.screenshot", "{path?}", "PNG of the window (needs a presented frame)."),
+    ("ui.render", "{path?, width?, height?, fit?}", "Headless render of the drawing; replies pngBase64."),
+    ("app.open", "{path}", "Open a drawing."),
+    ("app.save", "{path?}", "Save the drawing (Save As with a path)."),
+    ("app.quit", "", "Quit without the unsaved-changes prompt."),
+    ("control.methods", "", "This list."),
+    ("ping", "", "Replies \"pong\"."),
+];
+
+fn methods_json() -> Value {
+    METHODS.iter().map(|(method, params, description)| json!({"method": method, "params": params, "description": description})).collect()
 }
 
 pub fn all_commands(app: &CadApp) -> Value {
@@ -461,7 +498,9 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             ok(Value::Null)
         }
-        other => err(format!("unknown method `{other}`")),
+        "control.methods" => ok(methods_json()),
+        "ping" => ok(json!("pong")),
+        other => err(format!("unknown method `{other}`; `control.methods` lists them (docs/control-protocol.md)")),
     }
 }
 
