@@ -537,6 +537,24 @@ fn edit_field(ui: &mut egui::Ui, id: egui::Id, value: String) -> Option<String> 
     out
 }
 
+/// A committed numeric field read as the command line reads numbers (`36`, `3'`, `3'-6 1/2"`,
+/// `6 1/2`). Text it can't read goes to `bad`, to be reported rather than dropped.
+fn number(typed: Option<String>, bad: &mut Option<String>) -> Option<f64> {
+    let typed = typed?;
+    let v = cadcraft_engine::units::parse_distance(&typed);
+    if v.is_none() {
+        *bad = Some(typed);
+    }
+    v
+}
+
+/// Reports a numeric field the user typed that isn't a number; the field shows its value again.
+fn report_bad(app: &mut CadApp, bad: Option<String>) {
+    if let Some(text) = bad {
+        app.session.echo(crate::tf!("Not a number or distance: {text}", text = text.trim()));
+    }
+}
+
 /// A drop-down of `items` showing `current`; returns the item clicked.
 fn pick_menu(ui: &mut egui::Ui, current: &str, items: impl IntoIterator<Item = String>) -> Option<String> {
     // Names are the drawing's own; only the ByLayer/ByBlock keywords are translated.
@@ -645,6 +663,10 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let Ok(d) = app.session.doc() else { return };
     ui.add_space(4.0);
     let h = &d.header;
+    // Lengths are shown as the drawing's units say (UNITS), and read back in any format.
+    let (lu, lp) = (h.i64("LUNITS", 2), h.i64("LUPREC", 4));
+    let len = |v: f64| cadcraft_engine::units::format_distance(v, lu, lp);
+    let mut bad: Option<String> = None;
     if sel.is_empty() {
         // Current properties for new objects; each row runs the command that sets it.
         let layers: Vec<String> = d.layers.iter().map(|l| l.name.clone()).collect();
@@ -690,9 +712,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         });
         prop_row(ui, "Linetype scale", |ui| {
-            if let Some(v) = edit_field(ui, ui.id().with("cur_celtscale"), format!("{:.4}", h.f64("CELTSCALE", 1.0)))
-                && let Ok(f) = v.trim().parse::<f64>()
-            {
+            if let Some(f) = number(edit_field(ui, ui.id().with("cur_celtscale"), format!("{:.4}", h.f64("CELTSCALE", 1.0))), &mut bad) {
                 act("setvar", json!({ "name": "CELTSCALE", "value": f }));
             }
         });
@@ -714,9 +734,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         });
         prop_row(ui, "Transparency", |ui| unavailable(ui, "ByLayer"));
         prop_row(ui, "Thickness", |ui| {
-            if let Some(v) = edit_field(ui, ui.id().with("cur_thickness"), format!("{:.4}", h.f64("THICKNESS", 0.0)))
-                && let Ok(f) = v.trim().parse::<f64>()
-            {
+            if let Some(f) = number(edit_field(ui, ui.id().with("cur_thickness"), len(h.f64("THICKNESS", 0.0))), &mut bad) {
                 act("setvar", json!({ "name": "THICKNESS", "value": f }));
             }
         });
@@ -742,9 +760,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         });
         prop_row(ui, "Annotation scale", |ui| unavailable(ui, "1:1"));
         prop_row(ui, "Text height", |ui| {
-            if let Some(v) = edit_field(ui, ui.id().with("cur_textsize"), format!("{:.4}", h.f64("TEXTSIZE", 0.2)))
-                && let Ok(f) = v.trim().parse::<f64>()
-            {
+            if let Some(f) = number(edit_field(ui, ui.id().with("cur_textsize"), len(h.f64("TEXTSIZE", 0.2))), &mut bad) {
                 act("setvar", json!({ "name": "TEXTSIZE", "value": f }));
             }
         });
@@ -782,6 +798,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         if let Some((c, p)) = action {
             let _ = app.run(c, p);
         }
+        report_bad(app, bad);
         return;
     }
     // Selected objects: common + geometry for a single object.
@@ -856,9 +873,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         });
     });
     prop_row(ui, "Linetype scale", |ui| {
-        if let Some(v) = edit_field(ui, ui.id().with(("lts", &ids)), lts.clone())
-            && let Ok(f) = v.trim().parse::<f64>()
-        {
+        if let Some(f) = number(edit_field(ui, ui.id().with(("lts", &ids)), lts.clone()), &mut bad) {
             set = Some(json!({ "handles": ids, "ltscale": f }));
         }
     });
@@ -908,11 +923,10 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     });
     if sel.len() == 1 {
         group(ui, "Geometry");
-        let num = |ui: &mut egui::Ui, label: &str, key: &str, v: f64, set: &mut Option<Value>, ids: &Vec<String>| {
+        let real = |v: f64| format!("{v:.4}");
+        let num = |ui: &mut egui::Ui, label: &str, key: &str, shown: String, set: &mut Option<Value>, bad: &mut Option<String>, ids: &Vec<String>| {
             prop_row(ui, label, |ui| {
-                if let Some(s) = edit_field(ui, ui.id().with((key, ids)), format!("{v:.4}"))
-                    && let Ok(f) = s.trim().parse::<f64>()
-                {
+                if let Some(f) = number(edit_field(ui, ui.id().with((key, ids)), shown), bad) {
                     *set = Some(json!({ "handles": ids, key: f }));
                 }
             });
@@ -920,47 +934,39 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         match &e.kind {
             EntityKind::Line(l) => {
                 prop_row(ui, "Start X", |ui| {
-                    if let Some(s) = edit_field(ui, ui.id().with(("sx", &ids)), format!("{:.4}", l.a.x))
-                        && let Ok(f) = s.trim().parse::<f64>()
-                    {
+                    if let Some(f) = number(edit_field(ui, ui.id().with(("sx", &ids)), len(l.a.x)), &mut bad) {
                         set = Some(json!({ "handles": ids, "start": [f, l.a.y] }));
                     }
                 });
                 prop_row(ui, "Start Y", |ui| {
-                    if let Some(s) = edit_field(ui, ui.id().with(("sy", &ids)), format!("{:.4}", l.a.y))
-                        && let Ok(f) = s.trim().parse::<f64>()
-                    {
+                    if let Some(f) = number(edit_field(ui, ui.id().with(("sy", &ids)), len(l.a.y)), &mut bad) {
                         set = Some(json!({ "handles": ids, "start": [l.a.x, f] }));
                     }
                 });
                 prop_row(ui, "End X", |ui| {
-                    if let Some(s) = edit_field(ui, ui.id().with(("ex", &ids)), format!("{:.4}", l.b.x))
-                        && let Ok(f) = s.trim().parse::<f64>()
-                    {
+                    if let Some(f) = number(edit_field(ui, ui.id().with(("ex", &ids)), len(l.b.x)), &mut bad) {
                         set = Some(json!({ "handles": ids, "end": [f, l.b.y] }));
                     }
                 });
                 prop_row(ui, "End Y", |ui| {
-                    if let Some(s) = edit_field(ui, ui.id().with(("ey", &ids)), format!("{:.4}", l.b.y))
-                        && let Ok(f) = s.trim().parse::<f64>()
-                    {
+                    if let Some(f) = number(edit_field(ui, ui.id().with(("ey", &ids)), len(l.b.y)), &mut bad) {
                         set = Some(json!({ "handles": ids, "end": [l.b.x, f] }));
                     }
                 });
                 let dlt = l.b.xy() - l.a.xy();
-                prop_row(ui, "Delta X", |ui| read_only(ui, &format!("{:.4}", dlt.x)));
-                prop_row(ui, "Delta Y", |ui| read_only(ui, &format!("{:.4}", dlt.y)));
+                prop_row(ui, "Delta X", |ui| read_only(ui, &len(dlt.x)));
+                prop_row(ui, "Delta Y", |ui| read_only(ui, &len(dlt.y)));
                 // Length and angle keep the start point and move the end point.
-                num(ui, "Length", "length", dlt.len(), &mut set, &ids);
-                num(ui, "Angle", "angle", dlt.angle().to_degrees(), &mut set, &ids);
+                num(ui, "Length", "length", len(dlt.len()), &mut set, &mut bad, &ids);
+                num(ui, "Angle", "angle", real(dlt.angle().to_degrees()), &mut set, &mut bad, &ids);
             }
             EntityKind::Circle(c) => {
-                num(ui, "Center X", "cx", c.center.x, &mut set, &ids);
-                num(ui, "Center Y", "cy", c.center.y, &mut set, &ids);
-                num(ui, "Radius", "radius", c.radius, &mut set, &ids);
-                num(ui, "Diameter", "diameter", c.radius * 2.0, &mut set, &ids);
-                num(ui, "Circumference", "circumference", c.radius * std::f64::consts::TAU, &mut set, &ids);
-                num(ui, "Area", "area", c.radius * c.radius * std::f64::consts::PI, &mut set, &ids);
+                num(ui, "Center X", "cx", len(c.center.x), &mut set, &mut bad, &ids);
+                num(ui, "Center Y", "cy", len(c.center.y), &mut set, &mut bad, &ids);
+                num(ui, "Radius", "radius", len(c.radius), &mut set, &mut bad, &ids);
+                num(ui, "Diameter", "diameter", len(c.radius * 2.0), &mut set, &mut bad, &ids);
+                num(ui, "Circumference", "circumference", len(c.radius * std::f64::consts::TAU), &mut set, &mut bad, &ids);
+                num(ui, "Area", "area", real(c.radius * c.radius * std::f64::consts::PI), &mut set, &mut bad, &ids);
                 if let Some(v) = &mut set
                     && let Some(o) = v.as_object_mut()
                 {
@@ -973,9 +979,9 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
             }
             EntityKind::Arc(a) => {
-                num(ui, "Radius", "radius", a.radius, &mut set, &ids);
-                num(ui, "Start angle", "startAngle", a.start.to_degrees(), &mut set, &ids);
-                num(ui, "End angle", "endAngle", a.end.to_degrees(), &mut set, &ids);
+                num(ui, "Radius", "radius", len(a.radius), &mut set, &mut bad, &ids);
+                num(ui, "Start angle", "startAngle", real(a.start.to_degrees()), &mut set, &mut bad, &ids);
+                num(ui, "End angle", "endAngle", real(a.end.to_degrees()), &mut set, &mut bad, &ids);
             }
             EntityKind::Text(tx) => {
                 prop_row(ui, "Contents", |ui| {
@@ -983,9 +989,9 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                         set = Some(json!({ "handles": ids, "text": s }));
                     }
                 });
-                num(ui, "Height", "height", tx.height, &mut set, &ids);
-                num(ui, "Rotation", "rotation", tx.rotation.to_degrees(), &mut set, &ids);
-                num(ui, "Width factor", "widthFactor", tx.width_factor, &mut set, &ids);
+                num(ui, "Height", "height", len(tx.height), &mut set, &mut bad, &ids);
+                num(ui, "Rotation", "rotation", real(tx.rotation.to_degrees()), &mut set, &mut bad, &ids);
+                num(ui, "Width factor", "widthFactor", real(tx.width_factor), &mut set, &mut bad, &ids);
             }
             EntityKind::MText(tx) => {
                 prop_row(ui, "Contents", |ui| {
@@ -993,13 +999,13 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                         set = Some(json!({ "handles": ids, "text": s }));
                     }
                 });
-                num(ui, "Text height", "height", tx.height, &mut set, &ids);
-                num(ui, "Defined width", "width", tx.width, &mut set, &ids);
+                num(ui, "Text height", "height", len(tx.height), &mut set, &mut bad, &ids);
+                num(ui, "Defined width", "width", len(tx.width), &mut set, &mut bad, &ids);
             }
             EntityKind::LwPolyline(pl) => {
-                num(ui, "Global width", "width", pl.const_width, &mut set, &ids);
+                num(ui, "Global width", "width", len(pl.const_width), &mut set, &mut bad, &ids);
                 let g = cadcraft_geom::Polyline { vertices: pl.vertices.clone(), closed: pl.closed };
-                prop_row(ui, "Length", |ui| read_only(ui, &format!("{:.4}", g.len())));
+                prop_row(ui, "Length", |ui| read_only(ui, &len(g.len())));
                 if pl.closed {
                     prop_row(ui, "Area", |ui| read_only(ui, &format!("{:.4}", g.area().abs())));
                 }
@@ -1020,8 +1026,8 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                         }
                     });
                 });
-                num(ui, "Scale", "scale", hh.scale, &mut set, &ids);
-                num(ui, "Angle", "angle", hh.angle.to_degrees(), &mut set, &ids);
+                num(ui, "Scale", "scale", real(hh.scale), &mut set, &mut bad, &ids);
+                num(ui, "Angle", "angle", real(hh.angle.to_degrees()), &mut set, &mut bad, &ids);
             }
             EntityKind::Dimension(dm) => {
                 prop_row(ui, "Text override", |ui| {
@@ -1037,11 +1043,11 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             }
             EntityKind::Insert(i) => {
                 prop_row(ui, "Name", |ui| read_only(ui, &i.block));
-                prop_row(ui, "Position X", |ui| read_only(ui, &format!("{:.4}", i.insert.x)));
-                prop_row(ui, "Position Y", |ui| read_only(ui, &format!("{:.4}", i.insert.y)));
-                prop_row(ui, "Position Z", |ui| read_only(ui, &format!("{:.4}", i.insert.z)));
-                num(ui, "Rotation", "rotation", i.rotation.to_degrees(), &mut set, &ids);
-                num(ui, "Scale", "scale", i.scale.x, &mut set, &ids);
+                prop_row(ui, "Position X", |ui| read_only(ui, &len(i.insert.x)));
+                prop_row(ui, "Position Y", |ui| read_only(ui, &len(i.insert.y)));
+                prop_row(ui, "Position Z", |ui| read_only(ui, &len(i.insert.z)));
+                num(ui, "Rotation", "rotation", real(i.rotation.to_degrees()), &mut set, &mut bad, &ids);
+                num(ui, "Scale", "scale", real(i.scale.x), &mut set, &mut bad, &ids);
             }
             _ => {}
         }
@@ -1049,4 +1055,5 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     if let Some(p) = set {
         let _ = app.run("properties.set", p);
     }
+    report_bad(app, bad);
 }
