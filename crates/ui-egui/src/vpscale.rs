@@ -54,11 +54,23 @@ pub const ARCHITECTURAL: &[(&str, f64)] = &[
     ("1'-0\" = 1'-0\"", 1.0),
 ];
 
-/// The scales offered for a drawing: ratios, plus architectural scales when it is imperial.
+/// Engineering (civil) scales for imperial drawings: one paper inch per tens of model feet.
+pub const ENGINEERING: &[(&str, f64)] = &[
+    ("1\" = 10'-0\"", 1.0 / 120.0),
+    ("1\" = 20'-0\"", 1.0 / 240.0),
+    ("1\" = 30'-0\"", 1.0 / 360.0),
+    ("1\" = 40'-0\"", 1.0 / 480.0),
+    ("1\" = 50'-0\"", 1.0 / 600.0),
+    ("1\" = 60'-0\"", 1.0 / 720.0),
+    ("1\" = 100'-0\"", 1.0 / 1200.0),
+];
+
+/// The scales offered for a drawing: ratios, plus architectural and engineering scales when it is imperial.
 pub fn scales(metric: bool) -> Vec<(&'static str, f64)> {
     let mut v = RATIOS.to_vec();
     if !metric {
         v.extend_from_slice(ARCHITECTURAL);
+        v.extend_from_slice(ENGINEERING);
     }
     v
 }
@@ -169,5 +181,17 @@ mod tests {
         assert_eq!(label(3.0, true), "3:1");
         assert_eq!(label(f64::NAN, true), "?");
         assert_eq!(label(0.0, true), "?");
+    }
+
+    #[test]
+    fn engineering_scales_for_imperial_drawings() {
+        assert_eq!(label(1.0 / 120.0, false), "1\" = 10'-0\"");
+        assert_eq!(label(1.0 / 240.0, false), "1\" = 20'-0\"");
+        assert_eq!(label(1.0 / 1200.0, false), "1\" = 100'-0\"");
+        assert_eq!(label(1.0 / 240.0, true), "1:240");
+        let names: Vec<_> = scales(false).into_iter().map(|(n, _)| n).collect();
+        for n in ["1\" = 10'-0\"", "1\" = 20'-0\"", "1\" = 30'-0\"", "1\" = 40'-0\"", "1\" = 50'-0\"", "1\" = 60'-0\"", "1\" = 100'-0\""] {
+            assert!(names.contains(&n), "{n} missing");
+        }
     }
 }
