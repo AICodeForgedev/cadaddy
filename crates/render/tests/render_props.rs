@@ -121,6 +121,7 @@ fn attdef(handle: u64, tag: &str, x: f64, common: Common) -> Entity {
         prompt: String::new(),
         props: Default::default(),
         multiline: None,
+        modes: Default::default(),
     };
     Entity { common, ..Entity::new(Handle(handle), EntityKind::AttDef(a)) }
 }
@@ -155,6 +156,7 @@ fn attributes_draw_with_their_own_properties() {
             prompt: String::new(),
             props: Default::default(),
             multiline: None,
+            modes: Default::default(),
         })
         .to_vec();
     let ins = Insert {

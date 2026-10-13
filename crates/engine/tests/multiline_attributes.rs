@@ -43,6 +43,7 @@ fn session() -> Session {
         prompt: "Site".into(),
         props: Default::default(),
         multiline: Some(MultilineAttrib { mtext, read_as: "SITE\nNAME".into() }),
+        modes: Default::default(),
     };
     let mut b = Block::new("TAG");
     let h = d.new_handle();

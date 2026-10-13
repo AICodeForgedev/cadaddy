@@ -102,6 +102,7 @@ fn visible_attributes_of_a_missing_block_still_count() {
         prompt: String::new(),
         props: Default::default(),
         multiline: None,
+        modes: Default::default(),
     };
     let ins = |block: &str, attribs: Vec<Attrib>| {
         Entity::new(
@@ -439,6 +440,7 @@ fn attdef_in_block_is_ignored_in_insert_extents() {
             prompt: String::new(),
             props: Default::default(),
             multiline: None,
+            modes: Default::default(),
         }),
     );
     let d = drawing_with_block(attdef);

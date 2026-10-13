@@ -105,6 +105,7 @@ fn synced(blk: &Block, defs: &[&Attrib], ins: &Insert) -> Vec<Attrib> {
                 prompt: String::new(),
                 props: Default::default(),
                 multiline: ad.multiline.as_ref().map(|ml| ml.transformed(&m)),
+                modes: ad.modes.for_reference(),
             }
         })
         .collect()

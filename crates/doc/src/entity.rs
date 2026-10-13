@@ -353,6 +353,36 @@ pub struct Attrib {
     /// multiline text. `text.value` holds the plain text, which value edits change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multiline: Option<MultilineAttrib>,
+    /// Its other modes: Verify, Preset and Lock position.
+    #[serde(default, skip_serializing_if = "AttribModes::is_default")]
+    pub modes: AttribModes,
+}
+
+/// An attribute's modes beyond invisible and constant.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttribModes {
+    /// Verify: the value is asked for twice when the block is inserted (DXF flag 4).
+    #[serde(default)]
+    pub verify: bool,
+    /// Preset: the default value is used without asking (DXF flag 8).
+    #[serde(default)]
+    pub preset: bool,
+    /// Lock position: the attribute can't be moved on its own within a reference (DXF group
+    /// 280 after the flags). A reference's attributes take it from their definitions.
+    #[serde(default)]
+    pub lock_position: bool,
+}
+
+impl AttribModes {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    /// The modes of a reference's attribute made from a definition with these: AutoCAD keeps
+    /// only Lock position there.
+    pub fn for_reference(self) -> Self {
+        AttribModes { lock_position: self.lock_position, ..Self::default() }
+    }
 }
 
 /// The multiline text of a multiline attribute.

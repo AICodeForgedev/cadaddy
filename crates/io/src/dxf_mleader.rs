@@ -445,6 +445,7 @@ fn attribs(d: &Drawing, ins: &Insert, values: &[(String, String)]) -> Vec<Attrib
             prompt: String::new(),
             props: Default::default(),
             multiline: None,
+            modes: Default::default(),
         });
     }
     out

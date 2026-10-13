@@ -325,6 +325,7 @@ mod tests {
             prompt: String::new(),
             props: Default::default(),
             multiline: None,
+            modes: Default::default(),
         };
         let b = bounds(EntityKind::AttDef(a));
         assert!(b.min.x <= -4.4 && b.max.x < 1.0);

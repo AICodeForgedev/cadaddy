@@ -450,12 +450,15 @@ fn multiline_tags(w: &mut W, a: &Attrib, attdef: bool) {
     w.f(44, m.line_spacing);
 }
 
-/// ATTRIB/ATTDEF flags (group 70): 1 invisible, 2 constant.
+/// ATTRIB/ATTDEF flags (group 70): 1 invisible, 2 constant, 4 verify, 8 preset.
 fn attrib_flags(a: &Attrib) -> i64 {
-    i64::from(a.invisible) | if a.constant { 2 } else { 0 }
+    i64::from(a.invisible) | if a.constant { 2 } else { 0 } | if a.modes.verify { 4 } else { 0 } | if a.modes.preset { 8 } else { 0 }
 }
 
-fn text_tags(w: &mut W, t: &Text, attrib_tag: Option<(&str, i64)>, attdef_prompt: Option<&str>) {
+/// A TEXT's groups, or an attribute's (`attrib`, in a file of version `target`) with its
+/// subclass: the subclass version (`280 0`, 2010 and later), prompt, tag, flags and alignment,
+/// then Lock position (`280`, 2007 and later; readers take the 280 after the tag as it).
+fn text_tags(w: &mut W, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
     w.p(10, t.insert);
     w.f(40, t.height);
     w.s(1, &t.value);
@@ -489,16 +492,22 @@ fn text_tags(w: &mut W, t: &Text, attrib_tag: Option<(&str, i64)>, attdef_prompt
     if let Some(a) = t.align_pt {
         w.p(11, a);
     }
-    match attrib_tag {
-        Some((tag, flags)) => {
+    match attrib {
+        Some((a, target)) => {
             w.s(100, if attdef_prompt.is_some() { "AcDbAttributeDefinition" } else { "AcDbAttribute" });
+            if target >= Version::R2010 {
+                w.i(280, 0);
+            }
             if let Some(prompt) = attdef_prompt {
                 w.s(3, prompt);
             }
-            w.s(2, tag);
-            w.i(70, flags);
+            w.s(2, &a.tag);
+            w.i(70, attrib_flags(a));
             if v != 0 {
                 w.i(74, v);
+            }
+            if target >= Version::R2007 {
+                w.i(280, i64::from(a.modes.lock_position));
             }
         }
         None => {
@@ -703,7 +712,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
         EntityKind::AttDef(a) => {
             w.s(0, "ATTDEF");
             common(w, e, owner, paper, "AcDbText");
-            text_tags(w, &a.text, Some((&a.tag, attrib_flags(a))), Some(&a.prompt));
+            text_tags(w, &a.text, Some((a, cx.target)), Some(&a.prompt));
             if cx.target >= Version::R2007 {
                 multiline_tags(w, a, true);
             }
@@ -767,7 +776,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                         w.i(60, 1);
                     }
                     w.s(100, "AcDbText");
-                    text_tags(w, &a.text, Some((&a.tag, attrib_flags(a))), None);
+                    text_tags(w, &a.text, Some((a, cx.target)), None);
                     if cx.target >= Version::R2007 {
                         multiline_tags(w, a, false);
                     }

@@ -99,6 +99,7 @@ fn spline_leader_with_block_content_and_attributes() {
             prompt: "Number".into(),
             props: Default::default(),
             multiline: None,
+            modes: Default::default(),
         }),
     ));
     d.blocks.insert(blk.name.clone(), std::sync::Arc::new(blk));
@@ -119,6 +120,7 @@ fn spline_leader_with_block_content_and_attributes() {
         prompt: String::new(),
         props: Default::default(),
         multiline: None,
+        modes: Default::default(),
     });
     let m = MLeader {
         leaders: vec![vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(4.0, 5.0, 0.0), Vec3::new(8.0, 4.0, 0.0)]],

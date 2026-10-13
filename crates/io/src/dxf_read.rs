@@ -105,6 +105,16 @@ fn attrib_props(t: &T, insert_layer: &str) -> AttribProps {
     }
 }
 
+/// An attribute's modes from its own groups: flags (70) 4 verify and 8 preset, and Lock
+/// position, the 280 after its tag in its subclass (a 280 before the tag is the subclass version).
+fn attrib_modes(own: &[Tag]) -> AttribModes {
+    let flags = own.iter().find(|t| t.code == 70).map(Tag::i64).unwrap_or(0);
+    let sub = own.iter().position(|t| t.code == 100 && t.str().trim().starts_with("AcDbAttribute")).unwrap_or(0);
+    let rest = own.get(sub..).unwrap_or_default();
+    let lock_position = rest.iter().position(|t| t.code == 2).is_some_and(|at| rest.iter().skip(at + 1).any(|t| t.code == 280 && t.i64() != 0));
+    AttribModes { verify: flags & 4 != 0, preset: flags & 8 != 0, lock_position }
+}
+
 /// An ATTRIB's or ATTDEF's groups split at its embedded multiline text (`101 Embedded Object`):
 /// the attribute's own groups and, for a multiline attribute, the MTEXT groups after the marker.
 fn split_embedded(tags: &[Tag]) -> (&[Tag], Option<&[Tag]>) {
@@ -374,6 +384,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 prompt: own.s(3).unwrap_or_default(),
                 props: Default::default(),
                 multiline,
+                modes: attrib_modes(own.0),
             })
         }
         "INSERT" => {
@@ -1182,6 +1193,7 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx, ski
                                 prompt: String::new(),
                                 props: attrib_props(&tt, &ins_layer),
                                 multiline,
+                                modes: attrib_modes(own.0),
                             });
                             i += 1;
                         } else {

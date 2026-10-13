@@ -274,6 +274,7 @@ fn block_definition_properties_and_constant_attdefs_roundtrip() {
         prompt: String::new(),
         props: Default::default(),
         multiline: None,
+        modes: Default::default(),
     };
     for (i, a) in [attdef("COMPANY", false, true), attdef("SECRET", true, true), attdef("SHEET", false, false)].into_iter().enumerate() {
         b.entities.push(Entity::new(Handle(0x500 + i as u64), EntityKind::AttDef(a)));
@@ -1313,6 +1314,7 @@ fn intl_sample() -> Drawing {
         prompt: String::new(),
         props: Default::default(),
         multiline: None,
+        modes: Default::default(),
     };
     let mut b = Block::new(&block);
     b.entities.push(Entity::new(Handle(0x50), EntityKind::AttDef(def)));
@@ -1325,6 +1327,7 @@ fn intl_sample() -> Drawing {
         prompt: String::new(),
         props: Default::default(),
         multiline: None,
+        modes: Default::default(),
     };
     d.add(
         &Space::Model,
@@ -1585,6 +1588,7 @@ fn attdef_prompt_survives_dxf_roundtrip() {
             prompt: prompt.into(),
             props: Default::default(),
             multiline: None,
+            modes: Default::default(),
         })
     };
     d.add(&Space::Model, Default::default(), attdef("Enter value")).unwrap();
