@@ -1009,6 +1009,7 @@ fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf, ctx: &egui::Context) ->
     let wants_point = prompt.as_ref().is_some_and(cadcraft_engine::pointmod::accepts);
     let base = prompt.as_ref().and_then(|p| p.base);
     let deferred = prompt.as_ref().is_some_and(|p| p.deferred);
+    let corner = prompt.as_ref().is_some_and(|p| p.corner);
     app.canvas.snap = None;
     app.canvas.track = None;
     if !wants_point || app.session.pending_window.is_some() {
@@ -1018,7 +1019,8 @@ fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf, ctx: &egui::Context) ->
         return raw;
     }
     let (now, shift) = ctx.input(|i| (i.time, i.modifiers.shift));
-    let q = snap::tracking::CursorQuery { base, deferred, aperture: app.session.settings.aperture / xf.scale, tol: 6.0 / xf.scale, now, shift };
+    let q =
+        snap::tracking::CursorQuery { base, deferred, corner, aperture: app.session.settings.aperture / xf.scale, tol: 6.0 / xf.scale, now, shift };
     let r = app.session.snap_cursor(raw, &q);
     if r.wait {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(snap::tracking::DWELL / 4.0));

@@ -1342,7 +1342,7 @@ impl Session {
                 && !prompt.accept.number
             {
                 let mut c = self.cursor;
-                if self.settings.orthomode {
+                if self.settings.orthomode && !prompt.corner {
                     c = snap::iso::constrain(&self.drafting_settings(), base, c);
                 }
                 let dir = (c - base).normalized();

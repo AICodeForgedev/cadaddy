@@ -17,7 +17,7 @@ fn setvar(s: &mut Session, name: &str, value: Value) {
 
 /// Move the cursor to `raw` as the canvas does.
 fn hover(s: &mut Session, raw: Vec2, base: Option<Vec2>) -> Vec2 {
-    let q = CursorQuery { base, deferred: false, aperture: 0.5, tol: 0.1, now: 100.0, shift: false };
+    let q = CursorQuery { base, deferred: false, corner: false, aperture: 0.5, tol: 0.1, now: 100.0, shift: false };
     let r = s.snap_cursor(raw, &q);
     s.cursor = r.point;
     r.point

@@ -46,7 +46,7 @@ fn loaded_spacing_is_used_by_getvar_settings_snapshots_and_grid_snap() {
     s.settings.snapmode = true;
     s.settings.osmode = 0;
     s.settings.polarmode = false;
-    let q = CursorQuery { base: None, deferred: false, aperture: 0.1, tol: 0.1, now: 0.0, shift: false };
+    let q = CursorQuery { base: None, deferred: false, corner: false, aperture: 0.1, tol: 0.1, now: 0.0, shift: false };
     assert_eq!(s.snap_cursor(Vec2::new(0.27, 0.15), &q).point, Vec2::new(0.25, 0.125));
 }
 

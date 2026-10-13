@@ -42,7 +42,7 @@ fn on_ellipse(e: &cadcraft_doc::Ellipse, p: Vec2) -> bool {
 }
 
 fn cursor(s: &mut Session, raw: Vec2, base: Option<Vec2>) -> Vec2 {
-    s.snap_cursor(raw, &CursorQuery { base, deferred: false, aperture: 1e-6, tol: 1e-6, now: 0.0, shift: false }).point
+    s.snap_cursor(raw, &CursorQuery { base, deferred: false, corner: false, aperture: 1e-6, tol: 1e-6, now: 0.0, shift: false }).point
 }
 
 #[test]

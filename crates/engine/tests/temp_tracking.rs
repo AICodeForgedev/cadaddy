@@ -24,7 +24,7 @@ fn near(p: Vec2, x: f64, y: f64) -> bool {
 
 /// Move the cursor to `raw` as the canvas does: snap it and remember where it ended up.
 fn hover(s: &mut Session, raw: Vec2, base: Option<Vec2>) -> Vec2 {
-    let q = CursorQuery { base, deferred: false, aperture: 0.5, tol: 0.1, now: 100.0, shift: false };
+    let q = CursorQuery { base, deferred: false, corner: false, aperture: 0.5, tol: 0.1, now: 100.0, shift: false };
     let r = s.snap_cursor(raw, &q);
     s.cursor = r.point;
     r.point
@@ -132,7 +132,7 @@ fn setvar(s: &mut Session, name: &str, value: serde_json::Value) {
 /// Rest the cursor on `p` long enough to acquire what is there, then move off.
 fn rest(s: &mut Session, p: Vec2) {
     for (at, now) in [(p, 0.0), (p, DWELL + 0.01), (v(1e5, 1e5), DWELL + 0.02)] {
-        s.snap_cursor(at, &CursorQuery { base: None, deferred: false, aperture: 0.5, tol: 0.1, now, shift: false });
+        s.snap_cursor(at, &CursorQuery { base: None, deferred: false, corner: false, aperture: 0.5, tol: 0.1, now, shift: false });
     }
 }
 
@@ -217,7 +217,10 @@ fn extension_runs_around_an_elliptical_arc_and_off_a_spline_end() {
     assert!(near(p, 17.98, -2.98), "{p:?}");
     // Hostile cursors near the acquired end.
     for x in [f64::NAN, f64::INFINITY, -1e308, 1e-300] {
-        let r = s.snap_cursor(v(15.0 + x, x), &CursorQuery { base: Some(v(x, 0.0)), deferred: false, aperture: 0.5, tol: 0.1, now: x, shift: false });
+        let r = s.snap_cursor(
+            v(15.0 + x, x),
+            &CursorQuery { base: Some(v(x, 0.0)), deferred: false, corner: false, aperture: 0.5, tol: 0.1, now: x, shift: false },
+        );
         assert!(r.track.is_none_or(|t| t.point.is_finite()));
     }
 }

@@ -422,7 +422,7 @@ impl Interactive for ZoomM {
                 .kw(&["All", "Center", "Dynamic", "Extents", "Previous", "Scale", "Window", "Object"])
                 .default("real time"),
             (true, None) => Prompt::new("Specify first corner", Accept::POINT),
-            (_, Some(a)) => Prompt::new("Specify opposite corner", Accept::POINT).base(a),
+            (_, Some(a)) => Prompt::new("Specify opposite corner", Accept::POINT).corner(a),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {

@@ -52,7 +52,7 @@ fn setvar(s: &mut Session, name: &str, value: serde_json::Value) {
 }
 
 fn query(base: Option<Vec2>, now: f64) -> CursorQuery {
-    CursorQuery { base, deferred: false, aperture: APERTURE, tol: TOL, now, shift: false }
+    CursorQuery { base, deferred: false, corner: false, aperture: APERTURE, tol: TOL, now, shift: false }
 }
 
 fn at(s: &mut Session, cursor: Vec2, base: Option<Vec2>) -> CursorSnap {
@@ -345,7 +345,7 @@ fn hostile_inputs_never_panic() {
     for x in nums {
         for ap in [APERTURE, 0.0, -1.0, f64::NAN, f64::INFINITY, 1e300] {
             for base in [None, Some(v(x, 0.0)), Some(Vec2::ZERO)] {
-                let q = CursorQuery { base, deferred: true, aperture: ap, tol: ap, now: x, shift: x.is_nan() };
+                let q = CursorQuery { base, deferred: true, corner: false, aperture: ap, tol: ap, now: x, shift: x.is_nan() };
                 let _ = s.snap_cursor(v(x, 0.5), &q);
                 let r = s.snap_cursor(v(10.0, x), &q);
                 assert!(r.track.is_none_or(|t| t.point.is_finite()));

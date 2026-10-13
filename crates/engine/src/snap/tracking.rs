@@ -762,6 +762,8 @@ pub struct CursorQuery {
     pub base: Option<Vec2>,
     /// The prompt resolves deferred tangent/perpendicular snaps.
     pub deferred: bool,
+    /// The base is a window's first corner ([`crate::prompt::Prompt::corner`]): no ortho.
+    pub corner: bool,
     /// The object snap aperture in world units (APERTURE pixels at the view scale).
     pub aperture: f64,
     /// How close, in world units, the cursor slides onto a tracking path.
@@ -821,6 +823,7 @@ impl crate::Session {
         }
         if let Some(b) = q.base
             && s.orthomode
+            && !q.corner
         {
             p = super::iso::ortho(&self.settings, b, p);
         }

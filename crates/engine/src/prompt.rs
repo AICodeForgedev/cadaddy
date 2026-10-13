@@ -41,6 +41,10 @@ pub struct Prompt {
     /// prompt (a point with no base yet, e.g. the first point of a line). Elsewhere a deferred
     /// pick arrives as the plain point it was picked at.
     pub deferred: bool,
+    /// The base is a window's first corner (ZOOM Window): ortho does not bend the opposite
+    /// corner, so the window stays a rectangle.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub corner: bool,
     /// The grip this prompt stretches (one hot grip at the STRETCH prompt), as (object, grip
     /// index): Dynamic Input shows its dimensions ([`crate::grip_dims`]).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,7 +75,7 @@ pub enum Picker {
 
 impl Prompt {
     pub fn new(message: impl Into<String>, accept: Accept) -> Self {
-        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None, deferred: false, grip: None, picker: None }
+        Prompt { message: message.into(), accept, ..Default::default() }
     }
     /// The grip being stretched (the `grip` field).
     pub fn grip(mut self, g: (Handle, usize)) -> Self {
@@ -93,6 +97,12 @@ impl Prompt {
     }
     pub fn base_opt(mut self, p: Option<Vec2>) -> Self {
         self.base = p;
+        self
+    }
+    /// The base is a window's first corner (the `corner` field).
+    pub fn corner(mut self, p: Vec2) -> Self {
+        self.base = Some(p);
+        self.corner = true;
         self
     }
     /// Accept deferred tangent/perpendicular snaps (the `deferred` field).
