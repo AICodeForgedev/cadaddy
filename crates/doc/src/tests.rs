@@ -80,6 +80,57 @@ fn inserts_of_missing_or_empty_blocks_do_not_stretch_extents() {
 }
 
 #[test]
+fn visible_attributes_of_a_missing_block_still_count() {
+    // The renderer draws the attributes of a reference whose definition is missing, so they are
+    // extents and selection targets, as with an empty definition. The insertion point still isn't.
+    let attrib = |invisible: bool| Attrib {
+        tag: "TAG".into(),
+        text: Text {
+            insert: Vec3::new(1000.0, 1000.0, 0.0),
+            align_pt: None,
+            height: 10.0,
+            value: "hello".into(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: HAlign::Left,
+            valign: VAlign::Baseline,
+        },
+        invisible,
+        constant: false,
+        prompt: String::new(),
+        props: Default::default(),
+    };
+    let ins = |block: &str, attribs: Vec<Attrib>| {
+        Entity::new(
+            Handle(1),
+            EntityKind::Insert(Insert {
+                block: block.into(),
+                insert: Vec3::ZERO,
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                rotation: 0.0,
+                attribs,
+                cols: 1,
+                rows: 1,
+                col_spacing: 0.0,
+                row_spacing: 0.0,
+            }),
+        )
+    };
+    let mut d = Drawing::new_imperial();
+    d.blocks.insert("Empty".into(), std::sync::Arc::new(Block::new("Empty")));
+    let missing = entity_bounds(&d, &ins("Missing", vec![attrib(false)]), 0);
+    let empty = entity_bounds(&d, &ins("Empty", vec![attrib(false)]), 0);
+    assert!(!missing.is_empty());
+    assert_eq!((missing.min, missing.max), (empty.min, empty.max));
+    assert_eq!(missing.min, Vec2::new(1000.0, 1000.0));
+    // Without a visible attribute there is nothing to measure.
+    assert!(entity_bounds(&d, &ins("Missing", vec![]), 0).is_empty());
+    assert!(entity_bounds(&d, &ins("Missing", vec![attrib(true)]), 0).is_empty());
+}
+
+#[test]
 fn transform_arc_mirror_keeps_shape() {
     let mut k = EntityKind::Arc(Arc { center: Vec3::ZERO, radius: 1.0, start: 0.0, end: std::f64::consts::FRAC_PI_2 });
     k.transform(&Mat3::mirror(Vec2::ZERO, Vec2::Y));

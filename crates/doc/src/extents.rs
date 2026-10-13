@@ -108,24 +108,27 @@ fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<
             // A reference to a missing block (an unloaded xref, a purged definition) or to an empty
             // one draws nothing, so it contributes nothing: ZOOM Extents must not fly off to its
             // insertion point. Attributes below still count.
-            let Some(blk) = d.block(&ins.block) else { return Bounds2::EMPTY };
-            let m = ins.transform(blk.base.xy());
-            let inner = match blocks.get(&(blk.name.as_str(), depth)) {
-                Some(b) => *b,
-                None => {
-                    let mut inner = Bounds2::EMPTY;
-                    for be in blk.entities.iter().filter(|be| in_block_visible(d, be)) {
-                        inner = inner.union(&bounds_in(d, be, depth + 1, blocks));
+            let mut b = Bounds2::EMPTY;
+            if let Some(blk) = d.block(&ins.block) {
+                let m = ins.transform(blk.base.xy());
+                let inner = match blocks.get(&(blk.name.as_str(), depth)) {
+                    Some(b) => *b,
+                    None => {
+                        let mut inner = Bounds2::EMPTY;
+                        for be in blk.entities.iter().filter(|be| in_block_visible(d, be)) {
+                            inner = inner.union(&bounds_in(d, be, depth + 1, blocks));
+                        }
+                        blocks.insert((blk.name.as_str(), depth), inner);
+                        inner
                     }
-                    blocks.insert((blk.name.as_str(), depth), inner);
-                    inner
+                };
+                b = if inner.is_empty() { Bounds2::EMPTY } else { Bounds2::from_points(inner.corners().map(|c| m.apply(c))) };
+                if ins.cols > 1 || ins.rows > 1 {
+                    let off =
+                        Vec2::new(ins.col_spacing * f64::from(ins.cols.saturating_sub(1)), ins.row_spacing * f64::from(ins.rows.saturating_sub(1)))
+                            .rotate(ins.rotation);
+                    b = b.union(&Bounds2::from_points(b.corners().map(|c| c + off)));
                 }
-            };
-            let mut b = if inner.is_empty() { Bounds2::EMPTY } else { Bounds2::from_points(inner.corners().map(|c| m.apply(c))) };
-            if ins.cols > 1 || ins.rows > 1 {
-                let off = Vec2::new(ins.col_spacing * f64::from(ins.cols.saturating_sub(1)), ins.row_spacing * f64::from(ins.rows.saturating_sub(1)))
-                    .rotate(ins.rotation);
-                b = b.union(&Bounds2::from_points(b.corners().map(|c| c + off)));
             }
             for a in &ins.attribs {
                 if !a.invisible {
