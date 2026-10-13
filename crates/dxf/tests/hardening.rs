@@ -165,3 +165,41 @@ fn binary_sixteen_and_thirty_two_bit_values_wrap_in_range_and_clamp_outside() {
     assert_eq!(back[5], Tag::i(90, i64::from(i32::MAX)));
     assert_eq!(back[6], Tag::i(90, i64::from(i32::MIN)));
 }
+
+/// Strings of a `$DWGCODEPAGE`-declared file as ASCII text and as a binary file.
+fn both_forms(code_page: &str, strings: &[&[u8]]) -> [Vec<Tag>; 2] {
+    let mut a = format!("9\n$DWGCODEPAGE\n3\n{code_page}\n").into_bytes();
+    for s in strings {
+        a.extend_from_slice(b"1\n");
+        a.extend_from_slice(s);
+        a.push(b'\n');
+    }
+    a.extend_from_slice(b"0\nEOF\n");
+    let b = bin_with(|b| {
+        for (code, s) in [(9i16, &b"$DWGCODEPAGE"[..]), (3, code_page.as_bytes())].into_iter().chain(strings.iter().map(|s| (1, *s))) {
+            b.extend_from_slice(&code.to_le_bytes());
+            b.extend_from_slice(s);
+            b.push(0);
+        }
+    });
+    [parse(&a).unwrap(), parse(&b).unwrap()]
+}
+
+#[test]
+fn east_asian_short_strings_that_look_like_utf8_stay_in_the_code_page() {
+    // C3 B1 is valid UTF-8 ("ñ") but is also two half-width katakana in Shift-JIS; the second
+    // string is plainly Shift-JIS, so the file is not UTF-8.
+    for t in both_forms("ANSI_932", &[b"\xC3\xB1", b"\x90\x7D\x96\xCA"]) {
+        assert_eq!(t[2].str(), "\u{FF83}\u{FF71}");
+        assert_eq!(t[3].str(), "図面");
+    }
+}
+
+#[test]
+fn east_asian_file_that_is_all_utf8_reads_as_utf8() {
+    for t in both_forms("ANSI_932", &["図面".as_bytes(), b"\xC3\xB1", b"plain"]) {
+        assert_eq!(t[2].str(), "図面");
+        assert_eq!(t[3].str(), "ñ");
+        assert_eq!(t[4].str(), "plain");
+    }
+}

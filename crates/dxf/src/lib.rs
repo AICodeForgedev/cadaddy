@@ -378,8 +378,16 @@ pub fn parse_binary(b: &[u8]) -> Result<Vec<Tag>> {
 }
 
 fn parse_binary_with_limit(b: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
-    let mut c = Cur { b, p: 0 };
     let mut text = codepage::BinaryText::default();
+    let tags = parse_binary_pass(b, max_tags, &mut text)?;
+    if text.needs_code_page_pass() {
+        return parse_binary_pass(b, max_tags, &mut codepage::BinaryText::code_page_pass());
+    }
+    Ok(tags)
+}
+
+fn parse_binary_pass(b: &[u8], max_tags: usize, text: &mut codepage::BinaryText) -> Result<Vec<Tag>> {
+    let mut c = Cur { b, p: 0 };
     let mut tags = Vec::new();
     while c.p < b.len() {
         let mut code = i32::from(c.i16()?);
