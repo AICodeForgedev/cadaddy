@@ -409,9 +409,12 @@ impl Family<'_> {
         if bb.is_empty() {
             return;
         }
-        // The lines and spans swept: the boundary's extent, cut to the view's (its corners in
-        // this frame) when there is one.
+        // The lines swept: the boundary's extent, cut to the view's (its corners in this frame)
+        // when there is one. Spans are cut to the view's extent only: they already lie within the
+        // boundary, and cutting them to its extent too would move an end that sits on a boundary
+        // corner by a rounding error, so a view covering the hatch would change its lines.
         let (mut lo, mut hi) = (bb.min, bb.max);
+        let mut span_cut = None;
         if let Some(v) = view {
             let vb = Bounds2::from_points(v.corners().iter().map(|p| self.to_local(*p)));
             if vb.is_empty() || !vb.intersects(&bb) {
@@ -419,6 +422,7 @@ impl Family<'_> {
             }
             lo = Vec2::new(lo.x.max(vb.min.x), lo.y.max(vb.min.y));
             hi = Vec2::new(hi.x.min(vb.max.x), hi.y.min(vb.max.y));
+            span_cut = Some((vb.min.x, vb.max.x));
         }
         let shift_per_line = self.delta.rotate(-self.ang).x;
         let k0 = (lo.y / self.spacing).floor() as i64;
@@ -451,8 +455,11 @@ impl Family<'_> {
             let offset = shift_per_line * k as f64;
             for span in xs.chunks(2) {
                 let [x0, x1] = span else { continue };
-                let (x0, x1) = if view.is_some() { (x0.max(lo.x), x1.min(hi.x)) } else { (*x0, *x1) };
-                if view.is_some() && x1 <= x0 {
+                let (x0, x1) = match span_cut {
+                    Some((a, b)) => (x0.max(a), x1.min(b)),
+                    None => (*x0, *x1),
+                };
+                if span_cut.is_some() && x1 <= x0 {
                     continue;
                 }
                 if solid_line {
