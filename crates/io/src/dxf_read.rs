@@ -1555,6 +1555,17 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     let mut layout_objs: Vec<(String, u32, String, PageSetup)> = Vec::new();
     let mut entities = Vec::new();
     let mut objs = Objects::default();
+    // Every handle another program's file already uses is taken before anything gets a new one:
+    // its $HANDSEED can be lower than its handles, and entities made while reading (the faces of
+    // a polyface mesh) would otherwise get handles that records further on still have. A file
+    // CADCraft wrote names its own next handle, above which its rebuilt records are numbered
+    // (#495), so it is left to that.
+    let ours = secs.iter().any(|s| s.name == "OBJECTS" && s.tags.iter().any(|t| t.code == 3 && t.str() == crate::dxf_ext::HANDSEED_KEY));
+    for t in secs.iter().filter(|_| !ours).flat_map(|s| s.tags.iter()).filter(|t| t.code == 5 || t.code == 105) {
+        if let Some(h) = Handle::parse_hex(t.str().trim()) {
+            d.bump_handseed(h);
+        }
+    }
     for s in &secs {
         match s.name.as_str() {
             "HEADER" => header(&s.tags, &mut d),
