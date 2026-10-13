@@ -135,11 +135,13 @@ fn write_bytes(s: &Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Vec<
     if opts.binary && !is_dxf(path) {
         return Err(bad(cmd, "binary applies to DXF files only"));
     }
+    // A drawing file is the drawing outside the Block Editor; an image is what is shown.
+    let d: &cadcraft_doc::Drawing = if is_drawing_file(path) { s.state()?.drawing() } else { s.doc()? };
     let r = if *opts == SaveAs::default() {
-        (hooks.write)(s.doc()?, path)
+        (hooks.write)(d, path)
     } else {
         let w = write_as().ok_or_else(|| bad(cmd, "saving at a chosen version or as binary DXF is not available in this build"))?;
-        w(s.doc()?, path, opts)
+        w(d, path, opts)
     };
     r.map_err(|e| bad(cmd, e))
 }
@@ -385,10 +387,10 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<usiz
         let st = s.state_mut()?;
         st.binary_dxf = opts.binary;
         if let Some(v) = opts.version
-            && st.doc.header.get("ACADVER").and_then(cadcraft_doc::HVal::as_str) != Some(v.code())
+            && st.drawing().header.get("ACADVER").and_then(cadcraft_doc::HVal::as_str) != Some(v.code())
         {
-            std::sync::Arc::make_mut(&mut st.doc).header.set_str("ACADVER", v.code());
-            st.saved = st.doc.clone();
+            std::sync::Arc::make_mut(st.drawing_arc_mut()).header.set_str("ACADVER", v.code());
+            st.saved = st.drawing().clone();
         }
     }
     Ok(n)
@@ -424,7 +426,7 @@ fn commit_save(s: &mut Session, path: &str, bytes: &[u8], store: impl FnOnce(&st
         return Ok(bytes.len());
     }
     let st = s.state_mut()?;
-    st.saved = st.doc.clone();
+    st.saved = st.drawing().clone();
     st.path = Some(path.to_string());
     st.title = file_name(path);
     // A BEgin group still open when the drawing is saved ends there.

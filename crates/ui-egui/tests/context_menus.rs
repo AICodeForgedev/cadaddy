@@ -153,6 +153,23 @@ fn selection_menu_has_the_object_types_edit_commands() {
 }
 
 #[test]
+fn a_selected_block_reference_offers_the_block_editor() {
+    let mut app = app();
+    let l = app.run("line", json!({ "points": [[0, 0], [10, 0]] })).unwrap()["handles"][0].clone();
+    app.run("block", json!({ "name": "Door", "base": [0, 0], "handles": [l] })).unwrap();
+    select_all(&mut app);
+    let g = vec![context_menu::object_entries(&app)];
+    assert_eq!(labels(&g), ["Block Editor"]);
+    // Choosing it opens the Block Editor on that block; its own menu then saves and closes it.
+    cadcraft_ui_egui::menus::activate(&mut app, "bedit");
+    assert_eq!(app.session.state().unwrap().block_editor(), Some("Door"));
+    let menu = ids(&context_menu::entries(&app));
+    assert!(["bsave", "bsaveas", "bclose"].iter().all(|id| menu.iter().any(|i| i == id)), "{menu:?}");
+    cadcraft_ui_egui::menus::activate(&mut app, "bclose");
+    assert_eq!(app.session.state().unwrap().block_editor(), None);
+}
+
+#[test]
 fn every_menu_label_has_a_ukrainian_translation() {
     let mut app = app();
     app.cmdline("LINE 0,0 10,0");

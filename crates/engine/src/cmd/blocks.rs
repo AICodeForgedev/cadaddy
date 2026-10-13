@@ -1,5 +1,7 @@
-//! Blocks: BLOCK, INSERT, ATTDEF, ATTEDIT (programmatic), WBLOCK, BASE, PURGE, block listing.
+//! Blocks: BLOCK, INSERT, ATTDEF, ATTEDIT (programmatic), WBLOCK, BASE, PURGE, block listing, the
+//! Block Editor.
 
+pub(crate) mod bedit;
 mod purge;
 
 use std::sync::Arc;
@@ -76,6 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
     .into_iter()
     .chain(xref::specs())
     .chain(refedit::specs())
+    .chain(bedit::specs())
     .collect()
 }
 

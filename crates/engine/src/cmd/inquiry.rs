@@ -286,6 +286,7 @@ fn run_inspect(s: &mut Session, p: &Value) -> Result<Value> {
         "title": st.title,
         "path": st.path,
         "dirty": st.is_dirty(),
+        "blockEditor": st.block_editor(),
         "space": space.tab_name(),
         "entityCount": d.entity_count(),
         "counts": counts,

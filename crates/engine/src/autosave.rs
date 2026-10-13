@@ -109,6 +109,9 @@ pub enum Job {
 struct Tracked {
     /// The drawing as last autosaved (a weak pointer: compared, never kept alive).
     written: Option<Weak<Drawing>>,
+    /// The drawing outside the Block Editor as last autosaved (the same as `written` when the
+    /// editor is closed): saving the editor's changes into the block changes only this.
+    host: Option<Weak<Drawing>>,
     /// Its autosave file, once written (or adopted).
     file: Option<String>,
     /// When a change not yet autosaved was first seen (seconds).
@@ -150,8 +153,9 @@ impl Autosaver {
     /// Recovery, whose current state it holds): later autosaves overwrite it, and it is deleted
     /// once the drawing is saved or closed.
     pub fn adopt(&mut self, s: &Session, uid: u64, path: &str) {
-        let written = s.docs.iter().find(|d| d.uid == uid).map(|d| Arc::downgrade(&d.doc));
-        self.docs.insert(uid, Tracked { written, file: Some(path.to_string()), since: None });
+        let st = s.docs.iter().find(|d| d.uid == uid);
+        let (written, host) = (st.map(|d| Arc::downgrade(&d.doc)), st.map(|d| Arc::downgrade(d.drawing())));
+        self.docs.insert(uid, Tracked { written, host, file: Some(path.to_string()), since: None });
     }
 
     /// The autosave files this app has written or adopted.
@@ -194,7 +198,8 @@ impl Autosaver {
                 *t = Tracked::default();
                 continue;
             }
-            let changed = t.written.as_ref().is_none_or(|w| !std::ptr::eq(w.as_ptr(), Arc::as_ptr(&st.doc)));
+            let same = |w: &Option<Weak<Drawing>>, d: &Arc<Drawing>| w.as_ref().is_some_and(|w| std::ptr::eq(w.as_ptr(), Arc::as_ptr(d)));
+            let changed = !same(&t.written, &st.doc) || !same(&t.host, st.drawing());
             if !changed {
                 t.since = None;
                 continue;
@@ -209,8 +214,10 @@ impl Autosaver {
                 .unwrap_or_else(|| std::path::Path::new(dir).join(file_name(&st.title, &self.instance, st.uid)).to_string_lossy().to_string());
             t.file = Some(path.clone());
             t.written = Some(Arc::downgrade(&st.doc));
+            t.host = Some(Arc::downgrade(st.drawing()));
             t.since = None;
-            jobs.push(Job::Write { uid: st.uid, path, doc: st.doc.clone() });
+            // In the Block Editor: the drawing with the editor's unsaved changes in the block.
+            jobs.push(Job::Write { uid: st.uid, path, doc: st.recovery_drawing() });
         }
         jobs
     }

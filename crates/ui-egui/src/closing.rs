@@ -111,7 +111,10 @@ impl CadApp {
                 if self.session.active != i {
                     let _ = self.run("document.switch", json!({ "index": i }));
                 }
-                let r = self.run("qsave", Value::Null);
+                // The Block Editor's unsaved changes go into the block first (BSAVE), then the
+                // drawing is saved with them.
+                let r = if self.session.state().is_ok_and(|st| st.block_unsaved()) { self.run("bsave", json!({})) } else { Ok(Value::Null) };
+                let r = r.and_then(|_| self.run("qsave", Value::Null));
                 let saved = r.is_ok() && self.doc_index(uid).and_then(|i| self.session.docs.get(i)).is_some_and(|d| !d.is_dirty());
                 match (saved, self.doc_index(uid)) {
                     (true, Some(i)) => {
@@ -303,6 +306,23 @@ mod tests {
         assert!(app.closing.is_none());
         assert_eq!(titles(&app), ["A"]);
         assert!(app.session.docs[0].is_dirty());
+    }
+
+    #[test]
+    fn save_on_close_puts_the_block_editor_changes_into_the_block_first() {
+        let mut app = app_with(&["A"]);
+        let l = app.session.execute("line", &json!({ "points": [[0, 0], [1, 0]] })).unwrap()["handles"][0].clone();
+        app.session.execute("block", &json!({ "name": "B", "base": [0, 0], "handles": [l] })).unwrap();
+        app.session.execute("bedit", &json!({ "name": "B" })).unwrap();
+        app.session.execute("line", &json!({ "points": [[0, 0], [0, 1]] })).unwrap();
+        assert!(app.session.docs[0].block_unsaved());
+        app.request_close(None);
+        assert_eq!(app.close_prompt(), Some("A"));
+        app.answer_close(Choice::Save);
+        // The untitled drawing can't be saved here, so it stays open, but the block has the change.
+        let st = &app.session.docs[0];
+        assert!(!st.block_unsaved());
+        assert_eq!(st.drawing().block("B").unwrap().entities.len(), 2);
     }
 
     #[test]

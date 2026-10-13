@@ -1288,3 +1288,8 @@
 	Set Dynamic Property	Задати динамічну властивість
 	Dynamic Block Grips	Ручки динамічного блока
 	Drag Dynamic Grip	Перетягнути ручку динамічного блока
+# Block Editor (BEDIT).
+	Save Block	Зберегти блок
+	Save Block As	Зберегти блок як
+	Close Block Editor	Закрити редактор блоків
+	Unsaved changes	Незбережені зміни

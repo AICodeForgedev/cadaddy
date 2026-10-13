@@ -97,6 +97,10 @@ pub fn entries(app: &CadApp) -> Vec<Vec<Entry>> {
         .collect();
     first.extend(sub("Recent Commands", recent));
     push(&mut groups, first);
+    // In the Block Editor: save the block or go back to the drawing.
+    if app.session.state().is_ok_and(|st| st.block_edit.is_some()) {
+        push(&mut groups, items(app, &["bsave", "bsaveas", "bclose"]));
+    }
     let mut clip: Vec<Entry> = sub("Clipboard", items(app, CLIPBOARD)).into_iter().collect();
     clip.extend(sub("Isolate", items(app, ISOLATE)));
     push(&mut groups, clip);
