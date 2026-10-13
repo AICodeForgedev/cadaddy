@@ -172,14 +172,20 @@ impl DocState {
     }
 
     /// Open the Block Editor on block `name` (BEDIT).
-    pub fn open_block_editor(&mut self, name: &str) -> Result<()> {
+    /// With `create`, a name no block has yet starts a new, empty block, which BSAVE creates.
+    pub fn open_block_editor(&mut self, name: &str, create: bool) -> Result<()> {
         if let Some(open) = self.block_editor() {
             return Err(EngineError::Other(format!("The Block Editor is already open on \"{open}\"; close it first (BCLOSE).")));
         }
-        if let Some(why) = refusal(&self.doc, name) {
-            return Err(EngineError::Other(why));
-        }
-        let block = self.doc.block(name).cloned().ok_or_else(|| EngineError::Other(format!("Block \"{name}\" not found.")))?;
+        let block = match self.doc.block(name) {
+            None if create => Arc::new(cadcraft_doc::Block::new(name)),
+            _ => {
+                if let Some(why) = refusal(&self.doc, name) {
+                    return Err(EngineError::Other(why));
+                }
+                self.doc.block(name).cloned().ok_or_else(|| EngineError::Other(format!("Block \"{name}\" not found.")))?
+            }
+        };
         let base = block.base.xy();
         let mut d = (*self.doc).clone();
         d.model = if base == Vec2::ZERO { block.entities.clone() } else { moved(&block.entities, &Mat3::translate(-base)) };

@@ -16,7 +16,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bedit", "Block Editor", run_bedit)
             .menu(&["Tools", "Block Editor"])
             .alias(&["be", "-bedit"])
-            .params("{name? | handle? (a block reference: edits its block); default the one selected block reference} → {block}")
+            .params("{name? | handle? (a block reference: edits its block); default the one selected block reference, create?: bool (a name no block has yet starts a new block; BSAVE creates it)} → {block, new}")
             .enabled(not_editing)
             .noundo()
             .interactive(|_| Ok(Box::new(BeditM))),
@@ -105,18 +105,23 @@ fn has_dynamic_data(d: &Drawing, name: &str) -> bool {
 }
 
 /// Open the Block Editor on block `name` and frame its objects.
-fn open(s: &mut Session, name: &str) -> Result<Value> {
-    s.state_mut()?.open_block_editor(name)?;
+fn open(s: &mut Session, name: &str, create: bool) -> Result<Value> {
+    let new = create && s.doc()?.block(name).is_none();
+    s.state_mut()?.open_block_editor(name, create)?;
     let name = s.state()?.block_editor().unwrap_or(name).to_string();
     // The block's objects with room around them (and the editor's bar above them).
     s.zoom_extents()?;
     let c = s.state()?.view().center;
     s.zoom_about(0.75, c)?;
-    s.echo(format!("Block Editor: editing \"{name}\". BSAVE saves it into the drawing; BCLOSE closes the editor."));
+    s.echo(if new {
+        format!("Block Editor: new block \"{name}\". BSAVE creates it in the drawing; BCLOSE closes the editor.")
+    } else {
+        format!("Block Editor: editing \"{name}\". BSAVE saves it into the drawing; BCLOSE closes the editor.")
+    });
     if s.state().is_ok_and(|st| st.block_edit.as_ref().is_some_and(|be| has_dynamic_data(&be.host.doc, &be.name))) {
         s.echo("This is a dynamic block: its parameters and actions are kept but can't be edited in CADCraft yet.");
     }
-    Ok(json!({ "block": name }))
+    Ok(json!({ "block": name, "new": new }))
 }
 
 /// The one block reference selected, if exactly one is.
@@ -138,7 +143,12 @@ fn run_bedit(s: &mut Session, p: &Value) -> Result<Value> {
         }
         (None, None) => selected_reference(s).ok_or_else(|| bad("bedit", "`name` or `handle` is required (or select one block reference)"))?,
     };
-    open(s, &name)
+    let create = bool_or(p, "create", false);
+    let name = name.trim();
+    if create && s.doc()?.block(name).is_none() && !super::valid_block_name(name) {
+        return Err(bad("bedit", format!("\"{name}\" is not a valid block name")));
+    }
+    open(s, name, create)
 }
 
 fn run_bsave(s: &mut Session, _p: &Value) -> Result<Value> {
@@ -199,7 +209,7 @@ impl Interactive for BeditM {
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
         match selected_reference(s) {
-            Some(name) => open(s, &name).map(|_| Step::Done),
+            Some(name) => open(s, &name, false).map(|_| Step::Done),
             None => Ok(Step::Continue),
         }
     }
@@ -216,14 +226,14 @@ impl Interactive for BeditM {
                 s.echo(if names.is_empty() { "No blocks to edit.".to_string() } else { names.join(", ") });
                 Ok(Step::Continue)
             }
-            Input::Text(t) | Input::Keyword(t) => open(s, t.trim()).map(|_| Step::Done),
+            Input::Text(t) | Input::Keyword(t) => open(s, t.trim(), false).map(|_| Step::Done),
             Input::Pick(hs) => {
                 let name = {
                     let d = s.doc()?;
                     hs.iter().find_map(|h| block_of(d, *h))
                 };
                 match name {
-                    Some(n) => open(s, &n).map(|_| Step::Done),
+                    Some(n) => open(s, &n, false).map(|_| Step::Done),
                     None => Err(EngineError::Other("Select a block reference.".into())),
                 }
             }

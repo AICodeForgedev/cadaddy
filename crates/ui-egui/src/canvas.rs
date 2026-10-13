@@ -616,7 +616,7 @@ fn clip_infinite(xf: &Xf, base: Vec2, dir: Vec2, ray: bool) -> Option<[Pos2; 2]>
 }
 
 /// Draw a display list. `highlight`: draw these handles brighter (hover) or dashed (selected).
-fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay: bool) {
+pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay: bool) {
     let vis = xf.world_bounds();
     let mut shapes: Vec<Shape> = Vec::with_capacity(list.prims.len());
     let px = 1.0 / xf.scale;

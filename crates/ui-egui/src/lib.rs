@@ -10,6 +10,7 @@
 
 pub mod animation;
 pub mod autosave;
+pub mod bedit;
 pub mod canvas;
 pub mod chrome;
 pub mod clipboard;
@@ -239,6 +240,8 @@ pub struct CadApp {
     pub gpu_notice: Option<autosave::GpuNotice>,
     /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
+    /// The Edit Block Definition dialog ([`bedit`]).
+    pub bedit: bedit::State,
 }
 
 impl CadApp {
@@ -276,6 +279,7 @@ impl CadApp {
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
             hatch_dlg: None,
+            bedit: bedit::State::default(),
         }
     }
 
