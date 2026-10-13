@@ -1283,3 +1283,5 @@
 	Sheet Books to PDF...	Книги аркушів у PDF...
 	Not a number or distance: {text}	Не число й не відстань: {text}
 	Dynamic Block Data	Дані динамічного блока
+	Custom	Користувацькі
+	Dynamic Block Reference	Посилання на динамічний блок

@@ -87,3 +87,24 @@ fn blocks_without_dynamic_data_and_bad_names() {
         assert!(s.execute("blocks.dynamic", &p).is_err(), "{p}");
     }
 }
+
+#[test]
+fn a_reference_to_a_dynamic_block_reports_its_custom_properties() {
+    let mut s = session();
+    // BLOCK made the line a reference to Door, which has Door's own values.
+    let insert = s.doc().unwrap().model.handles()[0].hex();
+    let r = s.execute("blocks.reference", &json!({ "handle": insert })).unwrap();
+    assert_eq!(r["definition"], "Door");
+    assert_eq!(r["values"], json!({}));
+    assert_eq!(r["properties"], json!([{ "name": "Visibility1", "value": "Open", "choices": ["Open", "Closed"] }]));
+
+    // A plain block's reference, objects that aren't references and bad parameters.
+    let l = s.execute("line", &json!({ "points": [[0, 0], [1, 1]] })).unwrap()["handles"][0].clone();
+    let plain = s.execute("block", &json!({ "name": "Window", "base": [0, 0], "handles": [l.clone()] })).unwrap()["insert"].clone();
+    assert_eq!(s.execute("blocks.reference", &json!({ "handle": plain })).unwrap(), json!(null));
+    let l = s.execute("line", &json!({ "points": [[0, 0], [2, 2]] })).unwrap()["handles"][0].clone();
+    assert!(s.execute("blocks.reference", &json!({ "handle": l })).is_err());
+    for p in [json!({}), json!({ "handle": "zz" }), json!({ "handle": "FFFFFF" }), json!(null)] {
+        assert!(s.execute("blocks.reference", &p).is_err(), "{p}");
+    }
+}

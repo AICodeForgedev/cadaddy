@@ -530,3 +530,123 @@ fn damaged_dynamic_block_data_is_skipped_not_trusted() {
     }
     assert!(dynamic_block(&d, "Door").is_none(), "no graph handle");
 }
+
+/// The fixture with references to Door: one with Door's own values (handle 80), and two to
+/// anonymous blocks with values of their own, as another program leaves them: 81 (scale 2,
+/// Closed, Width 30, so Size is Narrow) and 82 (Width 33, which no Size row has).
+fn with_references() -> String {
+    let record =
+        |h: &str, name: &str| format!("0 BLOCK_RECORD\n5 {h}\n330 1\n100 AcDbSymbolTableRecord\n100 AcDbBlockTableRecord\n2 {name}\n340 0\n70 0\n");
+    let block = |h: &str, rec: &str, name: &str| {
+        format!(
+            "0 BLOCK\n5 {h}\n330 {rec}\n100 AcDbEntity\n8 0\n100 AcDbBlockBegin\n2 {name}\n70 1\n10 0\n20 0\n30 0\n3 {name}\n1\n0 LINE\n5 {h}1\n330 {rec}\n100 AcDbEntity\n8 0\n100 AcDbLine\n10 0\n20 0\n30 0\n11 30\n21 0\n31 0\n0 ENDBLK\n5 {h}2\n330 {rec}\n100 AcDbEntity\n8 0\n100 AcDbBlockEnd\n"
+        )
+    };
+    let insert = |h: &str, block: &str, xdict: Option<&str>, scale: f64| {
+        let x = xdict.map(|x| format!("102 {{ACAD_XDICTIONARY\n360 {x}\n102 }}\n")).unwrap_or_default();
+        format!(
+            "0 INSERT\n5 {h}\n{x}330 1F\n100 AcDbEntity\n8 0\n100 AcDbBlockReference\n2 {block}\n10 100\n20 0\n30 0\n41 {scale}\n42 {scale}\n43 {scale}\n"
+        )
+    };
+    let dict = |h: &str, owner: &str, entries: &[(&str, &str)]| {
+        let e: String = entries.iter().map(|(k, v)| format!("3 {k}\n360 {v}\n")).collect();
+        format!("0 DICTIONARY\n5 {h}\n330 {owner}\n100 AcDbDictionary\n280 1\n281 1\n{e}")
+    };
+    let xrecord =
+        |h: &str, owner: &str, body: &str| format!("0 XRECORD\n5 {h}\n330 {owner}\n100 AcDbXrecord\n280 1\n1071 1\n1071 2\n70 25\n70 104\n{body}");
+    // The values of a reference: representation data pointing at Door's record (1D) and one
+    // XRECORD per parameter graph id.
+    let values = |p: &str, owner: &str, vis: &str, width: f64, size: &str| {
+        [
+            dict(&format!("{p}0"), owner, &[("AcDbBlockRepresentation", &format!("{p}1"))]),
+            dict(&format!("{p}1"), &format!("{p}0"), &[("AcDbRepData", &format!("{p}2")), ("AppDataCache", &format!("{p}3"))]),
+            format!("0 ACDB_BLOCKREPRESENTATION_DATA\n5 {p}2\n330 {p}1\n100 AcDbBlockRepresentationData\n70 1\n340 1D\n"),
+            dict(&format!("{p}3"), &format!("{p}1"), &[("ACAD_ENHANCEDBLOCKDATA", &format!("{p}4"))]),
+            dict(
+                &format!("{p}4"),
+                &format!("{p}3"),
+                &[("1", &format!("{p}5")), ("2", &format!("{p}6")), ("3", &format!("{p}7")), ("4", &format!("{p}8"))],
+            ),
+            xrecord(&format!("{p}5"), &format!("{p}4"), &format!("10 18\n20 40\n30 0\n1 {vis}\n")),
+            xrecord(&format!("{p}6"), &format!("{p}4"), &format!("10 0\n20 -4\n30 0\n10 {width}\n20 -4\n30 0\n10 0\n20 0\n30 -1\n")),
+            xrecord(&format!("{p}7"), &format!("{p}4"), "40 0\n"),
+            xrecord(&format!("{p}8"), &format!("{p}4"), &format!("10 -6\n20 40\n30 0\n1 {size}\n")),
+        ]
+        .concat()
+    };
+    let src = dxf(FIXTURE);
+    let lines = |s: String| dxf(&s);
+    src.replace("0\nENDTAB\n", &format!("{}0\nENDTAB\n", lines(record("A1", "*U1") + &record("B1", "*U2"))))
+        .replace(
+            "0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nENDSEC\n",
+            &lines(
+                block("A2", "A1", "*U1")
+                    + &block("B2", "B1", "*U2")
+                    + "0 ENDSEC\n0 SECTION\n2 ENTITIES\n"
+                    + &insert("80", "Door", None, 1.0)
+                    + &insert("81", "*U1", Some("C0"), 2.0)
+                    + &insert("82", "*U2", Some("D0"), 1.0)
+                    + "0 ENDSEC\n",
+            ),
+        )
+        .replace(
+            "0\nENDSEC\n0\nEOF\n",
+            &format!("{}0\nENDSEC\n0\nEOF\n", lines(values("C", "81", "Closed", 30.0, "Narrow") + &values("D", "82", "Open", 33.0, "Narrow"))),
+        )
+}
+
+fn props(d: &cadcraft_doc::Drawing, h: &str) -> (String, Vec<(String, String, Vec<String>)>) {
+    let (name, ps) = cadcraft_doc::dynblock::custom_properties(d, Handle::parse_hex(h).unwrap()).unwrap();
+    (name, ps.into_iter().map(|p| (p.name, p.value, p.choices)).collect())
+}
+
+#[test]
+fn dynamic_block_references_show_their_values() {
+    let d = read_dxf(with_references().as_bytes()).unwrap();
+    assert_eq!(d.model.len(), 3, "the three references were read");
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+
+    // Door's own values.
+    let (name, p) = props(&d, "80");
+    assert_eq!(name, "Door");
+    assert_eq!(
+        p,
+        [
+            ("Visibility1".into(), "Open".into(), s(&["Open", "Closed"])),
+            ("Width".into(), "36.0000".into(), s(&["30.0000", "32.0000", "36.0000"])),
+            ("Size".into(), "Wide".into(), s(&["Narrow", "Wide"])),
+        ]
+    );
+
+    // An anonymous block with values of its own, scaled 2: lengths in drawing units.
+    let r = cadcraft_doc::dynblock::reference(&d, h("81")).unwrap();
+    assert_eq!(r.definition, "Door");
+    assert_eq!(r.values.len(), 3, "the action's record has no value");
+    let (name, p) = props(&d, "81");
+    assert_eq!(name, "Door");
+    assert_eq!(
+        p,
+        [
+            ("Visibility1".into(), "Closed".into(), s(&["Open", "Closed"])),
+            ("Width".into(), "60.0000".into(), s(&["60.0000", "64.0000", "72.0000"])),
+            ("Size".into(), "Narrow".into(), s(&["Narrow", "Wide"])),
+        ]
+    );
+
+    // A width no Size row has: the lookup shows its "no match" name, whatever was stored.
+    let (_, p) = props(&d, "82");
+    assert_eq!(p[2], ("Size".into(), "Custom".into(), s(&["Narrow", "Wide"])));
+
+    // Other references and objects aren't dynamic block references.
+    assert!(cadcraft_doc::dynblock::reference(&d, h("30")).is_none(), "a line in the block");
+    assert!(cadcraft_doc::dynblock::reference(&d, h("FFFF")).is_none());
+}
+
+#[test]
+fn dynamic_block_references_survive_a_save() {
+    let d = read_dxf(with_references().as_bytes()).unwrap();
+    let again = read_dxf(write_dxf(&d).as_bytes()).unwrap();
+    for hx in ["80", "81", "82"] {
+        assert_eq!(props(&again, hx), props(&d, hx), "{hx}");
+    }
+}

@@ -47,6 +47,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{name (a block, or \"*Model_Space\" for a drawing that is a dynamic block's own)} → {parameters, actions, other} | null (not a dynamic block)")
             .enabled(has_doc)
             .noundo(),
+        CommandSpec::new("blocks.reference", "Dynamic Block Reference", run_reference)
+            .params("{handle (a block reference)} → {definition, values (by parameter graph id), properties: [{name, value, choices}]} | null (not a dynamic block reference)")
+            .enabled(has_doc)
+            .noundo(),
         CommandSpec::new("purge", "Purge", purge::run)
             .alias(&["pu", "-purge"])
             .params("{type?: all|blocks|dimstyles|groups|layers|linetypes|mleaderstyles|tablestyles|textstyles|zerolength|emptytext (default all: every named type), names?: \"A*,B\" (default *)} → purged")
@@ -346,6 +350,22 @@ fn run_dynamic(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("blocks.dynamic", format!("no block `{name}`")));
     }
     serde_json::to_value(cadcraft_doc::dynblock::dynamic_block(d, name)).map_err(|e| bad("blocks.dynamic", e.to_string()))
+}
+
+/// The dynamic block a block reference shows, the values it was given and its custom properties
+/// (null for any other reference).
+fn run_reference(s: &mut Session, p: &Value) -> Result<Value> {
+    let h = super::curves::handle_param(p, "handle").ok_or_else(|| bad("blocks.reference", "`handle` is required"))?;
+    let d = s.doc()?;
+    match d.entity(h).map(|e| &e.kind) {
+        Some(EntityKind::Insert(_)) => {}
+        Some(_) => return Err(bad("blocks.reference", "`handle` is not a block reference")),
+        None => return Err(bad("blocks.reference", format!("no object {}", h.hex()))),
+    }
+    let (Some(r), Some((_, properties))) = (cadcraft_doc::dynblock::reference(d, h), cadcraft_doc::dynblock::custom_properties(d, h)) else {
+        return Ok(Value::Null);
+    };
+    Ok(json!({ "definition": r.definition, "values": r.values, "properties": properties }))
 }
 
 // ---------------- interactive ----------------

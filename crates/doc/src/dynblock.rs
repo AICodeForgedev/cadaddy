@@ -19,6 +19,9 @@ use serde::Serialize;
 use crate::foreign::ForeignObject;
 use crate::{Drawing, Handle, RawTag};
 
+mod reference;
+pub use reference::{CustomProperty, Reference, Value, custom_properties, reference};
+
 /// Most objects one evaluation graph is read with.
 const MAX_NODES: usize = 10_000;
 
