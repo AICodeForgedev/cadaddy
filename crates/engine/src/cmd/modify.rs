@@ -1414,6 +1414,9 @@ fn run_explode(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Break `h` between two points (or at one point when p1 == p2).
 pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Result<Vec<Handle>> {
+    if super::curves::is_locked(s, h) {
+        return Err(EngineError::Other("The object is on a locked layer.".into()));
+    }
     let e = s.doc()?.entity(h).map(|e| (**e).clone()).ok_or_else(|| EngineError::Other("no such object".into()))?;
     let pieces: Vec<EntityKind> = match &e.kind {
         EntityKind::Line(l) => {
@@ -1522,6 +1525,9 @@ fn run_breakat(s: &mut Session, p: &Value) -> Result<Value> {
 pub(crate) fn join(s: &mut Session, hs: &[Handle]) -> Result<Option<Handle>> {
     if let Some(h) = super::modify2::join_curves(s, hs)? {
         return Ok(Some(h));
+    }
+    if hs.iter().any(|h| super::curves::is_locked(s, *h)) {
+        return Err(EngineError::Other("An object is on a locked layer.".into()));
     }
     let d = s.doc()?;
     let mut segs: Vec<Segment> = Vec::new();
