@@ -56,18 +56,10 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<(Sheet, cadcraft_
     Ok((Sheet::from_page(&page, paper::paper_unit_mm(d)), page))
 }
 
-/// Paper units per drawing unit fitting `b` into the printable area (or the `scale` option).
+/// Paper units per drawing unit fitting `b` into the printable area; with `fit: false`, the
+/// `scale` option or 1:1, as PDF plots it.
 fn fit_scale(b: &Bounds2, sheet: &Sheet, o: &PdfOptions) -> f64 {
-    if let Some(s) = o.scale.filter(|s| s.is_finite() && *s > 0.0)
-        && o.fit == Some(false)
-    {
-        return s;
-    }
-    if b.is_empty() {
-        return 1.0;
-    }
-    let s = (sheet.printable.width() / b.width().max(1e-12)).min(sheet.printable.height() / b.height().max(1e-12));
-    if s.is_finite() && s > 0.0 { s } else { 1.0 }
+    pdf::plot_scale(b, sheet, o.fit != Some(false), o.scale)
 }
 
 fn png(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {

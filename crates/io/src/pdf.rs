@@ -507,7 +507,7 @@ fn links(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Bounds2, link
 }
 
 /// Paper units per drawing unit for a plot.
-fn plot_scale(b: &Bounds2, sheet: &Sheet, fit: bool, scale: Option<f64>) -> f64 {
+pub(crate) fn plot_scale(b: &Bounds2, sheet: &Sheet, fit: bool, scale: Option<f64>) -> f64 {
     if let Some(s) = scale.filter(|s| s.is_finite() && *s > 0.0)
         && !fit
     {
