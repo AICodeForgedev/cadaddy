@@ -306,7 +306,8 @@ pub fn mono() -> FontId {
 /// then CJK fonts after the Latin ones, so Latin text keeps its look, in every interface
 /// language: file, layout and layer names can be Japanese or Chinese whatever the interface
 /// shows (#513). In a Chinese interface (`language` "zh…") the Chinese font comes first, else a
-/// Japanese one, so names take their own glyph forms. A font embedded from craft-fonts comes
+/// Japanese one, so names take their own glyph forms; in an Arabic interface an installed
+/// Arabic font follows. A font embedded from craft-fonts comes
 /// last, for systems without any (and the web build, which has no system fonts). A Korean
 /// interface adds a Hangul font only when the CJK font found doesn't cover Hangul
 /// ([`korean_font`]).
@@ -351,6 +352,13 @@ pub fn install_fonts(ctx: &egui::Context, language: &str) {
                 .enumerate()
                 .map(|(i, bytes)| (format!("system-cjk-{i}"), std::sync::Arc::new(egui::FontData::from_owned(bytes)))),
         );
+        // العربية: an installed Arabic face after the Latin ones (egui's bundled faces carry no
+        // Arabic glyphs), for the Arabic interface.
+        if language == "ar"
+            && let Some(bytes) = arabic_font().and_then(|p| read_capped(p, MAX_UI_FONT_BYTES))
+        {
+            added.push(("system-arabic".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes))));
+        }
     }
     let mut embedded: Vec<_> = cadcraft_fonts::CRAFT_FONTS
         .iter()
@@ -419,6 +427,49 @@ pub fn cjk_font() -> Option<&'static std::path::Path> {
                         "/usr/share/fonts/wqy-microhei/wqy-microhei.ttc",
                         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
                         "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+                    ]
+                };
+                candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
+            })
+            .as_deref()
+    }
+    #[cfg(target_arch = "wasm32")]
+    None
+}
+
+/// An installed font with Arabic glyphs, for the العربية interface; fonts are never bundled
+/// (only looked for where the OS or common packages put them). Checked once.
+pub fn arabic_font() -> Option<&'static std::path::Path> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static FOUND: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+        FOUND
+            .get_or_init(|| {
+                let candidates: &[&str] = if cfg!(target_os = "macos") {
+                    &[
+                        "/System/Library/Fonts/GeezaPro.ttc",
+                        "/System/Library/Fonts/Supplemental/Geeza Pro.ttf",
+                        "/System/Library/Fonts/Supplemental/Al Nile.ttc",
+                        "/System/Library/Fonts/Supplemental/Baghdad.ttf",
+                    ]
+                } else if cfg!(windows) {
+                    &[
+                        "C:\\Windows\\Fonts\\segoeui.ttf",
+                        "C:\\Windows\\Fonts\\tahoma.ttf",
+                        "C:\\Windows\\Fonts\\trado.ttf",
+                        "C:\\Windows\\Fonts\\arabtype.ttf",
+                        "C:\\Windows\\Fonts\\arial.ttf",
+                    ]
+                } else {
+                    &[
+                        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+                        "/usr/share/fonts/noto/NotoSansArabic-Regular.ttf",
+                        "/usr/share/fonts/opentype/noto/NotoSansArabic-Regular.ttf",
+                        "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
+                        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+                        "/usr/share/fonts/truetype/amiri/Amiri-Regular.ttf",
+                        "/usr/share/fonts/truetype/kacst/KacstOne.ttf",
                     ]
                 };
                 candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
@@ -566,10 +617,11 @@ pub fn shows_hangul(language: &str) -> bool {
 }
 
 /// Whether the interface can show `language` without missing-glyph boxes: Chinese needs an
-/// installed CJK font, Korean a font with Hangul.
+/// installed CJK font, Korean a font with Hangul, العربية an installed Arabic font.
 pub fn can_show(language: &str) -> bool {
     match language {
         "ko" => shows_hangul("ko"),
+        "ar" => arabic_font().is_some(),
         l if l.starts_with("zh") => cjk_font().is_some(),
         _ => true,
     }
