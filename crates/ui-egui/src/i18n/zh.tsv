@@ -1017,9 +1017,7 @@
 	Calibrate	校准
 	Move sideways to pan; push/pull or twist to zoom.	向侧面移动以平移；推拉或扭转以缩放。
 	Left device button: zoom extents. Right device button: calibrate.	左侧设备按钮：范围缩放。右侧设备按钮：校准。
-	Left device button: zoom extents. Right device button: calibrate.	左侧设备按钮：范围缩放。右侧设备按钮：校准。
 	Not a number or distance: {text}	不是数字或距离：{text}
-	Left device button: zoom extents. Right device button: calibrate.	左侧设备按钮：范围缩放。右侧设备按钮：校准。
 	Plotter Manager...	绘图仪管理器...
 	Import...	导入...
 	Export...	导出...
