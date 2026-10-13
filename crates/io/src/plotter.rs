@@ -84,7 +84,8 @@ fn png(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     let est = if fit { fit_scale(&window.unwrap_or_else(|| d.extents(space)), &sheet, &o) } else { 1.0 };
     // Chord tolerance: a fifth of a pixel.
     let tolerance = (0.2 / (k * est)).max(1e-9);
-    let ropts = cadcraft_render::Options { tolerance, lineweights, plot_style_table: table, ..cadcraft_render::Options::default() };
+    let transparency = o.plot_transparency.unwrap_or(page.plot_transparency);
+    let ropts = cadcraft_render::Options { tolerance, lineweights, plot_style_table: table, transparency, ..cadcraft_render::Options::default() };
     let mut list = cadcraft_render::build_plot(d, space, &ropts);
     let half = Vec2::new(f64::from(width), f64::from(height)) / (2.0 * k);
     let b = window.unwrap_or(list.bounds);
@@ -108,8 +109,9 @@ fn png(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
 fn svg(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     let o = PdfOptions::from_json(opts);
     let Space::Model = space else {
-        let window = sheet(d, space, &o)?.0.bounds();
-        return Ok(crate::svg::export_window(d, space, Some(window)).into_bytes());
+        let (sheet, page) = sheet(d, space, &o)?;
+        let transparency = o.plot_transparency.unwrap_or(page.plot_transparency);
+        return Ok(crate::svg::export_window_with(d, space, Some(sheet.bounds()), transparency).into_bytes());
     };
     // Model space as plotted: the plot style table, lineweights, and the table's ends, joins and
     // fills at the scale that fits the window (or the extents) on the device's paper.
@@ -121,7 +123,8 @@ fn svg(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     // Chord tolerance: about 0.05 mm on paper.
     let tolerance = (0.05 / (sheet.unit_mm * est)).max(1e-9);
     let tolerance = if tolerance.is_finite() { tolerance } else { cadcraft_render::Options::default().tolerance };
-    let ropts = cadcraft_render::Options { tolerance, lineweights, plot_style_table: table, ..cadcraft_render::Options::default() };
+    let transparency = o.plot_transparency.unwrap_or(page.plot_transparency);
+    let ropts = cadcraft_render::Options { tolerance, lineweights, plot_style_table: table, transparency, ..cadcraft_render::Options::default() };
     let mut list = cadcraft_render::build_plot(d, space, &ropts);
     let s = fit_scale(&window.unwrap_or(list.bounds), &sheet, &o);
     cadcraft_render::pen::apply(&mut list, s * sheet.unit_mm);

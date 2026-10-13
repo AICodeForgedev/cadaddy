@@ -747,6 +747,9 @@ pub struct PageSetup {
     /// Draw the layout on screen (and in its PNG/SVG exports) with its plot style table
     /// applied ("Display plot styles"; DXF plot layout flag 2).
     pub show_plot_styles: bool,
+    /// Plot objects with their transparency ("Plot transparency"; PLOTTRANSPARENCYOVERRIDE can
+    /// override it). The DXF plot layout flags have no bit for it, so it is not saved in DXF.
+    pub plot_transparency: bool,
 }
 
 impl Default for PageSetup {
@@ -765,6 +768,7 @@ impl Default for PageSetup {
             center: false,
             lineweights: true,
             show_plot_styles: false,
+            plot_transparency: false,
         }
     }
 }

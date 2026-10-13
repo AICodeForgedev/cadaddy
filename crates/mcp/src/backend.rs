@@ -306,7 +306,7 @@ impl Backend for Headless {
                 let h = p.get("height").and_then(Value::as_f64).unwrap_or(1000.0).clamp(16.0, 8192.0) as u32;
                 let st = s.state().map_err(|e| e.to_string())?;
                 let window = render_window(&p);
-                let opts = cadcraft_render::Options { view: window, ..Default::default() };
+                let opts = cadcraft_render::Options { view: window, transparency: s.settings.transparency_display, ..Default::default() };
                 let list = cadcraft_render::build(&st.doc, &st.space, &opts);
                 let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(true);
                 let side = |k: &str| p.get(k).and_then(Value::as_f64).map(|x| x as u32);

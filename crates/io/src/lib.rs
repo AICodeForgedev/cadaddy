@@ -163,9 +163,10 @@ pub fn png(d: &Drawing, space: &Space, width: u32, height: u32) -> Result<Vec<u8
 }
 
 /// Render a space to PNG showing `window` (centred, fitted without margin), or fitted to its
-/// extents (5% margin) when `window` is `None`.
+/// extents (5% margin) when `window` is `None`. Objects are drawn with their transparency, as on
+/// screen.
 pub fn png_framed(d: &Drawing, space: &Space, width: u32, height: u32, window: Option<Bounds2>) -> Result<Vec<u8>> {
-    let list = cadcraft_render::build(d, space, &cadcraft_render::Options::default());
+    let list = cadcraft_render::build(d, space, &cadcraft_render::Options { transparency: true, ..cadcraft_render::Options::default() });
     let view = png_view(&list.bounds, width, height, window);
     cadcraft_render::raster::render_png(&list, &view, &cadcraft_render::raster::RasterOptions::default())
         .ok_or_else(|| IoError::Format("render failed".into()))

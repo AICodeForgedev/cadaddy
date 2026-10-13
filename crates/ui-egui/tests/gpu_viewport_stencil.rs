@@ -19,7 +19,8 @@ const STENCIL: wgpu::TextureFormat = wgpu::TextureFormat::Stencil8;
 fn tris(pts: Vec<Vec2>) -> DisplayList {
     let len = pts.len() as u32;
     let bounds = Bounds2::from_points(pts.iter().copied());
-    let prim = DPrim { handle: Handle(1), color: cadcraft_color::Rgb(0, 0, 0), aci7: false, lw: 0.0, kind: Kind::Tris, start: 0, len };
+    let prim =
+        DPrim { handle: Handle(1), color: cadcraft_color::Rgb(0, 0, 0), aci7: false, lw: 0.0, transparency: 0, kind: Kind::Tris, start: 0, len };
     DisplayList { prims: vec![prim], tris: pts, bounds, ..Default::default() }
 }
 
@@ -146,7 +147,16 @@ fn clipped_viewport_contents_draw_only_inside_their_outline() {
     // The selection highlight inside a clipped viewport stays inside its outline too: a wide
     // line across the whole target at world y 32, masked by the circle.
     let line = DisplayList {
-        prims: vec![DPrim { handle: Handle(1), color: cadcraft_color::Rgb(0, 0, 0), aci7: false, lw: 0.0, kind: Kind::Polyline, start: 0, len: 2 }],
+        prims: vec![DPrim {
+            handle: Handle(1),
+            color: cadcraft_color::Rgb(0, 0, 0),
+            aci7: false,
+            lw: 0.0,
+            transparency: 0,
+            kind: Kind::Polyline,
+            start: 0,
+            len: 2,
+        }],
         verts: vec![Vec2::new(0.0, 32.0), Vec2::new(64.0, 32.0)],
         bounds: Bounds2::new(Vec2::new(0.0, 32.0), Vec2::new(64.0, 32.0)),
         ..Default::default()

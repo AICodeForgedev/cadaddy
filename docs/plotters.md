@@ -111,3 +111,22 @@ In the file name, characters other than letters, digits, spaces and `-_()+,` bec
 Model-space PDF plots don't apply the paper's margins yet. They fit the drawing inside the
 default margins. PNG plots apply them. SVG plots show a layout's whole sheet, or the
 model-space extents.
+
+## Plot transparency
+
+Objects plot with their transparency (their own, their layer's when ByLayer, the block
+reference's when ByBlock) only when asked, as in AutoCAD:
+
+- `pagesetup {layout, plotTransparency: bool}` stores the layout's "Plot transparency" (off by
+  default). The Page Setup Manager and the Plot dialog have the checkbox.
+- `plot {plotTransparency?: bool}` (and `exportpdf`, `preview`) overrides it for one plot.
+  Model-space plots have it off unless asked.
+- `PLOTTRANSPARENCYOVERRIDE` decides first: 0 never plots transparency, 1 (default) uses the
+  setting above, 2 always plots it.
+
+PDF plots write it as alpha (`/ExtGState` with `/ca` and `/CA`), PNG plots blend it, SVG plots use
+`opacity`. A plot without transparency is written exactly as before. The DXF plot layout flags
+have no bit for the option, so it isn't saved in DXF or DWG files.
+
+On screen, `TRANSPARENCYDISPLAY` (on by default; the status bar's Transparency button) shows
+transparency; PNG and SVG exports of a drawing always draw it.

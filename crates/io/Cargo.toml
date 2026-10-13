@@ -21,3 +21,6 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 miniz_oxide = "0.8"
 quick-xml = { workspace = true }
+
+[dev-dependencies]
+tiny-skia = { workspace = true }

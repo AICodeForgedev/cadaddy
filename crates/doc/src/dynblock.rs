@@ -549,9 +549,7 @@ mod tests {
         let n = 20_000;
         let mut tags = vec![tag(93, "0"), tag(92, &n.to_string())];
         tags.extend((0..n).map(|_| tag(94, &n.to_string())));
-        let ParameterKind::Visibility { states, .. } = visibility(Vec3::default(), &tags) else {
-            panic!("a visibility parameter")
-        };
+        let ParameterKind::Visibility { states, .. } = visibility(Vec3::default(), &tags) else { panic!("a visibility parameter") };
         assert!(states.len() <= n && states.iter().all(|s| s.visible.is_empty()));
 
         let mut tags = vec![tag(73, &n.to_string())];

@@ -23,7 +23,8 @@ use cadcraft_render::{DisplayList, Kind};
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::util::DeviceExt;
 
-/// Line/triangle vertex: position (2 × f32, relative to the origin) + sRGB colour (4 × u8).
+/// Line/triangle vertex: position (2 × f32, relative to the origin) + sRGB colour (4 × u8,
+/// premultiplied by its alpha: transparent objects blend with what is under them).
 const VERTEX_SIZE: usize = 12;
 /// Wide-line / point instance: a, b (2 × f32 each) + colour (4 × u8) + width in points (f32) +
 /// length along its polyline before `a`, in world units (f32; dashing).
@@ -149,6 +150,12 @@ pub fn wide_width(lw: f32, lwdisplay: bool) -> Option<f32> {
     (w > 1.0).then_some(w)
 }
 
+/// `c` with alpha `a`, premultiplied (as the pipelines blend).
+fn premultiplied(c: Rgb, a: u8) -> [u8; 4] {
+    let k = |v: u8| u8::try_from((u32::from(v) * u32::from(a) + 127) / 255).unwrap_or(v);
+    [k(c.0), k(c.1), k(c.2), a]
+}
+
 /// Convert a display list into vertex data relative to `origin`, colours resolved against `bg`.
 pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) -> MeshData {
     let mut m = MeshData {
@@ -158,8 +165,7 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
         breaks: Vec::new(),
     };
     for prim in &list.prims {
-        let c = prim.display_rgb(bg);
-        let col = [c.0, c.1, c.2, 255];
+        let col = premultiplied(prim.display_rgb(bg), prim.alpha());
         let pts = list.points(prim);
         match prim.kind {
             Kind::Polyline => match wide_width(prim.lw, lwdisplay) {
@@ -396,11 +402,13 @@ fn px_to_clip(px: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(px.x / view.b.z * 2.0 - 1.0, 1.0 - px.y / view.b.w * 2.0, 0.0, 1.0);
 }
 
+// `c` is premultiplied sRGB; a linear target gets it linearised, still premultiplied.
 fn out_color(c: vec4<f32>) -> vec4<f32> {
     if (view.a.w > 0.5) {
-        let lo = c.rgb / 12.92;
-        let hi = pow((c.rgb + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
-        return vec4<f32>(select(hi, lo, c.rgb <= vec3<f32>(0.04045)), c.a);
+        let s = c.rgb / max(c.a, 0.0001);
+        let lo = s / 12.92;
+        let hi = pow((s + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
+        return vec4<f32>(select(hi, lo, s <= vec3<f32>(0.04045)) * c.a, c.a);
     }
     return c;
 }
@@ -798,7 +806,7 @@ mod tests {
             tris: vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)],
             ..Default::default()
         };
-        let p = |kind, start, len, lw| DPrim { handle: Handle(1), color: Rgb(255, 255, 255), aci7: true, lw, kind, start, len };
+        let p = |kind, start, len, lw| DPrim { handle: Handle(1), color: Rgb(255, 255, 255), aci7: true, lw, transparency: 0, kind, start, len };
         l.prims =
             vec![p(Kind::Polyline, 0, 3, 0.0), p(Kind::Tris, 0, 3, 0.0), p(Kind::Point, 3, 1, 0.0), p(Kind::Infinite { ray: false }, 0, 2, 0.0)];
         for v in l.verts.clone() {
@@ -860,6 +868,25 @@ mod tests {
         assert_eq!(&m.lines[8..12], &[0, 0, 0, 255]);
         let x = f32::from_le_bytes([m.lines[12], m.lines[13], m.lines[14], m.lines[15]]);
         assert_eq!(x, 1.0);
+    }
+
+    #[test]
+    fn transparent_objects_get_premultiplied_alpha() {
+        let mut l = list();
+        for p in &mut l.prims {
+            p.transparency = 50;
+        }
+        // Colour 7 on a black background is white: half of it, premultiplied.
+        let m = build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false);
+        assert_eq!(&m.lines[8..12], &[128, 128, 128, 128]);
+        assert_eq!(&m.tris[8..12], &[128, 128, 128, 128]);
+        // A wipeout's mask stays opaque.
+        if let Some(p) = l.prims.get_mut(1) {
+            p.kind = Kind::Mask;
+        }
+        let m = build_mesh(&l, Vec2::ZERO, Rgb(10, 20, 30), false);
+        assert_eq!(&m.tris[8..12], &[10, 20, 30, 255]);
+        assert_eq!(premultiplied(Rgb(255, 0, 0), 255), [255, 0, 0, 255], "opaque colours are unchanged");
     }
 
     #[test]

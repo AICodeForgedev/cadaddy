@@ -81,7 +81,8 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
     for p in &list.prims {
         let c = p.display_rgb(o.background);
         let mut paint = Paint::default();
-        paint.set_color_rgba8(c.0, c.1, c.2, 255);
+        // A transparent object blends with what is drawn under it.
+        paint.set_color_rgba8(c.0, c.1, c.2, p.alpha());
         paint.anti_alias = o.antialias;
         let pts = list.points(p);
         match p.kind {

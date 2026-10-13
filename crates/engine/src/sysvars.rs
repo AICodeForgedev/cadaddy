@@ -34,6 +34,7 @@ const SESSION_VARS: &[&str] = &[
     "DYNPICOORDS",
     "DYNPROMPT",
     "LWDISPLAY",
+    "PLOTTRANSPARENCYOVERRIDE",
     "SELECTSIMILARMODE",
     "OBJECTISOLATIONMODE",
     "QPMODE",
@@ -100,6 +101,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "DYNPICOORDS" => json!(i32::from(st.dynpi_absolute)),
         "DYNPROMPT" => json!(i32::from(st.dynprompt)),
         "LWDISPLAY" => json!(i32::from(st.lwdisplay)),
+        "PLOTTRANSPARENCYOVERRIDE" => json!(st.plot_transparency_override),
         "SELECTSIMILARMODE" => json!(st.selectsimilarmode),
         // Isolation is temporary: hidden objects show again when the drawing is reopened.
         "OBJECTISOLATIONMODE" => json!(0),
@@ -261,6 +263,9 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "DYNPICOORDS" => st.dynpi_absolute = as_bool(v).ok_or_else(bad)?,
         "DYNPROMPT" => st.dynprompt = as_bool(v).ok_or_else(bad)?,
         "LWDISPLAY" => st.lwdisplay = as_bool(v).ok_or_else(bad)?,
+        "PLOTTRANSPARENCYOVERRIDE" => {
+            st.plot_transparency_override = as_i(v).filter(|i| (0..=2).contains(i)).and_then(|i| u8::try_from(i).ok()).ok_or_else(bad)?
+        }
         "SELECTSIMILARMODE" => st.selectsimilarmode = as_i(v).filter(|b| (0..=255).contains(b)).ok_or_else(bad)? as u32,
         "OBJECTISOLATIONMODE" => match as_i(v) {
             Some(0) => {}

@@ -580,9 +580,10 @@ fn parse_ratio(t: &str) -> Option<f64> {
 }
 
 /// The page-setup rows (device, paper, orientation, plot area, fit, scale, center, lineweights,
-/// plot style table) shared by the Page Setup Manager and the Plot dialog, inside a two-column
-/// grid. Returns the setting the user changed as a `pagesetup` parameter (`device`, `paper`,
-/// `landscape`, `plotArea`, `scaleToFit`, `scale`, `center`, `lineweights` or `plotStyleTable`).
+/// transparency, plot style table) shared by the Page Setup Manager and the Plot dialog, inside a
+/// two-column grid. Returns the setting the user changed as a `pagesetup` parameter (`device`,
+/// `paper`, `landscape`, `plotArea`, `scaleToFit`, `scale`, `center`, `lineweights`,
+/// `plotTransparency` or `plotStyleTable`).
 fn page_rows(
     ui: &mut egui::Ui,
     salt: egui::Id,
@@ -706,6 +707,16 @@ fn page_rows(
         change = Some(("lineweights", json!(lw)));
     }
     ui.end_row();
+    ui.label("");
+    let mut transparency = page.plot_transparency;
+    if ui
+        .checkbox(&mut transparency, "Plot transparency")
+        .on_hover_text("Plot objects with their transparency (PLOTTRANSPARENCYOVERRIDE can override it)")
+        .changed()
+    {
+        change = Some(("plotTransparency", json!(transparency)));
+    }
+    ui.end_row();
     ui.label("Plot style table");
     egui::ComboBox::from_id_salt(salt.with("styles")).selected_text(style_label(page)).width(190.0).show_ui(ui, |ui| {
         if ui.selectable_label(style_label(page) == "None", "None").clicked() && style_label(page) != "None" {
@@ -751,6 +762,7 @@ fn apply_page_change(page: &mut cadcraft_doc::PageSetup, key: &str, v: &Value) {
                 "scaleToFit" => page.scale_to_fit = b,
                 "center" => page.center = b,
                 "lineweights" => page.lineweights = b,
+                "plotTransparency" => page.plot_transparency = b,
                 _ => {}
             }
         }
@@ -832,6 +844,7 @@ fn plot_params(st: &PlotState, preview_dpi: Option<f64>) -> Value {
         "landscape": page.landscape,
         "fit": page.scale_to_fit,
         "lineweights": page.lineweights,
+        "plotTransparency": page.plot_transparency,
     });
     if let Some(o) = p.as_object_mut() {
         let device = device_label(page) != "None";
@@ -920,13 +933,7 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
     set_temp(ctx, PLOT_NOW, false);
     let (mut cancel, mut action, mut pick, mut preview) = (false, None, false, false);
     let center = ctx.content_rect().center();
-    egui::Window::new("Plot")
-        .open(open)
-        .collapsible(false)
-        .resizable(false)
-        .pivot(egui::Align2::CENTER_CENTER)
-        .default_pos(center)
-        .show(ctx, |ui| {
+    egui::Window::new("Plot").open(open).collapsible(false).resizable(false).pivot(egui::Align2::CENTER_CENTER).default_pos(center).show(ctx, |ui| {
         egui::Grid::new("plot_target").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
             ui.label("Layout");
             egui::ComboBox::from_id_salt("plot_layout").selected_text(st.target.as_str()).width(190.0).show_ui(ui, |ui| {
@@ -980,7 +987,14 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                 let page = &st.page;
                 action = Some((
                     "pagesetup",
-                    json!({ "layout": st.target, "paper": page.paper, "landscape": page.landscape, "scaleToFit": page.scale_to_fit, "lineweights": page.lineweights }),
+                    json!({
+                        "layout": st.target,
+                        "paper": page.paper,
+                        "landscape": page.landscape,
+                        "scaleToFit": page.scale_to_fit,
+                        "lineweights": page.lineweights,
+                        "plotTransparency": page.plot_transparency,
+                    }),
                 ));
             }
             preview = ui.button("Preview").on_hover_text("The sheet as these settings plot it").clicked();
@@ -989,7 +1003,7 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                 ok |= ui.button("OK").clicked();
             });
         });
-        });
+    });
     // The output file type follows the device.
     let ext = choices.devices.iter().find(|dv| dv.name.eq_ignore_ascii_case(&st.page.device)).map_or("pdf", |dv| dv.output.as_str());
     set_temp(ctx, "plot_state", st.clone());
@@ -1167,6 +1181,25 @@ mod plot_dialog_tests {
         assert_eq!((p["device"].as_str(), p["paper"].as_str()), (Some("None"), Some(a3)));
         apply_page_change(&mut st.page, "plotStyleTable", &json!("None"));
         assert!(plot_params(&st, None).get("plotStyleTable").is_none());
+    }
+
+    #[test]
+    fn plot_transparency_checkbox_reaches_the_plot() {
+        let mut st = state("Model");
+        assert!(!st.page.plot_transparency, "off by default");
+        assert_eq!(plot_params(&st, None)["plotTransparency"], json!(false));
+        apply_page_change(&mut st.page, "plotTransparency", &json!(true));
+        assert!(st.page.plot_transparency);
+        assert_eq!(plot_params(&st, None)["plotTransparency"], json!(true));
+        // The preview plots it the same way.
+        assert_eq!(plot_params(&st, Some(150.0))["plotTransparency"], json!(true));
+        // Into a layout's page setup and back out to its Plot dialog.
+        let mut s = Session::new();
+        s.execute("pagesetup", &json!({ "layout": "Layout1", "plotTransparency": true })).unwrap();
+        let page = plot_page(s.doc().unwrap(), "Layout1");
+        assert!(page.plot_transparency);
+        apply_page_change(&mut st.page, "plotTransparency", &json!(false));
+        assert_eq!(plot_params(&st, None)["plotTransparency"], json!(false));
     }
 
     #[test]

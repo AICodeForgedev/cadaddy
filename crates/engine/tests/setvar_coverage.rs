@@ -31,7 +31,8 @@ fn defaults_are_the_ones_the_commands_use() {
         ("LWDEFAULT", json!(25)),
         ("DIMASSOC", json!(2)),
         ("CPLOTSTYLE", json!("ByLayer")),
-        ("TRANSPARENCYDISPLAY", json!(0)),
+        ("TRANSPARENCYDISPLAY", json!(1)),
+        ("PLOTTRANSPARENCYOVERRIDE", json!(1)),
     ] {
         assert_eq!(getvar(&mut s, name), v, "{name}");
     }
@@ -56,8 +57,10 @@ fn values_reach_the_commands() {
     // Typed at the command line.
     s.cmdline("setvar hpname net").unwrap();
     assert_eq!(getvar(&mut s, "HPNAME"), json!("NET"));
-    s.cmdline("setvar transparencydisplay 1").unwrap();
-    assert!(s.settings.transparency_display);
+    s.cmdline("setvar transparencydisplay 0").unwrap();
+    assert!(!s.settings.transparency_display);
+    s.cmdline("setvar plottransparencyoverride 2").unwrap();
+    assert_eq!(s.settings.plot_transparency_override, 2);
     assert!(setvar(&mut s, "INSNAME", json!("Valve")));
     assert!(setvar(&mut s, "INSNAME", json!(".")));
     assert_eq!(getvar(&mut s, "INSNAME"), json!(""));
@@ -77,6 +80,10 @@ fn bad_values_and_unknown_names_are_refused() {
         ("CIRCLERAD", json!(-1)),
         ("SPLINESEGS", json!(1e9)),
         ("TRANSPARENCYDISPLAY", json!(5)),
+        ("PLOTTRANSPARENCYOVERRIDE", json!(3)),
+        ("PLOTTRANSPARENCYOVERRIDE", json!(-1)),
+        ("PLOTTRANSPARENCYOVERRIDE", json!("always")),
+        ("PLOTTRANSPARENCYOVERRIDE", json!(1.5)),
         ("CHAMFERD", json!("abc")),
         ("CPLOTSTYLE", json!("Style 1")),
         ("OFFSETDIST", json!(f64::MAX.to_string() + "0")),

@@ -38,7 +38,7 @@ impl Xf {
 #[derive(Default)]
 pub struct CanvasState {
     pub list: Option<DisplayList>,
-    key: (u64, u64, i32, i32, bool, usize, u64),
+    key: (u64, u64, i32, i32, bool, bool, usize, u64),
     /// The area `list` was built for (hatch patterns exist only inside it); a view leaving it
     /// rebuilds the list.
     window: Option<Bounds2>,
@@ -174,8 +174,28 @@ fn prims_of(list: &DisplayList, handles: &[Handle]) -> Vec<usize> {
     list.prims.iter().enumerate().filter(|(_, pr)| set.contains(&pr.handle)).map(|(i, _)| i).collect()
 }
 
+/// Build options for previews at `scale` pixels per drawing unit (opaque).
+fn preview_options(scale: f64) -> cadcraft_render::Options {
+    cadcraft_render::Options { tolerance: 0.5 / scale, min_dash: 2.0 / scale, ..Default::default() }
+}
+
+/// The display list of preview entities the session builds with the current properties
+/// ([`cadcraft_engine::Session::preview`], the extras of [`cadcraft_engine::Session::drag`]): the
+/// command's rubber band and rebuilt copies of existing objects. They carry CLAYER's properties,
+/// not the objects', so they are drawn opaque (the GPU drag of the objects themselves keeps their
+/// transparency, see [`draw_drag_gpu`]).
+fn rebuilt_preview<'a>(doc: &cadcraft_doc::Drawing, ents: impl IntoIterator<Item = &'a cadcraft_doc::Entity>, scale: f64) -> DisplayList {
+    cadcraft_render::build_entities(doc, ents, &preview_options(scale))
+}
+
 fn color32(c: Rgb) -> Color32 {
     Color32::from_rgb(c.0, c.1, c.2)
+}
+
+/// A primitive's colour on `bg`, with its transparency.
+fn prim_color32(prim: &cadcraft_render::DPrim, bg: Rgb) -> Color32 {
+    let c = prim.display_rgb(bg);
+    Color32::from_rgba_unmultiplied(c.0, c.1, c.2, prim.alpha())
 }
 
 /// Rebuild the display list when needed. `px`: drawing units per pixel in the current view;
@@ -204,7 +224,17 @@ fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
         }
         s.finish()
     };
-    let key = (st.uid, st.revision, band(px), lod_band, app.session.settings.lwdisplay, std::sync::Arc::as_ptr(&st.doc) as usize, vp_view);
+    let settings = &app.session.settings;
+    let key = (
+        st.uid,
+        st.revision,
+        band(px),
+        lod_band,
+        settings.lwdisplay,
+        settings.transparency_display,
+        std::sync::Arc::as_ptr(&st.doc) as usize,
+        vp_view,
+    );
     let visible = views.iter().fold(Bounds2::EMPTY, |acc, v| acc.union(&v.0));
     let inside = app.canvas.window.is_none_or(|w| visible.is_empty() || w.contains_box(&visible));
     if app.canvas.list.is_some() && app.canvas.key == key && inside {
@@ -222,6 +252,7 @@ fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
         view_height: st.paper_view().height,
         plot_style_table: None,
         view: build_window(views),
+        transparency: app.session.settings.transparency_display,
         skip_viewport: split,
     };
     let space = st.space.clone();
@@ -263,7 +294,7 @@ struct VpContent {
     list: DisplayList,
     /// What the list was built from: drawing, revision, document, viewport, tessellation band
     /// and lineweight display.
-    key: Option<(u64, u64, usize, Handle, i32, bool)>,
+    key: Option<(u64, u64, usize, Handle, i32, bool, bool)>,
     /// The viewport's view (centre, height) the list was built for, and the paper area it covers.
     view: (Vec2, f64),
     area: Bounds2,
@@ -313,7 +344,7 @@ struct VpFrame {
 
 /// Build or reuse the active viewport's [`VpContent`] for this frame.
 fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Option<VpFrame> {
-    let lwdisplay = app.session.settings.lwdisplay;
+    let (lwdisplay, transparency) = (app.session.settings.lwdisplay, app.session.settings.transparency_display);
     let stencil = stencil_clip(app);
     let c = &mut app.canvas.vp;
     let Some((st, (h, vp, clip))) = app.session.state().ok().and_then(|st| Some((st, split_viewport(st, stencil)?))) else {
@@ -330,7 +361,7 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
     };
     let px = 1.0 / xf_paper.scale.max(1e-300);
     let band = px.max(1e-300).log2().floor() as i32;
-    let key = (st.uid, st.revision, std::sync::Arc::as_ptr(&st.doc) as usize, h, band, lwdisplay);
+    let key = (st.uid, st.revision, std::sync::Arc::as_ptr(&st.doc) as usize, h, band, lwdisplay, transparency);
     let now = crate::now_ms();
     let view = (vp.view_center, vp.view_height);
     if view != c.last_view {
@@ -365,6 +396,7 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
             plot_style_table: None,
             view: Some(area),
             skip_viewport: None,
+            transparency,
         };
         c.list = cadcraft_render::viewport_content(&st.doc, &st.space, h, area, &opts);
         c.key = Some(key);
@@ -449,7 +481,16 @@ fn draw_vp_mask(c: &mut VpContent, p: &egui::Painter, outline: &[Vec2], xf_paper
         }
         fan.bounds = Bounds2::from_points(outline.iter().copied());
         let len = u32::try_from(fan.tris.len()).unwrap_or(0);
-        fan.prims.push(cadcraft_render::DPrim { handle: Handle(0), color: Rgb(0, 0, 0), aci7: false, lw: 0.0, kind: Kind::Tris, start: 0, len });
+        fan.prims.push(cadcraft_render::DPrim {
+            handle: Handle(0),
+            color: Rgb(0, 0, 0),
+            aci7: false,
+            lw: 0.0,
+            transparency: 0,
+            kind: Kind::Tris,
+            start: 0,
+            len,
+        });
         let origin = if fan.bounds.is_empty() { Vec2::ZERO } else { fan.bounds.center() };
         if let Ok(mut slot) = c.mask_slot.lock() {
             *slot = Some(crate::gpu::build_mesh(&fan, origin, Rgb(0, 0, 0), false));
@@ -621,7 +662,7 @@ pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb,
     let mut shapes: Vec<Shape> = Vec::with_capacity(list.prims.len());
     let px = 1.0 / xf.scale;
     for prim in &list.prims {
-        let col = color32(prim.display_rgb(bg));
+        let col = prim_color32(prim, bg);
         let pts = list.points(prim);
         match prim.kind {
             Kind::Polyline => {
@@ -739,6 +780,8 @@ fn draw_highlight_gpu(
 /// the transformed copies as egui shapes every frame was slow with heavy selections and could
 /// overflow the GPU buffer limit.
 /// `clipboard` is the session's clipboard and its serial (dragged when `drag.clipboard`, by PASTE).
+/// `transparency`: TRANSPARENCYDISPLAY (dragged objects keep their transparency).
+#[allow(clippy::too_many_arguments)]
 fn draw_drag_gpu(
     c: &mut CanvasState,
     p: &egui::Painter,
@@ -747,13 +790,14 @@ fn draw_drag_gpu(
     drag: &cadcraft_engine::Drag,
     clipboard: (&[cadcraft_doc::Entity], u64),
     bg: Rgb,
+    transparency: bool,
 ) {
     // Tessellate for a power-of-two zoom band so zooming mid-drag rebuilds only every 2x.
     let band = xf.scale.max(1e-300).log2().round() as i32;
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        (c.key, band, bg.0, bg.1, bg.2, &drag.handles).hash(&mut h);
+        (c.key, band, bg.0, bg.1, bg.2, &drag.handles, transparency).hash(&mut h);
         if drag.clipboard {
             clipboard.1.hash(&mut h);
         }
@@ -761,7 +805,7 @@ fn draw_drag_gpu(
     };
     if c.drag_key != Some(key) {
         let band_scale = 2f64.powi(band);
-        let opts = cadcraft_render::Options { tolerance: 0.5 / band_scale, min_dash: 2.0 / band_scale, ..Default::default() };
+        let opts = cadcraft_render::Options { transparency, ..preview_options(band_scale) };
         let list = if drag.clipboard {
             cadcraft_render::build_entities(doc, clipboard.0.iter(), &opts)
         } else {
@@ -839,7 +883,7 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
         if let (Kind::Infinite { ray }, Some(b), Some(d)) = (prim.kind, pts.first(), pts.get(1))
             && let Some(seg) = clip_infinite(xf, *b, *d, ray)
         {
-            shapes.push(Shape::line_segment(seg, Stroke::new(1.0, color32(prim.display_rgb(bg)))));
+            shapes.push(Shape::line_segment(seg, Stroke::new(1.0, prim_color32(prim, bg))));
         }
     }
     p.extend(shapes);
@@ -1649,12 +1693,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if let Some((drag, extra)) = drag {
         if let Ok(st) = app.session.state() {
             let serial = app.session.clipboard_source.as_ref().map_or(0, |c| c.serial);
-            draw_drag_gpu(&mut app.canvas, &painter, &xf, &st.doc, &drag, (&app.session.clipboard, serial), bg);
-            let list = cadcraft_render::build_entities(
-                &st.doc,
-                extra.iter(),
-                &cadcraft_render::Options { tolerance: 0.5 / scale, min_dash: 2.0 / scale, ..Default::default() },
-            );
+            let transparency = app.session.settings.transparency_display;
+            draw_drag_gpu(&mut app.canvas, &painter, &xf, &st.doc, &drag, (&app.session.clipboard, serial), bg, transparency);
+            let list = rebuilt_preview(&st.doc, extra.iter(), scale);
             draw_list(&painter, &xf, &list, bg, false);
         }
     } else if let (Some(c), true) = (app.canvas.cursor, app.session.prompting()) {
@@ -1662,11 +1703,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         if !ents.is_empty()
             && let Ok(st) = app.session.state()
         {
-            let list = cadcraft_render::build_entities(
-                &st.doc,
-                ents.iter(),
-                &cadcraft_render::Options { tolerance: 0.5 / scale, min_dash: 2.0 / scale, ..Default::default() },
-            );
+            let list = rebuilt_preview(&st.doc, ents.iter(), scale);
             draw_list(&painter, &xf, &list, bg, false);
         }
     }
@@ -2240,12 +2277,73 @@ pub(crate) mod tests {
     use cadcraft_render::DPrim;
 
     fn list(handles: &[u64]) -> DisplayList {
-        let prim = |h| DPrim { handle: Handle(h), color: Rgb(255, 255, 255), aci7: true, lw: 0.0, kind: Kind::Polyline, start: 0, len: 0 };
+        let prim =
+            |h| DPrim { handle: Handle(h), color: Rgb(255, 255, 255), aci7: true, lw: 0.0, transparency: 0, kind: Kind::Polyline, start: 0, len: 0 };
         DisplayList { prims: handles.iter().map(|&h| prim(h)).collect(), ..Default::default() }
     }
 
     fn hs(v: &[u64]) -> Vec<Handle> {
         v.iter().map(|&h| Handle(h)).collect()
+    }
+
+    /// A dragged object keeps its transparency in the GPU preview when TRANSPARENCYDISPLAY is
+    /// on, and is opaque when it is off.
+    #[test]
+    fn dragged_objects_keep_their_transparency() {
+        let mut d = cadcraft_doc::Drawing::new_metric();
+        let common = cadcraft_doc::Common { transparency: cadcraft_doc::Transparency::Percent(50), ..Default::default() };
+        let line = cadcraft_doc::Line { a: cadcraft_geom::Vec3::ZERO, b: cadcraft_geom::Vec3::new(10.0, 0.0, 0.0) };
+        let h = d.add(&cadcraft_doc::Space::Model, common, cadcraft_doc::EntityKind::Line(line)).unwrap();
+        let drag = cadcraft_engine::Drag { handles: vec![h], matrix: cadcraft_geom::Mat3::IDENTITY, extra: Vec::new(), clipboard: false };
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(200.0, 100.0));
+        let xf = Xf { rect, center: Vec2::new(5.0, 0.0), scale: 10.0 };
+        let painter = egui::Painter::new(egui::Context::default(), egui::LayerId::background(), rect);
+        // One canvas across the toggle: the cached drag mesh must be rebuilt.
+        let mut c = CanvasState::default();
+        let mut alpha = |transparency: bool| {
+            draw_drag_gpu(&mut c, &painter, &xf, &d, &drag, (&[], 0), Rgb(0, 0, 0), transparency);
+            let mesh = c.drag_slot.lock().unwrap().take().unwrap();
+            // The first line vertex's colour alpha (after its 2 × f32 position).
+            mesh.lines[11]
+        };
+        assert_eq!(alpha(true), 128);
+        assert_eq!(alpha(false), 255);
+        assert_eq!(alpha(true), 128);
+    }
+
+    /// Previews the session rebuilds with the current properties (the rubber band, copies of
+    /// objects) stay opaque even when CLAYER is transparent: they were opaque before transparency
+    /// was drawn, and CLAYER's transparency isn't the objects'.
+    #[test]
+    fn rebuilt_previews_stay_opaque_on_a_transparent_current_layer() {
+        let mut s = cadcraft_engine::Session::new();
+        let d = s.doc_mut().unwrap();
+        d.layers.push(cadcraft_doc::Layer { name: "Glass".into(), transparency: 40, ..Default::default() });
+        d.header.set_str("CLAYER", "Glass");
+        assert!(s.settings.transparency_display);
+        // LINE: the segment from the first point to the cursor.
+        s.cmdline("line").unwrap();
+        s.cmdline("0,0").unwrap();
+        let ents = s.preview(Vec2::new(10.0, 5.0));
+        assert!(!ents.is_empty());
+        assert_eq!(ents[0].common.layer, "Glass");
+        let doc = s.doc().unwrap();
+        // Built with transparency, the preview would take CLAYER's 40 %.
+        let with = cadcraft_render::build_entities(doc, ents.iter(), &cadcraft_render::Options { transparency: true, ..preview_options(1.0) });
+        assert!(with.prims.iter().all(|p| p.transparency == 40));
+        let list = rebuilt_preview(doc, ents.iter(), 1.0);
+        assert!(!list.prims.is_empty() && list.prims.iter().all(|p| p.transparency == 0));
+        s.cancel();
+        // MOVE's base-to-cursor rubber band (a drag extra).
+        s.execute("line", &serde_json::json!({"points": [[0, 0], [10, 0]]})).unwrap();
+        s.cmdline("move").unwrap();
+        s.cmdline("all").unwrap();
+        s.cmdline("").unwrap();
+        s.cmdline("0,0").unwrap();
+        let (_, extra) = s.drag(Vec2::new(4.0, 4.0)).unwrap();
+        assert!(!extra.is_empty());
+        let list = rebuilt_preview(s.doc().unwrap(), extra.iter(), 1.0);
+        assert!(!list.prims.is_empty() && list.prims.iter().all(|p| p.transparency == 0));
     }
 
     #[test]

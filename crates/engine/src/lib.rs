@@ -373,7 +373,11 @@ pub struct Settings {
     /// prompt's options there (on by default).
     pub dynprompt: bool,
     pub lwdisplay: bool,
+    /// TRANSPARENCYDISPLAY: draw objects with their transparency on screen (on by default).
     pub transparency_display: bool,
+    /// PLOTTRANSPARENCYOVERRIDE: 0 never plots transparency, 1 (default) uses the page setup's or
+    /// the Plot dialog's "Plot transparency", 2 always plots it.
+    pub plot_transparency_override: u8,
     pub selection_cycling: bool,
     /// SELECTSIMILARMODE: what SELECTSIMILAR matches besides the object type (bits: 1 colour,
     /// 2 layer, 4 linetype, 8 linetype scale, 16 lineweight, 32 plot style, 64 object style,
@@ -463,7 +467,8 @@ impl Default for Settings {
             dynpi_absolute: false,
             dynprompt: true,
             lwdisplay: false,
-            transparency_display: false,
+            transparency_display: true,
+            plot_transparency_override: 1,
             selection_cycling: false,
             selectsimilarmode: 130,
             otrack: true,

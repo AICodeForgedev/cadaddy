@@ -326,6 +326,16 @@ pub(crate) fn plot_options(s: &Session, p: &Value, cmd: &str) -> Result<Value> {
     Ok(out)
 }
 
+/// Whether a plot draws transparency, as PLOTTRANSPARENCYOVERRIDE decides: 0 never, 2 always,
+/// otherwise the plot's `plotTransparency` (`None` when it has none: the page setup decides).
+pub(crate) fn plot_transparency(s: &Session, p: &Value) -> Option<bool> {
+    match s.settings.plot_transparency_override {
+        0 => Some(false),
+        2 => Some(true),
+        _ => p.get("plotTransparency").and_then(Value::as_bool),
+    }
+}
+
 // ---------- PLOTWINDOW ----------
 
 fn run_plotwindow(s: &mut Session, p: &Value) -> Result<Value> {

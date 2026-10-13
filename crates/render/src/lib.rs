@@ -69,6 +69,9 @@ pub struct DPrim {
     pub aci7: bool,
     /// Lineweight in mm (0 = thinnest).
     pub lw: f32,
+    /// Transparency in percent (0 = opaque, at most 90): the object's own, its layer's when
+    /// ByLayer, the block reference's when ByBlock. Always 0 unless [`Options::transparency`].
+    pub transparency: u8,
     pub kind: Kind,
     pub start: u32,
     pub len: u32,
@@ -124,7 +127,20 @@ impl DPrim {
     pub fn display_rgb(&self, background: Rgb) -> Rgb {
         cadcraft_color::display_rgb(self.color, self.aci7, background)
     }
+    /// The opacity to draw with: 255 when opaque, down to 26 at 90 % transparency.
+    pub fn alpha(&self) -> u8 {
+        alpha(self.transparency)
+    }
 }
+
+/// The opacity (0..=255) of a transparency percentage, which is clamped to 0..=90 first.
+pub fn alpha(transparency: u8) -> u8 {
+    let t = u32::from(transparency.min(MAX_TRANSPARENCY));
+    u8::try_from((255 * (100 - t) + 50) / 100).unwrap_or(u8::MAX)
+}
+
+/// The most transparent an object can be, in percent.
+pub const MAX_TRANSPARENCY: u8 = 90;
 
 /// A resolved colour: its RGB, whether it is colour 7, and its index colour (0 = a true
 /// colour), which picks the style of a colour-dependent plot style table.
@@ -200,6 +216,9 @@ pub struct Options {
     /// The area being looked at (world units of the space being built), for on-screen builds:
     /// hatch patterns are only generated inside it. `None` = everywhere (plots, exports, picks).
     pub view: Option<Bounds2>,
+    /// Draw objects with their transparency ([`DPrim::transparency`]). Off by default: the screen
+    /// follows TRANSPARENCYDISPLAY, plots the page setup's "Plot transparency".
+    pub transparency: bool,
     /// A layout viewport whose model-space contents are left out (its border is still drawn):
     /// the canvas draws the active viewport's contents itself, see [`viewport_content`].
     pub skip_viewport: Option<Handle>,
@@ -217,6 +236,7 @@ impl Default for Options {
             plot_style_table: None,
             view: None,
             skip_viewport: None,
+            transparency: false,
         }
     }
 }
@@ -252,6 +272,8 @@ struct Ctx<'a> {
     lt_factor: f64,
     /// Named plot style (table index) of the block reference being expanded, for `ByBlock`.
     block_pstyle: Option<usize>,
+    /// Transparency (percent) of the block reference being expanded, for `ByBlock`.
+    block_transparency: u8,
 }
 
 impl Ctx<'_> {
@@ -275,6 +297,8 @@ struct Builder<'a> {
     named: Option<usize>,
     /// The block-expansion budget shared by the parts of a list built in parallel.
     shared_budget: Option<&'a std::sync::atomic::AtomicUsize>,
+    /// Transparency (percent) of the entity being drawn.
+    transparency: u8,
 }
 
 /// Upper bound on the block contents drawn per display list (each block reference, MINSERT copy
@@ -313,7 +337,16 @@ impl Builder<'_> {
             self.list.bounds.add(q);
             self.list.verts.push(q);
         }
-        self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw, kind: Kind::Polyline, start, len: pts.len() as u32 });
+        self.list.prims.push(DPrim {
+            handle: ctx.top,
+            color: color.rgb,
+            aci7: color.aci7,
+            lw,
+            transparency: self.transparency,
+            kind: Kind::Polyline,
+            start,
+            len: pts.len() as u32,
+        });
     }
     fn tris(&mut self, ctx: &Ctx, color: Ink, tris: &[Vec2]) {
         self.tris_at(ctx, color, tris, ctx.xf);
@@ -330,7 +363,16 @@ impl Builder<'_> {
             self.list.bounds.add(q);
             self.list.tris.push(q);
         }
-        self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw: 0.0, kind: Kind::Tris, start, len: tris.len() as u32 });
+        self.list.prims.push(DPrim {
+            handle: ctx.top,
+            color: color.rgb,
+            aci7: color.aci7,
+            lw: 0.0,
+            transparency: self.transparency,
+            kind: Kind::Tris,
+            start,
+            len: tris.len() as u32,
+        });
     }
     /// Shaped text: strokes as polylines; TrueType glyphs filled (TEXTFILL) or outlined.
     fn shaped(&mut self, ctx: &Ctx, color: Ink, lw: f32, sh: &cadcraft_fonts::Shaped) {
@@ -381,14 +423,32 @@ impl Builder<'_> {
         self.list.bounds.add(q);
         let start = self.list.verts.len() as u32;
         self.list.verts.push(q);
-        self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw: 0.0, kind: Kind::Point, start, len: 1 });
+        self.list.prims.push(DPrim {
+            handle: ctx.top,
+            color: color.rgb,
+            aci7: color.aci7,
+            lw: 0.0,
+            transparency: self.transparency,
+            kind: Kind::Point,
+            start,
+            len: 1,
+        });
     }
     fn infinite(&mut self, ctx: &Ctx, color: Ink, base: Vec2, dir: Vec2, ray: bool) {
         let (color, _) = self.styled(color, 0.0);
         let start = self.list.verts.len() as u32;
         self.list.verts.push(ctx.xf.apply(base));
         self.list.verts.push(ctx.xf.apply_vec(dir).normalized());
-        self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw: 0.0, kind: Kind::Infinite { ray }, start, len: 2 });
+        self.list.prims.push(DPrim {
+            handle: ctx.top,
+            color: color.rgb,
+            aci7: color.aci7,
+            lw: 0.0,
+            transparency: self.transparency,
+            kind: Kind::Infinite { ray },
+            start,
+            len: 2,
+        });
     }
     /// Take one unit of the block-expansion budget; false once it is spent.
     fn expand(&mut self) -> bool {
@@ -425,13 +485,14 @@ fn top_ctx<'a>(d: &'a Drawing, xf: Mat3, top: Handle, frozen: &'a [String], vp_c
         vp_colors,
         lt_factor: 1.0,
         block_pstyle: None,
+        block_transparency: 0,
     }
 }
 
 fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> DisplayList {
     let opts = &with_point_view(d, space, opts);
     let styler = style_table(d, space, opts, plotting).map(|t| plotstyle::Styler::new(d, t));
-    let mut b = Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref(), named: None, shared_budget: None };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref(), named: None, shared_budget: None, transparency: 0 };
     if let Space::Paper(name) = space {
         b.list.sheet = paper::sheet(d, name);
     }
@@ -482,7 +543,8 @@ fn build_parallel(b: &mut Builder, d: &Drawing, store: &cadcraft_doc::EntityStor
     let parts: Vec<DisplayList> = ents
         .par_chunks(PARALLEL_CHUNK)
         .map(|chunk| {
-            let mut part = Builder { list: DisplayList::default(), opts, plotting, styles: None, named: None, shared_budget: Some(&budget) };
+            let mut part =
+                Builder { list: DisplayList::default(), opts, plotting, styles: None, named: None, shared_budget: Some(&budget), transparency: 0 };
             for e in chunk {
                 entity(&mut part, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
             }
@@ -608,7 +670,8 @@ pub fn viewport_content(d: &Drawing, space: &Space, handle: Handle, area: Bounds
     }
     let opts = &with_point_view(d, space, opts);
     let styler = style_table(d, space, opts, false).map(|t| plotstyle::Styler::new(d, t));
-    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: styler.as_ref(), named: None, shared_budget: None };
+    let mut b =
+        Builder { list: DisplayList::default(), opts, plotting: false, styles: styler.as_ref(), named: None, shared_budget: None, transparency: 0 };
     contents(&mut b, d, vp, area, &Clip::Rect(area));
     b.list
 }
@@ -647,7 +710,15 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bou
         let eb = cadcraft_doc::entity_bounds(d, me, 0);
         eb.is_empty() || eb.intersects(&win)
     };
-    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, styles: b.styles, named: None, shared_budget: None };
+    let mut sub = Builder {
+        list: DisplayList::default(),
+        opts: b.opts,
+        plotting: b.plotting,
+        styles: b.styles,
+        named: None,
+        shared_budget: None,
+        transparency: 0,
+    };
     #[cfg(not(target_arch = "wasm32"))]
     let parallel = !b.plotting && b.styles.is_none() && d.model.len() >= 2 * PARALLEL_CHUNK;
     #[cfg(target_arch = "wasm32")]
@@ -663,8 +734,15 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bou
             let parts: Vec<DisplayList> = ents
                 .par_chunks(PARALLEL_CHUNK)
                 .map(|chunk| {
-                    let mut part =
-                        Builder { list: DisplayList::default(), opts, plotting: false, styles: None, named: None, shared_budget: Some(&budget) };
+                    let mut part = Builder {
+                        list: DisplayList::default(),
+                        opts,
+                        plotting: false,
+                        styles: None,
+                        named: None,
+                        shared_budget: Some(&budget),
+                        transparency: 0,
+                    };
                     let c = ctx();
                     for me in chunk.iter().filter(|me| seen(me)) {
                         entity(&mut part, &c, me);
@@ -787,7 +865,16 @@ fn push_raw(dst: &mut DisplayList, p: &DPrim, kind: Kind, pts: &[Vec2]) {
     } else {
         dst.verts.extend_from_slice(pts);
     }
-    dst.prims.push(DPrim { handle: p.handle, color: p.color, aci7: p.aci7, lw: p.lw, kind, start, len: pts.len() as u32 });
+    dst.prims.push(DPrim {
+        handle: p.handle,
+        color: p.color,
+        aci7: p.aci7,
+        lw: p.lw,
+        transparency: p.transparency,
+        kind,
+        start,
+        len: pts.len() as u32,
+    });
 }
 
 /// Build the display list for a set of loose entities (previews, rubber bands).
@@ -801,7 +888,7 @@ pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents:
     } else {
         opts
     };
-    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: None, named: None, shared_budget: None };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: None, named: None, shared_budget: None, transparency: 0 };
     for e in ents {
         entity(&mut b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
     }
@@ -844,12 +931,16 @@ fn take_viewport_layers(list: &mut DisplayList) {
     }
 }
 
-fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Ink, f32, Option<cadcraft_doc::Linetype>, f64, bool) {
+/// An object's colour, lineweight (mm), linetype, linetype scale, visibility and the transparency
+/// of the layer it is drawn on (for ByLayer, see [`transparency`]).
+type Resolved = (Ink, f32, Option<cadcraft_doc::Linetype>, f64, bool, u8);
+
+fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> Resolved {
     resolve_common(ctx, &e.common, plotting)
 }
 
 /// [`resolve`] for an object's properties `c`.
-fn resolve_common(ctx: &Ctx, c: &cadcraft_doc::Common, plotting: bool) -> (Ink, f32, Option<cadcraft_doc::Linetype>, f64, bool) {
+fn resolve_common(ctx: &Ctx, c: &cadcraft_doc::Common, plotting: bool) -> Resolved {
     let d = ctx.d;
     // Layer "0" inside a block takes the insert's layer.
     let layer_name = if c.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { c.layer.as_str() };
@@ -874,7 +965,20 @@ fn resolve_common(ctx: &Ctx, c: &cadcraft_doc::Common, plotting: bool) -> (Ink, 
     };
     let lt = d.linetype(&lt_name).filter(|l| !l.pattern.is_empty()).cloned();
     let scale = d.header.f64("LTSCALE", 1.0) * c.ltscale * ctx.lt_factor;
-    (rgb, lw_mm, lt, scale, visible)
+    (rgb, lw_mm, lt, scale, visible, layer.map_or(0, |l| l.transparency))
+}
+
+/// The transparency (percent, 0..=90) of an object whose own setting is `t`: the percentage, its
+/// layer's `layer` when ByLayer (layer 0 inside a block: the block reference's layer, as
+/// [`resolve_common`] finds it), the block reference's `block` when ByBlock (opaque outside
+/// blocks).
+fn transparency(t: cadcraft_doc::Transparency, layer: u8, block: u8) -> u8 {
+    let t = match t {
+        cadcraft_doc::Transparency::Percent(p) => p,
+        cadcraft_doc::Transparency::ByBlock => block,
+        cadcraft_doc::Transparency::ByLayer => layer,
+    };
+    t.min(MAX_TRANSPARENCY)
 }
 
 /// The width in mm that the "Default" lineweight stands for: `LWDEFAULT` (hundredths of a mm,
@@ -891,11 +995,13 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     if ctx.d.is_hidden_object(e.handle) {
         return;
     }
-    // The entity's named plot style, for everything it draws (block contents set their own).
-    let saved = b.named;
+    // The entity's named plot style and transparency (set by `entity_parts`), for everything it
+    // draws (block contents set their own).
+    let (saved, saved_transparency) = (b.named, b.transparency);
     b.named = b.styles.and_then(|s| s.named_index(ctx, &e.common));
     entity_parts(b, ctx, e);
     b.named = saved;
+    b.transparency = saved_transparency;
     if b.plotting && b.list.prim_layers.len() < b.list.prims.len() {
         // What it drew that its block contents didn't claim is on its own layer.
         let layer = entity_layer(ctx, e);
@@ -930,9 +1036,12 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             cadcraft_doc::AnnoDraw::Plain => {}
         }
     }
-    let (rgb, lw, lt, ltscale, visible) = resolve(ctx, e, b.plotting);
+    let (rgb, lw, lt, ltscale, visible, layer_transparency) = resolve(ctx, e, b.plotting);
     if !visible {
         return;
+    }
+    if b.opts.transparency {
+        b.transparency = transparency(e.common.transparency, layer_transparency, ctx.block_transparency);
     }
     // A plot style's linetype replaces the object's.
     let lt = match b.styles.and_then(|s| s.linetype(rgb, b.named)) {
@@ -986,7 +1095,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if let Some(blk) = dm.block.as_ref().and_then(|n| ctx.d.block(n))
                 && ctx.depth < cadcraft_doc::MAX_BLOCK_DEPTH
             {
-                let sub = Ctx { block_pstyle: b.named, ..sub_ctx(ctx, e, Mat3::IDENTITY) };
+                let sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, Mat3::IDENTITY) };
                 for be in blk.entities.iter() {
                     if !b.expand() {
                         break;
@@ -1372,6 +1481,8 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
         vp_colors: ctx.vp_colors,
         lt_factor: ctx.lt_factor,
         block_pstyle: ctx.block_pstyle,
+        // The reference's own, set by the caller (`Builder::transparency` while it draws).
+        block_transparency: ctx.block_transparency,
     }
 }
 
@@ -1389,7 +1500,7 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
                 }
                 let off = Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
                 let m = Mat3::translate(off).then_before(ins.transform(blk.base.xy()));
-                let sub = Ctx { block_pstyle: b.named, ..sub_ctx(ctx, e, m) };
+                let sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, m) };
                 for be in blk.entities.iter() {
                     // Constant/visible attribute definitions inside blocks are not drawn; attribs are.
                     if matches!(be.kind, EntityKind::AttDef(_)) {
@@ -1406,6 +1517,8 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
     if b.opts.text {
         // ATTMODE (ATTDISP): 0 shows no attributes, 1 the visible ones, 2 all of them.
         let attmode = ctx.d.header.i64("ATTMODE", 1);
+        // The reference's transparency; each attribute draws with its own.
+        let reference = b.transparency;
         for a in &ins.attribs {
             if attmode == 0 || (a.invisible && attmode != 2) {
                 continue;
@@ -1417,15 +1530,17 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
             // on insertion), except those set on the attribute itself: ByBlock = the reference's,
             // layer 0 = the reference's layer.
             let def = ctx.d.block(&ins.block).and_then(|blk| blk.entities.iter().find(|be| attdef_tag(be, &a.tag)));
-            let (ink, lw, shown) = match (def, a.props.is_empty()) {
-                (None, true) => (rgb, resolve(ctx, e, b.plotting).1, true),
+            let (ink, lw, shown, t) = match (def, a.props.is_empty()) {
+                (None, true) => (rgb, resolve(ctx, e, b.plotting).1, true, reference),
                 (def, _) => {
                     let c = a.props.over(&def.map(|d| d.common.clone()).unwrap_or_else(by_block));
-                    let (ink, lw, _, _, shown) = resolve_common(&sub_ctx(ctx, e, Mat3::IDENTITY), &c, b.plotting);
-                    (ink, lw, shown)
+                    let (ink, lw, _, _, shown, layer_t) = resolve_common(&sub_ctx(ctx, e, Mat3::IDENTITY), &c, b.plotting);
+                    let t = if b.opts.transparency { transparency(c.transparency, layer_t, reference) } else { 0 };
+                    (ink, lw, shown, t)
                 }
             };
             if shown {
+                b.transparency = t;
                 let lw = if b.opts.lineweights { lw } else { 0.0 };
                 match (&multiline, &sh) {
                     (Some(m), _) => mtext(b, ctx, m, ink, lw),
@@ -1434,12 +1549,19 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
                 }
             }
         }
+        b.transparency = reference;
     }
 }
 
 /// Properties that follow the block reference's (an attribute without a definition).
 fn by_block() -> cadcraft_doc::Common {
-    cadcraft_doc::Common { color: Color::ByBlock, linetype: "ByBlock".into(), lineweight: Lineweight::ByBlock, ..cadcraft_doc::Common::default() }
+    cadcraft_doc::Common {
+        color: Color::ByBlock,
+        linetype: "ByBlock".into(),
+        lineweight: Lineweight::ByBlock,
+        transparency: cadcraft_doc::Transparency::ByBlock,
+        ..cadcraft_doc::Common::default()
+    }
 }
 
 /// The attribute definition with tag `tag` (any case).

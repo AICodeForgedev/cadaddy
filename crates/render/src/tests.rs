@@ -649,6 +649,214 @@ fn max_scale_is_the_most_stretched_axis() {
     assert!((max_scale(&Mat3::IDENTITY) - 1.0).abs() < 1e-12);
 }
 
+// ---------- transparency ----------
+
+fn line_common(c: Common) -> (Common, EntityKind) {
+    (c, EntityKind::Line(cadcraft_doc::Line { a: Vec3::ZERO, b: Vec3::new(10.0, 0.0, 0.0) }))
+}
+
+fn with_transparency() -> Options {
+    Options { transparency: true, ..Default::default() }
+}
+
+fn block_entity(handle: u64, common: Common, kind: EntityKind) -> cadcraft_doc::Entity {
+    let mut e = cadcraft_doc::Entity::new(cadcraft_doc::Handle(handle), kind);
+    e.common = common;
+    e
+}
+
+fn insert_of(block: &str) -> EntityKind {
+    EntityKind::Insert(cadcraft_doc::Insert {
+        block: block.into(),
+        insert: Vec3::ZERO,
+        scale: Vec3::new(1.0, 1.0, 1.0),
+        rotation: 0.0,
+        attribs: vec![],
+        cols: 1,
+        rows: 1,
+        col_spacing: 0.0,
+        row_spacing: 0.0,
+    })
+}
+
+#[test]
+fn transparency_resolves_by_object_layer_and_block() {
+    use cadcraft_doc::Transparency::{ByBlock, ByLayer, Percent};
+    let mut d = Drawing::new_imperial();
+    d.layers.push(cadcraft_doc::Layer { name: "Walls".into(), transparency: 40, ..Default::default() });
+    let add = |d: &mut Drawing, c: Common| {
+        let (c, k) = line_common(c);
+        d.add(&Space::Model, c, k).unwrap();
+    };
+    add(&mut d, Common { transparency: Percent(25), ..Default::default() });
+    add(&mut d, Common { layer: "Walls".into(), transparency: ByLayer, ..Default::default() });
+    // ByBlock outside a block: opaque.
+    add(&mut d, Common { transparency: ByBlock, ..Default::default() });
+    // Block "Inner": a ByBlock line and a ByLayer line on layer 0 (the reference's layer).
+    let mut inner = cadcraft_doc::Block::new("Inner");
+    let (c, k) = line_common(Common { transparency: ByBlock, ..Default::default() });
+    inner.entities.push(block_entity(1, c, k));
+    let (c, k) = line_common(Common::default());
+    inner.entities.push(block_entity(2, c, k));
+    d.blocks.insert("Inner".into(), std::sync::Arc::new(inner));
+    // Block "Outer": a ByBlock reference to Inner, on layer Walls.
+    let mut outer = cadcraft_doc::Block::new("Outer");
+    outer.entities.push(block_entity(3, Common { layer: "Walls".into(), transparency: ByBlock, ..Default::default() }, insert_of("Inner")));
+    d.blocks.insert("Outer".into(), std::sync::Arc::new(outer));
+    d.add(&Space::Model, Common { transparency: Percent(70), ..Default::default() }, insert_of("Outer")).unwrap();
+    let l = build(&d, &Space::Model, &with_transparency());
+    let t: Vec<u8> = l.prims.iter().map(|p| p.transparency).collect();
+    // Nested: Inner's ByBlock line takes Outer's reference (70, through the ByBlock reference to
+    // Inner); its layer-0 line takes the reference's layer, Walls (40).
+    assert_eq!(t, vec![25, 40, 0, 70, 40]);
+    // Off (the default): everything is opaque, as before.
+    assert!(build(&d, &Space::Model, &Options::default()).prims.iter().all(|p| p.transparency == 0 && p.alpha() == 255));
+}
+
+#[test]
+fn hostile_transparency_values_are_clamped() {
+    let mut d = Drawing::new_imperial();
+    d.layers.push(cadcraft_doc::Layer { name: "Odd".into(), transparency: 250, ..Default::default() });
+    let (c, k) = line_common(Common { transparency: cadcraft_doc::Transparency::Percent(u8::MAX), ..Default::default() });
+    d.add(&Space::Model, c, k).unwrap();
+    let (c, k) = line_common(Common { layer: "Odd".into(), ..Default::default() });
+    d.add(&Space::Model, c, k).unwrap();
+    // A ByLayer object on a layer that isn't in the table: opaque.
+    let (c, k) = line_common(Common { layer: "Missing".into(), ..Default::default() });
+    d.add(&Space::Model, c, k).unwrap();
+    let l = build(&d, &Space::Model, &with_transparency());
+    assert_eq!(l.prims.iter().map(|p| p.transparency).collect::<Vec<_>>(), vec![90, 90, 0]);
+    assert_eq!((alpha(0), alpha(50), alpha(90), alpha(200)), (255, 128, 26, 26));
+}
+
+#[test]
+fn transparent_solid_hatch_blends_with_the_line_under_it() {
+    let mut d = Drawing::new_imperial();
+    // The line runs mid-pixel (y = 2.025 is screen row 99.5) so it fills one row exactly.
+    d.add(&Space::Model, Common::default(), EntityKind::Line(cadcraft_doc::Line { a: Vec3::new(-2.0, 2.025, 0.0), b: Vec3::new(6.0, 2.025, 0.0) }))
+        .unwrap();
+    let solid = Hatch { solid: true, pattern: "SOLID".into(), ..pattern_hatch("SOLID", 1.0, (0.0, 0.0, 4.0, 4.0)) };
+    d.add(
+        &Space::Model,
+        Common { color: Color::Index(1), transparency: cadcraft_doc::Transparency::Percent(50), ..Default::default() },
+        EntityKind::Hatch(solid),
+    )
+    .unwrap();
+    let pixel = |o: &Options, x: f64, y: f64| {
+        let l = build(&d, &Space::Model, o);
+        let v = View { center: Vec2::new(2.0, 2.0), scale: 20.0, width: 200, height: 200 };
+        let pm = render(&l, &v, &RasterOptions { background: Rgb(0, 0, 0), antialias: false, ..Default::default() }).unwrap();
+        let (px, py) = v.to_screen(Vec2::new(x, y));
+        let c = pm.pixel(px as u32, py as u32).unwrap();
+        (c.red(), c.green(), c.blue())
+    };
+    let near = |a: (u8, u8, u8), b: (u8, u8, u8)| [(a.0, b.0), (a.1, b.1), (a.2, b.2)].iter().all(|(x, y)| x.abs_diff(*y) <= 2);
+    // 50 %: half red over black, and half red over the white line, which shows through.
+    let inside = pixel(&with_transparency(), 1.0, 1.0);
+    assert!(near(inside, (128, 0, 0)), "{inside:?}");
+    let on_line = pixel(&with_transparency(), 1.0, 2.025);
+    assert!(near(on_line, (255, 127, 127)), "{on_line:?}");
+    // Transparency off: the hatch hides the line, as before.
+    assert_eq!(pixel(&Options::default(), 1.0, 2.025), (255, 0, 0));
+}
+
+fn attrib(tag: &str) -> cadcraft_doc::Attrib {
+    cadcraft_doc::Attrib {
+        tag: tag.into(),
+        text: cadcraft_doc::Text {
+            insert: Vec3::new(1.0, 1.0, 0.0),
+            align_pt: None,
+            height: 1.0,
+            value: "A1".into(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: Default::default(),
+            valign: Default::default(),
+        },
+        invisible: false,
+        constant: false,
+        prompt: String::new(),
+        props: Default::default(),
+        multiline: None,
+        modes: Default::default(),
+    }
+}
+
+/// A block "B" with a line (layer 0, ByLayer) and an attribute definition with `def`'s
+/// properties, and a reference to it with `reference`'s, carrying the attribute.
+fn attributed(def: Common, reference: Common) -> Drawing {
+    let mut d = Drawing::new_imperial();
+    let mut blk = cadcraft_doc::Block::new("B");
+    let (c, k) = line_common(Common::default());
+    blk.entities.push(block_entity(1, c, k));
+    blk.entities.push(block_entity(2, def, EntityKind::AttDef(attrib("TAG"))));
+    d.blocks.insert("B".into(), std::sync::Arc::new(blk));
+    let EntityKind::Insert(mut ins) = insert_of("B") else { panic!("an insert") };
+    ins.attribs.push(attrib("TAG"));
+    d.add(&Space::Model, reference, EntityKind::Insert(ins)).unwrap();
+    d
+}
+
+/// The transparency of the block's line and of the attribute's text, from a list built with
+/// transparency on (the line is drawn first, then the text).
+fn line_and_text(d: &Drawing) -> (u8, Vec<u8>) {
+    let l = build(d, &Space::Model, &with_transparency());
+    let (first, rest) = l.prims.split_first().unwrap();
+    assert!(!rest.is_empty(), "the attribute is drawn");
+    (first.transparency, rest.iter().map(|p| p.transparency).collect())
+}
+
+#[test]
+fn attributes_draw_with_their_own_transparency() {
+    use cadcraft_doc::Transparency::{ByBlock, Percent};
+    // A reference at 60 % on an opaque layer: layer-0 ByLayer contents (the line and the
+    // attribute) take the reference's layer, so both are opaque.
+    let d = attributed(Common::default(), Common { transparency: Percent(60), ..Default::default() });
+    let (line, text) = line_and_text(&d);
+    assert_eq!(line, 0);
+    assert!(text.iter().all(|t| *t == 0), "{text:?}");
+    // An attribute definition with its own 50 % in an opaque reference.
+    let d = attributed(Common { transparency: Percent(50), ..Default::default() }, Common::default());
+    let (line, text) = line_and_text(&d);
+    assert_eq!(line, 0);
+    assert!(text.iter().all(|t| *t == 50), "{text:?}");
+    // ByBlock follows the reference.
+    let d = attributed(Common { transparency: ByBlock, ..Default::default() }, Common { transparency: Percent(30), ..Default::default() });
+    assert!(line_and_text(&d).1.iter().all(|t| *t == 30));
+    // Off: everything opaque.
+    assert!(build(&d, &Space::Model, &Options::default()).prims.iter().all(|p| p.transparency == 0));
+}
+
+#[test]
+fn attributes_follow_the_reference_layer_and_have_no_definition() {
+    use cadcraft_doc::Transparency::Percent;
+    // A layer-0 ByLayer definition in a reference on a 40 % layer: the line and the attribute
+    // both take the reference's layer.
+    let mut d = attributed(Common::default(), Common { layer: "Glass".into(), ..Default::default() });
+    // Adding the reference made the layer.
+    d.layer_mut("Glass").unwrap().transparency = 40;
+    let (line, text) = line_and_text(&d);
+    assert_eq!(line, 40);
+    assert!(text.iter().all(|t| *t == 40), "{text:?}");
+    // No definition in the block: the attribute follows the reference (30 %), with or without
+    // properties of its own.
+    for props in [cadcraft_doc::AttribProps::default(), cadcraft_doc::AttribProps { color: Some(Color::Index(3)), ..Default::default() }] {
+        let mut d = Drawing::new_imperial();
+        let mut blk = cadcraft_doc::Block::new("B");
+        let (c, k) = line_common(Common::default());
+        blk.entities.push(block_entity(1, c, k));
+        d.blocks.insert("B".into(), std::sync::Arc::new(blk));
+        let EntityKind::Insert(mut ins) = insert_of("B") else { panic!("an insert") };
+        ins.attribs.push(cadcraft_doc::Attrib { props: props.clone(), ..attrib("TAG") });
+        d.add(&Space::Model, Common { transparency: Percent(30), ..Default::default() }, EntityKind::Insert(ins)).unwrap();
+        let (line, text) = line_and_text(&d);
+        assert_eq!(line, 0, "layer-0 ByLayer contents take the reference's opaque layer");
+        assert!(text.iter().all(|t| *t == 30), "{props:?}: {text:?}");
+    }
+}
+
 #[test]
 fn mtext_exact_spacing_ignores_taller_lines() {
     // #711: a doubled middle line pushes the next baseline down with At least, not with Exactly.
