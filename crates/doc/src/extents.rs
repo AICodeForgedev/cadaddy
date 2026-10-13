@@ -88,10 +88,12 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
 }
 
 /// [`entity_bounds`] with the bounds of block contents (in block coordinates) already computed,
-/// by block name: every further reference to a block reuses them instead of expanding the block
-/// again, so nested or self-referencing blocks cost one pass over each definition instead of one
-/// per reference (which grows exponentially with the nesting depth).
-fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String, Bounds2>) -> Bounds2 {
+/// by block name and depth: every further reference to a block at that depth reuses them instead of
+/// expanding the block again, so nested or self-referencing blocks cost at most one pass over each
+/// definition per depth instead of one per reference (which grows exponentially with the nesting
+/// depth). The depth is part of the key because [`MAX_BLOCK_DEPTH`] cuts a deep visit short: its
+/// bounds must not stand in for a shallower reference to the same block (#706).
+fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<(&'a str, usize), Bounds2>) -> Bounds2 {
     match &e.kind {
         EntityKind::Table(t) if t.is_broken() => t.bounds(),
         EntityKind::Text(t) if blank(&t.value) => Bounds2::EMPTY,
@@ -108,14 +110,14 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
             // insertion point. Attributes below still count.
             let Some(blk) = d.block(&ins.block) else { return Bounds2::EMPTY };
             let m = ins.transform(blk.base.xy());
-            let inner = match blocks.get(&blk.name) {
+            let inner = match blocks.get(&(blk.name.as_str(), depth)) {
                 Some(b) => *b,
                 None => {
                     let mut inner = Bounds2::EMPTY;
                     for be in blk.entities.iter().filter(|be| in_block_visible(d, be)) {
                         inner = inner.union(&bounds_in(d, be, depth + 1, blocks));
                     }
-                    blocks.insert(blk.name.clone(), inner);
+                    blocks.insert((blk.name.as_str(), depth), inner);
                     inner
                 }
             };

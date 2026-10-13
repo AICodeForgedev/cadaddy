@@ -269,6 +269,38 @@ fn extents_pair(d: &Drawing) -> (Vec2, Vec2) {
     (b.min, b.max)
 }
 
+/// #706: block A reaches B once through a chain of 14 blocks (B at depth 15, its line's block E at
+/// 16, past the limit) and once directly (B at depth 1). `children` picks which of the two A holds.
+fn deep_and_shallow(children: &[&str]) -> Drawing {
+    let mut d = Drawing::new_imperial();
+    let mut add = |name: &str, kids: Vec<EntityKind>| {
+        let mut blk = Block::new(name);
+        for (i, k) in kids.into_iter().enumerate() {
+            blk.entities.push(Entity::new(Handle(i as u64 + 1), k));
+        }
+        d.blocks.insert(name.into(), std::sync::Arc::new(blk));
+    };
+    add("E", vec![line((1000.0, 1000.0), (2000.0, 1000.0))]);
+    add("B", vec![plain_insert("E")]);
+    for i in 1..=14 {
+        let next = if i == 14 { "B".to_string() } else { format!("C{}", i + 1) };
+        add(&format!("C{i}"), vec![plain_insert(&next)]);
+    }
+    add("A", children.iter().map(|c| plain_insert(c)).collect());
+    d.add(&Space::Model, Common::default(), plain_insert("A")).unwrap();
+    d
+}
+
+#[test]
+fn deep_block_visit_does_not_hide_a_shallow_reference() {
+    let line = (Vec2::new(1000.0, 1000.0), Vec2::new(2000.0, 1000.0));
+    // Control: past the limit, the deep path alone contributes nothing.
+    assert!(deep_and_shallow(&["C1"]).extents(&Space::Model).is_empty());
+    assert_eq!(extents_pair(&deep_and_shallow(&["B"])), line);
+    assert_eq!(extents_pair(&deep_and_shallow(&["B", "C1"])), line);
+    assert_eq!(extents_pair(&deep_and_shallow(&["C1", "B"])), line);
+}
+
 #[test]
 fn block_entity_with_invisible_flag_is_ignored_in_insert_extents() {
     let mut far = far_line("0");
