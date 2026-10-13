@@ -108,6 +108,19 @@ impl Remote {
     }
 }
 
+/// The `window` of a `ui.render` request: two finite corners [[x0, y0], [x1, y1]] around an area
+/// (`None` when absent or unusable).
+fn render_window(p: &Value) -> Option<cadcraft_engine::geom::Bounds2> {
+    let a = p.get("window")?.as_array().filter(|a| a.len() == 2)?;
+    let pt = |v: &Value| -> Option<cadcraft_engine::geom::Vec2> {
+        let c = v.as_array().filter(|c| c.len() == 2)?;
+        let (x, y) = (c[0].as_f64()?, c[1].as_f64()?);
+        (x.is_finite() && y.is_finite()).then(|| cadcraft_engine::geom::Vec2::new(x, y))
+    };
+    let b = cadcraft_engine::geom::Bounds2::new(pt(&a[0])?, pt(&a[1])?);
+    (b.width() > 0.0 && b.height() > 0.0).then_some(b)
+}
+
 /// The error for an app that doesn't answer: what to do about it.
 fn not_open(addr: &str, e: std::io::Error) -> std::io::Error {
     std::io::Error::new(
@@ -292,14 +305,20 @@ impl Backend for Headless {
                 let w = p.get("width").and_then(Value::as_f64).unwrap_or(1600.0).clamp(16.0, 8192.0) as u32;
                 let h = p.get("height").and_then(Value::as_f64).unwrap_or(1000.0).clamp(16.0, 8192.0) as u32;
                 let st = s.state().map_err(|e| e.to_string())?;
-                let list = cadcraft_render::build(&st.doc, &st.space, &cadcraft_render::Options::default());
+                let window = render_window(&p);
+                let opts = cadcraft_render::Options { view: window, ..Default::default() };
+                let list = cadcraft_render::build(&st.doc, &st.space, &opts);
                 let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(true);
-                let view = if fit {
+                let side = |k: &str| p.get(k).and_then(Value::as_f64).map(|x| x as u32);
+                let view = if let Some(win) = &window {
+                    cadcraft_render::raster::View::of_window(win, side("width"), side("height"))
+                } else if fit {
                     cadcraft_render::raster::View::fit(&list.bounds, w, h, 0.05)
                 } else {
                     let v = st.view();
                     cadcraft_render::raster::View { center: v.center, scale: f64::from(h) / v.height.max(1e-12), width: w, height: h }
                 };
+                let (w, h) = (view.width, view.height);
                 let png =
                     cadcraft_render::raster::render_png(&list, &view, &cadcraft_render::raster::RasterOptions::default()).ok_or("render failed")?;
                 if let Some(path) = str_p("path") {

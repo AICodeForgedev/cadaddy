@@ -31,6 +31,22 @@ impl View {
         let s = (f64::from(width) / w).min(f64::from(height) / h) * (1.0 - margin);
         View { center: b.center(), scale: if s.is_finite() && s > 0.0 { s } else { 1.0 }, width, height }
     }
+    /// The view of `window` (drawing units), filling the image: `width` × `height` pixels when both
+    /// are given; otherwise the side given (default 1600 wide) with the other matching the window's
+    /// shape, each side 16..=8192.
+    pub fn of_window(window: &Bounds2, width: Option<u32>, height: Option<u32>) -> View {
+        let aspect = if window.width() > 1e-12 && window.height() > 1e-12 { window.width() / window.height() } else { 1.0 };
+        let side = |v: f64| v.round().clamp(16.0, 8192.0) as u32;
+        let (w, h) = match (width, height) {
+            (Some(w), Some(h)) => (side(f64::from(w)), side(f64::from(h))),
+            (None, Some(h)) => (side(f64::from(h) * aspect), side(f64::from(h))),
+            (w, None) => {
+                let w = f64::from(w.unwrap_or(1600));
+                (side(w), side(w / aspect))
+            }
+        };
+        View::fit(window, w, h, 0.0)
+    }
     pub fn world_bounds(&self) -> Bounds2 {
         let hw = f64::from(self.width) / 2.0 / self.scale;
         let hh = f64::from(self.height) / 2.0 / self.scale;

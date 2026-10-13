@@ -141,6 +141,45 @@ fn list_commands_filter_matches_names_not_docs() {
 }
 
 #[test]
+fn find_text_reads_texts_and_render_shows_one_area() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    tool(&mut s, "execute", json!({"command": "layer.new", "params": {"name": "Texto"}}));
+    tool(&mut s, "execute", json!({"command": "text", "params": {"at": [1, 1], "height": 0.15, "text": "RECAMARA 1"}}));
+    tool(&mut s, "execute", json!({"command": "text", "params": {"at": [50, 1], "height": 0.15, "text": "COCINA"}}));
+    tool(
+        &mut s,
+        "execute",
+        json!({"command": "mtext", "params": {"at": [1, 5], "height": 0.2, "width": 5, "text": "{\\fArial|b1;PLANTA} BAJA\\PNIVEL 0.00"}}),
+    );
+    tool(&mut s, "execute", json!({"command": "rectang", "params": {"p1": [0, 0], "p2": [10, 5]}}));
+
+    let all = tool(&mut s, "find_text", json!({}));
+    assert_eq!(all["count"], 3);
+    let r = tool(&mut s, "find_text", json!({"contains": "recamara"}));
+    assert_eq!(r["count"], 1);
+    assert_eq!(r["texts"][0]["text"], "RECAMARA 1");
+    assert_eq!(r["texts"][0]["at"], json!([1.0, 1.0]));
+    assert_eq!(r["texts"][0]["height"], 0.15);
+    // Multiline text comes back readable, without its formatting codes.
+    let m = tool(&mut s, "find_text", json!({"contains": "planta"}));
+    let t = m["texts"][0]["text"].as_str().unwrap();
+    assert!(t.contains("PLANTA BAJA") && t.contains("NIVEL 0.00") && !t.contains('\\') && !t.contains('{'), "{t}");
+    // By area: only what is inside the window.
+    let w = tool(&mut s, "find_text", json!({"window": [[-1, -1], [20, 20]]}));
+    assert_eq!(w["count"], 2);
+    assert_eq!(tool(&mut s, "find_text", json!({"layer": "nope"}))["count"], 0);
+
+    // A render of one area takes the area's shape.
+    let r = call(&mut s, 9, "tools/call", json!({"name": "render", "arguments": {"window": [[0, 0], [10, 5]]}}));
+    let c = &r["result"]["content"][0];
+    assert_eq!(c["type"], "image", "{r}");
+    let png = cadcraft_engine::cmd::file::base64_decode(c["data"].as_str().unwrap()).unwrap();
+    let (w, h) = (u32::from_be_bytes(png[16..20].try_into().unwrap()), u32::from_be_bytes(png[20..24].try_into().unwrap()));
+    assert_eq!((w, h), (1600, 800));
+}
+
+#[test]
 fn a_lazy_bridge_starts_without_the_app_and_says_how_to_open_it() {
     // Nothing listens on a port that was just freed.
     let addr = {

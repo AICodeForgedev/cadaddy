@@ -43,6 +43,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("entities", "Query Entities", run_entities)
             .params("{type?, layer?, window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
             .noundo(),
+        CommandSpec::new("texts", "Query Texts", run_texts)
+            .params("{contains?: text (any case), layer?, window?: [[x,y],[x,y]] (by insertion point), limit? (default 200), offset?} → {count (all matches), returned, offset, texts: [{handle, type, layer, text, at, height, rotation (degrees), style, tag? (attributes)}]}: the readable text of TEXT, MTEXT (formatting removed), block attributes and multileaders")
+            .noundo(),
         CommandSpec::new("countlist", "Count List", count::run_countlist)
             .params("{space?: all (default)|current|model|<layout>, nested?: bool} → per-block counts, as COUNT")
             .noundo(),
@@ -346,6 +349,78 @@ fn run_entities(s: &mut Session, p: &Value) -> Result<Value> {
     let page: Vec<Value> = matches.iter().skip(offset).take(limit).map(|e| entity_summary(e)).collect();
     // `count` is every match; `returned` is this page of them (`offset`, `limit`).
     Ok(json!({ "count": matches.len(), "returned": page.len(), "offset": offset, "entities": page }))
+}
+
+/// TEXTS: the readable text of the space's texts, multiline texts, block attributes and
+/// multileaders, with where they are, filtered by content, layer and a window around their
+/// insertion points. Read-only (FIND selects and can replace; this only reports).
+fn run_texts(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "texts";
+    let given = |k: &str| p.get(k).filter(|v| !v.is_null());
+    let text = |k: &str| -> Result<Option<String>> {
+        given(k).map(|v| v.as_str().map(str::to_lowercase).ok_or_else(|| bad(CMD, format!("`{k}` must be a string")))).transpose()
+    };
+    let count = |k: &str, default: usize| -> Result<usize> {
+        given(k).map_or(Ok(default), |v| {
+            v.as_u64().map(|n| usize::try_from(n).unwrap_or(usize::MAX)).ok_or_else(|| bad(CMD, format!("`{k}` must be a whole number, 0 or more")))
+        })
+    };
+    let contains = text("contains")?;
+    let layer = text("layer")?;
+    let window = given("window")
+        .map(|w| {
+            let corners: Option<Vec<Vec2>> = w.as_array().filter(|a| a.len() == 2).and_then(|a| a.iter().map(point_value).collect());
+            match corners.as_deref() {
+                Some([a, b]) => Ok(cadcraft_geom::Bounds2::new(*a, *b)),
+                _ => Err(bad(CMD, "`window` must be two corner points [[x0, y0], [x1, y1]]")),
+            }
+        })
+        .transpose()?;
+    let limit = count("limit", 200)?;
+    let offset = count("offset", 0)?;
+    let st = s.state()?;
+    let Some(store) = st.doc.space(&st.space) else { return Ok(json!({ "count": 0, "returned": 0, "offset": offset, "texts": [] })) };
+    let mut found: Vec<Value> = Vec::new();
+    for e in store.iter() {
+        if layer.as_ref().is_some_and(|l| e.common.layer.to_lowercase() != *l) {
+            continue;
+        }
+        let mut push = |ty: &str, value: String, at: cadcraft_geom::Vec3, height: f64, rotation: f64, style: &str, tag: Option<&str>| {
+            let value = value.trim().to_string();
+            if value.is_empty()
+                || contains.as_ref().is_some_and(|c| !value.to_lowercase().contains(c.as_str()))
+                || window.as_ref().is_some_and(|w| !w.contains(Vec2::new(at.x, at.y)))
+            {
+                return;
+            }
+            let mut v = json!({
+                "handle": e.handle.hex(), "type": ty, "layer": e.common.layer, "text": value,
+                "at": [at.x, at.y], "height": height, "rotation": rotation.to_degrees(), "style": style,
+            });
+            if let (Some(t), Some(o)) = (tag, v.as_object_mut()) {
+                o.insert("tag".into(), json!(t));
+            }
+            found.push(v);
+        };
+        match &e.kind {
+            EntityKind::Text(t) => push("Text", t.value.clone(), t.insert, t.height, t.rotation, &t.style, None),
+            EntityKind::MText(t) => push("MText", cadcraft_fonts::plain_mtext(&t.contents), t.insert, t.height, t.rotation, &t.style, None),
+            EntityKind::Insert(i) => {
+                for a in i.attribs.iter().filter(|a| !a.invisible) {
+                    push("Attribute", a.text.value.clone(), a.text.insert, a.text.height, a.text.rotation, &a.text.style, Some(&a.tag));
+                }
+            }
+            EntityKind::MLeader(m) => {
+                if let Some(t) = &m.text {
+                    push("MLeader", cadcraft_fonts::plain_mtext(&t.contents), t.insert, t.height, t.rotation, &t.style, None);
+                }
+            }
+            _ => {}
+        }
+    }
+    let n = found.len();
+    let page: Vec<Value> = found.into_iter().skip(offset).take(limit).collect();
+    Ok(json!({ "count": n, "returned": page.len(), "offset": offset, "texts": page }))
 }
 
 mod count;
