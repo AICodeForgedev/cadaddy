@@ -77,6 +77,43 @@ fn programmatic_undo_during_a_command_ends_it_first() {
 }
 
 #[test]
+fn undo_during_line_removes_the_last_segment_and_keeps_line_running() {
+    let mut s = Session::new();
+    s.cmdline("line 0,0 10,0 10,10 20,10").unwrap();
+    assert_eq!(kinds(&s), vec!["Line", "Line", "Line"]);
+    // Ctrl+Z / the U command / the menu (Session::start) act as the Undo keyword.
+    s.start("u").unwrap();
+    assert!(s.running.is_some());
+    assert_eq!(kinds(&s), vec!["Line", "Line"]);
+    s.start("u").unwrap();
+    assert!(s.running.is_some());
+    assert_eq!(kinds(&s), vec!["Line"]);
+    // The command goes on from the last remaining point.
+    s.cmdline("10,5").unwrap();
+    assert_eq!(kinds(&s), vec!["Line", "Line"]);
+    s.cmdline("").unwrap();
+    assert!(s.running.is_none());
+}
+
+#[test]
+fn undo_during_a_command_without_undo_keyword_ends_it_and_undoes() {
+    let mut s = Session::new();
+    s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+    // LINE at its first point offers no Undo: Ctrl+Z ends it, then undoes the earlier line.
+    s.cmdline("line").unwrap();
+    assert!(s.running.is_some());
+    s.start("u").unwrap();
+    assert!(s.running.is_none());
+    assert!(kinds(&s).is_empty());
+    // TEXT offers no Undo keyword either.
+    s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+    s.script("TEXT 0,0 5 0 HELLO\n").unwrap();
+    s.start("u").unwrap();
+    assert!(s.running.is_none());
+    assert_eq!(kinds(&s), vec!["Line"]);
+}
+
+#[test]
 fn polar_and_direct_distance() {
     let mut s = Session::new();
     s.cmdline("line 1,1").unwrap();

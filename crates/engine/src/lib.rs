@@ -878,6 +878,12 @@ impl Session {
             }
         }
         let nested = transparent && spec.transparent && self.running.is_some() && spec.interactive.is_some();
+        // Ctrl+Z / U / UNDO while a command's prompt offers its own Undo keyword (LINE, PLINE…)
+        // takes back the last segment and keeps the command running, as the keyword does.
+        if !nested && matches!(spec.id, "u" | "undo") && self.current_prompt().is_some_and(|p| p.keywords.iter().any(|k| k == "Undo")) {
+            self.echo(format!("Command: {}", spec.id.to_ascii_uppercase()));
+            return self.input(Input::Keyword("Undo".into()));
+        }
         if !nested && self.running.is_some() {
             self.cancel();
         }
