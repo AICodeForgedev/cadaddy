@@ -743,16 +743,21 @@ fn glyph_or_fallback(face: &Face, c: char) -> Arc<GlyphOutline> {
 /// The [`crate::TextGlyph`] of a glyph placed like [`place_glyph`] does (its outline index is
 /// set when it is added). `None` for the missing-glyph shape.
 pub(crate) fn text_glyph(g: &GlyphOutline, c: char, x: f64, h: f64, wf: f64, shear: f64) -> Option<crate::TextGlyph> {
+    // Font units at 1000 per em scale by h / cap.
+    text_glyph_at(g, c, Vec2::new(x, 0.0), h / g.cap, wf, shear)
+}
+
+/// [`text_glyph`] with the glyph's origin at `origin` and font units scaled by `scale`.
+pub(crate) fn text_glyph_at(g: &GlyphOutline, c: char, origin: Vec2, scale: f64, wf: f64, shear: f64) -> Option<crate::TextGlyph> {
     let gid = u16::try_from(g.gid).ok().filter(|_| g.mapped)?;
     let face = g.face.clone()?;
-    // Font units at 1000 per em scale by h / cap.
-    let em = 1000.0 * h / g.cap;
+    let em = 1000.0 * scale;
     (em.is_finite() && em > 0.0).then(|| crate::TextGlyph {
         face,
         gid,
         ch: c,
         outline: 0,
-        origin: Vec2::new(x, 0.0),
+        origin,
         x: Vec2::new(em * wf, 0.0),
         y: Vec2::new(em * shear, em),
     })
@@ -760,14 +765,19 @@ pub(crate) fn text_glyph(g: &GlyphOutline, c: char, x: f64, h: f64, wf: f64, she
 
 /// Contours of a glyph scaled so its font's cap height is `h`, at pen position `x`.
 pub(crate) fn place_glyph(g: &GlyphOutline, x: f64, h: f64, wf: f64, shear: f64) -> Vec<Vec<Vec2>> {
-    let scale = h / g.cap;
+    place_glyph_at(g, Vec2::new(x, 0.0), h / g.cap, wf, shear)
+}
+
+/// Contours of a glyph with its origin at `origin` and font units scaled by `scale`; the shear
+/// slants about the baseline (y = 0).
+pub(crate) fn place_glyph_at(g: &GlyphOutline, origin: Vec2, scale: f64, wf: f64, shear: f64) -> Vec<Vec<Vec2>> {
     g.contours
         .iter()
         .map(|ct| {
             ct.iter()
                 .map(|p| {
-                    let y = p.y * scale;
-                    Vec2::new(x + p.x * scale * wf + y * shear, y)
+                    let y = origin.y + p.y * scale;
+                    Vec2::new(origin.x + p.x * scale * wf + y * shear, y)
                 })
                 .collect()
         })

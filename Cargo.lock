@@ -705,6 +705,7 @@ dependencies = [
  "cadcraft-color",
  "cadcraft-doc",
  "cadcraft-engine",
+ "cadcraft-fonts",
  "cadcraft-geom",
  "cadcraft-render",
  "craft-ui",

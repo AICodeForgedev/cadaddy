@@ -89,6 +89,42 @@ pub fn char_advance(c: char) -> f64 {
     }
 }
 
+/// Whether `c` is an East Asian wide character (CJK ideographs and punctuation, kana, Hangul,
+/// fullwidth forms): drawn in a square cell, like a big font's characters.
+pub fn is_wide(c: char) -> bool {
+    matches!(u32::from(c),
+        0x1100..=0x115F
+            | 0x2E80..=0x303E
+            | 0x3041..=0x33FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xA000..=0xA4CF
+            | 0xAC00..=0xD7A3
+            | 0xF900..=0xFAFF
+            | 0xFE30..=0xFE4F
+            | 0xFF00..=0xFF60
+            | 0xFFE0..=0xFFE6
+            | 0x20000..=0x3FFFD)
+}
+
+/// Where a CJK font's ideographic em box starts below the baseline, in em: the common value
+/// (fonts put the box from -0.12 em to 0.88 em).
+const IDEOGRAPHIC_DESCENT: f64 = 0.12;
+
+/// How the stroke font draws a fallback glyph of `c` at height `h`: its origin's height above
+/// the baseline and the scale of its font units (at 1000 per em). Wide characters fill a square
+/// cell from the baseline to the text height, as a big font's do in AutoCAD-style SHX text,
+/// so CJK text keeps the size and spacing its drawing was laid out with; other characters are
+/// sized like TrueType text (cap height = text height).
+fn stroke_fallback_metrics(g: &ttf::GlyphOutline, c: char, h: f64) -> (f64, f64) {
+    if is_wide(c) { (IDEOGRAPHIC_DESCENT * h, h / 1000.0) } else { (0.0, h / g.cap) }
+}
+
+/// Whether the stroke font draws `c` from a fallback font.
+fn draws_fallback(c: char) -> bool {
+    stroke::glyph(c).is_none() && !c.is_whitespace() && ttf::fallback_glyph(c).is_some()
+}
+
 /// Advance of `c` in the stroke font at height `h` and width factor `wf`; characters the
 /// stroke font lacks take a fallback font's advance when one has them.
 fn stroke_advance(c: char, h: f64, wf: f64) -> f64 {
@@ -99,7 +135,7 @@ fn stroke_advance(c: char, h: f64, wf: f64) -> f64 {
         && !c.is_whitespace()
         && let Some(g) = ttf::fallback_glyph(c)
     {
-        return g.advance * h / g.cap * wf;
+        return g.advance * stroke_fallback_metrics(&g, c, h).1 * wf;
     }
     char_advance(c) * h * wf
 }
@@ -116,6 +152,7 @@ pub fn shape_stroke(s: &str, height: f64, width_factor: f64, oblique: f64) -> Sh
     let mut x = 0.0;
     let mut under_start: Option<f64> = None;
     let mut over_start: Option<f64> = None;
+    let mut gap = stroke::GAP * sc * wf;
     if bidi::has_rtl(s)
         && let Some(sh) = complex::shape(None, s, h, wf, oblique)
     {
@@ -126,15 +163,18 @@ pub fn shape_stroke(s: &str, height: f64, width_factor: f64, oblique: f64) -> Sh
             continue;
         }
         let mut adv = char_advance(c) * h * wf;
+        gap = stroke::GAP * sc * wf;
         match stroke::glyph(c) {
             Some((_, spec)) => draw_stroke_glyph(&mut out, spec, x, sc, wf, shear),
             None if !c.is_whitespace() => match ttf::fallback_glyph(c) {
                 Some(g) => {
-                    let contours = ttf::place_glyph(&g, x, h, wf, shear);
+                    let (y, scale) = stroke_fallback_metrics(&g, c, h);
+                    let contours = ttf::place_glyph_at(&g, Vec2::new(x, y), scale, wf, shear);
                     if !contours.is_empty() {
-                        out.push_glyph(contours, ttf::text_glyph(&g, c, x, h, wf, shear));
+                        out.push_glyph(contours, ttf::text_glyph_at(&g, c, Vec2::new(x + y * shear, y), scale, wf, shear));
                     }
-                    adv = g.advance * h / g.cap * wf;
+                    adv = g.advance * scale * wf;
+                    gap = 0.0;
                 }
                 None => missing_glyph_box(&mut out, x, h, sc * wf),
             },
@@ -159,7 +199,9 @@ pub fn shape_stroke(s: &str, height: f64, width_factor: f64, oblique: f64) -> Sh
         }
         x += adv;
     }
-    let end = (x - stroke::GAP * sc * wf).max(0.0);
+    // The stroke font's gap after the last character isn't part of the line; a fallback glyph
+    // has none.
+    let end = (x - gap).max(0.0);
     if let Some(sx) = under_start {
         out.strokes.push(vec![Vec2::new(sx, -h * 0.2), Vec2::new(end, -h * 0.2)]);
     }
@@ -209,8 +251,13 @@ pub fn line_width(s: &str, height: f64, width_factor: f64) -> f64 {
             return sh.width;
         }
     }
-    let n: f64 = decode_controls(s).iter().map(|(c, _, _)| stroke_advance(*c, height, width_factor)).sum();
-    (n - stroke::GAP / stroke::CAP * height * width_factor).max(0.0)
+    let chars = decode_controls(s);
+    let n: f64 = chars.iter().map(|(c, _, _)| stroke_advance(*c, height, width_factor)).sum();
+    // The stroke font's gap after the last character isn't part of the line; a fallback glyph
+    // has none.
+    let last = chars.iter().rev().map(|(c, _, _)| *c).find(|c| !bidi::is_format_control(*c));
+    let gap = if last.is_some_and(draws_fallback) { 0.0 } else { stroke::GAP / stroke::CAP * height * width_factor };
+    (n - gap).max(0.0)
 }
 
 /// Width of the gap MTEXT leaves between two words. Words are measured without their trailing
@@ -679,8 +726,31 @@ mod ttf_tests {
         let sh = crate::shape_stroke("AB\u{4E2D}\u{6587}", 1.0, 1.0, 0.0);
         assert_eq!(sh.glyphs.len(), 2, "two fallback glyphs");
         assert!(!sh.strokes.iter().any(|s| s.len() == 5 && s.first() == s.last()), "no missing-glyph boxes");
-        let maxy = sh.glyphs.iter().flatten().flatten().map(|p| p.y).fold(f64::MIN, f64::max);
-        assert!(maxy > 0.8 && maxy < 1.8, "sized like TrueType text (cap height = text height), got {maxy}");
         assert!((crate::line_width("AB\u{4E2D}\u{6587}", 1.0, 1.0) - sh.width).abs() < 1e-9);
+    }
+
+    /// #674: CJK characters in stroke-font (SHX) text fill a square cell from the baseline to the
+    /// text height, as a big font's do, instead of being sized by the fallback font's Latin cap
+    /// height (which made them about 1.4 times too large and too widely spaced).
+    #[test]
+    fn cjk_in_stroke_text_fills_a_square_cell_like_a_big_font() {
+        if crate::ttf::fallback_for('\u{4E2D}').is_none() {
+            return;
+        }
+        let (h, wf) = (2.5, 0.8);
+        let one = crate::shape_stroke("\u{4E2D}", h, wf, 0.0);
+        let four = crate::shape_stroke("\u{4E2D}\u{6587}\u{5B57}\u{4F53}", h, wf, 0.0);
+        let pts: Vec<_> = four.glyphs.iter().flatten().flatten().copied().collect();
+        let (miny, maxy) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.y), b.max(p.y)));
+        assert!(miny > -0.1 * h && maxy < 1.05 * h && maxy > 0.75 * h, "glyphs span {miny}..{maxy} for height {h}");
+        let cell = h * wf;
+        assert!(
+            (one.width - cell).abs() < 0.05 * cell && (four.width - 4.0 * cell).abs() < 0.2 * cell,
+            "widths {} and {}, cell {cell}",
+            one.width,
+            four.width
+        );
+        assert!((crate::line_width("\u{4E2D}\u{6587}\u{5B57}\u{4F53}", h, wf) - four.width).abs() < 1e-9);
+        assert!(crate::is_wide('\u{3042}') && crate::is_wide('\u{AC00}') && crate::is_wide('\u{FF21}') && !crate::is_wide('A'));
     }
 }

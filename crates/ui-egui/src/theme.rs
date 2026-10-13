@@ -301,8 +301,17 @@ pub fn mono() -> FontId {
     FontId::new(12.0, FontFamily::Monospace)
 }
 
-/// Load a system UI font at run time when one is installed (not bundled), else keep egui's.
-pub fn install_fonts(ctx: &egui::Context, cjk: bool) {
+/// Load a system UI font at run time when one is installed (not bundled), else keep egui's;
+/// then CJK fonts after the Latin ones, so Latin text keeps its look, in every interface
+/// language: file, layout and layer names can be Japanese or Chinese whatever the interface
+/// shows (#513). With `chinese` (a Chinese interface) the Chinese font comes first, else a
+/// Japanese one, so names take their own glyph forms. A font embedded from craft-fonts comes
+/// last, for systems without any (and the web build, which has no system fonts).
+pub fn install_fonts(ctx: &egui::Context, chinese: bool) {
+    let mut fonts = egui::FontDefinitions::default();
+    let mut added: Vec<(String, std::sync::Arc<egui::FontData>)> = Vec::new();
+    #[cfg(target_arch = "wasm32")]
+    let _ = chinese;
     #[cfg(not(target_arch = "wasm32"))]
     {
         let candidates: &[&str] = if cfg!(target_os = "macos") {
@@ -317,7 +326,6 @@ pub fn install_fonts(ctx: &egui::Context, cjk: bool) {
                 "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
             ]
         };
-        let mut fonts = egui::FontDefinitions::default();
         for path in candidates {
             if let Ok(bytes) = std::fs::read(path) {
                 fonts.font_data.insert("system-ui".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
@@ -327,19 +335,36 @@ pub fn install_fonts(ctx: &egui::Context, cjk: bool) {
                 break;
             }
         }
-        // Chinese: an installed CJK font after the Latin ones, so Latin text keeps its look.
-        if let Some(bytes) = cjk.then(cjk_font).flatten().and_then(|p| read_capped(p, MAX_UI_FONT_BYTES)) {
-            fonts.font_data.insert("system-cjk".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-            for family in [FontFamily::Proportional, FontFamily::Monospace] {
-                if let Some(f) = fonts.families.get_mut(&family) {
-                    f.push("system-cjk".into());
-                }
+        let mut paths: Vec<&std::path::Path> = Vec::new();
+        if !chinese {
+            paths.extend(japanese_font());
+        }
+        paths.extend(cjk_font());
+        paths.dedup();
+        added.extend(
+            paths
+                .into_iter()
+                .filter_map(|p| read_capped(p, MAX_UI_FONT_BYTES))
+                .enumerate()
+                .map(|(i, bytes)| (format!("system-cjk-{i}"), std::sync::Arc::new(egui::FontData::from_owned(bytes)))),
+        );
+    }
+    let mut embedded: Vec<_> = cadcraft_fonts::CRAFT_FONTS
+        .iter()
+        .filter(|f| f.style == "Regular" && f.scripts.iter().any(|s| matches!(*s, "Jpan" | "Hans" | "Hant")))
+        .collect();
+    // A sans-serif face reads best in the interface.
+    embedded.sort_by_key(|f| !f.family.contains("Gothic") && !f.family.contains("Sans"));
+    added.extend(embedded.first().map(|f| (format!("craft-{}", f.stem()), std::sync::Arc::new(egui::FontData::from_static(f.bytes)))));
+    for (name, data) in added {
+        fonts.font_data.insert(name.clone(), data);
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            if let Some(f) = fonts.families.get_mut(&family) {
+                f.push(name.clone());
             }
         }
-        ctx.set_fonts(fonts);
     }
-    #[cfg(target_arch = "wasm32")]
-    let _ = (ctx, cjk);
+    ctx.set_fonts(fonts);
 }
 
 /// Largest interface font file read (CJK collections are 15–60 MB).
@@ -378,6 +403,34 @@ pub fn cjk_font() -> Option<&'static std::path::Path> {
                         "/usr/share/fonts/wqy-microhei/wqy-microhei.ttc",
                         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
                         "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+                    ]
+                };
+                candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
+            })
+            .as_deref()
+    }
+    #[cfg(target_arch = "wasm32")]
+    None
+}
+
+/// An installed Japanese font, for Japanese names in a non-Chinese interface. Checked once.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn japanese_font() -> Option<&'static std::path::Path> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static FOUND: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+        FOUND
+            .get_or_init(|| {
+                let candidates: &[&str] = if cfg!(target_os = "macos") {
+                    &["/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc"]
+                } else if cfg!(windows) {
+                    &["C:\\Windows\\Fonts\\YuGothR.ttc", "C:\\Windows\\Fonts\\meiryo.ttc", "C:\\Windows\\Fonts\\msgothic.ttc"]
+                } else {
+                    &[
+                        "/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
+                        "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
+                        "/usr/share/fonts/ipa-pgothic/ipagp.ttf",
+                        "/usr/share/fonts/vl-gothic/VL-PGothic-Regular.ttf",
                     ]
                 };
                 candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
