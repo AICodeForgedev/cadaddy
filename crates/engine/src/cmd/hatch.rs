@@ -453,6 +453,13 @@ fn add_hatches(s: &mut Session, st: &HatchSettings, groups: Vec<Vec<HatchLoop>>)
 
 fn run_hatch(s: &mut Session, p: &Value) -> Result<Value> {
     patfile::load_param(p)?;
+    // Like the prompt: a name without a definition would be drawn as ANSI31.
+    if let Some(up) = str_param(p, "pattern").map(str::to_ascii_uppercase)
+        && cadcraft_doc::library::pattern(&up).is_none()
+        && patfile::user_pattern(&up).is_none()
+    {
+        return Err(bad("hatch", format!("unknown pattern {up}")));
+    }
     make(s, p, false)
 }
 fn run_gradient(s: &mut Session, p: &Value) -> Result<Value> {
@@ -816,6 +823,19 @@ mod tests {
         s.cancel();
         s.start("gradient").unwrap();
         assert!(s.current_prompt().unwrap().picker.is_none());
+    }
+
+    #[test]
+    fn json_hatch_refuses_an_undefined_pattern() {
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        let e = s.execute("hatch", &json!({ "points": [[5, 5]], "pattern": "NOPE" })).unwrap_err();
+        assert!(e.to_string().contains("unknown pattern NOPE"), "{e}");
+        assert_eq!(s.doc().unwrap().model.len(), 1, "only the rectangle");
+        for name in ["ansi31", "SOLID"] {
+            s.execute("hatch", &json!({ "points": [[5, 5]], "pattern": name })).unwrap();
+        }
+        assert_eq!(s.doc().unwrap().model.len(), 3);
     }
 
     #[test]
