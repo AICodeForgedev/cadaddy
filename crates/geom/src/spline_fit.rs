@@ -96,6 +96,11 @@ impl FitOptions {
 /// systems the size of the point count several times.
 const MAX_APPROX_POINTS: usize = 300;
 
+/// Fit points above this count are not interpolated: interpolation solves a dense system the size
+/// of the point count squared (twice, about 270 MB at this size), so more points use them as
+/// control points instead. Above the 4,001 fit points of a 500-turn helix.
+const MAX_INTERP_POINTS: usize = 4_096;
+
 impl Spline {
     /// Build a spline through (or, with a tolerance, near) `fit`, open or closed. Closed curves
     /// are periodic and ignore end tangents; a tolerance approximates them with fewer periodic
@@ -230,11 +235,15 @@ fn open_fit(fit: &[Vec2], opts: FitOptions) -> Spline {
     {
         return s;
     }
-    interpolate(fit, &u, d0, d1).unwrap_or_else(|| {
+    let through_control = || {
         let mut s = Spline::from_control(fit.to_vec(), 3.min(n - 1));
         s.fit = fit.to_vec();
         s
-    })
+    };
+    if n > MAX_INTERP_POINTS {
+        return through_control();
+    }
+    interpolate(fit, &u, d0, d1).unwrap_or_else(through_control)
 }
 
 /// Global interpolation: one control point per fit point plus one per end-derivative
@@ -613,7 +622,8 @@ fn closed_fit(fit: &[Vec2], kind: KnotParam, tol: f64) -> Spline {
         s
     };
     let p = 3;
-    if n < p {
+    // The open fallback runs through n + 1 points, so above the cap it does not interpolate.
+    if n < p || n > MAX_INTERP_POINTS {
         return fallback(&pts);
     }
     // Parameters t_0 = 0 .. t_n = 1 (t_n is the return to the first point).
@@ -852,6 +862,29 @@ mod tests {
         }
         let tight: Vec<Vec2> = (0..8).map(|i| Vec2::new(i as f64 * 1e-13, 0.0)).collect();
         let _ = Spline::fit_with(&tight, true, FitOptions { tolerance: 1.0, ..FitOptions::default() });
+    }
+
+    /// Above the interpolation cap the fit points become control points instead of a dense
+    /// system the size of their count squared (issue #702); just below it they still interpolate.
+    #[test]
+    fn too_many_fit_points_are_not_interpolated() {
+        let wave = |n: usize| -> Vec<Vec2> { (0..n).map(|i| Vec2::new((i * i) as f64 * 1e-3, (i % 5) as f64)).collect() };
+        let fit = wave(MAX_INTERP_POINTS + 1);
+        let s = Spline::fit_with(&fit, false, FitOptions::default());
+        assert_eq!(s.control, fit);
+        assert_eq!(s.knots, Spline::from_control(fit.clone(), 3).knots);
+        assert_eq!(s.fit, fit);
+
+        let c = Spline::fit_with(&fit, true, FitOptions::default());
+        let mut ring = fit.clone();
+        ring.extend(fit.first().copied());
+        assert!(c.closed);
+        assert_eq!(c.control, ring);
+        assert_eq!(c.fit, fit);
+
+        let few = wave(64);
+        assert!(passes_through(&Spline::fit_with(&few, false, FitOptions::default()), &few, 1e-6));
+        assert!(passes_through(&Spline::fit_with(&few, true, FitOptions::default()), &few, 1e-6));
     }
 
     #[test]
