@@ -468,11 +468,27 @@ fn boundary_at(s: &mut Session, q: Vec2) -> Result<Vec<Handle>> {
     Ok(out)
 }
 
+/// Most internal points one BOUNDARY call accepts (checked before the list is copied).
+const MAX_BOUNDARY_POINTS: usize = 256;
+/// Most polylines one BOUNDARY call may create. Each pick adds polylines the next pick traces
+/// against, so this bounds the aggregate tracing work of the batch.
+const MAX_BOUNDARY_OUTPUT: usize = 1024;
+
 fn run_boundary(s: &mut Session, p: &Value) -> Result<Value> {
+    let raw = p.get("points").and_then(Value::as_array).ok_or_else(|| bad("boundary", "`points` is required"))?;
+    if raw.len() > MAX_BOUNDARY_POINTS {
+        return Err(bad("boundary", format!("at most {MAX_BOUNDARY_POINTS} points per call (got {})", raw.len())));
+    }
     let pts = points_param(p, "points").ok_or_else(|| bad("boundary", "`points` is required"))?;
+    let before = s.state()?.doc.clone();
     let mut out = Vec::new();
     for q in pts {
         out.extend(boundary_at(s, q)?.into_iter().map(|h| h.hex()));
+        if out.len() > MAX_BOUNDARY_OUTPUT {
+            // The refused call leaves no partial result behind.
+            s.state_mut()?.doc = before;
+            return Err(bad("boundary", format!("more than {MAX_BOUNDARY_OUTPUT} boundary polylines in one call; split the work")));
+        }
     }
     Ok(json!({ "handles": out, "message": format!("BOUNDARY created {} polyline(s)", out.len()) }))
 }

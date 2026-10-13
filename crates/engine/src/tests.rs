@@ -862,6 +862,21 @@ fn gradient_pick_point_keeps_island_of_separate_lines() {
 }
 
 #[test]
+fn boundary_point_batch_is_capped() {
+    let mut s = Session::new();
+    let sq = [[0, 0], [20, 0], [20, 20], [0, 20]];
+    for i in 0..4 {
+        s.execute("line", &json!({"points": [sq[i], sq[(i + 1) % 4]]})).unwrap();
+    }
+    let many: Vec<_> = (0..100_000).map(|_| json!([2, 2])).collect();
+    let t = std::time::Instant::now();
+    assert!(s.execute("boundary", &json!({"points": many})).is_err());
+    assert!(t.elapsed().as_secs() < 5);
+    let ok: Vec<_> = (0..8).map(|_| json!([2, 2])).collect();
+    assert!(s.execute("boundary", &json!({"points": ok})).is_ok());
+}
+
+#[test]
 fn boundary_pick_point_keeps_island_of_separate_lines() {
     for lines in [true, false] {
         let mut s = square_hole_fixture(lines);
