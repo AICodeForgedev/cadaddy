@@ -88,10 +88,14 @@ fn dist_to_polyline(pts: &[Vec2], p: Vec2) -> f64 {
 pub fn entity_distance(d: &Drawing, e: &Entity, p: Vec2, tol: f64) -> f64 {
     let polys = hit_polylines(d, e, tol);
     let mut best = polys.iter().map(|pl| dist_to_polyline(pl, p)).fold(f64::INFINITY, f64::min);
-    let filled = matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) | EntityKind::Solid(_) | EntityKind::Table(_))
+    let filled = matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) | EntityKind::Table(_))
         || matches!(e.kind, EntityKind::Tolerance(_))
         || matches!(&e.kind, EntityKind::Hatch(h) if h.solid);
     if filled && entity_bounds(d, e, 0).contains(p) {
+        best = 0.0;
+    }
+    // A SOLID fills its polygon, not its bounding rectangle (half of which is empty for a triangle).
+    if matches!(e.kind, EntityKind::Solid(_)) && e.kind.prims().iter().any(|prim| matches!(prim, Prim::Fill(poly) if point_in_polygon(poly, p))) {
         best = 0.0;
     }
     best
@@ -452,6 +456,19 @@ mod solid_interior_tests {
         assert!(!in_window(&d, &e, None, &empty, true, 0.01));
         let inside = Bounds2::new(Vec2::new(3.0, 3.0), Vec2::new(4.0, 4.0));
         assert!(in_window(&d, &e, None, &inside, true, 0.01));
+    }
+
+    #[test]
+    fn pick_in_triangular_bbox_but_outside_fill_does_not_select() {
+        let mut d = Drawing::default();
+        d.model.push(face(true, true));
+        let at = |x: f64, y: f64| pick(&d, &Space::Model, Vec2::new(x, y), 0.25);
+        // The empty corner of the bounding rectangle, 5.66 from the hypotenuse.
+        assert_eq!(at(9.0, 9.0), None);
+        // Inside the fill, farther than the aperture from every edge.
+        assert_eq!(at(2.0, 2.0), Some(Handle(256)));
+        // Outside the fill but within the aperture of the hypotenuse.
+        assert_eq!(at(5.1, 5.1), Some(Handle(256)));
     }
 }
 
