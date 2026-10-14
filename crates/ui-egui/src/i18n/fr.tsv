@@ -28,7 +28,7 @@
 	= Equals	= Égal à
 	> Greater than	> Supérieur à
 	About	À propos
-	About CADCraft	À propos de CADCraft
+	About CADaddy	À propos de CADaddy
 	Absolute	Absolu
 	Add Leader	Ajouter un repère
 	Align	Aligner
@@ -83,7 +83,7 @@
 	ByBlock	DuBloc
 	ByColor	Par couleur
 	ByLayer	DuCalque
-	CADCraft Help	Aide de CADCraft
+	CADaddy Help	Aide de CADaddy
 	Cancel	Annuler
 	Cartesian (x, y)	Cartésien (x, y)
 	Center	Centre
@@ -585,7 +585,7 @@
 	Quick Select Properties	Propriétés de la sélection rapide
 	Quick Select...	Sélection rapide...
 	QuickCalc	Calculatrice rapide
-	Quit CADCraft	Quitter CADCraft
+	Quit CADaddy	Quitter CADaddy
 	Radius	Rayon
 	Raster Image	Image raster
 	Ray	Rayon
@@ -994,7 +994,7 @@
 @plural	{n} contributor	{n} contributeur|{n} contributeurs
 	Drawing as bytes	Dessin sous forme d'octets
 	Services	Services
-	Hide CADCraft	Masquer CADCraft
+	Hide CADaddy	Masquer CADaddy
 	Hide Others	Masquer les autres
 	Accessibility	Accessibilité
 	Show System Cursor	Afficher le curseur système
@@ -1007,3 +1007,6 @@
 	Search for pattern	Rechercher un motif
 	Not a number or distance: {text}	Ni un nombre ni une distance : {text}
 	Query Texts	Interroger les textes
+	Ribbon	Ruban
+	Close Ribbon	Fermer le ruban
+	Menu Bar	Barre de menus

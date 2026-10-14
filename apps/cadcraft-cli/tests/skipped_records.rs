@@ -4,7 +4,7 @@
 use std::process::{Command, Output};
 
 fn cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_cadcraft-cli")).args(args).output().unwrap()
+    Command::new(env!("CARGO_BIN_EXE_cadaddy-cli")).args(args).output().unwrap()
 }
 
 /// A LINE after the last ENDSEC and a VERTEX with no POLYLINE before it.

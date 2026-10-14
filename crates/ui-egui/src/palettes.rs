@@ -302,7 +302,7 @@ fn section_header(ui: &mut egui::Ui, title: &str) -> Rect {
     hr
 }
 
-fn swatch(p: &egui::Painter, r: Rect, c: Color) {
+pub(crate) fn swatch(p: &egui::Painter, r: Rect, c: Color) {
     let rgb = c.resolve(Color::Index(7), Color::Index(7));
     p.rect_filled(r, 1.0, Color32::from_rgb(rgb.0, rgb.1, rgb.2));
     p.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_gray(30)), egui::StrokeKind::Inside);

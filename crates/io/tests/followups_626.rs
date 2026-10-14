@@ -205,7 +205,7 @@ fn modelled_dictionaries_are_not_kept_twice() {
     let first = dxf(&d, Version::R2018);
     let read = cadcraft_io::read_dxf(first.as_bytes()).unwrap();
     let kept: Vec<&str> = read.foreign.objects.iter().map(|o| o.kind.as_str()).collect();
-    assert!(kept.is_empty(), "nothing CADCraft writes itself is kept raw: {kept:?}");
+    assert!(kept.is_empty(), "nothing CADaddy writes itself is kept raw: {kept:?}");
     let again = dxf(&read, Version::R2018);
     let third = dxf(&cadcraft_io::read_dxf(again.as_bytes()).unwrap(), Version::R2018);
     for kind in ["MLINESTYLE", "SCALE", "MLEADERSTYLE", "TABLESTYLE", "DICTIONARY", "XRECORD", "GROUP", "LAYOUT"] {

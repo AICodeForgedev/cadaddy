@@ -31,8 +31,8 @@ fn open_bytes_opens_the_named_drawing_and_reports_failures() {
     // Too large to hold in memory: refused before anything is read, with the limit named.
     assert!(CadApp::open_size_error("big.dwg", CadApp::MAX_OPEN_BYTES).is_none());
     let e = CadApp::open_size_error("huge.dwg", CadApp::MAX_OPEN_BYTES * 2);
-    assert_eq!(e.as_deref(), Some("Open: huge.dwg is 512.0 MB, larger than the 256 MB CADCraft opens in the browser"));
+    assert_eq!(e.as_deref(), Some("Open: huge.dwg is 512.0 MB, larger than the 256 MB CADaddy opens in the browser"));
     app.open_failed(e.unwrap_or_default());
-    assert_eq!(app.session.log.last().map(String::as_str), Some("Open: huge.dwg is 512.0 MB, larger than the 256 MB CADCraft opens in the browser"));
+    assert_eq!(app.session.log.last().map(String::as_str), Some("Open: huge.dwg is 512.0 MB, larger than the 256 MB CADaddy opens in the browser"));
     assert_eq!(app.session.docs.len(), 1);
 }

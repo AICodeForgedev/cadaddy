@@ -34,7 +34,7 @@
 	A drawing opened from a file keeps that file's format.	En ritning som öppnats från en fil behåller filens format.
 	A variable name starts with a letter and has only letters, digits and _	Ett variabelnamn börjar med en bokstav och innehåller bara bokstäver, siffror och _
 	About	Om
-	About CADCraft	Om CADCraft
+	About CADaddy	Om CADaddy
 	Absolute	Absolut
 	Add Current Scale	Lägg till aktuell skala
 	Add Leader	Lägg till hänvisningslinje
@@ -109,9 +109,9 @@
 	ByBlock	Enligt block
 	ByColor	Enligt färg
 	ByLayer	Enligt lager
-	CADCraft	CADCraft
-	CADCraft Help	Hjälp för CADCraft
-	CADCraft keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADCraft sparar de här inställningarna, objektfästena och ritlägena för ditt användarkonto och återställer dem när programmet startar.
+	CADaddy	CADaddy
+	CADaddy Help	Hjälp för CADaddy
+	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADaddy sparar de här inställningarna, objektfästena och ritlägena för ditt användarkonto och återställer dem när programmet startar.
 	Cancel	Avbryt
 	Cartesian (x, y)	Kartesisk (x, y)
 	Center	Centrum
@@ -793,7 +793,7 @@
 	Quick Select Properties	Egenskaper för snabbmarkering
 	Quick Select...	Snabbmarkering...
 	QuickCalc	Snabbkalkyl
-	Quit CADCraft	Avsluta CADCraft
+	Quit CADaddy	Avsluta CADaddy
 	Radius	Radie
 	Raster Image	Rasterbild
 	Ray	Stråle
@@ -1214,7 +1214,7 @@
 @plural	{n} contributor	{n} bidragsgivare|{n} bidragsgivare
 	Drawing as bytes	Ritningen som byte
 	Services	Tjänster
-	Hide CADCraft	Dölj CADCraft
+	Hide CADaddy	Dölj CADaddy
 	Hide Others	Dölj övriga
 	Accessibility	Tillgänglighet
 	Show System Cursor	Visa systemets muspekare
@@ -1245,3 +1245,6 @@ menu	View	Visa
 menu	Draw	Rita
 menu	Dimension	Måttsättning
 menu	Modify	Ändra
+	Ribbon	Menyfliksområde
+	Close Ribbon	Stäng menyfliksområdet
+	Menu Bar	Menyrad

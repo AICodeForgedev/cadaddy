@@ -34,6 +34,9 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.animations.off", "Off", &["View", "Accessibility", "Animation Effects", "Off"], None),
     ("ui.animations", "Animation Effects", &[], None),
     ("ui.toggle.toolbar", "Tool Bar", &["Window", "Tool Bar"], None),
+    ("ui.toggle.ribbon", "Ribbon", &["Window", "Ribbon"], None),
+    ("ribbon", "Ribbon", &[], None),
+    ("ribbonclose", "Close Ribbon", &[], None),
     ("ui.toggle.filetabs", "File Tab", &["Window", "File Tab"], None),
     ("ui.toggle.statusbar", "Status Bar", &["Window", "Status Bar"], None),
     ("ui.toggle.cmdline", "Command Line", &["Window", "Command Line"], Some("Cmd+9")),
@@ -54,6 +57,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.saveversion.2000", "Version 2000", &["File", "Default Save Format", "Version 2000"], None),
     ("ui.saveversion", "Default Save Version", &[], None),
     ("ui.toggle.menubar", "In-window Menu Bar", &["Window", "In-window Menu Bar"], None),
+    ("menubar", "Menu Bar", &[], None),
     ("ui.hidepalettes", "Hide Palettes", &["Window", "Hide Palettes"], None),
     ("ui.resetpalettes", "Reset Palettes", &["Window", "Reset Palettes"], None),
     ("ui.start", "Start", &["Window", "Start"], None),
@@ -62,15 +66,15 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.dialog.qselect", "Quick Select...", &[], None),
     ("ui.dialog.parameters", "Parameters Manager", &["Window", "Parameters Manager"], None),
     ("ui.dialog.dsettings", "Drafting Settings...", &[], None),
-    ("ui.dialog.about", "About CADCraft", &["Help", "About CADCraft"], None),
-    ("ui.dialog.commands", "Command Reference", &["Help", "CADCraft Help"], Some("F1")),
+    ("ui.dialog.about", "About CADaddy", &["Help", "About CADaddy"], None),
+    ("ui.dialog.commands", "Command Reference", &["Help", "CADaddy Help"], Some("F1")),
     ("ui.toggle.history", "Command History", &["Window", "Command History"], Some("F2")),
     ("ui.cmdline.lines", "Command Line History Lines", &[], None),
     ("ui.cmdline.clear", "Clear Command History", &[], None),
     ("ui.dialog.language", "Interface Language", &["Edit", "Interface Language"], None),
     ("ui.language", "Language", &[], None),
     ("ui.noop", "", &[], None),
-    ("ui.quit", "Quit CADCraft", &[], Some("Cmd+Q")),
+    ("ui.quit", "Quit CADaddy", &[], Some("Cmd+Q")),
 ];
 
 pub fn is_ui_command(id: &str) -> bool {
@@ -210,6 +214,18 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             toggle(&mut app.ui.show_palettes, params);
             Ok(Value::Null)
         }
+        "ui.toggle.ribbon" => {
+            toggle(&mut app.ui.ribbon, params);
+            Ok(Value::Null)
+        }
+        "ribbon" => {
+            app.ui.ribbon = true;
+            Ok(Value::Null)
+        }
+        "ribbonclose" => {
+            app.ui.ribbon = false;
+            Ok(Value::Null)
+        }
         "ui.toggle.toolbar" => {
             toggle(&mut app.ui.show_toolbar, params);
             Ok(Value::Null)
@@ -242,7 +258,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             toggle(&mut app.ui.show_ucs_icon, params);
             Ok(Value::Null)
         }
-        "ui.toggle.menubar" => {
+        "ui.toggle.menubar" | "menubar" => {
             toggle(&mut app.ui.in_window_menu, params);
             Ok(Value::Null)
         }

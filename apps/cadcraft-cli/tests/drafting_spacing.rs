@@ -26,7 +26,7 @@ impl Drop for DxfFile {
 }
 
 fn cli(args: &[&str]) -> Vec<Value> {
-    let out = Command::new(env!("CARGO_BIN_EXE_cadcraft-cli")).args(args).output().expect("run cadcraft-cli");
+    let out = Command::new(env!("CARGO_BIN_EXE_cadaddy-cli")).args(args).output().expect("run cadcraft-cli");
     assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8_lossy(&out.stdout).lines().map(|line| serde_json::from_str(line).expect("CLI JSON reply")).collect()
 }

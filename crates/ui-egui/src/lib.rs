@@ -42,6 +42,7 @@ pub mod palettes;
 pub mod parametric;
 pub mod plotstyles;
 pub mod quick;
+pub mod ribbon;
 pub mod shortcut_menus;
 pub mod theme;
 pub mod viewcube;
@@ -71,6 +72,12 @@ pub struct UiState {
 
     pub interface_language: i18n::Preference,
     pub show_toolsets: bool,
+    /// The ribbon (AutoCAD for Windows' tabbed command bar) instead of the tool bar.
+    pub ribbon: bool,
+    /// The ribbon's active tab ("Home", "Insert", …).
+    pub ribbon_tab: String,
+    /// Split buttons remember the variant used last: (button's default command, variant).
+    pub ribbon_recent: Vec<(String, String)>,
     pub show_palettes: bool,
     pub show_toolbar: bool,
     pub show_file_tabs: bool,
@@ -156,7 +163,10 @@ impl Default for UiState {
             docking: docking::Workspace::default(),
 
             interface_language: i18n::Preference::default(),
-            show_toolsets: true,
+            show_toolsets: false,
+            ribbon: true,
+            ribbon_tab: "Home".into(),
+            ribbon_recent: Vec::new(),
             show_palettes: true,
             show_toolbar: true,
             show_file_tabs: true,
@@ -170,7 +180,8 @@ impl Default for UiState {
             collapsed_groups: Vec::new(),
             hidden_tools: Vec::new(),
             properties_all: true,
-            in_window_menu: !cfg!(target_os = "macos"),
+            // AutoCAD hides the menu bar under the ribbon (MENUBAR 0).
+            in_window_menu: false,
             start_tab: false,
             dialog: None,
             history_lines: 3,
@@ -464,7 +475,7 @@ impl CadApp {
     pub fn open_size_error(name: &str, len: u64) -> Option<String> {
         (len > Self::MAX_OPEN_BYTES).then(|| {
             format!(
-                "Open: {name} is {:.1} MB, larger than the {} MB CADCraft opens in the browser",
+                "Open: {name} is {:.1} MB, larger than the {} MB CADaddy opens in the browser",
                 len as f64 / 1048576.0,
                 Self::MAX_OPEN_BYTES >> 20
             )
@@ -618,8 +629,12 @@ impl CadApp {
         let t0 = now_ms();
         control::begin_frame(ui.ctx());
         let t = theme::Tokens::get();
+        // With the ribbon, a menu bar sits above it (AutoCAD's MENUBAR 1); otherwise under the tool bar.
+        if self.ui.ribbon && self.ui.in_window_menu {
+            menus::menu_bar(self, ui);
+        }
         chrome::title_and_toolbar(self, ui);
-        if self.ui.in_window_menu {
+        if !self.ui.ribbon && self.ui.in_window_menu {
             menus::menu_bar(self, ui);
         }
         if self.ui.show_status_bar {
@@ -821,7 +836,7 @@ mod tests {
     #[test]
     fn default_save_format_persists_and_names_new_drawings() {
         let mut a = app();
-        assert_eq!(a.ui.save_format, SaveFormat::Dxf, "default keeps DXF, CADCraft's native format");
+        assert_eq!(a.ui.save_format, SaveFormat::Dxf, "default keeps DXF, CADaddy's native format");
         assert!(a.run("ui.saveformat", json!({ "format": "pdf" })).is_err());
         assert_eq!(a.run("ui.saveformat", json!({ "format": "DWG" })).ok(), Some(json!({ "saveFormat": "dwg" })));
         assert_eq!(a.run("ui.saveformat", json!({})).ok(), Some(json!({ "saveFormat": "dwg" })), "no format: report it");

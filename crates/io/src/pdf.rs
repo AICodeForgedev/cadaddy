@@ -961,7 +961,7 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
     let labels: Vec<String> = pages.iter().enumerate().map(|(i, p)| format!("{i} << /P {} >>", pdf_string(&p.label))).collect();
     let _ = write!(cat, " /PageLabels << /Nums [{}] >> >>", labels.join(" "));
     objs.set(catalog, cat);
-    let info = objs.add(format!("<< /Producer (CADCraft) /Creator (CADCraft) /Title {} >>", pdf_string(title)));
+    let info = objs.add(format!("<< /Producer (CADaddy) /Creator (CADaddy) /Title {} >>", pdf_string(title)));
     let size: usize = objs.bodies.iter().map(Vec::len).sum();
     let mut out: Vec<u8> = Vec::with_capacity(size + 64 * objs.bodies.len() + 256);
     out.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");

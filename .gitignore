@@ -9,3 +9,6 @@
 *.swp
 /apps/cadcraft-web/dist/
 /.claude/worktrees/
+
+# local build/test logs
+/*.log

@@ -222,7 +222,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     };
     if let Some(f) = &formula {
         let f = if f.starts_with('=') { f.clone() } else { format!("={f}") };
-        formula::check(&f).map_err(|e| bad("table.set", format!("{e}: not a formula CADCraft can evaluate: {f}")))?;
+        formula::check(&f).map_err(|e| bad("table.set", format!("{e}: not a formula CADaddy can evaluate: {f}")))?;
     }
     edit(s, p, "table.set", |t| {
         let (r, c) = cell_at(p, t)?;

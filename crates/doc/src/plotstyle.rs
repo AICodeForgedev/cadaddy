@@ -361,11 +361,11 @@ impl PlotStyleTable {
         if text.len() > MAX_TABLE_FILE {
             return Err("the plot style table file is too large".into());
         }
-        let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("not a CADCraft plot style table: {e}"))?;
+        let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("not a CADaddy plot style table: {e}"))?;
         match v.get(FILE_MARKER).and_then(serde_json::Value::as_u64) {
             Some(FILE_VERSION) => {}
-            Some(n) => return Err(format!("plot style table format version {n} is newer than this CADCraft reads")),
-            None => return Err(format!("not a CADCraft plot style table (no `{FILE_MARKER}`)")),
+            Some(n) => return Err(format!("plot style table format version {n} is newer than this CADaddy reads")),
+            None => return Err(format!("not a CADaddy plot style table (no `{FILE_MARKER}`)")),
         }
         let t: PlotStyleTable = serde_json::from_value(v).map_err(|e| format!("bad plot style table: {e}"))?;
         Ok(t.sanitized())

@@ -85,7 +85,7 @@ fn parse(text: &str) -> (Vec<(String, String)>, Vec<String>) {
             continue;
         };
         if !target.trim_start().starts_with('*') {
-            warn(no, format!("{} is an external command; CADCraft doesn't run programs from alias files", alias.trim()));
+            warn(no, format!("{} is an external command; CADaddy doesn't run programs from alias files", alias.trim()));
             continue;
         }
         let name = match alias_name(alias) {

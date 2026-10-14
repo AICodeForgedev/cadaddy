@@ -12,6 +12,8 @@ fn harness(width: f32, height: f32, scale: f32, message: bool) -> Harness<'stati
     app.run("new", serde_json::json!({})).unwrap();
     app.ui.start_tab = false;
     app.ui.in_window_menu = false;
+    // These checks are about the tool bar layout (the ribbon has its own tests).
+    app.ui.ribbon = false;
     app.integrated_titlebar = true;
     if message {
         app.set_status("Drawing saved successfully with a long status message");

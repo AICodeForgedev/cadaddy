@@ -23,20 +23,20 @@ Generated-in-code assets are original and have no file to list:
 
 | Asset | Author | Source | Licence | Notes |
 |---|---|---|---|---|
-| `assets/app-icon/hicolor/128x128/apps/ai.storyteller.cadcraft.png` | CADCraft contributors | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
-| `assets/app-icon/hicolor/16x16/apps/ai.storyteller.cadcraft.png` | CADCraft contributors | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
-| `assets/app-icon/hicolor/24x24/apps/ai.storyteller.cadcraft.png` | CADCraft contributors | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
-| `assets/app-icon/hicolor/256x256/apps/ai.storyteller.cadcraft.png` | CADCraft contributors | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
-| `assets/app-icon/hicolor/32x32/apps/ai.storyteller.cadcraft.png` | CADCraft contributors | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
-| `assets/app-icon/hicolor/48x48/apps/ai.storyteller.cadcraft.png` | CADCraft contributors | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
-| `assets/app-icon/hicolor/512x512/apps/ai.storyteller.cadcraft.png` | CADCraft contributors | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
-| `assets/app-icon/hicolor/64x64/apps/ai.storyteller.cadcraft.png` | CADCraft contributors | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
-| `assets/app-icon/cadcraft.icns` | CADCraft contributors | generated (packaging/icons.sh) | MIT OR Apache-2.0 | macOS icon |
-| `assets/app-icon/cadcraft.ico` | CADCraft contributors | generated (packaging/icons.sh) | MIT OR Apache-2.0 | Windows icon |
-| `assets/app-icon/cadcraft-64.png` | CADCraft contributors | generated | MIT OR Apache-2.0 | |
-| `assets/app-icon/cadcraft-256.png` | CADCraft contributors | generated | MIT OR Apache-2.0 | |
-| `assets/app-icon/cadcraft-1024.png` | CADCraft contributors | generated | MIT OR Apache-2.0 | |
-| `assets/app-icon/cadcraft-macos-512.png` | CADCraft contributors | generated (macOS margin variant) | MIT OR Apache-2.0 | |
+| `assets/app-icon/hicolor/128x128/apps/ai.storyteller.cadcraft.png` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/16x16/apps/ai.storyteller.cadcraft.png` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/24x24/apps/ai.storyteller.cadcraft.png` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/256x256/apps/ai.storyteller.cadcraft.png` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/32x32/apps/ai.storyteller.cadcraft.png` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/48x48/apps/ai.storyteller.cadcraft.png` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/512x512/apps/ai.storyteller.cadcraft.png` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/64x64/apps/ai.storyteller.cadcraft.png` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated from `assets/app-icon/cadcraft-1024.png` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/cadcraft.icns` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated (packaging/icons.sh) | MIT OR Apache-2.0 | macOS icon |
+| `assets/app-icon/cadcraft.ico` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated (packaging/icons.sh) | MIT OR Apache-2.0 | Windows icon |
+| `assets/app-icon/cadcraft-64.png` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated | MIT OR Apache-2.0 | |
+| `assets/app-icon/cadcraft-256.png` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated | MIT OR Apache-2.0 | |
+| `assets/app-icon/cadcraft-1024.png` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated | MIT OR Apache-2.0 | |
+| `assets/app-icon/cadcraft-macos-512.png` | CADaddy contributors (original placeholder icon, 2026-10-14) | generated (macOS margin variant) | MIT OR Apache-2.0 | |
 | `packaging/macos/dmg/background.svg` | @XusBadia | original work for this repository (2026-10-08), "CADCraft macOS DMG window background"; derived from the CADCraft app icon (`assets/app-icon/`, referenced via `<image>`, not copied); text is outlined Inter / JetBrains Mono glyph paths (OFL fonts the project already uses); no third-party material modified | MIT OR Apache-2.0 (same as the code: `LICENSE-MIT`, `LICENSE-APACHE`) | Finder window background of the macOS DMG; `packaging/macos/dmg/generate.py` renders it to `background.tiff` (see `packaging/macos/dmg/README.md`) |
 | `packaging/macos/dmg/background.tiff` | @XusBadia | Rendered from `packaging/macos/dmg/background.svg` by `packaging/macos/dmg/generate.py` | MIT OR Apache-2.0 (same as the code: `LICENSE-MIT`, `LICENSE-APACHE`) | 1x + 2x HiDPI TIFF for the macOS DMG window; includes the app icon (see its row) and LittleCMS's built-in sRGB profile ("No copyright, use freely") |
 | `examples/apartment.dxf` | CADCraft contributors | sample drawing made with cadcraft-cli commands | MIT OR Apache-2.0 | Original |

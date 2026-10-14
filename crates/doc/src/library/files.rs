@@ -191,7 +191,7 @@ fn lin_pattern(line: &str, no: usize, name: &str, out: &mut Parsed<Linetype>) ->
             }
             None => {
                 let shape = inner.split(',').next().unwrap_or("").trim();
-                out.warn(no, format!("linetype {name}: shape {shape} needs an SHX shape file, which CADCraft can't read; left out"));
+                out.warn(no, format!("linetype {name}: shape {shape} needs an SHX shape file, which CADaddy can't read; left out"));
             }
         }
     }

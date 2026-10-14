@@ -974,12 +974,12 @@ fn oversized_dwg_and_dxf_are_rejected_early() {
 
     let limits = cadcraft_dwg::Limits { max_dwg_bytes: 100_000, ..cadcraft_dwg::Limits::DEFAULT };
     let e = cadcraft_dwg::dwg_to_dxf_with(&dwg, limits).unwrap_err();
-    assert!(e.starts_with("DWG: the file is 0.") && e.ends_with("MB, larger than the 0.1 MB CADCraft opens"), "{e}");
+    assert!(e.starts_with("DWG: the file is 0.") && e.ends_with("MB, larger than the 0.1 MB CADaddy opens"), "{e}");
 
     // Lines that aren't even group codes: the size is reported before anything is parsed.
     let text = "not a group code\nx\n".repeat(60);
     let e = cadcraft_dxf::parse_with_limit(text.as_bytes(), 50).unwrap_err();
-    assert_eq!(e.to_string(), "drawing too large: 60 DXF group codes, more than the 50 CADCraft reads");
+    assert_eq!(e.to_string(), "drawing too large: 60 DXF group codes, more than the 50 CADaddy reads");
 }
 
 /// Issue #800: one unreadable object record doesn't fail the whole DWG. The reader skips it, the
@@ -1088,7 +1088,7 @@ fn dimension_associativity_roundtrips() {
     assert_eq!(fa.len(), 2);
     assert_eq!(fa[1], ali.assoc[1]);
     assert!(matches!(fa[0].snap, AssocSnap::OnCircle { angle } if angle.abs() < 1e-9));
-    assert!(assoc_of(&foreign, hr).is_empty(), "radial links are CADCraft-only");
+    assert!(assoc_of(&foreign, hr).is_empty(), "radial links are CADaddy-only");
 }
 
 fn parametric_sample(d: &mut Drawing) -> (Vec<Constraint>, Parametric) {

@@ -28,7 +28,7 @@
 	= Equals	= Равно
 	> Greater than	> Больше чем
 	About	О программе
-	About CADCraft	О CADCraft
+	About CADaddy	О CADaddy
 	Absolute	Абсолютные
 	Add Leader	Добавить выноску
 	Align	Выровнять
@@ -83,7 +83,7 @@
 	ByBlock	Поблоку
 	ByColor	ПоЦвету
 	ByLayer	Послою
-	CADCraft Help	Справка CADCraft
+	CADaddy Help	Справка CADaddy
 	Cancel	Отмена
 	Cartesian (x, y)	Декартовы (x, y)
 	Center	Центр
@@ -585,7 +585,7 @@
 	Quick Select Properties	Свойства быстрого выбора
 	Quick Select...	Быстрый выбор...
 	QuickCalc	Быстрокалькулятор
-	Quit CADCraft	Выйти из CADCraft
+	Quit CADaddy	Выйти из CADaddy
 	Radius	Радиус
 	Raster Image	Растровое изображение
 	Ray	Луч
@@ -994,7 +994,7 @@
 @plural	{n} contributor	{n} участник|{n} участника|{n} участников
 	Drawing as bytes	Чертеж как байты
 	Services	Службы
-	Hide CADCraft	Скрыть CADCraft
+	Hide CADaddy	Скрыть CADaddy
 	Hide Others	Скрыть остальные
 	Accessibility	Специальные возможности
 	Show System Cursor	Показывать системный курсор
@@ -1008,3 +1008,6 @@
 	Sheet Books to PDF...	Книги листов в PDF...
 	Not a number or distance: {text}	Не число и не расстояние: {text}
 	Query Texts	Запрос текстов
+	Ribbon	Лента
+	Close Ribbon	Закрыть ленту
+	Menu Bar	Строка меню

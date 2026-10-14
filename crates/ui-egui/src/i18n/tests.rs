@@ -134,7 +134,7 @@ fn missing_marked_ui_literals(language: &str) -> BTreeSet<String> {
                     .unwrap();
                 let key: String = serde_json::from_str(&rest[..end]).unwrap();
                 // Coordinate axes, glyph buttons and product names are not translated.
-                if !["X", "Y", "B", "CADCraft"].contains(&key.as_str()) && !catalog.contains_key(&("", key.as_str())) {
+                if !["X", "Y", "B", "CADaddy"].contains(&key.as_str()) && !catalog.contains_key(&("", key.as_str())) {
                     missing.insert(key);
                 }
             }
@@ -345,7 +345,7 @@ fn live_switch_translates_the_shell_without_mutating_drawing_or_automation() {
 fn dialogs_render_in_ukrainian_and_keep_their_source_ids() {
     for (dialog, heading) in [
         ("dsettings", "Налаштування креслення"),
-        ("about", "Про CADCraft"),
+        ("about", "Про CADaddy"),
         ("commands", "Довідник команд"),
         ("blocks", "Блоки"),
         ("layers", "Диспетчер властивостей шарів"),
@@ -495,7 +495,7 @@ fn live_czech_switch_preserves_drawing_command_and_saved_choice() {
 fn czech_dialogs_render_with_stable_ids() {
     for (dialog, heading) in [
         ("dsettings", "Nastavení kreslení"),
-        ("about", "O aplikaci CADCraft"),
+        ("about", "O aplikaci CADaddy"),
         ("commands", "Přehled příkazů"),
         ("blocks", "Bloky"),
         ("layers", "Správce vlastností hladin"),
@@ -721,7 +721,7 @@ fn korean_dialogs_keep_source_ids() {
     }
     for (dialog, source) in [
         ("dsettings", "Drafting Settings"),
-        ("about", "About CADCraft"),
+        ("about", "About CADaddy"),
         ("commands", "Command Reference"),
         ("blocks", "Blocks"),
         ("layers", "Layer Properties Manager"),
@@ -850,7 +850,7 @@ fn live_swedish_switch_preserves_drawing_command_and_saved_choice() {
 fn swedish_dialogs_render_with_stable_ids() {
     for (dialog, heading) in [
         ("dsettings", "Ritinställningar"),
-        ("about", "Om CADCraft"),
+        ("about", "Om CADaddy"),
         ("blocks", "Block"),
         ("layers", "Hantera lageregenskaper"),
         ("qselect", "Snabbmarkering"),

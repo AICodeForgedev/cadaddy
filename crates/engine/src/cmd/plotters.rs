@@ -71,8 +71,8 @@ impl PlotterStore {
                 Some(r) if !r.is_empty() => Some(PathBuf::from(r)),
                 Some(_) => None,
                 None => match std::env::consts::OS {
-                    "macos" => get("HOME").map(|h| h.join("Library/Application Support/CADCraft")),
-                    "windows" => get("APPDATA").map(|r| r.join("CADCraft")),
+                    "macos" => get("HOME").map(|h| h.join("Library/Application Support/CADaddy")),
+                    "windows" => get("APPDATA").map(|r| r.join("CADaddy")),
                     _ => get("XDG_CONFIG_HOME").map(|r| r.join("cadcraft")).or_else(|| get("HOME").map(|h| h.join(".config/cadcraft"))),
                 },
             };

@@ -50,7 +50,7 @@
 	> Greater than	> 초과
 	A variable name starts with a letter and has only letters, digits and _	변수 이름은 문자로 시작하며 문자, 숫자, _만 사용할 수 있습니다
 	About	정보
-	About CADCraft	CADCraft 정보
+	About CADaddy	CADaddy 정보
 	Absolute	절대
 	Add Leader	지시선 추가
 	Additional angles	추가 각도
@@ -111,7 +111,7 @@
 	ByBlock	블록별
 	ByColor	색상별
 	ByLayer	도면층별
-	CADCraft Help	CADCraft 도움말
+	CADaddy Help	CADaddy 도움말
 	Cancel	취소
 	Cartesian (x, y)	직교 좌표(x, y)
 	Center	중심
@@ -695,7 +695,7 @@
 	Quick Select...	빠른 선택...
 	QuickCalc	빠른 계산기
 	QuickCalc Pick	빠른 계산기 점 지정
-	Quit CADCraft	CADCraft 종료
+	Quit CADaddy	CADaddy 종료
 	Radius	반지름
 	Raster Image	래스터 이미지
 	Ray	반직선
@@ -924,7 +924,7 @@
 	Specify insertion point	삽입점 지정
 	A drawing opened from a file keeps that file's format.	파일에서 연 도면은 해당 파일의 형식을 유지합니다.
 	An array that would create more objects than this is refused.	이 제한보다 많은 객체를 만드는 배열은 허용하지 않습니다.
-	CADCraft keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADCraft는 이 환경설정, 객체 스냅 모드 및 제도 기능의 켜기/끄기 상태를 사용자 계정에 저장하고 시작할 때 복원합니다.
+	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADaddy는 이 환경설정, 객체 스냅 모드 및 제도 기능의 켜기/끄기 상태를 사용자 계정에 저장하고 시작할 때 복원합니다.
 	Changes apply at once and are kept for next time.	변경 사항은 즉시 적용되며 다음 실행에도 유지됩니다.
 	Command line history	명령행 기록
 	Copy as JSON	JSON으로 복사
@@ -1172,7 +1172,7 @@
 @plural	{n} contributor	기여자 {n}명
 	Drawing as bytes	도면 바이트 데이터
 	Services	서비스
-	Hide CADCraft	CADCraft 숨기기
+	Hide CADaddy	CADaddy 숨기기
 	Hide Others	다른 앱 숨기기
 	Accessibility	접근성
 	Show System Cursor	시스템 커서 표시
@@ -1233,8 +1233,11 @@
 	X	X
 	Y	Y
 	B	B
-	CADCraft	CADCraft
+	CADaddy	CADaddy
 menu	View	보기
 menu	Draw	그리기
 menu	Dimension	치수
 menu	Modify	수정
+	Ribbon	리본
+	Close Ribbon	리본 닫기
+	Menu Bar	메뉴 막대

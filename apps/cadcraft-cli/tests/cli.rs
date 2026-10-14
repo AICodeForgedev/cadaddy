@@ -9,7 +9,7 @@ use std::process::{Command, Output, Stdio};
 #[test]
 fn closed_stdout_ends_quietly() {
     for args in [&["commands"][..], &["commands", "ellipse"], &["--version"]] {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_cadcraft-cli")).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_cadaddy-cli")).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let mut first = [0u8; 10];
         child.stdout.as_mut().unwrap().read_exact(&mut first).unwrap();
         drop(child.stdout.take());
@@ -22,7 +22,7 @@ fn closed_stdout_ends_quietly() {
 /// The CLI keeps working once stdout is gone: `run` still executes its commands and still saves,
 /// so `cadcraft-cli run … --save out.dxf | head` keeps the drawing.
 fn run_with_closed_stdout(args: &[&str]) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_cadcraft-cli")).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cadaddy-cli")).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     drop(child.stdout.take());
     child.wait_with_output().unwrap()
 }

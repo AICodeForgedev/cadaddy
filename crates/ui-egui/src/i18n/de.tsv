@@ -28,7 +28,7 @@
 	= Equals	= Gleich
 	> Greater than	> Größer als
 	About	Über
-	About CADCraft	Über CADCraft
+	About CADaddy	Über CADaddy
 	Absolute	Absolut
 	Add Leader	Führungslinie hinzufügen
 	Align	Ausrichten
@@ -83,7 +83,7 @@
 	ByBlock	VonBlock
 	ByColor	VonFarbe
 	ByLayer	VonLayer
-	CADCraft Help	CADCraft-Hilfe
+	CADaddy Help	CADaddy-Hilfe
 	Cancel	Abbrechen
 	Cartesian (x, y)	Kartesisch (x, y)
 	Center	Zentrum
@@ -591,7 +591,7 @@
 	Quick Select Properties	Schnellauswahl-Eigenschaften
 	Quick Select...	Schnellauswahl...
 	QuickCalc	QuickCalc
-	Quit CADCraft	CADCraft beenden
+	Quit CADaddy	CADaddy beenden
 	Radius	Radius
 	Raster Image	Rasterbild
 	Ray	Strahl
@@ -1000,7 +1000,7 @@
 @plural	{n} contributor	{n} Mitwirkender|{n} Mitwirkende
 	Drawing as bytes	Zeichnung als Bytes
 	Services	Dienste
-	Hide CADCraft	CADCraft ausblenden
+	Hide CADaddy	CADaddy ausblenden
 	Hide Others	Andere ausblenden
 	Accessibility	Bedienungshilfen
 	Show System Cursor	Systemzeiger anzeigen
@@ -1034,3 +1034,6 @@
 	Justify	Blocksatz
 	Text color	Textfarbe
 	Click the ruler to add a tab stop, right-click to remove one	Klick auf das Lineal setzt einen Tabstopp, Rechtsklick entfernt ihn
+	Ribbon	Multifunktionsleiste
+	Close Ribbon	Multifunktionsleiste schließen
+	Menu Bar	Menüleiste
