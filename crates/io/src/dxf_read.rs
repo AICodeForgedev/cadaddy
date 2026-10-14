@@ -1841,7 +1841,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
         }
     }
     // One *Active viewport is no tiling: the view is the editor's (it zooms to the extents).
-    d.vports.retain(|c| c.tiles.len() > usize::from(c.is_active()));
+    // One *Active viewport is no tiling: the view is the editor's (it zooms to the extents),
+    // kept only for its view twist (the model view's VIEWTWIST, see `cadaddy_engine`).
+    d.vports.retain(|c| c.tiles.len() > usize::from(c.is_active()) || c.tiles.first().is_some_and(|t| t.twist != 0.0));
     // Linetype shapes are numbers in DXF: their names come from the shape file when it is found
     // (so a linetype can be written to a .lin file again).
     let mut names = Vec::new();
@@ -1883,7 +1885,9 @@ fn vport_record(d: &mut Drawing, t: &T) {
     }
     let aspect = t.f(41).filter(|a| a.is_finite() && *a > 0.0).unwrap_or(0.0);
     let clamp = |p: Vec2| Vec2::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
-    let tile = VportTile { min: clamp(min), max: clamp(max), center, height, aspect };
+    // View twist (group 51, degrees), within one turn.
+    let twist = t.f(51).filter(|a| a.is_finite()).map_or(0.0, |a| cadaddy_geom::norm_angle(a.to_radians()));
+    let tile = VportTile { min: clamp(min), max: clamp(max), center, height, aspect, twist };
     let name = if name.eq_ignore_ascii_case(VportConfig::ACTIVE) { VportConfig::ACTIVE.to_string() } else { name };
     let room = d.vports.len() < MAX_OBJECTS;
     match d.vports.iter_mut().find(|c| c.name.eq_ignore_ascii_case(&name)) {

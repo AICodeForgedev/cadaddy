@@ -202,3 +202,32 @@ fn selection_windows_follow_the_screen_in_a_twisted_view() {
     s.idle_click(Vec2::new(40.0, -5.0), false).unwrap();
     assert!(s.selection().is_empty());
 }
+
+/// The model view's twist is saved with the drawing (the `*Active` VPORT's group 51) and
+/// comes back when the file is opened.
+#[test]
+fn the_model_view_twist_is_kept_through_a_dxf_save() {
+    cadaddy_engine::cmd::file::set_io(cadaddy_engine::cmd::file::IoHooks {
+        read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
+        write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
+    let dir = std::env::temp_dir().join(format!("cadaddy-vptwist-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("twisted.dxf");
+    let mut s = session();
+    s.execute("view.twist", &json!({"angle": 30})).unwrap();
+    assert!(s.state().unwrap().is_dirty(), "a new twist is a change to save");
+    s.execute("saveas", &json!({ "path": path.to_string_lossy() })).unwrap();
+    let mut t = Session::new();
+    t.execute("open", &json!({ "path": path.to_string_lossy() })).unwrap();
+    assert!((t.state().unwrap().twist().to_degrees() - 30.0).abs() < 1e-9);
+    assert!(!t.state().unwrap().is_dirty(), "opening a twisted view changes nothing");
+    // Turned back to none, the file has no configuration left.
+    t.execute("view.twist", &json!({"angle": 0})).unwrap();
+    assert!(t.doc().unwrap().vports.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

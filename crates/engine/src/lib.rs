@@ -558,9 +558,39 @@ impl DocState {
         // The model point at the centre of the screen stays there.
         let m = self.projection().and_then(|p| p.unproject(v.center, 0.0)).unwrap_or(v.center);
         self.view_twist = t;
+        self.keep_model_twist();
         let center = Projection::plan_twist(t).map_or(m, |p| p.project(m.to3(0.0)));
         self.put_paper_view(View { center, height: v.height });
         true
+    }
+    /// Keep model space's view twist in the drawing, where files carry it: the twist of the
+    /// lone `*Active` VPORT tile when the model view isn't tiled (DXF VPORT group 51), the
+    /// current tile's when it is. Changes nothing when the drawing already says so.
+    pub fn keep_model_twist(&mut self) {
+        use cadaddy_doc::{VportConfig, VportTile};
+        let t = if self.view_twist.is_finite() { cadaddy_geom::norm_angle(self.view_twist) } else { 0.0 };
+        let active = self.doc.vports.iter().position(|c| c.is_active());
+        let current = active.and_then(|i| self.doc.vports.get(i)).and_then(|c| c.tiles.first()).map(|x| x.twist);
+        if current.unwrap_or(0.0) == t {
+            return;
+        }
+        let v = self.views.iter().find(|(s, _)| *s == Space::Model).map(|(_, v)| *v).unwrap_or_default();
+        let doc = Arc::make_mut(&mut self.doc);
+        match active.and_then(|i| doc.vports.get_mut(i)) {
+            Some(c) if c.tiles.len() > 1 => {
+                if let Some(x) = c.tiles.first_mut() {
+                    x.twist = t;
+                }
+            }
+            Some(_) if t == 0.0 => doc.vports.retain(|c| !c.is_active()),
+            Some(c) => {
+                c.tiles = vec![VportTile { min: Vec2::ZERO, max: Vec2::new(1.0, 1.0), center: v.center, height: v.height, aspect: 0.0, twist: t }];
+            }
+            None => doc.vports.push(VportConfig {
+                name: VportConfig::ACTIVE.to_string(),
+                tiles: vec![VportTile { min: Vec2::ZERO, max: Vec2::new(1.0, 1.0), center: v.center, height: v.height, aspect: 0.0, twist: t }],
+            }),
+        }
     }
     /// The projection the current space's display list is built with: [`Self::projection`],
     /// except in a layout, whose sheet is drawn flat (an MSPACE viewport's model space is drawn
@@ -2434,6 +2464,11 @@ impl Session {
         let ext = st.doc.extents(&Space::Model);
         if !ext.is_empty() {
             st.set_view_quiet(framed(ext, self.viewport_px, self.viewport_inset_px, |a| a, 1.1));
+        }
+        // The model view's twist the file saved (VPORT group 51 of its `*Active` viewport).
+        let twist = st.doc.vports.iter().find(|c| c.is_active()).and_then(|c| c.tiles.first()).map_or(0.0, |t| t.twist);
+        if twist != 0.0 && st.space == Space::Model {
+            st.set_twist(twist);
         }
         self.end_running();
         self.docs.push(st);

@@ -1031,7 +1031,7 @@ fn every_field_set() -> Drawing {
     }
     renamed_copy!(text_styles, dim_styles, mleader_styles, table_styles, mline_styles);
     d.views.push(NamedView { name: "Lobby".into(), center: Vec2::new(5.0, 5.0), height: 20.0, width: 30.0, twist: 0.5, ..NamedView::default() });
-    let tile = VportTile { min: Vec2::ZERO, max: Vec2::new(0.5, 1.0), center: Vec2::new(3.0, 3.0), height: 9.0, aspect: 1.5 };
+    let tile = VportTile { min: Vec2::ZERO, max: Vec2::new(0.5, 1.0), center: Vec2::new(3.0, 3.0), height: 9.0, aspect: 1.5, twist: 0.0 };
     d.vports.push(VportConfig { name: "Two".into(), tiles: vec![tile] });
     let layer = d.layers.first().cloned().unwrap();
     d.layer_states.push(LayerState {

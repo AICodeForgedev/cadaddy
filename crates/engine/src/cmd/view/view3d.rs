@@ -193,6 +193,7 @@ pub fn set_dir(s: &mut Session, dir: Vec3, fit: bool) -> Result<Value> {
     st.view_dir = if view3::is_plan(dir) { Vec3::Z } else { dir.normalized() };
     // A new direction comes with the standard orientation (as PLAN and the ViewCube faces do).
     st.view_twist = 0.0;
+    st.keep_model_twist();
     let center = match st.projection() {
         Some(p) => p.project(target),
         None => target.xy(),

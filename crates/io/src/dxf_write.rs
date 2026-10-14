@@ -2405,6 +2405,8 @@ fn vport_table(w: &mut W, d: &Drawing, ext: Bounds2) {
         center: if ext.is_empty() { Vec2::new(6.0, 4.5) } else { ext.center() },
         height: if ext.is_empty() { 9.0 } else { (ext.height() * 1.1).max(1e-6) },
         aspect: 1.6,
+        // An untiled view's twist: the lone `*Active` tile the editor keeps for it.
+        twist: d.vports.iter().find(|c| c.is_active() && c.tiles.len() == 1).and_then(|c| c.tiles.first()).map_or(0.0, |t| t.twist),
     };
     let tiled = d.vports.iter().find(|c| c.is_active() && c.tiles.len() > 1);
     let mut records: Vec<(&str, &VportTile)> = match tiled {
@@ -2431,6 +2433,8 @@ fn vport_table(w: &mut W, d: &Drawing, ext: Bounds2) {
         w.f(41, if t.aspect.is_finite() && t.aspect > 0.0 { t.aspect } else { 1.0 });
         w.f(42, 50.0);
         w.f(50, d.header.f64("SNAPANG", 0.0));
+        // View twist (degrees), within one turn so a hostile value writes a sane angle.
+        w.f(51, if t.twist.is_finite() { cadaddy_geom::norm_angle(t.twist).to_degrees() } else { 0.0 });
     }
     w.s(0, "ENDTAB");
 }
