@@ -93,6 +93,15 @@ impl Interactive for Guarded {
             None
         })
     }
+    fn display_only(&self, s: &Session) -> Option<crate::prompt::DisplayOnly> {
+        if self.broken.get().is_some() {
+            return None;
+        }
+        catch_unwind(AssertUnwindSafe(|| self.inner.display_only(s))).unwrap_or_else(|_| {
+            self.broken.set(Some("panic in preview"));
+            None
+        })
+    }
 }
 
 #[cfg(test)]
