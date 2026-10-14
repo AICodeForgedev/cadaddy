@@ -2161,6 +2161,8 @@ fn text_of(k: &EntityKind) -> Option<String> {
         EntityKind::Text(t) => Some(t.value.clone()),
         EntityKind::AttDef(a) => Some(a.text.value.clone()),
         EntityKind::MText(t) => Some(t.contents.replace("\\P", "\n")),
+        // A multileader's text (one with a block instead has none, #1081).
+        EntityKind::MLeader(m) => m.text.as_ref().map(|t| t.contents.replace("\\P", "\n")),
         EntityKind::Dimension(d) => Some(if d.text.is_empty() { "<>".into() } else { d.text.clone() }),
         _ => None,
     }
@@ -2175,11 +2177,16 @@ pub(crate) fn set_text(s: &mut Session, h: Handle, text: &str) -> Result<()> {
         EntityKind::Text(t) => t.value = text.to_string(),
         EntityKind::AttDef(a) => a.text.value = text.to_string(),
         EntityKind::MText(t) => t.contents = text.replace('\n', "\\P"),
+        EntityKind::MLeader(m) if m.text.is_some() => {
+            if let Some(t) = &mut m.text {
+                t.contents = text.replace('\n', "\\P");
+            }
+        }
         EntityKind::Dimension(d) => {
             d.text = if text == "<>" { String::new() } else { text.to_string() };
             d.block = None;
         }
-        _ => return Err(other("Select a text, mtext, attribute definition or dimension.")),
+        _ => return Err(other("Select a text, mtext, multileader, attribute definition or dimension.")),
     }
     set_kind(s, h, k)
 }
@@ -2240,9 +2247,11 @@ impl Interactive for TextEditM {
             (None, Input::Point(p)) => {
                 let h = curves::pick_at(s, p).ok_or_else(|| other("*Invalid selection*"))?;
                 let kind = curves::entity(s, h)?.kind;
-                let old = text_of(&kind).ok_or_else(|| other("Select a text, mtext, attribute definition or dimension."))?;
+                let old = text_of(&kind).ok_or_else(|| other("Select a text, mtext, multileader, attribute definition or dimension."))?;
                 self.mtext = match kind {
                     EntityKind::MText(m) => Some(m),
+                    // A multileader's text opens in the same editor (#1081).
+                    EntityKind::MLeader(m) => m.text,
                     _ => None,
                 };
                 self.h = Some((h, old));
