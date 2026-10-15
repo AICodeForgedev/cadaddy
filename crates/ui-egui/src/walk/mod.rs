@@ -28,6 +28,8 @@ pub struct Building {
     /// Where the rules came from, for the panel.
     pub rules_from: String,
     pub scene: Scene,
+    /// Sheets that could not be read (their floors are empty).
+    pub problems: Vec<String>,
 }
 
 impl Building {
@@ -83,11 +85,18 @@ impl Building {
         let own = path.and_then(Path::file_name).map(|n| n.to_string_lossy().to_lowercase());
         let dir = from.as_deref().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default();
         let mut drawings = vec![Arc::clone(&doc)];
+        let mut problems = Vec::new();
         for sheet in rules.sheets() {
             if own.as_deref() == Some(sheet_name(&sheet).as_str()) {
                 drawings.push(Arc::clone(&doc));
             } else {
-                drawings.push(Arc::new(read_drawing(&dir.join(&sheet))?));
+                match read_drawing(&dir.join(&sheet)) {
+                    Ok(d) => drawings.push(Arc::new(d)),
+                    Err(e) => {
+                        problems.push(e);
+                        drawings.push(Arc::new(Drawing::default()));
+                    }
+                }
             }
         }
         let scene = derive_set(&drawings.iter().map(|d| &**d).collect::<Vec<_>>(), &rules);
@@ -95,7 +104,16 @@ impl Building {
             Some(f) => f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
             None => "built-in defaults (no .walk.json beside the drawing)".into(),
         };
-        Ok(Building { drawings, rules, rules_from, scene })
+        Ok(Building { drawings, rules, rules_from, scene, problems })
+    }
+
+    /// The level to start on: the first one drawn on the open drawing (opening A112 starts on
+    /// Level 2), else the lowest.
+    pub fn home_level(&self) -> usize {
+        let open = self.drawings.first();
+        (0..self.rules.levels.len())
+            .find(|&i| self.drawings.get(self.rules.level_source(i)).zip(open).is_some_and(|(a, b)| Arc::ptr_eq(a, b)))
+            .unwrap_or(0)
     }
 
     /// The sheet a source index came from, for the panel ("" for the open drawing).
@@ -147,7 +165,7 @@ pub struct Walk {
 
 impl Walk {
     fn new(building: Building, revision: u64) -> Walk {
-        let walker = Walker::spawn(&building.scene, 0);
+        let walker = Walker::spawn(&building.scene, building.home_level());
         Walk { building, walker, gpu: None, texture: None, uploaded: false, picked: None, cut: false, revision, fps: 0.0 }
     }
 }
@@ -161,8 +179,13 @@ pub fn open(app: &mut CadApp) -> Result<(), String> {
     let levels = building.scene.levels.len();
     let devices = building.scene.devices.len();
     let from = building.rules_from.clone();
+    let problems = building.problems.join("; ");
     app.walk = Some(Walk::new(building, revision));
-    app.set_status(format!("Walk: {levels} levels, {walls} wall faces, {devices} devices (rules: {from}). Esc returns to the drawing."));
+    if problems.is_empty() {
+        app.set_status(format!("Walk: {levels} levels, {walls} wall faces, {devices} devices (rules: {from}). Esc returns to the drawing."));
+    } else {
+        app.set_status(format!("Walk: some floors are empty, their sheets could not be read: {problems}"));
+    }
     Ok(())
 }
 
@@ -256,6 +279,9 @@ fn side_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
     let b = &walk.building;
     let s = &b.scene;
     ui.small(format!("Rules: {}", b.rules_from));
+    for p in &b.problems {
+        ui.colored_label(egui::Color32::from_rgb(230, 160, 60), format!("Empty floor: {p}"));
+    }
     ui.small(format!("{} wall faces · {} devices · {:.0} fps", s.walls.len(), s.devices.len(), walk.fps));
     ui.separator();
     ui.strong("Levels");
@@ -472,7 +498,8 @@ mod tests {
     fn a_floor_sheet_finds_its_building() {
         let dir = std::env::temp_dir().join(format!("walk_building_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        let rules = r#"{"levels":[{"name":"L1","elevation_ft":0,"height_ft":10,"sheet":"A111.dxf","base":[0,0]}],
+        let rules = r#"{"levels":[{"name":"L1","elevation_ft":0,"height_ft":10,"sheet":"A111.dxf","base":[0,0]},
+            {"name":"L2","elevation_ft":10,"height_ft":10,"sheet":"A112.dxf","base":[0,0]}],
             "layers":[{"layer":"A-WALL","kind":"wall"}]}"#;
         let _ = std::fs::write(dir.join("Hotel.walk.json"), rules);
         let mut d = Drawing::default();
@@ -486,10 +513,13 @@ mod tests {
         e.common.layer = "A-WALL".into();
         d.model.push(e);
         let doc = Arc::new(d);
-        let b = Building::load(Arc::clone(&doc), Some(&dir.join("a111.DXF"))).unwrap_or_else(|e| panic!("{e}"));
+        let b = Building::load(Arc::clone(&doc), Some(&dir.join("a112.DXF"))).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(b.rules_from, "Hotel.walk.json");
-        assert_eq!(b.scene.walls.len(), 1);
-        assert!(b.drawings.get(1).is_some_and(|s| Arc::ptr_eq(s, &doc)), "the open drawing is the sheet");
+        assert_eq!(b.scene.walls.iter().map(|w| w.level).collect::<Vec<_>>(), [1]);
+        assert!(b.drawings.get(2).is_some_and(|s| Arc::ptr_eq(s, &doc)), "the open drawing is its sheet");
+        assert_eq!(b.home_level(), 1, "walking A112 starts on its floor");
+        // A111 isn't there: its floor is empty and reported, the rest still walks.
+        assert!(b.problems.len() == 1 && b.problems.iter().all(|p| p.contains("A111")), "{:?}", b.problems);
         // A drawing the building doesn't list gets the defaults.
         let other = Building::load(Arc::clone(&doc), Some(&dir.join("E-4.dxf"))).unwrap_or_else(|e| panic!("{e}"));
         assert!(other.rules_from.starts_with("built-in"));
