@@ -1,12 +1,13 @@
 //! Ray picking against the scene's triangles.
 
-use crate::derive::Scene;
+use crate::derive::{Owner, Scene};
 use crate::math::{V3, v3};
 use cadcraft_doc::Handle;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hit {
-    pub handle: Handle,
+    /// The entity hit, and the drawing of the set it came from.
+    pub owner: Owner,
     /// Distance along the ray, feet.
     pub t: f64,
     pub point: V3,
@@ -18,15 +19,15 @@ pub fn pick(scene: &Scene, origin: V3, dir: V3) -> Option<Hit> {
     let dir = dir.norm();
     let mut best: Option<Hit> = None;
     for (i, tri) in scene.tris.as_chunks::<3>().0.iter().enumerate() {
-        let Some(&handle) = scene.owners.get(i) else { break };
-        if handle == Handle(0) {
+        let Some(&owner) = scene.owners.get(i) else { break };
+        if owner.handle == Handle(0) {
             continue;
         }
         let [a, b, c] = tri.each_ref().map(|v| v3(f64::from(v.p[0]), f64::from(v.p[1]), f64::from(v.p[2])));
         if let Some(t) = ray_tri(origin, dir, a, b, c)
             && best.is_none_or(|h| t < h.t)
         {
-            best = Some(Hit { handle, t, point: origin + dir * t });
+            best = Some(Hit { owner, t, point: origin + dir * t });
         }
     }
     best
@@ -66,11 +67,11 @@ mod tests {
         let wall = |x: f32| [vt(x, -1.0, -1.0), vt(x, 1.0, -1.0), vt(x, 0.0, 1.0)];
         let mut s = Scene::default();
         s.tris.extend(wall(10.0));
-        s.owners.push(Handle(7));
+        s.owners.push(Owner { src: 0, handle: Handle(7) });
         s.tris.extend(wall(5.0));
-        s.owners.push(Handle(9));
+        s.owners.push(Owner { src: 1, handle: Handle(9) });
         let h = pick(&s, v3(0.0, 0.0, 0.0), v3(1.0, 0.0, 0.0));
-        assert_eq!(h.map(|h| h.handle), Some(Handle(9)));
+        assert_eq!(h.map(|h| h.owner), Some(Owner { src: 1, handle: Handle(9) }));
         assert!(pick(&s, v3(0.0, 0.0, 0.0), v3(-1.0, 0.0, 0.0)).is_none());
     }
 }

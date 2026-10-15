@@ -57,6 +57,10 @@ fn fs_tri(o: VO) -> @location(0) vec4<f32> {
         discard;
     }
     let n = normalize(o.n);
+    // Ceilings face down and are one-sided: seen from above (cut away, flying) they vanish.
+    if (n.z < -0.9 && u.eye.z > o.w.z) {
+        discard;
+    }
     let d = abs(dot(n, normalize(u.light.xyz)));
     let col = o.c.rgb * (0.38 + 0.62 * d);
     return vec4<f32>(fogged(col, o.w), 1.0);

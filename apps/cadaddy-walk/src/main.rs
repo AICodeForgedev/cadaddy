@@ -1,5 +1,6 @@
 //! CADaddy Walk: open a drawing, derive its 3D model from the plans (levels + layer rules in
-//! `<drawing>.walk.json`), and walk it.
+//! `<drawing>.walk.json`), and walk it. Opening a `.walk.json` itself walks a building whose
+//! floors are separate sheets (each level's `sheet`).
 //!
 //! `cadaddy-walk [FILE] [--rules R.json] [--level N]` opens a window.
 //! `cadaddy-walk FILE --shot OUT.png [--cam x,y,z,yaw°,pitch°] [--size WxH] [--cut]` renders one
@@ -9,32 +10,56 @@
 
 mod gpu;
 
-use cadcraft_doc::{Drawing, EntityKind, Handle};
-use cadcraft_walk3d::{Rules, Scene, V3, Walker, derive, pick};
+use cadcraft_doc::{Drawing, EntityKind};
+use cadcraft_walk3d::{Owner, Rules, Scene, V3, Walker, derive_set, pick};
 use egui_wgpu::wgpu;
 use std::path::{Path, PathBuf};
 
 struct Loaded {
     path: PathBuf,
-    drawing: Drawing,
+    /// The opened drawing (empty when a `.walk.json` was opened), then the rules' sheets in order:
+    /// index = [`Owner::src`].
+    drawings: Vec<Drawing>,
     rules: Rules,
     /// Where the rules came from (a sidecar file, or the built-in fallback).
     rules_from: String,
     scene: Scene,
 }
 
-fn load(path: &Path, rules_path: Option<&Path>) -> Result<Loaded, String> {
+impl Loaded {
+    fn entity(&self, o: Owner) -> Option<&cadcraft_doc::Entity> {
+        self.drawings.get(usize::from(o.src)).and_then(|d| d.model.get(o.handle)).map(|e| &**e)
+    }
+}
+
+fn read_drawing(path: &Path) -> Result<Drawing, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let drawing = cadcraft_io::read(&bytes, &name).map_err(|e| format!("{name}: {e}"))?;
-    let side = rules_path.map(Path::to_path_buf).unwrap_or_else(|| Rules::sidecar_path(path));
+    cadcraft_io::read(&bytes, &name).map_err(|e| format!("{name}: {e}"))
+}
+
+fn is_rules_file(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"))
+}
+
+fn load(path: &Path, rules_path: Option<&Path>) -> Result<Loaded, String> {
+    let (drawing, side) = if is_rules_file(path) {
+        (Drawing::default(), path.to_path_buf())
+    } else {
+        (read_drawing(path)?, rules_path.map(Path::to_path_buf).unwrap_or_else(|| Rules::sidecar_path(path)))
+    };
     let (rules, rules_from) = match std::fs::read_to_string(&side) {
         Ok(s) => (Rules::from_json(&s)?, side.display().to_string()),
-        Err(_) if rules_path.is_none() => (Rules::fallback(), "built-in defaults (no .walk.json beside the drawing)".into()),
+        Err(_) if rules_path.is_none() && !is_rules_file(path) => (Rules::fallback(), "built-in defaults (no .walk.json beside the drawing)".into()),
         Err(e) => return Err(format!("{}: {e}", side.display())),
     };
-    let scene = derive(&drawing, &rules);
-    Ok(Loaded { path: path.to_path_buf(), drawing, rules, rules_from, scene })
+    let dir = side.parent().map(Path::to_path_buf).unwrap_or_default();
+    let mut drawings = vec![drawing];
+    for sheet in rules.sheets() {
+        drawings.push(read_drawing(&dir.join(&sheet))?);
+    }
+    let scene = derive_set(&drawings.iter().collect::<Vec<_>>(), &rules);
+    Ok(Loaded { path: path.to_path_buf(), drawings, rules, rules_from, scene })
 }
 
 struct Args {
@@ -116,10 +141,11 @@ fn shot(a: &Args) -> Result<(), String> {
     let img = image::RgbaImage::from_raw(width, height, rgba).ok_or("bad image size")?;
     img.save(out).map_err(|e| format!("{}: {e}", out.display()))?;
     println!(
-        "{}: {} levels, {} wall faces, {} devices, {} unplaced; eye {:.1},{:.1},{:.1} -> {}",
+        "{}: {} levels, {} wall faces ({} closed into solid walls), {} devices, {} unplaced; eye {:.1},{:.1},{:.1} -> {}",
         l.path.display(),
         l.scene.levels.len(),
         l.scene.walls.len(),
+        l.scene.solid_walls,
         l.scene.devices.len(),
         l.scene.unplaced,
         w.eye.x,
@@ -161,7 +187,7 @@ fn window(a: Args) -> Result<(), String> {
 /// What the last click hit.
 enum Picked {
     Device(usize),
-    Entity(Handle),
+    Entity(Owner),
 }
 
 struct App {
@@ -198,7 +224,7 @@ impl App {
     fn side_panel(&mut self, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderState>) {
         ui.heading("CADaddy Walk");
         if ui.button("Open drawing…").clicked()
-            && let Some(p) = rfd::FileDialog::new().add_filter("Drawings", &["dxf", "dwg"]).pick_file()
+            && let Some(p) = rfd::FileDialog::new().add_filter("Drawings and buildings", &["dxf", "dwg", "json"]).pick_file()
         {
             self.open(&p, rs);
         }
@@ -261,14 +287,18 @@ impl App {
                     });
                 }
             }
-            Some(Picked::Entity(h)) => match l.drawing.model.get(*h) {
+            Some(Picked::Entity(o)) => match l.entity(*o) {
                 Some(e) => {
                     let kind = match &e.kind {
                         EntityKind::LwPolyline(_) => "Polyline",
                         EntityKind::Line(_) => "Line",
                         _ => "Entity",
                     };
-                    ui.label(format!("{kind} on {} (handle {:X})", e.common.layer, h.0));
+                    let sheet = match o.src {
+                        0 => String::new(),
+                        n => l.rules.sheets().get(usize::from(n) - 1).map(|s| format!(" in {s}")).unwrap_or_default(),
+                    };
+                    ui.label(format!("{kind} on {}{sheet} (handle {:X})", e.common.layer, o.handle.0));
                     if let Some(r) = l.rules.layer(&e.common.layer) {
                         ui.small(format!("Rule: {r:?}"));
                     }
@@ -336,9 +366,11 @@ impl App {
             let nx = f64::from((p.x - rect.left()) / rect.width() * 2.0 - 1.0);
             let ny = f64::from(1.0 - (p.y - rect.top()) / rect.height() * 2.0);
             let dir = w.ray(nx, ny, aspect);
-            self.picked = pick(&l.scene, w.eye, dir).map(|hit| match l.scene.devices.iter().position(|d| d.handle == hit.handle) {
-                Some(i) => Picked::Device(i),
-                None => Picked::Entity(hit.handle),
+            self.picked = pick(&l.scene, w.eye, dir).map(|hit| {
+                match l.scene.devices.iter().position(|d| d.handle == hit.owner.handle && d.src == hit.owner.src) {
+                    Some(i) => Picked::Device(i),
+                    None => Picked::Entity(hit.owner),
+                }
             });
         }
         // Draw.

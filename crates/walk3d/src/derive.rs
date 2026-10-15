@@ -42,9 +42,19 @@ pub struct LevelInfo {
     pub max: Vec2,
 }
 
+/// Which drawing of the set a triangle or device came from (see [`Rules::sheets`]) and its
+/// entity there. Floors and other generated faces carry handle 0.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Owner {
+    pub src: u16,
+    pub handle: Handle,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeviceInfo {
     pub handle: Handle,
+    /// Source drawing (see [`Owner`]).
+    pub src: u16,
     pub block: String,
     pub level: usize,
     /// Centre of the device box, feet.
@@ -60,7 +70,7 @@ pub struct Scene {
     /// Triangle list.
     pub tris: Vec<Vertex>,
     /// Owner of each triangle (`tris.len() / 3` entries).
-    pub owners: Vec<Handle>,
+    pub owners: Vec<Owner>,
     /// Edge overlay, a line list.
     pub edges: Vec<Vertex>,
     pub walls: Vec<Seg>,
@@ -68,11 +78,23 @@ pub struct Scene {
     pub levels: Vec<LevelInfo>,
     /// Entities the rules placed nowhere (outside every level's region).
     pub unplaced: usize,
+    /// Wall face pairs closed into solid walls (top and end caps).
+    pub solid_walls: usize,
 }
 
 const WALL: Rgb = Rgb(222, 218, 210);
+const WALL_TOP: Rgb = Rgb(118, 112, 104);
 const FLOOR: Rgb = Rgb(150, 146, 140);
+const CEILING: Rgb = Rgb(236, 234, 228);
 const EDGE: Rgb = Rgb(40, 40, 44);
+
+/// Two parallel faces this far apart (feet) are the two sides of one wall: 3½" partitions up to
+/// thick exterior and rated walls.
+const WALL_THICK_FT: (f64, f64) = (0.2, 1.6);
+/// Faces count as parallel within this angle (radians).
+const PARALLEL: f64 = 0.035;
+/// Wall pairing is skipped above this many faces on one level (hostile input; quadratic).
+const MAX_PAIR_FACES: usize = 8_000;
 
 /// Where one level's plan sits: sheet region + base point.
 struct Place {
@@ -89,45 +111,73 @@ impl Place {
     }
 }
 
-/// Build the 3D scene. Never fails: what the rules don't place is counted in [`Scene::unplaced`].
+/// Build the 3D scene from one drawing. Never fails: what the rules don't place is counted in
+/// [`Scene::unplaced`].
 pub fn derive(d: &Drawing, rules: &Rules) -> Scene {
-    let upf = if rules.units_per_foot.is_finite() && rules.units_per_foot > 0.0 { rules.units_per_foot } else { 12.0 };
-    let places: Vec<Place> = rules.levels.iter().map(|l| Place { region: l.region, base: base_point(d, rules, l) }).collect();
-    let mut s = Scene::default();
-    let mut wall_pieces: Vec<(Vec<Vec2>, usize, f64, Handle)> = Vec::new();
+    derive_set(&[d], rules)
+}
 
-    for e in d.model.iter() {
-        let Some(kind) = rules.layer(&e.common.layer) else { continue };
-        if matches!(kind, LayerKind::Device) || matches!(e.kind, EntityKind::Insert(_)) {
+/// Build the 3D scene from a set of drawings: `sources[0]` is the drawing the rules were opened
+/// with, then one per [`Rules::sheets`] entry. A level whose sheet is missing from the set is
+/// empty.
+pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
+    let upf = if rules.units_per_foot.is_finite() && rules.units_per_foot > 0.0 { rules.units_per_foot } else { 12.0 };
+    let empty = Drawing::default();
+    let src_of: Vec<usize> = (0..rules.levels.len()).map(|i| rules.level_source(i)).collect();
+    let drawing_of = |lv: usize| -> &Drawing { src_of.get(lv).and_then(|s| sources.get(*s)).copied().unwrap_or(&empty) };
+    let places: Vec<Place> =
+        rules.levels.iter().enumerate().map(|(i, l)| Place { region: l.region, base: base_point(drawing_of(i), rules, l) }).collect();
+    // The level an entity of source `src` at plan point `p` belongs to.
+    let level_at = |src: usize, p: Vec2| -> Option<usize> {
+        (0..places.len()).find(|&i| src_of.get(i) == Some(&src) && places.get(i).is_some_and(|pl| pl.contains(p)))
+    };
+    let mut s = Scene::default();
+    let mut wall_pieces: Vec<(Vec<Vec2>, usize, f64, Owner)> = Vec::new();
+
+    for (src, d) in sources.iter().enumerate() {
+        if !src_of.contains(&src) {
             continue;
         }
-        let Some(pts) = plan_points(e) else { continue };
-        let Some(lv) = pts.first().and_then(|p| places.iter().position(|pl| pl.contains(*p))) else {
-            s.unplaced += 1;
-            continue;
-        };
-        let (Some(level), Some(place)) = (rules.levels.get(lv), places.get(lv)) else { continue };
-        let world: Vec<Vec2> = pts.iter().map(|p| to_world(*p, place.base, upf)).collect();
-        match kind {
-            LayerKind::Wall { height_ft } => {
-                let h = height_ft.filter(|h| h.is_finite()).unwrap_or(level.height_ft);
-                wall_pieces.push((world, lv, h, e.handle));
+        let owner = |h: Handle| Owner { src: u16::try_from(src).unwrap_or(u16::MAX), handle: h };
+        for e in d.model.iter() {
+            let Some(kind) = rules.layer(&e.common.layer) else { continue };
+            if matches!(kind, LayerKind::Device) || matches!(e.kind, EntityKind::Insert(_)) {
+                continue;
             }
-            LayerKind::Run { height_ft } => {
-                let z = level.elevation_ft + height_ft;
-                let c = entity_rgb(d, e);
-                for w in world.windows(2) {
-                    if let [a, b] = w {
-                        s.edges.push(vtx(v3(a.x, a.y, z), V3::default(), c));
-                        s.edges.push(vtx(v3(b.x, b.y, z), V3::default(), c));
+            let Some(pts) = plan_points(e) else { continue };
+            let Some(lv) = pts.first().and_then(|p| level_at(src, *p)) else {
+                s.unplaced += 1;
+                continue;
+            };
+            let (Some(level), Some(place)) = (rules.levels.get(lv), places.get(lv)) else { continue };
+            let world: Vec<Vec2> = pts.iter().map(|p| to_world(*p, place.base, upf)).collect();
+            match kind {
+                LayerKind::Wall { height_ft, skip_curves } => {
+                    let h = height_ft.filter(|h| h.is_finite()).unwrap_or(level.height_ft);
+                    if *skip_curves {
+                        for run in straight_runs(&world) {
+                            wall_pieces.push((run, lv, h, owner(e.handle)));
+                        }
+                    } else {
+                        wall_pieces.push((world, lv, h, owner(e.handle)));
                     }
                 }
+                LayerKind::Run { height_ft } => {
+                    let z = level.elevation_ft + height_ft;
+                    let c = entity_rgb(d, e);
+                    for w in world.windows(2) {
+                        if let [a, b] = w {
+                            s.edges.push(vtx(v3(a.x, a.y, z), V3::default(), c));
+                            s.edges.push(vtx(v3(b.x, b.y, z), V3::default(), c));
+                        }
+                    }
+                }
+                LayerKind::Device => {}
             }
-            LayerKind::Device => {}
         }
     }
 
-    // Level extents from their walls, then floors.
+    // Level extents from their walls, then floors and ceilings.
     for (i, l) in rules.levels.iter().enumerate() {
         let mut min = Vec2 { x: f64::INFINITY, y: f64::INFINITY };
         let mut max = Vec2 { x: f64::NEG_INFINITY, y: f64::NEG_INFINITY };
@@ -147,16 +197,28 @@ pub fn derive(d: &Drawing, rules: &Rules) -> Scene {
     }
     for li in s.levels.clone() {
         if li.max.x > li.min.x && li.max.y > li.min.y {
-            let z = li.elevation_ft;
             let pad = 2.0;
-            let (a, b) = (v3(li.min.x - pad, li.min.y - pad, z), v3(li.max.x + pad, li.max.y + pad, z));
-            quad(&mut s, [a, v3(b.x, a.y, z), b, v3(a.x, b.y, z)], FLOOR, Handle(0));
+            let rect = |z: f64| {
+                [
+                    v3(li.min.x - pad, li.min.y - pad, z),
+                    v3(li.max.x + pad, li.min.y - pad, z),
+                    v3(li.max.x + pad, li.max.y + pad, z),
+                    v3(li.min.x - pad, li.max.y + pad, z),
+                ]
+            };
+            quad(&mut s, rect(li.elevation_ft), FLOOR, Owner::default());
+            // The ceiling faces down (drawn from below; a cut at the ceiling line hides it).
+            let [a, b, c, d] = rect(li.elevation_ft + li.ceiling_ft);
+            if li.ceiling_ft > 0.0 && li.ceiling_ft < li.height_ft {
+                quad(&mut s, [a, d, c, b], CEILING, Owner::default());
+            }
         }
     }
 
     // Walls: one vertical quad per segment, edges along top and bottom and at corners.
     let mut segs = 0usize;
-    for (pts, lv, h, handle) in &wall_pieces {
+    let mut faces: Vec<(Vec2, Vec2, usize, f64, f64, Owner)> = Vec::new();
+    for (pts, lv, h, owner) in &wall_pieces {
         let Some(level) = s.levels.get(*lv) else { continue };
         let (z0, z1) = (level.elevation_ft, level.elevation_ft + h.max(0.0));
         let n = pts.len();
@@ -167,7 +229,8 @@ pub fn derive(d: &Drawing, rules: &Rules) -> Scene {
             }
             segs += 1;
             s.walls.push(Seg { a: *a, b: *b, level: *lv });
-            quad(&mut s, [v3(a.x, a.y, z0), v3(b.x, b.y, z0), v3(b.x, b.y, z1), v3(a.x, a.y, z1)], WALL, *handle);
+            faces.push((*a, *b, *lv, z0, z1, *owner));
+            quad(&mut s, [v3(a.x, a.y, z0), v3(b.x, b.y, z0), v3(b.x, b.y, z1), v3(a.x, a.y, z1)], WALL, *owner);
             edge(&mut s, v3(a.x, a.y, z1), v3(b.x, b.y, z1));
             edge(&mut s, v3(a.x, a.y, z0), v3(b.x, b.y, z0));
             let corner = |at: usize| -> bool {
@@ -191,66 +254,184 @@ pub fn derive(d: &Drawing, rules: &Rules) -> Scene {
             }
         }
     }
+    close_walls(&mut s, &faces);
 
     // Devices.
-    for e in d.model.iter() {
-        let EntityKind::Insert(ins) = &e.kind else { continue };
-        if rules.layer(&e.common.layer) != Some(&LayerKind::Device) {
+    for (src, d) in sources.iter().enumerate() {
+        if !src_of.contains(&src) {
             continue;
         }
-        let attrs: Vec<(String, String)> = ins.attribs.iter().map(|a| (a.tag.clone(), a.text.value.clone())).collect();
-        let attr = |tag: &str| attrs.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map(|(_, v)| v.as_str());
-        let at = ins.insert.xy();
-        let lv = attr(&rules.devices.level_attr)
-            .and_then(|v| rules.levels.iter().position(|l| l.attr.as_deref() == Some(v)))
-            .or_else(|| places.iter().position(|p| p.contains(at)));
-        let Some(lv) = lv else {
-            s.unplaced += 1;
-            continue;
-        };
-        let (Some(level), Some(place)) = (s.levels.get(lv).cloned(), places.get(lv)) else { continue };
-        let ty = attr(&rules.devices.type_attr).unwrap_or("");
-        let mount = rules.mount(ty).clone();
-        let aff_override = attr(&rules.devices.aff_attr).and_then(|v| v.trim().trim_end_matches('"').parse::<f64>().ok()).filter(|v| v.is_finite());
-        let p = to_world(at, place.base, upf);
-        let c = entity_rgb(d, e);
-        let [w, dp, h] = mount.size_ft.map(|v| if v.is_finite() { v.clamp(0.01, 20.0) } else { 0.5 });
-        let (pos, aff, dir) = if mount.ceiling && aff_override.is_none() {
-            let aff = level.ceiling_ft - h / 2.0;
-            (v3(p.x, p.y, level.elevation_ft + aff), aff, Vec2 { x: 1.0, y: 0.0 })
-        } else {
-            let aff = aff_override.map(|i| i / 12.0).unwrap_or(mount.aff_ft);
-            // Snap onto the nearest wall face of this level, facing out of it.
-            let mut best: Option<(f64, Vec2, Vec2)> = None;
-            for sg in s.walls.iter().filter(|sg| sg.level == lv) {
-                let (q, dist) = closest(sg.a, sg.b, p);
-                if dist < SNAP_FT && best.is_none_or(|(bd, _, _)| dist < bd) {
-                    let t = (sg.b - sg.a) * (1.0 / (sg.b - sg.a).len().max(1e-12));
-                    let mut nrm = Vec2 { x: -t.y, y: t.x };
-                    if (p - q).x * nrm.x + (p - q).y * nrm.y < 0.0 {
-                        nrm = nrm * -1.0;
+        for e in d.model.iter() {
+            let EntityKind::Insert(ins) = &e.kind else { continue };
+            if rules.layer(&e.common.layer) != Some(&LayerKind::Device) {
+                continue;
+            }
+            let attrs: Vec<(String, String)> = ins.attribs.iter().map(|a| (a.tag.clone(), a.text.value.clone())).collect();
+            let attr = |tag: &str| attrs.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map(|(_, v)| v.as_str());
+            let at = ins.insert.xy();
+            let lv = attr(&rules.devices.level_attr)
+                .and_then(|v| {
+                    (0..rules.levels.len()).find(|&i| src_of.get(i) == Some(&src) && rules.levels.get(i).and_then(|l| l.attr.as_deref()) == Some(v))
+                })
+                .or_else(|| level_at(src, at));
+            let Some(lv) = lv else {
+                s.unplaced += 1;
+                continue;
+            };
+            let (Some(level), Some(place)) = (s.levels.get(lv).cloned(), places.get(lv)) else { continue };
+            let ty = attr(&rules.devices.type_attr).unwrap_or("");
+            let mount = rules.mount(ty).clone();
+            let aff_override =
+                attr(&rules.devices.aff_attr).and_then(|v| v.trim().trim_end_matches('"').parse::<f64>().ok()).filter(|v| v.is_finite());
+            let p = to_world(at, place.base, upf);
+            let c = entity_rgb(d, e);
+            let [w, dp, h] = mount.size_ft.map(|v| if v.is_finite() { v.clamp(0.01, 20.0) } else { 0.5 });
+            let (pos, aff, dir) = if mount.ceiling && aff_override.is_none() {
+                let aff = level.ceiling_ft - h / 2.0;
+                (v3(p.x, p.y, level.elevation_ft + aff), aff, Vec2 { x: 1.0, y: 0.0 })
+            } else {
+                let aff = aff_override.map(|i| i / 12.0).unwrap_or(mount.aff_ft);
+                // Snap onto the nearest wall face of this level, facing out of it.
+                let mut best: Option<(f64, Vec2, Vec2)> = None;
+                for sg in s.walls.iter().filter(|sg| sg.level == lv) {
+                    let (q, dist) = closest(sg.a, sg.b, p);
+                    if dist < SNAP_FT && best.is_none_or(|(bd, _, _)| dist < bd) {
+                        let t = (sg.b - sg.a) * (1.0 / (sg.b - sg.a).len().max(1e-12));
+                        let mut nrm = Vec2 { x: -t.y, y: t.x };
+                        if (p - q).x * nrm.x + (p - q).y * nrm.y < 0.0 {
+                            nrm = nrm * -1.0;
+                        }
+                        best = Some((dist, q + nrm * (dp / 2.0), t));
                     }
-                    best = Some((dist, q + nrm * (dp / 2.0), t));
                 }
-            }
-            match best {
-                Some((_, q, t)) => (v3(q.x, q.y, level.elevation_ft + aff), aff, t),
-                None => (v3(p.x, p.y, level.elevation_ft + aff), aff, Vec2 { x: 1.0, y: 0.0 }),
-            }
-        };
-        let across = if mount.ceiling { w } else { dp };
-        boxed(&mut s, pos, dir, w, across, h, c, e.handle);
-        s.devices.push(DeviceInfo {
-            handle: e.handle,
-            block: ins.block.clone(),
-            level: lv,
-            pos,
-            aff_ft: aff,
-            ceiling: mount.ceiling && aff_override.is_none(),
-            attrs,
-        });
+                match best {
+                    Some((_, q, t)) => (v3(q.x, q.y, level.elevation_ft + aff), aff, t),
+                    None => (v3(p.x, p.y, level.elevation_ft + aff), aff, Vec2 { x: 1.0, y: 0.0 }),
+                }
+            };
+            let across = if mount.ceiling { w } else { dp };
+            let src16 = u16::try_from(src).unwrap_or(u16::MAX);
+            boxed(&mut s, pos, dir, w, across, h, c, Owner { src: src16, handle: e.handle });
+            s.devices.push(DeviceInfo {
+                handle: e.handle,
+                src: src16,
+                block: ins.block.clone(),
+                level: lv,
+                pos,
+                aff_ft: aff,
+                ceiling: mount.ceiling && aff_override.is_none(),
+                attrs,
+            });
+        }
     }
     s
+}
+
+/// Pair each wall face with the nearest parallel face a wall's thickness away and close the strip
+/// between them: a top cap over the overlap and end caps where the overlap stops (door and window
+/// openings, wall ends). Plans draw both sides of a wall; this makes them read as one solid.
+#[allow(clippy::type_complexity)]
+fn close_walls(s: &mut Scene, faces: &[(Vec2, Vec2, usize, f64, f64, Owner)]) {
+    let mut levels: Vec<usize> = faces.iter().map(|f| f.2).collect();
+    levels.sort_unstable();
+    levels.dedup();
+    for lv in levels {
+        let on: Vec<&(Vec2, Vec2, usize, f64, f64, Owner)> = faces.iter().filter(|f| f.2 == lv).collect();
+        if on.len() > MAX_PAIR_FACES {
+            continue;
+        }
+        for (i, fi) in on.iter().enumerate() {
+            let (a, b, _, z0, z1, owner) = **fi;
+            let len = (b - a).len();
+            if len < 1e-9 {
+                continue;
+            }
+            let t = (b - a) * (1.0 / len);
+            let n = Vec2 { x: -t.y, y: t.x };
+            // Nearest partner on the +n side only, so each pair closes once.
+            let mut best: Option<(f64, f64, f64)> = None;
+            for (j, fj) in on.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                let (c, d) = (fj.0, fj.1);
+                let u = d - c;
+                let ul = u.len();
+                if ul < 1e-9 || (t.x * u.y - t.y * u.x).abs() / ul > PARALLEL {
+                    continue;
+                }
+                let off = (c - a).x * n.x + (c - a).y * n.y;
+                let off_d = (d - a).x * n.x + (d - a).y * n.y;
+                if (off - off_d).abs() > 0.05 || off < WALL_THICK_FT.0 || off > WALL_THICK_FT.1 {
+                    continue;
+                }
+                // Overlap along this face, in its own coordinate.
+                let (sc, sd) = ((c - a).x * t.x + (c - a).y * t.y, (d - a).x * t.x + (d - a).y * t.y);
+                let (lo, hi) = (sc.min(sd).max(0.0), sc.max(sd).min(len));
+                if hi - lo < 0.25 {
+                    continue;
+                }
+                if best.is_none_or(|(bo, _, _)| off < bo) {
+                    best = Some((off, lo, hi));
+                }
+            }
+            let Some((off, lo, hi)) = best else { continue };
+            let p = |along: f64, out: f64, z: f64| {
+                let q = a + t * along + n * out;
+                v3(q.x, q.y, z)
+            };
+            quad(s, [p(lo, 0.0, z1), p(hi, 0.0, z1), p(hi, off, z1), p(lo, off, z1)], WALL_TOP, owner);
+            // End caps only where the overlap stops at this face's own end (an opening or a wall
+            // end), not where a longer partner runs past a junction.
+            if lo < 0.05 {
+                quad(s, [p(lo, off, z0), p(lo, 0.0, z0), p(lo, 0.0, z1), p(lo, off, z1)], WALL, owner);
+                edge(s, p(lo, 0.0, z1), p(lo, off, z1));
+            }
+            if hi > len - 0.05 {
+                quad(s, [p(hi, 0.0, z0), p(hi, off, z0), p(hi, off, z1), p(hi, 0.0, z1)], WALL, owner);
+                edge(s, p(hi, 0.0, z1), p(hi, off, z1));
+            }
+            s.solid_walls += 1;
+        }
+    }
+}
+
+/// A polyline without its curved parts: a segment is dropped when either end turns gently
+/// (2°–50°) into its neighbour, as chords of a flattened arc do. What remains is split into runs.
+fn straight_runs(pts: &[Vec2]) -> Vec<Vec<Vec2>> {
+    let turn = |p: Vec2, q: Vec2, r: Vec2| -> f64 {
+        let (u, v) = (q - p, r - q);
+        let (lu, lv) = (u.len(), v.len());
+        if lu < 1e-12 || lv < 1e-12 {
+            return 0.0;
+        }
+        ((u.x * v.x + u.y * v.y) / (lu * lv)).clamp(-1.0, 1.0).acos().to_degrees()
+    };
+    let gentle = |deg: f64| (2.0..=50.0).contains(&deg);
+    let n = pts.len();
+    let mut runs: Vec<Vec<Vec2>> = Vec::new();
+    let mut cur: Vec<Vec2> = Vec::new();
+    for i in 0..n.saturating_sub(1) {
+        let (Some(&a), Some(&b)) = (pts.get(i), pts.get(i + 1)) else { break };
+        let before = i.checked_sub(1).and_then(|j| pts.get(j)).map(|&p| turn(p, a, b));
+        let after = pts.get(i + 2).map(|&r| turn(a, b, r));
+        let curved = before.is_some_and(gentle) || after.is_some_and(gentle);
+        if curved {
+            if cur.len() >= 2 {
+                runs.push(std::mem::take(&mut cur));
+            }
+            cur.clear();
+            continue;
+        }
+        if cur.is_empty() {
+            cur.push(a);
+        }
+        cur.push(b);
+    }
+    if cur.len() >= 2 {
+        runs.push(cur);
+    }
+    runs
 }
 
 /// The sheet point mapped to the building origin for a level.
@@ -316,7 +497,7 @@ fn edge(s: &mut Scene, a: V3, b: V3) {
 }
 
 /// Two triangles for a planar quad (corners in order).
-fn quad(s: &mut Scene, q: [V3; 4], c: Rgb, owner: Handle) {
+fn quad(s: &mut Scene, q: [V3; 4], c: Rgb, owner: Owner) {
     let [a, b, cc, d] = q;
     let n = (b - a).cross(d - a).norm();
     for p in [a, b, cc, a, cc, d] {
@@ -328,7 +509,7 @@ fn quad(s: &mut Scene, q: [V3; 4], c: Rgb, owner: Handle) {
 
 /// A box centred on `c`, `along` wide in direction `dir`, `across` deep, `h` high.
 #[allow(clippy::too_many_arguments)]
-fn boxed(s: &mut Scene, c: V3, dir: Vec2, along: f64, across: f64, h: f64, col: Rgb, owner: Handle) {
+fn boxed(s: &mut Scene, c: V3, dir: Vec2, along: f64, across: f64, h: f64, col: Rgb, owner: Owner) {
     let t = v3(dir.x, dir.y, 0.0).norm() * (along / 2.0);
     let n = v3(-dir.y, dir.x, 0.0).norm() * (across / 2.0);
     let z = v3(0.0, 0.0, h / 2.0);
@@ -404,6 +585,7 @@ mod tests {
             region: Some([-100.0, y0, 400.0, y0 + 500.0]),
             base: None,
             attr: Some(attr.into()),
+            sheet: None,
         };
         let mut devices = DeviceRules::default();
         devices.by_type.insert("REC".into(), Mount { ceiling: false, aff_ft: 1.5, size_ft: [0.3, 0.15, 0.45] });
@@ -411,7 +593,7 @@ mod tests {
             units_per_foot: 12.0,
             levels: vec![lvl("L3", 20.0, -100.0, "3"), lvl("L4", 30.0, 900.0, "4")],
             layers: vec![
-                LayerRule { layer: "A-WALL".into(), kind: LayerKind::Wall { height_ft: None } },
+                LayerRule { layer: "A-WALL".into(), kind: LayerKind::Wall { height_ft: None, skip_curves: false } },
                 LayerRule { layer: "E-DEV*".into(), kind: LayerKind::Device },
             ],
             devices,
@@ -460,6 +642,74 @@ mod tests {
         let s = derive(&d, &rules);
         assert_eq!(s.walls.len(), 8);
         assert_eq!(s.unplaced, 1);
+    }
+
+    #[test]
+    fn floors_from_separate_sheets_stack_and_remember_their_sheet() {
+        let room = || {
+            let mut d = Drawing::default();
+            add(&mut d, "A-WALL", line(0.0, 0.0, 240.0, 0.0));
+            add(&mut d, "A-WALL", line(240.0, 0.0, 240.0, 120.0));
+            d
+        };
+        let (a, b) = (room(), room());
+        let lvl = |name: &str, elev: f64, sheet: &str| Level {
+            name: name.into(),
+            elevation_ft: elev,
+            height_ft: 10.0,
+            ceiling_ft: 8.0,
+            region: None,
+            base: Some([0.0, 0.0]),
+            attr: None,
+            sheet: Some(sheet.into()),
+        };
+        let rules = Rules {
+            units_per_foot: 12.0,
+            levels: vec![lvl("L1", 0.0, "A111.dxf"), lvl("L2", 10.0, "A112.dxf"), lvl("L2 again", 20.0, "A112.dxf")],
+            layers: vec![LayerRule { layer: "A-WALL".into(), kind: LayerKind::Wall { height_ft: None, skip_curves: false } }],
+            devices: DeviceRules::default(),
+        };
+        assert_eq!(rules.sheets(), ["A111.dxf", "A112.dxf"]);
+        assert_eq!((rules.level_source(0), rules.level_source(1), rules.level_source(2)), (1, 2, 2));
+        let s = derive_set(&[&Drawing::default(), &a, &b], &rules);
+        // Each sheet feeds its own levels; a sheet's entity lands on the first level that takes it.
+        assert_eq!(s.walls.iter().filter(|w| w.level == 0).count(), 2);
+        assert_eq!(s.walls.iter().filter(|w| w.level == 1).count(), 2);
+        assert!(s.owners.iter().any(|o| o.src == 1) && s.owners.iter().any(|o| o.src == 2));
+        assert_eq!(s.levels.first().map(|l| (l.min, l.max)), s.levels.get(1).map(|l| (l.min, l.max)));
+        // A missing sheet leaves its levels empty instead of failing.
+        let s = derive_set(&[&Drawing::default()], &rules);
+        assert!(s.walls.is_empty());
+    }
+
+    #[test]
+    fn both_faces_of_a_wall_close_into_a_solid() {
+        let (mut d, rules) = two_floor_sheet();
+        // A 6" partition, 10' long, inside the lower room: two faces 6" apart.
+        add(&mut d, "A-WALL", line(60.0, 30.0, 180.0, 30.0));
+        add(&mut d, "A-WALL", line(180.0, 36.0, 60.0, 36.0));
+        let s = derive(&d, &rules);
+        assert!(s.solid_walls >= 1);
+        let top = [WALL_TOP.0, WALL_TOP.1, WALL_TOP.2, 255];
+        let cap: Vec<&Vertex> = s.tris.iter().filter(|v| v.c == top).collect();
+        assert!(!cap.is_empty() && cap.iter().all(|v| (v.p[2] - 30.0).abs() < 1e-4), "caps sit on top of the wall");
+        assert!(cap.iter().all(|v| (2.5 - 1e-3..=3.0 + 1e-3).contains(&f64::from(v.p[1]))), "between the faces");
+        // The room's walls are 10' apart: too far to be one wall.
+        assert!(s.solid_walls < 4);
+    }
+
+    #[test]
+    fn door_swings_drop_out_of_walls_but_corners_stay() {
+        let p = |x: f64, y: f64| Vec2 { x, y };
+        // An L-shaped wall, then a quarter-circle swing in 9 chords.
+        let wall = [p(0.0, 0.0), p(10.0, 0.0), p(10.0, 5.0)];
+        assert_eq!(straight_runs(&wall), vec![wall.to_vec()]);
+        let swing: Vec<Vec2> = (0..=9).map(|i| f64::from(i) * std::f64::consts::FRAC_PI_2 / 9.0).map(|a| p(3.0 * a.cos(), 3.0 * a.sin())).collect();
+        assert!(straight_runs(&swing).is_empty());
+        // A leaf line joined square to the end of its swing keeps only the leaf.
+        let mut leaf = vec![p(0.0, 0.0), p(3.0, 0.0)];
+        leaf.extend(swing.iter().skip(1));
+        assert_eq!(straight_runs(&leaf), vec![vec![p(0.0, 0.0), p(3.0, 0.0)]], "the leaf stays, its swing goes");
     }
 
     #[test]
