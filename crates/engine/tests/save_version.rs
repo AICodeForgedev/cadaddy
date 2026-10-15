@@ -17,7 +17,7 @@ fn with_options(_: &Drawing, _: &str, o: &SaveAs) -> Result<Vec<u8>, String> {
 }
 
 fn install() {
-    set_io(IoHooks { read: |_, _| Ok(Drawing::new_metric()), write: plain, plot: None });
+    set_io(IoHooks { read: |_, _| Ok(Drawing::new_metric()), write: plain, plot: None, read_pdf: None });
     set_write_as(with_options);
 }
 

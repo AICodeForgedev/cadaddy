@@ -24,7 +24,7 @@ fn read(bytes: &[u8], _name: &str) -> Result<Drawing, String> {
 }
 
 fn hooks() {
-    set_io(IoHooks { read, write, plot: None });
+    set_io(IoHooks { read, write, plot: None, read_pdf: None });
 }
 
 fn path(name: &str) -> String {

@@ -15,7 +15,12 @@ fn echo_plot(_: &Drawing, _: &Space, opts: &Value) -> Result<Vec<u8>, String> {
 
 fn session() -> Session {
     set_plotter_store(PlotterStore::memory());
-    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Err("no writer in this test".into()), plot: Some(echo_plot) });
+    set_io(IoHooks {
+        read: |_, _| Err("no reader in this test".into()),
+        write: |_, _| Err("no writer in this test".into()),
+        plot: Some(echo_plot),
+        read_pdf: None,
+    });
     let mut s = Session::new();
     s.cmdline("line 0,0 100,0").unwrap();
     s.cmdline("").unwrap();

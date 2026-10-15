@@ -1133,3 +1133,16 @@
 	View Direction	视图方向
 	2D Wireframe	二维线框
 	Custom View	自定义视图
+	Convert PDF to DWG...	将 PDF 转换为 DWG...
+	Convert PDF to DWG	将 PDF 转换为 DWG
+	PDF Import...	PDF 输入...
+	PDF Import	PDF 输入
+	Page	页面
+	PDF layers (else by colour and line weight)	PDF 图层（否则按颜色和线宽）
+	By colour and line weight	按颜色和线宽
+	Object layers (PDF_Geometry, PDF_Text, …)	对象图层（PDF_Geometry、PDF_Text…）
+	Import text	输入文字
+	Join line pieces and make circles	合并线段并生成圆
+	Keep white fills (masks)	保留白色填充（遮罩）
+	Add a layout that plots like the sheet	添加按图纸打印的布局
+	Convert and Save as DWG…	转换并另存为 DWG…

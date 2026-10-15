@@ -1254,3 +1254,16 @@ menu	Modify	Edita
 	View Direction	Direzione vista
 	2D Wireframe	Wireframe 2D
 	Custom View	Vista personalizzata
+	Convert PDF to DWG...	Converti PDF in DWG...
+	Convert PDF to DWG	Converti PDF in DWG
+	PDF Import...	Importazione PDF...
+	PDF Import	Importazione PDF
+	Page	Pagina
+	PDF layers (else by colour and line weight)	Layer del PDF (altrimenti per colore e spessore)
+	By colour and line weight	Per colore e spessore di linea
+	Object layers (PDF_Geometry, PDF_Text, …)	Layer oggetti (PDF_Geometry, PDF_Text, …)
+	Import text	Importa testo
+	Join line pieces and make circles	Unisci i tratti e crea cerchi
+	Keep white fills (masks)	Mantieni i riempimenti bianchi (maschere)
+	Add a layout that plots like the sheet	Aggiungi un layout che stampa come il foglio
+	Convert and Save as DWG…	Converti e salva come DWG…

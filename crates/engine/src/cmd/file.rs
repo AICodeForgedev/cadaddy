@@ -26,7 +26,13 @@ pub struct IoHooks {
     pub write: fn(&Drawing, &str) -> std::result::Result<Vec<u8>, String>,
     /// PLOT / EXPORTPDF (optional: builds without a plotter report "not available").
     pub plot: Option<PlotHook>,
+    /// PDFIMPORT: one page of a PDF as a drawing, with JSON options, and a report (optional).
+    pub read_pdf: Option<PdfHook>,
 }
+
+/// Read a PDF page with JSON options (`{page?, scale?, layers?, whiteFills?, text?, join?,
+/// layout?}`) → the drawing and a report (scale used, counts, notes).
+pub type PdfHook = fn(&[u8], &Value) -> std::result::Result<(Drawing, Value), String>;
 
 static IO: OnceLock<IoHooks> = OnceLock::new();
 

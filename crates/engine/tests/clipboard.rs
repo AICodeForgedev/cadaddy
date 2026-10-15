@@ -189,6 +189,7 @@ fn clipboard_travels_as_text() {
             Ok(b"0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nEOF\n".to_vec())
         },
         plot: None,
+        read_pdf: None,
     });
     let mut s = Session::empty();
     let a = s.open_drawing(drawing_a(), "A", None);

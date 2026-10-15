@@ -13,7 +13,7 @@ fn unknown(kind: &str) -> EntityKind {
 
 #[test]
 fn save_lists_the_entities_the_file_does_not_keep() {
-    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None });
+    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None, read_pdf: None });
     let mut d = Drawing::new_imperial();
     for k in ["MLINE", "3DSOLID", "MLINE"] {
         d.add(&Space::Model, Common::default(), unknown(k)).unwrap();

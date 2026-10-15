@@ -43,6 +43,9 @@ fn harness(paper: bool, render: bool) -> Harness<'static, CadApp> {
     session.settings.snapmode = true;
     session.settings.orthomode = true;
     let mut app = CadApp::new(session, Services::default());
+    // the classic workspace (tool bar and Tool Sets); the default is the ribbon
+    app.ui.ribbon = false;
+    app.ui.show_toolsets = true;
     app.canvas.zoom_pending = false;
     let builder = Harness::builder().with_size(vec2(1600.0, 1000.0));
     let builder = if render { builder.wgpu() } else { builder };

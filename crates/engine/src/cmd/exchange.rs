@@ -31,6 +31,9 @@ const MAX_SHEETS: usize = 256;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec::new("pdfimport", "PDF Import", run_pdfimport)
+            .menu(&["Insert", "PDF Import..."])
+            .params("{path | data (base64) + name, page? (1-based, default 1), scale?: number (drawing units per sheet inch: 96 = 1/8 in = 1 ft in an inch drawing) | a scale note (1/8\" = 1'-0\") | auto (default: the sheet's own scale note, else 1), layers?: pdf|pen|object (pdf: the PDF's layers, else one per colour and line weight; object: PDF_Geometry, PDF_Solid Fills, PDF_Text), whiteFills?: bool (default false), text?: bool, join?: bool (join touching pieces, round loops to circles; default true), layout?: bool (a layout showing the sheet at the scale; default true), newDrawing?: bool (open as a new drawing), at?: [x,y]} -> {entities, scale, scaleSource, sheet, pages, stats, notes, layers}"),
         CommandSpec::new("import", "Import...", run_import)
             .menu(&["File", "Import..."])
             .alias(&["imp"])
@@ -137,6 +140,44 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     let src = (hooks.read)(&bytes, &name).map_err(|e| bad("import", e))?;
     let file = std::path::Path::new(&name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     import_drawing(s, &src, at, scale, &file)
+}
+
+/// PDFIMPORT: a PDF page as CAD objects — into this drawing, or (`newDrawing`) as a new drawing
+/// with the sheet's layout.
+fn run_pdfimport(s: &mut Session, p: &Value) -> Result<Value> {
+    let hooks = io().ok_or_else(|| bad("pdfimport", "file formats are not available in this build"))?;
+    let read_pdf = hooks.read_pdf.ok_or_else(|| bad("pdfimport", "PDF import is not available in this build"))?;
+    let (bytes, name) = if let Some(path) = str_param(p, "path") {
+        (read_file(path)?, path.to_string())
+    } else {
+        let data = str_param(p, "data").ok_or_else(|| bad("pdfimport", "`path` or `data` (base64) is required"))?;
+        (base64_decode(data).ok_or_else(|| bad("pdfimport", "invalid base64"))?, str_param(p, "name").unwrap_or("import.pdf").to_string())
+    };
+    let (src, mut report) = read_pdf(&bytes, p).map_err(|e| bad("pdfimport", e))?;
+    let count = src.model.len();
+    let stem = std::path::Path::new(&name).file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "PDF".into());
+    if p.get("newDrawing").and_then(Value::as_bool).unwrap_or(false) {
+        let index = s.open_drawing(src, &stem, None);
+        s.zoom_extents()?;
+        report["index"] = json!(index);
+    } else {
+        let at = match p.get("at") {
+            Some(v) => point_value(v).ok_or_else(|| bad("pdfimport", "`at` must be a point [x, y]"))?,
+            None => Vec2::ZERO,
+        };
+        let file = std::path::Path::new(&name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        import_drawing(s, &src, at, 1.0, &file)?;
+    }
+    report["entities"] = json!(count);
+    let scale = report["scale"].as_f64().unwrap_or(1.0);
+    let src_note = report["scaleSource"].as_str().unwrap_or("").to_string();
+    s.echo(format!("PDF Import: {count} objects from {stem}, scale 1:{scale} ({src_note})"));
+    if let Some(notes) = report["notes"].as_array() {
+        for n in notes.iter().filter_map(Value::as_str) {
+            s.echo(format!("  {n}"));
+        }
+    }
+    Ok(report)
 }
 
 /// Copy `src`'s model space into the current space (scaled about the origin, then moved to
@@ -558,6 +599,7 @@ mod tests {
             read: |_, _| Err("no reader in tests".into()),
             write: |d, name| Ok(if name == "probe.test" { b"exchange".to_vec() } else { format!("{name}:{}", d.model.len()).into_bytes() }),
             plot: Some(fake_plot),
+            read_pdf: None,
         });
         io().is_some_and(|h| (h.write)(&Drawing::new_imperial(), "probe.test").is_ok_and(|b| b == b"exchange"))
     }
@@ -763,9 +805,9 @@ mod tests {
     }
 
     #[test]
-    fn attach_share_and_orbit_say_they_are_not_available_yet() {
+    fn attach_and_share_say_they_are_not_available_yet() {
         let mut s = session();
-        for c in ["attach", "share", "3dorbit", "orbit"] {
+        for c in ["attach", "share"] {
             let e = s.execute(&resolve_alias(c), &Value::Null).unwrap_err().to_string();
             assert!(e.contains("not available yet"), "{c}: {e}");
         }

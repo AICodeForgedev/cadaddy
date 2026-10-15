@@ -1051,3 +1051,16 @@
 	View Direction	Ansichtsrichtung
 	2D Wireframe	2D-Drahtkörper
 	Custom View	Benutzerdefinierte Ansicht
+	Convert PDF to DWG...	PDF in DWG konvertieren...
+	Convert PDF to DWG	PDF in DWG konvertieren
+	PDF Import...	PDF-Import...
+	PDF Import	PDF-Import
+	Page	Seite
+	PDF layers (else by colour and line weight)	PDF-Layer (sonst nach Farbe und Linienstärke)
+	By colour and line weight	Nach Farbe und Linienstärke
+	Object layers (PDF_Geometry, PDF_Text, …)	Objekt-Layer (PDF_Geometry, PDF_Text, …)
+	Import text	Text importieren
+	Join line pieces and make circles	Linienstücke verbinden und Kreise erzeugen
+	Keep white fills (masks)	Weiße Füllungen (Masken) behalten
+	Add a layout that plots like the sheet	Layout hinzufügen, das wie das Blatt plottet
+	Convert and Save as DWG…	Konvertieren und als DWG speichern…

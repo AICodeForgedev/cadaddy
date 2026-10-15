@@ -1261,3 +1261,16 @@
 	View Direction	Direção da vista
 	2D Wireframe	Estrutura de arame 2D
 	Custom View	Vista personalizada
+	Convert PDF to DWG...	Converter PDF em DWG...
+	Convert PDF to DWG	Converter PDF em DWG
+	PDF Import...	Importação de PDF...
+	PDF Import	Importação de PDF
+	Page	Página
+	PDF layers (else by colour and line weight)	Camadas do PDF (senão por cor e espessura)
+	By colour and line weight	Por cor e espessura de linha
+	Object layers (PDF_Geometry, PDF_Text, …)	Camadas de objetos (PDF_Geometry, PDF_Text, …)
+	Import text	Importar texto
+	Join line pieces and make circles	Unir trechos de linha e criar círculos
+	Keep white fills (masks)	Manter preenchimentos brancos (máscaras)
+	Add a layout that plots like the sheet	Adicionar um layout que plota como a folha
+	Convert and Save as DWG…	Converter e salvar como DWG…

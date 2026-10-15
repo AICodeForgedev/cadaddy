@@ -292,7 +292,14 @@ pub const TABS: &[Tab] = &[
                 items: &[Item::Large(b(Icon::Attach, "xattach", "Attach")), Item::Smalls(&[b(Icon::Attach, "xref", "External References")])],
                 more: &[],
             },
-            Panel { name: "Import", items: &[Item::Large(b(Icon::Import, "import", "Import"))], more: &[] },
+            Panel {
+                name: "Import",
+                items: &[
+                    Item::Large(b(Icon::Import, "ui.pdfimport", "PDF Import")),
+                    Item::Smalls(&[b(Icon::Import, "import", "Import"), b(Icon::Export, "ui.convertpdf", "PDF to DWG")]),
+                ],
+                more: &[],
+            },
             Panel {
                 name: "Data",
                 items: &[
@@ -531,6 +538,7 @@ const QAT: &[(Icon, &str, &str)] = &[
 const APP_MENU: &[(Icon, &str, &str)] = &[
     (Icon::New, "new", "New"),
     (Icon::Open, "ui.open", "Open"),
+    (Icon::Import, "ui.convertpdf", "Convert PDF to DWG..."),
     (Icon::Save, "qsave", "Save"),
     (Icon::SaveAs, "ui.saveas", "Save As"),
     (Icon::Import, "import", "Import"),

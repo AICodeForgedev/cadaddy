@@ -310,7 +310,25 @@ impl Db {
                 return Some(face);
             }
         }
+        // Drawings made on Windows name fonts by their Windows file (arialbd.ttf, cour.ttf);
+        // macOS and Linux install the same faces under other file names.
+        if let Some(family) = windows_font_family(k)
+            && let Some(face) = self.lookup_family(family)
+        {
+            return Some(face);
+        }
         self.by_family(k)
+    }
+
+    /// `family` by its own file stems, then by the names inside the fonts.
+    fn lookup_family(&mut self, family: &str) -> Option<Face> {
+        let k = family.to_ascii_lowercase();
+        for c in [k.clone(), k.replace(' ', ""), k.replace(' ', "-")] {
+            if let Some(face) = self.file(&c).and_then(|b| faces(&b).into_iter().next()) {
+                return Some(face);
+            }
+        }
+        self.by_family(&k)
     }
 
     /// A face whose family or full name is `k`, among files with a similar stem, then among the
@@ -486,6 +504,41 @@ pub(crate) fn register_static(name: &str, bytes: &'static [u8]) {
 }
 
 /// Normalise a style font name ("arial.ttf", "Arial", "ARIALBD.TTF") to a lookup key.
+/// The family (and style) of a common Windows font file stem, for systems that name the file
+/// otherwise (`arialbd` is "Arial Bold": `Arial Bold.ttf` on macOS).
+fn windows_font_family(stem: &str) -> Option<&'static str> {
+    Some(match stem {
+        "arial" => "Arial",
+        "arialbd" => "Arial Bold",
+        "ariali" => "Arial Italic",
+        "arialbi" => "Arial Bold Italic",
+        "ariblk" => "Arial Black",
+        "arialn" => "Arial Narrow",
+        "arialnb" => "Arial Narrow Bold",
+        "cour" => "Courier New",
+        "courbd" => "Courier New Bold",
+        "couri" => "Courier New Italic",
+        "times" => "Times New Roman",
+        "timesbd" => "Times New Roman Bold",
+        "timesi" => "Times New Roman Italic",
+        "calibri" => "Calibri",
+        "calibrib" => "Calibri Bold",
+        "tahoma" => "Tahoma",
+        "tahomabd" => "Tahoma Bold",
+        "verdana" => "Verdana",
+        "verdanab" => "Verdana Bold",
+        "gothic" => "Century Gothic",
+        "gothicb" => "Century Gothic Bold",
+        "georgia" => "Georgia",
+        "georgiab" => "Georgia Bold",
+        "trebuc" => "Trebuchet MS",
+        "trebucbd" => "Trebuchet MS Bold",
+        "segoeui" => "Segoe UI",
+        "segoeuib" => "Segoe UI Bold",
+        _ => return None,
+    })
+}
+
 fn key(name: &str) -> String {
     let n = name.trim().to_ascii_lowercase();
     n.trim_end_matches(".ttf").trim_end_matches(".otf").trim_end_matches(".ttc").trim_end_matches(".otc").to_string()

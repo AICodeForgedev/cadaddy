@@ -20,7 +20,13 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 miniz_oxide = "0.8"
+# PDF reading for PDFIMPORT (MIT); no optional extras (parallelism, dates, images).
+lopdf = { version = "0.45", default-features = false }
 quick-xml = { workspace = true }
 
 [dev-dependencies]
 tiny-skia = { workspace = true }
+
+# lopdf needs randomness (rand → getrandom); in the browser it comes from crypto.getRandomValues.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }

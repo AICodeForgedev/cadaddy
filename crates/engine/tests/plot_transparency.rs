@@ -12,7 +12,12 @@ fn fake_plot(_: &cadcraft_doc::Drawing, _: &cadcraft_doc::Space, opts: &Value) -
 }
 
 fn session() -> Session {
-    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Err("no writer in this test".into()), plot: Some(fake_plot) });
+    set_io(IoHooks {
+        read: |_, _| Err("no reader in this test".into()),
+        write: |_, _| Err("no writer in this test".into()),
+        plot: Some(fake_plot),
+        read_pdf: None,
+    });
     let mut s = Session::new();
     s.execute("line", &json!({"points": [[0, 0], [100, 0]]})).unwrap();
     s

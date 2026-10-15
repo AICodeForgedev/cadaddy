@@ -1262,3 +1262,16 @@ menu	Modify	Ändra
 	View Direction	Vyriktning
 	2D Wireframe	2D-trådram
 	Custom View	Anpassad vy
+	Convert PDF to DWG...	Konvertera PDF till DWG...
+	Convert PDF to DWG	Konvertera PDF till DWG
+	PDF Import...	PDF-import...
+	PDF Import	PDF-import
+	Page	Sida
+	PDF layers (else by colour and line weight)	PDF-lager (annars efter färg och linjebredd)
+	By colour and line weight	Efter färg och linjebredd
+	Object layers (PDF_Geometry, PDF_Text, …)	Objektlager (PDF_Geometry, PDF_Text, …)
+	Import text	Importera text
+	Join line pieces and make circles	Foga ihop linjestycken och skapa cirklar
+	Keep white fills (masks)	Behåll vita fyllningar (masker)
+	Add a layout that plots like the sheet	Lägg till en layout som plottas som bladet
+	Convert and Save as DWG…	Konvertera och spara som DWG…
