@@ -89,6 +89,11 @@ pub struct PdfOptions {
 /// The layer annotations (markups) are drawn on.
 pub const MARKUP_LAYER: &str = "PDF-MARKUP";
 
+/// The layer invisible text (text rendering mode 3: the searchable copy of lettering drawn as
+/// linework, as AutoCAD writes SHX text) goes on, turned off: the sheet shows the lettering
+/// once, and its words can still be searched and listed.
+pub const HIDDEN_TEXT_LAYER: &str = "PDF-HIDDEN-TEXT";
+
 impl Default for PdfOptions {
     fn default() -> Self {
         PdfOptions {
@@ -638,13 +643,16 @@ struct TextState {
     hscale: f64,
     leading: f64,
     rise: f64,
+    /// Text rendering mode (Tr): 3 and 7 are invisible (the searchable copy of lettering the
+    /// PDF draws as linework).
+    render: i64,
     tm: M,
     tlm: M,
 }
 
 impl Default for TextState {
     fn default() -> Self {
-        TextState { font: None, size: 0.0, char_space: 0.0, word_space: 0.0, hscale: 1.0, leading: 0.0, rise: 0.0, tm: M::ID, tlm: M::ID }
+        TextState { font: None, size: 0.0, char_space: 0.0, word_space: 0.0, hscale: 1.0, leading: 0.0, rise: 0.0, render: 0, tm: M::ID, tlm: M::ID }
     }
 }
 
@@ -876,6 +884,7 @@ impl<'a> Interp<'a> {
                 "Tz" => ts.hscale = n.first().copied().unwrap_or(100.0) / 100.0,
                 "TL" => ts.leading = n.first().copied().unwrap_or(0.0),
                 "Ts" => ts.rise = n.first().copied().unwrap_or(0.0),
+                "Tr" => ts.render = n.first().map_or(0, |v| *v as i64),
                 "Td" | "TD" => {
                     if let [tx, ty] = n[..] {
                         if op.operator == "TD" {
@@ -929,7 +938,13 @@ impl<'a> Interp<'a> {
                             }
                         }
                     }
-                    self.show_text(&mut ts, &gs, &parts, self.force_layer.clone().or_else(|| ocg.iter().rev().find_map(|l| l.clone())));
+                    // invisible text goes on its own layer, off: the sheet shows the lettering once
+                    let layer = if matches!(ts.render, 3 | 7) {
+                        Some(HIDDEN_TEXT_LAYER.to_string())
+                    } else {
+                        self.force_layer.clone().or_else(|| ocg.iter().rev().find_map(|l| l.clone()))
+                    };
+                    self.show_text(&mut ts, &gs, &parts, layer);
                 }
                 // form XObjects
                 "Do" => {
@@ -1832,6 +1847,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             layer_set.entry(MARKUP_LAYER.into()).or_insert((Color::Index(2), Lineweight::Default));
             return (MARKUP_LAYER.into(), color, if kind == "line" { lw } else { Lineweight::ByLayer });
         }
+        if layer.as_deref() == Some(HIDDEN_TEXT_LAYER) {
+            layer_set.entry(HIDDEN_TEXT_LAYER.into()).or_insert((Color::Index(8), Lineweight::Default));
+            return (HIDDEN_TEXT_LAYER.into(), Color::ByLayer, Lineweight::ByLayer);
+        }
         match mode {
             LayerMode::Pdf => {
                 let name = layer.clone().unwrap_or_else(|| "0".into());
@@ -2067,6 +2086,9 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             }
             None => d.layers.push(Layer { name: name.clone(), color: *color, lineweight: *lw, ..Layer::default() }),
         }
+    }
+    if let Some(l) = d.layers.iter_mut().find(|l| l.name == HIDDEN_TEXT_LAYER) {
+        l.on = false;
     }
     if added >= MAX_OBJECTS {
         notes.push(format!("stopped at {MAX_OBJECTS} objects"));
@@ -2497,7 +2519,7 @@ mod tests {
 
     /// A hand-written one-page PDF: a stroked line, a rectangle, a white mask, text and a scale note.
     fn sample_pdf() -> Vec<u8> {
-        let content = b"q 0 0 0 RG 1.2 w 72 72 m 144 72 l S 0.5 0.5 0.5 RG 72 100 72 36 re S 0.1 0.1 0.1 RG 72 400 m 144 400 l S 1 1 1 rg 200 200 20 20 re f BT /F1 12 Tf 72 300 Td (PANEL A) Tj ET BT /F1 8 Tf 72 280 Td (SCALE: 1/4\" = 1'-0\") Tj ET Q";
+        let content = b"q 0 0 0 RG 1.2 w 72 72 m 144 72 l S 0.5 0.5 0.5 RG 72 100 72 36 re S 0.1 0.1 0.1 RG 72 400 m 144 400 l S 1 1 1 rg 200 200 20 20 re f BT /F1 12 Tf 72 300 Td (PANEL A) Tj ET BT 3 Tr /F1 12 Tf 72 500 Td (SEARCH ONLY) Tj ET BT /F1 8 Tf 72 280 Td (SCALE: 1/4\" = 1'-0\") Tj ET Q";
         let mut objs: Vec<String> = vec![
             "<< /Type /Catalog /Pages 2 0 R >>".into(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
@@ -2538,6 +2560,11 @@ mod tests {
         assert!(ents.iter().any(|e| matches!(&e.kind, EntityKind::LwPolyline(p) if p.closed && p.vertices.len() == 4)));
         assert!(ents.iter().any(|e| matches!(&e.kind, EntityKind::Text(t) if t.value == "PANEL A" && t.style == "PDF-Arial")));
         assert!(r.drawing.text_styles.iter().any(|st| st.name == "PDF-Arial" && st.font == "arial.ttf"));
+        // invisible text is kept, on its own layer that is off
+        assert!(
+            r.drawing.model.iter().any(|e| e.common.layer == HIDDEN_TEXT_LAYER && matches!(&e.kind, EntityKind::Text(t) if t.value == "SEARCH ONLY"))
+        );
+        assert!(r.drawing.layers.iter().any(|l| l.name == HIDDEN_TEXT_LAYER && !l.on));
         // condensed and other families keep their own files, so the text keeps its width
         assert_eq!(ttf_style("KLEEBE+ArialNarrow,Bold"), Some(("PDF-ArialNarrow-Bold".into(), "arialnb.ttf".into())));
         assert_eq!(ttf_style("ArialNarrow"), Some(("PDF-ArialNarrow".into(), "arialn.ttf".into())));
