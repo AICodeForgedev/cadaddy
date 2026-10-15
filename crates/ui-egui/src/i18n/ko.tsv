@@ -1255,3 +1255,16 @@ menu	Modify	수정
 	View Direction	뷰 방향
 	2D Wireframe	2D 와이어프레임
 	Custom View	사용자 뷰
+	Convert PDF to DWG...	PDF를 DWG로 변환...
+	Convert PDF to DWG	PDF를 DWG로 변환
+	PDF Import...	PDF 가져오기...
+	PDF Import	PDF 가져오기
+	Page	페이지
+	PDF layers (else by colour and line weight)	PDF 도면층 (없으면 색상 및 선가중치별)
+	By colour and line weight	색상 및 선가중치별
+	Object layers (PDF_Geometry, PDF_Text, …)	객체 도면층 (PDF_Geometry, PDF_Text, …)
+	Import text	문자 가져오기
+	Join line pieces and make circles	선 조각 결합 및 원 만들기
+	Keep white fills (masks)	흰색 채우기(마스크) 유지
+	Add a layout that plots like the sheet	시트처럼 플롯되는 배치 추가
+	Convert and Save as DWG…	변환하고 DWG로 저장…

@@ -115,6 +115,7 @@ pub fn install_io() {
         read: |b, name| cadcraft_io::read(b, name).map_err(|e| e.to_string()),
         write: |d, name| cadcraft_io::write(d, name).map_err(|e| e.to_string()),
         plot: Some(|d, space, opts| cadcraft_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
+        read_pdf: Some(cadcraft_io::pdf_read::read_json),
     });
     cadcraft_engine::cmd::file::set_write_as(|d, name, o| {
         cadcraft_io::write_with(d, name, &cadcraft_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
@@ -132,10 +133,12 @@ fn services() -> Services {
             rfd::FileDialog::new()
                 .add_filter(i18n::t("Drawings (DWG, DXF)"), &["dwg", "dxf", "dwt"])
                 .add_filter(i18n::t("SVG drawings (SVG, SVGZ)"), &["svg", "svgz"])
+                .add_filter(i18n::t("PDF (converted to CAD objects)"), &["pdf"])
                 .add_filter(i18n::t("All files"), &["*"])
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
+        pick_pdf: Some(Box::new(|| rfd::FileDialog::new().add_filter(i18n::t("PDF"), &["pdf"]).pick_file().map(|p| p.to_string_lossy().to_string()))),
         pick_save: Some(Box::new(|name: &str| {
             filters_for_save(name)
                 .iter()

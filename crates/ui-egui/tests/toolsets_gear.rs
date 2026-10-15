@@ -16,6 +16,9 @@ const HIDDEN_CMD: &str = "revcloud";
 
 fn harness() -> Harness<'static, CadApp> {
     let mut app = CadApp::new(Session::default(), Services::default());
+    // the classic workspace (tool bar and Tool Sets); the default is the ribbon
+    app.ui.ribbon = false;
+    app.ui.show_toolsets = true;
     app.ui.in_window_menu = false;
     app.integrated_titlebar = true;
     let mut harness = Harness::builder().with_size(vec2(1280.0, 760.0)).build_ui_state(

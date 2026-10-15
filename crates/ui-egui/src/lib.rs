@@ -40,6 +40,7 @@ pub mod opening;
 pub mod options;
 pub mod palettes;
 pub mod parametric;
+pub mod pdfdlg;
 pub mod plotstyles;
 pub mod quick;
 pub mod ribbon;
@@ -199,6 +200,8 @@ impl Default for UiState {
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// A PDF to convert or import (PDFIMPORT, Convert PDF to DWG).
+    pub pick_pdf: Option<Box<dyn Fn() -> Option<String>>>,
 }
 
 pub struct CadApp {
@@ -212,6 +215,8 @@ pub struct CadApp {
     pub options: options::UiOptions,
     pub services: Services,
     pub canvas: canvas::CanvasState,
+    /// The PDF Import / Convert PDF to DWG dialog's choices while it is open ([`pdfdlg`]).
+    pub pdf: Option<pdfdlg::PdfDialog>,
     /// Desktop HID status and navigation preferences; the web host supplies no HID backend.
     pub spacemouse: spacemouse::State,
     pub cmd: cmdline::CmdLine,
@@ -266,6 +271,7 @@ impl CadApp {
             options: options::UiOptions::default(),
             services,
             canvas: canvas::CanvasState::default(),
+            pdf: None,
             spacemouse: spacemouse::State::default(),
             cmd: cmdline::CmdLine::default(),
             status: None,

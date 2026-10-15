@@ -168,6 +168,7 @@ mod tests {
         let asked = Rc::new(RefCell::new(Vec::new()));
         let (a, b) = (asked.clone(), asked.clone());
         let services = Services {
+            pick_pdf: None,
             pick_open: Some(Box::new(move || {
                 a.borrow_mut().push("open".into());
                 None

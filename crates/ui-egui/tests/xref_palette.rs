@@ -35,7 +35,7 @@ fn status(app: &CadApp) -> Option<XrefStatus> {
 
 #[test]
 fn xref_opens_the_palette_and_its_buttons_manage_the_xref() {
-    set_io(IoHooks { read, write: |_, _| Err("no writer in this test".into()), plot: None });
+    set_io(IoHooks { read, write: |_, _| Err("no writer in this test".into()), plot: None, read_pdf: None });
     let mut app = CadApp::new(Session::default(), Services::default());
     app.run("xattach", json!({ "path": site_file(), "at": [10, 10] })).unwrap();
     assert_eq!(status(&app), Some(XrefStatus::Loaded));

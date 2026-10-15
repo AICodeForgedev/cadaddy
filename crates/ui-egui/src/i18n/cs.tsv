@@ -1234,3 +1234,16 @@ menu	Modify	Modifikace
 	View Direction	Směr pohledu
 	2D Wireframe	2D drátový model
 	Custom View	Vlastní pohled
+	Convert PDF to DWG...	Převést PDF na DWG...
+	Convert PDF to DWG	Převést PDF na DWG
+	PDF Import...	Import PDF...
+	PDF Import	Import PDF
+	Page	Stránka
+	PDF layers (else by colour and line weight)	Hladiny PDF (jinak podle barvy a tloušťky)
+	By colour and line weight	Podle barvy a tloušťky čáry
+	Object layers (PDF_Geometry, PDF_Text, …)	Hladiny objektů (PDF_Geometry, PDF_Text, …)
+	Import text	Importovat text
+	Join line pieces and make circles	Spojit úseky čar a vytvořit kružnice
+	Keep white fills (masks)	Zachovat bílé výplně (masky)
+	Add a layout that plots like the sheet	Přidat rozvržení, které se vykreslí jako list
+	Convert and Save as DWG…	Převést a uložit jako DWG…

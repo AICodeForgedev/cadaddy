@@ -1250,3 +1250,16 @@ menu	View	عرض
 	View Direction	اتجاه العرض
 	2D Wireframe	إطار سلكي ثنائي الأبعاد
 	Custom View	عرض مخصص
+	Convert PDF to DWG...	تحويل PDF إلى DWG...
+	Convert PDF to DWG	تحويل PDF إلى DWG
+	PDF Import...	استيراد PDF...
+	PDF Import	استيراد PDF
+	Page	الصفحة
+	PDF layers (else by colour and line weight)	طبقات PDF (وإلا حسب اللون وسمك الخط)
+	By colour and line weight	حسب اللون وسمك الخط
+	Object layers (PDF_Geometry, PDF_Text, …)	طبقات الكائنات (PDF_Geometry، PDF_Text، …)
+	Import text	استيراد النص
+	Join line pieces and make circles	ضم أجزاء الخطوط وإنشاء الدوائر
+	Keep white fills (masks)	الاحتفاظ بالتعبئات البيضاء (الأقنعة)
+	Add a layout that plots like the sheet	إضافة تخطيط يُطبع مثل اللوحة
+	Convert and Save as DWG…	تحويل وحفظ بصيغة DWG…

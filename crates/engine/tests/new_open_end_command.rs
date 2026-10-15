@@ -60,7 +60,7 @@ fn two_circles(_: &[u8], _: &str) -> Result<Drawing, String> {
 
 #[test]
 fn open_ends_the_command_of_the_previous_drawing() {
-    set_io(IoHooks { read: two_circles, write: |_, _| Err("no writer in tests".into()), plot: None });
+    set_io(IoHooks { read: two_circles, write: |_, _| Err("no writer in tests".into()), plot: None, read_pdf: None });
     let mut s = Session::new();
     line_running(&mut s);
     s.execute("open", &json!({"data": "AA==", "name": "Circles.dxf"})).unwrap();

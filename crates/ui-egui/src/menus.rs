@@ -22,6 +22,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.dock.reset", "Reset Panel Layout", &["Window", "Reset Panel Layout"], None),
     ("ui.open", "Open...", &[], Some("Cmd+O")),
     ("ui.newtemplate", "New from Template...", &["File", "New from Template..."], None),
+    ("ui.convertpdf", "Convert PDF to DWG...", &["File", "Convert PDF to DWG..."], None),
+    ("ui.pdfimport", "PDF Import...", &[], None),
     ("ui.saveas", "Save As...", &[], None),
     ("ui.sample", "Open Sample Drawing", &["Help", "Open Sample Drawing"], None),
     ("ui.toggle.toolsets", "Tool Sets", &["Window", "Tool Sets"], Some("Cmd+3")),
@@ -149,6 +151,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             }
             Ok(json!({"interfaceLanguage": preference.code(), "shown": shown}))
         }
+        // Convert PDF to DWG (application menu) and PDF Import (Insert tab; PDFIMPORT typed
+        // without a path, as AutoCAD asks for the file): pick the PDF, then the options dialog.
+        "ui.convertpdf" => crate::pdfdlg::begin(app, true),
+        "ui.pdfimport" => crate::pdfdlg::begin(app, false),
+        "pdfimport" if no_path && app.services.pick_pdf.is_some() => crate::pdfdlg::begin(app, false),
         "ui.open" | "open" if no_path => {
             let picked = app.services.pick_open.as_ref().and_then(|f| f());
             if let Some(p) = picked {
@@ -426,7 +433,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
 
 /// SAVEAS parameters for a path picked in the Save dialog: a drawing that has no file yet is saved
 /// in the default save version; one opened from a file keeps that file's version.
-fn saveas_params(ui: &crate::UiState, session: &cadcraft_engine::Session, path: &str) -> Value {
+pub(crate) fn saveas_params(ui: &crate::UiState, session: &cadcraft_engine::Session, path: &str) -> Value {
     let untitled = session.state().is_ok_and(|s| s.path.is_none());
     match crate::SaveVersion::parse(&ui.save_version) {
         Some(v) if untitled => json!({ "path": path, "version": v.year() }),
@@ -703,6 +710,7 @@ mod tests {
         let asked = Rc::new(RefCell::new(Vec::new()));
         let log = Rc::clone(&asked);
         let services = Services {
+            pick_pdf: None,
             pick_open: None,
             pick_save: Some(Box::new(move |name: &str| {
                 log.borrow_mut().push(name.to_string());
@@ -714,7 +722,12 @@ mod tests {
 
     #[test]
     fn plot_and_print_open_the_plot_dialog_and_exportpdf_asks_for_a_file() {
-        set_io(IoHooks { read: |_, _| Err("no reader in tests".into()), write: |_, _| Err("no writer in tests".into()), plot: Some(fake_plot) });
+        set_io(IoHooks {
+            read: |_, _| Err("no reader in tests".into()),
+            write: |_, _| Err("no writer in tests".into()),
+            plot: Some(fake_plot),
+            read_pdf: None,
+        });
         if io().and_then(|h| h.plot).is_none() {
             return; // another test installed hooks without a plotter first
         }

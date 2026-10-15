@@ -10,7 +10,7 @@ use cadcraft_ui_egui::{CadApp, Services};
 
 #[test]
 fn recovery_list_opens_copies_and_discards_files() {
-    set_io(IoHooks { read: |_, _| Ok(Drawing::new_metric()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None });
+    set_io(IoHooks { read: |_, _| Ok(Drawing::new_metric()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None, read_pdf: None });
     let dir = std::env::temp_dir().join(format!("cadcraft-recovery-ui-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

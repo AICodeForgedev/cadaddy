@@ -12,6 +12,7 @@ fn app() -> (CadApp, Rc<Cell<u32>>) {
     let picks = Rc::new(Cell::new(0));
     let (a, b) = (picks.clone(), picks.clone());
     let services = Services {
+        pick_pdf: None,
         pick_open: Some(Box::new(move || {
             a.set(a.get() + 1);
             None

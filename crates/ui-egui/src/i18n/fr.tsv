@@ -1024,3 +1024,16 @@
 	View Direction	Direction de vue
 	2D Wireframe	Filaire 2D
 	Custom View	Vue personnalisée
+	Convert PDF to DWG...	Convertir un PDF en DWG...
+	Convert PDF to DWG	Convertir un PDF en DWG
+	PDF Import...	Importation PDF...
+	PDF Import	Importation PDF
+	Page	Page
+	PDF layers (else by colour and line weight)	Calques PDF (sinon par couleur et épaisseur)
+	By colour and line weight	Par couleur et épaisseur de ligne
+	Object layers (PDF_Geometry, PDF_Text, …)	Calques d'objets (PDF_Geometry, PDF_Text, …)
+	Import text	Importer le texte
+	Join line pieces and make circles	Joindre les segments et créer les cercles
+	Keep white fills (masks)	Conserver les remplissages blancs (masques)
+	Add a layout that plots like the sheet	Ajouter une présentation qui trace comme la feuille
+	Convert and Save as DWG…	Convertir et enregistrer en DWG…

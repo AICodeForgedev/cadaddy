@@ -1347,3 +1347,16 @@
 	View Direction	Напрямок погляду
 	2D Wireframe	2D каркас
 	Custom View	Користувацький вид
+	Convert PDF to DWG...	Перетворити PDF на DWG...
+	Convert PDF to DWG	Перетворити PDF на DWG
+	PDF Import...	Імпорт PDF...
+	PDF Import	Імпорт PDF
+	Page	Сторінка
+	PDF layers (else by colour and line weight)	Шари PDF (інакше за кольором і вагою ліній)
+	By colour and line weight	За кольором і вагою ліній
+	Object layers (PDF_Geometry, PDF_Text, …)	Шари об'єктів (PDF_Geometry, PDF_Text, …)
+	Import text	Імпортувати текст
+	Join line pieces and make circles	З'єднувати відрізки та створювати кола
+	Keep white fills (masks)	Зберігати білі заливки (маски)
+	Add a layout that plots like the sheet	Додати аркуш, що друкується як оригінал
+	Convert and Save as DWG…	Перетворити й зберегти як DWG…

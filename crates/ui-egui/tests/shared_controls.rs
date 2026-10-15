@@ -8,6 +8,9 @@ use egui_kittest::kittest::Queryable;
 
 fn app() -> CadApp {
     let mut app = CadApp::new(Session::default(), Services::default());
+    // the classic workspace (tool bar and Tool Sets); the default is the ribbon
+    app.ui.ribbon = false;
+    app.ui.show_toolsets = true;
     app.run("ui.sample", serde_json::json!({})).unwrap();
     app
 }
