@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  CADaddy MSI (WiX Toolset v5: `dotnet tool install -g wix`, plus the WixUI extension:
+  `wix extension add -g WixToolset.UI.wixext/5.0.2`). Built by package.ps1:
+
+    wix build cadaddy.wxs -arch x64 -ext WixToolset.UI.wixext -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+
+  Per-user install (no administrator needed) into %LOCALAPPDATA%\Programs\CADaddy, a Start Menu
+  shortcut, an optional desktop shortcut, and CADaddy registered for .dwg and .dxf drawings:
+  - the default app for them where the user hasn't chosen one (a user's own choice, such as
+    AutoCAD, is theirs: Windows lets only the user change it, in Settings > Default apps, where
+    CADaddy is listed);
+  - offered under "Open with" either way.
+  Uninstalling removes all of it.
+
+  Desktop shortcut: the setup wizard asks (unchecked by default). Silent installs leave it out
+  unless asked: `msiexec /i cadaddy.msi /qn DESKTOPSHORTCUT=1`. Upgrades keep the previous choice
+  unless DESKTOPSHORTCUT=1 or DESKTOPSHORTCUT=0 is given.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="CADaddy"
+      Manufacturer="AICodeForge"
+      Version="$(var.Version)"
+      UpgradeCode="DD388A30-CFD8-45B5-9B5C-E89E317619A8"
+      Scope="perUser"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="CADaddy computer-aided design" Manufacturer="AICodeForge" />
+    <!-- Same-version upgrades let successive builds of one X.Y.Z replace each other
+         (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of CADaddy is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="CadaddyIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="CadaddyIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://aicodeforge.dev" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="UserProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="CADaddy" />
+      </Directory>
+    </StandardDirectory>
+    <!-- Where this install went (written by CadaddyApp), read back so repairs, upgrades and
+         uninstalls act on that folder, not the default one. -->
+    <Property Id="INSTALLFOLDER">
+      <RegistrySearch Id="PreviousInstallFolder" Root="HKCU" Key="Software\AICodeForge\CADaddy" Name="InstallDir" Type="raw" />
+    </Property>
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
+
+    <!-- "Create a desktop shortcut": the wizard's checkbox sets it to 1 (cleared = unset), and
+         silent installs pass DESKTOPSHORTCUT=1. -->
+    <Property Id="DESKTOPSHORTCUT" Secure="yes" />
+    <!-- The previous install's choice, so upgrades keep the desktop shortcut without asking again. -->
+    <Property Id="PREVIOUSDESKTOPSHORTCUT">
+      <RegistrySearch Id="PreviousDesktopShortcut" Root="HKCU" Key="Software\AICodeForge\CADaddy"
+          Name="DesktopShortcut" Type="raw" />
+    </Property>
+    <!-- Only when DESKTOPSHORTCUT wasn't given; "first" runs it once (in the UI sequence when there
+         is one), so unticking the box isn't undone by the execute sequence. -->
+    <SetProperty Id="DESKTOPSHORTCUT" Value="1" After="AppSearch" Sequence="first"
+        Condition="NOT DESKTOPSHORTCUT AND PREVIOUSDESKTOPSHORTCUT = &quot;1&quot;" />
+
+    <UIRef Id="CadaddyUI" />
+
+    <Feature Id="Main" Title="CADaddy" Level="1">
+      <ComponentGroupRef Id="CadaddyFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <!-- Per-user components: each is kept by an HKCU value (ICE38) and removes the folders it made
+         (ICE64); shortcuts are not advertised, so they point at the files directly. -->
+    <ComponentGroup Id="CadaddyFiles" Directory="INSTALLFOLDER">
+      <Component Id="CadaddyApp" Guid="D8D7939F-743B-4F05-8E12-CEE3C0326B46">
+        <File Id="CadaddyExe" Source="$(var.BinDir)\cadaddy.exe" />
+        <RegistryValue Root="HKCU" Key="Software\AICodeForge\CADaddy" Name="InstallDir" Value="[INSTALLFOLDER]" Type="string" KeyPath="yes" />
+        <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveUserPrograms" Directory="UserProgramsFolder" On="uninstall" />
+
+        <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\cadaddy.exe" Value="[#CadaddyExe]" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\Applications\cadaddy.exe\shell\open\command" Value="&quot;[#CadaddyExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\Applications\cadaddy.exe\SupportedTypes" Name=".dwg" Value="" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\Applications\cadaddy.exe\SupportedTypes" Name=".dxf" Value="" Type="string" />
+
+        <!-- The drawing type: its name, icon and how to open it. -->
+        <RegistryValue Root="HKCU" Key="Software\Classes\CADaddy.Drawing" Value="CADaddy Drawing" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\CADaddy.Drawing\DefaultIcon" Value="&quot;[#CadaddyExe]&quot;,0" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\CADaddy.Drawing\shell\open\command" Value="&quot;[#CadaddyExe]&quot; &quot;%1&quot;" Type="string" />
+
+        <!-- .dwg and .dxf: CADaddy by default (where the user hasn't picked an app) and under Open with. -->
+        <RegistryValue Root="HKCU" Key="Software\Classes\.dwg" Value="CADaddy.Drawing" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\.dxf" Value="CADaddy.Drawing" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\.dwg\OpenWithProgids" Name="CADaddy.Drawing" Value="" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\.dxf\OpenWithProgids" Name="CADaddy.Drawing" Value="" Type="string" />
+
+        <!-- Listed in Settings > Default apps. -->
+        <RegistryValue Root="HKCU" Key="Software\AICodeForge\CADaddy\Capabilities" Name="ApplicationName" Value="CADaddy" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\AICodeForge\CADaddy\Capabilities" Name="ApplicationDescription" Value="CADaddy computer-aided design" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\AICodeForge\CADaddy\Capabilities\FileAssociations" Name=".dwg" Value="CADaddy.Drawing" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\AICodeForge\CADaddy\Capabilities\FileAssociations" Name=".dxf" Value="CADaddy.Drawing" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\RegisteredApplications" Name="CADaddy" Value="Software\AICodeForge\CADaddy\Capabilities" Type="string" />
+      </Component>
+
+      <Component Id="CadaddyCli" Guid="1F774CD6-D34C-4FB0-9084-DC24DE2917F1">
+        <File Id="CadaddyCliExe" Source="$(var.BinDir)\cadaddy-cli.exe" />
+        <RegistryValue Root="HKCU" Key="Software\AICodeForge\CADaddy" Name="Cli" Value="[#CadaddyCliExe]" Type="string" KeyPath="yes" />
+      </Component>
+
+      <Component Id="StartMenuShortcut" Guid="0C1DE940-F53B-4749-87A3-E83F7C96F547" Directory="ProgramMenuFolder">
+        <Shortcut Id="StartMenuShortcut" Name="CADaddy" Description="CADaddy computer-aided design"
+            Target="[#CadaddyExe]" WorkingDirectory="INSTALLFOLDER" Icon="CadaddyIcon.ico" IconIndex="0" />
+        <RegistryValue Root="HKCU" Key="Software\AICodeForge\CADaddy" Name="StartMenuShortcut" Value="1" Type="string" KeyPath="yes" />
+      </Component>
+
+      <!-- Optional desktop shortcut, removed on uninstall. -->
+      <Component Id="DesktopShortcut" Guid="17EA77A0-5F0D-4DEC-833A-2E13A1508B6A" Directory="DesktopFolder" Condition="DESKTOPSHORTCUT = &quot;1&quot;">
+        <Shortcut Id="DesktopShortcut" Name="CADaddy" Description="CADaddy computer-aided design"
+            Target="[#CadaddyExe]" WorkingDirectory="INSTALLFOLDER" Icon="CadaddyIcon.ico" IconIndex="0" />
+        <RegistryValue Root="HKCU" Key="Software\AICodeForge\CADaddy" Name="DesktopShortcut"
+            Value="1" Type="string" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <!--
+    Setup wizard: WixUI_InstallDir's flow (WiX v5, ext/UI/wixlib/WixUI_InstallDir.wxs) without the
+    licence and folder pages, plus a Shortcuts page:
+      install:     Welcome > Shortcuts > Ready to install > Progress > Finish
+      maintenance: Maintenance welcome > Repair/Remove > Ready > Progress > Finish
+  -->
+  <Fragment>
+    <UI Id="CadaddyUI">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+
+      <DialogRef Id="DiskCostDlg" />
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+
+      <Dialog Id="ShortcutsDlg" Width="370" Height="270" Title="!(loc.InstallDirDlg_Title)">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes"
+            Text="Choose where to start [ProductName] from." />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes"
+            Text="{\WixUI_Font_Title}Shortcuts" />
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
+        <Control Id="StartMenuText" Type="Text" X="20" Y="60" Width="330" Height="15" NoPrefix="yes"
+            Text="[ProductName] will be added to the Start menu." />
+        <Control Id="DesktopShortcutCheckBox" Type="CheckBox" X="20" Y="85" Width="330" Height="17"
+            Property="DESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
+      </Dialog>
+
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="ShortcutsDlg" Condition="NOT Installed" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+
+      <Publish Dialog="ShortcutsDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
+      <Publish Dialog="ShortcutsDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
+
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ShortcutsDlg" Order="1" Condition="NOT Installed" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="Installed AND PATCH" />
+
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
+
+      <!-- No "Change" in Apps & features: there is a single feature. -->
+      <Property Id="ARPNOMODIFY" Value="1" />
+    </UI>
+
+    <UIRef Id="WixUI_Common" />
+  </Fragment>
+</Wix>
