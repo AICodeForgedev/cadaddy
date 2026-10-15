@@ -1583,7 +1583,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
         match kind.as_str() {
             "LAYER" => {
                 let name = t.s(2).unwrap_or_default();
-                if name.is_empty() {
+                if name.is_empty() || d.layers.len() >= MAX_OBJECTS {
                     continue;
                 }
                 let aci = t.i(62).unwrap_or(7);
@@ -1627,7 +1627,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             }
             "LTYPE" => {
                 let name = t.s(2).unwrap_or_default();
-                if name.is_empty() {
+                if name.is_empty() || d.linetype(&name).is_some() || d.linetypes.len() >= MAX_OBJECTS {
                     continue;
                 }
                 let pattern = ltype_pattern(&tg, &ltype_styles);
@@ -1656,6 +1656,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     {
                         d.shape_files.push(f);
                     }
+                    continue;
+                }
+                if d.text_styles.len() >= MAX_OBJECTS {
                     continue;
                 }
                 // 70 bit 4: vertical; 71 bits 2/4: backwards / upside down.
@@ -1766,7 +1769,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             }
             "DIMSTYLE" => {
                 let name = t.s(2).unwrap_or_default();
-                if name.is_empty() {
+                if name.is_empty() || d.dim_styles.len() >= MAX_OBJECTS {
                     continue;
                 }
                 // Every variable with a DIMSTYLE group code; values the style can't take are
