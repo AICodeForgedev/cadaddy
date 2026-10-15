@@ -25,6 +25,19 @@ pub fn export_window_with(d: &Drawing, space: &Space, window: Option<Bounds2>, t
     export_list(&list, window)
 }
 
+/// Standard base64 (RFC 4648, padded), for data URLs.
+fn base64(data: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for c in data.chunks(3) {
+        let n = (u32::from(*c.first().unwrap_or(&0)) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
+        for (i, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            out.push(if i <= c.len() { char::from(A[(n >> shift) as usize & 63]) } else { '=' });
+        }
+    }
+    out
+}
+
 /// ` opacity="…"` for a transparent primitive (none for an opaque one or a wipeout's mask).
 fn opacity(p: &cadcraft_render::DPrim) -> String {
     if p.kind == Kind::Mask || p.transparency == 0 {
@@ -53,6 +66,7 @@ pub fn export_list(list: &cadcraft_render::DisplayList, window: Option<Bounds2>)
     let white = Rgb(255, 255, 255);
     let tx = |x: f64| x - x0;
     let ty = |y: f64| y1 - y;
+    let mut images = 0usize;
     for p in &list.prims {
         let c = p.display_rgb(white).hex();
         let op = opacity(p);
@@ -78,6 +92,33 @@ pub fn export_list(list: &cadcraft_render::DisplayList, window: Option<Bounds2>)
                     }
                 }
                 s.push_str(r#""/>"#);
+            }
+            Kind::Image(_) => {
+                // the pixels as an embedded PNG, clipped to the visible triangles
+                let Some(img) = list.image(p) else { continue };
+                let Some(png) = img.raster.encode_png() else { continue };
+                let id = images;
+                images += 1;
+                let _ = write!(s, r#"<clipPath id="img{id}"><path d=""#);
+                for t in pts.chunks(3) {
+                    if let [a, b2, cc] = t {
+                        let _ = write!(s, "M{:.6} {:.6}L{:.6} {:.6}L{:.6} {:.6}Z", tx(a.x), ty(a.y), tx(b2.x), ty(b2.y), tx(cc.x), ty(cc.y));
+                    }
+                }
+                // pixel space → the SVG's (y down): the y components flip
+                let [a, b2, cc, dd, e, f] = img.pixel_to_world();
+                let opacity = f64::from(img.alpha) / 255.0 * f64::from(p.alpha()) / 255.0;
+                let _ = write!(
+                    s,
+                    r#""/></clipPath><image clip-path="url(#img{id})" width="{}" height="{}" preserveAspectRatio="none" opacity="{opacity:.3}" transform="matrix({a:.9} {:.9} {cc:.9} {:.9} {:.6} {:.6})" href="data:image/png;base64,{}"/>"#,
+                    img.raster.width,
+                    img.raster.height,
+                    -b2,
+                    -dd,
+                    tx(e),
+                    ty(f),
+                    base64(&png)
+                );
             }
             Kind::Point => {
                 if let Some(q) = pts.first() {

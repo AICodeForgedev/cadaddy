@@ -752,6 +752,7 @@ dependencies = [
  "cadcraft-doc",
  "cadcraft-fonts",
  "cadcraft-geom",
+ "image",
  "lyon_tessellation",
  "rayon",
  "serde_json",

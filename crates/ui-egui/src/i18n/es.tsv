@@ -1271,5 +1271,6 @@
 	Import text	Importar texto
 	Join line pieces and make circles	Unir tramos de línea y crear círculos
 	Keep white fills (masks)	Conservar rellenos blancos (máscaras)
+	Import raster images (saved as PNG files)	Importar imágenes ráster (guardadas como PNG)
 	Add a layout that plots like the sheet	Añadir una presentación que trace como la hoja
 	Convert and Save as DWG…	Convertir y guardar como DWG…

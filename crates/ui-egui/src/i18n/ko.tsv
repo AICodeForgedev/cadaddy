@@ -1266,5 +1266,6 @@ menu	Modify	수정
 	Import text	문자 가져오기
 	Join line pieces and make circles	선 조각 결합 및 원 만들기
 	Keep white fills (masks)	흰색 채우기(마스크) 유지
+	Import raster images (saved as PNG files)	래스터 이미지 가져오기(PNG 파일로 저장)
 	Add a layout that plots like the sheet	시트처럼 플롯되는 배치 추가
 	Convert and Save as DWG…	변환하고 DWG로 저장…

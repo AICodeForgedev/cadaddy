@@ -1265,5 +1265,6 @@ menu	Modify	Edita
 	Import text	Importa testo
 	Join line pieces and make circles	Unisci i tratti e crea cerchi
 	Keep white fills (masks)	Mantieni i riempimenti bianchi (maschere)
+	Import raster images (saved as PNG files)	Importa immagini raster (salvate come PNG)
 	Add a layout that plots like the sheet	Aggiungi un layout che stampa come il foglio
 	Convert and Save as DWG…	Converti e salva come DWG…

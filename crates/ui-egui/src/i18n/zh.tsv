@@ -1144,5 +1144,6 @@
 	Import text	输入文字
 	Join line pieces and make circles	合并线段并生成圆
 	Keep white fills (masks)	保留白色填充（遮罩）
+	Import raster images (saved as PNG files)	导入光栅图像（保存为 PNG 文件）
 	Add a layout that plots like the sheet	添加按图纸打印的布局
 	Convert and Save as DWG…	转换并另存为 DWG…

@@ -11,6 +11,7 @@ pub mod clip;
 mod dim;
 mod fill;
 mod hatch;
+pub mod images;
 mod linetype;
 mod linetype_text;
 mod mline;
@@ -58,6 +59,60 @@ pub enum Kind {
     Point,
     /// An infinite line or ray: `verts[start]` = base, `verts[start+1]` = unit direction.
     Infinite { ray: bool },
+    /// A raster image ([`DisplayList::images`] entry): triangles laid out like [`Kind::Tris`]
+    /// covering the visible part of the image (its clip boundary, cut by any viewport), painted
+    /// with the image's pixels.
+    Image(u32),
+}
+
+impl Kind {
+    /// The primitive is triangles in [`DisplayList::tris`] (otherwise points in `verts`).
+    pub fn is_fill(self) -> bool {
+        matches!(self, Kind::Tris | Kind::Mask | Kind::Image(_))
+    }
+}
+
+/// The pixels a [`Kind::Image`] primitive paints and where they lie: pixel space (0..width
+/// across, 0..height down from the top-left corner) maps to world space by `origin + x·ex/width
+/// + y·ey/height`.
+#[derive(Clone, Debug)]
+pub struct ImageRef {
+    /// The file the IMAGE names (the cache key).
+    pub path: String,
+    pub raster: std::sync::Arc<images::Raster>,
+    /// World position of the image's top-left corner.
+    pub origin: Vec2,
+    /// World vectors along the image's full width (left to right) and full height (top down).
+    pub ex: Vec2,
+    pub ey: Vec2,
+    /// Opacity of the image, 0..=255 (FADE and transparency).
+    pub alpha: u8,
+    /// A dark one-colour image on a clear background ([`images::is_dark_stencil`]): drawn white
+    /// on a dark background, like colour 7.
+    pub dark_stencil: bool,
+}
+
+impl ImageRef {
+    /// The pixels to show on `background`: a dark stencil turns white on a dark background.
+    pub fn raster_on(&self, background: Rgb) -> std::sync::Arc<images::Raster> {
+        let dark_bg = u32::from(background.0) + u32::from(background.1) + u32::from(background.2) < 3 * 128;
+        if self.dark_stencil && dark_bg { images::white_version(&self.raster) } else { std::sync::Arc::clone(&self.raster) }
+    }
+    /// Texture coordinates (0..1 across, 0..1 down) of world point `p`.
+    pub fn uv(&self, p: Vec2) -> (f64, f64) {
+        let det = self.ex.x * self.ey.y - self.ex.y * self.ey.x;
+        if det.abs() < 1e-300 {
+            return (0.0, 0.0);
+        }
+        let d = p - self.origin;
+        ((d.x * self.ey.y - d.y * self.ey.x) / det, (self.ex.x * d.y - self.ex.y * d.x) / det)
+    }
+    /// The affine map from pixel space to world space: `[a, b, c, d, e, f]` with
+    /// `x' = a·x + c·y + e`, `y' = b·x + d·y + f`.
+    pub fn pixel_to_world(&self) -> [f64; 6] {
+        let (w, h) = (f64::from(self.raster.width.max(1)), f64::from(self.raster.height.max(1)));
+        [self.ex.x / w, self.ex.y / w, self.ey.x / h, self.ey.y / h, self.origin.x, self.origin.y]
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -98,6 +153,8 @@ pub struct DisplayList {
     /// Plot style end, join and fill style per primitive (parallel to `prims`; missing entries
     /// are "use object"), turned into geometry by [`pen::apply`].
     pub pens: Vec<Pen>,
+    /// The images [`Kind::Image`] primitives paint.
+    pub images: Vec<ImageRef>,
 }
 
 /// A glyph of plotted text: the font glyph and, in world coordinates, where it sits. It is
@@ -180,16 +237,20 @@ impl DisplayList {
     /// The polyline points of a primitive.
     pub fn points(&self, p: &DPrim) -> &[Vec2] {
         match p.kind {
-            Kind::Tris | Kind::Mask => self.tris.get(p.start as usize..(p.start + p.len) as usize).unwrap_or(&[]),
+            k if k.is_fill() => self.tris.get(p.start as usize..(p.start + p.len) as usize).unwrap_or(&[]),
             _ => self.verts.get(p.start as usize..(p.start + p.len) as usize).unwrap_or(&[]),
         }
     }
-    /// The boundary of a filled primitive ([`Kind::Tris`], [`Kind::Mask`]) as closed polylines,
-    /// for highlighting it; empty for other kinds.
+    /// The boundary of a filled primitive ([`Kind::Tris`], [`Kind::Mask`], [`Kind::Image`]) as
+    /// closed polylines, for highlighting it; empty for other kinds.
     pub fn fill_outlines(&self, p: &DPrim) -> Vec<Vec<Vec2>> {
+        if p.kind.is_fill() { outline::fill_outlines(self.points(p)) } else { Vec::new() }
+    }
+    /// The image a [`Kind::Image`] primitive paints.
+    pub fn image(&self, p: &DPrim) -> Option<&ImageRef> {
         match p.kind {
-            Kind::Tris | Kind::Mask => outline::fill_outlines(self.points(p)),
-            _ => Vec::new(),
+            Kind::Image(i) => self.images.get(i as usize),
+            _ => None,
         }
     }
 }
@@ -390,6 +451,39 @@ impl Builder<'_> {
             len: tris.len() as u32,
         });
     }
+    /// Image triangles (in the entity's coordinates) painted with `img` (world coordinates
+    /// apart from `ctx.xf`, which this maps as it maps the triangles).
+    fn image_tris(&mut self, ctx: &Ctx, color: Ink, tris: &[Vec2], img: ImageRef) {
+        if tris.len() < 3 {
+            return;
+        }
+        let xf = ctx.xf;
+        let img = ImageRef {
+            origin: xf.apply(img.origin),
+            ex: xf.apply(img.origin + img.ex) - xf.apply(img.origin),
+            ey: xf.apply(img.origin + img.ey) - xf.apply(img.origin),
+            ..img
+        };
+        let (color, _) = self.styled(color, 0.0);
+        let start = self.list.tris.len() as u32;
+        for p in tris {
+            let q = xf.apply(*p);
+            self.list.bounds.add(q);
+            self.list.tris.push(q);
+        }
+        let idx = self.list.images.len() as u32;
+        self.list.images.push(img);
+        self.list.prims.push(DPrim {
+            handle: ctx.top,
+            color: color.rgb,
+            aci7: color.aci7,
+            lw: 0.0,
+            transparency: self.transparency,
+            kind: Kind::Image(idx),
+            start,
+            len: tris.len() as u32,
+        });
+    }
     /// Shaped text: strokes as polylines; TrueType glyphs filled (TEXTFILL) or outlined.
     fn shaped(&mut self, ctx: &Ctx, color: Ink, lw: f32, sh: &cadcraft_fonts::Shaped) {
         for s in &sh.strokes {
@@ -579,15 +673,19 @@ fn build_parallel(b: &mut Builder, d: &Drawing, store: &cadcraft_doc::EntityStor
 /// Append `src` to `dst`: its primitives index into `dst`'s vertex and triangle arrays.
 #[cfg(not(target_arch = "wasm32"))]
 fn append(dst: &mut DisplayList, src: DisplayList) {
-    let (verts, tris, prims) = (dst.verts.len() as u32, dst.tris.len() as u32, dst.prims.len() as u32);
+    let (verts, tris, prims, images) = (dst.verts.len() as u32, dst.tris.len() as u32, dst.prims.len() as u32, dst.images.len() as u32);
     // Pens are parallel to the primitives, with missing entries meaning "use object".
     if !src.pens.is_empty() {
         dst.pens.resize(dst.prims.len(), Pen::default());
     }
     dst.prims.extend(src.prims.into_iter().map(|mut p| {
-        p.start += if matches!(p.kind, Kind::Tris | Kind::Mask) { tris } else { verts };
+        p.start += if p.kind.is_fill() { tris } else { verts };
+        if let Kind::Image(i) = &mut p.kind {
+            *i += images;
+        }
         p
     }));
+    dst.images.extend(src.images);
     dst.verts.extend(src.verts);
     dst.tris.extend(src.tris);
     dst.prim_layers.extend(src.prim_layers);
@@ -833,6 +931,17 @@ fn append_clipped(dst: &mut DisplayList, src: &DisplayList, clip: &Clip) {
                 let t = c.clip_triangles(pts);
                 push_raw(dst, p, p.kind, &t);
             }
+            (Kind::Image(i), _) => {
+                let t = match clip {
+                    Clip::Rect(rect) => clip::clip_triangles(pts, rect),
+                    Clip::Poly(c) => c.clip_triangles(pts),
+                };
+                if let (false, Some(img)) = (t.is_empty(), src.images.get(i as usize)) {
+                    let idx = dst.images.len() as u32;
+                    dst.images.push(img.clone());
+                    push_raw(dst, p, Kind::Image(idx), &t);
+                }
+            }
             (Kind::Point, _) => {
                 let inside = |q: Vec2| match clip {
                     Clip::Rect(rect) => rect.contains(q),
@@ -865,13 +974,13 @@ fn append_clipped(dst: &mut DisplayList, src: &DisplayList, clip: &Clip) {
 fn push_raw(dst: &mut DisplayList, p: &DPrim, kind: Kind, pts: &[Vec2]) {
     let min = match kind {
         Kind::Polyline => 2,
-        Kind::Tris | Kind::Mask => 3,
+        k if k.is_fill() => 3,
         _ => 1,
     };
     if pts.len() < min {
         return;
     }
-    let tris = matches!(kind, Kind::Tris | Kind::Mask);
+    let tris = kind.is_fill();
     let start = if tris { dst.tris.len() } else { dst.verts.len() } as u32;
     for q in pts {
         dst.bounds.add(*q);
@@ -1248,14 +1357,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 b.polyline(ctx, rgb, lw, &pts);
             }
         }
-        EntityKind::Image(i) => {
-            let o = i.insert.xy();
-            let u = i.u.xy() * i.size.x;
-            let v = i.v.xy() * i.size.y;
-            b.polyline(ctx, rgb, lw, &[o, o + u, o + u + v, o + v, o]);
-            b.polyline(ctx, rgb, lw, &[o, o + u + v]);
-            b.polyline(ctx, rgb, lw, &[o + u, o + v]);
-        }
+        EntityKind::Image(i) => image(b, ctx, i, rgb, lw),
         EntityKind::Table(t) => table(b, ctx, t, rgb, lw),
         EntityKind::Tolerance(t) => tolerance::draw(b, ctx, e, t, lw, tol),
         EntityKind::Leader(l) => {
@@ -1557,6 +1659,58 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
         block_pstyle: ctx.block_pstyle,
         // The reference's own, set by the caller (`Builder::transparency` while it draws).
         block_transparency: ctx.block_transparency,
+    }
+}
+
+/// A raster image: its pixels inside its clip boundary, and its frame per IMAGEFRAME (0 none,
+/// 1 shown and plotted, 2 shown only). An image whose file can't be read is drawn as its frame
+/// with the diagonals, as AutoCAD marks an unloaded image.
+fn image(b: &mut Builder, ctx: &Ctx, i: &cadcraft_doc::Image, rgb: Ink, lw: f32) {
+    let o = i.insert.xy();
+    let (u, v) = (i.u.xy(), i.v.xy());
+    let (w, h) = (i.size.x, i.size.y);
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return;
+    }
+    // pixel coordinates (image corner at -0.5, -0.5, y down) to the entity's coordinates
+    let at = |px: f64, py: f64| o + u * (px + 0.5) + v * (h - (py + 0.5));
+    let boundary: Vec<Vec2> = match i.clip.as_slice() {
+        [a, c] if i.clipping => {
+            let (x0, x1, y0, y1) = (a.x.min(c.x), a.x.max(c.x), a.y.min(c.y), a.y.max(c.y));
+            vec![at(x0, y1), at(x1, y1), at(x1, y0), at(x0, y0)]
+        }
+        pts if i.clipping && pts.len() >= 3 => pts.iter().map(|q| at(q.x, q.y)).collect(),
+        _ => vec![o, o + u * w, o + u * w + v * h, o + v * h],
+    };
+    let raster = if i.display & 1 != 0 { images::get(&i.path) } else { None };
+    let missing = i.display & 1 != 0 && raster.is_none();
+    match raster {
+        Some(raster) => {
+            let tris = triangulate_evenodd(std::slice::from_ref(&boundary));
+            let alpha = (255.0 * (1.0 - f64::from(i.fade.min(100)) / 100.0)).round() as u8;
+            let dark_stencil = images::is_dark_stencil(&raster);
+            let img = ImageRef { path: i.path.clone(), raster, origin: o + v * h, ex: u * w, ey: v * -h, alpha, dark_stencil };
+            b.image_tris(ctx, rgb, &tris, img);
+        }
+        None if i.display & 1 != 0 => {
+            // not loaded: the frame and its diagonals, always (nothing else shows it is there)
+            let c = [o, o + u * w, o + u * w + v * h, o + v * h];
+            b.polyline(ctx, rgb, lw, &[c[0], c[2]]);
+            b.polyline(ctx, rgb, lw, &[c[1], c[3]]);
+        }
+        None => {}
+    }
+    let frame = match ctx.d.header.i64("IMAGEFRAME", 1) {
+        0 => false,
+        2 => !b.plotting,
+        _ => true,
+    };
+    if frame || missing {
+        let mut closed = boundary;
+        if let Some(f) = closed.first().copied() {
+            closed.push(f);
+        }
+        b.polyline(ctx, rgb, lw, &closed);
     }
 }
 

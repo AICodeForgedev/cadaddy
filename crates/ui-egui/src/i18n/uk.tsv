@@ -1358,5 +1358,6 @@
 	Import text	Імпортувати текст
 	Join line pieces and make circles	З'єднувати відрізки та створювати кола
 	Keep white fills (masks)	Зберігати білі заливки (маски)
+	Import raster images (saved as PNG files)	Імпортувати растрові зображення (зберігаються як PNG)
 	Add a layout that plots like the sheet	Додати аркуш, що друкується як оригінал
 	Convert and Save as DWG…	Перетворити й зберегти як DWG…

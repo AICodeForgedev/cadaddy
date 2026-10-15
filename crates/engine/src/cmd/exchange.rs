@@ -33,7 +33,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("pdfimport", "PDF Import", run_pdfimport)
             .menu(&["Insert", "PDF Import..."])
-            .params("{path | data (base64) + name, page? (1-based, default 1), scale?: number (drawing units per sheet inch: 96 = 1/8 in = 1 ft in an inch drawing) | a scale note (1/8\" = 1'-0\") | auto (default: the sheet's own scale note, else 1), layers?: pdf|pen|object (pdf: the PDF's layers, else one per colour and line weight; object: PDF_Geometry, PDF_Solid Fills, PDF_Text), whiteFills?: bool (default false), text?: bool, join?: bool (join touching pieces, round loops to circles; default true), layout?: bool (a layout showing the sheet at the scale; default true), newDrawing?: bool (open as a new drawing), at?: [x,y]} -> {entities, scale, scaleSource, sheet, pages, stats, notes, layers}"),
+            .params("{path | data (base64) + name, page? (1-based, default 1), scale?: number (drawing units per sheet inch: 96 = 1/8 in = 1 ft in an inch drawing) | a scale note (1/8\" = 1'-0\") | auto (default: the sheet's own scale note, else 1), layers?: pdf|pen|object (pdf: the PDF's layers, else one per colour and line weight; object: PDF_Geometry, PDF_Solid Fills, PDF_Text), whiteFills?: bool (default false), text?: bool, join?: bool (join touching pieces, round loops to circles; default true), layout?: bool (a layout showing the sheet at the scale; default true), markups?: bool (annotations on PDF-MARKUP; default true), images?: bool (raster images as IMAGE objects; default true), imageFolder?: folder for the image PNG files (default \"<PDF name> images\" next to the PDF), imagePrefix?: file name start (default \"<PDF name>-p<page>\"), newDrawing?: bool (open as a new drawing), at?: [x,y]} -> {entities, scale, scaleSource, sheet, pages, stats, notes, layers, imageFiles, imageFolder}"),
         CommandSpec::new("import", "Import...", run_import)
             .menu(&["File", "Import..."])
             .alias(&["imp"])
@@ -153,9 +153,20 @@ fn run_pdfimport(s: &mut Session, p: &Value) -> Result<Value> {
         let data = str_param(p, "data").ok_or_else(|| bad("pdfimport", "`path` or `data` (base64) is required"))?;
         (base64_decode(data).ok_or_else(|| bad("pdfimport", "invalid base64"))?, str_param(p, "name").unwrap_or("import.pdf").to_string())
     };
-    let (src, mut report) = read_pdf(&bytes, p).map_err(|e| bad("pdfimport", e))?;
-    let count = src.model.len();
     let stem = std::path::Path::new(&name).file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "PDF".into());
+    // images: PNG files named after the PDF and page, by default in "<PDF name> images" next to it
+    let mut p = p.clone();
+    let page = p.get("page").and_then(Value::as_u64).unwrap_or(1);
+    if p.get("imagePrefix").is_none() {
+        p["imagePrefix"] = json!(format!("{stem}-p{page}"));
+    }
+    if p.get("imageFolder").is_none()
+        && let Some(dir) = str_param(&p, "path").and_then(|path| std::path::Path::new(path).parent())
+    {
+        p["imageFolder"] = json!(dir.join(format!("{stem} images")).to_string_lossy());
+    }
+    let (src, mut report) = read_pdf(&bytes, &p).map_err(|e| bad("pdfimport", e))?;
+    let count = src.model.len();
     if p.get("newDrawing").and_then(Value::as_bool).unwrap_or(false) {
         let index = s.open_drawing(src, &stem, None);
         s.zoom_extents()?;

@@ -1273,5 +1273,6 @@ menu	Modify	Ändra
 	Import text	Importera text
 	Join line pieces and make circles	Foga ihop linjestycken och skapa cirklar
 	Keep white fills (masks)	Behåll vita fyllningar (masker)
+	Import raster images (saved as PNG files)	Importera rasterbilder (sparas som PNG-filer)
 	Add a layout that plots like the sheet	Lägg till en layout som plottas som bladet
 	Convert and Save as DWG…	Konvertera och spara som DWG…

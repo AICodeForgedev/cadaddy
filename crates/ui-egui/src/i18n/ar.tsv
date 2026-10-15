@@ -1261,5 +1261,6 @@ menu	View	عرض
 	Import text	استيراد النص
 	Join line pieces and make circles	ضم أجزاء الخطوط وإنشاء الدوائر
 	Keep white fills (masks)	الاحتفاظ بالتعبئات البيضاء (الأقنعة)
+	Import raster images (saved as PNG files)	استيراد الصور النقطية (تُحفظ كملفات PNG)
 	Add a layout that plots like the sheet	إضافة تخطيط يُطبع مثل اللوحة
 	Convert and Save as DWG…	تحويل وحفظ بصيغة DWG…

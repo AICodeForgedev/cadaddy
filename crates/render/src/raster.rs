@@ -78,6 +78,8 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
     let mut pm = Pixmap::new(view.width, view.height)?;
     pm.fill(tiny_skia::Color::from_rgba8(o.background.0, o.background.1, o.background.2, 255));
     let vis = view.world_bounds();
+    // each image's pixels as a premultiplied pixmap, made once per render
+    let mut pixmaps: std::collections::HashMap<*const crate::images::Raster, Option<Pixmap>> = std::collections::HashMap::new();
     for p in &list.prims {
         let c = p.display_rgb(o.background);
         let mut paint = Paint::default();
@@ -126,6 +128,32 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
                     pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
                 }
             }
+            Kind::Image(_) => {
+                let Some(img) = list.image(p) else { continue };
+                let shown = img.raster_on(o.background);
+                let key = std::sync::Arc::as_ptr(&shown);
+                let Some(src) = pixmaps.entry(key).or_insert_with(|| pixmap_of(&shown)).as_ref() else { continue };
+                let [a, b, c, d, e, f] = img.pixel_to_world();
+                let s = view.scale;
+                let (hw, hh) = (f64::from(view.width) / 2.0, f64::from(view.height) / 2.0);
+                let xf = Transform::from_row(
+                    (s * a) as f32,
+                    (-s * b) as f32,
+                    (s * c) as f32,
+                    (-s * d) as f32,
+                    (s * (e - view.center.x) + hw) as f32,
+                    (hh - s * (f - view.center.y)) as f32,
+                );
+                let opacity = f32::from(img.alpha) / 255.0 * f32::from(p.alpha()) / 255.0;
+                let paint = Paint {
+                    anti_alias: o.antialias,
+                    shader: tiny_skia::Pattern::new(src.as_ref(), tiny_skia::SpreadMode::Pad, tiny_skia::FilterQuality::Bilinear, opacity, xf),
+                    ..Default::default()
+                };
+                if let Some(path) = tri_path(view, pts) {
+                    pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+                }
+            }
             Kind::Point => {
                 if let Some(q) = pts.first() {
                     let (x, y) = view.to_screen(*q);
@@ -151,6 +179,33 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
                 }
             }
         }
+    }
+    Some(pm)
+}
+
+/// The triangles `pts` (three points each) on screen as one path.
+fn tri_path(view: &View, pts: &[Vec2]) -> Option<tiny_skia::Path> {
+    let mut pb = PathBuilder::new();
+    for t in pts.chunks(3) {
+        if let [a, b, c] = t {
+            let (ax, ay) = view.to_screen(*a);
+            let (bx, by) = view.to_screen(*b);
+            let (cx, cy) = view.to_screen(*c);
+            pb.move_to(ax, ay);
+            pb.line_to(bx, by);
+            pb.line_to(cx, cy);
+            pb.close();
+        }
+    }
+    pb.finish()
+}
+
+/// Image pixels as a tiny-skia pixmap (premultiplied).
+fn pixmap_of(r: &crate::images::Raster) -> Option<Pixmap> {
+    let mut pm = Pixmap::new(r.width, r.height)?;
+    for (dst, src) in pm.pixels_mut().iter_mut().zip(r.rgba.as_chunks::<4>().0.iter()) {
+        let [red, g, b, a] = *src;
+        *dst = tiny_skia::ColorU8::from_rgba(red, g, b, a).premultiply();
     }
     Some(pm)
 }

@@ -55,11 +55,13 @@ pub struct PdfDialog {
     pub text: bool,
     pub join: bool,
     pub layout: bool,
+    /// Raster images (logos, photos, scans) as IMAGE objects with PNG files.
+    pub images: bool,
 }
 
 impl PdfDialog {
     pub fn new(path: String, convert: bool) -> Self {
-        PdfDialog { path, convert, page: 1, scale: 0, layers: Layers::Pdf, white_fills: false, text: true, join: true, layout: true }
+        PdfDialog { path, convert, page: 1, scale: 0, layers: Layers::Pdf, white_fills: false, text: true, join: true, layout: true, images: true }
     }
 
     /// The PDFIMPORT parameters.
@@ -74,6 +76,7 @@ impl PdfDialog {
             "text": self.text,
             "join": self.join,
             "layout": self.layout,
+            "images": self.images,
             "newDrawing": self.convert,
         })
     }
@@ -90,9 +93,27 @@ pub fn begin(app: &mut CadApp, convert: bool) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-/// Run the conversion with the dialog's choices; for Convert PDF to DWG then save as DWG.
+/// Run the conversion with the dialog's choices; for Convert PDF to DWG, ask where to save first
+/// (the image files go in a folder beside the drawing), then save as DWG there.
 pub fn run(app: &mut CadApp, d: &PdfDialog) -> Result<Value, String> {
-    let report = app.session.execute("pdfimport", &d.params()).map_err(|e| e.to_string())?;
+    let stem = std::path::Path::new(&d.path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Drawing".into());
+    let target = if d.convert {
+        app.services
+            .pick_save
+            .as_ref()
+            .and_then(|f| f(&format!("{stem}.dwg")))
+            .map(|p| if std::path::Path::new(&p).extension().is_none() { format!("{p}.dwg") } else { p })
+    } else {
+        None
+    };
+    let mut params = d.params();
+    if let Some(t) = &target {
+        let t = std::path::Path::new(t);
+        if let (Some(dir), Some(name)) = (t.parent(), t.file_stem()) {
+            params["imageFolder"] = serde_json::json!(dir.join(format!("{} images", name.to_string_lossy())).to_string_lossy());
+        }
+    }
+    let report = app.session.execute("pdfimport", &params).map_err(|e| e.to_string())?;
     let objects = report["entities"].as_u64().unwrap_or(0);
     let scale = report["scale"].as_f64().unwrap_or(1.0);
     let joined = report["stats"]["pieces joined"].as_u64().unwrap_or(0);
@@ -100,12 +121,13 @@ pub fn run(app: &mut CadApp, d: &PdfDialog) -> Result<Value, String> {
     if joined > 0 {
         summary.push_str(&format!("; {joined} pieces joined"));
     }
+    let images = report["imageFiles"].as_u64().unwrap_or(0);
+    if images > 0 {
+        summary.push_str(&format!("; {images} image file(s) in {}", report["imageFolder"].as_str().unwrap_or("")));
+    }
     if d.convert {
-        let stem = std::path::Path::new(&d.path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Drawing".into());
-        let suggested = format!("{stem}.dwg");
-        let saved = match app.services.pick_save.as_ref().and_then(|f| f(&suggested)) {
+        let saved = match target {
             Some(p) => {
-                let p = if std::path::Path::new(&p).extension().is_none() { format!("{p}.dwg") } else { p };
                 app.session.execute("saveas", &crate::menus::saveas_params(&app.ui, &app.session, &p)).map_err(|e| e.to_string())?;
                 Some(p)
             }
@@ -158,6 +180,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         ui.checkbox(&mut d.text, crate::tl!("Import text"));
         ui.checkbox(&mut d.join, crate::tl!("Join line pieces and make circles"));
         ui.checkbox(&mut d.white_fills, crate::tl!("Keep white fills (masks)"));
+        ui.checkbox(&mut d.images, crate::tl!("Import raster images (saved as PNG files)"));
         if d.convert {
             ui.checkbox(&mut d.layout, crate::tl!("Add a layout that plots like the sheet"));
         }
