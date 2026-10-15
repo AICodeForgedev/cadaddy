@@ -1712,7 +1712,12 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         LayerMode::Pen
     };
     let mut layer_set: BTreeMap<String, (Color, Lineweight)> = BTreeMap::new();
-    let color_of = |rgb: [u8; 3]| -> Color { if rgb == [0, 0, 0] { Color::Index(7) } else { Color::True(Rgb(rgb[0], rgb[1], rgb[2])) } };
+    // black and near-black greys (up to about 15%) are colour 7: white on a dark screen, black on
+    // paper. As true colours they vanish on the dark model space (10% grey hatch lines did).
+    let color_of = |rgb: [u8; 3]| -> Color {
+        let (hi, lo) = (rgb.iter().copied().max().unwrap_or(0), rgb.iter().copied().min().unwrap_or(0));
+        if hi <= 38 && hi - lo <= 8 { Color::Index(7) } else { Color::True(Rgb(rgb[0], rgb[1], rgb[2])) }
+    };
     let pen_name = |rgb: [u8; 3]| -> String {
         if rgb[0] == rgb[1] && rgb[1] == rgb[2] {
             match rgb[0] {
@@ -2115,7 +2120,7 @@ mod tests {
 
     /// A hand-written one-page PDF: a stroked line, a rectangle, a white mask, text and a scale note.
     fn sample_pdf() -> Vec<u8> {
-        let content = b"q 0 0 0 RG 1.2 w 72 72 m 144 72 l S 0.5 0.5 0.5 RG 72 100 72 36 re S 1 1 1 rg 200 200 20 20 re f BT /F1 12 Tf 72 300 Td (PANEL A) Tj ET BT /F1 8 Tf 72 280 Td (SCALE: 1/4\" = 1'-0\") Tj ET Q";
+        let content = b"q 0 0 0 RG 1.2 w 72 72 m 144 72 l S 0.5 0.5 0.5 RG 72 100 72 36 re S 0.1 0.1 0.1 RG 72 400 m 144 400 l S 1 1 1 rg 200 200 20 20 re f BT /F1 12 Tf 72 300 Td (PANEL A) Tj ET BT /F1 8 Tf 72 280 Td (SCALE: 1/4\" = 1'-0\") Tj ET Q";
         let mut objs: Vec<String> = vec![
             "<< /Type /Catalog /Pages 2 0 R >>".into(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
@@ -2166,6 +2171,8 @@ mod tests {
         assert!(ents.iter().any(|e| matches!(&e.kind, EntityKind::Wipeout(w) if w.boundary.len() == 4)), "it is a wipeout");
         // black lines on a pen layer shown in colour 7
         assert!(r.drawing.layers.iter().any(|l| l.name == "PDF-BLACK-0.40" && l.color == Color::Index(7)));
+        // near-black greys too, or they vanish on the dark screen
+        assert!(r.drawing.layers.iter().any(|l| l.name.starts_with("PDF-GRAY10") && l.color == Color::Index(7)), "{:?}", r.drawing.layers);
         assert!(
             r.drawing.layers.iter().any(|l| l.name.starts_with("PDF-GRAY50") && l.color == Color::True(Rgb(128, 128, 128))),
             "{:?}",
