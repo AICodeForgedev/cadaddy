@@ -2008,6 +2008,15 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     continue;
                 }
                 let (clip, clipping) = image_clip(im, &sp, p00, u, v, h);
+                // a picture of nothing but white paper (Revit tiles whole sheets with them) is a
+                // mask like a white fill, or it shows as a white sheet behind white lines on screen
+                if !clipping && blank_paper(&im.raster.rgba) {
+                    let (layer, _, _) = place("mask", Pen { rgb: [255, 255, 255], lw: 0, transp: 0 }, &im.layer);
+                    let boundary = vec![p00, at(1.0, 0.0), at(1.0, 1.0), at(0.0, 1.0)];
+                    add(&mut d, layer, Color::ByLayer, Lineweight::ByLayer, 0, EntityKind::Wipeout(Wipeout { boundary }));
+                    *stats.entry("masks (wipeouts)".into()).or_default() += 1;
+                    continue;
+                }
                 let key = {
                     use std::hash::{Hash, Hasher};
                     let mut hs = std::collections::hash_map::DefaultHasher::new();
@@ -2249,6 +2258,11 @@ fn image_clip(im: &ImageOut, sp: &dyn Fn(f64, f64) -> Vec2, p00: Vec2, u: Vec2, 
         _ => [(cx0, cy0), (cx1, cy0), (cx1, cy1), (cx0, cy1)].iter().map(|(x, y)| to_px(*x, *y)).collect(),
     };
     (pts, true)
+}
+
+/// Every pixel opaque and white (to JPEG noise): the image only paints paper.
+fn blank_paper(rgba: &[u8]) -> bool {
+    !rgba.is_empty() && rgba.as_chunks::<4>().0.iter().all(|p| p.iter().all(|&c| c >= 250))
 }
 
 /// One image painted from a run of images sharing a frame (see [`stitch`]).
@@ -2519,7 +2533,11 @@ mod tests {
 
     /// A hand-written one-page PDF: a stroked line, a rectangle, a white mask, text and a scale note.
     fn sample_pdf() -> Vec<u8> {
-        let content = b"q 0 0 0 RG 1.2 w 72 72 m 144 72 l S 0.5 0.5 0.5 RG 72 100 72 36 re S 0.1 0.1 0.1 RG 72 400 m 144 400 l S 1 1 1 rg 200 200 20 20 re f BT /F1 12 Tf 72 300 Td (PANEL A) Tj ET BT 3 Tr /F1 12 Tf 72 500 Td (SEARCH ONLY) Tj ET BT /F1 8 Tf 72 280 Td (SCALE: 1/4\" = 1'-0\") Tj ET Q";
+        pdf_with(b"q 0 0 0 RG 1.2 w 72 72 m 144 72 l S 0.5 0.5 0.5 RG 72 100 72 36 re S 0.1 0.1 0.1 RG 72 400 m 144 400 l S 1 1 1 rg 200 200 20 20 re f BT /F1 12 Tf 72 300 Td (PANEL A) Tj ET BT 3 Tr /F1 12 Tf 72 500 Td (SEARCH ONLY) Tj ET BT /F1 8 Tf 72 280 Td (SCALE: 1/4\" = 1'-0\") Tj ET Q")
+    }
+
+    /// A one-page 11×8.5 PDF around a content stream.
+    fn pdf_with(content: &[u8]) -> Vec<u8> {
         let mut objs: Vec<String> = vec![
             "<< /Type /Catalog /Pages 2 0 R >>".into(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
@@ -2583,6 +2601,21 @@ mod tests {
             r.drawing.layers
         );
         assert!(r.drawing.layouts.first().is_some_and(|l| l.entities.iter().any(|e| matches!(e.kind, EntityKind::Viewport(_)))));
+    }
+
+    #[test]
+    fn white_paper_images_become_wipeouts() {
+        // two 2×2 RGB images: one near-white (JPEG-white 254), one with a black pixel
+        let content = b"q 100 0 0 100 300 300 cm BI /W 2 /H 2 /CS /RGB /BPC 8 /F /AHx ID fefefefefefefefefefefefe> EI Q \
+            q 100 0 0 100 500 300 cm BI /W 2 /H 2 /CS /RGB /BPC 8 /F /AHx ID 000000fefefefefefefefefe> EI Q";
+        let r = match read(&pdf_with(content), &PdfOptions::default()) {
+            Ok(r) => r,
+            Err(e) => panic!("{e}"),
+        };
+        let images = r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Image(_))).count();
+        let masks = r.drawing.model.iter().filter(|e| matches!(&e.kind, EntityKind::Wipeout(w) if w.boundary.len() == 4)).count();
+        assert_eq!((images, masks), (1, 1));
+        assert!(blank_paper(&[254, 254, 254, 255]) && !blank_paper(&[254, 254, 254, 0]) && !blank_paper(&[]));
     }
 
     #[test]
