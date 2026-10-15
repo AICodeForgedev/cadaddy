@@ -21,7 +21,7 @@ fn tool(s: &mut Server, name: &str, args: Value) -> Value {
 fn lifecycle_and_tools() {
     let mut s = Server::new(Box::new(Headless::default()));
     let init = call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
-    assert_eq!(init["result"]["serverInfo"]["name"], "cadcraft");
+    assert_eq!(init["result"]["serverInfo"]["name"], "cadaddy");
     assert!(s.handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
     assert!(s.is_initialized());
     let tools = call(&mut s, 2, "tools/list", json!({}));
@@ -188,7 +188,7 @@ fn a_lazy_bridge_starts_without_the_app_and_says_how_to_open_it() {
     };
     let mut s = Server::new(Box::new(crate::Remote::lazy(&addr, false)));
     let init = call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
-    assert_eq!(init["result"]["serverInfo"]["name"], "cadcraft");
+    assert_eq!(init["result"]["serverInfo"]["name"], "cadaddy");
     let tools = call(&mut s, 2, "tools/list", json!({}));
     assert!(tools["result"]["tools"].as_array().unwrap().iter().any(|t| t["name"] == "screenshot"));
     let r = call(&mut s, 3, "tools/call", json!({"name": "command_line", "arguments": {"text": "line 0,0 1,1"}}));

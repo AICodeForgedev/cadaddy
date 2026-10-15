@@ -1248,3 +1248,17 @@ menu	Modify	Ändra
 	Ribbon	Menyfliksområde
 	Close Ribbon	Stäng menyfliksområdet
 	Menu Bar	Menyrad
+	Top	Ovan
+	Bottom	Under
+	Front	Framsida
+	Back	Baksida
+	SW Isometric	SV-isometrisk
+	SE Isometric	SO-isometrisk
+	NE Isometric	NO-isometrisk
+	NW Isometric	NV-isometrisk
+	3D Views	3D-vyer
+	Plan View	Planvy
+	World UCS	Världs-UCS
+	View Direction	Vyriktning
+	2D Wireframe	2D-trådram
+	Custom View	Anpassad vy

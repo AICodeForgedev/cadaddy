@@ -226,6 +226,9 @@ pub struct Options {
     /// rebuild the view no longer needs). A cancelled build returns a partial list, which the
     /// caller must discard; see [`Options::cancelled`].
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// A 3D view of model space (`None`: the plan view). The list is then built on the view
+    /// plane: planar objects through the map of their plane, 3D objects point by point.
+    pub projection: Option<cadcraft_geom::view3::Projection>,
 }
 
 impl Options {
@@ -249,6 +252,7 @@ impl Default for Options {
             skip_viewport: None,
             transparency: false,
             cancel: None,
+            projection: None,
         }
     }
 }
@@ -527,7 +531,7 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
                 }
                 continue;
             }
-            entity(&mut b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
+            top_entity(&mut b, d, e);
         }
     }
     // A layout is drawn in paper units, so its pens become geometry now.
@@ -558,7 +562,7 @@ fn build_parallel(b: &mut Builder, d: &Drawing, store: &cadcraft_doc::EntityStor
             let mut part =
                 Builder { list: DisplayList::default(), opts, plotting, styles: None, named: None, shared_budget: Some(&budget), transparency: 0 };
             for e in chunk {
-                entity(&mut part, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
+                top_entity(&mut part, d, e);
             }
             part.list
         })
@@ -902,9 +906,66 @@ pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents:
     };
     let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: None, named: None, shared_budget: None, transparency: 0 };
     for e in ents {
-        entity(&mut b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
+        top_entity(&mut b, d, e);
     }
     b.list
+}
+
+/// Draw a top-level object: as it is in the plan view; in a 3D view ([`Options::projection`])
+/// on the view plane. A planar object goes through the affine map of its plane (circles become
+/// ellipses, text slants), so everything 2D drawing does still applies; a 3D object (a sloped
+/// line, 3D polyline or 3D face) becomes the polyline of its projected points.
+fn top_entity(b: &mut Builder, d: &Drawing, e: &Entity) {
+    let Some(p) = b.opts.projection else {
+        entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
+        return;
+    };
+    if let Some((pts, closed)) = e.kind.points3d() {
+        let vertices = pts.iter().map(|q| cadcraft_geom::PolyVertex { p: p.project(*q), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
+        let flat = Entity {
+            kind: EntityKind::LwPolyline(cadcraft_doc::LwPolyline { vertices, closed, const_width: 0.0, elevation: 0.0, plinegen: true }),
+            ..e.clone()
+        };
+        entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), &flat);
+        return;
+    }
+    entity(b, &top_ctx(d, plane_xf(&p, e), e.handle, &[], &[]), e);
+}
+
+/// The map from `e`'s plan geometry to the view plane. Circles and arcs drawn in a tilted plane
+/// (their extrusion not along Z) keep their WCS centre and turn into that plane; everything else
+/// lies parallel to XY at its elevation.
+fn plane_xf(p: &cadcraft_geom::view3::Projection, e: &Entity) -> Mat3 {
+    let n = e.common.extrusion;
+    let tilted = n.is_finite() && n.len() > 1e-12 && (n.x.abs() > 1e-9 * n.len() || n.y.abs() > 1e-9 * n.len());
+    let center = match &e.kind {
+        EntityKind::Circle(c) if tilted => Some(c.center),
+        EntityKind::Arc(a) if tilted => Some(a.center),
+        _ => None,
+    };
+    let Some(c) = center else { return p.plane_xf(e.kind.elevation()) };
+    let ocs = cadcraft_geom::Mat4::ocs(n);
+    let o = ocs.apply(cadcraft_geom::Vec3::ZERO);
+    let (ax, ay) =
+        (p.project(ocs.apply(cadcraft_geom::Vec3::new(1.0, 0.0, 0.0)) - o), p.project(ocs.apply(cadcraft_geom::Vec3::new(0.0, 1.0, 0.0)) - o));
+    let pc = p.project(c);
+    // (x, y) ↦ project(c + (x − cx)·ax + (y − cy)·ay)
+    Mat3 { a: ax.x, b: ax.y, c: ay.x, d: ay.y, e: pc.x - c.x * ax.x - c.y * ay.x, f: pc.y - c.x * ax.y - c.y * ay.y }
+}
+
+/// The scale `xf` draws at, for chord tolerances and dash lengths. In a 3D view a plane can be
+/// seen nearly edge-on, where the mean scale goes to zero but curves still span their full
+/// width; the largest axis scale keeps their detail. 2D drawing keeps the mean scale.
+fn detail_scale(b: &Builder, xf: &Mat3) -> f64 {
+    let mean = xf.scale_factor();
+    if b.opts.projection.is_none() {
+        return mean;
+    }
+    let (a, bb, c, d) = (xf.a, xf.b, xf.c, xf.d);
+    let s = a * a + bb * bb + c * c + d * d;
+    let det = xf.det();
+    let largest = ((s + (s * s - 4.0 * det * det).max(0.0).sqrt()) / 2.0).sqrt();
+    mean.max(largest)
 }
 
 /// The layer `e` is drawn on, as an index in the layer table: layer 0 inside a block is the
@@ -1061,12 +1122,12 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         Some(over) => over,
         None => lt,
     };
-    let tol = b.opts.tolerance / ctx.xf.scale_factor().max(1e-12);
+    let tol = b.opts.tolerance / detail_scale(b, &ctx.xf).max(1e-12);
     let lw = if b.opts.lineweights { lw } else { 0.0 };
     // Stroke a polyline with the entity's linetype.
     let stroke = |b: &mut Builder, pts: &[Vec2]| match &lt {
         Some(lt) => {
-            let min = b.opts.min_dash / ctx.xf.scale_factor().max(1e-12);
+            let min = b.opts.min_dash / detail_scale(b, &ctx.xf).max(1e-12);
             for dash in linetype::apply(pts, lt, ltscale, min) {
                 if dash.len() == 1 {
                     if let Some(p) = dash.first() {
@@ -1126,7 +1187,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 match &lt {
                     // Dashed: each dash a filled piece of the band; dots a line across it.
                     Some(lt) => {
-                        let min = b.opts.min_dash / ctx.xf.scale_factor().max(1e-12);
+                        let min = b.opts.min_dash / detail_scale(b, &ctx.xf).max(1e-12);
                         let (tris, ticks) = wide::dashed(p, tol, lt, ltscale, min);
                         b.tris(ctx, rgb, &tris);
                         for t in &ticks {
@@ -1368,7 +1429,7 @@ pub fn dimension_in(d: &Drawing, dm: &cadcraft_doc::Dimension) -> DimGeometry {
 fn stroke_with(b: &mut Builder, ctx: &Ctx, rgb: Ink, lw: f32, lt: Option<&cadcraft_doc::Linetype>, ltscale: f64, pts: &[Vec2]) {
     match lt {
         Some(lt) => {
-            let min = b.opts.min_dash / ctx.xf.scale_factor().max(1e-12);
+            let min = b.opts.min_dash / detail_scale(b, &ctx.xf).max(1e-12);
             for dash in linetype::apply(pts, lt, ltscale, min) {
                 match dash.as_slice() {
                     [p] => b.point(ctx, rgb, *p),

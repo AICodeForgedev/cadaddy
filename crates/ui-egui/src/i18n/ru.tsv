@@ -1011,3 +1011,17 @@
 	Ribbon	Лента
 	Close Ribbon	Закрыть ленту
 	Menu Bar	Строка меню
+	Top	Сверху
+	Bottom	Снизу
+	Front	Спереди
+	Back	Сзади
+	SW Isometric	ЮЗ изометрия
+	SE Isometric	ЮВ изометрия
+	NE Isometric	СВ изометрия
+	NW Isometric	СЗ изометрия
+	3D Views	3D виды
+	Plan View	Вид в плане
+	World UCS	МСК
+	View Direction	Направление взгляда
+	2D Wireframe	2D каркас
+	Custom View	Пользовательский вид

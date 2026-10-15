@@ -110,6 +110,18 @@ const PASTE: &[Fly] =
     &[(Icon::Copy, "pasteclip", "Paste"), (Icon::Insert, "pasteblock", "Paste as Block"), (Icon::Copy, "pasteorig", "Paste to Original Coordinates")];
 const DIM_CONTINUE: &[Fly] = &[(Icon::DimContinue, "dimcontinue", "Continue"), (Icon::DimBaseline, "dimbaseline", "Baseline")];
 const PLOT: &[Fly] = &[(Icon::Plot, "plot", "Plot")];
+const VIEWS: &[Fly] = &[
+    (Icon::Workspace, "view.top", "Top"),
+    (Icon::Workspace, "view.bottom", "Bottom"),
+    (Icon::Workspace, "view.left", "Left"),
+    (Icon::Workspace, "view.right", "Right"),
+    (Icon::Workspace, "view.front", "Front"),
+    (Icon::Workspace, "view.back", "Back"),
+    (Icon::Orbit, "view.swiso", "SW Isometric"),
+    (Icon::Orbit, "view.seiso", "SE Isometric"),
+    (Icon::Orbit, "view.neiso", "NE Isometric"),
+    (Icon::Orbit, "view.nwiso", "NW Isometric"),
+];
 
 pub const TABS: &[Tab] = &[
     Tab {
@@ -404,6 +416,14 @@ pub const TABS: &[Tab] = &[
             Panel {
                 name: "Viewport Tools",
                 items: &[Item::Large(b(Icon::Grid, "ui.toggle.ucsicon", "UCS Icon")), Item::Large(b(Icon::Orbit, "ui.toggle.viewcube", "View Cube"))],
+                more: &[],
+            },
+            Panel {
+                name: "Named Views",
+                items: &[
+                    Item::Large(f(Icon::Orbit, "view.swiso", "Views", VIEWS)),
+                    Item::Smalls(&[b(Icon::Workspace, "plan", "Plan View"), b(Icon::List, "view", "View Manager")]),
+                ],
                 more: &[],
             },
             Panel {

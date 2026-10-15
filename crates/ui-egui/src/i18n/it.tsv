@@ -1240,3 +1240,17 @@ menu	Modify	Edita
 	Ribbon	Barra multifunzione
 	Close Ribbon	Chiudi barra multifunzione
 	Menu Bar	Barra dei menu
+	Top	Superiore
+	Bottom	Inferiore
+	Front	Anteriore
+	Back	Posteriore
+	SW Isometric	Isometrica SO
+	SE Isometric	Isometrica SE
+	NE Isometric	Isometrica NE
+	NW Isometric	Isometrica NO
+	3D Views	Viste 3D
+	Plan View	Vista pianta
+	World UCS	UCS globale
+	View Direction	Direzione vista
+	2D Wireframe	Wireframe 2D
+	Custom View	Vista personalizzata

@@ -1098,6 +1098,47 @@ impl EntityKind {
         }
     }
 
+    /// The height a planar object lies at: its geometry is in a plane parallel to XY, at the Z
+    /// of its defining point (a polyline's or hatch's elevation). 0 for objects without one and
+    /// for a value that isn't a finite number. 3D objects ([`EntityKind::points3d`]) have a
+    /// height per point instead.
+    pub fn elevation(&self) -> f64 {
+        let z = match self {
+            EntityKind::Line(l) => l.a.z,
+            EntityKind::Point(p) => p.p.z,
+            EntityKind::Circle(c) => c.center.z,
+            EntityKind::Arc(a) => a.center.z,
+            EntityKind::Ellipse(e) => e.center.z,
+            EntityKind::LwPolyline(p) => p.elevation,
+            EntityKind::Text(t) => t.insert.z,
+            EntityKind::MText(t) => t.insert.z,
+            EntityKind::AttDef(a) => a.text.insert.z,
+            EntityKind::Insert(i) => i.insert.z,
+            EntityKind::Dimension(d) => d.defpt.z,
+            EntityKind::Hatch(h) => h.elevation,
+            EntityKind::Solid(s) | EntityKind::Trace(s) => s.corners[0].z,
+            EntityKind::Image(i) => i.insert.z,
+            _ => 0.0,
+        };
+        if z.is_finite() { z } else { 0.0 }
+    }
+
+    /// The points of an object whose points lie at different heights, in order, and whether
+    /// they close: a sloped line, a 3D polyline, a 3D face. 3D views draw these by projecting
+    /// each point. `None` for planar objects (see [`EntityKind::elevation`]).
+    pub fn points3d(&self) -> Option<(Vec<Vec3>, bool)> {
+        match self {
+            EntityKind::Line(l) if l.a.z != l.b.z => Some((vec![l.a, l.b], false)),
+            EntityKind::Polyline3d(p) => Some((p.points.clone(), p.closed)),
+            EntityKind::Face3d(f) => {
+                let [a, b, c, d] = f.corners;
+                // A triangle repeats its third corner.
+                Some((if c == d { vec![a, b, c] } else { vec![a, b, c, d] }, true))
+            }
+            _ => None,
+        }
+    }
+
     /// Geometric primitives in WCS (2D projection). Text/blocks/dimensions return their
     /// insertion points only; their full geometry comes from the renderer's expansion.
     pub fn prims(&self) -> Vec<Prim> {

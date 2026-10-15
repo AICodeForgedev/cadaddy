@@ -45,11 +45,11 @@ pub(crate) fn of_selection(app: &mut CadApp) -> Arc<Vec<(Handle, DynGrip)>> {
 
 /// The screen outline of grip `g` (size `gs`, half the side of a square grip).
 fn outline(xf: &Xf, g: &DynGrip, gs: f32) -> Vec<Pos2> {
-    let c = xf.to_screen(g.at);
+    let c = xf.w2s(g.at);
     match g.shape {
         GripShape::Linear => {
             // The arrow points the way the distance grows, on screen.
-            let ahead = xf.to_screen(g.at + g.dir) - c;
+            let ahead = xf.w2s(g.at + g.dir) - c;
             let u = if ahead.length() > 1e-6 { ahead / ahead.length() } else { vec2(1.0, 0.0) };
             let n = vec2(-u.y, u.x);
             let (len, half) = (gs * 1.6, gs * 1.1);
@@ -78,7 +78,7 @@ pub(crate) fn draw(app: &mut CadApp, painter: &Painter, xf: &Xf, rect: Rect, hov
     let gs = app.session.settings.gripsize as f32;
     let hot = app.canvas.dyn_hot;
     for (h, g) in of_selection(app).iter() {
-        if !rect.contains(xf.to_screen(g.at)) {
+        if !rect.contains(xf.w2s(g.at)) {
             continue;
         }
         let pts = outline(xf, g, gs);
@@ -129,7 +129,7 @@ pub(crate) fn menu(app: &mut CadApp, ctx: &egui::Context, xf: &Xf) {
         .map(|p| p.value)
         .unwrap_or_default();
     let gs = app.session.settings.gripsize as f32;
-    let at = xf.to_screen(g.at) + vec2(-gs, gs * 1.5);
+    let at = xf.w2s(g.at) + vec2(-gs, gs * 1.5);
     let mut chosen: Option<String> = None;
     let area = egui::Area::new(egui::Id::new(("dyn-grip-list", h, g.node))).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {

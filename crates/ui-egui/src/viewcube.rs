@@ -1,23 +1,42 @@
-//! The navigation overlays on the drawing area: the ViewCube (Top face, Home, compass ring and
-//! the WCS menu) and the UCS icon.
+//! The navigation overlays on the drawing area: the ViewCube (its faces and corners, Home,
+//! compass ring and the WCS menu) and the UCS icon.
 //!
 //! Every overlay registers a widget that senses clicks *and* drags, so egui hands the pointer to
 //! the overlay instead of the canvas underneath (a click on the ViewCube must never also pick or
 //! start a selection window in the drawing). What the overlays do goes through commands:
-//! `zoom.extents` (Top face, Home), `ui.toggle.viewcube`, `ui.toggle.ucsicon`.
+//! `view.dir` (faces, corners, Home, dragging the ring), `ui.toggle.viewcube`,
+//! `ui.toggle.ucsicon`.
 //!
-//! CADCraft's model view is a 2D plan view of the World Coordinate System: there is no view
-//! twist, no 3D view direction and no user coordinate system yet, so the compass ring explains
-//! that instead of rotating, and the WCS menu lists the only coordinate system there is.
+//! The cube is drawn in the current view direction, as AutoCAD's: in the plan view only its TOP
+//! face shows. A face click looks at that face, a corner click gives the isometric view from that
+//! corner, Home goes to the home view (SW isometric, fitted). Dragging the compass ring turns a 3D
+//! view about the Z axis; the plan view has no view twist yet, so there the ring explains that.
 
+use cadcraft_geom::Vec3;
+use cadcraft_geom::view3::Projection;
 use egui::{Color32, CursorIcon, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::json;
 
 use crate::CadApp;
 use crate::theme::Tokens;
 
-/// Shown when the compass ring is clicked or dragged.
+/// Shown when the compass ring is clicked or dragged in the plan view.
 pub const NO_TWIST: &str = "ViewCube: rotating the view needs a view twist, which the 2D plan view doesn't support yet.";
+
+/// Half the cube's edge on screen.
+const HALF: f32 = 22.0;
+/// How close to a corner a click picks the corner.
+const CORNER_HIT: f32 = 7.0;
+
+/// The cube's faces: outward normal, label and preset view.
+const FACES: [(Vec3, &str, &str); 6] = [
+    (Vec3::new(0.0, 0.0, 1.0), "TOP", "top"),
+    (Vec3::new(0.0, 0.0, -1.0), "BOTTOM", "bottom"),
+    (Vec3::new(0.0, -1.0, 0.0), "FRONT", "front"),
+    (Vec3::new(0.0, 1.0, 0.0), "BACK", "back"),
+    (Vec3::new(-1.0, 0.0, 0.0), "LEFT", "left"),
+    (Vec3::new(1.0, 0.0, 0.0), "RIGHT", "right"),
+];
 
 /// Where the ViewCube's parts are on the canvas.
 #[derive(Clone, Copy, Debug)]
@@ -25,12 +44,21 @@ pub struct Layout {
     pub center: Pos2,
     /// Radius of the compass ring's centre line.
     pub ring: f32,
+    /// The TOP face in the plan view.
     pub face: Rect,
     pub home: Rect,
     /// The "WCS" coordinate-system menu under the cube.
     pub pill: Rect,
     /// Everything that belongs to the cube (the area kept away from the canvas).
     pub bounds: Rect,
+}
+
+/// The view's screen axes in world terms: the plan view's when there is no projection.
+fn axes(proj: Option<Projection>) -> (Vec3, Vec3, Vec3) {
+    match proj {
+        Some(p) => (p.right, p.up, p.dir),
+        None => (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::Z),
+    }
 }
 
 impl Layout {
@@ -40,87 +68,182 @@ impl Layout {
         Layout {
             center,
             ring,
-            face: Rect::from_center_size(center, vec2(44.0, 44.0)),
+            face: Rect::from_center_size(center, vec2(2.0 * HALF, 2.0 * HALF)),
             home: Rect::from_center_size(center + vec2(-ring + 2.0, -ring + 2.0), vec2(20.0, 20.0)),
             pill: Rect::from_center_size(center + vec2(0.0, ring + 26.0), vec2(56.0, 16.0)),
             bounds: Rect::from_center_size(center, vec2(2.0 * (ring + 10.0), 2.0 * (ring + 10.0))),
         }
     }
 
-    /// The part of the cube at `p` (not the pill, which is its own widget).
-    pub fn part_at(&self, p: Pos2) -> Option<Part> {
+    /// A point of the unit cube on screen.
+    fn at(&self, proj: Option<Projection>, p: Vec3) -> Pos2 {
+        let (r, u, _) = axes(proj);
+        self.center + vec2(p.dot(r) as f32, -(p.dot(u) as f32)) * HALF
+    }
+
+    /// The faces facing the viewer: (normal, label, preset, screen corners, how squarely it
+    /// faces the viewer 0..1), the most oblique first.
+    fn visible_faces(&self, proj: Option<Projection>) -> Vec<(Vec3, &'static str, &'static str, [Pos2; 4], f64)> {
+        let (_, _, dir) = axes(proj);
+        let mut out: Vec<_> = FACES
+            .iter()
+            .filter_map(|(n, label, preset)| {
+                let facing = n.dot(dir);
+                (facing > 1e-6).then(|| {
+                    // Two edge directions in the face.
+                    let a = if n.z.abs() > 0.5 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::Z };
+                    let b = n.cross(a);
+                    let q = [*n + a + b, *n + a - b, *n - a - b, *n - a + b].map(|c| self.at(proj, c));
+                    (*n, *label, *preset, q, facing)
+                })
+            })
+            .collect();
+        out.sort_by(|x, y| x.4.total_cmp(&y.4));
+        out
+    }
+
+    /// The cube's corners the viewer sees (on at least one visible face), as view directions.
+    fn visible_corners(&self, proj: Option<Projection>) -> Vec<(Vec3, Pos2)> {
+        let (_, _, dir) = axes(proj);
+        let mut out = Vec::new();
+        for sx in [-1.0, 1.0] {
+            for sy in [-1.0, 1.0] {
+                for sz in [-1.0, 1.0] {
+                    let c = Vec3::new(sx, sy, sz);
+                    if sx * dir.x > 1e-6 || sy * dir.y > 1e-6 || sz * dir.z > 1e-6 {
+                        out.push((c, self.at(proj, c)));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The part of the cube at `p` in the view `proj` (not the pill, which is its own widget).
+    pub fn part_at(&self, p: Pos2, proj: Option<Projection>) -> Option<Part> {
         if self.home.contains(p) {
             return Some(Part::Home);
         }
-        if self.face.contains(p) {
-            return Some(Part::Face);
+        if let Some((c, _)) = self.visible_corners(proj).into_iter().find(|(_, at)| at.distance(p) <= CORNER_HIT) {
+            return Some(Part::Corner(c));
+        }
+        if let Some((_, _, preset, _, _)) = self.visible_faces(proj).into_iter().rev().find(|(_, _, _, q, _)| point_in_quad(p, q)) {
+            return Some(Part::Face(preset));
         }
         let d = p.distance(self.center);
         ((self.ring - 10.0..=self.ring + 10.0).contains(&d)).then_some(Part::Ring)
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Part {
-    Face,
+    /// A face: its preset view.
+    Face(&'static str),
+    /// A corner: the view direction from it.
+    Corner(Vec3),
     Home,
     Ring,
 }
 
 impl Part {
-    fn tip(self) -> &'static str {
+    fn tip(self, proj: Option<Projection>) -> String {
         match self {
-            Part::Face => "Top: plan view of the drawing (zoom extents)",
-            Part::Home => "Home: zoom to the drawing extents",
-            Part::Ring => "Compass: view rotation isn't available in the 2D plan view yet",
+            Part::Face(preset) => format!("{}: look at this face (zoom extents)", preset[..1].to_uppercase() + &preset[1..]),
+            Part::Corner(c) => match cadcraft_geom::view3::preset_label(c) {
+                Some(l) => format!("{l} view"),
+                None => "View from this corner".into(),
+            },
+            Part::Home => "Home: SW isometric view of the whole drawing".into(),
+            Part::Ring if proj.is_some() => "Drag to turn the view about the Z axis".into(),
+            Part::Ring => "Compass: view rotation isn't available in the 2D plan view yet".into(),
         }
     }
 }
 
-/// Paint the ViewCube's ring, compass letters, Top face and Home button, and handle the pointer.
-/// The canvas paints the WCS pill itself; this returns the pointer's part for its highlight.
+/// Paint the ViewCube in the current view and handle the pointer. The canvas paints the WCS
+/// pill itself.
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui, l: &Layout) {
+    let proj = app.session.state().ok().and_then(|st| st.projection());
     let resp = ui.interact(l.bounds, ui.id().with("viewcube"), Sense::click_and_drag());
-    let part = resp.hover_pos().and_then(|p| l.part_at(p));
+    let part = resp.hover_pos().and_then(|p| l.part_at(p, proj));
     let p = ui.painter_at(l.bounds.union(l.pill));
     let ring_col = if part == Some(Part::Ring) { Color32::from_rgb(0x5c, 0x67, 0x7c) } else { Color32::from_rgb(0x48, 0x50, 0x5c) };
     p.circle_stroke(l.center, l.ring, Stroke::new(9.0, ring_col));
     p.circle_stroke(l.center, l.ring + 4.5, Stroke::new(1.0, Color32::from_rgb(0x5c, 0x65, 0x72)));
+    // Compass letters where the world directions point on screen (hidden when one points at the
+    // viewer, as north does in a front view).
     let f = egui::FontId::proportional(17.0);
     let lc = Color32::from_rgb(0xc8, 0xcc, 0xd2);
-    let c = l.center;
-    let ring = l.ring;
-    p.text(c + vec2(0.0, -ring - 1.0), egui::Align2::CENTER_CENTER, crate::tl!("N"), f.clone(), lc);
-    p.text(c + vec2(0.0, ring + 1.0), egui::Align2::CENTER_CENTER, crate::tl!("S"), f.clone(), lc);
-    p.text(c + vec2(ring + 1.0, 0.0), egui::Align2::CENTER_CENTER, crate::tl!("E"), f.clone(), lc);
-    p.text(c + vec2(-ring - 1.0, 0.0), egui::Align2::CENTER_CENTER, crate::tl!("W"), f, lc);
-    let face_col = if part == Some(Part::Face) { Color32::from_rgb(0xb8, 0xbc, 0xc2) } else { Color32::from_rgb(0x9a, 0x9e, 0xa4) };
-    p.rect_filled(l.face, 2.0, face_col);
-    p.rect_stroke(l.face, 2.0, Stroke::new(1.0, Color32::from_rgb(0x6c, 0x70, 0x76)), egui::StrokeKind::Inside);
-    p.text(c, egui::Align2::CENTER_CENTER, crate::tl!("TOP"), egui::FontId::proportional(13.0), Color32::from_rgb(0x50, 0x54, 0x5a));
+    let (r, u, _) = axes(proj);
+    for (w, letter) in
+        [(Vec3::new(0.0, 1.0, 0.0), "N"), (Vec3::new(0.0, -1.0, 0.0), "S"), (Vec3::new(1.0, 0.0, 0.0), "E"), (Vec3::new(-1.0, 0.0, 0.0), "W")]
+    {
+        let d = vec2(w.dot(r) as f32, -(w.dot(u) as f32));
+        if d.length() > 0.3 {
+            p.text(l.center + d.normalized() * (l.ring + 1.0), egui::Align2::CENTER_CENTER, crate::i18n::t(letter), f.clone(), lc);
+        }
+    }
+    // Faces, the most oblique first, shaded by how squarely they face the viewer.
+    let edge = Stroke::new(1.0, Color32::from_rgb(0x6c, 0x70, 0x76));
+    for (_, label, preset, q, facing) in l.visible_faces(proj) {
+        let hot = part == Some(Part::Face(preset));
+        let base = if hot { 0xb8 } else { 0x7a + (0x24 as f64 * facing) as u8 };
+        p.add(egui::Shape::convex_polygon(q.to_vec(), Color32::from_rgb(base, base + 4, base + 10), edge));
+        if facing > 0.3 {
+            let c = pos2(q.iter().map(|v| v.x).sum::<f32>() / 4.0, q.iter().map(|v| v.y).sum::<f32>() / 4.0);
+            let size = if label.len() > 4 { 9.5 } else { 12.0 };
+            p.text(c, egui::Align2::CENTER_CENTER, crate::i18n::t(label), egui::FontId::proportional(size), Color32::from_rgb(0x40, 0x44, 0x4a));
+        }
+    }
+    if let Some(Part::Corner(c)) = part {
+        p.circle_filled(l.at(proj, c), 4.5, Color32::from_rgb(0x4d, 0x9c, 0xf5));
+    }
     paint_home(&p, l.home, part == Some(Part::Home));
 
     let resp = match part {
-        Some(part) => resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(part.tip()),
+        Some(part) => resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(part.tip(proj)),
         None => resp,
     };
-    let pressed_on = resp.interact_pointer_pos().and_then(|o| l.part_at(o));
+    let pressed_on = resp.interact_pointer_pos().and_then(|o| l.part_at(o, proj));
     if resp.clicked() {
         match pressed_on {
-            Some(Part::Face | Part::Home) => {
-                let _ = app.run("zoom.extents", json!({}));
+            Some(Part::Face(preset)) => {
+                let _ = app.run("view.dir", json!({ "preset": preset }));
             }
-            Some(Part::Ring) => app.session.echo(NO_TWIST),
-            None => {}
+            Some(Part::Corner(c)) => {
+                let _ = app.run("view.dir", json!({ "dir": [c.x, c.y, c.z], "fit": true }));
+            }
+            Some(Part::Home) => {
+                let _ = app.run("view.dir", json!({ "preset": "swiso" }));
+            }
+            Some(Part::Ring) if proj.is_none() => app.session.echo(NO_TWIST),
+            _ => {}
         }
     }
-    if resp.drag_started() && pressed_on == Some(Part::Ring) {
-        app.session.echo(NO_TWIST);
+    if pressed_on == Some(Part::Ring) && resp.dragged() {
+        match proj {
+            // Turn about Z by the angle the pointer swept around the cube's centre.
+            Some(pr) => {
+                if let Some(now) = resp.interact_pointer_pos() {
+                    let before = now - resp.drag_delta();
+                    let ang = |q: Pos2| f64::from((q.y - l.center.y).atan2(q.x - l.center.x));
+                    let (az, el) = Projection::angles(pr.dir);
+                    let d = Projection::dir_from_angles(az + (ang(now) - ang(before)), el);
+                    let _ = app.run("view.dir", json!({ "dir": [d.x, d.y, d.z] }));
+                }
+            }
+            None if resp.drag_started() => app.session.echo(NO_TWIST),
+            None => {}
+        }
     }
     let mut action = None;
     resp.context_menu(|ui| {
         if ui.button("Home").clicked() {
-            action = Some(("zoom.extents", json!({})));
+            action = Some(("view.dir", json!({"preset": "swiso"})));
+            ui.close();
+        }
+        if ui.button("Plan View").clicked() {
+            action = Some(("plan", json!({})));
             ui.close();
         }
         if ui.button("Hide ViewCube").clicked() {
@@ -135,6 +258,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, l: &Layout) {
     let pill = ui.interact(l.pill, ui.id().with("viewcube_wcs"), Sense::click_and_drag()).on_hover_cursor(CursorIcon::PointingHand);
     let pill = pill.on_hover_text("Coordinate system");
     ucs_menu(app, egui::Popup::menu(&pill));
+}
+
+/// Whether `p` is inside the convex quadrilateral `q` (either winding).
+fn point_in_quad(p: Pos2, q: &[Pos2; 4]) -> bool {
+    let side = |a: Pos2, b: Pos2| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+    let s = [side(q[0], q[1]), side(q[1], q[2]), side(q[2], q[3]), side(q[3], q[0])];
+    s.iter().all(|v| *v >= 0.0) || s.iter().all(|v| *v <= 0.0)
 }
 
 /// A small house, drawn in code.
@@ -246,11 +376,17 @@ mod tests {
     #[test]
     fn parts_are_found_where_they_are_drawn() {
         let l = Layout::new(Rect::from_min_size(pos2(200.0, 80.0), vec2(1000.0, 800.0)));
-        assert_eq!(l.part_at(l.center), Some(Part::Face));
-        assert_eq!(l.part_at(l.home.center()), Some(Part::Home));
-        assert_eq!(l.part_at(l.center + vec2(0.0, -l.ring)), Some(Part::Ring), "N");
-        assert_eq!(l.part_at(l.center + vec2(l.ring + 3.0, 0.0)), Some(Part::Ring), "E");
-        assert_eq!(l.part_at(l.center + vec2(30.0, 30.0)), None, "between the face and the ring");
+        assert_eq!(l.part_at(l.center, None), Some(Part::Face("top")));
+        assert_eq!(l.part_at(l.home.center(), None), Some(Part::Home));
+        assert_eq!(l.part_at(l.center + vec2(0.0, -l.ring), None), Some(Part::Ring), "N");
+        assert_eq!(l.part_at(l.center + vec2(l.ring + 3.0, 0.0), None), Some(Part::Ring), "E");
+        assert_eq!(l.part_at(l.center + vec2(30.0, 30.0), None), None, "between the face and the ring");
+        // The top face's corners give the isometric views (screen y runs down: the lower-left
+        // corner is south-west).
+        assert_eq!(l.part_at(l.center + vec2(-HALF, HALF), None), Some(Part::Corner(Vec3::new(-1.0, -1.0, 1.0))));
+        // Seen from the front, the middle of the cube is the FRONT face.
+        let front = Projection::new(Vec3::new(0.0, -1.0, 0.0));
+        assert_eq!(l.part_at(l.center, front), Some(Part::Face("front")));
         assert!(l.bounds.contains_rect(l.home) && l.bounds.contains_rect(l.face));
     }
 
@@ -266,10 +402,6 @@ mod tests {
         assert_eq!(view(&app), fitted, "Top face zooms to extents");
         assert!(app.session.pending_window.is_none(), "the click didn't start a selection window");
         assert!(app.session.selection().is_empty());
-        // Home does the same.
-        let _ = app.run("zoom.in", json!({}));
-        click(&mut app, &ctx, l.home.center(), egui::PointerButton::Primary);
-        assert_eq!(view(&app), fitted, "Home zooms to extents");
         // The ring explains that the 2D view can't rotate, and doesn't touch the drawing.
         click(&mut app, &ctx, l.center + vec2(0.0, -l.ring), egui::PointerButton::Primary);
         assert_eq!(app.session.log.last().map(String::as_str), Some(NO_TWIST));
@@ -279,6 +411,26 @@ mod tests {
         let empty = canvas(&app).center() + vec2(0.0, -300.0);
         click(&mut app, &ctx, empty, egui::PointerButton::Primary);
         assert!(app.session.pending_window.is_some(), "an empty-space click starts a selection window");
+    }
+
+    #[test]
+    fn home_and_corners_turn_the_view_and_top_returns_to_plan() {
+        let (mut app, ctx) = app_and_ctx();
+        let l = Layout::new(canvas(&app));
+        let dir = |app: &CadApp| app.session.state().map(|s| s.view_dir).unwrap_or(Vec3::Z);
+        click(&mut app, &ctx, l.home.center(), egui::PointerButton::Primary);
+        assert_eq!(cadcraft_geom::view3::preset_label(dir(&app)), Some("SW Isometric"), "Home");
+        // In the SW isometric view the cube shows TOP, FRONT and LEFT; the middle of the screen
+        // cube is their shared corner, which is the SW isometric view again.
+        let proj = app.session.state().ok().and_then(|s| s.projection());
+        assert_eq!(l.part_at(l.center, proj), Some(Part::Corner(Vec3::new(-1.0, -1.0, 1.0))));
+        // A point inside the TOP face goes back to the plan view.
+        let top = l.visible_faces(proj).into_iter().find(|f| f.2 == "top").map(|f| f.3);
+        let inside = top.map(|q| pos2((q[0].x + q[2].x) / 2.0, (q[0].y + q[2].y) / 2.0));
+        if let Some(at) = inside {
+            click(&mut app, &ctx, at, egui::PointerButton::Primary);
+        }
+        assert_eq!(dir(&app), Vec3::Z, "TOP face returns to the plan view");
     }
 
     #[test]

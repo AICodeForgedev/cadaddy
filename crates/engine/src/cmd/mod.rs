@@ -40,7 +40,7 @@ mod table;
 mod tolerance;
 mod trimextend;
 mod utility;
-mod view;
+pub(crate) mod view;
 
 pub mod curves;
 pub mod helpers;

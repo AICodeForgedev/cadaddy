@@ -127,11 +127,11 @@ pub fn draw(app: &mut CadApp, p: &egui::Painter) -> bool {
     let font = crate::theme::small();
     let line = Stroke::new(1.0, t.text_dim);
     let st = app.canvas.grip_dyn.clone();
-    let cs = xf.to_screen(c);
+    let cs = xf.w2s(c);
     let units = crate::canvas::length_units(&app.session);
     let mut offset_rank = 0.0;
     for (i, d) in dims.iter().enumerate() {
-        let a = xf.to_screen(d.anchor);
+        let a = xf.w2s(d.anchor);
         let active = i == st.active;
         let locked = st.locked.iter().find(|(j, _)| *j == i).map(|(_, s)| s.as_str());
         let text = if active && !app.cmd.buffer.is_empty() {

@@ -1220,3 +1220,17 @@ menu	Modify	Modifikace
 	Ribbon	Pás karet
 	Close Ribbon	Zavřít pás karet
 	Menu Bar	Pruh nabídek
+	Top	Shora
+	Bottom	Zdola
+	Front	Zepředu
+	Back	Zezadu
+	SW Isometric	JZ izometrický
+	SE Isometric	JV izometrický
+	NE Isometric	SV izometrický
+	NW Isometric	SZ izometrický
+	3D Views	3D pohledy
+	Plan View	Půdorys
+	World UCS	Globální USS
+	View Direction	Směr pohledu
+	2D Wireframe	2D drátový model
+	Custom View	Vlastní pohled

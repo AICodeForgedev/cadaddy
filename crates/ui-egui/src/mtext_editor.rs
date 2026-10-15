@@ -83,7 +83,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     let (col, row) = ((code % 3) as f64, (code / 3) as f64);
     let ww = f64::from(width) / scale;
     let corner = cadcraft_geom::Vec2::new(mt.insert.x - col * ww / 2.0, mt.insert.y + row * base_h * 2.0);
-    let at = app.canvas.xf.map_or(rect.center(), |x| x.to_screen(corner));
+    let at = app.canvas.xf.map_or(rect.center(), |x| x.w2s(corner));
     let max_x = (rect.right() - width - 8.0).max(rect.left());
     let pos = pos2(at.x.clamp(rect.left(), max_x), at.y.clamp(rect.top() + st.top, (rect.bottom() - 120.0).max(rect.top() + st.top)));
 

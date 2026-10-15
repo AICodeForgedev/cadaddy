@@ -1119,3 +1119,17 @@
 	Ribbon	功能区
 	Close Ribbon	关闭功能区
 	Menu Bar	菜单栏
+	Top	俯视
+	Bottom	仰视
+	Front	前视
+	Back	后视
+	SW Isometric	西南等轴测
+	SE Isometric	东南等轴测
+	NE Isometric	东北等轴测
+	NW Isometric	西北等轴测
+	3D Views	三维视图
+	Plan View	平面视图
+	World UCS	世界 UCS
+	View Direction	视图方向
+	2D Wireframe	二维线框
+	Custom View	自定义视图

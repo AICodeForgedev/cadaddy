@@ -1236,3 +1236,17 @@ menu	View	عرض
 	Ribbon	الشريط
 	Close Ribbon	إغلاق الشريط
 	Menu Bar	شريط القوائم
+	Top	أعلى
+	Bottom	أسفل
+	Front	أمامي
+	Back	خلفي
+	SW Isometric	متساوي القياس جنوب غرب
+	SE Isometric	متساوي القياس جنوب شرق
+	NE Isometric	متساوي القياس شمال شرق
+	NW Isometric	متساوي القياس شمال غرب
+	3D Views	طرق عرض ثلاثية الأبعاد
+	Plan View	عرض المسقط
+	World UCS	نظام الإحداثيات العالمي
+	View Direction	اتجاه العرض
+	2D Wireframe	إطار سلكي ثنائي الأبعاد
+	Custom View	عرض مخصص

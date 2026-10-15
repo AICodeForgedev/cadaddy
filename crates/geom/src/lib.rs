@@ -17,6 +17,7 @@ pub mod region;
 mod spline;
 mod spline_fit;
 mod vec;
+pub mod view3;
 
 pub use bounds::Bounds2;
 pub use curve::{Arc, Circle, Ellipse, Line, PolyVertex, Polyline, Segment, arc_to_bulge, bulge_to_arc, point_in_polygon, shoelace};

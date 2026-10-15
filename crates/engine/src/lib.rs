@@ -136,6 +136,10 @@ pub struct DocState {
     pub mspace: Option<Handle>,
     pub views: Vec<(Space, View)>,
     pub view_history: Vec<View>,
+    /// Model space's view direction (VIEWDIR, from the target towards the viewer); +Z is the
+    /// plan view. In other views [`View::center`] is on the view plane (see
+    /// [`DocState::projection`]).
+    pub view_dir: cadcraft_geom::Vec3,
     pub uid: u64,
     /// The drawing is saved as binary DXF (it was opened from one, or last saved as one).
     pub binary_dxf: bool,
@@ -165,6 +169,7 @@ impl DocState {
             mspace: None,
             views: Vec::new(),
             view_history: Vec::new(),
+            view_dir: cadcraft_geom::Vec3::Z,
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             binary_dxf: false,
             block_edit: None,
@@ -216,6 +221,14 @@ impl DocState {
             cadcraft_doc::EntityKind::Viewport(v) if v.height > 1e-12 && v.view_height > 1e-12 => Some((h, v.clone())),
             _ => None,
         }
+    }
+    /// The 3D view of model space on screen, `None` in the plan view and in layouts (paper
+    /// space and layout viewports are drawn in plan).
+    pub fn projection(&self) -> Option<cadcraft_geom::view3::Projection> {
+        if self.space != Space::Model || self.mspace.is_some() {
+            return None;
+        }
+        cadcraft_geom::view3::Projection::new(self.view_dir)
     }
     pub fn paper_view(&self) -> View {
         self.views.iter().find(|(s, _)| *s == self.space).map(|(_, v)| *v).unwrap_or_default()
@@ -1693,9 +1706,17 @@ impl Session {
         Ok(Bounds2::new(lo, hi))
     }
 
+    /// The extents of the current space as seen on screen: on the view plane in a 3D view.
+    pub fn view_extents(&self) -> Result<Bounds2> {
+        let st = self.state()?;
+        Ok(match st.projection() {
+            Some(p) => cmd::view::view3d::projected_extents(&st.doc, &p),
+            None => st.doc.extents(&self.space()),
+        })
+    }
+
     pub fn zoom_extents(&mut self) -> Result<()> {
-        let space = self.space();
-        let ext = self.doc()?.extents(&space);
+        let ext = self.view_extents()?;
         let (w, h) = self.viewport_px;
         let ext = if ext.is_empty() { self.zoom_limits()? } else { ext };
         let st = self.state_mut()?;

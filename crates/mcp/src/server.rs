@@ -104,7 +104,7 @@ impl Server {
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false}},
-                    "serverInfo": {"name": "cadcraft", "title": "CADaddy", "version": env!("CARGO_PKG_VERSION")},
+                    "serverInfo": {"name": "cadaddy", "title": "CADaddy", "version": env!("CARGO_PKG_VERSION")},
                     "instructions": format!("{INSTRUCTIONS} Backend: {}.", self.backend.describe()),
                 }))
             }

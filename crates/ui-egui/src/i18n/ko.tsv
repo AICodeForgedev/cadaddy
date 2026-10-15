@@ -1241,3 +1241,17 @@ menu	Modify	수정
 	Ribbon	리본
 	Close Ribbon	리본 닫기
 	Menu Bar	메뉴 막대
+	Top	위쪽
+	Bottom	아래쪽
+	Front	앞쪽
+	Back	뒤쪽
+	SW Isometric	남서 등각투영
+	SE Isometric	남동 등각투영
+	NE Isometric	북동 등각투영
+	NW Isometric	북서 등각투영
+	3D Views	3D 뷰
+	Plan View	평면도
+	World UCS	표준 UCS
+	View Direction	뷰 방향
+	2D Wireframe	2D 와이어프레임
+	Custom View	사용자 뷰

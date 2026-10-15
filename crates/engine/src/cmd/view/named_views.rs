@@ -91,8 +91,13 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Ok(json!({ "layerSnapshot": s.settings.view_layer_snapshot }))
         }
-        "orthographic" | "o" => Err(EngineError::Other("Orthographic views are not available yet: CADaddy views are 2D.".into())),
-        _ => Err(bad("view", "option must be save, window, restore, delete, list or settings")),
+        "orthographic" | "o" => {
+            let name = str_param(p, "name").ok_or_else(|| bad("view", "`name` (top, bottom, front, back, left or right) is required"))?;
+            super::view3d::preset_view(s, name)
+        }
+        // AutoCAD takes the preset views at the main prompt too: -VIEW _top, -VIEW _swiso.
+        other if cadcraft_geom::view3::preset(other).is_some() => super::view3d::preset_view(s, other),
+        _ => Err(bad("view", "option must be save, window, restore, delete, list, settings, orthographic or a preset view (top, front, swiso, …)")),
     }
 }
 
@@ -247,6 +252,7 @@ enum Stage {
     WindowSecond(Vec2),
     Settings,
     Snapshot,
+    Ortho,
 }
 
 /// -VIEW: "Enter an option [?/Delete/Orthographic/Restore/Save/sEttings/Window]:".
@@ -281,6 +287,7 @@ impl Interactive for ViewM {
             Stage::WindowFirst => Prompt::new("Specify first corner", Accept::POINT),
             Stage::WindowSecond(a) => Prompt::new("Specify opposite corner", Accept::POINT).base(a),
             Stage::Settings => Prompt::new("Enter an option", Accept::TEXT).kw(&["Layer snapshot"]),
+            Stage::Ortho => Prompt::new("Enter an option", Accept::TEXT).kw(&["Top", "Bottom", "Front", "BAck", "Left", "Right"]).default("Top"),
             Stage::Snapshot => {
                 let on = if s.settings.view_layer_snapshot { "Yes" } else { "No" };
                 Prompt::new("Save layer settings with views?", Accept::TEXT).kw(&["Yes", "No"]).default(on)
@@ -304,13 +311,26 @@ impl Interactive for ViewM {
                     "save" | "s" => Stage::Save,
                     "window" | "w" => Stage::WindowName,
                     "settings" | "e" => Stage::Settings,
-                    "orthographic" | "o" => {
-                        s.echo("Orthographic views are not available yet: CADaddy views are 2D.");
-                        return Ok(Step::Done);
+                    "orthographic" | "o" => Stage::Ortho,
+                    other if cadcraft_geom::view3::preset(other).is_some() => {
+                        return report(s, |s| super::view3d::preset_view(s, other));
                     }
                     _ => return Err(EngineError::Other("Invalid option keyword.".into())),
                 };
                 Ok(Step::Continue)
+            }
+            Stage::Ortho => {
+                let name = text.filter(|t| !t.is_empty()).unwrap_or_else(|| "top".into());
+                let key = match name.to_ascii_lowercase().as_str() {
+                    "t" | "top" => "top",
+                    "b" | "bottom" => "bottom",
+                    "f" | "front" => "front",
+                    "ba" | "back" => "back",
+                    "l" | "left" => "left",
+                    "r" | "right" => "right",
+                    _ => return Err(EngineError::Other("Invalid option keyword.".into())),
+                };
+                report(s, |s| super::view3d::preset_view(s, key))
             }
             Stage::List => {
                 let names = text.filter(|t| !t.is_empty()).unwrap_or_else(|| "*".into());

@@ -10,6 +10,7 @@ use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step, View};
 
 mod named_views;
+pub mod view3d;
 mod vports;
 
 pub(super) use vports::{config_names, config_tiles, model_vports, tile_model};
@@ -104,12 +105,12 @@ pub fn specs() -> Vec<CommandSpec> {
     ];
     v.extend(named_views::specs());
     v.extend(vports::specs());
+    v.extend(view3d::specs());
     v
 }
 
 fn ext_bounds(s: &Session) -> Result<Bounds2> {
-    let space = s.space();
-    Ok(s.doc()?.extents(&space))
+    s.view_extents()
 }
 
 fn fit(s: &mut Session, b: Bounds2) -> Result<()> {
