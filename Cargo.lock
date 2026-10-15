@@ -769,6 +769,7 @@ dependencies = [
  "cadcraft-fonts",
  "cadcraft-geom",
  "cadcraft-render",
+ "cadcraft-walk3d",
  "craft-ui",
  "egui",
  "egui-wgpu",
@@ -785,16 +786,11 @@ dependencies = [
 name = "cadcraft-walk"
 version = "0.7.0"
 dependencies = [
- "cadcraft-doc",
- "cadcraft-io",
+ "cadcraft-ui-egui",
  "cadcraft-walk3d",
- "eframe",
- "egui",
  "egui-wgpu",
  "image",
- "naga",
  "pollster 0.4.0",
- "rfd",
 ]
 
 [[package]]

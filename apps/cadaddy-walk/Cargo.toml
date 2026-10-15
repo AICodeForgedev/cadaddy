@@ -1,6 +1,6 @@
 [package]
 name = "cadcraft-walk"
-description = "CADaddy Walk: walk a drawing in 3D (derived from the 2D plans by level and layer rules)"
+description = "Headless walk-mode renderer: one frame of a drawing's derived 3D to a PNG (walk mode itself is in CADaddy, View ▸ Walk)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,16 +15,8 @@ name = "cadaddy-walk"
 path = "src/main.rs"
 
 [dependencies]
-cadcraft-doc = { workspace = true }
-cadcraft-io = { workspace = true }
+cadcraft-ui-egui = { workspace = true }
 cadcraft-walk3d = { path = "../../crates/walk3d" }
-egui = { workspace = true }
 egui-wgpu = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "wayland", "x11"] }
 image = { workspace = true }
-rfd = { workspace = true }
 pollster = "0.4"
-
-[dev-dependencies]
-# Validates the WGSL in tests (same naga wgpu uses).
-naga = { version = "30", features = ["wgsl-in"] }

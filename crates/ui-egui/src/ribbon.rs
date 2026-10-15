@@ -420,6 +420,7 @@ pub const TABS: &[Tab] = &[
     Tab {
         name: "View",
         panels: &[
+            Panel { name: "Walk", items: &[Item::Large(b(Icon::Walk, "ui.walk", "Walk"))], more: &[] },
             Panel {
                 name: "Viewport Tools",
                 items: &[Item::Large(b(Icon::Grid, "ui.toggle.ucsicon", "UCS Icon")), Item::Large(b(Icon::Orbit, "ui.toggle.viewcube", "View Cube"))],

@@ -48,6 +48,7 @@ pub mod shortcut_menus;
 pub mod theme;
 pub mod viewcube;
 pub mod vpscale;
+pub mod walk;
 
 pub mod exchange;
 
@@ -259,6 +260,10 @@ pub struct CadApp {
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
     /// The Edit Block Definition dialog ([`bedit`]).
     pub bedit: bedit::State,
+    /// Walk mode, while it is open: the drawing in 3D in place of the canvas ([`walk`]).
+    pub walk: Option<walk::Walk>,
+    /// The app's wgpu render state (walk mode draws its 3D with it).
+    pub wgpu_rs: Option<egui_wgpu::RenderState>,
 }
 
 impl CadApp {
@@ -298,6 +303,8 @@ impl CadApp {
             gpu_notice: None,
             hatch_dlg: None,
             bedit: bedit::State::default(),
+            walk: None,
+            wgpu_rs: None,
         }
     }
 
@@ -315,6 +322,7 @@ impl CadApp {
     pub fn set_wgpu(&mut self, rs: &egui_wgpu::RenderState, stencil: Option<egui_wgpu::wgpu::TextureFormat>) {
         self.canvas.gpu = Some(gpu::install(rs, &self.gpu_faults, stencil));
         self.canvas.gpu_device = Some(rs.device.clone());
+        self.wgpu_rs = Some(rs.clone());
     }
 
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
@@ -651,7 +659,9 @@ impl CadApp {
         }
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
-            if has_doc {
+            if self.walk.is_some() && has_doc {
+                walk::show(self, ui);
+            } else if has_doc {
                 docking::show(self, ui);
             } else {
                 chrome::start_page(self, ui);

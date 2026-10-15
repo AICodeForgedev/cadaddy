@@ -23,6 +23,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.open", "Open...", &[], Some("Cmd+O")),
     ("ui.newtemplate", "New from Template...", &["File", "New from Template..."], None),
     ("ui.convertpdf", "Convert PDF to DWG...", &["File", "Convert PDF to DWG..."], None),
+    ("ui.walk", "Walk", &["View", "Walk"], None),
     ("ui.pdfimport", "PDF Import...", &[], None),
     ("ui.saveas", "Save As...", &[], None),
     ("ui.sample", "Open Sample Drawing", &["Help", "Open Sample Drawing"], None),
@@ -256,6 +257,15 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         "ui.toggle.systemcursor" => {
             toggle(&mut app.ui.system_cursor, params);
             Ok(Value::Null)
+        }
+        "ui.walk" => {
+            // Toggles: opens walk mode on the active drawing, or goes back to the canvas.
+            if app.walk.is_some() {
+                crate::walk::close(app);
+                Ok(Value::Null)
+            } else {
+                crate::walk::open(app).map(|()| Value::Null)
+            }
         }
         "ui.toggle.viewcube" => {
             toggle(&mut app.ui.show_viewcube, params);

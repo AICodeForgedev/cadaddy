@@ -1,5 +1,5 @@
-//! Offscreen 3D renderer: the scene is drawn into a texture (4× MSAA, depth), which the window
-//! shows as an egui image and the headless mode copies out to a PNG.
+//! Walk mode's offscreen 3D renderer: the scene is drawn into a texture (4× MSAA, depth), which
+//! the walk view shows as an egui image and the headless `cadaddy-walk --shot` copies to a PNG.
 
 use cadcraft_walk3d::{Scene, Vertex};
 use egui_wgpu::wgpu;
@@ -27,6 +27,8 @@ struct Target {
     size: (u32, u32),
     msaa: wgpu::TextureView,
     depth: wgpu::TextureView,
+    // Read back by headless screenshots, which the web build has none of.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     resolve: wgpu::Texture,
     view: wgpu::TextureView,
 }
@@ -183,6 +185,7 @@ impl Gpu {
     }
 
     /// Copy the last frame out as RGBA rows (headless screenshots).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn read_rgba(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(u32, u32, Vec<u8>), String> {
         let t = self.target.as_ref().ok_or("nothing rendered yet")?;
         let (w, h) = t.size;

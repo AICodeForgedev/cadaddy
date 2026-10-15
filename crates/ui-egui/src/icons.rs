@@ -27,6 +27,7 @@ pub enum Icon {
     ZoomWindow,
     Pan,
     Orbit,
+    Walk,
     ZoomExtents,
     Properties,
     Blocks,
@@ -325,6 +326,16 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, dim: bool) {
                 true,
                 b,
             );
+        }
+        Walk => {
+            // A figure mid-stride: head, body, swinging arms and legs.
+            pen.c(13.0, 4.5, 2.0, b);
+            pen.l(12.5, 7.0, 11.0, 14.0);
+            pen.l(12.2, 9.0, 8.0, 12.5);
+            pen.l(12.2, 9.0, 16.0, 11.5);
+            pen.l(11.0, 14.0, 7.5, 21.0);
+            pen.la(11.0, 14.0, 14.5, 17.0);
+            pen.la(14.5, 17.0, 15.5, 21.0);
         }
         Orbit => {
             pen.c(12.0, 12.0, 4.0, b);

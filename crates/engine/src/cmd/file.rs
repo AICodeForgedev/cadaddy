@@ -264,6 +264,13 @@ pub struct ReadFile {
     path: Option<String>,
 }
 
+impl ReadFile {
+    /// The decoded drawing, for callers that read a file without opening it (walk mode's sheets).
+    pub fn into_drawing(self) -> Drawing {
+        self.drawing
+    }
+}
+
 /// Relative image paths in a drawing are relative to its folder: look for images there too.
 fn image_folder(path: Option<&str>) {
     if let Some(dir) = path.and_then(|p| std::path::Path::new(p).parent()).filter(|d| !d.as_os_str().is_empty()) {
