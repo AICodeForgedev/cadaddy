@@ -262,9 +262,11 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
     }
     close_walls(&mut s, &faces);
 
-    // Devices.
+    // Devices: from the levels' own drawings, and from device sheets (any level, by attribute).
+    let device_srcs = rules.device_sources();
     for (src, d) in sources.iter().enumerate() {
-        if !src_of.contains(&src) {
+        let device_sheet = device_srcs.contains(&src);
+        if !src_of.contains(&src) && !device_sheet {
             continue;
         }
         for e in d.model.iter() {
@@ -277,9 +279,10 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
             let at = ins.insert.xy();
             let lv = attr(&rules.devices.level_attr)
                 .and_then(|v| {
-                    (0..rules.levels.len()).find(|&i| src_of.get(i) == Some(&src) && rules.levels.get(i).and_then(|l| l.attr.as_deref()) == Some(v))
+                    (0..rules.levels.len())
+                        .find(|&i| (device_sheet || src_of.get(i) == Some(&src)) && rules.levels.get(i).and_then(|l| l.attr.as_deref()) == Some(v))
                 })
-                .or_else(|| level_at(src, at));
+                .or_else(|| if device_sheet { None } else { level_at(src, at) });
             let Some(lv) = lv else {
                 s.unplaced += 1;
                 continue;
@@ -668,6 +671,7 @@ mod tests {
                 LayerRule { layer: "E-DEV*".into(), kind: LayerKind::Device },
             ],
             devices,
+            device_sheets: Vec::new(),
         };
         (d, rules)
     }
@@ -739,6 +743,7 @@ mod tests {
             levels: vec![lvl("L1", 0.0, "A111.dxf"), lvl("L2", 10.0, "A112.dxf"), lvl("L2 again", 20.0, "A112.dxf")],
             layers: vec![LayerRule { layer: "A-WALL".into(), kind: LayerKind::Wall { height_ft: None, skip_curves: false, paired_only: false } }],
             devices: DeviceRules::default(),
+            device_sheets: Vec::new(),
         };
         assert_eq!(rules.sheets(), ["A111.dxf", "A112.dxf"]);
         assert_eq!((rules.level_source(0), rules.level_source(1), rules.level_source(2)), (1, 2, 2));
@@ -805,6 +810,25 @@ mod tests {
         assert_eq!(along_full.len(), 2, "{along_full:?}");
         assert!(along_full.iter().any(|(a, b)| (a - 5.0).abs() < 1e-9 && (b - 8.0).abs() < 1e-9));
         assert!(along_full.iter().any(|(a, b)| (a - 11.0).abs() < 1e-9 && (b - 15.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn a_device_sheet_places_devices_on_their_floor() {
+        let (d, mut rules) = two_floor_sheet();
+        let mut devs = Drawing::default();
+        // Floor 4 by attribute, placed with level L4's base (the lower-left of its walls).
+        add(&mut devs, "E-DEVC", device(1120.0, 1060.0, "A", "4"));
+        add(&mut devs, "E-DEVC", device(9999.0, 9999.0, "A", "7"));
+        rules.device_sheets = vec!["Hotel devices.dxf".into()];
+        assert_eq!(rules.sheets(), ["Hotel devices.dxf"]);
+        assert_eq!(rules.device_sources(), [1]);
+        let s = derive_set(&[&d, &devs], &rules);
+        let from_sheet: Vec<&DeviceInfo> = s.devices.iter().filter(|v| v.src == 1).collect();
+        assert_eq!(from_sheet.len(), 1, "a floor no level has is not placed");
+        assert!(from_sheet.iter().all(|v| v.level == 1 && (v.pos.x - 1120.0 / 12.0).abs() < 1e-9 && (v.pos.y - 5.0).abs() < 1e-9), "{from_sheet:?}");
+        assert!(s.unplaced >= 1);
+        // Walls in a device sheet are not walls.
+        assert_eq!(s.walls.len(), derive(&d, &rules).walls.len());
     }
 
     #[test]

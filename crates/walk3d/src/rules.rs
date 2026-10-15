@@ -13,6 +13,11 @@ pub struct Rules {
     pub layers: Vec<LayerRule>,
     #[serde(default)]
     pub devices: DeviceRules,
+    /// Drawings that only add devices, relative to the rules file (one devices drawing for a
+    /// whole building): each device's level attribute (`devices.level_attr`) picks its level, and
+    /// that level's base point places it.
+    #[serde(default)]
+    pub device_sheets: Vec<String>,
 }
 
 /// One floor: the part of the sheet its plan occupies and where that plan sits in the building.
@@ -160,6 +165,7 @@ impl Rules {
                 LayerRule { layer: "E-DEV*".into(), kind: LayerKind::Device },
             ],
             devices: DeviceRules::default(),
+            device_sheets: Vec::new(),
         }
     }
 
@@ -173,16 +179,23 @@ impl Rules {
     }
 
     /// The rule for a layer: the first one whose pattern matches.
-    /// The distinct level sheets in order. A level's drawing is source `0` (the opened drawing)
-    /// without a sheet, else `1 +` its sheet's position here.
+    /// The distinct sheets in order: the levels' sheets, then the device sheets. A level's
+    /// drawing is source `0` (the opened drawing) without a sheet, else `1 +` its sheet's position
+    /// here.
     pub fn sheets(&self) -> Vec<String> {
         let mut v: Vec<String> = Vec::new();
-        for s in self.levels.iter().filter_map(|l| l.sheet.as_ref()) {
+        for s in self.levels.iter().filter_map(|l| l.sheet.as_ref()).chain(self.device_sheets.iter()) {
             if !v.contains(s) {
                 v.push(s.clone());
             }
         }
         v
+    }
+
+    /// Source indexes of the device sheets (see [`Rules::sheets`]).
+    pub fn device_sources(&self) -> Vec<usize> {
+        let all = self.sheets();
+        self.device_sheets.iter().filter_map(|d| all.iter().position(|x| x == d)).map(|i| i + 1).collect()
     }
 
     /// Source index of a level's drawing (see [`Rules::sheets`]).
