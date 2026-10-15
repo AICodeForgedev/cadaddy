@@ -37,6 +37,10 @@ pub struct Level {
     /// this level wherever it is drawn.
     #[serde(default)]
     pub attr: Option<String>,
+    /// The drawing holding this level's plan, relative to the rules file (one sheet per floor, as
+    /// A111…A114 are); none = the drawing the rules were opened with.
+    #[serde(default)]
+    pub sheet: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -55,6 +59,10 @@ pub enum LayerKind {
     Wall {
         #[serde(default)]
         height_ft: Option<f64>,
+        /// Drop curved runs (door swings flattened to short chords share the wall pen on
+        /// PDF-converted plans): segments that turn gently at an end, not at a square corner.
+        #[serde(default)]
+        skip_curves: bool,
     },
     /// Block references are devices, placed by [`DeviceRules`].
     Device,
@@ -131,9 +139,18 @@ impl Rules {
     pub fn fallback() -> Rules {
         Rules {
             units_per_foot: 12.0,
-            levels: vec![Level { name: "Level 1".into(), elevation_ft: 0.0, height_ft: 10.0, ceiling_ft: 8.0, region: None, base: None, attr: None }],
+            levels: vec![Level {
+                name: "Level 1".into(),
+                elevation_ft: 0.0,
+                height_ft: 10.0,
+                ceiling_ft: 8.0,
+                region: None,
+                base: None,
+                attr: None,
+                sheet: None,
+            }],
             layers: vec![
-                LayerRule { layer: "*WALL*".into(), kind: LayerKind::Wall { height_ft: None } },
+                LayerRule { layer: "*WALL*".into(), kind: LayerKind::Wall { height_ft: None, skip_curves: false } },
                 LayerRule { layer: "E-DEV*".into(), kind: LayerKind::Device },
             ],
             devices: DeviceRules::default(),
@@ -150,6 +167,26 @@ impl Rules {
     }
 
     /// The rule for a layer: the first one whose pattern matches.
+    /// The distinct level sheets in order. A level's drawing is source `0` (the opened drawing)
+    /// without a sheet, else `1 +` its sheet's position here.
+    pub fn sheets(&self) -> Vec<String> {
+        let mut v: Vec<String> = Vec::new();
+        for s in self.levels.iter().filter_map(|l| l.sheet.as_ref()) {
+            if !v.contains(s) {
+                v.push(s.clone());
+            }
+        }
+        v
+    }
+
+    /// Source index of a level's drawing (see [`Rules::sheets`]).
+    pub fn level_source(&self, level: usize) -> usize {
+        match self.levels.get(level).and_then(|l| l.sheet.as_ref()) {
+            Some(s) => self.sheets().iter().position(|x| x == s).map_or(0, |i| i + 1),
+            None => 0,
+        }
+    }
+
     pub fn layer(&self, name: &str) -> Option<&LayerKind> {
         self.layers.iter().find(|r| layer_match(&r.layer, name)).map(|r| &r.kind)
     }
@@ -210,7 +247,7 @@ mod tests {
         assert_eq!(Rules::from_json(&s), Ok(r));
         let small = r#"{"levels":[{"name":"L1","elevation_ft":0,"height_ft":10}],"layers":[{"layer":"A-WALL","kind":"wall"},{"layer":"E-PWR","kind":"run","height_ft":9}]}"#;
         let r = Rules::from_json(small).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(r.layer("a-wall"), Some(&LayerKind::Wall { height_ft: None }));
+        assert_eq!(r.layer("a-wall"), Some(&LayerKind::Wall { height_ft: None, skip_curves: false }));
         assert_eq!(r.layer("E-PWR"), Some(&LayerKind::Run { height_ft: 9.0 }));
         assert_eq!(r.units_per_foot, 12.0);
     }

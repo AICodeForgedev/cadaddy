@@ -15,7 +15,7 @@ mod pick;
 mod rules;
 mod walker;
 
-pub use derive::{DeviceInfo, LevelInfo, Scene, Seg, Vertex, derive};
+pub use derive::{DeviceInfo, LevelInfo, Owner, Scene, Seg, Vertex, derive, derive_set};
 pub use math::{Mat4, V3};
 pub use pick::{Hit, pick};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Rules};
