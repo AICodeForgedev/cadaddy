@@ -13,6 +13,7 @@ mod dxf_table;
 mod dxf_write;
 mod dxf_xref;
 pub mod pdf;
+pub(crate) mod pdf_image;
 pub mod pdf_read;
 pub mod plotter;
 pub mod svg;

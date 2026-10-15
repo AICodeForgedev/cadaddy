@@ -1245,5 +1245,6 @@ menu	Modify	Modifikace
 	Import text	Importovat text
 	Join line pieces and make circles	Spojit úseky čar a vytvořit kružnice
 	Keep white fills (masks)	Zachovat bílé výplně (masky)
+	Import raster images (saved as PNG files)	Importovat rastrové obrázky (uložit jako PNG)
 	Add a layout that plots like the sheet	Přidat rozvržení, které se vykreslí jako list
 	Convert and Save as DWG…	Převést a uložit jako DWG…

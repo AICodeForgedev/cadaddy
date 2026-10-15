@@ -75,6 +75,15 @@ pub struct PdfOptions {
     /// Draw the page's annotations (markups: highlights, clouds, stamps, text boxes) as they
     /// appear, on their own layer PDF-MARKUP (on by default).
     pub markups: bool,
+    /// Bring raster images (logos, photos, scans) in as IMAGE objects (on by default). Their
+    /// pixels are returned in [`PdfImport::images`] for the caller to save as PNG files.
+    pub images: bool,
+    /// The folder the image files go in: IMAGE objects name `<folder>/<image_prefix>-<n>.png`.
+    /// `None`: they name `pdf-image:<image_prefix>-<n>.png`, which only this session can show
+    /// until the images are saved somewhere.
+    pub image_folder: Option<String>,
+    /// File name start of the images (the PDF's name and page).
+    pub image_prefix: String,
 }
 
 /// The layer annotations (markups) are drawn on.
@@ -92,6 +101,9 @@ impl Default for PdfOptions {
             join: true,
             layout: true,
             markups: true,
+            images: true,
+            image_folder: None,
+            image_prefix: "pdf-image".into(),
         }
     }
 }
@@ -107,6 +119,8 @@ pub struct PdfImport {
     pub pages: u32,
     pub stats: BTreeMap<String, usize>,
     pub notes: Vec<String>,
+    /// The image files the IMAGE objects name (path as they name it) and their pixels.
+    pub images: Vec<(String, std::sync::Arc<cadcraft_render::images::Raster>)>,
 }
 
 /// The number of pages.
@@ -203,6 +217,21 @@ struct Fill {
     order: usize,
 }
 
+/// A raster image painted on the page: its pixels and where the unit square of image space
+/// lands (`ctm`, sheet points; row 0 of the pixels at the top, y = 1).
+struct ImageOut {
+    ctm: M,
+    raster: std::sync::Arc<cadcraft_render::images::Raster>,
+    layer: Option<String>,
+    clip: Option<std::rc::Rc<Vec<Vec<(f64, f64)>>>>,
+    /// Transparency percent from the constant fill alpha.
+    transp: u8,
+    order: usize,
+}
+
+/// Pixel memory images of one page may take.
+const MAX_IMAGE_BYTES: usize = 1 << 30;
+
 struct TextOut {
     at: (f64, f64),
     /// Where the text's advance ends (the next character would start), sheet points.
@@ -223,7 +252,11 @@ struct Out {
     strokes: Vec<Stroke>,
     fills: Vec<Fill>,
     texts: Vec<TextOut>,
-    images: usize,
+    images: Vec<ImageOut>,
+    /// Images left out, by why.
+    image_failures: BTreeMap<&'static str, usize>,
+    /// Pixel bytes held by `images` (bounded: [`MAX_IMAGE_BYTES`]).
+    image_bytes: usize,
     /// The next painting-order number.
     seq: usize,
     ops: usize,
@@ -592,6 +625,7 @@ struct Interp<'a> {
     /// Optional content group names by object id.
     ocg_names: HashMap<ObjectId, String>,
     want_text: bool,
+    want_images: bool,
     /// Everything drawn goes on this layer (annotations).
     force_layer: Option<String>,
 }
@@ -640,6 +674,9 @@ impl<'a> Interp<'a> {
             return;
         }
         let Ok(content) = Content::decode(data) else { return };
+        // lopdf drops filtered inline images: read them from the bytes (the n-th BI is the n-th)
+        let inline = if self.want_images { crate::pdf_image::scan_inline(data, resources, self.doc) } else { Vec::new() };
+        let mut inline_at = 0usize;
         let mut gs = gs0;
         let mut stack: Vec<Gs> = Vec::new();
         let mut path: Vec<Seg> = Vec::new();
@@ -920,13 +957,50 @@ impl<'a> Interp<'a> {
                             let data = st.decompressed_content().unwrap_or_else(|_| st.content.clone());
                             self.run(&data, res, g, depth + 1);
                         }
-                        Some(b"Image") => self.out.images += 1,
+                        Some(b"Image") => {
+                            let layer = self.force_layer.clone().or_else(|| ocg.iter().rev().find_map(|l| l.clone()));
+                            self.image(&st.dict, &st.content, resources, &gs, layer);
+                        }
                         _ => {}
                     }
                 }
-                "BI" | "ID" | "EI" => self.out.images += usize::from(op.operator == "EI"),
+                "BI" => {
+                    let found = inline.get(inline_at).cloned().flatten();
+                    inline_at += 1;
+                    match found {
+                        Some((dict, bytes)) => {
+                            let layer = self.force_layer.clone().or_else(|| ocg.iter().rev().find_map(|l| l.clone()));
+                            self.image(&dict, &bytes, resources, &gs, layer);
+                        }
+                        None if self.want_images => *self.out.image_failures.entry("damaged or unsupported").or_default() += 1,
+                        None => {}
+                    }
+                }
                 _ => {}
             }
+        }
+    }
+
+    /// Decode an image (XObject or inline) and keep it with where it lands.
+    fn image(&mut self, dict: &Dictionary, raw: &[u8], resources: Option<&Dictionary>, gs: &Gs, layer: Option<String>) {
+        if !self.want_images || !gs.ctm.finite() {
+            return;
+        }
+        match crate::pdf_image::decode(self.doc, dict, raw, resources, rgb8(gs.fill)) {
+            Ok(raster) if self.out.image_bytes.saturating_add(raster.rgba.len()) <= MAX_IMAGE_BYTES => {
+                self.out.image_bytes += raster.rgba.len();
+                self.out.images.push(ImageOut {
+                    ctm: gs.ctm,
+                    raster: std::sync::Arc::new(raster),
+                    layer,
+                    clip: gs.clip.clone(),
+                    transp: transp(gs.fill_alpha),
+                    order: self.out.seq,
+                });
+                self.out.seq += 1;
+            }
+            Ok(_) => *self.out.image_failures.entry("too much image data").or_default() += 1,
+            Err(e) => *self.out.image_failures.entry(e.label()).or_default() += 1,
         }
     }
 
@@ -1593,8 +1667,15 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     let resources =
         dict_get(&doc, page, b"Resources").and_then(|o| o.as_dict().ok()).or_else(|| inherited(b"Resources").and_then(|o| o.as_dict().ok()));
     let content = doc.get_page_content(page_id);
-    let mut it =
-        Interp { doc: &doc, out: Out::default(), fonts: HashMap::new(), ocg_names: ocg_names.clone(), want_text: opts.text, force_layer: None };
+    let mut it = Interp {
+        doc: &doc,
+        out: Out::default(),
+        fonts: HashMap::new(),
+        ocg_names: ocg_names.clone(),
+        want_text: opts.text,
+        want_images: opts.images,
+        force_layer: None,
+    };
     it.run(&content, resources, Gs::default(), 0);
     let mut markups = 0usize;
     if opts.markups {
@@ -1695,11 +1776,18 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
     }
 
+    let white: HashSet<usize> = masks.iter().map(|f| f.order).collect();
+    let (images, stitched) = stitch(out.images, &white);
+    if stitched > 0 {
+        stats.insert("image pieces stitched".into(), stitched);
+    }
+
     // the drawing
     let mut d = Drawing::new_imperial();
     d.header.set_i64("INSUNITS", 1);
-    // masks hide what is under them without a frame, as on the sheet
+    // masks and images show without a frame, as on the sheet
     d.header.set_i64("WIPEOUTFRAME", 0);
+    d.header.set_i64("IMAGEFRAME", 0);
     if scale >= 12.0 {
         d.header.set_i64("LUNITS", 4); // architectural
     }
@@ -1754,6 +1842,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 let name = match kind {
                     "fill" | "mask" => "PDF_Solid Fills",
                     "text" => "PDF_Text",
+                    "image" => "PDF_Images",
                     _ => "PDF_Geometry",
                 }
                 .to_string();
@@ -1764,6 +1853,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 if kind == "mask" {
                     layer_set.entry("PDF-MASK".into()).or_insert((Color::Index(7), Lineweight::Default));
                     return ("PDF-MASK".into(), Color::ByLayer, Lineweight::ByLayer);
+                }
+                if kind == "image" {
+                    layer_set.entry("PDF-IMAGES".into()).or_insert((Color::Index(7), Lineweight::Default));
+                    return ("PDF-IMAGES".into(), Color::ByLayer, Lineweight::ByLayer);
                 }
                 let name = match kind {
                     "fill" => format!("PDF-FILL-{}", pen_name(pen.rgb)),
@@ -1797,7 +1890,11 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     paint.extend(fills.iter().enumerate().map(|(i, f)| (f.order, 1, i)));
     paint.extend(masks.iter().enumerate().map(|(i, f)| (f.order, 2, i)));
     paint.extend(texts.iter().enumerate().map(|(i, t)| (t.order, 3, i)));
+    paint.extend(images.iter().enumerate().map(|(i, im)| (im.order, 4, i)));
     paint.sort_unstable();
+    // image files by their pixels (a logo on every sheet is one file)
+    let mut image_files: HashMap<u64, String> = HashMap::new();
+    let mut image_out: Vec<(String, std::sync::Arc<cadcraft_render::images::Raster>)> = Vec::new();
     for (_, kind, i) in paint {
         match kind {
             0 => {
@@ -1879,6 +1976,56 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     *stats.entry("masks (wipeouts)".into()).or_default() += 1;
                 }
             }
+            4 => {
+                let Some(im) = images.get(i) else { continue };
+                let (w, h) = (f64::from(im.raster.width), f64::from(im.raster.height));
+                let at = |x: f64, y: f64| {
+                    let (px, py) = im.ctm.apply(x, y);
+                    sp(px, py)
+                };
+                let p00 = at(0.0, 0.0);
+                let (u, v) = ((at(1.0, 0.0) - p00) / w, (at(0.0, 1.0) - p00) / h);
+                if !(u.is_finite() && v.is_finite()) || u.len() < 1e-12 || v.len() < 1e-12 {
+                    continue;
+                }
+                let (clip, clipping) = image_clip(im, &sp, p00, u, v, h);
+                let key = {
+                    use std::hash::{Hash, Hasher};
+                    let mut hs = std::collections::hash_map::DefaultHasher::new();
+                    (im.raster.width, im.raster.height, &im.raster.rgba).hash(&mut hs);
+                    hs.finish()
+                };
+                let path = match image_files.get(&key) {
+                    Some(p) => p.clone(),
+                    None => {
+                        let file = format!("{}-{}.png", opts.image_prefix, image_files.len() + 1);
+                        let path = match &opts.image_folder {
+                            Some(f) => std::path::Path::new(f).join(&file).to_string_lossy().to_string(),
+                            None => format!("pdf-image:{file}"),
+                        };
+                        image_files.insert(key, path.clone());
+                        image_out.push((path.clone(), std::sync::Arc::clone(&im.raster)));
+                        path
+                    }
+                };
+                let transparent = im.raster.rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255);
+                let name = std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                let image = Image {
+                    insert: Vec3::new(p00.x, p00.y, 0.0),
+                    u: Vec3::new(u.x, u.y, 0.0),
+                    v: Vec3::new(v.x, v.y, 0.0),
+                    size: Vec2::new(w, h),
+                    path,
+                    name,
+                    clip,
+                    clipping,
+                    display: 1 | 2 | if clipping { 4 } else { 0 } | if transparent { 8 } else { 0 },
+                    ..Image::default()
+                };
+                let (layer, color, lw) = place("image", Pen { rgb: [0, 0, 0], lw: 0, transp: im.transp }, &im.layer);
+                add(&mut d, layer, color, lw, im.transp, EntityKind::Image(image));
+                *stats.entry("images".into()).or_default() += 1;
+            }
             _ => {
                 let Some(t) = texts.get(i) else { continue };
                 let (layer, color, lw) = place("text", t.pen, &t.layer);
@@ -1924,8 +2071,11 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     if added >= MAX_OBJECTS {
         notes.push(format!("stopped at {MAX_OBJECTS} objects"));
     }
-    if out.images > 0 {
-        notes.push(format!("{} raster image(s) not converted", out.images));
+    if !image_out.is_empty() {
+        stats.insert("image files".into(), image_out.len());
+    }
+    for (why, n) in &out.image_failures {
+        notes.push(format!("{n} raster image(s) not converted ({why})"));
     }
     if markups > 0 {
         stats.insert("markups".into(), markups);
@@ -1966,7 +2116,192 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
         notes.push(format!("layout \"{name}\" shows model space at 1:{k} on the {:.0} x {:.0} in sheet", sheet.0, sheet.1));
     }
-    Ok(PdfImport { drawing: d, sheet, scale: k, scale_source, pages: page_total, stats, notes })
+    Ok(PdfImport { drawing: d, sheet, scale: k, scale_source, pages: page_total, stats, notes, images: image_out })
+}
+
+/// Images painted one after another in the same orientation that touch, each small (the rows
+/// of a run-length-coded logo, tiles of a picture): stitched into one image at the finest
+/// resolution among them. Only white fills (the white background some writers paint under each
+/// piece) may come between two pieces; the stitched image is painted where the last piece was,
+/// over those. Returns the images and how many pieces were stitched away.
+fn stitch(images: Vec<ImageOut>, white_fills: &HashSet<usize>) -> (Vec<ImageOut>, usize) {
+    let unit = |x: f64, y: f64| {
+        let l = x.hypot(y);
+        (l > 1e-9).then(|| (x / l, y / l, l))
+    };
+    // the image's frame: unit vectors along its width (U) and height (V) and their lengths
+    let frame = |m: &M| -> Option<((f64, f64), (f64, f64), f64, f64)> {
+        let [a, b, c, d, _, _] = m.0;
+        let (ux, uy, lu) = unit(a, b)?;
+        let (vx, vy, lv) = unit(c, d)?;
+        // orthogonal frames only (no skew)
+        ((ux * vx + uy * vy).abs() < 1e-6).then_some(((ux, uy), (vx, vy), lu, lv))
+    };
+    let small = |r: &cadcraft_render::images::Raster| r.width.min(r.height) <= 4 || u64::from(r.width) * u64::from(r.height) <= 4096;
+    let mut out: Vec<ImageOut> = Vec::with_capacity(images.len());
+    let mut run: Vec<ImageOut> = Vec::new();
+    // the run's sheet-point box
+    let mut run_box = [0.0f64; 4];
+    let mut stitched = 0usize;
+    let flush = |run: &mut Vec<ImageOut>, out: &mut Vec<ImageOut>, stitched: &mut usize| {
+        if run.len() < 2 {
+            out.append(run);
+            return;
+        }
+        match stitch_run(run, &frame) {
+            Some(im) => {
+                *stitched += run.len() - 1;
+                run.clear();
+                out.push(im);
+            }
+            None => out.append(run),
+        }
+    };
+    for im in images {
+        let joins = run.last().is_some_and(|prev| {
+            let (Some((pu, pv, _, _)), Some((u, v, _, _))) = (frame(&prev.ctm), frame(&im.ctm)) else { return false };
+            let same = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).abs() < 1e-6 && (p.1 - q.1).abs() < 1e-6;
+            // within the run's box, padded (a logo's runs are separated by its white gaps)
+            let near = {
+                let (b0, b1) = (run_box, image_box(&im.ctm));
+                let pad = (0.25 * (b0[2] - b0[0]).max(b0[3] - b0[1])).max(10.0);
+                b1[0] <= b0[2] + pad && b1[2] >= b0[0] - pad && b1[1] <= b0[3] + pad && b1[3] >= b0[1] - pad
+            };
+            let between = (prev.order + 1..im.order).all(|o| white_fills.contains(&o));
+            im.order > prev.order
+                && between
+                && same(pu, u)
+                && same(pv, v)
+                && small(&im.raster)
+                && small(&prev.raster)
+                && near
+                && prev.layer == im.layer
+                && prev.transp == im.transp
+        });
+        let b = image_box(&im.ctm);
+        if joins {
+            run_box = [run_box[0].min(b[0]), run_box[1].min(b[1]), run_box[2].max(b[2]), run_box[3].max(b[3])];
+        } else {
+            flush(&mut run, &mut out, &mut stitched);
+            run_box = b;
+        }
+        run.push(im);
+    }
+    flush(&mut run, &mut out, &mut stitched);
+    (out, stitched)
+}
+
+/// The sheet-point box of an image's unit square.
+fn image_box(m: &M) -> [f64; 4] {
+    let pts = [m.apply(0.0, 0.0), m.apply(1.0, 0.0), m.apply(0.0, 1.0), m.apply(1.0, 1.0)];
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for (x, y) in pts {
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    [x0, y0, x1, y1]
+}
+
+/// An image's clip boundary in pixel coordinates (corner at -0.5, -0.5, y down), when the
+/// clipping path in force cuts it: the path's outline when it is one loop, else its box.
+fn image_clip(im: &ImageOut, sp: &dyn Fn(f64, f64) -> Vec2, p00: Vec2, u: Vec2, v: Vec2, h: f64) -> (Vec<Vec2>, bool) {
+    let Some(loops) = &im.clip else { return (Vec::new(), false) };
+    let Some([cx0, cy0, cx1, cy1]) = bbox(loops) else { return (Vec::new(), false) };
+    let [ix0, iy0, ix1, iy1] = image_box(&im.ctm);
+    let tol = 0.5;
+    if cx0 <= ix0 + tol && cy0 <= iy0 + tol && cx1 >= ix1 - tol && cy1 >= iy1 - tol {
+        return (Vec::new(), false);
+    }
+    // a model point in pixel coordinates: solve q - p00 = u·s + v·t
+    let det = u.x * v.y - u.y * v.x;
+    if det.abs() < 1e-300 {
+        return (Vec::new(), false);
+    }
+    let to_px = |x: f64, y: f64| {
+        let q = sp(x, y) - p00;
+        let s = (q.x * v.y - q.y * v.x) / det;
+        let t = (u.x * q.y - u.y * q.x) / det;
+        Vec2::new(s - 0.5, h - t - 0.5)
+    };
+    let pts: Vec<Vec2> = match loops.as_slice() {
+        [one] if (3..=4096).contains(&one.len()) => one.iter().map(|(x, y)| to_px(*x, *y)).collect(),
+        _ => [(cx0, cy0), (cx1, cy0), (cx1, cy1), (cx0, cy1)].iter().map(|(x, y)| to_px(*x, *y)).collect(),
+    };
+    (pts, true)
+}
+
+/// One image painted from a run of images sharing a frame (see [`stitch`]).
+#[allow(clippy::type_complexity)]
+fn stitch_run(run: &[ImageOut], frame: &dyn Fn(&M) -> Option<((f64, f64), (f64, f64), f64, f64)>) -> Option<ImageOut> {
+    let first = run.first()?;
+    let (u, v, _, _) = frame(&first.ctm)?;
+    let dot = |p: (f64, f64), q: (f64, f64)| p.0 * q.0 + p.1 * q.1;
+    // each piece in frame coordinates: (u0, v0, length along U, along V)
+    let mut parts = Vec::with_capacity(run.len());
+    let (mut u0, mut v0, mut u1, mut v1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    let (mut ru, mut rv) = (0.0f64, 0.0f64);
+    for im in run {
+        let (_, _, lu, lv) = frame(&im.ctm)?;
+        let o = (im.ctm.0[4], im.ctm.0[5]);
+        let (pu, pv) = (dot(o, u), dot(o, v));
+        parts.push((pu, pv, lu, lv));
+        (u0, v0, u1, v1) = (u0.min(pu), v0.min(pv), u1.max(pu + lu), v1.max(pv + lv));
+        ru = ru.max(f64::from(im.raster.width) / lu);
+        rv = rv.max(f64::from(im.raster.height) / lv);
+    }
+    let (mut cw, mut ch) = (((u1 - u0) * ru).ceil(), ((v1 - v0) * rv).ceil());
+    const MAX_SIDE: f64 = 4096.0;
+    if cw > MAX_SIDE || ch > MAX_SIDE {
+        let k = MAX_SIDE / cw.max(ch);
+        (cw, ch) = ((cw * k).ceil(), (ch * k).ceil());
+    }
+    if !(cw >= 1.0 && ch >= 1.0) {
+        return None;
+    }
+    let (cw, ch) = (cw as usize, ch as usize);
+    let mut rgba = vec![0u8; cw * ch * 4];
+    for (im, (pu, pv, lu, lv)) in run.iter().zip(parts) {
+        let (w, h) = (im.raster.width as usize, im.raster.height as usize);
+        // canvas pixels whose centre falls inside this piece
+        let cx0 = (((pu - u0) / (u1 - u0)) * cw as f64).floor().max(0.0) as usize;
+        let cx1 = ((((pu + lu - u0) / (u1 - u0)) * cw as f64).ceil() as usize).min(cw);
+        // canvas row 0 is the far end of V (the top of the image)
+        let cy0 = (((v1 - pv - lv) / (v1 - v0)) * ch as f64).floor().max(0.0) as usize;
+        let cy1 = ((((v1 - pv) / (v1 - v0)) * ch as f64).ceil() as usize).min(ch);
+        for cy in cy0..cy1 {
+            let vv = v1 - (cy as f64 + 0.5) / ch as f64 * (v1 - v0);
+            let t = (vv - pv) / lv;
+            if !(0.0..1.0).contains(&t) {
+                continue;
+            }
+            let sy = (((1.0 - t) * h as f64) as usize).min(h - 1);
+            for cx in cx0..cx1 {
+                let uu = u0 + (cx as f64 + 0.5) / cw as f64 * (u1 - u0);
+                let sx_f = (uu - pu) / lu;
+                if !(0.0..1.0).contains(&sx_f) {
+                    continue;
+                }
+                let sx = ((sx_f * w as f64) as usize).min(w - 1);
+                let Some(px) = im.raster.pixel(sx as u32, sy as u32) else { continue };
+                if px[3] == 0 {
+                    continue;
+                }
+                let i = (cy * cw + cx) * 4;
+                if let Some(dst) = rgba.get_mut(i..i + 4) {
+                    // source over what is there
+                    let a = u32::from(px[3]);
+                    for k in 0..3 {
+                        dst[k] = ((u32::from(px[k]) * a + u32::from(dst[k]) * (255 - a)) / 255) as u8;
+                    }
+                    dst[3] = (a + u32::from(dst[3]) * (255 - a) / 255) as u8;
+                }
+            }
+        }
+    }
+    let raster = cadcraft_render::images::Raster::new(cw as u32, ch as u32, rgba)?;
+    let origin = (u.0 * u0 + v.0 * v0, u.1 * u0 + v.1 * v0);
+    let ctm = M([u.0 * (u1 - u0), u.1 * (u1 - u0), v.0 * (v1 - v0), v.1 * (v1 - v0), origin.0, origin.1]);
+    let order = run.last().map_or(first.order, |l| l.order);
+    Some(ImageOut { ctm, raster: std::sync::Arc::new(raster), layer: first.layer.clone(), clip: first.clip.clone(), transp: first.transp, order })
 }
 
 /// The sheet number from the title block: the largest short text near the right or bottom edge
@@ -1997,8 +2332,28 @@ fn decode_pdf_string(b: &[u8]) -> String {
     }
 }
 
+/// Write each image as a PNG file at its path (in `folder`, created when missing).
+#[cfg(not(target_arch = "wasm32"))]
+fn write_images(folder: &str, images: &[(String, std::sync::Arc<cadcraft_render::images::Raster>)]) -> std::io::Result<usize> {
+    std::fs::create_dir_all(folder)?;
+    let mut n = 0;
+    for (path, raster) in images {
+        let png = raster.encode_png().ok_or_else(|| std::io::Error::other("PNG encoding failed"))?;
+        std::fs::write(path, png)?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn write_images(_folder: &str, _images: &[(String, std::sync::Arc<cadcraft_render::images::Raster>)]) -> std::io::Result<usize> {
+    Err(std::io::Error::other("files can't be written on the web"))
+}
+
 /// PDFIMPORT's JSON options → the converted page and a report: `{page?, scale?: number | "auto",
-/// layers?: "pdf" | "pen" | "object", whiteFills?, text?, join?, layout?}`.
+/// layers?: "pdf" | "pen" | "object", whiteFills?, text?, join?, layout?, markups?, images?,
+/// imageFolder?, imagePrefix?}`. Images are written as PNG files in `imageFolder` (created
+/// when missing) and their pixels handed to the image cache, so they show at once.
 pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Drawing, serde_json::Value), String> {
     use serde_json::{Value, json};
     let mut o = PdfOptions::default();
@@ -2028,7 +2383,27 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
     o.join = flag("join", true);
     o.layout = flag("layout", true);
     o.markups = flag("markups", true);
-    let r = read(bytes, &o).map_err(|e| e.to_string())?;
+    o.images = flag("images", true);
+    o.image_folder = p.get("imageFolder").and_then(Value::as_str).map(str::trim).filter(|f| !f.is_empty()).map(str::to_string);
+    if let Some(prefix) = p.get("imagePrefix").and_then(Value::as_str) {
+        let clean: String = prefix.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') { c } else { '_' }).collect();
+        if !clean.trim().is_empty() {
+            o.image_prefix = clean.trim().to_string();
+        }
+    }
+    let mut r = read(bytes, &o).map_err(|e| e.to_string())?;
+    let mut written = 0usize;
+    if let Some(folder) = &o.image_folder
+        && !r.images.is_empty()
+    {
+        match write_images(folder, &r.images) {
+            Ok(n) => written = n,
+            Err(e) => r.notes.push(format!("the image files couldn't be written to {folder}: {e}; the images show in this session only")),
+        }
+    }
+    for (path, raster) in &r.images {
+        cadcraft_render::images::insert(path, std::sync::Arc::clone(raster));
+    }
     let report = json!({
         "pages": r.pages,
         "page": o.page,
@@ -2038,6 +2413,8 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
         "stats": r.stats,
         "notes": r.notes,
         "layers": r.drawing.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
+        "imageFiles": written,
+        "imageFolder": o.image_folder,
     });
     Ok((r.drawing, report))
 }

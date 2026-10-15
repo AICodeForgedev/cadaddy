@@ -856,9 +856,49 @@ pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb,
                     shapes.push(Shape::line_segment(seg, Stroke::new(1.0, col)));
                 }
             }
+            Kind::Image(_) => {
+                let Some(img) = list.image(prim) else { continue };
+                if !Bounds2::from_points(pts.iter().copied()).intersects(&vis) {
+                    continue;
+                }
+                let Some(tex) = image_texture(p.ctx(), &img.raster_on(bg)) else { continue };
+                let a = (u32::from(img.alpha) * u32::from(prim.alpha()) / 255) as u8;
+                let tint = Color32::from_white_alpha(a);
+                let mut mesh = egui::Mesh::with_texture(tex);
+                for q in pts.iter() {
+                    let (u, v) = img.uv(*q);
+                    mesh.vertices.push(egui::epaint::Vertex { pos: xf.to_screen(*q), uv: egui::pos2(u as f32, v as f32), color: tint });
+                }
+                mesh.indices = (0..mesh.vertices.len() as u32 / 3 * 3).collect();
+                if !mesh.vertices.is_empty() {
+                    shapes.push(Shape::mesh(mesh));
+                }
+            }
         }
     }
     p.extend(shapes);
+}
+
+/// Textures of the images drawn by the CPU canvas, by their pixels (each entry keeps its pixels
+/// alive, so a key is never reused while it is cached).
+#[derive(Clone, Default)]
+struct ImageTextures(std::collections::HashMap<usize, (std::sync::Arc<cadcraft_render::images::Raster>, egui::TextureHandle)>);
+
+/// The egui texture of image pixels `r`, uploaded on first use (scaled to the largest texture
+/// the backend takes).
+pub(crate) fn image_texture(ctx: &egui::Context, r: &std::sync::Arc<cadcraft_render::images::Raster>) -> Option<egui::TextureId> {
+    let key = std::sync::Arc::as_ptr(r) as usize;
+    let id = egui::Id::new("cad_image_textures");
+    if let Some(t) = ctx.data(|d| d.get_temp::<ImageTextures>(id)).and_then(|c| c.0.get(&key).map(|(_, t)| t.id())) {
+        return Some(t);
+    }
+    let max = ctx.input(|i| i.max_texture_side) as u32;
+    let fitted = r.fit(max.max(1));
+    let image = egui::ColorImage::from_rgba_unmultiplied([fitted.width as usize, fitted.height as usize], &fitted.rgba);
+    let handle = ctx.load_texture(format!("cad_image_{key}"), image, egui::TextureOptions::LINEAR);
+    let tex = handle.id();
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<ImageTextures>(id).0.insert(key, (std::sync::Arc::clone(r), handle)));
+    Some(tex)
 }
 
 /// Draw the selection highlight (as `look` says) through the GPU: its vertex data is
@@ -1089,7 +1129,7 @@ pub(crate) fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, pri
                     fill.indices.push(i);
                 }
             }
-            Kind::Tris | Kind::Mask => {
+            Kind::Tris | Kind::Mask | Kind::Image(_) => {
                 for outline in list.fill_outlines(prim) {
                     line(outline.iter().map(|q| xf.to_screen(*q)).collect(), &mut shapes);
                 }

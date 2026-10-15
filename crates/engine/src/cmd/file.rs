@@ -264,6 +264,13 @@ pub struct ReadFile {
     path: Option<String>,
 }
 
+/// Relative image paths in a drawing are relative to its folder: look for images there too.
+fn image_folder(path: Option<&str>) {
+    if let Some(dir) = path.and_then(|p| std::path::Path::new(p).parent()).filter(|d| !d.as_os_str().is_empty()) {
+        cadcraft_render::images::add_search_dir(dir);
+    }
+}
+
 /// Read and decode `path` (the slow half of `OPEN {path}`). Needs no session; runs anywhere.
 pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
     #[cfg(not(target_arch = "wasm32"))]
@@ -287,6 +294,7 @@ pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
 /// Add a [`read_file`] result to the session as the active drawing: the fast half of OPEN.
 pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
     let ReadFile { drawing, binary_dxf, name, path } = f;
+    image_folder(path.as_deref());
     let i = add_read(s, drawing, binary_dxf, &name, path);
     super::blocks::xref::after_open(s, i);
     Ok(opened(s, i, true))
@@ -431,6 +439,7 @@ fn commit_save(s: &mut Session, path: &str, bytes: &[u8], store: impl FnOnce(&st
     if !is_drawing_file(path) {
         return Ok(bytes.len());
     }
+    image_folder(Some(path));
     let st = s.state_mut()?;
     st.saved = st.drawing().clone();
     st.path = Some(path.to_string());

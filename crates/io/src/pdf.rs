@@ -596,13 +596,16 @@ fn color(out: &mut String, c: Rgb, op: &str) {
 /// Transparent primitives are drawn with a graphics state of their alpha (`/T<percent> gs`);
 /// the transparencies used are returned for the page's `/ExtGState` (see [`ext_gstates`]). A
 /// list without transparency writes no graphics states.
+///
+/// Raster images are painted as `/Im<k> Do` clipped to their visible triangles; the images used
+/// are returned too (`/Im<k>` is the k-th), for the page's `/XObject` resources.
 fn content_stream(
     list: &cadcraft_render::DisplayList,
     map: &Map,
     clip_pt: &Bounds2,
     layers: &[u32],
     texts: &std::collections::HashMap<u32, (usize, &cadcraft_render::PlotText)>,
-) -> (String, Vec<u8>) {
+) -> (String, Vec<u8>, Vec<std::sync::Arc<cadcraft_render::images::Raster>>) {
     let marked: std::collections::HashSet<u32> = layers.iter().copied().collect();
     let white = Rgb(255, 255, 255);
     let mut c = String::new();
@@ -631,6 +634,7 @@ fn content_stream(
     // The transparency (percent) marks are drawn with, and those used on the page.
     let mut alpha: u8 = 0;
     let mut alphas: Vec<u8> = Vec::new();
+    let mut images: Vec<std::sync::Arc<cadcraft_render::images::Raster>> = Vec::new();
     for (i, p) in list.prims.iter().enumerate() {
         let want = list.prim_layers.get(i).copied().filter(|l| marked.contains(l));
         let text = u32::try_from(i).ok().and_then(|i| texts.get(&i));
@@ -734,6 +738,45 @@ fn content_stream(
                     c.push_str("f\n");
                 }
             }
+            Kind::Image(_) => {
+                let Some(img) = list.image(p) else { continue };
+                flush(&mut c, &mut pending);
+                let k = match images.iter().position(|r| std::sync::Arc::ptr_eq(r, &img.raster)) {
+                    Some(k) => k,
+                    None => {
+                        images.push(std::sync::Arc::clone(&img.raster));
+                        images.len() - 1
+                    }
+                };
+                c.push_str("q\n");
+                // the image's own opacity (FADE) on top of the object's transparency
+                let opaque = (100.0 - f64::from(t)) / 100.0 * f64::from(img.alpha) / 255.0;
+                let ti = (100.0 - opaque * 100.0).round().clamp(0.0, f64::from(cadcraft_render::MAX_TRANSPARENCY)) as u8;
+                if ti != alpha {
+                    let _ = writeln!(c, "/T{ti} gs");
+                    if !alphas.contains(&ti) {
+                        alphas.push(ti);
+                    }
+                }
+                for t in raw.as_chunks::<3>().0 {
+                    for (i, q) in t.iter().enumerate() {
+                        pt(&mut c, map.pt(*q));
+                        c.push_str(if i == 0 { " m\n" } else { " l\n" });
+                    }
+                    c.push_str("h\n");
+                }
+                c.push_str("W n\n");
+                // the unit square (row 0 at the top) onto the image's corners
+                let p0 = map.pt(img.origin + img.ey);
+                let pu = map.pt(img.origin + img.ey + img.ex) - p0;
+                let pv = map.pt(img.origin) - p0;
+                for v in [pu.x, pu.y, pv.x, pv.y, p0.x, p0.y] {
+                    num(&mut c, v);
+                    c.push(' ');
+                }
+                let _ = writeln!(c, "cm /Im{k} Do");
+                c.push_str("Q\n");
+            }
             Kind::Point => {
                 let Some(q) = raw.first() else { continue };
                 flush(&mut c, &mut pending);
@@ -759,7 +802,26 @@ fn content_stream(
         c.push_str("EMC\n");
     }
     c.push_str("Q\n");
-    (c, alphas)
+    (c, alphas, images)
+}
+
+/// An image XObject for `r`: 8-bit RGB, with a soft mask (alpha) when any pixel isn't opaque.
+fn image_object(objs: &mut Objects, r: &cadcraft_render::images::Raster, compress: bool) -> usize {
+    let n = r.width as usize * r.height as usize;
+    let mut rgb = Vec::with_capacity(n * 3);
+    let mut alpha = Vec::with_capacity(n);
+    for px in r.rgba.as_chunks::<4>().0 {
+        rgb.extend_from_slice(&[px[0], px[1], px[2]]);
+        alpha.push(px[3]);
+    }
+    let dims = format!(" /Type /XObject /Subtype /Image /Width {} /Height {} /BitsPerComponent 8", r.width, r.height);
+    let smask = if alpha.iter().any(|a| *a < 255) {
+        let m = objs.add(stream(&alpha, compress, &format!("{dims} /ColorSpace /DeviceGray")));
+        format!(" /SMask {m} 0 R")
+    } else {
+        String::new()
+    };
+    objs.add(stream(&rgb, compress, &format!("{dims} /ColorSpace /DeviceRGB{smask}")))
 }
 
 /// The page resources' graphics states for transparencies `alphas` (percent): `/T<percent>`
@@ -898,10 +960,25 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
     let mut kids = Vec::new();
     // Page dictionaries are completed once the fonts are written: (page, its fonts, the rest).
     let mut page_dicts: Vec<(usize, Vec<usize>, String, String, String)> = Vec::new();
+    // Image XObjects shared by all pages, by the pixels they hold.
+    let mut image_ids: Vec<(std::sync::Arc<cadcraft_render::images::Raster>, usize)> = Vec::new();
     for p in pages {
         let page = objs.reserve();
         let texts = fonts.texts(&p.list);
-        let (marks, alphas) = content_stream(&p.list, &p.map, &p.clip_pt, &p.layers, &texts);
+        let (marks, alphas, images) = content_stream(&p.list, &p.map, &p.clip_pt, &p.layers, &texts);
+        let mut xobjects = String::new();
+        for (k, r) in images.iter().enumerate() {
+            let id = match image_ids.iter().find(|(q, _)| std::sync::Arc::ptr_eq(q, r)) {
+                Some((_, id)) => *id,
+                None => {
+                    let id = image_object(&mut objs, r, o.compress);
+                    image_ids.push((std::sync::Arc::clone(r), id));
+                    id
+                }
+            };
+            let _ = write!(xobjects, " /Im{k} {id} 0 R");
+        }
+        let xobjects = if xobjects.is_empty() { String::new() } else { format!(" /XObject <<{xobjects} >>") };
         let content = objs.add(stream(marks.as_bytes(), o.compress, ""));
         let mut used: Vec<usize> = texts.values().map(|(f, _)| *f).collect();
         used.sort_unstable();
@@ -932,7 +1009,7 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
         let mut mb = String::new();
         pt(&mut mb, p.media);
         let annots = if annots.is_empty() { String::new() } else { format!(" /Annots [{}]", refs(annots)) };
-        page_dicts.push((page, used, props, ext_gstates(&alphas), format!("/MediaBox [0 0 {mb}] /Contents {content} 0 R{annots}")));
+        page_dicts.push((page, used, props, ext_gstates(&alphas) + &xobjects, format!("/MediaBox [0 0 {mb}] /Contents {content} 0 R{annots}")));
         kids.push(page);
     }
     let font_ids = if fonts.is_empty() { Vec::new() } else { fonts.write(&mut objs, o.compress) };

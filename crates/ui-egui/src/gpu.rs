@@ -33,6 +33,9 @@ const INSTANCE_SIZE: usize = 28;
 const CHUNK: usize = 4_194_300;
 /// Point markers are 1.5 × 1.5 points (as on the CPU path).
 const POINT_SIZE: f32 = 1.5;
+/// Image vertex: position (2 × f32, relative to the origin) + texture coordinates (2 × f32) +
+/// opacity (f32).
+const IMAGE_VERTEX_SIZE: usize = 20;
 
 /// How the native window presents frames (`NativeOptions::wgpu_options.surface`).
 ///
@@ -108,9 +111,20 @@ pub struct MeshData {
     /// Draw-order breaks, one before each wipeout mask: the fill vertices, line vertices and
     /// quad instances drawn before it. Each group is drawn fills, lines, quads in turn.
     pub breaks: Vec<[usize; 3]>,
+    /// Raster images, each drawn between two draw-order groups (see [`MeshImage::group`]).
+    pub images: Vec<MeshImage>,
     /// The vertex buffers already created from this data (see [`MeshData::upload_now`]); the
     /// paint callback then only swaps them in.
     uploaded: Option<Uploaded>,
+}
+
+/// A raster image in a [`MeshData`]: its triangles with texture coordinates, painted with its
+/// pixels after draw-order group `group` (the group ending at `breaks[group]`) and before the
+/// next, so it covers what was drawn before it and lies under what comes after.
+pub struct MeshImage {
+    pub raster: Arc<cadcraft_render::images::Raster>,
+    pub verts: Vec<u8>,
+    pub group: usize,
 }
 
 /// GPU buffers made ahead of the frame that draws them.
@@ -118,6 +132,14 @@ struct Uploaded {
     lines: Vec<Batch>,
     tris: Vec<Batch>,
     quads: Vec<Batch>,
+    images: Vec<LayerImage>,
+}
+
+/// An uploaded [`MeshImage`].
+struct LayerImage {
+    raster: Arc<cadcraft_render::images::Raster>,
+    vertices: Option<Batch>,
+    group: usize,
 }
 
 impl MeshData {
@@ -126,10 +148,19 @@ impl MeshData {
     /// background rebuild does off the UI thread (see `canvas::rebuild`).
     pub fn upload_now(&mut self, device: &wgpu::Device) {
         let usage = wgpu::BufferUsages::VERTEX;
+        let images = std::mem::take(&mut self.images)
+            .into_iter()
+            .map(|im| LayerImage {
+                vertices: upload(device, "cad_image", &im.verts, IMAGE_VERTEX_SIZE, usage).into_iter().next(),
+                raster: im.raster,
+                group: im.group,
+            })
+            .collect();
         self.uploaded = Some(Uploaded {
             lines: upload(device, "cad_lines", &self.lines, VERTEX_SIZE, usage),
             tris: upload(device, "cad_fills", &self.tris, VERTEX_SIZE, usage),
             quads: upload(device, "cad_quads", &self.quads, INSTANCE_SIZE, usage),
+            images,
         });
         self.lines = Vec::new();
         self.tris = Vec::new();
@@ -188,6 +219,7 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
         tris: Vec::with_capacity(list.tris.len().saturating_mul(VERTEX_SIZE)),
         quads: Vec::new(),
         breaks: Vec::new(),
+        images: Vec::new(),
         uploaded: None,
     };
     for prim in &list.prims {
@@ -234,6 +266,21 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
             }
             // Drawn on the CPU each frame (clipped to the view).
             Kind::Infinite { .. } => {}
+            Kind::Image(_) => {
+                let Some(img) = list.image(prim) else { continue };
+                // drawn between the groups before and after it
+                m.breaks.push([m.tri_vertices(), m.line_vertices(), m.quad_instances()]);
+                let opacity = f32::from(img.alpha) / 255.0 * f32::from(prim.alpha()) / 255.0;
+                let mut verts = Vec::with_capacity(pts.len() * IMAGE_VERTEX_SIZE);
+                for q in pts.as_chunks::<3>().0.iter().flatten() {
+                    let (u, v) = img.uv(*q);
+                    let [x, y] = rel(*q, origin);
+                    for f in [x, y, u as f32, v as f32, opacity] {
+                        verts.extend_from_slice(&f.to_le_bytes());
+                    }
+                }
+                m.images.push(MeshImage { raster: img.raster_on(bg), verts, group: m.breaks.len() - 1 });
+            }
         }
     }
     m
@@ -271,7 +318,7 @@ pub fn build_highlight_mesh(list: &DisplayList, prims: &[usize], origin: Vec2, c
                     }
                 }
             }
-            Kind::Tris | Kind::Mask => {
+            Kind::Tris | Kind::Mask | Kind::Image(_) => {
                 for line in list.fill_outlines(prim) {
                     let mut run = 0.0;
                     for s in line.windows(2) {
@@ -379,12 +426,20 @@ struct Layer {
     tris: Vec<Batch>,
     quads: Vec<Batch>,
     breaks: Vec<[usize; 3]>,
+    images: Vec<LayerImage>,
 }
 
 struct Resources {
     line_pipeline: wgpu::RenderPipeline,
     tri_pipeline: wgpu::RenderPipeline,
     quad_pipeline: wgpu::RenderPipeline,
+    /// Raster images: textured triangles (group 1 holds the texture and sampler).
+    image_pipeline: wgpu::RenderPipeline,
+    image_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    /// Image textures by their pixels (each keeps its pixels alive, so a key isn't reused while
+    /// it is here); dropped when no layer draws them.
+    textures: std::collections::HashMap<usize, (Arc<cadcraft_render::images::Raster>, wgpu::BindGroup)>,
     /// With a stencil buffer: the pipelines of [`Stencil::Mask`] and [`Stencil::Inside`].
     clipped: Option<ClipPipelines>,
     linear_out: bool,
@@ -397,6 +452,7 @@ struct ClipPipelines {
     line: wgpu::RenderPipeline,
     tri: wgpu::RenderPipeline,
     quad: wgpu::RenderPipeline,
+    image: wgpu::RenderPipeline,
 }
 
 const UNIFORM_SIZE: u64 = 80;
@@ -478,6 +534,32 @@ fn vs_quad(
     return o;
 }
 
+@group(1) @binding(0) var image_tex: texture_2d<f32>;
+@group(1) @binding(1) var image_sampler: sampler;
+
+struct IOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) alpha: f32,
+};
+
+@vertex
+fn vs_image(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) alpha: f32) -> IOut {
+    var o: IOut;
+    o.pos = px_to_clip(to_px(pos));
+    o.uv = uv;
+    o.alpha = alpha;
+    return o;
+}
+
+// The texture holds sRGB values with straight alpha: premultiplied here like vertex colours.
+@fragment
+fn fs_image(v: IOut) -> @location(0) vec4<f32> {
+    let c = textureSample(image_tex, image_sampler, v.uv);
+    let a = c.a * v.alpha;
+    return out_color(vec4<f32>(c.rgb * a, a));
+}
+
 @fragment
 fn fs_main(v: VOut) -> @location(0) vec4<f32> {
     if (view.c.y > 0.0) {
@@ -493,6 +575,11 @@ fn fs_main(v: VOut) -> @location(0) vec4<f32> {
 fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     const ATTRS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Unorm8x4];
     wgpu::VertexBufferLayout { array_stride: VERTEX_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &ATTRS }
+}
+
+fn image_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+    const ATTRS: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32];
+    wgpu::VertexBufferLayout { array_stride: IMAGE_VERTEX_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &ATTRS }
 }
 
 fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -528,7 +615,7 @@ impl Resources {
                 layout: &bgl,
                 entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
             });
-            Layer { uniform, bind_group, key: None, lines: Vec::new(), tris: Vec::new(), quads: Vec::new(), breaks: Vec::new() }
+            Layer { uniform, bind_group, key: None, lines: Vec::new(), tris: Vec::new(), quads: Vec::new(), breaks: Vec::new(), images: Vec::new() }
         };
         // A render pass with a stencil buffer needs every pipeline to name its format; only the
         // clipped-viewport pipelines read or write it.
@@ -554,10 +641,37 @@ impl Resources {
                 wgpu::DepthStencilState { format, depth_write_enabled: None, depth_compare: None, stencil, bias: wgpu::DepthBiasState::default() }
             })
         };
+        let image_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("cad_image"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let textured = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cad_image"),
+            bind_group_layouts: &[Some(&bgl), Some(&image_layout)],
+            immediate_size: 0,
+        });
         let pipeline = |label: &str, vs: &str, topology: wgpu::PrimitiveTopology, buffer: wgpu::VertexBufferLayout<'static>, s: Stencil| {
+            let image = vs == "vs_image";
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&layout),
+                layout: Some(if image { &textured } else { &layout }),
                 vertex: wgpu::VertexState {
                     module: &module,
                     entry_point: Some(vs),
@@ -569,7 +683,7 @@ impl Resources {
                 multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(if image { "fs_image" } else { "fs_main" }),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: target.format,
                         blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
@@ -586,14 +700,70 @@ impl Resources {
             line_pipeline: pipeline("cad_lines", "vs_line", LineList, vertex_layout(), Stencil::Off),
             tri_pipeline: pipeline("cad_fills", "vs_line", TriangleList, vertex_layout(), Stencil::Off),
             quad_pipeline: pipeline("cad_quads", "vs_quad", TriangleList, instance_layout(), Stencil::Off),
+            image_pipeline: pipeline("cad_images", "vs_image", TriangleList, image_vertex_layout(), Stencil::Off),
             clipped: target.stencil.map(|_| ClipPipelines {
                 mask: pipeline("cad_clip_mask", "vs_line", TriangleList, vertex_layout(), Stencil::Mask),
                 line: pipeline("cad_clip_lines", "vs_line", LineList, vertex_layout(), Stencil::Inside),
                 tri: pipeline("cad_clip_fills", "vs_line", TriangleList, vertex_layout(), Stencil::Inside),
                 quad: pipeline("cad_clip_quads", "vs_quad", TriangleList, instance_layout(), Stencil::Inside),
+                image: pipeline("cad_clip_images", "vs_image", TriangleList, image_vertex_layout(), Stencil::Inside),
             }),
+            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("cad_image"),
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
+            image_layout,
+            textures: std::collections::HashMap::new(),
             linear_out: target.format.is_srgb(),
             layers: (0..=LAYER_MASK).map(|_| layer()).collect(),
+        }
+    }
+}
+
+impl Resources {
+    /// Create the textures the layers' images need and drop those no layer draws any more.
+    fn sync_textures(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let used: std::collections::HashMap<usize, Arc<cadcraft_render::images::Raster>> =
+            self.layers.iter().flat_map(|l| &l.images).map(|im| (Arc::as_ptr(&im.raster) as usize, Arc::clone(&im.raster))).collect();
+        self.textures.retain(|k, _| used.contains_key(k));
+        let max = device.limits().max_texture_dimension_2d;
+        for (key, raster) in used {
+            if self.textures.contains_key(&key) {
+                continue;
+            }
+            let fitted = raster.fit(max);
+            let size = wgpu::Extent3d { width: fitted.width, height: fitted.height, depth_or_array_layers: 1 };
+            let texture = wgpu::util::DeviceExt::create_texture_with_data(
+                device,
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some("cad_image"),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    // sRGB values read as they are (as vertex colours); `out_color` linearises
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                &fitted.rgba,
+            );
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("cad_image"),
+                layout: &self.image_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                ],
+            });
+            self.textures.insert(key, (raster, group));
         }
     }
 }
@@ -699,9 +869,9 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         _encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let Some(res) = resources.get_mut::<Resources>() else { return Vec::new() };
-        let linear_out = res.linear_out;
-        let Some(res) = res.layers.get_mut(self.layer) else { return Vec::new() };
+        let Some(shared) = resources.get_mut::<Resources>() else { return Vec::new() };
+        let linear_out = shared.linear_out;
+        let Some(res) = shared.layers.get_mut(self.layer) else { return Vec::new() };
         if res.key != Some(self.key) {
             let pending = self.slot.lock().ok().and_then(|mut s| s.take());
             if let Some(mut m) = pending {
@@ -709,12 +879,14 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
                     m.upload_now(device);
                 }
                 if let Some(u) = m.uploaded {
-                    (res.lines, res.tris, res.quads) = (u.lines, u.tris, u.quads);
+                    (res.lines, res.tris, res.quads, res.images) = (u.lines, u.tris, u.quads, u.images);
                 }
                 res.breaks = m.breaks;
                 res.key = Some(self.key);
+                shared.sync_textures(device, queue);
             }
         }
+        let Some(res) = shared.layers.get_mut(self.layer) else { return Vec::new() };
         let ppp = screen.pixels_per_point;
         let [w, h] = screen.size_in_pixels;
         let a = [self.offset[0], self.offset[1], self.scale * ppp, if linear_out { 1.0 } else { 0.0 }];
@@ -741,11 +913,11 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         // Whole-screen device pixels; egui already set the scissor to the canvas clip rect.
         pass.set_viewport(0.0, 0.0, sw as f32, sh as f32, 0.0, 1.0);
         pass.set_bind_group(0, &res.bind_group, &[]);
-        let (tri, line, quad) = match (self.stencil, &shared.clipped) {
-            (Stencil::Off, _) => (&shared.tri_pipeline, &shared.line_pipeline, &shared.quad_pipeline),
+        let (tri, line, quad, image) = match (self.stencil, &shared.clipped) {
+            (Stencil::Off, _) => (&shared.tri_pipeline, &shared.line_pipeline, &shared.quad_pipeline, &shared.image_pipeline),
             // The outline is all triangles.
-            (Stencil::Mask, Some(c)) => (&c.mask, &c.mask, &c.mask),
-            (Stencil::Inside, Some(c)) => (&c.tri, &c.line, &c.quad),
+            (Stencil::Mask, Some(c)) => (&c.mask, &c.mask, &c.mask, &c.mask),
+            (Stencil::Inside, Some(c)) => (&c.tri, &c.line, &c.quad, &c.image),
             // No stencil buffer: the canvas never asks for these.
             (_, None) => return,
         };
@@ -757,7 +929,7 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         let total = |bs: &[Batch]| bs.iter().map(|b| b.count as usize).sum::<usize>();
         let all = [total(&res.tris), if mask { 0 } else { total(&res.lines) }, if mask { 0 } else { total(&res.quads) }];
         let mut from = [0usize; 3];
-        for to in res.breaks.iter().copied().chain(std::iter::once(all)) {
+        for (group, to) in res.breaks.iter().copied().chain(std::iter::once(all)).enumerate() {
             for (i, (pipeline, batches)) in [(tri, &res.tris), (line, &res.lines), (quad, &res.quads)].into_iter().enumerate() {
                 let parts = batch_ranges(batches.iter().map(|b| b.count), from[i]..to[i]);
                 if parts.is_empty() {
@@ -770,6 +942,14 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
                     // Quads are instanced: six vertices per instance.
                     if i == 2 { pass.draw(0..6, r) } else { pass.draw(r, 0..1) }
                 }
+            }
+            // the images between this group and the next (never into the stencil)
+            for im in res.images.iter().filter(|im| im.group == group && !mask) {
+                let (Some(b), Some((_, tex))) = (&im.vertices, shared.textures.get(&(Arc::as_ptr(&im.raster) as usize))) else { continue };
+                pass.set_pipeline(image);
+                pass.set_bind_group(1, tex, &[]);
+                pass.set_vertex_buffer(0, b.buffer.slice(..));
+                pass.draw(0..b.count, 0..1);
             }
             from = to;
         }
@@ -956,6 +1136,35 @@ mod tests {
         assert!((o.x - 123_456.7).abs() <= 32.0 && (o.y - 654_321.2).abs() <= 32.0);
         assert_eq!(choose_origin(&Bounds2::EMPTY, Vec2::new(1.0, 1.0), 1.0), Vec2::ZERO);
         assert_eq!(choose_origin(&b, Vec2::new(f64::NAN, 0.0), 1.0), b.center());
+    }
+
+    #[test]
+    fn images_draw_between_draw_order_groups() {
+        let mut l = list();
+        let raster = Arc::new(cadcraft_render::images::Raster::new(1, 1, vec![9, 9, 9, 255]).unwrap());
+        // the fill becomes an image over the unit square (top-left corner at 0,1)
+        l.images.push(cadcraft_render::ImageRef {
+            path: "x".into(),
+            raster,
+            origin: Vec2::new(0.0, 1.0),
+            ex: Vec2::new(1.0, 0.0),
+            ey: Vec2::new(0.0, -1.0),
+            alpha: 255,
+            dark_stencil: false,
+        });
+        if let Some(p) = l.prims.get_mut(1) {
+            p.kind = Kind::Image(0);
+        }
+        let m = build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false);
+        // after the polyline's two segments, before the point marker
+        assert_eq!(m.breaks, vec![[0, 4, 0]]);
+        assert_eq!(m.images.len(), 1);
+        assert_eq!(m.images[0].group, 0);
+        assert_eq!(m.images[0].verts.len(), 3 * IMAGE_VERTEX_SIZE);
+        // the vertex at (1, 0) is the image's bottom-right corner: u 1, v 1
+        let f = |i: usize| f32::from_le_bytes(m.images[0].verts[i * 4..i * 4 + 4].try_into().unwrap());
+        assert_eq!([f(5), f(6), f(7), f(8), f(9)], [1.0, 0.0, 1.0, 1.0, 1.0]);
+        assert_eq!(m.tri_vertices(), 0, "no plain fill");
     }
 
     #[test]

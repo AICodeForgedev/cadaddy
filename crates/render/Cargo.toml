@@ -14,6 +14,8 @@ cadcraft-color = { workspace = true }
 cadcraft-doc = { workspace = true }
 cadcraft-fonts = { workspace = true }
 tiny-skia = { workspace = true }
+# Raster images (IMAGE entities): PNG and JPEG decoding (MIT/Apache-2.0).
+image = { workspace = true }
 lyon_tessellation = { workspace = true }
 
 # Display lists of large drawings are built on all cores (not on the web, which has no threads).
