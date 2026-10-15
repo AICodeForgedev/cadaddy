@@ -301,7 +301,18 @@ fn ttf_style(base: &str) -> Option<(String, String)> {
     let fam = fam.trim_end_matches("mt").trim_end_matches("psmt").to_string();
     let (label, file) = match fam.as_str() {
         "arialblack" => ("Arial Black", "ariblk.ttf".to_string()),
-        "arial" | "helvetica" | "arialmt" | "arialnarrow" => (
+        "arialnarrow" => (
+            "Arial Narrow",
+            match (bold, italic) {
+                (true, true) => "arialnbi.ttf",
+                (true, false) => "arialnb.ttf",
+                (false, true) => "arialni.ttf",
+                _ => "arialn.ttf",
+            }
+            .to_string(),
+        ),
+        // Swiss 721 is Bitstream's Helvetica, with Arial's widths; Arial is on every system
+        "arial" | "helvetica" | "arialmt" | "swiss721bt" | "swiss721" | "swis721bt" => (
             "Arial",
             match (bold, italic) {
                 (true, true) => "arialbi.ttf",
@@ -311,6 +322,17 @@ fn ttf_style(base: &str) -> Option<(String, String)> {
             }
             .to_string(),
         ),
+        "twcen" => (
+            "Tw Cen MT",
+            match (bold, italic) {
+                (true, true) => "tcbi____.ttf",
+                (true, false) => "tcb_____.ttf",
+                (false, true) => "tcmi____.ttf",
+                _ => "tcm_____.ttf",
+            }
+            .to_string(),
+        ),
+        "bradleyhanditc" => ("Bradley Hand ITC", "bradhitc.ttf".to_string()),
         "centurygothic" => ("Century Gothic", if bold { "GOTHICB.TTF" } else { "GOTHIC.TTF" }.to_string()),
         "timesnewroman" | "times" | "timesroman" => ("Times New Roman", if bold { "timesbd.ttf" } else { "times.ttf" }.to_string()),
         "calibri" => ("Calibri", if bold { "calibrib.ttf" } else { "calibri.ttf" }.to_string()),
@@ -2134,6 +2156,12 @@ mod tests {
         assert!(ents.iter().any(|e| matches!(&e.kind, EntityKind::LwPolyline(p) if p.closed && p.vertices.len() == 4)));
         assert!(ents.iter().any(|e| matches!(&e.kind, EntityKind::Text(t) if t.value == "PANEL A" && t.style == "PDF-Arial")));
         assert!(r.drawing.text_styles.iter().any(|st| st.name == "PDF-Arial" && st.font == "arial.ttf"));
+        // condensed and other families keep their own files, so the text keeps its width
+        assert_eq!(ttf_style("KLEEBE+ArialNarrow,Bold"), Some(("PDF-ArialNarrow-Bold".into(), "arialnb.ttf".into())));
+        assert_eq!(ttf_style("ArialNarrow"), Some(("PDF-ArialNarrow".into(), "arialn.ttf".into())));
+        assert_eq!(ttf_style("Swiss721BT-Bold"), Some(("PDF-Arial-Bold".into(), "arialbd.ttf".into())));
+        assert_eq!(ttf_style("TKHEYN+TwCenMT"), Some(("PDF-TwCenMT".into(), "tcm_____.ttf".into())));
+        assert_eq!(ttf_style("BradleyHandITC"), Some(("PDF-BradleyHandITC".into(), "bradhitc.ttf".into())));
         assert!(!ents.iter().any(|e| matches!(e.kind, EntityKind::Hatch(_))), "the white mask is no solid fill");
         assert!(ents.iter().any(|e| matches!(&e.kind, EntityKind::Wipeout(w) if w.boundary.len() == 4)), "it is a wipeout");
         // black lines on a pen layer shown in colour 7
