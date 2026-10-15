@@ -782,6 +782,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadcraft-walk"
+version = "0.7.0"
+dependencies = [
+ "cadcraft-doc",
+ "cadcraft-io",
+ "cadcraft-walk3d",
+ "eframe",
+ "egui",
+ "egui-wgpu",
+ "image",
+ "naga",
+ "pollster 0.4.0",
+ "rfd",
+]
+
+[[package]]
+name = "cadcraft-walk3d"
+version = "0.7.0"
+dependencies = [
+ "cadcraft-color",
+ "cadcraft-doc",
+ "cadcraft-geom",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cadcraft-web"
 version = "0.7.0"
 dependencies = [

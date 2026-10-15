@@ -1,0 +1,17 @@
+[package]
+name = "cadcraft-walk3d"
+description = "CADaddy walk mode: a 3D model derived from the 2D drawing (levels + layer rules), walk camera, picking"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version = "1.95"
+
+[lints]
+workspace = true
+
+[dependencies]
+cadcraft-geom = { workspace = true }
+cadcraft-color = { workspace = true }
+cadcraft-doc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
