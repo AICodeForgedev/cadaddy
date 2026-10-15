@@ -48,8 +48,22 @@ fn args() -> Result<Args, String> {
     Ok(Args { file: file.ok_or(usage)?, shot: shot.ok_or(usage)?, cam, size, level, cut })
 }
 
+/// The drawing readers (what CADaddy installs at startup), so floor sheets can be read.
+fn install_io() {
+    cadcraft_engine::cmd::file::set_io(cadcraft_engine::cmd::file::IoHooks {
+        read: |b, name| cadcraft_io::read(b, name).map_err(|e| e.to_string()),
+        write: |d, name| cadcraft_io::write(d, name).map_err(|e| e.to_string()),
+        plot: None,
+        read_pdf: None,
+    });
+}
+
 fn run(a: &Args) -> Result<(), String> {
+    install_io();
     let b = Building::load_file(&a.file)?;
+    for p in &b.problems {
+        eprintln!("cadaddy-walk: empty floor: {p}");
+    }
     let mut w = Walker::spawn(&b.scene, a.level);
     if let Some([x, y, z, yaw, pitch]) = a.cam {
         w.eye = V3 { x, y, z };

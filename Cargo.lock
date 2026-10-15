@@ -786,6 +786,8 @@ dependencies = [
 name = "cadcraft-walk"
 version = "0.7.0"
 dependencies = [
+ "cadcraft-engine",
+ "cadcraft-io",
  "cadcraft-ui-egui",
  "cadcraft-walk3d",
  "egui-wgpu",

@@ -16,6 +16,8 @@ path = "src/main.rs"
 
 [dependencies]
 cadcraft-ui-egui = { workspace = true }
+cadcraft-engine = { workspace = true }
+cadcraft-io = { workspace = true }
 cadcraft-walk3d = { path = "../../crates/walk3d" }
 egui-wgpu = { workspace = true }
 image = { workspace = true }

@@ -88,6 +88,8 @@ const FLOOR: Rgb = Rgb(150, 146, 140);
 const CEILING: Rgb = Rgb(236, 234, 228);
 const EDGE: Rgb = Rgb(40, 40, 44);
 
+/// Floor-to-floor walls end this far (feet) below the next floor (its structure).
+const FLOOR_GAP_FT: f64 = 0.1;
 /// Two parallel faces this far apart (feet) are the two sides of one wall: 3½" partitions up to
 /// thick exterior and rated walls.
 const WALL_THICK_FT: (f64, f64) = (0.2, 1.6);
@@ -132,7 +134,7 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
         (0..places.len()).find(|&i| src_of.get(i) == Some(&src) && places.get(i).is_some_and(|pl| pl.contains(p)))
     };
     let mut s = Scene::default();
-    let mut wall_pieces: Vec<(Vec<Vec2>, usize, f64, Owner)> = Vec::new();
+    let mut wall_pieces: Vec<(Vec<Vec2>, usize, f64, Owner, bool)> = Vec::new();
 
     for (src, d) in sources.iter().enumerate() {
         if !src_of.contains(&src) {
@@ -152,14 +154,16 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
             let (Some(level), Some(place)) = (rules.levels.get(lv), places.get(lv)) else { continue };
             let world: Vec<Vec2> = pts.iter().map(|p| to_world(*p, place.base, upf)).collect();
             match kind {
-                LayerKind::Wall { height_ft, skip_curves } => {
-                    let h = height_ft.filter(|h| h.is_finite()).unwrap_or(level.height_ft);
+                LayerKind::Wall { height_ft, skip_curves, paired_only } => {
+                    // Floor-to-floor walls stop just under the next floor, so their dark top caps
+                    // show when the levels above are cut away.
+                    let h = height_ft.filter(|h| h.is_finite()).unwrap_or(level.height_ft - FLOOR_GAP_FT);
                     if *skip_curves {
                         for run in straight_runs(&world) {
-                            wall_pieces.push((run, lv, h, owner(e.handle)));
+                            wall_pieces.push((run, lv, h, owner(e.handle), *paired_only));
                         }
                     } else {
-                        wall_pieces.push((world, lv, h, owner(e.handle)));
+                        wall_pieces.push((world, lv, h, owner(e.handle), *paired_only));
                     }
                 }
                 LayerKind::Run { height_ft } => {
@@ -181,7 +185,7 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
     for (i, l) in rules.levels.iter().enumerate() {
         let mut min = Vec2 { x: f64::INFINITY, y: f64::INFINITY };
         let mut max = Vec2 { x: f64::NEG_INFINITY, y: f64::NEG_INFINITY };
-        for (pts, lv, _, _) in &wall_pieces {
+        for (pts, lv, _, _, _) in &wall_pieces {
             if *lv == i {
                 for p in pts {
                     min = Vec2 { x: min.x.min(p.x), y: min.y.min(p.y) };
@@ -215,43 +219,45 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
         }
     }
 
-    // Walls: one vertical quad per segment, edges along top and bottom and at corners.
-    let mut segs = 0usize;
-    let mut faces: Vec<(Vec2, Vec2, usize, f64, f64, Owner)> = Vec::new();
-    for (pts, lv, h, owner) in &wall_pieces {
+    // Walls: the faces of each piece (corners marked for vertical edges), paired-only layers
+    // cut down to where a partner face runs alongside, then one vertical quad per face.
+    let mut faces: Vec<Face> = Vec::new();
+    for (pts, lv, h, owner, paired_only) in &wall_pieces {
         let Some(level) = s.levels.get(*lv) else { continue };
         let (z0, z1) = (level.elevation_ft, level.elevation_ft + h.max(0.0));
         let n = pts.len();
+        let corner = |at: usize| -> bool {
+            if at == 0 || at + 1 >= n {
+                return true;
+            }
+            match (pts.get(at - 1), pts.get(at), pts.get(at + 1)) {
+                (Some(p), Some(q), Some(r)) => {
+                    let (u, v) = (*q - *p, *r - *q);
+                    (u.x * v.x + u.y * v.y) / (u.len() * v.len()).max(1e-12) < 0.9
+                }
+                _ => true,
+            }
+        };
         for (i, w) in pts.windows(2).enumerate() {
             let [a, b] = w else { continue };
-            if (*b - *a).len() < MIN_WALL_FT || segs >= MAX_SEGS {
+            if (*b - *a).len() < MIN_WALL_FT || faces.len() >= MAX_SEGS {
                 continue;
             }
-            segs += 1;
-            s.walls.push(Seg { a: *a, b: *b, level: *lv });
-            faces.push((*a, *b, *lv, z0, z1, *owner));
-            quad(&mut s, [v3(a.x, a.y, z0), v3(b.x, b.y, z0), v3(b.x, b.y, z1), v3(a.x, a.y, z1)], WALL, *owner);
-            edge(&mut s, v3(a.x, a.y, z1), v3(b.x, b.y, z1));
-            edge(&mut s, v3(a.x, a.y, z0), v3(b.x, b.y, z0));
-            let corner = |at: usize| -> bool {
-                if at == 0 || at + 1 >= n {
-                    return true;
-                }
-                match (pts.get(at - 1), pts.get(at), pts.get(at + 1)) {
-                    (Some(p), Some(q), Some(r)) => {
-                        let (u, v) = (*q - *p, *r - *q);
-                        let c = (u.x * v.x + u.y * v.y) / (u.len() * v.len()).max(1e-12);
-                        c < 0.9
-                    }
-                    _ => true,
-                }
-            };
-            if corner(i) {
-                edge(&mut s, v3(a.x, a.y, z0), v3(a.x, a.y, z1));
-            }
-            if i + 2 == n {
-                edge(&mut s, v3(b.x, b.y, z0), v3(b.x, b.y, z1));
-            }
+            faces.push(Face { a: *a, b: *b, lv: *lv, z0, z1, owner: *owner, paired_only: *paired_only, edge_a: corner(i), edge_b: i + 2 == n });
+        }
+    }
+    let faces = keep_paired(faces);
+    for f in &faces {
+        let (a, b, z0, z1) = (f.a, f.b, f.z0, f.z1);
+        s.walls.push(Seg { a, b, level: f.lv });
+        quad(&mut s, [v3(a.x, a.y, z0), v3(b.x, b.y, z0), v3(b.x, b.y, z1), v3(a.x, a.y, z1)], WALL, f.owner);
+        edge(&mut s, v3(a.x, a.y, z1), v3(b.x, b.y, z1));
+        edge(&mut s, v3(a.x, a.y, z0), v3(b.x, b.y, z0));
+        if f.edge_a {
+            edge(&mut s, v3(a.x, a.y, z0), v3(a.x, a.y, z1));
+        }
+        if f.edge_b {
+            edge(&mut s, v3(b.x, b.y, z0), v3(b.x, b.y, z1));
         }
     }
     close_walls(&mut s, &faces);
@@ -327,21 +333,104 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
     s
 }
 
+/// One wall face in plan: a straight piece of a wall layer's linework on a level.
+#[derive(Clone, Copy, Debug)]
+struct Face {
+    a: Vec2,
+    b: Vec2,
+    lv: usize,
+    z0: f64,
+    z1: f64,
+    owner: Owner,
+    paired_only: bool,
+    /// Draw a vertical edge at this end (a corner or the end of a run).
+    edge_a: bool,
+    edge_b: bool,
+}
+
+/// A face parallel to `f` a wall's thickness away: its signed offset (along `f`'s left normal)
+/// and the overlap with `f`, in feet along `f` from `a`.
+fn partner(f: &Face, g: &Face) -> Option<(f64, f64, f64)> {
+    let (a, b) = (f.a, f.b);
+    let len = (b - a).len();
+    let ul = (g.b - g.a).len();
+    if len < 1e-9 || ul < 1e-9 {
+        return None;
+    }
+    let t = (b - a) * (1.0 / len);
+    let n = Vec2 { x: -t.y, y: t.x };
+    let u = g.b - g.a;
+    if (t.x * u.y - t.y * u.x).abs() / ul > PARALLEL {
+        return None;
+    }
+    let off = (g.a - a).x * n.x + (g.a - a).y * n.y;
+    let off_b = (g.b - a).x * n.x + (g.b - a).y * n.y;
+    if (off - off_b).abs() > 0.05 || off.abs() < WALL_THICK_FT.0 || off.abs() > WALL_THICK_FT.1 {
+        return None;
+    }
+    let (sc, sd) = ((g.a - a).x * t.x + (g.a - a).y * t.y, (g.b - a).x * t.x + (g.b - a).y * t.y);
+    let (lo, hi) = (sc.min(sd).max(0.0), sc.max(sd).min(len));
+    (hi - lo >= 0.25).then_some((off, lo, hi))
+}
+
+/// Faces of paired-only layers cut down to the stretches where a partner runs alongside (see
+/// [`LayerKind::Wall`]); a level with more faces than [`MAX_PAIR_FACES`] keeps them all.
+fn keep_paired(faces: Vec<Face>) -> Vec<Face> {
+    if !faces.iter().any(|f| f.paired_only) {
+        return faces;
+    }
+    let mut by_level: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+    for (i, f) in faces.iter().enumerate() {
+        by_level.entry(f.lv).or_default().push(i);
+    }
+    let mut out = Vec::with_capacity(faces.len());
+    for (i, f) in faces.iter().enumerate() {
+        let on = by_level.get(&f.lv).map(Vec::as_slice).unwrap_or(&[]);
+        if !f.paired_only || on.len() > MAX_PAIR_FACES {
+            out.push(*f);
+            continue;
+        }
+        let mut spans: Vec<(f64, f64)> =
+            on.iter().filter(|&&j| j != i).filter_map(|&j| faces.get(j)).filter_map(|g| partner(f, g)).map(|(_, lo, hi)| (lo, hi)).collect();
+        spans.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let mut merged: Vec<(f64, f64)> = Vec::new();
+        for (lo, hi) in spans {
+            match merged.last_mut() {
+                Some(m) if lo <= m.1 + 0.01 => m.1 = m.1.max(hi),
+                _ => merged.push((lo, hi)),
+            }
+        }
+        let len = (f.b - f.a).len();
+        let t = (f.b - f.a) * (1.0 / len.max(1e-12));
+        for (lo, hi) in merged {
+            let at_a = lo < 0.01;
+            let at_b = hi > len - 0.01;
+            out.push(Face {
+                a: f.a + t * lo,
+                b: f.a + t * hi,
+                edge_a: if at_a { f.edge_a } else { true },
+                edge_b: if at_b { f.edge_b } else { true },
+                ..*f
+            });
+        }
+    }
+    out
+}
+
 /// Pair each wall face with the nearest parallel face a wall's thickness away and close the strip
 /// between them: a top cap over the overlap and end caps where the overlap stops (door and window
 /// openings, wall ends). Plans draw both sides of a wall; this makes them read as one solid.
-#[allow(clippy::type_complexity)]
-fn close_walls(s: &mut Scene, faces: &[(Vec2, Vec2, usize, f64, f64, Owner)]) {
-    let mut levels: Vec<usize> = faces.iter().map(|f| f.2).collect();
-    levels.sort_unstable();
-    levels.dedup();
-    for lv in levels {
-        let on: Vec<&(Vec2, Vec2, usize, f64, f64, Owner)> = faces.iter().filter(|f| f.2 == lv).collect();
+fn close_walls(s: &mut Scene, faces: &[Face]) {
+    let mut by_level: std::collections::BTreeMap<usize, Vec<&Face>> = std::collections::BTreeMap::new();
+    for f in faces {
+        by_level.entry(f.lv).or_default().push(f);
+    }
+    for on in by_level.values() {
         if on.len() > MAX_PAIR_FACES {
             continue;
         }
-        for (i, fi) in on.iter().enumerate() {
-            let (a, b, _, z0, z1, owner) = **fi;
+        for (i, f) in on.iter().enumerate() {
+            let (a, b) = (f.a, f.b);
             let len = (b - a).len();
             if len < 1e-9 {
                 continue;
@@ -349,46 +438,28 @@ fn close_walls(s: &mut Scene, faces: &[(Vec2, Vec2, usize, f64, f64, Owner)]) {
             let t = (b - a) * (1.0 / len);
             let n = Vec2 { x: -t.y, y: t.x };
             // Nearest partner on the +n side only, so each pair closes once.
-            let mut best: Option<(f64, f64, f64)> = None;
-            for (j, fj) in on.iter().enumerate() {
-                if i == j {
-                    continue;
-                }
-                let (c, d) = (fj.0, fj.1);
-                let u = d - c;
-                let ul = u.len();
-                if ul < 1e-9 || (t.x * u.y - t.y * u.x).abs() / ul > PARALLEL {
-                    continue;
-                }
-                let off = (c - a).x * n.x + (c - a).y * n.y;
-                let off_d = (d - a).x * n.x + (d - a).y * n.y;
-                if (off - off_d).abs() > 0.05 || off < WALL_THICK_FT.0 || off > WALL_THICK_FT.1 {
-                    continue;
-                }
-                // Overlap along this face, in its own coordinate.
-                let (sc, sd) = ((c - a).x * t.x + (c - a).y * t.y, (d - a).x * t.x + (d - a).y * t.y);
-                let (lo, hi) = (sc.min(sd).max(0.0), sc.max(sd).min(len));
-                if hi - lo < 0.25 {
-                    continue;
-                }
-                if best.is_none_or(|(bo, _, _)| off < bo) {
-                    best = Some((off, lo, hi));
-                }
-            }
+            let best = on
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .filter_map(|(_, g)| partner(f, g))
+                .filter(|(off, _, _)| *off > 0.0)
+                .min_by(|x, y| x.0.total_cmp(&y.0));
             let Some((off, lo, hi)) = best else { continue };
+            let (z0, z1) = (f.z0, f.z1);
             let p = |along: f64, out: f64, z: f64| {
                 let q = a + t * along + n * out;
                 v3(q.x, q.y, z)
             };
-            quad(s, [p(lo, 0.0, z1), p(hi, 0.0, z1), p(hi, off, z1), p(lo, off, z1)], WALL_TOP, owner);
+            quad(s, [p(lo, 0.0, z1), p(hi, 0.0, z1), p(hi, off, z1), p(lo, off, z1)], WALL_TOP, f.owner);
             // End caps only where the overlap stops at this face's own end (an opening or a wall
             // end), not where a longer partner runs past a junction.
             if lo < 0.05 {
-                quad(s, [p(lo, off, z0), p(lo, 0.0, z0), p(lo, 0.0, z1), p(lo, off, z1)], WALL, owner);
+                quad(s, [p(lo, off, z0), p(lo, 0.0, z0), p(lo, 0.0, z1), p(lo, off, z1)], WALL, f.owner);
                 edge(s, p(lo, 0.0, z1), p(lo, off, z1));
             }
             if hi > len - 0.05 {
-                quad(s, [p(hi, 0.0, z0), p(hi, off, z0), p(hi, off, z1), p(hi, 0.0, z1)], WALL, owner);
+                quad(s, [p(hi, 0.0, z0), p(hi, off, z0), p(hi, off, z1), p(hi, 0.0, z1)], WALL, f.owner);
                 edge(s, p(hi, 0.0, z1), p(hi, off, z1));
             }
             s.solid_walls += 1;
@@ -593,7 +664,7 @@ mod tests {
             units_per_foot: 12.0,
             levels: vec![lvl("L3", 20.0, -100.0, "3"), lvl("L4", 30.0, 900.0, "4")],
             layers: vec![
-                LayerRule { layer: "A-WALL".into(), kind: LayerKind::Wall { height_ft: None, skip_curves: false } },
+                LayerRule { layer: "A-WALL".into(), kind: LayerKind::Wall { height_ft: None, skip_curves: false, paired_only: false } },
                 LayerRule { layer: "E-DEV*".into(), kind: LayerKind::Device },
             ],
             devices,
@@ -613,7 +684,7 @@ mod tests {
         }
         // Walls stand from the floor to the next floor.
         let zs: Vec<f32> = s.tris.iter().map(|v| v.p[2]).collect();
-        assert!(zs.contains(&20.0) && zs.contains(&30.0) && zs.contains(&40.0));
+        assert!(zs.contains(&20.0) && zs.contains(&29.9) && zs.contains(&39.9), "walls stop just under the next floor");
         assert_eq!(s.owners.len() * 3, s.tris.len());
     }
 
@@ -666,7 +737,7 @@ mod tests {
         let rules = Rules {
             units_per_foot: 12.0,
             levels: vec![lvl("L1", 0.0, "A111.dxf"), lvl("L2", 10.0, "A112.dxf"), lvl("L2 again", 20.0, "A112.dxf")],
-            layers: vec![LayerRule { layer: "A-WALL".into(), kind: LayerKind::Wall { height_ft: None, skip_curves: false } }],
+            layers: vec![LayerRule { layer: "A-WALL".into(), kind: LayerKind::Wall { height_ft: None, skip_curves: false, paired_only: false } }],
             devices: DeviceRules::default(),
         };
         assert_eq!(rules.sheets(), ["A111.dxf", "A112.dxf"]);
@@ -692,7 +763,7 @@ mod tests {
         assert!(s.solid_walls >= 1);
         let top = [WALL_TOP.0, WALL_TOP.1, WALL_TOP.2, 255];
         let cap: Vec<&Vertex> = s.tris.iter().filter(|v| v.c == top).collect();
-        assert!(!cap.is_empty() && cap.iter().all(|v| (v.p[2] - 30.0).abs() < 1e-4), "caps sit on top of the wall");
+        assert!(!cap.is_empty() && cap.iter().all(|v| (v.p[2] - 29.9).abs() < 1e-4), "caps sit on top of the wall");
         assert!(cap.iter().all(|v| (2.5 - 1e-3..=3.0 + 1e-3).contains(&f64::from(v.p[1]))), "between the faces");
         // The room's walls are 10' apart: too far to be one wall.
         assert!(s.solid_walls < 4);
@@ -710,6 +781,30 @@ mod tests {
         let mut leaf = vec![p(0.0, 0.0), p(3.0, 0.0)];
         leaf.extend(swing.iter().skip(1));
         assert_eq!(straight_runs(&leaf), vec![vec![p(0.0, 0.0), p(3.0, 0.0)]], "the leaf stays, its swing goes");
+    }
+
+    #[test]
+    fn paired_only_keeps_walls_and_drops_lone_lines() {
+        let (mut d, mut rules) = two_floor_sheet();
+        for r in &mut rules.layers {
+            if let LayerKind::Wall { paired_only, .. } = &mut r.kind {
+                *paired_only = true;
+            }
+        }
+        // A 6" partition 10' long with a 3' doorway in one face, plus a lone dimension line.
+        add(&mut d, "A-WALL", line(60.0, 30.0, 180.0, 30.0));
+        add(&mut d, "A-WALL", line(60.0, 36.0, 96.0, 36.0));
+        add(&mut d, "A-WALL", line(132.0, 36.0, 180.0, 36.0));
+        add(&mut d, "A-WALL", line(10.0, 80.0, 200.0, 80.0));
+        let s = derive(&d, &rules);
+        let lv0: Vec<&Seg> = s.walls.iter().filter(|w| w.level == 0).collect();
+        // The room's own walls are 10' apart: none of them pair, so the room's lone outline goes.
+        assert!(lv0.iter().all(|w| (w.a.y - 2.5).abs() < 1e-9 || (w.a.y - 3.0).abs() < 1e-9), "{lv0:?}");
+        // The full face is cut to the two stretches its partner runs along: the doorway opens.
+        let along_full: Vec<(f64, f64)> = lv0.iter().filter(|w| (w.a.y - 2.5).abs() < 1e-9).map(|w| (w.a.x, w.b.x)).collect();
+        assert_eq!(along_full.len(), 2, "{along_full:?}");
+        assert!(along_full.iter().any(|(a, b)| (a - 5.0).abs() < 1e-9 && (b - 8.0).abs() < 1e-9));
+        assert!(along_full.iter().any(|(a, b)| (a - 11.0).abs() < 1e-9 && (b - 15.0).abs() < 1e-9));
     }
 
     #[test]

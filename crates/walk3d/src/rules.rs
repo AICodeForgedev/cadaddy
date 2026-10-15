@@ -63,6 +63,12 @@ pub enum LayerKind {
         /// PDF-converted plans): segments that turn gently at an end, not at a square corner.
         #[serde(default)]
         skip_curves: bool,
+        /// Keep only faces with a partner face a wall's thickness away (3½" to 1'-7"), and only
+        /// where they overlap it. Plans draw both sides of every wall; dimension and leader
+        /// lines, casework edges, door leaves and the lines across door openings have no
+        /// partner, so they drop out (and doorways open up).
+        #[serde(default)]
+        paired_only: bool,
     },
     /// Block references are devices, placed by [`DeviceRules`].
     Device,
@@ -150,7 +156,7 @@ impl Rules {
                 sheet: None,
             }],
             layers: vec![
-                LayerRule { layer: "*WALL*".into(), kind: LayerKind::Wall { height_ft: None, skip_curves: false } },
+                LayerRule { layer: "*WALL*".into(), kind: LayerKind::Wall { height_ft: None, skip_curves: false, paired_only: false } },
                 LayerRule { layer: "E-DEV*".into(), kind: LayerKind::Device },
             ],
             devices: DeviceRules::default(),
@@ -247,7 +253,7 @@ mod tests {
         assert_eq!(Rules::from_json(&s), Ok(r));
         let small = r#"{"levels":[{"name":"L1","elevation_ft":0,"height_ft":10}],"layers":[{"layer":"A-WALL","kind":"wall"},{"layer":"E-PWR","kind":"run","height_ft":9}]}"#;
         let r = Rules::from_json(small).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(r.layer("a-wall"), Some(&LayerKind::Wall { height_ft: None, skip_curves: false }));
+        assert_eq!(r.layer("a-wall"), Some(&LayerKind::Wall { height_ft: None, skip_curves: false, paired_only: false }));
         assert_eq!(r.layer("E-PWR"), Some(&LayerKind::Run { height_ft: 9.0 }));
         assert_eq!(r.units_per_foot, 12.0);
     }
