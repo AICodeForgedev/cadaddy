@@ -11,12 +11,14 @@
 
 mod derive;
 mod math;
+mod measure;
 mod pick;
 mod rules;
 mod walker;
 
 pub use derive::{DeviceInfo, LevelInfo, Owner, Scene, Seg, Vertex, derive, derive_set};
 pub use math::{Mat4, V3};
+pub use measure::{Dim, DimKind, measure};
 pub use pick::{Hit, pick};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Rules};
 pub use walker::Walker;

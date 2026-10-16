@@ -10,8 +10,9 @@ pub mod gpu;
 
 use crate::CadApp;
 use cadcraft_doc::{Drawing, EntityKind, Handle};
-use cadcraft_walk3d::{Owner, Rules, Scene, Walker, derive_set, pick};
+use cadcraft_walk3d::{DeviceInfo, DimKind, Owner, Rules, Scene, Walker, derive_set, measure, pick};
 use egui_wgpu::wgpu;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -161,13 +162,85 @@ pub struct Walk {
     /// The open drawing's revision the scene was derived from; edits rebuild it.
     revision: u64,
     fps: f32,
+    /// Device types hidden in the Layers list, and whether walls show.
+    pub hidden_types: BTreeSet<String>,
+    pub walls_on: bool,
+    /// The scene as drawn and picked: the building's, less hidden device types (and walls).
+    view: Scene,
+    /// Device types with their counts and colours, most common first.
+    types: Vec<(String, usize, [u8; 3])>,
 }
 
 impl Walk {
     fn new(building: Building, revision: u64) -> Walk {
         let walker = Walker::spawn(&building.scene, building.home_level());
-        Walk { building, walker, gpu: None, texture: None, uploaded: false, picked: None, cut: false, revision, fps: 0.0 }
+        let mut w = Walk {
+            building,
+            walker,
+            gpu: None,
+            texture: None,
+            uploaded: false,
+            picked: None,
+            cut: false,
+            revision,
+            fps: 0.0,
+            hidden_types: BTreeSet::new(),
+            walls_on: true,
+            view: Scene::default(),
+            types: Vec::new(),
+        };
+        w.rebuild_view();
+        w
     }
+
+    /// Recount the device types and redo the drawn scene after a layer toggle or a rebuild.
+    fn rebuild_view(&mut self) {
+        let b = &self.building;
+        let mut colour: std::collections::HashMap<(u16, u64), [u8; 3]> = std::collections::HashMap::new();
+        for (i, tri) in b.scene.tris.as_chunks::<3>().0.iter().enumerate() {
+            if let (Some(o), [v, ..]) = (b.scene.owners.get(i), tri) {
+                colour.entry((o.src, o.handle.0)).or_insert([v.c[0], v.c[1], v.c[2]]);
+            }
+        }
+        let mut types: std::collections::BTreeMap<String, (usize, [u8; 3])> = std::collections::BTreeMap::new();
+        for d in &b.scene.devices {
+            let e = types.entry(device_type(b, d)).or_insert((0, colour.get(&(d.src, d.handle.0)).copied().unwrap_or([230, 120, 30])));
+            e.0 += 1;
+        }
+        let mut types: Vec<(String, usize, [u8; 3])> = types.into_iter().map(|(t, (n, c))| (t, n, c)).collect();
+        types.sort_by(|x, y| y.1.cmp(&x.1).then_with(|| x.0.cmp(&y.0)));
+        self.types = types;
+        self.view = visible(b, &self.hidden_types, self.walls_on);
+        self.uploaded = false;
+    }
+}
+
+/// A device's type: its type attribute (as the rules name it), else its block name.
+fn device_type(b: &Building, d: &DeviceInfo) -> String {
+    d.attrs.iter().find(|(t, _)| t.eq_ignore_ascii_case(&b.rules.devices.type_attr)).map(|(_, v)| v.clone()).unwrap_or_else(|| d.block.clone())
+}
+
+/// The building's scene without the hidden device types, and without walls (faces, caps and
+/// outlines) when they are off. Floors, ceilings and shown devices stay.
+fn visible(b: &Building, hidden: &BTreeSet<String>, walls_on: bool) -> Scene {
+    let s = &b.scene;
+    let device_type_of: std::collections::HashMap<(u16, u64), String> = s.devices.iter().map(|d| ((d.src, d.handle.0), device_type(b, d))).collect();
+    let mut v = Scene::default();
+    for (i, tri) in s.tris.as_chunks::<3>().0.iter().enumerate() {
+        let Some(o) = s.owners.get(i) else { break };
+        let keep = match device_type_of.get(&(o.src, o.handle.0)) {
+            Some(t) => !hidden.contains(t),
+            None => walls_on || o.handle == Handle(0),
+        };
+        if keep {
+            v.tris.extend_from_slice(tri);
+            v.owners.push(*o);
+        }
+    }
+    if walls_on {
+        v.edges = s.edges.clone();
+    }
+    v
 }
 
 /// Open walk mode on the active drawing.
@@ -225,7 +298,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             walk.fps = walk.fps * 0.9 + (1.0 / dt) * 0.1;
         }
         egui::Panel::right("walk_panel").default_size(270.0).show(ui, |ui| {
-            close_now = side_panel(walk, ui);
+            close_now = egui::ScrollArea::vertical().id_salt("walk_side").show(ui, |ui| side_panel(walk, ui)).inner;
         });
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             let (esc, sel) = viewport(walk, ui, rs.as_ref());
@@ -258,8 +331,8 @@ fn refresh_if_edited(app: &mut CadApp) {
             let level = walk.walker.level.min(b.scene.levels.len().saturating_sub(1));
             walk.walker.level = level;
             walk.building = b;
-            walk.uploaded = false;
             walk.picked = None;
+            walk.rebuild_view();
         }
         Err(e) => app.set_status(format!("Walk: {e}")),
     }
@@ -322,6 +395,12 @@ fn side_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
                     ui.label("Mount");
                     ui.label(if d.ceiling { format!("ceiling, {} AFF", ft_in(d.aff_ft)) } else { format!("wall, {} AFF", ft_in(d.aff_ft)) });
                     ui.end_row();
+                    let to: Vec<String> = measure(s, *i).iter().filter(|m| m.kind == DimKind::ToWall).map(|m| ft_in(m.feet)).collect();
+                    if !to.is_empty() {
+                        ui.label(if d.ceiling { "To walls" } else { "Along wall" });
+                        ui.label(to.join("  ·  "));
+                        ui.end_row();
+                    }
                     let sheet = b.sheet_of(d.src);
                     if !sheet.is_empty() {
                         ui.label("Sheet");
@@ -349,6 +428,10 @@ fn side_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
         None => {
             ui.small("Click a wall or device.");
         }
+    }
+    ui.separator();
+    if layers_panel(walk, ui) {
+        walk.rebuild_view();
     }
     ui.separator();
     ui.small("Drag: look · WASD/arrows: move · Shift: run\nQ/E: down/up (fly) · PgUp/PgDn: level\nF: fly · H: cut above · click: pick · Esc: back");
@@ -424,10 +507,11 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
         let nx = f64::from((p.x - rect.left()) / rect.width() * 2.0 - 1.0);
         let ny = f64::from(1.0 - (p.y - rect.top()) / rect.height() * 2.0);
         let dir = w.ray(nx, ny, aspect);
-        walk.picked = pick(s, w.eye, dir).map(|hit| match s.devices.iter().position(|d| d.handle == hit.owner.handle && d.src == hit.owner.src) {
-            Some(i) => Picked::Device(i),
-            None => Picked::Entity(hit.owner),
-        });
+        walk.picked =
+            pick(&walk.view, w.eye, dir).map(|hit| match s.devices.iter().position(|d| d.handle == hit.owner.handle && d.src == hit.owner.src) {
+                Some(i) => Picked::Device(i),
+                None => Picked::Entity(hit.owner),
+            });
         // The open drawing is source 0, and any sheet that is the same drawing.
         if let Some(o) = match &walk.picked {
             Some(Picked::Device(i)) => s.devices.get(*i).map(|d| Owner { src: d.src, handle: d.handle }),
@@ -443,7 +527,7 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
     let size = ((rect.width() * ppp).round().max(1.0) as u32, (rect.height() * ppp).round().max(1.0) as u32);
     let g = walk.gpu.get_or_insert_with(|| gpu::Gpu::new(&rs.device));
     if !walk.uploaded {
-        g.upload(&rs.device, s);
+        g.upload(&rs.device, &walk.view);
         walk.uploaded = true;
     }
     g.render(&rs.device, &rs.queue, size, &frame_for(s, &walk.walker, size, walk.cut));
@@ -457,6 +541,9 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
     if let Some(id) = walk.texture {
         ui.painter().image(id, rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
     }
+    if let Some(Picked::Device(i)) = &walk.picked {
+        draw_dims(ui.painter(), rect, &walk.walker.view_proj(aspect), &measure(&walk.building.scene, *i));
+    }
     ui.painter().circle_filled(rect.center(), 2.5, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200));
     if let Some(lv) = s.levels.get(walk.walker.level) {
         ui.painter().text(
@@ -469,6 +556,93 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
     }
     ctx.request_repaint();
     (esc, select)
+}
+
+/// The Layers list: walls, then each device type with its colour and count (right-click a type to
+/// show only it). True when something changed.
+fn layers_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.strong("Layers");
+        if ui.small_button("All").clicked() {
+            walk.hidden_types.clear();
+            walk.walls_on = true;
+            changed = true;
+        }
+        if ui.small_button("None").clicked() {
+            walk.hidden_types = walk.types.iter().map(|t| t.0.clone()).collect();
+            changed = true;
+        }
+    });
+    changed |= ui.checkbox(&mut walk.walls_on, "Walls").changed();
+    let mut only: Option<String> = None;
+    egui::ScrollArea::vertical().id_salt("walk_layers").max_height(240.0).show(ui, |ui| {
+        for (t, n, c) in &walk.types {
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                ui.painter().rect_filled(r, 2.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
+                let mut on = !walk.hidden_types.contains(t);
+                let resp = ui.checkbox(&mut on, format!("{t} ({n})")).on_hover_text("Right-click: show only this");
+                if resp.changed() {
+                    if on {
+                        walk.hidden_types.remove(t);
+                    } else {
+                        walk.hidden_types.insert(t.clone());
+                    }
+                    changed = true;
+                }
+                if resp.secondary_clicked() {
+                    only = Some(t.clone());
+                }
+            });
+        }
+    });
+    if let Some(t) = only {
+        walk.hidden_types = walk.types.iter().map(|x| x.0.clone()).filter(|x| *x != t).collect();
+        changed = true;
+    }
+    changed
+}
+
+/// A world point on screen (none behind the eye).
+fn project(m: &cadcraft_walk3d::Mat4, rect: egui::Rect, p: cadcraft_walk3d::V3) -> Option<egui::Pos2> {
+    let r = |i: usize| m.0.get(i).map(|row| row[0] * p.x + row[1] * p.y + row[2] * p.z + row[3]).unwrap_or(0.0);
+    let (x, y, w) = (r(0), r(1), r(3));
+    if w < 0.05 {
+        return None;
+    }
+    let (nx, ny) = (x / w, y / w);
+    Some(egui::pos2(rect.left() + ((nx + 1.0) / 2.0) as f32 * rect.width(), rect.top() + ((1.0 - ny) / 2.0) as f32 * rect.height()))
+}
+
+/// Dimension arrows over the 3D view: a yellow line with arrowheads at both ends and its length.
+fn draw_dims(painter: &egui::Painter, rect: egui::Rect, m: &cadcraft_walk3d::Mat4, dims: &[cadcraft_walk3d::Dim]) {
+    let col = egui::Color32::from_rgb(255, 214, 10);
+    let stroke = egui::Stroke::new(2.0, col);
+    let painter = painter.with_clip_rect(rect);
+    for d in dims {
+        let (Some(a), Some(b)) = (project(m, rect, d.a), project(m, rect, d.b)) else { continue };
+        let v = b - a;
+        if v.length() < 4.0 {
+            continue;
+        }
+        painter.line_segment([a, b], stroke);
+        let u = v.normalized();
+        let n = egui::vec2(-u.y, u.x);
+        for (tip, dir) in [(a, u), (b, -u)] {
+            painter.line_segment([tip, tip + dir * 10.0 + n * 5.0], stroke);
+            painter.line_segment([tip, tip + dir * 10.0 - n * 5.0], stroke);
+        }
+        let label = match d.kind {
+            DimKind::Height => format!("{} AFF", ft_in(d.feet)),
+            DimKind::ToWall => ft_in(d.feet),
+        };
+        let galley = painter.layout_no_wrap(label, egui::FontId::proportional(15.0), egui::Color32::BLACK);
+        let mid = a + v / 2.0;
+        let r = egui::Rect::from_center_size(mid, galley.size() + egui::vec2(8.0, 4.0));
+        painter.rect_filled(r, 3.0, col);
+        painter.galley(r.min + egui::vec2(4.0, 2.0), galley, egui::Color32::BLACK);
+    }
 }
 
 /// 12.5 → 12'-6"
@@ -490,6 +664,42 @@ mod tests {
         assert_eq!(ft_in(19.6458), "19'-8\"");
         assert_eq!(ft_in(-1.5), "-1'-6\"");
         assert_eq!(ft_in(f64::NAN), "?");
+    }
+
+    #[test]
+    fn layers_hide_device_types_and_walls() {
+        let rules = Rules::from_json(
+            r#"{"levels":[{"name":"L1","elevation_ft":0,"height_ft":10}],
+                "layers":[{"layer":"A-WALL","kind":"wall"},{"layer":"E-DEVC","kind":"device"}]}"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let mut d = Drawing::default();
+        let mut push = |h: u64, layer: &str, kind: EntityKind| {
+            let mut e = cadcraft_doc::Entity::new(Handle(h), kind);
+            e.common.layer = layer.into();
+            d.model.push(e);
+        };
+        let v = |x: f64, y: f64| cadcraft_geom::Vec3 { x, y, z: 0.0 };
+        push(1, "A-WALL", EntityKind::Line(cadcraft_doc::Line { a: v(0.0, 0.0), b: v(240.0, 0.0) }));
+        // A second wall gives the level an area, so it gets a floor.
+        push(5, "A-WALL", EntityKind::Line(cadcraft_doc::Line { a: v(240.0, 0.0), b: v(240.0, 120.0) }));
+        for (h, t, x) in [(2u64, "light", 60.0), (3, "receptacle", 120.0), (4, "light", 180.0)] {
+            let attr = serde_json::json!({"tag": "TYPE", "text": {"insert": v(x, 60.0), "height": 6.0, "value": t}});
+            let ins = serde_json::json!({"block": "E-DEV", "insert": v(x, 60.0), "attribs": [attr]});
+            push(h, "E-DEVC", EntityKind::Insert(serde_json::from_value(ins).unwrap_or_else(|e| panic!("{e}"))));
+        }
+        let scene = derive_set(&[&d], &rules);
+        let b = Building { drawings: vec![Arc::new(d)], rules, rules_from: String::new(), scene, problems: Vec::new() };
+        let tris_of = |s: &Scene, h: u64| s.owners.iter().filter(|o| o.handle == Handle(h)).count();
+        let all = visible(&b, &BTreeSet::new(), true);
+        assert!(tris_of(&all, 1) > 0 && tris_of(&all, 2) > 0 && tris_of(&all, 3) > 0);
+        let no_lights = visible(&b, &BTreeSet::from(["light".to_string()]), true);
+        assert_eq!((tris_of(&no_lights, 2), tris_of(&no_lights, 4)), (0, 0));
+        assert_eq!(tris_of(&no_lights, 3), tris_of(&all, 3));
+        let no_walls = visible(&b, &BTreeSet::new(), false);
+        assert_eq!((tris_of(&no_walls, 1), tris_of(&no_walls, 5)), (0, 0));
+        assert!(no_walls.edges.is_empty() && tris_of(&no_walls, 0) > 0, "floors stay");
+        assert_eq!(no_walls.tris.len(), no_walls.owners.len() * 3);
     }
 
     /// A building file in the drawing's folder that lists it as a sheet is found, and the open
