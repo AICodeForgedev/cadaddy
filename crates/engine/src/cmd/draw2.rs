@@ -1692,7 +1692,7 @@ impl Interactive for RectM2 {
         }
         match self.first {
             None => Prompt::new("Specify first corner point", Accept::POINT).kw(&["Chamfer", "Elevation", "Fillet", "Thickness", "Width"]),
-            Some(p) => Prompt::new("Specify other corner point", Accept::POINT).kw(&["Area", "Dimensions", "Rotation"]).base(p),
+            Some(p) => Prompt::new("Specify other corner point", Accept::POINT).kw(&["Area", "Dimensions", "Rotation"]).corner(p),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
