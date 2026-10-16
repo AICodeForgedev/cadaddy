@@ -18,6 +18,31 @@ pub struct Rules {
     /// that level's base point places it.
     #[serde(default)]
     pub device_sheets: Vec<String>,
+    /// Doors, windows and cased openings found in the walls (see [`Openings`]).
+    #[serde(default)]
+    pub openings: Openings,
+}
+
+/// How the gaps between two pieces of one wall are filled: a door (a swing arc at a jamb) gets a
+/// header above its head and its leaf standing open; a gap in an outside wall is a window (sill and
+/// head); any other gap up to 8' is a cased opening with a header. Heights are above the floor.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Openings {
+    pub enabled: bool,
+    pub door_head_ft: f64,
+    pub window_sill_ft: f64,
+    pub window_head_ft: f64,
+    /// Gaps narrower than this (feet) are not openings.
+    pub min_ft: f64,
+    /// Nor wider than this.
+    pub max_ft: f64,
+}
+
+impl Default for Openings {
+    fn default() -> Self {
+        Openings { enabled: true, door_head_ft: 7.0, window_sill_ft: 2.0, window_head_ft: 7.0, min_ft: 1.5, max_ft: 16.0 }
+    }
 }
 
 /// One floor: the part of the sheet its plan occupies and where that plan sits in the building.
@@ -166,6 +191,7 @@ impl Rules {
             ],
             devices: DeviceRules::default(),
             device_sheets: Vec::new(),
+            openings: Openings::default(),
         }
     }
 

@@ -12,6 +12,7 @@
 mod derive;
 mod math;
 mod measure;
+mod openings;
 mod pick;
 mod rules;
 mod walker;
@@ -20,5 +21,5 @@ pub use derive::{DeviceInfo, LevelInfo, Owner, Scene, Seg, Vertex, derive, deriv
 pub use math::{Mat4, V3};
 pub use measure::{Dim, DimKind, measure};
 pub use pick::{Hit, pick};
-pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Rules};
+pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules};
 pub use walker::Walker;

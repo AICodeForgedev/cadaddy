@@ -82,12 +82,15 @@ fn run(a: &Args) -> Result<(), String> {
     img.save(&a.shot).map_err(|e| format!("{}: {e}", a.shot.display()))?;
     let s = &b.scene;
     println!(
-        "{}: rules {}; {} levels, {} wall faces ({} closed into solid walls), {} devices, {} unplaced -> {}",
+        "{}: rules {}; {} levels, {} wall faces ({} closed into solid walls), {} doors, {} windows, {} cased openings, {} devices, {} unplaced -> {}",
         a.file.display(),
         b.rules_from,
         s.levels.len(),
         s.walls.len(),
         s.solid_walls,
+        s.doors,
+        s.windows,
+        s.cased,
         s.devices.len(),
         s.unplaced,
         a.shot.display()

@@ -111,7 +111,7 @@ fn nearest<'a>(walls: &[&'a Seg], p: Vec2) -> Option<(&'a Seg, f64)> {
 /// Distance from `p` along unit `dir` to the first wall it meets (walls running along the ray are
 /// not met; one ending within [`BUTT_FT`] of the ray, as a wall butting into the measured face
 /// does, is), within [`REACH_FT`].
-fn ray(walls: &[&Seg], p: Vec2, dir: Vec2) -> Option<f64> {
+pub(crate) fn ray(walls: &[&Seg], p: Vec2, dir: Vec2) -> Option<f64> {
     let mut best: Option<f64> = None;
     for s in walls {
         let e = s.b - s.a;

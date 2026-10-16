@@ -80,10 +80,14 @@ pub struct Scene {
     pub unplaced: usize,
     /// Wall face pairs closed into solid walls (top and end caps).
     pub solid_walls: usize,
+    /// Openings filled ([`crate::Openings`]): doors, windows and cased openings.
+    pub doors: usize,
+    pub windows: usize,
+    pub cased: usize,
 }
 
-const WALL: Rgb = Rgb(222, 218, 210);
-const WALL_TOP: Rgb = Rgb(118, 112, 104);
+pub(crate) const WALL: Rgb = Rgb(222, 218, 210);
+pub(crate) const WALL_TOP: Rgb = Rgb(118, 112, 104);
 const FLOOR: Rgb = Rgb(150, 146, 140);
 const CEILING: Rgb = Rgb(236, 234, 228);
 const EDGE: Rgb = Rgb(40, 40, 44);
@@ -135,6 +139,8 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
     };
     let mut s = Scene::default();
     let mut wall_pieces: Vec<(Vec<Vec2>, usize, f64, Owner, bool)> = Vec::new();
+    // Curved runs the wall layers dropped: door swings among them (see [`crate::openings`]).
+    let mut curves: Vec<(Vec<Vec2>, usize, Owner)> = Vec::new();
 
     for (src, d) in sources.iter().enumerate() {
         if !src_of.contains(&src) {
@@ -159,9 +165,11 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
                     // show when the levels above are cut away.
                     let h = height_ft.filter(|h| h.is_finite()).unwrap_or(level.height_ft - FLOOR_GAP_FT);
                     if *skip_curves {
-                        for run in straight_runs(&world) {
+                        let (runs, arcs) = split_runs(&world);
+                        for run in runs {
                             wall_pieces.push((run, lv, h, owner(e.handle), *paired_only));
                         }
+                        curves.extend(arcs.into_iter().map(|c| (c, lv, owner(e.handle))));
                     } else {
                         wall_pieces.push((world, lv, h, owner(e.handle), *paired_only));
                     }
@@ -247,6 +255,11 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
         }
     }
     let faces = keep_paired(faces);
+    // Openings are found on the paired walls before they are built: lines of a window unit inside a
+    // window opening are its frame, not wall.
+    let face_segs: Vec<Seg> = faces.iter().map(|f| Seg { a: f.a, b: f.b, level: f.lv }).collect();
+    let plans = crate::openings::plan(&face_segs, &pair_pieces(&faces), &curves, &rules.openings);
+    let faces: Vec<Face> = faces.into_iter().filter(|f| !crate::openings::in_window(&plans, f.lv, f.a, f.b)).collect();
     for f in &faces {
         let (a, b, z0, z1) = (f.a, f.b, f.z0, f.z1);
         s.walls.push(Seg { a, b, level: f.lv });
@@ -261,6 +274,7 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
         }
     }
     close_walls(&mut s, &faces);
+    crate::openings::build(&mut s, &plans, &rules.openings);
 
     // Devices: from the levels' own drawings, and from device sheets (any level, by attribute).
     let device_srcs = rules.device_sources();
@@ -470,9 +484,62 @@ fn close_walls(s: &mut Scene, faces: &[Face]) {
     }
 }
 
+/// The solid stretches of wall: each face with its nearest partner on its +n side, over their
+/// overlap (as [`close_walls`] closes them).
+fn pair_pieces(faces: &[Face]) -> Vec<Piece> {
+    let mut by_level: std::collections::BTreeMap<usize, Vec<&Face>> = std::collections::BTreeMap::new();
+    for f in faces {
+        by_level.entry(f.lv).or_default().push(f);
+    }
+    let mut pieces = Vec::new();
+    for on in by_level.values() {
+        if on.len() > MAX_PAIR_FACES {
+            continue;
+        }
+        for (i, f) in on.iter().enumerate() {
+            let len = (f.b - f.a).len();
+            if len < 1e-9 {
+                continue;
+            }
+            let t = (f.b - f.a) * (1.0 / len);
+            let n = Vec2 { x: -t.y, y: t.x };
+            let best = on
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .filter_map(|(_, g)| partner(f, g))
+                .filter(|(off, _, _)| *off > 0.0)
+                .min_by(|x, y| x.0.total_cmp(&y.0));
+            if let Some((off, lo, hi)) = best {
+                pieces.push(Piece { p0: f.a + t * lo, p1: f.a + t * hi, n, off, lv: f.lv, z0: f.z0, z1: f.z1, owner: f.owner });
+            }
+        }
+    }
+    pieces
+}
+
+/// A solid stretch of wall: along one face from `p0` to `p1`, `off` thick on the face's `n` side.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Piece {
+    pub(crate) p0: Vec2,
+    pub(crate) p1: Vec2,
+    pub(crate) n: Vec2,
+    pub(crate) off: f64,
+    pub(crate) lv: usize,
+    pub(crate) z0: f64,
+    pub(crate) z1: f64,
+    pub(crate) owner: Owner,
+}
+
 /// A polyline without its curved parts: a segment is dropped when either end turns gently
 /// (2°–50°) into its neighbour, as chords of a flattened arc do. What remains is split into runs.
+#[cfg(test)]
 fn straight_runs(pts: &[Vec2]) -> Vec<Vec<Vec2>> {
+    split_runs(pts).0
+}
+
+/// A polyline split into its straight runs and its curved runs (see [`straight_runs`]).
+fn split_runs(pts: &[Vec2]) -> (Vec<Vec<Vec2>>, Vec<Vec<Vec2>>) {
     let turn = |p: Vec2, q: Vec2, r: Vec2| -> f64 {
         let (u, v) = (q - p, r - q);
         let (lu, lv) = (u.len(), v.len());
@@ -485,6 +552,8 @@ fn straight_runs(pts: &[Vec2]) -> Vec<Vec<Vec2>> {
     let n = pts.len();
     let mut runs: Vec<Vec<Vec2>> = Vec::new();
     let mut cur: Vec<Vec2> = Vec::new();
+    let mut arcs: Vec<Vec<Vec2>> = Vec::new();
+    let mut arc: Vec<Vec2> = Vec::new();
     for i in 0..n.saturating_sub(1) {
         let (Some(&a), Some(&b)) = (pts.get(i), pts.get(i + 1)) else { break };
         let before = i.checked_sub(1).and_then(|j| pts.get(j)).map(|&p| turn(p, a, b));
@@ -495,8 +564,16 @@ fn straight_runs(pts: &[Vec2]) -> Vec<Vec<Vec2>> {
                 runs.push(std::mem::take(&mut cur));
             }
             cur.clear();
+            if arc.is_empty() {
+                arc.push(a);
+            }
+            arc.push(b);
             continue;
         }
+        if arc.len() >= 3 {
+            arcs.push(std::mem::take(&mut arc));
+        }
+        arc.clear();
         if cur.is_empty() {
             cur.push(a);
         }
@@ -505,7 +582,10 @@ fn straight_runs(pts: &[Vec2]) -> Vec<Vec<Vec2>> {
     if cur.len() >= 2 {
         runs.push(cur);
     }
-    runs
+    if arc.len() >= 3 {
+        arcs.push(arc);
+    }
+    (runs, arcs)
 }
 
 /// The sheet point mapped to the building origin for a level.
@@ -565,13 +645,13 @@ fn vtx(p: V3, n: V3, c: Rgb) -> Vertex {
     Vertex { p: p.f32(), n: n.f32(), c: [c.0, c.1, c.2, 255] }
 }
 
-fn edge(s: &mut Scene, a: V3, b: V3) {
+pub(crate) fn edge(s: &mut Scene, a: V3, b: V3) {
     s.edges.push(vtx(a, V3::default(), EDGE));
     s.edges.push(vtx(b, V3::default(), EDGE));
 }
 
 /// Two triangles for a planar quad (corners in order).
-fn quad(s: &mut Scene, q: [V3; 4], c: Rgb, owner: Owner) {
+pub(crate) fn quad(s: &mut Scene, q: [V3; 4], c: Rgb, owner: Owner) {
     let [a, b, cc, d] = q;
     let n = (b - a).cross(d - a).norm();
     for p in [a, b, cc, a, cc, d] {
@@ -583,7 +663,7 @@ fn quad(s: &mut Scene, q: [V3; 4], c: Rgb, owner: Owner) {
 
 /// A box centred on `c`, `along` wide in direction `dir`, `across` deep, `h` high.
 #[allow(clippy::too_many_arguments)]
-fn boxed(s: &mut Scene, c: V3, dir: Vec2, along: f64, across: f64, h: f64, col: Rgb, owner: Owner) {
+pub(crate) fn boxed(s: &mut Scene, c: V3, dir: Vec2, along: f64, across: f64, h: f64, col: Rgb, owner: Owner) {
     let t = v3(dir.x, dir.y, 0.0).norm() * (along / 2.0);
     let n = v3(-dir.y, dir.x, 0.0).norm() * (across / 2.0);
     let z = v3(0.0, 0.0, h / 2.0);
@@ -672,6 +752,7 @@ mod tests {
             ],
             devices,
             device_sheets: Vec::new(),
+            openings: crate::rules::Openings::default(),
         };
         (d, rules)
     }
@@ -744,6 +825,7 @@ mod tests {
             layers: vec![LayerRule { layer: "A-WALL".into(), kind: LayerKind::Wall { height_ft: None, skip_curves: false, paired_only: false } }],
             devices: DeviceRules::default(),
             device_sheets: Vec::new(),
+            openings: crate::rules::Openings::default(),
         };
         assert_eq!(rules.sheets(), ["A111.dxf", "A112.dxf"]);
         assert_eq!((rules.level_source(0), rules.level_source(1), rules.level_source(2)), (1, 2, 2));
@@ -801,6 +883,8 @@ mod tests {
         add(&mut d, "A-WALL", line(60.0, 36.0, 96.0, 36.0));
         add(&mut d, "A-WALL", line(132.0, 36.0, 180.0, 36.0));
         add(&mut d, "A-WALL", line(10.0, 80.0, 200.0, 80.0));
+        // Only the faces are checked here: the doorway is not filled (see `openings`).
+        rules.openings.enabled = false;
         let s = derive(&d, &rules);
         let lv0: Vec<&Seg> = s.walls.iter().filter(|w| w.level == 0).collect();
         // The room's own walls are 10' apart: none of them pair, so the room's lone outline goes.
