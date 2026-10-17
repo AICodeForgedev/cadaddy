@@ -12,6 +12,15 @@ Start the desktop app with `--control PORT` (or `CADCRAFT_CONTROL_PORT=PORT`). I
 Errors come back as `{"id": …, "ok": false, "error": "message"}`. An unknown method's error points
 to `control.methods`, which lists the methods the server answers.
 
+A line that is not a JSON object with a string `method` (an HTTP request, text that isn't JSON,
+bytes that aren't UTF-8) gets one error reply and the server closes the connection; nothing sent
+after it runs. Blank lines are skipped.
+
+The server bounds what a client can hold: 16 connections at once (more get an error line and are
+closed), 256 MiB per request line (longer closes the connection), 64 queued requests (more are
+answered `{"ok": false, "error": "busy: …", "state": "not-run"}`), and 10 minutes idle or 30 seconds
+per blocked reply write before the socket is closed.
+
 The server waits up to 60 s for the app to answer a request. After that it replies with a timeout, and
 `state` tells whether sending the request again is safe:
 
