@@ -17,10 +17,10 @@
 </p>
 
 <p align="center">
-  <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-d65410?style=flat-square&logo=rust&logoColor=white">
-  <img alt="Runs on Windows, macOS, Linux, FreeBSD and the web" src="https://img.shields.io/badge/runs%20on-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux%20%C2%B7%20BSD%20%C2%B7%20Web-f26b1d?style=flat-square">
-  <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-d65410?style=flat-square">
-  <img alt="Agent-drivable over MCP" src="https://img.shields.io/badge/agents-MCP-f26b1d?style=flat-square">
+  <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-1f6bff?style=flat-square&logo=rust&logoColor=white">
+  <img alt="Runs on Windows, macOS, Linux, FreeBSD and the web" src="https://img.shields.io/badge/runs%20on-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux%20%C2%B7%20BSD%20%C2%B7%20Web-00a8e8?style=flat-square">
+  <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-1f6bff?style=flat-square">
+  <img alt="Agent-drivable over MCP" src="https://img.shields.io/badge/agents-MCP-00a8e8?style=flat-square">
 </p>
 
 <br>
