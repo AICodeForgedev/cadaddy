@@ -14,7 +14,7 @@
       "registryType": "mcpb",
       "identifier": "https://github.com/AICodeForgedev/cadaddy/releases/download/v0.7.5/CADaddy.mcpb",
       "version": "0.7.5",
-      "fileSha256": "6570c57eaa3ebc55165c376dbde72c2929262f74736f04d0c6a99669bdc98d33",
+      "fileSha256": "b2738b55cc86f45c266618b1012ca1365a1b150a436aca7556b581f475fdf6c1",
       "transport": {
         "type": "stdio"
       }
