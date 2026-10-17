@@ -959,6 +959,7 @@ fn title_row(app: &mut CadApp, ui: &mut egui::Ui, row: Rect, left: f32, clicks: 
         }
         x += 25.0;
     }
+    let heart_left = support_button(ui, row, clicks);
     if !app.integrated_titlebar {
         let title = match app.session.state() {
             Ok(st) if !app.ui.start_tab => format!("{}{}", st.title, if st.title.contains('.') { "" } else { ".dwg" }),
@@ -966,8 +967,43 @@ fn title_row(app: &mut CadApp, ui: &mut egui::Ui, row: Rect, left: f32, clicks: 
         };
         let g = ui.painter().layout_no_wrap(title, egui::FontId::proportional(13.0), t.text_dim);
         let tx = (row.center().x - g.size().x / 2.0).max(x + 16.0);
-        ui.painter().galley(pos2(tx, row.center().y - g.size().y / 2.0), g, t.text_dim);
+        if tx + g.size().x < heart_left - 12.0 {
+            ui.painter().galley(pos2(tx, row.center().y - g.size().y / 2.0), g, t.text_dim);
+        }
     }
+}
+
+/// The heart button at the right of the title row: Report a Bug, Request a Feature and (while
+/// donations are on) Donate ([`crate::support`]). Returns its left edge.
+fn support_button(ui: &mut egui::Ui, row: Rect, clicks: &mut Clicks) -> f32 {
+    let t = Tokens::get();
+    let label = crate::i18n::t(crate::support::button_label());
+    let g = ui.painter().layout_no_wrap(label.to_string(), crate::theme::body(), t.text);
+    let w = g.size().x + 36.0;
+    let br = Rect::from_min_size(pos2(row.right() - w - 8.0, row.center().y - 11.0), vec2(w, 22.0));
+    let resp = ui.interact(br, ui.id().with("rb_support"), Sense::click());
+    let blue = egui::Color32::from_rgb(0x1f, 0x6b, 0xff);
+    ui.painter().rect(
+        br,
+        11.0,
+        if resp.hovered() { blue.gamma_multiply(0.22) } else { blue.gamma_multiply(0.10) },
+        Stroke::new(1.0, blue.gamma_multiply(0.7)),
+        egui::StrokeKind::Inside,
+    );
+    crate::support::paint_heart(ui.painter(), pos2(br.left() + 15.0, br.center().y), 12.0, blue);
+    ui.painter().galley(pos2(br.left() + 26.0, br.center().y - g.size().y / 2.0), g, t.text);
+    icons::describe_control(ui, &resp, crate::support::button_label(), None, false);
+    egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClick).show(|ui| {
+        ui.set_min_width(230.0);
+        for (cmd, label) in crate::support::entries() {
+            if ui.add(egui::Button::new(crate::i18n::t(label)).frame(false).min_size(vec2(ui.available_width(), 26.0))).clicked() {
+                clicks.cmd = Some(cmd.to_string());
+            }
+        }
+        ui.separator();
+        ui.label(egui::RichText::new(crate::tf!("Or email {address}", address = crate::support::FEEDBACK_EMAIL)).small().color(t.text_dim));
+    });
+    br.left()
 }
 
 /// The tabs row and the active tab's panels.
@@ -1110,6 +1146,7 @@ mod tests {
             }
         }
         QAT.iter().chain(APP_MENU).for_each(|(_, c, _)| check(c));
+        crate::support::entries().iter().for_each(|(c, _)| check(c));
         assert!(missing.is_empty(), "ribbon commands that don't exist: {missing:?}");
     }
 

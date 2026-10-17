@@ -71,6 +71,9 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.dialog.dsettings", "Drafting Settings...", &[], None),
     ("ui.dialog.about", "About CADaddy", &["Help", "About CADaddy"], None),
     ("ui.dialog.commands", "Command Reference", &["Help", "CADaddy Help"], Some("F1")),
+    ("ui.feedback", "Report a Bug...", &["Help", "Report a Bug..."], None),
+    ("ui.feature", "Request a Feature...", &["Help", "Request a Feature..."], None),
+    ("ui.donate", "Donate...", &[], None),
     ("ui.toggle.history", "Command History", &["Window", "Command History"], Some("F2")),
     ("ui.cmdline.lines", "Command Line History Lines", &[], None),
     ("ui.cmdline.clear", "Clear Command History", &[], None),
@@ -387,6 +390,16 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "ui.noop" => Ok(Value::Null),
+        // The feedback form and the fundraiser open in the browser ([`crate::support`]).
+        "ui.feedback" | "ui.feature" | "ui.donate" => {
+            let url = match id {
+                "ui.feedback" => crate::support::feedback_url("bug"),
+                "ui.feature" => crate::support::feedback_url("idea"),
+                _ => crate::support::donate_url(),
+            };
+            app.pending_url = Some(url.clone());
+            Ok(json!({ "url": url }))
+        }
         // From a menu or typed, closing asks about unsaved changes; JSON calls close without asking.
         "close" if params.is_null() => {
             app.request_close(None);

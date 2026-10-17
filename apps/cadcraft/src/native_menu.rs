@@ -38,7 +38,7 @@ impl NativeMenu {
         let mut counter = 0usize;
         let app_menu = Submenu::new("CADaddy", true);
         let about = MenuItem::with_id("cc-about", i18n::tr(language, "About CADaddy"), true, None);
-        let discord = MenuItem::with_id("cc-discord", i18n::tr(language, "Join the ArtCraft Discord…"), true, None);
+        let feedback = MenuItem::with_id("cc-feedback", i18n::tr(language, "Report a Bug..."), true, None);
         let predefined = vec![
             ("Services", PredefinedMenuItem::services(Some(i18n::tr(language, "Services")))),
             ("Hide CADaddy", PredefinedMenuItem::hide(Some(i18n::tr(language, "Hide CADaddy")))),
@@ -48,7 +48,7 @@ impl NativeMenu {
         ];
         // The Mac place for preferences: CADCraft ▸ Settings… (⌘,) opens the Options dialog.
         let settings = MenuItem::with_id("cc-settings", i18n::tr(language, "Settings..."), true, accel("Cmd+Comma"));
-        let _ = app_menu.append_items(&[&about, &discord, &PredefinedMenuItem::separator(), &settings, &PredefinedMenuItem::separator()]);
+        let _ = app_menu.append_items(&[&about, &feedback, &PredefinedMenuItem::separator(), &settings, &PredefinedMenuItem::separator()]);
         for (label, item) in &predefined {
             let _ = app_menu.append(item);
             if ["Services", "Show All"].contains(label) {
@@ -56,7 +56,7 @@ impl NativeMenu {
             }
         }
         items.insert("cc-about".into(), ("ui.dialog.about".into(), "About CADaddy".into(), about));
-        items.insert("cc-discord".into(), ("ui.discord".into(), "Join the ArtCraft Discord…".into(), discord));
+        items.insert("cc-feedback".into(), ("ui.feedback".into(), "Report a Bug...".into(), feedback));
         items.insert("cc-settings".into(), ("options".into(), "Settings...".into(), settings));
         let _ = menu.append(&app_menu);
         for (title, entries) in menus::tree(app) {
@@ -90,11 +90,7 @@ impl NativeMenu {
     pub fn poll(&mut self, app: &mut CadApp, ctx: &egui::Context) {
         while let Ok(ev) = MenuEvent::receiver().try_recv() {
             if let Some((cmd, _, _)) = self.items.get(ev.id.as_ref()) {
-                if cmd == "ui.discord" {
-                    ctx.open_url(egui::OpenUrl::new_tab("https://discord.gg/artcraft"));
-                } else {
-                    menus::activate(app, &cmd.clone());
-                }
+                menus::activate(app, &cmd.clone());
                 ctx.request_repaint();
             }
         }

@@ -24,6 +24,8 @@ pub mod docking;
 pub mod hatchdlg;
 mod mtext_editor;
 pub mod spacemouse;
+// Report a Bug, Request a Feature, Donate.
+pub mod support;
 // The External References palette.
 pub mod xrefs;
 
@@ -243,6 +245,10 @@ pub struct CadApp {
     shown_animations: Option<bool>,
     pub frame_ms: f64,
     pub quit_requested: bool,
+    /// A web page to open in the browser on the next frame (Report a Bug, Donate).
+    pub pending_url: Option<String>,
+    /// What the donation prompt remembers ([`support`]).
+    pub donate: support::DonatePrefs,
     /// The app may close although drawings have unsaved changes (they were dealt with, or the
     /// quit came from the control channel, which never asks).
     pub quit_confirmed: bool,
@@ -295,6 +301,8 @@ impl CadApp {
             shown_animations: None,
             frame_ms: 0.0,
             quit_requested: false,
+            pending_url: None,
+            donate: support::DonatePrefs::default(),
             quit_confirmed: false,
             closing: None,
             autosave: None,
@@ -401,6 +409,12 @@ impl CadApp {
         if !self.ui.recent_files.is_empty() {
             prefs["recentFiles"] = json!(self.ui.recent_files);
         }
+        if !self.donate.asked_version.is_empty() {
+            prefs["donateAsked"] = json!(self.donate.asked_version);
+        }
+        if self.donate.never {
+            prefs["donateNever"] = json!(true);
+        }
         prefs.to_string()
     }
 
@@ -428,6 +442,15 @@ impl CadApp {
         if let Some(files) = v.get("recentFiles").and_then(Value::as_array) {
             self.ui.recent_files = files.iter().filter_map(Value::as_str).filter(|p| !p.is_empty()).take(RECENT_FILES).map(str::to_string).collect();
         }
+        if let Some(v) = v.get("donateAsked").and_then(Value::as_str) {
+            self.donate.asked_version = v.chars().take(40).collect();
+        }
+        self.donate.never = v.get("donateNever").and_then(Value::as_bool).unwrap_or(false);
+    }
+
+    /// Whether an agent can drive this window over the control channel (`--control PORT`).
+    pub fn has_control_channel(&self) -> bool {
+        self.control_rx.is_some()
     }
 
     pub fn set_status(&mut self, s: impl Into<String>) {
@@ -672,6 +695,10 @@ impl CadApp {
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
+        support::prompt(self, ui.ctx());
+        if let Some(url) = self.pending_url.take() {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+        }
         self.frame_ms = now_ms() - t0;
     }
 
