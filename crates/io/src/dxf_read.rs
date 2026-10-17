@@ -1417,6 +1417,8 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
         }
     }
     let mut active_vport = false;
+    // Linetype names already read from this file (upper case), so its first record wins.
+    let mut seen_ltypes: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (kind, tg) in recs {
         let t = T(&tg);
         match kind.as_str() {
@@ -1459,11 +1461,23 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             }
             "LTYPE" => {
                 let name = t.s(2).unwrap_or_default();
-                if name.is_empty() || d.linetype(&name).is_some() {
+                if name.is_empty() {
                     continue;
                 }
                 let pattern = ltype_pattern(&tg, &ltype_styles);
-                d.linetypes.push(Linetype { name, description: t.s(3).unwrap_or_default(), pattern });
+                let lt = Linetype { name, description: t.s(3).unwrap_or_default(), pattern };
+                // The file's record wins over a default of the same name (its "CONTINUOUS"
+                // spelling and description), as layers do; a later duplicate in the file doesn't.
+                match d.linetypes.iter().position(|x| x.name.eq_ignore_ascii_case(&lt.name)) {
+                    Some(i) if !seen_ltypes.contains(&lt.name.to_ascii_uppercase()) => {
+                        if let Some(x) = d.linetypes.get_mut(i) {
+                            *x = lt.clone();
+                        }
+                    }
+                    Some(_) => continue,
+                    None => d.linetypes.push(lt.clone()),
+                }
+                seen_ltypes.insert(lt.name.to_ascii_uppercase());
             }
             "STYLE" => {
                 let name = t.s(2).unwrap_or_default();

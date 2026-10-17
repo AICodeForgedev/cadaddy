@@ -139,3 +139,32 @@ fn viewport_ids_survive_dwg_and_the_paper_viewport_stays_implicit() {
     assert!(!text.contains("PAPERVIEW"));
     assert_eq!(viewport_ids(&cadcraft_io::read_dxf(text.as_bytes()).unwrap().layouts[0]), [1, 2]);
 }
+
+/// The current layer and text style, and a linetype spelled the old way ("CONTINUOUS"), used to
+/// come back from DWG as layer 0, Standard and "Continuous" (real AutoCAD sample drawings).
+#[test]
+fn dwg_keeps_current_layer_style_and_linetype_spelling() {
+    let mut d = Drawing::default();
+    for lt in &mut d.linetypes {
+        if lt.name == "Continuous" {
+            lt.name = "CONTINUOUS".into();
+        }
+    }
+    for l in &mut d.layers {
+        l.linetype = "CONTINUOUS".into();
+    }
+    let mut lot = d.layers.first().cloned().unwrap();
+    lot.name = "LOT".into();
+    d.layers.push(lot);
+    let mut style = d.text_styles.first().cloned().unwrap();
+    style.name = "NOTES".into();
+    d.text_styles.push(style);
+    d.header.set("CLAYER", HVal::Str("LOT".into()));
+    d.header.set("TEXTSTYLE", HVal::Str("NOTES".into()));
+    line(&mut d, &Space::Model, Common { layer: "LOT".into(), ..Common::default() });
+    let back = through_dwg(&d);
+    assert_eq!(back.header.str("CLAYER", ""), "LOT");
+    assert_eq!(back.header.str("TEXTSTYLE", ""), "NOTES");
+    assert!(back.linetypes.iter().any(|l| l.name == "CONTINUOUS"), "{:?}", back.linetypes.iter().map(|l| &l.name).collect::<Vec<_>>());
+    assert_eq!(back.layer("LOT").map(|l| l.linetype.as_str()), Some("CONTINUOUS"));
+}

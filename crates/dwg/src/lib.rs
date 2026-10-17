@@ -85,6 +85,7 @@ mod native {
         }
         let notes = read_notes(&outcome.stats);
         let mut doc = outcome.document;
+        names_by_current(&mut doc);
         table_merges(&mut doc);
         table_style_rows(&mut doc, false);
         let mut out = CappedWriter { buf: Vec::new(), limit: limits.max_dxf_bytes, exceeded: false };
@@ -339,6 +340,76 @@ mod native {
         dxf
     }
 
+    /// DXF names the current layer, text style, dimension style and linetype; DWG points at them.
+    /// acadrust's DXF reader keeps the names and its DWG writer only checks the pointers, so
+    /// without this every DWG saved current layer 0 and the Standard styles.
+    fn current_by_name(doc: &mut acadrust::CadDocument) {
+        let h = &mut doc.header;
+        if let Some(l) = doc.layers.get(&h.current_layer_name) {
+            h.current_layer_handle = l.handle;
+        }
+        if let Some(s) = doc.text_styles.get(&h.current_text_style_name) {
+            h.current_text_style_handle = s.handle;
+        }
+        if let Some(s) = doc.dim_styles.get(&h.current_dimstyle_name) {
+            h.current_dimstyle_handle = s.handle;
+        }
+        if let Some(lt) = doc.line_types.get(&h.current_linetype_name) {
+            h.current_linetype_handle = lt.handle;
+        }
+    }
+
+    /// The reverse of [`current_by_name`] for reading: a DWG points at the current layer and
+    /// styles, and acadrust's DXF writer writes their names, which its DWG reader leaves as they
+    /// were (empty or Standard).
+    fn names_by_current(doc: &mut acadrust::CadDocument) {
+        let h = &mut doc.header;
+        if let Some(l) = doc.layers.iter().find(|l| l.handle == h.current_layer_handle && !h.current_layer_handle.is_null()) {
+            h.current_layer_name.clone_from(&l.name);
+        }
+        if let Some(st) = doc.text_styles.iter().find(|st| st.handle == h.current_text_style_handle && !h.current_text_style_handle.is_null()) {
+            h.current_text_style_name.clone_from(&st.name);
+        }
+        if let Some(st) = doc.dim_styles.iter().find(|st| st.handle == h.current_dimstyle_handle && !h.current_dimstyle_handle.is_null()) {
+            h.current_dimstyle_name.clone_from(&st.name);
+        }
+        if let Some(lt) = doc.line_types.iter().find(|lt| lt.handle == h.current_linetype_handle && !h.current_linetype_handle.is_null()) {
+            h.current_linetype_name.clone_from(&lt.name);
+        }
+    }
+
+    /// The names of the LTYPE records in DXF text (group 2 of each `0 LTYPE`).
+    fn dxf_linetype_names(dxf: &[u8]) -> Vec<String> {
+        let text = String::from_utf8_lossy(dxf);
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let mut names = Vec::new();
+        let mut in_ltype = false;
+        for pair in lines.chunks(2) {
+            let [code, value] = pair else { break };
+            match *code {
+                "0" => in_ltype = *value == "LTYPE",
+                "2" if in_ltype => {
+                    names.push(value.to_string());
+                    in_ltype = false;
+                }
+                _ => {}
+            }
+        }
+        names
+    }
+
+    /// acadrust's tables match names regardless of case and start with their own "Continuous",
+    /// so a drawing's "CONTINUOUS" (older files spell it so) came back renamed: keep the
+    /// drawing's spelling.
+    fn keep_linetype_case(doc: &mut acadrust::CadDocument, dxf: &[u8]) {
+        let names = dxf_linetype_names(dxf);
+        for lt in doc.line_types.iter_mut() {
+            if let Some(n) = names.iter().find(|n| n.eq_ignore_ascii_case(&lt.name) && **n != lt.name) {
+                lt.name.clone_from(n);
+            }
+        }
+    }
+
     /// Collects the DXF text and fails the write once it would grow past `limit`.
     struct CappedWriter {
         buf: Vec<u8>,
@@ -399,6 +470,8 @@ mod native {
             None => {}
         }
         table_style_rows(&mut doc, true);
+        current_by_name(&mut doc);
+        keep_linetype_case(&mut doc, dxf);
         drop_unwritable(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
