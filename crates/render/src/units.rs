@@ -171,7 +171,13 @@ pub fn format_linear(v: f64, f: &NumFormat) -> (String, String) {
             let total = (v.abs() * den as f64).round().clamp(0.0, 9.0e15) as i64;
             let ft = total / (12 * den);
             let rem_inch = (total - ft * 12 * den) as f64 / den as f64;
-            let (_, ip, im, zero) = mixed(rem_inch, f.decimals, f.frac);
+            let (whole, mut ip, mut im, zero) = mixed(rem_inch, f.decimals, f.frac);
+            // After feet, less than an inch keeps its zero: 20'-0 1/2", not 20'-1/2" (AutoCAD).
+            let show_ft = ft != 0 || matches!(f.zin & 3, 1 | 2);
+            if show_ft && whole == 0 && !zero {
+                ip = format!("0 {ip}");
+                im = if f.frac == 2 { format!("0 {im}") } else { format!("0{im}") };
+            }
             feet_inches(neg, ft, &ip, &im, zero, f.zin)
         }
         5 => {
@@ -268,6 +274,11 @@ mod tests {
         assert_eq!(format_linear(6.0, &f(4, 4, 2)).0, "0'-6\"");
         assert_eq!(format_linear(0.25, &f(4, 4, 0)).0, "1/4\"");
         assert_eq!(format_linear(0.0, &f(4, 4, 0)).0, "0\"");
+        // Less than an inch after feet keeps its zero inches; alone it is just the fraction.
+        assert_eq!(format_linear(240.5, &f(4, 4, 0)), ("20'-0 1/2\"".to_string(), "20'-0\\S1/2;\"".to_string()));
+        assert_eq!(format_linear(12.25, &f(4, 4, 3)).0, "1'-0 1/4\"");
+        assert_eq!(format_linear(0.5, &f(4, 4, 2)).0, "0'-0 1/2\"");
+        assert_eq!(format_linear(6.5, &f(4, 4, 2)).0, "0'-6 1/2\"");
         let mut d = f(4, 4, 0);
         d.frac = 1;
         assert_eq!(format_linear(18.5, &d).1, "1'-6\\S1#2;\"");
