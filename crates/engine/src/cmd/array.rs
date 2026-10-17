@@ -626,7 +626,7 @@ impl Interactive for RectM {
             SpaceRows => dist("Specify the distance between rows", self.rs),
             UnitCell => match self.corner {
                 None => Prompt::new("Specify first corner of the unit cell", Accept::POINT).base(self.base),
-                Some(c) => Prompt::new("Specify other corner", Accept::POINT).base(c),
+                Some(c) => Prompt::new("Specify other corner", Accept::POINT).corner(c),
             },
             ColsSpace => dist("Specify the distance between columns", self.cs).kw(&["Total"]),
             ColsTotal => dist("Specify the distance between the first and last column", self.cs * self.cols.saturating_sub(1) as f64),
