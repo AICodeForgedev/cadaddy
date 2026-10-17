@@ -42,8 +42,12 @@
 
 ## For AI agents
 
-CADaddy is built to be driven by AI assistants. Every one of its 400+ commands can be called as
-JSON, and `cadaddy-cli` (installed with the app) includes a Model Context Protocol (MCP) server:
+CADaddy is built to be driven by AI assistants. **One click for Claude Desktop:** download
+[CADaddy.mcpb](https://github.com/AICodeForgedev/cadaddy/releases/latest/download/CADaddy.mcpb) and open it.
+It's also in the official [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.AICodeForgedev/cadaddy`.
+
+Every one of its 400+ commands can be called as JSON, and `cadaddy-cli` (installed with the app)
+includes a Model Context Protocol (MCP) server:
 
 ```sh
 cadaddy-cli mcp                                  # headless MCP server
