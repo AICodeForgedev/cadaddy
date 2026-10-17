@@ -19,7 +19,7 @@
   <a href="https://github.com/AICodeForgedev/cadaddy/releases">All versions</a>
 </p>
 
-<p align="center"><a href="https://aicodeforge.dev">aicodeforge.dev</a> · also from AICodeForge: <b>Redline</b>, a PDF editor for construction drawings (markup, measure, count, sign), coming soon</p>
+<p align="center"><a href="https://aicodeforge.dev">aicodeforge.dev</a> · also from AICodeForge: <a href="https://github.com/AICodeForgedev/redline"><b>Redline</b></a>, a free PDF editor for construction drawings (markup, measure, count, sign)</p>
 
 ## Install
 
