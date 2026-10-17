@@ -55,6 +55,8 @@
 - Or download [`CADaddy-Mac.dmg`](https://github.com/AICodeForgedev/cadaddy/releases/latest/download/CADaddy-Mac.dmg) and drag CADaddy to Applications.
 - If macOS says it can't verify CADaddy, open **System Settings ▸ Privacy & Security ▸ Open Anyway**. The app isn't notarized yet.
 
+CADaddy 0.7.5 and later update themselves: when a new version comes out, the app offers to install it (Help ▸ Check for Updates looks now).
+
 **Linux (64-bit)**
 
 - AppImage, any distro from 2022 on: download [`CADaddy-Linux.AppImage`](https://github.com/AICodeForgedev/cadaddy/releases/latest/download/CADaddy-Linux.AppImage), then `chmod +x CADaddy-Linux.AppImage` and run it.
@@ -82,6 +84,7 @@ sha256sum CADaddy-Linux.AppImage
 - AutoCAD-style **ribbon and command line**: type a command, pick your points
 - Object snaps, ortho and polar tracking, layers, dimensions, hatches, text, tables, leaders
 - Blocks, dynamic blocks and external references (xrefs)
+- **Electrical and plumbing symbol libraries**: receptacles, switches, lights, panels, fire alarm, fixtures, valves and more, with circuit, panel and tag fields to fill in (Window ▸ Symbols)
 - Layouts and plotting to PDF
 - **PDF to DWG**: turn PDF drawings into editable DWG
 - **Walk mode** (View ▸ Walk): walk through a building in 3D, right from its floor plans

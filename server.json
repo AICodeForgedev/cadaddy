@@ -3,7 +3,7 @@
   "name": "io.github.AICodeForgedev/cadaddy",
   "title": "CADaddy",
   "description": "Free AutoCAD-style CAD: open, draw, query, render and save DWG and DXF drawings.",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "websiteUrl": "https://aicodeforge.dev",
   "repository": {
     "url": "https://github.com/AICodeForgedev/cadaddy",
@@ -12,8 +12,8 @@
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/AICodeForgedev/cadaddy/releases/download/v0.7.4/CADaddy.mcpb",
-      "version": "0.7.4",
+      "identifier": "https://github.com/AICodeForgedev/cadaddy/releases/download/v0.7.5/CADaddy.mcpb",
+      "version": "0.7.5",
       "fileSha256": "6570c57eaa3ebc55165c376dbde72c2929262f74736f04d0c6a99669bdc98d33",
       "transport": {
         "type": "stdio"
