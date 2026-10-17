@@ -1321,8 +1321,10 @@ impl EntityKind {
                     i.scale.y = -i.scale.y;
                     i.rotation = cadcraft_geom::norm_angle(rot - (i.rotation - rot));
                 }
+                // Attributes are text: mirrored, they keep reading left to right (MIRRTEXT 0),
+                // not turned upside down.
                 for a in &mut i.attribs {
-                    transform_text(&mut a.text, m, s, rot, false);
+                    transform_text(&mut a.text, m, s, rot, mirror);
                     a.transform_multiline(m);
                 }
                 i.col_spacing *= s;

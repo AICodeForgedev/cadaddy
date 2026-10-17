@@ -502,13 +502,36 @@ fn bak_path(path: &str) -> String {
 fn store(path: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // The file being replaced, if any: a read-only one is left alone (as AutoCAD does: save
+        // under another name), and the new file keeps its permissions.
+        let before = std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file);
+        if let Some(m) = &before
+            && m.permissions().readonly()
+        {
+            return Err(bad("save", format!("{path} is read-only. Save it under another name with SAVEAS.")));
+        }
         // A drawing saved over keeps its previous version as .bak, as AutoCAD does.
-        if is_drawing_file(path) && std::path::Path::new(path).is_file() {
+        if before.is_some() && is_drawing_file(path) {
             let bak = bak_path(path);
-            std::fs::copy(path, &bak).map_err(|e| bad("save", format!("{path}: couldn't keep the previous version as {bak}: {e}")))?;
+            let keep = || -> std::io::Result<()> {
+                // An earlier .bak (perhaps read-only) is replaced, not written into.
+                if let Ok(m) = std::fs::metadata(&bak) {
+                    let mut p = m.permissions();
+                    if p.readonly() {
+                        #[allow(clippy::permissions_set_readonly_false)]
+                        p.set_readonly(false);
+                        std::fs::set_permissions(&bak, p)?;
+                    }
+                    std::fs::remove_file(&bak)?;
+                }
+                std::fs::copy(path, &bak).map(|_| ())
+            };
+            keep().map_err(|e| bad("save", format!("{path}: couldn't keep the previous version as {bak}: {e}")))?;
         }
         let tmp = format!("{path}.cadcraft-tmp");
-        let written = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
+        let written = std::fs::write(&tmp, bytes)
+            .and_then(|()| before.as_ref().map_or(Ok(()), |m| std::fs::set_permissions(&tmp, m.permissions())))
+            .and_then(|()| std::fs::rename(&tmp, path));
         if let Err(e) = written {
             // A failed save leaves nothing behind but the file as it was.
             let _ = std::fs::remove_file(&tmp);

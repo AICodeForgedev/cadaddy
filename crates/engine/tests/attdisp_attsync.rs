@@ -123,3 +123,24 @@ fn typed_attdef_asks_for_height_and_rotation() {
     assert_eq!(a.tag, "DOORNO");
     assert!((a.text.height - 0.3).abs() < 1e-9 && (a.text.rotation.to_degrees() - 90.0).abs() < 1e-9, "{:?}", a.text);
 }
+
+#[test]
+fn mirrored_attributes_stay_readable() {
+    // MIRROR with MIRRTEXT 0: a block's attributes keep reading left to right, as its text does,
+    // instead of turning upside down (an electrical device mirrored across a wall).
+    let mut s = Session::new();
+    line(&mut s);
+    attdef(&mut s, "CIRCUIT", "1", 1.0, 0.5, false);
+    make_block(&mut s, "B");
+    let h = insert(&mut s, 0.0, json!({"CIRCUIT": "12"}));
+    s.execute("mirror", &json!({"handles": [h.hex()], "p1": [20, -5], "p2": [20, 5], "erase": false})).unwrap();
+    let copies: Vec<Handle> =
+        s.doc().unwrap().model.iter().filter(|e| e.handle != h && matches!(e.kind, EntityKind::Insert(_))).map(|e| e.handle).collect();
+    assert_eq!(copies.len(), 1);
+    let a = attribs(&s, copies[0]);
+    assert_eq!(a[0].text.value, "12");
+    let r = a[0].text.rotation.rem_euclid(std::f64::consts::TAU);
+    assert!(r < 1e-9 || (std::f64::consts::TAU - r) < 1e-9, "rotation {r}");
+    // Mirrored across x = 20, the attribute moved to the other side.
+    assert!(a[0].text.insert.x > 20.0, "{:?}", a[0].text.insert);
+}

@@ -32,6 +32,7 @@ mod overkill;
 mod pline_opts;
 pub mod plotters;
 mod props;
+pub mod symbol;
 pub use props::MatchProps;
 mod qselect;
 mod selecttools;
@@ -187,6 +188,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(modify::specs());
         v.extend(draworder::specs());
         v.extend(array::specs());
+        v.extend(symbol::specs());
         v.extend(modify2::specs());
         v.extend(groups::specs());
         v.extend(gripcmds::specs());

@@ -1090,12 +1090,13 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
             }
             rx.mleader_fix.push((h, pending));
         }
-        // CADCraft's VPFROZEN xdata wins; otherwise AutoCAD's group 341 layer handles.
+        // CADCraft's VPFROZEN xdata wins; otherwise the group 331 layer handles (DXF Reference).
         ("VIEWPORT", EntityKind::Viewport(v)) if v.frozen_layers.is_empty() => {
             v.frozen_layers = tags
                 .iter()
                 .take_while(|t| t.code < 1000)
-                .filter(|t| t.code == 341)
+                // 331 per the DXF Reference; 341 is what CADaddy wrote before 0.7.4.
+                .filter(|t| t.code == 331 || t.code == 341)
                 .filter_map(|t| rx.layers.get(&t.str().trim().to_ascii_uppercase()).cloned())
                 .collect();
         }

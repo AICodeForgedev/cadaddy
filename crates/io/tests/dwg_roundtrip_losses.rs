@@ -197,3 +197,44 @@ fn a_viewport_view_target_offsets_its_view_centre() {
         .find_map(|e| if let EntityKind::Viewport(v) = &e.kind { (v.id == 2).then_some(v.view_center) } else { None });
     assert_eq!(vc2, Some(vc));
 }
+
+#[test]
+fn viewport_frozen_layers_use_group_331() {
+    // The DXF Reference keeps a viewport's frozen layers in group 331; other programs read only
+    // that (CADaddy wrote 341 before 0.7.4, which nothing else understood).
+    let mut d = Drawing::new_metric();
+    d.ensure_layer("HIDE");
+    let first = Space::Paper(d.layouts[0].name.clone());
+    let mut vp = viewport(2);
+    if let EntityKind::Viewport(v) = &mut vp {
+        v.frozen_layers = vec!["HIDE".into()];
+    }
+    d.add(&first, Common::default(), vp).unwrap();
+    let text = cadcraft_io::write_dxf(&d);
+    let vps = records(&text, "VIEWPORT");
+    let ours = vps.iter().find(|r| group(r, "69") == Some("2")).expect("viewport 2");
+    assert!(group(ours, "331").is_some(), "{ours:?}");
+    assert!(group(ours, "341").is_none(), "{ours:?}");
+    // Without CADaddy's own xdata (a file from another program), 331 alone freezes the layer.
+    // Drop CADaddy's own xdata (1001 CADCRAFT up to the next app or record) from every record.
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut skipping = false;
+    for pair in lines.chunks(2) {
+        let [code, value] = pair else { break };
+        if *code == "0" || *code == "1001" {
+            skipping = *code == "1001" && *value == "CADCRAFT";
+        }
+        if !skipping {
+            kept.extend([*code, *value]);
+        }
+    }
+    let plain = kept.join("\n");
+    let back = cadcraft_io::read_dxf(plain.as_bytes()).unwrap();
+    let frozen: Vec<String> = back.layouts[0]
+        .entities
+        .iter()
+        .find_map(|e| if let EntityKind::Viewport(v) = &e.kind { (v.id == 2).then(|| v.frozen_layers.clone()) } else { None })
+        .unwrap();
+    assert_eq!(frozen, ["HIDE"]);
+}

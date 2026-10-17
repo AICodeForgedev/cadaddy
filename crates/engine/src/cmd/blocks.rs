@@ -546,6 +546,17 @@ struct InsertM {
     file: Option<insert_file::FileRef>,
 }
 
+/// INSERT's prompts for block `name`, already chosen, from the insertion point on; with `scale`
+/// the scale isn't asked (SYMBOL places annotation symbols at the drawing's scale).
+pub(crate) fn insert_machine(s: &mut Session, name: &str, scale: Option<Vec2>) -> Result<Box<dyn Interactive>> {
+    let mut m = InsertM { scale, ..InsertM::default() };
+    m.choose(s, name)?;
+    if m.name.is_none() {
+        return Err(EngineError::Other(format!("Block \"{name}\" not found.")));
+    }
+    Ok(Box::new(m))
+}
+
 impl InsertM {
     /// After the insertion point or a scale/rotation answer: the next prompt still needed.
     fn advance(&mut self, s: &mut Session) -> Result<Step> {

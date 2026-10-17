@@ -271,7 +271,11 @@ pub const TABS: &[Tab] = &[
         panels: &[
             Panel {
                 name: "Block",
-                items: &[Item::Large(f(Icon::Insert, "insert", "Insert", INSERT)), Item::Large(b(Icon::AttDef, "attedit", "Edit Attribute"))],
+                items: &[
+                    Item::Large(f(Icon::Insert, "insert", "Insert", INSERT)),
+                    Item::Large(b(Icon::Blocks, "ui.panel.symbols", "Symbols")),
+                    Item::Large(b(Icon::AttDef, "attedit", "Edit Attribute")),
+                ],
                 more: &[],
             },
             Panel {

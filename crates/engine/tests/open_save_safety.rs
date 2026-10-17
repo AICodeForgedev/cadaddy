@@ -115,3 +115,33 @@ fn a_failed_save_leaves_no_temporary_file() {
     }
     std::fs::remove_dir_all(&d).ok();
 }
+
+#[cfg(unix)]
+#[test]
+fn a_read_only_file_is_not_saved_over_and_permissions_are_kept() {
+    use std::os::unix::fs::PermissionsExt;
+    install();
+    let d = dir("perms");
+    // A read-only drawing: QSAVE refuses (save it under another name), the file is untouched.
+    let ro = d.join("ro.dxf");
+    std::fs::write(&ro, b"original").unwrap();
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let mut s = Session::new();
+    s.execute("open", &json!({ "path": ro.to_string_lossy() })).unwrap();
+    s.cmdline("circle 0,0 5").unwrap();
+    let e = s.execute("qsave", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("read-only"), "{e}");
+    assert_eq!(std::fs::read(&ro).unwrap(), b"original");
+    // A drawing with its own permissions keeps them, and saving twice replaces the .bak.
+    let rw = d.join("rw.dxf");
+    std::fs::write(&rw, b"first").unwrap();
+    std::fs::set_permissions(&rw, std::fs::Permissions::from_mode(0o750)).unwrap();
+    s.execute("open", &json!({ "path": rw.to_string_lossy() })).unwrap();
+    s.execute("qsave", &json!({})).unwrap();
+    s.cmdline("circle 0,0 6").unwrap();
+    s.execute("qsave", &json!({})).unwrap();
+    assert_eq!(std::fs::metadata(&rw).unwrap().permissions().mode() & 0o777, 0o750);
+    assert_eq!(std::fs::read(d.join("rw.bak")).unwrap(), b"saved");
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::remove_dir_all(&d).ok();
+}

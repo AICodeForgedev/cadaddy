@@ -31,6 +31,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.panel.properties", "Properties Inspector", &["Window", "Properties Inspector"], Some("Cmd+1")),
     ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
     ("ui.panel.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
+    ("ui.panel.symbols", "Symbols", &["Window", "Symbols"], None),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
     ("ui.animations.system", "Use System Setting", &["View", "Accessibility", "Animation Effects", "Use System Setting"], None),
     ("ui.animations.on", "On", &["View", "Accessibility", "Animation Effects", "On"], None),
@@ -111,6 +112,19 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     if matches!(id, "ui.panel.properties" | "ui.panel.layers") {
         let panel = if id == "ui.panel.properties" { "properties" } else { "layers" };
         return Some(crate::docking::command(app, false, &json!({"operation":"open", "panel":panel})));
+    }
+    // SYMBOLS typed or from a menu opens the symbol library palette, expanded.
+    if id == "ui.panel.symbols" || (id == "symbols" && params.is_null()) {
+        // A layout saved before the palette existed has no place for it: the first time it goes
+        // under Properties in the right column; afterwards it returns where it was closed.
+        let panel = crate::docking::Panel::Symbols;
+        let first = !app.ui.docking.layout.contains(&panel) && !app.ui.docking.hidden.iter().any(|(p, _)| *p == panel);
+        let open = crate::docking::command(app, false, &json!({"operation":"open", "panel":"symbols"}));
+        if first && app.ui.docking.layout.contains(&crate::docking::Panel::Properties) {
+            let _ = crate::docking::command(app, false, &json!({"operation":"move", "panel":"symbols", "target":"properties", "zone":"bottom"}));
+        }
+        let _ = crate::docking::command(app, false, &json!({"operation":"setStackOpen", "panel":"symbols", "open": true}));
+        return Some(open);
     }
     // QUICKCALC typed or from a menu opens the palette; with parameters it is CAL.
     if id == "ui.panel.quickcalc" || (matches!(id, "quickcalc" | "qc") && params.is_null()) {

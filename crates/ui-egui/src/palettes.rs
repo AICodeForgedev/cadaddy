@@ -13,6 +13,8 @@ use crate::theme::Tokens;
 pub mod patterns;
 /// The QuickCalc palette.
 pub mod quickcalc;
+/// The Symbols palette (the built-in symbol library).
+pub mod symbols;
 
 type Tool = (Icon, &'static str, &'static str);
 
@@ -336,6 +338,9 @@ pub fn right_palettes(app: &mut CadApp, ui: &mut egui::Ui) {
                 layers_section(app, ui);
                 ui.add_space(8.0);
                 properties_section(app, ui);
+                ui.add_space(8.0);
+                section_header(ui, "Symbols");
+                symbols::symbols_section(app, ui);
             });
         });
     });
