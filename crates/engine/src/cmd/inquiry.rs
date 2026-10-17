@@ -66,6 +66,19 @@ fn fmt_d(s: &Session, v: f64) -> String {
     let h = s.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
     format_distance(v, h.0, h.1)
 }
+/// An area as AutoCAD reports it: square inches with square feet in architectural and engineering
+/// units ("11520.0000 square in. (80.0000 square ft.)"), else a plain number at LUPREC.
+fn fmt_area(s: &Session, v: f64) -> String {
+    let (lunits, prec) = s.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
+    let p = usize::try_from(prec.clamp(0, 8)).unwrap_or(4);
+    if matches!(lunits, 3 | 4) {
+        // Architectural precision counts fraction steps; areas show at least 4 decimals.
+        let p = if lunits == 4 { 4 } else { p };
+        format!("{v:.p$} square in. ({:.p$} square ft.)", v / 144.0)
+    } else {
+        format!("{v:.p$}")
+    }
+}
 fn fmt_a(s: &Session, v: f64) -> String {
     let h = s.doc().map(|d| (d.header.i64("AUNITS", 0), d.header.i64("AUPREC", 0))).unwrap_or((0, 0));
     format_angle(v, h.0, h.1)
@@ -131,7 +144,7 @@ fn list_text(s: &Session, h: Handle) -> String {
                 fmt_d(s, 0.0),
                 fmt_d(s, c.radius),
                 fmt_d(s, c.radius * cadcraft_geom::TAU),
-                fmt_d(s, c.radius * c.radius * cadcraft_geom::PI)
+                fmt_area(s, c.radius * c.radius * cadcraft_geom::PI)
             ));
         }
         EntityKind::Arc(a) => {
@@ -149,7 +162,7 @@ fn list_text(s: &Session, h: Handle) -> String {
             let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
             t.push_str(&format!("\n            {}\n    Constant width    {}", if p.closed { "Closed" } else { "Open" }, fmt_d(s, p.const_width)));
             if p.closed {
-                t.push_str(&format!("\n             area   {}\n        perimeter   {}", fmt_d(s, pl.area().abs()), fmt_d(s, pl.len())));
+                t.push_str(&format!("\n             area   {}\n        perimeter   {}", fmt_area(s, pl.area().abs()), fmt_d(s, pl.len())));
             } else {
                 t.push_str(&format!("\n           length   {}", fmt_d(s, pl.len())));
             }
@@ -201,7 +214,7 @@ fn run_area(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn area_text(s: &Session, a: f64, per: f64) -> String {
-    format!("Area = {}, Perimeter = {}", fmt_d(s, a), fmt_d(s, per))
+    format!("Area = {}, Perimeter = {}", fmt_area(s, a), fmt_d(s, per))
 }
 
 /// Area and perimeter of a closed object (AREA's Object option).
@@ -690,7 +703,7 @@ impl AreaM {
             AreaMode::Add => self.total += a,
             AreaMode::Subtract => self.total -= a,
         }
-        s.echo(format!("Total area = {}", fmt_d(s, self.total)));
+        s.echo(format!("Total area = {}", fmt_area(s, self.total)));
         Step::Continue
     }
     /// Close the boundary picked so far (Enter or Total at the next-point prompt).

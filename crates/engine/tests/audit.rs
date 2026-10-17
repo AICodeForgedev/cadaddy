@@ -130,8 +130,8 @@ fn audit_reports_without_changing_and_fixes_when_asked() {
     ] {
         assert!(k.iter().any(|x| x == want), "{want} not reported: {r:#}");
     }
-    // NaN line, zero radius circle, zero length line.
-    assert_eq!(k.iter().filter(|x| *x == "invalidGeometry").count(), 3, "{r:#}");
+    // NaN line and zero radius circle (a zero-length line is valid: it plots as a dot).
+    assert_eq!(k.iter().filter(|x| *x == "invalidGeometry").count(), 2, "{r:#}");
     assert_eq!(r["fixed"], 0);
     assert!(r["errors"].as_u64().unwrap() >= 12);
     assert!(Arc::ptr_eq(&before, &s.state().unwrap().doc), "a report without fix changes nothing");
@@ -154,7 +154,7 @@ fn audit_reports_without_changing_and_fixes_when_asked() {
                 assert!(c.radius > 0.0);
                 assert_eq!(e.common.linetype, "ByLayer");
             }
-            EntityKind::Line(l) => assert!(l.a != l.b && l.a.x.is_finite()),
+            EntityKind::Line(l) => assert!(l.a.x.is_finite()),
             _ => {}
         }
     }

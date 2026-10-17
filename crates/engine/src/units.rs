@@ -103,7 +103,8 @@ pub fn format_angle(a: f64, aunits: i64, auprec: i64) -> String {
     }
 }
 
-/// Parse a distance typed by the user: decimal, `1'6"`, `1'-6 1/2"`, `6 1/2`, `3/4`, `1e3`.
+/// Parse a distance typed by the user: decimal, `1'6"`, `1'-6 1/2"`, `5'6-1/2"`, `6 1/2`, `6-1/2`,
+/// `3/4`, `1e3`.
 pub fn parse_distance(s: &str) -> Option<f64> {
     let t = s.trim();
     if t.is_empty() {
@@ -132,7 +133,12 @@ pub fn parse_distance(s: &str) -> Option<f64> {
 }
 
 fn parse_mixed(s: &str) -> Option<f64> {
-    let parts: Vec<&str> = s.split_whitespace().collect();
+    // AutoCAD's typed form joins whole inches and a fraction with a dash: 6-1/2 (as 6 1/2).
+    let dashed = s.trim().split_once('-').filter(|(a, b)| !a.is_empty() && b.contains('/') && !a.contains(char::is_whitespace));
+    let parts: Vec<&str> = match dashed {
+        Some((a, b)) => vec![a.trim(), b.trim()],
+        None => s.split_whitespace().collect(),
+    };
     let frac = |p: &str| -> Option<f64> {
         if let Some((a, b)) = p.split_once('/') {
             let d: f64 = b.trim().parse().ok()?;
@@ -285,6 +291,20 @@ pub const DEG: f64 = PI / 180.0;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dash_joins_inches_and_a_fraction() {
+        for (t, v) in
+            [("6-1/2\"", 6.5), ("6-1/2", 6.5), ("66-1/2", 66.5), ("5'6-1/2\"", 66.5), ("5'6-1/2", 66.5), ("5'-6-1/2\"", 66.5), ("-6-1/2", -6.5)]
+        {
+            assert_eq!(parse_distance(t), Some(v), "{t}");
+        }
+        // Still read as before.
+        for (t, v) in [("5'6\"", 66.0), ("5'-6\"", 66.0), ("1/2\"", 0.5), ("5'", 60.0), ("-5'6\"", -66.0), ("6 1/2", 6.5), ("2.5", 2.5)] {
+            assert_eq!(parse_distance(t), Some(v), "{t}");
+        }
+        assert_eq!(parse_distance("6-"), None);
+    }
 
     #[test]
     fn decimal_and_arch() {

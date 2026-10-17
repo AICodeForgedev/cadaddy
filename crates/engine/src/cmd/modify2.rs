@@ -398,6 +398,12 @@ enum PPhase {
     /// The second marker of Break / Straighten.
     VMark,
     VTangent,
+    /// Multiple: selecting, converting lines and arcs, the options, width, join fuzz.
+    MSelect,
+    MConvert,
+    MMain,
+    MWidth,
+    MFuzz,
 }
 
 mod pedit_vertex;
@@ -418,6 +424,8 @@ struct PeditM {
     tangents: Vec<(Vec2, Vec2)>,
     /// Pieces split off by Break, with the history length after it (erased again by Undo).
     split_off: Vec<(usize, Vec<Handle>)>,
+    /// Multiple: the objects chosen.
+    multi: Vec<Handle>,
 }
 
 impl PeditM {
@@ -434,6 +442,49 @@ impl PeditM {
         {
             self.history.push(e.kind);
         }
+    }
+    /// Take the one object picked at "Select polyline" (a point or a selection).
+    fn take(&mut self, s: &mut Session, h: Handle) -> Result<Step> {
+        let k = curves::entity(s, h)?.kind;
+        self.h = Some(h);
+        match k {
+            EntityKind::LwPolyline(pl) => {
+                self.original = Some(pl.vertices);
+                self.phase = PPhase::Main;
+            }
+            EntityKind::Line(_) | EntityKind::Arc(_) => self.phase = PPhase::Convert,
+            _ => {
+                self.h = None;
+                return Err(other("Object selected is not a polyline."));
+            }
+        }
+        s.set_selection(vec![h]);
+        Ok(Step::Continue)
+    }
+    /// Multiple: `opt` on every chosen polyline.
+    fn apply_all(&mut self, s: &mut Session, opt: &str, p: &Value) -> Result<()> {
+        let d = s.doc()?;
+        self.multi.retain(|h| d.entity(*h).is_some());
+        for h in self.multi.clone() {
+            pedit_apply(s, h, opt, p)?;
+        }
+        Ok(())
+    }
+    /// Multiple Join: each remaining polyline takes in the others that meet it.
+    fn join_all(&mut self, s: &mut Session, fuzz: f64) -> Result<usize> {
+        let mut added = 0;
+        let mut i = 0;
+        while i < self.multi.len() {
+            let d = s.doc()?;
+            self.multi.retain(|h| d.entity(*h).is_some());
+            let Some(h) = self.multi.get(i).copied() else { break };
+            let others: Vec<Handle> = self.multi.iter().copied().filter(|o| *o != h).collect();
+            added += pedit_join(s, h, &others, fuzz)?;
+            i += 1;
+        }
+        let d = s.doc()?;
+        self.multi.retain(|h| d.entity(*h).is_some());
+        Ok(added)
     }
     fn apply(&mut self, s: &mut Session, opt: &str, p: Value) -> Result<()> {
         let h = self.h.ok_or_else(|| other("No polyline."))?;
@@ -471,7 +522,14 @@ impl Interactive for PeditM {
     }
     fn prompt(&self, s: &Session) -> Prompt {
         match self.phase {
-            PPhase::Select => Prompt::new("Select polyline or", Accept::POINT).kw(&["Multiple"]),
+            PPhase::Select => Prompt::new("Select polyline or", Accept::SELECT).kw(&["Multiple"]),
+            PPhase::MSelect => Prompt::new("Select objects", Accept::SELECT),
+            PPhase::MConvert => Prompt::new("Convert Lines, Arcs and Splines to polylines?", curves::KW).kw(&["Yes", "No"]).default("Y"),
+            PPhase::MMain => {
+                Prompt::new("Enter an option", curves::KW).kw(&["Close", "Open", "Join", "Width", "Fit", "Spline", "Decurve", "Ltype gen", "Reverse"])
+            }
+            PPhase::MWidth => Prompt::new("Specify new width for all segments", Accept::NUMBER),
+            PPhase::MFuzz => Prompt::new("Enter fuzz distance", Accept::NUMBER).default("0.0000"),
             PPhase::Convert => {
                 Prompt::new("Object selected is not a polyline. Do you want to turn it into one?", curves::KW).kw(&["Yes", "No"]).default("Y")
             }
@@ -514,26 +572,109 @@ impl Interactive for PeditM {
             PPhase::Select => match i {
                 Input::Point(p) => {
                     let h = curves::pick_at(s, p).ok_or_else(|| other("*Invalid selection*"))?;
-                    let k = curves::entity(s, h)?.kind;
-                    self.h = Some(h);
-                    match k {
-                        EntityKind::LwPolyline(pl) => {
-                            self.original = Some(pl.vertices);
-                            self.phase = PPhase::Main;
-                        }
-                        EntityKind::Line(_) | EntityKind::Arc(_) => self.phase = PPhase::Convert,
-                        _ => {
-                            self.h = None;
-                            return Err(other("Object selected is not a polyline."));
-                        }
-                    }
-                    s.set_selection(vec![h]);
+                    self.take(s, h)
+                }
+                // A selection (Last, a window…): its first object, as AutoCAD takes one.
+                Input::Pick(hs) => match hs.first() {
+                    Some(h) => self.take(s, *h),
+                    None => Ok(Step::Continue),
+                },
+                Input::Keyword(k) if k.eq_ignore_ascii_case("multiple") => {
+                    self.phase = PPhase::MSelect;
                     Ok(Step::Continue)
                 }
-                Input::Keyword(_) => Err(other("Select one polyline (Multiple is available through the JSON form).")),
+                Input::Text(_) | Input::Keyword(_) => Err(other("*Invalid selection*")),
                 Input::Enter => Ok(Step::Cancel),
                 _ => Ok(Step::Continue),
             },
+            PPhase::MSelect => match i {
+                Input::Pick(hs) => {
+                    let d = s.doc()?;
+                    for h in hs {
+                        let ok = d.entity(h).is_some_and(|e| matches!(e.kind, EntityKind::LwPolyline(_) | EntityKind::Line(_) | EntityKind::Arc(_)));
+                        if ok && !self.multi.contains(&h) {
+                            self.multi.push(h);
+                        }
+                    }
+                    Ok(Step::Continue)
+                }
+                Input::Enter => {
+                    if self.multi.is_empty() {
+                        return Ok(Step::Done);
+                    }
+                    let d = s.doc()?;
+                    let loose = self.multi.iter().any(|h| d.entity(*h).is_some_and(|e| !matches!(e.kind, EntityKind::LwPolyline(_))));
+                    self.phase = if loose { PPhase::MConvert } else { PPhase::MMain };
+                    Ok(Step::Continue)
+                }
+                Input::Text(_) | Input::Keyword(_) => Err(other("*Invalid selection*")),
+                _ => Ok(Step::Continue),
+            },
+            PPhase::MConvert => {
+                let yes = match (&i, kw(&i)) {
+                    (Input::Enter, _) => true,
+                    (_, Some(k)) if k.starts_with('y') => true,
+                    (_, Some(k)) if k.starts_with('n') => false,
+                    _ => return Err(other("Enter Yes or No.")),
+                };
+                let hs = self.multi.clone();
+                for h in hs {
+                    let k = curves::entity(s, h)?.kind;
+                    if matches!(k, EntityKind::LwPolyline(_)) {
+                        continue;
+                    }
+                    match (yes, as_lwpoly(&k)) {
+                        (true, Some(pl)) => set_kind(s, h, EntityKind::LwPolyline(pl))?,
+                        _ => self.multi.retain(|x| *x != h),
+                    }
+                }
+                self.phase = PPhase::MMain;
+                Ok(if self.multi.is_empty() { Step::Done } else { Step::Continue })
+            }
+            PPhase::MMain => {
+                let Some(k) = kw(&i) else {
+                    return Ok(if i == Input::Enter { Step::Done } else { Step::Continue });
+                };
+                match k.as_str() {
+                    "close" | "c" => self.apply_all(s, "close", &json!({}))?,
+                    "open" | "o" => self.apply_all(s, "open", &json!({}))?,
+                    "fit" | "f" => self.apply_all(s, "fit", &json!({}))?,
+                    "spline" | "s" => self.apply_all(s, "spline", &json!({}))?,
+                    "decurve" | "d" => self.apply_all(s, "decurve", &json!({}))?,
+                    "ltype gen" | "l" => self.apply_all(s, "ltypegen", &json!({}))?,
+                    "reverse" | "r" => self.apply_all(s, "reverse", &json!({}))?,
+                    "width" | "w" => self.phase = PPhase::MWidth,
+                    "join" | "j" => self.phase = PPhase::MFuzz,
+                    _ => return Err(other("Invalid option keyword.")),
+                }
+                Ok(Step::Continue)
+            }
+            PPhase::MWidth => match &i {
+                Input::Text(t) | Input::Keyword(t) => {
+                    let w = crate::units::parse_distance(t).filter(|w| *w >= 0.0).ok_or_else(|| other("Requires a non-negative number."))?;
+                    self.apply_all(s, "width", &json!({ "width": w }))?;
+                    self.phase = PPhase::MMain;
+                    Ok(Step::Continue)
+                }
+                Input::Enter => {
+                    self.phase = PPhase::MMain;
+                    Ok(Step::Continue)
+                }
+                _ => Ok(Step::Continue),
+            },
+            PPhase::MFuzz => {
+                let fuzz = match &i {
+                    Input::Enter => 0.0,
+                    Input::Text(t) | Input::Keyword(t) => {
+                        crate::units::parse_distance(t).filter(|f| *f >= 0.0).ok_or_else(|| other("Requires a non-negative number."))?
+                    }
+                    _ => return Ok(Step::Continue),
+                };
+                let n = self.join_all(s, fuzz)?;
+                s.echo(format!("{n} segments added to polyline"));
+                self.phase = PPhase::MMain;
+                Ok(Step::Continue)
+            }
             PPhase::Convert => {
                 let no = kw(&i).is_some_and(|k| k.starts_with('n'));
                 if no {

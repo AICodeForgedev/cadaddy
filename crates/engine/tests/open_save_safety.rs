@@ -145,3 +145,24 @@ fn a_read_only_file_is_not_saved_over_and_permissions_are_kept() {
     std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o644)).unwrap();
     std::fs::remove_dir_all(&d).ok();
 }
+
+/// Saving a drawing to the file another tab has open is refused: it would wipe that drawing's
+/// work and leave two tabs on one file (battle test 3, B1).
+#[test]
+fn saving_over_a_drawing_open_in_another_tab_is_refused() {
+    install();
+    let d = dir("sametab");
+    let p = d.join("same.dxf").to_string_lossy().to_string();
+    let mut s = Session::new();
+    s.cmdline("circle 0,0 5").unwrap();
+    s.execute("saveas", &json!({ "path": p })).unwrap();
+    s.new_drawing(false);
+    s.cmdline("line 0,0 9,9 ").unwrap();
+    let e = s.execute("saveas", &json!({ "path": p })).unwrap_err().to_string();
+    assert!(e.contains("open in another tab"), "{e}");
+    assert_eq!(s.docs.iter().filter(|st| st.path.as_deref() == Some(p.as_str())).count(), 1);
+    // The tab's own file saves as before.
+    s.execute("document.switch", &json!({"index": 0})).unwrap();
+    s.execute("qsave", &json!({})).unwrap();
+    std::fs::remove_dir_all(&d).ok();
+}

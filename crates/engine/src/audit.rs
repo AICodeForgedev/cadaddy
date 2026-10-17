@@ -332,7 +332,7 @@ fn invalid_geometry(e: &Entity) -> Option<&'static str> {
         return Some("has infinite or undefined numbers");
     }
     match &e.kind {
-        EntityKind::Line(l) if l.a == l.b => Some("has zero length"),
+        // A zero-length line is valid (it plots as a dot); PURGE's zero-length option removes them.
         EntityKind::Circle(c) if c.radius <= 0.0 => Some("has no radius"),
         EntityKind::Arc(a) if a.radius <= 0.0 => Some("has no radius"),
         EntityKind::Ellipse(el) if el.major.len() <= 0.0 || el.ratio <= 0.0 => Some("has no size"),

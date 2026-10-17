@@ -475,6 +475,17 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<usiz
             ),
         ));
     }
+    // Another open drawing's file: saving over it would wipe that drawing's work, and both tabs
+    // would then claim the file (AutoCAD refuses too).
+    if is_drawing_file(path) {
+        let active = s.active;
+        if let Some(other) = s.docs.iter().enumerate().find(|(i, d)| *i != active && d.path.as_deref().is_some_and(|p| same_file(p, path))) {
+            return Err(bad(
+                cmd,
+                format!("{} is open in another tab ({}). Close it first, or save under another name.", file_name(path), other.1.title),
+            ));
+        }
+    }
     let bytes = write_bytes(s, cmd, path, opts)?;
     let n = commit_save(s, path, &bytes, store)?;
     if is_drawing_file(path)
