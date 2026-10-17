@@ -29,6 +29,9 @@
 3. If Windows says *"Windows protected your PC"*, click **More info → Run anyway**. The installer isn't code-signed yet.
 
 **Mac (Apple chip or Intel, macOS 11 or newer)**
+
+With [Homebrew](https://brew.sh): `brew install --cask aicodeforgedev/tap/cadaddy`. Or:
+
 1. Download **CADaddy-Mac.dmg** and open it.
 2. Drag **CADaddy** onto **Applications**.
 3. The first time, if your Mac says it *"could not verify"* CADaddy, open **System Settings ▸ Privacy & Security** and click **Open Anyway**. The app isn't notarized yet.
