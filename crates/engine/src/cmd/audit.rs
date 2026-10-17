@@ -119,7 +119,17 @@ fn run_recover(s: &mut Session, p: &Value) -> Result<Value> {
         st.saved = Arc::new((*st.doc).clone());
     }
     let uid = st.uid;
+    // What reading the file left out (a cut-off DXF, unreadable DWG objects) is part of the
+    // recovery report too, and saving over the original asks first.
+    let warnings = st.doc.read_notes.clone();
+    if !copy {
+        st.read_loss = file::read_loss(&st.doc);
+    }
+    for w in &warnings {
+        s.echo(w.clone());
+    }
     let mut r = report.to_json();
+    r["warnings"] = json!(warnings);
     r["index"] = json!(i);
     r["uid"] = json!(uid);
     Ok(r)

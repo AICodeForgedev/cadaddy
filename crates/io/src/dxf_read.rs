@@ -1668,12 +1668,18 @@ fn ltype_pattern(tags: &[Tag], styles: &HashMap<String, String>) -> Vec<DashElem
 }
 
 /// Read a DXF file into a drawing.
+/// The read note for a DXF file that stops before its end (no `0 EOF`).
+pub const CUT_OFF_NOTE: &str = "DXF: the file ends early (it has no end marker), so it looks cut off and anything after the cut is missing; saving over the original file would lose it";
+
 pub fn read(bytes: &[u8]) -> Result<Drawing> {
     let tags = cadcraft_dxf::parse(bytes).map_err(|e| IoError::Format(e.to_string()))?;
     let secs = sections(&tags);
     if secs.is_empty() {
         return Err(IoError::Format("no sections found".into()));
     }
+    // Every DXF ends with `0 EOF`: without it the file was cut off (a failed copy or download),
+    // and whatever came after the cut is missing.
+    let cut_off = !tags.iter().rev().take(4).any(|t| t.code == 0 && t.str().trim().eq_ignore_ascii_case("EOF"));
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
     let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
@@ -1874,6 +1880,9 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     }
     crate::dxf_raw::read(&secs, &mut d);
     d.skipped_records = skipped;
+    if cut_off {
+        d.read_notes.push(CUT_OFF_NOTE.into());
+    }
     Ok(d)
 }
 

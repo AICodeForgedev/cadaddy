@@ -301,6 +301,9 @@ pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
 /// Add a [`read_file`] result to the session as the active drawing: the fast half of OPEN.
 pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
     let ReadFile { drawing, binary_dxf, name, path } = f;
+    if let Some(i) = path.as_deref().and_then(|p| already_open(s, p)) {
+        return Ok(switch_to_open(s, i));
+    }
     image_folder(path.as_deref());
     let i = add_read(s, drawing, binary_dxf, &name, path);
     super::blocks::xref::after_open(s, i);
@@ -318,15 +321,56 @@ fn read_bytes(bytes: &[u8], name: &str, path: Option<String>) -> Result<ReadFile
 
 fn add_read(s: &mut Session, drawing: Drawing, binary_dxf: bool, name: &str, path: Option<String>) -> usize {
     let notes = drawing.read_notes.clone();
+    let loss = read_loss(&drawing);
+    let has_path = path.is_some();
     let i = s.open_drawing(drawing, &file_name(name), path);
     if let Some(st) = s.docs.get_mut(i) {
         // QSAVE keeps a binary DXF binary.
         st.binary_dxf = binary_dxf;
+        st.read_loss = loss.filter(|_| has_path);
     }
     for note in notes {
         s.echo(note);
     }
     i
+}
+
+/// What reading left out of a drawing that the file still has, when anything was: a DWG's
+/// unreadable object records, a cut-off DXF, records a damaged DXF couldn't place.
+pub(crate) fn read_loss(d: &Drawing) -> Option<String> {
+    if let Some(note) = d.read_notes.first() {
+        return Some(note.clone());
+    }
+    let n = d.skipped_records.values().fold(0usize, |a, n| a.saturating_add(*n));
+    (n > 0).then(|| {
+        format!("{n} damaged record{} couldn't be placed and {} left out", if n == 1 { "" } else { "s" }, if n == 1 { "was" } else { "were" })
+    })
+}
+
+/// Whether two paths name the same file (resolved when they exist, else compared as written;
+/// without regard to case on Windows and macOS, whose file systems usually ignore it).
+pub(crate) fn same_file(a: &str, b: &str) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let (Ok(x), Ok(y)) = (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        return x == y;
+    }
+    if cfg!(any(windows, target_os = "macos")) { a.eq_ignore_ascii_case(b) } else { a == b }
+}
+
+/// The open drawing read from `path`, if any: opening it again switches to it instead of making a
+/// second copy whose save would overwrite the first one's edits.
+fn already_open(s: &Session, path: &str) -> Option<usize> {
+    s.docs.iter().position(|d| d.path.as_deref().is_some_and(|p| same_file(p, path)))
+}
+
+/// OPEN of a file that is already open: that drawing becomes current, as in AutoCAD.
+fn switch_to_open(s: &mut Session, i: usize) -> Value {
+    s.active = i;
+    let title = s.docs.get(i).map(|d| d.title.clone()).unwrap_or_default();
+    s.echo(format!("{title} is already open."));
+    let mut r = opened(s, i, true);
+    r["alreadyOpen"] = json!(true);
+    r
 }
 
 pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option<String>) -> Result<usize> {
@@ -351,6 +395,9 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
         let path = _path;
         #[cfg(not(target_arch = "wasm32"))]
         {
+            if let Some(i) = already_open(s, path) {
+                return Ok(switch_to_open(s, i));
+            }
             let bytes = crate::readfile::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
             let i = open_bytes(s, &bytes, path, Some(path.to_string()))?;
             super::blocks::xref::after_open(s, i);
@@ -402,8 +449,35 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<usiz
     if s.doc()?.refedit.is_some() {
         return Err(bad(cmd, "A block reference is being edited in place: finish with REFCLOSE (Save or Discard) before saving."));
     }
+    // Saving over the file a drawing was read from with parts left out loses them for good: the
+    // first save there explains and stops; saving again overwrites (keeping a .bak).
+    let st = s.state_mut()?;
+    let over_original = st.path.as_deref().is_some_and(|p| same_file(p, path));
+    if over_original
+        && !st.loss_warned
+        && let Some(why) = st.read_loss.clone()
+    {
+        st.loss_warned = true;
+        return Err(bad(
+            cmd,
+            format!(
+                "{} was opened with parts missing ({why}). Saving over it would lose them for good. \
+                 Use SAVEAS to save under another name and keep the original, or save again to overwrite it \
+                 (the original is kept as {}).",
+                st.title,
+                file_name(&bak_path(path))
+            ),
+        ));
+    }
     let bytes = write_bytes(s, cmd, path, opts)?;
     let n = commit_save(s, path, &bytes, store)?;
+    if is_drawing_file(path)
+        && let Ok(st) = s.state_mut()
+    {
+        // The drawing's file now holds just what the drawing has: nothing more to lose (a SAVEAS
+        // left the original, with what reading left out, where it was).
+        st.read_loss = None;
+    }
     if is_drawing_file(path) {
         let st = s.state_mut()?;
         st.binary_dxf = opts.binary;
@@ -419,12 +493,27 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<usiz
 
 /// Put saved bytes where the user gets them: natively the file at `path` (written atomically); on
 /// the web, which has no file system, a browser download named after `path` via [`deliver`].
+/// Where saving over a drawing keeps the previous file: the same name with `.bak` (AutoCAD's
+/// ISAVEBAK).
+fn bak_path(path: &str) -> String {
+    std::path::Path::new(path).with_extension("bak").to_string_lossy().into_owned()
+}
+
 fn store(path: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // A drawing saved over keeps its previous version as .bak, as AutoCAD does.
+        if is_drawing_file(path) && std::path::Path::new(path).is_file() {
+            let bak = bak_path(path);
+            std::fs::copy(path, &bak).map_err(|e| bad("save", format!("{path}: couldn't keep the previous version as {bak}: {e}")))?;
+        }
         let tmp = format!("{path}.cadcraft-tmp");
-        std::fs::write(&tmp, bytes).map_err(|e| bad("save", format!("{path}: {e}")))?;
-        std::fs::rename(&tmp, path).map_err(|e| bad("save", format!("{path}: {e}")))?;
+        let written = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
+        if let Err(e) = written {
+            // A failed save leaves nothing behind but the file as it was.
+            let _ = std::fs::remove_file(&tmp);
+            return Err(bad("save", format!("{path}: {e}")));
+        }
         Ok(())
     }
     #[cfg(target_arch = "wasm32")]

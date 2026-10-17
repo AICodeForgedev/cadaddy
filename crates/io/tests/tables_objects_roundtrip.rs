@@ -302,3 +302,16 @@ fn foreign_and_hostile_tables_objects() {
     assert_eq!(again.groups, d.groups);
     assert_eq!(again.views, d.views);
 }
+
+#[test]
+fn a_dxf_cut_off_before_its_end_is_reported() {
+    // A truncated file (a failed copy or download) has no `0 EOF`: it opens with a note saying so,
+    // which also makes saving over it ask first.
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(1.0, 0.0, 0.0) })).unwrap();
+    let text = write_dxf(&d);
+    assert!(read_dxf(text.as_bytes()).unwrap().read_notes.is_empty(), "a whole file has no note");
+    let cut = &text[..text.find("ENTITIES").expect("entities") + 200];
+    let r = read_dxf(cut.as_bytes()).expect("a cut-off file still opens");
+    assert!(r.read_notes.iter().any(|n| n.contains("cut off")), "{:?}", r.read_notes);
+}

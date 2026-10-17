@@ -148,6 +148,12 @@ pub struct DocState {
     /// The Block Editor (BEDIT), when it is open: `doc` is then the editor's drawing, and the
     /// drawing itself waits in it ([`DocState::drawing`]).
     pub block_edit: Option<blockedit::BlockEdit>,
+    /// The file at `path` holds what reading it left out (a DWG's unreadable objects, a cut-off
+    /// DXF): what the user was told. Saving over that file asks first; cleared once it's saved.
+    pub read_loss: Option<String>,
+    /// The user was told that saving over the file would lose what reading left out: saving
+    /// again overwrites it.
+    pub loss_warned: bool,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -174,6 +180,8 @@ impl DocState {
             view_dir: cadcraft_geom::Vec3::Z,
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             binary_dxf: false,
+            read_loss: None,
+            loss_warned: false,
             block_edit: None,
         }
     }
