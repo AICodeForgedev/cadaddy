@@ -155,3 +155,24 @@ fn objects_in_a_read_xref_block_are_ignored() {
     assert_eq!(site.xref_path.as_deref(), Some("site.dxf"));
     assert!(site.entities.is_empty());
 }
+
+/// The same through DWG (saved by way of acadrust): the references, their paths and kinds, and
+/// the host's settings of an xref's layers.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn xrefs_survive_a_dwg_save() {
+    let mut d = host();
+    let walls = d.layer_mut("SITE|Walls").expect("walls");
+    walls.color = Color::Index(252);
+    walls.frozen = true;
+    let dwg = cadcraft_io::write(&d, "x.dwg").expect("save dwg");
+    let r = cadcraft_io::read(&dwg, "x.dwg").expect("reopen dwg");
+    let site = r.block("SITE").expect("xref kept");
+    assert_eq!((site.xref_path.as_deref(), site.xref_overlay), (Some("..\\shared\\site.dwg"), false));
+    assert!(site.entities.is_empty(), "its objects come from the referenced file");
+    let plan = r.block("PLAN").expect("overlay kept");
+    assert_eq!((plan.xref_path.as_deref(), plan.xref_overlay), (Some("plan.dxf"), true));
+    assert_eq!(r.model.iter().filter(|e| matches!(e.kind, EntityKind::Insert(_))).count(), 2);
+    let walls = r.layer("SITE|Walls").expect("xref layer kept");
+    assert_eq!((walls.color, walls.frozen), (Color::Index(252), true));
+}

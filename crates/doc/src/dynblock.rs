@@ -337,6 +337,19 @@ fn graph_members<'a>(objects: &HashMap<Handle, &'a ForeignObject>, xdict: Handle
     Some(members.take(MAX_NODES).filter_map(|h| objects.get(&h).copied()).collect())
 }
 
+/// The name a dynamic block goes by: AutoCAD keeps some dynamic blocks under an anonymous name
+/// (`*U7`) and their own name in the record's `AcDbDynamicBlockTrueName` xdata. Any other block
+/// goes by its name.
+pub fn display_name(d: &Drawing, name: &str) -> String {
+    let key = ("BLOCK_RECORD".to_string(), name.trim().to_ascii_uppercase());
+    let xdata = d.foreign.records.get(&key).map(|r| r.xdata.as_slice()).unwrap_or_default();
+    let mut tags = xdata.iter().skip_while(|t| !(t.code == 1001 && t.value.trim() == "AcDbDynamicBlockTrueName")).skip(1);
+    match tags.next() {
+        Some(t) if t.code == 1000 && !t.value.trim().is_empty() => t.value.trim().to_string(),
+        _ => name.to_string(),
+    }
+}
+
 /// The dynamic block data of block `name` (any case; `*Model_Space` for a drawing that is a
 /// block's own drawing), or `None` when it has none.
 pub fn dynamic_block(d: &Drawing, name: &str) -> Option<DynamicBlock> {
@@ -557,5 +570,18 @@ mod tests {
         let (_, ActionKind::Stretch { vertices, .. }) = stretch(&tags) else { panic!("a stretch action") };
         let ints: usize = vertices.iter().map(|(_, v)| v.len()).sum();
         assert!(ints <= 16 * tags.len() + 1024, "{ints}");
+    }
+
+    /// A dynamic block kept under an anonymous name goes by the name in its record's xdata.
+    #[test]
+    fn an_anonymous_dynamic_block_goes_by_its_true_name() {
+        let mut d = Drawing::default();
+        let extra = crate::foreign::ForeignExtra {
+            xdata: vec![tag(1001, "AcDbDynamicBlockTrueName"), tag(1000, "Drawing Title"), tag(1001, "AcDbBlockRepETag"), tag(1070, "1")],
+            ..Default::default()
+        };
+        std::sync::Arc::make_mut(&mut d.foreign).records.insert(("BLOCK_RECORD".into(), "*U7".into()), extra);
+        assert_eq!(display_name(&d, "*u7"), "Drawing Title");
+        assert_eq!(display_name(&d, "Door"), "Door");
     }
 }

@@ -259,7 +259,7 @@ pub fn custom_properties(d: &Drawing, insert: Handle) -> Option<(String, Vec<Cus
             _ => {}
         }
     }
-    Some((r.definition, out))
+    Some((super::display_name(d, &r.definition), out))
 }
 
 /// Whether every lookup table that sets lookup parameter `node` sets only what

@@ -293,6 +293,8 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
     let layers: Vec<String> = d.layers.iter().map(|l| l.name.clone()).collect();
     let linetypes: Vec<String> = d.linetypes.iter().map(|l| l.name.clone()).collect();
     let kind = if ents.len() == 1 { Some(first.kind.clone()) } else { None };
+    // A dynamic block reference goes by its dynamic block's name, not its anonymous block's.
+    let block_name = cadcraft_engine::doc::dynblock::custom_properties(d, first.handle).map(|(n, _)| n);
     let ids: Vec<String> = sel.iter().map(|h| h.hex()).collect();
     let mut set: Option<(String, Value)> = None;
     let mut close = false;
@@ -384,7 +386,7 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
                         num_row(ui, "Text height", id("h"), tx.height, &mut set, "height");
                     }
                     Some(EntityKind::Insert(i)) => {
-                        ro_row(ui, "Name", i.block.clone());
+                        ro_row(ui, "Name", block_name.clone().unwrap_or_else(|| i.block.clone()));
                         num_row(ui, "Rotation", id("rot"), i.rotation.to_degrees(), &mut set, "rotation");
                         num_row(ui, "Scale", id("sc"), i.scale.x, &mut set, "scale");
                     }
