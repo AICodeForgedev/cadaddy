@@ -597,3 +597,20 @@ fn dimcontinue_enter_asks_for_a_dimension_and_a_second_enter_ends() {
     assert!((last.p13.x - 10.0).abs() < 1e-9 && (last.p14.x - 30.0).abs() < 1e-9 && last.p13.y.abs() < 1e-9, "{last:?}");
     let _ = b;
 }
+
+#[test]
+fn properties_set_leaves_locked_layer_objects_alone() {
+    // The Properties palette goes through properties.set: a line on a locked layer keeps its
+    // length; in a mixed selection the others change and the locked one is reported.
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({ "name": "Walls" })).unwrap();
+    let a = h(&s.execute("line", &json!({ "points": [[0, 0], [40, 0]] })).unwrap()["handles"][0].as_str().map(|x| json!({"handle": x})).unwrap());
+    let b = h(&s.execute("line", &json!({ "points": [[0, 5], [40, 5]] })).unwrap()["handles"][0].as_str().map(|x| json!({"handle": x})).unwrap());
+    s.execute("properties.set", &json!({ "handles": [a.hex()], "layer": "Walls" })).unwrap();
+    s.execute("layer.set", &json!({ "name": "Walls", "locked": true })).unwrap();
+    assert!(s.execute("properties.set", &json!({ "handles": [a.hex()], "color": 1 })).is_err());
+    s.execute("properties.set", &json!({ "handles": [a.hex(), b.hex()], "color": 1 })).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.entity(a).unwrap().common.color, cadcraft_color::Color::ByLayer);
+    assert_eq!(d.entity(b).unwrap().common.color, cadcraft_color::Color::Index(1));
+}

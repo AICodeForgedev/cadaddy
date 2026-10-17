@@ -528,6 +528,15 @@ fn edit_field(ui: &mut egui::Ui, id: egui::Id, value: String) -> Option<String> 
     let w = ui.available_width() - 10.0;
     let te = id.with("te");
     let resp = ui.add_sized([w, 20.0], egui::TextEdit::singleline(&mut buf).id(te).font(crate::theme::body()));
+    // Clicking into a value selects all of it, so what is typed replaces it (as in AutoCAD) instead
+    // of being appended: "30.0000" then "40" must give 40, not 30.000040.
+    if resp.gained_focus()
+        && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), te)
+    {
+        let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(buf.chars().count()));
+        state.cursor.set_char_range(Some(all));
+        state.store(ui.ctx(), te);
+    }
     let mut out = None;
     // Keyboard focus from memory: `Response::has_focus` is false while the window itself is
     // unfocused, which dropped the typed text every frame.

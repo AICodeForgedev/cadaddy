@@ -29,6 +29,7 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
         "ddptype" | "ptype" => "ptype",
         "style" | "st" => "textstyle",
         "tablestyle" | "ts" => "tablestyle",
+        "dimstyle" | "d" | "dst" | "ddim" | "dimstyle.dimension" => "dimstyle",
         "mleaderstyle" | "mls" => "mleaderstyle",
         "pagesetup" => "pagesetup",
         "constraintsettings" | "csettings" => "csettings",
@@ -50,6 +51,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, name: &str, open: &mut bool
         "ptype" => point_style(app, ctx, open),
         "textstyle" => text_style(app, ctx, open),
         "tablestyle" => table_style(app, ctx, open),
+        "dimstyle" => dim_style(app, ctx, open),
         "mleaderstyle" => mleader_style(app, ctx, open),
         "pagesetup" => page_setup(app, ctx, open),
         "csettings" => constraint_settings(app, ctx, open),
@@ -298,6 +300,8 @@ enum Field {
     Num(&'static str, &'static str, f64),
     Bool(&'static str, &'static str, bool),
     Choice(&'static str, &'static str, String, Vec<String>),
+    /// A number picked from named values (the style holds the number).
+    Pick(&'static str, &'static str, i64, &'static [(&'static str, i64)]),
 }
 
 struct Style {
@@ -355,6 +359,52 @@ fn table_style(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action
     }
     let current = d.header.str("CTABLESTYLE", "Standard");
     style_manager(ctx, open, "Table Style", "tablestyle", &current, &styles)
+}
+
+/// DIMLUNIT values.
+const LINEAR_UNITS: &[(&str, i64)] =
+    &[("Scientific", 1), ("Decimal", 2), ("Engineering", 3), ("Architectural", 4), ("Fractional", 5), ("Windows Desktop", 6)];
+/// DIMDEC: digits after the decimal point (or the fraction denominator power for feet-inches).
+const PRECISIONS: &[(&str, i64)] = &[
+    ("0", 0),
+    ("0.0  (1/2\")", 1),
+    ("0.00  (1/4\")", 2),
+    ("0.000  (1/8\")", 3),
+    ("0.0000  (1/16\")", 4),
+    ("0.00000  (1/32\")", 5),
+    ("0.000000  (1/64\")", 6),
+];
+/// DIMTAD: text placement against the dimension line.
+const TEXT_PLACEMENT: &[(&str, i64)] = &[("Centered", 0), ("Above", 1), ("Outside", 2), ("JIS", 3), ("Below", 4)];
+
+fn dim_style(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
+    let Ok(d) = app.session.doc() else {
+        no_drawing(ctx, "Dimension Style", open);
+        return None;
+    };
+    let text_styles: Vec<String> = d.text_styles.iter().map(|s| s.name.clone()).collect();
+    let styles: Vec<Style> = d
+        .dim_styles
+        .iter()
+        .map(|s| Style {
+            name: s.name.clone(),
+            fields: vec![
+                Field::Pick("linearUnit", "Unit format", i64::from(s.linear_unit), LINEAR_UNITS),
+                Field::Pick("decimals", "Precision", i64::from(s.decimals), PRECISIONS),
+                Field::Num("textHeight", "Text height", s.text_height),
+                Field::Choice("textStyle", "Text style", s.text_style.clone(), text_styles.clone()),
+                Field::Pick("textAbove", "Text placement", i64::from(s.text_above), TEXT_PLACEMENT),
+                Field::Num("textGap", "Offset from dim line", s.text_gap),
+                Field::Num("arrowSize", "Arrow size", s.arrow_size),
+                Field::Num("tickSize", "Tick size (0 = arrows)", s.tick_size),
+                Field::Num("extExtend", "Extend beyond dim lines", s.ext_extend),
+                Field::Num("extOffset", "Offset from origin", s.ext_offset),
+                Field::Num("scale", "Overall scale (DIMSCALE)", s.scale),
+            ],
+        })
+        .collect();
+    let current = d.header.str("DIMSTYLE", "Standard");
+    style_manager(ctx, open, "Dimension Style Manager", "dimstyle", &current, &styles)
 }
 
 fn mleader_style(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
@@ -437,6 +487,19 @@ fn style_manager(ctx: &egui::Context, open: &mut bool, title: &str, cmd: &'stati
                             ui.label("");
                             let mut b = *v;
                             ui.checkbox(&mut b, *label).changed().then(|| (*key, json!(b)))
+                        }
+                        Field::Pick(key, label, v, choices) => {
+                            ui.label(*label);
+                            let shown = choices.iter().find(|(_, n)| n == v).map_or_else(|| v.to_string(), |(l, _)| crate::i18n::t(l).to_string());
+                            let mut picked = None;
+                            egui::ComboBox::from_id_salt((cmd, *key)).selected_text(shown).show_ui(ui, |ui| {
+                                for (l, n) in *choices {
+                                    if ui.selectable_label(n == v, crate::i18n::t(l)).clicked() && n != v {
+                                        picked = Some(*n);
+                                    }
+                                }
+                            });
+                            picked.map(|n| (*key, json!(n)))
                         }
                         Field::Choice(key, label, v, choices) => {
                             ui.label(*label);

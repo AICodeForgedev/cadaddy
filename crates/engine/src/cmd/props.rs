@@ -184,9 +184,27 @@ fn set_xy(p: &mut Vec3, v: &Value) {
 }
 
 fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = targets(s, p)?;
+    let mut hs = targets(s, p)?;
     if hs.is_empty() {
         return Err(bad("properties.set", "nothing selected"));
+    }
+    // Objects on a locked layer can't be changed, from the Properties palette either (AutoCAD).
+    let before = hs.len();
+    {
+        let d = s.doc()?;
+        hs.retain(|h| !d.entity(*h).and_then(|e| d.layer(&e.common.layer)).is_some_and(|l| l.locked));
+    }
+    match before - hs.len() {
+        0 => {}
+        _ if hs.is_empty() => {
+            return Err(crate::EngineError::Other(if before == 1 {
+                "The object is on a locked layer.".into()
+            } else {
+                format!("All {before} objects are on locked layers.")
+            }));
+        }
+        1 => s.echo("1 was on a locked layer."),
+        k => s.echo(format!("{k} were on a locked layer.")),
     }
     let color = p.get("color").map(|c| parse_color(c).ok_or_else(|| bad("properties.set", "bad colour"))).transpose()?;
     let transparency = p

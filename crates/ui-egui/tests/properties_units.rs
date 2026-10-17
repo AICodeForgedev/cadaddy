@@ -75,3 +75,16 @@ fn unreadable_text_is_reported_not_dropped() {
     assert!(log.iter().any(|l| l.contains("abc")), "{log:?}");
     field(&h, "2.5000");
 }
+
+#[test]
+fn typing_into_a_field_replaces_its_value() {
+    // Clicking into a value selects it: typing "4" over "2.5000" gives 4, not 2.50004.
+    let mut h = palettes(2);
+    field(&h, "2.5000").focus();
+    h.run_steps(2);
+    field(&h, "2.5000").type_text("4");
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(height(h.state()), 4.0);
+}
