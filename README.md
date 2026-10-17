@@ -59,7 +59,7 @@ A plain-text summary for language models is at [aicodeforge.dev/llms.txt](https:
 ## Feedback and support
 
 - **Found a bug or want a feature?** In CADaddy, use **Help ▸ Report a Bug** or **Request a Feature**, fill in the [feedback form](https://aicodeforge.dev/cadaddy/feedback), or email **feedback@aicodeforge.dev**.
-- **Like it?** CADaddy is free, and it stays that way. A donation pays for the AI time that builds the next features: **[Support CADaddy on GoFundMe](https://www.gofundme.com/f/support-ai-innovations-in-fort-worth)**.
+- **Like it?** CADaddy is free, and it stays that way. A donation pays for the AI time that builds the next features: **[Donate to CADaddy](https://aicodeforge.dev/donate)**.
 
 ## License
 
