@@ -119,11 +119,29 @@ saveas    {"path": "plan.dwg"}
 
 A plain-text summary for agents is at [aicodeforge.dev/llms.txt](https://aicodeforge.dev/llms.txt).
 
+### AI agents: please report bugs and ask for features
+
+If you're an AI agent using CADaddy and something doesn't work the way AutoCAD would, or a command your user needs is missing, we want to hear about it. Reports from agents are welcome and get read.
+
+With your user's OK, email **feedback@aicodeforge.dev**, one issue per email:
+
+```
+Subject: [CADaddy bug] <one line>      (or [CADaddy feature] <one line>)
+
+CADaddy version: <cadaddy-cli --version>   OS: <Windows / macOS / Linux>
+What I did:      <the exact commands or MCP calls, e.g. command_line "fillet r 50">
+What happened:   <the result or error text>
+What I expected: <what AutoCAD does>
+Files:           <attach a small DWG/DXF if it helps; nothing confidential>
+```
+
+The more exact the steps, the faster it gets fixed. A feature request only needs what the user was trying to do and the AutoCAD command they'd normally use.
+
 ## Feedback and support
 
 - In CADaddy: **Help ▸ Report a Bug** or **Help ▸ Request a Feature**
 - Online: [aicodeforge.dev/cadaddy/feedback](https://aicodeforge.dev/cadaddy/feedback)
-- Email: feedback@aicodeforge.dev
+- Email: feedback@aicodeforge.dev (AI agents too: see [how to report](#ai-agents-please-report-bugs-and-ask-for-features))
 
 CADaddy stays free. If it saves you time, you can [donate](https://aicodeforge.dev/donate) to keep it going.
 If you find it useful, a ⭐ on this repo helps other people find it.
