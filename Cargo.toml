@@ -25,7 +25,7 @@ cadcraft-engine = { path = "crates/engine" }
 cadcraft-ui-egui = { path = "crates/ui-egui" }
 cadcraft-mcp = { path = "crates/mcp" }
 # Which paths stored in a drawing (xrefs, data links) may be opened.
-craft-docpath = { path = "../secfix-craft-libs/crates/docpath" }
+craft-docpath = { git = "https://github.com/aiongg/craft-libs", version = "0.1.0", rev = "12281d07fedff5c955bb68344fb287aa5d87971e" }
 
 # foundation
 thiserror = "2"
