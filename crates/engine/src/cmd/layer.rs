@@ -25,13 +25,26 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["clayer"])
             .params("{name}"),
         CommandSpec::new("layer.delete", "Delete Layer", run_delete).params("{name}"),
-        CommandSpec::new("laymcur", "Make Object's Layer Current", run_laymcur).params("{handles?}"),
-        CommandSpec::new("laymch", "Layer Match", run_laymch).menu(&["Format", "Layer Tools", "Layer Match"]).params("{handles?, layer}"),
+        CommandSpec::new("laymcur", "Make Object's Layer Current", run_laymcur)
+            .params("{handles?}")
+            .interactive(|_| Ok(Box::new(SelectRun::single("laymcur", "LAYMCUR", "Select object whose layer will become current")))),
+        CommandSpec::new("laymch", "Layer Match", run_laymch).menu(&["Format", "Layer Tools", "Layer Match"]).params("{handles?, layer}").interactive(|_| {
+            Ok(super::ask::machine(
+                "laymch",
+                "LAYMCH",
+                [
+                    super::ask::ask("handles", "Select objects to be changed", super::ask::Kind::Select),
+                    super::ask::ask("layer", "Enter layer name", super::ask::Kind::Text),
+                ],
+            ))
+        }),
         CommandSpec::new("laycur", "Change to Current Layer", run_laycur)
             .menu(&["Format", "Layer Tools", "Change to Current Layer"])
             .params("{handles?}")
             .interactive(|_| Ok(Box::new(SelectRun::new("laycur", "LAYCUR")))),
-        CommandSpec::new("layiso", "Isolate Layer", run_layiso).menu(&["Format", "Layer Tools", "Isolate Layer"]).params("{handles?}"),
+        CommandSpec::new("layiso", "Isolate Layer", run_layiso).menu(&["Format", "Layer Tools", "Isolate Layer"])
+            .params("{handles?}")
+            .interactive(|_| Ok(Box::new(SelectRun::new("layiso", "LAYISO")))),
         CommandSpec::new("layuniso", "Unisolate Layer", run_layuniso).menu(&["Format", "Layer Tools", "Unisolate Layer"]),
         CommandSpec::new("layfrz", "Freeze Layer", |s, p| set_obj_layers(s, p, |l| l.frozen = true))
             .menu(&["Format", "Layer Tools", "Freeze Layer"])

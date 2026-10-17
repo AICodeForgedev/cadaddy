@@ -25,7 +25,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{mode: point|distance|angle|intersection, points: [[x,y],...]} → {value} | {point}")
             .noundo()
             .interactive(|_| Ok(Box::<PickM>::default())),
-        CommandSpec::new("find", "Find...", run_find).menu(&["Edit", "Find..."]).params("{find, replace?, matchCase?: bool, wholeWord?: bool}"),
+        CommandSpec::new("find", "Find...", run_find)
+            .menu(&["Edit", "Find..."])
+            .params("{find, replace?, matchCase?: bool, wholeWord?: bool}")
+            .interactive(|_| Ok(super::ask::machine("find", "FIND", [super::ask::ask("find", "Enter text to find", super::ask::Kind::Text)]))),
         CommandSpec::new("measuregeom", "Measure Geometry", run_measuregeom).params("{mode: distance|radius|angle|area, ...}").noundo(),
         CommandSpec::new("radius.measure", "Radius", run_radius).menu(&["Tools", "Inquiry", "Radius"]).params("{handle}").noundo(),
         CommandSpec::new("angle.measure", "Angle", run_angle).menu(&["Tools", "Inquiry", "Angle"]).params("{vertex, p1, p2} | {h1, h2}").noundo(),

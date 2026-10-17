@@ -4,6 +4,7 @@
 pub(crate) mod annoscale;
 mod annotate;
 mod array;
+pub(crate) mod ask;
 mod audit;
 pub(crate) mod blocks;
 pub mod clipboard;

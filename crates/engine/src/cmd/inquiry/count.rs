@@ -368,7 +368,7 @@ impl Interactive for CountM {
         "COUNT"
     }
     fn prompt(&self, _s: &Session) -> Prompt {
-        Prompt::new("Select object to count or [List/Spaces]", Accept::SELECT).kw(&["List", "Spaces"]).default("List")
+        Prompt::new("Select object to count", Accept::SELECT).kw(&["List", "Spaces"]).default("List")
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         let p = match i {

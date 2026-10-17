@@ -152,7 +152,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{name, value}")
             .transparent()
             .interactive(|_| Ok(Box::new(SetvarM::default()))),
-        CommandSpec::new("getvar", "Get Variable", run_getvar).params("{name}").enabled(always).noundo(),
+        CommandSpec::new("getvar", "Get Variable", run_getvar)
+            .params("{name}")
+            .enabled(always)
+            .noundo()
+            .interactive(|_| Ok(super::ask::machine("getvar", "GETVAR", [super::ask::ask("name", "Enter variable name", super::ask::Kind::Text)]))),
         CommandSpec::new("sysvars", "List System Variables", |s, _| Ok(crate::sysvars::list(s))).enabled(always).noundo(),
     ]
 }

@@ -45,7 +45,9 @@ pub fn specs() -> Vec<CommandSpec> {
         attedit::attedit_spec(),
         attedit::dash_attedit_spec(),
         CommandSpec::new("wblock", "Write Block", run_wblock).alias(&["w"]).params("{path, name? | handles?, base?}"),
-        CommandSpec::new("base", "Base", run_base).menu(&["Draw", "Block", "Base"]).params("{at: [x,y]}"),
+        CommandSpec::new("base", "Base", run_base).menu(&["Draw", "Block", "Base"]).params("{at: [x,y]}").interactive(|_| {
+            Ok(super::ask::machine("base", "BASE", [super::ask::ask("at", "Enter base point", super::ask::Kind::Point)]))
+        }),
         CommandSpec::new("blocks.dynamic", "Dynamic Block Data", run_dynamic)
             .params("{name (a block, or \"*Model_Space\" for a drawing that is a dynamic block's own)} → {parameters, actions, other} | null (not a dynamic block)")
             .enabled(has_doc)

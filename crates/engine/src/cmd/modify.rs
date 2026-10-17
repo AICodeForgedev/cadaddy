@@ -88,7 +88,16 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["br"])
             .params("{handle, p1, p2}")
             .interactive(|_| Ok(Box::new(BreakM::default()))),
-        CommandSpec::new("breakatpoint", "Break At Point", run_breakat).menu(&["Modify", "Break At Point"]).params("{handle, at}"),
+        CommandSpec::new("breakatpoint", "Break At Point", run_breakat).menu(&["Modify", "Break At Point"]).params("{handle, at}").interactive(|_| {
+            Ok(super::ask::machine(
+                "breakatpoint",
+                "BREAKATPOINT",
+                [
+                    super::ask::ask("handle", "Select object", super::ask::Kind::One),
+                    super::ask::ask("at", "Specify break point", super::ask::Kind::Point),
+                ],
+            ))
+        }),
         CommandSpec::new("join", "Join", run_join)
             .menu(&["Modify", "Join"])
             .alias(&["j"])

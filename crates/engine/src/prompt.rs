@@ -130,12 +130,13 @@ impl Prompt {
             return self.message.trim_matches(['\n', '\r']).to_string();
         }
         let mut s = self.message.clone();
-        if !self.keywords.is_empty() {
+        // A message that already lists its options ("... or [Options]") keeps its own list.
+        if !self.keywords.is_empty() && !self.message.trim_end().ends_with(']') {
             // A question offers its answers ("Fix any errors detected? [Yes/No]"); anything else
             // offers options besides what it asks for ("Specify next point or [Undo]").
             s.push_str(if self.message.is_empty() {
                 "["
-            } else if self.message.ends_with('?') {
+            } else if self.message.ends_with('?') || self.message.ends_with(" or") {
                 " ["
             } else {
                 " or ["
@@ -148,6 +149,14 @@ impl Prompt {
         }
         s.push(':');
         s
+    }
+    /// Whether `text` is a whole keyword or its capital-letter shortcut (not just a prefix).
+    pub fn exact_keyword(&self, text: &str) -> bool {
+        self.match_keyword(text).is_some_and(|k| {
+            let t = text.trim().to_ascii_lowercase();
+            let shortcut: String = k.chars().filter(|c| c.is_ascii_uppercase() || c.is_ascii_digit()).collect::<String>().to_ascii_lowercase();
+            t == k.to_ascii_lowercase() || t == shortcut
+        })
     }
     /// Match typed text against keywords: full word or the capitalised shortcut, case-insensitive.
     pub fn match_keyword(&self, text: &str) -> Option<String> {

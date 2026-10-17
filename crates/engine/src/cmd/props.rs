@@ -30,17 +30,39 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["ma", "painter"])
             .params("{source, targets?: [hex] (default: selection), properties?: [name] | {name: bool} (default: all; names: color, layer, linetype, ltscale, lineweight, transparency, thickness, plotStyle, dimension, text, hatch, polyline, viewport, table, multileader)} → {changed}")
             .interactive(|_| Ok(Box::new(matchprop::MatchPropM::new()))),
-        CommandSpec::new("color", "Color...", run_color).menu(&["Format", "Color..."]).alias(&["col", "colour"]).params("{color: \"ByLayer\" | \"red\" | 1..255 | \"r,g,b\"}"),
+        CommandSpec::new("color", "Color...", run_color).menu(&["Format", "Color..."]).alias(&["col", "colour"]).params("{color: \"ByLayer\" | \"red\" | 1..255 | \"r,g,b\"}").interactive(|_| {
+            Ok(super::ask::machine("color", "COLOR", [super::ask::ask_or("color", "Enter default object color", super::ask::Kind::Text, |s| var(s, "CECOLOR"))]))
+        }),
         CommandSpec::new("linetype", "Linetype...", run_linetype).menu(&["Format", "Linetype..."]).alias(&["lt", "ltype"]).params("{current?: name, load?: name | \"*\" (with a file: comma-separated names, wildcards), file?: path to a .lin file | text?: its contents, reload?: bool}"),
         CommandSpec::new("hatch.patterns", "Hatch Patterns", super::hatch::run_patterns)
             .params("{file?: path to a .pat file | text?: its contents, clear?: bool} → {standard, user, added, warnings} (HATCH also takes patternFile | patternText)")
             .enabled(always)
             .noundo(),
         CommandSpec::new("-linetype", "Linetype", run_linetype).params("{current?, load?, file? | text?, reload?} (as LINETYPE)").interactive(|_| Ok(Box::new(linfile::DashLinetype::new()))),
-        CommandSpec::new("lweight", "Lineweight...", run_lweight).menu(&["Format", "Lineweight..."]).alias(&["lw", "lineweight"]).params("{lineweight: mm | ByLayer}"),
-        CommandSpec::new("ltscale", "Linetype Scale", run_ltscale).alias(&["lts"]).params("{scale}"),
+        CommandSpec::new("lweight", "Lineweight...", run_lweight).menu(&["Format", "Lineweight..."]).alias(&["lw", "lineweight"]).params("{lineweight: mm | ByLayer}").interactive(|_| {
+            Ok(super::ask::machine("lweight", "LWEIGHT", [super::ask::ask_or("lineweight", "Enter default lineweight for new objects", super::ask::Kind::Text, |s| {
+                Some(match s.doc().ok()?.header.i64("CELWEIGHT", -1) {
+                    -1 => "ByLayer".into(),
+                    -2 => "ByBlock".into(),
+                    -3 => "Default".into(),
+                    n => format!("{:.2}", n as f64 / 100.0),
+                })
+            })]))
+        }),
+        CommandSpec::new("ltscale", "Linetype Scale", run_ltscale).alias(&["lts"]).params("{scale}").interactive(|_| {
+            Ok(super::ask::machine("ltscale", "LTSCALE", [super::ask::ask_or("scale", "Enter new linetype scale factor", super::ask::Kind::Number, |s| var(s, "LTSCALE"))]))
+        }),
         CommandSpec::new("units", "Units...", run_units).menu(&["Format", "Units..."]).alias(&["un"]).params("{lunits?: 1..5, luprec?: 0..8, aunits?: 0..4, auprec?: 0..8, insunits?}"),
-        CommandSpec::new("limits", "Drawing Limits", run_limits).menu(&["Format", "Drawing Limits"]).params("{min: [x,y], max: [x,y]}"),
+        CommandSpec::new("limits", "Drawing Limits", run_limits).menu(&["Format", "Drawing Limits"]).params("{min: [x,y], max: [x,y]}").interactive(|_| {
+            Ok(super::ask::machine(
+                "limits",
+                "LIMITS",
+                [
+                    super::ask::ask_or("min", "Specify lower left corner", super::ask::Kind::Point, |s| var(s, "LIMMIN")),
+                    super::ask::ask_or("max", "Specify upper right corner", super::ask::Kind::Point, |s| var(s, "LIMMAX")),
+                ],
+            ))
+        }),
         CommandSpec::new("style", "Text Style...", run_style)
             .menu(&["Format", "Text Style..."])
             .alias(&["st"])
@@ -505,7 +527,13 @@ fn run_lweight(s: &mut Session, p: &Value) -> Result<Value> {
         Some("bylayer") => -1,
         Some("byblock") => -2,
         Some("default") => -3,
-        _ => (v.as_f64().ok_or_else(|| bad("lweight", "bad lineweight"))? * 100.0).round().clamp(0.0, 211.0) as i64,
+        _ => {
+            let mm = v.as_f64().or_else(|| v.as_str().and_then(|t| t.trim().trim_end_matches("mm").trim().parse().ok()));
+            (mm.filter(|m: &f64| m.is_finite()).ok_or_else(|| bad("lweight", "Enter a lineweight in millimetres, ByLayer, ByBlock or Default."))?
+                * 100.0)
+                .round()
+                .clamp(0.0, 211.0) as i64
+        }
     };
     s.doc_mut()?.header.set_i64("CELWEIGHT", code);
     ok()
@@ -1066,6 +1094,15 @@ fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad("rename", "unsupported table")),
     }
     ok()
+}
+
+/// A system variable's current value as the prompt's default ("12.0000,9.0000" for a point).
+fn var(s: &Session, name: &str) -> Option<String> {
+    match crate::sysvars::get(s, name)? {
+        Value::String(t) => Some(t),
+        Value::Array(a) => Some(a.iter().take(2).map(|v| v.as_f64().map_or_else(|| v.to_string(), |f| format!("{f}"))).collect::<Vec<_>>().join(",")),
+        other => Some(other.to_string()),
+    }
 }
 
 #[cfg(test)]

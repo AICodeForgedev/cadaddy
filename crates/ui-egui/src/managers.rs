@@ -24,6 +24,12 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
         return None;
     }
     let dialog = match id {
+        // QUIT and EXIT close CADaddy, asking about unsaved drawings.
+        "quit" | "exit" => {
+            app.quit_requested = true;
+            return Some(Ok(Value::Null));
+        }
+        "about" => "about",
         "battman" => "battman",
         "linetype" | "lt" | "ltype" => "linetype",
         "ddptype" | "ptype" => "ptype",
