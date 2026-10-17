@@ -328,7 +328,7 @@ fn about(ctx: &egui::Context, open: &mut bool) {
                     ui.label(RichText::new(crate::tl!("Built on CADCraft by the ArtCraft team and community.")).color(t.text_dim));
                     ui.hyperlink_to(crate::tl!("Report a bug or request a feature"), crate::support::feedback_url("bug"));
                     if crate::support::DONATIONS {
-                        ui.hyperlink_to(crate::tl!("Donate"), crate::support::donate_url());
+                        ui.hyperlink_to(crate::tl!("Support CADaddy"), crate::support::donate_url());
                     }
                     ui.label(RichText::new(crate::tf!("Or email {address}", address = crate::support::FEEDBACK_EMAIL)).small().color(t.text_dim));
                     ui.add_space(6.0);

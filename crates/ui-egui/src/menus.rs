@@ -73,7 +73,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.dialog.commands", "Command Reference", &["Help", "CADaddy Help"], Some("F1")),
     ("ui.feedback", "Report a Bug...", &["Help", "Report a Bug..."], None),
     ("ui.feature", "Request a Feature...", &["Help", "Request a Feature..."], None),
-    ("ui.donate", "Donate...", &[], None),
+    ("ui.donate", "Support CADaddy...", &["Help", "Support CADaddy..."], None),
     ("ui.toggle.history", "Command History", &["Window", "Command History"], Some("F2")),
     ("ui.cmdline.lines", "Command Line History Lines", &[], None),
     ("ui.cmdline.clear", "Clear Command History", &[], None),

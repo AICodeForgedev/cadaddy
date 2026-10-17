@@ -39,7 +39,7 @@
   <a href="#architecture">Architecture</a> ·
   <a href="#roadmap">Roadmap</a> ·
   <a href="#downloads">Downloads</a> ·
-  <a href="#the-crafting-apps">The Crafting Apps</a> ·
+  <a href="#support-this-project">Support this project</a> ·
   <a href="#license-and-credits">License and credits</a>
 </p>
 
@@ -316,6 +316,17 @@ RISC-V (riscv64): `cadcraft-<ver>-linux-riscv64.tar.gz`, cross-compiled; needs g
 | Build | File | Notes |
 |---|---|---|
 | Static site | `cadcraft-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
+
+## Support this project
+
+CADaddy is free, with no ads and no subscription, and it stays that way. It's built by AICodeForge
+with AI doing much of the coding. If CADaddy saves you time, a donation pays for
+the AI time that builds the next features:
+**[Support CADaddy](https://aicodeforge.dev/donate)**.
+
+Found a bug or want a feature? Use **Help ▸ Report a Bug** or **Request a Feature** in the app,
+the [feedback form](https://aicodeforge.dev/cadaddy/feedback), or email
+**feedback@aicodeforge.dev**.
 
 ## License and credits
 

@@ -247,7 +247,7 @@ pub struct CadApp {
     pub quit_requested: bool,
     /// A web page to open in the browser on the next frame (Report a Bug, Donate).
     pub pending_url: Option<String>,
-    /// What the donation prompt remembers ([`support`]).
+    /// What the support banner remembers ([`support`]).
     pub donate: support::DonatePrefs,
     /// The app may close although drawings have unsaved changes (they were dealt with, or the
     /// quit came from the control channel, which never asks).
@@ -409,11 +409,8 @@ impl CadApp {
         if !self.ui.recent_files.is_empty() {
             prefs["recentFiles"] = json!(self.ui.recent_files);
         }
-        if !self.donate.asked_version.is_empty() {
-            prefs["donateAsked"] = json!(self.donate.asked_version);
-        }
-        if self.donate.never {
-            prefs["donateNever"] = json!(true);
+        if self.donate.shown_ms > 0.0 {
+            prefs["supportBannerShown"] = json!(self.donate.shown_ms);
         }
         prefs.to_string()
     }
@@ -442,10 +439,9 @@ impl CadApp {
         if let Some(files) = v.get("recentFiles").and_then(Value::as_array) {
             self.ui.recent_files = files.iter().filter_map(Value::as_str).filter(|p| !p.is_empty()).take(RECENT_FILES).map(str::to_string).collect();
         }
-        if let Some(v) = v.get("donateAsked").and_then(Value::as_str) {
-            self.donate.asked_version = v.chars().take(40).collect();
+        if let Some(ms) = v.get("supportBannerShown").and_then(Value::as_f64).filter(|ms| ms.is_finite()) {
+            self.donate.shown_ms = ms;
         }
-        self.donate.never = v.get("donateNever").and_then(Value::as_bool).unwrap_or(false);
     }
 
     /// Whether an agent can drive this window over the control channel (`--control PORT`).
@@ -695,7 +691,7 @@ impl CadApp {
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
-        support::prompt(self, ui.ctx());
+        support::banner(self, ui.ctx());
         if let Some(url) = self.pending_url.take() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }

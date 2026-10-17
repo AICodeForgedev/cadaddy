@@ -312,6 +312,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let mut app = CadApp::new(Session::empty(), services());
+            app.donate.enabled = true;
             let (workspace, restored, workspace_error) = workspace::Workspace::load();
             if let Some(ui) = restored {
                 app.ui = ui;

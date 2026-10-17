@@ -1,19 +1,20 @@
-//! Feedback and donations: Help ▸ Report a Bug / Request a Feature, the heart button in the
-//! ribbon's title row, and a donation prompt (like Wikipedia's) shown once per version after an
-//! install or update while donations are on.
+//! Feedback and donations: Help ▸ Report a Bug / Request a Feature / Support CADaddy, the heart
+//! button in the ribbon's title row, and a small support banner (like Wikipedia's) at most once a
+//! month. Never a nag dialog, never a locked feature.
 //!
-//! The links go to aicodeforge.dev/cadaddy (`pdfapp/cadaddy/site.mjs` on S1): the feedback form
-//! gets the version and OS in its address, and /donate redirects to the fundraiser, so the
-//! fundraiser can change without a release.
+//! The links go to aicodeforge.dev/cadaddy (`pdfapp/cadaddy/site.mjs` on S1) and open in the
+//! system browser: the feedback form gets the version and OS in its address, and /donate
+//! redirects to the GoFundMe page named in the server's `donate-url` file, so the fundraiser can
+//! change without a release.
 
 use egui::{Align2, Color32, Pos2, RichText, Shape, Stroke, pos2, vec2};
 
 use crate::CadApp;
 use crate::theme::Tokens;
 
-/// Whether CADaddy asks for donations (the Donate entries and the prompt). Off until the
-/// fundraiser is live.
-pub const DONATIONS: bool = false;
+/// Whether CADaddy asks for support (Help ▸ Support CADaddy, the About box, the heart button and
+/// the monthly banner).
+pub const DONATIONS: bool = true;
 pub const SITE: &str = "https://aicodeforge.dev/cadaddy";
 pub const FEEDBACK_EMAIL: &str = "feedback@aicodeforge.dev";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -27,18 +28,24 @@ pub fn donate_url() -> String {
     format!("{SITE}/donate")
 }
 
-/// What the donation prompt remembers (kept in the preferences).
+/// How long the support banner stays away once it has shown.
+pub const BANNER_EVERY_MS: f64 = 30.0 * 24.0 * 3600.0 * 1000.0;
+
+/// What the support banner remembers (kept in the preferences).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DonatePrefs {
-    /// The version the prompt last showed in; it shows again after the next update.
-    pub asked_version: String,
-    /// "Don't ask again".
-    pub never: bool,
+    /// When the banner last showed (ms since 1970; 0 = never).
+    pub shown_ms: f64,
+    /// The banner is up in this session (until closed).
+    pub showing: bool,
+    /// The host shows the banner (the desktop app turns it on; tests and other hosts don't).
+    pub enabled: bool,
 }
 
 impl DonatePrefs {
-    pub fn wants_prompt(&self) -> bool {
-        DONATIONS && !self.never && self.asked_version != VERSION
+    /// At most once a month.
+    pub fn due(&self, now_ms: f64) -> bool {
+        DONATIONS && (self.shown_ms <= 0.0 || now_ms - self.shown_ms >= BANNER_EVERY_MS)
     }
 }
 
@@ -46,7 +53,7 @@ impl DonatePrefs {
 pub fn entries() -> Vec<(&'static str, &'static str)> {
     let mut v = vec![("ui.feedback", "Report a Bug..."), ("ui.feature", "Request a Feature...")];
     if DONATIONS {
-        v.push(("ui.donate", "Donate..."));
+        v.push(("ui.donate", "Support CADaddy..."));
     }
     v
 }
@@ -69,51 +76,56 @@ pub fn paint_heart(painter: &egui::Painter, c: Pos2, size: f32, color: Color32) 
     ));
 }
 
-/// The donation prompt, at the bottom of the window. Agents driving the control channel never
-/// see it, so their screenshots stay clean.
-pub fn prompt(app: &mut CadApp, ctx: &egui::Context) {
-    if !app.donate.wants_prompt() || app.has_control_channel() {
-        return;
+/// The support banner: one small, non-blocking card in the bottom-right corner (clear of the
+/// command line), at most once a month. Agents driving the control channel never see it, so their screenshots stay clean.
+pub fn banner(app: &mut CadApp, ctx: &egui::Context) {
+    if !app.donate.showing {
+        let now = crate::now_ms();
+        if !app.donate.enabled || app.has_control_channel() || now <= 0.0 || !app.donate.due(now) {
+            return;
+        }
+        app.donate.showing = true;
+        app.donate.shown_ms = now;
     }
     let t = Tokens::get();
-    let mut answer = None;
-    egui::Window::new(crate::tl!("Support CADaddy"))
-        .id(egui::Id::new("donate_prompt"))
-        .title_bar(false)
-        .resizable(false)
-        .collapsible(false)
-        .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -56.0))
-        .fixed_size(vec2(520.0, 0.0))
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), egui::Sense::hover());
-                paint_heart(ui.painter(), r.center(), 26.0, Color32::from_rgb(0x1f, 0x6b, 0xff));
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(crate::tl!("CADaddy is free, and it always will be.")).strong().size(16.0));
-                    ui.label(crate::tl!(
-                        "No ads, no subscription. If CADaddy saves you time, a small donation pays for the AI time that builds the next features."
-                    ));
+    let blue = Color32::from_rgb(0x1f, 0x6b, 0xff);
+    let mut close = false;
+    egui::Area::new(egui::Id::new("support_banner")).anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -40.0)).order(egui::Order::Foreground).show(
+        ctx,
+        |ui| {
+            egui::Frame::new()
+                .fill(t.panel)
+                .stroke(Stroke::new(1.0, blue.gamma_multiply(0.7)))
+                .corner_radius(10.0)
+                .inner_margin(egui::Margin::symmetric(14, 10))
+                .shadow(egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(80) })
+                .show(ui, |ui| {
+                    ui.set_max_width(440.0);
+                    ui.horizontal(|ui| {
+                        let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), egui::Sense::hover());
+                        paint_heart(ui.painter(), r.center(), 20.0, blue);
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(crate::tl!("CADaddy is free, and it always will be.")).strong());
+                            ui.label(RichText::new(crate::tl!(
+                            "No ads, no subscription. If CADaddy saves you time, a small donation pays for the AI time that builds the next features."
+                        ))
+                        .small()
+                        .color(t.text_dim));
+                        });
+                        if ui.add(egui::Button::new(RichText::new(crate::tl!("Support CADaddy")).strong().color(Color32::WHITE)).fill(blue)).clicked()
+                        {
+                            app.pending_url = Some(donate_url());
+                            close = true;
+                        }
+                        if ui.add(egui::Button::new("✕").frame(false)).on_hover_text(crate::tl!("Close")).clicked() {
+                            close = true;
+                        }
+                    });
                 });
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.add(egui::Button::new(RichText::new(crate::tl!("Donate")).strong().color(Color32::WHITE)).fill(t.accent)).clicked() {
-                    answer = Some("donate");
-                }
-                if ui.button(crate::tl!("Maybe later")).clicked() {
-                    answer = Some("later");
-                }
-                if ui.button(crate::tl!("Don't ask again")).clicked() {
-                    answer = Some("never");
-                }
-            });
-        });
-    if let Some(a) = answer {
-        app.donate.asked_version = VERSION.to_string();
-        app.donate.never = a == "never";
-        if a == "donate" {
-            app.pending_url = Some(donate_url());
-        }
+        },
+    );
+    if close {
+        app.donate.showing = false;
     }
 }
 
@@ -129,12 +141,11 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_shows_once_per_version_and_never_after_dont_ask() {
-        let fresh = DonatePrefs::default();
-        assert_eq!(fresh.wants_prompt(), DONATIONS);
-        assert!(!DonatePrefs { asked_version: VERSION.into(), never: false }.wants_prompt());
-        assert!(!DonatePrefs { asked_version: String::new(), never: true }.wants_prompt());
-        assert_eq!(DonatePrefs { asked_version: "0.0.1".into(), never: false }.wants_prompt(), DONATIONS);
+    fn the_banner_comes_at_most_once_a_month() {
+        let now = 1.8e12;
+        assert_eq!(DonatePrefs::default().due(now), DONATIONS);
+        assert!(!DonatePrefs { shown_ms: now - 29.0 * 86_400_000.0, ..Default::default() }.due(now));
+        assert_eq!(DonatePrefs { shown_ms: now - 31.0 * 86_400_000.0, ..Default::default() }.due(now), DONATIONS);
     }
 
     #[test]
