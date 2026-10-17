@@ -1172,3 +1172,8 @@
 	Computer-aided design and drafting for Windows, Mac and Linux, written in Rust.	适用于 Windows、Mac 和 Linux 的计算机辅助设计与绘图软件，用 Rust 编写。
 	Includes open-source components: see NOTICE.	包含开源组件：参见 NOTICE。
 	Free to use. Not affiliated with Autodesk, Inc.	免费使用。与 Autodesk, Inc. 无关。
+	Electrical devices	电气设备
+	Lighting	照明
+	Power and distribution	电力与配电
+	Low voltage	弱电
+	Fire alarm	火灾报警

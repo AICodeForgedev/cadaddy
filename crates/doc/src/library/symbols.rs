@@ -12,6 +12,7 @@ use cadcraft_geom::{PolyVertex, Vec2, Vec3};
 
 use crate::{Attrib, Circle, Ellipse, Entity, EntityKind, HAlign, Handle, Line, LwPolyline, Text, VAlign};
 
+mod electrical;
 mod plumbing;
 
 /// One library symbol.
@@ -39,7 +40,8 @@ impl Symbol {
     pub fn entities(&self) -> Vec<Entity> {
         let mut k = Sketch::default();
         (self.draw)(&mut k);
-        let ty = self.name.trim_start_matches("PL_");
+        // The type is the name without its trade prefix (PL_, EL_).
+        let ty = self.name.split_once('_').map_or(self.name, |(_, rest)| rest);
         let hidden = if self.annotation { 0.05 } else { 2.0 };
         k.attdef_constant("TRADE", self.trade, Vec2::new(0.0, 0.0), hidden);
         k.attdef_constant("TYPE", ty, Vec2::new(0.0, -hidden * 1.5), hidden);
@@ -53,9 +55,11 @@ impl Symbol {
     }
 }
 
-/// Every library symbol, palette order.
+/// Every library symbol, palette order: electrical, then plumbing.
 pub fn symbols() -> &'static [Symbol] {
-    plumbing::SYMBOLS
+    static ALL: std::sync::LazyLock<Vec<Symbol>> =
+        std::sync::LazyLock::new(|| electrical::SYMBOLS.iter().chain(plumbing::SYMBOLS).copied().collect());
+    &ALL
 }
 
 /// The library symbol named `name` (its block name, any case).
@@ -161,16 +165,16 @@ mod tests {
     #[test]
     fn every_symbol_draws_tags_and_has_a_unique_name() {
         let mut names = std::collections::HashSet::new();
-        assert!(symbols().len() >= 30);
+        assert!(symbols().len() >= 60);
         for s in symbols() {
             assert!(names.insert(s.name), "duplicate {}", s.name);
-            assert!(s.name.starts_with("PL_") && s.name == s.name.to_ascii_uppercase(), "{}", s.name);
+            assert!((s.name.starts_with("PL_") || s.name.starts_with("EL_")) && s.name == s.name.to_ascii_uppercase(), "{}", s.name);
             let es = s.entities();
             let drawn = es.iter().filter(|e| !matches!(e.kind, EntityKind::AttDef(_))).count();
             assert!(drawn >= 1, "{} draws nothing", s.name);
             let tags: Vec<&str> = es.iter().filter_map(|e| if let EntityKind::AttDef(a) = &e.kind { Some(a.tag.as_str()) } else { None }).collect();
             assert!(tags.contains(&"TRADE") && tags.contains(&"TYPE"), "{} tags {tags:?}", s.name);
-            assert!(tags.iter().any(|t| *t == "TAG" || *t == "SIZE"), "{} has nothing to fill in: {tags:?}", s.name);
+            assert!(tags.iter().any(|t| ["TAG", "SIZE", "CIRCUIT", "MOUNT_HT"].contains(t)), "{} has nothing to fill in: {tags:?}", s.name);
             // Every coordinate is a real number of sensible size.
             let d = crate::Drawing::new_imperial();
             let b = es.iter().fold(cadcraft_geom::Bounds2::EMPTY, |b, e| b.union(&crate::extents::entity_bounds(&d, e, 1)));
