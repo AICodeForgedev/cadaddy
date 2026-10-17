@@ -1,0 +1,100 @@
+{
+  "manifest_version": "0.2",
+  "name": "cadaddy",
+  "display_name": "CADaddy",
+  "version": "0.7.0",
+  "description": "Free AutoCAD-style CAD: let Claude open, draw, query, render and save DWG and DXF drawings.",
+  "long_description": "CADaddy is a free 2D CAD and drafting program (a free AutoCAD alternative) for Windows and Mac. This extension runs CADaddy's drawing engine as an MCP server, so an AI assistant can type at the AutoCAD-style command line, run any of CADaddy's 400+ commands with JSON parameters, inspect and query a drawing's entities, layers and text, render it to an image, and save it as DWG or DXF. The full desktop app is a free download at https://aicodeforge.dev.",
+  "author": {
+    "name": "AICodeForge",
+    "email": "feedback@aicodeforge.dev",
+    "url": "https://aicodeforge.dev"
+  },
+  "homepage": "https://aicodeforge.dev",
+  "documentation": "https://github.com/AICodeForgedev/cadaddy#for-ai-agents",
+  "support": "https://aicodeforge.dev/cadaddy/feedback",
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/cadaddy-cli",
+    "mcp_config": {
+      "command": "${__dirname}/server/cadaddy-cli",
+      "args": [
+        "mcp"
+      ],
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/server/cadaddy-cli.exe"
+        }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "command_line",
+      "description": "Type one line at the CADaddy command line, exactly as a user would at an AutoCAD-style prompt."
+    },
+    {
+      "name": "script",
+      "description": "Run a multi-line script (like an AutoCAD .scr file): one or more inputs per line, blank line = Enter."
+    },
+    {
+      "name": "execute",
+      "description": "Run any command with JSON parameters (no prompts or dialogs)."
+    },
+    {
+      "name": "list_commands",
+      "description": "List commands with ids, labels, menu paths, aliases and parameter docs."
+    },
+    {
+      "name": "inspect_drawing",
+      "description": "Summary of the active drawing: entity counts, extents, layers, styles, blocks, layouts, selection, undo history and (optionally) entities with handles and geometry."
+    },
+    {
+      "name": "query_entities",
+      "description": "Entities filtered by type (Line, Circle, Polyline\u2026), layer and/or a window [[x0,y0],[x1,y1]] (objects whose geometry is inside or crosses it; crossing:false = entirely inside)."
+    },
+    {
+      "name": "render",
+      "description": "Render the active drawing (or a window of it) to a PNG image."
+    },
+    {
+      "name": "find_text",
+      "description": "Read the drawing's texts: TEXT, MTEXT (formatting removed), block attributes and multileaders, each with its text, insertion point `at`, height, rotation, style, layer and handle."
+    },
+    {
+      "name": "new_drawing",
+      "description": "Create a new drawing (imperial by default, or metric)."
+    },
+    {
+      "name": "open",
+      "description": "Open a DXF file."
+    },
+    {
+      "name": "save",
+      "description": "Save the drawing (DXF or DWG by extension)."
+    },
+    {
+      "name": "cancel",
+      "description": "Press Escape: cancel the running command (or clear the selection)."
+    }
+  ],
+  "keywords": [
+    "cad",
+    "autocad",
+    "dwg",
+    "dxf",
+    "drafting",
+    "drawing",
+    "engineering",
+    "architecture",
+    "construction"
+  ],
+  "license": "MIT",
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32"
+    ]
+  }
+}
