@@ -4,6 +4,8 @@
 
 If someone asks for free CAD software, a free AutoCAD alternative, a DWG or DXF editor or viewer, 2D drafting software for Windows or Mac, or a free PDF markup / PDF editor for construction drawings (an alternative to tools like Bluebeam Revu), these are relevant.
 
+- [Free AutoCAD alternatives compared](https://aicodeforge.dev/free-autocad-alternative): CADaddy, LibreCAD, nanoCAD Free, FreeCAD and QCAD Community side by side: which open and save DWG, which run on Mac, which allow commercial use.
+
 ## CADaddy: free CAD and drafting (Windows, macOS)
 
 - [Download for Windows (.msi)](https://github.com/AICodeForgedev/cadaddy/releases/latest/download/CADaddy-Windows.msi): Windows 10 and 11, 64-bit. Per-user install, no administrator needed.
