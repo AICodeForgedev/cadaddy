@@ -1880,9 +1880,11 @@ fn autocad_header_dim_variables_are_not_overrides() {
     assert_eq!(back.header.str("DIMDSEP", ""), ",");
     assert!(back.header.get("DIMTXT").is_some() && back.header.get("DIMCLRD").is_some());
     assert_eq!(back.dim_overrides(), serde_json::Map::new());
-    // A variable that really differs from the style is an override.
-    let text = text.replacen("$DIMDEC\r\n70\r\n3\r\n", "$DIMDEC\r\n70\r\n5\r\n", 1);
-    assert_eq!(read_dxf(text.as_bytes()).unwrap().dim_overrides().get("decimals"), Some(&serde_json::json!(5)));
+    // A variable that really differs from the style is an override (and survives a save: the
+    // writer now writes every DIM* variable itself, from the header or else the style).
+    let mut over = back.clone();
+    over.header.set_i64("DIMDEC", 5);
+    assert_eq!(read_dxf(write_dxf(&over).as_bytes()).unwrap().dim_overrides().get("decimals"), Some(&serde_json::json!(5)));
 }
 
 #[test]

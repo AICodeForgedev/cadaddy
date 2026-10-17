@@ -238,3 +238,25 @@ fn viewport_frozen_layers_use_group_331() {
         .unwrap();
     assert_eq!(frozen, ["HIDE"]);
 }
+
+#[test]
+fn the_current_dimension_style_survives_dwg_without_header_overrides() {
+    // A current architectural style and no DIM* header values (none overridden): the DWG must not
+    // reopen with the converter's defaults (decimal units, arrows) overriding the style.
+    let mut d = Drawing::new_imperial();
+    let mut a = d.dim_style("Standard").cloned().unwrap();
+    a.name = "A".into();
+    a.linear_unit = 4;
+    a.zero_suppression = 3;
+    a.tick_size = 0.1;
+    d.dim_styles.push(a);
+    d.header.set_str("DIMSTYLE", "A");
+    for (var, _) in cadcraft_doc::DIMVARS {
+        d.header.vars.remove(*var);
+    }
+    let back = through_dwg(&d);
+    assert_eq!(back.header.str("DIMSTYLE", ""), "A");
+    assert!(back.dim_overrides().is_empty(), "overrides after DWG: {:?}", back.dim_overrides());
+    let dxf = cadcraft_io::read_dxf(cadcraft_io::write_dxf(&d).as_bytes()).unwrap();
+    assert!(dxf.dim_overrides().is_empty(), "overrides after DXF: {:?}", dxf.dim_overrides());
+}

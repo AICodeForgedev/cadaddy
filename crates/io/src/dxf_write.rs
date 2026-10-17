@@ -336,11 +336,25 @@ fn header_vars(w: &mut W, d: &Drawing) {
 /// overrides new dimensions take on), with their DXF group codes. DIMSTYLE and DIMSCALE are in
 /// [`HEADER_VARS`].
 fn dim_header_vars(w: &mut W, d: &Drawing) {
-    for (name, _) in cadcraft_doc::DIMVARS {
+    // A variable the header doesn't hold is the current style's value: written all the same, as
+    // AutoCAD does, so a reader that fills in its own defaults (the DWG converter) doesn't
+    // override the style (an architectural style reopening with decimal units).
+    let style = d.dim_style(&d.header.str("DIMSTYLE", "Standard")).and_then(|s| serde_json::to_value(s).ok());
+    let from_style = |field: &str| -> Option<HVal> {
+        match style.as_ref()?.get(field)? {
+            serde_json::Value::Bool(b) => Some(HVal::Int(i64::from(*b))),
+            serde_json::Value::Number(n) if n.is_i64() || n.is_u64() => n.as_i64().map(HVal::Int),
+            serde_json::Value::Number(n) => n.as_f64().map(HVal::Real),
+            serde_json::Value::String(t) => Some(HVal::Str(t.clone())),
+            _ => None,
+        }
+    };
+    for (name, field) in cadcraft_doc::DIMVARS {
         if HEADER_VARS.iter().any(|(n, _)| n == name) {
             continue;
         }
-        let Some(v) = d.header.get(name) else { continue };
+        let owned = d.header.get(name).cloned().or_else(|| from_style(field));
+        let Some(v) = owned.as_ref() else { continue };
         match (*name, v) {
             // The decimal separator is a character code in the header.
             ("DIMDSEP", HVal::Str(c)) => {
