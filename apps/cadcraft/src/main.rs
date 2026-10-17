@@ -9,7 +9,7 @@
 //! `CADCRAFT_VSYNC=1` presents with vsync on Linux/BSD, where the default is the low-latency
 //! present mode (`CADCRAFT_VSYNC=0` selects that elsewhere); see `cadcraft_ui_egui::gpu::surface_config`.
 //!
-//! `log` records go to standard error and `<settings dir>/logs/cadcraft.log` (`RUST_LOG` sets the
+//! `log` records go to standard error and `<settings dir>/logs/cadaddy.log` (`RUST_LOG` sets the
 //! levels); see [`logging`] and [`config_dir`].
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -180,8 +180,11 @@ fn config_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<s
     } else if cfg!(windows) {
         set("APPDATA").map(|a| a.join("CADaddy"))
     } else {
-        // The XDG spec ignores a relative XDG_CONFIG_HOME.
-        set("XDG_CONFIG_HOME").filter(|p| p.is_absolute()).or_else(|| set("HOME").map(|h| h.join(".config"))).map(|c| c.join("cadcraft"))
+        // The XDG spec ignores a relative XDG_CONFIG_HOME. Settings saved by 0.7.3 and 0.7.4
+        // under the old `cadcraft` folder stay in use until that folder is gone.
+        let base = set("XDG_CONFIG_HOME").filter(|p| p.is_absolute()).or_else(|| set("HOME").map(|h| h.join(".config")))?;
+        let old = base.join("cadcraft");
+        Some(if !base.join("cadaddy").exists() && old.is_dir() { old } else { base.join("cadaddy") })
     }
 }
 
@@ -439,10 +442,10 @@ mod tests {
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn linux_and_bsd_follow_xdg_config_home() {
-        assert_eq!(config_dir_from(env(&[("XDG_CONFIG_HOME", "/x"), ("HOME", "/home/u")])), Some(PathBuf::from("/x/cadcraft")));
-        assert_eq!(config_dir_from(env(&[("HOME", "/home/u")])), Some(PathBuf::from("/home/u/.config/cadcraft")));
+        assert_eq!(config_dir_from(env(&[("XDG_CONFIG_HOME", "/x"), ("HOME", "/home/u")])), Some(PathBuf::from("/x/cadaddy")));
+        assert_eq!(config_dir_from(env(&[("HOME", "/home/u")])), Some(PathBuf::from("/home/u/.config/cadaddy")));
         // The XDG spec says a relative XDG_CONFIG_HOME is ignored.
-        assert_eq!(config_dir_from(env(&[("XDG_CONFIG_HOME", "rel"), ("HOME", "/home/u")])), Some(PathBuf::from("/home/u/.config/cadcraft")));
+        assert_eq!(config_dir_from(env(&[("XDG_CONFIG_HOME", "rel"), ("HOME", "/home/u")])), Some(PathBuf::from("/home/u/.config/cadaddy")));
     }
 
     #[cfg(target_os = "macos")]

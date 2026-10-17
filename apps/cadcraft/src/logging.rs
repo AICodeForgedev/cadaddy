@@ -27,7 +27,7 @@ use std::time::SystemTime;
 use log::LevelFilter;
 
 /// The current log file's name inside the log directory.
-pub const LOG_FILE: &str = "cadcraft.log";
+pub const LOG_FILE: &str = "cadaddy.log";
 /// The log directory inside the settings directory.
 pub const LOG_DIR: &str = "logs";
 /// How many previous logs are kept (`cadcraft.1.log` … `cadcraft.<KEEP>.log`).
@@ -119,7 +119,7 @@ fn civil_from_days(days: u64) -> (u64, u64, u64) {
 }
 
 fn numbered(dir: &Path, n: usize) -> PathBuf {
-    if n == 0 { dir.join(LOG_FILE) } else { dir.join(format!("cadcraft.{n}.log")) }
+    if n == 0 { dir.join(LOG_FILE) } else { dir.join(format!("cadaddy.{n}.log")) }
 }
 
 /// Shift the previous logs up one (`.log` → `.1.log` → … → `.<KEEP>.log`, the oldest dropped)
@@ -399,9 +399,9 @@ mod tests {
             std::fs::write(&path, format!("run {run}")).expect("write");
         }
         assert_eq!(read(&dir.join(LOG_FILE)), "run 4");
-        assert_eq!(read(&dir.join("cadcraft.1.log")), "run 3");
-        assert_eq!(read(&dir.join("cadcraft.2.log")), "run 2");
-        assert!(!dir.join("cadcraft.3.log").exists(), "only {KEEP} old logs are kept");
+        assert_eq!(read(&dir.join("cadaddy.1.log")), "run 3");
+        assert_eq!(read(&dir.join("cadaddy.2.log")), "run 2");
+        assert!(!dir.join("cadaddy.3.log").exists(), "only {KEEP} old logs are kept");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -504,7 +504,7 @@ mod tests {
         // A second launch rotates: the first log becomes `.1`.
         let second = AppLogger::new(Filter::parse(DEFAULT_FILTER), false);
         assert_eq!(second.attach_dir(&dir).expect("attach again"), dir.join(LOG_FILE));
-        assert_eq!(read(&dir.join("cadcraft.1.log")), text);
+        assert_eq!(read(&dir.join("cadaddy.1.log")), text);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

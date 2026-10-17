@@ -66,7 +66,8 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     let t = Tokens::get();
     let (rect, scale) = app.canvas.xf.map_or((ctx.content_rect(), 20.0), |x| (x.rect, x.scale.max(1e-6)));
     let mut st = ctx.data_mut(|d| d.get_temp::<State>(state_id())).unwrap_or_else(|| {
-        let mut fmt = Formatted::default();
+        // An existing MTEXT (TEXTEDIT) opens with its text and formatting.
+        let mut fmt = if mt.contents.is_empty() { Formatted::default() } else { Formatted::from_contents(&mt.contents) };
         if let Some(f) = app.session.doc().ok().and_then(|d| d.text_style(&mt.style).map(|s| s.font.clone())) {
             // A family name, not a font file (`txt.shx`, `arial.ttf`).
             if !f.is_empty() && !f.contains('.') {
@@ -125,7 +126,11 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
             if !st.fmt.is_empty() {
                 let _ = app.session.input(cadcraft_engine::Input::Text(st.fmt.to_contents()));
             }
-            if app.session.running.as_ref().is_some_and(|r| r.id == "mtext") {
+            let running = app.session.running.as_ref().map(|r| r.id.clone());
+            if running.as_deref() == Some("mtext") {
+                let _ = app.session.input(cadcraft_engine::Input::Enter);
+            } else if running.as_deref() == Some("textedit") && st.fmt.is_empty() {
+                // Emptied: keep the text as it was (Enter at "Enter new text").
                 let _ = app.session.input(cadcraft_engine::Input::Enter);
             }
         }
@@ -494,5 +499,35 @@ mod tests {
         let d = app.session.doc().unwrap();
         let found = d.model.iter().any(|e| matches!(&e.kind, cadcraft_engine::doc::EntityKind::MText(m) if m.contents == contents));
         assert!(found, "{contents}");
+    }
+
+    #[test]
+    fn textedit_opens_the_editor_on_an_existing_mtext_with_its_formatting() {
+        let ctx = egui::Context::default();
+        let mut app = CadApp::new(Session::new(), Services::default());
+        let frame = |app: &mut CadApp| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 800.0))), ..Default::default() };
+            for _ in 0..2 {
+                let mut out = ctx.run_ui(input.clone(), |ui| show(app, ui.ctx()));
+                out.textures_delta.clear();
+            }
+        };
+        let r = app.session.execute("mtext", &serde_json::json!({ "at": [0, 10], "text": "{\\fArial|b1;OLD} NOTE", "height": 2 })).unwrap();
+        let h = cadcraft_engine::doc::Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap();
+        app.start("textedit");
+        app.session.input(cadcraft_engine::Input::Point(cadcraft_geom::Vec2::new(1.0, 9.0))).unwrap();
+        let m = app.session.editing_mtext().expect("TEXTEDIT reports the mtext it edits");
+        assert!(m.contents.contains("OLD"));
+        frame(&mut app);
+        let mut st = ctx.data_mut(|d| d.get_temp::<State>(state_id())).expect("editor open");
+        assert_eq!(st.fmt.text(), "OLD NOTE", "the editor starts from the text");
+        assert!(st.fmt.fmt_at(0).bold, "with its formatting");
+        st.fmt.set_text("NEW NOTE", &CharFmt::default());
+        app.session.input(cadcraft_engine::Input::Text(st.fmt.to_contents())).unwrap();
+        let d = app.session.doc().unwrap();
+        match &d.entity(h).unwrap().kind {
+            cadcraft_engine::doc::EntityKind::MText(m) => assert!(m.contents.contains("NEW NOTE"), "{}", m.contents),
+            k => panic!("{k:?}"),
+        }
     }
 }

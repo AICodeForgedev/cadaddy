@@ -323,16 +323,16 @@ fn about(ctx: &egui::Context, open: &mut bool) {
                 _ => {
                     ui.heading(crate::tl!("CADaddy"));
                     ui.label(crate::tf!("Version {version}", version = env!("CARGO_PKG_VERSION")));
-                    ui.label(crate::tl!("Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust."));
+                    ui.label(crate::tl!("Computer-aided design and drafting for Windows, Mac and Linux, written in Rust."));
                     ui.add_space(6.0);
-                    ui.label(RichText::new(crate::tl!("Built on CADCraft by the ArtCraft team and community.")).color(t.text_dim));
+                    ui.label(RichText::new(crate::tl!("Includes open-source components: see NOTICE.")).color(t.text_dim));
                     ui.hyperlink_to(crate::tl!("Report a bug or request a feature"), crate::support::feedback_url("bug"));
                     if crate::support::DONATIONS {
                         ui.hyperlink_to(crate::tl!("Support CADaddy"), crate::support::donate_url());
                     }
                     ui.label(RichText::new(crate::tf!("Or email {address}", address = crate::support::FEEDBACK_EMAIL)).small().color(t.text_dim));
                     ui.add_space(6.0);
-                    ui.label(RichText::new(crate::tl!("MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.")).small().color(t.text_faint));
+                    ui.label(RichText::new(crate::tl!("Free to use. Not affiliated with Autodesk, Inc.")).small().color(t.text_faint));
                 }
             }
         });

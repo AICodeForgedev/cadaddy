@@ -44,7 +44,7 @@ fn opacity_of(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<u8> {
 
 /// The opacity the About dialog's text has in the first frame it is painted, and a second later.
 fn about_fade(app: &mut CadApp) -> (u8, u8) {
-    const TEXT: &str = "clean-room CAD application";
+    const TEXT: &str = "design and drafting for Windows";
     let ctx = egui::Context::default();
     frame(app, &ctx, Vec::new(), |_| ()); // the app itself, before the dialog opens
     app.start("ui.dialog.about");

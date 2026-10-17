@@ -160,9 +160,9 @@ point.
 
 ### Logs
 
-The desktop app writes its `log` records to standard error and to `logs/cadcraft.log` in the
-settings directory (Linux and the BSDs `~/.config/cadcraft/logs/`, or
-`$XDG_CONFIG_HOME/cadcraft/logs/`; macOS `~/Library/Application Support/CADaddy/logs/`; Windows
+The desktop app writes its `log` records to standard error and to `logs/cadaddy.log` in the
+settings directory (Linux and the BSDs `~/.config/cadaddy/logs/`, or
+`$XDG_CONFIG_HOME/cadaddy/logs/`; macOS `~/Library/Application Support/CADaddy/logs/`; Windows
 `%APPDATA%\CADaddy\logs\`; or under `CADCRAFT_CONFIG_DIR`). A start from a desktop menu or the
 Dock has no terminal, so this file is what to attach to a bug report. Each launch moves the
 previous log to `cadcraft.1.log` (and that one to `cadcraft.2.log`), so the log of a run that
