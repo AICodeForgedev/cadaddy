@@ -38,7 +38,7 @@
 | **Runs on** | Windows 10 and 11 (64-bit), macOS 11 or newer (Apple chip and Intel), Linux (64-bit, glibc 2.35+: Ubuntu 22.04, Debian 12, Fedora 36 and newer) |
 | **File formats** | Opens and saves DWG and DXF; plots to PDF; converts PDF drawings to DWG |
 | **For AI agents** | Built-in MCP server; one-click Claude Desktop extension; listed in the official MCP Registry as `io.github.AICodeForgedev/cadaddy` |
-| **Licence** | MIT or Apache-2.0, at your option. Based on [CADCraft](https://github.com/storytold/cadcraft) |
+| **Licence** | Free to use, including commercial work ([terms](LICENSE.md)). Source code not published |
 | **How it compares** | [CADaddy vs LibreCAD, nanoCAD Free, FreeCAD and QCAD](https://aicodeforge.dev/free-autocad-alternative) |
 
 ## Install
@@ -148,9 +148,11 @@ If you find it useful, a ⭐ on this repo helps other people find it.
 
 ## Licence
 
-CADaddy is licensed under the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
-It is based on [CADCraft](https://github.com/storytold/cadcraft) by the ArtCraft team and contributors.
-See [NOTICE](NOTICE) for required notices, including the third-party DWG library.
+CADaddy is free to use, including for commercial work: see the [terms](LICENSE.md). Its source code
+isn't published.
+
+<sub>Credits: CADaddy includes open-source components, among them CADCraft (MIT/Apache-2.0) and
+acadrust (MPL-2.0). Their notices and licenses are in [NOTICE](NOTICE) and [`licenses/`](licenses).</sub>
 
 ---
 
