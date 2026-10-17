@@ -11,8 +11,8 @@ in [ui-parity.md](ui-parity.md); dimension and hatch behaviour in [gaps.md](gaps
 **Headline (estimated): geometry ≈ 40% (weighted below: 41%), of which the constraint solver ≈ 50%.** Everything built
 from lines, arcs and circles is exact. Intersections, closest points and offsets of ellipses and
 splines are found on a tessellation and then polished onto the curves themselves (exact to about
-1e-12 of their size; offsets are splines within 1e-6); polyline offsets don't
-recompute arc bulges or clean up loops; tolerances are absolute, so very large or very small
+1e-12 of their size; offsets are splines within 1e-6); polyline offsets recompute each arc's
+sweep after joining but don't clean up self-intersecting loops; tolerances are absolute, so very large or very small
 drawings behave differently from mid-sized ones. 3D geometry doesn't exist. Remaining:
 **≈ 90–140 Opus 5.5 hours** for 2D precision and the solver, plus the 3D kernel (M11, see
 [target-app-parity.md](target-app-parity.md)).
