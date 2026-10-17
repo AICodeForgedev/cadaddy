@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/cadaddy-logo-dark.png">
-    <img alt="CADaddy" src="docs/brand/cadaddy-logo-light.png" width="360">
+    <img alt="CADaddy" src="docs/brand/cadaddy-logo-light.png" width="420">
   </picture>
 </p>
 
