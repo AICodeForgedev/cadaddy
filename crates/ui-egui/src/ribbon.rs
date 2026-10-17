@@ -1112,7 +1112,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, title_h: f32, content_left: f32
             let _ = app.run("layer.current", json!({ "name": n }));
         }
         if let Some((n, k, v)) = clicks.layer_toggle {
-            let _ = app.run("layer.set", json!({ "name": n, k: v }));
+            crate::layers::set_flag(app, &n, k, v);
         }
         if let Some(cmd) = clicks.cmd {
             app.start(&cmd);

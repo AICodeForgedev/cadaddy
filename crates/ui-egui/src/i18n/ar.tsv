@@ -1294,3 +1294,26 @@ menu	View	عرض
 	Power and distribution	الطاقة والتوزيع
 	Low voltage	الجهد المنخفض
 	Fire alarm	إنذار الحريق
+	Check for Updates...	التحقق من وجود تحديثات...
+	Check for updates automatically	التحقق من التحديثات تلقائيًا
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	يسأل CADaddy موقع GitHub مرة واحدة يوميًا عن رقم أحدث إصدار. لا يُرسَل أي شيء عنك أو عن رسوماتك.
+	Checking for updates...	جارٍ التحقق من وجود تحديثات...
+	CADaddy {v} is the latest version.	CADaddy {v} هو أحدث إصدار.
+	CADaddy {v} is available	يتوفر CADaddy {v}
+	You have {v}. Updating keeps your drawings and settings.	لديك الإصدار {v}. يحتفظ التحديث برسوماتك وإعداداتك.
+	Downloading CADaddy {v}...	جارٍ تنزيل CADaddy {v}...
+	CADaddy {v} is ready to install	CADaddy {v} جاهز للتثبيت
+	It installs when you close CADaddy. Restart now to update right away.	سيُثبَّت عند إغلاق CADaddy. أعد التشغيل الآن للتحديث فورًا.
+	Couldn't update CADaddy	تعذّر تحديث CADaddy
+	Download	تنزيل
+	What's New	الجديد
+	Later	لاحقًا
+	Skip This Version	تخطي هذا الإصدار
+	Restart Now	إعادة التشغيل الآن
+	When I Close CADaddy	عند إغلاق CADaddy
+	Download Page	صفحة التنزيل
+	Hide	إخفاء
+	The current layer is being turned off	يتم إيقاف تشغيل الطبقة الحالية
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	الطبقة "{layer}" هي الطبقة الحالية. لن يظهر ما ترسمه عليها حتى تعيد تشغيلها.
+	Keep the Current Layer On	إبقاء الطبقة الحالية قيد التشغيل
+	Turn the Current Layer Off	إيقاف تشغيل الطبقة الحالية

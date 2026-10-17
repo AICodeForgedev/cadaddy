@@ -388,7 +388,54 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         });
     ctx.data_mut(|dd| dd.insert_temp(sid, st));
     for (c, p) in actions {
-        let _ = app.run(c, p);
+        if c == "layer.set"
+            && p.get("on") == Some(&Value::Bool(false))
+            && let Some(name) = p.get("name").and_then(Value::as_str)
+        {
+            set_flag(app, name, "on", false);
+        } else {
+            let _ = app.run(c, p);
+        }
+    }
+}
+
+/// A layer's On, Frozen or Locked from a palette or the ribbon. Turning the current layer off asks
+/// first, as AutoCAD does: new objects would be drawn on a layer that doesn't show.
+pub(crate) fn set_flag(app: &mut CadApp, name: &str, key: &'static str, value: bool) {
+    let current = app.session.doc().is_ok_and(|d| d.header.str("CLAYER", "0").eq_ignore_ascii_case(name));
+    if key == "on" && !value && current {
+        app.layer_off_ask = Some(name.to_string());
+        return;
+    }
+    let _ = app.run("layer.set", json!({ "name": name, key: value }));
+}
+
+/// The question [`set_flag`] asks before turning the current layer off.
+pub fn off_prompt(app: &mut CadApp, ctx: &egui::Context) {
+    let Some(name) = app.layer_off_ask.clone() else { return };
+    let mut answer = None;
+    egui::Modal::new(egui::Id::new("layer_off_current")).show(ctx, |ui| {
+        ui.set_max_width(420.0);
+        ui.label(RichText::new(crate::tl!("The current layer is being turned off")).strong());
+        ui.label(crate::tf!("Layer \"{layer}\" is the current layer. Objects you draw on it won't show until you turn it back on.", layer = name));
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button(crate::tl!("Keep the Current Layer On")).clicked() {
+                answer = Some(false);
+            }
+            if ui.button(crate::tl!("Turn the Current Layer Off")).clicked() {
+                answer = Some(true);
+            }
+        });
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            answer = Some(false);
+        }
+    });
+    if let Some(off) = answer {
+        app.layer_off_ask = None;
+        if off {
+            let _ = app.run("layer.set", json!({ "name": name, "on": false }));
+        }
     }
 }
 

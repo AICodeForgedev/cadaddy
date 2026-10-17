@@ -1299,3 +1299,26 @@ menu	Modify	Edita
 	Power and distribution	Potenza e distribuzione
 	Low voltage	Bassa tensione
 	Fire alarm	Allarme antincendio
+	Check for Updates...	Verifica aggiornamenti...
+	Check for updates automatically	Verifica automaticamente gli aggiornamenti
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	Una volta al giorno CADaddy chiede a GitHub il numero dell'ultima versione. Non viene inviato nulla su di te o sui tuoi disegni.
+	Checking for updates...	Verifica degli aggiornamenti...
+	CADaddy {v} is the latest version.	CADaddy {v} è la versione più recente.
+	CADaddy {v} is available	CADaddy {v} è disponibile
+	You have {v}. Updating keeps your drawings and settings.	Hai la {v}. L'aggiornamento mantiene disegni e impostazioni.
+	Downloading CADaddy {v}...	Download di CADaddy {v}...
+	CADaddy {v} is ready to install	CADaddy {v} è pronto per l'installazione
+	It installs when you close CADaddy. Restart now to update right away.	Si installa quando chiudi CADaddy. Riavvia ora per aggiornare subito.
+	Couldn't update CADaddy	Impossibile aggiornare CADaddy
+	Download	Scarica
+	What's New	Novità
+	Later	Più tardi
+	Skip This Version	Salta questa versione
+	Restart Now	Riavvia ora
+	When I Close CADaddy	Alla chiusura di CADaddy
+	Download Page	Pagina di download
+	Hide	Nascondi
+	The current layer is being turned off	Il layer corrente sta per essere disattivato
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	Il layer "{layer}" è il layer corrente. Ciò che vi disegni non sarà visibile finché non lo riattivi.
+	Keep the Current Layer On	Mantieni attivo il layer corrente
+	Turn the Current Layer Off	Disattiva il layer corrente

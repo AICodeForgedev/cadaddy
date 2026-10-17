@@ -4,8 +4,9 @@
 
 use std::collections::BTreeMap;
 
+use cadcraft_doc::MAX_BLOCK_DEPTH;
 use cadcraft_doc::{EntityKind, Insert};
-use cadcraft_geom::Vec2;
+use cadcraft_geom::{Mat3, Vec2};
 use serde_json::{Value, json};
 
 use crate::cmd::curves::KW;
@@ -20,7 +21,7 @@ const MAX_TABLE_COLS: usize = 200;
 /// Attribute columns kept at most.
 const MAX_TAGS: usize = 190;
 
-const PARAMS: &str = "{blocks?: \"A*,B\" (block names, wildcards, default *), tags?: attribute tags to include (wildcards, default *), handles? (default: the block references in model space and every layout), combine?: bool (default true: identical rows once, with a Count column; false: one row per reference with handle, layer, position and rotation), file?: path (.csv; .txt is tab-separated), at?: [x,y] (insert a table there), title?: table title} → {columns, rows, file?, table?}";
+const PARAMS: &str = "{blocks?: \"A*,B\" (block names, wildcards, default *), tags?: attribute tags to include (wildcards, default *), handles? (default: the block references in model space and every layout), nested?: bool (default true: count references inside blocks and arrays too), combine?: bool (default true: identical rows once, with a Count column; false: one row per reference with handle, layer, position and rotation), file?: path (.csv; .txt is tab-separated), at?: [x,y] (insert a table there), title?: table title} → {columns, rows, file?, table?}";
 
 pub(super) fn dataextraction_spec() -> CommandSpec {
     CommandSpec::new("dataextraction", "Data Extraction...", run)
@@ -70,6 +71,8 @@ struct Options {
     blocks: String,
     tags: String,
     combine: bool,
+    /// References inside blocks count too.
+    nested: bool,
 }
 
 /// One block reference found: block name, handle, layer, position, rotation (degrees), and its
@@ -104,7 +107,14 @@ fn values(d: &cadcraft_doc::Drawing, ins: &Insert) -> Vec<(String, String)> {
     v
 }
 
+/// References found at most (MINSERT grids and arrays of nested blocks multiply quickly).
+const MAX_FOUND: usize = 200_000;
+
 /// The block references to extract from: `handles` when given, else model space and the layouts.
+/// With `nested`, references inside blocks count too (each copy once, as COUNT does); anonymous
+/// blocks (associative arrays, dynamic block copies) are always looked into, never listed. A
+/// nested reference reports the top-level object holding it, its world position and rotation, and
+/// the holder's layer when it is on layer 0.
 fn found(s: &Session, p: &Value, o: &Options) -> Result<Vec<Found>> {
     let d = s.doc()?;
     let ents: Vec<std::sync::Arc<cadcraft_doc::Entity>> = if p.get("handles").is_some() || p.get("handle").is_some() {
@@ -115,21 +125,54 @@ fn found(s: &Session, p: &Value, o: &Options) -> Result<Vec<Found>> {
     let mut out = Vec::new();
     for e in &ents {
         let EntityKind::Insert(ins) = &e.kind else { continue };
-        let anonymous = ins.block.starts_with('*') || d.block(&ins.block).is_some_and(|b| b.anonymous);
-        if anonymous || !matches(&o.blocks, &ins.block) {
-            continue;
+        walk(d, o, &e.handle.hex(), ins, &e.common.layer, Mat3::IDENTITY, 0, &mut out);
+        if out.len() >= MAX_FOUND {
+            break;
         }
-        let block = d.block(&ins.block).map(|b| b.name.clone()).unwrap_or_else(|| ins.block.clone());
-        out.push(Found {
-            block,
-            handle: e.handle.hex(),
-            layer: e.common.layer.clone(),
-            at: ins.insert.xy(),
-            rotation: ins.rotation.to_degrees(),
-            values: values(d, ins),
-        });
     }
     Ok(out)
+}
+
+/// Add `ins` (on `layer`, placed by `outer`, held by the top-level object `holder`) and, when asked, the references inside it.
+#[allow(clippy::too_many_arguments)]
+fn walk(d: &cadcraft_doc::Drawing, o: &Options, holder: &str, ins: &Insert, layer: &str, outer: Mat3, depth: usize, out: &mut Vec<Found>) {
+    if depth >= MAX_BLOCK_DEPTH || out.len() >= MAX_FOUND {
+        return;
+    }
+    let def = d.block(&ins.block);
+    let anonymous = ins.block.starts_with('*') || def.is_some_and(|b| b.anonymous);
+    let listed = !anonymous && matches(&o.blocks, &ins.block);
+    let base = def.map_or(Vec2::new(0.0, 0.0), |b| b.base.xy());
+    let cols = ins.cols.clamp(1, 10_000);
+    let rows = ins.rows.clamp(1, 10_000);
+    for r in 0..rows {
+        for c in 0..cols {
+            if out.len() >= MAX_FOUND {
+                return;
+            }
+            let off = Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
+            let m = outer.then_before(Mat3::translate(off).then_before(ins.transform(base)));
+            if listed {
+                out.push(Found {
+                    block: def.map(|b| b.name.clone()).unwrap_or_else(|| ins.block.clone()),
+                    handle: holder.to_string(),
+                    layer: layer.to_string(),
+                    at: m.apply(base),
+                    rotation: m.rotation().to_degrees(),
+                    values: values(d, ins),
+                });
+            }
+            if !(o.nested || anonymous) {
+                continue;
+            }
+            let Some(b) = def else { continue };
+            for be in b.entities.iter() {
+                let EntityKind::Insert(inner) = &be.kind else { continue };
+                let inner_layer = if be.common.layer == "0" { layer } else { &be.common.layer };
+                walk(d, o, holder, inner, inner_layer, m, depth + 1, out);
+            }
+        }
+    }
 }
 
 /// Columns and rows for what was found.
@@ -261,6 +304,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         blocks: str_param(p, "blocks").filter(|b| !b.trim().is_empty()).unwrap_or("*").to_string(),
         tags: str_param(p, "tags").filter(|b| !b.trim().is_empty()).unwrap_or("*").to_string(),
         combine: bool_or(p, "combine", true),
+        nested: bool_or(p, "nested", true),
     };
     let at = match p.get("at") {
         None | Some(Value::Null) => None,
@@ -295,7 +339,7 @@ struct ExtractM {
 
 impl ExtractM {
     fn options(&self) -> Options {
-        Options { blocks: self.blocks.clone().unwrap_or_else(|| "*".into()), tags: "*".into(), combine: self.combine }
+        Options { blocks: self.blocks.clone().unwrap_or_else(|| "*".into()), tags: "*".into(), combine: self.combine, nested: true }
     }
 
     /// The default file name: the drawing's, with a .csv extension.

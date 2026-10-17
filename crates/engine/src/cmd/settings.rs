@@ -15,6 +15,23 @@ fn toggle(s: &mut Session, p: &Value, get: fn(&mut crate::Settings) -> &mut bool
     Ok(json!({ "on": on, "message": format!("<{name} {}>", if on { "on" } else { "off" }) }))
 }
 
+/// Ortho and polar tracking exclude each other (AutoCAD): turning one on turns the other off.
+fn toggle_ortho(s: &mut Session, p: &Value) -> Result<Value> {
+    let r = toggle(s, p, |st| &mut st.orthomode, "Ortho")?;
+    if s.settings.orthomode {
+        s.settings.polarmode = false;
+    }
+    Ok(r)
+}
+
+fn toggle_polar(s: &mut Session, p: &Value) -> Result<Value> {
+    let r = toggle(s, p, |st| &mut st.polarmode, "Polar")?;
+    if s.settings.polarmode {
+        s.settings.orthomode = false;
+    }
+    Ok(r)
+}
+
 /// ORTHO typed at the command line: "Enter mode [ON/OFF] <current>", as in AutoCAD (F8 and the
 /// status bar toggle without asking).
 struct OrthoM;
@@ -44,7 +61,7 @@ impl Interactive for OrthoM {
             Input::Cancel => return Ok(Step::Cancel),
             _ => return Ok(Step::Continue),
         };
-        let r = toggle(s, &json!({ "on": on }), |st| &mut st.orthomode, "Ortho")?;
+        let r = toggle_ortho(s, &json!({ "on": on }))?;
         if let Some(m) = r.get("message").and_then(Value::as_str) {
             s.echo(m);
         }
@@ -54,7 +71,7 @@ impl Interactive for OrthoM {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("ortho", "Ortho Mode", |s, p| toggle(s, p, |st| &mut st.orthomode, "Ortho"))
+        CommandSpec::new("ortho", "Ortho Mode", toggle_ortho)
             .key("F8")
             .params("{on?: bool}")
             .enabled(always)
@@ -73,12 +90,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(always)
             .noundo()
             .transparent(),
-        CommandSpec::new("polar", "Polar Tracking", |s, p| toggle(s, p, |st| &mut st.polarmode, "Polar"))
-            .key("F10")
-            .params("{on?: bool}")
-            .enabled(always)
-            .noundo()
-            .transparent(),
+        CommandSpec::new("polar", "Polar Tracking", toggle_polar).key("F10").params("{on?: bool}").enabled(always).noundo().transparent(),
         CommandSpec::new("otrack", "Object Snap Tracking", |s, p| toggle(s, p, |st| &mut st.otrack, "Object Snap Tracking"))
             .key("F11")
             .params("{on?: bool}")

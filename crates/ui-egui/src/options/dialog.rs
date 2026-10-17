@@ -469,6 +469,12 @@ fn preferences(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>
         changes.insert("timeSensitiveRightClick".into(), json!(timed));
     }
     hint(ui, crate::tl!("Turned off, a right-click while a command runs always opens the shortcut menu."));
+    ui.add_space(6.0);
+    let mut auto = app.update.auto;
+    if ui.checkbox(&mut auto, crate::tl!("Check for updates automatically")).changed() {
+        changes.insert("checkForUpdates".into(), json!(auto));
+    }
+    hint(ui, crate::tl!("Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent."));
 }
 
 fn profiles(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {

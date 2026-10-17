@@ -141,6 +141,7 @@ struct UiChanges {
     savetime: Option<u32>,
     savefilepath: Option<String>,
     time_sensitive_right_click: Option<bool>,
+    check_for_updates: Option<bool>,
 }
 
 fn color_param(key: &str, v: &Value) -> Result<Option<Color32>, String> {
@@ -179,6 +180,7 @@ fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
             c.save_version = Some(crate::SaveVersion::parse(name.trim()).ok_or("saveVersion must be 2000, 2004, 2007, 2010, 2013 or 2018")?);
         }
         "timeSensitiveRightClick" => c.time_sensitive_right_click = Some(v.as_bool().ok_or("timeSensitiveRightClick must be true or false")?),
+        "checkForUpdates" => c.check_for_updates = Some(v.as_bool().ok_or("checkForUpdates must be true or false")?),
         k if k.eq_ignore_ascii_case("SAVETIME") => {
             let max = cadcraft_engine::autosave::MAX_SAVETIME;
             let n = v
@@ -214,6 +216,7 @@ fn ui_json(app: &CadApp) -> Map<String, Value> {
     m.insert("SAVETIME".into(), json!(cadcraft_engine::autosave::savetime()));
     m.insert("SAVEFILEPATH".into(), json!(cadcraft_engine::autosave::savefilepath()));
     m.insert("timeSensitiveRightClick".into(), json!(o.time_sensitive_right_click));
+    m.insert("checkForUpdates".into(), json!(app.update.auto));
     m
 }
 
@@ -283,6 +286,9 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
     }
     if let Some(b) = ui.time_sensitive_right_click {
         app.options.time_sensitive_right_click = b;
+    }
+    if let Some(b) = ui.check_for_updates {
+        app.update.auto = b;
     }
     Ok(report(app))
 }

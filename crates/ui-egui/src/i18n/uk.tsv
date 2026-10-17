@@ -1392,3 +1392,26 @@
 	Power and distribution	Живлення та розподіл
 	Low voltage	Слабкострумові системи
 	Fire alarm	Пожежна сигналізація
+	Check for Updates...	Перевірити оновлення...
+	Check for updates automatically	Перевіряти оновлення автоматично
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	Раз на день CADaddy запитує в GitHub номер найновішої версії. Жодних відомостей про вас чи ваші креслення не надсилається.
+	Checking for updates...	Перевірка оновлень...
+	CADaddy {v} is the latest version.	CADaddy {v} — найновіша версія.
+	CADaddy {v} is available	Доступна версія CADaddy {v}
+	You have {v}. Updating keeps your drawings and settings.	У вас версія {v}. Під час оновлення креслення й налаштування зберігаються.
+	Downloading CADaddy {v}...	Завантаження CADaddy {v}...
+	CADaddy {v} is ready to install	CADaddy {v} готовий до встановлення
+	It installs when you close CADaddy. Restart now to update right away.	Встановлення відбудеться, коли ви закриєте CADaddy. Перезапустіть зараз, щоб оновити одразу.
+	Couldn't update CADaddy	Не вдалося оновити CADaddy
+	Download	Завантажити
+	What's New	Що нового
+	Later	Пізніше
+	Skip This Version	Пропустити цю версію
+	Restart Now	Перезапустити
+	When I Close CADaddy	Під час закриття CADaddy
+	Download Page	Сторінка завантаження
+	Hide	Сховати
+	The current layer is being turned off	Поточний шар вимикається
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	Шар "{layer}" є поточним. Те, що ви на ньому накреслите, не буде видно, доки ви знову його не ввімкнете.
+	Keep the Current Layer On	Залишити поточний шар увімкненим
+	Turn the Current Layer Off	Вимкнути поточний шар

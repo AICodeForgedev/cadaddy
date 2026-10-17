@@ -1278,3 +1278,26 @@ menu	Modify	Modifikace
 	Power and distribution	Napájení a rozvod
 	Low voltage	Slaboproud
 	Fire alarm	Požární signalizace
+	Check for Updates...	Vyhledat aktualizace...
+	Check for updates automatically	Automaticky vyhledávat aktualizace
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	Jednou denně se CADaddy zeptá GitHubu na číslo nejnovější verze. Nic o vás ani o vašich výkresech se neodesílá.
+	Checking for updates...	Vyhledávání aktualizací...
+	CADaddy {v} is the latest version.	CADaddy {v} je nejnovější verze.
+	CADaddy {v} is available	Je k dispozici CADaddy {v}
+	You have {v}. Updating keeps your drawings and settings.	Máte verzi {v}. Aktualizace zachová vaše výkresy i nastavení.
+	Downloading CADaddy {v}...	Stahování CADaddy {v}...
+	CADaddy {v} is ready to install	CADaddy {v} je připraven k instalaci
+	It installs when you close CADaddy. Restart now to update right away.	Nainstaluje se, až CADaddy zavřete. Restartujte nyní a aktualizujte hned.
+	Couldn't update CADaddy	CADaddy se nepodařilo aktualizovat
+	Download	Stáhnout
+	What's New	Novinky
+	Later	Později
+	Skip This Version	Přeskočit tuto verzi
+	Restart Now	Restartovat nyní
+	When I Close CADaddy	Při zavření CADaddy
+	Download Page	Stránka ke stažení
+	Hide	Skrýt
+	The current layer is being turned off	Aktuální hladina se vypíná
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	Hladina "{layer}" je aktuální hladina. Co do ní nakreslíte, nebude vidět, dokud ji znovu nezapnete.
+	Keep the Current Layer On	Ponechat aktuální hladinu zapnutou
+	Turn the Current Layer Off	Vypnout aktuální hladinu

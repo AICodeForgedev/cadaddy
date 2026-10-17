@@ -1299,3 +1299,26 @@ menu	Modify	수정
 	Power and distribution	전원 및 배전
 	Low voltage	약전
 	Fire alarm	화재 경보
+	Check for Updates...	업데이트 확인...
+	Check for updates automatically	자동으로 업데이트 확인
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	CADaddy는 하루에 한 번 GitHub에 최신 버전 번호를 확인합니다. 사용자나 도면에 관한 정보는 전송되지 않습니다.
+	Checking for updates...	업데이트 확인 중...
+	CADaddy {v} is the latest version.	CADaddy {v}이(가) 최신 버전입니다.
+	CADaddy {v} is available	CADaddy {v}을(를) 사용할 수 있습니다
+	You have {v}. Updating keeps your drawings and settings.	현재 버전은 {v}입니다. 업데이트해도 도면과 설정은 유지됩니다.
+	Downloading CADaddy {v}...	CADaddy {v} 다운로드 중...
+	CADaddy {v} is ready to install	CADaddy {v} 설치 준비 완료
+	It installs when you close CADaddy. Restart now to update right away.	CADaddy를 닫으면 설치됩니다. 바로 업데이트하려면 지금 다시 시작하세요.
+	Couldn't update CADaddy	CADaddy를 업데이트할 수 없습니다
+	Download	다운로드
+	What's New	새로운 기능
+	Later	나중에
+	Skip This Version	이 버전 건너뛰기
+	Restart Now	지금 다시 시작
+	When I Close CADaddy	CADaddy를 닫을 때
+	Download Page	다운로드 페이지
+	Hide	숨기기
+	The current layer is being turned off	현재 도면층을 끄려고 합니다
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	"{layer}" 도면층은 현재 도면층입니다. 다시 켤 때까지 이 도면층에 그린 객체는 표시되지 않습니다.
+	Keep the Current Layer On	현재 도면층 켜 두기
+	Turn the Current Layer Off	현재 도면층 끄기

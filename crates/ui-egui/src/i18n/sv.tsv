@@ -1306,3 +1306,26 @@ menu	Modify	Ändra
 	Power and distribution	Kraft och distribution
 	Low voltage	Svagström
 	Fire alarm	Brandlarm
+	Check for Updates...	Sök efter uppdateringar...
+	Check for updates automatically	Sök efter uppdateringar automatiskt
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	En gång om dagen frågar CADaddy GitHub efter det senaste versionsnumret. Inget om dig eller dina ritningar skickas.
+	Checking for updates...	Söker efter uppdateringar...
+	CADaddy {v} is the latest version.	CADaddy {v} är den senaste versionen.
+	CADaddy {v} is available	CADaddy {v} finns tillgänglig
+	You have {v}. Updating keeps your drawings and settings.	Du har {v}. Uppdateringen behåller dina ritningar och inställningar.
+	Downloading CADaddy {v}...	Hämtar CADaddy {v}...
+	CADaddy {v} is ready to install	CADaddy {v} är klar att installera
+	It installs when you close CADaddy. Restart now to update right away.	Den installeras när du stänger CADaddy. Starta om nu för att uppdatera direkt.
+	Couldn't update CADaddy	Det gick inte att uppdatera CADaddy
+	Download	Hämta
+	What's New	Nyheter
+	Later	Senare
+	Skip This Version	Hoppa över den här versionen
+	Restart Now	Starta om nu
+	When I Close CADaddy	När jag stänger CADaddy
+	Download Page	Hämtningssida
+	Hide	Dölj
+	The current layer is being turned off	Det aktuella lagret stängs av
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	Lagret "{layer}" är det aktuella lagret. Det du ritar på det syns inte förrän du slår på det igen.
+	Keep the Current Layer On	Behåll det aktuella lagret på
+	Turn the Current Layer Off	Stäng av det aktuella lagret

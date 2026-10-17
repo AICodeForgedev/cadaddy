@@ -1279,13 +1279,8 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                     .iter()
                     .map(|be| {
                         let mut ne = (**be).clone();
+                        // AutoCAD's EXPLODE keeps layer 0 and ByBlock properties as defined.
                         ne.kind.transform(&m);
-                        if ne.common.layer == "0" {
-                            ne.common.layer = e.common.layer.clone();
-                        }
-                        if ne.common.color == cadcraft_color::Color::ByBlock {
-                            ne.common.color = e.common.color;
-                        }
                         ne
                     })
                     .collect(),

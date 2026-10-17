@@ -26,8 +26,8 @@ fn open_bytes_opens_the_named_drawing_and_reports_failures() {
     // A file the reader rejects: nothing opens; the error reaches the command line and status bar.
     app.open_bytes("junk.dxf", b"junk");
     assert_eq!(app.session.docs.len(), 1);
-    assert!(app.session.log.last().is_some_and(|l| l.contains("not a drawing")), "{:?}", app.session.log.last());
-    assert!(app.status.as_ref().is_some_and(|(s, _)| s.contains("not a drawing")));
+    assert!(app.session.log.last().is_some_and(|l| l.to_lowercase().contains("not a drawing")), "{:?}", app.session.log.last());
+    assert!(app.status.as_ref().is_some_and(|(s, _)| s.to_lowercase().contains("not a drawing")));
 
     // Too large to hold in memory: refused before anything is read, with the limit named.
     assert!(CadApp::open_size_error("big.dwg", CadApp::MAX_OPEN_BYTES).is_none());

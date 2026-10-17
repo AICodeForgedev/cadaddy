@@ -1306,3 +1306,26 @@
 	Power and distribution	Energia e distribuição
 	Low voltage	Baixa tensão
 	Fire alarm	Alarme de incêndio
+	Check for Updates...	Verificar atualizações...
+	Check for updates automatically	Verificar atualizações automaticamente
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	Uma vez por dia o CADaddy pergunta ao GitHub o número da versão mais recente. Nada sobre você ou seus desenhos é enviado.
+	Checking for updates...	Verificando atualizações...
+	CADaddy {v} is the latest version.	O CADaddy {v} é a versão mais recente.
+	CADaddy {v} is available	O CADaddy {v} está disponível
+	You have {v}. Updating keeps your drawings and settings.	Você tem a {v}. A atualização mantém seus desenhos e configurações.
+	Downloading CADaddy {v}...	Baixando o CADaddy {v}...
+	CADaddy {v} is ready to install	O CADaddy {v} está pronto para instalar
+	It installs when you close CADaddy. Restart now to update right away.	Ele é instalado quando você fecha o CADaddy. Reinicie agora para atualizar imediatamente.
+	Couldn't update CADaddy	Não foi possível atualizar o CADaddy
+	Download	Baixar
+	What's New	Novidades
+	Later	Mais tarde
+	Skip This Version	Pular esta versão
+	Restart Now	Reiniciar agora
+	When I Close CADaddy	Ao fechar o CADaddy
+	Download Page	Página de download
+	Hide	Ocultar
+	The current layer is being turned off	A camada atual está sendo desligada
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	A camada "{layer}" é a camada atual. O que você desenhar nela não aparecerá até que você a ligue novamente.
+	Keep the Current Layer On	Manter a camada atual ligada
+	Turn the Current Layer Off	Desligar a camada atual

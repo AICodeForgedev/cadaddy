@@ -230,7 +230,11 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         // A scale of the drawing's list; ANNOAUTOSCALE adds it to the annotative objects.
         "CANNOSCALE" => crate::cmd::annoscale::set_current(s, v.as_str().ok_or_else(bad)?)?,
         "CANNOSCALEVALUE" => return Err(EngineError::BadParams { cmd: "setvar".into(), msg: format!("{n} is read-only") }),
-        "ORTHOMODE" => st.orthomode = as_bool(v).ok_or_else(bad)?,
+        "ORTHOMODE" => {
+            st.orthomode = as_bool(v).ok_or_else(bad)?;
+            // Ortho and polar tracking exclude each other.
+            st.polarmode &= !st.orthomode;
+        }
         "POLARMODE" => st.polar_flags = as_i(v).filter(|b| (0..=15).contains(b)).ok_or_else(bad)? as u32,
         "POLARADDANG" => {
             let text = v.as_str().map(str::to_string).or_else(|| as_f64(v).map(|f| f.to_string())).ok_or_else(bad)?;
@@ -242,6 +246,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             let bits = as_i(v).filter(|b| (0..=63).contains(b)).ok_or_else(bad)?;
             st.polarmode = bits & 8 != 0;
             st.otrack = bits & 16 != 0;
+            st.orthomode &= !st.polarmode;
         }
         "QNEWTEMPLATE" => crate::cmd::file::set_qnew_template(v.as_str().ok_or_else(bad)?),
         "POLARANG" => st.polarang = as_f64(v).filter(|a| *a > 0.0).ok_or_else(bad)?.to_radians(),

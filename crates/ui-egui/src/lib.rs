@@ -26,6 +26,7 @@ mod mtext_editor;
 pub mod spacemouse;
 // Report a Bug, Request a Feature, Donate.
 pub mod support;
+pub mod update;
 // The External References palette.
 pub mod xrefs;
 
@@ -249,6 +250,12 @@ pub struct CadApp {
     pub pending_url: Option<String>,
     /// What the support banner remembers ([`support`]).
     pub donate: support::DonatePrefs,
+    /// Looking for, downloading and installing new versions ([`update`]); the desktop host
+    /// supplies the updater.
+    pub updater: Option<Box<dyn update::Updater>>,
+    /// A palette asked to turn the current layer off: the question waits ([`layers::off_prompt`]).
+    pub layer_off_ask: Option<String>,
+    pub update: update::UpdateState,
     /// The app may close although drawings have unsaved changes (they were dealt with, or the
     /// quit came from the control channel, which never asks).
     pub quit_confirmed: bool,
@@ -303,6 +310,9 @@ impl CadApp {
             quit_requested: false,
             pending_url: None,
             donate: support::DonatePrefs::default(),
+            updater: None,
+            layer_off_ask: None,
+            update: update::UpdateState::default(),
             quit_confirmed: false,
             closing: None,
             autosave: None,
@@ -343,7 +353,7 @@ impl CadApp {
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             return r;
         }
-        let r = self.session.execute(id, &params).map_err(|e| e.to_string());
+        let r = self.session.execute(id, &params);
         if let Ok(v) = &r
             && let Some(m) = v.get("message").and_then(Value::as_str)
         {
@@ -352,9 +362,9 @@ impl CadApp {
             }
         }
         if let Err(e) = &r {
-            self.session.echo(e.clone());
+            self.session.echo(e.user_message());
         }
-        r
+        r.map_err(|e| e.to_string())
     }
 
     /// Start a command as if typed (interactive when it has prompts).
@@ -363,7 +373,7 @@ impl CadApp {
             return;
         }
         if let Err(e) = self.session.start(name) {
-            self.session.echo(e.to_string());
+            self.session.echo(e.user_message());
         }
     }
 
@@ -412,6 +422,15 @@ impl CadApp {
         if self.donate.shown_ms > 0.0 {
             prefs["supportBannerShown"] = json!(self.donate.shown_ms);
         }
+        if !self.update.auto {
+            prefs["checkForUpdates"] = json!(false);
+        }
+        if self.update.checked_ms > 0.0 {
+            prefs["updateChecked"] = json!(self.update.checked_ms);
+        }
+        if !self.update.skip.is_empty() {
+            prefs["updateSkip"] = json!(self.update.skip);
+        }
         prefs.to_string()
     }
 
@@ -441,6 +460,15 @@ impl CadApp {
         }
         if let Some(ms) = v.get("supportBannerShown").and_then(Value::as_f64).filter(|ms| ms.is_finite()) {
             self.donate.shown_ms = ms;
+        }
+        if let Some(b) = v.get("checkForUpdates").and_then(Value::as_bool) {
+            self.update.auto = b;
+        }
+        if let Some(ms) = v.get("updateChecked").and_then(Value::as_f64).filter(|ms| ms.is_finite()) {
+            self.update.checked_ms = ms;
+        }
+        if let Some(skip) = v.get("updateSkip").and_then(Value::as_str).filter(|s| s.len() <= 32) {
+            self.update.skip = skip.to_string();
         }
     }
 
@@ -692,11 +720,16 @@ impl CadApp {
             }
         });
         dialogs::show(self, ui.ctx());
+        layers::off_prompt(self, ui.ctx());
         palettes::patterns::prompt_picker(self, ui.ctx());
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
-        support::banner(self, ui.ctx());
+        update::tick(self);
+        update::card(self, ui.ctx());
+        if !self.update.busy() {
+            support::banner(self, ui.ctx());
+        }
         if let Some(url) = self.pending_url.take() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }

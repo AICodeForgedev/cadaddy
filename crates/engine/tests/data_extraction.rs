@@ -166,3 +166,42 @@ fn eattext_at_the_command_line_writes_a_file() {
     assert_eq!(text.lines().count(), 4);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Blocks in associative arrays and inside other blocks are extracted too (a panel schedule built
+/// from an arrayed or nested device must not come up short), at their world positions.
+#[test]
+fn arrays_and_nested_blocks_are_included() {
+    let mut s = Session::new();
+    block(&mut s, "DEV", &["CIRCUIT"]);
+    let one = insert(&mut s, "DEV", 0.0, json!({"CIRCUIT": "1"}));
+    let arr = s.execute("arrayrect", &json!({"handles": [one], "rows": 1, "cols": 3, "rowSpacing": 1, "colSpacing": 10})).unwrap()["handle"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // ROOM holds two DEV references (circuit 2); two ROOMs are placed, one moved and rotated.
+    let a = s.execute("insert", &json!({"name": "DEV", "at": [0, 0], "attribs": {"CIRCUIT": "2"}})).unwrap()["handle"].as_str().unwrap().to_string();
+    let b = s.execute("insert", &json!({"name": "DEV", "at": [4, 0], "attribs": {"CIRCUIT": "2"}})).unwrap()["handle"].as_str().unwrap().to_string();
+    s.execute("block", &json!({"name": "ROOM", "base": [0, 0], "handles": [a, b], "keep": "delete"})).unwrap();
+    s.execute("insert", &json!({"name": "ROOM", "at": [100, 0]})).unwrap();
+    let room = s.execute("insert", &json!({"name": "ROOM", "at": [200, 0], "rotation": 90})).unwrap()["handle"].as_str().unwrap().to_string();
+
+    let r = s.execute("dataextraction", &json!({})).unwrap();
+    assert_eq!(r["rows"], json!([[3, "DEV", "1"], [4, "DEV", "2"], [2, "ROOM", ""]]));
+    // Without nested blocks, the array's copies still count (an array is one object holding copies).
+    let r = s.execute("dataextraction", &json!({"nested": false})).unwrap();
+    assert_eq!(r["rows"], json!([[3, "DEV", "1"], [2, "ROOM", ""]]));
+
+    // One row per copy: the holding object's handle, world position and rotation.
+    let r = s.execute("dataextraction", &json!({"combine": false, "blocks": "DEV", "handles": [room]})).unwrap();
+    let rows = r["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for (row, y) in rows.iter().zip([0.0, 4.0]) {
+        assert_eq!(row[1], json!(room));
+        assert!((row[3].as_f64().unwrap() - 200.0).abs() < 1e-9 && (row[4].as_f64().unwrap() - y).abs() < 1e-9, "{row}");
+        assert!((row[5].as_f64().unwrap() - 90.0).abs() < 1e-9, "{row}");
+    }
+    let r = s.execute("dataextraction", &json!({"combine": false, "handles": [arr]})).unwrap();
+    let xs: Vec<f64> = r["rows"].as_array().unwrap().iter().map(|r| r[3].as_f64().unwrap()).collect();
+    assert_eq!(xs.len(), 3);
+    assert!(xs.iter().zip([0.0, 10.0, 20.0]).all(|(x, want)| (x - want).abs() < 1e-9), "{xs:?}");
+}

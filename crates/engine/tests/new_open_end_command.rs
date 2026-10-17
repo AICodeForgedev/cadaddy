@@ -6,8 +6,9 @@ use cadcraft_engine::cmd::file::{IoHooks, set_io};
 use cadcraft_engine::doc::Drawing;
 use serde_json::json;
 
+/// Objects in model space (a new drawing's layouts start with a viewport each).
 fn count(s: &Session) -> usize {
-    s.doc().unwrap().entity_count()
+    s.doc().unwrap().model.iter().count()
 }
 
 /// LINE with one segment drawn, still asking for the next point.

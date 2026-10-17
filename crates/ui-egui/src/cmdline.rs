@@ -224,7 +224,7 @@ pub fn pick_option(app: &mut CadApp, keyword: String) {
     app.cmd.options = None;
     app.cmd.buffer.clear();
     if let Err(e) = app.session.input(Input::Keyword(keyword)) {
-        app.session.echo(e.to_string());
+        app.session.echo(e.user_message());
     }
 }
 
@@ -383,7 +383,7 @@ pub fn submit(app: &mut CadApp) {
     crate::context_menu::note_input(app, &text);
     if text.is_empty() {
         if let Err(e) = app.session.input(Input::Enter) {
-            app.session.echo(e.to_string());
+            app.session.echo(e.user_message());
         }
         return;
     }

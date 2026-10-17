@@ -185,36 +185,24 @@ pub(crate) fn explode_array(d: &Drawing, e: &Entity) -> Option<Vec<Entity>> {
     let m = ins.transform(blk.base.xy());
     let mut out = Vec::new();
     for item in blk.entities.iter() {
-        let item = placed(e, item, &m);
+        let item = placed(item, &m);
         let source = match &item.kind {
             EntityKind::Insert(i) if i.block.eq_ignore_ascii_case(&p.source) => d.block(&i.block).map(|b| (i.transform(b.base.xy()), b)),
             _ => None,
         };
         match source {
-            Some((im, b)) => out.extend(b.entities.iter().map(|se| placed(&item, se, &im))),
+            Some((im, b)) => out.extend(b.entities.iter().map(|se| placed(se, &im))),
             None => out.push(item),
         }
     }
     Some(out)
 }
 
-/// `child` of a block referenced by `parent`, moved by `m`, with layer 0 and ByBlock properties
-/// taken from the reference (as EXPLODE does).
-fn placed(parent: &Entity, child: &Entity, m: &Mat3) -> Entity {
+/// `child` of a block, moved by `m`. Like AutoCAD's EXPLODE, its layer, colour, linetype and
+/// lineweight stay as defined (layer 0 and ByBlock included).
+fn placed(child: &Entity, m: &Mat3) -> Entity {
     let mut ne = child.clone();
     ne.kind.transform(m);
-    if ne.common.layer == "0" {
-        ne.common.layer = parent.common.layer.clone();
-    }
-    if ne.common.color == cadcraft_color::Color::ByBlock {
-        ne.common.color = parent.common.color;
-    }
-    if ne.common.linetype.eq_ignore_ascii_case("ByBlock") {
-        ne.common.linetype = parent.common.linetype.clone();
-    }
-    if ne.common.lineweight == cadcraft_doc::Lineweight::ByBlock {
-        ne.common.lineweight = parent.common.lineweight;
-    }
     ne
 }
 

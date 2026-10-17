@@ -1069,3 +1069,26 @@
 	Power and distribution	Puissance et distribution
 	Low voltage	Courants faibles
 	Fire alarm	Alarme incendie
+	Check for Updates...	Rechercher des mises à jour...
+	Check for updates automatically	Rechercher automatiquement les mises à jour
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	Une fois par jour, CADaddy demande à GitHub le numéro de la dernière version. Rien sur vous ni sur vos dessins n'est envoyé.
+	Checking for updates...	Recherche de mises à jour...
+	CADaddy {v} is the latest version.	CADaddy {v} est la dernière version.
+	CADaddy {v} is available	CADaddy {v} est disponible
+	You have {v}. Updating keeps your drawings and settings.	Vous avez la {v}. La mise à jour conserve vos dessins et vos réglages.
+	Downloading CADaddy {v}...	Téléchargement de CADaddy {v}...
+	CADaddy {v} is ready to install	CADaddy {v} est prêt à être installé
+	It installs when you close CADaddy. Restart now to update right away.	Il s'installe quand vous fermez CADaddy. Redémarrez maintenant pour mettre à jour tout de suite.
+	Couldn't update CADaddy	Impossible de mettre à jour CADaddy
+	Download	Télécharger
+	What's New	Nouveautés
+	Later	Plus tard
+	Skip This Version	Ignorer cette version
+	Restart Now	Redémarrer maintenant
+	When I Close CADaddy	À la fermeture de CADaddy
+	Download Page	Page de téléchargement
+	Hide	Masquer
+	The current layer is being turned off	Le calque courant va être désactivé
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	Le calque "{layer}" est le calque courant. Ce que vous y dessinez restera invisible jusqu'à ce que vous le réactiviez.
+	Keep the Current Layer On	Garder le calque courant activé
+	Turn the Current Layer Off	Désactiver le calque courant

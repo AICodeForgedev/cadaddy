@@ -64,6 +64,28 @@ pub enum EngineError {
     Internal(String, String),
 }
 
+impl EngineError {
+    /// The error as the command line shows it: the reason alone, without the command id and
+    /// "invalid parameters" wording meant for scripts and agents (they get [`ToString`]).
+    pub fn user_message(&self) -> String {
+        let text = match self {
+            EngineError::UnknownCommand(c) => return format!("Unknown command \"{}\". Press F1 for help.", c.to_ascii_uppercase()),
+            EngineError::Disabled(_, why) => why.clone(),
+            EngineError::BadParams { msg, .. } => msg.clone(),
+            EngineError::NoDocument => "No drawing is open.".into(),
+            EngineError::Other(m) => m.clone(),
+            EngineError::Internal(..) => return self.to_string(),
+        };
+        // Parameter names in backticks read as plain words.
+        let text = text.replace('`', "");
+        let mut c = text.chars();
+        match c.next() {
+            Some(f) => f.to_uppercase().chain(c).collect(),
+            None => text,
+        }
+    }
+}
+
 impl From<cadcraft_doc::DocError> for EngineError {
     fn from(e: cadcraft_doc::DocError) -> Self {
         EngineError::Other(e.to_string())
@@ -746,8 +768,19 @@ impl Session {
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {
+        self.add_new_drawing(metric, false)
+    }
+    /// NEW without a template: a new drawing whose layouts each have a viewport, like AutoCAD's
+    /// default template. ([`Self::new_drawing`] leaves the layouts empty.)
+    pub fn new_drawing_with_viewports(&mut self, metric: bool) -> usize {
+        self.add_new_drawing(metric, true)
+    }
+    fn add_new_drawing(&mut self, metric: bool, viewports: bool) -> usize {
         self.untitled_counter += 1;
-        let d = if metric { Drawing::new_metric() } else { Drawing::new_imperial() };
+        let mut d = if metric { Drawing::new_metric() } else { Drawing::new_imperial() };
+        if viewports {
+            cmd::layout::default_viewports(&mut d);
+        }
         let mut st = DocState::new(d, &format!("Drawing{}", self.untitled_counter), None);
         st.set_view_quiet(if metric { View { center: Vec2::new(210.0, 148.5), height: 297.0 } } else { View::default() });
         self.end_running();
@@ -1268,7 +1301,7 @@ impl Session {
             }
             Err(e) => {
                 // Invalid input: report and keep prompting (AutoCAD re-prompts).
-                self.echo(e.to_string());
+                self.echo(e.user_message());
                 self.running = Some(run);
                 Ok(())
             }
@@ -1282,7 +1315,7 @@ impl Session {
         if find_command(&run.id).is_some_and(|c| c.undoable)
             && let Err(e) = self.refuse_non_finite(None, &run.before, &run.selection_before, &run.id)
         {
-            self.echo(e.to_string());
+            self.echo(e.user_message());
         }
         // A command outside undo that changed the drawing (UNDO, which swapped it for an earlier
         // one) records no undo step, as in `execute`.
@@ -1495,7 +1528,7 @@ impl Session {
                 // `(expression)` or `!variable` at Command: evaluates LISP and shows the value.
                 let src = tok.trim().strip_prefix('!').unwrap_or(tok.trim()).to_string();
                 if let Err(e) = self.lisp_eval(&src, true, false, Vec::new()) {
-                    self.echo(e.to_string());
+                    self.echo(e.user_message());
                 }
             } else {
                 self.start(tok)?;
@@ -1530,7 +1563,7 @@ impl Session {
                 Ok(Some(Ok(v))) => v,
                 Ok(_) => return Ok(()),
                 Err(e) => {
-                    self.echo(e.to_string());
+                    self.echo(e.user_message());
                     return Ok(());
                 }
             };

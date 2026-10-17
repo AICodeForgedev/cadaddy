@@ -21,7 +21,7 @@ pub(crate) mod groups;
 pub(crate) mod hatch;
 mod inquiry;
 mod layer;
-mod layout;
+pub(crate) mod layout;
 mod lisp;
 mod mleader_content;
 mod mleader_edit;

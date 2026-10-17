@@ -78,7 +78,9 @@ fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         });
         ui.separator();
         ui.heading(crate::tl!("Polar Tracking"));
-        ui.checkbox(&mut s.polarmode, crate::tl!("Polar Tracking On (F10)"));
+        if ui.checkbox(&mut s.polarmode, crate::tl!("Polar Tracking On (F10)")).changed() && s.polarmode {
+            s.orthomode = false;
+        }
         let mut deg = s.polarang.to_degrees();
         ui.horizontal(|ui| {
             ui.label(crate::tl!("Increment angle"));

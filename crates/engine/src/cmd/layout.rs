@@ -422,6 +422,22 @@ fn fit_view(d: &Drawing, w: f64, h: f64) -> (Vec2, f64) {
     if vh.is_finite() && c.is_finite() { (c, vh) } else { (Vec2::ZERO, 1.0) }
 }
 
+/// A new drawing's layouts each get one viewport over the printable area, as in AutoCAD's default
+/// template (a Layout1 without one shows an empty sheet). Added straight to the drawing: no undo
+/// step, and the drawing isn't modified by it.
+pub(crate) fn default_viewports(d: &mut Drawing) {
+    let names: Vec<String> = d.layouts.iter().filter(|l| l.entities.is_empty()).map(|l| l.name.clone()).collect();
+    for name in names {
+        let Some(rect) = cadcraft_render::sheet(d, &name).map(|sh| sh.printable) else { continue };
+        if rect.is_empty() || rect.width() < 1e-6 || rect.height() < 1e-6 {
+            continue;
+        }
+        let id = viewports::next_viewport_id(d);
+        let vp = viewports::new_viewport(d, rect, id);
+        let _ = d.add(&Space::Paper(name), cadcraft_doc::Common::default(), EntityKind::Viewport(vp));
+    }
+}
+
 /// Add `count` viewports tiling `rect` in a layout, each zoomed to the model extents.
 fn add_viewports(s: &mut Session, space: &Space, rect: Bounds2, count: usize, arrangement: &str) -> Result<Vec<Handle>> {
     if !(1..=4).contains(&count) {

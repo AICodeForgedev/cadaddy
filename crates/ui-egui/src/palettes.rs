@@ -384,7 +384,7 @@ pub(crate) fn layers_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let layers: Vec<(String, bool, bool, bool, Color)> = d.layers.iter().map(|l| (l.name.clone(), l.on, l.frozen, l.locked, l.color)).collect();
     let cur_info = layers.iter().find(|l| l.0.eq_ignore_ascii_case(&cur)).cloned();
     let mut set_current = None;
-    let mut toggle: Option<(String, &str, bool)> = None;
+    let mut toggle: Option<(String, &'static str, bool)> = None;
     ui.horizontal(|ui| {
         ui.add_space(8.0);
         let w = ui.available_width() - 10.0;
@@ -485,7 +485,7 @@ pub(crate) fn layers_section(app: &mut CadApp, ui: &mut egui::Ui) {
         let _ = app.run("layer.current", json!({ "name": n }));
     }
     if let Some((n, k, v)) = toggle {
-        let _ = app.run("layer.set", json!({ "name": n, k: v }));
+        crate::layers::set_flag(app, &n, k, v);
     }
 }
 

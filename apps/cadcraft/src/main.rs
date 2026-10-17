@@ -23,6 +23,7 @@ mod logging;
 mod native_menu;
 mod spacemouse;
 mod system_animations;
+mod updater;
 mod workspace;
 
 use cadcraft_engine::Session;
@@ -97,6 +98,9 @@ impl eframe::App for App {
     fn on_exit(&mut self) {
         self.persist_workspace(true);
         self.cad.shutdown_autosave();
+        if let Some(u) = &self.cad.updater {
+            u.on_exit();
+        }
     }
     /// Preferences (the interface theme) survive restarts; window and egui state are not kept.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -316,6 +320,9 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             let mut app = CadApp::new(Session::empty(), services());
             app.donate.enabled = true;
+            if std::env::var_os("CADCRAFT_NO_UPDATES").is_none() {
+                app.updater = Some(Box::new(updater::DesktopUpdater::default()));
+            }
             let (workspace, restored, workspace_error) = workspace::Workspace::load();
             if let Some(ui) = restored {
                 app.ui = ui;
@@ -364,7 +371,7 @@ fn main() -> eframe::Result {
                 app.open_path(f);
             }
             if app.session.docs.is_empty() {
-                app.session.new_drawing(false);
+                app.session.new_drawing_with_viewports(false);
             }
             let ctx = cc.egui_ctx.clone();
             let desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());
