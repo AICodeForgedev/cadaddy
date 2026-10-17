@@ -6,9 +6,9 @@
 </p>
 
 <p align="center">
-  <b>Fast, free computer-aided drafting for Windows and Mac.</b><br>
+  <b>Free CAD software for Windows and Mac: a fast, free AutoCAD alternative for 2D drafting.</b><br>
   The AutoCAD workflow you already know (command line, object snaps, layers, dimensions,
-  hatches, blocks and xrefs) with real DWG and DXF files. No ads, no subscription.
+  hatches, blocks and xrefs) with real DWG and DXF files. No ads, no subscription, no account.
 </p>
 
 <p align="center">
@@ -18,6 +18,8 @@
   &nbsp;·&nbsp;
   <a href="https://github.com/AICodeForgedev/cadaddy/releases">All versions</a>
 </p>
+
+<p align="center"><a href="https://aicodeforge.dev">aicodeforge.dev</a> · also from AICodeForge: <b>Redline</b>, a PDF editor for construction drawings (markup, measure, count, sign), coming soon</p>
 
 ## Install
 
@@ -37,6 +39,22 @@
 - AutoCAD-style ribbon and command line, with object snaps, layers, dimensions, hatches, blocks, dynamic blocks, xrefs, layouts and plotting.
 - **Walk mode** (View ▸ Walk): walk through a building in 3D, straight from its floor plans.
 - Converts PDF drawings to DWG.
+
+## For AI agents
+
+CADaddy is built to be driven by AI assistants. Every one of its 400+ commands can be called as
+JSON, and `cadaddy-cli` (installed with the app) includes a Model Context Protocol (MCP) server:
+
+```sh
+cadaddy-cli mcp                                  # headless MCP server
+cadaddy --control 7800                           # or drive the open app:
+cadaddy-cli mcp --connect 127.0.0.1:7800
+cadaddy-cli convert plan.dwg plan.pdf            # headless conversion
+```
+
+Example calls: `open {"path": "plan.dwg"}`, `line {"points": [[0,0],[100,0]]}`,
+`dimlinear {"p1": [0,0], "p2": [100,0], "at": [50,-10]}`, `saveas {"path": "plan.dwg"}`.
+A plain-text summary for language models is at [aicodeforge.dev/llms.txt](https://aicodeforge.dev/llms.txt).
 
 ## Feedback and support
 
