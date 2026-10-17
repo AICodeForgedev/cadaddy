@@ -13,6 +13,7 @@ pub mod audit;
 pub mod autosave;
 pub mod blockedit;
 pub mod cmd;
+pub mod doc_path;
 mod finite;
 pub mod grip_dims;
 pub mod grips;
