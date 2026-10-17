@@ -271,11 +271,13 @@ fn osnap_in_with_prims(
         let real = if osmode & mode::INT != 0 { mode::INT } else { mode::APP };
         for i in 0..segs.len() {
             for j in i + 1..segs.len() {
+                let (pi, pj) = (near_prims.get(i), near_prims.get(j));
                 // Extending a tessellated ellipse or spline chord means nothing.
                 let extend = osmode & mode::APP != 0 && [i, j].iter().all(|k| near_prims.get(*k).is_some_and(extendable));
                 for a in segs.get(i).into_iter().flatten() {
                     for b in segs.get(j).into_iter().flatten() {
                         for x in intersect_ext(&fix_circle(a), &fix_circle(b), false) {
+                            let x = exact_crossing(x, pi, pj, aperture);
                             if x.dist(cursor) <= aperture {
                                 cands.push((real, x));
                             }
@@ -294,6 +296,31 @@ fn osnap_in_with_prims(
     }
     let hit = finish(cands, &near_prims, cursor, aperture, osmode, base, deferred, clip);
     Some((hit, near_prims))
+}
+
+/// A primitive as an equation for [`cadcraft_geom::refine_intersection`].
+pub(crate) fn curve_ref(p: &Prim) -> Option<cadcraft_geom::CurveRef<'_>> {
+    use cadcraft_geom::CurveRef;
+    Some(match p {
+        Prim::Seg(Segment::Line(l)) => CurveRef::Line(*l),
+        Prim::Seg(Segment::Arc { arc, .. }) => CurveRef::Circle { center: arc.center, radius: arc.radius },
+        Prim::Circle(c) => CurveRef::Circle { center: c.center, radius: c.radius },
+        Prim::Ellipse(e) => CurveRef::Ellipse(Ellipse { start: 0.0, end: std::f64::consts::TAU, ..*e }),
+        Prim::Spline(s) => CurveRef::Spline(s),
+        Prim::Infinite { base, dir, .. } => CurveRef::Line(cadcraft_geom::Line::new(*base, *base + *dir)),
+        Prim::Fill(_) | Prim::Point(_) => return None,
+    })
+}
+
+/// An intersection found on tessellated chords, moved onto both curves when one of them is an
+/// ellipse or a spline (lines, arcs and circles already intersect exactly).
+pub(crate) fn exact_crossing(x: Vec2, a: Option<&Prim>, b: Option<&Prim>, reach: f64) -> Vec2 {
+    let curved = |p: Option<&Prim>| matches!(p, Some(Prim::Ellipse(_) | Prim::Spline(_)));
+    if !(curved(a) || curved(b)) {
+        return x;
+    }
+    let (Some(ca), Some(cb)) = (a.and_then(curve_ref), b.and_then(curve_ref)) else { return x };
+    cadcraft_geom::refine_intersection(&ca, &cb, x, reach.max(1e-9)).unwrap_or(x)
 }
 
 fn finite_intersection_probe(cursor: Vec2, aperture: f64) -> Option<Bounds2> {
@@ -469,11 +496,24 @@ fn finish(
             }
         };
         for p in near_prims {
-            for s in prim_segments(p) {
-                consider(fix_circle(&s).closest(cursor));
-            }
-            if let Prim::Circle(c) = p {
-                consider(c.closest(cursor));
+            match p {
+                // On the curve itself, not on its tessellation's chords.
+                Prim::Ellipse(e) => consider(e.closest(cursor)),
+                Prim::Spline(sp) => {
+                    let rough = prim_segments(p).iter().map(|s| s.closest(cursor)).min_by(|a, b| a.dist(cursor).total_cmp(&b.dist(cursor)));
+                    if let Some(rough) = rough {
+                        let t = crate::cmd::curves::spline_param_of(sp, rough);
+                        consider(cadcraft_geom::refine_closest(&cadcraft_geom::CurveRef::Spline(sp), cursor, Some(t)).0);
+                    }
+                }
+                _ => {
+                    for s in prim_segments(p) {
+                        consider(fix_circle(&s).closest(cursor));
+                    }
+                    if let Prim::Circle(c) = p {
+                        consider(c.closest(cursor));
+                    }
+                }
             }
         }
         if let Some((_, p)) = nb {
@@ -1043,6 +1083,69 @@ mod tests {
         let h = osnap(&d, &Space::Model, Vec2::new(5.2, 0.2), 0.5, mode::INT, None, false).unwrap();
         assert!(h.point.near(Vec2::new(5.0, 0.0), 1e-9));
         assert_eq!(h.name, "Intersection");
+    }
+
+    #[test]
+    fn intersections_with_ellipses_and_splines_are_exact() {
+        // A line across a tilted ellipse, and the same line across a spline.
+        let mut d = Drawing::new_imperial();
+        let line = cadcraft_geom::Line::new(Vec2::new(-10.0, 1.3), Vec2::new(15.0, -0.7));
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(-10.0, 1.3, 0.0), b: Vec3::new(15.0, -0.7, 0.0) })).unwrap();
+        let ge = Ellipse::full(Vec2::new(3.0, -2.0), Vec2::new(8.0, 3.0), 0.45);
+        d.add(
+            &Space::Model,
+            Common::default(),
+            EntityKind::Ellipse(cadcraft_doc::Ellipse {
+                center: Vec3::new(3.0, -2.0, 0.0),
+                major: Vec3::new(8.0, 3.0, 0.0),
+                ratio: 0.45,
+                start: 0.0,
+                end: std::f64::consts::TAU,
+            }),
+        )
+        .unwrap();
+        // Where the line crosses the ellipse, found exactly in the ellipse's own frame.
+        let ux = ge.major / ge.major.len();
+        let off = |p: Vec2| {
+            let l = p - ge.center;
+            let (x, y) = (l.dot(ux) / ge.major.len(), l.dot(ux.perp()) / (ge.major.len() * ge.ratio));
+            ((x * x + y * y).sqrt() - 1.0).abs() * ge.major.len()
+        };
+        let mut crossings = Vec::new();
+        for i in 0..20000 {
+            let p = line.at(i as f64 / 20000.0);
+            let q = line.at((i + 1) as f64 / 20000.0);
+            let side = |p: Vec2| {
+                let l = p - ge.center;
+                let (x, y) = (l.dot(ux) / ge.major.len(), l.dot(ux.perp()) / (ge.major.len() * ge.ratio));
+                x * x + y * y - 1.0
+            };
+            if side(p) * side(q) <= 0.0 {
+                crossings.push(p);
+            }
+        }
+        assert_eq!(crossings.len(), 2);
+        for c in crossings {
+            let h = osnap(&d, &Space::Model, c + Vec2::new(0.05, 0.05), 0.5, mode::INT, None, false).unwrap();
+            assert_eq!(h.name, "Intersection");
+            assert!(off(h.point) < 1e-10, "off the ellipse by {}", off(h.point));
+            assert!(line.dist(h.point) < 1e-10);
+        }
+        // A spline crossing the same line.
+        let sp =
+            cadcraft_geom::Spline::from_control(vec![Vec2::new(20.0, -6.0), Vec2::new(22.0, 6.0), Vec2::new(25.0, -6.0), Vec2::new(28.0, 6.0)], 3);
+        let line2 = cadcraft_geom::Line::new(Vec2::new(18.0, 0.3), Vec2::new(30.0, 0.1));
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(18.0, 0.3, 0.0), b: Vec3::new(30.0, 0.1, 0.0) })).unwrap();
+        d.add(&Space::Model, Common::default(), EntityKind::Spline(sp.clone())).unwrap();
+        let pts = sp.tessellate(1e-3);
+        let rough: Vec<Vec2> = pts.windows(2).filter_map(|w| cadcraft_geom::line_line(&cadcraft_geom::Line::new(w[0], w[1]), &line2)).collect();
+        assert!(!rough.is_empty());
+        for r in rough {
+            let h = osnap(&d, &Space::Model, r, 0.3, mode::INT, None, false).unwrap();
+            let (on, _) = cadcraft_geom::refine_closest(&cadcraft_geom::CurveRef::Spline(&sp), h.point, None);
+            assert!(on.dist(h.point) < 1e-10, "off the spline by {}", on.dist(h.point));
+            assert!(line2.dist(h.point) < 1e-10);
+        }
     }
 
     #[test]

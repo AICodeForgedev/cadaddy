@@ -589,11 +589,14 @@ pub(crate) fn offset_kind(k: &EntityKind, dist: f64, side: Vec2) -> Option<Entit
                 ge.tessellate(e.major.xy().len() * 1e-3, &mut pts);
                 cadcraft_geom::point_in_polygon(&pts, side)
             };
-            // offset_points shifts along the left normal, which points into a counter-clockwise ellipse.
-            let mut pts = Vec::new();
-            ge.tessellate(e.major.xy().len() * 1e-3, &mut pts);
-            let off = offset_points(&pts, if inside { dist } else { -dist }, ge.is_full());
-            Some(lwpoly(off.into_iter().map(PolyVertex::new).collect(), ge.is_full()))
+            // The offset of an ellipse is no ellipse: like AutoCAD, a spline that stays within a
+            // millionth of the ellipse's size of the true offset. Positive distances go left, into
+            // a counter-clockwise ellipse.
+            let full = cadcraft_geom::Ellipse { start: 0.0, end: TAU, ..ge };
+            let d = if inside { dist } else { -dist };
+            let tol = ge.major.len() * 1e-6;
+            cadcraft_geom::offset_spline(&cadcraft_geom::CurveRef::Ellipse(full), ge.start, ge.start + ge.sweep(), d, ge.is_full(), tol)
+                .map(EntityKind::Spline)
         }
         EntityKind::LwPolyline(p) => {
             let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
@@ -618,9 +621,13 @@ pub(crate) fn offset_kind(k: &EntityKind, dist: f64, side: Vec2) -> Option<Entit
             let mid = pts.get(n / 2).copied()?;
             let next = pts.get((n / 2 + 1).min(n.saturating_sub(1))).copied()?;
             let left = (next - mid).cross(side - mid) > 0.0;
-            let off = offset_points(&pts, if left { dist } else { -dist }, sp.closed);
-            // A closed spline stays closed (periodic), smooth across its start point.
-            Some(EntityKind::Spline(cadcraft_geom::Spline::from_fit(&decimate(&off, 40), sp.closed)))
+            // Through exact offset points, as many as it takes to stay within a millionth of the
+            // spline's size of the true offset. A closed spline stays closed (periodic).
+            let (lo, hi) = sp.domain();
+            let b = sp.bounds();
+            let tol = b.width().hypot(b.height()) * 1e-6;
+            cadcraft_geom::offset_spline(&cadcraft_geom::CurveRef::Spline(sp), lo, hi, if left { dist } else { -dist }, sp.closed, tol)
+                .map(EntityKind::Spline)
         }
         EntityKind::XLine(r) | EntityKind::Ray(r) => {
             let ln = Line::new(r.base.xy(), r.base.xy() + r.dir.xy());
@@ -631,48 +638,6 @@ pub(crate) fn offset_kind(k: &EntityKind, dist: f64, side: Vec2) -> Option<Entit
         }
         _ => None,
     }
-}
-
-fn decimate(pts: &[Vec2], max: usize) -> Vec<Vec2> {
-    if pts.len() <= max {
-        return pts.to_vec();
-    }
-    let step = pts.len() as f64 / max as f64;
-    let mut v: Vec<Vec2> = (0..max).filter_map(|i| pts.get((i as f64 * step) as usize).copied()).collect();
-    if let Some(l) = pts.last() {
-        v.push(*l);
-    }
-    v
-}
-
-fn offset_points(pts: &[Vec2], d: f64, closed: bool) -> Vec<Vec2> {
-    let n = pts.len();
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        let p = pts.get(i).copied().unwrap_or_default();
-        let prev = if i > 0 {
-            pts.get(i - 1)
-        } else if closed {
-            pts.get(n.saturating_sub(2))
-        } else {
-            None
-        };
-        let next = if i + 1 < n {
-            pts.get(i + 1)
-        } else if closed {
-            pts.get(1)
-        } else {
-            None
-        };
-        let t = match (prev, next) {
-            (Some(a), Some(b)) => (*b - *a).normalized(),
-            (None, Some(b)) => (*b - p).normalized(),
-            (Some(a), None) => (p - *a).normalized(),
-            _ => Vec2::X,
-        };
-        out.push(p + t.perp() * d);
-    }
-    out
 }
 
 /// Offset a polyline: offset each segment, then join neighbours at their intersections.
@@ -809,6 +774,21 @@ fn edge_segments(s: &Session, edges: Edges, exclude: Handle) -> Result<Vec<Segme
     Ok(out)
 }
 
+/// The ellipses and splines among the cutting or boundary edges (excluding `exclude`), for
+/// [`super::exact_ends::polish`].
+fn curved_edges(s: &Session, edges: Edges, exclude: Handle) -> Result<Vec<Prim>> {
+    let d = s.doc()?;
+    let store = d.space(&s.space()).ok_or(EngineError::NoDocument)?;
+    let mut out = Vec::new();
+    for e in store.iter() {
+        if e.handle == exclude || !d.is_visible(e) || edges.only.is_some_and(|es| !es.contains(&e.handle)) {
+            continue;
+        }
+        out.extend(e.kind.prims().into_iter().filter(|p| matches!(p, Prim::Ellipse(_) | Prim::Spline(_))));
+    }
+    Ok(out)
+}
+
 /// `k` as an implied edge (EDGEMODE 1), for lines, arcs and open polylines.
 fn implied_edge(k: &EntityKind) -> Option<Vec<Segment>> {
     const FAR: f64 = 1e8;
@@ -936,6 +916,7 @@ pub(crate) fn trim(s: &mut Session, h: Handle, pick: Vec2, edges: Edges) -> Resu
         EntityKind::LwPolyline(p) => trim_polyline(p, &cut, pick)?,
         k => super::modify2::trim_other(k, &cut, pick)?,
     };
+    let pieces = super::exact_ends::polish(pieces, &e.kind, &curved_edges(s, edges, h)?);
     let common = e.common.clone();
     let space = s.space();
     let d = s.doc_mut()?;
@@ -1107,6 +1088,7 @@ pub(crate) fn extend(s: &mut Session, h: Handle, pick: Vec2, edges: Edges) -> Re
         }
         k => super::modify2::extend_other(k, &cut, pick)?,
     };
+    let new_kind = super::exact_ends::polish(vec![new_kind], &e.kind, &curved_edges(s, edges, h)?).pop().unwrap_or_else(|| e.kind.clone());
     s.doc_mut()?.modify_entity(h, |e| e.kind = new_kind)?;
     Ok(())
 }

@@ -281,10 +281,16 @@ impl Ellipse {
         let mb = ma * self.ratio;
         norm_angle((y / mb.max(EPS)).atan2(x / ma))
     }
+    /// The nearest point on the ellipse or arc: the nearest of a tessellation, polished onto
+    /// the curve itself (exact to about 1e-12 of its size, not to the chords).
     pub fn closest(&self, p: Vec2) -> Vec2 {
         let mut pts = Vec::new();
         self.tessellate(self.major.len() * 1e-3, &mut pts);
-        nearest_on_polyline(&pts, p).unwrap_or(self.center)
+        let Some(rough) = nearest_on_polyline(&pts, p) else { return self.center };
+        let full = Ellipse { start: 0.0, end: TAU, ..*self };
+        let (q, t) = crate::refine_closest(&crate::CurveRef::Ellipse(full), p, Some(self.param_of(rough)));
+        let on_arc = self.is_full() || angle_in_sweep(norm_angle(t), self.start, self.end);
+        if on_arc && q.is_finite() && q.dist(p) <= rough.dist(p) + 1e-12 * self.major.len() { q } else { rough }
     }
 }
 

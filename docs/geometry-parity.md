@@ -9,8 +9,9 @@ audits CADCraft's geometry kernel (`crates/geom`, the curve code in `crates/engi
 in [ui-parity.md](ui-parity.md); dimension and hatch behaviour in [gaps.md](gaps.md).
 
 **Headline (estimated): geometry ≈ 40% (weighted below: 41%), of which the constraint solver ≈ 50%.** Everything built
-from lines, arcs and circles is exact. Ellipses and splines are handled by tessellating them, so
-intersections, offsets, trims and snaps on them are approximations; polyline offsets don't
+from lines, arcs and circles is exact. Intersections, closest points and offsets of ellipses and
+splines are found on a tessellation and then polished onto the curves themselves (exact to about
+1e-12 of their size; offsets are splines within 1e-6); polyline offsets don't
 recompute arc bulges or clean up loops; tolerances are absolute, so very large or very small
 drawings behave differently from mid-sized ones. 3D geometry doesn't exist. Remaining:
 **≈ 90–140 Opus 5.5 hours** for 2D precision and the solver, plus the 3D kernel (M11, see
@@ -59,9 +60,9 @@ constraints 10%.
 | Pair | AutoCAD | CADCraft |
 |---|---|---|
 | line–line, line–circle/arc, circle–circle | exact | closed form, exact; tangency decided by a fixed `|disc| ≤ 1e-12·a`, so near-tangent cases depend on scale |
-| line/arc–ellipse | exact (quartic) | **tessellated**: 1e-4 world units in TRIM, 1e-3 in snaps; TRIM refines with 720 samples + 60-step bisection, near-exact against line/arc cutters (`modify2.rs:1946-1995`) |
-| line/arc–spline | exact to tolerance (subdivision + Newton) | tessellated as above |
-| ellipse–ellipse, ellipse–spline, spline–spline | exact to tolerance | **polygon approximations** only |
+| line/arc–ellipse | exact (quartic) | exact to tolerance: found on the tessellation, then polished onto both curves by Newton (`geom/src/refine.rs`) in snaps, TRIM and EXTEND; about 1e-12 of the ellipse's size |
+| line/arc–spline | exact to tolerance (subdivision + Newton) | exact to tolerance: tessellation, then Newton on both curves (`refine.rs`) in snaps, TRIM and EXTEND |
+| ellipse–ellipse, ellipse–spline, spline–spline | exact to tolerance | exact to tolerance in snaps and where an ellipse or spline edge cuts a line, arc, polyline or elliptical arc (`refine.rs`, `cmd/exact_ends.rs`); a **spline being trimmed** against a curved edge still ends on a chord |
 | Self-intersections (curves, offset loops) | yes | **no routine** |
 | Apparent intersection (projected) | yes | treated as plain intersection |
 
@@ -71,8 +72,8 @@ constraints 10%.
 |---|---|---|
 | Line, ray, xline | exact | exact |
 | Circle, arc | exact | exact (radius change) |
-| Ellipse | spline approximation within tolerance | **a polyline** from tessellation at 1e-3 × major axis |
-| Spline | spline approximation within tolerance | tessellate at 1e-3, offset vertices along normals, keep about 40 points, refit: **lossy** |
+| Ellipse | spline approximation within tolerance | a cubic spline through exact offset points, refined until within 1e-6 of the ellipse's size of the true offset (`refine.rs` `offset_spline`) |
+| Spline | spline approximation within tolerance | a cubic spline through exact offset points, refined to 1e-6 of the spline's size (no fixed point count) |
 | Polyline with arcs | exact, with self-intersection trimming, OFFSETGAPTYPE (extend, fillet, chamfer) | segments offset and joined at neighbours' intersections; **arc bulges not recomputed** after endpoints move (comment at L413), **no loop cleanup**, collapsed segments not removed; OFFSETGAPTYPE only echoed |
 | Options: Through, Erase, Layer, Multiple | yes | see [gaps.md](gaps.md) |
 
@@ -95,7 +96,7 @@ Where line and arc are supported the results are exact.
 | Quantity | AutoCAD | CADCraft |
 |---|---|---|
 | Closest point: line, arc, circle, polyline | exact | exact |
-| Closest point: ellipse, spline | exact to tolerance | **sampled** (`curve.rs:264`, `curves.rs:637`) |
+| Closest point: ellipse, spline | exact to tolerance | exact to tolerance: nearest chord point polished by Newton (`Ellipse::closest`, Nearest snap) |
 | Tangent points, common tangents | every curve | circles and arcs only (`curve.rs:170-183`) |
 | AREA: circle, ellipse | exact | exact area (ellipse perimeter by Ramanujan, not exact); an open elliptical arc has no area, like an arc |
 | AREA: polyline with arcs | exact (bulge segments) | **tessellated at 1e-4** (`curve.rs:491`) |
