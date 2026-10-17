@@ -107,6 +107,51 @@ fn layout_page_setup_and_paper_view_round_trip() {
 }
 
 #[test]
+fn layout_sheet_position_and_paper_units_round_trip() {
+    // An AutoCAD layout keeps its sheet at its limits (here the printable area's corner at the
+    // origin) and may plot in millimetres in an imperial drawing (DWG samples building, bygginga).
+    let mut d = Drawing::new_imperial();
+    let first = d.layouts.get_mut(0).expect("Layout1");
+    first.page.paper = "ISO A1 (594.00 x 841.00 MM)".into();
+    first.page.width_mm = 594.0;
+    first.page.height_mm = 841.0;
+    first.page.mm_units = Some(true);
+    first.origin = Vec2::new(-10.79, -5.79);
+    let r = round_trip(&d);
+    let l = r.layouts.first().expect("Layout1");
+    assert_eq!(l.page.mm_units, Some(true));
+    assert!((l.origin - Vec2::new(-10.79, -5.79)).len() < 1e-9, "{:?}", l.origin);
+    let sheet = cadcraft_render::sheet(&r, &l.name).expect("sheet");
+    assert_eq!(sheet.unit_mm, 1.0);
+    let b = sheet.bounds();
+    assert!((b.min - Vec2::new(-10.79, -5.79)).len() < 1e-9 && (b.max - Vec2::new(830.21, 588.21)).len() < 1e-9, "{b:?}");
+    // The second layout keeps the defaults: sheet at the origin, units from MEASUREMENT.
+    let second = r.layouts.get(1).expect("Layout2");
+    assert_eq!((second.origin, second.page.mm_units), (Vec2::ZERO, None));
+}
+
+#[test]
+fn dimension_variables_round_trip() {
+    // The header's DIM* variables are the current dimension settings new dimensions use; an
+    // architectural drawing must not come back with decimal units and default sizes.
+    use cadcraft_doc::HVal;
+    let mut d = Drawing::new_imperial();
+    d.header.set("DIMLUNIT", HVal::Int(4));
+    d.header.set("DIMTXT", HVal::Real(0.078125));
+    d.header.set("DIMASZ", HVal::Real(0.09375));
+    d.header.set("DIMALT", HVal::Int(1));
+    d.header.set("DIMPOST", HVal::Str("\\X".into()));
+    d.header.set("DIMDSEP", HVal::Str(",".into()));
+    d.header.set("DIMJOGANG", HVal::Real(45.0));
+    d.header.set("DIMTXSTY", HVal::Str("Standard".into()));
+    let r = round_trip(&d);
+    for var in ["DIMLUNIT", "DIMTXT", "DIMASZ", "DIMALT", "DIMPOST", "DIMDSEP", "DIMJOGANG", "DIMTXSTY"] {
+        assert_eq!(r.header.get(var), d.header.get(var), "{var}");
+    }
+    assert_eq!(r.dim_overrides(), d.dim_overrides());
+}
+
+#[test]
 fn named_views_ucss_and_groups_round_trip() {
     let mut d = Drawing::new_imperial();
     let line = d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(10.0, 0.0, 0.0) })).expect("line");

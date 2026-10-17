@@ -63,6 +63,11 @@ fn outlines(d: &Drawing, space: &Space, near: Option<Bounds2>) -> (Vec<Vec<Vec2>
 /// box around the extents `ext`.
 fn object_polys(d: &Drawing, e: &Entity, tol: f64, ext: Bounds2) -> Vec<Vec<Vec2>> {
     let mut polys = crate::select::hit_polylines(d, e, tol);
+    // Block references, dimensions and multileaders end with their bounding box (so a click
+    // inside one picks it); a boundary follows only what they draw, the door swing not its box.
+    if matches!(e.kind, EntityKind::Insert(_) | EntityKind::Dimension(_) | EntityKind::MLeader(_)) {
+        polys.pop();
+    }
     if matches!(e.kind, EntityKind::XLine(_) | EntityKind::Ray(_)) {
         let r = (ext.width() + ext.height()).max(1.0) * 4.0;
         for pl in &mut polys {
@@ -227,6 +232,28 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
                 if inside && !same_as_outer && !point_in_polygon(&pts, p) {
                     loops.push(HatchLoop { vertices: vs, outer: false, sources: vec![e.handle] });
                 }
+            }
+        }
+    }
+    // Text inside the area is an island (normal island detection): the hatch leaves a margin
+    // around it, as AutoCAD does, instead of running over the words.
+    if let Some(store) = d.space(&space) {
+        for e in store.iter() {
+            if !d.is_visible(e)
+                || !matches!(&e.kind, EntityKind::Text(t) if !t.value.trim().is_empty())
+                    && !matches!(&e.kind, EntityKind::MText(m) if !m.contents.trim().is_empty())
+            {
+                continue;
+            }
+            let eb = entity_bounds(d, e, 0);
+            if eb.is_empty() || eb.contains(p) {
+                continue;
+            }
+            let pad = eb.height().min(eb.width()) * 0.25;
+            let b = eb.expand(pad);
+            let corners = b.corners();
+            if corners.iter().all(|q| point_in_polygon(&outer, *q)) {
+                loops.push(HatchLoop { vertices: corners.iter().map(|q| PolyVertex::new(*q)).collect(), outer: false, sources: Vec::new() });
             }
         }
     }
@@ -539,6 +566,8 @@ struct HatchM {
     /// Loops by pick (one hatch each when separate).
     loops: Vec<Vec<HatchLoop>>,
     asking: Option<HatchAsk>,
+    /// The Pattern option goes on to ask for the scale and the angle, as AutoCAD's -HATCH does.
+    pattern_chain: bool,
     /// "Select objects" mode instead of "Pick internal point"; the next HATCH starts in it again.
     selecting: bool,
 }
@@ -550,6 +579,7 @@ impl HatchM {
             settings: HatchSettings::from(s, &Value::Null, gradient),
             loops: Vec::new(),
             asking: None,
+            pattern_chain: false,
             selecting: s.last_used.hatch_select,
         }
     }
@@ -632,7 +662,9 @@ impl Interactive for HatchM {
         // The sub-prompts offer the current value: Enter keeps it.
         match self.asking {
             Some(HatchAsk::Pattern) => {
-                return Prompt::new("Enter a pattern name", Accept::TEXT)
+                // One word (pattern names have no spaces): in a script a space ends it, as in
+                // AutoCAD, so `-HATCH P ANSI31 2 45` answers the scale and angle too.
+                return Prompt::new("Enter a pattern name", Accept { number: true, ..Accept::TEXT })
                     .default(self.settings.pattern.clone())
                     .picker(Picker::HatchPattern(self.settings.pattern.clone()));
             }
@@ -678,7 +710,21 @@ impl Interactive for HatchM {
             match &i {
                 Input::Point(p) if a == HatchAsk::Origin => self.set_origin(s, Some(*p), OriginMode::Current)?,
                 Input::Text(t) | Input::Keyword(t) => self.answer(s, a, t)?,
+                Input::Cancel => {
+                    self.pattern_chain = false;
+                    return Ok(Step::Cancel);
+                }
                 _ => {}
+            }
+            // Pattern → scale → angle (a solid fill has neither), Enter keeping each value.
+            if self.pattern_chain {
+                let next = match a {
+                    HatchAsk::Pattern if !self.settings.pattern.eq_ignore_ascii_case("SOLID") => Some(HatchAsk::Scale),
+                    HatchAsk::Scale => Some(HatchAsk::Angle),
+                    _ => None,
+                };
+                self.pattern_chain = next.is_some();
+                self.asking = next;
             }
             return Ok(Step::Continue);
         }
@@ -712,7 +758,11 @@ impl Interactive for HatchM {
                     "Select objects" => self.set_mode(s, true),
                     "picK internal point" => self.set_mode(s, false),
                     "Undo" => self.loops.clear(),
-                    "Pattern" | "seTtings" => self.asking = Some(HatchAsk::Pattern),
+                    "Pattern" => {
+                        self.asking = Some(HatchAsk::Pattern);
+                        self.pattern_chain = true;
+                    }
+                    "seTtings" => self.asking = Some(HatchAsk::Pattern),
                     "sCale" => self.asking = Some(HatchAsk::Scale),
                     "Angle" => self.asking = Some(HatchAsk::Angle),
                     "Origin" => self.asking = Some(HatchAsk::Origin),
@@ -827,6 +877,9 @@ mod tests {
         s.input(Input::Keyword("Pattern".into())).unwrap();
         assert!(s.current_prompt().unwrap().picker.is_some());
         s.input(Input::Text("BRICK".into())).unwrap();
+        // The Pattern option goes on to the scale and the angle (Enter keeps each).
+        s.input(Input::Enter).unwrap();
+        s.input(Input::Enter).unwrap();
         s.input(Input::Point(Vec2::new(5.0, 5.0))).unwrap();
         s.input(Input::Enter).unwrap();
         assert_eq!(only_hatch(&s).1.pattern, "BRICK");

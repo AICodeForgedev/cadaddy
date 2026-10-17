@@ -237,7 +237,7 @@ fn import_drawing(s: &mut Session, src: &Drawing, at: Vec2, scale: f64, file: &s
 fn read_file(_path: &str) -> Result<Vec<u8>> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::fs::read(_path).map_err(|e| bad("import", format!("{_path}: {e}")))
+        crate::readfile::read(_path).map_err(|e| bad("import", format!("{_path}: {e}")))
     }
     #[cfg(target_arch = "wasm32")]
     Err(bad("import", "paths are not available on the web; pass `data`"))
@@ -368,7 +368,7 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(l) = p.get("landscape").and_then(Value::as_bool) {
         page.landscape = l;
     }
-    let sheet = Sheet::from_page(&page, paper::paper_unit_mm(d));
+    let sheet = Sheet::from_page(&page, paper::page_unit_mm(d, &page));
     let lineweights = p.get("lineweights").and_then(Value::as_bool).unwrap_or(if space.is_paper() { page.lineweights } else { true });
     let transparency = super::plotters::plot_transparency(s, p).unwrap_or(page.plot_transparency);
     let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(matches!(space, Space::Model));
@@ -395,7 +395,9 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     let (from, k, to) = if fit || space == Space::Model {
         (if b.is_empty() { Vec2::ZERO } else { b.center() }, plot_scale(&b, &sheet, fit, scale), sheet.printable.center())
     } else {
-        (Vec2::ZERO, plot_scale(&b, &sheet, fit, scale), Vec2::ZERO)
+        // A layout at 1:1: the page shows its sheet, wherever the layout keeps it.
+        let origin = space.layout().map(|n| paper::layout_origin(d, n)).unwrap_or(Vec2::ZERO);
+        (origin, plot_scale(&b, &sheet, fit, scale), Vec2::ZERO)
     };
     let world = Bounds2::new((Vec2::ZERO - to) / k + from, (sheet.size - to) / k + from);
     if ![world.min.x, world.min.y, world.max.x, world.max.y].iter().all(|v| v.is_finite()) {

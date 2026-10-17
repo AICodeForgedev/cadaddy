@@ -20,6 +20,7 @@ use super::modify::transform_entities;
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
+mod classic;
 mod edit;
 
 /// Most preview entities drawn while the array is edited.
@@ -35,6 +36,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["ar"])
             .params("{type?: \"rectangular\" (default) | \"polar\" | \"path\", ...the parameters of arrayrect, arraypolar or arraypath}")
             .interactive(|_| Ok(Box::new(ArrayM::default()))),
+        CommandSpec::new("arrayclassic", "Array (classic)", run_array)
+            .alias(&["-array"])
+            .params("{type?: \"rectangular\" (default) | \"polar\", ...the parameters of arrayrect or arraypolar} (typed: AutoCAD's classic -ARRAY prompts, plain copies)")
+            .interactive(|_| Ok(Box::new(classic::ClassicM::default()))),
         CommandSpec::new("arrayrect", "Rectangular Array", run_arrayrect)
             .menu(&["Modify", "Array", "Rectangular Array"])
             .params(

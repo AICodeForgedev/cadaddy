@@ -179,7 +179,7 @@ fn read(file: &Path) -> Result<Drawing, String> {
         if len > MAX_XREF_BYTES {
             return Err(format!("the file is larger than {} MB", MAX_XREF_BYTES >> 20));
         }
-        let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
+        let bytes = crate::readfile::read(file).map_err(|e| e.to_string())?;
         (hooks.read)(&bytes, &file.to_string_lossy())
     }
     #[cfg(target_arch = "wasm32")]

@@ -750,6 +750,9 @@ pub struct PageSetup {
     /// Plot objects with their transparency ("Plot transparency"; PLOTTRANSPARENCYOVERRIDE can
     /// override it). The DXF plot layout flags have no bit for it, so it is not saved in DXF.
     pub plot_transparency: bool,
+    /// Paper units of the layout: millimetres (`Some(true)`, DXF plot paper units 72 = 1) or
+    /// inches (`Some(false)`); `None` follows the drawing's MEASUREMENT.
+    pub mm_units: Option<bool>,
 }
 
 impl Default for PageSetup {
@@ -769,6 +772,7 @@ impl Default for PageSetup {
             lineweights: true,
             show_plot_styles: false,
             plot_transparency: false,
+            mm_units: None,
         }
     }
 }
@@ -784,11 +788,15 @@ pub struct Layout {
     /// Saved paper-space view (centre, height).
     #[serde(default)]
     pub view: Option<(Vec2, f64)>,
+    /// Paper-space position of the sheet's lower-left corner. AutoCAD layouts often keep their
+    /// sheet away from the origin (the layout limits, DXF 10/20); CADCraft's own start at zero.
+    #[serde(default)]
+    pub origin: Vec2,
 }
 
 impl Layout {
     pub fn new(name: &str, tab_order: u32) -> Self {
-        Layout { name: name.into(), tab_order, page: PageSetup::default(), entities: EntityStore::new(), view: None }
+        Layout { name: name.into(), tab_order, page: PageSetup::default(), entities: EntityStore::new(), view: None, origin: Vec2::ZERO }
     }
 }
 

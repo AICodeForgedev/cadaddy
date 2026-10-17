@@ -36,6 +36,24 @@ pub(crate) fn decode_contents(s: &str) -> String {
     out
 }
 
+/// Encoded contents split into the 250-character strings of MTEXT's 3 and 1 groups, never
+/// between a caret and the character after it: readers that decode each string on its own
+/// (acadrust, so DWG save) would keep a split `^I` as the two characters.
+pub(crate) fn chunks(encoded: &str) -> Vec<String> {
+    let chars: Vec<char> = encoded.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        let mut end = (start + 250).min(chars.len());
+        if end < chars.len() && chars.get(end - 1) == Some(&'^') && end - 1 > start {
+            end -= 1;
+        }
+        out.push(chars.get(start..end).unwrap_or_default().iter().collect());
+        start = end;
+    }
+    out
+}
+
 /// Encode the contents for a DXF string: a tab as `^I`, a line feed as `^J`, a caret as `^ `;
 /// other control characters (which draw nothing) are dropped.
 pub(crate) fn encode_contents(s: &str) -> String {
@@ -117,4 +135,21 @@ pub(crate) fn column_tags(t: &MText) -> Vec<Tag> {
     ];
     v.extend(heights.into_iter().map(|h| Tag::f(50, h)));
     v
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::*;
+
+    #[test]
+    fn a_caret_escape_is_never_split() {
+        // carriage.dwg: a tab at a 250-character boundary came back from DWG as "^I".
+        let text = format!("{}\t\tPGM", "x".repeat(249));
+        let enc = encode_contents(&text);
+        let parts = chunks(&enc);
+        assert!(parts.iter().all(|p| !p.ends_with('^') && p.chars().count() <= 250), "{parts:?}");
+        assert_eq!(parts.concat(), enc);
+        assert!(parts.iter().all(|p| decode_contents(p).matches('^').count() == 0));
+        assert!(chunks("").is_empty());
+    }
 }

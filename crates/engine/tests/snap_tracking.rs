@@ -356,3 +356,19 @@ fn hostile_inputs_never_panic() {
     assert!(polar_angles(1e-9, &[f64::NAN], f64::NAN).len() <= 360);
     assert!(polar_angles(1e-4, &[], 0.0).len() <= 360);
 }
+
+#[test]
+fn typed_ortho_asks_on_or_off() {
+    let mut s = Session::new();
+    s.script("ORTHO ON\n").unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert!(s.settings.orthomode);
+    s.script("ORTHO OFF\n").unwrap();
+    assert!(!s.settings.orthomode);
+    // Enter keeps the current mode.
+    s.script("ORTHO\n\n").unwrap();
+    assert!(!s.settings.orthomode);
+    // F8 (the command without the prompt) still toggles.
+    s.execute("ortho", &json!({})).unwrap();
+    assert!(s.settings.orthomode);
+}

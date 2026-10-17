@@ -1,5 +1,6 @@
 //! Properties: per-object property edits, current properties, MATCHPROP, linetypes, units, RENAME.
 
+mod chprop;
 mod matchprop;
 mod rename;
 
@@ -17,6 +18,13 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
         CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>}"),
+        CommandSpec::new("chprop", "Change Properties", run_set)
+            .params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?} (typed: AutoCAD's property prompts)")
+            .interactive(|_| Ok(Box::new(chprop::ChpropM::new(false)))),
+        CommandSpec::new("change", "Change", run_set)
+            .alias(&["-ch"])
+            .params("{handles?, ...properties.set fields} (typed: a change point, or Properties as CHPROP)")
+            .interactive(|_| Ok(Box::new(chprop::ChpropM::new(true)))),
         CommandSpec::new("matchprop", "Match Properties", matchprop::run_matchprop)
             .menu(&["Modify", "Match Properties"])
             .alias(&["ma", "painter"])

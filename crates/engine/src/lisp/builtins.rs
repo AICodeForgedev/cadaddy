@@ -963,7 +963,7 @@ fn findfile(a: &[Value]) -> R {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_text_file(path: &str) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::readfile::read(path).ok()?;
     // Cap what a routine can pull into memory.
     if bytes.len() > 64 * 1024 * 1024 {
         return None;

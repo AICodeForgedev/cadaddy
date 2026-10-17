@@ -721,3 +721,17 @@ fn offset_polyline_arc_bulge_follows_joined_endpoints() {
     assert!(near(arc.center, 10.0, 5.0), "arc centre drifted to {:?}", arc.center);
     assert!((arc.radius - 4.0).abs() < 1e-6, "radius {}", arc.radius);
 }
+
+#[test]
+fn offset_keeps_polyline_widths() {
+    let mut s = Session::new();
+    let pl = pline(
+        &mut s,
+        json!([{"p": [0, 0], "startWidth": 1, "endWidth": 0.5}, {"p": [10, 0], "startWidth": 0.25, "endWidth": 0.25}, [10, 10]]),
+        false,
+    );
+    s.execute("offset", &json!({"handle": pl, "distance": 1, "side": [5, 5]})).unwrap();
+    let p = poly(&last(&s));
+    assert_eq!((p.vertices[0].start_width, p.vertices[0].end_width), (1.0, 0.5));
+    assert_eq!((p.vertices[1].start_width, p.vertices[1].end_width), (0.25, 0.25));
+}

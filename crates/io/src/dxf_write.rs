@@ -329,6 +329,59 @@ fn header_vars(w: &mut W, d: &Drawing) {
             }
         }
     }
+    dim_header_vars(w, d);
+}
+
+/// The DIM* variables the header carries (the current dimension style's settings, with any
+/// overrides new dimensions take on), with their DXF group codes. DIMSTYLE and DIMSCALE are in
+/// [`HEADER_VARS`].
+fn dim_header_vars(w: &mut W, d: &Drawing) {
+    for (name, _) in cadcraft_doc::DIMVARS {
+        if HEADER_VARS.iter().any(|(n, _)| n == name) {
+            continue;
+        }
+        let Some(v) = d.header.get(name) else { continue };
+        match (*name, v) {
+            // The decimal separator is a character code in the header.
+            ("DIMDSEP", HVal::Str(c)) => {
+                if let Some(ch) = c.chars().next() {
+                    w.s(9, format!("${name}"));
+                    w.i(70, i64::from(u32::from(ch)));
+                }
+            }
+            // The jog angle is in radians in the header, degrees in the variable.
+            ("DIMJOGANG", v) => {
+                if let Some(f) = v.as_f64().filter(|f| f.is_finite()) {
+                    w.s(9, format!("${name}"));
+                    w.f(40, f.to_radians());
+                }
+            }
+            (_, HVal::Str(t)) => {
+                let code = match *name {
+                    "DIMTXSTY" => 7,
+                    "DIMLTYPE" | "DIMLTEX1" | "DIMLTEX2" => 6,
+                    _ => 1,
+                };
+                w.s(9, format!("${name}"));
+                w.s(code, t);
+            }
+            (_, HVal::Int(i)) => {
+                let code = match *name {
+                    "DIMTFILLCLR" => 62,
+                    "DIMASSOC" => 280,
+                    "DIMFXLON" | "DIMTXTDIRECTION" => 290,
+                    _ => 70,
+                };
+                w.s(9, format!("${name}"));
+                w.i(code, *i);
+            }
+            (_, HVal::Real(f)) if f.is_finite() => {
+                w.s(9, format!("${name}"));
+                w.f(40, *f);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// An entity's group 440 (DXF Reference): ByBlock is `0x01000000`, a fixed transparency its alpha
@@ -412,7 +465,9 @@ fn attrib_common(d: &Drawing, e: &Entity, ins: &Insert, a: &Attrib) -> (Common, 
         .and_then(|b| b.entities.iter().find(|be| matches!(&be.kind, EntityKind::AttDef(ad) if ad.tag.eq_ignore_ascii_case(&a.tag))));
     let base = def.map(|de| de.common.clone()).unwrap_or_default();
     let mut c = a.props.over(&base);
-    if c.layer == "0" {
+    // A definition on layer 0 puts the attribute on the reference's layer; an attribute the
+    // file put on layer 0 itself stays there.
+    if a.props.layer.is_none() && c.layer == "0" {
         c.layer.clone_from(&e.common.layer);
     }
     (c, base)
@@ -433,8 +488,7 @@ fn multiline_tags(w: &mut W, a: &Attrib, attdef: bool) {
     w.f(46, 0.0);
     w.i(71, i64::from(m.attach));
     w.i(72, 5);
-    let chars: Vec<char> = crate::dxf_read::mtext_dxf::encode_contents(&m.contents).chars().collect();
-    let chunks: Vec<String> = chars.chunks(250).map(|c| c.iter().collect()).collect();
+    let chunks = crate::dxf_read::mtext_dxf::chunks(&crate::dxf_read::mtext_dxf::encode_contents(&m.contents));
     let n = chunks.len();
     for (i, c) in chunks.iter().enumerate() {
         w.s(if i + 1 == n { 1 } else { 3 }, c.clone());
@@ -726,8 +780,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(71, i64::from(t.attach));
             w.i(72, 1);
             // Long contents go in 250-char 3-chunks, the remainder in 1.
-            let chars: Vec<char> = crate::dxf_read::mtext_dxf::encode_contents(&t.contents).chars().collect();
-            let chunks: Vec<String> = chars.chunks(250).map(|c| c.iter().collect()).collect();
+            let chunks = crate::dxf_read::mtext_dxf::chunks(&crate::dxf_read::mtext_dxf::encode_contents(&t.contents));
             let n = chunks.len();
             for (i, c) in chunks.iter().enumerate() {
                 w.s(if i + 1 == n { 1 } else { 3 }, c.clone());
@@ -1461,8 +1514,8 @@ fn paper_views(d: &Drawing) -> HashMap<Handle, usize> {
 /// leaves it implicit again.
 fn paper_view(w: &mut W, d: &Drawing, e: &Entity, owner: &str, cx: &Ctx) {
     let Some(l) = cx.paper_views.get(&e.handle).and_then(|i| d.layouts.get(*i)) else { return };
-    let size = cadcraft_render::paper::sheet(d, &l.name).map(|s| s.size).unwrap_or(Vec2::new(12.0, 9.0));
-    let center = size * 0.5;
+    let (size, center) =
+        cadcraft_render::paper::sheet(d, &l.name).map_or((Vec2::new(12.0, 9.0), Vec2::new(6.0, 4.5)), |s| (s.size, s.bounds().center()));
     let h = w.h();
     w.s(0, "VIEWPORT");
     w.s(5, h);
@@ -2359,94 +2412,97 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.s(3, &l.name);
         w.s(350, layout_handles.get(i).cloned().unwrap_or_default());
     }
-    let layout_obj = |w: &mut W, h: &str, name: &str, tab: i64, brh: &str, flags: i64, page: &PageSetup, view: Option<(Vec2, f64)>| {
-        // Plot scale: a standard scale when fitting or 1:1, otherwise custom (142 paper units
-        // per 143 drawing units).
-        let scale = if page.scale.is_finite() && page.scale > 0.0 { page.scale } else { 1.0 };
-        let standard = page.scale_to_fit || scale == 1.0;
-        let plot_flags = 512
-            | 32
-            | if standard { 16 } else { 0 }
-            | if page.lineweights { 128 } else { 0 }
-            | if page.center { 4 } else { 0 }
-            | if page.show_plot_styles { 2 } else { 0 };
-        let plot_type = match page.plot_area.as_str() {
-            "display" => 0,
-            "extents" => 1,
-            "limits" => 2,
-            "window" => 4,
-            _ => 5,
+    let layout_obj =
+        |w: &mut W, h: &str, name: &str, tab: i64, brh: &str, flags: i64, page: &PageSetup, view: Option<(Vec2, f64)>, limits: (Vec2, Vec2)| {
+            // Plot scale: a standard scale when fitting or 1:1, otherwise custom (142 paper units
+            // per 143 drawing units).
+            let scale = if page.scale.is_finite() && page.scale > 0.0 { page.scale } else { 1.0 };
+            let standard = page.scale_to_fit || scale == 1.0;
+            let plot_flags = 512
+                | 32
+                | if standard { 16 } else { 0 }
+                | if page.lineweights { 128 } else { 0 }
+                | if page.center { 4 } else { 0 }
+                | if page.show_plot_styles { 2 } else { 0 };
+            let plot_type = match page.plot_area.as_str() {
+                "display" => 0,
+                "extents" => 1,
+                "limits" => 2,
+                "window" => 4,
+                _ => 5,
+            };
+            w.s(0, "LAYOUT");
+            w.s(5, h);
+            w.s(330, layout_dict.clone());
+            w.s(100, "AcDbPlotSettings");
+            w.s(1, "");
+            let device = page.device.trim();
+            w.s(2, if device.is_empty() || device.eq_ignore_ascii_case("None") { "none_device" } else { device });
+            w.s(4, page.paper.replace(' ', "_"));
+            w.s(6, "");
+            for (c, v) in [
+                (40, page.margins_mm[0]),
+                (41, page.margins_mm[1]),
+                (42, page.margins_mm[2]),
+                (43, page.margins_mm[3]),
+                (44, page.width_mm),
+                (45, page.height_mm),
+                (46, 0.0),
+                (47, 0.0),
+                (48, 0.0),
+                (49, 0.0),
+                (140, 0.0),
+                (141, 0.0),
+                (142, scale),
+                (143, 1.0),
+            ] {
+                w.f(c, v);
+            }
+            w.i(70, plot_flags);
+            w.i(72, i64::from(cadcraft_render::paper::page_unit_mm(d, page) == 1.0));
+            w.i(73, i64::from(page.landscape));
+            w.i(74, plot_type);
+            w.s(7, &page.plot_style_table);
+            w.i(75, if page.scale_to_fit { 0 } else { 16 });
+            w.f(147, scale);
+            w.f(148, 0.0);
+            w.f(149, 0.0);
+            w.s(100, "AcDbLayout");
+            w.s(1, name);
+            w.i(70, flags);
+            w.i(71, tab);
+            // Limits: where the sheet lies in paper space.
+            w.p2(10, limits.0);
+            w.p2(11, limits.1);
+            w.p(12, Vec3::ZERO);
+            w.p(14, Vec3::ZERO);
+            w.p(15, Vec3::ZERO);
+            w.f(146, 0.0);
+            w.p(13, Vec3::ZERO);
+            w.p(16, Vec3::new(1.0, 0.0, 0.0));
+            w.p(17, Vec3::new(0.0, 1.0, 0.0));
+            w.i(76, 0);
+            w.s(330, brh);
+            // The saved paper-space view (centre, height) as CADCraft xdata.
+            if let Some((c, height)) = view.filter(|(c, v)| c.x.is_finite() && c.y.is_finite() && v.is_finite()) {
+                w.s(1001, dxf_ext::APP);
+                w.s(1000, "PSVIEW");
+                w.s(1002, "{");
+                w.p(1010, c.to3(0.0));
+                w.f(1040, height);
+                w.s(1002, "}");
+            }
         };
-        w.s(0, "LAYOUT");
-        w.s(5, h);
-        w.s(330, layout_dict.clone());
-        w.s(100, "AcDbPlotSettings");
-        w.s(1, "");
-        let device = page.device.trim();
-        w.s(2, if device.is_empty() || device.eq_ignore_ascii_case("None") { "none_device" } else { device });
-        w.s(4, page.paper.replace(' ', "_"));
-        w.s(6, "");
-        for (c, v) in [
-            (40, page.margins_mm[0]),
-            (41, page.margins_mm[1]),
-            (42, page.margins_mm[2]),
-            (43, page.margins_mm[3]),
-            (44, page.width_mm),
-            (45, page.height_mm),
-            (46, 0.0),
-            (47, 0.0),
-            (48, 0.0),
-            (49, 0.0),
-            (140, 0.0),
-            (141, 0.0),
-            (142, scale),
-            (143, 1.0),
-        ] {
-            w.f(c, v);
-        }
-        w.i(70, plot_flags);
-        w.i(72, 0);
-        w.i(73, i64::from(page.landscape));
-        w.i(74, plot_type);
-        w.s(7, &page.plot_style_table);
-        w.i(75, if page.scale_to_fit { 0 } else { 16 });
-        w.f(147, scale);
-        w.f(148, 0.0);
-        w.f(149, 0.0);
-        w.s(100, "AcDbLayout");
-        w.s(1, name);
-        w.i(70, flags);
-        w.i(71, tab);
-        w.p2(10, Vec2::ZERO);
-        w.p2(11, Vec2::new(12.0, 9.0));
-        w.p(12, Vec3::ZERO);
-        w.p(14, Vec3::ZERO);
-        w.p(15, Vec3::ZERO);
-        w.f(146, 0.0);
-        w.p(13, Vec3::ZERO);
-        w.p(16, Vec3::new(1.0, 0.0, 0.0));
-        w.p(17, Vec3::new(0.0, 1.0, 0.0));
-        w.i(76, 0);
-        w.s(330, brh);
-        // The saved paper-space view (centre, height) as CADCraft xdata.
-        if let Some((c, height)) = view.filter(|(c, v)| c.x.is_finite() && c.y.is_finite() && v.is_finite()) {
-            w.s(1001, dxf_ext::APP);
-            w.s(1000, "PSVIEW");
-            w.s(1002, "{");
-            w.p(1010, c.to3(0.0));
-            w.f(1040, height);
-            w.s(1002, "}");
-        }
-    };
     // Model space has no page setup of its own: write what PLOT does for it, the drawing extents
     // fitted to the paper (plot type 1, scaled to fit). The default page's "layout" area is
     // plot type 5, "Layout information" (DXF Reference, PLOTSETTINGS group 74), which means
     // nothing for model space: another program's Plot dialog then shows no plot area or scale.
     let model_page = PageSetup { plot_area: "extents".into(), scale_to_fit: true, ..PageSetup::default() };
-    layout_obj(&mut w, &model_layout, "Model", 0, &ms_br, 1, &model_page, None);
+    layout_obj(&mut w, &model_layout, "Model", 0, &ms_br, 1, &model_page, None, (Vec2::ZERO, Vec2::new(12.0, 9.0)));
     for (i, (_, brh, l)) in ps_brs.iter().enumerate() {
         let h = layout_handles.get(i).cloned().unwrap_or_default();
-        layout_obj(&mut w, &h, &l.name, i64::from(l.tab_order.max(1)), brh, 1, &l.page, l.view);
+        let limits = cadcraft_render::paper::sheet(d, &l.name).map_or((Vec2::ZERO, Vec2::new(12.0, 9.0)), |s| (s.origin, s.origin + s.size));
+        layout_obj(&mut w, &h, &l.name, i64::from(l.tab_order.max(1)), brh, 1, &l.page, l.view, limits);
     }
     // Raster image definitions.
     w.t.extend(crate::dxf_image::objects(&cx.images, &root_dict));

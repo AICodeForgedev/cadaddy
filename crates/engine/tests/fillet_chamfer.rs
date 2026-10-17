@@ -121,3 +121,29 @@ fn json_chamfer_angle_and_trim() {
     s.execute("chamfer", &json!({ "h1": hs[0], "p1": [5, 0], "h2": hs[1], "p2": [10, 5], "length": 2, "angle": 45, "trim": false })).unwrap();
     assert_eq!(lines(&s), vec![((0.0, 0.0), (12.0, 0.0)), ((8.0, 0.0), (10.0, 2.0)), ((10.0, -2.0), (10.0, 12.0))]);
 }
+
+#[test]
+fn a_radius_or_distance_too_large_for_the_lines_is_refused() {
+    // Lines 0,0-10,0 and 10,0-10,10 meeting at a corner: a radius of 50 or a chamfer of 20
+    // would cut past their far ends. AutoCAD refuses; nothing changes.
+    for cmd in ["FILLET R 50 5,0 10,5\n", "CHAMFER D 20 20 5,0 10,5\n"] {
+        let mut s = Session::new();
+        for l in ["0,0 10,0", "10,0 10,10"] {
+            s.cmdline(&format!("LINE {l}")).unwrap();
+            s.cmdline("").unwrap();
+        }
+        let before = lines(&s);
+        let _ = s.script(cmd);
+        assert_eq!(lines(&s), before, "{cmd}");
+        assert_eq!(arcs(&s), 0, "{cmd}");
+    }
+    // A cut that fits still works.
+    let mut s = Session::new();
+    for l in ["0,0 10,0", "10,0 10,10"] {
+        s.cmdline(&format!("LINE {l}")).unwrap();
+        s.cmdline("").unwrap();
+    }
+    s.script("FILLET R 4 5,0 10,5\n").unwrap();
+    assert_eq!(lines(&s), vec![((0.0, 0.0), (6.0, 0.0)), ((10.0, 4.0), (10.0, 10.0))]);
+    assert_eq!(arcs(&s), 1);
+}

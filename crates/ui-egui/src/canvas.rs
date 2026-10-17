@@ -1712,8 +1712,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         Some(sh) => {
             // Paper space: grey surround, the sheet with a shadow, the printable area dashed.
             painter.rect_filled(rect, 0.0, Color32::from_rgb(0x50, 0x57, 0x63));
-            let a = xf_paper.to_screen(Vec2::new(0.0, sh.size.y));
-            let b = xf_paper.to_screen(Vec2::new(sh.size.x, 0.0));
+            let sb = sh.bounds();
+            let a = xf_paper.to_screen(Vec2::new(sb.min.x, sb.max.y));
+            let b = xf_paper.to_screen(Vec2::new(sb.max.x, sb.min.y));
             let paper = Rect::from_two_pos(a, b);
             painter.rect_filled(paper.translate(vec2(5.0, 5.0)), 0.0, Color32::from_black_alpha(110));
             painter.rect_filled(paper, 0.0, t.paper);

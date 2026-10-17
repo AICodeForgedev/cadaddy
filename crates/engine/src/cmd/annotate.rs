@@ -72,7 +72,14 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["mld"])
             .params("{points: [[arrow], ..., [landing]] ([location] with leaderType none), text?, leaderType?: straight|spline|none, block?: name, blockAttach?: center|insertion}")
             .interactive(|s| Ok(Box::new(MLeaderM::new(s)))),
-        CommandSpec::new("leader", "Leader", run_leader).alias(&["lead"]).params("{points: [[x,y]...], text?}"),
+        CommandSpec::new("leader", "Leader", run_leader)
+            .alias(&["lead"])
+            .params("{points: [[x,y]...], text?}")
+            .interactive(|_| Ok(Box::new(leader_cmd::LeaderM::new(false)))),
+        CommandSpec::new("qleader", "Quick Leader", run_leader)
+            .alias(&["le"])
+            .params("{points: [[x,y]...], text?} (typed: up to three points, text width, text lines)")
+            .interactive(|_| Ok(Box::new(leader_cmd::LeaderM::new(true)))),
         CommandSpec::new("dimstyle.update", "Update", run_update)
             .menu(&["Dimension", "Update"])
             .params("{handles?}")
@@ -420,6 +427,8 @@ fn run_baseline(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// QDIM: its modes and prompts.
+#[path = "annotate_leader.rs"]
+mod leader_cmd;
 #[path = "annotate_qdim.rs"]
 mod qdim;
 
@@ -1470,11 +1479,29 @@ impl Interactive for OrdinateM {
 struct ChainM {
     baseline: bool,
     created: Vec<Handle>,
+    /// Asking for the dimension to continue from (the Select option, or Enter).
+    selecting: bool,
 }
 
 impl ChainM {
     fn new(_s: &Session, baseline: bool) -> Self {
-        ChainM { baseline, created: Vec::new() }
+        ChainM { baseline, created: Vec::new(), selecting: false }
+    }
+    /// Continue from the picked dimension when it is a linear or aligned one.
+    fn select(&mut self, s: &mut Session, h: Option<Handle>) {
+        let linear = h.filter(|h| {
+            s.doc()
+                .ok()
+                .and_then(|d| d.entity(*h))
+                .is_some_and(|e| matches!(&e.kind, EntityKind::Dimension(dm) if matches!(dm.kind, DimKind::Linear { .. } | DimKind::Aligned)))
+        });
+        match linear {
+            Some(h) => {
+                s.last_dim = Some(h);
+                self.selecting = false;
+            }
+            None => s.echo("Select a linear or aligned dimension."),
+        }
     }
 }
 
@@ -1490,12 +1517,29 @@ impl Interactive for ChainM {
         Ok(Step::Continue)
     }
     fn prompt(&self, s: &Session) -> Prompt {
+        if self.selecting {
+            return Prompt::new(if self.baseline { "Select base dimension" } else { "Select continued dimension" }, Accept::SELECT);
+        }
         Prompt::new("Specify a second extension line origin", Accept::POINT)
             .kw(&["Select", "Undo"])
             .default("Select")
             .base_opt(last_linear(s).map(|d| if self.baseline { d.p13.xy() } else { d.p14.xy() }))
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if self.selecting {
+            match i {
+                Input::Pick(hs) => self.select(s, hs.first().copied()),
+                Input::Point(p) => {
+                    let ap = s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5;
+                    let space = s.space();
+                    let h = crate::select::pick(s.doc()?, &space, p, ap);
+                    self.select(s, h);
+                }
+                Input::Enter => return Ok(Step::Done),
+                _ => {}
+            }
+            return Ok(Step::Continue);
+        }
         match i {
             Input::Point(p) => {
                 let prev = last_linear(s).ok_or_else(|| EngineError::Other("no linear dimension".into()))?;
@@ -1510,11 +1554,23 @@ impl Interactive for ChainM {
                 }
                 Ok(Step::Continue)
             }
-            Input::Enter => Ok(Step::Done),
+            // Enter takes the default, Select: AutoCAD asks for the dimension to continue from,
+            // and only an Enter there ends the command.
+            Input::Keyword(k) if k == "Select" => {
+                self.selecting = true;
+                Ok(Step::Continue)
+            }
+            Input::Enter => {
+                self.selecting = true;
+                Ok(Step::Continue)
+            }
             _ => Ok(Step::Continue),
         }
     }
     fn preview(&self, s: &Session, c: Vec2) -> Vec<EntityKind> {
+        if self.selecting {
+            return Vec::new();
+        }
         last_linear(s).map(|d| vec![chained(s, &d, c, self.baseline)]).unwrap_or_default()
     }
 }

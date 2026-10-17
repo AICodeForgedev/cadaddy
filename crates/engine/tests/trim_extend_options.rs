@@ -201,3 +201,19 @@ fn json_forms_take_fence_crossing_edge_mode_and_mode() {
     assert_eq!(r["extended"], 1);
     assert_eq!(lines(&s), vec![((0.0, 0.0), (10.0, 0.0)), ((10.0, -5.0), (10.0, 5.0))]);
 }
+
+#[test]
+fn quick_mode_keeps_an_object_the_chosen_cutting_edges_miss() {
+    // TRIM, cuTting edges, Enter (select all), then pick a line nothing crosses: AutoCAD reports
+    // that it doesn't intersect an edge; it must not be erased as a plain Quick-mode pick is.
+    let mut s = session(&["0,0 10,0"]);
+    let _ = s.script("TRIM T\n\n5,0\n\n");
+    assert_eq!(lines(&s), vec![((0.0, 0.0), (10.0, 0.0))]);
+    // Picked edges that miss it: kept too.
+    let mut s = ladder();
+    s.cmdline("LINE 20,20 25,20").unwrap();
+    s.cmdline("").unwrap();
+    let _ = s.script("TRIM T 10,4\n\n22,20\n\n");
+    assert!(lines(&s).contains(&((20.0, 20.0), (25.0, 20.0))));
+    assert_eq!(header(&s, "TRIMEXTENDMODE"), -1, "cuTting edges leaves the mode alone");
+}

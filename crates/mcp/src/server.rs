@@ -45,9 +45,15 @@ impl Server {
 
     /// Serve newline-delimited JSON-RPC until `input` closes (logs to stderr only).
     pub fn serve(&mut self, input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
-        for line in input.lines() {
+        // Lines are read as bytes: one that isn't UTF-8 is a parse error, not the end of the
+        // session.
+        for line in input.split(b'\n') {
             let line = line?;
-            if let Some(reply) = self.handle_line(&line) {
+            let reply = match std::str::from_utf8(&line) {
+                Ok(text) => self.handle_line(text),
+                Err(e) => Some(error(Value::Null, PARSE_ERROR, format!("parse error: invalid UTF-8 ({e})")).to_string()),
+            };
+            if let Some(reply) = reply {
                 output.write_all(reply.as_bytes())?;
                 output.write_all(b"\n")?;
                 output.flush()?;

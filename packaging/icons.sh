@@ -10,7 +10,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIR="$ROOT/assets/app-icon"
-ID="ai.storyteller.cadcraft"
+ID="dev.aicodeforge.cadaddy"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 command -v resvg >/dev/null || { echo "error: resvg not found (cargo install resvg)" >&2; exit 1; }
@@ -27,27 +27,27 @@ for s in 16 24 32 48 64 128 256 512; do
   mkdir -p "$DIR/hicolor/${s}x${s}/apps"
   render "$s" "$DIR/hicolor/${s}x${s}/apps/$ID.png"
 done
-render 64 "$DIR/cadcraft-64.png"
-render 256 "$DIR/cadcraft-256.png"
-render 1024 "$DIR/cadcraft-1024.png"
-render 512 "$DIR/cadcraft-macos-512.png" macos
+render 64 "$DIR/cadaddy-64.png"
+render 256 "$DIR/cadaddy-256.png"
+render 1024 "$DIR/cadaddy-1024.png"
+render 512 "$DIR/cadaddy-macos-512.png" macos
 
 ICO_PNGS=()
 for s in 16 20 24 32 40 48 64 128 256; do
   render "$s" "$TMP/ico-$s.png"
   ICO_PNGS+=("$TMP/ico-$s.png")
 done
-(cd "$ROOT" && cargo run -q -p xtask -- ico "$DIR/cadcraft.ico" "${ICO_PNGS[@]}")
+(cd "$ROOT" && cargo run -q -p xtask -- ico "$DIR/cadaddy.ico" "${ICO_PNGS[@]}")
 
 if command -v iconutil >/dev/null; then
-  SET="$TMP/cadcraft.iconset"
+  SET="$TMP/cadaddy.iconset"
   mkdir -p "$SET"
   for s in 16 32 128 256 512; do
     render "$s" "$SET/icon_${s}x${s}.png" macos
     render $((s * 2)) "$SET/icon_${s}x${s}@2x.png" macos
   done
-  iconutil -c icns -o "$DIR/cadcraft.icns" "$SET"
+  iconutil -c icns -o "$DIR/cadaddy.icns" "$SET"
 else
-  echo "note: iconutil not found (macOS only); cadcraft.icns left as it was" >&2
+  echo "note: iconutil not found (macOS only); cadaddy.icns left as it was" >&2
 fi
 echo "icons written to $DIR"

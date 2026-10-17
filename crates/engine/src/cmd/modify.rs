@@ -127,14 +127,22 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
 
 fn erase(s: &mut Session, hs: &[Handle]) -> Result<usize> {
     let d = s.doc_mut()?;
-    let mut n = 0;
+    let (mut n, mut locked_n) = (0, 0);
     for h in hs {
         let locked = d.entity(*h).and_then(|e| d.layer(&e.common.layer)).is_some_and(|l| l.locked);
-        if !locked && d.remove_entity(*h).is_some() {
+        if locked {
+            locked_n += 1;
+        } else if d.remove_entity(*h).is_some() {
             n += 1;
         }
     }
     s.set_selection(Vec::new());
+    // As AutoCAD says it: the objects left alone are not a silent surprise.
+    match locked_n {
+        0 => {}
+        1 => s.echo("1 was on a locked layer."),
+        k => s.echo(format!("{k} were on a locked layer.")),
+    }
     Ok(n)
 }
 
@@ -642,7 +650,8 @@ pub(crate) fn offset_kind(k: &EntityKind, dist: f64, side: Vec2) -> Option<Entit
 
 /// Offset a polyline: offset each segment, then join neighbours at their intersections.
 pub(crate) fn offset_polyline(pl: &Polyline, d: f64) -> Option<Vec<PolyVertex>> {
-    let segs: Vec<Segment> = pl.segments().iter().filter_map(|s| s.offset(d)).collect();
+    // Each offset segment with the vertex its source segment starts at (for its widths).
+    let (src, segs): (Vec<usize>, Vec<Segment>) = pl.segments().iter().enumerate().filter_map(|(i, s)| Some((i, s.offset(d)?))).unzip();
     if segs.is_empty() {
         return None;
     }
@@ -683,7 +692,9 @@ pub(crate) fn offset_polyline(pl: &Polyline, d: f64) -> Option<Vec<PolyVertex>> 
                 cadcraft_geom::arc_to_bulge(if *ccw { sweep } else { -sweep })
             }
         };
-        verts.push(PolyVertex { p: start, bulge, start_width: 0.0, end_width: 0.0 });
+        // Segment widths carry over, as AutoCAD keeps them.
+        let w = src.get(i).and_then(|j| pl.vertices.get(*j)).map_or((0.0, 0.0), |v| (v.start_width, v.end_width));
+        verts.push(PolyVertex { p: start, bulge, start_width: w.0, end_width: w.1 });
     }
     if !pl.closed {
         verts.push(PolyVertex::new(segs.last()?.end()));
@@ -1160,6 +1171,11 @@ pub(crate) fn fillet_lines(
         new_arc = Some(ar);
         (t1, t2)
     };
+    // The cut must land on the part of each line that is kept (the lines may be extended
+    // towards the corner, never past their far ends): AutoCAD refuses otherwise.
+    if t1.dist(x) > k1.dist(x) + 1e-9 || t2.dist(x) > k2.dist(x) + 1e-9 {
+        return Err(EngineError::Other(if chamfer.is_some() { "The chamfer distances are too large." } else { "Radius is too large." }.into()));
+    }
     let common = e1.common.clone();
     let doc = s.doc_mut()?;
     doc.modify_entity(h1, |e| e.kind = line(k1, t1))?;
@@ -1642,7 +1658,16 @@ struct SelectThen {
     ref_len: Option<f64>,
     copy_mode: bool,
     ask_erase: bool,
+    /// COPY Array: `Some(None)` while asking how many items, then `Some(Some(n))`.
+    copy_array: Option<Option<u32>>,
+    /// COPY Array Fit: the second point is the last item, not the second.
+    array_fit: bool,
+    /// COPY: the objects each placement made, for Undo.
+    copies: Vec<Vec<Handle>>,
 }
+
+/// Most items COPY Array makes in one go.
+const MAX_COPY_ARRAY: u32 = 10_000;
 
 impl SelectThen {
     fn new(op: Op) -> Self {
@@ -1658,6 +1683,9 @@ impl SelectThen {
             ref_len: None,
             copy_mode: false,
             ask_erase: false,
+            copy_array: None,
+            array_fit: false,
+            copies: Vec::new(),
         }
     }
     fn apply(&mut self, s: &mut Session) -> Result<Step> {
@@ -1889,6 +1917,11 @@ impl Interactive for SelectThen {
         match (self.op, k) {
             (Op::Move | Op::Copy, 0) => Prompt::new("Specify base point", Accept::POINT).kw(&["Displacement"]),
             (Op::Move, _) => Prompt::new("Specify second point or <use first point as displacement>", Accept::POINT).base_opt(base),
+            (Op::Copy, _) if self.copy_array == Some(None) => Prompt::new("Enter number of items to array", Accept::NUMBER),
+            (Op::Copy, _) if self.copy_array.is_some() && !self.array_fit => {
+                Prompt::new("Specify second point", Accept::POINT).kw(&["Fit"]).base_opt(base)
+            }
+            (Op::Copy, _) if self.copy_array.is_some() => Prompt::new("Specify second point", Accept::POINT).base_opt(base),
             (Op::Copy, _) => Prompt::new("Specify second point", Accept::POINT).kw(&["Array", "Exit", "Undo"]).base_opt(base),
             (Op::Rotate | Op::Scale, 0) => Prompt::new("Specify base point", Accept::POINT),
             // ROTATE and SCALE offer the angle/factor used last time.
@@ -1949,6 +1982,47 @@ impl Interactive for SelectThen {
                 s.set_selection(Vec::new());
                 Ok(Step::Done)
             }
+            (Op::Copy, 1, Input::Keyword(kw)) if kw == "Array" => {
+                self.copy_array = Some(None);
+                Ok(Step::Continue)
+            }
+            (Op::Copy, 1, Input::Keyword(kw)) if kw == "Fit" && self.copy_array.is_some() => {
+                self.array_fit = true;
+                Ok(Step::Continue)
+            }
+            (Op::Copy, 1, Input::Keyword(kw)) if kw == "Undo" => {
+                match self.copies.pop() {
+                    Some(made) => {
+                        let d = s.doc_mut()?;
+                        for h in made {
+                            d.remove_entity(h);
+                        }
+                    }
+                    None => s.echo("Everything has been undone."),
+                }
+                Ok(Step::Continue)
+            }
+            (Op::Copy, 1, Input::Text(t)) if self.copy_array == Some(None) => {
+                let n = number(&t)
+                    .filter(|n| n.fract() == 0.0 && *n >= 2.0 && *n <= f64::from(MAX_COPY_ARRAY))
+                    .ok_or_else(|| EngineError::Other(format!("Requires an integer between 2 and {MAX_COPY_ARRAY}.")))?;
+                self.copy_array = Some(Some(n as u32));
+                Ok(Step::Continue)
+            }
+            (Op::Copy, 1, Input::Point(p)) if self.copy_array.is_some() => {
+                let Some(Some(n)) = self.copy_array else { return Ok(Step::Continue) };
+                // The original is the first item: the second point places the second item, or
+                // with Fit the last one.
+                let step = if self.array_fit { (p - self.pts[0]) / f64::from(n - 1) } else { p - self.pts[0] };
+                let mut made = Vec::new();
+                for i in 1..n {
+                    made.extend(transform_entities(s, &self.objs, &Mat3::translate(step * f64::from(i)), true)?);
+                }
+                self.copies.push(made);
+                self.copy_array = None;
+                self.array_fit = false;
+                Ok(Step::Continue)
+            }
             (_, 0, Input::Point(p)) => {
                 self.pts.push(p);
                 Ok(Step::Continue)
@@ -1967,7 +2041,8 @@ impl Interactive for SelectThen {
             }
             (Op::Copy, _, Input::Point(p)) => {
                 let d = p - self.pts[0];
-                transform_entities(s, &self.objs, &Mat3::translate(d), true)?;
+                let made = transform_entities(s, &self.objs, &Mat3::translate(d), true)?;
+                self.copies.push(made);
                 Ok(Step::Continue)
             }
             (Op::Copy, _, Input::Enter) => {

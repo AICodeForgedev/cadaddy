@@ -185,7 +185,7 @@ fn config_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<s
     }
 }
 
-const APP_ID: &str = "ai.storyteller.cadcraft";
+const APP_ID: &str = "dev.aicodeforge.cadaddy";
 
 /// Stencil bits of the window's render pass (see `NativeOptions::stencil_buffer`).
 const STENCIL_BITS: u8 = 8;

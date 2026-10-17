@@ -168,3 +168,32 @@ fn dwg_keeps_current_layer_style_and_linetype_spelling() {
     assert!(back.linetypes.iter().any(|l| l.name == "CONTINUOUS"), "{:?}", back.linetypes.iter().map(|l| &l.name).collect::<Vec<_>>());
     assert_eq!(back.layer("LOT").map(|l| l.linetype.as_str()), Some("CONTINUOUS"));
 }
+
+#[test]
+fn a_viewport_view_target_offsets_its_view_centre() {
+    // AutoCAD keeps a panned viewport's view centre relative to its view target (17/27); the
+    // model point shown is target + centre (tablet_overlay.dwg looked at a corner otherwise).
+    let mut d = Drawing::new_metric();
+    let first = Space::Paper(d.layouts[0].name.clone());
+    d.add(&first, Common::default(), viewport(2)).unwrap();
+    let text = cadcraft_io::write_dxf(&d);
+    // After the last viewport's subclass marker line (the file may use CR LF).
+    let m = text.rfind("AcDbViewport").expect("viewport");
+    let at = m + text[m..].find('\n').expect("line end") + 1;
+    let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let patched = format!("{} 17{nl}4.5{nl} 27{nl}-4.6{nl} 37{nl}0.0{nl}{}", &text[..at], &text[at..]);
+    let back = cadcraft_io::read_dxf(patched.as_bytes()).unwrap();
+    let vc = back.layouts[0]
+        .entities
+        .iter()
+        .find_map(|e| if let EntityKind::Viewport(v) = &e.kind { (v.id == 2).then_some(v.view_center) } else { None })
+        .expect("viewport 2");
+    assert!((vc - Vec2::new(14.5, 5.4)).len() < 1e-9, "{vc:?}");
+    // Saved again: the centre is written whole with no target, so it reads back the same.
+    let again = cadcraft_io::read_dxf(cadcraft_io::write_dxf(&back).as_bytes()).unwrap();
+    let vc2 = again.layouts[0]
+        .entities
+        .iter()
+        .find_map(|e| if let EntityKind::Viewport(v) = &e.kind { (v.id == 2).then_some(v.view_center) } else { None });
+    assert_eq!(vc2, Some(vc));
+}

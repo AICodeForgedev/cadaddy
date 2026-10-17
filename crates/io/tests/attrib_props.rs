@@ -119,3 +119,14 @@ fn hostile_attrib_groups_do_not_panic() {
     assert_eq!((p.layer.as_deref(), p.linetype.as_deref()), (None, None), "empty names are not properties");
     let _ = write_dxf(&d);
 }
+
+#[test]
+fn an_attribute_set_to_layer_0_stays_on_layer_0() {
+    // DWG samples (carriage, bygginga) put attributes on layer 0 under references on other
+    // layers; only an attribute that follows its layer-0 definition takes the reference's layer.
+    let on_zero = AttribProps { layer: Some("0".into()), ..AttribProps::default() };
+    let (d, h) = drawing(vec![attrib("OWN", 0.0, on_zero.clone()), attrib("RED", 2.0, AttribProps::default())]);
+    let got = reopened_attribs(&d, h);
+    assert_eq!(got[0].props, on_zero);
+    assert_eq!(got[1].props.layer, None);
+}

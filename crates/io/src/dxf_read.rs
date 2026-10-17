@@ -485,7 +485,14 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             center: t.p(10),
             width: t.fd(40, 1.0),
             height: t.fd(41, 1.0),
-            view_center: Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0)),
+            // The view centre (12/22) is measured from the view target (17/27): AutoCAD moves
+            // the target when it pans (tablet_overlay.dwg). In a plan view that is a plain offset.
+            view_center: {
+                let c = Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0));
+                let dir = t.p(16);
+                let target = Vec2::new(t.fd(17, 0.0), t.fd(27, 0.0));
+                if dir.x.abs() < 1e-9 && dir.y.abs() < 1e-9 && target.is_finite() { c + target } else { c }
+            },
             view_height: t.fd(45, 1.0),
             id: t.i(69).unwrap_or(0) as u32,
             locked: t.i(90).unwrap_or(0) & 16384 != 0,
@@ -1671,7 +1678,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     d.layouts.clear();
     let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
     let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Entity)>, i64)> = Vec::new();
-    let mut layout_objs: Vec<(String, u32, String, PageSetup)> = Vec::new();
+    let mut layout_objs: Vec<(String, u32, String, PageSetup, Option<(Vec2, Vec2)>)> = Vec::new();
     let mut entities = Vec::new();
     let mut objs = Objects::default();
     // Every handle another program's file already uses is taken before anything gets a new one:
@@ -1744,7 +1751,15 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
                         // LAYOUT has two 330s: owner dict and the block record; take the last.
                         let br = tg.iter().rfind(|x| x.code == 330).map(Tag::str).unwrap_or_default();
                         let plot = T(tg.get(..start).unwrap_or(&[]));
-                        layout_objs.push((t.s(1).unwrap_or_default(), t.i(71).unwrap_or(0) as u32, br.to_ascii_uppercase(), page_setup(&plot)));
+                        let corner = |x: i32| Some(Vec2::new(t.f(x)?, t.f(x + 10)?)).filter(|p| p.x.is_finite() && p.y.is_finite());
+                        let limits = corner(10).zip(corner(11));
+                        layout_objs.push((
+                            t.s(1).unwrap_or_default(),
+                            t.i(71).unwrap_or(0) as u32,
+                            br.to_ascii_uppercase(),
+                            page_setup(&plot),
+                            limits,
+                        ));
                     }
                 }
             }
@@ -1757,11 +1772,25 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     // Layouts.
     let mut paper_block_for: HashMap<String, String> = HashMap::new();
     layout_objs.sort_by_key(|l| l.1);
-    for (name, order, br, page) in &layout_objs {
+    for (name, order, br, page, limits) in &layout_objs {
         if name.eq_ignore_ascii_case("Model") {
             continue;
         }
-        d.layouts.push(Layout { page: page.clone(), ..Layout::new(name, *order) });
+        // AutoCAD keeps the sheet where the layout's limits are; trust them when they are the
+        // size of the paper (stale limits from another paper size are ignored).
+        let size = cadcraft_render::Sheet::from_page(page, cadcraft_render::paper::page_unit_mm(&d, page)).size;
+        let origin = limits
+            .filter(|(lo, hi)| {
+                let close = |a: f64, b: f64| (a - b).abs() <= 0.01 * b.abs().max(1e-9);
+                close(hi.x - lo.x, size.x) && close(hi.y - lo.y, size.y)
+            })
+            .map_or(Vec2::ZERO, |(lo, _)| lo);
+        let mut page = page.clone();
+        // Paper units the drawing implies anyway stay implicit.
+        if page.mm_units == Some(cadcraft_render::paper::paper_unit_mm(&d) == 1.0) {
+            page.mm_units = None;
+        }
+        d.layouts.push(Layout { page, origin, ..Layout::new(name, *order) });
         if let Some(bname) = rx.brs.get(br) {
             paper_block_for.insert(bname.to_ascii_uppercase(), name.clone());
         }
@@ -2209,6 +2238,12 @@ fn page_setup(t: &T) -> PageSetup {
     p.margins_mm = [mm(40, p.margins_mm[0]), mm(41, p.margins_mm[1]), mm(42, p.margins_mm[2]), mm(43, p.margins_mm[3])];
     // Plot rotation 1 or 3 turns the media a quarter turn; media defined wider than tall is
     // already landscape.
+    // Plot paper units: 0 inches, 1 millimetres (2, pixels, has no paper-space meaning).
+    p.mm_units = match t.i(72) {
+        Some(0) => Some(false),
+        Some(1) => Some(true),
+        _ => None,
+    };
     let rotated = matches!(t.i(73), Some(1 | 3));
     if w > 0.0 && h > 0.0 {
         p.landscape = rotated != (w > h);

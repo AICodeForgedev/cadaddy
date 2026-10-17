@@ -573,3 +573,27 @@ fn linetype_rename_updates_references() {
     assert!(s.execute("rename", &json!({ "table": "linetype", "from": "ByLayer", "to": "X" })).is_err());
     assert_eq!(s.doc().unwrap().entity(by_layer).unwrap().common.linetype, "ByLayer");
 }
+
+#[test]
+fn dimcontinue_enter_asks_for_a_dimension_and_a_second_enter_ends() {
+    let mut s = Session::new();
+    let a = h(&s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [10, 0], "at": [0, -3] })).unwrap());
+    let b = h(&s.execute("dimlinear", &json!({ "p1": [0, 5], "p2": [10, 5], "at": [0, 8] })).unwrap());
+    s.start("dimcontinue").unwrap();
+    s.input(Input::Point(Vec2::new(20.0, 5.0))).unwrap();
+    // Enter takes the default, Select: the command keeps running.
+    s.input(Input::Enter).unwrap();
+    assert!(s.prompt_text().contains("Select continued dimension"), "{}", s.prompt_text());
+    // Continue from the first dimension instead.
+    s.input(Input::Pick(vec![a])).unwrap();
+    assert!(s.prompt_text().contains("second extension line origin"), "{}", s.prompt_text());
+    s.input(Input::Point(Vec2::new(30.0, 0.0))).unwrap();
+    s.input(Input::Enter).unwrap();
+    s.input(Input::Enter).unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    let dims: Vec<_> = s.doc().unwrap().model.iter().filter(|e| matches!(e.kind, EntityKind::Dimension(_))).map(|e| e.handle).collect();
+    assert_eq!(dims.len(), 4);
+    let last = dim(&s, *dims.last().unwrap());
+    assert!((last.p13.x - 10.0).abs() < 1e-9 && (last.p14.x - 30.0).abs() < 1e-9 && last.p13.y.abs() < 1e-9, "{last:?}");
+    let _ = b;
+}

@@ -800,6 +800,9 @@ struct AttdefM {
     tag: Option<String>,
     prompt: Option<String>,
     default: Option<String>,
+    /// The start point, then the text height: AutoCAD asks for both, then the rotation.
+    at: Option<Vec2>,
+    height: Option<f64>,
 }
 
 impl Interactive for AttdefM {
@@ -811,7 +814,13 @@ impl Interactive for AttdefM {
             (None, ..) => Prompt::new("Enter attribute tag name", Accept::TEXT),
             (Some(_), None, _) => Prompt::new("Enter attribute prompt", Accept::TEXT),
             (Some(_), Some(_), None) => Prompt::new("Enter default attribute value", Accept::TEXT),
-            _ => Prompt::new("Specify start point of text", Accept::POINT),
+            _ => match (self.at, self.height) {
+                (None, _) => Prompt::new("Specify start point of text", Accept::POINT),
+                (Some(at), None) => Prompt::new("Specify text height", Accept::POINT_OR_NUMBER)
+                    .default(format!("{:.4}", _s.doc().map(|d| d.header.f64("TEXTSIZE", 0.2)).unwrap_or(0.2)))
+                    .base(at),
+                (Some(at), Some(_)) => Prompt::new("Specify rotation angle of text", Accept::POINT_OR_NUMBER).default("0").base(at),
+            },
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
@@ -828,14 +837,37 @@ impl Interactive for AttdefM {
             }
             (Some(_), None, _) => self.prompt = text,
             (Some(_), Some(_), None) => self.default = text,
-            (Some(tag), Some(pr), Some(def)) => {
-                if let Input::Point(p) = i {
-                    let h = s.doc()?.header.f64("TEXTSIZE", 0.2);
-                    let k = attdef_kind(s, tag, pr, def, p, h, false);
+            (Some(tag), Some(pr), Some(def)) => match (self.at, self.height, i) {
+                (None, _, Input::Point(p)) => self.at = Some(p),
+                (Some(at), None, i) => {
+                    let current = s.doc()?.header.f64("TEXTSIZE", 0.2);
+                    let h = match i {
+                        Input::Point(p) => at.dist(p),
+                        Input::Text(t) => super::machines::number(&t).unwrap_or(f64::NAN),
+                        Input::Enter => current,
+                        _ => return Ok(Step::Continue),
+                    };
+                    if !(h.is_finite() && h > 0.0) {
+                        return Err(EngineError::Other("Requires a positive number.".into()));
+                    }
+                    self.height = Some(h);
+                }
+                (Some(at), Some(h), i) => {
+                    let rotation = match i {
+                        Input::Point(p) => at.angle_to(p),
+                        Input::Text(t) => s.angle_settings().direction(&t).ok_or_else(|| EngineError::Other("Requires an angle.".into()))?,
+                        Input::Enter => 0.0,
+                        _ => return Ok(Step::Continue),
+                    };
+                    let mut k = attdef_kind(s, tag, pr, def, at, h, false);
+                    if let EntityKind::AttDef(a) = &mut k {
+                        a.text.rotation = rotation;
+                    }
                     s.add_entity(k)?;
                     return Ok(Step::Done);
                 }
-            }
+                _ => {}
+            },
         }
         Ok(Step::Continue)
     }

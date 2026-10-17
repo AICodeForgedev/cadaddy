@@ -42,8 +42,10 @@ fn apply(s: &mut Session, h: Handle, at: Vec2, extending: bool, edges: Edges, qu
         extend(s, h, at, edges)?;
         return Ok(vec![h]);
     }
+    // Quick mode erases an object no edge crosses, but not when cutting edges were picked
+    // (cuTting edges): then a miss is reported, as in Standard mode.
     match trim(s, h, at, edges) {
-        Err(e) if quick && misses_edges(&e) => {
+        Err(e) if quick && edges.only.is_none() && misses_edges(&e) => {
             s.doc_mut()?.remove_entity(h);
             Ok(Vec::new())
         }
@@ -236,11 +238,14 @@ pub(crate) struct TrimM {
     stage: Stage,
     /// The drawing before each trim, extend or erase, for Undo.
     undo: Vec<Arc<Drawing>>,
+    /// Edges were chosen (cuTting/Boundary edges, even "select all"): Quick mode then keeps an
+    /// object they miss instead of erasing it.
+    edges_chosen: bool,
 }
 
 impl TrimM {
     pub(crate) fn new(extend: bool) -> Self {
-        TrimM { extend, edges: None, stage: Stage::Pick, undo: Vec::new() }
+        TrimM { extend, edges: None, stage: Stage::Pick, undo: Vec::new(), edges_chosen: false }
     }
     fn edges(&self, quick: bool, implied: bool) -> Edges<'_> {
         Edges { only: self.edges.as_deref(), implied: !quick && implied }
@@ -248,6 +253,7 @@ impl TrimM {
     fn select_edges(&mut self, s: &mut Session) {
         s.echo(if self.extend { "Select boundary edges ..." } else { "Select cutting edges ..." });
         s.set_selection(Vec::new());
+        self.edges_chosen = true;
         self.stage = Stage::Edges(Vec::new());
     }
     /// Run `f` as one undoable step of the command; a step that changed nothing records none.
@@ -278,6 +284,7 @@ impl TrimM {
                 s.doc_mut()?.header.set_i64("TRIMEXTENDMODE", i64::from(quick));
                 if quick {
                     self.edges = None;
+                    self.edges_chosen = false;
                     self.stage = Stage::Pick;
                 } else {
                     self.select_edges(s);
@@ -378,7 +385,7 @@ impl Interactive for TrimM {
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
-        let quick = quick_mode(s);
+        let quick = quick_mode(s) && !self.edges_chosen;
         let implied = edge_mode(s);
         let extending = self.extend;
         match self.stage.clone() {

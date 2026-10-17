@@ -232,7 +232,7 @@ fn read_link(id: &str, path: &str) -> Result<String> {
         if meta.len() > MAX_LINK_BYTES {
             return Err(bad(id, format!("{path}: larger than {} MB", MAX_LINK_BYTES >> 20)));
         }
-        let bytes = std::fs::read(path).map_err(|e| bad(id, format!("{path}: {e}")))?;
+        let bytes = crate::readfile::read(path).map_err(|e| bad(id, format!("{path}: {e}")))?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
     #[cfg(target_arch = "wasm32")]

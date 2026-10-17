@@ -196,7 +196,7 @@ fn run_script(s: &mut Session, p: &Value) -> Result<Value> {
         let path = _path;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let bytes = std::fs::read(path).map_err(|e| bad("script", format!("{path}: {e}")))?;
+            let bytes = crate::readfile::read(path).map_err(|e| bad("script", format!("{path}: {e}")))?;
             String::from_utf8_lossy(&bytes).into_owned()
         }
         #[cfg(target_arch = "wasm32")]
@@ -283,7 +283,7 @@ pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let r = std::panic::catch_unwind(|| {
-            let bytes = std::fs::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
+            let bytes = crate::readfile::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
             read_bytes(&bytes, path, Some(path.to_string()))
         });
         match r {
@@ -351,7 +351,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
         let path = _path;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let bytes = std::fs::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
+            let bytes = crate::readfile::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
             let i = open_bytes(s, &bytes, path, Some(path.to_string()))?;
             super::blocks::xref::after_open(s, i);
             return Ok(opened(s, i, true));

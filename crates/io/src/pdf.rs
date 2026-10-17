@@ -394,7 +394,7 @@ struct SheetPage {
 /// Plot one space.
 fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String)]) -> Result<SheetPage> {
     let page = page_for(d, space, o)?;
-    let unit_mm = paper::paper_unit_mm(d);
+    let unit_mm = paper::page_unit_mm(d, &page);
     let sheet = Sheet::from_page(&page, unit_mm);
     let lineweights = o.lineweights.unwrap_or(if space.is_paper() { page.lineweights } else { true });
     let plot_style_table = cadcraft_doc::plot_style_table(d, &page.plot_style_table).map(std::sync::Arc::new);
@@ -428,7 +428,8 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
         let (from, to) = placement(space, &b, fit, &sheet, o);
         Map { from, s, to, k }
     } else {
-        Map { from: Vec2::ZERO, s, to: Vec2::ZERO, k }
+        // A layout at 1:1: the page shows its sheet, wherever the layout keeps it.
+        Map { from: layout_origin(d, space), s, to: Vec2::ZERO, k }
     };
     // Plot style ends, joins and fill patterns at the plot scale (a layout's are already drawn).
     let mut list = list;
@@ -451,6 +452,14 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
     }
     let links = links(&list, &map, &clip_pt, links_to);
     Ok(SheetPage { media, list, map, clip_pt, layers, links, label: sheet_name(space) })
+}
+
+/// Paper-space position of the sheet a layout plots (zero for model space).
+pub(crate) fn layout_origin(d: &Drawing, space: &Space) -> Vec2 {
+    match space {
+        Space::Paper(name) => paper::layout_origin(d, name),
+        Space::Model => Vec2::ZERO,
+    }
 }
 
 /// Source and destination origins for the shared model-space PDF/PNG placement behavior.

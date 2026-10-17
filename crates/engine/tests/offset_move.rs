@@ -97,3 +97,36 @@ fn copy_displacement() {
     assert!(s.running.is_none(), "{}", s.prompt_text());
     assert_eq!(lines(&s), vec![l((0.0, 0.0), (10.0, 0.0), "0"), l((0.0, 3.0), (10.0, 3.0), "0")]);
 }
+
+/// The x of every circle's centre, sorted.
+fn circle_xs(s: &Session) -> Vec<f64> {
+    let mut v: Vec<f64> = s
+        .doc()
+        .unwrap()
+        .model
+        .iter()
+        .filter_map(|e| if let EntityKind::Circle(c) = &e.kind { Some((c.center.x * 1e6).round() / 1e6) } else { None })
+        .collect();
+    v.sort_by(f64::total_cmp);
+    v
+}
+
+#[test]
+fn copy_array_fit_and_undo() {
+    // COPY Array: 5 items (the original is the first), the second point places the second.
+    let mut s = Session::new();
+    s.cmdline("CIRCLE 10,10 0.5").unwrap();
+    s.script("COPY 10.5,10\n\n10,10 A 5 @5,0\n\n").unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert_eq!(circle_xs(&s), vec![10.0, 15.0, 20.0, 25.0, 30.0]);
+    // Fit: the second point is the last item.
+    let mut s = Session::new();
+    s.cmdline("CIRCLE 0,0 0.5").unwrap();
+    s.script("COPY 0.5,0\n\n0,0 A 3 F 10,0\n\n").unwrap();
+    assert_eq!(circle_xs(&s), vec![0.0, 5.0, 10.0]);
+    // Undo removes the last placement only.
+    let mut s = Session::new();
+    s.cmdline("CIRCLE 0,0 0.5").unwrap();
+    s.script("COPY 0.5,0\n\n0,0 5,0 10,0 U\n\n").unwrap();
+    assert_eq!(circle_xs(&s), vec![0.0, 5.0]);
+}

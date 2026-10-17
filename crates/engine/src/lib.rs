@@ -21,6 +21,8 @@ pub mod lisp;
 pub mod mtext_edit;
 pub mod pointmod;
 pub mod prompt;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod readfile;
 mod recent;
 pub mod sample;
 pub mod select;

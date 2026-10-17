@@ -1,7 +1,7 @@
 # Flatpak manifest for the single-file bundle attached to every GitHub release
-# (cadcraft-<version>-linux-<arch>.flatpak). Build it with packaging/linux/flatpak-bundle.sh.
+# (cadaddy-<version>-linux-<arch>.flatpak). Build it with packaging/linux/flatpak-bundle.sh.
 #
-# It repackages the release's own Linux tarball (cadcraft-<version>-linux-<arch>.tar.gz, built
+# It repackages the release's own Linux tarball (cadaddy-<version>-linux-<arch>.tar.gz, built
 # on Ubuntu 22.04 by package.sh) instead of compiling Rust inside flatpak-builder: no network and
 # no vendored crate sources during the build, a few seconds instead of many minutes, and
 # byte-for-byte the same binaries as the AppImage/deb/rpm. The script unpacks the tarball into
@@ -9,13 +9,13 @@
 # xkbcommon and Vulkan at runtime; the freedesktop runtime has all of them, and the GPU driver
 # comes from its org.freedesktop.Platform.GL extension.
 #
-# ai.storyteller.cadcraft.yml (same directory) is the from-source manifest for Flathub. Keep
+# dev.aicodeforge.cadaddy.yml (same directory) is the from-source manifest for Flathub. Keep
 # runtime, runtime-version, sdk and finish-args identical in both (packaging-lint checks this).
-id: ai.storyteller.cadcraft
+id: dev.aicodeforge.cadaddy
 runtime: org.freedesktop.Platform
 runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
-command: cadcraft
+command: cadaddy
 finish-args:
   # Display: Wayland first; X11 only when no Wayland compositor is running.
   - --socket=wayland
@@ -31,20 +31,20 @@ finish-args:
   - --filesystem=xdg-documents
   - --filesystem=xdg-pictures
   # Deliberately not granted: network (the optional --control server listens on 127.0.0.1 in
-  # the sandbox; `flatpak override --user --share=network ai.storyteller.cadcraft` exposes it to
+  # the sandbox; `flatpak override --user --share=network dev.aicodeforge.cadaddy` exposes it to
   # host agents) and home/host filesystem access.
 modules:
-  - name: cadcraft
+  - name: cadaddy
     buildsystem: simple
     build-commands:
-      - install -Dm755 bin/cadcraft /app/bin/cadcraft
-      - install -Dm755 bin/cadcraft-cli /app/bin/cadcraft-cli
-      - install -Dm644 share/applications/ai.storyteller.cadcraft.desktop /app/share/applications/ai.storyteller.cadcraft.desktop
+      - install -Dm755 bin/cadaddy /app/bin/cadaddy
+      - install -Dm755 bin/cadaddy-cli /app/bin/cadaddy-cli
+      - install -Dm644 share/applications/dev.aicodeforge.cadaddy.desktop /app/share/applications/dev.aicodeforge.cadaddy.desktop
       # .dxf and .dwg.
-      - install -Dm644 share/mime/packages/ai.storyteller.cadcraft.xml /app/share/mime/packages/ai.storyteller.cadcraft.xml
+      - install -Dm644 share/mime/packages/dev.aicodeforge.cadaddy.xml /app/share/mime/packages/dev.aicodeforge.cadaddy.xml
       # Already has the release's version and date substituted by package.sh.
-      - install -Dm644 share/metainfo/ai.storyteller.cadcraft.metainfo.xml /app/share/metainfo/ai.storyteller.cadcraft.metainfo.xml
-      - mkdir -p /app/share/icons /app/share/doc && cp -R share/icons/hicolor /app/share/icons/ && cp -R share/doc/cadcraft /app/share/doc/
+      - install -Dm644 share/metainfo/dev.aicodeforge.cadaddy.metainfo.xml /app/share/metainfo/dev.aicodeforge.cadaddy.metainfo.xml
+      - mkdir -p /app/share/icons /app/share/doc && cp -R share/icons/hicolor /app/share/icons/ && cp -R share/doc/cadaddy /app/share/doc/
     sources:
       - type: dir
         path: stage

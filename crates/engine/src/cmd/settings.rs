@@ -15,6 +15,43 @@ fn toggle(s: &mut Session, p: &Value, get: fn(&mut crate::Settings) -> &mut bool
     Ok(json!({ "on": on, "message": format!("<{name} {}>", if on { "on" } else { "off" }) }))
 }
 
+/// ORTHO typed at the command line: "Enter mode [ON/OFF] <current>", as in AutoCAD (F8 and the
+/// status bar toggle without asking).
+struct OrthoM;
+
+impl Interactive for OrthoM {
+    fn name(&self) -> &'static str {
+        "ORTHO"
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        Prompt::new("Enter mode", Accept { enter: true, ..Accept::default() }).kw(&["ON", "OFF"]).default(if s.settings.orthomode {
+            "ON"
+        } else {
+            "OFF"
+        })
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        let on = match i {
+            Input::Keyword(k) | Input::Text(k) => match k.trim().to_ascii_lowercase().as_str() {
+                "on" => true,
+                "off" | "of" => false,
+                _ => {
+                    s.echo("Invalid option keyword.");
+                    return Ok(Step::Continue);
+                }
+            },
+            Input::Enter => return Ok(Step::Done),
+            Input::Cancel => return Ok(Step::Cancel),
+            _ => return Ok(Step::Continue),
+        };
+        let r = toggle(s, &json!({ "on": on }), |st| &mut st.orthomode, "Ortho")?;
+        if let Some(m) = r.get("message").and_then(Value::as_str) {
+            s.echo(m);
+        }
+        Ok(Step::Done)
+    }
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("ortho", "Ortho Mode", |s, p| toggle(s, p, |st| &mut st.orthomode, "Ortho"))
@@ -22,7 +59,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{on?: bool}")
             .enabled(always)
             .noundo()
-            .transparent(),
+            .transparent()
+            .interactive(|_| Ok(Box::new(OrthoM))),
         CommandSpec::new("grid", "Grid Display", |s, p| toggle(s, p, |st| &mut st.gridmode, "Grid"))
             .key("F7")
             .params("{on?: bool}")

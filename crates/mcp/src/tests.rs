@@ -210,3 +210,16 @@ fn a_lazy_bridge_starts_without_the_app_and_says_how_to_open_it() {
     assert_ne!(r["result"]["isError"], json!(true), "{r}");
     app.join().unwrap();
 }
+
+#[test]
+fn invalid_utf8_is_a_parse_error_not_the_end_of_the_session() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let input: &[u8] = b"\xff\xfe\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}\r\n";
+    let mut out = Vec::new();
+    s.serve(input, &mut out).expect("serve");
+    let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    assert_eq!(replies[0]["error"]["code"], -32700);
+    assert_eq!(replies[1]["id"], 2);
+    assert!(replies[1]["error"].is_null(), "{}", replies[1]);
+}

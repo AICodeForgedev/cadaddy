@@ -112,3 +112,14 @@ fn attsync_brings_references_in_line_with_the_definitions() {
     // The JSON form, by a reference's handle.
     assert_eq!(s.execute("attsync", &json!({"handle": r1.hex()})).unwrap(), json!({"block": "B", "references": 3}));
 }
+
+#[test]
+fn typed_attdef_asks_for_height_and_rotation() {
+    let mut s = Session::new();
+    s.script("ATTDEF\nDOORNO\nDoor number\nD1\n101,1\n0.3\n90\n").unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    let d = s.doc().unwrap();
+    let a = d.model.iter().find_map(|e| if let cadcraft_doc::EntityKind::AttDef(a) = &e.kind { Some(a.clone()) } else { None }).expect("attdef");
+    assert_eq!(a.tag, "DOORNO");
+    assert!((a.text.height - 0.3).abs() < 1e-9 && (a.text.rotation.to_degrees() - 90.0).abs() < 1e-9, "{:?}", a.text);
+}

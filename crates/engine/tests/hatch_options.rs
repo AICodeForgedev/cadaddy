@@ -172,3 +172,42 @@ fn hatchedit_refuses_unknown_patterns_and_region_boundaries() {
     // Region boundaries need REGION objects; the hatch is left as it was.
     assert!(s.execute("hatchedit", &json!({ "handles": [h], "recreate": "region" })).is_err());
 }
+
+#[test]
+fn hatch_pattern_option_asks_for_scale_and_angle() {
+    // -HATCH > Pattern: name, scale, angle, as AutoCAD asks them.
+    let mut s = Session::new();
+    rect(&mut s, [0.0, 0.0], [10.0, 10.0]);
+    s.script("-HATCH P ANSI31 2 45 5,5\n\n").unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    let hs = all_hatches(&s);
+    assert_eq!(hs.len(), 1);
+    let h = &hs[0].1;
+    assert_eq!(h.pattern.to_ascii_uppercase(), "ANSI31");
+    assert!((h.scale - 2.0).abs() < 1e-9 && (h.angle.to_degrees() - 45.0).abs() < 1e-9, "{} {}", h.scale, h.angle);
+    // A solid fill has no scale or angle to ask for; Enter keeps a value.
+    let mut s = Session::new();
+    rect(&mut s, [0.0, 0.0], [10.0, 10.0]);
+    s.script("-HATCH P SOLID 5,5\n\n").unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert_eq!(all_hatches(&s).len(), 1);
+}
+
+#[test]
+fn a_boundary_follows_a_door_swing_and_leaves_text_as_an_island() {
+    let mut s = Session::new();
+    rect(&mut s, [0.0, 0.0], [20.0, 20.0]);
+    // A door block: its leaf along the top wall and its quarter-circle swing into the room.
+    let leaf = s.execute("line", &json!({ "points": [[0, 0], [3, 0]] })).unwrap()["handles"][0].as_str().unwrap().to_string();
+    let swing = handle(&s.execute("arc", &json!({ "center": [0, 0], "radius": 3, "start": -90, "end": 0 })).unwrap());
+    s.execute("block", &json!({ "name": "DOOR", "base": [0, 0], "handles": [leaf, swing], "keep": "delete" })).unwrap();
+    s.execute("insert", &json!({ "name": "DOOR", "at": [0, 20] })).unwrap();
+    s.execute("text", &json!({ "at": [8, 5], "text": "BEDROOM", "height": 1 })).unwrap();
+    let h = handle(&s.execute("hatch", &json!({ "points": [[10, 10]] })).unwrap());
+    let hh = hatch(&s, &h);
+    let outer = hh.loops.iter().find(|l| l.outer).expect("outer loop");
+    // The swing's bounding-box corner (3,17) is not a boundary vertex: the loop follows the arc.
+    assert!(outer.vertices.iter().all(|v| v.p.dist(Vec2::new(3.0, 17.0)) > 0.1), "{:?}", outer.vertices);
+    // The text is an island.
+    assert!(hh.loops.iter().any(|l| !l.outer && l.vertices.iter().any(|v| (v.p.y - 5.0).abs() < 1.0)), "{:?}", hh.loops);
+}
