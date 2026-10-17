@@ -94,6 +94,7 @@ fn a_dimension_drawn_from_its_block_is_picked_on_the_block_text() {
     let block = cadcraft_engine::doc::Block {
         xref_overlay: false,
         xref_status: Default::default(),
+        xref_reason: String::new(),
         name: "*D1".into(),
         annotative: false,
         base: Default::default(),

@@ -663,6 +663,9 @@ pub struct Block {
     /// Whether an xref's objects are loaded, and why not (session state; not saved).
     #[serde(default)]
     pub xref_status: XrefStatus,
+    /// Why an xref isn't loaded (the file it couldn't find or read), empty when it is.
+    #[serde(skip)]
+    pub xref_reason: String,
     /// Anonymous (`*D12`, `*U3`…) blocks are generated geometry.
     #[serde(default)]
     pub anonymous: bool,
@@ -715,6 +718,7 @@ impl Block {
             entities: EntityStore::new(),
             xref_overlay: false,
             xref_status: XrefStatus::NotLoaded,
+            xref_reason: String::new(),
             description: String::new(),
             anonymous: name.starts_with('*'),
             xref_path: None,

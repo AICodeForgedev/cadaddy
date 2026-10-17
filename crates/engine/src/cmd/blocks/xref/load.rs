@@ -316,6 +316,9 @@ fn load_in(d: &mut Drawing, name: &str, host: Option<&Path>, chosen: bool, cx: &
         clear(d, &key);
     }
     set_status(d, &key, status);
+    if let Some(b) = d.blocks.get_mut(&key) {
+        Arc::make_mut(b).xref_reason = if status == XrefStatus::Loaded { String::new() } else { detail.clone() };
+    }
     (status, detail)
 }
 

@@ -175,6 +175,9 @@ enum Atom {
 
 /// Upper bound on parsed atoms (hostile contents).
 const MAX_ATOMS: usize = 200_000;
+/// Space before a fraction stack (`/` or `#`), as a fraction of the text height.
+const STACK_LEAD: f64 = 0.15;
+
 /// Scale of stacked text relative to the surrounding text.
 const STACK_SCALE: f64 = 0.7;
 
@@ -415,9 +418,9 @@ fn seg_width(seg: &Seg, f: &Fmt) -> f64 {
             let wt = text_width(&f.font, top, hs, f.wf);
             let wb = text_width(&f.font, bottom, hs, f.wf);
             match sep {
-                '#' => wt + wb + f.height * 0.5,
+                '#' => STACK_LEAD * f.height + wt + wb + f.height * 0.5,
                 '^' => wt.max(wb),
-                _ => wt.max(wb) + f.height * 0.2,
+                _ => STACK_LEAD * f.height + wt.max(wb) + f.height * 0.2,
             }
         }
     }
@@ -444,6 +447,7 @@ fn seg_shape(seg: &Seg, f: &Fmt, x: f64) -> Shaped {
             let wb = text_width(&f.font, bottom, hs, f.wf);
             match sep {
                 '#' => {
+                    let x = x + STACK_LEAD * h;
                     out.extend(put(top, hs, Vec2::new(x, h * 0.4)));
                     let sx = x + wt + h * 0.1;
                     out.extend(put(bottom, hs, Vec2::new(sx + h * 0.4, -h * 0.05)));
@@ -461,6 +465,8 @@ fn seg_shape(seg: &Seg, f: &Fmt, x: f64) -> Shaped {
                     out.extend(put(bottom, hs, Vec2::new(x, yb)));
                 }
                 _ => {
+                    // The bar starts after a small gap, clear of the text before it (20'-0 ½").
+                    let (x, w) = (x + STACK_LEAD * h, w - STACK_LEAD * h);
                     let bar = h * 0.45;
                     out.extend(put(top, hs, Vec2::new(x + (w - wt) / 2.0, bar + h * 0.12)));
                     out.extend(put(bottom, hs, Vec2::new(x + (w - wb) / 2.0, bar - h * 0.12 - hs)));

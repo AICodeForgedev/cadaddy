@@ -30,7 +30,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("xref", "Reference Manager", run_xref)
             .menu(&["Window", "Reference Manager"])
             .alias(&["xr", "externalreferences"])
-            .params("{} → {xrefs: [{name, path, foundAt, type: Attach|Overlay, status: Loaded|Unloaded|Not Found|Unresolved|Unreferenced|Not loaded, references, objects}]} (the app opens the External References palette instead)")
+            .params("{} → {xrefs: [{name, path, foundAt, type: Attach|Overlay, status: Loaded|Unloaded|Not Found|Unresolved|Unreferenced|Not loaded, reason? (why it isn't loaded), references, objects}]} (the app opens the External References palette instead)")
             .noundo(),
         CommandSpec::new("-xref", "External References", run_dash_xref)
             .alias(&["-xr"])
@@ -112,6 +112,7 @@ fn describe(d: &Drawing, b: &Block, host: Option<&str>) -> Value {
         "foundAt": found,
         "type": if b.xref_overlay { "Overlay" } else { "Attach" },
         "status": status,
+        "reason": (!b.xref_reason.is_empty()).then_some(&b.xref_reason),
         "references": refs,
         "objects": b.entities.len(),
     })

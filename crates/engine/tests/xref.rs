@@ -222,8 +222,14 @@ fn missing_files_leave_the_host_intact() {
     let host = dir.join("host.dxf");
     save(&host_with(&[("gone.dxf", false)]), &host);
     let mut s = Session::new();
-    open(&mut s, &host);
+    let r = s.execute("open", &json!({ "path": host.to_string_lossy() })).unwrap();
     assert_eq!((status(&s, "gone"), objects(&s, "gone")), (Some(XrefStatus::NotFound), 0));
+    // Agents see why in the open result and the xref list, not only in the command history.
+    let warned = r["warnings"].as_array().unwrap().iter().filter_map(|w| w.as_str()).any(|w| w.contains("gone") && w.contains("not found"));
+    assert!(warned, "{r}");
+    let list = s.execute("xref", &json!({})).unwrap();
+    let gone = list["xrefs"].as_array().unwrap().iter().find(|x| x["name"] == "gone").unwrap().clone();
+    assert!(gone["reason"].as_str().is_some_and(|r| !r.is_empty()), "{gone}");
     assert!(s.log.iter().any(|m| m.contains("gone") && m.contains("not loaded")), "{:?}", s.log);
     // The reference survives a save.
     s.execute("qsave", &json!({})).unwrap();

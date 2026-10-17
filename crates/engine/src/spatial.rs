@@ -289,6 +289,7 @@ mod tests {
         let mut blk = Block {
             xref_overlay: false,
             xref_status: Default::default(),
+            xref_reason: String::new(),
             name: "B".into(),
             annotative: false,
             base: Vec3::default(),

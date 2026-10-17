@@ -381,7 +381,13 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
 /// OPEN's reply: the drawing's index and what reading it left out.
 fn opened(s: &Session, i: usize, entities: bool) -> Value {
     let d = s.docs.get(i).map(|st| &st.doc);
-    let warnings = d.map(|d| d.read_notes.clone()).unwrap_or_default();
+    let mut warnings = d.map(|d| d.read_notes.clone()).unwrap_or_default();
+    // Xrefs that didn't load, and why (agents see no command-line history).
+    if let Some(d) = d {
+        for b in d.blocks.values().filter(|b| b.xref_path.is_some() && !b.xref_reason.is_empty()) {
+            warnings.push(format!("Xref \"{}\" {}: {}", b.name, b.xref_status.label().to_ascii_lowercase(), b.xref_reason));
+        }
+    }
     if entities {
         json!({ "index": i, "entities": d.map(|d| d.entity_count()), "warnings": warnings })
     } else {
