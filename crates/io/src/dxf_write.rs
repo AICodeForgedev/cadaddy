@@ -809,6 +809,21 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             // Line spacing style: 1 = at least, 2 = exactly.
             w.i(73, if t.line_spacing_exact { 2 } else { 1 });
             w.f(44, t.line_spacing);
+            // Background mask: 90 = 1 (fill colour) or 3 (the drawing's background colour), then
+            // its colour, border scale and transparency.
+            if let Some(bg) = &t.background {
+                w.i(90, if bg.color.is_none() { 3 } else { 1 });
+                match bg.color {
+                    Some(Color::True(rgb)) => {
+                        w.i(63, i64::from(cadcraft_color::nearest_aci(rgb)));
+                        w.i(421, i64::from(rgb.to_u32()));
+                    }
+                    Some(c) => w.i(63, i64::from(c.to_aci())),
+                    None => w.i(63, 256),
+                }
+                w.f(45, bg.scale);
+                w.i(441, bg.transparency);
+            }
             w.t.extend(crate::dxf_read::mtext_dxf::column_tags(t));
         }
         EntityKind::Insert(i) => {
@@ -1375,6 +1390,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
             handle: Handle(0),
             common: c,
             kind: EntityKind::MText(MText {
+                background: None,
                 insert: g.text_pos.to3(0.0),
                 height: g.text_height,
                 width: 0.0,
@@ -1426,6 +1442,7 @@ fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
                 handle: Handle(0),
                 common: Common { color: cell.color, ..c.clone() },
                 kind: EntityKind::MText(MText {
+                    background: None,
                     insert: cell.at.to3(0.0),
                     height: cell.height,
                     width: 0.0,

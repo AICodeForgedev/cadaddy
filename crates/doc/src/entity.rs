@@ -280,6 +280,35 @@ pub struct MText {
     /// one column.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub columns: Option<MTextColumns>,
+    /// Background mask (DXF 90/63/421/45/441): a fill behind the text, so it reads over
+    /// hatches and lines. `None` when off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<MTextBackground>,
+}
+
+/// An MTEXT background mask.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MTextBackground {
+    /// The fill colour; `None` uses the drawing's background colour (AutoCAD's "Use drawing
+    /// background color", DXF 90 bit 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
+    /// How far the fill reaches past the text, as a multiple of the text height: 1.0 fits it
+    /// exactly, AutoCAD's default is 1.5 (DXF 45).
+    #[serde(default = "mask_scale")]
+    pub scale: f64,
+    /// The fill's transparency as stored in the file (DXF 441), kept for round trips.
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub transparency: i64,
+}
+
+fn mask_scale() -> f64 {
+    1.5
+}
+
+fn is_zero_i64(v: &i64) -> bool {
+    *v == 0
 }
 fn attach_tl() -> u8 {
     1

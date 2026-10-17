@@ -22,6 +22,7 @@ fn text_mleader() -> MLeader {
         landing: Vec3::new(5.0, 4.0, 0.0),
         dogleg: 0.75,
         text: Some(MText {
+            background: None,
             insert: Vec3::new(5.9, 4.0, 0.0),
             height: 0.4,
             width: 6.0,

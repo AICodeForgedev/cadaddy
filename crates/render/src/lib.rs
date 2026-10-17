@@ -1271,6 +1271,11 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if !b.opts.text {
                 return;
             }
+            if let Some(bg) = &t.background {
+                let layer = if e.common.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { e.common.layer.as_str() };
+                let layer_color = ctx.layer_color(layer).unwrap_or(Color::Index(7));
+                mtext_mask(b, ctx, t, bg, rgb, layer_color);
+            }
             mtext(b, ctx, t, rgb, lw);
         }
         EntityKind::Insert(ins) => insert(b, ctx, e, ins, rgb),
@@ -1504,6 +1509,45 @@ fn mtext_color(c: Option<cadcraft_fonts::MTextColor>, rgb: Ink) -> Ink {
             Ink { rgb: Rgb(((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8), aci7: false, aci: 0 }
         }
         None => rgb,
+    }
+}
+
+/// An MTEXT's background mask: a box round the laid-out text (in the text's own direction),
+/// reaching `scale - 1` text heights past it, filled with the mask colour or, like a wipeout,
+/// with the drawing's background. Drawn before the text, so it hides what lies beneath.
+fn mtext_mask(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::MText, bg: &cadcraft_doc::MTextBackground, rgb: Ink, layer_color: Color) {
+    if !b.opts.fill {
+        return;
+    }
+    let l = layout_mtext_entity(ctx.d, t);
+    let o = t.insert.xy();
+    let (sin, cos) = t.rotation.sin_cos();
+    // Into the text's frame (rotation undone about the insertion point) and back.
+    let local = |p: Vec2| {
+        let d = p - o;
+        Vec2::new(d.x * cos + d.y * sin, -d.x * sin + d.y * cos)
+    };
+    let world = |q: Vec2| o + Vec2::new(q.x * cos - q.y * sin, q.x * sin + q.y * cos);
+    let mut bx = Bounds2::EMPTY;
+    for p in l.strokes.iter().flatten() {
+        bx.add(local(*p));
+    }
+    if bx.is_empty() || !bx.min.is_finite() || !bx.max.is_finite() {
+        return;
+    }
+    let margin = (bg.scale - 1.0).clamp(0.0, 10.0) * t.height;
+    let bx = bx.expand(margin);
+    let q = [world(bx.min), world(Vec2::new(bx.max.x, bx.min.y)), world(bx.max), world(Vec2::new(bx.min.x, bx.max.y))];
+    let tris = [q[0], q[1], q[2], q[0], q[2], q[3]];
+    match bg.color {
+        Some(c) => b.tris(ctx, ink(c, layer_color, ctx.block_color), &tris),
+        None => {
+            let n = b.list.prims.len();
+            b.tris(ctx, rgb, &tris);
+            if let Some(p) = b.list.prims.get_mut(n) {
+                p.kind = Kind::Mask;
+            }
+        }
     }
 }
 

@@ -161,7 +161,24 @@ fn mtext_from(tags: &[Tag], c: &Common) -> MText {
             a => a,
         };
     }
+    // Background mask: 90 bit 1 = a fill colour (63, or 421 true colour), bit 2 = the drawing's
+    // background colour; 45 = how far it reaches past the text; 441 = its transparency.
+    let flags = own.i(90).unwrap_or(0);
+    let background = (flags & 3 != 0).then(|| cadcraft_doc::MTextBackground {
+        color: if flags & 2 != 0 {
+            None
+        } else {
+            Some(match (own.i(421), own.i(63)) {
+                (Some(tc), _) => Color::True(Rgb::from_u32(tc as u32)),
+                (None, Some(aci)) => Color::from_aci(aci as i16),
+                (None, None) => Color::ByLayer,
+            })
+        },
+        scale: own.f(45).filter(|s| s.is_finite() && *s > 0.0 && *s < 100.0).unwrap_or(1.5),
+        transparency: own.i(441).unwrap_or(0),
+    });
     MText {
+        background,
         insert: t.p(10),
         height: t.fd(40, 0.2).max(1e-9),
         width: match &columns {

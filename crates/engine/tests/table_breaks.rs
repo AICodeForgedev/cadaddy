@@ -132,6 +132,7 @@ fn data_links_saved_in_a_drawing_are_read_beside_it_or_on_this_computer_only() {
         read: |b, name| cadcraft_io::read(b, name).map_err(|e| e.to_string()),
         write: |d, name| cadcraft_io::write(d, name).map_err(|e| e.to_string()),
         plot: None,
+        read_pdf: None,
     });
     let base = std::env::temp_dir().join(format!("cadcraft-datalink-saved-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);

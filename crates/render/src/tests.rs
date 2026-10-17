@@ -329,6 +329,7 @@ fn truetype_mtext_and_dimension_text() {
         &Space::Model,
         Common::default(),
         EntityKind::MText(cadcraft_doc::MText {
+            background: None,
             insert: Vec3::ZERO,
             height: 1.0,
             width: 0.0,
@@ -861,6 +862,7 @@ fn attributes_follow_the_reference_layer_and_have_no_definition() {
 fn mtext_exact_spacing_ignores_taller_lines() {
     // #711: a doubled middle line pushes the next baseline down with At least, not with Exactly.
     let mtext = |contents: &str, line_spacing: f64, line_spacing_exact: bool| cadcraft_doc::MText {
+        background: None,
         insert: Vec3::ZERO,
         height: 1.0,
         width: 10.0,
@@ -923,4 +925,44 @@ fn cancelled_build_stops_early() {
     let drawing = cadcraft_doc::Drawing::new_imperial();
     assert!(!crate::hatch::pattern_lines_until(&drawing, &h, &loops, 0.0, None, None).is_empty());
     assert!(crate::hatch::pattern_lines_until(&drawing, &h, &loops, 0.0, None, set.as_deref()).is_empty());
+}
+
+#[test]
+fn mtext_background_mask_draws_under_the_text() {
+    let mt = |bg: Option<cadcraft_doc::MTextBackground>| {
+        EntityKind::MText(cadcraft_doc::MText {
+            background: bg,
+            insert: Vec3::new(0.0, 10.0, 0.0),
+            height: 2.0,
+            width: 0.0,
+            attach: 1,
+            rotation: 0.3,
+            style: "Standard".into(),
+            contents: "NOTE".into(),
+            line_spacing: 1.0,
+            line_spacing_exact: false,
+            columns: None,
+        })
+    };
+    let opts = Options { fill: true, text: true, ..Options::default() };
+    // The drawing's background: a mask (like a wipeout), drawn first.
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), mt(Some(cadcraft_doc::MTextBackground { color: None, scale: 1.5, transparency: 0 }))).unwrap();
+    let l = build(&d, &Space::Model, &opts);
+    assert_eq!(l.prims.first().map(|p| p.kind), Some(Kind::Mask), "{:?}", l.prims.iter().map(|p| p.kind).collect::<Vec<_>>());
+    assert!(l.prims.len() > 1, "the text is drawn over the mask");
+    // A fill colour: an ordinary filled box, still first.
+    let mut d = Drawing::new_imperial();
+    d.add(
+        &Space::Model,
+        Common::default(),
+        mt(Some(cadcraft_doc::MTextBackground { color: Some(cadcraft_color::Color::Index(1)), scale: 1.5, transparency: 0 })),
+    )
+    .unwrap();
+    let l = build(&d, &Space::Model, &opts);
+    assert!(l.prims.first().is_some_and(|p| p.kind.is_fill() && p.kind != Kind::Mask));
+    // No mask: no fill at all.
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), mt(None)).unwrap();
+    assert!(!build(&d, &Space::Model, &opts).prims.iter().any(|p| p.kind == Kind::Mask));
 }

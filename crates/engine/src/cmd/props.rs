@@ -17,7 +17,7 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
-        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>}"),
+        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, background?: true | false | {color?, scale?} (MTEXT mask), <geometry fields: radius, center, start, end, text, height, rotation…>}"),
         CommandSpec::new("chprop", "Change Properties", run_set)
             .params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?} (typed: AutoCAD's property prompts)")
             .interactive(|_| Ok(Box::new(chprop::ChpropM::new(false)))),
@@ -229,6 +229,26 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let dim_style = str_param(p, "dimStyle")
         .map(|n| d.dim_style(n).map(|st| st.name.clone()).ok_or_else(|| bad("properties.set", format!("dimension style `{n}` not found"))))
         .transpose()?;
+    // MTEXT background mask: true (the drawing's background colour), {color?, scale?}, or
+    // false / null to remove it.
+    let background: Option<Option<cadcraft_doc::MTextBackground>> = match p.get("background") {
+        None => None,
+        Some(Value::Null | Value::Bool(false)) => Some(None),
+        Some(Value::Bool(true)) => Some(Some(cadcraft_doc::MTextBackground { color: None, scale: 1.5, transparency: 0 })),
+        Some(Value::Object(o)) => {
+            let color = match o.get("color") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(c)) if c.eq_ignore_ascii_case("background") => None,
+                Some(c) => Some(parse_color(c).ok_or_else(|| bad("properties.set", "bad background colour"))?),
+            };
+            let scale = o.get("scale").and_then(Value::as_f64).unwrap_or(1.5);
+            if !(1.0..=5.0).contains(&scale) {
+                return Err(bad("properties.set", "background `scale` must be from 1 to 5"));
+            }
+            Some(Some(cadcraft_doc::MTextBackground { color, scale, transparency: 0 }))
+        }
+        Some(_) => return Err(bad("properties.set", "`background` is true, false or {color?, scale?}")),
+    };
     let anno_scale = d.current_anno_scale();
     for h in &hs {
         d.modify_entity(*h, |e| {
@@ -343,6 +363,9 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                     }
                     if let Some(x) = num("rotation") {
                         t.rotation = x.to_radians();
+                    }
+                    if let Some(bg) = &background {
+                        t.background = bg.clone();
                     }
                 }
                 EntityKind::LwPolyline(pl) => {

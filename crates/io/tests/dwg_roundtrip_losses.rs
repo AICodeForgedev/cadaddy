@@ -260,3 +260,45 @@ fn the_current_dimension_style_survives_dwg_without_header_overrides() {
     let dxf = cadcraft_io::read_dxf(cadcraft_io::write_dxf(&d).as_bytes()).unwrap();
     assert!(dxf.dim_overrides().is_empty(), "overrides after DXF: {:?}", dxf.dim_overrides());
 }
+
+#[test]
+fn mtext_background_masks_survive_dxf_and_dwg() {
+    // A note's background mask (MTEXT 90/63/45/441) used to be dropped on open and on save.
+    let mut d = Drawing::new_imperial();
+    let mt = |bg: Option<MTextBackground>, y: f64| {
+        EntityKind::MText(MText {
+            background: bg,
+            insert: Vec3::new(0.0, y, 0.0),
+            height: 2.5,
+            width: 40.0,
+            attach: 1,
+            rotation: 0.0,
+            style: "Standard".into(),
+            contents: "NOTE OVER HATCH".into(),
+            line_spacing: 1.0,
+            line_spacing_exact: false,
+            columns: None,
+        })
+    };
+    let coloured = Some(MTextBackground { color: Some(Color::Index(1)), scale: 1.25, transparency: 0 });
+    let window = Some(MTextBackground { color: None, scale: 1.5, transparency: 0 });
+    let a = d.add(&Space::Model, Common::default(), mt(coloured.clone(), 0.0)).unwrap();
+    let b = d.add(&Space::Model, Common::default(), mt(window.clone(), 10.0)).unwrap();
+    let c = d.add(&Space::Model, Common::default(), mt(None, 20.0)).unwrap();
+    let bg = |d: &Drawing, h: Handle| match &d.entity(h).unwrap().kind {
+        EntityKind::MText(m) => m.background.clone(),
+        k => panic!("{k:?}"),
+    };
+    let dxf = cadcraft_io::read_dxf(cadcraft_io::write_dxf(&d).as_bytes()).unwrap();
+    assert_eq!((bg(&dxf, a), bg(&dxf, b), bg(&dxf, c)), (coloured.clone(), window.clone(), None));
+    let dwg = through_dwg(&d);
+    let find = |d: &Drawing, y: f64| {
+        d.model
+            .iter()
+            .find_map(|e| if let EntityKind::MText(m) = &e.kind { ((m.insert.y - y).abs() < 1e-9).then(|| m.background.clone()) } else { None })
+            .unwrap()
+    };
+    assert_eq!(find(&dwg, 0.0).map(|b| (b.color, (b.scale * 100.0).round())), Some((Some(Color::Index(1)), 125.0)));
+    assert_eq!(find(&dwg, 10.0).map(|b| b.color), Some(None));
+    assert_eq!(find(&dwg, 20.0), None);
+}

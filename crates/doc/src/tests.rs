@@ -464,6 +464,7 @@ fn text_kind(value: &str) -> EntityKind {
 
 fn mtext_kind(contents: &str) -> EntityKind {
     EntityKind::MText(MText {
+        background: None,
         insert: Vec3::new(10.0, 10.0, 0.0),
         height: 2.0,
         width: 0.0,

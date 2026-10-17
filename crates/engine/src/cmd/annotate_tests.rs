@@ -614,3 +614,20 @@ fn properties_set_leaves_locked_layer_objects_alone() {
     assert_eq!(d.entity(a).unwrap().common.color, cadcraft_color::Color::ByLayer);
     assert_eq!(d.entity(b).unwrap().common.color, cadcraft_color::Color::Index(1));
 }
+
+#[test]
+fn properties_set_adds_and_removes_an_mtext_mask() {
+    let mut s = Session::new();
+    let m = h(&s.execute("mtext", &json!({ "at": [0, 0], "text": "NOTE", "height": 2 })).unwrap());
+    let bg = |s: &Session| match &s.doc().unwrap().entity(m).unwrap().kind {
+        EntityKind::MText(t) => t.background.clone(),
+        _ => None,
+    };
+    s.execute("properties.set", &json!({ "handles": [m.hex()], "background": true })).unwrap();
+    assert_eq!(bg(&s).map(|b| (b.color, b.scale)), Some((None, 1.5)));
+    s.execute("properties.set", &json!({ "handles": [m.hex()], "background": { "color": 3, "scale": 1.2 } })).unwrap();
+    assert_eq!(bg(&s).map(|b| (b.color, b.scale)), Some((Some(cadcraft_color::Color::Index(3)), 1.2)));
+    assert!(s.execute("properties.set", &json!({ "handles": [m.hex()], "background": { "scale": 9 } })).is_err());
+    s.execute("properties.set", &json!({ "handles": [m.hex()], "background": false })).unwrap();
+    assert_eq!(bg(&s), None);
+}

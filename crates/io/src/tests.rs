@@ -44,6 +44,7 @@ fn sample() -> Drawing {
         &Space::Model,
         c("0"),
         EntityKind::MText(MText {
+            background: None,
             insert: Vec3::new(5.0, 5.0, 0.0),
             height: 0.2,
             width: 3.0,
@@ -1293,6 +1294,7 @@ fn intl_sample() -> Drawing {
         &Space::Model,
         on.clone(),
         EntityKind::MText(MText {
+            background: None,
             insert: Vec3::new(5.0, 5.0, 0.0),
             height: 2.5,
             width: 30.0,
@@ -1534,6 +1536,7 @@ fn dwg_roundtrip_keeps_extension_data() {
 fn mleader_is_written_as_multileader() {
     let mut d = Drawing::new_metric();
     let text = cadcraft_doc::MText {
+        background: None,
         insert: Vec3::new(12.0, 5.0, 0.0),
         height: 2.5,
         width: 0.0,
