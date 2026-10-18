@@ -669,3 +669,59 @@ fn attributes_and_table_records_are_entities() {
     assert_eq!(ok(&mut s, "(cdr (assoc 2 (entget (tblobjname \"LAYER\" \"0\"))))"), "\"0\"");
     assert_eq!(ok(&mut s, "(tblobjname \"LAYER\" \"NOPE\")"), "nil");
 }
+
+/// Angles in entity lists are radians, as in AutoLISP (DXF keeps most in degrees, MTEXT in
+/// radians): entget gives them, entmod and entmake take them.
+#[test]
+fn entity_list_angles_are_radians() {
+    let mut s = session();
+    ok(&mut s, "(command \"arc\" \"c\" '(0 0) '(10 0) '(0 10))");
+    let arc = ok(&mut s, "(list (cdr (assoc 50 (entget (entlast)))) (cdr (assoc 51 (entget (entlast)))))");
+    assert_eq!(arc, "(0.0 1.5708)", "{arc}");
+    ok(&mut s, "(entmake (list '(0 . \"TEXT\") '(10 0.0 0.0 0.0) '(40 . 2.0) '(1 . \"A\") (cons 50 (/ pi 4))))");
+    assert_eq!(ok(&mut s, "(angtos (cdr (assoc 50 (entget (entlast)))) 0 0)"), "\"45\"");
+    // entmod with a radian angle turns the text 90 degrees.
+    ok(&mut s, "(setq e (entget (entlast)))");
+    ok(&mut s, "(entmod (subst (cons 50 (/ pi 2)) (assoc 50 e) e))");
+    let rot =
+        s.doc().unwrap().model.iter().find_map(|e| if let cadaddy_doc::EntityKind::Text(t) = &e.kind { Some(t.rotation) } else { None }).unwrap();
+    assert!((rot - std::f64::consts::FRAC_PI_2).abs() < 1e-9, "{rot}");
+    // MTEXT stays radians both ways.
+    ok(&mut s, "(entmake (list '(0 . \"MTEXT\") '(10 0.0 0.0 0.0) '(40 . 2.0) '(1 . \"M\") '(50 . 0.5)))");
+    assert_eq!(ok(&mut s, "(cdr (assoc 50 (entget (entlast))))"), "0.5");
+}
+
+/// A TEXT's list always has its rotation, width, obliquing, style, justification, alignment
+/// point and extrusion, even at their defaults, so routines can read them.
+#[test]
+fn text_lists_carry_default_groups() {
+    let mut s = session();
+    ok(&mut s, "(entmake '((0 . \"TEXT\") (10 1.0 2.0 0.0) (40 . 2.0) (1 . \"A\")))");
+    for code in [50, 41, 51, 7, 71, 72, 73, 11, 210] {
+        assert_ne!(ok(&mut s, &format!("(assoc {code} (entget (entlast)))")), "nil", "group {code}");
+    }
+    assert_eq!(ok(&mut s, "(+ 1 (cdr (assoc 50 (entget (entlast)))))"), "1.0");
+}
+
+/// Extended data only when asked for, wrapped as AutoLISP does; it goes back in through entmod.
+#[test]
+fn xdata_comes_when_asked_for() {
+    let mut s = session();
+    ok(&mut s, "(regapp \"MYAPP\")");
+    ok(&mut s, "(entmake '((0 . \"LINE\") (10 0.0 0.0 0.0) (11 5.0 0.0 0.0)))");
+    ok(&mut s, "(setq e (entget (entlast)))");
+    ok(&mut s, "(entmod (append e '((-3 (\"MYAPP\" (1000 . \"hello\") (1070 . 7))))))");
+    assert_eq!(ok(&mut s, "(assoc -3 (entget (entlast)))"), "nil");
+    assert_eq!(ok(&mut s, "(cadr (assoc -3 (entget (entlast) '(\"MYAPP\"))))"), "(\"MYAPP\" (1000 . \"hello\") (1070 . 7))");
+}
+
+#[test]
+fn drawing_name_variables() {
+    let mut s = session();
+    assert!(ok(&mut s, "(getvar \"DWGNAME\")").ends_with(".dwg\""));
+    assert_eq!(ok(&mut s, "(getvar \"DWGTITLED\")"), "0");
+    assert_ne!(ok(&mut s, "(getvar \"DWGPREFIX\")"), "nil");
+    s.state_mut().unwrap().path = Some("C:\\Jobs\\A112\\E-1.dwg".into());
+    assert_eq!(ok(&mut s, "(getvar \"DWGPREFIX\")"), "\"C:\\\\Jobs\\\\A112\\\\\"");
+    assert_eq!(ok(&mut s, "(getvar \"DWGTITLED\")"), "1");
+}

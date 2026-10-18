@@ -228,6 +228,25 @@ fn groups_to_list(tags: &[Tag]) -> Vec<Value> {
 /// An association list back to DXF groups (points split into x, y, z groups). The type
 /// (`0`), the entity name (`-1`), the handle (`5`), the owner (`330`) and the layout (`410`) are
 /// left out: they aren't the entity's to set.
+/// One group's value as DXF groups (a point as its x, y and z groups).
+fn push_group(tags: &mut Vec<Tag>, code: i32, v: &Value) -> Result<(), LispError> {
+    if point_group(code) && matches!(v, Value::Cons(_)) {
+        let p = v.as_point().ok_or_else(|| LispError::bad_arg("2D/3D point", v))?;
+        tags.push(Tag::f(code, p[0]));
+        tags.push(Tag::f(code + 10, p[1]));
+        tags.push(Tag::f(code + 20, p[2]));
+        return Ok(());
+    }
+    tags.push(match v {
+        Value::Int(i) => Tag::i(code, i64::from(*i)),
+        Value::Real(r) => Tag::f(code, *r),
+        Value::Str(s) => Tag::s(code, &**s),
+        Value::Ename(h) => Tag::s(code, h.hex()),
+        other => return Err(LispError::bad_arg("DXF group value", other)),
+    });
+    Ok(())
+}
+
 fn list_to_groups(list: &Value) -> Result<(String, Vec<Tag>), LispError> {
     let mut kind = None;
     let mut tags = Vec::new();
@@ -243,22 +262,31 @@ fn list_to_groups(list: &Value) -> Result<(String, Vec<Tag>), LispError> {
                 })
             }
             -1 | 5 | 330 | 360 | 410 | 102 => {}
-            _ if point_group(code) && matches!(v, Value::Cons(_)) => {
-                let p = v.as_point().ok_or_else(|| LispError::bad_arg("2D/3D point", &v))?;
-                tags.push(Tag::f(code, p[0]));
-                tags.push(Tag::f(code + 10, p[1]));
-                tags.push(Tag::f(code + 20, p[2]));
+            // Extended data, as entget lists it: (-3 ("APP" (1000 . "x") …) …).
+            -3 => {
+                for app in v.iter() {
+                    let Value::Str(name) = app.car() else { return Err(LispError::bad_arg("xdata application name", &app)) };
+                    tags.push(Tag::s(1001, &*name));
+                    for g in app.cdr().iter() {
+                        let Value::Cons(gc) = &g else { return Err(LispError::bad_arg("listp", &g)) };
+                        let Value::Int(c) = gc.car else { return Err(LispError::bad_arg("fixnump", &gc.car)) };
+                        push_group(&mut tags, c, &gc.cdr)?;
+                    }
+                }
             }
-            _ => tags.push(match &v {
-                Value::Int(i) => Tag::i(code, i64::from(*i)),
-                Value::Real(r) => Tag::f(code, *r),
-                Value::Str(s) => Tag::s(code, &**s),
-                Value::Ename(h) => Tag::s(code, h.hex()),
-                other => return Err(LispError::bad_arg("DXF group value", other)),
-            }),
+            _ => push_group(&mut tags, code, &v)?,
         }
     }
-    Ok((kind.ok_or_else(|| LispError::new("bad DXF group: no entity type (0)"))?, tags))
+    let kind = kind.ok_or_else(|| LispError::new("bad DXF group: no entity type (0)"))?;
+    // Angles come in radians, as entget lists them; DXF holds most in degrees.
+    if degree_angles(&kind) {
+        for t in &mut tags {
+            if angle_code(t.code) && matches!(t.value, cadaddy_dxf::Value::Real(_) | cadaddy_dxf::Value::Int(_)) {
+                *t = Tag::f(t.code, t.value.as_f64().to_degrees());
+            }
+        }
+    }
+    Ok((kind, tags))
 }
 
 fn codec() -> Result<&'static crate::cmd::file::EntityCodec, LispError> {
@@ -267,6 +295,96 @@ fn codec() -> Result<&'static crate::cmd::file::EntityCodec, LispError> {
 
 fn space_of(d: &cadaddy_doc::Drawing, h: Handle) -> Option<Space> {
     d.space_of(h)
+}
+
+/// Whether a type's angle groups (50–58) are degrees in DXF. AutoLISP lists them in radians;
+/// MTEXT and MLEADER keep radians in DXF too.
+fn degree_angles(kind: &str) -> bool {
+    !matches!(kind.to_ascii_uppercase().as_str(), "MTEXT" | "MLEADER" | "MULTILEADER")
+}
+
+fn angle_code(code: i32) -> bool {
+    (50..=58).contains(&code)
+}
+
+/// A record's groups as `entget` lists them: angles in radians, the groups a TEXT or an
+/// attribute always has in AutoCAD added at their defaults when the file leaves them out, and
+/// extended data (1000 and up) only for the applications asked for, as `(-3 ("APP" …))`.
+fn entget_items(kind: &str, tags: &[Tag], apps: &[String]) -> (Vec<Value>, Option<Value>) {
+    let split = tags.iter().position(|t| t.code >= 1000).unwrap_or(tags.len());
+    let (own, xdata) = tags.split_at(split);
+    let mut own: Vec<Tag> = own
+        .iter()
+        .map(|t| match (&t.value, degree_angles(kind) && angle_code(t.code)) {
+            (cadaddy_dxf::Value::Real(r), true) => Tag::f(t.code, r.to_radians()),
+            (cadaddy_dxf::Value::Int(i), true) => Tag::f(t.code, (*i as f64).to_radians()),
+            _ => t.clone(),
+        })
+        .collect();
+    let up = kind.to_ascii_uppercase();
+    if matches!(up.as_str(), "TEXT" | "ATTRIB" | "ATTDEF") {
+        let has = |own: &[Tag], c: i32| own.iter().any(|t| t.code == c);
+        let at = |own: &[Tag], c: i32| own.iter().position(|t| t.code == c);
+        let (x, y, z) = match at(&own, 10) {
+            Some(i) => {
+                (own.get(i).map(Tag::f64).unwrap_or(0.0), own.get(i + 1).map(Tag::f64).unwrap_or(0.0), own.get(i + 2).map(Tag::f64).unwrap_or(0.0))
+            }
+            None => (0.0, 0.0, 0.0),
+        };
+        let vertical = if up == "TEXT" { 73 } else { 74 };
+        let defaults: [(i32, Tag); 7] = [
+            (50, Tag::f(50, 0.0)),
+            (41, Tag::f(41, 1.0)),
+            (51, Tag::f(51, 0.0)),
+            (7, Tag::s(7, "Standard")),
+            (71, Tag::i(71, 0)),
+            (72, Tag::i(72, 0)),
+            (vertical, Tag::i(vertical, 0)),
+        ];
+        for (c, t) in defaults {
+            if !has(&own, c) {
+                own.push(t);
+            }
+        }
+        if !has(&own, 11) {
+            own.extend([Tag::f(11, x), Tag::f(21, y), Tag::f(31, z)]);
+        }
+        if !has(&own, 210) {
+            own.extend([Tag::f(210, 0.0), Tag::f(220, 0.0), Tag::f(230, 1.0)]);
+        }
+    }
+    // Extended data by application: 1001 starts each one.
+    let mut groups: Vec<Value> = Vec::new();
+    let mut i = 0;
+    while let Some(t) = xdata.get(i) {
+        let start = i;
+        i += 1;
+        while xdata.get(i).is_some_and(|t| t.code != 1001) {
+            i += 1;
+        }
+        let name = t.value.as_str();
+        let wanted = apps.iter().any(|a| crate::cmd::qselect::wildcard(a, &name));
+        if t.code == 1001 && wanted {
+            let body = groups_to_list(xdata.get(start + 1..i).unwrap_or(&[]));
+            groups.push(Value::list(std::iter::once(Value::str(&name)).chain(body).collect::<Vec<_>>()));
+        }
+    }
+    let x = (!groups.is_empty()).then(|| Value::list(std::iter::once(Value::Int(-3)).chain(groups).collect::<Vec<_>>()));
+    (groups_to_list(&own), x)
+}
+
+/// A kept xdata group as a DXF group of its code's type.
+fn raw_tag(r: &cadaddy_doc::RawTag) -> Tag {
+    match r.code {
+        1010..=1059 => Tag::f(r.code, r.value.trim().parse().unwrap_or(0.0)),
+        1060..=1071 => Tag::i(r.code, r.value.trim().parse().unwrap_or(0)),
+        _ => Tag::s(r.code, &r.value),
+    }
+}
+
+/// The application names `(entget e apps)` asks for.
+fn entget_apps(a: &[Value]) -> Vec<String> {
+    a.get(1).map(|l| l.iter().filter_map(|v| if let Value::Str(s) = v { Some(s.to_string()) } else { None }).collect()).unwrap_or_default()
 }
 
 /// The `410` layout group goes right after the AcDbEntity marker, as AutoCAD lists it.
@@ -285,7 +403,7 @@ fn with_layout(head: Vec<Value>, groups: Vec<Value>, layout: &str) -> Value {
 }
 
 /// `entget` of an attribute, a SEQEND or a table record.
-fn sub_entget(ctx: &mut Ctx<'_>, h: Handle, sub: &super::Sub) -> Result<Value, LispError> {
+fn sub_entget(ctx: &mut Ctx<'_>, h: Handle, sub: &super::Sub, apps: &[String]) -> Result<Value, LispError> {
     let Ok(d) = ctx.s.doc() else { return Ok(Value::Nil) };
     let me = Value::cons(Value::Int(-1), Value::Ename(h));
     let (ins, at) = match sub {
@@ -308,14 +426,16 @@ fn sub_entget(ctx: &mut Ctx<'_>, h: Handle, sub: &super::Sub) -> Result<Value, L
     if at == usize::MAX {
         head.push(Value::cons(Value::Int(-2), Value::Ename(ins)));
     }
-    Ok(with_layout(head, groups_to_list(tags), &layout))
+    let (items, xdata) = entget_items(kind, tags, apps);
+    Ok(with_layout(head, items.into_iter().chain(xdata).collect(), &layout))
 }
 
 pub fn entget(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 1, 2)?;
     let h = ename(&a[0])?;
+    let apps = entget_apps(&a);
     if let Some(sub) = ctx.env.subs.get(&h).cloned() {
-        return Ok(Flow::Value(sub_entget(ctx, h, &sub)?));
+        return Ok(Flow::Value(sub_entget(ctx, h, &sub, &apps)?));
     }
     let Ok(d) = ctx.s.doc() else { return Ok(Flow::Value(Value::Nil)) };
     let Some(e) = d.entity(h) else { return Ok(Flow::Value(Value::Nil)) };
@@ -325,7 +445,11 @@ pub fn entget(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
         _ => "Model".into(),
     };
     let head = vec![Value::cons(Value::Int(-1), Value::Ename(h)), Value::cons(Value::Int(0), Value::str(&kind))];
-    Ok(Flow::Value(with_layout(head, groups_to_list(&tags), &layout)))
+    // Other applications' xdata travels with the object, not in its written record.
+    let mut tags = tags;
+    tags.extend(e.common.xdata.iter().map(raw_tag));
+    let (items, xdata) = entget_items(&kind, &tags, &apps);
+    Ok(Flow::Value(with_layout(head, items.into_iter().chain(xdata).collect(), &layout)))
 }
 
 /// The entity a list describes, as the reader makes it; a missing layer (8) is the current one.
@@ -338,7 +462,25 @@ fn entity_from_list(ctx: &Ctx<'_>, list: &Value) -> Result<(String, cadaddy_doc:
     match (codec()?.entity)(&kind, &tags) {
         // A type the reader only carries through (an unknown or invalid name) isn't made.
         Some((_, cadaddy_doc::EntityKind::Unknown(_))) | None => Err(LispError::new(format!("bad DXF group: {kind} can't be made from this list"))),
-        Some((common, k)) => Ok((kind, common, k)),
+        Some((mut common, k)) => {
+            // Other applications' extended data from the list's (-3 …) groups; ACAD's and
+            // CADaddy's own are read into the object already.
+            let mut xdata = Vec::new();
+            let mut keep = false;
+            for t in tags.iter().skip_while(|t| t.code < 1000) {
+                if t.code == 1001 {
+                    let app = t.value.as_str().to_ascii_uppercase();
+                    keep = app != "ACAD" && app != "CADADDY";
+                }
+                if keep {
+                    xdata.push(cadaddy_doc::RawTag { code: t.code, value: t.value.as_str() });
+                }
+            }
+            if !xdata.is_empty() {
+                common.xdata = xdata;
+            }
+            Ok((kind, common, k))
+        }
     }
 }
 
@@ -391,6 +533,11 @@ pub fn entmod(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     // entmod changes an entity, never its type.
     if !kind_name.eq_ignore_ascii_case(old.kind.dxf_name()) {
         return Ok(Flow::Value(Value::Nil));
+    }
+    // A list without (-3 …) leaves the extended data as it is.
+    let mut common = common;
+    if !list.iter().any(|v| v.car().as_number() == Some(-3.0)) {
+        common.xdata = old.common.xdata.clone();
     }
     let Ok(d) = ctx.s.doc_mut() else { return Ok(Flow::Value(Value::Nil)) };
     d.ensure_layer(&common.layer);
@@ -974,6 +1121,15 @@ pub fn tblsearch(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
         ctx.env.tblnext.insert(table.clone(), i + 1);
     }
     Ok(Flow::Value(found.and_then(|i| records.get(i).cloned()).unwrap_or_default()))
+}
+
+/// `(regapp name)`: register an application name for extended data; the name, or nil for one
+/// that can't be a symbol name. (Each application a drawing's xdata uses is written as an APPID.)
+pub fn regapp(_ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
+    arity(&a, 1, 1)?;
+    let name = string(&a[0])?;
+    let ok = !name.is_empty() && name.len() <= 255 && !name.chars().any(|c| "<>/\\\":;?*|,=`".contains(c));
+    Ok(Flow::Value(if ok { Value::str(&name) } else { Value::Nil }))
 }
 
 /// `(tblobjname table name)`: the entity name of a symbol table record (nil when there is none);

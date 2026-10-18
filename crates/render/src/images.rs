@@ -171,15 +171,24 @@ pub fn forget(path: &str) {
     c.generation += 1;
 }
 
-/// Also look for relative image paths in `dir` (a drawing's folder). Images found missing are
-/// tried again.
+/// Look for relative image paths in `dir` (a drawing's folder, as it is opened or saved) first.
+/// Every relative path and every image found missing is looked for again: an images folder
+/// copied in after the drawing was opened is found, and two drawings using the same relative
+/// name in different folders each get their own.
 pub fn add_search_dir(dir: &Path) {
     let Ok(mut c) = cache().lock() else { return };
-    if !c.dirs.iter().any(|d| d == dir) {
-        c.dirs.push(dir.to_path_buf());
-        c.map.retain(|_, v| v.is_some());
-        c.generation += 1;
-    }
+    c.dirs.retain(|d| d != dir);
+    c.dirs.insert(0, dir.to_path_buf());
+    let mut freed = 0usize;
+    c.map.retain(|k, v| {
+        let keep = v.is_some() && Path::new(k).is_absolute();
+        if !keep {
+            freed += v.as_ref().map_or(0, |r| r.rgba.len());
+        }
+        keep
+    });
+    c.bytes = c.bytes.saturating_sub(freed);
+    c.generation += 1;
 }
 
 /// Changes whenever cached pixels change (loaded, registered or dropped).
@@ -228,6 +237,27 @@ mod tests {
         let mut out = std::io::Cursor::new(Vec::new());
         img.write_to(&mut out, image::ImageFormat::Png).unwrap();
         out.into_inner()
+    }
+
+    #[test]
+    fn relative_images_follow_the_drawing_opened_or_saved() {
+        let base = std::env::temp_dir().join(format!("cadaddy-relimg-{}", std::process::id()));
+        let (a, b) = (base.join("a"), base.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(b.join("pics")).unwrap();
+        let name = "pics/relimg-logo.png";
+        // Opened before its images folder was copied in: missing, then found on the next open.
+        add_search_dir(&a);
+        assert!(get(name).is_none());
+        std::fs::create_dir_all(a.join("pics")).unwrap();
+        std::fs::write(a.join(name), png(2, 2, [255, 0, 0, 255])).unwrap();
+        add_search_dir(&a);
+        assert_eq!(get(name).and_then(|r| r.pixel(0, 0)), Some([255, 0, 0, 255]));
+        // Another drawing using the same relative name in its own folder gets its own image.
+        std::fs::write(b.join(name), png(2, 2, [0, 0, 255, 255])).unwrap();
+        add_search_dir(&b);
+        assert_eq!(get(name).and_then(|r| r.pixel(0, 0)), Some([0, 0, 255, 255]));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

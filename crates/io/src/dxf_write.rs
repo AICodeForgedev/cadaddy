@@ -1425,6 +1425,11 @@ fn dim_block_plan(d: &Drawing) -> DimBlockPlan {
         }
         EntityKind::MLeader(m) => used.extend(m.block.as_ref().map(|b| b.block.to_ascii_uppercase())),
         EntityKind::Dimension(dm) if dims => used.extend(dm.block.as_ref().map(|n| n.to_ascii_uppercase())),
+        // A dimension type carried through as read (ARC_DIMENSION, LARGE_RADIAL_DIMENSION) keeps
+        // its geometry block: its group 2.
+        EntityKind::Unknown(u) if u.dxf_type.to_ascii_uppercase().contains("DIMENSION") => {
+            used.extend(u.tags.iter().filter(|t| t.code == 2).map(|t| t.value.trim().to_ascii_uppercase()));
+        }
         _ => {}
     };
     for e in spaces.iter().flat_map(|s| s.iter()) {
@@ -1770,6 +1775,16 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         layers: HashMap::new(),
         reactors: hatch_reactors(d),
     };
+    // Group handles first: each member lists its groups among its persistent reactors.
+    let group_handles: Vec<String> = d.groups.iter().filter(|g| !g.name.is_empty()).map(|_| w.h()).collect();
+    for (g, h) in d.groups.iter().filter(|g| !g.name.is_empty()).zip(&group_handles) {
+        for m in &g.members {
+            let r = w.reactors.entry(*m).or_default();
+            if !r.contains(h) {
+                r.push(h.clone());
+            }
+        }
+    }
     // Pre-allocate handles for block records.
     let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
     paper_layouts.sort_by_key(|l| l.tab_order);
@@ -2415,7 +2430,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // Groups (members that still exist) and multileader styles.
     let group_owner = group_dict.clone();
     let written: std::collections::HashSet<String> = w.t.iter().filter(|t| t.code == 5).map(Tag::str).collect();
-    let groups: Vec<(&Group, String)> = d.groups.iter().filter(|g| !g.name.is_empty()).map(|g| (g, w.h())).collect();
+    let groups: Vec<(&Group, String)> = d.groups.iter().filter(|g| !g.name.is_empty()).zip(group_handles).collect();
     let mleader_dict = w.h();
     let mleader_handles: Vec<String> = cx.mleader_styles.iter().map(|(_, h)| h.clone()).collect();
     w.s(0, "SECTION");
