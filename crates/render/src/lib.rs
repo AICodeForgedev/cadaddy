@@ -805,11 +805,13 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
     if !ok(s) {
         return;
     }
-    let xf = Mat3::translate(center).then_before(Mat3::scale(s, s)).then_before(Mat3::translate(-vp.view_center));
-    let mhalf = Vec2::new(area.width(), area.height()) / (2.0 * s);
-    let mcenter = vp.view_center + (area.center() - center) / s;
-    // Model window with slack: entity bounds are approximate (text, dimensions).
-    let win = Bounds2::new(mcenter - mhalf, mcenter + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
+    let twist = if vp.twist.is_finite() { vp.twist } else { 0.0 };
+    let xf = Mat3::translate(center).then_before(Mat3::rotate(twist)).then_before(Mat3::scale(s, s)).then_before(Mat3::translate(-vp.view_center));
+    // The model window: `area` seen through the (possibly twisted) view.
+    let Some(corners) = area.corners().into_iter().map(|c| vp.to_model(c)).collect::<Option<Vec<_>>>() else { return };
+    let mwin = Bounds2::from_points(corners);
+    // With slack: entity bounds are approximate (text, dimensions).
+    let win = mwin.expand(mwin.width().max(mwin.height()) * 0.05);
     // PSLTSCALE on: model-space dashes are scaled so they measure the same on paper as in
     // paper space, whatever the viewport scale.
     let lt_factor = if d.header.i64("PSLTSCALE", 1) != 0 { 1.0 / s } else { 1.0 };

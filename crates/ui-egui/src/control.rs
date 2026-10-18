@@ -477,7 +477,7 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             let opts = cadaddy_render::Options {
                 view: window,
                 transparency: app.session.settings.transparency_display,
-                projection: st.projection(),
+                projection: st.list_projection(),
                 ..Default::default()
             };
             let list = cadaddy_render::build(&st.doc, &st.space, &opts);
