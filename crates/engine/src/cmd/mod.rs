@@ -47,7 +47,7 @@ mod selecttools;
 mod settings;
 mod spline_opts;
 mod table;
-mod tolerance;
+pub mod tolerance;
 mod trimextend;
 mod utility;
 pub(crate) mod view;

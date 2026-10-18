@@ -74,11 +74,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|s| Ok(Box::new(MLeaderM::new(s)))),
         CommandSpec::new("leader", "Leader", run_leader)
             .alias(&["lead"])
-            .params("{points: [[x,y]...], text?}")
+            .params("{points: [[x,y]...], text? | tolerance?: frame string | {symbol, tol1, tol2, datums, …} (a feature control frame at the end)}")
             .interactive(|_| Ok(Box::new(leader_cmd::LeaderM::new(false)))),
         CommandSpec::new("qleader", "Quick Leader", run_leader)
             .alias(&["le"])
-            .params("{points: [[x,y]...], text?} (typed: up to three points, text width, text lines)")
+            .params("{points: [[x,y]...], text? | tolerance?: frame string | fields} (typed: Settings for the annotation type, up to three points, then the text or the frame)")
             .interactive(|_| Ok(Box::new(leader_cmd::LeaderM::new(true)))),
         CommandSpec::new("dimstyle.update", "Update", run_update)
             .menu(&["Dimension", "Update"])
@@ -493,6 +493,17 @@ fn run_leader(s: &mut Session, p: &Value) -> Result<Value> {
     if pts.len() < 2 {
         return Err(bad("leader", "need 2+ points"));
     }
+    // A Tolerance annotation's frame, checked before anything is added.
+    let frame = match p.get("tolerance").filter(|v| !v.is_null()) {
+        Some(tv) => {
+            let text = super::tolerance::frame_param(tv)?;
+            if cadaddy_doc::parse_frame(&text).iter().flatten().all(cadaddy_doc::compartment_is_empty) {
+                return Err(bad("leader", "the feature control frame is empty"));
+            }
+            Some(text)
+        }
+        None => None,
+    };
     let st = style(s);
     let h = s.add_entity(EntityKind::Leader(cadaddy_doc::Leader {
         vertices: pts.iter().map(|q| v3(*q)).collect(),
@@ -501,6 +512,11 @@ fn run_leader(s: &mut Session, p: &Value) -> Result<Value> {
         style: st,
     }))?;
     let mut out = vec![h.hex()];
+    // A Tolerance annotation: a feature control frame at the end of the leader.
+    if let (Some(text), Some(last)) = (frame, pts.last()) {
+        out.push(super::tolerance::add_frame(s, *last, text)?.hex());
+        return Ok(json!({ "handles": out }));
+    }
     if let (Some(t), Some(last)) = (str_param(p, "text"), pts.last()) {
         let th = s.doc()?.dim_style(&style(s)).map(|d| d.text_height).unwrap_or(0.18);
         out.push(

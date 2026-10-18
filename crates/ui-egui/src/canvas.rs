@@ -2001,6 +2001,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 /// offers Edit Text for); false when there is none.
 fn edit_text_at(app: &mut CadApp, p: Vec2) -> bool {
     use cadaddy_engine::doc::EntityKind;
+    // A feature control frame opens the Geometric Tolerance dialog with its contents.
+    if let Some(h) = cadaddy_engine::cmd::curves::pick_at(&app.session, p)
+        && app.session.doc().ok().and_then(|d| d.entity(h)).is_some_and(|e| matches!(e.kind, EntityKind::Tolerance(_)))
+    {
+        return crate::toldlg::open_edit(app, h);
+    }
     let is_text = cadaddy_engine::cmd::curves::pick_at(&app.session, p).and_then(|h| {
         app.session.doc().ok()?.entity(h).map(|e| matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_)))
     });

@@ -49,6 +49,7 @@ pub mod quick;
 pub mod ribbon;
 pub mod shortcut_menus;
 pub mod theme;
+pub mod toldlg;
 pub mod viewcube;
 pub mod vpscale;
 pub mod walk;
@@ -227,6 +228,8 @@ pub struct CadApp {
     pub canvas: canvas::CanvasState,
     /// The PDF Import / Convert PDF to DWG dialog's choices while it is open ([`pdfdlg`]).
     pub pdf: Option<pdfdlg::PdfDialog>,
+    /// The Geometric Tolerance dialog's fields while it is open ([`toldlg`]).
+    pub tol_dlg: Option<toldlg::ToleranceDialog>,
     /// Desktop HID status and navigation preferences; the web host supplies no HID backend.
     pub spacemouse: spacemouse::State,
     pub cmd: cmdline::CmdLine,
@@ -296,6 +299,7 @@ impl CadApp {
             services,
             canvas: canvas::CanvasState::default(),
             pdf: None,
+            tol_dlg: None,
             spacemouse: spacemouse::State::default(),
             cmd: cmdline::CmdLine::default(),
             status: None,
