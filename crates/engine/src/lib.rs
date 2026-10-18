@@ -172,6 +172,9 @@ pub struct DocState {
     /// Model space's view twist (VIEWTWIST, radians counterclockwise) in the plan view; a
     /// twisted plan view is drawn through [`DocState::projection`] like a 3D view.
     pub view_twist: f64,
+    /// The solid background colour of the named view last restored in model space (`None`:
+    /// the drawing area's own colour).
+    pub view_background: Option<cadaddy_color::Color>,
     pub uid: u64,
     /// The drawing is saved as binary DXF (it was opened from one, or last saved as one).
     pub binary_dxf: bool,
@@ -212,6 +215,7 @@ impl DocState {
             view_history: Vec::new(),
             view_dir: cadaddy_geom::Vec3::Z,
             view_twist: 0.0,
+            view_background: None,
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             binary_dxf: false,
             read_loss: None,

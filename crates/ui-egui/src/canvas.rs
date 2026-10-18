@@ -367,7 +367,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         let mesh = app.canvas.gpu.is_some().then(|| rebuild::MeshRequest {
             view_center: xf.center,
             view_height: f64::from(xf.rect.height()) / xf.scale.max(1e-300),
-            model_bg: Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b()),
+            model_bg: view_background(app).unwrap_or(Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b())),
             paper_bg: Rgb(t.paper.r(), t.paper.g(), t.paper.b()),
             lwdisplay,
             device: app.canvas.gpu_device.clone(),
@@ -1751,9 +1751,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             Rgb(t.paper.r(), t.paper.g(), t.paper.b())
         }
         None => {
+            // A restored named view's background colour, else the drawing area's.
+            let bg = view_background(app);
+            if let Some(Rgb(r, g, b)) = bg {
+                painter.rect_filled(rect, 0.0, Color32::from_rgb(r, g, b));
+            }
             blockedit::wash(app, &painter, rect);
             draw_grid(app, &painter, &xf);
-            Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b())
+            bg.unwrap_or(Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b()))
         }
     };
     let sel = app.session.selection();
@@ -2872,5 +2877,18 @@ mod hatch_pick_tests {
         assert_eq!(app.hatch_dlg.as_ref().map(|s| s.edit.iter().map(|h| h.hex()).collect::<Vec<_>>()), Some(vec![hx]));
         // The double-click (at the hatch's centre grip) only opens the dialog: no grip edit.
         assert!(app.session.running.is_none(), "{:?}", app.session.running.as_ref().map(|r| r.machine.name()));
+    }
+}
+
+/// The background colour of the named view last restored on the Model tab, if it has one.
+fn view_background(app: &CadApp) -> Option<Rgb> {
+    let st = app.session.state().ok()?;
+    if st.space != cadaddy_engine::doc::Space::Model {
+        return None;
+    }
+    match st.view_background? {
+        cadaddy_color::Color::Index(i) => Some(cadaddy_color::aci_rgb(i)),
+        cadaddy_color::Color::True(c) => Some(c),
+        _ => None,
     }
 }

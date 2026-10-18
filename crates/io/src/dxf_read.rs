@@ -1557,7 +1557,24 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 // 70 bit 1: a paper space view; its layout is CADaddy xdata.
                 let layout = (t.i(70).unwrap_or(0) & 1 != 0).then(|| field("LAYOUT").unwrap_or_default());
                 let twist = t.f(50).filter(|a| a.is_finite()).map_or(0.0, |a| a.rem_euclid(360.0).to_radians());
-                let v = NamedView { name: name.clone(), center, height: h, width: w, layer_state: field("LAYERSTATE"), twist, layout };
+                // The view direction: the plan view when missing, zero or not a number.
+                let dir = Some(t.p(11)).filter(|d| d.is_finite() && d.len() > 1e-12).map(|d| d.normalized()).filter(|d| (*d - Vec3::Z).len() > 1e-9);
+                let ucs = (t.i(72).unwrap_or(0) == 1)
+                    .then(|| ViewUcs { name: field("UCSNAME").unwrap_or_default(), origin: t.p(110), x_axis: t.p(111), y_axis: t.p(112) })
+                    .filter(|u| [u.origin, u.x_axis, u.y_axis].iter().all(|p| p.is_finite()) && u.x_axis.len() > 1e-9 && u.y_axis.len() > 1e-9);
+                let background = field("BACKGROUND").and_then(|c| cadaddy_color::Color::parse(&c));
+                let v = NamedView {
+                    name: name.clone(),
+                    center,
+                    height: h,
+                    width: w,
+                    layer_state: field("LAYERSTATE"),
+                    twist,
+                    layout,
+                    dir,
+                    ucs,
+                    background,
+                };
                 match d.views.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
                     Some(x) => *x = v,
                     None => d.views.push(v),

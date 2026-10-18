@@ -859,6 +859,69 @@ pub struct NamedView {
     /// paper space view whose layout is not known).
     #[serde(default)]
     pub layout: Option<String>,
+    /// The view direction, from the target towards the viewer (DXF group 11; `None`: the plan
+    /// view). A model space view seen from a preset direction (Front, SW Isometric…) keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<Vec3>,
+    /// The UCS restored with the view (DXF groups 72, 110–112, 146, 79; `None`: the view leaves
+    /// the current UCS as it is).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ucs: Option<ViewUcs>,
+    /// A solid background colour shown behind the view (`None`: the drawing area's own).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<Color>,
+}
+
+/// A UCS kept with a named view: its origin and axes, and the named UCS it was (empty when it
+/// had no name).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewUcs {
+    #[serde(default)]
+    pub name: String,
+    pub origin: Vec3,
+    pub x_axis: Vec3,
+    pub y_axis: Vec3,
+}
+
+impl ViewUcs {
+    /// A UCS in the plan: `origin`, its X axis turned `angle` radians from the world's.
+    pub fn plan(origin: Vec3, angle: f64) -> ViewUcs {
+        let (s, c) = angle.sin_cos();
+        ViewUcs { name: String::new(), origin, x_axis: Vec3::new(c, s, 0.0), y_axis: Vec3::new(-s, c, 0.0) }
+    }
+
+    /// The world coordinate system (origin at 0,0,0, world axes).
+    pub fn is_world(&self) -> bool {
+        self.origin.len() <= 1e-12 && (self.x_axis - Vec3::new(1.0, 0.0, 0.0)).len() <= 1e-9 && (self.y_axis - Vec3::new(0.0, 1.0, 0.0)).len() <= 1e-9
+    }
+
+    /// The rotation of the X axis in the plan (radians, counterclockwise).
+    pub fn angle(&self) -> f64 {
+        self.x_axis.y.atan2(self.x_axis.x)
+    }
+
+    /// The current UCS a drawing's header holds ($UCSORG, $UCSXDIR, $UCSYDIR, $UCSNAME); the
+    /// world when it holds none or they are unusable.
+    pub fn current(h: &crate::Header) -> ViewUcs {
+        let pt = |k: &str| match h.get(k) {
+            Some(crate::HVal::Point(p)) if p.is_finite() => Some(*p),
+            _ => None,
+        };
+        let name = h.get("UCSNAME").and_then(crate::HVal::as_str).unwrap_or_default().to_string();
+        match (pt("UCSORG"), pt("UCSXDIR"), pt("UCSYDIR")) {
+            (Some(o), Some(x), Some(y)) if x.len() > 1e-9 && y.len() > 1e-9 => ViewUcs { name, origin: o, x_axis: x, y_axis: y },
+            _ => ViewUcs { name, ..ViewUcs::plan(Vec3::ZERO, 0.0) },
+        }
+    }
+
+    /// Make this the drawing's current UCS.
+    pub fn make_current(&self, h: &mut crate::Header) {
+        h.set("UCSORG", crate::HVal::Point(self.origin));
+        h.set("UCSXDIR", crate::HVal::Point(self.x_axis));
+        h.set("UCSYDIR", crate::HVal::Point(self.y_axis));
+        h.set("UCSNAME", crate::HVal::Str(self.name.clone()));
+    }
 }
 
 /// One tiled model space viewport of a [`VportConfig`] (a VPORT table record): its corners as

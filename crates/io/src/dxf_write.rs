@@ -383,6 +383,10 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("INSUNITS", 70),
     ("MEASUREMENT", 70),
     ("PSLTSCALE", 70),
+    ("UCSNAME", 2),
+    ("UCSORG", -3),
+    ("UCSXDIR", -3),
+    ("UCSYDIR", -3),
 ];
 
 fn header_vars(w: &mut W, d: &Drawing) {
@@ -2233,7 +2237,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.f(40, v.height);
         w.p2(10, v.center);
         w.f(41, v.width);
-        w.p(11, Vec3::Z);
+        w.p(11, v.dir.filter(|d| d.is_finite() && d.len() > 1e-12).unwrap_or(Vec3::Z));
         w.p(12, Vec3::ZERO);
         w.f(42, 50.0);
         w.f(43, 0.0);
@@ -2241,8 +2245,23 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.f(50, if v.twist.is_finite() { v.twist.to_degrees() } else { 0.0 });
         w.i(71, 0);
         w.i(281, 0);
-        w.i(72, 0);
-        let xdata = [("LAYERSTATE", v.layer_state.as_deref()), ("LAYOUT", v.layout.as_deref().filter(|l| !l.is_empty()))];
+        // A UCS kept with the view: its origin and axes (a named one also by name, in xdata).
+        w.i(72, i64::from(v.ucs.is_some()));
+        if let Some(u) = &v.ucs {
+            w.p(110, u.origin);
+            w.p(111, u.x_axis);
+            w.p(112, u.y_axis);
+            w.i(79, 0);
+            w.f(146, u.origin.z);
+        }
+        let background = v.background.map(|c| c.name());
+        let ucs_name = v.ucs.as_ref().map(|u| u.name.as_str()).filter(|n| !n.is_empty());
+        let xdata = [
+            ("LAYERSTATE", v.layer_state.as_deref()),
+            ("LAYOUT", v.layout.as_deref().filter(|l| !l.is_empty())),
+            ("BACKGROUND", background.as_deref()),
+            ("UCSNAME", ucs_name),
+        ];
         if xdata.iter().any(|(_, x)| x.is_some()) {
             w.s(1001, dxf_ext::APP);
             for (key, value) in xdata {
