@@ -225,7 +225,9 @@ pub(crate) fn build(s: &mut Scene, plans: &[Planned], o: &Openings) {
                     let u = u * (1.0 / u.len());
                     let h = o.door_head_ft.min(z1 - z0).max(0.1);
                     let c = *hinge + u * (sw.r / 2.0);
+                    s.part = crate::Part::Door;
                     boxed(s, v3(c.x, c.y, z0 + h / 2.0), u, sw.r, LEAF_FT, h, DOOR, sw.owner);
+                    s.part = crate::Part::Wall;
                 }
                 s.doors += 1;
             }
@@ -235,7 +237,9 @@ pub(crate) fn build(s: &mut Scene, plans: &[Planned], o: &Openings) {
                 header(s, &g, head, z1);
                 let (m0, m1) = (g.e0 + g.n * (g.off / 2.0), g.e1 + g.n * (g.off / 2.0));
                 if head > sill {
+                    s.part = crate::Part::Glass;
                     quad(s, [v3(m0.x, m0.y, sill), v3(m1.x, m1.y, sill), v3(m1.x, m1.y, head), v3(m0.x, m0.y, head)], GLASS, g.owner);
+                    s.part = crate::Part::Wall;
                 }
                 // Windows stop the walker.
                 s.walls.push(Seg { a: g.e0, b: g.e1, level: g.lv });

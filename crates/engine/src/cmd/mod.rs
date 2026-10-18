@@ -42,6 +42,7 @@ mod props;
 pub mod symbol;
 mod takeoff;
 pub(crate) mod underlay;
+pub mod wallgen;
 pub use props::MatchProps;
 pub(crate) mod qselect;
 mod selecttools;
@@ -204,6 +205,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(blocks::specs());
         v.extend(modify::specs());
         v.extend(draworder::specs());
+        v.extend(wallgen::specs());
         v.extend(imageclip::specs());
         v.extend(array::specs());
         v.extend(symbol::specs());

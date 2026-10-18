@@ -40,6 +40,24 @@ pub struct LevelInfo {
     /// Plan extents of this level's walls, feet.
     pub min: Vec2,
     pub max: Vec2,
+    /// The sheet point (drawing units) this level's plan places at the building origin: a scene
+    /// point `p` (feet) is at `base + p * units_per_foot` on the sheet.
+    pub base: Vec2,
+}
+
+/// What a triangle of the scene is part of.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Part {
+    #[default]
+    Wall,
+    Floor,
+    Ceiling,
+    /// Window glass.
+    Glass,
+    /// An open door leaf.
+    Door,
+    /// A device box.
+    Device,
 }
 
 /// Which drawing of the set a triangle or device came from (see [`Rules::sheets`]) and its
@@ -71,6 +89,12 @@ pub struct Scene {
     pub tris: Vec<Vertex>,
     /// Owner of each triangle (`tris.len() / 3` entries).
     pub owners: Vec<Owner>,
+    /// What each triangle is part of (as `owners`).
+    pub parts: Vec<Part>,
+    /// What the faces added next are part of.
+    pub(crate) part: Part,
+    /// Drawing units per foot of the sheets (see [`LevelInfo::base`]).
+    pub units_per_foot: f64,
     /// Edge overlay, a line list.
     pub edges: Vec<Vertex>,
     pub walls: Vec<Seg>,
@@ -137,7 +161,7 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
     let level_at = |src: usize, p: Vec2| -> Option<usize> {
         (0..places.len()).find(|&i| src_of.get(i) == Some(&src) && places.get(i).is_some_and(|pl| pl.contains(p)))
     };
-    let mut s = Scene::default();
+    let mut s = Scene { units_per_foot: upf, ..Scene::default() };
     let mut wall_pieces: Vec<(Vec<Vec2>, usize, f64, Owner, bool)> = Vec::new();
     // Curved runs the wall layers dropped: door swings among them (see [`crate::openings`]).
     let mut curves: Vec<(Vec<Vec2>, usize, Owner)> = Vec::new();
@@ -205,7 +229,16 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
             min = Vec2 { x: 0.0, y: 0.0 };
             max = Vec2 { x: 0.0, y: 0.0 };
         }
-        s.levels.push(LevelInfo { name: l.name.clone(), elevation_ft: l.elevation_ft, height_ft: l.height_ft, ceiling_ft: l.ceiling_ft, min, max });
+        let base = places.get(i).map_or(Vec2 { x: 0.0, y: 0.0 }, |p| p.base);
+        s.levels.push(LevelInfo {
+            name: l.name.clone(),
+            elevation_ft: l.elevation_ft,
+            height_ft: l.height_ft,
+            ceiling_ft: l.ceiling_ft,
+            min,
+            max,
+            base,
+        });
     }
     for li in s.levels.clone() {
         if li.max.x > li.min.x && li.max.y > li.min.y {
@@ -218,10 +251,12 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
                     v3(li.min.x - pad, li.max.y + pad, z),
                 ]
             };
+            s.part = Part::Floor;
             quad(&mut s, rect(li.elevation_ft), FLOOR, Owner::default());
             // The ceiling faces down (drawn from below; a cut at the ceiling line hides it).
             let [a, b, c, d] = rect(li.elevation_ft + li.ceiling_ft);
             if li.ceiling_ft > 0.0 && li.ceiling_ft < li.height_ft {
+                s.part = Part::Ceiling;
                 quad(&mut s, [a, d, c, b], CEILING, Owner::default());
             }
         }
@@ -260,6 +295,7 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
     let face_segs: Vec<Seg> = faces.iter().map(|f| Seg { a: f.a, b: f.b, level: f.lv }).collect();
     let plans = crate::openings::plan(&face_segs, &pair_pieces(&faces), &curves, &rules.openings);
     let faces: Vec<Face> = faces.into_iter().filter(|f| !crate::openings::in_window(&plans, f.lv, f.a, f.b)).collect();
+    s.part = Part::Wall;
     for f in &faces {
         let (a, b, z0, z1) = (f.a, f.b, f.z0, f.z1);
         s.walls.push(Seg { a, b, level: f.lv });
@@ -275,6 +311,7 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
     }
     close_walls(&mut s, &faces);
     crate::openings::build(&mut s, &plans, &rules.openings);
+    s.part = Part::Device;
 
     // Devices: from the levels' own drawings, and from device sheets (any level, by attribute).
     let device_srcs = rules.device_sources();
@@ -657,6 +694,8 @@ pub(crate) fn quad(s: &mut Scene, q: [V3; 4], c: Rgb, owner: Owner) {
     for p in [a, b, cc, a, cc, d] {
         s.tris.push(vtx(p, n, c));
     }
+    s.parts.push(s.part);
+    s.parts.push(s.part);
     s.owners.push(owner);
     s.owners.push(owner);
 }

@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+cadaddy-walk3d = { path = "../walk3d" }
 cadaddy-geom = { workspace = true }
 cadaddy-color = { workspace = true }
 cadaddy-doc = { workspace = true }

@@ -143,7 +143,15 @@ mod tests {
         let walls = [(p(0., 0.), p(20., 0.)), (p(20., 0.), p(20., 10.)), (p(20., 10.), p(0., 10.)), (p(0., 10.), p(0., 0.))];
         Scene {
             walls: walls.iter().map(|(a, b)| Seg { a: *a, b: *b, level: 0 }).collect(),
-            levels: vec![LevelInfo { name: "L1".into(), elevation_ft: 12.0, height_ft: 10.0, ceiling_ft: 8.0, min: p(0., 0.), max: p(20., 10.) }],
+            levels: vec![LevelInfo {
+                name: "L1".into(),
+                elevation_ft: 12.0,
+                height_ft: 10.0,
+                ceiling_ft: 8.0,
+                min: p(0., 0.),
+                max: p(20., 10.),
+                base: p(0., 0.),
+            }],
             ..Scene::default()
         }
     }

@@ -213,6 +213,8 @@ pub struct DocState {
     /// The user was told that saving over the file would lose what reading left out: saving
     /// again overwrites it.
     pub loss_warned: bool,
+    /// The drawing's associative 3D building (WALLGEN): what it builds again from.
+    pub wallgen: Option<cmd::wallgen::WallGen>,
     /// What opening the drawing changed and told the user (missing current styles reset): the
     /// OPEN reply lists them with its warnings, for agents that see no command-line history.
     pub open_notes: Vec<String>,
@@ -246,6 +248,7 @@ impl DocState {
             binary_dxf: false,
             read_loss: None,
             loss_warned: false,
+            wallgen: None,
             open_notes: Vec::new(),
             block_edit: None,
         }
@@ -1516,6 +1519,7 @@ impl Session {
         cmd::clip_partners::after_command(self, before);
         cmd::table::after_command(self, before);
         cmd::annotate::dimbreak_after_command(self, before);
+        cmd::wallgen::after_command(self, before);
     }
 
     fn resume_suspended(&mut self) {

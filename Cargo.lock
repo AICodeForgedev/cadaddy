@@ -690,6 +690,7 @@ dependencies = [
  "cadaddy-geom",
  "cadaddy-io",
  "cadaddy-render",
+ "cadaddy-walk3d",
  "craft-docpath",
  "log",
  "rstar",
