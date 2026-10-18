@@ -1,9 +1,9 @@
 //! Clicking a drawing or layout tab leaves the keyboard with the command line: a command typed
 //! next starts (it used to go nowhere, the tab holding keyboard focus).
 
-use cadcraft_engine::Session;
-use cadcraft_ui_egui::control::{ControlRequest, Outcome, handle};
-use cadcraft_ui_egui::{CadApp, Services};
+use cadaddy_engine::Session;
+use cadaddy_ui_egui::control::{ControlRequest, Outcome, handle};
+use cadaddy_ui_egui::{CadApp, Services};
 use serde_json::{Value, json};
 
 fn call(app: &mut CadApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
@@ -20,7 +20,7 @@ fn call(app: &mut CadApp, ctx: &egui::Context, method: &str, params: Value) -> V
 fn frame(app: &mut CadApp, ctx: &egui::Context) {
     let mut raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..Default::default() };
     app.raw_input_hook(&mut raw);
-    cadcraft_ui_egui::cmdline::capture_tab(ctx, &mut raw);
+    cadaddy_ui_egui::cmdline::capture_tab(ctx, &mut raw);
     let mut out = ctx.run_ui(raw, |ui| {
         app.logic(ui.ctx());
         app.ui(ui);

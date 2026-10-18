@@ -1,8 +1,8 @@
 //! View menu: ZOOM (with Realtime and Dynamic), PAN, REGEN, REDRAW, named views (VIEW), layout
 //! switching.
 
-use cadcraft_doc::{Space, entity_bounds};
-use cadcraft_geom::{Bounds2, Vec2};
+use cadaddy_doc::{Space, entity_bounds};
+use cadaddy_geom::{Bounds2, Vec2};
 use serde_json::{Value, json};
 
 use super::machines::{SelectRun, number};
@@ -526,7 +526,7 @@ impl Interactive for ZoomM {
             _ => Ok(Step::Continue),
         }
     }
-    fn preview(&self, _s: &Session, c: Vec2) -> Vec<cadcraft_doc::EntityKind> {
+    fn preview(&self, _s: &Session, c: Vec2) -> Vec<cadaddy_doc::EntityKind> {
         use super::helpers::{line, lwpoly, rect_vertices};
         let rect = |r: Bounds2| lwpoly(rect_vertices(r.min, r.max), true);
         if let ZoomStage::Dynamic(b) = self.stage {

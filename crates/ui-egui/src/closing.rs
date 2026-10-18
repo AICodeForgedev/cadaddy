@@ -30,7 +30,7 @@ pub enum Choice {
 /// A close request in progress.
 #[derive(Clone, Debug, Default)]
 pub struct Closing {
-    /// Drawings (by [`cadcraft_engine::DocState::uid`]) still to close, front first.
+    /// Drawings (by [`cadaddy_engine::DocState::uid`]) still to close, front first.
     queue: VecDeque<u64>,
     /// The drawing the prompt is asking about (always the front of `queue`).
     asking: Option<u64>,
@@ -237,7 +237,7 @@ pub fn prompt(app: &mut CadApp, ctx: &egui::Context) {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use cadcraft_engine::Session;
+    use cadaddy_engine::Session;
     use serde_json::json;
 
     use super::Choice;

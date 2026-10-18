@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use super::super::machines::{SelOutcome, SelectPhase, number};
 use super::run_set;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
-use cadcraft_doc::{EntityKind, Handle};
-use cadcraft_geom::Vec2;
+use cadaddy_doc::{EntityKind, Handle};
+use cadaddy_geom::Vec2;
 
 /// A name or value typed as one word: in a script a space ends it, as in AutoCAD.
 const WORD: Accept = Accept { text: true, number: true, ..Accept::TEXT };
@@ -166,7 +166,7 @@ impl Interactive for ChpropM {
 
 #[cfg(test)]
 mod tests {
-    use cadcraft_doc::EntityKind;
+    use cadaddy_doc::EntityKind;
 
     use crate::Session;
 
@@ -180,7 +180,7 @@ mod tests {
         assert!(s.running.is_none(), "{}", s.prompt_text());
         let e = s.doc().unwrap().model.iter().next().unwrap().clone();
         assert_eq!(e.common.layer, "WALLS");
-        assert_eq!(e.common.color, cadcraft_color::Color::Index(3));
+        assert_eq!(e.common.color, cadaddy_color::Color::Index(3));
         // A missing layer is refused.
         assert!(s.script("CHPROP 5,0\n\nLA NOPE\n").is_err() || s.doc().unwrap().layer("NOPE").is_none());
         s.cancel();

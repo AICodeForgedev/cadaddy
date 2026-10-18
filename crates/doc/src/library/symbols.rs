@@ -8,7 +8,7 @@
 //! is drawn at its plotted size, centred on its insertion point with its pipe along X, and placed
 //! at the drawing's scale (see [`Symbol::annotation`]).
 
-use cadcraft_geom::{PolyVertex, Vec2, Vec3};
+use cadaddy_geom::{PolyVertex, Vec2, Vec3};
 
 use crate::{Attrib, Circle, Ellipse, Entity, EntityKind, HAlign, Handle, Line, LwPolyline, Text, VAlign};
 
@@ -184,7 +184,7 @@ mod tests {
             assert!(tags.iter().any(|t| ["TAG", "SIZE", "CIRCUIT", "MOUNT_HT"].contains(t)), "{} has nothing to fill in: {tags:?}", s.name);
             // Every coordinate is a real number of sensible size.
             let d = crate::Drawing::new_imperial();
-            let b = es.iter().fold(cadcraft_geom::Bounds2::EMPTY, |b, e| b.union(&crate::extents::entity_bounds(&d, e, 1)));
+            let b = es.iter().fold(cadaddy_geom::Bounds2::EMPTY, |b, e| b.union(&crate::extents::entity_bounds(&d, e, 1)));
             assert!(b.min.is_finite() && b.max.is_finite() && b.width() < 200.0 && b.height() < 200.0, "{} bounds {b:?}", s.name);
         }
         assert!(symbol("pl_water_closet").is_some());

@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
-use cadcraft_doc::library::symbols::{self, Symbol};
-use cadcraft_doc::{Block, EntityKind};
-use cadcraft_geom::{Vec2, Vec3};
+use cadaddy_doc::library::symbols::{self, Symbol};
+use cadaddy_doc::{Block, EntityKind};
+use cadaddy_geom::{Vec2, Vec3};
 use serde_json::{Value, json};
 
 use super::*;
@@ -101,7 +101,7 @@ fn target_layer(s: &mut Session, sym: &Symbol, layer: Option<&str>) -> Result<Op
                 if d.ensure_layer(n)
                     && let Some(l) = d.layer_mut(n)
                 {
-                    l.color = cadcraft_color::Color::Index(color);
+                    l.color = cadaddy_color::Color::Index(color);
                 }
                 n.to_string()
             }
@@ -172,26 +172,26 @@ pub struct SymbolPreview {
     pub keywords: &'static str,
     pub lines: Vec<Vec<Vec2>>,
     pub fills: Vec<[Vec2; 3]>,
-    pub bounds: cadcraft_geom::Bounds2,
+    pub bounds: cadaddy_geom::Bounds2,
 }
 
 /// Previews of every library symbol, in palette order.
 pub fn previews() -> Vec<SymbolPreview> {
-    let d = cadcraft_doc::Drawing::new_imperial();
+    let d = cadaddy_doc::Drawing::new_imperial();
     symbols::symbols()
         .iter()
         .map(|sym| {
-            let ents: Vec<cadcraft_doc::Entity> = sym.entities().into_iter().filter(|e| !matches!(e.kind, EntityKind::AttDef(_))).collect();
-            let size = ents.iter().fold(cadcraft_geom::Bounds2::EMPTY, |b, e| b.union(&cadcraft_doc::entity_bounds(&d, e, 1)));
+            let ents: Vec<cadaddy_doc::Entity> = sym.entities().into_iter().filter(|e| !matches!(e.kind, EntityKind::AttDef(_))).collect();
+            let size = ents.iter().fold(cadaddy_geom::Bounds2::EMPTY, |b, e| b.union(&cadaddy_doc::entity_bounds(&d, e, 1)));
             let tol = (size.width().max(size.height()) / 200.0).max(1e-6);
-            let list = cadcraft_render::build_entities(
+            let list = cadaddy_render::build_entities(
                 &d,
                 ents.iter(),
-                &cadcraft_render::Options { tolerance: tol, text: true, fill: true, ..Default::default() },
+                &cadaddy_render::Options { tolerance: tol, text: true, fill: true, ..Default::default() },
             );
             let mut lines = Vec::new();
             let mut fills = Vec::new();
-            let mut bounds = cadcraft_geom::Bounds2::EMPTY;
+            let mut bounds = cadaddy_geom::Bounds2::EMPTY;
             for p in &list.prims {
                 let pts = list.points(p);
                 for q in pts {
@@ -215,7 +215,7 @@ pub fn previews() -> Vec<SymbolPreview> {
 struct SymbolM {
     inner: Option<Box<dyn Interactive>>,
     /// The symbol being placed, and the handles there were before (to find the new reference).
-    placing: Option<(&'static Symbol, std::collections::HashSet<cadcraft_doc::Handle>)>,
+    placing: Option<(&'static Symbol, std::collections::HashSet<cadaddy_doc::Handle>)>,
 }
 
 impl Interactive for SymbolM {
@@ -310,7 +310,7 @@ impl Interactive for SymbolM {
 
 #[cfg(test)]
 mod tests {
-    use cadcraft_doc::EntityKind;
+    use cadaddy_doc::EntityKind;
     use serde_json::json;
 
     use crate::Session;
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(layer_of(&s, &r["handle"]), "E-LITE");
         let r = s.execute("symbol", &json!({"name": "EL_RECEPTACLE_DUPLEX", "at": [9, 0], "layer": "current"})).unwrap();
         assert_eq!(layer_of(&s, &r["handle"]), "0");
-        assert!(s.doc().unwrap().layer("E-LITE").is_some_and(|l| l.color == cadcraft_color::Color::Index(2)));
+        assert!(s.doc().unwrap().layer("E-LITE").is_some_and(|l| l.color == cadaddy_color::Color::Index(2)));
         // Typed: the Layers option turns trade layers off for this drawing.
         for i in ["symbol", "layers", "EL_RECEPTACLE_DUPLEX", "20,0", "0", "", "", ""] {
             s.cmdline(i).unwrap();
@@ -427,9 +427,9 @@ mod tests {
     #[test]
     fn every_symbol_places_and_survives_a_dxf_round_trip_shape() {
         let mut s = Session::new();
-        for (i, sym) in cadcraft_doc::library::symbols::symbols().iter().enumerate() {
+        for (i, sym) in cadaddy_doc::library::symbols::symbols().iter().enumerate() {
             s.execute("symbol", &json!({ "name": sym.name, "at": [i as f64 * 60.0, 0] })).unwrap();
         }
-        assert_eq!(inserts(&s).len(), cadcraft_doc::library::symbols::symbols().len());
+        assert_eq!(inserts(&s).len(), cadaddy_doc::library::symbols::symbols().len());
     }
 }

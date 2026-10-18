@@ -1,7 +1,7 @@
 //! `grip.*` commands: the undoable, scriptable form of grip editing (see `crate::grips`).
 
-use cadcraft_doc::{Entity, EntityKind, Handle};
-use cadcraft_geom::{Mat3, Vec2};
+use cadaddy_doc::{Entity, EntityKind, Handle};
+use cadaddy_geom::{Mat3, Vec2};
 use serde_json::{Value, json};
 
 use super::curves;
@@ -65,8 +65,8 @@ fn stretch(s: &mut Session, cmd: &str, p: &Value) -> Result<Value> {
     let d = s.doc_mut()?;
     for (o, k) in &mut edits {
         // A dimension's text moved by its grip: with DIMTMOVE 0 the dimension line follows.
-        if let cadcraft_doc::EntityKind::Dimension(dm) = k
-            && let Some(cadcraft_doc::EntityKind::Dimension(old)) = d.entity(*o).map(|e| &e.kind)
+        if let cadaddy_doc::EntityKind::Dimension(dm) = k
+            && let Some(cadaddy_doc::EntityKind::Dimension(old)) = d.entity(*o).map(|e| &e.kind)
             && dm.text_mid != old.text_mid
         {
             let st = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);

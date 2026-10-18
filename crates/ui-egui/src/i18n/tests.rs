@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use super::*;
 use crate::{CadApp, Services};
-use cadcraft_engine::Session;
+use cadaddy_engine::Session;
 use serde_json::json;
 
 fn placeholders(text: &str) -> BTreeSet<&str> {
@@ -60,7 +60,7 @@ fn missing_commands_menus_tools_and_snap_labels(language: &str) -> Vec<String> {
     let catalog = catalog(language).unwrap();
     let mut sources = BTreeSet::new();
     sources.extend(crate::menus::MENUS.iter().copied());
-    for c in cadcraft_engine::command_specs() {
+    for c in cadaddy_engine::command_specs() {
         sources.insert(c.label);
         sources.extend(c.menu.iter().copied());
     }
@@ -74,7 +74,7 @@ fn missing_commands_menus_tools_and_snap_labels(language: &str) -> Vec<String> {
             sources.extend(large.iter().chain(*small).map(|(_, _, label)| *label));
         }
     }
-    sources.extend(cadcraft_engine::snap::mode::ALL.iter().map(|(_, name)| *name));
+    sources.extend(cadaddy_engine::snap::mode::ALL.iter().map(|(_, name)| *name));
     sources.into_iter().filter(|s| !s.is_empty() && !catalog.contains_key(&("", *s))).map(str::to_string).collect()
 }
 

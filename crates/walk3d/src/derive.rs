@@ -2,9 +2,9 @@
 
 use crate::math::{V3, v3};
 use crate::rules::{LayerKind, Level, Rules};
-use cadcraft_color::{Color, Rgb};
-use cadcraft_doc::geom::{Polyline, Vec2};
-use cadcraft_doc::{Drawing, Entity, EntityKind, Handle};
+use cadaddy_color::{Color, Rgb};
+use cadaddy_doc::geom::{Polyline, Vec2};
+use cadaddy_doc::{Drawing, Entity, EntityKind, Handle};
 
 /// Arcs are cut into chords no further than this from the curve, in drawing units.
 const ARC_TOL: f64 = 0.5;
@@ -694,8 +694,8 @@ pub(crate) fn closest(a: Vec2, b: Vec2, p: Vec2) -> (Vec2, f64) {
 mod tests {
     use super::*;
     use crate::rules::{DeviceRules, LayerRule, Mount};
-    use cadcraft_doc::{Insert, Line};
-    use cadcraft_geom::Vec3;
+    use cadaddy_doc::{Insert, Line};
+    use cadaddy_geom::Vec3;
 
     fn add(d: &mut Drawing, layer: &str, kind: EntityKind) {
         let h = Handle(d.handseed.max(1));

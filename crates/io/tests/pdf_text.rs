@@ -5,9 +5,9 @@
 //!
 //! The fonts are tiny synthetic TrueType files built here (no font files in the repository).
 
-use cadcraft_doc::{Common, Drawing, EntityKind, Space, Text, TextStyle, Viewport};
-use cadcraft_geom::{Vec2, Vec3};
-use cadcraft_io::plot;
+use cadaddy_doc::{Common, Drawing, EntityKind, Space, Text, TextStyle, Viewport};
+use cadaddy_geom::{Vec2, Vec3};
+use cadaddy_io::plot;
 use serde_json::json;
 
 // ---------- a minimal TrueType font: .notdef, "A" (triangle), "B" (square) ----------
@@ -146,8 +146,8 @@ fn test_font(fs_type: u16) -> Vec<u8> {
 fn fonts() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        cadcraft_fonts::ttf::register("cadcraft-pdf-test.ttf", test_font(0));
-        cadcraft_fonts::ttf::register("cadcraft-pdf-restricted.ttf", test_font(0x0002));
+        cadaddy_fonts::ttf::register("cadaddy-pdf-test.ttf", test_font(0));
+        cadaddy_fonts::ttf::register("cadaddy-pdf-restricted.ttf", test_font(0x0002));
     });
 }
 
@@ -176,8 +176,8 @@ fn text(d: &mut Drawing, space: &Space, style: &str, at: (f64, f64), value: &str
 fn drawing() -> Drawing {
     fonts();
     let mut d = Drawing::new_metric();
-    style(&mut d, "Real", "cadcraft-pdf-test.ttf");
-    style(&mut d, "Locked", "cadcraft-pdf-restricted.ttf");
+    style(&mut d, "Real", "cadaddy-pdf-test.ttf");
+    style(&mut d, "Locked", "cadaddy-pdf-restricted.ttf");
     d
 }
 
@@ -262,8 +262,8 @@ fn the_subset_is_a_valid_truetype_font() {
     let p: String = bytes.iter().map(|b| if b.is_ascii() { char::from(*b) } else { '?' }).collect();
     let file = font_file(&p, &bytes);
     assert!(p.contains(&format!("/Length1 {}", file.len())));
-    let face = cadcraft_fonts::ttf::Face::new(std::sync::Arc::new(file.clone()), 0).expect("the subset parses");
-    assert_eq!(cadcraft_fonts::subset::embedding(&face), cadcraft_fonts::subset::Embedding::Allowed);
+    let face = cadaddy_fonts::ttf::Face::new(std::sync::Arc::new(file.clone()), 0).expect("the subset parses");
+    assert_eq!(cadaddy_fonts::subset::embedding(&face), cadaddy_fonts::subset::Embedding::Allowed);
     // Glyph A kept, B (unused) emptied: the subset is smaller than the font.
     assert!(file.len() < test_font(0).len());
     // Whole-file checksum adjusted.

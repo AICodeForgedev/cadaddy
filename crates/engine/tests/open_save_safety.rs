@@ -2,9 +2,9 @@
 //! opened a second time; saving over a file that was read with parts left out asks first; saving
 //! over a drawing keeps the previous version as .bak; a failed save leaves no temporary file.
 
-use cadcraft_doc::Drawing;
-use cadcraft_engine::Session;
-use cadcraft_engine::cmd::file::{IoHooks, set_io};
+use cadaddy_doc::Drawing;
+use cadaddy_engine::Session;
+use cadaddy_engine::cmd::file::{IoHooks, set_io};
 use serde_json::json;
 
 /// A reader that leaves something out when the file says so, and a writer that writes "saved".

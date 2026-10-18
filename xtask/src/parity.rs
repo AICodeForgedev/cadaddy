@@ -1,5 +1,5 @@
 //! `cargo xtask parity`: compare the reference app's menu tree (feature names only, in
-//! `xtask/data/menu-catalog.txt`) with the live command registry (`cadcraft-cli commands`), and
+//! `xtask/data/menu-catalog.txt`) with the live command registry (`cadaddy-cli commands`), and
 //! write `docs/parity-checklist.md` (dated; the assessment that interprets it is
 //! `docs/target-app-parity.md`).
 
@@ -53,9 +53,9 @@ pub fn run(root: &Path) -> Result<(), String> {
     let catalog = std::fs::read_to_string(root.join("xtask/data/menu-catalog.txt")).map_err(|e| format!("menu catalog: {e}"))?;
     let out = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
         .current_dir(root)
-        .args(["run", "-q", "-p", "cadcraft-cli", "--", "commands"])
+        .args(["run", "-q", "-p", "cadaddy-cli", "--", "commands"])
         .output()
-        .map_err(|e| format!("cadcraft-cli: {e}"))?;
+        .map_err(|e| format!("cadaddy-cli: {e}"))?;
     let cmds: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("commands JSON: {e}"))?;
     let paths: Vec<String> = cmds
         .as_array()

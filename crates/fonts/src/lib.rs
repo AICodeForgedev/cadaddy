@@ -1,7 +1,7 @@
-//! CADCraft text layout.
+//! CADaddy text layout.
 //!
 //! Turns TEXT and MTEXT into stroke polylines with the built-in single-stroke font
-//! ("CADCraft Stroke") or glyph outlines of installed TrueType fonts ([`ttf`]), with a
+//! ("CADaddy Stroke") or glyph outlines of installed TrueType fonts ([`ttf`]), with a
 //! per-character fallback to installed fonts for characters the chosen font lacks. Handles the
 //! `%%` control codes, alignment modes, width factor, obliquing, MTEXT inline formatting
 //! (paragraphs, stacking, height changes), word wrap and attachment points.
@@ -20,7 +20,7 @@ mod stroke;
 pub mod subset;
 pub mod ttf;
 
-use cadcraft_geom::{Bounds2, Vec2};
+use cadaddy_geom::{Bounds2, Vec2};
 
 pub use mtext::para::{DEFAULT_TAB, ListStyle, MTextColumnSpec, ParaAlign, ParaProps, Paragraphs, TabKind, list_contents};
 pub use mtext::{MTextColor, MTextLayout, MTextParams, MTextPiece, layout_mtext, layout_mtext_with, plain_mtext};
@@ -30,13 +30,10 @@ pub use craft_fonts::{CRAFT_FONTS, CraftFont};
 
 /// Name of the built-in font.
 pub const BUILTIN_FONT: &str = "CADaddy Stroke";
-/// The built-in font's earlier name, still read from settings and drawings made with it.
-pub const LEGACY_BUILTIN_FONT: &str = "CADCraft Stroke";
-
-/// Whether `name` names the built-in stroke font (its current or earlier name).
+/// Whether `name` names the built-in stroke font.
 pub fn is_builtin_font(name: &str) -> bool {
     let n = name.trim();
-    n.eq_ignore_ascii_case(BUILTIN_FONT) || n.eq_ignore_ascii_case(LEGACY_BUILTIN_FONT)
+    n.eq_ignore_ascii_case(BUILTIN_FONT)
 }
 
 /// One laid-out run of text: strokes in local coordinates (baseline at y = 0, x from 0).
@@ -764,8 +761,8 @@ mod ttf_tests {
             assert!(crate::ttf::Face::new(arc.clone(), 3).is_none());
             assert!(!crate::ttf::Face { bytes: arc, index: u32::MAX }.has_glyph('a'));
         }
-        crate::ttf::register("cadcraft-hostile-test.ttc", ttc);
-        assert!(crate::ttf::find("cadcraft-hostile-test.ttc").is_none());
+        crate::ttf::register("cadaddy-hostile-test.ttc", ttc);
+        assert!(crate::ttf::find("cadaddy-hostile-test.ttc").is_none());
         let _ = crate::ttf::fallback_for('\u{4E2D}');
     }
 

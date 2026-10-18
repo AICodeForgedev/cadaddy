@@ -1,6 +1,6 @@
 //! Walk mode: the open drawing turned into 3D and walked first-person, inside CADaddy.
 //!
-//! The 3D is derived ([`cadcraft_walk3d`]), never modelled: walls stand up from the plan's wall
+//! The 3D is derived ([`cadaddy_walk3d`]), never modelled: walls stand up from the plan's wall
 //! layers, devices hang at their mounting heights, floors stack at their elevations. The rules sit
 //! beside the drawing as `<name>.walk.json`, or in a building file in the same folder that names
 //! this drawing as one floor's sheet (then every floor of the building is walked). Nothing is
@@ -9,8 +9,8 @@
 pub mod gpu;
 
 use crate::CadApp;
-use cadcraft_doc::{Drawing, EntityKind, Handle};
-use cadcraft_walk3d::{DeviceInfo, DimKind, Owner, Rules, Scene, Walker, derive_set, measure, pick};
+use cadaddy_doc::{Drawing, EntityKind, Handle};
+use cadaddy_walk3d::{DeviceInfo, DimKind, Owner, Rules, Scene, Walker, derive_set, measure, pick};
 use egui_wgpu::wgpu;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -140,7 +140,7 @@ fn read_small(path: &Path) -> Option<String> {
 }
 
 fn read_drawing(path: &Path) -> Result<Drawing, String> {
-    cadcraft_engine::cmd::file::read_file(&path.to_string_lossy()).map(|f| f.into_drawing())
+    cadaddy_engine::cmd::file::read_file(&path.to_string_lossy()).map(|f| f.into_drawing())
 }
 
 /// What the last click hit.
@@ -605,7 +605,7 @@ fn layers_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
 }
 
 /// A world point on screen (none behind the eye).
-fn project(m: &cadcraft_walk3d::Mat4, rect: egui::Rect, p: cadcraft_walk3d::V3) -> Option<egui::Pos2> {
+fn project(m: &cadaddy_walk3d::Mat4, rect: egui::Rect, p: cadaddy_walk3d::V3) -> Option<egui::Pos2> {
     let r = |i: usize| m.0.get(i).map(|row| row[0] * p.x + row[1] * p.y + row[2] * p.z + row[3]).unwrap_or(0.0);
     let (x, y, w) = (r(0), r(1), r(3));
     if w < 0.05 {
@@ -616,7 +616,7 @@ fn project(m: &cadcraft_walk3d::Mat4, rect: egui::Rect, p: cadcraft_walk3d::V3) 
 }
 
 /// Dimension arrows over the 3D view: a yellow line with arrowheads at both ends and its length.
-fn draw_dims(painter: &egui::Painter, rect: egui::Rect, m: &cadcraft_walk3d::Mat4, dims: &[cadcraft_walk3d::Dim]) {
+fn draw_dims(painter: &egui::Painter, rect: egui::Rect, m: &cadaddy_walk3d::Mat4, dims: &[cadaddy_walk3d::Dim]) {
     let col = egui::Color32::from_rgb(255, 214, 10);
     let stroke = egui::Stroke::new(2.0, col);
     let painter = painter.with_clip_rect(rect);
@@ -675,14 +675,14 @@ mod tests {
         .unwrap_or_else(|e| panic!("{e}"));
         let mut d = Drawing::default();
         let mut push = |h: u64, layer: &str, kind: EntityKind| {
-            let mut e = cadcraft_doc::Entity::new(Handle(h), kind);
+            let mut e = cadaddy_doc::Entity::new(Handle(h), kind);
             e.common.layer = layer.into();
             d.model.push(e);
         };
-        let v = |x: f64, y: f64| cadcraft_geom::Vec3 { x, y, z: 0.0 };
-        push(1, "A-WALL", EntityKind::Line(cadcraft_doc::Line { a: v(0.0, 0.0), b: v(240.0, 0.0) }));
+        let v = |x: f64, y: f64| cadaddy_geom::Vec3 { x, y, z: 0.0 };
+        push(1, "A-WALL", EntityKind::Line(cadaddy_doc::Line { a: v(0.0, 0.0), b: v(240.0, 0.0) }));
         // A second wall gives the level an area, so it gets a floor.
-        push(5, "A-WALL", EntityKind::Line(cadcraft_doc::Line { a: v(240.0, 0.0), b: v(240.0, 120.0) }));
+        push(5, "A-WALL", EntityKind::Line(cadaddy_doc::Line { a: v(240.0, 0.0), b: v(240.0, 120.0) }));
         for (h, t, x) in [(2u64, "light", 60.0), (3, "receptacle", 120.0), (4, "light", 180.0)] {
             let attr = serde_json::json!({"tag": "TYPE", "text": {"insert": v(x, 60.0), "height": 6.0, "value": t}});
             let ins = serde_json::json!({"block": "E-DEV", "insert": v(x, 60.0), "attribs": [attr]});
@@ -713,11 +713,11 @@ mod tests {
             "layers":[{"layer":"A-WALL","kind":"wall"}]}"#;
         let _ = std::fs::write(dir.join("Hotel.walk.json"), rules);
         let mut d = Drawing::default();
-        let mut e = cadcraft_doc::Entity::new(
+        let mut e = cadaddy_doc::Entity::new(
             Handle(5),
-            EntityKind::Line(cadcraft_doc::Line {
-                a: cadcraft_geom::Vec3 { x: 0.0, y: 0.0, z: 0.0 },
-                b: cadcraft_geom::Vec3 { x: 120.0, y: 0.0, z: 0.0 },
+            EntityKind::Line(cadaddy_doc::Line {
+                a: cadaddy_geom::Vec3 { x: 0.0, y: 0.0, z: 0.0 },
+                b: cadaddy_geom::Vec3 { x: 120.0, y: 0.0, z: 0.0 },
             }),
         );
         e.common.layer = "A-WALL".into();

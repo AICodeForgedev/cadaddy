@@ -2,7 +2,7 @@
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (Swedish catalog added: complete catalog, menu headings, native-speaker terminology review; previously: complete current Korean catalog with Hangul font coverage) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
-How far CADCraft's interface and drawing text are from AutoCAD's languages. Summarised in
+How far CADaddy's interface and drawing text are from AutoCAD's languages. Summarised in
 [ROADMAP.md](../ROADMAP.md#languages); work items in [gaps.md](gaps.md#localization).
 
 ## What the target ships
@@ -18,7 +18,7 @@ language-pack list, not measured here). AutoCAD's spell checker ships about 20 d
 Drawing text in AutoCAD: TrueType and SHX big fonts (CJK), Unicode `\U+` escapes, complex-script
 shaping and right-to-left text through TrueType, vertical SHX text styles.
 
-## What CADCraft has
+## What CADaddy has
 
 - **A display-time string catalog** (`crates/ui-egui/src/i18n/`, landed with #36): a TSV per
   language (context, English source, translation, `@plural` rows), Edit → Interface Language with
@@ -72,7 +72,7 @@ plus native review by a human; extending the catalog to the remaining English-on
 Other languages shipped: Ukrainian, Brazilian Portuguese, German, Czech, Russian, French, Italian, Korean and Swedish.
 Czech, Swedish and Brazilian Portuguese cover the reference catalog and every marked UI literal; engine diagnostics and uncatalogued text
 remain English. AutoCAD for Mac ships 7
-non-English languages (zh-Hans, es, fr, ja, de, ko, it); of those, CADCraft now ships German and Korean,
+non-English languages (zh-Hans, es, fr, ja, de, ko, it); of those, CADaddy now ships German and Korean,
 and additionally Ukrainian, which AutoCAD for Mac doesn't ship.
 
 **Total to put all twelve at `full`:** about 55–95 Opus 5.5 hours (catalog extension 4–6 h,

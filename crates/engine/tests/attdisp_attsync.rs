@@ -1,7 +1,7 @@
 //! ATTDISP (ATTMODE, honoured by the display) and ATTSYNC.
 
-use cadcraft_doc::{Attrib, EntityKind, Handle, Space};
-use cadcraft_engine::Session;
+use cadaddy_doc::{Attrib, EntityKind, Handle, Space};
+use cadaddy_engine::Session;
 use serde_json::{Value, json};
 
 /// Make block `name` from what is in model space now (the objects are removed).
@@ -29,7 +29,7 @@ fn attribs(s: &Session, h: Handle) -> Vec<Attrib> {
 }
 
 fn segments(s: &Session) -> usize {
-    cadcraft_render::build(s.doc().unwrap(), &Space::Model, &cadcraft_render::Options::default()).segment_count()
+    cadaddy_render::build(s.doc().unwrap(), &Space::Model, &cadaddy_render::Options::default()).segment_count()
 }
 
 #[test]
@@ -119,7 +119,7 @@ fn typed_attdef_asks_for_height_and_rotation() {
     s.script("ATTDEF\nDOORNO\nDoor number\nD1\n101,1\n0.3\n90\n").unwrap();
     assert!(s.running.is_none(), "{}", s.prompt_text());
     let d = s.doc().unwrap();
-    let a = d.model.iter().find_map(|e| if let cadcraft_doc::EntityKind::AttDef(a) = &e.kind { Some(a.clone()) } else { None }).expect("attdef");
+    let a = d.model.iter().find_map(|e| if let cadaddy_doc::EntityKind::AttDef(a) = &e.kind { Some(a.clone()) } else { None }).expect("attdef");
     assert_eq!(a.tag, "DOORNO");
     assert!((a.text.height - 0.3).abs() < 1e-9 && (a.text.rotation.to_degrees() - 90.0).abs() < 1e-9, "{:?}", a.text);
 }

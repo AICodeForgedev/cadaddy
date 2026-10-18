@@ -1,9 +1,9 @@
 //! Snaps on dimensions, justified text and hatches; the snap grid's base and angle (#334).
 
-use cadcraft_doc::{Common, EntityKind, HAlign, Space, Text, VAlign};
-use cadcraft_engine::Session;
-use cadcraft_engine::snap::{self, mode};
-use cadcraft_geom::{Vec2, Vec3};
+use cadaddy_doc::{Common, EntityKind, HAlign, Space, Text, VAlign};
+use cadaddy_engine::Session;
+use cadaddy_engine::snap::{self, mode};
+use cadaddy_geom::{Vec2, Vec3};
 use serde_json::json;
 
 /// The snap of `modes` near `p` (a hair off it, inside a 0.1 aperture).

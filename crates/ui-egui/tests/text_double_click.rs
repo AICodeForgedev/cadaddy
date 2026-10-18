@@ -1,9 +1,9 @@
 //! Double-clicking text with no command running edits it, as in AutoCAD (#842).
 
-use cadcraft_engine::doc::EntityKind;
-use cadcraft_engine::geom::Vec2;
-use cadcraft_engine::{Input, Session};
-use cadcraft_ui_egui::{CadApp, Services};
+use cadaddy_engine::doc::EntityKind;
+use cadaddy_engine::geom::Vec2;
+use cadaddy_engine::{Input, Session};
+use cadaddy_ui_egui::{CadApp, Services};
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use serde_json::json;

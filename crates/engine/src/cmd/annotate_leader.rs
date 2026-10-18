@@ -6,8 +6,8 @@ use serde_json::json;
 
 use super::run_leader;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
-use cadcraft_doc::EntityKind;
-use cadcraft_geom::Vec2;
+use cadaddy_doc::EntityKind;
+use cadaddy_geom::Vec2;
 
 /// QLEADER's default maximum number of leader points.
 const QUICK_POINTS: usize = 3;
@@ -111,7 +111,7 @@ impl Interactive for LeaderM {
 
 #[cfg(test)]
 mod tests {
-    use cadcraft_doc::EntityKind;
+    use cadaddy_doc::EntityKind;
 
     use crate::Session;
 

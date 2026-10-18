@@ -1,10 +1,10 @@
 //! TRIM and EXTEND against an ellipse or a spline. Cutting and boundary edges reach TRIM and
 //! EXTEND as segments, so an ellipse or a spline arrives as the chords of its tessellation and a
 //! new end lands on a chord, a little off the curve. This moves every new end onto the curve
-//! itself ([`cadcraft_geom::refine_intersection`]).
+//! itself ([`cadaddy_geom::refine_intersection`]).
 
-use cadcraft_doc::{EntityKind, Prim};
-use cadcraft_geom::{CurveRef, Ellipse, Line, TAU, Vec2, arc_to_bulge, bulge_to_arc, norm_angle, refine_intersection};
+use cadaddy_doc::{EntityKind, Prim};
+use cadaddy_geom::{CurveRef, Ellipse, Line, TAU, Vec2, arc_to_bulge, bulge_to_arc, norm_angle, refine_intersection};
 
 #[derive(Clone, Copy, PartialEq)]
 enum End {
@@ -30,7 +30,7 @@ fn ends(k: &EntityKind) -> Option<(Vec2, Vec2)> {
     }
 }
 
-fn ellipse(e: &cadcraft_doc::Ellipse) -> Ellipse {
+fn ellipse(e: &cadaddy_doc::Ellipse) -> Ellipse {
     Ellipse { center: e.center.xy(), major: e.major.xy(), ratio: e.ratio, start: e.start, end: e.end }
 }
 

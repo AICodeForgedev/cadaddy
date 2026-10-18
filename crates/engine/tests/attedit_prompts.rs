@@ -1,7 +1,7 @@
 //! ATTEDIT / -ATTEDIT typed at the command line, and attribute tags matched in any case.
 
-use cadcraft_doc::{EntityKind, Handle};
-use cadcraft_engine::Session;
+use cadaddy_doc::{EntityKind, Handle};
+use cadaddy_engine::Session;
 use serde_json::{Value, json};
 
 /// Block B: a line from 0,0 to 10,0 with attributes T (default "one") and U (default "u").

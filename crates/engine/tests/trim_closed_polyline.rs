@@ -2,8 +2,8 @@
 //! whichever side of the stored start vertex the pick is on (a pick after the last cutting edge
 //! used to keep one extra circuit of the shape).
 
-use cadcraft_engine::Session;
-use cadcraft_engine::doc::EntityKind;
+use cadaddy_engine::Session;
+use cadaddy_engine::doc::EntityKind;
 use serde_json::json;
 
 type Vertex = (f64, f64, f64);

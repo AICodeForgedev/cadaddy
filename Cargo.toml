@@ -6,24 +6,24 @@ members = ["crates/*", "apps/*", "xtask"]
 [workspace.package]
 version = "0.7.6"
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "FSL-1.1-ALv2"
 rust-version = "1.90"
-repository = "https://github.com/storytold/cadcraft"
+repository = "https://github.com/AICodeForgedev/cadaddy"
 
 [workspace.dependencies]
 # internal
-cadcraft-geom = { path = "crates/geom" }
-cadcraft-dxf = { path = "crates/dxf" }
-cadcraft-dwg = { path = "crates/dwg" }
-cadcraft-color = { path = "crates/color" }
-cadcraft-doc = { path = "crates/doc" }
-cadcraft-constraints = { path = "crates/constraints" }
-cadcraft-fonts = { path = "crates/fonts" }
-cadcraft-render = { path = "crates/render" }
-cadcraft-io = { path = "crates/io" }
-cadcraft-engine = { path = "crates/engine" }
-cadcraft-ui-egui = { path = "crates/ui-egui" }
-cadcraft-mcp = { path = "crates/mcp" }
+cadaddy-geom = { path = "crates/geom" }
+cadaddy-dxf = { path = "crates/dxf" }
+cadaddy-dwg = { path = "crates/dwg" }
+cadaddy-color = { path = "crates/color" }
+cadaddy-doc = { path = "crates/doc" }
+cadaddy-constraints = { path = "crates/constraints" }
+cadaddy-fonts = { path = "crates/fonts" }
+cadaddy-render = { path = "crates/render" }
+cadaddy-io = { path = "crates/io" }
+cadaddy-engine = { path = "crates/engine" }
+cadaddy-ui-egui = { path = "crates/ui-egui" }
+cadaddy-mcp = { path = "crates/mcp" }
 # Which paths stored in a drawing (xrefs, data links) may be opened.
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
 

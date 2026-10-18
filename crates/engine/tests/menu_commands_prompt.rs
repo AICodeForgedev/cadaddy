@@ -2,7 +2,7 @@
 //! "`x` is required" (battle test 3: Find Text and Write Block on the ribbon did). The ones listed
 //! open a dialog in the app, or report a state ("No isolated layers.").
 
-use cadcraft_engine::{Session, command_specs};
+use cadaddy_engine::{Session, command_specs};
 
 const DIALOG_OR_STATE: &[&str] = &[
     "open",

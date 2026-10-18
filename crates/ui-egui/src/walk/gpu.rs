@@ -1,7 +1,7 @@
 //! Walk mode's offscreen 3D renderer: the scene is drawn into a texture (4× MSAA, depth), which
 //! the walk view shows as an egui image and the headless `cadaddy-walk --shot` copies to a PNG.
 
-use cadcraft_walk3d::{Scene, Vertex};
+use cadaddy_walk3d::{Scene, Vertex};
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::util::DeviceExt;
 

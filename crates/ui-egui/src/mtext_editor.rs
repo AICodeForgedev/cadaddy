@@ -2,11 +2,11 @@
 //! the text's location and width with a formatting toolbar (font, height, bold, italic,
 //! underline, overline, colour, alignment, lists, tabs) and a ruler for the paragraph's indents
 //! and tab stops. The text and its formats live in the engine's
-//! [`cadcraft_engine::mtext_edit::Formatted`]; this file only draws and forwards edits.
+//! [`cadaddy_engine::mtext_edit::Formatted`]; this file only draws and forwards edits.
 
 use std::sync::Arc;
 
-use cadcraft_engine::mtext_edit::{CharFmt, Flag, Formatted, ListStyle, MTextColor, ParaAlign, TabKind};
+use cadaddy_engine::mtext_edit::{CharFmt, Flag, Formatted, ListStyle, MTextColor, ParaAlign, TabKind};
 use egui::text::{CCursor, CCursorRange, LayoutJob};
 use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Shape, Stroke, TextFormat, pos2, vec2};
 
@@ -52,8 +52,8 @@ fn edit_id() -> egui::Id {
 /// The ACI index or true colour as a screen colour.
 fn color32(c: MTextColor) -> Color32 {
     let rgb = match c {
-        MTextColor::Aci(v) => cadcraft_color::aci_rgb(u8::try_from(v).unwrap_or(7)),
-        MTextColor::Rgb(v) => cadcraft_color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8),
+        MTextColor::Aci(v) => cadaddy_color::aci_rgb(u8::try_from(v).unwrap_or(7)),
+        MTextColor::Rgb(v) => cadaddy_color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8),
     };
     Color32::from_rgb(rgb.0, rgb.1, rgb.2)
 }
@@ -91,7 +91,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     let code = usize::from(mt.attach.clamp(1, 9) - 1);
     let (col, row) = ((code % 3) as f64, (code / 3) as f64);
     let ww = f64::from(width) / scale;
-    let corner = cadcraft_geom::Vec2::new(mt.insert.x - col * ww / 2.0, mt.insert.y + row * base_h * 2.0);
+    let corner = cadaddy_geom::Vec2::new(mt.insert.x - col * ww / 2.0, mt.insert.y + row * base_h * 2.0);
     let at = app.canvas.xf.map_or(rect.center(), |x| x.w2s(corner));
     let max_x = (rect.right() - width - 8.0).max(rect.left());
     let pos = pos2(at.x.clamp(rect.left(), max_x), at.y.clamp(rect.top() + st.top, (rect.bottom() - 120.0).max(rect.top() + st.top)));
@@ -137,14 +137,14 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
             ctx.data_mut(|d| d.remove::<State>(state_id()));
             // The editor holds the whole contents: one input, then Enter ends MTEXT's text entry.
             if !st.fmt.is_empty() {
-                let _ = app.session.input(cadcraft_engine::Input::Text(st.fmt.to_contents()));
+                let _ = app.session.input(cadaddy_engine::Input::Text(st.fmt.to_contents()));
             }
             let running = app.session.running.as_ref().map(|r| r.id.clone());
             if running.as_deref() == Some("mtext") {
-                let _ = app.session.input(cadcraft_engine::Input::Enter);
+                let _ = app.session.input(cadaddy_engine::Input::Enter);
             } else if running.as_deref() == Some("textedit") && st.fmt.is_empty() {
                 // Emptied: keep the text as it was (Enter at "Enter new text").
-                let _ = app.session.input(cadcraft_engine::Input::Enter);
+                let _ = app.session.input(cadaddy_engine::Input::Enter);
             }
         }
         Done::Cancel => {
@@ -451,7 +451,7 @@ fn text_box(ui: &mut egui::Ui, st: &mut State, base_h: f64, px: f32, width: f32,
         .desired_rows(5)
         .margin(egui::Margin::symmetric(4, 4))
         .lock_focus(true)
-        .char_limit(cadcraft_engine::mtext_edit::MAX_CHARS)
+        .char_limit(cadaddy_engine::mtext_edit::MAX_CHARS)
         .layouter(&mut layouter)
         .show(ui);
     if !st.focused || (!out.response.has_focus() && buf.is_empty() && st.fmt.is_empty()) {
@@ -486,7 +486,7 @@ fn text_box(ui: &mut egui::Ui, st: &mut State, base_h: f64, px: f32, width: f32,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadcraft_engine::Session;
+    use cadaddy_engine::Session;
 
     use crate::Services;
 
@@ -505,8 +505,8 @@ mod tests {
         assert!(ctx.data_mut(|d| d.get_temp::<State>(state_id())).is_none());
         app.start("mtext");
         assert!(app.session.editing_mtext().is_none(), "no box yet");
-        app.session.input(cadcraft_engine::Input::Point(cadcraft_geom::Vec2::new(1.0, 1.0))).unwrap();
-        app.session.input(cadcraft_engine::Input::Point(cadcraft_geom::Vec2::new(6.0, 0.0))).unwrap();
+        app.session.input(cadaddy_engine::Input::Point(cadaddy_geom::Vec2::new(1.0, 1.0))).unwrap();
+        app.session.input(cadaddy_engine::Input::Point(cadaddy_geom::Vec2::new(6.0, 0.0))).unwrap();
         let m = app.session.editing_mtext().expect("box known");
         assert!((m.width - 5.0).abs() < 1e-9, "{}", m.width);
         frame(&mut app);
@@ -514,10 +514,10 @@ mod tests {
         st.fmt.set_text("hello", &CharFmt::default());
         st.fmt.toggle(0..5, Flag::Bold);
         let contents = st.fmt.to_contents();
-        app.session.input(cadcraft_engine::Input::Text(contents.clone())).unwrap();
-        app.session.input(cadcraft_engine::Input::Enter).unwrap();
+        app.session.input(cadaddy_engine::Input::Text(contents.clone())).unwrap();
+        app.session.input(cadaddy_engine::Input::Enter).unwrap();
         let d = app.session.doc().unwrap();
-        let found = d.model.iter().any(|e| matches!(&e.kind, cadcraft_engine::doc::EntityKind::MText(m) if m.contents == contents));
+        let found = d.model.iter().any(|e| matches!(&e.kind, cadaddy_engine::doc::EntityKind::MText(m) if m.contents == contents));
         assert!(found, "{contents}");
     }
 
@@ -533,9 +533,9 @@ mod tests {
             }
         };
         let r = app.session.execute("mtext", &serde_json::json!({ "at": [0, 10], "text": "{\\fArial|b1;OLD} NOTE", "height": 2 })).unwrap();
-        let h = cadcraft_engine::doc::Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap();
+        let h = cadaddy_engine::doc::Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap();
         app.start("textedit");
-        app.session.input(cadcraft_engine::Input::Point(cadcraft_geom::Vec2::new(1.0, 9.0))).unwrap();
+        app.session.input(cadaddy_engine::Input::Point(cadaddy_geom::Vec2::new(1.0, 9.0))).unwrap();
         let m = app.session.editing_mtext().expect("TEXTEDIT reports the mtext it edits");
         assert!(m.contents.contains("OLD"));
         frame(&mut app);
@@ -543,10 +543,10 @@ mod tests {
         assert_eq!(st.fmt.text(), "OLD NOTE", "the editor starts from the text");
         assert!(st.fmt.fmt_at(0).bold, "with its formatting");
         st.fmt.set_text("NEW NOTE", &CharFmt::default());
-        app.session.input(cadcraft_engine::Input::Text(st.fmt.to_contents())).unwrap();
+        app.session.input(cadaddy_engine::Input::Text(st.fmt.to_contents())).unwrap();
         let d = app.session.doc().unwrap();
         match &d.entity(h).unwrap().kind {
-            cadcraft_engine::doc::EntityKind::MText(m) => assert!(m.contents.contains("NEW NOTE"), "{}", m.contents),
+            cadaddy_engine::doc::EntityKind::MText(m) => assert!(m.contents.contains("NEW NOTE"), "{}", m.contents),
             k => panic!("{k:?}"),
         }
     }
@@ -564,9 +564,9 @@ mod tests {
             out.textures_delta.clear();
         };
         let r = app.session.execute("mtext", &serde_json::json!({ "at": [0, 10], "text": "HELLO WORLD", "height": 2 })).unwrap();
-        let h = cadcraft_engine::doc::Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap();
+        let h = cadaddy_engine::doc::Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap();
         app.start("textedit");
-        app.session.input(cadcraft_engine::Input::Point(cadcraft_geom::Vec2::new(1.0, 9.0))).unwrap();
+        app.session.input(cadaddy_engine::Input::Point(cadaddy_geom::Vec2::new(1.0, 9.0))).unwrap();
         run(&mut app, vec![]);
         run(&mut app, vec![]);
         assert!(ctx.egui_wants_keyboard_input(), "the editor has the keyboard, not the command line");
@@ -586,7 +586,7 @@ mod tests {
         out.textures_delta.clear();
         let d = app.session.doc().unwrap();
         match &d.entity(h).unwrap().kind {
-            cadcraft_engine::doc::EntityKind::MText(m) => assert!(m.contents.contains("HELLO WORLD AGAIN"), "{}", m.contents),
+            cadaddy_engine::doc::EntityKind::MText(m) => assert!(m.contents.contains("HELLO WORLD AGAIN"), "{}", m.contents),
             k => panic!("{k:?}"),
         }
     }

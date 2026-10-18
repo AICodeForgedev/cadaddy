@@ -17,9 +17,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use cadcraft_color::Rgb;
-use cadcraft_geom::{Bounds2, Vec2};
-use cadcraft_render::{DisplayList, Kind};
+use cadaddy_color::Rgb;
+use cadaddy_geom::{Bounds2, Vec2};
+use cadaddy_render::{DisplayList, Kind};
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::util::DeviceExt;
 
@@ -45,7 +45,7 @@ const IMAGE_VERTEX_SIZE: usize = 20;
 /// queued behind the one on screen; Windows DX12 honours one). `low_latency` (the
 /// app passes it on Linux/BSD) prefers a mode that never queues: `AutoNoVsync` picks Immediate,
 /// then Mailbox, then falls back to FIFO, so it is valid on every surface; under a compositor the
-/// compositor still syncs to the display. `vsync` is the `CADCRAFT_VSYNC` override: `1`/`on`
+/// compositor still syncs to the display. `vsync` is the `CADADDY_VSYNC` override: `1`/`on`
 /// forces FIFO (tear-free without a compositor), `0`/`off` forces the low-latency mode.
 pub fn surface_config(vsync: Option<&str>, low_latency: bool) -> egui_wgpu::SurfaceConfig {
     let no_vsync = match vsync.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
@@ -122,7 +122,7 @@ pub struct MeshData {
 /// pixels after draw-order group `group` (the group ending at `breaks[group]`) and before the
 /// next, so it covers what was drawn before it and lies under what comes after.
 pub struct MeshImage {
-    pub raster: Arc<cadcraft_render::images::Raster>,
+    pub raster: Arc<cadaddy_render::images::Raster>,
     pub verts: Vec<u8>,
     pub group: usize,
 }
@@ -137,7 +137,7 @@ struct Uploaded {
 
 /// An uploaded [`MeshImage`].
 struct LayerImage {
-    raster: Arc<cadcraft_render::images::Raster>,
+    raster: Arc<cadaddy_render::images::Raster>,
     vertices: Option<Batch>,
     group: usize,
 }
@@ -439,7 +439,7 @@ struct Resources {
     sampler: wgpu::Sampler,
     /// Image textures by their pixels (each keeps its pixels alive, so a key isn't reused while
     /// it is here); dropped when no layer draws them.
-    textures: std::collections::HashMap<usize, (Arc<cadcraft_render::images::Raster>, wgpu::BindGroup)>,
+    textures: std::collections::HashMap<usize, (Arc<cadaddy_render::images::Raster>, wgpu::BindGroup)>,
     /// With a stencil buffer: the pipelines of [`Stencil::Mask`] and [`Stencil::Inside`].
     clipped: Option<ClipPipelines>,
     linear_out: bool,
@@ -727,7 +727,7 @@ impl Resources {
 impl Resources {
     /// Create the textures the layers' images need and drop those no layer draws any more.
     fn sync_textures(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let used: std::collections::HashMap<usize, Arc<cadcraft_render::images::Raster>> =
+        let used: std::collections::HashMap<usize, Arc<cadaddy_render::images::Raster>> =
             self.layers.iter().flat_map(|l| &l.images).map(|im| (Arc::as_ptr(&im.raster) as usize, Arc::clone(&im.raster))).collect();
         self.textures.retain(|k, _| used.contains_key(k));
         let max = device.limits().max_texture_dimension_2d;
@@ -975,8 +975,8 @@ fn batch_ranges(counts: impl IntoIterator<Item = u32>, range: std::ops::Range<us
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadcraft_doc::Handle;
-    use cadcraft_render::DPrim;
+    use cadaddy_doc::Handle;
+    use cadaddy_render::DPrim;
 
     #[test]
     fn surface_config_prefers_low_latency_where_asked_and_honours_override() {
@@ -1141,9 +1141,9 @@ mod tests {
     #[test]
     fn images_draw_between_draw_order_groups() {
         let mut l = list();
-        let raster = Arc::new(cadcraft_render::images::Raster::new(1, 1, vec![9, 9, 9, 255]).unwrap());
+        let raster = Arc::new(cadaddy_render::images::Raster::new(1, 1, vec![9, 9, 9, 255]).unwrap());
         // the fill becomes an image over the unit square (top-left corner at 0,1)
-        l.images.push(cadcraft_render::ImageRef {
+        l.images.push(cadaddy_render::ImageRef {
             path: "x".into(),
             raster,
             origin: Vec2::new(0.0, 1.0),

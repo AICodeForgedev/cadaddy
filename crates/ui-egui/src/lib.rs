@@ -1,6 +1,6 @@
-//! The CADCraft egui front end.
+//! The CADaddy egui front end.
 //!
-//! A thin shell over [`cadcraft_engine::Session`]: panels read engine state and act through
+//! A thin shell over [`cadaddy_engine::Session`]: panels read engine state and act through
 //! commands (`app.run(id, params)`) or the command line (`app.cmdline(text)`). Nothing here owns
 //! drawing data. The layout follows the familiar CAD desktop: title and tool bar, file tabs,
 //! Tool Sets on the left, the drawing area with its command line, Layers and Properties on the
@@ -57,14 +57,14 @@ pub mod exchange;
 
 use std::sync::mpsc::Receiver;
 
-use cadcraft_engine::Session;
+use cadaddy_engine::Session;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub use control::{ControlRequest, ControlResponse, PendingReply};
 
 /// The host storage key for [`CadApp::prefs_json`].
-pub const PREFS_KEY: &str = "cadcraft.prefs";
+pub const PREFS_KEY: &str = "cadaddy.prefs";
 
 /// How many recently opened drawings are kept (AutoCAD's default for its file history).
 pub const RECENT_FILES: usize = 9;
@@ -94,7 +94,7 @@ pub struct UiState {
     /// Keep the system cursor visible over the drawing area (a small crosshair at the centre of the
     /// drawn one) instead of hiding it. Screen magnifiers (Windows Magnifier "follow the mouse
     /// pointer"), screen readers, recorders and remote desktops track the system cursor and lose it
-    /// when it is hidden. Off by default; `CADCRAFT_SYSTEM_CURSOR=1` turns it on at startup.
+    /// when it is hidden. Off by default; `CADADDY_SYSTEM_CURSOR=1` turns it on at startup.
     pub system_cursor: bool,
     /// "Drafting" or "Modeling".
     pub toolset_tab: String,
@@ -123,14 +123,14 @@ pub struct UiState {
 }
 
 /// A DXF/DWG file version (2000 … 2018).
-pub use cadcraft_engine::cmd::file::Version as SaveVersion;
+pub use cadaddy_engine::cmd::file::Version as SaveVersion;
 
 /// The default save format for new drawings, like AutoCAD's Options > Open and Save > "Save as".
 /// A drawing opened from a file keeps that file's format.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SaveFormat {
-    /// CADCraft's native format, and the default.
+    /// CADaddy's native format, and the default.
     #[default]
     Dxf,
     Dwg,
@@ -180,7 +180,7 @@ impl Default for UiState {
             show_viewcube: true,
             show_ucs_icon: true,
             show_layer_list: false,
-            system_cursor: std::env::var("CADCRAFT_SYSTEM_CURSOR").is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "off")),
+            system_cursor: std::env::var("CADADDY_SYSTEM_CURSOR").is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "off")),
             toolset_tab: "Drafting".into(),
             collapsed_groups: Vec::new(),
             hidden_tools: Vec::new(),
@@ -262,7 +262,7 @@ pub struct CadApp {
     /// A close request waiting for "Save changes?" answers ([`closing`]).
     pub closing: Option<closing::Closing>,
     /// Autosave (desktop; `None` until [`Self::enable_autosave`]).
-    pub autosave: Option<cadcraft_engine::autosave::Autosaver>,
+    pub autosave: Option<cadaddy_engine::autosave::Autosaver>,
     /// Drawing Recovery: autosave files a crashed app left behind.
     pub recovery: autosave::Recovery,
     /// GPU errors and device loss reported by wgpu ([`gpu::GpuFaults`]).
@@ -487,7 +487,7 @@ impl CadApp {
     pub fn open_path(&mut self, path: &str) {
         // A LISP file (dropped on the window): loaded as APPLOAD loads it.
         if is_lisp_file(path) {
-            match cadcraft_engine::lisp::builtins::read_text_file(path) {
+            match cadaddy_engine::lisp::builtins::read_text_file(path) {
                 Some(text) => self.load_lisp(path, &text),
                 None => self.open_failed(format!("APPLOAD: can't read {path}")),
             }
@@ -553,7 +553,7 @@ impl CadApp {
         if is_lisp_file(name) {
             return self.load_lisp(name, &String::from_utf8_lossy(bytes));
         }
-        let data = cadcraft_engine::cmd::file::base64_encode(bytes);
+        let data = cadaddy_engine::cmd::file::base64_encode(bytes);
         let r = self.run("open", json!({ "data": data, "name": name }));
         self.opened(r);
     }
@@ -582,7 +582,7 @@ impl CadApp {
                     self.set_status(w.to_string());
                 }
                 // A dynamic block's own drawing: ask whether to open it in the Block Editor.
-                if self.session.state().is_ok_and(|st| cadcraft_engine::blockedit::has_authoring_elements(&st.doc)) {
+                if self.session.state().is_ok_and(|st| cadaddy_engine::blockedit::has_authoring_elements(&st.doc)) {
                     self.ui.dialog = Some("authoring".into());
                 }
             }

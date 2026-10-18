@@ -1,6 +1,6 @@
 //! Prompt wording: one "or" and one keyword list, and keywords typed whole win over selection words.
 
-use cadcraft_engine::Session;
+use cadaddy_engine::Session;
 use serde_json::json;
 
 fn prompt(s: &Session) -> String {

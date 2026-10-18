@@ -600,12 +600,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
-name = "cadcraft"
+name = "cadaddy"
 version = "0.7.6"
 dependencies = [
- "cadcraft-engine",
- "cadcraft-io",
- "cadcraft-ui-egui",
+ "cadaddy-engine",
+ "cadaddy-io",
+ "cadaddy-ui-egui",
  "eframe",
  "egui",
  "hidapi",
@@ -623,53 +623,53 @@ dependencies = [
 ]
 
 [[package]]
-name = "cadcraft-cli"
+name = "cadaddy-cli"
 version = "0.7.6"
 dependencies = [
- "cadcraft-engine",
- "cadcraft-io",
- "cadcraft-mcp",
- "cadcraft-render",
+ "cadaddy-engine",
+ "cadaddy-io",
+ "cadaddy-mcp",
+ "cadaddy-render",
  "serde_json",
 ]
 
 [[package]]
-name = "cadcraft-color"
+name = "cadaddy-color"
 version = "0.7.6"
 dependencies = [
  "serde",
 ]
 
 [[package]]
-name = "cadcraft-constraints"
+name = "cadaddy-constraints"
 version = "0.7.6"
 dependencies = [
- "cadcraft-doc",
- "cadcraft-geom",
+ "cadaddy-doc",
+ "cadaddy-geom",
  "serde",
  "thiserror 2.0.21",
 ]
 
 [[package]]
-name = "cadcraft-doc"
+name = "cadaddy-doc"
 version = "0.7.6"
 dependencies = [
- "cadcraft-color",
- "cadcraft-geom",
+ "cadaddy-color",
+ "cadaddy-geom",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
 ]
 
 [[package]]
-name = "cadcraft-dwg"
+name = "cadaddy-dwg"
 version = "0.7.6"
 dependencies = [
  "acadrust",
 ]
 
 [[package]]
-name = "cadcraft-dxf"
+name = "cadaddy-dxf"
 version = "0.7.6"
 dependencies = [
  "encoding_rs",
@@ -678,17 +678,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "cadcraft-engine"
+name = "cadaddy-engine"
 version = "0.7.6"
 dependencies = [
- "cadcraft-color",
- "cadcraft-constraints",
- "cadcraft-doc",
- "cadcraft-dxf",
- "cadcraft-fonts",
- "cadcraft-geom",
- "cadcraft-io",
- "cadcraft-render",
+ "cadaddy-color",
+ "cadaddy-constraints",
+ "cadaddy-doc",
+ "cadaddy-dxf",
+ "cadaddy-fonts",
+ "cadaddy-geom",
+ "cadaddy-io",
+ "cadaddy-render",
  "craft-docpath",
  "log",
  "rstar",
@@ -698,33 +698,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "cadcraft-fonts"
+name = "cadaddy-fonts"
 version = "0.7.6"
 dependencies = [
- "cadcraft-geom",
+ "cadaddy-geom",
  "harfrust",
  "skrifa 0.47.0",
  "unicode-bidi",
 ]
 
 [[package]]
-name = "cadcraft-geom"
+name = "cadaddy-geom"
 version = "0.7.6"
 dependencies = [
  "serde",
 ]
 
 [[package]]
-name = "cadcraft-io"
+name = "cadaddy-io"
 version = "0.7.6"
 dependencies = [
- "cadcraft-color",
- "cadcraft-doc",
- "cadcraft-dwg",
- "cadcraft-dxf",
- "cadcraft-fonts",
- "cadcraft-geom",
- "cadcraft-render",
+ "cadaddy-color",
+ "cadaddy-doc",
+ "cadaddy-dwg",
+ "cadaddy-dxf",
+ "cadaddy-fonts",
+ "cadaddy-geom",
+ "cadaddy-render",
  "getrandom 0.4.3",
  "lopdf",
  "miniz_oxide 0.8.9",
@@ -736,24 +736,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "cadcraft-mcp"
+name = "cadaddy-mcp"
 version = "0.7.6"
 dependencies = [
- "cadcraft-engine",
- "cadcraft-io",
- "cadcraft-render",
+ "cadaddy-engine",
+ "cadaddy-io",
+ "cadaddy-render",
  "log",
  "serde_json",
 ]
 
 [[package]]
-name = "cadcraft-render"
+name = "cadaddy-render"
 version = "0.7.6"
 dependencies = [
- "cadcraft-color",
- "cadcraft-doc",
- "cadcraft-fonts",
- "cadcraft-geom",
+ "cadaddy-color",
+ "cadaddy-doc",
+ "cadaddy-fonts",
+ "cadaddy-geom",
  "image",
  "lyon_tessellation",
  "rayon",
@@ -762,16 +762,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "cadcraft-ui-egui"
+name = "cadaddy-ui-egui"
 version = "0.7.6"
 dependencies = [
- "cadcraft-color",
- "cadcraft-doc",
- "cadcraft-engine",
- "cadcraft-fonts",
- "cadcraft-geom",
- "cadcraft-render",
- "cadcraft-walk3d",
+ "cadaddy-color",
+ "cadaddy-doc",
+ "cadaddy-engine",
+ "cadaddy-fonts",
+ "cadaddy-geom",
+ "cadaddy-render",
+ "cadaddy-walk3d",
  "craft-ui",
  "egui",
  "egui-wgpu",
@@ -785,36 +785,36 @@ dependencies = [
 ]
 
 [[package]]
-name = "cadcraft-walk"
+name = "cadaddy-walk"
 version = "0.7.6"
 dependencies = [
- "cadcraft-engine",
- "cadcraft-io",
- "cadcraft-ui-egui",
- "cadcraft-walk3d",
+ "cadaddy-engine",
+ "cadaddy-io",
+ "cadaddy-ui-egui",
+ "cadaddy-walk3d",
  "egui-wgpu",
  "image",
  "pollster 0.4.0",
 ]
 
 [[package]]
-name = "cadcraft-walk3d"
+name = "cadaddy-walk3d"
 version = "0.7.6"
 dependencies = [
- "cadcraft-color",
- "cadcraft-doc",
- "cadcraft-geom",
+ "cadaddy-color",
+ "cadaddy-doc",
+ "cadaddy-geom",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "cadcraft-web"
+name = "cadaddy-web"
 version = "0.7.6"
 dependencies = [
- "cadcraft-engine",
- "cadcraft-io",
- "cadcraft-ui-egui",
+ "cadaddy-engine",
+ "cadaddy-io",
+ "cadaddy-ui-egui",
  "eframe",
  "egui",
  "log",

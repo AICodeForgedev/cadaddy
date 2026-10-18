@@ -25,8 +25,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
-use cadcraft_engine::Input;
-use cadcraft_geom::Vec2;
+use cadaddy_engine::Input;
+use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
 
 use crate::CadApp;
@@ -103,7 +103,7 @@ struct Widget {
 }
 
 fn widgets_id() -> egui::Id {
-    egui::Id::new("cadcraft-observed-widgets")
+    egui::Id::new("cadaddy-observed-widgets")
 }
 
 pub(crate) fn begin_frame(ctx: &egui::Context) {
@@ -223,7 +223,7 @@ fn methods_json() -> Value {
 }
 
 pub fn all_commands(app: &CadApp) -> Value {
-    let mut v: Vec<Value> = cadcraft_engine::command_specs().iter().map(|c| serde_json::to_value(c.info(&app.session)).unwrap_or_default()).collect();
+    let mut v: Vec<Value> = cadaddy_engine::command_specs().iter().map(|c| serde_json::to_value(c.info(&app.session)).unwrap_or_default()).collect();
     for (id, label, menu, sc) in crate::menus::UI_COMMANDS {
         v.push(json!({"id": id, "label": label, "menu": menu, "shortcut": sc, "enabled": true, "ui": true}));
     }
@@ -474,21 +474,21 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             // `window`: just that area, at the size given or matching its shape.
             let window = render_window(p);
             // The view on screen, 3D views included.
-            let opts = cadcraft_render::Options {
+            let opts = cadaddy_render::Options {
                 view: window,
                 transparency: app.session.settings.transparency_display,
                 projection: st.projection(),
                 ..Default::default()
             };
-            let list = cadcraft_render::build(&st.doc, &st.space, &opts);
+            let list = cadaddy_render::build(&st.doc, &st.space, &opts);
             let v = st.view();
             let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(true);
             let view = match &window {
-                Some(win) => cadcraft_render::raster::View::of_window(win, f("width").map(|x| x as u32), f("height").map(|x| x as u32)),
+                Some(win) => cadaddy_render::raster::View::of_window(win, f("width").map(|x| x as u32), f("height").map(|x| x as u32)),
                 None => render_view(&list.bounds, v.center, v.height, fit, w, h),
             };
             let (w, h) = (view.width, view.height);
-            let Some(png) = cadcraft_render::raster::render_png(&list, &view, &cadcraft_render::raster::RasterOptions::default()) else {
+            let Some(png) = cadaddy_render::raster::render_png(&list, &view, &cadaddy_render::raster::RasterOptions::default()) else {
                 return err("render failed");
             };
             #[cfg(not(target_arch = "wasm32"))]
@@ -520,29 +520,29 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
 
 /// The `window` of a `ui.render` request: two finite corners [[x0, y0], [x1, y1]] around an area
 /// (`None` when absent or unusable).
-pub fn render_window(p: &Value) -> Option<cadcraft_geom::Bounds2> {
+pub fn render_window(p: &Value) -> Option<cadaddy_geom::Bounds2> {
     let a = p.get("window")?.as_array().filter(|a| a.len() == 2)?;
-    let pt = |v: &Value| -> Option<cadcraft_geom::Vec2> {
+    let pt = |v: &Value| -> Option<cadaddy_geom::Vec2> {
         let c = v.as_array().filter(|c| c.len() == 2)?;
         let (x, y) = (c[0].as_f64()?, c[1].as_f64()?);
-        (x.is_finite() && y.is_finite()).then(|| cadcraft_geom::Vec2::new(x, y))
+        (x.is_finite() && y.is_finite()).then(|| cadaddy_geom::Vec2::new(x, y))
     };
-    let b = cadcraft_geom::Bounds2::new(pt(&a[0])?, pt(&a[1])?);
+    let b = cadaddy_geom::Bounds2::new(pt(&a[0])?, pt(&a[1])?);
     (b.width() > 0.0 && b.height() > 0.0).then_some(b)
 }
 
 /// The raster view for `ui.render`: fitted to the drawing's bounds, or the current screen view.
-fn render_view(bounds: &cadcraft_geom::Bounds2, center: Vec2, height: f64, fit: bool, w: u32, h: u32) -> cadcraft_render::raster::View {
+fn render_view(bounds: &cadaddy_geom::Bounds2, center: Vec2, height: f64, fit: bool, w: u32, h: u32) -> cadaddy_render::raster::View {
     if fit {
-        cadcraft_render::raster::View::fit(bounds, w, h, 0.05)
+        cadaddy_render::raster::View::fit(bounds, w, h, 0.05)
     } else {
-        cadcraft_render::raster::View { center, scale: f64::from(h) / height.max(1e-12), width: w, height: h }
+        cadaddy_render::raster::View { center, scale: f64::from(h) / height.max(1e-12), width: w, height: h }
     }
 }
 
 /// The `ui.render` reply, matching the headless backend (`pngBase64`, `width`, `height`), plus `bytes` and `path`.
 fn render_reply(png: &[u8], w: u32, h: u32, path: Option<&str>) -> Value {
-    let mut v = json!({"pngBase64": cadcraft_engine::cmd::file::base64_encode(png), "width": w, "height": h, "bytes": png.len()});
+    let mut v = json!({"pngBase64": cadaddy_engine::cmd::file::base64_encode(png), "width": w, "height": h, "bytes": png.len()});
     if let (Some(path), Some(o)) = (path, v.as_object_mut()) {
         o.insert("path".to_string(), json!(path));
     }
@@ -557,7 +557,7 @@ pub fn save_screenshot(image: &egui::ColorImage, path: Option<&str>) -> Value {
         buf.extend_from_slice(&c.to_array());
     }
     let Some(img) = image::RgbaImage::from_raw(w as u32, h as u32, buf) else { return json!({"ok": false, "error": "bad image"}) };
-    let path = path.map(str::to_string).unwrap_or_else(|| std::env::temp_dir().join("cadcraft-shot.png").to_string_lossy().to_string());
+    let path = path.map(str::to_string).unwrap_or_else(|| std::env::temp_dir().join("cadaddy-shot.png").to_string_lossy().to_string());
     match img.save(&path) {
         Ok(()) => json!({"ok": true, "result": {"path": path, "width": w, "height": h}}),
         Err(e) => json!({"ok": false, "error": e.to_string()}),
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn render_view_fit_finds_offscreen_drawing() {
-        let far = cadcraft_geom::Bounds2::new(Vec2::new(9000.0, 9000.0), Vec2::new(9100.0, 9050.0));
+        let far = cadaddy_geom::Bounds2::new(Vec2::new(9000.0, 9000.0), Vec2::new(9100.0, 9050.0));
         let fitted = render_view(&far, Vec2::ZERO, 100.0, true, 800, 500);
         assert_eq!(fitted.center, far.center());
         let kept = render_view(&far, Vec2::ZERO, 100.0, false, 800, 500);

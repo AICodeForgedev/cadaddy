@@ -11,7 +11,7 @@
 //! lopdf's content parser skips inline images that carry a filter, so [`scan_inline`] reads
 //! them from the content bytes itself, in order; the n-th `BI` operation is the n-th image.
 
-use cadcraft_render::images::{MAX_PIXELS, Raster};
+use cadaddy_render::images::{MAX_PIXELS, Raster};
 use lopdf::{Dictionary, Document, Object, Stream};
 
 /// Decoded bytes one image may take (before conversion to RGBA).
@@ -607,7 +607,7 @@ pub(crate) fn decode(doc: &Document, dict: &Dictionary, raw: &[u8], resources: O
         let m = stencil(doc, dict, &data, w, h).ok_or(Unsupported::Other)?;
         m.iter().flat_map(|on| if *on { [fill[0], fill[1], fill[2], 255] } else { [0; 4] }).collect::<Vec<u8>>()
     } else if jpeg {
-        let r = cadcraft_render::images::decode(&data).ok_or(Unsupported::Other)?;
+        let r = cadaddy_render::images::decode(&data).ok_or(Unsupported::Other)?;
         if (r.width as usize, r.height as usize) != (w, h) {
             return Err(Unsupported::Other);
         }
@@ -662,7 +662,7 @@ pub(crate) fn decode(doc: &Document, dict: &Dictionary, raw: &[u8], resources: O
         let (data, jpeg) = unfilter(doc, &st.dict, &st.content).ok()?;
         let a: Vec<u8> = if soft {
             if jpeg {
-                cadcraft_render::images::decode(&data)?.rgba.as_chunks::<4>().0.iter().map(|p| p[0]).collect()
+                cadaddy_render::images::decode(&data)?.rgba.as_chunks::<4>().0.iter().map(|p| p[0]).collect()
             } else {
                 let bpc = u32::try_from(get(doc, &st.dict, b"BitsPerComponent").and_then(int).unwrap_or(8)).ok()?;
                 let max = (1u32 << bpc.min(16)) - 1;

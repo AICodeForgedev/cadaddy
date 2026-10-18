@@ -1,8 +1,8 @@
 //! Commands that had only a JSON form prompt when typed (battle test 3): LTSCALE, LIMITS, BASE,
 //! COLOR, LWEIGHT, GETVAR, FIND, LAYISO, LAYMCUR, LAYMCH, BREAKATPOINT.
 
-use cadcraft_engine::doc::EntityKind;
-use cadcraft_engine::{Input, Session};
+use cadaddy_engine::doc::EntityKind;
+use cadaddy_engine::{Input, Session};
 use serde_json::json;
 
 fn typed(s: &mut Session, inputs: &[&str]) {
@@ -16,7 +16,7 @@ fn typed(s: &mut Session, inputs: &[&str]) {
 fn bare_commands_prompt_for_what_they_need() {
     let mut s = Session::new();
     typed(&mut s, &["ltscale", "2.5"]);
-    assert_eq!(cadcraft_engine::sysvars::get(&s, "LTSCALE"), Some(json!(2.5)));
+    assert_eq!(cadaddy_engine::sysvars::get(&s, "LTSCALE"), Some(json!(2.5)));
     typed(&mut s, &["limits", "0,0", "48,36"]);
     typed(&mut s, &["base", "5,5"]);
     typed(&mut s, &["color", "red"]);
@@ -102,14 +102,12 @@ fn running_center_snap_from_the_edge() {
     let mut s = Session::new();
     s.execute("circle", &json!({"center": [0, 0], "radius": 20})).unwrap();
     let d = s.doc().unwrap();
-    let hit =
-        cadcraft_engine::snap::osnap(d, &cadcraft_engine::doc::Space::Model, cadcraft_engine::geom::Vec2::new(20.2, 0.3), 1.0, 4133, None, false);
+    let hit = cadaddy_engine::snap::osnap(d, &cadaddy_engine::doc::Space::Model, cadaddy_engine::geom::Vec2::new(20.2, 0.3), 1.0, 4133, None, false);
     assert_eq!(hit.map(|h| (h.point.x, h.point.y, h.mode)), Some((0.0, 0.0, 4)));
     // A nearby endpoint still wins over a far centre.
     s.execute("line", &json!({"points": [[20.5, 0.5], [40, 0]]})).unwrap();
     let d = s.doc().unwrap();
-    let hit =
-        cadcraft_engine::snap::osnap(d, &cadcraft_engine::doc::Space::Model, cadcraft_engine::geom::Vec2::new(20.2, 0.3), 1.0, 4133, None, false);
+    let hit = cadaddy_engine::snap::osnap(d, &cadaddy_engine::doc::Space::Model, cadaddy_engine::geom::Vec2::new(20.2, 0.3), 1.0, 4133, None, false);
     assert_eq!(hit.map(|h| h.mode), Some(1));
 }
 
@@ -133,7 +131,7 @@ fn hpgaptol_typed_closes_gaps_for_hatch() {
     }
     assert!(s.execute("hatch", &json!({"points": [[5, 5]], "pattern": "SOLID"})).is_err());
     s.script("hpgaptol 1\n").unwrap();
-    assert_eq!(cadcraft_engine::sysvars::get(&s, "HPGAPTOL"), Some(json!(1.0)));
+    assert_eq!(cadaddy_engine::sysvars::get(&s, "HPGAPTOL"), Some(json!(1.0)));
     s.execute("hatch", &json!({"points": [[5, 5]], "pattern": "SOLID"})).unwrap();
     assert!(s.execute("setvar", &json!({"name": "HPGAPTOL", "value": 6000})).is_err());
 }
@@ -166,8 +164,8 @@ fn hatch_pattern_unknown_reasks_and_drawing_patterns_are_usable() {
     s.cancel();
     // A hatch that came from another program's file carries its own definition.
     let h = s.execute("hatch", &json!({"points": [[5, 5]], "pattern": "ANSI31"})).unwrap()["handle"].as_str().unwrap().to_string();
-    let hh = cadcraft_engine::doc::Handle::parse_hex(&h).unwrap();
-    let lines = cadcraft_engine::doc::library::pattern("ANSI31").unwrap().lines;
+    let hh = cadaddy_engine::doc::Handle::parse_hex(&h).unwrap();
+    let lines = cadaddy_engine::doc::library::pattern("ANSI31").unwrap().lines;
     s.doc_mut()
         .unwrap()
         .modify_entity(hh, |e| {

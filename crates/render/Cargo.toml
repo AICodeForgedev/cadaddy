@@ -1,6 +1,6 @@
 [package]
-name = "cadcraft-render"
-description = "CADCraft rendering: display lists (linetypes, hatches, text, blocks, dimensions) and a CPU rasteriser"
+name = "cadaddy-render"
+description = "CADaddy rendering: display lists (linetypes, hatches, text, blocks, dimensions) and a CPU rasteriser"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,10 +9,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-cadcraft-geom = { workspace = true }
-cadcraft-color = { workspace = true }
-cadcraft-doc = { workspace = true }
-cadcraft-fonts = { workspace = true }
+cadaddy-geom = { workspace = true }
+cadaddy-color = { workspace = true }
+cadaddy-doc = { workspace = true }
+cadaddy-fonts = { workspace = true }
 tiny-skia = { workspace = true }
 # Raster images (IMAGE entities): PNG and JPEG decoding (MIT/Apache-2.0).
 image = { workspace = true }

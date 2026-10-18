@@ -4,9 +4,9 @@
 
 use std::collections::BTreeMap;
 
-use cadcraft_doc::MAX_BLOCK_DEPTH;
-use cadcraft_doc::{EntityKind, Insert};
-use cadcraft_geom::{Mat3, Vec2};
+use cadaddy_doc::MAX_BLOCK_DEPTH;
+use cadaddy_doc::{EntityKind, Insert};
+use cadaddy_geom::{Mat3, Vec2};
 use serde_json::{Value, json};
 
 use crate::cmd::curves::KW;
@@ -92,7 +92,7 @@ fn matches(spec: &str, text: &str) -> bool {
 }
 
 /// The attribute values of `ins`: its own, then the constant ones of its block.
-fn values(d: &cadcraft_doc::Drawing, ins: &Insert) -> Vec<(String, String)> {
+fn values(d: &cadaddy_doc::Drawing, ins: &Insert) -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = ins.attribs.iter().map(|a| (a.tag.to_ascii_uppercase(), a.text.value.clone())).collect();
     if let Some(b) = d.block(&ins.block) {
         for e in b.entities.iter() {
@@ -117,7 +117,7 @@ const MAX_FOUND: usize = 200_000;
 /// the holder's layer when it is on layer 0.
 fn found(s: &Session, p: &Value, o: &Options) -> Result<Vec<Found>> {
     let d = s.doc()?;
-    let ents: Vec<std::sync::Arc<cadcraft_doc::Entity>> = if p.get("handles").is_some() || p.get("handle").is_some() {
+    let ents: Vec<std::sync::Arc<cadaddy_doc::Entity>> = if p.get("handles").is_some() || p.get("handle").is_some() {
         targets(s, p)?.iter().filter_map(|h| d.entity(*h).cloned()).collect()
     } else {
         d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())).cloned().collect()
@@ -135,7 +135,7 @@ fn found(s: &Session, p: &Value, o: &Options) -> Result<Vec<Found>> {
 
 /// Add `ins` (on `layer`, placed by `outer`, held by the top-level object `holder`) and, when asked, the references inside it.
 #[allow(clippy::too_many_arguments)]
-fn walk(d: &cadcraft_doc::Drawing, o: &Options, holder: &str, ins: &Insert, layer: &str, outer: Mat3, depth: usize, out: &mut Vec<Found>) {
+fn walk(d: &cadaddy_doc::Drawing, o: &Options, holder: &str, ins: &Insert, layer: &str, outer: Mat3, depth: usize, out: &mut Vec<Found>) {
     if depth >= MAX_BLOCK_DEPTH || out.len() >= MAX_FOUND {
         return;
     }

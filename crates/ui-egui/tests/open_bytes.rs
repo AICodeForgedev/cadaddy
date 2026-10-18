@@ -1,10 +1,10 @@
 //! Opening a drawing from its contents, where the file has no path (the web's File > Open… picker
 //! and files dropped on the page, #55).
 
-use cadcraft_engine::Session;
-use cadcraft_engine::cmd::file::{IoHooks, set_io};
-use cadcraft_engine::doc::Drawing;
-use cadcraft_ui_egui::{CadApp, Services};
+use cadaddy_engine::Session;
+use cadaddy_engine::cmd::file::{IoHooks, set_io};
+use cadaddy_engine::doc::Drawing;
+use cadaddy_ui_egui::{CadApp, Services};
 
 #[test]
 fn open_bytes_opens_the_named_drawing_and_reports_failures() {

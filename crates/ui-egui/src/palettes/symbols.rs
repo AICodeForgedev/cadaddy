@@ -4,9 +4,9 @@
 
 use std::sync::Arc;
 
-use cadcraft_engine::Input;
-use cadcraft_engine::cmd::symbol::{SymbolPreview, previews};
-use cadcraft_engine::geom::Vec2;
+use cadaddy_engine::Input;
+use cadaddy_engine::cmd::symbol::{SymbolPreview, previews};
+use cadaddy_engine::geom::Vec2;
 use egui::{Rect, Sense, Stroke, pos2, vec2};
 
 use crate::CadApp;

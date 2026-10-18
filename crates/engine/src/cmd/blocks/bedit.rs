@@ -4,7 +4,7 @@
 //! drawing shows the change; BCLOSE goes back to the drawing, saving or discarding what isn't saved.
 //! The state is [`crate::blockedit`].
 
-use cadcraft_doc::{Drawing, EntityKind, Handle};
+use cadaddy_doc::{Drawing, EntityKind, Handle};
 use serde_json::{Value, json};
 
 use crate::cmd::curves::{KW, handle_value};

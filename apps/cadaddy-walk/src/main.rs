@@ -7,8 +7,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-use cadcraft_ui_egui::walk::{Building, frame_for, gpu};
-use cadcraft_walk3d::{V3, Walker};
+use cadaddy_ui_egui::walk::{Building, frame_for, gpu};
+use cadaddy_walk3d::{V3, Walker};
 use egui_wgpu::wgpu;
 use std::path::PathBuf;
 
@@ -50,9 +50,9 @@ fn args() -> Result<Args, String> {
 
 /// The drawing readers (what CADaddy installs at startup), so floor sheets can be read.
 fn install_io() {
-    cadcraft_engine::cmd::file::set_io(cadcraft_engine::cmd::file::IoHooks {
-        read: |b, name| cadcraft_io::read(b, name).map_err(|e| e.to_string()),
-        write: |d, name| cadcraft_io::write(d, name).map_err(|e| e.to_string()),
+    cadaddy_engine::cmd::file::set_io(cadaddy_engine::cmd::file::IoHooks {
+        read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
+        write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
         plot: None,
         read_pdf: None,
     });

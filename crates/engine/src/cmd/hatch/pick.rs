@@ -2,8 +2,8 @@
 //! origin, or the hatches to edit), kept in the session for the dialog to take. It never changes
 //! the drawing.
 
-use cadcraft_doc::{EntityKind, Handle, HatchLoop};
-use cadcraft_geom::Vec2;
+use cadaddy_doc::{EntityKind, Handle, HatchLoop};
+use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
 
 use super::{HatchSettings, closed_loop, loops_at, loops_from_handles};

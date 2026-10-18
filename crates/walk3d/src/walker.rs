@@ -2,7 +2,7 @@
 
 use crate::derive::{Scene, closest};
 use crate::math::{Mat4, V3, v3};
-use cadcraft_doc::geom::Vec2;
+use cadaddy_doc::geom::Vec2;
 
 /// Body radius against walls, feet.
 const RADIUS: f64 = 0.9;

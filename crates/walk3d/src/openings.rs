@@ -9,8 +9,8 @@
 use crate::derive::{Owner, Piece, Scene, Seg, WALL, WALL_TOP, boxed, edge, quad};
 use crate::math::v3;
 use crate::rules::Openings;
-use cadcraft_color::Rgb;
-use cadcraft_doc::geom::Vec2;
+use cadaddy_color::Rgb;
+use cadaddy_doc::geom::Vec2;
 
 const GLASS: Rgb = Rgb(150, 192, 218);
 const DOOR: Rgb = Rgb(150, 112, 78);
@@ -318,8 +318,8 @@ fn circle(a: Vec2, b: Vec2, c: Vec2) -> Option<(Vec2, f64)> {
 mod tests {
     use crate::derive::{Scene, derive};
     use crate::rules::Rules;
-    use cadcraft_doc::{Drawing, Entity, EntityKind, Handle, Line, LwPolyline};
-    use cadcraft_geom::Vec3;
+    use cadaddy_doc::{Drawing, Entity, EntityKind, Handle, Line, LwPolyline};
+    use cadaddy_geom::Vec3;
 
     fn add(d: &mut Drawing, kind: EntityKind) {
         let h = Handle(d.handseed.max(1));

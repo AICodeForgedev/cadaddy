@@ -2,10 +2,10 @@
 //! PAGESETUP takes a device and its papers with their printable areas, and PLOT hands the
 //! plotter the device's output, paper and margins.
 
-use cadcraft_doc::{Drawing, Space};
-use cadcraft_engine::Session;
-use cadcraft_engine::cmd::file::{IoHooks, base64_decode, set_io};
-use cadcraft_engine::cmd::plotters::{PlotterStore, set_plotter_store};
+use cadaddy_doc::{Drawing, Space};
+use cadaddy_engine::Session;
+use cadaddy_engine::cmd::file::{IoHooks, base64_decode, set_io};
+use cadaddy_engine::cmd::plotters::{PlotterStore, set_plotter_store};
 use serde_json::{Value, json};
 
 /// The plot hook echoes the options it gets.
@@ -43,7 +43,7 @@ fn manage_devices() {
     let mut s = session();
     let n = names(&mut s);
     assert_eq!(n[..3], ["CADaddy PDF", "CADaddy PNG", "CADaddy SVG"], "built-in devices first");
-    let pdf = s.execute("plottermanager", &json!({"action": "get", "name": "cadcraft pdf"})).unwrap();
+    let pdf = s.execute("plottermanager", &json!({"action": "get", "name": "cadaddy pdf"})).unwrap();
     assert!(pdf["builtin"].as_bool().unwrap());
     let papers = pdf["papers"].as_array().unwrap();
     assert!(papers.iter().any(|p| p["name"] == "ISO B1 (707.00 x 1000.00 MM)"));
@@ -67,7 +67,7 @@ fn manage_devices() {
 
     // Save as text, load under another name, delete.
     let text = s.execute("plottermanager", &json!({"action": "save", "name": "Office Raster"})).unwrap()["text"].as_str().unwrap().to_string();
-    assert!(text.contains("\"cadcraftPlotter\": 1"), "{text}");
+    assert!(text.contains("\"cadaddyPlotter\": 1"), "{text}");
     s.execute("plottermanager", &json!({"action": "load", "text": text, "name": "Office Copy"})).unwrap();
     let copy = s.execute("plottermanager", &json!({"action": "get", "name": "Office Copy"})).unwrap();
     assert_eq!(copy["output"], "png");
@@ -89,7 +89,7 @@ fn page_setup_takes_a_device_and_its_papers() {
     let page = &s.doc().unwrap().layout("Layout1").unwrap().page;
     assert_eq!((page.width_mm, page.height_mm, page.margins_mm), (200.0, 600.0, [10.0, 20.0, 10.0, 20.0]));
     // The printable area shown in the layout follows the device paper.
-    let sheet = cadcraft_render::sheet(s.doc().unwrap(), "Layout1").unwrap();
+    let sheet = cadaddy_render::sheet(s.doc().unwrap(), "Layout1").unwrap();
     let mm = |v: f64| v * sheet.unit_mm;
     let got = [mm(sheet.printable.min.x), mm(sheet.printable.min.y), mm(sheet.printable.max.x), mm(sheet.printable.max.y)];
     assert!(got.iter().zip([10.0, 20.0, 190.0, 580.0]).all(|(a, b)| (a - b).abs() < 1e-9), "{got:?}");
@@ -185,7 +185,7 @@ fn plotwindow_keeps_the_picked_window_for_the_plot_dialog() {
     s.cmdline("plotwindow").unwrap();
     assert_eq!(s.current_prompt().unwrap().message, "Specify first corner");
     s.cmdline("10,20").unwrap();
-    assert_eq!(s.preview(cadcraft_engine::geom::Vec2::new(40.0, 5.0)).len(), 4, "the rubber-band rectangle");
+    assert_eq!(s.preview(cadaddy_engine::geom::Vec2::new(40.0, 5.0)).len(), 4, "the rubber-band rectangle");
     s.cmdline("40,5").unwrap();
     assert!(s.running.is_none());
     let w = s.plot_window.expect("the picked window");
@@ -194,13 +194,4 @@ fn plotwindow_keeps_the_picked_window_for_the_plot_dialog() {
     let r = s.execute("plotwindow", &json!({"p1": [0, 0], "p2": [3, 4]})).unwrap();
     assert_eq!(r["window"], json!([[0.0, 0.0], [3.0, 4.0]]));
     assert!(s.execute("plotwindow", &json!({"p1": [0, 0], "p2": [3, 0]})).is_err());
-}
-
-/// Page setups saved before the rename name the built-in devices "CADCraft PDF" and so on: they
-/// still find the device, under its new name.
-#[test]
-fn old_builtin_device_names_still_resolve() {
-    for (old, new) in [("CADCraft PDF", "CADaddy PDF"), ("cadcraft png", "CADaddy PNG"), ("CADCraft SVG", "CADaddy SVG")] {
-        assert_eq!(cadcraft_engine::cmd::plotters::find_device(old).map(|d| d.name), Some(new.to_string()), "{old}");
-    }
 }

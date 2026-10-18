@@ -1,9 +1,9 @@
 //! The source boundary objects of an associative HATCH (group 97 count, 330 handles per loop,
 //! DXF Reference) survive a DXF save and read (#451).
 
-use cadcraft_doc::*;
-use cadcraft_geom::{PolyVertex, Vec2};
-use cadcraft_io::{read_dxf, write_dxf};
+use cadaddy_doc::*;
+use cadaddy_geom::{PolyVertex, Vec2};
+use cadaddy_io::{read_dxf, write_dxf};
 
 fn square(x0: f64, s: f64) -> Vec<PolyVertex> {
     [(x0, x0), (x0 + s, x0), (x0 + s, x0 + s), (x0, x0 + s)].into_iter().map(|(x, y)| PolyVertex::new(Vec2::new(x, y))).collect()
@@ -143,8 +143,8 @@ fn a_hatch_in_a_block_keeps_its_boundary_and_the_boundary_its_reactor() {
     assert!(record(&p, "HATCH", other).contains(&(97, "0".to_string())));
     // Read back, from DXF and from DWG.
     let back = read_dxf(join(&p).as_bytes()).expect("read");
-    let dwg = cadcraft_io::write(&d, "x.dwg").expect("dwg");
-    let from_dwg = cadcraft_io::read(&dwg, "x.dwg").expect("read dwg");
+    let dwg = cadaddy_io::write(&d, "x.dwg").expect("dwg");
+    let from_dwg = cadaddy_io::read(&dwg, "x.dwg").expect("read dwg");
     for (what, back) in [("dxf", &back), ("dwg", &from_dwg)] {
         let blk = back.block("Tag").expect("block");
         let sources: Vec<Vec<Handle>> = blk

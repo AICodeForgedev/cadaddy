@@ -1,4 +1,4 @@
-//! CADCraft rendering.
+//! CADaddy rendering.
 //!
 //! [`build`] turns a drawing space into a [`DisplayList`]: world-space polylines, filled
 //! triangles and points, each tagged with its top-level entity handle and resolved colour.
@@ -26,9 +26,9 @@ mod tolerance;
 pub mod units;
 mod wide;
 
-use cadcraft_color::{Color, Rgb};
-use cadcraft_doc::{Drawing, Entity, EntityKind, Handle, Lineweight, Prim, Space};
-use cadcraft_geom::{Bounds2, Mat3, Polyline, Vec2};
+use cadaddy_color::{Color, Rgb};
+use cadaddy_doc::{Drawing, Entity, EntityKind, Handle, Lineweight, Prim, Space};
+use cadaddy_geom::{Bounds2, Mat3, Polyline, Vec2};
 use pen::Pen;
 
 pub use dim::{ArrowGeom, Arrowhead, DimGeometry, DimText, LineRole, arrowhead, dimension_geometry, dimension_geometry_with, format_linear_value};
@@ -170,7 +170,7 @@ pub struct PlotText {
     pub verts: u32,
     pub bounds: Bounds2,
     /// The glyph; its origin and em axes are in world coordinates.
-    pub glyph: cadcraft_fonts::TextGlyph,
+    pub glyph: cadaddy_fonts::TextGlyph,
 }
 
 impl PlotText {
@@ -182,7 +182,7 @@ impl PlotText {
 impl DPrim {
     /// The colour to draw with on `background`.
     pub fn display_rgb(&self, background: Rgb) -> Rgb {
-        cadcraft_color::display_rgb(self.color, self.aci7, background)
+        cadaddy_color::display_rgb(self.color, self.aci7, background)
     }
     /// The opacity to draw with: 255 when opaque, down to 26 at 90 % transparency.
     pub fn alpha(&self) -> u8 {
@@ -273,7 +273,7 @@ pub struct Options {
     pub view_height: f64,
     /// Plot style table to draw with. When `None`, [`build`] of a layout whose page setup has
     /// "Display plot styles" on uses the layout's table; [`build_plot`] uses none.
-    pub plot_style_table: Option<std::sync::Arc<cadcraft_doc::PlotStyleTable>>,
+    pub plot_style_table: Option<std::sync::Arc<cadaddy_doc::PlotStyleTable>>,
     /// The area being looked at (world units of the space being built), for on-screen builds:
     /// hatch patterns are only generated inside it. `None` = everywhere (plots, exports, picks).
     pub view: Option<Bounds2>,
@@ -289,7 +289,7 @@ pub struct Options {
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// A 3D view of model space (`None`: the plan view). The list is then built on the view
     /// plane: planar objects through the map of their plane, 3D objects point by point.
-    pub projection: Option<cadcraft_geom::view3::Projection>,
+    pub projection: Option<cadaddy_geom::view3::Projection>,
 }
 
 impl Options {
@@ -485,7 +485,7 @@ impl Builder<'_> {
         });
     }
     /// Shaped text: strokes as polylines; TrueType glyphs filled (TEXTFILL) or outlined.
-    fn shaped(&mut self, ctx: &Ctx, color: Ink, lw: f32, sh: &cadcraft_fonts::Shaped) {
+    fn shaped(&mut self, ctx: &Ctx, color: Ink, lw: f32, sh: &cadaddy_fonts::Shaped) {
         for s in &sh.strokes {
             self.polyline(ctx, color, lw, s);
         }
@@ -516,7 +516,7 @@ impl Builder<'_> {
                     && let (Ok(prim), Ok(verts)) = (u32::try_from(at), u32::try_from(len))
                 {
                     let xf = &ctx.xf;
-                    let glyph = cadcraft_fonts::TextGlyph { origin: xf.apply(t.origin), x: xf.apply_vec(t.x), y: xf.apply_vec(t.y), ..t.clone() };
+                    let glyph = cadaddy_fonts::TextGlyph { origin: xf.apply(t.origin), x: xf.apply_vec(t.x), y: xf.apply_vec(t.y), ..t.clone() };
                     let bounds = self.list.prims.get(at).map(|p| Bounds2::from_points(self.list.points(p).iter().copied())).unwrap_or(Bounds2::EMPTY);
                     self.list.texts.push(PlotText { prim, verts, bounds, glyph });
                 }
@@ -645,7 +645,7 @@ const PARALLEL_CHUNK: usize = 256;
 /// stopped blocking the UI) and after every edit; one core made both slow on real drawings. Plots, layouts and plot styles keep the one-thread
 /// path (they run once, and their pens and per-primitive layers are built along the way).
 #[cfg(not(target_arch = "wasm32"))]
-fn build_parallel(b: &mut Builder, d: &Drawing, store: &cadcraft_doc::EntityStore) {
+fn build_parallel(b: &mut Builder, d: &Drawing, store: &cadaddy_doc::EntityStore) {
     use rayon::prelude::*;
     let ents: Vec<&std::sync::Arc<Entity>> = store.iter().collect();
     let budget = std::sync::atomic::AtomicUsize::new(0);
@@ -702,12 +702,12 @@ fn append(dst: &mut DisplayList, src: DisplayList) {
 
 /// The plot style table a build draws with: the one in `opts`, else (on screen) the layout's
 /// when its page setup has "Display plot styles" on.
-fn style_table(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Option<std::sync::Arc<cadcraft_doc::PlotStyleTable>> {
+fn style_table(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Option<std::sync::Arc<cadaddy_doc::PlotStyleTable>> {
     opts.plot_style_table.clone().or_else(|| match space {
         Space::Paper(n) if !plotting => d
             .layout(n)
             .filter(|l| l.page.show_plot_styles)
-            .and_then(|l| cadcraft_doc::plot_style_table(d, &l.page.plot_style_table))
+            .and_then(|l| cadaddy_doc::plot_style_table(d, &l.page.plot_style_table))
             .map(std::sync::Arc::new),
         _ => None,
     })
@@ -732,7 +732,7 @@ const MAX_VIEWPORTS: usize = 256;
 /// Viewport id 1 is the paper-space view itself and is not drawn. A clipped viewport shows
 /// model space through its clip boundary's outline (the boundary entity draws itself, so the
 /// rectangle is not drawn); a viewport turned off shows only its border.
-fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewport) {
+fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadaddy_doc::Viewport) {
     if !viewport_shown(d, e, vp) {
         return;
     }
@@ -756,12 +756,12 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
 
 /// Whether a viewport draws anything: id 1 is the paper-space view itself, and a hidden viewport
 /// or one on a frozen layer shows neither its border nor its contents.
-fn viewport_shown(d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewport) -> bool {
+fn viewport_shown(d: &Drawing, e: &Entity, vp: &cadaddy_doc::Viewport) -> bool {
     vp.id != 1 && e.common.visible && !d.is_hidden_object(e.handle) && !d.layer(&e.common.layer).is_some_and(|l| l.frozen)
 }
 
 /// A viewport's rectangle on paper; `None` for an unusable size or centre.
-fn viewport_rect(vp: &cadcraft_doc::Viewport) -> Option<Bounds2> {
+fn viewport_rect(vp: &cadaddy_doc::Viewport) -> Option<Bounds2> {
     let center = vp.center.xy();
     let ok = |v: f64| v.is_finite() && v > 0.0;
     (ok(vp.width) && ok(vp.height) && center.is_finite()).then(|| {
@@ -792,7 +792,7 @@ pub fn viewport_content(d: &Drawing, space: &Space, handle: Handle, area: Bounds
 
 /// Model space seen through `vp`, in paper units, appended to `b`'s list clipped to `clip`;
 /// `area` (the clip's bounds on paper) picks the model objects to draw.
-fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bounds2, clip: &Clip) {
+fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Bounds2, clip: &Clip) {
     if b.list.expanded >= MAX_BLOCK_EXPANSION || !vp.on {
         return;
     }
@@ -821,7 +821,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bou
         if matches!(me.kind, EntityKind::Ray(_) | EntityKind::XLine(_)) {
             return true;
         }
-        let eb = cadcraft_doc::entity_bounds(d, me, 0);
+        let eb = cadaddy_doc::entity_bounds(d, me, 0);
         eb.is_empty() || eb.intersects(&win)
     };
     let mut sub = Builder {
@@ -894,7 +894,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bou
 /// The clip region of a clipped viewport: the outline of its clip boundary entity, when that
 /// is a closed shape in the drawing. `None` for a rectangular viewport (or a dangling,
 /// unusable or self-referencing boundary, which falls back to the rectangle).
-pub fn viewport_clip(d: &Drawing, handle: Handle, vp: &cadcraft_doc::Viewport) -> Option<clip::PolyClip> {
+pub fn viewport_clip(d: &Drawing, handle: Handle, vp: &cadaddy_doc::Viewport) -> Option<clip::PolyClip> {
     let h = vp.clip.filter(|h| *h != handle)?;
     let be = d.entity(h)?;
     clip::PolyClip::new(&clip::boundary_polygon(&be.kind)?)
@@ -1030,9 +1030,9 @@ fn top_entity(b: &mut Builder, d: &Drawing, e: &Entity) {
         return;
     };
     if let Some((pts, closed)) = e.kind.points3d() {
-        let vertices = pts.iter().map(|q| cadcraft_geom::PolyVertex { p: p.project(*q), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
+        let vertices = pts.iter().map(|q| cadaddy_geom::PolyVertex { p: p.project(*q), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
         let flat = Entity {
-            kind: EntityKind::LwPolyline(cadcraft_doc::LwPolyline { vertices, closed, const_width: 0.0, elevation: 0.0, plinegen: true }),
+            kind: EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed, const_width: 0.0, elevation: 0.0, plinegen: true }),
             ..e.clone()
         };
         entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), &flat);
@@ -1044,7 +1044,7 @@ fn top_entity(b: &mut Builder, d: &Drawing, e: &Entity) {
 /// The map from `e`'s plan geometry to the view plane. Circles and arcs drawn in a tilted plane
 /// (their extrusion not along Z) keep their WCS centre and turn into that plane; everything else
 /// lies parallel to XY at its elevation.
-fn plane_xf(p: &cadcraft_geom::view3::Projection, e: &Entity) -> Mat3 {
+fn plane_xf(p: &cadaddy_geom::view3::Projection, e: &Entity) -> Mat3 {
     let n = e.common.extrusion;
     let tilted = n.is_finite() && n.len() > 1e-12 && (n.x.abs() > 1e-9 * n.len() || n.y.abs() > 1e-9 * n.len());
     let center = match &e.kind {
@@ -1053,10 +1053,10 @@ fn plane_xf(p: &cadcraft_geom::view3::Projection, e: &Entity) -> Mat3 {
         _ => None,
     };
     let Some(c) = center else { return p.plane_xf(e.kind.elevation()) };
-    let ocs = cadcraft_geom::Mat4::ocs(n);
-    let o = ocs.apply(cadcraft_geom::Vec3::ZERO);
+    let ocs = cadaddy_geom::Mat4::ocs(n);
+    let o = ocs.apply(cadaddy_geom::Vec3::ZERO);
     let (ax, ay) =
-        (p.project(ocs.apply(cadcraft_geom::Vec3::new(1.0, 0.0, 0.0)) - o), p.project(ocs.apply(cadcraft_geom::Vec3::new(0.0, 1.0, 0.0)) - o));
+        (p.project(ocs.apply(cadaddy_geom::Vec3::new(1.0, 0.0, 0.0)) - o), p.project(ocs.apply(cadaddy_geom::Vec3::new(0.0, 1.0, 0.0)) - o));
     let pc = p.project(c);
     // (x, y) ↦ project(c + (x − cx)·ax + (y − cy)·ay)
     Mat3 { a: ax.x, b: ax.y, c: ay.x, d: ay.y, e: pc.x - c.x * ax.x - c.y * ay.x, f: pc.y - c.x * ax.y - c.y * ay.y }
@@ -1115,14 +1115,14 @@ fn take_viewport_layers(list: &mut DisplayList) {
 
 /// An object's colour, lineweight (mm), linetype, linetype scale, visibility and the transparency
 /// of the layer it is drawn on (for ByLayer, see [`transparency`]).
-type Resolved = (Ink, f32, Option<cadcraft_doc::Linetype>, f64, bool, u8);
+type Resolved = (Ink, f32, Option<cadaddy_doc::Linetype>, f64, bool, u8);
 
 fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> Resolved {
     resolve_common(ctx, &e.common, plotting)
 }
 
 /// [`resolve`] for an object's properties `c`.
-fn resolve_common(ctx: &Ctx, c: &cadcraft_doc::Common, plotting: bool) -> Resolved {
+fn resolve_common(ctx: &Ctx, c: &cadaddy_doc::Common, plotting: bool) -> Resolved {
     let d = ctx.d;
     // Layer "0" inside a block takes the insert's layer.
     let layer_name = if c.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { c.layer.as_str() };
@@ -1154,11 +1154,11 @@ fn resolve_common(ctx: &Ctx, c: &cadcraft_doc::Common, plotting: bool) -> Resolv
 /// layer's `layer` when ByLayer (layer 0 inside a block: the block reference's layer, as
 /// [`resolve_common`] finds it), the block reference's `block` when ByBlock (opaque outside
 /// blocks).
-fn transparency(t: cadcraft_doc::Transparency, layer: u8, block: u8) -> u8 {
+fn transparency(t: cadaddy_doc::Transparency, layer: u8, block: u8) -> u8 {
     let t = match t {
-        cadcraft_doc::Transparency::Percent(p) => p,
-        cadcraft_doc::Transparency::ByBlock => block,
-        cadcraft_doc::Transparency::ByLayer => layer,
+        cadaddy_doc::Transparency::Percent(p) => p,
+        cadaddy_doc::Transparency::ByBlock => block,
+        cadaddy_doc::Transparency::ByLayer => layer,
     };
     t.min(MAX_TRANSPARENCY)
 }
@@ -1203,20 +1203,20 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
 fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     // A top-level annotative object draws at the view's annotation scale: a viewport's scale for
     // model space seen through it, else the drawing's (CANNOSCALE in model space, 1:1 on paper).
-    if ctx.depth == 0 && cadcraft_doc::is_annotative(e) {
+    if ctx.depth == 0 && cadaddy_doc::is_annotative(e) {
         let mode = if ctx.top == VIEWPORT_CONTENT {
-            cadcraft_doc::anno_draw(e, 1.0 / ctx.xf.scale_factor().max(1e-12), ctx.d.anno_all_visible())
+            cadaddy_doc::anno_draw(e, 1.0 / ctx.xf.scale_factor().max(1e-12), ctx.d.anno_all_visible())
         } else {
             ctx.d.anno_draw(e)
         };
         match mode {
-            cadcraft_doc::AnnoDraw::Hidden => return,
-            cadcraft_doc::AnnoDraw::Scaled(f) => {
-                let mut scaled = cadcraft_doc::anno_scaled(e, f);
+            cadaddy_doc::AnnoDraw::Hidden => return,
+            cadaddy_doc::AnnoDraw::Scaled(f) => {
+                let mut scaled = cadaddy_doc::anno_scaled(e, f);
                 scaled.common.anno_scales.clear();
                 return entity_parts(b, ctx, &scaled);
             }
-            cadcraft_doc::AnnoDraw::Plain => {}
+            cadaddy_doc::AnnoDraw::Plain => {}
         }
     }
     let (rgb, lw, lt, ltscale, visible, layer_transparency) = resolve(ctx, e, b.plotting);
@@ -1281,7 +1281,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         EntityKind::Insert(ins) => insert(b, ctx, e, ins, rgb),
         EntityKind::Dimension(dm) => {
             if let Some(blk) = dm.block.as_ref().and_then(|n| ctx.d.block(n))
-                && ctx.depth < cadcraft_doc::MAX_BLOCK_DEPTH
+                && ctx.depth < cadaddy_doc::MAX_BLOCK_DEPTH
             {
                 let sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, Mat3::IDENTITY) };
                 for be in blk.entities.iter() {
@@ -1450,16 +1450,16 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
 }
 
 /// The text style of an entity (Standard defaults when missing).
-fn text_style(d: &Drawing, name: &str) -> cadcraft_doc::TextStyle {
+fn text_style(d: &Drawing, name: &str) -> cadaddy_doc::TextStyle {
     d.text_style(name).cloned().unwrap_or_default()
 }
 
 /// Shape a TEXT / ATTRIB / ATTDEF with its style's font and generation flags.
-pub fn place_text_entity(d: &Drawing, t: &cadcraft_doc::Text, value: &str) -> (cadcraft_fonts::Shaped, Bounds2) {
+pub fn place_text_entity(d: &Drawing, t: &cadaddy_doc::Text, value: &str) -> (cadaddy_fonts::Shaped, Bounds2) {
     let ts = text_style(d, &t.style);
-    let font = cadcraft_fonts::TextFont::resolve(&ts.font);
+    let font = cadaddy_fonts::TextFont::resolve(&ts.font);
     let (h, v) = align(t.halign, t.valign);
-    let p = cadcraft_fonts::TextParams {
+    let p = cadaddy_fonts::TextParams {
         insert: t.insert.xy(),
         align_pt: t.align_pt.map(|p| p.xy()),
         height: t.height,
@@ -1471,13 +1471,13 @@ pub fn place_text_entity(d: &Drawing, t: &cadcraft_doc::Text, value: &str) -> (c
         backwards: ts.backwards,
         upside_down: ts.upside_down,
     };
-    cadcraft_fonts::place(&font, value, &p)
+    cadaddy_fonts::place(&font, value, &p)
 }
 
 /// Lay out an MTEXT with its style's font.
-pub fn layout_mtext_entity(d: &Drawing, t: &cadcraft_doc::MText) -> cadcraft_fonts::MTextLayout {
+pub fn layout_mtext_entity(d: &Drawing, t: &cadaddy_doc::MText) -> cadaddy_fonts::MTextLayout {
     let ts = text_style(d, &t.style);
-    let params = cadcraft_fonts::MTextParams {
+    let params = cadaddy_fonts::MTextParams {
         insert: t.insert.xy(),
         height: t.height,
         width: t.width,
@@ -1485,27 +1485,27 @@ pub fn layout_mtext_entity(d: &Drawing, t: &cadcraft_doc::MText) -> cadcraft_fon
         rotation: t.rotation,
         line_spacing: t.line_spacing,
         line_spacing_exact: t.line_spacing_exact,
-        font: cadcraft_fonts::TextFont::resolve(&ts.font),
+        font: cadaddy_fonts::TextFont::resolve(&ts.font),
         width_factor: ts.width_factor,
         oblique: ts.oblique,
-        columns: t.columns.as_ref().map(|c| cadcraft_fonts::MTextColumnSpec {
-            dynamic: c.kind == cadcraft_doc::MTextColumnType::Dynamic,
+        columns: t.columns.as_ref().map(|c| cadaddy_fonts::MTextColumnSpec {
+            dynamic: c.kind == cadaddy_doc::MTextColumnType::Dynamic,
             count: usize::from(c.count.max(1)),
             gutter: c.gutter,
             height: c.height,
-            heights: if c.kind == cadcraft_doc::MTextColumnType::Dynamic && !c.auto_height { c.heights.clone() } else { Vec::new() },
+            heights: if c.kind == cadaddy_doc::MTextColumnType::Dynamic && !c.auto_height { c.heights.clone() } else { Vec::new() },
             reversed: c.flow_reversed,
         }),
     };
-    cadcraft_fonts::layout_mtext_with(&t.contents, &params)
+    cadaddy_fonts::layout_mtext_with(&t.contents, &params)
 }
 
-fn mtext_color(c: Option<cadcraft_fonts::MTextColor>, rgb: Ink) -> Ink {
+fn mtext_color(c: Option<cadaddy_fonts::MTextColor>, rgb: Ink) -> Ink {
     match c {
-        Some(cadcraft_fonts::MTextColor::Aci(i)) => {
+        Some(cadaddy_fonts::MTextColor::Aci(i)) => {
             u8::try_from(i).ok().filter(|i| *i > 0).map(|i| ink(Color::Index(i), Color::Index(7), Color::Index(7))).unwrap_or(rgb)
         }
-        Some(cadcraft_fonts::MTextColor::Rgb(v)) => {
+        Some(cadaddy_fonts::MTextColor::Rgb(v)) => {
             Ink { rgb: Rgb(((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8), aci7: false, aci: 0 }
         }
         None => rgb,
@@ -1515,7 +1515,7 @@ fn mtext_color(c: Option<cadcraft_fonts::MTextColor>, rgb: Ink) -> Ink {
 /// An MTEXT's background mask: a box round the laid-out text (in the text's own direction),
 /// reaching `scale - 1` text heights past it, filled with the mask colour or, like a wipeout,
 /// with the drawing's background. Drawn before the text, so it hides what lies beneath.
-fn mtext_mask(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::MText, bg: &cadcraft_doc::MTextBackground, rgb: Ink, layer_color: Color) {
+fn mtext_mask(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::MText, bg: &cadaddy_doc::MTextBackground, rgb: Ink, layer_color: Color) {
     if !b.opts.fill {
         return;
     }
@@ -1551,7 +1551,7 @@ fn mtext_mask(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::MText, bg: &cadcraft
     }
 }
 
-fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::MText, rgb: Ink, lw: f32) {
+fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::MText, rgb: Ink, lw: f32) {
     let l = layout_mtext_entity(ctx.d, t);
     for p in &l.pieces {
         b.shaped(ctx, mtext_color(p.color, rgb), lw, &p.shaped);
@@ -1559,20 +1559,20 @@ fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::MText, rgb: Ink, lw: f32)
 }
 
 /// The font settings of a dimension style's text style.
-pub fn dim_text(d: &Drawing, st: &cadcraft_doc::DimStyle) -> DimText {
+pub fn dim_text(d: &Drawing, st: &cadaddy_doc::DimStyle) -> DimText {
     let ts = text_style(d, &st.text_style);
-    DimText { font: cadcraft_fonts::TextFont::resolve(&ts.font), fixed_height: ts.height, width_factor: ts.width_factor, oblique: ts.oblique }
+    DimText { font: cadaddy_fonts::TextFont::resolve(&ts.font), fixed_height: ts.height, width_factor: ts.width_factor, oblique: ts.oblique }
 }
 
 /// Geometry of a dimension in a drawing: its style, overrides and text font.
-pub fn dimension_in(d: &Drawing, dm: &cadcraft_doc::Dimension) -> DimGeometry {
+pub fn dimension_in(d: &Drawing, dm: &cadaddy_doc::Dimension) -> DimGeometry {
     let style = d.dim_style(&dm.style).cloned().unwrap_or_default();
     let st = style.with_overrides(&dm.overrides);
     dim::dimension_geometry_with(dm, &style, d.header.f64("DIMSCALE", 1.0), &dim_text(d, &st))
 }
 
 /// Draw a polyline with a linetype (None: continuous).
-fn stroke_with(b: &mut Builder, ctx: &Ctx, rgb: Ink, lw: f32, lt: Option<&cadcraft_doc::Linetype>, ltscale: f64, pts: &[Vec2]) {
+fn stroke_with(b: &mut Builder, ctx: &Ctx, rgb: Ink, lw: f32, lt: Option<&cadaddy_doc::Linetype>, ltscale: f64, pts: &[Vec2]) {
     match lt {
         Some(lt) => {
             let min = b.opts.min_dash / detail_scale(b, &ctx.xf).max(1e-12);
@@ -1589,7 +1589,7 @@ fn stroke_with(b: &mut Builder, ctx: &Ctx, rgb: Ink, lw: f32, lt: Option<&cadcra
 
 /// `lw` / `lt` are the dimension's own lineweight and linetype (ByBlock in DIMLWD, DIMLWE,
 /// DIMLTYPE, DIMLTEX1 and DIMLTEX2).
-fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimension, lw: f32, lt: Option<&cadcraft_doc::Linetype>, ltscale: f64) {
+fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadaddy_doc::Dimension, lw: f32, lt: Option<&cadaddy_doc::Linetype>, ltscale: f64) {
     let d = ctx.d;
     let style = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
     let g = dimension_in(d, dm);
@@ -1619,7 +1619,7 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimensio
             Lineweight::Default => default_lineweight(d),
         }
     };
-    let ltype = |name: &str| -> Option<cadcraft_doc::Linetype> {
+    let ltype = |name: &str| -> Option<cadaddy_doc::Linetype> {
         match name.trim().to_ascii_lowercase().as_str() {
             "" | "byblock" => lt.cloned(),
             "bylayer" => layer.and_then(|l| d.linetype(&l.linetype)).filter(|l| !l.pattern.is_empty()).cloned(),
@@ -1640,7 +1640,7 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimensio
         b.tris(ctx, dim_rgb, t);
     }
     if b.opts.text {
-        let sh = cadcraft_fonts::Shaped { strokes: g.text.clone(), glyphs: g.text_glyphs.clone(), width: 0.0, text: g.text_runs.clone() };
+        let sh = cadaddy_fonts::Shaped { strokes: g.text.clone(), glyphs: g.text_glyphs.clone(), width: 0.0, text: g.text_runs.clone() };
         b.shaped(ctx, txt_rgb, lw, &sh);
     }
 }
@@ -1648,25 +1648,25 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimensio
 mod table;
 pub use table::{MAX_LAYOUT_CELLS, TableFill, TableGeom, TableLine, TableText, table_covered, table_geometry, table_style_of};
 
-fn table(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::Table, rgb: Ink, lw: f32) {
+fn table(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::Table, rgb: Ink, lw: f32) {
     table::draw(b, ctx, t, rgb, lw);
 }
 
-fn align(h: cadcraft_doc::HAlign, v: cadcraft_doc::VAlign) -> (cadcraft_fonts::Align, cadcraft_fonts::VAlign) {
-    use cadcraft_fonts::{Align as A, VAlign as V};
+fn align(h: cadaddy_doc::HAlign, v: cadaddy_doc::VAlign) -> (cadaddy_fonts::Align, cadaddy_fonts::VAlign) {
+    use cadaddy_fonts::{Align as A, VAlign as V};
     let ha = match h {
-        cadcraft_doc::HAlign::Left => A::Left,
-        cadcraft_doc::HAlign::Center => A::Center,
-        cadcraft_doc::HAlign::Right => A::Right,
-        cadcraft_doc::HAlign::Aligned => A::Aligned,
-        cadcraft_doc::HAlign::Middle => A::Middle,
-        cadcraft_doc::HAlign::Fit => A::Fit,
+        cadaddy_doc::HAlign::Left => A::Left,
+        cadaddy_doc::HAlign::Center => A::Center,
+        cadaddy_doc::HAlign::Right => A::Right,
+        cadaddy_doc::HAlign::Aligned => A::Aligned,
+        cadaddy_doc::HAlign::Middle => A::Middle,
+        cadaddy_doc::HAlign::Fit => A::Fit,
     };
     let va = match v {
-        cadcraft_doc::VAlign::Baseline => V::Baseline,
-        cadcraft_doc::VAlign::Bottom => V::Bottom,
-        cadcraft_doc::VAlign::Middle => V::Middle,
-        cadcraft_doc::VAlign::Top => V::Top,
+        cadaddy_doc::VAlign::Baseline => V::Baseline,
+        cadaddy_doc::VAlign::Bottom => V::Bottom,
+        cadaddy_doc::VAlign::Middle => V::Middle,
+        cadaddy_doc::VAlign::Top => V::Top,
     };
     (ha, va)
 }
@@ -1709,7 +1709,7 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
 /// A raster image: its pixels inside its clip boundary, and its frame per IMAGEFRAME (0 none,
 /// 1 shown and plotted, 2 shown only). An image whose file can't be read is drawn as its frame
 /// with the diagonals, as AutoCAD marks an unloaded image.
-fn image(b: &mut Builder, ctx: &Ctx, i: &cadcraft_doc::Image, rgb: Ink, lw: f32) {
+fn image(b: &mut Builder, ctx: &Ctx, i: &cadaddy_doc::Image, rgb: Ink, lw: f32) {
     let o = i.insert.xy();
     let (u, v) = (i.u.xy(), i.v.xy());
     let (w, h) = (i.size.x, i.size.y);
@@ -1758,8 +1758,8 @@ fn image(b: &mut Builder, ctx: &Ctx, i: &cadcraft_doc::Image, rgb: Ink, lw: f32)
     }
 }
 
-fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rgb: Ink) {
-    if ctx.depth >= cadcraft_doc::MAX_BLOCK_DEPTH {
+fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb: Ink) {
+    if ctx.depth >= cadaddy_doc::MAX_BLOCK_DEPTH {
         return;
     }
     if let Some(blk) = ctx.d.block(&ins.block) {
@@ -1826,13 +1826,13 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
 }
 
 /// Properties that follow the block reference's (an attribute without a definition).
-fn by_block() -> cadcraft_doc::Common {
-    cadcraft_doc::Common {
+fn by_block() -> cadaddy_doc::Common {
+    cadaddy_doc::Common {
         color: Color::ByBlock,
         linetype: "ByBlock".into(),
         lineweight: Lineweight::ByBlock,
-        transparency: cadcraft_doc::Transparency::ByBlock,
-        ..cadcraft_doc::Common::default()
+        transparency: cadaddy_doc::Transparency::ByBlock,
+        ..cadaddy_doc::Common::default()
     }
 }
 
@@ -1843,9 +1843,9 @@ fn attdef_tag(e: &Entity, tag: &str) -> bool {
 
 /// The overall scale of a leader drawn with dimension style `st`: its DIMSCALE, else the
 /// drawing's.
-fn leader_scale(d: &Drawing, st: Option<&cadcraft_doc::DimStyle>) -> f64 {
+fn leader_scale(d: &Drawing, st: Option<&cadaddy_doc::DimStyle>) -> f64 {
     let dimscale = d.header.f64("DIMSCALE", 1.0);
-    st.map(|s| s.effective_scale(dimscale)).unwrap_or_else(|| cadcraft_doc::DimStyle::default().effective_scale(dimscale))
+    st.map(|s| s.effective_scale(dimscale)).unwrap_or_else(|| cadaddy_doc::DimStyle::default().effective_scale(dimscale))
 }
 
 #[cfg(test)]

@@ -1,12 +1,12 @@
 //! IMAGE entities draw their pixels: placed by insertion point and pixel vectors, clipped to
 //! their clip boundary, through block references, and as a crossed frame when the file is missing.
 
-use cadcraft_color::Rgb;
-use cadcraft_doc::{Block, Common, Drawing, Entity, EntityKind, Handle, Image, Insert, Space};
-use cadcraft_geom::{Vec2, Vec3};
-use cadcraft_render::images::{Raster, insert};
-use cadcraft_render::raster::{RasterOptions, View, render};
-use cadcraft_render::{DisplayList, Kind, Options, build};
+use cadaddy_color::Rgb;
+use cadaddy_doc::{Block, Common, Drawing, Entity, EntityKind, Handle, Image, Insert, Space};
+use cadaddy_geom::{Vec2, Vec3};
+use cadaddy_render::images::{Raster, insert};
+use cadaddy_render::raster::{RasterOptions, View, render};
+use cadaddy_render::{DisplayList, Kind, Options, build};
 
 /// A 2 × 2 image: red, green on the top row; blue, white below.
 fn quad_image(path: &str) {

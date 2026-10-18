@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
-use cadcraft_color::Color;
-use cadcraft_geom::{Vec2, Vec3};
+use cadaddy_color::Color;
+use cadaddy_geom::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{EntityStore, Lineweight};
@@ -793,7 +793,7 @@ pub struct Layout {
     #[serde(default)]
     pub view: Option<(Vec2, f64)>,
     /// Paper-space position of the sheet's lower-left corner. AutoCAD layouts often keep their
-    /// sheet away from the origin (the layout limits, DXF 10/20); CADCraft's own start at zero.
+    /// sheet away from the origin (the layout limits, DXF 10/20); CADaddy's own start at zero.
     #[serde(default)]
     pub origin: Vec2,
 }

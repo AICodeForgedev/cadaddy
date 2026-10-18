@@ -12,8 +12,8 @@
 //! corner, Home goes to the home view (SW isometric, fitted). Dragging the compass ring turns a 3D
 //! view about the Z axis; the plan view has no view twist yet, so there the ring explains that.
 
-use cadcraft_geom::Vec3;
-use cadcraft_geom::view3::Projection;
+use cadaddy_geom::Vec3;
+use cadaddy_geom::view3::Projection;
 use egui::{Color32, CursorIcon, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::json;
 
@@ -149,7 +149,7 @@ impl Part {
     fn tip(self, proj: Option<Projection>) -> String {
         match self {
             Part::Face(preset) => format!("{}: look at this face (zoom extents)", preset[..1].to_uppercase() + &preset[1..]),
-            Part::Corner(c) => match cadcraft_geom::view3::preset_label(c) {
+            Part::Corner(c) => match cadaddy_geom::view3::preset_label(c) {
                 Some(l) => format!("{l} view"),
                 None => "View from this corner".into(),
             },
@@ -328,7 +328,7 @@ fn ucs_menu(app: &mut CadApp, popup: egui::Popup<'_>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadcraft_engine::Session;
+    use cadaddy_engine::Session;
 
     /// The app with the sample drawing, laid out once in a 1400×900 window.
     fn app_and_ctx() -> (CadApp, egui::Context) {
@@ -419,7 +419,7 @@ mod tests {
         let l = Layout::new(canvas(&app));
         let dir = |app: &CadApp| app.session.state().map(|s| s.view_dir).unwrap_or(Vec3::Z);
         click(&mut app, &ctx, l.home.center(), egui::PointerButton::Primary);
-        assert_eq!(cadcraft_geom::view3::preset_label(dir(&app)), Some("SW Isometric"), "Home");
+        assert_eq!(cadaddy_geom::view3::preset_label(dir(&app)), Some("SW Isometric"), "Home");
         // In the SW isometric view the cube shows TOP, FRONT and LEFT; the middle of the screen
         // cube is their shared corner, which is the SW isometric view again.
         let proj = app.session.state().ok().and_then(|s| s.projection());

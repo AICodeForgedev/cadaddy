@@ -10,11 +10,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use cadcraft_color::Rgb;
-use cadcraft_doc::{Drawing, Entity, EntityKind, PageSetup, Space};
-use cadcraft_geom::{Bounds2, Mat3, Vec2};
-use cadcraft_render::paper::{self, Sheet};
-use cadcraft_render::raster::{RasterOptions, View};
+use cadaddy_color::Rgb;
+use cadaddy_doc::{Drawing, Entity, EntityKind, PageSetup, Space};
+use cadaddy_geom::{Bounds2, Mat3, Vec2};
+use cadaddy_render::paper::{self, Sheet};
+use cadaddy_render::raster::{RasterOptions, View};
 use serde_json::{Value, json};
 
 use super::file::{base64_decode, base64_encode, io};
@@ -82,7 +82,7 @@ fn extension(path: &str) -> String {
 fn write_file(cmd: &str, path: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let tmp = format!("{path}.cadcraft-tmp");
+        let tmp = format!("{path}.cadaddy-tmp");
         std::fs::write(&tmp, bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
         std::fs::rename(&tmp, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
         Ok(())
@@ -380,7 +380,7 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     // Curves are flattened to about half a pixel.
     let est = plot_scale(&d.extents(&space), &sheet, fit, scale);
     let tol = 0.5 / (px_per_paper_unit * est);
-    let ropts = cadcraft_render::Options {
+    let ropts = cadaddy_render::Options {
         tolerance: if tol.is_finite() && tol > 0.0 { tol } else { 0.01 },
         min_dash: 0.0,
         text: true,
@@ -389,7 +389,7 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
         transparency,
         ..Default::default()
     };
-    let list = cadcraft_render::build_plot(d, &space, &ropts);
+    let list = cadaddy_render::build_plot(d, &space, &ropts);
     let b = list.bounds;
     // Paper point q shows drawing point (q - to) / k + from.
     let (from, k, to) = if fit || space == Space::Model {
@@ -412,7 +412,7 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
         px_per_mm: if lineweights && px_per_mm.is_finite() { px_per_mm } else { 0.0 },
         antialias: true,
     };
-    let png = cadcraft_render::raster::render_png(&list, &view, &ro).ok_or_else(|| bad("preview", "rendering the preview failed"))?;
+    let png = cadaddy_render::raster::render_png(&list, &view, &ro).ok_or_else(|| bad("preview", "rendering the preview failed"))?;
     let layout = space.tab_name();
     Ok(json!({ "data": base64_encode(&png), "width": w, "height": h, "layout": layout, "paper": page.paper, "landscape": page.landscape }))
 }
@@ -492,7 +492,7 @@ struct Frame {
 
 /// The ISO/ANSI paper a frame of `w` x `h` mm fits (either orientation), and whether it is landscape.
 fn paper_for(w: f64, h: f64) -> Option<(&'static str, bool)> {
-    cadcraft_render::PAPER_SIZES.iter().find_map(|p| {
+    cadaddy_render::PAPER_SIZES.iter().find_map(|p| {
         let (pw, ph) = (p.width_mm, p.height_mm);
         if (pw - w).abs() <= FRAME_TOL_MM && (ph - h).abs() <= FRAME_TOL_MM {
             Some((p.name, false))
@@ -513,7 +513,7 @@ fn frame_books(d: &Drawing, frame_height: f64, unit: f64) -> (Vec<Vec<Frame>>, u
         if !pl.closed {
             continue;
         }
-        let b = cadcraft_doc::entity_bounds(d, e, 0);
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
         if b.is_empty() || !b.width().is_finite() || !b.height().is_finite() {
             continue;
         }
@@ -594,8 +594,8 @@ fn run_pdfbook(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    use cadcraft_doc::{Block, Circle, Common, Handle, Insert, Layer, Line};
-    use cadcraft_geom::Vec3;
+    use cadaddy_doc::{Block, Circle, Common, Handle, Insert, Layer, Line};
+    use cadaddy_geom::Vec3;
 
     use super::super::file::{IoHooks, set_io};
     use super::*;
@@ -626,7 +626,7 @@ mod tests {
     }
 
     fn temp(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("cadcraft-exchange-{}-{name}", std::process::id()))
+        std::env::temp_dir().join(format!("cadaddy-exchange-{}-{name}", std::process::id()))
     }
 
     #[test]

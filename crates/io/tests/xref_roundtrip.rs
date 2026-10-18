@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
-use cadcraft_color::Color;
-use cadcraft_doc::*;
-use cadcraft_dxf::{Tag, parse_ascii, records, sections, write_ascii};
-use cadcraft_geom::Vec3;
-use cadcraft_io::{read_dxf, write_dxf};
+use cadaddy_color::Color;
+use cadaddy_doc::*;
+use cadaddy_dxf::{Tag, parse_ascii, records, sections, write_ascii};
+use cadaddy_geom::Vec3;
+use cadaddy_io::{read_dxf, write_dxf};
 
 fn roundtrip(d: &Drawing) -> Drawing {
     read_dxf(write_dxf(d).as_bytes()).expect("reopen")
@@ -165,8 +165,8 @@ fn xrefs_survive_a_dwg_save() {
     let walls = d.layer_mut("SITE|Walls").expect("walls");
     walls.color = Color::Index(252);
     walls.frozen = true;
-    let dwg = cadcraft_io::write(&d, "x.dwg").expect("save dwg");
-    let r = cadcraft_io::read(&dwg, "x.dwg").expect("reopen dwg");
+    let dwg = cadaddy_io::write(&d, "x.dwg").expect("save dwg");
+    let r = cadaddy_io::read(&dwg, "x.dwg").expect("reopen dwg");
     let site = r.block("SITE").expect("xref kept");
     assert_eq!((site.xref_path.as_deref(), site.xref_overlay), (Some("..\\shared\\site.dwg"), false));
     assert!(site.entities.is_empty(), "its objects come from the referenced file");

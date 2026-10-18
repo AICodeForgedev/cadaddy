@@ -23,9 +23,9 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use cadcraft_color::{Color, Rgb};
-use cadcraft_doc::*;
-use cadcraft_geom::{PolyVertex, Vec2, Vec3};
+use cadaddy_color::{Color, Rgb};
+use cadaddy_doc::*;
+use cadaddy_geom::{PolyVertex, Vec2, Vec3};
 use lopdf::content::Content;
 use lopdf::{Dictionary, Document, Object, ObjectId};
 
@@ -125,7 +125,7 @@ pub struct PdfImport {
     pub stats: BTreeMap<String, usize>,
     pub notes: Vec<String>,
     /// The image files the IMAGE objects name (path as they name it) and their pixels.
-    pub images: Vec<(String, std::sync::Arc<cadcraft_render::images::Raster>)>,
+    pub images: Vec<(String, std::sync::Arc<cadaddy_render::images::Raster>)>,
 }
 
 /// The number of pages.
@@ -226,7 +226,7 @@ struct Fill {
 /// lands (`ctm`, sheet points; row 0 of the pixels at the top, y = 1).
 struct ImageOut {
     ctm: M,
-    raster: std::sync::Arc<cadcraft_render::images::Raster>,
+    raster: std::sync::Arc<cadaddy_render::images::Raster>,
     layer: Option<String>,
     clip: Option<std::rc::Rc<Vec<Vec<(f64, f64)>>>>,
     /// Transparency percent from the constant fill alpha.
@@ -1938,7 +1938,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     paint.sort_unstable();
     // image files by their pixels (a logo on every sheet is one file)
     let mut image_files: HashMap<u64, String> = HashMap::new();
-    let mut image_out: Vec<(String, std::sync::Arc<cadcraft_render::images::Raster>)> = Vec::new();
+    let mut image_out: Vec<(String, std::sync::Arc<cadaddy_render::images::Raster>)> = Vec::new();
     for (_, kind, i) in paint {
         match kind {
             0 => {
@@ -2193,7 +2193,7 @@ fn stitch(images: Vec<ImageOut>, white_fills: &HashSet<usize>) -> (Vec<ImageOut>
         // orthogonal frames only (no skew)
         ((ux * vx + uy * vy).abs() < 1e-6).then_some(((ux, uy), (vx, vy), lu, lv))
     };
-    let small = |r: &cadcraft_render::images::Raster| r.width.min(r.height) <= 4 || u64::from(r.width) * u64::from(r.height) <= 4096;
+    let small = |r: &cadaddy_render::images::Raster| r.width.min(r.height) <= 4 || u64::from(r.width) * u64::from(r.height) <= 4096;
     let mut out: Vec<ImageOut> = Vec::with_capacity(images.len());
     let mut run: Vec<ImageOut> = Vec::new();
     // the run's sheet-point box
@@ -2358,7 +2358,7 @@ fn stitch_run(run: &[ImageOut], frame: &dyn Fn(&M) -> Option<((f64, f64), (f64, 
             }
         }
     }
-    let raster = cadcraft_render::images::Raster::new(cw as u32, ch as u32, rgba)?;
+    let raster = cadaddy_render::images::Raster::new(cw as u32, ch as u32, rgba)?;
     let origin = (u.0 * u0 + v.0 * v0, u.1 * u0 + v.1 * v0);
     let ctm = M([u.0 * (u1 - u0), u.1 * (u1 - u0), v.0 * (v1 - v0), v.1 * (v1 - v0), origin.0, origin.1]);
     let order = run.last().map_or(first.order, |l| l.order);
@@ -2395,7 +2395,7 @@ fn decode_pdf_string(b: &[u8]) -> String {
 
 /// Write each image as a PNG file at its path (in `folder`, created when missing).
 #[cfg(not(target_arch = "wasm32"))]
-fn write_images(folder: &str, images: &[(String, std::sync::Arc<cadcraft_render::images::Raster>)]) -> std::io::Result<usize> {
+fn write_images(folder: &str, images: &[(String, std::sync::Arc<cadaddy_render::images::Raster>)]) -> std::io::Result<usize> {
     std::fs::create_dir_all(folder)?;
     let mut n = 0;
     for (path, raster) in images {
@@ -2407,7 +2407,7 @@ fn write_images(folder: &str, images: &[(String, std::sync::Arc<cadcraft_render:
 }
 
 #[cfg(target_arch = "wasm32")]
-fn write_images(_folder: &str, _images: &[(String, std::sync::Arc<cadcraft_render::images::Raster>)]) -> std::io::Result<usize> {
+fn write_images(_folder: &str, _images: &[(String, std::sync::Arc<cadaddy_render::images::Raster>)]) -> std::io::Result<usize> {
     Err(std::io::Error::other("files can't be written on the web"))
 }
 
@@ -2463,7 +2463,7 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
         }
     }
     for (path, raster) in &r.images {
-        cadcraft_render::images::insert(path, std::sync::Arc::clone(raster));
+        cadaddy_render::images::insert(path, std::sync::Arc::clone(raster));
     }
     let report = json!({
         "pages": r.pages,

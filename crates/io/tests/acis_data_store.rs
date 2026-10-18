@@ -1,10 +1,10 @@
 //! The ACIS geometry of 3D solids and regions survives a save. From AutoCAD 2013 on those entities
 //! don't carry it themselves: it lives in the file's data store section (ACDSDATA), one record per
-//! entity bound by a 320 handle. CADCraft doesn't model solids, so it keeps the section as read and
+//! entity bound by a 320 handle. CADaddy doesn't model solids, so it keeps the section as read and
 //! writes it back (and the DWG bridge reads it), without the records of deleted entities.
 #![cfg(not(target_arch = "wasm32"))]
 
-use cadcraft_doc::EntityKind;
+use cadaddy_doc::EntityKind;
 
 /// Stand-in modeler data, carried as opaque bytes: the binary ACIS magic, some bytes, and the
 /// end-of-data marker DWG readers delimit each body with.
@@ -64,20 +64,20 @@ fn asm_data(text: &str) -> Vec<(String, String)> {
 
 #[test]
 fn dxf_keeps_the_data_store_and_drops_records_of_deleted_entities() {
-    let mut d = cadcraft_io::read_dxf(dxf().as_bytes()).unwrap();
+    let mut d = cadaddy_io::read_dxf(dxf().as_bytes()).unwrap();
     assert_eq!(d.foreign.data_store_entities().len(), 2);
-    let out = String::from_utf8(cadcraft_io::write(&d, "x.dxf").unwrap()).unwrap();
+    let out = String::from_utf8(cadaddy_io::write(&d, "x.dxf").unwrap()).unwrap();
     assert_eq!(asm_data(&out), vec![("2A".to_string(), SAB_HEX.to_string()), ("2B".to_string(), SAB_HEX.to_string())]);
 
     // Deleting a solid drops its record; the other stays.
     let h = d.model.iter().find(|e| e.handle.hex() == "2B").map(|e| e.handle).unwrap();
     d.remove_entity(h).unwrap();
-    let out = String::from_utf8(cadcraft_io::write(&d, "x.dxf").unwrap()).unwrap();
+    let out = String::from_utf8(cadaddy_io::write(&d, "x.dxf").unwrap()).unwrap();
     assert_eq!(asm_data(&out), vec![("2A".to_string(), SAB_HEX.to_string())]);
 
     // An R2000 file has no data store (its solids would carry SAT text instead).
     let r2000 = String::from_utf8(
-        cadcraft_io::write_with(&d, "x.dxf", &cadcraft_io::SaveOptions { version: Some(cadcraft_io::Version::R2000), binary: false }).unwrap(),
+        cadaddy_io::write_with(&d, "x.dxf", &cadaddy_io::SaveOptions { version: Some(cadaddy_io::Version::R2000), binary: false }).unwrap(),
     )
     .unwrap();
     assert!(!r2000.contains("ACDSDATA"));
@@ -85,20 +85,20 @@ fn dxf_keeps_the_data_store_and_drops_records_of_deleted_entities() {
     // No solid left: no section.
     let h = d.model.iter().find(|e| matches!(e.kind, EntityKind::Unknown(_))).map(|e| e.handle).unwrap();
     d.remove_entity(h).unwrap();
-    let out = String::from_utf8(cadcraft_io::write(&d, "x.dxf").unwrap()).unwrap();
+    let out = String::from_utf8(cadaddy_io::write(&d, "x.dxf").unwrap()).unwrap();
     assert!(!out.contains("ACDSDATA"));
 }
 
 #[test]
 fn dwg_keeps_the_solids_geometry() {
-    let d = cadcraft_io::read_dxf(dxf().as_bytes()).unwrap();
-    let dwg = cadcraft_io::write(&d, "x.dwg").unwrap();
+    let d = cadaddy_io::read_dxf(dxf().as_bytes()).unwrap();
+    let dwg = cadaddy_io::write(&d, "x.dwg").unwrap();
     // The DWG read back (as the bridge's DXF) binds the same bytes to both solids.
-    let back = String::from_utf8(cadcraft_dwg::dwg_to_dxf(&dwg).unwrap()).unwrap();
+    let back = String::from_utf8(cadaddy_dwg::dwg_to_dxf(&dwg).unwrap()).unwrap();
     let mut got = asm_data(&back);
     got.sort();
     assert_eq!(got, vec![("2A".to_string(), SAB_HEX.to_string()), ("2B".to_string(), SAB_HEX.to_string())]);
-    // And reopening it in CADCraft keeps them for the next save.
-    let again = cadcraft_io::read(&dwg, "x.dwg").unwrap();
+    // And reopening it in CADaddy keeps them for the next save.
+    let again = cadaddy_io::read(&dwg, "x.dwg").unwrap();
     assert_eq!(again.foreign.data_store_entities().len(), 2);
 }

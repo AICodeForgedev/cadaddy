@@ -1,13 +1,13 @@
 //! WBLOCK at the command line (AutoCAD's -WBLOCK prompts), and `.dwg` added to a bare file name.
 
-use cadcraft_engine::Session;
-use cadcraft_engine::cmd::file::{IoHooks, set_io};
+use cadaddy_engine::Session;
+use cadaddy_engine::cmd::file::{IoHooks, set_io};
 use serde_json::json;
 
 fn install() {
     set_io(IoHooks {
-        read: |b, n| cadcraft_io::read(b, n).map_err(|e| e.to_string()),
-        write: |d, n| cadcraft_io::write(d, n).map_err(|e| e.to_string()),
+        read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
+        write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
         plot: None,
         read_pdf: None,
     });
@@ -28,7 +28,7 @@ fn typed_wblock_writes_new_objects_a_block_and_the_whole_drawing() {
         s.cmdline(i).unwrap();
     }
     assert!(s.running.is_none(), "{}", s.prompt_text());
-    let d = cadcraft_io::read(&std::fs::read(dir.join("part.dwg")).unwrap(), "part.dwg").unwrap();
+    let d = cadaddy_io::read(&std::fs::read(dir.join("part.dwg")).unwrap(), "part.dwg").unwrap();
     assert_eq!(d.model.iter().count(), 2);
 
     // The whole drawing.

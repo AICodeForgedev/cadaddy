@@ -1,8 +1,8 @@
 //! DIMCONTINUE / DIMBASELINE with many points: one snap index per chain (no rescan of the
 //! drawing per point), the same associations as DIMREASSOCIATE, and a cap on the input size.
 
-use cadcraft_engine::Session;
-use cadcraft_engine::doc::{DimAssoc, EntityKind, Handle};
+use cadaddy_engine::Session;
+use cadaddy_engine::doc::{DimAssoc, EntityKind, Handle};
 use serde_json::{Value, json};
 
 fn assoc_of(s: &Session, handles: &[Value]) -> Vec<Vec<DimAssoc>> {

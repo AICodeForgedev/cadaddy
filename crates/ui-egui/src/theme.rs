@@ -1,5 +1,5 @@
 //! Design tokens. Colours were measured from the reference look (dark slate chrome, near-black
-//! navy model space) and are CADCraft's own values; every widget reads them from here.
+//! navy model space) and are CADaddy's own values; every widget reads them from here.
 //!
 //! Two palettes: [`Tokens::DARK`] (the original look) and [`Tokens::LIGHT`]. The interface theme
 //! changes the chrome (title and tool bar, menus, palettes, tabs, command line, status bar,
@@ -19,7 +19,7 @@ pub enum ThemePref {
     /// Follow the operating system's light/dark appearance, live.
     System,
     Light,
-    /// The default: CADCraft's original look.
+    /// The default: CADaddy's original look.
     #[default]
     Dark,
 }
@@ -360,7 +360,7 @@ pub fn install_fonts(ctx: &egui::Context, language: &str) {
             added.push(("system-arabic".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes))));
         }
     }
-    let mut embedded: Vec<_> = cadcraft_fonts::CRAFT_FONTS
+    let mut embedded: Vec<_> = cadaddy_fonts::CRAFT_FONTS
         .iter()
         .filter(|f| f.style == "Regular" && f.scripts.iter().any(|s| matches!(*s, "Jpan" | "Hans" | "Hant")))
         .collect();
@@ -524,13 +524,13 @@ fn hangul_letters() -> &'static std::collections::BTreeSet<char> {
 
 /// Whether `face` has every Hangul letter the Korean interface shows (rejects malformed fonts
 /// and Chinese- or Japanese-only faces).
-fn covers_hangul(face: &cadcraft_fonts::ttf::Face) -> bool {
+fn covers_hangul(face: &cadaddy_fonts::ttf::Face) -> bool {
     hangul_letters().iter().all(|c| face.has_glyph(*c))
 }
 
 /// The first face of a font file (the one egui uses) when it covers the Korean interface.
-fn korean_face(bytes: std::sync::Arc<Vec<u8>>) -> Option<cadcraft_fonts::ttf::Face> {
-    cadcraft_fonts::ttf::faces(&bytes).into_iter().find(covers_hangul)
+fn korean_face(bytes: std::sync::Arc<Vec<u8>>) -> Option<cadaddy_fonts::ttf::Face> {
+    cadaddy_fonts::ttf::faces(&bytes).into_iter().find(covers_hangul)
 }
 
 /// Whether the CJK fonts [`install_fonts`] loads in every language already show Hangul (Noto Sans
@@ -544,17 +544,17 @@ pub fn cjk_covers_hangul() -> bool {
             // egui uses a collection's first face, and each letter from the first font with it.
             let first_covers = |p: &std::path::Path| {
                 read_capped(p, MAX_UI_FONT_BYTES)
-                    .and_then(|bytes| cadcraft_fonts::ttf::faces(&std::sync::Arc::new(bytes)).into_iter().next())
+                    .and_then(|bytes| cadaddy_fonts::ttf::faces(&std::sync::Arc::new(bytes)).into_iter().next())
                     .is_some_and(|face| covers_hangul(&face))
             };
             if cjk_font().is_some_and(first_covers) {
                 return true;
             }
         }
-        cadcraft_fonts::CRAFT_FONTS
+        cadaddy_fonts::CRAFT_FONTS
             .iter()
             .filter(|f| f.style == "Regular" && f.scripts.iter().any(|s| matches!(*s, "Jpan" | "Hans" | "Hant")))
-            .any(|f| cadcraft_fonts::ttf::faces(&std::sync::Arc::new(f.bytes.to_vec())).first().is_some_and(covers_hangul))
+            .any(|f| cadaddy_fonts::ttf::faces(&std::sync::Arc::new(f.bytes.to_vec())).first().is_some_and(covers_hangul))
     })
 }
 
@@ -563,11 +563,11 @@ pub fn cjk_covers_hangul() -> bool {
 /// Nothing is bundled or downloaded; without one the interface stays English. Only looked for
 /// when Korean is asked about. Checked once; collections are scanned with the fonts crate's
 /// face-count cap and reads are capped.
-pub fn korean_font() -> Option<&'static cadcraft_fonts::ttf::Face> {
-    static FOUND: std::sync::OnceLock<Option<cadcraft_fonts::ttf::Face>> = std::sync::OnceLock::new();
+pub fn korean_font() -> Option<&'static cadaddy_fonts::ttf::Face> {
+    static FOUND: std::sync::OnceLock<Option<cadaddy_fonts::ttf::Face>> = std::sync::OnceLock::new();
     FOUND
         .get_or_init(|| {
-            for font in cadcraft_fonts::CRAFT_FONTS.iter().filter(|f| f.scripts.iter().any(|s| matches!(*s, "Hang" | "Kore"))) {
+            for font in cadaddy_fonts::CRAFT_FONTS.iter().filter(|f| f.scripts.iter().any(|s| matches!(*s, "Hang" | "Kore"))) {
                 if font.bytes.len() as u64 > MAX_UI_FONT_BYTES {
                     continue;
                 }

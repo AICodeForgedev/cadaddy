@@ -1,6 +1,6 @@
 //! POINT display figures: point style (`PDMODE`) and size (`PDSIZE`).
 
-use cadcraft_geom::{Circle, Vec2};
+use cadaddy_geom::{Circle, Vec2};
 
 /// The figure a POINT draws.
 #[derive(Debug, Default, PartialEq)]

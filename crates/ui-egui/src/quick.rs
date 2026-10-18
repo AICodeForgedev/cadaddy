@@ -1,7 +1,7 @@
 //! Quick Select (QSELECT dialog → the engine `qselect` command) and the Quick Properties
 //! palette shown near the cursor while objects are selected and QPMODE is on.
 
-use cadcraft_doc::{EntityKind, Handle};
+use cadaddy_doc::{EntityKind, Handle};
 use egui::{Pos2, RichText, vec2};
 use serde_json::{Value, json};
 
@@ -232,7 +232,7 @@ fn num_row(ui: &mut egui::Ui, label: &str, id: egui::Id, v: f64, set: &mut Optio
     ui.label(RichText::new(crate::i18n::t(label)).color(Tokens::get().text_dim));
     let s = format!("{v:.4}");
     if let Some(n) = crate::parametric::expr_field(ui, id, &s)
-        && let Some(f) = cadcraft_engine::units::parse_distance(&n).or_else(|| n.parse::<f64>().ok()).filter(|f| f.is_finite())
+        && let Some(f) = cadaddy_engine::units::parse_distance(&n).or_else(|| n.parse::<f64>().ok()).filter(|f| f.is_finite())
     {
         *set = Some((key.to_string(), json!(f)));
     }
@@ -283,7 +283,7 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
     } else {
         format!("{} ({})", crate::tl!("All"), ents.len())
     };
-    let same = |f: &dyn Fn(&cadcraft_doc::Entity) -> String| -> String {
+    let same = |f: &dyn Fn(&cadaddy_doc::Entity) -> String| -> String {
         let v0 = ents.first().map(|e| f(e)).unwrap_or_default();
         if ents.iter().all(|e| f(e) == v0) { v0 } else { "*VARIES*".into() }
     };
@@ -294,7 +294,7 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
     let linetypes: Vec<String> = d.linetypes.iter().map(|l| l.name.clone()).collect();
     let kind = if ents.len() == 1 { Some(first.kind.clone()) } else { None };
     // A dynamic block reference goes by its dynamic block's name, not its anonymous block's.
-    let block_name = cadcraft_engine::doc::dynblock::custom_properties(d, first.handle).map(|(n, _)| n);
+    let block_name = cadaddy_engine::doc::dynblock::custom_properties(d, first.handle).map(|(n, _)| n);
     let ids: Vec<String> = sel.iter().map(|h| h.hex()).collect();
     let mut set: Option<(String, Value)> = None;
     let mut close = false;
@@ -308,7 +308,7 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             egui::Grid::new("qp_grid").num_columns(2).spacing(vec2(10.0, 4.0)).min_col_width(80.0).show(ui, |ui| {
                 ui.label(RichText::new(crate::tl!("Color")).color(Tokens::get().text_dim));
-                let cur = color.unwrap_or(cadcraft_color::Color::ByLayer);
+                let cur = color.unwrap_or(cadaddy_color::Color::ByLayer);
                 if let Some(c) = crate::layers::color_button(ui, egui::Id::new(("qp_color", &ids)), cur, true, 150.0) {
                     set = Some(("color".into(), json!(c.name())));
                 }
@@ -361,7 +361,7 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
                         num_row(ui, "End angle", id("ea"), a.end.to_degrees(), &mut set, "endAngle");
                     }
                     Some(EntityKind::LwPolyline(p)) => {
-                        let g = cadcraft_geom::Polyline { vertices: p.vertices.clone(), closed: p.closed };
+                        let g = cadaddy_geom::Polyline { vertices: p.vertices.clone(), closed: p.closed };
                         ro_row(ui, "Length", format!("{:.4}", g.len()));
                         if p.closed {
                             ro_row(ui, "Area", format!("{:.4}", g.area().abs()));

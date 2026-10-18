@@ -1,10 +1,10 @@
 //! Raster images go into PDF plots (an image XObject per picture, clipped and placed) and SVG
 //! exports (an embedded PNG).
 
-use cadcraft_doc::{Common, Drawing, EntityKind, Image, Space};
-use cadcraft_geom::{Vec2, Vec3};
-use cadcraft_io::{PdfOptions, pdf, svg};
-use cadcraft_render::images::{Raster, insert};
+use cadaddy_doc::{Common, Drawing, EntityKind, Image, Space};
+use cadaddy_geom::{Vec2, Vec3};
+use cadaddy_io::{PdfOptions, pdf, svg};
+use cadaddy_render::images::{Raster, insert};
 
 fn drawing(path: &str) -> Drawing {
     // 2 × 1 pixels, the second half transparent

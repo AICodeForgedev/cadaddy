@@ -1,7 +1,7 @@
 //! MEASUREGEOM at the command line: pick what to measure (Distance by default), then the points or
 //! the object it needs; each result is echoed and the option prompt comes back, as in AutoCAD.
 
-use cadcraft_geom::Vec2;
+use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
 
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};

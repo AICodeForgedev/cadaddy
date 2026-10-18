@@ -1,7 +1,7 @@
 //! Interaction and optional offscreen evidence for the application's painted controls.
 
-use cadcraft_engine::Session;
-use cadcraft_ui_egui::{CadApp, Services, icons, theme};
+use cadaddy_engine::Session;
+use cadaddy_ui_egui::{CadApp, Services, icons, theme};
 use egui::{Event, Key, Modifiers, PointerButton, Response, pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -122,7 +122,7 @@ fn right_palettes_collapse_arrow_hides_menu() {
     let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
         |ui, app: &mut CadApp| {
             app.logic(&ui.ctx().clone());
-            cadcraft_ui_egui::palettes::right_palettes(app, ui);
+            cadaddy_ui_egui::palettes::right_palettes(app, ui);
         },
         app(),
     );
@@ -140,7 +140,7 @@ fn toolsets_collapse_arrow_hides_menu() {
     let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
         |ui, app: &mut CadApp| {
             app.logic(&ui.ctx().clone());
-            cadcraft_ui_egui::palettes::toolsets(app, ui);
+            cadaddy_ui_egui::palettes::toolsets(app, ui);
         },
         app(),
     );
@@ -168,7 +168,7 @@ fn shared_controls_visuals() {
         for (name, size) in [("normal", vec2(1600.0, 1000.0)), ("narrow", vec2(900.0, 600.0))] {
             h.set_size(size);
             h.run_steps(6);
-            h.render().unwrap().save(directory.join(format!("cadcraft-{name}-dark-{scale}x.png"))).unwrap();
+            h.render().unwrap().save(directory.join(format!("cadaddy-{name}-dark-{scale}x.png"))).unwrap();
         }
         let mut controls = Harness::builder().with_size(vec2(340.0, 150.0)).with_pixels_per_point(scale).wgpu().build_ui_state(
             |ui, rects: &mut Vec<egui::Rect>| {
@@ -189,7 +189,7 @@ fn shared_controls_visuals() {
             Vec::new(),
         );
         controls.run_steps(4);
-        controls.render().unwrap().save(directory.join(format!("cadcraft-controls-dark-{scale}x.png"))).unwrap();
+        controls.render().unwrap().save(directory.join(format!("cadaddy-controls-dark-{scale}x.png"))).unwrap();
         for (name, index, pressed) in [("hover", 0, false), ("selected-hover", 3, false), ("disabled-hover", 6, false), ("pressed", 0, true)] {
             let center = controls.state()[index].center();
             controls.event(Event::PointerMoved(center));
@@ -197,13 +197,13 @@ fn shared_controls_visuals() {
                 controls.event(pointer(center, true));
             }
             controls.run_steps(2);
-            controls.render().unwrap().save(directory.join(format!("cadcraft-controls-{name}-dark-{scale}x.png"))).unwrap();
+            controls.render().unwrap().save(directory.join(format!("cadaddy-controls-{name}-dark-{scale}x.png"))).unwrap();
         }
         controls.event(pointer(controls.state()[0].center(), false));
         controls.event(Event::PointerGone);
         controls.run_steps(2);
         controls.key_press(Key::Tab);
         controls.run_steps(2);
-        controls.render().unwrap().save(directory.join(format!("cadcraft-controls-focus-dark-{scale}x.png"))).unwrap();
+        controls.render().unwrap().save(directory.join(format!("cadaddy-controls-focus-dark-{scale}x.png"))).unwrap();
     }
 }

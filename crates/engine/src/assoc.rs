@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use cadcraft_doc::{AssocSnap, DimAssoc, DimKind, Dimension, Drawing, EntityKind, Handle, Space};
-use cadcraft_geom::{Vec2, Vec3};
+use cadaddy_doc::{AssocSnap, DimAssoc, DimKind, Dimension, Drawing, EntityKind, Handle, Space};
+use cadaddy_geom::{Vec2, Vec3};
 
 /// Definition point names in the order they are tried.
 const POINTS: [&str; 5] = ["defpt", "p13", "p14", "p15", "p16"];
@@ -34,8 +34,8 @@ fn def_point_mut<'a>(d: &'a mut Dimension, name: &str) -> Option<&'a mut Vec3> {
     })
 }
 
-fn arc_geom(a: &cadcraft_doc::Arc) -> cadcraft_geom::Arc {
-    cadcraft_geom::Arc::new(a.center.xy(), a.radius, a.start, a.end)
+fn arc_geom(a: &cadaddy_doc::Arc) -> cadaddy_geom::Arc {
+    cadaddy_geom::Arc::new(a.center.xy(), a.radius, a.start, a.end)
 }
 
 /// Where a snap sits on an object now.
@@ -46,7 +46,7 @@ pub fn snap_point(d: &Drawing, a: &DimAssoc) -> Option<Vec2> {
         (EntityKind::Line(l), AssocSnap::End) => Some(l.b.xy()),
         (EntityKind::Line(l), AssocSnap::Mid) => Some(l.a.xy().mid(l.b.xy())),
         (EntityKind::Line(l), AssocSnap::Intersection { other }) => match &d.entity(*other)?.kind {
-            EntityKind::Line(m) => cadcraft_geom::line_line_infinite(l.a.xy(), l.b.xy(), m.a.xy(), m.b.xy()).map(|x| x.0),
+            EntityKind::Line(m) => cadaddy_geom::line_line_infinite(l.a.xy(), l.b.xy(), m.a.xy(), m.b.xy()).map(|x| x.0),
             _ => None,
         },
         (EntityKind::Arc(ar), AssocSnap::Start) => Some(arc_geom(ar).start_point()),

@@ -651,7 +651,7 @@ fn variant_label(btn: &Btn) -> &'static str {
 }
 
 fn command_known(id: &str) -> bool {
-    cadcraft_engine::find_command(id).is_some() || crate::menus::is_ui_command(id) || id.starts_with("ui.dialog.")
+    cadaddy_engine::find_command(id).is_some() || crate::menus::is_ui_command(id) || id.starts_with("ui.dialog.")
 }
 
 /// The flyout list under a split button's arrow.
@@ -742,7 +742,7 @@ fn small_button(app: &CadApp, ui: &mut egui::Ui, rect: Rect, btn: &Btn, fit: Fit
     let tip = if split {
         variant_label(&shown)
     } else if btn.label.is_empty() {
-        cadcraft_engine::find_command(btn.cmd).map_or(btn.cmd, |c| c.label)
+        cadaddy_engine::find_command(btn.cmd).map_or(btn.cmd, |c| c.label)
     } else {
         btn.label
     };

@@ -44,7 +44,7 @@ modules:
         CARGO_HOME: /run/build/cadaddy/cargo
         CARGO_NET_OFFLINE: 'true'
     build-commands:
-      - cargo --offline build --release --locked -p cadcraft -p cadcraft-cli
+      - cargo --offline build --release --locked -p cadaddy -p cadaddy-cli
       - install -Dm755 target/release/cadaddy /app/bin/cadaddy
       - install -Dm755 target/release/cadaddy-cli /app/bin/cadaddy-cli
       - install -Dm644 packaging/linux/dev.aicodeforge.cadaddy.desktop /app/share/applications/dev.aicodeforge.cadaddy.desktop

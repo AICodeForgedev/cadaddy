@@ -1,12 +1,12 @@
 //! The drawing area: grid, entities, selection highlighting, grips, rubber bands, object-snap
 //! markers, crosshair cursor, ViewCube, UCS icon and mouse handling.
 
-use cadcraft_color::Rgb;
-use cadcraft_doc::Handle;
-use cadcraft_engine::Input;
-use cadcraft_engine::snap::{self, SnapHit};
-use cadcraft_geom::{Bounds2, Vec2};
-use cadcraft_render::{DisplayList, Kind};
+use cadaddy_color::Rgb;
+use cadaddy_doc::Handle;
+use cadaddy_engine::Input;
+use cadaddy_engine::snap::{self, SnapHit};
+use cadaddy_geom::{Bounds2, Vec2};
+use cadaddy_render::{DisplayList, Kind};
 use egui::{Color32, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 
 use crate::CadApp;
@@ -22,7 +22,7 @@ pub struct Xf {
     /// A 3D view of model space (`None`: plan). `center`, [`Xf::to_screen`] and
     /// [`Xf::to_world`] are then on its view plane, where the display lists are built; drawing
     /// points (on the XY plane) go through [`Xf::w2s`] and [`Xf::s2w`].
-    pub proj: Option<cadcraft_geom::view3::Projection>,
+    pub proj: Option<cadaddy_geom::view3::Projection>,
 }
 
 impl Xf {
@@ -40,7 +40,7 @@ impl Xf {
     /// A drawing point (on the XY plane) on screen.
     pub fn w2s(&self, p: Vec2) -> Pos2 {
         match self.proj {
-            Some(pr) => self.to_screen(pr.project(cadcraft_geom::Vec3::new(p.x, p.y, 0.0))),
+            Some(pr) => self.to_screen(pr.project(cadaddy_geom::Vec3::new(p.x, p.y, 0.0))),
             None => self.to_screen(p),
         }
     }
@@ -55,12 +55,12 @@ impl Xf {
     }
     /// A drawing-space transform (a drag's MOVE/ROTATE/SCALE) acting on the view plane: the
     /// same motion of objects on the XY plane, seen in this view.
-    pub fn to_plane(&self, m: cadcraft_geom::Mat3) -> cadcraft_geom::Mat3 {
+    pub fn to_plane(&self, m: cadaddy_geom::Mat3) -> cadaddy_geom::Mat3 {
         let Some(pr) = self.proj else { return m };
         let p = pr.plane_xf(0.0);
         match p.inverse() {
             Some(inv) if p.det().abs() > 1e-6 => inv.then(m).then(p),
-            _ => cadcraft_geom::Mat3::IDENTITY,
+            _ => cadaddy_geom::Mat3::IDENTITY,
         }
     }
 }
@@ -139,8 +139,8 @@ pub struct CanvasState {
     /// Dynamic block grips of the selection (cached), the one being dragged, and the list grip
     /// whose choices are open (and whether it opened this frame).
     pub(crate) dyn_grips: crate::dyngrips::Cache,
-    pub(crate) dyn_hot: Option<(Handle, i32, cadcraft_engine::doc::dynblock::GripPart)>,
-    pub(crate) dyn_menu: Option<(Handle, cadcraft_engine::doc::dynblock::DynGrip)>,
+    pub(crate) dyn_hot: Option<(Handle, i32, cadaddy_engine::doc::dynblock::GripPart)>,
+    pub(crate) dyn_menu: Option<(Handle, cadaddy_engine::doc::dynblock::DynGrip)>,
     pub(crate) dyn_menu_fresh: bool,
     /// Zoom to extents once the canvas size is known (after opening a drawing).
     pub zoom_pending: bool,
@@ -244,22 +244,22 @@ fn prims_of(list: &DisplayList, handles: &[Handle]) -> Vec<usize> {
 
 /// Build options for previews at `scale` pixels per drawing unit (opaque).
 /// `proj`: the 3D view they are drawn in ([`Xf::proj`]).
-fn preview_options(scale: f64, proj: Option<cadcraft_geom::view3::Projection>) -> cadcraft_render::Options {
-    cadcraft_render::Options { tolerance: 0.5 / scale, min_dash: 2.0 / scale, projection: proj, ..Default::default() }
+fn preview_options(scale: f64, proj: Option<cadaddy_geom::view3::Projection>) -> cadaddy_render::Options {
+    cadaddy_render::Options { tolerance: 0.5 / scale, min_dash: 2.0 / scale, projection: proj, ..Default::default() }
 }
 
 /// The display list of preview entities the session builds with the current properties
-/// ([`cadcraft_engine::Session::preview`], the extras of [`cadcraft_engine::Session::drag`]): the
+/// ([`cadaddy_engine::Session::preview`], the extras of [`cadaddy_engine::Session::drag`]): the
 /// command's rubber band and rebuilt copies of existing objects. They carry CLAYER's properties,
 /// not the objects', so they are drawn opaque (the GPU drag of the objects themselves keeps their
 /// transparency, see [`draw_drag_gpu`]).
 fn rebuilt_preview<'a>(
-    doc: &cadcraft_doc::Drawing,
-    ents: impl IntoIterator<Item = &'a cadcraft_doc::Entity>,
+    doc: &cadaddy_doc::Drawing,
+    ents: impl IntoIterator<Item = &'a cadaddy_doc::Entity>,
     scale: f64,
-    proj: Option<cadcraft_geom::view3::Projection>,
+    proj: Option<cadaddy_geom::view3::Projection>,
 ) -> DisplayList {
-    cadcraft_render::build_entities(doc, ents, &preview_options(scale, proj))
+    cadaddy_render::build_entities(doc, ents, &preview_options(scale, proj))
 }
 
 fn color32(c: Rgb) -> Color32 {
@@ -267,7 +267,7 @@ fn color32(c: Rgb) -> Color32 {
 }
 
 /// A primitive's colour on `bg`, with its transparency.
-fn prim_color32(prim: &cadcraft_render::DPrim, bg: Rgb) -> Color32 {
+fn prim_color32(prim: &cadaddy_render::DPrim, bg: Rgb) -> Color32 {
     let c = prim.display_rgb(bg);
     Color32::from_rgba_unmultiplied(c.0, c.1, c.2, prim.alpha())
 }
@@ -341,7 +341,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
     // dropping it cancels it.
     app.canvas.job = None;
     let t0 = crate::now_ms();
-    let opts = cadcraft_render::Options {
+    let opts = cadaddy_render::Options {
         tolerance: 2f64.powi(band(px)) * 0.5,
         // Two pixels at the band's finest zoom: the list serves every zoom in the band, so its
         // level of detail must hold at the finest one.
@@ -375,7 +375,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         }
     }
     let space = st.space.clone();
-    app.canvas.list = Some(cadcraft_render::build(&st.doc, &space, &opts));
+    app.canvas.list = Some(cadaddy_render::build(&st.doc, &space, &opts));
     app.canvas.key = key;
     app.canvas.window = opts.view;
     app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);
@@ -385,12 +385,9 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
 /// The active MSPACE viewport when its contents are drawn apart from the layout's list (see
 /// [`VpContent`]), with its clip outline when it is clipped. A clipped viewport is clipped with
 /// the GPU's stencil buffer (`stencil`); without one its contents stay in the list.
-fn split_viewport(
-    st: &cadcraft_engine::DocState,
-    stencil: bool,
-) -> Option<(Handle, cadcraft_doc::Viewport, Option<cadcraft_render::clip::PolyClip>)> {
+fn split_viewport(st: &cadaddy_engine::DocState, stencil: bool) -> Option<(Handle, cadaddy_doc::Viewport, Option<cadaddy_render::clip::PolyClip>)> {
     let (h, vp) = st.active_viewport()?;
-    let clip = cadcraft_render::viewport_clip(&st.doc, h, &vp);
+    let clip = cadaddy_render::viewport_clip(&st.doc, h, &vp);
     (clip.is_none() || stencil).then_some((h, vp, clip))
 }
 
@@ -445,7 +442,7 @@ impl VpContent {
 /// view, as `p = k·p0 + b` on paper. A model point m is at p0 = c + s0 (m − c0) in the list and
 /// belongs at p = c + s (m − vc), with c the viewport's centre and s, s0 paper units per model
 /// unit, so k = s / s0 and b = c (1 − k) + s (c0 − vc).
-fn vp_motion(vp: &cadcraft_doc::Viewport, built: (Vec2, f64)) -> Option<(f64, Vec2)> {
+fn vp_motion(vp: &cadaddy_doc::Viewport, built: (Vec2, f64)) -> Option<(f64, Vec2)> {
     let (s, k) = (vp.height / vp.view_height, built.1 / vp.view_height);
     let b = vp.center.xy() * (1.0 - k) + (built.0 - vp.view_center) * s;
     (k.is_finite() && k > 0.0 && b.is_finite()).then_some((k, b))
@@ -505,7 +502,7 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
         // The viewport with half its larger side of margin all round: panning by up to that much
         // only moves the geometry.
         let area = rect.expand(rect.width().max(rect.height()) * 0.5);
-        let opts = cadcraft_render::Options {
+        let opts = cadaddy_render::Options {
             tolerance: 2f64.powi(band) * 0.5,
             min_dash: 2f64.powi(band) * 2.0,
             text: true,
@@ -519,7 +516,7 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
             cancel: None,
             projection: None,
         };
-        c.list = cadcraft_render::viewport_content(&st.doc, &st.space, h, area, &opts);
+        c.list = cadaddy_render::viewport_content(&st.doc, &st.space, h, area, &opts);
         c.key = Some(key);
         c.view = view;
         c.area = area;
@@ -602,7 +599,7 @@ fn draw_vp_mask(c: &mut VpContent, p: &egui::Painter, outline: &[Vec2], xf_paper
         }
         fan.bounds = Bounds2::from_points(outline.iter().copied());
         let len = u32::try_from(fan.tris.len()).unwrap_or(0);
-        fan.prims.push(cadcraft_render::DPrim {
+        fan.prims.push(cadaddy_render::DPrim {
             handle: Handle(0),
             color: Rgb(0, 0, 0),
             aci7: false,
@@ -656,7 +653,7 @@ struct VpHighlight {
 }
 
 impl VpHighlight {
-    fn update(&mut self, st: &cadcraft_engine::DocState, handles: &[Handle], scale: f64) {
+    fn update(&mut self, st: &cadaddy_engine::DocState, handles: &[Handle], scale: f64) {
         let tolerance = viewport_highlight_tolerance(scale);
         let key = {
             use std::hash::{Hash, Hasher};
@@ -666,7 +663,7 @@ impl VpHighlight {
         };
         if self.key != Some(key) {
             let ents = handles.iter().filter_map(|h| st.doc.model.get(*h)).map(|e| e.as_ref());
-            self.list = cadcraft_render::build_entities(&st.doc, ents, &cadcraft_render::Options { tolerance, ..Default::default() });
+            self.list = cadaddy_render::build_entities(&st.doc, ents, &cadaddy_render::Options { tolerance, ..Default::default() });
             self.key = Some(key);
             self.list_gen = self.list_gen.wrapping_add(1);
         }
@@ -694,12 +691,12 @@ fn build_window(views: &[(Bounds2, f64)]) -> Option<Bounds2> {
 fn orbit_by(app: &mut CadApp, d: egui::Vec2) {
     let Ok(st) = app.session.state() else { return };
     let (az, el) = match st.projection() {
-        Some(p) => cadcraft_geom::view3::Projection::angles(p.dir),
+        Some(p) => cadaddy_geom::view3::Projection::angles(p.dir),
         None => (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
     };
     let k = 0.5f64.to_radians();
     let el = (el + f64::from(d.y) * k).clamp(-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
-    let dir = cadcraft_geom::view3::Projection::dir_from_angles(az - f64::from(d.x) * k, el);
+    let dir = cadaddy_geom::view3::Projection::dir_from_angles(az - f64::from(d.x) * k, el);
     let _ = app.run("view.dir", serde_json::json!({ "dir": [dir.x, dir.y, dir.z] }));
 }
 
@@ -769,7 +766,7 @@ fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
 /// The isometric grid (SNAPSTYL 1): lines at 30°, 90° and 150° through the snap lattice, GRIDUNIT
 /// Y apart along the axes, coarsened while they would crowd closer than 8 pixels.
 fn draw_iso_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
-    use cadcraft_engine::snap::iso;
+    use cadaddy_engine::snap::iso;
     let t = Tokens::get();
     let s = app.session.drafting_settings();
     let mut d = s.gridunit.y.max(1e-12);
@@ -779,7 +776,7 @@ fn draw_iso_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
         }
         d *= 5.0;
     }
-    let (origin, angle) = app.session.doc().map(cadcraft_engine::snap::grid_frame).unwrap_or((Vec2::ZERO, 0.0));
+    let (origin, angle) = app.session.doc().map(cadaddy_engine::snap::grid_frame).unwrap_or((Vec2::ZERO, 0.0));
     let lines = iso::grid_lines(xf.world_bounds(), d, origin, angle, s.gridmajor);
     p.extend(
         lines.into_iter().map(|l| {
@@ -882,11 +879,11 @@ pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb,
 /// Textures of the images drawn by the CPU canvas, by their pixels (each entry keeps its pixels
 /// alive, so a key is never reused while it is cached).
 #[derive(Clone, Default)]
-struct ImageTextures(std::collections::HashMap<usize, (std::sync::Arc<cadcraft_render::images::Raster>, egui::TextureHandle)>);
+struct ImageTextures(std::collections::HashMap<usize, (std::sync::Arc<cadaddy_render::images::Raster>, egui::TextureHandle)>);
 
 /// The egui texture of image pixels `r`, uploaded on first use (scaled to the largest texture
 /// the backend takes).
-pub(crate) fn image_texture(ctx: &egui::Context, r: &std::sync::Arc<cadcraft_render::images::Raster>) -> Option<egui::TextureId> {
+pub(crate) fn image_texture(ctx: &egui::Context, r: &std::sync::Arc<cadaddy_render::images::Raster>) -> Option<egui::TextureId> {
     let key = std::sync::Arc::as_ptr(r) as usize;
     let id = egui::Id::new("cad_image_textures");
     if let Some(t) = ctx.data(|d| d.get_temp::<ImageTextures>(id)).and_then(|c| c.0.get(&key).map(|(_, t)| t.id())) {
@@ -966,9 +963,9 @@ fn draw_drag_gpu(
     c: &mut CanvasState,
     p: &egui::Painter,
     xf: &Xf,
-    doc: &cadcraft_doc::Drawing,
-    drag: &cadcraft_engine::Drag,
-    clipboard: (&[cadcraft_doc::Entity], u64),
+    doc: &cadaddy_doc::Drawing,
+    drag: &cadaddy_engine::Drag,
+    clipboard: (&[cadaddy_doc::Entity], u64),
     bg: Rgb,
     transparency: bool,
 ) {
@@ -985,11 +982,11 @@ fn draw_drag_gpu(
     };
     if c.drag_key != Some(key) {
         let band_scale = 2f64.powi(band);
-        let opts = cadcraft_render::Options { transparency, ..preview_options(band_scale, xf.proj) };
+        let opts = cadaddy_render::Options { transparency, ..preview_options(band_scale, xf.proj) };
         let list = if drag.clipboard {
-            cadcraft_render::build_entities(doc, clipboard.0.iter(), &opts)
+            cadaddy_render::build_entities(doc, clipboard.0.iter(), &opts)
         } else {
-            cadcraft_render::build_entities(doc, drag.handles.iter().filter_map(|h| doc.entity(*h)).map(|e| e.as_ref()), &opts)
+            cadaddy_render::build_entities(doc, drag.handles.iter().filter_map(|h| doc.entity(*h)).map(|e| e.as_ref()), &opts)
         };
         let origin = if list.bounds.is_empty() { Vec2::ZERO } else { list.bounds.center() };
         let mesh = crate::gpu::build_mesh(&list, origin, bg, false);
@@ -1082,11 +1079,11 @@ pub(crate) struct Look {
 
 impl Look {
     /// Selected objects (HIGHLIGHT, SELECTIONEFFECT); `None`: not highlighted.
-    pub(crate) fn selection(s: &cadcraft_engine::Settings) -> Option<Look> {
+    pub(crate) fn selection(s: &cadaddy_engine::Settings) -> Option<Look> {
         s.highlight.then_some(Look { width: 1.5, dashed: s.selectioneffect == 0 })
     }
     /// The object under the cursor (PREVIEWEFFECT: 0 dashed, 1 thicker, 2 both).
-    pub(crate) fn preview(s: &cadcraft_engine::Settings) -> Look {
+    pub(crate) fn preview(s: &cadaddy_engine::Settings) -> Look {
         Look { width: if s.previeweffect == 0 { 1.0 } else { 2.0 }, dashed: s.previeweffect != 1 }
     }
 }
@@ -1144,9 +1141,9 @@ pub(crate) fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, pri
 
 /// The fill of a selection window or crossing area (SELECTIONAREA, WINDOWAREACOLOR,
 /// CROSSINGAREACOLOR, SELECTIONAREAOPACITY); `None` when areas aren't filled.
-fn selection_area_fill(s: &cadcraft_engine::Settings, crossing: bool) -> Option<Color32> {
+fn selection_area_fill(s: &cadaddy_engine::Settings, crossing: bool) -> Option<Color32> {
     let aci = if crossing { s.crossingareacolor } else { s.windowareacolor };
-    let c = cadcraft_color::aci_rgb(aci);
+    let c = cadaddy_color::aci_rgb(aci);
     s.selectionarea.then(|| Color32::from_rgb(c.0, c.1, c.2).gamma_multiply(f32::from(s.selectionareaopacity.min(100)) / 100.0))
 }
 
@@ -1244,14 +1241,14 @@ fn draw_tracking(p: &egui::Painter, xf: &Xf, acquired: &[snap::tracking::Acquire
                 (0..=96).map(|i| xf.w2s(Vec2::polar(center, radius, a0 - span + span * f64::from(i) / 48.0))).collect()
             }
             PathShape::Ellipse { center, major, ratio, .. } => {
-                let e = cadcraft_geom::Ellipse::full(center, major, ratio);
+                let e = cadaddy_geom::Ellipse::full(center, major, ratio);
                 let (t0, span) = (e.param_of(tr.point), (far / (major.len() * ratio.min(1.0))).min(std::f64::consts::PI));
                 (0..=96).map(|i| xf.w2s(e.at_param(t0 - span + span * f64::from(i) / 48.0))).collect()
             }
         };
         p.extend(Shape::dotted_line(&pts, t.snap, 6.0, 1.0));
         let (distance, angle) = (
-            cadcraft_engine::units::format_distance(path.from.dist(tr.point), 2, 4),
+            cadaddy_engine::units::format_distance(path.from.dist(tr.point), 2, 4),
             (path.from.angle_to(tr.point).to_degrees().round() as i64).rem_euclid(360),
         );
         tips.push(if path.name == "Polar" {
@@ -1275,7 +1272,7 @@ fn draw_tracking(p: &egui::Painter, xf: &Xf, acquired: &[snap::tracking::Acquire
 /// `Session::snap_cursor`: object snaps, acquiring tracking points, grid, tracking paths, ortho).
 fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf, ctx: &egui::Context) -> Vec2 {
     let prompt = app.session.current_prompt();
-    let wants_point = prompt.as_ref().is_some_and(cadcraft_engine::pointmod::accepts);
+    let wants_point = prompt.as_ref().is_some_and(cadaddy_engine::pointmod::accepts);
     let base = prompt.as_ref().and_then(|p| p.base);
     let deferred = prompt.as_ref().is_some_and(|p| p.deferred);
     let corner = prompt.as_ref().is_some_and(|p| p.corner);
@@ -1375,7 +1372,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         // Pinch (and Cmd+scroll) still zoom via `zoom_delta` below.
         if let Ok(st) = app.session.state_mut() {
             let v = st.view();
-            st.set_view_quiet(cadcraft_engine::View {
+            st.set_view_quiet(cadaddy_engine::View {
                 center: v.center - Vec2::new(f64::from(scroll.x) / scale, -f64::from(scroll.y) / scale),
                 height: v.height,
             });
@@ -1411,14 +1408,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         if let Some(last) = app.canvas.pan_last {
             let d = hp - last;
             // Shift + middle drag orbits (AutoCAD's transparent 3DORBIT); otherwise it pans.
-            let orbit = mods.shift && app.session.state().is_ok_and(|st| st.space == cadcraft_doc::Space::Model && st.mspace.is_none());
+            let orbit = mods.shift && app.session.state().is_ok_and(|st| st.space == cadaddy_doc::Space::Model && st.mspace.is_none());
             if orbit {
                 if d != egui::Vec2::ZERO {
                     orbit_by(app, d);
                 }
             } else if let Ok(st) = app.session.state_mut() {
                 let v = st.view();
-                st.set_view_quiet(cadcraft_engine::View {
+                st.set_view_quiet(cadaddy_engine::View {
                     center: v.center - Vec2::new(f64::from(d.x) / scale, -f64::from(d.y) / scale),
                     height: v.height,
                 });
@@ -1462,16 +1459,16 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         Err(_) => (xf, None),
     };
     // A clipped active viewport's outline (picks and its heavy border follow it).
-    let active_clip = app.session.state().ok().and_then(|st| st.active_viewport().and_then(|(h, v)| cadcraft_render::viewport_clip(&st.doc, h, &v)));
+    let active_clip = app.session.state().ok().and_then(|st| st.active_viewport().and_then(|(h, v)| cadaddy_render::viewport_clip(&st.doc, h, &v)));
     // Double-click a viewport to work inside it; double-click the sheet outside it to return.
     if inside
         && dbl_primary
         && !app.session.prompting()
-        && matches!(app.session.layout_space(), cadcraft_doc::Space::Paper(_))
+        && matches!(app.session.layout_space(), cadaddy_doc::Space::Paper(_))
         && let Some(hp) = hover_pos
     {
         let pp = xf_paper.to_world(hp);
-        let in_rect = |v: &cadcraft_doc::Viewport| (pp.x - v.center.x).abs() <= v.width / 2.0 && (pp.y - v.center.y).abs() <= v.height / 2.0;
+        let in_rect = |v: &cadaddy_doc::Viewport| (pp.x - v.center.x).abs() <= v.width / 2.0 && (pp.y - v.center.y).abs() <= v.height / 2.0;
         let in_active = active_vp.as_ref().is_some_and(|v| active_clip.as_ref().map_or(in_rect(v), |c| c.contains(pp)));
         if !in_active {
             app.canvas.hot_grips.clear();
@@ -1513,7 +1510,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // While a command asks for a point, every click places one, however fast the drafting (#815).
     // egui drops a click whose button comes up a few pixels from where it went down (a drag to it),
     // and eframe hands a slow frame's clicks over together, which egui reports as one.
-    let point_prompt = app.session.current_prompt().is_some_and(|p| cadcraft_engine::pointmod::accepts(&p))
+    let point_prompt = app.session.current_prompt().is_some_and(|p| cadaddy_engine::pointmod::accepts(&p))
         && app.session.pending_window.is_none()
         && !app.session.realtime_zoom_active();
     let pressed_primary = pressed_primary || (point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary));
@@ -1689,8 +1686,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             && let (Some(w), Ok(st)) = (raw_world, app.session.state())
         {
             let filter = app.session.settings.previewfilter;
-            app.canvas.hover = cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale)
-                .filter(|h| st.doc.entity(*h).is_none_or(|e| !cadcraft_engine::select::preview_filtered(&st.doc, e, filter)));
+            app.canvas.hover = cadaddy_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale)
+                .filter(|h| st.doc.entity(*h).is_none_or(|e| !cadaddy_engine::select::preview_filtered(&st.doc, e, filter)));
             app.canvas.hover_at = hover_pos;
         }
     } else {
@@ -1973,8 +1970,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 /// Start TEXTEDIT on the text, mtext or attribute definition at `p` (the objects its shortcut menu
 /// offers Edit Text for); false when there is none.
 fn edit_text_at(app: &mut CadApp, p: Vec2) -> bool {
-    use cadcraft_engine::doc::EntityKind;
-    let is_text = cadcraft_engine::cmd::curves::pick_at(&app.session, p).and_then(|h| {
+    use cadaddy_engine::doc::EntityKind;
+    let is_text = cadaddy_engine::cmd::curves::pick_at(&app.session, p).and_then(|h| {
         app.session.doc().ok()?.entity(h).map(|e| matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_)))
     });
     if is_text != Some(true) {
@@ -1987,7 +1984,7 @@ fn edit_text_at(app: &mut CadApp, p: Vec2) -> bool {
     true
 }
 
-fn tile_rects(app: &CadApp, full: Rect) -> Vec<(Rect, cadcraft_engine::ModelTile)> {
+fn tile_rects(app: &CadApp, full: Rect) -> Vec<(Rect, cadaddy_engine::ModelTile)> {
     let x = |f: f64| full.left() + full.width() * f.clamp(0.0, 1.0) as f32;
     let y = |f: f64| full.bottom() - full.height() * f.clamp(0.0, 1.0) as f32;
     app.session
@@ -1998,13 +1995,13 @@ fn tile_rects(app: &CadApp, full: Rect) -> Vec<(Rect, cadcraft_engine::ModelTile
 }
 
 /// The world ↔ screen transform of a model tile drawn in `r`.
-fn tile_xf(r: Rect, tile: &cadcraft_engine::ModelTile) -> Xf {
+fn tile_xf(r: Rect, tile: &cadaddy_engine::ModelTile) -> Xf {
     Xf { rect: r, center: tile.view.center, scale: f64::from(r.height()) / tile.view.height.max(1e-12), proj: None }
 }
 
 /// The tiles other than the current one (each with its own view, clipped to it), then the
 /// tile borders: thin, and heavy around the current tile.
-fn draw_tiles(app: &CadApp, ui: &egui::Ui, tiles: &[(Rect, cadcraft_engine::ModelTile)]) {
+fn draw_tiles(app: &CadApp, ui: &egui::Ui, tiles: &[(Rect, cadaddy_engine::ModelTile)]) {
     let t = Tokens::get();
     let bg = Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b());
     for (r, tile) in tiles.iter().filter(|(r, tile)| !tile.active && r.width() >= 1.0 && r.height() >= 1.0) {
@@ -2036,8 +2033,8 @@ fn tooltip(p: &egui::Painter, at: Pos2, text: &str) {
 fn hatch_at(app: &CadApp, w: Vec2, scale: f64) -> Option<Handle> {
     let st = app.session.state().ok()?;
     let aperture = app.session.settings.pickbox.max(1.0) * 1.5 / scale.max(1e-12);
-    let h = cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, aperture)?;
-    matches!(st.doc.entity(h)?.kind, cadcraft_doc::EntityKind::Hatch(_)).then_some(h)
+    let h = cadaddy_engine::select::pick(&st.doc, &st.edit_space(), w, aperture)?;
+    matches!(st.doc.entity(h)?.kind, cadaddy_doc::EntityKind::Hatch(_)).then_some(h)
 }
 
 /// Half the side of the pick box: the pick aperture (PICKBOX × 1.5 pixels, as `select::pick` is
@@ -2064,7 +2061,7 @@ fn override_cursor(app: &mut CadApp, raw: Vec2, xf: &Xf) {
     let ap = app.session.settings.aperture / xf.scale;
     let cycle = snap_cycle(app, raw, ap);
     let prompt = app.session.current_prompt();
-    let wants_point = prompt.as_ref().is_some_and(cadcraft_engine::pointmod::accepts);
+    let wants_point = prompt.as_ref().is_some_and(cadaddy_engine::pointmod::accepts);
     if (over.is_none() && cycle.is_none()) || !wants_point || app.session.pending_window.is_some() {
         return;
     }
@@ -2075,7 +2072,7 @@ fn override_cursor(app: &mut CadApp, raw: Vec2, xf: &Xf) {
     let Ok(st) = app.session.state() else { return };
     let hit = match cycle {
         Some(i) => {
-            let cands = cadcraft_engine::pointmod::snap_candidates(&st.doc, &st.edit_space(), raw, ap, osmode, base, deferred);
+            let cands = cadaddy_engine::pointmod::snap_candidates(&st.doc, &st.edit_space(), raw, ap, osmode, base, deferred);
             cands.get(i % cands.len().max(1)).copied()
         }
         None => snap::osnap(&st.doc, &st.edit_space(), raw, ap, osmode, base, deferred),
@@ -2108,7 +2105,7 @@ fn draw_crosshair(app: &CadApp, p: &egui::Painter, rect: Rect, at: Pos2, pickbox
     let gap = pb.unwrap_or(0.0);
     // Along the isometric plane's axes in isometric drafting.
     if app.session.settings.isodraft {
-        for a in cadcraft_engine::snap::iso::cursor_axes(&app.session.settings) {
+        for a in cadaddy_engine::snap::iso::cursor_axes(&app.session.settings) {
             let dir = vec2(a.cos() as f32, -(a.sin() as f32));
             p.line_segment([at - dir * len, at - dir * gap], st);
             p.line_segment([at + dir * gap, at + dir * len], st);
@@ -2178,14 +2175,14 @@ fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
 }
 
 /// The drawing's length units: (LUNITS, LUPREC).
-pub(crate) fn length_units(session: &cadcraft_engine::Session) -> (i64, i64) {
+pub(crate) fn length_units(session: &cadaddy_engine::Session) -> (i64, i64) {
     session.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4))
 }
 
 /// A distance in the drawing's length units.
-fn distance_text(session: &cadcraft_engine::Session, v: f64) -> String {
+fn distance_text(session: &cadaddy_engine::Session, v: f64) -> String {
     let (lu, lp) = length_units(session);
-    cadcraft_engine::units::format_distance(v, lu, lp)
+    cadaddy_engine::units::format_distance(v, lu, lp)
 }
 
 /// Room for the down-arrow sign that a prompt has options.
@@ -2257,7 +2254,7 @@ fn dynamic_input_boxes(
     use crate::dyninput::Format;
     let t = Tokens::get();
     let font = crate::theme::small();
-    let dist = |v: f64| cadcraft_engine::units::format_distance(v, lu, lp);
+    let dist = |v: f64| cadaddy_engine::units::format_distance(v, lu, lp);
     let (live_first, live_second) = f.live(e.format, cursor);
     let live_second = match e.format {
         Format::Cartesian => dist(live_second),
@@ -2353,7 +2350,7 @@ fn draw_lock(p: &egui::Painter, c: Pos2, color: Color32) {
 
 /// The UCS icon: the WCS axes as the view shows them (X and Y in the plan view; X, Y and Z in a
 /// 3D view, an axis pointing at the viewer drawn short).
-fn draw_ucs_icon(p: &egui::Painter, rect: Rect, proj: Option<cadcraft_geom::view3::Projection>) {
+fn draw_ucs_icon(p: &egui::Painter, rect: Rect, proj: Option<cadaddy_geom::view3::Projection>) {
     let t = Tokens::get();
     let o = pos2(rect.left() + 36.0, rect.bottom() - 34.0);
     let st = Stroke::new(1.0, t.canvas_ink);
@@ -2369,9 +2366,9 @@ fn draw_ucs_icon(p: &egui::Painter, rect: Rect, proj: Option<cadcraft_geom::view
     // Up the icon a little so a downward axis stays on screen.
     let o = o + vec2(18.0, -18.0);
     for (axis, name, col) in [
-        (cadcraft_geom::Vec3::new(1.0, 0.0, 0.0), "X", Color32::from_rgb(0xe0, 0x5a, 0x4f)),
-        (cadcraft_geom::Vec3::new(0.0, 1.0, 0.0), "Y", Color32::from_rgb(0x6c, 0xc0, 0x5a)),
-        (cadcraft_geom::Vec3::Z, "Z", Color32::from_rgb(0x4d, 0x9c, 0xf5)),
+        (cadaddy_geom::Vec3::new(1.0, 0.0, 0.0), "X", Color32::from_rgb(0xe0, 0x5a, 0x4f)),
+        (cadaddy_geom::Vec3::new(0.0, 1.0, 0.0), "Y", Color32::from_rgb(0x6c, 0xc0, 0x5a)),
+        (cadaddy_geom::Vec3::Z, "Z", Color32::from_rgb(0x4d, 0x9c, 0xf5)),
     ] {
         let d = vec2(axis.dot(pr.right) as f32, -(axis.dot(pr.up) as f32));
         if d.length() < 0.05 {
@@ -2396,7 +2393,7 @@ fn viewport_controls(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect, model: boo
     let proj = app.session.state().ok().and_then(|st| st.projection());
     let view = match proj {
         None => "Top",
-        Some(p) => cadcraft_geom::view3::preset_label(p.dir).unwrap_or("Custom View"),
+        Some(p) => cadaddy_geom::view3::preset_label(p.dir).unwrap_or("Custom View"),
     };
     let p = ui.painter_at(rect);
     let font = crate::theme::small();
@@ -2481,9 +2478,9 @@ fn click_grip(app: &mut CadApp, g: (Handle, usize), shift: bool) {
 }
 
 /// The multifunctional options of grip `g` (Add Vertex, Lengthen…; empty: Stretch only).
-fn grip_options(app: &CadApp, (h, i): (Handle, usize)) -> Vec<cadcraft_engine::grips::GripAction> {
+fn grip_options(app: &CadApp, (h, i): (Handle, usize)) -> Vec<cadaddy_engine::grips::GripAction> {
     let Ok(st) = app.session.state() else { return Vec::new() };
-    st.doc.entity(h).map(|e| cadcraft_engine::grips::grip_actions(&e.kind, i)).unwrap_or_default()
+    st.doc.entity(h).map(|e| cadaddy_engine::grips::grip_actions(&e.kind, i)).unwrap_or_default()
 }
 
 /// The menu of a multifunctional grip: Stretch and its options. A choice makes the grip hot and
@@ -2491,10 +2488,10 @@ fn grip_options(app: &CadApp, (h, i): (Handle, usize)) -> Vec<cadcraft_engine::g
 fn grip_menu(app: &mut CadApp, resp: &egui::Response) {
     let Some(g) = app.canvas.grip_menu else { return };
     let options = grip_options(app, g);
-    let mut chosen: Option<Option<cadcraft_engine::grips::GripAction>> = None;
+    let mut chosen: Option<Option<cadaddy_engine::grips::GripAction>> = None;
     let open = resp
         .context_menu(|ui| {
-            let vertex = options.contains(&cadcraft_engine::grips::GripAction::RemoveVertex);
+            let vertex = options.contains(&cadaddy_engine::grips::GripAction::RemoveVertex);
             if ui.button(crate::i18n::t(if vertex { "Stretch Vertex" } else { "Stretch" })).clicked() {
                 chosen = Some(None);
                 ui.close();
@@ -2550,7 +2547,7 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)
 #[allow(clippy::unwrap_used)]
 pub(crate) mod tests {
     use super::*;
-    use cadcraft_render::DPrim;
+    use cadaddy_render::DPrim;
 
     fn list(handles: &[u64]) -> DisplayList {
         let prim =
@@ -2566,11 +2563,11 @@ pub(crate) mod tests {
     /// on, and is opaque when it is off.
     #[test]
     fn dragged_objects_keep_their_transparency() {
-        let mut d = cadcraft_doc::Drawing::new_metric();
-        let common = cadcraft_doc::Common { transparency: cadcraft_doc::Transparency::Percent(50), ..Default::default() };
-        let line = cadcraft_doc::Line { a: cadcraft_geom::Vec3::ZERO, b: cadcraft_geom::Vec3::new(10.0, 0.0, 0.0) };
-        let h = d.add(&cadcraft_doc::Space::Model, common, cadcraft_doc::EntityKind::Line(line)).unwrap();
-        let drag = cadcraft_engine::Drag { handles: vec![h], matrix: cadcraft_geom::Mat3::IDENTITY, extra: Vec::new(), clipboard: false };
+        let mut d = cadaddy_doc::Drawing::new_metric();
+        let common = cadaddy_doc::Common { transparency: cadaddy_doc::Transparency::Percent(50), ..Default::default() };
+        let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::ZERO, b: cadaddy_geom::Vec3::new(10.0, 0.0, 0.0) };
+        let h = d.add(&cadaddy_doc::Space::Model, common, cadaddy_doc::EntityKind::Line(line)).unwrap();
+        let drag = cadaddy_engine::Drag { handles: vec![h], matrix: cadaddy_geom::Mat3::IDENTITY, extra: Vec::new(), clipboard: false };
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(200.0, 100.0));
         let xf = Xf { rect, center: Vec2::new(5.0, 0.0), scale: 10.0, proj: None };
         let painter = egui::Painter::new(egui::Context::default(), egui::LayerId::background(), rect);
@@ -2592,9 +2589,9 @@ pub(crate) mod tests {
     /// was drawn, and CLAYER's transparency isn't the objects'.
     #[test]
     fn rebuilt_previews_stay_opaque_on_a_transparent_current_layer() {
-        let mut s = cadcraft_engine::Session::new();
+        let mut s = cadaddy_engine::Session::new();
         let d = s.doc_mut().unwrap();
-        d.layers.push(cadcraft_doc::Layer { name: "Glass".into(), transparency: 40, ..Default::default() });
+        d.layers.push(cadaddy_doc::Layer { name: "Glass".into(), transparency: 40, ..Default::default() });
         d.header.set_str("CLAYER", "Glass");
         assert!(s.settings.transparency_display);
         // LINE: the segment from the first point to the cursor.
@@ -2605,7 +2602,7 @@ pub(crate) mod tests {
         assert_eq!(ents[0].common.layer, "Glass");
         let doc = s.doc().unwrap();
         // Built with transparency, the preview would take CLAYER's 40 %.
-        let with = cadcraft_render::build_entities(doc, ents.iter(), &cadcraft_render::Options { transparency: true, ..preview_options(1.0, None) });
+        let with = cadaddy_render::build_entities(doc, ents.iter(), &cadaddy_render::Options { transparency: true, ..preview_options(1.0, None) });
         assert!(with.prims.iter().all(|p| p.transparency == 40));
         let list = rebuilt_preview(doc, ents.iter(), 1.0, None);
         assert!(!list.prims.is_empty() && list.prims.iter().all(|p| p.transparency == 0));
@@ -2633,25 +2630,25 @@ pub(crate) mod tests {
 
     #[test]
     fn selection_area_fill_follows_the_area_effect_settings() {
-        let mut s = cadcraft_engine::Settings::default();
+        let mut s = cadaddy_engine::Settings::default();
         // Window: ACI 150 at 25 %; crossing: ACI 100.
         let rgb = |c: Rgb| Color32::from_rgb(c.0, c.1, c.2);
-        assert_eq!(selection_area_fill(&s, false), Some(rgb(cadcraft_color::aci_rgb(150)).gamma_multiply(0.25)));
-        assert_eq!(selection_area_fill(&s, true), Some(rgb(cadcraft_color::aci_rgb(100)).gamma_multiply(0.25)));
+        assert_eq!(selection_area_fill(&s, false), Some(rgb(cadaddy_color::aci_rgb(150)).gamma_multiply(0.25)));
+        assert_eq!(selection_area_fill(&s, true), Some(rgb(cadaddy_color::aci_rgb(100)).gamma_multiply(0.25)));
         s.selectionareaopacity = 100;
-        assert_eq!(selection_area_fill(&s, false), Some(rgb(cadcraft_color::aci_rgb(150))));
+        assert_eq!(selection_area_fill(&s, false), Some(rgb(cadaddy_color::aci_rgb(150))));
         s.selectionarea = false;
         assert_eq!(selection_area_fill(&s, false), None, "Indicate selection area off: no fill");
     }
 
     #[test]
     fn viewport_highlight_is_tessellated_once_per_selection_and_zoom_band() {
-        use cadcraft_doc::{Circle, Common, Drawing, EntityKind, Space};
+        use cadaddy_doc::{Circle, Common, Drawing, EntityKind, Space};
         let mut d = Drawing::new_imperial();
-        let circle = |r| EntityKind::Circle(Circle { center: cadcraft_geom::Vec3::new(0.0, 0.0, 0.0), radius: r });
+        let circle = |r| EntityKind::Circle(Circle { center: cadaddy_geom::Vec3::new(0.0, 0.0, 0.0), radius: r });
         let a = d.add(&Space::Model, Common::default(), circle(10.0)).unwrap();
         let b = d.add(&Space::Model, Common::default(), circle(5.0)).unwrap();
-        let st = cadcraft_engine::DocState::new(d, "highlight", None);
+        let st = cadaddy_engine::DocState::new(d, "highlight", None);
         let points = |l: &DisplayList| l.prims.iter().map(|p| l.points(p).len()).sum::<usize>();
         let (mut sel, mut hover) = (VpHighlight::default(), VpHighlight::default());
         sel.update(&st, &[a], 10.0);
@@ -2762,7 +2759,7 @@ pub(crate) mod tests {
     /// units (LUNITS/LUPREC), as DIST and the status bar do (#841).
     #[test]
     fn dynamic_input_distance_follows_the_drawing_units() {
-        let mut app = CadApp::new(cadcraft_engine::Session::new(), crate::Services::default());
+        let mut app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
         app.session.execute("units", &serde_json::json!({"lunits": 4, "luprec": 4})).unwrap();
         let ctx = egui::Context::default();
         painted_text(&mut app, &ctx, pos2(700.0, 450.0));
@@ -2772,12 +2769,12 @@ pub(crate) mod tests {
         painted_text(&mut app, &ctx, at);
         let text = painted_text(&mut app, &ctx, at);
         let c = app.canvas.cursor.unwrap();
-        let arch = |v: f64| cadcraft_engine::units::format_distance(v, 4, 4);
+        let arch = |v: f64| cadaddy_engine::units::format_distance(v, 4, 4);
         // The status bar shows X and Y in the same units: the distance must be neither.
         assert!(arch(c.len()) != arch(c.x) && arch(c.len()) != arch(c.y), "{c:?}");
         assert!(text.contains(&arch(c.len())), "no {} in:\n{text}", arch(c.len()));
         // Without the value boxes (a window corner pending) the tooltip shows the distance too.
-        app.session.pending_window = Some(cadcraft_engine::PendingWindow { corner: Vec2::ZERO, during_command: true });
+        app.session.pending_window = Some(cadaddy_engine::PendingWindow { corner: Vec2::ZERO, during_command: true });
         let text = painted_text(&mut app, &ctx, at);
         assert!(text.contains(&format!("   {}  <", arch(c.len()))), "no {} in:\n{text}", arch(c.len()));
     }
@@ -2793,8 +2790,8 @@ mod rebuild;
 
 #[cfg(test)]
 mod hatch_pick_tests {
-    use cadcraft_engine::Session;
-    use cadcraft_geom::Vec2;
+    use cadaddy_engine::Session;
+    use cadaddy_geom::Vec2;
     use serde_json::json;
 
     use crate::{CadApp, Services};

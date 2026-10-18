@@ -1,10 +1,10 @@
 //! PEDIT typed as in AutoCAD scripts: a selection word at "Select polyline", and Multiple.
 
-use cadcraft_engine::Session;
-use cadcraft_engine::doc::EntityKind;
+use cadaddy_engine::Session;
+use cadaddy_engine::doc::EntityKind;
 use serde_json::json;
 
-fn polylines(s: &Session) -> Vec<cadcraft_engine::doc::LwPolyline> {
+fn polylines(s: &Session) -> Vec<cadaddy_engine::doc::LwPolyline> {
     s.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::LwPolyline(p) = &e.kind { Some(p.clone()) } else { None }).collect()
 }
 

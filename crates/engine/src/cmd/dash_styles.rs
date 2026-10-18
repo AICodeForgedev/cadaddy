@@ -42,7 +42,7 @@ fn current_dimstyle(s: &Session) -> String {
 
 /// The current dimension settings: every DIM* variable as the drawing reads it now.
 fn current_vars(s: &Session) -> Map<String, Value> {
-    cadcraft_doc::DIMVARS.iter().filter_map(|(v, _)| crate::sysvars::get(s, v).map(|x| (v.to_string(), x))).collect()
+    cadaddy_doc::DIMVARS.iter().filter_map(|(v, _)| crate::sysvars::get(s, v).map(|x| (v.to_string(), x))).collect()
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -188,7 +188,7 @@ struct DashStyle {
 }
 
 impl DashStyle {
-    fn existing(&self, s: &Session) -> Option<cadcraft_doc::TextStyle> {
+    fn existing(&self, s: &Session) -> Option<cadaddy_doc::TextStyle> {
         let name = self.p.get("name")?.as_str()?;
         s.doc().ok()?.text_style(name).cloned()
     }

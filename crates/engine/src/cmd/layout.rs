@@ -4,8 +4,8 @@
 //! Plotting goes through the host's [`super::file::IoHooks::plot`] hook so the engine stays
 //! I/O-agnostic.
 
-use cadcraft_doc::{Drawing, Entity, EntityKind, EntityStore, Handle, Layout, PageSetup, Space, Viewport};
-use cadcraft_geom::{Bounds2, Vec2};
+use cadaddy_doc::{Drawing, Entity, EntityKind, EntityStore, Handle, Layout, PageSetup, Space, Viewport};
+use cadaddy_geom::{Bounds2, Vec2};
 use serde_json::{Value, json};
 
 use super::file::{base64_encode, io};
@@ -188,8 +188,8 @@ fn next_layout_name(d: &Drawing) -> String {
 /// The page setup new layouts get: ANSI A landscape (imperial) or ISO A4 landscape (metric).
 fn default_page(d: &Drawing) -> PageSetup {
     let mut p = PageSetup::default();
-    if cadcraft_render::paper::paper_unit_mm(d) == 1.0
-        && let Some(a4) = cadcraft_render::paper_size("A4")
+    if cadaddy_render::paper::paper_unit_mm(d) == 1.0
+        && let Some(a4) = cadaddy_render::paper_size("A4")
     {
         p.paper = a4.name.into();
         p.width_mm = a4.width_mm;
@@ -366,7 +366,7 @@ fn run_layout(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The printable area of a layout, in paper units.
 fn printable(s: &Session, layout: &str) -> Result<Bounds2> {
-    cadcraft_render::sheet(s.doc()?, layout).map(|sh| sh.printable).ok_or_else(|| bad("mview", format!("no layout `{layout}`")))
+    cadaddy_render::sheet(s.doc()?, layout).map(|sh| sh.printable).ok_or_else(|| bad("mview", format!("no layout `{layout}`")))
 }
 
 /// The layout a viewport command acts on: `layout` param or the current layout.
@@ -428,13 +428,13 @@ fn fit_view(d: &Drawing, w: f64, h: f64) -> (Vec2, f64) {
 pub(crate) fn default_viewports(d: &mut Drawing) {
     let names: Vec<String> = d.layouts.iter().filter(|l| l.entities.is_empty()).map(|l| l.name.clone()).collect();
     for name in names {
-        let Some(rect) = cadcraft_render::sheet(d, &name).map(|sh| sh.printable) else { continue };
+        let Some(rect) = cadaddy_render::sheet(d, &name).map(|sh| sh.printable) else { continue };
         if rect.is_empty() || rect.width() < 1e-6 || rect.height() < 1e-6 {
             continue;
         }
         let id = viewports::next_viewport_id(d);
         let vp = viewports::new_viewport(d, rect, id);
-        let _ = d.add(&Space::Paper(name), cadcraft_doc::Common::default(), EntityKind::Viewport(vp));
+        let _ = d.add(&Space::Paper(name), cadaddy_doc::Common::default(), EntityKind::Viewport(vp));
     }
 }
 
@@ -572,22 +572,22 @@ fn run_viewport_set(s: &mut Session, p: &Value) -> Result<Value> {
     let freeze = layer_list(p, "freeze");
     let thaw = layer_list(p, "thaw");
     // Per-viewport layer colours: {layer: colour} (null clears the override).
-    let mut colors: Vec<(String, Option<cadcraft_color::Color>)> = Vec::new();
+    let mut colors: Vec<(String, Option<cadaddy_color::Color>)> = Vec::new();
     if let Some(m) = p.get("colors").and_then(Value::as_object) {
         for (layer, c) in m.iter().take(10_000) {
             let col = match c {
                 Value::Null => None,
-                Value::String(t) => Some(cadcraft_color::Color::parse(t).ok_or_else(|| bad(cmd, format!("bad colour for `{layer}`")))?),
+                Value::String(t) => Some(cadaddy_color::Color::parse(t).ok_or_else(|| bad(cmd, format!("bad colour for `{layer}`")))?),
                 Value::Number(n) => Some(
                     n.as_u64()
                         .and_then(|i| u8::try_from(i).ok())
                         .filter(|i| *i > 0)
-                        .map(cadcraft_color::Color::Index)
+                        .map(cadaddy_color::Color::Index)
                         .ok_or_else(|| bad(cmd, "colour index 1..255"))?,
                 ),
                 _ => return Err(bad(cmd, "`colors` values are colours or null")),
             };
-            if matches!(col, Some(cadcraft_color::Color::ByLayer | cadcraft_color::Color::ByBlock)) {
+            if matches!(col, Some(cadaddy_color::Color::ByLayer | cadaddy_color::Color::ByBlock)) {
                 return Err(bad(cmd, "a viewport layer colour must be an index or true colour"));
             }
             colors.push((layer.clone(), col));
@@ -667,8 +667,8 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
         let d = s.doc()?;
         return Ok(json!({
             "layouts": d.layouts.iter().map(|l| json!({"name": l.name, "page": serde_json::to_value(&l.page).unwrap_or(Value::Null)})).collect::<Vec<_>>(),
-            "papers": cadcraft_render::PAPER_SIZES.iter().map(|p| p.name).collect::<Vec<_>>(),
-            "plotStyleTables": cadcraft_doc::BUILTIN_PLOT_STYLE_TABLES,
+            "papers": cadaddy_render::PAPER_SIZES.iter().map(|p| p.name).collect::<Vec<_>>(),
+            "plotStyleTables": cadaddy_doc::BUILTIN_PLOT_STYLE_TABLES,
             "devices": super::plotters::device_names(),
         }));
     };
@@ -677,8 +677,8 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
     let device_paper = super::plotters::page_device(cmd, p, &mut page)?;
     if let Some(paper) = p.get("paper").filter(|_| !device_paper) {
         let n = paper.as_str().ok_or_else(|| bad(cmd, "`paper` must be a paper name"))?;
-        let ps = cadcraft_render::paper_size(n).ok_or_else(|| {
-            let known: Vec<&str> = cadcraft_render::PAPER_SIZES.iter().filter_map(|p| p.aliases.first().copied()).collect();
+        let ps = cadaddy_render::paper_size(n).ok_or_else(|| {
+            let known: Vec<&str> = cadaddy_render::PAPER_SIZES.iter().filter_map(|p| p.aliases.first().copied()).collect();
             bad(cmd, format!("unknown paper size `{n}` (known: {})", known.join(", ")))
         })?;
         page.paper = ps.name.into();
@@ -748,12 +748,12 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- plotting ----------
 
-/// Most sheets in one plot (the PDF writer's own limit, `cadcraft_io::pdf::MAX_PAGES`).
+/// Most sheets in one plot (the PDF writer's own limit, `cadaddy_io::pdf::MAX_PAGES`).
 const MAX_PLOT_SHEETS: usize = 256;
 
 /// The sheets of a multi-sheet plot, as canonical names: the `layouts` list (`"Model"` or layout
 /// names, any case) or `"all"` (Model if it has objects, then every layout in tab order).
-fn plot_sheets(cmd: &str, d: &cadcraft_doc::Drawing, v: &Value) -> Result<Vec<String>> {
+fn plot_sheets(cmd: &str, d: &cadaddy_doc::Drawing, v: &Value) -> Result<Vec<String>> {
     let names: Vec<String> = match v {
         Value::String(a) if a.eq_ignore_ascii_case("all") => {
             let mut layouts: Vec<_> = d.layouts.iter().collect();
@@ -805,8 +805,8 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         if !x.zip(y).is_some_and(|(x, y)| {
             x.is_finite()
                 && y.is_finite()
-                && x.abs() <= cadcraft_render::paper::MAX_PLOT_OFFSET_MM
-                && y.abs() <= cadcraft_render::paper::MAX_PLOT_OFFSET_MM
+                && x.abs() <= cadaddy_render::paper::MAX_PLOT_OFFSET_MM
+                && y.abs() <= cadaddy_render::paper::MAX_PLOT_OFFSET_MM
         }) {
             return Err(bad(cmd, "`offset` must contain exactly two finite millimetre values within ±100000"));
         }
@@ -842,7 +842,7 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let path = _path;
-                let tmp = format!("{path}.cadcraft-tmp");
+                let tmp = format!("{path}.cadaddy-tmp");
                 std::fs::write(&tmp, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
                 std::fs::rename(&tmp, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
                 Ok(json!({ "path": path, "bytes": bytes.len(), "layout": layout, "pages": pages }))
@@ -922,7 +922,7 @@ mod tests {
         let vps = viewports(&s, "Layout3");
         assert_eq!(vps.len(), 1);
         let (_, v) = &vps[0];
-        let sheet = cadcraft_render::sheet(s.doc().unwrap(), "Layout3").unwrap();
+        let sheet = cadaddy_render::sheet(s.doc().unwrap(), "Layout3").unwrap();
         assert!((v.width - sheet.printable.width()).abs() < 1e-9 && (v.height - sheet.printable.height()).abs() < 1e-9);
         assert!(v.id >= 2);
         // Model extents (0,0)..(100,45) are centred and fully visible.
@@ -930,9 +930,9 @@ mod tests {
         let model_w = v.view_height * v.width / v.height;
         assert!(model_w >= 100.0 && v.view_height >= 45.0);
         // The render shows model geometry inside the viewport only.
-        let list = cadcraft_render::build(s.doc().unwrap(), &Space::Paper("Layout3".into()), &cadcraft_render::Options::default());
+        let list = cadaddy_render::build(s.doc().unwrap(), &Space::Paper("Layout3".into()), &cadaddy_render::Options::default());
         let rect = Bounds2::new(v.center.xy() - Vec2::new(v.width, v.height) / 2.0, v.center.xy() + Vec2::new(v.width, v.height) / 2.0).expand(1e-9);
-        let content: Vec<_> = list.prims.iter().filter(|p| p.handle == cadcraft_render::VIEWPORT_CONTENT).collect();
+        let content: Vec<_> = list.prims.iter().filter(|p| p.handle == cadaddy_render::VIEWPORT_CONTENT).collect();
         assert!(content.len() >= 2);
         assert!(content.iter().all(|p| list.points(p).iter().all(|q| rect.contains(*q))));
         assert!(list.sheet.is_some());
@@ -1038,13 +1038,13 @@ mod tests {
         assert!(s.execute("vplayer", &json!({"handle": h, "colors": {"Walls": "bylayer"}})).is_err());
         assert!(s.execute("vplayer", &json!({"handle": h, "colors": {"Walls": [1]}})).is_err());
         let vv = viewports(&s, "Layout1");
-        assert_eq!(vv[0].1.layer_colors, vec![("Walls".to_string(), cadcraft_color::Color::Index(1))]);
+        assert_eq!(vv[0].1.layer_colors, vec![("Walls".to_string(), cadaddy_color::Color::Index(1))]);
         s.execute("vplayer", &json!({"handle": h, "colors": {"walls": null}})).unwrap();
         assert!(viewports(&s, "Layout1")[0].1.layer_colors.is_empty());
         assert!((v[0].1.view_height - 30.0).abs() < 1e-9);
         // Layer 0 frozen in the viewport: nothing of the model shows.
-        let list = cadcraft_render::build(s.doc().unwrap(), &Space::Paper("Layout1".into()), &cadcraft_render::Options::default());
-        assert!(list.prims.iter().all(|p| p.handle != cadcraft_render::VIEWPORT_CONTENT));
+        let list = cadaddy_render::build(s.doc().unwrap(), &Space::Paper("Layout1".into()), &cadaddy_render::Options::default());
+        assert!(list.prims.iter().all(|p| p.handle != cadaddy_render::VIEWPORT_CONTENT));
         for bad_p in [
             json!({"handle": h, "scale": "0:0"}),
             json!({"handle": h, "scale": -1}),
@@ -1060,7 +1060,7 @@ mod tests {
         let mut s = Session::new();
         let r = s.execute("pagesetup", &json!({"layout": "Layout1", "paper": "A3", "landscape": true, "margins": [5, 5, 5, 5]})).unwrap();
         assert_eq!(r["page"]["widthMm"], 297.0);
-        let sheet = cadcraft_render::sheet(s.doc().unwrap(), "Layout1").unwrap();
+        let sheet = cadaddy_render::sheet(s.doc().unwrap(), "Layout1").unwrap();
         // Imperial drawing: paper units are inches.
         assert!((sheet.size.x - 420.0 / 25.4).abs() < 1e-9 && (sheet.size.y - 297.0 / 25.4).abs() < 1e-9);
         assert!(s.execute("pagesetup", &json!({"layout": "Layout1", "paper": "Z12"})).is_err());
@@ -1123,7 +1123,7 @@ mod tests {
         assert!(s.execute("plot", &json!({"layout": "Model", "scale": -1})).is_err());
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let path = std::env::temp_dir().join(format!("cadcraft-plot-test-{}.pdf", std::process::id()));
+            let path = std::env::temp_dir().join(format!("cadaddy-plot-test-{}.pdf", std::process::id()));
             let ps = path.to_string_lossy().to_string();
             let r = s.execute("plot", &json!({"path": ps})).unwrap();
             assert!(r["bytes"].as_u64().unwrap() > 0);

@@ -4,7 +4,7 @@
 //! A loaded file adds aliases or overrides the built-in ones for the rest of the session, for
 //! every drawing; command names themselves always win. Lines that define external commands
 //! (programs the file would have the application start) are never run: they are skipped with a
-//! note. CADCraft ships no alias file; the aliases built into the command catalog stay the
+//! note. CADaddy ships no alias file; the aliases built into the command catalog stay the
 //! defaults.
 
 use std::collections::BTreeMap;

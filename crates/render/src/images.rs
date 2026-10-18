@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn files_load_once_and_missing_ones_are_remembered() {
-        let dir = std::env::temp_dir().join(format!("cadcraft-images-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("cadaddy-images-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("red.png");
         std::fs::write(&file, png(3, 2, [255, 0, 0, 255])).unwrap();
@@ -241,7 +241,7 @@ mod tests {
         assert_eq!(r.pixel(2, 1), Some([255, 0, 0, 255]));
         assert!(Arc::ptr_eq(&r, &get(file.to_str().unwrap()).unwrap()), "cached");
         // relative: found once its folder is a search folder
-        assert!(get("cadcraft-test-elsewhere/red.png").is_none());
+        assert!(get("cadaddy-test-elsewhere/red.png").is_none());
         add_search_dir(&dir);
         assert!(get("red.png").is_some());
         assert!(get("C:\\Somewhere\\Else\\red.png").is_some(), "a Windows path by its file name");

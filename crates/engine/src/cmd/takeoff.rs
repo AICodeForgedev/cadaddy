@@ -6,8 +6,8 @@
 
 use std::collections::BTreeMap;
 
-use cadcraft_doc::{Entity, EntityKind, MAX_BLOCK_DEPTH, Space};
-use cadcraft_geom::Mat3;
+use cadaddy_doc::{Entity, EntityKind, MAX_BLOCK_DEPTH, Space};
+use cadaddy_geom::Mat3;
 use serde_json::{Value, json};
 
 use super::blocks::extract::{Cell, csv, insert_table, write_file};
@@ -43,7 +43,7 @@ enum Mode {
 
 /// The real-world unit for a drawing's INSUNITS: its name and how many of it one drawing unit is
 /// (squared for areas). `None`: unitless, totals stay in drawing units.
-fn real_unit(d: &cadcraft_doc::Drawing, mode: Mode) -> Option<(&'static str, f64)> {
+fn real_unit(d: &cadaddy_doc::Drawing, mode: Mode) -> Option<(&'static str, f64)> {
     let (name, f) = match d.header.i64("INSUNITS", 0) {
         1 => ("ft", 1.0 / 12.0),
         2 => ("ft", 1.0),
@@ -91,7 +91,7 @@ const MAX_SHAPES: usize = 500_000;
 
 /// What was measured: (layer, amount) per shape.
 struct Tally<'a> {
-    d: &'a cadcraft_doc::Drawing,
+    d: &'a cadaddy_doc::Drawing,
     mode: Mode,
     nested: bool,
     layers: &'a str,
@@ -115,7 +115,7 @@ impl Tally<'_> {
             let base = b.base.xy();
             for r in 0..ins.rows.clamp(1, 10_000) {
                 for c in 0..ins.cols.clamp(1, 10_000) {
-                    let off = cadcraft_geom::Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
+                    let off = cadaddy_geom::Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
                     let local = Mat3::translate(off).then_before(ins.transform(base));
                     let mm = m.map_or(local, |o| o.then_before(local));
                     for be in b.entities.iter() {

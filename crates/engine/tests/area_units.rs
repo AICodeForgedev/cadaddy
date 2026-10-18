@@ -1,6 +1,6 @@
 //! AREA reports square inches and square feet in architectural units (not a feet-inches length).
 
-use cadcraft_engine::Session;
+use cadaddy_engine::Session;
 use serde_json::json;
 
 #[test]

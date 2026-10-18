@@ -7,7 +7,7 @@
 /temp/
 .DS_Store
 *.swp
-/apps/cadcraft-web/dist/
+/apps/cadaddy-web/dist/
 /.claude/worktrees/
 
 # local build/test logs

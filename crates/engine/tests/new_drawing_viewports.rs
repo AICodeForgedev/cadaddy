@@ -1,8 +1,8 @@
 //! A new drawing's layouts each start with one viewport (AutoCAD's default template), and the new
 //! drawing isn't modified by it.
 
-use cadcraft_doc::EntityKind;
-use cadcraft_engine::Session;
+use cadaddy_doc::EntityKind;
+use cadaddy_engine::Session;
 use serde_json::json;
 
 #[test]

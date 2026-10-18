@@ -1,6 +1,6 @@
 [package]
-name = "cadcraft-ui-egui"
-description = "CADCraft user interface (egui): the swappable front end"
+name = "cadaddy-ui-egui"
+description = "CADaddy user interface (egui): the swappable front end"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,13 +11,13 @@ workspace = true
 
 [dependencies]
 craft-ui = { workspace = true }
-cadcraft-geom = { workspace = true }
-cadcraft-color = { workspace = true }
-cadcraft-doc = { workspace = true }
-cadcraft-render = { workspace = true }
-cadcraft-engine = { workspace = true }
-cadcraft-fonts = { workspace = true }
-cadcraft-walk3d = { path = "../walk3d" }
+cadaddy-geom = { workspace = true }
+cadaddy-color = { workspace = true }
+cadaddy-doc = { workspace = true }
+cadaddy-render = { workspace = true }
+cadaddy-engine = { workspace = true }
+cadaddy-fonts = { workspace = true }
+cadaddy-walk3d = { path = "../walk3d" }
 egui = { workspace = true }
 # GPU canvas paint callback (same egui-wgpu/wgpu eframe uses with its "wgpu" feature).
 egui-wgpu = { workspace = true }

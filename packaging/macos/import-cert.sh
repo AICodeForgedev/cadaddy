@@ -18,8 +18,8 @@ if [ -z "${APPLE_CERTIFICATE:-}" ]; then
 fi
 
 TMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-KEYCHAIN="$TMP/cadcraft-signing.keychain-db"
-CERT="$TMP/cadcraft-signing.p12"
+KEYCHAIN="$TMP/cadaddy-signing.keychain-db"
+CERT="$TMP/cadaddy-signing.p12"
 KC_PASS="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"
 
 trap 'rm -f "$CERT"' EXIT

@@ -1,9 +1,9 @@
 //! EXPLODE leaves a block's objects as defined: layer 0 and ByBlock colour stay (AutoCAD; taking
 //! the reference's layer and colour is what XPLODE's Inherit option does).
 
-use cadcraft_color::Color;
-use cadcraft_doc::EntityKind;
-use cadcraft_engine::Session;
+use cadaddy_color::Color;
+use cadaddy_doc::EntityKind;
+use cadaddy_engine::Session;
 use serde_json::json;
 
 #[test]

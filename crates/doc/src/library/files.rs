@@ -2,7 +2,7 @@
 //!
 //! Both follow the publicly documented text formats: a header line `*NAME[,description]`, then
 //! the definition (`A,dash,gap,…` for a linetype, `angle, x, y, dx, dy[, dash, …]` lines for
-//! a pattern), with `;` starting a comment line. CADCraft ships no such file; these read the
+//! a pattern), with `;` starting a comment line. CADaddy ships no such file; these read the
 //! files users bring. Everything here treats the text as hostile: lines, definitions, dashes,
 //! families and warnings are capped, numbers must be finite and reasonable, and nothing panics.
 //! Problems become warnings and the definitions that can be read are kept.

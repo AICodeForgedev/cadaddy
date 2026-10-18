@@ -13,10 +13,10 @@
 
 use std::fmt::Write as _;
 
-use cadcraft_color::Rgb;
-use cadcraft_doc::{Drawing, Handle, PageSetup, Space};
-use cadcraft_geom::{Bounds2, Vec2};
-use cadcraft_render::{Kind, Sheet, clip, paper};
+use cadaddy_color::Rgb;
+use cadaddy_doc::{Drawing, Handle, PageSetup, Space};
+use cadaddy_geom::{Bounds2, Vec2};
+use cadaddy_render::{Kind, Sheet, clip, paper};
 use serde_json::Value;
 
 use crate::{IoError, Result};
@@ -41,7 +41,7 @@ const MAX_URL: usize = 2048;
 pub struct PdfOptions {
     /// Plot style table name, replacing the page setup's (`"None"` plots without one).
     pub plot_style_table: Option<String>,
-    /// Paper name from [`cadcraft_render::PAPER_SIZES`] (`"A4"`, `"Letter"`, `"ANSI B"`…).
+    /// Paper name from [`cadaddy_render::PAPER_SIZES`] (`"A4"`, `"Letter"`, `"ANSI B"`…).
     pub paper: Option<String>,
     /// Custom paper size in millimetres (portrait width, height).
     pub paper_mm: Option<(f64, f64)>,
@@ -380,7 +380,7 @@ struct SheetPage {
     /// Page size in points.
     media: Vec2,
     /// What it draws, the mapping to points and the plot area (points).
-    list: cadcraft_render::DisplayList,
+    list: cadaddy_render::DisplayList,
     map: Map,
     clip_pt: Bounds2,
     /// The drawing layers (indices in the layer table) of the content's `/L<i>` marks.
@@ -397,8 +397,8 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
     let unit_mm = paper::page_unit_mm(d, &page);
     let sheet = Sheet::from_page(&page, unit_mm);
     let lineweights = o.lineweights.unwrap_or(if space.is_paper() { page.lineweights } else { true });
-    let plot_style_table = cadcraft_doc::plot_style_table(d, &page.plot_style_table).map(std::sync::Arc::new);
-    let ropts = cadcraft_render::Options {
+    let plot_style_table = cadaddy_doc::plot_style_table(d, &page.plot_style_table).map(std::sync::Arc::new);
+    let ropts = cadaddy_render::Options {
         transparency: o.plot_transparency.unwrap_or(page.plot_transparency),
         tolerance: 0.001,
         min_dash: 0.0,
@@ -421,7 +421,7 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
     let tolerance = if tol.is_finite() && tol > 0.0 { tol } else { ropts.tolerance };
     // Relative point sizes follow the plotted window (else the extents).
     let view_height = window.map(|w| w.height()).unwrap_or(0.0);
-    let list = cadcraft_render::build_plot(d, space, &cadcraft_render::Options { tolerance, view_height, ..ropts });
+    let list = cadaddy_render::build_plot(d, space, &cadaddy_render::Options { tolerance, view_height, ..ropts });
     let b = window.unwrap_or(list.bounds);
     let s = plot_scale(&b, &sheet, fit, o.scale);
     let map = if fit || matches!(space, Space::Model) {
@@ -433,7 +433,7 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
     };
     // Plot style ends, joins and fill patterns at the plot scale (a layout's are already drawn).
     let mut list = list;
-    cadcraft_render::pen::apply(&mut list, map.s * unit_mm);
+    cadaddy_render::pen::apply(&mut list, map.s * unit_mm);
     let media = sheet.size * k;
     let clip_pt = if fit || matches!(space, Space::Model) {
         Bounds2::new(sheet.printable.min * k, sheet.printable.max * k)
@@ -509,7 +509,7 @@ fn all_links(d: &Drawing, o: &PdfOptions) -> Vec<(Handle, String)> {
 
 /// The link target of `PE_URL` extended data: the first string (group 1000) after
 /// `1001 PE_URL`, before the next application's data.
-fn pe_url(xdata: &[cadcraft_doc::RawTag]) -> Option<String> {
+fn pe_url(xdata: &[cadaddy_doc::RawTag]) -> Option<String> {
     let start = xdata.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case("PE_URL"))?;
     let url = xdata.get(start + 1..)?.iter().take_while(|t| t.code != 1001).find(|t| t.code == 1000)?.value.trim();
     (!url.is_empty() && url.len() <= MAX_URL).then(|| url.to_string())
@@ -517,7 +517,7 @@ fn pe_url(xdata: &[cadcraft_doc::RawTag]) -> Option<String> {
 
 /// Link annotation rectangles: the area (in points) each linked entity covers on the sheet,
 /// clipped to the plot area.
-fn links(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Bounds2, links: &[(Handle, String)]) -> Vec<(Bounds2, String)> {
+fn links(list: &cadaddy_render::DisplayList, map: &Map, clip_pt: &Bounds2, links: &[(Handle, String)]) -> Vec<(Bounds2, String)> {
     if links.is_empty() {
         return Vec::new();
     }
@@ -609,12 +609,12 @@ fn color(out: &mut String, c: Rgb, op: &str) {
 /// Raster images are painted as `/Im<k> Do` clipped to their visible triangles; the images used
 /// are returned too (`/Im<k>` is the k-th), for the page's `/XObject` resources.
 fn content_stream(
-    list: &cadcraft_render::DisplayList,
+    list: &cadaddy_render::DisplayList,
     map: &Map,
     clip_pt: &Bounds2,
     layers: &[u32],
-    texts: &std::collections::HashMap<u32, (usize, &cadcraft_render::PlotText)>,
-) -> (String, Vec<u8>, Vec<std::sync::Arc<cadcraft_render::images::Raster>>) {
+    texts: &std::collections::HashMap<u32, (usize, &cadaddy_render::PlotText)>,
+) -> (String, Vec<u8>, Vec<std::sync::Arc<cadaddy_render::images::Raster>>) {
     let marked: std::collections::HashSet<u32> = layers.iter().copied().collect();
     let white = Rgb(255, 255, 255);
     let mut c = String::new();
@@ -643,7 +643,7 @@ fn content_stream(
     // The transparency (percent) marks are drawn with, and those used on the page.
     let mut alpha: u8 = 0;
     let mut alphas: Vec<u8> = Vec::new();
-    let mut images: Vec<std::sync::Arc<cadcraft_render::images::Raster>> = Vec::new();
+    let mut images: Vec<std::sync::Arc<cadaddy_render::images::Raster>> = Vec::new();
     for (i, p) in list.prims.iter().enumerate() {
         let want = list.prim_layers.get(i).copied().filter(|l| marked.contains(l));
         let text = u32::try_from(i).ok().and_then(|i| texts.get(&i));
@@ -667,7 +667,7 @@ fn content_stream(
             continue;
         }
         // A wipeout's mask always hides what is under it.
-        let t = if p.kind == Kind::Mask { 0 } else { p.transparency.min(cadcraft_render::MAX_TRANSPARENCY) };
+        let t = if p.kind == Kind::Mask { 0 } else { p.transparency.min(cadaddy_render::MAX_TRANSPARENCY) };
         if t != alpha {
             flush(&mut c, &mut pending);
             let _ = writeln!(c, "/T{t} gs");
@@ -760,7 +760,7 @@ fn content_stream(
                 c.push_str("q\n");
                 // the image's own opacity (FADE) on top of the object's transparency
                 let opaque = (100.0 - f64::from(t)) / 100.0 * f64::from(img.alpha) / 255.0;
-                let ti = (100.0 - opaque * 100.0).round().clamp(0.0, f64::from(cadcraft_render::MAX_TRANSPARENCY)) as u8;
+                let ti = (100.0 - opaque * 100.0).round().clamp(0.0, f64::from(cadaddy_render::MAX_TRANSPARENCY)) as u8;
                 if ti != alpha {
                     let _ = writeln!(c, "/T{ti} gs");
                     if !alphas.contains(&ti) {
@@ -815,7 +815,7 @@ fn content_stream(
 }
 
 /// An image XObject for `r`: 8-bit RGB, with a soft mask (alpha) when any pixel isn't opaque.
-fn image_object(objs: &mut Objects, r: &cadcraft_render::images::Raster, compress: bool) -> usize {
+fn image_object(objs: &mut Objects, r: &cadaddy_render::images::Raster, compress: bool) -> usize {
     let n = r.width as usize * r.height as usize;
     let mut rgb = Vec::with_capacity(n * 3);
     let mut alpha = Vec::with_capacity(n);
@@ -842,7 +842,7 @@ fn ext_gstates(alphas: &[u8]) -> String {
     let mut out = String::from(" /ExtGState <<");
     for t in alphas {
         let mut a = String::new();
-        num(&mut a, f64::from(100 - u32::from((*t).min(cadcraft_render::MAX_TRANSPARENCY))) / 100.0);
+        num(&mut a, f64::from(100 - u32::from((*t).min(cadaddy_render::MAX_TRANSPARENCY))) / 100.0);
         let _ = write!(out, " /T{t} << /Type /ExtGState /CA {a} /ca {a} >>");
     }
     out.push_str(" >>");
@@ -851,7 +851,7 @@ fn ext_gstates(alphas: &[u8]) -> String {
 
 /// Write one glyph as text: opens a text object and sets the font when needed, then places the
 /// glyph with a text matrix (font size 1: the matrix axes are one em).
-fn glyph(c: &mut String, text_font: &mut Option<Option<usize>>, font: usize, t: &cadcraft_render::PlotText, map: &Map) {
+fn glyph(c: &mut String, text_font: &mut Option<Option<usize>>, font: usize, t: &cadaddy_render::PlotText, map: &Map) {
     if text_font.is_none() {
         c.push_str("BT\n");
         *text_font = Some(None);
@@ -970,7 +970,7 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
     // Page dictionaries are completed once the fonts are written: (page, its fonts, the rest).
     let mut page_dicts: Vec<(usize, Vec<usize>, String, String, String)> = Vec::new();
     // Image XObjects shared by all pages, by the pixels they hold.
-    let mut image_ids: Vec<(std::sync::Arc<cadcraft_render::images::Raster>, usize)> = Vec::new();
+    let mut image_ids: Vec<(std::sync::Arc<cadaddy_render::images::Raster>, usize)> = Vec::new();
     for p in pages {
         let page = objs.reserve();
         let texts = fonts.texts(&p.list);

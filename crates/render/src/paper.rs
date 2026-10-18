@@ -2,10 +2,10 @@
 //!
 //! Paper-space units are millimetres in metric drawings (`MEASUREMENT` = 1) and inches
 //! otherwise. The sheet's lower-left corner is the paper-space origin, unless the layout keeps
-//! its sheet elsewhere ([`Layout::origin`](cadcraft_doc::Layout::origin)).
+//! its sheet elsewhere ([`Layout::origin`](cadaddy_doc::Layout::origin)).
 
-use cadcraft_doc::{Drawing, PageSetup};
-use cadcraft_geom::{Bounds2, Vec2};
+use cadaddy_doc::{Drawing, PageSetup};
+use cadaddy_geom::{Bounds2, Vec2};
 
 /// Maximum model-space plot offset accepted by the PLOT command, in millimetres.
 pub const MAX_PLOT_OFFSET_MM: f64 = 100_000.0;

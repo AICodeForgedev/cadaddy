@@ -1,9 +1,9 @@
 //! DXF save → reopen keeps table and object-section data: complex linetype elements,
 //! multileader styles, layout page setups, named views, UCSs and groups.
 
-use cadcraft_doc::geom::{Vec2, Vec3};
-use cadcraft_doc::{Common, DashElement, Drawing, EntityKind, Group, Line, Linetype, MLeaderStyle, NamedView, Space, TextStyle, Ucs, library};
-use cadcraft_io::{read_dxf, write_dxf};
+use cadaddy_doc::geom::{Vec2, Vec3};
+use cadaddy_doc::{Common, DashElement, Drawing, EntityKind, Group, Line, Linetype, MLeaderStyle, NamedView, Space, TextStyle, Ucs, library};
+use cadaddy_io::{read_dxf, write_dxf};
 
 fn round_trip(d: &Drawing) -> Drawing {
     read_dxf(write_dxf(d).as_bytes()).expect("reopen")
@@ -74,8 +74,8 @@ fn multileader_styles_and_current_style_round_trip() {
     d.mleader_styles.push(callout);
     d.header.set_str("CMLEADERSTYLE", "Callout");
     let text = write_dxf(&d);
-    let tags = cadcraft_dxf::parse(text.as_bytes()).expect("parse written DXF");
-    let header = cadcraft_dxf::sections(&tags).into_iter().find(|s| s.name == "HEADER").expect("HEADER");
+    let tags = cadaddy_dxf::parse(text.as_bytes()).expect("parse written DXF");
+    let header = cadaddy_dxf::sections(&tags).into_iter().find(|s| s.name == "HEADER").expect("HEADER");
     assert!(header.tags.iter().all(|t| t.code != 9 || t.str() != "$CMLEADERSTYLE"));
     let r = read_dxf(text.as_bytes()).expect("reopen");
     assert_eq!(r.mleader_styles, d.mleader_styles);
@@ -121,7 +121,7 @@ fn layout_sheet_position_and_paper_units_round_trip() {
     let l = r.layouts.first().expect("Layout1");
     assert_eq!(l.page.mm_units, Some(true));
     assert!((l.origin - Vec2::new(-10.79, -5.79)).len() < 1e-9, "{:?}", l.origin);
-    let sheet = cadcraft_render::sheet(&r, &l.name).expect("sheet");
+    let sheet = cadaddy_render::sheet(&r, &l.name).expect("sheet");
     assert_eq!(sheet.unit_mm, 1.0);
     let b = sheet.bounds();
     assert!((b.min - Vec2::new(-10.79, -5.79)).len() < 1e-9 && (b.max - Vec2::new(830.21, 588.21)).len() < 1e-9, "{b:?}");
@@ -134,7 +134,7 @@ fn layout_sheet_position_and_paper_units_round_trip() {
 fn dimension_variables_round_trip() {
     // The header's DIM* variables are the current dimension settings new dimensions use; an
     // architectural drawing must not come back with decimal units and default sizes.
-    use cadcraft_doc::HVal;
+    use cadaddy_doc::HVal;
     let mut d = Drawing::new_imperial();
     d.header.set("DIMLUNIT", HVal::Int(4));
     d.header.set("DIMTXT", HVal::Real(0.078125));

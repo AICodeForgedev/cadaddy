@@ -1,7 +1,7 @@
 //! Snap queries through the same rectangular layout viewports that the renderer displays.
 
-use cadcraft_doc::{Drawing, EntityKind, Handle, Space, Viewport};
-use cadcraft_geom::{Bounds2, Vec2};
+use cadaddy_doc::{Drawing, EntityKind, Handle, Space, Viewport};
+use cadaddy_geom::{Bounds2, Vec2};
 use serde::Serialize;
 
 use super::{Deferred, SnapCurve, SnapHit};

@@ -1,8 +1,8 @@
 //! DIMTEDIT at the command line: "Select dimension", then a new text location or
 //! Left/Right/Center/Home/Angle. Each answer runs the JSON form on the picked dimension.
 
-use cadcraft_doc::{EntityKind, Handle};
-use cadcraft_geom::Vec2;
+use cadaddy_doc::{EntityKind, Handle};
+use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
 
 use super::{dims_of, run_dimtedit, v3};

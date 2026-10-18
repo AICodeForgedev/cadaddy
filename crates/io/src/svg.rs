@@ -2,10 +2,10 @@
 
 use std::fmt::Write as _;
 
-use cadcraft_color::Rgb;
-use cadcraft_doc::{Drawing, Space};
-use cadcraft_geom::Bounds2;
-use cadcraft_render::Kind;
+use cadaddy_color::Rgb;
+use cadaddy_doc::{Drawing, Space};
+use cadaddy_geom::Bounds2;
+use cadaddy_render::Kind;
 
 /// Export with a white background (colour 7 prints black), fitted to the extents.
 pub fn export(d: &Drawing, space: &Space) -> String {
@@ -21,7 +21,7 @@ pub fn export_window(d: &Drawing, space: &Space, window: Option<Bounds2>) -> Str
 
 /// [`export_window`], drawing transparency only when `transparency` is on (plots).
 pub fn export_window_with(d: &Drawing, space: &Space, window: Option<Bounds2>, transparency: bool) -> String {
-    let list = cadcraft_render::build(d, space, &cadcraft_render::Options { transparency, ..cadcraft_render::Options::default() });
+    let list = cadaddy_render::build(d, space, &cadaddy_render::Options { transparency, ..cadaddy_render::Options::default() });
     export_list(&list, window)
 }
 
@@ -39,7 +39,7 @@ fn base64(data: &[u8]) -> String {
 }
 
 /// ` opacity="…"` for a transparent primitive (none for an opaque one or a wipeout's mask).
-fn opacity(p: &cadcraft_render::DPrim) -> String {
+fn opacity(p: &cadaddy_render::DPrim) -> String {
     if p.kind == Kind::Mask || p.transparency == 0 {
         return String::new();
     }
@@ -47,7 +47,7 @@ fn opacity(p: &cadcraft_render::DPrim) -> String {
 }
 
 /// Write a display list (as [`export_window`] does for a space's own).
-pub fn export_list(list: &cadcraft_render::DisplayList, window: Option<Bounds2>) -> String {
+pub fn export_list(list: &cadaddy_render::DisplayList, window: Option<Bounds2>) -> String {
     let window = window.filter(|w| !w.is_empty());
     let b = window.unwrap_or(list.bounds);
     let (w, h) = if b.is_empty() { (1.0, 1.0) } else { (b.width().max(1e-9), b.height().max(1e-9)) };

@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use super::super::machines::{SelOutcome, SelectPhase, number};
 use super::{run_arraypolar, run_arrayrect};
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
-use cadcraft_doc::Handle;
-use cadcraft_geom::Vec2;
+use cadaddy_doc::Handle;
+use cadaddy_geom::Vec2;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Ask {
@@ -213,7 +213,7 @@ impl Interactive for ClassicM {
 
 #[cfg(test)]
 mod tests {
-    use cadcraft_doc::EntityKind;
+    use cadaddy_doc::EntityKind;
 
     use crate::Session;
 

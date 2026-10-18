@@ -174,7 +174,7 @@ fn find_text_reads_texts_and_render_shows_one_area() {
     let r = call(&mut s, 9, "tools/call", json!({"name": "render", "arguments": {"window": [[0, 0], [10, 5]]}}));
     let c = &r["result"]["content"][0];
     assert_eq!(c["type"], "image", "{r}");
-    let png = cadcraft_engine::cmd::file::base64_decode(c["data"].as_str().unwrap()).unwrap();
+    let png = cadaddy_engine::cmd::file::base64_decode(c["data"].as_str().unwrap()).unwrap();
     let (w, h) = (u32::from_be_bytes(png[16..20].try_into().unwrap()), u32::from_be_bytes(png[20..24].try_into().unwrap()));
     assert_eq!((w, h), (1600, 800));
 }

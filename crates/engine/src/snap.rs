@@ -7,8 +7,8 @@ mod viewport;
 
 pub use viewport::ViewportPoint;
 
-use cadcraft_doc::{Drawing, EntityKind, Insert, MAX_BLOCK_DEPTH, Prim, Space};
-use cadcraft_geom::{Bounds2, Circle, EPS, Ellipse, Mat3, PI, Segment, Vec2, intersect_ext};
+use cadaddy_doc::{Drawing, EntityKind, Insert, MAX_BLOCK_DEPTH, Prim, Space};
+use cadaddy_geom::{Bounds2, Circle, EPS, Ellipse, Mat3, PI, Segment, Vec2, intersect_ext};
 use serde::Serialize;
 
 /// OSMODE bits.
@@ -125,20 +125,20 @@ fn name_of(m: u32) -> &'static str {
 fn prim_segments(p: &Prim) -> Vec<Segment> {
     match p {
         Prim::Seg(s) => vec![*s],
-        Prim::Circle(c) => vec![Segment::Arc { arc: cadcraft_geom::Arc::new(c.center, c.radius, 0.0, 0.0), ccw: true }],
-        Prim::Infinite { base, dir, .. } => vec![Segment::Line(cadcraft_geom::Line::new(*base - *dir * 1e7, *base + *dir * 1e7))],
+        Prim::Circle(c) => vec![Segment::Arc { arc: cadaddy_geom::Arc::new(c.center, c.radius, 0.0, 0.0), ccw: true }],
+        Prim::Infinite { base, dir, .. } => vec![Segment::Line(cadaddy_geom::Line::new(*base - *dir * 1e7, *base + *dir * 1e7))],
         Prim::Ellipse(e) => {
             let mut pts = Vec::new();
             e.tessellate(e.major.len() * 1e-3, &mut pts);
-            pts.windows(2).filter_map(|w| Some(Segment::Line(cadcraft_geom::Line::new(*w.first()?, *w.get(1)?)))).collect()
+            pts.windows(2).filter_map(|w| Some(Segment::Line(cadaddy_geom::Line::new(*w.first()?, *w.get(1)?)))).collect()
         }
         Prim::Spline(s) => {
             let pts = s.tessellate(1e-3);
-            pts.windows(2).filter_map(|w| Some(Segment::Line(cadcraft_geom::Line::new(*w.first()?, *w.get(1)?)))).collect()
+            pts.windows(2).filter_map(|w| Some(Segment::Line(cadaddy_geom::Line::new(*w.first()?, *w.get(1)?)))).collect()
         }
         Prim::Fill(f) => {
             let n = f.len();
-            (0..n).filter_map(|i| Some(Segment::Line(cadcraft_geom::Line::new(*f.get(i)?, *f.get((i + 1) % n)?)))).collect()
+            (0..n).filter_map(|i| Some(Segment::Line(cadaddy_geom::Line::new(*f.get(i)?, *f.get((i + 1) % n)?)))).collect()
         }
         Prim::Point(_) => Vec::new(),
     }
@@ -314,16 +314,16 @@ fn osnap_in_with_prims(
     Some((hit, near_prims))
 }
 
-/// A primitive as an equation for [`cadcraft_geom::refine_intersection`].
-pub(crate) fn curve_ref(p: &Prim) -> Option<cadcraft_geom::CurveRef<'_>> {
-    use cadcraft_geom::CurveRef;
+/// A primitive as an equation for [`cadaddy_geom::refine_intersection`].
+pub(crate) fn curve_ref(p: &Prim) -> Option<cadaddy_geom::CurveRef<'_>> {
+    use cadaddy_geom::CurveRef;
     Some(match p {
         Prim::Seg(Segment::Line(l)) => CurveRef::Line(*l),
         Prim::Seg(Segment::Arc { arc, .. }) => CurveRef::Circle { center: arc.center, radius: arc.radius },
         Prim::Circle(c) => CurveRef::Circle { center: c.center, radius: c.radius },
         Prim::Ellipse(e) => CurveRef::Ellipse(Ellipse { start: 0.0, end: std::f64::consts::TAU, ..*e }),
         Prim::Spline(s) => CurveRef::Spline(s),
-        Prim::Infinite { base, dir, .. } => CurveRef::Line(cadcraft_geom::Line::new(*base, *base + *dir)),
+        Prim::Infinite { base, dir, .. } => CurveRef::Line(cadaddy_geom::Line::new(*base, *base + *dir)),
         Prim::Fill(_) | Prim::Point(_) => return None,
     })
 }
@@ -336,7 +336,7 @@ pub(crate) fn exact_crossing(x: Vec2, a: Option<&Prim>, b: Option<&Prim>, reach:
         return x;
     }
     let (Some(ca), Some(cb)) = (a.and_then(curve_ref), b.and_then(curve_ref)) else { return x };
-    cadcraft_geom::refine_intersection(&ca, &cb, x, reach.max(1e-9)).unwrap_or(x)
+    cadaddy_geom::refine_intersection(&ca, &cb, x, reach.max(1e-9)).unwrap_or(x)
 }
 
 fn finite_intersection_probe(cursor: Vec2, aperture: f64) -> Option<Bounds2> {
@@ -522,7 +522,7 @@ fn finish(
                     let rough = prim_segments(p).iter().map(|s| s.closest(cursor)).min_by(|a, b| a.dist(cursor).total_cmp(&b.dist(cursor)));
                     if let Some(rough) = rough {
                         let t = crate::cmd::curves::spline_param_of(sp, rough);
-                        consider(cadcraft_geom::refine_closest(&cadcraft_geom::CurveRef::Spline(sp), cursor, Some(t)).0);
+                        consider(cadaddy_geom::refine_closest(&cadaddy_geom::CurveRef::Spline(sp), cursor, Some(t)).0);
                     }
                 }
                 _ => {
@@ -626,7 +626,7 @@ impl Sink<'_> {
                         // Only the quadrant points the arc passes through.
                         for k in 0..4 {
                             let t = k as f64 * PI / 2.0;
-                            if cadcraft_geom::angle_in_sweep(t, el.start, el.end) {
+                            if cadaddy_geom::angle_in_sweep(t, el.start, el.end) {
                                 cands.push((mode::QUA, el.at_param(t)));
                             }
                         }
@@ -671,7 +671,7 @@ impl Sink<'_> {
             // The centroid of the area a closed polyline or spline encloses.
             let pts = match kind {
                 EntityKind::LwPolyline(pl) if pl.closed => {
-                    cadcraft_geom::Polyline { vertices: pl.vertices.clone(), closed: true }.tessellate(self.aperture / 10.0)
+                    cadaddy_geom::Polyline { vertices: pl.vertices.clone(), closed: true }.tessellate(self.aperture / 10.0)
                 }
                 EntityKind::Spline(s) if s.closed => s.tessellate(1e-3),
                 _ => Vec::new(),
@@ -687,14 +687,14 @@ impl Sink<'_> {
     /// A dimension snaps to what it draws, as in AutoCAD (into its block): the objects of its
     /// block when the drawing has one (read from a file), else the lines generated from it
     /// (Endpoint on their ends); Node on its definition points.
-    fn dimension(&mut self, d: &Drawing, dm: &cadcraft_doc::Dimension, budget: &mut usize, frozen: &[String]) {
+    fn dimension(&mut self, d: &Drawing, dm: &cadaddy_doc::Dimension, budget: &mut usize, frozen: &[String]) {
         match dm.block.as_ref().and_then(|n| d.block(n)) {
             Some(blk) => {
                 // The block holds world geometry: a reference at its own base point places it as is.
                 let ins = Insert {
                     block: blk.name.clone(),
                     insert: blk.base,
-                    scale: cadcraft_geom::Vec3::new(1.0, 1.0, 1.0),
+                    scale: cadaddy_geom::Vec3::new(1.0, 1.0, 1.0),
                     rotation: 0.0,
                     attribs: Vec::new(),
                     cols: 1,
@@ -705,7 +705,7 @@ impl Sink<'_> {
                 block_leaves(d, &ins, &Mat3::IDENTITY, 0, budget, frozen, &mut |k, m| self.object(k, Some(m)));
             }
             None => {
-                let g = cadcraft_render::dimension_in(d, dm);
+                let g = cadaddy_render::dimension_in(d, dm);
                 for line in &g.lines {
                     let (Some(a), Some(b)) = (line.first(), line.last()) else { continue };
                     if self.osmode & mode::END != 0 {
@@ -716,7 +716,7 @@ impl Sink<'_> {
                     }
                     for w in line.windows(2) {
                         if let [p, q] = w {
-                            let s = Prim::Seg(Segment::Line(cadcraft_geom::Line::new(*p, *q)));
+                            let s = Prim::Seg(Segment::Line(cadaddy_geom::Line::new(*p, *q)));
                             if prim_near(&s, &self.probe, self.aperture) {
                                 self.near.push(s);
                             }
@@ -732,8 +732,8 @@ impl Sink<'_> {
 }
 
 /// The definition points of a dimension that its kind uses.
-fn dim_def_points(dm: &cadcraft_doc::Dimension) -> Vec<Vec2> {
-    use cadcraft_doc::DimKind;
+fn dim_def_points(dm: &cadaddy_doc::Dimension) -> Vec<Vec2> {
+    use cadaddy_doc::DimKind;
     let pts = match dm.kind {
         DimKind::Linear { .. } | DimKind::Aligned | DimKind::ArcLength => vec![dm.defpt, dm.p13, dm.p14],
         DimKind::Radius | DimKind::Diameter => vec![dm.defpt, dm.p15],
@@ -814,13 +814,13 @@ fn similarity_scale(m: &Mat3) -> Option<f64> {
 fn xform_prim(p: &Prim, m: &Mat3) -> Prim {
     let mirror = m.is_mirroring();
     match p {
-        Prim::Seg(Segment::Line(l)) => Prim::Seg(Segment::Line(cadcraft_geom::Line::new(m.apply(l.a), m.apply(l.b)))),
+        Prim::Seg(Segment::Line(l)) => Prim::Seg(Segment::Line(cadaddy_geom::Line::new(m.apply(l.a), m.apply(l.b)))),
         Prim::Seg(Segment::Arc { arc, ccw }) => match similarity_scale(m) {
             Some(s) => {
                 let c = m.apply(arc.center);
                 let (a0, a1) = (c.angle_to(m.apply(arc.start_point())), c.angle_to(m.apply(arc.end_point())));
                 let (start, end) = if mirror { (a1, a0) } else { (a0, a1) };
-                Prim::Seg(Segment::Arc { arc: cadcraft_geom::Arc::new(c, arc.radius * s, start, end), ccw: *ccw != mirror })
+                Prim::Seg(Segment::Arc { arc: cadaddy_geom::Arc::new(c, arc.radius * s, start, end), ccw: *ccw != mirror })
             }
             None => {
                 let e = Ellipse { center: arc.center, major: Vec2::X * arc.radius, ratio: 1.0, start: arc.start, end: arc.end };
@@ -858,7 +858,7 @@ fn xform_ellipse(e: &Ellipse, m: &Mat3) -> Ellipse {
         return Ellipse::full(center, u, ratio);
     }
     let (start, end) = if u.cross(v) >= 0.0 { (e.start - t0, e.end - t0) } else { (t0 - e.end, t0 - e.start) };
-    Ellipse { center, major: u, ratio, start: cadcraft_geom::norm_angle(start), end: cadcraft_geom::norm_angle(end) }
+    Ellipse { center, major: u, ratio, start: cadaddy_geom::norm_angle(start), end: cadaddy_geom::norm_angle(end) }
 }
 
 /// The nearest deferred tangent/perpendicular within `aperture` of `cursor`.
@@ -881,7 +881,7 @@ fn deferred_hit(prims: &[Prim], cursor: Vec2, aperture: f64, osmode: u32, clip: 
             }
             SnapCurve::Line { a, b } if osmode & mode::PER != 0 => {
                 // Pick on the drawn extent: a segment's own span, an xline/ray anywhere.
-                let l = cadcraft_geom::Line::new(a, b);
+                let l = cadaddy_geom::Line::new(a, b);
                 (mode::PER, "Deferred Perpendicular", if matches!(p, Prim::Seg(_)) { l.closest(cursor) } else { l.project(cursor) })
             }
             _ => continue,
@@ -918,7 +918,7 @@ pub fn resolve_deferred(a: LineEnd, b: LineEnd) -> Option<(Vec2, Vec2)> {
                         vec![center + u * radius, center - u * radius]
                     }
                 }
-                (mode::PER, SnapCurve::Line { a, b }) => line_dir(a, b).map(|_| vec![cadcraft_geom::Line::new(a, b).project(p)]).unwrap_or_default(),
+                (mode::PER, SnapCurve::Line { a, b }) => line_dir(a, b).map(|_| vec![cadaddy_geom::Line::new(a, b).project(p)]).unwrap_or_default(),
                 _ => Vec::new(),
             };
             pick_best(cands.into_iter().map(|t| (t, p)), d.at, None)
@@ -950,7 +950,7 @@ fn deferred_pairs(d1: &Deferred, d2: &Deferred) -> Option<Vec<(Vec2, Vec2)>> {
         // Perpendicular to a line: the tangent runs along the line's normal.
         ((mode::TAN, C { center, radius }), (mode::PER, L { a, b })) => {
             let Some(v) = line_dir(a, b) else { return Some(Vec::new()) };
-            let l = cadcraft_geom::Line::new(a, b);
+            let l = cadaddy_geom::Line::new(a, b);
             [center + v * radius, center - v * radius].into_iter().map(|t| (t, l.project(t))).collect()
         }
         ((mode::PER, C { center: k1, radius: r1 }), (mode::PER, C { center: k2, radius: r2 })) => {
@@ -968,8 +968,8 @@ fn deferred_pairs(d1: &Deferred, d2: &Deferred) -> Option<Vec<(Vec2, Vec2)>> {
         }
         ((mode::PER, C { center: k, radius: rk }), (mode::PER, L { a, b })) => {
             let Some(v) = line_dir(a, b) else { return Some(Vec::new()) };
-            let f = cadcraft_geom::Line::new(a, b).project(k);
-            let u = if f.dist(k) > cadcraft_geom::EPS { (f - k).normalized() } else { v.perp() };
+            let f = cadaddy_geom::Line::new(a, b).project(k);
+            let u = if f.dist(k) > cadaddy_geom::EPS { (f - k).normalized() } else { v.perp() };
             vec![(k + u * rk, f), (k - u * rk, f)]
         }
         ((mode::PER, L { a: a1, b: b1 }), (mode::PER, L { a: a2, b: b2 })) => {
@@ -978,8 +978,8 @@ fn deferred_pairs(d1: &Deferred, d2: &Deferred) -> Option<Vec<(Vec2, Vec2)>> {
             if v1.cross(v2).abs() > 1e-9 {
                 return Some(Vec::new());
             }
-            let p = cadcraft_geom::Line::new(a1, b1).project(d1.at);
-            vec![(p, cadcraft_geom::Line::new(a2, b2).project(p))]
+            let p = cadaddy_geom::Line::new(a1, b1).project(d1.at);
+            vec![(p, cadaddy_geom::Line::new(a2, b2).project(p))]
         }
         _ => return None,
     })
@@ -994,7 +994,7 @@ fn line_dir(a: Vec2, b: Vec2) -> Option<Vec2> {
 /// The finite, non-degenerate candidate closest to the picks.
 fn pick_best(cands: impl Iterator<Item = (Vec2, Vec2)>, at1: Vec2, at2: Option<Vec2>) -> Option<(Vec2, Vec2)> {
     cands
-        .filter(|(p, q)| p.is_finite() && q.is_finite() && p.dist(*q) > cadcraft_geom::EPS)
+        .filter(|(p, q)| p.is_finite() && q.is_finite() && p.dist(*q) > cadaddy_geom::EPS)
         .map(|(p, q)| (p.dist(at1) + at2.map_or(0.0, |a| q.dist(a)), (p, q)))
         .filter(|(cost, _)| cost.is_finite())
         .min_by(|x, y| x.0.total_cmp(&y.0))
@@ -1005,7 +1005,7 @@ fn pick_best(cands: impl Iterator<Item = (Vec2, Vec2)>, at1: Vec2, at2: Option<V
 fn fix_circle(s: &Segment) -> Segment {
     match *s {
         Segment::Arc { arc, ccw } if (arc.start - arc.end).abs() < 1e-15 => {
-            Segment::Arc { arc: cadcraft_geom::Arc { start: 0.0, end: cadcraft_geom::TAU - 1e-12, ..arc }, ccw }
+            Segment::Arc { arc: cadaddy_geom::Arc { start: 0.0, end: cadaddy_geom::TAU - 1e-12, ..arc }, ccw }
         }
         other => other,
     }
@@ -1049,7 +1049,7 @@ pub fn polar(base: Vec2, p: Vec2, inc: f64, tol: f64) -> Option<(Vec2, f64)> {
     let snapped = k * inc;
     if (a - snapped).abs() <= tol {
         let dir = Vec2::from_angle(snapped);
-        Some((base + dir * d.dot(dir), cadcraft_geom::norm_angle(snapped)))
+        Some((base + dir * d.dot(dir), cadaddy_geom::norm_angle(snapped)))
     } else {
         None
     }
@@ -1075,15 +1075,15 @@ pub fn grid_frame(d: &Drawing) -> (Vec2, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadcraft_doc::{Common, Line};
-    use cadcraft_geom::Vec3;
+    use cadaddy_doc::{Common, Line};
+    use cadaddy_geom::Vec3;
 
     fn drawing() -> Drawing {
         let mut d = Drawing::new_imperial();
         let l = |a: (f64, f64), b: (f64, f64)| EntityKind::Line(Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) });
         d.add(&Space::Model, Common::default(), l((0.0, 0.0), (10.0, 0.0))).unwrap();
         d.add(&Space::Model, Common::default(), l((5.0, -5.0), (5.0, 5.0))).unwrap();
-        d.add(&Space::Model, Common::default(), EntityKind::Circle(cadcraft_doc::Circle { center: Vec3::new(20.0, 0.0, 0.0), radius: 2.0 })).unwrap();
+        d.add(&Space::Model, Common::default(), EntityKind::Circle(cadaddy_doc::Circle { center: Vec3::new(20.0, 0.0, 0.0), radius: 2.0 })).unwrap();
         d
     }
 
@@ -1108,13 +1108,13 @@ mod tests {
     fn intersections_with_ellipses_and_splines_are_exact() {
         // A line across a tilted ellipse, and the same line across a spline.
         let mut d = Drawing::new_imperial();
-        let line = cadcraft_geom::Line::new(Vec2::new(-10.0, 1.3), Vec2::new(15.0, -0.7));
+        let line = cadaddy_geom::Line::new(Vec2::new(-10.0, 1.3), Vec2::new(15.0, -0.7));
         d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(-10.0, 1.3, 0.0), b: Vec3::new(15.0, -0.7, 0.0) })).unwrap();
         let ge = Ellipse::full(Vec2::new(3.0, -2.0), Vec2::new(8.0, 3.0), 0.45);
         d.add(
             &Space::Model,
             Common::default(),
-            EntityKind::Ellipse(cadcraft_doc::Ellipse {
+            EntityKind::Ellipse(cadaddy_doc::Ellipse {
                 center: Vec3::new(3.0, -2.0, 0.0),
                 major: Vec3::new(8.0, 3.0, 0.0),
                 ratio: 0.45,
@@ -1152,16 +1152,16 @@ mod tests {
         }
         // A spline crossing the same line.
         let sp =
-            cadcraft_geom::Spline::from_control(vec![Vec2::new(20.0, -6.0), Vec2::new(22.0, 6.0), Vec2::new(25.0, -6.0), Vec2::new(28.0, 6.0)], 3);
-        let line2 = cadcraft_geom::Line::new(Vec2::new(18.0, 0.3), Vec2::new(30.0, 0.1));
+            cadaddy_geom::Spline::from_control(vec![Vec2::new(20.0, -6.0), Vec2::new(22.0, 6.0), Vec2::new(25.0, -6.0), Vec2::new(28.0, 6.0)], 3);
+        let line2 = cadaddy_geom::Line::new(Vec2::new(18.0, 0.3), Vec2::new(30.0, 0.1));
         d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(18.0, 0.3, 0.0), b: Vec3::new(30.0, 0.1, 0.0) })).unwrap();
         d.add(&Space::Model, Common::default(), EntityKind::Spline(sp.clone())).unwrap();
         let pts = sp.tessellate(1e-3);
-        let rough: Vec<Vec2> = pts.windows(2).filter_map(|w| cadcraft_geom::line_line(&cadcraft_geom::Line::new(w[0], w[1]), &line2)).collect();
+        let rough: Vec<Vec2> = pts.windows(2).filter_map(|w| cadaddy_geom::line_line(&cadaddy_geom::Line::new(w[0], w[1]), &line2)).collect();
         assert!(!rough.is_empty());
         for r in rough {
             let h = osnap(&d, &Space::Model, r, 0.3, mode::INT, None, false).unwrap();
-            let (on, _) = cadcraft_geom::refine_closest(&cadcraft_geom::CurveRef::Spline(&sp), h.point, None);
+            let (on, _) = cadaddy_geom::refine_closest(&cadaddy_geom::CurveRef::Spline(&sp), h.point, None);
             assert!(on.dist(h.point) < 1e-10, "off the spline by {}", on.dist(h.point));
             assert!(line2.dist(h.point) < 1e-10);
         }

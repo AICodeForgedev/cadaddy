@@ -11,14 +11,14 @@
 //! - [`fallback_fonts`] (`FONTFALLBACK`): fonts tried first for characters the text's font
 //!   lacks (CJK in an SHX big font, for example), before the automatic system font search.
 //!
-//! On native builds both start from the `CADCRAFT_FONTALT` / `CADCRAFT_FONTFALLBACK`
+//! On native builds both start from the `CADADDY_FONTALT` / `CADADDY_FONTFALLBACK`
 //! environment variables.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 
-use cadcraft_geom::Vec2;
+use cadaddy_geom::Vec2;
 use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::raw::FileRef;
@@ -587,7 +587,7 @@ fn prefs() -> MutexGuard<'static, Prefs> {
         let env = |k: &str| std::env::var(k).unwrap_or_default();
         #[cfg(target_arch = "wasm32")]
         let env = |_: &str| String::new();
-        Mutex::new(Prefs { alt: clean_name(&env("CADCRAFT_FONTALT")), fallback: split_list(&env("CADCRAFT_FONTFALLBACK")) })
+        Mutex::new(Prefs { alt: clean_name(&env("CADADDY_FONTALT")), fallback: split_list(&env("CADADDY_FONTFALLBACK")) })
     })
     .lock()
     .unwrap_or_else(PoisonError::into_inner)

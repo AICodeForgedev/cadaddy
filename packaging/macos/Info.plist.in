@@ -24,9 +24,9 @@
   <string>@SHORT_VERSION@</string>
   <key>CFBundleVersion</key>
   <string>@SHORT_VERSION@</string>
-  <key>CADCraftVersion</key>
+  <key>CADaddyVersion</key>
   <string>@VERSION@</string>
-  <key>CADCraftBuildCommit</key>
+  <key>CADaddyBuildCommit</key>
   <string>@BUILD_SHA@</string>
   <key>CFBundleIconFile</key>
   <string>CADaddy</string>
@@ -43,7 +43,7 @@
   <key>NSRequiresAquaSystemAppearance</key>
   <false/>
   <key>NSHumanReadableCopyright</key>
-  <string>Copyright © 2026 the CADaddy contributors. Based on CADCraft, copyright © 2026 ArtCraft Team and the CADCraft contributors. MIT OR Apache-2.0.</string>
+  <string>Copyright © 2026 AICodeForge. Third-party notices: see NOTICE.</string>
 
   <!-- Drawing files CADaddy opens (declared here in case macOS has no type for them). -->
   <key>UTImportedTypeDeclarations</key>

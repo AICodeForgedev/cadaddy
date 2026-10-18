@@ -1,6 +1,6 @@
 //! Status-bar drafting toggles.
 
-use cadcraft_engine::Session;
+use cadaddy_engine::Session;
 use serde_json::json;
 
 /// Ortho and polar tracking exclude each other, however they're turned on (AutoCAD).

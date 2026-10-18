@@ -1,9 +1,9 @@
 //! 3D views of model space: the preset views (View ▸ 3D Views, the ViewCube), PLAN and the
 //! view direction 3DORBIT changes. Views are orthographic; the drawing is seen in wireframe.
 
-use cadcraft_doc::{Drawing, Space, entity_bounds};
-use cadcraft_geom::view3::{self, Projection};
-use cadcraft_geom::{Bounds2, Vec3};
+use cadaddy_doc::{Drawing, Space, entity_bounds};
+use cadaddy_geom::view3::{self, Projection};
+use cadaddy_geom::{Bounds2, Vec3};
 use serde_json::{Value, json};
 
 use super::super::*;
@@ -125,10 +125,10 @@ pub fn projected_extents(d: &Drawing, p: &Projection) -> Bounds2 {
         // A circle or arc in a tilted plane: the box of its sphere.
         let tilted = e.common.extrusion.x.abs() > 1e-9 || e.common.extrusion.y.abs() > 1e-9;
         let (lo, hi) = match &e.kind {
-            cadcraft_doc::EntityKind::Circle(c) if tilted => {
+            cadaddy_doc::EntityKind::Circle(c) if tilted => {
                 (c.center - Vec3::new(c.radius, c.radius, c.radius), c.center + Vec3::new(c.radius, c.radius, c.radius))
             }
-            cadcraft_doc::EntityKind::Arc(a) if tilted => {
+            cadaddy_doc::EntityKind::Arc(a) if tilted => {
                 (a.center - Vec3::new(a.radius, a.radius, a.radius), a.center + Vec3::new(a.radius, a.radius, a.radius))
             }
             _ => (Vec3::new(eb.min.x, eb.min.y, z), Vec3::new(eb.max.x, eb.max.y, z)),
@@ -147,7 +147,7 @@ pub fn projected_extents(d: &Drawing, p: &Projection) -> Bounds2 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadcraft_doc::{Common, EntityKind, Line};
+    use cadaddy_doc::{Common, EntityKind, Line};
 
     fn session_with(lines: &[(Vec3, Vec3)]) -> Session {
         let mut s = Session::default();

@@ -1,4 +1,4 @@
-//! The CADCraft engine.
+//! The CADaddy engine.
 //!
 //! Every user-visible action is a command with a stable id (AutoCAD's command names in lower
 //! case: `line`, `circle`, `zoom`, `layer`…, plus dotted ids for UI operations). Commands run two
@@ -35,14 +35,14 @@ pub mod units;
 
 use std::sync::Arc;
 
-use cadcraft_doc::{Common, Drawing, Entity, EntityKind, Handle, Space};
-use cadcraft_geom::{Bounds2, Vec2};
+use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Space};
+use cadaddy_geom::{Bounds2, Vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use cadcraft_doc as doc;
-pub use cadcraft_geom as geom;
-pub use cadcraft_render as render;
+pub use cadaddy_doc as doc;
+pub use cadaddy_geom as geom;
+pub use cadaddy_render as render;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use prompt::{Accept, Drag, Input, Interactive, Picker, Prompt, Step};
@@ -86,8 +86,8 @@ impl EngineError {
     }
 }
 
-impl From<cadcraft_doc::DocError> for EngineError {
-    fn from(e: cadcraft_doc::DocError) -> Self {
+impl From<cadaddy_doc::DocError> for EngineError {
+    fn from(e: cadaddy_doc::DocError) -> Self {
         EngineError::Other(e.to_string())
     }
 }
@@ -164,7 +164,7 @@ pub struct DocState {
     /// Model space's view direction (VIEWDIR, from the target towards the viewer); +Z is the
     /// plan view. In other views [`View::center`] is on the view plane (see
     /// [`DocState::projection`]).
-    pub view_dir: cadcraft_geom::Vec3,
+    pub view_dir: cadaddy_geom::Vec3,
     pub uid: u64,
     /// The drawing is saved as binary DXF (it was opened from one, or last saved as one).
     pub binary_dxf: bool,
@@ -200,7 +200,7 @@ impl DocState {
             mspace: None,
             views: Vec::new(),
             view_history: Vec::new(),
-            view_dir: cadcraft_geom::Vec3::Z,
+            view_dir: cadaddy_geom::Vec3::Z,
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             binary_dxf: false,
             read_loss: None,
@@ -247,21 +247,21 @@ impl DocState {
         if self.active_viewport().is_some() { Space::Model } else { self.space.clone() }
     }
     /// The active MSPACE viewport, if it still exists in the current layout.
-    pub fn active_viewport(&self) -> Option<(Handle, cadcraft_doc::Viewport)> {
+    pub fn active_viewport(&self) -> Option<(Handle, cadaddy_doc::Viewport)> {
         let h = self.mspace?;
         let e = self.doc.space(&self.space)?.get(h)?;
         match &e.kind {
-            cadcraft_doc::EntityKind::Viewport(v) if v.height > 1e-12 && v.view_height > 1e-12 => Some((h, v.clone())),
+            cadaddy_doc::EntityKind::Viewport(v) if v.height > 1e-12 && v.view_height > 1e-12 => Some((h, v.clone())),
             _ => None,
         }
     }
     /// The 3D view of model space on screen, `None` in the plan view and in layouts (paper
     /// space and layout viewports are drawn in plan).
-    pub fn projection(&self) -> Option<cadcraft_geom::view3::Projection> {
+    pub fn projection(&self) -> Option<cadaddy_geom::view3::Projection> {
         if self.space != Space::Model || self.mspace.is_some() {
             return None;
         }
-        cadcraft_geom::view3::Projection::new(self.view_dir)
+        cadaddy_geom::view3::Projection::new(self.view_dir)
     }
     pub fn paper_view(&self) -> View {
         self.views.iter().find(|(s, _)| *s == self.space).map(|(_, v)| *v).unwrap_or_default()
@@ -303,7 +303,7 @@ impl DocState {
                 let doc = Arc::make_mut(&mut self.doc);
                 if let Some(store) = doc.space_mut(&self.space.clone()) {
                     store.modify(h, |e| {
-                        if let cadcraft_doc::EntityKind::Viewport(x) = &mut e.kind {
+                        if let cadaddy_doc::EntityKind::Viewport(x) = &mut e.kind {
                             x.view_center = center;
                             x.view_height = height;
                         }
@@ -342,7 +342,7 @@ impl DocState {
     /// The active MSPACE viewport when ZOOM works on its own view, as in AutoCAD: extents and
     /// windows fit the viewport, and zooms keep its centre. A locked viewport keeps its scale, so
     /// zooming it moves the sheet instead (see `store_view`).
-    pub fn zoom_viewport(&self) -> Option<cadcraft_doc::Viewport> {
+    pub fn zoom_viewport(&self) -> Option<cadaddy_doc::Viewport> {
         self.active_viewport().map(|(_, v)| v).filter(|v| !v.locked && v.width > 1e-12)
     }
     /// The view ZOOM starts from: the model view of the active unlocked viewport, else [`Self::view`].
@@ -714,7 +714,7 @@ pub struct Session {
     /// Where `clipboard` came from and the layers, styles and blocks its objects need.
     pub clipboard_source: Option<cmd::clipboard::ClipSource>,
     /// The window last picked with PLOTWINDOW (the Plot dialog's "Window <").
-    pub plot_window: Option<cadcraft_geom::Bounds2>,
+    pub plot_window: Option<cadaddy_geom::Bounds2>,
     /// AutoLISP: each drawing's symbols and the routine running ([`lisp`]).
     lisp: lisp::LispState,
     /// How the last LISP run ended (its value or error message).
@@ -884,9 +884,9 @@ impl Session {
         let h = &d.header;
         Common {
             layer: h.str("CLAYER", "0"),
-            color: cadcraft_color::Color::from_aci(h.i64("CECOLOR", 256) as i16),
+            color: cadaddy_color::Color::from_aci(h.i64("CECOLOR", 256) as i16),
             linetype: h.str("CELTYPE", "ByLayer"),
-            lineweight: cadcraft_doc::Lineweight::from_dxf(h.i64("CELWEIGHT", -1) as i16),
+            lineweight: cadaddy_doc::Lineweight::from_dxf(h.i64("CELWEIGHT", -1) as i16),
             ltscale: h.f64("CELTSCALE", 1.0),
             plot_style: h.str("CPLOTSTYLE", "ByLayer"),
             ..Common::default()
@@ -900,7 +900,7 @@ impl Session {
         let true_color = self.doc()?.header.get("CECOLOR_RGB").and_then(|v| v.as_i64());
         let mut common = common;
         if let Some(rgb) = true_color {
-            common.color = cadcraft_color::Color::True(cadcraft_color::Rgb::from_u32(rgb as u32));
+            common.color = cadaddy_color::Color::True(cadaddy_color::Rgb::from_u32(rgb as u32));
         }
         // Text, dimensions, multileaders, hatches and block references of annotative styles are
         // annotative, supporting the current annotation scale.
@@ -1403,7 +1403,7 @@ impl Session {
 
     /// The multiline text the running command is collecting, for the in-place editor
     /// ([`Interactive::editing_mtext`]).
-    pub fn editing_mtext(&self) -> Option<cadcraft_doc::MText> {
+    pub fn editing_mtext(&self) -> Option<cadaddy_doc::MText> {
         self.running.as_ref().and_then(|r| r.machine.editing_mtext())
     }
 
@@ -1747,7 +1747,7 @@ impl Session {
     pub fn zoom_limits(&self) -> Result<Bounds2> {
         let d = self.doc()?;
         if let Space::Paper(name) = self.space()
-            && let Some(sheet) = cadcraft_render::sheet(d, &name)
+            && let Some(sheet) = cadaddy_render::sheet(d, &name)
         {
             return Ok(sheet.bounds());
         }

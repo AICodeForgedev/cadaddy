@@ -4,7 +4,7 @@
 
 use crate::derive::{Scene, Seg};
 use crate::math::{V3, v3};
-use cadcraft_doc::geom::Vec2;
+use cadaddy_doc::geom::Vec2;
 
 /// Walls further than this (feet) are not measured to.
 const REACH_FT: f64 = 80.0;
@@ -139,7 +139,7 @@ pub(crate) fn ray(walls: &[&Seg], p: Vec2, dir: Vec2) -> Option<f64> {
 mod tests {
     use super::*;
     use crate::derive::{DeviceInfo, LevelInfo};
-    use cadcraft_doc::Handle;
+    use cadaddy_doc::Handle;
 
     /// A 20' × 10' room on a level at 12', with a receptacle on the east wall and a light.
     fn room() -> Scene {

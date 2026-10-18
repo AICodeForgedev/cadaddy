@@ -2,7 +2,7 @@
 //! (the block named like the file), `*` (the whole drawing) or Enter for new objects, which asks
 //! for their base point and selects them. A file name without an extension gets `.dwg`.
 
-use cadcraft_geom::Vec2;
+use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
 
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};

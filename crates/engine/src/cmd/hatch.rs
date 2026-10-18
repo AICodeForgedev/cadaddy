@@ -4,9 +4,9 @@ mod patfile;
 pub use patfile::{PatternChoice, pattern_choices};
 pub(super) use patfile::{lines_for, run_patterns};
 
-use cadcraft_color::Color;
-use cadcraft_doc::{Drawing, Entity, EntityKind, Gradient, Handle, Hatch, HatchLoop, Space, entity_bounds};
-use cadcraft_geom::{Bounds2, PolyVertex, Polyline, Vec2, point_in_polygon};
+use cadaddy_color::Color;
+use cadaddy_doc::{Drawing, Entity, EntityKind, Gradient, Handle, Hatch, HatchLoop, Space, entity_bounds};
+use cadaddy_geom::{Bounds2, PolyVertex, Polyline, Vec2, point_in_polygon};
 use serde_json::{Value, json};
 
 use super::helpers::lwpoly;
@@ -100,7 +100,7 @@ fn closed_loop(d: &Drawing, e: &Entity) -> Option<Vec<PolyVertex>> {
             Some(p.vertices.clone())
         }
         EntityKind::Ellipse(el) => {
-            let ge = cadcraft_geom::Ellipse { center: el.center.xy(), major: el.major.xy(), ratio: el.ratio, start: el.start, end: el.end };
+            let ge = cadaddy_geom::Ellipse { center: el.center.xy(), major: el.major.xy(), ratio: el.ratio, start: el.start, end: el.end };
             if !ge.is_full() {
                 return None;
             }
@@ -218,8 +218,8 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
         let full = !span.is_finite() || r >= span * 2.0;
         let window = if full { None } else { Some(Bounds2::new(p - Vec2::new(r, r), p + Vec2::new(r, r))) };
         let (polys, owners) = outlines(d, &space, window);
-        let found = cadcraft_geom::region::boundary_at_gap(&polys, p, tol, gap);
-        let inside = |w: &Bounds2, b: &cadcraft_geom::region::Boundary| {
+        let found = cadaddy_geom::region::boundary_at_gap(&polys, p, tol, gap);
+        let inside = |w: &Bounds2, b: &cadaddy_geom::region::Boundary| {
             let bb = Bounds2::from_points(b.outer.iter().copied());
             bb.min.x > w.min.x && bb.min.y > w.min.y && bb.max.x < w.max.x && bb.max.y < w.max.y
         };
@@ -247,7 +247,7 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
             if let Some(vs) = closed_loop(d, e) {
                 let pts = Polyline { vertices: vs.clone(), closed: true }.tessellate(tol.max(eb.width() * 1e-3));
                 let inside = pts.iter().all(|q| point_in_polygon(&outer, *q) || outer.iter().any(|o| o.near(*q, tol * 10.0)));
-                let same_as_outer = (cadcraft_geom::shoelace(&pts).abs() - cadcraft_geom::shoelace(&outer).abs()).abs() < tol.max(1e-6) * 1000.0;
+                let same_as_outer = (cadaddy_geom::shoelace(&pts).abs() - cadaddy_geom::shoelace(&outer).abs()).abs() < tol.max(1e-6) * 1000.0;
                 if inside && !same_as_outer && !point_in_polygon(&pts, p) {
                     loops.push(HatchLoop { vertices: vs, outer: false, sources: vec![e.handle] });
                 }
@@ -557,7 +557,7 @@ fn run_region(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some((vs, common)) = vs {
             let d = s.doc_mut()?;
             d.modify_entity(h, |e| {
-                e.kind = EntityKind::Region(cadcraft_doc::Region::from_loop(vs));
+                e.kind = EntityKind::Region(cadaddy_doc::Region::from_loop(vs));
                 e.common = common;
             })?;
             n += 1;
@@ -613,7 +613,7 @@ impl HatchM {
         let h = &mut s.doc_mut()?.header;
         if let Some(o) = origin.filter(|o| o.is_finite()) {
             self.settings.origin = o;
-            h.set("HPORIGIN", cadcraft_doc::HVal::Point(o.to3(0.0)));
+            h.set("HPORIGIN", cadaddy_doc::HVal::Point(o.to3(0.0)));
         }
         self.settings.origin_mode = mode;
         h.set_i64("HPORIGINMODE", mode.index());
