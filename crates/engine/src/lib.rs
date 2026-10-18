@@ -14,6 +14,7 @@ pub mod autosave;
 pub mod blockedit;
 pub mod cmd;
 pub mod doc_path;
+pub mod fields;
 mod finite;
 pub mod grip_dims;
 pub mod grips;
@@ -1460,6 +1461,7 @@ impl Session {
         cmd::constraints::after_command(self, before, ok);
         assoc::after_command(self, before, uid);
         cmd::clip_partners::after_command(self, before);
+        fields::after_command(self, before);
     }
 
     fn resume_suspended(&mut self) {

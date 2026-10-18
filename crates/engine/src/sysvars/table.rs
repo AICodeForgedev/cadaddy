@@ -77,6 +77,10 @@ const HEADER: &[(&str, Kind, Def)] = &[
     ("XCLIPFRAME", Kind::Choice(&[0, 1, 2]), Def::Int(2)),
     // 0: file commands ask for the file name on the command line instead of opening a dialog.
     ("FILEDIA", Kind::Choice(&[0, 1]), Def::Int(1)),
+    // When fields are worked out: 1 open, 2 save, 4 plot, 8 eTransmit, 16 regen.
+    ("FIELDEVAL", Kind::Int(0, 31), Def::Int(31)),
+    // 1: fields show on a grey background on screen (never plotted).
+    ("FIELDDISPLAY", Kind::Choice(&[0, 1]), Def::Int(1)),
 ];
 
 /// The standard lineweights in hundredths of a millimetre.

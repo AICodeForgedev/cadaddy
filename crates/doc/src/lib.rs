@@ -10,6 +10,7 @@ mod array;
 mod constraint;
 mod entity;
 mod extents;
+pub mod field;
 mod gdt;
 mod header;
 pub mod library;
@@ -131,6 +132,9 @@ pub struct Drawing {
     /// Records of the file this drawing was read from that the reader could not place (a damaged
     /// file), counted by the section they came from. Never written to a file.
     pub skipped_records: BTreeMap<String, usize>,
+    /// The values fields last evaluated to ([`field`]): per object, in the order the codes
+    /// appear in its text ([`field::texts`]).
+    pub field_values: BTreeMap<Handle, Vec<String>>,
 }
 
 impl Default for Drawing {
@@ -188,6 +192,7 @@ impl Drawing {
             read_notes: Vec::new(),
             refedit: None,
             skipped_records: BTreeMap::new(),
+            field_values: BTreeMap::new(),
         }
     }
 

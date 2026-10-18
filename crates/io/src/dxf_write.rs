@@ -193,6 +193,10 @@ struct OsnapRef {
 /// Handles and names the entity writer needs from the rest of the file.
 #[derive(Default)]
 struct Ctx {
+    /// Write texts' fields as FIELD objects (a whole drawing; entity records alone keep the codes).
+    write_fields: bool,
+    /// The FIELD objects of the texts written so far, for the OBJECTS section.
+    field_plans: std::cell::RefCell<Vec<crate::dxf_field::Plan>>,
     /// Multiline styles: MLINESTYLE handles and their dictionary.
     mlines: crate::dxf_mline::Plan,
     /// First viewport of each layout that has no paper-space viewport (id 1) → the layout's index;
@@ -383,6 +387,9 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("INSUNITS", 70),
     ("MEASUREMENT", 70),
     ("PSLTSCALE", 70),
+    ("FIELDEVAL", 70),
+    ("TDCREATE", 40),
+    ("TDUPDATE", 40),
 ];
 
 fn header_vars(w: &mut W, d: &Drawing) {
@@ -621,6 +628,115 @@ fn attrib_flags(a: &Attrib) -> i64 {
 /// A TEXT's groups, or an attribute's (`attrib`, in a file of version `target`) with its
 /// subclass: the subclass version (`280 0`, 2010 and later), prompt, tag, flags and alignment,
 /// then Lock position (`280`, 2007 and later; readers take the 280 after the tag as it).
+/// The field values of text `slot` of `e` (its attributes are slots 0, 1, …).
+fn slot_values(d: &Drawing, e: &Entity, slot: usize) -> Vec<String> {
+    let all = d.field_values.get(&e.handle);
+    let texts = cadaddy_doc::field::texts(&e.kind);
+    let start: usize = texts.iter().take(slot).map(|t| cadaddy_doc::field::codes(t).len()).sum();
+    let n = texts.get(slot).map_or(0, |t| cadaddy_doc::field::codes(t).len());
+    (start..start + n).map(|i| all.and_then(|v| v.get(i)).cloned().unwrap_or_else(|| cadaddy_doc::field::NO_VALUE.into())).collect()
+}
+
+/// The FIELD objects of `text` (text `slot` of `e`, written with handle `owner`), noted for the
+/// OBJECTS section: the text as it shows, and its extension dictionary's handle.
+fn plan_fields(w: &mut W, d: &Drawing, cx: &Ctx, owner: &str, e: &Entity, slot: usize, text: &str) -> Option<(String, String)> {
+    if !cx.write_fields || !cadaddy_doc::field::has_fields(text) {
+        return None;
+    }
+    let values = slot_values(d, e, slot);
+    let (plan, shown) = crate::dxf_field::plan(text, &values, owner.to_string(), || w.h())?;
+    let x = plan.xdict.clone();
+    cx.field_plans.borrow_mut().push(plan);
+    Some((shown, x))
+}
+
+/// One text's field objects (DXF Reference, FIELD), laid out as AutoCAD writes them.
+fn write_fields(w: &mut W, p: &crate::dxf_field::Plan) {
+    let dict = |w: &mut W, h: &str, owner: &str, key: &str, entry: &str| {
+        w.s(0, "DICTIONARY");
+        w.s(5, h);
+        w.group("ACAD_REACTORS", 330, &[owner]);
+        w.s(330, owner);
+        w.s(100, "AcDbDictionary");
+        w.i(280, 1);
+        w.i(281, 1);
+        w.s(3, key);
+        w.s(360, entry);
+    };
+    dict(w, &p.xdict, &p.owner, "ACAD_FIELD", &p.dict);
+    dict(w, &p.dict, &p.xdict, "TEXT", &p.root);
+    let code = |w: &mut W, c: &str| {
+        for (i, part) in crate::dxf_field::chunks(c).into_iter().enumerate() {
+            w.s(if i == 0 { 2 } else { 3 }, part);
+        }
+    };
+    let value = |w: &mut W, flags: i64, data: Option<(&str, &str)>, shown: &str| {
+        w.s(7, "ACFD_FIELD_VALUE");
+        w.i(93, flags);
+        match data {
+            Some((v, fmt)) => {
+                w.i(90, 4);
+                w.s(1, v);
+                w.i(94, 0);
+                w.s(300, fmt);
+                w.s(302, v);
+            }
+            None => {
+                w.i(90, 0);
+                w.i(94, 0);
+                w.s(300, "");
+                w.s(302, "");
+            }
+        }
+        w.s(304, "ACVALUE_END");
+        for (i, part) in crate::dxf_field::chunks(shown).into_iter().enumerate() {
+            w.s(if i == 0 { 301 } else { 9 }, part);
+        }
+        w.i(98, i64::try_from(shown.len()).unwrap_or(0));
+    };
+    // The text, with each field as %<\_FldIdx i>%.
+    w.s(0, "FIELD");
+    w.s(5, &p.root);
+    w.s(330, &p.dict);
+    w.s(100, "AcDbField");
+    w.s(1, "_text");
+    code(w, &p.template);
+    w.i(90, i64::try_from(p.children.len()).unwrap_or(0));
+    for c in &p.children {
+        w.s(360, &c.handle);
+    }
+    w.i(97, 0);
+    w.i(91, 63);
+    w.i(92, 0);
+    w.i(94, 9);
+    w.i(95, 2);
+    w.i(96, 0);
+    w.s(300, "");
+    w.i(93, 0);
+    value(w, 3, None, "");
+    for c in &p.children {
+        w.s(0, "FIELD");
+        w.s(5, &c.handle);
+        w.s(330, &p.root);
+        w.s(100, "AcDbField");
+        w.s(1, &c.evaluator);
+        code(w, &c.code);
+        w.i(90, 0);
+        w.i(97, i64::try_from(c.objects.len()).unwrap_or(0));
+        for o in &c.objects {
+            w.s(331, o.hex());
+        }
+        w.i(91, 63);
+        w.i(92, 0);
+        w.i(94, 59);
+        w.i(95, 2);
+        w.i(96, 0);
+        w.s(300, "");
+        w.i(93, 0);
+        value(w, 4, Some((&c.value, &c.format)), &c.value);
+    }
+}
+
 fn text_tags(w: &mut W, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
     w.p(10, t.insert);
     w.f(40, t.height);
@@ -853,9 +969,13 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
         }
         EntityKind::Text(t) => {
             w.s(0, "TEXT");
-            common(w, e, owner, paper, "AcDbText");
+            let f = plan_fields(w, d, cx, &e.handle.hex(), e, 0, &t.value);
+            common_x(w, e, owner, paper, "AcDbText", None, f.as_ref().map(|f| f.1.as_str()));
             thickness(w, e);
-            text_tags(w, t, None, None);
+            match &f {
+                Some((shown, _)) => text_tags(w, &Text { value: shown.clone(), ..t.clone() }, None, None),
+                None => text_tags(w, t, None, None),
+            }
         }
         // Closed polylines, one per loop (`dxf_region`): REGION's own data is ACIS.
         EntityKind::Region(r) => {
@@ -874,22 +994,28 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
         }
         EntityKind::AttDef(a) => {
             w.s(0, "ATTDEF");
-            common(w, e, owner, paper, "AcDbText");
-            text_tags(w, &a.text, Some((a, cx.target)), Some(&a.prompt));
+            let f = plan_fields(w, d, cx, &e.handle.hex(), e, 0, &a.text.value);
+            common_x(w, e, owner, paper, "AcDbText", None, f.as_ref().map(|f| f.1.as_str()));
+            match &f {
+                Some((shown, _)) => text_tags(w, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), Some(&a.prompt)),
+                None => text_tags(w, &a.text, Some((a, cx.target)), Some(&a.prompt)),
+            }
             if cx.target >= Version::R2007 {
                 multiline_tags(w, a, true);
             }
         }
         EntityKind::MText(t) => {
             w.s(0, "MTEXT");
-            common(w, e, owner, paper, "AcDbMText");
+            let f = plan_fields(w, d, cx, &e.handle.hex(), e, 0, &t.contents);
+            common_x(w, e, owner, paper, "AcDbMText", None, f.as_ref().map(|f| f.1.as_str()));
             w.p(10, t.insert);
             w.f(40, t.height);
             w.f(41, t.width);
             w.i(71, i64::from(t.attach));
             w.i(72, 1);
-            // Long contents go in 250-char 3-chunks, the remainder in 1.
-            let chunks = crate::dxf_read::mtext_dxf::chunks(&crate::dxf_read::mtext_dxf::encode_contents(&t.contents));
+            // Long contents go in 250-char 3-chunks, the remainder in 1. Fields show their values.
+            let contents = f.as_ref().map_or(t.contents.as_str(), |f| f.0.as_str());
+            let chunks = crate::dxf_read::mtext_dxf::chunks(&crate::dxf_read::mtext_dxf::encode_contents(contents));
             let n = chunks.len();
             for (i, c) in chunks.iter().enumerate() {
                 w.s(if i + 1 == n { 1 } else { 3 }, c.clone());
@@ -941,10 +1067,14 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.f(45, i.row_spacing);
             }
             if !i.attribs.is_empty() {
-                for a in &i.attribs {
+                for (ai, a) in i.attribs.iter().enumerate() {
                     let ah = w.h();
+                    let f = plan_fields(w, d, cx, &ah, e, ai, &a.text.value);
                     w.s(0, "ATTRIB");
                     w.s(5, ah);
+                    if let Some((_, x)) = &f {
+                        w.group("ACAD_XDICTIONARY", 360, &[x]);
+                    }
                     w.s(330, e.handle.hex());
                     w.s(100, "AcDbEntity");
                     let (c, base) = attrib_common(d, e, i, a);
@@ -954,7 +1084,10 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                         w.i(60, 1);
                     }
                     w.s(100, "AcDbText");
-                    text_tags(w, &a.text, Some((a, cx.target)), None);
+                    match &f {
+                        Some((shown, _)) => text_tags(w, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), None),
+                        None => text_tags(w, &a.text, Some((a, cx.target)), None),
+                    }
                     if cx.target >= Version::R2007 {
                         multiline_tags(w, a, false);
                     }
@@ -1813,7 +1946,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         .collect();
     user_blocks.iter_mut().for_each(|b| b.1 = format!("{:X}", 0));
     let user_blocks: Vec<(String, String, &Block)> = user_blocks.into_iter().map(|(n, _, b)| (n, w.h(), b)).collect();
-    let mut cx = Ctx { paper_views: paper_views(d), target, ..Ctx::default() };
+    let mut cx = Ctx { paper_views: paper_views(d), target, write_fields: true, ..Ctx::default() };
     cx.block_records = user_blocks.iter().map(|(n, h, _)| (n.to_ascii_uppercase(), h.clone())).collect();
     // Dimension blocks.
     let mut dim_defs: Vec<(String, String, Vec<Entity>)> = Vec::new(); // filled below
@@ -2549,6 +2682,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     scale_list(&mut w, &scales, &scale_dict, &root_dict);
     write_xclips(&mut w, &cx.xclips, &every);
+    // Texts' fields: extension dictionary, ACAD_FIELD dictionary, the `_text` field and its fields.
+    for p in cx.field_plans.take() {
+        write_fields(&mut w, &p);
+    }
     // Dimension associativity: extension dictionary + DIMASSOC per dimension.
     let mut assoc: Vec<(&Handle, &AssocObj)> = cx.assoc.iter().collect();
     assoc.sort_by_key(|(h, _)| **h);

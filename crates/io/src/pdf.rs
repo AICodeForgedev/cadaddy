@@ -411,6 +411,8 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
         skip_viewport: None,
         cancel: None,
         projection: None,
+        // Fields' grey backgrounds are for the screen; plots don't show them.
+        field_shading: false,
     };
     let k = unit_mm * PT_PER_MM;
     let window = o.window.filter(|w| matches!(space, Space::Model) && !w.is_empty());

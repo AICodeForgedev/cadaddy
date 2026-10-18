@@ -361,6 +361,8 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         skip_viewport: split,
         cancel: None,
         projection: st.list_projection(),
+        // FIELDDISPLAY: fields on a grey background (on screen only).
+        field_shading: st.doc.header.i64("FIELDDISPLAY", 1) != 0,
     };
     if view_only {
         let t = Tokens::get();
@@ -521,6 +523,7 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
             transparency,
             cancel: None,
             projection: None,
+            field_shading: st.doc.header.i64("FIELDDISPLAY", 1) != 0,
         };
         c.list = cadaddy_render::viewport_content(&st.doc, &st.space, h, area, &opts);
         c.key = Some(key);

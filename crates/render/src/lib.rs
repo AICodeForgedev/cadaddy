@@ -292,6 +292,8 @@ pub struct Options {
     /// A 3D view of model space (`None`: the plan view). The list is then built on the view
     /// plane: planar objects through the map of their plane, 3D objects point by point.
     pub projection: Option<cadaddy_geom::view3::Projection>,
+    /// Shade field values with a grey box (FIELDDISPLAY, on screen only).
+    pub field_shading: bool,
 }
 
 impl Options {
@@ -316,6 +318,7 @@ impl Default for Options {
             transparency: false,
             cancel: None,
             projection: None,
+            field_shading: false,
         }
     }
 }
@@ -1264,8 +1267,19 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if !b.opts.text {
                 return;
             }
-            let (sh, _) = place_text_entity(ctx.d, t, &t.value);
-            b.shaped(ctx, rgb, lw, &sh);
+            let mut vals = field_values(ctx.d, e.handle);
+            match with_fields(&t.value, &mut vals, b.opts.field_shading) {
+                Some(marked) => {
+                    text_field_boxes(b, ctx, t, &marked);
+                    let plain: String = marked.chars().filter(|c| *c != cadaddy_fonts::FIELD_ON && *c != cadaddy_fonts::FIELD_OFF).collect();
+                    let (sh, _) = place_text_entity(ctx.d, t, &plain);
+                    b.shaped(ctx, rgb, lw, &sh);
+                }
+                None => {
+                    let (sh, _) = place_text_entity(ctx.d, t, &t.value);
+                    b.shaped(ctx, rgb, lw, &sh);
+                }
+            }
         }
         EntityKind::AttDef(a) => {
             let (sh, _) = place_text_entity(ctx.d, &a.text, &a.tag);
@@ -1275,6 +1289,9 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if !b.opts.text {
                 return;
             }
+            let mut vals = field_values(ctx.d, e.handle);
+            let substituted = with_fields(&t.contents, &mut vals, b.opts.field_shading).map(|contents| cadaddy_doc::MText { contents, ..t.clone() });
+            let t = substituted.as_ref().unwrap_or(t);
             if let Some(bg) = &t.background {
                 let layer = if e.common.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { e.common.layer.as_str() };
                 let layer_color = ctx.layer_color(layer).unwrap_or(Color::Index(7));
@@ -1478,6 +1495,79 @@ pub fn place_text_entity(d: &Drawing, t: &cadaddy_doc::Text, value: &str) -> (ca
     cadaddy_fonts::place(&font, value, &p)
 }
 
+/// The grey behind field values on screen (FIELDDISPLAY).
+const FIELD_INK: Ink = Ink { rgb: Rgb(128, 128, 128), aci7: false, aci: 8 };
+
+/// The values fields of object `h` last evaluated to.
+fn field_values(d: &Drawing, h: Handle) -> std::slice::Iter<'_, String> {
+    d.field_values.get(&h).map_or([].iter(), |v| v.iter())
+}
+
+/// `s` with its fields' values (taken from `vals`) in place of their codes, each value between
+/// [`cadaddy_fonts::FIELD_ON`] and [`cadaddy_fonts::FIELD_OFF`] when `marked`; `None` when `s`
+/// holds no field.
+fn with_fields(s: &str, vals: &mut std::slice::Iter<'_, String>, marked: bool) -> Option<String> {
+    if !cadaddy_doc::field::has_fields(s) {
+        return None;
+    }
+    let marks = marked.then_some((cadaddy_fonts::FIELD_ON, cadaddy_fonts::FIELD_OFF));
+    Some(cadaddy_doc::field::substitute(s, &mut vals.by_ref().map(String::as_str), marks))
+}
+
+/// Grey boxes behind the field values of a single-line text (`marked` holds the values between
+/// field marks), from the widths of the text before and in each value.
+fn text_field_boxes(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::Text, marked: &str) {
+    if !marked.contains(cadaddy_fonts::FIELD_ON) {
+        return;
+    }
+    let ts = text_style(ctx.d, &t.style);
+    if ts.backwards || ts.upside_down {
+        return;
+    }
+    let font = cadaddy_fonts::TextFont::resolve(&ts.font);
+    let h = t.height;
+    let width = |s: &str| cadaddy_fonts::text_width(&font, s, h, t.width_factor);
+    let plain: String = marked.chars().filter(|c| *c != cadaddy_fonts::FIELD_ON && *c != cadaddy_fonts::FIELD_OFF).collect();
+    let total = width(&plain);
+    let align_pt = t.align_pt.unwrap_or(t.insert).xy();
+    use cadaddy_doc::{HAlign, VAlign};
+    let (anchor, x0) = match t.halign {
+        HAlign::Left => (t.insert.xy(), 0.0),
+        HAlign::Center | HAlign::Middle => (align_pt, -total / 2.0),
+        HAlign::Right => (align_pt, -total),
+        HAlign::Aligned | HAlign::Fit => return,
+    };
+    let y0 = match (t.halign, t.valign) {
+        (HAlign::Middle, _) | (_, VAlign::Middle) => -h / 2.0,
+        (_, VAlign::Top) => -h,
+        (_, VAlign::Bottom) => h * 0.3,
+        _ => 0.0,
+    };
+    let (sin, cos) = t.rotation.sin_cos();
+    let world = |q: Vec2| anchor + Vec2::new(q.x * cos - q.y * sin, q.x * sin + q.y * cos);
+    let mut before = String::new();
+    let mut start: Option<f64> = None;
+    for c in marked.chars() {
+        match c {
+            cadaddy_fonts::FIELD_ON => start = Some(width(&before)),
+            cadaddy_fonts::FIELD_OFF => {
+                if let Some(a) = start.take() {
+                    let w = width(&before) - a;
+                    let q = [
+                        Vec2::new(x0 + a, y0 - h * 0.3),
+                        Vec2::new(x0 + a + w, y0 - h * 0.3),
+                        Vec2::new(x0 + a + w, y0 + h * 1.2),
+                        Vec2::new(x0 + a, y0 + h * 1.2),
+                    ]
+                    .map(world);
+                    b.tris(ctx, FIELD_INK, &[q[0], q[1], q[2], q[0], q[2], q[3]]);
+                }
+            }
+            c => before.push(c),
+        }
+    }
+}
+
 /// Lay out an MTEXT with its style's font.
 pub fn layout_mtext_entity(d: &Drawing, t: &cadaddy_doc::MText) -> cadaddy_fonts::MTextLayout {
     let ts = text_style(d, &t.style);
@@ -1557,6 +1647,9 @@ fn mtext_mask(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::MText, bg: &cadaddy_d
 
 fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::MText, rgb: Ink, lw: f32) {
     let l = layout_mtext_entity(ctx.d, t);
+    for q in &l.fields {
+        b.tris(ctx, FIELD_INK, &[q[0], q[1], q[2], q[0], q[2], q[3]]);
+    }
     for p in &l.pieces {
         b.shaped(ctx, mtext_color(p.color, rgb), lw, &p.shaped);
     }
@@ -1872,7 +1965,15 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
         let attmode = ctx.d.header.i64("ATTMODE", 1);
         // The reference's transparency; each attribute draws with its own.
         let reference = b.transparency;
+        let mut vals = field_values(ctx.d, e.handle);
         for a in &ins.attribs {
+            // Field values are counted over every attribute, shown or not.
+            let with = with_fields(&a.text.value, &mut vals, false).map(|value| {
+                let mut a = a.clone();
+                a.text.value = value;
+                a
+            });
+            let a = with.as_ref().unwrap_or(a);
             if attmode == 0 || (a.invisible && attmode != 2) {
                 continue;
             }

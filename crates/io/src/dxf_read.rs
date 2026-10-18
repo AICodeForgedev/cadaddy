@@ -1009,6 +1009,12 @@ struct Rx {
     table_style_fix: Vec<(Handle, String)>,
     /// Multileaders' style handles and block attribute values, resolved with the objects.
     mleader_fix: Vec<(Handle, crate::dxf_mleader::Pending)>,
+    /// Texts, attribute definitions and block references whose extension dictionaries may hold
+    /// fields, resolved with the objects.
+    text_fields: Vec<crate::dxf_field::Pending>,
+    /// The extension dictionaries of the attributes of the block reference being read: (index,
+    /// dictionary handle).
+    attrib_xdicts: Vec<(usize, String)>,
     /// Upper-case xref block name → the external drawing's path (BLOCK group 1).
     xref_paths: HashMap<String, String>,
     /// Plot style name placeholder handle (upper case) → plot style name (`ACAD_PLOTSTYLENAME`).
@@ -1076,6 +1082,22 @@ fn entity_plot_style(tags: &[Tag], rx: &Rx) -> Option<String> {
 /// Dimension overrides and associativity, table references: data of an entity record that
 /// needs the file's handle maps.
 fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &mut Rx) {
+    // Fields: a text's extension dictionary, or its attributes'.
+    if rx.text_fields.len() < crate::dxf_field::MAX_FIELDS {
+        match kind {
+            "TEXT" | "MTEXT" | "ATTDEF" => {
+                if let Some(x) = crate::dxf_field::xdict_of(tags) {
+                    rx.text_fields.push(crate::dxf_field::Pending { entity: h, slot: crate::dxf_field::Slot::Own, xdict: x });
+                }
+            }
+            "INSERT" => {
+                for (i, x) in std::mem::take(&mut rx.attrib_xdicts) {
+                    rx.text_fields.push(crate::dxf_field::Pending { entity: h, slot: crate::dxf_field::Slot::Attrib(i), xdict: x });
+                }
+            }
+            _ => {}
+        }
+    }
     match (kind, k) {
         ("DIMENSION", EntityKind::Dimension(dm)) => {
             dm.overrides = crate::dxf_ext::read_dstyle(tags, &rx.styles, &rx.brs, &rx.ltypes);
@@ -1204,11 +1226,15 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx, ski
                 kindent = Some((c, k));
             }
             "INSERT" => {
+                rx.attrib_xdicts.clear();
                 if t.i(66) == Some(1) {
                     let mut attribs = Vec::new();
                     let ins_layer = kindent.as_ref().map(|(c, _)| c.layer.clone()).unwrap_or_default();
                     while let Some((k2, t2)) = recs.get(i) {
                         if k2 == "ATTRIB" {
+                            if let Some(x) = crate::dxf_field::xdict_of(t2) {
+                                rx.attrib_xdicts.push((attribs.len(), x));
+                            }
                             attribs.push(attrib_from_groups(t2, &ins_layer));
                             i += 1;
                         } else {
@@ -1992,6 +2018,10 @@ struct Objects {
     layout_views: Vec<(String, (Vec2, f64))>,
     /// SORTENTSTABLE objects: (owning block record handle, entity handle → sort handle).
     sortents: Vec<(String, HashMap<Handle, u64>)>,
+    /// FIELD objects by handle.
+    fields: HashMap<String, Vec<Tag>>,
+    /// Dictionaries that lead to fields (an `ACAD_FIELD` or `TEXT` entry) by handle.
+    field_dicts: HashMap<String, Vec<Tag>>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -2008,6 +2038,9 @@ impl Objects {
                 }
             }
             "DICTIONARY" => {
+                if self.field_dicts.len() < MAX_OBJECTS && tags.iter().any(|t| t.code == 3 && matches!(t.str().trim(), "ACAD_FIELD" | "TEXT")) {
+                    self.field_dicts.insert(h.clone(), tags.to_vec());
+                }
                 let mut name: Option<String> = None;
                 for t in tags {
                     match t.code {
@@ -2022,6 +2055,9 @@ impl Objects {
                         _ => {}
                     }
                 }
+            }
+            "FIELD" if self.fields.len() < crate::dxf_field::MAX_FIELDS => {
+                self.fields.insert(h, tags.to_vec());
             }
             "XRECORD" if self.xrecords.len() < MAX_OBJECTS => {
                 self.xrecords.insert(h, tags.to_vec());
@@ -2060,6 +2096,8 @@ impl Objects {
     }
 
     fn apply(self, d: &mut Drawing, rx: &Rx) {
+        // Fields: codes back into their texts, cached values kept.
+        crate::dxf_field::apply(d, &rx.text_fields, &self.fields, &self.field_dicts);
         if let Some(style) = self.xrecord_text(crate::dxf_ext::MLEADER_STYLE_KEY).filter(|s| !s.trim().is_empty()) {
             d.header.set_str("CMLEADERSTYLE", &style);
         }

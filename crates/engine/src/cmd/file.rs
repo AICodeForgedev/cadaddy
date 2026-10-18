@@ -370,6 +370,13 @@ fn add_read(s: &mut Session, mut drawing: Drawing, binary_dxf: bool, name: &str,
         st.read_loss = loss.filter(|_| has_path);
         st.open_notes = reset.clone();
     }
+    // Fields worked out on opening (FIELDEVAL 1): what they show isn't an edit to save.
+    if s.active == i
+        && crate::fields::on_event(s, crate::fields::Event::Open) > 0
+        && let Some(st) = s.docs.get_mut(i)
+    {
+        st.saved = st.doc.clone();
+    }
     for note in notes.into_iter().chain(reset) {
         s.echo(note);
     }
@@ -551,6 +558,10 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<usiz
                 format!("{} is open in another tab ({}). Close it first, or save under another name.", file_name(path), other.1.title),
             ));
         }
+    }
+    // The save date, and fields worked out on saving (FIELDEVAL 2).
+    if is_drawing_file(path) {
+        crate::fields::on_save(s);
     }
     let bytes = write_bytes(s, cmd, path, opts)?;
     let n = commit_save(s, path, &bytes, store)?;

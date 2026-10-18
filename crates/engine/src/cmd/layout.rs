@@ -833,6 +833,8 @@ fn plot_sheets(cmd: &str, d: &cadaddy_doc::Drawing, v: &Value) -> Result<Vec<Str
 /// are off on hidden PDF layers), `links?: [{handle, url}]` (hyperlinks) and `title?`.
 fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let hook = io().and_then(|h| h.plot).ok_or_else(|| bad(cmd, "plotting is not available in this build"))?;
+    // Fields worked out on plotting (FIELDEVAL 4): PlotDate is now.
+    crate::fields::on_event(s, crate::fields::Event::Plot);
     // Checked here for a clear error; the plotter resolves the names the same way.
     let sheets = p.get("layouts").map(|v| plot_sheets(cmd, s.doc()?, v)).transpose()?;
 
