@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(AreaM::default()))),
         CommandSpec::new("time", "Time", run_time).menu(&["Tools", "Inquiry", "Time"]).noundo(),
         CommandSpec::new("status", "Status", run_status).menu(&["Tools", "Inquiry", "Status"]).noundo(),
-        CommandSpec::new("drawing.inspect", "Inspect Drawing", run_inspect).params("{entities?: bool, limit?: n}").noundo(),
+        CommandSpec::new("drawing.inspect", "Inspect Drawing", run_inspect).params("{entities?: bool, limit?: n, index? (another open drawing, as DOCUMENT.LIST numbers them)}").noundo(),
         CommandSpec::new("entities", "Query Entities", run_entities)
             .params("{type?, layer?, window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
             .noundo(),
@@ -293,7 +293,14 @@ fn entity_summary(e: &cadaddy_doc::Entity) -> Value {
 }
 
 fn run_inspect(s: &mut Session, p: &Value) -> Result<Value> {
-    let st = s.state()?;
+    // Another open drawing (by its place in DOCUMENT.LIST), without switching to it.
+    let st = match p.get("index").filter(|v| !v.is_null()) {
+        Some(i) => {
+            let i = i.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad("drawing.inspect", "`index` is a drawing number"))?;
+            s.docs.get(i).ok_or_else(|| bad("drawing.inspect", format!("there is no open drawing {i}")))?
+        }
+        None => s.state()?,
+    };
     let d = &st.doc;
     let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
     let space = st.space.clone();
