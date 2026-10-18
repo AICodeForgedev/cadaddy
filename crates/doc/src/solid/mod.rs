@@ -14,6 +14,14 @@ use serde::{Deserialize, Serialize};
 
 use std::f64::consts::{PI, TAU};
 
+pub mod bsp;
+mod csg;
+mod edit;
+mod tri;
+pub use csg::*;
+pub use edit::*;
+pub use tri::triangulate;
+
 /// A 3D solid: its definition in its own coordinates, and where those are in the drawing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,6 +93,12 @@ pub enum SolidShape {
     /// Closed cross sections passed through in order.
     Loft {
         sections: Vec<Vec<Vec3>>,
+    },
+    /// Two solids combined (UNION, SUBTRACT, INTERSECT), each placed in this solid's coordinates.
+    Boolean {
+        op: BoolOp,
+        a: Box<Solid3d>,
+        b: Box<Solid3d>,
     },
 }
 
@@ -271,11 +285,26 @@ impl Solid3d {
             SolidShape::Revolution { .. } => "Revolve",
             SolidShape::Sweep { .. } => "Sweep",
             SolidShape::Loft { .. } => "Loft",
+            SolidShape::Boolean { .. } => "Composite",
         }
     }
 
-    /// Whether the definition is usable: finite, positive dimensions within [`MAX_SOLID_SIZE`].
+    /// Whether the definition is usable: finite, positive dimensions within [`MAX_SOLID_SIZE`];
+    /// a composite no deeper than [`MAX_CSG_DEPTH`] with at most [`MAX_CSG_LEAVES`] leaves.
     pub fn is_valid(&self) -> bool {
+        let mut nodes = 0usize;
+        self.valid_at(0, &mut nodes)
+    }
+
+    fn valid_at(&self, depth: usize, nodes: &mut usize) -> bool {
+        *nodes += 1;
+        if *nodes > 2 * MAX_CSG_LEAVES || depth > MAX_CSG_DEPTH {
+            return false;
+        }
+        if let SolidShape::Boolean { a, b, .. } = &self.shape {
+            let xf_ok = self.xf.m.iter().flatten().all(|v| v.is_finite()) && det3(&self.xf).abs() > 1e-300;
+            return xf_ok && a.valid_at(depth + 1, nodes) && b.valid_at(depth + 1, nodes);
+        }
         let ok = |v: f64| v.is_finite() && v > 0.0 && v <= MAX_SOLID_SIZE;
         let ok0 = |v: f64| v.is_finite() && (0.0..=MAX_SOLID_SIZE).contains(&v);
         let xf_ok = self.xf.m.iter().flatten().all(|v| v.is_finite()) && det3(&self.xf).abs() > 1e-300;
@@ -309,6 +338,7 @@ impl Solid3d {
                         && path.len() <= MAX_STATIONS
                         && path.iter().all(|p| p.is_finite())
                 }
+                SolidShape::Boolean { .. } => false,
                 SolidShape::Loft { sections } => {
                     sections.len() >= 2
                         && sections.len() <= MAX_STATIONS
@@ -457,12 +487,16 @@ impl Solid3d {
                 Rings { stations, wrap: false, caps: true, section_wires: vec![0, last], long_wires: ls.iter().map(|(_, c)| c.clone()).collect() }
             }
             SolidShape::Loft { sections } => loft_rings(sections),
+            SolidShape::Boolean { .. } => Rings::default(),
         }
     }
 
     /// The display curves (silhouette-free wireframe: section loops and lines along corners), in
     /// drawing coordinates.
     pub fn wires(&self, tol: f64) -> Vec<Vec<Vec3>> {
+        if matches!(self.shape, SolidShape::Boolean { .. }) {
+            return self.feature_edges(tol).into_iter().map(|[a, b]| vec![a, b]).collect();
+        }
         let r = self.rings(tol);
         let mut out = Vec::new();
         for &s in &r.section_wires {
@@ -534,6 +568,16 @@ impl Solid3d {
     /// without taper (under rotations, moves and uniform scales); otherwise from the surfaces at
     /// `tol`.
     pub fn props(&self, tol: f64) -> SolidProps {
+        if matches!(self.shape, SolidShape::Boolean { .. }) {
+            let polys = self.polys(tol);
+            let (mut min, mut max) = (Vec3::new(f64::MAX, f64::MAX, f64::MAX), Vec3::new(f64::MIN, f64::MIN, f64::MIN));
+            for p in polys.iter().flat_map(|p| p.pts.iter()) {
+                min = Vec3::new(min.x.min(p.x), min.y.min(p.y), min.z.min(p.z));
+                max = Vec3::new(max.x.max(p.x), max.y.max(p.y), max.z.max(p.z));
+            }
+            let (volume, area, centroid) = bsp::mass(&polys);
+            return SolidProps { volume, area, centroid, min, max };
+        }
         let r = self.rings(tol);
         let (mut min, mut max) = (Vec3::new(f64::MAX, f64::MAX, f64::MAX), Vec3::new(f64::MIN, f64::MIN, f64::MIN));
         for p in r.stations.iter().flatten().flatten() {
@@ -687,7 +731,7 @@ impl Solid3d {
                 let p = loops.first().and_then(|l| l.first()).map_or(Vec2::ZERO, |v| v.p);
                 g.push((Vec3::new(p.x, p.y, *height), z, Dim::Height));
             }
-            SolidShape::Revolution { .. } | SolidShape::Sweep { .. } | SolidShape::Loft { .. } => {}
+            SolidShape::Revolution { .. } | SolidShape::Sweep { .. } | SolidShape::Loft { .. } | SolidShape::Boolean { .. } => {}
         }
         g
     }
@@ -737,9 +781,10 @@ impl Solid3d {
     /// A tolerance for drawing the solid as a whole (a 4000th of its size): what files store
     /// and EXPLODE makes, and what picking and 3D extents use.
     pub fn mesh_tol(&self) -> f64 {
-        let r = self.rings(f64::MAX);
+        let leaves = self.leaves();
+        let rings: Vec<Rings> = leaves.iter().map(|(_, l)| l.rings(f64::MAX)).collect();
         let (mut lo, mut hi) = (Vec3::new(f64::MAX, f64::MAX, f64::MAX), Vec3::new(f64::MIN, f64::MIN, f64::MIN));
-        for q in r.stations.iter().flatten().flatten() {
+        for q in rings.iter().flat_map(|r| r.stations.iter().flatten().flatten()) {
             lo = Vec3::new(lo.x.min(q.x), lo.y.min(q.y), lo.z.min(q.z));
             hi = Vec3::new(hi.x.max(q.x), hi.y.max(q.y), hi.z.max(q.z));
         }

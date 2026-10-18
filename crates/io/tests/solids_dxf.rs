@@ -87,3 +87,28 @@ fn a_damaged_definition_falls_back_to_the_mesh() {
     let d = read_dxf(text.as_bytes()).unwrap();
     assert_eq!(back(&d).len(), solids().len() - 1);
 }
+
+#[test]
+fn composites_round_trip_and_save_their_result_as_the_mesh() {
+    let mut hole = Solid3d::new(SolidShape::Frustum { base_radius: 1.0, top_radius: 1.0, height: 4.0 });
+    hole.transform(&placement(Vec3::new(1.5, 1.0, -1.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)));
+    let holed = combine(Solid3d::new(SolidShape::Box { length: 3.0, width: 2.0, height: 1.0 }), hole, BoolOp::Subtract);
+    let mut d = Drawing::new_metric();
+    d.add(&Space::Model, Common::default(), EntityKind::Solid3d(Box::new(holed.clone()))).unwrap();
+    for version in [Version::R2018, Version::R2000] {
+        let bytes = write_with(&d, "x.dxf", &SaveOptions { version: Some(version), binary: false }).unwrap();
+        assert_eq!(back(&read_dxf(&bytes).unwrap()), vec![holed.clone()], "{version:?}");
+        // Other programs see the box with its hole.
+        let text = String::from_utf8_lossy(&bytes).replace("SOLID3D", "SOMETHING");
+        let m = read_dxf(text.as_bytes())
+            .unwrap()
+            .model
+            .iter()
+            .find_map(|e| if let EntityKind::Mesh(m) = &e.kind { Some(m.clone()) } else { None })
+            .unwrap();
+        let exact = 6.0 - std::f64::consts::PI;
+        assert!((mesh_volume(&m) - exact).abs() < 1e-2 * exact, "{version:?}: {}", mesh_volume(&m));
+    }
+    let dwg = cadaddy_io::write(&d, "x.dwg").unwrap();
+    assert_eq!(back(&cadaddy_io::read(&dwg, "x.dwg").unwrap()), vec![holed]);
+}

@@ -12,6 +12,9 @@ use lyon_tessellation::{FillOptions, FillTessellator, FillVertex, VertexSource};
 /// The solid's surfaces to `tol` as one closed mesh, display curves visible and the
 /// tessellation's own edges hidden.
 pub fn solid_mesh(s: &Solid3d, tol: f64) -> Mesh {
+    if matches!(s.shape, cadaddy_doc::SolidShape::Boolean { .. }) {
+        return composite_mesh(s, tol);
+    }
     let r = s.rings(tol);
     let mut vertices: Vec<Vec3> = Vec::new();
     let mut faces: Vec<MeshFace> = Vec::new();
@@ -91,6 +94,61 @@ pub fn solid_mesh(s: &Solid3d, tol: f64) -> Mesh {
         }
     }
     mesh
+}
+
+/// A composite solid's polygons, their corners welded, the edges between faces visible.
+fn composite_mesh(s: &Solid3d, tol: f64) -> Mesh {
+    let polys = s.polys(tol);
+    let scale = polys.iter().flat_map(|p| p.pts.iter()).fold(1.0f64, |m, p| m.max(p.x.abs()).max(p.y.abs()).max(p.z.abs()));
+    let quantum = scale * 1e-9;
+    let key = |p: Vec3| [(p.x / quantum).round() as i64, (p.y / quantum).round() as i64, (p.z / quantum).round() as i64];
+    let mut ids: std::collections::HashMap<[i64; 3], u32> = std::collections::HashMap::new();
+    let mut vertices: Vec<Vec3> = Vec::new();
+    let mut faces: Vec<MeshFace> = Vec::new();
+    let features = cadaddy_doc::feature_edges(&polys);
+    // An edge is visible where it lies along a feature segment.
+    let on_feature = |a: Vec3, b: Vec3| {
+        let m = (a + b) * 0.5;
+        features.iter().any(|[p, q]| {
+            let d = *q - *p;
+            let l2 = d.dot(d);
+            if l2 <= 0.0 {
+                return false;
+            }
+            let t = (m - *p).dot(d) / l2;
+            let near = |x: Vec3| {
+                let tt = (x - *p).dot(d) / l2;
+                (*p + d * tt - x).len() <= quantum * 100.0
+            };
+            (-1e-9..=1.0 + 1e-9).contains(&t) && near(a) && near(b)
+        })
+    };
+    for p in polys.iter() {
+        if vertices.len() > cadaddy_doc::MAX_MESH_VERTICES || faces.len() > cadaddy_doc::MAX_MESH_FACES {
+            break;
+        }
+        let mut v: Vec<u32> = Vec::with_capacity(p.pts.len());
+        for q in &p.pts {
+            let id = *ids.entry(key(*q)).or_insert_with(|| {
+                vertices.push(*q);
+                u32::try_from(vertices.len() - 1).unwrap_or(u32::MAX)
+            });
+            if v.last() != Some(&id) {
+                v.push(id);
+            }
+        }
+        if v.len() > 1 && v.first() == v.last() {
+            v.pop();
+        }
+        if v.len() < 3 {
+            continue;
+        }
+        let n = p.pts.len();
+        let hidden = (0..n.min(64)).filter(|&k| !on_feature(p.pts[k], p.pts[(k + 1) % n])).fold(0u64, |h, k| h | 1 << k);
+        let hidden = if v.len() == n { hidden } else { 0 };
+        faces.push(MeshFace { v, hidden });
+    }
+    Mesh { vertices, faces, kind: MeshKind::Subd }
 }
 
 /// One planar end: a single face for one loop, triangles for a profile with holes. `flip`

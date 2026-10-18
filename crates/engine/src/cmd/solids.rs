@@ -2,7 +2,10 @@
 //! made from closed profiles (EXTRUDE, REVOLVE, SWEEP, LOFT, PRESSPULL). Each makes a
 //! [`cadaddy_doc::Solid3d`]: CADaddy's own exact solid, drawn from its definition.
 
+mod edits;
 mod prompts;
+
+pub(crate) use edits::solid_boolean;
 
 use cadaddy_doc::{Drawing, Entity, EntityKind, Handle, Solid3d, SolidShape, placement};
 use cadaddy_geom::{PolyVertex, Vec2, Vec3};
@@ -13,7 +16,8 @@ use super::{CommandSpec, bad, bool_or, size_param, targets};
 use crate::{EngineError, Result, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![
+    let mut v = edits::specs();
+    v.extend(vec![
         CommandSpec::new("box", "Box", run_box)
             .menu(&["Draw", "Modeling", "Box"])
             .params("{corner: [x,y,z?], length, width?, height?} | {corner, opposite: [x,y], height} | {center, length, width?, height?} (cube when width/height are left out; a negative height goes down)")
@@ -68,7 +72,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Draw", "Modeling", "Presspull"])
             .params("{point: [x,y], height} — the closed area around the point, extruded (negative: down)")
             .interactive(|_| Ok(Box::new(prompts::PresspullM::default()))),
-    ]
+    ]);
+    v
 }
 
 /// Most solids one command makes.
@@ -594,7 +599,7 @@ pub(crate) fn set_solid_props(so: &mut Solid3d, p: &Value) {
             num("taper").into_iter().for_each(|v| *taper = v.to_radians());
         }
         SolidShape::Revolution { angle, .. } => num("angle").into_iter().for_each(|v| *angle = v.to_radians()),
-        SolidShape::Sweep { .. } | SolidShape::Loft { .. } => {}
+        SolidShape::Sweep { .. } | SolidShape::Loft { .. } | SolidShape::Boolean { .. } => {}
     }
     if next.is_valid() {
         *so = next;
