@@ -177,6 +177,9 @@ pub struct DocState {
     /// The user was told that saving over the file would lose what reading left out: saving
     /// again overwrites it.
     pub loss_warned: bool,
+    /// What opening the drawing changed and told the user (missing current styles reset): the
+    /// OPEN reply lists them with its warnings, for agents that see no command-line history.
+    pub open_notes: Vec<String>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -205,6 +208,7 @@ impl DocState {
             binary_dxf: false,
             read_loss: None,
             loss_warned: false,
+            open_notes: Vec::new(),
             block_edit: None,
         }
     }

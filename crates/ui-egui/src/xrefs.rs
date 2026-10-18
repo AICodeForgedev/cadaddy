@@ -18,6 +18,15 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
     }
     match cadaddy_engine::cmd::resolve_alias(id).as_str() {
         "xref" => Some(open_palette(app)),
+        "imageattach" | "attach" => {
+            let picked = app.services.pick_image.as_ref().and_then(|f| f())?;
+            let path = relative_to_host(app, &picked);
+            if let Err(e) = app.session.start("imageattach") {
+                return Some(Err(e.to_string()));
+            }
+            app.cmdline(&path);
+            Some(Ok(Value::Null))
+        }
         "xattach" => {
             let picked = app.services.pick_open.as_ref().and_then(|f| f())?;
             let path = relative_to_host(app, &picked);

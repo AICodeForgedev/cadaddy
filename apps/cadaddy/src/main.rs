@@ -145,6 +145,12 @@ fn services() -> Services {
                 .map(|p| p.to_string_lossy().to_string())
         })),
         pick_pdf: Some(Box::new(|| rfd::FileDialog::new().add_filter(i18n::t("PDF"), &["pdf"]).pick_file().map(|p| p.to_string_lossy().to_string()))),
+        pick_image: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter(i18n::t("Images (PNG, JPEG)"), &["png", "jpg", "jpeg"])
+                .pick_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
         pick_save: Some(Box::new(|name: &str| {
             filters_for_save(name)
                 .iter()

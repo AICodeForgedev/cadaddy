@@ -169,6 +169,7 @@ mod tests {
         let (a, b) = (asked.clone(), asked.clone());
         let services = Services {
             pick_pdf: None,
+            pick_image: None,
             pick_open: Some(Box::new(move || {
                 a.borrow_mut().push("open".into());
                 None

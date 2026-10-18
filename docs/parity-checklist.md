@@ -4,14 +4,14 @@
 
 Menu-breadth parity: a reference menu item counts as covered when a CADaddy command is registered under the same menu label. It measures breadth, not depth; see [target-app-parity.md](target-app-parity.md) for the weighted assessment.
 
-**Menu breadth: 292 / 491 items (59%)** · 449 registered commands.
+**Menu breadth: 293 / 491 items (60%)** · 450 registered commands.
 
 | Menu | Items | Covered | % |
 |---|---|---|---|
 | File | 22 | 13 | 59% |
 | Edit | 13 | 11 | 85% |
 | View | 75 | 40 | 53% |
-| Insert | 11 | 5 | 45% |
+| Insert | 11 | 6 | 55% |
 | Format | 27 | 25 | 93% |
 | Tools | 85 | 59 | 69% |
 | Draw | 87 | 55 | 63% |
@@ -69,7 +69,6 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - View > Lights
 - View > Enter Full Screen
 - Insert > PDF Underlay...
-- Insert > Raster Image Reference...
 - Insert > Field...
 - Insert > Layout > Layout from Template...
 - Insert > ACIS File...

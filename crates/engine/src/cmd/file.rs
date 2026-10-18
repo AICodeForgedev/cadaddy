@@ -351,6 +351,7 @@ fn add_read(s: &mut Session, mut drawing: Drawing, binary_dxf: bool, name: &str,
         // QSAVE keeps a binary DXF binary.
         st.binary_dxf = binary_dxf;
         st.read_loss = loss.filter(|_| has_path);
+        st.open_notes = reset.clone();
     }
     for note in notes.into_iter().chain(reset) {
         s.echo(note);
@@ -406,6 +407,7 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
 fn opened(s: &Session, i: usize, entities: bool) -> Value {
     let d = s.docs.get(i).map(|st| &st.doc);
     let mut warnings = d.map(|d| d.read_notes.clone()).unwrap_or_default();
+    warnings.extend(s.docs.get(i).map(|st| st.open_notes.clone()).unwrap_or_default());
     // Xrefs that didn't load, and why (agents see no command-line history).
     if let Some(d) = d {
         for b in d.blocks.values().filter(|b| b.xref_path.is_some() && !b.xref_reason.is_empty()) {

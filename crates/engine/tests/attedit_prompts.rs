@@ -83,10 +83,7 @@ fn dash_attedit_one_at_a_time_edits_the_selected_attributes() {
     let mut s = with_block();
     let h = handle(&insert(&mut s, 100.0, json!({"T": "abc"})));
     type_lines(&mut s, &["-attedit", "y", "", "T", "", "105,0", ""]);
-    assert!(s.prompt_text().contains("[Value/Layer/Color/Next] <N>"), "{}", s.prompt_text());
-    // Unsupported options say so and keep the prompt.
-    s.cmdline("p").unwrap();
-    assert!(s.log.iter().any(|l| l.contains("Position is not available yet")), "{:?}", s.log);
+    assert!(s.prompt_text().contains("[Value/Position/Height/Angle/Style/Layer/Color/Next] <N>"), "{}", s.prompt_text());
     type_lines(&mut s, &["v", "c", "b", "B", "v", "r", "replaced value", "n"]);
     assert!(s.running.is_none(), "{}", s.prompt_text());
     assert_eq!(value(&s, h, "T"), "replaced value");
@@ -108,4 +105,35 @@ fn attribute_tags_match_in_any_case_and_unknown_tags_are_reported() {
 
     let r = s.execute("attedit", &json!({"handle": h.hex(), "values": {"T": "four"}})).unwrap();
     assert_eq!(r, json!({"changed": 1}));
+}
+
+fn text_of(s: &Session, h: Handle, tag: &str) -> cadaddy_doc::Text {
+    let EntityKind::Insert(i) = &s.doc().unwrap().entity(h).unwrap().kind else { panic!("not an insert") };
+    i.attribs.iter().find(|a| a.tag == tag).unwrap().text.clone()
+}
+
+#[test]
+fn dash_attedit_one_at_a_time_moves_resizes_turns_and_restyles() {
+    let mut s = with_block();
+    s.execute("style", &json!({"name": "NARROW"})).unwrap();
+    let h = handle(&insert(&mut s, 100.0, json!({"T": "abc"})));
+    let before = text_of(&s, h, "T");
+    type_lines(&mut s, &["-attedit", "y", "", "T", "", "105,0", ""]);
+    // Position moves the text to the point; height, angle and style take typed values.
+    let to = format!("{},{}", before.insert.x + 3.0, before.insert.y + 4.0);
+    type_lines(&mut s, &["p", &to, "h", "0.75", "a", "90", "s", "narrow"]);
+    let t = text_of(&s, h, "T");
+    assert!((t.insert.x - before.insert.x - 3.0).abs() < 1e-9 && (t.insert.y - before.insert.y - 4.0).abs() < 1e-9, "{t:?}");
+    assert!((t.height - 0.75).abs() < 1e-12);
+    assert!((t.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+    assert_eq!(t.style.to_ascii_uppercase(), "NARROW");
+    // Enter keeps a value; a bad height or style is refused and changes nothing.
+    type_lines(&mut s, &["h", "", "h", "-2"]);
+    assert!(s.log.iter().any(|l| l.contains("positive")), "{:?}", s.log);
+    assert!((text_of(&s, h, "T").height - 0.75).abs() < 1e-12);
+    type_lines(&mut s, &["", "s", "nosuchstyle"]);
+    assert!(s.log.iter().any(|l| l.contains("Cannot find text style")), "{:?}", s.log);
+    type_lines(&mut s, &["", "n"]);
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert_eq!(text_of(&s, h, "T").style.to_ascii_uppercase(), "NARROW");
 }

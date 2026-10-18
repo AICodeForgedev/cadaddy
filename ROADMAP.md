@@ -20,7 +20,7 @@ it has not been re-estimated. Beta was ≈ 600–930 h away on that estimate.
 
 | Number | Value | Kind |
 |---|---|---|
-| Feature breadth (AutoCAD for Mac menu items with a live command) | **59%** (292 / 491; 449 registered commands; 2026-10-18) | measured ([parity-checklist.md](docs/parity-checklist.md), `cargo xtask parity`) |
+| Feature breadth (AutoCAD for Mac menu items with a live command) | **60%** (293 / 491; 450 registered commands; 2026-10-18) | measured ([parity-checklist.md](docs/parity-checklist.md), `cargo xtask parity`) |
 | Ready for real work | **≈ 38%** | estimated ([target-app-parity.md](docs/target-app-parity.md)) |
 | Mainstream practitioner (2D drafter) | **≈ 28%** (lower than the full number: file exchange, stability and interaction discounts multiply) | estimated ([target-app-parity.md](docs/target-app-parity.md#mainstream-practitioner)) |
 | Essentials user | **≈ 46%** | estimated ([target-app-parity.md](docs/target-app-parity.md#essentials-user)) |

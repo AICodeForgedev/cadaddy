@@ -735,3 +735,17 @@ fn drawing_name_variables() {
     assert_eq!(ok(&mut s, "(getvar \"DWGPREFIX\")"), "\"C:\\\\Jobs\\\\A112\\\\\"");
     assert_eq!(ok(&mut s, "(getvar \"DWGTITLED\")"), "1");
 }
+
+#[test]
+fn a_multiline_names_its_style_as_an_entity() {
+    let mut s = session();
+    s.execute("mline", &serde_json::json!({"points": [[0, 0], [10, 0]]})).unwrap();
+    ok(&mut s, "(setq m (entlast) st (cdr (assoc 340 (entget m))))");
+    assert_eq!(ok(&mut s, "(type st)"), "ENAME");
+    assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget st)))"), "\"MLINESTYLE\"");
+    assert_eq!(ok(&mut s, "(strcase (cdr (assoc 2 (entget st))))"), "\"STANDARD\"");
+    // The list goes back in unchanged: the style is found by its name.
+    assert_ne!(ok(&mut s, "(entmake (entget m))"), "nil");
+    assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget (entlast))))"), "\"MLINE\"");
+    assert_eq!(ok(&mut s, "(cdr (assoc 2 (entget (entlast))))"), "\"STANDARD\"");
+}

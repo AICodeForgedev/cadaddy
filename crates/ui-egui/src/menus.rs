@@ -753,6 +753,7 @@ mod tests {
         let log = Rc::clone(&asked);
         let services = Services {
             pick_pdf: None,
+            pick_image: None,
             pick_open: None,
             pick_save: Some(Box::new(move |name: &str| {
                 log.borrow_mut().push(name.to_string());
