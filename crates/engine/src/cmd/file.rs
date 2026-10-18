@@ -338,7 +338,8 @@ fn read_bytes(bytes: &[u8], name: &str, path: Option<String>) -> Result<ReadFile
     Ok(ReadFile { drawing, binary_dxf: cadaddy_dxf::is_binary(bytes), name: name.to_string(), path })
 }
 
-fn add_read(s: &mut Session, drawing: Drawing, binary_dxf: bool, name: &str, path: Option<String>) -> usize {
+fn add_read(s: &mut Session, mut drawing: Drawing, binary_dxf: bool, name: &str, path: Option<String>) -> usize {
+    let reset = crate::audit::current_styles(&mut drawing);
     // Every way a drawing is opened (the OPEN command, the background open, scripts) looks for
     // its relative image paths in its folder first.
     image_folder(path.as_deref());
@@ -351,7 +352,7 @@ fn add_read(s: &mut Session, drawing: Drawing, binary_dxf: bool, name: &str, pat
         st.binary_dxf = binary_dxf;
         st.read_loss = loss.filter(|_| has_path);
     }
-    for note in notes {
+    for note in notes.into_iter().chain(reset) {
         s.echo(note);
     }
     i
@@ -457,6 +458,9 @@ fn run_close(s: &mut Session, p: &Value) -> Result<Value> {
     if s.active >= s.docs.len() {
         s.active = s.docs.len().saturating_sub(1);
     }
+    // The cached selection indexes hold their drawing's objects: a closed drawing's would keep
+    // it in memory (gigabytes for a large one). The open drawings' are rebuilt when next used.
+    crate::spatial::clear_cache();
     ok()
 }
 
@@ -464,6 +468,7 @@ fn run_closeall(s: &mut Session, _p: &Value) -> Result<Value> {
     s.cancel();
     s.docs.clear();
     s.active = 0;
+    crate::spatial::clear_cache();
     ok()
 }
 

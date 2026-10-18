@@ -177,7 +177,7 @@ fn issue(kind: &'static str, location: impl Into<String>, handle: Option<Handle>
 pub fn repair(d: &mut Drawing) -> Vec<Issue> {
     let mut out = Vec::new();
     tables(d, &mut out);
-    header(d, &mut out);
+    header(d, true, &mut out);
     handseed(d, &mut out);
     objects(d, &mut out);
     missing_blocks(d, &mut out);
@@ -269,17 +269,35 @@ fn tables(d: &mut Drawing, out: &mut Vec<Issue>) {
     }
 }
 
-/// The current layer, linetype and style variables name entries that exist.
-fn header(d: &mut Drawing, out: &mut Vec<Issue>) {
-    let vars: [(&str, &str, &str); 6] = [
+/// Opening a drawing resets current linetype and style variables that name entries it doesn't
+/// have, as AutoCAD does: otherwise every new object would be given the missing name. Returns a
+/// note per reset. The current layer is left: drawing on it creates it.
+pub(crate) fn current_styles(d: &mut Drawing) -> Vec<String> {
+    let mut out = Vec::new();
+    header(d, false, &mut out);
+    // A name that was already the default (a file without a Standard multileader style) changed
+    // nothing worth a note.
+    out.into_iter()
+        .filter(|i| !i.fix.strip_prefix("set to ").is_some_and(|def| i.message.contains(&format!("is \"{def}\","))))
+        .map(|i| format!("{}: {}.", i.message.replacen("the current", "The current", 1), i.fix))
+        .collect()
+}
+
+/// The current layer (`layer`), linetype and style variables name entries that exist.
+fn header(d: &mut Drawing, layer: bool, out: &mut Vec<Issue>) {
+    let vars: [(&str, &str, &str); 7] = [
         ("CLAYER", "layer", "0"),
         ("CELTYPE", "linetype", "ByLayer"),
         ("TEXTSTYLE", "text style", "Standard"),
         ("DIMSTYLE", "dimension style", "Standard"),
         ("CMLEADERSTYLE", "multileader style", "Standard"),
         ("CTABLESTYLE", "table style", "Standard"),
+        ("CMLSTYLE", "multiline style", "Standard"),
     ];
     for (var, what, default) in vars {
+        if var == "CLAYER" && !layer {
+            continue;
+        }
         let Some(name) = d.header.get(var).map(|v| v.as_str().map(str::to_string)) else { continue };
         let exists = name.as_deref().is_some_and(|n| match var {
             "CLAYER" => d.layer(n).is_some(),
@@ -287,6 +305,7 @@ fn header(d: &mut Drawing, out: &mut Vec<Issue>) {
             "TEXTSTYLE" => d.text_style(n).is_some(),
             "DIMSTYLE" => d.dim_style(n).is_some(),
             "CMLEADERSTYLE" => has_name(&d.mleader_styles, n, |s| &s.name),
+            "CMLSTYLE" => has_name(&d.mline_styles, n, |s| &s.name),
             _ => has_name(&d.table_styles, n, |s| &s.name),
         });
         if !exists {
@@ -652,4 +671,28 @@ fn constraints(d: &mut Drawing, all: &HashSet<Handle>, out: &mut Vec<Issue>) {
         }
     }
     d.constraints = kept;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_current_styles_are_reset_at_open() {
+        let mut d = Drawing::default();
+        for (var, val) in [("CLAYER", "NOLAYER"), ("CELTYPE", "NOLTYPE"), ("TEXTSTYLE", "NOSTYLE"), ("DIMSTYLE", "NODIM"), ("CMLSTYLE", "NOMLS")] {
+            d.header.set_str(var, val);
+        }
+        let notes = current_styles(&mut d);
+        assert_eq!(notes.len(), 4, "{notes:?}");
+        assert!(notes.iter().all(|n| n.starts_with("The current")), "{notes:?}");
+        let get = |v: &str| d.header.get(v).and_then(|v| v.as_str().map(str::to_string));
+        assert_eq!(get("CLAYER").as_deref(), Some("NOLAYER"), "drawing on a missing current layer creates it");
+        assert_eq!(get("CELTYPE").as_deref(), Some("ByLayer"));
+        assert_eq!(get("TEXTSTYLE").as_deref(), Some("Standard"));
+        assert_eq!(get("DIMSTYLE").as_deref(), Some("Standard"));
+        assert_eq!(get("CMLSTYLE").as_deref(), Some("Standard"));
+        // Nothing left to reset: no notes.
+        assert!(current_styles(&mut d).is_empty());
+    }
 }

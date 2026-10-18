@@ -79,13 +79,30 @@ fn same_polygon(a: &[Vec2], b: &[Vec2]) -> bool {
     (0..n).any(|k| (0..n).all(|i| near(a[i], b[(i + k) % n]))) || (0..n).any(|k| (0..n).all(|i| near(a[i], b[(k + n - (i % n)) % n])))
 }
 
+/// Drops repeated loops. Only loops with as many vertices and a near lowest corner are compared
+/// (a grid of those corners): comparing every pair took seconds for a hatch around thousands of
+/// islands, on every pick and redraw.
 fn dedup_polygons(loops: &mut Vec<Vec<Vec2>>) {
+    const CELL: f64 = 1e-2;
+    let key = |l: &[Vec2]| {
+        let b = Bounds2::from_points(l.iter().copied());
+        ((b.min.x / CELL).floor() as i64, (b.min.y / CELL).floor() as i64)
+    };
     let mut unique: Vec<Vec<Vec2>> = Vec::with_capacity(loops.len());
+    let mut grid: std::collections::HashMap<(usize, i64, i64), Vec<usize>> = std::collections::HashMap::new();
     for l in loops.drain(..) {
         if l.len() < 3 {
             continue;
         }
-        if !unique.iter().any(|u| same_polygon(u, &l)) {
+        let (cx, cy) = key(&l);
+        let seen = (-1..=1).any(|dx| {
+            (-1..=1).any(|dy| {
+                grid.get(&(l.len(), cx.saturating_add(dx), cy.saturating_add(dy)))
+                    .is_some_and(|ids| ids.iter().any(|i| unique.get(*i).is_some_and(|u| same_polygon(u, &l))))
+            })
+        });
+        if !seen {
+            grid.entry((l.len(), cx, cy)).or_default().push(unique.len());
             unique.push(l);
         }
     }
@@ -558,5 +575,37 @@ mod tests {
         let tris = fill::triangulate_evenodd(&loops);
         let area: f64 = tris.chunks(3).map(|t| ((t[1] - t[0]).cross(t[2] - t[0]) / 2.0).abs()).sum();
         assert!((area - 100.0).abs() < 1e-6, "triangulated area must be 100.0, not zero");
+    }
+
+    #[test]
+    fn thousands_of_islands_dedup_quickly() {
+        let square = |x: f64, y: f64| -> Vec<PolyVertex> {
+            [(0.0, 0.0), (0.5, 0.0), (0.5, 0.5), (0.0, 0.5)].iter().map(|(dx, dy)| PolyVertex::new(Vec2::new(x + dx, y + dy))).collect()
+        };
+        let mut loops: Vec<HatchLoop> =
+            (0..12_000).map(|i| HatchLoop { vertices: square((i % 120) as f64, (i / 120) as f64), outer: false, sources: vec![] }).collect();
+        // Some of the squares again, a hair off.
+        loops.extend((0..100).map(|i| HatchLoop {
+            vertices: square((i % 120) as f64 + 1e-5, (i / 120) as f64 - 1e-5),
+            outer: false,
+            sources: vec![],
+        }));
+        let hatch = Hatch {
+            origin: Vec2::ZERO,
+            pattern: "ANSI31".into(),
+            solid: false,
+            loops,
+            scale: 1.0,
+            angle: 0.0,
+            associative: false,
+            style: 0,
+            elevation: 0.0,
+            gradient: None,
+            background: None,
+            pattern_lines: vec![],
+        };
+        let t = std::time::Instant::now();
+        assert_eq!(fill_loops(&hatch, 1e-4).len(), 12_000);
+        assert!(t.elapsed().as_secs_f64() < 5.0, "took {:?}", t.elapsed());
     }
 }
