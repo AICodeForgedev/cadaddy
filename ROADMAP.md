@@ -2,24 +2,25 @@
 
 **Stage: pre-alpha** · next: alpha, ~2 points (38% → 40% ready for real work) and ~125–190 Opus 5.5 hours away (the four failing core workflows of the [alpha gate](docs/roadmap.md#alpha-gate))
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (hours to ~95% for each readiness number) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (0.7.6: breadth re-measured, alpha-gate facts refreshed; readiness and hour estimates not re-estimated since 2026-10-10) · **Target:** Autodesk AutoCAD 2027
 
 CADaddy targets full parity with AutoCAD (2D drafting first, then annotation, layouts and
 plotting, DWG, parametrics and 3D), plus what AutoCAD doesn't have: agent control over MCP, a
 scriptable CLI, a web build, Linux and FreeBSD builds, and a free licence.
 
-**Why pre-alpha:** four of AutoCAD's five core workflows fail the [alpha gate](docs/roadmap.md#alpha-gate).
-Precise drafting lacks object snap tracking and has stubbed TRIM/EXTEND/OFFSET options; blocks
-can't be edited in a block editor (REFEDIT edits them in place, xrefs not yet); plots ignore plot styles; and a DWG saved by
-CADaddy drops everything it doesn't model and has never been checked in
-AutoCAD. Dimensioning passes. Ready for real work (≈ 38%) is also under the ~40% alpha bar. Beta
-is ≈ 600–930 h away.
+**Why pre-alpha:** the [alpha gate](docs/roadmap.md#alpha-gate) still fails on DWG exchange
+(a DWG saved by CADaddy drops what it doesn't model, and no CADaddy file has been checked in
+AutoCAD), dynamic-block authoring, a few prompt options that print "not available yet", and
+plotting leftovers (binary `.ctb`/`.stb`/`.pc3` files, system printers). Since the last review
+object snap tracking, the Block Editor, REFEDIT, XCLIP and plot styles landed, and dimensioning
+passes. Ready for real work (≈ 38% on 2026-10-10, before those) was under the ~40% alpha bar;
+it has not been re-estimated. Beta was ≈ 600–930 h away on that estimate.
 
 ## Headline numbers
 
 | Number | Value | Kind |
 |---|---|---|
-| Feature breadth (AutoCAD for Mac menu items with a live command) | **50%** (245 / 491; 2D menus only ≈ 65%) | measured ([parity-checklist.md](docs/parity-checklist.md) + UI-only commands) |
+| Feature breadth (AutoCAD for Mac menu items with a live command) | **59%** (292 / 491; 449 registered commands; 2026-10-18) | measured ([parity-checklist.md](docs/parity-checklist.md), `cargo xtask parity`) |
 | Ready for real work | **≈ 38%** | estimated ([target-app-parity.md](docs/target-app-parity.md)) |
 | Mainstream practitioner (2D drafter) | **≈ 28%** (lower than the full number: file exchange, stability and interaction discounts multiply) | estimated ([target-app-parity.md](docs/target-app-parity.md#mainstream-practitioner)) |
 | Essentials user | **≈ 46%** | estimated ([target-app-parity.md](docs/target-app-parity.md#essentials-user)) |

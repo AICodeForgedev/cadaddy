@@ -1,22 +1,22 @@
 # Parity checklist
 
-> **Generated:** 2026-10-12 by `cargo xtask parity`. Do not edit by hand.
+> **Generated:** 2026-10-18 by `cargo xtask parity`. Do not edit by hand.
 
 Menu-breadth parity: a reference menu item counts as covered when a CADaddy command is registered under the same menu label. It measures breadth, not depth; see [target-app-parity.md](target-app-parity.md) for the weighted assessment.
 
-**Menu breadth: 280 / 491 items (57%)** · 409 registered commands.
+**Menu breadth: 292 / 491 items (59%)** · 449 registered commands.
 
 | Menu | Items | Covered | % |
 |---|---|---|---|
 | File | 22 | 13 | 59% |
 | Edit | 13 | 11 | 85% |
-| View | 75 | 31 | 41% |
+| View | 75 | 40 | 53% |
 | Insert | 11 | 5 | 45% |
 | Format | 27 | 25 | 93% |
-| Tools | 85 | 57 | 67% |
+| Tools | 85 | 59 | 69% |
 | Draw | 87 | 55 | 63% |
 | Dimension | 28 | 28 | 100% |
-| Modify | 113 | 52 | 46% |
+| Modify | 113 | 53 | 47% |
 | Window | 22 | 3 | 14% |
 | Help | 8 | 0 | 0% |
 
@@ -41,16 +41,7 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - View > Viewports > Named Viewports...
 - View > 3D Views > Viewpoint
 - View > 3D Views > Plan View > Current UCS
-- View > 3D Views > Plan View > World UCS
 - View > 3D Views > Plan View > Named UCS
-- View > 3D Views > Top
-- View > 3D Views > Bottom
-- View > 3D Views > Front
-- View > 3D Views > Back
-- View > 3D Views > SW Isometric
-- View > 3D Views > SE Isometric
-- View > 3D Views > NE Isometric
-- View > 3D Views > NW Isometric
 - View > Hide
 - View > Visual Styles > 2D Wireframe
 - View > Visual Styles > Wireframe
@@ -88,9 +79,7 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - Tools > Spelling
 - Tools > Inquiry > Volume
 - Tools > Update Fields
-- Tools > Block Editor
 - Tools > Edit Xref in Place
-- Tools > Load Application...
 - Tools > New UCS > World
 - Tools > New UCS > Face
 - Tools > New UCS > View
@@ -152,7 +141,6 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - Modify > Object > Image > Frame
 - Modify > Object > Block Description...
 - Modify > Clip > Image
-- Modify > Clip > Xref
 - Modify > 3D Operations > 3D Move
 - Modify > 3D Operations > 3D Rotate
 - Modify > 3D Operations > 3D Align
