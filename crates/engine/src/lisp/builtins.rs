@@ -1447,6 +1447,7 @@ static BUILTINS: &[Builtin] = &[
     ctx!("SSGETFIRST", drawing::ssgetfirst),
     ctx!("TBLSEARCH", drawing::tblsearch),
     ctx!("TBLOBJNAME", drawing::tblobjname),
+    ctx!("REGAPP", drawing::regapp),
     ctx!("TBLNEXT", drawing::tblnext),
     ctx!("RTOS", drawing::rtos),
     ctx!("ANGTOS", drawing::angtos),

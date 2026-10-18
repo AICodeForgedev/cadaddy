@@ -38,7 +38,7 @@ mod props;
 pub mod symbol;
 mod takeoff;
 pub use props::MatchProps;
-mod qselect;
+pub(crate) mod qselect;
 mod selecttools;
 mod settings;
 mod spline_opts;

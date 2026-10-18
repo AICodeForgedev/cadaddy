@@ -138,7 +138,15 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "SAVETIME" => json!(crate::autosave::savetime()),
         "SAVEFILEPATH" => json!(crate::autosave::savefilepath()),
         "CMDNAMES" => json!(s.running.as_ref().map(|r| r.id.to_ascii_uppercase()).unwrap_or_default()),
-        "DWGNAME" => json!(s.state().map(|d| d.title.clone()).unwrap_or_default()),
+        // A drawing not saved yet is named as AutoCAD names it, "Drawing1.dwg".
+        "DWGNAME" => json!(
+            s.state()
+                .map(|d| if d.path.is_none() && !d.title.contains('.') { format!("{}.dwg", d.title) } else { d.title.clone() })
+                .unwrap_or_default()
+        ),
+        // The drawing's folder with its trailing separator; the current folder before it is saved.
+        "DWGPREFIX" => json!(s.state().ok().map(|d| dwg_prefix(d.path.as_deref())).unwrap_or_default()),
+        "DWGTITLED" => json!(i32::from(s.state().is_ok_and(|d| d.path.is_some()))),
         "DBMOD" => json!(s.state().map(|d| i32::from(d.is_dirty())).unwrap_or(0)),
         "BLOCKEDITOR" => json!(i32::from(s.state().is_ok_and(|d| d.block_edit.is_some()))),
         // The template NEW/QNEW start from (a profile setting, like FONTALT; "" = none).
@@ -197,13 +205,41 @@ fn small(v: &Value, max: u8) -> Option<u8> {
 fn as_f64(v: &Value) -> Option<f64> {
     v.as_f64().or_else(|| v.as_str().and_then(crate::units::parse_distance)).filter(|f| f.is_finite())
 }
+/// DWGPREFIX: everything up to the last path separator of `path`, or the current folder.
+fn dwg_prefix(path: Option<&str>) -> String {
+    if let Some(p) = path
+        && let Some(i) = p.rfind(['/', '\\'])
+    {
+        return p.get(..=i).unwrap_or_default().to_string();
+    }
+    let mut dir = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+    if !dir.is_empty() && !dir.ends_with(['/', '\\']) {
+        dir.push(std::path::MAIN_SEPARATOR);
+    }
+    dir
+}
+
 fn as_pt(v: &Value) -> Option<cadaddy_geom::Vec2> {
     crate::cmd::point_value(v).or_else(|| as_f64(v).map(|f| cadaddy_geom::Vec2::new(f, f)))
 }
 
 /// Variables `get` reports from session or drawing state that `set` can't change.
-const READ_ONLY: &[&str] =
-    &["CMDNAMES", "DWGNAME", "DBMOD", "BLOCKEDITOR", "CTAB", "LASTPOINT", "VIEWCTR", "VIEWSIZE", "EXTMIN", "EXTMAX", "UNDOCTL", "UNDOMARKS"];
+const READ_ONLY: &[&str] = &[
+    "CMDNAMES",
+    "DWGNAME",
+    "DWGPREFIX",
+    "DWGTITLED",
+    "DBMOD",
+    "BLOCKEDITOR",
+    "CTAB",
+    "LASTPOINT",
+    "VIEWCTR",
+    "VIEWSIZE",
+    "EXTMIN",
+    "EXTMAX",
+    "UNDOCTL",
+    "UNDOMARKS",
+];
 
 pub fn is_read_only(name: &str) -> bool {
     READ_ONLY.iter().any(|r| r.eq_ignore_ascii_case(name.trim())) || table::is_read_only(&name.trim().to_ascii_uppercase())
