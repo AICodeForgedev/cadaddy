@@ -488,7 +488,10 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             if kind == "SOLID" { EntityKind::Solid(Solid { corners }) } else { EntityKind::Trace(Solid { corners }) }
         }
         "MLINE" => EntityKind::MLine(crate::dxf_mline::read_entity(tags)),
-        "MESH" => EntityKind::Mesh(crate::dxf_mesh::read_subd(tags)?),
+        "MESH" => match crate::dxf_solid::read_solid(tags) {
+            Some(so) => EntityKind::Solid3d(Box::new(so)),
+            None => EntityKind::Mesh(crate::dxf_mesh::read_subd(tags)?),
+        },
         "3DFACE" => EntityKind::Face3d(Face3d { corners: [t.p(10), t.p(11), t.p(12), t.p(13)], hidden_edges: t.i(70).unwrap_or(0) as u8 }),
         "HATCH" => {
             let mut k = hatch(tags, &t)?;
@@ -1204,11 +1207,14 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
                     } else {
                         crate::dxf_mesh::polygon(verts, [t.i(71), t.i(72), t.i(73), t.i(74)], flags)
                     };
-                    let Some(mesh) = mesh else {
-                        *skipped = skipped.saturating_add(1);
-                        continue;
-                    };
-                    EntityKind::Mesh(mesh)
+                    match (crate::dxf_solid::read_solid(tags), mesh) {
+                        (Some(so), _) => EntityKind::Solid3d(Box::new(so)),
+                        (None, Some(mesh)) => EntityKind::Mesh(mesh),
+                        (None, None) => {
+                            *skipped = skipped.saturating_add(1);
+                            continue;
+                        }
+                    }
                 } else if flags & 8 != 0 {
                     EntityKind::Polyline3d(Polyline3d { points: pts.iter().map(|p| p.0).collect(), closed: flags & 1 != 0 })
                 } else {

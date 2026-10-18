@@ -123,6 +123,16 @@ fn distance_within(d: &Drawing, e: &Entity, p: Vec2, tol: f64, reach: Option<f64
     {
         best = 0.0;
     }
+    // So is a solid: a pick inside its outline as seen from above.
+    if let EntityKind::Solid3d(so) = &e.kind
+        && best > 0.0
+        && cadaddy_render::solid_mesh(so, so.mesh_tol())
+            .face_points()
+            .take(MAX_MESH_PICK_FACES)
+            .any(|f| point_in_polygon(&f.iter().map(|q| q.xy()).collect::<Vec<_>>(), p))
+    {
+        best = 0.0;
+    }
     best
 }
 
@@ -508,6 +518,7 @@ pub fn class_name(k: &EntityKind) -> &'static str {
             cadaddy_doc::MeshKind::Polyface => "AcDbPolyFaceMesh",
             cadaddy_doc::MeshKind::Polygon { .. } => "AcDbPolygonMesh",
         },
+        EntityKind::Solid3d(_) => "AcDb3dSolid",
         EntityKind::Region(_) => "AcDbRegion",
         EntityKind::Viewport(_) => "AcDbViewport",
         EntityKind::Image(_) => "AcDbRasterImage",

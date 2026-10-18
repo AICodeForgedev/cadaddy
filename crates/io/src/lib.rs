@@ -10,6 +10,7 @@ mod dxf_image;
 mod dxf_mesh;
 mod dxf_mleader;
 mod dxf_read;
+mod dxf_solid;
 mod dxf_table;
 mod dxf_underlay;
 mod dxf_write;

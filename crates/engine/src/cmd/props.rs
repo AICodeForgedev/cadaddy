@@ -148,6 +148,11 @@ pub(super) fn entity_props(d: &cadaddy_doc::Drawing, e: &cadaddy_doc::Entity) ->
                 o.insert("arcLength".into(), json!(a.radius * cadaddy_geom::ccw_sweep(a.start, a.end)));
                 o.insert("totalAngle".into(), json!(cadaddy_geom::ccw_sweep(a.start, a.end).to_degrees()));
             }
+            EntityKind::Solid3d(so) => {
+                if let Some(x) = super::solids::solid_props_json(so).as_object() {
+                    o.extend(x.clone());
+                }
+            }
             EntityKind::LwPolyline(p) => {
                 let pl = cadaddy_geom::Polyline { vertices: p.vertices.clone(), closed: p.closed };
                 o.insert("length".into(), json!(pl.len()));
@@ -327,6 +332,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                         }
                     }
                 }
+                EntityKind::Solid3d(so) => super::solids::set_solid_props(so, p),
                 EntityKind::Circle(c) => {
                     if let Some(v) = p.get("center") {
                         set_xy(&mut c.center, v);

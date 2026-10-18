@@ -165,6 +165,10 @@ pub fn projected_extents(d: &Drawing, p: &Projection) -> Bounds2 {
             b = b.union(&Bounds2::from_points(m.vertices.iter().map(|q| p.project(*q))));
             continue;
         }
+        if let cadaddy_doc::EntityKind::Solid3d(so) = &e.kind {
+            b = b.union(&Bounds2::from_points(so.wires(so.mesh_tol()).iter().flatten().map(|q| p.project(*q))));
+            continue;
+        }
         if let Some((pts, _)) = e.kind.points3d() {
             for q in pts {
                 b = b.union(&Bounds2::from_points([p.project(q)]));

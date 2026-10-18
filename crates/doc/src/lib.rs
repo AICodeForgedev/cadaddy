@@ -16,6 +16,7 @@ pub mod library;
 mod plotstyle;
 mod plotter;
 mod refedit;
+mod solid;
 mod store;
 mod tables;
 
@@ -32,6 +33,7 @@ pub use header::{HVal, Header};
 pub use plotstyle::*;
 pub use plotter::*;
 pub use refedit::{RefEdit, WorkItem};
+pub use solid::*;
 pub use store::EntityStore;
 pub use tables::*;
 

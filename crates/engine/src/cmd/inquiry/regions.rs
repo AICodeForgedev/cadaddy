@@ -32,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(SelectRun::new("intersect", "INTERSECT")))),
         CommandSpec::new("massprop", "Region/Mass Properties", run_massprop)
             .menu(&["Tools", "Inquiry", "Region/Mass Properties"])
-            .params("{handles?} (regions) → properties of each")
+            .params("{handles?} (regions, 3D solids) → properties of each: regions {area, perimeter, centroid, moments…}, solids {volume, surfaceArea, boundingBox, centroid}")
             .noundo()
             .interactive(|_| Ok(Box::new(SelectRun::new("massprop", "MASSPROP")))),
     ]
@@ -198,8 +198,9 @@ impl Interactive for SubtractM {
 fn run_massprop(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let rs = regions(s, &hs)?;
-    if rs.is_empty() {
-        return Err(other("Select one or more regions."));
+    let (solids, solid_lines) = super::super::solids::massprop_solids(s, &hs)?;
+    if rs.is_empty() && solids.is_empty() {
+        return Err(other("Select one or more regions or 3D solids."));
     }
     let f = |v: f64| super::fmt_d(s, v);
     let mut out = Vec::new();
@@ -244,5 +245,6 @@ fn run_massprop(s: &mut Session, p: &Value) -> Result<Value> {
             ang.cos(),
         ));
     }
-    Ok(json!({ "regions": out, "message": lines.join("\n") }))
+    lines.extend(solid_lines);
+    Ok(json!({ "regions": out, "solids": solids, "message": lines.join("\n") }))
 }

@@ -2,7 +2,8 @@
 
 use cadaddy_color::Color;
 use cadaddy_geom::{
-    Arc as GArc, Bounds2, Circle as GCircle, Ellipse as GEllipse, Line as GLine, Mat3, PolyVertex, Polyline, Segment, Spline as GSpline, Vec2, Vec3,
+    Arc as GArc, Bounds2, Circle as GCircle, Ellipse as GEllipse, Line as GLine, Mat3, Mat4, PolyVertex, Polyline, Segment, Spline as GSpline, Vec2,
+    Vec3,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1414,6 +1415,8 @@ pub enum EntityKind {
     Trace(Solid),
     Face3d(Face3d),
     Mesh(Mesh),
+    /// A 3D solid (BOX, EXTRUDE, REVOLVE…): our own exact definition, tessellated for display.
+    Solid3d(Box<crate::Solid3d>),
     Region(Region),
     Viewport(Viewport),
     Image(Image),
@@ -1474,6 +1477,7 @@ impl EntityKind {
                 MeshKind::Polyface => "Polyface Mesh",
                 MeshKind::Polygon { .. } => "Polygon Mesh",
             },
+            EntityKind::Solid3d(_) => "3D Solid",
             EntityKind::Region(_) => "Region",
             EntityKind::Viewport(_) => "Viewport",
             EntityKind::Image(_) => "Raster Image",
@@ -1514,6 +1518,8 @@ impl EntityKind {
                 MeshKind::Subd => "MESH",
                 _ => "POLYLINE",
             },
+            // Saved as a mesh other programs can show (see `io::dxf_solid`).
+            EntityKind::Solid3d(_) => "MESH",
             EntityKind::Region(_) => "REGION",
             EntityKind::Viewport(_) => "VIEWPORT",
             EntityKind::Image(_) => "IMAGE",
@@ -1612,6 +1618,14 @@ impl EntityKind {
                 .filter_map(|(a, b)| {
                     let (p, q) = (m.vertices.get(a as usize)?.xy(), m.vertices.get(b as usize)?.xy());
                     Some(Prim::Seg(Segment::Line(GLine::new(p, q))))
+                })
+                .collect(),
+            // Its display curves, seen from above.
+            EntityKind::Solid3d(so) => so
+                .wires(crate::SOLID_PRIM_TOL)
+                .iter()
+                .flat_map(|w| {
+                    w.windows(2).filter_map(|p| Some(Prim::Seg(Segment::Line(GLine::new(p.first()?.xy(), p.get(1)?.xy()))))).collect::<Vec<_>>()
                 })
                 .collect(),
             EntityKind::Region(r) => r.segments().into_iter().map(Prim::Seg).collect(),
@@ -1838,6 +1852,12 @@ impl EntityKind {
             EntityKind::Solid(so) | EntityKind::Trace(so) => so.corners.iter_mut().for_each(t3),
             EntityKind::Face3d(f) => f.corners.iter_mut().for_each(t3),
             EntityKind::Mesh(me) => me.vertices.iter_mut().for_each(t3),
+            EntityKind::Solid3d(so) => {
+                // Heights scale with the plan so the solid keeps its proportions.
+                let mut m4 = Mat4::from_mat3(m);
+                m4.m[2][2] = s;
+                so.transform(&m4);
+            }
             EntityKind::Region(r) => {
                 for l in &mut r.loops {
                     l.transform(m, mirror);
@@ -1941,6 +1961,8 @@ impl EntityKind {
             EntityKind::Face3d(f) => f.corners.iter().map(|c| c.xy()).collect(),
             // Its vertices (a large mesh: the first thousand).
             EntityKind::Mesh(m) => m.vertices.iter().take(1000).map(|c| c.xy()).collect(),
+            // Its base point and dimension grips.
+            EntityKind::Solid3d(so) => so.grip_points().into_iter().map(|c| c.xy()).collect(),
             EntityKind::Region(r) => vec![r.bounds().center()],
             EntityKind::Viewport(v) => {
                 let c = v.center.xy();

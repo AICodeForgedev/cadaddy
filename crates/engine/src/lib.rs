@@ -707,6 +707,8 @@ pub struct LastUsed {
     pub area: f64,
     pub perimeter: f64,
     pub distance: f64,
+    /// The last height a solid command (BOX, EXTRUDE…) used: its next `<default>`.
+    pub solid_height: Option<f64>,
 }
 
 impl Default for LastUsed {
@@ -723,6 +725,7 @@ impl Default for LastUsed {
             area: 0.0,
             perimeter: 0.0,
             distance: 0.0,
+            solid_height: None,
         }
     }
 }

@@ -133,6 +133,19 @@ pub fn scene(d: &Drawing, space: &Space, tol: f64, bg: Rgb) -> Scene {
                     }
                 }
             }
+            EntityKind::Solid3d(so) => {
+                native.insert(e.handle);
+                for t in crate::solid_mesh(so, tol).triangles() {
+                    push_tri(&mut out, Tri { p: t, color: surface });
+                }
+                for w in so.wires(tol) {
+                    for seg in w.windows(2) {
+                        if let [a, b] = seg {
+                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true });
+                        }
+                    }
+                }
+            }
             EntityKind::Face3d(f) => {
                 native.insert(e.handle);
                 let [a, b, c, dd] = f.corners;

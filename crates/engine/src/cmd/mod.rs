@@ -46,6 +46,7 @@ pub use props::MatchProps;
 pub(crate) mod qselect;
 mod selecttools;
 mod settings;
+mod solids;
 mod spline_opts;
 pub(crate) mod table;
 pub mod tolerance;
@@ -228,6 +229,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(tolerance::specs());
         v.extend(constraints::specs());
         v.extend(lisp::specs());
+        v.extend(solids::specs());
         v
     })
 }

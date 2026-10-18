@@ -627,7 +627,16 @@ fn attrib_flags(a: &Attrib) -> i64 {
 /// then Lock position (`280`, 2007 and later; readers take the 280 after the tag as it).
 /// A mesh (DXF Reference, MESH and POLYLINE): a MESH entity from AutoCAD 2010 (its base level,
 /// no creases), else a polyface mesh; an M×N polygon mesh stays one.
-fn mesh(w: &mut W, e: &Entity, m: &Mesh, owner: &str, paper: bool, target: Version) {
+/// A mesh; `ours` is CADaddy xdata to attach (a solid's definition).
+fn mesh(w: &mut W, e: &Entity, m: &Mesh, owner: &str, paper: bool, target: Version, ours: &[String]) {
+    let ours = |w: &mut W| {
+        if !ours.is_empty() {
+            w.s(1001, dxf_ext::APP);
+            for x in ours {
+                w.s(1000, x);
+            }
+        }
+    };
     let count = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
     match m.kind {
         MeshKind::Subd if target >= Version::R2010 => {
@@ -651,6 +660,7 @@ fn mesh(w: &mut W, e: &Entity, m: &Mesh, owner: &str, paper: bool, target: Versi
             w.i(94, 0);
             w.i(95, 0);
             w.i(90, 0);
+            ours(w);
         }
         MeshKind::Polygon { m: rows, n: cols, closed_m, closed_n }
             if (rows as usize).checked_mul(cols as usize) == Some(m.vertices.len()) && rows >= 2 && cols >= 2 =>
@@ -711,6 +721,7 @@ fn mesh(w: &mut W, e: &Entity, m: &Mesh, owner: &str, paper: bool, target: Versi
             w.i(70, 64);
             w.i(71, count(m.vertices.len()));
             w.i(72, count(records.len()));
+            ours(w);
             for v in &m.vertices {
                 let vh = w.h();
                 w.s(0, "VERTEX");
@@ -1297,7 +1308,11 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.p(13, s.corners[3]);
             thickness(w, e);
         }
-        EntityKind::Mesh(m) => mesh(w, e, m, owner, paper, cx.target),
+        EntityKind::Mesh(m) => mesh(w, e, m, owner, paper, cx.target, &[]),
+        EntityKind::Solid3d(so) => {
+            let m = cadaddy_render::solid_mesh(so, so.mesh_tol());
+            mesh(w, e, &m, owner, paper, cx.target, &crate::dxf_solid::solid_xdata(so));
+        }
         EntityKind::Face3d(f) => {
             w.s(0, "3DFACE");
             common(w, e, owner, paper, "AcDbFace");

@@ -22,6 +22,7 @@ mod plotstyle;
 mod point;
 pub mod raster;
 pub mod shade;
+mod solid;
 mod text;
 mod tolerance;
 pub mod units;
@@ -38,6 +39,7 @@ pub use dim::{
 pub use fill::triangulate_evenodd;
 pub use hatch::{fill_loops as hatch_fill_loops, pattern_swatch};
 pub use paper::{PAPER_SIZES, PaperSize, Sheet, paper_size, sheet};
+pub use solid::solid_mesh;
 pub use tolerance::{gdt_points, tolerance_in};
 
 /// Handle carried by model-space geometry drawn inside a paper-space viewport (it belongs to no
@@ -1047,6 +1049,19 @@ fn top_entity(b: &mut Builder, d: &Drawing, e: &Entity) {
         entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), &flat);
         return;
     }
+    // A solid: its display curves onto the view plane.
+    if let EntityKind::Solid3d(so) = &e.kind {
+        let ctx = top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]);
+        for w in so.wires(b.opts.tolerance) {
+            let vertices = w.iter().map(|q| cadaddy_geom::PolyVertex { p: p.project(*q), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
+            let flat = Entity {
+                kind: EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: false, const_width: 0.0, elevation: 0.0, plinegen: true }),
+                ..e.clone()
+            };
+            entity(b, &ctx, &flat);
+        }
+        return;
+    }
     if let Some((pts, closed)) = e.kind.points3d() {
         let vertices = pts.iter().map(|q| cadaddy_geom::PolyVertex { p: p.project(*q), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
         let flat = Entity {
@@ -1470,6 +1485,13 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             }
             for l in &fig.lines {
                 b.polyline(ctx, rgb, lw, l);
+            }
+        }
+        // Its display curves, seen from above, to the view's tolerance.
+        EntityKind::Solid3d(so) => {
+            for w in so.wires(tol) {
+                let pts: Vec<Vec2> = w.iter().map(|p| p.xy()).collect();
+                b.polyline(ctx, rgb, lw, &pts);
             }
         }
         kind => {
