@@ -26,17 +26,7 @@ fn boundary_bounds(k: &EntityKind) -> Option<Bounds2> {
     cadaddy_render::clip::boundary_polygon(k).map(Bounds2::from_points)
 }
 
-/// The next free viewport id (ids are unique across layouts; 1 is a sheet's own view).
-pub(super) fn next_viewport_id(d: &Drawing) -> u32 {
-    d.layouts
-        .iter()
-        .flat_map(|l| l.entities.iter())
-        .filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some(v.id) } else { None })
-        .max()
-        .unwrap_or(1)
-        .max(1)
-        .saturating_add(1)
-}
+pub(super) use super::super::clip_partners::next_viewport_id;
 
 /// Layers marked "New VP Freeze": frozen in new viewports.
 pub(super) fn new_vp_frozen(d: &Drawing) -> Vec<String> {
@@ -99,10 +89,8 @@ fn check_boundary(cmd: &str, d: &Drawing, space: &Space, h: Handle) -> Result<Bo
     if viewport_of_boundary(d, space, h).is_some() {
         return Err(bad(cmd, "the object already clips a viewport"));
     }
-    let b = boundary_bounds(&e.kind).ok_or_else(|| bad(cmd, "the object must be a closed polyline, circle, ellipse or spline"))?;
-    // The exact extents (the tessellated outline runs just inside curves).
-    let eb = cadaddy_doc::entity_bounds(d, e, 0);
-    let b = if eb.is_empty() || !eb.min.is_finite() || !eb.max.is_finite() { b } else { b.union(&eb) };
+    let b = super::super::clip_partners::boundary_extents(d, e)
+        .ok_or_else(|| bad(cmd, "the object must be a closed polyline, circle, ellipse or spline"))?;
     if b.width() > 1e7 || b.height() > 1e7 {
         return Err(bad(cmd, "the viewport is too large"));
     }
@@ -326,18 +314,7 @@ pub(super) fn run_vpclip(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let b = check_boundary(cmd, s.doc()?, &space, boundary)?;
     // The viewport takes the boundary's extents; model space stays where it was on the sheet.
-    let k = cur.view_height / cur.height.max(1e-12);
-    let mut v = cur;
-    let c = b.center();
-    let view_center = v.view_center + (c - v.center.xy()) * k;
-    let view_height = b.height() * k;
-    if view_center.is_finite() && view_height.is_finite() && view_height > 0.0 {
-        v.view_center = view_center;
-        v.view_height = view_height;
-    }
-    v.center = c.to3(v.center.z);
-    v.width = b.width();
-    v.height = b.height();
+    let mut v = super::super::clip_partners::fitted(&cur, b).unwrap_or(cur);
     v.clip = Some(boundary);
     s.doc_mut()?.modify_entity(vh, |e| e.kind = EntityKind::Viewport(v))?;
     if let Some(o) = old.filter(|o| *o != boundary) {

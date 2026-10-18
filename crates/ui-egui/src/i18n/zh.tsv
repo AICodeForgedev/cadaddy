@@ -1212,3 +1212,27 @@
 	Press Space to cycle options	按空格键切换选项
 	Burst	带属性分解
 	Convert to Mtext	转换为多行文字
+	View Twist	视图扭转
+	Let AI agents control CADaddy	允许 AI 代理控制 CADaddy
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	这样，此计算机上的 Claude 连接器和其他代理即可在此窗口中打开、编辑、保存和关闭图形。此计算机之外的任何设备都无法连接。下次启动 CADaddy 时生效。
+	Base Point	基点
+	Column Spacing	列间距
+	Column Count	列数
+	Row Spacing	行间距
+	Row Count	行数
+	Row and Column Count	行数和列数
+	Level Spacing	层间距
+	Level Count	层数
+	Item Spacing	项目间距
+	Item Count	项目数
+	Total column spacing	列总间距
+	Total row spacing	行总间距
+	Total row and column spacing	行和列总间距
+	Total level spacing	层总间距
+	Fill angle	填充角度
+	Stretch radius	拉伸半径
+	Array Grips	阵列夹点
+	Edit Array with a Grip	使用夹点编辑阵列
+	Open Drawings	已打开的图形
+	Close Drawing	关闭图形
+	Close All Drawings	关闭所有图形

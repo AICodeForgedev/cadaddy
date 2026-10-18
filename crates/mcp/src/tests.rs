@@ -223,3 +223,77 @@ fn invalid_utf8_is_a_parse_error_not_the_end_of_the_session() {
     assert_eq!(replies[1]["id"], 2);
     assert!(replies[1]["error"].is_null(), "{}", replies[1]);
 }
+
+fn tool_err(s: &mut Server, name: &str, args: Value) -> String {
+    let r = call(s, 98, "tools/call", json!({"name": name, "arguments": args}));
+    assert_eq!(r["result"]["isError"], json!(true), "{name} should fail: {r}");
+    r["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string()
+}
+
+#[test]
+fn agent_manages_drawings_without_losing_work() {
+    // A stand-in file format: writing stores a marker, reading gives a fresh drawing (this crate
+    // doesn't depend on the real readers; the CLI installs them).
+    use cadaddy_engine::cmd::file::{IoHooks, set_io};
+    set_io(IoHooks { read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()), write: |_, _| Ok(b"saved".to_vec()), plot: None, read_pdf: None });
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "circle 0,0 5"}));
+    let docs = tool(&mut s, "list_drawings", json!({}));
+    assert_eq!(docs["drawings"][0]["modified"], json!(true), "{docs}");
+    // Closing unsaved work is refused until the agent says what to do with it.
+    let e = tool_err(&mut s, "close_drawing", json!({}));
+    assert!(e.contains("unsaved changes"), "{e}");
+    let dir = std::env::temp_dir().join(format!("cadaddy-mcp-close-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("kept.dxf").to_string_lossy().into_owned();
+    let r = tool(&mut s, "close_drawing", json!({"saveAs": path}));
+    assert_eq!(r["saved"], json!(path), "{r}");
+    assert!(std::path::Path::new(&path).is_file());
+    // It opens again, unmodified; a second drawing with changes blocks close_all.
+    tool(&mut s, "open", json!({"path": path}));
+    tool(&mut s, "new_drawing", json!({}));
+    tool(&mut s, "command_line", json!({"text": "line 0,0 10,0 "}));
+    let docs = tool(&mut s, "list_drawings", json!({}));
+    assert_eq!(docs["drawings"].as_array().map(Vec::len), Some(2), "{docs}");
+    tool(&mut s, "switch_drawing", json!({"path": path}));
+    assert_eq!(tool(&mut s, "list_drawings", json!({}))["active"], json!(0));
+    assert!(tool_err(&mut s, "close_all", json!({})).contains("unsaved changes"));
+    // Undo/redo, select, variables and LISP on the second drawing.
+    tool(&mut s, "switch_drawing", json!({"index": 1}));
+    tool(&mut s, "undo", json!({}));
+    assert!(tool(&mut s, "inspect_drawing", json!({}))["counts"].get("Line").is_none());
+    tool(&mut s, "redo", json!({}));
+    let sel = tool(&mut s, "select", json!({"all": true}));
+    assert!(sel.to_string().contains("handles"), "{sel}");
+    tool(&mut s, "set_variable", json!({"name": "LTSCALE", "value": 2}));
+    assert!(tool(&mut s, "get_variable", json!({"name": "LTSCALE"})).to_string().contains('2'));
+    let l = tool(&mut s, "run_lisp", json!({"code": "(+ 1 2)"}));
+    assert_eq!(l["value"], json!("3"), "{l}");
+    let r = tool(&mut s, "close_all", json!({"discard": true}));
+    assert_eq!(r["closed"].as_array().map(Vec::len), Some(2), "{r}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn auto_works_without_an_open_app() {
+    // Nothing listens on the agent port in tests: the server runs a session of its own.
+    if std::net::TcpStream::connect(("127.0.0.1", cadaddy_engine::AGENT_PORT)).is_ok() {
+        return;
+    }
+    let mut s = Server::new(Box::new(crate::Auto::default()));
+    tool(&mut s, "command_line", json!({"text": "circle 0,0 5"}));
+    assert_eq!(tool(&mut s, "inspect_drawing", json!({}))["counts"]["Circle"], 1);
+}
+
+#[test]
+fn agent_reads_the_prompt_and_waits_for_idle() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "pline 0,0"}));
+    let p = tool(&mut s, "get_prompt", json!({}));
+    assert_eq!(p["running"], json!("pline"), "{p}");
+    assert!(p["keywords"].as_array().is_some_and(|k| k.iter().any(|k| k == "Undo")), "{p}");
+    assert_eq!(p["accept"]["point"], json!(true), "{p}");
+    let w = tool(&mut s, "wait_until_idle", json!({"timeoutMs": 1000}));
+    assert_eq!(w["busy"], json!(false), "{w}");
+    assert!(w.get("timedOut").is_none());
+}

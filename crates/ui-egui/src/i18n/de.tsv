@@ -1133,3 +1133,27 @@
 	Selection	Auswahl
 	Burst	Auflösen mit Attributen
 	Convert to Mtext	In mehrzeiligen Text umwandeln
+	View Twist	Ansichtsverdrehung
+	Let AI agents control CADaddy	KI-Agenten die Steuerung von CADaddy erlauben
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	Der Claude-Connector und andere Agenten auf diesem Computer können dann Zeichnungen in diesem Fenster öffnen, bearbeiten, speichern und schließen. Von außerhalb dieses Computers ist keine Verbindung möglich. Wirkt beim nächsten Start von CADaddy.
+	Base Point	Basispunkt
+	Column Spacing	Spaltenabstand
+	Column Count	Spaltenanzahl
+	Row Spacing	Zeilenabstand
+	Row Count	Zeilenanzahl
+	Row and Column Count	Zeilen- und Spaltenanzahl
+	Level Spacing	Ebenenabstand
+	Level Count	Ebenenanzahl
+	Item Spacing	Elementabstand
+	Item Count	Elementanzahl
+	Total column spacing	Gesamtspaltenabstand
+	Total row spacing	Gesamtzeilenabstand
+	Total row and column spacing	Gesamtzeilen- und -spaltenabstand
+	Total level spacing	Gesamtebenenabstand
+	Fill angle	Ausfüllwinkel
+	Stretch radius	Radius strecken
+	Array Grips	Reihengriffe
+	Edit Array with a Grip	Reihe mit Griff bearbeiten
+	Open Drawings	Geöffnete Zeichnungen
+	Close Drawing	Zeichnung schließen
+	Close All Drawings	Alle Zeichnungen schließen

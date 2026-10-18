@@ -475,6 +475,17 @@ fn preferences(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>
         changes.insert("checkForUpdates".into(), json!(auto));
     }
     hint(ui, crate::tl!("Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent."));
+    ui.add_space(6.0);
+    let mut agents = app.ui.agent_control;
+    if ui.checkbox(&mut agents, crate::tl!("Let AI agents control CADaddy")).changed() {
+        changes.insert("agentControl".into(), json!(agents));
+    }
+    hint(
+        ui,
+        crate::tl!(
+            "The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts."
+        ),
+    );
 }
 
 fn profiles(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {

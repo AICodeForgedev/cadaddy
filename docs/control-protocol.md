@@ -38,7 +38,7 @@ field. `engine.commands` returns a separate command catalog, not a list of addit
 | `cmdline.input` | `{text}` | Type a line at the command line exactly like a user. Starts commands by name/alias and answers prompts (points `x,y`, `@dx,dy`, `@d<a`, distances, keywords, empty = Enter). Spaces act as Enter except at text prompts. |
 | `cmdline.script` | `{text}` | Run a multi-line script (like `.scr` files). |
 | `cmdline.key` | `{key: "enter"\|"escape"}` | Press Enter or Escape. Replies like `cmdline.input`: the state, `output`, and `error` when Enter was refused. |
-| `cmdline.state` | | Current prompt, keywords, accepted input kinds, history tail. |
+| `cmdline.state` | | Current prompt (text and bare message), keywords, default, accepted input kinds, `busy` (a drawing still opening), `closePrompt`, history tail. |
 | `engine.execute` | `{command, params}` | Run any command with JSON parameters. Never opens a dialog. `command` is an alias of this method, with the same parameters and result. |
 | `engine.commands` | | Every command: id, label, menu path, shortcut, aliases, params doc, enabled. |
 | `drawing.inspect` | `{entities?, limit?}` | Drawing summary (counts, extents, layers, styles, blocks, layouts, selection, undo) and entities with handles and geometry. |
@@ -55,7 +55,9 @@ field. `engine.commands` returns a separate command catalog, not a list of addit
 | `ui.focus` | | Activate the native window. Does not assign focus to a widget. |
 | `ui.screenshot` | `{path?}` | PNG of the window (needs a presented frame). |
 | `ui.render` | `{path?, width?, height?, fit?}` | Headless render. `fit` (default true) frames the whole drawing; `false` uses the current view. Replies `{pngBase64, width, height, bytes, path?}`. |
-| `app.open` / `app.save` / `app.quit` | `{path}` | File operations. |
+| `app.open` / `app.save` / `app.quit` | `{path}` (open, save) · `{save?, discard?}` (quit) | File operations. `app.quit {save: true}` saves every modified drawing first. |
+| `app.closePrompt` | | The drawing an open "Save changes to …?" question is about (`{title}` or `{title: null}`). |
+| `app.answerClose` | `{choice: save\|discard\|cancel}` | Answer that question as the user would. |
 | `control.methods` | | Every method this server answers: `{method, params, description}`. Headless (`cadaddy-cli mcp`) lists only the methods it serves. |
 | `ping` | | Replies `"pong"`. A cheap health check. |
 

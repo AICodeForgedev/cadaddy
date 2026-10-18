@@ -118,6 +118,9 @@ pub struct UiState {
     /// The version Save As writes for a drawing that has no file yet ("2000" … "2018"); a
     /// drawing opened from a file keeps that file's version.
     pub save_version: String,
+    /// "Let AI agents control CADaddy": the app listens on [`cadaddy_engine::AGENT_PORT`]
+    /// (this computer only) from its next start. On by default.
+    pub agent_control: bool,
     /// Drawings opened from a path, newest first (File ▸ Open Recent and the Start page).
     pub recent_files: Vec<String>,
 }
@@ -194,6 +197,7 @@ impl Default for UiState {
             animations: animation::AnimationPref::default(),
             save_format: SaveFormat::default(),
             save_version: SaveVersion::default().year().to_string(),
+            agent_control: true,
             recent_files: Vec::new(),
         }
     }
@@ -427,6 +431,9 @@ impl CadApp {
         if !self.update.auto {
             prefs["checkForUpdates"] = json!(false);
         }
+        if !self.ui.agent_control {
+            prefs["agentControl"] = json!(false);
+        }
         if self.update.checked_ms > 0.0 {
             prefs["updateChecked"] = json!(self.update.checked_ms);
         }
@@ -465,6 +472,9 @@ impl CadApp {
         }
         if let Some(b) = v.get("checkForUpdates").and_then(Value::as_bool) {
             self.update.auto = b;
+        }
+        if let Some(b) = v.get("agentControl").and_then(Value::as_bool) {
+            self.ui.agent_control = b;
         }
         if let Some(ms) = v.get("updateChecked").and_then(Value::as_f64).filter(|ms| ms.is_finite()) {
             self.update.checked_ms = ms;

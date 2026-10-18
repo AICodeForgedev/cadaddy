@@ -138,7 +138,22 @@ fn launch_app(addr: &str) -> std::io::Result<()> {
         let ok = std::process::Command::new("open").args(["-a", "CADaddy", "--args", "--control", port]).status()?.success();
         if ok { Ok(()) } else { Err(std::io::Error::other("could not open CADaddy (is it in Applications?)")) }
     } else {
-        Err(std::io::Error::other(format!("CADaddy is not running; start it with `cadaddy --control {port}`")))
+        // Windows and Linux: the app installed beside this command-line tool (the installers and
+        // the portable folder put them together), started on its own with the control port.
+        let name = if cfg!(windows) { "cadaddy.exe" } else { "cadaddy" };
+        let app = std::env::current_exe()?.parent().map(|d| d.join(name)).filter(|p| p.is_file());
+        let Some(app) = app else {
+            return Err(std::io::Error::other(format!(
+                "CADaddy is not running and {name} isn't beside this tool; start it with `cadaddy --control {port}`"
+            )));
+        };
+        std::process::Command::new(app)
+            .args(["--control", port])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|_| ())
     }
 }
 
@@ -153,6 +168,7 @@ fn is_read_only(method: &str) -> bool {
             | "control.methods"
             | "ping"
             | "ui.inspect"
+            | "app.closePrompt"
             | "ui.render"
             | "ui.screenshot"
     )
@@ -202,7 +218,11 @@ const HEADLESS_METHODS: &[(&str, &str, &str)] = &[
     ("cmdline.input", "{text}", "Type a line at the command line exactly like a user (commands, prompts, keywords; empty = Enter)."),
     ("cmdline.script", "{text}", "Run a multi-line script, like a .scr file."),
     ("cmdline.key", "{key: \"enter\"|\"escape\"}", "Press Enter or Escape at the command line."),
-    ("cmdline.state", "", "Current prompt, keywords, accepted input kinds and history tail."),
+    (
+        "cmdline.state",
+        "",
+        "Current prompt (text and bare message), keywords, default, accepted input kinds, busy (a drawing still opening), closePrompt and history tail.",
+    ),
     ("engine.execute", "{command, params}", "Run any command with JSON parameters. Never opens a dialog."),
     ("engine.commands", "", "Every command: id, label, menu path, shortcut, aliases, params doc, enabled."),
     ("drawing.inspect", "{entities?, limit?}", "Drawing summary and entities with handles and geometry."),
@@ -231,8 +251,12 @@ fn state(s: &Session) -> Value {
     json!({
         "prompt": s.prompt_text(),
         "running": s.running.as_ref().map(|r| r.id.clone()),
+        "message": p.as_ref().map(|p| p.message.clone()),
         "keywords": p.as_ref().map(|p| p.keywords.clone()).unwrap_or_default(),
+        "default": p.as_ref().and_then(|p| p.default.clone()),
         "accept": p.as_ref().map(|p| p.accept),
+        "busy": false,
+        "closePrompt": Value::Null,
         "buffer": "",
         "history": s.log.iter().rev().take(20).rev().cloned().collect::<Vec<_>>(),
         "historyExpanded": false,
@@ -398,5 +422,38 @@ mod tests {
             assert!(err.starts_with("timeout") && err.contains(want), "{err}");
             server.join().unwrap();
         }
+    }
+}
+
+/// The open CADaddy window when one listens on [`cadaddy_engine::AGENT_PORT`], else an
+/// in-process session: decided the first time the server needs to know (listing its tools or
+/// its first call), so an app opened before the agent's first request is the one it drives.
+#[derive(Default)]
+pub struct Auto {
+    chosen: std::cell::RefCell<Option<Box<dyn Backend>>>,
+}
+
+impl Auto {
+    fn choose() -> Box<dyn Backend> {
+        let addr = format!("127.0.0.1:{}", cadaddy_engine::AGENT_PORT);
+        match Remote::connect(&addr) {
+            Ok(mut r) => match r.call("ping", Value::Null) {
+                Ok(_) => Box::new(r),
+                Err(_) => Box::new(Headless::default()),
+            },
+            Err(_) => Box::new(Headless::default()),
+        }
+    }
+}
+
+impl Backend for Auto {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.chosen.get_mut().get_or_insert_with(Self::choose).call(method, params)
+    }
+    fn has_ui(&self) -> bool {
+        self.chosen.borrow_mut().get_or_insert_with(Self::choose).has_ui()
+    }
+    fn describe(&self) -> String {
+        self.chosen.borrow_mut().get_or_insert_with(Self::choose).describe()
     }
 }

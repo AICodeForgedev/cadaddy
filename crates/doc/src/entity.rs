@@ -310,6 +310,9 @@ fn mask_scale() -> f64 {
 fn is_zero_i64(v: &i64) -> bool {
     *v == 0
 }
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
 fn attach_tl() -> u8 {
     1
 }
@@ -876,6 +879,24 @@ pub struct Viewport {
     /// Display on (MVIEW ON/OFF). An off viewport shows its border but no model space.
     #[serde(default = "yes")]
     pub on: bool,
+    /// View twist (radians, counterclockwise; DXF group 51): model space is shown turned by
+    /// this angle about the view centre.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub twist: f64,
+}
+impl Viewport {
+    /// The model-space point shown at paper point `p` (`None` for a degenerate viewport).
+    pub fn to_model(&self, p: Vec2) -> Option<Vec2> {
+        let k = self.view_height / self.height;
+        let q = self.view_center + (p - self.center.xy()).rotate(-self.twist) * k;
+        (k.is_finite() && k > 0.0 && q.is_finite()).then_some(q)
+    }
+    /// The paper point where model-space point `m` is shown (`None` for a degenerate viewport).
+    pub fn to_paper(&self, m: Vec2) -> Option<Vec2> {
+        let s = self.height / self.view_height;
+        let q = self.center.xy() + (m - self.view_center).rotate(self.twist) * s;
+        (s.is_finite() && s > 0.0 && q.is_finite()).then_some(q)
+    }
 }
 impl Default for Viewport {
     fn default() -> Self {
@@ -891,6 +912,7 @@ impl Default for Viewport {
             layer_colors: Vec::new(),
             clip: None,
             on: true,
+            twist: 0.0,
         }
     }
 }

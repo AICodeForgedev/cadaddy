@@ -41,6 +41,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use cadaddy_doc as doc;
+
+/// The local port (127.0.0.1 only) the desktop app listens on for AI agents unless its "Let AI
+/// agents control CADaddy" preference is off, and where `cadaddy-cli mcp` looks for it first.
+pub const AGENT_PORT: u16 = 47_820;
 pub use cadaddy_geom as geom;
 pub use cadaddy_render as render;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
@@ -165,6 +169,9 @@ pub struct DocState {
     /// plan view. In other views [`View::center`] is on the view plane (see
     /// [`DocState::projection`]).
     pub view_dir: cadaddy_geom::Vec3,
+    /// Model space's view twist (VIEWTWIST, radians counterclockwise) in the plan view; a
+    /// twisted plan view is drawn through [`DocState::projection`] like a 3D view.
+    pub view_twist: f64,
     pub uid: u64,
     /// The drawing is saved as binary DXF (it was opened from one, or last saved as one).
     pub binary_dxf: bool,
@@ -204,6 +211,7 @@ impl DocState {
             views: Vec::new(),
             view_history: Vec::new(),
             view_dir: cadaddy_geom::Vec3::Z,
+            view_twist: 0.0,
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             binary_dxf: false,
             read_loss: None,
@@ -259,13 +267,59 @@ impl DocState {
             _ => None,
         }
     }
-    /// The 3D view of model space on screen, `None` in the plan view and in layouts (paper
-    /// space and layout viewports are drawn in plan).
+    /// How model space is on screen when that is not the plain plan view: a 3D view, a
+    /// twisted plan view, or (in MSPACE) the active viewport's view twist. [`View::center`] and
+    /// screen picks are then on its view plane. `None` in the untwisted plan view and in paper
+    /// space.
     pub fn projection(&self) -> Option<cadaddy_geom::view3::Projection> {
+        use cadaddy_geom::view3::{Projection, is_plan};
         if self.space != Space::Model || self.mspace.is_some() {
-            return None;
+            return self.active_viewport().and_then(|(_, v)| Projection::plan_twist(v.twist));
         }
-        cadaddy_geom::view3::Projection::new(self.view_dir)
+        if is_plan(self.view_dir) { Projection::plan_twist(self.view_twist) } else { Projection::new(self.view_dir) }
+    }
+    /// The view twist on screen (radians, counterclockwise): the active MSPACE viewport's, else
+    /// model space's plan view's; 0 in paper space and in 3D views.
+    pub fn twist(&self) -> f64 {
+        self.projection().map_or(0.0, |p| p.twist())
+    }
+    /// Set the view twist (radians, counterclockwise) of the view on screen: the active MSPACE
+    /// viewport's (turning about its centre) or model space's plan view (turning about the
+    /// centre of the screen). False, changing nothing, in paper space, in a 3D view and for a
+    /// twist that isn't finite.
+    pub fn set_twist(&mut self, twist: f64) -> bool {
+        use cadaddy_geom::view3::{Projection, is_plan};
+        if !twist.is_finite() {
+            return false;
+        }
+        let t = cadaddy_geom::norm_angle(twist);
+        if let Some((h, _)) = self.active_viewport() {
+            let space = self.space.clone();
+            let doc = Arc::make_mut(&mut self.doc);
+            return doc.space_mut(&space).is_some_and(|store| {
+                store.modify(h, |e| {
+                    if let cadaddy_doc::EntityKind::Viewport(x) = &mut e.kind {
+                        x.twist = t;
+                    }
+                })
+            });
+        }
+        if self.space != Space::Model || !is_plan(self.view_dir) {
+            return false;
+        }
+        let v = self.view();
+        // The model point at the centre of the screen stays there.
+        let m = self.projection().and_then(|p| p.unproject(v.center, 0.0)).unwrap_or(v.center);
+        self.view_twist = t;
+        let center = Projection::plan_twist(t).map_or(m, |p| p.project(m.to3(0.0)));
+        self.put_paper_view(View { center, height: v.height });
+        true
+    }
+    /// The projection the current space's display list is built with: [`Self::projection`],
+    /// except in a layout, whose sheet is drawn flat (an MSPACE viewport's model space is drawn
+    /// through the viewport).
+    pub fn list_projection(&self) -> Option<cadaddy_geom::view3::Projection> {
+        if self.space != Space::Model { None } else { self.projection() }
     }
     pub fn paper_view(&self) -> View {
         self.views.iter().find(|(s, _)| *s == self.space).map(|(_, v)| *v).unwrap_or_default()
@@ -277,7 +331,8 @@ impl DocState {
         match self.active_viewport() {
             Some((_, vp)) => {
                 let k = vp.view_height / vp.height;
-                View { center: vp.view_center + (pv.center - vp.center.xy()) * k, height: pv.height * k }
+                // On the view plane: the model turned by the viewport's twist.
+                View { center: vp.view_center.rotate(vp.twist) + (pv.center - vp.center.xy()) * k, height: pv.height * k }
             }
             None => pv,
         }
@@ -292,14 +347,14 @@ impl DocState {
             if vp.locked {
                 // A locked viewport keeps its scale: pan/zoom the sheet instead.
                 let k0 = vp.view_height / vp.height;
-                let pc = vp.center.xy() + (v.center - vp.view_center) / k0;
+                let pc = vp.center.xy() + (v.center - vp.view_center.rotate(vp.twist)) / k0;
                 let paper = View { center: pc, height: v.height / k0 };
                 if !usable_view(&paper) {
                     return false;
                 }
                 self.put_paper_view(paper);
             } else {
-                let center = v.center - (pv.center - vp.center.xy()) * k;
+                let center = (v.center - (pv.center - vp.center.xy()) * k).rotate(-vp.twist);
                 let height = vp.height * k;
                 if !usable_view(&View { center, height }) {
                     return false;
@@ -352,7 +407,7 @@ impl DocState {
     /// The view ZOOM starts from: the model view of the active unlocked viewport, else [`Self::view`].
     pub fn zoom_frame(&self) -> View {
         match self.zoom_viewport() {
-            Some(v) => View { center: v.view_center, height: v.view_height },
+            Some(v) => View { center: v.view_center.rotate(v.twist), height: v.view_height },
             None => self.view(),
         }
     }
@@ -1177,8 +1232,7 @@ impl Session {
             Input::Point(p) => {
                 let ap = self.pixel_size() * self.settings.pickbox.max(1.0) * 1.5;
                 if let Some(pw) = self.pending_window.take() {
-                    let crossing = p.x < pw.corner.x;
-                    let hs = select::select_window(self.doc()?, &space, Bounds2::new(pw.corner, p), crossing);
+                    let hs = self.window_selection(&space, pw.corner, p)?;
                     return Ok(Some(Input::Pick(cmd::groups::expand(self, hs))));
                 }
                 match select::pick(self.doc()?, &space, p, ap) {
@@ -1372,6 +1426,7 @@ impl Session {
         cmd::groups::after_command(self, before);
         cmd::constraints::after_command(self, before, ok);
         assoc::after_command(self, before, uid);
+        cmd::clip_partners::after_command(self, before);
     }
 
     fn resume_suspended(&mut self) {
@@ -1709,8 +1764,7 @@ impl Session {
     pub fn idle_click(&mut self, p: Vec2, shift: bool) -> Result<()> {
         let space = self.space();
         if let Some(pw) = self.pending_window.take() {
-            let crossing = p.x < pw.corner.x;
-            let hs = select::select_window(self.doc()?, &space, Bounds2::new(pw.corner, p), crossing);
+            let hs = self.window_selection(&space, pw.corner, p)?;
             self.idle_select_area(hs, shift);
             return Ok(());
         }
@@ -1807,6 +1861,22 @@ impl Session {
         }
         self.idle_pick(h, shift);
         Ok(())
+    }
+
+    /// The objects in the selection window from `a` to `b` (drawing points): a window left to
+    /// right on screen, a crossing window right to left. In a twisted plan view the window is
+    /// the screen's rectangle, a turned one in the drawing.
+    fn window_selection(&self, space: &Space, a: Vec2, b: Vec2) -> Result<Vec<Handle>> {
+        let d = self.doc()?;
+        let twisted = self.state()?.projection().filter(|p| cadaddy_geom::view3::is_plan(p.dir));
+        let Some(pr) = twisted else { return Ok(select::select_window(d, space, Bounds2::new(a, b), b.x < a.x)) };
+        let (sa, sb) = (pr.project(a.to3(0.0)), pr.project(b.to3(0.0)));
+        let screen = Bounds2::new(sa, sb);
+        let poly: Option<Vec<Vec2>> = screen.corners().into_iter().map(|c| pr.unproject(c, 0.0)).collect();
+        Ok(match poly {
+            Some(poly) => select::select_polygon(d, space, &poly, sb.x < sa.x),
+            None => select::select_window(d, space, Bounds2::new(a, b), b.x < a.x),
+        })
     }
 
     /// Remember the selection used by a command as "Previous".

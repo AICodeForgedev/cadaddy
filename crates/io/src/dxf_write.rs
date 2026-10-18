@@ -1236,8 +1236,14 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             // Status 68: a positive value is "on" (the stacking order; 1 is the active viewport), 0 off.
             w.i(68, if v.on { i64::from(v.id.clamp(1, 32767)) } else { 0 });
             w.i(69, i64::from(v.id));
-            w.p2(12, v.view_center);
+            // The view centre is in display coordinates (the target is the origin), which the
+            // twist turns.
+            let twist = if v.twist.is_finite() { v.twist } else { 0.0 };
+            w.p2(12, v.view_center.rotate(twist));
             w.f(45, v.view_height);
+            if twist != 0.0 {
+                w.f(51, twist.to_degrees());
+            }
             // Status flags: 16384 = display locked, 32768 = always set, 65536 = clipped by the
             // 340 entity, 131072 = off.
             let clip = v.clip.filter(|h| *h != e.handle && d.entity(*h).is_some());

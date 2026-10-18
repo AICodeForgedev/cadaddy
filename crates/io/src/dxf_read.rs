@@ -84,6 +84,11 @@ fn common(t: &T) -> Common {
 }
 
 /// Apply the OCS → WCS transform for 2D entities with a non-default extrusion.
+/// A VIEWPORT's view twist (51, degrees) in radians; 0 when absent or not finite.
+fn viewport_twist(t: &T) -> f64 {
+    t.f(51).filter(|a| a.is_finite()).map_or(0.0, |a| a.rem_euclid(360.0).to_radians())
+}
+
 fn ocs(c: &Common, p: Vec3) -> Vec3 {
     ocs_n(c.extrusion, p)
 }
@@ -503,10 +508,11 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             center: t.p(10),
             width: t.fd(40, 1.0),
             height: t.fd(41, 1.0),
-            // The view centre (12/22) is measured from the view target (17/27): AutoCAD moves
-            // the target when it pans (tablet_overlay.dwg). In a plan view that is a plain offset.
+            // The view centre (12/22) is in display coordinates, measured from the view target
+            // (17/27): AutoCAD moves the target when it pans (tablet_overlay.dwg). In a plan view
+            // that is an offset along the display axes, which the view twist (51) turns.
             view_center: {
-                let c = Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0));
+                let c = Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0)).rotate(-viewport_twist(&t));
                 let dir = t.p(16);
                 let target = Vec2::new(t.fd(17, 0.0), t.fd(27, 0.0));
                 if dir.x.abs() < 1e-9 && dir.y.abs() < 1e-9 && target.is_finite() { c + target } else { c }
@@ -519,6 +525,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             // Status flags: 65536 = non-rectangular clipping (by the 340 entity), 131072 = off.
             clip: t.s(340).and_then(|h| Handle::parse_hex(&h)).filter(|h| h.0 != 0 && t.i(90).unwrap_or(0) & 65536 != 0),
             on: t.i(90).unwrap_or(0) & 131072 == 0,
+            twist: viewport_twist(&t),
         }),
         "WIPEOUT" => {
             let o = t.p(10);

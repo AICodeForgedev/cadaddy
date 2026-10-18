@@ -1313,3 +1313,27 @@ menu	Modify	Modifikace
 	Press Space to cycle options	Mezerníkem přepnete možnosti
 	Burst	Rozložit s atributy
 	Convert to Mtext	Převést na víceřádkový text
+	View Twist	Natočení pohledu
+	Let AI agents control CADaddy	Povolit agentům AI ovládat CADaddy
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	Konektor Claude a další agenti na tomto počítači pak mohou v tomto okně otevírat, upravovat, ukládat a zavírat výkresy. Nic mimo tento počítač se připojit nemůže. Projeví se při dalším spuštění CADaddy.
+	Base Point	Základní bod
+	Column Spacing	Rozteč sloupců
+	Column Count	Počet sloupců
+	Row Spacing	Rozteč řad
+	Row Count	Počet řad
+	Row and Column Count	Počet řad a sloupců
+	Level Spacing	Rozteč úrovní
+	Level Count	Počet úrovní
+	Item Spacing	Rozteč prvků
+	Item Count	Počet prvků
+	Total column spacing	Celková rozteč sloupců
+	Total row spacing	Celková rozteč řad
+	Total row and column spacing	Celková rozteč řad a sloupců
+	Total level spacing	Celková rozteč úrovní
+	Fill angle	Úhel vyplnění
+	Stretch radius	Protáhnout poloměr
+	Array Grips	Úchopy pole
+	Edit Array with a Grip	Upravit pole úchopem
+	Open Drawings	Otevřené výkresy
+	Close Drawing	Zavřít výkres
+	Close All Drawings	Zavřít všechny výkresy
