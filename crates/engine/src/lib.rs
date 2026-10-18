@@ -142,6 +142,31 @@ pub struct Snapshot {
     pub label: String,
     pub doc: Arc<Drawing>,
     pub selection: Vec<Handle>,
+    /// Roughly the memory this step holds that the drawing after it doesn't share (set when it is
+    /// recorded; 0 until then). Undo keeps the total under [`undoctl::UNDO_BUDGET`].
+    pub bytes: usize,
+}
+
+/// The extents of a space, remembered for the last few drawings: a drawing is never changed in
+/// place (every edit makes a new one), so the same drawing has the same extents. ZOOM Extents
+/// on a 190k-object drawing walked every object each time (about 70 ms).
+pub(crate) fn cached_extents(d: &Arc<Drawing>, space: &Space) -> Bounds2 {
+    type Entry = (std::sync::Weak<Drawing>, Space, Bounds2);
+    static CACHE: std::sync::Mutex<Vec<Entry>> = std::sync::Mutex::new(Vec::new());
+    if let Ok(c) = CACHE.lock()
+        && let Some((_, _, b)) = c.iter().find(|(w, sp, _)| sp == space && std::ptr::eq(w.as_ptr(), Arc::as_ptr(d)) && w.strong_count() > 0)
+    {
+        return *b;
+    }
+    let b = d.extents(space);
+    if let Ok(mut c) = CACHE.lock() {
+        c.retain(|(w, _, _)| w.strong_count() > 0);
+        if c.len() >= 8 {
+            c.remove(0);
+        }
+        c.push((Arc::downgrade(d), space.clone(), b));
+    }
+    b
 }
 
 /// One open drawing.
@@ -500,6 +525,15 @@ pub struct Settings {
     /// ACADLSPASDOC: acad.lsp loads into every drawing, not once per session.
     pub acadlspasdoc: bool,
     pub pickadd: bool,
+    /// FILEDIA: 0 makes file commands ask on the command line instead of opening dialogs. Kept for
+    /// the session (AutoCAD keeps it in the registry), not per drawing.
+    pub filedia: u8,
+    /// CMDECHO: commands run from LISP echo their prompts (1) or not (0).
+    pub cmdecho: u8,
+    /// EXPERT: 0–5, how many "are you sure?" questions are suppressed.
+    pub expert: u8,
+    /// ATTDIA: 1 asks for attribute values in a dialog when inserting, 0 on the command line.
+    pub attdia: u8,
     /// PICKSTYLE: bit 1 picks whole selectable groups ([`cmd::groups`]), bit 2 associative hatches
     /// with their boundaries (stored, not used yet).
     pub pickstyle: u8,
@@ -591,6 +625,10 @@ impl Default for Settings {
             pickfirst: true,
             acadlspasdoc: false,
             pickadd: true,
+            filedia: 1,
+            cmdecho: 1,
+            expert: 0,
+            attdia: 0,
             pickstyle: 1,
             groupdisplaymode: 2,
             objectisolationmode: 0,
@@ -660,6 +698,10 @@ pub struct LastUsed {
     /// The last value entered for each attribute of a library symbol ("EL_SWITCH|CIRCUIT"): the
     /// next placement offers it, and fills its hidden fields (PANEL, MOUNT_HT) with it.
     pub symbol_attribs: std::collections::HashMap<String, String>,
+    /// The last AREA measured (AREA and PERIMETER) and the last DIST (DISTANCE).
+    pub area: f64,
+    pub perimeter: f64,
+    pub distance: f64,
 }
 
 impl Default for LastUsed {
@@ -673,6 +715,9 @@ impl Default for LastUsed {
             mleader: MLeaderOptions::default(),
             mleader_block: String::new(),
             symbol_attribs: std::collections::HashMap::new(),
+            area: 0.0,
+            perimeter: 0.0,
+            distance: 0.0,
         }
     }
 }
@@ -1037,7 +1082,7 @@ impl Session {
         {
             // Inside a LISP routine the routine's single undo step records it.
             if !grouped {
-                st.push_undo(Snapshot { label: spec.label.to_string(), doc, selection: sel });
+                st.push_undo(Snapshot { label: spec.label.to_string(), doc, selection: sel, bytes: 0 });
             }
             st.revision += 1;
         }
@@ -1424,7 +1469,11 @@ impl Session {
         self.pending_window = None;
         self.select_mode = None;
         let label = find_command(&run.id).map(|c| c.label).unwrap_or("Command");
-        let _ = cancelled;
+        // A cancelled command leaves the selection as it found it: objects picked at its "Select
+        // objects" must not stay selected for the next command (ERASE would take them unasked).
+        if cancelled {
+            self.set_selection(run.selection_before.clone());
+        }
         if let Some(m) = cmd::blocks::refedit::after_command(self, &run.before, &run.id) {
             self.echo(m);
         }
@@ -1442,7 +1491,7 @@ impl Session {
         if let Ok(st) = self.state_mut()
             && !Arc::ptr_eq(&run.before, &st.doc)
         {
-            st.push_undo(Snapshot { label: label.to_string(), doc: run.before, selection: run.selection_before });
+            st.push_undo(Snapshot { label: label.to_string(), doc: run.before, selection: run.selection_before, bytes: 0 });
             st.revision += 1;
         }
     }
@@ -1460,6 +1509,8 @@ impl Session {
         cmd::constraints::after_command(self, before, ok);
         assoc::after_command(self, before, uid);
         cmd::clip_partners::after_command(self, before);
+        cmd::table::after_command(self, before);
+        cmd::annotate::dimbreak_after_command(self, before);
     }
 
     fn resume_suspended(&mut self) {
@@ -1755,7 +1806,7 @@ impl Session {
     pub fn undo(&mut self) -> Result<Option<String>> {
         let st = self.state_mut()?;
         let Some(snap) = st.undo.pop() else { return Ok(None) };
-        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone() };
+        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone(), bytes: snap.bytes };
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
         st.selection = Vec::new();
@@ -1766,7 +1817,7 @@ impl Session {
     pub fn redo(&mut self) -> Result<Option<String>> {
         let st = self.state_mut()?;
         let Some(snap) = st.redo.pop() else { return Ok(None) };
-        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone() };
+        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone(), bytes: snap.bytes };
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
         st.selection = Vec::new();
@@ -1939,7 +1990,7 @@ impl Session {
         let st = self.state()?;
         Ok(match st.projection() {
             Some(p) => cmd::view::view3d::projected_extents(&st.doc, &p),
-            None => st.doc.extents(&self.space()),
+            None => cached_extents(&st.doc, &self.space()),
         })
     }
 

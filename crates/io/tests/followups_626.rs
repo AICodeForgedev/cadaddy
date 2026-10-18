@@ -51,6 +51,11 @@ fn mleader_drawing() -> (Drawing, MLeader) {
         arrow_size: 1.0,
         spline: false,
         block: None,
+        roots: Vec::new(),
+        leader_color: None,
+        leader_linetype: None,
+        arrow: None,
+        text_frame: false,
     };
     d.add(&Space::Model, Common { layer: "0".into(), ..Common::default() }, EntityKind::MLeader(m.clone())).unwrap();
     (d, m)

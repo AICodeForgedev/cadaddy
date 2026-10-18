@@ -799,7 +799,8 @@ fn korean_ui_fonts_cover_catalog_and_language_picker_in_both_families() {
     let english = crate::theme::cjk_covers_hangul();
     assert_eq!(with_language("en", || Preference::Korean.name()), if english { "한국어" } else { "Korean" });
     assert_eq!(with_language("ko", || Preference::Korean.name()), "한국어");
-    crate::theme::install_fonts(&ctx, if english { "en" } else { "ko" });
+    // CJK fonts load on demand in other languages; showing a language picker is such a demand.
+    crate::theme::install_fonts(&ctx, if english { "en" } else { "ko" }, true);
     let mut output = ctx.run_ui(Default::default(), |_| {});
     output.textures_delta.clear();
     let missing = ctx.fonts_mut(|view| {

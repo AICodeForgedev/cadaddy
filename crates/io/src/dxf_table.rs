@@ -234,3 +234,86 @@ mod tests {
         assert_eq!(c.concat(), s);
     }
 }
+
+/// A formula cell's FIELD objects (DXF Reference, FIELD): a `_text` field holding the cell's
+/// text (`%<\_FldIdx 0>%`) that owns an `AcExpr` field with the formula (`\AcExpr (…)`) and its
+/// cached value. The cell points at the first with group 344, so other programs see the formula.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CellField {
+    pub row: usize,
+    pub col: usize,
+    /// The `_text` field's handle, then the `AcExpr` field's.
+    pub text: String,
+    pub expr: String,
+    /// The formula without its `=`.
+    pub code: String,
+    pub value: Option<f64>,
+}
+
+/// Most formula cells of one table written as fields.
+const MAX_FIELDS: usize = 100_000;
+
+/// The FIELD objects a table's formula cells need, with handles from `next`.
+pub(crate) fn plan_fields(t: &Table, mut next: impl FnMut() -> String) -> Vec<CellField> {
+    let mut out = Vec::new();
+    for (r, row) in t.cells.iter().enumerate().take(t.row_heights.len()) {
+        for (c, cell) in row.iter().enumerate().take(t.col_widths.len()) {
+            let Some(f) = cell.formula.as_deref().map(str::trim).filter(|f| f.len() > 1) else { continue };
+            if out.len() >= MAX_FIELDS {
+                return out;
+            }
+            let code = f.strip_prefix('=').unwrap_or(f).to_string();
+            let value = cadaddy_doc::number_of(&cell.text);
+            out.push(CellField { row: r, col: c, text: next(), expr: next(), code, value });
+        }
+    }
+    out
+}
+
+/// The FIELD handle (upper case) of each cell of an ACAD_TABLE that has one (group 344), by the
+/// cell's row-major index.
+pub(crate) fn cell_fields(tags: &[Tag]) -> Vec<(usize, String)> {
+    let start = tags.iter().position(|x| x.code == 100 && x.str() == "AcDbTable").unwrap_or(0);
+    let tail = tags.get(start..).unwrap_or(&[]);
+    let end = tail.iter().position(|x| x.code >= 1000).unwrap_or(tail.len());
+    let mut out = Vec::new();
+    let mut index: Option<usize> = None;
+    for t in tail.get(..end).unwrap_or(&[]) {
+        match t.code {
+            171 => index = Some(index.map_or(0, |i| i + 1)),
+            344 => {
+                if let Some(i) = index
+                    && out.len() < MAX_FIELDS
+                {
+                    out.push((i, t.str().trim().to_ascii_uppercase()));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The formula (with its `=`) a cell's FIELD holds: an `AcExpr` field, directly or as a child of
+/// the cell's `_text` field. `fields` finds FIELD objects by upper-case handle.
+pub(crate) fn field_formula(fields: &std::collections::HashMap<String, Vec<Tag>>, handle: &str) -> Option<String> {
+    let expr = |tags: &[Tag]| -> Option<String> {
+        let start = tags.iter().position(|x| x.code == 100 && x.str() == "AcDbField").unwrap_or(0);
+        let tags = tags.get(start..)?;
+        let evaluator = tags.iter().find(|x| x.code == 1)?.str();
+        if !evaluator.trim().eq_ignore_ascii_case("AcExpr") {
+            return None;
+        }
+        let code: String = tags.iter().skip_while(|x| x.code != 2).take_while(|x| x.code == 2 || x.code == 3).map(Tag::str).collect();
+        let code = code.trim();
+        let rest = code.strip_prefix("\\AcExpr").unwrap_or(code).trim();
+        let inner = rest.strip_prefix('(').and_then(|r| r.strip_suffix(')')).unwrap_or(rest).trim();
+        (!inner.is_empty() && inner.len() <= 10_000).then(|| format!("={inner}"))
+    };
+    let root = fields.get(handle)?;
+    if let Some(f) = expr(root) {
+        return Some(f);
+    }
+    // Its children (360), one level down.
+    root.iter().filter(|x| x.code == 360).take(16).find_map(|c| fields.get(&c.str().trim().to_ascii_uppercase()).and_then(|t| expr(t)))
+}

@@ -1164,3 +1164,32 @@
 	Material	Материал
 	Shadow display	Отображение теней
 	Center object	Объект центра
+	Move with Dim Line	Переместить с размерной линией
+	Move Text Only	Переместить только текст
+	Above Dim Line	Над размерной линией
+	Center Vertically	По центру по вертикали
+	Reset Text Position	Сбросить положение текста
+	Continue Dimension	Продолжить размер
+	Baseline Dimension	Размер от базовой линии
+	Flip Arrow	Перевернуть стрелку
+	Lengthen Landing	Удлинить полку
+	Origin Point	Точка начала
+	Hatch Angle	Угол штриховки
+	Hatch Scale	Масштаб штриховки
+	Edit Tolerance	Редактировать допуск
+	Geometric Tolerance	Геометрический допуск
+	Geometric characteristic	Геометрическая характеристика
+	Material condition	Условие материала
+	No symbol	Без символа
+	Projected Tolerance Zone	Выступающее поле допуска
+	Datum Identifier	Обозначение базы
+	Sym	Знак
+	Tolerance 1	Допуск 1
+	Tolerance 2	Допуск 2
+	Datum 1	База 1
+	Datum 2	База 2
+	Datum 3	База 3
+	PDF Underlay...	PDF-подложка...
+	Clip PDF Underlay	Подрезать PDF-подложку
+	Adjust PDF Underlay	Настроить PDF-подложку
+	PDF Underlay Layers	Слои PDF-подложки

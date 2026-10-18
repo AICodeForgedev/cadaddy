@@ -1391,3 +1391,32 @@ menu	Modify	Edita
 	Material	Materiale
 	Shadow display	Visualizzazione ombre
 	Center object	Oggetto centro
+	Move with Dim Line	Sposta con linea di quota
+	Move Text Only	Sposta solo testo
+	Above Dim Line	Sopra la linea di quota
+	Center Vertically	Centra verticalmente
+	Reset Text Position	Ripristina posizione testo
+	Continue Dimension	Continua quota
+	Baseline Dimension	Quota da linea di base
+	Flip Arrow	Inverti freccia
+	Lengthen Landing	Allunga approdo
+	Origin Point	Punto di origine
+	Hatch Angle	Angolo tratteggio
+	Hatch Scale	Scala tratteggio
+	Edit Tolerance	Modifica tolleranza
+	Geometric Tolerance	Tolleranza geometrica
+	Geometric characteristic	Caratteristica geometrica
+	Material condition	Condizione di materiale
+	No symbol	Nessun simbolo
+	Projected Tolerance Zone	Zona di tolleranza proiettata
+	Datum Identifier	Identificatore di riferimento
+	Sym	Sim
+	Tolerance 1	Tolleranza 1
+	Tolerance 2	Tolleranza 2
+	Datum 1	Riferimento 1
+	Datum 2	Riferimento 2
+	Datum 3	Riferimento 3
+	PDF Underlay...	Sottoposto PDF...
+	Clip PDF Underlay	Ritaglia sottoposto PDF
+	Adjust PDF Underlay	Regola sottoposto PDF
+	PDF Underlay Layers	Layer del sottoposto PDF

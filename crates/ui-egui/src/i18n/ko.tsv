@@ -1391,3 +1391,32 @@ menu	Modify	수정
 	Material	재료
 	Shadow display	그림자 표시
 	Center object	중심 객체
+	Move with Dim Line	치수선과 함께 이동
+	Move Text Only	문자만 이동
+	Above Dim Line	치수선 위
+	Center Vertically	수직 가운데
+	Reset Text Position	문자 위치 재설정
+	Continue Dimension	치수 계속
+	Baseline Dimension	기준선 치수
+	Flip Arrow	화살표 뒤집기
+	Lengthen Landing	연결선 늘이기
+	Origin Point	원점
+	Hatch Angle	해치 각도
+	Hatch Scale	해치 축척
+	Edit Tolerance	공차 편집
+	Geometric Tolerance	기하학적 공차
+	Geometric characteristic	기하학적 특성
+	Material condition	재료 조건
+	No symbol	기호 없음
+	Projected Tolerance Zone	돌출 공차 영역
+	Datum Identifier	데이텀 식별자
+	Sym	기호
+	Tolerance 1	공차 1
+	Tolerance 2	공차 2
+	Datum 1	데이텀 1
+	Datum 2	데이텀 2
+	Datum 3	데이텀 3
+	PDF Underlay...	PDF 언더레이...
+	Clip PDF Underlay	PDF 언더레이 자르기
+	Adjust PDF Underlay	PDF 언더레이 조정
+	PDF Underlay Layers	PDF 언더레이 도면층

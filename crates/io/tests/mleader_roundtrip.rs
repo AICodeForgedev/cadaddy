@@ -38,6 +38,11 @@ fn text_mleader() -> MLeader {
         arrow_size: 0.3,
         spline: false,
         block: None,
+        roots: Vec::new(),
+        leader_color: None,
+        leader_linetype: None,
+        arrow: None,
+        text_frame: false,
     }
 }
 
@@ -133,6 +138,11 @@ fn spline_leader_with_block_content_and_attributes() {
         arrow_size: 0.18,
         spline: true,
         block: Some(ins),
+        roots: Vec::new(),
+        leader_color: None,
+        leader_linetype: None,
+        arrow: None,
+        text_frame: false,
     };
     d.add(&Space::Model, Common::default(), EntityKind::MLeader(m.clone())).unwrap();
     let (_, back) = roundtrip(&d);
@@ -213,7 +223,12 @@ fn foreign_multileader_with_two_landings() {
     assert_eq!(m.landing, Vec3::new(5.0, 5.0, 0.0));
     assert_eq!(m.dogleg, 0.5);
     assert_eq!(m.arrow_size, 1.5);
-    assert_eq!(m.leaders, vec![vec![Vec3::ZERO], vec![Vec3::new(25.0, 0.0, 0.0), Vec3::new(20.0, 5.0, 0.0)]]);
+    // The second root is a landing of its own, right of the text (its dogleg points left).
+    assert_eq!(m.leaders, vec![vec![Vec3::ZERO]]);
+    assert_eq!(m.roots.len(), 1);
+    assert_eq!(m.roots[0].landing, Vec3::new(20.0, 5.0, 0.0));
+    assert_eq!(m.roots[0].leaders, vec![vec![Vec3::new(25.0, 0.0, 0.0)]]);
+    assert_eq!((m.roots[0].dogleg, m.roots[0].dir), (0.5, -1.0));
     let t = m.text.as_ref().unwrap();
     assert_eq!(t.contents, "HELLO");
     assert_eq!(t.insert, Vec3::new(6.0, 5.0, 0.0));

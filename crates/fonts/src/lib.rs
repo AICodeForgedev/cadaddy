@@ -16,6 +16,7 @@
 pub mod bidi;
 mod complex;
 mod mtext;
+pub mod shx;
 mod stroke;
 pub mod subset;
 pub mod ttf;
@@ -23,7 +24,7 @@ pub mod ttf;
 use cadaddy_geom::{Bounds2, Vec2};
 
 pub use mtext::para::{DEFAULT_TAB, ListStyle, MTextColumnSpec, ParaAlign, ParaProps, Paragraphs, TabKind, list_contents};
-pub use mtext::{MTextColor, MTextLayout, MTextParams, MTextPiece, layout_mtext, layout_mtext_with, plain_mtext};
+pub use mtext::{CaretLine, MTextColor, MTextLayout, MTextParams, MTextPiece, layout_mtext, layout_mtext_with, plain_mtext};
 
 mod craft_fonts;
 pub use craft_fonts::{CRAFT_FONTS, CraftFont};
@@ -324,6 +325,9 @@ pub fn line_width(s: &str, height: f64, width_factor: f64) -> f64 {
 /// Width of the gap MTEXT leaves between two words. Words are measured without their trailing
 /// letter gap, so the stroke font's gap is added on both sides of the space, as TEXT lays it out.
 pub fn space_width(font: &TextFont, height: f64, width_factor: f64) -> f64 {
+    if let TextFont::Shx { main, big } = font {
+        return shx::width(main, big.as_deref(), " ", height, width_factor);
+    }
     if let TextFont::Outline(face) = font
         && let Some(w) = ttf::width(face, " ", height, width_factor)
     {
@@ -339,6 +343,12 @@ pub enum TextFont {
     #[default]
     Stroke,
     Outline(ttf::Face),
+    /// A compiled shape font found on the font search path ([`shx`]), with the style's big font
+    /// for the characters it lacks.
+    Shx {
+        main: std::sync::Arc<shx::ShxFont>,
+        big: Option<std::sync::Arc<shx::ShxFont>>,
+    },
 }
 
 impl TextFont {
@@ -346,6 +356,14 @@ impl TextFont {
     /// can't find (an SHX file, a missing TTF), the FONTALT font ([`ttf::font_alt`]) when set;
     /// else the stroke font.
     pub fn resolve(name: &str) -> TextFont {
+        Self::resolve_style(name, "")
+    }
+    /// [`Self::resolve`] for a text style with a big font (an .shx for double-byte characters):
+    /// a shape font found on the font search path draws with it, the big font filling in.
+    pub fn resolve_style(name: &str, big_font: &str) -> TextFont {
+        if let Some(main) = shx::find(name) {
+            return TextFont::Shx { main, big: shx::find(big_font) };
+        }
         if let Some(f) = ttf::find(name) {
             return TextFont::Outline(f);
         }
@@ -471,6 +489,9 @@ pub(crate) fn decorations(spans: &[(f64, f64, bool, bool)], h: f64) -> Vec<Vec<V
 /// Shape one line in `font` (baseline at y = 0, x from 0). TrueType fonts that fail to parse
 /// fall back to the stroke font.
 pub fn shape_line(font: &TextFont, s: &str, height: f64, width_factor: f64, oblique: f64) -> Shaped {
+    if let TextFont::Shx { main, big } = font {
+        return shx::shape(main, big.as_deref(), s, height, width_factor, oblique);
+    }
     if let TextFont::Outline(face) = font
         && let Some(sh) = ttf::shape(face, s, height, width_factor, oblique)
     {
@@ -481,6 +502,9 @@ pub fn shape_line(font: &TextFont, s: &str, height: f64, width_factor: f64, obli
 
 /// Width of one line in `font`.
 pub fn text_width(font: &TextFont, s: &str, height: f64, width_factor: f64) -> f64 {
+    if let TextFont::Shx { main, big } = font {
+        return shx::width(main, big.as_deref(), s, height, width_factor);
+    }
     if let TextFont::Outline(face) = font
         && let Some(w) = ttf::width(face, s, height, width_factor)
     {

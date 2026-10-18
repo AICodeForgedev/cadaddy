@@ -496,6 +496,7 @@ pub fn class_name(k: &EntityKind) -> &'static str {
         EntityKind::Region(_) => "AcDbRegion",
         EntityKind::Viewport(_) => "AcDbViewport",
         EntityKind::Image(_) => "AcDbRasterImage",
+        EntityKind::Underlay(_) => "AcDbPdfReference",
         EntityKind::Wipeout(_) => "AcDbWipeout",
         EntityKind::Table(_) => "AcDbTable",
         EntityKind::Tolerance(_) => "AcDbFcf",
@@ -717,7 +718,7 @@ mod hatch_pattern_pick_tests {
 
     fn square(lo: f64, hi: f64, outer: bool) -> HatchLoop {
         let vertices = [(lo, lo), (hi, lo), (hi, hi), (lo, hi)].iter().map(|&(x, y)| PolyVertex::new(Vec2::new(x, y))).collect();
-        HatchLoop { vertices, outer, sources: Vec::new() }
+        HatchLoop { curves: Vec::new(), vertices, outer, sources: Vec::new() }
     }
 
     fn ansi31_hatch(loops: Vec<HatchLoop>) -> Drawing {
@@ -781,6 +782,7 @@ mod hatch_pattern_pick_tests {
     #[test]
     fn solid_hatch_is_picked_inside_its_fill_not_its_bounding_rectangle() {
         let tri = HatchLoop {
+            curves: Vec::new(),
             vertices: [(0.0, 0.0), (10.0, 0.0), (0.0, 10.0)].iter().map(|&(x, y)| PolyVertex::new(Vec2::new(x, y))).collect(),
             outer: true,
             sources: Vec::new(),

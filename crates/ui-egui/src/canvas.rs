@@ -136,6 +136,12 @@ pub struct CanvasState {
     grip_editing: bool,
     /// The grip whose menu (Stretch, Add Vertex, Lengthen…) a right-click opened.
     grip_menu: Option<(Handle, usize)>,
+    /// The grip the cursor rests on and since when (seconds), and the hover menu it opened: a
+    /// multifunctional grip shows its options when the cursor stays on it.
+    grip_hover: Option<((Handle, usize), f64)>,
+    hover_menu: Option<(Handle, usize)>,
+    /// Ctrl was down last frame (a Ctrl tap during a grip edit cycles the grip's options).
+    ctrl_down: bool,
     /// Dynamic block grips of the selection (cached), the one being dragged, and the list grip
     /// whose choices are open (and whether it opened this frame).
     pub(crate) dyn_grips: crate::dyngrips::Cache,
@@ -1696,6 +1702,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.canvas.grip_menu = grip_at(app, &xf, hover_pos).filter(|g| !grip_options(app, *g).is_empty());
     }
     crate::dyngrips::menu(app, ui.ctx(), &xf);
+    // Ctrl tapped while a grip is edited: the grip's next option (Stretch, then its options).
+    let ctrl_tap = mods.ctrl && !app.canvas.ctrl_down;
+    app.canvas.ctrl_down = mods.ctrl;
+    if ctrl_tap && app.session.running.as_ref().is_some_and(|r| r.id == "grip") {
+        let _ = app.session.input(Input::Keyword(cadaddy_engine::grips::CYCLE_OPTIONS.into()));
+        ui.ctx().request_repaint();
+    }
+    hover_menu(app, ui, &xf, hover_pos.filter(|_| inside), idle && app.canvas.grip_menu.is_none());
     if idle && !app.canvas.snap_menu && app.canvas.grip_menu.is_some() {
         grip_menu(app, &resp);
     } else if idle || app.canvas.snap_menu {
@@ -2007,6 +2021,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 /// offers Edit Text for); false when there is none.
 fn edit_text_at(app: &mut CadApp, p: Vec2) -> bool {
     use cadaddy_engine::doc::EntityKind;
+    // A feature control frame opens the Geometric Tolerance dialog with its contents.
+    if let Some(h) = cadaddy_engine::cmd::curves::pick_at(&app.session, p)
+        && app.session.doc().ok().and_then(|d| d.entity(h)).is_some_and(|e| matches!(e.kind, EntityKind::Tolerance(_)))
+    {
+        return crate::toldlg::open_edit(app, h);
+    }
     let is_text = cadaddy_engine::cmd::curves::pick_at(&app.session, p).and_then(|h| {
         app.session.doc().ok()?.entity(h).map(|e| matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_)))
     });
@@ -2519,6 +2539,79 @@ fn grip_options(app: &CadApp, (h, i): (Handle, usize)) -> Vec<cadaddy_engine::gr
     st.doc.entity(h).map(|e| cadaddy_engine::grips::grip_actions(&e.kind, i)).unwrap_or_default()
 }
 
+/// How long (seconds) the cursor rests on a multifunctional grip before its options show.
+const HOVER_MENU_DELAY: f64 = 0.35;
+
+/// The hover menu of a multifunctional grip: the cursor resting on the grip shows Stretch and its
+/// options beside it; a choice runs like the right-click menu's. It closes when the cursor leaves
+/// both the grip and the menu.
+fn hover_menu(app: &mut CadApp, ui: &egui::Ui, xf: &Xf, hover: Option<Pos2>, allowed: bool) {
+    let now = ui.input(|i| i.time);
+    let on = if allowed { grip_at(app, xf, hover) } else { None };
+    match (on, app.canvas.grip_hover) {
+        (Some(g), Some((h, _))) if g == h => {}
+        (Some(g), _) => app.canvas.grip_hover = Some((g, now)),
+        (None, _) => app.canvas.grip_hover = None,
+    }
+    if let Some((g, since)) = app.canvas.grip_hover
+        && app.canvas.hover_menu.is_none()
+        && !grip_options(app, g).is_empty()
+    {
+        if now - since >= HOVER_MENU_DELAY {
+            app.canvas.hover_menu = Some(g);
+        } else {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(HOVER_MENU_DELAY - (now - since) + 0.01));
+        }
+    }
+    let Some(g) = app.canvas.hover_menu.filter(|_| allowed) else {
+        app.canvas.hover_menu = None;
+        return;
+    };
+    let Some(at) = app.session.grips_of(g.0).ok().and_then(|gs| gs.get(g.1).copied()) else {
+        app.canvas.hover_menu = None;
+        return;
+    };
+    let gs = app.session.settings.gripsize as f32;
+    let corner = xf.w2s(at) + vec2(gs + 6.0, gs + 6.0);
+    let options = grip_options(app, g);
+    let mut chosen: Option<Option<cadaddy_engine::grips::GripAction>> = None;
+    let area = egui::Area::new(egui::Id::new(("grip-hover-menu", g.0, g.1))).order(egui::Order::Foreground).fixed_pos(corner).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            let vertex = options.contains(&cadaddy_engine::grips::GripAction::RemoveVertex);
+            if ui.button(crate::i18n::t(if vertex { "Stretch Vertex" } else { "Stretch" })).clicked() {
+                chosen = Some(None);
+            }
+            for a in &options {
+                if ui.button(crate::i18n::t(a.label())).clicked() {
+                    chosen = Some(Some(*a));
+                }
+            }
+        });
+    });
+    let on_grip = hover.is_some_and(|p| Rect::from_center_size(xf.w2s(at), vec2(gs * 2.0 + 6.0, gs * 2.0 + 6.0)).contains(p));
+    if let Some(choice) = chosen {
+        app.canvas.hover_menu = None;
+        app.canvas.grip_hover = None;
+        run_grip_choice(app, g, choice);
+    } else if !on_grip && !area.response.contains_pointer() {
+        app.canvas.hover_menu = None;
+    }
+}
+
+/// Make grip `g` hot and run `choice` (None: Stretch) at the grip prompt, as typing its keyword
+/// would.
+fn run_grip_choice(app: &mut CadApp, g: (Handle, usize), choice: Option<cadaddy_engine::grips::GripAction>) {
+    app.canvas.hot_grips = vec![g];
+    let r = app.session.start_grip_edit(&[g]).and_then(|()| match choice {
+        Some(a) => app.session.input(Input::Keyword(a.keyword().to_string())),
+        None => Ok(()),
+    });
+    if let Err(e) = r {
+        app.canvas.hot_grips.clear();
+        app.session.echo(e.to_string());
+    }
+}
+
 /// The menu of a multifunctional grip: Stretch and its options. A choice makes the grip hot and
 /// runs the option at the grip prompt, as typing its keyword would.
 fn grip_menu(app: &mut CadApp, resp: &egui::Response) {
@@ -2544,15 +2637,7 @@ fn grip_menu(app: &mut CadApp, resp: &egui::Response) {
         app.canvas.grip_menu = None;
     }
     let Some(choice) = chosen else { return };
-    app.canvas.hot_grips = vec![g];
-    let r = app.session.start_grip_edit(&[g]).and_then(|()| match choice {
-        Some(a) => app.session.input(Input::Keyword(a.keyword().to_string())),
-        None => Ok(()),
-    });
-    if let Err(e) = r {
-        app.canvas.hot_grips.clear();
-        app.session.echo(e.to_string());
-    }
+    run_grip_choice(app, g, choice);
 }
 
 /// The grip of a selected object under the cursor, if any: (object, grip index).

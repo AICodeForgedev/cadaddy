@@ -99,6 +99,7 @@ fn dist_text(s: &Session, a: Vec2, b: Vec2) -> String {
 fn run_dist(s: &mut Session, p: &Value) -> Result<Value> {
     let a = point_req("dist", p, "p1")?;
     let b = point_req("dist", p, "p2")?;
+    s.last_used.distance = a.dist(b);
     Ok(json!({ "distance": a.dist(b), "angle": (b - a).angle().to_degrees(), "dx": b.x - a.x, "dy": b.y - a.y, "message": dist_text(s, a, b) }))
 }
 
@@ -210,6 +211,7 @@ fn run_area(s: &mut Session, p: &Value) -> Result<Value> {
         let h = targets(s, p)?.first().copied().ok_or_else(|| bad("area", "`points` or `handle` is required"))?;
         object_area(s, h)?
     };
+    (s.last_used.area, s.last_used.perimeter) = (a, per);
     Ok(json!({ "area": a, "perimeter": per, "message": area_text(s, a, per) }))
 }
 
@@ -246,10 +248,12 @@ pub(crate) fn kind_area(k: &EntityKind) -> Result<(f64, f64)> {
             let geoms: Vec<Polyline> = hh.loops.iter().map(|l| Polyline { vertices: l.vertices.clone(), closed: true }).collect();
             let polys: Vec<Vec<Vec2>> = geoms.iter().map(|g| g.tessellate(1e-3)).collect();
             let mut total = (0.0, 0.0);
-            for (i, g) in geoms.iter().enumerate() {
+            for (i, (g, l)) in geoms.iter().zip(&hh.loops).enumerate() {
                 let probe = polys.get(i).and_then(|p| p.first().copied());
                 let depth = probe.map_or(0, |pt| polys.iter().enumerate().filter(|(j, q)| *j != i && cadaddy_geom::point_in_polygon(q, pt)).count());
-                total.0 += if depth % 2 == 0 { g.area().abs() } else { -g.area().abs() };
+                // Exact from the loop's edges when it has curves (an ellipse, a spline).
+                let a = l.area().abs();
+                total.0 += if depth % 2 == 0 { a } else { -a };
                 total.1 += g.len();
             }
             total
@@ -293,7 +297,7 @@ fn run_inspect(s: &mut Session, p: &Value) -> Result<Value> {
     let d = &st.doc;
     let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
     let space = st.space.clone();
-    let ext = d.extents(&space);
+    let ext = crate::cached_extents(d, &space);
     let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     if let Some(store) = d.space(&space) {
         for e in store.iter() {
@@ -585,6 +589,7 @@ impl Interactive for DistM {
                     (Some(first), Some(second)) if first.viewport == second.viewport => (first.point, second.point),
                     _ => (a, b),
                 };
+                s.last_used.distance = a.dist(b);
                 let t = dist_text(s, a, b);
                 for l in t.lines() {
                     s.echo(l.to_string());
@@ -714,6 +719,7 @@ impl AreaM {
     }
     /// Report an area (and the running total in add/subtract mode); ends the command in single mode.
     fn measured(&mut self, s: &mut Session, a: f64, per: f64) -> Step {
+        (s.last_used.area, s.last_used.perimeter) = (a, per);
         s.echo(area_text(s, a, per));
         match self.mode {
             AreaMode::Single => return Step::Done,

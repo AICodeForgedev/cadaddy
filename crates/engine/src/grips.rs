@@ -104,7 +104,13 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
             1 => return Some(translated(kind, delta)),
             _ => set_xy(&mut l.b, to),
         },
-        EntityKind::Point(_) | EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) | EntityKind::Image(_) | EntityKind::Table(_) => {
+        EntityKind::Point(_)
+        | EntityKind::Text(_)
+        | EntityKind::MText(_)
+        | EntityKind::AttDef(_)
+        | EntityKind::Image(_)
+        | EntityKind::Underlay(_)
+        | EntityKind::Table(_) => {
             return Some(translated(kind, delta));
         }
         EntityKind::Hatch(_) | EntityKind::Tolerance(_) => return Some(translated(kind, delta)),
@@ -324,6 +330,41 @@ pub enum GripAction {
     Lengthen,
     /// Arc midpoint: change the radius, keeping the center and angles.
     Radius,
+    /// Dimension text: the text moves and the dimension line follows (DIMTMOVE 0).
+    DimMoveWithLine,
+    /// Dimension text: only the text moves (DIMTMOVE 2).
+    DimMoveText,
+    /// Dimension text: back to its place, above the dimension line (DIMTAD 1).
+    DimAboveLine,
+    /// Dimension text: back to its place, centred on the dimension line (DIMTAD 0).
+    DimCenter,
+    /// Dimension text: back to its default place.
+    DimResetText,
+    /// Linear dimension line: a continued dimension from this one, to a picked origin.
+    DimContinue,
+    /// Linear dimension line: a baseline dimension from this one, to a picked origin.
+    DimBaseline,
+    /// Linear dimension line: the arrowhead at this end flips to the other side of its
+    /// extension line.
+    DimFlipArrow,
+    /// Multileader arrowhead or landing: another leader from a picked arrowhead point.
+    AddLeader,
+    /// Multileader arrowhead: remove this leader (not the last one).
+    RemoveLeader,
+    /// Multileader landing: lengthen or shorten the landing (the dogleg); the content follows.
+    LengthenLanding,
+    /// Text insertion point: MOVE mode.
+    TextMove,
+    /// Text insertion point: ROTATE mode.
+    TextRotate,
+    /// Text insertion point: SCALE mode.
+    TextScale,
+    /// Hatch: move the pattern's origin point.
+    HatchOrigin,
+    /// Hatch: the pattern angle, from the grip toward a picked point (or typed, degrees).
+    HatchAngle,
+    /// Hatch: the pattern scale, the distance from the grip to a picked point (or typed).
+    HatchScale,
 }
 
 impl GripAction {
@@ -336,6 +377,23 @@ impl GripAction {
             GripAction::ToLine => "conVert to line",
             GripAction::Lengthen => "Lengthen",
             GripAction::Radius => "Radius",
+            GripAction::DimMoveWithLine => "Move with dim line",
+            GripAction::DimMoveText => "Move text only",
+            GripAction::DimAboveLine => "Above dim line",
+            GripAction::DimCenter => "Center vertically",
+            GripAction::DimResetText => "Reset text position",
+            GripAction::DimContinue => "Continue dimension",
+            GripAction::DimBaseline => "Baseline dimension",
+            GripAction::DimFlipArrow => "Flip arrow",
+            GripAction::AddLeader => "Add leader",
+            GripAction::RemoveLeader => "Remove leader",
+            GripAction::LengthenLanding => "Lengthen landing",
+            GripAction::TextMove => "Move",
+            GripAction::TextRotate => "Rotate",
+            GripAction::TextScale => "Scale",
+            GripAction::HatchOrigin => "Origin point",
+            GripAction::HatchAngle => "Hatch angle",
+            GripAction::HatchScale => "Hatch scale",
         }
     }
     /// The grip menu label.
@@ -347,6 +405,23 @@ impl GripAction {
             GripAction::ToLine => "Convert to Line",
             GripAction::Lengthen => "Lengthen",
             GripAction::Radius => "Radius",
+            GripAction::DimMoveWithLine => "Move with Dim Line",
+            GripAction::DimMoveText => "Move Text Only",
+            GripAction::DimAboveLine => "Above Dim Line",
+            GripAction::DimCenter => "Center Vertically",
+            GripAction::DimResetText => "Reset Text Position",
+            GripAction::DimContinue => "Continue Dimension",
+            GripAction::DimBaseline => "Baseline Dimension",
+            GripAction::DimFlipArrow => "Flip Arrow",
+            GripAction::AddLeader => "Add Leader",
+            GripAction::RemoveLeader => "Remove Leader",
+            GripAction::LengthenLanding => "Lengthen Landing",
+            GripAction::TextMove => "Move",
+            GripAction::TextRotate => "Rotate",
+            GripAction::TextScale => "Scale",
+            GripAction::HatchOrigin => "Origin Point",
+            GripAction::HatchAngle => "Hatch Angle",
+            GripAction::HatchScale => "Hatch Scale",
         }
     }
     /// The mode name on the command line ("** ADD VERTEX **").
@@ -358,11 +433,89 @@ impl GripAction {
             GripAction::ToLine => "** CONVERT TO LINE **",
             GripAction::Lengthen => "** LENGTHEN **",
             GripAction::Radius => "** RADIUS **",
+            GripAction::DimMoveWithLine => "** MOVE WITH DIM LINE **",
+            GripAction::DimMoveText => "** MOVE TEXT ONLY **",
+            GripAction::DimAboveLine => "** ABOVE DIM LINE **",
+            GripAction::DimCenter => "** CENTER VERTICALLY **",
+            GripAction::DimResetText => "** RESET TEXT POSITION **",
+            GripAction::DimContinue => "** CONTINUE DIMENSION **",
+            GripAction::DimBaseline => "** BASELINE DIMENSION **",
+            GripAction::DimFlipArrow => "** FLIP ARROW **",
+            GripAction::AddLeader => "** ADD LEADER **",
+            GripAction::RemoveLeader => "** REMOVE LEADER **",
+            GripAction::LengthenLanding => "** LENGTHEN LANDING **",
+            GripAction::TextMove => "** MOVE **",
+            GripAction::TextRotate => "** ROTATE **",
+            GripAction::TextScale => "** SCALE **",
+            GripAction::HatchOrigin => "** ORIGIN POINT **",
+            GripAction::HatchAngle => "** HATCH ANGLE **",
+            GripAction::HatchScale => "** HATCH SCALE **",
         }
     }
     /// Whether the option needs a point (or value); the others act at once.
     pub fn needs_point(self) -> bool {
-        !matches!(self, GripAction::RemoveVertex | GripAction::ToLine)
+        !matches!(
+            self,
+            GripAction::RemoveVertex
+                | GripAction::ToLine
+                | GripAction::DimAboveLine
+                | GripAction::DimCenter
+                | GripAction::DimResetText
+                | GripAction::DimFlipArrow
+                | GripAction::RemoveLeader
+        )
+    }
+    /// Whether a typed number answers the option (a length, an angle, a scale).
+    pub fn takes_value(self) -> bool {
+        matches!(self, GripAction::Lengthen | GripAction::Radius | GripAction::LengthenLanding | GripAction::HatchAngle | GripAction::HatchScale)
+    }
+    /// The grip mode the option switches to, for options that are modes (text Move/Rotate/Scale).
+    pub fn mode(self) -> Option<GripMode> {
+        match self {
+            GripAction::TextMove => Some(GripMode::Move),
+            GripAction::TextRotate => Some(GripMode::Rotate),
+            GripAction::TextScale => Some(GripMode::Scale),
+            _ => None,
+        }
+    }
+    /// The prompt (after the title) of an option that takes a point.
+    pub fn prompt(self) -> &'static str {
+        match self {
+            GripAction::AddVertex => "Specify new vertex point",
+            GripAction::ToArc => "Specify a point on the arc",
+            GripAction::Lengthen => "Specify end point or length change",
+            GripAction::Radius => "Specify radius",
+            GripAction::DimMoveWithLine | GripAction::DimMoveText => "Specify text location",
+            GripAction::DimContinue | GripAction::DimBaseline => "Specify a second extension line origin",
+            GripAction::AddLeader => "Specify leader arrowhead location",
+            GripAction::LengthenLanding => "Specify landing end point or length change",
+            GripAction::HatchOrigin => "Specify new origin point",
+            GripAction::HatchAngle => "Specify hatch angle",
+            GripAction::HatchScale => "Specify hatch scale",
+            _ => "",
+        }
+    }
+}
+
+/// Where flattened multileader grip `index` is: `Some((leader, vertex))`, or `None` for the
+/// landing (the last grip) or an index past it.
+fn mleader_grip(m: &cadaddy_doc::MLeader, index: usize) -> Option<(usize, usize)> {
+    let mut k = 0usize;
+    for (li, l) in m.leaders.iter().enumerate() {
+        if index < k + l.len() {
+            return Some((li, index - k));
+        }
+        k += l.len();
+    }
+    None
+}
+
+/// The way a multileader's content sits from its landing: +1 to the right, -1 to the left.
+fn landing_dir(m: &cadaddy_doc::MLeader) -> f64 {
+    let content = m.text.as_ref().map(|t| t.insert.x).or_else(|| m.block.as_ref().map(|b| b.insert.x));
+    match content {
+        Some(x) if x < m.landing.x => -1.0,
+        _ => 1.0,
     }
 }
 
@@ -380,6 +533,34 @@ pub fn grip_actions(kind: &EntityKind, index: usize) -> Vec<GripAction> {
             }
             None => Vec::new(),
         },
+        EntityKind::Dimension(d) => {
+            let linear = matches!(d.kind, DimKind::Linear { .. } | DimKind::Aligned);
+            match index {
+                3 if linear => vec![
+                    GripAction::DimMoveWithLine,
+                    GripAction::DimMoveText,
+                    GripAction::DimAboveLine,
+                    GripAction::DimCenter,
+                    GripAction::DimResetText,
+                ],
+                3 => vec![GripAction::DimMoveText, GripAction::DimAboveLine, GripAction::DimCenter, GripAction::DimResetText],
+                2 if linear => vec![GripAction::DimContinue, GripAction::DimBaseline, GripAction::DimFlipArrow],
+                _ => Vec::new(),
+            }
+        }
+        EntityKind::MLeader(m) => match mleader_grip(m, index) {
+            Some((_, 0)) if m.leaders.len() > 1 => vec![GripAction::AddLeader, GripAction::RemoveLeader],
+            Some((_, 0)) => vec![GripAction::AddLeader],
+            Some(_) => Vec::new(),
+            None if index == m.leaders.iter().map(Vec::len).sum::<usize>() => vec![GripAction::LengthenLanding, GripAction::AddLeader],
+            None => Vec::new(),
+        },
+        EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) if index == 0 => {
+            vec![GripAction::TextMove, GripAction::TextRotate, GripAction::TextScale]
+        }
+        EntityKind::Hatch(h) if index == 0 && !h.solid && h.gradient.is_none() => {
+            vec![GripAction::HatchOrigin, GripAction::HatchAngle, GripAction::HatchScale]
+        }
         EntityKind::Line(_) if index == 0 || index == 2 => vec![GripAction::Lengthen],
         EntityKind::Arc(_) if index == 0 || index == 2 => vec![GripAction::Lengthen],
         EntityKind::Arc(_) if index == 1 => vec![GripAction::Radius],
@@ -476,6 +657,83 @@ pub fn grip_action(kind: &EntityKind, index: usize, action: GripAction, to: Opti
                 return None;
             }
         }
+        (EntityKind::Dimension(d), GripAction::DimMoveWithLine | GripAction::DimMoveText) => {
+            set_xy(&mut d.text_mid, to?);
+            d.user_text_pos = true;
+            let tmove = if action == GripAction::DimMoveWithLine { 0 } else { 2 };
+            d.overrides.insert("textMove".into(), serde_json::json!(tmove));
+            d.block = None;
+        }
+        (EntityKind::Dimension(d), GripAction::DimAboveLine | GripAction::DimCenter) => {
+            d.overrides.insert("textAbove".into(), serde_json::json!(u8::from(action == GripAction::DimAboveLine)));
+            d.user_text_pos = false;
+            d.block = None;
+        }
+        (EntityKind::Dimension(d), GripAction::DimResetText) => {
+            d.user_text_pos = false;
+            d.block = None;
+        }
+        (EntityKind::Dimension(d), GripAction::DimFlipArrow) => {
+            // The dimension line grip sits at the second extension line's end.
+            d.marks.flip_arrows[1] = !d.marks.flip_arrows[1];
+            d.block = None;
+        }
+        (EntityKind::MLeader(m), GripAction::AddLeader) => {
+            let to = to?;
+            if m.leaders.len() >= MAX_LEADERS {
+                return None;
+            }
+            m.leaders.push(vec![Vec3::new(to.x, to.y, m.landing.z)]);
+        }
+        (EntityKind::MLeader(m), GripAction::RemoveLeader) => {
+            let (li, _) = mleader_grip(m, index)?;
+            if m.leaders.len() < 2 || li >= m.leaders.len() {
+                return None;
+            }
+            m.leaders.remove(li);
+        }
+        (EntityKind::MLeader(m), GripAction::LengthenLanding) => {
+            let dir = landing_dir(m);
+            let new = match (value, to) {
+                (Some(d), _) => m.dogleg + d,
+                (None, Some(p)) => (p.x - m.landing.x) * dir,
+                _ => return None,
+            };
+            if !(new >= 0.0 && new.is_finite()) {
+                return None;
+            }
+            let shift = Vec2::new((new - m.dogleg) * dir, 0.0);
+            m.dogleg = new;
+            if let Some(t) = &mut m.text {
+                let q = t.insert.xy() + shift;
+                set_xy(&mut t.insert, q);
+            }
+            if let Some(b) = &mut m.block {
+                let q = b.insert.xy() + shift;
+                set_xy(&mut b.insert, q);
+            }
+        }
+        (EntityKind::Hatch(h), GripAction::HatchOrigin) => h.origin = to?,
+        (EntityKind::Hatch(h), GripAction::HatchAngle) => {
+            let center = kind.grips().first().copied()?;
+            h.angle = match (value, to) {
+                (Some(deg), _) => norm_angle(deg.to_radians()),
+                (None, Some(p)) if !p.near(center, EPS) => center.angle_to(p),
+                _ => return None,
+            };
+        }
+        (EntityKind::Hatch(h), GripAction::HatchScale) => {
+            let center = kind.grips().first().copied()?;
+            let f = match (value, to) {
+                (Some(f), _) => f,
+                (None, Some(p)) => center.dist(p),
+                _ => return None,
+            };
+            if !(f > EPS && f.is_finite()) {
+                return None;
+            }
+            h.scale = f;
+        }
         (EntityKind::Arc(a), GripAction::Radius) => {
             let r = match (value, to) {
                 (Some(r), _) => r,
@@ -491,6 +749,13 @@ pub fn grip_action(kind: &EntityKind, index: usize, action: GripAction, to: Opti
     }
     Some(k)
 }
+
+/// The keyword the UI sends when Ctrl is tapped during a grip edit: the next multifunctional
+/// option of the hot grip (then back to STRETCH).
+pub const CYCLE_OPTIONS: &str = "Cycle options";
+
+/// Most leaders Add Leader gives one multileader.
+const MAX_LEADERS: usize = 1000;
 
 /// The transform for a multi-functional grip mode about `base` with the dragged point `to`.
 pub fn mode_matrix(mode: GripMode, base: Vec2, to: Vec2) -> Option<Mat3> {

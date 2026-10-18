@@ -28,6 +28,7 @@ fn drawing() -> (Drawing, Space) {
             clip: None,
             on: true,
             twist: 0.0,
+            anno_scale: None,
         }),
     )
     .unwrap();

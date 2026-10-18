@@ -1,5 +1,5 @@
 //! Regions (#510): REGION turns closed objects into region objects; AREA and MASSPROP measure
-//! them; UNION, SUBTRACT and INTERSECT combine regions whose boundaries don't meet; they move,
+//! them; UNION, SUBTRACT and INTERSECT combine them; they move,
 //! explode and snap like other objects.
 
 use cadaddy_doc::{EntityKind, Handle, Region, Space};
@@ -107,13 +107,13 @@ fn booleans_on_separate_and_nested_regions() {
     assert!(r["handle"].is_null());
     assert_eq!(s.doc().unwrap().model.len(), 0);
 
-    // Overlapping boundaries: not available yet, nothing changes.
+    // Overlapping boundaries combine too (exactly; see region_booleans.rs).
     let mut s = Session::new();
     let a = rect_region(&mut s, [0.0, 0.0], [10.0, 10.0]);
     let b = rect_region(&mut s, [5.0, 5.0], [15.0, 15.0]);
-    let err = s.execute("union", &json!({"handles": [a.hex(), b.hex()]})).unwrap_err().to_string();
-    assert!(err.contains("not available yet"), "{err}");
-    assert_eq!(s.doc().unwrap().model.len(), 2);
+    s.execute("union", &json!({"handles": [a.hex(), b.hex()]})).unwrap();
+    assert!(near(region(&s, a).area(), 175.0));
+    assert_eq!(s.doc().unwrap().model.len(), 1);
     assert!(s.execute("subtract", &json!({"from": [a.hex()], "remove": [a.hex()]})).is_err());
 }
 

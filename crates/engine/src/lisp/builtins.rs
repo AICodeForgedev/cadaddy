@@ -18,7 +18,7 @@ pub fn args_err(few: bool) -> LispError {
     LispError::new(if few { "too few arguments" } else { "too many arguments" })
 }
 
-fn arity(a: &[Value], min: usize, max: usize) -> Result<(), LispError> {
+pub(super) fn arity(a: &[Value], min: usize, max: usize) -> Result<(), LispError> {
     if a.len() < min {
         return Err(args_err(true));
     }
@@ -32,21 +32,21 @@ fn num(v: &Value) -> Result<f64, LispError> {
     v.as_number().ok_or_else(|| LispError::bad_arg("numberp", v))
 }
 
-fn int(v: &Value) -> Result<i32, LispError> {
+pub(super) fn int(v: &Value) -> Result<i32, LispError> {
     match v {
         Value::Int(i) => Ok(*i),
         other => Err(LispError::bad_arg("fixnump", other)),
     }
 }
 
-fn string(v: &Value) -> Result<Arc<str>, LispError> {
+pub(super) fn string(v: &Value) -> Result<Arc<str>, LispError> {
     match v {
         Value::Str(s) => Ok(s.clone()),
         other => Err(LispError::bad_arg("stringp", other)),
     }
 }
 
-fn list_arg(v: &Value) -> Result<Vec<Value>, LispError> {
+pub(super) fn list_arg(v: &Value) -> Result<Vec<Value>, LispError> {
     if v.is_list() { Ok(v.to_vec()) } else { Err(LispError::bad_arg("listp", v)) }
 }
 
@@ -661,7 +661,7 @@ fn wcmatch(a: &[Value]) -> R {
     Ok(Value::bool(split_patterns(&pat).iter().any(|p| match_pattern(&text, p))))
 }
 
-fn split_patterns(pat: &str) -> Vec<Vec<char>> {
+pub(super) fn split_patterns(pat: &str) -> Vec<Vec<char>> {
     let mut out = vec![Vec::new()];
     let mut chars = pat.chars().peekable();
     let mut in_set = false;
@@ -696,7 +696,7 @@ fn split_patterns(pat: &str) -> Vec<Vec<char>> {
     out
 }
 
-fn match_pattern(text: &[char], pat: &[char]) -> bool {
+pub(super) fn match_pattern(text: &[char], pat: &[char]) -> bool {
     if let Some(('~', rest)) = pat.split_first().map(|(c, r)| (*c, r))
         && !rest.is_empty()
     {
@@ -1004,7 +1004,7 @@ fn file_exists(_path: &str) -> bool {
 // ---------------- functions of functions ----------------
 
 /// A function argument: a function, or a symbol naming one (`'car`, `'1+`).
-fn callable(ctx: &Ctx<'_>, f: &Value) -> Result<Value, LispError> {
+pub(super) fn callable(ctx: &Ctx<'_>, f: &Value) -> Result<Value, LispError> {
     match f {
         Value::Sym(s) => {
             let v = super::eval::lookup(ctx.env, s);
@@ -1099,7 +1099,7 @@ fn vl_sort(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
 }
 
 /// A stable sort with a fallible-free comparison (`less`).
-fn merge_sort(v: &mut Vec<Value>, less: &mut dyn FnMut(&Value, &Value) -> bool) {
+pub(super) fn merge_sort(v: &mut Vec<Value>, less: &mut dyn FnMut(&Value, &Value) -> bool) {
     if v.len() <= 1 {
         return;
     }
@@ -1373,6 +1373,14 @@ static BUILTINS: &[Builtin] = &[
     pure!("VL-FILENAME-BASE", vl_filename_base),
     pure!("VL-FILENAME-EXTENSION", vl_filename_extension),
     pure!("VL-FILENAME-DIRECTORY", vl_filename_directory),
+    pure!("VL-STRING-POSITION", super::vl::string_position),
+    pure!("VL-STRING-MISMATCH", super::vl::string_mismatch),
+    pure!("VL-STRING-ELT", super::vl::string_elt),
+    pure!("VL-LIST*", super::vl::list_star),
+    pure!("VL-FILE-SIZE", super::vl::file_size),
+    pure!("VL-FILE-DIRECTORY-P", super::vl::file_directory_p),
+    pure!("VL-FILE-SYSTIME", super::vl::file_systime),
+    pure!("VL-DIRECTORY-FILES", super::vl::directory_files),
     pure!("POLAR", polar),
     pure!("DISTANCE", distance),
     pure!("ANGLE", angle),
@@ -1406,6 +1414,8 @@ static BUILTINS: &[Builtin] = &[
     ctx!("VL-MEMBER-IF", vl_member_if),
     ctx!("VL-EVERY", vl_every),
     ctx!("VL-SOME", vl_some),
+    ctx!("VL-MEMBER-IF-NOT", super::vl::member_if_not),
+    ctx!("VL-SORT-I", super::vl::sort_i),
     ctx!("VL-CATCH-ALL-APPLY", vl_catch_all_apply),
     ctx!("EXIT", exit),
     ctx!("QUIT", exit),

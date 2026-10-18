@@ -353,6 +353,9 @@ struct Ctx<'a> {
     block_pstyle: Option<usize>,
     /// Transparency (percent) of the block reference being expanded, for `ByBlock`.
     block_transparency: u8,
+    /// The annotation scale (drawing units per paper unit) of the viewport being drawn when it
+    /// has its own, apart from its zoom scale.
+    view_anno: Option<f64>,
 }
 
 impl Ctx<'_> {
@@ -598,6 +601,7 @@ fn top_ctx<'a>(d: &'a Drawing, xf: Mat3, top: Handle, frozen: &'a [String], vp_c
         lt_factor: 1.0,
         block_pstyle: None,
         block_transparency: 0,
+        view_anno: None,
     }
 }
 
@@ -817,7 +821,9 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
     // PSLTSCALE on: model-space dashes are scaled so they measure the same on paper as in
     // paper space, whatever the viewport scale.
     let lt_factor = if d.header.i64("PSLTSCALE", 1) != 0 { 1.0 / s } else { 1.0 };
-    let ctx = || Ctx { lt_factor, ..top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors) };
+    // A viewport's own annotation scale, when it names one of the drawing's scales.
+    let view_anno = vp.anno_scale.as_deref().and_then(|n| d.anno_scale(n)).filter(|sc| sc.is_valid()).map(|sc| sc.factor());
+    let ctx = || Ctx { lt_factor, view_anno, ..top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors) };
     let seen = |me: &Entity| {
         if matches!(me.kind, EntityKind::Viewport(_)) {
             return false;
@@ -1209,7 +1215,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     // model space seen through it, else the drawing's (CANNOSCALE in model space, 1:1 on paper).
     if ctx.depth == 0 && cadaddy_doc::is_annotative(e) {
         let mode = if ctx.top == VIEWPORT_CONTENT {
-            cadaddy_doc::anno_draw(e, 1.0 / ctx.xf.scale_factor().max(1e-12), ctx.d.anno_all_visible())
+            cadaddy_doc::anno_draw(e, ctx.view_anno.unwrap_or_else(|| 1.0 / ctx.xf.scale_factor().max(1e-12)), ctx.d.anno_all_visible())
         } else {
             ctx.d.anno_draw(e)
         };
@@ -1367,6 +1373,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             }
         }
         EntityKind::Image(i) => image(b, ctx, i, rgb, lw),
+        EntityKind::Underlay(u) => underlay(b, ctx, u, rgb, lw),
         EntityKind::Table(t) => table(b, ctx, t, rgb, lw),
         EntityKind::Tolerance(t) => tolerance::draw(b, ctx, e, t, lw, tol),
         EntityKind::Leader(l) => {
@@ -1388,18 +1395,53 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             }
         }
         EntityKind::MLeader(m) => {
-            // Straight or spline leader lines; block content draws like a block reference.
-            for pts in m.leader_paths() {
-                b.polyline(ctx, rgb, lw, &pts);
-                if let (Some(a), Some(n)) = (pts.first(), pts.get(1)) {
-                    b.tris(ctx, rgb, &dim::arrow(*a, (*a - *n).normalized(), m.arrow_size));
+            // Leader lines (straight or spline) in the multileader's own leader colour and
+            // linetype when it overrides them; block content draws like a block reference.
+            let (lrgb, llt) = if m.leader_color.is_some() || m.leader_linetype.is_some() {
+                let mut c = e.common.clone();
+                if let Some(col) = m.leader_color {
+                    c.color = col;
                 }
+                if let Some(l) = &m.leader_linetype {
+                    c.linetype.clone_from(l);
+                }
+                let (r, _, l, _, _, _) = resolve_common(ctx, &c, b.plotting);
+                (r, l)
+            } else {
+                (rgb, lt.clone())
+            };
+            let kind = dim::Arrowhead::parse(m.arrow.as_deref().unwrap_or(""));
+            for pts in m.leader_paths() {
+                stroke_with(b, ctx, lrgb, lw, llt.as_ref(), ltscale, &pts);
+                if let (Some(a), Some(n)) = (pts.first(), pts.get(1)) {
+                    let g = dim::arrowhead(kind, *a, (*a - *n).normalized(), m.arrow_size);
+                    for l in &g.lines {
+                        b.polyline(ctx, lrgb, lw, l);
+                    }
+                    b.tris(ctx, lrgb, &g.tris);
+                }
+            }
+            // The further landings' doglegs.
+            for dg in m.root_doglegs() {
+                stroke_with(b, ctx, lrgb, lw, llt.as_ref(), ltscale, &dg);
             }
             if let Some(t) = &m.text {
                 let land = m.landing.xy();
                 let dir = if t.insert.x >= land.x { 1.0 } else { -1.0 };
-                b.polyline(ctx, rgb, lw, &[land, land + Vec2::new(m.dogleg * dir, 0.0)]);
+                stroke_with(b, ctx, lrgb, lw, llt.as_ref(), ltscale, &[land, land + Vec2::new(m.dogleg * dir, 0.0)]);
                 mtext(b, ctx, t, rgb, lw);
+                if m.text_frame {
+                    // A frame around the text, as far out as the landing gap.
+                    let st = ctx.d.mleader_styles.iter().find(|s| s.name.eq_ignore_ascii_case(&m.style)).cloned().unwrap_or_default();
+                    let k = if st.annotative { 1.0 } else { ctx.d.header.f64("DIMSCALE", 1.0) };
+                    let gap = (st.landing_gap * k).max(0.0);
+                    let bx = layout_mtext_entity(ctx.d, t).bounds;
+                    if !bx.is_empty() && bx.min.is_finite() && bx.max.is_finite() {
+                        let bx = bx.expand(if gap.is_finite() { gap } else { 0.0 });
+                        let [c0, c1, c2, c3] = bx.corners();
+                        b.polyline(ctx, rgb, lw, &[c0, c1, c2, c3, c0]);
+                    }
+                }
             }
             if let Some(ins) = &m.block {
                 if m.dogleg > 0.0 && !m.leaders.is_empty() {
@@ -1461,7 +1503,7 @@ fn text_style(d: &Drawing, name: &str) -> cadaddy_doc::TextStyle {
 /// Shape a TEXT / ATTRIB / ATTDEF with its style's font and generation flags.
 pub fn place_text_entity(d: &Drawing, t: &cadaddy_doc::Text, value: &str) -> (cadaddy_fonts::Shaped, Bounds2) {
     let ts = text_style(d, &t.style);
-    let font = cadaddy_fonts::TextFont::resolve(&ts.font);
+    let font = cadaddy_fonts::TextFont::resolve_style(&ts.font, &ts.big_font);
     let (h, v) = align(t.halign, t.valign);
     let p = cadaddy_fonts::TextParams {
         insert: t.insert.xy(),
@@ -1489,7 +1531,7 @@ pub fn layout_mtext_entity(d: &Drawing, t: &cadaddy_doc::MText) -> cadaddy_fonts
         rotation: t.rotation,
         line_spacing: t.line_spacing,
         line_spacing_exact: t.line_spacing_exact,
-        font: cadaddy_fonts::TextFont::resolve(&ts.font),
+        font: cadaddy_fonts::TextFont::resolve_style(&ts.font, &ts.big_font),
         width_factor: ts.width_factor,
         oblique: ts.oblique,
         columns: t.columns.as_ref().map(|c| cadaddy_fonts::MTextColumnSpec {
@@ -1565,7 +1607,12 @@ fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::MText, rgb: Ink, lw: f32) 
 /// The font settings of a dimension style's text style.
 pub fn dim_text(d: &Drawing, st: &cadaddy_doc::DimStyle) -> DimText {
     let ts = text_style(d, &st.text_style);
-    DimText { font: cadaddy_fonts::TextFont::resolve(&ts.font), fixed_height: ts.height, width_factor: ts.width_factor, oblique: ts.oblique }
+    DimText {
+        font: cadaddy_fonts::TextFont::resolve_style(&ts.font, &ts.big_font),
+        fixed_height: ts.height,
+        width_factor: ts.width_factor,
+        oblique: ts.oblique,
+    }
 }
 
 /// Geometry of a dimension in a drawing: its style, overrides and text font.
@@ -1680,7 +1727,7 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadaddy_doc::Dimension
 }
 
 mod table;
-pub use table::{MAX_LAYOUT_CELLS, TableFill, TableGeom, TableLine, TableText, table_covered, table_geometry, table_style_of};
+pub use table::{MAX_LAYOUT_CELLS, TableFill, TableGeom, TableLine, TableText, fit_rows, table_covered, table_geometry, table_style_of};
 
 fn table(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::Table, rgb: Ink, lw: f32) {
     table::draw(b, ctx, t, rgb, lw);
@@ -1737,6 +1784,77 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
         block_pstyle: ctx.block_pstyle,
         // The reference's own, set by the caller (`Builder::transparency` while it draws).
         block_transparency: ctx.block_transparency,
+        view_anno: ctx.view_anno,
+    }
+}
+
+/// Loads a PDF underlay's page: its file and 1-based page → the page as a drawing in sheet inches
+/// (origin at the page's lower-left corner). The engine installs one that reads through the io
+/// hooks and caches pages; without one an underlay shows as its frame.
+pub type UnderlayLoader = fn(&str, u32) -> Option<std::sync::Arc<Drawing>>;
+
+static UNDERLAY_LOADER: std::sync::OnceLock<UnderlayLoader> = std::sync::OnceLock::new();
+
+pub fn set_underlay_loader(f: UnderlayLoader) {
+    let _ = UNDERLAY_LOADER.set(f);
+}
+
+/// A PDF underlay: the page's objects (its layers turned off left out) placed by the underlay,
+/// faded (as transparency) and in colour 7 when monochrome, inside its clip boundary or, without
+/// one, its page frame. A page that can't be loaded shows as its frame.
+fn underlay(b: &mut Builder, ctx: &Ctx, u: &cadaddy_doc::Underlay, rgb: Ink, lw: f32) {
+    let frame: Vec<Vec2> = u.corners().iter().map(|p| ctx.xf.apply(*p)).collect();
+    let content = if ctx.depth < cadaddy_doc::MAX_BLOCK_DEPTH { UNDERLAY_LOADER.get().and_then(|f| f(&u.path, u.page.max(1))) } else { None };
+    let Some(page) = content else {
+        let mut closed = frame.clone();
+        closed.extend(frame.first().copied());
+        b.polyline(ctx, rgb, lw, &closed);
+        return;
+    };
+    let m = ctx.xf.then_before(u.transform());
+    let sub = Ctx { d: &page, xf: m, depth: ctx.depth + 1, frozen: &[], vp_colors: &[], ..top_ctx(&page, m, ctx.top, &[], &[]) };
+    let mut part = Builder {
+        list: DisplayList::default(),
+        opts: b.opts,
+        plotting: b.plotting,
+        styles: None,
+        named: None,
+        shared_budget: b.shared_budget,
+        transparency: 0,
+    };
+    part.list.expanded = b.list.expanded;
+    for pe in page.model.iter() {
+        if u.layers_off.iter().any(|l| l.eq_ignore_ascii_case(&pe.common.layer)) {
+            continue;
+        }
+        if !part.expand() {
+            break;
+        }
+        entity(&mut part, &sub, pe);
+    }
+    b.list.expanded = part.list.expanded;
+    part.list.texts.clear();
+    let fade = u.fade.min(80);
+    for p in &mut part.list.prims {
+        if u.monochrome {
+            p.color = Rgb(255, 255, 255);
+            p.aci7 = true;
+        }
+        p.transparency = p.transparency.max(fade);
+    }
+    let boundary: Vec<Vec2> = if u.clipping && u.clip.len() >= 2 {
+        let t = u.transform();
+        let pts: Vec<Vec2> = match u.clip.as_slice() {
+            [a, c] => Bounds2::new(*a, *c).corners().to_vec(),
+            pts => pts.to_vec(),
+        };
+        pts.into_iter().map(|p| ctx.xf.apply(t.apply(p))).collect()
+    } else {
+        frame
+    };
+    match clip::PolyClip::new(&boundary) {
+        Some(poly) => append_clipped(&mut b.list, &part.list, &Clip::Poly(&poly)),
+        None => append_clipped(&mut b.list, &part.list, &Clip::Rect(Bounds2::from_points(boundary))),
     }
 }
 

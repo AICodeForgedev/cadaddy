@@ -198,7 +198,11 @@ const METHODS: &[(&str, &str, &str)] = &[
         "Current prompt (text and bare message), keywords, default, accepted input kinds, busy (a drawing still opening), closePrompt and history tail.",
     ),
     ("engine.execute", "{command, params}", "Run any command with JSON parameters. Never opens a dialog."),
-    ("engine.commands", "", "Every command: id, label, menu path, shortcut, aliases, params doc, enabled."),
+    (
+        "engine.commands",
+        "{filter?}",
+        "Every command (or those whose id, label or an alias contains `filter`): id, label, menu path, shortcut, aliases, params doc, enabled.",
+    ),
     ("drawing.inspect", "{entities?, limit?}", "Drawing summary and entities with handles and geometry."),
     ("ui.inspect", "", "UI state, canvas rect, view, cursor and snap, performance, keyboard focus."),
     ("ui.elements", "{label?, role?, focused?}", "Observed visible controls with their egui id, rectangle, state and focus."),
@@ -239,6 +243,13 @@ const METHODS: &[(&str, &str, &str)] = &[
 
 fn methods_json() -> Value {
     METHODS.iter().map(|(method, params, description)| json!({"method": method, "params": params, "description": description})).collect()
+}
+
+/// Whether a command entry's id, label or an alias contains `f` (any case).
+fn command_json_matches(c: &Value, f: &str) -> bool {
+    let f = f.trim().to_ascii_lowercase();
+    let has = |v: &Value| v.as_str().is_some_and(|t| t.to_ascii_lowercase().contains(&f));
+    f.is_empty() || has(&c["id"]) || has(&c["label"]) || c["aliases"].as_array().is_some_and(|a| a.iter().any(has))
 }
 
 pub fn all_commands(app: &CadApp) -> Value {
@@ -370,7 +381,10 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             ok(st)
         }
         "cmdline.state" => ok(cmdline_state(app)),
-        "engine.commands" => ok(all_commands(app)),
+        "engine.commands" => ok(match s("filter") {
+            Some(f) => Value::Array(all_commands(app).as_array().into_iter().flatten().filter(|c| command_json_matches(c, f)).cloned().collect()),
+            None => all_commands(app),
+        }),
         "drawing.inspect" | "document.inspect" => wrap(app.session.execute("drawing.inspect", p).map_err(|e| e.to_string())),
         "ui.inspect" => ok(inspect(app, ctx)),
         "ui.elements" => ok(elements(ctx, p)),

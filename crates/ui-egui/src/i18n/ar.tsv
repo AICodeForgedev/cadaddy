@@ -1386,3 +1386,32 @@ menu	View	عرض
 	Material	المادة
 	Shadow display	عرض الظل
 	Center object	كائن المركز
+	Move with Dim Line	نقل مع خط البعد
+	Move Text Only	نقل النص فقط
+	Above Dim Line	فوق خط البعد
+	Center Vertically	توسيط عمودي
+	Reset Text Position	إعادة تعيين موضع النص
+	Continue Dimension	متابعة البعد
+	Baseline Dimension	بعد خط الأساس
+	Flip Arrow	قلب السهم
+	Lengthen Landing	إطالة الهبوط
+	Origin Point	نقطة الأصل
+	Hatch Angle	زاوية التهشير
+	Hatch Scale	مقياس التهشير
+	Edit Tolerance	تحرير التفاوت
+	Geometric Tolerance	التفاوت الهندسي
+	Geometric characteristic	الخاصية الهندسية
+	Material condition	حالة المادة
+	No symbol	بدون رمز
+	Projected Tolerance Zone	منطقة التفاوت المسقطة
+	Datum Identifier	معرّف المرجع
+	Sym	الرمز
+	Tolerance 1	التفاوت 1
+	Tolerance 2	التفاوت 2
+	Datum 1	المرجع 1
+	Datum 2	المرجع 2
+	Datum 3	المرجع 3
+	PDF Underlay...	مرجع PDF سفلي...
+	Clip PDF Underlay	قص مرجع PDF السفلي
+	Adjust PDF Underlay	ضبط مرجع PDF السفلي
+	PDF Underlay Layers	طبقات مرجع PDF السفلي

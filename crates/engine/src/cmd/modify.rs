@@ -134,7 +134,10 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
             if locked {
                 continue;
             }
-            d.modify_entity(*h, |e| e.kind.transform(m))?;
+            // An annotative object with several scales: only the current scale's representation moves.
+            if !super::annoscale::move_current_representation(d, *h, m) {
+                d.modify_entity(*h, |e| e.kind.transform(m))?;
+            }
             out.push(*h);
             moved.push((*h, *h));
         }

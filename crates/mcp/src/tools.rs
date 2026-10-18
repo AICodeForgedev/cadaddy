@@ -149,7 +149,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
             "engine.execute",
             json!({"command": a.get("command").cloned().unwrap_or(Value::Null), "params": a.get("params").cloned().unwrap_or(json!({}))}),
         ),
-        "list_commands" => b.call("engine.commands", json!({})).map(|v| {
+        "list_commands" => b.call("engine.commands", json!({"filter": a.get("filter").cloned().unwrap_or(Value::Null)})).map(|v| {
             let f = a.get("filter").and_then(Value::as_str).map(str::to_ascii_lowercase);
             match (v, f) {
                 (Value::Array(items), Some(f)) => Value::Array(items.into_iter().filter(|c| command_matches(c, &f)).collect()),
@@ -196,7 +196,14 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
         }),
         "get_variable" => exec(b, "getvar", a),
         "set_variable" => exec(b, "setvar", a),
-        "run_lisp" => exec(b, "lisp", a),
+        // An evaluation error is the tool's error, with what was printed before it.
+        "run_lisp" => exec(b, "lisp", a).and_then(|r| match r.get("error").and_then(Value::as_str) {
+            Some(e) => Err(format!(
+                "LISP error: {e}{}",
+                r["output"].as_array().filter(|o| !o.is_empty()).map(|o| format!(" (output: {})", Value::Array(o.clone()))).unwrap_or_default()
+            )),
+            None => Ok(r),
+        }),
         "plot" => exec(b, "exportpdf", a),
         "answer_close_prompt" => b.call("app.answerClose", a),
         "quit_app" => {

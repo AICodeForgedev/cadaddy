@@ -168,6 +168,7 @@ fn viewport_contents_keep_their_layers() {
         clip: None,
         on: true,
         twist: 0.0,
+        anno_scale: None,
     };
     d.add(&paper, Common { layer: "Viewports".into(), ..Default::default() }, EntityKind::Viewport(vp)).unwrap();
     add_line(&mut d, &paper, "Title", (10.0, 10.0), (50.0, 10.0));

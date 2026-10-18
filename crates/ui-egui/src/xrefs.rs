@@ -17,7 +17,8 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
         return None;
     }
     match cadaddy_engine::cmd::resolve_alias(id).as_str() {
-        "xref" => Some(open_palette(app)),
+        // IMAGE lists images in the same palette, as AutoCAD's External References palette does.
+        "xref" | "image" => Some(open_palette(app)),
         "imageattach" | "attach" => {
             let picked = app.services.pick_image.as_ref().and_then(|f| f())?;
             let path = relative_to_host(app, &picked);

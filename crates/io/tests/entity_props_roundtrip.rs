@@ -74,7 +74,7 @@ fn hatch(pattern: &str, gradient: Option<Gradient>) -> Hatch {
     Hatch {
         pattern: pattern.into(),
         solid: pattern == "SOLID",
-        loops: vec![HatchLoop { vertices: square(10.0), outer: true, sources: Vec::new() }],
+        loops: vec![HatchLoop { curves: Vec::new(), vertices: square(10.0), outer: true, sources: Vec::new() }],
         scale: 2.0,
         angle: 0.25,
         associative: false,

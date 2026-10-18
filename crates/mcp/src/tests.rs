@@ -105,7 +105,8 @@ fn bad_tool_calls_are_invalid_params() {
     }
     // Nothing was typed: the circle is still the only object and no command is running.
     let d = tool(&mut s, "inspect_drawing", json!({"entities": false}));
-    assert_eq!(d["entityCount"], 1, "{d}");
+    // (Model space: the layouts' viewports count in `entityCount` too.)
+    assert_eq!(d["counts"], json!({"Circle": 1}), "{d}");
     assert_eq!(s.handle_line("[]").map(|r| serde_json::from_str::<Value>(&r).unwrap()["error"]["code"].clone()), Some(json!(-32600)));
 }
 
@@ -296,4 +297,21 @@ fn agent_reads_the_prompt_and_waits_for_idle() {
     let w = tool(&mut s, "wait_until_idle", json!({"timeoutMs": 1000}));
     assert_eq!(w["busy"], json!(false), "{w}");
     assert!(w.get("timedOut").is_none());
+}
+
+#[test]
+fn lisp_errors_are_tool_errors() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    assert!(tool_err(&mut s, "run_lisp", json!({"code": "(car 5)"})).contains("LISP error"));
+    assert_eq!(tool(&mut s, "run_lisp", json!({"code": "(* 6 7)"}))["value"], json!("42"));
+    // Unknown variables are refused, known ones read and set.
+    assert!(tool_err(&mut s, "set_variable", json!({"name": "NOSUCHVAR", "value": 1})).contains("Unknown variable"));
+    tool(&mut s, "set_variable", json!({"name": "FILEDIA", "value": 0}));
+    tool(&mut s, "new_drawing", json!({}));
+    assert!(tool(&mut s, "get_variable", json!({"name": "FILEDIA"})).to_string().contains('0'), "FILEDIA is session-wide");
+    for name in ["CMDECHO", "EXPERT", "ATTDIA", "ATTREQ"] {
+        let v = tool(&mut s, "get_variable", json!({"name": name}));
+        assert!(!v.to_string().contains("null"), "{name}: {v}");
+    }
+    assert_eq!(tool(&mut s, "get_variable", json!({"name": "ATTREQ"}))["value"], json!(1));
 }

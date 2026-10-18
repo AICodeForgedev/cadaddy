@@ -1398,3 +1398,32 @@
 	Material	Material
 	Shadow display	Exibição de sombra
 	Center object	Objeto de centro
+	Move with Dim Line	Mover com a linha de cota
+	Move Text Only	Mover somente o texto
+	Above Dim Line	Acima da linha de cota
+	Center Vertically	Centralizar verticalmente
+	Reset Text Position	Redefinir posição do texto
+	Continue Dimension	Continuar cota
+	Baseline Dimension	Cota de linha de base
+	Flip Arrow	Inverter seta
+	Lengthen Landing	Alongar patamar
+	Origin Point	Ponto de origem
+	Hatch Angle	Ângulo da hachura
+	Hatch Scale	Escala da hachura
+	Edit Tolerance	Editar tolerância
+	Geometric Tolerance	Tolerância geométrica
+	Geometric characteristic	Característica geométrica
+	Material condition	Condição de material
+	No symbol	Sem símbolo
+	Projected Tolerance Zone	Zona de tolerância projetada
+	Datum Identifier	Identificador de referência
+	Sym	Sím
+	Tolerance 1	Tolerância 1
+	Tolerance 2	Tolerância 2
+	Datum 1	Referência 1
+	Datum 2	Referência 2
+	Datum 3	Referência 3
+	PDF Underlay...	Referência subjacente PDF...
+	Clip PDF Underlay	Recortar referência subjacente PDF
+	Adjust PDF Underlay	Ajustar referência subjacente PDF
+	PDF Underlay Layers	Camadas da referência subjacente PDF

@@ -5,26 +5,28 @@ CADaddy speaks the [Model Context Protocol](https://modelcontextprotocol.io) ove
 ## Start it
 
 ```sh
-# Headless: an in-process drawing session, no window.
+# The usual way (what the Claude connector runs): drives the open CADaddy window when one is
+# listening on the agent port, 127.0.0.1:47820, else runs a drawing session of its own.
 cadaddy-cli mcp
 
-# Bridged to the running app (watch the agent draw):
-cadaddy --control 7979 &
+# Always a session of its own, never the window:
+cadaddy-cli mcp --headless
+
+# A specific app's control port (an app started with `cadaddy --control 7979`):
 cadaddy-cli mcp --connect 127.0.0.1:7979
 ```
 
-An MCP client usually starts its servers when it starts, often before the app is open. With
-`--lazy` the bridge starts anyway and reaches the app at the first tool call; until the app answers,
-each call fails with a message saying how to open it. `--launch` also opens CADaddy (macOS) with
-that control port at a call that finds nothing, and waits for it:
+The desktop app listens on the agent port **47820** (this computer only) unless "Let AI agents control
+CADaddy" is turned off in Options ▸ User Preferences; a `--control PORT` given on its command line is
+served as well, not instead. Without `--connect`, `cadaddy-cli mcp` decides the first time it is asked
+(listing its tools or its first call): the window if one answers on 47820, else its own session — so
+open CADaddy before asking the agent if you want to watch it work.
 
-```json
-{ "mcpServers": { "cadaddy": { "command": "cadaddy-cli", "args": ["mcp", "--connect", "127.0.0.1:7979", "--launch"] } } }
-```
-
-`--connect` needs the app's `HOST:PORT`. Without one (or with an unknown argument) `cadaddy-cli mcp`
-exits with an error instead of falling back to a headless session, so a client meant for the app
-never edits a separate drawing by mistake. If the app can't be reached, startup fails too.
+With `--connect`, an MCP client that starts before the app can add `--lazy` (reach the app at the
+first tool call; until it answers each call fails with a message saying how to open it) and
+`--launch` (open CADaddy with that control port when nothing answers, and wait for it — macOS, and on
+Windows and Linux the app installed beside `cadaddy-cli`). `--connect` needs the app's `HOST:PORT`; a
+missing or bad one is an error, never a silent session of its own.
 
 Example client configuration (Claude Code / Claude Desktop):
 
@@ -46,6 +48,16 @@ Example client configuration (Claude Code / Claude Desktop):
 | `find_text {contains?, layer?, window?, limit?, offset?}` | The readable texts — TEXT, MTEXT without formatting codes, block attributes, multileaders — with text, insertion point, height, rotation, style, layer and handle; filtered by content (any case), layer and a window around the insertion points. Read-only (the `texts` command). |
 | `new_drawing {metric?}`, `open {path}`, `save {path?}`, `cancel` | Files and Escape. `save` to a `.svg`, `.png` or `.pdf` path exports: the drawing keeps its name and unsaved changes. |
 | `screenshot`, `ui_inspect`, `ui_click {x, y}` | Only when connected to the app. |
+| `list_drawings {}` / `switch_drawing {index\|path\|title}` | The open drawings (title, path, unsaved changes, current) and switching between them. |
+| `close_drawing {index?, path?, title?, save?, saveAs?, discard?}` / `close_all {save?, discard?}` | Close drawings; unsaved work is never dropped unless `discard` is given (or it's saved first). |
+| `undo {count?}` / `redo {count?}` | Undo or redo commands. |
+| `select {handles\|window\|all\|clear, crossing?, add?}` | Set the selection; returns the selected handles. |
+| `get_variable {name}` / `set_variable {name, value}` | System variables, checked like SETVAR (unknown names are refused). |
+| `run_lisp {code, inputs?}` | Evaluate AutoLISP; an evaluation error is a tool error. |
+| `plot {path, layout?}` | Plot a layout (or Model) to PDF with its page setup. |
+| `get_prompt {}` | What CADaddy is asking for: command, prompt, keywords, default, accepted input, `busy`, `closePrompt`. |
+| `wait_until_idle {timeoutMs?}` | Wait while a drawing is still opening in the background. |
+| `answer_close_prompt {choice}` / `quit_app {save?, discard?}` | (Window only) answer "Save changes to …?" as the user would; quit without losing unsaved work. |
 
 Resources: `cadaddy://drawing` (inspect JSON) and `cadaddy://commands` (catalog).
 

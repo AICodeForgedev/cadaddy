@@ -19,7 +19,7 @@ fn regions(d: &Drawing) -> Vec<Region> {
 
 fn square(x: f64, y: f64, s: f64, outer: bool) -> HatchLoop {
     let v = |a: f64, b: f64| PolyVertex::new(Vec2::new(a, b));
-    HatchLoop { vertices: vec![v(x, y), v(x + s, y), v(x + s, y + s), v(x, y + s)], outer, sources: Vec::new() }
+    HatchLoop { curves: Vec::new(), vertices: vec![v(x, y), v(x + s, y), v(x + s, y + s), v(x, y + s)], outer, sources: Vec::new() }
 }
 
 #[test]
@@ -27,6 +27,7 @@ fn region_with_islands_survives_save_and_reopen() {
     let mut d = Drawing::new_imperial();
     // A square with a round hole and a square island in it, and a second square piece.
     let hole = HatchLoop {
+        curves: Vec::new(),
         vertices: vec![PolyVertex::with_bulge(Vec2::new(3.0, 5.0), 1.0), PolyVertex::with_bulge(Vec2::new(7.0, 5.0), 1.0)],
         outer: false,
         sources: Vec::new(),

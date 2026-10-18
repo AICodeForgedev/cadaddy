@@ -372,6 +372,7 @@ fn chspace_json_and_command_line() {
         clip: None,
         on: true,
         twist: 0.0,
+        anno_scale: None,
     };
     s.doc_mut().unwrap().add(&Space::Paper("Layout1".into()), Default::default(), EntityKind::Viewport(vp)).unwrap();
     let r = s.execute("chspace", &json!({"handles": [l]})).unwrap();

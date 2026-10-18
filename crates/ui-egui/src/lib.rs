@@ -52,6 +52,7 @@ pub mod quick;
 pub mod ribbon;
 pub mod shortcut_menus;
 pub mod theme;
+pub mod toldlg;
 pub mod viewcube;
 pub mod vpscale;
 pub mod walk;
@@ -232,6 +233,8 @@ pub struct CadApp {
     pub canvas: canvas::CanvasState,
     /// The PDF Import / Convert PDF to DWG dialog's choices while it is open ([`pdfdlg`]).
     pub pdf: Option<pdfdlg::PdfDialog>,
+    /// The Geometric Tolerance dialog's fields while it is open ([`toldlg`]).
+    pub tol_dlg: Option<toldlg::ToleranceDialog>,
     /// Desktop HID status and navigation preferences; the web host supplies no HID backend.
     pub spacemouse: spacemouse::State,
     pub cmd: cmdline::CmdLine,
@@ -249,6 +252,12 @@ pub struct CadApp {
     pub frame_cap: Option<gpu::FrameCap>,
     /// Language whose interface fonts are installed (`None` until the first frame).
     fonts_language: Option<&'static str>,
+    /// The interface fonts include the system CJK fonts.
+    fonts_cjk: bool,
+    /// Open drawings (by uid) whose names were checked for CJK characters.
+    cjk_scanned: std::collections::HashSet<u64>,
+    /// An open drawing had CJK names: the CJK fonts stay installed from then on.
+    needs_cjk: bool,
     /// The theme last installed into egui (`None` until the first frame).
     shown_theme: Option<egui::Theme>,
     /// Whether the last applied theme was handed to egui as the System preference.
@@ -305,6 +314,7 @@ impl CadApp {
             services,
             canvas: canvas::CanvasState::default(),
             pdf: None,
+            tol_dlg: None,
             spacemouse: spacemouse::State::default(),
             cmd: cmdline::CmdLine::default(),
             status: None,
@@ -318,6 +328,9 @@ impl CadApp {
             #[cfg(not(target_arch = "wasm32"))]
             frame_cap: None,
             fonts_language: None,
+            fonts_cjk: false,
+            cjk_scanned: std::collections::HashSet::new(),
+            needs_cjk: false,
             shown_theme: None,
             shown_follows_system: false,
             shown_animations: None,
@@ -643,9 +656,24 @@ impl CadApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         let language = self.language();
-        if self.fonts_language != Some(language) {
-            theme::install_fonts(ctx, language);
+        // Drawings opened since the last frame: do their names need a CJK font in the interface?
+        for st in &self.session.docs {
+            if self.cjk_scanned.insert(st.uid) {
+                let d = &st.doc;
+                self.needs_cjk |= theme::has_cjk(&st.title)
+                    || d.layers.iter().any(|l| theme::has_cjk(&l.name))
+                    || d.blocks.keys().any(|k| theme::has_cjk(k))
+                    || d.layouts.iter().any(|l| theme::has_cjk(&l.name))
+                    || d.text_styles.iter().any(|t| theme::has_cjk(&t.name));
+            }
+        }
+        // The language pickers (the Language dialog, Options) name languages in their own scripts.
+        let picker = self.ui.dialog.as_deref().is_some_and(|d| d == "language" || d.starts_with("options"));
+        let cjk = self.needs_cjk || picker || matches!(language, "zh" | "ja" | "ko");
+        if self.fonts_language != Some(language) || (cjk && !self.fonts_cjk) {
+            theme::install_fonts(ctx, language, cjk);
             self.fonts_language = Some(language);
+            self.fonts_cjk = cjk;
         }
         // Resolved every frame, so a System choice follows the OS appearance live (winit and the
         // browser report changes as input); the saved choice itself never changes here.
@@ -770,26 +798,45 @@ impl CadApp {
 
     fn drain_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control_rx.take() else { return };
-        while let Ok(req) = rx.try_recv() {
-            // Timed out while queued: the client was told it did not run (#345).
-            if !req.begin() {
-                continue;
+        // A minimised window is woken at most every 100 ms (eframe throttles hidden windows to save
+        // CPU), which made every agent call take that long. While minimised, keep listening a
+        // little after each request so an agent's run of calls is served back to back; there is
+        // nothing to draw meanwhile.
+        // (Desktop only: the web build can't block.)
+        let minimised = cfg!(not(target_arch = "wasm32")) && ctx.input(|i| i.viewport().minimized == Some(true));
+        loop {
+            while let Ok(req) = rx.try_recv() {
+                self.handle_control_request(ctx, req);
             }
-            let reply = req.reply.clone();
-            match control::handle(self, ctx, &req) {
-                control::Outcome::Done(v) => {
-                    let _ = reply.send(v);
-                }
-                control::Outcome::Screenshot { path } => {
-                    self.shot_token += 1;
-                    let token = self.shot_token;
-                    self.queued_shots.push((token, now_ms() + 120.0, 0));
-                    self.pending_shots.push((token, path, reply, now_ms() + 8000.0));
-                }
+            if !minimised {
+                break;
             }
-            ctx.request_repaint();
+            match rx.recv_timeout(std::time::Duration::from_millis(80)) {
+                Ok(req) => self.handle_control_request(ctx, req),
+                Err(_) => break,
+            }
         }
         self.control_rx = Some(rx);
+    }
+
+    fn handle_control_request(&mut self, ctx: &egui::Context, req: control::ControlRequest) {
+        // Timed out while queued: the client was told it did not run (#345).
+        if !req.begin() {
+            return;
+        }
+        let reply = req.reply.clone();
+        match control::handle(self, ctx, &req) {
+            control::Outcome::Done(v) => {
+                let _ = reply.send(v);
+            }
+            control::Outcome::Screenshot { path } => {
+                self.shot_token += 1;
+                let token = self.shot_token;
+                self.queued_shots.push((token, now_ms() + 120.0, 0));
+                self.pending_shots.push((token, path, reply, now_ms() + 8000.0));
+            }
+        }
+        ctx.request_repaint();
     }
 
     fn issue_screenshots(&mut self, ctx: &egui::Context) {

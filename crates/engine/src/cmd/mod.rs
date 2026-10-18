@@ -2,7 +2,7 @@
 //! AutoCAD's menu bar so the catalog doubles as the parity metric.
 
 pub(crate) mod annoscale;
-mod annotate;
+pub(crate) mod annotate;
 pub mod array;
 pub(crate) mod ask;
 mod audit;
@@ -41,13 +41,14 @@ pub mod plotters;
 mod props;
 pub mod symbol;
 mod takeoff;
+pub(crate) mod underlay;
 pub use props::MatchProps;
 pub(crate) mod qselect;
 mod selecttools;
 mod settings;
 mod spline_opts;
-mod table;
-mod tolerance;
+pub(crate) mod table;
+pub mod tolerance;
 mod trimextend;
 mod utility;
 pub(crate) mod view;
@@ -132,6 +133,14 @@ impl CommandSpec {
         self.transparent = true;
         self
     }
+    /// Whether the id, label or an alias contains `filter` (any case): what `list_commands` and
+    /// `engine.commands {filter}` select by, before anything is serialised.
+    pub fn matches(&self, filter: &str) -> bool {
+        let f = filter.trim().to_ascii_lowercase();
+        let has = |t: &str| t.to_ascii_lowercase().contains(&f);
+        f.is_empty() || has(self.id) || has(self.label) || self.aliases.iter().any(|a| has(a))
+    }
+
     pub fn info(&self, s: &Session) -> CommandInfo {
         let e = (self.enabled)(s);
         CommandInfo {
@@ -199,6 +208,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(array::specs());
         v.extend(symbol::specs());
         v.extend(express::specs());
+        v.extend(underlay::specs());
         v.extend(takeoff::specs());
         v.extend(imageattach::specs());
         v.extend(dash_styles::specs());

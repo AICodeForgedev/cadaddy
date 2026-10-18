@@ -1601,6 +1601,11 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
             i.u.z = 0.0;
             i.v.z = 0.0;
         }
+        EntityKind::Underlay(u) => {
+            z(&mut u.insert);
+            u.u.z = 0.0;
+            u.v.z = 0.0;
+        }
         EntityKind::Table(t) => z(&mut t.insert),
         EntityKind::Tolerance(t) => {
             z(&mut t.insert);

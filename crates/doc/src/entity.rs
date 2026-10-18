@@ -138,6 +138,21 @@ pub struct Entity {
 }
 
 impl Entity {
+    /// Roughly the memory this object takes, its own allocations included: for undo's memory
+    /// budget, not an exact count.
+    pub fn approx_bytes(&self) -> usize {
+        let vertex = std::mem::size_of::<cadaddy_geom::PolyVertex>();
+        let heap = match &self.kind {
+            EntityKind::LwPolyline(p) => p.vertices.len() * vertex,
+            EntityKind::Hatch(h) => h.loops.iter().map(|l| l.vertices.len() * vertex + 64).sum(),
+            EntityKind::Text(t) => t.value.len() + t.style.len(),
+            EntityKind::MText(m) => m.contents.len() + m.style.len(),
+            EntityKind::Insert(i) => i.attribs.len() * 256 + i.block.len(),
+            _ => 0,
+        };
+        std::mem::size_of::<Entity>() + 32 + heap + self.common.layer.len() + self.common.linetype.len()
+    }
+
     pub fn new(handle: Handle, kind: EntityKind) -> Self {
         Entity { handle, common: Common::default(), kind }
     }
@@ -627,6 +642,46 @@ pub struct Dimension {
     pub marks: DimMarks,
 }
 
+impl Dimension {
+    /// The direction of a linear or aligned dimension's line (`None` for other kinds).
+    fn line_dir(&self) -> Option<Vec2> {
+        let dir = match self.kind {
+            DimKind::Linear { rotation } => Vec2::from_angle(rotation),
+            DimKind::Aligned => (self.p14.xy() - self.p13.xy()).normalized(),
+            _ => return None,
+        };
+        (dir != Vec2::ZERO && dir.is_finite()).then_some(dir)
+    }
+
+    /// Where the dimension line grip goes: for a linear or aligned dimension the end of the
+    /// dimension line at the second extension line (any point of the line is a valid `defpt`);
+    /// otherwise `defpt`.
+    pub fn line_grip(&self) -> Vec2 {
+        let on = self.defpt.xy();
+        match self.line_dir() {
+            Some(dir) => {
+                let q = on + dir * (self.p14.xy() - on).dot(dir);
+                if q.is_finite() { q } else { on }
+            }
+            None => on,
+        }
+    }
+
+    /// Where the text grip goes: the text the user placed, or for a linear or aligned dimension
+    /// with its text in the default place the middle of the dimension line (where that text is
+    /// drawn; `text_mid` isn't kept up to date then).
+    pub fn text_grip(&self) -> Vec2 {
+        if self.user_text_pos {
+            return self.text_mid.xy();
+        }
+        let (p1, p2, on) = (self.p13.xy(), self.p14.xy(), self.defpt.xy());
+        let Some(dir) = self.line_dir() else { return self.text_mid.xy() };
+        let foot = |p: Vec2| on + dir * (p - on).dot(dir);
+        let m = foot(p1).mid(foot(p2));
+        if m.is_finite() { m } else { self.text_mid.xy() }
+    }
+}
+
 /// What dimension edits add to a dimension's drawing: DIMEDIT Oblique, DIMJOGLINE, DIMJOGGED,
 /// DIMBREAK and DIMINSPECT.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -645,9 +700,21 @@ pub struct DimMarks {
     /// Gaps in the dimension and extension lines (DIMBREAK).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub breaks: Vec<DimBreak>,
+    /// The objects DIMBREAK Auto breaks the dimension at: its automatic breaks are worked out
+    /// again where they cross it whenever they or the dimension change (associative breaks).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub break_objects: Vec<Handle>,
     /// Inspection frame, label and rate (DIMINSPECT).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inspect: Option<Inspection>,
+    /// The first / second arrowhead of a linear or aligned dimension is flipped to the other
+    /// side of its extension line (the Flip Arrow grip option).
+    #[serde(skip_serializing_if = "no_flip")]
+    pub flip_arrows: [bool; 2],
+}
+
+fn no_flip(f: &[bool; 2]) -> bool {
+    !f.iter().any(|b| *b)
 }
 
 impl DimMarks {
@@ -774,17 +841,59 @@ pub struct MLeader {
     /// Block content in place of the text: a block reference placed at the landing.
     #[serde(default)]
     pub block: Option<Insert>,
+    /// Further landings (DXF: further `LEADER{` roots), each with its own dogleg and leader
+    /// lines: a multileader with leaders on both sides of its content. `leaders`, `landing` and
+    /// `dogleg` are the first root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roots: Vec<LeaderRoot>,
+    /// Per-object overrides of the style: leader line colour and linetype, the arrowhead (a
+    /// dimension arrowhead name such as "_DOT"; `None`: closed filled) and a frame around the text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_color: Option<cadaddy_color::Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_linetype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrow: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub text_frame: bool,
+}
+
+/// A further landing of a multileader ([`MLeader::roots`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LeaderRoot {
+    /// Where the leader lines end and the dogleg starts.
+    pub landing: Vec3,
+    /// The dogleg's length, and its direction along X: +1 to the right, -1 to the left.
+    pub dogleg: f64,
+    pub dir: f64,
+    /// The leader lines, each from its arrowhead (the landing is not repeated).
+    pub leaders: Vec<Vec<Vec3>>,
 }
 
 impl MLeader {
-    /// Each leader line as drawn: through its points to the landing, smoothed for spline leaders.
+    /// Each leader line as drawn: through its points to its landing, smoothed for spline
+    /// leaders; the first root's lines, then the further roots'.
     pub fn leader_paths(&self) -> Vec<Vec<Vec2>> {
+        let path = |l: &Vec<Vec3>, land: Vec3| {
+            let pts: Vec<Vec2> = l.iter().map(|v| v.xy()).chain(std::iter::once(land.xy())).collect();
+            if self.spline && pts.len() > 2 { GSpline::from_fit_points(&pts).tessellate(1e-3) } else { pts }
+        };
         self.leaders
             .iter()
-            .map(|l| {
-                let pts: Vec<Vec2> = l.iter().map(|v| v.xy()).chain(std::iter::once(self.landing.xy())).collect();
-                if self.spline && pts.len() > 2 { GSpline::from_fit_points(&pts).tessellate(1e-3) } else { pts }
-            })
+            .map(|l| path(l, self.landing))
+            .chain(self.roots.iter().flat_map(|r| r.leaders.iter().map(move |l| path(l, r.landing))))
+            .collect()
+    }
+    /// How many leader lines there are over every root.
+    pub fn leader_count(&self) -> usize {
+        self.leaders.len() + self.roots.iter().map(|r| r.leaders.len()).sum::<usize>()
+    }
+    /// The dogleg of each further root, from its landing.
+    pub fn root_doglegs(&self) -> Vec<[Vec2; 2]> {
+        self.roots
+            .iter()
+            .filter(|r| r.dogleg > 0.0 && r.dogleg.is_finite() && !r.leaders.is_empty())
+            .map(|r| [r.landing.xy(), r.landing.xy() + Vec2::new(r.dogleg * r.dir.signum(), 0.0)])
             .collect()
     }
 }
@@ -798,6 +907,62 @@ pub struct HatchLoop {
     /// hatch re-fills the loop from them when they change.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<Handle>,
+    /// The loop's exact edges when it has curves `vertices` can't hold (elliptical arcs,
+    /// splines): `vertices` is then their tessellation (for filling and picking), and files,
+    /// areas and transforms use the edges. Empty for loops of lines and arcs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curves: Vec<cadaddy_geom::LoopEdge>,
+}
+
+impl HatchLoop {
+    /// A loop of exact edges: `vertices` from them (lines and arcs exactly, other curves within
+    /// a tolerance relative to the loop's size); `curves` kept when there is a curve vertices
+    /// can't hold.
+    pub fn from_curves(curves: Vec<cadaddy_geom::LoopEdge>, outer: bool, sources: Vec<Handle>) -> HatchLoop {
+        let vertices = cadaddy_geom::loop_vertices(&curves, curve_tolerance(&curves));
+        let exact_needed = curves.iter().any(|c| matches!(c, cadaddy_geom::LoopEdge::Ellipse { .. } | cadaddy_geom::LoopEdge::Spline(_)));
+        HatchLoop { vertices, outer, sources, curves: if exact_needed { curves } else { Vec::new() } }
+    }
+
+    /// The loop's signed area (positive counterclockwise): exact from its edges when it has
+    /// curves, else the bulge polyline's.
+    pub fn area(&self) -> f64 {
+        if self.curves.is_empty() {
+            cadaddy_geom::Polyline { vertices: self.vertices.clone(), closed: true }.area()
+        } else {
+            cadaddy_geom::loop_area(&self.curves)
+        }
+    }
+
+    /// Transform the loop by `m` (`mirror`: `m` reverses orientation): exact edges stay exact
+    /// and the vertices are made from them again.
+    pub fn transform(&mut self, m: &Mat3, mirror: bool) {
+        if !self.curves.is_empty() {
+            for c in &mut self.curves {
+                c.transform(m);
+            }
+            self.vertices = cadaddy_geom::loop_vertices(&self.curves, curve_tolerance(&self.curves));
+            return;
+        }
+        for v in &mut self.vertices {
+            v.p = m.apply(v.p);
+            if mirror {
+                v.bulge = -v.bulge;
+            }
+        }
+    }
+}
+
+/// The tessellation tolerance for a loop's curves: 1e-4 of their extent (curves too small or
+/// broken to measure get a tiny absolute one).
+fn curve_tolerance(curves: &[cadaddy_geom::LoopEdge]) -> f64 {
+    let mut pts = Vec::new();
+    for c in curves.iter().take(10_000) {
+        pts.push(c.start_point());
+        pts.push(c.end_point());
+    }
+    let b = cadaddy_geom::Bounds2::from_points(pts.into_iter().filter(|p| p.is_finite()));
+    if b.is_empty() { 1e-6 } else { ((b.width() + b.height()) * 1e-4).max(1e-9) }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -883,6 +1048,10 @@ pub struct Viewport {
     /// this angle about the view centre.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub twist: f64,
+    /// The viewport's own annotation scale (a name in the drawing's scale list), apart from its
+    /// zoom scale; `None` follows the viewport's scale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anno_scale: Option<String>,
 }
 impl Viewport {
     /// The model-space point shown at paper point `p` (`None` for a degenerate viewport).
@@ -913,6 +1082,7 @@ impl Default for Viewport {
             clip: None,
             on: true,
             twist: 0.0,
+            anno_scale: None,
         }
     }
 }
@@ -954,6 +1124,66 @@ pub struct Image {
     #[serde(default)]
     pub resolution_units: u8,
 }
+/// A PDF underlay (PDFATTACH): a page of a PDF file shown in place, not converted. The page's
+/// content (in sheet inches, origin at its lower-left corner) is mapped by `u` (one sheet inch
+/// along the page's x axis) and `v` (along its y axis) from `insert`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Underlay {
+    pub insert: Vec3,
+    pub u: Vec3,
+    pub v: Vec3,
+    /// The page size in sheet inches.
+    pub size: Vec2,
+    /// The PDF file (its PDFDEFINITION's path).
+    pub path: String,
+    /// 1-based page number.
+    #[serde(default = "first_page")]
+    pub page: u32,
+    /// The definition's name (the file name and page by default).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// Clip boundary in page coordinates (sheet inches): two opposite corners of a rectangle or a
+    /// polygon's vertices. Empty: the whole page.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clip: Vec<Vec2>,
+    #[serde(default)]
+    pub clipping: bool,
+    /// Fade 0..=80, contrast 20..=100 (PDFADJUST).
+    #[serde(default = "underlay_fade")]
+    pub fade: u8,
+    #[serde(default = "underlay_contrast")]
+    pub contrast: u8,
+    #[serde(default)]
+    pub monochrome: bool,
+    /// The page's layers turned off (PDFLAYERS).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers_off: Vec<String>,
+}
+fn first_page() -> u32 {
+    1
+}
+fn underlay_fade() -> u8 {
+    25
+}
+fn underlay_contrast() -> u8 {
+    20
+}
+
+impl Underlay {
+    /// The four corners of the page as placed.
+    pub fn corners(&self) -> [Vec2; 4] {
+        let o = self.insert.xy();
+        let (u, v) = (self.u.xy() * self.size.x, self.v.xy() * self.size.y);
+        [o, o + u, o + u + v, o + v]
+    }
+    /// Page coordinates (sheet inches) → drawing coordinates.
+    pub fn transform(&self) -> cadaddy_geom::Mat3 {
+        let (u, v, o) = (self.u.xy(), self.v.xy(), self.insert.xy());
+        cadaddy_geom::Mat3 { a: u.x, b: u.y, c: v.x, d: v.y, e: o.x, f: o.y }
+    }
+}
+
 fn image_display() -> u16 {
     7
 }
@@ -1078,6 +1308,7 @@ pub enum EntityKind {
     Region(Region),
     Viewport(Viewport),
     Image(Image),
+    Underlay(Underlay),
     Wipeout(Wipeout),
     Table(Table),
     Tolerance(crate::Tolerance),
@@ -1132,6 +1363,7 @@ impl EntityKind {
             EntityKind::Region(_) => "Region",
             EntityKind::Viewport(_) => "Viewport",
             EntityKind::Image(_) => "Raster Image",
+            EntityKind::Underlay(_) => "PDF Underlay",
             EntityKind::Wipeout(_) => "Wipeout",
             EntityKind::Table(_) => "Table",
             EntityKind::Tolerance(_) => "Tolerance",
@@ -1167,6 +1399,7 @@ impl EntityKind {
             EntityKind::Region(_) => "REGION",
             EntityKind::Viewport(_) => "VIEWPORT",
             EntityKind::Image(_) => "IMAGE",
+            EntityKind::Underlay(_) => "PDFUNDERLAY",
             EntityKind::Wipeout(_) => "WIPEOUT",
             EntityKind::Table(_) => "ACAD_TABLE",
             EntityKind::Tolerance(_) => "TOLERANCE",
@@ -1194,6 +1427,7 @@ impl EntityKind {
             EntityKind::Hatch(h) => h.elevation,
             EntityKind::Solid(s) | EntityKind::Trace(s) => s.corners[0].z,
             EntityKind::Image(i) => i.insert.z,
+            EntityKind::Underlay(u) => u.insert.z,
             _ => 0.0,
         };
         if z.is_finite() { z } else { 0.0 }
@@ -1282,10 +1516,21 @@ impl EntityKind {
             EntityKind::MLeader(m) => m
                 .leaders
                 .iter()
+                .chain(m.roots.iter().flat_map(|r| r.leaders.iter()))
                 .flat_map(|l| l.windows(2).filter_map(|w| Some(Prim::Seg(Segment::Line(GLine::new(w.first()?.xy(), w.get(1)?.xy()))))))
+                .chain(
+                    m.roots
+                        .iter()
+                        .flat_map(|r| r.leaders.iter().filter_map(|l| Some(Prim::Seg(Segment::Line(GLine::new(l.last()?.xy(), r.landing.xy())))))),
+                )
                 .chain(m.block.iter().map(|b| Prim::Point(b.insert.xy())))
                 .collect(),
             EntityKind::Image(i) => vec![Prim::Point(i.insert.xy())],
+            // The page's frame: picked, snapped to and measured like a rectangle.
+            EntityKind::Underlay(u) => {
+                let c = u.corners();
+                (0..4).filter_map(|k| Some(Prim::Seg(Segment::Line(GLine::new(*c.get(k)?, *c.get((k + 1) % 4)?))))).collect()
+            }
             EntityKind::Table(t) => vec![Prim::Point(t.insert.xy())],
             EntityKind::Tolerance(t) => vec![Prim::Point(t.insert.xy())],
             EntityKind::Unknown(_) => Vec::new(),
@@ -1428,6 +1673,16 @@ impl EntityKind {
                     l.iter_mut().for_each(t3);
                 }
                 t3(&mut ml.landing);
+                for r in &mut ml.roots {
+                    // The dogleg keeps pointing at the content (sideways after a mirror).
+                    let end = m.apply(r.landing.xy() + Vec2::new(r.dir.signum(), 0.0));
+                    t3(&mut r.landing);
+                    r.dogleg *= s;
+                    r.dir = if end.x >= r.landing.x { 1.0 } else { -1.0 };
+                    for l in &mut r.leaders {
+                        l.iter_mut().for_each(t3);
+                    }
+                }
                 if let Some(t) = &mut ml.text {
                     t3(&mut t.insert);
                     t.height *= s;
@@ -1447,12 +1702,7 @@ impl EntityKind {
             }
             EntityKind::Hatch(h) => {
                 for l in &mut h.loops {
-                    for v in &mut l.vertices {
-                        v.p = m.apply(v.p);
-                        if mirror {
-                            v.bulge = -v.bulge;
-                        }
-                    }
+                    l.transform(m, mirror);
                 }
                 h.scale *= s;
                 h.angle = cadaddy_geom::norm_angle(h.angle + rot);
@@ -1461,11 +1711,8 @@ impl EntityKind {
             EntityKind::Solid(so) | EntityKind::Trace(so) => so.corners.iter_mut().for_each(t3),
             EntityKind::Face3d(f) => f.corners.iter_mut().for_each(t3),
             EntityKind::Region(r) => {
-                for v in r.loops.iter_mut().flat_map(|l| l.vertices.iter_mut()) {
-                    v.p = m.apply(v.p);
-                    if mirror {
-                        v.bulge = -v.bulge;
-                    }
+                for l in &mut r.loops {
+                    l.transform(m, mirror);
                 }
             }
             EntityKind::Viewport(v) => {
@@ -1477,6 +1724,11 @@ impl EntityKind {
                 t3(&mut i.insert);
                 i.u = m.apply_vec(i.u.xy()).to3(0.0);
                 i.v = m.apply_vec(i.v.xy()).to3(0.0);
+            }
+            EntityKind::Underlay(u) => {
+                t3(&mut u.insert);
+                u.u = m.apply_vec(u.u.xy()).to3(0.0);
+                u.v = m.apply_vec(u.v.xy()).to3(0.0);
             }
             EntityKind::Wipeout(w) => w.boundary.iter_mut().for_each(|p| *p = m.apply(*p)),
             EntityKind::Table(t) => {
@@ -1549,7 +1801,7 @@ impl EntityKind {
             EntityKind::MText(t) => vec![t.insert.xy()],
             EntityKind::AttDef(a) => vec![a.text.justify_point()],
             EntityKind::Insert(i) => std::iter::once(i.insert.xy()).chain(i.attribs.iter().map(|a| a.text.justify_point())).collect(),
-            EntityKind::Dimension(d) => vec![d.p13.xy(), d.p14.xy(), d.defpt.xy(), d.text_mid.xy()],
+            EntityKind::Dimension(d) => vec![d.p13.xy(), d.p14.xy(), d.line_grip(), d.text_grip()],
             EntityKind::MLine(m) => m.points(),
             EntityKind::Leader(l) => l.vertices.iter().map(|v| v.xy()).collect(),
             EntityKind::MLeader(m) => m.leaders.iter().flat_map(|l| l.iter().map(|v| v.xy())).chain(std::iter::once(m.landing.xy())).collect(),
@@ -1566,6 +1818,7 @@ impl EntityKind {
                 Bounds2::new(c - h, c + h).corners().to_vec()
             }
             EntityKind::Image(i) => vec![i.insert.xy()],
+            EntityKind::Underlay(u) => u.corners().to_vec(),
             EntityKind::Wipeout(w) => w.boundary.clone(),
             EntityKind::Table(t) => vec![t.insert.xy()],
             EntityKind::Tolerance(t) => vec![t.insert.xy()],

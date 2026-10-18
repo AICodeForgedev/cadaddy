@@ -53,6 +53,30 @@ impl EntityStore {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+    /// Roughly how many bytes this store holds that `newer` doesn't share with it: the objects of
+    /// its chunks that aren't the same allocation in `newer`. Shared chunks are skipped whole, so
+    /// the cost follows what changed, not the store's size. Undo uses it to keep a memory budget.
+    pub fn unique_bytes(&self, newer: &EntityStore) -> usize {
+        let theirs: HashMap<u32, &Arc<Chunk>> = newer.chunks.iter().map(|c| (c.id, c)).collect();
+        let mut bytes = 0usize;
+        for c in &self.chunks {
+            match theirs.get(&c.id) {
+                Some(t) if Arc::ptr_eq(c, t) => {}
+                Some(t) => {
+                    let shared: std::collections::HashSet<*const Entity> = t.items.iter().map(Arc::as_ptr).collect();
+                    for e in c.items.iter().filter(|e| !shared.contains(&Arc::as_ptr(e))) {
+                        bytes = bytes.saturating_add(e.approx_bytes());
+                    }
+                }
+                None => {
+                    for e in &c.items {
+                        bytes = bytes.saturating_add(e.approx_bytes());
+                    }
+                }
+            }
+        }
+        bytes
+    }
     /// Iterate in draw order.
     pub fn iter(&self) -> impl Iterator<Item = &Arc<Entity>> + '_ {
         self.chunks.iter().flat_map(|c| c.items.iter())

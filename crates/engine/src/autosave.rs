@@ -23,6 +23,8 @@ use serde::Serialize;
 
 use crate::Session;
 
+pub mod store;
+
 /// The autosave file extension.
 pub const EXT: &str = "sv$";
 
@@ -146,6 +148,8 @@ pub struct Autosaver {
     start: std::time::Instant,
     #[cfg(not(target_arch = "wasm32"))]
     last_beat: Option<f64>,
+    /// When the store lock entry was last refreshed ([`store`]).
+    store_beat: Option<f64>,
 }
 
 impl Autosaver {
@@ -160,6 +164,7 @@ impl Autosaver {
             start: std::time::Instant::now(),
             #[cfg(not(target_arch = "wasm32"))]
             last_beat: None,
+            store_beat: None,
         }
     }
 
