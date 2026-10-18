@@ -27,6 +27,10 @@ quick-xml = { workspace = true }
 [dev-dependencies]
 tiny-skia = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Large PDF page content is compressed on all cores (already a dependency of cadaddy-render).
+rayon = { workspace = true }
+
 # lopdf needs randomness (rand → getrandom); in the browser it comes from crypto.getRandomValues.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }

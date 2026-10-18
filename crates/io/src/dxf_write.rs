@@ -1820,11 +1820,30 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
 }
 
 /// The R2000 DXF the DWG bridge converts to a `dwg` version DWG: its entity types are the DWG
-/// version's (MULTILEADER from 2007).
-pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> String {
+/// version's (MULTILEADER from 2007). Binary DXF (the converter reads it in about two thirds of
+/// the time of ASCII, and it is smaller and quicker to write), with the LTYPE table's names.
+pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>) {
     let mut tags = tags_for(d, Version::R2000, dwg);
     bridge_markers(&mut tags);
-    cadaddy_dxf::write_ascii(&tags)
+    let mut names = Vec::new();
+    let mut in_ltype = false;
+    for t in &tags {
+        match t.code {
+            0 => {
+                // The LTYPE table ends: no more names (the rest is not read).
+                if !names.is_empty() && t.str() == "ENDTAB" {
+                    break;
+                }
+                in_ltype = t.str() == "LTYPE";
+            }
+            2 if in_ltype => {
+                names.push(t.str());
+                in_ltype = false;
+            }
+            _ => {}
+        }
+    }
+    (cadaddy_dxf::write_binary(&tags, false), names)
 }
 
 /// Subclass markers the DWG bridge knows by another spelling (it matches them exactly):

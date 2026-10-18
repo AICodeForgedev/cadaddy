@@ -38,6 +38,17 @@ impl PartialEq for EntityStore {
     }
 }
 
+/// Where `h` is in a chunk's objects. They are usually in handle order (new objects get higher
+/// handles and go on top): a binary search, checked, else a walk (an object moved in the draw
+/// order, or a file's own handle order).
+fn item_pos(items: &[Arc<Entity>], h: Handle) -> Option<usize> {
+    let i = items.partition_point(|e| e.handle < h);
+    if items.get(i).is_some_and(|e| e.handle == h) {
+        return Some(i);
+    }
+    items.iter().position(|e| e.handle == h)
+}
+
 fn shard_of(h: Handle) -> usize {
     // Fibonacci hashing spreads sequential handles across shards.
     ((h.0.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 58) as usize) % SHARDS
@@ -90,12 +101,21 @@ impl EntityStore {
     fn chunk_id(&self, h: Handle) -> Option<u32> {
         self.shards.get(shard_of(h)).and_then(|s| s.get(&h).copied())
     }
+    /// The position of chunk `id`. Chunks are made in draw order, so their ids usually rise
+    /// along it: a binary search finds the chunk without walking them all (a store of 500 000
+    /// objects has about 500 chunks, and every lookup walked half of them). Chunks put in front
+    /// (send to back) break that order; the search then misses and the walk finds it.
     fn chunk_pos(&self, id: u32) -> Option<usize> {
+        let i = self.chunks.partition_point(|c| c.id < id);
+        if self.chunks.get(i).is_some_and(|c| c.id == id) {
+            return Some(i);
+        }
         self.chunks.iter().position(|c| c.id == id)
     }
     pub fn get(&self, h: Handle) -> Option<&Arc<Entity>> {
         let pos = self.chunk_pos(self.chunk_id(h)?)?;
-        self.chunks.get(pos)?.items.iter().find(|e| e.handle == h)
+        let items = &self.chunks.get(pos)?.items;
+        items.get(item_pos(items, h)?)
     }
     fn set_index(&mut self, h: Handle, chunk: Option<u32>) {
         if let Some(shard) = self.shards.get_mut(shard_of(h)) {
@@ -159,11 +179,12 @@ impl EntityStore {
         let Some(pos) = self.chunk_pos(id) else { return false };
         let Some(c) = self.chunks.get_mut(pos) else { return false };
         let chunk = Arc::make_mut(c);
-        if let Some(slot) = chunk.items.iter_mut().find(|x| x.handle == e.handle) {
-            *slot = Arc::new(e);
-            true
-        } else {
-            false
+        match item_pos(&chunk.items, e.handle).and_then(|i| chunk.items.get_mut(i)) {
+            Some(slot) => {
+                *slot = Arc::new(e);
+                true
+            }
+            None => false,
         }
     }
     pub fn remove(&mut self, h: Handle) -> Option<Arc<Entity>> {
@@ -171,7 +192,7 @@ impl EntityStore {
         let pos = self.chunk_pos(id)?;
         let c = self.chunks.get_mut(pos)?;
         let chunk = Arc::make_mut(c);
-        let i = chunk.items.iter().position(|x| x.handle == h)?;
+        let i = item_pos(&chunk.items, h)?;
         let e = chunk.items.remove(i);
         let empty = chunk.items.is_empty();
         if empty {
@@ -187,7 +208,7 @@ impl EntityStore {
         let Some(pos) = self.chunk_pos(id) else { return false };
         let Some(c) = self.chunks.get_mut(pos) else { return false };
         let chunk = Arc::make_mut(c);
-        match chunk.items.iter_mut().find(|x| x.handle == h) {
+        match item_pos(&chunk.items, h).and_then(|i| chunk.items.get_mut(i)) {
             Some(slot) => {
                 f(Arc::make_mut(slot));
                 true

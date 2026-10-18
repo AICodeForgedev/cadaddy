@@ -918,6 +918,39 @@ fn uri_string(url: &str) -> Option<String> {
     Some(out)
 }
 
+/// Page content larger than this is written as several streams (PDF concatenates a page's
+/// /Contents array), compressed side by side.
+const CONTENT_PIECE: usize = 1 << 20;
+
+/// A page's content as stream object bodies: one, or for large compressed content pieces of
+/// about [`CONTENT_PIECE`] bytes split at line ends (between operators, as PDF requires),
+/// compressed on all cores.
+fn content_streams(data: &[u8], compress: bool) -> Vec<Vec<u8>> {
+    if !compress || data.len() <= CONTENT_PIECE {
+        return vec![stream(data, compress, "")];
+    }
+    let mut pieces: Vec<&[u8]> = Vec::new();
+    let mut rest = data;
+    while rest.len() > CONTENT_PIECE {
+        let cut = rest.get(CONTENT_PIECE..).and_then(|r| r.iter().position(|b| *b == b'\n')).map_or(rest.len(), |i| CONTENT_PIECE + i + 1);
+        let (a, b) = rest.split_at(cut.min(rest.len()));
+        pieces.push(a);
+        rest = b;
+    }
+    if !rest.is_empty() {
+        pieces.push(rest);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        pieces.par_iter().map(|p| stream(p, true, "")).collect()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        pieces.iter().map(|p| stream(p, true, "")).collect()
+    }
+}
+
 /// A stream object body, Flate-compressed when asked.
 fn stream(data: &[u8], compress: bool, extra: &str) -> Vec<u8> {
     let (data, filter) = if compress { (miniz_oxide::deflate::compress_to_vec_zlib(data, 6), " /Filter /FlateDecode") } else { (data.to_vec(), "") };
@@ -988,7 +1021,11 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
             let _ = write!(xobjects, " /Im{k} {id} 0 R");
         }
         let xobjects = if xobjects.is_empty() { String::new() } else { format!(" /XObject <<{xobjects} >>") };
-        let content = objs.add(stream(marks.as_bytes(), o.compress, ""));
+        let parts: Vec<usize> = content_streams(marks.as_bytes(), o.compress).into_iter().map(|b| objs.add(b)).collect();
+        let content = match parts.as_slice() {
+            [one] => format!("{one} 0 R"),
+            many => format!("[{}]", refs(many.iter().copied())),
+        };
         let mut used: Vec<usize> = texts.values().map(|(f, _)| *f).collect();
         used.sort_unstable();
         used.dedup();
@@ -1018,7 +1055,7 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
         let mut mb = String::new();
         pt(&mut mb, p.media);
         let annots = if annots.is_empty() { String::new() } else { format!(" /Annots [{}]", refs(annots)) };
-        page_dicts.push((page, used, props, ext_gstates(&alphas) + &xobjects, format!("/MediaBox [0 0 {mb}] /Contents {content} 0 R{annots}")));
+        page_dicts.push((page, used, props, ext_gstates(&alphas) + &xobjects, format!("/MediaBox [0 0 {mb}] /Contents {content}{annots}")));
         kids.push(page);
     }
     let font_ids = if fonts.is_empty() { Vec::new() } else { fonts.write(&mut objs, o.compress) };

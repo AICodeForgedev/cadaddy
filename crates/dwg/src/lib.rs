@@ -381,18 +381,21 @@ mod native {
     /// The names of the LTYPE records in DXF text (group 2 of each `0 LTYPE`).
     fn dxf_linetype_names(dxf: &[u8]) -> Vec<String> {
         let text = String::from_utf8_lossy(dxf);
-        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let mut lines = text.lines().map(str::trim);
         let mut names = Vec::new();
         let mut in_ltype = false;
-        for pair in lines.chunks(2) {
-            let [code, value] = pair else { break };
-            match *code {
-                "0" => in_ltype = *value == "LTYPE",
+        while let (Some(code), Some(value)) = (lines.next(), lines.next()) {
+            match code {
+                "0" => in_ltype = value == "LTYPE",
                 "2" if in_ltype => {
                     names.push(value.to_string());
                     in_ltype = false;
                 }
                 _ => {}
+            }
+            // The LTYPE table is in TABLES: nothing after the entities can add to it.
+            if code == "2" && matches!(value, "BLOCKS" | "ENTITIES" | "OBJECTS") {
+                break;
             }
         }
         names
@@ -401,8 +404,7 @@ mod native {
     /// acadrust's tables match names regardless of case and start with their own "Continuous",
     /// so a drawing's "CONTINUOUS" (older files spell it so) came back renamed: keep the
     /// drawing's spelling.
-    fn keep_linetype_case(doc: &mut acadrust::CadDocument, dxf: &[u8]) {
-        let names = dxf_linetype_names(dxf);
+    fn keep_linetype_case(doc: &mut acadrust::CadDocument, names: &[String]) {
         for lt in doc.line_types.iter_mut() {
             if let Some(n) = names.iter().find(|n| n.eq_ignore_ascii_case(&lt.name) && **n != lt.name) {
                 lt.name.clone_from(n);
@@ -438,7 +440,7 @@ mod native {
     /// Convert DXF bytes into a DWG file of the DXF's version, and at least AutoCAD 2004
     /// (AC1018).
     pub fn dxf_to_dwg(dxf: &[u8]) -> Result<Vec<u8>, String> {
-        convert(dxf, None)
+        convert(dxf, None, None)
     }
 
     /// Convert DXF bytes into a DWG file of `version`, a code from [`super::VERSIONS`] ("AC1032"),
@@ -453,10 +455,28 @@ mod native {
             "AC1032" => acadrust::DxfVersion::AC1032,
             _ => return Err(super::unsupported(version)),
         };
-        convert(dxf, Some(v))
+        convert(dxf, Some(v), None)
     }
 
-    fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>) -> Result<Vec<u8>, String> {
+    /// [`dxf_to_dwg_as`] for DXF of any form (ASCII or binary) whose linetype names the caller
+    /// gives (`linetypes`: the LTYPE table's names, as written), so they need not be read back
+    /// from the DXF.
+    pub fn dxf_to_dwg_named(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<Vec<u8>, String> {
+        let v = match version.trim().to_ascii_uppercase().as_str() {
+            "AC1015" => acadrust::DxfVersion::AC1015,
+            "AC1018" => acadrust::DxfVersion::AC1018,
+            "AC1021" => acadrust::DxfVersion::AC1021,
+            "AC1024" => acadrust::DxfVersion::AC1024,
+            "AC1027" => acadrust::DxfVersion::AC1027,
+            "AC1032" => acadrust::DxfVersion::AC1032,
+            _ => return Err(super::unsupported(version)),
+        };
+        convert(dxf, Some(v), Some(linetypes))
+    }
+
+    /// `linetypes`: the DXF's linetype names when the caller knows them; otherwise they are read
+    /// from the (ASCII) DXF.
+    fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>, linetypes: Option<&[String]>) -> Result<Vec<u8>, String> {
         let data = dxf.to_vec();
         let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
             .map_err(|_| "the DXF→DWG conversion failed".to_string())?
@@ -471,7 +491,10 @@ mod native {
         }
         table_style_rows(&mut doc, true);
         current_by_name(&mut doc);
-        keep_linetype_case(&mut doc, dxf);
+        match linetypes {
+            Some(names) => keep_linetype_case(&mut doc, names),
+            None => keep_linetype_case(&mut doc, &dxf_linetype_names(dxf)),
+        }
         drop_unwritable(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
@@ -480,7 +503,7 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as};
+pub use native::{dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named};
 
 /// The error for a DWG version CADaddy can't write.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -507,6 +530,10 @@ pub fn dxf_to_dwg(_dxf: &[u8]) -> Result<Vec<u8>, String> {
 }
 #[cfg(target_arch = "wasm32")]
 pub fn dxf_to_dwg_as(_dxf: &[u8], _version: &str) -> Result<Vec<u8>, String> {
+    Err("DWG files can't be written in the web build yet; save as DXF".into())
+}
+#[cfg(target_arch = "wasm32")]
+pub fn dxf_to_dwg_named(_dxf: &[u8], _version: &str, _linetypes: &[String]) -> Result<Vec<u8>, String> {
     Err("DWG files can't be written in the web build yet; save as DXF".into())
 }
 

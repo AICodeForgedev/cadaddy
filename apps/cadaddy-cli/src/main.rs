@@ -436,6 +436,46 @@ fn perf_file(path: &str) -> Result<(), String> {
         return Err("perf: the drawing is empty".into());
     }
     outln!("open {open_ms:.0} ms, {} entities, extents {:.1} x {:.1}", d.entity_count(), ext.width(), ext.height());
+    // The steps of a working session, each timed on its own.
+    s.viewport_px = (1600.0, 1000.0);
+    {
+        let mut step = |name: &str, f: &mut dyn FnMut(&mut Session) -> Result<String, String>| -> Result<(), String> {
+            let t = Instant::now();
+            let note = f(&mut s)?;
+            outln!("{name:<24} {:>9.1} ms  {note}", ms(t));
+            Ok(())
+        };
+        step("first draw", &mut |s| {
+            let st = s.state().map_err(|e| e.to_string())?;
+            let v = st.view();
+            let px = v.height / 1000.0;
+            let o = Options {
+                tolerance: px * 0.5,
+                min_dash: px * 2.0,
+                view: Some(Bounds2::new(v.center - Vec2::new(v.height * 0.8, v.height * 0.5), v.center + Vec2::new(v.height * 0.8, v.height * 0.5))),
+                ..Default::default()
+            };
+            Ok(format!("{} prims", build(&st.doc, &st.space, &o).prims.len()))
+        })?;
+        step("zoom extents", &mut |s| s.zoom_extents().map(|_| String::new()).map_err(|e| e.to_string()))?;
+        step("select all + move", &mut |s| {
+            let hs: Vec<String> = s.doc().map_err(|e| e.to_string())?.model.iter().map(|e| e.handle.hex()).collect();
+            let n = hs.len();
+            s.execute("move", &serde_json::json!({ "handles": hs, "delta": [1, 1] })).map_err(|e| e.to_string())?;
+            Ok(format!("{n} objects"))
+        })?;
+        step("regen", &mut |s| s.execute("regen", &serde_json::json!({})).map(|_| String::new()).map_err(|e| e.to_string()))?;
+        step("save DWG", &mut |s| {
+            let d = s.doc().map_err(|e| e.to_string())?;
+            cadaddy_io::write(d, "perf.dwg").map(|b| format!("{:.1} MB", b.len() as f64 / 1e6)).map_err(|e| e.to_string())
+        })?;
+        step("plot (PDF)", &mut |s| {
+            let d = s.doc().map_err(|e| e.to_string())?;
+            cadaddy_io::write(d, "perf.pdf").map(|b| format!("{:.1} MB", b.len() as f64 / 1e6)).map_err(|e| e.to_string())
+        })?;
+    }
+    let st = s.state().map_err(|e| e.to_string())?;
+    let (d, space) = (&st.doc, &st.space);
     outln!("{:>8} {:>10} {:>10}", "zoom", "build ms", "prims");
     let mut finest = Options::default();
     for k in 0..5 {
