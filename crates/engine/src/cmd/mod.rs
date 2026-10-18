@@ -16,6 +16,7 @@ mod draworder;
 mod edit;
 mod exact_ends;
 mod exchange;
+mod express;
 pub mod file;
 mod gripcmds;
 mod griphot;
@@ -194,6 +195,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(draworder::specs());
         v.extend(array::specs());
         v.extend(symbol::specs());
+        v.extend(express::specs());
         v.extend(takeoff::specs());
         v.extend(imageattach::specs());
         v.extend(dash_styles::specs());
