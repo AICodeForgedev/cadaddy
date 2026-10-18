@@ -50,6 +50,7 @@ pub const PROFILE_VARS: &[&str] = &[
     "CURSORSIZE",
     "PICKFIRST",
     "PICKADD",
+    "SELECTIONCYCLING",
     "MAXARRAY",
 ];
 
@@ -141,6 +142,7 @@ pub fn reset(s: &mut Session) {
     st.cursorsize = d.cursorsize;
     st.pickfirst = d.pickfirst;
     st.pickadd = d.pickadd;
+    st.selectioncycling = d.selectioncycling;
     st.maxarray = d.maxarray;
 }
 
