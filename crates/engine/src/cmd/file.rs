@@ -458,17 +458,36 @@ fn run_close(s: &mut Session, p: &Value) -> Result<Value> {
     if s.active >= s.docs.len() {
         s.active = s.docs.len().saturating_sub(1);
     }
-    // The cached selection indexes hold their drawing's objects: a closed drawing's would keep
-    // it in memory (gigabytes for a large one). The open drawings' are rebuilt when next used.
-    crate::spatial::clear_cache();
+    release_closed(s);
     ok()
+}
+
+/// Let go of what process-wide caches hold for drawings no longer open: the selection indexes
+/// (they hold their drawing's objects; the open drawings' are rebuilt when next used) and the
+/// decoded pixels of images only closed drawings showed. Either kept a closed drawing's memory
+/// (gigabytes for a large one) until the program exited.
+fn release_closed(s: &Session) {
+    crate::spatial::clear_cache();
+    let used: std::collections::HashSet<&str> = s
+        .docs
+        .iter()
+        .flat_map(|st| {
+            let d = &st.doc;
+            std::iter::once(&d.model)
+                .chain(d.layouts.iter().map(|l| &l.entities))
+                .chain(d.blocks.values().map(|b| &b.entities))
+                .flat_map(|e| e.iter())
+        })
+        .filter_map(|e| if let cadaddy_doc::EntityKind::Image(i) = &e.kind { Some(i.path.as_str()) } else { None })
+        .collect();
+    cadaddy_render::images::keep_only(&used);
 }
 
 fn run_closeall(s: &mut Session, _p: &Value) -> Result<Value> {
     s.cancel();
     s.docs.clear();
     s.active = 0;
-    crate::spatial::clear_cache();
+    release_closed(s);
     ok()
 }
 
