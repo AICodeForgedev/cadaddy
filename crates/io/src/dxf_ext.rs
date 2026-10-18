@@ -26,6 +26,8 @@ pub(crate) const CONSTRAINTS_KEY: &str = "CADADDY_CONSTRAINTS";
 pub(crate) const LAYER_STATES_KEY: &str = "CADADDY_LAYERSTATES";
 /// Named-object-dictionary key of the drawing's plot style tables XRECORD.
 pub(crate) const PLOT_STYLES_KEY: &str = "CADADDY_PLOTSTYLES";
+/// Named object dictionary key of the sun and exposure of rendered views (SUNPROPERTIES).
+pub(crate) const SUN_KEY: &str = "CADADDY_SUN";
 /// Named-object-dictionary key of the annotative scaling XRECORD.
 pub(crate) const ANNOTATION_KEY: &str = "CADADDY_ANNOTATION";
 /// Named-object-dictionary key of the plot style names dictionary (DXF Reference): its entries
@@ -828,6 +830,22 @@ pub(crate) fn plot_style_chunks(tables: &[PlotStyleTable]) -> Option<Vec<String>
     }
     let json = serde_json::to_string(&PlotStylesPayload { version: 1, tables: tables.to_vec() }).ok()?;
     Some(json_chunks(&json))
+}
+
+/// The sun XRECORD's text (JSON); `None` while it is the default.
+pub(crate) fn sun_chunks(sun: &cadaddy_doc::lighting::Sun) -> Option<Vec<String>> {
+    if *sun == cadaddy_doc::lighting::Sun::default() {
+        return None;
+    }
+    Some(json_chunks(&serde_json::to_string(sun).ok()?))
+}
+
+/// The sun from its XRECORD text (values made safe); `None` when it isn't one.
+pub(crate) fn parse_sun(text: &str) -> Option<cadaddy_doc::lighting::Sun> {
+    if text.len() > MAX_PAYLOAD {
+        return None;
+    }
+    serde_json::from_str::<cadaddy_doc::lighting::Sun>(text).ok().map(cadaddy_doc::lighting::Sun::sane)
 }
 
 /// Parse the plot style tables XRECORD text (tables sanitized); `None` when it is not a

@@ -509,6 +509,7 @@ pub fn class_name(k: &EntityKind) -> &'static str {
             cadaddy_doc::MeshKind::Polygon { .. } => "AcDbPolygonMesh",
         },
         EntityKind::Region(_) => "AcDbRegion",
+        EntityKind::Light(_) => "AcDbLight",
         EntityKind::Viewport(_) => "AcDbViewport",
         EntityKind::Image(_) => "AcDbRasterImage",
         EntityKind::Underlay(_) => "AcDbPdfReference",

@@ -1426,6 +1426,8 @@ pub enum EntityKind {
     Wipeout(Wipeout),
     Table(Table),
     Tolerance(crate::Tolerance),
+    /// A light of rendered views (LIGHT).
+    Light(crate::lighting::Light),
     Unknown(Unknown),
 }
 
@@ -1486,6 +1488,7 @@ impl EntityKind {
             EntityKind::Wipeout(_) => "Wipeout",
             EntityKind::Table(_) => "Table",
             EntityKind::Tolerance(_) => "Tolerance",
+            EntityKind::Light(_) => "Light",
             EntityKind::Unknown(_) => "Proxy",
         }
     }
@@ -1526,6 +1529,7 @@ impl EntityKind {
             EntityKind::Wipeout(_) => "WIPEOUT",
             EntityKind::Table(_) => "ACAD_TABLE",
             EntityKind::Tolerance(_) => "TOLERANCE",
+            EntityKind::Light(_) => "LIGHT",
             EntityKind::Unknown(u) => u.dxf_type.as_str(),
         }
     }
@@ -1665,6 +1669,11 @@ impl EntityKind {
             }
             EntityKind::Table(t) => vec![Prim::Point(t.insert.xy())],
             EntityKind::Tolerance(t) => vec![Prim::Point(t.insert.xy())],
+            // A light shows as its glyph: a point, and a spot's aim.
+            EntityKind::Light(l) => match l.kind {
+                crate::lighting::LightKind::Point => vec![Prim::Point(l.position.xy())],
+                _ => vec![Prim::Point(l.position.xy()), Prim::Seg(Segment::Line(GLine::new(l.position.xy(), l.target.xy())))],
+            },
             EntityKind::Unknown(_) => Vec::new(),
         }
     }
@@ -1882,6 +1891,10 @@ impl EntityKind {
                 let a = if mirror { t.rotation() } else { t.rotation() + rot };
                 t.dir = Vec2::from_angle(cadaddy_geom::norm_angle(a)).to3(0.0);
             }
+            EntityKind::Light(l) => {
+                t3(&mut l.position);
+                t3(&mut l.target);
+            }
             EntityKind::Unknown(_) => {}
         }
     }
@@ -1957,6 +1970,7 @@ impl EntityKind {
             EntityKind::Wipeout(w) => w.boundary.clone(),
             EntityKind::Table(t) => vec![t.insert.xy()],
             EntityKind::Tolerance(t) => vec![t.insert.xy()],
+            EntityKind::Light(l) => vec![l.position.xy(), l.target.xy()],
             EntityKind::Unknown(_) => Vec::new(),
         }
     }

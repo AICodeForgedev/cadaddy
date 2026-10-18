@@ -38,6 +38,7 @@ pub use tables::*;
 /// File data CADaddy doesn't model, kept for saving (#528).
 pub mod dynblock;
 pub mod foreign;
+pub mod lighting;
 pub mod material;
 
 #[derive(Debug, thiserror::Error)]
@@ -125,6 +126,8 @@ pub struct Drawing {
     pub hidden_saved: bool,
     /// The drawing's own materials (MATERIALS), by name; Global, ByLayer and ByBlock are implied.
     pub materials: Vec<material::Material>,
+    /// The sun of rendered views and their exposure (SUNPROPERTIES, RENDEREXPOSURE).
+    pub sun: lighting::Sun,
     /// What reading the file left out (a DWG's object records the reader couldn't decode), told
     /// to the user when the drawing opens. Never written to a file.
     pub read_notes: Vec<String>,
@@ -209,6 +212,7 @@ impl Drawing {
             hidden_objects: BTreeSet::new(),
             hidden_saved: false,
             materials: Vec::new(),
+            sun: lighting::Sun::default(),
             read_notes: Vec::new(),
             refedit: None,
             skipped_records: BTreeMap::new(),

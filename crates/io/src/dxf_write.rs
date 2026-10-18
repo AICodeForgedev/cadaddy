@@ -1474,6 +1474,29 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.s(1, &t.text);
             w.p(11, t.dir);
         }
+        // LIGHT (DXF Reference): its colour is the entity's (62/420).
+        EntityKind::Light(l) => {
+            w.s(0, "LIGHT");
+            common(w, e, owner, paper, "AcDbLight");
+            w.i(90, 1);
+            w.s(1, dxf_ext::xdata_str(&l.name));
+            w.i(70, l.kind.dxf());
+            w.i(290, i64::from(l.on));
+            w.i(291, 0);
+            w.f(40, l.intensity);
+            w.p(10, l.position);
+            w.p(11, l.target);
+            w.i(72, l.attenuation.dxf());
+            w.i(292, 0);
+            w.f(41, 0.0);
+            w.f(42, 0.0);
+            w.f(50, l.hotspot);
+            w.f(51, l.falloff);
+            w.i(293, i64::from(l.shadows));
+            w.i(73, 1);
+            w.i(91, 1024);
+            w.i(280, 1);
+        }
         // Entity types CADaddy doesn't model aren't written; the save command reports them.
         EntityKind::Unknown(_) => {}
     }
@@ -2216,6 +2239,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     if let Some(chunks) = dxf_ext::anno_chunks(d) {
         xrecords.push((dxf_ext::ANNOTATION_KEY, w.h(), chunks));
+    }
+    if let Some(chunks) = dxf_ext::sun_chunks(&d.sun) {
+        xrecords.push((dxf_ext::SUN_KEY, w.h(), chunks));
     }
     // The annotation scale list: the ACAD_SCALELIST dictionary of SCALE objects.
     let scale_dict = w.h();

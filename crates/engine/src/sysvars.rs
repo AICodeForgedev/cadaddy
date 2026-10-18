@@ -151,6 +151,8 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "SAVETIME" => json!(crate::autosave::savetime()),
         "SAVEFILEPATH" => json!(crate::autosave::savefilepath()),
         "AUDITCTL" => json!(i32::from(crate::audit::auditctl())),
+        "SUNSTATUS" => json!(i32::from(s.doc().ok()?.sun.on)),
+        "RENDEREXPOSURE" => json!(s.doc().ok()?.sun.exposure),
         "CMDNAMES" => json!(s.running.as_ref().map(|r| r.id.to_ascii_uppercase()).unwrap_or_default()),
         // A drawing not saved yet is named as AutoCAD names it, "Drawing1.dwg".
         "DWGNAME" => json!(
@@ -308,6 +310,9 @@ fn header_default(n: &str) -> Option<Value> {
         "USERS1" | "USERS2" | "USERS3" | "USERS4" | "USERS5" => Some(json!("")),
         // The material new objects get (MATERIALASSIGN's default).
         "CMATERIAL" => Some(json!("ByLayer")),
+        // Rendered views' sun on/off and exposure, kept with the drawing's sun.
+        "SUNSTATUS" => Some(json!(1)),
+        "RENDEREXPOSURE" => Some(json!(0.0)),
         _ => None,
     }
 }
@@ -496,6 +501,8 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         // AutoCAD's range: gaps up to 5000 drawing units close a hatch boundary.
         "HPGAPTOL" => s.doc_mut()?.header.set_f64("HPGAPTOL", as_f64(v).filter(|g| (0.0..=5000.0).contains(g)).ok_or_else(bad)?),
         "CONSTRAINTINFER" => s.doc_mut()?.parametric.settings.infer = as_bool(v).ok_or_else(bad)?,
+        "SUNSTATUS" => s.doc_mut()?.sun.on = as_bool(v).ok_or_else(bad)?,
+        "RENDEREXPOSURE" => s.doc_mut()?.sun.exposure = as_f64(v).filter(|e| (-20.0..=20.0).contains(e)).ok_or_else(bad)?,
         // ByLayer, ByBlock or one of the drawing's materials.
         "CMATERIAL" => {
             let t = v.as_str().map(str::trim).ok_or_else(bad)?;

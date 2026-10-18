@@ -289,6 +289,11 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
         EntityKind::Face3d(f) => set_xy(f.corners.get_mut(index)?, to),
         // A vertex grip moves that vertex (and every face using it).
         EntityKind::Mesh(m) => set_xy(m.vertices.get_mut(index)?, to),
+        EntityKind::Light(l) => match index {
+            0 => set_xy(&mut l.position, to),
+            1 => set_xy(&mut l.target, to),
+            _ => return None,
+        },
         EntityKind::Region(_) => return Some(translated(kind, delta)),
         EntityKind::Viewport(v) => {
             let opposite = *grips.get((index + 2) % 4)?;

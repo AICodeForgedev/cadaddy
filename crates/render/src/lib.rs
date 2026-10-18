@@ -12,6 +12,7 @@ mod dim;
 mod fill;
 mod hatch;
 pub mod images;
+pub mod light;
 mod linetype;
 mod linetype_text;
 pub mod materials;

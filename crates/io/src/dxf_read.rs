@@ -551,6 +551,21 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 text: t.s(1).unwrap_or_default().chars().take(MAX_FRAME_CHARS).collect(),
             })
         }
+        "LIGHT" => EntityKind::Light(
+            cadaddy_doc::lighting::Light {
+                name: t.s(1).unwrap_or_default(),
+                kind: cadaddy_doc::lighting::LightKind::from_dxf(t.i(70).unwrap_or(2)),
+                on: t.i(290).unwrap_or(1) != 0,
+                position: t.p(10),
+                target: t.p(11),
+                intensity: t.fd(40, 1500.0),
+                attenuation: cadaddy_doc::lighting::Attenuation::from_dxf(t.i(72).unwrap_or(2)),
+                hotspot: t.fd(50, 45.0),
+                falloff: t.fd(51, 50.0),
+                shadows: t.i(293).unwrap_or(1) != 0,
+            }
+            .sane(),
+        ),
         other => EntityKind::Unknown(Unknown {
             dxf_type: other.to_string(),
             tags: tags.iter().map(|tg| RawTag { code: tg.code, value: tg.str() }).collect(),
@@ -2134,6 +2149,10 @@ impl Objects {
         if let Some(hs) = self.xrecord_text(crate::dxf_ext::HIDDEN_OBJECTS_KEY).and_then(|t| crate::dxf_ext::parse_hidden_objects(&t)) {
             d.hidden_objects = hs.into_iter().filter(|h| d.entity(*h).is_some()).collect();
             d.hidden_saved = true;
+        }
+        // The sun and exposure of rendered views.
+        if let Some(sun) = self.xrecord_text(crate::dxf_ext::SUN_KEY).and_then(|t| crate::dxf_ext::parse_sun(&t)) {
+            d.sun = sun;
         }
         // The drawing's plot style tables.
         if let Some(tables) = self.xrecord_text(crate::dxf_ext::PLOT_STYLES_KEY).and_then(|t| crate::dxf_ext::parse_plot_styles(&t)) {

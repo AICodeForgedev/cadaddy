@@ -122,7 +122,20 @@ impl Mapping {
     /// Texture coordinates (in tiles) of a point on a surface with normal `n`.
     pub fn uv(&self, p: crate::geom::Vec3, n: crate::geom::Vec3) -> (f64, f64) {
         let (u, v) = match self.projection {
-            Projection::Planar => (p.x, p.y),
+            // In the surface's own plane: across it horizontally, and up it (or along Y on a
+            // horizontal surface).
+            Projection::Planar => {
+                let len = (n.x * n.x + n.y * n.y + n.z * n.z).sqrt();
+                if !(len.is_finite() && len > 1e-12) || (n.z / len).abs() > 0.999 {
+                    (p.x, p.y)
+                } else {
+                    let n = crate::geom::Vec3::new(n.x / len, n.y / len, n.z / len);
+                    let h = (n.x * n.x + n.y * n.y).sqrt();
+                    let u_axis = crate::geom::Vec3::new(-n.y / h, n.x / h, 0.0);
+                    let v_axis = n.cross(u_axis);
+                    (p.dot(u_axis), p.dot(v_axis))
+                }
+            }
             Projection::Box => {
                 let (ax, ay, az) = (n.x.abs(), n.y.abs(), n.z.abs());
                 if az >= ax && az >= ay {
@@ -474,6 +487,9 @@ mod tests {
     fn mapping_gives_tiles() {
         let m = Mapping { size_u: 2.0, size_v: 0.5, ..Mapping::default() };
         assert_eq!(m.uv(Vec3::new(4.0, 1.0, 9.0), Vec3::Z), (2.0, 2.0));
+        // Planar on a wall: across it and up it, so the texture stands upright.
+        let wall = Mapping::default().uv(Vec3::new(0.0, 3.0, 2.0), Vec3::new(1.0, 0.0, 0.0));
+        assert!((wall.0 - 3.0).abs() < 1e-12 && (wall.1 - 2.0).abs() < 1e-12, "{wall:?}");
         // Box: a wall facing X takes Y and Z.
         let b = Mapping { projection: Projection::Box, ..Mapping::default() };
         assert_eq!(b.uv(Vec3::new(5.0, 2.0, 3.0), Vec3::new(1.0, 0.0, 0.0)), (2.0, 3.0));
