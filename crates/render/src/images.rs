@@ -103,6 +103,38 @@ pub fn white_version(r: &Arc<Raster>) -> Arc<Raster> {
     w
 }
 
+/// `r` with an IMAGE's brightness and contrast (0..=100, 50 leaves it as it is) applied, made once
+/// per image and setting. Contrast scales each channel about mid-grey (0 flat grey, 100 twice as
+/// steep), then brightness shifts it (0 black, 100 white); alpha is kept. Only the source's weak
+/// reference is held, so an image dropped from the cache frees its adjusted copies too.
+pub fn adjusted(r: &Arc<Raster>, brightness: u8, contrast: u8) -> Arc<Raster> {
+    type Adjusted = HashMap<(usize, u8, u8), (std::sync::Weak<Raster>, Arc<Raster>)>;
+    static ADJUSTED: OnceLock<Mutex<Adjusted>> = OnceLock::new();
+    let (b, c) = (brightness.min(100), contrast.min(100));
+    if (b, c) == (50, 50) {
+        return Arc::clone(r);
+    }
+    let key = (Arc::as_ptr(r) as usize, b, c);
+    let map = ADJUSTED.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(m) = map.lock()
+        && let Some((src, a)) = m.get(&key)
+        && src.upgrade().is_some_and(|s| Arc::ptr_eq(&s, r))
+    {
+        return Arc::clone(a);
+    }
+    let k = f64::from(c) / 50.0;
+    let shift = (f64::from(b) - 50.0) / 50.0 * 255.0;
+    let lut: Vec<u8> = (0..=255u16).map(|v| ((f64::from(v) - 127.5) * k + 127.5 + shift).round().clamp(0.0, 255.0) as u8).collect();
+    let tone = |v: u8| lut.get(usize::from(v)).copied().unwrap_or(v);
+    let rgba = r.rgba.as_chunks::<4>().0.iter().flat_map(|p| [tone(p[0]), tone(p[1]), tone(p[2]), p[3]]).collect();
+    let a = Arc::new(Raster { width: r.width, height: r.height, rgba });
+    if let Ok(mut m) = map.lock() {
+        m.retain(|_, (src, _)| src.strong_count() > 0);
+        m.insert(key, (Arc::downgrade(r), Arc::clone(&a)));
+    }
+    a
+}
+
 /// Largest image decoded, in pixels (a 16k × 16k scan); larger files are treated as missing.
 pub const MAX_PIXELS: u64 = 16_384 * 16_384;
 /// Pixel memory the cache holds at most; images past it are treated as missing.
@@ -330,6 +362,22 @@ mod tests {
         assert_eq!(decode(&r.encode_png().unwrap()).unwrap(), r);
         let opaque = Raster::new(1, 1, vec![9, 8, 7, 255]).unwrap();
         assert_eq!(decode(&opaque.encode_png().unwrap()).unwrap(), opaque);
+    }
+
+    #[test]
+    fn brightness_and_contrast_adjust_once_per_setting() {
+        let r = Arc::new(Raster::new(2, 1, vec![0, 128, 255, 255, 32, 32, 32, 10]).unwrap());
+        assert!(Arc::ptr_eq(&r, &adjusted(&r, 50, 50)), "the defaults leave it alone");
+        let bright = adjusted(&r, 100, 50);
+        assert_eq!(bright.pixel(0, 0), Some([255, 255, 255, 255]));
+        assert_eq!(bright.pixel(1, 0).map(|p| p[3]), Some(10), "alpha kept");
+        assert_eq!(adjusted(&r, 0, 50).pixel(0, 0), Some([0, 0, 0, 255]));
+        let flat = adjusted(&r, 50, 0);
+        assert_eq!(flat.pixel(0, 0), Some([128, 128, 128, 255]));
+        let steep = adjusted(&r, 50, 100);
+        assert_eq!(steep.pixel(1, 0), Some([0, 0, 0, 10]), "dark grey pushed to black");
+        assert!(Arc::ptr_eq(&steep, &adjusted(&r, 50, 100)), "cached");
+        assert_eq!(adjusted(&r, 200, 200).pixel(0, 0), adjusted(&r, 100, 100).pixel(0, 0), "clamped to 100");
     }
 
     #[test]

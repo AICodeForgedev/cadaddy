@@ -98,3 +98,20 @@ fn print_opens_the_plot_dialog_but_json_plot_never_does() {
     assert!(app.ui.dialog.is_none());
     assert_eq!(picks.get(), 0);
 }
+
+#[test]
+fn filedia_0_asks_on_the_command_line() {
+    let (mut app, picks) = app();
+    app.cmdline("open");
+    assert_eq!(picks.get(), 1, "FILEDIA 1: the picker");
+    app.cmdline("filedia 0");
+    for (c, ask) in [("open", "Enter name of drawing to open"), ("saveas", "Save drawing as"), ("attach", "Enter name of file to attach")] {
+        app.cmdline(c);
+        assert!(app.session.prompt_text().contains(ask), "{c}: {}", app.session.prompt_text());
+        app.cmdline("");
+        menus::activate(&mut app, c);
+        assert!(app.session.prompt_text().contains(ask), "{c} from the menu: {}", app.session.prompt_text());
+        app.cmdline("");
+    }
+    assert_eq!(picks.get(), 1, "no more pickers");
+}

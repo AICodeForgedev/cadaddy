@@ -1296,6 +1296,54 @@ pub(crate) fn explode_kind(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<Vec<E
                     .collect(),
             )
         }
+        // A table explodes into what it draws: cell fills as solids, borders as lines and cell
+        // texts as multiline text, as in AutoCAD.
+        EntityKind::Table(t) => {
+            let g = cadaddy_render::table_geometry(d, t);
+            let z = t.insert.z;
+            // A part drawn "by block" takes the table's own property.
+            let with = |color: cadaddy_color::Color, lw: Option<cadaddy_doc::Lineweight>| {
+                let mut c = e.common.clone();
+                if color != cadaddy_color::Color::ByBlock {
+                    c.color = color;
+                }
+                if let Some(lw) = lw.filter(|l| *l != cadaddy_doc::Lineweight::ByBlock) {
+                    c.lineweight = lw;
+                }
+                c
+            };
+            let fills = g.fills.iter().map(|f| {
+                let [bl, br, tr, tl] = f.corners;
+                Entity {
+                    handle: Handle(0),
+                    common: with(f.color, None),
+                    kind: EntityKind::Solid(cadaddy_doc::Solid { corners: [bl.to3(z), br.to3(z), tl.to3(z), tr.to3(z)] }),
+                }
+            });
+            let lines = g.lines.iter().map(|l| Entity {
+                handle: Handle(0),
+                common: with(l.color, Some(l.lineweight)),
+                kind: EntityKind::Line(cadaddy_doc::Line { a: l.a.to3(z), b: l.b.to3(z) }),
+            });
+            let texts = g.texts.iter().filter(|tx| !tx.text.trim().is_empty()).map(|tx| Entity {
+                handle: Handle(0),
+                common: with(tx.color, None),
+                kind: EntityKind::MText(cadaddy_doc::MText {
+                    insert: tx.at.to3(z),
+                    height: tx.height,
+                    width: 0.0,
+                    attach: tx.attach,
+                    rotation: 0.0,
+                    style: tx.style.clone(),
+                    contents: tx.text.clone(),
+                    line_spacing: 1.0,
+                    line_spacing_exact: false,
+                    columns: None,
+                    background: None,
+                }),
+            });
+            Some(fills.chain(lines).chain(texts).collect())
+        }
         // A helix explodes into its spline (seen from above).
         EntityKind::Helix(h) => Some(vec![Entity { handle: Handle(0), common: e.common.clone(), kind: EntityKind::Spline(h.spline()) }]),
         EntityKind::Polyline3d(p) => Some(

@@ -230,7 +230,7 @@ impl Used {
 
 /// The definitions `ents` need from `src`: the layers, linetypes, styles and blocks they (and the
 /// blocks they reference, nested ones too) use, and `src`'s header.
-fn defs_for(src: &Drawing, ents: &[Entity]) -> Drawing {
+pub(crate) fn defs_for(src: &Drawing, ents: &[Entity]) -> Drawing {
     let mut used = Used::default();
     let mut frontier: Vec<String> = ents.iter().flat_map(|e| used.note(e)).collect();
     let mut walked = 0usize;
@@ -278,7 +278,7 @@ fn defs_for(src: &Drawing, ents: &[Entity]) -> Drawing {
 
 /// Add `defs`' table records and blocks that `d` doesn't have. Returns the blocks copied, from
 /// their name in `defs` to their name in `d`.
-fn merge(d: &mut Drawing, defs: &Drawing) -> BTreeMap<String, String> {
+pub(crate) fn merge(d: &mut Drawing, defs: &Drawing) -> BTreeMap<String, String> {
     fn add<T: Clone>(ours: &mut Vec<T>, theirs: &[T], name: fn(&T) -> &str) {
         for t in theirs {
             if !ours.iter().any(|o| name(o).eq_ignore_ascii_case(name(t))) {
@@ -338,7 +338,7 @@ fn block_names(d: &Drawing, defs: &Drawing) -> BTreeMap<String, String> {
 
 /// A copy of a clipboard object for `d`: a fresh handle, block references renamed, and links to
 /// objects of the source drawing (associative dimension points) dropped.
-fn adopt(d: &mut Drawing, e: &Entity, renames: &BTreeMap<String, String>) -> Entity {
+pub(crate) fn adopt(d: &mut Drawing, e: &Entity, renames: &BTreeMap<String, String>) -> Entity {
     let mut e = e.clone();
     e.handle = d.new_handle();
     match &mut e.kind {

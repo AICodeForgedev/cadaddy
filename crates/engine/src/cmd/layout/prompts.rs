@@ -2,7 +2,9 @@
 //! Every option runs the `layout.*` command bodies, so validation matches the JSON form and the
 //! command is one undo step.
 
-use cadaddy_doc::Space;
+use std::sync::Arc;
+
+use cadaddy_doc::{Drawing, Space};
 use serde_json::{Value, json};
 
 use super::super::find_command;
@@ -26,6 +28,11 @@ enum Stage {
     RenameTo(String),
     Set,
     List,
+    TemplateFile,
+    /// The template read, and the path typed.
+    TemplateLayouts(Arc<Drawing>, String),
+    SaveLayout,
+    SavePath(String),
 }
 
 #[derive(Default)]
@@ -71,8 +78,9 @@ impl LayoutM {
             "Rename" => Stage::RenameFrom,
             "Set" => Stage::Set,
             "?" => Stage::List,
+            "Template" => Stage::TemplateFile,
+            "SAveas" => Stage::SaveLayout,
             other => {
-                // Template, SAveas: report and end, leaving the next input to the command line.
                 s.echo(format!("LAYOUT {other} is not available yet."));
                 return Ok(Step::Done);
             }
@@ -132,6 +140,9 @@ impl Interactive for LayoutM {
                 Prompt::new("Enter layout to make current", Accept::TEXT).default(tab)
             }
             Stage::List => Prompt::new("Enter layout name(s) to list", Accept::TEXT).default("*"),
+            Stage::TemplateFile | Stage::SavePath(_) => Prompt::new("Enter template file name", Accept::TEXT),
+            Stage::TemplateLayouts(..) => Prompt::new("Enter layout name(s) to insert or [?]", Accept::TEXT),
+            Stage::SaveLayout => with_cur(Prompt::new("Enter layout to save to template", Accept::TEXT)),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
@@ -201,6 +212,39 @@ impl Interactive for LayoutM {
             }
             Stage::List => {
                 Self::list(s, name.as_deref().unwrap_or("*"))?;
+                Ok(Step::Done)
+            }
+            Stage::TemplateFile => {
+                // A missing or unreadable file is reported and asked for again.
+                let path = name.ok_or_else(|| EngineError::Other("Requires a template file name.".into()))?;
+                let src = super::template::read_template(&path).map_err(retry)?;
+                if src.layouts.is_empty() {
+                    return Err(EngineError::Other(format!("\"{path}\" has no layouts.")));
+                }
+                self.stage = Stage::TemplateLayouts(Arc::new(src), path);
+                Ok(Step::Continue)
+            }
+            Stage::TemplateLayouts(src, path) => {
+                let typed = need(name)?;
+                if typed == "?" {
+                    for n in super::template::layout_names(&src) {
+                        s.echo(format!("Layout: {n}"));
+                    }
+                    return Ok(Step::Continue);
+                }
+                let pats: Vec<String> = typed.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).take(1000).collect();
+                super::template::insert(s, &src, &pats, &path).map_err(retry)?;
+                Ok(Step::Done)
+            }
+            Stage::SaveLayout => {
+                let n = need(name.or_else(|| current_layout(s)))?;
+                let n = super::layout_name("layout", s.doc()?, &n).map_err(retry)?;
+                self.stage = Stage::SavePath(n);
+                Ok(Step::Continue)
+            }
+            Stage::SavePath(layout) => {
+                let path = name.ok_or_else(|| EngineError::Other("Requires a template file name.".into()))?;
+                super::template::run_saveas(s, &json!({ "layout": layout, "path": path })).map_err(retry)?;
                 Ok(Step::Done)
             }
         }
