@@ -479,6 +479,12 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::toldlg::open_new(app);
             Ok(Value::Null)
         }
+        // Typed or from a menu: the Check Spelling dialog. -SPELL and JSON calls keep the command
+        // line and the JSON form.
+        "spell" | "sp" if params.is_null() && app.session.state().is_ok() => {
+            crate::spelldlg::open(app);
+            Ok(Value::Null)
+        }
         "hatchedit" | "he" if params.is_null() && app.session.state().is_ok() => {
             crate::hatchdlg::open_edit(app);
             Ok(Value::Null)

@@ -39,6 +39,7 @@ mod overkill;
 mod pline_opts;
 pub mod plotters;
 mod props;
+pub mod spell;
 pub mod symbol;
 mod takeoff;
 pub(crate) mod underlay;
@@ -208,6 +209,13 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(array::specs());
         v.extend(symbol::specs());
         v.extend(express::specs());
+        v.push(
+            CommandSpec::new("spell", "Spelling", spell::run)
+                .menu(&["Tools", "Spelling"])
+                .alias(&["sp", "-spell"])
+                .params("{action?: \"check\" (default) | \"suggest\" | \"change\" | \"changeAll\" | \"ignoreAll\" | \"add\", handles? (default every object in the current space), suggestions?: bool (default true), word?, to?, handle? and where? (\"text\" | \"dimension\" | \"multileader\" | {attribute: n} | {cell: [row, col]}) for one change, all?: bool} → check: {misspelled: [{handle, where, word, context, suggestions}], checked}; change: {changed}")
+                .interactive(|_| Ok(Box::new(spell::SpellM::default()))),
+        );
         v.extend(underlay::specs());
         v.extend(takeoff::specs());
         v.extend(imageattach::specs());

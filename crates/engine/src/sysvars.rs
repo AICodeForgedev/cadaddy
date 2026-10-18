@@ -71,6 +71,8 @@ const SESSION_VARS: &[&str] = &[
     "SAVETIME",
     "SAVEFILEPATH",
     "AUDITCTL",
+    "DCTMAIN",
+    "DCTCUST",
 ];
 
 pub fn get(s: &Session, name: &str) -> Option<Value> {
@@ -151,6 +153,9 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "SAVETIME" => json!(crate::autosave::savetime()),
         "SAVEFILEPATH" => json!(crate::autosave::savefilepath()),
         "AUDITCTL" => json!(i32::from(crate::audit::auditctl())),
+        // Spelling dictionaries: the main one (only American English ships) and the user's file.
+        "DCTMAIN" => json!(crate::cmd::spell::MAIN_CODE),
+        "DCTCUST" => json!(crate::cmd::spell::dctcust()),
         "CMDNAMES" => json!(s.running.as_ref().map(|r| r.id.to_ascii_uppercase()).unwrap_or_default()),
         // A drawing not saved yet is named as AutoCAD names it, "Drawing1.dwg".
         "DWGNAME" => json!(
@@ -482,6 +487,22 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         ),
         "SAVEFILEPATH" => crate::autosave::set_savefilepath(v.as_str().ok_or_else(bad)?),
         "AUDITCTL" => crate::audit::set_auditctl(as_i(v).filter(|b| (0..=1).contains(b)).ok_or_else(bad)? == 1),
+        "DCTMAIN" => {
+            let code = v.as_str().ok_or_else(bad)?.trim();
+            if !code.eq_ignore_ascii_case(crate::cmd::spell::MAIN_CODE) {
+                return Err(crate::EngineError::Other(format!(
+                    "Only the American English dictionary (\"{}\") is available.",
+                    crate::cmd::spell::MAIN_CODE
+                )));
+            }
+        }
+        "DCTCUST" => {
+            let path = v.as_str().ok_or_else(bad)?;
+            if path.len() > 4096 {
+                return Err(bad());
+            }
+            crate::cmd::spell::set_dctcust(path);
+        }
         // A number is in degrees; text is an angle typed in AUNITS (SETVAR at the command line).
         "ANGBASE" => {
             let a = match v {

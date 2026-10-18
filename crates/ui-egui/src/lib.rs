@@ -51,6 +51,7 @@ pub mod plotstyles;
 pub mod quick;
 pub mod ribbon;
 pub mod shortcut_menus;
+pub mod spelldlg;
 pub mod theme;
 pub mod toldlg;
 pub mod viewcube;
@@ -293,6 +294,8 @@ pub struct CadApp {
     pub gpu_notice: Option<autosave::GpuNotice>,
     /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
+    /// The Check Spelling dialog while open ([`spelldlg`]).
+    pub spell_dlg: Option<spelldlg::State>,
     /// The layout tabs' rename, selection and Move or Copy dialog ([`layouttabs`]).
     pub layout_tabs: layouttabs::LayoutTabs,
     /// The Edit Block Definition dialog ([`bedit`]).
@@ -349,6 +352,7 @@ impl CadApp {
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
             hatch_dlg: None,
+            spell_dlg: None,
             layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
