@@ -213,10 +213,54 @@ fn with_handles(s: &Session, p: &Value, mut extra: Value) -> Value {
     extra
 }
 
+/// The representation an edit at the current annotation scale works on: `e`'s supported scale of
+/// the current scale's size, when `e` is an annotative model space object with more than one
+/// scale (with one, the object and its representation are the same).
+fn current_representation(d: &Drawing, e: &cadaddy_doc::Entity) -> Option<usize> {
+    if !is_annotative(e) || e.common.anno_scales.len() < 2 || !d.model.contains(e.handle) {
+        return None;
+    }
+    let f = d.current_anno_scale().factor();
+    e.common.anno_scales.iter().position(|sc| sc.has_factor(f))
+}
+
+/// MOVE of an annotative object with several scales moves only its representation at the current
+/// scale, as AutoCAD does: the move becomes that scale's offset. `false` (nothing done) when `m`
+/// isn't a pure translation or the object has no such representation.
+pub(crate) fn move_current_representation(d: &mut Drawing, h: Handle, m: &cadaddy_geom::Mat3) -> bool {
+    let delta = m.apply(cadaddy_geom::Vec2::ZERO);
+    let linear_identity = (m.apply_vec(cadaddy_geom::Vec2::X) - cadaddy_geom::Vec2::X).len() < 1e-12
+        && (m.apply_vec(cadaddy_geom::Vec2::Y) - cadaddy_geom::Vec2::Y).len() < 1e-12;
+    if !linear_identity || !delta.is_finite() {
+        return false;
+    }
+    let Some(i) = d.entity(h).and_then(|e| current_representation(d, e)) else { return false };
+    d.modify_entity(h, |e| {
+        if let Some(sc) = e.common.anno_scales.get_mut(i) {
+            sc.offset += delta;
+        }
+    })
+    .is_ok()
+}
+
+/// ANNORESET: every scale representation of the objects goes where the current scale's is (an
+/// object that doesn't support the current scale keeps its first scale's position).
 fn run_annoreset(s: &mut Session, p: &Value) -> Result<Value> {
     let (hs, _) = annotative_targets(s, p, "annoreset")?;
-    // One position serves every scale of an object, so they are always in step.
-    Ok(json!({ "objects": hs.len(), "message": format!("{} annotative object(s) synchronized", hs.len()) }))
+    let d = s.doc_mut()?;
+    let f = d.current_anno_scale().factor();
+    let mut changed = 0;
+    for h in &hs {
+        let Some(e) = d.entity(*h) else { continue };
+        let scales = &e.common.anno_scales;
+        let at = scales.iter().find(|sc| sc.has_factor(f)).or(scales.first()).map(|sc| sc.offset).unwrap_or(cadaddy_geom::Vec2::ZERO);
+        if scales.iter().all(|sc| sc.offset == at) {
+            continue;
+        }
+        d.modify_entity(*h, |e| e.common.anno_scales.iter_mut().for_each(|sc| sc.offset = at))?;
+        changed += 1;
+    }
+    Ok(json!({ "objects": hs.len(), "changed": changed, "message": format!("{} annotative object(s) synchronized", hs.len()) }))
 }
 
 fn run_annoupdate(s: &mut Session, p: &Value) -> Result<Value> {

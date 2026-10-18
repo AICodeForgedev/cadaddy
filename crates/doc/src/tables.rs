@@ -637,6 +637,12 @@ pub struct MLeaderStyle {
     pub text_style: String,
     /// New multileaders of this style are annotative.
     pub annotative: bool,
+    /// Leader lines: "straight", "spline" or "none" (content only).
+    pub leader_type: String,
+    /// Block content: the block new multileaders show in place of text ("" for text).
+    pub block: String,
+    /// The block's extents centre (not its insertion point) sits at the end of the landing.
+    pub block_center: bool,
 }
 
 impl Default for MLeaderStyle {
@@ -649,6 +655,9 @@ impl Default for MLeaderStyle {
             dogleg: 0.36,
             text_style: "Standard".into(),
             annotative: false,
+            leader_type: "straight".into(),
+            block: String::new(),
+            block_center: true,
         }
     }
 }

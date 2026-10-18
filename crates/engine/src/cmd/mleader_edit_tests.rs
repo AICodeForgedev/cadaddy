@@ -24,11 +24,14 @@ fn edit_adds_and_removes_leaders() {
     let mut s = Session::new();
     let h = text_ml(&mut s, [0.0, 0.0], [5.0, 5.0]);
     s.execute("mleaderedit", &json!({ "handle": h.hex(), "points": [[1, 9], [8, 0]] })).unwrap();
-    assert_eq!(ml(&s, h).leaders.len(), 3);
-    // Pick the leader near (8, 0): it is leader 2.
+    // (8, 0) is right of the text: it gets a landing of its own on that side.
+    let m = ml(&s, h);
+    assert_eq!((m.leaders.len(), m.roots.len(), m.leader_count()), (2, 1, 3));
+    // Pick the leader near (8, 0): it is leader 2; its landing goes with it.
     s.execute("mleaderedit", &json!({ "handle": h.hex(), "mode": "remove", "points": [[7.5, 0.5]] })).unwrap();
     let m = ml(&s, h);
     assert_eq!(m.leaders.len(), 2);
+    assert!(m.roots.is_empty());
     assert!(m.leaders.iter().all(|l| l[0].x != 8.0));
     assert!(s.execute("mleaderedit", &json!({ "handle": h.hex(), "mode": "remove", "index": 7 })).is_err());
     // Interactive: Add Leader then Remove Leader, one undo step each.

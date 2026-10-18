@@ -154,6 +154,31 @@ impl CellStyle {
     }
 }
 
+/// A cell's text as a number: plain numbers, with thousands separators or a percent sign.
+pub fn number_of(text: &str) -> Option<f64> {
+    let t = text.trim();
+    if t.is_empty() || t.len() > 64 {
+        return None;
+    }
+    let (t, scale) = match t.strip_suffix('%') {
+        Some(rest) => (rest.trim_end(), 0.01),
+        None => (t, 1.0),
+    };
+    let plain: String = t.chars().filter(|c| *c != ',' && *c != ' ').collect();
+    plain.parse::<f64>().ok().filter(|v| v.is_finite()).map(|v| v * scale)
+}
+
+impl CellStyle {
+    /// How a cell's `text` shows: a plain number (no formula) in the style's number format when
+    /// that is Decimal or Percent, otherwise as typed.
+    pub fn display_text(&self, text: &str, formula: bool) -> String {
+        match self.format {
+            CellFormat::Decimal | CellFormat::Percent if !formula => number_of(text).map_or_else(|| text.to_string(), |v| self.format_number(v)),
+            _ => text.to_string(),
+        }
+    }
+}
+
 impl TableStyle {
     /// The Title, Header or Data style this table style implies from its text height and margin
     /// (data middle left; header and title middle centre, the title 1.4 × as high and merged).

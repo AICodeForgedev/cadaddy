@@ -19,6 +19,44 @@ use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 const MAX_ROWS: usize = 2000;
 const MAX_COLS: usize = 200;
 
+/// Most changed tables refitted after one command.
+const MAX_REFIT: usize = 1000;
+
+/// The post-command pass: a table the command changed (or added) grows the rows its wrapped cell
+/// text no longer fits in, in the command's own undo step. Rows only grow: a row height is also
+/// the minimum the user set.
+pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<cadaddy_doc::Drawing>>) {
+    let Some(before) = before else { return };
+    let Ok(st) = s.state_mut() else { return };
+    if std::sync::Arc::ptr_eq(before, &st.doc) {
+        return;
+    }
+    let d = &st.doc;
+    let mut fits: Vec<(Handle, Vec<f64>)> = Vec::new();
+    for store in std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)) {
+        for e in store.iter() {
+            let EntityKind::Table(t) = &e.kind else { continue };
+            if before.entity(e.handle).is_some_and(|b| std::sync::Arc::ptr_eq(b, e)) || fits.len() >= MAX_REFIT {
+                continue;
+            }
+            if let Some(rows) = cadaddy_render::fit_rows(d, t) {
+                fits.push((e.handle, rows));
+            }
+        }
+    }
+    if fits.is_empty() {
+        return;
+    }
+    let d = std::sync::Arc::make_mut(&mut st.doc);
+    for (h, rows) in fits {
+        let _ = d.modify_entity(h, |e| {
+            if let EntityKind::Table(t) = &mut e.kind {
+                t.row_heights = rows;
+            }
+        });
+    }
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("table", "Table...", run_table)

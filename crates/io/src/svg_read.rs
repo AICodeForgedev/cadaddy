@@ -1,67 +1,89 @@
 //! SVG → Drawing: the static W3C SVG subset that drawing tools emit.
 //!
-//! Reads shapes (`rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`), `path`
-//! outlines (`M L H V C S Q T A Z`, absolute and relative), `g` grouping with `transform`
-//! attributes, `viewBox` and unit-bearing `width`/`height`, and Inkscape layers
-//! (`inkscape:groupmode="layer"`). Geometry becomes centre-line entities in millimetres with
-//! the page's top-left corner at the origin and Y pointing up — where a laser or pen job
-//! wants it.
+//! Reads shapes (`rect` with rounded corners, `circle`, `ellipse`, `line`, `polyline`,
+//! `polygon`), `path` outlines (`M L H V C S Q T A Z`, absolute and relative), `g` grouping with
+//! `transform` attributes, `use` references (to any element or a `symbol`, with their `x`/`y`
+//! and transforms), `viewBox` and unit-bearing `width`/`height`, Inkscape layers
+//! (`inkscape:groupmode="layer"`), CSS rules in `<style>` with simple selectors (`tag`,
+//! `.class`, `#id`), fills (a solid hatch in the fill colour; a linear or radial gradient
+//! becomes a gradient hatch), text (TEXT, or MTEXT for several lines, with the font size and
+//! anchor) and raster images (IMAGE: an embedded one is written out as a file beside the SVG; a
+//! linked one is used where it lies). Geometry becomes centre-line entities in millimetres with
+//! the page's top-left corner at the origin and Y pointing up — where a laser or pen job wants
+//! it.
 //!
-//! Not read (each is a follow-up): CSS class rules (`<style>`), `use` references, fills,
-//! gradients and hatch patterns, text, embedded raster images, rounded rectangle corners
-//! (`rx`/`ry`), and elliptical arcs under non-uniform transforms (those are flattened into
-//! line segments instead of losing the shape).
+//! Not read (each is a follow-up): patterns, masks, clip paths and markers, stroke widths and
+//! colours, text on a path, gradients' middle stops, and elliptical arcs under non-uniform
+//! transforms (those are flattened into line segments instead of losing the shape). A shape
+//! whose fill the file never sets is not hatched — SVG paints it black, but line art drawn
+//! without styles should stay line art.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-use cadaddy_color::Color;
+use cadaddy_color::{Color, Rgb};
 use cadaddy_doc::*;
-use cadaddy_geom::{Mat3, PolyVertex, Spline, Vec2, Vec3};
-use quick_xml::Reader;
-use quick_xml::XmlVersion;
-use quick_xml::events::{BytesStart, Event};
+use cadaddy_geom::{Bounds2, Mat3, PolyVertex, Spline, Vec2, Vec3};
+use cadaddy_render::images::Raster;
 
+use crate::svg_style::{self, Anchor, Css, Dom, Kid, Node, Paint, Style};
 use crate::{IoError, Result};
 
 /// A decompressed SVGZ payload larger than this is refused (decompression bomb guard).
 const MAX_DECOMPRESSED: usize = 64 << 20;
-/// Shape elements per file (rect, circle, path, …; each counted once).
+/// Entities per file.
 const MAX_ELEMENTS: usize = 500_000;
+/// Elements visited (each `use` visits its target again).
+const MAX_VISITS: usize = 4_000_000;
 /// Path data segments per `d` attribute.
 const MAX_PATH_SEGMENTS: usize = 100_000;
 /// Vertices in one polyline, and control points in one spline.
 const MAX_CURVE_POINTS: usize = 100_001;
+/// Vertices in one fill's boundary.
+const MAX_FILL_VERTICES: usize = 1_000_000;
 /// Layers created from Inkscape layer groups.
 const MAX_LAYERS: usize = 256;
-/// Nested `<g>`/`<svg>` transforms.
+/// Nested `<g>`/`<svg>`/`use` transforms.
 const MAX_TRANSFORM_DEPTH: usize = 64;
+/// Nested `use` references.
+const MAX_USE_DEPTH: usize = 16;
 /// Flattened chords per elliptical arc under a non-uniform transform.
 const MAX_ARC_CHORDS: usize = 10_000;
+/// Raster images per file, and the bytes of one.
+const MAX_IMAGES: usize = 256;
+const MAX_IMAGE_BYTES: usize = 64 << 20;
+/// Characters in one text element.
+const MAX_TEXT_CHARS: usize = 65_536;
+/// Notes about what couldn't be read.
+const MAX_NOTES: usize = 32;
+/// A drafting text height is its capital letters' height; an SVG font size is the em, of which
+/// capitals take about this much in common fonts.
+const CAP_HEIGHT: f64 = 0.7;
 
-/// Elements whose whole subtree is skipped (paint servers, text, raster images, metadata).
-const SKIP: &[&[u8]] = &[
-    b"defs",
-    b"symbol",
-    b"clipPath",
-    b"mask",
-    b"pattern",
-    b"marker",
-    b"linearGradient",
-    b"radialGradient",
-    b"filter",
-    b"style",
-    b"text",
-    b"image",
-    b"title",
-    b"desc",
-    b"metadata",
+/// Elements whose whole subtree is skipped where it stands (definitions are reached through
+/// `use` and `url(#…)` instead; paint servers, metadata).
+const SKIP: &[&str] = &[
+    "defs",
+    "symbol",
+    "clipPath",
+    "mask",
+    "pattern",
+    "marker",
+    "linearGradient",
+    "radialGradient",
+    "filter",
+    "style",
+    "title",
+    "desc",
+    "metadata",
+    "script",
+    "foreignObject",
 ];
 
-/// Elements that hold children and push a transform stack frame.
-const CONTAINERS: &[&[u8]] = &[b"g", b"svg", b"a", b"switch"];
-
-/// Read an SVG document, or a gzip-compressed one (`.svgz`, Inkscape's "Compressed SVG").
-pub fn read(bytes: &[u8]) -> Result<Drawing> {
+/// Read an SVG document, or a gzip-compressed one (`.svgz`, Inkscape's "Compressed SVG"). `name`
+/// is the file's path: embedded images are written beside it, linked ones looked up from its
+/// folder (a bare name has no folder: embedded images then show in this session only).
+pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
     let unpacked;
     let plain: &[u8] = if bytes.starts_with(&[0x1f, 0x8b]) {
         unpacked = gunzip(bytes)?;
@@ -70,9 +92,19 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         bytes
     };
     let text = std::str::from_utf8(plain).map_err(|_| IoError::Format("SVG files must be UTF-8".into()))?;
-    let mut parser = Parser::new();
-    parser.parse(text)?;
-    Ok(parser.drawing)
+    let dom = svg_style::build(text)?;
+    let mut parser = Parser::new(name);
+    for n in dom.nodes.iter().filter(|n| n.name == "style") {
+        if n.attr("type").is_none_or(|t| t.trim().eq_ignore_ascii_case("text/css")) {
+            parser.css.add(&n.own_text());
+        }
+    }
+    if let Some(root) = dom.root {
+        parser.walk(&dom, root, &Style::default())?;
+    }
+    let mut d = parser.drawing;
+    d.read_notes.extend(parser.notes);
+    Ok(d)
 }
 
 /// Decompress a gzip member (RFC 1952) with a hard output cap.
@@ -116,121 +148,178 @@ fn v3(p: Vec2) -> Vec3 {
     Vec3::new(p.x, p.y, 0.0)
 }
 
+/// What a fill paint comes to.
+enum Fill {
+    Solid(Rgb),
+    Gradient(Gradient),
+}
+
+/// One line of a text element: where its first character sits (user units), what it says, and
+/// how it is sized and anchored.
+struct TextLine {
+    at: Vec2,
+    text: String,
+    size: f64,
+    anchor: Anchor,
+}
+
 struct Parser {
     drawing: Drawing,
     /// Root viewBox/unit mapping composed with every open container transform.
     stack: Vec<Mat3>,
+    root_seen: bool,
     /// Current Inkscape layer name.
     layer: String,
     layers: HashSet<String>,
     layer_color: u8,
     elements: usize,
-    /// > 0 while inside a skipped subtree; counts the starts seen there.
-    skip: usize,
+    visits: usize,
+    css: Css,
+    /// The `use` targets being read, innermost last (a reference cycle stops there).
+    uses: Vec<usize>,
+    /// The SVG's folder (embedded images are written there) and file name without extension.
+    dir: Option<std::path::PathBuf>,
+    stem: String,
+    /// Embedded image bytes already placed → their path.
+    images: HashMap<u64, String>,
+    image_count: usize,
+    notes: Vec<String>,
 }
 
 impl Parser {
-    fn new() -> Self {
+    fn new(name: &str) -> Self {
+        let p = std::path::Path::new(name);
+        let dir = p.parent().filter(|d| !d.as_os_str().is_empty() && cfg!(not(target_arch = "wasm32"))).map(std::path::Path::to_path_buf);
+        let stem: String = p
+            .file_stem()
+            .map(|s| s.to_string_lossy().chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') { c } else { '_' }).collect())
+            .filter(|s: &String| !s.trim().is_empty())
+            .unwrap_or_else(|| "svg".into());
         Parser {
             drawing: Drawing::new_metric(),
             stack: vec![Mat3::IDENTITY],
+            root_seen: false,
             layer: "0".into(),
             layers: HashSet::from(["0".to_string()]),
             layer_color: 1,
             elements: 0,
-            skip: 0,
+            visits: 0,
+            css: Css::default(),
+            uses: Vec::new(),
+            dir,
+            stem,
+            images: HashMap::new(),
+            image_count: 0,
+            notes: Vec::new(),
         }
     }
 
-    fn parse(&mut self, text: &str) -> Result<()> {
-        let mut reader = Reader::from_str(text);
-        reader.config_mut().trim_text(true);
-        loop {
-            match reader.read_event().map_err(parse_err)? {
-                Event::Start(e) => {
-                    let name = e.name();
-                    self.on_start(name.as_ref(), &e)?;
-                }
-                Event::Empty(e) => {
-                    let name = e.name();
-                    self.on_element(name.as_ref(), &e)?;
-                }
-                Event::End(e) => {
-                    let name = e.name();
-                    self.on_end(name.as_ref());
-                }
-                Event::Eof => break,
-                _ => {}
+    fn note(&mut self, s: String) {
+        if self.notes.len() < MAX_NOTES && !self.notes.contains(&s) {
+            self.notes.push(s);
+        }
+    }
+
+    fn walk(&mut self, dom: &Dom, i: usize, parent: &Style) -> Result<()> {
+        let Some(n) = dom.node(i) else { return Ok(()) };
+        self.visits += 1;
+        if self.visits > MAX_VISITS {
+            return Err(IoError::Format(format!("SVG: more than {MAX_VISITS} elements to read (through `use` references)")));
+        }
+        if SKIP.contains(&n.name.as_str()) {
+            return Ok(());
+        }
+        let style = Style::of(n, parent, &self.css);
+        if style.hidden {
+            return Ok(());
+        }
+        match n.name.as_str() {
+            "g" | "svg" | "a" | "switch" => self.group(dom, n, &style),
+            "use" => self.use_ref(dom, n, &style),
+            name => {
+                // A shape's own transform applies to it alone.
+                self.push(n.attr("transform").and_then(parse_transform))?;
+                let r = match name {
+                    "text" => self.text(dom, n, &style),
+                    "image" => self.image(n),
+                    _ => self.shape(dom, n, &style),
+                };
+                self.stack.pop();
+                r
+            }
+        }
+    }
+
+    fn kids(&mut self, dom: &Dom, n: &Node, style: &Style) -> Result<()> {
+        for k in &n.kids {
+            if let Kid::El(c) = k {
+                self.walk(dom, *c, style)?;
             }
         }
         Ok(())
     }
 
-    /// A start tag: open a transform frame, descend into a skipped subtree, or treat a
-    /// shape written as start+end the same as a self-closed one.
-    fn on_start(&mut self, name: &[u8], e: &BytesStart) -> Result<()> {
-        if self.skip > 0 {
-            self.skip += 1;
-            return Ok(());
-        }
-        if SKIP.contains(&name) {
-            self.skip = 1;
-            return Ok(());
-        }
-        if hidden(e) {
-            self.skip = 1;
-            return Ok(());
-        }
-        if CONTAINERS.contains(&name) { self.enter_group(name, e) } else { self.on_element(name, e) }
-    }
-
-    fn on_element(&mut self, name: &[u8], e: &BytesStart) -> Result<()> {
-        if self.skip > 0 {
-            return Ok(());
-        }
-        if SKIP.contains(&name) || hidden(e) {
-            return Ok(());
-        }
-        match name {
-            b"rect" => self.rect(e),
-            b"circle" => self.circle(e),
-            b"ellipse" => self.ellipse(e),
-            b"line" => self.line(e),
-            b"polyline" => self.poly_points(e, false),
-            b"polygon" => self.poly_points(e, true),
-            b"path" => self.path(e),
-            _ => Ok(()),
-        }
-    }
-
-    fn on_end(&mut self, name: &[u8]) {
-        if self.skip > 0 {
-            self.skip -= 1;
-        } else if CONTAINERS.contains(&name) && self.stack.len() > 1 {
-            self.stack.pop();
-        }
-    }
-
-    fn enter_group(&mut self, name: &[u8], e: &BytesStart) -> Result<()> {
-        if name == b"svg" && self.stack.len() == 1 {
-            self.stack[0] = viewport(e)?;
-        }
-        if name == b"g" && attr(e, b"inkscape:groupmode").as_deref() == Some("layer") {
-            let raw = attr(e, b"inkscape:label").or_else(|| attr(e, b"id"));
-            if let Some(raw) = raw {
-                self.set_layer(&raw);
-            }
-        }
+    /// Open a transform frame: `local` applied inside the current mapping.
+    fn push(&mut self, local: Option<Mat3>) -> Result<()> {
         if self.stack.len() >= MAX_TRANSFORM_DEPTH {
             return Err(IoError::Format(format!("SVG: more than {MAX_TRANSFORM_DEPTH} nested groups")));
         }
-        let current = *self.stack.last().unwrap_or(&Mat3::IDENTITY);
-        let next = match attr(e, b"transform").as_deref().and_then(parse_transform) {
-            Some(local) => current.then_before(local),
-            None => current,
-        };
-        self.stack.push(next);
+        let current = self.cur();
+        self.stack.push(local.map_or(current, |l| current.then_before(l)));
         Ok(())
+    }
+
+    fn group(&mut self, dom: &Dom, n: &Node, style: &Style) -> Result<()> {
+        if n.name == "svg" && !self.root_seen {
+            self.root_seen = true;
+            if let Some(root) = self.stack.first_mut() {
+                *root = viewport(n)?;
+            }
+        }
+        let layer = self.layer.clone();
+        if n.name == "g"
+            && n.attr("inkscape:groupmode") == Some("layer")
+            && let Some(raw) = n.attr("inkscape:label").or_else(|| n.attr("id"))
+        {
+            self.set_layer(raw);
+        }
+        self.push(n.attr("transform").and_then(parse_transform))?;
+        let r = self.kids(dom, n, style);
+        self.stack.pop();
+        self.layer = layer;
+        r
+    }
+
+    /// `use`: the referenced element drawn again, moved by `x`/`y` inside the `use`'s transform
+    /// and styled as a child of the `use`. A `symbol`'s `viewBox` maps onto the `use`'s
+    /// `width`/`height`.
+    fn use_ref(&mut self, dom: &Dom, n: &Node, style: &Style) -> Result<()> {
+        let Some(target) = n.href().and_then(|h| dom.by_ref(h)) else { return Ok(()) };
+        let Some(t) = dom.node(target) else { return Ok(()) };
+        if self.uses.contains(&target) || self.uses.len() >= MAX_USE_DEPTH {
+            self.note("SVG: a `use` reference that refers back to itself was left out".into());
+            return Ok(());
+        }
+        let place = Mat3::translate(Vec2::new(num(n, "x", 0.0), num(n, "y", 0.0)));
+        let local = n.attr("transform").and_then(parse_transform).map_or(place, |m| m.then_before(place));
+        self.push(Some(local))?;
+        self.uses.push(target);
+        let r = if t.name == "symbol" {
+            let st = Style::of(t, style, &self.css);
+            match self.push(Some(symbol_viewbox(t, n))) {
+                Ok(()) => {
+                    let r = if st.hidden { Ok(()) } else { self.kids(dom, t, &st) };
+                    self.stack.pop();
+                    r
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            self.walk(dom, target, style)
+        };
+        self.uses.pop();
+        self.stack.pop();
+        r
     }
 
     fn set_layer(&mut self, raw: &str) {
@@ -261,43 +350,101 @@ impl Parser {
     }
 
     fn add(&mut self, kind: EntityKind) -> Result<()> {
+        self.add_colored(kind, Color::ByLayer)
+    }
+
+    fn add_colored(&mut self, kind: EntityKind, color: Color) -> Result<()> {
         self.elements += 1;
         if self.elements > MAX_ELEMENTS {
             return Err(IoError::Format(format!("SVG: more than {MAX_ELEMENTS} elements")));
         }
-        let common = Common { layer: self.layer.clone(), ..Common::default() };
+        let common = Common { layer: self.layer.clone(), color, ..Common::default() };
         self.drawing.add(&Space::Model, common, kind).map(|_| ()).map_err(parse_err)
     }
 
     // --- shapes -------------------------------------------------------------
 
-    fn rect(&mut self, e: &BytesStart) -> Result<()> {
-        let x = num(e, b"x", 0.0);
-        let y = num(e, b"y", 0.0);
-        let w = num(e, b"width", 0.0);
-        let h = num(e, b"height", 0.0);
+    /// A shape: its fill (painted first, so the outline shows over it), then its outline.
+    fn shape(&mut self, dom: &Dom, n: &Node, style: &Style) -> Result<()> {
+        match n.name.as_str() {
+            "rect" => self.rect(dom, n, style),
+            "circle" => {
+                let r = num(n, "r", 0.0);
+                self.round(dom, n, style, r, r)
+            }
+            "ellipse" => {
+                let (rx, ry) = (num(n, "rx", 0.0), num(n, "ry", 0.0));
+                self.round(dom, n, style, rx, ry)
+            }
+            "line" => {
+                let a = Vec2::new(num(n, "x1", 0.0), num(n, "y1", 0.0));
+                let b = Vec2::new(num(n, "x2", 0.0), num(n, "y2", 0.0));
+                self.add(EntityKind::Line(Line { a: v3(self.map(a)), b: v3(self.map(b)) }))
+            }
+            "polyline" | "polygon" => {
+                let Some(raw) = n.attr("points") else { return Ok(()) };
+                let closed = n.name == "polygon";
+                let nums: Vec<f64> = Numbers::new(raw).collect();
+                let mut pts: Vec<Vec2> = nums.as_chunks::<2>().0.iter().map(|[x, y]| Vec2::new(*x, *y)).collect();
+                pts.truncate(MAX_CURVE_POINTS);
+                if let Some((first, rest)) = pts.split_first() {
+                    let sp = Subpath { start: *first, segs: rest.iter().map(|p| Seg::Line(*p)).collect(), closed };
+                    self.fill(dom, std::slice::from_ref(&sp), style)?;
+                }
+                let mapped: Vec<Vec2> = pts.iter().map(|p| self.map(*p)).collect();
+                self.add_polyline(&mapped, closed)
+            }
+            "path" => {
+                let Some(d) = n.attr("d") else { return Ok(()) };
+                let sps = parse_path(d)?;
+                self.fill(dom, &sps, style)?;
+                for sp in &sps {
+                    self.emit_subpath(sp)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn rect(&mut self, dom: &Dom, n: &Node, style: &Style) -> Result<()> {
+        let x = num(n, "x", 0.0);
+        let y = num(n, "y", 0.0);
+        let w = num(n, "width", 0.0);
+        let h = num(n, "height", 0.0);
         if w <= 0.0 || h <= 0.0 {
             return Ok(());
         }
+        // Corner radii: one given stands for both; each at most half the side.
+        let given = |k: &str| n.attr(k).and_then(parse_length_mm).filter(|r| *r >= 0.0);
+        let (rx, ry) = match (given("rx"), given("ry")) {
+            (Some(rx), Some(ry)) => (rx, ry),
+            (Some(r), None) | (None, Some(r)) => (r, r),
+            (None, None) => (0.0, 0.0),
+        };
+        let (rx, ry) = (rx.min(w / 2.0), ry.min(h / 2.0));
+        if rx > 0.0 && ry > 0.0 {
+            let sp = rounded_rect(x, y, w, h, rx, ry);
+            self.fill(dom, std::slice::from_ref(&sp), style)?;
+            return self.emit_subpath(&sp);
+        }
         let pts = [Vec2::new(x, y), Vec2::new(x + w, y), Vec2::new(x + w, y + h), Vec2::new(x, y + h)];
+        let sp = Subpath { start: pts[0], segs: pts[1..].iter().map(|p| Seg::Line(*p)).collect(), closed: true };
+        self.fill(dom, std::slice::from_ref(&sp), style)?;
         self.add_polyline(&pts.map(|p| self.map(p)), true)
     }
 
-    fn circle(&mut self, e: &BytesStart) -> Result<()> {
-        let r = num(e, b"r", 0.0);
-        if r <= 0.0 {
-            return Ok(());
-        }
-        self.add_rounded(Vec2::new(num(e, b"cx", 0.0), num(e, b"cy", 0.0)), r, r)
-    }
-
-    fn ellipse(&mut self, e: &BytesStart) -> Result<()> {
-        let rx = num(e, b"rx", 0.0);
-        let ry = num(e, b"ry", 0.0);
+    /// A circle or an ellipse, and its fill.
+    fn round(&mut self, dom: &Dom, n: &Node, style: &Style, rx: f64, ry: f64) -> Result<()> {
         if rx <= 0.0 || ry <= 0.0 {
             return Ok(());
         }
-        self.add_rounded(Vec2::new(num(e, b"cx", 0.0), num(e, b"cy", 0.0)), rx, ry)
+        let c = Vec2::new(num(n, "cx", 0.0), num(n, "cy", 0.0));
+        let arc = |end: Vec2| Seg::Arc { rx, ry, rot: 0.0, large: false, sweep: true, end };
+        let start = c + Vec2::new(rx, 0.0);
+        let sp = Subpath { start, segs: vec![arc(c - Vec2::new(rx, 0.0)), arc(start)], closed: true };
+        self.fill(dom, std::slice::from_ref(&sp), style)?;
+        self.add_rounded(c, rx, ry)
     }
 
     /// A circle or ellipse through a transform. A circle stays a `CIRCLE` under rotations,
@@ -339,24 +486,6 @@ impl Parser {
         self.add(EntityKind::Ellipse(Ellipse { center: v3(center), major: v3(major), ratio, start: 0.0, end: std::f64::consts::TAU }))
     }
 
-    fn line(&mut self, e: &BytesStart) -> Result<()> {
-        let a = Vec2::new(num(e, b"x1", 0.0), num(e, b"y1", 0.0));
-        let b = Vec2::new(num(e, b"x2", 0.0), num(e, b"y2", 0.0));
-        self.add(EntityKind::Line(Line { a: v3(self.map(a)), b: v3(self.map(b)) }))
-    }
-
-    fn poly_points(&mut self, e: &BytesStart, closed: bool) -> Result<()> {
-        let Some(raw) = attr(e, b"points") else {
-            return Ok(());
-        };
-        let nums: Vec<f64> = Numbers::new(&raw).collect();
-        let mut pts: Vec<Vec2> = nums.as_chunks::<2>().0.iter().map(|[x, y]| self.map(Vec2::new(*x, *y))).collect();
-        if pts.len() > MAX_CURVE_POINTS {
-            pts.truncate(MAX_CURVE_POINTS);
-        }
-        self.add_polyline(&pts, closed)
-    }
-
     fn add_polyline(&mut self, pts: &[Vec2], closed: bool) -> Result<()> {
         if pts.len() < 2 {
             return Ok(());
@@ -365,36 +494,450 @@ impl Parser {
         self.add(EntityKind::LwPolyline(LwPolyline { vertices, closed, const_width: 0.0, elevation: 0.0, plinegen: false }))
     }
 
-    // --- path data ----------------------------------------------------------
+    // --- fills --------------------------------------------------------------
 
-    fn path(&mut self, e: &BytesStart) -> Result<()> {
-        let Some(d) = attr(e, b"d") else {
+    /// The fill of a shape made of `sps` (user units): a solid hatch in the fill colour, or a
+    /// gradient hatch. Open subpaths are closed, as SVG fills them; holes follow the even-odd
+    /// rule (a non-zero file's overlapping loops show as holes too).
+    fn fill(&mut self, dom: &Dom, sps: &[Subpath], style: &Style) -> Result<()> {
+        let fill = match &style.fill {
+            None | Some(Paint::None) => return Ok(()),
+            Some(Paint::Color(c)) => Fill::Solid(*c),
+            Some(Paint::Current) => Fill::Solid(style.color),
+            Some(Paint::Url(r, fallback)) => match self.gradient(dom, r, sps) {
+                Some(f) => f,
+                None => match fallback {
+                    Some(c) => Fill::Solid(*c),
+                    None => return Ok(()),
+                },
+            },
+        };
+        let loops = self.loops(sps);
+        if loops.is_empty() {
+            return Ok(());
+        }
+        let (color, gradient) = match fill {
+            Fill::Solid(c) => (Color::True(c), None),
+            Fill::Gradient(g) => (Color::ByLayer, Some(g)),
+        };
+        let hatch = Hatch {
+            pattern: "SOLID".into(),
+            solid: true,
+            loops,
+            scale: 1.0,
+            angle: 0.0,
+            associative: false,
+            style: 0,
+            elevation: 0.0,
+            gradient,
+            origin: Vec2::ZERO,
+            background: None,
+            pattern_lines: Vec::new(),
+        };
+        self.add_colored(EntityKind::Hatch(hatch), color)
+    }
+
+    /// The hatch loops of `sps` in drawing units: lines and circular arcs as polyline vertices
+    /// (arcs as bulges), curves and elliptical arcs flattened.
+    fn loops(&self, sps: &[Subpath]) -> Vec<HatchLoop> {
+        let m = self.cur();
+        let frame = Frame::of(&m);
+        let mut out: Vec<HatchLoop> = Vec::new();
+        let mut total = 0usize;
+        for sp in sps {
+            let mut v: Vec<PolyVertex> = vec![PolyVertex::new(m.apply(sp.start))];
+            let mut cur_user = sp.start;
+            for seg in &sp.segs {
+                let cur = m.apply(cur_user);
+                match seg {
+                    Seg::Line(p) => v.push(PolyVertex::new(m.apply(*p))),
+                    Seg::Cubic(c1, c2, p) => {
+                        let (q1, q2, q3) = (m.apply(*c1), m.apply(*c2), m.apply(*p));
+                        let reach = cur.dist(q1) + q1.dist(q2) + q2.dist(q3);
+                        let steps = if reach.is_finite() { ((reach / 0.5).sqrt().ceil() as usize).clamp(4, 64) } else { 4 };
+                        for k in 1..=steps {
+                            let t = k as f64 / steps as f64;
+                            let s = 1.0 - t;
+                            v.push(PolyVertex::new(cur * (s * s * s) + q1 * (3.0 * s * s * t) + q2 * (3.0 * s * t * t) + q3 * (t * t * t)));
+                        }
+                    }
+                    Seg::Arc { rx, ry, rot, large, sweep, end } => {
+                        if let Some(delta) = frame
+                            .circular(*rx, *ry)
+                            .and_then(|r| arc_center_circular(cur, m.apply(*end), r, *large, *sweep != frame.flipped))
+                            .map(|(_, d)| d)
+                        {
+                            if let Some(last) = v.last_mut() {
+                                last.bulge = (delta / 4.0).tan();
+                            }
+                            v.push(PolyVertex::new(m.apply(*end)));
+                        } else if *rx > 0.0
+                            && *ry > 0.0
+                            && let Ok(pts) = flatten_arc(&m, cur_user, *end, *rx, *ry, *rot, *large, *sweep)
+                        {
+                            v.extend(pts.into_iter().skip(1).map(PolyVertex::new));
+                        } else {
+                            v.push(PolyVertex::new(m.apply(*end)));
+                        }
+                    }
+                }
+                cur_user = seg.end();
+                if total + v.len() > MAX_FILL_VERTICES {
+                    return Vec::new();
+                }
+            }
+            // The closing vertex repeats the first: the one before it then holds the closing
+            // segment's bulge.
+            if v.len() > 2 && v.first().zip(v.last()).is_some_and(|(a, b)| a.p.dist(b.p) <= 1e-9 * (1.0 + a.p.x.abs().max(a.p.y.abs()))) {
+                v.pop();
+            }
+            let curved = v.iter().any(|x| x.bulge != 0.0);
+            if v.len() >= 3 || (v.len() == 2 && curved) {
+                total += v.len();
+                out.push(HatchLoop { curves: Vec::new(), vertices: v, outer: out.is_empty(), sources: Vec::new() });
+            }
+        }
+        out
+    }
+
+    /// The fill a `url(#…)` paint names: a linear gradient as a LINEAR gradient hatch along the
+    /// gradient's direction, a radial one as SPHERICAL (its centre colour in the middle); the
+    /// first and last stops are the two colours. One colour (or one stop) is a solid fill.
+    fn gradient(&self, dom: &Dom, r: &str, sps: &[Subpath]) -> Option<Fill> {
+        let first = dom.by_ref(r)?;
+        let kind = dom.node(first)?.name.clone();
+        if kind != "linearGradient" && kind != "radialGradient" {
+            return None;
+        }
+        // Gradients inherit attributes and stops through `href`.
+        let mut chain = vec![first];
+        while chain.len() < 8 {
+            let Some(next) = chain.last().and_then(|i| dom.node(*i)).and_then(Node::href).and_then(|h| dom.by_ref(h)) else { break };
+            if chain.contains(&next) {
+                break;
+            }
+            chain.push(next);
+        }
+        let attr = |k: &str| chain.iter().find_map(|i| dom.node(*i).and_then(|n| n.attr(k)));
+        let stops: Vec<Rgb> = chain.iter().find_map(|i| {
+            let n = dom.node(*i)?;
+            let stops: Vec<Rgb> = n
+                .kids
+                .iter()
+                .filter_map(|k| if let Kid::El(s) = k { dom.node(*s) } else { None })
+                .filter(|s| s.name == "stop")
+                .map(|s| Style::of(s, &Style::default(), &self.css).stop.unwrap_or(Rgb(0, 0, 0)))
+                .collect();
+            (!stops.is_empty()).then_some(stops)
+        })?;
+        let (c0, c1) = (*stops.first()?, *stops.last()?);
+        if c0 == c1 {
+            return Some(Fill::Solid(c0));
+        }
+        let user_space = attr("gradientUnits") == Some("userSpaceOnUse");
+        let gt = attr("gradientTransform").and_then(parse_transform).unwrap_or(Mat3::IDENTITY);
+        let bb = Bounds2::from_points(sps.iter().flat_map(Subpath::points));
+        if bb.is_empty() {
+            return None;
+        }
+        let coord = |k: &str, default: f64| attr(k).and_then(fraction).unwrap_or(default);
+        if kind == "linearGradient" {
+            let (x1, y1, x2, y2) = (coord("x1", 0.0), coord("y1", 0.0), coord("x2", 1.0), coord("y2", 0.0));
+            let d = gt.apply_vec(Vec2::new(x2 - x1, y2 - y1));
+            let d = if user_space { d } else { Vec2::new(d.x * bb.width(), d.y * bb.height()) };
+            let dd = self.map_vec(d);
+            if !(dd.x.is_finite() && dd.y.is_finite()) || dd.x.hypot(dd.y) <= 1e-12 {
+                return Some(Fill::Solid(c1));
+            }
+            return Some(Fill::Gradient(Gradient {
+                name: "LINEAR".into(),
+                color1: Color::True(c0),
+                color2: Color::True(c1),
+                angle: dd.y.atan2(dd.x),
+                centered: true,
+            }));
+        }
+        let (cx, cy) = (coord("cx", 0.5), coord("cy", 0.5));
+        let centered = if user_space {
+            let c = gt.apply(Vec2::new(cx, cy));
+            c.dist(bb.center()) <= 0.05 * bb.width().max(bb.height())
+        } else {
+            let c = gt.apply(Vec2::new(cx, cy));
+            (c.x - 0.5).abs() <= 0.05 && (c.y - 0.5).abs() <= 0.05
+        };
+        Some(Fill::Gradient(Gradient { name: "SPHERICAL".into(), color1: Color::True(c1), color2: Color::True(c0), angle: 0.0, centered }))
+    }
+
+    // --- text ---------------------------------------------------------------
+
+    /// A text element: one line becomes TEXT, several (tspans placed with their own `x` or
+    /// `y`, as Inkscape writes lines) one MTEXT. The text height is the font's capital height.
+    fn text(&mut self, dom: &Dom, n: &Node, style: &Style) -> Result<()> {
+        let at = Vec2::new(
+            first_num(n, "x").unwrap_or(0.0) + first_num(n, "dx").unwrap_or(0.0),
+            first_num(n, "y").unwrap_or(0.0) + first_num(n, "dy").unwrap_or(0.0),
+        );
+        let mut lines = vec![TextLine { at, text: String::new(), size: style.font_size, anchor: style.anchor }];
+        self.text_runs(dom, n, style, &mut lines, 0);
+        let lines: Vec<TextLine> = lines
+            .into_iter()
+            .map(|mut l| {
+                l.text = l.text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_TEXT_CHARS).collect();
+                l
+            })
+            .filter(|l| !l.text.is_empty())
+            .collect();
+        let Some(first) = lines.first() else { return Ok(()) };
+        let ex = self.map_vec(Vec2::new(1.0, 0.0));
+        let ey = self.map_vec(Vec2::new(0.0, 1.0));
+        let (sx, sy) = (ex.x.hypot(ex.y), ey.x.hypot(ey.y));
+        let height = CAP_HEIGHT * first.size * sy;
+        if !(height.is_finite() && height > 0.0 && sx.is_finite() && sx > 0.0) {
+            return Ok(());
+        }
+        let rotation = ex.y.atan2(ex.x);
+        let width_factor = if (sx - sy).abs() <= 1e-9 * sx.max(sy) { 1.0 } else { (sx / sy).clamp(0.01, 100.0) };
+        let color = style.fill_rgb().map_or(Color::ByLayer, Color::True);
+        let base = self.map(first.at);
+        if let [line] = lines.as_slice() {
+            let (halign, align_pt) = match line.anchor {
+                Anchor::Start => (HAlign::Left, None),
+                Anchor::Middle => (HAlign::Center, Some(v3(base))),
+                Anchor::End => (HAlign::Right, Some(v3(base))),
+            };
+            let t = Text {
+                insert: v3(base),
+                align_pt,
+                height,
+                value: line.text.clone(),
+                rotation,
+                width_factor,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign,
+                valign: VAlign::Baseline,
+            };
+            return self.add_colored(EntityKind::Text(t), color);
+        }
+        // MTEXT hangs from the top of its first line.
+        let up = Vec2::new(-rotation.sin(), rotation.cos());
+        let pitch = lines.get(1).map(|l| self.map(l.at).dist(base)).filter(|p| p.is_finite() && *p > 0.0);
+        let line_spacing = pitch.map_or(1.0, |p| (p / (height * 5.0 / 3.0)).clamp(0.25, 4.0));
+        let attach = match first.anchor {
+            Anchor::Start => 1,
+            Anchor::Middle => 2,
+            Anchor::End => 3,
+        };
+        let contents = lines.iter().map(|l| mtext_escape(&l.text)).collect::<Vec<_>>().join("\\P");
+        let m = MText {
+            insert: v3(base + up * height),
+            height,
+            width: 0.0,
+            attach,
+            rotation,
+            style: "Standard".into(),
+            contents,
+            line_spacing,
+            line_spacing_exact: true,
+            columns: None,
+            background: None,
+        };
+        self.add_colored(EntityKind::MText(m), color)
+    }
+
+    /// Gather a text element's characters into lines.
+    fn text_runs(&self, dom: &Dom, n: &Node, style: &Style, lines: &mut Vec<TextLine>, depth: usize) {
+        for k in &n.kids {
+            match k {
+                Kid::Text(t) => {
+                    if let Some(l) = lines.last_mut() {
+                        l.text.push_str(t);
+                    }
+                }
+                Kid::El(c) => {
+                    let Some(span) = dom.node(*c) else { continue };
+                    if !matches!(span.name.as_str(), "tspan" | "a") || depth >= 16 {
+                        continue;
+                    }
+                    let st = Style::of(span, style, &self.css);
+                    if st.hidden {
+                        continue;
+                    }
+                    let (x, y) = (first_num(span, "x"), first_num(span, "y"));
+                    if x.is_some() || y.is_some() {
+                        let prev = lines.last().map_or(Vec2::ZERO, |l| l.at);
+                        let at = Vec2::new(x.unwrap_or(prev.x), y.unwrap_or(prev.y) + first_num(span, "dy").unwrap_or(0.0));
+                        match lines.last_mut() {
+                            Some(l) if l.text.trim().is_empty() => *l = TextLine { at, text: String::new(), size: st.font_size, anchor: st.anchor },
+                            _ => {
+                                if lines.len() < 1000 {
+                                    lines.push(TextLine { at, text: String::new(), size: st.font_size, anchor: st.anchor });
+                                }
+                            }
+                        }
+                    }
+                    self.text_runs(dom, span, &st, lines, depth + 1);
+                }
+            }
+        }
+    }
+
+    // --- images -------------------------------------------------------------
+
+    /// An `image`: placed in its box as `preserveAspectRatio` says (centred and fitted by
+    /// default; `slice` clips the overflow).
+    fn image(&mut self, n: &Node) -> Result<()> {
+        let Some(href) = n.href() else { return Ok(()) };
+        if self.image_count >= MAX_IMAGES {
+            self.note(format!("SVG: images past the first {MAX_IMAGES} were left out"));
+            return Ok(());
+        }
+        let Some((raster, path)) = (if href.trim_start().starts_with("data:") { self.embedded(href) } else { self.linked(href) }) else {
             return Ok(());
         };
-        for sp in parse_path(&d)? {
-            self.emit_subpath(&sp)?;
-        }
-        Ok(())
+        let (pw, ph) = (f64::from(raster.width), f64::from(raster.height));
+        let given = |k: &str| n.attr(k).and_then(parse_length_mm).filter(|v| *v > 0.0);
+        let (w, h) = match (given("width"), given("height")) {
+            (Some(w), Some(h)) => (w, h),
+            (Some(w), None) => (w, w * ph / pw),
+            (None, Some(h)) => (h * pw / ph, h),
+            (None, None) => (pw, ph),
+        };
+        let (x, y) = (num(n, "x", 0.0), num(n, "y", 0.0));
+        let (ix, iy, iw, ih, clip) = fit_image(x, y, w, h, pw, ph, n.attr("preserveAspectRatio").unwrap_or(""));
+        let transparent = raster.rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255);
+        let name =
+            std::path::Path::new(path.rsplit(':').next().unwrap_or(&path)).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let clipping = !clip.is_empty();
+        let image = Image {
+            insert: v3(self.map(Vec2::new(ix, iy + ih))),
+            u: v3(self.map_vec(Vec2::new(iw / pw, 0.0))),
+            v: v3(self.map_vec(Vec2::new(0.0, -ih / ph))),
+            size: Vec2::new(pw, ph),
+            path,
+            name,
+            clip,
+            clipping,
+            display: 1 | 2 | if clipping { 4 } else { 0 } | if transparent { 8 } else { 0 },
+            ..Image::default()
+        };
+        self.add(EntityKind::Image(image))
     }
+
+    /// A `data:` image: decoded, then written beside the SVG (once per distinct image).
+    fn embedded(&mut self, href: &str) -> Option<(Arc<Raster>, String)> {
+        let Some((mime, bytes)) = svg_style::data_url(href, MAX_IMAGE_BYTES) else {
+            self.note("SVG: an embedded image that isn't base64 data was left out".into());
+            return None;
+        };
+        let Some(raster) = cadaddy_render::images::decode(&bytes).map(Arc::new) else {
+            self.note(format!("SVG: an embedded {mime} image couldn't be decoded and was left out"));
+            return None;
+        };
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut hs = std::collections::hash_map::DefaultHasher::new();
+            bytes.hash(&mut hs);
+            hs.finish()
+        };
+        if let Some(p) = self.images.get(&key) {
+            return Some((raster, p.clone()));
+        }
+        self.image_count += 1;
+        let ext = match mime.as_str() {
+            "image/jpeg" | "image/jpg" => "jpg",
+            "image/gif" => "gif",
+            "image/webp" => "webp",
+            "image/bmp" => "bmp",
+            _ => "png",
+        };
+        let file = format!("{}-image-{}.{ext}", self.stem, self.image_count);
+        let path = self.write_image(&file, &bytes).unwrap_or_else(|| format!("svg-image:{file}"));
+        cadaddy_render::images::insert(&path, Arc::clone(&raster));
+        self.images.insert(key, path.clone());
+        Some((raster, path))
+    }
+
+    /// Write an embedded image's bytes into the SVG's folder; an existing file of that name
+    /// with other content is kept (the next free name is used). `None` when there is no
+    /// folder or it can't be written.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn write_image(&mut self, file: &str, bytes: &[u8]) -> Option<String> {
+        let dir = self.dir.clone()?;
+        let (stem, ext) = file.rsplit_once('.').unwrap_or((file, ""));
+        for k in 0..100 {
+            let name = if k == 0 { file.to_string() } else { format!("{stem}-{}.{ext}", k + 1) };
+            let p = dir.join(&name);
+            match std::fs::read(&p) {
+                Ok(existing) if existing == bytes => return Some(p.to_string_lossy().into_owned()),
+                Ok(_) => continue,
+                Err(_) => {
+                    return match std::fs::write(&p, bytes) {
+                        Ok(()) => Some(p.to_string_lossy().into_owned()),
+                        Err(e) => {
+                            self.note(format!(
+                                "SVG: the embedded images couldn't be written to {}: {e}; they show in this session only",
+                                dir.display()
+                            ));
+                            None
+                        }
+                    };
+                }
+            }
+        }
+        None
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn write_image(&mut self, _file: &str, _bytes: &[u8]) -> Option<String> {
+        None
+    }
+
+    /// A linked image file, looked up from the SVG's folder.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn linked(&mut self, href: &str) -> Option<(Arc<Raster>, String)> {
+        let raw = href.trim();
+        let raw = raw.strip_prefix("file://").unwrap_or(raw);
+        if raw.contains("://") {
+            self.note(format!("SVG: the image at {raw} is on the web and was left out"));
+            return None;
+        }
+        let decoded = raw.replace("%20", " ");
+        let p = std::path::Path::new(&decoded);
+        let full = if p.is_absolute() { p.to_path_buf() } else { self.dir.as_ref()?.join(p) };
+        let readable = std::fs::metadata(&full).is_ok_and(|m| m.is_file() && m.len() <= MAX_IMAGE_BYTES as u64);
+        let Some(raster) = readable.then(|| std::fs::read(&full).ok()).flatten().and_then(|b| cadaddy_render::images::decode(&b)).map(Arc::new)
+        else {
+            self.note(format!("SVG: the linked image {raw} couldn't be read and was left out"));
+            return None;
+        };
+        self.image_count += 1;
+        let path = full.to_string_lossy().into_owned();
+        cadaddy_render::images::insert(&path, Arc::clone(&raster));
+        Some((raster, path))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn linked(&mut self, href: &str) -> Option<(Arc<Raster>, String)> {
+        self.note(format!("SVG: the linked image {} can't be read on the web and was left out", href.trim()));
+        None
+    }
+
+    // --- path data ----------------------------------------------------------
 
     /// Emit one subpath: runs of lines and arcs become an `LWPOLYLINE` (an arc becomes a
     /// bulge vertex, exactly like DXF's polyline bulge), runs of Bézier curves become a
-    /// `SPLINE`. Under a non-uniform transform a circular arc is no longer circular, so it
-    /// is flattened into line vertices instead.
+    /// `SPLINE`. Under a non-uniform transform, or for an elliptical arc, the arc is no longer
+    /// circular, so it is flattened into line vertices instead.
     fn emit_subpath(&mut self, sp: &Subpath) -> Result<()> {
         let m = self.cur();
-        let det = m.det();
-        let ex = m.apply_vec(Vec2::new(1.0, 0.0));
-        let ey = m.apply_vec(Vec2::new(0.0, 1.0));
-        let mag = (ex.x * ex.x + ex.y * ex.y + ey.x * ey.x + ey.y * ey.y).max(1.0);
-        let uniform =
-            (ex.x * ex.x + ex.y * ex.y - (ey.x * ey.x + ey.y * ey.y)).abs() <= 1e-9 * mag && (ex.x * ey.x + ex.y * ey.y).abs() <= 1e-9 * mag;
-        let scale = det.abs().sqrt();
+        let frame = Frame::of(&m);
 
         let mut run: Vec<PolyVertex> = Vec::new();
         let mut ctrl: Vec<Vec2> = Vec::new();
         let mut cur_user = sp.start;
         let mut cur = m.apply(sp.start);
+        let curved = sp.segs.iter().any(|s| matches!(s, Seg::Cubic(..)));
 
         for seg in &sp.segs {
             match seg {
@@ -421,12 +964,8 @@ impl Parser {
                     }
                 }
                 Seg::Arc { rx, ry, rot, large, sweep, end } => {
-                    if uniform && scale > 0.0 {
-                        let r = rx * scale;
-                        let flipped = det < 0.0;
-                        if r > 0.0
-                            && let Some((_, delta)) = arc_center_circular(cur, m.apply(*end), r, *large, *sweep != flipped)
-                        {
+                    if let Some(r) = frame.circular(*rx, *ry) {
+                        if let Some((_, delta)) = arc_center_circular(cur, m.apply(*end), r, *large, *sweep != frame.flipped) {
                             if run.is_empty() {
                                 run.push(PolyVertex::new(cur));
                             }
@@ -438,7 +977,6 @@ impl Parser {
                             cur_user = *end;
                         }
                     } else if *rx > 0.0 && *ry > 0.0 {
-                        self.flush_run(&mut run, false)?;
                         self.flush_ctrl(&mut ctrl)?;
                         for p in flatten_arc(&m, cur_user, *end, *rx, *ry, *rot, *large, *sweep)? {
                             if run.is_empty() {
@@ -455,12 +993,17 @@ impl Parser {
                 return Err(IoError::Format("SVG: one path has too many vertices".into()));
             }
         }
-        self.flush_run(&mut run, sp.closed)?;
+        self.flush_run(&mut run, sp.closed && !curved)?;
         self.flush_ctrl(&mut ctrl)?;
         Ok(())
     }
 
     fn flush_run(&mut self, run: &mut Vec<PolyVertex>, closed: bool) -> Result<()> {
+        // A closed run that comes back to its start: the repeated vertex goes, and the one
+        // before it holds the closing segment's bulge.
+        if closed && run.len() > 2 && run.first().zip(run.last()).is_some_and(|(a, b)| a.p.dist(b.p) <= 1e-9 * (1.0 + a.p.x.abs().max(a.p.y.abs()))) {
+            run.pop();
+        }
         if run.len() >= 2 {
             let vertices = std::mem::take(run);
             self.add(EntityKind::LwPolyline(LwPolyline { vertices, closed, const_width: 0.0, elevation: 0.0, plinegen: false }))?;
@@ -481,25 +1024,136 @@ impl Parser {
     }
 }
 
-/// The element is not rendered (`display="none"`, or a style that says so).
-fn hidden(e: &BytesStart) -> bool {
-    if attr(e, b"display").as_deref() == Some("none") {
-        return true;
-    }
-    attr(e, b"style").is_some_and(|s| s.replace(' ', "").contains("display:none"))
+/// How a transform treats circles: whether it keeps them circles (a uniform scale with any
+/// rotation or reflection), its scale and whether it mirrors.
+struct Frame {
+    uniform: bool,
+    scale: f64,
+    flipped: bool,
 }
 
-fn attr(e: &BytesStart, name: &[u8]) -> Option<String> {
-    for a in e.attributes().flatten() {
-        if a.key.as_ref() == name {
-            return a.normalized_value(XmlVersion::Explicit1_0).ok().map(|v| v.into_owned());
+impl Frame {
+    fn of(m: &Mat3) -> Frame {
+        let ex = m.apply_vec(Vec2::new(1.0, 0.0));
+        let ey = m.apply_vec(Vec2::new(0.0, 1.0));
+        let mag = (ex.x * ex.x + ex.y * ex.y + ey.x * ey.x + ey.y * ey.y).max(1.0);
+        let uniform =
+            (ex.x * ex.x + ex.y * ex.y - (ey.x * ey.x + ey.y * ey.y)).abs() <= 1e-9 * mag && (ex.x * ey.x + ex.y * ey.y).abs() <= 1e-9 * mag;
+        let det = m.det();
+        Frame { uniform, scale: det.abs().sqrt(), flipped: det < 0.0 }
+    }
+
+    /// The drawing radius of an arc with radii `rx`, `ry`, when it stays circular.
+    fn circular(&self, rx: f64, ry: f64) -> Option<f64> {
+        let r = rx * self.scale;
+        (self.uniform && self.scale > 0.0 && (rx - ry).abs() <= 1e-9 * rx.max(ry) && r > 0.0 && r.is_finite()).then_some(r)
+    }
+}
+
+/// A rectangle with rounded corners as a path, clockwise on the page from the top edge.
+fn rounded_rect(x: f64, y: f64, w: f64, h: f64, rx: f64, ry: f64) -> Subpath {
+    let arc = |end: Vec2| Seg::Arc { rx, ry, rot: 0.0, large: false, sweep: true, end };
+    let mut segs = Vec::with_capacity(8);
+    let line = |segs: &mut Vec<Seg>, from: Vec2, to: Vec2| {
+        if from.dist(to) > 0.0 {
+            segs.push(Seg::Line(to));
         }
-    }
-    None
+    };
+    let start = Vec2::new(x + rx, y);
+    line(&mut segs, start, Vec2::new(x + w - rx, y));
+    segs.push(arc(Vec2::new(x + w, y + ry)));
+    line(&mut segs, Vec2::new(x + w, y + ry), Vec2::new(x + w, y + h - ry));
+    segs.push(arc(Vec2::new(x + w - rx, y + h)));
+    line(&mut segs, Vec2::new(x + w - rx, y + h), Vec2::new(x + rx, y + h));
+    segs.push(arc(Vec2::new(x, y + h - ry)));
+    line(&mut segs, Vec2::new(x, y + h - ry), Vec2::new(x, y + ry));
+    segs.push(arc(start));
+    Subpath { start, segs, closed: true }
 }
 
-fn num(e: &BytesStart, name: &[u8], fallback: f64) -> f64 {
-    attr(e, name).as_deref().and_then(parse_length_mm).unwrap_or(fallback)
+/// A `symbol`'s `viewBox` fitted into the referencing `use`'s `width`/`height` (centred, aspect
+/// kept unless `preserveAspectRatio="none"`); without both, just the `viewBox` origin.
+fn symbol_viewbox(sym: &Node, user: &Node) -> Mat3 {
+    let vb: Vec<f64> = sym.attr("viewBox").map(|v| Numbers::new(v).collect()).unwrap_or_default();
+    let [vx, vy, vw, vh] = vb.as_slice() else { return Mat3::IDENTITY };
+    let size = |k: &str| user.attr(k).filter(|v| !v.contains('%')).and_then(parse_length_mm).filter(|v| *v > 0.0);
+    match (size("width"), size("height")) {
+        (Some(w), Some(h)) if *vw > 0.0 && *vh > 0.0 => {
+            let (sx, sy) = if sym.attr("preserveAspectRatio").is_some_and(|p| p.trim().starts_with("none")) {
+                (w / vw, h / vh)
+            } else {
+                let s = (w / vw).min(h / vh);
+                (s, s)
+            };
+            let (tx, ty) = ((w - vw * sx) / 2.0 - vx * sx, (h - vh * sy) / 2.0 - vy * sy);
+            Mat3 { a: sx, b: 0.0, c: 0.0, d: sy, e: tx, f: ty }
+        }
+        _ => Mat3::translate(Vec2::new(-vx, -vy)),
+    }
+}
+
+/// An image's displayed rectangle inside its box `(x, y, w, h)` for `preserveAspectRatio`, and
+/// the clip boundary (in pixels) when `slice` lets it overflow the box.
+fn fit_image(x: f64, y: f64, w: f64, h: f64, pw: f64, ph: f64, par: &str) -> (f64, f64, f64, f64, Vec<Vec2>) {
+    let par = par.trim();
+    if par.starts_with("none") {
+        return (x, y, w, h, Vec::new());
+    }
+    let slice = par.contains("slice");
+    let s = if slice { (w / pw).max(h / ph) } else { (w / pw).min(h / ph) };
+    let ax = if par.contains("xMin") {
+        0.0
+    } else if par.contains("xMax") {
+        1.0
+    } else {
+        0.5
+    };
+    let ay = if par.contains("YMin") {
+        0.0
+    } else if par.contains("YMax") {
+        1.0
+    } else {
+        0.5
+    };
+    let (iw, ih) = (pw * s, ph * s);
+    let (ix, iy) = (x + (w - iw) * ax, y + (h - ih) * ay);
+    let clip = if slice && (iw > w * (1.0 + 1e-9) || ih > h * (1.0 + 1e-9)) {
+        vec![Vec2::new((x - ix) / s, (y - iy) / s), Vec2::new((x + w - ix) / s, (y + h - iy) / s)]
+    } else {
+        Vec::new()
+    };
+    (ix, iy, iw, ih, clip)
+}
+
+/// MTEXT contents: backslashes and braces are formatting codes, so literal ones are escaped.
+fn mtext_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '\\' | '{' | '}') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn num(n: &Node, name: &str, fallback: f64) -> f64 {
+    n.attr(name).and_then(parse_length_mm).unwrap_or(fallback)
+}
+
+/// The first number of a list attribute (a text element's `x` may hold one per character).
+fn first_num(n: &Node, name: &str) -> Option<f64> {
+    n.attr(name).and_then(|v| Numbers::new(v).next())
+}
+
+/// A gradient coordinate: a number, or a percentage as a fraction.
+fn fraction(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let v = match s.strip_suffix('%') {
+        Some(p) => p.trim().parse::<f64>().ok()? / 100.0,
+        None => s.parse::<f64>().ok()?,
+    };
+    v.is_finite().then_some(v)
 }
 
 /// A bare number, or a number with an absolute CSS/SVG unit: millimetres here, everything
@@ -525,16 +1179,16 @@ fn parse_length_mm(s: &str) -> Option<f64> {
 
 /// The root mapping: `viewBox` and unit-bearing `width`/`height` become millimetres per user
 /// unit, and the page's Y axis is flipped so the drawing keeps its appearance with Y up.
-fn viewport(e: &BytesStart) -> Result<Mat3> {
-    let vb = attr(e, b"viewBox").and_then(|raw| {
-        let nums: Vec<f64> = Numbers::new(&raw).collect();
+fn viewport(e: &Node) -> Result<Mat3> {
+    let vb = e.attr("viewBox").and_then(|raw| {
+        let nums: Vec<f64> = Numbers::new(raw).collect();
         match nums.as_slice() {
             [x, y, w, h] if w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0 => Some((*x, *y, *w, *h)),
             _ => None,
         }
     });
-    let w_mm = attr(e, b"width").as_deref().and_then(parse_length_mm);
-    let h_mm = attr(e, b"height").as_deref().and_then(parse_length_mm);
+    let w_mm = e.attr("width").and_then(parse_length_mm);
+    let h_mm = e.attr("height").and_then(parse_length_mm);
     let unit = match (vb, w_mm, h_mm) {
         (Some((_, _, vw, _)), Some(w), _) if w > 0.0 => w / vw,
         (Some((_, _, _, vh)), _, Some(h)) if h > 0.0 => h / vh,
@@ -658,6 +1312,42 @@ enum Seg {
     Line(Vec2),
     Cubic(Vec2, Vec2, Vec2),
     Arc { rx: f64, ry: f64, rot: f64, large: bool, sweep: bool, end: Vec2 },
+}
+
+impl Seg {
+    fn end(&self) -> Vec2 {
+        match self {
+            Seg::Line(p) | Seg::Cubic(_, _, p) => *p,
+            Seg::Arc { end, .. } => *end,
+        }
+    }
+}
+
+impl Subpath {
+    /// Points the subpath passes through or near (its vertices, curve control points and
+    /// samples along its arcs), enough for its bounds.
+    fn points(&self) -> Vec<Vec2> {
+        let mut out = vec![self.start];
+        let mut cur = self.start;
+        for seg in &self.segs {
+            match seg {
+                Seg::Line(p) => out.push(*p),
+                Seg::Cubic(a, b, p) => out.extend([*a, *b, *p]),
+                Seg::Arc { rx, ry, rot, large, sweep, end } => {
+                    if let Some((c, theta, delta)) = elliptical_params(cur, *end, *rx, *ry, rot.to_radians(), *large, *sweep) {
+                        let axes = Mat3::rotate(rot.to_radians());
+                        out.extend((0..=16).map(|k| {
+                            let t = theta + delta * f64::from(k) / 16.0;
+                            c + axes.apply_vec(Vec2::new(rx * t.cos(), ry * t.sin()))
+                        }));
+                    }
+                    out.push(*end);
+                }
+            }
+            cur = seg.end();
+        }
+        out
+    }
 }
 
 /// Tokens of a `d` attribute: command letters and numbers, in order.

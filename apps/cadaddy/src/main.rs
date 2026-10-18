@@ -367,11 +367,11 @@ fn main() -> eframe::Result {
             if let Some(rs) = &cc.wgpu_render_state {
                 app.set_wgpu(rs, eframe::egui_wgpu::depth_format_from_bits(0, STENCIL_BITS));
             }
-            // An explicit --control port wins; otherwise agents get the fixed local port unless
-            // the user turned that off in Options.
-            let control_port = control_port.or(app.ui.agent_control.then_some(cadaddy_engine::AGENT_PORT));
-            if let Some(port) = control_port {
-                let rx = control_server::start(port, cc.egui_ctx.clone());
+            // An explicit --control port, and the agent port unless the user turned that off in
+            // Options: both serve the same window.
+            let ports: Vec<u16> = control_port.into_iter().chain(app.ui.agent_control.then_some(cadaddy_engine::AGENT_PORT)).collect();
+            if !ports.is_empty() {
+                let rx = control_server::start_ports(&ports, cc.egui_ctx.clone());
                 app = app.with_control(rx);
             }
             if sample {

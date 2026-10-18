@@ -1397,3 +1397,32 @@
 	Material	Material
 	Shadow display	Visualización de sombras
 	Center object	Objeto de centro
+	Move with Dim Line	Mover con línea de cota
+	Move Text Only	Mover solo texto
+	Above Dim Line	Sobre línea de cota
+	Center Vertically	Centrar verticalmente
+	Reset Text Position	Restablecer posición del texto
+	Continue Dimension	Continuar cota
+	Baseline Dimension	Cota de línea base
+	Flip Arrow	Invertir flecha
+	Lengthen Landing	Alargar descanso
+	Origin Point	Punto de origen
+	Hatch Angle	Ángulo de sombreado
+	Hatch Scale	Escala de sombreado
+	Edit Tolerance	Editar tolerancia
+	Geometric Tolerance	Tolerancia geométrica
+	Geometric characteristic	Característica geométrica
+	Material condition	Condición de material
+	No symbol	Sin símbolo
+	Projected Tolerance Zone	Zona de tolerancia proyectada
+	Datum Identifier	Identificador de referencia
+	Sym	Sím
+	Tolerance 1	Tolerancia 1
+	Tolerance 2	Tolerancia 2
+	Datum 1	Referencia 1
+	Datum 2	Referencia 2
+	Datum 3	Referencia 3
+	PDF Underlay...	Calco subyacente PDF...
+	Clip PDF Underlay	Delimitar calco subyacente PDF
+	Adjust PDF Underlay	Ajustar calco subyacente PDF
+	PDF Underlay Layers	Capas del calco subyacente PDF

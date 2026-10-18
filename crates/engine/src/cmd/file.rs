@@ -358,8 +358,9 @@ fn read_bytes(bytes: &[u8], name: &str, path: Option<String>) -> Result<ReadFile
 fn add_read(s: &mut Session, mut drawing: Drawing, binary_dxf: bool, name: &str, path: Option<String>) -> usize {
     let reset = crate::audit::current_styles(&mut drawing);
     // Every way a drawing is opened (the OPEN command, the background open, scripts) looks for
-    // its relative image paths in its folder first.
+    // its relative image paths in its folder first, and images that moved are looked up again.
     image_folder(path.as_deref());
+    cadaddy_render::images::revalidate();
     let notes = drawing.read_notes.clone();
     let loss = read_loss(&drawing);
     let has_path = path.is_some();
@@ -669,8 +670,14 @@ fn run_save(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(saved(&path, n))
 }
 
+/// A file name with no extension saves as a drawing, `.dwg` added, as AutoCAD does.
+fn with_drawing_ext(path: &str) -> String {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    if name.contains('.') || name.trim().is_empty() { path.to_string() } else { format!("{path}.dwg") }
+}
+
 fn run_saveas(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = str_param(p, "path").ok_or_else(|| bad("saveas", "`path` is required"))?.to_string();
+    let path = with_drawing_ext(str_param(p, "path").ok_or_else(|| bad("saveas", "`path` is required"))?);
     let opts = save_options("saveas", p)?;
     let n = save_as(s, "saveas", &path, &opts)?;
     let mut r = saved(&path, n);
@@ -737,7 +744,7 @@ fn run_list_docs(s: &mut Session, _p: &Value) -> Result<Value> {
 /// `save` does first. The path it was saved to.
 fn save_doc(s: &mut Session, cmd: &str, i: usize, save_as: Option<&str>) -> Result<String> {
     let path = match save_as {
-        Some(p) => p.to_string(),
+        Some(p) => with_drawing_ext(p),
         None => s.docs.get(i).and_then(|d| d.path.clone()).ok_or_else(|| {
             bad(cmd, format!("\"{}\" has no file name yet: pass saveAs with a path", s.docs.get(i).map(|d| d.title.as_str()).unwrap_or("")))
         })?,

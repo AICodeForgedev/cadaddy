@@ -1986,6 +1986,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     .filter(|l| l.len() >= 3)
                     .enumerate()
                     .map(|(i, l)| HatchLoop {
+                        curves: Vec::new(),
                         vertices: l.iter().map(|(x, y)| PolyVertex { p: sp(*x, *y), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect(),
                         outer: i == 0,
                         sources: Vec::new(),

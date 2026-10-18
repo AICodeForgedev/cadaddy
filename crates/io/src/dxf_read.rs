@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use cadaddy_color::{Color, Rgb};
 use cadaddy_doc::*;
-use cadaddy_dxf::{Tag, records, sections};
+use cadaddy_dxf::{Tag, records};
 use cadaddy_geom::{PolyVertex, Spline, Vec2, Vec3};
 
 use crate::{IoError, Result};
@@ -526,6 +526,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             clip: t.s(340).and_then(|h| Handle::parse_hex(&h)).filter(|h| h.0 != 0 && t.i(90).unwrap_or(0) & 65536 != 0),
             on: t.i(90).unwrap_or(0) & 131072 == 0,
             twist: viewport_twist(&t),
+            anno_scale: None,
         }),
         "WIPEOUT" => {
             let o = t.p(10);
@@ -537,6 +538,8 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         }
         // The file path comes from the IMAGEDEF object (`dxf_image::resolve`).
         "IMAGE" => EntityKind::Image(crate::dxf_image::read_entity(tags)),
+        // The file and page come from the PDFDEFINITION object (`dxf_underlay::resolve`).
+        "PDFUNDERLAY" => EntityKind::Underlay(crate::dxf_underlay::read_entity(tags)),
         "TOLERANCE" => {
             let dir = t.p(11);
             let dir = if dir.xy().is_finite() && dir.xy().len() > 1e-12 { dir } else { Vec3::new(1.0, 0.0, 0.0) };
@@ -656,6 +659,8 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
         i += 1;
         let outer = flags & 1 != 0;
         let mut verts: Vec<PolyVertex> = Vec::new();
+        // An edge boundary's edges, kept exactly when it has elliptical or spline edges.
+        let mut edges: Vec<cadaddy_geom::LoopEdge> = Vec::new();
         if flags & 2 != 0 {
             // Polyline boundary: 72 has-bulge, 73 closed, 93 count, then 10/20/42.
             let has_bulge = get(i).filter(|x| x.code == 72).map(Tag::i64).unwrap_or(0) != 0;
@@ -698,6 +703,7 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
                             verts.push(PolyVertex::new(a));
                         }
                         verts.push(PolyVertex::new(b));
+                        edges.push(cadaddy_geom::LoopEdge::Line { a, b });
                     }
                     2 => {
                         let c = Vec2::new(f(i), f(i + 1));
@@ -707,6 +713,7 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
                         let ccw = get(i + 5).map(Tag::i64).unwrap_or(1) != 0;
                         i += 6;
                         let (s, e) = if ccw { (sa, ea) } else { (-sa, -ea) };
+                        edges.push(cadaddy_geom::LoopEdge::Arc { center: c, radius: r, start: s, end: e, ccw });
                         let p0 = Vec2::polar(c, r, s);
                         let p1 = Vec2::polar(c, r, e);
                         let sweep = if ccw { cadaddy_geom::ccw_sweep(s, e) } else { -cadaddy_geom::ccw_sweep(e, s) };
@@ -737,6 +744,12 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
                         // A clockwise edge stores its parameters mirrored, as an arc edge does: it
                         // runs from -start clockwise to -end, the ccw sweep from -end to -start
                         // walked backwards.
+                        // As an exact edge: from -start, clockwise, to -end.
+                        edges.push(if ccw {
+                            cadaddy_geom::LoopEdge::Ellipse { center: c, major: m, ratio, start: sa, end: ea, ccw: true }
+                        } else {
+                            cadaddy_geom::LoopEdge::Ellipse { center: c, major: m, ratio, start: -sa, end: -ea, ccw: false }
+                        });
                         let (s, e) = if ccw { (sa, ea) } else { (-ea, -sa) };
                         let e = cadaddy_geom::Ellipse { center: c, major: m, ratio, start: s, end: e };
                         let mut pts = Vec::new();
@@ -797,6 +810,7 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
                             Spline::from_control(sp.control, degree)
                         };
                         let pts = sp.tessellate(1e-3);
+                        edges.push(cadaddy_geom::LoopEdge::Spline(sp));
                         let skip = usize::from(verts.last().zip(pts.first()).is_some_and(|(l, p)| l.p.near(*p, 1e-9)));
                         verts.extend(pts.into_iter().skip(skip).map(PolyVertex::new));
                     }
@@ -830,7 +844,11 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
             }
             break;
         }
-        loops.push(HatchLoop { vertices: verts, outer, sources });
+        // Lines and arcs are exact in the vertices (bulges); elliptical and spline edges are kept
+        // as curves when every edge is usable.
+        let curved = edges.iter().any(|e| matches!(e, cadaddy_geom::LoopEdge::Ellipse { .. } | cadaddy_geom::LoopEdge::Spline(_)));
+        let curves = if curved && edges.iter().all(cadaddy_geom::LoopEdge::is_valid) { edges } else { Vec::new() };
+        loops.push(HatchLoop { curves, vertices: verts, outer, sources });
     }
     let solid = solid || pattern.eq_ignore_ascii_case("SOLID");
     let (scale, angle) = (t.fd(41, 1.0), t.fd(52, 0.0).to_radians());
@@ -1007,6 +1025,8 @@ struct Rx {
     inserted: std::collections::HashSet<String>,
     /// Tables whose style is known only by TABLESTYLE handle: (table, style handle).
     table_style_fix: Vec<(Handle, String)>,
+    /// Table cells pointing at FIELD objects: (table, row-major cell index, FIELD handle).
+    table_fields: Vec<(Handle, usize, String)>,
     /// Multileaders' style handles and block attribute values, resolved with the objects.
     mleader_fix: Vec<(Handle, crate::dxf_mleader::Pending)>,
     /// Upper-case xref block name → the external drawing's path (BLOCK group 1).
@@ -1100,6 +1120,11 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
             if let Some(b) = t.s(2) {
                 rx.table_blocks.insert(b.to_ascii_uppercase());
             }
+            for (i, f) in crate::dxf_table::cell_fields(tags) {
+                if rx.table_fields.len() < MAX_OBJECTS {
+                    rx.table_fields.push((h, i, f));
+                }
+            }
             let ours = crate::dxf_ext::xdata(tags, crate::dxf_ext::APP).iter().any(|t| t.code == 1000 && t.str() == "TABLE");
             if !ours {
                 rx.table_style_fix.push((h, t.s(342).map(|sh| sh.trim().to_ascii_uppercase()).unwrap_or_default()));
@@ -1109,7 +1134,7 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
             rx.inserted.insert(ins.block.to_ascii_uppercase());
         }
         ("MULTILEADER" | "MLEADER", EntityKind::MLeader(m)) => {
-            let pending = crate::dxf_mleader::resolve(tags, m, &rx.styles, &rx.brs);
+            let pending = crate::dxf_mleader::resolve(tags, m, &rx.styles, &rx.brs, &rx.ltypes);
             if let Some(b) = &m.block {
                 rx.inserted.insert(b.block.to_ascii_uppercase());
             }
@@ -1131,7 +1156,7 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
 
 /// Parse a run of entity records (ENTITIES section or a block's body) into entities. Records that
 /// can't be placed are counted in `skipped`.
-fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx, skipped: &mut usize) -> Vec<(Option<String>, bool, Entity)> {
+fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipped: &mut usize) -> Vec<(Option<String>, bool, Entity)> {
     let mut out = Vec::new();
     let mut i = 0;
     while let Some((kind, tags)) = recs.get(i) {
@@ -1682,13 +1707,15 @@ pub const CUT_OFF_NOTE: &str = "DXF: the file ends early (it has no end marker),
 
 pub fn read(bytes: &[u8]) -> Result<Drawing> {
     let tags = cadaddy_dxf::parse(bytes).map_err(|e| IoError::Format(e.to_string()))?;
-    let secs = sections(&tags);
-    if secs.is_empty() {
-        return Err(IoError::Format("no sections found".into()));
-    }
     // Every DXF ends with `0 EOF`: without it the file was cut off (a failed copy or download),
     // and whatever came after the cut is missing.
     let cut_off = !tags.iter().rev().take(4).any(|t| t.code == 0 && t.str().trim().eq_ignore_ascii_case("EOF"));
+    let outside = outside_sections(&tags);
+    // The sections take the tags (no second copy of the file's text).
+    let secs = cadaddy_dxf::sections_owned(tags);
+    if secs.is_empty() {
+        return Err(IoError::Format("no sections found".into()));
+    }
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
     let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
@@ -1708,13 +1735,13 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         }
     }
     let mut skipped = std::collections::BTreeMap::new();
-    count_skipped(&mut skipped, "(no section)", outside_sections(&tags));
+    count_skipped(&mut skipped, "(no section)", outside);
     for s in &secs {
         match s.name.as_str() {
             "HEADER" => header(&s.tags, &mut d),
             "TABLES" => tables(&s.tags, &mut d, &mut rx),
             "BLOCKS" => {
-                let recs = records(&s.tags);
+                let recs = cadaddy_dxf::record_slices(&s.tags);
                 for (k, tg) in &recs {
                     let t = T(tg);
                     if k == "BLOCK" && t.i(70).unwrap_or(0) & 4 != 0 {
@@ -1752,7 +1779,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
             // A damaged file may split its entities over several ENTITIES sections (#865).
             "ENTITIES" => {
                 let mut n = 0;
-                entities.extend(parse_entities(&records(&s.tags), &mut d, &mut rx, &mut n));
+                entities.extend(parse_entities(&cadaddy_dxf::record_slices(&s.tags), &mut d, &mut rx, &mut n));
                 count_skipped(&mut skipped, "ENTITIES", n);
             }
             "OBJECTS" => {
@@ -1878,6 +1905,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     apply_sortents(&mut d, &objs.sortents, &rx.brs, &paper_block_for, &first_layout);
     objs.apply(&mut d, &rx);
     crate::dxf_image::resolve(&secs, &mut d);
+    crate::dxf_underlay::resolve(&secs, &mut d);
     crate::dxf_mline::resolve(&secs, &mut d);
     crate::dxf_xclip::resolve(&secs, &mut d);
     // Keep handles unique against the header's seed.
@@ -1992,6 +2020,8 @@ struct Objects {
     layout_views: Vec<(String, (Vec2, f64))>,
     /// SORTENTSTABLE objects: (owning block record handle, entity handle → sort handle).
     sortents: Vec<(String, HashMap<Handle, u64>)>,
+    /// FIELD objects by handle (table formulas).
+    fields: HashMap<String, Vec<Tag>>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -2030,6 +2060,9 @@ impl Objects {
             "DIMASSOC" if self.dimassocs.len() < MAX_OBJECTS => self.dimassocs.push(tags.to_vec()),
             "MLEADERSTYLE" if self.mleader_styles.len() < MAX_OBJECTS => self.mleader_styles.push((h, tags.to_vec())),
             "GROUP" if self.groups.len() < MAX_OBJECTS => self.groups.push((h, tags.to_vec())),
+            "FIELD" | "ACAD_FIELD" if self.fields.len() < MAX_OBJECTS => {
+                self.fields.insert(h, tags.to_vec());
+            }
             "SORTENTSTABLE" if self.sortents.len() < MAX_OBJECTS => {
                 if let Some(t) = sortents_table(tags) {
                     self.sortents.push(t);
@@ -2092,6 +2125,20 @@ impl Objects {
                 }
             });
         }
+        // Table formulas from FIELD objects, for cells CADaddy's own data didn't give one.
+        for (h, i, fh) in &rx.table_fields {
+            let Some(formula) = crate::dxf_table::field_formula(&self.fields, fh) else { continue };
+            let _ = d.modify_entity(*h, |e| {
+                if let EntityKind::Table(t) = &mut e.kind {
+                    let cols = t.col_widths.len().max(1);
+                    if let Some(cell) = t.cells.get_mut(i / cols).and_then(|row| row.get_mut(i % cols))
+                        && cell.formula.is_none()
+                    {
+                        cell.formula = Some(formula);
+                    }
+                }
+            });
+        }
         // Parametric constraints and parameters.
         if let Some((c, p)) = self.xrecord_text(crate::dxf_ext::CONSTRAINTS_KEY).and_then(|t| crate::dxf_ext::parse_constraints(&t)) {
             d.constraints = c;
@@ -2135,6 +2182,20 @@ impl Objects {
                 dogleg: num(43, def.dogleg, 0.0),
                 text_style: text_style.unwrap_or(def.text_style),
                 annotative: t.i(296).unwrap_or(0) != 0,
+                // Leader type (173: 0 none, 1 straight, 2 spline).
+                leader_type: match t.i(173) {
+                    Some(0) => "none".into(),
+                    Some(2) => "spline".into(),
+                    _ => def.leader_type.clone(),
+                },
+                // Block content (170 = 1, the block 343), attached by its extents centre (177 = 0)
+                // or its insertion point (1).
+                block: if t.i(170) == Some(1) {
+                    t.s(343).and_then(|bh| rx.brs.get(&bh.trim().to_ascii_uppercase()).cloned()).filter(|n| !n.is_empty()).unwrap_or_default()
+                } else {
+                    String::new()
+                },
+                block_center: t.i(177) != Some(1),
             };
             match d.mleader_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(name)) {
                 Some(x) => *x = st,

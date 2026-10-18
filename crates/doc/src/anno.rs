@@ -10,6 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use cadaddy_geom::Vec2;
+
 use crate::{Common, Drawing, Entity, EntityKind};
 
 /// A named annotation scale: `paper_units` on paper show `drawing_units` of the drawing.
@@ -19,6 +21,15 @@ pub struct AnnoScale {
     pub name: String,
     pub paper_units: f64,
     pub drawing_units: f64,
+    /// In an object's list of supported scales: how far its representation at this scale sits
+    /// from the stored position (moving an annotative object moves the current scale's
+    /// representation only; ANNORESET brings the others to it). Zero in the drawing's list.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub offset: Vec2,
+}
+
+fn is_zero(v: &Vec2) -> bool {
+    *v == Vec2::ZERO
 }
 
 /// The most scales a drawing's list or one object holds (hostile files and parameters).
@@ -26,7 +37,7 @@ pub const MAX_SCALES: usize = 1000;
 
 impl AnnoScale {
     pub fn new(name: &str, paper_units: f64, drawing_units: f64) -> Self {
-        AnnoScale { name: name.to_string(), paper_units, drawing_units }
+        AnnoScale { name: name.to_string(), paper_units, drawing_units, offset: Vec2::ZERO }
     }
     /// The 1:1 scale.
     pub fn unit() -> Self {
@@ -147,13 +158,56 @@ pub fn anno_draw(e: &Entity, view: f64, all_visible: bool) -> AnnoDraw {
     }
 }
 
+/// Where `e`'s representation at annotation scale `f` sits relative to its stored position: the
+/// offset of its supported scale of that size (zero when it has none).
+pub fn anno_offset(e: &Entity, f: f64) -> Vec2 {
+    e.common.anno_scales.iter().find(|s| s.has_factor(f)).map(|s| s.offset).filter(|o| o.is_finite()).unwrap_or(Vec2::ZERO)
+}
+
+/// Move `k`'s representation by `o`: text, multiline text and block references whole; a
+/// multileader's content (landing, text, block) with its arrowheads where they point; a linear
+/// or aligned dimension's line and text, other dimensions' text placed by the user.
+fn shift_representation(k: &mut EntityKind, o: Vec2) {
+    let o3 = o.to3(0.0);
+    match k {
+        EntityKind::Text(t) => {
+            t.insert = t.insert + o3;
+            t.align_pt = t.align_pt.map(|p| p + o3);
+        }
+        EntityKind::MText(t) => t.insert = t.insert + o3,
+        EntityKind::Insert(_) => k.transform(&cadaddy_geom::Mat3::translate(o)),
+        EntityKind::MLeader(m) => {
+            m.landing = m.landing + o3;
+            if let Some(t) = &mut m.text {
+                t.insert = t.insert + o3;
+            }
+            if let Some(ins) = &mut m.block {
+                ins.insert = ins.insert + o3;
+            }
+        }
+        EntityKind::Dimension(dm) => {
+            if matches!(dm.kind, crate::DimKind::Linear { .. } | crate::DimKind::Aligned) {
+                dm.defpt = dm.defpt + o3;
+            }
+            if dm.user_text_pos {
+                dm.text_mid = dm.text_mid + o3;
+            }
+        }
+        _ => {}
+    }
+}
+
 /// `e` as it draws at annotation scale `f`: its paper sizes (text height and width, dimension
 /// overall scale, multileader arrow, landing and content, hatch pattern scale, block scale and
-/// attributes) multiplied by `f`. A dimension is drawn from its definition at that scale, not
+/// attributes) multiplied by `f`, at that scale's position ([`anno_offset`]). A dimension is drawn from its definition at that scale, not
 /// from a stored geometry block. Other kinds come back unchanged.
 pub fn anno_scaled(e: &Entity, f: f64) -> Entity {
     let f = if f.is_finite() && f > 0.0 { f } else { 1.0 };
     let mut out = e.clone();
+    let o = anno_offset(e, f);
+    if o != Vec2::ZERO {
+        shift_representation(&mut out.kind, o);
+    }
     match &mut out.kind {
         EntityKind::Text(t) => t.height *= f,
         EntityKind::MText(t) => {
@@ -171,6 +225,10 @@ pub fn anno_scaled(e: &Entity, f: f64) -> Entity {
             let land = m.landing;
             m.arrow_size *= f;
             m.dogleg *= f;
+            for r in &mut m.roots {
+                r.landing = land + (r.landing - land) * f;
+                r.dogleg *= f;
+            }
             if let Some(t) = &mut m.text {
                 t.insert = land + (t.insert - land) * f;
                 t.height *= f;

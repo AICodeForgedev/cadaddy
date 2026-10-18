@@ -486,6 +486,94 @@ fn crossings(dm_lines: &[Vec<Vec2>], prims: &[Prim]) -> Vec<Vec2> {
     out
 }
 
+/// The automatic breaks of `dm` at the objects `objs` (handle, outline): where its drawn lines
+/// cross them, and which objects did cross.
+fn auto_breaks(d: &cadaddy_doc::Drawing, dm: &Dimension, objs: &[(Handle, Vec<Prim>)]) -> (Vec<Vec2>, Vec<Handle>) {
+    let mut plain = dm.clone();
+    plain.marks.breaks.clear();
+    let g = cadaddy_render::dimension_in(d, &plain);
+    let mut pts: Vec<Vec2> = Vec::new();
+    let mut crossed = Vec::new();
+    for (h, prims) in objs {
+        let found = crossings(&g.lines, prims);
+        if !found.is_empty() {
+            crossed.push(*h);
+        }
+        for q in found {
+            if pts.len() < MAX_AUTO_BREAKS && !pts.iter().any(|o| o.dist(q) < 1e-9) {
+                pts.push(q);
+            }
+        }
+    }
+    (pts, crossed)
+}
+
+/// The size of a dimension's automatic breaks: its style's break size (with its overrides)
+/// times the style's scale.
+fn break_size(d: &cadaddy_doc::Drawing, dm: &Dimension) -> f64 {
+    let st = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
+    let size = st.break_size * st.effective_scale(d.header.f64("DIMSCALE", 1.0));
+    if size.is_finite() && size > 0.0 && size < 1e12 { size } else { 0.125 }
+}
+
+/// Most dimensions whose automatic breaks are checked after one command.
+const MAX_FOLLOW: usize = 10_000;
+
+/// The post-command pass: a dimension with automatic breaks works them out again when it or an
+/// object it breaks at changed (moved, reshaped, erased), or its style's break size changed —
+/// DIMBREAK's breaks are associative, as AutoCAD's are. Manual breaks stay as placed.
+pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<cadaddy_doc::Drawing>>) {
+    let Some(before) = before else { return };
+    let Ok(st) = s.state_mut() else { return };
+    if std::sync::Arc::ptr_eq(before, &st.doc) {
+        return;
+    }
+    let d = &st.doc;
+    let changed = |h: Handle| match (before.entity(h), d.entity(h)) {
+        (Some(a), Some(b)) => !std::sync::Arc::ptr_eq(a, b),
+        (None, None) => false,
+        _ => true,
+    };
+    let mut updates: Vec<(Handle, Vec<DimBreak>, Vec<Handle>)> = Vec::new();
+    for store in std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)) {
+        for e in store.iter() {
+            let EntityKind::Dimension(dm) = &e.kind else { continue };
+            if dm.marks.break_objects.is_empty() || updates.len() >= MAX_FOLLOW {
+                continue;
+            }
+            // The style's break size changed with this command: the breaks take the new size;
+            // otherwise they keep theirs (a size given to DIMBREAK stays).
+            let style_size = break_size(d, dm);
+            let resized = (break_size(before, dm) - style_size).abs() > 1e-12 * (1.0 + style_size);
+            if !(changed(e.handle) || resized || dm.marks.break_objects.iter().any(|o| changed(*o))) {
+                continue;
+            }
+            let size = if resized { style_size } else { dm.marks.breaks.iter().find(|b| b.auto).map_or(style_size, |b| b.size) };
+            // The objects that still exist (in the dimension's space).
+            let objs: Vec<(Handle, Vec<Prim>)> = dm.marks.break_objects.iter().filter_map(|o| store.get(*o).map(|x| (*o, x.kind.prims()))).collect();
+            let (pts, _) = auto_breaks(d, dm, &objs);
+            let mut breaks: Vec<DimBreak> = dm.marks.breaks.iter().filter(|b| !b.auto).cloned().collect();
+            breaks.extend(pts.into_iter().map(|q| DimBreak { at: v3(q), size, auto: true }));
+            let keep: Vec<Handle> = objs.into_iter().map(|(h, _)| h).collect();
+            if breaks != dm.marks.breaks || keep != dm.marks.break_objects {
+                updates.push((e.handle, breaks, keep));
+            }
+        }
+    }
+    if updates.is_empty() {
+        return;
+    }
+    let d = std::sync::Arc::make_mut(&mut st.doc);
+    for (h, breaks, objs) in updates {
+        let _ = d.modify_entity(h, |e| {
+            if let EntityKind::Dimension(dm) = &mut e.kind {
+                dm.marks.breaks = breaks;
+                dm.marks.break_objects = objs;
+            }
+        });
+    }
+}
+
 fn run_dimbreak(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = dims_of(s, &targets(s, p)?);
     if hs.is_empty() {
@@ -505,8 +593,9 @@ fn run_dimbreak(s: &mut Session, p: &Value) -> Result<Value> {
     match mode.as_str() {
         "remove" => {
             let n = edit_dims(s, &hs, &|dm| {
-                let had = !dm.marks.breaks.is_empty();
+                let had = !dm.marks.breaks.is_empty() || !dm.marks.break_objects.is_empty();
                 dm.marks.breaks.clear();
+                dm.marks.break_objects.clear();
                 had
             })?;
             Ok(json!({ "changed": n }))
@@ -540,20 +629,24 @@ fn run_dimbreak(s: &mut Session, p: &Value) -> Result<Value> {
                 .take(MAX_BREAK_OBJECTS)
                 .map(|e| (e.handle, e.kind.prims()))
                 .collect();
+            let explicit = p.get("size").is_some_and(|v| !v.is_null());
             let mut plan = Vec::new();
             for h in &hs {
                 let Some(EntityKind::Dimension(dm)) = d.entity(*h).map(|e| &e.kind) else { continue };
-                let mut plain = dm.clone();
-                plain.marks.breaks.clear();
-                let g = cadaddy_render::dimension_in(d, &plain);
-                let prims: Vec<Prim> = others.iter().filter(|(o, _)| o != h).flat_map(|(_, p)| p.iter().cloned()).collect();
-                plan.push((*h, crossings(&g.lines, &prims)));
+                let objs: Vec<(Handle, Vec<Prim>)> = others.iter().filter(|(o, _)| o != h).cloned().collect();
+                let (pts, crossed) = auto_breaks(d, dm, &objs);
+                // The breaks follow the objects given, or those that crossed the dimension.
+                let follow = if given.is_some() { objs.iter().map(|(o, _)| *o).collect() } else { crossed };
+                // A size given here is this call's; otherwise the dimension's own style decides.
+                let size = if explicit { size } else { break_size(d, dm) };
+                plan.push((*h, pts, follow, size));
             }
             let mut n = 0;
-            for (h, pts) in plan {
+            for (h, pts, follow, size) in plan {
                 n += edit_dims(s, &[h], &|dm| {
                     dm.marks.breaks.retain(|b| !b.auto);
                     dm.marks.breaks.extend(pts.iter().map(|q| DimBreak { at: v3(*q), size, auto: true }));
+                    dm.marks.break_objects.clone_from(&follow);
                     true
                 })?;
             }

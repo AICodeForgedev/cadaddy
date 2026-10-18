@@ -96,7 +96,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("mleaderstyle", "Multileader Style...", run_mleaderstyle)
             .menu(&["Format", "Multileader Style..."])
             .alias(&["mls"])
-            .params("{name, arrowSize?, textHeight?, landingGap?, dogleg?, textStyle?, annotative?, current?} → styles"),
+            .params("{name, arrowSize?, textHeight?, landingGap?, dogleg?, textStyle?, annotative?, leaderType?: straight|spline|none, block?: block name (\"\" for text content), blockAttach?: center|insertion, current?} → styles"),
         CommandSpec::new("ddptype", "Point Style...", run_ptype)
             .menu(&["Format", "Point Style..."])
             .alias(&["ptype"])
@@ -986,6 +986,23 @@ fn run_tablestyle(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_mleaderstyle(s: &mut Session, p: &Value) -> Result<Value> {
+    // The leader type and block content are checked before anything changes.
+    let leader_type = match str_param(p, "leaderType").map(|t| t.trim().to_ascii_lowercase()) {
+        None => None,
+        Some(t) if matches!(t.as_str(), "straight" | "spline" | "none") => Some(t),
+        Some(_) => return Err(bad("mleaderstyle", "`leaderType` must be \"straight\", \"spline\" or \"none\"")),
+    };
+    let block = match str_param(p, "block").map(str::trim) {
+        None => None,
+        Some("") => Some(String::new()),
+        Some(n) => Some(super::mleader_content::block_name(s, n).map_err(|e| bad("mleaderstyle", e.to_string()))?),
+    };
+    let block_center = match str_param(p, "blockAttach").map(str::to_ascii_lowercase).as_deref() {
+        None => None,
+        Some("center") => Some(true),
+        Some("insertion") => Some(false),
+        Some(_) => return Err(bad("mleaderstyle", "`blockAttach` must be \"center\" or \"insertion\"")),
+    };
     let d = s.doc_mut()?;
     if let Some(name) = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         let idx = match d.mleader_styles.iter().position(|t| t.name.eq_ignore_ascii_case(name)) {
@@ -1014,6 +1031,15 @@ fn run_mleaderstyle(s: &mut Session, p: &Value) -> Result<Value> {
             }
             if let Some(a) = p.get("annotative").and_then(Value::as_bool) {
                 st.annotative = a;
+            }
+            if let Some(t) = &leader_type {
+                st.leader_type.clone_from(t);
+            }
+            if let Some(b) = &block {
+                st.block.clone_from(b);
+            }
+            if let Some(c) = block_center {
+                st.block_center = c;
             }
         }
         if bool_or(p, "current", true) {

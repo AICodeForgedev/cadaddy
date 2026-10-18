@@ -48,20 +48,32 @@ impl Default for Limits {
     }
 }
 
-pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
-    match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(l) => {
-            log::info!("control server listening on 127.0.0.1:{port}");
-            serve_listener(l, Limits::default(), ctx)
+/// Listen on every port of `ports` (127.0.0.1 only), all feeding one stream of requests: an
+/// explicit `--control` port and the agent port together. A port that can't be bound (another
+/// window has it) is logged and skipped.
+pub fn start_ports(ports: &[u16], ctx: egui::Context) -> Receiver<ControlRequest> {
+    let limits = Limits::default();
+    let (tx, rx) = sync_channel::<ControlRequest>(limits.queue.max(1));
+    let mut seen = Vec::new();
+    for &port in ports {
+        if seen.contains(&port) {
+            continue;
         }
-        Err(e) => {
-            log::error!("control server failed to bind 127.0.0.1:{port}: {e}");
-            sync_channel::<ControlRequest>(0).1
+        seen.push(port);
+        match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => {
+                log::info!("control server listening on 127.0.0.1:{port}");
+                let (tx, ctx) = (tx.clone(), ctx.clone());
+                std::thread::spawn(move || accept_loop(l, tx, ctx, limits));
+            }
+            Err(e) => log::error!("control server failed to bind 127.0.0.1:{port}: {e}"),
         }
     }
+    rx
 }
 
 /// Accept connections on `listener` under `limits`; requests arrive on the returned receiver.
+#[cfg(test)]
 fn serve_listener(listener: TcpListener, limits: Limits, ctx: egui::Context) -> Receiver<ControlRequest> {
     let (tx, rx) = sync_channel::<ControlRequest>(limits.queue.max(1));
     std::thread::spawn(move || accept_loop(listener, tx, ctx, limits));

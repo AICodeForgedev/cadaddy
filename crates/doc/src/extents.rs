@@ -178,7 +178,14 @@ fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<
             b
         }
         EntityKind::MLeader(m) => {
-            let mut b = Bounds2::from_points(m.leaders.iter().flatten().map(|v| v.xy()).chain(std::iter::once(m.landing.xy())));
+            let mut b = Bounds2::from_points(
+                m.leaders
+                    .iter()
+                    .flatten()
+                    .map(|v| v.xy())
+                    .chain(std::iter::once(m.landing.xy()))
+                    .chain(m.roots.iter().flat_map(|r| r.leaders.iter().flatten().map(|v| v.xy()).chain(std::iter::once(r.landing.xy())))),
+            );
             if let Some(t) = &m.text {
                 b.add(t.insert.xy());
                 if !blank(&t.contents) {
@@ -198,6 +205,7 @@ fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<
         }
         // Text widths estimated like `text_box`; the renderer measures the font.
         EntityKind::Tolerance(t) => t.layout(d, &|s, h| h * 0.9 * s.chars().count() as f64).bounds,
+        EntityKind::Underlay(u) => Bounds2::from_points(u.corners()),
         EntityKind::Image(i) => {
             let o = i.insert.xy();
             let u = i.u.xy() * i.size.x;
@@ -361,6 +369,11 @@ mod tests {
             arrow_size: 1.0,
             spline: false,
             block: None,
+            roots: Vec::new(),
+            leader_color: None,
+            leader_linetype: None,
+            arrow: None,
+            text_frame: false,
         };
         let b = bounds(EntityKind::MLeader(ml.clone()));
         // The glyph spans x 25.45..28.78, y -2.5..2.5.

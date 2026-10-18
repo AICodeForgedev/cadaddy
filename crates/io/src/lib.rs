@@ -10,6 +10,7 @@ mod dxf_image;
 mod dxf_mleader;
 mod dxf_read;
 mod dxf_table;
+mod dxf_underlay;
 mod dxf_write;
 mod dxf_xref;
 pub mod pdf;
@@ -18,6 +19,7 @@ pub mod pdf_read;
 pub mod plotter;
 pub mod svg;
 mod svg_read;
+mod svg_style;
 
 /// Multilines and their styles (MLINE, MLINESTYLE).
 mod dxf_mline;
@@ -70,7 +72,7 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
         return Ok(d);
     }
     match ext(name).as_str() {
-        "svg" | "svgz" => svg_read::read(bytes),
+        "svg" | "svgz" => svg_read::read(bytes, name),
         "pdf" => {
             let r = pdf_read::read(bytes, &pdf_read::PdfOptions::default())?;
             let mut d = r.drawing;

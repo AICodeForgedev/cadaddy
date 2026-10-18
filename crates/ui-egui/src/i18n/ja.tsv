@@ -1432,3 +1432,20 @@
 	Alternate tolerance zero suppression	代替公差のゼロ省略
 	Linear jog height (× text height)	線形折れ線の高さ (× 文字の高さ)
 	Break size	切断サイズ
+	Edit Tolerance	公差の編集
+	Geometric Tolerance	幾何公差
+	Geometric characteristic	幾何特性
+	Material condition	実体条件
+	No symbol	記号なし
+	Projected Tolerance Zone	突出公差域
+	Datum Identifier	データム記号
+	Sym	記号
+	Tolerance 1	公差 1
+	Tolerance 2	公差 2
+	Datum 1	データム 1
+	Datum 2	データム 2
+	Datum 3	データム 3
+	PDF Underlay...	PDF アンダーレイ...
+	Clip PDF Underlay	PDF アンダーレイをクリップ
+	Adjust PDF Underlay	PDF アンダーレイを調整
+	PDF Underlay Layers	PDF アンダーレイのレイヤー

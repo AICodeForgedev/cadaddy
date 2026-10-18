@@ -311,7 +311,10 @@ pub fn mono() -> FontId {
 /// last, for systems without any (and the web build, which has no system fonts). A Korean
 /// interface adds a Hangul font only when the CJK font found doesn't cover Hangul
 /// ([`korean_font`]).
-pub fn install_fonts(ctx: &egui::Context, language: &str) {
+/// Install the interface fonts for `language`. The large system CJK fonts (tens of MB each) are
+/// read only when `cjk` asks for them — a CJK interface language, or a drawing with CJK names
+/// open — not for every interface (an empty window held about 390 MB, much of it these fonts).
+pub fn install_fonts(ctx: &egui::Context, language: &str, cjk: bool) {
     let mut fonts = egui::FontDefinitions::default();
     let mut added: Vec<(String, std::sync::Arc<egui::FontData>)> = Vec::new();
     #[cfg(not(target_arch = "wasm32"))]
@@ -340,10 +343,12 @@ pub fn install_fonts(ctx: &egui::Context, language: &str) {
             }
         }
         let mut paths: Vec<&std::path::Path> = Vec::new();
-        if !chinese {
+        if cjk && !chinese {
             paths.extend(japanese_font());
         }
-        paths.extend(cjk_font());
+        if cjk {
+            paths.extend(cjk_font());
+        }
         paths.dedup();
         added.extend(
             paths
@@ -385,6 +390,13 @@ pub fn install_fonts(ctx: &egui::Context, language: &str) {
         }
     }
     ctx.set_fonts(fonts);
+}
+
+/// Whether `text` has characters only a CJK font shows (Han, kana, Hangul, CJK punctuation and
+/// full-width forms).
+pub fn has_cjk(text: &str) -> bool {
+    text.chars()
+        .any(|c| matches!(c as u32, 0x3000..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF))
 }
 
 /// Largest interface font file read or embedded face copied (CJK collections are 15–60 MB).

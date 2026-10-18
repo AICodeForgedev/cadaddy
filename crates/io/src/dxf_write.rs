@@ -213,6 +213,8 @@ struct Ctx {
     xclips: HashMap<Handle, XclipObj>,
     /// Table → (anonymous `*T` block name, BLOCK_RECORD handle).
     tables: HashMap<Handle, (String, String)>,
+    /// Table → the FIELD objects of its formula cells.
+    fields: HashMap<Handle, Vec<crate::dxf_table::CellField>>,
     /// Table style name → TABLESTYLE handle (the first is the fallback).
     table_styles: Vec<(String, String)>,
     /// Multileader style name → MLEADERSTYLE handle (the first is the fallback).
@@ -221,6 +223,8 @@ struct Ctx {
     block_records: HashMap<String, String>,
     /// Raster images' IMAGEDEF, IMAGEDEF_REACTOR and dictionary handles.
     images: crate::dxf_image::Plan,
+    /// PDF underlays' PDFDEFINITION and dictionary handles.
+    underlays: crate::dxf_underlay::Plan,
     /// The version the file ends up in (the DWG version for a DWG save): it decides which
     /// entity types exist (MULTILEADER from 2007).
     target: Version,
@@ -1101,6 +1105,10 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     if n == 0 {
                         w.s(1, "");
                     }
+                    // A formula: its FIELD (other programs read the formula from it).
+                    if let Some(f) = cx.fields.get(&e.handle).and_then(|fs| fs.iter().find(|f| f.row == r && f.col == c)) {
+                        w.s(344, &f.text);
+                    }
                 }
             }
             w.s(1001, dxf_ext::APP);
@@ -1121,6 +1129,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 style: cx.mleader_style(&m.style),
                 text_style: m.text.as_ref().and_then(|t| cx.style(&t.style)),
                 block: m.block.as_ref().and_then(|b| cx.block_records.get(&b.block.to_ascii_uppercase()).cloned()),
+                ltype: m.leader_linetype.as_ref().and_then(|l| cx.ltypes.get(&l.trim().to_ascii_uppercase()).cloned()),
+                arrow: m.arrow.as_ref().and_then(|a| cx.arrows.get(&a.trim().to_ascii_uppercase()).cloned()),
             };
             w.t.extend(crate::dxf_mleader::entity_tags(d, m, &refs));
         }
@@ -1134,6 +1144,13 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             for v in &l.vertices {
                 w.p(10, *v);
             }
+        }
+        EntityKind::Underlay(u) => {
+            // Every underlay has its PDFDEFINITION (planned in `write`).
+            let Some(def) = cx.underlays.by_entity.get(&e.handle) else { return };
+            w.s(0, "PDFUNDERLAY");
+            common(w, e, owner, paper, "AcDbUnderlayReference");
+            w.t.extend(crate::dxf_underlay::entity_tags(u, def).into_iter().skip(1));
         }
         EntityKind::Image(i) => {
             // Every image has its IMAGEDEF (planned in `write`); the fallback never happens.
@@ -1171,15 +1188,25 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(71, i64::from(h.associative));
             w.i(91, h.loops.len() as i64);
             for l in &h.loops {
-                w.i(92, 2 | if l.outer { 1 } else { 0 });
-                let has_bulge = l.vertices.iter().any(|v| v.bulge != 0.0);
-                w.i(72, i64::from(has_bulge));
-                w.i(73, 1);
-                w.i(93, l.vertices.len() as i64);
-                for v in &l.vertices {
-                    w.p2(10, v.p);
-                    if has_bulge {
-                        w.f(42, v.bulge);
+                if l.curves.is_empty() {
+                    w.i(92, 2 | if l.outer { 1 } else { 0 });
+                    let has_bulge = l.vertices.iter().any(|v| v.bulge != 0.0);
+                    w.i(72, i64::from(has_bulge));
+                    w.i(73, 1);
+                    w.i(93, l.vertices.len() as i64);
+                    for v in &l.vertices {
+                        w.p2(10, v.p);
+                        if has_bulge {
+                            w.f(42, v.bulge);
+                        }
+                    }
+                } else {
+                    // Exact edges (DXF Reference hatch edge data): 72 type 1 line, 2 circular arc,
+                    // 3 elliptic arc, 4 spline.
+                    w.i(92, if l.outer { 1 } else { 0 });
+                    w.i(93, l.curves.len() as i64);
+                    for c in &l.curves {
+                        hatch_edge(w, c);
                     }
                 }
                 // Source boundary objects of an associative hatch (the ones still beside it, in
@@ -1331,9 +1358,11 @@ fn code_page(d: &Drawing, version: Version) -> String {
 fn mleader_fallback(w: &mut W, d: &Drawing, e: &Entity, m: &MLeader, owner: &str, paper: bool, cx: &Ctx) {
     let part = |w: &mut W, kind: EntityKind| Entity { handle: Handle::parse_hex(&w.h()).unwrap_or(Handle(0)), common: e.common.clone(), kind };
     let style = d.header.str("DIMSTYLE", "Standard");
-    for arm in m.leaders.iter().take(64) {
+    // Every landing's leader lines, each ending at its landing.
+    let arms = m.leaders.iter().map(|l| (l, m.landing)).chain(m.roots.iter().flat_map(|r| r.leaders.iter().map(move |l| (l, r.landing))));
+    for (arm, landing) in arms.take(64) {
         let mut vertices = arm.clone();
-        vertices.push(m.landing);
+        vertices.push(landing);
         let le = part(w, EntityKind::Leader(Leader { vertices, arrow: true, spline: m.spline, style: style.clone() }));
         entity(w, d, &le, owner, paper, cx);
     }
@@ -1553,7 +1582,7 @@ fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
                     background: None,
                     insert: cell.at.to3(0.0),
                     height: cell.height,
-                    width: 0.0,
+                    width: cell.width,
                     attach: cell.attach,
                     rotation: 0.0,
                     style,
@@ -1567,6 +1596,49 @@ fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
     }
     out.extend(texts);
     out
+}
+
+/// Write `f`'s two FIELD objects, owned by the table `owner`.
+fn write_field(w: &mut W, f: &crate::dxf_table::CellField, owner: &str) {
+    // The cell's text field: one child, the expression.
+    w.s(0, "FIELD");
+    w.s(5, &f.text);
+    w.s(330, owner);
+    w.s(100, "AcDbField");
+    w.s(1, "_text");
+    w.s(2, "%<\\_FldIdx 0>%");
+    w.i(90, 1);
+    w.s(360, &f.expr);
+    w.i(97, 0);
+    w.i(93, 0);
+    w.s(7, "ACFD_FIELD_VALUE");
+    w.i(90, 0);
+    w.s(301, "");
+    w.i(98, 0);
+    // The expression and its cached value (a double).
+    w.s(0, "FIELD");
+    w.s(5, &f.expr);
+    w.s(330, &f.text);
+    w.s(100, "AcDbField");
+    w.s(1, "AcExpr");
+    let code = format!("\\AcExpr ({})", f.code);
+    let parts = crate::dxf_table::chunks(&code);
+    for (i, p) in parts.iter().enumerate() {
+        w.s(if i == 0 { 2 } else { 3 }, p);
+    }
+    w.i(90, 0);
+    w.i(97, 0);
+    w.i(93, 0);
+    w.s(7, "ACFD_FIELD_VALUE");
+    match f.value.filter(|v| v.is_finite()) {
+        Some(v) => {
+            w.i(90, 2);
+            w.f(140, v);
+        }
+        None => w.i(90, 0),
+    }
+    w.s(301, "");
+    w.i(98, 0);
 }
 
 /// Our own geometry for an arrowhead block: unit size, tip at the origin, pointing along +X.
@@ -1890,6 +1962,12 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         arrow_names.extend([s.arrow_block.clone(), s.arrow_block1.clone(), s.arrow_block2.clone(), s.leader_arrow_block.clone()]);
     }
     for e in &every {
+        // Multileaders' own arrowheads.
+        if let EntityKind::MLeader(m) = &e.kind
+            && let Some(a) = &m.arrow
+        {
+            arrow_names.push(a.clone());
+        }
         if let EntityKind::Dimension(dm) = &e.kind {
             for (k, v) in &dm.overrides {
                 let Some(f) = DimStyle::field_name(k).filter(|f| f.starts_with("arrowBlock") || *f == "leaderArrowBlock") else { continue };
@@ -1938,11 +2016,16 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
             tn += 1;
             let brh = w.h();
             cx.tables.insert(e.handle, (name.clone(), brh.clone()));
+            let fields = crate::dxf_table::plan_fields(t, || w.h());
+            if !fields.is_empty() {
+                cx.fields.insert(e.handle, fields);
+            }
             table_defs.push((name, brh, table_block_entities(d, t, &e.common.layer)));
         }
     }
     // Image definitions (IMAGEDEF objects) of raster images anywhere in the drawing.
     cx.images = crate::dxf_image::plan(every.iter().copied(), || w.h());
+    cx.underlays = crate::dxf_underlay::plan(every.iter().copied(), || w.h());
     cx.mlines = crate::dxf_mline::plan(d, every.iter().copied(), || w.h());
     // DIMASSOC objects of associative dimensions in model and paper space.
     for st in &all_spaces {
@@ -2063,6 +2146,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     if every.iter().any(|e| matches!(e.kind, EntityKind::Wipeout(_))) {
         classes.push(("WIPEOUT", "AcDbWipeout", 127, true));
+    }
+    if !cx.underlays.is_empty() {
+        classes.push(("PDFUNDERLAY", "AcDbPdfReference", 4095, true));
+        classes.push(("PDFDEFINITION", "AcDbPdfDefinition", 1153, false));
     }
     if !cx.images.is_empty() {
         classes.push(("IMAGE", "AcDbRasterImage", 127, true));
@@ -2452,6 +2539,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     w.i(281, 1);
     w.s(3, "ACAD_GROUP");
     w.s(350, group_dict.clone());
+    if !cx.underlays.is_empty() {
+        w.s(3, "ACAD_PDFDEFINITIONS");
+        w.s(350, cx.underlays.dict.clone());
+    }
     if !cx.images.is_empty() {
         w.s(3, "ACAD_IMAGE_DICT");
         w.s(350, cx.images.dict.clone());
@@ -2498,7 +2589,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     let byblock_ltype = ltype_handles.get("BYBLOCK").cloned();
     for (s, h) in mleader_styles.iter().zip(&mleader_handles) {
-        mleader_style_obj(&mut w, s, h, &mleader_dict, byblock_ltype.as_deref(), cx.style(&s.text_style));
+        let block = Some(s.block.trim()).filter(|b| !b.is_empty()).and_then(|b| cx.block_records.get(&b.to_ascii_uppercase()).cloned());
+        mleader_style_obj(&mut w, s, h, &mleader_dict, byblock_ltype.as_deref(), cx.style(&s.text_style), block);
     }
     // Multiline styles.
     w.t.extend(crate::dxf_mline::objects(&cx.mlines, &root_dict));
@@ -2548,6 +2640,15 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         }
     }
     scale_list(&mut w, &scales, &scale_dict, &root_dict);
+    // Formula cells' FIELD objects, owned by their tables.
+    let mut fields: Vec<(&Handle, &Vec<crate::dxf_table::CellField>)> = cx.fields.iter().collect();
+    fields.sort_by_key(|(h, _)| **h);
+    for (table, fs) in fields {
+        let owner = table.hex();
+        for f in fs {
+            write_field(&mut w, f, &owner);
+        }
+    }
     write_xclips(&mut w, &cx.xclips, &every);
     // Dimension associativity: extension dictionary + DIMASSOC per dimension.
     let mut assoc: Vec<(&Handle, &AssocObj)> = cx.assoc.iter().collect();
@@ -2695,6 +2796,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     // Raster image definitions.
     w.t.extend(crate::dxf_image::objects(&cx.images, &root_dict));
+    w.t.extend(crate::dxf_underlay::objects(&cx.underlays, &root_dict));
     w.s(0, "ENDSEC");
     w.s(0, "EOF");
     let seed = format!("{:X}", w.next);
@@ -2813,10 +2915,18 @@ fn group_obj(w: &mut W, g: &Group, h: &str, dict: &str, written: &std::collectio
     }
 }
 
-/// A MLEADERSTYLE object (DXF Reference, OBJECTS: MLEADERSTYLE): MText content and straight
-/// ByBlock leaders with the style's landing gap, dogleg length, arrow size, text style and
-/// text height.
-fn mleader_style_obj(w: &mut W, s: &MLeaderStyle, h: &str, dict: &str, byblock_ltype: Option<&str>, text_style: Option<String>) {
+/// A MLEADERSTYLE object (DXF Reference, OBJECTS: MLEADERSTYLE): MText or block content and
+/// ByBlock leaders (straight, spline or none) with the style's landing gap, dogleg length, arrow
+/// size, text style and text height.
+fn mleader_style_obj(
+    w: &mut W,
+    s: &MLeaderStyle,
+    h: &str,
+    dict: &str,
+    byblock_ltype: Option<&str>,
+    text_style: Option<String>,
+    block: Option<String>,
+) {
     // ByBlock as a 32-bit colour value (0xC1000000).
     const BYBLOCK: i64 = -1_056_964_608;
     w.s(0, "MLEADERSTYLE");
@@ -2825,13 +2935,20 @@ fn mleader_style_obj(w: &mut W, s: &MLeaderStyle, h: &str, dict: &str, byblock_l
     w.s(330, dict);
     w.s(100, "AcDbMLeaderStyle");
     w.i(179, 2);
-    w.i(170, 2);
+    w.i(170, if block.is_some() { 1 } else { 2 });
     w.i(171, 1);
     w.i(172, 0);
     w.i(90, 2);
     w.f(40, 0.0);
     w.f(41, 0.0);
-    w.i(173, 1);
+    w.i(
+        173,
+        match s.leader_type.to_ascii_lowercase().as_str() {
+            "none" => 0,
+            "spline" => 2,
+            _ => 1,
+        },
+    );
     w.i(91, BYBLOCK);
     if let Some(lt) = byblock_ltype {
         w.s(340, lt);
@@ -2856,6 +2973,9 @@ fn mleader_style_obj(w: &mut W, s: &MLeaderStyle, h: &str, dict: &str, byblock_l
     w.i(292, 0);
     w.i(297, 0);
     w.f(46, 4.0);
+    if let Some(b) = &block {
+        w.s(343, b);
+    }
     w.i(94, BYBLOCK);
     for c in [47, 49, 140] {
         w.f(c, 1.0);
@@ -2863,7 +2983,7 @@ fn mleader_style_obj(w: &mut W, s: &MLeaderStyle, h: &str, dict: &str, byblock_l
     w.i(293, 1);
     w.f(141, 0.0);
     w.i(294, 1);
-    w.i(177, 0);
+    w.i(177, i64::from(!s.block_center));
     w.f(142, 1.0);
     w.i(295, 0);
     w.i(296, i64::from(s.annotative));
@@ -2922,4 +3042,60 @@ pub fn entity_records(d: &Drawing, e: &Entity) -> Vec<(String, Vec<Tag>)> {
     let paper = d.space_of(e.handle).is_some_and(|s| !matches!(s, cadaddy_doc::Space::Model));
     entity(&mut w, d, e, "0", paper, &cx);
     cadaddy_dxf::records(&w.t).into_iter().map(|(k, tags)| (k, tags.into_iter().filter(|t| t.code != 330).collect())).collect()
+}
+
+/// One exact hatch boundary edge (DXF Reference): 72 edge type, then the edge's data. A clockwise
+/// arc or elliptic arc stores its angles mirrored (as AutoCAD writes them), with 73 = 0.
+fn hatch_edge(w: &mut W, c: &cadaddy_geom::LoopEdge) {
+    use cadaddy_geom::LoopEdge;
+    let deg = |a: f64| a.to_degrees().rem_euclid(360.0);
+    match c {
+        LoopEdge::Line { a, b } => {
+            w.i(72, 1);
+            w.p2(10, *a);
+            w.p2(11, *b);
+        }
+        LoopEdge::Arc { center, radius, start, end, ccw } => {
+            w.i(72, 2);
+            w.p2(10, *center);
+            w.f(40, *radius);
+            let (s, e) = if *ccw { (*start, *end) } else { (-*start, -*end) };
+            let (s, e) = (deg(s), deg(e));
+            // A full circle runs 0 to 360.
+            let e = if (e - s).abs() < 1e-9 && c.start_point().near(c.end_point(), 1e-12) { s + 360.0 } else { e };
+            w.f(50, s);
+            w.f(51, e);
+            w.i(73, i64::from(*ccw));
+        }
+        LoopEdge::Ellipse { center, major, ratio, start, end, ccw } => {
+            w.i(72, 3);
+            w.p2(10, *center);
+            w.p2(11, *major);
+            w.f(40, *ratio);
+            let (s, e) = if *ccw { (*start, *end) } else { (-*start, -*end) };
+            let (s, e) = (deg(s), deg(e));
+            let e = if (e - s).abs() < 1e-9 && c.start_point().near(c.end_point(), 1e-12) { s + 360.0 } else { e };
+            w.f(50, s);
+            w.f(51, e);
+            w.i(73, i64::from(*ccw));
+        }
+        LoopEdge::Spline(sp) => {
+            w.i(72, 4);
+            w.i(94, sp.degree as i64);
+            w.i(73, i64::from(!sp.weights.is_empty()));
+            w.i(74, 0);
+            w.i(95, sp.knots.len() as i64);
+            w.i(96, sp.control.len() as i64);
+            for k in &sp.knots {
+                w.f(40, *k);
+            }
+            for (i, p) in sp.control.iter().enumerate() {
+                w.p2(10, *p);
+                if let Some(wt) = sp.weights.get(i) {
+                    w.f(42, *wt);
+                }
+            }
+            w.i(97, 0);
+        }
+    }
 }

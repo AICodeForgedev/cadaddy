@@ -72,8 +72,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("pan.up", "Pan Up", |s, _| pan_frac(s, Vec2::new(0.0, 0.25))).menu(&["View", "Pan", "Up"]).noundo().transparent(),
         CommandSpec::new("pan.down", "Pan Down", |s, _| pan_frac(s, Vec2::new(0.0, -0.25))).menu(&["View", "Pan", "Down"]).noundo().transparent(),
         CommandSpec::new("regen", "Regen", |s, _| {
-            // Table formulas are recalculated (as on UPDATEFIELD).
+            // Table formulas are recalculated (as on UPDATEFIELD), and image files looked up again.
             super::table::recalc(s, None)?;
+            cadaddy_render::images::revalidate();
             s.touch();
             Ok(json!({"message": "Regenerating model."}))
         })
@@ -81,6 +82,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .alias(&["re"])
         .noundo(),
         CommandSpec::new("regenall", "Regen All", |s, _| {
+            cadaddy_render::images::revalidate();
             s.touch();
             Ok(json!({"message": "Regenerating all viewports."}))
         })

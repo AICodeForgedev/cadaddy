@@ -7,7 +7,7 @@
 
 use cadaddy_geom::{Bounds2, Vec2};
 
-use super::{Atom, Fmt, MTextLayout, MTextParams, MTextPiece, Seg, arg, num, parse, seg_plain, seg_shape, seg_width};
+use super::{Atom, CaretLine, Fmt, MTextLayout, MTextParams, MTextPiece, Seg, arg, char_starts, num, parse, seg_plain, seg_shape, seg_width};
 
 /// Columns an MTEXT's text flows through, each as wide as the MTEXT's width.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -363,6 +363,8 @@ struct PLine {
     width: f64,
     max_h: f64,
     text: String,
+    /// Where each character of `text` starts (before alignment), and the word gaps before it.
+    xs: Vec<(f64, usize)>,
     gaps: usize,
     para: usize,
     /// The last line of its paragraph.
@@ -483,6 +485,7 @@ pub(super) fn layout(contents: &str, p: &MTextParams, base: &Fmt) -> MTextLayout
                             if x > avail + 1e-9 && !line.items.is_empty() {
                                 finish(&mut lines, &mut line, fmt(last_fmt), k, false, left);
                             } else {
+                                line.xs.push((line.width, line.gaps));
                                 line.width = x;
                                 line.text.push(' ');
                             }
@@ -493,17 +496,20 @@ pub(super) fn layout(contents: &str, p: &MTextParams, base: &Fmt) -> MTextLayout
                             if width > 0.0 && !line.items.is_empty() && line.width + sw + ww > avail + 1e-9 {
                                 finish(&mut lines, &mut line, fmt(last_fmt), k, false, left);
                             } else if pi == 0 && (!line.items.is_empty() || pending_space.is_some()) {
-                                line.width += sw;
                                 if pending_space.is_some() {
+                                    line.xs.push((line.width, line.gaps));
                                     line.text.push(' ');
                                     line.gaps += 1;
                                 }
+                                line.width += sw;
                             }
                             pending_space = None;
                             for (sg, f) in segs {
                                 let fw = seg_width(sg, fmt(*f));
                                 line.max_h = line.max_h.max(fmt(*f).height);
                                 line.text.push_str(&seg_plain(sg));
+                                let g = line.gaps;
+                                line.xs.extend(char_starts(sg, fmt(*f), line.width).into_iter().map(|x| (x, g)));
                                 line.items.push(Item { seg: sg.clone(), fmt: *f, x: line.width, gap: line.gaps });
                                 line.width += fw;
                                 last_fmt = *f;
@@ -604,6 +610,14 @@ pub(super) fn layout(contents: &str, p: &MTextParams, base: &Fmt) -> MTextLayout
             _ if spread => (0.0, free / l.gaps as f64),
             _ => (0.0, 0.0),
         };
+        out.carets.push(CaretLine {
+            text: l.text.clone(),
+            para: l.para,
+            xs: l.xs.iter().map(|(x, g)| col_x + shift + per_gap * *g as f64 + x).collect(),
+            end: col_x + shift + per_gap * l.gaps as f64 + l.width,
+            baseline: top + base_y,
+            height: if l.max_h > 0.0 { l.max_h } else { h },
+        });
         for it in &l.items {
             let fm = fmt(it.fmt);
             let mut sh = seg_shape(&it.seg, fm, it.x);

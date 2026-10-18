@@ -18,6 +18,7 @@ fn drawing(twist: f64) -> Drawing {
         view_height: 40.0,
         id: 2,
         twist: twist.to_radians(),
+        anno_scale: None,
         ..Viewport::default()
     };
     d.add(&Space::Paper("Layout1".into()), Common::default(), EntityKind::Viewport(vp)).unwrap();

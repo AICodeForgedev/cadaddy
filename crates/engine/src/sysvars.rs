@@ -54,6 +54,10 @@ const SESSION_VARS: &[&str] = &[
     "PICKFIRST",
     "ACADLSPASDOC",
     "PICKADD",
+    "FILEDIA",
+    "CMDECHO",
+    "EXPERT",
+    "ATTDIA",
     "SELECTIONCYCLING",
     "PICKSTYLE",
     "GROUPDISPLAYMODE",
@@ -125,6 +129,10 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "PICKFIRST" => json!(i32::from(st.pickfirst)),
         "ACADLSPASDOC" => json!(i32::from(st.acadlspasdoc)),
         "PICKADD" => json!(i32::from(st.pickadd)),
+        "FILEDIA" => json!(st.filedia),
+        "CMDECHO" => json!(st.cmdecho),
+        "EXPERT" => json!(st.expert),
+        "ATTDIA" => json!(st.attdia),
         "SELECTIONCYCLING" => json!(st.selectioncycling),
         "PICKSTYLE" => json!(st.pickstyle),
         "GROUPDISPLAYMODE" => json!(st.groupdisplaymode),
@@ -181,7 +189,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
                 Some(h) => serde_json::to_value(h).ok()?,
                 // A dimension variable the header doesn't carry reads from the current style.
                 // Variables CADaddy reads with a default when the drawing doesn't set them.
-                None if let Some((_, v)) = HEADER_DEFAULTS.iter().find(|(v, _)| *v == n) => json!(v),
+                None if let Some(v) = header_default(&n) => v,
                 None => {
                     let field = cadaddy_doc::DIMVARS.iter().find(|(v, _)| *v == n)?.1;
                     let st = d.dim_style(&d.header.str("DIMSTYLE", "Standard"))?;
@@ -195,7 +203,112 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
 
 /// Drawing variables that are read with a default when the header doesn't carry them, so they
 /// can be typed by name and read with GETVAR before anything sets them.
-const HEADER_DEFAULTS: &[(&str, f64)] = &[("HPGAPTOL", 0.0), ("ATTREQ", 1.0)];
+/// Header variables CADaddy reads (so SETVAR may set them) though no table above describes them:
+/// every `header.*("NAME")` read in the code.
+const READ_HEADER_VARS: &[&str] = &[
+    "ACADVER",
+    "ANGBASE",
+    "ANGDIR",
+    "ANNOALLVISIBLE",
+    "ARRAYASSOCIATIVITY",
+    "ATTMODE",
+    "ATTREQ",
+    "AUNITS",
+    "AUPREC",
+    "CANNOSCALE",
+    "CECOLOR",
+    "CECOLOR_RGB",
+    "CELTYPE",
+    "CELWEIGHT",
+    "CENTEREXE",
+    "CHAMFERA",
+    "CHAMFERB",
+    "CHAMFERC",
+    "CHAMFERD",
+    "CHAMMODE",
+    "CIRCLERAD",
+    "CLAYER",
+    "CMLEADERSTYLE",
+    "CMLJUST",
+    "CMLSCALE",
+    "CMLSTYLE",
+    "CPLOTSTYLE",
+    "CTABLESTYLE",
+    "DIMASSOC",
+    "DIMCLRD",
+    "DIMDSEP",
+    "DIMJOGANG",
+    "DIMSCALE",
+    "DIMSTYLE",
+    "DIMTXT",
+    "DONUTID",
+    "DONUTOD",
+    "DWGCODEPAGE",
+    "EDGEMODE",
+    "FILLETRAD",
+    "FILLMODE",
+    "FONTALT",
+    "GRIDUNIT",
+    "HANDSEED",
+    "HPANG",
+    "HPANNOTATIVE",
+    "HPASSOC",
+    "HPDLGMODE",
+    "HPGAPTOL",
+    "HPISLANDDETECTION",
+    "HPNAME",
+    "HPORIGIN",
+    "HPORIGINMODE",
+    "HPSCALE",
+    "HPSEPARATE",
+    "IMAGEFRAME",
+    "INSBASE",
+    "INSNAME",
+    "INSUNITS",
+    "LIMMAX",
+    "LIMMIN",
+    "LTSCALE",
+    "LUNITS",
+    "LUPREC",
+    "LWDEFAULT",
+    "MEASUREMENT",
+    "OFFSETDIST",
+    "OFFSETERASE",
+    "OFFSETLAYER",
+    "PDFOSNAP",
+    "PDMODE",
+    "PDSIZE",
+    "POLYSIDES",
+    "PROJMODE",
+    "PSLTSCALE",
+    "REVCLOUDARCLEN",
+    "SNAPANG",
+    "SNAPBASE",
+    "SNAPSTYL",
+    "SNAPUNIT",
+    "SPLINESEGS",
+    "SPLKNOTS",
+    "TEXTFILL",
+    "TEXTSIZE",
+    "TEXTSTYLE",
+    "TRIMEXTENDMODE",
+    "TRIMMODE",
+    "WIPEOUTFRAME",
+    "XCLIPFRAME",
+];
+
+/// ATTREQ is an integer (AutoCAD returns 1, not 1.0); USERI1–5, USERR1–5 and USERS1–5 are the
+/// variables LISP routines keep their own values in.
+fn header_default(n: &str) -> Option<Value> {
+    match n {
+        "HPGAPTOL" => Some(json!(0.0)),
+        "ATTREQ" => Some(json!(1)),
+        "USERI1" | "USERI2" | "USERI3" | "USERI4" | "USERI5" => Some(json!(0)),
+        "USERR1" | "USERR2" | "USERR3" | "USERR4" | "USERR5" => Some(json!(0.0)),
+        "USERS1" | "USERS2" | "USERS3" | "USERS4" | "USERS5" => Some(json!("")),
+        _ => None,
+    }
+}
 
 fn as_bool(v: &Value) -> Option<bool> {
     v.as_bool().or_else(|| v.as_i64().map(|i| i != 0)).or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()).map(|i| i != 0))
@@ -351,6 +464,10 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "PICKFIRST" => st.pickfirst = as_bool(v).ok_or_else(bad)?,
         "ACADLSPASDOC" => st.acadlspasdoc = as_bool(v).ok_or_else(bad)?,
         "PICKADD" => st.pickadd = as_bool(v).ok_or_else(bad)?,
+        "FILEDIA" => st.filedia = as_i(v).filter(|i| (0..=1).contains(i)).ok_or_else(bad)? as u8,
+        "CMDECHO" => st.cmdecho = as_i(v).filter(|i| (0..=1).contains(i)).ok_or_else(bad)? as u8,
+        "EXPERT" => st.expert = as_i(v).filter(|i| (0..=5).contains(i)).ok_or_else(bad)? as u8,
+        "ATTDIA" => st.attdia = as_i(v).filter(|i| (0..=1).contains(i)).ok_or_else(bad)? as u8,
         "SELECTIONCYCLING" => st.selectioncycling = as_i(v).filter(|n| (-2..=2).contains(n)).and_then(|n| i8::try_from(n).ok()).ok_or_else(bad)?,
         "PICKSTYLE" => st.pickstyle = as_i(v).filter(|b| (0..=3).contains(b)).and_then(|b| u8::try_from(b).ok()).ok_or_else(bad)?,
         "GROUPDISPLAYMODE" => st.groupdisplaymode = small(v, 2).ok_or_else(bad)?,
@@ -380,6 +497,15 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         _ => {
             if let Some(r) = table::set(s, &n, v) {
                 return r;
+            }
+            // Only variables that exist: one the drawing carries, a dimension variable, or one read
+            // with a default. Anything else is refused (it used to land in the header unasked).
+            let known = s.doc().is_ok_and(|d| d.header.get(&n).is_some())
+                || cadaddy_doc::DIMVARS.iter().any(|(v, _)| *v == n)
+                || header_default(&n).is_some()
+                || READ_HEADER_VARS.contains(&n.as_str());
+            if !known {
+                return Err(EngineError::BadParams { cmd: "setvar".into(), msg: format!("Unknown variable name: {n}") });
             }
             let d = s.doc_mut()?;
             let val = match v {

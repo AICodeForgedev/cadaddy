@@ -38,6 +38,7 @@ fn harness(clipped: bool) -> Harness<'static, CadApp> {
             clip,
             on: true,
             twist: 0.0,
+            anno_scale: None,
         }),
     )
     .unwrap();

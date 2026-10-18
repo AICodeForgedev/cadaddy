@@ -1269,3 +1269,32 @@
 	Material	材质
 	Shadow display	阴影显示
 	Center object	中心对象
+	Move with Dim Line	随尺寸线移动
+	Move Text Only	仅移动文字
+	Above Dim Line	尺寸线上方
+	Center Vertically	垂直居中
+	Reset Text Position	重置文字位置
+	Continue Dimension	连续标注
+	Baseline Dimension	基线标注
+	Flip Arrow	翻转箭头
+	Lengthen Landing	拉长基线
+	Origin Point	原点
+	Hatch Angle	填充角度
+	Hatch Scale	填充比例
+	Edit Tolerance	编辑公差
+	Geometric Tolerance	形位公差
+	Geometric characteristic	几何特征
+	Material condition	材料条件
+	No symbol	无符号
+	Projected Tolerance Zone	延伸公差带
+	Datum Identifier	基准标识符
+	Sym	符号
+	Tolerance 1	公差 1
+	Tolerance 2	公差 2
+	Datum 1	基准 1
+	Datum 2	基准 2
+	Datum 3	基准 3
+	PDF Underlay...	PDF 参考底图...
+	Clip PDF Underlay	剪裁 PDF 参考底图
+	Adjust PDF Underlay	调整 PDF 参考底图
+	PDF Underlay Layers	PDF 参考底图图层

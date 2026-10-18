@@ -7,6 +7,25 @@ use crate::{DocState, Snapshot};
 
 /// The most undo steps a drawing keeps; the oldest are dropped first.
 pub const MAX_UNDO: usize = 2000;
+/// The memory a drawing's undo steps may hold (what they don't share with the drawing as it is
+/// now); past it the oldest steps are dropped, the most recent one always kept. A MOVE of every
+/// object in a 190k-object drawing holds about 140 MB, so this keeps several such steps.
+pub const UNDO_BUDGET: usize = 768 * 1024 * 1024;
+
+/// Free undo or redo steps off the command path: dropping a step that held a whole changed copy
+/// of a large drawing took half a second (they're freed on a short-lived thread instead; the web
+/// build has no threads and frees them here).
+fn drop_later(steps: Vec<Snapshot>) {
+    if steps.is_empty() {
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = std::thread::Builder::new().name("undo-free".into()).spawn(move || drop(steps));
+    }
+    #[cfg(target_arch = "wasm32")]
+    drop(steps);
+}
 /// The most marks a drawing keeps; the oldest are dropped first.
 const MAX_MARKS: usize = 1000;
 
@@ -38,11 +57,13 @@ pub struct UndoCtl {
     pub marks: Vec<usize>,
     /// Undo-stack depth when the open BEgin group started.
     pub group: Option<usize>,
+    /// The memory the undo steps may hold ([`UNDO_BUDGET`] unless changed).
+    pub budget: usize,
 }
 
 impl Default for UndoCtl {
     fn default() -> Self {
-        UndoCtl { control: Control::All, auto: true, combine_view: true, combine_layer: true, marks: Vec::new(), group: None }
+        UndoCtl { control: Control::All, auto: true, combine_view: true, combine_layer: true, marks: Vec::new(), group: None, budget: UNDO_BUDGET }
     }
 }
 
@@ -77,20 +98,22 @@ impl DocState {
     /// Record an undo step (`snap` holds the drawing as it was before the change) and clear redo.
     /// UNDO Control None records nothing and One keeps just this step; the stack holds at most
     /// [`MAX_UNDO`] steps.
-    pub fn push_undo(&mut self, snap: Snapshot) {
-        self.redo.clear();
+    pub fn push_undo(&mut self, mut snap: Snapshot) {
+        drop_later(std::mem::take(&mut self.redo));
         match self.undo_ctl.control {
             Control::None => {
-                self.undo.clear();
+                drop_later(std::mem::take(&mut self.undo));
                 return;
             }
             Control::One => {
-                self.undo.clear();
+                drop_later(std::mem::take(&mut self.undo));
                 self.undo.push(snap);
                 return;
             }
             Control::All => {}
         }
+        // What keeping this step costs: the objects of the old drawing the new one doesn't share.
+        snap.bytes = snap.doc.unique_bytes(&self.doc);
         // Marks above the current depth were undone; a new step makes them unreachable for good.
         let depth = self.undo.len();
         self.undo_ctl.marks.retain(|m| *m <= depth);
@@ -100,8 +123,15 @@ impl DocState {
             self.undo_ctl.group = Some(depth);
         }
         self.undo.push(snap);
-        if let Some(extra) = self.undo.len().checked_sub(MAX_UNDO).filter(|e| *e > 0) {
-            self.undo.drain(..extra);
+        let mut extra = self.undo.len().saturating_sub(MAX_UNDO);
+        // The memory budget: drop the oldest steps until the rest fit, keeping the newest.
+        let mut total: usize = self.undo.iter().map(|s| s.bytes).fold(0, usize::saturating_add);
+        while total > self.undo_ctl.budget && extra + 1 < self.undo.len() {
+            total = total.saturating_sub(self.undo.get(extra).map_or(0, |s| s.bytes));
+            extra += 1;
+        }
+        if extra > 0 {
+            drop_later(self.undo.drain(..extra).collect());
             for m in &mut self.undo_ctl.marks {
                 *m = m.saturating_sub(extra);
             }

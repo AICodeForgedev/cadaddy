@@ -41,6 +41,8 @@ pub struct TableText {
     pub color: Color,
     pub style: String,
     pub text: String,
+    /// The width the text wraps to: its cell (or merge) less the margins.
+    pub width: f64,
 }
 
 /// Everything a table draws, in world coordinates.
@@ -317,10 +319,59 @@ fn layout(d: &Drawing, t: &Table) -> TableGeom {
             height: cell.text_height.filter(|h| h.is_finite() && *h > 0.0).map_or(cs.text_height, |h| h * k),
             color: cs.text_color,
             style: cs.text_style.clone(),
-            text: cell.text.clone(),
+            // A plain number shows in the cell style's number format (formula results already do).
+            text: cs.display_text(&cell.text, cell.formula.is_some()),
+            width: (x1 - x0 - 2.0 * cs.margin_h).max(0.0),
         });
     }
     g
+}
+
+/// The MTEXT layout of a cell's text: at its alignment point, wrapping to the cell's width.
+fn text_params(tx: &TableText, font: cadaddy_fonts::TextFont, ts: &cadaddy_doc::TextStyle) -> cadaddy_fonts::MTextParams {
+    cadaddy_fonts::MTextParams {
+        attach: tx.attach,
+        font,
+        width_factor: ts.width_factor,
+        oblique: ts.oblique,
+        width: if tx.width.is_finite() { tx.width } else { 0.0 },
+        ..cadaddy_fonts::MTextParams::new(tx.at, tx.height)
+    }
+}
+
+/// Row heights that fit every cell's wrapped text: each row at least as high as it is, raised
+/// where a cell's text (one row high) needs more. `None` when every row already fits.
+pub fn fit_rows(d: &Drawing, t: &Table) -> Option<Vec<f64>> {
+    let rows = t.row_heights.len().min(10_000);
+    if rows.saturating_mul(t.col_widths.len()) > MAX_LAYOUT_CELLS {
+        return None;
+    }
+    let st = table_style_of(d, t);
+    let k = style_scale(&st, t);
+    let g = layout(d, t);
+    let mut out = t.row_heights.clone();
+    let mut grown = false;
+    for tx in &g.texts {
+        // Merges over several rows keep their heights.
+        if t.cells.get(tx.row).and_then(|r| r.get(tx.col)).and_then(|c| c.merged).is_some_and(|(rs, _)| rs > 1) {
+            continue;
+        }
+        let cs = st.cell_style(t.cell_style_name(tx.row, tx.col));
+        let ts = crate::text_style(d, &tx.style);
+        let font = cadaddy_fonts::TextFont::resolve(&ts.font);
+        let lay = cadaddy_fonts::layout_mtext_with(&tx.text, &text_params(tx, font, &ts));
+        // MTEXT's line pitch is 5/3 of the text height.
+        let lines = lay.lines.len().max(1) as f64;
+        let need = tx.height * (1.0 + (lines - 1.0) * 5.0 / 3.0) + 2.0 * cs.margin_v * k;
+        if let Some(h) = out.get_mut(tx.row)
+            && need.is_finite()
+            && need > *h + 1e-9
+        {
+            *h = need;
+            grown = true;
+        }
+    }
+    grown.then_some(out)
 }
 
 /// A cell style colour as drawn: ByBlock / ByLayer take the table's colour.
@@ -353,16 +404,10 @@ pub(crate) fn draw(b: &mut Builder, ctx: &Ctx, t: &Table, rgb: Ink, lw: f32) {
     }
     for tx in &g.texts {
         let ts = crate::text_style(ctx.d, &tx.style);
-        let font = cadaddy_fonts::TextFont::resolve(&ts.font);
+        let font = cadaddy_fonts::TextFont::resolve_style(&ts.font, &ts.big_font);
         // Cell content is MTEXT (`\P`, `{\Q15;…}`, `\F…;`): laid out as such, at the cell's
         // alignment point (its numbering is MTEXT's attachment).
-        let mp = cadaddy_fonts::MTextParams {
-            attach: tx.attach,
-            font,
-            width_factor: ts.width_factor,
-            oblique: ts.oblique,
-            ..cadaddy_fonts::MTextParams::new(tx.at, tx.height)
-        };
+        let mp = text_params(tx, font, &ts);
         let layout = cadaddy_fonts::layout_mtext_with(&tx.text, &mp);
         for piece in &layout.pieces {
             b.shaped(ctx, style_ink(tx.color, rgb), lw, &piece.shaped);

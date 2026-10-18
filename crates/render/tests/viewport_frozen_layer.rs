@@ -22,6 +22,7 @@ fn drawing() -> Drawing {
         clip: None,
         on: true,
         twist: 0.0,
+        anno_scale: None,
     };
     d.add(&Space::Paper("Layout1".into()), Common { layer: "VPORTS".into(), ..Default::default() }, EntityKind::Viewport(vp)).unwrap();
     d

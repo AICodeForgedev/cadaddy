@@ -147,6 +147,26 @@ impl Drawing {
         d
     }
     /// An empty metric drawing (millimetres, ISO-25 dimensions).
+    /// Roughly how many bytes this drawing holds that `newer` doesn't share with it (objects of
+    /// model space, the layouts and the blocks): what keeping it as an undo step costs.
+    pub fn unique_bytes(&self, newer: &Drawing) -> usize {
+        let mut bytes = self.model.unique_bytes(&newer.model);
+        for l in &self.layouts {
+            bytes = bytes.saturating_add(match newer.layouts.iter().find(|n| n.name == l.name) {
+                Some(n) => l.entities.unique_bytes(&n.entities),
+                None => l.entities.unique_bytes(&EntityStore::new()),
+            });
+        }
+        for (name, b) in &self.blocks {
+            bytes = bytes.saturating_add(match newer.blocks.get(name) {
+                Some(n) if std::sync::Arc::ptr_eq(b, n) => 0,
+                Some(n) => b.entities.unique_bytes(&n.entities),
+                None => b.entities.unique_bytes(&EntityStore::new()),
+            });
+        }
+        bytes
+    }
+
     pub fn new_metric() -> Self {
         let mut d = Drawing::bare();
         d.header = Header::metric();

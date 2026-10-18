@@ -12,4 +12,5 @@ workspace = true
 cadaddy-geom = { workspace = true }
 skrifa = { workspace = true }
 harfrust = { workspace = true }
+encoding_rs = { workspace = true }
 unicode-bidi = { workspace = true }

@@ -41,6 +41,11 @@ fn run_drawingrecovery(s: &mut Session, p: &Value) -> Result<Value> {
         "list" => Ok(json!({ "files": files })),
         "open" => {
             let f = pick()?;
+            // An autosave in browser storage: its DXF text, as an unsaved copy.
+            if crate::autosave::store::is_store_path(&f.path) {
+                let bytes = crate::autosave::store::read_store(&f.path).ok_or_else(|| bad("drawingrecovery", format!("{} can't be read", f.path)))?;
+                return run_recover(s, &json!({ "data": file::base64_encode(&bytes), "name": "autosave.dxf", "copy": true, "title": f.drawing }));
+            }
             run_recover(s, &json!({ "path": f.path, "copy": true, "title": f.drawing }))
         }
         "discard" => {
@@ -54,6 +59,9 @@ fn run_drawingrecovery(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn recoverable_files() -> Vec<crate::autosave::Recoverable> {
+    if crate::autosave::store::store().is_some() {
+        return crate::autosave::store::recoverable_store("");
+    }
     let dir = crate::autosave::savefilepath();
     if dir.is_empty() {
         return Vec::new();
@@ -64,16 +72,23 @@ fn recoverable_files() -> Vec<crate::autosave::Recoverable> {
 
 #[cfg(target_arch = "wasm32")]
 fn recoverable_files() -> Vec<crate::autosave::Recoverable> {
-    Vec::new()
+    // The web build's autosaves are in browser storage (this tab's own are kept out by its lock).
+    crate::autosave::store::recoverable_store("")
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn discard_file(path: &str) {
-    crate::autosave::discard(path);
+    if crate::autosave::store::is_store_path(path) {
+        crate::autosave::store::discard_store(path);
+    } else {
+        crate::autosave::discard(path);
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn discard_file(_: &str) {}
+fn discard_file(path: &str) {
+    crate::autosave::store::discard_store(path);
+}
 
 /// Check the current drawing; with `fix`, repair it (one undo step).
 fn run_audit(s: &mut Session, p: &Value) -> Result<Value> {

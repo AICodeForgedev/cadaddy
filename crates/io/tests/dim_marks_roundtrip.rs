@@ -92,3 +92,17 @@ fn damaged_marks_are_skipped() {
     let got = marks_of(&back);
     assert_eq!(got.first(), Some(&DimMarks::default()), "{got:?}");
 }
+
+#[test]
+fn flipped_arrowheads_roundtrip() {
+    let mut d = Drawing::new_imperial();
+    for flip in [[true, false], [false, true], [true, true]] {
+        d.add(&Space::Model, Common::default(), dim(DimKind::Linear { rotation: 0.0 }, DimMarks { flip_arrows: flip, ..DimMarks::default() }))
+            .unwrap();
+    }
+    d.add(&Space::Model, Common::default(), dim(DimKind::Aligned, DimMarks::default())).unwrap();
+    let text = write_dxf(&d);
+    let back = read_dxf(text.as_bytes()).unwrap();
+    assert_eq!(marks_of(&back).iter().map(|m| m.flip_arrows).collect::<Vec<_>>(), vec![[true, false], [false, true], [true, true], [false, false]]);
+    assert_eq!(marks_of(&back), marks_of(&d));
+}

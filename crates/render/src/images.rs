@@ -244,6 +244,31 @@ pub fn keep_only(used: &std::collections::HashSet<&str>) {
     }
 }
 
+/// Look image files up again where they may have changed on disk: cached pixels whose file path
+/// no longer names a file (moved, renamed, deleted) are dropped, and "couldn't be read" results
+/// are forgotten, so the next draw reads the files afresh. Registered pixels (no file behind
+/// them) are kept. REGEN and opening a drawing call this.
+pub fn revalidate() {
+    let Ok(mut c) = cache().lock() else { return };
+    let mut freed = 0usize;
+    let before = c.map.len();
+    c.map.retain(|k, v| match v {
+        None => false,
+        // An absolute path whose file is gone (moved, renamed, deleted). Relative paths follow the
+        // drawing's folder (`add_search_dir`), and keys with no file behind them hold registered
+        // pixels; both are left alone.
+        Some(r) if Path::new(k).is_absolute() && !Path::new(k).is_file() => {
+            freed += r.rgba.len();
+            false
+        }
+        Some(_) => true,
+    });
+    if c.map.len() != before {
+        c.bytes = c.bytes.saturating_sub(freed);
+        c.generation += 1;
+    }
+}
+
 /// Changes whenever cached pixels change (loaded, registered or dropped).
 pub fn generation() -> u64 {
     cache().lock().map(|c| c.generation).unwrap_or(0)

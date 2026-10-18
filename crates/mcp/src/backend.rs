@@ -224,7 +224,11 @@ const HEADLESS_METHODS: &[(&str, &str, &str)] = &[
         "Current prompt (text and bare message), keywords, default, accepted input kinds, busy (a drawing still opening), closePrompt and history tail.",
     ),
     ("engine.execute", "{command, params}", "Run any command with JSON parameters. Never opens a dialog."),
-    ("engine.commands", "", "Every command: id, label, menu path, shortcut, aliases, params doc, enabled."),
+    (
+        "engine.commands",
+        "{filter?}",
+        "Every command (or those whose id, label or an alias contains `filter`): id, label, menu path, shortcut, aliases, params doc, enabled.",
+    ),
     ("drawing.inspect", "{entities?, limit?}", "Drawing summary and entities with handles and geometry."),
     ("ui.render", "{path?, width?, height?, fit?}", "Render the drawing; replies pngBase64."),
     ("app.open", "{path}", "Open a drawing."),
@@ -239,8 +243,12 @@ pub struct Headless {
 }
 
 impl Default for Headless {
+    /// A session with one new drawing whose layouts have their viewport, as the app and NEW start
+    /// one (so plotting Layout1 shows the drawing, not a blank sheet).
     fn default() -> Self {
-        Headless { session: Session::new() }
+        let mut session = Session::empty();
+        session.new_drawing_with_viewports(false);
+        Headless { session }
     }
 }
 
@@ -322,7 +330,14 @@ impl Backend for Headless {
             }
             "cmdline.state" => Ok(state(s)),
             "engine.commands" => {
-                Ok(Value::Array(cadaddy_engine::command_specs().iter().map(|c| serde_json::to_value(c.info(s)).unwrap_or_default()).collect()))
+                let f = p.get("filter").and_then(Value::as_str).unwrap_or("");
+                Ok(Value::Array(
+                    cadaddy_engine::command_specs()
+                        .iter()
+                        .filter(|c| c.matches(f))
+                        .map(|c| serde_json::to_value(c.info(s)).unwrap_or_default())
+                        .collect(),
+                ))
             }
             "drawing.inspect" | "document.inspect" => s.execute("drawing.inspect", &p).map_err(|e| e.to_string()),
             "ui.render" => {

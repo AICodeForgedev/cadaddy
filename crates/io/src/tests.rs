@@ -106,6 +106,7 @@ fn sample() -> Drawing {
             pattern: "ANSI31".into(),
             solid: false,
             loops: vec![HatchLoop {
+                curves: Vec::new(),
                 vertices: vec![PolyVertex::new(Vec2::ZERO), PolyVertex::new(Vec2::new(2.0, 0.0)), PolyVertex::new(Vec2::new(2.0, 2.0))],
                 outer: true,
                 sources: Vec::new(),
@@ -508,6 +509,7 @@ fn pdf_layout_one_to_one_with_viewport() {
             clip: None,
             on: true,
             twist: 0.0,
+            anno_scale: None,
         }),
     )
     .unwrap();
@@ -613,6 +615,7 @@ fn viewport_frozen_layers_roundtrip() {
             clip: None,
             on: true,
             twist: 0.0,
+            anno_scale: None,
         })
     };
     d.add(&paper, Common::default(), vp(2, vec!["Walls".into(), "A B".into()])).unwrap();
@@ -650,6 +653,7 @@ fn frozen_vp_dxf() -> (Drawing, Vec<(String, String)>) {
         clip: None,
         on: true,
         twist: 0.0,
+        anno_scale: None,
     });
     d.add(&paper, Common::default(), vp).unwrap();
     let text = write_dxf(&d);
@@ -774,6 +778,7 @@ fn viewport_layer_colors_roundtrip() {
             clip: None,
             on: true,
             twist: 0.0,
+            anno_scale: None,
         })
     };
     let colors = vec![("Walls".to_string(), Color::Index(5)), ("A B".to_string(), Color::True(cadaddy_color::Rgb(255, 128, 0)))];
@@ -1563,6 +1568,11 @@ fn mleader_is_written_as_multileader() {
         arrow_size: 2.5,
         spline: false,
         block: None,
+        roots: Vec::new(),
+        leader_color: None,
+        leader_linetype: None,
+        arrow: None,
+        text_frame: false,
     };
     d.add(&Space::Model, Default::default(), EntityKind::MLeader(m.clone())).unwrap();
     // MULTILEADER is a 2007 entity (R2000/2004 files get LEADER + MTEXT).
@@ -1702,7 +1712,7 @@ fn gradient_sample() -> (Drawing, Vec<Option<Gradient>>) {
         let h = Hatch {
             pattern: "SOLID".into(),
             solid: true,
-            loops: vec![HatchLoop { vertices: square.clone(), outer: true, sources: Vec::new() }],
+            loops: vec![HatchLoop { curves: Vec::new(), vertices: square.clone(), outer: true, sources: Vec::new() }],
             scale: 1.0,
             angle: 0.0,
             associative: false,
@@ -2128,7 +2138,7 @@ fn svg_hidden_and_defs_subtrees_are_skipped() {
          <rect x=\"1\" y=\"1\" width=\"2\" height=\"2\"/></svg>"
     );
     let d = read(svg.as_bytes(), "skip.svg").unwrap();
-    assert_eq!(kinds(&d), ["Polyline"]);
+    assert_eq!(kinds(&d), ["Text", "Polyline"]);
 }
 
 #[test]

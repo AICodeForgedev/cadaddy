@@ -473,6 +473,12 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::hatchdlg::open_create(app, matches!(id, "gradient" | "gd"));
             Ok(Value::Null)
         }
+        // TOLERANCE typed or from the menu: the Geometric Tolerance dialog (the JSON form and
+        // scripts keep the command line).
+        "tolerance" | "tol" if params.is_null() && app.session.state().is_ok() => {
+            crate::toldlg::open_new(app);
+            Ok(Value::Null)
+        }
         "hatchedit" | "he" if params.is_null() && app.session.state().is_ok() => {
             crate::hatchdlg::open_edit(app);
             Ok(Value::Null)

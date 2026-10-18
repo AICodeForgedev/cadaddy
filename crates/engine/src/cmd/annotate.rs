@@ -74,11 +74,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|s| Ok(Box::new(MLeaderM::new(s)))),
         CommandSpec::new("leader", "Leader", run_leader)
             .alias(&["lead"])
-            .params("{points: [[x,y]...], text?}")
+            .params("{points: [[x,y]...], text? | tolerance?: frame string | {symbol, tol1, tol2, datums, …} (a feature control frame at the end)}")
             .interactive(|_| Ok(Box::new(leader_cmd::LeaderM::new(false)))),
         CommandSpec::new("qleader", "Quick Leader", run_leader)
             .alias(&["le"])
-            .params("{points: [[x,y]...], text?} (typed: up to three points, text width, text lines)")
+            .params("{points: [[x,y]...], text? | tolerance?: frame string | fields} (typed: Settings for the annotation type, up to three points, then the text or the frame)")
             .interactive(|_| Ok(Box::new(leader_cmd::LeaderM::new(true)))),
         CommandSpec::new("dimstyle.update", "Update", run_update)
             .menu(&["Dimension", "Update"])
@@ -430,6 +430,28 @@ fn chain_run(s: &mut Session, p: &Value, baseline: bool) -> Result<Value> {
     Ok(json!({ "handles": out }))
 }
 
+/// A continued (or baseline) dimension from linear dimension `base` to the extension line origin
+/// `next` (the dimension line grip's Continue / Baseline Dimension options).
+pub(crate) fn chain_from(s: &mut Session, base: Handle, next: Vec2, baseline: bool) -> Result<Handle> {
+    let prev = match s.doc()?.entity(base).map(|e| &e.kind) {
+        Some(EntityKind::Dimension(d)) if matches!(d.kind, DimKind::Linear { .. } | DimKind::Aligned) => d.clone(),
+        _ => return Err(EngineError::Other("Not a linear dimension.".into())),
+    };
+    if !next.is_finite() {
+        return Err(EngineError::Other("Requires a valid point.".into()));
+    }
+    let mut k = chained(s, &prev, next, baseline);
+    if assoc_enabled(s)
+        && let EntityKind::Dimension(dm) = &mut k
+    {
+        let ix = crate::assoc::SnapIndex::new(s.doc()?, &s.space());
+        dm.assoc = ix.auto_assoc(&[("p13", dm.p13.xy()), ("p14", dm.p14.xy())]);
+    }
+    let h = s.add_entity(k)?;
+    s.last_dim = Some(h);
+    Ok(h)
+}
+
 fn run_continue(s: &mut Session, p: &Value) -> Result<Value> {
     chain_run(s, p, false)
 }
@@ -477,6 +499,11 @@ fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<
         arrow_size: st.arrow_size * k,
         spline: false,
         block: None,
+        roots: Vec::new(),
+        leader_color: None,
+        leader_linetype: None,
+        arrow: None,
+        text_frame: false,
     }))
 }
 
@@ -487,8 +514,12 @@ fn run_mleader(s: &mut Session, p: &Value) -> Result<Value> {
     if pts.len() < 2 && !(content.leader == crate::LeaderType::None && pts.len() == 1) {
         return Err(bad("mleader", "need an arrowhead and a landing point"));
     }
+    let overrides = super::mleader_content::Overrides::from_json(s, "mleader", p)?;
     let k = mleader_kind(s, &pts, str_param(p, "text").unwrap_or(""), true).ok_or_else(|| bad("mleader", "bad points"))?;
-    let k = super::mleader_content::apply(s, k, &content)?;
+    let mut k = super::mleader_content::apply(s, k, &content)?;
+    if let EntityKind::MLeader(m) = &mut k {
+        overrides.apply(m);
+    }
     Ok(json!({ "handle": s.add_entity(k)?.hex() }))
 }
 
@@ -497,6 +528,17 @@ fn run_leader(s: &mut Session, p: &Value) -> Result<Value> {
     if pts.len() < 2 {
         return Err(bad("leader", "need 2+ points"));
     }
+    // A Tolerance annotation's frame, checked before anything is added.
+    let frame = match p.get("tolerance").filter(|v| !v.is_null()) {
+        Some(tv) => {
+            let text = super::tolerance::frame_param(tv)?;
+            if cadaddy_doc::parse_frame(&text).iter().flatten().all(cadaddy_doc::compartment_is_empty) {
+                return Err(bad("leader", "the feature control frame is empty"));
+            }
+            Some(text)
+        }
+        None => None,
+    };
     let st = style(s);
     let h = s.add_entity(EntityKind::Leader(cadaddy_doc::Leader {
         vertices: pts.iter().map(|q| v3(*q)).collect(),
@@ -505,6 +547,11 @@ fn run_leader(s: &mut Session, p: &Value) -> Result<Value> {
         style: st,
     }))?;
     let mut out = vec![h.hex()];
+    // A Tolerance annotation: a feature control frame at the end of the leader.
+    if let (Some(text), Some(last)) = (frame, pts.last()) {
+        out.push(super::tolerance::add_frame(s, *last, text)?.hex());
+        return Ok(json!({ "handles": out }));
+    }
     if let (Some(t), Some(last)) = (str_param(p, "text"), pts.last()) {
         let th = s.doc()?.dim_style(&style(s)).map(|d| d.text_height).unwrap_or(0.18);
         out.push(
@@ -1629,8 +1676,19 @@ struct MLeaderM {
 impl MLeaderM {
     /// Starts with the order and Options chosen the last time (as AutoCAD does).
     fn new(s: &Session) -> Self {
-        let o = s.last_used.mleader;
+        let mut o = s.last_used.mleader;
         let max_points = o.max_points.clamp(2, MAX_LEADER_POINTS);
+        // The current style's leader type and block content, when it has its own.
+        let st = super::mleader_content::current_style(s);
+        if !st.leader_type.eq_ignore_ascii_case("straight") {
+            o.leader_type = super::mleader_content::style_leader(&st);
+        }
+        let style_block = super::mleader_content::style_block(s, &st);
+        if let Some((_, center)) = &style_block {
+            o.block = true;
+            o.block_center = *center;
+        }
+        let block_name = style_block.map_or_else(|| s.last_used.mleader_block.clone(), |(n, _)| n);
         MLeaderM {
             order: o.order,
             pts: Vec::new(),
@@ -1643,8 +1701,8 @@ impl MLeaderM {
             content: o.content,
             leader_type: o.leader_type,
             // Block content needs a block that still exists.
-            block: o.block && s.doc().is_ok_and(|d| d.block(&s.last_used.mleader_block).is_some()),
-            block_name: s.last_used.mleader_block.clone(),
+            block: o.block && s.doc().is_ok_and(|d| d.block(&block_name).is_some()),
+            block_name,
             block_center: o.block_center,
         }
     }
@@ -1667,6 +1725,7 @@ impl MLeaderM {
         super::mleader_content::Content {
             leader: self.leader_type,
             block: (self.content && self.block).then(|| (self.block_name.clone(), self.block_center)),
+            values: Default::default(),
         }
     }
     /// Leader type None: the one point placed is the content location.
@@ -1898,6 +1957,7 @@ mod tedit;
 
 #[path = "annotate_dimedit.rs"]
 mod dimedit;
+pub(crate) use dimedit::after_command as dimbreak_after_command;
 
 #[cfg(test)]
 #[path = "annotate_tests.rs"]

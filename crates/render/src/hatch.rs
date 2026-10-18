@@ -546,6 +546,7 @@ mod tests {
     #[test]
     fn fill_loops_deduplicates_coincident_loops() {
         let loop1 = HatchLoop {
+            curves: Vec::new(),
             vertices: vec![
                 PolyVertex::new(Vec2::new(0.0, 0.0)),
                 PolyVertex::new(Vec2::new(10.0, 0.0)),
@@ -582,10 +583,12 @@ mod tests {
         let square = |x: f64, y: f64| -> Vec<PolyVertex> {
             [(0.0, 0.0), (0.5, 0.0), (0.5, 0.5), (0.0, 0.5)].iter().map(|(dx, dy)| PolyVertex::new(Vec2::new(x + dx, y + dy))).collect()
         };
-        let mut loops: Vec<HatchLoop> =
-            (0..12_000).map(|i| HatchLoop { vertices: square((i % 120) as f64, (i / 120) as f64), outer: false, sources: vec![] }).collect();
+        let mut loops: Vec<HatchLoop> = (0..12_000)
+            .map(|i| HatchLoop { curves: Vec::new(), vertices: square((i % 120) as f64, (i / 120) as f64), outer: false, sources: vec![] })
+            .collect();
         // Some of the squares again, a hair off.
         loops.extend((0..100).map(|i| HatchLoop {
+            curves: Vec::new(),
             vertices: square((i % 120) as f64 + 1e-5, (i / 120) as f64 - 1e-5),
             outer: false,
             sources: vec![],

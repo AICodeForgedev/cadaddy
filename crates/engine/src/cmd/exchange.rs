@@ -86,7 +86,7 @@ fn attach_spec(path: &str) -> Result<&'static CommandSpec> {
     let id = match extension(path).as_str() {
         "png" | "jpg" | "jpeg" => "imageattach",
         "dwg" | "dxf" => "xattach",
-        "pdf" => return Err(bad("attach", "PDF underlays are not available yet; PDFIMPORT converts the PDF into drawing objects")),
+        "pdf" => "pdfattach",
         "dwf" | "dwfx" | "dgn" => return Err(bad("attach", "DWF and DGN underlays are not available yet")),
         other => return Err(bad("attach", format!("files of type .{other} can't be attached; choose an image (PNG, JPEG) or a drawing (DWG, DXF)"))),
     };
@@ -916,7 +916,7 @@ mod tests {
         // 8 units wide, 4 high (square pixels), lower-left corner at the point.
         assert!((im.u.x * im.size.x - 8.0).abs() < 1e-9 && (im.v.y * im.size.y - 4.0).abs() < 1e-9, "{im:?}");
         assert_eq!((im.insert.x, im.insert.y, im.name.as_str()), (10.0, 5.0, "photo"));
-        for (p, says) in [("plan.pdf", "PDFIMPORT"), ("a.dgn", "not available yet"), ("notes.txt", "can't be attached")] {
+        for (p, says) in [("plan.pdf", "pdfattach"), ("a.dgn", "not available yet"), ("notes.txt", "can't be attached")] {
             let e = s.execute("attach", &json!({ "path": p })).unwrap_err().to_string();
             assert!(e.contains(says), "{p}: {e}");
         }

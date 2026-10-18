@@ -1398,3 +1398,32 @@ menu	Modify	Ändra
 	Material	Material
 	Shadow display	Skuggvisning
 	Center object	Centrumobjekt
+	Move with Dim Line	Flytta med måttlinje
+	Move Text Only	Flytta endast text
+	Above Dim Line	Ovanför måttlinjen
+	Center Vertically	Centrera vertikalt
+	Reset Text Position	Återställ textposition
+	Continue Dimension	Fortsätt måttsättning
+	Baseline Dimension	Baslinjemått
+	Flip Arrow	Vänd pil
+	Lengthen Landing	Förläng avsats
+	Origin Point	Ursprungspunkt
+	Hatch Angle	Skrafferingsvinkel
+	Hatch Scale	Skrafferingsskala
+	Edit Tolerance	Redigera tolerans
+	Geometric Tolerance	Geometrisk tolerans
+	Geometric characteristic	Geometrisk egenskap
+	Material condition	Materialvillkor
+	No symbol	Ingen symbol
+	Projected Tolerance Zone	Projicerad toleranszon
+	Datum Identifier	Referensbeteckning
+	Sym	Sym
+	Tolerance 1	Tolerans 1
+	Tolerance 2	Tolerans 2
+	Datum 1	Referens 1
+	Datum 2	Referens 2
+	Datum 3	Referens 3
+	PDF Underlay...	PDF-underlägg...
+	Clip PDF Underlay	Beskär PDF-underlägg
+	Adjust PDF Underlay	Justera PDF-underlägg
+	PDF Underlay Layers	Lager i PDF-underlägg

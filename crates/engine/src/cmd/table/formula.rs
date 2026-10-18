@@ -360,16 +360,7 @@ pub fn check(formula: &str) -> std::result::Result<(), &'static str> {
 
 /// A cell's text as a number: plain numbers, with thousands separators or a percent sign.
 pub fn number_of(text: &str) -> Option<f64> {
-    let t = text.trim();
-    if t.is_empty() || t.len() > 64 {
-        return None;
-    }
-    let (t, scale) = match t.strip_suffix('%') {
-        Some(rest) => (rest.trim_end(), 0.01),
-        None => (t, 1.0),
-    };
-    let plain: String = t.chars().filter(|c| *c != ',' && *c != ' ').collect();
-    plain.parse::<f64>().ok().filter(|v| v.is_finite()).map(|v| v * scale)
+    cadaddy_doc::number_of(text)
 }
 
 /// The cells `e` reads, as visited ranges; `false` when a range is too large.

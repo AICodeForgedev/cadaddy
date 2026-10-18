@@ -151,6 +151,48 @@ pub struct MTextLayout {
     pub bounds: Bounds2,
     /// Plain text of each laid-out line.
     pub lines: Vec<String>,
+    /// Where each line's characters are, for an editor's caret, selection and hit-testing.
+    pub carets: Vec<CaretLine>,
+}
+
+/// A laid-out line as an editor's caret sees it: where each character starts. Positions are in
+/// the text's own frame (before its rotation, relative to its insertion point), in drawing units.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CaretLine {
+    /// The line's plain text: a tab is a space, a stacked fraction `top/bottom`; the space where
+    /// a line wrapped belongs to no line.
+    pub text: String,
+    /// Index of the paragraph the line belongs to.
+    pub para: usize,
+    /// x where each character of `text` starts.
+    pub xs: Vec<f64>,
+    /// x where the line's last character ends.
+    pub end: f64,
+    /// The baseline's y, and the line's tallest character height.
+    pub baseline: f64,
+    pub height: f64,
+}
+
+/// Where each character of segment `seg` (format `f`, starting at `x`) starts: prefix widths, a
+/// stack's characters spread over its width.
+fn char_starts(seg: &Seg, f: &Fmt, x: f64) -> Vec<f64> {
+    match seg {
+        Seg::Text(t) => {
+            let mut prefix = String::new();
+            t.chars()
+                .map(|c| {
+                    let at = x + text_width(&f.font, &prefix, f.height, f.wf);
+                    prefix.push(c);
+                    at
+                })
+                .collect()
+        }
+        Seg::Stack(..) => {
+            let n = seg_plain(seg).chars().count().max(1);
+            let w = seg_width(seg, f);
+            (0..n).map(|i| x + w * i as f64 / n as f64).collect()
+        }
+    }
 }
 
 /// Inline character format.
@@ -527,6 +569,8 @@ struct Line {
     width: f64,
     max_h: f64,
     text: String,
+    /// Where each character of `text` starts (before the line's alignment shift).
+    xs: Vec<f64>,
     /// Index of the paragraph the line belongs to.
     para: usize,
 }
@@ -609,6 +653,7 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
                         let at = line.text.chars().count();
                         line.items.push(Item { seg: None, fmt: f, x: line.width, w: sw, at });
                         line.text.push(' ');
+                        line.xs.push(line.width);
                     }
                     line.width += sw;
                 }
@@ -618,6 +663,7 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
                     line.max_h = line.max_h.max(fmt(*f).height);
                     let at = line.text.chars().count();
                     line.text.push_str(&seg_plain(sg));
+                    line.xs.extend(char_starts(sg, fmt(*f), line.width));
                     line.items.push(Item { seg: Some(sg.clone()), fmt: *f, x: line.width, w: fw, at });
                     line.width += fw;
                     last_fmt = *f;
@@ -675,6 +721,14 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
             1 => -l.width / 2.0,
             _ => -l.width,
         };
+        out.carets.push(CaretLine {
+            text: l.text.clone(),
+            para: l.para,
+            xs: l.xs.iter().map(|x| x + x0).collect(),
+            end: x0 + l.width,
+            baseline: top + base_y,
+            height: if l.max_h > 0.0 { l.max_h } else { h },
+        });
         for it in &l.items {
             let Some(sg) = &it.seg else { continue };
             let fm = fmt(it.fmt);
@@ -712,6 +766,48 @@ mod tests {
         assert_eq!(plain_mtext("a\\~b\\\\c"), "a b\\c");
         assert_eq!(plain_mtext("\\H2.5x;Big"), "Big");
         assert_eq!(plain_mtext("unterminated \\H2"), "unterminated ");
+    }
+
+    #[test]
+    fn caret_lines_give_every_character_its_place() {
+        // Wrapped: the space at the wrap belongs to no line; each line's characters ascend.
+        let l = layout_mtext("abc def ghi", Vec2::ZERO, 1.0, crate::line_width("abc def", 1.0, 1.0) + 0.01, 1, 0.0, 1.0);
+        assert_eq!(l.carets.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(), vec!["abc def", "ghi"]);
+        for c in &l.carets {
+            assert_eq!(c.xs.len(), c.text.chars().count());
+            assert!(c.xs.windows(2).all(|w| w[0] < w[1]), "{:?}", c.xs);
+            assert!(c.xs.last().is_some_and(|x| *x < c.end));
+        }
+        let (a, b) = (&l.carets[0], &l.carets[1]);
+        assert!(a.xs[0].abs() < 1e-9 && (a.end - crate::line_width("abc def", 1.0, 1.0)).abs() < 1e-9);
+        let d_at = crate::line_width("abc", 1.0, 1.0) + crate::space_width(&TextFont::Stroke, 1.0, 1.0);
+        assert!((a.xs[4] - d_at).abs() < 1e-9, "d starts after `abc` and a word space: {} vs {d_at}", a.xs[4]);
+        assert!(b.baseline < a.baseline && b.para == 0);
+        // Centred: each line centred on the insertion point.
+        let l = layout_mtext("ab\\Pabcd", Vec2::ZERO, 1.0, 0.0, 2, 0.0, 1.0);
+        for c in &l.carets {
+            assert!((c.xs[0] + c.end).abs() < 1e-9, "{c:?}");
+        }
+        assert_eq!(l.carets[1].para, 1);
+    }
+
+    #[test]
+    fn caret_lines_follow_tabs_indents_and_justification() {
+        // A tab stop at 5: the character after the tab starts there.
+        let l = layout_mtext("\\pxt5;a\tb", Vec2::ZERO, 1.0, 20.0, 1, 0.0, 1.0);
+        let c = &l.carets[0];
+        assert_eq!(c.text, "a b");
+        assert!((c.xs[2] - 5.0).abs() < 1e-9, "{:?}", c.xs);
+        // A first-line indent of 2.
+        let l = layout_mtext("\\pi2;word", Vec2::ZERO, 1.0, 20.0, 1, 0.0, 1.0);
+        assert!((l.carets[0].xs[0] - 2.0).abs() < 1e-9);
+        // Justified: the first line's words spread to the full width, its last character's end at
+        // the right edge.
+        let w = crate::line_width("aa bb cc", 1.0, 1.0) + 0.5;
+        let l = layout_mtext("\\pqj;aa bb cc dd", Vec2::ZERO, 1.0, w, 1, 0.0, 1.0);
+        let c = &l.carets[0];
+        assert!((c.end - w).abs() < 1e-6, "{} vs {w}", c.end);
+        assert!(c.xs.windows(2).all(|w| w[0] < w[1]));
     }
 
     #[test]

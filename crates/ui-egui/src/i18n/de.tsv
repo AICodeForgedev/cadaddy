@@ -1190,3 +1190,32 @@
 	Material	Material
 	Shadow display	Schattenanzeige
 	Center object	Mittelpunktobjekt
+	Move with Dim Line	Mit Maßlinie verschieben
+	Move Text Only	Nur Text verschieben
+	Above Dim Line	Über der Maßlinie
+	Center Vertically	Vertikal zentrieren
+	Reset Text Position	Textposition zurücksetzen
+	Continue Dimension	Maß fortsetzen
+	Baseline Dimension	Basislinienmaß
+	Flip Arrow	Pfeil umkehren
+	Lengthen Landing	Absatz verlängern
+	Origin Point	Ursprungspunkt
+	Hatch Angle	Schraffurwinkel
+	Hatch Scale	Schraffurmaßstab
+	Edit Tolerance	Toleranz bearbeiten
+	Geometric Tolerance	Form- und Lagetoleranz
+	Geometric characteristic	Geometrische Eigenschaft
+	Material condition	Materialbedingung
+	No symbol	Kein Symbol
+	Projected Tolerance Zone	Projizierte Toleranzzone
+	Datum Identifier	Bezugskennzeichen
+	Sym	Sym
+	Tolerance 1	Toleranz 1
+	Tolerance 2	Toleranz 2
+	Datum 1	Bezug 1
+	Datum 2	Bezug 2
+	Datum 3	Bezug 3
+	PDF Underlay...	PDF-Unterlage...
+	Clip PDF Underlay	PDF-Unterlage zuschneiden
+	Adjust PDF Underlay	PDF-Unterlage anpassen
+	PDF Underlay Layers	Layer der PDF-Unterlage

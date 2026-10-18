@@ -552,6 +552,56 @@ pub fn sections(tags: &[Tag]) -> Vec<Section> {
     out
 }
 
+/// [`sections`], taking the tags instead of copying them: a large file's text is then held once,
+/// not twice (reading a 40 MB DXF peaked at four times its loaded size).
+pub fn sections_owned(tags: Vec<Tag>) -> Vec<Section> {
+    let mut out = Vec::new();
+    let mut current: Option<Section> = None;
+    let mut want_name = false;
+    for t in tags {
+        if let Some(sec) = &mut current {
+            // The tag after SECTION is its name (code 2); like `sections`, it is never a tag of
+            // the section even when it isn't one.
+            if want_name {
+                want_name = false;
+                if t.code == 2 {
+                    sec.name = t.str();
+                }
+                continue;
+            }
+            if t.code == 0 && t.str() == "ENDSEC" {
+                out.extend(current.take());
+            } else {
+                sec.tags.push(t);
+            }
+        } else if t.code == 0 && t.str() == "SECTION" {
+            current = Some(Section { name: String::new(), tags: Vec::new() });
+            want_name = true;
+        }
+    }
+    // A file cut off inside a section keeps what it has, as `sections` does.
+    out.extend(current);
+    out
+}
+
+/// [`records`], borrowing each record's tags instead of copying them.
+pub fn record_slices(tags: &[Tag]) -> Vec<(String, &[Tag])> {
+    let mut out: Vec<(String, &[Tag])> = Vec::new();
+    let mut start: Option<(String, usize)> = None;
+    for (i, t) in tags.iter().enumerate() {
+        if t.code == 0 {
+            if let Some((k, s)) = start.take() {
+                out.push((k, tags.get(s..i).unwrap_or(&[])));
+            }
+            start = Some((t.str(), i + 1));
+        }
+    }
+    if let Some((k, s)) = start {
+        out.push((k, tags.get(s..).unwrap_or(&[])));
+    }
+    out
+}
+
 /// Split a run of tags into records starting at each code-0 tag: (type, tags after the 0).
 pub fn records(tags: &[Tag]) -> Vec<(String, Vec<Tag>)> {
     let mut out: Vec<(String, Vec<Tag>)> = Vec::new();
@@ -568,6 +618,40 @@ pub fn records(tags: &[Tag]) -> Vec<(String, Vec<Tag>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owned_sections_and_record_slices_match_the_copying_ones() {
+        let tags = vec![
+            Tag::s(0, "SECTION"),
+            Tag::s(2, "HEADER"),
+            Tag::s(9, "$ACADVER"),
+            Tag::s(1, "AC1032"),
+            Tag::s(0, "ENDSEC"),
+            Tag::s(0, "SECTION"),
+            Tag::s(2, "ENTITIES"),
+            Tag::s(0, "LINE"),
+            Tag::s(8, "0"),
+            Tag::s(0, "CIRCLE"),
+            Tag::s(8, "A"),
+            Tag::s(0, "ENDSEC"),
+            Tag::s(0, "SECTION"),
+            Tag::s(2, "OBJECTS"),
+            Tag::s(0, "DICTIONARY"),
+        ];
+        let copied = sections(&tags);
+        let owned = sections_owned(tags.clone());
+        assert_eq!(owned.len(), copied.len());
+        for (a, b) in owned.iter().zip(&copied) {
+            assert_eq!((&a.name, &a.tags), (&b.name, &b.tags));
+        }
+        let ents = &owned[1].tags;
+        let slices = record_slices(ents);
+        let recs = records(ents);
+        assert_eq!(slices.len(), recs.len());
+        for ((ka, ta), (kb, tb)) in slices.iter().zip(&recs) {
+            assert_eq!((ka, *ta), (kb, tb.as_slice()));
+        }
+    }
 
     #[test]
     fn ascii_roundtrip() {

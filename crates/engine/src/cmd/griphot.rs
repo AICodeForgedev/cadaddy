@@ -15,7 +15,7 @@ use super::gripcmds::stretch_grips;
 use super::helpers::line;
 use super::machines::number;
 use super::modify::transform_entities;
-use crate::grips::{GripAction, GripMode, grip_action, grip_actions, mode_matrix};
+use crate::grips::{CYCLE_OPTIONS, GripAction, GripMode, grip_action, grip_actions, mode_matrix};
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Running, Session, Step};
 
 /// At most this many grips are hot at once (input-derived: a cap on the work per edit).
@@ -170,6 +170,53 @@ impl GripEdit {
         }
     }
 
+    /// The options Ctrl cycles through (one hot grip, whatever the mode): those that take a point
+    /// and the mode options; the ones that act at once aren't cycled into.
+    fn cycle_options(&self, s: &Session) -> Vec<GripAction> {
+        match self.hot.as_slice() {
+            [(h, i)] => s
+                .doc()
+                .ok()
+                .and_then(|d| d.entity(*h))
+                .map(|e| grip_actions(&e.kind, *i).into_iter().filter(|a| a.needs_point() || a.mode().is_some()).collect())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Ctrl: the hot grip's next option, after the last one STRETCH again.
+    fn cycle(&mut self, s: &mut Session) -> Step {
+        let opts = self.cycle_options(s);
+        if opts.is_empty() {
+            return Step::Continue;
+        }
+        let cur = match self.ask {
+            Ask::Action(a) => opts.iter().position(|o| *o == a),
+            _ => opts.iter().position(|o| o.mode() == Some(self.mode)),
+        };
+        match opts.get(cur.map_or(0, |c| c + 1)) {
+            Some(a) => {
+                match a.mode() {
+                    Some(m) => {
+                        self.mode = m;
+                        self.ask = Ask::Mode;
+                    }
+                    None => {
+                        self.mode = GripMode::Stretch;
+                        self.ask = Ask::Action(*a);
+                    }
+                }
+                s.echo(a.title());
+            }
+            None => {
+                self.mode = GripMode::Stretch;
+                self.ask = Ask::Mode;
+                s.echo(self.label());
+            }
+        }
+        Step::Continue
+    }
+
     /// The object after the multifunctional `action` with the point `to` or value `value`.
     fn acted(&self, s: &Session, action: GripAction, to: Option<Vec2>, value: Option<f64>) -> Option<(Handle, EntityKind)> {
         let &(h, i) = self.hot.first()?;
@@ -179,11 +226,8 @@ impl GripEdit {
 
     /// Apply a multifunctional option; the grip edit ends.
     fn act(&mut self, s: &mut Session, action: GripAction, to: Option<Vec2>, value: Option<f64>) -> Result<Step> {
-        if self.hot.first().is_some_and(|(h, _)| super::curves::is_locked(s, *h)) {
-            return Err(other("The object is on a locked layer."));
-        }
-        let (h, k) = self.acted(s, action, to, value).ok_or_else(|| other("That would make a degenerate object."))?;
-        s.doc_mut()?.modify_entity(h, |e| e.kind = k)?;
+        let &(h, i) = self.hot.first().ok_or_else(|| other("no grip"))?;
+        super::gripcmds::apply_option(s, h, i, action, to, value)?;
         Ok(Step::Done)
     }
 
@@ -191,7 +235,7 @@ impl GripEdit {
         match i {
             Input::Point(p) => self.act(s, action, Some(p), None),
             Input::Deferred(d) => self.act(s, action, Some(d.at), None),
-            Input::Text(t) if matches!(action, GripAction::Lengthen | GripAction::Radius) => {
+            Input::Text(t) if action.takes_value() => {
                 let v = number(&t).filter(|v| v.is_finite()).ok_or_else(|| other("Requires a number or point."))?;
                 self.act(s, action, None, Some(v))
             }
@@ -252,7 +296,12 @@ impl GripEdit {
                     Ok(Step::Continue)
                 }
                 "eXit" => Ok(Step::Done),
-                other_kw => match self.actions(s).into_iter().find(|a| a.keyword() == other_kw) {
+                other_kw => match self.cycle_options(s).into_iter().chain(self.actions(s)).find(|a| a.keyword() == other_kw) {
+                    Some(a) if a.mode().is_some() => {
+                        self.mode = a.mode().unwrap_or_default();
+                        s.echo(a.title());
+                        Ok(Step::Continue)
+                    }
                     Some(a) if a.needs_point() => {
                         self.ask = Ask::Action(a);
                         s.echo(a.title());
@@ -352,14 +401,8 @@ impl Interactive for GripEdit {
             Ask::RefNew(_) if self.mode == GripMode::Rotate => Prompt::new("Specify new angle", Accept::POINT_OR_NUMBER).base(base),
             Ask::RefNew(_) => Prompt::new("Specify new length", Accept::POINT_OR_NUMBER).base(base),
             Ask::Action(a) => {
-                let (msg, accept) = match a {
-                    GripAction::AddVertex => ("Specify new vertex point", Accept::POINT),
-                    GripAction::ToArc => ("Specify a point on the arc", Accept::POINT),
-                    GripAction::Lengthen => ("Specify end point or length change", Accept::POINT_OR_NUMBER),
-                    GripAction::Radius => ("Specify radius", Accept::POINT_OR_NUMBER),
-                    GripAction::RemoveVertex | GripAction::ToLine => ("", Accept::POINT),
-                };
-                Prompt::new(format!("{} {msg}", a.title()), accept).kw(&["eXit"]).base(base)
+                let accept = if a.takes_value() { Accept::POINT_OR_NUMBER } else { Accept::POINT };
+                Prompt::new(format!("{} {}", a.title(), a.prompt()), accept).kw(&["eXit"]).base(base)
             }
             Ask::Mode => {
                 let (msg, accept, kw): (&str, Accept, &[&str]) = match self.mode {
@@ -409,6 +452,9 @@ impl Interactive for GripEdit {
                 Input::Enter => Ok(Step::Done),
                 _ => Err(other("Requires a point on a grip.")),
             };
+        }
+        if matches!(&i, Input::Keyword(k) if k == CYCLE_OPTIONS) {
+            return Ok(self.cycle(s));
         }
         match self.ask {
             Ask::Mode => self.mode_input(s, i),

@@ -493,7 +493,8 @@ pub(crate) fn arclen_xdata(center: cadaddy_geom::Vec3) -> Vec<Tag> {
 
 /// Dimension marks as CADaddy xdata (`1000 MARKS`, `1002 {`, items, `1002 }`): `1000 JOGLINE`
 /// and a point; `1000 JOGGED`, the centre and the jog point; `1000 BREAK`, a point, `1040` size
-/// and `1070` auto; `1000 INSPECT`, `1070` shape, `1000` label and `1000` rate. Points are
+/// and `1070` auto; `1000 INSPECT`, `1070` shape, `1000` label and `1000` rate; `1000 FLIP`,
+/// `1070` flipped arrowheads (bit 1 the first, bit 2 the second). Points are
 /// `1010/1020/1030`. The oblique angle is the standard group 52 instead.
 pub(crate) fn marks_xdata(m: &cadaddy_doc::DimMarks) -> Vec<Tag> {
     let pt = |v: &mut Vec<Tag>, p: cadaddy_geom::Vec3| v.extend([Tag::f(1010, p.x), Tag::f(1020, p.y), Tag::f(1030, p.z)]);
@@ -512,8 +513,17 @@ pub(crate) fn marks_xdata(m: &cadaddy_doc::DimMarks) -> Vec<Tag> {
         pt(&mut v, b.at);
         v.extend([Tag::f(1040, b.size), Tag::i(1070, i64::from(b.auto))]);
     }
+    // The objects automatic breaks follow, as database handles (1005: readers that renumber
+    // handles renumber these too).
+    for h in m.break_objects.iter().take(MAX_XDATA_ITEMS / 4) {
+        v.extend([Tag::s(1000, "BREAKOBJ"), Tag::s(1005, h.hex())]);
+    }
     if let Some(i) = &m.inspect {
         v.extend([Tag::s(1000, "INSPECT"), Tag::i(1070, i64::from(i.shape)), Tag::s(1000, i.label.clone()), Tag::s(1000, i.rate.clone())]);
+    }
+    let [f1, f2] = m.flip_arrows;
+    if f1 || f2 {
+        v.extend([Tag::s(1000, "FLIP"), Tag::i(1070, i64::from(f1) | (i64::from(f2) << 1))]);
     }
     if v.is_empty() {
         return v;
@@ -549,6 +559,19 @@ pub(crate) fn read_marks(tags: &[Tag]) -> cadaddy_doc::DimMarks {
                 let auto = list.get(i + 5).filter(|t| t.code == 1070).is_some_and(|t| t.i64() != 0);
                 if let (Some(at), Some(size)) = (point(i + 1), size) {
                     m.breaks.push(cadaddy_doc::DimBreak { at, size, auto });
+                }
+            }
+            "FLIP" => {
+                if let Some(bits) = list.get(i + 1).filter(|t| t.code == 1070).map(Tag::i64) {
+                    m.flip_arrows = [bits & 1 != 0, bits & 2 != 0];
+                }
+            }
+            "BREAKOBJ" => {
+                if let Some(h) = list.get(i + 1).filter(|t| t.code == 1005).and_then(|t| cadaddy_doc::Handle::parse_hex(t.str().trim()))
+                    && h.0 != 0
+                    && !m.break_objects.contains(&h)
+                {
+                    m.break_objects.push(h);
                 }
             }
             "INSPECT" => {
@@ -835,6 +858,15 @@ pub(crate) struct AnnoPayload {
     blocks: Vec<String>,
     #[serde(default)]
     objects: Vec<AnnoObject>,
+    /// Layout viewports with their own annotation scale.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    viewports: Vec<AnnoViewport>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct AnnoViewport {
+    handle: String,
+    scale: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -859,10 +891,19 @@ pub(crate) fn anno_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
         .filter(|e| cadaddy_doc::is_annotative(e))
         .map(|e| AnnoObject { handle: e.handle.hex(), scales: e.common.anno_scales.clone() })
         .collect();
-    if cannoscale == "1:1" && annoallvisible == 1 && blocks.is_empty() && objects.is_empty() {
+    let viewports: Vec<AnnoViewport> = d
+        .layouts
+        .iter()
+        .flat_map(|l| l.entities.iter())
+        .filter_map(|e| match &e.kind {
+            cadaddy_doc::EntityKind::Viewport(v) => v.anno_scale.as_ref().map(|sc| AnnoViewport { handle: e.handle.hex(), scale: sc.clone() }),
+            _ => None,
+        })
+        .collect();
+    if cannoscale == "1:1" && annoallvisible == 1 && blocks.is_empty() && objects.is_empty() && viewports.is_empty() {
         return None;
     }
-    let p = AnnoPayload { version: 1, cannoscale: Some(cannoscale), annoallvisible: Some(annoallvisible), blocks, objects };
+    let p = AnnoPayload { version: 1, cannoscale: Some(cannoscale), annoallvisible: Some(annoallvisible), blocks, objects, viewports };
     Some(json_chunks(&serde_json::to_string(&p).ok()?))
 }
 
@@ -872,7 +913,8 @@ pub(crate) fn parse_anno(text: &str) -> Option<AnnoPayload> {
         return None;
     }
     let p: AnnoPayload = serde_json::from_str(text).ok()?;
-    (p.version == 1 && p.objects.len() <= MAX_ANNO_OBJECTS && p.blocks.len() <= MAX_ANNO_OBJECTS).then_some(p)
+    (p.version == 1 && p.objects.len() <= MAX_ANNO_OBJECTS && p.blocks.len() <= MAX_ANNO_OBJECTS && p.viewports.len() <= MAX_ANNO_OBJECTS)
+        .then_some(p)
 }
 
 /// Apply a parsed annotative scaling record: variables, annotative blocks and each object's
@@ -903,6 +945,16 @@ pub(crate) fn apply_anno(d: &mut cadaddy_doc::Drawing, p: AnnoPayload) {
         let _ = d.modify_entity(h, |e| {
             if cadaddy_doc::can_be_annotative(&e.kind) {
                 e.common.anno_scales = scales;
+            }
+        });
+    }
+    // A viewport's own annotation scale, when it names a scale of the list.
+    for v in p.viewports {
+        let Some(h) = Handle::parse_hex(&v.handle) else { continue };
+        let Some(name) = d.anno_scale(&v.scale).map(|sc| sc.name.clone()) else { continue };
+        let _ = d.modify_entity(h, |e| {
+            if let cadaddy_doc::EntityKind::Viewport(vp) = &mut e.kind {
+                vp.anno_scale = Some(name);
             }
         });
     }

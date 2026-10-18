@@ -1163,3 +1163,32 @@
 	Material	Matériau
 	Shadow display	Affichage des ombres
 	Center object	Objet de centre
+	Move with Dim Line	Déplacer avec la ligne de cote
+	Move Text Only	Déplacer le texte uniquement
+	Above Dim Line	Au-dessus de la ligne de cote
+	Center Vertically	Centrer verticalement
+	Reset Text Position	Réinitialiser la position du texte
+	Continue Dimension	Continuer la cote
+	Baseline Dimension	Cote de ligne de base
+	Flip Arrow	Inverser la flèche
+	Lengthen Landing	Allonger le palier
+	Origin Point	Point d’origine
+	Hatch Angle	Angle de hachures
+	Hatch Scale	Échelle de hachures
+	Edit Tolerance	Modifier la tolérance
+	Geometric Tolerance	Tolérance géométrique
+	Geometric characteristic	Caractéristique géométrique
+	Material condition	Condition de matière
+	No symbol	Aucun symbole
+	Projected Tolerance Zone	Zone de tolérance projetée
+	Datum Identifier	Identificateur de référence
+	Sym	Sym
+	Tolerance 1	Tolérance 1
+	Tolerance 2	Tolérance 2
+	Datum 1	Référence 1
+	Datum 2	Référence 2
+	Datum 3	Référence 3
+	PDF Underlay...	Calque sous-jacent PDF...
+	Clip PDF Underlay	Découper le calque sous-jacent PDF
+	Adjust PDF Underlay	Ajuster le calque sous-jacent PDF
+	PDF Underlay Layers	Calques du calque sous-jacent PDF

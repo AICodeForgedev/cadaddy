@@ -1,7 +1,8 @@
 //! Autosave and Drawing Recovery in the app. The engine decides what to write and writes it
 //! ([`cadaddy_engine::autosave`]); this runs it every frame, keeps SAVETIME and SAVEFILEPATH with
 //! the preferences, and shows the Drawing Recovery list after a crash: each autosaved drawing can
-//! be opened (as an unsaved copy) or discarded. On the web there is no autosave yet.
+//! be opened (as an unsaved copy) or discarded. On the web autosaves go to browser storage
+//! ([`autosave::store`]) and the ones a closed or crashed tab left are offered on the next visit.
 
 use cadaddy_engine::autosave::{self, Recoverable};
 use egui::{RichText, vec2};
@@ -61,11 +62,29 @@ impl CadApp {
         self.autosave = Some(saver);
     }
 
+    /// Turn autosave on into the store the host installed ([`autosave::store::set_store`], the
+    /// web build's browser storage); the autosaves of tabs that stopped are listed for Drawing
+    /// Recovery.
+    pub fn enable_store_autosave(&mut self, instance: String) {
+        if autosave::store::store().is_none() {
+            return;
+        }
+        autosave::store::prune_store_locks();
+        self.recovery.items = autosave::store::recoverable_store(&instance);
+        self.autosave = Some(autosave::Autosaver::new(instance));
+    }
+
     /// Open recovery item `i` as an unsaved copy. Its autosave file stays until that drawing is
     /// saved or closed, so a second crash doesn't lose it.
     pub fn recover_item(&mut self, i: usize) -> Result<(), String> {
         let item = self.recovery.items.get(i).cloned().ok_or("no such recovery file")?;
-        let r = self.run("recover", json!({ "path": item.path, "copy": true, "title": item.drawing }))?;
+        let params = if autosave::store::is_store_path(&item.path) {
+            let bytes = autosave::store::read_store(&item.path).ok_or("the autosave can't be read")?;
+            json!({ "data": cadaddy_engine::cmd::file::base64_encode(&bytes), "name": "autosave.dxf", "copy": true, "title": item.drawing })
+        } else {
+            json!({ "path": item.path, "copy": true, "title": item.drawing })
+        };
+        let r = self.run("recover", params)?;
         self.recovery.items.remove(i);
         if let (Some(saver), Some(uid)) = (&mut self.autosave, r.get("uid").and_then(Value::as_u64)) {
             saver.adopt(&self.session, uid, &item.path);
@@ -78,17 +97,29 @@ impl CadApp {
     /// Delete recovery item `i`'s file.
     pub fn discard_item(&mut self, i: usize) {
         if i < self.recovery.items.len() {
-            let _item = self.recovery.items.remove(i);
-            #[cfg(not(target_arch = "wasm32"))]
-            autosave::discard(&_item.path);
+            let item = self.recovery.items.remove(i);
+            if autosave::store::is_store_path(&item.path) {
+                autosave::store::discard_store(&item.path);
+            } else {
+                #[cfg(not(target_arch = "wasm32"))]
+                autosave::discard(&item.path);
+            }
         }
     }
 
     /// Every frame: autosave what is due, and wake up when the next one is.
     pub fn autosave_tick(&mut self, _ctx: &egui::Context) {
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(wait) = self.autosave.as_mut().and_then(|s| s.tick(&self.session)) {
-            _ctx.request_repaint_after(wait);
+        if autosave::store::store().is_some() {
+            if let Some(s) = self.autosave.as_mut() {
+                s.tick_store(&self.session);
+                // Wake up to autosave and keep the lock fresh while the page sits idle.
+                _ctx.request_repaint_after(std::time::Duration::from_secs(30));
+            }
+        } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(wait) = self.autosave.as_mut().and_then(|s| s.tick(&self.session)) {
+                _ctx.request_repaint_after(wait);
+            }
         }
     }
 
@@ -107,9 +138,15 @@ impl CadApp {
 
     /// The app closes normally: this app's autosave files are not needed any more.
     pub fn shutdown_autosave(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(s) = &mut self.autosave {
-            s.shutdown();
+        if autosave::store::store().is_some() {
+            if let Some(s) = &mut self.autosave {
+                s.shutdown_store();
+            }
+        } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(s) = &mut self.autosave {
+                s.shutdown();
+            }
         }
     }
 }

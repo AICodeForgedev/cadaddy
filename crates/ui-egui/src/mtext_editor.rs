@@ -3,12 +3,20 @@
 //! underline, overline, colour, alignment, lists, tabs) and a ruler for the paragraph's indents
 //! and tab stops. The text and its formats live in the engine's
 //! [`cadaddy_engine::mtext_edit::Formatted`]; this file only draws and forwards edits.
-
-use std::sync::Arc;
+//!
+//! The box shows the text laid out as the MTEXT object will be: the final object's own layout
+//! ([`cadaddy_render::layout_mtext_entity`]: its font and weights, height, width, columns,
+//! justification, indents, tab stops and line spacing), drawn at the box's scale. The caret, the
+//! selection and the pointer follow that layout ([`caret::CaretMap`]); the keyboard goes to an
+//! egui text field that isn't shown (typing, deleting, Left/Right, the clipboard, undo).
 
 use cadaddy_engine::mtext_edit::{CharFmt, Flag, Formatted, ListStyle, MTextColor, ParaAlign, TabKind};
-use egui::text::{CCursor, CCursorRange, LayoutJob};
-use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Shape, Stroke, TextFormat, pos2, vec2};
+use cadaddy_fonts::MTextLayout;
+use cadaddy_geom::Vec2;
+use egui::text::{CCursor, CCursorRange};
+use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, pos2, vec2};
+
+mod caret;
 
 use crate::CadApp;
 use crate::theme::Tokens;
@@ -39,6 +47,10 @@ struct State {
     /// The text box has taken the keyboard once (with the caret at the end): typing goes into
     /// the drawing's text, never to the command line behind the editor.
     focused: bool,
+    /// Up/Down keep the caret's x across lines of different lengths (text frame).
+    keep_x: Option<f64>,
+    /// Where a pointer drag in the box started (caret position).
+    anchor: Option<usize>,
 }
 
 fn state_id() -> egui::Id {
@@ -82,11 +94,20 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
                 fmt.base_font = f;
             }
         }
-        State { fmt, typing: CharFmt::default(), typing_at: 0, top: 70.0, sel: (0, 0), caret: None, focused: false }
+        State { fmt, typing: CharFmt::default(), typing_at: 0, top: 70.0, sel: (0, 0), caret: None, focused: false, keep_x: None, anchor: None }
     });
     let base_h = if mt.height > 0.0 { mt.height } else { 0.2 };
-    let px = ((base_h * scale) as f32).clamp(MIN_PX, MAX_PX);
-    let width = if mt.width > 0.0 { ((mt.width * scale) as f32).clamp(280.0, rect.width().max(280.0) * 0.9) } else { 380.0 };
+    // The text as the object will lay it out, and the box's scale: a readable size for the text
+    // height, smaller when the object is wider than the screen allows.
+    let lay = layout(app.session.doc().ok(), &mt, &st.fmt);
+    let content_w = if lay.bounds.is_empty() { 0.0 } else { lay.bounds.width() }.max(mt.width.max(0.0));
+    let mut k = f64::from(((base_h * scale) as f32).clamp(MIN_PX, MAX_PX)) / base_h;
+    let max_w = f64::from(rect.width().max(280.0) * 0.9);
+    if content_w * k > max_w && content_w > 0.0 {
+        k = max_w / content_w;
+    }
+    let px = (base_h * k) as f32;
+    let width = ((content_w * k) as f32 + 2.0 * BOX_MARGIN).max(280.0);
     // The box's top-left corner on screen (rotation is ignored while editing).
     let code = usize::from(mt.attach.clamp(1, 9) - 1);
     let (col, row) = ((code % 3) as f64, (code / 3) as f64);
@@ -105,7 +126,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
             toolbar(ui, &mut st, base_h);
             ruler(ui, &mut st, px, width, base_h);
             st.top = ui.cursor().top() - y0;
-            text_box(ui, &mut st, base_h, px, width, &t);
+            text_box(ui, &mut st, &lay, k, width, &t);
             ui.horizontal(|ui| {
                 ui.add_space(4.0);
                 if ui.button(crate::tl!("OK")).clicked() {
@@ -392,81 +413,165 @@ fn ruler(ui: &mut egui::Ui, st: &mut State, px: f32, width: f32, base_h: f64) {
     bg.on_hover_text(crate::tl!("Click the ruler to add a tab stop, right-click to remove one"));
 }
 
-fn text_box(ui: &mut egui::Ui, st: &mut State, base_h: f64, px: f32, width: f32, t: &Tokens) {
-    let id = edit_id();
-    if let Some(at) = st.caret.take()
-        && let Some(mut s) = egui::TextEdit::load_state(ui.ctx(), id)
-    {
-        s.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(at))));
-        s.store(ui.ctx(), id);
+/// The editor's text laid out as the MTEXT object will be (at the origin, unrotated: the text's
+/// own frame), with the drawing's text style when there is a drawing.
+fn layout(d: Option<&cadaddy_engine::doc::Drawing>, mt: &cadaddy_engine::doc::MText, fmt: &Formatted) -> MTextLayout {
+    let mut t = mt.clone();
+    t.contents = fmt.to_contents();
+    t.insert = cadaddy_geom::Vec3::ZERO;
+    t.rotation = 0.0;
+    match d {
+        Some(d) => cadaddy_render::layout_mtext_entity(d, &t),
+        None => cadaddy_fonts::layout_mtext(&t.contents, Vec2::ZERO, t.height, t.width, t.attach, 0.0, t.line_spacing),
     }
-    let fmt = st.fmt.clone();
-    let default_color = t.text;
-    let mut layouter = move |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| -> Arc<egui::Galley> {
-        let mut job = LayoutJob::default();
-        job.wrap.max_width = wrap;
-        let s = text.as_str();
-        let mut run = String::new();
-        let mut cur: Option<CharFmt> = None;
-        let flush = |job: &mut LayoutJob, run: &mut String, f: &CharFmt| {
-            if run.is_empty() {
-                return;
-            }
-            let size = f.height.map_or(px, |h| (px * (h / base_h) as f32).clamp(6.0, 120.0));
-            let color = f.color.map_or(default_color, color32);
-            job.append(
-                run,
-                0.0,
-                TextFormat {
-                    font_id: FontId::proportional(size),
-                    color,
-                    italics: f.italic,
-                    underline: if f.underline { Stroke::new(1.0, color) } else { Stroke::NONE },
-                    // The editor has one weight of each font: bold is shown wider.
-                    extra_letter_spacing: if f.bold { size * 0.06 } else { 0.0 },
-                    ..TextFormat::default()
-                },
-            );
-            run.clear();
-        };
-        for (i, c) in s.chars().enumerate() {
-            let f = fmt.fmt_at(i);
-            if cur.as_ref() != Some(&f) {
-                if let Some(p) = &cur {
-                    flush(&mut job, &mut run, p);
-                }
-                cur = Some(f);
-            }
-            run.push(c);
-        }
-        if let Some(p) = &cur {
-            flush(&mut job, &mut run, p);
-        }
-        ui.fonts_mut(|f| f.layout_job(job))
-    };
+}
+
+/// Margin round the text in the box, in points.
+const BOX_MARGIN: f32 = 6.0;
+
+/// The text box: the laid-out text at `k` points per drawing unit, the selection and the caret
+/// placed on it, the pointer and Up/Down/Home/End handled on it; the keyboard otherwise goes to
+/// a text field off screen.
+fn text_box(ui: &mut egui::Ui, st: &mut State, lay: &MTextLayout, k: f64, width: f32, t: &Tokens) {
+    let id = edit_id();
     let mut buf = st.fmt.text().to_string();
-    let out = egui::TextEdit::multiline(&mut buf)
-        .id(id)
-        .desired_width(width)
-        .desired_rows(5)
-        .margin(egui::Margin::symmetric(4, 4))
-        .lock_focus(true)
-        .char_limit(cadaddy_engine::mtext_edit::MAX_CHARS)
-        .layouter(&mut layouter)
-        .show(ui);
-    if !st.focused || (!out.response.has_focus() && buf.is_empty() && st.fmt.is_empty()) {
-        out.response.request_focus();
+    let map = caret::CaretMap::new(&buf, lay.carets.clone());
+    // The text frame on screen: the layout's top-left corner at the box's, plus a margin.
+    let (bx0, top) = if lay.bounds.is_empty() { (0.0, 0.0) } else { (lay.bounds.min.x, lay.bounds.max.y) };
+    let line_px = (lay.carets.first().map_or(1.0, |l| l.height) * k * 5.0 / 3.0) as f32;
+    let content_h = if lay.bounds.is_empty() { 0.0 } else { (lay.bounds.height() * k) as f32 };
+    let height = (content_h + line_px).max(line_px * 5.0) + 2.0 * BOX_MARGIN;
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
+    let origin = rect.min + vec2(BOX_MARGIN, BOX_MARGIN);
+    let to_screen = |q: Vec2| pos2(origin.x + ((q.x - bx0) * k) as f32, origin.y + ((top - q.y) * k) as f32);
+    let to_local = |p: Pos2| Vec2::new(bx0 + f64::from(p.x - origin.x) / k, top - f64::from(p.y - origin.y) / k);
+
+    // The caret and selection as the field has them, changed by the pointer and the keys the
+    // layout answers before the field sees the frame's input.
+    let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+    let n = buf.chars().count();
+    let mut range = state.cursor.char_range().map_or((n, n), |r| (r.secondary.index.0.min(n), r.primary.index.0.min(n)));
+    let mut moved = false;
+    if let Some(at) = st.caret.take() {
+        range = (at.min(n), at.min(n));
+        moved = true;
     }
     if !st.focused {
         // Opened on existing text (TEXTEDIT): the caret goes to its end, as AutoCAD's editor.
-        st.focused = true;
-        let mut state = out.state.clone();
-        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(buf.chars().count()))));
+        range = (n, n);
+        moved = true;
+    }
+    let shift = ui.input(|i| i.modifiers.shift);
+    if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.is_pointer_button_down_on() || resp.drag_stopped() || resp.clicked()) {
+        let at = map.hit(to_local(p));
+        if resp.drag_started() || resp.clicked() || st.anchor.is_none() {
+            st.anchor = Some(if shift { range.0 } else { at });
+        }
+        range = (st.anchor.unwrap_or(at), at);
+        st.keep_x = None;
+        moved = true;
+    }
+    if !resp.is_pointer_button_down_on() {
+        st.anchor = None;
+    }
+    let has_focus = ui.memory(|m| m.has_focus(id));
+    if has_focus {
+        let keys = [egui::Key::ArrowUp, egui::Key::ArrowDown, egui::Key::Home, egui::Key::End];
+        for key in keys {
+            let pressed = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key) || i.consume_key(egui::Modifiers::SHIFT, key));
+            if !pressed {
+                continue;
+            }
+            let cur = range.1;
+            let next = match key {
+                egui::Key::ArrowUp | egui::Key::ArrowDown => {
+                    let x = st.keep_x.or_else(|| map.pos(cur).map(|p| p.0)).unwrap_or(0.0);
+                    st.keep_x = Some(x);
+                    map.vertical(cur, if key == egui::Key::ArrowUp { -1 } else { 1 }, x)
+                }
+                egui::Key::Home => map.line_start(cur),
+                _ => map.line_end(cur),
+            };
+            if !matches!(key, egui::Key::ArrowUp | egui::Key::ArrowDown) {
+                st.keep_x = None;
+            }
+            range = (if shift { range.0 } else { next }, next);
+            moved = true;
+        }
+    }
+    if moved {
+        state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(range.0), CCursor::new(range.1))));
         state.store(ui.ctx(), id);
     }
+
+    // The keyboard: an egui text field off screen (it is never drawn where it could be seen).
+    let out = egui::Area::new(egui::Id::new("mtext_editor_keyboard"))
+        .order(egui::Order::Background)
+        .constrain(false)
+        .fixed_pos(pos2(-100_000.0, -100_000.0))
+        .show(ui.ctx(), |ui| {
+            egui::TextEdit::multiline(&mut buf)
+                .id(id)
+                .desired_width(200.0)
+                .lock_focus(true)
+                .char_limit(cadaddy_engine::mtext_edit::MAX_CHARS)
+                .show(ui)
+        })
+        .inner;
+    if !st.focused || moved || (!out.response.has_focus() && buf.is_empty() && st.fmt.is_empty()) || resp.clicked() || resp.drag_started() {
+        out.response.request_focus();
+    }
+    st.focused = true;
     if out.response.changed() {
         let typing = st.typing.clone();
         st.fmt.set_text(&buf, &typing);
+        st.keep_x = None;
+        // The layout follows next frame.
+        ui.ctx().request_repaint();
+    }
+
+    // Draw: the field, the selection, the text as laid out, the caret.
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 2.0, t.field);
+    painter.rect_stroke(rect, 2.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let sel = out.cursor_range.map_or(range, |r| (r.secondary.index.0, r.primary.index.0));
+    // Positions from this frame's layout: the text may have just changed (next frame catches up).
+    let fresh = map.len() == buf.chars().count() + 1;
+    if fresh {
+        for (x0, x1, base, h) in map.spans(sel.0, sel.1) {
+            let r = Rect::from_two_pos(to_screen(Vec2::new(x0, base + h * 1.25)), to_screen(Vec2::new(x1, base - h * 0.45)));
+            painter.rect_filled(r, 0.0, t.select_bg);
+        }
+    }
+    for piece in &lay.pieces {
+        let color = piece.color.map_or(t.text, color32);
+        for s in &piece.shaped.strokes {
+            if s.len() >= 2 {
+                painter.add(Shape::line(s.iter().map(|q| to_screen(*q)).collect(), Stroke::new(1.2, color)));
+            }
+        }
+        for glyph in &piece.shaped.glyphs {
+            let rings: Vec<Vec<Vec2>> =
+                glyph.iter().map(|ring| ring.iter().map(|q| to_screen(*q)).map(|p| Vec2::new(f64::from(p.x), f64::from(p.y))).collect()).collect();
+            let tris = cadaddy_render::triangulate_evenodd(&rings);
+            let mut mesh = egui::Mesh::default();
+            for tri in tris.as_chunks::<3>().0 {
+                let Ok(i) = u32::try_from(mesh.vertices.len()) else { break };
+                for v in tri {
+                    mesh.colored_vertex(pos2(v.x as f32, v.y as f32), color);
+                }
+                mesh.add_triangle(i, i + 1, i + 2);
+            }
+            if !mesh.is_empty() {
+                painter.add(Shape::mesh(mesh));
+            }
+        }
+    }
+    if fresh
+        && out.response.has_focus()
+        && let Some((x, base, h)) = map.pos(sel.1)
+    {
+        painter.line_segment([to_screen(Vec2::new(x, base + h * 1.2)), to_screen(Vec2::new(x, base - h * 0.4))], Stroke::new(1.5, t.accent));
     }
     if let Some(r) = out.cursor_range {
         let (a, b) = (r.primary.index.0, r.secondary.index.0);

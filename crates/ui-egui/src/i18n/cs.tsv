@@ -1370,3 +1370,32 @@ menu	Modify	Modifikace
 	Material	Materiál
 	Shadow display	Zobrazení stínů
 	Center object	Objekt středu
+	Move with Dim Line	Přesunout s kótovací čarou
+	Move Text Only	Přesunout pouze text
+	Above Dim Line	Nad kótovací čarou
+	Center Vertically	Svisle na střed
+	Reset Text Position	Obnovit polohu textu
+	Continue Dimension	Pokračovat v kótě
+	Baseline Dimension	Kóta od základny
+	Flip Arrow	Převrátit šipku
+	Lengthen Landing	Prodloužit odskok
+	Origin Point	Počáteční bod
+	Hatch Angle	Úhel šrafy
+	Hatch Scale	Měřítko šrafy
+	Edit Tolerance	Upravit toleranci
+	Geometric Tolerance	Geometrická tolerance
+	Geometric characteristic	Geometrická charakteristika
+	Material condition	Materiálová podmínka
+	No symbol	Bez symbolu
+	Projected Tolerance Zone	Promítnuté toleranční pole
+	Datum Identifier	Označení základny
+	Sym	Sym
+	Tolerance 1	Tolerance 1
+	Tolerance 2	Tolerance 2
+	Datum 1	Základna 1
+	Datum 2	Základna 2
+	Datum 3	Základna 3
+	PDF Underlay...	Podložka PDF...
+	Clip PDF Underlay	Oříznout podložku PDF
+	Adjust PDF Underlay	Upravit podložku PDF
+	PDF Underlay Layers	Hladiny podložky PDF
