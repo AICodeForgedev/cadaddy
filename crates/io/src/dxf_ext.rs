@@ -35,6 +35,11 @@ pub(crate) const PLOT_STYLE_NAMES_KEY: &str = "ACAD_PLOTSTYLENAME";
 pub(crate) const HANDSEED_KEY: &str = "CADADDY_HANDSEED";
 /// Named-object-dictionary key of the XRECORD holding the current multileader style.
 pub(crate) const MLEADER_STYLE_KEY: &str = "CADADDY_MLEADERSTYLE";
+/// Named-object-dictionary key of the XRECORD listing the objects hidden by ISOLATEOBJECTS /
+/// HIDEOBJECTS when OBJECTISOLATIONMODE 1 saves them with the drawing.
+pub(crate) const HIDDEN_OBJECTS_KEY: &str = "CADADDY_HIDDENOBJECTS";
+/// Most hidden objects read from a file.
+pub(crate) const MAX_HIDDEN_OBJECTS: usize = 10_000_000;
 /// Most plot style tables and plot style names read from a file.
 pub(crate) const MAX_PLOT_STYLE_TABLES: usize = 1000;
 pub(crate) const MAX_PLOT_STYLE_NAMES: usize = 100_000;
@@ -725,6 +730,37 @@ pub(crate) fn parse_layer_states(text: &str) -> Option<Vec<LayerState>> {
         return None;
     }
     Some(p.states)
+}
+
+/// The hidden objects stored in the `CADADDY_HIDDENOBJECTS` XRECORD (hex handles).
+#[derive(Serialize, Deserialize)]
+struct HiddenObjectsPayload {
+    version: u32,
+    #[serde(default)]
+    handles: Vec<String>,
+}
+
+/// JSON chunks for the hidden objects XRECORD, or `None` when the drawing doesn't save them
+/// (OBJECTISOLATIONMODE 0) or hides nothing.
+pub(crate) fn hidden_object_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    if !d.hidden_saved || d.hidden_objects.is_empty() {
+        return None;
+    }
+    let handles = d.hidden_objects.iter().filter(|h| d.entity(**h).is_some()).map(|h| h.hex()).collect();
+    let json = serde_json::to_string(&HiddenObjectsPayload { version: 1, handles }).ok()?;
+    Some(json_chunks(&json))
+}
+
+/// Parse the hidden objects XRECORD text; `None` when it is not a payload we understand.
+pub(crate) fn parse_hidden_objects(text: &str) -> Option<Vec<Handle>> {
+    if text.len() > MAX_PAYLOAD {
+        return None;
+    }
+    let p: HiddenObjectsPayload = serde_json::from_str(text).ok()?;
+    if p.version != 1 || p.handles.len() > MAX_HIDDEN_OBJECTS {
+        return None;
+    }
+    Some(p.handles.iter().filter_map(|h| Handle::parse_hex(h)).collect())
 }
 
 /// The drawing's plot style tables stored in the `CADADDY_PLOTSTYLES` XRECORD.

@@ -105,7 +105,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "PLOTTRANSPARENCYOVERRIDE" => json!(st.plot_transparency_override),
         "SELECTSIMILARMODE" => json!(st.selectsimilarmode),
         // Isolation is temporary: hidden objects show again when the drawing is reopened.
-        "OBJECTISOLATIONMODE" => json!(0),
+        "OBJECTISOLATIONMODE" => json!(st.objectisolationmode),
         "QPMODE" => json!(i32::from(st.qpmode)),
         "HIGHLIGHT" => json!(i32::from(st.highlight)),
         "SELECTIONEFFECT" => json!(st.selectioneffect),
@@ -320,11 +320,16 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             st.plot_transparency_override = as_i(v).filter(|i| (0..=2).contains(i)).and_then(|i| u8::try_from(i).ok()).ok_or_else(bad)?
         }
         "SELECTSIMILARMODE" => st.selectsimilarmode = as_i(v).filter(|b| (0..=255).contains(b)).ok_or_else(bad)? as u32,
-        "OBJECTISOLATIONMODE" => match as_i(v) {
-            Some(0) => {}
-            Some(1) => return Err(EngineError::Other("OBJECTISOLATIONMODE 1 (isolation saved with the drawing) is not available yet".into())),
-            _ => return Err(bad()),
-        },
+        "OBJECTISOLATIONMODE" => {
+            st.objectisolationmode = small(v, 1).ok_or_else(bad)?;
+            // The open drawings save their hidden objects from now on (or stop saving them).
+            let keep = st.objectisolationmode == 1;
+            for d in &mut s.docs {
+                if d.doc.hidden_saved != keep {
+                    std::sync::Arc::make_mut(&mut d.doc).hidden_saved = keep;
+                }
+            }
+        }
         "QPMODE" => st.qpmode = as_i(v).ok_or_else(bad)? > 0,
         "HIGHLIGHT" => st.highlight = as_bool(v).ok_or_else(bad)?,
         "SELECTIONEFFECT" => st.selectioneffect = small(v, 1).ok_or_else(bad)?,

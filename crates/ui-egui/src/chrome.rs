@@ -332,6 +332,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         // Right side: toggles, right-aligned.
         let s = app.session.settings.clone();
         let anno_all = app.session.doc().is_ok_and(|d| d.anno_all_visible());
+        let isolated = app.session.doc().is_ok_and(|d| !d.hidden_objects.is_empty());
         use cadaddy_engine::snap::mode;
         let toggles: Vec<(Icon, bool, &str, &str)> = vec![
             (Icon::Grid, s.gridmode, "grid", "Grid (F7)"),
@@ -347,6 +348,8 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             (Icon::QuickProps, s.qpmode, "qpmode", "Quick Properties"),
             (Icon::SelectionCycling, s.selectioncycling > 0, "selectioncycling", "Selection Cycling"),
             (Icon::Annotation, anno_all, "annovisible.toggle", "Annotation Visibility"),
+            // Isolate Objects: a menu (Isolate, Hide, End Object Isolation); lit while objects are hidden.
+            (if isolated { Icon::Bulb } else { Icon::BulbOff }, isolated, ISOLATE_MENU, "Isolate Objects"),
             (Icon::Workspace, false, "ui.noop", "Workspace Switching"),
             (Icon::Gear, false, "ui.dialog.dsettings", "Drafting Settings"),
         ];
@@ -495,6 +498,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
         let mut toggle_cmd = None;
+        let mut isolate_button = None;
         for (icon, on, cmd, tip) in toggles {
             let br = Rect::from_min_size(pos2(rx, r.center().y - size / 2.0), vec2(size, size));
             let resp = ui.interact(br, ui.id().with(("tg", tip)), Sense::click());
@@ -509,16 +513,35 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
                 p.hline(br.x_range().shrink(4.0), br.bottom() - 1.0, Stroke::new(1.5, t.toggle_on));
             }
             icons::describe_control(ui, &resp, tip, Some(on), false);
-            if resp.on_hover_text(crate::i18n::t(tip)).clicked() {
+            let resp = resp.on_hover_text(crate::i18n::t(tip));
+            if cmd == ISOLATE_MENU {
+                isolate_button = Some(resp);
+            } else if resp.clicked() {
                 toggle_cmd = Some(cmd);
             }
             rx += size + 4.0;
+        }
+        if let Some(resp) = isolate_button {
+            egui::Popup::from_toggle_button_response(&resp).width(180.0).close_behavior(egui::PopupCloseBehavior::CloseOnClick).show(|ui| {
+                for (id, label, enabled) in [
+                    ("isolateobjects", "Isolate Objects", true),
+                    ("hideobjects", "Hide Objects", true),
+                    ("unisolateobjects", "End Object Isolation", isolated),
+                ] {
+                    if ui.add_enabled(enabled, egui::Button::new(crate::i18n::t(label))).clicked() {
+                        toggle_cmd = Some(id);
+                    }
+                }
+            });
         }
         if let Some(c) = toggle_cmd {
             app.start(c);
         }
     });
 }
+
+/// The status bar's Isolate Objects button: it opens a menu instead of running a command.
+const ISOLATE_MENU: &str = "ui.isolate.menu";
 
 /// The Start page (no drawing open, or the Start tab).
 pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
