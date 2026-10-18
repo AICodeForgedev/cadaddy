@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(has_doc),
         CommandSpec::new("purge", "Purge", purge::run)
             .alias(&["pu", "-purge"])
-            .params("{type?: all|blocks|dimstyles|groups|layers|linetypes|mleaderstyles|tablestyles|textstyles|zerolength|emptytext (default all: every named type), names?: \"A*,B\" (default *)} → purged")
+            .params("{type?: all|blocks|dimstyles|groups|layers|linetypes|mleaderstyles|mlinestyles|tablestyles|textstyles|zerolength|emptytext (default all: every named type), names?: \"A*,B\" (default *)} → purged")
             .interactive(|_| Ok(Box::new(purge::PurgeM::default()))),
         CommandSpec::new("blocks.list", "List Blocks", run_list).enabled(has_doc).noundo(),
         battman::battman_spec(),
@@ -196,6 +196,14 @@ pub(crate) fn insert_with(
     let blk = s.doc()?.block(name).cloned().ok_or_else(|| EngineError::Other(format!("Block \"{name}\" not found.")))?;
     let mut ins = insert_entity(&blk, at, scale, rotation, base);
     let m = ins.transform(blk.base.xy());
+    ins.attribs = reference_attribs(&blk, &m, |tag| attedit::value_for(values, tag));
+    s.add_entity(EntityKind::Insert(ins))
+}
+
+/// The attributes of a new reference to `blk` whose block-to-drawing transform is `m`: one per
+/// non-constant attribute definition, valued `value(tag)` or else the definition's default.
+pub(crate) fn reference_attribs(blk: &Block, m: &cadaddy_geom::Mat3, value: impl Fn(&str) -> Option<String>) -> Vec<Attrib> {
+    let mut out = Vec::new();
     for e in blk.entities.iter() {
         if let EntityKind::AttDef(ad) = &e.kind {
             if ad.constant {
@@ -203,24 +211,24 @@ pub(crate) fn insert_with(
             }
             let mut t = ad.text.clone();
             let mut k = EntityKind::Text(t.clone());
-            k.transform(&m);
+            k.transform(m);
             if let EntityKind::Text(tt) = k {
                 t = tt;
             }
-            t.value = attedit::value_for(values, &ad.tag).unwrap_or_else(|| ad.text.value.clone());
-            ins.attribs.push(Attrib {
+            t.value = value(&ad.tag).unwrap_or_else(|| ad.text.value.clone());
+            out.push(Attrib {
                 tag: ad.tag.clone(),
                 text: t,
                 invisible: ad.invisible,
                 constant: false,
                 prompt: String::new(),
                 props: Default::default(),
-                multiline: ad.multiline.as_ref().map(|ml| ml.transformed(&m)),
+                multiline: ad.multiline.as_ref().map(|ml| ml.transformed(m)),
                 modes: ad.modes.for_reference(),
             });
         }
     }
-    s.add_entity(EntityKind::Insert(ins))
+    out
 }
 
 fn run_block(s: &mut Session, p: &Value) -> Result<Value> {

@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Modify", "Object", "Multiline..."])
             .alias(&["-mledit"])
             .params(
-                "{tool: cc|oc|mc|ct|ot|cj, first, p1, second, p2} | {tool: av|dv, handle, point} | \
+                "{tool: cc|oc|mc|ct|ot|mt|cj, first, p1, second, p2} | {tool: av|dv, handle, point} | \
                  {tool: cs|ca|wa, handle, p1, p2} (handles of multilines; points pick segments and sides)",
             )
             .interactive(|_| Ok(Box::new(MleditM::default()))),
@@ -486,6 +486,46 @@ fn trim_at(m: &MLine, k: usize, at: f64, keep_before: bool) -> Option<MLine> {
     (out.vertices.len() >= 2 && out.segment_count() > 0).then_some(out)
 }
 
+/// `m` trimmed at segment `k` for a tee: each element ends (or, keeping the part after, starts)
+/// where it meets its own `target` line rather than square across. The path is cut where every
+/// element still reaches its meeting point and the elements are broken back to it. Returns the
+/// trimmed multiline and the index of the segment at the tee.
+fn tee_trim(m: &MLine, k: usize, keep_before: bool, target: &dyn Fn(usize) -> Option<Line>) -> Option<(MLine, usize)> {
+    let path = path_seg(m, k)?;
+    let dir = path.dir();
+    let (mm, offs) = (m.miters(), m.offsets());
+    // Where each element meets its target, as a distance along the path.
+    let mut along = Vec::with_capacity(offs.len());
+    for (e, d) in offs.iter().enumerate() {
+        let l = element_line(m, &mm, k, *d)?;
+        let x = meet(&l, &target(e)?)?;
+        along.push((l.a + l.dir() * x - path.a).dot(dir));
+    }
+    // The new end's miter follows the cap angle whatever the length: a trial cut gives it.
+    let trial = trim_at(m, k, *along.first()?, keep_before)?;
+    let tm = trial.miters();
+    let lean = if keep_before { tm.last()? } else { tm.first()? }.dot(dir);
+    let reach = offs.iter().zip(&along).map(|(d, t)| t - lean * d);
+    let at = if keep_before { reach.fold(f64::NEG_INFINITY, f64::max) } else { reach.fold(f64::INFINITY, f64::min) };
+    if !at.is_finite() {
+        return None;
+    }
+    let mut out = trim_at(m, k, at, keep_before)?;
+    let seg = if keep_before { out.vertices.len().checked_sub(2)? } else { 0 };
+    let (om, oo) = (out.miters(), out.offsets());
+    for (e, d) in oo.iter().enumerate() {
+        let Some(l) = element_line(&out, &om, seg, *d) else { continue };
+        let Some(x) = target(e).and_then(|t| meet(&l, &t)) else { continue };
+        let len = l.len();
+        if keep_before && x < len - 1e-9 {
+            add_cut(&mut out, seg, e, x.max(0.0), len);
+        } else if !keep_before && x > 1e-9 {
+            add_cut(&mut out, seg, e, 0.0, x.min(len));
+        }
+    }
+    Some((out, seg))
+}
+
 // =====================================================================================
 // MLEDIT
 // =====================================================================================
@@ -576,8 +616,7 @@ fn mledit_pair(s: &mut Session, tool: Tool, ha: Handle, pa: Vec2, hb: Handle, pb
             let aa = a.clone();
             cut_across(&mut b, u, &outer_of(&bo), &aa, k);
         }
-        Tool::MergedTee => return Err(other("Merged tee is not available yet.")),
-        Tool::ClosedTee | Tool::OpenTee => {
+        Tool::ClosedTee | Tool::OpenTee | Tool::MergedTee => {
             let path = path_seg(&a, k).ok_or_else(|| other("*Invalid selection*"))?;
             let bm = b.miters();
             let (top, bottom) = outer(&bo).ok_or_else(|| other("*Invalid selection*"))?;
@@ -588,20 +627,63 @@ fn mledit_pair(s: &mut Session, tool: Tool, ha: Handle, pa: Vec2, hb: Handle, pb
             let pick = (pa - path.a).dot(path.dir());
             let mid = (st + sb) / 2.0;
             let keep_before = pick < mid;
-            let (at, near_e) = match (keep_before, st < sb) {
-                (true, true) | (false, false) => (st, top),
-                _ => (sb, bottom),
+            let near_e = match (keep_before, st < sb) {
+                (true, true) | (false, false) => top,
+                _ => bottom,
             };
-            let near = if near_e == top { lt } else { lb };
-            a = trim_at(&a, k, at, keep_before).ok_or_else(|| other("Nothing would be left of the first multiline."))?;
-            if tool == Tool::OpenTee {
-                // Open the near outer element of the second multiline where the first meets it.
-                let ak = if keep_before { a.vertices.len().saturating_sub(2) } else { 0 };
+            let (near_d, far_d) = if near_e == top { (bo.get(top), bo.get(bottom)) } else { (bo.get(bottom), bo.get(top)) };
+            let (near_d, far_d) = (*near_d.ok_or_else(|| other("*Invalid selection*"))?, *far_d.ok_or_else(|| other("*Invalid selection*"))?);
+            // Merged: the inner elements of the first meet the second's centre element (the inner
+            // one nearest the middle), and the second opens from its near side to that element.
+            let centre = if tool == Tool::MergedTee {
+                let middle = (near_d + far_d) / 2.0;
+                (0..bo.len()).filter(|e| *e != top && *e != bottom).min_by(|x, y| {
+                    let dx = bo.get(*x).map_or(f64::INFINITY, |d| (d - middle).abs());
+                    let dy = bo.get(*y).map_or(f64::INFINITY, |d| (d - middle).abs());
+                    dx.total_cmp(&dy)
+                })
+            } else {
+                None
+            };
+            let a_outer = outer(&ao);
+            let target = |e: usize| -> Option<Line> {
+                let is_outer = a_outer.is_some_and(|(t, b2)| e == t || e == b2);
+                match centre {
+                    Some(c) if !is_outer => line(c),
+                    _ => line(near_e),
+                }
+            };
+            let (na, ak) = if a.closed {
+                // A closed multiline opens at the tee and keeps a square end.
+                let at = if near_e == top { st } else { sb };
+                let na = trim_at(&a, k, at, keep_before).ok_or_else(|| other("Nothing would be left of the first multiline."))?;
+                let ak = if keep_before { na.vertices.len().saturating_sub(2) } else { 0 };
+                (na, ak)
+            } else {
+                tee_trim(&a, k, keep_before, &target).ok_or_else(|| other("Nothing would be left of the first multiline."))?
+            };
+            a = na;
+            if tool != Tool::ClosedTee {
+                // Open the second multiline's near outer element (and, merged, the elements up to
+                // its centre) between the first's outer elements.
+                let opened: Vec<usize> = (0..bo.len())
+                    .filter(|f| {
+                        *f == near_e
+                            || centre
+                                .and_then(|c| bo.get(c))
+                                .zip(bo.get(*f))
+                                .is_some_and(|(cd, fd)| *f != centre.unwrap_or(usize::MAX) && (fd - near_d) * (fd - cd) < 0.0)
+                    })
+                    .collect();
+                let blines: Vec<Option<Line>> = opened.iter().map(|f| line(*f)).collect();
                 let (am, aoff) = (a.miters(), a.offsets());
                 if let Some((t2, b2)) = outer(&aoff) {
                     let al = |e: usize| aoff.get(e).and_then(|d| element_line(&a, &am, ak, *d));
-                    if let (Some(x), Some(y)) = (al(t2).and_then(|l| meet(&near, &l)), al(b2).and_then(|l| meet(&near, &l))) {
-                        add_cut(&mut b, u, near_e, x, y);
+                    for (f, bl) in opened.into_iter().zip(blines) {
+                        let Some(bl) = bl else { continue };
+                        if let (Some(x), Some(y)) = (al(t2).and_then(|l| meet(&bl, &l)), al(b2).and_then(|l| meet(&bl, &l))) {
+                            add_cut(&mut b, u, f, x, y);
+                        }
                     }
                 }
             }

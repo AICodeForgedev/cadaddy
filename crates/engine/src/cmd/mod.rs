@@ -21,7 +21,7 @@ mod express;
 pub mod file;
 mod gripcmds;
 mod griphot;
-pub(crate) mod groups;
+pub mod groups;
 pub(crate) mod hatch;
 mod imageattach;
 mod imageclip;

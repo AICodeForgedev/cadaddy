@@ -1,9 +1,10 @@
 //! Selection tools: SELECTSIMILAR (objects like the selected ones, per SELECTSIMILARMODE) and
 //! object isolation — ISOLATEOBJECTS, HIDEOBJECTS, UNISOLATEOBJECTS.
 //!
-//! Isolation is temporary (OBJECTISOLATIONMODE 0): hidden objects are kept in
-//! [`Drawing::hidden_objects`], which display, selection, snapping and plotting skip and which
-//! is never written to a file. Hiding and showing are undoable like any other change.
+//! Hidden objects are kept in [`Drawing::hidden_objects`], which display, selection, snapping and
+//! plotting skip. With OBJECTISOLATIONMODE 0 (the default) that lasts for the session; with 1 the
+//! list is saved with the drawing ([`Drawing::hidden_saved`]) and the objects stay hidden when it
+//! is opened again. Hiding and showing are undoable like any other change.
 
 use cadaddy_doc::{Drawing, Entity, EntityKind, Handle};
 use serde_json::{Value, json};
@@ -203,7 +204,10 @@ fn hide(s: &mut Session, hs: Vec<Handle>) -> Result<usize> {
     let d = s.doc()?;
     let hs: Vec<Handle> = hs.into_iter().filter(|h| d.entity(*h).is_some() && !d.is_hidden_object(*h)).collect();
     if !hs.is_empty() {
-        s.doc_mut()?.hidden_objects.extend(hs.iter().copied());
+        let keep = s.settings.objectisolationmode == 1;
+        let d = s.doc_mut()?;
+        d.hidden_objects.extend(hs.iter().copied());
+        d.hidden_saved = keep;
     }
     // Hidden objects can't stay selected.
     s.set_selection(Vec::new());

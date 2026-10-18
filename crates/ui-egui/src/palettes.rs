@@ -489,13 +489,31 @@ pub(crate) fn layers_section(app: &mut CadApp, ui: &mut egui::Ui) {
     }
 }
 
+/// egui memory: whether objects are selected (for the rows' menus), and the item a row's menu
+/// chose (run on the next frame, when the app is free; see [`properties_section`]).
+fn row_menu_selection_id() -> egui::Id {
+    egui::Id::new("prop_row_has_selection")
+}
+fn row_menu_choice_id() -> egui::Id {
+    egui::Id::new("prop_row_menu_choice")
+}
+
 fn prop_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
     let t = Tokens::get();
     ui.horizontal(|ui| {
         let mut job = egui::text::LayoutJob::simple(crate::i18n::t(label).to_string(), crate::theme::body(), t.text_dim, 106.0);
         job.halign = egui::Align::RIGHT;
         let galley = ui.painter().layout_job(job);
-        let (lr, _) = ui.allocate_exact_size(vec2(118.0, galley.size().y.max(22.0)), Sense::hover());
+        let (lr, lresp) = ui.allocate_exact_size(vec2(118.0, galley.size().y.max(22.0)), Sense::click());
+        // The row's menu (right-click on its name).
+        let has_selection = ui.data(|d| d.get_temp::<bool>(row_menu_selection_id())).unwrap_or(false);
+        let mut clicked = None;
+        lresp.context_menu(|ui| {
+            crate::context_menu::groups_ui(ui, &crate::shortcut_menus::property_row_entries(label, has_selection), &mut clicked);
+        });
+        if let Some(id) = clicked {
+            ui.data_mut(|d| d.insert_temp(row_menu_choice_id(), id));
+        }
         ui.painter().galley(pos2(lr.right() - 6.0, lr.center().y - galley.size().y / 2.0), galley, t.text_dim);
         add(ui);
     });
@@ -687,6 +705,11 @@ fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
 
 pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
+    // A row menu's choice from the last frame.
+    if let Some(id) = ui.data_mut(|d| d.remove_temp::<String>(row_menu_choice_id())) {
+        crate::shortcut_menus::choose(app, &ui.ctx().clone(), &id);
+    }
+    ui.data_mut(|d| d.insert_temp(row_menu_selection_id(), !app.session.selection().is_empty()));
     properties_header(app, ui);
     let sel = app.session.selection();
     let Ok(d) = app.session.doc() else { return };

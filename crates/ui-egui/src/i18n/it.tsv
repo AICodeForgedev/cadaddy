@@ -1358,3 +1358,36 @@ menu	Modify	Edita
 	Open Drawings	Disegni aperti
 	Close Drawing	Chiudi disegno
 	Close All Drawings	Chiudi tutti i disegni
+	Export Comparison Report...	Esporta rapporto di confronto...
+	Select All Layouts	Seleziona tutti i layout
+	Move or Copy...	Sposta o copia...
+	Move or Copy	Sposta o copia
+	Move or copy layout "{name}"	Sposta o copia il layout "{name}"
+	Before layout:	Prima del layout:
+	(move to end)	(sposta alla fine)
+	Create a copy	Crea una copia
+	A drawing keeps at least one layout.	Un disegno conserva almeno un layout.
+	Move Layout	Sposta layout
+	Background	Sfondo
+	Text fill	Riempimento testo
+	Text fill color	Colore riempimento testo
+	Text reads right to left	Testo da destra a sinistra
+	Placing text places the dimension line	Posizionare il testo posiziona la linea di quota
+	Alternate tolerance precision	Precisione tolleranza alternativa
+	Alternate tolerance zero suppression	Soppressione zeri tolleranza alternativa
+	Linear jog height (× text height)	Altezza spezzata lineare (× altezza testo)
+	Break size	Dimensione interruzione
+	Express Tools	Strumenti Express
+	Break-line Symbol	Simbolo linea di interruzione
+	Replace Block...	Sostituisci blocco...
+	Move/Copy/Rotate	Sposta/Copia/Ruota
+	Remove boundaries	Rimuovi contorni
+	Inherit Properties	Eredita proprietà
+	Nothing to preview yet.	Ancora niente da visualizzare in anteprima.
+	Property Settings	Impostazioni proprietà
+	Basic Properties	Proprietà di base
+	Special Properties	Proprietà speciali
+	Plot Style	Stile di stampa
+	Material	Materiale
+	Shadow display	Visualizzazione ombre
+	Center object	Oggetto centro

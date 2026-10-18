@@ -1364,3 +1364,36 @@
 	Open Drawings	Dibujos abiertos
 	Close Drawing	Cerrar dibujo
 	Close All Drawings	Cerrar todos los dibujos
+	Export Comparison Report...	Exportar informe de comparación...
+	Select All Layouts	Seleccionar todas las presentaciones
+	Move or Copy...	Mover o copiar...
+	Move or Copy	Mover o copiar
+	Move or copy layout "{name}"	Mover o copiar la presentación "{name}"
+	Before layout:	Antes de la presentación:
+	(move to end)	(mover al final)
+	Create a copy	Crear una copia
+	A drawing keeps at least one layout.	Un dibujo conserva al menos una presentación.
+	Move Layout	Mover presentación
+	Background	Fondo
+	Text fill	Relleno de texto
+	Text fill color	Color de relleno de texto
+	Text reads right to left	Texto de derecha a izquierda
+	Placing text places the dimension line	Colocar el texto coloca la línea de cota
+	Alternate tolerance precision	Precisión de tolerancia alternativa
+	Alternate tolerance zero suppression	Supresión de ceros de tolerancia alternativa
+	Linear jog height (× text height)	Altura del recodo lineal (× altura de texto)
+	Break size	Tamaño de corte
+	Express Tools	Herramientas Express
+	Break-line Symbol	Símbolo de línea de rotura
+	Replace Block...	Reemplazar bloque...
+	Move/Copy/Rotate	Desplazar/Copiar/Girar
+	Remove boundaries	Eliminar contornos
+	Inherit Properties	Heredar propiedades
+	Nothing to preview yet.	Aún no hay nada que previsualizar.
+	Property Settings	Parámetros de propiedades
+	Basic Properties	Propiedades básicas
+	Special Properties	Propiedades especiales
+	Plot Style	Estilo de trazado
+	Material	Material
+	Shadow display	Visualización de sombras
+	Center object	Objeto de centro

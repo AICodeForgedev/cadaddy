@@ -1337,3 +1337,36 @@ menu	Modify	Modifikace
 	Open Drawings	Otevřené výkresy
 	Close Drawing	Zavřít výkres
 	Close All Drawings	Zavřít všechny výkresy
+	Export Comparison Report...	Exportovat zprávu o porovnání...
+	Select All Layouts	Vybrat všechna rozvržení
+	Move or Copy...	Přesunout nebo kopírovat...
+	Move or Copy	Přesunout nebo kopírovat
+	Move or copy layout "{name}"	Přesunout nebo kopírovat rozvržení „{name}“
+	Before layout:	Před rozvržení:
+	(move to end)	(přesunout na konec)
+	Create a copy	Vytvořit kopii
+	A drawing keeps at least one layout.	Výkres si ponechá alespoň jedno rozvržení.
+	Move Layout	Přesunout rozvržení
+	Background	Pozadí
+	Text fill	Výplň textu
+	Text fill color	Barva výplně textu
+	Text reads right to left	Text se čte zprava doleva
+	Placing text places the dimension line	Umístění textu umístí i kótovací čáru
+	Alternate tolerance precision	Přesnost alternativní tolerance
+	Alternate tolerance zero suppression	Potlačení nul alternativní tolerance
+	Linear jog height (× text height)	Výška lomu (× výška textu)
+	Break size	Velikost přerušení
+	Express Tools	Nástroje Express
+	Break-line Symbol	Symbol přerušení
+	Replace Block...	Nahradit blok...
+	Move/Copy/Rotate	Přesunout/Kopírovat/Otočit
+	Remove boundaries	Odebrat hranice
+	Inherit Properties	Převzít vlastnosti
+	Nothing to preview yet.	Zatím není co zobrazit.
+	Property Settings	Nastavení vlastností
+	Basic Properties	Základní vlastnosti
+	Special Properties	Zvláštní vlastnosti
+	Plot Style	Styl vykreslení
+	Material	Materiál
+	Shadow display	Zobrazení stínů
+	Center object	Objekt středu

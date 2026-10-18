@@ -52,9 +52,15 @@ pub struct HatchDlgState {
     /// The hatches being edited; empty in create mode.
     pub edit: Vec<Handle>,
     pub separate: bool,
-    /// Internal points and boundary objects picked so far (create mode).
+    /// Internal points and boundary objects picked so far (create mode: the hatch's boundaries;
+    /// edit mode: boundaries to add).
     pub points: Vec<[f64; 2]>,
     pub handles: Vec<Handle>,
+    /// Edit mode: points on the loops to remove.
+    pub remove: Vec<[f64; 2]>,
+    /// The hatch Inherit Properties took the fill from (create mode: its colour and
+    /// transparency go to the new hatch too).
+    pub inherit: Option<Handle>,
     /// A HATCHPICK the dialog started that hasn't ended yet.
     pub picking: Option<PickMode>,
     /// The last command error, shown in the dialog.
@@ -98,6 +104,8 @@ pub fn create_state(d: &Drawing, uid: u64, gradient: bool) -> HatchDlgState {
         separate: h.i64("HPSEPARATE", 0) != 0,
         points: Vec::new(),
         handles: Vec::new(),
+        remove: Vec::new(),
+        inherit: None,
         picking: None,
         error: None,
         uid,
@@ -113,18 +121,27 @@ pub fn edit_state(d: &Drawing, uid: u64, handles: Vec<Handle>) -> Option<HatchDl
         _ => None,
     })?;
     let mut st = create_state(d, uid, first.gradient.is_some());
-    let f = &mut st.fill;
-    // A gradient's own pattern is SOLID; its Pattern tab offers the current pattern (HPNAME).
-    if first.gradient.is_none() {
-        f.pattern = first.pattern.clone();
+    fill_from(&mut st.fill, &first);
+    st.fill.associative = first.associative;
+    st.fill.specified = false;
+    st.fill.origin = None;
+    st.opened = st.fill.clone();
+    st.edit = hatches;
+    st.separate = false;
+    Some(st)
+}
+
+/// The fill of hatch `h`: pattern or gradient, scale, angle and island style.
+fn fill_from(f: &mut Fill, h: &cadaddy_doc::Hatch) {
+    f.gradient = h.gradient.is_some();
+    // A gradient's own pattern is SOLID; its Pattern tab keeps offering the pattern shown.
+    if h.gradient.is_none() {
+        f.pattern = h.pattern.clone();
     }
-    f.scale = if first.scale.is_finite() && first.scale > 0.0 { first.scale } else { 1.0 };
-    f.angle = Some(first.angle.to_degrees()).filter(|a| a.is_finite()).unwrap_or(0.0);
-    f.associative = first.associative;
-    f.style = first.style.min(2);
-    f.specified = false;
-    f.origin = None;
-    if let Some(g) = &first.gradient {
+    f.scale = if h.scale.is_finite() && h.scale > 0.0 { h.scale } else { 1.0 };
+    f.angle = Some(h.angle.to_degrees()).filter(|a| a.is_finite()).unwrap_or(0.0);
+    f.style = h.style.min(2);
+    if let Some(g) = &h.gradient {
         let up = g.name.trim().to_ascii_uppercase();
         let (inverted, base) = match up.strip_prefix("INV") {
             Some(b) => (true, b.to_string()),
@@ -137,10 +154,17 @@ pub fn edit_state(d: &Drawing, uid: u64, handles: Vec<Handle>) -> Option<HatchDl
         f.angle = Some(g.angle.to_degrees()).filter(|a| a.is_finite()).unwrap_or(0.0);
         f.centered = g.centered;
     }
-    st.opened = st.fill.clone();
-    st.edit = hatches;
-    st.separate = false;
-    Some(st)
+}
+
+/// Inherit Properties: the dialog takes hatch `h`'s fill, island style and origin.
+pub fn inherit(st: &mut HatchDlgState, d: &Drawing, h: Handle) {
+    let Some(EntityKind::Hatch(x)) = d.entity(h).map(|e| &e.kind) else { return };
+    fill_from(&mut st.fill, x);
+    if x.origin.is_finite() {
+        st.fill.specified = true;
+        st.fill.origin = Some([x.origin.x, x.origin.y]);
+    }
+    st.inherit = Some(h);
 }
 
 fn style_name(s: u8) -> &'static str {
@@ -192,6 +216,9 @@ pub fn ok_call(st: &HatchDlgState) -> Option<(&'static str, Value)> {
             (true, None) => p.insert("originMode".into(), json!(f.origin_mode)),
             (false, _) => p.insert("originMode".into(), json!("current")),
         };
+        if let Some(h) = st.inherit {
+            p.insert("inherit".into(), json!(h.hex()));
+        }
         return Some((if f.gradient { "gradient" } else { "hatch" }, Value::Object(p)));
     }
     let o = &st.opened;
@@ -232,6 +259,15 @@ pub fn ok_call(st: &HatchDlgState) -> Option<(&'static str, Value)> {
             None => p.insert("originMode".into(), json!(f.origin_mode)),
         };
     }
+    if !st.points.is_empty() {
+        p.insert("addPoints".into(), json!(st.points));
+    }
+    if !st.handles.is_empty() {
+        p.insert("addHandles".into(), hexes(&st.handles));
+    }
+    if !st.remove.is_empty() {
+        p.insert("remove".into(), json!(st.remove));
+    }
     if p.is_empty() {
         return None;
     }
@@ -256,7 +292,9 @@ pub fn merge_picks(st: &mut HatchDlgState, picks: HatchPicks) {
                 st.fill.specified = true;
             }
         }
-        PickMode::Hatch => {}
+        PickMode::Remove => st.remove.extend(picks.points.iter().map(|q| [q.x, q.y])),
+        // Inherit is taken by `resume` (it reads the hatch), Preview by `resume` too.
+        PickMode::Hatch | PickMode::Inherit | PickMode::Preview => {}
     }
     st.error = None;
 }
@@ -309,6 +347,9 @@ pub fn start_pick(app: &mut CadApp, mode: PickMode) {
         PickMode::Objects => "Objects",
         PickMode::Origin => "oRigin",
         PickMode::Hatch => "Hatch",
+        PickMode::Remove => "reMove",
+        PickMode::Inherit => "Inherit",
+        PickMode::Preview => "preView",
     };
     if app.session.running.is_some()
         && let Err(e) = app.session.input(cadaddy_engine::Input::Keyword(kw.into()))
@@ -332,16 +373,49 @@ pub fn resume(app: &mut CadApp) {
         return;
     }
     st.picking = None;
-    if mode == PickMode::Hatch {
+    if mode == PickMode::Preview {
+        // Accepted: the previewed hatch stays and the dialog is done. Otherwise it goes and the
+        // dialog comes back as it was.
+        if picks.is_some_and(|p| p.accepted) {
+            return;
+        }
+        if let Err(e) = app.session.undo() {
+            st.error = Some(e.to_string());
+        }
+    } else if mode == PickMode::Hatch {
         let next = picks.and_then(|p| app.session.doc().ok().and_then(|d| edit_state(d, st.uid, p.handles)));
         let Some(mut next) = next else { return };
         next.space = st.space.clone();
         st = next;
+    } else if mode == PickMode::Inherit {
+        if let (Some(h), Ok(d)) = (picks.and_then(|p| p.handles.first().copied()), app.session.doc()) {
+            inherit(&mut st, d, h);
+        }
     } else if let Some(p) = picks {
         merge_picks(&mut st, p);
     }
     app.hatch_dlg = Some(st);
     app.ui.dialog = Some("hatch".into());
+}
+
+/// Preview: run the dialog's command and wait (the dialog hidden) for Enter, which keeps the
+/// hatch, or Esc or a pick, which undoes it and brings the dialog back (see [`resume`]).
+pub fn preview(app: &mut CadApp) {
+    let Some(call) = app.hatch_dlg.as_ref().map(ok_call) else { return };
+    let Some((cmd, p)) = call else {
+        if let Some(st) = app.hatch_dlg.as_mut() {
+            st.error = Some(crate::tl!("Nothing to preview yet.").to_string());
+        }
+        return;
+    };
+    match app.run(cmd, p) {
+        Ok(_) => start_pick(app, PickMode::Preview),
+        Err(e) => {
+            if let Some(st) = app.hatch_dlg.as_mut() {
+                st.error = Some(e);
+            }
+        }
+    }
 }
 
 /// OK: run the dialog's command. True when the dialog closes; a failed command keeps it open
@@ -370,6 +444,7 @@ enum Action {
     None,
     Ok,
     Cancel,
+    Preview,
     Pick(PickMode),
 }
 
@@ -432,6 +507,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         ui.separator();
         ui.horizontal(|ui| {
             let ready = !(st.edit.is_empty() && st.points.is_empty() && st.handles.is_empty());
+            if ui.add_enabled(ready, egui::Button::new(crate::tl!("Preview"))).clicked() {
+                action = Action::Preview;
+            }
             if ui.add_enabled(ready, egui::Button::new(crate::tl!("OK"))).clicked() {
                 action = Action::Ok;
             }
@@ -452,6 +530,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             *open = false;
         }
         Action::Pick(mode) => start_pick(app, mode),
+        Action::Preview => preview(app),
         Action::None => {
             if !*open {
                 app.hatch_dlg = None;
@@ -536,24 +615,32 @@ fn fill_ui(ui: &mut egui::Ui, f: &mut Fill, action: &mut Action) {
 }
 
 fn options_ui(ui: &mut egui::Ui, st: &mut HatchDlgState, action: &mut Action) {
-    if st.edit.is_empty() {
-        ui.strong(crate::tl!("Boundaries"));
-        if ui.button(crate::tl!("Add: Pick points")).clicked() {
-            *action = Action::Pick(PickMode::Points);
-        }
-        if ui.button(crate::tl!("Add: Select objects")).clicked() {
-            *action = Action::Pick(PickMode::Objects);
-        }
-        ui.horizontal(|ui| {
-            ui.label(crate::tf!("Boundaries picked: {n}", n = st.points.len() + st.handles.len()));
-            let any = !(st.points.is_empty() && st.handles.is_empty());
-            if ui.add_enabled(any, egui::Button::new(crate::tl!("Clear"))).clicked() {
-                st.points.clear();
-                st.handles.clear();
-            }
-        });
-        ui.separator();
+    ui.strong(crate::tl!("Boundaries"));
+    if ui.button(crate::tl!("Add: Pick points")).clicked() {
+        *action = Action::Pick(PickMode::Points);
     }
+    if ui.button(crate::tl!("Add: Select objects")).clicked() {
+        *action = Action::Pick(PickMode::Objects);
+    }
+    // Editing: loops of the hatch can be removed too (one hatch at a time).
+    let one = st.edit.len() == 1;
+    if !st.edit.is_empty() && ui.add_enabled(one, egui::Button::new(crate::tl!("Remove boundaries"))).clicked() {
+        *action = Action::Pick(PickMode::Remove);
+    }
+    ui.horizontal(|ui| {
+        ui.label(crate::tf!("Boundaries picked: {n}", n = st.points.len() + st.handles.len() + st.remove.len()));
+        let any = !(st.points.is_empty() && st.handles.is_empty() && st.remove.is_empty());
+        if ui.add_enabled(any, egui::Button::new(crate::tl!("Clear"))).clicked() {
+            st.points.clear();
+            st.handles.clear();
+            st.remove.clear();
+        }
+    });
+    ui.separator();
+    if ui.button(crate::tl!("Inherit Properties")).clicked() {
+        *action = Action::Pick(PickMode::Inherit);
+    }
+    ui.separator();
     ui.strong(crate::tl!("Options"));
     ui.checkbox(&mut st.fill.associative, crate::tl!("Associative"));
     if st.edit.is_empty() {
@@ -586,6 +673,106 @@ mod tests {
     fn app_with_rect() -> (CadApp, Handle) {
         let (s, r) = session_with_rect();
         (CadApp::new(s, Services::default()), r)
+    }
+
+    /// The rectangle hatched, a second rectangle beside it, and the dialog in edit mode on it.
+    fn editing() -> (CadApp, Handle, Handle) {
+        let (mut app, _) = app_with_rect();
+        let h = Handle::parse_hex(app.session.execute("hatch", &json!({ "points": [[5, 5]] })).unwrap()["handle"].as_str().unwrap()).unwrap();
+        let b = Handle::parse_hex(app.session.execute("rectang", &json!({ "p1": [20, 0], "p2": [30, 10] })).unwrap()["handle"].as_str().unwrap())
+            .unwrap();
+        app.session.set_selection(vec![h]);
+        open_edit(&mut app);
+        assert!(app.hatch_dlg.as_ref().is_some_and(|st| st.edit == vec![h]));
+        (app, h, b)
+    }
+
+    fn loops(app: &CadApp, h: Handle) -> usize {
+        match app.session.doc().ok().and_then(|d| d.entity(h)).map(|e| &e.kind) {
+            Some(EntityKind::Hatch(x)) => x.loops.len(),
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn edit_mode_adds_and_removes_boundaries() {
+        let (mut app, h, _) = editing();
+        start_pick(&mut app, PickMode::Points);
+        app.session.input(cadaddy_engine::Input::Point(Vec2::new(25.0, 5.0))).unwrap();
+        app.session.input(cadaddy_engine::Input::Enter).unwrap();
+        resume(&mut app);
+        let st = app.hatch_dlg.clone().unwrap();
+        let (cmd, p) = ok_call(&st).unwrap();
+        assert_eq!(cmd, "hatchedit");
+        assert_eq!(p["addPoints"], json!([[25.0, 5.0]]));
+        assert!(ok(&mut app));
+        assert_eq!(loops(&app, h), 2);
+        // Remove the added loop again: a point on its edge.
+        app.session.set_selection(vec![h]);
+        open_edit(&mut app);
+        start_pick(&mut app, PickMode::Remove);
+        assert!(app.session.prompt_text().contains("boundary to remove"));
+        app.session.input(cadaddy_engine::Input::Point(Vec2::new(30.0, 5.0))).unwrap();
+        app.session.input(cadaddy_engine::Input::Enter).unwrap();
+        resume(&mut app);
+        let st = app.hatch_dlg.clone().unwrap();
+        assert_eq!(st.remove, vec![[30.0, 5.0]]);
+        let (_, p) = ok_call(&st).unwrap();
+        assert_eq!(p["remove"], json!([[30.0, 5.0]]));
+        assert!(ok(&mut app));
+        assert_eq!(loops(&app, h), 1);
+    }
+
+    #[test]
+    fn inherit_properties_fills_the_dialog_and_passes_the_hatch() {
+        let (mut app, h, b) = editing();
+        app.session.execute("hatchedit", &json!({ "handles": [h.hex()], "pattern": "ANSI37", "scale": 4, "angle": 15 })).unwrap();
+        app.hatch_dlg = None;
+        open_create(&mut app, false);
+        if let Some(st) = app.hatch_dlg.as_mut() {
+            st.handles.push(b);
+        }
+        start_pick(&mut app, PickMode::Inherit);
+        assert!(app.session.prompt_text().contains("Select hatch object"));
+        app.session.input(cadaddy_engine::Input::Pick(vec![h])).unwrap();
+        resume(&mut app);
+        let st = app.hatch_dlg.clone().unwrap();
+        assert_eq!((st.fill.pattern.as_str(), st.fill.scale), ("ANSI37", 4.0));
+        assert!((st.fill.angle - 15.0).abs() < 1e-9);
+        assert_eq!(st.inherit, Some(h));
+        let (cmd, p) = ok_call(&st).unwrap();
+        assert_eq!((cmd, p["inherit"].as_str()), ("hatch", Some(h.hex().as_str())));
+        assert!(ok(&mut app));
+    }
+
+    #[test]
+    fn preview_draws_the_hatch_until_esc_or_keeps_it_on_enter() {
+        let (mut app, r) = app_with_rect();
+        let count = |app: &CadApp| app.session.doc().map_or(0, |d| d.model.iter().filter(|e| matches!(e.kind, EntityKind::Hatch(_))).count());
+        open_create(&mut app, false);
+        if let Some(st) = app.hatch_dlg.as_mut() {
+            st.handles.push(r);
+        }
+        let before = app.hatch_dlg.clone();
+        preview(&mut app);
+        assert_eq!(app.ui.dialog, None, "hidden while previewing");
+        assert_eq!(count(&app), 1, "the hatch is drawn");
+        // Esc: the hatch goes and the dialog comes back as it was.
+        app.session.cancel();
+        resume(&mut app);
+        assert_eq!(count(&app), 0);
+        assert_eq!(app.ui.dialog.as_deref(), Some("hatch"));
+        assert_eq!(app.hatch_dlg, before);
+        // Enter: the hatch stays and the dialog is done.
+        preview(&mut app);
+        app.session.input(cadaddy_engine::Input::Enter).unwrap();
+        resume(&mut app);
+        assert_eq!(count(&app), 1);
+        assert_eq!(app.hatch_dlg, None);
+        // Nothing picked yet: Preview says so and keeps the dialog.
+        open_create(&mut app, false);
+        preview(&mut app);
+        assert!(app.hatch_dlg.as_ref().is_some_and(|st| st.error.is_some()));
     }
 
     #[test]

@@ -13,14 +13,17 @@ use crate::theme::Tokens;
 /// The host storage key for [`prefs_json`].
 pub const PREFS_KEY: &str = "cadaddy.autosave";
 
-/// SAVETIME and SAVEFILEPATH as JSON for the host's storage.
+/// SAVETIME, SAVEFILEPATH and AUDITCTL as JSON for the host's storage.
 pub fn prefs_json() -> String {
-    json!({ "savetime": autosave::savetime(), "saveFilePath": autosave::savefilepath() }).to_string()
+    json!({ "savetime": autosave::savetime(), "saveFilePath": autosave::savefilepath(), "auditctl": cadaddy_engine::audit::auditctl() }).to_string()
 }
 
 /// Restore what [`prefs_json`] saved; malformed values are ignored.
 pub fn load_prefs(json: &str) {
     let Ok(v) = serde_json::from_str::<Value>(json) else { return };
+    if let Some(b) = v.get("auditctl").and_then(Value::as_bool) {
+        cadaddy_engine::audit::set_auditctl(b);
+    }
     if let Some(m) = v.get("savetime").and_then(Value::as_u64) {
         autosave::set_savetime(u32::try_from(m).unwrap_or(autosave::MAX_SAVETIME));
     }

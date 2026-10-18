@@ -152,8 +152,18 @@ fn follow(before: &Drawing, after: &Drawing, handle: Handle, h: &Hatch, checked:
             return None;
         }
         match prev {
-            // Moved or reshaped on its own: no longer tied to the boundary.
+            // Moved or reshaped on its own: no longer tied to the boundary. Loops added to it
+            // (HATCHEDIT's added boundaries) keep the link when they are where their objects are.
             Some(p) if reshaped(p, h) => {
+                *checked += 1;
+                let added_fit = *checked <= MAX_NEW_CHECKED
+                    && h.loops
+                        .iter()
+                        .filter(|l| !p.loops.iter().any(|q| q.vertices == l.vertices))
+                        .all(|l| l.sources.is_empty() || matches!(refill(after, after, l), Refill::Loop(vs) if same_shape(&vs, &l.vertices)));
+                if added_fit {
+                    return None;
+                }
                 detach(&mut nh);
                 return Some((nh, None));
             }

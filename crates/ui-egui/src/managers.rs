@@ -383,6 +383,19 @@ const PRECISIONS: &[(&str, i64)] = &[
 /// DIMTAD: text placement against the dimension line.
 const TEXT_PLACEMENT: &[(&str, i64)] = &[("Centered", 0), ("Above", 1), ("Outside", 2), ("JIS", 3), ("Below", 4)];
 
+/// DIMTFILL: the text background.
+const TEXT_FILL: &[(&str, i64)] = &[("None", 0), ("Background", 1), ("Color", 2)];
+
+/// The colours offered for DIMTFILLCLR: ByBlock, ByLayer, the seven named ones, and `current`.
+fn fill_colors(current: cadaddy_color::Color) -> Vec<String> {
+    use cadaddy_color::Color;
+    let mut v: Vec<String> = [Color::ByBlock, Color::ByLayer].into_iter().chain((1..=7).map(Color::Index)).map(Color::name).collect();
+    if !v.contains(&current.name()) {
+        v.push(current.name());
+    }
+    v
+}
+
 fn dim_style(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
     let Ok(d) = app.session.doc() else {
         no_drawing(ctx, "Dimension Style", open);
@@ -406,6 +419,14 @@ fn dim_style(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                 Field::Num("extExtend", "Extend beyond dim lines", s.ext_extend),
                 Field::Num("extOffset", "Offset from origin", s.ext_offset),
                 Field::Num("scale", "Overall scale (DIMSCALE)", s.scale),
+                Field::Pick("textFill", "Text fill", i64::from(s.text_fill), TEXT_FILL),
+                Field::Choice("textFillColor", "Text fill color", s.text_fill_color.name(), fill_colors(s.text_fill_color)),
+                Field::Bool("textRightToLeft", "Text reads right to left", s.text_right_to_left),
+                Field::Bool("userTextPlacesLine", "Placing text places the dimension line", s.user_text_places_line),
+                Field::Pick("altTolDecimals", "Alternate tolerance precision", i64::from(s.alt_tol_decimals), PRECISIONS),
+                Field::Num("altTolZeroSuppression", "Alternate tolerance zero suppression", f64::from(s.alt_tol_zero_suppression)),
+                Field::Num("jogHeight", "Linear jog height (× text height)", s.jog_height),
+                Field::Num("breakSize", "Break size", s.break_size),
             ],
         })
         .collect();

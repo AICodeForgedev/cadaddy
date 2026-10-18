@@ -1365,3 +1365,36 @@ menu	Modify	Ändra
 	Open Drawings	Öppna ritningar
 	Close Drawing	Stäng ritning
 	Close All Drawings	Stäng alla ritningar
+	Export Comparison Report...	Exportera jämförelserapport...
+	Select All Layouts	Markera alla layouter
+	Move or Copy...	Flytta eller kopiera...
+	Move or Copy	Flytta eller kopiera
+	Move or copy layout "{name}"	Flytta eller kopiera layouten "{name}"
+	Before layout:	Före layout:
+	(move to end)	(flytta till slutet)
+	Create a copy	Skapa en kopia
+	A drawing keeps at least one layout.	En ritning behåller minst en layout.
+	Move Layout	Flytta layout
+	Background	Bakgrund
+	Text fill	Textfyllning
+	Text fill color	Textfyllningsfärg
+	Text reads right to left	Text läses från höger till vänster
+	Placing text places the dimension line	Placering av text placerar även måttlinjen
+	Alternate tolerance precision	Precision för alternativ tolerans
+	Alternate tolerance zero suppression	Nollundertryckning för alternativ tolerans
+	Linear jog height (× text height)	Höjd på linjärt brytmärke (× texthöjd)
+	Break size	Brytstorlek
+	Express Tools	Express-verktyg
+	Break-line Symbol	Brytlinjesymbol
+	Replace Block...	Ersätt block...
+	Move/Copy/Rotate	Flytta/Kopiera/Rotera
+	Remove boundaries	Ta bort gränser
+	Inherit Properties	Ärv egenskaper
+	Nothing to preview yet.	Inget att förhandsgranska ännu.
+	Property Settings	Egenskapsinställningar
+	Basic Properties	Grundläggande egenskaper
+	Special Properties	Särskilda egenskaper
+	Plot Style	Plottstil
+	Material	Material
+	Shadow display	Skuggvisning
+	Center object	Centrumobjekt

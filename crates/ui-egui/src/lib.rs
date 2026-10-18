@@ -34,10 +34,13 @@ pub mod dyngrips;
 pub mod dyninput;
 pub mod gpu;
 pub mod grip_dyn;
+mod groupgrips;
 pub mod i18n;
 pub mod icons;
 pub mod layers;
+pub mod layouttabs;
 pub mod managers;
+pub mod matchpropdlg;
 pub mod menus;
 pub mod opening;
 pub mod options;
@@ -212,6 +215,8 @@ pub struct Services {
     pub pick_pdf: Option<Box<dyn Fn() -> Option<String>>>,
     /// A raster image to attach (IMAGEATTACH, ATTACH).
     pub pick_image: Option<Box<dyn Fn() -> Option<String>>>,
+    /// The system clipboard's text (Paste to Command Line).
+    pub read_clipboard: Option<Box<dyn Fn() -> Option<String>>>,
 }
 
 pub struct CadApp {
@@ -256,6 +261,8 @@ pub struct CadApp {
     pub pending_url: Option<String>,
     /// What the support banner remembers ([`support`]).
     pub donate: support::DonatePrefs,
+    /// QuickCalc's history and variables, kept in the preferences.
+    pub quickcalc: palettes::quickcalc::Saved,
     /// Looking for, downloading and installing new versions ([`update`]); the desktop host
     /// supplies the updater.
     pub updater: Option<Box<dyn update::Updater>>,
@@ -277,6 +284,8 @@ pub struct CadApp {
     pub gpu_notice: Option<autosave::GpuNotice>,
     /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
+    /// The layout tabs' rename, selection and Move or Copy dialog ([`layouttabs`]).
+    pub layout_tabs: layouttabs::LayoutTabs,
     /// The Edit Block Definition dialog ([`bedit`]).
     pub bedit: bedit::State,
     /// Walk mode, while it is open: the drawing in 3D in place of the canvas ([`walk`]).
@@ -316,6 +325,7 @@ impl CadApp {
             quit_requested: false,
             pending_url: None,
             donate: support::DonatePrefs::default(),
+            quickcalc: Default::default(),
             updater: None,
             layer_off_ask: None,
             update: update::UpdateState::default(),
@@ -326,6 +336,7 @@ impl CadApp {
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
             hatch_dlg: None,
+            layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
             wgpu_rs: None,
@@ -422,6 +433,9 @@ impl CadApp {
         if self.spacemouse.settings != spacemouse::Settings::default() {
             prefs["spacemouse"] = json!(self.spacemouse.settings);
         }
+        if !self.quickcalc.is_empty() {
+            prefs["quickcalc"] = self.quickcalc.to_json();
+        }
         if !self.ui.recent_files.is_empty() {
             prefs["recentFiles"] = json!(self.ui.recent_files);
         }
@@ -481,6 +495,9 @@ impl CadApp {
         }
         if let Some(skip) = v.get("updateSkip").and_then(Value::as_str).filter(|s| s.len() <= 32) {
             self.update.skip = skip.to_string();
+        }
+        if let Some(q) = v.get("quickcalc") {
+            self.quickcalc = palettes::quickcalc::Saved::from_json(q);
         }
     }
 
@@ -735,6 +752,8 @@ impl CadApp {
         dialogs::show(self, ui.ctx());
         layers::off_prompt(self, ui.ctx());
         palettes::patterns::prompt_picker(self, ui.ctx());
+        layouttabs::move_copy_dialog(self, ui.ctx());
+        matchpropdlg::show(self, ui.ctx());
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());

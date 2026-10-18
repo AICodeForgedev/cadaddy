@@ -1130,3 +1130,36 @@
 	Open Drawings	Dessins ouverts
 	Close Drawing	Fermer le dessin
 	Close All Drawings	Fermer tous les dessins
+	Export Comparison Report...	Exporter le rapport de comparaison...
+	Select All Layouts	Sélectionner toutes les présentations
+	Move or Copy...	Déplacer ou copier...
+	Move or Copy	Déplacer ou copier
+	Move or copy layout "{name}"	Déplacer ou copier la présentation « {name} »
+	Before layout:	Avant la présentation :
+	(move to end)	(déplacer à la fin)
+	Create a copy	Créer une copie
+	A drawing keeps at least one layout.	Un dessin conserve au moins une présentation.
+	Move Layout	Déplacer la présentation
+	Background	Arrière-plan
+	Text fill	Remplissage du texte
+	Text fill color	Couleur de remplissage du texte
+	Text reads right to left	Texte de droite à gauche
+	Placing text places the dimension line	Placer le texte place la ligne de cote
+	Alternate tolerance precision	Précision de la tolérance alternative
+	Alternate tolerance zero suppression	Suppression des zéros de la tolérance alternative
+	Linear jog height (× text height)	Hauteur du raccourci linéaire (× hauteur de texte)
+	Break size	Taille de la coupure
+	Express Tools	Outils Express
+	Break-line Symbol	Symbole de ligne de coupure
+	Replace Block...	Remplacer le bloc...
+	Move/Copy/Rotate	Déplacer/Copier/Faire pivoter
+	Remove boundaries	Supprimer des contours
+	Inherit Properties	Hériter des propriétés
+	Nothing to preview yet.	Rien à prévisualiser pour l’instant.
+	Property Settings	Paramètres des propriétés
+	Basic Properties	Propriétés de base
+	Special Properties	Propriétés spéciales
+	Plot Style	Style de tracé
+	Material	Matériau
+	Shadow display	Affichage des ombres
+	Center object	Objet de centre

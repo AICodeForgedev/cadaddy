@@ -115,9 +115,13 @@ pub struct Drawing {
     pub scales: Vec<AnnoScale>,
     /// Next free handle.
     pub handseed: u64,
-    /// Objects hidden for this session by ISOLATEOBJECTS / HIDEOBJECTS. Never written to a file:
-    /// a drawing opens with everything shown again.
+    /// Objects hidden by ISOLATEOBJECTS / HIDEOBJECTS. Written to the file only when
+    /// `hidden_saved` is set (OBJECTISOLATIONMODE 1); otherwise a drawing opens with everything
+    /// shown again.
     pub hidden_objects: BTreeSet<Handle>,
+    /// The hidden objects are saved with the drawing (OBJECTISOLATIONMODE 1, or read from a file
+    /// that saved them).
+    pub hidden_saved: bool,
     /// What reading the file left out (a DWG's object records the reader couldn't decode), told
     /// to the user when the drawing opens. Never written to a file.
     pub read_notes: Vec<String>,
@@ -180,6 +184,7 @@ impl Drawing {
             scales: imperial_scales(),
             handseed: 0x100,
             hidden_objects: BTreeSet::new(),
+            hidden_saved: false,
             read_notes: Vec::new(),
             refedit: None,
             skipped_records: BTreeMap::new(),

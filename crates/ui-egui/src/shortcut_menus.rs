@@ -5,7 +5,8 @@
 //! Every item goes through a command: an item id is a command id, started like a menu item, or
 //! one of the forms [`choose`] reads: `run:<command>:<JSON params>`, `layout:<op>:<name>`,
 //! `drawing:<op>:<index>` and `cmdline:<op>`. Items for commands that aren't registered are
-//! left out.
+//! left out. The External References palette's rows and the Properties palette's rows have menus
+//! too.
 
 use cadaddy_engine::{Input, find_command};
 use serde_json::{Value, json};
@@ -61,7 +62,10 @@ pub fn command_line_entries(app: &CadApp) -> Vec<Vec<Entry>> {
     if !lines.is_empty() {
         groups.push(vec![Entry::Sub { label: "Lines of Command History".into(), children: lines }]);
     }
-    let mut edit = vec![action("Copy History", "cmdline:copy".into(), !app.session.log.is_empty())];
+    let mut edit = vec![
+        action("Copy History", "cmdline:copy".into(), !app.session.log.is_empty()),
+        action("Paste to Command Line", "cmdline:paste".into(), app.services.read_clipboard.is_some()),
+    ];
     edit.extend(item(app, "ui.cmdline.clear", None));
     groups.push(edit);
     groups
@@ -90,8 +94,9 @@ pub fn drawing_tab_entries(app: &CadApp, index: usize) -> Vec<Vec<Entry>> {
 }
 
 /// A layout tab's menu (`name` is the layout, "Model" the model tab): New Layout, From Template,
-/// Delete, Rename and Copy (layouts only), Page Setup Manager and Print. Delete, Rename and Copy
-/// go through LAYOUT's prompts, so Rename and Copy ask for the new name on the command line.
+/// Delete, Rename and Move or Copy (layouts only), Select All Layouts, Page Setup Manager and
+/// Print. Rename edits the tab in place; Delete acts on every selected tab when this one is
+/// selected ([`crate::layouttabs`]).
 pub fn layout_tab_entries(app: &CadApp, name: &str) -> Vec<Vec<Entry>> {
     let model = name == "Model";
     let layout = |op: &str, label: &str| action(label, format!("layout:{op}:{name}"), true);
@@ -100,10 +105,11 @@ pub fn layout_tab_entries(app: &CadApp, name: &str) -> Vec<Vec<Entry>> {
     if find_command("layout").is_some() {
         new.push(layout("template", "From Template..."));
         if !model {
-            new.extend([layout("delete", "Delete Layout"), layout("rename", "Rename Layout"), layout("copy", "Copy Layout")]);
+            new.extend([layout("delete", "Delete Layout"), layout("rename", "Rename Layout"), layout("movecopy", "Move or Copy...")]);
         }
     }
     push(&mut groups, new);
+    groups.push(vec![action("Select All Layouts", format!("layout:selectall:{name}"), true)]);
     let out: Vec<Entry> = [("pagesetup", "Page Setup Manager..."), ("plot", "Print...")]
         .iter()
         .filter(|(id, _)| find_command(id).is_some())
@@ -137,6 +143,69 @@ pub fn layer_entries(app: &CadApp, name: &str) -> Vec<Vec<Entry>> {
     groups
 }
 
+/// An external reference's menu in the External References palette: Open, Attach DWG, Unload,
+/// Reload, Detach, Bind and Insert (as the palette's buttons do).
+pub fn xref_entries(app: &CadApp, name: &str, status: &str) -> Vec<Vec<Entry>> {
+    let loaded = status == "Loaded" || status == "Unreferenced";
+    let op = |option: &str| json!({ "option": option, "names": name });
+    let mut groups = Vec::new();
+    push(&mut groups, run("Open", "xopen", json!({ "name": name })).into_iter().chain(item(app, "xattach", Some("Attach DWG..."))).collect());
+    push(
+        &mut groups,
+        [
+            (status != "Unloaded").then(|| run("Unload", "-xref", op("unload"))).flatten(),
+            run("Reload", "-xref", op("reload")),
+            run("Detach", "-xref", op("detach")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    );
+    if loaded {
+        push(
+            &mut groups,
+            [run("Bind", "-xref", op("bind")), run("Insert", "-xref", json!({ "option": "bind", "names": name, "insert": true }))]
+                .into_iter()
+                .flatten()
+                .collect(),
+        );
+    }
+    groups
+}
+
+/// SELECTSIMILARMODE's bit for a Properties palette row (the properties Select Similar compares).
+fn similar_bit(label: &str) -> Option<u32> {
+    Some(match label {
+        "Color" => 1,
+        "Layer" => 2,
+        "Linetype" => 4,
+        "Linetype scale" | "Linetype Scale" => 8,
+        "Lineweight" => 16,
+        "Plot style" | "Plot Style" => 32,
+        _ => return None,
+    })
+}
+
+/// A Properties palette row's menu (`label` is the row's property): Select Similar by that
+/// property (with objects selected), Quick Select, Select All and Deselect All. Built without the
+/// app: the rows are drawn while it is borrowed (see [`crate::palettes`]).
+pub fn property_row_entries(label: &str, has_selection: bool) -> Vec<Vec<Entry>> {
+    let mut groups = Vec::new();
+    if has_selection && let Some(bit) = similar_bit(label) {
+        push(&mut groups, run("Select Similar", "selectsimilar", json!({ "mode": bit })).into_iter().collect());
+    }
+    let cmd = |id: &str| {
+        find_command(id).map(|s| Entry::Item {
+            label: s.label.to_string(),
+            id: id.to_string(),
+            shortcut: s.shortcut.map(str::to_string),
+            enabled: true,
+        })
+    };
+    push(&mut groups, ["qselect", "selectall", "ai_deselect"].iter().filter_map(|id| cmd(id)).collect());
+    groups
+}
+
 /// The Properties palette's menu: Quick Select, Select All, Deselect All, and hiding the palette.
 pub fn properties_entries(app: &CadApp) -> Vec<Vec<Entry>> {
     let mut groups = Vec::new();
@@ -155,6 +224,12 @@ pub fn choose(app: &mut CadApp, ctx: &egui::Context, id: &str) {
         }
     } else if id == "cmdline:copy" {
         ctx.copy_text(app.session.log.join("\n"));
+    } else if id == "cmdline:paste" {
+        // Into the command line as typed: one line (line breaks become spaces), not run yet.
+        if let Some(text) = app.services.read_clipboard.as_ref().and_then(|f| f()) {
+            let line: String = text.split(['\r', '\n']).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
+            app.cmd.buffer.push_str(&line);
+        }
     } else if let Some(rest) = id.strip_prefix("drawing:") {
         let Some((op, index)) = rest.split_once(':') else { return };
         let Ok(index) = index.parse::<usize>() else { return };
@@ -211,16 +286,15 @@ fn layout_action(app: &mut CadApp, op: &str, name: &str) {
             let _ = app.run("layout.set", json!({ "name": name }));
             activate(app, op);
         }
-        // LAYOUT's options, as typed: Template asks for the file, Rename and Copy for the new name.
-        "template" | "delete" | "rename" | "copy" => {
+        "rename" => crate::layouttabs::start_rename(app, name),
+        "movecopy" => crate::layouttabs::open_move_copy(app, name),
+        "selectall" => crate::layouttabs::select_all(app),
+        "delete" => crate::layouttabs::delete(app, name),
+        // LAYOUT's options, as typed: Template asks for the file, Copy for the new name.
+        "template" | "copy" => {
             activate(app, "layout");
             if app.session.running.as_ref().is_some_and(|r| r.id == "layout") {
-                let keyword = match op {
-                    "template" => "Template",
-                    "delete" => "Delete",
-                    "rename" => "Rename",
-                    _ => "Copy",
-                };
+                let keyword = if op == "template" { "Template" } else { "Copy" };
                 keyword_then(app, keyword, (op != "template").then_some(name));
             }
         }

@@ -39,7 +39,10 @@ pub struct ClipSource {
 /// Put copies of `ents` from the active drawing on the clipboard, with `base` as base point.
 pub(crate) fn copy(s: &mut Session, ents: Vec<Entity>, base: Vec2) -> Result<()> {
     let uid = s.state()?.uid;
-    let defs = defs_for(s.doc()?, &ents);
+    let mut defs = defs_for(s.doc()?, &ents);
+    // Whole groups among the objects travel with them: pasting makes unnamed groups of the copies.
+    let copied: HashSet<Handle> = ents.iter().map(|e| e.handle).collect();
+    defs.groups = super::groups::whole_groups(&s.doc()?.groups, &copied);
     set(s, ents, base, defs, Some(uid));
     Ok(())
 }
@@ -79,17 +82,22 @@ pub(crate) fn paste(s: &mut Session, m: &Mat3) -> Result<Vec<Handle>> {
     let defs = s.clipboard_source.as_ref().map(|c| c.defs.clone());
     let space = s.space();
     let d = s.doc_mut()?;
+    let groups = defs.as_ref().map(|x| x.groups.clone()).unwrap_or_default();
     let renames = defs.map(|x| merge(d, &x)).unwrap_or_default();
     let mut out = Vec::new();
+    let mut copies = std::collections::HashMap::new();
     for e in &ents {
+        let old = e.handle;
         let mut e = adopt(d, e, &renames);
         e.kind.transform(m);
         d.ensure_layer(&e.common.layer);
         out.push(e.handle);
+        copies.insert(old, e.handle);
         if let Some(st) = d.space_mut(&space) {
             st.push(e);
         }
     }
+    super::groups::copy_groups(d, &groups, &copies);
     s.set_selection(out.clone());
     Ok(out)
 }

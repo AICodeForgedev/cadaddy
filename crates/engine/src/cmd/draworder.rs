@@ -1,6 +1,7 @@
 //! Draw order: DRAWORDER (Above objects / Under objects / Front / Back), TEXTTOFRONT and
 //! HATCHTOBACK. The order is the order of a space's entity store, which DXF files keep as the
 //! order of their entity records (`cadaddy-io` also applies a SORTENTSTABLE when it reads one).
+//! TEXTTOFRONT and HATCHTOBACK act on model space, every layout and every block definition.
 
 use std::collections::{HashMap, HashSet};
 
@@ -180,15 +181,41 @@ impl Annot {
     }
 }
 
-/// Every object of the current space that `keep` accepts, in draw order.
-fn of_kind(s: &Session, keep: impl Fn(&EntityKind) -> bool) -> Result<Vec<Handle>> {
-    let d = s.doc()?;
-    Ok(d.space(&s.space()).map(|st| st.iter().filter(|e| keep(&e.kind)).map(|e| e.handle).collect()).unwrap_or_default())
+/// Move the objects `keep` accepts to the front (or the back) of one store, keeping their order
+/// among themselves. Returns how many there are.
+fn to_front_or_back(st: &mut cadaddy_doc::EntityStore, keep: &dyn Fn(&EntityKind) -> bool, front: bool) -> usize {
+    let hs: Vec<Handle> = st.iter().filter(|e| keep(&e.kind)).map(|e| e.handle).collect();
+    if front {
+        hs.iter().for_each(|h| {
+            st.bring_to_front(*h);
+        });
+    } else {
+        hs.iter().rev().for_each(|h| {
+            st.send_to_back(*h);
+        });
+    }
+    hs.len()
+}
+
+/// [`to_front_or_back`] in model space, every layout and every block definition (not xrefs,
+/// whose objects come from their files). Returns how many objects moved.
+fn everywhere(s: &mut Session, keep: &dyn Fn(&EntityKind) -> bool, front: bool) -> Result<usize> {
+    let d = s.doc_mut()?;
+    let mut n = to_front_or_back(&mut d.model, keep, front);
+    for l in &mut d.layouts {
+        n += to_front_or_back(&mut l.entities, keep, front);
+    }
+    for b in d.blocks.values_mut() {
+        if b.xref_path.is_some() || !b.entities.iter().any(|e| keep(&e.kind)) {
+            continue;
+        }
+        n += to_front_or_back(&mut std::sync::Arc::make_mut(b).entities, keep, front);
+    }
+    Ok(n)
 }
 
 fn annotations_to_front(s: &mut Session, which: Annot) -> Result<Value> {
-    let hs = of_kind(s, |k| which.matches(k))?;
-    let n = reorder(s, &hs, Order::Front, &[])?;
+    let n = everywhere(s, &|k| which.matches(k), true)?;
     Ok(json!({ "moved": n, "message": format!("{n} object(s) brought to front.") }))
 }
 
@@ -207,8 +234,7 @@ fn run_texttofront(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_hatchtoback(s: &mut Session, _p: &Value) -> Result<Value> {
-    let hs = of_kind(s, |k| matches!(k, EntityKind::Hatch(_)))?;
-    let n = reorder(s, &hs, Order::Back, &[])?;
+    let n = everywhere(s, &|k| matches!(k, EntityKind::Hatch(_)), false)?;
     Ok(json!({ "moved": n, "message": format!("{n} hatch object(s) sent to back.") }))
 }
 

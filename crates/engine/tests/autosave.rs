@@ -300,3 +300,43 @@ fn hooks() {
         read_pdf: None,
     });
 }
+
+fn dwg_and_dxf(_: &cadaddy_engine::doc::Drawing, name: &str) -> Result<Vec<u8>, String> {
+    Ok(name.as_bytes().to_vec())
+}
+
+fn dxf_only(_: &cadaddy_engine::doc::Drawing, name: &str) -> Result<Vec<u8>, String> {
+    if name.ends_with(".dwg") { Err("no DWG writer".into()) } else { Ok(b"0\nEOF\n".to_vec()) }
+}
+
+fn empty_dwg(_: &cadaddy_engine::doc::Drawing, name: &str) -> Result<Vec<u8>, String> {
+    if name.ends_with(".dwg") { Ok(Vec::new()) } else { Ok(b"0\nEOF\n".to_vec()) }
+}
+
+#[test]
+fn autosave_files_are_dwg_with_dxf_when_dwg_writing_fails() {
+    let d = cadaddy_engine::doc::Drawing::new_imperial();
+    assert_eq!(autosave::encode(dwg_and_dxf, &d).unwrap(), (b"autosave.dwg".to_vec(), "dwg"));
+    assert_eq!(autosave::encode(dxf_only, &d).unwrap(), (b"0\nEOF\n".to_vec(), "dxf"));
+    assert_eq!(autosave::encode(empty_dwg, &d).unwrap().1, "dxf", "an empty DWG is no file");
+}
+
+#[test]
+fn a_dwg_autosave_is_recovered_with_its_objects() {
+    // The real writer and reader: the .sv$ holds DWG content, and reading it back (as Drawing
+    // Recovery does, by its first bytes whatever the extension) gives the drawing again.
+    let mut s = Session::new();
+    draw(&mut s);
+    s.execute("circle", &json!({"center": [3, 3], "radius": 1})).unwrap();
+    let doc = s.doc().unwrap().clone();
+    let (bytes, format) = autosave::encode(|d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()), &doc).unwrap();
+    assert_eq!(format, "dwg");
+    assert!(bytes.starts_with(b"AC10"), "DWG content");
+    let back = cadaddy_io::read(&bytes, "Plan.dwg_1-a_2.sv$").unwrap();
+    let kinds = |d: &cadaddy_engine::doc::Drawing| {
+        let mut k: Vec<&str> = d.model.iter().map(|e| e.kind.type_name()).collect();
+        k.sort_unstable();
+        k
+    };
+    assert_eq!(kinds(&back), kinds(&doc));
+}

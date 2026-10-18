@@ -1,4 +1,4 @@
-//! Express Tools: BURST and TXT2MTXT.
+//! Express Tools: BURST, TXT2MTXT, BREAKLINE, BLOCKREPLACE and MOCORO.
 //!
 //! BURST explodes block references the way they are drawn: attributes become text with their
 //! values (invisible ones are dropped), and objects on layer 0 or with ByBlock properties take the
@@ -12,6 +12,10 @@ use cadaddy_doc::color::Color;
 use cadaddy_doc::{Common, Entity, EntityKind, HAlign, Handle, Lineweight, MText, Text, Transparency, VAlign};
 use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
+
+mod blockreplace;
+mod breakline;
+mod mocoro;
 
 use super::machines::{SelOutcome, SelectPhase, SelectRun};
 use super::*;
@@ -27,6 +31,18 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Modify", "Text", "Convert to Mtext"])
             .params("{handles? (TEXT; default the selection), combine?: bool (default true: one MTEXT, lines top to bottom), wordWrap?: bool (combined: one wrapping paragraph as wide as the widest line)} → {handles}")
             .interactive(|_| Ok(Box::new(Txt2MtxtM::default()))),
+        CommandSpec::new("breakline", "Break-line Symbol", breakline::run)
+            .menu(&["Tools", "Express Tools", "Break-line Symbol"])
+            .params("{p1, p2, at? (where the symbol goes; default the midpoint), size? (default 0.5, metric 12.5), extension? (past each point; default 0.125, metric 3)} → {handle}: a polyline on the current layer")
+            .interactive(|s| Ok(Box::new(breakline::BreaklineM::new(s)))),
+        CommandSpec::new("blockreplace", "Replace Block...", blockreplace::run)
+            .menu(&["Tools", "Express Tools", "Replace Block..."])
+            .params("{from, to (block names), purge?: bool (default true: purge the old block when nothing refers to it)} → {replaced, purged}")
+            .interactive(|_| Ok(Box::new(blockreplace::BlockReplaceM::new()))),
+        CommandSpec::new("mocoro", "Move/Copy/Rotate", mocoro::run)
+            .menu(&["Tools", "Express Tools", "Move/Copy/Rotate"])
+            .params("{handles? (default the selection), base, steps: [{move: [x, y]} | {copy: [x, y]} | {rotate: degrees} | {scale: factor} | {base: [x, y]}, …]} → {handles, base}: one undo step")
+            .interactive(|_| Ok(Box::new(mocoro::MocoroM::new()))),
     ]
 }
 
