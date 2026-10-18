@@ -1,0 +1,21 @@
+[package]
+name = "cadaddy-cli"
+description = "CADaddy command-line tool: info, convert, run scripts, export, commands, MCP server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+cadaddy-engine = { workspace = true }
+cadaddy-io = { workspace = true }
+cadaddy-mcp = { workspace = true }
+cadaddy-render = { workspace = true }
+serde_json = { workspace = true }
+
+[[bin]]
+name = "cadaddy-cli"
+path = "src/main.rs"

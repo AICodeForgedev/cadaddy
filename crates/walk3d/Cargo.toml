@@ -1,0 +1,17 @@
+[package]
+name = "cadaddy-walk3d"
+description = "CADaddy walk mode: a 3D model derived from the 2D drawing (levels + layer rules), walk camera, picking"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version = "1.95"
+
+[lints]
+workspace = true
+
+[dependencies]
+cadaddy-geom = { workspace = true }
+cadaddy-color = { workspace = true }
+cadaddy-doc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

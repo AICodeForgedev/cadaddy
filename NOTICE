@@ -1,11 +1,11 @@
 CADaddy
-Copyright (c) 2026 AICodeForge. Free to use; see LICENSE.md.
+Copyright (c) 2026 AICodeForge. Source-available under FSL-1.1-ALv2; see LICENSE.md.
 
 This product includes third-party open-source software:
 
 - CADCraft, Copyright (c) 2026 ArtCraft Team and the CADCraft contributors
   (https://github.com/storytold/cadcraft). Licensed under the MIT License or the Apache License,
-  Version 2.0, at your option: licenses/CADCraft-MIT.txt, licenses/CADCraft-Apache-2.0.txt.
+  Version 2.0, at your option: LICENSE-MIT, LICENSE-APACHE.
 - acadrust (DWG reading and writing, https://github.com/hakanaktt/acadrust), Mozilla Public
   License 2.0, used unmodified as a separate library. Its source is available from crates.io and
   the repository above.

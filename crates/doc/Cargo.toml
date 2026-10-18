@@ -1,0 +1,16 @@
+[package]
+name = "cadaddy-doc"
+description = "CADaddy drawing database: entities, symbol tables, blocks, layouts, copy-on-write store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cadaddy-geom = { workspace = true }
+cadaddy-color = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

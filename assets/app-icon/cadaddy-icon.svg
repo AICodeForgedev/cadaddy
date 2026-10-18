@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><defs><linearGradient id="ig" x1="60" y1="60" x2="452" y2="452" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#00e0ff"/><stop offset="1" stop-color="#1f5bff"/></linearGradient>
+<linearGradient id="ic" x1="0" y1="256" x2="0" y2="400" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#e9eef7"/><stop offset="1" stop-color="#b9c4d8"/></linearGradient>
+<radialGradient id="if" cx="230" cy="200" r="260" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#12234a"/><stop offset="1" stop-color="#070d1f"/></radialGradient><mask id="ik" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512"><rect width="512" height="512" fill="#fff"/><path d="M300.5,444.3 L333.8,425.1" stroke="#000" stroke-width="50"/><path d="M359.8,410.1 L367.2,405.8" stroke="#000" stroke-width="0"/></mask></defs><g mask="url(#ik)"><polygon points="256.0,51.0 433.5,153.5 433.5,358.5 256.0,461.0 78.5,358.5 78.5,153.5" fill="url(#if)"/>
+<path d="M256.0,42.0 L441.3,149.0 L441.3,363.0 L256.0,470.0 L70.7,363.0 L70.7,149.0 Z" fill="none" stroke="url(#ig)" stroke-width="46" stroke-linejoin="round" stroke-linecap="butt"/>
+</g>
+<g stroke="#29b6ff" stroke-width="7" stroke-linecap="round" fill="none">
+<path d="M236,196 H392" stroke-dasharray="16 11"/>
+<path d="M352,150 V392" stroke-dasharray="16 11"/>
+<path d="M216,320 H404" stroke-dasharray="16 11"/>
+<path d="M272,250 V384" stroke-dasharray="16 11"/>
+<path d="M200,228 L340,312" stroke-dasharray="16 11" stroke-opacity="0.9"/>
+<circle cx="352" cy="196" r="9" fill="#0b1630"/>
+<circle cx="272" cy="320" r="9" fill="#0b1630"/>
+<circle cx="352" cy="320" r="20" fill="#0b1630" stroke-width="8"/>
+<circle cx="352" cy="320" r="3.5" fill="#29b6ff" stroke="none"/>
+</g>
+<polygon points="304,108 146,200 146,256 186,256 186,219 304,150" fill="#ffffff"/>
+<polygon points="146,256 146,312 304,404 304,362 186,293 186,256" fill="url(#ic)"/>
+<polygon points="186,219 186,293 200,285 200,227" fill="#8ea2c4"/>
+<polygon points="186,293 304,362 304,346 200,285" fill="#6f84aa"/>
+<polygon points="304,150 186,219 200,227 304,166" fill="#d7e2f3"/>
+<path d="M304,150 L186,219" stroke="#2fb8ff" stroke-width="3"/></svg>

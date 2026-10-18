@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata (software centres, Flathub). Template: package.sh and the Flatpak
+     manifest substitute @VERSION@ and @DATE@ from Cargo.toml and the build date. -->
+<component type="desktop-application">
+  <id>dev.aicodeforge.cadaddy</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>FSL-1.1-ALv2</project_license>
+  <name>CADaddy</name>
+  <summary>Draft, dimension and plot 2D drawings</summary>
+  <developer id="dev.aicodeforge">
+    <name>AICodeForge</name>
+  </developer>
+  <description>
+    <p>
+      CADaddy is an open-source computer-aided design and drafting application with a familiar
+      command line, object snaps, layers, dimensions, hatches and blocks. It opens and saves DXF
+      and DWG drawings, exports SVG and PNG, and can be driven by AI agents over MCP.
+    </p>
+  </description>
+  <launchable type="desktop-id">dev.aicodeforge.cadaddy.desktop</launchable>
+  <icon type="stock">dev.aicodeforge.cadaddy</icon>
+  <!-- Only url types known to appstream 0.15 (Ubuntu 22.04, where CI validates): no vcs-browser. -->
+  <url type="homepage">https://aicodeforge.dev</url>
+  <url type="bugtracker">https://aicodeforge.dev/cadaddy/feedback</url>
+  <url type="help">https://github.com/AICodeForgedev/cadaddy</url>
+  <categories>
+    <category>Graphics</category>
+    <category>Engineering</category>
+  </categories>
+  <keywords>
+    <keyword>CAD</keyword>
+    <keyword>drafting</keyword>
+    <keyword>DXF</keyword>
+    <keyword>DWG</keyword>
+  </keywords>
+  <branding>
+    <color type="primary" scheme_preference="light">#9ee3f2</color>
+    <color type="primary" scheme_preference="dark">#0b6f88</color>
+  </branding>
+  <requires>
+    <display_length compare="ge">760</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>tablet</control>
+  </supports>
+  <provides>
+    <binary>cadaddy</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

@@ -1,0 +1,29 @@
+[package]
+name = "cadaddy-engine"
+description = "CADaddy engine: sessions, commands, the command line and prompts, snaps, selection, undo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cadaddy-geom = { workspace = true }
+cadaddy-color = { workspace = true }
+cadaddy-doc = { workspace = true }
+cadaddy-dxf = { workspace = true }
+cadaddy-constraints = { workspace = true }
+cadaddy-fonts = { workspace = true }
+cadaddy-render = { workspace = true }
+craft-docpath = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+# R-tree spatial index for picking, window selection and object snaps (MIT OR Apache-2.0).
+rstar = { version = "0.12", default-features = false }
+
+[dev-dependencies]
+# Real DXF files for the external reference tests (io is a lower layer).
+cadaddy-io = { workspace = true }

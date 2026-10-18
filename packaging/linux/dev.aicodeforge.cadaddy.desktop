@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=CADaddy
+GenericName=Computer-Aided Design
+Comment=Draft, dimension and plot 2D drawings; open DXF and DWG files
+Exec=cadaddy %F
+TryExec=cadaddy
+Icon=dev.aicodeforge.cadaddy
+Terminal=false
+StartupNotify=true
+StartupWMClass=dev.aicodeforge.cadaddy
+Categories=Graphics;Engineering;VectorGraphics;
+MimeType=image/vnd.dxf;image/vnd.dwg;application/x-dxf;application/acad;
+Keywords=cad;drafting;dxf;dwg;drawing;engineering;architecture;mechanical;

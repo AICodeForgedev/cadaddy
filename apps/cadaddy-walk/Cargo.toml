@@ -1,0 +1,24 @@
+[package]
+name = "cadaddy-walk"
+description = "Headless walk-mode renderer: one frame of a drawing's derived 3D to a PNG (walk mode itself is in CADaddy, View ▸ Walk)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version = "1.95"
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "cadaddy-walk"
+path = "src/main.rs"
+
+[dependencies]
+cadaddy-ui-egui = { workspace = true }
+cadaddy-engine = { workspace = true }
+cadaddy-io = { workspace = true }
+cadaddy-walk3d = { path = "../../crates/walk3d" }
+egui-wgpu = { workspace = true }
+image = { workspace = true }
+pollster = "0.4"

@@ -1,0 +1,15 @@
+[package]
+name = "cadaddy-constraints"
+description = "CADaddy parametric solver: geometric and dimensional constraints (own damped Gauss-Newton solver), expressions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cadaddy-geom = { workspace = true }
+cadaddy-doc = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

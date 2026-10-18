@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/cadaddy-logo-dark.png">
-    <img src="docs/cadaddy-logo-light.png" width="420" alt="CADaddy">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/cadaddy-logo-dark.png">
+    <img src="docs/brand/cadaddy-logo-light.png" width="420" alt="CADaddy">
   </picture>
 </p>
 
@@ -38,7 +38,7 @@
 | **Runs on** | Windows 10 and 11 (64-bit), macOS 11 or newer (Apple chip and Intel), Linux (64-bit, glibc 2.35+: Ubuntu 22.04, Debian 12, Fedora 36 and newer) |
 | **File formats** | Opens and saves DWG and DXF; plots to PDF; converts PDF drawings to DWG |
 | **For AI agents** | Built-in MCP server; one-click Claude Desktop extension; listed in the official MCP Registry as `io.github.AICodeForgedev/cadaddy` |
-| **Licence** | Free to use, including commercial work ([terms](LICENSE.md)). Source code not published |
+| **Licence** | Free to use, including commercial work. Source-available under FSL-1.1, becoming Apache-2.0 after two years ([license](LICENSE.md)) |
 | **How it compares** | [CADaddy vs LibreCAD, nanoCAD Free, FreeCAD and QCAD](https://aicodeforge.dev/free-autocad-alternative) |
 
 ## Install
@@ -140,6 +140,43 @@ Files:           <attach a small DWG/DXF if it helps; nothing confidential>
 
 The more exact the steps, the faster it gets fixed. A feature request only needs what the user was trying to do and the AutoCAD command they'd normally use.
 
+## Build from source
+
+CADaddy is written in Rust. Desktop builds need Rust 1.95 or later ([rustup.rs](https://rustup.rs)).
+
+```sh
+git clone https://github.com/AICodeForgedev/cadaddy
+cd cadaddy
+cargo run --release -p cadaddy -- --sample      # the app, with a sample drawing
+cargo run --release -p cadaddy-cli -- --help    # the command-line tool and MCP server
+cargo xtask ci                                  # format, lint, tests, asset and layering checks, wasm
+```
+
+On Linux, install the usual windowing development packages first (on Ubuntu:
+`libxkbcommon-dev libwayland-dev libx11-dev libgtk-3-dev`). The browser build:
+`cd apps/cadaddy-web && trunk serve` (needs [trunk](https://trunkrs.dev)).
+
+How the code is laid out:
+
+```text
+geom ─┐                       f64 geometry: arcs, bulges, splines, intersections, offsets
+dxf   │  (standalone)         DXF tag reader/writer
+color ┤                       colour index, true colour
+doc   ┤                       drawing database, copy-on-write entity store (cheap undo)
+fonts ┤ render               stroke font + TEXT/MTEXT layout │ display lists, linetypes, hatches, dims, CPU raster
+io    ┤                       DXF mapping, SVG/PNG export
+engine┤                       sessions, commands, command line + prompts, snaps, selection, undo
+ui-egui · mcp                 the swappable egui front end · MCP server
+apps: cadaddy · cadaddy-cli · cadaddy-web
+```
+
+Nothing below `ui-egui` knows about the user interface, so the front end can be replaced. Every
+feature is a command (`crates/engine/src/cmd`), reachable from the command line, menus, scripts,
+the JSON control channel and MCP alike. Agent and contributor notes are in [AGENTS.md](AGENTS.md).
+
+Pull requests are welcome. By contributing you agree your contribution is licensed under the
+project's [license](LICENSE.md).
+
 ## Feedback and support
 
 - In CADaddy: **Help ▸ Report a Bug** or **Help ▸ Request a Feature**
@@ -151,11 +188,14 @@ If you find it useful, a ⭐ on this repo helps other people find it.
 
 ## Licence
 
-CADaddy is free to use, including for commercial work: see the [terms](LICENSE.md). Its source code
-isn't published.
+CADaddy is free to use, including for commercial work. Its source code is source-available under
+the [Functional Source License 1.1](LICENSE.md) (FSL-1.1-ALv2): you may read, use, modify and
+redistribute it for anything except a competing product or service, and each version also becomes
+available under the Apache License 2.0 two years after its release.
 
-<sub>Credits: CADaddy includes open-source components, among them CADCraft (MIT/Apache-2.0) and
-acadrust (MPL-2.0). Their notices and licenses are in [NOTICE](NOTICE) and [`licenses/`](licenses).</sub>
+<sub>Credits: CADaddy includes code from CADCraft (MIT/Apache-2.0) and uses acadrust (MPL-2.0),
+among other open-source components. Their notices and licenses are in [NOTICE](NOTICE),
+[LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).</sub>
 
 ---
 

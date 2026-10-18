@@ -1,0 +1,32 @@
+[package]
+name = "cadaddy-io"
+description = "CADaddy file formats: DXF read/write mapping, SVG, PNG and PDF export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cadaddy-geom = { workspace = true }
+cadaddy-color = { workspace = true }
+cadaddy-doc = { workspace = true }
+cadaddy-dxf = { workspace = true }
+cadaddy-dwg = { workspace = true }
+cadaddy-render = { workspace = true }
+cadaddy-fonts = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+miniz_oxide = "0.8"
+# PDF reading for PDFIMPORT (MIT); no optional extras (parallelism, dates, images).
+lopdf = { version = "0.45", default-features = false }
+quick-xml = { workspace = true }
+
+[dev-dependencies]
+tiny-skia = { workspace = true }
+
+# lopdf needs randomness (rand → getrandom); in the browser it comes from crypto.getRandomValues.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }

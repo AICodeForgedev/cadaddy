@@ -1,0 +1,14 @@
+*~
+/target
+/plan/
+/plans/
+/dist/
+/log/
+/temp/
+.DS_Store
+*.swp
+/apps/cadaddy-web/dist/
+/.claude/worktrees/
+
+# local build/test logs
+/*.log
