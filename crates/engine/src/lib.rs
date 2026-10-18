@@ -47,6 +47,7 @@ pub use cadaddy_doc as doc;
 pub const AGENT_PORT: u16 = 47_820;
 pub use cadaddy_geom as geom;
 pub use cadaddy_render as render;
+pub use cmd::blocks::extract::EXTRACT_PROPERTIES;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use prompt::{Accept, Drag, Input, Interactive, Picker, Prompt, Step};

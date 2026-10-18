@@ -473,6 +473,12 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::hatchdlg::open_create(app, matches!(id, "gradient" | "gd"));
             Ok(Value::Null)
         }
+        // Typed or from a menu: the Data Extraction wizard. -DATAEXTRACTION and JSON calls keep
+        // the command line and the JSON form.
+        "dataextraction" | "dx" | "eattext" if params.is_null() && app.session.state().is_ok() => {
+            crate::extractdlg::open(app);
+            Ok(Value::Null)
+        }
         "hatchedit" | "he" if params.is_null() && app.session.state().is_ok() => {
             crate::hatchdlg::open_edit(app);
             Ok(Value::Null)

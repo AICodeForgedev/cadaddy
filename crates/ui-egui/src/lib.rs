@@ -32,6 +32,7 @@ pub mod xrefs;
 
 pub mod dyngrips;
 pub mod dyninput;
+pub mod extractdlg;
 pub mod gpu;
 pub mod grip_dyn;
 mod groupgrips;
@@ -284,6 +285,8 @@ pub struct CadApp {
     pub gpu_notice: Option<autosave::GpuNotice>,
     /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
+    /// The Data Extraction wizard while open ([`extractdlg`]).
+    pub extract_dlg: Option<extractdlg::State>,
     /// The layout tabs' rename, selection and Move or Copy dialog ([`layouttabs`]).
     pub layout_tabs: layouttabs::LayoutTabs,
     /// The Edit Block Definition dialog ([`bedit`]).
@@ -336,6 +339,7 @@ impl CadApp {
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
             hatch_dlg: None,
+            extract_dlg: None,
             layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
