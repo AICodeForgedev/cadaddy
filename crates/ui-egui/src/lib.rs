@@ -38,6 +38,7 @@ pub mod i18n;
 pub mod icons;
 pub mod layers;
 pub mod managers;
+pub mod matchpropdlg;
 pub mod menus;
 pub mod opening;
 pub mod options;
@@ -725,6 +726,7 @@ impl CadApp {
         dialogs::show(self, ui.ctx());
         layers::off_prompt(self, ui.ctx());
         palettes::patterns::prompt_picker(self, ui.ctx());
+        matchpropdlg::show(self, ui.ctx());
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
