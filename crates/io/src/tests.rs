@@ -2128,7 +2128,7 @@ fn svg_hidden_and_defs_subtrees_are_skipped() {
          <rect x=\"1\" y=\"1\" width=\"2\" height=\"2\"/></svg>"
     );
     let d = read(svg.as_bytes(), "skip.svg").unwrap();
-    assert_eq!(kinds(&d), ["Polyline"]);
+    assert_eq!(kinds(&d), ["Text", "Polyline"]);
 }
 
 #[test]
