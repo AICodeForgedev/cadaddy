@@ -41,7 +41,7 @@ pub(crate) enum Sym {
 }
 
 /// Names no xref brings: layer 0 and the built-in linetypes stay the host's.
-fn shared(sym: Sym, name: &str) -> bool {
+pub(crate) fn shared(sym: Sym, name: &str) -> bool {
     name.is_empty()
         || match sym {
             Sym::Layer => name == "0",

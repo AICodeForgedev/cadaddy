@@ -1,6 +1,7 @@
 //! XCLIP: clip block references and xrefs to a boundary. New boundary (Rectangular, Polygonal or a
 //! selected closed polyline, optionally inverted), ON / OFF, Delete, and generate Polyline (the
-//! boundary drawn as a polyline). The boundary is kept in block coordinates
+//! boundary drawn as a polyline) and Clipdepth (front and back clipping planes, as distances in
+//! front of and behind the boundary's plane; objects entirely beyond them are hidden). The boundary is kept in block coordinates
 //! ([`cadaddy_doc::XClip`]), so it moves, turns and scales with the reference; XCLIPFRAME shows it.
 
 use cadaddy_doc::{EntityKind, Handle, Insert, LwPolyline, XClip};
@@ -20,8 +21,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Modify", "Clip", "Xref"])
             .alias(&["xc"])
             .params(
-                "{handles?, option?: \"new\"|\"on\"|\"off\"|\"delete\"|\"polyline\" (default new), boundary?: [[x,y]…] (world; two points = rectangle), \
-                 polyline?: hex (a closed object to clip to), invert?: bool} → {changed, handles?}",
+                "{handles?, option?: \"new\"|\"on\"|\"off\"|\"delete\"|\"polyline\"|\"clipdepth\" (default new), boundary?: [[x,y]…] (world; two points = rectangle), \
+                 polyline?: hex (a closed object to clip to), invert?: bool, front?: distance in front of the boundary (clipdepth), back?: distance behind it, remove?: bool (clipdepth: no planes)} → {changed, handles?}",
             )
             .interactive(|_| Ok(Box::new(XclipM::default()))),
     ]
@@ -72,7 +73,7 @@ fn clip_new(s: &mut Session, hs: &[Handle], world: &[Vec2], invert: bool) -> Res
     let mut n = 0;
     for (h, ins, base) in references(s, hs)? {
         let Some(boundary) = to_block(&ins, base, world) else { continue };
-        set_clip(s, h, Some(XClip { boundary, enabled: true, inverted: invert }))?;
+        set_clip(s, h, Some(XClip { boundary, enabled: true, inverted: invert, front: None, back: None }))?;
         n += 1;
     }
     Ok(n)
@@ -97,6 +98,34 @@ fn clip_option(s: &mut Session, hs: &[Handle], option: &str) -> Result<(usize, V
         n += 1;
     }
     Ok((n, made))
+}
+
+/// XCLIP Clipdepth: set the front and back clipping planes (distances in front of and behind the
+/// boundary; `None` leaves that plane off) of every clipped reference among `hs`.
+fn clip_depth(s: &mut Session, hs: &[Handle], front: Option<f64>, back: Option<f64>) -> Result<usize> {
+    if [front, back].iter().flatten().any(|v| !v.is_finite() || v.abs() > 1e12) {
+        return Err(bad("xclip", "clip distances must be numbers"));
+    }
+    if let (Some(f), Some(b)) = (front, back)
+        && f < -b
+    {
+        return Err(bad("xclip", "the front clipping plane must not be behind the back one"));
+    }
+    let mut n = 0;
+    for (h, ins, _) in references(s, hs)? {
+        let Some(c) = ins.clip.clone() else { continue };
+        set_clip(s, h, Some(XClip { front, back: back.map(|b| -b), ..c }))?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// A clip distance parameter: absent or null = no plane.
+fn distance(p: &Value, key: &str) -> Result<Option<f64>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_f64().map(Some).ok_or_else(|| bad("xclip", format!("`{key}` must be a distance"))),
+    }
 }
 
 /// The outline of a closed object, as XCLIP's Select polyline takes it.
@@ -129,6 +158,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let n = clip_new(s, &hs, &world, bool_or(p, "invert", false))?;
             Ok(json!({ "changed": n }))
         }
+        "clipdepth" | "depth" => {
+            let (front, back) = if bool_or(p, "remove", false) { (None, None) } else { (distance(p, "front")?, distance(p, "back")?) };
+            Ok(json!({ "changed": clip_depth(s, &hs, front, back)? }))
+        }
         "on" | "off" | "delete" | "polyline" => {
             let (n, made) = clip_option(s, &hs, &option)?;
             let mut r = json!({ "changed": n });
@@ -137,7 +170,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Ok(r)
         }
-        o => Err(bad("xclip", format!("`option` must be \"new\", \"on\", \"off\", \"delete\" or \"polyline\", got \"{o}\""))),
+        o => Err(bad("xclip", format!("`option` must be \"new\", \"on\", \"off\", \"clipdepth\", \"delete\" or \"polyline\", got \"{o}\""))),
     }
 }
 
@@ -148,6 +181,9 @@ enum Stage {
     Option,
     /// Replace the existing boundary?
     Replace,
+    /// Clipdepth: the front plane's distance, then the back plane's.
+    Front,
+    Back,
     Boundary,
     Corner1,
     Corner2,
@@ -165,6 +201,7 @@ struct XclipM {
     objs: Vec<Handle>,
     invert: bool,
     points: Vec<Vec2>,
+    front: Option<f64>,
 }
 
 impl XclipM {
@@ -193,10 +230,12 @@ impl Interactive for XclipM {
     fn prompt(&self, _s: &Session) -> Prompt {
         match self.stage {
             Stage::Select => self.sel.prompt(),
-            Stage::Option => {
-                Prompt::new("Enter clipping option", Accept::TEXT).kw(&["ON", "OFF", "Delete", "generate Polyline", "New boundary"]).default("New")
-            }
+            Stage::Option => Prompt::new("Enter clipping option", Accept::TEXT)
+                .kw(&["ON", "OFF", "Clipdepth", "Delete", "generate Polyline", "New boundary"])
+                .default("New"),
             Stage::Replace => Prompt::new("Delete old boundary(s)?", Accept::TEXT).kw(&["Yes", "No"]).default("Yes"),
+            Stage::Front => Prompt::new("Specify front clip distance or [Remove]", Accept::NUMBER).kw(&["Remove"]),
+            Stage::Back => Prompt::new("Specify back clip distance or [Remove]", Accept::NUMBER).kw(&["Remove"]),
             Stage::Boundary => Prompt::new(
                 if self.invert {
                     "Inside mode - Objects inside boundary will be hidden.\nSpecify clipping boundary or select invert option"
@@ -247,6 +286,10 @@ impl Interactive for XclipM {
                         self.stage = if clipped { Stage::Replace } else { Stage::Boundary };
                         return Ok(Step::Continue);
                     }
+                    (Some("c" | "clipdepth"), _) => {
+                        self.stage = Stage::Front;
+                        return Ok(Step::Continue);
+                    }
                     (Some("on"), _) => "on",
                     (Some("off"), _) => "off",
                     (Some("d" | "delete"), _) => "delete",
@@ -258,6 +301,34 @@ impl Interactive for XclipM {
                 };
                 let (n, _) = clip_option(s, &self.objs, option)?;
                 if n == 0 {
+                    s.echo("No clipped references selected.");
+                }
+                s.set_selection(Vec::new());
+                Ok(Step::Done)
+            }
+            Stage::Front | Stage::Back => {
+                let value = match (word.as_deref(), &i) {
+                    (Some("r" | "remove"), _) => {
+                        clip_depth(s, &self.objs, None, None)?;
+                        s.set_selection(Vec::new());
+                        return Ok(Step::Done);
+                    }
+                    (_, Input::Enter) => None,
+                    (Some(w), _) => match w.parse::<f64>().ok().filter(|v| v.is_finite()) {
+                        Some(v) => Some(v),
+                        None => {
+                            s.echo("Requires a distance or the Remove option.");
+                            return Ok(Step::Continue);
+                        }
+                    },
+                    _ => return Ok(Step::Continue),
+                };
+                if self.stage == Stage::Front {
+                    self.front = value;
+                    self.stage = Stage::Back;
+                    return Ok(Step::Continue);
+                }
+                if clip_depth(s, &self.objs, self.front, value)? == 0 {
                     s.echo("No clipped references selected.");
                 }
                 s.set_selection(Vec::new());

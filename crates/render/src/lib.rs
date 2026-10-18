@@ -1192,7 +1192,19 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     // draws (block contents set their own).
     let (saved, saved_transparency) = (b.named, b.transparency);
     b.named = b.styles.and_then(|s| s.named_index(ctx, &e.common));
+    let first = b.list.prims.len();
     entity_parts(b, ctx, e);
+    // While a reference is edited in place, the rest of the drawing is faded (XFADECTL).
+    if ctx.depth == 0
+        && !b.plotting
+        && let Some(r) = &ctx.d.refedit
+        && !r.owns(e.handle)
+    {
+        let fade = u8::try_from(ctx.d.header.i64("XFADECTL", 50).clamp(0, i64::from(MAX_TRANSPARENCY))).unwrap_or(50);
+        for p in b.list.prims.iter_mut().skip(first) {
+            p.transparency = p.transparency.max(fade);
+        }
+    }
     b.named = saved;
     b.transparency = saved_transparency;
     if b.plotting && b.list.prim_layers.len() < b.list.prims.len() {
@@ -1913,6 +1925,8 @@ fn image(b: &mut Builder, ctx: &Ctx, i: &cadaddy_doc::Image, rgb: Ink, lw: f32) 
 
 /// A block reference's contents: every copy (MINSERT rows × columns) of its block's objects.
 fn insert_contents(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, blk: &cadaddy_doc::Block) {
+    // XCLIP Clipdepth: objects beyond the clipping planes are left out.
+    let depth = ins.clip.as_ref().filter(|c| c.active() && (c.front.is_some() || c.back.is_some()));
     let cols = ins.cols.clamp(1, 10_000);
     let rows = ins.rows.clamp(1, 10_000);
     'copies: for r in 0..rows {
@@ -1925,7 +1939,7 @@ fn insert_contents(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::In
             let sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, m) };
             for be in blk.entities.iter() {
                 // Constant/visible attribute definitions inside blocks are not drawn; attribs are.
-                if matches!(be.kind, EntityKind::AttDef(_)) {
+                if matches!(be.kind, EntityKind::AttDef(_)) || depth.is_some_and(|c| c.beyond_depth(&be.kind)) {
                     continue;
                 }
                 if !b.expand() {

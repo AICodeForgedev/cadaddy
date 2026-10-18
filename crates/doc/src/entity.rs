@@ -559,12 +559,34 @@ pub struct XClip {
     /// Inverted: the part inside the boundary is hidden instead.
     #[serde(default)]
     pub inverted: bool,
+    /// XCLIP Clipdepth: the front clipping plane, as a height above the boundary's plane (block
+    /// coordinates); objects entirely above it are hidden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front: Option<f64>,
+    /// The back clipping plane (a height, usually below the boundary's plane); objects entirely
+    /// below it are hidden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back: Option<f64>,
 }
 
 impl XClip {
     /// Whether the clip shows anything different from the whole block.
     pub fn active(&self) -> bool {
         self.enabled && self.boundary.len() >= 3 && self.boundary.iter().all(|p| p.is_finite())
+    }
+    /// Whether block object `e` (block coordinates) is hidden by the clipping planes: it lies
+    /// entirely in front of the front plane or behind the back plane.
+    pub fn beyond_depth(&self, e: &EntityKind) -> bool {
+        if self.front.is_none() && self.back.is_none() {
+            return false;
+        }
+        let (lo, hi) = match e.points3d() {
+            Some((pts, _)) if !pts.is_empty() => {
+                pts.iter().filter(|p| p.z.is_finite()).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.z), hi.max(p.z)))
+            }
+            _ => (e.elevation(), e.elevation()),
+        };
+        self.front.is_some_and(|f| f.is_finite() && lo > f) || self.back.is_some_and(|b| b.is_finite() && hi < b)
     }
 }
 fn unit_scale() -> Vec3 {

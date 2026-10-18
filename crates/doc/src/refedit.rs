@@ -42,6 +42,9 @@ pub struct RefEdit {
     /// Block objects taken out of the working set with their edits (block coordinates, the block
     /// object's handle).
     pub released: Vec<Entity>,
+    /// When a nested reference is edited: faded copies of the objects of the blocks around it
+    /// (they show where it is and are never edited).
+    pub context: Vec<Handle>,
 }
 
 impl RefEdit {
@@ -51,7 +54,7 @@ impl RefEdit {
     }
     /// Whether `h` is something the edit manages (working set, ghost, the hidden reference).
     pub fn owns(&self, h: Handle) -> bool {
-        h == self.insert || self.is_working(h) || self.ghosts.iter().any(|(g, _)| *g == h)
+        h == self.insert || self.is_working(h) || self.ghosts.iter().any(|(g, _)| *g == h) || self.context.contains(&h)
     }
 }
 
@@ -75,6 +78,9 @@ impl Drawing {
         }
         for (g, _) in &r.ghosts {
             self.remove_entity(*g);
+        }
+        for c in &r.context {
+            self.remove_entity(*c);
         }
         let vis = r.insert_was_visible;
         let _ = self.modify_entity(r.insert, |e| e.common.visible = vis);

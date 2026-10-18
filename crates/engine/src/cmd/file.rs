@@ -583,7 +583,7 @@ fn bak_path(path: &str) -> String {
     std::path::Path::new(path).with_extension("bak").to_string_lossy().into_owned()
 }
 
-fn store(path: &str, bytes: &[u8]) -> Result<()> {
+pub(crate) fn store(path: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         // The file being replaced, if any: a read-only one is left alone (as AutoCAD does: save

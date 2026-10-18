@@ -140,8 +140,17 @@ fn write_xclips(w: &mut W, plan: &HashMap<Handle, XclipObj>, every: &[&Entity]) 
         w.f(21, 0.0);
         w.f(31, 0.0);
         w.i(71, i64::from(clip.enabled));
-        w.i(72, 0);
-        w.i(73, 0);
+        // Clipping planes (XCLIP Clipdepth): front (72 on, 40 distance), back (73 on, 41).
+        let front = clip.front.filter(|v| v.is_finite());
+        let back = clip.back.filter(|v| v.is_finite());
+        w.i(72, i64::from(front.is_some()));
+        if let Some(f) = front {
+            w.f(40, f);
+        }
+        w.i(73, i64::from(back.is_some()));
+        if let Some(b) = back {
+            w.f(41, b);
+        }
         // The inverse block transform, then the clip transform: identities (4×3, column major).
         for _ in 0..2 {
             for v in [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
