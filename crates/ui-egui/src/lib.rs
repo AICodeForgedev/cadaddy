@@ -640,6 +640,7 @@ impl CadApp {
         }
         self.drain_control(ctx);
         self.finish_opening();
+        cadaddy_engine::cmd::file::sync_image_folder(&self.session);
         self.opening.show(ctx);
         if !self.synthetic.is_empty() {
             ctx.request_repaint();

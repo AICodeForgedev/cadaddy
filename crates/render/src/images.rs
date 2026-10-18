@@ -113,7 +113,8 @@ struct Cache {
     /// Resolved (or registered) path → pixels, `None` when it couldn't be read.
     map: HashMap<String, Option<Arc<Raster>>>,
     bytes: usize,
-    dirs: Vec<PathBuf>,
+    /// The folder relative image paths are taken from: the current drawing's.
+    dir: Option<PathBuf>,
     /// Bumped whenever pixels arrive or are dropped: views keyed on it rebuild.
     generation: u64,
 }
@@ -128,15 +129,15 @@ pub fn get(path: &str) -> Option<Arc<Raster>> {
     if path.trim().is_empty() {
         return None;
     }
-    let dirs = {
+    let dir = {
         let c = cache().lock().ok()?;
         if let Some(hit) = c.map.get(path) {
             return hit.clone();
         }
-        c.dirs.clone()
+        c.dir.clone()
     };
     // Decode outside the lock: other threads keep drawing what is already loaded.
-    let loaded = resolve(path, &dirs).and_then(|p| load(&p)).map(Arc::new);
+    let loaded = resolve(path, dir.as_deref()).and_then(|p| load(&p)).map(Arc::new);
     let mut c = cache().lock().ok()?;
     if let Some(hit) = c.map.get(path) {
         return hit.clone();
@@ -171,14 +172,14 @@ pub fn forget(path: &str) {
     c.generation += 1;
 }
 
-/// Look for relative image paths in `dir` (a drawing's folder, as it is opened or saved) first.
-/// Every relative path and every image found missing is looked for again: an images folder
-/// copied in after the drawing was opened is found, and two drawings using the same relative
-/// name in different folders each get their own.
+/// Take relative image paths from `dir`, the current drawing's folder (as it is opened, saved or
+/// made current), and from no other folder: two jobs converted alike use the same relative
+/// names, and one's images must never show in the other. A new folder, or the same one opened
+/// again, looks every relative path and every missing image up again (an images folder copied in
+/// after the drawing was opened is found).
 pub fn add_search_dir(dir: &Path) {
     let Ok(mut c) = cache().lock() else { return };
-    c.dirs.retain(|d| d != dir);
-    c.dirs.insert(0, dir.to_path_buf());
+    c.dir = Some(dir.to_path_buf());
     let mut freed = 0usize;
     c.map.retain(|k, v| {
         let keep = v.is_some() && Path::new(k).is_absolute();
@@ -197,17 +198,23 @@ pub fn generation() -> u64 {
 }
 
 /// The file `path` names: itself when it is a full path to a file, else its relative path (or
-/// its name) in each search folder, the folder of the drawing opened or saved last first. A
-/// relative path is never taken from the program's working folder, which has nothing to do with
-/// the drawing (a program started from the Start menu works in its install or system folder).
-fn resolve(path: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+/// its name) in the current drawing's folder. A relative path is never taken from the program's
+/// working folder, which has nothing to do with the drawing (a program started from the Start
+/// menu works in its install or system folder), nor from another drawing's folder.
+fn resolve(path: &str, dir: Option<&Path>) -> Option<PathBuf> {
     let p = Path::new(path);
     if p.is_absolute() && p.is_file() {
         return Some(p.to_path_buf());
     }
     // A Windows path read on another system: its last component.
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    dirs.iter().flat_map(|d| [d.join(path), d.join(name)]).find(|c| c.is_file())
+    let d = dir?;
+    [d.join(path), d.join(name)].into_iter().find(|c| c.is_file())
+}
+
+/// Whether `dir` is already the folder relative image paths are taken from.
+pub fn is_search_dir(dir: &Path) -> bool {
+    cache().lock().is_ok_and(|c| c.dir.as_deref() == Some(dir))
 }
 
 /// Decode an image file (PNG, JPEG).
@@ -234,6 +241,12 @@ pub fn decode(bytes: &[u8]) -> Option<Raster> {
 mod tests {
     use super::*;
 
+    /// The image folder is process-wide: tests that set it take turns.
+    fn folder_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn png(w: u32, h: u32, px: [u8; 4]) -> Vec<u8> {
         let img = image::RgbaImage::from_pixel(w, h, image::Rgba(px));
         let mut out = std::io::Cursor::new(Vec::new());
@@ -243,6 +256,7 @@ mod tests {
 
     #[test]
     fn relative_images_follow_the_drawing_opened_or_saved() {
+        let _turn = folder_lock();
         let base = std::env::temp_dir().join(format!("cadaddy-relimg-{}", std::process::id()));
         let (a, b) = (base.join("a"), base.join("b"));
         std::fs::create_dir_all(&a).unwrap();
@@ -264,6 +278,7 @@ mod tests {
 
     #[test]
     fn files_load_once_and_missing_ones_are_remembered() {
+        let _turn = folder_lock();
         let dir = std::env::temp_dir().join(format!("cadaddy-images-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("red.png");

@@ -8,7 +8,11 @@ use cadaddy_engine::cmd::file::{IoHooks, set_io};
 use serde_json::json;
 
 /// A reader that leaves something out when the file says so, and a writer that writes "saved".
-fn install() {
+/// The IO hooks, and a lock held for the test: opening a drawing sets the process-wide folder
+/// relative image paths are taken from, so these tests take turns.
+fn install() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_io(IoHooks {
         read: |bytes, _| {
             let mut d = Drawing::new_metric();
@@ -21,6 +25,7 @@ fn install() {
         plot: None,
         read_pdf: None,
     });
+    guard
 }
 
 fn dir(name: &str) -> std::path::PathBuf {
@@ -31,7 +36,7 @@ fn dir(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn opening_an_open_file_switches_to_it() {
-    install();
+    let _turn = install();
     let d = dir("twice");
     let path = d.join("plan.dxf");
     std::fs::write(&path, b"plan").unwrap();
@@ -54,7 +59,7 @@ fn opening_an_open_file_switches_to_it() {
 
 #[test]
 fn saving_over_a_file_read_with_parts_missing_asks_first_and_keeps_a_bak() {
-    install();
+    let _turn = install();
     let d = dir("lossy");
     let path = d.join("mech.dxf");
     std::fs::write(&path, b"LOSSY original").unwrap();
@@ -77,7 +82,7 @@ fn saving_over_a_file_read_with_parts_missing_asks_first_and_keeps_a_bak() {
 
 #[test]
 fn saveas_elsewhere_doesnt_ask_and_a_complete_file_saves_at_once() {
-    install();
+    let _turn = install();
     let d = dir("elsewhere");
     let lossy = d.join("a.dxf");
     std::fs::write(&lossy, b"LOSSY").unwrap();
@@ -101,7 +106,7 @@ fn saveas_elsewhere_doesnt_ask_and_a_complete_file_saves_at_once() {
 #[test]
 fn a_failed_save_leaves_no_temporary_file() {
     use std::os::unix::fs::PermissionsExt;
-    install();
+    let _turn = install();
     let d = dir("readonly");
     let mut s = Session::new();
     s.cmdline("circle 0,0 5").unwrap();
@@ -120,7 +125,7 @@ fn a_failed_save_leaves_no_temporary_file() {
 #[test]
 fn a_read_only_file_is_not_saved_over_and_permissions_are_kept() {
     use std::os::unix::fs::PermissionsExt;
-    install();
+    let _turn = install();
     let d = dir("perms");
     // A read-only drawing: QSAVE refuses (save it under another name), the file is untouched.
     let ro = d.join("ro.dxf");
@@ -150,7 +155,7 @@ fn a_read_only_file_is_not_saved_over_and_permissions_are_kept() {
 /// work and leave two tabs on one file (battle test 3, B1).
 #[test]
 fn saving_over_a_drawing_open_in_another_tab_is_refused() {
-    install();
+    let _turn = install();
     let d = dir("sametab");
     let p = d.join("same.dxf").to_string_lossy().to_string();
     let mut s = Session::new();
@@ -173,7 +178,7 @@ fn saving_over_a_drawing_open_in_another_tab_is_refused() {
 #[test]
 fn relative_images_are_found_beside_the_drawing_opened() {
     use cadaddy_engine::render::images;
-    install();
+    let _turn = install();
     let png = |rgba: [u8; 4]| images::Raster::new(1, 1, rgba.to_vec()).unwrap().encode_png().unwrap();
     let name = format!("pics/logo-{}.png", std::process::id());
     let (a, b) = (dir("img-a"), dir("img-b"));
@@ -184,13 +189,23 @@ fn relative_images_are_found_beside_the_drawing_opened() {
     }
     let mut s = Session::new();
     let open = |s: &mut Session, d: &std::path::Path| s.execute("open", &json!({ "path": d.join("plan.dxf").to_string_lossy() })).unwrap();
-    open(&mut s, &a);
+    let ia = open(&mut s, &a)["index"].as_u64().unwrap() as usize;
     assert_eq!(images::get(&name).and_then(|r| r.pixel(0, 0)), Some([255, 0, 0, 255]));
     open(&mut s, &b);
     assert_eq!(images::get(&name).and_then(|r| r.pixel(0, 0)), Some([0, 0, 255, 255]));
     // Back to the first drawing (already open).
     open(&mut s, &a);
     assert_eq!(images::get(&name).and_then(|r| r.pixel(0, 0)), Some([255, 0, 0, 255]));
-    std::fs::remove_dir_all(&a).ok();
-    std::fs::remove_dir_all(&b).ok();
+    // A drawing whose folder lacks the image doesn't borrow another drawing's of the same name.
+    let c = dir("img-c");
+    std::fs::write(c.join("plan.dxf"), b"plan").unwrap();
+    open(&mut s, &c);
+    assert!(images::get(&name).is_none(), "an image from another drawing's folder");
+    // Making another open drawing current (a tab click) takes its folder again.
+    s.active = ia;
+    cadaddy_engine::cmd::file::sync_image_folder(&s);
+    assert_eq!(images::get(&name).and_then(|r| r.pixel(0, 0)), Some([255, 0, 0, 255]));
+    for d in [&a, &b, &c] {
+        std::fs::remove_dir_all(d).ok();
+    }
 }
