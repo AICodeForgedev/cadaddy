@@ -151,6 +151,11 @@ pub struct CanvasState {
     pub param: crate::parametric::Cache,
     /// A selection window opened by a press-and-drag, to close where the button is let go.
     drag_window: bool,
+    /// The path of that drag, which becomes a lasso once it encloses an area ([`lasso`]).
+    lasso: Option<lasso::Lasso>,
+    /// Selection cycling: Shift+Space stepping through the objects under the cursor, or the list
+    /// of them a click opened (SELECTIONCYCLING 2).
+    cycle: Option<lasso::Cycle>,
     /// The right-click that opened the shortcut menu held Shift or Ctrl: it is the object snap
     /// menu ([`crate::context_menu`]).
     pub snap_menu: bool,
@@ -1604,7 +1609,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && !middle_down
         && let Some(p) = app.canvas.cursor
     {
-        if app.session.prompting() {
+        // Selection cycling may take the click: the object Shift+Space stepped to, or the list.
+        let on_grip = !app.session.prompting() && (crate::dyngrips::at(app, &xf, hover_pos).is_some() || grip_at(app, &xf, hover_pos).is_some());
+        let cycled = hover_pos.is_some_and(|hp| lasso::click(app, hp, raw_world.unwrap_or(p), mods.shift, on_grip));
+        if cycled {
+        } else if app.session.prompting() {
             // Ctrl held while picking the point of a grip edit makes copies (the Copy option).
             if mods.ctrl && app.session.running.as_ref().is_some_and(|r| r.id == "grip") {
                 let _ = app.session.input(Input::Keyword("Copy".into()));
@@ -1643,11 +1652,19 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && crate::dyngrips::at(app, &xf, Some(origin)).is_none()
     {
         app.canvas.drag_window = app.session.begin_window(xf.s2w(origin));
+        app.canvas.lasso = app.canvas.drag_window.then(|| lasso::Lasso::new(origin));
+        app.canvas.cycle = None;
+    }
+    if app.canvas.drag_window
+        && let (Some(l), Some(hp)) = (app.canvas.lasso.as_mut(), hover_pos)
+    {
+        l.track(hp);
     }
     if app.canvas.drag_window && resp.drag_stopped_by(egui::PointerButton::Primary) {
         app.canvas.drag_window = false;
         if app.session.pending_window.is_some()
             && let Some(end) = ui.input(|i| i.pointer.interact_pos())
+            && !lasso::finish(app, &xf, end, mods.shift)
         {
             let end = xf.s2w(end);
             let done = if app.session.prompting() { app.session.input(Input::Point(end)) } else { app.session.idle_click(end, mods.shift) };
@@ -1655,6 +1672,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                 app.session.echo(e.to_string());
             }
         }
+        app.canvas.lasso = None;
     }
     // Right-click acts as Enter while a command runs (the classic CAD default; held, it opens the
     // command menu); otherwise it opens the shortcut menu (Repeat, Clipboard, …).
@@ -1694,6 +1712,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.canvas.hover = None;
         app.canvas.hover_at = None;
     }
+    lasso::hover(app, hover_pos.filter(|_| inside));
+    lasso::list(app, ui.ctx());
 
     // ---------- paint ----------
     painter.rect_filled(rect, 0.0, t.canvas);
@@ -1906,7 +1926,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     }
     // Pending selection window.
-    if let (Some(pw), Some(c)) = (app.session.pending_window, raw_world) {
+    if lasso::dragging(app) {
+        if let Some(hp) = hover_pos {
+            lasso::draw(app, &painter, hp);
+        }
+    } else if let (Some(pw), Some(c)) = (app.session.pending_window, raw_world) {
         let a = xf.w2s(pw.corner);
         let b = xf.w2s(c);
         let r = Rect::from_two_pos(a, b);
@@ -1939,7 +1963,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         draw_viewcube(app, ui, rect);
     }
     viewport_controls(app, ui, rect, sheet.is_none());
-    // Typing and Escape reach the command line even when its overlay is hidden.
+    // Space while dragging a lasso, Shift+Space for selection cycling and Escape on its list are
+    // the drawing area's; typing and Escape reach the command line even when its overlay is hidden.
+    lasso::keys(app, ui.ctx(), hover_pos.filter(|_| inside), raw_world);
     crate::cmdline::keyboard(app, ui.ctx());
     // Command line overlay.
     if app.ui.show_command_line {
@@ -2784,6 +2810,8 @@ pub(crate) mod tests {
 mod blockedit;
 /// The COMPARE overlay.
 mod compare;
+/// Lasso selection and selection cycling.
+mod lasso;
 
 /// Background rebuilds of the display list for a new view.
 mod rebuild;

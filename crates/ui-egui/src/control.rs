@@ -203,7 +203,12 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("ui.pointer", "{x, y, space?, button?, action?}", "Click or move in the drawing area (world coordinates by default). Right button = Enter."),
     ("ui.click", "{x, y, button?, shift?, ctrl?}", "Real egui click in screen points."),
     ("ui.move", "{x, y}", "Real egui pointer move in screen points."),
-    ("ui.drag", "{x, y, to: [x, y], button?}", "Real press, move and release."),
+    (
+        "ui.drag",
+        "{x, y, to: [x, y], path?: [[x, y], ...], button?, shift?, release?: bool}",
+        "Real press, move (through path, if given) and release (release: false holds the button).",
+    ),
+    ("ui.release", "{x, y, button?, shift?}", "Real button release (ends a ui.drag with release: false)."),
     ("ui.key", "{key, cmd?, shift?, alt?}", "Synthetic key press."),
     ("ui.text", "{text}", "Synthetic text input."),
     ("ui.set", "UiState fields", "Change UI state: palettes, toolbars, command line, theme…"),
@@ -414,15 +419,44 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 Some("middle") => egui::PointerButton::Middle,
                 _ => egui::PointerButton::Primary,
             };
-            let modifiers = egui::Modifiers::default();
+            let modifiers = egui::Modifiers { shift: p.get("shift").and_then(Value::as_bool).unwrap_or(false), ..Default::default() };
             let from = egui::pos2(x as f32, y as f32);
             let to = egui::pos2(tx as f32, ty as f32);
+            // A freehand drag (a lasso) passes through `path`; otherwise eight straight steps.
+            let path: Vec<egui::Pos2> = p
+                .get("path")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .take(10_000)
+                        .filter_map(|q| Some(egui::pos2(q.get(0)?.as_f64()? as f32, q.get(1)?.as_f64()? as f32)))
+                        .filter(|q| q.x.is_finite() && q.y.is_finite())
+                        .collect()
+                })
+                .unwrap_or_default();
             app.synthetic.push(egui::Event::PointerMoved(from));
             app.synthetic.push(egui::Event::PointerButton { pos: from, button, pressed: true, modifiers });
-            for i in 1..=8 {
-                app.synthetic.push(egui::Event::PointerMoved(from + (to - from) * (i as f32 / 8.0)));
+            if path.is_empty() {
+                for i in 1..=8 {
+                    app.synthetic.push(egui::Event::PointerMoved(from + (to - from) * (i as f32 / 8.0)));
+                }
+            } else {
+                app.synthetic.extend(path.into_iter().chain(std::iter::once(to)).map(egui::Event::PointerMoved));
             }
-            app.synthetic.push(egui::Event::PointerButton { pos: to, button, pressed: false, modifiers });
+            if p.get("release").and_then(Value::as_bool).unwrap_or(true) {
+                app.synthetic.push(egui::Event::PointerButton { pos: to, button, pressed: false, modifiers });
+            }
+            ok(Value::Null)
+        }
+        "ui.release" => {
+            let (Some(x), Some(y)) = (f("x"), f("y")) else { return err("missing x/y") };
+            let button = match s("button") {
+                Some("right") => egui::PointerButton::Secondary,
+                Some("middle") => egui::PointerButton::Middle,
+                _ => egui::PointerButton::Primary,
+            };
+            let modifiers = egui::Modifiers { shift: p.get("shift").and_then(Value::as_bool).unwrap_or(false), ..Default::default() };
+            app.synthetic.push(egui::Event::PointerButton { pos: egui::pos2(x as f32, y as f32), button, pressed: false, modifiers });
             ok(Value::Null)
         }
         "ui.key" => {

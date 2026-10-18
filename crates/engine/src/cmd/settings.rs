@@ -32,6 +32,17 @@ fn toggle_polar(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
+/// The status-bar Selection Cycling toggle: SELECTIONCYCLING changes sign, so turning it back on
+/// restores the mode it had (with or without the list); off from 0 comes back as 2.
+fn toggle_selection_cycling(s: &mut Session, p: &Value) -> Result<Value> {
+    let cur = s.settings.selectioncycling;
+    let on = p.get("on").and_then(Value::as_bool).unwrap_or(cur <= 0);
+    let mode = if cur == 0 { 2 } else { cur.saturating_abs() };
+    s.settings.selectioncycling = if on { mode } else { -mode };
+    s.touch();
+    Ok(json!({ "on": on, "message": format!("<Selection Cycling {}>", if on { "on" } else { "off" }) }))
+}
+
 /// ORTHO typed at the command line: "Enter mode [ON/OFF] <current>", as in AutoCAD (F8 and the
 /// status bar toggle without asking).
 struct OrthoM;
@@ -130,8 +141,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(always)
             .noundo()
             .transparent(),
-        CommandSpec::new("selectioncycling", "Selection Cycling", |s, p| toggle(s, p, |st| &mut st.selection_cycling, "Selection Cycling"))
-            .params("{on?: bool}")
+        CommandSpec::new("selectioncycling", "Selection Cycling", toggle_selection_cycling)
+            .params("{on?: bool} (SELECTIONCYCLING keeps its mode, 1 or 2, while off)")
             .enabled(always)
             .noundo(),
         CommandSpec::new("osnap", "Object Snap", run_osnap)

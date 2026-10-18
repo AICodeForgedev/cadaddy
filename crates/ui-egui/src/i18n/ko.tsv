@@ -1328,3 +1328,9 @@ menu	Modify	수정
 	Text Style	문자 스타일
 	Xref	외부 참조
 	Raster Image Reference...	래스터 이미지 참조...
+	Window Lasso	윈도우 올가미
+	Crossing Lasso	걸치기 올가미
+	Fence Lasso	울타리 올가미
+	Press Space to cycle options	스페이스 키를 눌러 옵션 전환
+	Burst	속성 포함 분해
+	Convert to Mtext	여러 줄 문자로 변환

@@ -1323,3 +1323,9 @@ menu	View	عرض
 	Text Style	نمط النص
 	Xref	مرجع خارجي
 	Raster Image Reference...	مرجع صورة نقطية...
+	Window Lasso	لاسو النافذة
+	Crossing Lasso	لاسو التقاطع
+	Fence Lasso	لاسو السياج
+	Press Space to cycle options	اضغط مسافة للتبديل بين الخيارات
+	Burst	تفكيك مع السمات
+	Convert to Mtext	تحويل إلى نص متعدد الأسطر

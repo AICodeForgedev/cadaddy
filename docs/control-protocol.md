@@ -47,7 +47,8 @@ field. `engine.commands` returns a separate command catalog, not a list of addit
 | `ui.menu.list` / `ui.menu.invoke` | `{command}` | The menu tree; invoke an item like a click (interactive). |
 | `ui.pointer` | `{x, y, space?: "world"\|"screen", button?, action?: "click"\|"move"}` | Click in the drawing area (world coordinates by default). Right button = Enter. |
 | `ui.click` / `ui.move` | `{x, y, button?, shift?, ctrl?}` | Real egui pointer events in screen points (reach every widget). |
-| `ui.drag` | `{x, y, to: [x, y], button?}` | Real press, move and release (drag the command line's top edge, the ViewCube ring…). |
+| `ui.drag` | `{x, y, to: [x, y], path?: [[x, y], ...], button?, shift?, release?: bool}` | Real press, move and release (drag the command line's top edge, the ViewCube ring…). `path` moves through those points first (a freehand lasso); `release: false` keeps the button down. |
+| `ui.release` | `{x, y, button?, shift?}` | Real button release: ends a `ui.drag` sent with `release: false`. |
 | `ui.key` / `ui.text` | `{key, cmd?, shift?, alt?}` / `{text}` | Synthetic keyboard input. |
 | `ui.set` | UiState fields | Show/hide palettes, toolbars, command line, ViewCube…; `theme: "system"\|"light"\|"dark"` (also `engine.execute` with `ui.theme {theme}`); `ui.inspect` reports the theme shown (`theme`: light/dark). `animations: "system"\|"on"\|"off"` (also `ui.animations {animations}`) shows or hides animation effects (dialog and menu fades, smoothed scrolling), `system` following the operating system's setting; `ui.inspect` reports whether they show (`animations`: true/false). `saveFormat: "dxf"\|"dwg"` (also `ui.saveformat {format}`) is the format Save As suggests for new drawings; `saveVersion: "2000"`…`"2018"` (also `ui.saveversion {version}`) the version it saves them in (SAVEAS also takes `version` and `binary` directly). |
 | `ui.resize` | `{width, height}` | Resize the window. |

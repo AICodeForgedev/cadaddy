@@ -1100,3 +1100,10 @@
 	Text Style	Текстовый стиль
 	Xref	Внешняя ссылка
 	Raster Image Reference...	Ссылка на растровое изображение...
+	Window Lasso	Рамочное лассо
+	Crossing Lasso	Секущее лассо
+	Fence Lasso	Лассо-линия
+	Press Space to cycle options	Пробел переключает варианты
+	Selection	Выбор
+	Burst	Расчленить с атрибутами
+	Convert to Mtext	Преобразовать в многострочный текст

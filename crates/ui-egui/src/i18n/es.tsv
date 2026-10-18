@@ -1334,3 +1334,9 @@
 	Text Style	Estilo de texto
 	Xref	Referencia externa
 	Raster Image Reference...	Referencia de imagen ráster...
+	Window Lasso	Lazo de ventana
+	Crossing Lasso	Lazo de captura
+	Fence Lasso	Lazo de borde
+	Press Space to cycle options	Pulse Espacio para cambiar de opción
+	Burst	Descomponer con atributos
+	Convert to Mtext	Convertir en texto multilínea

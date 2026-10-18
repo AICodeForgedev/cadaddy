@@ -1335,3 +1335,9 @@ menu	Modify	Ändra
 	Text Style	Textstil
 	Xref	Extern referens
 	Raster Image Reference...	Rasterbildsreferens...
+	Window Lasso	Fönsterlasso
+	Crossing Lasso	Korsande lasso
+	Fence Lasso	Staketlasso
+	Press Space to cycle options	Tryck på blanksteg för att växla alternativ
+	Burst	Lös upp med attribut
+	Convert to Mtext	Konvertera till flerradstext

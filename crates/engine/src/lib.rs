@@ -428,7 +428,10 @@ pub struct Settings {
     /// PLOTTRANSPARENCYOVERRIDE: 0 never plots transparency, 1 (default) uses the page setup's or
     /// the Plot dialog's "Plot transparency", 2 always plots it.
     pub plot_transparency_override: u8,
-    pub selection_cycling: bool,
+    /// SELECTIONCYCLING: a pick over overlapping objects can step through them (Shift+Space);
+    /// 2 also lists them to choose from, 1 doesn't. 0 is off; -1 and -2 are off and remember the
+    /// mode the status-bar toggle turns back on.
+    pub selectioncycling: i8,
     /// SELECTSIMILARMODE: what SELECTSIMILAR matches besides the object type (bits: 1 colour,
     /// 2 layer, 4 linetype, 8 linetype scale, 16 lineweight, 32 plot style, 64 object style,
     /// 128 name).
@@ -519,7 +522,7 @@ impl Default for Settings {
             lwdisplay: false,
             transparency_display: true,
             plot_transparency_override: 1,
-            selection_cycling: false,
+            selectioncycling: 2,
             selectsimilarmode: 130,
             otrack: true,
             pickbox: 3.0,
@@ -1705,36 +1708,104 @@ impl Session {
     /// replaces the selection and Shift adds (Shift+pick on a selected object removes it).
     pub fn idle_click(&mut self, p: Vec2, shift: bool) -> Result<()> {
         let space = self.space();
-        let pickadd = self.settings.pickadd;
         if let Some(pw) = self.pending_window.take() {
             let crossing = p.x < pw.corner.x;
             let hs = select::select_window(self.doc()?, &space, Bounds2::new(pw.corner, p), crossing);
-            let hs = cmd::groups::expand(self, hs);
-            let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };
-            if shift && pickadd {
-                sel.retain(|h| !hs.contains(h));
-            } else {
-                sel.extend(hs);
-            }
-            self.set_selection(sel);
+            self.idle_select_area(hs, shift);
             return Ok(());
         }
-        let ap = self.pixel_size() * self.settings.pickbox.max(1.0) * 1.5;
+        let ap = self.pick_aperture();
         match select::pick(self.doc()?, &space, p, ap) {
-            Some(h) => {
-                // With group selection the object's selectable groups come (or go) with it.
-                let hs = cmd::groups::expand(self, vec![h]);
-                let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };
-                let had = sel.contains(&h);
-                if shift && (pickadd || had) {
-                    sel.retain(|x| !hs.contains(x));
-                } else if !had {
-                    sel.extend(hs);
-                }
-                self.set_selection(sel);
-            }
+            Some(h) => self.idle_pick(h, shift),
             None => self.pending_window = Some(PendingWindow { corner: p, during_command: false }),
         }
+        Ok(())
+    }
+
+    /// The pick aperture in drawing units: PICKBOX (at least one pixel) and a half again.
+    pub fn pick_aperture(&self) -> f64 {
+        self.pixel_size() * self.settings.pickbox.max(1.0) * 1.5
+    }
+
+    /// The objects an area (a window, crossing or lasso) selected with no command running join
+    /// the selection, or leave it with Shift (PICKADD on); with PICKADD off they replace it.
+    fn idle_select_area(&mut self, hs: Vec<Handle>, shift: bool) {
+        let pickadd = self.settings.pickadd;
+        let hs = cmd::groups::expand(self, hs);
+        let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };
+        if shift && pickadd {
+            sel.retain(|h| !hs.contains(h));
+        } else {
+            sel.extend(hs);
+        }
+        self.set_selection(sel);
+    }
+
+    /// One object picked with no command running: PICKADD adds it (Shift removes it), PICKADD
+    /// off replaces the selection with it (Shift adds, or removes it when it was selected).
+    fn idle_pick(&mut self, h: Handle, shift: bool) {
+        let pickadd = self.settings.pickadd;
+        // With group selection the object's selectable groups come (or go) with it.
+        let hs = cmd::groups::expand(self, vec![h]);
+        let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };
+        let had = sel.contains(&h);
+        if shift && (pickadd || had) {
+            sel.retain(|x| !hs.contains(x));
+        } else if !had {
+            sel.extend(hs);
+        }
+        self.set_selection(sel);
+    }
+
+    /// Whether objects are being selected: no command running, or a command at "Select objects"
+    /// (not while a typed W, C, F… mode collects its points).
+    pub fn selecting_objects(&self) -> bool {
+        match &self.running {
+            None => true,
+            Some(_) => self.select_mode.is_none() && self.current_prompt().is_some_and(|p| p.accept.select),
+        }
+    }
+
+    /// Finish a lasso dragged along `path` (drawing coordinates): the objects it selects go to
+    /// the command asking for objects, or with no command running join the selection (Shift
+    /// removes them), like a window. Ends any pending window. Does nothing while a command asks
+    /// for something other than objects.
+    pub fn lasso(&mut self, path: &[Vec2], mode: select::LassoMode, shift: bool) -> Result<()> {
+        self.pending_window = None;
+        if !self.selecting_objects() {
+            return Ok(());
+        }
+        let hs = select::select_lasso(self.doc()?, &self.space(), path, mode);
+        if self.running.is_some() {
+            let hs = cmd::groups::expand(self, hs);
+            return self.input(Input::Pick(hs));
+        }
+        self.idle_select_area(hs, shift);
+        Ok(())
+    }
+
+    /// The objects under `p` that selection cycling steps through, nearest first.
+    pub fn pick_candidates(&self, p: Vec2) -> Result<Vec<Handle>> {
+        Ok(select::pick_all(self.doc()?, &self.space(), p, self.pick_aperture()))
+    }
+
+    /// Pick the object `h` (one of [`Self::pick_candidates`], chosen by selection cycling) as a
+    /// click on it would: to the command asking for objects, or into the selection with no
+    /// command running (PICKADD and Shift as for any pick). Ends any pending window.
+    pub fn pick_handle(&mut self, h: Handle, shift: bool) -> Result<()> {
+        self.pending_window = None;
+        if !self.selecting_objects() {
+            return Ok(());
+        }
+        let space = self.space();
+        if self.doc()?.space(&space).and_then(|st| st.get(h)).is_none() {
+            return Err(EngineError::Other(format!("no object {} in this space", h.hex())));
+        }
+        if self.running.is_some() {
+            let hs = cmd::groups::expand(self, vec![h]);
+            return self.input(Input::Pick(hs));
+        }
+        self.idle_pick(h, shift);
         Ok(())
     }
 

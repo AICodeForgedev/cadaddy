@@ -227,6 +227,40 @@ pub(crate) fn pick_with(d: &Drawing, space: &Space, ix: &Option<std::sync::Arc<S
     best.map(|(_, h)| h)
 }
 
+/// Most objects [`pick_all`] reports (a pick over a dense hatch or a stack of copies).
+pub const MAX_PICK_CANDIDATES: usize = 64;
+
+/// Every entity within `aperture` of `p`, nearest first (the topmost first among equally near
+/// ones): the candidates selection cycling (SELECTIONCYCLING) steps through.
+pub fn pick_all(d: &Drawing, space: &Space, p: Vec2, aperture: f64) -> Vec<Handle> {
+    let ix = spatial::index(d, space);
+    pick_all_with(d, space, &ix, p, aperture)
+}
+
+pub(crate) fn pick_all_with(d: &Drawing, space: &Space, ix: &Option<std::sync::Arc<SpatialIndex>>, p: Vec2, aperture: f64) -> Vec<Handle> {
+    if !p.is_finite() || !aperture.is_finite() {
+        return Vec::new();
+    }
+    let probe = Bounds2::new(p, p).expand(aperture);
+    let Some(cands) = candidates(d, space, ix, &probe.expand(aperture), true, true) else { return Vec::new() };
+    let mut hits: Vec<(f64, Handle)> = Vec::new();
+    for (e, known) in cands {
+        if !selectable(d, e) {
+            continue;
+        }
+        if !is_infinite(e) && !bounds_of(d, e, known).expand(aperture).intersects(&probe) {
+            continue;
+        }
+        let dist = distance_within(d, e, p, aperture / 4.0, Some(aperture));
+        if dist <= aperture {
+            hits.push((dist, e.handle));
+        }
+    }
+    // A stable sort keeps the draw order (topmost first) among equal distances.
+    hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+    hits.into_iter().map(|(_, h)| h).take(MAX_PICK_CANDIDATES).collect()
+}
+
 /// Whether PREVIEWFILTER keeps `e` from being highlighted under the cursor: bits 1 objects on
 /// locked layers, 2 xrefs, 4 tables, 8 multiline text, 16 hatches, 32 objects in groups.
 pub fn preview_filtered(d: &Drawing, e: &Entity, filter: u8) -> bool {
@@ -368,6 +402,69 @@ pub fn select_polygon(d: &Drawing, space: &Space, poly: &[Vec2], crossing: bool)
         }
     }
     out
+}
+
+/// How a lasso (a freehand selection path dragged on the drawing area) selects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LassoMode {
+    /// Objects entirely inside the closed path (dragged rightward).
+    Window,
+    /// Objects inside or crossing the closed path (dragged leftward).
+    Crossing,
+    /// Objects the open path crosses.
+    Fence,
+}
+
+impl LassoMode {
+    /// The mode Space switches to while dragging: Window, Crossing, Fence, then Window again.
+    pub fn next(self) -> Self {
+        match self {
+            LassoMode::Window => LassoMode::Crossing,
+            LassoMode::Crossing => LassoMode::Fence,
+            LassoMode::Fence => LassoMode::Window,
+        }
+    }
+    /// The mode called `name` (`window`, `crossing`, `fence`, any case, or their initials).
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "w" | "window" => Some(LassoMode::Window),
+            "c" | "crossing" => Some(LassoMode::Crossing),
+            "f" | "fence" => Some(LassoMode::Fence),
+            _ => None,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            LassoMode::Window => "window",
+            LassoMode::Crossing => "crossing",
+            LassoMode::Fence => "fence",
+        }
+    }
+    /// The mode a drag's direction gives: Window when the path first heads right of where it
+    /// started, Crossing when it first heads left (a path that never moves sideways is a window).
+    pub fn from_direction(path: &[Vec2]) -> Self {
+        let Some(start) = path.first() else { return LassoMode::Window };
+        match path.iter().find(|p| (p.x - start.x).abs() > 1e-12) {
+            Some(p) if p.x < start.x => LassoMode::Crossing,
+            _ => LassoMode::Window,
+        }
+    }
+}
+
+/// Most points a lasso path keeps (the path is input, and the polygon tests are linear in it).
+pub const MAX_LASSO_POINTS: usize = MAX_MODE_POINTS;
+
+/// Lasso selection: a window or crossing polygon closing `path` back to its first point, or a
+/// fence along it. Points that aren't finite are dropped; a path too short to enclose anything
+/// (or to cross anything, for a fence) selects nothing.
+pub fn select_lasso(d: &Drawing, space: &Space, path: &[Vec2], mode: LassoMode) -> Vec<Handle> {
+    let pts: Vec<Vec2> = path.iter().copied().filter(|p| p.is_finite()).take(MAX_LASSO_POINTS).collect();
+    match mode {
+        LassoMode::Window => select_polygon(d, space, &pts, false),
+        LassoMode::Crossing => select_polygon(d, space, &pts, true),
+        LassoMode::Fence if pts.len() >= 2 => select_fence(d, space, &pts),
+        LassoMode::Fence => Vec::new(),
+    }
 }
 
 /// The visible objects in `space` of the group called `name` (any case), or `None` when the

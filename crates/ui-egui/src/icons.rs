@@ -116,6 +116,7 @@ pub enum Icon {
     Isodraft,
     DynInput,
     QuickProps,
+    SelectionCycling,
     Gear,
     Annotation,
     Workspace,
@@ -876,6 +877,13 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, dim: bool) {
                 pen.la(11.0, y, 16.0, y);
             }
             pen.poly(&[(15.0, 14.0), (15.0, 22.0), (17.0, 20.0), (19.5, 22.5), (20.5, 21.5), (18.0, 19.0), (21.0, 18.5)], true, b);
+        }
+        SelectionCycling => {
+            // Two overlapping objects and an arrow going round from one to the other.
+            pen.rect(3.0, 9.0, 10.0, 10.0, b);
+            pen.rect(9.0, 3.0, 10.0, 10.0, b);
+            pen.arc(12.0, 12.0, 9.0, 200.0, 290.0, a);
+            pen.arrow_tip(15.1, 20.5, 0.94, -0.34, a);
         }
         Equal => {
             pen.l(5.0, 9.0, 19.0, 9.0);

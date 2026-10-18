@@ -1206,3 +1206,9 @@
 	Text Style	文字样式
 	Xref	外部参照
 	Raster Image Reference...	光栅图像参照...
+	Window Lasso	窗口套索
+	Crossing Lasso	窗交套索
+	Fence Lasso	栏选套索
+	Press Space to cycle options	按空格键切换选项
+	Burst	带属性分解
+	Convert to Mtext	转换为多行文字
