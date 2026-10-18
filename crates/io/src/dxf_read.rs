@@ -656,6 +656,8 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
         i += 1;
         let outer = flags & 1 != 0;
         let mut verts: Vec<PolyVertex> = Vec::new();
+        // An edge boundary's edges, kept exactly when it has elliptical or spline edges.
+        let mut edges: Vec<cadaddy_geom::LoopEdge> = Vec::new();
         if flags & 2 != 0 {
             // Polyline boundary: 72 has-bulge, 73 closed, 93 count, then 10/20/42.
             let has_bulge = get(i).filter(|x| x.code == 72).map(Tag::i64).unwrap_or(0) != 0;
@@ -698,6 +700,7 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
                             verts.push(PolyVertex::new(a));
                         }
                         verts.push(PolyVertex::new(b));
+                        edges.push(cadaddy_geom::LoopEdge::Line { a, b });
                     }
                     2 => {
                         let c = Vec2::new(f(i), f(i + 1));
@@ -707,6 +710,7 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
                         let ccw = get(i + 5).map(Tag::i64).unwrap_or(1) != 0;
                         i += 6;
                         let (s, e) = if ccw { (sa, ea) } else { (-sa, -ea) };
+                        edges.push(cadaddy_geom::LoopEdge::Arc { center: c, radius: r, start: s, end: e, ccw });
                         let p0 = Vec2::polar(c, r, s);
                         let p1 = Vec2::polar(c, r, e);
                         let sweep = if ccw { cadaddy_geom::ccw_sweep(s, e) } else { -cadaddy_geom::ccw_sweep(e, s) };
@@ -737,6 +741,12 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
                         // A clockwise edge stores its parameters mirrored, as an arc edge does: it
                         // runs from -start clockwise to -end, the ccw sweep from -end to -start
                         // walked backwards.
+                        // As an exact edge: from -start, clockwise, to -end.
+                        edges.push(if ccw {
+                            cadaddy_geom::LoopEdge::Ellipse { center: c, major: m, ratio, start: sa, end: ea, ccw: true }
+                        } else {
+                            cadaddy_geom::LoopEdge::Ellipse { center: c, major: m, ratio, start: -sa, end: -ea, ccw: false }
+                        });
                         let (s, e) = if ccw { (sa, ea) } else { (-ea, -sa) };
                         let e = cadaddy_geom::Ellipse { center: c, major: m, ratio, start: s, end: e };
                         let mut pts = Vec::new();
@@ -797,6 +807,7 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
                             Spline::from_control(sp.control, degree)
                         };
                         let pts = sp.tessellate(1e-3);
+                        edges.push(cadaddy_geom::LoopEdge::Spline(sp));
                         let skip = usize::from(verts.last().zip(pts.first()).is_some_and(|(l, p)| l.p.near(*p, 1e-9)));
                         verts.extend(pts.into_iter().skip(skip).map(PolyVertex::new));
                     }
@@ -830,7 +841,11 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
             }
             break;
         }
-        loops.push(HatchLoop { vertices: verts, outer, sources });
+        // Lines and arcs are exact in the vertices (bulges); elliptical and spline edges are kept
+        // as curves when every edge is usable.
+        let curved = edges.iter().any(|e| matches!(e, cadaddy_geom::LoopEdge::Ellipse { .. } | cadaddy_geom::LoopEdge::Spline(_)));
+        let curves = if curved && edges.iter().all(cadaddy_geom::LoopEdge::is_valid) { edges } else { Vec::new() };
+        loops.push(HatchLoop { curves, vertices: verts, outer, sources });
     }
     let solid = solid || pattern.eq_ignore_ascii_case("SOLID");
     let (scale, angle) = (t.fd(41, 1.0), t.fd(52, 0.0).to_radians());

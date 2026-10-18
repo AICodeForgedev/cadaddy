@@ -1171,15 +1171,25 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(71, i64::from(h.associative));
             w.i(91, h.loops.len() as i64);
             for l in &h.loops {
-                w.i(92, 2 | if l.outer { 1 } else { 0 });
-                let has_bulge = l.vertices.iter().any(|v| v.bulge != 0.0);
-                w.i(72, i64::from(has_bulge));
-                w.i(73, 1);
-                w.i(93, l.vertices.len() as i64);
-                for v in &l.vertices {
-                    w.p2(10, v.p);
-                    if has_bulge {
-                        w.f(42, v.bulge);
+                if l.curves.is_empty() {
+                    w.i(92, 2 | if l.outer { 1 } else { 0 });
+                    let has_bulge = l.vertices.iter().any(|v| v.bulge != 0.0);
+                    w.i(72, i64::from(has_bulge));
+                    w.i(73, 1);
+                    w.i(93, l.vertices.len() as i64);
+                    for v in &l.vertices {
+                        w.p2(10, v.p);
+                        if has_bulge {
+                            w.f(42, v.bulge);
+                        }
+                    }
+                } else {
+                    // Exact edges (DXF Reference hatch edge data): 72 type 1 line, 2 circular arc,
+                    // 3 elliptic arc, 4 spline.
+                    w.i(92, if l.outer { 1 } else { 0 });
+                    w.i(93, l.curves.len() as i64);
+                    for c in &l.curves {
+                        hatch_edge(w, c);
                     }
                 }
                 // Source boundary objects of an associative hatch (the ones still beside it, in
@@ -2922,4 +2932,60 @@ pub fn entity_records(d: &Drawing, e: &Entity) -> Vec<(String, Vec<Tag>)> {
     let paper = d.space_of(e.handle).is_some_and(|s| !matches!(s, cadaddy_doc::Space::Model));
     entity(&mut w, d, e, "0", paper, &cx);
     cadaddy_dxf::records(&w.t).into_iter().map(|(k, tags)| (k, tags.into_iter().filter(|t| t.code != 330).collect())).collect()
+}
+
+/// One exact hatch boundary edge (DXF Reference): 72 edge type, then the edge's data. A clockwise
+/// arc or elliptic arc stores its angles mirrored (as AutoCAD writes them), with 73 = 0.
+fn hatch_edge(w: &mut W, c: &cadaddy_geom::LoopEdge) {
+    use cadaddy_geom::LoopEdge;
+    let deg = |a: f64| a.to_degrees().rem_euclid(360.0);
+    match c {
+        LoopEdge::Line { a, b } => {
+            w.i(72, 1);
+            w.p2(10, *a);
+            w.p2(11, *b);
+        }
+        LoopEdge::Arc { center, radius, start, end, ccw } => {
+            w.i(72, 2);
+            w.p2(10, *center);
+            w.f(40, *radius);
+            let (s, e) = if *ccw { (*start, *end) } else { (-*start, -*end) };
+            let (s, e) = (deg(s), deg(e));
+            // A full circle runs 0 to 360.
+            let e = if (e - s).abs() < 1e-9 && c.start_point().near(c.end_point(), 1e-12) { s + 360.0 } else { e };
+            w.f(50, s);
+            w.f(51, e);
+            w.i(73, i64::from(*ccw));
+        }
+        LoopEdge::Ellipse { center, major, ratio, start, end, ccw } => {
+            w.i(72, 3);
+            w.p2(10, *center);
+            w.p2(11, *major);
+            w.f(40, *ratio);
+            let (s, e) = if *ccw { (*start, *end) } else { (-*start, -*end) };
+            let (s, e) = (deg(s), deg(e));
+            let e = if (e - s).abs() < 1e-9 && c.start_point().near(c.end_point(), 1e-12) { s + 360.0 } else { e };
+            w.f(50, s);
+            w.f(51, e);
+            w.i(73, i64::from(*ccw));
+        }
+        LoopEdge::Spline(sp) => {
+            w.i(72, 4);
+            w.i(94, sp.degree as i64);
+            w.i(73, i64::from(!sp.weights.is_empty()));
+            w.i(74, 0);
+            w.i(95, sp.knots.len() as i64);
+            w.i(96, sp.control.len() as i64);
+            for k in &sp.knots {
+                w.f(40, *k);
+            }
+            for (i, p) in sp.control.iter().enumerate() {
+                w.p2(10, *p);
+                if let Some(wt) = sp.weights.get(i) {
+                    w.f(42, *wt);
+                }
+            }
+            w.i(97, 0);
+        }
+    }
 }

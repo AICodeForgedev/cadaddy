@@ -91,6 +91,29 @@ fn handles_of(owners: &[Handle], idx: &[usize]) -> Vec<Handle> {
 
 /// Closed loops of entities that are closed curves (for islands and "select objects").
 fn closed_loop(d: &Drawing, e: &Entity) -> Option<Vec<PolyVertex>> {
+    closed_geom(d, e).map(|(v, _)| v)
+}
+
+/// A closed curve object as a loop: its vertices, and its exact edge when the vertices can only
+/// approximate it (a whole ellipse, a closed spline).
+pub(crate) fn closed_geom(d: &Drawing, e: &Entity) -> Option<(Vec<PolyVertex>, Vec<cadaddy_geom::LoopEdge>)> {
+    let exact = match &e.kind {
+        EntityKind::Ellipse(el) => {
+            let ge = cadaddy_geom::Ellipse { center: el.center.xy(), major: el.major.xy(), ratio: el.ratio, start: el.start, end: el.end };
+            ge.is_full().then(|| cadaddy_geom::LoopEdge::full_ellipse(ge.center, ge.major, ge.ratio))
+        }
+        EntityKind::Spline(sp) if sp.closed && sp.is_valid() => Some(cadaddy_geom::LoopEdge::Spline(sp.clone())),
+        _ => None,
+    };
+    if let Some(edge) = exact.filter(cadaddy_geom::LoopEdge::is_valid) {
+        let l = HatchLoop::from_curves(vec![edge], true, Vec::new());
+        return Some((l.vertices, l.curves));
+    }
+    closed_vertices(d, e).map(|v| (v, Vec::new()))
+}
+
+/// The vertices of a closed curve object (bulges for circles; other curves approximated).
+fn closed_vertices(d: &Drawing, e: &Entity) -> Option<Vec<PolyVertex>> {
     match &e.kind {
         EntityKind::Circle(c) => {
             let ctr = c.center.xy();
@@ -244,7 +267,17 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
     let outer = found.outer;
     let ob = Bounds2::from_points(outer.iter().copied());
     let sources = handles_of(&owners, &found.outer_sources);
-    let mut loops = vec![HatchLoop { vertices: outer.iter().map(|q| PolyVertex::new(*q)).collect(), outer: true, sources }];
+    // The boundary is one closed curve object (inside an ellipse or a closed spline): its exact
+    // edge instead of the traced points.
+    let single = match sources.as_slice() {
+        [h] => d.entity(*h).and_then(|e| closed_geom(d, e)).filter(|(_, c)| !c.is_empty()),
+        _ => None,
+    };
+    let first = match single {
+        Some((vs, curves)) => HatchLoop { curves, vertices: vs, outer: true, sources },
+        None => HatchLoop { curves: Vec::new(), vertices: outer.iter().map(|q| PolyVertex::new(*q)).collect(), outer: true, sources },
+    };
+    let mut loops = vec![first];
     // Islands: closed objects entirely inside the outer loop that don't contain the pick point.
     if let Some(store) = d.space(&space) {
         for e in store.iter() {
@@ -255,12 +288,12 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
             if !ob.contains_box(&eb) {
                 continue;
             }
-            if let Some(vs) = closed_loop(d, e) {
+            if let Some((vs, curves)) = closed_geom(d, e) {
                 let pts = Polyline { vertices: vs.clone(), closed: true }.tessellate(tol.max(eb.width() * 1e-3));
                 let inside = pts.iter().all(|q| point_in_polygon(&outer, *q) || outer.iter().any(|o| o.near(*q, tol * 10.0)));
                 let same_as_outer = (cadaddy_geom::shoelace(&pts).abs() - cadaddy_geom::shoelace(&outer).abs()).abs() < tol.max(1e-6) * 1000.0;
                 if inside && !same_as_outer && !point_in_polygon(&pts, p) {
-                    loops.push(HatchLoop { vertices: vs, outer: false, sources: vec![e.handle] });
+                    loops.push(HatchLoop { curves, vertices: vs, outer: false, sources: vec![e.handle] });
                 }
             }
         }
@@ -283,7 +316,12 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
             let b = eb.expand(pad);
             let corners = b.corners();
             if corners.iter().all(|q| point_in_polygon(&outer, *q)) {
-                loops.push(HatchLoop { vertices: corners.iter().map(|q| PolyVertex::new(*q)).collect(), outer: false, sources: Vec::new() });
+                loops.push(HatchLoop {
+                    curves: Vec::new(),
+                    vertices: corners.iter().map(|q| PolyVertex::new(*q)).collect(),
+                    outer: false,
+                    sources: Vec::new(),
+                });
             }
         }
     }
@@ -294,7 +332,7 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
             && island.sources.iter().all(|&i| owners.get(i).and_then(|h| d.entity(*h)).is_some_and(|e| island_curve(d, e)));
         if open_curves {
             let sources = handles_of(&owners, &island.sources);
-            loops.push(HatchLoop { vertices: island.outline.into_iter().map(PolyVertex::new).collect(), outer: false, sources });
+            loops.push(HatchLoop { curves: Vec::new(), vertices: island.outline.into_iter().map(PolyVertex::new).collect(), outer: false, sources });
         }
     }
     Ok(loops)
@@ -304,8 +342,8 @@ pub(crate) fn loops_from_handles(s: &Session, hs: &[Handle]) -> Result<Vec<Hatch
     let d = s.doc()?;
     let mut loops = Vec::new();
     for h in hs {
-        if let Some(vs) = d.entity(*h).and_then(|e| closed_loop(d, e)) {
-            loops.push(HatchLoop { vertices: vs, outer: loops.is_empty(), sources: vec![*h] });
+        if let Some((vs, curves)) = d.entity(*h).and_then(|e| closed_geom(d, e)) {
+            loops.push(HatchLoop { curves, vertices: vs, outer: loops.is_empty(), sources: vec![*h] });
         }
     }
     if loops.is_empty() {
@@ -641,12 +679,16 @@ fn run_region(s: &mut Session, p: &Value) -> Result<Value> {
     for h in hs {
         let vs = {
             let d = s.doc()?;
-            d.entity(h).and_then(|e| closed_loop(d, e).map(|v| (v, e.common.clone())))
+            d.entity(h).and_then(|e| closed_geom(d, e).map(|v| (v, e.common.clone())))
         };
-        if let Some((vs, common)) = vs {
+        if let Some(((vs, curves), common)) = vs {
             let d = s.doc_mut()?;
+            let mut region = cadaddy_doc::Region::from_loop(vs);
+            if let Some(l) = region.loops.first_mut() {
+                l.curves = curves;
+            }
             d.modify_entity(h, |e| {
-                e.kind = EntityKind::Region(cadaddy_doc::Region::from_loop(vs));
+                e.kind = EntityKind::Region(region);
                 e.common = common;
             })?;
             n += 1;

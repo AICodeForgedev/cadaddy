@@ -798,6 +798,62 @@ pub struct HatchLoop {
     /// hatch re-fills the loop from them when they change.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<Handle>,
+    /// The loop's exact edges when it has curves `vertices` can't hold (elliptical arcs,
+    /// splines): `vertices` is then their tessellation (for filling and picking), and files,
+    /// areas and transforms use the edges. Empty for loops of lines and arcs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curves: Vec<cadaddy_geom::LoopEdge>,
+}
+
+impl HatchLoop {
+    /// A loop of exact edges: `vertices` from them (lines and arcs exactly, other curves within
+    /// a tolerance relative to the loop's size); `curves` kept when there is a curve vertices
+    /// can't hold.
+    pub fn from_curves(curves: Vec<cadaddy_geom::LoopEdge>, outer: bool, sources: Vec<Handle>) -> HatchLoop {
+        let vertices = cadaddy_geom::loop_vertices(&curves, curve_tolerance(&curves));
+        let exact_needed = curves.iter().any(|c| matches!(c, cadaddy_geom::LoopEdge::Ellipse { .. } | cadaddy_geom::LoopEdge::Spline(_)));
+        HatchLoop { vertices, outer, sources, curves: if exact_needed { curves } else { Vec::new() } }
+    }
+
+    /// The loop's signed area (positive counterclockwise): exact from its edges when it has
+    /// curves, else the bulge polyline's.
+    pub fn area(&self) -> f64 {
+        if self.curves.is_empty() {
+            cadaddy_geom::Polyline { vertices: self.vertices.clone(), closed: true }.area()
+        } else {
+            cadaddy_geom::loop_area(&self.curves)
+        }
+    }
+
+    /// Transform the loop by `m` (`mirror`: `m` reverses orientation): exact edges stay exact
+    /// and the vertices are made from them again.
+    pub fn transform(&mut self, m: &Mat3, mirror: bool) {
+        if !self.curves.is_empty() {
+            for c in &mut self.curves {
+                c.transform(m);
+            }
+            self.vertices = cadaddy_geom::loop_vertices(&self.curves, curve_tolerance(&self.curves));
+            return;
+        }
+        for v in &mut self.vertices {
+            v.p = m.apply(v.p);
+            if mirror {
+                v.bulge = -v.bulge;
+            }
+        }
+    }
+}
+
+/// The tessellation tolerance for a loop's curves: 1e-4 of their extent (curves too small or
+/// broken to measure get a tiny absolute one).
+fn curve_tolerance(curves: &[cadaddy_geom::LoopEdge]) -> f64 {
+    let mut pts = Vec::new();
+    for c in curves.iter().take(10_000) {
+        pts.push(c.start_point());
+        pts.push(c.end_point());
+    }
+    let b = cadaddy_geom::Bounds2::from_points(pts.into_iter().filter(|p| p.is_finite()));
+    if b.is_empty() { 1e-6 } else { ((b.width() + b.height()) * 1e-4).max(1e-9) }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1447,12 +1503,7 @@ impl EntityKind {
             }
             EntityKind::Hatch(h) => {
                 for l in &mut h.loops {
-                    for v in &mut l.vertices {
-                        v.p = m.apply(v.p);
-                        if mirror {
-                            v.bulge = -v.bulge;
-                        }
-                    }
+                    l.transform(m, mirror);
                 }
                 h.scale *= s;
                 h.angle = cadaddy_geom::norm_angle(h.angle + rot);
@@ -1461,11 +1512,8 @@ impl EntityKind {
             EntityKind::Solid(so) | EntityKind::Trace(so) => so.corners.iter_mut().for_each(t3),
             EntityKind::Face3d(f) => f.corners.iter_mut().for_each(t3),
             EntityKind::Region(r) => {
-                for v in r.loops.iter_mut().flat_map(|l| l.vertices.iter_mut()) {
-                    v.p = m.apply(v.p);
-                    if mirror {
-                        v.bulge = -v.bulge;
-                    }
+                for l in &mut r.loops {
+                    l.transform(m, mirror);
                 }
             }
             EntityKind::Viewport(v) => {

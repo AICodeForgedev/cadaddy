@@ -18,7 +18,7 @@ use std::sync::Arc;
 use cadaddy_doc::{Drawing, EntityKind, Handle, Hatch, HatchLoop, entity_bounds};
 use cadaddy_geom::{Bounds2, PolyVertex, Polyline, Vec2, region, shoelace};
 
-use super::{closed_loop, gap_tolerance, object_polys};
+use super::{gap_tolerance, object_polys};
 
 /// Upper bound on the source objects of one loop that are traced (hostile files).
 const MAX_SOURCES: usize = 4096;
@@ -28,7 +28,8 @@ const MAX_NEW_CHECKED: usize = 1000;
 
 /// How a loop came out of its objects.
 enum Refill {
-    Loop(Vec<PolyVertex>),
+    /// The loop's vertices, and its exact edges when it is one closed curve.
+    Loop(Vec<PolyVertex>, Vec<cadaddy_geom::LoopEdge>),
     /// Every object of the loop was erased.
     Erased,
     /// The objects no longer enclose an area.
@@ -78,9 +79,9 @@ fn refill(before: &Drawing, after: &Drawing, l: &HatchLoop) -> Refill {
         return Refill::Erased;
     }
     if let [h] = live.as_slice()
-        && let Some(vs) = after.entity(*h).and_then(|e| closed_loop(after, e))
+        && let Some((vs, curves)) = after.entity(*h).and_then(|e| super::closed_geom(after, e))
     {
-        return Refill::Loop(vs);
+        return Refill::Loop(vs, curves);
     }
     let nb = bounds_of(after, &live);
     if nb.is_empty() {
@@ -102,7 +103,7 @@ fn refill(before: &Drawing, after: &Drawing, l: &HatchLoop) -> Refill {
         region::outline(&polys, snap, gap)
     };
     match found {
-        Some(pts) => Refill::Loop(pts.into_iter().map(PolyVertex::new).collect()),
+        Some(pts) => Refill::Loop(pts.into_iter().map(PolyVertex::new).collect(), Vec::new()),
         None => Refill::Open,
     }
 }
@@ -160,7 +161,7 @@ fn follow(before: &Drawing, after: &Drawing, handle: Handle, h: &Hatch, checked:
                     && h.loops
                         .iter()
                         .filter(|l| !p.loops.iter().any(|q| q.vertices == l.vertices))
-                        .all(|l| l.sources.is_empty() || matches!(refill(after, after, l), Refill::Loop(vs) if same_shape(&vs, &l.vertices)));
+                        .all(|l| l.sources.is_empty() || matches!(refill(after, after, l), Refill::Loop(vs, _) if same_shape(&vs, &l.vertices)));
                 if added_fit {
                     return None;
                 }
@@ -175,7 +176,7 @@ fn follow(before: &Drawing, after: &Drawing, handle: Handle, h: &Hatch, checked:
                 let fits = *checked <= MAX_NEW_CHECKED
                     && h.loops
                         .iter()
-                        .all(|l| l.sources.is_empty() || matches!(refill(after, after, l), Refill::Loop(vs) if same_shape(&vs, &l.vertices)));
+                        .all(|l| l.sources.is_empty() || matches!(refill(after, after, l), Refill::Loop(vs, _) if same_shape(&vs, &l.vertices)));
                 if fits {
                     return None;
                 }
@@ -192,9 +193,9 @@ fn follow(before: &Drawing, after: &Drawing, handle: Handle, h: &Hatch, checked:
         }
         let from = if prev.is_some() { before } else { after };
         match refill(from, after, l) {
-            Refill::Loop(vertices) => {
+            Refill::Loop(vertices, curves) => {
                 let sources = l.sources.iter().copied().filter(|s| exists(after, *s)).take(MAX_SOURCES).collect();
-                loops.push(HatchLoop { vertices, outer: l.outer, sources });
+                loops.push(HatchLoop { curves, vertices, outer: l.outer, sources });
             }
             // An erased island: the hatch fills its area.
             Refill::Erased if !l.outer => {}
