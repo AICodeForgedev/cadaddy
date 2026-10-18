@@ -80,14 +80,14 @@ impl W {
     }
 }
 
-/// The `DIMASSOC` object of an associative dimension (stored in the dimension's extension
-/// dictionary under `ACAD_DIMASSOC`).
 /// The objects an XCLIP boundary is written as: the reference's extension dictionary, its
-/// `ACAD_FILTER` dictionary and the `SPATIAL` filter.
+/// `ACAD_FILTER` dictionary and the `SPATIAL` filter; for an inverted clip also the filter's
+/// extension dictionary and its `ACAD_XREC_ROUNDTRIP` record.
 struct XclipObj {
     xdict: String,
     filters: String,
     filter: String,
+    inverted: Option<(String, String)>,
 }
 
 /// The `SPATIAL_FILTER` of each clipped block reference, with its two dictionaries. The boundary
@@ -121,6 +121,9 @@ fn write_xclips(w: &mut W, plan: &HashMap<Handle, XclipObj>, every: &[&Entity]) 
         w.s(0, "SPATIAL_FILTER");
         w.s(5, x.filter.clone());
         w.group("ACAD_REACTORS", 330, &[&x.filters]);
+        if let Some((fx, _)) = &x.inverted {
+            w.group("ACAD_XDICTIONARY", 360, &[fx]);
+        }
         w.s(330, x.filters.clone());
         w.s(100, "AcDbFilter");
         w.s(100, "AcDbSpatialFilter");
@@ -145,9 +148,31 @@ fn write_xclips(w: &mut W, plan: &HashMap<Handle, XclipObj>, every: &[&Entity]) 
                 w.f(40, v);
             }
         }
+        // An inverted clip: flagged in a round-trip record of the filter, as AutoCAD keeps it.
+        if let Some((fx, rec)) = &x.inverted {
+            w.s(0, "DICTIONARY");
+            w.s(5, fx.clone());
+            w.group("ACAD_REACTORS", 330, &[&x.filter]);
+            w.s(330, x.filter.clone());
+            w.s(100, "AcDbDictionary");
+            w.i(280, 1);
+            w.i(281, 1);
+            w.s(3, "ACAD_XREC_ROUNDTRIP");
+            w.s(360, rec.clone());
+            w.s(0, "XRECORD");
+            w.s(5, rec.clone());
+            w.group("ACAD_REACTORS", 330, &[fx]);
+            w.s(330, fx.clone());
+            w.s(100, "AcDbXrecord");
+            w.i(280, 1);
+            w.s(102, "ACAD_INVERTEDCLIP_ROUNDTRIP");
+            w.i(290, 1);
+        }
     }
 }
 
+/// The `DIMASSOC` object of an associative dimension (stored in the dimension's extension
+/// dictionary under `ACAD_DIMASSOC`).
 struct AssocObj {
     xdict: String,
     handle: String,
@@ -1914,7 +1939,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         if let EntityKind::Insert(i) = &e.kind
             && i.clip.as_ref().is_some_and(|c| c.boundary.len() >= 3)
         {
-            cx.xclips.insert(e.handle, XclipObj { xdict: w.h(), filters: w.h(), filter: w.h() });
+            let (xdict, filters, filter) = (w.h(), w.h(), w.h());
+            let inverted = i.clip.as_ref().is_some_and(|c| c.inverted).then(|| (w.h(), w.h()));
+            cx.xclips.insert(e.handle, XclipObj { xdict, filters, filter, inverted });
         }
     }
     let default_table_style = [TableStyle::default()];
