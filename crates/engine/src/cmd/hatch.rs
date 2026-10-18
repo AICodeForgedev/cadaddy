@@ -21,11 +21,11 @@ pub use pick::{HatchPicks, PickMode};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("hatch", "Hatch...", run_hatch).menu(&["Draw", "Hatch..."]).alias(&["h", "bh", "-hatch"]).params("{points?: [[x,y]] (internal points) and/or handles?: [hex] (closed objects), pattern?: \"ANSI31\", scale?, angle? (degrees), associative? (HPASSOC), separate? (HPSEPARATE: a hatch per point/object), origin?: [x,y] (HPORIGIN) | originMode?: \"current\"|\"bottomLeft\"|\"bottomRight\"|\"topLeft\"|\"topRight\"|\"center\" (HPORIGINMODE), style?: \"normal\"|\"outer\"|\"ignore\" (HPISLANDDETECTION)} — gaps up to HPGAPTOL close").interactive(|s| Ok(Box::new(HatchM::new(s, false)))),
-        CommandSpec::new("gradient", "Gradient...", run_gradient).menu(&["Draw", "Gradient..."]).alias(&["gd"]).params("{points? and/or handles?, name?: \"LINEAR\"|\"CYLINDER\"|\"CURVED\"|\"SPHERICAL\"|\"HEMISPHERICAL\" or INV… (colours swapped), color1?, color2?, angle? (degrees), centered? (default true)}").interactive(|s| Ok(Box::new(HatchM::new(s, true)))),
+        CommandSpec::new("hatch", "Hatch...", run_hatch).menu(&["Draw", "Hatch..."]).alias(&["h", "bh", "-hatch"]).params("{points?: [[x,y]] (internal points) and/or handles?: [hex] (closed objects), pattern?: \"ANSI31\", scale?, angle? (degrees), associative? (HPASSOC), separate? (HPSEPARATE: a hatch per point/object), origin?: [x,y] (HPORIGIN) | originMode?: \"current\"|\"bottomLeft\"|\"bottomRight\"|\"topLeft\"|\"topRight\"|\"center\" (HPORIGINMODE), style?: \"normal\"|\"outer\"|\"ignore\" (HPISLANDDETECTION), inherit?: hatch handle (Inherit Properties: its pattern or gradient, scale, angle, origin, island style, colour and transparency; explicit values win)} — gaps up to HPGAPTOL close").interactive(|s| Ok(Box::new(HatchM::new(s, false)))),
+        CommandSpec::new("gradient", "Gradient...", run_gradient).menu(&["Draw", "Gradient..."]).alias(&["gd"]).params("{points? and/or handles?, name?: \"LINEAR\"|\"CYLINDER\"|\"CURVED\"|\"SPHERICAL\"|\"HEMISPHERICAL\" or INV… (colours swapped), color1?, color2?, angle? (degrees), centered? (default true), inherit?: hatch handle}").interactive(|s| Ok(Box::new(HatchM::new(s, true)))),
         CommandSpec::new("boundary", "Boundary...", run_boundary).menu(&["Draw", "Boundary..."]).alias(&["bo", "bpoly"]).params("{points: [[x,y]]}").interactive(|_| Ok(Box::new(BoundaryM { region: false }))),
         CommandSpec::new("region", "Region", run_region).menu(&["Draw", "Region"]).alias(&["reg"]).params("{handles?}"),
-        CommandSpec::new("hatchedit", "Hatch Edit", edit::run_hatchedit).menu(&["Modify", "Object", "Hatch..."]).alias(&["he", "-hatchedit"]).params("{handles?, pattern?, scale?, angle?, gradient?: {name?, color1?, color2?, angle? (degrees), centered?} (makes or changes a gradient fill; `pattern` turns it back), associative?: bool (false unlinks; true links each loop to a closed object of the same shape, or to `boundary` objects), boundary?: [hex], style?, origin? | originMode?, separate?: true, recreate?: \"polyline\"|\"region\", associate?: bool (link to the recreated boundary)}").interactive(|s| Ok(Box::new(edit::HatchEditM::new(s)))),
+        CommandSpec::new("hatchedit", "Hatch Edit", edit::run_hatchedit).menu(&["Modify", "Object", "Hatch..."]).alias(&["he", "-hatchedit"]).params("{handles?, pattern?, scale?, angle?, gradient?: {name?, color1?, color2?, angle? (degrees), centered?} (makes or changes a gradient fill; `pattern` turns it back), associative?: bool (false unlinks; true links each loop to a closed object of the same shape, or to `boundary` objects), boundary?: [hex], addPoints?: [[x,y]] (internal points: their boundaries are added), addHandles?: [hex] (closed objects added as boundaries), remove?: [[x,y]] (points on loops to remove, within tolerance?, default a pick box), removeLoops?: [index] (one hatch at a time; a hatch keeps at least one loop), style?, origin? | originMode?, separate?: true, recreate?: \"polyline\"|\"region\", associate?: bool (link to the recreated boundary)}").interactive(|s| Ok(Box::new(edit::HatchEditM::new(s)))),
         CommandSpec::new("hatchpick", "Hatch Pick", pick::run_hatchpick)
             .params("{points?: [[x,y]] (internal points), handles?: [hex] (closed objects)} (typed: Points, Objects, oRigin or Hatch, then the picks): the Hatch and Gradient dialog's picks, kept in the session; changes nothing")
             .enabled(has_doc)
@@ -327,6 +327,11 @@ pub(crate) fn gradient_name(t: &str) -> Option<&'static str> {
 
 #[derive(Clone)]
 struct HatchSettings {
+    /// The colour and transparency of an inherited hatch (Inherit Properties), set on the new
+    /// hatches; `None`: the current ones.
+    look: Option<(Color, cadaddy_doc::Transparency)>,
+    /// An inherited hatch's own pattern definition (a pattern read from a file).
+    lines: Option<Vec<cadaddy_doc::library::PatternLine>>,
     pattern: String,
     scale: f64,
     angle: f64,
@@ -339,8 +344,72 @@ struct HatchSettings {
     style: u8,
 }
 
+/// The hatch `inherit` names (Inherit Properties): its fill and its colour and transparency.
+fn inherited(s: &Session, p: &Value) -> Result<Option<(Hatch, cadaddy_doc::Common)>> {
+    let Some(v) = p.get("inherit").filter(|v| !v.is_null()) else { return Ok(None) };
+    let h = curves::handle_value(v).ok_or_else(|| bad("hatch", "`inherit` is the handle of a hatch"))?;
+    match s.doc()?.entity(h) {
+        Some(e) => match &e.kind {
+            EntityKind::Hatch(x) => Ok(Some((x.clone(), e.common.clone()))),
+            _ => Err(bad("hatch", format!("{} is not a hatch", h.hex()))),
+        },
+        None => Err(bad("hatch", format!("no object {}", h.hex()))),
+    }
+}
+
 impl HatchSettings {
+    /// Take hatch `h`'s fill, origin, island style, colour and transparency (Inherit Properties).
+    fn inherit(&mut self, h: &Hatch, c: &cadaddy_doc::Common) {
+        if h.gradient.is_none() {
+            self.pattern = h.pattern.clone();
+            self.lines = (!h.pattern_lines.is_empty()).then(|| h.pattern_lines.clone());
+        }
+        if h.scale.is_finite() && h.scale > 0.0 {
+            self.scale = h.scale;
+        }
+        if h.angle.is_finite() {
+            self.angle = h.angle;
+        }
+        self.gradient = h.gradient.clone();
+        if h.origin.is_finite() {
+            self.origin = h.origin;
+            self.origin_mode = OriginMode::Current;
+        }
+        self.style = h.style.min(2);
+        self.look = Some((c.color, c.transparency));
+    }
+
     fn from(s: &Session, p: &Value, gradient: bool) -> Self {
+        let mut st = Self::from_params(s, p, gradient);
+        // Inherit Properties: the hatch's settings, then whatever the call gives explicitly.
+        if let Ok(Some((h, c))) = inherited(s, p) {
+            st.inherit(&h, &c);
+            let explicit = Self::from_params(s, p, gradient);
+            if str_param(p, "pattern").is_some() {
+                st.pattern = explicit.pattern;
+                st.lines = None;
+                st.gradient = explicit.gradient.clone().filter(|_| gradient);
+            }
+            if p.get("scale").is_some_and(|v| !v.is_null()) {
+                st.scale = explicit.scale;
+            }
+            if p.get("angle").is_some_and(|v| !v.is_null()) {
+                st.angle = explicit.angle;
+            }
+            if str_param(p, "style").is_some() {
+                st.style = explicit.style;
+            }
+            if point_param(p, "origin").is_some() || str_param(p, "originMode").is_some() {
+                (st.origin, st.origin_mode) = (explicit.origin, explicit.origin_mode);
+            }
+            if gradient && (str_param(p, "name").is_some() || str_param(p, "color1").is_some() || str_param(p, "color2").is_some()) {
+                st.gradient = explicit.gradient;
+            }
+        }
+        st
+    }
+
+    fn from_params(s: &Session, p: &Value, gradient: bool) -> Self {
         let hdr = s.doc().map(|d| (d.header.str("HPNAME", "ANSI31"), d.header.f64("HPSCALE", 1.0), d.header.f64("HPANG", 0.0))).unwrap_or((
             "ANSI31".into(),
             1.0,
@@ -355,6 +424,8 @@ impl HatchSettings {
             centered: bool_or(p, "centered", true),
         });
         HatchSettings {
+            look: None,
+            lines: None,
             pattern,
             scale: f64_or(p, "scale", hdr.1).max(1e-9),
             angle: p.get("angle").and_then(Value::as_f64).map(f64::to_radians).unwrap_or(hdr.2),
@@ -393,7 +464,7 @@ impl HatchSettings {
             elevation: 0.0,
             gradient: self.gradient.clone(),
             background: None,
-            pattern_lines: patfile::lines_for(&self.pattern),
+            pattern_lines: self.lines.clone().unwrap_or_else(|| patfile::lines_for(&self.pattern)),
         })
     }
 }
@@ -411,6 +482,7 @@ fn make(s: &mut Session, p: &Value, gradient: bool) -> Result<Value> {
     if gradient && str_param(p, "name").is_some_and(|t| gradient_name(t).is_none()) {
         return Err(bad(cmd, format!("unknown gradient `name`; use one of {}", GRADIENT_NAMES.join(", "))));
     }
+    inherited(s, p)?;
     let st = HatchSettings::from(s, p, gradient);
     // Loops by picked point or selected object: one hatch each when separate.
     let mut groups: Vec<Vec<HatchLoop>> = Vec::new();
@@ -439,7 +511,7 @@ fn make(s: &mut Session, p: &Value, gradient: bool) -> Result<Value> {
 }
 
 /// True when two loops have the same vertex sequence (ignoring cyclic shift and winding order).
-fn same_loop(a: &HatchLoop, b: &HatchLoop) -> bool {
+pub(super) fn same_loop(a: &HatchLoop, b: &HatchLoop) -> bool {
     if a.vertices.len() != b.vertices.len() {
         return false;
     }
@@ -498,6 +570,12 @@ fn add_hatches(s: &mut Session, st: &HatchSettings, groups: Vec<Vec<HatchLoop>>)
     let mut out = Vec::new();
     for loops in groups.into_iter().filter(|g| !g.is_empty()) {
         let h = s.add_entity(st.hatch(loops))?;
+        if let Some((color, transparency)) = st.look {
+            s.doc_mut()?.modify_entity(h, |e| {
+                e.common.color = color;
+                e.common.transparency = transparency;
+            })?;
+        }
         // Hatches go under other objects (HPDRAWORDER = behind boundary).
         let space = s.space();
         if let Some(store) = s.doc_mut()?.space_mut(&space) {
@@ -587,6 +665,8 @@ enum HatchAsk {
     Scale,
     Angle,
     Origin,
+    /// Inherit Properties: a hatch to take the settings from.
+    Inherit,
 }
 
 struct HatchM {
@@ -670,6 +750,7 @@ impl HatchM {
                 };
                 self.set_origin(s, None, mode)?;
             }
+            HatchAsk::Inherit => {}
         }
         Ok(())
     }
@@ -709,6 +790,7 @@ impl Interactive for HatchM {
                 return Prompt::new("Specify an angle for the hatch pattern", Accept::NUMBER).default(d);
             }
             Some(HatchAsk::Origin) => return Prompt::new("Specify the pattern origin", Accept::POINT).kw(&ORIGIN_KW).default("Use current"),
+            Some(HatchAsk::Inherit) => return Prompt::new("Select hatch object", Accept::SELECT),
             None => {}
         }
         // The pattern picker stays offered while boundaries are picked: a choice sets the pattern.
@@ -722,6 +804,7 @@ impl Interactive for HatchM {
                 "Angle",
                 "Origin",
                 "sEparate",
+                "Inherit",
             ]));
         }
         picker(Prompt::new("Pick internal point", Accept::POINT).kw(&[
@@ -733,9 +816,44 @@ impl Interactive for HatchM {
             "Angle",
             "Origin",
             "sEparate",
+            "Inherit",
         ]))
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if self.asking == Some(HatchAsk::Inherit) {
+            match i {
+                Input::Pick(hs) => {
+                    let d = s.doc()?;
+                    let found = hs.iter().find_map(|h| {
+                        let e = d.entity(*h)?;
+                        match &e.kind {
+                            EntityKind::Hatch(x) => Some((x.clone(), e.common.clone())),
+                            _ => None,
+                        }
+                    });
+                    match found {
+                        Some((h, c)) => {
+                            self.settings.inherit(&h, &c);
+                            self.asking = None;
+                            s.echo(format!(
+                                "Inherited Properties: Name <{}>, Scale <{:.4}>, Angle <{:.0}>",
+                                if h.gradient.is_some() { "GRADIENT".to_string() } else { h.pattern.clone() },
+                                self.settings.scale,
+                                self.settings.angle.to_degrees()
+                            ));
+                        }
+                        None => s.echo("No hatch selected."),
+                    }
+                    return Ok(Step::Continue);
+                }
+                Input::Cancel => return Ok(Step::Cancel),
+                Input::Enter => {
+                    self.asking = None;
+                    return Ok(Step::Continue);
+                }
+                _ => return Ok(Step::Continue),
+            }
+        }
         if let Some(a) = self.asking.take() {
             match &i {
                 Input::Point(p) if a == HatchAsk::Origin => self.set_origin(s, Some(*p), OriginMode::Current)?,
@@ -802,6 +920,7 @@ impl Interactive for HatchM {
                     "sCale" => self.asking = Some(HatchAsk::Scale),
                     "Angle" => self.asking = Some(HatchAsk::Angle),
                     "Origin" => self.asking = Some(HatchAsk::Origin),
+                    "Inherit" => self.asking = Some(HatchAsk::Inherit),
                     "sEparate" => {
                         self.settings.separate = !self.settings.separate;
                         s.doc_mut()?.header.set_i64("HPSEPARATE", i64::from(self.settings.separate));

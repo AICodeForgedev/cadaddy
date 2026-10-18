@@ -1,6 +1,6 @@
 //! HATCHEDIT and -HATCHEDIT: pattern, scale and angle, island style, pattern origin,
-//! associativity (unlink, or link to boundary objects), separate hatches and recreated
-//! boundaries of existing hatches.
+//! associativity (unlink, or link to boundary objects), boundaries added (internal points or
+//! closed objects) and removed, separate hatches and recreated boundaries of existing hatches.
 
 use cadaddy_color::Color;
 use cadaddy_doc::{Drawing, EntityKind, Gradient, Handle, Hatch, HatchLoop, entity_bounds};
@@ -8,10 +8,10 @@ use cadaddy_geom::{Bounds2, Polyline, Vec2, point_in_polygon};
 use serde_json::{Value, json};
 
 use super::assoc::{detach, same_shape};
-use super::{GRADIENT_NAMES, ORIGIN_KW, OriginMode, closed_loop, gradient_name, island_style};
+use super::{GRADIENT_NAMES, ORIGIN_KW, OriginMode, closed_loop, gradient_name, island_style, loops_at, loops_from_handles, same_loop};
 use crate::cmd::helpers::lwpoly;
-use crate::cmd::{bad, bool_or, point_param, size_param, str_param, targets};
-use crate::{Accept, Input, Interactive, Picker, Prompt, Result, Session, Step};
+use crate::cmd::{bad, bool_or, point_param, points_param, size_param, str_param, targets};
+use crate::{Accept, EngineError, Input, Interactive, Picker, Prompt, Result, Session, Step};
 
 /// Upper bound on hatches edited by one call.
 const MAX_EDITED: usize = 10_000;
@@ -139,6 +139,146 @@ fn separate(s: &mut Session, handle: Handle) -> Result<Vec<Handle>> {
     let kept = Hatch { loops: first, ..h };
     d.modify_entity(handle, |e| e.kind = EntityKind::Hatch(kept))?;
     Ok(out)
+}
+
+/// What HATCHEDIT does to a hatch's boundaries: loops to add, and loops to remove (a point on
+/// the loop, or its index).
+#[derive(Default)]
+struct BoundaryEdit {
+    add: Vec<HatchLoop>,
+    remove_at: Vec<Vec2>,
+    remove_index: Vec<usize>,
+    /// How far from a loop a removal point may be.
+    tolerance: f64,
+}
+
+impl BoundaryEdit {
+    fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.remove_at.is_empty() && self.remove_index.is_empty()
+    }
+}
+
+/// Distance from `q` to the closed outline `pts`.
+fn outline_distance(pts: &[Vec2], q: Vec2) -> f64 {
+    let n = pts.len();
+    (0..n)
+        .filter_map(|i| {
+            let (a, b) = (*pts.get(i)?, *pts.get((i + 1) % n)?);
+            let ab = b - a;
+            let len2 = ab.dot(ab);
+            let t = if len2 > 0.0 { ((q - a).dot(ab) / len2).clamp(0.0, 1.0) } else { 0.0 };
+            Some(q.dist(a + ab * t))
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// Mark each loop outer or island by nesting: a loop inside an even number of the others is an
+/// outer loop.
+fn mark_outer(loops: &mut [HatchLoop]) {
+    let polys: Vec<Vec<Vec2>> = loops.iter().map(outline).collect();
+    let outer: Vec<bool> = (0..polys.len())
+        .map(|i| {
+            let Some(q) = polys.get(i).and_then(|p| p.first().copied()) else { return true };
+            let depth = polys.iter().enumerate().filter(|(j, pj)| *j != i && point_in_polygon(pj, q)).count();
+            depth % 2 == 0
+        })
+        .collect();
+    for (l, o) in loops.iter_mut().zip(outer) {
+        l.outer = o;
+    }
+}
+
+/// Apply `edit` to `h`: remove the loops picked or listed, add the new ones (a loop it already
+/// has is not added twice). New loops keep their boundary objects when the hatch is
+/// associative. Refuses to remove every loop.
+fn edit_boundaries(h: &mut Hatch, edit: &BoundaryEdit) -> Result<()> {
+    let mut gone: Vec<usize> = edit.remove_index.clone();
+    if gone.iter().any(|i| *i >= h.loops.len()) {
+        return Err(bad("hatchedit", format!("the hatch has {} loop(s)", h.loops.len())));
+    }
+    let polys: Vec<Vec<Vec2>> = h.loops.iter().map(outline).collect();
+    for q in &edit.remove_at {
+        let best = polys
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i, outline_distance(p, *q)))
+            .filter(|(_, d)| d.is_finite())
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .filter(|(_, d)| *d <= edit.tolerance);
+        match best {
+            Some((i, _)) => gone.push(i),
+            None => return Err(EngineError::Other(format!("No boundary of the hatch at {:.4},{:.4}.", q.x, q.y))),
+        }
+    }
+    gone.sort_unstable();
+    gone.dedup();
+    let left = h.loops.len().saturating_sub(gone.len()) + edit.add.len();
+    if left == 0 {
+        return Err(EngineError::Other("A hatch needs at least one boundary: erase it instead.".into()));
+    }
+    for i in gone.into_iter().rev() {
+        if i < h.loops.len() {
+            h.loops.remove(i);
+        }
+    }
+    for l in &edit.add {
+        if h.loops.iter().any(|x| same_loop(x, l)) {
+            continue;
+        }
+        let mut l = l.clone();
+        if !h.associative {
+            l.sources.clear();
+        }
+        h.loops.push(l);
+    }
+    if h.loops.is_empty() {
+        return Err(EngineError::Other("A hatch needs at least one boundary: erase it instead.".into()));
+    }
+    mark_outer(&mut h.loops);
+    Ok(())
+}
+
+/// The boundary changes asked for: `addPoints` (internal points), `addHandles` (closed objects),
+/// `remove` (points on loops to drop, within `tolerance`, default a pick box) and `removeLoops`
+/// (loop indices).
+fn boundary_edit(s: &Session, p: &Value) -> Result<BoundaryEdit> {
+    let cmd = "hatchedit";
+    let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+    let mut e = BoundaryEdit { tolerance: s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5, ..BoundaryEdit::default() };
+    if let Some(t) = p.get("tolerance").filter(|v| !v.is_null()) {
+        e.tolerance = t.as_f64().filter(|t| t.is_finite() && *t >= 0.0).ok_or_else(|| bad(cmd, "`tolerance` must be a number of 0 or more"))?;
+    }
+    if given("addPoints") {
+        let pts = points_param(p, "addPoints").ok_or_else(|| bad(cmd, "`addPoints` is an array of [x, y]"))?;
+        if pts.len() > MAX_LOOPS {
+            return Err(bad(cmd, format!("at most {MAX_LOOPS} points")));
+        }
+        for q in pts {
+            e.add.extend(loops_at(s, q)?);
+        }
+    }
+    if given("addHandles") {
+        let a = p.get("addHandles").and_then(Value::as_array).ok_or_else(|| bad(cmd, "`addHandles` is an array of object handles"))?;
+        let hs: Vec<Handle> = a
+            .iter()
+            .take(MAX_LOOPS)
+            .map(|v| v.as_str().and_then(Handle::parse_hex).ok_or_else(|| bad(cmd, "`addHandles` is an array of object handles")))
+            .collect::<Result<_>>()?;
+        e.add.extend(loops_from_handles(s, &hs)?);
+    }
+    if given("remove") {
+        let pts = points_param(p, "remove").ok_or_else(|| bad(cmd, "`remove` is an array of [x, y] points on the loops to remove"))?;
+        e.remove_at = pts.into_iter().take(MAX_LOOPS).collect();
+    }
+    if given("removeLoops") {
+        let a = p.get("removeLoops").and_then(Value::as_array).ok_or_else(|| bad(cmd, "`removeLoops` is an array of loop indices"))?;
+        e.remove_index = a
+            .iter()
+            .take(MAX_LOOPS)
+            .map(|v| v.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(cmd, "`removeLoops` is an array of loop indices")))
+            .collect::<Result<_>>()?;
+    }
+    Ok(e)
 }
 
 /// Pattern, scale and angle (degrees) from the parameters.
@@ -303,11 +443,29 @@ pub(super) fn run_hatchedit(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad("hatchedit", "`boundary` is an array of object handles")),
     };
     let associate = bool_or(p, "associate", false);
+    let bedit = boundary_edit(s, p)?;
+    if !bedit.is_empty() && hs.len() > 1 {
+        return Err(bad("hatchedit", "boundaries are added to or removed from one hatch at a time"));
+    }
+    // Checked before anything changes: a refused boundary edit leaves the hatch as it was.
+    let edited_boundaries = match (bedit.is_empty(), hs.first()) {
+        (false, Some(first)) => {
+            let Some(EntityKind::Hatch(mut h)) = s.doc()?.entity(*first).map(|e| e.kind.clone()) else {
+                return Err(bad("hatchedit", "select one or more hatches"));
+            };
+            edit_boundaries(&mut h, &bedit)?;
+            Some(h.loops)
+        }
+        _ => None,
+    };
     let mut created = Vec::new();
     let mut notes = Vec::new();
     let mut budget = MAX_LOOPS;
     for handle in &hs {
         let Some(EntityKind::Hatch(mut h)) = s.doc()?.entity(*handle).map(|e| e.kind.clone()) else { continue };
+        if let Some(loops) = &edited_boundaries {
+            h.loops = loops.clone();
+        }
         properties(&mut h, p);
         if let Some(g) = &grad {
             g.apply(&mut h);
@@ -368,9 +526,16 @@ enum Ask {
     Recreate,
     RecreateLink,
     Link,
+    /// Add boundaries: by internal point or by object?
+    AddHow,
+    AddPoints,
+    AddObjects,
+    /// Remove boundaries: points on the loops to remove.
+    Remove,
 }
 
-const OPTIONS: [&str; 7] = ["Disassociate", "Style", "Properties", "recreate Boundary", "ASsociate", "separate Hatches", "Origin"];
+const OPTIONS: [&str; 9] =
+    ["Disassociate", "Style", "Properties", "ADd boundaries", "Remove boundaries", "recreate Boundary", "ASsociate", "separate Hatches", "Origin"];
 
 /// -HATCHEDIT: select hatches, then one option.
 pub(crate) struct HatchEditM {
@@ -378,6 +543,8 @@ pub(crate) struct HatchEditM {
     ask: Ask,
     /// Properties typed so far (pattern, scale, angle in degrees).
     props: serde_json::Map<String, Value>,
+    /// Internal points (ADd boundaries) or points on loops (Remove boundaries) picked so far.
+    points: Vec<Vec2>,
 }
 
 impl HatchEditM {
@@ -386,7 +553,7 @@ impl HatchEditM {
             .doc()
             .map(|d| s.selection().into_iter().filter(|h| matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Hatch(_)))).collect())
             .unwrap_or_default();
-        HatchEditM { hatches, ask: Ask::Option, props: serde_json::Map::new() }
+        HatchEditM { hatches, ask: Ask::Option, props: serde_json::Map::new(), points: Vec::new() }
     }
     fn first(&self, s: &Session) -> Option<Hatch> {
         let d = s.doc().ok()?;
@@ -442,6 +609,10 @@ impl Interactive for HatchEditM {
             Ask::Recreate => Prompt::new("Type of boundary object", Accept::TEXT).kw(&["Polyline"]).default("Polyline"),
             Ask::RecreateLink => Prompt::new("Associate the hatch with the new boundary?", Accept::TEXT).kw(&["Yes", "No"]).default("No"),
             Ask::Link => Prompt::new("Select boundary objects (Enter finds them)", Accept::SELECT),
+            Ask::AddHow => Prompt::new("Add boundaries by", Accept::TEXT).kw(&["Internal point", "Select objects"]).default("Internal point"),
+            Ask::AddPoints => Prompt::new("Pick internal point", Accept::POINT),
+            Ask::AddObjects => Prompt::new("Select objects", Accept::SELECT),
+            Ask::Remove => Prompt::new("Select a boundary to remove", Accept::POINT),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
@@ -472,6 +643,20 @@ impl Interactive for HatchEditM {
                     Some("separate Hatches") => return self.apply(s, json!({ "separate": true })),
                     Some("Style") => self.ask = Ask::Style,
                     Some("Properties") => self.ask = Ask::Pattern,
+                    Some("ADd boundaries") => {
+                        if self.hatches.len() > 1 {
+                            s.echo("Boundaries are added to one hatch at a time.");
+                            return Ok(Step::Done);
+                        }
+                        self.ask = Ask::AddHow;
+                    }
+                    Some("Remove boundaries") => {
+                        if self.hatches.len() > 1 {
+                            s.echo("Boundaries are removed from one hatch at a time.");
+                            return Ok(Step::Done);
+                        }
+                        self.ask = Ask::Remove;
+                    }
                     Some("recreate Boundary") => self.ask = Ask::Recreate,
                     Some("ASsociate") => self.ask = Ask::Link,
                     Some("Origin") => self.ask = Ask::Origin,
@@ -544,6 +729,49 @@ impl Interactive for HatchEditM {
             (Ask::Link, Input::Pick(hs)) => self.apply(s, json!({ "associative": true, "boundary": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() })),
             (Ask::Link, Input::Enter) => self.apply(s, json!({ "associative": true })),
             (Ask::Link, _) => Ok(Step::Continue),
+            (Ask::AddHow, Input::Enter) => {
+                self.ask = Ask::AddPoints;
+                Ok(Step::Continue)
+            }
+            (Ask::AddHow, _) => {
+                self.ask = match text.as_deref().map(str::to_ascii_lowercase).as_deref() {
+                    Some("select objects" | "s") => Ask::AddObjects,
+                    _ => Ask::AddPoints,
+                };
+                Ok(Step::Continue)
+            }
+            (Ask::AddPoints | Ask::Remove, Input::Point(q)) => {
+                if self.ask == Ask::AddPoints {
+                    match loops_at(s, q) {
+                        Ok(l) => s.echo(format!("Analyzing the selected data... {} loop(s)", l.len())),
+                        Err(e) => {
+                            s.echo(e.to_string());
+                            return Ok(Step::Continue);
+                        }
+                    }
+                }
+                if self.points.len() < MAX_LOOPS {
+                    self.points.push(q);
+                }
+                Ok(Step::Continue)
+            }
+            (Ask::AddPoints, Input::Enter) => {
+                if self.points.is_empty() {
+                    return Ok(Step::Done);
+                }
+                let pts: Vec<[f64; 2]> = self.points.iter().map(|q| [q.x, q.y]).collect();
+                self.apply(s, json!({ "addPoints": pts }))
+            }
+            (Ask::Remove, Input::Enter) => {
+                if self.points.is_empty() {
+                    return Ok(Step::Done);
+                }
+                let pts: Vec<[f64; 2]> = self.points.iter().map(|q| [q.x, q.y]).collect();
+                self.apply(s, json!({ "remove": pts }))
+            }
+            (Ask::AddObjects, Input::Pick(hs)) => self.apply(s, json!({ "addHandles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() })),
+            (Ask::AddObjects, Input::Enter) => Ok(Step::Done),
+            (Ask::AddPoints | Ask::AddObjects | Ask::Remove, _) => Ok(Step::Continue),
         }
     }
 }
