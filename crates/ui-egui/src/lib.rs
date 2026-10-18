@@ -37,6 +37,7 @@ pub mod grip_dyn;
 pub mod i18n;
 pub mod icons;
 pub mod layers;
+pub mod layouttabs;
 pub mod managers;
 pub mod menus;
 pub mod opening;
@@ -208,6 +209,8 @@ pub struct Services {
     pub pick_pdf: Option<Box<dyn Fn() -> Option<String>>>,
     /// A raster image to attach (IMAGEATTACH, ATTACH).
     pub pick_image: Option<Box<dyn Fn() -> Option<String>>>,
+    /// The system clipboard's text (Paste to Command Line).
+    pub read_clipboard: Option<Box<dyn Fn() -> Option<String>>>,
 }
 
 pub struct CadApp {
@@ -273,6 +276,8 @@ pub struct CadApp {
     pub gpu_notice: Option<autosave::GpuNotice>,
     /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
+    /// The layout tabs' rename, selection and Move or Copy dialog ([`layouttabs`]).
+    pub layout_tabs: layouttabs::LayoutTabs,
     /// The Edit Block Definition dialog ([`bedit`]).
     pub bedit: bedit::State,
     /// Walk mode, while it is open: the drawing in 3D in place of the canvas ([`walk`]).
@@ -322,6 +327,7 @@ impl CadApp {
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
             hatch_dlg: None,
+            layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
             wgpu_rs: None,
@@ -725,6 +731,7 @@ impl CadApp {
         dialogs::show(self, ui.ctx());
         layers::off_prompt(self, ui.ctx());
         palettes::patterns::prompt_picker(self, ui.ctx());
+        layouttabs::move_copy_dialog(self, ui.ctx());
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());

@@ -420,16 +420,50 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             let tr = Rect::from_min_size(pos2(x, r.top() + 1.0), vec2(w, r.height() - 2.0)).intersect(clip);
             let active = active_tab == Some(i);
             let resp = ui.interact(tr, ui.id().with(("lt", i)), Sense::click());
+            let selected = app.layout_tabs.selected.iter().any(|n| n == name);
             if active {
                 tp.rect_filled(tr, 2.0, t.tab_active);
+            } else if selected {
+                tp.rect_filled(tr, 2.0, t.tab_active.gamma_multiply(0.6));
             } else if resp.hovered() {
                 tp.rect_filled(tr, 2.0, t.control.gamma_multiply(0.5));
+            }
+            // Renaming in place: the tab's name is a text field until Enter (or Esc).
+            if app.layout_tabs.rename.as_ref().is_some_and(|(n, _)| n == name) {
+                let mut text = app.layout_tabs.rename.as_ref().map(|r| r.1.clone()).unwrap_or_default();
+                let edit_rect = Rect::from_min_size(pos2(tr.left() + 4.0, tr.top() + 2.0), vec2((w - 8.0).max(80.0), tr.height() - 4.0));
+                let edit = ui.put(edit_rect, egui::TextEdit::singleline(&mut text).font(crate::theme::body()).id(ui.id().with("lt_rename")));
+                if !edit.has_focus() && !edit.lost_focus() {
+                    edit.request_focus();
+                }
+                if let Some(r) = app.layout_tabs.rename.as_mut() {
+                    r.1 = text;
+                }
+                let (enter, esc) = ui.input(|inp| (inp.key_pressed(egui::Key::Enter), inp.key_pressed(egui::Key::Escape)));
+                if esc {
+                    crate::layouttabs::finish_rename(app, false);
+                } else if (enter || edit.lost_focus())
+                    && let Some(e) = crate::layouttabs::finish_rename(app, true)
+                {
+                    app.set_status(e);
+                }
+                x += w + 2.0;
+                continue;
             }
             tp.galley(pos2(tr.left() + 13.0, tr.center().y - g.size().y / 2.0), g, if active { t.text } else { t.text_dim });
             icons::describe_control(ui, &resp, name, Some(active), true);
             let resp = if cut { resp.on_hover_text(shown_name(i, name)) } else { resp };
-            if resp.clicked() {
-                switch = Some(name.clone());
+            if i > 0 && resp.double_clicked() {
+                crate::layouttabs::start_rename(app, name);
+            } else if resp.clicked() {
+                // Ctrl (Cmd) adds a layout tab to the selection or takes it out; a plain click
+                // goes to the tab and drops the selection.
+                if i > 0 && ui.input(|inp| inp.modifiers.command) {
+                    crate::layouttabs::toggle_selected(app, name);
+                } else {
+                    app.layout_tabs.selected.clear();
+                    switch = Some(name.clone());
+                }
             }
             crate::shortcut_menus::attach(app, &resp, |app| crate::shortcut_menus::layout_tab_entries(app, name));
             x += w + 2.0;
