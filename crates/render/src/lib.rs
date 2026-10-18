@@ -351,6 +351,9 @@ struct Ctx<'a> {
     block_pstyle: Option<usize>,
     /// Transparency (percent) of the block reference being expanded, for `ByBlock`.
     block_transparency: u8,
+    /// The annotation scale (drawing units per paper unit) of the viewport being drawn when it
+    /// has its own, apart from its zoom scale.
+    view_anno: Option<f64>,
 }
 
 impl Ctx<'_> {
@@ -596,6 +599,7 @@ fn top_ctx<'a>(d: &'a Drawing, xf: Mat3, top: Handle, frozen: &'a [String], vp_c
         lt_factor: 1.0,
         block_pstyle: None,
         block_transparency: 0,
+        view_anno: None,
     }
 }
 
@@ -815,7 +819,9 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
     // PSLTSCALE on: model-space dashes are scaled so they measure the same on paper as in
     // paper space, whatever the viewport scale.
     let lt_factor = if d.header.i64("PSLTSCALE", 1) != 0 { 1.0 / s } else { 1.0 };
-    let ctx = || Ctx { lt_factor, ..top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors) };
+    // A viewport's own annotation scale, when it names one of the drawing's scales.
+    let view_anno = vp.anno_scale.as_deref().and_then(|n| d.anno_scale(n)).filter(|sc| sc.is_valid()).map(|sc| sc.factor());
+    let ctx = || Ctx { lt_factor, view_anno, ..top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors) };
     let seen = |me: &Entity| {
         if matches!(me.kind, EntityKind::Viewport(_)) {
             return false;
@@ -1207,7 +1213,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     // model space seen through it, else the drawing's (CANNOSCALE in model space, 1:1 on paper).
     if ctx.depth == 0 && cadaddy_doc::is_annotative(e) {
         let mode = if ctx.top == VIEWPORT_CONTENT {
-            cadaddy_doc::anno_draw(e, 1.0 / ctx.xf.scale_factor().max(1e-12), ctx.d.anno_all_visible())
+            cadaddy_doc::anno_draw(e, ctx.view_anno.unwrap_or_else(|| 1.0 / ctx.xf.scale_factor().max(1e-12)), ctx.d.anno_all_visible())
         } else {
             ctx.d.anno_draw(e)
         };
@@ -1705,6 +1711,7 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
         block_pstyle: ctx.block_pstyle,
         // The reference's own, set by the caller (`Builder::transparency` while it draws).
         block_transparency: ctx.block_transparency,
+        view_anno: ctx.view_anno,
     }
 }
 

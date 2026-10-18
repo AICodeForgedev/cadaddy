@@ -166,6 +166,7 @@ fn viewport_contents_get_their_pens() {
         clip: None,
         on: true,
         twist: 0.0,
+        anno_scale: None,
     };
     let space = Space::Paper("Layout1".into());
     d.add(&space, Common::default(), EntityKind::Viewport(vp)).unwrap();

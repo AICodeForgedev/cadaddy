@@ -883,6 +883,10 @@ pub struct Viewport {
     /// this angle about the view centre.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub twist: f64,
+    /// The viewport's own annotation scale (a name in the drawing's scale list), apart from its
+    /// zoom scale; `None` follows the viewport's scale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anno_scale: Option<String>,
 }
 impl Viewport {
     /// The model-space point shown at paper point `p` (`None` for a degenerate viewport).
@@ -913,6 +917,7 @@ impl Default for Viewport {
             clip: None,
             on: true,
             twist: 0.0,
+            anno_scale: None,
         }
     }
 }

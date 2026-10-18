@@ -772,6 +772,15 @@ pub(crate) struct AnnoPayload {
     blocks: Vec<String>,
     #[serde(default)]
     objects: Vec<AnnoObject>,
+    /// Layout viewports with their own annotation scale.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    viewports: Vec<AnnoViewport>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct AnnoViewport {
+    handle: String,
+    scale: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -796,10 +805,19 @@ pub(crate) fn anno_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
         .filter(|e| cadaddy_doc::is_annotative(e))
         .map(|e| AnnoObject { handle: e.handle.hex(), scales: e.common.anno_scales.clone() })
         .collect();
-    if cannoscale == "1:1" && annoallvisible == 1 && blocks.is_empty() && objects.is_empty() {
+    let viewports: Vec<AnnoViewport> = d
+        .layouts
+        .iter()
+        .flat_map(|l| l.entities.iter())
+        .filter_map(|e| match &e.kind {
+            cadaddy_doc::EntityKind::Viewport(v) => v.anno_scale.as_ref().map(|sc| AnnoViewport { handle: e.handle.hex(), scale: sc.clone() }),
+            _ => None,
+        })
+        .collect();
+    if cannoscale == "1:1" && annoallvisible == 1 && blocks.is_empty() && objects.is_empty() && viewports.is_empty() {
         return None;
     }
-    let p = AnnoPayload { version: 1, cannoscale: Some(cannoscale), annoallvisible: Some(annoallvisible), blocks, objects };
+    let p = AnnoPayload { version: 1, cannoscale: Some(cannoscale), annoallvisible: Some(annoallvisible), blocks, objects, viewports };
     Some(json_chunks(&serde_json::to_string(&p).ok()?))
 }
 
@@ -809,7 +827,8 @@ pub(crate) fn parse_anno(text: &str) -> Option<AnnoPayload> {
         return None;
     }
     let p: AnnoPayload = serde_json::from_str(text).ok()?;
-    (p.version == 1 && p.objects.len() <= MAX_ANNO_OBJECTS && p.blocks.len() <= MAX_ANNO_OBJECTS).then_some(p)
+    (p.version == 1 && p.objects.len() <= MAX_ANNO_OBJECTS && p.blocks.len() <= MAX_ANNO_OBJECTS && p.viewports.len() <= MAX_ANNO_OBJECTS)
+        .then_some(p)
 }
 
 /// Apply a parsed annotative scaling record: variables, annotative blocks and each object's
@@ -840,6 +859,16 @@ pub(crate) fn apply_anno(d: &mut cadaddy_doc::Drawing, p: AnnoPayload) {
         let _ = d.modify_entity(h, |e| {
             if cadaddy_doc::can_be_annotative(&e.kind) {
                 e.common.anno_scales = scales;
+            }
+        });
+    }
+    // A viewport's own annotation scale, when it names a scale of the list.
+    for v in p.viewports {
+        let Some(h) = Handle::parse_hex(&v.handle) else { continue };
+        let Some(name) = d.anno_scale(&v.scale).map(|sc| sc.name.clone()) else { continue };
+        let _ = d.modify_entity(h, |e| {
+            if let cadaddy_doc::EntityKind::Viewport(vp) = &mut e.kind {
+                vp.anno_scale = Some(name);
             }
         });
     }

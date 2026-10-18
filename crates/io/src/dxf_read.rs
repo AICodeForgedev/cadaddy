@@ -526,6 +526,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             clip: t.s(340).and_then(|h| Handle::parse_hex(&h)).filter(|h| h.0 != 0 && t.i(90).unwrap_or(0) & 65536 != 0),
             on: t.i(90).unwrap_or(0) & 131072 == 0,
             twist: viewport_twist(&t),
+            anno_scale: None,
         }),
         "WIPEOUT" => {
             let o = t.p(10);

@@ -67,7 +67,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{p1?, p2?, layout?}")
             .interactive(|s| Ok(super::view::model_vports(s, Some(4)).unwrap_or_else(|| Box::new(MviewM::new(4, false))))),
         CommandSpec::new("viewport.set", "Viewport Properties", run_viewport_set).params(
-            "{handle? (default: selected viewports), scale?: paper units per model unit | \"1:50\", viewHeight?, center?: [x,y], locked?, freeze?: [layer], thaw?: [layer], colors?: {layer: color | null}}",
+            "{handle? (default: selected viewports), scale?: paper units per model unit | \"1:50\", viewHeight?, center?: [x,y], locked?, annoScale?: scale name (the viewport's own annotation scale) | null (follow its scale), freeze?: [layer], thaw?: [layer], colors?: {layer: color | null}}",
         ),
         CommandSpec::new("vplayer", "Viewport Layer Freeze", run_viewport_set)
             .params("{handle?, freeze?: [layer], thaw?: [layer], colors?: {layer: color (\"red\" | 1..255 | \"r,g,b\") | null to clear}} (typed: option prompts)")
@@ -534,6 +534,7 @@ fn viewport_json(h: Handle, v: &Viewport) -> Value {
         "scale": if v.view_height > 0.0 { v.height / v.view_height } else { 0.0 },
         "locked": v.locked,
         "on": v.on,
+        "annoScale": v.anno_scale,
         "clip": v.clip.map(|h| h.hex()),
         "frozenLayers": v.frozen_layers,
         "layerColors": v.layer_colors.iter().map(|(l, c)| json!({ "layer": l, "color": c.name() })).collect::<Vec<_>>(),
@@ -572,6 +573,19 @@ fn run_viewport_set(s: &mut Session, p: &Value) -> Result<Value> {
         None => None,
     };
     let locked = p.get("locked").and_then(Value::as_bool);
+    // The viewport's own annotation scale: a scale of the list, or null / "" to follow its scale.
+    let anno_scale: Option<Option<String>> = match p.get("annoScale") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::String(t)) if t.trim().is_empty() => Some(None),
+        Some(Value::String(t)) => Some(Some(
+            s.doc()?
+                .anno_scale_or_ratio(t)
+                .map(|sc| sc.name.clone())
+                .ok_or_else(|| bad(cmd, format!("no annotation scale `{t}` in the scale list")))?,
+        )),
+        Some(_) => return Err(bad(cmd, "`annoScale` is a scale name or null")),
+    };
     let freeze = layer_list(p, "freeze");
     let thaw = layer_list(p, "thaw");
     // Per-viewport layer colours: {layer: colour} (null clears the override).
@@ -618,6 +632,9 @@ fn run_viewport_set(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if let Some(l) = locked {
             v.locked = l;
+        }
+        if let Some(a) = &anno_scale {
+            v.anno_scale = a.clone();
         }
         for f in &freeze {
             if !v.frozen_layers.iter().any(|x| x.eq_ignore_ascii_case(f)) {
