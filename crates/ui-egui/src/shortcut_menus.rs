@@ -211,7 +211,17 @@ pub fn properties_entries(app: &CadApp) -> Vec<Vec<Entry>> {
     let mut groups = Vec::new();
     push(&mut groups, ["qselect", "selectall", "ai_deselect"].iter().filter_map(|id| item(app, id, None)).collect());
     push(&mut groups, run("Hide Palette", "ui.dock", json!({ "operation": "close", "panel": "properties" })).into_iter().collect());
+    push(&mut groups, window_entry(app, crate::docking::Panel::Properties).into_iter().collect());
     groups
+}
+
+/// Float a palette in a window of its own (to put it on another screen), or dock it back.
+pub fn window_entry(app: &CadApp, panel: crate::docking::Panel) -> Option<Entry> {
+    if app.ui.docking.is_detached(panel) {
+        run("Dock Palette", "ui.dock", json!({ "operation": "dock", "panel": panel.id() }))
+    } else {
+        run("Float in Own Window", "ui.dock", json!({ "operation": "detach", "panel": panel.id() }))
+    }
 }
 
 /// Run a chosen item. `ctx` is for the items that copy text to the system clipboard.

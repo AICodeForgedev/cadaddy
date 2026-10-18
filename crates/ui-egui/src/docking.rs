@@ -57,7 +57,7 @@ impl Panel {
     }
     /// Palettes outside the default arrangement, opened on request (QUICKCALC).
     pub const ON_DEMAND: &[Self] = &[Self::QuickCalc];
-    fn parse(id: &str) -> Result<Self, String> {
+    pub fn parse(id: &str) -> Result<Self, String> {
         Self::ALL.iter().chain(Self::ON_DEMAND).copied().find(|panel| panel.id() == id).ok_or_else(|| format!("Unknown panel: {id}"))
     }
 }
@@ -80,6 +80,28 @@ pub struct Workspace {
     pub layout: Layout<Panel>,
     /// Closed panels retain their most recent group, side, size or floating rectangle.
     pub hidden: Vec<(Panel, Location<Panel>)>,
+    /// Palettes in windows of their own (another screen, say), outside the main window.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub detached: Vec<Detached>,
+}
+
+/// A palette in its own OS window: where that window is (screen points: left, top, width,
+/// height) and the size of the screen it was on, so it reopens there.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Detached {
+    pub panel: Panel,
+    pub rect: [f32; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor: Option<[f32; 2]>,
+}
+
+/// Largest coordinate or size a detached window takes (hostile saved settings).
+const MAX_COORD: f32 = 100_000.0;
+
+/// A window rectangle that can be used: finite, within bounds, at least a small window.
+fn usable(rect: &[f32; 4]) -> bool {
+    rect.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORD) && rect[2] >= 120.0 && rect[3] >= 80.0
 }
 
 impl Default for Workspace {
@@ -108,6 +130,7 @@ impl Default for Workspace {
                 floating: Vec::new(),
             },
             hidden: Vec::new(),
+            detached: Vec::new(),
         }
     }
 }
@@ -115,6 +138,12 @@ impl Default for Workspace {
 impl Workspace {
     pub fn validate(&self) -> Result<(), String> {
         self.layout.validate().map_err(|error| error.to_string())?;
+        let mut own = std::collections::HashSet::new();
+        for d in &self.detached {
+            if d.panel == Panel::Canvas || self.layout.contains(&d.panel) || !own.insert(d.panel) || !usable(&d.rect) {
+                return Err("A palette window has an invalid panel or rectangle".into());
+            }
+        }
         if !self.layout.contains(&Panel::Canvas) || self.hidden.len() > Panel::ALL.len() + Panel::ON_DEMAND.len() {
             return Err("The panel layout must contain its document view and bounded hidden panels".into());
         }
@@ -222,6 +251,18 @@ impl Workspace {
             return self.apply(action);
         }
         let operation = params.get("operation").and_then(Value::as_str).ok_or("operation is required")?;
+        if matches!(operation, "detach" | "dock" | "moveDetached") {
+            let panel = Panel::parse(params.get("panel").and_then(Value::as_str).ok_or("panel is required")?)?;
+            let rect = match params.get("rect") {
+                None | Some(Value::Null) => None,
+                Some(r) => Some(rect_param(r)?),
+            };
+            return match operation {
+                "detach" => self.detach(panel, rect.unwrap_or([120.0, 120.0, 320.0, 520.0]), None),
+                "dock" => self.dock(panel),
+                _ => self.move_detached(panel, rect.ok_or("rect is required")?, None),
+            };
+        }
         if operation == "resizeSplit" {
             let path: Vec<bool> =
                 serde_json::from_value(params.get("path").cloned().ok_or("path is required")?).map_err(|error| error.to_string())?;
@@ -230,6 +271,17 @@ impl Workspace {
             return self.apply(Action::ResizeSplit { path, size });
         }
         let panel = Panel::parse(params.get("panel").and_then(Value::as_str).ok_or("panel is required")?)?;
+        if self.is_detached(panel) {
+            // Its window is already open; closing it keeps its place in the layout for later.
+            return match operation {
+                "open" | "activate" => Ok(()),
+                "close" => {
+                    self.detached.retain(|d| d.panel != panel);
+                    Ok(())
+                }
+                _ => Err(format!("{} is in a window of its own; dock it first", panel.id())),
+            };
+        }
         let action = match operation {
             "open" => return self.reveal_panel(panel),
             "close" => Action::Close { panel },
@@ -286,14 +338,90 @@ impl Workspace {
                 };
                 Action::Move { panel, anchor, placement }
             }
-            _ => return Err("operation must be open, close, activate, float, move, moveFloating, resizeSplit, setStackOpen or resizeStack".into()),
+            _ => return Err("operation must be open, close, activate, float, move, moveFloating, resizeSplit, setStackOpen, resizeStack, detach, dock or moveDetached".into()),
         };
         self.apply(action)
     }
 }
 
+impl Workspace {
+    /// Whether `panel` is in a window of its own.
+    pub fn is_detached(&self, panel: Panel) -> bool {
+        self.detached.iter().any(|d| d.panel == panel)
+    }
+
+    /// Move `panel` out of the main window into its own window at `rect`; its place in the
+    /// layout is kept for docking back.
+    pub fn detach(&mut self, panel: Panel, rect: [f32; 4], monitor: Option<[f32; 2]>) -> Result<(), String> {
+        if panel == Panel::Canvas {
+            return Err("The document view cannot leave the main window".into());
+        }
+        if !usable(&rect) {
+            return Err("rect must be finite, bounded and at least 120 × 80".into());
+        }
+        if self.is_detached(panel) {
+            return self.move_detached(panel, rect, monitor);
+        }
+        let mut next = self.clone();
+        if next.layout.contains(&panel) {
+            next.apply(Action::Close { panel })?;
+        }
+        next.detached.push(Detached { panel, rect, monitor });
+        next.validate()?;
+        *self = next;
+        Ok(())
+    }
+
+    /// Bring `panel` back into the main window, where it was before it was detached.
+    pub fn dock(&mut self, panel: Panel) -> Result<(), String> {
+        if !self.is_detached(panel) {
+            return Err(format!("{} is not in a window of its own", panel.id()));
+        }
+        let mut next = self.clone();
+        next.detached.retain(|d| d.panel != panel);
+        next.reveal_panel(panel)?;
+        *self = next;
+        Ok(())
+    }
+
+    /// Remember where `panel`'s window is now (and on which screen).
+    pub fn move_detached(&mut self, panel: Panel, rect: [f32; 4], monitor: Option<[f32; 2]>) -> Result<(), String> {
+        if !usable(&rect) {
+            return Err("rect must be finite, bounded and at least 120 × 80".into());
+        }
+        let d = self.detached.iter_mut().find(|d| d.panel == panel).ok_or_else(|| format!("{} is not in a window of its own", panel.id()))?;
+        d.rect = rect;
+        if monitor.is_some() {
+            d.monitor = monitor.filter(|m| m.iter().all(|v| v.is_finite() && *v > 0.0 && *v <= MAX_COORD));
+        }
+        Ok(())
+    }
+}
+
+fn rect_param(v: &Value) -> Result<[f32; 4], String> {
+    let a = v.as_array().filter(|r| r.len() == 4).ok_or("rect must be [x,y,width,height]")?;
+    let mut out = [0.0f32; 4];
+    for (o, x) in out.iter_mut().zip(a) {
+        *o = x.as_f64().filter(|n| n.is_finite() && n.abs() <= f64::from(MAX_COORD)).ok_or("rect values must be finite and bounded")? as f32;
+    }
+    Ok(out)
+}
+
 fn sync(workspace: &mut Workspace, app: &crate::CadApp) -> Result<(), String> {
-    workspace.set_visible(Panel::ToolSets, app.ui.show_toolsets)?;
+    // A palette in its own window stays there while its switch is on; turned off, its window closes.
+    if !workspace.is_detached(Panel::ToolSets) {
+        workspace.set_visible(Panel::ToolSets, app.ui.show_toolsets)?;
+    } else if !app.ui.show_toolsets {
+        workspace.detached.retain(|d| d.panel != Panel::ToolSets);
+    }
+    if workspace.is_detached(Panel::Layers) || workspace.is_detached(Panel::Properties) {
+        if !app.ui.show_palettes {
+            workspace.detached.retain(|d| !matches!(d.panel, Panel::Layers | Panel::Properties));
+            workspace.set_visible(Panel::Layers, false)?;
+            workspace.set_visible(Panel::Properties, false)?;
+        }
+        return Ok(());
+    }
     if !app.ui.show_palettes {
         workspace.set_visible(Panel::Layers, false)?;
         workspace.set_visible(Panel::Properties, false)?;
@@ -306,8 +434,9 @@ fn sync(workspace: &mut Workspace, app: &crate::CadApp) -> Result<(), String> {
 }
 
 fn publish_visibility(app: &mut crate::CadApp, workspace: &Workspace) {
-    app.ui.show_toolsets = workspace.layout.contains(&Panel::ToolSets);
-    app.ui.show_palettes = workspace.layout.contains(&Panel::Layers) || workspace.layout.contains(&Panel::Properties);
+    let shown = |p: Panel| workspace.layout.contains(&p) || workspace.is_detached(p);
+    app.ui.show_toolsets = shown(Panel::ToolSets);
+    app.ui.show_palettes = shown(Panel::Layers) || shown(Panel::Properties);
 }
 
 pub fn command(app: &mut crate::CadApp, reset: bool, params: &Value) -> Result<Value, String> {
@@ -351,36 +480,107 @@ pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
         |panel| crate::i18n::t(panel.label()).into(),
         permissions,
         panel_limits,
-        |ui, panel| match panel {
-            Panel::Canvas => {
-                ui.painter().rect_filled(ui.max_rect(), 0.0, t.canvas);
-                crate::canvas::show(app, ui);
-            }
-            Panel::ToolSets => crate::palettes::toolsets(app, ui),
-            Panel::QuickCalc => crate::palettes::quickcalc::show(app, ui),
-            Panel::Layers => {
-                egui::ScrollArea::vertical()
-                    .id_salt("dock-layers")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| crate::palettes::layers_section(app, ui));
-            }
-            Panel::Properties => {
-                egui::ScrollArea::vertical().id_salt("dock-properties").auto_shrink([false, false]).show(ui, |ui| {
-                    crate::shortcut_menus::palette(app, ui, crate::palettes::properties_section, crate::shortcut_menus::properties_entries)
-                });
-            }
-            Panel::ExternalRefs => {
-                egui::ScrollArea::both().id_salt("dock-xrefs").auto_shrink([false, false]).show(ui, |ui| crate::xrefs::section(app, ui));
-            }
-            Panel::Symbols => {
-                egui::ScrollArea::vertical()
-                    .id_salt("dock-symbols")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| crate::palettes::symbols::symbols_section(app, ui));
-            }
-        },
+        |ui, panel| panel_body(app, ui, *panel),
     );
+    // Palettes in windows of their own.
+    show_detached(app, ui.ctx(), &workspace);
     // Existing panel close buttons and commands still own their visibility switches.
+    finish(app, ui, workspace, output.actions);
+}
+
+/// A panel's contents, in the dock area or a palette window.
+fn panel_body(app: &mut crate::CadApp, ui: &mut egui::Ui, panel: Panel) {
+    let t = crate::theme::Tokens::get();
+    match panel {
+        Panel::Canvas => {
+            ui.painter().rect_filled(ui.max_rect(), 0.0, t.canvas);
+            crate::canvas::show(app, ui);
+        }
+        Panel::ToolSets => crate::palettes::toolsets(app, ui),
+        Panel::QuickCalc => crate::palettes::quickcalc::show(app, ui),
+        Panel::Layers => {
+            egui::ScrollArea::vertical().id_salt("dock-layers").auto_shrink([false, false]).show(ui, |ui| crate::palettes::layers_section(app, ui));
+        }
+        Panel::Properties => {
+            egui::ScrollArea::vertical().id_salt("dock-properties").auto_shrink([false, false]).show(ui, |ui| {
+                crate::shortcut_menus::palette(app, ui, crate::palettes::properties_section, crate::shortcut_menus::properties_entries)
+            });
+        }
+        Panel::ExternalRefs => {
+            egui::ScrollArea::both().id_salt("dock-xrefs").auto_shrink([false, false]).show(ui, |ui| crate::xrefs::section(app, ui));
+        }
+        Panel::Symbols => {
+            egui::ScrollArea::vertical()
+                .id_salt("dock-symbols")
+                .auto_shrink([false, false])
+                .show(ui, |ui| crate::palettes::symbols::symbols_section(app, ui));
+        }
+    }
+}
+
+/// Each detached palette in an OS window of its own (an egui viewport; on the web, where there
+/// is only one window, it shows inside it). Its window's place and screen are remembered; closing
+/// it or "Dock" brings the palette back into the main window.
+fn show_detached(app: &mut crate::CadApp, ctx: &egui::Context, workspace: &Workspace) {
+    for d in workspace.detached.clone() {
+        let panel = d.panel;
+        let id = egui::ViewportId::from_hash_of(("cadaddy-palette", panel.id()));
+        let title = crate::i18n::t(panel.label()).to_string();
+        let builder = egui::ViewportBuilder::default()
+            .with_title(title.clone())
+            .with_position(egui::pos2(d.rect[0], d.rect[1]))
+            .with_inner_size(egui::vec2(d.rect[2], d.rect[3]))
+            .with_min_inner_size(egui::vec2(160.0, 120.0));
+        let mut dock = false;
+        let mut moved: Option<([f32; 4], Option<[f32; 2]>)> = None;
+        ctx.show_viewport_immediate(id, builder, |ui, class| {
+            let mut body = |ui: &mut egui::Ui| {
+                ui.horizontal(|ui| {
+                    // The window's title bar names the palette; only the way back goes here.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        dock = ui.small_button(crate::tl!("Dock")).on_hover_text(crate::tl!("Back into the main window")).clicked();
+                    });
+                });
+                ui.separator();
+                panel_body(app, ui, panel);
+            };
+            if class == egui::ViewportClass::EmbeddedWindow {
+                // No windows of its own here (the web): egui already put it in a window.
+                body(ui);
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| body(ui));
+            let info = ui.ctx().input(|i| i.viewport().clone());
+            if info.close_requested() {
+                dock = true;
+            }
+            if let (Some(outer), Some(inner)) = (info.outer_rect, info.inner_rect) {
+                let r = [outer.min.x, outer.min.y, inner.width(), inner.height()];
+                if r.iter().zip(d.rect.iter()).any(|(a, b)| (a - b).abs() > 0.5) {
+                    moved = Some((r, info.monitor_size.map(|m| [m.x, m.y])));
+                }
+            }
+        });
+        let mut ws = app.ui.docking.clone();
+        let result = if dock {
+            ws.dock(panel)
+        } else if let Some((r, m)) = moved {
+            ws.move_detached(panel, r, m)
+        } else {
+            Ok(())
+        };
+        match result {
+            Ok(()) => {
+                publish_visibility(app, &ws);
+                app.ui.docking = ws;
+            }
+            Err(e) => app.set_status(format!("Palette window: {e}")),
+        }
+    }
+}
+
+/// After the dock area drew: keep commands' visibility changes and apply the area's moves.
+fn finish(app: &mut crate::CadApp, ui: &mut egui::Ui, workspace: Workspace, actions: Vec<Action<Panel>>) {
     let rendered = workspace;
     let mut workspace = app.ui.docking.clone();
     let _ = sync(&mut workspace, app);
@@ -393,7 +593,7 @@ pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
     if stale {
         return;
     }
-    for action in output.actions {
+    for action in actions {
         if let Err(error) =
             serde_json::to_value(action).map_err(|error| error.to_string()).and_then(|action| command(app, false, &json!({"action": action})))
         {

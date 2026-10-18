@@ -32,6 +32,12 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
     ("ui.panel.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
     ("ui.panel.symbols", "Symbols", &["Window", "Symbols"], None),
+    ("ui.float.toolSets", "Tool Sets", &["Window", "Palette Windows", "Tool Sets"], None),
+    ("ui.float.properties", "Properties", &["Window", "Palette Windows", "Properties"], None),
+    ("ui.float.layers", "Layers", &["Window", "Palette Windows", "Layers"], None),
+    ("ui.float.externalReferences", "External References", &["Window", "Palette Windows", "External References"], None),
+    ("ui.float.symbols", "Symbols", &["Window", "Palette Windows", "Symbols"], None),
+    ("ui.float.quickCalc", "QuickCalc", &["Window", "Palette Windows", "QuickCalc"], None),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
     ("ui.animations.system", "Use System Setting", &["View", "Accessibility", "Animation Effects", "Use System Setting"], None),
     ("ui.animations.on", "On", &["View", "Accessibility", "Animation Effects", "On"], None),
@@ -118,6 +124,15 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     }
     if let Some(r) = crate::managers::route(app, id, params) {
         return Some(r);
+    }
+    // Window ▸ Palette Windows: a palette into a window of its own, or back.
+    if let Some(panel) = id.strip_prefix("ui.float.") {
+        let operation = match crate::docking::Panel::parse(panel) {
+            Ok(p) if app.ui.docking.is_detached(p) => "dock",
+            Ok(_) => "detach",
+            Err(e) => return Some(Err(e)),
+        };
+        return Some(crate::docking::command(app, false, &json!({"operation": operation, "panel": panel})));
     }
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", params));
