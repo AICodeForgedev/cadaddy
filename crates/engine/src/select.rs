@@ -8,6 +8,12 @@ use crate::{Accept, Prompt};
 
 /// Polylines approximating an entity for hit testing, tessellated at `tol`.
 pub fn hit_polylines(d: &Drawing, e: &Entity, tol: f64) -> Vec<Vec<Vec2>> {
+    hit_polylines_in(d, e, tol, None)
+}
+
+/// [`hit_polylines`] where only what lies in `area` matters: a pattern hatch's strokes are made
+/// only there. A hatch around thousands of islands took seconds to stroke in full on every pick.
+fn hit_polylines_in(d: &Drawing, e: &Entity, tol: f64, area: Option<Bounds2>) -> Vec<Vec<Vec2>> {
     match &e.kind {
         EntityKind::Text(_)
         | EntityKind::MText(_)
@@ -68,7 +74,7 @@ pub fn hit_polylines(d: &Drawing, e: &Entity, tol: f64) -> Vec<Vec<Vec2>> {
                 let list = cadaddy_render::build_entities(
                     d,
                     std::iter::once(e),
-                    &cadaddy_render::Options { tolerance: tol, text: false, fill: false, ..Default::default() },
+                    &cadaddy_render::Options { tolerance: tol, text: false, fill: false, view: area, ..Default::default() },
                 );
                 out.extend(list.prims.iter().map(|p| list.points(p).to_vec()));
             }
@@ -86,7 +92,12 @@ fn dist_to_polyline(pts: &[Vec2], p: Vec2) -> f64 {
 
 /// Distance from `p` to the entity (0 inside text boxes and solid fills).
 pub fn entity_distance(d: &Drawing, e: &Entity, p: Vec2, tol: f64) -> f64 {
-    let polys = hit_polylines(d, e, tol);
+    distance_within(d, e, p, tol, None)
+}
+
+/// [`entity_distance`] that is exact only up to `reach`: farther, it may be larger than the truth.
+fn distance_within(d: &Drawing, e: &Entity, p: Vec2, tol: f64, reach: Option<f64>) -> f64 {
+    let polys = hit_polylines_in(d, e, tol, reach.map(|r| Bounds2::new(p, p).expand(r + tol)));
     let mut best = polys.iter().map(|pl| dist_to_polyline(pl, p)).fold(f64::INFINITY, f64::min);
     let filled = matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) | EntityKind::Table(_))
         || matches!(e.kind, EntityKind::Tolerance(_));
@@ -205,7 +216,7 @@ pub(crate) fn pick_with(d: &Drawing, space: &Space, ix: &Option<std::sync::Arc<S
         if !infinite && !bounds_of(d, e, known).expand(aperture).intersects(&probe) {
             continue;
         }
-        let dist = entity_distance(d, e, p, aperture / 4.0);
+        let dist = distance_within(d, e, p, aperture / 4.0, Some(aperture));
         if dist <= aperture && best.is_none_or(|(bd, _)| dist < bd - 1e-12) {
             best = Some((dist, e.handle));
             if dist == 0.0 {
@@ -264,7 +275,7 @@ pub(crate) fn in_window(d: &Drawing, e: &Entity, known: Option<Bounds2>, bx: &Bo
     if !crossing || (!infinite && !eb.intersects(bx)) {
         return false;
     }
-    let polys = hit_polylines(d, e, tol);
+    let polys = hit_polylines_in(d, e, tol, Some(bx.expand(tol)));
     let hit = polys.iter().any(|pl| {
         if pl.len() == 1 {
             pl.first().is_some_and(|p| bx.contains(*p))
@@ -306,7 +317,7 @@ pub(crate) fn select_fence_with(d: &Drawing, space: &Space, ix: &Option<std::syn
         if !selectable(d, e) || (!is_infinite(e) && !bounds_of(d, e, known).intersects(&probe)) {
             continue;
         }
-        let polys = hit_polylines(d, e, tol);
+        let polys = hit_polylines_in(d, e, tol, Some(probe));
         let hit = fence.windows(2).any(|f| {
             let (Some(a), Some(b)) = (f.first(), f.get(1)) else { return false };
             let fl = Line::new(*a, *b);
@@ -341,7 +352,7 @@ pub fn select_polygon(d: &Drawing, space: &Space, poly: &[Vec2], crossing: bool)
         if !infinite && if crossing { !eb.intersects(&pb) } else { !pb.contains_box(&eb) } {
             continue;
         }
-        let polys = hit_polylines(d, e, tol);
+        let polys = hit_polylines_in(d, e, tol, Some(pb.expand(tol)));
         let crosses = polys.iter().any(|pl| {
             pl.windows(2)
                 .any(|w| w.first().zip(w.get(1)).is_some_and(|(p, q)| edges.iter().any(|f| cadaddy_geom::line_line(f, &Line::new(*p, *q)).is_some())))
