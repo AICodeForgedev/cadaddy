@@ -45,6 +45,25 @@
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © 2026 AICodeForge. Third-party notices: see NOTICE.</string>
 
+  <!-- CADaddy's own drawing format, .cdy. -->
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>dev.aicodeforge.cadaddy.cdy</string>
+      <key>UTTypeDescription</key>
+      <string>CADaddy Drawing</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>cdy</string></array>
+        <key>public.mime-type</key>
+        <array><string>application/x-cadaddy-drawing</string></array>
+      </dict>
+    </dict>
+  </array>
   <!-- Drawing files CADaddy opens (declared here in case macOS has no type for them). -->
   <key>UTImportedTypeDeclarations</key>
   <array>
@@ -81,6 +100,18 @@
   </array>
   <key>CFBundleDocumentTypes</key>
   <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>CADaddy Drawing</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+      <key>LSItemContentTypes</key>
+      <array><string>dev.aicodeforge.cadaddy.cdy</string></array>
+      <key>CFBundleTypeIconFile</key>
+      <string>CADaddy</string>
+    </dict>
     <dict>
       <key>CFBundleTypeName</key>
       <string>Drawing Exchange Format</string>

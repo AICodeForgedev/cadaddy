@@ -67,6 +67,7 @@ const SESSION_VARS: &[&str] = &[
     "SAVETIME",
     "SAVEFILEPATH",
     "AUDITCTL",
+    "DWGCOPY",
 ];
 
 pub fn get(s: &Session, name: &str) -> Option<Value> {
@@ -143,6 +144,8 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "SAVETIME" => json!(crate::autosave::savetime()),
         "SAVEFILEPATH" => json!(crate::autosave::savefilepath()),
         "AUDITCTL" => json!(i32::from(crate::audit::auditctl())),
+        // Saving a .cdy file also writes a DWG copy (a profile setting).
+        "DWGCOPY" => json!(i32::from(crate::cmd::file::dwg_copy())),
         "CMDNAMES" => json!(s.running.as_ref().map(|r| r.id.to_ascii_uppercase()).unwrap_or_default()),
         // A drawing not saved yet is named as AutoCAD names it, "Drawing1.dwg".
         "DWGNAME" => json!(
@@ -365,6 +368,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         ),
         "SAVEFILEPATH" => crate::autosave::set_savefilepath(v.as_str().ok_or_else(bad)?),
         "AUDITCTL" => crate::audit::set_auditctl(as_i(v).filter(|b| (0..=1).contains(b)).ok_or_else(bad)? == 1),
+        "DWGCOPY" => crate::cmd::file::set_dwg_copy(as_bool(v).ok_or_else(bad)?),
         // A number is in degrees; text is an angle typed in AUNITS (SETVAR at the command line).
         "ANGBASE" => {
             let a = match v {

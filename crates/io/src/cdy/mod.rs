@@ -39,11 +39,13 @@ pub fn read_cdy_report(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
 /// The manifest of a .cdy file (format and writer versions, units, extents, counts), read
 /// without reading the drawing; `None` when it isn't a readable .cdy file.
 pub fn manifest(bytes: &[u8]) -> Option<serde_json::Value> {
-    let (chunks, _) = container::chunks(bytes).ok()?;
-    chunks.into_iter().find_map(|c| match c {
-        container::Read::Ok(c) if &c.tag == b"MANI" => serde_json::from_slice(&c.data).ok(),
-        _ => None,
-    })
+    serde_json::from_slice(&container::find(bytes, b"MANI")?.data).ok()
+}
+
+/// The PNG preview of a .cdy file (for file browsers and the Start page), read without reading
+/// the drawing; `None` when there is none.
+pub fn thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
+    container::find(bytes, b"THMB").map(|c| c.data).filter(|png| png.starts_with(b"\x89PNG"))
 }
 
 #[cfg(test)]

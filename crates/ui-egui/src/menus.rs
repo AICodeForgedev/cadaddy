@@ -50,6 +50,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.theme.light", "Light", &["View", "Interface Theme", "Light"], None),
     ("ui.theme.dark", "Dark", &["View", "Interface Theme", "Dark"], None),
     ("ui.theme", "Interface Theme", &[], None),
+    ("ui.saveformat.cdy", "CADaddy Drawing (CDY)", &["File", "Default Save Format", "CADaddy Drawing (CDY)"], None),
     ("ui.saveformat.dxf", "DXF", &["File", "Default Save Format", "DXF"], None),
     ("ui.saveformat.dwg", "DWG", &["File", "Default Save Format", "DWG"], None),
     ("ui.saveformat", "Default Save Format", &[], None),
@@ -333,16 +334,16 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             },
             None => Ok(animations_json(app)),
         },
-        "ui.saveformat.dxf" | "ui.saveformat.dwg" => {
+        "ui.saveformat.cdy" | "ui.saveformat.dxf" | "ui.saveformat.dwg" => {
             let format = crate::SaveFormat::parse(id.trim_start_matches("ui.saveformat.")).unwrap_or_default();
             Ok(set_save_format(app, format))
         }
-        // `{"format": "dxf"|"dwg"}` sets the default save format for new drawings; without it,
+        // `{"format": "cdy"|"dxf"|"dwg"}` sets the default save format for new drawings; without it,
         // reports it.
         "ui.saveformat" => match params.get("format").and_then(Value::as_str) {
             Some(name) => match crate::SaveFormat::parse(name) {
                 Some(format) => Ok(set_save_format(app, format)),
-                None => Err(format!("unknown save format \"{name}\" (dxf or dwg)")),
+                None => Err(format!("unknown save format \"{name}\" (cdy, dxf or dwg)")),
             },
             None => Ok(json!({ "saveFormat": app.ui.save_format.as_str() })),
         },
@@ -489,6 +490,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
 /// in the default save version; one opened from a file keeps that file's version.
 pub(crate) fn saveas_params(ui: &crate::UiState, session: &cadaddy_engine::Session, path: &str) -> Value {
     let untitled = session.state().is_ok_and(|s| s.path.is_none());
+    // The version is a DWG/DXF one: a .cdy file has none.
+    if cadaddy_engine::cmd::file::is_cdy(path) {
+        return json!({ "path": path });
+    }
     match crate::SaveVersion::parse(&ui.save_version) {
         Some(v) if untitled => json!({ "path": path, "version": v.year() }),
         _ => json!({ "path": path }),
@@ -766,6 +771,7 @@ mod tests {
         let services = Services {
             pick_pdf: None,
             read_clipboard: None,
+            thumbnail: None,
             pick_image: None,
             pick_open: None,
             pick_save: Some(Box::new(move |name: &str| {

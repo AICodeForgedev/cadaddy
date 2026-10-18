@@ -186,7 +186,25 @@ pub fn chunks(b: &[u8]) -> Result<(Vec<Read>, bool), String> {
     Ok((out, false))
 }
 
-fn by_index(b: &[u8]) -> Option<Vec<Read>> {
+/// The first chunk tagged `tag`, decoding only that one when the index is sound (a preview or the
+/// manifest without reading the drawing); `None` when there is none or it is damaged.
+pub fn find(b: &[u8], tag: &[u8; 4]) -> Option<Chunk> {
+    header(b).ok()?;
+    let found = match index(b) {
+        Some(entries) => {
+            let e = entries.iter().find(|e| &e.tag == tag)?;
+            chunk_at(b, usize::try_from(e.offset).ok()?)?.0
+        }
+        None => chunks(b).ok()?.0.into_iter().find(|r| matches!(r, Read::Ok(c) if &c.tag == tag))?,
+    };
+    match found {
+        Read::Ok(c) if &c.tag == tag => Some(c),
+        _ => None,
+    }
+}
+
+/// The index entries, when trailer and index are sound.
+fn index(b: &[u8]) -> Option<Vec<IndexEntry>> {
     let t = b.len().checked_sub(TRAILER_LEN)?;
     if b.get(t + 8..)? != TRAILER_MAGIC {
         return None;
@@ -197,9 +215,11 @@ fn by_index(b: &[u8]) -> Option<Vec<Read>> {
         return None;
     }
     let entries: Vec<IndexEntry> = postcard::from_bytes(&ix.data).ok()?;
-    if entries.len() > MAX_CHUNKS {
-        return None;
-    }
+    (entries.len() <= MAX_CHUNKS).then_some(entries)
+}
+
+fn by_index(b: &[u8]) -> Option<Vec<Read>> {
+    let entries = index(b)?;
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
         let (r, _) = chunk_at(b, usize::try_from(e.offset).ok()?)?;

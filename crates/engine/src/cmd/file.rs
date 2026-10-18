@@ -1,7 +1,8 @@
-//! File menu: new, close, switching drawings. Open/save of DWG/DXF go through the io layer,
+//! File menu: new, close, switching drawings. Open/save of .cdy, DWG and DXF go through the io layer,
 //! registered by the host (desktop/CLI) via [`crate::cmd::file::set_io`]. On the web, where there is
 //! no file system, saved files reach the user through the host's [`crate::cmd::file::set_deliver`].
 
+pub mod kept;
 mod pgp;
 mod template;
 
@@ -104,6 +105,28 @@ pub fn write_as() -> Option<WriteAsHook> {
     WRITE_AS.get().copied()
 }
 
+static DWG_COPY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// DWGCOPY: saving a .cdy file also writes a DWG copy next to it (the same name with `.dwg`), for
+/// people who exchange drawings with AutoCAD users. A profile setting, off by default.
+pub fn dwg_copy() -> bool {
+    DWG_COPY.load(std::sync::atomic::Ordering::Relaxed)
+}
+pub fn set_dwg_copy(on: bool) {
+    DWG_COPY.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether `path` names a .cdy file (CADaddy's own format).
+pub fn is_cdy(path: &str) -> bool {
+    std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("cdy"))
+}
+
+/// Whether `path` is a DWG, DXF or DWG template file: a format that may not keep everything a
+/// drawing holds ([`kept::not_kept`]).
+fn is_exchange_file(path: &str) -> bool {
+    !is_cdy(path) && is_drawing_file(path)
+}
+
 /// The versions a drawing can be saved in, for messages ("2000, 2004, …, 2018").
 fn version_list() -> String {
     Version::ALL.iter().map(|v| v.year()).collect::<Vec<_>>().join(", ")
@@ -178,7 +201,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("saveas", "Save As...", run_saveas_reporting)
             .menu(&["File", "Save As..."])
             .key("Cmd+Shift+S")
-            .params("{path, version?: 2000|2004|2007|2010|2013|2018, binary?: bool}")
+            .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), binary?: bool (DXF)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved}")
             .noundo()
             .interactive(|_| Ok(Box::new(FileM { name: "SAVEAS", message: "Save drawing as", run: run_saveas_reporting }))),
         CommandSpec::new("document.switch", "Switch Drawing", run_switch)
@@ -198,7 +221,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(always)
             .noundo(),
         CommandSpec::new("document.bytes", "Drawing as bytes", run_bytes)
-            .params("{format?: dxf, version?: 2000…2018, binary?: bool} → {data: base64}")
+            .params("{format?: dxf (or cdy, dwg), version?: 2000…2018, binary?: bool} → {data: base64}")
             .noundo(),
         CommandSpec::new("script", "Run Script...", run_script)
             .menu(&["Tools", "Run Script..."])
@@ -510,14 +533,20 @@ fn run_closeall(s: &mut Session, _p: &Value) -> Result<Value> {
     ok()
 }
 
-pub(crate) fn save_to(s: &mut Session, path: &str) -> Result<usize> {
+/// What a save wrote: the file's size, and with DWGCOPY the DWG copy's path (or why it failed).
+pub(crate) struct Saved {
+    bytes: usize,
+    copy: Option<std::result::Result<String, String>>,
+}
+
+pub(crate) fn save_to(s: &mut Session, path: &str) -> Result<Saved> {
     let opts = SaveAs { version: None, binary: s.state()?.binary_dxf && is_dxf(path) };
     save_as(s, "save", path, &opts)
 }
 
 /// Save to `path` with `opts`. A drawing file then keeps the version and binary choice: the
 /// version goes into the drawing's `$ACADVER`, so later saves (QSAVE) write it again.
-fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<usize> {
+fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Saved> {
     if s.doc()?.refedit.is_some() {
         return Err(bad(cmd, "A block reference is being edited in place: finish with REFCLOSE (Save or Discard) before saving."));
     }
@@ -571,7 +600,26 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<usiz
             st.saved = st.drawing().clone();
         }
     }
-    Ok(n)
+    let copy = (is_cdy(path) && dwg_copy()).then(|| save_dwg_copy(s, cmd, path));
+    Ok(Saved { bytes: n, copy })
+}
+
+/// DWGCOPY: write the DWG copy of a drawing just saved to the .cdy file `path`. A copy that fails
+/// is reported, never failing the save itself.
+fn save_dwg_copy(s: &mut Session, cmd: &str, path: &str) -> std::result::Result<String, String> {
+    let copy = std::path::Path::new(path).with_extension("dwg").to_string_lossy().into_owned();
+    let r = write_bytes(s, cmd, &copy, &SaveAs::default()).and_then(|b| store_keeping(&copy, &b, false));
+    match r {
+        Ok(()) => {
+            s.echo(format!("Saved a DWG copy: {}", file_name(&copy)));
+            Ok(copy)
+        }
+        Err(e) => {
+            let msg = format!("The DWG copy wasn't saved: {e}");
+            s.echo(msg.clone());
+            Err(msg)
+        }
+    }
 }
 
 /// Put saved bytes where the user gets them: natively the file at `path` (written atomically); on
@@ -583,6 +631,12 @@ fn bak_path(path: &str) -> String {
 }
 
 fn store(path: &str, bytes: &[u8]) -> Result<()> {
+    store_keeping(path, bytes, true)
+}
+
+/// [`store`], keeping the previous drawing file as `.bak` only when `keep_bak`: a DWG copy
+/// (DWGCOPY) keeps none, as its `.bak` would replace the drawing's own.
+fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         // The file being replaced, if any: a read-only one is left alone (as AutoCAD does: save
@@ -594,7 +648,7 @@ fn store(path: &str, bytes: &[u8]) -> Result<()> {
             return Err(bad("save", format!("{path} is read-only. Save it under another name with SAVEAS.")));
         }
         // A drawing saved over keeps its previous version as .bak, as AutoCAD does.
-        if before.is_some() && is_drawing_file(path) {
+        if keep_bak && before.is_some() && is_drawing_file(path) {
             let bak = bak_path(path);
             let keep = || -> std::io::Result<()> {
                 // An earlier .bak (perhaps read-only) is replaced, not written into.
@@ -624,6 +678,7 @@ fn store(path: &str, bytes: &[u8]) -> Result<()> {
     }
     #[cfg(target_arch = "wasm32")]
     {
+        let _ = keep_bak;
         let name = file_name(path);
         let deliver = deliver().ok_or_else(|| bad("save", "saving files is not available in this build; use document.bytes"))?;
         deliver(&name, "application/octet-stream", bytes).map_err(|e| bad("save", format!("{name}: {e}")))
@@ -652,10 +707,15 @@ fn commit_save(s: &mut Session, path: &str, bytes: &[u8], store: impl FnOnce(&st
 }
 
 /// The save result; on the web it also names the file the browser downloaded.
-fn saved(path: &str, bytes: usize) -> Value {
-    let mut r = json!({ "path": path, "bytes": bytes });
+fn saved(path: &str, sv: &Saved) -> Value {
+    let mut r = json!({ "path": path, "bytes": sv.bytes });
     if cfg!(target_arch = "wasm32") {
         r["download"] = json!(file_name(path));
+    }
+    match &sv.copy {
+        Some(Ok(copy)) => r["dwgCopy"] = json!(copy),
+        Some(Err(why)) => r["dwgCopyError"] = json!(why),
+        None => {}
     }
     r
 }
@@ -665,16 +725,20 @@ fn run_save(s: &mut Session, p: &Value) -> Result<Value> {
         Some(p) => p.to_string(),
         None => s.state()?.path.clone().ok_or_else(|| bad("qsave", "drawing has no file name yet; use saveas {path}"))?,
     };
-    let n = save_to(s, &path)?;
-    Ok(saved(&path, n))
+    let sv = save_to(s, &path)?;
+    Ok(saved(&path, &sv))
 }
 
 fn run_saveas(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("saveas", "`path` is required"))?.to_string();
-    let opts = save_options("saveas", p)?;
-    let n = save_as(s, "saveas", &path, &opts)?;
-    let mut r = saved(&path, n);
-    if is_drawing_file(&path) {
+    let mut opts = save_options("saveas", p)?;
+    // A version is a DWG/DXF one: a .cdy file keeps everything whatever is asked.
+    if is_cdy(&path) {
+        opts.version = None;
+    }
+    let sv = save_as(s, "saveas", &path, &opts)?;
+    let mut r = saved(&path, &sv);
+    if is_exchange_file(&path) {
         r["version"] = json!(opts.version.unwrap_or_else(|| drawing_version(s, &path)).year());
         r["binary"] = json!(opts.binary);
     }
@@ -859,10 +923,10 @@ pub fn drops_unknown(path: &str) -> bool {
     std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("dwg") || e.eq_ignore_ascii_case("dwt"))
 }
 
-/// Whether `path` is saved as a drawing (DXF, DWG) rather than exported as an image.
+/// Whether `path` is saved as a drawing (.cdy, DXF, DWG) rather than exported as an image.
 fn is_drawing_file(path: &str) -> bool {
     let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    matches!(ext.as_str(), "dxf" | "dwg" | "dwt" | "")
+    matches!(ext.as_str(), "cdy" | "dxf" | "dwg" | "dwt" | "")
 }
 
 /// Say on the command line what the file couldn't keep, and list it in the result's `notSaved`.
@@ -884,7 +948,30 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
     if r.get("path").and_then(Value::as_str).is_some_and(drops_unknown) {
         report_not_saved(s, &mut r, &lost);
     }
+    if let Some(path) = r.get("path").and_then(Value::as_str).filter(|p| is_exchange_file(p)).map(str::to_string) {
+        report_not_kept(s, &mut r, &path);
+    }
     Ok(r)
+}
+
+/// The first save of a drawing into DWG or DXF: say what that file doesn't keep that a .cdy file
+/// would (once per drawing), and list it in the result's `notKept`.
+fn report_not_kept(s: &mut Session, r: &mut Value, path: &str) {
+    let Some(hooks) = io() else { return };
+    let Ok(st) = s.state_mut() else { return };
+    if st.kept_checked {
+        return;
+    }
+    st.kept_checked = true;
+    let lost = kept::not_kept(st.drawing(), path, hooks.write, hooks.read);
+    if lost.is_empty() {
+        return;
+    }
+    let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_uppercase()).unwrap_or_else(|| "DXF".into());
+    s.echo(format!("Not kept in the {ext} file: {}. Save as a CADaddy drawing (.cdy) to keep everything.", lost.join(", ")));
+    if let Some(o) = r.as_object_mut() {
+        o.insert("notKept".into(), json!(lost));
+    }
 }
 
 fn run_qsave_reporting(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1050,7 +1137,7 @@ mod pr193_tests {
         let st = s.state().unwrap();
         assert!(!st.is_dirty());
         assert_eq!((st.path.as_deref(), st.title.as_str()), (Some("a/Owned.dxf"), "Owned.dxf"));
-        assert_eq!(saved("a/Owned.dxf", n)["bytes"], 6);
+        assert_eq!(saved("a/Owned.dxf", &Saved { bytes: n, copy: None })["bytes"], 6);
     }
 }
 

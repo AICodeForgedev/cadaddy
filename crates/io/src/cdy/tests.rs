@@ -140,6 +140,11 @@ fn the_public_api_and_io_dispatch_read_what_they_write() {
     assert_eq!(m["insunits"], 4);
     assert_eq!(manifest(&bytes), Some(m));
     assert_eq!(manifest(b"not a drawing"), None);
+    assert_eq!(thumbnail(&bytes).as_deref(), Some(&png[..]));
+    assert_eq!(thumbnail(&model::write(&d, None).unwrap()), None, "written without one");
+    // With the index gone the preview is still found, by walking.
+    assert_eq!(thumbnail(&bytes[..bytes.len() - 2]).as_deref(), Some(&png[..]));
+    assert_eq!(thumbnail(b"CADDY\x1a\r\n"), None);
     // Whatever the name, the content says it is a .cdy file.
     assert_eq!(crate::read(&bytes, "renamed.dxf").unwrap(), d);
     assert!(crate::write_with(&d, "a.cdy", &crate::SaveOptions { binary: true, ..Default::default() }).is_err());

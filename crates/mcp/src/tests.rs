@@ -269,6 +269,12 @@ fn agent_manages_drawings_without_losing_work() {
     assert!(tool(&mut s, "get_variable", json!({"name": "LTSCALE"})).to_string().contains('2'));
     let l = tool(&mut s, "run_lisp", json!({"code": "(+ 1 2)"}));
     assert_eq!(l["value"], json!("3"), "{l}");
+    // Saving as CADaddy's own format names the drawing after the .cdy file.
+    let cdy = dir.join("own.cdy").to_string_lossy().into_owned();
+    let r = tool(&mut s, "save", json!({"path": cdy}));
+    assert_eq!(r["path"], json!(cdy), "{r}");
+    assert!(std::path::Path::new(&cdy).is_file());
+    assert!(tool(&mut s, "list_drawings", json!({}))["drawings"][1]["title"] == json!("own.cdy"));
     let r = tool(&mut s, "close_all", json!({"discard": true}));
     assert_eq!(r["closed"].as_array().map(Vec::len), Some(2), "{r}");
     std::fs::remove_dir_all(&dir).ok();

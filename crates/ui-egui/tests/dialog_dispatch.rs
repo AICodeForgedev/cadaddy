@@ -14,6 +14,7 @@ fn app() -> (CadApp, Rc<Cell<u32>>) {
     let services = Services {
         pick_pdf: None,
         read_clipboard: None,
+        thumbnail: None,
         pick_image: None,
         pick_open: Some(Box::new(move || {
             a.set(a.get() + 1);

@@ -116,7 +116,7 @@ pub struct UiState {
     /// Animation effects (dialog and menu fades, smoothed scrolling): "system" (follow the OS
     /// setting), "on" or "off".
     pub animations: animation::AnimationPref,
-    /// The format Save As suggests for a drawing that has no file yet: "dxf" or "dwg".
+    /// The format Save As suggests for a drawing that has no file yet: "cdy", "dxf" or "dwg".
     pub save_format: SaveFormat,
     /// The version Save As writes for a drawing that has no file yet ("2000" … "2018"); a
     /// drawing opened from a file keeps that file's version.
@@ -136,18 +136,24 @@ pub use cadaddy_engine::cmd::file::Version as SaveVersion;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SaveFormat {
-    /// CADaddy's native format, and the default.
+    /// CADaddy's native format (.cdy: keeps everything the drawing holds), and the default.
     #[default]
+    Cdy,
     Dxf,
     Dwg,
 }
 
-impl SaveFormat {
-    pub const ALL: [SaveFormat; 2] = [SaveFormat::Dxf, SaveFormat::Dwg];
+/// Which save formats preferences were written with (2: with .cdy), so [`CadApp::load_prefs`]
+/// tells a chosen DXF from the old default.
+const SAVE_FORMATS_PREFS: u64 = 2;
 
-    /// The file extension, which is also the saved name ("dxf" or "dwg").
+impl SaveFormat {
+    pub const ALL: [SaveFormat; 3] = [SaveFormat::Cdy, SaveFormat::Dxf, SaveFormat::Dwg];
+
+    /// The file extension, which is also the saved name ("cdy", "dxf" or "dwg").
     pub fn as_str(self) -> &'static str {
         match self {
+            SaveFormat::Cdy => "cdy",
             SaveFormat::Dxf => "dxf",
             SaveFormat::Dwg => "dwg",
         }
@@ -217,6 +223,9 @@ pub struct Services {
     pub pick_image: Option<Box<dyn Fn() -> Option<String>>>,
     /// The system clipboard's text (Paste to Command Line).
     pub read_clipboard: Option<Box<dyn Fn() -> Option<String>>>,
+    /// A drawing file's preview as PNG bytes (a .cdy file's embedded thumbnail), for the Start
+    /// page's recent files; `None` when the file has none.
+    pub thumbnail: Option<Box<dyn Fn(&str) -> Option<Vec<u8>>>>,
 }
 
 pub struct CadApp {
@@ -428,6 +437,7 @@ impl CadApp {
             "animations": self.ui.animations.as_str(),
             "interfaceLanguage": self.ui.interface_language.code(),
             "saveFormat": self.ui.save_format.as_str(),
+            "saveFormats": SAVE_FORMATS_PREFS,
             "saveVersion": self.ui.save_version,
         });
         if self.spacemouse.settings != spacemouse::Settings::default() {
@@ -473,7 +483,10 @@ impl CadApp {
             self.ui.interface_language = l;
         }
         if let Some(f) = v.get("saveFormat").and_then(Value::as_str).and_then(SaveFormat::parse) {
-            self.ui.save_format = f;
+            // Preferences from before .cdy always held DXF, then the default: that is no choice,
+            // so new drawings get the new default (a chosen DWG stays).
+            let before_cdy = v.get("saveFormats").and_then(Value::as_u64).is_none_or(|n| n < SAVE_FORMATS_PREFS);
+            self.ui.save_format = if before_cdy && f == SaveFormat::Dxf { SaveFormat::default() } else { f };
         }
         if let Some(v) = v.get("saveVersion").and_then(Value::as_str).and_then(SaveVersion::parse) {
             self.ui.save_version = v.year().to_string();
@@ -923,7 +936,10 @@ mod tests {
         frame(&mut a, &ctx, None);
         assert_eq!(Tokens::get(), Tokens::of(theme::SYSTEM_FALLBACK), "no OS appearance: the documented fallback");
         assert_eq!(a.ui.theme, ThemePref::System);
-        assert_eq!(a.prefs_json(), r#"{"animations":"system","interfaceLanguage":"auto","saveFormat":"dxf","saveVersion":"2018","theme":"system"}"#);
+        assert_eq!(
+            a.prefs_json(),
+            r#"{"animations":"system","interfaceLanguage":"auto","saveFormat":"cdy","saveFormats":2,"saveVersion":"2018","theme":"system"}"#
+        );
     }
 
     #[test]
@@ -945,7 +961,8 @@ mod tests {
     #[test]
     fn default_save_format_persists_and_names_new_drawings() {
         let mut a = app();
-        assert_eq!(a.ui.save_format, SaveFormat::Dxf, "default keeps DXF, CADaddy's native format");
+        assert_eq!(a.ui.save_format, SaveFormat::Cdy, "new drawings default to .cdy, CADaddy's native format");
+        assert_eq!(SaveFormat::Cdy.suggested_name(Some("Drawing1")), "Drawing1.cdy");
         assert!(a.run("ui.saveformat", json!({ "format": "pdf" })).is_err());
         assert_eq!(a.run("ui.saveformat", json!({ "format": "DWG" })).ok(), Some(json!({ "saveFormat": "dwg" })));
         assert_eq!(a.run("ui.saveformat", json!({})).ok(), Some(json!({ "saveFormat": "dwg" })), "no format: report it");
@@ -955,9 +972,19 @@ mod tests {
         assert_eq!(b.ui.save_format, SaveFormat::Dwg);
         b.load_prefs(r#"{"saveFormat": "svg"}"#);
         assert_eq!(b.ui.save_format, SaveFormat::Dwg);
+        // DXF in preferences from before .cdy was the old default, not a choice; a DXF chosen since
+        // stays, and so does a DWG chosen before.
+        b.load_prefs(r#"{"saveFormat": "dxf"}"#);
+        assert_eq!(b.ui.save_format, SaveFormat::Cdy);
+        b.load_prefs(r#"{"saveFormat": "dxf", "saveFormats": 2}"#);
+        assert_eq!(b.ui.save_format, SaveFormat::Dxf);
+        b.load_prefs(r#"{"saveFormat": "dwg"}"#);
+        assert_eq!(b.ui.save_format, SaveFormat::Dwg);
         // The menu items reach the same setting, and resetting the palettes keeps it.
         b.start("ui.saveformat.dxf");
         assert_eq!(b.ui.save_format, SaveFormat::Dxf);
+        b.start("ui.saveformat.cdy");
+        assert_eq!(b.ui.save_format, SaveFormat::Cdy);
         b.start("ui.saveformat.dwg");
         b.start("ui.resetpalettes");
         assert_eq!(b.ui.save_format, SaveFormat::Dwg);

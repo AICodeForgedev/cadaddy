@@ -22,7 +22,7 @@ use super::*;
 use crate::{EngineError, Result, Session};
 
 /// Formats EXPORT writes (the io layer picks the writer from the extension).
-pub const EXPORT_FORMATS: &[&str] = &["dxf", "dwg", "svg", "png", "pdf"];
+pub const EXPORT_FORMATS: &[&str] = &["cdy", "dxf", "dwg", "svg", "png", "pdf"];
 /// Default and largest plot preview width, in pixels.
 const PREVIEW_PX: u64 = 1200;
 const MAX_PREVIEW_PX: u64 = 4096;
@@ -41,7 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("export", "Export...", run_export)
             .menu(&["File", "Export..."])
             .alias(&["exp"])
-            .params("{path? (else returns base64 `data`), format?: dxf|dwg|svg|png|pdf (default: the path's extension)} → {format, bytes, path? | data}")
+            .params("{path? (else returns base64 `data`), format?: cdy|dxf|dwg|svg|png|pdf (default: the path's extension)} → {format, bytes, path? | data}")
             .noundo(),
         CommandSpec::new("preview", "Plot Preview", run_preview)
             .menu(&["File", "Plot Preview"])
@@ -85,10 +85,12 @@ fn run_attach(s: &mut Session, p: &Value) -> Result<Value> {
 fn attach_spec(path: &str) -> Result<&'static CommandSpec> {
     let id = match extension(path).as_str() {
         "png" | "jpg" | "jpeg" => "imageattach",
-        "dwg" | "dxf" => "xattach",
+        "cdy" | "dwg" | "dxf" => "xattach",
         "pdf" => return Err(bad("attach", "PDF underlays are not available yet; PDFIMPORT converts the PDF into drawing objects")),
         "dwf" | "dwfx" | "dgn" => return Err(bad("attach", "DWF and DGN underlays are not available yet")),
-        other => return Err(bad("attach", format!("files of type .{other} can't be attached; choose an image (PNG, JPEG) or a drawing (DWG, DXF)"))),
+        other => {
+            return Err(bad("attach", format!("files of type .{other} can't be attached; choose an image (PNG, JPEG) or a drawing (CDY, DWG, DXF)")));
+        }
     };
     command_specs().iter().find(|c| c.id == id).ok_or_else(|| bad("attach", format!("{id} is missing")))
 }
@@ -180,7 +182,7 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         None => path.map(extension).unwrap_or_default(),
     };
     if !EXPORT_FORMATS.contains(&format.as_str()) {
-        return Err(bad("export", "`format` must be dxf, dwg, svg, png or pdf (or give a `path` with one of those extensions)"));
+        return Err(bad("export", "`format` must be cdy, dxf, dwg, svg, png or pdf (or give a `path` with one of those extensions)"));
     }
     let bytes = (hooks.write)(s.doc()?, &format!("export.{format}")).map_err(|e| bad("export", e))?;
     match path {

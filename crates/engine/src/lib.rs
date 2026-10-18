@@ -184,6 +184,9 @@ pub struct DocState {
     /// The user was told that saving over the file would lose what reading left out: saving
     /// again overwrites it.
     pub loss_warned: bool,
+    /// Saving into DWG or DXF has checked what that file wouldn't keep of the drawing (and said
+    /// so, when anything): it is checked once per drawing.
+    pub kept_checked: bool,
     /// What opening the drawing changed and told the user (missing current styles reset): the
     /// OPEN reply lists them with its warnings, for agents that see no command-line history.
     pub open_notes: Vec<String>,
@@ -216,6 +219,7 @@ impl DocState {
             binary_dxf: false,
             read_loss: None,
             loss_warned: false,
+            kept_checked: false,
             open_notes: Vec::new(),
             block_edit: None,
         }
