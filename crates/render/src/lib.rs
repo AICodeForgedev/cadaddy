@@ -1386,18 +1386,53 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             }
         }
         EntityKind::MLeader(m) => {
-            // Straight or spline leader lines; block content draws like a block reference.
-            for pts in m.leader_paths() {
-                b.polyline(ctx, rgb, lw, &pts);
-                if let (Some(a), Some(n)) = (pts.first(), pts.get(1)) {
-                    b.tris(ctx, rgb, &dim::arrow(*a, (*a - *n).normalized(), m.arrow_size));
+            // Leader lines (straight or spline) in the multileader's own leader colour and
+            // linetype when it overrides them; block content draws like a block reference.
+            let (lrgb, llt) = if m.leader_color.is_some() || m.leader_linetype.is_some() {
+                let mut c = e.common.clone();
+                if let Some(col) = m.leader_color {
+                    c.color = col;
                 }
+                if let Some(l) = &m.leader_linetype {
+                    c.linetype.clone_from(l);
+                }
+                let (r, _, l, _, _, _) = resolve_common(ctx, &c, b.plotting);
+                (r, l)
+            } else {
+                (rgb, lt.clone())
+            };
+            let kind = dim::Arrowhead::parse(m.arrow.as_deref().unwrap_or(""));
+            for pts in m.leader_paths() {
+                stroke_with(b, ctx, lrgb, lw, llt.as_ref(), ltscale, &pts);
+                if let (Some(a), Some(n)) = (pts.first(), pts.get(1)) {
+                    let g = dim::arrowhead(kind, *a, (*a - *n).normalized(), m.arrow_size);
+                    for l in &g.lines {
+                        b.polyline(ctx, lrgb, lw, l);
+                    }
+                    b.tris(ctx, lrgb, &g.tris);
+                }
+            }
+            // The further landings' doglegs.
+            for dg in m.root_doglegs() {
+                stroke_with(b, ctx, lrgb, lw, llt.as_ref(), ltscale, &dg);
             }
             if let Some(t) = &m.text {
                 let land = m.landing.xy();
                 let dir = if t.insert.x >= land.x { 1.0 } else { -1.0 };
-                b.polyline(ctx, rgb, lw, &[land, land + Vec2::new(m.dogleg * dir, 0.0)]);
+                stroke_with(b, ctx, lrgb, lw, llt.as_ref(), ltscale, &[land, land + Vec2::new(m.dogleg * dir, 0.0)]);
                 mtext(b, ctx, t, rgb, lw);
+                if m.text_frame {
+                    // A frame around the text, as far out as the landing gap.
+                    let st = ctx.d.mleader_styles.iter().find(|s| s.name.eq_ignore_ascii_case(&m.style)).cloned().unwrap_or_default();
+                    let k = if st.annotative { 1.0 } else { ctx.d.header.f64("DIMSCALE", 1.0) };
+                    let gap = (st.landing_gap * k).max(0.0);
+                    let bx = layout_mtext_entity(ctx.d, t).bounds;
+                    if !bx.is_empty() && bx.min.is_finite() && bx.max.is_finite() {
+                        let bx = bx.expand(if gap.is_finite() { gap } else { 0.0 });
+                        let [c0, c1, c2, c3] = bx.corners();
+                        b.polyline(ctx, rgb, lw, &[c0, c1, c2, c3, c0]);
+                    }
+                }
             }
             if let Some(ins) = &m.block {
                 if m.dogleg > 0.0 && !m.leaders.is_empty() {

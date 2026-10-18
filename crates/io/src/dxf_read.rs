@@ -1109,7 +1109,7 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
             rx.inserted.insert(ins.block.to_ascii_uppercase());
         }
         ("MULTILEADER" | "MLEADER", EntityKind::MLeader(m)) => {
-            let pending = crate::dxf_mleader::resolve(tags, m, &rx.styles, &rx.brs);
+            let pending = crate::dxf_mleader::resolve(tags, m, &rx.styles, &rx.brs, &rx.ltypes);
             if let Some(b) = &m.block {
                 rx.inserted.insert(b.block.to_ascii_uppercase());
             }
@@ -2129,6 +2129,20 @@ impl Objects {
                 dogleg: num(43, def.dogleg, 0.0),
                 text_style: text_style.unwrap_or(def.text_style),
                 annotative: t.i(296).unwrap_or(0) != 0,
+                // Leader type (173: 0 none, 1 straight, 2 spline).
+                leader_type: match t.i(173) {
+                    Some(0) => "none".into(),
+                    Some(2) => "spline".into(),
+                    _ => def.leader_type.clone(),
+                },
+                // Block content (170 = 1, the block 343), attached by its extents centre (177 = 0)
+                // or its insertion point (1).
+                block: if t.i(170) == Some(1) {
+                    t.s(343).and_then(|bh| rx.brs.get(&bh.trim().to_ascii_uppercase()).cloned()).filter(|n| !n.is_empty()).unwrap_or_default()
+                } else {
+                    String::new()
+                },
+                block_center: t.i(177) != Some(1),
             };
             match d.mleader_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(name)) {
                 Some(x) => *x = st,

@@ -30,6 +30,11 @@ fn spline_leader_and_block_content_are_written() {
             row_spacing: 0.0,
             clip: None,
         }),
+        roots: Vec::new(),
+        leader_color: None,
+        leader_linetype: None,
+        arrow: None,
+        text_frame: false,
     };
     d.add(&Space::Model, Common::default(), EntityKind::MLeader(m)).unwrap();
     let bytes = cadaddy_io::write(&d, "a.dxf").unwrap();

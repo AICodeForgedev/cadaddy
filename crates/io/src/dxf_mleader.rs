@@ -66,8 +66,33 @@ impl P {
 #[derive(Default)]
 struct Root {
     landing: P,
+    /// The dogleg's direction (11).
+    direction: P,
     dogleg: Option<f64>,
     lines: Vec<Vec<Vec3>>,
+}
+
+/// A colour from its 32-bit DXF value: 0xC0 ByLayer, 0xC1 ByBlock, 0xC2 RGB, 0xC3 ACI.
+fn color_of(v: i64) -> Option<cadaddy_color::Color> {
+    let u = u32::try_from(v & 0xFFFF_FFFF).ok()?;
+    match u >> 24 {
+        0xC0 => Some(cadaddy_color::Color::ByLayer),
+        0xC1 => Some(cadaddy_color::Color::ByBlock),
+        0xC2 => Some(cadaddy_color::Color::True(cadaddy_color::Rgb((u >> 16) as u8, (u >> 8) as u8, u as u8))),
+        0xC3 => u8::try_from(u & 0xFF).ok().filter(|i| (1..=255).contains(i)).map(cadaddy_color::Color::Index),
+        _ => None,
+    }
+}
+
+/// A colour as its 32-bit DXF value (the inverse of [`color_of`]).
+pub(crate) fn color_value(c: cadaddy_color::Color) -> i64 {
+    let u: u32 = match c {
+        cadaddy_color::Color::ByLayer => 0xC000_0000,
+        cadaddy_color::Color::ByBlock => 0xC100_0000,
+        cadaddy_color::Color::True(cadaddy_color::Rgb(r, g, b)) => 0xC200_0000 | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b),
+        cadaddy_color::Color::Index(i) => 0xC300_0000 | u32::from(i),
+    };
+    i64::from(u as i32)
 }
 
 #[derive(Default)]
@@ -84,6 +109,11 @@ struct Parsed {
     block_scale: P,
     block_rotation: Option<f64>,
     attribs: Vec<(String, String)>,
+    /// Overrides: leader line colour (91), linetype (341), arrowhead block (342), text frame (292).
+    leader_color: Option<i64>,
+    leader_ltype: Option<String>,
+    arrow_block: Option<String>,
+    frame: Option<bool>,
     // CONTEXT_DATA.
     base: P,
     text_height: Option<f64>,
@@ -155,6 +185,10 @@ fn parse(tags: &[Tag]) -> Parsed {
                     p.block_scale.take(10, c, f);
                 }
                 43 => p.block_rotation = finite(f),
+                91 => p.leader_color = Some(t.i64()),
+                341 => p.leader_ltype = handle(t),
+                342 => p.arrow_block = handle(t),
+                292 => p.frame = Some(t.i64() != 0),
                 173 => p.left_attach = p.left_attach.or(Some(t.i64())),
                 95 => p.right_attach = p.right_attach.or(Some(t.i64())),
                 // Block attribute values: ATTDEF handle (330), index, width, then the text (302).
@@ -231,6 +265,11 @@ fn parse(tags: &[Tag]) -> Parsed {
                         r.dogleg = finite(f);
                     }
                 }
+                11 | 21 | 31 if root_kept => {
+                    if let Some(r) = p.roots.last_mut() {
+                        r.direction.take(11, c, f);
+                    }
+                }
                 _ => {}
             },
             Level::Line => match c {
@@ -266,31 +305,43 @@ pub(crate) fn read(tags: &[Tag]) -> MLeader {
     let p = parse(tags);
     let def = MLeaderStyle::default();
     let pos = |v: Option<f64>| v.filter(|x| *x > 0.0);
-    // Leader lines: those of the first root run to its landing; a further root's lines get
-    // their own landing as a last vertex (one landing per multileader here).
-    let mut leaders: Vec<Vec<Vec3>> = Vec::new();
-    for (i, r) in p.roots.iter().enumerate() {
-        for l in r.lines.iter().filter(|l| !l.is_empty()) {
-            let mut l = l.clone();
-            if i > 0
-                && let Some(land) = r.landing.get()
-            {
-                l.push(land);
-            }
-            leaders.push(l);
-        }
-    }
+    // Leader lines: the first root with lines is the multileader's landing; every further
+    // one keeps its own landing, dogleg and direction.
+    let mut roots = p.roots.iter().filter(|r| r.lines.iter().any(|l| !l.is_empty()));
+    let first = roots.next();
+    let mut leaders: Vec<Vec<Vec3>> = first.map(|r| r.lines.iter().filter(|l| !l.is_empty()).cloned().collect()).unwrap_or_default();
+    // Without a direction (11), a landing's dogleg points at the content.
+    let content_x = p.text_location.get().or(p.block_location.get()).map(|c| c.x);
+    let mut more: Vec<cadaddy_doc::LeaderRoot> = roots
+        .filter_map(|r| {
+            let landing = r.landing.get()?;
+            let dir = match (r.direction.get(), content_x) {
+                (Some(d), _) if d.x != 0.0 => d.x.signum(),
+                (_, Some(cx)) if cx < landing.x => -1.0,
+                _ => 1.0,
+            };
+            let dogleg = r.dogleg.filter(|d| *d >= 0.0).unwrap_or(0.0);
+            Some(cadaddy_doc::LeaderRoot { landing, dogleg, dir, leaders: r.lines.iter().filter(|l| !l.is_empty()).cloned().collect() })
+        })
+        .collect();
     let none = p.leader_type == Some(0);
     if none {
         leaders.clear();
+        more.clear();
     }
     let text_location = p.text_location.get();
     let block_location = p.block_location.get();
-    let landing = p.roots.iter().find_map(|r| r.landing.get()).or(p.base.get()).or(text_location).or(block_location).unwrap_or(Vec3::ZERO);
+    let landing = first
+        .and_then(|r| r.landing.get())
+        .or_else(|| p.roots.iter().find_map(|r| r.landing.get()))
+        .or(p.base.get())
+        .or(text_location)
+        .or(block_location)
+        .unwrap_or(Vec3::ZERO);
     let dogleg = if leaders.is_empty() || p.dogleg_on == Some(false) {
         0.0
     } else {
-        p.roots.iter().find_map(|r| r.dogleg).or(p.dogleg).filter(|d| *d >= 0.0).unwrap_or(0.0)
+        first.and_then(|r| r.dogleg).or(p.dogleg).filter(|d| *d >= 0.0).unwrap_or(0.0)
     };
     let has_block = p.has_block.unwrap_or(p.content == Some(1));
     let has_text = !has_block && p.has_text.unwrap_or(p.content == Some(2));
@@ -338,6 +389,12 @@ pub(crate) fn read(tags: &[Tag]) -> MLeader {
         arrow_size: pos(p.arrow_ctx).or(pos(p.arrow)).unwrap_or(def.arrow_size),
         spline: p.leader_type == Some(2),
         block,
+        roots: more,
+        // ByBlock is no override (the entity's own colour).
+        leader_color: p.leader_color.and_then(color_of).filter(|c| *c != cadaddy_color::Color::ByBlock),
+        leader_linetype: None,
+        arrow: None,
+        text_frame: p.frame.unwrap_or(false),
     }
 }
 
@@ -354,10 +411,20 @@ fn attach_point(p: &Parsed, text_left_of_landing: bool) -> u8 {
     u8::try_from(row * 3 + col).unwrap_or(1)
 }
 
-/// Text style and block names from the file's STYLE and BLOCK_RECORD handles (upper case →
-/// name); block content whose block is unknown is dropped. Returns what needs the objects.
-pub(crate) fn resolve(tags: &[Tag], m: &mut MLeader, styles: &HashMap<String, String>, brs: &HashMap<String, String>) -> Pending {
+/// Text style, block, leader linetype and arrowhead names from the file's STYLE, BLOCK_RECORD
+/// and LTYPE handles (upper case → name); block content whose block is unknown is dropped.
+/// Returns what needs the objects.
+pub(crate) fn resolve(
+    tags: &[Tag],
+    m: &mut MLeader,
+    styles: &HashMap<String, String>,
+    brs: &HashMap<String, String>,
+    ltypes: &HashMap<String, String>,
+) -> Pending {
     let p = parse(tags);
+    m.leader_linetype = p.leader_ltype.as_ref().and_then(|h| ltypes.get(h)).filter(|n| !n.is_empty() && !n.eq_ignore_ascii_case("ByBlock")).cloned();
+    // An arrowhead block (`_DOT`…); none or an unknown block is the default closed filled.
+    m.arrow = p.arrow_block.as_ref().and_then(|h| brs.get(h)).filter(|n| !n.is_empty()).cloned();
     if let Some(t) = &mut m.text
         && let Some(n) = p.text_style_ctx.iter().chain(&p.text_style).find_map(|h| styles.get(h)).filter(|n| !n.is_empty())
     {
@@ -461,6 +528,10 @@ pub(crate) struct Refs {
     pub text_style: Option<String>,
     /// BLOCK_RECORD handle of the content block.
     pub block: Option<String>,
+    /// LTYPE record handle of the leader linetype override.
+    pub ltype: Option<String>,
+    /// BLOCK_RECORD handle of the arrowhead override.
+    pub arrow: Option<String>,
 }
 
 /// The groups of a MULTILEADER record after its `AcDbMLeader` marker.
@@ -549,20 +620,29 @@ pub(crate) fn entity_tags(d: &Drawing, m: &MLeader, r: &Refs) -> Vec<Tag> {
     p(&mut t, 111, Vec3::new(1.0, 0.0, 0.0));
     p(&mut t, 112, Vec3::new(0.0, 1.0, 0.0));
     i(&mut t, 297, 0);
+    // The first landing, then each further one: its own landing, dogleg and leader lines
+    // (numbered over the whole multileader).
+    let mut roots: Vec<(Vec3, f64, f64, &Vec<Vec<Vec3>>)> = Vec::new();
     if !m.leaders.is_empty() {
+        roots.push((m.landing, dir, m.dogleg, &m.leaders));
+    }
+    roots.extend(m.roots.iter().filter(|r| !r.leaders.is_empty()).map(|r| (r.landing, r.dir.signum(), r.dogleg, &r.leaders)));
+    let mut n_line = 0i64;
+    for (root, (land, rdir, dogleg, lines)) in roots.into_iter().enumerate() {
         s(&mut t, 302, "LEADER{");
         i(&mut t, 290, 1);
         i(&mut t, 291, 1);
-        p(&mut t, 10, m.landing);
-        p(&mut t, 11, Vec3::new(dir, 0.0, 0.0));
-        i(&mut t, 90, 0);
-        f(&mut t, 40, m.dogleg);
-        for (n, l) in m.leaders.iter().enumerate() {
+        p(&mut t, 10, land);
+        p(&mut t, 11, Vec3::new(rdir, 0.0, 0.0));
+        i(&mut t, 90, i64::try_from(root).unwrap_or(i64::MAX));
+        f(&mut t, 40, dogleg);
+        for l in lines {
             s(&mut t, 304, "LEADER_LINE{");
             for v in l {
                 p(&mut t, 10, *v);
             }
-            i(&mut t, 91, i64::try_from(n).unwrap_or(i64::MAX));
+            i(&mut t, 91, n_line);
+            n_line += 1;
             s(&mut t, 305, "}");
         }
         i(&mut t, 271, 0);
@@ -573,8 +653,22 @@ pub(crate) fn entity_tags(d: &Drawing, m: &MLeader, r: &Refs) -> Vec<Tag> {
     s(&mut t, 301, "}");
     s(&mut t, 340, &r.style);
     // Overridden properties: leader type, landing and dogleg, arrowhead size, content type,
-    // text style and height, block content (the entity holds its own values).
-    i(&mut t, 90, 0x1 | 0x10 | 0x40 | 0x80 | 0x200 | 0x400 | 0x800 | 0x1_0000 | 0x8_0000);
+    // text style and height, block content (the entity holds its own values); and the leader
+    // colour, linetype, arrowhead and text frame when this multileader sets them.
+    let mut flags = 0x1 | 0x10 | 0x40 | 0x80 | 0x200 | 0x400 | 0x800 | 0x1_0000 | 0x8_0000;
+    if m.leader_color.is_some() {
+        flags |= 0x2;
+    }
+    if r.ltype.is_some() {
+        flags |= 0x4;
+    }
+    if r.arrow.is_some() {
+        flags |= 0x100;
+    }
+    if m.text_frame {
+        flags |= 0x2_0000;
+    }
+    i(&mut t, 90, flags);
     i(
         &mut t,
         170,
@@ -586,11 +680,17 @@ pub(crate) fn entity_tags(d: &Drawing, m: &MLeader, r: &Refs) -> Vec<Tag> {
             1
         },
     );
-    i(&mut t, 91, BYBLOCK);
+    i(&mut t, 91, m.leader_color.map_or(BYBLOCK, color_value));
+    if let Some(h) = &r.ltype {
+        s(&mut t, 341, h);
+    }
     i(&mut t, 171, -2);
     i(&mut t, 290, 1);
     i(&mut t, 291, i64::from(m.dogleg > 0.0));
     f(&mut t, 41, m.dogleg);
+    if let Some(h) = &r.arrow {
+        s(&mut t, 342, h);
+    }
     f(&mut t, 42, m.arrow_size);
     i(
         &mut t,
@@ -611,7 +711,7 @@ pub(crate) fn entity_tags(d: &Drawing, m: &MLeader, r: &Refs) -> Vec<Tag> {
     i(&mut t, 174, 1);
     i(&mut t, 175, align);
     i(&mut t, 92, BYBLOCK);
-    i(&mut t, 292, 0);
+    i(&mut t, 292, i64::from(m.text_frame));
     if let Some((b, h)) = block {
         s(&mut t, 344, h);
         i(&mut t, 93, BYBLOCK);

@@ -1121,6 +1121,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 style: cx.mleader_style(&m.style),
                 text_style: m.text.as_ref().and_then(|t| cx.style(&t.style)),
                 block: m.block.as_ref().and_then(|b| cx.block_records.get(&b.block.to_ascii_uppercase()).cloned()),
+                ltype: m.leader_linetype.as_ref().and_then(|l| cx.ltypes.get(&l.trim().to_ascii_uppercase()).cloned()),
+                arrow: m.arrow.as_ref().and_then(|a| cx.arrows.get(&a.trim().to_ascii_uppercase()).cloned()),
             };
             w.t.extend(crate::dxf_mleader::entity_tags(d, m, &refs));
         }
@@ -1331,9 +1333,11 @@ fn code_page(d: &Drawing, version: Version) -> String {
 fn mleader_fallback(w: &mut W, d: &Drawing, e: &Entity, m: &MLeader, owner: &str, paper: bool, cx: &Ctx) {
     let part = |w: &mut W, kind: EntityKind| Entity { handle: Handle::parse_hex(&w.h()).unwrap_or(Handle(0)), common: e.common.clone(), kind };
     let style = d.header.str("DIMSTYLE", "Standard");
-    for arm in m.leaders.iter().take(64) {
+    // Every landing's leader lines, each ending at its landing.
+    let arms = m.leaders.iter().map(|l| (l, m.landing)).chain(m.roots.iter().flat_map(|r| r.leaders.iter().map(move |l| (l, r.landing))));
+    for (arm, landing) in arms.take(64) {
         let mut vertices = arm.clone();
-        vertices.push(m.landing);
+        vertices.push(landing);
         let le = part(w, EntityKind::Leader(Leader { vertices, arrow: true, spline: m.spline, style: style.clone() }));
         entity(w, d, &le, owner, paper, cx);
     }
@@ -1890,6 +1894,12 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         arrow_names.extend([s.arrow_block.clone(), s.arrow_block1.clone(), s.arrow_block2.clone(), s.leader_arrow_block.clone()]);
     }
     for e in &every {
+        // Multileaders' own arrowheads.
+        if let EntityKind::MLeader(m) = &e.kind
+            && let Some(a) = &m.arrow
+        {
+            arrow_names.push(a.clone());
+        }
         if let EntityKind::Dimension(dm) = &e.kind {
             for (k, v) in &dm.overrides {
                 let Some(f) = DimStyle::field_name(k).filter(|f| f.starts_with("arrowBlock") || *f == "leaderArrowBlock") else { continue };
@@ -2494,7 +2504,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     let byblock_ltype = ltype_handles.get("BYBLOCK").cloned();
     for (s, h) in mleader_styles.iter().zip(&mleader_handles) {
-        mleader_style_obj(&mut w, s, h, &mleader_dict, byblock_ltype.as_deref(), cx.style(&s.text_style));
+        let block = Some(s.block.trim()).filter(|b| !b.is_empty()).and_then(|b| cx.block_records.get(&b.to_ascii_uppercase()).cloned());
+        mleader_style_obj(&mut w, s, h, &mleader_dict, byblock_ltype.as_deref(), cx.style(&s.text_style), block);
     }
     // Multiline styles.
     w.t.extend(crate::dxf_mline::objects(&cx.mlines, &root_dict));
@@ -2809,10 +2820,18 @@ fn group_obj(w: &mut W, g: &Group, h: &str, dict: &str, written: &std::collectio
     }
 }
 
-/// A MLEADERSTYLE object (DXF Reference, OBJECTS: MLEADERSTYLE): MText content and straight
-/// ByBlock leaders with the style's landing gap, dogleg length, arrow size, text style and
-/// text height.
-fn mleader_style_obj(w: &mut W, s: &MLeaderStyle, h: &str, dict: &str, byblock_ltype: Option<&str>, text_style: Option<String>) {
+/// A MLEADERSTYLE object (DXF Reference, OBJECTS: MLEADERSTYLE): MText or block content and
+/// ByBlock leaders (straight, spline or none) with the style's landing gap, dogleg length, arrow
+/// size, text style and text height.
+fn mleader_style_obj(
+    w: &mut W,
+    s: &MLeaderStyle,
+    h: &str,
+    dict: &str,
+    byblock_ltype: Option<&str>,
+    text_style: Option<String>,
+    block: Option<String>,
+) {
     // ByBlock as a 32-bit colour value (0xC1000000).
     const BYBLOCK: i64 = -1_056_964_608;
     w.s(0, "MLEADERSTYLE");
@@ -2821,13 +2840,20 @@ fn mleader_style_obj(w: &mut W, s: &MLeaderStyle, h: &str, dict: &str, byblock_l
     w.s(330, dict);
     w.s(100, "AcDbMLeaderStyle");
     w.i(179, 2);
-    w.i(170, 2);
+    w.i(170, if block.is_some() { 1 } else { 2 });
     w.i(171, 1);
     w.i(172, 0);
     w.i(90, 2);
     w.f(40, 0.0);
     w.f(41, 0.0);
-    w.i(173, 1);
+    w.i(
+        173,
+        match s.leader_type.to_ascii_lowercase().as_str() {
+            "none" => 0,
+            "spline" => 2,
+            _ => 1,
+        },
+    );
     w.i(91, BYBLOCK);
     if let Some(lt) = byblock_ltype {
         w.s(340, lt);
@@ -2852,6 +2878,9 @@ fn mleader_style_obj(w: &mut W, s: &MLeaderStyle, h: &str, dict: &str, byblock_l
     w.i(292, 0);
     w.i(297, 0);
     w.f(46, 4.0);
+    if let Some(b) = &block {
+        w.s(343, b);
+    }
     w.i(94, BYBLOCK);
     for c in [47, 49, 140] {
         w.f(c, 1.0);
@@ -2859,7 +2888,7 @@ fn mleader_style_obj(w: &mut W, s: &MLeaderStyle, h: &str, dict: &str, byblock_l
     w.i(293, 1);
     w.f(141, 0.0);
     w.i(294, 1);
-    w.i(177, 0);
+    w.i(177, i64::from(!s.block_center));
     w.f(142, 1.0);
     w.i(295, 0);
     w.i(296, i64::from(s.annotative));

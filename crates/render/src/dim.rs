@@ -166,6 +166,12 @@ impl Arrowhead {
             _ => Arrowhead::ClosedFilled,
         }
     }
+    /// Whether `name` is one of the arrowheads [`Arrowhead::parse`] knows (anything else reads
+    /// as closed filled).
+    pub fn is_known(name: &str) -> bool {
+        let n: String = name.trim().trim_start_matches('_').chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+        matches!(n.as_str(), "" | "closedfilled" | "filled") || Arrowhead::parse(name) != Arrowhead::ClosedFilled
+    }
     /// Ticks and obliques: the dimension line runs through the tip and extends by DIMDLE.
     pub fn is_tick(self) -> bool {
         matches!(self, Arrowhead::Oblique | Arrowhead::ArchTick | Arrowhead::Integral | Arrowhead::None)

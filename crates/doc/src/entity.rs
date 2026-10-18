@@ -774,17 +774,59 @@ pub struct MLeader {
     /// Block content in place of the text: a block reference placed at the landing.
     #[serde(default)]
     pub block: Option<Insert>,
+    /// Further landings (DXF: further `LEADER{` roots), each with its own dogleg and leader
+    /// lines: a multileader with leaders on both sides of its content. `leaders`, `landing` and
+    /// `dogleg` are the first root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roots: Vec<LeaderRoot>,
+    /// Per-object overrides of the style: leader line colour and linetype, the arrowhead (a
+    /// dimension arrowhead name such as "_DOT"; `None`: closed filled) and a frame around the text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_color: Option<cadaddy_color::Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_linetype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrow: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub text_frame: bool,
+}
+
+/// A further landing of a multileader ([`MLeader::roots`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LeaderRoot {
+    /// Where the leader lines end and the dogleg starts.
+    pub landing: Vec3,
+    /// The dogleg's length, and its direction along X: +1 to the right, -1 to the left.
+    pub dogleg: f64,
+    pub dir: f64,
+    /// The leader lines, each from its arrowhead (the landing is not repeated).
+    pub leaders: Vec<Vec<Vec3>>,
 }
 
 impl MLeader {
-    /// Each leader line as drawn: through its points to the landing, smoothed for spline leaders.
+    /// Each leader line as drawn: through its points to its landing, smoothed for spline
+    /// leaders; the first root's lines, then the further roots'.
     pub fn leader_paths(&self) -> Vec<Vec<Vec2>> {
+        let path = |l: &Vec<Vec3>, land: Vec3| {
+            let pts: Vec<Vec2> = l.iter().map(|v| v.xy()).chain(std::iter::once(land.xy())).collect();
+            if self.spline && pts.len() > 2 { GSpline::from_fit_points(&pts).tessellate(1e-3) } else { pts }
+        };
         self.leaders
             .iter()
-            .map(|l| {
-                let pts: Vec<Vec2> = l.iter().map(|v| v.xy()).chain(std::iter::once(self.landing.xy())).collect();
-                if self.spline && pts.len() > 2 { GSpline::from_fit_points(&pts).tessellate(1e-3) } else { pts }
-            })
+            .map(|l| path(l, self.landing))
+            .chain(self.roots.iter().flat_map(|r| r.leaders.iter().map(move |l| path(l, r.landing))))
+            .collect()
+    }
+    /// How many leader lines there are over every root.
+    pub fn leader_count(&self) -> usize {
+        self.leaders.len() + self.roots.iter().map(|r| r.leaders.len()).sum::<usize>()
+    }
+    /// The dogleg of each further root, from its landing.
+    pub fn root_doglegs(&self) -> Vec<[Vec2; 2]> {
+        self.roots
+            .iter()
+            .filter(|r| r.dogleg > 0.0 && r.dogleg.is_finite() && !r.leaders.is_empty())
+            .map(|r| [r.landing.xy(), r.landing.xy() + Vec2::new(r.dogleg * r.dir.signum(), 0.0)])
             .collect()
     }
 }
@@ -1282,7 +1324,13 @@ impl EntityKind {
             EntityKind::MLeader(m) => m
                 .leaders
                 .iter()
+                .chain(m.roots.iter().flat_map(|r| r.leaders.iter()))
                 .flat_map(|l| l.windows(2).filter_map(|w| Some(Prim::Seg(Segment::Line(GLine::new(w.first()?.xy(), w.get(1)?.xy()))))))
+                .chain(
+                    m.roots
+                        .iter()
+                        .flat_map(|r| r.leaders.iter().filter_map(|l| Some(Prim::Seg(Segment::Line(GLine::new(l.last()?.xy(), r.landing.xy())))))),
+                )
                 .chain(m.block.iter().map(|b| Prim::Point(b.insert.xy())))
                 .collect(),
             EntityKind::Image(i) => vec![Prim::Point(i.insert.xy())],
@@ -1428,6 +1476,16 @@ impl EntityKind {
                     l.iter_mut().for_each(t3);
                 }
                 t3(&mut ml.landing);
+                for r in &mut ml.roots {
+                    // The dogleg keeps pointing at the content (sideways after a mirror).
+                    let end = m.apply(r.landing.xy() + Vec2::new(r.dir.signum(), 0.0));
+                    t3(&mut r.landing);
+                    r.dogleg *= s;
+                    r.dir = if end.x >= r.landing.x { 1.0 } else { -1.0 };
+                    for l in &mut r.leaders {
+                        l.iter_mut().for_each(t3);
+                    }
+                }
                 if let Some(t) = &mut ml.text {
                     t3(&mut t.insert);
                     t.height *= s;

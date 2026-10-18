@@ -473,6 +473,11 @@ fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<
         arrow_size: st.arrow_size * k,
         spline: false,
         block: None,
+        roots: Vec::new(),
+        leader_color: None,
+        leader_linetype: None,
+        arrow: None,
+        text_frame: false,
     }))
 }
 
@@ -483,8 +488,12 @@ fn run_mleader(s: &mut Session, p: &Value) -> Result<Value> {
     if pts.len() < 2 && !(content.leader == crate::LeaderType::None && pts.len() == 1) {
         return Err(bad("mleader", "need an arrowhead and a landing point"));
     }
+    let overrides = super::mleader_content::Overrides::from_json(s, "mleader", p)?;
     let k = mleader_kind(s, &pts, str_param(p, "text").unwrap_or(""), true).ok_or_else(|| bad("mleader", "bad points"))?;
-    let k = super::mleader_content::apply(s, k, &content)?;
+    let mut k = super::mleader_content::apply(s, k, &content)?;
+    if let EntityKind::MLeader(m) = &mut k {
+        overrides.apply(m);
+    }
     Ok(json!({ "handle": s.add_entity(k)?.hex() }))
 }
 
@@ -1625,8 +1634,19 @@ struct MLeaderM {
 impl MLeaderM {
     /// Starts with the order and Options chosen the last time (as AutoCAD does).
     fn new(s: &Session) -> Self {
-        let o = s.last_used.mleader;
+        let mut o = s.last_used.mleader;
         let max_points = o.max_points.clamp(2, MAX_LEADER_POINTS);
+        // The current style's leader type and block content, when it has its own.
+        let st = super::mleader_content::current_style(s);
+        if !st.leader_type.eq_ignore_ascii_case("straight") {
+            o.leader_type = super::mleader_content::style_leader(&st);
+        }
+        let style_block = super::mleader_content::style_block(s, &st);
+        if let Some((_, center)) = &style_block {
+            o.block = true;
+            o.block_center = *center;
+        }
+        let block_name = style_block.map_or_else(|| s.last_used.mleader_block.clone(), |(n, _)| n);
         MLeaderM {
             order: o.order,
             pts: Vec::new(),
@@ -1639,8 +1659,8 @@ impl MLeaderM {
             content: o.content,
             leader_type: o.leader_type,
             // Block content needs a block that still exists.
-            block: o.block && s.doc().is_ok_and(|d| d.block(&s.last_used.mleader_block).is_some()),
-            block_name: s.last_used.mleader_block.clone(),
+            block: o.block && s.doc().is_ok_and(|d| d.block(&block_name).is_some()),
+            block_name,
             block_center: o.block_center,
         }
     }
@@ -1663,6 +1683,7 @@ impl MLeaderM {
         super::mleader_content::Content {
             leader: self.leader_type,
             block: (self.content && self.block).then(|| (self.block_name.clone(), self.block_center)),
+            values: Default::default(),
         }
     }
     /// Leader type None: the one point placed is the content location.

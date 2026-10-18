@@ -171,6 +171,10 @@ pub fn anno_scaled(e: &Entity, f: f64) -> Entity {
             let land = m.landing;
             m.arrow_size *= f;
             m.dogleg *= f;
+            for r in &mut m.roots {
+                r.landing = land + (r.landing - land) * f;
+                r.dogleg *= f;
+            }
             if let Some(t) = &mut m.text {
                 t.insert = land + (t.insert - land) * f;
                 t.height *= f;
