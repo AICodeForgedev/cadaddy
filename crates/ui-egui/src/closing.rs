@@ -285,6 +285,40 @@ mod tests {
         assert!(app.session.docs[1].is_dirty(), "edits survive Cancel");
     }
 
+    /// While the save-changes question is up, Enter doesn't reach the command line behind it
+    /// (where it would repeat the last command).
+    #[test]
+    fn enter_under_the_close_question_doesnt_repeat_a_command() {
+        let mut app = app_with(&["A", "B"]);
+        dirty(&mut app, 1);
+        app.cmdline("line");
+        app.session.cancel();
+        let ctx = egui::Context::default();
+        let frame = |app: &mut CadApp, events: Vec<egui::Event>| {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            });
+            out.textures_delta.clear();
+        };
+        frame(&mut app, Vec::new());
+        app.request_close(None);
+        assert_eq!(app.close_prompt(), Some("B"));
+        let m = egui::Modifiers::NONE;
+        let enter = vec![
+            egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: m },
+            egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: false, repeat: false, modifiers: m },
+        ];
+        frame(&mut app, enter.clone());
+        frame(&mut app, enter);
+        assert!(app.session.running.is_none(), "Enter reached the command line: {:?}", app.session.current_prompt().map(|p| p.message));
+    }
+
     #[test]
     fn discard_closes_the_dirty_drawing() {
         let mut app = app_with(&["A", "B"]);
