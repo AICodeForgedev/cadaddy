@@ -285,6 +285,19 @@ fn image_folder(path: Option<&str>) {
     }
 }
 
+/// Point relative image paths at the current drawing's folder when the current drawing changed
+/// (a tab switched to, a drawing closed); the UI calls it every frame, and it does nothing while
+/// the folder stays the same.
+pub fn sync_image_folder(s: &Session) {
+    let Some(p) = s.state().ok().and_then(|st| st.path.clone()) else { return };
+    let full = std::path::absolute(&p).unwrap_or_else(|_| std::path::PathBuf::from(&p));
+    if let Some(dir) = full.parent().filter(|d| !d.as_os_str().is_empty())
+        && !cadaddy_render::images::is_search_dir(dir)
+    {
+        cadaddy_render::images::add_search_dir(dir);
+    }
+}
+
 /// Read and decode `path` (the slow half of `OPEN {path}`). Needs no session; runs anywhere.
 pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
     #[cfg(not(target_arch = "wasm32"))]
