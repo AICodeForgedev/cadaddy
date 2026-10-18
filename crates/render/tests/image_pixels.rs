@@ -126,3 +126,21 @@ fn a_black_stencil_shows_white_on_a_dark_screen() {
     let (x, y) = view.to_screen(Vec2::new(7.5, 7.5));
     assert!(pm.pixel(x as u32, y as u32).unwrap().red() < 20, "black on paper");
 }
+
+#[test]
+fn brightness_and_contrast_change_the_pixels_drawn() {
+    quad_image("mem://quad-adjusted");
+    let mut d = Drawing::new_imperial();
+    d.header.set_i64("IMAGEFRAME", 0);
+    let mut img = image("mem://quad-adjusted", Vec2::new(5.0, 5.0));
+    img.brightness = 100;
+    d.add(&Space::Model, Common::default(), EntityKind::Image(img.clone())).unwrap();
+    // full brightness turns the red pixel white
+    assert_eq!(color_at(&build(&d, &Space::Model, &opts()), Vec2::new(7.5, 12.5)), [255, 255, 255]);
+    // no contrast: everything mid-grey
+    let mut d2 = Drawing::new_imperial();
+    d2.header.set_i64("IMAGEFRAME", 0);
+    d2.add(&Space::Model, Common::default(), EntityKind::Image(cadaddy_doc::Image { brightness: 50, contrast: 0, ..img })).unwrap();
+    let c = color_at(&build(&d2, &Space::Model, &opts()), Vec2::new(12.5, 12.5));
+    assert!(c.iter().all(|v| (120..=136).contains(v)), "{c:?}");
+}

@@ -75,6 +75,8 @@ const HEADER: &[(&str, Kind, Def)] = &[
     ("TRIMMODE", Kind::Choice(&[0, 1]), Def::Int(1)),
     ("WIPEOUTFRAME", Kind::Choice(&[0, 1, 2]), Def::Int(1)),
     ("XCLIPFRAME", Kind::Choice(&[0, 1, 2]), Def::Int(2)),
+    // 0: file commands ask for the file name on the command line instead of opening a dialog.
+    ("FILEDIA", Kind::Choice(&[0, 1]), Def::Int(1)),
 ];
 
 /// The standard lineweights in hundredths of a millimetre.

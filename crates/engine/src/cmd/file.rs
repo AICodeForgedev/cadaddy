@@ -170,7 +170,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .key("Cmd+O")
             .params("{path} | {data: base64, name} → {index, entities?, warnings: what reading left out}")
             .enabled(always)
-            .noundo(),
+            .noundo()
+            .interactive(|_| Ok(Box::new(FileM { name: "OPEN", message: "Enter name of drawing to open", run: run_open }))),
         CommandSpec::new("close", "Close", run_close).menu(&["File", "Close"]).key("Cmd+W").params("{index?}").noundo(),
         CommandSpec::new("closeall", "Close All", run_closeall).menu(&["File", "Close All"]).enabled(always).noundo(),
         CommandSpec::new("qsave", "Save", run_qsave_reporting).menu(&["File", "Save"]).key("Cmd+S").alias(&["save"]).params("{path?}").noundo(),
@@ -178,7 +179,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["File", "Save As..."])
             .key("Cmd+Shift+S")
             .params("{path, version?: 2000|2004|2007|2010|2013|2018, binary?: bool}")
-            .noundo(),
+            .noundo()
+            .interactive(|_| Ok(Box::new(FileM { name: "SAVEAS", message: "Save drawing as", run: run_saveas_reporting }))),
         CommandSpec::new("document.switch", "Switch Drawing", run_switch).params("{index}").enabled(always).noundo(),
         CommandSpec::new("document.bytes", "Drawing as bytes", run_bytes)
             .params("{format?: dxf, version?: 2000…2018, binary?: bool} → {data: base64}")
@@ -933,5 +935,37 @@ mod pr193_tests {
         assert!(!st.is_dirty());
         assert_eq!((st.path.as_deref(), st.title.as_str()), (Some("a/Owned.dxf"), "Owned.dxf"));
         assert_eq!(saved("a/Owned.dxf", n)["bytes"], 6);
+    }
+}
+
+/// A file command typed with FILEDIA 0 (scripts, or no file picker): the file name on the command
+/// line, then the command, as AutoCAD asks when its dialogs are off.
+pub(crate) struct FileM {
+    pub name: &'static str,
+    pub message: &'static str,
+    pub run: fn(&mut Session, &Value) -> Result<Value>,
+}
+
+impl crate::Interactive for FileM {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+    fn prompt(&self, _s: &Session) -> crate::Prompt {
+        crate::Prompt::new(self.message, crate::Accept::TEXT)
+    }
+    fn input(&mut self, s: &mut Session, i: crate::Input) -> Result<crate::Step> {
+        use crate::{Input, Step};
+        match i {
+            Input::Cancel | Input::Enter => Ok(Step::Cancel),
+            Input::Text(t) | Input::Keyword(t) => {
+                let path = t.trim().trim_matches('"');
+                if path.is_empty() {
+                    return Ok(Step::Cancel);
+                }
+                (self.run)(s, &json!({ "path": path }))?;
+                Ok(Step::Done)
+            }
+            _ => Ok(Step::Continue),
+        }
     }
 }

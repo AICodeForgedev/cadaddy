@@ -4,7 +4,7 @@
 
 Menu-breadth parity: a reference menu item counts as covered when a CADaddy command is registered under the same menu label. It measures breadth, not depth; see [target-app-parity.md](target-app-parity.md) for the weighted assessment.
 
-**Menu breadth: 293 / 491 items (60%)** · 450 registered commands.
+**Menu breadth: 295 / 491 items (60%)** · 452 registered commands.
 
 | Menu | Items | Covered | % |
 |---|---|---|---|
@@ -16,7 +16,7 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 | Tools | 85 | 59 | 69% |
 | Draw | 87 | 55 | 63% |
 | Dimension | 28 | 28 | 100% |
-| Modify | 113 | 53 | 47% |
+| Modify | 113 | 55 | 49% |
 | Window | 22 | 3 | 14% |
 | Help | 8 | 0 | 0% |
 
@@ -134,12 +134,10 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - Draw > 3D Modeling > Setup > View
 - Draw > 3D Modeling > Setup > Profile
 - Modify > Object > External Reference > Frame
-- Modify > Object > Image > Adjust...
 - Modify > Object > Image > Quality
 - Modify > Object > Image > Transparency
 - Modify > Object > Image > Frame
 - Modify > Object > Block Description...
-- Modify > Clip > Image
 - Modify > 3D Operations > 3D Move
 - Modify > 3D Operations > 3D Rotate
 - Modify > 3D Operations > 3D Align

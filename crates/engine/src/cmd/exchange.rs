@@ -57,9 +57,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["printpdf", "pdfb"])
             .params("{path?: \"DIR/NAME^NAME2.pdf\" (default: the drawing's file; a `^` splits the name into one book name per row of frames; else returns base64 `data` per book), names?: [book names], frameHeight?: mm (default 297), unit?: mm per drawing unit (default 1)} → {books: [{name, pages, bytes, path? | data}], skipped}: closed polylines of the frame height in model space are sheet frames; each row (same lower edge, bottom to top) is one PDF, its frames left to right one page each on the paper (ISO A-series, either orientation) they match")
             .noundo(),
-        CommandSpec::new("attach", "Attach", run_attach).params(
-            "{path: an image (PNG, JPEG: as IMAGEATTACH) or a drawing (DWG, DXF: as XATTACH), and that command's other parameters} → its reply. PDF, DWF and DGN underlays are not available yet (PDFIMPORT converts a PDF)",
-        ),
+        CommandSpec::new("attach", "Attach", run_attach)
+            .params(
+                "{path: an image (PNG, JPEG: as IMAGEATTACH) or a drawing (DWG, DXF: as XATTACH), and that command's other parameters} → its reply. PDF, DWF and DGN underlays are not available yet (PDFIMPORT converts a PDF)",
+            )
+            .interactive(|_| Ok(Box::new(AttachM::default()))),
         CommandSpec::new("share", "Share", |_, _| {
             Err(EngineError::Other("SHARE is not available yet: there is no online service to share through; EXPORT or PUBLISH the drawing and send the file".into()))
         })
@@ -75,6 +77,12 @@ pub fn specs() -> Vec<CommandSpec> {
 /// ATTACH: the reference its file's type calls for.
 fn run_attach(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("attach", "`path` is required"))?;
+    let spec = attach_spec(path)?;
+    (spec.run)(s, p)
+}
+
+/// The command that attaches `path`: IMAGEATTACH for an image, XATTACH for a drawing.
+fn attach_spec(path: &str) -> Result<&'static CommandSpec> {
     let id = match extension(path).as_str() {
         "png" | "jpg" | "jpeg" => "imageattach",
         "dwg" | "dxf" => "xattach",
@@ -82,8 +90,64 @@ fn run_attach(s: &mut Session, p: &Value) -> Result<Value> {
         "dwf" | "dwfx" | "dgn" => return Err(bad("attach", "DWF and DGN underlays are not available yet")),
         other => return Err(bad("attach", format!("files of type .{other} can't be attached; choose an image (PNG, JPEG) or a drawing (DWG, DXF)"))),
     };
-    let spec = command_specs().iter().find(|c| c.id == id).ok_or_else(|| bad("attach", format!("{id} is missing")))?;
-    (spec.run)(s, p)
+    command_specs().iter().find(|c| c.id == id).ok_or_else(|| bad("attach", format!("{id} is missing")))
+}
+
+/// ATTACH typed: the file name, then the prompts of the command its type calls for (insertion
+/// point, scale, rotation), as that command asks them.
+#[derive(Default)]
+struct AttachM {
+    inner: Option<Box<dyn crate::Interactive>>,
+}
+
+impl crate::Interactive for AttachM {
+    fn name(&self) -> &'static str {
+        self.inner.as_ref().map(|m| m.name()).unwrap_or("ATTACH")
+    }
+    fn prompt(&self, s: &Session) -> crate::Prompt {
+        match &self.inner {
+            Some(m) => m.prompt(s),
+            None => crate::Prompt::new("Enter name of file to attach", crate::Accept::TEXT),
+        }
+    }
+    fn preview(&self, s: &Session, cursor: Vec2) -> Vec<EntityKind> {
+        self.inner.as_ref().map(|m| m.preview(s, cursor)).unwrap_or_default()
+    }
+    fn input(&mut self, s: &mut Session, i: crate::Input) -> Result<crate::Step> {
+        use crate::{Input, Step};
+        if let Some(m) = &mut self.inner {
+            return m.input(s, i);
+        }
+        match i {
+            Input::Cancel | Input::Enter => Ok(Step::Cancel),
+            Input::Text(t) | Input::Keyword(t) => {
+                let path = t.trim().trim_matches('"').to_string();
+                if path.is_empty() {
+                    return Ok(Step::Cancel);
+                }
+                let factory = match attach_spec(&path) {
+                    Ok(spec) => spec.interactive,
+                    Err(e) => {
+                        s.echo(match e {
+                            EngineError::BadParams { msg, .. } => msg,
+                            other => other.to_string(),
+                        });
+                        return Ok(Step::Continue);
+                    }
+                };
+                let Some(factory) = factory else { return Ok(Step::Cancel) };
+                let mut m = factory(s)?;
+                if m.begin(s)? != Step::Continue {
+                    return Ok(Step::Cancel);
+                }
+                // Its first prompt is the file name: answer it with this one.
+                let step = m.input(s, Input::Text(path))?;
+                self.inner = Some(m);
+                Ok(step)
+            }
+            _ => Ok(Step::Continue),
+        }
+    }
 }
 
 fn extension(path: &str) -> String {
@@ -858,6 +922,17 @@ mod tests {
         }
         assert!(s.execute("imageattach", &json!({ "path": dir.join("missing.png").to_string_lossy() })).is_err());
         assert!(s.execute("imageattach", &json!({ "path": png.to_string_lossy(), "scale": 0 })).is_err());
+        // Beside a saved drawing the image is stored relative to its folder; pathType full keeps it whole.
+        std::fs::create_dir_all(dir.join("pics")).unwrap();
+        let pic = dir.join("pics").join("logo.png");
+        std::fs::copy(&png, &pic).unwrap();
+        s.state_mut().unwrap().path = Some(dir.join("host.dxf").to_string_lossy().into_owned());
+        let rel = s.execute("imageattach", &json!({ "path": pic.to_string_lossy() })).unwrap();
+        assert_eq!(rel["path"].as_str(), Some(std::path::Path::new("pics").join("logo.png").to_string_lossy().as_ref()), "{rel}");
+        let full = s.execute("imageattach", &json!({ "path": pic.to_string_lossy(), "pathType": "full" })).unwrap();
+        assert_eq!(full["path"].as_str(), Some(pic.to_string_lossy().as_ref()));
+        assert!(s.execute("imageattach", &json!({ "path": pic.to_string_lossy(), "pathType": "none" })).is_err());
+        s.state_mut().unwrap().path = None;
         // Typed: a wrong name is asked again; then point, scale and rotation.
         let before = s.doc().unwrap().entity_count();
         for line in ["imageattach", "nope.png", &png.to_string_lossy(), "1,1", "2", "90"] {
@@ -866,6 +941,15 @@ mod tests {
         assert!(s.running.is_none(), "{}", s.prompt_text());
         assert!(s.log.iter().any(|l| l.contains("nope.png can't be read")), "{:?}", s.log);
         assert_eq!(s.doc().unwrap().entity_count(), before + 1);
+        // Typed ATTACH: the file, then IMAGEATTACH's own prompts.
+        s.cmdline("attach").unwrap();
+        s.cmdline(&png.to_string_lossy()).unwrap();
+        assert!(s.prompt_text().contains("insertion point"), "{}", s.prompt_text());
+        for line in ["2,2", "3", "0"] {
+            s.cmdline(line).unwrap();
+        }
+        assert!(s.running.is_none(), "{}", s.prompt_text());
+        assert_eq!(s.doc().unwrap().entity_count(), before + 2);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

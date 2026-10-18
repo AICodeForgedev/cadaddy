@@ -1730,6 +1730,7 @@ fn image(b: &mut Builder, ctx: &Ctx, i: &cadaddy_doc::Image, rgb: Ink, lw: f32) 
     let missing = i.display & 1 != 0 && raster.is_none();
     match raster {
         Some(raster) => {
+            let raster = images::adjusted(&raster, i.brightness, i.contrast);
             let tris = triangulate_evenodd(std::slice::from_ref(&boundary));
             let alpha = (255.0 * (1.0 - f64::from(i.fade.min(100)) / 100.0)).round() as u8;
             let dark_stencil = images::is_dark_stencil(&raster);

@@ -8,10 +8,12 @@
 menu	View	Visualizza
 menu	Modify	Edita
 # External References palette.
+	Adjust...	Regola...
 	Apply	Applica
 	Attach DWG...	Associa DWG...
 	Bind	Unisci
 	Detach	Scollega
+	Image	Immagine
 	Loaded	Caricato
 	Make it a block of this drawing, keeping its layer names	Lo rende un blocco di questo disegno, conservando i nomi dei layer
 	Make it a block of this drawing; its layers become NAME$0$LAYER	Lo rende un blocco di questo disegno; i suoi layer diventano NOME$0$LAYER

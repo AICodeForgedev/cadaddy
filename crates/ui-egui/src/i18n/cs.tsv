@@ -3,10 +3,12 @@
 # Written from the meaning of CADCraft English strings; no proprietary translations copied.
 # UTF-8: context<TAB>English source<TAB>Czech translation.
 # @plural = one|few|other forms for integer counts.
+	Adjust...	Upravit...
 	Apply	Použít
 	Attach DWG...	Připojit DWG...
 	Bind	Svázat
 	Detach	Odpojit
+	Image	Obrázek
 	Loaded	Načteno
 	Make it a block of this drawing, keeping its layer names	Převést na blok tohoto výkresu a zachovat názvy hladin
 	Make it a block of this drawing; its layers become NAME$0$LAYER	Převést na blok tohoto výkresu; názvy hladin budou NAME$0$LAYER

@@ -22,6 +22,7 @@ mod griphot;
 pub(crate) mod groups;
 pub(crate) mod hatch;
 mod imageattach;
+mod imageclip;
 mod inquiry;
 mod layer;
 pub(crate) mod layout;
@@ -192,6 +193,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(blocks::specs());
         v.extend(modify::specs());
         v.extend(draworder::specs());
+        v.extend(imageclip::specs());
         v.extend(array::specs());
         v.extend(symbol::specs());
         v.extend(takeoff::specs());

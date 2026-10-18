@@ -31,6 +31,7 @@
 	About CADaddy	О CADaddy
 	Absolute	Абсолютные
 	Add Leader	Добавить выноску
+	Adjust...	Настроить...
 	Align	Выровнять
 	Align Text	Выровнять текст
 	Aligned	Параллельный
@@ -103,6 +104,7 @@
 	Circle	Круг
 	Circumference	Длина окружности
 	Clear	Очистить
+	Clip	Подрезать
 	Clipboard	Буфер обмена
 	Close	Закрыть
 	Close All	Закрыть все
@@ -329,6 +331,7 @@
 	HorizontalDistance	ГоризонтальноеРасстояние
 	How to apply:	Способ применения:
 	ID Point	Координаты точки
+	Image	Изображение
 	Import	Импортировать
 	In	Приблизить
 	In-window Menu Bar	Строка меню в окне

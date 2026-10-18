@@ -94,7 +94,19 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
     crate::i18n::with_language(app.language(), || run_ui_command_inner(app, id, params))
 }
 
+/// FILEDIA 0: file commands ask for the file name on the command line instead of opening a file
+/// dialog, as scripts expect.
+fn file_dialogs_off(app: &CadApp) -> bool {
+    cadaddy_engine::sysvars::get(&app.session, "FILEDIA").and_then(|v| v.as_i64()) == Some(0)
+}
+
 fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    if params.is_null()
+        && file_dialogs_off(app)
+        && matches!(cadaddy_engine::cmd::resolve_alias(id).as_str(), "open" | "saveas" | "recover" | "xattach" | "imageattach" | "attach")
+    {
+        return None;
+    }
     if let Some(result) = crate::spacemouse::route(app, id, params) {
         return Some(result);
     }

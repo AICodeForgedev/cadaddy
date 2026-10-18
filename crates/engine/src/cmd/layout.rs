@@ -15,13 +15,14 @@ use viewports::MviewM;
 
 mod plotstyle;
 mod prompts;
+mod template;
 mod viewports;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("layout", "Layout", run_layout)
             .alias(&["lo"])
-            .params("{option: new|copy|delete|rename|set|list, name?, to?} (typed LAYOUT / -LAYOUT: option prompts)")
+            .params("{option: new|copy|delete|rename|set|list|template|saveas, name?, to?; template: path (.dwt/.dwg/.dxf), layouts?: [names] | \"a,b\" | \"*\" (default; wildcards); saveas: layout? (current), path (.dwt added when no extension)} (typed LAYOUT / -LAYOUT: option prompts)")
             .interactive(|_| Ok(Box::new(prompts::LayoutM::default()))),
         CommandSpec::new("layout.new", "New Layout", run_new)
             .menu(&["Insert", "Layout", "New Layout"])
@@ -358,7 +359,9 @@ fn run_layout(s: &mut Session, p: &Value) -> Result<Value> {
             (set.run)(s, p)
         }
         "list" | "?" => run_list(s, p),
-        _ => Err(bad("layout", "option must be new, copy, delete, rename, set or list")),
+        "template" | "t" => template::run_template(s, p),
+        "saveas" | "sa" => template::run_saveas(s, p),
+        _ => Err(bad("layout", "option must be new, copy, delete, rename, set, list, template or saveas")),
     }
 }
 

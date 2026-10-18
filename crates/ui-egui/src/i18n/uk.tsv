@@ -5,10 +5,12 @@
 # Empty context = ordinary label; @plural = one|few|many forms with {n}.
 # Keep command IDs, keywords, technology/product names and user data unchanged.
 # External References palette (#525).
+	Adjust...	Налаштувати...
 	Apply	Застосувати
 	Attach DWG...	Приєднати DWG...
 	Bind	Вбудувати
 	Detach	Від'єднати
+	Image	Зображення
 	Loaded	Завантажено
 	Make it a block of this drawing, keeping its layer names	Зробити блоком цього креслення зі збереженням назв шарів
 	Make it a block of this drawing; its layers become NAME$0$LAYER	Зробити блоком цього креслення; його шари стануть NAME$0$LAYER

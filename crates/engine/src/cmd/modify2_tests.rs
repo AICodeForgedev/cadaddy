@@ -735,3 +735,29 @@ fn offset_keeps_polyline_widths() {
     assert_eq!((p.vertices[0].start_width, p.vertices[0].end_width), (1.0, 0.5));
     assert_eq!((p.vertices[1].start_width, p.vertices[1].end_width), (0.25, 0.25));
 }
+
+#[test]
+fn explode_table_gives_its_borders_and_cell_texts() {
+    let mut s = Session::new();
+    let t =
+        h(&s.execute("table", &json!({"at": [0, 0], "rows": 2, "cols": 2, "title": "PANEL A", "cells": [["CKT", "LOAD"], ["1", "180"]]})).unwrap());
+    s.execute("explode", &json!({"handles": [t]})).unwrap();
+    let d = s.doc().unwrap();
+    assert!(!d.model.iter().any(|e| matches!(e.kind, EntityKind::Table(_))), "the table is replaced");
+    let texts: Vec<String> = d
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::MText(m) => Some(m.contents.clone()),
+            _ => None,
+        })
+        .collect();
+    for want in ["PANEL A", "CKT", "LOAD", "1", "180"] {
+        assert!(texts.iter().any(|t| t.contains(want)), "{want} in {texts:?}");
+    }
+    let lines = d.model.iter().filter(|e| matches!(e.kind, EntityKind::Line(_))).count();
+    assert!(lines >= 4, "borders: {lines}");
+    // One undo brings the table back.
+    s.execute("u", &json!({})).unwrap();
+    assert!(s.doc().unwrap().model.iter().any(|e| matches!(e.kind, EntityKind::Table(_))));
+}
