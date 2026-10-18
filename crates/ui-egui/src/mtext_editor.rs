@@ -36,6 +36,9 @@ struct State {
     sel: (usize, usize),
     /// A caret position to set on the text box in the next frame (after a toolbar insertion).
     caret: Option<usize>,
+    /// The text box has taken the keyboard once (with the caret at the end): typing goes into
+    /// the drawing's text, never to the command line behind the editor.
+    focused: bool,
 }
 
 fn state_id() -> egui::Id {
@@ -53,6 +56,11 @@ fn color32(c: MTextColor) -> Color32 {
         MTextColor::Rgb(v) => cadcraft_color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8),
     };
     Color32::from_rgb(rgb.0, rgb.1, rgb.2)
+}
+
+/// Whether the in-place editor is showing.
+pub fn is_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<State>(state_id()).is_some())
 }
 
 /// Show the editor while MTEXT collects its text; clears its state when it isn't running.
@@ -74,7 +82,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
                 fmt.base_font = f;
             }
         }
-        State { fmt, typing: CharFmt::default(), typing_at: 0, top: 70.0, sel: (0, 0), caret: None }
+        State { fmt, typing: CharFmt::default(), typing_at: 0, top: 70.0, sel: (0, 0), caret: None, focused: false }
     });
     let base_h = if mt.height > 0.0 { mt.height } else { 0.2 };
     let px = ((base_h * scale) as f32).clamp(MIN_PX, MAX_PX);
@@ -113,7 +121,12 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     });
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         done = Done::Cancel;
-    } else if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter)) {
+    } else if ctx.input(|i| {
+        // Ctrl/⌘+Enter, as the frame's modifiers or the key press itself carries them.
+        i.events.iter().any(
+            |e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } if modifiers.command || i.modifiers.command),
+        )
+    }) {
         done = Done::Ok;
     }
     match done {
@@ -441,8 +454,15 @@ fn text_box(ui: &mut egui::Ui, st: &mut State, base_h: f64, px: f32, width: f32,
         .char_limit(cadcraft_engine::mtext_edit::MAX_CHARS)
         .layouter(&mut layouter)
         .show(ui);
-    if !out.response.has_focus() && buf.is_empty() && st.fmt.is_empty() {
+    if !st.focused || (!out.response.has_focus() && buf.is_empty() && st.fmt.is_empty()) {
         out.response.request_focus();
+    }
+    if !st.focused {
+        // Opened on existing text (TEXTEDIT): the caret goes to its end, as AutoCAD's editor.
+        st.focused = true;
+        let mut state = out.state.clone();
+        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(buf.chars().count()))));
+        state.store(ui.ctx(), id);
     }
     if out.response.changed() {
         let typing = st.typing.clone();
@@ -527,6 +547,46 @@ mod tests {
         let d = app.session.doc().unwrap();
         match &d.entity(h).unwrap().kind {
             cadcraft_engine::doc::EntityKind::MText(m) => assert!(m.contents.contains("NEW NOTE"), "{}", m.contents),
+            k => panic!("{k:?}"),
+        }
+    }
+
+    /// Opened on existing text, the editor has the keyboard with the caret at the end: typing
+    /// adds to the text (battle test P1: it went to the command line and replaced it all).
+    #[test]
+    fn textedit_typing_goes_into_the_editor_at_the_end() {
+        let ctx = egui::Context::default();
+        let mut app = CadApp::new(Session::new(), Services::default());
+        let screen = Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 800.0)));
+        let run = |app: &mut CadApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput { screen_rect: screen, events, ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| show(app, ui.ctx()));
+            out.textures_delta.clear();
+        };
+        let r = app.session.execute("mtext", &serde_json::json!({ "at": [0, 10], "text": "HELLO WORLD", "height": 2 })).unwrap();
+        let h = cadcraft_engine::doc::Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap();
+        app.start("textedit");
+        app.session.input(cadcraft_engine::Input::Point(cadcraft_geom::Vec2::new(1.0, 9.0))).unwrap();
+        run(&mut app, vec![]);
+        run(&mut app, vec![]);
+        assert!(ctx.egui_wants_keyboard_input(), "the editor has the keyboard, not the command line");
+        run(&mut app, vec![egui::Event::Text(" AGAIN".into())]);
+        let st = ctx.data_mut(|d| d.get_temp::<State>(state_id())).expect("editor open");
+        assert_eq!(st.fmt.text(), "HELLO WORLD AGAIN");
+        let ctrl = egui::Modifiers { command: true, ctrl: true, ..Default::default() };
+        let input = egui::RawInput {
+            screen_rect: screen,
+            events: vec![
+                egui::Event::ModifiersChanged(ctrl),
+                egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: ctrl },
+            ],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| show(&mut app, ui.ctx()));
+        out.textures_delta.clear();
+        let d = app.session.doc().unwrap();
+        match &d.entity(h).unwrap().kind {
+            cadcraft_engine::doc::EntityKind::MText(m) => assert!(m.contents.contains("HELLO WORLD AGAIN"), "{}", m.contents),
             k => panic!("{k:?}"),
         }
     }

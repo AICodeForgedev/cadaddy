@@ -16,6 +16,8 @@ pub(crate) enum Kind {
     Select,
     /// One object → `handle`.
     One,
+    /// A layer: an object picked on it, or the name of one that exists.
+    Layer,
 }
 
 /// One prompt: the parameter it fills, its message and kind, and the current value Enter keeps.
@@ -102,7 +104,7 @@ impl Interactive for Asker {
             Kind::Point => Accept::POINT,
             Kind::Number => Accept::NUMBER,
             Kind::Text => Accept::TEXT,
-            Kind::Select | Kind::One => Accept::SELECT,
+            Kind::Select | Kind::One | Kind::Layer => Accept::SELECT,
         };
         let p = Prompt::new(a.message, accept);
         match a.default.and_then(|d| d(s)) {
@@ -119,9 +121,10 @@ impl Interactive for Asker {
         let default = a.default.and_then(|d| d(s));
         match (a.kind, i) {
             (Kind::Select, Input::Pick(hs)) => {
+                let mut have: std::collections::HashSet<String> = self.picked.iter().cloned().collect();
                 for h in hs {
                     let h = h.hex();
-                    if !self.picked.contains(&h) {
+                    if have.insert(h.clone()) {
                         self.picked.push(h);
                     }
                 }
@@ -139,6 +142,24 @@ impl Interactive for Asker {
                 None => Ok(Step::Continue),
             },
             (Kind::One, Input::Enter) => Ok(Step::Done),
+            (Kind::Layer, Input::Pick(hs)) => {
+                let layer = hs.first().and_then(|h| s.doc().ok()?.entity(*h).map(|e| e.common.layer.clone()));
+                match layer {
+                    Some(l) => self.take(s, json!(l)),
+                    None => Ok(Step::Continue),
+                }
+            }
+            (Kind::Layer, Input::Text(t) | Input::Keyword(t)) => {
+                let name = t.trim();
+                match s.doc()?.layer(name).map(|l| l.name.clone()) {
+                    Some(l) => self.take(s, json!(l)),
+                    None => {
+                        s.echo(format!("Layer \"{name}\" not found."));
+                        Ok(Step::Continue)
+                    }
+                }
+            }
+            (Kind::Layer, Input::Enter) => Ok(Step::Done),
             (Kind::Point, Input::Point(p)) => self.take(s, json!([p.x, p.y])),
             (Kind::Point, Input::Text(t) | Input::Keyword(t)) => match point_text(&t) {
                 Some(v) => self.take(s, v),

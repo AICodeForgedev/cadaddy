@@ -2033,7 +2033,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.f(42, 0.2);
         // The built-in font goes out as `txt`, which every reader has; CADCraft's own name
         // travels in `CADCRAFT` xdata (`1000 FONT`, name) so the style reopens with it.
-        let file = if s.font == cadcraft_fonts_name() { "txt" } else { s.font.as_str() };
+        let file =
+            if s.font.eq_ignore_ascii_case("CADaddy Stroke") || s.font.eq_ignore_ascii_case("CADCraft Stroke") { "txt" } else { s.font.as_str() };
         w.s(3, file);
         w.s(4, &s.big_font);
         if s.annotative {
@@ -2741,10 +2742,6 @@ fn scale_list(w: &mut W, scales: &[(&cadcraft_doc::AnnoScale, String)], dict: &s
         w.f(141, s.drawing_units);
         w.i(290, i64::from(cadcraft_doc::same_factor(s.factor(), 1.0)));
     }
-}
-
-fn cadcraft_fonts_name() -> &'static str {
-    "CADCraft Stroke"
 }
 
 /// One entity's DXF groups, as the writer stores them, without its `0` group: its type name

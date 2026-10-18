@@ -14,7 +14,16 @@ pub fn plain_mtext(s: &str) -> String {
     let mut i = 0;
     while let Some(&c) = chars.get(i) {
         match c {
+            '%' if crate::field_code(&chars, i).is_some() => {
+                out.push_str("####");
+                i += crate::field_code(&chars, i).unwrap_or(1);
+            }
             '\\' => {
+                if let Some((u, n)) = crate::unicode_escape(&chars, i) {
+                    out.push(u);
+                    i += n;
+                    continue;
+                }
                 let code = chars.get(i + 1).copied().unwrap_or(' ');
                 match code {
                     'P' => {
@@ -275,7 +284,18 @@ fn parse(contents: &str, base: Fmt) -> (Vec<Atom>, Vec<Fmt>) {
             break;
         }
         match c {
+            '%' if crate::field_code(&chars, i).is_some() => {
+                for ch in "####".chars() {
+                    push_char(&mut word, ch, cur);
+                }
+                i += crate::field_code(&chars, i).unwrap_or(1);
+            }
             '\\' => {
+                if let Some((u, n)) = crate::unicode_escape(&chars, i) {
+                    push_char(&mut word, u, cur);
+                    i += n;
+                    continue;
+                }
                 let code = chars.get(i + 1).copied().unwrap_or(' ');
                 i += 2;
                 match code {

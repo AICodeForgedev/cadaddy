@@ -24,7 +24,17 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(BreakM::default()))),
         CommandSpec::new("datalink", "Data Link...", run_datalink)
             .menu(&["Insert", "Data Link..."])
-            .params("{handle, path (.csv, .txt/.tsv tab-separated), startRow? (default: below the title), remove?: bool} → {rows, cols}"),
+            .params("{handle, path (.csv, .txt/.tsv tab-separated), startRow? (default: below the title), remove?: bool} → {rows, cols}")
+            .interactive(|_| {
+                Ok(crate::cmd::ask::machine(
+                    "datalink",
+                    "DATALINK",
+                    [
+                        crate::cmd::ask::ask("handle", "Select table", crate::cmd::ask::Kind::One),
+                        crate::cmd::ask::ask("path", "Enter data file name (.csv, .txt)", crate::cmd::ask::Kind::Text),
+                    ],
+                ))
+            }),
         CommandSpec::new("datalinkupdate", "Update Data Links", run_update)
             .params("{handles?} (default: every linked table) → {updated}")
             .interactive(|_| Ok(Box::new(SelectRun::new("datalinkupdate", "DATALINKUPDATE")))),

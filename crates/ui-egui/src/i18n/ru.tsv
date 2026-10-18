@@ -1048,7 +1048,6 @@
 	Support CADaddy	Поддержите CADaddy
 	CADaddy is free, and it always will be.	CADaddy бесплатен и всегда будет бесплатным.
 	No ads, no subscription. If CADaddy saves you time, a small donation pays for the AI time that builds the next features.	Без рекламы и подписки. Если CADaddy экономит вам время, небольшое пожертвование оплачивает работу ИИ, которая создаёт новые функции.
-	Built on CADCraft by the ArtCraft team and community.	Создан на основе CADCraft командой и сообществом ArtCraft.
 	Report a bug or request a feature	Сообщить об ошибке или предложить функцию
 	Support CADaddy...	Поддержите CADaddy...
 	Array (classic)	Массив (классический)
@@ -1093,3 +1092,6 @@
 	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	Слой "{layer}" является текущим. Нарисованное на нём не будет видно, пока вы снова его не включите.
 	Keep the Current Layer On	Оставить текущий слой включённым
 	Turn the Current Layer Off	Отключить текущий слой
+	Quantity Takeoff	Подсчёт объёмов
+	Dimension Style	Размерный стиль
+	Text Style	Текстовый стиль

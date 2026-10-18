@@ -20,8 +20,10 @@ fn recovery_list_opens_copies_and_discards_files() {
         std::fs::write(f, b"0\nEOF\n").unwrap();
     }
     // A copy of the app that is still running keeps its lock fresh: its files are not offered.
-    std::fs::write(dir.join("Other.dxf_2-b_1.sv$"), b"0\nEOF\n").unwrap();
-    std::fs::write(dir.join("2-b.lock"), b"2").unwrap();
+    // (Its process must exist too: this test's own stands in for it.)
+    let live = format!("{}-b", std::process::id());
+    std::fs::write(dir.join(format!("Other.dxf_{live}_1.sv$")), b"0\nEOF\n").unwrap();
+    std::fs::write(dir.join(format!("{live}.lock")), b"2").unwrap();
 
     let mut app = CadApp::new(Session::empty(), Services::default());
     app.enable_autosave(&dir);
@@ -51,7 +53,7 @@ fn recovery_list_opens_copies_and_discards_files() {
 
     // Exiting normally removes this app's files; the running copy's file stays.
     app.shutdown_autosave();
-    assert!(dir.join("Other.dxf_2-b_1.sv$").exists());
+    assert!(dir.join(format!("Other.dxf_{live}_1.sv$")).exists());
     let _ = std::fs::remove_dir_all(&dir);
 
     // SAVETIME and SAVEFILEPATH survive restarts (process-wide, so checked in this one test).

@@ -89,7 +89,7 @@ pub(crate) fn parse_ratio(t: &str) -> Option<(f64, f64)> {
 /// Make `name` the current annotation scale (CANNOSCALE). With ANNOAUTOSCALE on, the annotative
 /// objects of model space on layers that are on, thawed and unlocked get the scale too.
 pub(crate) fn set_current(s: &mut Session, name: &str) -> Result<()> {
-    let sc = find_scale(s.doc()?, "setvar", name)?;
+    let sc = s.doc()?.anno_scale_or_ratio(name).cloned().ok_or_else(|| bad("setvar", format!("`{name}` is not in the scale list")))?;
     let auto = s.settings.annoautoscale;
     let d = s.doc_mut()?;
     d.header.set_str("CANNOSCALE", &sc.name);

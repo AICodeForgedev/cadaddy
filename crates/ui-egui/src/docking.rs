@@ -96,9 +96,11 @@ impl Default for Workspace {
                         tabs(Panel::Canvas),
                         Node::Stack {
                             entries: vec![
-                                craft_ui::docking::StackEntry { panel: Panel::Layers, open: true, height: Some(280.0) },
+                                // Properties takes the room left: Layers and Symbols get modest fixed
+                                // heights (users resize them; a saved layout keeps their sizes).
+                                craft_ui::docking::StackEntry { panel: Panel::Layers, open: true, height: Some(190.0) },
                                 craft_ui::docking::StackEntry { panel: Panel::Properties, open: true, height: None },
-                                craft_ui::docking::StackEntry { panel: Panel::Symbols, open: false, height: Some(320.0) },
+                                craft_ui::docking::StackEntry { panel: Panel::Symbols, open: false, height: Some(240.0) },
                             ],
                         },
                     ),

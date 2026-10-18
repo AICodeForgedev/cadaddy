@@ -98,16 +98,23 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["dda"])
             .params("{handles?}")
             .interactive(|_| Ok(Box::new(SelectRun::new("dimdisassociate", "DIMDISASSOCIATE")))),
-        CommandSpec::new("dimtedit.home", "Home", |s, p| run_tedit(s, p, "home")).menu(&["Dimension", "Align Text", "Home"]).params("{handles?}"),
+        CommandSpec::new("dimtedit.home", "Home", |s, p| run_tedit(s, p, "home")).menu(&["Dimension", "Align Text", "Home"])
+            .params("{handles?}")
+            .interactive(|_| Ok(Box::new(SelectRun::new("dimtedit.home", "DIMTEDIT")))),
         CommandSpec::new("dimtedit.angle", "Angle", |s, p| run_tedit(s, p, "angle"))
             .menu(&["Dimension", "Align Text", "Angle"])
             .params("{handles?, angle: degrees}")
             .interactive(|_| Ok(Box::new(tedit::TEditM::angle()))),
-        CommandSpec::new("dimtedit.left", "Left", |s, p| run_tedit(s, p, "left")).menu(&["Dimension", "Align Text", "Left"]).params("{handles?}"),
+        CommandSpec::new("dimtedit.left", "Left", |s, p| run_tedit(s, p, "left")).menu(&["Dimension", "Align Text", "Left"])
+            .params("{handles?}")
+            .interactive(|_| Ok(Box::new(SelectRun::new("dimtedit.left", "DIMTEDIT")))),
         CommandSpec::new("dimtedit.center", "Center", |s, p| run_tedit(s, p, "center"))
             .menu(&["Dimension", "Align Text", "Center"])
-            .params("{handles?}"),
-        CommandSpec::new("dimtedit.right", "Right", |s, p| run_tedit(s, p, "right")).menu(&["Dimension", "Align Text", "Right"]).params("{handles?}"),
+            .params("{handles?}")
+            .interactive(|_| Ok(Box::new(SelectRun::new("dimtedit.center", "DIMTEDIT")))),
+        CommandSpec::new("dimtedit.right", "Right", |s, p| run_tedit(s, p, "right")).menu(&["Dimension", "Align Text", "Right"])
+            .params("{handles?}")
+            .interactive(|_| Ok(Box::new(SelectRun::new("dimtedit.right", "DIMTEDIT")))),
         CommandSpec::new("dimtedit", "Dimension Text Edit", run_dimtedit)
             .alias(&["dimted"])
             .params("{handles?, at?: [x,y], mode?: home|angle|left|center|right, angle?}")

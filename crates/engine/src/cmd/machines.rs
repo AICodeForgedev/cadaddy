@@ -55,14 +55,17 @@ impl SelectPhase {
     pub fn feed(&mut self, s: &mut Session, i: &Input) -> Result<SelOutcome> {
         match i {
             Input::Pick(hs) => {
+                // Sets, not `contains` on the lists: ALL on a 200,000-object sheet stays linear.
                 let changed: Vec<Handle> = if self.removing {
-                    let gone: Vec<Handle> = self.picked.iter().copied().filter(|h| hs.contains(h)).collect();
-                    self.picked.retain(|h| !hs.contains(h));
+                    let drop: std::collections::HashSet<Handle> = hs.iter().copied().collect();
+                    let gone: Vec<Handle> = self.picked.iter().copied().filter(|h| drop.contains(h)).collect();
+                    self.picked.retain(|h| !drop.contains(h));
                     gone
                 } else {
+                    let mut have: std::collections::HashSet<Handle> = self.picked.iter().copied().collect();
                     let mut added = Vec::new();
                     for h in hs {
-                        if !self.picked.contains(h) {
+                        if have.insert(*h) {
                             self.picked.push(*h);
                             added.push(*h);
                         }

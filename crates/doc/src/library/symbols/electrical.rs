@@ -2,7 +2,8 @@
 //! and fire alarm symbols are at plotted size (inches on paper) with the insertion point at the
 //! wall, the symbol out from it in −Y; light fixtures are at real size (inches), centred.
 //! Smart attributes: devices carry CIRCUIT, PANEL and MOUNT_HT; fixtures carry TAG (fixture type)
-//! and CIRCUIT; panels carry TAG (panel name) and VOLTAGE.
+//! and CIRCUIT; panels carry TAG (panel name) and VOLTAGE. Plans show the circuit and tags; PANEL,
+//! MOUNT_HT and a panel's VOLTAGE are hidden (filled in, extracted, scheduled, not plotted).
 
 use super::{Sketch, Symbol};
 
@@ -66,7 +67,7 @@ pub(super) const SYMBOLS: &[Symbol] = &[
         k.line((-0.025, 0.05), (-0.025, -0.05));
         k.line((0.025, 0.05), (0.025, -0.05));
         k.attdef("CIRCUIT", "Circuit", "1", (0.15, 0.02), NOTE_H);
-        k.attdef("PANEL", "Panel", "LP-1", (0.15, -0.08), NOTE_H);
+        k.attdef_hidden("PANEL", "Panel", "LP-1", (0.15, -0.08), NOTE_H);
     }),
     // ---------- switches ----------
     device("EL_SWITCH", "Single-pole switch", DEVICES, "switch single pole light switch s", |k| {
@@ -85,7 +86,7 @@ pub(super) const SYMBOLS: &[Symbol] = &[
         k.circle((0.0, 0.0), 0.11);
         k.text((0.0, 0.0), 0.07, "OS");
         k.attdef("CIRCUIT", "Circuit", "1", (0.14, 0.02), NOTE_H);
-        k.attdef("PANEL", "Panel", "LP-1", (0.14, -0.08), NOTE_H);
+        k.attdef_hidden("PANEL", "Panel", "LP-1", (0.14, -0.08), NOTE_H);
     }),
     // ---------- lighting (real size, inches) ----------
     fixture("EL_LIGHT_2X4", "Troffer 2'x4'", "light fixture troffer 2x4 lay-in recessed lighting luminaire", |k| {
@@ -129,7 +130,7 @@ pub(super) const SYMBOLS: &[Symbol] = &[
         k.rect((-0.25, 0.0), (0.25, -0.1));
         k.pline(&[(-0.25, 0.0, 0.0), (0.25, 0.0, 0.0), (0.25, -0.1, 0.0)], true, 0.0);
         k.attdef("TAG", "Panel name", "LP-1", (-0.25, -0.25), 0.09);
-        k.attdef("VOLTAGE", "Voltage", "120/208V 3PH", (-0.25, -0.38), NOTE_H);
+        k.attdef_hidden("VOLTAGE", "Voltage", "120/208V 3PH", (-0.25, -0.38), NOTE_H);
     }),
     device("EL_DISCONNECT", "Disconnect switch", POWER, "disconnect safety switch fused non-fused", |k| {
         k.rect((-0.1, 0.0), (0.1, -0.2));
@@ -155,7 +156,7 @@ pub(super) const SYMBOLS: &[Symbol] = &[
         k.text(C, 0.08, "M");
         k.attdef("TAG", "Equipment tag", "EF-1", (0.13, -0.03), NOTE_H);
         k.attdef("CIRCUIT", "Circuit", "1", (0.13, -0.13), NOTE_H);
-        k.attdef("PANEL", "Panel", "LP-1", (0.13, -0.23), NOTE_H);
+        k.attdef_hidden("PANEL", "Panel", "LP-1", (0.13, -0.23), NOTE_H);
     }),
     device("EL_HOME_RUN", "Home run arrow", POWER, "home run arrow circuit to panel", |k| {
         k.line((0.0, 0.0), (0.35, 0.0));
@@ -167,20 +168,20 @@ pub(super) const SYMBOLS: &[Symbol] = &[
         k.line((0.0, 0.0), (0.0, -0.03));
         k.pline(&[(-0.09, -0.03, 0.0), (0.09, -0.03, 0.0), (0.0, -0.18, 0.0)], true, 0.0);
         k.attdef("TAG", "Outlet tag", "D", (0.12, -0.08), NOTE_H);
-        k.attdef("MOUNT_HT", "Mounting height", "18\"", (0.12, -0.18), NOTE_H);
+        k.attdef_hidden("MOUNT_HT", "Mounting height", "18\"", (0.12, -0.18), NOTE_H);
     }),
     device("EL_PHONE", "Telephone outlet", LOW_VOLTAGE, "telephone phone voice outlet communication", |k| {
         k.line((0.0, 0.0), (0.0, -0.03));
         k.pline(&[(-0.09, -0.03, 0.0), (0.09, -0.03, 0.0), (0.0, -0.18, 0.0)], true, 0.0);
         k.dot((0.0, -0.08), 0.03);
         k.attdef("TAG", "Outlet tag", "T", (0.12, -0.08), NOTE_H);
-        k.attdef("MOUNT_HT", "Mounting height", "18\"", (0.12, -0.18), NOTE_H);
+        k.attdef_hidden("MOUNT_HT", "Mounting height", "18\"", (0.12, -0.18), NOTE_H);
     }),
     device("EL_TV", "TV / CATV outlet", LOW_VOLTAGE, "tv catv coax television cable outlet", |k| {
         k.line((0.0, 0.0), (0.0, -0.03));
         k.rect((-0.09, -0.03), (0.09, -0.18));
         k.text((0.0, -0.105), 0.06, "TV");
-        k.attdef("MOUNT_HT", "Mounting height", "18\"", (0.12, -0.18), NOTE_H);
+        k.attdef_hidden("MOUNT_HT", "Mounting height", "18\"", (0.12, -0.18), NOTE_H);
     }),
     // ---------- fire alarm ----------
     device("EL_FA_SMOKE", "Smoke detector", FIRE_ALARM, "fire alarm smoke detector sd ceiling", |k| {
@@ -198,13 +199,13 @@ pub(super) const SYMBOLS: &[Symbol] = &[
         k.rect((-0.1, -0.03), (0.1, -0.23));
         k.text((0.0, -0.13), 0.07, "HS");
         k.attdef("TAG", "Candela", "75cd", (0.13, -0.13), NOTE_H);
-        k.attdef("MOUNT_HT", "Mounting height", "80\"", (0.13, -0.23), NOTE_H);
+        k.attdef_hidden("MOUNT_HT", "Mounting height", "80\"", (0.13, -0.23), NOTE_H);
     }),
     device("EL_FA_PULL", "Manual pull station", FIRE_ALARM, "fire alarm pull station manual f", |k| {
         k.line((0.0, 0.0), (0.0, -0.03));
         k.rect((-0.1, -0.03), (0.1, -0.23));
         k.text((0.0, -0.13), 0.08, "F");
-        k.attdef("MOUNT_HT", "Mounting height", "48\"", (0.13, -0.23), NOTE_H);
+        k.attdef_hidden("MOUNT_HT", "Mounting height", "48\"", (0.13, -0.23), NOTE_H);
     }),
     device("EL_FA_PANEL", "Fire alarm control panel", FIRE_ALARM, "fire alarm control panel facp", |k| {
         k.rect((-0.25, 0.0), (0.25, -0.15));
@@ -226,15 +227,15 @@ fn switch(k: &mut Sketch, letters: &str) {
     k.line((0.0, 0.0), (0.0, -0.04));
     k.text((0.0, -0.11), 0.09, letters);
     k.attdef("CIRCUIT", "Circuit / switch leg", "a", (0.12, -0.08), NOTE_H);
-    k.attdef("MOUNT_HT", "Mounting height", "48\"", (0.12, -0.18), NOTE_H);
+    k.attdef_hidden("MOUNT_HT", "Mounting height", "48\"", (0.12, -0.18), NOTE_H);
 }
 
 /// CIRCUIT, PANEL and (when given) MOUNT_HT beside a device.
 fn circuit_tags(k: &mut Sketch, mount: &str) {
     k.attdef("CIRCUIT", "Circuit", "1", (0.13, -0.04), NOTE_H);
-    k.attdef("PANEL", "Panel", "LP-1", (0.13, -0.16), NOTE_H);
+    k.attdef_hidden("PANEL", "Panel", "LP-1", (0.13, -0.16), NOTE_H);
     if !mount.is_empty() {
-        k.attdef("MOUNT_HT", "Mounting height", mount, (0.13, -0.28), NOTE_H);
+        k.attdef_hidden("MOUNT_HT", "Mounting height", mount, (0.13, -0.28), NOTE_H);
     }
 }
 

@@ -1277,7 +1277,6 @@ menu	Modify	Edita
 	Support CADaddy	Sostieni CADaddy
 	CADaddy is free, and it always will be.	CADaddy è gratuito e lo sarà sempre.
 	No ads, no subscription. If CADaddy saves you time, a small donation pays for the AI time that builds the next features.	Niente pubblicità, niente abbonamento. Se CADaddy ti fa risparmiare tempo, una piccola donazione paga il tempo di IA che crea le prossime funzioni.
-	Built on CADCraft by the ArtCraft team and community.	Basato su CADCraft, del team e della comunità ArtCraft.
 	Report a bug or request a feature	Segnala un errore o richiedi una funzione
 	Support CADaddy...	Sostieni CADaddy...
 	Array (classic)	Serie (classica)
@@ -1322,3 +1321,6 @@ menu	Modify	Edita
 	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	Il layer "{layer}" è il layer corrente. Ciò che vi disegni non sarà visibile finché non lo riattivi.
 	Keep the Current Layer On	Mantieni attivo il layer corrente
 	Turn the Current Layer Off	Disattiva il layer corrente
+	Quantity Takeoff	Computo quantità
+	Dimension Style	Stile di quota
+	Text Style	Stile di testo

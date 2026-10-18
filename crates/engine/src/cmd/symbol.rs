@@ -20,7 +20,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Insert", "Symbol..."])
             .alias(&["sym"])
             .params(
-                "{name (a library symbol, e.g. \"PL_WATER_CLOSET\"; see symbols.list), at: [x,y], rotation? (degrees), scale? (default: 1 for fixtures, the drawing's scale for annotation symbols), attribs?: {TAG: value}} → {handle, block}",
+                "{name (a library symbol, e.g. \"PL_WATER_CLOSET\"; see symbols.list), at: [x,y], rotation? (degrees), scale? (default: 1 for fixtures, the drawing's scale for annotation symbols), attribs?: {TAG: value}, layer? (default: the symbol's trade layer, E-LITE, E-POWR-DEVC…; \"current\" for the current layer)} → {handle, block, layer?}",
             )
             .interactive(|_| Ok(Box::new(SymbolM::default()))),
         CommandSpec::new("symbols.list", "List Symbols", run_list)
@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// The scale an annotation symbol is placed at: the current annotation scale's, else DIMSCALE
 /// (1 when neither is set).
-fn drawing_scale(s: &Session) -> Result<f64> {
+pub(crate) fn drawing_scale(s: &Session) -> Result<f64> {
     let d = s.doc()?;
     let anno = d.current_anno_scale().factor();
     let dim = d.header.f64("DIMSCALE", 1.0);
@@ -66,6 +66,52 @@ pub(crate) fn define(s: &mut Session, sym: &Symbol) -> Result<String> {
     Ok(sym.name.to_string())
 }
 
+/// The layer a symbol goes on by default (US National CAD Standard names) and its colour.
+fn trade_layer(sym: &Symbol) -> Option<(&'static str, u8)> {
+    if !sym.name.starts_with("EL_") {
+        return None;
+    }
+    Some(match sym.category {
+        _ if sym.name.starts_with("EL_SWITCH") => ("E-LITE", 2),
+        "Lighting" => ("E-LITE", 2),
+        "Power and distribution" => ("E-POWR-EQPM", 6),
+        "Low voltage" => ("E-COMM", 3),
+        "Fire alarm" => ("E-FIRE", 1),
+        _ => ("E-POWR-DEVC", 4),
+    })
+}
+
+/// Header variable: "0" places symbols on the current layer instead of their trade layers.
+const TRADE_LAYERS_VAR: &str = "CADADDY_SYMBOL_LAYERS";
+
+fn trade_layers_on(s: &Session) -> bool {
+    s.doc().map(|d| d.header.str(TRADE_LAYERS_VAR, "1") != "0").unwrap_or(true)
+}
+
+/// The layer to put a placed symbol on (`None`: leave it on the current layer): `layer` when
+/// given ("current" for the current one), else its trade layer, made with its colour if missing.
+fn target_layer(s: &mut Session, sym: &Symbol, layer: Option<&str>) -> Result<Option<String>> {
+    let name = match layer.map(str::trim) {
+        Some(l) if l.eq_ignore_ascii_case("current") || l.is_empty() => return Ok(None),
+        Some(l) => l.to_string(),
+        None if !trade_layers_on(s) => return Ok(None),
+        None => match trade_layer(sym) {
+            Some((n, color)) => {
+                let d = s.doc_mut()?;
+                if d.ensure_layer(n)
+                    && let Some(l) = d.layer_mut(n)
+                {
+                    l.color = cadcraft_color::Color::Index(color);
+                }
+                n.to_string()
+            }
+            None => return Ok(None),
+        },
+    };
+    s.doc_mut()?.ensure_layer(&name);
+    Ok(Some(name))
+}
+
 fn find(name: &str) -> Result<&'static Symbol> {
     symbols::symbol(name).ok_or_else(|| bad("symbol", format!("no library symbol `{name}` (see symbols.list)")))
 }
@@ -86,6 +132,12 @@ fn run_symbol(s: &mut Session, p: &Value) -> Result<Value> {
     // The INSERT command body, not `execute`: SYMBOL records the one undo step.
     let insert = find_command("insert").ok_or_else(|| EngineError::UnknownCommand("insert".into()))?;
     let mut r = (insert.run)(s, &ip)?;
+    if let Some(layer) = target_layer(s, sym, str_param(p, "layer"))?
+        && let Some(h) = r.get("handle").and_then(super::curves::handle_value)
+    {
+        s.doc_mut()?.modify_entity(h, |e| e.common.layer = layer.clone())?;
+        r["layer"] = json!(layer);
+    }
     r["block"] = json!(name);
     Ok(r)
 }
@@ -162,6 +214,8 @@ pub fn previews() -> Vec<SymbolPreview> {
 #[derive(Default)]
 struct SymbolM {
     inner: Option<Box<dyn Interactive>>,
+    /// The symbol being placed, and the handles there were before (to find the new reference).
+    placing: Option<(&'static Symbol, std::collections::HashSet<cadcraft_doc::Handle>)>,
 }
 
 impl Interactive for SymbolM {
@@ -171,18 +225,46 @@ impl Interactive for SymbolM {
     fn prompt(&self, s: &Session) -> Prompt {
         match &self.inner {
             Some(m) => m.prompt(s),
-            None => Prompt::new("Enter symbol name", Accept::TEXT).kw(&["?"]),
+            None => Prompt::new("Enter symbol name", Accept::TEXT).kw(&["?", "Layers"]),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Some(m) = &mut self.inner {
-            return m.input(s, i);
+            let step = m.input(s, i)?;
+            if step == Step::Done
+                && let Some((sym, before)) = self.placing.take()
+                && let Some(layer) = target_layer(s, sym, None)?
+            {
+                // The reference INSERT just made goes on the symbol's trade layer.
+                let new: Vec<_> = s
+                    .doc()?
+                    .model
+                    .iter()
+                    .chain(s.doc()?.layouts.iter().flat_map(|l| l.entities.iter()))
+                    .map(|e| e.handle)
+                    .filter(|h| !before.contains(h))
+                    .collect();
+                for h in new {
+                    s.doc_mut()?.modify_entity(h, |e| {
+                        if matches!(e.kind, EntityKind::Insert(_)) {
+                            e.common.layer = layer.clone();
+                        }
+                    })?;
+                }
+            }
+            return Ok(step);
         }
         let word = match &i {
             Input::Text(t) | Input::Keyword(t) => t.trim().to_string(),
             Input::Enter | Input::Cancel => return Ok(Step::Cancel),
             _ => return Ok(Step::Continue),
         };
+        if word.eq_ignore_ascii_case("layers") || word.eq_ignore_ascii_case("l") {
+            let on = !trade_layers_on(s);
+            s.doc_mut()?.header.set_str(TRADE_LAYERS_VAR, if on { "1" } else { "0" });
+            s.echo(if on { "Symbols go on their trade layers (E-LITE, E-POWR-DEVC, E-FIRE…)." } else { "Symbols go on the current layer." });
+            return Ok(Step::Continue);
+        }
         if word == "?" || word.is_empty() {
             for sym in symbols::symbols() {
                 s.echo(format!("{:<28} {} ({})", sym.name, sym.label, sym.category));
@@ -211,6 +293,8 @@ impl Interactive for SymbolM {
             }
         };
         let name = define(s, sym)?;
+        let d = s.doc()?;
+        self.placing = Some((sym, d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())).map(|e| e.handle).collect()));
         // Fixtures at 1:1, annotation symbols at the drawing's scale: no scale prompt.
         let f = default_scale(s, sym)?;
         self.inner = Some(super::blocks::insert_machine(s, &name, Some(Vec2::new(f, f)))?);
@@ -276,6 +360,60 @@ mod tests {
         let names: Vec<&str> = l["symbols"].as_array().unwrap().iter().filter_map(|v| v["name"].as_str()).collect();
         assert!(names.contains(&"PL_BALL_VALVE") && !names.contains(&"PL_SINK"), "{names:?}");
         assert!(l["symbols"].as_array().unwrap().iter().any(|v| v["name"] == "PL_BALL_VALVE" && v["defined"] == true));
+    }
+
+    /// Electrical symbols land on their trade layers (made with a colour when missing), and the
+    /// schedule-only attributes (PANEL, MOUNT_HT) don't show.
+    #[test]
+    fn electrical_symbols_go_on_trade_layers_with_schedule_fields_hidden() {
+        let mut s = Session::new();
+        let layer_of =
+            |s: &Session, h: &serde_json::Value| s.doc().unwrap().entity(crate::cmd::curves::handle_value(h).unwrap()).unwrap().common.layer.clone();
+        let r = s.execute("symbol", &json!({"name": "EL_RECEPTACLE_DUPLEX", "at": [0, 0]})).unwrap();
+        assert_eq!(layer_of(&s, &r["handle"]), "E-POWR-DEVC");
+        let r = s.execute("symbol", &json!({"name": "EL_SWITCH", "at": [5, 0]})).unwrap();
+        assert_eq!(layer_of(&s, &r["handle"]), "E-LITE");
+        let r = s.execute("symbol", &json!({"name": "EL_RECEPTACLE_DUPLEX", "at": [9, 0], "layer": "current"})).unwrap();
+        assert_eq!(layer_of(&s, &r["handle"]), "0");
+        assert!(s.doc().unwrap().layer("E-LITE").is_some_and(|l| l.color == cadcraft_color::Color::Index(2)));
+        // Typed: the Layers option turns trade layers off for this drawing.
+        for i in ["symbol", "layers", "EL_RECEPTACLE_DUPLEX", "20,0", "0", "", "", ""] {
+            s.cmdline(i).unwrap();
+        }
+        let last = s.doc().unwrap().model.iter().last().unwrap().clone();
+        assert_eq!(last.common.layer, "0");
+        // PANEL and MOUNT_HT hidden, CIRCUIT shown.
+        let d = s.doc().unwrap();
+        for e in d.block("EL_RECEPTACLE_DUPLEX").unwrap().entities.iter() {
+            if let EntityKind::AttDef(a) = &e.kind {
+                assert_eq!(a.invisible, matches!(a.tag.as_str(), "PANEL" | "MOUNT_HT" | "TRADE" | "TYPE"), "{}", a.tag);
+            }
+        }
+    }
+
+    /// Placing symbols one after another: only CIRCUIT is asked, its last value is offered next
+    /// time, and ATTREQ 0 places with no attribute prompts (battle test A1/A2).
+    #[test]
+    fn symbols_remember_their_last_values_and_honour_attreq() {
+        let mut s = Session::new();
+        s.execute("setvar", &json!({"name": "DIMSCALE", "value": 1})).unwrap();
+        for i in ["symbol", "EL_RECEPTACLE_DUPLEX", "0,0", "0", "7"] {
+            s.cmdline(i).unwrap();
+        }
+        assert!(s.running.is_none(), "only CIRCUIT is asked: {}", s.prompt_text());
+        for i in ["symbol", "EL_RECEPTACLE_DUPLEX", "10,0", "0"] {
+            s.cmdline(i).unwrap();
+        }
+        assert!(s.prompt_text().contains("<7>"), "{}", s.prompt_text());
+        s.cmdline("").unwrap();
+        let circuits: Vec<String> =
+            inserts(&s).iter().filter_map(|(_, _, a)| a.iter().find(|(t, _)| t == "CIRCUIT").map(|(_, v)| v.clone())).collect();
+        assert_eq!(circuits, vec!["7", "7"]);
+        s.execute("setvar", &json!({"name": "ATTREQ", "value": 0})).unwrap();
+        for i in ["symbol", "EL_SWITCH", "20,0", "0"] {
+            s.cmdline(i).unwrap();
+        }
+        assert!(s.running.is_none(), "ATTREQ 0 asks nothing: {}", s.prompt_text());
     }
 
     #[test]

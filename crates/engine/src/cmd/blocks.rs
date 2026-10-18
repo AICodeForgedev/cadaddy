@@ -3,6 +3,7 @@
 
 pub(crate) mod bedit;
 mod purge;
+mod wblock;
 
 use std::sync::Arc;
 
@@ -17,7 +18,7 @@ use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, St
 
 mod attedit;
 mod dyngrip;
-mod extract;
+pub(crate) mod extract;
 pub(crate) mod refedit;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -44,7 +45,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(AttdefM::default()))),
         attedit::attedit_spec(),
         attedit::dash_attedit_spec(),
-        CommandSpec::new("wblock", "Write Block", run_wblock).alias(&["w"]).params("{path, name? | handles?, base?}"),
+        CommandSpec::new("wblock", "Write Block", run_wblock)
+            .alias(&["w", "-wblock"])
+            .params("{path (no extension: .dwg), name? | handles?, base?}")
+            .interactive(|_| Ok(Box::new(wblock::WblockM::default()))),
         CommandSpec::new("base", "Base", run_base).menu(&["Draw", "Block", "Base"]).params("{at: [x,y]}").interactive(|_| {
             Ok(super::ask::machine("base", "BASE", [super::ask::ask("at", "Enter base point", super::ask::Kind::Point)]))
         }),
@@ -300,7 +304,7 @@ fn run_attdef(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = str_param(p, "path").ok_or_else(|| bad("wblock", "`path` is required"))?.to_string();
+    let path = wblock::with_extension(str_param(p, "path").ok_or_else(|| bad("wblock", "`path` is required"))?);
     let src = s.doc()?;
     let mut d = cadcraft_doc::Drawing::new_imperial();
     d.layers = src.layers.clone();
@@ -540,8 +544,13 @@ struct InsertM {
     x_scale: Option<f64>,
     scale: Option<Vec2>,
     rotation: Option<f64>,
+    /// The attributes to ask for: tag, prompt, default.
     attdefs: Vec<(String, String, String)>,
+    /// How many of `attdefs` have been answered.
+    asked: usize,
     values: serde_json::Map<String, Value>,
+    /// A library symbol: answers are remembered for its next placement.
+    symbol: bool,
     /// `*name`: insert the block's objects (one uniform scale factor, no attribute values).
     explode: bool,
     /// The file waiting for the Redefine answer.
@@ -570,7 +579,7 @@ impl InsertM {
             InsStage::Attribs
         };
         if self.stage == InsStage::Attribs
-            && self.values.len() >= self.attdefs.len()
+            && self.asked >= self.attdefs.len()
             && let (Some(n), Some(a), Some(sc), Some(r)) = (self.name.clone(), self.at, self.scale, self.rotation)
         {
             let h = insert_with(s, &n, a, sc, r, self.base, &self.values)?;
@@ -588,20 +597,30 @@ impl InsertM {
             s.echo(format!("Block \"{name}\" not found."));
             return Ok(());
         };
-        self.attdefs = if self.explode {
-            Vec::new()
-        } else {
-            b.entities
-                .iter()
-                .filter_map(|e| {
-                    if let EntityKind::AttDef(a) = &e.kind {
-                        (!a.constant).then(|| (a.tag.clone(), a.prompt.clone(), a.text.value.clone()))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        };
+        // ATTREQ 0: no attribute prompts, every attribute takes its default (scripts placing many).
+        let attreq = s.doc()?.header.i64("ATTREQ", 1) != 0;
+        // A library symbol asks only for what shows on the plan (CIRCUIT, TAG), offering the last
+        // values entered; its hidden fields (PANEL, MOUNT_HT) take the last values without asking.
+        self.symbol = cadcraft_doc::library::symbols::symbol(&b.name).is_some();
+        self.asked = 0;
+        self.values.clear();
+        self.attdefs = Vec::new();
+        if !self.explode {
+            for e in b.entities.iter() {
+                let EntityKind::AttDef(a) = &e.kind else { continue };
+                if a.constant {
+                    continue;
+                }
+                let remembered =
+                    self.symbol.then(|| s.last_used.symbol_attribs.get(&format!("{}|{}", b.name.to_ascii_uppercase(), a.tag)).cloned()).flatten();
+                let default = remembered.clone().unwrap_or_else(|| a.text.value.clone());
+                if attreq && !(self.symbol && a.invisible) {
+                    self.attdefs.push((a.tag.clone(), a.prompt.clone(), default));
+                } else if remembered.is_some() {
+                    self.values.insert(a.tag.clone(), Value::String(default));
+                }
+            }
+        }
         s.doc_mut()?.header.set_str("INSNAME", &b.name);
         self.name = Some(b.name.clone());
         self.stage = InsStage::Point;
@@ -660,7 +679,7 @@ impl Interactive for InsertM {
             InsStage::YScale => Prompt::new("Enter Y scale factor", Accept::NUMBER).default("use X scale factor"),
             InsStage::Rotation => Prompt::new("Specify rotation angle", Accept::POINT_OR_NUMBER).default("0").base(at),
             InsStage::Attribs => {
-                let (_, prompt, default) = self.attdefs.get(self.values.len()).cloned().unwrap_or_default();
+                let (_, prompt, default) = self.attdefs.get(self.asked).cloned().unwrap_or_default();
                 Prompt::new(if prompt.is_empty() { "Enter attribute value".into() } else { prompt }, Accept::TEXT).default(default)
             }
         }
@@ -779,12 +798,18 @@ impl Interactive for InsertM {
                 return self.advance(s);
             }
             InsStage::Attribs => {
-                let (tag, _, default) = self.attdefs.get(self.values.len()).cloned().unwrap_or_default();
+                let (tag, _, default) = self.attdefs.get(self.asked).cloned().unwrap_or_default();
                 let v = match i {
                     Input::Text(t) => t,
                     _ => default,
                 };
+                if self.symbol
+                    && let Some(n) = &self.name
+                {
+                    s.last_used.symbol_attribs.insert(format!("{}|{tag}", n.to_ascii_uppercase()), v.clone());
+                }
                 self.values.insert(tag, Value::String(v));
+                self.asked += 1;
                 return self.advance(s);
             }
         }

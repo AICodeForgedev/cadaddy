@@ -38,21 +38,21 @@ pub(super) fn eattext_spec() -> CommandSpec {
 
 /// A cell: a count, a number or text.
 #[derive(Clone, Debug, PartialEq)]
-enum Cell {
+pub(crate) enum Cell {
     Count(u64),
     Num(f64),
     Text(String),
 }
 
 impl Cell {
-    fn json(&self) -> Value {
+    pub(crate) fn json(&self) -> Value {
         match self {
             Cell::Count(n) => json!(n),
             Cell::Num(v) => json!(v),
             Cell::Text(t) => json!(t),
         }
     }
-    fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         match self {
             Cell::Count(n) => n.to_string(),
             Cell::Num(v) => {
@@ -232,7 +232,7 @@ fn csv_field(text: &str, sep: char) -> String {
 }
 
 /// The rows as CSV (or tab-separated with `sep` '\t'), header first.
-fn csv(columns: &[String], rows: &[Vec<Cell>], sep: char) -> String {
+pub(crate) fn csv(columns: &[String], rows: &[Vec<Cell>], sep: char) -> String {
     let line = |cells: Vec<String>| cells.iter().map(|c| csv_field(c, sep)).collect::<Vec<_>>().join(&sep.to_string());
     let mut out = line(columns.to_vec());
     out.push_str("\r\n");
@@ -243,7 +243,7 @@ fn csv(columns: &[String], rows: &[Vec<Cell>], sep: char) -> String {
     out
 }
 
-fn write_file(path: &str, text: &str) -> Result<()> {
+pub(crate) fn write_file(path: &str, text: &str) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::fs::write(path, text).map_err(|e| EngineError::Other(format!("{path}: {e}")))
@@ -257,12 +257,24 @@ fn write_file(path: &str, text: &str) -> Result<()> {
 
 /// Insert the rows as a table at `at` (a header row of the column names, an optional title); the
 /// caller checks the size against the table limits.
-fn insert_table(s: &mut Session, at: Vec2, title: Option<&str>, columns: &[String], rows: &[Vec<Cell>]) -> Result<String> {
-    let st = {
+pub(crate) fn insert_table(s: &mut Session, at: Vec2, title: Option<&str>, columns: &[String], rows: &[Vec<Cell>]) -> Result<String> {
+    let mut st = {
         let d = s.doc()?;
         let cur = d.header.str("CTABLESTYLE", "Standard");
         d.table_styles.iter().find(|t| t.name.eq_ignore_ascii_case(&cur)).or(d.table_styles.first()).cloned().unwrap_or_default()
     };
+    // Sized for the drawing's scale (annotation scale, else DIMSCALE), as symbols are: on a
+    // 1/8" = 1'-0" plan the table reads like the rest of the sheet's text.
+    let k = crate::cmd::symbol::drawing_scale(s)?;
+    if k.is_finite() && k > 0.0 && (k - 1.0).abs() > 1e-12 {
+        st.text_height *= k;
+        st.margin *= k;
+        for c in &mut st.cell_styles {
+            c.text_height *= k;
+            c.margin_h *= k;
+            c.margin_v *= k;
+        }
+    }
     let cells: Vec<Vec<String>> = rows.iter().map(|r| r.iter().map(Cell::text).collect()).collect();
     let mut t = make_table(&st, at, rows.len(), columns.len(), None, None, title, Some(columns.to_vec()), &cells);
     // Columns as wide as their longest text.

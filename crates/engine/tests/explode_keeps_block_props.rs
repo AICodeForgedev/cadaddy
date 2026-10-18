@@ -9,7 +9,7 @@ use serde_json::json;
 #[test]
 fn exploded_layer_0_and_byblock_objects_keep_them() {
     let mut s = Session::new();
-    s.execute("layer", &json!({"action": "new", "name": "E-POWER"})).unwrap();
+    s.execute("layer.new", &json!({"name": "E-POWER"})).unwrap();
     let c = s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap()["handle"].as_str().unwrap().to_string();
     s.execute("properties.set", &json!({"handles": [c], "color": "byblock"})).unwrap();
     s.execute("block", &json!({"name": "DEV", "base": [0, 0], "handles": [c], "keep": "delete"})).unwrap();

@@ -28,6 +28,29 @@ pub(crate) fn user_pattern(name: &str) -> Option<UserPattern> {
     store().iter().find(|p| p.name.eq_ignore_ascii_case(name)).cloned()
 }
 
+/// Make pattern `name` available when a hatch in drawing `d` already carries its definition (a
+/// pattern from another program's file, e.g. STEEL or AR-B816 in an opened DWG): it becomes a
+/// user pattern for new hatches. Whether `name` is available now.
+pub(crate) fn adopt_from(d: &cadcraft_doc::Drawing, name: &str) -> bool {
+    if pattern(name).is_some() || user_pattern(name).is_some() {
+        return true;
+    }
+    let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
+    let found = stores.flat_map(|st| st.iter()).find_map(|e| match &e.kind {
+        cadcraft_doc::EntityKind::Hatch(h) if h.pattern.eq_ignore_ascii_case(name) && !h.pattern_lines.is_empty() => {
+            Some(UserPattern { name: h.pattern.clone(), description: "From this drawing".into(), lines: h.pattern_lines.clone() })
+        }
+        _ => None,
+    });
+    let Some(p) = found else { return false };
+    let mut user = store();
+    if user.len() >= MAX_USER_PATTERNS {
+        return false;
+    }
+    user.push(p);
+    true
+}
+
 /// The line families a new hatch of pattern `name` carries: a user pattern's, else none (the
 /// library's patterns are drawn and saved from the library).
 pub(crate) fn lines_for(name: &str) -> Vec<PatternLine> {

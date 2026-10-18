@@ -551,3 +551,42 @@ fn a_panic_inside_a_routine_ends_it_with_an_error() {
     assert!(s.log.iter().any(|l| l.contains("internal error")), "{:?}", s.log);
     assert_eq!(ok(&mut s, "(+ 1 2)"), "3");
 }
+
+/// `(entmod (entget e))` and changing a block reference's layer keep its attributes (battle test
+/// L1: they were all deleted, losing circuit numbers).
+#[test]
+fn entmod_of_a_block_reference_keeps_its_attributes() {
+    let mut s = session();
+    s.execute("setvar", &serde_json::json!({"name": "ATTREQ", "value": 0})).unwrap();
+    s.execute("symbol", &serde_json::json!({"name": "EL_RECEPTACLE_DUPLEX", "at": [0, 0], "attribs": {"CIRCUIT": "5"}})).unwrap();
+    eval(&mut s, "(setq e (entlast)) (entmod (entget e)) (entupd e)").unwrap();
+    eval(&mut s, "(setq d (entget e)) (entmod (subst (cons 8 \"E-NEW\") (assoc 8 d) d))").unwrap();
+    let d = s.doc().unwrap();
+    let ins = d
+        .model
+        .iter()
+        .find_map(|e| if let cadcraft_doc::EntityKind::Insert(i) = &e.kind { Some((e.common.layer.clone(), i.attribs.clone())) } else { None })
+        .unwrap();
+    assert_eq!(ins.0, "E-NEW");
+    assert!(ins.1.iter().any(|a| a.tag == "CIRCUIT" && a.text.value == "5"), "{:?}", ins.1);
+}
+
+/// `(entmod (entget e))` leaves an associative dimension associative (battle test L1 follow-up).
+#[test]
+fn entmod_of_a_dimension_keeps_its_associativity() {
+    let mut s = session();
+    s.execute("line", &serde_json::json!({"points": [[0, 0], [10, 0]]})).unwrap();
+    s.script("dimlinear end 0,0 end 10,0 5,3\n").unwrap();
+    let assoc = |s: &Session| {
+        s.doc()
+            .unwrap()
+            .model
+            .iter()
+            .find_map(|e| if let cadcraft_doc::EntityKind::Dimension(d) = &e.kind { Some(d.assoc.len()) } else { None })
+            .unwrap()
+    };
+    let before = assoc(&s);
+    assert!(before > 0, "the dimension is associative");
+    eval(&mut s, "(setq e (entlast)) (entmod (entget e))").unwrap();
+    assert_eq!(assoc(&s), before);
+}

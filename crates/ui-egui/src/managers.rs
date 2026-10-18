@@ -1228,14 +1228,14 @@ mod plot_dialog_tests {
     #[test]
     fn a_device_brings_its_papers_and_the_plot_names_them() {
         let mut st = state("Model");
-        apply_page_change(&mut st.page, "device", &json!("CADCraft PNG"));
-        assert_eq!(st.page.device, "CADCraft PNG");
-        let dev = cadcraft_engine::cmd::plotters::find_device("CADCraft PNG").unwrap();
+        apply_page_change(&mut st.page, "device", &json!("CADaddy PNG"));
+        assert_eq!(st.page.device, "CADaddy PNG");
+        let dev = cadcraft_engine::cmd::plotters::find_device("CADaddy PNG").unwrap();
         assert!(dev.papers.iter().any(|p| p.name == st.page.paper), "a paper of the device: {}", st.page.paper);
         assert!(st.page.margins_mm.iter().any(|m| *m > 0.0), "the paper's printable area");
         apply_page_change(&mut st.page, "plotStyleTable", &json!("monochrome.ctb"));
         let p = plot_params(&st, None);
-        assert_eq!((p["device"].as_str(), p["paper"].as_str()), (Some("CADCraft PNG"), Some(st.page.paper.as_str())));
+        assert_eq!((p["device"].as_str(), p["paper"].as_str()), (Some("CADaddy PNG"), Some(st.page.paper.as_str())));
         assert_eq!(p["plotStyleTable"], json!("monochrome.ctb"));
         // The preview plots the same sheet to PNG, whatever the device.
         let q = plot_params(&st, Some(150.0));

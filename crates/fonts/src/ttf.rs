@@ -553,7 +553,7 @@ fn key(name: &str) -> String {
 
 /// Names that mean a stroke font: never looked up as TrueType.
 fn is_stroke_name(k: &str) -> bool {
-    k.is_empty() || k.ends_with(".shx") || k == crate::BUILTIN_FONT.to_ascii_lowercase() || k == "txt" || k == "simplex" || k == "romans"
+    k.is_empty() || k.ends_with(".shx") || crate::is_builtin_font(k) || k == "txt" || k == "simplex" || k == "romans"
 }
 
 /// A face of an installed (or registered) font by file name or family name. Stroke-font names

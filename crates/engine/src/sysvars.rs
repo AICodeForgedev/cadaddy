@@ -166,6 +166,8 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
             match d.header.get(&n) {
                 Some(h) => serde_json::to_value(h).ok()?,
                 // A dimension variable the header doesn't carry reads from the current style.
+                // Variables CADaddy reads with a default when the drawing doesn't set them.
+                None if let Some((_, v)) = HEADER_DEFAULTS.iter().find(|(v, _)| *v == n) => json!(v),
                 None => {
                     let field = cadcraft_doc::DIMVARS.iter().find(|(v, _)| *v == n)?.1;
                     let st = d.dim_style(&d.header.str("DIMSTYLE", "Standard"))?;
@@ -176,6 +178,10 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
     };
     Some(v)
 }
+
+/// Drawing variables that are read with a default when the header doesn't carry them, so they
+/// can be typed by name and read with GETVAR before anything sets them.
+const HEADER_DEFAULTS: &[(&str, f64)] = &[("HPGAPTOL", 0.0), ("ATTREQ", 1.0)];
 
 fn as_bool(v: &Value) -> Option<bool> {
     v.as_bool().or_else(|| v.as_i64().map(|i| i != 0)).or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()).map(|i| i != 0))
@@ -314,6 +320,8 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             let a = a.filter(|a| a.is_finite()).ok_or_else(bad)?;
             s.doc_mut()?.header.set_f64("ANGBASE", cadcraft_geom::norm_angle(a));
         }
+        // AutoCAD's range: gaps up to 5000 drawing units close a hatch boundary.
+        "HPGAPTOL" => s.doc_mut()?.header.set_f64("HPGAPTOL", as_f64(v).filter(|g| (0.0..=5000.0).contains(g)).ok_or_else(bad)?),
         "CONSTRAINTINFER" => s.doc_mut()?.parametric.settings.infer = as_bool(v).ok_or_else(bad)?,
         _ => {
             if let Some(r) = table::set(s, &n, v) {

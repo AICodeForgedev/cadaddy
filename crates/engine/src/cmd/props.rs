@@ -31,7 +31,14 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{source, targets?: [hex] (default: selection), properties?: [name] | {name: bool} (default: all; names: color, layer, linetype, ltscale, lineweight, transparency, thickness, plotStyle, dimension, text, hatch, polyline, viewport, table, multileader)} → {changed}")
             .interactive(|_| Ok(Box::new(matchprop::MatchPropM::new()))),
         CommandSpec::new("color", "Color...", run_color).menu(&["Format", "Color..."]).alias(&["col", "colour"]).params("{color: \"ByLayer\" | \"red\" | 1..255 | \"r,g,b\"}").interactive(|_| {
-            Ok(super::ask::machine("color", "COLOR", [super::ask::ask_or("color", "Enter default object color", super::ask::Kind::Text, |s| var(s, "CECOLOR"))]))
+            Ok(super::ask::machine("color", "COLOR", [super::ask::ask_or("color", "Enter default object color", super::ask::Kind::Text, |s| {
+                // AutoCAD's spelling: BYLAYER, BYBLOCK, or the colour.
+                Some(match var(s, "CECOLOR")?.trim_matches('"') {
+                    "256" => "BYLAYER".to_string(),
+                    "0" => "BYBLOCK".to_string(),
+                    other => other.to_string(),
+                })
+            })]))
         }),
         CommandSpec::new("linetype", "Linetype...", run_linetype).menu(&["Format", "Linetype..."]).alias(&["lt", "ltype"]).params("{current?: name, load?: name | \"*\" (with a file: comma-separated names, wildcards), file?: path to a .lin file | text?: its contents, reload?: bool}"),
         CommandSpec::new("hatch.patterns", "Hatch Patterns", super::hatch::run_patterns)
@@ -1100,7 +1107,11 @@ fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
 fn var(s: &Session, name: &str) -> Option<String> {
     match crate::sysvars::get(s, name)? {
         Value::String(t) => Some(t),
-        Value::Array(a) => Some(a.iter().take(2).map(|v| v.as_f64().map_or_else(|| v.to_string(), |f| format!("{f}"))).collect::<Vec<_>>().join(",")),
+        Value::Array(a) => {
+            Some(a.iter().take(2).map(|v| v.as_f64().map_or_else(|| v.to_string(), |f| format!("{f:.4}"))).collect::<Vec<_>>().join(","))
+        }
+        // A point: "0.0000,0.0000".
+        Value::Object(o) => Some(format!("{:.4},{:.4}", o.get("x")?.as_f64()?, o.get("y")?.as_f64()?)),
         other => Some(other.to_string()),
     }
 }

@@ -345,15 +345,18 @@ struct StretchM {
 impl StretchM {
     fn add(&mut self, s: &mut Session, hs: Vec<Handle>, whole: bool) {
         let n = hs.len();
-        for h in hs {
-            if self.removing {
-                self.objs.retain(|o| *o != h);
-                self.whole.retain(|o| *o != h);
-            } else {
-                if !self.objs.contains(&h) {
+        if self.removing {
+            let drop: std::collections::HashSet<Handle> = hs.into_iter().collect();
+            self.objs.retain(|o| !drop.contains(o));
+            self.whole.retain(|o| !drop.contains(o));
+        } else {
+            let mut have: std::collections::HashSet<Handle> = self.objs.iter().copied().collect();
+            let mut have_whole: std::collections::HashSet<Handle> = self.whole.iter().copied().collect();
+            for h in hs {
+                if have.insert(h) {
                     self.objs.push(h);
                 }
-                if whole && !self.whole.contains(&h) {
+                if whole && have_whole.insert(h) {
                     self.whole.push(h);
                 }
             }

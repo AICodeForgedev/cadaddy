@@ -269,6 +269,49 @@ mod native {
         age.is_some_and(|a| a < Duration::from_secs(STALE_LOCK_SECS))
     }
 
+    /// Whether a CADaddy process `pid` is running (the name must match, so a process id reused
+    /// by another program doesn't count): `None` when this system can't tell.
+    fn pid_running(pid: u32) -> Option<bool> {
+        let ours = |name: &str| {
+            let n = name.to_ascii_lowercase();
+            n.contains("cadaddy") || n.contains("cadcraft")
+        };
+        if cfg!(any(target_os = "linux", target_os = "android")) {
+            return Some(std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|n| ours(&n)));
+        }
+        if cfg!(windows) {
+            #[allow(unused_mut)]
+            let mut c = std::process::Command::new("tasklist");
+            c.args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"]);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+            }
+            let out = c.output().ok()?;
+            let text = String::from_utf8_lossy(&out.stdout);
+            // "cadaddy.exe","7152",...
+            return Some(text.lines().any(|l| l.contains(&format!("\"{pid}\"")) && ours(l)));
+        }
+        if cfg!(unix) {
+            let out = std::process::Command::new("/bin/ps").args(["-p", &pid.to_string(), "-o", "comm="]).output().ok()?;
+            return Some(out.status.success() && ours(&String::from_utf8_lossy(&out.stdout)));
+        }
+        None
+    }
+
+    /// Whether the app that owns `instance` may still be running. Its process (the id's first
+    /// part) decides when this system can tell: a crashed app's files are offered right away, and
+    /// an idle one whose lock went stale keeps them. Otherwise the lock's age decides.
+    fn instance_running(dir: &Path, instance: &str) -> bool {
+        let pid = instance.split('-').next().and_then(|p| p.parse::<u32>().ok());
+        match pid {
+            Some(pid) if pid == std::process::id() => true,
+            Some(pid) => pid_running(pid).unwrap_or_else(|| instance_alive(lock_age(dir, instance))),
+            None => instance_alive(lock_age(dir, instance)),
+        }
+    }
+
     fn lock_age(dir: &Path, instance: &str) -> Option<Duration> {
         let m = std::fs::metadata(lock_path(dir, instance)).and_then(|m| m.modified()).ok()?;
         // A time in the future (clock changes) counts as fresh.
@@ -284,7 +327,7 @@ mod native {
         for e in entries.flatten().take(10_000) {
             let name = e.file_name().to_string_lossy().to_string();
             let Some((title, instance, _)) = parse_file_name(&name) else { continue };
-            if instance == own || *alive.entry(instance.to_string()).or_insert_with(|| instance_alive(lock_age(dir, instance))) {
+            if instance == own || *alive.entry(instance.to_string()).or_insert_with(|| instance_running(dir, instance)) {
                 continue;
             }
             let Ok(meta) = e.metadata() else { continue };
@@ -326,7 +369,7 @@ mod native {
         for n in &names {
             let Some(instance) = parse_lock_name(n) else { continue };
             let has_files = names.iter().any(|f| parse_file_name(f).is_some_and(|(_, i, _)| i == instance));
-            if !has_files && !instance_alive(lock_age(dir, instance)) {
+            if !has_files && !instance_running(dir, instance) {
                 let _ = std::fs::remove_file(dir.join(n));
             }
         }
@@ -355,7 +398,14 @@ mod native {
             let jobs = self.plan(s, now, minutes, &dir);
             self.perform(jobs);
             self.heartbeat(&dir, now);
-            self.next_due(now, minutes).map(Duration::from_secs_f64)
+            // While this app has autosave files, wake for the next heartbeat too: an idle window
+            // must keep its lock fresh, or another CADaddy would offer its files for recovery.
+            let beat = self.docs.values().any(|t| t.file.is_some()).then_some(HEARTBEAT_SECS);
+            match (self.next_due(now, minutes), beat) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+            .map(Duration::from_secs_f64)
         }
 
         /// Autosave every drawing with changes not yet autosaved right away, without waiting for

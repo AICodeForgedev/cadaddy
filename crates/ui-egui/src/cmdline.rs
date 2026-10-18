@@ -249,7 +249,9 @@ pub struct KeyPress {
 
 /// Handle keyboard input destined for the command line (when no text field has focus).
 pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
-    if ctx.egui_wants_keyboard_input() {
+    // The in-place text editor owns the keyboard while it is open (an Enter here would answer
+    // TEXTEDIT's prompt behind it with the old text).
+    if ctx.egui_wants_keyboard_input() || crate::mtext_editor::is_open(ctx) {
         return;
     }
     let events = ctx.input(|i| i.events.clone());

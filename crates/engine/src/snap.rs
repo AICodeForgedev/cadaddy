@@ -158,6 +158,22 @@ pub fn osnap(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osmode: u3
     osnap_with(d, space, &ix, cursor, aperture, osmode, base, deferred)
 }
 
+/// A typed snap override (`cen`, `mid` then a point): the snap points of the objects under the
+/// aperture, however far the snap point itself is (a point on a circle's edge finds its centre,
+/// as in AutoCAD). The nearest one wins; `None` when no object is there.
+pub fn osnap_object(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osmode: u32) -> Option<SnapHit> {
+    if osmode == 0 || !cursor.is_finite() || !(aperture.is_finite() && aperture > 0.0) {
+        return None;
+    }
+    let ix = crate::spatial::index(d, space);
+    let (cands, _) = gather_in(d, space, &ix, cursor, aperture, osmode, &[])?;
+    cands
+        .into_iter()
+        .filter(|(m, p)| p.is_finite() && osmode & m != 0)
+        .min_by(|a, b| a.1.dist(cursor).total_cmp(&b.1.dist(cursor)))
+        .map(|(m, p)| SnapHit { point: p, mode: m, name: name_of(m), viewport: None, deferred: None })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn osnap_with(
     d: &Drawing,
@@ -471,7 +487,10 @@ fn finish(
         }
     }
     let visible = |p: Vec2| p.is_finite() && clip.is_none_or(|c| c.contains(p));
-    let best = cands.iter().filter(|(_, p)| visible(*p) && p.dist(cursor) <= aperture).min_by(|a, b| {
+    // A centre comes from a curve under the aperture, however far the centre is: hovering a
+    // circle's edge offers its centre (AutoCAD). With Nearest on, the curve itself keeps priority.
+    let far_center = |m: u32| m == mode::CEN && osmode & mode::NEA == 0;
+    let best = cands.iter().filter(|(m, p)| visible(*p) && (p.dist(cursor) <= aperture || far_center(*m))).min_by(|a, b| {
         // Prefer more specific modes when nearly equidistant.
         let da = snap_score(a.0, a.1, cursor, aperture);
         let db = snap_score(b.0, b.1, cursor, aperture);

@@ -29,13 +29,66 @@ mod craft_fonts;
 pub use craft_fonts::{CRAFT_FONTS, CraftFont};
 
 /// Name of the built-in font.
-pub const BUILTIN_FONT: &str = "CADCraft Stroke";
+pub const BUILTIN_FONT: &str = "CADaddy Stroke";
+/// The built-in font's earlier name, still read from settings and drawings made with it.
+pub const LEGACY_BUILTIN_FONT: &str = "CADCraft Stroke";
+
+/// Whether `name` names the built-in stroke font (its current or earlier name).
+pub fn is_builtin_font(name: &str) -> bool {
+    let n = name.trim();
+    n.eq_ignore_ascii_case(BUILTIN_FONT) || n.eq_ignore_ascii_case(LEGACY_BUILTIN_FONT)
+}
 
 /// One laid-out run of text: strokes in local coordinates (baseline at y = 0, x from 0).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Run {
     pub strokes: Vec<Vec<Vec2>>,
     pub width: f64,
+}
+
+/// An AutoCAD Unicode escape at `chars[i]`: `\U+XXXX` (the character, 7 characters long), or a
+/// big-font `\M+nXXXX` (shown as `?`: its code page isn't known here). Used by TEXT, attributes
+/// and MTEXT alike, so `3/4\U+2300 EMT` reads `3/4⌀ EMT` everywhere.
+pub fn unicode_escape(chars: &[char], i: usize) -> Option<(char, usize)> {
+    if chars.get(i) != Some(&'\\') || chars.get(i + 2) != Some(&'+') {
+        return None;
+    }
+    let hex = |from: usize| -> Option<u32> {
+        let h: String = chars.get(from..from + 4)?.iter().collect();
+        u32::from_str_radix(&h, 16).ok()
+    };
+    match chars.get(i + 1)? {
+        'U' | 'u' => Some((char::from_u32(hex(i + 3)?).unwrap_or('?'), 7)),
+        'M' | 'm' if chars.get(i + 3).is_some_and(char::is_ascii_digit) => hex(i + 4).map(|_| ('?', 8)),
+        _ => None,
+    }
+}
+
+/// A field code at `chars[i]` (`%<\AcVar Date>%`, title-block fields): its length, so it shows
+/// as `####` (AutoCAD's look for a field without a value) instead of being read as formatting.
+pub fn field_code(chars: &[char], i: usize) -> Option<usize> {
+    if chars.get(i) != Some(&'%') || chars.get(i + 1) != Some(&'<') || chars.get(i + 2) != Some(&'\\') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut j = i;
+    while j + 1 < chars.len() && j < i + 4096 {
+        match (chars.get(j), chars.get(j + 1)) {
+            (Some('%'), Some('<')) => {
+                depth += 1;
+                j += 2;
+            }
+            (Some('>'), Some('%')) => {
+                depth = depth.saturating_sub(1);
+                j += 2;
+                if depth == 0 {
+                    return Some(j - i);
+                }
+            }
+            _ => j += 1,
+        }
+    }
+    None
 }
 
 /// Replace `%%` control codes: `%%d` degree, `%%p` plus/minus, `%%c` diameter, `%%%` percent,
@@ -49,6 +102,11 @@ pub fn decode_controls(s: &str) -> Vec<(char, bool, bool)> {
     let mut i = 0;
     while i < chars.len() {
         let c = chars.get(i).copied().unwrap_or(' ');
+        if let Some((u, n)) = unicode_escape(&chars, i) {
+            out.push((u, under, over));
+            i += n;
+            continue;
+        }
         if c == '%' && chars.get(i + 1) == Some(&'%') {
             let code = chars.get(i + 2).copied().unwrap_or(' ');
             match code.to_ascii_lowercase() {
@@ -78,6 +136,12 @@ pub fn decode_controls(s: &str) -> Vec<(char, bool, bool)> {
         i += 1;
     }
     out
+}
+
+/// A TEXT or attribute value as it reads: `%%` codes and `\U+` escapes decoded, underline and
+/// overline toggles dropped (`3/4%%c CONDUIT` → `3/4⌀ CONDUIT`).
+pub fn plain_text(s: &str) -> String {
+    decode_controls(s).into_iter().map(|(c, _, _)| c).collect()
 }
 
 /// Advance width of one character at height 1 and width factor 1.
@@ -289,7 +353,7 @@ impl TextFont {
             return TextFont::Outline(f);
         }
         let n = name.trim();
-        if n.is_empty() || n.eq_ignore_ascii_case(BUILTIN_FONT) {
+        if n.is_empty() || is_builtin_font(n) {
             return TextFont::Stroke;
         }
         ttf::find(&ttf::font_alt()).map(TextFont::Outline).unwrap_or(TextFont::Stroke)
@@ -752,5 +816,25 @@ mod ttf_tests {
         );
         assert!((crate::line_width("\u{4E2D}\u{6587}\u{5B57}\u{4F53}", h, wf) - four.width).abs() < 1e-9);
         assert!(crate::is_wide('\u{3042}') && crate::is_wide('\u{AC00}') && crate::is_wide('\u{FF21}') && !crate::is_wide('A'));
+    }
+}
+
+#[cfg(test)]
+mod unicode_escape_tests {
+    use super::*;
+
+    /// `\U+XXXX` decodes in TEXT and MTEXT, and an MTEXT paragraph after it isn't lost
+    /// (battle test T-U: "A\PB \U+2300 C" showed only A / B).
+    #[test]
+    fn unicode_escapes_decode_everywhere() {
+        let t: String = decode_controls("3/4\\U+2300 EMT 45\\U+00B0").iter().map(|x| x.0).collect();
+        assert_eq!(t, "3/4⌀ EMT 45°");
+        assert_eq!(crate::mtext::plain_mtext("A\\PB \\U+2300 C"), "A\nB ⌀ C");
+        assert_eq!(crate::mtext::plain_mtext("x\\M+18140y"), "x?y");
+        // Field codes show as #### and the text around them stays (battle test F1).
+        assert_eq!(crate::mtext::plain_mtext("FILE %<\\AcVar Filename \\f \"%fn2\">% DATE %<\\AcVar Date>% END"), "FILE #### DATE #### END");
+        // Not an escape: kept as typed.
+        let t: String = decode_controls("C:\\Users").iter().map(|x| x.0).collect();
+        assert_eq!(t, "C:\\Users");
     }
 }

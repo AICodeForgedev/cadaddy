@@ -59,7 +59,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("selectall", "Select All", run_selectall).menu(&["Edit", "Select All"]).key("Cmd+A").alias(&["ai_selall"]).noundo(),
         CommandSpec::new("ai_deselect", "Deselect All", run_deselect).params("{}").noundo(),
         CommandSpec::new("select", "Select", run_select)
-            .params("{handles: [hex]} | {window: [[x,y],[x,y]], crossing?: bool} | {at: [x,y]} | {clear: true} | {add?: bool}")
+            .params("{handles: [hex]} | {window: [[x,y],[x,y]], crossing?: bool} | {at: [x,y]} | {all: true} | {clear: true} | {add?: bool}")
             .noundo()
             .interactive(|_| Ok(Box::new(SelectM::default()))),
     ]
@@ -537,6 +537,10 @@ fn run_select(s: &mut Session, p: &Value) -> Result<Value> {
     if bool_or(p, "clear", false) {
         s.set_selection(Vec::new());
         return Ok(json!({ "selected": 0 }));
+    }
+    // Everything selectable in the current space (SELECTALL; ALL at "Select objects").
+    if bool_or(p, "all", false) {
+        return run_selectall(s, p);
     }
     let space = s.space();
     let add = bool_or(p, "add", false);

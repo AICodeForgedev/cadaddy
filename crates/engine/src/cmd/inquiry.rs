@@ -218,10 +218,15 @@ fn area_text(s: &Session, a: f64, per: f64) -> String {
 }
 
 /// Area and perimeter of a closed object (AREA's Object option).
-fn object_area(s: &Session, h: Handle) -> Result<(f64, f64)> {
+pub(crate) fn object_area(s: &Session, h: Handle) -> Result<(f64, f64)> {
     let d = s.doc()?;
     let e = d.entity(h).ok_or_else(|| bad("area", "no such object"))?;
-    Ok(match &e.kind {
+    kind_area(&e.kind)
+}
+
+/// Area and perimeter of a closed shape (TAKEOFF measures transformed copies of block contents).
+pub(crate) fn kind_area(k: &EntityKind) -> Result<(f64, f64)> {
+    Ok(match k {
         EntityKind::Circle(c) => (c.radius * c.radius * cadcraft_geom::PI, c.radius * cadcraft_geom::TAU),
         EntityKind::LwPolyline(pl) => {
             let g = Polyline { vertices: pl.vertices.clone(), closed: true };
@@ -401,34 +406,46 @@ fn run_texts(s: &mut Session, p: &Value) -> Result<Value> {
         if layer.as_ref().is_some_and(|l| e.common.layer.to_lowercase() != *l) {
             continue;
         }
-        let mut push = |ty: &str, value: String, at: cadcraft_geom::Vec3, height: f64, rotation: f64, style: &str, tag: Option<&str>| {
-            let value = value.trim().to_string();
-            if value.is_empty()
-                || contains.as_ref().is_some_and(|c| !value.to_lowercase().contains(c.as_str()))
+        // value: (as stored, as it reads); the search matches what it reads.
+        let mut push = |ty: &str, value: (String, String), at: cadcraft_geom::Vec3, height: f64, rotation: f64, style: &str, tag: Option<&str>| {
+            let value = (value.0, value.1.trim().to_string());
+            if value.1.is_empty()
+                || contains.as_ref().is_some_and(|c| !value.1.to_lowercase().contains(c.as_str()))
                 || window.as_ref().is_some_and(|w| !w.contains(Vec2::new(at.x, at.y)))
             {
                 return;
             }
             let mut v = json!({
-                "handle": e.handle.hex(), "type": ty, "layer": e.common.layer, "text": value,
+                "handle": e.handle.hex(), "type": ty, "layer": e.common.layer, "text": value.1,
                 "at": [at.x, at.y], "height": height, "rotation": rotation.to_degrees(), "style": style,
             });
-            if let (Some(t), Some(o)) = (tag, v.as_object_mut()) {
-                o.insert("tag".into(), json!(t));
+            if let Some(o) = v.as_object_mut() {
+                if let Some(t) = tag {
+                    o.insert("tag".into(), json!(t));
+                }
+                // As stored, when the codes in it read differently (%%c, \U+2300, MTEXT formatting).
+                if value.0 != value.1 {
+                    o.insert("raw".into(), json!(value.0));
+                }
             }
             found.push(v);
         };
         match &e.kind {
-            EntityKind::Text(t) => push("Text", t.value.clone(), t.insert, t.height, t.rotation, &t.style, None),
-            EntityKind::MText(t) => push("MText", cadcraft_fonts::plain_mtext(&t.contents), t.insert, t.height, t.rotation, &t.style, None),
+            EntityKind::Text(t) => {
+                push("Text", (t.value.clone(), cadcraft_fonts::plain_text(&t.value)), t.insert, t.height, t.rotation, &t.style, None)
+            }
+            EntityKind::MText(t) => {
+                push("MText", (t.contents.clone(), cadcraft_fonts::plain_mtext(&t.contents)), t.insert, t.height, t.rotation, &t.style, None)
+            }
             EntityKind::Insert(i) => {
                 for a in i.attribs.iter().filter(|a| !a.invisible) {
-                    push("Attribute", a.text.value.clone(), a.text.insert, a.text.height, a.text.rotation, &a.text.style, Some(&a.tag));
+                    let v = (a.text.value.clone(), cadcraft_fonts::plain_text(&a.text.value));
+                    push("Attribute", v, a.text.insert, a.text.height, a.text.rotation, &a.text.style, Some(&a.tag));
                 }
             }
             EntityKind::MLeader(m) => {
                 if let Some(t) = &m.text {
-                    push("MLeader", cadcraft_fonts::plain_mtext(&t.contents), t.insert, t.height, t.rotation, &t.style, None);
+                    push("MLeader", (t.contents.clone(), cadcraft_fonts::plain_mtext(&t.contents)), t.insert, t.height, t.rotation, &t.style, None);
                 }
             }
             _ => {}

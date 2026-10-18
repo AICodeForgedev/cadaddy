@@ -208,9 +208,24 @@ pub fn anno_scaled(e: &Entity, f: f64) -> Entity {
 
 impl Drawing {
     /// The scale named `name` in the drawing's scale list (case-insensitive).
+    /// A scale of the list by name: any case, spaces ignored (`1/4"=1'-0"` is `1/4" = 1'-0"`,
+    /// which a command line can't type).
     pub fn anno_scale(&self, name: &str) -> Option<&AnnoScale> {
         let n = name.trim();
-        self.scales.iter().find(|s| s.name.eq_ignore_ascii_case(n))
+        let squeeze = |t: &str| t.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_lowercase();
+        let want = squeeze(n);
+        self.scales.iter().find(|s| s.name.eq_ignore_ascii_case(n)).or_else(|| self.scales.iter().find(|s| squeeze(&s.name) == want))
+    }
+    /// [`Self::anno_scale`], or a ratio `1:48` naming a scale of the same size (for choosing the
+    /// current scale; editing the list goes by name only).
+    pub fn anno_scale_or_ratio(&self, name: &str) -> Option<&AnnoScale> {
+        self.anno_scale(name).or_else(|| {
+            let (p, d) = name.trim().split_once(':')?;
+            let (p, d): (f64, f64) = (p.trim().parse().ok()?, d.trim().parse().ok()?);
+            let ratio = d / p;
+            (ratio.is_finite() && ratio > 0.0).then_some(())?;
+            self.scales.iter().find(|s| s.is_valid() && ((s.drawing_units / s.paper_units) / ratio - 1.0).abs() < 1e-9)
+        })
     }
     /// The current annotation scale (`CANNOSCALE`); 1:1 when it names no scale of the list.
     pub fn current_anno_scale(&self) -> AnnoScale {
@@ -246,5 +261,17 @@ impl Drawing {
             EntityKind::Insert(ins) => self.block(&ins.block).is_some_and(|b| b.annotative),
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn scale_names_match_without_spaces_or_as_a_ratio() {
+        let d = crate::Drawing::new_imperial();
+        let quarter = d.scales.iter().find(|s| s.name.starts_with("1/4\"")).map(|s| s.name.clone()).expect("1/4\" scale");
+        assert_eq!(d.anno_scale("1/4\"=1'-0\"").map(|s| s.name.clone()), Some(quarter.clone()));
+        assert_eq!(d.anno_scale_or_ratio("1:48").map(|s| s.name.clone()), Some(quarter));
+        assert!(d.anno_scale("1:48").is_none() && d.anno_scale_or_ratio("1:47").is_none());
     }
 }

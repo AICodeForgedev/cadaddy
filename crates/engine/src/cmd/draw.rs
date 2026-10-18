@@ -1479,8 +1479,9 @@ impl Interactive for TextM {
         let d = s.doc()?;
         let style = d.header.str("TEXTSTYLE", "Standard");
         let anno = if d.text_style(&style).is_some_and(|st| st.annotative) { "Yes" } else { "No" };
-        let msg =
-            format!("Current text style:  \"{style}\"  Text height:  {:.4}  Annotative:  {anno}  Justify:  Left", d.header.f64("TEXTSIZE", 0.2));
+        // A fixed-height style's height is the one TEXT uses.
+        let h = d.text_style(&style).map(|st| st.height).filter(|h| h.is_finite() && *h > 0.0).unwrap_or_else(|| d.header.f64("TEXTSIZE", 0.2));
+        let msg = format!("Current text style:  \"{style}\"  Text height:  {h:.4}  Annotative:  {anno}  Justify:  Left");
         s.echo(msg);
         Ok(Step::Continue)
     }
@@ -1497,7 +1498,15 @@ impl Interactive for TextM {
         let th = s.doc()?.header.f64("TEXTSIZE", 0.2);
         match (self.at, self.height, self.rotation, i) {
             (None, _, _, Input::Keyword(k)) if k == "Justify" => self.asking_justify = true,
-            (None, _, _, Input::Point(p)) => self.at = Some(p),
+            (None, _, _, Input::Point(p)) => {
+                self.at = Some(p);
+                // A style with a fixed height skips the height prompt (AutoCAD; scripts rely on it).
+                let d = s.doc()?;
+                let fixed = d.text_style(&d.header.str("TEXTSTYLE", "Standard")).map(|st| st.height).filter(|h| h.is_finite() && *h > 0.0);
+                if fixed.is_some() {
+                    self.height = fixed;
+                }
+            }
             (Some(_), None, _, Input::Enter) => self.height = Some(th),
             (Some(a), None, _, Input::Point(p)) => self.height = Some(a.dist(p).max(1e-9)),
             (Some(_), None, _, Input::Text(t)) => {

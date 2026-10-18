@@ -587,6 +587,9 @@ pub struct LastUsed {
     pub mleader: MLeaderOptions,
     /// MLEADER's block content name (Options > Content type > Block).
     pub mleader_block: String,
+    /// The last value entered for each attribute of a library symbol ("EL_SWITCH|CIRCUIT"): the
+    /// next placement offers it, and fills its hidden fields (PANEL, MOUNT_HT) with it.
+    pub symbol_attribs: std::collections::HashMap<String, String>,
 }
 
 impl Default for LastUsed {
@@ -599,6 +602,7 @@ impl Default for LastUsed {
             matchprop: cmd::MatchProps::default(),
             mleader: MLeaderOptions::default(),
             mleader_block: String::new(),
+            symbol_attribs: std::collections::HashMap::new(),
         }
     }
 }

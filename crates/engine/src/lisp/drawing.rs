@@ -334,10 +334,22 @@ pub fn entmod(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
         return Err(LispError::bad_arg("lentityp", &Value::Nil));
     };
     let Some(old) = ctx.s.doc().ok().and_then(|d| d.entity(h)).cloned() else { return Ok(Flow::Value(Value::Nil)) };
-    let (kind_name, common, kind) = match entity_from_list(ctx, list) {
+    let (kind_name, common, mut kind) = match entity_from_list(ctx, list) {
         Ok(x) => x,
         Err(_) => return Ok(Flow::Value(Value::Nil)),
     };
+    // A block reference's attributes are separate entities in AutoCAD (ATTRIB, after the INSERT):
+    // the INSERT's list doesn't carry them, and changing it leaves them as they are.
+    match (&mut kind, &old.kind) {
+        (cadcraft_doc::EntityKind::Insert(new), cadcraft_doc::EntityKind::Insert(was)) if new.attribs.is_empty() => {
+            new.attribs = was.attribs.clone();
+        }
+        // A dimension's links to the objects it measures aren't in its list either.
+        (cadcraft_doc::EntityKind::Dimension(new), cadcraft_doc::EntityKind::Dimension(was)) if new.assoc.is_empty() => {
+            new.assoc = was.assoc.clone();
+        }
+        _ => {}
+    }
     // entmod changes an entity, never its type.
     if !kind_name.eq_ignore_ascii_case(old.kind.dxf_name()) {
         return Ok(Flow::Value(Value::Nil));

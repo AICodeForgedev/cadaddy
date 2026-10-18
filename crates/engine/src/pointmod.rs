@@ -347,7 +347,15 @@ impl Session {
                     let hatch = if self.settings.osnaphatch { mode::HATCH } else { 0 };
                     let base = prompt.as_ref().and_then(|q| q.base);
                     let deferred = prompt.as_ref().is_some_and(|q| q.deferred);
-                    let hit = crate::snap::osnap(self.doc()?, &space, p, aperture, mode | hatch, base, deferred);
+                    let hit = crate::snap::osnap(self.doc()?, &space, p, aperture, mode | hatch, base, deferred).or_else(|| {
+                        // Center, Midpoint, Quadrant…: the object picked, wherever its snap point is.
+                        let object_modes = mode::CEN | mode::MID | mode::QUA | mode::END | mode::NOD;
+                        if mode & object_modes == 0 {
+                            None
+                        } else {
+                            self.doc().ok().and_then(|d| crate::snap::osnap_object(d, &space, p, aperture, mode & object_modes))
+                        }
+                    });
                     match hit {
                         Some(h) if self.point_mods.is_empty() => return self.input_snapped(h),
                         Some(h) => p = h.point,

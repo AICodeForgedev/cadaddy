@@ -23,7 +23,14 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layer.current", "Make Current", run_current)
             .menu(&["Format", "Layer Tools", "Make Current"])
             .alias(&["clayer"])
-            .params("{name}"),
+            .params("{name}")
+            .interactive(|_| {
+                Ok(super::ask::machine(
+                    "layer.current",
+                    "CLAYER",
+                    [super::ask::ask_or("name", "Enter layer name to make current", super::ask::Kind::Text, |s| Some(s.doc().ok()?.header.str("CLAYER", "0")))],
+                ))
+            }),
         CommandSpec::new("layer.delete", "Delete Layer", run_delete).params("{name}"),
         CommandSpec::new("laymcur", "Make Object's Layer Current", run_laymcur)
             .params("{handles?}")
@@ -34,7 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 "LAYMCH",
                 [
                     super::ask::ask("handles", "Select objects to be changed", super::ask::Kind::Select),
-                    super::ask::ask("layer", "Enter layer name", super::ask::Kind::Text),
+                    super::ask::ask("layer", "Select object on destination layer or enter its name", super::ask::Kind::Layer),
                 ],
             ))
         }),
@@ -339,7 +346,8 @@ fn run_laymch(s: &mut Session, p: &Value) -> Result<Value> {
     for h in &hs {
         d.modify_entity(*h, |e| e.common.layer = layer.clone())?;
     }
-    Ok(json!({ "changed": hs.len() }))
+    let n = hs.len();
+    Ok(json!({ "changed": n, "message": format!("{n} object{} changed to layer \"{layer}\".", if n == 1 { "" } else { "s" }) }))
 }
 
 fn run_laycur(s: &mut Session, p: &Value) -> Result<Value> {
@@ -376,7 +384,7 @@ fn run_layuniso(s: &mut Session, _p: &Value) -> Result<Value> {
     let snap = d.header.str("CADCRAFT_LAYISO", "");
     let layers: Vec<Layer> = serde_json::from_str(&snap).map_err(|_| bad("layuniso", "No isolated layers."))?;
     d.layers = layers;
-    ok()
+    Ok(json!({ "message": "Layers isolated by LAYISO have been restored." }))
 }
 
 fn set_obj_layers(s: &mut Session, p: &Value, f: fn(&mut Layer)) -> Result<Value> {

@@ -1021,7 +1021,7 @@ impl<'a> Interp<'a> {
 
     /// Draw the page's annotations from their normal appearance streams, on [`MARKUP_LAYER`].
     /// The appearance's box (BBox through its Matrix) is fitted to the annotation's Rect.
-    fn annotations(&mut self, page: &Dictionary) -> usize {
+    fn annotations(&mut self, page: &Dictionary, page_box: [f64; 4]) -> usize {
         let Some(Object::Array(annots)) = dict_get(self.doc, page, b"Annots") else { return 0 };
         let mut drawn = 0;
         for a in annots.iter().take(10_000) {
@@ -1078,15 +1078,31 @@ impl<'a> Interp<'a> {
             }
             let (sx, sy) = ((rx1 - rx0) / (tx1 - tx0), (ry1 - ry0) / (ty1 - ty0));
             let fit = M([sx, 0.0, 0.0, sy, rx0 - tx0 * sx, ry0 - ty0 * sy]);
-            let g = Gs { ctm: mat.then(fit), ..Gs::default() };
+            // Clipped to the annotation's Rect and the page, as viewers show it: a markup drawn
+            // off the sheet (a PDF-XChange dimension with a bogus /LL leader length) stays off it.
+            let [px0, py0, px1, py1] = page_box;
+            let (cx0, cx1, cy0, cy1) = (rx0.max(px0.min(px1)), rx1.min(px0.max(px1)), ry0.max(py0.min(py1)), ry1.min(py0.max(py1)));
+            if cx1 <= cx0 || cy1 <= cy0 {
+                continue;
+            }
+            let frame = vec![vec![(cx0, cy0), (cx1, cy0), (cx1, cy1), (cx0, cy1)]];
+            let g = Gs { ctm: mat.then(fit), clip: Some(std::rc::Rc::new(frame)), ..Gs::default() };
             if !g.ctm.finite() {
                 continue;
             }
             let res = st.dict.get(b"Resources").ok().and_then(|o| deref(self.doc, o).as_dict().ok());
             let data = st.decompressed_content().unwrap_or_else(|_| st.content.clone());
             self.force_layer = Some(MARKUP_LAYER.to_string());
+            let texts_before = self.out.texts.len();
             self.run(&data, res, g, 1);
             self.force_layer = None;
+            let slack = ((cx1 - cx0) + (cy1 - cy0)) * 0.05 + 1.0;
+            let inside = |p: (f64, f64)| p.0 >= cx0 - slack && p.0 <= cx1 + slack && p.1 >= cy0 - slack && p.1 <= cy1 + slack;
+            let mut i = 0usize;
+            self.out.texts.retain(|t| {
+                i += 1;
+                i <= texts_before || inside(t.at)
+            });
             drawn += 1;
         }
         drawn
@@ -1694,7 +1710,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     it.run(&content, resources, Gs::default(), 0);
     let mut markups = 0usize;
     if opts.markups {
-        markups = it.annotations(page);
+        markups = it.annotations(page, mbox);
     }
     let out = it.out;
     if out.ops > MAX_OPS {
@@ -1805,6 +1821,15 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     d.header.set_i64("IMAGEFRAME", 0);
     if scale >= 12.0 {
         d.header.set_i64("LUNITS", 4); // architectural
+    }
+    // What the user adds is sized for the sheet's scale: dimensions (DIMSCALE), annotative
+    // objects and symbols (CANNOSCALE, when the list has the scale), text (3/32" on the sheet).
+    if scale.is_finite() && scale > 1.0 {
+        d.header.set_f64("DIMSCALE", scale);
+        d.header.set_f64("TEXTSIZE", 0.09375 * scale);
+        if let Some(name) = d.anno_scale_or_ratio(&format!("1:{scale}")).map(|sc| sc.name.clone()) {
+            d.header.set_str("CANNOSCALE", &name);
+        }
     }
     let use_ocg = opts.layers == LayerMode::Pdf && !ocg_names.is_empty();
     let mode = if use_ocg {
@@ -2569,6 +2594,10 @@ mod tests {
             Err(e) => panic!("{e}"),
         };
         assert_eq!(r.scale, 48.0, "{}", r.scale_source);
+        // What the user adds next is sized for the sheet's scale.
+        let h = &r.drawing.header;
+        assert_eq!((h.f64("DIMSCALE", 1.0), h.f64("TEXTSIZE", 0.0)), (48.0, 4.5));
+        assert!(h.str("CANNOSCALE", "").starts_with("1/4\""), "{}", h.str("CANNOSCALE", ""));
         assert_eq!(r.sheet, (11.0, 8.5));
         let ents: Vec<_> = r.drawing.model.iter().collect();
         // the black line: 1"..2" at 1" up on the sheet, × 48

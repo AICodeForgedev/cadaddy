@@ -208,9 +208,28 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
     let space = s.space();
     let ext = d.extents(&space);
     let tol = ((ext.width() + ext.height()) * 1e-9).max(1e-9);
-    let (polys, owners) = outlines(d, &space, None);
-    let found = cadcraft_geom::region::boundary_at_gap(&polys, p, tol, gap_tolerance(d))
-        .ok_or_else(|| EngineError::Other("Valid hatch boundary not found.".into()))?;
+    let gap = gap_tolerance(d);
+    // Search around the point first, widening the window: a big plan has far more segments than
+    // one search takes, and a room only needs what is near it. A boundary wholly inside the
+    // window is exact (anything crossing it would touch the window and be included).
+    let span = ext.width().max(ext.height());
+    let mut r = (span / 64.0).max(gap * 4.0).max(tol * 1e6);
+    let (_polys, owners, found) = loop {
+        let full = !span.is_finite() || r >= span * 2.0;
+        let window = if full { None } else { Some(Bounds2::new(p - Vec2::new(r, r), p + Vec2::new(r, r))) };
+        let (polys, owners) = outlines(d, &space, window);
+        let found = cadcraft_geom::region::boundary_at_gap(&polys, p, tol, gap);
+        let inside = |w: &Bounds2, b: &cadcraft_geom::region::Boundary| {
+            let bb = Bounds2::from_points(b.outer.iter().copied());
+            bb.min.x > w.min.x && bb.min.y > w.min.y && bb.max.x < w.max.x && bb.max.y < w.max.y
+        };
+        match (window, found) {
+            (None, f) => break (polys, owners, f),
+            (Some(w), Some(b)) if inside(&w, &b) => break (polys, owners, Some(b)),
+            _ => r *= 2.0,
+        }
+    };
+    let found = found.ok_or_else(|| EngineError::Other("Valid hatch boundary not found.".into()))?;
     let outer = found.outer;
     let ob = Bounds2::from_points(outer.iter().copied());
     let sources = handles_of(&owners, &found.outer_sources);
@@ -482,8 +501,7 @@ fn run_hatch(s: &mut Session, p: &Value) -> Result<Value> {
     patfile::load_param(p)?;
     // Like the prompt: a name without a definition would be drawn as ANSI31.
     if let Some(up) = str_param(p, "pattern").map(str::to_ascii_uppercase)
-        && cadcraft_doc::library::pattern(&up).is_none()
-        && patfile::user_pattern(&up).is_none()
+        && !patfile::adopt_from(s.doc()?, &up)
     {
         return Err(bad("hatch", format!("unknown pattern {up}")));
     }
@@ -609,11 +627,12 @@ impl HatchM {
                     Some(n) => n,
                     None => t.trim().to_ascii_uppercase(),
                 };
-                if cadcraft_doc::library::pattern(&up).is_some() || patfile::user_pattern(&up).is_some() {
+                if patfile::adopt_from(s.doc()?, &up) {
                     self.settings.pattern = up.clone();
                     s.doc_mut()?.header.set_str("HPNAME", &up);
                 } else {
-                    s.echo(format!("Unknown pattern {up}. Available: {}", patfile::names().join(", ")));
+                    // Asked again (a script's next words must not land on the scale prompt).
+                    return Err(EngineError::Other(format!("Unknown pattern {up}. Available: {}", patfile::names().join(", "))));
                 }
             }
             HatchAsk::Scale => {
@@ -709,7 +728,13 @@ impl Interactive for HatchM {
         if let Some(a) = self.asking.take() {
             match &i {
                 Input::Point(p) if a == HatchAsk::Origin => self.set_origin(s, Some(*p), OriginMode::Current)?,
-                Input::Text(t) | Input::Keyword(t) => self.answer(s, a, t)?,
+                Input::Text(t) | Input::Keyword(t) => {
+                    if let Err(e) = self.answer(s, a, t) {
+                        // Still asking the same question.
+                        self.asking = Some(a);
+                        return Err(e);
+                    }
+                }
                 Input::Cancel => {
                     self.pattern_chain = false;
                     return Ok(Step::Cancel);

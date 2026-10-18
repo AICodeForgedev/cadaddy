@@ -140,8 +140,20 @@ fn recovery_offers_files_of_apps_that_stopped() {
     let dir = temp_dir("scan");
     let touch = |name: &str| std::fs::write(dir.join(name), b"0\nEOF\n").unwrap();
     touch("Crashed.dxf_1-a_3.sv$"); // no lock: the app went down
-    touch("Live.dxf_2-b_4.sv$"); // fresh lock: still running
-    std::fs::write(dir.join("2-b.lock"), b"2").unwrap();
+    // Fresh lock and a running process (this one): still running.
+    let live = format!("{}-b", std::process::id());
+    touch(&format!("Live.dxf_{live}_4.sv$"));
+    std::fs::write(dir.join(format!("{live}.lock")), b"2").unwrap();
+    // Fresh lock but its process is gone: the app crashed a moment ago (battle test K1).
+    touch("Crashed2.dxf_4000000000-e_7.sv$");
+    std::fs::write(dir.join("4000000000-e.lock"), b"2").unwrap();
+    // An idle app whose lock went stale but whose process runs keeps its files (its process
+    // decides; this test process stands in for it).
+    let idle = format!("{}-g", std::process::id());
+    touch(&format!("Idle.dxf_{idle}_8.sv$"));
+    let lock = std::fs::File::create(dir.join(format!("{idle}.lock"))).unwrap();
+    lock.set_modified(SystemTime::now() - Duration::from_secs(3600)).unwrap();
+    drop(lock);
     touch("Stale.dxf_3-c_5.sv$"); // lock not refreshed for 10 minutes
     let lock = std::fs::File::create(dir.join("3-c.lock")).unwrap();
     lock.set_modified(SystemTime::now() - Duration::from_secs(600)).unwrap();
@@ -152,8 +164,8 @@ fn recovery_offers_files_of_apps_that_stopped() {
 
     let found = autosave::recoverable(&dir, "9-f");
     let names: Vec<&str> = found.iter().map(|r| r.drawing.as_str()).collect();
-    assert_eq!(names.len(), 2, "{found:?}");
-    assert!(names.contains(&"Crashed.dxf") && names.contains(&"Stale.dxf"));
+    assert_eq!(names.len(), 3, "{found:?}");
+    assert!(names.contains(&"Crashed.dxf") && names.contains(&"Stale.dxf") && names.contains(&"Crashed2.dxf"));
     assert!(found.iter().all(|r| r.bytes == 6 && r.modified > 0));
 
     // Discarding deletes the file and the dead app's lock once it has no files left.
@@ -161,8 +173,8 @@ fn recovery_offers_files_of_apps_that_stopped() {
     autosave::discard(&stale.path);
     assert!(!std::path::Path::new(&stale.path).exists());
     assert!(!dir.join("3-c.lock").exists());
-    assert!(dir.join("2-b.lock").exists(), "a running app's lock stays");
-    assert_eq!(autosave::recoverable(&dir, "9-f").len(), 1);
+    assert!(dir.join(format!("{live}.lock")).exists(), "a running app's lock stays");
+    assert_eq!(autosave::recoverable(&dir, "9-f").len(), 2);
     assert!(autosave::recoverable(&dir.join("missing"), "9-f").is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -199,7 +211,8 @@ fn autosave_files_are_written_in_the_background_and_removed_on_exit() {
     assert!(autosave::recoverable(&dir, "someone-else").is_empty());
 
     // After a GPU error a change made a moment ago is autosaved right away, not SAVETIME later.
-    assert!(a.tick(&s).is_none(), "no change waiting");
+    // No change waiting: only the lock's heartbeat wakes an idle app (it has autosave files).
+    assert_eq!(a.tick(&s), Some(Duration::from_secs(60)), "no change waiting: the heartbeat only");
     draw(&mut s);
     assert!(a.tick(&s).is_some(), "SAVETIME (3 minutes) is not up yet");
     assert_eq!(a.save_now(&s), 1);

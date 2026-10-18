@@ -149,6 +149,13 @@ impl Sketch {
         let a = Self::attrib(tag, prompt, default, Vec2::new(at.0, at.1), height);
         self.add(EntityKind::AttDef(a));
     }
+    /// An attribute the user fills in that doesn't show on the plan (PANEL, MOUNT_HT): for
+    /// schedules, counts and extraction.
+    fn attdef_hidden(&mut self, tag: &str, prompt: &str, default: &str, at: (f64, f64), height: f64) {
+        let mut a = Self::attrib(tag, prompt, default, Vec2::new(at.0, at.1), height);
+        a.invisible = true;
+        self.add(EntityKind::AttDef(a));
+    }
     /// A constant, hidden attribute (not asked for): what counts and schedules group by.
     fn attdef_constant(&mut self, tag: &str, value: &str, at: Vec2, height: f64) {
         let mut a = Self::attrib(tag, "", value, at, height);

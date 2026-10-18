@@ -98,10 +98,23 @@ fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
         let (x0, y0) = cell(a.min(*b));
         let (x1, y1) = cell(a.max(*b));
         if (x1 - x0 + 1) * (y1 - y0 + 1) > 4096 {
-            // Very long segment: register in a coarse band.
-            for gx in (x0..=x1).step_by(((x1 - x0) / 64).max(1)) {
-                for gy in (y0..=y1).step_by(((y1 - y0) / 64).max(1)) {
-                    grid.entry((gx, gy)).or_default().push(i);
+            // A long segment: the cells along it (not its whole box), every one of them; a cell
+            // skipped would miss a crossing there and leave two edges crossing without a vertex.
+            let steps = (((b.x - a.x).abs() / cw).max((b.y - a.y).abs() / ch) * 2.0).ceil().clamp(1.0, 8192.0) as usize;
+            let mut last = None;
+            for k in 0..=steps {
+                let t = k as f64 / steps as f64;
+                let (cx, cy) = cell(*a + (*b - *a) * t);
+                for gx in cx.saturating_sub(1)..=(cx + 1).min(cells - 1) {
+                    for gy in cy.saturating_sub(1)..=(cy + 1).min(cells - 1) {
+                        if last != Some((gx, gy, i)) {
+                            let l = grid.entry((gx, gy)).or_default();
+                            if l.last() != Some(&i) {
+                                l.push(i);
+                            }
+                        }
+                        last = Some((gx, gy, i));
+                    }
                 }
             }
             continue;
@@ -129,6 +142,21 @@ fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
                     }
                     if let Some(v) = splits.get_mut(j) {
                         v.push(lj.param_of(x).clamp(0.0, 1.0));
+                    }
+                } else {
+                    // Collinear overlap (double-line walls traced from a PDF): each splits where
+                    // the other ends on it, so the shared stretch becomes shared edges.
+                    for (l, m, k) in [(&li, &lj, i), (&lj, &li, j)] {
+                        for q in [m.a, m.b] {
+                            let t = l.param_of(q);
+                            if t > 0.0
+                                && t < 1.0
+                                && l.at(t).dist(q) <= tol
+                                && let Some(v) = splits.get_mut(k)
+                            {
+                                v.push(t);
+                            }
+                        }
                     }
                 }
                 if tested.len() > 20_000_000 {
@@ -688,6 +716,24 @@ mod tests {
         assert!(point_in_polygon(&rev, interior_point(&rev).unwrap()));
         assert!(interior_point(&[Vec2::ZERO, Vec2::new(1.0, 0.0)]).is_none());
         assert!(interior_point(&[Vec2::new(f64::NAN, 0.0); 4]).is_none());
+    }
+
+    #[test]
+    fn overlapping_collinear_wall_pieces_close_a_room() {
+        // Walls traced from a PDF come as overlapping collinear pieces (0..60 and 40..100) that
+        // share no end: each splits where the other ends on it, so the room closes (converted
+        // hotel plans failed to hatch).
+        let polys = vec![
+            vec![Vec2::new(0.0, 0.0), Vec2::new(60.0, 0.0)],
+            vec![Vec2::new(40.0, 0.0), Vec2::new(100.0, 0.0)],
+            vec![Vec2::new(100.0, 0.0), Vec2::new(100.0, 100.0)],
+            vec![Vec2::new(100.0, 100.0), Vec2::new(30.0, 100.0)],
+            vec![Vec2::new(70.0, 100.0), Vec2::new(0.0, 100.0)],
+            vec![Vec2::new(0.0, 100.0), Vec2::new(0.0, 0.0)],
+        ];
+        let p = Vec2::new(50.0, 50.0);
+        let b = boundary_at(&polys, p, 1e-6).expect("the room closes");
+        assert!((shoelace(&b.outer) - 10_000.0).abs() < 1e-6, "{}", shoelace(&b.outer));
     }
 
     #[test]

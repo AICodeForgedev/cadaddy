@@ -590,9 +590,10 @@ impl Interactive for PeditM {
             PPhase::MSelect => match i {
                 Input::Pick(hs) => {
                     let d = s.doc()?;
+                    let mut have: std::collections::HashSet<Handle> = self.multi.iter().copied().collect();
                     for h in hs {
                         let ok = d.entity(h).is_some_and(|e| matches!(e.kind, EntityKind::LwPolyline(_) | EntityKind::Line(_) | EntityKind::Arc(_)));
-                        if ok && !self.multi.contains(&h) {
+                        if ok && have.insert(h) {
                             self.multi.push(h);
                         }
                     }

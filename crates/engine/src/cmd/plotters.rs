@@ -1,7 +1,7 @@
 //! Plotter configurations: PLOTTERMANAGER / -PLOTTERMANAGER, and the device and paper a page
 //! setup or a plot uses.
 //!
-//! The built-in devices (`CADCraft PDF`, `CADCraft PNG`, `CADCraft SVG`) come first. They offer
+//! The built-in devices (`CADaddy PDF`, `CADaddy PNG`, `CADaddy SVG`) come first. They offer
 //! the standard ISO and ANSI/ARCH paper sizes with 5 mm (ISO) or quarter-inch (inch sizes)
 //! margins. User devices are `*.plotter.json` files ([`cadcraft_doc::PlotterConfig`],
 //! `docs/plotters.md`) in a folder the host provides through [`set_plotter_store`]. Without
@@ -137,9 +137,9 @@ const MAX_DEVICES: usize = 1000;
 
 /// The built-in devices: name, output, description.
 const BUILTIN: [(&str, PlotOutput, &str); 3] = [
-    ("CADCraft PDF", PlotOutput::Pdf, "Vector PDF"),
-    ("CADCraft PNG", PlotOutput::Png, "Raster PNG image"),
-    ("CADCraft SVG", PlotOutput::Svg, "Vector SVG image"),
+    ("CADaddy PDF", PlotOutput::Pdf, "Vector PDF"),
+    ("CADaddy PNG", PlotOutput::Png, "Raster PNG image"),
+    ("CADaddy SVG", PlotOutput::Svg, "Vector SVG image"),
 ];
 
 /// A page setup's "no device" name.
@@ -204,6 +204,14 @@ pub fn find_device(name: &str) -> Option<PlotterConfig> {
     if n.is_empty() || n.eq_ignore_ascii_case(NO_DEVICE) {
         return None;
     }
+    // Page setups saved by earlier versions name the built-in devices "CADCraft PDF" and so on.
+    let renamed = n
+        .get(..9)
+        .filter(|head| head.eq_ignore_ascii_case("CADCraft "))
+        .and_then(|_| n.get(9..))
+        .map(|rest| format!("CADaddy {rest}"))
+        .filter(|r| BUILTIN.iter().any(|(b, _, _)| b.eq_ignore_ascii_case(r)));
+    let n = renamed.as_deref().unwrap_or(n);
     if let Some((b, o, d)) = BUILTIN.iter().find(|(b, _, _)| b.eq_ignore_ascii_case(n)) {
         return Some(builtin(b, *o, d));
     }
@@ -549,7 +557,7 @@ fn run_plottermanager(_s: &mut Session, p: &Value) -> Result<Value> {
                         Some(o) => o.as_str().and_then(PlotOutput::parse).ok_or_else(|| bad(cmd, "`output` must be pdf, png or svg"))?,
                         None => PlotOutput::Pdf,
                     };
-                    let (b, o, _) = BUILTIN.iter().find(|(_, o, _)| *o == output).copied().unwrap_or(("CADCraft PDF", PlotOutput::Pdf, ""));
+                    let (b, o, _) = BUILTIN.iter().find(|(_, o, _)| *o == output).copied().unwrap_or(("CADaddy PDF", PlotOutput::Pdf, ""));
                     builtin(b, o, "")
                 }
             };

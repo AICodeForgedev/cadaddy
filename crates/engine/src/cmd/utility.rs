@@ -29,9 +29,29 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Edit", "Find..."])
             .params("{find, replace?, matchCase?: bool, wholeWord?: bool}")
             .interactive(|_| Ok(super::ask::machine("find", "FIND", [super::ask::ask("find", "Enter text to find", super::ask::Kind::Text)]))),
-        CommandSpec::new("measuregeom", "Measure Geometry", run_measuregeom).params("{mode: distance|radius|angle|area, ...}").noundo(),
-        CommandSpec::new("radius.measure", "Radius", run_radius).menu(&["Tools", "Inquiry", "Radius"]).params("{handle}").noundo(),
-        CommandSpec::new("angle.measure", "Angle", run_angle).menu(&["Tools", "Inquiry", "Angle"]).params("{vertex, p1, p2} | {h1, h2}").noundo(),
+        CommandSpec::new("measuregeom", "Measure Geometry", run_measuregeom)
+            .alias(&["mea"])
+            .params("{mode: distance|radius|angle|area, ...}")
+            .noundo()
+            .interactive(|_| Ok(Box::new(super::measuregeom::MeasureM::default()))),
+        CommandSpec::new("radius.measure", "Radius", run_radius).menu(&["Tools", "Inquiry", "Radius"]).params("{handle}").noundo().interactive(
+            |_| Ok(super::ask::machine("radius.measure", "MEASUREGEOM", [super::ask::ask("handle", "Select arc or circle", super::ask::Kind::One)])),
+        ),
+        CommandSpec::new("angle.measure", "Angle", run_angle)
+            .menu(&["Tools", "Inquiry", "Angle"])
+            .params("{vertex, p1, p2} | {h1, h2}")
+            .noundo()
+            .interactive(|_| {
+                Ok(super::ask::machine(
+                    "angle.measure",
+                    "MEASUREGEOM",
+                    [
+                        super::ask::ask("vertex", "Specify angle vertex", super::ask::Kind::Point),
+                        super::ask::ask("p1", "Specify first angle endpoint", super::ask::Kind::Point),
+                        super::ask::ask("p2", "Specify second angle endpoint", super::ask::Kind::Point),
+                    ],
+                ))
+            }),
     ]
 }
 
