@@ -39,15 +39,16 @@ fn typed_layout_options_prompt_for_names() {
     s.script("LAYOUT\n\nModel\n").unwrap();
     assert_eq!(s.layout_space(), Space::Model);
 
-    // ? lists; Template and SAveas report and end without taking the next input.
+    // ? lists; Template asks for the template file (layout_template_saveas.rs covers the rest).
     let n = s.log.len();
     s.cmdline("LAYOUT ? Sheet*").unwrap();
     assert!(s.log[n..].iter().any(|l| l == "Layout: Sheet A (2)"), "{:?}", &s.log[n..]);
     assert!(!s.log[n..].iter().any(|l| l == "Layout: Layout1"));
     let n = s.log.len();
     s.cmdline("LAYOUT T").unwrap();
-    assert!(s.current_prompt().is_none());
-    assert!(s.log[n..].iter().any(|l| l.contains("not available yet")), "{:?}", &s.log[n..]);
+    assert_eq!(s.current_prompt().map(|p| p.display()).as_deref(), Some("Enter template file name:"));
+    s.input(cadaddy_engine::Input::Cancel).unwrap();
+    assert!(!s.log[n..].iter().any(|l| l.contains("not available yet")), "{:?}", &s.log[n..]);
     assert_eq!(layouts(&s), ["Layout1", "Sheet A", "Sheet A (2)"]);
 
     // The whole command is one undo step.
