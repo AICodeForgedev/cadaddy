@@ -252,6 +252,8 @@ pub struct CadApp {
     pub pending_url: Option<String>,
     /// What the support banner remembers ([`support`]).
     pub donate: support::DonatePrefs,
+    /// QuickCalc's history and variables, kept in the preferences.
+    pub quickcalc: palettes::quickcalc::Saved,
     /// Looking for, downloading and installing new versions ([`update`]); the desktop host
     /// supplies the updater.
     pub updater: Option<Box<dyn update::Updater>>,
@@ -312,6 +314,7 @@ impl CadApp {
             quit_requested: false,
             pending_url: None,
             donate: support::DonatePrefs::default(),
+            quickcalc: Default::default(),
             updater: None,
             layer_off_ask: None,
             update: update::UpdateState::default(),
@@ -418,6 +421,9 @@ impl CadApp {
         if self.spacemouse.settings != spacemouse::Settings::default() {
             prefs["spacemouse"] = json!(self.spacemouse.settings);
         }
+        if !self.quickcalc.is_empty() {
+            prefs["quickcalc"] = self.quickcalc.to_json();
+        }
         if !self.ui.recent_files.is_empty() {
             prefs["recentFiles"] = json!(self.ui.recent_files);
         }
@@ -471,6 +477,9 @@ impl CadApp {
         }
         if let Some(skip) = v.get("updateSkip").and_then(Value::as_str).filter(|s| s.len() <= 32) {
             self.update.skip = skip.to_string();
+        }
+        if let Some(q) = v.get("quickcalc") {
+            self.quickcalc = palettes::quickcalc::Saved::from_json(q);
         }
     }
 
