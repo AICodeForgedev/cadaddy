@@ -59,7 +59,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("selectall", "Select All", run_selectall).menu(&["Edit", "Select All"]).key("Cmd+A").alias(&["ai_selall"]).noundo(),
         CommandSpec::new("ai_deselect", "Deselect All", run_deselect).params("{}").noundo(),
         CommandSpec::new("select", "Select", run_select)
-            .params("{handles: [hex]} | {window: [[x,y],[x,y]], crossing?: bool} | {at: [x,y]} | {all: true} | {clear: true} | {add?: bool}")
+            .params(
+                "{handles: [hex]} | {window: [[x,y],[x,y]], crossing?: bool} | {lasso: [[x,y],...], mode?: \"window\"|\"crossing\"|\"fence\" (default: rightward window, leftward crossing)} | {at: [x,y], cycle?: n (the nth of the overlapping objects there, nearest first; the reply lists them as candidates)} | {fence: [[x,y],...]} | {all: true} | {clear: true} | {add?: bool}",
+            )
             .noundo()
             .interactive(|_| Ok(Box::new(SelectM::default()))),
     ]
@@ -544,12 +546,32 @@ fn run_select(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let space = s.space();
     let add = bool_or(p, "add", false);
+    let mut candidates: Option<Vec<Handle>> = None;
     let picked: Vec<Handle> = if let Some(w) = points_param(p, "window") {
         let (Some(a), Some(b)) = (w.first(), w.get(1)) else { return Err(bad("select", "window needs 2 corners")) };
         crate::select::select_window(s.doc()?, &space, Bounds2::new(*a, *b), bool_or(p, "crossing", false))
+    } else if let Some(path) = points_param(p, "lasso") {
+        let mode = match str_param(p, "mode") {
+            Some(m) => crate::select::LassoMode::from_name(m).ok_or_else(|| bad("select", "`mode` is \"window\", \"crossing\" or \"fence\""))?,
+            None => crate::select::LassoMode::from_direction(&path),
+        };
+        let need = if mode == crate::select::LassoMode::Fence { 2 } else { 3 };
+        if path.len() < need {
+            return Err(bad("select", format!("a {} lasso needs at least {need} points", mode.name())));
+        }
+        crate::select::select_lasso(s.doc()?, &space, &path, mode)
     } else if let Some(at) = point_param(p, "at") {
         let ap = f64_or(p, "aperture", s.pixel_size() * s.settings.pickbox * 1.5);
-        crate::select::pick(s.doc()?, &space, at, ap).into_iter().collect()
+        match p.get("cycle") {
+            None | Some(Value::Null) => crate::select::pick(s.doc()?, &space, at, ap).into_iter().collect(),
+            Some(v) => {
+                let n = v.as_u64().ok_or_else(|| bad("select", "`cycle` is a whole number (0: the nearest object)"))?;
+                let all = crate::select::pick_all(s.doc()?, &space, at, ap);
+                let chosen = usize::try_from(n).ok().and_then(|n| n.checked_rem(all.len())).and_then(|i| all.get(i).copied());
+                candidates = Some(all);
+                chosen.into_iter().collect()
+            }
+        }
     } else if let Some(f) = points_param(p, "fence") {
         crate::select::select_fence(s.doc()?, &space, &f)
     } else {
@@ -559,7 +581,11 @@ fn run_select(s: &mut Session, p: &Value) -> Result<Value> {
     sel.extend(picked);
     s.set_selection(sel);
     let sel = s.selection();
-    Ok(json!({ "selected": sel.len(), "handles": sel.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
+    let mut reply = json!({ "selected": sel.len(), "handles": sel.iter().map(|h| h.hex()).collect::<Vec<_>>() });
+    if let (Some(c), Some(m)) = (candidates, reply.as_object_mut()) {
+        m.insert("candidates".into(), json!(c.iter().map(|h| h.hex()).collect::<Vec<_>>()));
+    }
+    Ok(reply)
 }
 
 #[derive(Clone, Copy, PartialEq)]

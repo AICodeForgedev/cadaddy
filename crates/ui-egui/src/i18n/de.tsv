@@ -1126,3 +1126,10 @@
 	Text Style	Textstil
 	Xref	Externe Referenz
 	Raster Image Reference...	Rasterbildreferenz...
+	Window Lasso	Fensterlasso
+	Crossing Lasso	Kreuzenlasso
+	Fence Lasso	Zaunlasso
+	Press Space to cycle options	Leertaste wechselt die Optionen
+	Selection	Auswahl
+	Burst	Auflösen mit Attributen
+	Convert to Mtext	In mehrzeiligen Text umwandeln
