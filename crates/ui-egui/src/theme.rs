@@ -498,6 +498,8 @@ fn japanese_font() -> Option<&'static std::path::Path> {
                         "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
                         "/usr/share/fonts/ipa-pgothic/ipagp.ttf",
                         "/usr/share/fonts/vl-gothic/VL-PGothic-Regular.ttf",
+                        "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
+                        "/usr/share/fonts/noto-cjk/NotoSansCJKjp-Regular.otf",
                     ]
                 };
                 candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
@@ -610,6 +612,47 @@ pub fn korean_font() -> Option<&'static cadaddy_fonts::ttf::Face> {
         .as_ref()
 }
 
+/// The kana and kanji the Japanese interface shows: its catalog and its own name.
+fn japanese_letters() -> &'static std::collections::BTreeSet<char> {
+    static LETTERS: std::sync::OnceLock<std::collections::BTreeSet<char>> = std::sync::OnceLock::new();
+    LETTERS.get_or_init(|| {
+        include_str!("i18n/ja.tsv")
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .filter_map(|line| line.split('\t').nth(2))
+            .flat_map(str::chars)
+            .chain("日本語".chars())
+            .filter(|c| matches!(c, '\u{3040}'..='\u{30ff}' | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{ff66}'..='\u{ff9f}'))
+            .collect()
+    })
+}
+
+/// Whether the Japanese interface can be shown: an installed Japanese font, the CJK font or an
+/// embedded craft-fonts face (the first face of each, as egui uses it) has every kana and kanji
+/// it shows. Checked once.
+pub fn shows_japanese() -> bool {
+    static SHOWS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SHOWS.get_or_init(|| {
+        let covers = |face: &cadaddy_fonts::ttf::Face| japanese_letters().iter().all(|c| face.has_glyph(*c));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let first_covers = |p: &std::path::Path| {
+                read_capped(p, MAX_UI_FONT_BYTES)
+                    .and_then(|bytes| cadaddy_fonts::ttf::faces(&std::sync::Arc::new(bytes)).into_iter().next())
+                    .is_some_and(|face| covers(&face))
+            };
+            if japanese_font().is_some_and(first_covers) || cjk_font().is_some_and(first_covers) {
+                return true;
+            }
+        }
+        cadaddy_fonts::CRAFT_FONTS
+            .iter()
+            .filter(|f| f.style == "Regular" && f.scripts.iter().any(|s| matches!(*s, "Jpan" | "Hans" | "Hant")))
+            .filter(|f| f.bytes.len() as u64 <= MAX_UI_FONT_BYTES)
+            .any(|f| cadaddy_fonts::ttf::faces(&std::sync::Arc::new(f.bytes.to_vec())).first().is_some_and(covers))
+    })
+}
+
 /// Whether the interface in `language` shows Hangul (the Korean name in the language picker):
 /// in every language when the CJK fonts cover it, in a Korean interface with [`korean_font`].
 pub fn shows_hangul(language: &str) -> bool {
@@ -617,10 +660,12 @@ pub fn shows_hangul(language: &str) -> bool {
 }
 
 /// Whether the interface can show `language` without missing-glyph boxes: Chinese needs an
-/// installed CJK font, Korean a font with Hangul, العربية an installed Arabic font.
+/// installed CJK font, Korean a font with Hangul, Japanese one with its kana and kanji, العربية an
+/// installed Arabic font.
 pub fn can_show(language: &str) -> bool {
     match language {
         "ko" => shows_hangul("ko"),
+        "ja" => shows_japanese(),
         "ar" => arabic_font().is_some(),
         l if l.starts_with("zh") => cjk_font().is_some(),
         _ => true,

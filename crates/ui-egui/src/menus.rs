@@ -174,10 +174,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.interface_language = preference;
             let shown = app.language();
             if shown != preference.resolve(&app.system_languages) {
-                app.set_status(if preference.resolve(&app.system_languages) == "ko" {
-                    "No font covers the Korean interface, so it stays in English. Install a Hangul font (Malgun Gothic or Nanum Gothic), or build with a Hang/Kore craft-fonts face."
-                } else {
-                    "No Chinese font is installed, so the interface stays in English. Install one (Noto Sans CJK, for example) to use Chinese."
+                app.set_status(match preference.resolve(&app.system_languages) {
+                    "ko" => "No font covers the Korean interface, so it stays in English. Install a Hangul font (Malgun Gothic or Nanum Gothic), or build with a Hang/Kore craft-fonts face.",
+                    "ja" => "No font covers the Japanese interface, so it stays in English. Install a Japanese font (Yu Gothic, Meiryo, Hiragino Sans or Noto Sans CJK JP).",
+                    _ => "No Chinese font is installed, so the interface stays in English. Install one (Noto Sans CJK, for example) to use Chinese.",
                 });
             }
             Ok(json!({"interfaceLanguage": preference.code(), "shown": shown}))
