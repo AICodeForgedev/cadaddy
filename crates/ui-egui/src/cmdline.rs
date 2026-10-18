@@ -254,6 +254,11 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
     if ctx.egui_wants_keyboard_input() || crate::mtext_editor::is_open(ctx) {
         return;
     }
+    // A modal dialog (the save-changes question when closing) owns the keyboard: an Enter here
+    // would repeat the last command behind it.
+    if app.close_prompt().is_some() || ctx.memory(|m| m.top_modal_layer()).is_some() {
+        return;
+    }
     let events = ctx.input(|i| i.events.clone());
     let selection = app.session.selection();
     app.cmd.watch_selection(&selection);
