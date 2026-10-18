@@ -386,3 +386,170 @@ fn generated_drawings_roundtrip_exactly() {
 fn first_insert() -> Insert {
     first(&every_kind(), |k| if let EntityKind::Insert(i) = k { Some(i.clone()) } else { None })
 }
+
+// ---- Incremental saves (Q99) ----
+
+/// The file after storing `out` over `file`.
+fn stored(file: &[u8], out: &Output) -> Vec<u8> {
+    match out {
+        Output::Full(b) => b.clone(),
+        Output::Append { from, bytes, .. } => {
+            assert_eq!(*from as usize, file.len(), "appended to the file as it is");
+            [file, bytes.as_slice()].concat()
+        }
+    }
+}
+
+fn lines(n: usize) -> Drawing {
+    let mut d = Drawing::new_metric();
+    for i in 0..n {
+        let x = i as f64;
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(x, 0.0, 0.0), b: Vec3::new(x, 1.0, 0.0) })).unwrap();
+    }
+    d
+}
+
+fn no_thumb() -> Option<Vec<u8>> {
+    None
+}
+
+#[test]
+fn an_edit_appends_only_its_chunk_and_reads_back_exactly() {
+    let mut d = lines(5000);
+    let (out, state) = save(&d, None, &no_thumb).unwrap();
+    assert!(matches!(out, Output::Full(_)));
+    let file = stored(&[], &out);
+    // Nothing changed: only a new index and trailer (and nothing else) are appended.
+    let (out, state) = save(&d, Some(&state), &no_thumb).unwrap();
+    let Output::Append { bytes, .. } = &out else { panic!("expected an append") };
+    assert!(bytes.len() < 400, "{} bytes appended for no change", bytes.len());
+    let file = stored(&file, &out);
+    // One object edited: its chunk (of 1024) is appended.
+    let h = d.model.iter().nth(2500).map(|e| e.handle).unwrap();
+    d.model.modify(h, |e| e.common.layer = "Edited".into());
+    let (out, state) = save(&d, Some(&state), &no_thumb).unwrap();
+    let Output::Append { bytes, index_at, .. } = &out else { panic!("expected an append") };
+    assert!(*index_at > 0 && bytes.len() < file.len() / 3, "{} of {}", bytes.len(), file.len());
+    let file = stored(&file, &out);
+    let (back, rep) = model::read(&file).unwrap();
+    assert!(rep.notes.is_empty(), "{:?}", rep.notes);
+    assert_eq!(back, d);
+    assert_eq!(state.len as usize, file.len());
+}
+
+#[test]
+fn a_file_read_back_saves_incrementally() {
+    let d = every_kind();
+    let (out, _) = save(&d, None, &|| Some(b"\x89PNG fake".to_vec())).unwrap();
+    let file = stored(&[], &out);
+    let (mut opened, _) = model::read(&file).unwrap();
+    let state = seed(&opened, &file).expect("a file this writer wrote matches the drawing read from it");
+    opened.layers.push(Layer { name: "Added".into(), ..Layer::default() });
+    let h = opened.model.iter().next().map(|e| e.handle).unwrap();
+    opened.model.modify(h, |e| e.common.layer = "Added".into());
+    let (out, _) = save(&opened, Some(&state), &no_thumb).unwrap();
+    let Output::Append { bytes, .. } = &out else { panic!("expected an append") };
+    assert!(bytes.len() < file.len());
+    let file2 = stored(&file, &out);
+    let (back, rep) = read_cdy_report(&file2).unwrap();
+    assert_eq!(back, opened);
+    assert_eq!(rep.thumbnail.as_deref(), Some(&b"\x89PNG fake"[..]), "an appended save keeps the preview");
+    // A file a different writer laid out (or damaged) isn't matched: the next save is full.
+    assert!(seed(&opened, &file[..file.len() - 1]).is_none());
+    assert!(seed(&lines(3), &file).is_none());
+}
+
+#[test]
+fn waste_past_the_limit_compacts_the_file() {
+    let mut d = lines(3000);
+    let (out, mut state) = save(&d, None, &no_thumb).unwrap();
+    let mut file = stored(&[], &out);
+    let h = d.model.iter().next().map(|e| e.handle).unwrap();
+    let mut appends = 0;
+    for i in 0..20 {
+        d.model.modify(h, |e| e.common.layer = format!("L{i}"));
+        let (out, s) = save(&d, Some(&state), &no_thumb).unwrap();
+        state = s;
+        match &out {
+            Output::Append { .. } => appends += 1,
+            Output::Full(_) => {
+                assert!(appends > 0, "appends first");
+                file = stored(&file, &out);
+                let (back, _) = model::read(&file).unwrap();
+                assert_eq!(back, d);
+                return;
+            }
+        }
+        file = stored(&file, &out);
+        let waste = file.len() as f64 - state.len as f64;
+        assert!(waste.abs() < 1.0);
+    }
+    panic!("never compacted after {appends} appends");
+}
+
+#[test]
+fn a_save_cut_short_anywhere_leaves_the_previous_save() {
+    let mut d = lines(1500);
+    let (out, state) = save(&d, None, &no_thumb).unwrap();
+    let old = stored(&[], &out);
+    let before = d.clone();
+    let h = d.model.iter().last().map(|e| e.handle).unwrap();
+    d.model.modify(h, |e| e.common.layer = "New".into());
+    d.layers.push(Layer { name: "New".into(), ..Layer::default() });
+    let (out, _) = save(&d, Some(&state), &no_thumb).unwrap();
+    let Output::Append { index_at, .. } = &out else { panic!("expected an append") };
+    let new = stored(&old, &out);
+    // Until the new index is complete the file reads as the previous save; once it is (only the
+    // trailer short), as the new one.
+    let index_end = new.len() - container::TRAILER_LEN;
+    for cut in old.len()..new.len() {
+        let (back, _) = model::read(&new[..cut]).unwrap_or_else(|e| panic!("cut at {cut}: {e}"));
+        let want = if cut < index_end { &before } else { &d };
+        assert_eq!(&back, want, "cut at {cut} of {} (index from {})", new.len(), old.len() + index_at);
+    }
+    assert_eq!(model::read(&new).unwrap().0, d);
+}
+
+#[test]
+fn parts_from_a_newer_version_survive_an_incremental_save() {
+    let d = lines(10);
+    let (out, _) = save(&d, None, &no_thumb).unwrap();
+    let Output::Full(file) = out else { panic!() };
+    let (opened, _) = model::read(&file).unwrap();
+    // The file as a newer CADaddy might leave it: one more chunk, of a type this one doesn't know.
+    let combined = {
+        let mut w = Writer::append(file.len() as u64);
+        w.chunk(*b"ZZZZ", 3, b"future data", false);
+        for e in container::index(&file).unwrap() {
+            w.reuse(&e);
+        }
+        [file.clone(), w.finish()].concat()
+    };
+    let state = seed(&opened, &combined).expect("a part this version doesn't know doesn't stop the match");
+    let mut edited = opened.clone();
+    edited.layers.push(Layer { name: "X".into(), ..Layer::default() });
+    let (out, _) = save(&edited, Some(&state), &no_thumb).unwrap();
+    let after = stored(&combined, &out);
+    let tags: Vec<[u8; 4]> = container::index(&after).unwrap().iter().map(|e| e.tag).collect();
+    assert!(tags.contains(b"ZZZZ"), "{tags:?}");
+    assert_eq!(model::read(&after).unwrap().0, edited);
+}
+
+/// 190k objects: the full save, then a save after one edit (printed with `--nocapture`).
+#[test]
+fn saving_a_large_drawing_after_a_small_edit_is_fast() {
+    let mut d = lines(190_000);
+    let t = std::time::Instant::now();
+    let (out, state) = save(&d, None, &no_thumb).unwrap();
+    let full = t.elapsed();
+    let file = stored(&[], &out);
+    let h = d.model.iter().nth(100_000).map(|e| e.handle).unwrap();
+    d.model.modify(h, |e| e.common.layer = "Edited".into());
+    let t = std::time::Instant::now();
+    let (out, _) = save(&d, Some(&state), &no_thumb).unwrap();
+    let small = t.elapsed();
+    let Output::Append { bytes, .. } = &out else { panic!("expected an append") };
+    println!("190k objects: full save {full:?} ({} B); after one edit {small:?} ({} B appended)", file.len(), bytes.len());
+    assert!(small * 10 < full, "{small:?} vs {full:?}");
+    assert_eq!(model::read(&stored(&file, &out)).unwrap().0, d);
+}

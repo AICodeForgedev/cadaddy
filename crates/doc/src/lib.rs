@@ -32,7 +32,7 @@ pub use header::{HVal, Header};
 pub use plotstyle::*;
 pub use plotter::*;
 pub use refedit::{RefEdit, WorkItem};
-pub use store::EntityStore;
+pub use store::{ChunkRef, EntityStore};
 pub use tables::*;
 
 /// File data CADaddy doesn't model, kept for saving (#528).

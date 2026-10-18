@@ -45,10 +45,12 @@ pub struct IndexEntry {
     pub raw_len: u64,
 }
 
-/// Writes a .cdy file chunk by chunk.
+/// Writes a .cdy file chunk by chunk, or the chunks appended to one (an incremental save).
 pub struct Writer {
     out: Vec<u8>,
     index: Vec<IndexEntry>,
+    /// Where `out` starts in the file: 0 for a new file, the old length when appending.
+    base: u64,
 }
 
 impl Writer {
@@ -58,7 +60,22 @@ impl Writer {
         out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes());
-        Writer { out, index: Vec::new() }
+        Writer { out, index: Vec::new(), base: 0 }
+    }
+
+    /// Chunks to append to a file of `len` bytes; [`Writer::reuse`] lists the ones it already has.
+    pub fn append(len: u64) -> Self {
+        Writer { out: Vec::with_capacity(1 << 16), index: Vec::new(), base: len }
+    }
+
+    /// List a chunk the file already holds in the new index (unchanged since it was written).
+    pub fn reuse(&mut self, e: &IndexEntry) {
+        self.index.push(e.clone());
+    }
+
+    /// The index entries so far, in order.
+    pub fn entries(&self) -> &[IndexEntry] {
+        &self.index
     }
 
     /// Append a chunk; `deflate` compresses its payload (small or already compressed data, like a
@@ -69,7 +86,7 @@ impl Writer {
             Some(p) if p.len() < data.len() => (FLAG_DEFLATE, p),
             _ => (0, data),
         };
-        let offset = self.out.len() as u64;
+        let offset = self.base + self.out.len() as u64;
         self.out.extend_from_slice(&tag);
         self.out.extend_from_slice(&version.to_le_bytes());
         self.out.extend_from_slice(&flags.to_le_bytes());
@@ -81,13 +98,20 @@ impl Writer {
     }
 
     /// Finish: the index chunk and the trailer.
-    pub fn finish(mut self) -> Vec<u8> {
+    pub fn finish(self) -> Vec<u8> {
+        self.finish_split().0
+    }
+
+    /// [`Writer::finish`], with where in the bytes the index starts: a careful writer makes the
+    /// chunks durable before the index and trailer that point at them.
+    pub fn finish_split(mut self) -> (Vec<u8>, usize) {
         let index = postcard::to_allocvec(&self.index).unwrap_or_default();
-        let at = self.out.len() as u64;
+        let split = self.out.len();
+        let at = self.base + split as u64;
         self.chunk(*b"INDX", 1, &index, false);
         self.out.extend_from_slice(&at.to_le_bytes());
         self.out.extend_from_slice(&TRAILER_MAGIC);
-        self.out
+        (self.out, split)
     }
 }
 
@@ -123,7 +147,7 @@ pub enum Read {
 }
 
 /// The chunk at `at`, and where the next one starts.
-fn chunk_at(b: &[u8], at: usize) -> Option<(Read, usize)> {
+pub(super) fn chunk_at(b: &[u8], at: usize) -> Option<(Read, usize)> {
     let tag: [u8; 4] = b.get(at..at.checked_add(4)?)?.try_into().ok()?;
     let version = u16_at(b, at + 4)?;
     let flags = u16_at(b, at + 6)?;
@@ -167,21 +191,44 @@ pub fn header(b: &[u8]) -> Result<u16, String> {
 
 /// Every chunk of the file in order: through the index when trailer and index are sound, else by
 /// walking the chunks from the header (a damaged or cut-short file). The second value says how.
+///
+/// A file saved incrementally holds several saves, each ending in its index and trailer. Walking
+/// finds the last index whose chunks are all there (a damaged one is then reported) and reads
+/// through it: a save cut short (the app or machine stopped while appending) leaves the file as
+/// the save before it.
 pub fn chunks(b: &[u8]) -> Result<(Vec<Read>, bool), String> {
     header(b)?;
     if let Some(list) = by_index(b) {
         return Ok((list, true));
     }
-    // Walk: chunk after chunk until the bytes run out or stop making sense.
     let mut at = HEADER_LEN;
     let mut out = Vec::new();
-    while out.len() < MAX_CHUNKS {
-        let Some((r, next)) = chunk_at(b, at) else { break };
-        if matches!(&r, Read::Ok(c) if &c.tag == b"INDX") {
-            break;
+    let mut last_index: Option<Vec<IndexEntry>> = None;
+    let mut steps = 0usize;
+    while steps < MAX_CHUNKS {
+        steps += 1;
+        // An earlier save's trailer: skip it.
+        if b.get(at + 8..at + TRAILER_LEN) == Some(&TRAILER_MAGIC[..]) {
+            at += TRAILER_LEN;
+            continue;
         }
-        out.push(r);
+        let Some((r, next)) = chunk_at(b, at) else { break };
+        match r {
+            Read::Ok(c) if &c.tag == b"INDX" => {
+                if let Ok(entries) = postcard::from_bytes::<Vec<IndexEntry>>(&c.data)
+                    && entries.len() <= MAX_CHUNKS
+                    && entries.iter().all(|e| usize::try_from(e.offset).ok().and_then(|o| chunk_at(b, o)).is_some())
+                {
+                    last_index = Some(entries);
+                }
+            }
+            r => out.push(r),
+        }
         at = next;
+    }
+    if let Some(entries) = last_index {
+        let list = entries.iter().filter_map(|e| Some(chunk_at(b, usize::try_from(e.offset).ok()?)?.0)).collect();
+        return Ok((list, false));
     }
     Ok((out, false))
 }
@@ -204,7 +251,7 @@ pub fn find(b: &[u8], tag: &[u8; 4]) -> Option<Chunk> {
 }
 
 /// The index entries, when trailer and index are sound.
-fn index(b: &[u8]) -> Option<Vec<IndexEntry>> {
+pub(super) fn index(b: &[u8]) -> Option<Vec<IndexEntry>> {
     let t = b.len().checked_sub(TRAILER_LEN)?;
     if b.get(t + 8..)? != TRAILER_MAGIC {
         return None;

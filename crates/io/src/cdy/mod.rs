@@ -5,22 +5,28 @@
 
 mod container;
 mod model;
+mod save;
 mod tokens;
 
 use cadaddy_doc::{Drawing, Space};
 
 pub use container::{FORMAT_VERSION, is_cdy};
 pub use model::{ENTITY_CHUNK, ReadReport};
+pub use save::{MAX_WASTE, Output, SaveState, save, seed};
 
 use crate::{IoError, Result};
 
 /// Width and height of the embedded preview, in pixels.
 pub const THUMBNAIL_SIZE: (u32, u32) = (256, 192);
 
+/// The preview a .cdy file embeds: model space as a PNG, `None` when it is empty.
+pub fn preview(d: &Drawing) -> Option<Vec<u8>> {
+    if d.model.is_empty() { None } else { crate::png(d, &Space::Model, THUMBNAIL_SIZE.0, THUMBNAIL_SIZE.1).ok() }
+}
+
 /// The drawing as a .cdy file, with a preview of model space.
 pub fn write_cdy(d: &Drawing) -> Result<Vec<u8>> {
-    let png = if d.model.is_empty() { None } else { crate::png(d, &Space::Model, THUMBNAIL_SIZE.0, THUMBNAIL_SIZE.1).ok() };
-    model::write(d, png.as_deref()).map_err(IoError::Format)
+    model::write(d, preview(d).as_deref()).map_err(IoError::Format)
 }
 
 /// The drawing in a .cdy file. Damaged parts that were left out are listed in the drawing's

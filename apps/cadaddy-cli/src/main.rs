@@ -170,6 +170,20 @@ fn install_io() {
         plot: Some(|d, space, opts| cadaddy_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
         read_pdf: Some(cadaddy_io::pdf_read::read_json),
     });
+    // .cdy saves append only what changed to the file a drawing was saved to or read from.
+    cadaddy_engine::cmd::file::set_cdy_hooks(cadaddy_engine::cmd::file::CdyHooks {
+        save: |d, prev| {
+            use cadaddy_engine::cmd::file::CdyWrite;
+            let prev = prev.and_then(|p| p.as_ref().downcast_ref::<cadaddy_io::cdy::SaveState>());
+            let (out, state) = cadaddy_io::cdy::save(d, prev, &|| cadaddy_io::cdy::preview(d))?;
+            let out = match out {
+                cadaddy_io::cdy::Output::Full(bytes) => CdyWrite::Full(bytes),
+                cadaddy_io::cdy::Output::Append { from, bytes, index_at } => CdyWrite::Append { from, bytes, index_at },
+            };
+            Ok((out, std::sync::Arc::new(state)))
+        },
+        seed: |d, bytes| cadaddy_io::cdy::seed(d, bytes).map(|s| std::sync::Arc::new(s) as cadaddy_engine::cmd::file::CdyState),
+    });
     cadaddy_engine::cmd::file::set_write_as(|d, name, o| {
         cadaddy_io::write_with(d, name, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });

@@ -99,8 +99,8 @@ object.
 | `MANI` | the manifest: `format`, `writer` (e.g. `CADaddy 0.7.7`), `insunits`, `measurement`, `extents` (`[minx, miny, maxx, maxy]` of model space or null), `objects`, `blocks`, `layouts` (names), `thumbnail` (the tag of the preview chunk or null) | JSON text, the first chunk |
 | `HEAD` | the header variables | value tree |
 | `TABL` | a record of `layers`, `linetypes`, `textStyles`, `dimStyles`, `mleaderStyles`, `tableStyles`, `mlineStyles`, `views`, `vports`, `ucss`, `layerStates`, `groups`, `plotStyleTables`, `constraints`, `parametric`, `scales`, `handseed`, `hiddenSaved`, `hidden` (handles) | value tree |
-| `BLKS` | a list of block definitions, each `[name, block, objects]`; about 1024 objects per chunk | value tree |
-| `ENTS` | up to 1024 model space objects, in draw order (the size of an `EntityStore` chunk); as many chunks as needed | value tree |
+| `BLKS` | a list of block definitions, each `[name, block, objects]`; a writer puts one per chunk | value tree |
+| `ENTS` | model space objects in draw order, one chunk of the drawing's object store (up to 1024) each; as many chunks as needed | value tree |
 | `LAYO` | one layout: `[layout, objects]` (its paper space objects) | value tree |
 | `FRGN` | data from other programs kept without modelling it: `classes`, `objects` (`[handle, type, groups]`), `dictionary`, `entities` and `records` (extension dictionaries, reactors, xdata, colour books, properties), `targets`, `dataStore` | value tree |
 | `THMB` | a PNG preview of model space (256 × 192) | raw PNG, stored uncompressed |
@@ -110,6 +110,25 @@ properties (layer, colour, linetype, xdata, …) and their kind with its data.
 
 What isn't saved, by design: session state, i.e. why an xref couldn't load, an ARRAYEDIT in progress, a REFEDIT in
 progress, the notes from reading the file and the records the reader skipped.
+
+## Incremental saves
+
+Saving a drawing again to the .cdy file it was saved to or read from appends only the chunks that
+changed. The appended bytes are those chunks, a new `INDX` listing every current chunk (the unchanged
+ones where they already are), and a new trailer. Readers only ever follow the last index, so the
+superseded chunks are dead space. A writer:
+
+- appends only when the file is exactly as it last wrote or read it (same length and modification
+  time); otherwise it writes the whole file;
+- writes the chunks, makes them durable, then writes the index and trailer;
+- writes the whole file instead once the dead space would exceed 30% of the file and 64 KiB
+  (compaction). A whole file is written to a temporary file and renamed over the old one;
+- keeps chunks of types it doesn't know in the new index;
+- keeps the existing preview (`THMB`) on an appended save; a whole-file save renders a new one.
+
+A save stopped partway (the app or machine stopped) leaves no trailer at the file's end. A reader
+then walks the chunks, skipping earlier trailers, and uses the last `INDX` whose chunks are all
+present, i.e. the previous complete save.
 
 ## Compatibility
 
@@ -121,3 +140,4 @@ progress, the notes from reading the file and the records the reader skipped.
 | date | change |
 |------|--------|
 | 2026-10-18 | Version 1. |
+| 2026-10-18 | Incremental saves (append, last complete index wins); one block per `BLKS` chunk, one store chunk per `ENTS` chunk. Readers of version 1 read these files unchanged. |

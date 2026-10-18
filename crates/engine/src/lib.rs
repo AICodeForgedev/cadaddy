@@ -187,6 +187,9 @@ pub struct DocState {
     /// Saving into DWG or DXF has checked what that file wouldn't keep of the drawing (and said
     /// so, when anything): it is checked once per drawing.
     pub kept_checked: bool,
+    /// The .cdy file this drawing was last saved to or read from, and what it holds: the next
+    /// save there appends only what changed ([`cmd::file::CdySaved`]).
+    pub cdy_saved: Option<cmd::file::CdySaved>,
     /// What opening the drawing changed and told the user (missing current styles reset): the
     /// OPEN reply lists them with its warnings, for agents that see no command-line history.
     pub open_notes: Vec<String>,
@@ -220,6 +223,7 @@ impl DocState {
             read_loss: None,
             loss_warned: false,
             kept_checked: false,
+            cdy_saved: None,
             open_notes: Vec::new(),
             block_edit: None,
         }

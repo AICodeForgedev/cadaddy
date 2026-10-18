@@ -105,6 +105,115 @@ pub fn write_as() -> Option<WriteAsHook> {
     WRITE_AS.get().copied()
 }
 
+/// What a .cdy file holds and where, as the io layer's .cdy saver last wrote or read it (opaque
+/// here: the engine only keeps it for the next save).
+pub type CdyState = std::sync::Arc<dyn std::any::Any + Send + Sync>;
+
+/// How a .cdy save is stored.
+pub enum CdyWrite {
+    /// A whole file, written atomically.
+    Full(Vec<u8>),
+    /// Bytes appended to the file, which must still be `from` bytes long: the changed chunks,
+    /// then from `index_at` the new index and trailer.
+    Append { from: u64, bytes: Vec<u8>, index_at: usize },
+}
+
+/// The .cdy saver (installed by hosts with the io layer): incremental saves of a drawing to the
+/// .cdy file it came from.
+pub struct CdyHooks {
+    /// Save a drawing given what its file held (`None`: write it in full).
+    pub save: fn(&Drawing, Option<&CdyState>) -> std::result::Result<(CdyWrite, CdyState), String>,
+    /// What a .cdy file just read holds, matched to the drawing read from it (`None` when it
+    /// can't be: the first save is then a full one).
+    pub seed: fn(&Drawing, &[u8]) -> Option<CdyState>,
+}
+
+static CDY: OnceLock<CdyHooks> = OnceLock::new();
+
+pub fn set_cdy_hooks(h: CdyHooks) {
+    let _ = CDY.set(h);
+}
+pub fn cdy_hooks() -> Option<&'static CdyHooks> {
+    CDY.get()
+}
+
+/// The .cdy file a drawing was last saved to or read from: its path, its length and modification
+/// time then (a file changed since by anything else is written in full), and what it holds.
+#[derive(Clone)]
+pub struct CdySaved {
+    path: String,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    state: CdyState,
+}
+
+impl std::fmt::Debug for CdySaved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CdySaved").field("path", &self.path).field("len", &self.len).finish()
+    }
+}
+
+/// The length and modification time of the file at `path`, if it is one.
+fn on_disk(path: &str) -> Option<(u64, Option<std::time::SystemTime>)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let m = std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file)?;
+        Some((m.len(), m.modified().ok()))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        None
+    }
+}
+
+impl CdySaved {
+    fn new(path: &str, state: CdyState) -> Option<Self> {
+        let (len, modified) = on_disk(path)?;
+        Some(CdySaved { path: path.to_string(), len, modified, state })
+    }
+    /// Whether the file at `path` is still exactly what this describes.
+    fn holds(&self, path: &str) -> bool {
+        same_file(&self.path, path) && on_disk(path) == Some((self.len, self.modified))
+    }
+}
+
+/// Append a .cdy save to `path`: the chunks, made durable, then the index and trailer. A file no
+/// longer `from` bytes long is left alone; a failed append cuts the file back to what it was, so
+/// it still holds the previous save.
+fn append_cdy(path: &str, from: u64, bytes: &[u8], index_at: usize) -> Result<()> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let fail = |e: std::io::Error| bad("save", format!("{path}: {e}"));
+        let mut f = std::fs::OpenOptions::new().write(true).open(path).map_err(fail)?;
+        let m = f.metadata().map_err(fail)?;
+        if m.permissions().readonly() {
+            return Err(bad("save", format!("{path} is read-only. Save it under another name with SAVEAS.")));
+        }
+        if m.len() != from {
+            return Err(bad("save", format!("{path} changed since it was last saved")));
+        }
+        let (chunks, index) = bytes.split_at(index_at.min(bytes.len()));
+        let r = f
+            .seek(SeekFrom::Start(from))
+            .and_then(|_| f.write_all(chunks))
+            .and_then(|()| f.sync_data())
+            .and_then(|()| f.write_all(index))
+            .and_then(|()| f.sync_all());
+        if let Err(e) = r {
+            let _ = f.set_len(from);
+            return Err(fail(e));
+        }
+        Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (from, bytes, index_at);
+        Err(bad("save", format!("{path}: appending is not available on the web")))
+    }
+}
+
 static DWG_COPY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// DWGCOPY: saving a .cdy file also writes a DWG copy next to it (the same name with `.dwg`), for
@@ -306,6 +415,8 @@ pub struct ReadFile {
     binary_dxf: bool,
     name: String,
     path: Option<String>,
+    /// For a .cdy file: what it holds, for incremental saves.
+    cdy: Option<CdyState>,
 }
 
 impl ReadFile {
@@ -360,11 +471,11 @@ pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
 
 /// Add a [`read_file`] result to the session as the active drawing: the fast half of OPEN.
 pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
-    let ReadFile { drawing, binary_dxf, name, path } = f;
+    let ReadFile { drawing, binary_dxf, name, path, cdy } = f;
     if let Some(i) = path.as_deref().and_then(|p| already_open(s, p)) {
         return Ok(switch_to_open(s, i));
     }
-    let i = add_read(s, drawing, binary_dxf, &name, path);
+    let i = add_read(s, drawing, binary_dxf, &name, path, cdy);
     super::blocks::xref::after_open(s, i);
     Ok(opened(s, i, true))
 }
@@ -375,10 +486,11 @@ fn read_bytes(bytes: &[u8], name: &str, path: Option<String>) -> Result<ReadFile
     // A file that isn't a drawing (an imported SVG) gives the drawing no file name: QSAVE then
     // asks where to save instead of exporting over the original.
     let path = path.filter(|p| is_drawing_file(p));
-    Ok(ReadFile { drawing, binary_dxf: cadaddy_dxf::is_binary(bytes), name: name.to_string(), path })
+    let cdy = path.as_ref().filter(|p| is_cdy(p)).and_then(|_| cdy_hooks()).and_then(|h| (h.seed)(&drawing, bytes));
+    Ok(ReadFile { drawing, binary_dxf: cadaddy_dxf::is_binary(bytes), name: name.to_string(), path, cdy })
 }
 
-fn add_read(s: &mut Session, mut drawing: Drawing, binary_dxf: bool, name: &str, path: Option<String>) -> usize {
+fn add_read(s: &mut Session, mut drawing: Drawing, binary_dxf: bool, name: &str, path: Option<String>, cdy: Option<CdyState>) -> usize {
     let reset = crate::audit::current_styles(&mut drawing);
     // Every way a drawing is opened (the OPEN command, the background open, scripts) looks for
     // its relative image paths in its folder first.
@@ -386,12 +498,14 @@ fn add_read(s: &mut Session, mut drawing: Drawing, binary_dxf: bool, name: &str,
     let notes = drawing.read_notes.clone();
     let loss = read_loss(&drawing);
     let has_path = path.is_some();
+    let cdy_saved = path.as_deref().zip(cdy).and_then(|(p, state)| CdySaved::new(p, state));
     let i = s.open_drawing(drawing, &file_name(name), path);
     if let Some(st) = s.docs.get_mut(i) {
         // QSAVE keeps a binary DXF binary.
         st.binary_dxf = binary_dxf;
         st.read_loss = loss.filter(|_| has_path);
         st.open_notes = reset.clone();
+        st.cdy_saved = cdy_saved;
     }
     for note in notes.into_iter().chain(reset) {
         s.echo(note);
@@ -439,8 +553,8 @@ fn switch_to_open(s: &mut Session, i: usize) -> Value {
 }
 
 pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option<String>) -> Result<usize> {
-    let ReadFile { drawing, binary_dxf, name, path } = read_bytes(bytes, name, path)?;
-    Ok(add_read(s, drawing, binary_dxf, &name, path))
+    let ReadFile { drawing, binary_dxf, name, path, cdy } = read_bytes(bytes, name, path)?;
+    Ok(add_read(s, drawing, binary_dxf, &name, path, cdy))
 }
 
 /// OPEN's reply: the drawing's index and what reading it left out.
@@ -537,6 +651,8 @@ fn run_closeall(s: &mut Session, _p: &Value) -> Result<Value> {
 pub(crate) struct Saved {
     bytes: usize,
     copy: Option<std::result::Result<String, String>>,
+    /// Appended to the .cdy file (only what changed) rather than written in full.
+    incremental: bool,
 }
 
 pub(crate) fn save_to(s: &mut Session, path: &str) -> Result<Saved> {
@@ -581,8 +697,13 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
             ));
         }
     }
-    let bytes = write_bytes(s, cmd, path, opts)?;
-    let n = commit_save(s, path, &bytes, store)?;
+    let (n, incremental) = match save_cdy(s, path, opts)? {
+        Some(r) => r,
+        None => {
+            let bytes = write_bytes(s, cmd, path, opts)?;
+            (commit_save(s, path, &bytes, store)?, false)
+        }
+    };
     if is_drawing_file(path)
         && let Ok(st) = s.state_mut()
     {
@@ -601,7 +722,36 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
         }
     }
     let copy = (is_cdy(path) && dwg_copy()).then(|| save_dwg_copy(s, cmd, path));
-    Ok(Saved { bytes: n, copy })
+    Ok(Saved { bytes: n, copy, incremental })
+}
+
+/// Save to a .cdy file through the .cdy saver: appended to the file when it is the one the drawing
+/// was last saved to or read from and nothing else changed it since, else in full. `None` when
+/// this isn't such a save (another format, or no saver: [`write_bytes`] writes it). The bytes
+/// written and whether they were appended.
+fn save_cdy(s: &mut Session, path: &str, opts: &SaveAs) -> Result<Option<(usize, bool)>> {
+    let Some(h) = cdy_hooks().filter(|_| is_cdy(path) && *opts == SaveAs::default()) else { return Ok(None) };
+    let st = s.state()?;
+    let prev = st.cdy_saved.as_ref().filter(|c| c.holds(path)).map(|c| c.state.clone());
+    let d = st.drawing().clone();
+    let (out, mut state) = (h.save)(&d, prev.as_ref()).map_err(|e| bad("save", e))?;
+    let (n, incremental) = match out {
+        CdyWrite::Append { from, bytes, index_at } => match commit_save(s, path, &bytes, |p, b| append_cdy(p, from, b, index_at)) {
+            Ok(n) => (n, true),
+            // Appending failed (the file was cut back to the previous save): write it in full.
+            Err(_) => {
+                let (out, full) = (h.save)(&d, None).map_err(|e| bad("save", e))?;
+                state = full;
+                let CdyWrite::Full(bytes) = out else { return Err(bad("save", "the .cdy saver didn't write the whole file")) };
+                (commit_save(s, path, &bytes, store)?, false)
+            }
+        },
+        CdyWrite::Full(bytes) => (commit_save(s, path, &bytes, store)?, false),
+    };
+    if let Ok(st) = s.state_mut() {
+        st.cdy_saved = CdySaved::new(path, state);
+    }
+    Ok(Some((n, incremental)))
 }
 
 /// DWGCOPY: write the DWG copy of a drawing just saved to the .cdy file `path`. A copy that fails
@@ -709,6 +859,9 @@ fn commit_save(s: &mut Session, path: &str, bytes: &[u8], store: impl FnOnce(&st
 /// The save result; on the web it also names the file the browser downloaded.
 fn saved(path: &str, sv: &Saved) -> Value {
     let mut r = json!({ "path": path, "bytes": sv.bytes });
+    if sv.incremental {
+        r["incremental"] = json!(true);
+    }
     if cfg!(target_arch = "wasm32") {
         r["download"] = json!(file_name(path));
     }
@@ -1137,7 +1290,7 @@ mod pr193_tests {
         let st = s.state().unwrap();
         assert!(!st.is_dirty());
         assert_eq!((st.path.as_deref(), st.title.as_str()), (Some("a/Owned.dxf"), "Owned.dxf"));
-        assert_eq!(saved("a/Owned.dxf", &Saved { bytes: n, copy: None })["bytes"], 6);
+        assert_eq!(saved("a/Owned.dxf", &Saved { bytes: n, copy: None, incremental: false })["bytes"], 6);
     }
 }
 

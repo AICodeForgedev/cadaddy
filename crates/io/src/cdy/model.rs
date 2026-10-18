@@ -5,8 +5,8 @@
 //! | MANI | manifest: format and writer versions, counts, units, extents, the thumbnail's chunk | JSON |
 //! | HEAD | the header variables | tokens (postcard) |
 //! | TABL | layers, linetypes, styles, views, viewports, UCSs, layer states, groups, plot style tables, constraints, parameters, scale list, handle seed, saved hidden objects | tokens |
-//! | BLKS | block definitions, each `[name, block, objects]` (a run of blocks per chunk) | tokens |
-//! | ENTS | model space objects, up to [`ENTITY_CHUNK`] per chunk, in draw order | tokens |
+//! | BLKS | block definitions, each `[name, block, objects]` (one per chunk) | tokens |
+//! | ENTS | model space objects, a chunk of the drawing's object store (up to [`ENTITY_CHUNK`]) each, in draw order | tokens |
 //! | LAYO | one layout with its paper space objects, `[layout, objects]` | tokens |
 //! | FRGN | file data CADaddy keeps without modelling it | tokens |
 //! | THMB | a PNG preview | raw |
@@ -20,7 +20,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::container::{self, Read, Writer};
+use super::container::{self, Read};
 use super::tokens;
 
 /// Model space objects per ENTS chunk (as many as one `EntityStore` chunk holds).
@@ -173,10 +173,8 @@ fn take<T: DeserializeOwned>(v: Value, what: &str, notes: &mut Vec<String>) -> O
     }
 }
 
-/// The drawing as a .cdy file; `thumbnail` a PNG preview to embed.
-pub fn write(d: &Drawing, thumbnail: Option<&[u8]>) -> Result<Vec<u8>, String> {
-    let mut w = Writer::new();
-    let blocks: Vec<(&String, &Arc<Block>)> = d.blocks.iter().collect();
+/// The manifest chunk's JSON: format and writer, units, extents, counts, the preview's chunk.
+pub(super) fn manifest(d: &Drawing, thumbnail: bool) -> Vec<u8> {
     let ext = d.extents(&cadaddy_doc::Space::Model);
     let manifest = json!({
         "format": container::FORMAT_VERSION,
@@ -185,12 +183,20 @@ pub fn write(d: &Drawing, thumbnail: Option<&[u8]>) -> Result<Vec<u8>, String> {
         "measurement": d.header.i64("MEASUREMENT", 0),
         "extents": if ext.is_empty() { Value::Null } else { json!([ext.min.x, ext.min.y, ext.max.x, ext.max.y]) },
         "objects": d.model.len(),
-        "blocks": blocks.len(),
+        "blocks": d.blocks.len(),
         "layouts": d.layouts.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
-        "thumbnail": thumbnail.map(|_| "THMB"),
+        "thumbnail": thumbnail.then_some("THMB"),
     });
-    w.chunk(*b"MANI", V1, serde_json::to_string_pretty(&manifest).unwrap_or_default().as_bytes(), true);
-    w.chunk(*b"HEAD", V1, &tokens::encode(&value(&d.header)?), true);
+    serde_json::to_string_pretty(&manifest).unwrap_or_default().into_bytes()
+}
+
+/// The header chunk's payload.
+pub(super) fn header(d: &Drawing) -> Result<Vec<u8>, String> {
+    Ok(tokens::encode(&value(&d.header)?))
+}
+
+/// The tables chunk's payload.
+pub(super) fn tables(d: &Drawing) -> Result<Vec<u8>, String> {
     let tables = Tables {
         layers: value(&d.layers)?,
         linetypes: value(&d.linetypes)?,
@@ -212,36 +218,33 @@ pub fn write(d: &Drawing, thumbnail: Option<&[u8]>) -> Result<Vec<u8>, String> {
         hidden_saved: d.hidden_saved,
         hidden: if d.hidden_saved { d.hidden_objects.iter().map(|h| h.0).collect() } else { Vec::new() },
     };
-    w.chunk(*b"TABL", V1, &tokens::encode(&value(&tables)?), true);
-    // Blocks: runs of about ENTITY_CHUNK objects per chunk.
-    let mut run: Vec<Value> = Vec::new();
-    let mut run_objects = 0usize;
-    for (name, b) in blocks {
-        run.push(json!([name, value(b.as_ref())?, objects(&b.entities)?]));
-        run_objects += b.entities.len().max(1);
-        if run_objects >= ENTITY_CHUNK {
-            w.chunk(*b"BLKS", V1, &tokens::encode(&Value::Array(std::mem::take(&mut run))), true);
-            run_objects = 0;
-        }
-    }
-    if !run.is_empty() {
-        w.chunk(*b"BLKS", V1, &tokens::encode(&Value::Array(run)), true);
-    }
-    let ents: Vec<&Arc<Entity>> = d.model.iter().collect();
-    for part in ents.chunks(ENTITY_CHUNK) {
-        let list = part.iter().map(|e| value(e.as_ref())).collect::<Result<Vec<_>, _>>()?;
-        w.chunk(*b"ENTS", V1, &tokens::encode(&Value::Array(list)), true);
-    }
-    for l in &d.layouts {
-        w.chunk(*b"LAYO", V1, &tokens::encode(&json!([value(l)?, objects(&l.entities)?])), true);
-    }
-    if !d.foreign.is_empty() {
-        w.chunk(*b"FRGN", V1, &tokens::encode(&value(&foreign_v1(&d.foreign))?), true);
-    }
-    if let Some(png) = thumbnail {
-        w.chunk(*b"THMB", V1, png, false);
-    }
-    Ok(w.finish())
+    Ok(tokens::encode(&value(&tables)?))
+}
+
+/// A block chunk's payload: one `[name, block, objects]`.
+pub(super) fn block(name: &str, b: &Block) -> Result<Vec<u8>, String> {
+    Ok(tokens::encode(&json!([[name, value(b)?, objects(&b.entities)?]])))
+}
+
+/// A model space chunk's payload: one chunk of the store's objects.
+pub(super) fn entities(items: &[Arc<Entity>]) -> Result<Vec<u8>, String> {
+    let list = items.iter().map(|e| value(e.as_ref())).collect::<Result<Vec<_>, _>>()?;
+    Ok(tokens::encode(&Value::Array(list)))
+}
+
+/// A layout chunk's payload.
+pub(super) fn layout(l: &Layout) -> Result<Vec<u8>, String> {
+    Ok(tokens::encode(&json!([value(l)?, objects(&l.entities)?])))
+}
+
+/// The kept file data's payload.
+pub(super) fn foreign(f: &Foreign) -> Result<Vec<u8>, String> {
+    Ok(tokens::encode(&value(&foreign_v1(f))?))
+}
+
+/// The drawing as a .cdy file; `thumbnail` a PNG preview to embed.
+pub fn write(d: &Drawing, thumbnail: Option<&[u8]>) -> Result<Vec<u8>, String> {
+    super::save::write_full(d, thumbnail.map(<[u8]>::to_vec)).map(|(bytes, _)| bytes)
 }
 
 /// The drawing in a .cdy file, with notes about anything damaged that was left out. Errors only
@@ -347,11 +350,10 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                     rep.notes.push("a model space part was damaged".into());
                     continue;
                 };
-                for item in list {
-                    if let Some(e) = take::<Entity>(item, "an object", &mut rep.notes) {
-                        model.push(e);
-                    }
-                }
+                // One chunk of the store per chunk of the file, as it was saved (an incremental
+                // save then finds them unchanged).
+                let items: Vec<Entity> = list.into_iter().filter_map(|item| take::<Entity>(item, "an object", &mut rep.notes)).collect();
+                model.push_chunk(items);
             }
             b"LAYO" => {
                 let Some([l, objs]) = parts::<2>(v) else {
