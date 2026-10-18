@@ -269,9 +269,54 @@ fn space_of(d: &cadaddy_doc::Drawing, h: Handle) -> Option<Space> {
     d.space_of(h)
 }
 
+/// The `410` layout group goes right after the AcDbEntity marker, as AutoCAD lists it.
+fn with_layout(head: Vec<Value>, groups: Vec<Value>, layout: &str) -> Value {
+    let mut items = head;
+    let mut placed = false;
+    for v in groups {
+        let after_marker = !placed && v.car().as_number() == Some(100.0) && matches!(v.cdr(), Value::Str(ref s) if &**s == "AcDbEntity");
+        items.push(v);
+        if after_marker {
+            items.push(Value::cons(Value::Int(410), Value::str(layout)));
+            placed = true;
+        }
+    }
+    Value::list(items)
+}
+
+/// `entget` of an attribute, a SEQEND or a table record.
+fn sub_entget(ctx: &mut Ctx<'_>, h: Handle, sub: &super::Sub) -> Result<Value, LispError> {
+    let Ok(d) = ctx.s.doc() else { return Ok(Value::Nil) };
+    let me = Value::cons(Value::Int(-1), Value::Ename(h));
+    let (ins, at) = match sub {
+        super::Sub::Table(table, name) => {
+            let r = table_records(d, table).into_iter().find(|r| record_name(r).eq_ignore_ascii_case(name));
+            return Ok(r.map(|r| Value::list(std::iter::once(me).chain(r.iter()).collect::<Vec<_>>())).unwrap_or_default());
+        }
+        super::Sub::Attrib(ins, n) => (*ins, n + 1),
+        super::Sub::Seqend(ins) => (*ins, usize::MAX),
+    };
+    let Some(e) = d.entity(ins) else { return Ok(Value::Nil) };
+    let records = (codec()?.records)(d, e);
+    let rec = if at == usize::MAX { records.last().filter(|r| r.0 == "SEQEND") } else { records.get(at).filter(|r| r.0 == "ATTRIB") };
+    let Some((kind, tags)) = rec else { return Ok(Value::Nil) };
+    let layout = match space_of(d, ins) {
+        Some(Space::Paper(name)) => name,
+        _ => "Model".into(),
+    };
+    let mut head = vec![me, Value::cons(Value::Int(0), Value::str(kind)), Value::cons(Value::Int(330), Value::Ename(ins))];
+    if at == usize::MAX {
+        head.push(Value::cons(Value::Int(-2), Value::Ename(ins)));
+    }
+    Ok(with_layout(head, groups_to_list(tags), &layout))
+}
+
 pub fn entget(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 1, 2)?;
     let h = ename(&a[0])?;
+    if let Some(sub) = ctx.env.subs.get(&h).cloned() {
+        return Ok(Flow::Value(sub_entget(ctx, h, &sub)?));
+    }
     let Ok(d) = ctx.s.doc() else { return Ok(Flow::Value(Value::Nil)) };
     let Some(e) = d.entity(h) else { return Ok(Flow::Value(Value::Nil)) };
     let (kind, tags) = (codec()?.groups)(d, e);
@@ -279,18 +324,8 @@ pub fn entget(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
         Some(Space::Paper(name)) => name,
         _ => "Model".into(),
     };
-    let mut items = vec![Value::cons(Value::Int(-1), Value::Ename(h)), Value::cons(Value::Int(0), Value::str(&kind))];
-    let mut placed_layout = false;
-    for v in groups_to_list(&tags) {
-        // The layout name follows the AcDbEntity marker, as AutoCAD lists it.
-        let after_marker = !placed_layout && v.car().as_number() == Some(100.0) && matches!(v.cdr(), Value::Str(ref s) if &**s == "AcDbEntity");
-        items.push(v);
-        if after_marker {
-            items.push(Value::cons(Value::Int(410), Value::str(&layout)));
-            placed_layout = true;
-        }
-    }
-    Ok(Flow::Value(Value::list(items)))
+    let head = vec![Value::cons(Value::Int(-1), Value::Ename(h)), Value::cons(Value::Int(0), Value::str(&kind))];
+    Ok(Flow::Value(with_layout(head, groups_to_list(&tags), &layout)))
 }
 
 /// The entity a list describes, as the reader makes it; a missing layer (8) is the current one.
@@ -333,6 +368,9 @@ pub fn entmod(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     let Some(Value::Ename(h)) = list.iter().find(|v| v.car().as_number() == Some(-1.0)).map(|v| v.cdr()) else {
         return Err(LispError::bad_arg("lentityp", &Value::Nil));
     };
+    if let Some(sub) = ctx.env.subs.get(&h).cloned() {
+        return Ok(Flow::Value(if entmod_attrib(ctx, &sub, list)? { list.clone() } else { Value::Nil }));
+    }
     let Some(old) = ctx.s.doc().ok().and_then(|d| d.entity(h)).cloned() else { return Ok(Flow::Value(Value::Nil)) };
     let (kind_name, common, mut kind) = match entity_from_list(ctx, list) {
         Ok(x) => x,
@@ -366,6 +404,37 @@ pub fn entmod(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
         ctx.s.touch();
     }
     Ok(Flow::Value(if ok { list.clone() } else { Value::Nil }))
+}
+
+/// `entmod` of an ATTRIB's list: the block reference's attribute takes its groups.
+fn entmod_attrib(ctx: &mut Ctx<'_>, sub: &super::Sub, list: &Value) -> Result<bool, LispError> {
+    let super::Sub::Attrib(ins, n) = sub else { return Ok(false) };
+    let (kind, tags) = list_to_groups(list)?;
+    if kind != "ATTRIB" {
+        return Ok(false);
+    }
+    let attrib_of = codec()?.attrib;
+    let Ok(d) = ctx.s.doc_mut() else { return Ok(false) };
+    let Some(layer) = d.entity(*ins).map(|e| e.common.layer.clone()) else { return Ok(false) };
+    let mut new = Some(attrib_of(&tags, &layer));
+    let mut ok = false;
+    let _ = d.modify_entity(*ins, |e| {
+        if let cadaddy_doc::EntityKind::Insert(i) = &mut e.kind
+            && let Some(old) = i.attribs.get_mut(*n)
+            && let Some(mut a) = new.take()
+        {
+            // What the reference's definition says, which the record doesn't hold.
+            a.prompt = std::mem::take(&mut old.prompt);
+            a.constant = old.constant;
+            *old = a;
+            ok = true;
+        }
+    });
+    if ok {
+        d.ensure_layer(&layer);
+        ctx.s.touch();
+    }
+    Ok(ok)
 }
 
 /// `(entupd ename)`: redraw an entity (the canvas redraws on its own).
@@ -424,18 +493,59 @@ pub fn entlast(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     Ok(Flow::Value(handles_in_order(ctx).last().map(|h| Value::Ename(*h)).unwrap_or_default()))
 }
 
+/// The number of attributes a block reference has (0 for anything else).
+fn attrib_count(ctx: &Ctx<'_>, h: Handle) -> usize {
+    match ctx.s.doc().ok().and_then(|d| d.entity(h)).map(|e| &e.kind) {
+        Some(cadaddy_doc::EntityKind::Insert(i)) => i.attribs.len(),
+        _ => 0,
+    }
+}
+
+/// `(entnext [ename])`: the next entity in the drawing. After a block reference with
+/// attributes come its ATTRIBs and then its SEQEND, as in AutoCAD.
 pub fn entnext(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 0, 1)?;
     let order = handles_in_order(ctx);
+    let after = |h: Handle| order.get(order.partition_point(|x| *x <= h)).copied();
     let next = match a.first() {
         None | Some(Value::Nil) => order.first().copied(),
         Some(v) => {
             let h = ename(v)?;
-            let i = order.partition_point(|x| *x <= h);
-            order.get(i).copied()
+            match ctx.env.subs.get(&h).cloned() {
+                Some(super::Sub::Attrib(ins, k)) if k + 1 < attrib_count(ctx, ins) => Some(ctx.env.sub_name(super::Sub::Attrib(ins, k + 1))),
+                Some(super::Sub::Attrib(ins, _)) => Some(ctx.env.sub_name(super::Sub::Seqend(ins))),
+                Some(super::Sub::Seqend(ins)) => after(ins),
+                Some(super::Sub::Table(..)) => None,
+                None if attrib_count(ctx, h) > 0 => Some(ctx.env.sub_name(super::Sub::Attrib(h, 0))),
+                None => after(h),
+            }
         }
     };
     Ok(Flow::Value(next.map(Value::Ename).unwrap_or_default()))
+}
+
+/// `(nentselp [msg] [pt])`: with a point, the object there without asking (an attribute of a
+/// block reference when the point is on its text), as `(ename pt)`; without one, as `nentsel`.
+pub fn nentselp(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
+    let pt = a.iter().find_map(Value::as_point);
+    let Some(p) = pt else {
+        let msg: Vec<Value> = a.into_iter().filter(|v| matches!(v, Value::Str(_))).collect();
+        return super::input::entsel(ctx, msg);
+    };
+    let q = Vec2::new(p[0], p[1]);
+    let ap = ctx.s.settings.pickbox.max(1.0) * ctx.s.pixel_size();
+    let Ok(space) = ctx.s.state().map(|st| st.edit_space()) else { return Ok(Flow::Value(Value::Nil)) };
+    let Ok(d) = ctx.s.doc() else { return Ok(Flow::Value(Value::Nil)) };
+    let Some(h) = crate::select::pick(d, &space, q, ap) else { return Ok(Flow::Value(Value::Nil)) };
+    let on_attrib = match d.entity(h).map(|e| &e.kind) {
+        Some(cadaddy_doc::EntityKind::Insert(i)) => crate::select::attrib_at(d, i, q),
+        _ => None,
+    };
+    let name = match on_attrib {
+        Some(n) => ctx.env.sub_name(super::Sub::Attrib(h, n)),
+        None => h,
+    };
+    Ok(Flow::Value(Value::list(vec![Value::Ename(name), Value::point(&p)])))
 }
 
 pub fn handent(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
@@ -864,6 +974,20 @@ pub fn tblsearch(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
         ctx.env.tblnext.insert(table.clone(), i + 1);
     }
     Ok(Flow::Value(found.and_then(|i| records.get(i).cloned()).unwrap_or_default()))
+}
+
+/// `(tblobjname table name)`: the entity name of a symbol table record (nil when there is none);
+/// `entget` gives its record.
+pub fn tblobjname(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
+    arity(&a, 2, 2)?;
+    let table = string(&a[0])?.to_ascii_uppercase();
+    let name = string(&a[1])?;
+    let Ok(d) = ctx.s.doc() else { return Ok(Flow::Value(Value::Nil)) };
+    let Some(r) = table_records(d, &table).into_iter().find(|r| record_name(r).eq_ignore_ascii_case(&name)) else {
+        return Ok(Flow::Value(Value::Nil));
+    };
+    let h = ctx.env.sub_name(super::Sub::Table(table, record_name(&r).to_ascii_uppercase()));
+    Ok(Flow::Value(Value::Ename(h)))
 }
 
 pub fn tblnext(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {

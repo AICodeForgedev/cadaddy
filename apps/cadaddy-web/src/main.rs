@@ -87,6 +87,8 @@ mod web {
         cadaddy_engine::cmd::file::set_entity_codec(cadaddy_engine::cmd::file::EntityCodec {
             groups: cadaddy_io::entity_groups,
             entity: cadaddy_io::entity_from_groups,
+            records: cadaddy_io::entity_records,
+            attrib: cadaddy_io::attrib_from_groups,
         });
         // `?host=parent`: a same-origin page framing CADaddy (such as a Nextcloud app) opens
         // drawings in it and stores what it saves. Otherwise there is no file system here: saved

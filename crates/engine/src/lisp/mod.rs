@@ -42,6 +42,33 @@ impl LispError {
     }
 }
 
+/// An entity name for part of an entity or a table record.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Sub {
+    /// Attribute `n` (from 0) of a block reference.
+    Attrib(Handle, usize),
+    /// The SEQEND after a block reference's attributes.
+    Seqend(Handle),
+    /// A symbol table record: table and name, upper case.
+    Table(String, String),
+}
+
+/// Sub-entity names start here, far above the handles drawings use.
+const SUB_BASE: u64 = 0x7FFF_FFFF_0000_0000;
+
+impl Env {
+    /// The entity name for `sub` (the same one each time it is asked for).
+    pub fn sub_name(&mut self, sub: Sub) -> Handle {
+        if let Some(h) = self.sub_names.get(&sub) {
+            return *h;
+        }
+        let h = Handle(SUB_BASE.saturating_add(self.subs.len() as u64));
+        self.subs.insert(h, sub.clone());
+        self.sub_names.insert(sub, h);
+        h
+    }
+}
+
 /// One drawing's LISP environment.
 pub struct Env {
     pub globals: HashMap<Sym, Value>,
@@ -58,6 +85,10 @@ pub struct Env {
     pub order: Option<(usize, Arc<Vec<Handle>>)>,
     /// `tblnext`'s place in each table.
     pub tblnext: HashMap<String, usize>,
+    /// Names given to what isn't an entity of its own here but is in AutoCAD: a block
+    /// reference's ATTRIBs and SEQEND, and symbol table records (`tblobjname`).
+    pub subs: HashMap<Handle, Sub>,
+    pub sub_names: HashMap<Sub, Handle>,
     /// The command history's length after LISP last printed a line: when something else wrote since
     /// (a prompt, a command's echo), a leading newline only ends that line.
     pub printed_at: Option<usize>,
@@ -75,6 +106,8 @@ impl Default for Env {
             deleted: HashMap::new(),
             order: None,
             tblnext: HashMap::new(),
+            subs: HashMap::new(),
+            sub_names: HashMap::new(),
             printed_at: None,
         };
         builtins::install(&mut e);

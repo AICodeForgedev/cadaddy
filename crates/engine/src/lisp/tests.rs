@@ -5,7 +5,12 @@ use crate::Session;
 use crate::cmd::file::{EntityCodec, set_entity_codec};
 
 fn session() -> Session {
-    set_entity_codec(EntityCodec { groups: cadaddy_io::entity_groups, entity: cadaddy_io::entity_from_groups });
+    set_entity_codec(EntityCodec {
+        groups: cadaddy_io::entity_groups,
+        entity: cadaddy_io::entity_from_groups,
+        records: cadaddy_io::entity_records,
+        attrib: cadaddy_io::attrib_from_groups,
+    });
     Session::new()
 }
 
@@ -589,4 +594,78 @@ fn entmod_of_a_dimension_keeps_its_associativity() {
     assert!(before > 0, "the dimension is associative");
     eval(&mut s, "(setq e (entlast)) (entmod (entget e))").unwrap();
     assert_eq!(assoc(&s), before);
+}
+
+/// A block reference's attributes and SEQEND are entities to LISP, as in AutoCAD: `entnext`
+/// walks INSERT → ATTRIBs → SEQEND → the next object, `entget` lists them, `entmod` changes an
+/// attribute, `nentselp` picks one at a point; `tblobjname` names a table record.
+#[test]
+fn attributes_and_table_records_are_entities() {
+    use cadaddy_doc::{Attrib, Block, EntityKind, HAlign, Insert, Text, VAlign};
+    use cadaddy_geom::Vec3;
+    let mut s = session();
+    let text = |v: &str, y: f64| Text {
+        insert: Vec3::new(0.0, y, 0.0),
+        align_pt: None,
+        height: 2.0,
+        value: v.into(),
+        rotation: 0.0,
+        width_factor: 1.0,
+        oblique: 0.0,
+        style: "Standard".into(),
+        halign: HAlign::Left,
+        valign: VAlign::Baseline,
+    };
+    let attrib = |tag: &str, v: &str, y: f64| Attrib {
+        tag: tag.into(),
+        text: text(v, y),
+        invisible: false,
+        constant: false,
+        prompt: String::new(),
+        props: Default::default(),
+        multiline: None,
+        modes: Default::default(),
+    };
+    s.doc_mut().unwrap().blocks.insert("TAGGED".into(), std::sync::Arc::new(Block::new("TAGGED")));
+    let ins = Insert {
+        block: "TAGGED".into(),
+        insert: Vec3::ZERO,
+        scale: Vec3::new(1.0, 1.0, 1.0),
+        rotation: 0.0,
+        attribs: vec![attrib("CKT", "12", 0.0), attrib("PANEL", "LA", 10.0)],
+        cols: 1,
+        rows: 1,
+        col_spacing: 0.0,
+        row_spacing: 0.0,
+        clip: None,
+    };
+    s.add_entity(EntityKind::Insert(ins)).unwrap();
+    ok(&mut s, "(command \"circle\" '(50 50) 3)");
+    ok(&mut s, "(setq i (entnext) a1 (entnext i) a2 (entnext a1) se (entnext a2) nx (entnext se))");
+    assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget i)))"), "\"INSERT\"");
+    assert_eq!(
+        ok(&mut s, "(list (cdr (assoc 0 (entget a1))) (cdr (assoc 2 (entget a1))) (cdr (assoc 1 (entget a1))))"),
+        "(\"ATTRIB\" \"CKT\" \"12\")"
+    );
+    assert_eq!(ok(&mut s, "(cdr (assoc 2 (entget a2)))"), "\"PANEL\"");
+    assert_eq!(ok(&mut s, "(eq (cdr (assoc 330 (entget a2))) i)"), "T");
+    assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget se)))"), "\"SEQEND\"");
+    assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget nx)))"), "\"CIRCLE\"");
+    // The same attribute has the same name each time.
+    assert_eq!(ok(&mut s, "(eq (entnext i) a1)"), "T");
+    // entmod changes the attribute's value; the reference keeps its other attribute.
+    ok(&mut s, "(entmod (subst (cons 1 \"14\") (assoc 1 (entget a1)) (entget a1)))");
+    let vals: Vec<String> = s
+        .doc()
+        .unwrap()
+        .model
+        .iter()
+        .find_map(|e| if let EntityKind::Insert(i) = &e.kind { Some(i.attribs.iter().map(|a| a.text.value.clone()).collect()) } else { None })
+        .unwrap();
+    assert_eq!(vals, ["14", "LA"]);
+    // nentselp at a point on the second attribute's text gives that attribute.
+    assert_eq!(ok(&mut s, "(cdr (assoc 2 (entget (car (nentselp '(1 11))))))"), "\"PANEL\"");
+    // tblobjname: a layer record by name, nil for none.
+    assert_eq!(ok(&mut s, "(cdr (assoc 2 (entget (tblobjname \"LAYER\" \"0\"))))"), "\"0\"");
+    assert_eq!(ok(&mut s, "(tblobjname \"LAYER\" \"NOPE\")"), "nil");
 }

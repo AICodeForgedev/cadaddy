@@ -128,6 +128,8 @@ pub fn install_io() {
     cadaddy_engine::cmd::file::set_entity_codec(cadaddy_engine::cmd::file::EntityCodec {
         groups: cadaddy_io::entity_groups,
         entity: cadaddy_io::entity_from_groups,
+        records: cadaddy_io::entity_records,
+        attrib: cadaddy_io::attrib_from_groups,
     });
 }
 

@@ -220,7 +220,12 @@ fn run_case(dir: &Path) -> Result<(), String> {
 
 #[test]
 fn autolisp_corpus() {
-    set_entity_codec(EntityCodec { groups: cadaddy_io::entity_groups, entity: cadaddy_io::entity_from_groups });
+    set_entity_codec(EntityCodec {
+        groups: cadaddy_io::entity_groups,
+        entity: cadaddy_io::entity_from_groups,
+        records: cadaddy_io::entity_records,
+        attrib: cadaddy_io::attrib_from_groups,
+    });
     let Some(dir) = cases_dir() else {
         eprintln!("CADADDY_LISP_CORPUS is not set: the AutoLISP corpus is skipped");
         return;

@@ -50,6 +50,10 @@ pub struct EntityCodec {
     pub groups: fn(&Drawing, &cadaddy_doc::Entity) -> (String, Vec<cadaddy_dxf::Tag>),
     /// An entity from a type name and groups.
     pub entity: fn(&str, &[cadaddy_dxf::Tag]) -> Option<(cadaddy_doc::Common, cadaddy_doc::EntityKind)>,
+    /// Every record of the entity (an INSERT, its ATTRIBs and SEQEND), as `groups` gives one.
+    pub records: fn(&Drawing, &cadaddy_doc::Entity) -> Vec<(String, Vec<cadaddy_dxf::Tag>)>,
+    /// An ATTRIB record's attribute, for a reference on the given layer.
+    pub attrib: fn(&[cadaddy_dxf::Tag], &str) -> cadaddy_doc::Attrib,
 }
 
 static CODEC: OnceLock<EntityCodec> = OnceLock::new();
