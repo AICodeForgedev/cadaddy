@@ -627,6 +627,46 @@ pub struct Dimension {
     pub marks: DimMarks,
 }
 
+impl Dimension {
+    /// The direction of a linear or aligned dimension's line (`None` for other kinds).
+    fn line_dir(&self) -> Option<Vec2> {
+        let dir = match self.kind {
+            DimKind::Linear { rotation } => Vec2::from_angle(rotation),
+            DimKind::Aligned => (self.p14.xy() - self.p13.xy()).normalized(),
+            _ => return None,
+        };
+        (dir != Vec2::ZERO && dir.is_finite()).then_some(dir)
+    }
+
+    /// Where the dimension line grip goes: for a linear or aligned dimension the end of the
+    /// dimension line at the second extension line (any point of the line is a valid `defpt`);
+    /// otherwise `defpt`.
+    pub fn line_grip(&self) -> Vec2 {
+        let on = self.defpt.xy();
+        match self.line_dir() {
+            Some(dir) => {
+                let q = on + dir * (self.p14.xy() - on).dot(dir);
+                if q.is_finite() { q } else { on }
+            }
+            None => on,
+        }
+    }
+
+    /// Where the text grip goes: the text the user placed, or for a linear or aligned dimension
+    /// with its text in the default place the middle of the dimension line (where that text is
+    /// drawn; `text_mid` isn't kept up to date then).
+    pub fn text_grip(&self) -> Vec2 {
+        if self.user_text_pos {
+            return self.text_mid.xy();
+        }
+        let (p1, p2, on) = (self.p13.xy(), self.p14.xy(), self.defpt.xy());
+        let Some(dir) = self.line_dir() else { return self.text_mid.xy() };
+        let foot = |p: Vec2| on + dir * (p - on).dot(dir);
+        let m = foot(p1).mid(foot(p2));
+        if m.is_finite() { m } else { self.text_mid.xy() }
+    }
+}
+
 /// What dimension edits add to a dimension's drawing: DIMEDIT Oblique, DIMJOGLINE, DIMJOGGED,
 /// DIMBREAK and DIMINSPECT.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -648,6 +688,14 @@ pub struct DimMarks {
     /// Inspection frame, label and rate (DIMINSPECT).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inspect: Option<Inspection>,
+    /// The first / second arrowhead of a linear or aligned dimension is flipped to the other
+    /// side of its extension line (the Flip Arrow grip option).
+    #[serde(skip_serializing_if = "no_flip")]
+    pub flip_arrows: [bool; 2],
+}
+
+fn no_flip(f: &[bool; 2]) -> bool {
+    !f.iter().any(|b| *b)
 }
 
 impl DimMarks {
@@ -1549,7 +1597,7 @@ impl EntityKind {
             EntityKind::MText(t) => vec![t.insert.xy()],
             EntityKind::AttDef(a) => vec![a.text.justify_point()],
             EntityKind::Insert(i) => std::iter::once(i.insert.xy()).chain(i.attribs.iter().map(|a| a.text.justify_point())).collect(),
-            EntityKind::Dimension(d) => vec![d.p13.xy(), d.p14.xy(), d.defpt.xy(), d.text_mid.xy()],
+            EntityKind::Dimension(d) => vec![d.p13.xy(), d.p14.xy(), d.line_grip(), d.text_grip()],
             EntityKind::MLine(m) => m.points(),
             EntityKind::Leader(l) => l.vertices.iter().map(|v| v.xy()).collect(),
             EntityKind::MLeader(m) => m.leaders.iter().flat_map(|l| l.iter().map(|v| v.xy())).chain(std::iter::once(m.landing.xy())).collect(),

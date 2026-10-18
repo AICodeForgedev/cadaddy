@@ -461,7 +461,8 @@ pub(crate) fn arclen_xdata(center: cadaddy_geom::Vec3) -> Vec<Tag> {
 
 /// Dimension marks as CADaddy xdata (`1000 MARKS`, `1002 {`, items, `1002 }`): `1000 JOGLINE`
 /// and a point; `1000 JOGGED`, the centre and the jog point; `1000 BREAK`, a point, `1040` size
-/// and `1070` auto; `1000 INSPECT`, `1070` shape, `1000` label and `1000` rate. Points are
+/// and `1070` auto; `1000 INSPECT`, `1070` shape, `1000` label and `1000` rate; `1000 FLIP`,
+/// `1070` flipped arrowheads (bit 1 the first, bit 2 the second). Points are
 /// `1010/1020/1030`. The oblique angle is the standard group 52 instead.
 pub(crate) fn marks_xdata(m: &cadaddy_doc::DimMarks) -> Vec<Tag> {
     let pt = |v: &mut Vec<Tag>, p: cadaddy_geom::Vec3| v.extend([Tag::f(1010, p.x), Tag::f(1020, p.y), Tag::f(1030, p.z)]);
@@ -482,6 +483,10 @@ pub(crate) fn marks_xdata(m: &cadaddy_doc::DimMarks) -> Vec<Tag> {
     }
     if let Some(i) = &m.inspect {
         v.extend([Tag::s(1000, "INSPECT"), Tag::i(1070, i64::from(i.shape)), Tag::s(1000, i.label.clone()), Tag::s(1000, i.rate.clone())]);
+    }
+    let [f1, f2] = m.flip_arrows;
+    if f1 || f2 {
+        v.extend([Tag::s(1000, "FLIP"), Tag::i(1070, i64::from(f1) | (i64::from(f2) << 1))]);
     }
     if v.is_empty() {
         return v;
@@ -517,6 +522,11 @@ pub(crate) fn read_marks(tags: &[Tag]) -> cadaddy_doc::DimMarks {
                 let auto = list.get(i + 5).filter(|t| t.code == 1070).is_some_and(|t| t.i64() != 0);
                 if let (Some(at), Some(size)) = (point(i + 1), size) {
                     m.breaks.push(cadaddy_doc::DimBreak { at, size, auto });
+                }
+            }
+            "FLIP" => {
+                if let Some(bits) = list.get(i + 1).filter(|t| t.code == 1070).map(Tag::i64) {
+                    m.flip_arrows = [bits & 1 != 0, bits & 2 != 0];
                 }
             }
             "INSPECT" => {

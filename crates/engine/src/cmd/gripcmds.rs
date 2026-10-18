@@ -137,16 +137,42 @@ fn run_grip_option(s: &mut Session, p: &Value) -> Result<Value> {
     let action: GripAction = p
         .get("option")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .ok_or_else(|| bad(cmd, "`option` must be addVertex, removeVertex, toArc, toLine, lengthen or radius"))?;
+        .ok_or_else(|| bad(cmd, "`option` must name one of the grip's options (addVertex, lengthen, dimMoveText, addLeader, hatchAngle…)"))?;
+    if action.mode().is_some() {
+        return Err(bad(cmd, "Move, Rotate and Scale are grip modes: use grip.move, grip.rotate or grip.scale"));
+    }
+    let value = p.get("value").and_then(Value::as_f64);
+    let made = apply_option(s, h, i, action, point_param(p, "to"), value).map_err(|e| bad(cmd, e.to_string()))?;
+    let mut r = json!({ "handle": h.hex() });
+    if let (Some(n), Some(m)) = (made, r.as_object_mut()) {
+        m.insert("created".into(), json!(n.hex()));
+    }
+    Ok(r)
+}
+
+/// Apply the multifunctional `action` of grip `i` of `h` with the point `to` or value `value`
+/// (one change to the drawing). Continue / Baseline Dimension add a dimension and return it.
+pub(crate) fn apply_option(s: &mut Session, h: Handle, i: usize, action: GripAction, to: Option<Vec2>, value: Option<f64>) -> Result<Option<Handle>> {
     if curves::is_locked(s, h) {
         return Err(EngineError::Other("The object is on a locked layer.".into()));
     }
     let e = curves::entity(s, h)?;
-    let value = p.get("value").and_then(Value::as_f64);
-    let k = grip_action(&e.kind, i, action, point_param(p, "to"), value)
-        .ok_or_else(|| bad(cmd, "that option doesn't apply to this grip, or the result would be degenerate"))?;
-    s.doc_mut()?.modify_entity(h, |e| e.kind = k)?;
-    Ok(json!({ "handle": h.hex() }))
+    if !crate::grips::grip_actions(&e.kind, i).contains(&action) {
+        return Err(EngineError::Other("That option doesn't apply to this grip.".into()));
+    }
+    if matches!(action, GripAction::DimContinue | GripAction::DimBaseline) {
+        let to = to.ok_or_else(|| EngineError::Other("Requires a point.".into()))?;
+        return super::annotate::chain_from(s, h, to, action == GripAction::DimBaseline).map(Some);
+    }
+    let mut k = grip_action(&e.kind, i, action, to, value).ok_or_else(|| EngineError::Other("That would make a degenerate object.".into()))?;
+    let d = s.doc_mut()?;
+    // Dimension text moved with its dimension line (DIMTMOVE 0): the line follows.
+    if let cadaddy_doc::EntityKind::Dimension(dm) = &mut k {
+        let st = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
+        st.follow_text(dm, d.header.f64("DIMSCALE", 1.0));
+    }
+    d.modify_entity(h, |e| e.kind = k)?;
+    Ok(None)
 }
 
 fn run_grip(_s: &mut Session, _p: &Value) -> Result<Value> {

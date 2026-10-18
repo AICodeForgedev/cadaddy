@@ -426,6 +426,28 @@ fn chain_run(s: &mut Session, p: &Value, baseline: bool) -> Result<Value> {
     Ok(json!({ "handles": out }))
 }
 
+/// A continued (or baseline) dimension from linear dimension `base` to the extension line origin
+/// `next` (the dimension line grip's Continue / Baseline Dimension options).
+pub(crate) fn chain_from(s: &mut Session, base: Handle, next: Vec2, baseline: bool) -> Result<Handle> {
+    let prev = match s.doc()?.entity(base).map(|e| &e.kind) {
+        Some(EntityKind::Dimension(d)) if matches!(d.kind, DimKind::Linear { .. } | DimKind::Aligned) => d.clone(),
+        _ => return Err(EngineError::Other("Not a linear dimension.".into())),
+    };
+    if !next.is_finite() {
+        return Err(EngineError::Other("Requires a valid point.".into()));
+    }
+    let mut k = chained(s, &prev, next, baseline);
+    if assoc_enabled(s)
+        && let EntityKind::Dimension(dm) = &mut k
+    {
+        let ix = crate::assoc::SnapIndex::new(s.doc()?, &s.space());
+        dm.assoc = ix.auto_assoc(&[("p13", dm.p13.xy()), ("p14", dm.p14.xy())]);
+    }
+    let h = s.add_entity(k)?;
+    s.last_dim = Some(h);
+    Ok(h)
+}
+
 fn run_continue(s: &mut Session, p: &Value) -> Result<Value> {
     chain_run(s, p, false)
 }

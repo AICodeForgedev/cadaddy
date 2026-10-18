@@ -657,22 +657,44 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                     seg(g, from, from + u * (to - from).dot(u));
                 }
             };
+            // Flip Arrow (grip option): that arrowhead goes to the other side of its extension line.
+            let [flip1, flip2] = d.marks.flip_arrows;
+            let stub = asz * 2.0;
             if arrows_inside {
-                let i1 = if st.suppress_dim1 { 0.0 } else { end(&mut g, blk1, f1, -u) };
-                let i2 = if st.suppress_dim2 { 0.0 } else { end(&mut g, blk2, f2, u) };
+                let i1 = if st.suppress_dim1 {
+                    0.0
+                } else if flip1 {
+                    end(&mut g, blk1, f1, u);
+                    seg(&mut g, f1 - u * stub, f1);
+                    0.0
+                } else {
+                    end(&mut g, blk1, f1, -u)
+                };
+                let i2 = if st.suppress_dim2 {
+                    0.0
+                } else if flip2 {
+                    end(&mut g, blk2, f2, -u);
+                    seg(&mut g, f2, f2 + u * stub);
+                    0.0
+                } else {
+                    end(&mut g, blk2, f2, u)
+                };
                 inner(&mut g, f1 - u * dle + u * i1, f2 + u * dle - u * i2);
                 to_text(&mut g, f2);
             } else {
-                let stub = asz * 2.0;
                 if outside_arrows {
                     if !st.suppress_dim1 {
-                        end(&mut g, blk1, f1, u);
+                        end(&mut g, blk1, f1, if flip1 { -u } else { u });
                     }
                     if !st.suppress_dim2 {
-                        end(&mut g, blk2, f2, -u);
+                        end(&mut g, blk2, f2, if flip2 { u } else { -u });
                     }
-                    seg(&mut g, f1 - u * stub, f1);
-                    seg(&mut g, f2, f2 + u * stub);
+                    if !flip1 {
+                        seg(&mut g, f1 - u * stub, f1);
+                    }
+                    if !flip2 {
+                        seg(&mut g, f2, f2 + u * stub);
+                    }
                 }
                 // DIMTOFL: the line between the extension lines as well.
                 if st.force_line_inside {
