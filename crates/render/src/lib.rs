@@ -1804,7 +1804,16 @@ fn insert_contents(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::In
             }
             let off = Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
             let m = Mat3::translate(off).then_before(ins.transform(blk.base.xy()));
-            let sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, m) };
+            let mut sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, m) };
+            // In a 3D view a block reference inside a block (an array's items on their levels)
+            // stands at its own elevation; a top-level one is already placed at its elevation.
+            if ctx.depth > 0
+                && let Some(p) = b.opts.projection
+                && ins.insert.z.is_finite()
+                && ins.insert.z != 0.0
+            {
+                sub.xf = Mat3::translate(p.project(cadaddy_geom::Vec3::new(0.0, 0.0, ins.insert.z))).then_before(sub.xf);
+            }
             for be in blk.entities.iter() {
                 // Constant/visible attribute definitions inside blocks are not drawn; attribs are.
                 if matches!(be.kind, EntityKind::AttDef(_)) {

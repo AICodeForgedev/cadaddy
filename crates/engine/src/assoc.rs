@@ -343,6 +343,13 @@ pub fn after_command(s: &mut crate::Session, before: Option<&Arc<Drawing>>, uid:
     {
         update(&mut st.doc, before);
         notes = crate::cmd::hatch::refill_associative(&mut st.doc, before);
+        // Path arrays follow their path curves.
+        let changed = !Arc::ptr_eq(before, &st.doc);
+        notes.into_iter().for_each(|n| s.echo(n));
+        if changed {
+            crate::cmd::array::path::after_command(s, before);
+        }
+        return;
     }
     notes.into_iter().for_each(|n| s.echo(n));
 }

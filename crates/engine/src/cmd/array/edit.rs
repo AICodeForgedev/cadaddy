@@ -25,7 +25,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("arrayedit", "Edit Array", run_arrayedit)
             .menu(&["Modify", "Object", "Array"])
             .params(
-                "{handle, cols?, rows?, colSpacing?, rowSpacing?, axisAngle? (degrees), rowElevation?, levels?, levelSpacing?, items?, angle? (fill, degrees), angleBetween?, rotate?: bool, center? ([x, y]), base? ([x, y], the new base point), reset?: bool, replace?: {handles, base? ([x, y], default the objects' centre), items: [[i, j, level]…] | \"source\"}, source?: {item? ([i, j, level], default [0, 0, 0])} (places the source objects for editing; ARRAYCLOSE ends)}",
+                "{handle, cols?, rows?, colSpacing?, rowSpacing?, axisAngle? (degrees), rowElevation?, levels?, levelSpacing?, items?, angle? (fill, degrees), angleBetween?, rotate?: bool, center? ([x, y]), path arrays: method? (\"divide\" | \"measure\"), spacing?, align?: bool; base? ([x, y], the new base point), remove?: [[i, j, level]…] (items taken out), reset?: bool (brings back replaced and removed items), replace?: {handles, base? ([x, y], default the objects' centre), items: [[i, j, level]…] | \"source\"}, source?: {item? ([i, j, level], default [0, 0, 0])} (places the source objects for editing; ARRAYCLOSE ends)}",
             )
             .interactive(|_| Ok(Box::new(EditM::default()))),
         CommandSpec::new("arrayclose", "Close Array Editing", run_arrayclose)
@@ -38,7 +38,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
 
 /// The array block reference `h`, its array block and parameters (with the block names its items
 /// use).
-pub(super) fn array_of(d: &Drawing, h: Handle) -> Result<(Insert, Arc<Block>, ArrayParams)> {
+pub(crate) fn array_of(d: &Drawing, h: Handle) -> Result<(Insert, Arc<Block>, ArrayParams)> {
     let e = d.entity(h).ok_or_else(|| other("No such object."))?;
     let p = d.array_params(e).ok_or_else(|| other("The object is not an associative array."))?;
     let EntityKind::Insert(ins) = &e.kind else { return Err(other("The object is not an associative array.")) };
@@ -230,8 +230,11 @@ fn rebase(s: &mut Session, h: Handle, base: Vec2) -> Result<()> {
     ns.name = d.anonymous_block_name("*U");
     p.source.clone_from(&ns.name);
     d.blocks.insert(ns.name.clone(), Arc::new(ns));
-    if let ArrayKind::Polar(k) = &mut p.kind {
-        k.center -= b;
+    match &mut p.kind {
+        ArrayKind::Polar(k) => k.center -= b,
+        // The path stays where it is; the new base point is what sits on it.
+        ArrayKind::Path(k) => k.path.vertices.iter_mut().for_each(|v| v.p -= b),
+        ArrayKind::Rect(_) => {}
     }
     rebuild(s, h, p, Some(w.apply(b)))
 }
@@ -421,6 +424,41 @@ fn apply_params(a: &mut ArrayParams, p: &Value, to_local: &Mat3) -> Result<()> {
                 k.center = to_local.apply(c);
             }
         }
+        ArrayKind::Path(k) => {
+            if let Some(m) = p.get("method").and_then(Value::as_str) {
+                k.divide = match m.to_ascii_lowercase().as_str() {
+                    "divide" => true,
+                    "measure" => false,
+                    _ => return Err(other("method must be \"divide\" or \"measure\"")),
+                };
+                if !k.divide && k.spacing <= 0.0 {
+                    // Measure from the spacing the items have now.
+                    k.spacing = k.count_and_step(k.length()).1;
+                }
+            }
+            if let Some(n) = count_param(p, "items")? {
+                k.items = n;
+            }
+            if let Some(x) = num_param(p, "spacing")? {
+                if x <= 0.0 {
+                    return Err(other("Requires a spacing greater than 0."));
+                }
+                k.spacing = x;
+                k.divide = false;
+            }
+            if let Some(a) = p.get("align").and_then(Value::as_bool) {
+                k.align = a;
+            }
+            if let Some(n) = count_param(p, "rows")? {
+                k.rows = n;
+            }
+            if let Some(x) = num_param(p, "rowSpacing")? {
+                k.row_spacing = x;
+            }
+            if let Some(x) = num_param(p, "rowElevation")? {
+                k.row_elevation = x;
+            }
+        }
     }
     Ok(())
 }
@@ -453,6 +491,16 @@ fn run_arrayedit(s: &mut Session, p: &Value) -> Result<Value> {
     if bool_or(p, "reset", false) {
         let (_, _, mut a) = array_of(s.doc()?, h)?;
         a.replaced.clear();
+        a.removed.clear();
+        rebuild(s, h, a, None)?;
+    }
+    if let Some(list) = p.get("remove").filter(|v| !v.is_null()) {
+        let list = list.as_array().ok_or_else(|| bad("arrayedit", "`remove` is a list of [i, j, level]"))?;
+        let (_, _, mut a) = array_of(s.doc()?, h)?;
+        for v in list.iter().take(cadaddy_doc::MAX_ARRAY_ITEMS as usize) {
+            let (i, j, level) = item_param(v).ok_or_else(|| bad("arrayedit", "`remove` holds [i, j, level] item numbers"))?;
+            remove_item(&mut a, (i, j, level))?;
+        }
         rebuild(s, h, a, None)?;
     }
     if let Some(r) = p.get("replace").filter(|v| !v.is_null()) {
@@ -493,6 +541,19 @@ fn run_arrayedit(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "handle": h.hex() }))
 }
 
+/// Take item `it` out of array `a` (it stays out on save and load; RESet brings it back).
+fn remove_item(a: &mut ArrayParams, it: (u32, u32, u32)) -> Result<()> {
+    let items = a.items().ok_or_else(|| other("The array parameters are not valid."))?;
+    if !items.iter().any(|x| (x.i, x.j, x.level) == it) {
+        return Err(other("The array has no such item."));
+    }
+    if items.len() <= 1 {
+        return Err(other("The last item of an array cannot be deleted; erase the array instead."));
+    }
+    a.removed.push([it.0, it.1, it.2]);
+    Ok(())
+}
+
 fn run_arrayclose(s: &mut Session, p: &Value) -> Result<Value> {
     close_source(s, bool_or(p, "save", true))
 }
@@ -529,6 +590,12 @@ enum Stage {
     RepItems,
     /// Source: the item whose objects are placed for editing.
     SourceItem,
+    /// Path arrays: Divide or Measure, the distance between items, Align items.
+    Method,
+    PathSpace,
+    Align,
+    /// DElete items: items picked are taken out of the array.
+    Remove,
 }
 
 /// ARRAYEDIT: select an array, then change it option by option until eXit.
@@ -604,12 +671,16 @@ impl EditM {
             "Angle between" => Stage::Between,
             "Fill angle" => Stage::Fill,
             "ROTate items" => Stage::Rotate,
+            "Method" => Stage::Method,
+            "ALign items" => Stage::Align,
+            "DElete items" => Stage::Remove,
             "RESet" => {
                 self.change(s, |p| {
                     p.replaced.clear();
+                    p.removed.clear();
                     Ok(())
                 })?;
-                s.echo("Replaced items were restored.");
+                s.echo("Replaced and deleted items were restored.");
                 Stage::Main
             }
             _ => return Err(other("Invalid option keyword.")),
@@ -638,28 +709,62 @@ impl Interactive for EditM {
         let p = self.params(s);
         let rect = p.as_ref().and_then(|p| match &p.kind {
             ArrayKind::Rect(r) => Some(r.clone()),
-            ArrayKind::Polar(_) => None,
+            _ => None,
         });
         let polar = p.as_ref().and_then(|p| match &p.kind {
             ArrayKind::Polar(k) => Some(k.clone()),
-            ArrayKind::Rect(_) => None,
+            _ => None,
+        });
+        let path = p.as_ref().and_then(|p| match &p.kind {
+            ArrayKind::Path(k) => Some(k.clone()),
+            _ => None,
         });
         let (levels, ls) = p.as_ref().map(|p| (p.levels, p.level_spacing)).unwrap_or((1, 0.0));
         let (cols, rows, cs, rs, elev) = match (&rect, &polar) {
             (Some(r), _) => (r.cols, r.rows, r.col_spacing, r.row_spacing, r.row_elevation),
             (_, Some(k)) => (k.items, k.rows, 0.0, k.row_spacing, k.row_elevation),
-            _ => (1, 1, 0.0, 0.0, 0.0),
+            _ => match &path {
+                Some(k) => {
+                    let (n, step) = k.count_and_step(k.length());
+                    (n, k.rows, step, k.row_spacing, k.row_elevation)
+                }
+                None => (1, 1, 0.0, 0.0, 0.0),
+            },
         };
         let dist = |m: &str, d: f64| Prompt::new(m, Accept::POINT_OR_NUMBER).default(fmt(d));
         let total = |n: u32, d: f64| d * f64::from(n.saturating_sub(1));
         match self.stage {
             Select => Prompt::new("Select array", Accept::SELECT),
             Main if polar.is_some() => Prompt::new("Enter an option", KEYWORDS)
-                .kw(&["Source", "REPlace", "Base point", "Items", "Angle between", "Fill angle", "Rows", "Levels", "ROTate items", "RESet", "eXit"])
+                .kw(&[
+                    "Source",
+                    "REPlace",
+                    "Base point",
+                    "Items",
+                    "Angle between",
+                    "Fill angle",
+                    "Rows",
+                    "Levels",
+                    "ROTate items",
+                    "DElete items",
+                    "RESet",
+                    "eXit",
+                ])
+                .default("eXit"),
+            Main if path.is_some() => Prompt::new("Enter an option", KEYWORDS)
+                .kw(&["Source", "REPlace", "Method", "Base point", "Items", "Rows", "Levels", "ALign items", "DElete items", "RESet", "eXit"])
                 .default("eXit"),
             Main => Prompt::new("Enter an option", KEYWORDS)
-                .kw(&["Source", "REPlace", "Base point", "Rows", "Columns", "Levels", "RESet", "eXit"])
+                .kw(&["Source", "REPlace", "Base point", "Rows", "Columns", "Levels", "DElete items", "RESet", "eXit"])
                 .default("eXit"),
+            Method => Prompt::new("Enter path method", KEYWORDS).kw(&["Divide", "Measure"]).default(if path.as_ref().is_some_and(|k| k.divide) {
+                "Divide"
+            } else {
+                "Measure"
+            }),
+            PathSpace => dist("Specify the distance between items along path", cs),
+            Align => Prompt::new("Align arrayed items to the path?", KEYWORDS).kw(&["Yes", "No"]).default(yes(path.as_ref().is_none_or(|k| k.align))),
+            Remove => Prompt::new("Select items to delete", Accept::POINT),
             Base => Prompt::new("Specify base point", Accept::POINT).kw(&["Key point"]).default("centroid"),
             ColsCount => Prompt::new("Enter the number of columns", Accept::NUMBER).default(cols.to_string()),
             ColsSpace => dist("Specify the distance between columns", cs).kw(&["Total"]),
@@ -671,6 +776,7 @@ impl Interactive for EditM {
             LevelsCount => Prompt::new("Enter the number of levels", Accept::NUMBER).default(levels.to_string()),
             LevelsSpace => dist("Specify the distance between levels", ls).kw(&["Total"]),
             LevelsTotal => dist("Specify the distance between the first and last level", total(levels, ls)),
+            Items if path.is_some() => Prompt::new("Enter number of items along path", Accept::NUMBER).default(cols.to_string()),
             Items => Prompt::new("Enter number of items in array", Accept::NUMBER).default(cols.to_string()),
             Between => {
                 let b = polar.as_ref().map_or(0.0, |k| {
@@ -772,10 +878,18 @@ impl Interactive for EditM {
                         match &mut p.kind {
                             ArrayKind::Rect(r) => r.cols = n,
                             ArrayKind::Polar(k) => k.items = n,
+                            ArrayKind::Path(k) => k.items = n,
                         }
                         Ok(())
                     })?;
-                    if stage == ColsCount { ColsSpace } else { Main }
+                    let measured = self.params(s).is_some_and(|p| matches!(p.kind, ArrayKind::Path(ref k) if !k.divide));
+                    if stage == ColsCount {
+                        ColsSpace
+                    } else if measured {
+                        PathSpace
+                    } else {
+                        Main
+                    }
                 }
                 None => stage,
             },
@@ -786,6 +900,7 @@ impl Interactive for EditM {
                         match &mut p.kind {
                             ArrayKind::Rect(r) => r.rows = n,
                             ArrayKind::Polar(k) => k.rows = n,
+                            ArrayKind::Path(k) => k.rows = n,
                         }
                         Ok(())
                     })?;
@@ -813,6 +928,7 @@ impl Interactive for EditM {
                     (ColsSpace | ColsTotal, ArrayKind::Rect(r)) => (r.col_spacing, r.cols),
                     (RowsSpace | RowsTotal, ArrayKind::Rect(r)) => (r.row_spacing, r.rows),
                     (RowsSpace | RowsTotal, ArrayKind::Polar(k)) => (k.row_spacing, k.rows),
+                    (RowsSpace | RowsTotal, ArrayKind::Path(k)) => (k.row_spacing, k.rows),
                     (LevelsSpace | LevelsTotal, _) => (p.level_spacing, p.levels),
                     _ => (0.0, 1),
                 };
@@ -827,6 +943,7 @@ impl Interactive for EditM {
                                 (ColsSpace | ColsTotal, ArrayKind::Rect(r)) => r.col_spacing = v,
                                 (RowsSpace | RowsTotal, ArrayKind::Rect(r)) => r.row_spacing = v,
                                 (RowsSpace | RowsTotal, ArrayKind::Polar(k)) => k.row_spacing = v,
+                                (RowsSpace | RowsTotal, ArrayKind::Path(k)) => k.row_spacing = v,
                                 _ => p.level_spacing = v,
                             }
                             Ok(())
@@ -843,6 +960,7 @@ impl Interactive for EditM {
                         match &mut p.kind {
                             ArrayKind::Rect(r) => r.row_elevation = z,
                             ArrayKind::Polar(k) => k.row_elevation = z,
+                            ArrayKind::Path(k) => k.row_elevation = z,
                         }
                         Ok(())
                     })?;
@@ -912,6 +1030,61 @@ impl Interactive for EditM {
                 return Ok(Step::Done);
             }
             (SourceItem, Input::Enter) => Main,
+            (Method, Input::Enter) => Main,
+            (Method, Input::Keyword(k)) => {
+                let divide = k == "Divide";
+                self.change(s, |p| {
+                    if let ArrayKind::Path(k) = &mut p.kind {
+                        if !divide && k.divide {
+                            k.spacing = k.count_and_step(k.length()).1;
+                        }
+                        k.divide = divide;
+                    }
+                    Ok(())
+                })?;
+                if divide { Main } else { PathSpace }
+            }
+            (PathSpace, _) => {
+                let cur = self.params(s).and_then(|p| match p.kind {
+                    ArrayKind::Path(k) => Some(k.count_and_step(k.length()).1),
+                    _ => None,
+                });
+                match self.distance(s, &i, cur.unwrap_or(1.0))? {
+                    Some(d) => {
+                        self.change(s, |p| {
+                            if let ArrayKind::Path(k) = &mut p.kind {
+                                k.spacing = d.abs();
+                                k.divide = false;
+                            }
+                            Ok(())
+                        })?;
+                        Main
+                    }
+                    None => stage,
+                }
+            }
+            (Align, _) => {
+                let cur = self.params(s).is_none_or(|p| !matches!(p.kind, ArrayKind::Path(ref k) if !k.align));
+                match yes_no(&i, cur) {
+                    Some(a) => {
+                        self.change(s, |p| {
+                            if let ArrayKind::Path(k) = &mut p.kind {
+                                k.align = a;
+                            }
+                            Ok(())
+                        })?;
+                        Main
+                    }
+                    None => return Err(other("Requires Yes or No.")),
+                }
+            }
+            (Remove, Input::Point(at)) => {
+                let tol = s.pixel_size() * s.settings.pickbox;
+                let item = item_at(s.doc()?, h, *at, tol).ok_or_else(|| other("No array item there; select an item of the array."))?;
+                self.change(s, |p| remove_item(p, item))?;
+                Remove
+            }
+            (Remove, Input::Enter) => Main,
             _ => stage,
         };
         self.stage = next;

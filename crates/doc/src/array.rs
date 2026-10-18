@@ -10,7 +10,7 @@
 //! All positions are in the array block's coordinates: its origin is the array's base point,
 //! which is where the array's block reference is inserted.
 
-use cadaddy_geom::{Vec2, Vec3};
+use cadaddy_geom::{Polyline, Segment, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{Common, Drawing, Entity, EntityKind, Insert, Lineweight};
@@ -37,6 +37,9 @@ pub struct ArrayParams {
     /// Items that refer to another block than the source (ARRAYEDIT REPlace).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub replaced: Vec<ReplacedItem>,
+    /// Items taken out of the array (ARRAYEDIT, Ctrl+pick and Erase): (i, j, level).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<[u32; 3]>,
     /// The source objects are out for editing (ARRAYEDIT Source, until ARRAYCLOSE). Not saved:
     /// a drawing saved meanwhile keeps the objects as separate objects.
     #[serde(skip)]
@@ -62,6 +65,7 @@ pub struct SourceEdit {
 pub enum ArrayKind {
     Rect(RectArray),
     Polar(PolarArray),
+    Path(PathArray),
 }
 
 /// A rectangular array: columns along the axis angle, rows across it.
@@ -99,6 +103,83 @@ pub struct PolarArray {
     pub row_elevation: f64,
 }
 
+/// A path array: items along a curve, rows offset to its left.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathArray {
+    /// The path curve in the drawing; the array follows it when it is edited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve: Option<crate::Handle>,
+    /// The path in the array block's coordinates (arcs as bulges).
+    pub path: Polyline,
+    /// Items along the path (with `divide` exactly this many; else at most this many).
+    pub items: u32,
+    /// Distance between items along the path (Measure).
+    pub spacing: f64,
+    /// Divide: the items spread evenly over the whole path, whatever its length.
+    #[serde(default)]
+    pub divide: bool,
+    /// Items turn with the path.
+    pub align: bool,
+    /// The path's direction where the source objects are (radians): items are turned by the
+    /// path's direction minus this.
+    #[serde(default)]
+    pub ref_angle: f64,
+    #[serde(default = "one")]
+    pub rows: u32,
+    #[serde(default)]
+    pub row_spacing: f64,
+    #[serde(default)]
+    pub row_elevation: f64,
+}
+
+/// Most vertices a path array's path keeps.
+pub const MAX_PATH_VERTICES: usize = 100_000;
+
+impl PathArray {
+    fn segments(&self) -> Vec<Segment> {
+        self.path.segments()
+    }
+
+    /// The path's length.
+    pub fn length(&self) -> f64 {
+        self.segments().iter().map(Segment::len).sum()
+    }
+
+    /// The items along the path and the distance between them, for a path of length `len`.
+    pub fn count_and_step(&self, len: f64) -> (u32, f64) {
+        if self.divide {
+            let gaps = if self.path.closed { self.items } else { self.items.saturating_sub(1) };
+            (self.items, if gaps == 0 { 0.0 } else { len / f64::from(gaps) })
+        } else if self.spacing > 0.0 {
+            let fit = (len / self.spacing + 1e-9).floor();
+            let fit = if fit.is_finite() && fit >= 0.0 { fit.min(f64::from(u32::MAX - 1)) as u32 + 1 } else { 1 };
+            (self.items.min(fit).max(1), self.spacing)
+        } else {
+            (1, 0.0)
+        }
+    }
+
+    /// Point and unit tangent at distance `d` along the path (clamped to its ends).
+    pub fn at_length(&self, d: f64) -> Option<(Vec2, Vec2)> {
+        let segs = self.segments();
+        at_length(&segs, d)
+    }
+}
+
+fn at_length(segs: &[Segment], d: f64) -> Option<(Vec2, Vec2)> {
+    let mut acc = 0.0;
+    for s in segs {
+        let l = s.len();
+        if d <= acc + l + 1e-12 && l > 0.0 {
+            let t = ((d - acc) / l).clamp(0.0, 1.0);
+            return Some((s.at(t), s.tangent(t)));
+        }
+        acc += l;
+    }
+    segs.last().map(|s| (s.end(), s.tangent(1.0)))
+}
+
 /// An item that refers to another block. `i` is the column (rectangular) or the item around the
 /// circle (polar), `j` the row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -128,6 +209,7 @@ impl ArrayParams {
         match &self.kind {
             ArrayKind::Rect(r) => (r.cols, r.rows),
             ArrayKind::Polar(p) => (p.items, p.rows),
+            ArrayKind::Path(p) => (p.count_and_step(p.length()).0, p.rows),
         }
     }
 
@@ -145,6 +227,17 @@ impl ArrayParams {
         let nums = match &self.kind {
             ArrayKind::Rect(r) => [r.col_spacing, r.row_spacing, r.axis_angle, r.row_elevation, 0.0, 0.0],
             ArrayKind::Polar(p) => [p.center.x, p.center.y, p.fill, p.row_spacing, p.row_elevation, 0.0],
+            ArrayKind::Path(p) => {
+                let v = &p.path.vertices;
+                if v.len() < 2 || v.len() > MAX_PATH_VERTICES || !v.iter().all(|v| v.p.x.is_finite() && v.p.y.is_finite() && v.bulge.is_finite()) {
+                    return false;
+                }
+                let len = p.length();
+                if !(len.is_finite() && len > 0.0) || p.spacing < 0.0 || (!p.divide && p.spacing == 0.0) {
+                    return false;
+                }
+                [p.spacing, p.ref_angle, p.row_spacing, p.row_elevation, len, 0.0]
+            }
         };
         a >= 1
             && b >= 1
@@ -153,6 +246,12 @@ impl ArrayParams {
             && !self.source.trim().is_empty()
             && nums.iter().chain(std::iter::once(&self.level_spacing)).all(|v| v.is_finite())
             && self.replaced.len() as u64 <= MAX_ARRAY_ITEMS
+            && self.removed.len() as u64 <= MAX_ARRAY_ITEMS
+    }
+
+    /// Whether item (i, j, level) was taken out of the array.
+    pub fn is_removed(&self, i: u32, j: u32, level: u32) -> bool {
+        self.removed.contains(&[i, j, level])
     }
 
     /// Where every item goes, row by row and level by level; `None` when the parameters are not
@@ -194,7 +293,24 @@ impl ArrayParams {
                         }
                     }
                 }
+                ArrayKind::Path(p) => {
+                    let segs = p.segments();
+                    let len: f64 = segs.iter().map(Segment::len).sum();
+                    let (n, step) = p.count_and_step(len);
+                    for j in 0..p.rows {
+                        for i in 0..n {
+                            let Some((at, tangent)) = at_length(&segs, step * f64::from(i)) else { continue };
+                            // Rows go to the left of the path.
+                            let at = at + tangent.perp() * (p.row_spacing * f64::from(j));
+                            let rotation = if p.align { tangent.angle() - p.ref_angle } else { 0.0 };
+                            out.push(ArrayItem { i, j, level, insert: at.to3(lz + p.row_elevation * f64::from(j)), rotation });
+                        }
+                    }
+                }
             }
+        }
+        if !self.removed.is_empty() {
+            out.retain(|it| !self.is_removed(it.i, it.j, it.level));
         }
         Some(out)
     }
@@ -243,12 +359,11 @@ impl ArrayParams {
     ///
     /// [`items`]: Self::items
     pub fn sync_names<'a>(&mut self, ents: impl Iterator<Item = &'a Entity>) -> bool {
-        let n = self.item_count();
-        let ents: Vec<&Entity> = ents.take(usize::try_from(n).unwrap_or(usize::MAX).saturating_add(1)).collect();
-        if ents.len() as u64 != n {
+        let Some(items) = self.items() else { return false };
+        let ents: Vec<&Entity> = ents.take(items.len().saturating_add(1)).collect();
+        if ents.len() != items.len() {
             return false;
         }
-        let Some(items) = self.items() else { return false };
         let mut source: Option<&str> = None;
         for (it, e) in items.iter().zip(&ents) {
             let EntityKind::Insert(ins) = &e.kind else { return false };
@@ -290,8 +405,60 @@ mod tests {
             levels: 2,
             level_spacing: 5.0,
             replaced: Vec::new(),
+            removed: Vec::new(),
             editing: None,
         }
+    }
+
+    fn path(divide: bool) -> ArrayParams {
+        ArrayParams {
+            source: "*U1".into(),
+            kind: ArrayKind::Path(PathArray {
+                curve: None,
+                path: Polyline::from_points(&[Vec2::ZERO, Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0)], false),
+                items: 5,
+                spacing: 4.0,
+                divide,
+                align: true,
+                ref_angle: 0.0,
+                rows: 1,
+                row_spacing: 0.0,
+                row_elevation: 0.0,
+            }),
+            levels: 1,
+            level_spacing: 0.0,
+            replaced: Vec::new(),
+            removed: Vec::new(),
+            editing: None,
+        }
+    }
+
+    #[test]
+    fn path_items_measure_and_divide() {
+        // Measure: every 4 units, 5 items fit in 20.
+        let items = path(false).items().unwrap_or_default();
+        assert_eq!(items.len(), 5);
+        assert!(items[3].insert.xy().near(Vec2::new(10.0, 2.0), 1e-9));
+        assert!((items[3].rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9, "turned with the path");
+        // Divide: 5 items over 20 units (4 gaps): ends included.
+        let items = path(true).items().unwrap_or_default();
+        assert!(items[4].insert.xy().near(Vec2::new(10.0, 10.0), 1e-9));
+        // A shorter path holds fewer measured items.
+        let mut p = path(false);
+        if let ArrayKind::Path(k) = &mut p.kind {
+            k.spacing = 7.0;
+        }
+        assert_eq!(p.items().unwrap_or_default().len(), 3);
+    }
+
+    #[test]
+    fn removed_items_are_left_out() {
+        let mut p = rect(3, 2);
+        p.removed.push([1, 0, 0]);
+        let items = p.items().unwrap_or_default();
+        assert_eq!(items.len(), 11);
+        assert!(!items.iter().any(|it| (it.i, it.j, it.level) == (1, 0, 0)));
+        assert_eq!(p.item_count(), 12, "the grid is unchanged");
     }
 
     #[test]
@@ -318,6 +485,7 @@ mod tests {
             levels: 1,
             level_spacing: 0.0,
             replaced: Vec::new(),
+            removed: Vec::new(),
             editing: None,
         };
         let items = p.items().unwrap_or_default();
@@ -336,6 +504,16 @@ mod tests {
         assert!(!p.is_valid());
         p = rect(2, 2);
         p.level_spacing = f64::NAN;
+        assert!(!p.is_valid());
+        let mut p = path(false);
+        if let ArrayKind::Path(k) = &mut p.kind {
+            k.path.vertices.truncate(1);
+        }
+        assert!(!p.is_valid());
+        let mut p = path(false);
+        if let ArrayKind::Path(k) = &mut p.kind {
+            k.spacing = 0.0;
+        }
         assert!(!p.is_valid());
     }
 }

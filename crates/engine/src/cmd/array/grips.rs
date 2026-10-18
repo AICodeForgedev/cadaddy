@@ -174,7 +174,7 @@ fn option_of(kind: &ArrayKind, g: GripId) -> Option<(&'static str, GripOption)> 
         GripId::RowCount => Some(("Total row spacing", GripOption::Total)),
         GripId::RowColumnCount => Some(("Total row and column spacing", GripOption::Total)),
         GripId::LevelCount => Some(("Total level spacing", GripOption::Total)),
-        GripId::ItemCount => Some(("Fill angle", GripOption::Total)),
+        GripId::ItemCount if polar => Some(("Fill angle", GripOption::Total)),
         GripId::Base if polar => Some(("Stretch radius", GripOption::StretchRadius)),
         _ => None,
     }
@@ -247,6 +247,24 @@ pub(crate) fn grips_for(p: &ArrayParams, w: &Mat3, with_base: bool) -> Vec<Array
                 let out_dir = polar_out(k.center);
                 add(GripId::RowCount, GripLook::Arrow, out_dir * (k.row_spacing * f64::from(k.rows - 1)), out_dir);
                 add(GripId::RowSpacing, GripLook::Arrow, out_dir * k.row_spacing, out_dir);
+            }
+        }
+        ArrayKind::Path(k) => {
+            let (n, step) = k.count_and_step(k.length());
+            if n > 1 {
+                if let Some((at, t)) = k.at_length(step * f64::from(n - 1)) {
+                    add(GripId::ItemCount, GripLook::Arrow, at, t);
+                }
+                if let Some((at, t)) = k.at_length(step) {
+                    add(GripId::ItemSpacing, GripLook::Arrow, at, t);
+                }
+            }
+            if k.rows > 1
+                && let Some((p0, t0)) = k.at_length(0.0)
+            {
+                let out_dir = t0.perp();
+                add(GripId::RowCount, GripLook::Arrow, p0 + out_dir * (k.row_spacing * f64::from(k.rows - 1)), out_dir);
+                add(GripId::RowSpacing, GripLook::Arrow, p0 + out_dir * k.row_spacing, out_dir);
             }
         }
     }
@@ -398,6 +416,28 @@ pub(crate) fn drag(p: &ArrayParams, w: &Mat3, g: GripId, opt: GripOption, to: Ve
                 _ => return None,
             }
         }
+        (ArrayKind::Path(k), _) => {
+            let chain = super::super::curves::Chain { segs: k.path.segments(), closed: k.path.closed };
+            let (_, step) = k.count_and_step(k.length());
+            let (p0, t0) = k.at_length(0.0)?;
+            let across = (l - p0).dot(t0.perp());
+            match g {
+                // Spacing along the path: the items go every so far (Measure).
+                GripId::ItemSpacing => {
+                    k.spacing = nonzero(chain.length_of(l))?;
+                    k.divide = false;
+                }
+                GripId::ItemCount => {
+                    k.items = count_for(chain.length_of(l), step)?;
+                    k.spacing = nonzero(step)?;
+                    k.divide = false;
+                }
+                GripId::RowSpacing => k.row_spacing = nonzero(across)?,
+                GripId::RowCount if opt == GripOption::Total => k.row_spacing = nonzero(across / f64::from(k.rows.saturating_sub(1).max(1)))?,
+                GripId::RowCount => k.rows = count_for(across, k.row_spacing)?,
+                _ => return None,
+            }
+        }
     }
     q.is_valid().then_some(Edited { params: q, base })
 }
@@ -458,6 +498,17 @@ pub(crate) fn typed(p: &ArrayParams, w: &Mat3, g: GripId, opt: GripOption, v: f6
                     _ => return None,
                 }
             }
+            ArrayKind::Path(k) => match g {
+                GripId::ItemSpacing => {
+                    k.spacing = nonzero(v)?.abs();
+                    k.divide = false;
+                }
+                GripId::ItemCount => k.items = count()?,
+                GripId::RowSpacing => k.row_spacing = nonzero(v)?,
+                GripId::RowCount if total => k.row_spacing = nonzero(v / f64::from(k.rows.saturating_sub(1).max(1)))?,
+                GripId::RowCount => k.rows = count()?,
+                _ => return None,
+            },
         },
     }
     q.is_valid().then_some(Edited { params: q, base })
@@ -472,6 +523,7 @@ pub(crate) fn prompt(kind: &ArrayKind, g: GripId, opt: GripOption, from: Vec2) -
         (GripId::ColumnSpacing, _) => "** COLUMN SPACING ** Specify the distance between columns",
         (GripId::RowSpacing, _) => "** ROW SPACING ** Specify the distance between rows",
         (GripId::LevelSpacing, _) => "** LEVEL SPACING ** Specify the distance between levels",
+        (GripId::ItemSpacing, _) if matches!(kind, ArrayKind::Path(_)) => "** ITEM SPACING ** Specify the distance between items",
         (GripId::ItemSpacing, _) => "** ITEM SPACING ** Specify the angle between items",
         (GripId::ColumnCount, GripOption::Total) => "** TOTAL COLUMN SPACING ** Specify the distance between the first and last column",
         (GripId::RowCount, GripOption::Total) => "** TOTAL ROW SPACING ** Specify the distance between the first and last row",
