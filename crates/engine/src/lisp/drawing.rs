@@ -408,7 +408,7 @@ fn sub_entget(ctx: &mut Ctx<'_>, h: Handle, sub: &super::Sub, apps: &[String]) -
     let me = Value::cons(Value::Int(-1), Value::Ename(h));
     let (ins, at) = match sub {
         super::Sub::Table(table, name) => {
-            let r = table_records(d, table).into_iter().find(|r| record_name(r).eq_ignore_ascii_case(name));
+            let r = table_records(d, table, &ctx.env.apps).into_iter().find(|r| record_name(r).eq_ignore_ascii_case(name));
             return Ok(r.map(|r| Value::list(std::iter::once(me).chain(r.iter()).collect::<Vec<_>>())).unwrap_or_default());
         }
         super::Sub::Attrib(ins, n) => (*ins, n + 1),
@@ -477,6 +477,11 @@ fn entity_from_list(ctx: &Ctx<'_>, list: &Value) -> Result<(String, cadaddy_doc:
                 }
             }
             if !xdata.is_empty() {
+                // Every application must be registered first (regapp), as in AutoCAD.
+                let known = ctx.s.doc().map(|d| app_names(d, &ctx.env.apps)).unwrap_or_default();
+                if let Some(t) = xdata.iter().find(|t| t.code == 1001 && !known.iter().any(|k| k.eq_ignore_ascii_case(&t.value))) {
+                    return Err(LispError::new(format!("bad DXF group: application {} isn't registered (regapp)", t.value)));
+                }
                 common.xdata = xdata;
             }
             Ok((kind, common, k))
@@ -892,7 +897,10 @@ fn matches_filter(d: &cadaddy_doc::Drawing, e: &Entity, f: &Filter) -> bool {
         }
         None => vec![Value::cons(Value::Int(0), Value::str(e.kind.dxf_name())), Value::cons(Value::Int(8), Value::str(&e.common.layer))],
     };
-    let groups = groups();
+    let mut groups = groups();
+    // The applications whose xdata the object carries, for a (-3 ("APP")) filter.
+    let apps: Vec<Value> = e.common.xdata.iter().filter(|t| t.code == 1001).map(|t| Value::str(&t.value)).collect();
+    groups.push(Value::cons(Value::Int(-3), Value::list(apps)));
     eval_filter(&groups, f)
 }
 
@@ -902,6 +910,22 @@ fn eval_filter(groups: &[Value], f: &Filter) -> bool {
         Filter::Or(v) => v.iter().any(|x| eval_filter(groups, x)),
         Filter::Xor(v) => v.iter().filter(|x| eval_filter(groups, x)).count() == 1,
         Filter::Not(x) => !eval_filter(groups, x),
+        // (-3 ("APP1") ("APP2*")): xdata of every application named (wildcards allowed).
+        Filter::Group { code: -3, value, .. } => {
+            let have: Vec<String> = groups
+                .iter()
+                .filter(|g| g.car().as_number() == Some(-3.0))
+                .flat_map(|g| g.cdr().iter().collect::<Vec<_>>())
+                .map(|v| to_text(&v, false))
+                .collect();
+            value.iter().all(|want| {
+                let w = match want.car() {
+                    Value::Str(s) => s.to_uppercase(),
+                    _ => to_text(&want, false).to_uppercase(),
+                };
+                have.iter().any(|h| super::builtins::wild_match(&h.to_uppercase(), &w))
+            })
+        }
         Filter::Group { code, value, op } => {
             let found: Vec<Value> = groups.iter().filter(|g| g.car().as_number() == Some(f64::from(*code))).map(Value::cdr).collect();
             if found.is_empty() {
@@ -1038,7 +1062,27 @@ fn color_index(c: cadaddy_color::Color) -> i32 {
 }
 
 /// The records of a symbol table, as `tblsearch` lists them.
-fn table_records(d: &cadaddy_doc::Drawing, table: &str) -> Vec<Value> {
+/// The application names a drawing knows: ACAD, those its objects' xdata uses and `registered`.
+fn app_names(d: &cadaddy_doc::Drawing, registered: &[String]) -> Vec<String> {
+    let mut out = vec!["ACAD".to_string()];
+    let mut add = |n: &str| {
+        if !n.is_empty() && !out.iter().any(|o| o.eq_ignore_ascii_case(n)) {
+            out.push(n.to_string());
+        }
+    };
+    let ents = d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())).chain(d.blocks.values().flat_map(|b| b.entities.iter()));
+    for e in ents {
+        for t in e.common.xdata.iter().filter(|t| t.code == 1001) {
+            add(&t.value);
+        }
+    }
+    for r in registered {
+        add(r);
+    }
+    out
+}
+
+fn table_records(d: &cadaddy_doc::Drawing, table: &str, apps: &[String]) -> Vec<Value> {
     let pair = |c: i32, v: Value| Value::cons(Value::Int(c), v);
     match table {
         "LAYER" => d
@@ -1099,7 +1143,10 @@ fn table_records(d: &cadaddy_doc::Drawing, table: &str) -> Vec<Value> {
             .iter()
             .map(|s| Value::list(vec![pair(0, Value::str("DIMSTYLE")), pair(2, Value::str(&s.name)), pair(70, Value::Int(0))]))
             .collect(),
-        "APPID" => vec![Value::list(vec![pair(0, Value::str("APPID")), pair(2, Value::str("ACAD")), pair(70, Value::Int(0))])],
+        "APPID" => app_names(d, apps)
+            .iter()
+            .map(|n| Value::list(vec![pair(0, Value::str("APPID")), pair(2, Value::str(n)), pair(70, Value::Int(0))]))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -1113,7 +1160,7 @@ pub fn tblsearch(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     let table = string(&a[0])?.to_ascii_uppercase();
     let name = string(&a[1])?;
     let Ok(d) = ctx.s.doc() else { return Ok(Flow::Value(Value::Nil)) };
-    let records = table_records(d, &table);
+    let records = table_records(d, &table, &ctx.env.apps);
     let found = records.iter().position(|r| record_name(r).eq_ignore_ascii_case(&name));
     if let Some(i) = found
         && a.get(2).is_some_and(|v| !v.is_nil())
@@ -1125,11 +1172,17 @@ pub fn tblsearch(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
 
 /// `(regapp name)`: register an application name for extended data; the name, or nil for one
 /// that can't be a symbol name. (Each application a drawing's xdata uses is written as an APPID.)
-pub fn regapp(_ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
+pub fn regapp(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 1, 1)?;
     let name = string(&a[0])?;
     let ok = !name.is_empty() && name.len() <= 255 && !name.chars().any(|c| "<>/\\\":;?*|,=`".contains(c));
-    Ok(Flow::Value(if ok { Value::str(&name) } else { Value::Nil }))
+    // nil for a name already registered, as in AutoCAD.
+    let known = ctx.s.doc().map(|d| app_names(d, &ctx.env.apps)).unwrap_or_default();
+    if !ok || known.iter().any(|k| k.eq_ignore_ascii_case(&name)) {
+        return Ok(Flow::Value(Value::Nil));
+    }
+    ctx.env.apps.push(name.clone());
+    Ok(Flow::Value(Value::str(&name)))
 }
 
 /// `(tblobjname table name)`: the entity name of a symbol table record (nil when there is none);
@@ -1139,7 +1192,7 @@ pub fn tblobjname(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     let table = string(&a[0])?.to_ascii_uppercase();
     let name = string(&a[1])?;
     let Ok(d) = ctx.s.doc() else { return Ok(Flow::Value(Value::Nil)) };
-    let Some(r) = table_records(d, &table).into_iter().find(|r| record_name(r).eq_ignore_ascii_case(&name)) else {
+    let Some(r) = table_records(d, &table, &ctx.env.apps).into_iter().find(|r| record_name(r).eq_ignore_ascii_case(&name)) else {
         return Ok(Flow::Value(Value::Nil));
     };
     let h = ctx.env.sub_name(super::Sub::Table(table, record_name(&r).to_ascii_uppercase()));
@@ -1151,7 +1204,7 @@ pub fn tblnext(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     let table = string(&a[0])?.to_ascii_uppercase();
     let rewind = a.get(1).is_some_and(|v| !v.is_nil());
     let Ok(d) = ctx.s.doc() else { return Ok(Flow::Value(Value::Nil)) };
-    let records = table_records(d, &table);
+    let records = table_records(d, &table, &ctx.env.apps);
     let i = if rewind { 0 } else { ctx.env.tblnext.get(&table).copied().unwrap_or(0) };
     ctx.env.tblnext.insert(table, i + 1);
     Ok(Flow::Value(records.get(i).cloned().unwrap_or_default()))

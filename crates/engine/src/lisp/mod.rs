@@ -89,6 +89,8 @@ pub struct Env {
     /// reference's ATTRIBs and SEQEND, and symbol table records (`tblobjname`).
     pub subs: HashMap<Handle, Sub>,
     pub sub_names: HashMap<Sub, Handle>,
+    /// Application names `regapp` registered (those the drawing's xdata uses count too).
+    pub apps: Vec<String>,
     /// The command history's length after LISP last printed a line: when something else wrote since
     /// (a prompt, a command's echo), a leading newline only ends that line.
     pub printed_at: Option<usize>,
@@ -108,6 +110,7 @@ impl Default for Env {
             tblnext: HashMap::new(),
             subs: HashMap::new(),
             sub_names: HashMap::new(),
+            apps: Vec::new(),
             printed_at: None,
         };
         builtins::install(&mut e);

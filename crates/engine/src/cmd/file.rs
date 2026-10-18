@@ -277,7 +277,10 @@ impl ReadFile {
 
 /// Relative image paths in a drawing are relative to its folder: look for images there too.
 fn image_folder(path: Option<&str>) {
-    if let Some(dir) = path.and_then(|p| std::path::Path::new(p).parent()).filter(|d| !d.as_os_str().is_empty()) {
+    let Some(p) = path.filter(|p| !p.trim().is_empty()) else { return };
+    // A drawing named relative to the working folder: its folder as a full path.
+    let full = std::path::absolute(p).unwrap_or_else(|_| std::path::PathBuf::from(p));
+    if let Some(dir) = full.parent().filter(|d| !d.as_os_str().is_empty()) {
         cadaddy_render::images::add_search_dir(dir);
     }
 }
@@ -308,7 +311,6 @@ pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
     if let Some(i) = path.as_deref().and_then(|p| already_open(s, p)) {
         return Ok(switch_to_open(s, i));
     }
-    image_folder(path.as_deref());
     let i = add_read(s, drawing, binary_dxf, &name, path);
     super::blocks::xref::after_open(s, i);
     Ok(opened(s, i, true))
@@ -324,6 +326,9 @@ fn read_bytes(bytes: &[u8], name: &str, path: Option<String>) -> Result<ReadFile
 }
 
 fn add_read(s: &mut Session, drawing: Drawing, binary_dxf: bool, name: &str, path: Option<String>) -> usize {
+    // Every way a drawing is opened (the OPEN command, the background open, scripts) looks for
+    // its relative image paths in its folder first.
+    image_folder(path.as_deref());
     let notes = drawing.read_notes.clone();
     let loss = read_loss(&drawing);
     let has_path = path.is_some();
@@ -370,6 +375,7 @@ fn already_open(s: &Session, path: &str) -> Option<usize> {
 /// OPEN of a file that is already open: that drawing becomes current, as in AutoCAD.
 fn switch_to_open(s: &mut Session, i: usize) -> Value {
     s.active = i;
+    image_folder(s.docs.get(i).and_then(|d| d.path.clone()).as_deref());
     let title = s.docs.get(i).map(|d| d.title.clone()).unwrap_or_default();
     s.echo(format!("{title} is already open."));
     let mut r = opened(s, i, true);

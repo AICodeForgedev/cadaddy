@@ -166,3 +166,31 @@ fn saving_over_a_drawing_open_in_another_tab_is_refused() {
     s.execute("qsave", &json!({})).unwrap();
     std::fs::remove_dir_all(&d).ok();
 }
+
+/// A drawing's relative image paths are found in its own folder whichever way it is opened (the
+/// OPEN command here), never in the program's working folder; switching back to an open drawing
+/// finds its images again.
+#[test]
+fn relative_images_are_found_beside_the_drawing_opened() {
+    use cadaddy_engine::render::images;
+    install();
+    let png = |rgba: [u8; 4]| images::Raster::new(1, 1, rgba.to_vec()).unwrap().encode_png().unwrap();
+    let name = format!("pics/logo-{}.png", std::process::id());
+    let (a, b) = (dir("img-a"), dir("img-b"));
+    for (d, px) in [(&a, [255, 0, 0, 255]), (&b, [0, 0, 255, 255])] {
+        std::fs::create_dir_all(d.join("pics")).unwrap();
+        std::fs::write(d.join(&name), png(px)).unwrap();
+        std::fs::write(d.join("plan.dxf"), b"plan").unwrap();
+    }
+    let mut s = Session::new();
+    let open = |s: &mut Session, d: &std::path::Path| s.execute("open", &json!({ "path": d.join("plan.dxf").to_string_lossy() })).unwrap();
+    open(&mut s, &a);
+    assert_eq!(images::get(&name).and_then(|r| r.pixel(0, 0)), Some([255, 0, 0, 255]));
+    open(&mut s, &b);
+    assert_eq!(images::get(&name).and_then(|r| r.pixel(0, 0)), Some([0, 0, 255, 255]));
+    // Back to the first drawing (already open).
+    open(&mut s, &a);
+    assert_eq!(images::get(&name).and_then(|r| r.pixel(0, 0)), Some([255, 0, 0, 255]));
+    std::fs::remove_dir_all(&a).ok();
+    std::fs::remove_dir_all(&b).ok();
+}

@@ -196,11 +196,13 @@ pub fn generation() -> u64 {
     cache().lock().map(|c| c.generation).unwrap_or(0)
 }
 
-/// The file `path` names: itself when it exists, else its name (or relative path) in each
-/// search folder.
+/// The file `path` names: itself when it is a full path to a file, else its relative path (or
+/// its name) in each search folder, the folder of the drawing opened or saved last first. A
+/// relative path is never taken from the program's working folder, which has nothing to do with
+/// the drawing (a program started from the Start menu works in its install or system folder).
 fn resolve(path: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     let p = Path::new(path);
-    if p.is_file() {
+    if p.is_absolute() && p.is_file() {
         return Some(p.to_path_buf());
     }
     // A Windows path read on another system: its last component.
