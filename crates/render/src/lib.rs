@@ -1648,7 +1648,7 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadaddy_doc::Dimension
 }
 
 mod table;
-pub use table::{MAX_LAYOUT_CELLS, TableFill, TableGeom, TableLine, TableText, table_covered, table_geometry, table_style_of};
+pub use table::{MAX_LAYOUT_CELLS, TableFill, TableGeom, TableLine, TableText, fit_rows, table_covered, table_geometry, table_style_of};
 
 fn table(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::Table, rgb: Ink, lw: f32) {
     table::draw(b, ctx, t, rgb, lw);

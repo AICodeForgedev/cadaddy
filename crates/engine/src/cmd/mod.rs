@@ -46,7 +46,7 @@ pub(crate) mod qselect;
 mod selecttools;
 mod settings;
 mod spline_opts;
-mod table;
+pub(crate) mod table;
 mod tolerance;
 mod trimextend;
 mod utility;

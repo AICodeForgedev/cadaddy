@@ -1007,6 +1007,8 @@ struct Rx {
     inserted: std::collections::HashSet<String>,
     /// Tables whose style is known only by TABLESTYLE handle: (table, style handle).
     table_style_fix: Vec<(Handle, String)>,
+    /// Table cells pointing at FIELD objects: (table, row-major cell index, FIELD handle).
+    table_fields: Vec<(Handle, usize, String)>,
     /// Multileaders' style handles and block attribute values, resolved with the objects.
     mleader_fix: Vec<(Handle, crate::dxf_mleader::Pending)>,
     /// Upper-case xref block name → the external drawing's path (BLOCK group 1).
@@ -1099,6 +1101,11 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
             let t = T(tags);
             if let Some(b) = t.s(2) {
                 rx.table_blocks.insert(b.to_ascii_uppercase());
+            }
+            for (i, f) in crate::dxf_table::cell_fields(tags) {
+                if rx.table_fields.len() < MAX_OBJECTS {
+                    rx.table_fields.push((h, i, f));
+                }
             }
             let ours = crate::dxf_ext::xdata(tags, crate::dxf_ext::APP).iter().any(|t| t.code == 1000 && t.str() == "TABLE");
             if !ours {
@@ -1991,6 +1998,8 @@ struct Objects {
     layout_views: Vec<(String, (Vec2, f64))>,
     /// SORTENTSTABLE objects: (owning block record handle, entity handle → sort handle).
     sortents: Vec<(String, HashMap<Handle, u64>)>,
+    /// FIELD objects by handle (table formulas).
+    fields: HashMap<String, Vec<Tag>>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -2029,6 +2038,9 @@ impl Objects {
             "DIMASSOC" if self.dimassocs.len() < MAX_OBJECTS => self.dimassocs.push(tags.to_vec()),
             "MLEADERSTYLE" if self.mleader_styles.len() < MAX_OBJECTS => self.mleader_styles.push((h, tags.to_vec())),
             "GROUP" if self.groups.len() < MAX_OBJECTS => self.groups.push((h, tags.to_vec())),
+            "FIELD" | "ACAD_FIELD" if self.fields.len() < MAX_OBJECTS => {
+                self.fields.insert(h, tags.to_vec());
+            }
             "SORTENTSTABLE" if self.sortents.len() < MAX_OBJECTS => {
                 if let Some(t) = sortents_table(tags) {
                     self.sortents.push(t);
@@ -2088,6 +2100,20 @@ impl Objects {
                         t.style = name;
                     }
                     t.text_height = height;
+                }
+            });
+        }
+        // Table formulas from FIELD objects, for cells CADaddy's own data didn't give one.
+        for (h, i, fh) in &rx.table_fields {
+            let Some(formula) = crate::dxf_table::field_formula(&self.fields, fh) else { continue };
+            let _ = d.modify_entity(*h, |e| {
+                if let EntityKind::Table(t) = &mut e.kind {
+                    let cols = t.col_widths.len().max(1);
+                    if let Some(cell) = t.cells.get_mut(i / cols).and_then(|row| row.get_mut(i % cols))
+                        && cell.formula.is_none()
+                    {
+                        cell.formula = Some(formula);
+                    }
                 }
             });
         }

@@ -213,6 +213,8 @@ struct Ctx {
     xclips: HashMap<Handle, XclipObj>,
     /// Table → (anonymous `*T` block name, BLOCK_RECORD handle).
     tables: HashMap<Handle, (String, String)>,
+    /// Table → the FIELD objects of its formula cells.
+    fields: HashMap<Handle, Vec<crate::dxf_table::CellField>>,
     /// Table style name → TABLESTYLE handle (the first is the fallback).
     table_styles: Vec<(String, String)>,
     /// Multileader style name → MLEADERSTYLE handle (the first is the fallback).
@@ -1101,6 +1103,10 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     if n == 0 {
                         w.s(1, "");
                     }
+                    // A formula: its FIELD (other programs read the formula from it).
+                    if let Some(f) = cx.fields.get(&e.handle).and_then(|fs| fs.iter().find(|f| f.row == r && f.col == c)) {
+                        w.s(344, &f.text);
+                    }
                 }
             }
             w.s(1001, dxf_ext::APP);
@@ -1553,7 +1559,7 @@ fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
                     background: None,
                     insert: cell.at.to3(0.0),
                     height: cell.height,
-                    width: 0.0,
+                    width: cell.width,
                     attach: cell.attach,
                     rotation: 0.0,
                     style,
@@ -1567,6 +1573,49 @@ fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
     }
     out.extend(texts);
     out
+}
+
+/// Write `f`'s two FIELD objects, owned by the table `owner`.
+fn write_field(w: &mut W, f: &crate::dxf_table::CellField, owner: &str) {
+    // The cell's text field: one child, the expression.
+    w.s(0, "FIELD");
+    w.s(5, &f.text);
+    w.s(330, owner);
+    w.s(100, "AcDbField");
+    w.s(1, "_text");
+    w.s(2, "%<\\_FldIdx 0>%");
+    w.i(90, 1);
+    w.s(360, &f.expr);
+    w.i(97, 0);
+    w.i(93, 0);
+    w.s(7, "ACFD_FIELD_VALUE");
+    w.i(90, 0);
+    w.s(301, "");
+    w.i(98, 0);
+    // The expression and its cached value (a double).
+    w.s(0, "FIELD");
+    w.s(5, &f.expr);
+    w.s(330, &f.text);
+    w.s(100, "AcDbField");
+    w.s(1, "AcExpr");
+    let code = format!("\\AcExpr ({})", f.code);
+    let parts = crate::dxf_table::chunks(&code);
+    for (i, p) in parts.iter().enumerate() {
+        w.s(if i == 0 { 2 } else { 3 }, p);
+    }
+    w.i(90, 0);
+    w.i(97, 0);
+    w.i(93, 0);
+    w.s(7, "ACFD_FIELD_VALUE");
+    match f.value.filter(|v| v.is_finite()) {
+        Some(v) => {
+            w.i(90, 2);
+            w.f(140, v);
+        }
+        None => w.i(90, 0),
+    }
+    w.s(301, "");
+    w.i(98, 0);
 }
 
 /// Our own geometry for an arrowhead block: unit size, tip at the origin, pointing along +X.
@@ -1938,6 +1987,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
             tn += 1;
             let brh = w.h();
             cx.tables.insert(e.handle, (name.clone(), brh.clone()));
+            let fields = crate::dxf_table::plan_fields(t, || w.h());
+            if !fields.is_empty() {
+                cx.fields.insert(e.handle, fields);
+            }
             table_defs.push((name, brh, table_block_entities(d, t, &e.common.layer)));
         }
     }
@@ -2544,6 +2597,15 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         }
     }
     scale_list(&mut w, &scales, &scale_dict, &root_dict);
+    // Formula cells' FIELD objects, owned by their tables.
+    let mut fields: Vec<(&Handle, &Vec<crate::dxf_table::CellField>)> = cx.fields.iter().collect();
+    fields.sort_by_key(|(h, _)| **h);
+    for (table, fs) in fields {
+        let owner = table.hex();
+        for f in fs {
+            write_field(&mut w, f, &owner);
+        }
+    }
     write_xclips(&mut w, &cx.xclips, &every);
     // Dimension associativity: extension dictionary + DIMASSOC per dimension.
     let mut assoc: Vec<(&Handle, &AssocObj)> = cx.assoc.iter().collect();
