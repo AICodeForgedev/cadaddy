@@ -22,6 +22,36 @@ fn pedit_multiple_joins_lines_into_one_polyline() {
     assert_eq!(s.doc().unwrap().model.iter().count(), 1);
 }
 
+/// Many separate chains, picked in a scrambled order and drawn in both directions, each join into
+/// one polyline, and quickly: the join looks ends up in a grid instead of comparing every object
+/// with every other (a 10,000-line selection took minutes).
+#[test]
+fn pedit_multiple_join_scales_to_thousands_of_segments() {
+    let mut s = Session::new();
+    let (chains, segs) = (200usize, 50usize);
+    let mut order: Vec<(usize, usize)> = (0..chains).flat_map(|c| (0..segs).map(move |k| (c, k))).collect();
+    // A fixed scramble (no rng dependency): stride through the list.
+    let n = order.len();
+    order = (0..n).map(|i| order[(i * 7919) % n]).collect();
+    for (c, k) in order {
+        let y = c as f64 * 10.0;
+        let (a, b) = ([k as f64, y + (k % 2) as f64], [(k + 1) as f64, y + ((k + 1) % 2) as f64]);
+        let (a, b) = if k % 3 == 0 { (b, a) } else { (a, b) };
+        s.add_entity(EntityKind::Line(cadaddy_engine::doc::Line {
+            a: cadaddy_engine::geom::Vec3::new(a[0], a[1], 0.0),
+            b: cadaddy_engine::geom::Vec3::new(b[0], b[1], 0.0),
+        }))
+        .unwrap();
+    }
+    let t = std::time::Instant::now();
+    s.script("pedit m all  y j 0 \n").unwrap();
+    let took = t.elapsed();
+    let p = polylines(&s);
+    assert_eq!(p.len(), chains, "{:?}", s.log.iter().rev().take(4).collect::<Vec<_>>());
+    assert!(p.iter().all(|p| p.vertices.len() == segs + 1 && !p.closed));
+    assert!(took.as_secs_f64() < 20.0, "join took {took:?}");
+}
+
 #[test]
 fn pedit_last_then_width() {
     let mut s = Session::new();

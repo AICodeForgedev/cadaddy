@@ -212,20 +212,31 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
     // Search around the point first, widening the window: a big plan has far more segments than
     // one search takes, and a room only needs what is near it. A boundary wholly inside the
     // window is exact (anything crossing it would touch the window and be included).
+    // The first window is small (extents often reach a stray far-off object, and a dense plan
+    // puts tens of thousands of segments in a sixty-fourth of the sheet): doubling from there
+    // costs about twice the last window. A window too dense to search ends the search, as every
+    // larger one holds the same curves.
+    use cadaddy_geom::region::Search;
     let span = ext.width().max(ext.height());
-    let mut r = (span / 64.0).max(gap * 4.0).max(tol * 1e6);
-    let (_polys, owners, found) = loop {
+    let mut r = (span / 4096.0).max(gap * 4.0).max(tol * 1e6);
+    let (owners, found) = loop {
         let full = !span.is_finite() || r >= span * 2.0;
         let window = if full { None } else { Some(Bounds2::new(p - Vec2::new(r, r), p + Vec2::new(r, r))) };
         let (polys, owners) = outlines(d, &space, window);
-        let found = cadaddy_geom::region::boundary_at_gap(&polys, p, tol, gap);
+        let found = cadaddy_geom::region::search_at_gap(&polys, p, tol, gap);
         let inside = |w: &Bounds2, b: &cadaddy_geom::region::Boundary| {
             let bb = Bounds2::from_points(b.outer.iter().copied());
             bb.min.x > w.min.x && bb.min.y > w.min.y && bb.max.x < w.max.x && bb.max.y < w.max.y
         };
         match (window, found) {
-            (None, f) => break (polys, owners, f),
-            (Some(w), Some(b)) if inside(&w, &b) => break (polys, owners, Some(b)),
+            (_, Search::TooComplex) => {
+                return Err(EngineError::Other(
+                    "Valid hatch boundary not found: the area around the point is too dense to search. Zoom in and pick inside a closed area, or select objects.".into(),
+                ));
+            }
+            (None, Search::Found(b)) => break (owners, Some(b)),
+            (None, Search::Missing) => break (owners, None),
+            (Some(w), Search::Found(b)) if inside(&w, &b) => break (owners, Some(b)),
             _ => r *= 2.0,
         }
     };

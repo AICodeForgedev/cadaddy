@@ -60,7 +60,14 @@ struct Graph {
     edge_src: HashMap<(usize, usize), usize>,
 }
 
-fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
+/// Why no graph was built: nothing to build from, or too much (the work caps were reached).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fail {
+    Empty,
+    Complex,
+}
+
+fn build_r(polys: &[Vec<Vec2>], tol: f64) -> Result<Graph, Fail> {
     let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
     let mut owner: Vec<usize> = Vec::new();
     for (k, pl) in polys.iter().enumerate() {
@@ -75,11 +82,11 @@ fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
             }
         }
         if segs.len() > MAX_SEGMENTS {
-            return None;
+            return Err(Fail::Complex);
         }
     }
-    if segs.is_empty() || segs.len() > MAX_SEGMENTS {
-        return None;
+    if segs.is_empty() {
+        return Err(Fail::Empty);
     }
     // Split points per segment (parameters), found with a uniform grid.
     let bb = Bounds2::from_points(segs.iter().flat_map(|(a, b)| [*a, *b]));
@@ -94,10 +101,15 @@ fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
         )
     };
     let mut grid: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    // Segments registered along their path rather than in every cell of their box.
+    let mut long = vec![false; n];
     for (i, (a, b)) in segs.iter().enumerate() {
         let (x0, y0) = cell(a.min(*b));
         let (x1, y1) = cell(a.max(*b));
         if (x1 - x0 + 1) * (y1 - y0 + 1) > 4096 {
+            if let Some(l) = long.get_mut(i) {
+                *l = true;
+            }
             // A long segment: the cells along it (not its whole box), every one of them; a cell
             // skipped would miss a crossing there and leave two edges crossing without a vertex.
             let steps = (((b.x - a.x).abs() / cw).max((b.y - a.y).abs() / ch) * 2.0).ceil().clamp(1.0, 8192.0) as usize;
@@ -126,13 +138,34 @@ fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
         }
     }
     let mut splits: Vec<Vec<f64>> = vec![vec![0.0, 1.0]; n];
+    // A short segment is in every cell of its box, so two of them share exactly the cells from
+    // the larger of their lowest cells up: the pair is tested once, in that first shared cell. A
+    // long segment isn't in all the cells of its box, so pairs with one are remembered instead.
+    let boxes: Vec<Bounds2> = segs.iter().map(|(a, b)| Bounds2::new(*a, *b).expand(tol)).collect();
+    let lowest: Vec<(usize, usize)> = segs.iter().map(|(a, b)| cell(a.min(*b))).collect();
     let mut tested = std::collections::HashSet::new();
-    for list in grid.values() {
+    let mut tests = 0usize;
+    for (&here, list) in &grid {
         for (k, &i) in list.iter().enumerate() {
             for &j in list.iter().skip(k + 1) {
-                if i == j || !tested.insert((i.min(j), i.max(j))) {
+                if i == j {
                     continue;
                 }
+                let (Some(bi), Some(bj)) = (boxes.get(i), boxes.get(j)) else { continue };
+                if !bi.intersects(bj) {
+                    continue;
+                }
+                if long.get(i).copied().unwrap_or(true) || long.get(j).copied().unwrap_or(true) {
+                    if !tested.insert((i.min(j), i.max(j))) {
+                        continue;
+                    }
+                } else {
+                    let (Some(li), Some(lj)) = (lowest.get(i), lowest.get(j)) else { continue };
+                    if (li.0.max(lj.0), li.1.max(lj.1)) != here {
+                        continue;
+                    }
+                }
+                tests += 1;
                 let (Some(si), Some(sj)) = (segs.get(i), segs.get(j)) else { continue };
                 let li = Line::new(si.0, si.1);
                 let lj = Line::new(sj.0, sj.1);
@@ -159,8 +192,8 @@ fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
                         }
                     }
                 }
-                if tested.len() > 20_000_000 {
-                    return None;
+                if tests > 20_000_000 || tested.len() > 20_000_000 {
+                    return Err(Fail::Complex);
                 }
             }
         }
@@ -206,15 +239,19 @@ fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
             }
         }
     }
-    Some(g)
+    Ok(g)
 }
 
 /// The graph of the curves with gaps of up to `gap` between open ends bridged: each open end
 /// joins the nearest other open end within reach.
 fn build_gap(polys: &[Vec<Vec2>], tol: f64, gap: f64) -> Option<Graph> {
-    let mut g = build(polys, tol.max(1e-12))?;
+    build_gap_r(polys, tol, gap).ok()
+}
+
+fn build_gap_r(polys: &[Vec<Vec2>], tol: f64, gap: f64) -> Result<Graph, Fail> {
+    let mut g = build_r(polys, tol.max(1e-12))?;
     if !(gap.is_finite() && gap > tol) {
-        return Some(g);
+        return Ok(g);
     }
     let mut ends: Vec<(Vec2, usize)> =
         g.adj.iter().enumerate().filter(|(_, ns)| ns.len() == 1).filter_map(|(u, _)| Some((*g.pts.get(u)?, u))).take(MAX_GAP_ENDS).collect();
@@ -257,7 +294,7 @@ fn build_gap(polys: &[Vec<Vec2>], tol: f64, gap: f64) -> Option<Graph> {
             *f = true;
         }
     }
-    Some(g)
+    Ok(g)
 }
 
 /// Trace the face left of half-edge u→v (vertex indices), giving up after `max_steps` edges.
@@ -469,11 +506,34 @@ pub fn boundary_at(polys: &[Vec<Vec2>], p: Vec2, tol: f64) -> Option<Boundary> {
 }
 
 /// [`boundary_at`], with gaps of up to `gap` between curve ends closed (HPGAPTOL).
+/// What a boundary search around a point found.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Search {
+    Found(Boundary),
+    /// No closed boundary around the point among these curves.
+    Missing,
+    /// Too many curves (or crossings) to search; a larger set of curves would be too.
+    TooComplex,
+}
+
+/// [`boundary_at_gap`], telling a search that gave up on the work caps apart from one that
+/// found nothing.
+pub fn search_at_gap(polys: &[Vec<Vec2>], p: Vec2, tol: f64, gap: f64) -> Search {
+    match build_gap_r(polys, tol, gap) {
+        Err(Fail::Complex) => Search::TooComplex,
+        Err(Fail::Empty) => Search::Missing,
+        Ok(g) => boundary_in(&g, p).map_or(Search::Missing, Search::Found),
+    }
+}
+
 pub fn boundary_at_gap(polys: &[Vec<Vec2>], p: Vec2, tol: f64, gap: f64) -> Option<Boundary> {
-    let g = build_gap(polys, tol, gap)?;
-    let ids = outer_face(&g, p)?;
-    let outer = points(&g, &ids)?;
-    let islands = islands(&g, &ids, p);
+    boundary_in(&build_gap(polys, tol, gap)?, p)
+}
+
+fn boundary_in(g: &Graph, p: Vec2) -> Option<Boundary> {
+    let ids = outer_face(g, p)?;
+    let outer = points(g, &ids)?;
+    let islands = islands(g, &ids, p);
     let mut outer_sources: Vec<usize> =
         ids.iter().zip(ids.iter().cycle().skip(1)).filter_map(|(&u, &v)| g.edge_src.get(&(u.min(v), u.max(v))).copied()).collect();
     outer_sources.sort_unstable();

@@ -275,6 +275,121 @@ pub(crate) fn pedit_join(s: &mut Session, h: Handle, others: &[Handle], fuzz: f6
     Ok(joined.len())
 }
 
+/// PEDIT Multiple Join: join every chain of connected objects among `hs`, each onto the first
+/// polyline (or line/arc, made a polyline) of its chain in selection order. Ends are found through
+/// a grid of endpoint cells the fuzz distance wide, so a selection of many thousands joins in
+/// about linear time instead of comparing every object with every other.
+pub(crate) fn join_many(s: &mut Session, hs: &[Handle], fuzz: f64) -> Result<usize> {
+    use std::collections::{HashMap, HashSet};
+    let tol = fuzz.max(1e-6);
+    let mut items: Vec<(Handle, Chain, bool)> = Vec::new();
+    {
+        let d = s.doc()?;
+        let mut seen = HashSet::new();
+        for h in hs {
+            if !seen.insert(*h) {
+                continue;
+            }
+            let Some(e) = d.entity(*h) else { continue };
+            let closed = matches!(&e.kind, EntityKind::LwPolyline(p) if p.closed);
+            let ok = matches!(&e.kind, EntityKind::Line(_) | EntityKind::Arc(_) | EntityKind::LwPolyline(_));
+            if let (true, Some(c)) = (ok, Chain::of(&e.kind)) {
+                items.push((*h, c, closed));
+            }
+        }
+    }
+    // Cells a little wider than the fuzz distance: two ends that meet share a cell or touch one.
+    let cell = tol * 2.0;
+    let key = |p: Vec2| -> Option<(i64, i64)> {
+        let (x, y) = ((p.x / cell).floor(), (p.y / cell).floor());
+        (x.is_finite() && y.is_finite() && x.abs() < 9e15 && y.abs() < 9e15).then_some((x as i64, y as i64))
+    };
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, (_, c, closed)) in items.iter().enumerate() {
+        if *closed {
+            continue;
+        }
+        for p in [c.start(), c.end()].into_iter().flatten() {
+            if let Some(k) = key(p) {
+                grid.entry(k).or_default().push(i);
+            }
+        }
+    }
+    let mut used = vec![false; items.len()];
+    // An unused open object (other than `me`) with an end near `p`.
+    let near = |p: Vec2, me: usize, used: &[bool], items: &[(Handle, Chain, bool)]| -> Option<usize> {
+        let (kx, ky) = key(p)?;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for &j in grid.get(&(kx + dx, ky + dy)).map(Vec::as_slice).unwrap_or(&[]) {
+                    if j == me || used.get(j).copied().unwrap_or(true) {
+                        continue;
+                    }
+                    let Some((_, c, _)) = items.get(j) else { continue };
+                    if c.start().is_some_and(|a| a.near(p, tol)) || c.end().is_some_and(|b| b.near(p, tol)) {
+                        return Some(j);
+                    }
+                }
+            }
+        }
+        None
+    };
+    let mut total = 0;
+    for i in 0..items.len() {
+        if used.get(i).copied().unwrap_or(true) || items.get(i).is_some_and(|it| it.2) {
+            continue;
+        }
+        let Some(mut chain) = items.get(i).map(|it| it.1.clone()) else { continue };
+        if let Some(u) = used.get_mut(i) {
+            *u = true;
+        }
+        let mut joined: Vec<Handle> = Vec::new();
+        while let (Some(st), Some(en)) = (chain.start(), chain.end()) {
+            if chain.segs.len() > 1 && st.near(en, tol) {
+                break;
+            }
+            let (j, at_end) = match near(en, i, &used, &items) {
+                Some(j) => (j, true),
+                None => match near(st, i, &used, &items) {
+                    Some(j) => (j, false),
+                    None => break,
+                },
+            };
+            let Some((oh, c, _)) = items.get(j) else { break };
+            let (Some(a), Some(b)) = (c.start(), c.end()) else { break };
+            if let Some(u) = used.get_mut(j) {
+                *u = true;
+            }
+            if at_end {
+                chain.segs.extend(if a.near(en, tol) { c.segs.clone() } else { c.reversed().segs });
+            } else {
+                let mut v = if b.near(st, tol) { c.segs.clone() } else { c.reversed().segs };
+                v.extend(std::mem::take(&mut chain.segs));
+                chain.segs = v;
+            }
+            joined.push(*oh);
+            if joined.len() >= MAX_GEN {
+                break;
+            }
+        }
+        if joined.is_empty() {
+            continue;
+        }
+        let Some(h) = items.get(i).map(|it| it.0) else { continue };
+        let Some(mut base) = as_lwpoly(&curves::entity(s, h)?.kind) else { continue };
+        let closed = chain.start().zip(chain.end()).is_some_and(|(a, b)| a.near(b, tol)) && chain.segs.len() > 1;
+        base.vertices = chain.vertices();
+        base.closed = closed;
+        let d = s.doc_mut()?;
+        d.modify_entity(h, |e| e.kind = EntityKind::LwPolyline(base))?;
+        for o in &joined {
+            d.remove_entity(*o);
+        }
+        total += joined.len();
+    }
+    Ok(total)
+}
+
 fn pedit_apply(s: &mut Session, h: Handle, opt: &str, p: &Value) -> Result<Value> {
     let e = curves::entity(s, h)?;
     if curves::is_locked(s, h) {
@@ -472,16 +587,8 @@ impl PeditM {
     }
     /// Multiple Join: each remaining polyline takes in the others that meet it.
     fn join_all(&mut self, s: &mut Session, fuzz: f64) -> Result<usize> {
-        let mut added = 0;
-        let mut i = 0;
-        while i < self.multi.len() {
-            let d = s.doc()?;
-            self.multi.retain(|h| d.entity(*h).is_some());
-            let Some(h) = self.multi.get(i).copied() else { break };
-            let others: Vec<Handle> = self.multi.iter().copied().filter(|o| *o != h).collect();
-            added += pedit_join(s, h, &others, fuzz)?;
-            i += 1;
-        }
+        let multi = self.multi.clone();
+        let added = join_many(s, &multi, fuzz)?;
         let d = s.doc()?;
         self.multi.retain(|h| d.entity(*h).is_some());
         Ok(added)
