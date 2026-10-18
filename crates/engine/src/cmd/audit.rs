@@ -84,7 +84,33 @@ fn run_audit(s: &mut Session, p: &Value) -> Result<Value> {
     if fix && !issues.is_empty() {
         s.state_mut()?.doc = Arc::new(copy);
     }
-    Ok(crate::audit::Report { issues, fixed: fix }.to_json())
+    let report = crate::audit::Report { issues, fixed: fix };
+    let mut r = report.to_json();
+    let path = s.state()?.path.clone();
+    write_log(s, &mut r, &report, "AUDIT", path.as_deref());
+    Ok(r)
+}
+
+/// AUDITCTL 1: the report also goes to an `.adt` file beside the drawing (`log` in the result). A
+/// drawing without a file has no log; a log that can't be written is reported, not an error.
+fn write_log(s: &mut Session, r: &mut Value, report: &crate::audit::Report, command: &str, drawing: Option<&str>) {
+    let Some(drawing) = drawing.filter(|_| crate::audit::auditctl()) else { return };
+    let log = crate::audit::log_path(drawing);
+    let name = std::path::Path::new(drawing).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| drawing.to_string());
+    match write_text(&log, &report.log_text(command, &name)) {
+        Ok(()) => r["log"] = json!(log),
+        Err(e) => s.echo(format!("The audit log {log} can't be written: {e}")),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_text(path: &str, text: &str) -> std::result::Result<(), String> {
+    std::fs::write(path, text).map_err(|e| e.to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn write_text(_path: &str, _text: &str) -> std::result::Result<(), String> {
+    Err("files are not available on the web".into())
 }
 
 /// Open a drawing file as tolerantly as the readers allow, then fix what AUDIT finds. The
@@ -107,6 +133,7 @@ fn run_recover(s: &mut Session, p: &Value) -> Result<Value> {
         None => std::path::Path::new(&name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| name.clone()),
     };
     let copy = bool_or(p, "copy", false);
+    let log_for = path.clone().filter(|_| !copy);
     let i = s.open_drawing(d, &title, if copy { None } else { path });
     let st = s.state_mut()?;
     let report = crate::audit::fix(Arc::make_mut(&mut st.doc));
@@ -129,6 +156,8 @@ fn run_recover(s: &mut Session, p: &Value) -> Result<Value> {
         s.echo(w.clone());
     }
     let mut r = report.to_json();
+    // The log of a recovery goes beside the file read (not an unsaved copy's autosave file).
+    write_log(s, &mut r, &report, "RECOVER", log_for.as_deref());
     r["warnings"] = json!(warnings);
     r["index"] = json!(i);
     r["uid"] = json!(uid);
