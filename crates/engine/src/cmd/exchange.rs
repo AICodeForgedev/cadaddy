@@ -57,11 +57,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["printpdf", "pdfb"])
             .params("{path?: \"DIR/NAME^NAME2.pdf\" (default: the drawing's file; a `^` splits the name into one book name per row of frames; else returns base64 `data` per book), names?: [book names], frameHeight?: mm (default 297), unit?: mm per drawing unit (default 1)} → {books: [{name, pages, bytes, path? | data}], skipped}: closed polylines of the frame height in model space are sheet frames; each row (same lower edge, bottom to top) is one PDF, its frames left to right one page each on the paper (ISO A-series, either orientation) they match")
             .noundo(),
-        CommandSpec::new("attach", "Attach", |_, _| {
-            Err(EngineError::Other("ATTACH is not available yet: raster images and PDF/DWF/DGN underlays can't be shown yet".into()))
-        })
-        .params("not available yet")
-        .noundo(),
+        CommandSpec::new("attach", "Attach", run_attach).params(
+            "{path: an image (PNG, JPEG: as IMAGEATTACH) or a drawing (DWG, DXF: as XATTACH), and that command's other parameters} → its reply. PDF, DWF and DGN underlays are not available yet (PDFIMPORT converts a PDF)",
+        ),
         CommandSpec::new("share", "Share", |_, _| {
             Err(EngineError::Other("SHARE is not available yet: there is no online service to share through; EXPORT or PUBLISH the drawing and send the file".into()))
         })
@@ -72,6 +70,20 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("not available yet")
             .noundo(),
     ]
+}
+
+/// ATTACH: the reference its file's type calls for.
+fn run_attach(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = str_param(p, "path").ok_or_else(|| bad("attach", "`path` is required"))?;
+    let id = match extension(path).as_str() {
+        "png" | "jpg" | "jpeg" => "imageattach",
+        "dwg" | "dxf" => "xattach",
+        "pdf" => return Err(bad("attach", "PDF underlays are not available yet; PDFIMPORT converts the PDF into drawing objects")),
+        "dwf" | "dwfx" | "dgn" => return Err(bad("attach", "DWF and DGN underlays are not available yet")),
+        other => return Err(bad("attach", format!("files of type .{other} can't be attached; choose an image (PNG, JPEG) or a drawing (DWG, DXF)"))),
+    };
+    let spec = command_specs().iter().find(|c| c.id == id).ok_or_else(|| bad("attach", format!("{id} is missing")))?;
+    (spec.run)(s, p)
 }
 
 fn extension(path: &str) -> String {
@@ -819,11 +831,41 @@ mod tests {
     }
 
     #[test]
-    fn attach_and_share_say_they_are_not_available_yet() {
+    fn share_says_it_is_not_available_yet() {
         let mut s = session();
-        for c in ["attach", "share"] {
-            let e = s.execute(&resolve_alias(c), &Value::Null).unwrap_err().to_string();
-            assert!(e.contains("not available yet"), "{c}: {e}");
+        let e = s.execute(&resolve_alias("share"), &Value::Null).unwrap_err().to_string();
+        assert!(e.contains("not available yet"), "{e}");
+    }
+
+    #[test]
+    fn attach_picks_the_reference_by_file_type() {
+        let mut s = session();
+        let dir = std::env::temp_dir().join(format!("cadaddy-attach-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("photo.png");
+        let r = cadaddy_render::images::Raster::new(4, 2, vec![200; 32]).unwrap();
+        std::fs::write(&png, r.encode_png().unwrap()).unwrap();
+        let out = s.execute("attach", &json!({ "path": png.to_string_lossy(), "at": [10, 5], "scale": 8 })).unwrap();
+        assert_eq!(out["pixels"], json!([4, 2]));
+        let h = cadaddy_doc::Handle::parse_hex(out["handle"].as_str().unwrap()).unwrap();
+        let EntityKind::Image(im) = &s.doc().unwrap().entity(h).unwrap().kind else { panic!("not an image") };
+        // 8 units wide, 4 high (square pixels), lower-left corner at the point.
+        assert!((im.u.x * im.size.x - 8.0).abs() < 1e-9 && (im.v.y * im.size.y - 4.0).abs() < 1e-9, "{im:?}");
+        assert_eq!((im.insert.x, im.insert.y, im.name.as_str()), (10.0, 5.0, "photo"));
+        for (p, says) in [("plan.pdf", "PDFIMPORT"), ("a.dgn", "not available yet"), ("notes.txt", "can't be attached")] {
+            let e = s.execute("attach", &json!({ "path": p })).unwrap_err().to_string();
+            assert!(e.contains(says), "{p}: {e}");
         }
+        assert!(s.execute("imageattach", &json!({ "path": dir.join("missing.png").to_string_lossy() })).is_err());
+        assert!(s.execute("imageattach", &json!({ "path": png.to_string_lossy(), "scale": 0 })).is_err());
+        // Typed: a wrong name is asked again; then point, scale and rotation.
+        let before = s.doc().unwrap().entity_count();
+        for line in ["imageattach", "nope.png", &png.to_string_lossy(), "1,1", "2", "90"] {
+            s.cmdline(line).unwrap();
+        }
+        assert!(s.running.is_none(), "{}", s.prompt_text());
+        assert!(s.log.iter().any(|l| l.contains("nope.png can't be read")), "{:?}", s.log);
+        assert_eq!(s.doc().unwrap().entity_count(), before + 1);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

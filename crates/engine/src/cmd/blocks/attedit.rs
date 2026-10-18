@@ -138,6 +138,27 @@ fn edit(s: &mut Session, (h, k): (Handle, usize), f: impl FnOnce(&str) -> Option
 }
 
 /// Change the properties set on attribute `k` of block reference `h`.
+/// Change the text of attribute `k` of block reference `h` (position, height, angle, style).
+fn set_text(s: &mut Session, (h, k): (Handle, usize), f: impl FnOnce(&mut cadaddy_doc::Text)) -> Result<()> {
+    s.doc_mut()?.modify_entity(h, |e| {
+        if let EntityKind::Insert(ins) = &mut e.kind
+            && let Some(a) = ins.attribs.get_mut(k)
+        {
+            f(&mut a.text);
+        }
+    })?;
+    Ok(())
+}
+
+/// The point attribute `k` of block reference `h` is placed by: its alignment point when it
+/// is justified, else its insertion point.
+fn text_anchor(s: &Session, (h, k): (Handle, usize)) -> Option<cadaddy_geom::Vec2> {
+    let e = s.doc().ok()?.entity(h)?;
+    let EntityKind::Insert(ins) = &e.kind else { return None };
+    let t = &ins.attribs.get(k)?.text;
+    Some(t.align_pt.unwrap_or(t.insert).xy())
+}
+
 fn set_props(s: &mut Session, (h, k): (Handle, usize), f: impl FnOnce(&mut AttribProps)) -> Result<()> {
     s.doc_mut()?.modify_entity(h, |e| {
         if let EntityKind::Insert(ins) = &mut e.kind
@@ -283,6 +304,10 @@ enum Stage {
     TrueColor,
     Find,
     Replace,
+    Position,
+    Height,
+    Angle,
+    Style,
 }
 
 #[derive(Default)]
@@ -356,7 +381,13 @@ impl Interactive for DashAtteditM {
             Stage::TagSpec => Prompt::new("Enter attribute tag specification", Accept::TEXT).default("*"),
             Stage::ValueSpec => Prompt::new("Enter attribute value specification", Accept::TEXT).default("*"),
             Stage::Select => Prompt::new("Select attributes", Accept::SELECT),
-            Stage::Option => Prompt::new("Enter an option", KW).kw(&["Value", "Layer", "Color", "Next"]).default("N"),
+            Stage::Option => {
+                Prompt::new("Enter an option", KW).kw(&["Value", "Position", "Height", "Angle", "Style", "Layer", "Color", "Next"]).default("N")
+            }
+            Stage::Position => Prompt::new("Specify new text insertion point <no change>", Accept::POINT),
+            Stage::Height => Prompt::new("Specify new height <no change>", Accept::POINT_OR_NUMBER),
+            Stage::Angle => Prompt::new("Specify new rotation angle <no change>", Accept::POINT_OR_NUMBER),
+            Stage::Style => Prompt::new("Enter new text style <no change>", Accept::TEXT),
             Stage::ValueKind => Prompt::new("Enter type of value modification", KW).kw(&["Change", "Replace"]).default("R"),
             Stage::NewValue => Prompt::new("Enter new attribute value", Accept::TEXT),
             Stage::Layer => {
@@ -432,6 +463,10 @@ impl Interactive for DashAtteditM {
                 Input::Keyword(k) if k == "Value" => self.stage = Stage::ValueKind,
                 Input::Keyword(k) if k == "Layer" => self.stage = Stage::Layer,
                 Input::Keyword(k) if k == "Color" => self.stage = Stage::Color,
+                Input::Keyword(k) if k == "Position" => self.stage = Stage::Position,
+                Input::Keyword(k) if k == "Height" => self.stage = Stage::Height,
+                Input::Keyword(k) if k == "Angle" => self.stage = Stage::Angle,
+                Input::Keyword(k) if k == "Style" => self.stage = Stage::Style,
                 Input::Keyword(_) | Input::Enter => {
                     self.cur += 1;
                     if self.cur >= self.items.len() {
@@ -439,16 +474,62 @@ impl Interactive for DashAtteditM {
                     }
                     self.show_current(s);
                 }
-                Input::Text(t) => {
-                    let tl = t.trim().to_ascii_lowercase();
-                    let later = ["Position", "Height", "Angle", "Style"];
-                    return match later.iter().find(|k| !tl.is_empty() && k.to_ascii_lowercase().starts_with(&tl)) {
-                        Some(k) => Err(EngineError::Other(format!("{k} is not available yet."))),
-                        None => Err(invalid_keyword()),
-                    };
-                }
+                Input::Text(_) => return Err(invalid_keyword()),
                 _ => {}
             },
+            Stage::Position => {
+                if let (Input::Point(p), Some(it)) = (&i, self.items.get(self.cur).copied()) {
+                    let Some(from) = text_anchor(s, it) else { return Err(EngineError::Other("The attribute is gone.".into())) };
+                    let d = cadaddy_geom::Vec3::new(p.x - from.x, p.y - from.y, 0.0);
+                    set_text(s, it, |t| {
+                        t.insert = t.insert + d;
+                        t.align_pt = t.align_pt.map(|a| a + d);
+                    })?;
+                }
+                self.stage = Stage::Option;
+            }
+            Stage::Height => {
+                let it = self.items.get(self.cur).copied();
+                let h = match &i {
+                    Input::Point(p) => it.and_then(|it| text_anchor(s, it)).map(|a| a.dist(*p)),
+                    Input::Text(t) => Some(crate::units::parse_distance(t).ok_or_else(|| EngineError::Other("Requires a positive number.".into()))?),
+                    _ => None,
+                };
+                if let (Some(h), Some(it)) = (h, it) {
+                    if !(h.is_finite() && h > 0.0) {
+                        return Err(EngineError::Other("Value must be positive and nonzero.".into()));
+                    }
+                    set_text(s, it, |t| t.height = h)?;
+                }
+                self.stage = Stage::Option;
+            }
+            Stage::Angle => {
+                let it = self.items.get(self.cur).copied();
+                let a = match &i {
+                    Input::Point(p) => it.and_then(|it| text_anchor(s, it)).map(|a| (p.y - a.y).atan2(p.x - a.x)),
+                    Input::Text(t) => Some(s.angle_settings().direction(t).ok_or_else(|| EngineError::Other("Requires a valid angle.".into()))?),
+                    _ => None,
+                };
+                if let (Some(a), Some(it)) = (a, it) {
+                    set_text(s, it, |t| t.rotation = a)?;
+                }
+                self.stage = Stage::Option;
+            }
+            Stage::Style => {
+                let Some(t) = text else { return Ok(Step::Continue) };
+                let t = t.trim();
+                if !t.is_empty() {
+                    let name = s
+                        .doc()?
+                        .text_style(t)
+                        .map(|st| st.name.clone())
+                        .ok_or_else(|| EngineError::Other(format!("Cannot find text style \"{t}\".")))?;
+                    if let Some(it) = self.items.get(self.cur).copied() {
+                        set_text(s, it, |tx| tx.style = name)?;
+                    }
+                }
+                self.stage = Stage::Option;
+            }
             Stage::ValueKind => match &i {
                 Input::Keyword(k) if k == "Change" => self.stage = Stage::Find,
                 Input::Keyword(_) | Input::Enter => self.stage = Stage::NewValue,

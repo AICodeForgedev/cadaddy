@@ -448,7 +448,20 @@ pub fn entget(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     // Other applications' xdata travels with the object, not in its written record.
     let mut tags = tags;
     tags.extend(e.common.xdata.iter().map(raw_tag));
-    let (items, xdata) = entget_items(&kind, &tags, &apps);
+    let (mut items, xdata) = entget_items(&kind, &tags, &apps);
+    // A multiline points (340) to its MLINESTYLE, which gets its handle only when written: name
+    // it as an entity like a table record, as AutoCAD's ename for the style.
+    if kind == "MLINE" {
+        let style = tags.iter().find(|t| t.code == 2).map(|t| t.value.as_str().to_ascii_uppercase()).unwrap_or_default();
+        let style_ename = Value::Ename(ctx.env.sub_name(super::Sub::Table("MLINESTYLE".into(), style)));
+        for it in &mut items {
+            if let Value::Cons(c) = it
+                && matches!(c.car, Value::Int(340))
+            {
+                *it = Value::cons(Value::Int(340), style_ename.clone());
+            }
+        }
+    }
     Ok(Flow::Value(with_layout(head, items.into_iter().chain(xdata).collect(), &layout)))
 }
 
@@ -1135,6 +1148,19 @@ fn table_records(d: &cadaddy_doc::Drawing, table: &str, apps: &[String]) -> Vec<
                     pair(2, Value::str(&b.name)),
                     pair(70, Value::Int(0)),
                     Value::list(vec![Value::Int(10), Value::Real(b.base.x), Value::Real(b.base.y), Value::Real(b.base.z)]),
+                ])
+            })
+            .collect(),
+        "MLINESTYLE" => d
+            .mline_styles
+            .iter()
+            .map(|s| {
+                Value::list(vec![
+                    pair(0, Value::str("MLINESTYLE")),
+                    pair(2, Value::str(&s.name)),
+                    pair(70, Value::Int(0)),
+                    pair(3, Value::str(&s.description)),
+                    pair(71, Value::Int(i32::try_from(s.elements.len()).unwrap_or(i32::MAX))),
                 ])
             })
             .collect(),

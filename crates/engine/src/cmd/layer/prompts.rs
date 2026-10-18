@@ -111,6 +111,24 @@ enum Stage {
     Layers(Change),
     /// Turning the current layer off asks first.
     ConfirmOff(Vec<String>),
+    /// stAte: the layer state option.
+    State,
+    /// stAte Save, Restore or Delete: the state's name.
+    StateName(StateOp),
+    StateRenameFrom,
+    StateRenameTo(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StateOp {
+    Save,
+    Restore,
+    Delete,
+}
+
+/// The saved layer state named `name` (any case), by its own spelling.
+fn state_named(s: &Session, name: &str) -> Option<String> {
+    s.doc().ok()?.layer_states.iter().find(|st| st.name.eq_ignore_ascii_case(name)).map(|st| st.name.clone())
 }
 
 #[derive(Default)]
@@ -188,13 +206,24 @@ impl LayerM {
             "LOck" => Stage::Layers(Change::Lock),
             "Unlock" => Stage::Layers(Change::Unlock),
             "Description" => Stage::Description,
+            "stAte" => Stage::State,
             other => {
-                // MATerial, stAte, rEconcile: report and stay at the option prompt.
+                // MATerial, rEconcile: report and stay at the option prompt.
                 s.echo(format!("-LAYER {other} is not available yet."));
                 Stage::Option
             }
         };
         Ok(Step::Continue)
+    }
+
+    /// stAte ?: the saved layer states.
+    fn list_states(&self, s: &mut Session) {
+        let names: Vec<String> = s.doc().map(|d| d.layer_states.iter().map(|st| st.name.clone()).collect()).unwrap_or_default();
+        if names.is_empty() {
+            s.echo("No saved layer states.");
+        } else {
+            s.echo(format!("Saved layer states: {}", names.join(", ")));
+        }
     }
 
     fn list(&mut self, s: &mut Session, pat: &str) {
@@ -263,6 +292,68 @@ impl LayerM {
         };
         match stage {
             Stage::Option => Ok(Step::Continue),
+            Stage::State => match &i {
+                Input::Enter => back(self, Stage::Option),
+                Input::Keyword(k) => match k.as_str() {
+                    "?" => {
+                        self.list_states(s);
+                        back(self, Stage::State)
+                    }
+                    "Save" => back(self, Stage::StateName(StateOp::Save)),
+                    "Restore" => back(self, Stage::StateName(StateOp::Restore)),
+                    "Delete" => back(self, Stage::StateName(StateOp::Delete)),
+                    _ => back(self, Stage::StateRenameFrom),
+                },
+                _ => {
+                    self.stage = Stage::State;
+                    Err(retry("Invalid option keyword."))
+                }
+            },
+            Stage::StateName(op) => {
+                if matches!(&i, Input::Keyword(k) if k == "?") {
+                    self.list_states(s);
+                    return back(self, Stage::StateName(op));
+                }
+                let Some(n) = text else { return back(self, Stage::State) };
+                let r = match op {
+                    StateOp::Save => {
+                        // Saving under an existing name (any case) replaces that state.
+                        let name = state_named(s, &n).unwrap_or(n);
+                        call(s, "layerstate.save", &json!({ "name": name }))
+                    }
+                    _ => match state_named(s, &n) {
+                        Some(name) => {
+                            call(s, if op == StateOp::Restore { "layerstate.restore" } else { "layerstate.delete" }, &json!({ "name": name }))
+                        }
+                        None => Err(retry(format!("Cannot find layer state \"{n}\"."))),
+                    },
+                };
+                if let Err(e) = r {
+                    s.echo(message(&e));
+                }
+                back(self, Stage::State)
+            }
+            Stage::StateRenameFrom => {
+                if matches!(&i, Input::Keyword(k) if k == "?") {
+                    self.list_states(s);
+                    return back(self, Stage::StateRenameFrom);
+                }
+                let Some(n) = text else { return back(self, Stage::State) };
+                match state_named(s, &n) {
+                    Some(name) => back(self, Stage::StateRenameTo(name)),
+                    None => {
+                        s.echo(format!("Cannot find layer state \"{n}\"."));
+                        back(self, Stage::State)
+                    }
+                }
+            }
+            Stage::StateRenameTo(from) => {
+                let Some(to) = text else { return back(self, Stage::State) };
+                if let Err(e) = call(s, "layerstate.rename", &json!({ "from": from, "to": to })) {
+                    s.echo(message(&e));
+                }
+                back(self, Stage::State)
+            }
             Stage::List => {
                 self.list(s, text.as_deref().unwrap_or("*"));
                 Ok(Step::Continue)
@@ -434,6 +525,12 @@ impl Interactive for LayerM {
                 if enter_is_current { p.default(cur) } else { p }
             }
             Stage::ConfirmOff(_) => Prompt::new(format!("Really want layer \"{cur}\" (the CURRENT layer) off?"), KW).kw(&["Yes", "No"]).default("N"),
+            Stage::State => Prompt::new("Enter an option", KW).kw(&["?", "Save", "Restore", "Delete", "Name"]),
+            Stage::StateName(StateOp::Save) => Prompt::new("Enter new layer state name", NAME),
+            Stage::StateName(StateOp::Restore) => Prompt::new("Enter name of layer state to restore or [?]", NAME).kw(&["?"]),
+            Stage::StateName(StateOp::Delete) => Prompt::new("Enter name of layer state to delete or [?]", NAME).kw(&["?"]),
+            Stage::StateRenameFrom => Prompt::new("Enter name of layer state to rename or [?]", NAME).kw(&["?"]),
+            Stage::StateRenameTo(_) => Prompt::new("Enter new layer state name", NAME),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {

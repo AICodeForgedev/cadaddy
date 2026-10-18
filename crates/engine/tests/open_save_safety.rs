@@ -19,6 +19,9 @@ fn install() -> std::sync::MutexGuard<'static, ()> {
             if bytes.starts_with(b"LOSSY") {
                 d.read_notes.push("DXF: the file ends early".into());
             }
+            if bytes.starts_with(b"BADSTYLE") {
+                d.header.set_str("DIMSTYLE", "NODIM");
+            }
             Ok(d)
         },
         write: |_, _| Ok(b"saved".to_vec()),
@@ -208,4 +211,18 @@ fn relative_images_are_found_beside_the_drawing_opened() {
     for d in [&a, &b, &c] {
         std::fs::remove_dir_all(d).ok();
     }
+}
+
+#[test]
+fn the_open_reply_lists_reset_current_styles() {
+    let _turn = install();
+    let d = dir("badstyle");
+    let path = d.join("styles.dxf");
+    std::fs::write(&path, b"BADSTYLE").unwrap();
+    let mut s = Session::new();
+    let r = s.execute("open", &json!({ "path": path.to_string_lossy() })).unwrap();
+    let warnings = r["warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|w| w.as_str().is_some_and(|w| w.contains("NODIM") && w.contains("Standard"))), "{r}");
+    assert_eq!(s.doc().unwrap().header.str("DIMSTYLE", ""), "Standard");
+    std::fs::remove_dir_all(&d).ok();
 }

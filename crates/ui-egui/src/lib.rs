@@ -206,6 +206,8 @@ pub struct Services {
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
     /// A PDF to convert or import (PDFIMPORT, Convert PDF to DWG).
     pub pick_pdf: Option<Box<dyn Fn() -> Option<String>>>,
+    /// A raster image to attach (IMAGEATTACH, ATTACH).
+    pub pick_image: Option<Box<dyn Fn() -> Option<String>>>,
 }
 
 pub struct CadApp {
