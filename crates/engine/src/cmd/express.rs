@@ -1,4 +1,5 @@
-//! Express Tools: BURST, TXT2MTXT, BREAKLINE, BLOCKREPLACE and MOCORO.
+//! Express Tools: BURST, TXT2MTXT, BREAKLINE, BLOCKREPLACE, MOCORO, and the text tools TCASE,
+//! TCOUNT, TXTEXP and ARCTEXT (each in its own module).
 //!
 //! BURST explodes block references the way they are drawn: attributes become text with their
 //! values (invisible ones are dropped), and objects on layer 0 or with ByBlock properties take the
@@ -13,9 +14,13 @@ use cadaddy_doc::{Common, Entity, EntityKind, HAlign, Handle, Lineweight, MText,
 use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
 
+mod arctext;
 mod blockreplace;
 mod breakline;
 mod mocoro;
+mod tcase;
+mod tcount;
+mod txtexp;
 
 use super::machines::{SelOutcome, SelectPhase, SelectRun};
 use super::*;
@@ -43,6 +48,22 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Tools", "Express Tools", "Move/Copy/Rotate"])
             .params("{handles? (default the selection), base, steps: [{move: [x, y]} | {copy: [x, y]} | {rotate: degrees} | {scale: factor} | {base: [x, y]}, …]} → {handles, base}: one undo step")
             .interactive(|_| Ok(Box::new(mocoro::MocoroM::new()))),
+        CommandSpec::new("tcase", "Change Text Case", tcase::run)
+            .menu(&["Tools", "Express Tools", "Change Text Case"])
+            .params("{handles? (text, mtext, attribute definitions, block references' attributes; default the selection), case?: \"sentence\" (default) | \"lower\" | \"upper\" | \"title\" | \"toggle\"} → {handles}: the objects changed")
+            .interactive(|_| Ok(Box::new(tcase::TcaseM::default()))),
+        CommandSpec::new("tcount", "Auto Number", tcount::run)
+            .menu(&["Tools", "Express Tools", "Auto Number"])
+            .params("{handles? (text and mtext; default the selection), sort?: \"y\" (default, top to bottom) | \"x\" (left to right) | \"select\" (selection order), start? (1), increment? (1), placement?: \"prefix\" (default) | \"suffix\" | \"overwrite\" | \"find\", find? (the string the number replaces)} → {handles}: in numbering order")
+            .interactive(|_| Ok(Box::new(tcount::TcountM::default()))),
+        CommandSpec::new("txtexp", "Explode Text", txtexp::run)
+            .menu(&["Tools", "Express Tools", "Explode Text"])
+            .params("{handles? (text, mtext, attribute definitions; default the selection)} → {handles}: the polylines they became")
+            .interactive(|_| Ok(Box::new(txtexp::interactive()))),
+        CommandSpec::new("arctext", "Arc Aligned Text", arctext::run)
+            .menu(&["Tools", "Express Tools", "Arc Aligned Text"])
+            .params("{arc (handle), text, height? (the style's, else TEXTSIZE), style? (TEXTSTYLE), widthFactor?, side?: \"convex\" (default, outside, reading clockwise) | \"concave\", align?: \"fit\" (default) | \"left\" | \"right\" | \"center\", offset? (from the arc), spacing? (extra between characters)} → {handles, group}: one TEXT per character, as an unnamed group")
+            .interactive(|_| Ok(Box::new(arctext::ArctextM::default()))),
     ]
 }
 
