@@ -495,7 +495,12 @@ fn run_dimbreak(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc()?;
     let size = match size_param("dimbreak", p, "size", false)? {
         Some(x) => x,
-        None => 0.125 * Some(d.header.f64("DIMSCALE", 1.0)).filter(|k| *k > 0.0 && *k < 1e12).unwrap_or(1.0),
+        // The current style's break size (with any overrides) times its scale.
+        None => {
+            let st = d.dim_style(&d.header.str("DIMSTYLE", "Standard")).cloned().unwrap_or_default().with_overrides(&d.dim_overrides());
+            let size = st.break_size * st.effective_scale(d.header.f64("DIMSCALE", 1.0));
+            if (0.0..1e12).contains(&size) { size } else { 0.125 }
+        }
     };
     match mode.as_str() {
         "remove" => {

@@ -144,6 +144,7 @@ fn services() -> Services {
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
+        read_clipboard: Some(Box::new(|| arboard::Clipboard::new().ok()?.get_text().ok())),
         pick_pdf: Some(Box::new(|| rfd::FileDialog::new().add_filter(i18n::t("PDF"), &["pdf"]).pick_file().map(|p| p.to_string_lossy().to_string()))),
         pick_image: Some(Box::new(|| {
             rfd::FileDialog::new()

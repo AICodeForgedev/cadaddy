@@ -301,3 +301,36 @@ fn recover_opens_the_file_with_the_fixes_applied() {
     assert_eq!(s.docs.len(), docs);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn auditctl_writes_an_adt_log_beside_the_drawing() {
+    let dir = std::env::temp_dir().join(format!("cadaddy-auditctl-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let drawing = dir.join("site plan.dwg");
+    let log = dir.join("site plan.adt");
+    let (mut s, _, _) = corrupt_session();
+    s.state_mut().unwrap().path = Some(drawing.to_string_lossy().to_string());
+
+    // Off (the default): no log.
+    assert_eq!(cadaddy_engine::sysvars::get(&s, "AUDITCTL"), Some(json!(0)));
+    let r = s.execute("audit", &json!({})).unwrap();
+    assert!(r.get("log").is_none() && !log.exists());
+
+    s.execute("setvar", &json!({"name": "AUDITCTL", "value": 1})).unwrap();
+    assert!(s.execute("setvar", &json!({"name": "AUDITCTL", "value": 2})).is_err());
+    let r = s.execute("audit", &json!({"fix": true})).unwrap();
+    assert_eq!(r["log"], json!(log.to_string_lossy()));
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(text.starts_with("AUDIT of site plan.dwg\nFix any errors detected: Yes\n"), "{text}");
+    let n = r["errors"].as_u64().unwrap();
+    assert!(n > 0 && text.ends_with(&format!("Total errors found {n} fixed {n}\n")), "{text}");
+    // One line per issue, every one of them.
+    assert_eq!(text.lines().filter(|l| l.contains(": ") && l.ends_with(')')).count() as u64, n);
+
+    // A drawing without a file has no log.
+    let mut fresh = Session::new();
+    assert!(fresh.execute("audit", &json!({})).unwrap().get("log").is_none());
+
+    s.execute("setvar", &json!({"name": "AUDITCTL", "value": 0})).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+}

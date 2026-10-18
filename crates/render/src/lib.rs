@@ -31,7 +31,9 @@ use cadaddy_doc::{Drawing, Entity, EntityKind, Handle, Lineweight, Prim, Space};
 use cadaddy_geom::{Bounds2, Mat3, Polyline, Vec2};
 use pen::Pen;
 
-pub use dim::{ArrowGeom, Arrowhead, DimGeometry, DimText, LineRole, arrowhead, dimension_geometry, dimension_geometry_with, format_linear_value};
+pub use dim::{
+    ArrowGeom, Arrowhead, DimGeometry, DimText, LineRole, arrowhead, dimension_geometry, dimension_geometry_with, format_linear_value, right_to_left,
+};
 pub use fill::triangulate_evenodd;
 pub use hatch::{fill_loops as hatch_fill_loops, pattern_swatch};
 pub use paper::{PAPER_SIZES, PaperSize, Sheet, paper_size, sheet};
@@ -1640,6 +1642,36 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadaddy_doc::Dimension
     }
     for t in &g.fills {
         b.tris(ctx, dim_rgb, t);
+    }
+    // DIMTFILL: a box behind the text (DIMGAP round it), in the drawing's background colour (1)
+    // or DIMTFILLCLR (2). Drawn after the lines, so it hides what runs under the text.
+    if b.opts.text && b.opts.fill && style.text_fill != 0 {
+        let (sin, cos) = g.text_angle.sin_cos();
+        let o = g.text_pos;
+        let local = |p: Vec2| {
+            let v = p - o;
+            Vec2::new(v.x * cos + v.y * sin, -v.x * sin + v.y * cos)
+        };
+        let mut bx = Bounds2::EMPTY;
+        for p in g.text.iter().flatten().chain(g.text_glyphs.iter().flatten().flatten()) {
+            bx.add(local(*p));
+        }
+        if !bx.is_empty() && bx.min.is_finite() && bx.max.is_finite() {
+            let gap = if style.text_height > 0.0 { style.text_gap.abs() / style.text_height * g.text_height } else { 0.0 };
+            let bx = bx.expand(if gap.is_finite() { gap.min(1e9) } else { 0.0 });
+            let world = |q: Vec2| o + Vec2::new(q.x * cos - q.y * sin, q.x * sin + q.y * cos);
+            let q = [world(bx.min), world(Vec2::new(bx.max.x, bx.min.y)), world(bx.max), world(Vec2::new(bx.min.x, bx.max.y))];
+            let tris = [q[0], q[1], q[2], q[0], q[2], q[3]];
+            if style.text_fill == 2 {
+                b.tris(ctx, ink(style.text_fill_color, layer_color, own), &tris);
+            } else {
+                let n = b.list.prims.len();
+                b.tris(ctx, txt_rgb, &tris);
+                if let Some(p) = b.list.prims.get_mut(n) {
+                    p.kind = Kind::Mask;
+                }
+            }
+        }
     }
     if b.opts.text {
         let sh = cadaddy_fonts::Shaped { strokes: g.text.clone(), glyphs: g.text_glyphs.clone(), width: 0.0, text: g.text_runs.clone() };

@@ -155,7 +155,7 @@ fn mledit_tees_and_corner() {
     s.execute("mledit", &json!({"tool": "ot", "first": a.hex(), "p1": [9, 0], "second": b.hex(), "p2": [5, 3]})).unwrap();
     assert_eq!(mline(&s, a).points(), vec![Vec2::new(6.0, 0.0), Vec2::new(10.0, 0.0)]);
     assert_eq!(pieces(&mline(&s, b)), vec![[4.0, -5.0, 4.0, 5.0], [6.0, -5.0, 6.0, -1.0], [6.0, 1.0, 6.0, 5.0]]);
-    assert!(s.execute("mledit", &json!({"tool": "mt", "first": a.hex(), "p1": [9, 0], "second": b.hex(), "p2": [5, 3]})).is_err());
+    // Merged tees and slanted tees: mline_tees_purge.rs.
 
     // Corner joint: two multilines become one round the corner.
     let mut s = Session::new();

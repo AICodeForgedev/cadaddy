@@ -1,8 +1,10 @@
 //! COMPARE: compare the drawing with another one (a file read through the io hooks, or an open
 //! drawing). Objects are matched by geometry and properties first (preferring the same handle),
 //! then by handle: the same handle with other geometry or properties is a change. What is left
-//! is only in this drawing or only in the other. The comparison stays on the session for the
-//! canvas overlay and next/previous navigation until COMPARECLOSE.
+//! is only in this drawing or only in the other. Model space and every layout (matched by name;
+//! one only in either drawing counts all its objects as added or removed) are compared at once.
+//! The comparison stays on the session for the canvas overlay and next/previous navigation
+//! (of the tab shown) and COMPAREEXPORT's report until COMPARECLOSE.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -50,6 +52,29 @@ pub struct Comparison {
     pub regions: Vec<Bounds2>,
     /// The area shown last by next/previous (`None` before the first).
     pub at: Option<usize>,
+    /// Every space compared, model space first, then the layouts in tab order.
+    pub layouts: Vec<LayoutDiff>,
+}
+
+/// What differs in one space (model space or a layout).
+#[derive(Clone, Debug)]
+pub struct LayoutDiff {
+    pub space: Space,
+    /// Only in this drawing (handles here).
+    pub added: Vec<Handle>,
+    /// Only in the other drawing (handles there).
+    pub removed: Vec<Handle>,
+    /// (here, there, geometry differs, properties differ).
+    pub changed: Vec<(Handle, Handle, bool, bool)>,
+    pub common: usize,
+    /// The layout exists only in this drawing (`Some(true)`) or only in the other (`Some(false)`).
+    pub only_here: Option<bool>,
+}
+
+impl LayoutDiff {
+    pub fn differences(&self) -> usize {
+        self.added.len() + self.removed.len() + self.changed.len()
+    }
 }
 
 impl Comparison {
@@ -71,6 +96,13 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("compare.next", "Next Change", |s, _| step(s, 1)).params("→ {region, of}: zoom to the next area with changes").noundo(),
         CommandSpec::new("compare.previous", "Previous Change", |s, _| step(s, -1)).params("→ {region, of}").noundo(),
         CommandSpec::new("compareclose", "Close Comparison", run_close).params("{}: end the comparison and its overlay").noundo(),
+        CommandSpec::new("compareexport", "Export Comparison Report...", run_export)
+            .params(
+                "{path?: .html file (else returns `html`)} → {path?, rows}: the last COMPARE as an HTML report: a summary per layout, then \
+                 one row per difference with the columns Layout, Status (Added / Removed / Changed), Object, Handle, Other handle, \
+                 Layer, Change (geometry / properties)",
+            )
+            .noundo(),
     ]
 }
 
@@ -305,8 +337,64 @@ fn regions(boxes: &[Bounds2]) -> Vec<Bounds2> {
     out.into_iter().map(|(_, b)| b).collect()
 }
 
+/// What differs about a changed object.
+fn what(geom: bool, props: bool) -> &'static str {
+    match (geom, props) {
+        (true, true) => "geometry and properties",
+        (true, false) => "geometry",
+        _ => "properties",
+    }
+}
+
 fn listed(d: &Drawing, hs: &[Handle]) -> Vec<Value> {
     hs.iter().take(MAX_LISTED).filter_map(|h| d.entity(*h)).map(|e| json!({ "handle": e.handle.hex(), "type": e.kind.type_name() })).collect()
+}
+
+/// The spaces to compare: model space, this drawing's layouts in tab order, then layouts only
+/// the other drawing has. `Some(true)`: only here; `Some(false)`: only there.
+fn spaces(cur: &Drawing, other: &Drawing) -> Vec<(Space, Option<bool>)> {
+    let ordered = |d: &Drawing| {
+        let mut ls: Vec<&cadaddy_doc::Layout> = d.layouts.iter().collect();
+        ls.sort_by_key(|l| l.tab_order);
+        ls.into_iter().map(|l| l.name.clone()).collect::<Vec<_>>()
+    };
+    let (here, there) = (ordered(cur), ordered(other));
+    let has = |names: &[String], n: &str| names.iter().any(|x| x.eq_ignore_ascii_case(n));
+    let mut out = vec![(Space::Model, None)];
+    out.extend(here.iter().map(|n| (Space::Paper(n.clone()), if has(&there, n) { None } else { Some(true) })));
+    out.extend(there.iter().filter(|n| !has(&here, n)).map(|n| (Space::Paper(n.clone()), Some(false))));
+    out
+}
+
+/// `space` of `d`, matched by layout name without case.
+fn space_in(d: &Drawing, space: &Space) -> Space {
+    match space {
+        Space::Paper(n) => d.layout(n).map(|l| Space::Paper(l.name.clone())).unwrap_or_else(|| space.clone()),
+        s => s.clone(),
+    }
+}
+
+/// Compare `space` (its name in `cur`) with the same-named space of `other`.
+fn diff_space(cur: &Drawing, other: &Drawing, space: &Space) -> Diff {
+    let there = space_in(other, space);
+    if &there == space {
+        return diff(cur, other, space);
+    }
+    // The other drawing names the layout in another case: compare it under this drawing's name.
+    let mut o = other.clone();
+    if let (Space::Paper(from), Space::Paper(to)) = (&there, space)
+        && let Some(l) = o.layouts.iter_mut().find(|l| &l.name == from)
+    {
+        l.name = to.clone();
+    }
+    diff(cur, &o, space)
+}
+
+fn space_name(space: &Space) -> String {
+    match space {
+        Space::Paper(n) => n.clone(),
+        _ => "Model".into(),
+    }
 }
 
 fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
@@ -316,7 +404,18 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
     if Arc::ptr_eq(&cur, &other) {
         return Err(bad("compare", "a drawing can't be compared with itself"));
     }
-    let Diff { added, removed, changed, common, truncated } = diff(&cur, &other, &space);
+    let mut layouts = Vec::new();
+    let mut truncated_any = false;
+    for (sp, only_here) in spaces(&cur, &other) {
+        let Diff { added, removed, changed, common, truncated } = diff_space(&cur, &other, &sp);
+        truncated_any |= truncated;
+        layouts.push(LayoutDiff { space: sp, added, removed, changed, common, only_here });
+    }
+    let shown = layouts.iter().find(|l| l.space == space).cloned();
+    let Diff { added, removed, changed, common, truncated } = match shown {
+        Some(l) => Diff { added: l.added, removed: l.removed, changed: l.changed, common: l.common, truncated: truncated_any },
+        None => diff(&cur, &other, &space),
+    };
     let mut boxes = Vec::new();
     let mut bound = |d: &Drawing, h: Handle| {
         if let Some(b) = d.entity(h).map(|e| entity_bounds(d, e, 0)).filter(|b| !b.is_empty() && b.min.is_finite() && b.max.is_finite()) {
@@ -335,21 +434,41 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
         .take(MAX_LISTED)
         .filter_map(|(a, b, geom, props)| {
             let x = cur.entity(*a)?;
-            let what = match (geom, props) {
-                (true, true) => "geometry and properties",
-                (true, false) => "geometry",
-                _ => "properties",
-            };
-            Some(json!({ "handle": a.hex(), "other": b.hex(), "type": x.kind.type_name(), "what": what }))
+            Some(json!({ "handle": a.hex(), "other": b.hex(), "type": x.kind.type_name(), "what": what(*geom, *props) }))
         })
         .collect();
+    let (ta, tr, tc, tcommon) =
+        layouts.iter().fold((0, 0, 0, 0), |(a, r, c, k), l| (a + l.added.len(), r + l.removed.len(), c + l.changed.len(), k + l.common));
+    let with_changes: Vec<String> =
+        layouts.iter().filter(|l| l.differences() > 0).map(|l| format!("{} ({})", space_name(&l.space), l.differences())).collect();
+    // Differences elsewhere than the tab shown are listed per layout.
+    let elsewhere = layouts.iter().any(|l| l.space != space && l.differences() > 0);
     let message = format!(
-        "Compared with {name}: {} only in this drawing, {} only in {name}, {} changed, {common} the same{}.",
-        added.len(),
-        removed.len(),
-        changed.len(),
-        if truncated { format!(" (only the first {MAX_OBJECTS} objects of each were compared)") } else { String::new() }
+        "Compared with {name}: {ta} only in this drawing, {tr} only in {name}, {tc} changed, {tcommon} the same{}.{}",
+        if truncated { format!(" (only the first {MAX_OBJECTS} objects of each space were compared)") } else { String::new() },
+        if elsewhere { format!(" Differences by layout: {}.", with_changes.join(", ")) } else { String::new() }
     );
+    let per_layout: Vec<Value> = layouts
+        .iter()
+        .map(|l| {
+            let ch: Vec<Value> = l
+                .changed
+                .iter()
+                .take(MAX_LISTED)
+                .filter_map(|(a, b, geom, props)| {
+                    Some(json!({ "handle": a.hex(), "other": b.hex(), "type": cur.entity(*a)?.kind.type_name(), "what": what(*geom, *props) }))
+                })
+                .collect();
+            json!({
+                "layout": space_name(&l.space),
+                "onlyIn": match l.only_here { Some(true) => json!("this"), Some(false) => json!("other"), None => Value::Null },
+                "counts": { "added": l.added.len(), "removed": l.removed.len(), "changed": l.changed.len(), "common": l.common },
+                "added": listed(&cur, &l.added),
+                "removed": listed(&other, &l.removed),
+                "changed": ch,
+            })
+        })
+        .collect();
     let out = json!({
         "other": name,
         "added": listed(&cur, &added),
@@ -358,10 +477,12 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
         "counts": { "added": added.len(), "removed": removed.len(), "changed": changed.len(), "common": common },
         "regions": regions.iter().map(|b| json!([[b.min.x, b.min.y], [b.max.x, b.max.y]])).collect::<Vec<_>>(),
         "truncated": truncated,
+        "total": { "added": ta, "removed": tr, "changed": tc, "common": tcommon },
+        "layouts": per_layout,
         "message": message,
     });
     let changed = changed.into_iter().map(|(a, b, _, _)| (a, b)).collect();
-    s.compare = Some(Comparison { uid, space, other_name: name, other, added, removed, changed, common, truncated, regions, at: None });
+    s.compare = Some(Comparison { uid, space, other_name: name, other, added, removed, changed, common, truncated, regions, at: None, layouts });
     s.touch();
     Ok(out)
 }
@@ -387,6 +508,103 @@ fn step(s: &mut Session, dir: i64) -> Result<Value> {
     let (p1, p2) = (b.min - Vec2::new(pad, pad), b.max + Vec2::new(pad, pad));
     s.execute("zoom", &json!({ "mode": "window", "p1": [p1.x, p1.y], "p2": [p2.x, p2.y] }))?;
     Ok(json!({ "region": i, "of": n, "message": format!("Change area {} of {n}.", i + 1) }))
+}
+
+/// Text for HTML: `& < > " '` escaped.
+fn html(t: &str) -> String {
+    let mut o = String::with_capacity(t.len());
+    for c in t.chars() {
+        match c {
+            '&' => o.push_str("&amp;"),
+            '<' => o.push_str("&lt;"),
+            '>' => o.push_str("&gt;"),
+            '"' => o.push_str("&quot;"),
+            '\'' => o.push_str("&#39;"),
+            c => o.push(c),
+        }
+    }
+    o
+}
+
+/// Rows written to a report at most (the summary always counts everything).
+const MAX_REPORT_ROWS: usize = 200_000;
+
+/// The comparison report: a summary per layout and one row per difference.
+fn report(c: &Comparison, cur: &Drawing, title: &str) -> (String, usize) {
+    let mut rows = String::new();
+    let mut n = 0usize;
+    let mut row = |rows: &mut String, layout: &str, status: &str, d: &Drawing, h: Handle, other: Option<Handle>, change: &str| {
+        if n >= MAX_REPORT_ROWS {
+            return;
+        }
+        n += 1;
+        let (kind, layer) = d.entity(h).map(|e| (e.kind.type_name(), e.common.layer.clone())).unwrap_or(("", String::new()));
+        rows.push_str(&format!(
+            "<tr class=\"{}\"><td>{}</td><td>{status}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{change}</td></tr>\n",
+            status.to_ascii_lowercase(),
+            html(layout),
+            html(kind),
+            h.hex(),
+            other.map(|o| o.hex()).unwrap_or_default(),
+            html(&layer),
+        ));
+    };
+    let mut summary = String::new();
+    for l in &c.layouts {
+        let name = space_name(&l.space);
+        let note = match l.only_here {
+            Some(true) => " (only in this drawing)",
+            Some(false) => " (only in the other drawing)",
+            None => "",
+        };
+        summary.push_str(&format!(
+            "<tr><td>{}{note}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+            html(&name),
+            l.added.len(),
+            l.removed.len(),
+            l.changed.len(),
+            l.common
+        ));
+        for h in &l.added {
+            row(&mut rows, &name, "Added", cur, *h, None, "");
+        }
+        for h in &l.removed {
+            row(&mut rows, &name, "Removed", &c.other, *h, None, "");
+        }
+        for (a, b, geom, props) in &l.changed {
+            row(&mut rows, &name, "Changed", cur, *a, Some(*b), what(*geom, *props));
+        }
+    }
+    let total = c.layouts.iter().map(LayoutDiff::differences).sum::<usize>();
+    let page = format!(
+        "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Drawing Comparison</title>\n<style>\
+         body{{font-family:sans-serif;margin:24px}}table{{border-collapse:collapse;margin:12px 0}}\
+         th,td{{border:1px solid #bbb;padding:4px 8px;text-align:left}}th{{background:#eee}}\
+         tr.added td{{background:#e6f4e6}}tr.removed td{{background:#fbe7e7}}tr.changed td{{background:#fff6dc}}</style></head><body>\n\
+         <h1>Drawing Comparison</h1>\n<p>This drawing: <b>{}</b><br>Compared with: <b>{}</b><br>Differences: {total}</p>\n\
+         <h2>Summary</h2>\n<table><tr><th>Layout</th><th>Added</th><th>Removed</th><th>Changed</th><th>Same</th></tr>\n{summary}</table>\n\
+         <h2>Differences</h2>\n<table><tr><th>Layout</th><th>Status</th><th>Object</th><th>Handle</th><th>Other handle</th><th>Layer</th><th>Change</th></tr>\n{rows}</table>\n{}</body></html>\n",
+        html(title),
+        html(&c.other_name),
+        if n >= MAX_REPORT_ROWS { format!("<p>Only the first {MAX_REPORT_ROWS} differences are listed.</p>\n") } else { String::new() },
+    );
+    (page, n)
+}
+
+fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
+    let st = s.state()?;
+    let c = s.compare.as_ref().filter(|c| c.uid == st.uid).ok_or_else(|| bad("compareexport", "no comparison: run COMPARE first"))?;
+    let (page, rows) = report(c, &st.doc, &st.title);
+    let Some(path) = str_param(p, "path") else { return Ok(json!({ "html": page, "rows": rows })) };
+    #[cfg(not(target_arch = "wasm32"))]
+    std::fs::write(path, page.as_bytes()).map_err(|e| bad("compareexport", format!("{path}: {e}")))?;
+    #[cfg(target_arch = "wasm32")]
+    return Err(bad("compareexport", format!("{path}: paths are not available on the web; leave out `path` to get the report")));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        s.echo(format!("Comparison report written to {path}."));
+        Ok(json!({ "path": path, "rows": rows }))
+    }
 }
 
 fn run_close(s: &mut Session, _p: &Value) -> Result<Value> {

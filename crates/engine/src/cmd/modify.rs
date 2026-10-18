@@ -114,6 +114,8 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
     let d = s.doc_mut()?;
     let mut out = Vec::new();
     let mut moved = Vec::new();
+    // Original → copy, so a whole group copied becomes a new unnamed group.
+    let mut copies = std::collections::HashMap::new();
     for h in hs {
         let Some(sp) = d.space_of(*h) else { continue };
         if copy {
@@ -125,6 +127,7 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
                 st.push(ne);
                 out.push(nh);
                 moved.push((*h, nh));
+                copies.insert(*h, nh);
             }
         } else {
             let locked = d.entity(*h).and_then(|e| d.layer(&e.common.layer)).is_some_and(|l| l.locked);
@@ -137,6 +140,10 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
         }
     }
     super::clip_partners::after_transform(d, &moved, m, copy)?;
+    if !copies.is_empty() && !d.groups.is_empty() {
+        let source = d.groups.clone();
+        super::groups::copy_groups(d, &source, &copies);
+    }
     Ok(out)
 }
 

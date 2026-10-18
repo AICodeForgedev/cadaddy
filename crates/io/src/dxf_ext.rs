@@ -35,6 +35,11 @@ pub(crate) const PLOT_STYLE_NAMES_KEY: &str = "ACAD_PLOTSTYLENAME";
 pub(crate) const HANDSEED_KEY: &str = "CADADDY_HANDSEED";
 /// Named-object-dictionary key of the XRECORD holding the current multileader style.
 pub(crate) const MLEADER_STYLE_KEY: &str = "CADADDY_MLEADERSTYLE";
+/// Named-object-dictionary key of the XRECORD listing the objects hidden by ISOLATEOBJECTS /
+/// HIDEOBJECTS when OBJECTISOLATIONMODE 1 saves them with the drawing.
+pub(crate) const HIDDEN_OBJECTS_KEY: &str = "CADADDY_HIDDENOBJECTS";
+/// Most hidden objects read from a file.
+pub(crate) const MAX_HIDDEN_OBJECTS: usize = 10_000_000;
 /// Most plot style tables and plot style names read from a file.
 pub(crate) const MAX_PLOT_STYLE_TABLES: usize = 1000;
 pub(crate) const MAX_PLOT_STYLE_NAMES: usize = 100_000;
@@ -136,21 +141,48 @@ pub(crate) const DIM_CODES: &[(&str, i32, K)] = &[
     ("extLinetype2", 347, K::Linetype),
     ("dimLineweight", 371, K::Int),
     ("extLineweight", 372, K::Int),
+    ("altTolDecimals", 274, K::Int),
+    ("altTolZeroSuppression", 286, K::Int),
+    ("userTextPlacesLine", 288, K::Bool),
+    ("textFill", 69, K::Int),
+    ("textFillColor", 70, K::Color),
+    ("textRightToLeft", 294, K::Bool),
+    // Not DIMSTYLE groups: kept only in the style's `CADADDY` "DIMVARS" xdata ([`XDATA_ONLY`]).
+    ("jogHeight", 1388, K::Real),
+    ("breakSize", 1391, K::Real),
 ];
 
 /// DIMSAH: separate arrow blocks in use.
 pub(crate) const DIMSAH: i32 = 173;
 
 /// Variables newer than R2000: DIMFXL, DIMJOGANG, DIMARCSYM, DIMFXLON, DIMLTYPE, DIMLTEX1,
-/// DIMLTEX2. Files of [`NEWER_SINCE`] or later get them as DIMSTYLE groups; R2000 files get them
+/// DIMLTEX2, DIMTFILL, DIMTFILLCLR, DIMTXTDIRECTION. Files of [`NEWER_SINCE`] or later get them as DIMSTYLE groups; R2000 files get them
 /// in a style's `CADADDY` "DIMVARS" xdata (`1070 <code>` then the value, like DSTYLE) instead of
 /// groups an R2000 reader doesn't expect. The reader takes both.
-pub(crate) const NEWER_CODES: &[i32] = &[49, 50, 90, 290, 345, 346, 347];
+pub(crate) const NEWER_CODES: &[i32] = &[49, 50, 90, 290, 345, 346, 347, 69, 294];
+/// Style settings with no DIMSTYLE group (linear jog height, break size): written only in the
+/// style's `CADADDY` "DIMVARS" xdata, whatever the version, and never in the `ACAD` DSTYLE
+/// override xdata. Their numbers are CADaddy's own (outside the group code range).
+pub(crate) const XDATA_ONLY: &[i32] = &[1388, 1391];
+/// Variables a style keeps in its `CADADDY` "DIMVARS" xdata instead of a DIMSTYLE group: the
+/// [`XDATA_ONLY`] ones and DIMTFILLCLR, whose override code (70) is the table record's flags
+/// group.
+pub(crate) const STYLE_XDATA: &[i32] = &[70, 1388, 1391];
 /// The first version with [`NEWER_CODES`] as DIMSTYLE groups: all came with AutoCAD 2006, whose
 /// files are the 2004 format (AC1018).
 pub(crate) const NEWER_SINCE: Version = Version::R2004;
 /// Xdata list name of [`NEWER_CODES`] values.
 pub(crate) const DIMVARS_LIST: &str = "DIMVARS";
+
+/// The first file version with `code` as a DIMSTYLE group, for [`NEWER_CODES`]: DIMTFILL came
+/// with the 2007 format, DIMTXTDIRECTION with 2010, the others with 2004.
+pub(crate) fn newer_since(code: i32) -> Version {
+    match code {
+        69 => Version::R2007,
+        294 => Version::R2010,
+        _ => NEWER_SINCE,
+    }
+}
 
 pub(crate) fn dim_code(field: &str) -> Option<(i32, K)> {
     DIM_CODES.iter().find(|(f, _, _)| *f == field).map(|(_, c, k)| (*c, *k))
@@ -725,6 +757,37 @@ pub(crate) fn parse_layer_states(text: &str) -> Option<Vec<LayerState>> {
         return None;
     }
     Some(p.states)
+}
+
+/// The hidden objects stored in the `CADADDY_HIDDENOBJECTS` XRECORD (hex handles).
+#[derive(Serialize, Deserialize)]
+struct HiddenObjectsPayload {
+    version: u32,
+    #[serde(default)]
+    handles: Vec<String>,
+}
+
+/// JSON chunks for the hidden objects XRECORD, or `None` when the drawing doesn't save them
+/// (OBJECTISOLATIONMODE 0) or hides nothing.
+pub(crate) fn hidden_object_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    if !d.hidden_saved || d.hidden_objects.is_empty() {
+        return None;
+    }
+    let handles = d.hidden_objects.iter().filter(|h| d.entity(**h).is_some()).map(|h| h.hex()).collect();
+    let json = serde_json::to_string(&HiddenObjectsPayload { version: 1, handles }).ok()?;
+    Some(json_chunks(&json))
+}
+
+/// Parse the hidden objects XRECORD text; `None` when it is not a payload we understand.
+pub(crate) fn parse_hidden_objects(text: &str) -> Option<Vec<Handle>> {
+    if text.len() > MAX_PAYLOAD {
+        return None;
+    }
+    let p: HiddenObjectsPayload = serde_json::from_str(text).ok()?;
+    if p.version != 1 || p.handles.len() > MAX_HIDDEN_OBJECTS {
+        return None;
+    }
+    Some(p.handles.iter().filter_map(|h| Handle::parse_hex(h)).collect())
 }
 
 /// The drawing's plot style tables stored in the `CADADDY_PLOTSTYLES` XRECORD.

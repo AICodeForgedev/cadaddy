@@ -1,7 +1,9 @@
 //! Autosave (SAVETIME, SAVEFILEPATH) and the files Drawing Recovery offers after a crash.
 //!
 //! Every SAVETIME minutes after a change, each drawing with unsaved changes made since its last
-//! autosave is written as DXF to `<SAVEFILEPATH>/<drawing>_<instance>_<uid>.sv$`. The file goes
+//! autosave is written to `<SAVEFILEPATH>/<drawing>_<instance>_<uid>.sv$`: DWG content, as AutoCAD
+//! writes them, or DXF when the DWG writer fails (readers tell them apart by their first bytes, so
+//! Drawing Recovery opens either). The file goes
 //! away when the drawing is saved or closed and when the app exits normally, so a file left behind
 //! means the app (or the machine) went down; the next start offers it for recovery. A running app
 //! keeps a lock file (`<instance>.lock`) fresh, so another copy running at the same time doesn't
@@ -23,6 +25,18 @@ use crate::Session;
 
 /// The autosave file extension.
 pub const EXT: &str = "sv$";
+
+/// The writer the io hooks provide: a drawing and a file name (its extension picks the format).
+pub type WriteHook = fn(&Drawing, &str) -> std::result::Result<Vec<u8>, String>;
+
+/// An autosave file's contents: DWG, else DXF when writing DWG fails. Returns the bytes and the
+/// format used ("dwg" or "dxf").
+pub fn encode(write: WriteHook, doc: &Drawing) -> std::result::Result<(Vec<u8>, &'static str), String> {
+    match write(doc, "autosave.dwg") {
+        Ok(bytes) if !bytes.is_empty() => Ok((bytes, "dwg")),
+        _ => write(doc, "autosave.dxf").map(|bytes| (bytes, "dxf")),
+    }
+}
 /// SAVETIME's default, in minutes.
 pub const DEFAULT_SAVETIME: u32 = 10;
 /// SAVETIME's largest value, in minutes.
@@ -375,10 +389,8 @@ mod native {
         }
     }
 
-    type WriteHook = fn(&Drawing, &str) -> std::result::Result<Vec<u8>, String>;
-
     fn write_file(write: WriteHook, doc: &Drawing, path: &str) -> std::result::Result<(), String> {
-        let bytes = write(doc, "autosave.dxf")?;
+        let (bytes, _) = encode(write, doc)?;
         if let Some(dir) = Path::new(path).parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }

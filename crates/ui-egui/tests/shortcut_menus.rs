@@ -92,12 +92,15 @@ fn layout_tab_menu() {
     assert!(find(&model, "New Layout").is_some() && find(&model, "From Template...").is_some());
     assert!(find(&model, "Delete Layout").is_none() && find(&model, "Rename Layout").is_none(), "the model tab stays");
 
-    // Rename asks for the new name on the command line.
+    // Rename edits the tab in place.
     let first = before[0].clone();
     let g = sm::layout_tab_entries(&app, &first);
     choose(&mut app, &g, "Rename Layout");
-    assert!(app.session.prompt_text().contains("new layout name"), "{}", app.session.prompt_text());
-    app.cmdline("Sheet A");
+    assert_eq!(app.layout_tabs.rename.as_ref().map(|r| r.0.as_str()), Some(first.as_str()));
+    if let Some(r) = app.layout_tabs.rename.as_mut() {
+        r.1 = "Sheet A".into();
+    }
+    assert_eq!(cadaddy_ui_egui::layouttabs::finish_rename(&mut app, true), None);
     assert!(layout_names(&app).contains(&"Sheet A".to_string()), "{:?}", layout_names(&app));
 
     let second = before[1].clone();
@@ -113,6 +116,53 @@ fn layout_tab_menu() {
     // Page Setup acts on the right-clicked tab.
     let g = sm::layout_tab_entries(&app, "Sheet A");
     assert!(find(&g, "Page Setup Manager...").is_some() && find(&g, "Print...").is_some());
+}
+
+#[test]
+fn layout_tab_move_or_copy_and_select_all() {
+    let mut app = app();
+    let g = sm::layout_tab_entries(&app, "Layout2");
+    choose(&mut app, &g, "Move or Copy...");
+    assert_eq!(app.layout_tabs.move_copy.as_ref().map(|m| m.name.as_str()), Some("Layout2"));
+    if let Some(m) = app.layout_tabs.move_copy.as_mut() {
+        m.before = Some("Layout1".into());
+    }
+    assert!(cadaddy_ui_egui::layouttabs::move_copy_ok(&mut app));
+    assert_eq!(cadaddy_ui_egui::layouttabs::layout_names(&app), ["Layout2", "Layout1"]);
+    choose(&mut app, &g, "Select All Layouts");
+    assert_eq!(app.layout_tabs.selected.len(), 2);
+    assert!(find(&sm::layout_tab_entries(&app, "Model"), "Move or Copy...").is_none(), "the model tab stays");
+}
+
+#[test]
+fn paste_to_command_line() {
+    let services = Services { read_clipboard: Some(Box::new(|| Some("CIRCLE\r\n0,0 5\n".into()))), ..Services::default() };
+    let mut app = CadApp::new(Session::new(), services);
+    let g = sm::command_line_entries(&app);
+    choose(&mut app, &g, "Paste to Command Line");
+    assert_eq!(app.cmd.buffer, "CIRCLE 0,0 5");
+    // Without a clipboard service the item is there but off.
+    assert!(find(&sm::command_line_entries(&self::app()), "Paste to Command Line").is_some_and(|(_, e)| !e));
+}
+
+#[test]
+fn xref_and_property_row_menus() {
+    let app = app();
+    let g = sm::xref_entries(&app, "BASE", "Loaded");
+    for l in ["Open", "Attach DWG...", "Unload", "Reload", "Detach", "Bind", "Insert"] {
+        assert!(find(&g, l).is_some(), "{l} missing from {:?}", flatten(&g));
+    }
+    let g = sm::xref_entries(&app, "BASE", "Unloaded");
+    assert!(find(&g, "Unload").is_none() && find(&g, "Bind").is_none() && find(&g, "Reload").is_some());
+    let (id, _) = find(&sm::xref_entries(&app, "BASE", "Loaded"), "Detach").unwrap();
+    assert!(id.starts_with("run:-xref:") && id.contains("detach"));
+    // Properties rows: Select Similar by the row's property, with objects selected.
+    let g = sm::property_row_entries("Layer", true);
+    let (id, _) = find(&g, "Select Similar").unwrap();
+    assert!(id.contains("\"mode\":2"), "{id}");
+    assert!(find(&sm::property_row_entries("Layer", false), "Select Similar").is_none());
+    assert!(find(&sm::property_row_entries("Radius", true), "Select Similar").is_none());
+    assert!(find(&sm::property_row_entries("Radius", true), "Quick Select...").is_some());
 }
 
 #[test]
@@ -146,6 +196,8 @@ fn every_label_has_a_ukrainian_translation_and_every_id_a_command() {
     all.extend(flatten(&sm::layout_tab_entries(&app, "Layout1")));
     all.extend(flatten(&sm::layer_entries(&app, "0")));
     all.extend(flatten(&sm::properties_entries(&app)));
+    all.extend(flatten(&sm::xref_entries(&app, "X", "Loaded")));
+    all.extend(flatten(&sm::property_row_entries("Color", true)));
     let mut missing = Vec::new();
     for (label, id, _) in &all {
         let segments: Vec<&str> = label.split('/').collect();

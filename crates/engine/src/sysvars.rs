@@ -56,6 +56,7 @@ const SESSION_VARS: &[&str] = &[
     "PICKADD",
     "SELECTIONCYCLING",
     "PICKSTYLE",
+    "GROUPDISPLAYMODE",
     "GRIPSIZE",
     "CURSORSIZE",
     "MAXARRAY",
@@ -65,6 +66,7 @@ const SESSION_VARS: &[&str] = &[
     "FONTFALLBACK",
     "SAVETIME",
     "SAVEFILEPATH",
+    "AUDITCTL",
 ];
 
 pub fn get(s: &Session, name: &str) -> Option<Value> {
@@ -105,7 +107,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "PLOTTRANSPARENCYOVERRIDE" => json!(st.plot_transparency_override),
         "SELECTSIMILARMODE" => json!(st.selectsimilarmode),
         // Isolation is temporary: hidden objects show again when the drawing is reopened.
-        "OBJECTISOLATIONMODE" => json!(0),
+        "OBJECTISOLATIONMODE" => json!(st.objectisolationmode),
         "QPMODE" => json!(i32::from(st.qpmode)),
         "HIGHLIGHT" => json!(i32::from(st.highlight)),
         "SELECTIONEFFECT" => json!(st.selectioneffect),
@@ -125,6 +127,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "PICKADD" => json!(i32::from(st.pickadd)),
         "SELECTIONCYCLING" => json!(st.selectioncycling),
         "PICKSTYLE" => json!(st.pickstyle),
+        "GROUPDISPLAYMODE" => json!(st.groupdisplaymode),
         "GRIPSIZE" => json!(st.gripsize),
         "CURSORSIZE" => json!(st.cursorsize),
         "MAXARRAY" => json!(st.maxarray),
@@ -139,6 +142,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         // Autosave (profile settings too).
         "SAVETIME" => json!(crate::autosave::savetime()),
         "SAVEFILEPATH" => json!(crate::autosave::savefilepath()),
+        "AUDITCTL" => json!(i32::from(crate::audit::auditctl())),
         "CMDNAMES" => json!(s.running.as_ref().map(|r| r.id.to_ascii_uppercase()).unwrap_or_default()),
         // A drawing not saved yet is named as AutoCAD names it, "Drawing1.dwg".
         "DWGNAME" => json!(
@@ -320,11 +324,16 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             st.plot_transparency_override = as_i(v).filter(|i| (0..=2).contains(i)).and_then(|i| u8::try_from(i).ok()).ok_or_else(bad)?
         }
         "SELECTSIMILARMODE" => st.selectsimilarmode = as_i(v).filter(|b| (0..=255).contains(b)).ok_or_else(bad)? as u32,
-        "OBJECTISOLATIONMODE" => match as_i(v) {
-            Some(0) => {}
-            Some(1) => return Err(EngineError::Other("OBJECTISOLATIONMODE 1 (isolation saved with the drawing) is not available yet".into())),
-            _ => return Err(bad()),
-        },
+        "OBJECTISOLATIONMODE" => {
+            st.objectisolationmode = small(v, 1).ok_or_else(bad)?;
+            // The open drawings save their hidden objects from now on (or stop saving them).
+            let keep = st.objectisolationmode == 1;
+            for d in &mut s.docs {
+                if d.doc.hidden_saved != keep {
+                    std::sync::Arc::make_mut(&mut d.doc).hidden_saved = keep;
+                }
+            }
+        }
         "QPMODE" => st.qpmode = as_i(v).ok_or_else(bad)? > 0,
         "HIGHLIGHT" => st.highlight = as_bool(v).ok_or_else(bad)?,
         "SELECTIONEFFECT" => st.selectioneffect = small(v, 1).ok_or_else(bad)?,
@@ -344,6 +353,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "PICKADD" => st.pickadd = as_bool(v).ok_or_else(bad)?,
         "SELECTIONCYCLING" => st.selectioncycling = as_i(v).filter(|n| (-2..=2).contains(n)).and_then(|n| i8::try_from(n).ok()).ok_or_else(bad)?,
         "PICKSTYLE" => st.pickstyle = as_i(v).filter(|b| (0..=3).contains(b)).and_then(|b| u8::try_from(b).ok()).ok_or_else(bad)?,
+        "GROUPDISPLAYMODE" => st.groupdisplaymode = small(v, 2).ok_or_else(bad)?,
         "GRIPSIZE" => st.gripsize = as_f64(v).ok_or_else(bad)?.clamp(1.0, 255.0),
         "CURSORSIZE" => st.cursorsize = as_f64(v).ok_or_else(bad)?.clamp(1.0, 100.0),
         "MAXARRAY" => st.maxarray = as_f64(v).ok_or_else(bad)?.clamp(100.0, 10_000_000.0) as u64,
@@ -354,6 +364,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             as_f64(v).filter(|m| *m >= 0.0 && *m <= f64::from(crate::autosave::MAX_SAVETIME)).ok_or_else(bad)?.round() as u32,
         ),
         "SAVEFILEPATH" => crate::autosave::set_savefilepath(v.as_str().ok_or_else(bad)?),
+        "AUDITCTL" => crate::audit::set_auditctl(as_i(v).filter(|b| (0..=1).contains(b)).ok_or_else(bad)? == 1),
         // A number is in degrees; text is an angle typed in AUNITS (SETVAR at the command line).
         "ANGBASE" => {
             let a = match v {

@@ -1451,3 +1451,36 @@
 	Open Drawings	Відкриті креслення
 	Close Drawing	Закрити креслення
 	Close All Drawings	Закрити всі креслення
+	Export Comparison Report...	Експортувати звіт порівняння...
+	Select All Layouts	Вибрати всі аркуші
+	Move or Copy...	Перемістити або копіювати...
+	Move or Copy	Перемістити або копіювати
+	Move or copy layout "{name}"	Перемістити або копіювати аркуш «{name}»
+	Before layout:	Перед аркушем:
+	(move to end)	(перемістити в кінець)
+	Create a copy	Створити копію
+	A drawing keeps at least one layout.	У кресленні лишається принаймні один аркуш.
+	Move Layout	Перемістити аркуш
+	Background	Тло
+	Text fill	Заливка тексту
+	Text fill color	Колір заливки тексту
+	Text reads right to left	Текст читається справа наліво
+	Placing text places the dimension line	Розміщення тексту задає й розмірну лінію
+	Alternate tolerance precision	Точність альтернативного допуску
+	Alternate tolerance zero suppression	Приховування нулів альтернативного допуску
+	Linear jog height (× text height)	Висота лінійного зламу (× висота тексту)
+	Break size	Розмір розриву
+	Express Tools	Інструменти Express
+	Break-line Symbol	Символ лінії обриву
+	Replace Block...	Замінити блок...
+	Move/Copy/Rotate	Перемістити/Копіювати/Повернути
+	Remove boundaries	Видалити контури
+	Inherit Properties	Успадкувати властивості
+	Nothing to preview yet.	Поки що нічого переглядати.
+	Property Settings	Параметри властивостей
+	Basic Properties	Основні властивості
+	Special Properties	Особливі властивості
+	Plot Style	Стиль друку
+	Material	Матеріал
+	Shadow display	Відображення тіней
+	Center object	Обʼєкт центру

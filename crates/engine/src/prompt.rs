@@ -75,6 +75,9 @@ pub fn parse_polar_text(text: &str, angles: &crate::units::AngleSettings) -> Opt
 pub enum Picker {
     /// A hatch pattern by name (see [`crate::pattern_choices`]); holds the current pattern.
     HatchPattern(String),
+    /// MATCHPROP's Property Settings dialog: it edits [`crate::LastUsed::matchprop`] and answers
+    /// the settings prompt with Enter.
+    MatchProps,
 }
 
 impl Prompt {

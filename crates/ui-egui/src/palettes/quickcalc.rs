@@ -16,6 +16,60 @@ const MAX_HISTORY: usize = 100;
 const MAX_VARS: usize = 50;
 const KINDS: [(&str, &str); 4] = [("length", "Length"), ("area", "Area"), ("volume", "Volume"), ("angle", "Angle")];
 
+/// What QuickCalc keeps between sessions (in the preferences): its history and variables.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Saved {
+    /// (expression, result) newest last.
+    pub history: Vec<(String, String)>,
+    /// Variables: name and value (a number or `[x, y]`).
+    pub vars: Vec<(String, Value)>,
+}
+
+/// Longest expression, result or variable name kept in the preferences.
+const MAX_SAVED_TEXT: usize = 1000;
+
+impl Saved {
+    pub fn is_empty(&self) -> bool {
+        self.history.is_empty() && self.vars.is_empty()
+    }
+
+    /// `{history: [[expression, result]…], vars: [[name, number | [x, y]]…]}` (in their order).
+    pub fn to_json(&self) -> Value {
+        let pairs = |v: &[(String, Value)]| v.iter().map(|(k, x)| json!([k, x])).collect::<Vec<_>>();
+        json!({ "history": self.history.iter().map(|(e, r)| json!([e, r])).collect::<Vec<_>>(), "vars": pairs(&self.vars) })
+    }
+
+    /// From [`Self::to_json`]; malformed entries, overlong text and values that aren't numbers or
+    /// points are left out, and at most [`MAX_HISTORY`] / [`MAX_VARS`] are kept.
+    pub fn from_json(v: &Value) -> Saved {
+        let ok = |t: &str| !t.is_empty() && t.len() <= MAX_SAVED_TEXT;
+        let mut history: Vec<(String, String)> = v
+            .get("history")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| Some((x.get(0)?.as_str()?.to_string(), x.get(1)?.as_str()?.to_string())))
+                    .filter(|(e, r)| ok(e) && r.len() <= MAX_SAVED_TEXT)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if history.len() > MAX_HISTORY {
+            history.drain(..history.len() - MAX_HISTORY);
+        }
+        let number = |x: &Value| x.as_f64().is_some_and(f64::is_finite);
+        let mut vars: Vec<(String, Value)> = Vec::new();
+        for pair in v.get("vars").and_then(Value::as_array).into_iter().flatten().take(10_000) {
+            let (Some(k), Some(x)) = (pair.get(0).and_then(Value::as_str), pair.get(1)) else { continue };
+            let good_name = ok(k) && k.chars().all(|c| c.is_alphanumeric() || c == '_');
+            let good_value = number(x) || x.as_array().is_some_and(|a| (2..=3).contains(&a.len()) && a.iter().all(number));
+            if good_name && good_value && !vars.iter().any(|(n, _)| n == k) && vars.len() < MAX_VARS {
+                vars.push((k.to_string(), x.clone()));
+            }
+        }
+        Saved { history, vars }
+    }
+}
+
 #[derive(Clone, Default)]
 struct State {
     input: String,
@@ -200,6 +254,9 @@ pub fn open(app: &mut CadApp) -> Result<Value, String> {
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     let mut st: State = ui.ctx().data_mut(|d| d.get_temp(id())).unwrap_or_default();
+    // History and variables live on the app, so they are saved with the preferences.
+    st.history = app.quickcalc.history.clone();
+    st.vars = app.quickcalc.vars.clone();
     st.collect(app);
     egui::ScrollArea::vertical().id_salt("dock-quickcalc").auto_shrink([false, false]).show(ui, |ui| {
         ui.add_space(6.0);
@@ -352,5 +409,45 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             });
         });
     });
+    if app.quickcalc.history != st.history || app.quickcalc.vars != st.vars {
+        app.quickcalc = Saved { history: st.history.clone(), vars: st.vars.clone() };
+    }
     ui.ctx().data_mut(|d| d.insert_temp(id(), st));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_and_variables_survive_a_restart_through_the_preferences() {
+        let mut app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+        app.quickcalc = Saved {
+            history: vec![("2+3".into(), "5".into()), ("pi*2".into(), "6.2832".into())],
+            vars: vec![("w".into(), json!(12.5)), ("p".into(), json!([1.0, 2.0])), ("a".into(), json!(3))],
+        };
+        let mut restarted = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+        restarted.load_prefs(&app.prefs_json());
+        assert_eq!(restarted.quickcalc, app.quickcalc, "same history and variables, in order");
+        // Nothing saved when there is nothing to keep.
+        let fresh = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+        assert!(!fresh.prefs_json().contains("quickcalc"));
+    }
+
+    #[test]
+    fn saved_preferences_are_checked_and_capped() {
+        let long = "x".repeat(MAX_SAVED_TEXT + 1);
+        let history: Vec<Value> =
+            (0..MAX_HISTORY + 20).map(|i| json!([format!("{i}"), "1"])).chain([json!([long, "1"]), json!(["only one"]), json!(7)]).collect();
+        let v = json!({
+            "history": history,
+            "vars": [["ok", 1.5], ["pt", [1, 2]], ["bad name", 1], ["str", "x"], ["nan", null], ["big", [1, 2, 3, 4]], ["ok", 9]],
+        });
+        let s = Saved::from_json(&v);
+        assert_eq!(s.history.len(), MAX_HISTORY);
+        assert_eq!(s.history.last().map(|h| h.0.as_str()), Some(&*format!("{}", MAX_HISTORY + 19)), "the newest kept");
+        let names: Vec<&str> = s.vars.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(names, ["ok", "pt"]);
+        assert_eq!(Saved::from_json(&json!("garbage")), Saved::default());
+    }
 }

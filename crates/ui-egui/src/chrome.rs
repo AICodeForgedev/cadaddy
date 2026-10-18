@@ -332,6 +332,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         // Right side: toggles, right-aligned.
         let s = app.session.settings.clone();
         let anno_all = app.session.doc().is_ok_and(|d| d.anno_all_visible());
+        let isolated = app.session.doc().is_ok_and(|d| !d.hidden_objects.is_empty());
         use cadaddy_engine::snap::mode;
         let toggles: Vec<(Icon, bool, &str, &str)> = vec![
             (Icon::Grid, s.gridmode, "grid", "Grid (F7)"),
@@ -347,6 +348,8 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             (Icon::QuickProps, s.qpmode, "qpmode", "Quick Properties"),
             (Icon::SelectionCycling, s.selectioncycling > 0, "selectioncycling", "Selection Cycling"),
             (Icon::Annotation, anno_all, "annovisible.toggle", "Annotation Visibility"),
+            // Isolate Objects: a menu (Isolate, Hide, End Object Isolation); lit while objects are hidden.
+            (if isolated { Icon::Bulb } else { Icon::BulbOff }, isolated, ISOLATE_MENU, "Isolate Objects"),
             (Icon::Workspace, false, "ui.noop", "Workspace Switching"),
             (Icon::Gear, false, "ui.dialog.dsettings", "Drafting Settings"),
         ];
@@ -420,16 +423,50 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             let tr = Rect::from_min_size(pos2(x, r.top() + 1.0), vec2(w, r.height() - 2.0)).intersect(clip);
             let active = active_tab == Some(i);
             let resp = ui.interact(tr, ui.id().with(("lt", i)), Sense::click());
+            let selected = app.layout_tabs.selected.iter().any(|n| n == name);
             if active {
                 tp.rect_filled(tr, 2.0, t.tab_active);
+            } else if selected {
+                tp.rect_filled(tr, 2.0, t.tab_active.gamma_multiply(0.6));
             } else if resp.hovered() {
                 tp.rect_filled(tr, 2.0, t.control.gamma_multiply(0.5));
+            }
+            // Renaming in place: the tab's name is a text field until Enter (or Esc).
+            if app.layout_tabs.rename.as_ref().is_some_and(|(n, _)| n == name) {
+                let mut text = app.layout_tabs.rename.as_ref().map(|r| r.1.clone()).unwrap_or_default();
+                let edit_rect = Rect::from_min_size(pos2(tr.left() + 4.0, tr.top() + 2.0), vec2((w - 8.0).max(80.0), tr.height() - 4.0));
+                let edit = ui.put(edit_rect, egui::TextEdit::singleline(&mut text).font(crate::theme::body()).id(ui.id().with("lt_rename")));
+                if !edit.has_focus() && !edit.lost_focus() {
+                    edit.request_focus();
+                }
+                if let Some(r) = app.layout_tabs.rename.as_mut() {
+                    r.1 = text;
+                }
+                let (enter, esc) = ui.input(|inp| (inp.key_pressed(egui::Key::Enter), inp.key_pressed(egui::Key::Escape)));
+                if esc {
+                    crate::layouttabs::finish_rename(app, false);
+                } else if (enter || edit.lost_focus())
+                    && let Some(e) = crate::layouttabs::finish_rename(app, true)
+                {
+                    app.set_status(e);
+                }
+                x += w + 2.0;
+                continue;
             }
             tp.galley(pos2(tr.left() + 13.0, tr.center().y - g.size().y / 2.0), g, if active { t.text } else { t.text_dim });
             icons::describe_control(ui, &resp, name, Some(active), true);
             let resp = if cut { resp.on_hover_text(shown_name(i, name)) } else { resp };
-            if resp.clicked() {
-                switch = Some(name.clone());
+            if i > 0 && resp.double_clicked() {
+                crate::layouttabs::start_rename(app, name);
+            } else if resp.clicked() {
+                // Ctrl (Cmd) adds a layout tab to the selection or takes it out; a plain click
+                // goes to the tab and drops the selection.
+                if i > 0 && ui.input(|inp| inp.modifiers.command) {
+                    crate::layouttabs::toggle_selected(app, name);
+                } else {
+                    app.layout_tabs.selected.clear();
+                    switch = Some(name.clone());
+                }
             }
             crate::shortcut_menus::attach(app, &resp, |app| crate::shortcut_menus::layout_tab_entries(app, name));
             x += w + 2.0;
@@ -495,6 +532,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
         let mut toggle_cmd = None;
+        let mut isolate_button = None;
         for (icon, on, cmd, tip) in toggles {
             let br = Rect::from_min_size(pos2(rx, r.center().y - size / 2.0), vec2(size, size));
             let resp = ui.interact(br, ui.id().with(("tg", tip)), Sense::click());
@@ -509,16 +547,35 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
                 p.hline(br.x_range().shrink(4.0), br.bottom() - 1.0, Stroke::new(1.5, t.toggle_on));
             }
             icons::describe_control(ui, &resp, tip, Some(on), false);
-            if resp.on_hover_text(crate::i18n::t(tip)).clicked() {
+            let resp = resp.on_hover_text(crate::i18n::t(tip));
+            if cmd == ISOLATE_MENU {
+                isolate_button = Some(resp);
+            } else if resp.clicked() {
                 toggle_cmd = Some(cmd);
             }
             rx += size + 4.0;
+        }
+        if let Some(resp) = isolate_button {
+            egui::Popup::from_toggle_button_response(&resp).width(180.0).close_behavior(egui::PopupCloseBehavior::CloseOnClick).show(|ui| {
+                for (id, label, enabled) in [
+                    ("isolateobjects", "Isolate Objects", true),
+                    ("hideobjects", "Hide Objects", true),
+                    ("unisolateobjects", "End Object Isolation", isolated),
+                ] {
+                    if ui.add_enabled(enabled, egui::Button::new(crate::i18n::t(label))).clicked() {
+                        toggle_cmd = Some(id);
+                    }
+                }
+            });
         }
         if let Some(c) = toggle_cmd {
             app.start(c);
         }
     });
 }
+
+/// The status bar's Isolate Objects button: it opens a menu instead of running a command.
+const ISOLATE_MENU: &str = "ui.isolate.menu";
 
 /// The Start page (no drawing open, or the Start tab).
 pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {

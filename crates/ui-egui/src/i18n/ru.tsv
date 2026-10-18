@@ -1131,3 +1131,36 @@
 	Open Drawings	Открытые чертежи
 	Close Drawing	Закрыть чертеж
 	Close All Drawings	Закрыть все чертежи
+	Export Comparison Report...	Экспорт отчёта о сравнении...
+	Select All Layouts	Выбрать все листы
+	Move or Copy...	Переместить или копировать...
+	Move or Copy	Переместить или копировать
+	Move or copy layout "{name}"	Переместить или копировать лист «{name}»
+	Before layout:	Перед листом:
+	(move to end)	(переместить в конец)
+	Create a copy	Создать копию
+	A drawing keeps at least one layout.	В чертеже остаётся хотя бы один лист.
+	Move Layout	Переместить лист
+	Background	Фон
+	Text fill	Заливка текста
+	Text fill color	Цвет заливки текста
+	Text reads right to left	Текст справа налево
+	Placing text places the dimension line	Размещение текста задаёт и размерную линию
+	Alternate tolerance precision	Точность альтернативного допуска
+	Alternate tolerance zero suppression	Подавление нулей альтернативного допуска
+	Linear jog height (× text height)	Высота линейного излома (× высота текста)
+	Break size	Размер разрыва
+	Express Tools	Инструменты Express
+	Break-line Symbol	Символ линии обрыва
+	Replace Block...	Заменить блок...
+	Move/Copy/Rotate	Перенести/Копировать/Повернуть
+	Remove boundaries	Удалить контуры
+	Inherit Properties	Наследовать свойства
+	Nothing to preview yet.	Пока нечего просматривать.
+	Property Settings	Настройки свойств
+	Basic Properties	Основные свойства
+	Special Properties	Особые свойства
+	Plot Style	Стиль печати
+	Material	Материал
+	Shadow display	Отображение теней
+	Center object	Объект центра

@@ -165,10 +165,13 @@ pub fn section(app: &mut CadApp, ui: &mut egui::Ui) {
                 ui.end_row();
                 for r in &rows {
                     let on = selected.as_deref() == Some(r.name.as_str());
-                    if ui.selectable_label(on, &r.name).clicked() {
+                    let resp = ui.selectable_label(on, &r.name);
+                    if resp.clicked() || resp.secondary_clicked() {
                         selected = Some(r.name.clone());
                         ui.data_mut(|d| d.remove::<String>(path_id));
                     }
+                    let (name, status) = (r.name.clone(), r.status.clone());
+                    crate::shortcut_menus::attach(app, &resp, |app| crate::shortcut_menus::xref_entries(app, &name, &status));
                     let bad = matches!(r.status.as_str(), "Not Found" | "Unresolved");
                     ui.label(RichText::new(crate::i18n::t(&r.status)).color(if bad { t.warn } else { t.text }));
                     ui.label(crate::i18n::t(if r.overlay { "Overlay" } else { "Attach" }));

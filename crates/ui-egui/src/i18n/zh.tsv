@@ -1236,3 +1236,36 @@
 	Open Drawings	已打开的图形
 	Close Drawing	关闭图形
 	Close All Drawings	关闭所有图形
+	Export Comparison Report...	导出比较报告...
+	Select All Layouts	选择所有布局
+	Move or Copy...	移动或复制...
+	Move or Copy	移动或复制
+	Move or copy layout "{name}"	移动或复制布局"{name}"
+	Before layout:	在布局之前：
+	(move to end)	（移到末尾）
+	Create a copy	创建副本
+	A drawing keeps at least one layout.	图形至少保留一个布局。
+	Move Layout	移动布局
+	Background	背景
+	Text fill	文字填充
+	Text fill color	文字填充颜色
+	Text reads right to left	文字从右向左阅读
+	Placing text places the dimension line	放置文字时同时放置尺寸线
+	Alternate tolerance precision	换算公差精度
+	Alternate tolerance zero suppression	换算公差消零
+	Linear jog height (× text height)	线性折弯高度（× 文字高度）
+	Break size	打断大小
+	Express Tools	Express 工具
+	Break-line Symbol	折断线符号
+	Replace Block...	替换块...
+	Move/Copy/Rotate	移动/复制/旋转
+	Remove boundaries	删除边界
+	Inherit Properties	继承特性
+	Nothing to preview yet.	尚无可预览的内容。
+	Property Settings	特性设置
+	Basic Properties	基本特性
+	Special Properties	特殊特性
+	Plot Style	打印样式
+	Material	材质
+	Shadow display	阴影显示
+	Center object	中心对象

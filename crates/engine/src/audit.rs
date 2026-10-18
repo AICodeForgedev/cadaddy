@@ -9,10 +9,28 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use cadaddy_doc::{Block, DimStyle, Drawing, Entity, EntityKind, EntityStore, Handle, Layer, Linetype, MLeaderStyle, TableStyle, TextStyle};
 use serde::Serialize;
 use serde_json::{Value, json};
+
+/// AUDITCTL: AUDIT and RECOVER also write their report to an `.adt` file beside the drawing (a
+/// profile setting: process-wide, off by default).
+static AUDITCTL: AtomicBool = AtomicBool::new(false);
+
+pub fn auditctl() -> bool {
+    AUDITCTL.load(Ordering::Relaxed)
+}
+
+pub fn set_auditctl(on: bool) {
+    AUDITCTL.store(on, Ordering::Relaxed);
+}
+
+/// The audit log's path for a drawing file: the same name with the `.adt` extension.
+pub fn log_path(drawing: &str) -> String {
+    std::path::Path::new(drawing).with_extension("adt").to_string_lossy().to_string()
+}
 
 /// One error found in the drawing.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -71,6 +89,23 @@ impl Report {
             lines.push("Run AUDIT and answer Yes to fix them.".into());
         }
         lines.join("\n")
+    }
+
+    /// The `.adt` audit log: what ran on which drawing, then every issue (no line limit) with
+    /// its fix, and the totals.
+    pub fn log_text(&self, command: &str, drawing: &str) -> String {
+        let n = self.errors();
+        let mut out = format!("{command} of {drawing}\nFix any errors detected: {}\n\n", if self.fixed { "Yes" } else { "No" });
+        for i in &self.issues {
+            let at = match &i.handle {
+                Some(h) => format!("{}: object {h}", i.location),
+                None => i.location.clone(),
+            };
+            out.push_str(&format!("{at}: {} ({}{})\n", i.message, if self.fixed { "" } else { "would " }, i.fix.trim_end_matches('.')));
+        }
+        let fixed = if self.fixed { n } else { 0 };
+        out.push_str(&format!("\nTotal errors found {n} fixed {fixed}\n"));
+        out
     }
 
     /// The programmatic result: `{errors, fixed, issues, message}`.

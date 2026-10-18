@@ -1,13 +1,15 @@
 //! MATCHPROP (alias MA, PAINTER): copy properties from a source object to destination objects.
 //! Typed: "Select source object", then "Select destination object(s) or [Settings]" until Enter;
-//! Settings toggles which properties are copied (remembered for the next typed MATCHPROP). The
-//! JSON form copies every property unless `properties` names some.
+//! Settings toggles which properties are copied (remembered for the session); its prompt offers
+//! the Property Settings dialog too ([`Picker::MatchProps`]). The JSON form copies every property
+//! unless `properties` names some. Material, shadow display and centre objects are settings
+//! CADaddy keeps but doesn't model yet: they copy nothing.
 
 use cadaddy_doc::{Entity, EntityKind, Handle};
 use serde_json::{Value, json};
 
 use super::super::*;
-use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
+use crate::{Accept, Input, Interactive, Picker, Prompt, Result, Session, Step};
 
 /// Which properties MATCHPROP copies (its Settings).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +36,12 @@ pub struct MatchProps {
     pub table: bool,
     /// Style, arrowhead size, landing and leader type of multileaders.
     pub multileader: bool,
+    /// Material (not modelled yet: copies nothing).
+    pub material: bool,
+    /// Shadow display (not modelled yet: copies nothing).
+    pub shadow: bool,
+    /// Centre marks and centre lines (drawn as plain lines here: copies nothing).
+    pub center: bool,
 }
 
 impl Default for MatchProps {
@@ -60,6 +68,9 @@ const FIELDS: &[(&str, &str, Field)] = &[
     ("Viewport", "viewport", |m| &mut m.viewport),
     ("TAble", "table", |m| &mut m.table),
     ("Multileader", "multileader", |m| &mut m.multileader),
+    ("MAterial", "material", |m| &mut m.material),
+    ("SHadow", "shadowDisplay", |m| &mut m.shadow),
+    ("CEnter", "centerObject", |m| &mut m.center),
 ];
 
 impl MatchProps {
@@ -80,6 +91,9 @@ impl MatchProps {
             viewport: on,
             table: on,
             multileader: on,
+            material: on,
+            shadow: on,
+            center: on,
         }
     }
     /// The settings that are on, by name.
@@ -311,6 +325,9 @@ fn label(name: &str) -> &'static str {
         "polyline" => "Polyline",
         "viewport" => "Viewport",
         "table" => "Table",
+        "material" => "Material",
+        "shadowDisplay" => "Shadow",
+        "centerObject" => "Center",
         _ => "Multileader",
     }
 }
@@ -337,7 +354,7 @@ impl Interactive for MatchPropM {
             Stage::Settings => {
                 let mut kws: Vec<&str> = FIELDS.iter().map(|f| f.0).collect();
                 kws.extend(["ALL", "None"]);
-                Prompt::new("Enter a property to turn on or off", Accept::TEXT).kw(&kws).default("Done")
+                Prompt::new("Enter a property to turn on or off", Accept::TEXT).kw(&kws).default("Done").picker(Picker::MatchProps)
             }
         }
     }

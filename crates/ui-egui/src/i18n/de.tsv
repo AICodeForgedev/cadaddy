@@ -1157,3 +1157,36 @@
 	Open Drawings	Geöffnete Zeichnungen
 	Close Drawing	Zeichnung schließen
 	Close All Drawings	Alle Zeichnungen schließen
+	Export Comparison Report...	Vergleichsbericht exportieren...
+	Select All Layouts	Alle Layouts auswählen
+	Move or Copy...	Verschieben oder Kopieren...
+	Move or Copy	Verschieben oder Kopieren
+	Move or copy layout "{name}"	Layout „{name}“ verschieben oder kopieren
+	Before layout:	Vor Layout:
+	(move to end)	(ans Ende verschieben)
+	Create a copy	Kopie erstellen
+	A drawing keeps at least one layout.	Eine Zeichnung behält mindestens ein Layout.
+	Move Layout	Layout verschieben
+	Background	Hintergrund
+	Text fill	Textfüllung
+	Text fill color	Textfüllfarbe
+	Text reads right to left	Text von rechts nach links
+	Placing text places the dimension line	Textplatzierung setzt auch die Maßlinie
+	Alternate tolerance precision	Genauigkeit der Alternativtoleranz
+	Alternate tolerance zero suppression	Nullunterdrückung der Alternativtoleranz
+	Linear jog height (× text height)	Höhe der linearen Knickung (× Texthöhe)
+	Break size	Unterbrechungsgröße
+	Express Tools	Express Tools
+	Break-line Symbol	Bruchliniensymbol
+	Replace Block...	Block ersetzen...
+	Move/Copy/Rotate	Schieben/Kopieren/Drehen
+	Remove boundaries	Umgrenzungen entfernen
+	Inherit Properties	Eigenschaften übernehmen
+	Nothing to preview yet.	Noch nichts für die Vorschau.
+	Property Settings	Eigenschafteneinstellungen
+	Basic Properties	Grundeigenschaften
+	Special Properties	Spezielle Eigenschaften
+	Plot Style	Plotstil
+	Material	Material
+	Shadow display	Schattenanzeige
+	Center object	Mittelpunktobjekt

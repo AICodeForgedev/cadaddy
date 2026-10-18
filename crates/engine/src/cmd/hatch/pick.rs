@@ -1,6 +1,7 @@
 //! HATCHPICK: the Hatch and Gradient dialog's picks (internal points, boundary objects, a pattern
-//! origin, or the hatches to edit), kept in the session for the dialog to take. It never changes
-//! the drawing.
+//! origin, the hatches to edit, boundaries to remove, a hatch to inherit from), kept in the
+//! session for the dialog to take, and the wait while the dialog previews its hatch. It never
+//! changes the drawing.
 
 use cadaddy_doc::{EntityKind, Handle, HatchLoop};
 use cadaddy_geom::Vec2;
@@ -14,7 +15,7 @@ use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 pub(crate) const MAX_PICKS: usize = 1000;
 
 /// The first prompt's keywords: what to pick.
-const MODES: [&str; 4] = ["Points", "Objects", "oRigin", "Hatch"];
+const MODES: [&str; 7] = ["Points", "Objects", "oRigin", "Hatch", "reMove", "Inherit", "preView"];
 
 /// What HATCHPICK picks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -28,6 +29,12 @@ pub enum PickMode {
     Origin,
     /// Hatches to edit.
     Hatch,
+    /// Points on the loops of the edited hatch to remove.
+    Remove,
+    /// One hatch whose properties the dialog takes (Inherit Properties).
+    Inherit,
+    /// The dialog's Preview: its hatch is drawn until Enter (keep it) or Esc (back to the dialog).
+    Preview,
 }
 
 /// What the last HATCHPICK kept ([`Session::hatch_picks`]).
@@ -39,6 +46,8 @@ pub struct HatchPicks {
     pub handles: Vec<Handle>,
     /// The pattern origin (Origin).
     pub origin: Option<Vec2>,
+    /// Preview: the hatch was accepted (Enter or right-click) rather than sent back to the dialog.
+    pub accepted: bool,
 }
 
 fn mode_named(t: &str) -> Option<PickMode> {
@@ -47,6 +56,9 @@ fn mode_named(t: &str) -> Option<PickMode> {
         "objects" | "o" => PickMode::Objects,
         "origin" | "r" => PickMode::Origin,
         "hatch" | "h" => PickMode::Hatch,
+        "remove" | "m" => PickMode::Remove,
+        "inherit" | "i" => PickMode::Inherit,
+        "preview" | "v" => PickMode::Preview,
         _ => return None,
     })
 }
@@ -102,6 +114,8 @@ enum Pick {
 pub(super) struct HatchPickM {
     mode: Option<PickMode>,
     picks: Vec<Pick>,
+    /// Remove: points on the loops to remove.
+    removed: Vec<Vec2>,
 }
 
 impl HatchPickM {
@@ -136,7 +150,9 @@ impl Interactive for HatchPickM {
             Some(PickMode::Points) => Prompt::new("Pick internal point", Accept::POINT).kw(&["Undo"]),
             Some(PickMode::Objects) => Prompt::new("Select objects", Accept::SELECT).kw(&["Undo"]),
             Some(PickMode::Origin) => Prompt::new("Specify the pattern origin", Accept::POINT),
-            Some(PickMode::Hatch) => Prompt::new("Select hatch object", Accept::SELECT),
+            Some(PickMode::Hatch | PickMode::Inherit) => Prompt::new("Select hatch object", Accept::SELECT),
+            Some(PickMode::Remove) => Prompt::new("Select a boundary to remove", Accept::POINT).kw(&["Undo"]),
+            Some(PickMode::Preview) => Prompt::new("Pick or press Esc to return to dialog or <Right-click to accept hatch>", Accept::POINT),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
@@ -188,11 +204,36 @@ impl Interactive for HatchPickM {
                 s.echo(if others == 0 { format!("{} found", closed.len()) } else { format!("{} found, {others} not closed", closed.len()) });
                 Ok(Step::Continue)
             }
+            (PickMode::Remove, Input::Keyword(k)) if k == "Undo" => {
+                if self.removed.pop().is_none() {
+                    s.echo("Nothing to undo.");
+                }
+                Ok(Step::Continue)
+            }
+            (PickMode::Remove, Input::Point(q)) => {
+                if self.removed.len() < MAX_PICKS {
+                    self.removed.push(q);
+                }
+                Ok(Step::Continue)
+            }
+            (PickMode::Remove, Input::Enter) => {
+                s.hatch_picks = Some(HatchPicks { mode, points: std::mem::take(&mut self.removed), ..HatchPicks::default() });
+                Ok(Step::Done)
+            }
+            (PickMode::Preview, Input::Enter) => {
+                s.hatch_picks = Some(HatchPicks { mode, accepted: true, ..HatchPicks::default() });
+                Ok(Step::Done)
+            }
+            // A pick (like Esc) goes back to the dialog.
+            (PickMode::Preview, Input::Point(_)) => {
+                s.hatch_picks = Some(HatchPicks { mode, ..HatchPicks::default() });
+                Ok(Step::Done)
+            }
             (PickMode::Origin, Input::Point(q)) => {
                 s.hatch_picks = Some(HatchPicks { mode, origin: Some(q), ..HatchPicks::default() });
                 Ok(Step::Done)
             }
-            (PickMode::Hatch, Input::Pick(hs)) => {
+            (PickMode::Hatch | PickMode::Inherit, Input::Pick(hs)) => {
                 let hatches: Vec<Handle> = {
                     let d = s.doc()?;
                     hs.into_iter().filter(|h| matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Hatch(_)))).take(MAX_PICKS).collect()
@@ -204,7 +245,7 @@ impl Interactive for HatchPickM {
                 s.hatch_picks = Some(HatchPicks { mode, handles: hatches, ..HatchPicks::default() });
                 Ok(Step::Done)
             }
-            (PickMode::Origin | PickMode::Hatch, Input::Enter) => Ok(Step::Done),
+            (PickMode::Origin | PickMode::Hatch | PickMode::Inherit, Input::Enter) => Ok(Step::Done),
             _ => Ok(Step::Continue),
         }
     }

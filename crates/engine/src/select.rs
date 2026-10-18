@@ -467,6 +467,73 @@ pub fn select_lasso(d: &Drawing, space: &Space, path: &[Vec2], mode: LassoMode) 
     }
 }
 
+/// The class (DXF Reference subclass marker) of an object type, as the `CLass` selection option
+/// and agents name it.
+pub fn class_name(k: &EntityKind) -> &'static str {
+    match k {
+        EntityKind::Line(_) => "AcDbLine",
+        EntityKind::Point(_) => "AcDbPoint",
+        EntityKind::Circle(_) => "AcDbCircle",
+        EntityKind::Arc(_) => "AcDbArc",
+        EntityKind::Ellipse(_) => "AcDbEllipse",
+        EntityKind::LwPolyline(_) => "AcDbPolyline",
+        EntityKind::Polyline3d(_) => "AcDb3dPolyline",
+        EntityKind::Spline(_) => "AcDbSpline",
+        EntityKind::Helix(_) => "AcDbHelix",
+        EntityKind::Ray(_) => "AcDbRay",
+        EntityKind::XLine(_) => "AcDbXline",
+        EntityKind::Text(_) => "AcDbText",
+        EntityKind::MText(_) => "AcDbMText",
+        EntityKind::AttDef(_) => "AcDbAttributeDefinition",
+        EntityKind::Insert(_) => "AcDbBlockReference",
+        EntityKind::Dimension(_) => "AcDbDimension",
+        EntityKind::MLine(_) => "AcDbMline",
+        EntityKind::Leader(_) => "AcDbLeader",
+        EntityKind::MLeader(_) => "AcDbMLeader",
+        EntityKind::Hatch(_) => "AcDbHatch",
+        EntityKind::Solid(_) | EntityKind::Trace(_) => "AcDbTrace",
+        EntityKind::Face3d(_) => "AcDbFace",
+        EntityKind::Region(_) => "AcDbRegion",
+        EntityKind::Viewport(_) => "AcDbViewport",
+        EntityKind::Image(_) => "AcDbRasterImage",
+        EntityKind::Wipeout(_) => "AcDbWipeout",
+        EntityKind::Table(_) => "AcDbTable",
+        EntityKind::Tolerance(_) => "AcDbFcf",
+        EntityKind::Unknown(_) => "AcDbProxyEntity",
+    }
+}
+
+/// Most comma-separated names one class filter takes.
+const MAX_CLASS_NAMES: usize = 64;
+
+/// Whether `e` is of a class `pattern` names: comma-separated names, each a class (`AcDbLine`),
+/// a DXF type (`LINE`) or a type name (`Line`, `Block Reference`), any case, with `*` and `?`
+/// wildcards.
+pub fn class_matches(e: &Entity, pattern: &str) -> bool {
+    let names = [class_name(&e.kind), e.kind.dxf_name(), e.kind.type_name()];
+    pattern
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .take(MAX_CLASS_NAMES)
+        .any(|p| names.iter().any(|n| crate::cmd::qselect::wildcard(p, n)))
+}
+
+/// The visible, selectable objects in `space` of the classes `pattern` names (see
+/// [`class_matches`]).
+pub fn select_class(d: &Drawing, space: &Space, pattern: &str) -> Vec<Handle> {
+    let Some(store) = d.space(space) else { return Vec::new() };
+    store.iter().filter(|e| selectable(d, e) && class_matches(e, pattern)).map(|e| e.handle).collect()
+}
+
+/// The classes of the visible objects in `space`, sorted (what `?` lists): "AcDbLine (LINE)".
+pub fn classes_in(d: &Drawing, space: &Space) -> Vec<String> {
+    let Some(store) = d.space(space) else { return Vec::new() };
+    let set: std::collections::BTreeSet<String> =
+        store.iter().filter(|e| selectable(d, e)).map(|e| format!("{} ({})", class_name(&e.kind), e.kind.dxf_name())).collect();
+    set.into_iter().collect()
+}
+
 /// The visible objects in `space` of the group called `name` (any case), or `None` when the
 /// drawing has no such group.
 pub fn select_group(d: &Drawing, space: &Space, name: &str) -> Option<Vec<Handle>> {
@@ -492,6 +559,8 @@ pub enum SelectKind {
     Box,
     /// `G`: the objects of a group, by name.
     Group,
+    /// `CL`: the objects of a class (object type), by name.
+    Class,
 }
 
 /// Most points a fence or polygon collects (typed input is hostile).
@@ -515,6 +584,7 @@ impl SelectMode {
             "cp" | "cpolygon" => SelectKind::CPolygon,
             "box" => SelectKind::Box,
             "g" | "group" => SelectKind::Group,
+            "cl" | "class" => SelectKind::Class,
             _ => return None,
         };
         Some(SelectMode { kind, pts: Vec::new() })
@@ -527,6 +597,7 @@ impl SelectMode {
         let last = self.pts.last().copied();
         let (first, next) = match self.kind {
             SelectKind::Group => return Prompt::new("Enter group name", Accept::TEXT),
+            SelectKind::Class => return Prompt::new("Enter class name", Accept::TEXT).kw(&["?"]),
             SelectKind::Window | SelectKind::Crossing | SelectKind::Box => ("Specify first corner", "Specify opposite corner"),
             SelectKind::Fence => ("Specify first fence point", "Specify next fence point"),
             SelectKind::WPolygon | SelectKind::CPolygon => ("Specify first polygon point", "Specify endpoint of line"),

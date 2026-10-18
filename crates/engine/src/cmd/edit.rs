@@ -60,7 +60,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("ai_deselect", "Deselect All", run_deselect).params("{}").noundo(),
         CommandSpec::new("select", "Select", run_select)
             .params(
-                "{handles: [hex]} | {window: [[x,y],[x,y]], crossing?: bool} | {lasso: [[x,y],...], mode?: \"window\"|\"crossing\"|\"fence\" (default: rightward window, leftward crossing)} | {at: [x,y], cycle?: n (the nth of the overlapping objects there, nearest first; the reply lists them as candidates)} | {fence: [[x,y],...]} | {all: true} | {clear: true} | {add?: bool}",
+                "{handles: [hex]} | {window: [[x,y],[x,y]], crossing?: bool} | {lasso: [[x,y],...], mode?: \"window\"|\"crossing\"|\"fence\" (default: rightward window, leftward crossing)} | {at: [x,y], cycle?: n (the nth of the overlapping objects there, nearest first; the reply lists them as candidates)} | {fence: [[x,y],...]} | {class: \"LINE,AcDbCircle,*Text\" (classes, DXF types or type names, wildcards)} | {all: true} | {clear: true} | {add?: bool}",
             )
             .noundo()
             .interactive(|_| Ok(Box::new(SelectM::default()))),
@@ -550,6 +550,8 @@ fn run_select(s: &mut Session, p: &Value) -> Result<Value> {
     let picked: Vec<Handle> = if let Some(w) = points_param(p, "window") {
         let (Some(a), Some(b)) = (w.first(), w.get(1)) else { return Err(bad("select", "window needs 2 corners")) };
         crate::select::select_window(s.doc()?, &space, Bounds2::new(*a, *b), bool_or(p, "crossing", false))
+    } else if let Some(c) = str_param(p, "class") {
+        crate::select::select_class(s.doc()?, &space, c)
     } else if let Some(path) = points_param(p, "lasso") {
         let mode = match str_param(p, "mode") {
             Some(m) => crate::select::LassoMode::from_name(m).ok_or_else(|| bad("select", "`mode` is \"window\", \"crossing\" or \"fence\""))?,

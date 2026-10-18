@@ -110,7 +110,8 @@ mod tests {
     /// cannot be read is reported like a failed OPEN without adding a drawing.
     #[test]
     fn open_path_reads_in_the_background_and_reports_failure() {
-        let mut app = CadApp::new(Session::new(), Services { pick_open: None, pick_save: None, pick_pdf: None, pick_image: None });
+        let mut app =
+            CadApp::new(Session::new(), Services { pick_open: None, pick_save: None, pick_pdf: None, pick_image: None, read_clipboard: None });
         let before = app.session.docs.len();
         let missing = std::env::temp_dir().join(format!("cadaddy-missing-{}.dxf", std::process::id()));
         let p = missing.to_string_lossy().to_string();

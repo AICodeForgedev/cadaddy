@@ -503,6 +503,12 @@ pub struct Settings {
     /// PICKSTYLE: bit 1 picks whole selectable groups ([`cmd::groups`]), bit 2 associative hatches
     /// with their boundaries (stored, not used yet).
     pub pickstyle: u8,
+    /// GROUPDISPLAYMODE: a selected group shows every member's grips (0), one grip at its centre
+    /// (1), or that grip and its bounding box (2, the default).
+    pub groupdisplaymode: u8,
+    /// OBJECTISOLATIONMODE: objects hidden by ISOLATEOBJECTS / HIDEOBJECTS stay hidden for this
+    /// session only (0, the default) or are saved with the drawing (1).
+    pub objectisolationmode: u8,
     pub gripsize: f64,
     pub cursorsize: f64,
     /// MAXARRAY: the most objects one array command creates (items × selected objects).
@@ -586,6 +592,8 @@ impl Default for Settings {
             acadlspasdoc: false,
             pickadd: true,
             pickstyle: 1,
+            groupdisplaymode: 2,
+            objectisolationmode: 0,
             gripsize: 5.0,
             cursorsize: 5.0,
             maxarray: 100_000,
@@ -1270,6 +1278,31 @@ impl Session {
     /// objects go to the command as a pick once the mode is complete.
     fn select_mode_input(&mut self, input: Input) -> Result<Option<Input>> {
         let Some(mut mode) = self.select_mode.take() else { return Ok(Some(input)) };
+        if mode.kind == select::SelectKind::Class {
+            return match input {
+                Input::Text(t) | Input::Keyword(t) if t.trim() == "?" => {
+                    let names = select::classes_in(self.doc()?, &self.space());
+                    self.echo(if names.is_empty() { "No objects.".to_string() } else { names.join(", ") });
+                    self.select_mode = Some(mode);
+                    Ok(None)
+                }
+                Input::Text(name) | Input::Keyword(name) => {
+                    let hs = select::select_class(self.doc()?, &self.space(), &name);
+                    if hs.is_empty() {
+                        self.echo(format!("No objects of class \"{}\".", name.trim()));
+                        return Ok(None);
+                    }
+                    Ok(Some(Input::Pick(cmd::groups::expand(self, hs))))
+                }
+                Input::Cancel => Ok(Some(input)),
+                Input::Enter => Ok(None),
+                _ => {
+                    self.echo("Invalid class name.");
+                    self.select_mode = Some(mode);
+                    Ok(None)
+                }
+            };
+        }
         if mode.kind == select::SelectKind::Group {
             return match input {
                 Input::Text(name) | Input::Keyword(name) => match select::select_group(self.doc()?, &self.space(), &name) {

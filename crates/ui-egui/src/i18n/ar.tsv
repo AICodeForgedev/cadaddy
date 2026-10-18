@@ -1353,3 +1353,36 @@ menu	View	عرض
 	Open Drawings	الرسومات المفتوحة
 	Close Drawing	إغلاق الرسم
 	Close All Drawings	إغلاق كل الرسومات
+	Export Comparison Report...	تصدير تقرير المقارنة...
+	Select All Layouts	تحديد كل التخطيطات
+	Move or Copy...	نقل أو نسخ...
+	Move or Copy	نقل أو نسخ
+	Move or copy layout "{name}"	نقل أو نسخ التخطيط "{name}"
+	Before layout:	قبل التخطيط:
+	(move to end)	(نقل إلى النهاية)
+	Create a copy	إنشاء نسخة
+	A drawing keeps at least one layout.	يحتفظ الرسم بتخطيط واحد على الأقل.
+	Move Layout	نقل التخطيط
+	Background	الخلفية
+	Text fill	تعبئة النص
+	Text fill color	لون تعبئة النص
+	Text reads right to left	يُقرأ النص من اليمين إلى اليسار
+	Placing text places the dimension line	وضع النص يضع خط البعد
+	Alternate tolerance precision	دقة التفاوت بالوحدات البديلة
+	Alternate tolerance zero suppression	حذف أصفار التفاوت البديل
+	Linear jog height (× text height)	ارتفاع التعرج الخطي (× ارتفاع النص)
+	Break size	حجم الفاصل
+	Express Tools	أدوات Express
+	Break-line Symbol	رمز خط القطع
+	Replace Block...	استبدال الكتلة...
+	Move/Copy/Rotate	نقل/نسخ/تدوير
+	Remove boundaries	إزالة الحدود
+	Inherit Properties	وراثة الخصائص
+	Nothing to preview yet.	لا شيء للمعاينة بعد.
+	Property Settings	إعدادات الخصائص
+	Basic Properties	الخصائص الأساسية
+	Special Properties	خصائص خاصة
+	Plot Style	نمط الطباعة
+	Material	المادة
+	Shadow display	عرض الظل
+	Center object	كائن المركز

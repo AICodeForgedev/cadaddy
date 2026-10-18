@@ -1358,3 +1358,36 @@ menu	Modify	수정
 	Open Drawings	열린 도면
 	Close Drawing	도면 닫기
 	Close All Drawings	모든 도면 닫기
+	Export Comparison Report...	비교 보고서 내보내기...
+	Select All Layouts	모든 배치 선택
+	Move or Copy...	이동 또는 복사...
+	Move or Copy	이동 또는 복사
+	Move or copy layout "{name}"	배치 "{name}" 이동 또는 복사
+	Before layout:	배치 앞:
+	(move to end)	(끝으로 이동)
+	Create a copy	복사본 만들기
+	A drawing keeps at least one layout.	도면에는 배치가 하나 이상 남습니다.
+	Move Layout	배치 이동
+	Background	배경
+	Text fill	문자 채우기
+	Text fill color	문자 채우기 색상
+	Text reads right to left	문자를 오른쪽에서 왼쪽으로 읽기
+	Placing text places the dimension line	문자 배치 시 치수선도 배치
+	Alternate tolerance precision	대체 공차 정밀도
+	Alternate tolerance zero suppression	대체 공차 0 억제
+	Linear jog height (× text height)	선형 꺾기 높이(× 문자 높이)
+	Break size	끊기 크기
+	Express Tools	Express 도구
+	Break-line Symbol	끊기선 기호
+	Replace Block...	블록 대체...
+	Move/Copy/Rotate	이동/복사/회전
+	Remove boundaries	경계 제거
+	Inherit Properties	특성 상속
+	Nothing to preview yet.	아직 미리 볼 항목이 없습니다.
+	Property Settings	특성 설정
+	Basic Properties	기본 특성
+	Special Properties	특수 특성
+	Plot Style	플롯 스타일
+	Material	재료
+	Shadow display	그림자 표시
+	Center object	중심 객체

@@ -4,7 +4,7 @@
 
 Menu-breadth parity: a reference menu item counts as covered when a CADaddy command is registered under the same menu label. It measures breadth, not depth; see [target-app-parity.md](target-app-parity.md) for the weighted assessment.
 
-**Menu breadth: 295 / 491 items (60%)** · 454 registered commands.
+**Menu breadth: 298 / 491 items (61%)** · 465 registered commands.
 
 | Menu | Items | Covered | % |
 |---|---|---|---|
@@ -13,7 +13,7 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 | View | 75 | 40 | 53% |
 | Insert | 11 | 6 | 55% |
 | Format | 27 | 25 | 93% |
-| Tools | 85 | 59 | 69% |
+| Tools | 85 | 62 | 73% |
 | Draw | 87 | 55 | 63% |
 | Dimension | 28 | 28 | 100% |
 | Modify | 113 | 55 | 49% |
@@ -94,10 +94,7 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - Tools > Import Settings
 - Tools > Export Settings
 - Tools > Express Tools > Convert Text to Mtext
-- Tools > Express Tools > Break-line Symbol
 - Tools > Express Tools > Explode Attributes to Text
-- Tools > Express Tools > Move/Copy/Rotate
-- Tools > Express Tools > Replace Block...
 - Tools > Express Tools > Super Hatch > Image...
 - Tools > Express Tools > Super Hatch > Xref...
 - Tools > Express Tools > Super Hatch > Select Existing Object

@@ -39,7 +39,7 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
 /// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
 /// command doesn't require a row in every language.
 const REQUIRED: &[&str] = &["uk"];
-const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar"];
+const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar", "ja"];
 
 fn check(language: &str, what: &str, missing: Vec<String>) {
     if REQUIRED.contains(&language) {
@@ -654,6 +654,43 @@ fn korean_locale_saved_preference_and_single_count_form() {
             assert_eq!(count(n, "{n} contributor", "{n} contributors"), format!("기여자 {n}명"));
         }
         assert_eq!(format("Current: {color}", &[("color", "{n} Open".into())]), "현재: {n} Open");
+    });
+}
+
+#[test]
+fn japanese_representative_translations_and_single_count_form() {
+    let ja = catalog("ja").unwrap();
+    assert!(REPORTED.contains(&"ja"));
+    for (context, source, expected) in [
+        ("", "File", "ファイル"),
+        ("", "Options...", "オプション..."),
+        ("", "Interface Language", "表示言語"),
+        ("", "Properties", "プロパティ"),
+        ("", "Undo", "元に戻す"),
+        ("", "Write Block", "ブロック書き出し"),
+        ("@plural", "{n} commit", "{n} 件のコミット"),
+    ] {
+        assert_eq!(ja.get(&(context, source)).copied(), Some(expected), "{context}: {source}");
+    }
+    assert_eq!(tr("ja", "future untranslated label"), "future untranslated label");
+    for tag in ["ja", "ja-JP", "ja_JP.UTF-8", "JA-jp", " ja-JP "] {
+        assert_eq!(locale_language(tag), Some("ja"), "{tag}");
+    }
+    for tag in ["jp", "japanese", "jav"] {
+        assert_eq!(locale_language(tag), None, "{tag}");
+    }
+    assert_eq!(Preference::parse("ja"), Some(Preference::Japanese));
+    assert_eq!(Preference::Auto.resolve(&["pl-PL".into(), "ja-JP".into(), "en-US".into()]), "ja");
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.run("ui.language", json!({"lang": "ja"})).unwrap();
+    let mut restored = CadApp::new(Session::new(), Services::default());
+    restored.system_languages = vec!["en-US".into()];
+    restored.load_prefs(&app.prefs_json());
+    assert_eq!(restored.ui.interface_language, Preference::Japanese);
+    with_language("ja", || {
+        for n in [0, 1, 2, 11, u64::MAX] {
+            assert_eq!(count(n, "{n} commit", "{n} commits"), format!("{n} 件のコミット"));
+        }
     });
 }
 

@@ -112,12 +112,13 @@ fn isolate_hide_and_unisolate() {
     assert!(s.doc().unwrap().hidden_objects.is_empty());
     assert_eq!(drawn(&s), all_prims + 1);
     assert_eq!(s.execute("unisolateobjects", &json!({})).unwrap()["shown"], 0);
-    // Nothing to isolate or hide is an error; isolation is temporary only.
+    // Nothing to isolate or hide is an error; isolation is temporary by default
+    // (OBJECTISOLATIONMODE 0; 1 saves it with the drawing, see selection_class_isolation.rs).
     assert!(s.execute("isolateobjects", &json!({})).is_err());
     assert!(s.execute("hideobjects", &json!({ "handles": "1A" })).is_err());
     assert!(s.execute("isolateobjects", &json!({ "handles": ["FFFFFF"] })).is_err());
-    assert!(s.execute("setvar", &json!({ "name": "OBJECTISOLATIONMODE", "value": 1 })).is_err());
     assert_eq!(s.execute("getvar", &json!({ "name": "OBJECTISOLATIONMODE" })).unwrap()["value"], json!(0));
+    assert!(s.execute("setvar", &json!({ "name": "OBJECTISOLATIONMODE", "value": 2 })).is_err());
 }
 
 #[test]

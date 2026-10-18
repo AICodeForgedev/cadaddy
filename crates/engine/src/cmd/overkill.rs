@@ -1,7 +1,7 @@
 //! OVERKILL (Delete Duplicate Objects): deletes duplicates within a tolerance, deletes lines and
 //! arcs that lie on another one, combines collinear lines and arcs on the same circle that
 //! partially overlap (and, as an option, ones that meet end to end), and optimizes polylines
-//! (zero-length and collinear segments).
+//! (zero-length and collinear segments); lines and arcs lying on a polyline's segment go too.
 //!
 //! Work stays near O(n log n): duplicates are hashed, lines are bucketed by direction and offset,
 //! arcs by circle.
@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use cadaddy_doc::{Circle, Common, Entity, EntityKind, Handle};
-use cadaddy_geom::{TAU, Vec2, Vec3, ccw_sweep, norm_angle};
+use cadaddy_geom::{Polyline, Segment, TAU, Vec2, Vec3, angle_in_sweep, ccw_sweep, norm_angle};
 use serde_json::{Value, json};
 
 use super::machines::{SelOutcome, SelectPhase, number};
@@ -22,7 +22,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Modify", "Delete Duplicate Objects"])
             .alias(&["-overkill"])
             .params(
-                "{handles? (default: the whole current space), tolerance? (0..1e6, default 1e-6), ignore?: [color|layer|linetype|ltscale|lineweight|thickness|transparency|plotStyle], plines?: bool (default true), partialOverlap?: bool (default true), endToEnd?: bool (default false), associativity?: bool (keep associated objects, default true)} → {deleted, duplicates, overlapping, segments}",
+                "{handles? (default: the whole current space), tolerance? (0..1e6, default 1e-6), ignore?: [color|layer|linetype|ltscale|lineweight|thickness|transparency|plotStyle], plines?: bool (default true: optimize polylines, and delete lines and arcs lying on their segments), partialOverlap?: bool (default true), endToEnd?: bool (default false), associativity?: bool (keep associated objects, default true)} → {deleted, duplicates, overlapping, segments}",
             )
             .interactive(|_| Ok(Box::new(OverkillM::default()))),
     ]
@@ -206,6 +206,7 @@ fn overkill(s: &mut Session, hs: Option<Vec<Handle>>, o: &Opts) -> Result<Report
     lines(&cands, o, &mut gone, &mut changed, &mut rep);
     arcs(&cands, o, &mut gone, &mut changed, &mut rep);
     if o.plines {
+        on_polylines(&cands, o, &mut gone, &mut rep);
         for (i, c) in cands.iter().enumerate() {
             if gone.get(i).copied().unwrap_or(true) || c.protected {
                 continue;
@@ -543,6 +544,109 @@ fn same_circle(group: &[usize], cands: &[Cand], o: &Opts, gone: &mut [bool], cha
             a.start = norm_angle(s);
             a.end = norm_angle(e);
             changed.insert(keeper, EntityKind::Arc(a));
+        }
+    }
+}
+
+/// Most polyline segments [`on_polylines`] looks at, and grid cells one segment may cover.
+const MAX_SEGMENTS: usize = 1_000_000;
+const MAX_CELLS: usize = 256;
+
+/// Distance from `p` to the segment from `a` to `b`.
+fn seg_dist(a: Vec2, b: Vec2, p: Vec2) -> f64 {
+    let ab = b - a;
+    let len2 = ab.dot(ab);
+    let t = if len2 > 0.0 { ((p - a).dot(ab) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    p.dist(a + ab * t)
+}
+
+/// Lines and arcs lying wholly on a segment of a polyline with the same compared properties (and
+/// elevation) are deleted: the polyline already draws them. The segments are found through a
+/// grid of their extents.
+fn on_polylines(cands: &[Cand], o: &Opts, gone: &mut [bool], rep: &mut Report) {
+    let q = o.q();
+    // (properties, elevation, segment, extents)
+    let mut segs: Vec<(u32, f64, Segment, cadaddy_geom::Bounds2)> = Vec::new();
+    for (i, c) in cands.iter().enumerate() {
+        let EntityKind::LwPolyline(pl) = &c.e.kind else { continue };
+        if gone.get(i).copied().unwrap_or(true) {
+            continue;
+        }
+        for seg in (Polyline { vertices: pl.vertices.clone(), closed: pl.closed }).segments() {
+            if segs.len() >= MAX_SEGMENTS {
+                break;
+            }
+            let b = match &seg {
+                Segment::Line(l) => cadaddy_geom::Bounds2::from_points([l.a, l.b]),
+                Segment::Arc { arc, .. } => {
+                    cadaddy_geom::Bounds2::new(arc.center - Vec2::new(arc.radius, arc.radius), arc.center + Vec2::new(arc.radius, arc.radius))
+                }
+            };
+            if b.min.is_finite() && b.max.is_finite() {
+                segs.push((c.prop, pl.elevation, seg, b));
+            }
+        }
+    }
+    if segs.is_empty() {
+        return;
+    }
+    let all = segs.iter().fold(cadaddy_geom::Bounds2::EMPTY, |acc, s| acc.union(&s.3));
+    let cell = ((all.width() + all.height()) / (segs.len() as f64).sqrt()).max(q * 4.0).max(1e-9);
+    let at = |v: f64| (v / cell).floor() as i64;
+    let cells = |b: &cadaddy_geom::Bounds2| -> Option<Vec<(i64, i64)>> {
+        let (x0, x1, y0, y1) = (at(b.min.x), at(b.max.x), at(b.min.y), at(b.max.y));
+        let n = (x1.saturating_sub(x0).saturating_add(1)).saturating_mul(y1.saturating_sub(y0).saturating_add(1));
+        if !(0..=MAX_CELLS as i64).contains(&n) {
+            return None;
+        }
+        Some((x0..=x1).flat_map(|x| (y0..=y1).map(move |y| (x, y))).collect())
+    };
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    // Segments too big for the grid are checked against everything.
+    let mut big: Vec<usize> = Vec::new();
+    for (k, sg) in segs.iter().enumerate() {
+        match cells(&sg.3.expand(q)) {
+            Some(cs) => cs.into_iter().for_each(|c| grid.entry(c).or_default().push(k)),
+            None => big.push(k),
+        }
+    }
+    for (i, c) in cands.iter().enumerate() {
+        if gone.get(i).copied().unwrap_or(true) || c.protected {
+            continue;
+        }
+        let (bounds, z) = match &c.e.kind {
+            EntityKind::Line(l) if (l.a.z - l.b.z).abs() <= q => (cadaddy_geom::Bounds2::from_points([l.a.xy(), l.b.xy()]), l.a.z),
+            EntityKind::Arc(a) => (cadaddy_geom::Bounds2::new(a.center.xy(), a.center.xy()).expand(a.radius), a.center.z),
+            _ => continue,
+        };
+        if !(bounds.min.is_finite() && bounds.max.is_finite()) {
+            continue;
+        }
+        let mut near: Vec<usize> = cells(&bounds).unwrap_or_default().into_iter().filter_map(|k| grid.get(&k)).flatten().copied().collect();
+        near.extend(big.iter().copied());
+        near.sort_unstable();
+        near.dedup();
+        let covered = near.into_iter().filter_map(|k| segs.get(k)).any(|(prop, elev, seg, _)| {
+            if *prop != c.prop || (elev - z).abs() > q {
+                return false;
+            }
+            match (&c.e.kind, seg) {
+                (EntityKind::Line(l), Segment::Line(sl)) => seg_dist(sl.a, sl.b, l.a.xy()) <= q && seg_dist(sl.a, sl.b, l.b.xy()) <= q,
+                (EntityKind::Arc(a), Segment::Arc { arc, .. }) => {
+                    let atol = (q / arc.radius.max(1e-12)).min(1.0);
+                    a.center.xy().dist(arc.center) <= q
+                        && (a.radius - arc.radius).abs() <= q
+                        && ccw_sweep(a.start, a.end) <= ccw_sweep(arc.start, arc.end) + atol
+                        && (angle_in_sweep(a.start, arc.start, arc.end)
+                            || norm_angle(a.start - arc.start).min(TAU - norm_angle(a.start - arc.start)) <= atol)
+                        && (angle_in_sweep(a.end, arc.start, arc.end) || norm_angle(a.end - arc.end).min(TAU - norm_angle(a.end - arc.end)) <= atol)
+                }
+                _ => false,
+            }
+        });
+        if covered && let Some(g) = gone.get_mut(i) {
+            *g = true;
+            rep.overlapping += 1;
         }
     }
 }

@@ -30,7 +30,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(NewLayoutM))),
         CommandSpec::new("layout.delete", "Delete Layout", run_delete).params("{name}"),
         CommandSpec::new("layout.rename", "Rename Layout", run_rename).params("{from?: current layout, to}"),
-        CommandSpec::new("layout.copy", "Copy Layout", run_copy).params("{from, to?}"),
+        CommandSpec::new("layout.copy", "Copy Layout", run_copy).params("{from, to?, before?: layout (the copy's tab goes before it; default: last)}"),
+        CommandSpec::new("layout.move", "Move Layout", run_move).params("{name, before?: layout (default: move to the end)} (the layout tabs' Move or Copy)"),
         CommandSpec::new("layout.list", "List Layouts", run_list).params("→ [{name, tabOrder, page, viewports}]").noundo(),
         CommandSpec::new("mview", "Viewports", run_mview)
             .alias(&["mv"])
@@ -307,7 +308,50 @@ fn run_copy(s: &mut Session, p: &Value) -> Result<Value> {
         store.push(Entity { handle: h, ..Entity::clone(e) });
     }
     d.layouts.push(Layout { name: to.clone(), tab_order: order, page: src.page, entities: store, view: src.view, origin: src.origin });
+    if let Some(b) = before_param("layout.copy", s.doc()?, p, &to)? {
+        place_before(s.doc_mut()?, &to, Some(&b));
+    }
     Ok(json!({ "name": to }))
+}
+
+/// Put layout `name` in the tab order right before layout `before` (`None`: last), numbering the
+/// tabs 1, 2, … again.
+fn place_before(d: &mut Drawing, name: &str, before: Option<&str>) {
+    let mut order: Vec<String> = {
+        let mut ls: Vec<&Layout> = d.layouts.iter().collect();
+        ls.sort_by_key(|l| l.tab_order);
+        ls.into_iter().map(|l| l.name.clone()).filter(|n| n != name).collect()
+    };
+    let at = before.and_then(|b| order.iter().position(|n| n == b)).unwrap_or(order.len());
+    order.insert(at, name.to_string());
+    for l in &mut d.layouts {
+        if let Some(i) = order.iter().position(|n| *n == l.name) {
+            l.tab_order = u32::try_from(i + 1).unwrap_or(u32::MAX);
+        }
+    }
+}
+
+/// `before`, when given: an existing layout other than `name`.
+fn before_param(cmd: &str, d: &Drawing, p: &Value, name: &str) -> Result<Option<String>> {
+    match str_param(p, "before") {
+        None => Ok(None),
+        Some(b) => {
+            let b = layout_name(cmd, d, b)?;
+            if b == name {
+                return Err(bad(cmd, "a layout can't go before itself"));
+            }
+            Ok(Some(b))
+        }
+    }
+}
+
+fn run_move(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = str_param(p, "name").ok_or_else(|| bad("layout.move", "`name` is required"))?;
+    let name = layout_name("layout.move", s.doc()?, name)?;
+    let before = before_param("layout.move", s.doc()?, p, &name)?;
+    place_before(s.doc_mut()?, &name, before.as_deref());
+    s.touch();
+    Ok(json!({ "name": name, "before": before }))
 }
 
 fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
