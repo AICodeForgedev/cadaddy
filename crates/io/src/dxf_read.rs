@@ -1202,25 +1202,7 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx, ski
                     let ins_layer = kindent.as_ref().map(|(c, _)| c.layer.clone()).unwrap_or_default();
                     while let Some((k2, t2)) = recs.get(i) {
                         if k2 == "ATTRIB" {
-                            let tt = T(t2);
-                            // A multiline attribute has its text as embedded MTEXT after its own groups.
-                            let (own, embedded) = split_embedded(t2);
-                            let multiline = multiline_attrib(embedded, &common(&tt));
-                            let own = T(own);
-                            let mut text = text_from(&own);
-                            if let Some(m) = &multiline {
-                                text.value.clone_from(&m.read_as);
-                            }
-                            attribs.push(Attrib {
-                                tag: own.s(2).unwrap_or_default(),
-                                text,
-                                invisible: own.i(70).unwrap_or(0) & 1 != 0,
-                                constant: false,
-                                prompt: String::new(),
-                                props: attrib_props(&tt, &ins_layer),
-                                multiline,
-                                modes: attrib_modes(own.0),
-                            });
+                            attribs.push(attrib_from_groups(t2, &ins_layer));
                             i += 1;
                         } else {
                             if k2 == "SEQEND" {
@@ -2365,6 +2347,29 @@ fn helix(tags: &[Tag]) -> Helix {
 
 /// An entity from the groups of a DXF record of type `kind` (without its `0` group), as the
 /// reader makes it. AutoLISP's `entmake` and `entmod` are built on it.
+/// An ATTRIB record's attribute, for a block reference on layer `ins_layer`.
+pub fn attrib_from_groups(tags: &[Tag], ins_layer: &str) -> Attrib {
+    let tt = T(tags);
+    // A multiline attribute has its text as embedded MTEXT after its own groups.
+    let (own, embedded) = split_embedded(tags);
+    let multiline = multiline_attrib(embedded, &common(&tt));
+    let own = T(own);
+    let mut text = text_from(&own);
+    if let Some(m) = &multiline {
+        text.value.clone_from(&m.read_as);
+    }
+    Attrib {
+        tag: own.s(2).unwrap_or_default(),
+        text,
+        invisible: own.i(70).unwrap_or(0) & 1 != 0,
+        constant: false,
+        prompt: String::new(),
+        props: attrib_props(&tt, ins_layer),
+        multiline,
+        modes: attrib_modes(own.0),
+    }
+}
+
 pub fn entity_from_groups(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
     entity(&kind.to_ascii_uppercase(), tags)
 }

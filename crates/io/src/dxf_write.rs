@@ -2880,6 +2880,12 @@ fn scale_list(w: &mut W, scales: &[(&cadaddy_doc::AnnoScale, String)], dict: &st
 /// VERTEXes, gives its first). Handles of objects outside the entity (owner, styles) are left
 /// out. AutoLISP's `entget` is built on it.
 pub fn entity_groups(d: &Drawing, e: &Entity) -> (String, Vec<Tag>) {
+    entity_records(d, e).into_iter().next().unwrap_or_default()
+}
+
+/// Every record an entity is written as (a block reference's ATTRIBs and SEQEND follow its
+/// INSERT; a POLYLINE's VERTEXes and SEQEND follow it), each as [`entity_groups`] gives one.
+pub fn entity_records(d: &Drawing, e: &Entity) -> Vec<(String, Vec<Tag>)> {
     let mut w = W {
         t: Vec::new(),
         next: d.handseed.max(0x100).saturating_add(0x1000),
@@ -2890,7 +2896,5 @@ pub fn entity_groups(d: &Drawing, e: &Entity) -> (String, Vec<Tag>) {
     let cx = Ctx { target: Version::R2018, ..Ctx::default() };
     let paper = d.space_of(e.handle).is_some_and(|s| !matches!(s, cadaddy_doc::Space::Model));
     entity(&mut w, d, e, "0", paper, &cx);
-    let mut tags = w.t.into_iter();
-    let kind = tags.next().filter(|t| t.code == 0).map(|t| t.value.as_str()).unwrap_or_default();
-    (kind, tags.take_while(|t| t.code != 0).filter(|t| t.code != 330).collect())
+    cadaddy_dxf::records(&w.t).into_iter().map(|(k, tags)| (k, tags.into_iter().filter(|t| t.code != 330).collect())).collect()
 }

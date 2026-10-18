@@ -130,8 +130,15 @@ fn in_text(d: &Drawing, e: &Entity, p: Vec2) -> bool {
         EntityKind::MLeader(m) => {
             m.text.as_ref().is_some_and(|t| in_box(cadaddy_render::layout_mtext_entity(d, t).strokes.into_iter().flatten(), t.rotation, p))
         }
+        // A block reference is picked on its attributes' text too, as on its lines.
+        EntityKind::Insert(i) => attrib_at(d, i, p).is_some(),
         _ => false,
     }
+}
+
+/// The shown attribute of a block reference whose text box holds `p`.
+pub fn attrib_at(d: &Drawing, ins: &cadaddy_doc::Insert, p: Vec2) -> Option<usize> {
+    ins.attribs.iter().position(|a| !a.invisible && entity_bounds(d, &Entity::new(Handle(0), EntityKind::Text(a.text.clone())), 1).contains(p))
 }
 
 /// Whether `p` is inside the box around `pts` turned by `angle` (the box of text set at `angle`).

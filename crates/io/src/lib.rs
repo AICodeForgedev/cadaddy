@@ -27,8 +27,8 @@ use cadaddy_doc::{Drawing, Space};
 use cadaddy_geom::Bounds2;
 
 pub use cadaddy_dxf::Version;
-pub use dxf_read::entity_from_groups;
-pub use dxf_write::entity_groups;
+pub use dxf_read::{attrib_from_groups, entity_from_groups};
+pub use dxf_write::{entity_groups, entity_records};
 pub use pdf::{PdfOptions, pdf, plot};
 
 /// How a drawing is saved as DXF or DWG.
