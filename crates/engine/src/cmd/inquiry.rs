@@ -99,6 +99,7 @@ fn dist_text(s: &Session, a: Vec2, b: Vec2) -> String {
 fn run_dist(s: &mut Session, p: &Value) -> Result<Value> {
     let a = point_req("dist", p, "p1")?;
     let b = point_req("dist", p, "p2")?;
+    s.last_used.distance = a.dist(b);
     Ok(json!({ "distance": a.dist(b), "angle": (b - a).angle().to_degrees(), "dx": b.x - a.x, "dy": b.y - a.y, "message": dist_text(s, a, b) }))
 }
 
@@ -210,6 +211,7 @@ fn run_area(s: &mut Session, p: &Value) -> Result<Value> {
         let h = targets(s, p)?.first().copied().ok_or_else(|| bad("area", "`points` or `handle` is required"))?;
         object_area(s, h)?
     };
+    (s.last_used.area, s.last_used.perimeter) = (a, per);
     Ok(json!({ "area": a, "perimeter": per, "message": area_text(s, a, per) }))
 }
 
@@ -585,6 +587,7 @@ impl Interactive for DistM {
                     (Some(first), Some(second)) if first.viewport == second.viewport => (first.point, second.point),
                     _ => (a, b),
                 };
+                s.last_used.distance = a.dist(b);
                 let t = dist_text(s, a, b);
                 for l in t.lines() {
                     s.echo(l.to_string());
@@ -714,6 +717,7 @@ impl AreaM {
     }
     /// Report an area (and the running total in add/subtract mode); ends the command in single mode.
     fn measured(&mut self, s: &mut Session, a: f64, per: f64) -> Step {
+        (s.last_used.area, s.last_used.perimeter) = (a, per);
         s.echo(area_text(s, a, per));
         match self.mode {
             AreaMode::Single => return Step::Done,

@@ -597,6 +597,10 @@ pub struct LastUsed {
     /// The last value entered for each attribute of a library symbol ("EL_SWITCH|CIRCUIT"): the
     /// next placement offers it, and fills its hidden fields (PANEL, MOUNT_HT) with it.
     pub symbol_attribs: std::collections::HashMap<String, String>,
+    /// The last AREA measured (AREA and PERIMETER) and the last DIST (DISTANCE).
+    pub area: f64,
+    pub perimeter: f64,
+    pub distance: f64,
 }
 
 impl Default for LastUsed {
@@ -610,6 +614,9 @@ impl Default for LastUsed {
             mleader: MLeaderOptions::default(),
             mleader_block: String::new(),
             symbol_attribs: std::collections::HashMap::new(),
+            area: 0.0,
+            perimeter: 0.0,
+            distance: 0.0,
         }
     }
 }
