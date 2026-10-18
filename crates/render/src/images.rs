@@ -192,6 +192,26 @@ pub fn add_search_dir(dir: &Path) {
     c.generation += 1;
 }
 
+/// Drop the cached pixels of images no open drawing names (`used`: the paths their IMAGEs
+/// give), as drawings close. A closed drawing's images stayed decoded until the program exited:
+/// hundreds of megabytes after a sheet full of them.
+pub fn keep_only(used: &std::collections::HashSet<&str>) {
+    let Ok(mut c) = cache().lock() else { return };
+    let mut freed = 0usize;
+    let before = c.map.len();
+    c.map.retain(|k, v| {
+        let keep = used.contains(k.as_str());
+        if !keep {
+            freed += v.as_ref().map_or(0, |r| r.rgba.len());
+        }
+        keep
+    });
+    if c.map.len() != before {
+        c.bytes = c.bytes.saturating_sub(freed);
+        c.generation += 1;
+    }
+}
+
 /// Changes whenever cached pixels change (loaded, registered or dropped).
 pub fn generation() -> u64 {
     cache().lock().map(|c| c.generation).unwrap_or(0)

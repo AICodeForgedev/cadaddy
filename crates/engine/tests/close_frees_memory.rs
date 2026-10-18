@@ -31,3 +31,21 @@ fn closing_a_picked_drawing_frees_it() {
         assert!(weak.upgrade().is_none(), "a closed drawing's objects are still held (closeall: {all})");
     }
 }
+
+#[test]
+fn closing_a_drawing_drops_its_images_only() {
+    use cadaddy_engine::doc::{EntityKind, Image};
+    use cadaddy_render::images;
+    let pixels = || images::Raster::new(1, 1, vec![255, 0, 0, 255]).unwrap();
+    let mut s = Session::new();
+    // Registered pixels with no file behind them: once dropped they can't come back.
+    let (mine, theirs) = ("close-test-kept.png", "close-test-dropped.png");
+    images::insert(mine, pixels());
+    images::insert(theirs, pixels());
+    s.add_entity(EntityKind::Image(Image { path: mine.into(), ..Default::default() })).unwrap();
+    s.execute("new", &json!({})).unwrap();
+    s.add_entity(EntityKind::Image(Image { path: theirs.into(), ..Default::default() })).unwrap();
+    s.execute("close", &json!({})).unwrap();
+    assert!(images::get(mine).is_some(), "an open drawing's image stays");
+    assert!(images::get(theirs).is_none(), "a closed drawing's image is let go");
+}
