@@ -41,6 +41,7 @@ pub mod plotters;
 mod props;
 pub mod symbol;
 mod takeoff;
+pub(crate) mod underlay;
 pub use props::MatchProps;
 pub(crate) mod qselect;
 mod selecttools;
@@ -199,6 +200,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(array::specs());
         v.extend(symbol::specs());
         v.extend(express::specs());
+        v.extend(underlay::specs());
         v.extend(takeoff::specs());
         v.extend(imageattach::specs());
         v.extend(dash_styles::specs());

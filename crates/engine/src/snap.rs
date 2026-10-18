@@ -207,6 +207,27 @@ pub(crate) fn osnap_with_neighborhood(
         Some((hit, prims)) => (hit, Some(prims)),
         None => (None, None),
     };
+    // PDF underlays' geometry (PDFOSNAP): the page's objects, snapped to in page coordinates.
+    for (page, m) in crate::cmd::underlay::near(d, space, cursor, aperture) {
+        let Some(inv) = m.inverse() else { continue };
+        let k = m.apply_vec(Vec2::X).len().max(1e-12);
+        let (pc, pa) = (inv.apply(cursor), aperture / k);
+        if !(pc.is_finite() && pa.is_finite() && pa > 0.0) {
+            continue;
+        }
+        let model = Space::Model;
+        let pix = crate::spatial::index(&page, &model);
+        let hit = osnap_in(&page, &model, &pix, pc, pa, osmode, base.map(|b| inv.apply(b)), false, &[], None).map(|h| SnapHit {
+            point: m.apply(h.point),
+            deferred: None,
+            ..h
+        });
+        if let Some(hit) = hit
+            && best.as_ref().is_none_or(|b| snap_score(hit.mode, hit.point, cursor, aperture) < snap_score(b.mode, b.point, cursor, aperture))
+        {
+            best = Some(hit);
+        }
+    }
     let views = viewport::near(d, space, cursor, aperture);
     if views.is_empty() {
         return (best, near_prims);

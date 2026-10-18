@@ -221,6 +221,8 @@ struct Ctx {
     block_records: HashMap<String, String>,
     /// Raster images' IMAGEDEF, IMAGEDEF_REACTOR and dictionary handles.
     images: crate::dxf_image::Plan,
+    /// PDF underlays' PDFDEFINITION and dictionary handles.
+    underlays: crate::dxf_underlay::Plan,
     /// The version the file ends up in (the DWG version for a DWG save): it decides which
     /// entity types exist (MULTILEADER from 2007).
     target: Version,
@@ -1135,6 +1137,13 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.p(10, *v);
             }
         }
+        EntityKind::Underlay(u) => {
+            // Every underlay has its PDFDEFINITION (planned in `write`).
+            let Some(def) = cx.underlays.by_entity.get(&e.handle) else { return };
+            w.s(0, "PDFUNDERLAY");
+            common(w, e, owner, paper, "AcDbUnderlayReference");
+            w.t.extend(crate::dxf_underlay::entity_tags(u, def).into_iter().skip(1));
+        }
         EntityKind::Image(i) => {
             // Every image has its IMAGEDEF (planned in `write`); the fallback never happens.
             let Some((def, reactor)) = cx.images.by_entity.get(&e.handle) else { return };
@@ -1943,6 +1952,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     // Image definitions (IMAGEDEF objects) of raster images anywhere in the drawing.
     cx.images = crate::dxf_image::plan(every.iter().copied(), || w.h());
+    cx.underlays = crate::dxf_underlay::plan(every.iter().copied(), || w.h());
     cx.mlines = crate::dxf_mline::plan(d, every.iter().copied(), || w.h());
     // DIMASSOC objects of associative dimensions in model and paper space.
     for st in &all_spaces {
@@ -2063,6 +2073,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     if every.iter().any(|e| matches!(e.kind, EntityKind::Wipeout(_))) {
         classes.push(("WIPEOUT", "AcDbWipeout", 127, true));
+    }
+    if !cx.underlays.is_empty() {
+        classes.push(("PDFUNDERLAY", "AcDbPdfReference", 4095, true));
+        classes.push(("PDFDEFINITION", "AcDbPdfDefinition", 1153, false));
     }
     if !cx.images.is_empty() {
         classes.push(("IMAGE", "AcDbRasterImage", 127, true));
@@ -2452,6 +2466,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     w.i(281, 1);
     w.s(3, "ACAD_GROUP");
     w.s(350, group_dict.clone());
+    if !cx.underlays.is_empty() {
+        w.s(3, "ACAD_PDFDEFINITIONS");
+        w.s(350, cx.underlays.dict.clone());
+    }
     if !cx.images.is_empty() {
         w.s(3, "ACAD_IMAGE_DICT");
         w.s(350, cx.images.dict.clone());
@@ -2695,6 +2713,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     // Raster image definitions.
     w.t.extend(crate::dxf_image::objects(&cx.images, &root_dict));
+    w.t.extend(crate::dxf_underlay::objects(&cx.underlays, &root_dict));
     w.s(0, "ENDSEC");
     w.s(0, "EOF");
     let seed = format!("{:X}", w.next);

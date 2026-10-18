@@ -496,6 +496,7 @@ pub fn class_name(k: &EntityKind) -> &'static str {
         EntityKind::Region(_) => "AcDbRegion",
         EntityKind::Viewport(_) => "AcDbViewport",
         EntityKind::Image(_) => "AcDbRasterImage",
+        EntityKind::Underlay(_) => "AcDbPdfReference",
         EntityKind::Wipeout(_) => "AcDbWipeout",
         EntityKind::Table(_) => "AcDbTable",
         EntityKind::Tolerance(_) => "AcDbFcf",

@@ -954,6 +954,66 @@ pub struct Image {
     #[serde(default)]
     pub resolution_units: u8,
 }
+/// A PDF underlay (PDFATTACH): a page of a PDF file shown in place, not converted. The page's
+/// content (in sheet inches, origin at its lower-left corner) is mapped by `u` (one sheet inch
+/// along the page's x axis) and `v` (along its y axis) from `insert`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Underlay {
+    pub insert: Vec3,
+    pub u: Vec3,
+    pub v: Vec3,
+    /// The page size in sheet inches.
+    pub size: Vec2,
+    /// The PDF file (its PDFDEFINITION's path).
+    pub path: String,
+    /// 1-based page number.
+    #[serde(default = "first_page")]
+    pub page: u32,
+    /// The definition's name (the file name and page by default).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// Clip boundary in page coordinates (sheet inches): two opposite corners of a rectangle or a
+    /// polygon's vertices. Empty: the whole page.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clip: Vec<Vec2>,
+    #[serde(default)]
+    pub clipping: bool,
+    /// Fade 0..=80, contrast 20..=100 (PDFADJUST).
+    #[serde(default = "underlay_fade")]
+    pub fade: u8,
+    #[serde(default = "underlay_contrast")]
+    pub contrast: u8,
+    #[serde(default)]
+    pub monochrome: bool,
+    /// The page's layers turned off (PDFLAYERS).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers_off: Vec<String>,
+}
+fn first_page() -> u32 {
+    1
+}
+fn underlay_fade() -> u8 {
+    25
+}
+fn underlay_contrast() -> u8 {
+    20
+}
+
+impl Underlay {
+    /// The four corners of the page as placed.
+    pub fn corners(&self) -> [Vec2; 4] {
+        let o = self.insert.xy();
+        let (u, v) = (self.u.xy() * self.size.x, self.v.xy() * self.size.y);
+        [o, o + u, o + u + v, o + v]
+    }
+    /// Page coordinates (sheet inches) → drawing coordinates.
+    pub fn transform(&self) -> cadaddy_geom::Mat3 {
+        let (u, v, o) = (self.u.xy(), self.v.xy(), self.insert.xy());
+        cadaddy_geom::Mat3 { a: u.x, b: u.y, c: v.x, d: v.y, e: o.x, f: o.y }
+    }
+}
+
 fn image_display() -> u16 {
     7
 }
@@ -1078,6 +1138,7 @@ pub enum EntityKind {
     Region(Region),
     Viewport(Viewport),
     Image(Image),
+    Underlay(Underlay),
     Wipeout(Wipeout),
     Table(Table),
     Tolerance(crate::Tolerance),
@@ -1132,6 +1193,7 @@ impl EntityKind {
             EntityKind::Region(_) => "Region",
             EntityKind::Viewport(_) => "Viewport",
             EntityKind::Image(_) => "Raster Image",
+            EntityKind::Underlay(_) => "PDF Underlay",
             EntityKind::Wipeout(_) => "Wipeout",
             EntityKind::Table(_) => "Table",
             EntityKind::Tolerance(_) => "Tolerance",
@@ -1167,6 +1229,7 @@ impl EntityKind {
             EntityKind::Region(_) => "REGION",
             EntityKind::Viewport(_) => "VIEWPORT",
             EntityKind::Image(_) => "IMAGE",
+            EntityKind::Underlay(_) => "PDFUNDERLAY",
             EntityKind::Wipeout(_) => "WIPEOUT",
             EntityKind::Table(_) => "ACAD_TABLE",
             EntityKind::Tolerance(_) => "TOLERANCE",
@@ -1194,6 +1257,7 @@ impl EntityKind {
             EntityKind::Hatch(h) => h.elevation,
             EntityKind::Solid(s) | EntityKind::Trace(s) => s.corners[0].z,
             EntityKind::Image(i) => i.insert.z,
+            EntityKind::Underlay(u) => u.insert.z,
             _ => 0.0,
         };
         if z.is_finite() { z } else { 0.0 }
@@ -1286,6 +1350,11 @@ impl EntityKind {
                 .chain(m.block.iter().map(|b| Prim::Point(b.insert.xy())))
                 .collect(),
             EntityKind::Image(i) => vec![Prim::Point(i.insert.xy())],
+            // The page's frame: picked, snapped to and measured like a rectangle.
+            EntityKind::Underlay(u) => {
+                let c = u.corners();
+                (0..4).filter_map(|k| Some(Prim::Seg(Segment::Line(GLine::new(*c.get(k)?, *c.get((k + 1) % 4)?))))).collect()
+            }
             EntityKind::Table(t) => vec![Prim::Point(t.insert.xy())],
             EntityKind::Tolerance(t) => vec![Prim::Point(t.insert.xy())],
             EntityKind::Unknown(_) => Vec::new(),
@@ -1478,6 +1547,11 @@ impl EntityKind {
                 i.u = m.apply_vec(i.u.xy()).to3(0.0);
                 i.v = m.apply_vec(i.v.xy()).to3(0.0);
             }
+            EntityKind::Underlay(u) => {
+                t3(&mut u.insert);
+                u.u = m.apply_vec(u.u.xy()).to3(0.0);
+                u.v = m.apply_vec(u.v.xy()).to3(0.0);
+            }
             EntityKind::Wipeout(w) => w.boundary.iter_mut().for_each(|p| *p = m.apply(*p)),
             EntityKind::Table(t) => {
                 if let Some(b) = &mut t.breaks {
@@ -1566,6 +1640,7 @@ impl EntityKind {
                 Bounds2::new(c - h, c + h).corners().to_vec()
             }
             EntityKind::Image(i) => vec![i.insert.xy()],
+            EntityKind::Underlay(u) => u.corners().to_vec(),
             EntityKind::Wipeout(w) => w.boundary.clone(),
             EntityKind::Table(t) => vec![t.insert.xy()],
             EntityKind::Tolerance(t) => vec![t.insert.xy()],

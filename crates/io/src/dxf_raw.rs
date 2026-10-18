@@ -34,6 +34,7 @@ const MODELLED_KEYS: &[&str] = &[
     "ACAD_TABLESTYLE",
     "ACAD_IMAGE_DICT",
     "ACAD_IMAGE_VARS",
+    "ACAD_PDFDEFINITIONS",
 ];
 
 /// Extension dictionary entries not kept raw: dimension associativity and XCLIP boundaries

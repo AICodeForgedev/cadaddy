@@ -104,7 +104,13 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
             1 => return Some(translated(kind, delta)),
             _ => set_xy(&mut l.b, to),
         },
-        EntityKind::Point(_) | EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) | EntityKind::Image(_) | EntityKind::Table(_) => {
+        EntityKind::Point(_)
+        | EntityKind::Text(_)
+        | EntityKind::MText(_)
+        | EntityKind::AttDef(_)
+        | EntityKind::Image(_)
+        | EntityKind::Underlay(_)
+        | EntityKind::Table(_) => {
             return Some(translated(kind, delta));
         }
         EntityKind::Hatch(_) | EntityKind::Tolerance(_) => return Some(translated(kind, delta)),

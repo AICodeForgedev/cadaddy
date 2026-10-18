@@ -537,6 +537,8 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         }
         // The file path comes from the IMAGEDEF object (`dxf_image::resolve`).
         "IMAGE" => EntityKind::Image(crate::dxf_image::read_entity(tags)),
+        // The file and page come from the PDFDEFINITION object (`dxf_underlay::resolve`).
+        "PDFUNDERLAY" => EntityKind::Underlay(crate::dxf_underlay::read_entity(tags)),
         "TOLERANCE" => {
             let dir = t.p(11);
             let dir = if dir.xy().is_finite() && dir.xy().len() > 1e-12 { dir } else { Vec3::new(1.0, 0.0, 0.0) };
@@ -1878,6 +1880,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     apply_sortents(&mut d, &objs.sortents, &rx.brs, &paper_block_for, &first_layout);
     objs.apply(&mut d, &rx);
     crate::dxf_image::resolve(&secs, &mut d);
+    crate::dxf_underlay::resolve(&secs, &mut d);
     crate::dxf_mline::resolve(&secs, &mut d);
     crate::dxf_xclip::resolve(&secs, &mut d);
     // Keep handles unique against the header's seed.

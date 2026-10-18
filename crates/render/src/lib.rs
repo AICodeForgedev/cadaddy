@@ -1367,6 +1367,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             }
         }
         EntityKind::Image(i) => image(b, ctx, i, rgb, lw),
+        EntityKind::Underlay(u) => underlay(b, ctx, u, rgb, lw),
         EntityKind::Table(t) => table(b, ctx, t, rgb, lw),
         EntityKind::Tolerance(t) => tolerance::draw(b, ctx, e, t, lw, tol),
         EntityKind::Leader(l) => {
@@ -1737,6 +1738,76 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
         block_pstyle: ctx.block_pstyle,
         // The reference's own, set by the caller (`Builder::transparency` while it draws).
         block_transparency: ctx.block_transparency,
+    }
+}
+
+/// Loads a PDF underlay's page: its file and 1-based page → the page as a drawing in sheet inches
+/// (origin at the page's lower-left corner). The engine installs one that reads through the io
+/// hooks and caches pages; without one an underlay shows as its frame.
+pub type UnderlayLoader = fn(&str, u32) -> Option<std::sync::Arc<Drawing>>;
+
+static UNDERLAY_LOADER: std::sync::OnceLock<UnderlayLoader> = std::sync::OnceLock::new();
+
+pub fn set_underlay_loader(f: UnderlayLoader) {
+    let _ = UNDERLAY_LOADER.set(f);
+}
+
+/// A PDF underlay: the page's objects (its layers turned off left out) placed by the underlay,
+/// faded (as transparency) and in colour 7 when monochrome, inside its clip boundary or, without
+/// one, its page frame. A page that can't be loaded shows as its frame.
+fn underlay(b: &mut Builder, ctx: &Ctx, u: &cadaddy_doc::Underlay, rgb: Ink, lw: f32) {
+    let frame: Vec<Vec2> = u.corners().iter().map(|p| ctx.xf.apply(*p)).collect();
+    let content = if ctx.depth < cadaddy_doc::MAX_BLOCK_DEPTH { UNDERLAY_LOADER.get().and_then(|f| f(&u.path, u.page.max(1))) } else { None };
+    let Some(page) = content else {
+        let mut closed = frame.clone();
+        closed.extend(frame.first().copied());
+        b.polyline(ctx, rgb, lw, &closed);
+        return;
+    };
+    let m = ctx.xf.then_before(u.transform());
+    let sub = Ctx { d: &page, xf: m, depth: ctx.depth + 1, frozen: &[], vp_colors: &[], ..top_ctx(&page, m, ctx.top, &[], &[]) };
+    let mut part = Builder {
+        list: DisplayList::default(),
+        opts: b.opts,
+        plotting: b.plotting,
+        styles: None,
+        named: None,
+        shared_budget: b.shared_budget,
+        transparency: 0,
+    };
+    part.list.expanded = b.list.expanded;
+    for pe in page.model.iter() {
+        if u.layers_off.iter().any(|l| l.eq_ignore_ascii_case(&pe.common.layer)) {
+            continue;
+        }
+        if !part.expand() {
+            break;
+        }
+        entity(&mut part, &sub, pe);
+    }
+    b.list.expanded = part.list.expanded;
+    part.list.texts.clear();
+    let fade = u.fade.min(80);
+    for p in &mut part.list.prims {
+        if u.monochrome {
+            p.color = Rgb(255, 255, 255);
+            p.aci7 = true;
+        }
+        p.transparency = p.transparency.max(fade);
+    }
+    let boundary: Vec<Vec2> = if u.clipping && u.clip.len() >= 2 {
+        let t = u.transform();
+        let pts: Vec<Vec2> = match u.clip.as_slice() {
+            [a, c] => Bounds2::new(*a, *c).corners().to_vec(),
+            pts => pts.to_vec(),
+        };
+        pts.into_iter().map(|p| ctx.xf.apply(t.apply(p))).collect()
+    } else {
+        frame
+    };
+    match clip::PolyClip::new(&boundary) {
+        Some(poly) => append_clipped(&mut b.list, &part.list, &Clip::Poly(&poly)),
+        None => append_clipped(&mut b.list, &part.list, &Clip::Rect(Bounds2::from_points(boundary))),
     }
 }
 
