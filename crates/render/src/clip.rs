@@ -422,11 +422,19 @@ impl PolyClip {
                 continue;
             }
             if self.invert {
-                // The triangle less the region: the even-odd fill of both outlines is their
-                // symmetric difference, and keeping its part inside the triangle leaves the rest.
-                let both = crate::fill::triangulate_evenodd(&[t.to_vec(), self.poly.clone()]);
-                for piece in both.as_chunks::<3>().0 {
-                    let poly = clip_convex(piece, t);
+                // The triangle less the region: take away each of the region's triangles in
+                // turn, splitting the convex pieces left along that triangle's edges.
+                let mut pieces = vec![t.to_vec()];
+                for (c, cb) in &self.tris {
+                    if !cb.intersects(&tb) {
+                        continue;
+                    }
+                    pieces = pieces.into_iter().flat_map(|p| subtract_triangle(p, c)).collect();
+                    if pieces.len() > 100_000 {
+                        break;
+                    }
+                }
+                for poly in pieces {
                     if let Some(first) = poly.first().copied() {
                         for w in poly.get(1..).unwrap_or(&[]).windows(2) {
                             if let (Some(b), Some(c)) = (w.first(), w.get(1))
@@ -466,6 +474,66 @@ impl PolyClip {
         }
         out
     }
+}
+
+/// The length of a polyline that every region in `clips` keeps (a takeoff through XCLIPs).
+pub fn clipped_length(pts: &[Vec2], clips: &[PolyClip]) -> f64 {
+    let mut pieces = vec![pts.to_vec()];
+    for c in clips {
+        pieces = pieces.iter().flat_map(|p| c.clip_polyline(p)).collect();
+    }
+    pieces.iter().flat_map(|p| p.windows(2)).map(|w| w.first().zip(w.get(1)).map_or(0.0, |(a, b)| a.dist(*b))).sum()
+}
+
+/// The area of a polygon (even-odd) that every region in `clips` keeps.
+pub fn clipped_area(poly: &[Vec2], clips: &[PolyClip]) -> f64 {
+    let mut tris = crate::fill::triangulate_evenodd(&[poly.to_vec()]);
+    for c in clips {
+        tris = c.clip_triangles(&tris);
+    }
+    tris.as_chunks::<3>().0.iter().map(|[a, b, c]| ((*b - *a).cross(*c - *a) / 2.0).abs()).sum()
+}
+
+/// The part of a convex polygon on the left of `p`→`q` (`left`), or on its right.
+fn half_plane(poly: &[Vec2], p: Vec2, q: Vec2, left: bool) -> Vec<Vec2> {
+    let e = q - p;
+    let side = |x: Vec2| if left { e.cross(x - p) } else { -e.cross(x - p) };
+    let n = poly.len();
+    let mut out = Vec::with_capacity(n + 2);
+    for i in 0..n {
+        let (Some(s), Some(t)) = (poly.get(i).copied(), poly.get((i + 1) % n).copied()) else { continue };
+        let (ds, dt) = (side(s), side(t));
+        if ds >= 0.0 {
+            out.push(s);
+        }
+        if (ds >= 0.0) != (dt >= 0.0) {
+            let k = ds / (ds - dt);
+            if k.is_finite() {
+                out.push(s + (t - s) * k);
+            }
+        }
+    }
+    out
+}
+
+/// A convex polygon less a triangle: up to three convex pieces, one outside each of its edges.
+fn subtract_triangle(poly: Vec<Vec2>, tri: &[Vec2; 3]) -> Vec<Vec<Vec2>> {
+    let [a, b, c] = *tri;
+    let ccw = (b - a).cross(c - a) >= 0.0;
+    let mut rest = poly;
+    let mut out = Vec::new();
+    for (p, q) in [(a, b), (b, c), (c, a)] {
+        let (p, q) = if ccw { (p, q) } else { (q, p) };
+        let outside = half_plane(&rest, p, q, false);
+        if outside.len() >= 3 && cadaddy_geom::shoelace(&outside).abs() > 1e-18 {
+            out.push(outside);
+        }
+        rest = half_plane(&rest, p, q, true);
+        if rest.len() < 3 {
+            break;
+        }
+    }
+    out
 }
 
 /// Clip a polygon to a triangle (Sutherland–Hodgman; the triangle is convex).
@@ -592,5 +660,14 @@ mod tests {
         let t = c.clip_triangles(&tri);
         let area: f64 = t.as_chunks::<3>().0.iter().map(|t| ((t[1] - t[0]).cross(t[2] - t[0]) / 2.0).abs()).sum();
         assert!((area - (200.0 - 25.0)).abs() < 1e-6, "{area}");
+    }
+
+    #[test]
+    fn inverted_area_of_a_square_half_inside() {
+        let rect = [Vec2::new(1020.0, 0.0), Vec2::new(1060.0, 0.0), Vec2::new(1060.0, 60.0), Vec2::new(1020.0, 60.0)];
+        let sq = [Vec2::new(1010.0, 10.0), Vec2::new(1030.0, 10.0), Vec2::new(1030.0, 30.0), Vec2::new(1010.0, 30.0)];
+        let inside = clipped_area(&sq, &[PolyClip::new(&rect).unwrap()]);
+        let outside = clipped_area(&sq, &[PolyClip::new(&rect).unwrap().inverted()]);
+        assert!((inside - 200.0).abs() < 1e-6 && (outside - 200.0).abs() < 1e-6, "{inside} {outside}");
     }
 }

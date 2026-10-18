@@ -87,3 +87,13 @@ fn extents_follow_the_clip() {
     let b = entity_bounds(&d, d.model.iter().next().unwrap(), 0);
     assert!((b.max.x - 250.0).abs() < 1e-9, "{b:?}");
 }
+
+/// An inverted clip stays inverted through DXF and DWG.
+#[test]
+fn inverted_clip_survives_dxf_and_dwg() {
+    let inv = XClip { inverted: true, ..square() };
+    let d = drawing(Some(inv.clone()));
+    assert_eq!(clip_of(&read_dxf(write_dxf(&d).as_bytes()).unwrap()), Some(inv.clone()), "dxf");
+    let dwg = write(&d, "x.dwg").unwrap();
+    assert_eq!(clip_of(&read(&dwg, "x.dwg").unwrap()), Some(inv), "dwg");
+}

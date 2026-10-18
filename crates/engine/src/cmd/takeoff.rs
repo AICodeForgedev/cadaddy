@@ -10,6 +10,8 @@ use cadaddy_doc::{Entity, EntityKind, MAX_BLOCK_DEPTH, Space};
 use cadaddy_geom::Mat3;
 use serde_json::{Value, json};
 
+use cadaddy_render::clip::PolyClip;
+
 use super::blocks::extract::{Cell, csv, insert_table, write_file};
 use super::curves::Chain;
 use super::qselect::wildcard;
@@ -27,7 +29,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Tools", "Inquiry", "Quantity Takeoff"])
             .alias(&["qto"])
             .params(
-                "{mode?: \"length\" (default) | \"area\", handles? | layers?: \"E-*,P-*\" (wildcards; default: every object in the current space), waste?: percent added (default 0; the waste column is left out at 0), nested?: bool (default true: shapes inside block references, arrays and xrefs count, on the layer they are drawn on), file?: path (.csv; .txt tab-separated), at?: [x,y] (insert a table), title?} → {mode, unit, rows: [{layer, objects, drawing, real, withWaste}], total: {objects, drawing, real, withWaste}, columns, file?, table?}",
+                "{mode?: \"length\" (default) | \"area\", handles? | layers?: \"E-*,P-*\" (wildcards; default: every object in the current space), waste?: percent added (default 0; the waste column is left out at 0), nested?: bool (default true: shapes inside block references, arrays and xrefs count, on the layer they are drawn on), clipped?: bool (default true: an XCLIP boundary limits what counts, as drawn; false counts whole blocks), file?: path (.csv; .txt tab-separated), at?: [x,y] (insert a table), title?} → {mode, unit, rows: [{layer, objects, drawing, real, withWaste}], total: {objects, drawing, real, withWaste}, columns, file?, table?}",
             )
             .noundo()
             .interactive(|_| Ok(Box::new(TakeoffM::default()))),
@@ -95,6 +97,8 @@ struct Tally<'a> {
     mode: Mode,
     nested: bool,
     layers: &'a str,
+    /// XCLIP boundaries the shapes being added sit inside (world coordinates), when honoured.
+    clips: Option<Vec<PolyClip>>,
     out: Vec<(String, f64)>,
 }
 
@@ -113,38 +117,97 @@ impl Tally<'_> {
             }
             let Some(b) = self.d.block(&ins.block) else { return };
             let base = b.base.xy();
-            for r in 0..ins.rows.clamp(1, 10_000) {
-                for c in 0..ins.cols.clamp(1, 10_000) {
-                    let off = cadaddy_geom::Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
-                    let local = Mat3::translate(off).then_before(ins.transform(base));
-                    let mm = m.map_or(local, |o| o.then_before(local));
-                    for be in b.entities.iter() {
-                        // Layer 0 inside a block takes the reference's layer (as drawn).
-                        let l = if be.common.layer == "0" { layer } else { be.common.layer.as_str() };
-                        self.add(&be.kind, l, Some(mm), depth + 1);
-                    }
-                    if self.out.len() >= MAX_SHAPES {
-                        return;
+            // A clipped reference counts what it shows: its boundary placed as drawn.
+            let region = match (&self.clips, ins.clip.as_ref().filter(|c| c.active())) {
+                (Some(_), Some(c)) => {
+                    let place = m.map_or(ins.transform(base), |o| o.then_before(ins.transform(base)));
+                    match PolyClip::new(&c.boundary.iter().map(|p| place.apply(*p)).collect::<Vec<_>>()) {
+                        Some(r) => Some(if c.inverted { r.inverted() } else { r }),
+                        None => return,
                     }
                 }
+                _ => None,
+            };
+            let pushed = region.is_some();
+            if let (Some(r), Some(cs)) = (region, self.clips.as_mut()) {
+                cs.push(r);
+            }
+            self.add_copies(ins, b, layer, m, depth);
+            if pushed && let Some(cs) = self.clips.as_mut() {
+                cs.pop();
             }
             return;
         }
         if !self.on(layer) {
             return;
         }
-        let v = match m {
-            None => measure(k, self.mode),
+        let t = match m {
+            None => std::borrow::Cow::Borrowed(k),
             Some(m) => {
                 let mut t = k.clone();
                 t.transform(&m);
-                measure(&t, self.mode)
+                std::borrow::Cow::Owned(t)
             }
+        };
+        let v = match self.clips.as_deref() {
+            Some(cs) if !cs.is_empty() => clipped_measure(&t, self.mode, cs),
+            _ => measure(&t, self.mode),
         };
         if let Some(v) = v {
             self.out.push((layer.to_string(), v));
         }
     }
+    /// The shapes inside every copy of a reference (MINSERT rows × columns).
+    fn add_copies(&mut self, ins: &cadaddy_doc::Insert, b: &cadaddy_doc::Block, layer: &str, m: Option<Mat3>, depth: usize) {
+        let base = b.base.xy();
+        for r in 0..ins.rows.clamp(1, 10_000) {
+            for c in 0..ins.cols.clamp(1, 10_000) {
+                let off = cadaddy_geom::Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
+                let local = Mat3::translate(off).then_before(ins.transform(base));
+                let mm = m.map_or(local, |o| o.then_before(local));
+                for be in b.entities.iter() {
+                    // Layer 0 inside a block takes the reference's layer (as drawn).
+                    let l = if be.common.layer == "0" { layer } else { be.common.layer.as_str() };
+                    self.add(&be.kind, l, Some(mm), depth + 1);
+                }
+                if self.out.len() >= MAX_SHAPES {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// [`measure`] of the part of a shape that every clip region keeps: lengths along the kept
+/// pieces, areas of the kept part of closed outlines. A hatch or region (no single outline here)
+/// counts whole when the middle of its extents is kept, else not at all.
+fn clipped_measure(k: &EntityKind, mode: Mode, clips: &[PolyClip]) -> Option<f64> {
+    let whole = measure(k, mode)?;
+    match mode {
+        Mode::Length => {
+            let chain = Chain::of(k)?;
+            let mut pts: Vec<cadaddy_geom::Vec2> = Vec::new();
+            for seg in &chain.segs {
+                let b = seg.bounds();
+                let tol = (b.width().max(b.height()) * 1e-3).max(1e-9);
+                let start = pts.len();
+                seg.tessellate(tol, &mut pts);
+                // Each segment starts where the last ended.
+                if start > 0 && pts.get(start).zip(pts.get(start - 1)).is_some_and(|(a, b)| a.near(*b, 1e-12)) {
+                    pts.remove(start);
+                }
+            }
+            Some(cadaddy_render::clip::clipped_length(&pts, clips))
+        }
+        Mode::Area => match cadaddy_render::clip::boundary_polygon(k) {
+            Some(poly) => Some(cadaddy_render::clip::clipped_area(&poly, clips)),
+            None => {
+                let b = cadaddy_doc::entity_bounds(&cadaddy_doc::Drawing::default(), &Entity::new(cadaddy_doc::Handle(0), k.clone()), 1);
+                clips.iter().all(|c| c.contains(b.center())).then_some(whole)
+            }
+        },
+    }
+    .filter(|v| v.is_finite() && *v > 0.0)
 }
 
 /// The shapes to measure: those of `handles`, else of the current space, on `layers` (all), with
@@ -159,7 +222,8 @@ fn shapes(s: &Session, p: &Value, mode: Mode) -> Result<Vec<(String, f64)>> {
         d.space(&space).or_else(|| d.space(&Space::Model)).ok_or_else(|| bad("takeoff", "no such space"))?.iter().cloned().collect()
     };
     let layers = str_param(p, "layers").filter(|l| !l.trim().is_empty() && !given).unwrap_or("*");
-    let mut t = Tally { d, mode, nested: super::bool_or(p, "nested", true), layers, out: Vec::new() };
+    let clips = super::bool_or(p, "clipped", true).then(Vec::new);
+    let mut t = Tally { d, mode, nested: super::bool_or(p, "nested", true), layers, clips, out: Vec::new() };
     for e in &ents {
         t.add(&e.kind, &e.common.layer, None, 0);
     }
@@ -443,6 +507,32 @@ mod tests {
 
     /// Shapes inside block references count, scaled as placed and on the layer drawn (battle
     /// test Q1: typical-room blocks and arrays hold conduit).
+    #[test]
+    fn clipped_references_count_what_they_show() {
+        let mut s = Session::new();
+        s.execute("pline", &json!({"points": [[0, 50], [100, 50]]})).unwrap();
+        s.execute("pline", &json!({"points": [[0, 90], [100, 90]]})).unwrap();
+        s.execute("pline", &json!({"points": [[10, 10], [30, 10], [30, 30], [10, 30]], "closed": true})).unwrap();
+        let hs: Vec<String> = s.doc().unwrap().model.iter().map(|e| e.handle.hex()).collect();
+        s.execute("block", &json!({"name": "FLOOR", "base": [0, 0], "handles": hs, "keep": "delete"})).unwrap();
+        s.execute("insert", &json!({"name": "FLOOR", "at": [1000, 0]})).unwrap();
+        let ins = s.doc().unwrap().model.iter().last().unwrap().handle.hex();
+        let len = |s: &mut Session, p: serde_json::Value| s.execute("takeoff", &p).unwrap()["total"].clone();
+        assert_eq!(len(&mut s, json!({}))["drawing"].as_f64(), Some(280.0));
+        // Clipped to x 1020..1060, y 0..60: 40 of the line at y=50, none at y=90, and of the
+        // square (perimeter 80) the 10..20 + 20..30 parts inside: 10 + 20 + 10 = 40.
+        s.execute("xclip", &json!({"handles": [ins.clone()], "boundary": [[1020, 0], [1060, 60]]})).unwrap();
+        let t = len(&mut s, json!({}));
+        assert_eq!((t["objects"].as_u64(), t["drawing"].as_f64()), (Some(2), Some(80.0)), "{t}");
+        assert_eq!(len(&mut s, json!({"clipped": false}))["drawing"].as_f64(), Some(280.0));
+        // Area: the 20 × 20 square less what lies left of x=20: 10 × 20.
+        assert_eq!(len(&mut s, json!({"mode": "area"}))["drawing"].as_f64(), Some(200.0));
+        // Inverted: the rest.
+        s.execute("xclip", &json!({"handles": [ins.clone()], "boundary": [[1020, 0], [1060, 60]], "invert": true})).unwrap();
+        assert_eq!(len(&mut s, json!({}))["drawing"].as_f64(), Some(200.0));
+        assert_eq!(len(&mut s, json!({"mode": "area"}))["drawing"].as_f64(), Some(200.0));
+    }
+
     #[test]
     fn block_contents_count_with_their_scale() {
         let mut s = Session::new();
