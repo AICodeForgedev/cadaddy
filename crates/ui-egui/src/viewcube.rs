@@ -311,17 +311,40 @@ pub fn ucs_icon(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     ucs_menu(app, egui::Popup::menu(&resp).open_memory(open).at_pointer_fixed());
 }
 
-/// The coordinate-system menu: the WCS (the only coordinate system so far) and the icon switch.
+/// The coordinate-system menu: World, the named UCSs (the current one checked; an unnamed
+/// current UCS listed as Unnamed), New UCS from the command line, and the icon switch.
 fn ucs_menu(app: &mut CadApp, popup: egui::Popup<'_>) {
     let mut hide = false;
+    let mut run: Option<(&'static str, serde_json::Value)> = None;
+    let cur = app.session.ucs();
+    let names: Vec<String> = app.session.doc().map(|d| d.ucss.iter().map(|u| u.name.clone()).take(50).collect()).unwrap_or_default();
     popup.show(|ui| {
-        ui.radio(true, "World (WCS)").on_hover_text("CADaddy draws in the World Coordinate System; user coordinate systems aren't available yet.");
+        if ui.radio(cur.is_world() && cur.name.is_empty(), crate::tl!("World (WCS)")).clicked() {
+            run = Some(("ucs", json!({"option": "world"})));
+            ui.close();
+        }
+        for n in &names {
+            if ui.radio(cur.name.eq_ignore_ascii_case(n), n.as_str()).clicked() {
+                run = Some(("ucs", json!({"option": "restore", "name": n})));
+                ui.close();
+            }
+        }
+        if !cur.is_world() && cur.name.is_empty() {
+            let _ = ui.radio(true, crate::tl!("Unnamed"));
+        }
         ui.separator();
-        if ui.button("Hide UCS Icon").clicked() {
+        if ui.button(crate::tl!("New UCS")).clicked() {
+            app.start("ucs");
+            ui.close();
+        }
+        if ui.button(crate::tl!("Hide UCS Icon")).clicked() {
             hide = true;
             ui.close();
         }
     });
+    if let Some((id, p)) = run {
+        let _ = app.run(id, p);
+    }
     if hide {
         let _ = app.run("ui.toggle.ucsicon", json!({"on": false}));
     }

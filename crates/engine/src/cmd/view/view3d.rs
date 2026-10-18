@@ -36,9 +36,16 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             .transparent(),
     ];
     v.push(
-        CommandSpec::new("plan", "Plan View", |s, _| preset_view(s, "top"))
+        CommandSpec::new("plan", "Plan View", run_plan)
+            .menu(&["View", "3D Views", "Plan View", "Current UCS"])
+            .params("{option?: current|world|ucs (default current), name? (ucs: a named UCS)} — the plan view of that coordinate system (its X axis across the screen), zoomed to the extents")
+            .noundo()
+            .transparent()
+            .interactive(|_| Ok(Box::new(PlanM))),
+    );
+    v.push(
+        CommandSpec::new("plan.world", "Plan View (World)", |s, _| run_plan(s, &json!({ "option": "world" })))
             .menu(&["View", "3D Views", "Plan View", "World UCS"])
-            .params("{} — the plan view of the world coordinate system, zoomed to the extents")
             .noundo()
             .transparent(),
     );
@@ -166,6 +173,58 @@ pub fn projected_extents(d: &Drawing, p: &Projection) -> Bounds2 {
         }
     }
     b
+}
+
+/// PLAN: the plan view of the current UCS, the world or a named UCS.
+fn run_plan(s: &mut Session, p: &Value) -> Result<Value> {
+    let f = match str_param(p, "option").unwrap_or("current").trim().to_ascii_lowercase().as_str() {
+        "current" | "c" | "current ucs" => crate::ucs::Frame::current(s.doc()?),
+        "world" | "w" => crate::ucs::Frame::WORLD,
+        "ucs" | "u" => {
+            let name = str_param(p, "name").map(str::trim).ok_or_else(|| bad("plan", "`name` (a named UCS) is required"))?;
+            let rec = s
+                .doc()?
+                .ucss
+                .iter()
+                .find(|u| u.name.eq_ignore_ascii_case(name))
+                .cloned()
+                .ok_or_else(|| EngineError::Other(format!("Could not find UCS \"{name}\".")))?;
+            crate::ucs::Frame::from_record(&rec).ok_or_else(|| EngineError::Other(format!("UCS \"{name}\" is not in the plan.")))?
+        }
+        _ => return Err(bad("plan", "option must be current, world or ucs")),
+    };
+    super::super::ucs::plan_of(s, &f)?;
+    Ok(json!({ "twist": s.state()?.twist().to_degrees() }))
+}
+
+/// PLAN typed: "Enter an option [Current ucs/Ucs/World] <Current>:".
+struct PlanM;
+
+impl crate::Interactive for PlanM {
+    fn name(&self) -> &'static str {
+        "PLAN"
+    }
+    fn prompt(&self, _s: &Session) -> crate::Prompt {
+        crate::Prompt::new("Enter an option", crate::Accept::TEXT).kw(&["Current ucs", "Ucs", "World"]).default("Current ucs")
+    }
+    fn input(&mut self, s: &mut Session, i: crate::Input) -> Result<crate::Step> {
+        let t = match &i {
+            crate::Input::Text(t) | crate::Input::Keyword(t) => t.trim().to_ascii_lowercase(),
+            crate::Input::Enter => "current".into(),
+            _ => return Err(EngineError::Other("Invalid option keyword.".into())),
+        };
+        let p = match t.as_str() {
+            "c" | "current" | "current ucs" => json!({ "option": "current" }),
+            "w" | "world" => json!({ "option": "world" }),
+            // A named UCS: its name, typed as the option.
+            "u" | "ucs" => {
+                return Err(EngineError::Other("Type the name of the UCS (for example PLAN then a UCS name), or use Current ucs / World.".into()));
+            }
+            name => json!({ "option": "ucs", "name": name }),
+        };
+        run_plan(s, &p)?;
+        Ok(crate::Step::Done)
+    }
 }
 
 #[cfg(test)]

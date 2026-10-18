@@ -1965,8 +1965,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     draw_tiles(app, ui, &tiles);
     // UCS icon, ViewCube and viewport label.
-    if app.ui.show_ucs_icon {
-        draw_ucs_icon(&painter, rect, xf.proj);
+    // UCSICON 1: shown; 2: at the UCS origin when that is on screen (model space).
+    let ucsicon = app.session.doc().map_or(3, |d| d.header.i64("UCSICON", 3));
+    if app.ui.show_ucs_icon && ucsicon & 1 != 0 {
+        let ucs = if sheet.is_none() { app.session.ucs() } else { cadaddy_engine::ucs::Frame::WORLD };
+        let at = (ucsicon & 2 != 0 && sheet.is_none()).then(|| xf.w2s(ucs.origin)).filter(|o| rect.shrink(48.0).contains(*o));
+        draw_ucs_icon(&painter, rect, xf.proj, &ucs, at);
         crate::viewcube::ucs_icon(app, ui, rect);
     }
     if app.ui.show_viewcube && sheet.is_none() {
@@ -2384,26 +2388,32 @@ fn draw_lock(p: &egui::Painter, c: Pos2, color: Color32) {
     ));
 }
 
-/// The UCS icon: the WCS axes as the view shows them (X and Y in the plan view; X, Y and Z in a
-/// 3D view, an axis pointing at the viewer drawn short).
-fn draw_ucs_icon(p: &egui::Painter, rect: Rect, proj: Option<cadaddy_geom::view3::Projection>) {
+/// The UCS icon: the current UCS's axes as the view shows them (X and Y in the plan view, with
+/// the square at the corner for the world; X, Y and Z in a 3D view, an axis pointing at the
+/// viewer drawn short), at the lower-left corner or at `at` (the UCS origin on screen).
+fn draw_ucs_icon(p: &egui::Painter, rect: Rect, proj: Option<cadaddy_geom::view3::Projection>, ucs: &cadaddy_engine::ucs::Frame, at: Option<Pos2>) {
     let t = Tokens::get();
-    let o = pos2(rect.left() + 36.0, rect.bottom() - 34.0);
+    let o = at.unwrap_or(pos2(rect.left() + 36.0, rect.bottom() - 34.0));
     let st = Stroke::new(1.0, t.canvas_ink);
     let f = egui::FontId::proportional(13.0);
+    let (ux, uy) = ucs.axes();
     let Some(pr) = proj else {
-        p.line_segment([o, o + vec2(60.0, 0.0)], st);
-        p.line_segment([o, o + vec2(0.0, -60.0)], st);
-        p.rect_stroke(Rect::from_center_size(o, vec2(9.0, 9.0)), 0.0, st, egui::StrokeKind::Middle);
-        p.text(o + vec2(70.0, 0.0), egui::Align2::LEFT_CENTER, crate::tl!("X"), f.clone(), t.canvas_ink);
-        p.text(o + vec2(0.0, -70.0), egui::Align2::CENTER_BOTTOM, crate::tl!("Y"), f, t.canvas_ink);
+        // Screen y points down.
+        let (x, y) = (vec2(ux.x as f32, -ux.y as f32), vec2(uy.x as f32, -uy.y as f32));
+        p.line_segment([o, o + x * 60.0], st);
+        p.line_segment([o, o + y * 60.0], st);
+        if ucs.is_world() {
+            p.rect_stroke(Rect::from_center_size(o, vec2(9.0, 9.0)), 0.0, st, egui::StrokeKind::Middle);
+        }
+        p.text(o + x * 72.0, egui::Align2::CENTER_CENTER, crate::tl!("X"), f.clone(), t.canvas_ink);
+        p.text(o + y * 72.0, egui::Align2::CENTER_CENTER, crate::tl!("Y"), f, t.canvas_ink);
         return;
     };
     // Up the icon a little so a downward axis stays on screen.
-    let o = o + vec2(18.0, -18.0);
+    let o = if at.is_some() { o } else { o + vec2(18.0, -18.0) };
     for (axis, name, col) in [
-        (cadaddy_geom::Vec3::new(1.0, 0.0, 0.0), "X", Color32::from_rgb(0xe0, 0x5a, 0x4f)),
-        (cadaddy_geom::Vec3::new(0.0, 1.0, 0.0), "Y", Color32::from_rgb(0x6c, 0xc0, 0x5a)),
+        (ux.to3(0.0), "X", Color32::from_rgb(0xe0, 0x5a, 0x4f)),
+        (uy.to3(0.0), "Y", Color32::from_rgb(0x6c, 0xc0, 0x5a)),
         (cadaddy_geom::Vec3::Z, "Z", Color32::from_rgb(0x4d, 0x9c, 0xf5)),
     ] {
         let d = vec2(axis.dot(pr.right) as f32, -(axis.dot(pr.up) as f32));
@@ -2485,7 +2495,22 @@ fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
     // WCS pill.
     let pill = Rect::from_center_size(c + vec2(0.0, ring + 26.0), vec2(56.0, 16.0));
     p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
-    p.text(pill.center(), egui::Align2::CENTER_CENTER, crate::tl!("WCS ⌄"), crate::theme::small(), Tokens::DARK.canvas_ink);
+    // The current UCS: WCS, its name, or Unnamed.
+    let ucs = app.session.ucs();
+    let label = if ucs.is_world() && ucs.name.is_empty() {
+        format!("{} ⌄", crate::tl!("WCS"))
+    } else if ucs.name.is_empty() {
+        format!("{} ⌄", crate::tl!("Unnamed"))
+    } else {
+        format!("{} ⌄", ucs.name)
+    };
+    let pill = if label.chars().count() > 6 {
+        Rect::from_center_size(pill.center(), vec2(56f32.max(label.chars().count() as f32 * 7.0 + 8.0), 16.0))
+    } else {
+        pill
+    };
+    p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
+    p.text(pill.center(), egui::Align2::CENTER_CENTER, label, crate::theme::small(), Tokens::DARK.canvas_ink);
 }
 
 /// A click on grip `g` (idle): Shift+click makes it hot or cold again; a plain click starts

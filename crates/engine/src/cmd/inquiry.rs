@@ -105,7 +105,11 @@ fn run_dist(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_id(s: &mut Session, p: &Value) -> Result<Value> {
     let a = point_req("id", p, "at")?;
     s.last_point = a;
-    Ok(json!({ "x": a.x, "y": a.y, "message": format!("X = {}     Y = {}     Z = {}", fmt_d(s, a.x), fmt_d(s, a.y), fmt_d(s, 0.0)) }))
+    // Reported in the current UCS, as AutoCAD does; `x`, `y` stay the world point.
+    let u = s.ucs().to_ucs(a);
+    Ok(
+        json!({ "x": a.x, "y": a.y, "ucs": [u.x, u.y], "message": format!("X = {}     Y = {}     Z = {}", fmt_d(s, u.x), fmt_d(s, u.y), fmt_d(s, 0.0)) }),
+    )
 }
 
 fn list_text(s: &Session, h: Handle) -> String {
@@ -632,6 +636,7 @@ impl Interactive for IdM {
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Input::Point(p) = i {
+            let p = s.ucs().to_ucs(p);
             let m = format!("X = {}     Y = {}     Z = {}", fmt_d(s, p.x), fmt_d(s, p.y), fmt_d(s, 0.0));
             s.echo(m);
         }
