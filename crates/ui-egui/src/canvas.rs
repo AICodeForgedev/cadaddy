@@ -76,6 +76,8 @@ fn same_content(a: &ListKey, b: &ListKey) -> bool {
 
 #[derive(Default)]
 pub struct CanvasState {
+    /// The Model tab in a 3D visual style (VSCURRENT).
+    pub shade: crate::shaded::State,
     pub list: Option<DisplayList>,
     key: ListKey,
     /// The area `list` was built for (hatch patterns exist only inside it); a view leaving it
@@ -1783,7 +1785,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         draw_vp_content(&mut app.canvas.vp, gpu, &clipped, &f, &xf_paper, bg, app.session.settings.lwdisplay);
         masked = gpu && f.outline.is_some();
     }
-    if app.canvas.gpu.is_some() {
+    if sheet.is_none() && crate::shaded::paint(app, ui, &painter, &xf, bg) {
+        // The Model tab in a 3D visual style: the shaded view stands for the display list.
+    } else if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);
     } else if let Some(list) = &app.canvas.list {
         draw_list(&painter, &xf_paper, list, bg, app.session.settings.lwdisplay);
@@ -2464,9 +2468,29 @@ fn viewport_controls(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect, model: boo
     };
     piece("+  |  ");
     let view_r = piece(crate::i18n::t(view));
-    piece(&format!("  |  {}", crate::tl!("2D Wireframe")));
+    piece("  |  ");
+    // The visual style (layouts show their sheet as 2D Wireframe).
+    let style =
+        if model { app.session.state().map(|st| st.visual_style).unwrap_or_default() } else { cadaddy_render::shade::VisualStyle::Wireframe2d };
+    let style_r = piece(crate::i18n::t(style.name()));
     if !model {
         return;
+    }
+    let sresp = ui.interact(style_r.expand(3.0), ui.id().with("vp_style_menu"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    if sresp.hovered() {
+        p.rect_stroke(style_r.expand(3.0), 2.0, Stroke::new(1.0, t.canvas_ink), egui::StrokeKind::Outside);
+    }
+    let mut pick_style = None;
+    egui::Popup::menu(&sresp).show(|ui| {
+        for vs in cadaddy_render::shade::VisualStyle::ALL {
+            if ui.radio(style == vs, crate::i18n::t(vs.name())).clicked() {
+                pick_style = Some(vs);
+                ui.close();
+            }
+        }
+    });
+    if let Some(vs) = pick_style {
+        let _ = app.run("vscurrent", serde_json::json!({ "style": vs.name() }));
     }
     let resp = ui.interact(view_r.expand(3.0), ui.id().with("vp_view_menu"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     if resp.hovered() {

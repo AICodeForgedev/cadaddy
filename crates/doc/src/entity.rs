@@ -1015,6 +1015,114 @@ pub struct Face3d {
     #[serde(default)]
     pub hidden_edges: u8,
 }
+/// A polygon mesh: shared vertices and faces of three or more of them. MESH (a subdivision mesh,
+/// kept at its base level), the old POLYLINE polyface mesh (flag 64) and M×N polygon mesh (flag
+/// 16) are all this; `kind` says which, so a file gets back what it had.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Mesh {
+    pub vertices: Vec<Vec3>,
+    pub faces: Vec<MeshFace>,
+    #[serde(default)]
+    pub kind: MeshKind,
+}
+
+/// One face of a [`Mesh`]: its vertices by index, in order round the face.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MeshFace {
+    pub v: Vec<u32>,
+    /// Bit `i`: the edge from vertex `i` to the next is invisible (a polyface's negative index).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub hidden: u64,
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
+/// Which DXF object a [`Mesh`] is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum MeshKind {
+    /// MESH (AcDbSubDMesh) with its smoothing level (drawn at the base level).
+    #[default]
+    Subd,
+    /// POLYLINE polyface mesh (flag 64).
+    Polyface,
+    /// POLYLINE M×N polygon mesh (flag 16): `m` rows of `n` vertices, closed across rows or
+    /// columns.
+    Polygon { m: u32, n: u32, closed_m: bool, closed_n: bool },
+}
+
+/// Most vertices, faces and vertices per face a mesh read from a file may have.
+pub const MAX_MESH_VERTICES: usize = 4_000_000;
+pub const MAX_MESH_FACES: usize = 4_000_000;
+pub const MAX_FACE_VERTICES: usize = 1024;
+
+impl Mesh {
+    /// The faces as their corner points (faces naming a missing vertex are left out).
+    pub fn face_points(&self) -> impl Iterator<Item = Vec<Vec3>> + '_ {
+        self.faces.iter().filter_map(|f| f.v.iter().map(|i| self.vertices.get(*i as usize).copied()).collect::<Option<Vec<Vec3>>>())
+    }
+
+    /// The visible edges, each once: vertex index pairs (lower first).
+    pub fn edges(&self) -> Vec<(u32, u32)> {
+        let mut out: Vec<(u32, u32)> = Vec::new();
+        for f in &self.faces {
+            let n = f.v.len();
+            for i in 0..n {
+                if i < 64 && f.hidden & (1 << i) != 0 {
+                    continue;
+                }
+                let (Some(&a), Some(&b)) = (f.v.get(i), f.v.get((i + 1) % n)) else { continue };
+                if a != b {
+                    out.push((a.min(b), a.max(b)));
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// The faces as triangles (fans from each face's first vertex), as corner points.
+    pub fn triangles(&self) -> Vec<[Vec3; 3]> {
+        let mut out = Vec::new();
+        for pts in self.face_points() {
+            let Some(first) = pts.first().copied() else { continue };
+            for w in pts.get(1..).unwrap_or(&[]).windows(2) {
+                if let [b, c] = w {
+                    out.push([first, *b, *c]);
+                }
+            }
+        }
+        out
+    }
+
+    /// The faces as 3D faces (triangles and quads directly; larger faces fanned), as EXPLODE
+    /// makes them.
+    pub fn to_faces(&self) -> Vec<Face3d> {
+        let mut out = Vec::new();
+        for (f, pts) in self.faces.iter().zip(self.face_points()) {
+            match pts.as_slice() {
+                [a, b, c] => {
+                    out.push(Face3d { corners: [*a, *b, *c, *c], hidden_edges: (f.hidden & 7) as u8 | if f.hidden & 4 != 0 { 8 } else { 0 } })
+                }
+                [a, b, c, d] => out.push(Face3d { corners: [*a, *b, *c, *d], hidden_edges: (f.hidden & 15) as u8 }),
+                _ => {
+                    let Some(first) = pts.first().copied() else { continue };
+                    for w in pts.get(1..).unwrap_or(&[]).windows(2) {
+                        if let [b, c] = w {
+                            out.push(Face3d { corners: [first, *b, *c, *c], hidden_edges: 0 });
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RayLine {
     pub base: Vec3,
@@ -1305,6 +1413,7 @@ pub enum EntityKind {
     Solid(Solid),
     Trace(Solid),
     Face3d(Face3d),
+    Mesh(Mesh),
     Region(Region),
     Viewport(Viewport),
     Image(Image),
@@ -1360,6 +1469,11 @@ impl EntityKind {
             EntityKind::Solid(_) => "2D Solid",
             EntityKind::Trace(_) => "Trace",
             EntityKind::Face3d(_) => "3D Face",
+            EntityKind::Mesh(m) => match m.kind {
+                MeshKind::Subd => "Mesh",
+                MeshKind::Polyface => "Polyface Mesh",
+                MeshKind::Polygon { .. } => "Polygon Mesh",
+            },
             EntityKind::Region(_) => "Region",
             EntityKind::Viewport(_) => "Viewport",
             EntityKind::Image(_) => "Raster Image",
@@ -1396,6 +1510,10 @@ impl EntityKind {
             EntityKind::Solid(_) => "SOLID",
             EntityKind::Trace(_) => "TRACE",
             EntityKind::Face3d(_) => "3DFACE",
+            EntityKind::Mesh(m) => match m.kind {
+                MeshKind::Subd => "MESH",
+                _ => "POLYLINE",
+            },
             EntityKind::Region(_) => "REGION",
             EntityKind::Viewport(_) => "VIEWPORT",
             EntityKind::Image(_) => "IMAGE",
@@ -1487,6 +1605,15 @@ impl EntityKind {
                 let pts = [c[0].xy(), c[1].xy(), c[2].xy(), c[3].xy(), c[0].xy()];
                 pts.windows(2).filter_map(|w| Some(Prim::Seg(Segment::Line(GLine::new(*w.first()?, *w.get(1)?))))).collect()
             }
+            // Its visible edges, seen from above.
+            EntityKind::Mesh(m) => m
+                .edges()
+                .into_iter()
+                .filter_map(|(a, b)| {
+                    let (p, q) = (m.vertices.get(a as usize)?.xy(), m.vertices.get(b as usize)?.xy());
+                    Some(Prim::Seg(Segment::Line(GLine::new(p, q))))
+                })
+                .collect(),
             EntityKind::Region(r) => r.segments().into_iter().map(Prim::Seg).collect(),
             EntityKind::Hatch(h) => {
                 h.loops.iter().flat_map(|l| Polyline { vertices: l.vertices.clone(), closed: true }.segments()).map(Prim::Seg).collect()
@@ -1710,6 +1837,7 @@ impl EntityKind {
             }
             EntityKind::Solid(so) | EntityKind::Trace(so) => so.corners.iter_mut().for_each(t3),
             EntityKind::Face3d(f) => f.corners.iter_mut().for_each(t3),
+            EntityKind::Mesh(me) => me.vertices.iter_mut().for_each(t3),
             EntityKind::Region(r) => {
                 for l in &mut r.loops {
                     l.transform(m, mirror);
@@ -1811,6 +1939,8 @@ impl EntityKind {
             }
             EntityKind::Solid(s) | EntityKind::Trace(s) => s.corners.iter().map(|c| c.xy()).collect(),
             EntityKind::Face3d(f) => f.corners.iter().map(|c| c.xy()).collect(),
+            // Its vertices (a large mesh: the first thousand).
+            EntityKind::Mesh(m) => m.vertices.iter().take(1000).map(|c| c.xy()).collect(),
             EntityKind::Region(r) => vec![r.bounds().center()],
             EntityKind::Viewport(v) => {
                 let c = v.center.xy();

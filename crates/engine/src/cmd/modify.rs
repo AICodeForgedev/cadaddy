@@ -1373,6 +1373,10 @@ pub(crate) fn explode_kind(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<Vec<E
                 })
                 .collect(),
         ),
+        // A mesh explodes into its faces as 3D faces (larger faces fanned into triangles).
+        EntityKind::Mesh(m) => {
+            Some(m.to_faces().into_iter().map(|f| Entity { handle: Handle(0), common: e.common.clone(), kind: EntityKind::Face3d(f) }).collect())
+        }
         EntityKind::MLine(m) => Some(super::draw2::mline::explode(e, m)),
         EntityKind::MText(m) => Some(
             cadaddy_fonts::plain_mtext(&m.contents)

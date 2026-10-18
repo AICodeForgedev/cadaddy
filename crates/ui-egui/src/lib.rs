@@ -23,6 +23,7 @@ pub mod dialogs;
 pub mod docking;
 pub mod hatchdlg;
 mod mtext_editor;
+mod shaded;
 pub mod spacemouse;
 // Report a Bug, Request a Feature, Donate.
 pub mod support;

@@ -918,6 +918,41 @@ fn uri_string(url: &str) -> Option<String> {
     Some(out)
 }
 
+/// A one-page PDF of `media` points showing a raster in `place` (x, y, width, height in
+/// points): a shaded plot.
+pub(crate) fn raster_page(r: &cadaddy_render::images::Raster, media: (f64, f64), place: (f64, f64, f64, f64)) -> Vec<u8> {
+    let rgb: Vec<u8> = r.rgba.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+    let mut objs = Objects::default();
+    let catalog = objs.add("<< /Type /Catalog /Pages 2 0 R >>");
+    let _pages = objs.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    let (mw, mh) = media;
+    let (x, y, w, h) = place;
+    let _page = objs
+        .add(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {mw:.3} {mh:.3}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>"));
+    let content = format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q");
+    let _content = objs.add(stream(content.as_bytes(), true, ""));
+    let _image = objs.add(stream(
+        &rgb,
+        true,
+        &format!(" /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8", r.width, r.height),
+    ));
+    let mut out: Vec<u8> = b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec();
+    let mut offsets = Vec::with_capacity(objs.bodies.len());
+    for (i, body) in objs.bodies.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
+    for o in &offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root {catalog} 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1).as_bytes());
+    out
+}
+
 /// A stream object body, Flate-compressed when asked.
 fn stream(data: &[u8], compress: bool, extra: &str) -> Vec<u8> {
     let (data, filter) = if compress { (miniz_oxide::deflate::compress_to_vec_zlib(data, 6), " /Filter /FlateDecode") } else { (data.to_vec(), "") };

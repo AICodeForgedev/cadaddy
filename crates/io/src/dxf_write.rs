@@ -625,6 +625,134 @@ fn attrib_flags(a: &Attrib) -> i64 {
 /// A TEXT's groups, or an attribute's (`attrib`, in a file of version `target`) with its
 /// subclass: the subclass version (`280 0`, 2010 and later), prompt, tag, flags and alignment,
 /// then Lock position (`280`, 2007 and later; readers take the 280 after the tag as it).
+/// A mesh (DXF Reference, MESH and POLYLINE): a MESH entity from AutoCAD 2010 (its base level,
+/// no creases), else a polyface mesh; an M×N polygon mesh stays one.
+fn mesh(w: &mut W, e: &Entity, m: &Mesh, owner: &str, paper: bool, target: Version) {
+    let count = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
+    match m.kind {
+        MeshKind::Subd if target >= Version::R2010 => {
+            w.s(0, "MESH");
+            common(w, e, owner, paper, "AcDbSubDMesh");
+            w.i(71, 2);
+            w.i(72, 0);
+            w.i(91, 0);
+            w.i(92, count(m.vertices.len()));
+            for v in &m.vertices {
+                w.p(10, *v);
+            }
+            let faces: Vec<&MeshFace> = m.faces.iter().filter(|f| f.v.len() >= 3 && f.v.iter().all(|i| (*i as usize) < m.vertices.len())).collect();
+            w.i(93, count(faces.iter().map(|f| f.v.len() + 1).sum()));
+            for f in faces {
+                w.i(90, count(f.v.len()));
+                for i in &f.v {
+                    w.i(90, i64::from(*i));
+                }
+            }
+            w.i(94, 0);
+            w.i(95, 0);
+            w.i(90, 0);
+        }
+        MeshKind::Polygon { m: rows, n: cols, closed_m, closed_n }
+            if (rows as usize).checked_mul(cols as usize) == Some(m.vertices.len()) && rows >= 2 && cols >= 2 =>
+        {
+            w.s(0, "POLYLINE");
+            common(w, e, owner, paper, "AcDbPolygonMesh");
+            w.i(66, 1);
+            w.p(10, Vec3::ZERO);
+            w.i(70, 16 | i64::from(closed_m) | if closed_n { 32 } else { 0 });
+            w.i(71, i64::from(rows));
+            w.i(72, i64::from(cols));
+            for v in &m.vertices {
+                let vh = w.h();
+                w.s(0, "VERTEX");
+                w.s(5, vh);
+                w.s(330, e.handle.hex());
+                w.s(100, "AcDbEntity");
+                w.s(8, &e.common.layer);
+                w.s(100, "AcDbVertex");
+                w.s(100, "AcDbPolygonMeshVertex");
+                w.p(10, *v);
+                w.i(70, 64);
+            }
+            seqend(w, e);
+        }
+        _ => {
+            // Polyface: faces of three or four vertices; a larger face is fanned, the fan's
+            // inner edges hidden.
+            let mut records: Vec<[i64; 4]> = Vec::new();
+            for f in &m.faces {
+                let n = f.v.len();
+                if n < 3 || f.v.iter().any(|i| (*i as usize) >= m.vertices.len()) {
+                    continue;
+                }
+                let idx = |k: usize, hide: bool| -> i64 {
+                    let i = i64::from(f.v.get(k).copied().unwrap_or(0)) + 1;
+                    if hide { -i } else { i }
+                };
+                let hidden = |k: usize| k < 64 && f.hidden & (1 << k) != 0;
+                if n <= 4 {
+                    let mut r = [0i64; 4];
+                    for (k, slot) in r.iter_mut().enumerate().take(n) {
+                        *slot = idx(k, hidden(k));
+                    }
+                    records.push(r);
+                } else {
+                    for k in 1..n - 1 {
+                        // Triangle 0, k, k+1: its edges 0→k (inner unless k = 1), k→k+1 (the
+                        // face's own), k+1→0 (inner unless k+1 = n-1).
+                        records.push([idx(0, k != 1 || hidden(0)), idx(k, hidden(k)), idx(k + 1, k + 1 != n - 1 || hidden(n - 1)), 0]);
+                    }
+                }
+            }
+            w.s(0, "POLYLINE");
+            common(w, e, owner, paper, "AcDbPolyFaceMesh");
+            w.i(66, 1);
+            w.p(10, Vec3::ZERO);
+            w.i(70, 64);
+            w.i(71, count(m.vertices.len()));
+            w.i(72, count(records.len()));
+            for v in &m.vertices {
+                let vh = w.h();
+                w.s(0, "VERTEX");
+                w.s(5, vh);
+                w.s(330, e.handle.hex());
+                w.s(100, "AcDbEntity");
+                w.s(8, &e.common.layer);
+                w.s(100, "AcDbVertex");
+                w.s(100, "AcDbPolyFaceMeshVertex");
+                w.p(10, *v);
+                w.i(70, 192);
+            }
+            for r in records {
+                let vh = w.h();
+                w.s(0, "VERTEX");
+                w.s(5, vh);
+                w.s(330, e.handle.hex());
+                w.s(100, "AcDbEntity");
+                w.s(8, &e.common.layer);
+                w.s(100, "AcDbFaceRecord");
+                w.p(10, Vec3::ZERO);
+                w.i(70, 128);
+                for (k, i) in r.iter().enumerate() {
+                    if *i != 0 {
+                        w.i(71 + k as i32, *i);
+                    }
+                }
+            }
+            seqend(w, e);
+        }
+    }
+}
+
+fn seqend(w: &mut W, e: &Entity) {
+    let sh = w.h();
+    w.s(0, "SEQEND");
+    w.s(5, sh);
+    w.s(330, e.handle.hex());
+    w.s(100, "AcDbEntity");
+    w.s(8, &e.common.layer);
+}
+
 fn text_tags(w: &mut W, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
     w.p(10, t.insert);
     w.f(40, t.height);
@@ -1169,6 +1297,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.p(13, s.corners[3]);
             thickness(w, e);
         }
+        EntityKind::Mesh(m) => mesh(w, e, m, owner, paper, cx.target),
         EntityKind::Face3d(f) => {
             w.s(0, "3DFACE");
             common(w, e, owner, paper, "AcDbFace");

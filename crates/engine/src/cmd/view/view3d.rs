@@ -8,6 +8,10 @@ use serde_json::{Value, json};
 
 use super::super::*;
 use crate::{Result, Session, View};
+use cadaddy_render::shade::VisualStyle;
+
+/// A command's JSON form.
+type CommandFn = fn(&mut Session, &Value) -> Result<Value>;
 
 pub(super) fn specs() -> Vec<CommandSpec> {
     // View ▸ 3D Views, in AutoCAD's order.
@@ -42,6 +46,28 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             .noundo()
             .transparent(),
     );
+    v.push(
+        CommandSpec::new("vscurrent", "Visual Style", vscurrent_cmd)
+            .alias(&["vs", "shademode"])
+            .params(
+                "{style: 2dwireframe|wireframe|hidden|shaded|shadedwithedges|realistic} → {style} — how model space shows its 3D objects (VSCURRENT)",
+            )
+            .noundo()
+            .transparent()
+            .interactive(|_| Ok(Box::new(VsM))),
+    );
+    // View ▸ Visual Styles, in AutoCAD's order.
+    let styles: [(&'static str, VisualStyle, &'static [&'static str], CommandFn); 6] = [
+        ("vs.2dwireframe", VisualStyle::Wireframe2d, &["View", "Visual Styles", "2D Wireframe"], |s, _| set_style(s, VisualStyle::Wireframe2d)),
+        ("vs.wireframe", VisualStyle::Wireframe, &["View", "Visual Styles", "Wireframe"], |s, _| set_style(s, VisualStyle::Wireframe)),
+        ("vs.hidden", VisualStyle::Hidden, &["View", "Visual Styles", "Hidden"], |s, _| set_style(s, VisualStyle::Hidden)),
+        ("vs.realistic", VisualStyle::Realistic, &["View", "Visual Styles", "Realistic"], |s, _| set_style(s, VisualStyle::Realistic)),
+        ("vs.shaded", VisualStyle::Shaded, &["View", "Visual Styles", "Shaded"], |s, _| set_style(s, VisualStyle::Shaded)),
+        ("vs.shadededges", VisualStyle::ShadedEdges, &["View", "Visual Styles", "Shaded with Edges"], |s, _| set_style(s, VisualStyle::ShadedEdges)),
+    ];
+    for (id, vs, menu, run) in styles {
+        v.push(CommandSpec::new(id, vs.name(), run).menu(menu).noundo().transparent());
+    }
     v.push(
         CommandSpec::new("view.twist", "View Twist", view_twist_cmd)
             .params("{angle: degrees (counterclockwise) | by: degrees (added to the current twist)} → {twist} — turns the plan view of model space about the centre of the screen, or the active MSPACE viewport's view about its centre (VIEWTWIST)")
@@ -135,6 +161,10 @@ pub fn projected_extents(d: &Drawing, p: &Projection) -> Bounds2 {
         if !d.is_visible(e) {
             continue;
         }
+        if let cadaddy_doc::EntityKind::Mesh(m) = &e.kind {
+            b = b.union(&Bounds2::from_points(m.vertices.iter().map(|q| p.project(*q))));
+            continue;
+        }
         if let Some((pts, _)) = e.kind.points3d() {
             for q in pts {
                 b = b.union(&Bounds2::from_points([p.project(q)]));
@@ -166,6 +196,75 @@ pub fn projected_extents(d: &Drawing, p: &Projection) -> Bounds2 {
         }
     }
     b
+}
+
+fn set_style(s: &mut Session, vs: VisualStyle) -> Result<Value> {
+    s.state_mut()?.visual_style = vs;
+    s.touch();
+    Ok(json!({ "style": vs.name() }))
+}
+
+fn vscurrent_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = str_param(p, "style").ok_or_else(|| bad("vscurrent", "`style` is required"))?;
+    let vs = VisualStyle::parse(name).ok_or_else(|| {
+        bad("vscurrent", format!("unknown visual style \"{name}\" (2dwireframe, wireframe, hidden, shaded, shadedwithedges, realistic)"))
+    })?;
+    set_style(s, vs)
+}
+
+/// VSCURRENT typed: "Enter an option [2dwireframe/Wireframe/Hidden/Realistic/Shaded/shaded with
+/// Edges] <current>:".
+struct VsM;
+
+impl crate::Interactive for VsM {
+    fn name(&self) -> &'static str {
+        "VSCURRENT"
+    }
+    fn prompt(&self, s: &Session) -> crate::Prompt {
+        let cur = s.state().map(|st| st.visual_style.name()).unwrap_or("2D Wireframe");
+        crate::Prompt::new("Enter an option", crate::Accept::TEXT)
+            .kw(&["2dwireframe", "Wireframe", "Hidden", "Realistic", "Shaded", "shaded with Edges"])
+            .default(cur)
+    }
+    fn input(&mut self, s: &mut Session, i: crate::Input) -> Result<crate::Step> {
+        match i {
+            crate::Input::Enter => Ok(crate::Step::Done),
+            crate::Input::Text(t) | crate::Input::Keyword(t) => {
+                let vs = VisualStyle::parse(&t).ok_or_else(|| EngineError::Other("Invalid option keyword.".into()))?;
+                set_style(s, vs)?;
+                Ok(crate::Step::Done)
+            }
+            _ => Err(EngineError::Other("Invalid option keyword.".into())),
+        }
+    }
+}
+
+/// How model space would print or export as displayed: `None` in the plain plan view with 2D
+/// Wireframe (the usual vector output), else the visual style (2D Wireframe in a 3D view: see-
+/// through Wireframe) with the view's direction and twist.
+pub fn shade_options(s: &Session) -> Option<Value> {
+    let st = s.state().ok()?;
+    if st.space != Space::Model || st.mspace.is_some() {
+        return None;
+    }
+    let p = st.projection();
+    let three_d = p.is_some_and(|p| !view3::is_plan(p.dir));
+    if st.visual_style == VisualStyle::Wireframe2d && !three_d {
+        return None;
+    }
+    let style = if st.visual_style == VisualStyle::Wireframe2d { VisualStyle::Wireframe } else { st.visual_style };
+    let dir = p.map_or(Vec3::Z, |p| p.dir);
+    Some(json!({ "style": style.name(), "dir": [dir.x, dir.y, dir.z], "twist": st.twist() }))
+}
+
+/// A PNG of model space as displayed in a 3D view or a visual style, fitted into `w` × `h` on
+/// white; `None` when the plain plan vectors apply ([`shade_options`]) or nothing is drawn.
+pub fn shaded_png(s: &Session, w: u32, h: u32) -> Option<Vec<u8>> {
+    let opts = shade_options(s)?;
+    let st = s.state().ok()?;
+    let style = opts.get("style").and_then(Value::as_str).and_then(VisualStyle::parse)?;
+    let proj = st.projection();
+    cadaddy_render::shade::render_fitted(&st.doc, proj, style, w, h, cadaddy_color::Rgb(255, 255, 255))?.encode_png()
 }
 
 #[cfg(test)]

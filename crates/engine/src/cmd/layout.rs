@@ -895,6 +895,21 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             None => o.remove("plotTransparency"),
         };
     }
+    // Model space as displayed: a 3D view or a visual style plots shaded (`shade: false` plots
+    // the plan's vectors; a window, pages or several layouts keep the vector plot).
+    if space == Space::Model
+        && opts.get("shade").is_none()
+        && ["window", "pages", "layouts"].iter().all(|k| opts.get(*k).is_none())
+        && s.space() == Space::Model
+        && let Some(shade) = super::view::view3d::shade_options(s)
+    {
+        opts["shade"] = shade;
+    }
+    if opts.get("shade").is_some_and(|v| !v.is_object())
+        && let Some(o) = opts.as_object_mut()
+    {
+        o.remove("shade");
+    }
     let bytes = hook(s.doc()?, &space, &opts).map_err(|e| bad(cmd, e))?;
     let layout = match &sheets {
         Some(names) => names.first().cloned().unwrap_or_default(),

@@ -42,6 +42,12 @@ pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
         }
         _ => d,
     };
+    // Model space as displayed in a 3D view or a visual style: a shaded raster of the view.
+    if matches!(space, Space::Model)
+        && let Some(shade) = opts.get("shade").filter(|v| v.is_object())
+    {
+        return shaded(d, opts, shade);
+    }
     match opts.get("output").and_then(Value::as_str).map(str::to_ascii_lowercase).as_deref() {
         None | Some("pdf") => pdf::plot(d, space, opts),
         Some("png") => png(d, space, opts),
@@ -130,6 +136,51 @@ fn svg(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     let s = fit_scale(&window.unwrap_or(list.bounds), &sheet, &o);
     cadaddy_render::pen::apply(&mut list, s * sheet.unit_mm);
     Ok(crate::svg::export_list(&list, window).into_bytes())
+}
+
+/// A shaded plot (`shade: {style, dir, twist}`, what the engine passes for a 3D view or a
+/// visual style): model space seen along `dir` (`twist` turning a plan view), its extents fitted
+/// into the printable area, drawn in `style` on white paper as a raster, a PNG or one PDF page
+/// holding it (PDF at 200 dpi, PNG at `resolution`).
+fn shaded(d: &Drawing, opts: &Value, shade: &Value) -> Result<Vec<u8>> {
+    use cadaddy_geom::Vec3;
+    use cadaddy_geom::view3::Projection;
+    use cadaddy_render::shade::{self, VisualStyle};
+    let style = shade.get("style").and_then(Value::as_str).and_then(VisualStyle::parse).unwrap_or(VisualStyle::Wireframe);
+    let dir = shade
+        .get("dir")
+        .and_then(Value::as_array)
+        .and_then(|a| match a.as_slice() {
+            [x, y, z] => Some(Vec3::new(x.as_f64()?, y.as_f64()?, z.as_f64()?)),
+            _ => None,
+        })
+        .filter(|v| v.is_finite() && v.len() > 1e-12)
+        .unwrap_or(Vec3::Z);
+    let twist = shade.get("twist").and_then(Value::as_f64).filter(|t| t.is_finite()).unwrap_or(0.0);
+    let proj = if cadaddy_geom::view3::is_plan(dir) { Projection::plan_twist(twist) } else { Projection::new(dir) };
+    let o = PdfOptions::from_json(opts);
+    let (sheet, _) = sheet(d, &Space::Model, &o)?;
+    let png = opts.get("output").and_then(Value::as_str).is_some_and(|x| x.eq_ignore_ascii_case("png"));
+    let dpi = if png { opts.get("resolution").and_then(Value::as_f64).filter(|r| r.is_finite()).unwrap_or(300.0).clamp(50.0, 2400.0) } else { 200.0 };
+    let area = if sheet.printable.is_empty() { sheet.bounds() } else { sheet.printable };
+    let k = sheet.unit_mm / 25.4 * dpi;
+    let (mut w, mut h) = (area.width() * k, area.height() * k);
+    let shrink = (MAX_PNG_PIXELS / (w * h).max(1.0)).sqrt().min(f64::from(shade::MAX_SIDE) / w.max(h).max(1.0)).min(1.0);
+    if !(shrink.is_finite() && shrink > 0.0) {
+        return Err(IoError::Format("the sheet is too large to plot".into()));
+    }
+    w *= shrink;
+    h *= shrink;
+    let (wp, hp) = ((w.round() as u32).max(1), (h.round() as u32).max(1));
+    let raster =
+        shade::render_fitted(d, proj, style, wp, hp, Rgb(255, 255, 255)).ok_or_else(|| IoError::Format("model space has nothing to plot".into()))?;
+    if png {
+        return raster.encode_png().ok_or_else(|| IoError::Format("PNG encoding failed".into()));
+    }
+    let pt = sheet.unit_mm * 72.0 / 25.4;
+    let media = (sheet.size.x * pt, sheet.size.y * pt);
+    let place = ((area.min.x - sheet.origin.x) * pt, (area.min.y - sheet.origin.y) * pt, area.width() * pt, area.height() * pt);
+    Ok(pdf::raster_page(&raster, media, place))
 }
 
 #[cfg(test)]

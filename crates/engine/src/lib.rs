@@ -48,6 +48,8 @@ pub const AGENT_PORT: u16 = 47_820;
 pub use cadaddy_geom as geom;
 pub use cadaddy_render as render;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
+/// A shaded or 3D view of model space as a PNG (exports; see the function).
+pub use cmd::view::view3d::shaded_png;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use prompt::{Accept, Drag, Input, Interactive, Picker, Prompt, Step};
 
@@ -197,6 +199,8 @@ pub struct DocState {
     /// Model space's view twist (VIEWTWIST, radians counterclockwise) in the plan view; a
     /// twisted plan view is drawn through [`DocState::projection`] like a 3D view.
     pub view_twist: f64,
+    /// Model space's visual style (VSCURRENT): how 3D objects show on the Model tab.
+    pub visual_style: cadaddy_render::shade::VisualStyle,
     pub uid: u64,
     /// The drawing is saved as binary DXF (it was opened from one, or last saved as one).
     pub binary_dxf: bool,
@@ -237,6 +241,7 @@ impl DocState {
             view_history: Vec::new(),
             view_dir: cadaddy_geom::Vec3::Z,
             view_twist: 0.0,
+            visual_style: cadaddy_render::shade::VisualStyle::Wireframe2d,
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             binary_dxf: false,
             read_loss: None,

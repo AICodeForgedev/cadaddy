@@ -21,6 +21,7 @@ pub mod pen;
 mod plotstyle;
 mod point;
 pub mod raster;
+pub mod shade;
 mod text;
 mod tolerance;
 pub mod units;
@@ -1039,6 +1040,13 @@ fn top_entity(b: &mut Builder, d: &Drawing, e: &Entity) {
         entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
         return;
     };
+    // A mesh: its vertices onto the view plane; its edges are drawn from them.
+    if let EntityKind::Mesh(m) = &e.kind {
+        let vertices = m.vertices.iter().map(|q| p.project(*q).to3(0.0)).collect();
+        let flat = Entity { kind: EntityKind::Mesh(cadaddy_doc::Mesh { vertices, ..m.clone() }), ..e.clone() };
+        entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), &flat);
+        return;
+    }
     if let Some((pts, closed)) = e.kind.points3d() {
         let vertices = pts.iter().map(|q| cadaddy_geom::PolyVertex { p: p.project(*q), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
         let flat = Entity {
