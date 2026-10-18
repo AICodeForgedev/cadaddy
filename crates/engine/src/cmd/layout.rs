@@ -894,8 +894,16 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
                 std::fs::rename(&tmp, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
                 Ok(json!({ "path": path, "bytes": bytes.len(), "layout": layout, "pages": pages }))
             }
+            // On the web the file is handed to the browser as a download (the host's deliver hook).
             #[cfg(target_arch = "wasm32")]
-            Err(bad(cmd, "paths are not available on the web; omit `path` to get the PDF as base64 `data`"))
+            {
+                let name = _path.rsplit(['/', '\\']).next().filter(|n| !n.trim().is_empty()).unwrap_or("plot.pdf");
+                let name = if name.to_ascii_lowercase().ends_with(".pdf") { name.to_string() } else { format!("{name}.pdf") };
+                let deliver = super::file::deliver()
+                    .ok_or_else(|| bad(cmd, "paths are not available on the web; omit `path` to get the PDF as base64 `data`"))?;
+                deliver(&name, "application/pdf", &bytes).map_err(|e| bad(cmd, format!("{name}: {e}")))?;
+                Ok(json!({ "path": name, "bytes": bytes.len(), "layout": layout, "pages": pages, "downloaded": true }))
+            }
         }
         None => Ok(json!({ "data": base64_encode(&bytes), "bytes": bytes.len(), "layout": layout, "pages": pages })),
     }

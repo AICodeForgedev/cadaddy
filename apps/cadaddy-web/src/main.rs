@@ -10,6 +10,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_arch = "wasm32")]
+mod autosave;
+#[cfg(target_arch = "wasm32")]
 pub mod download;
 #[cfg(target_arch = "wasm32")]
 mod host;
@@ -137,6 +139,10 @@ mod web {
                             // eframe's web runner has no stencil buffer: clipped layout
                             // viewports stay in the layout's display list.
                             app.set_wgpu(rs, None);
+                        }
+                        // Not embedded (the host keeps the drawings then): autosave to browser storage.
+                        if app_bridge.is_none() {
+                            crate::autosave::enable(&mut app);
                         }
                         if query().contains("sample") {
                             let _ = app.run("ui.sample", serde_json::json!({}));
