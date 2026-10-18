@@ -144,7 +144,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
                 .map(|d| if d.path.is_none() && !d.title.contains('.') { format!("{}.dwg", d.title) } else { d.title.clone() })
                 .unwrap_or_default()
         ),
-        // The drawing's folder with its trailing separator; the current folder before it is saved.
+        // The drawing's folder with its trailing separator; Documents before it is saved.
         "DWGPREFIX" => json!(s.state().ok().map(|d| dwg_prefix(d.path.as_deref())).unwrap_or_default()),
         "DWGTITLED" => json!(i32::from(s.state().is_ok_and(|d| d.path.is_some()))),
         "DBMOD" => json!(s.state().map(|d| i32::from(d.is_dirty())).unwrap_or(0)),
@@ -212,7 +212,11 @@ fn dwg_prefix(path: Option<&str>) -> String {
     {
         return p.get(..=i).unwrap_or_default().to_string();
     }
-    let mut dir = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+    // Unsaved: the user's Documents folder, as AutoCAD (never the program's working folder,
+    // which is a system folder when started from the Start menu).
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(std::path::PathBuf::from);
+    let docs = home.map(|h| h.join("Documents")).filter(|d| d.is_dir());
+    let mut dir = docs.or_else(|| std::env::current_dir().ok()).map(|d| d.display().to_string()).unwrap_or_default();
     if !dir.is_empty() && !dir.ends_with(['/', '\\']) {
         dir.push(std::path::MAIN_SEPARATOR);
     }

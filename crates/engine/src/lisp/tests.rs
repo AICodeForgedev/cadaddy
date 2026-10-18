@@ -713,6 +713,16 @@ fn xdata_comes_when_asked_for() {
     ok(&mut s, "(entmod (append e '((-3 (\"MYAPP\" (1000 . \"hello\") (1070 . 7))))))");
     assert_eq!(ok(&mut s, "(assoc -3 (entget (entlast)))"), "nil");
     assert_eq!(ok(&mut s, "(cadr (assoc -3 (entget (entlast) '(\"MYAPP\"))))"), "(\"MYAPP\" (1000 . \"hello\") (1070 . 7))");
+    // Registered once; the APPID table shows it.
+    assert_eq!(ok(&mut s, "(regapp \"MYAPP\")"), "nil");
+    assert_eq!(ok(&mut s, "(cdr (assoc 2 (tblsearch \"APPID\" \"MYAPP\")))"), "\"MYAPP\"");
+    // ssget finds the objects tagged with it.
+    ok(&mut s, "(entmake '((0 . \"LINE\") (10 0.0 9.0 0.0) (11 5.0 9.0 0.0)))");
+    assert_eq!(ok(&mut s, "(sslength (ssget \"_X\" '((-3 (\"MYAPP\")))))"), "1");
+    assert_eq!(ok(&mut s, "(sslength (ssget \"_X\" '((-3 (\"MY*\")))))"), "1");
+    assert_eq!(ok(&mut s, "(ssget \"_X\" '((-3 (\"OTHER\"))))"), "nil");
+    // An application never registered is refused.
+    assert_eq!(ok(&mut s, "(entmake '((0 . \"LINE\") (10 0.0 0.0 0.0) (11 1.0 0.0 0.0) (-3 (\"NOREG\" (1000 . \"x\")))))"), "nil");
 }
 
 #[test]
