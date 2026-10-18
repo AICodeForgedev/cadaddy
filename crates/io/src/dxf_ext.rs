@@ -512,6 +512,11 @@ pub(crate) fn marks_xdata(m: &cadaddy_doc::DimMarks) -> Vec<Tag> {
         pt(&mut v, b.at);
         v.extend([Tag::f(1040, b.size), Tag::i(1070, i64::from(b.auto))]);
     }
+    // The objects automatic breaks follow, as database handles (1005: readers that renumber
+    // handles renumber these too).
+    for h in m.break_objects.iter().take(MAX_XDATA_ITEMS / 4) {
+        v.extend([Tag::s(1000, "BREAKOBJ"), Tag::s(1005, h.hex())]);
+    }
     if let Some(i) = &m.inspect {
         v.extend([Tag::s(1000, "INSPECT"), Tag::i(1070, i64::from(i.shape)), Tag::s(1000, i.label.clone()), Tag::s(1000, i.rate.clone())]);
     }
@@ -549,6 +554,14 @@ pub(crate) fn read_marks(tags: &[Tag]) -> cadaddy_doc::DimMarks {
                 let auto = list.get(i + 5).filter(|t| t.code == 1070).is_some_and(|t| t.i64() != 0);
                 if let (Some(at), Some(size)) = (point(i + 1), size) {
                     m.breaks.push(cadaddy_doc::DimBreak { at, size, auto });
+                }
+            }
+            "BREAKOBJ" => {
+                if let Some(h) = list.get(i + 1).filter(|t| t.code == 1005).and_then(|t| cadaddy_doc::Handle::parse_hex(t.str().trim()))
+                    && h.0 != 0
+                    && !m.break_objects.contains(&h)
+                {
+                    m.break_objects.push(h);
                 }
             }
             "INSPECT" => {

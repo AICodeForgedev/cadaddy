@@ -2,7 +2,7 @@
 //! AutoCAD's menu bar so the catalog doubles as the parity metric.
 
 pub(crate) mod annoscale;
-mod annotate;
+pub(crate) mod annotate;
 pub mod array;
 pub(crate) mod ask;
 mod audit;

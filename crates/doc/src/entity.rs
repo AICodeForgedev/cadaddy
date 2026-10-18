@@ -645,6 +645,10 @@ pub struct DimMarks {
     /// Gaps in the dimension and extension lines (DIMBREAK).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub breaks: Vec<DimBreak>,
+    /// The objects DIMBREAK Auto breaks the dimension at: its automatic breaks are worked out
+    /// again where they cross it whenever they or the dimension change (associative breaks).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub break_objects: Vec<Handle>,
     /// Inspection frame, label and rate (DIMINSPECT).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inspect: Option<Inspection>,

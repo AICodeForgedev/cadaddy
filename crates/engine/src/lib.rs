@@ -1460,6 +1460,7 @@ impl Session {
         cmd::constraints::after_command(self, before, ok);
         assoc::after_command(self, before, uid);
         cmd::clip_partners::after_command(self, before);
+        cmd::annotate::dimbreak_after_command(self, before);
     }
 
     fn resume_suspended(&mut self) {
