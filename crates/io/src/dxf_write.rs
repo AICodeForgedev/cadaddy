@@ -299,7 +299,7 @@ fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
     let mut sah = false;
     for (k, v) in &dm.overrides {
         let Some(field) = DimStyle::field_name(k) else { continue };
-        let Some((code, kind)) = dxf_ext::dim_code(field) else { continue };
+        let Some((code, kind)) = dxf_ext::dim_code(field).filter(|(c, _)| !dxf_ext::XDATA_ONLY.contains(c)) else { continue };
         let Some(val) = dxf_ext::canonical(field, v) else { continue };
         let Some(enc) = cx.encode(kind, &val) else { continue };
         sah |= matches!(code, 343 | 344);
@@ -2288,12 +2288,13 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
-            if !dxf_ext::NEWER_CODES.contains(code) {
+            let own = dxf_ext::STYLE_XDATA.contains(code);
+            if !own && !dxf_ext::NEWER_CODES.contains(code) {
                 w.dimval(*code, enc, false);
                 continue;
             }
             // Table groups where the file version has them, else xdata.
-            if version >= dxf_ext::NEWER_SINCE {
+            if !own && version >= dxf_ext::newer_since(*code) {
                 w.dimval(*code, enc, false);
             } else if v.get(*field) != defaults.get(*field) {
                 newer.i(1070, i64::from(*code));

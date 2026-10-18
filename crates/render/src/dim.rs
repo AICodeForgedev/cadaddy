@@ -371,18 +371,7 @@ fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str) -> String 
         let tf = NumFormat { decimals: st.tol_decimals, zin: st.tol_zero_suppression, round: 0.0, ..nf.clone() };
         // DIMPOST's suffix (what follows `<>`, or all of it) also goes on the tolerance values.
         let suffix = st.post.split_once("<>").map_or(st.post.as_str(), |(_, after)| after);
-        if (st.tol_plus - st.tol_minus).abs() < 1e-12 {
-            s += &format!("%%p{}{suffix}", format_linear(st.tol_plus, &tf).1);
-        } else {
-            let plus = format_linear(st.tol_plus, &tf).1 + suffix;
-            let minus = format_linear(st.tol_minus, &tf).1 + suffix;
-            let sign = |x: &str, pos: char| if x.trim_start_matches(['0', '.', ',']).is_empty() { x.to_string() } else { format!("{pos}{x}") };
-            let (plus, minus) =
-                (sign(&plus, '+'), if st.tol_minus < 0.0 { format!("+{}", minus.trim_start_matches('-')) } else { sign(&minus, '-') });
-            // DIMTOLJ: bottom / middle / top (MTEXT `\A`; middle is the default).
-            let tolj = if st.tol_just == 1 { String::new() } else { format!("\\A{};", st.tol_just.min(2)) };
-            s += &format!("{{\\H{};{tolj}\\S{plus}^{minus};}}", tol_height_code(st));
-        }
+        s += &tolerance_text(st, &tf, 1.0, suffix);
     }
     if st.alt {
         // DIMALTU 6 and 7 are architectural and fractional without stacking, 8 is decimal.
@@ -393,10 +382,34 @@ fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str) -> String 
             _ => (2, nf.frac),
         };
         let af = NumFormat { unit, decimals: st.alt_decimals, zin: st.alt_zero_suppression, round: st.alt_round, frac, ..nf };
-        let alt = format_linear(v * st.alt_factor, &af).1;
-        s += &format!(" [{}]", post(&st.alt_post, &alt));
+        let mut alt = post(&st.alt_post, &format_linear(v * st.alt_factor, &af).1);
+        // DIMALTTD / DIMALTTZ: the tolerance values in alternate units, after the alternate
+        // measurement.
+        if st.tolerance && !st.limits {
+            let atf = NumFormat { decimals: st.alt_tol_decimals, zin: st.alt_tol_zero_suppression, round: 0.0, ..af };
+            let suffix = st.alt_post.split_once("<>").map_or(st.alt_post.as_str(), |(_, after)| after);
+            alt += &tolerance_text(st, &atf, st.alt_factor, suffix);
+        }
+        s += &format!(" [{alt}]");
     }
     inspected(apply_override(&s, d), d)
+}
+
+/// The tolerance after a measurement: `%%p` and the value when DIMTP equals DIMTM, else the
+/// upper and lower deviations stacked (DIMTOLJ places the stack), in `tf`'s format, multiplied
+/// by `factor` (the alternate units' DIMALTF), with `suffix` on each value.
+fn tolerance_text(st: &DimStyle, tf: &NumFormat, factor: f64, suffix: &str) -> String {
+    let (tp, tm) = (st.tol_plus * factor, st.tol_minus * factor);
+    if (st.tol_plus - st.tol_minus).abs() < 1e-12 {
+        return format!("%%p{}{suffix}", format_linear(tp, tf).1);
+    }
+    let plus = format_linear(tp, tf).1 + suffix;
+    let minus = format_linear(tm, tf).1 + suffix;
+    let sign = |x: &str, pos: char| if x.trim_start_matches(['0', '.', ',']).is_empty() { x.to_string() } else { format!("{pos}{x}") };
+    let (plus, minus) = (sign(&plus, '+'), if st.tol_minus < 0.0 { format!("+{}", minus.trim_start_matches('-')) } else { sign(&minus, '-') });
+    // DIMTOLJ: bottom / middle / top (MTEXT `\A`; middle is the default).
+    let tolj = if st.tol_just == 1 { String::new() } else { format!("\\A{};", st.tol_just.min(2)) };
+    format!("{{\\H{};{tolj}\\S{plus}^{minus};}}", tol_height_code(st))
 }
 
 /// DIMINSPECT: the label and the rate either side of the value, two spaces apart.
@@ -692,7 +705,8 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             // DIMJOGLINE: a zigzag in the dimension line, 1.5 text heights tall.
             if let Some(j) = d.marks.jog_line {
                 let at = f1 + u * (j.xy() - f1).dot(u);
-                let h = 1.5 * th;
+                // Linear jog height: a multiple of the text height (1.5 by default).
+                let h = if st.jog_height.is_finite() && st.jog_height > 0.0 { st.jog_height.min(1000.0) } else { 1.5 } * th;
                 if at.is_finite() && h > 0.0 {
                     let r = h / 2.0;
                     g.cut(at, r, Some(LineRole::Dim));
@@ -956,6 +970,9 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             g.dim(ends);
         }
     }
+    if st.text_right_to_left {
+        g.mtext = right_to_left(&g.mtext);
+    }
     g.value = decode_value(&cadaddy_fonts::plain_mtext(&g.mtext));
     if !g.mtext.is_empty() {
         let l = cadaddy_fonts::layout_mtext_with(&g.mtext, &params(text_mid, text_angle));
@@ -969,6 +986,36 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
     g.text_pos = text_mid;
     g.text_angle = text_angle;
     g
+}
+
+/// DIMTXTDIRECTION: the text read right to left, as bidirectional text shows left-to-right runs
+/// in a right-to-left line: the space-separated runs (a number, a word, a stacked tolerance) in
+/// reverse order, each one as it was. Spaces inside braces (formatting groups) don't split.
+pub fn right_to_left(mtext: &str) -> String {
+    let mut runs: Vec<String> = vec![String::new()];
+    let mut depth = 0usize;
+    let mut escaped = false;
+    for c in mtext.chars() {
+        if escaped {
+            escaped = false;
+        } else {
+            match c {
+                '\\' => escaped = true,
+                '{' => depth += 1,
+                '}' => depth = depth.saturating_sub(1),
+                ' ' if depth == 0 => {
+                    runs.push(String::new());
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        if let Some(r) = runs.last_mut() {
+            r.push(c);
+        }
+    }
+    runs.reverse();
+    runs.join(" ")
 }
 
 /// `%%` codes in the plain value become their characters (`%%c` → ⌀, `%%p` → ±, `%%d` → °).

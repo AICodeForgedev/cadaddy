@@ -273,6 +273,22 @@ pub struct DimStyle {
     pub fixed_ext_length: f64,
     /// DIMJOGANG: angle (degrees) of the jog's middle segment in jogged radius dimensions.
     pub jog_angle: f64,
+    /// DIMTFILL, the text background: 0 none, 1 the drawing's background colour, 2 DIMTFILLCLR.
+    pub text_fill: u8,
+    /// DIMTFILLCLR: the text background colour when DIMTFILL is 2.
+    pub text_fill_color: Color,
+    /// DIMTXTDIRECTION: the text reads right to left.
+    pub text_right_to_left: bool,
+    /// DIMUPT: text placed by the user also places the dimension line (the pick sets both).
+    pub user_text_places_line: bool,
+    /// DIMALTTD / DIMALTTZ: decimals and zero suppression (DIMZIN bits) of tolerance values in
+    /// alternate units.
+    pub alt_tol_decimals: u8,
+    pub alt_tol_zero_suppression: u8,
+    /// Linear jog height (DIMJOGLINE's zigzag), as a multiple of the text height.
+    pub jog_height: f64,
+    /// Break size of DIMBREAK's automatic breaks, in drawing units before DIMSCALE.
+    pub break_size: f64,
 }
 
 /// DIMSTYLE system variable names and the [`DimStyle`] fields they set.
@@ -344,6 +360,12 @@ pub const DIMVARS: &[(&str, &str)] = &[
     ("DIMFXLON", "fixedExt"),
     ("DIMFXL", "fixedExtLength"),
     ("DIMJOGANG", "jogAngle"),
+    ("DIMTFILL", "textFill"),
+    ("DIMTFILLCLR", "textFillColor"),
+    ("DIMTXTDIRECTION", "textRightToLeft"),
+    ("DIMUPT", "userTextPlacesLine"),
+    ("DIMALTTD", "altTolDecimals"),
+    ("DIMALTTZ", "altTolZeroSuppression"),
 ];
 
 impl Default for DimStyle {
@@ -418,6 +440,14 @@ impl Default for DimStyle {
             fixed_ext: false,
             fixed_ext_length: 1.0,
             jog_angle: 45.0,
+            text_fill: 0,
+            text_fill_color: Color::ByBlock,
+            text_right_to_left: false,
+            user_text_places_line: false,
+            alt_tol_decimals: 2,
+            alt_tol_zero_suppression: 0,
+            jog_height: 1.5,
+            break_size: 0.125,
         }
     }
 }
@@ -429,7 +459,7 @@ impl DimStyle {
             .iter()
             .find(|(var, field)| var.eq_ignore_ascii_case(name) || field.eq_ignore_ascii_case(name))
             .map(|(_, f)| *f)
-            .or_else(|| ["name", "annotative"].into_iter().find(|f| f.eq_ignore_ascii_case(name)))
+            .or_else(|| ["name", "annotative", "jogHeight", "breakSize"].into_iter().find(|f| f.eq_ignore_ascii_case(name)))
     }
 
     /// Set fields from a JSON object of field or DIM* variable names (numbers, booleans as
@@ -492,6 +522,12 @@ impl DimStyle {
                 "textMove" | "tolJust" | "arcSymbol" => x.is_some_and(|x| x > 2.0),
                 "dimLineweight" | "extLineweight" => x.is_some_and(|x| !(-3.0..=211.0).contains(&x)),
                 "jogAngle" => x.is_some_and(|x| !(5.0..=90.0).contains(&x)),
+                "textFill" => x.is_some_and(|x| x > 2.0),
+                "altTolDecimals" => x.is_some_and(|x| x > 8.0),
+                "altTolZeroSuppression" => x.is_some_and(|x| x > 15.0),
+                // AutoCAD's ranges: jog height factor and break size are positive.
+                "jogHeight" => x.is_some_and(|x| !(x > 0.0 && x <= 1000.0)),
+                "breakSize" => x.is_some_and(|x| !(0.0..=1e9).contains(&x)),
                 _ => false,
             };
             if out_of_range {
@@ -584,6 +620,7 @@ impl DimStyle {
             baseline_spacing: 3.75,
             force_line_inside: true,
             tol_just: 0,
+            break_size: 3.75,
             ..Default::default()
         }
     }

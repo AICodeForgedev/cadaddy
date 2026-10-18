@@ -1577,7 +1577,8 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 // Every variable with a DIMSTYLE group code; values the style can't take are
                 // left at their defaults.
                 let mut fields = serde_json::Map::new();
-                for tag in tg.iter().take_while(|x| x.code < 1000) {
+                // Group 70 is the record's flags, not DIMTFILLCLR (that one is in the xdata).
+                for tag in tg.iter().take_while(|x| x.code < 1000).filter(|x| !crate::dxf_ext::STYLE_XDATA.contains(&x.code)) {
                     let Some((field, kind)) = crate::dxf_ext::dim_field(tag.code) else { continue };
                     if let Some(v) = crate::dxf_ext::decode(kind, tag, &rx.styles, &rx.brs, &rx.ltypes) {
                         fields.insert(field.to_string(), v);
