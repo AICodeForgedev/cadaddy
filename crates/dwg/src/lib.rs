@@ -100,7 +100,7 @@ mod native {
             ));
         }
         written.map_err(|e| format!("DWG→DXF: {e}"))?;
-        Ok((add_header_vars(out.buf, &doc.header), notes))
+        Ok((add_materials(add_header_vars(out.buf, &doc.header), &doc), notes))
     }
 
     /// Most record types named in the skipped-records note.
@@ -410,6 +410,111 @@ mod native {
         }
     }
 
+    /// The materials a DXF's objects and layers point at (group 347): by entity handle, and by
+    /// layer name (upper case). acadrust's DXF reader doesn't read them, its DWG writer writes them.
+    fn dxf_materials(dxf: &[u8]) -> (std::collections::HashMap<u64, u64>, std::collections::HashMap<String, u64>) {
+        let text = String::from_utf8_lossy(dxf);
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let (mut ents, mut layers) = (std::collections::HashMap::new(), std::collections::HashMap::new());
+        let (mut kind, mut handle, mut name, mut in_entity) = ("", None::<u64>, String::new(), false);
+        for pair in lines.chunks(2) {
+            let [code, value] = pair else { break };
+            match *code {
+                "0" => {
+                    (kind, handle, in_entity) = (value, None, false);
+                    name.clear();
+                }
+                "5" if handle.is_none() => handle = u64::from_str_radix(value, 16).ok(),
+                "2" if kind == "LAYER" && name.is_empty() => name = value.to_ascii_uppercase(),
+                "100" => in_entity = *value == "AcDbEntity",
+                "347" => {
+                    let Ok(m) = u64::from_str_radix(value, 16) else { continue };
+                    if kind == "LAYER" && !name.is_empty() {
+                        layers.insert(name.clone(), m);
+                    } else if in_entity && let Some(h) = handle {
+                        ents.insert(h, m);
+                    }
+                }
+                _ => {}
+            }
+        }
+        (ents, layers)
+    }
+
+    /// Give acadrust's document the materials of the DXF it read ([`dxf_materials`]).
+    fn put_materials(doc: &mut acadrust::CadDocument, dxf: &[u8]) {
+        let (ents, layers) = dxf_materials(dxf);
+        if ents.is_empty() && layers.is_empty() {
+            return;
+        }
+        for e in doc.entities_mut() {
+            let c = e.common_mut();
+            if let Some(m) = ents.get(&u64::from(c.handle)) {
+                c.material_flags = 0b11;
+                c.material_handle = Some(acadrust::types::Handle::from(*m));
+            }
+        }
+        for l in doc.layers.iter_mut() {
+            if let Some(m) = layers.get(&l.name.to_ascii_uppercase()) {
+                l.material = acadrust::types::Handle::from(*m);
+            }
+        }
+    }
+
+    /// The reverse of [`put_materials`] for reading: the materials acadrust read from the DWG
+    /// (entities' and layers'), added to its DXF text, whose writer leaves them out.
+    fn add_materials(dxf: Vec<u8>, doc: &acadrust::CadDocument) -> Vec<u8> {
+        let ents: std::collections::HashMap<u64, u64> = doc
+            .entities()
+            .filter_map(|e| {
+                let c = e.common();
+                c.material_handle.filter(|_| c.material_flags == 0b11).map(|m| (u64::from(c.handle), u64::from(m)))
+            })
+            .collect();
+        let layers: std::collections::HashMap<String, u64> =
+            doc.layers.iter().filter(|l| u64::from(l.material) != 0).map(|l| (l.name.to_ascii_uppercase(), u64::from(l.material))).collect();
+        if ents.is_empty() && layers.is_empty() {
+            return dxf;
+        }
+        let Ok(text) = String::from_utf8(dxf.clone()) else { return dxf };
+        let lines: Vec<&str> = text.split("\r\n").collect();
+        let mut out = String::with_capacity(text.len() + 64 * (ents.len() + layers.len()));
+        let (mut kind, mut handle, mut name) = (String::new(), None::<u64>, String::new());
+        let mut i = 0;
+        while let (Some(code), Some(value)) = (lines.get(i), lines.get(i + 1)) {
+            out.push_str(code);
+            out.push_str("\r\n");
+            out.push_str(value);
+            out.push_str("\r\n");
+            match code.trim() {
+                "0" => {
+                    kind = value.trim().to_string();
+                    handle = None;
+                    name.clear();
+                }
+                "5" if handle.is_none() => handle = u64::from_str_radix(value.trim(), 16).ok(),
+                "2" if kind == "LAYER" && name.is_empty() => name = value.trim().to_ascii_uppercase(),
+                "100" if value.trim() == "AcDbEntity" => {
+                    if let Some(m) = handle.and_then(|h| ents.get(&h)) {
+                        out.push_str(&format!("347\r\n{m:X}\r\n"));
+                    }
+                }
+                "70" if kind == "LAYER" => {
+                    if let Some(m) = layers.get(&name) {
+                        out.push_str(&format!("347\r\n{m:X}\r\n"));
+                    }
+                }
+                _ => {}
+            }
+            i += 2;
+        }
+        // Whatever is left (an odd last line) as it was.
+        for l in lines.get(i..).unwrap_or_default() {
+            out.push_str(l);
+        }
+        out.into_bytes()
+    }
+
     /// Collects the DXF text and fails the write once it would grow past `limit`.
     struct CappedWriter {
         buf: Vec<u8>,
@@ -472,6 +577,7 @@ mod native {
         table_style_rows(&mut doc, true);
         current_by_name(&mut doc);
         keep_linetype_case(&mut doc, dxf);
+        put_materials(&mut doc, dxf);
         drop_unwritable(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?

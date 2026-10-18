@@ -38,6 +38,7 @@ pub use tables::*;
 /// File data CADaddy doesn't model, kept for saving (#528).
 pub mod dynblock;
 pub mod foreign;
+pub mod material;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocError {
@@ -122,6 +123,8 @@ pub struct Drawing {
     /// The hidden objects are saved with the drawing (OBJECTISOLATIONMODE 1, or read from a file
     /// that saved them).
     pub hidden_saved: bool,
+    /// The drawing's own materials (MATERIALS), by name; Global, ByLayer and ByBlock are implied.
+    pub materials: Vec<material::Material>,
     /// What reading the file left out (a DWG's object records the reader couldn't decode), told
     /// to the user when the drawing opens. Never written to a file.
     pub read_notes: Vec<String>,
@@ -205,6 +208,7 @@ impl Drawing {
             handseed: 0x100,
             hidden_objects: BTreeSet::new(),
             hidden_saved: false,
+            materials: Vec::new(),
             read_notes: Vec::new(),
             refedit: None,
             skipped_records: BTreeMap::new(),

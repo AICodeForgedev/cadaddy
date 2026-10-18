@@ -27,6 +27,9 @@ pub struct Layer {
     pub plot_style: String,
     /// Frozen in viewports created from now on (New VP Freeze; DXF layer flag 2).
     pub vp_freeze_new: bool,
+    /// The material attached to the layer (MATERIALATTACH); `None`: Global.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
 }
 
 impl Default for Layer {
@@ -44,6 +47,7 @@ impl Default for Layer {
             description: String::new(),
             plot_style: "Normal".into(),
             vp_freeze_new: false,
+            material: None,
         }
     }
 }

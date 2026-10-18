@@ -14,6 +14,7 @@ mod hatch;
 pub mod images;
 mod linetype;
 mod linetype_text;
+pub mod materials;
 mod mline;
 mod outline;
 pub mod paper;

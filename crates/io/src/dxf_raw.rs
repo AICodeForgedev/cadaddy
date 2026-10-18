@@ -27,6 +27,7 @@ use cadaddy_dxf::{Section, Tag};
 const MODELLED_KEYS: &[&str] = &[
     "ACAD_GROUP",
     "ACAD_LAYOUT",
+    "ACAD_MATERIAL",
     "ACAD_MLEADERSTYLE",
     "ACAD_MLINESTYLE",
     "ACAD_PLOTSTYLENAME",
@@ -280,7 +281,7 @@ fn extra(kind: &str, tags: &[Tag], entity: bool, unknown: bool, kept: &HashSet<S
         ..ForeignExtra::default()
     };
     // An unknown entity's own groups are written as they are; of table records, layers have a
-    // colour book colour and a material.
+    // colour book colour. (Materials, group 347, are modelled: read and written by the model.)
     if !unknown && (entity || kind == "LAYER") {
         let props =
             if entity { entity_groups(tags) } else { tags.get(..tags.iter().position(|t| t.code >= 1000).unwrap_or(tags.len())).unwrap_or(&[]) };
@@ -291,7 +292,7 @@ fn extra(kind: &str, tags: &[Tag], entity: bool, unknown: bool, kept: &HashSet<S
         {
             x.color_book = Some((rgb, book));
         }
-        x.props = props.iter().filter(|t| matches!(t.code, 347 | 284)).map(raw).collect();
+        x.props = props.iter().filter(|t| t.code == 284).map(raw).collect();
     }
     x
 }

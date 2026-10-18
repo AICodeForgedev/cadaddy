@@ -108,6 +108,10 @@ pub struct Common {
     /// object (COPY, MIRROR, ARRAY, paste) carries it, as in AutoCAD.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub xdata: Vec<RawTag>,
+    /// The material assigned to the object (MATERIALASSIGN): a material's name, `ByBlock`, or
+    /// `None` for its layer's (ByLayer).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
 }
 
 impl Default for Common {
@@ -125,6 +129,7 @@ impl Default for Common {
             plot_style: "ByLayer".into(),
             anno_scales: Vec::new(),
             xdata: Vec::new(),
+            material: None,
         }
     }
 }

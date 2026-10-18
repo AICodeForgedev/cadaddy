@@ -306,6 +306,8 @@ fn header_default(n: &str) -> Option<Value> {
         "USERI1" | "USERI2" | "USERI3" | "USERI4" | "USERI5" => Some(json!(0)),
         "USERR1" | "USERR2" | "USERR3" | "USERR4" | "USERR5" => Some(json!(0.0)),
         "USERS1" | "USERS2" | "USERS3" | "USERS4" | "USERS5" => Some(json!("")),
+        // The material new objects get (MATERIALASSIGN's default).
+        "CMATERIAL" => Some(json!("ByLayer")),
         _ => None,
     }
 }
@@ -494,6 +496,19 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         // AutoCAD's range: gaps up to 5000 drawing units close a hatch boundary.
         "HPGAPTOL" => s.doc_mut()?.header.set_f64("HPGAPTOL", as_f64(v).filter(|g| (0.0..=5000.0).contains(g)).ok_or_else(bad)?),
         "CONSTRAINTINFER" => s.doc_mut()?.parametric.settings.infer = as_bool(v).ok_or_else(bad)?,
+        // ByLayer, ByBlock or one of the drawing's materials.
+        "CMATERIAL" => {
+            let t = v.as_str().map(str::trim).ok_or_else(bad)?;
+            let d = s.doc()?;
+            let name = if t.eq_ignore_ascii_case(cadaddy_doc::material::BY_LAYER) || t.is_empty() {
+                cadaddy_doc::material::BY_LAYER.to_string()
+            } else if t.eq_ignore_ascii_case(cadaddy_doc::material::BY_BLOCK) {
+                cadaddy_doc::material::BY_BLOCK.to_string()
+            } else {
+                d.material(t).map(|m| m.name.clone()).ok_or_else(bad)?
+            };
+            s.doc_mut()?.header.set_str("CMATERIAL", &name);
+        }
         _ => {
             if let Some(r) = table::set(s, &n, v) {
                 return r;

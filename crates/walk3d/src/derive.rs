@@ -263,7 +263,7 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
     for f in &faces {
         let (a, b, z0, z1) = (f.a, f.b, f.z0, f.z1);
         s.walls.push(Seg { a, b, level: f.lv });
-        quad(&mut s, [v3(a.x, a.y, z0), v3(b.x, b.y, z0), v3(b.x, b.y, z1), v3(a.x, a.y, z1)], WALL, f.owner);
+        quad(&mut s, [v3(a.x, a.y, z0), v3(b.x, b.y, z0), v3(b.x, b.y, z1), v3(a.x, a.y, z1)], wall_rgb(sources, f.owner), f.owner);
         edge(&mut s, v3(a.x, a.y, z1), v3(b.x, b.y, z1));
         edge(&mut s, v3(a.x, a.y, z0), v3(b.x, b.y, z0));
         if f.edge_a {
@@ -634,6 +634,13 @@ fn to_world(p: Vec2, base: Vec2, upf: f64) -> Vec2 {
     Vec2 { x: (p.x - base.x) / upf, y: (p.y - base.y) / upf }
 }
 
+/// A wall face's colour: the base colour of the material its line shows (its own or its
+/// layer's, MATERIALATTACH), else the plain wall colour.
+fn wall_rgb(sources: &[&Drawing], owner: Owner) -> Rgb {
+    let Some(d) = sources.get(usize::from(owner.src)) else { return WALL };
+    d.entity(owner.handle).and_then(|e| d.material_of(e, None)).map_or(WALL, |m| m.color)
+}
+
 fn entity_rgb(d: &Drawing, e: &Entity) -> Rgb {
     let layer = d.layer(&e.common.layer).map(|l| l.color).unwrap_or(Color::Index(7));
     let c = e.common.color.resolve(layer, Color::Index(7));
@@ -789,6 +796,20 @@ mod tests {
         assert!((rec.pos.x - (20.0 - 0.075)).abs() < 1e-9, "{:?}", rec.pos);
         let up = s.devices.iter().find(|v| v.level == 1).unwrap_or_else(|| panic!("no floor 4 device"));
         assert!((up.pos.z - (30.0 + 8.0 - 0.125)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn walls_show_their_layers_material_colour() {
+        let (mut d, rules) = two_floor_sheet();
+        let plain = derive(&d, &rules);
+        assert!(plain.tris.iter().any(|v| v.c[..3] == [WALL.0, WALL.1, WALL.2]));
+        let concrete = cadaddy_doc::material::recipe("concrete").unwrap().material(0.0254);
+        let c = concrete.color;
+        d.materials.push(concrete.clone());
+        d.layers.retain(|l| l.name != "A-WALL");
+        d.layers.push(cadaddy_doc::Layer { name: "A-WALL".into(), material: Some(concrete.name.clone()), ..cadaddy_doc::Layer::default() });
+        let s = derive(&d, &rules);
+        assert!(s.tris.iter().any(|v| v.c[..3] == [c.0, c.1, c.2]), "walls take the material's colour");
     }
 
     #[test]

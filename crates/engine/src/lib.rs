@@ -844,6 +844,16 @@ impl Default for Session {
     }
 }
 
+/// CMATERIAL as an object's material: `None` for ByLayer, and for a value that names no material
+/// of the drawing (files keep CMATERIAL as a handle).
+fn current_material(d: &Drawing) -> Option<String> {
+    let m = d.header.str("CMATERIAL", cadaddy_doc::material::BY_LAYER);
+    if m.eq_ignore_ascii_case(cadaddy_doc::material::BY_BLOCK) {
+        return Some(cadaddy_doc::material::BY_BLOCK.into());
+    }
+    d.material(&m).map(|x| x.name.clone())
+}
+
 impl Session {
     pub fn new() -> Self {
         let mut s = Session::empty();
@@ -993,7 +1003,8 @@ impl Session {
         }
     }
 
-    /// Common properties for new objects (CLAYER, CECOLOR, CELTYPE, CELWEIGHT, CELTSCALE).
+    /// Common properties for new objects (CLAYER, CECOLOR, CELTYPE, CELWEIGHT, CELTSCALE,
+    /// CMATERIAL).
     pub fn current_common(&self) -> Common {
         let Ok(d) = self.doc() else { return Common::default() };
         let h = &d.header;
@@ -1004,6 +1015,7 @@ impl Session {
             lineweight: cadaddy_doc::Lineweight::from_dxf(h.i64("CELWEIGHT", -1) as i16),
             ltscale: h.f64("CELTSCALE", 1.0),
             plot_style: h.str("CPLOTSTYLE", "ByLayer"),
+            material: current_material(d),
             ..Common::default()
         }
     }

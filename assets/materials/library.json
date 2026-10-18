@@ -1,0 +1,24 @@
+{
+  "about": "CADaddy's material library: recipes CADaddy turns into colour, normal and roughness textures (crates/render/src/materials.rs). Original work, CC0.",
+  "materials": [
+    {"id": "concrete", "name": "Concrete, cast", "category": "Masonry", "color": "#9a9892", "roughness": 0.9, "pattern": {"kind": "speckle", "contrast": 0.18, "detail": 6}, "tile": [1.2, 1.2]},
+    {"id": "concrete-polished", "name": "Concrete, polished", "category": "Masonry", "color": "#a7a59f", "roughness": 0.35, "pattern": {"kind": "speckle", "contrast": 0.1, "detail": 5}, "tile": [1.5, 1.5]},
+    {"id": "brick-red", "name": "Brick, red, running bond", "category": "Masonry", "color": "#8e3f2c", "roughness": 0.85, "pattern": {"kind": "brick", "unit": [0.215, 0.065], "joint": 0.01, "joint_color": "#b8b1a4", "variation": 0.18}, "tile": [0.45, 0.3]},
+    {"id": "block-grey", "name": "Concrete block", "category": "Masonry", "color": "#8f8e8a", "roughness": 0.92, "pattern": {"kind": "brick", "unit": [0.39, 0.19], "joint": 0.01, "joint_color": "#a9a7a1", "variation": 0.06}, "tile": [0.8, 0.4]},
+    {"id": "paint-white", "name": "Paint, white (drywall)", "category": "Finishes", "color": "#ecebe6", "roughness": 0.75, "pattern": {"kind": "speckle", "contrast": 0.025, "detail": 4}, "tile": [1.0, 1.0]},
+    {"id": "paint-beige", "name": "Paint, warm beige (drywall)", "category": "Finishes", "color": "#d9cdb5", "roughness": 0.75, "pattern": {"kind": "speckle", "contrast": 0.025, "detail": 4}, "tile": [1.0, 1.0]},
+    {"id": "carpet-grey", "name": "Carpet, charcoal loop", "category": "Flooring", "color": "#5a5c60", "roughness": 0.98, "pattern": {"kind": "carpet", "contrast": 0.22}, "tile": [0.5, 0.5]},
+    {"id": "carpet-blue", "name": "Carpet, blue tile", "category": "Flooring", "color": "#3a4a68", "roughness": 0.98, "pattern": {"kind": "carpet", "contrast": 0.2, "grid": 0.5}, "tile": [1.0, 1.0]},
+    {"id": "oak", "name": "Oak, natural", "category": "Wood", "color": "#b48a5a", "roughness": 0.55, "pattern": {"kind": "wood", "rings": 9, "contrast": 0.28}, "tile": [0.6, 0.6]},
+    {"id": "walnut", "name": "Walnut", "category": "Wood", "color": "#6b4a32", "roughness": 0.5, "pattern": {"kind": "wood", "rings": 12, "contrast": 0.3}, "tile": [0.6, 0.6]},
+    {"id": "oak-planks", "name": "Oak floor planks", "category": "Flooring", "color": "#b08454", "roughness": 0.5, "pattern": {"kind": "planks", "unit": [1.2, 0.15], "joint": 0.002, "joint_color": "#5a4330", "variation": 0.12, "rings": 9}, "tile": [2.4, 0.6]},
+    {"id": "tile-white", "name": "Ceramic tile, white 300", "category": "Tile", "color": "#efefec", "roughness": 0.2, "pattern": {"kind": "tile", "unit": [0.3, 0.3], "joint": 0.003, "joint_color": "#c9c6bf", "variation": 0.03}, "tile": [0.6, 0.6]},
+    {"id": "tile-grey", "name": "Porcelain tile, grey 600", "category": "Tile", "color": "#8a8985", "roughness": 0.35, "pattern": {"kind": "tile", "unit": [0.6, 0.6], "joint": 0.003, "joint_color": "#6e6c67", "variation": 0.05, "speckle": 0.08}, "tile": [1.2, 1.2]},
+    {"id": "ceiling-tile", "name": "Acoustic ceiling tile 600", "category": "Ceiling", "color": "#e9e8e2", "roughness": 0.95, "pattern": {"kind": "ceiling", "unit": [0.6, 0.6], "joint": 0.015, "joint_color": "#d4d3cc"}, "tile": [1.2, 1.2]},
+    {"id": "marble-white", "name": "Marble, white", "category": "Stone", "color": "#e7e5e0", "roughness": 0.15, "pattern": {"kind": "marble", "contrast": 0.35}, "tile": [1.2, 1.2]},
+    {"id": "glass-clear", "name": "Glass, clear", "category": "Glass", "color": "#d8e6ea", "roughness": 0.02, "opacity": 0.15, "refraction": 1.52, "pattern": {"kind": "plain"}, "tile": [1.0, 1.0]},
+    {"id": "steel-brushed", "name": "Steel, brushed", "category": "Metal", "color": "#a9adb1", "roughness": 0.35, "metallic": 1.0, "pattern": {"kind": "brushed", "contrast": 0.12}, "tile": [0.5, 0.5]},
+    {"id": "aluminium", "name": "Aluminium, satin", "category": "Metal", "color": "#c4c7ca", "roughness": 0.3, "metallic": 1.0, "pattern": {"kind": "speckle", "contrast": 0.02, "detail": 3}, "tile": [0.5, 0.5]},
+    {"id": "asphalt", "name": "Asphalt", "category": "Site", "color": "#3d3d3c", "roughness": 0.95, "pattern": {"kind": "speckle", "contrast": 0.3, "detail": 7}, "tile": [1.0, 1.0]}
+  ]
+}
