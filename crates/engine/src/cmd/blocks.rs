@@ -83,6 +83,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
     .into_iter()
     .chain(xref::specs())
+    .chain(xclip::specs())
     .chain(refedit::specs())
     .chain(bedit::specs())
     .collect()
@@ -173,6 +174,7 @@ fn insert_entity(blk: &Block, at: Vec2, scale: Vec2, rotation: f64, base: Option
         rows: 1,
         col_spacing: 0.0,
         row_spacing: 0.0,
+        clip: None,
     };
     if let Some(b) = base {
         let landed = ins.transform(blk.base.xy()).apply(b);
@@ -512,6 +514,7 @@ impl BlockM {
 }
 
 mod insert_file;
+mod xclip;
 pub(crate) mod xref;
 
 /// Where the command-line INSERT is in its prompt sequence.

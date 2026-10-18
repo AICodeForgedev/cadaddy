@@ -380,6 +380,7 @@ fn parameters_in_a_stretch_selection_are_carried_along() {
         rows: 1,
         col_spacing: 0.0,
         row_spacing: 0.0,
+        clip: None,
     };
     let r = d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::Insert(ins)).unwrap();
     cadaddy_doc::dynblock::set_property(&mut d, r, "Width", "30").unwrap();
@@ -481,6 +482,7 @@ fn door_at_100(d: &mut cadaddy_doc::Drawing) -> Handle {
         rows: 1,
         col_spacing: 0.0,
         row_spacing: 0.0,
+        clip: None,
     };
     d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::Insert(ins)).unwrap()
 }

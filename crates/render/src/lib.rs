@@ -1278,7 +1278,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             }
             mtext(b, ctx, t, rgb, lw);
         }
-        EntityKind::Insert(ins) => insert(b, ctx, e, ins, rgb),
+        EntityKind::Insert(ins) => insert(b, ctx, e, ins, rgb, lw),
         EntityKind::Dimension(dm) => {
             if let Some(blk) = dm.block.as_ref().and_then(|n| ctx.d.block(n))
                 && ctx.depth < cadaddy_doc::MAX_BLOCK_DEPTH
@@ -1403,7 +1403,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                     let dir = if ins.insert.x >= land.x { 1.0 } else { -1.0 };
                     b.polyline(ctx, rgb, lw, &[land, land + Vec2::new(m.dogleg * dir, 0.0)]);
                 }
-                insert(b, ctx, e, ins, rgb);
+                insert(b, ctx, e, ins, rgb, lw);
             }
         }
         EntityKind::Point(p) => {
@@ -1758,32 +1758,78 @@ fn image(b: &mut Builder, ctx: &Ctx, i: &cadaddy_doc::Image, rgb: Ink, lw: f32) 
     }
 }
 
-fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb: Ink) {
+/// A block reference's contents: every copy (MINSERT rows × columns) of its block's objects.
+fn insert_contents(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, blk: &cadaddy_doc::Block) {
+    let cols = ins.cols.clamp(1, 10_000);
+    let rows = ins.rows.clamp(1, 10_000);
+    'copies: for r in 0..rows {
+        for c in 0..cols {
+            if !b.expand() {
+                break 'copies;
+            }
+            let off = Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
+            let m = Mat3::translate(off).then_before(ins.transform(blk.base.xy()));
+            let sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, m) };
+            for be in blk.entities.iter() {
+                // Constant/visible attribute definitions inside blocks are not drawn; attribs are.
+                if matches!(be.kind, EntityKind::AttDef(_)) {
+                    continue;
+                }
+                if !b.expand() {
+                    break 'copies;
+                }
+                entity(b, &sub, be);
+            }
+        }
+    }
+}
+
+fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb: Ink, lw: f32) {
     if ctx.depth >= cadaddy_doc::MAX_BLOCK_DEPTH {
         return;
     }
     if let Some(blk) = ctx.d.block(&ins.block) {
-        let cols = ins.cols.clamp(1, 10_000);
-        let rows = ins.rows.clamp(1, 10_000);
-        'copies: for r in 0..rows {
-            for c in 0..cols {
-                if !b.expand() {
-                    break 'copies;
-                }
-                let off = Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
-                let m = Mat3::translate(off).then_before(ins.transform(blk.base.xy()));
-                let sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, m) };
-                for be in blk.entities.iter() {
-                    // Constant/visible attribute definitions inside blocks are not drawn; attribs are.
-                    if matches!(be.kind, EntityKind::AttDef(_)) {
-                        continue;
+        // XCLIP: the contents are drawn on their own, then only what is inside the boundary
+        // (in block coordinates, placed like the block) is kept.
+        let clip = ins.clip.as_ref().filter(|c| c.active()).and_then(|c| {
+            let m = ctx.xf.then_before(ins.transform(blk.base.xy()));
+            let poly = clip::PolyClip::new(&c.boundary.iter().map(|p| m.apply(*p)).collect::<Vec<_>>())?;
+            Some(if c.inverted { poly.inverted() } else { poly })
+        });
+        match clip {
+            Some(poly) => {
+                let mut part = Builder {
+                    list: DisplayList::default(),
+                    opts: b.opts,
+                    plotting: b.plotting,
+                    styles: b.styles,
+                    named: b.named,
+                    shared_budget: b.shared_budget,
+                    transparency: b.transparency,
+                };
+                // The same expansion budget as the rest of the list.
+                part.list.expanded = b.list.expanded;
+                insert_contents(&mut part, ctx, e, ins, blk);
+                b.list.expanded = part.list.expanded;
+                // Plot text entries point at primitives by index; the clipped copies are new ones.
+                part.list.texts.clear();
+                append_clipped(&mut b.list, &part.list, &Clip::Poly(&poly));
+                // XCLIPFRAME: 0 = no frame, 1 = shown and plotted, 2 = shown but not plotted.
+                let frame = match ctx.d.header.i64("XCLIPFRAME", 2) {
+                    0 => false,
+                    2 => !b.plotting,
+                    _ => true,
+                };
+                if let (true, Some(c)) = (frame, ins.clip.as_ref()) {
+                    let m = ins.transform(blk.base.xy());
+                    let mut pts: Vec<Vec2> = c.boundary.iter().map(|p| m.apply(*p)).collect();
+                    if let Some(f) = pts.first().copied() {
+                        pts.push(f);
                     }
-                    if !b.expand() {
-                        break 'copies;
-                    }
-                    entity(b, &sub, be);
+                    b.polyline(ctx, rgb, lw, &pts);
                 }
             }
+            None => insert_contents(b, ctx, e, ins, blk),
         }
     }
     if b.opts.text {

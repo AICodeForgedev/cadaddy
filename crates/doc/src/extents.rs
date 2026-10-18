@@ -122,6 +122,12 @@ fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<
                         inner
                     }
                 };
+                // A clip boundary (XCLIP) hides what lies outside it; an inverted one may hide
+                // the middle only, which leaves the outer box as it is.
+                let inner = match ins.clip.as_ref().filter(|c| c.active() && !c.inverted) {
+                    Some(c) => inner.intersection(&Bounds2::from_points(c.boundary.iter().copied())),
+                    None => inner,
+                };
                 b = if inner.is_empty() { Bounds2::EMPTY } else { Bounds2::from_points(inner.corners().map(|c| m.apply(c))) };
                 if ins.cols > 1 || ins.rows > 1 {
                     let off =

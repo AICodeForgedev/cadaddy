@@ -36,10 +36,11 @@ const MODELLED_KEYS: &[&str] = &[
     "ACAD_IMAGE_VARS",
 ];
 
-/// Extension dictionary entries not kept raw: dimension associativity (CADaddy reads and
-/// rewrites it), draw order and annotation scale contexts (written from their own models by the
-/// changes that model them; stale copies would contradict the drawing).
-const MODELLED_XDICT_KEYS: &[&str] = &["ACAD_DIMASSOC", "ACAD_SORTENTS", "ACDBCONTEXTDATAMANAGER"];
+/// Extension dictionary entries not kept raw: dimension associativity and XCLIP boundaries
+/// (`ACAD_FILTER`; CADaddy reads and rewrites both), draw order and annotation scale contexts
+/// (written from their own models by the changes that model them; stale copies would contradict
+/// the drawing).
+const MODELLED_XDICT_KEYS: &[&str] = &["ACAD_DIMASSOC", "ACAD_FILTER", "ACAD_SORTENTS", "ACDBCONTEXTDATAMANAGER"];
 
 /// Applications whose xdata CADaddy reads and writes itself. `ACAD` holds dimension overrides
 /// (DSTYLE) on dimensions and dimension styles; elsewhere it is kept.

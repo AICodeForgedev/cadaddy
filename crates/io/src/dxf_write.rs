@@ -82,6 +82,72 @@ impl W {
 
 /// The `DIMASSOC` object of an associative dimension (stored in the dimension's extension
 /// dictionary under `ACAD_DIMASSOC`).
+/// The objects an XCLIP boundary is written as: the reference's extension dictionary, its
+/// `ACAD_FILTER` dictionary and the `SPATIAL` filter.
+struct XclipObj {
+    xdict: String,
+    filters: String,
+    filter: String,
+}
+
+/// The `SPATIAL_FILTER` of each clipped block reference, with its two dictionaries. The boundary
+/// is written in block coordinates with an identity inverse block transform, which every reader
+/// takes the same way.
+fn write_xclips(w: &mut W, plan: &HashMap<Handle, XclipObj>, every: &[&Entity]) {
+    let mut refs: Vec<(&Entity, &XclipObj)> = every.iter().filter_map(|e| plan.get(&e.handle).map(|x| (*e, x))).collect();
+    refs.sort_by_key(|(e, _)| e.handle);
+    for (e, x) in refs {
+        let EntityKind::Insert(ins) = &e.kind else { continue };
+        let Some(clip) = &ins.clip else { continue };
+        let eh = e.handle.hex();
+        w.s(0, "DICTIONARY");
+        w.s(5, x.xdict.clone());
+        w.group("ACAD_REACTORS", 330, &[&eh]);
+        w.s(330, eh.clone());
+        w.s(100, "AcDbDictionary");
+        w.i(280, 1);
+        w.i(281, 1);
+        w.s(3, "ACAD_FILTER");
+        w.s(360, x.filters.clone());
+        w.s(0, "DICTIONARY");
+        w.s(5, x.filters.clone());
+        w.group("ACAD_REACTORS", 330, &[&x.xdict]);
+        w.s(330, x.xdict.clone());
+        w.s(100, "AcDbDictionary");
+        w.i(280, 1);
+        w.i(281, 1);
+        w.s(3, "SPATIAL");
+        w.s(360, x.filter.clone());
+        w.s(0, "SPATIAL_FILTER");
+        w.s(5, x.filter.clone());
+        w.group("ACAD_REACTORS", 330, &[&x.filters]);
+        w.s(330, x.filters.clone());
+        w.s(100, "AcDbFilter");
+        w.s(100, "AcDbSpatialFilter");
+        let pts: Vec<Vec2> = clip.boundary.iter().copied().filter(|p| p.is_finite()).collect();
+        w.i(70, pts.len() as i64);
+        for p in &pts {
+            w.f(10, p.x);
+            w.f(20, p.y);
+        }
+        w.f(210, 0.0);
+        w.f(220, 0.0);
+        w.f(230, 1.0);
+        w.f(11, 0.0);
+        w.f(21, 0.0);
+        w.f(31, 0.0);
+        w.i(71, i64::from(clip.enabled));
+        w.i(72, 0);
+        w.i(73, 0);
+        // The inverse block transform, then the clip transform: identities (4×3, column major).
+        for _ in 0..2 {
+            for v in [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+                w.f(40, v);
+            }
+        }
+    }
+}
+
 struct AssocObj {
     xdict: String,
     handle: String,
@@ -117,6 +183,9 @@ struct Ctx {
     ltypes: HashMap<String, String>,
     /// Associative dimension → its DIMASSOC object.
     assoc: HashMap<Handle, AssocObj>,
+    /// XCLIP boundaries: the extension dictionary, filter dictionary and SPATIAL_FILTER of each
+    /// clipped block reference.
+    xclips: HashMap<Handle, XclipObj>,
     /// Table → (anonymous `*T` block name, BLOCK_RECORD handle).
     tables: HashMap<Handle, (String, String)>,
     /// Table style name → TABLESTYLE handle (the first is the fallback).
@@ -409,20 +478,21 @@ fn transparency_440(t: Transparency) -> Option<i64> {
 }
 
 fn common(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str) {
-    common_x(w, e, owner, paper, subclass, None);
+    common_x(w, e, owner, paper, subclass, None, None);
 }
 
-/// Common entity groups; `assoc` adds the reactor and extension dictionary of a DIMASSOC.
-fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, assoc: Option<&AssocObj>) {
+/// Common entity groups; `reactor` adds a reactor (a DIMASSOC) and `xdict` the entity's extension
+/// dictionary (a DIMASSOC's, an XCLIP's).
+fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, reactor: Option<&str>, xdict: Option<&str>) {
     w.s(5, e.handle.hex());
-    let mut reactors: Vec<String> = assoc.map(|a| a.handle.clone()).into_iter().collect();
+    let mut reactors: Vec<String> = reactor.map(str::to_string).into_iter().collect();
     reactors.extend(w.reactors.get(&e.handle).into_iter().flatten().cloned());
     if !reactors.is_empty() {
         let rs: Vec<&str> = reactors.iter().map(String::as_str).collect();
         w.group("ACAD_REACTORS", 330, &rs);
     }
-    if let Some(a) = assoc {
-        w.group("ACAD_XDICTIONARY", 360, &[&a.xdict]);
+    if let Some(x) = xdict {
+        w.group("ACAD_XDICTIONARY", 360, &[x]);
     }
     w.s(330, owner);
     w.s(100, "AcDbEntity");
@@ -828,7 +898,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
         }
         EntityKind::Insert(i) => {
             w.s(0, "INSERT");
-            common(w, e, owner, paper, "AcDbBlockReference");
+            let xclip = cx.xclips.get(&e.handle).map(|x| x.xdict.as_str());
+            common_x(w, e, owner, paper, "AcDbBlockReference", None, xclip);
             if !i.attribs.is_empty() {
                 w.i(66, 1);
             }
@@ -873,7 +944,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
         }
         EntityKind::Dimension(dm) => {
             w.s(0, "DIMENSION");
-            common_x(w, e, owner, paper, "AcDbDimension", cx.assoc.get(&e.handle));
+            let a = cx.assoc.get(&e.handle);
+            common_x(w, e, owner, paper, "AcDbDimension", a.map(|a| a.handle.as_str()), a.map(|a| a.xdict.as_str()));
             let bname = cx.dim_blocks.get(&e.handle).cloned().or_else(|| dm.block.clone()).unwrap_or_default();
             w.s(2, bname);
             w.p(10, dm.defpt);
@@ -1739,6 +1811,27 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
             }
         }
     }
+    // Dimensions inside block definitions (a -BLOCK of model dimensions, a nested detail): one
+    // whose own geometry block isn't written gets a fresh one, or readers drop it as invalid.
+    for b in d.blocks.values().filter(|b| !dim_plan.skip.contains(&b.name.to_ascii_uppercase())) {
+        for e in b.entities.iter() {
+            let EntityKind::Dimension(dm) = &e.kind else { continue };
+            let written = dm.block.as_deref().is_some_and(|n| d.block(n).is_some() && !dim_plan.skip.contains(&n.to_ascii_uppercase()));
+            if written || cx.dim_blocks.contains_key(&e.handle) {
+                continue;
+            }
+            let ents = dim_block_entities(d, dm, &e.common.layer);
+            let mut name = format!("*D{n}");
+            while d.block(&name).is_some() {
+                n += 1;
+                name = format!("*D{n}");
+            }
+            n += 1;
+            let brh = w.h();
+            cx.dim_blocks.insert(e.handle, name.clone());
+            dim_defs.push((name, brh, ents));
+        }
+    }
     // Every entity, including block contents (for arrows, tables and overrides).
     let every: Vec<&Entity> = all_spaces
         .iter()
@@ -1814,6 +1907,14 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
                     cx.assoc.insert(e.handle, AssocObj { xdict: w.h(), handle: w.h(), flags, refs });
                 }
             }
+        }
+    }
+    // XCLIP boundaries of clipped block references.
+    for e in every.iter() {
+        if let EntityKind::Insert(i) = &e.kind
+            && i.clip.as_ref().is_some_and(|c| c.boundary.len() >= 3)
+        {
+            cx.xclips.insert(e.handle, XclipObj { xdict: w.h(), filters: w.h(), filter: w.h() });
         }
     }
     let default_table_style = [TableStyle::default()];
@@ -1902,6 +2003,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     if !cx.assoc.is_empty() {
         classes.push(("DIMASSOC", "AcDbDimAssoc", 0, false));
+    }
+    if !cx.xclips.is_empty() {
+        classes.push(("SPATIAL_FILTER", "AcDbSpatialFilter", 0, false));
     }
     if cx.native_mleader() && every.iter().any(|e| matches!(e.kind, EntityKind::MLeader(_))) {
         classes.push(("MULTILEADER", "AcDbMLeader", 1025, true));
@@ -2392,6 +2496,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         }
     }
     scale_list(&mut w, &scales, &scale_dict, &root_dict);
+    write_xclips(&mut w, &cx.xclips, &every);
     // Dimension associativity: extension dictionary + DIMASSOC per dimension.
     let mut assoc: Vec<(&Handle, &AssocObj)> = cx.assoc.iter().collect();
     assoc.sort_by_key(|(h, _)| **h);

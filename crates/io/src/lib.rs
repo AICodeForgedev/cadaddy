@@ -21,6 +21,7 @@ mod svg_read;
 
 /// Multilines and their styles (MLINE, MLINESTYLE).
 mod dxf_mline;
+mod dxf_xclip;
 
 use cadaddy_doc::{Drawing, Space};
 use cadaddy_geom::Bounds2;

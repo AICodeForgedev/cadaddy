@@ -523,6 +523,31 @@ pub struct Insert {
     pub col_spacing: f64,
     #[serde(default)]
     pub row_spacing: f64,
+    /// XCLIP: only the part of the block inside this boundary shows and plots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip: Option<XClip>,
+}
+
+/// A block reference's clip boundary (XCLIP), in the block definition's coordinates, so it
+/// moves, turns and scales with the reference.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XClip {
+    /// The boundary polygon (a rectangle is its four corners).
+    pub boundary: Vec<Vec2>,
+    /// XCLIP ON / OFF: an off clip is kept but the whole block shows.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// Inverted: the part inside the boundary is hidden instead.
+    #[serde(default)]
+    pub inverted: bool,
+}
+
+impl XClip {
+    /// Whether the clip shows anything different from the whole block.
+    pub fn active(&self) -> bool {
+        self.enabled && self.boundary.len() >= 3 && self.boundary.iter().all(|p| p.is_finite())
+    }
 }
 fn unit_scale() -> Vec3 {
     Vec3::new(1.0, 1.0, 1.0)

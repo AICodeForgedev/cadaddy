@@ -89,6 +89,7 @@ fn clip_boundary_and_block_references() {
         rows: 1,
         col_spacing: 0.0,
         row_spacing: 0.0,
+        clip: None,
     };
     d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).unwrap();
     let list = build(&d, &Space::Model, &opts());
