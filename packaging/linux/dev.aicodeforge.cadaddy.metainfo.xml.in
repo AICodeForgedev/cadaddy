@@ -4,7 +4,7 @@
 <component type="desktop-application">
   <id>dev.aicodeforge.cadaddy</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>FSL-1.1-ALv2</project_license>
+  <project_license>LicenseRef-FSL-1.1-ALv2</project_license>
   <name>CADaddy</name>
   <summary>Draft, dimension and plot 2D drawings</summary>
   <developer id="dev.aicodeforge">
