@@ -1,50 +1,24 @@
 {
   "schema": 1,
-  "repo": "storytold/cadcraft",
+  "repo": "AICodeForgedev/cadaddy",
   "branch": "main",
-  "head": "86f3199b400c271a1166103519b3785e4ac88e72",
-  "head_date": "2026-10-08T13:12:32Z",
-  "commits": 26,
+  "head": "b9698c6c53e9a7ec49c8ae196a307180e4abc11b",
+  "head_date": "2026-10-18T02:06:58Z",
+  "commits": 47,
   "unattributed_commits": 0,
   "contributors": [
     {
-      "login": "echelon",
+      "login": "AICodeForgedev",
       "people_entry": true,
       "github_name": null,
-      "prs": 4,
-      "commits": 23,
-      "lines_added": 70258,
-      "lines_deleted": 3353,
-      "binary_added": 26,
-      "binary_deleted": 5,
-      "first_commit": "2026-10-06T00:15:47Z",
-      "last_commit": "2026-10-08T13:50:35Z"
-    },
-    {
-      "login": "h-a-n-a-s-h-i",
-      "people_entry": false,
-      "github_name": null,
       "prs": 0,
-      "commits": 2,
-      "lines_added": 34,
-      "lines_deleted": 34,
-      "binary_added": 0,
+      "commits": 47,
+      "lines_added": 26915,
+      "lines_deleted": 7153,
+      "binary_added": 53,
       "binary_deleted": 0,
-      "first_commit": "2026-10-08T12:13:20Z",
-      "last_commit": "2026-10-08T14:02:20Z"
-    },
-    {
-      "login": "XusBadia",
-      "people_entry": false,
-      "github_name": null,
-      "prs": 1,
-      "commits": 1,
-      "lines_added": 244,
-      "lines_deleted": 1,
-      "binary_added": 2,
-      "binary_deleted": 0,
-      "first_commit": "2026-10-08T13:12:32Z",
-      "last_commit": "2026-10-08T13:12:32Z"
+      "first_commit": "2026-10-14T23:01:06Z",
+      "last_commit": "2026-10-18T02:06:58Z"
     }
   ],
   "models": [
@@ -53,9 +27,9 @@
       "company": "Anthropic",
       "model": "Claude Opus",
       "version": "5.5",
-      "commits": 25,
-      "lines_added": 70529,
-      "lines_deleted": 3388
+      "commits": 46,
+      "lines_added": 27079,
+      "lines_deleted": 7157
     }
   ]
 }
