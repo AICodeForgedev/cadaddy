@@ -2,7 +2,7 @@
 //! button in the ribbon's title row, and a small support banner (like Wikipedia's) at most once a
 //! month. Never a nag dialog, never a locked feature.
 //!
-//! The links go to aicodeforge.dev/cadaddy (`pdfapp/cadaddy/site.mjs` on S1) and open in the
+//! The links go to aicodeforge.dev/cadaddy and open in the
 //! system browser: the feedback form gets the version and OS in its address, and /donate
 //! redirects to the GoFundMe page named in the server's `donate-url` file, so the fundraiser can
 //! change without a release.
