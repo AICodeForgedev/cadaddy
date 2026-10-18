@@ -38,6 +38,7 @@ pub use tables::*;
 /// File data CADaddy doesn't model, kept for saving (#528).
 pub mod dynblock;
 pub mod foreign;
+pub mod hyperlink;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocError {

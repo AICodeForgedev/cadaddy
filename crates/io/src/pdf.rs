@@ -494,12 +494,13 @@ fn all_links(d: &Drawing, o: &PdfOptions) -> Vec<(Handle, String)> {
         return out;
     }
     let given: std::collections::HashSet<Handle> = out.iter().map(|(h, _)| *h).collect();
+    let base = d.header.str("HYPERLINKBASE", "");
     let mut read: Vec<(Handle, String)> = std::iter::once(&d.model)
         .chain(d.layouts.iter().map(|l| &l.entities))
         .chain(d.blocks.values().map(|b| &b.entities))
         .flat_map(|s| s.iter())
         .filter(|e| !given.contains(&e.handle))
-        .filter_map(|e| Some((e.handle, pe_url(&e.common.xdata)?)))
+        .filter_map(|e| Some((e.handle, pe_url(&e.common.xdata, &base)?)))
         .collect();
     read.sort_by_key(|(h, _)| *h);
     read.dedup_by_key(|(h, _)| *h);
@@ -507,12 +508,11 @@ fn all_links(d: &Drawing, o: &PdfOptions) -> Vec<(Handle, String)> {
     out
 }
 
-/// The link target of `PE_URL` extended data: the first string (group 1000) after
-/// `1001 PE_URL`, before the next application's data.
-fn pe_url(xdata: &[cadaddy_doc::RawTag]) -> Option<String> {
-    let start = xdata.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case("PE_URL"))?;
-    let url = xdata.get(start + 1..)?.iter().take_while(|t| t.code != 1001).find(|t| t.code == 1000)?.value.trim();
-    (!url.is_empty() && url.len() <= MAX_URL).then(|| url.to_string())
+/// The link target of a hyperlink (`PE_URL` extended data), relative links resolved against
+/// HYPERLINKBASE (`base`). A link into the drawing itself (only a named location) has none.
+fn pe_url(xdata: &[cadaddy_doc::RawTag], base: &str) -> Option<String> {
+    let url = cadaddy_doc::hyperlink::resolve(&cadaddy_doc::hyperlink::read(xdata)?, base, None)?;
+    (!url.is_empty() && url.len() <= MAX_URL).then_some(url)
 }
 
 /// Link annotation rectangles: the area (in points) each linked entity covers on the sheet,

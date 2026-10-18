@@ -318,7 +318,7 @@ mod native {
         ]
     }
 
-    /// Add the [`unwritten_header_vars`] to the HEADER section of acadrust's DXF text, before its
+    /// Add the [`unwritten_header_vars`] (and HYPERLINKBASE) to the HEADER section of acadrust's DXF text, before its
     /// ENDSEC; a variable the writer already wrote is left alone. Text of another layout than
     /// acadrust's (`  0\r\nSECTION\r\n  2\r\nHEADER\r\n` … `  0\r\nENDSEC\r\n`) is returned unchanged.
     fn add_header_vars(mut dxf: Vec<u8>, h: &acadrust::document::HeaderVariables) -> Vec<u8> {
@@ -330,11 +330,16 @@ mod native {
         let Some(end) = dxf.windows(END.len()).position(|w| w == END).map(|p| p + 2) else { return dxf };
         let section = dxf.get(..end).unwrap_or_default();
         let mut add = String::new();
+        let written = |name: &str| section.windows(name.len() + 2).any(|w| w.starts_with(name.as_bytes()) && w.ends_with(b"\r\n"));
         for (name, code, value) in unwritten_header_vars(h) {
-            let written = section.windows(name.len() + 2).any(|w| w.starts_with(name.as_bytes()) && w.ends_with(b"\r\n"));
-            if !written && value.parse::<f64>().is_ok_and(f64::is_finite) {
+            if !written(name) && value.parse::<f64>().is_ok_and(f64::is_finite) {
                 add.push_str(&format!("  9\r\n{name}\r\n{code:>3}\r\n{value}\r\n"));
             }
+        }
+        // HYPERLINKBASE, text: when set, on one line.
+        let base = h.hyperlink_base.as_str();
+        if !written("$HYPERLINKBASE") && !base.is_empty() && !base.contains(['\r', '\n']) {
+            add.push_str(&format!("  9\r\n$HYPERLINKBASE\r\n  1\r\n{base}\r\n"));
         }
         dxf.splice(end..end, add.into_bytes());
         dxf

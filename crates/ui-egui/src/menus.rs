@@ -449,6 +449,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some("qselect".into());
             Ok(Value::Null)
         }
+        // Typed or from the menu: the Insert Hyperlink dialog (objects selected first).
+        "hyperlink" if params.is_null() => {
+            crate::hyperlinks::start(app);
+            Ok(Value::Null)
+        }
         "units" | "un" if params.is_null() => {
             app.ui.dialog = Some("units".into());
             Ok(Value::Null)

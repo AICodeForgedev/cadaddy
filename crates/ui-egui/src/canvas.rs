@@ -1612,7 +1612,16 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.session.pending_window = None;
         app.canvas.drag_window = false;
     }
-    let pressed_primary = pressed_primary && !picked && !hatch_dialog && !idle_dbl;
+    // Hyperlinks: the tooltip over a linked object; Ctrl+click (⌘-click) follows its link.
+    let link_pick = if inside && pressed_primary && mods.command {
+        raw_world
+            .zip(app.session.state().ok())
+            .and_then(|(w, st)| cadaddy_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale))
+    } else {
+        app.canvas.hover
+    };
+    let followed = inside && crate::hyperlinks::hover_and_follow(app, ui.ctx(), &resp, link_pick, pressed_primary, mods.command);
+    let pressed_primary = pressed_primary && !picked && !hatch_dialog && !idle_dbl && !followed;
     // Clicks.
     if inside
         && pressed_primary

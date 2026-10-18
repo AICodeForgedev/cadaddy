@@ -23,6 +23,7 @@ mod gripcmds;
 mod griphot;
 pub mod groups;
 pub(crate) mod hatch;
+pub mod hyperlink;
 mod imageattach;
 mod imageclip;
 mod inquiry;
@@ -204,6 +205,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(blocks::specs());
         v.extend(modify::specs());
         v.extend(draworder::specs());
+        v.extend(hyperlink::specs());
         v.extend(imageclip::specs());
         v.extend(array::specs());
         v.extend(symbol::specs());

@@ -306,6 +306,8 @@ fn header_default(n: &str) -> Option<Value> {
         "USERI1" | "USERI2" | "USERI3" | "USERI4" | "USERI5" => Some(json!(0)),
         "USERR1" | "USERR2" | "USERR3" | "USERR4" | "USERR5" => Some(json!(0.0)),
         "USERS1" | "USERS2" | "USERS3" | "USERS4" | "USERS5" => Some(json!("")),
+        // The base relative hyperlinks resolve against ("": the drawing's folder).
+        "HYPERLINKBASE" => Some(json!("")),
         _ => None,
     }
 }
@@ -494,6 +496,15 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         // AutoCAD's range: gaps up to 5000 drawing units close a hatch boundary.
         "HPGAPTOL" => s.doc_mut()?.header.set_f64("HPGAPTOL", as_f64(v).filter(|g| (0.0..=5000.0).contains(g)).ok_or_else(bad)?),
         "CONSTRAINTINFER" => s.doc_mut()?.parametric.settings.infer = as_bool(v).ok_or_else(bad)?,
+        // Text, whatever it looks like (a base such as "2024" stays text).
+        "HYPERLINKBASE" => {
+            let t = match v {
+                Value::String(t) => t.trim().chars().take(cadaddy_doc::hyperlink::MAX_LEN).collect(),
+                Value::Number(x) => x.to_string(),
+                _ => return Err(bad()),
+            };
+            s.doc_mut()?.header.set("HYPERLINKBASE", cadaddy_doc::HVal::Str(t));
+        }
         _ => {
             if let Some(r) = table::set(s, &n, v) {
                 return r;

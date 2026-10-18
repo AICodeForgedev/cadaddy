@@ -22,6 +22,7 @@ pub mod credits;
 pub mod dialogs;
 pub mod docking;
 pub mod hatchdlg;
+pub mod hyperlinks;
 mod mtext_editor;
 pub mod spacemouse;
 // Report a Bug, Request a Feature, Donate.
@@ -293,6 +294,8 @@ pub struct CadApp {
     pub gpu_notice: Option<autosave::GpuNotice>,
     /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
+    /// HYPERLINK is selecting objects; its dialog opens once that ends ([`hyperlinks::resume`]).
+    pub hyperlink_pick: bool,
     /// The layout tabs' rename, selection and Move or Copy dialog ([`layouttabs`]).
     pub layout_tabs: layouttabs::LayoutTabs,
     /// The Edit Block Definition dialog ([`bedit`]).
@@ -349,6 +352,7 @@ impl CadApp {
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
             hatch_dlg: None,
+            hyperlink_pick: false,
             layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
@@ -707,6 +711,7 @@ impl CadApp {
         self.gpu_fault_tick(ctx);
         managers::plot_window_resume(self, ctx);
         hatchdlg::resume(self);
+        hyperlinks::resume(self);
         self.autosave_tick(ctx);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]

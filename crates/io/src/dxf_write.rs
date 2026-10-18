@@ -387,6 +387,7 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("INSUNITS", 70),
     ("MEASUREMENT", 70),
     ("PSLTSCALE", 70),
+    ("HYPERLINKBASE", 1),
 ];
 
 fn header_vars(w: &mut W, d: &Drawing) {
