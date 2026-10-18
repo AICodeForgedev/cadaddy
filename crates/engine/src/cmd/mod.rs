@@ -36,6 +36,7 @@ mod modify;
 mod modify2;
 mod mtext_opts;
 mod overkill;
+mod perceive;
 mod pline_opts;
 pub mod plotters;
 mod props;
@@ -208,6 +209,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(array::specs());
         v.extend(symbol::specs());
         v.extend(express::specs());
+        v.extend(perceive::specs());
         v.extend(underlay::specs());
         v.extend(takeoff::specs());
         v.extend(imageattach::specs());
