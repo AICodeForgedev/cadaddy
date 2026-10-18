@@ -34,6 +34,7 @@ pub mod dyngrips;
 pub mod dyninput;
 pub mod gpu;
 pub mod grip_dyn;
+mod groupgrips;
 pub mod i18n;
 pub mod icons;
 pub mod layers;

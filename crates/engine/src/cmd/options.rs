@@ -44,6 +44,7 @@ pub const PROFILE_VARS: &[&str] = &[
     "CROSSINGAREACOLOR",
     "SELECTIONAREAOPACITY",
     "PICKSTYLE",
+    "GROUPDISPLAYMODE",
     "PICKBOX",
     "APERTURE",
     "GRIPSIZE",
@@ -142,6 +143,7 @@ pub fn reset(s: &mut Session) {
     st.cursorsize = d.cursorsize;
     st.pickfirst = d.pickfirst;
     st.pickadd = d.pickadd;
+    st.groupdisplaymode = d.groupdisplaymode;
     st.selectioncycling = d.selectioncycling;
     st.maxarray = d.maxarray;
 }

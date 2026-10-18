@@ -1,6 +1,7 @@
 //! PICKSTYLE: with group selection on (bit 1, the default), picking or windowing an object of a
-//! selectable group selects the whole group. Ctrl+Shift+A (the `pickstyle` command without a
-//! value) turns group selection on and off.
+//! selectable group selects the whole group; with associative hatch selection (bit 2), picking an
+//! associative hatch selects its boundary objects too. Ctrl+Shift+A (the `pickstyle` command
+//! without a value) turns group selection on and off.
 
 use std::collections::{HashMap, HashSet};
 
@@ -25,10 +26,15 @@ pub fn specs() -> Vec<CommandSpec> {
 /// The commands whose object prompts pick single members, not whole groups.
 const MEMBER_PICKS: &[&str] = &["groupedit", "-group"];
 
-/// `hs` plus the other members of the selectable groups they belong to (in the space being
-/// edited, visible), when PICKSTYLE has group selection on. Order: `hs` first.
+/// `hs` plus, when PICKSTYLE says so, the boundary objects of the associative hatches among them
+/// (bit 2) and the other members of the selectable groups they belong to (bit 1); in the space
+/// being edited, visible. Order: `hs` first.
 pub(crate) fn expand(s: &Session, hs: Vec<Handle>) -> Vec<Handle> {
-    if s.settings.pickstyle & 1 == 0 || hs.is_empty() || s.running.as_ref().is_some_and(|r| MEMBER_PICKS.contains(&r.id.as_str())) {
+    if hs.is_empty() || s.running.as_ref().is_some_and(|r| MEMBER_PICKS.contains(&r.id.as_str())) {
+        return hs;
+    }
+    let hs = if s.settings.pickstyle & 2 != 0 { with_hatch_boundaries(s, hs) } else { hs };
+    if s.settings.pickstyle & 1 == 0 {
         return hs;
     }
     let Ok(d) = s.doc() else { return hs };
@@ -57,6 +63,30 @@ pub(crate) fn expand(s: &Session, hs: Vec<Handle>) -> Vec<Handle> {
                 if store.get(*m).is_some_and(|e| d.is_visible(e)) && seen.insert(*m) {
                     out.push(*m);
                 }
+            }
+        }
+    }
+    out
+}
+
+/// Most boundary objects one associative hatch brings along.
+const MAX_BOUNDARY: usize = 10_000;
+
+/// `hs` plus the boundary objects of the associative hatches among them.
+fn with_hatch_boundaries(s: &Session, hs: Vec<Handle>) -> Vec<Handle> {
+    let Ok(d) = s.doc() else { return hs };
+    let space = s.space();
+    let Some(store) = d.space(&space) else { return hs };
+    let mut seen: HashSet<Handle> = hs.iter().copied().collect();
+    let mut out = hs.clone();
+    for h in &hs {
+        let Some(cadaddy_doc::EntityKind::Hatch(hatch)) = store.get(*h).map(|e| &e.kind) else { continue };
+        if !hatch.associative {
+            continue;
+        }
+        for b in hatch.loops.iter().flat_map(|l| l.sources.iter()).take(MAX_BOUNDARY) {
+            if store.get(*b).is_some_and(|e| d.is_visible(e)) && seen.insert(*b) {
+                out.push(*b);
             }
         }
     }

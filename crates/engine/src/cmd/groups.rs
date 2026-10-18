@@ -5,6 +5,7 @@
 //! `groups`, saved as GROUP objects in the ACAD_GROUP dictionary. The JSON forms never prompt;
 //! typed, the commands ask as AutoCAD's command-line versions do.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use cadaddy_doc::{Drawing, Group, Handle};
@@ -15,6 +16,7 @@ use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 mod dash;
+pub mod display;
 mod pick;
 
 pub(crate) use pick::expand;
@@ -94,6 +96,28 @@ pub(crate) fn create(s: &mut Session, name: Option<&str>, description: &str, hs:
     };
     s.doc_mut()?.groups.push(Group { name: name.clone(), description: description.to_string(), selectable, members });
     Ok(name)
+}
+
+/// The groups of `groups` whose members (at least one) are all among `hs`.
+pub(crate) fn whole_groups(groups: &[Group], hs: &HashSet<Handle>) -> Vec<Group> {
+    groups.iter().filter(|g| !g.members.is_empty() && g.members.iter().all(|m| hs.contains(m))).cloned().collect()
+}
+
+/// Objects were copied (`map`: original → copy). Each group of `source` whose members were all
+/// copied gets an unnamed group (`*A…`) of the copies in `d`, as AutoCAD does when a whole group
+/// is copied. Returns how many groups were made.
+pub(crate) fn copy_groups(d: &mut Drawing, source: &[Group], map: &HashMap<Handle, Handle>) -> usize {
+    let mut n = 0;
+    for g in source {
+        if g.members.is_empty() || d.groups.len() >= MAX_GROUPS {
+            continue;
+        }
+        let Some(members) = g.members.iter().map(|m| map.get(m).copied()).collect::<Option<Vec<Handle>>>() else { continue };
+        let name = next_unnamed(d);
+        d.groups.push(Group { name, description: g.description.clone(), selectable: g.selectable, members });
+        n += 1;
+    }
+    n
 }
 
 /// Remove the groups at `idx`; their objects stay. Returns the names removed.

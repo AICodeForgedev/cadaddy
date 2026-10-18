@@ -1632,6 +1632,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             if let Err(e) = result {
                 app.session.echo(e.to_string());
             }
+        } else if let Some(g) = crate::groupgrips::at(app, &xf, hover_pos) {
+            crate::groupgrips::click(app, g);
         } else if let Some(g) = crate::dyngrips::at(app, &xf, hover_pos) {
             crate::dyngrips::click(app, g);
         } else if let Some(g) = grip_at(app, &xf, hover_pos) {
@@ -1649,6 +1651,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
         && rect.contains(origin)
         && grip_at(app, &xf, Some(origin)).is_none()
+        && crate::groupgrips::at(app, &xf, Some(origin)).is_none()
         && crate::dyngrips::at(app, &xf, Some(origin)).is_none()
     {
         app.canvas.drag_window = app.session.begin_window(xf.s2w(origin));
@@ -1876,7 +1879,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && let Ok(st) = app.session.state()
     {
         let gs = app.session.settings.gripsize as f32;
-        for h in sel.iter().take(200) {
+        // Members of a group shown with one grip (GROUPDISPLAYMODE) don't show their own.
+        let hidden = cadaddy_engine::cmd::groups::display::grips_hidden(&app.session);
+        for h in sel.iter().take(200).filter(|h| !hidden.contains(h)) {
             if let Some(e) = st.doc.entity(*h) {
                 for (gi, g) in e.kind.grips().into_iter().enumerate() {
                     let sp = xf.w2s(g);
@@ -1900,6 +1905,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
             }
         }
+        crate::groupgrips::draw(app, &painter, &xf, rect, hover_pos);
         crate::dyngrips::draw(app, &painter, &xf, rect, hover_pos);
     }
     // Rubber band preview of the active command.
@@ -2554,7 +2560,8 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)
     if !app.session.shows_grips(sel.len()) {
         return None;
     }
-    for h in sel.iter().take(200) {
+    let hidden = cadaddy_engine::cmd::groups::display::grips_hidden(&app.session);
+    for h in sel.iter().take(200).filter(|h| !hidden.contains(h)) {
         let e = st.doc.entity(*h)?;
         if st.doc.layer(&e.common.layer).is_some_and(|l| l.locked) {
             continue;
