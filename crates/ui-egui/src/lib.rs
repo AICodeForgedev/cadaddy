@@ -649,7 +649,13 @@ impl CadApp {
         // Esc in a dialog is Cancel: it closes the dialog, and the command line doesn't also
         // get it (cancelling a command waiting behind the dialog).
         if self.ui.dialog.is_some() && self.closing.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-            self.ui.dialog = None;
+            // As the dialog's Cancel does: what it was editing goes with it.
+            match self.ui.dialog.take().as_deref() {
+                Some("hatch") => self.hatch_dlg = None,
+                Some("tolerance") => self.tol_dlg = None,
+                Some("pdfimport") => self.pdf = None,
+                _ => {}
+            }
         }
         // Closing the window (title bar, File ▸ Exit, Cmd+Q) with unsaved changes asks first.
         if ctx.input(|i| i.viewport().close_requested()) && self.request_quit() {

@@ -310,8 +310,14 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
             egui::Event::Key { key, pressed: true, repeat, modifiers, .. } => match key {
                 Key::Enter => submit(app),
                 Key::Escape => {
+                    // With nothing to cancel, Esc leaves walk mode: the 3D view doesn't get keys
+                    // while the command line has them.
+                    let idle = app.cmd.buffer.is_empty() && !app.session.prompting();
                     app.cmd.buffer.clear();
                     app.session.cancel();
+                    if idle && app.walk.is_some() {
+                        crate::walk::close(app);
+                    }
                 }
                 Key::Backspace => {
                     let press = KeyPress { repeat, plain: !(modifiers.alt || modifiers.ctrl || modifiers.command) };
