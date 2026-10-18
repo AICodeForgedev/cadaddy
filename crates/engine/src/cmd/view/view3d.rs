@@ -42,6 +42,24 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             .noundo()
             .transparent(),
     );
+    // 3DWALK and 3DFLY are modes of the app window (the walk view of the drawing); the engine
+    // only says so, and reports the walking speed (STEPSIZE × STEPSPERSEC).
+    const WALK_PARAMS: &str =
+        "{} → {mode, stepSize, stepsPerSec} (the app shows the drawing in 3D and walks or flies through it; WASD and the mouse, Esc returns)";
+    v.push(
+        CommandSpec::new("3dwalk", "Walk", |s, _| walk_mode(s, false))
+            .menu(&["View", "Walk and Fly", "Walk"])
+            .alias(&["3dw"])
+            .params(WALK_PARAMS)
+            .noundo(),
+    );
+    v.push(
+        CommandSpec::new("3dfly", "Fly", |s, _| walk_mode(s, true))
+            .menu(&["View", "Walk and Fly", "Fly"])
+            .alias(&["3df"])
+            .params(WALK_PARAMS)
+            .noundo(),
+    );
     v.push(
         CommandSpec::new("view.twist", "View Twist", view_twist_cmd)
             .params("{angle: degrees (counterclockwise) | by: degrees (added to the current twist)} → {twist} — turns the plan view of model space about the centre of the screen, or the active MSPACE viewport's view about its centre (VIEWTWIST)")
@@ -166,6 +184,18 @@ pub fn projected_extents(d: &Drawing, p: &Projection) -> Bounds2 {
         }
     }
     b
+}
+
+fn walk_mode(s: &mut Session, fly: bool) -> Result<Value> {
+    let d = s.doc()?;
+    let size = d.header.f64("STEPSIZE", 6.0);
+    let rate = d.header.f64("STEPSPERSEC", 2.0);
+    Ok(json!({
+        "mode": if fly { "fly" } else { "walk" },
+        "stepSize": size,
+        "stepsPerSec": rate,
+        "message": "Walking and flying happen in the app window (View ▸ Walk and Fly).",
+    }))
 }
 
 #[cfg(test)]

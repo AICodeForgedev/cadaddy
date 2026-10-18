@@ -769,9 +769,8 @@ impl CadApp {
         }
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
-            if self.walk.is_some() && has_doc {
-                walk::show(self, ui);
-            } else if has_doc {
+            // Walk mode shows in the drawing's own tab (docking), the palettes beside it.
+            if has_doc {
                 docking::show(self, ui);
             } else {
                 chrome::start_page(self, ui);

@@ -288,6 +288,21 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             toggle(&mut app.ui.system_cursor, params);
             Ok(Value::Null)
         }
+        // 3DWALK and 3DFLY: walk mode in the drawing's tab, walking or flying (switching when it
+        // is already open).
+        "3dwalk" | "3dw" | "3dfly" | "3df" => {
+            let fly = matches!(id, "3dfly" | "3df");
+            if app.walk.is_none()
+                && let Err(e) = crate::walk::open(app)
+            {
+                return Some(Err(e));
+            }
+            if let Some(w) = app.walk.as_mut() {
+                w.walker.fly = fly;
+                w.walker.vz = 0.0;
+            }
+            Ok(json!({ "mode": if fly { "fly" } else { "walk" } }))
+        }
         "ui.walk" => {
             // Toggles: opens walk mode on the active drawing, or goes back to the canvas.
             if app.walk.is_some() {

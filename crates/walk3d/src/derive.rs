@@ -84,6 +84,80 @@ pub struct Scene {
     pub doors: usize,
     pub windows: usize,
     pub cased: usize,
+    /// Door leaves, which open and close ([`Scene::toggle_door`]).
+    pub door_leaves: Vec<crate::DoorLeaf>,
+}
+
+/// A room name on a level's plan (TEXT or MTEXT), where it is in the building.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Room {
+    pub name: String,
+    pub level: usize,
+    pub at: Vec2,
+}
+
+/// Most room names collected.
+const MAX_ROOMS: usize = 5_000;
+
+/// The room names on the plans: text placed on a level, with letters, at most 40 characters.
+pub fn rooms(sources: &[&Drawing], rules: &Rules) -> Vec<Room> {
+    let upf = if rules.units_per_foot.is_finite() && rules.units_per_foot > 0.0 { rules.units_per_foot } else { 12.0 };
+    let empty = Drawing::default();
+    let src_of: Vec<usize> = (0..rules.levels.len()).map(|i| rules.level_source(i)).collect();
+    let drawing_of = |lv: usize| -> &Drawing { src_of.get(lv).and_then(|s| sources.get(*s)).copied().unwrap_or(&empty) };
+    let places: Vec<Place> =
+        rules.levels.iter().enumerate().map(|(i, l)| Place { region: l.region, base: base_point(drawing_of(i), rules, l) }).collect();
+    let mut out: Vec<Room> = Vec::new();
+    for (lv, place) in places.iter().enumerate() {
+        let d = drawing_of(lv);
+        for e in d.model.iter() {
+            let (text, at) = match &e.kind {
+                EntityKind::Text(t) => (t.value.clone(), t.justify_point()),
+                EntityKind::MText(t) => (cadaddy_fonts_plain(&t.contents), t.insert.xy()),
+                _ => continue,
+            };
+            let name = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if name.chars().count() < 2 || name.chars().count() > 40 || !name.chars().any(char::is_alphabetic) || !place.contains(at) {
+                continue;
+            }
+            if out.iter().any(|r| r.level == lv && r.name == name) {
+                continue;
+            }
+            out.push(Room { name, level: lv, at: to_world(at, place.base, upf) });
+            if out.len() >= MAX_ROOMS {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+/// MTEXT contents as plain text (format codes dropped).
+fn cadaddy_fonts_plain(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' | '}' => {}
+            '\\' => match chars.next() {
+                Some('P' | 'N') => out.push(' '),
+                Some('\\') => out.push('\\'),
+                Some('{') => out.push('{'),
+                Some('}') => out.push('}'),
+                Some(_) => {
+                    // A code with a value runs to `;`.
+                    for x in chars.by_ref() {
+                        if x == ';' {
+                            break;
+                        }
+                    }
+                }
+                None => {}
+            },
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 pub(crate) const WALL: Rgb = Rgb(222, 218, 210);

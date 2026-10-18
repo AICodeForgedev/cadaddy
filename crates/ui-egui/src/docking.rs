@@ -354,7 +354,12 @@ pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
         |ui, panel| match panel {
             Panel::Canvas => {
                 ui.painter().rect_filled(ui.max_rect(), 0.0, t.canvas);
-                crate::canvas::show(app, ui);
+                // Walk mode (3DWALK, 3DFLY, View ▸ Walk) takes the drawing's place in its tab.
+                if app.walk.is_some() {
+                    crate::walk::show(app, ui);
+                } else {
+                    crate::canvas::show(app, ui);
+                }
             }
             Panel::ToolSets => crate::palettes::toolsets(app, ui),
             Panel::QuickCalc => crate::palettes::quickcalc::show(app, ui),

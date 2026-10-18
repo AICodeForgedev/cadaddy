@@ -381,6 +381,8 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("ANGDIR", 70),
     ("PDMODE", 70),
     ("PDSIZE", 40),
+    ("STEPSIZE", 40),
+    ("STEPSPERSEC", 40),
     ("PLINEWID", 40),
     ("CELWEIGHT", 370),
     ("LWDISPLAY", 290),

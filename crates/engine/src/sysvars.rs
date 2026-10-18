@@ -288,6 +288,8 @@ const READ_HEADER_VARS: &[&str] = &[
     "SNAPUNIT",
     "SPLINESEGS",
     "SPLKNOTS",
+    "STEPSIZE",
+    "STEPSPERSEC",
     "TEXTFILL",
     "TEXTSIZE",
     "TEXTSTYLE",
@@ -302,6 +304,9 @@ const READ_HEADER_VARS: &[&str] = &[
 fn header_default(n: &str) -> Option<Value> {
     match n {
         "HPGAPTOL" => Some(json!(0.0)),
+        // 3DWALK / 3DFLY: drawing units a step takes, and steps a second.
+        "STEPSIZE" => Some(json!(6.0)),
+        "STEPSPERSEC" => Some(json!(2.0)),
         "ATTREQ" => Some(json!(1)),
         "USERI1" | "USERI2" | "USERI3" | "USERI4" | "USERI5" => Some(json!(0)),
         "USERR1" | "USERR2" | "USERR3" | "USERR4" | "USERR5" => Some(json!(0.0)),
