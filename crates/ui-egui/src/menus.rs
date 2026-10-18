@@ -479,6 +479,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::toldlg::open_new(app);
             Ok(Value::Null)
         }
+        // Typed or from Format ▸ Layer States Manager…: the dialog. JSON calls list the states.
+        "layerstate" | "las" if params.is_null() && app.session.state().is_ok() => {
+            crate::layerstates::open(app, None);
+            Ok(Value::Null)
+        }
         "hatchedit" | "he" if params.is_null() && app.session.state().is_ok() => {
             crate::hatchdlg::open_edit(app);
             Ok(Value::Null)

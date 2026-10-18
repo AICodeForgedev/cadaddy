@@ -38,6 +38,7 @@ mod groupgrips;
 pub mod i18n;
 pub mod icons;
 pub mod layers;
+pub mod layerstates;
 pub mod layouttabs;
 pub mod managers;
 pub mod matchpropdlg;
@@ -293,6 +294,8 @@ pub struct CadApp {
     pub gpu_notice: Option<autosave::GpuNotice>,
     /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
+    /// The Layer States Manager while open ([`layerstates`]).
+    pub layer_states_dlg: Option<layerstates::State>,
     /// The layout tabs' rename, selection and Move or Copy dialog ([`layouttabs`]).
     pub layout_tabs: layouttabs::LayoutTabs,
     /// The Edit Block Definition dialog ([`bedit`]).
@@ -349,6 +352,7 @@ impl CadApp {
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
             hatch_dlg: None,
+            layer_states_dlg: None,
             layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
@@ -649,7 +653,12 @@ impl CadApp {
         // Esc in a dialog is Cancel: it closes the dialog, and the command line doesn't also
         // get it (cancelling a command waiting behind the dialog).
         if self.ui.dialog.is_some() && self.closing.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-            self.ui.dialog = None;
+            // The Layer States Manager goes back to where it was opened from, as its Close does.
+            if self.ui.dialog.as_deref() == Some("layerstates") {
+                self.ui.dialog = self.layer_states_dlg.take().and_then(|s| s.back());
+            } else {
+                self.ui.dialog = None;
+            }
         }
         // Closing the window (title bar, File ▸ Exit, Cmd+Q) with unsaved changes asks first.
         if ctx.input(|i| i.viewport().close_requested()) && self.request_quit() {

@@ -914,6 +914,148 @@ pub struct Ucs {
 pub struct LayerState {
     pub name: String,
     pub layers: Vec<Layer>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// The layer properties restoring the state sets.
+    #[serde(default)]
+    pub restore: LayerStateMask,
+    /// Restoring turns off the layers that are not in the state.
+    #[serde(default)]
+    pub off_others: bool,
+}
+
+impl LayerState {
+    pub fn new(name: &str, layers: Vec<Layer>) -> Self {
+        LayerState { name: name.into(), layers, description: String::new(), restore: LayerStateMask::default(), off_others: false }
+    }
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Which layer properties restoring a layer state sets ("Layer properties to restore"); all of
+/// them unless a state says otherwise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerStateMask {
+    #[serde(default = "yes")]
+    pub on: bool,
+    #[serde(default = "yes")]
+    pub frozen: bool,
+    #[serde(default = "yes")]
+    pub locked: bool,
+    #[serde(default = "yes")]
+    pub plot: bool,
+    #[serde(default = "yes")]
+    pub vp_freeze_new: bool,
+    #[serde(default = "yes")]
+    pub color: bool,
+    #[serde(default = "yes")]
+    pub linetype: bool,
+    #[serde(default = "yes")]
+    pub lineweight: bool,
+    #[serde(default = "yes")]
+    pub transparency: bool,
+    #[serde(default = "yes")]
+    pub plot_style: bool,
+}
+
+impl Default for LayerStateMask {
+    fn default() -> Self {
+        LayerStateMask {
+            on: true,
+            frozen: true,
+            locked: true,
+            plot: true,
+            vp_freeze_new: true,
+            color: true,
+            linetype: true,
+            lineweight: true,
+            transparency: true,
+            plot_style: true,
+        }
+    }
+}
+
+impl LayerStateMask {
+    /// `to` with the properties this mask covers taken from `saved`.
+    pub fn apply(&self, saved: &Layer, to: &mut Layer) {
+        if self.on {
+            to.on = saved.on;
+        }
+        if self.frozen {
+            to.frozen = saved.frozen;
+        }
+        if self.locked {
+            to.locked = saved.locked;
+        }
+        if self.plot {
+            to.plot = saved.plot;
+        }
+        if self.vp_freeze_new {
+            to.vp_freeze_new = saved.vp_freeze_new;
+        }
+        if self.color {
+            to.color = saved.color;
+        }
+        if self.linetype {
+            to.linetype.clone_from(&saved.linetype);
+        }
+        if self.lineweight {
+            to.lineweight = saved.lineweight;
+        }
+        if self.transparency {
+            to.transparency = saved.transparency;
+        }
+        if self.plot_style {
+            to.plot_style.clone_from(&saved.plot_style);
+        }
+    }
+}
+
+/// A layer filter in the Layer Properties Manager's tree: property rules or a fixed group of
+/// layers, optionally nested under another filter (a layer then has to pass that one too).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerFilter {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    pub kind: LayerFilterKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum LayerFilterKind {
+    /// Layers whose properties pass every rule given.
+    Property(LayerRules),
+    /// These layers (by name).
+    Group { layers: Vec<String> },
+}
+
+/// Property filter rules; a rule left out passes every layer. Text rules are comma-separated
+/// wildcard patterns (`*`, `?`, `#`; `~` in front excludes).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerRules {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Colour names or numbers (`red`, `1`, `250,0,0`), comma-separated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linetype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot: Option<bool>,
 }
 
 /// A named group of entities (GROUP).

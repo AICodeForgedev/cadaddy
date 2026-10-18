@@ -2022,6 +2022,8 @@ struct Objects {
     sortents: Vec<(String, HashMap<Handle, u64>)>,
     /// FIELD objects by handle (table formulas).
     fields: HashMap<String, Vec<Tag>>,
+    /// LAYER_FILTER objects: (handle, the layer names they list).
+    layer_filters: Vec<(String, Vec<String>)>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -2060,6 +2062,11 @@ impl Objects {
             "DIMASSOC" if self.dimassocs.len() < MAX_OBJECTS => self.dimassocs.push(tags.to_vec()),
             "MLEADERSTYLE" if self.mleader_styles.len() < MAX_OBJECTS => self.mleader_styles.push((h, tags.to_vec())),
             "GROUP" if self.groups.len() < MAX_OBJECTS => self.groups.push((h, tags.to_vec())),
+            "LAYER_FILTER" if self.layer_filters.len() < 10_000 => {
+                let names: Vec<String> =
+                    tags.iter().filter(|t| t.code == 8).take(100_000).map(|t| t.str().trim().to_string()).filter(|n| !n.is_empty()).collect();
+                self.layer_filters.push((h, names));
+            }
             "FIELD" | "ACAD_FIELD" if self.fields.len() < MAX_OBJECTS => {
                 self.fields.insert(h, tags.to_vec());
             }
@@ -2157,6 +2164,24 @@ impl Objects {
         // Saved layer states.
         if let Some(states) = self.xrecord_text(crate::dxf_ext::LAYER_STATES_KEY).and_then(|t| crate::dxf_ext::parse_layer_states(&t)) {
             d.layer_states = states;
+        }
+        // Layer filters: ours, else the group filters of the LAYER_FILTER objects other programs
+        // keep in the layer table's ACAD_LAYERFILTERS dictionary (those stay in the file too).
+        if let Some(filters) = self.xrecord_text(crate::dxf_ext::LAYER_FILTERS_KEY).and_then(|t| crate::dxf_ext::parse_layer_filters(&t)) {
+            d.layer_filters = filters;
+        } else {
+            for (h, layers) in &self.layer_filters {
+                let Some(name) = self.names.get(h).map(|n| n.trim()).filter(|n| !n.is_empty()) else { continue };
+                if d.layer_filters.iter().any(|f| f.name.eq_ignore_ascii_case(name)) {
+                    continue;
+                }
+                let layers: Vec<String> = layers.iter().filter_map(|n| d.layer(n).map(|l| l.name.clone())).collect();
+                d.layer_filters.push(cadaddy_doc::LayerFilter {
+                    name: name.to_string(),
+                    parent: None,
+                    kind: cadaddy_doc::LayerFilterKind::Group { layers },
+                });
+            }
         }
         // Objects hidden by ISOLATEOBJECTS / HIDEOBJECTS, saved with OBJECTISOLATIONMODE 1.
         if let Some(hs) = self.xrecord_text(crate::dxf_ext::HIDDEN_OBJECTS_KEY).and_then(|t| crate::dxf_ext::parse_hidden_objects(&t)) {

@@ -103,6 +103,8 @@ pub struct Drawing {
     pub vports: Vec<VportConfig>,
     pub ucss: Vec<Ucs>,
     pub layer_states: Vec<LayerState>,
+    /// Layer filters of the Layer Properties Manager.
+    pub layer_filters: Vec<LayerFilter>,
     pub groups: Vec<Group>,
     /// Plot style tables kept with the drawing (STYLESMANAGER); they shadow built-in tables of
     /// the same name.
@@ -197,6 +199,7 @@ impl Drawing {
             vports: Vec::new(),
             ucss: Vec::new(),
             layer_states: Vec::new(),
+            layer_filters: Vec::new(),
             groups: Vec::new(),
             plot_style_tables: Vec::new(),
             constraints: Vec::new(),

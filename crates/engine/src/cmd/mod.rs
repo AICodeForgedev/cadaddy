@@ -27,6 +27,8 @@ mod imageattach;
 mod imageclip;
 mod inquiry;
 mod layer;
+/// The layers a layer filter shows (the Layer Properties Manager's filter tree).
+pub use layer::filters::layers_of as layer_filter_layers;
 pub(crate) mod layout;
 mod lisp;
 mod measuregeom;
