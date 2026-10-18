@@ -1,0 +1,384 @@
+//! The drawing in .cdy chunks (schema v1): what each chunk holds, and the mapping both ways.
+//!
+//! | tag  | holds | encoding |
+//! |------|-------|----------|
+//! | MANI | manifest: format and writer versions, counts, units, extents, the thumbnail's chunk | JSON |
+//! | HEAD | the header variables | tokens (postcard) |
+//! | TABL | layers, linetypes, styles, views, viewports, UCSs, layer states, groups, plot style tables, constraints, parameters, scale list, handle seed, saved hidden objects | tokens |
+//! | BLKS | block definitions, each `[name, block, objects]` (a run of blocks per chunk) | tokens |
+//! | ENTS | model space objects, up to [`ENTITY_CHUNK`] per chunk, in draw order | tokens |
+//! | LAYO | one layout with its paper space objects, `[layout, objects]` | tokens |
+//! | FRGN | file data CADaddy keeps without modelling it | tokens |
+//! | THMB | a PNG preview | raw |
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use cadaddy_doc::foreign::{Foreign, ForeignExtra, ForeignObject};
+use cadaddy_doc::{Block, Drawing, Entity, EntityStore, Handle, Layout, RawTag};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use super::container::{self, Read, Writer};
+use super::tokens;
+
+/// Model space objects per ENTS chunk (as many as one `EntityStore` chunk holds).
+pub const ENTITY_CHUNK: usize = 1024;
+/// The schema version of each chunk type this reader and writer know.
+const V1: u16 = 1;
+const KNOWN: [&[u8; 4]; 8] = [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"THMB"];
+
+/// What the file was read with besides the drawing: notes about damaged or unread parts.
+#[derive(Clone, Debug, Default)]
+pub struct ReadReport {
+    pub notes: Vec<String>,
+    pub manifest: Option<Value>,
+    pub thumbnail: Option<Vec<u8>>,
+}
+
+/// The tables chunk.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Tables {
+    layers: Value,
+    linetypes: Value,
+    text_styles: Value,
+    dim_styles: Value,
+    mleader_styles: Value,
+    table_styles: Value,
+    mline_styles: Value,
+    views: Value,
+    vports: Value,
+    ucss: Value,
+    layer_states: Value,
+    groups: Value,
+    plot_style_tables: Value,
+    constraints: Value,
+    parametric: Value,
+    scales: Value,
+    handseed: u64,
+    hidden_saved: bool,
+    hidden: Vec<u64>,
+}
+
+/// The unmodelled file data, as a stable mirror of [`Foreign`] (its tuple-keyed maps as lists).
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ForeignV1 {
+    classes: Vec<Vec<RawTag>>,
+    objects: Vec<(u64, String, Vec<RawTag>)>,
+    dictionary: Vec<(String, u64)>,
+    entities: Vec<(u64, ExtraV1)>,
+    records: Vec<((String, String), ExtraV1)>,
+    targets: Vec<(u64, (String, String))>,
+    data_store: Vec<RawTag>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct ExtraV1 {
+    xdict: Option<u64>,
+    reactors: Vec<u64>,
+    xdata: Vec<RawTag>,
+    color_book: Option<(String, String)>,
+    props: Vec<RawTag>,
+}
+
+impl From<&ForeignExtra> for ExtraV1 {
+    fn from(x: &ForeignExtra) -> Self {
+        ExtraV1 {
+            xdict: x.xdict.map(|h| h.0),
+            reactors: x.reactors.iter().map(|h| h.0).collect(),
+            xdata: x.xdata.clone(),
+            color_book: x.color_book.clone(),
+            props: x.props.clone(),
+        }
+    }
+}
+
+impl From<ExtraV1> for ForeignExtra {
+    fn from(x: ExtraV1) -> Self {
+        ForeignExtra {
+            xdict: x.xdict.map(Handle),
+            reactors: x.reactors.into_iter().map(Handle).collect(),
+            xdata: x.xdata,
+            color_book: x.color_book,
+            props: x.props,
+        }
+    }
+}
+
+pub(super) fn foreign_v1(f: &Foreign) -> ForeignV1 {
+    ForeignV1 {
+        classes: f.classes.clone(),
+        objects: f.objects.iter().map(|o| (o.handle.0, o.kind.clone(), o.tags.clone())).collect(),
+        dictionary: f.dictionary.iter().map(|(k, h)| (k.clone(), h.0)).collect(),
+        entities: f.entities.iter().map(|(h, x)| (h.0, x.into())).collect(),
+        records: f.records.iter().map(|(k, x)| (k.clone(), x.into())).collect(),
+        targets: f.targets.iter().map(|(h, k)| (h.0, k.clone())).collect(),
+        data_store: f.data_store.clone(),
+    }
+}
+
+pub(super) fn foreign_from(v: ForeignV1) -> Foreign {
+    Foreign {
+        classes: v.classes,
+        objects: v.objects.into_iter().map(|(h, kind, tags)| ForeignObject { handle: Handle(h), kind, tags }).collect(),
+        dictionary: v.dictionary.into_iter().map(|(k, h)| (k, Handle(h))).collect(),
+        entities: v.entities.into_iter().map(|(h, x)| (Handle(h), x.into())).collect::<BTreeMap<_, _>>(),
+        records: v.records.into_iter().map(|(k, x)| (k, x.into())).collect::<BTreeMap<_, _>>(),
+        targets: v.targets.into_iter().map(|(h, k)| (Handle(h), k)).collect::<BTreeMap<_, _>>(),
+        data_store: v.data_store,
+    }
+}
+
+fn value<T: Serialize>(t: &T) -> Result<Value, String> {
+    serde_json::to_value(t).map_err(|e| e.to_string())
+}
+
+/// The objects of a block or layout (which their own serde form leaves out), in draw order.
+fn objects(store: &EntityStore) -> Result<Value, String> {
+    store.iter().map(|e| value(e.as_ref())).collect::<Result<Vec<_>, _>>().map(Value::Array)
+}
+
+/// The objects of a block or layout read back; damaged ones are noted and left out.
+fn store_from(v: Value, notes: &mut Vec<String>) -> EntityStore {
+    let mut store = EntityStore::new();
+    if let Value::Array(list) = v {
+        for item in list {
+            if let Some(e) = take::<Entity>(item, "an object", notes) {
+                store.push(e);
+            }
+        }
+    } else {
+        notes.push("a list of objects was damaged".into());
+    }
+    store
+}
+
+/// A `[record, objects]` or `[name, record, objects]` item split into its parts.
+fn parts<const N: usize>(v: Value) -> Option<[Value; N]> {
+    let Value::Array(list) = v else { return None };
+    list.try_into().ok()
+}
+
+fn take<T: DeserializeOwned>(v: Value, what: &str, notes: &mut Vec<String>) -> Option<T> {
+    match serde_json::from_value(v) {
+        Ok(t) => Some(t),
+        Err(e) => {
+            notes.push(format!("{what} couldn't be read ({e})"));
+            None
+        }
+    }
+}
+
+/// The drawing as a .cdy file; `thumbnail` a PNG preview to embed.
+pub fn write(d: &Drawing, thumbnail: Option<&[u8]>) -> Result<Vec<u8>, String> {
+    let mut w = Writer::new();
+    let blocks: Vec<(&String, &Arc<Block>)> = d.blocks.iter().collect();
+    let ext = d.extents(&cadaddy_doc::Space::Model);
+    let manifest = json!({
+        "format": container::FORMAT_VERSION,
+        "writer": format!("CADaddy {}", env!("CARGO_PKG_VERSION")),
+        "insunits": d.header.i64("INSUNITS", 0),
+        "measurement": d.header.i64("MEASUREMENT", 0),
+        "extents": if ext.is_empty() { Value::Null } else { json!([ext.min.x, ext.min.y, ext.max.x, ext.max.y]) },
+        "objects": d.model.len(),
+        "blocks": blocks.len(),
+        "layouts": d.layouts.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
+        "thumbnail": thumbnail.map(|_| "THMB"),
+    });
+    w.chunk(*b"MANI", V1, serde_json::to_string_pretty(&manifest).unwrap_or_default().as_bytes(), true);
+    w.chunk(*b"HEAD", V1, &tokens::encode(&value(&d.header)?), true);
+    let tables = Tables {
+        layers: value(&d.layers)?,
+        linetypes: value(&d.linetypes)?,
+        text_styles: value(&d.text_styles)?,
+        dim_styles: value(&d.dim_styles)?,
+        mleader_styles: value(&d.mleader_styles)?,
+        table_styles: value(&d.table_styles)?,
+        mline_styles: value(&d.mline_styles)?,
+        views: value(&d.views)?,
+        vports: value(&d.vports)?,
+        ucss: value(&d.ucss)?,
+        layer_states: value(&d.layer_states)?,
+        groups: value(&d.groups)?,
+        plot_style_tables: value(&d.plot_style_tables)?,
+        constraints: value(&d.constraints)?,
+        parametric: value(&d.parametric)?,
+        scales: value(&d.scales)?,
+        handseed: d.handseed,
+        hidden_saved: d.hidden_saved,
+        hidden: if d.hidden_saved { d.hidden_objects.iter().map(|h| h.0).collect() } else { Vec::new() },
+    };
+    w.chunk(*b"TABL", V1, &tokens::encode(&value(&tables)?), true);
+    // Blocks: runs of about ENTITY_CHUNK objects per chunk.
+    let mut run: Vec<Value> = Vec::new();
+    let mut run_objects = 0usize;
+    for (name, b) in blocks {
+        run.push(json!([name, value(b.as_ref())?, objects(&b.entities)?]));
+        run_objects += b.entities.len().max(1);
+        if run_objects >= ENTITY_CHUNK {
+            w.chunk(*b"BLKS", V1, &tokens::encode(&Value::Array(std::mem::take(&mut run))), true);
+            run_objects = 0;
+        }
+    }
+    if !run.is_empty() {
+        w.chunk(*b"BLKS", V1, &tokens::encode(&Value::Array(run)), true);
+    }
+    let ents: Vec<&Arc<Entity>> = d.model.iter().collect();
+    for part in ents.chunks(ENTITY_CHUNK) {
+        let list = part.iter().map(|e| value(e.as_ref())).collect::<Result<Vec<_>, _>>()?;
+        w.chunk(*b"ENTS", V1, &tokens::encode(&Value::Array(list)), true);
+    }
+    for l in &d.layouts {
+        w.chunk(*b"LAYO", V1, &tokens::encode(&json!([value(l)?, objects(&l.entities)?])), true);
+    }
+    if !d.foreign.is_empty() {
+        w.chunk(*b"FRGN", V1, &tokens::encode(&value(&foreign_v1(&d.foreign))?), true);
+    }
+    if let Some(png) = thumbnail {
+        w.chunk(*b"THMB", V1, png, false);
+    }
+    Ok(w.finish())
+}
+
+/// The drawing in a .cdy file, with notes about anything damaged that was left out. Errors only
+/// when the file isn't a .cdy file this version can read.
+pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
+    let (chunks, indexed) = container::chunks(bytes)?;
+    let mut rep = ReadReport::default();
+    if !indexed {
+        rep.notes.push("the file's index was damaged; its parts were found one by one".into());
+    }
+    let mut d = Drawing::new_imperial();
+    d.layouts.clear();
+    let mut model = EntityStore::new();
+    let mut have_tables = false;
+    for c in chunks {
+        let c = match c {
+            Read::Ok(c) => c,
+            Read::Damaged { tag, why } => {
+                rep.notes.push(format!("a {} part was left out: {why}", String::from_utf8_lossy(&tag)));
+                continue;
+            }
+        };
+        if !KNOWN.contains(&&c.tag) {
+            // A part added by a newer CADaddy: skipped.
+            continue;
+        }
+        if c.version > V1 {
+            return Err(format!(
+                "made by a newer CADaddy: its {} data is version {} (this one reads version {V1})",
+                String::from_utf8_lossy(&c.tag),
+                c.version
+            ));
+        }
+        let what = String::from_utf8_lossy(&c.tag).into_owned();
+        if &c.tag == b"THMB" {
+            rep.thumbnail = Some(c.data);
+            continue;
+        }
+        if &c.tag == b"MANI" {
+            rep.manifest = serde_json::from_slice(&c.data).ok();
+            continue;
+        }
+        let Some(v) = tokens::decode(&c.data) else {
+            rep.notes.push(format!("a {what} part couldn't be decoded and was left out"));
+            continue;
+        };
+        match &c.tag {
+            b"HEAD" => {
+                if let Some(h) = take(v, "the header", &mut rep.notes) {
+                    d.header = h;
+                }
+            }
+            b"TABL" => {
+                let Some(t) = take::<Tables>(v, "the tables", &mut rep.notes) else { continue };
+                let n = &mut rep.notes;
+                macro_rules! field {
+                    ($f:ident, $name:expr) => {
+                        if let Some(x) = take(t.$f, $name, n) {
+                            d.$f = x;
+                        }
+                    };
+                }
+                field!(layers, "layers");
+                field!(linetypes, "linetypes");
+                field!(text_styles, "text styles");
+                field!(dim_styles, "dimension styles");
+                field!(mleader_styles, "multileader styles");
+                field!(table_styles, "table styles");
+                field!(mline_styles, "multiline styles");
+                field!(views, "named views");
+                field!(vports, "viewport configurations");
+                field!(ucss, "UCSs");
+                field!(layer_states, "layer states");
+                field!(groups, "groups");
+                field!(plot_style_tables, "plot style tables");
+                field!(constraints, "constraints");
+                field!(parametric, "parameters");
+                field!(scales, "the scale list");
+                d.handseed = t.handseed;
+                d.hidden_saved = t.hidden_saved;
+                d.hidden_objects = t.hidden.into_iter().map(Handle).collect();
+                have_tables = true;
+            }
+            b"BLKS" => {
+                let Value::Array(list) = v else {
+                    rep.notes.push("a block part was damaged".into());
+                    continue;
+                };
+                for item in list {
+                    let Some([name, b, objs]) = parts::<3>(item) else {
+                        rep.notes.push("a block was damaged and left out".into());
+                        continue;
+                    };
+                    let (Some(name), Some(mut b)) = (name.as_str().map(str::to_string), take::<Block>(b, "a block", &mut rep.notes)) else {
+                        continue;
+                    };
+                    b.entities = store_from(objs, &mut rep.notes);
+                    d.blocks.insert(name, Arc::new(b));
+                }
+            }
+            b"ENTS" => {
+                let Value::Array(list) = v else {
+                    rep.notes.push("a model space part was damaged".into());
+                    continue;
+                };
+                for item in list {
+                    if let Some(e) = take::<Entity>(item, "an object", &mut rep.notes) {
+                        model.push(e);
+                    }
+                }
+            }
+            b"LAYO" => {
+                let Some([l, objs]) = parts::<2>(v) else {
+                    rep.notes.push("a layout was damaged and left out".into());
+                    continue;
+                };
+                if let Some(mut l) = take::<Layout>(l, "a layout", &mut rep.notes) {
+                    l.entities = store_from(objs, &mut rep.notes);
+                    d.layouts.push(l);
+                }
+            }
+            b"FRGN" => {
+                if let Some(f) = take::<ForeignV1>(v, "the kept file data", &mut rep.notes) {
+                    d.foreign = Arc::new(foreign_from(f));
+                }
+            }
+            _ => {}
+        }
+    }
+    if !have_tables {
+        rep.notes.push("the tables were missing; the standard ones are used".into());
+    }
+    d.model = model;
+    // Handles allocated from here on can't collide with the ones read.
+    let blocks = d.blocks.values().flat_map(|b| b.entities.iter());
+    let papers = d.layouts.iter().flat_map(|l| l.entities.iter());
+    let top = d.model.iter().chain(blocks).chain(papers).map(|e| e.handle.0).max().unwrap_or(0);
+    d.handseed = d.handseed.max(top.saturating_add(1));
+    Ok((d, rep))
+}

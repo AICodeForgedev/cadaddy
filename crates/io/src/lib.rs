@@ -1,8 +1,9 @@
-//! CADaddy file formats: DXF/DWG read, SVG and SVGZ import, SVG/PNG/PDF export (plotting).
+//! CADaddy file formats: the native .cdy format, DXF/DWG read, SVG and SVGZ import, SVG/PNG/PDF export (plotting).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 /// What a DXF file holds that CADaddy doesn't model, kept and written back (#528).
+pub mod cdy;
 mod dxf_raw;
 
 mod dxf_ext;
@@ -61,8 +62,11 @@ fn ext(name: &str) -> String {
 }
 
 /// Read a drawing; the format comes from the content (DXF ASCII/binary, DWG) or the name
-/// (SVG and gzip-compressed SVGZ).
+/// (SVG and gzip-compressed SVGZ); a .cdy file is known by its content.
 pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
+    if cdy::is_cdy(bytes) {
+        return cdy::read_cdy(bytes);
+    }
     if cadaddy_dwg::is_dwg(bytes) {
         let (dxf, notes) = cadaddy_dwg::dwg_to_dxf_noted(bytes, cadaddy_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
         let mut d = dxf_read::read(&dxf).map_err(|e| IoError::Format(format!("{e} (in the DXF converted from this DWG)")))?;
@@ -95,6 +99,7 @@ pub fn write(d: &Drawing, name: &str) -> Result<Vec<u8>> {
 pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>> {
     let version = opts.version.unwrap_or_else(|| save_version(d));
     match ext(name).as_str() {
+        "cdy" if !opts.binary => cdy::write_cdy(d),
         "dxf" | "" => {
             let tags = dxf_write::tags(d, version);
             Ok(if opts.binary {
@@ -130,7 +135,7 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
         check_window(w)?;
     }
     match ext(name).as_str() {
-        "dxf" | "" | "dwg" => write_with(d, name, &SaveOptions::default()),
+        "dxf" | "" | "dwg" | "cdy" => write_with(d, name, &SaveOptions::default()),
         "svg" => Ok(svg::export_window(d, &Space::Model, window).into_bytes()),
         "png" => png_framed(d, &Space::Model, 2400, 1600, window),
         "pdf" => pdf::pdf(d, &Space::Model, &PdfOptions { compress: true, window, ..PdfOptions::default() }),

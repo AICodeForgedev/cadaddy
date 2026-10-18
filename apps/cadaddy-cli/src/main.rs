@@ -214,6 +214,12 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
 const NO_OPTIONS: &[OptionSpec] = &[];
 
 fn info(path: &str) -> Result<(), String> {
+    // A .cdy file's manifest first: what wrote it, and what it holds.
+    if let Ok(bytes) = std::fs::read(path)
+        && let Some(m) = cadaddy_io::cdy::manifest(&bytes)
+    {
+        outln!("{}", serde_json::to_string_pretty(&json!({ "manifest": m })).unwrap_or_default());
+    }
     let mut s = Session::empty();
     open(&mut s, path)?;
     let v = s.execute("drawing.inspect", &json!({ "entities": false })).map_err(|e| e.to_string())?;
