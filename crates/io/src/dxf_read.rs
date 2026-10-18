@@ -1012,6 +1012,8 @@ fn native_gradient(tags: &[Tag]) -> Option<Gradient> {
 /// Handle maps and references gathered while reading.
 #[derive(Default)]
 struct Rx {
+    /// MATERIAL object handle (upper case) → material name (group 347 of entities and layers).
+    materials: HashMap<String, String>,
     /// STYLE record handle (upper case) → text style name.
     styles: HashMap<String, String>,
     /// BLOCK_RECORD handle (upper case) → block name.
@@ -1076,6 +1078,23 @@ fn plot_style_names(secs: &[cadaddy_dxf::Section]) -> HashMap<String, String> {
         }
     }
     out
+}
+
+/// The material an entity record points at (group 347 among its AcDbEntity groups): `None` for
+/// ByLayer (or none).
+fn entity_material(tags: &[Tag], rx: &Rx) -> Option<String> {
+    let mut in_entity = false;
+    for t in tags {
+        if t.code == 100 {
+            if in_entity {
+                return None;
+            }
+            in_entity = t.str() == "AcDbEntity";
+        } else if t.code == 347 && in_entity {
+            return rx.materials.get(&t.str().trim().to_ascii_uppercase()).and_then(|n| crate::dxf_material::entity_material(n));
+        }
+    }
+    None
 }
 
 /// The named plot style an entity record points at (group 390 among its AcDbEntity groups).
@@ -1170,6 +1189,9 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
             && let Some(n) = entity_plot_style(tags, rx)
         {
             c.plot_style = n;
+        }
+        if let Some((c, _)) = kindent.as_mut() {
+            c.material = entity_material(tags, rx);
         }
         i += 1;
         match kind.as_str() {
@@ -1430,6 +1452,8 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 if let Some(n) = t.s(390).and_then(|h| rx.pstyles.get(&h.trim().to_ascii_uppercase())) {
                     l.plot_style = n.clone();
                 }
+                l.material =
+                    t.s(347).and_then(|h| rx.materials.get(&h.trim().to_ascii_uppercase())).and_then(|n| crate::dxf_material::layer_material(n));
                 let alpha = crate::dxf_ext::xdata(&tg, crate::dxf_ext::LAYER_TRANSPARENCY_APP).iter().find(|x| x.code == 1071);
                 if let Some(pct) = alpha.and_then(|x| crate::dxf_ext::transparency_from_dxf(x.i64())) {
                     l.transparency = pct;
@@ -1662,6 +1686,11 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
     let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
+    if let Some(objects) = secs.iter().find(|s| s.name == "OBJECTS") {
+        let (materials, names) = crate::dxf_material::read(&records(&objects.tags));
+        d.materials = materials;
+        rx.materials = names;
+    }
     let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Entity)>, i64)> = Vec::new();
     let mut layout_objs: Vec<(String, u32, String, PageSetup, Option<(Vec2, Vec2)>)> = Vec::new();
     let mut entities = Vec::new();

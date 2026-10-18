@@ -7,6 +7,7 @@ mod dxf_raw;
 
 mod dxf_ext;
 mod dxf_image;
+mod dxf_material;
 mod dxf_mesh;
 mod dxf_mleader;
 mod dxf_read;

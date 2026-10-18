@@ -29,6 +29,7 @@ mod inquiry;
 mod layer;
 pub(crate) mod layout;
 mod lisp;
+pub mod materials;
 mod measuregeom;
 mod mleader_content;
 mod mleader_edit;
@@ -204,6 +205,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(blocks::specs());
         v.extend(modify::specs());
         v.extend(draworder::specs());
+        v.extend(materials::specs());
         v.extend(imageclip::specs());
         v.extend(array::specs());
         v.extend(symbol::specs());

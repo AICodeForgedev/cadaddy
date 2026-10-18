@@ -22,6 +22,8 @@ struct W {
     /// Persistent reactors of boundary objects: each source object of an associative hatch →
     /// the hatches (groups `{ACAD_REACTORS 330 …}`), from [`hatch_reactors`].
     reactors: HashMap<Handle, Vec<String>>,
+    /// Upper-case material name → its MATERIAL object handle (group 347 of layers and objects).
+    materials: HashMap<String, String>,
 }
 
 impl W {
@@ -299,7 +301,7 @@ fn annotative_xdata(w: &mut W) {
 
 /// Override (`ACAD` DSTYLE) and associativity (`CADADDY` ASSOC) xdata of a dimension.
 fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
-    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
+    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new(), materials: HashMap::new() };
     let mut sah = false;
     for (k, v) in &dm.overrides {
         let Some(field) = DimStyle::field_name(k) else { continue };
@@ -537,6 +539,10 @@ fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, rea
     }
     if let Some(v) = transparency_440(e.common.transparency) {
         w.i(440, v);
+    }
+    // A material other than ByLayer: its MATERIAL object.
+    if let Some(h) = e.common.material.as_deref().and_then(|m| w.materials.get(&m.trim().to_ascii_uppercase())).cloned() {
+        w.s(347, h);
     }
     // A named plot style (not ByLayer/ByBlock): its placeholder object.
     if let Some(h) = w.pstyles.get(&e.common.plot_style.trim().to_ascii_uppercase()).cloned() {
@@ -1981,6 +1987,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         pstyles: HashMap::new(),
         layers: HashMap::new(),
         reactors: hatch_reactors(d),
+        materials: HashMap::new(),
     };
     // Group handles first: each member lists its groups among its persistent reactors.
     let group_handles: Vec<String> = d.groups.iter().filter(|g| !g.name.is_empty()).map(|_| w.h()).collect();
@@ -2226,6 +2233,19 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     let pstyles: Vec<(String, String)> = pstyle_names.into_iter().map(|n| (n, w.h())).collect();
     w.pstyles = pstyles.iter().map(|(n, h)| (n.to_ascii_uppercase(), h.clone())).collect();
+    // Materials: Global, ByLayer, ByBlock and the drawing's, each a MATERIAL object.
+    let material_dict = w.h();
+    let material_names = [cadaddy_doc::material::GLOBAL, cadaddy_doc::material::BY_LAYER, cadaddy_doc::material::BY_BLOCK]
+        .into_iter()
+        .chain(d.materials.iter().take(cadaddy_doc::material::MAX_MATERIALS).map(|m| m.name.as_str()))
+        .map(str::to_ascii_uppercase)
+        .collect::<Vec<_>>();
+    for n in material_names {
+        if !w.materials.contains_key(&n) {
+            let h = w.h();
+            w.materials.insert(n, h);
+        }
+    }
     let model_layout = w.h();
     let layout_handles: Vec<String> = ps_brs.iter().map(|_| w.h()).collect();
 
@@ -2369,6 +2389,11 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         if let Some(h) = w.pstyles.get(&l.plot_style.trim().to_ascii_uppercase()).cloned().or(normal) {
             w.s(390, h);
         }
+        // The layer's material, Global when none is attached.
+        let global = w.materials.get(&cadaddy_doc::material::GLOBAL.to_ascii_uppercase()).cloned();
+        if let Some(h) = l.material.as_deref().and_then(|m| w.materials.get(&m.trim().to_ascii_uppercase())).cloned().or(global) {
+            w.s(347, h);
+        }
         if l.transparency > 0 {
             w.s(1001, dxf_ext::LAYER_TRANSPARENCY_APP);
             w.i(1071, dxf_ext::transparency_to_dxf(l.transparency));
@@ -2510,7 +2535,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.i(70, 0);
         let v = serde_json::to_value(s).unwrap_or_default();
         let defaults = serde_json::to_value(DimStyle::default()).unwrap_or_default();
-        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
+        let mut newer =
+            W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new(), materials: HashMap::new() };
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
             let own = dxf_ext::STYLE_XDATA.contains(code);
@@ -2680,6 +2706,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     w.s(3, "ACAD_LAYOUT");
     w.s(350, layout_dict.clone());
+    if !w.materials.is_empty() {
+        w.s(3, "ACAD_MATERIAL");
+        w.s(350, material_dict.clone());
+    }
     w.s(3, "ACAD_MLEADERSTYLE");
     w.s(350, mleader_dict.clone());
     w.s(3, "ACAD_MLINESTYLE");
@@ -2723,6 +2753,11 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     // Multiline styles.
     w.t.extend(crate::dxf_mline::objects(&cx.mlines, &root_dict));
+    // Materials.
+    if !w.materials.is_empty() {
+        let tags = crate::dxf_material::objects(&d.materials, &w.materials, &material_dict, &root_dict);
+        w.t.extend(tags);
+    }
     // Table styles.
     w.s(0, "DICTIONARY");
     w.s(5, table_style_dict.clone());
@@ -3166,6 +3201,7 @@ pub fn entity_records(d: &Drawing, e: &Entity) -> Vec<(String, Vec<Tag>)> {
         pstyles: HashMap::new(),
         layers: HashMap::new(),
         reactors: HashMap::new(),
+        materials: HashMap::new(),
     };
     let cx = Ctx { target: Version::R2018, ..Ctx::default() };
     let paper = d.space_of(e.handle).is_some_and(|s| !matches!(s, cadaddy_doc::Space::Model));
