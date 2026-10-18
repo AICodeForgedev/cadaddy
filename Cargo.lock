@@ -703,6 +703,7 @@ name = "cadaddy-fonts"
 version = "0.7.6"
 dependencies = [
  "cadaddy-geom",
+ "encoding_rs",
  "harfrust",
  "skrifa 0.47.0",
  "unicode-bidi",

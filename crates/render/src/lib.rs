@@ -1461,7 +1461,7 @@ fn text_style(d: &Drawing, name: &str) -> cadaddy_doc::TextStyle {
 /// Shape a TEXT / ATTRIB / ATTDEF with its style's font and generation flags.
 pub fn place_text_entity(d: &Drawing, t: &cadaddy_doc::Text, value: &str) -> (cadaddy_fonts::Shaped, Bounds2) {
     let ts = text_style(d, &t.style);
-    let font = cadaddy_fonts::TextFont::resolve(&ts.font);
+    let font = cadaddy_fonts::TextFont::resolve_style(&ts.font, &ts.big_font);
     let (h, v) = align(t.halign, t.valign);
     let p = cadaddy_fonts::TextParams {
         insert: t.insert.xy(),
@@ -1489,7 +1489,7 @@ pub fn layout_mtext_entity(d: &Drawing, t: &cadaddy_doc::MText) -> cadaddy_fonts
         rotation: t.rotation,
         line_spacing: t.line_spacing,
         line_spacing_exact: t.line_spacing_exact,
-        font: cadaddy_fonts::TextFont::resolve(&ts.font),
+        font: cadaddy_fonts::TextFont::resolve_style(&ts.font, &ts.big_font),
         width_factor: ts.width_factor,
         oblique: ts.oblique,
         columns: t.columns.as_ref().map(|c| cadaddy_fonts::MTextColumnSpec {
@@ -1565,7 +1565,12 @@ fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::MText, rgb: Ink, lw: f32) 
 /// The font settings of a dimension style's text style.
 pub fn dim_text(d: &Drawing, st: &cadaddy_doc::DimStyle) -> DimText {
     let ts = text_style(d, &st.text_style);
-    DimText { font: cadaddy_fonts::TextFont::resolve(&ts.font), fixed_height: ts.height, width_factor: ts.width_factor, oblique: ts.oblique }
+    DimText {
+        font: cadaddy_fonts::TextFont::resolve_style(&ts.font, &ts.big_font),
+        fixed_height: ts.height,
+        width_factor: ts.width_factor,
+        oblique: ts.oblique,
+    }
 }
 
 /// Geometry of a dimension in a drawing: its style, overrides and text font.
