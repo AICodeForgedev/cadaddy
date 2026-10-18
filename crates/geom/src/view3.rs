@@ -71,6 +71,23 @@ impl Projection {
         (right.is_finite() && up.is_finite()).then_some(Projection { dir, right, up })
     }
 
+    /// The plan view turned by a view twist of `twist` radians (counterclockwise: the drawing
+    /// turns that way on screen). `None` for no twist (or one that isn't finite): the plain
+    /// plan view draws without a projection.
+    pub fn plan_twist(twist: f64) -> Option<Projection> {
+        let t = crate::norm_angle(twist);
+        if !t.is_finite() || t.abs() < 1e-12 || (t - std::f64::consts::TAU).abs() < 1e-12 {
+            return None;
+        }
+        let (sin, cos) = t.sin_cos();
+        Some(Projection { dir: Vec3::Z, right: Vec3::new(cos, -sin, 0.0), up: Vec3::new(sin, cos, 0.0) })
+    }
+
+    /// The view twist of a plan projection (0 for a 3D view).
+    pub fn twist(&self) -> f64 {
+        if is_plan(self.dir) { (-self.right.y).atan2(self.right.x) } else { 0.0 }
+    }
+
     /// The view direction from an azimuth (radians, from +X towards +Y, of the viewer seen from
     /// above) and an elevation (radians above the XY plane), as 3DORBIT changes them.
     pub fn dir_from_angles(azimuth: f64, elevation: f64) -> Vec3 {
@@ -114,6 +131,19 @@ mod tests {
 
     fn close(a: Vec2, b: Vec2) -> bool {
         (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9
+    }
+
+    #[test]
+    fn plan_twist_turns_the_drawing_counterclockwise() {
+        assert!(Projection::plan_twist(0.0).is_none());
+        assert!(Projection::plan_twist(std::f64::consts::TAU).is_none());
+        assert!(Projection::plan_twist(f64::NAN).is_none());
+        let p = Projection::plan_twist(std::f64::consts::FRAC_PI_2).unwrap_or(Projection { dir: Vec3::Z, right: Vec3::Z, up: Vec3::Z });
+        // World +X points up on screen; the plane map round-trips.
+        assert!(close(p.project(Vec3::new(1.0, 0.0, 0.0)), Vec2::new(0.0, 1.0)));
+        assert!(close(p.unproject(Vec2::new(0.0, 1.0), 0.0).unwrap_or(Vec2::ZERO), Vec2::new(1.0, 0.0)));
+        assert!((p.twist() - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        assert!(is_plan(p.dir));
     }
 
     #[test]

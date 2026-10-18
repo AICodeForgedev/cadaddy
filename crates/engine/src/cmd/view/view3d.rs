@@ -43,12 +43,34 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             .transparent(),
     );
     v.push(
+        CommandSpec::new("view.twist", "View Twist", view_twist_cmd)
+            .params("{angle: degrees (counterclockwise) | by: degrees (added to the current twist)} → {twist} — turns the plan view of model space about the centre of the screen, or the active MSPACE viewport's view about its centre (VIEWTWIST)")
+            .noundo()
+            .transparent(),
+    );
+    v.push(
         CommandSpec::new("view.dir", "View Direction", view_dir_cmd)
             .params("{dir: [x, y, z] (from the target towards the viewer; [0,0,1] = plan) | preset: top|bottom|front|back|left|right|swiso|seiso|neiso|nwiso, fit?: bool (zoom to the extents; default: true for a preset)} → {dir, label?}")
             .noundo()
             .transparent(),
     );
     v
+}
+
+fn view_twist_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let num = |k: &str| p.get(k).map(|v| v.as_f64().filter(|a| a.is_finite() && a.abs() <= 1e6));
+    let st = s.state_mut()?;
+    let t = match (num("angle"), num("by")) {
+        (Some(Some(a)), None) => a.to_radians(),
+        (None, Some(Some(d))) => st.twist() + d.to_radians(),
+        _ => return Err(bad("view.twist", "pass `angle` or `by` (degrees)")),
+    };
+    if !st.set_twist(t) {
+        return Err(EngineError::Other("View twist is available in the plan view of model space and in layout viewports.".into()));
+    }
+    let twist = st.twist();
+    s.touch();
+    Ok(json!({ "twist": twist.to_degrees() }))
 }
 
 fn view_dir_cmd(s: &mut Session, p: &Value) -> Result<Value> {
@@ -92,6 +114,8 @@ pub fn set_dir(s: &mut Session, dir: Vec3, fit: bool) -> Result<Value> {
         None => Vec3::new(v.center.x, v.center.y, 0.0),
     };
     st.view_dir = if view3::is_plan(dir) { Vec3::Z } else { dir.normalized() };
+    // A new direction comes with the standard orientation (as PLAN and the ViewCube faces do).
+    st.view_twist = 0.0;
     let center = match st.projection() {
         Some(p) => p.project(target),
         None => target.xy(),

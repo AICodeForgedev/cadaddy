@@ -1334,3 +1334,27 @@ menu	Modify	수정
 	Press Space to cycle options	스페이스 키를 눌러 옵션 전환
 	Burst	속성 포함 분해
 	Convert to Mtext	여러 줄 문자로 변환
+	View Twist	뷰 비틀기
+	Let AI agents control CADaddy	AI 에이전트가 CADaddy를 제어하도록 허용
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	그러면 이 컴퓨터의 Claude 커넥터와 다른 에이전트가 이 창에서 도면을 열고, 편집하고, 저장하고, 닫을 수 있습니다. 이 컴퓨터 밖에서는 연결할 수 없습니다. 다음에 CADaddy를 시작할 때 적용됩니다.
+	Base Point	기준점
+	Column Spacing	열 간격
+	Column Count	열 개수
+	Row Spacing	행 간격
+	Row Count	행 개수
+	Row and Column Count	행 및 열 개수
+	Level Spacing	레벨 간격
+	Level Count	레벨 개수
+	Item Spacing	항목 간격
+	Item Count	항목 개수
+	Total column spacing	전체 열 간격
+	Total row spacing	전체 행 간격
+	Total row and column spacing	전체 행 및 열 간격
+	Total level spacing	전체 레벨 간격
+	Fill angle	채우기 각도
+	Stretch radius	반지름 신축
+	Array Grips	배열 그립
+	Edit Array with a Grip	그립으로 배열 편집
+	Open Drawings	열린 도면
+	Close Drawing	도면 닫기
+	Close All Drawings	모든 도면 닫기

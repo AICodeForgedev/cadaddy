@@ -300,9 +300,9 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         use std::hash::{Hash, Hasher};
         let mut s = std::collections::hash_map::DefaultHasher::new();
         split.hash(&mut s);
-        // A 3D view is built on its view plane: another direction is other content.
-        if let Some(p) = st.projection() {
-            (p.dir.x.to_bits(), p.dir.y.to_bits(), p.dir.z.to_bits()).hash(&mut s);
+        // A 3D or twisted view is built on its view plane: another plane is other content.
+        if let Some(p) = st.list_projection() {
+            (p.dir.x.to_bits(), p.dir.y.to_bits(), p.dir.z.to_bits(), p.right.x.to_bits(), p.right.y.to_bits()).hash(&mut s);
         }
         if split.is_none()
             && let Some((h, vp)) = st.active_viewport()
@@ -360,7 +360,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         transparency: app.session.settings.transparency_display,
         skip_viewport: split,
         cancel: None,
-        projection: st.projection(),
+        projection: st.list_projection(),
     };
     if view_only {
         let t = Tokens::get();
@@ -444,12 +444,13 @@ impl VpContent {
 }
 
 /// How a list built for view `built` (centre, height) of viewport `vp` maps to its current
-/// view, as `p = k·p0 + b` on paper. A model point m is at p0 = c + s0 (m − c0) in the list and
-/// belongs at p = c + s (m − vc), with c the viewport's centre and s, s0 paper units per model
-/// unit, so k = s / s0 and b = c (1 − k) + s (c0 − vc).
+/// view, as `p = k·p0 + b` on paper. A model point m is at p0 = c + s0 R (m − c0) in the list and
+/// belongs at p = c + s R (m − vc), with c the viewport's centre, R its view twist and s, s0
+/// paper units per model unit, so k = s / s0 and b = c (1 − k) + s R (c0 − vc). (A new twist is
+/// a new drawing revision: the list is rebuilt.)
 fn vp_motion(vp: &cadaddy_doc::Viewport, built: (Vec2, f64)) -> Option<(f64, Vec2)> {
     let (s, k) = (vp.height / vp.view_height, built.1 / vp.view_height);
-    let b = vp.center.xy() * (1.0 - k) + (built.0 - vp.view_center) * s;
+    let b = vp.center.xy() * (1.0 - k) + (built.0 - vp.view_center).rotate(vp.twist) * s;
     (k.is_finite() && k > 0.0 && b.is_finite()).then_some((k, b))
 }
 
@@ -660,15 +661,18 @@ struct VpHighlight {
 impl VpHighlight {
     fn update(&mut self, st: &cadaddy_engine::DocState, handles: &[Handle], scale: f64) {
         let tolerance = viewport_highlight_tolerance(scale);
+        // Drawn by the MSPACE transform: on a twisted viewport's view plane.
+        let projection = st.projection();
         let key = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            (st.uid, st.revision, std::sync::Arc::as_ptr(&st.doc) as usize, tolerance.to_bits(), handles).hash(&mut h);
+            let twist = projection.map_or(0, |p| p.twist().to_bits());
+            (st.uid, st.revision, std::sync::Arc::as_ptr(&st.doc) as usize, tolerance.to_bits(), twist, handles).hash(&mut h);
             h.finish()
         };
         if self.key != Some(key) {
             let ents = handles.iter().filter_map(|h| st.doc.model.get(*h)).map(|e| e.as_ref());
-            self.list = cadaddy_render::build_entities(&st.doc, ents, &cadaddy_render::Options { tolerance, ..Default::default() });
+            self.list = cadaddy_render::build_entities(&st.doc, ents, &cadaddy_render::Options { tolerance, projection, ..Default::default() });
             self.key = Some(key);
             self.list_gen = self.list_gen.wrapping_add(1);
         }

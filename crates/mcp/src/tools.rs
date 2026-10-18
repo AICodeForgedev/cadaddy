@@ -30,16 +30,49 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "limit": {"type": "integer", "minimum": 0}, "offset": {"type": "integer", "minimum": 0}}}}),
         json!({"name": "new_drawing", "description": "Create a new drawing (imperial by default, or metric).",
             "inputSchema": {"type": "object", "properties": {"metric": {"type": "boolean"}}}}),
-        json!({"name": "open", "description": "Open a drawing: DWG or DXF (by extension).", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}),
+        json!({"name": "open", "description": "Open a drawing (DWG, DXF, DWT; an SVG or PDF is converted) as a new tab that becomes current. Returns its index and any warnings (what reading left out, styles reset). Opening a file that is already open switches to it.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}),
         json!({"name": "save", "description": "Save the drawing (DXF or DWG by extension). A .svg, .png or .pdf path exports instead: the drawing keeps its name and unsaved changes.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}),
         json!({"name": "cancel", "description": "Press Escape: cancel the running command (or clear the selection).", "inputSchema": {"type": "object", "properties": {}}}),
+        json!({"name": "get_prompt", "description": "What CADaddy is asking for right now: the running command, the prompt text and bare message, its keyword options (type the capital letters to choose one), the default Enter takes, which inputs it accepts (point, number, text, selection), whether a drawing is still opening (`busy`), whether a \"Save changes?\" question is open (`closePrompt`), and the last command-line lines. Use it to step through a command with command_line.",
+            "inputSchema": {"type": "object", "properties": {}}}),
+        json!({"name": "wait_until_idle", "description": "Wait until CADaddy is no longer busy (a drawing opening in the background), up to timeoutMs (default 30000). Returns the prompt state, with timedOut: true if it was still busy.",
+            "inputSchema": {"type": "object", "properties": {"timeoutMs": {"type": "integer", "minimum": 0}}}}),
+        json!({"name": "list_drawings", "description": "The open drawings: index, title, path, whether each has unsaved changes (`modified`), which is current, and their object counts.", "inputSchema": {"type": "object", "properties": {}}}),
+        json!({"name": "switch_drawing", "description": "Make another open drawing current, by index, path or title.",
+            "inputSchema": {"type": "object", "properties": {"index": {"type": "integer", "minimum": 0}, "path": {"type": "string"}, "title": {"type": "string"}}}}),
+        json!({"name": "close_drawing", "description": "Close a drawing (the current one by default, or by index, path or title). A drawing with unsaved changes is closed only with save: true (to its own file), saveAs: a path, or discard: true — otherwise the call is refused and nothing is lost.",
+            "inputSchema": {"type": "object", "properties": {"index": {"type": "integer", "minimum": 0}, "path": {"type": "string"}, "title": {"type": "string"}, "save": {"type": "boolean"}, "saveAs": {"type": "string"}, "discard": {"type": "boolean"}}}}),
+        json!({"name": "close_all", "description": "Close every drawing. Refused (closing nothing) while one has unsaved changes, unless save: true (each saved to its own file; refused if one has none yet) or discard: true.",
+            "inputSchema": {"type": "object", "properties": {"save": {"type": "boolean"}, "discard": {"type": "boolean"}}}}),
+        json!({"name": "undo", "description": "Undo the last `count` commands (default 1).", "inputSchema": {"type": "object", "properties": {"count": {"type": "integer", "minimum": 1}}}}),
+        json!({"name": "redo", "description": "Redo `count` undone commands (default 1).", "inputSchema": {"type": "object", "properties": {"count": {"type": "integer", "minimum": 1}}}}),
+        json!({"name": "select", "description": "Set the selection (commands like MOVE, ERASE and PROPERTIES then act on it): by handles, a window [[x0,y0],[x1,y1]] (crossing: true selects what it touches), all: true, or clear: true; add: true adds to the current selection. Returns the selected handles.",
+            "inputSchema": {"type": "object", "properties": {"handles": {"type": "array", "items": {"type": "string"}},
+                "window": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}, "minItems": 2, "maxItems": 2},
+                "crossing": {"type": "boolean"}, "all": {"type": "boolean"}, "clear": {"type": "boolean"}, "add": {"type": "boolean"}}}}),
+        json!({"name": "get_variable", "description": "Read a system variable (CLAYER, LTSCALE, DIMSCALE, FILEDIA, INSUNITS…).", "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}),
+        json!({"name": "set_variable", "description": "Set a system variable, as SETVAR does (range-checked; read-only ones are refused).",
+            "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "value": {}}, "required": ["name", "value"]}}),
+        json!({"name": "run_lisp", "description": "Evaluate AutoLISP in the current drawing (entget/entmod/ssget/command… and loaded routines). `inputs` answers get… calls in order. Returns the value and printed output.",
+            "inputSchema": {"type": "object", "properties": {"code": {"type": "string"}, "inputs": {"type": "array"}}, "required": ["code"]}}),
+        json!({"name": "plot", "description": "Plot a layout (or Model) to a PDF file with its page setup, as PLOT does, without the dialog.",
+            "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "layout": {"type": "string"}}, "required": ["path"]}}),
     ];
     if has_ui {
         tools.push(json!({"name": "screenshot", "description": "Screenshot the CADaddy window (PNG).", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}));
         tools.push(json!({"name": "ui_inspect", "description": "UI state: panels, canvas rect, view, cursor and snap, performance.", "inputSchema": {"type": "object", "properties": {}}}));
+        tools.push(json!({"name": "answer_close_prompt", "description": "When the app shows \"Save changes to …?\" (a person closed a drawing or the app), answer it: save, discard or cancel. Fails when no such question is open.",
+            "inputSchema": {"type": "object", "properties": {"choice": {"type": "string"}}, "required": ["choice"]}}));
+        tools.push(json!({"name": "quit_app", "description": "Quit CADaddy. Refused while a drawing has unsaved changes unless save: true (saves each to its own file first) or discard: true.",
+            "inputSchema": {"type": "object", "properties": {"save": {"type": "boolean"}, "discard": {"type": "boolean"}}}}));
         tools.push(json!({"name": "ui_click", "description": "Click in the drawing area at world coordinates (or screen with space:\"screen\"). Right button = Enter.", "inputSchema": {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "space": {"type": "string"}, "button": {"type": "string"}}, "required": ["x", "y"]}}));
     }
     json!({ "tools": tools })
+}
+
+/// `engine.execute` of `command` with `params`.
+fn exec(b: &mut dyn Backend, command: &str, params: Value) -> Result<Value, String> {
+    b.call("engine.execute", json!({"command": command, "params": params}))
 }
 
 fn text(v: &Value) -> Value {
@@ -130,6 +163,62 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
         "open" => b.call("app.open", a),
         "save" => b.call("app.save", a),
         "cancel" => b.call("cmdline.key", json!({"key": "escape"})),
+        "get_prompt" => b.call("cmdline.state", json!({})),
+        "wait_until_idle" => {
+            let limit = a.get("timeoutMs").and_then(Value::as_u64).unwrap_or(30_000).min(600_000);
+            let start = std::time::Instant::now();
+            loop {
+                let st = b.call("cmdline.state", json!({}));
+                let busy = st.as_ref().is_ok_and(|v| v["busy"] == json!(true));
+                if !busy {
+                    break st;
+                }
+                if start.elapsed().as_millis() as u64 >= limit {
+                    break st.map(|mut v| {
+                        v["timedOut"] = json!(true);
+                        v
+                    });
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+        }
+        "list_drawings" => exec(b, "document.list", a),
+        "switch_drawing" => exec(b, "document.switch", a),
+        "close_drawing" => exec(b, "document.close", a),
+        "close_all" => exec(b, "document.closeall", a),
+        "undo" => exec(b, "undo", json!({"count": a.get("count").cloned().unwrap_or(json!(1))})),
+        "redo" => exec(b, "redo", json!({"count": a.get("count").cloned().unwrap_or(json!(1))})),
+        "select" => exec(b, "select", a).and_then(|mut r| {
+            // The reply names what is selected, not only how many.
+            let d = b.call("drawing.inspect", json!({"entities": false}))?;
+            r["handles"] = d["selection"].clone();
+            Ok(r)
+        }),
+        "get_variable" => exec(b, "getvar", a),
+        "set_variable" => exec(b, "setvar", a),
+        "run_lisp" => exec(b, "lisp", a),
+        "plot" => exec(b, "exportpdf", a),
+        "answer_close_prompt" => b.call("app.answerClose", a),
+        "quit_app" => {
+            // Refuse before quitting rather than lose work: the app's own quit discards.
+            let save = a.get("save").and_then(Value::as_bool) == Some(true);
+            let discard = a.get("discard").and_then(Value::as_bool) == Some(true);
+            if !save && !discard {
+                let open = b.call("engine.execute", json!({"command": "document.list", "params": {}}));
+                let modified: Vec<String> = open
+                    .ok()
+                    .and_then(|v| v["drawings"].as_array().cloned())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|d| d["modified"] == json!(true))
+                    .filter_map(|d| d["title"].as_str().map(str::to_string))
+                    .collect();
+                if !modified.is_empty() {
+                    return Ok(err_text(&format!("unsaved changes in {}: pass save: true or discard: true", modified.join(", "))));
+                }
+            }
+            b.call("app.quit", a)
+        }
         "screenshot" => b.call("ui.screenshot", a),
         "ui_inspect" => b.call("ui.inspect", json!({})),
         "ui_click" => b.call("ui.pointer", a),

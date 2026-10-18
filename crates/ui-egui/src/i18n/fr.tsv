@@ -1106,3 +1106,27 @@
 	Selection	Sélection
 	Burst	Décomposer avec attributs
 	Convert to Mtext	Convertir en texte multiligne
+	View Twist	Torsion de la vue
+	Let AI agents control CADaddy	Autoriser les agents d'IA à piloter CADaddy
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	Le connecteur Claude et les autres agents de cet ordinateur pourront alors ouvrir, modifier, enregistrer et fermer des dessins dans cette fenêtre. Rien en dehors de cet ordinateur ne peut se connecter. Prend effet au prochain démarrage de CADaddy.
+	Base Point	Point de base
+	Column Spacing	Espacement des colonnes
+	Column Count	Nombre de colonnes
+	Row Spacing	Espacement des rangées
+	Row Count	Nombre de rangées
+	Row and Column Count	Nombre de rangées et de colonnes
+	Level Spacing	Espacement des niveaux
+	Level Count	Nombre de niveaux
+	Item Spacing	Espacement des éléments
+	Item Count	Nombre d’éléments
+	Total column spacing	Espacement total des colonnes
+	Total row spacing	Espacement total des rangées
+	Total row and column spacing	Espacement total des rangées et colonnes
+	Total level spacing	Espacement total des niveaux
+	Fill angle	Angle à décrire
+	Stretch radius	Étirer le rayon
+	Array Grips	Poignées de réseau
+	Edit Array with a Grip	Modifier le réseau avec une poignée
+	Open Drawings	Dessins ouverts
+	Close Drawing	Fermer le dessin
+	Close All Drawings	Fermer tous les dessins

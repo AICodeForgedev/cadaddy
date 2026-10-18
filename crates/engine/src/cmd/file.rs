@@ -181,7 +181,22 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{path, version?: 2000|2004|2007|2010|2013|2018, binary?: bool}")
             .noundo()
             .interactive(|_| Ok(Box::new(FileM { name: "SAVEAS", message: "Save drawing as", run: run_saveas_reporting }))),
-        CommandSpec::new("document.switch", "Switch Drawing", run_switch).params("{index}").enabled(always).noundo(),
+        CommandSpec::new("document.switch", "Switch Drawing", run_switch)
+            .params("{index} | {path} | {title}: the open drawing to make current (path and title in any case)")
+            .enabled(always)
+            .noundo(),
+        CommandSpec::new("document.list", "Open Drawings", run_list_docs)
+            .params("{} → {active, drawings: [{index, title, path, modified (unsaved changes), active, entities}]}")
+            .enabled(always)
+            .noundo(),
+        CommandSpec::new("document.close", "Close Drawing", run_close_doc)
+            .params("{index? | path? | title? (default the current drawing), save?: bool (save to its file first), saveAs?: path, discard?: bool} → {closed, saved?}. A drawing with unsaved changes is closed only with save, saveAs or discard (CLOSE itself discards)")
+            .enabled(always)
+            .noundo(),
+        CommandSpec::new("document.closeall", "Close All Drawings", run_closeall_docs)
+            .params("{save?: bool, discard?: bool} → {closed: [titles], saved: [paths]}. Refused, closing nothing, while a drawing has unsaved changes and neither is given (or a drawing to save has no file name)")
+            .enabled(always)
+            .noundo(),
         CommandSpec::new("document.bytes", "Drawing as bytes", run_bytes)
             .params("{format?: dxf, version?: 2000…2018, binary?: bool} → {data: base64}")
             .noundo(),
@@ -674,13 +689,114 @@ fn drawing_version(s: &Session, path: &str) -> Version {
 }
 
 fn run_switch(s: &mut Session, p: &Value) -> Result<Value> {
-    let i = p.get("index").and_then(Value::as_u64).ok_or_else(|| bad("document.switch", "`index` is required"))? as usize;
-    if i >= s.docs.len() {
-        return Err(bad("document.switch", "no such drawing"));
-    }
+    let i = doc_index(s, "document.switch", p)?.ok_or_else(|| bad("document.switch", "`index`, `path` or `title` is required"))?;
     s.cancel();
     s.active = i;
+    image_folder(s.docs.get(i).and_then(|d| d.path.clone()).as_deref());
     ok()
+}
+
+/// The open drawing `p` names by `index`, `path` or `title`; `None` when it names none.
+fn doc_index(s: &Session, cmd: &str, p: &Value) -> Result<Option<usize>> {
+    if let Some(i) = p.get("index").filter(|v| !v.is_null()) {
+        let i = i.as_u64().map(|i| i as usize).filter(|i| *i < s.docs.len()).ok_or_else(|| bad(cmd, "no such drawing"))?;
+        return Ok(Some(i));
+    }
+    if let Some(path) = str_param(p, "path") {
+        return s
+            .docs
+            .iter()
+            .position(|d| d.path.as_deref().is_some_and(|q| same_file(q, path)))
+            .map(Some)
+            .ok_or_else(|| bad(cmd, format!("{path} is not open")));
+    }
+    if let Some(title) = str_param(p, "title") {
+        return s
+            .docs
+            .iter()
+            .position(|d| d.title.eq_ignore_ascii_case(title))
+            .map(Some)
+            .ok_or_else(|| bad(cmd, format!("no open drawing is called {title}")));
+    }
+    Ok(None)
+}
+
+fn run_list_docs(s: &mut Session, _p: &Value) -> Result<Value> {
+    let drawings: Vec<Value> = s
+        .docs
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            json!({ "index": i, "title": d.title, "path": d.path, "modified": d.is_dirty(), "active": i == s.active, "entities": d.drawing().entity_count() })
+        })
+        .collect();
+    Ok(json!({ "active": s.active, "drawings": drawings }))
+}
+
+/// Save drawing `i` (to `save_as`, else its own file) and make it current: what closing with
+/// `save` does first. The path it was saved to.
+fn save_doc(s: &mut Session, cmd: &str, i: usize, save_as: Option<&str>) -> Result<String> {
+    let path = match save_as {
+        Some(p) => p.to_string(),
+        None => s.docs.get(i).and_then(|d| d.path.clone()).ok_or_else(|| {
+            bad(cmd, format!("\"{}\" has no file name yet: pass saveAs with a path", s.docs.get(i).map(|d| d.title.as_str()).unwrap_or("")))
+        })?,
+    };
+    s.cancel();
+    s.active = i;
+    run_saveas(s, &json!({ "path": path }))?;
+    Ok(path)
+}
+
+fn run_close_doc(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "document.close";
+    let i = doc_index(s, CMD, p)?.unwrap_or(s.active);
+    let st = s.docs.get(i).ok_or_else(|| bad(CMD, "no drawing is open"))?;
+    let (title, dirty) = (st.title.clone(), st.is_dirty());
+    let save_as = str_param(p, "saveAs");
+    let save = p.get("save").and_then(Value::as_bool).unwrap_or(false) || save_as.is_some();
+    let discard = p.get("discard").and_then(Value::as_bool).unwrap_or(false);
+    if save && discard {
+        return Err(bad(CMD, "pass save or discard, not both"));
+    }
+    let mut saved = None;
+    if dirty || save_as.is_some() {
+        if save {
+            saved = Some(save_doc(s, CMD, i, save_as)?);
+        } else if !discard {
+            return Err(bad(CMD, format!("\"{title}\" has unsaved changes: pass save: true (or saveAs) to keep them, or discard: true")));
+        }
+    }
+    run_close(s, &json!({ "index": i }))?;
+    Ok(json!({ "closed": title, "saved": saved }))
+}
+
+fn run_closeall_docs(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "document.closeall";
+    let save = p.get("save").and_then(Value::as_bool).unwrap_or(false);
+    let discard = p.get("discard").and_then(Value::as_bool).unwrap_or(false);
+    if save && discard {
+        return Err(bad(CMD, "pass save or discard, not both"));
+    }
+    let dirty: Vec<(usize, String, bool)> =
+        s.docs.iter().enumerate().filter(|(_, d)| d.is_dirty()).map(|(i, d)| (i, d.title.clone(), d.path.is_some())).collect();
+    if !dirty.is_empty() && !save && !discard {
+        let names: Vec<&str> = dirty.iter().map(|(_, t, _)| t.as_str()).collect();
+        return Err(bad(CMD, format!("unsaved changes in {}: pass save: true or discard: true", names.join(", "))));
+    }
+    // Check every drawing to save can be, before saving or closing anything.
+    if save && let Some((_, t, _)) = dirty.iter().find(|(_, _, has_path)| !has_path) {
+        return Err(bad(CMD, format!("\"{t}\" has no file name yet: save it with document.close and saveAs first")));
+    }
+    let mut saved = Vec::new();
+    if save {
+        for (i, _, _) in &dirty {
+            saved.push(save_doc(s, CMD, *i, None)?);
+        }
+    }
+    let closed: Vec<String> = s.docs.iter().map(|d| d.title.clone()).collect();
+    run_closeall(s, &json!({}))?;
+    Ok(json!({ "closed": closed, "saved": saved }))
 }
 
 fn run_bytes(s: &mut Session, p: &Value) -> Result<Value> {

@@ -1427,3 +1427,27 @@
 	Press Space to cycle options	Пробіл перемикає варіанти
 	Burst	Розчленувати з атрибутами
 	Convert to Mtext	Перетворити на багаторядковий текст
+	View Twist	Поворот виду
+	Let AI agents control CADaddy	Дозволити ШІ-агентам керувати CADaddy
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	Конектор Claude та інші агенти на цьому комп'ютері зможуть відкривати, змінювати, зберігати й закривати креслення в цьому вікні. Ззовні цього комп'ютера підключитися неможливо. Діє з наступного запуску CADaddy.
+	Base Point	Базова точка
+	Column Spacing	Відстань між стовпцями
+	Column Count	Кількість стовпців
+	Row Spacing	Відстань між рядами
+	Row Count	Кількість рядів
+	Row and Column Count	Кількість рядів і стовпців
+	Level Spacing	Відстань між рівнями
+	Level Count	Кількість рівнів
+	Item Spacing	Крок елементів
+	Item Count	Кількість елементів
+	Total column spacing	Загальна відстань по стовпцях
+	Total row spacing	Загальна відстань по рядах
+	Total row and column spacing	Загальна відстань по рядах і стовпцях
+	Total level spacing	Загальна відстань по рівнях
+	Fill angle	Кут заповнення
+	Stretch radius	Розтягнути радіус
+	Array Grips	Ручки масиву
+	Edit Array with a Grip	Редагувати масив ручкою
+	Open Drawings	Відкриті креслення
+	Close Drawing	Закрити креслення
+	Close All Drawings	Закрити всі креслення

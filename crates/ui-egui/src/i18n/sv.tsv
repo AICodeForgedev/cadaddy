@@ -1341,3 +1341,27 @@ menu	Modify	Ändra
 	Press Space to cycle options	Tryck på blanksteg för att växla alternativ
 	Burst	Lös upp med attribut
 	Convert to Mtext	Konvertera till flerradstext
+	View Twist	Vyvridning
+	Let AI agents control CADaddy	Låt AI-agenter styra CADaddy
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	Claude-anslutningen och andra agenter på den här datorn kan då öppna, redigera, spara och stänga ritningar i det här fönstret. Inget utanför datorn kan ansluta. Gäller från nästa gång CADaddy startar.
+	Base Point	Baspunkt
+	Column Spacing	Kolumnavstånd
+	Column Count	Antal kolumner
+	Row Spacing	Radavstånd
+	Row Count	Antal rader
+	Row and Column Count	Antal rader och kolumner
+	Level Spacing	Nivåavstånd
+	Level Count	Antal nivåer
+	Item Spacing	Objektavstånd
+	Item Count	Antal objekt
+	Total column spacing	Totalt kolumnavstånd
+	Total row spacing	Totalt radavstånd
+	Total row and column spacing	Totalt rad- och kolumnavstånd
+	Total level spacing	Totalt nivåavstånd
+	Fill angle	Fyllnadsvinkel
+	Stretch radius	Sträck radie
+	Array Grips	Matrisgrepp
+	Edit Array with a Grip	Redigera matris med grepp
+	Open Drawings	Öppna ritningar
+	Close Drawing	Stäng ritning
+	Close All Drawings	Stäng alla ritningar

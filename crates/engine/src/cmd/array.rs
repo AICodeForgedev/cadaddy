@@ -22,6 +22,7 @@ use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, St
 
 mod classic;
 mod edit;
+pub mod grips;
 
 /// Most preview entities drawn while the array is edited.
 const PREVIEW_LIMIT: usize = 2000;
@@ -55,6 +56,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
     .into_iter()
     .chain(edit::specs())
+    .chain(grips::specs())
     .collect()
 }
 
@@ -454,6 +456,10 @@ enum RStage {
     Main,
     Assoc,
     Base,
+    /// Base point: Key point picked on the source objects.
+    KeyBase,
+    /// A grip of the preview picked at "Select grip to edit array", being dragged.
+    Grip(grips::GripId, grips::GripOption),
     /// COUnt: columns, then rows.
     CountCols,
     CountRows,
@@ -546,6 +552,30 @@ impl RectM {
         d.filter(|d| d.is_finite() && d.abs() > 1e-12).map(Some).ok_or_else(|| other("Requires a nonzero distance."))
     }
 
+    /// The array after dragging (or typing at) grip `g` with `i`; `None` for inputs the grip
+    /// ignores. An error when the result is too large or not an array.
+    fn grip_edit(&self, s: &Session, g: grips::GripId, o: grips::GripOption, i: &Input) -> Result<Option<grips::Edited>> {
+        let e = match i {
+            Input::Point(p) => grips::drag(&self.params(), &Mat3::translate(self.base), g, o, *p),
+            Input::Deferred(d) => grips::drag(&self.params(), &Mat3::translate(self.base), g, o, d.at),
+            Input::Text(t) => {
+                grips::typed(&self.params(), &Mat3::translate(self.base), g, o, number(t).ok_or_else(|| other("Requires a number or a point."))?)
+            }
+            _ => return Ok(None),
+        };
+        let e = e.ok_or_else(|| other("That gives no valid array; specify another point."))?;
+        check_size(s, e.params.item_count(), self.objs.len())?;
+        Ok(Some(e))
+    }
+
+    /// Take the counts and spacings of `p` (a grip edit).
+    fn take(&mut self, p: &ArrayParams) {
+        if let ArrayKind::Rect(r) = &p.kind {
+            (self.cols, self.rows, self.cs, self.rs) = (u64::from(r.cols), u64::from(r.rows), r.col_spacing, r.row_spacing);
+        }
+        (self.levels, self.ls) = (u64::from(p.levels), p.level_spacing);
+    }
+
     fn finish(&mut self, s: &mut Session) -> Result<Step> {
         let levels = if self.assoc { self.levels } else { 1 };
         check_size(s, self.rows.saturating_mul(self.cols).saturating_mul(levels), self.objs.len())?;
@@ -561,7 +591,12 @@ impl RectM {
         let k = match i {
             Input::Enter => return self.finish(s),
             Input::Keyword(k) => k,
-            Input::Point(_) => return Err(other("Editing the array with grips is not available yet; choose an option.")),
+            Input::Point(p) => {
+                let g = grips::creating_grip_at(&self.params(), self.base, p, grips::grip_tolerance(s))
+                    .ok_or_else(|| other("Select a grip of the array or an option."))?;
+                self.stage = RStage::Grip(g, grips::GripOption::Default);
+                return Ok(Step::Continue);
+            }
             _ => return Err(other("Invalid option keyword.")),
         };
         self.stage = match k.as_str() {
@@ -614,6 +649,8 @@ impl Interactive for RectM {
                 .default("eXit"),
             Assoc => assoc_prompt(self.assoc),
             Base => Prompt::new("Specify base point", Accept::POINT).kw(&["Key point"]).default("centroid"),
+            KeyBase => grips::key_prompt(),
+            Grip(g, o) => grips::prompt(&self.params().kind, g, o, grips::creating_grip_point(&self.params(), self.base, g)),
             CountCols | ColsCount => cols(),
             CountRows | RowsCount => rows(),
             SpaceCols => dist("Specify the distance between columns", self.cs).kw(&["Unit cell"]),
@@ -663,10 +700,30 @@ impl Interactive for RectM {
                 self.base = self.centroid;
                 Main
             }
-            (Base, Input::Keyword(_)) => {
-                s.echo("Key points are not available yet; specify a point.");
-                Base
+            (Base, Input::Keyword(_)) => KeyBase,
+            (KeyBase, _) => match grips::key_input(&grips::key_points_of(s.doc()?, &self.objs), &i)? {
+                Some(p) => {
+                    self.base = p;
+                    Main
+                }
+                None => KeyBase,
+            },
+            (Grip(g, o), Input::Keyword(k)) if k == "eXit" => {
+                let _ = (g, o);
+                Main
             }
+            (Grip(g, o), Input::Keyword(k)) => {
+                let kind = self.params().kind;
+                Grip(g, grips::option_keyword(&kind, g, o, k).ok_or_else(|| other("Invalid option keyword."))?)
+            }
+            (Grip(_, _), Input::Enter | Input::Cancel) => Main,
+            (Grip(g, o), _) => match self.grip_edit(s, g, o, &i)? {
+                Some(e) => {
+                    self.take(&e.params);
+                    Main
+                }
+                None => stage,
+            },
             (CountCols | ColsCount, _) => match count(&i, self.cols, max_count(s, self.rows.saturating_mul(self.levels), n))? {
                 Some(c) => {
                     self.cols = c;
@@ -778,6 +835,14 @@ impl Interactive for RectM {
         if !self.sel.done {
             return Vec::new();
         }
+        if let RStage::Grip(g, o) = self.stage {
+            let mut out = match self.grip_edit(s, g, o, &Input::Point(cursor)) {
+                Ok(Some(e)) => preview_copies(s, &self.objs, item_mats(&e.params, self.base).into_iter()),
+                _ => Vec::new(),
+            };
+            out.push(line(grips::creating_grip_point(&self.params(), self.base, g), cursor));
+            return out;
+        }
         let mut out = preview_copies(s, &self.objs, item_mats(&self.params(), self.base).into_iter());
         match (self.stage, self.corner) {
             (RStage::UnitCell, Some(c)) => out.push(line(c, cursor)),
@@ -809,6 +874,11 @@ enum PStage {
     Main,
     Assoc,
     Base,
+    /// Key point picked on the source objects, from the center prompt or from the main loop.
+    KeyCenterBase,
+    KeyBase,
+    /// A grip of the preview picked at "Select grip to edit array", being dragged.
+    Grip(grips::GripId, grips::GripOption),
     Items,
     Between,
     Fill,
@@ -918,6 +988,30 @@ impl PolarM {
         params(kind, if self.assoc { self.levels } else { 1 }, self.ls)
     }
 
+    /// The array after dragging (or typing at) grip `g` with `i` (see [`RectM::grip_edit`]).
+    fn grip_edit(&self, s: &Session, g: grips::GripId, o: grips::GripOption, i: &Input) -> Result<Option<grips::Edited>> {
+        let base = self.base_point(s, self.center);
+        let p = self.params(base, self.center);
+        let e = match i {
+            Input::Point(at) => grips::drag(&p, &Mat3::translate(base), g, o, *at),
+            Input::Deferred(d) => grips::drag(&p, &Mat3::translate(base), g, o, d.at),
+            Input::Text(t) => grips::typed(&p, &Mat3::translate(base), g, o, number(t).ok_or_else(|| other("Requires a number or a point."))?),
+            _ => return Ok(None),
+        };
+        let e = e.ok_or_else(|| other("That gives no valid array; specify another point."))?;
+        check_size(s, e.params.item_count(), self.objs.len())?;
+        Ok(Some(e))
+    }
+
+    /// Take the centre, counts, angles and spacings of `p` (a grip edit; base point `base`).
+    fn take(&mut self, p: &ArrayParams, base: Vec2) {
+        if let ArrayKind::Polar(k) = &p.kind {
+            self.center = base + k.center;
+            (self.items, self.fill, self.rows, self.rs) = (u64::from(k.items), k.fill, u64::from(k.rows), k.row_spacing);
+        }
+        (self.levels, self.ls) = (u64::from(p.levels), p.level_spacing);
+    }
+
     fn finish(&mut self, s: &mut Session) -> Result<Step> {
         let levels = if self.assoc { self.levels } else { 1 };
         check_size(s, self.items.saturating_mul(self.rows).saturating_mul(levels), self.objs.len())?;
@@ -934,7 +1028,13 @@ impl PolarM {
         let k = match i {
             Input::Enter => return self.finish(s),
             Input::Keyword(k) => k,
-            Input::Point(_) => return Err(other("Editing the array with grips is not available yet; choose an option.")),
+            Input::Point(p) => {
+                let base = self.base_point(s, self.center);
+                let g = grips::creating_grip_at(&self.params(base, self.center), base, p, grips::grip_tolerance(s))
+                    .ok_or_else(|| other("Select a grip of the array or an option."))?;
+                self.stage = PStage::Grip(g, grips::GripOption::Default);
+                return Ok(Step::Continue);
+            }
             _ => return Err(other("Invalid option keyword.")),
         };
         self.stage = match k.as_str() {
@@ -976,7 +1076,7 @@ impl Interactive for PolarM {
         }
         Ok(Step::Continue)
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
+    fn prompt(&self, s: &Session) -> Prompt {
         use PStage::*;
         if !self.sel.done {
             return self.sel.prompt();
@@ -985,6 +1085,12 @@ impl Interactive for PolarM {
         match self.stage {
             Center => Prompt::new("Specify center point of array", Accept::POINT).kw(&["Base point", "Axis of rotation"]),
             CenterBase | Base => Prompt::new("Specify base point", Accept::POINT).kw(&["Key point"]).default("centroid"),
+            KeyCenterBase | KeyBase => grips::key_prompt(),
+            Grip(g, o) => {
+                let base = self.base_point(s, self.center);
+                let p = self.params(base, self.center);
+                grips::prompt(&p.kind, g, o, grips::creating_grip_point(&p, base, g))
+            }
             Main => Prompt::new("Select grip to edit array", Accept::POINT)
                 .kw(&["ASsociative", "Base point", "Items", "Angle between", "Fill angle", "ROWs", "Levels", "ROTate items", "eXit"])
                 .default("eXit"),
@@ -1044,9 +1150,34 @@ impl Interactive for PolarM {
                 if stage == CenterBase { Center } else { Main }
             }
             (CenterBase | Base, Input::Keyword(_)) => {
-                s.echo("Key points are not available yet; specify a point.");
-                stage
+                if stage == CenterBase {
+                    KeyCenterBase
+                } else {
+                    KeyBase
+                }
             }
+            (KeyCenterBase | KeyBase, _) => match grips::key_input(&grips::key_points_of(s.doc()?, &self.objs), &i)? {
+                Some(p) => {
+                    self.base = Some(p);
+                    if stage == KeyCenterBase { Center } else { Main }
+                }
+                None => stage,
+            },
+            (Grip(_, _), Input::Keyword(k)) if k == "eXit" => Main,
+            (Grip(g, o), Input::Keyword(k)) => {
+                let base = self.base_point(s, self.center);
+                let kind = self.params(base, self.center).kind;
+                Grip(g, grips::option_keyword(&kind, g, o, k).ok_or_else(|| other("Invalid option keyword."))?)
+            }
+            (Grip(_, _), Input::Enter | Input::Cancel) => Main,
+            (Grip(g, o), _) => match self.grip_edit(s, g, o, &i)? {
+                Some(e) => {
+                    let base = self.base_point(s, self.center);
+                    self.take(&e.params, base);
+                    Main
+                }
+                None => stage,
+            },
             (Items, _) => match count(&i, self.items, max_count(s, self.rows.saturating_mul(self.levels), n))? {
                 Some(c) => {
                     self.items = c;
@@ -1159,6 +1290,14 @@ impl Interactive for PolarM {
             _ => self.center,
         };
         let base = self.base_point(s, center);
+        if let PStage::Grip(g, o) = self.stage {
+            let mut out = match self.grip_edit(s, g, o, &Input::Point(cursor)) {
+                Ok(Some(e)) => preview_copies(s, &self.objs, item_mats(&e.params, base).into_iter()),
+                _ => Vec::new(),
+            };
+            out.push(line(grips::creating_grip_point(&self.params(base, center), base, g), cursor));
+            return out;
+        }
         preview_copies(s, &self.objs, item_mats(&self.params(base, center), base).into_iter())
     }
 }

@@ -1329,3 +1329,27 @@ menu	View	عرض
 	Press Space to cycle options	اضغط مسافة للتبديل بين الخيارات
 	Burst	تفكيك مع السمات
 	Convert to Mtext	تحويل إلى نص متعدد الأسطر
+	View Twist	التفاف العرض
+	Let AI agents control CADaddy	السماح لوكلاء الذكاء الاصطناعي بالتحكم في CADaddy
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	يمكن عندها لموصل Claude والوكلاء الآخرين على هذا الكمبيوتر فتح الرسومات وتحريرها وحفظها وإغلاقها في هذه النافذة. لا يمكن لأي جهاز خارج هذا الكمبيوتر الاتصال. يسري ذلك عند تشغيل CADaddy التالي.
+	Base Point	نقطة الأساس
+	Column Spacing	تباعد الأعمدة
+	Column Count	عدد الأعمدة
+	Row Spacing	تباعد الصفوف
+	Row Count	عدد الصفوف
+	Row and Column Count	عدد الصفوف والأعمدة
+	Level Spacing	تباعد المستويات
+	Level Count	عدد المستويات
+	Item Spacing	تباعد العناصر
+	Item Count	عدد العناصر
+	Total column spacing	إجمالي تباعد الأعمدة
+	Total row spacing	إجمالي تباعد الصفوف
+	Total row and column spacing	إجمالي تباعد الصفوف والأعمدة
+	Total level spacing	إجمالي تباعد المستويات
+	Fill angle	زاوية الملء
+	Stretch radius	تمديد نصف القطر
+	Array Grips	مقابض المصفوفة
+	Edit Array with a Grip	تحرير المصفوفة بمقبض
+	Open Drawings	الرسومات المفتوحة
+	Close Drawing	إغلاق الرسم
+	Close All Drawings	إغلاق كل الرسومات

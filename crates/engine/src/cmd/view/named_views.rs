@@ -128,6 +128,8 @@ fn save(s: &mut Session, name: &str, window: Option<Bounds2>, snapshot: bool) ->
         }
     };
     let replaced = find(&st.doc.views, name).map(|v| v.name.clone());
+    // The centre is on the view plane (display coordinates), which the twist turns.
+    let twist = if layout.is_some() || window.is_some() { 0.0 } else { st.twist() };
     let d = s.doc_mut()?;
     let layer_state = snapshot.then(|| {
         let state = snapshot_name(name);
@@ -143,7 +145,7 @@ fn save(s: &mut Session, name: &str, window: Option<Bounds2>, snapshot: bool) ->
         }
         d.views.retain(|v| !v.name.eq_ignore_ascii_case(old));
     }
-    d.views.push(NamedView { name: name.to_string(), center, height, width, layer_state, twist: 0.0, layout });
+    d.views.push(NamedView { name: name.to_string(), center, height, width, layer_state, twist, layout });
     let msg = if replaced.is_some() { format!("View \"{name}\" replaced.") } else { format!("View \"{name}\" saved.") };
     Ok(json!({ "name": name, "center": [center.x, center.y], "height": height, "width": width, "message": msg }))
 }
@@ -181,6 +183,9 @@ fn restore(s: &mut Session, name: &str) -> Result<Value> {
             }
             let (w, h) = s.viewport_px;
             let st = s.state_mut()?;
+            // Its twist first: the centre is on its (turned) view plane. In a 3D view there is
+            // none to set.
+            st.set_twist(v.twist);
             let aspect = st.zoom_aspect(w / h.max(1.0)).max(1e-9);
             st.set_zoom_frame(View { center: v.center, height: v.height.max(v.width / aspect) });
         }

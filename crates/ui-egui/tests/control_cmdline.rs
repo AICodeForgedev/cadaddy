@@ -6,7 +6,8 @@ use cadaddy_ui_egui::control::{ControlRequest, Outcome, handle};
 use cadaddy_ui_egui::{CadApp, Services};
 use serde_json::{Value, json};
 
-const STATE_KEYS: [&str; 7] = ["prompt", "running", "keywords", "accept", "buffer", "history", "historyExpanded"];
+const STATE_KEYS: [&str; 11] =
+    ["prompt", "message", "running", "keywords", "default", "accept", "busy", "closePrompt", "buffer", "history", "historyExpanded"];
 
 fn call(app: &mut CadApp, method: &str, params: Value) -> Value {
     let (req, _reply) = ControlRequest::new(method, params);

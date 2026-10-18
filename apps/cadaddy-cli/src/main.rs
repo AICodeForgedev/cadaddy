@@ -5,7 +5,7 @@
 //! cadaddy-cli convert IN.dxf OUT.(dxf|svg|png) [--window x0,y0,x1,y1 | --view extents|current]
 //! cadaddy-cli run [FILE|--sample|--metric] [--script TEXT|--script-file F.scr] [--cmd 'id {json}']... [--save OUT] [--export OUT.png] [--window ... | --view ...]
 //! cadaddy-cli commands [FILTER]                   command catalog (JSON)
-//! cadaddy-cli mcp [--connect HOST:PORT [--lazy] [--launch]]  MCP server on stdio (headless or bridged to the app)
+//! cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--launch]]  MCP server on stdio (the open app on the agent port, else headless; or bridged to a given app)
 //! cadaddy-cli perf [N]                            timing table on a synthetic N-entity drawing
 //! cadaddy-cli perf FILE                           canvas display-list build of a drawing, zoomed in step by step
 //! cadaddy-cli sample (bracket|floorplan) OUT       write a built-in sample drawing
@@ -60,7 +60,7 @@ const USAGE: &str = "usage:
   cadaddy-cli convert IN.dxf OUT.(dxf|dwg|svg|png|pdf) [FRAMING]
   cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
   cadaddy-cli commands [FILTER]
-  cadaddy-cli mcp [--connect HOST:PORT [--lazy] [--launch]]
+  cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--launch]]
   cadaddy-cli perf [N | FILE]
   cadaddy-cli sample (bracket|floorplan) OUT.(dxf|dwg|svg|png)
   cadaddy-cli --version
@@ -544,7 +544,10 @@ fn perf(args: &[String]) -> Result<(), String> {
 /// The backend `cadaddy-cli mcp` serves from.
 #[derive(Debug, PartialEq, Eq)]
 enum McpTarget {
-    /// An in-process drawing session (no `--connect`).
+    /// The open CADaddy window on the agent port if it answers, else an in-process session (no
+    /// arguments; what the Claude connector runs).
+    Auto,
+    /// An in-process drawing session (`--headless`).
     Headless,
     /// The running app's control channel at `HOST:PORT`; `lazy`: reached at the first call;
     /// `launch`: opened then if it isn't running.
@@ -555,7 +558,7 @@ enum McpTarget {
 /// empty or flag-like value is an error, never a silent fall back to a headless session (#103).
 fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
     let mut addr: Option<String> = None;
-    let (mut lazy, mut launch) = (false, false);
+    let (mut lazy, mut launch, mut headless) = (false, false, false);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -571,15 +574,18 @@ fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
                 addr = Some(a.to_string());
             }
             "--lazy" => lazy = true,
+            "--headless" => headless = true,
             "--launch" => launch = true,
             other => return Err(format!("mcp: unknown argument {other}\n{USAGE}")),
         }
     }
     match addr {
+        Some(_) if headless => Err("--headless and --connect exclude each other".into()),
         // `--launch` connects at the first call too (the app opens then).
         Some(addr) => Ok(McpTarget::Connect { addr, lazy: lazy || launch, launch }),
         None if lazy || launch => Err("--lazy and --launch need --connect HOST:PORT".into()),
-        None => Ok(McpTarget::Headless),
+        None if headless => Ok(McpTarget::Headless),
+        None => Ok(McpTarget::Auto),
     }
 }
 
@@ -591,6 +597,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
             Err(e) => return Err(format!("cadaddy-cli: cannot connect to {addr}: {e}")),
         },
         McpTarget::Headless => Box::new(cadaddy_mcp::Headless::default()),
+        McpTarget::Auto => Box::new(cadaddy_mcp::Auto::default()),
     };
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -606,8 +613,10 @@ mod mcp_args_tests {
     }
 
     #[test]
-    fn mcp_without_connect_is_headless() {
-        assert_eq!(parse_mcp_args(&args(&[])), Ok(McpTarget::Headless));
+    fn mcp_without_connect_finds_the_app_or_runs_headless() {
+        assert_eq!(parse_mcp_args(&args(&[])), Ok(McpTarget::Auto));
+        assert_eq!(parse_mcp_args(&args(&["--headless"])), Ok(McpTarget::Headless));
+        assert!(parse_mcp_args(&args(&["--headless", "--connect", "127.0.0.1:1"])).is_err());
     }
 
     #[test]

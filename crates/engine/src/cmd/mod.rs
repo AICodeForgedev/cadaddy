@@ -3,10 +3,11 @@
 
 pub(crate) mod annoscale;
 mod annotate;
-mod array;
+pub mod array;
 pub(crate) mod ask;
 mod audit;
 pub(crate) mod blocks;
+pub(crate) mod clip_partners;
 pub mod clipboard;
 pub mod constraints;
 mod dash_styles;

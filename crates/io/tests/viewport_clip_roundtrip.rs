@@ -115,3 +115,43 @@ fn hostile_clip_handles_do_not_panic() {
     g.remove(at);
     assert_eq!(viewport(&cadaddy_io::read_dxf(text_of(&g).as_bytes()).unwrap(), v).clip, None);
 }
+
+/// The view twist (group 51, degrees) round-trips, and the view centre (12/22, in display
+/// coordinates, which the twist turns) comes back as the same model point.
+#[test]
+fn view_twist_roundtrips() {
+    let (mut d, v, _) = drawing(false, true);
+    let twist = 30f64.to_radians();
+    let sheet = Space::Paper(d.layouts[0].name.clone());
+    d.space_mut(&sheet).unwrap().modify(v, |e| {
+        if let EntityKind::Viewport(vp) = &mut e.kind {
+            vp.twist = twist;
+        }
+    });
+    let text = cadaddy_io::write_dxf(&d);
+    let gs = groups(&text);
+    let at = gs.iter().position(|g| *g == ("5".to_string(), v.hex())).unwrap();
+    let record: Vec<&(String, String)> = gs[at..].iter().take_while(|(c, _)| c != "0").collect();
+    let deg = record.iter().find(|(c, _)| c == "51").map(|(_, x)| x.parse::<f64>().unwrap()).unwrap();
+    assert!((deg - 30.0).abs() < 1e-9);
+    // Display coordinates: the model point 50,50 turned by the twist.
+    let x = record.iter().find(|(c, _)| c == "12").map(|(_, x)| x.parse::<f64>().unwrap()).unwrap();
+    assert!((x - Vec2::new(50.0, 50.0).rotate(twist).x).abs() < 1e-9);
+    let got = viewport(&cadaddy_io::read_dxf(text.as_bytes()).unwrap(), v);
+    assert!((got.twist - twist).abs() < 1e-9);
+    assert!(got.view_center.near(Vec2::new(50.0, 50.0), 1e-9), "{:?}", got.view_center);
+    // An untwisted viewport writes no 51; hostile values read as no twist.
+    let (d0, v0, _) = drawing(false, true);
+    let g0 = groups(&cadaddy_io::write_dxf(&d0));
+    let at0 = g0.iter().position(|g| *g == ("5".to_string(), v0.hex())).unwrap();
+    assert!(!g0[at0..].iter().take_while(|(c, _)| c != "0").any(|(c, _)| c == "51"));
+    for bad in ["nan", "inf", "-inf", "1e400", "x"] {
+        let mut g = gs.clone();
+        if let Some(i) = g.iter().skip(at).position(|(c, _)| c == "51") {
+            g[at + i].1 = bad.to_string();
+        }
+        let back = cadaddy_io::read_dxf(text_of(&g).as_bytes()).unwrap();
+        let got = viewport(&back, v);
+        assert!(got.twist.is_finite() && got.view_center.is_finite(), "{bad}");
+    }
+}

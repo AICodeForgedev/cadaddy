@@ -109,8 +109,11 @@ pub fn specs() -> Vec<CommandSpec> {
 // ---------------- core operations ----------------
 
 pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy: bool) -> Result<Vec<Handle>> {
+    // A clipped viewport and its boundary move as one.
+    let hs = &super::clip_partners::with_partners(s.doc()?, hs);
     let d = s.doc_mut()?;
     let mut out = Vec::new();
+    let mut moved = Vec::new();
     for h in hs {
         let Some(sp) = d.space_of(*h) else { continue };
         if copy {
@@ -121,6 +124,7 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
             if let Some(st) = d.space_mut(&sp) {
                 st.push(ne);
                 out.push(nh);
+                moved.push((*h, nh));
             }
         } else {
             let locked = d.entity(*h).and_then(|e| d.layer(&e.common.layer)).is_some_and(|l| l.locked);
@@ -129,12 +133,16 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
             }
             d.modify_entity(*h, |e| e.kind.transform(m))?;
             out.push(*h);
+            moved.push((*h, *h));
         }
     }
+    super::clip_partners::after_transform(d, &moved, m, copy)?;
     Ok(out)
 }
 
 fn erase(s: &mut Session, hs: &[Handle]) -> Result<usize> {
+    // A clipped viewport and its boundary go together.
+    let hs = &super::clip_partners::with_partners(s.doc()?, hs);
     let d = s.doc_mut()?;
     let (mut n, mut locked_n) = (0, 0);
     for h in hs {

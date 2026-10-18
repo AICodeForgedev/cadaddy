@@ -10,7 +10,7 @@
 //! The cube is drawn in the current view direction, as AutoCAD's: in the plan view only its TOP
 //! face shows. A face click looks at that face, a corner click gives the isometric view from that
 //! corner, Home goes to the home view (SW isometric, fitted). Dragging the compass ring turns a 3D
-//! view about the Z axis; the plan view has no view twist yet, so there the ring explains that.
+//! view about the Z axis, and twists the plan view (`view.twist`).
 
 use cadaddy_geom::Vec3;
 use cadaddy_geom::view3::Projection;
@@ -19,9 +19,6 @@ use serde_json::json;
 
 use crate::CadApp;
 use crate::theme::Tokens;
-
-/// Shown when the compass ring is clicked or dragged in the plan view.
-pub const NO_TWIST: &str = "ViewCube: rotating the view needs a view twist, which the 2D plan view doesn't support yet.";
 
 /// Half the cube's edge on screen.
 const HALF: f32 = 22.0;
@@ -216,23 +213,28 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, l: &Layout) {
             Some(Part::Home) => {
                 let _ = app.run("view.dir", json!({ "preset": "swiso" }));
             }
-            Some(Part::Ring) if proj.is_none() => app.session.echo(NO_TWIST),
             _ => {}
         }
     }
-    if pressed_on == Some(Part::Ring) && resp.dragged() {
-        match proj {
-            // Turn about Z by the angle the pointer swept around the cube's centre.
+    if pressed_on == Some(Part::Ring)
+        && resp.dragged()
+        && let Some(now) = resp.interact_pointer_pos()
+    {
+        // Turn about Z by the angle the pointer swept around the cube's centre (screen y is down:
+        // a counterclockwise sweep on screen is a negative angle here).
+        let before = now - resp.drag_delta();
+        let ang = |q: Pos2| f64::from((q.y - l.center.y).atan2(q.x - l.center.x));
+        let swept = ang(now) - ang(before);
+        match proj.filter(|p| !cadaddy_geom::view3::is_plan(p.dir)) {
             Some(pr) => {
-                if let Some(now) = resp.interact_pointer_pos() {
-                    let before = now - resp.drag_delta();
-                    let ang = |q: Pos2| f64::from((q.y - l.center.y).atan2(q.x - l.center.x));
-                    let (az, el) = Projection::angles(pr.dir);
-                    let d = Projection::dir_from_angles(az + (ang(now) - ang(before)), el);
-                    let _ = app.run("view.dir", json!({ "dir": [d.x, d.y, d.z] }));
-                }
+                let (az, el) = Projection::angles(pr.dir);
+                let d = Projection::dir_from_angles(az + swept, el);
+                let _ = app.run("view.dir", json!({ "dir": [d.x, d.y, d.z] }));
             }
-            None if resp.drag_started() => app.session.echo(NO_TWIST),
+            // The plan view twists: the compass follows the pointer round.
+            None if swept.is_finite() && swept != 0.0 => {
+                let _ = app.run("view.twist", json!({ "by": -swept.to_degrees() }));
+            }
             None => {}
         }
     }
@@ -402,9 +404,8 @@ mod tests {
         assert_eq!(view(&app), fitted, "Top face zooms to extents");
         assert!(app.session.pending_window.is_none(), "the click didn't start a selection window");
         assert!(app.session.selection().is_empty());
-        // The ring explains that the 2D view can't rotate, and doesn't touch the drawing.
+        // A click on the ring doesn't touch the drawing or the view.
         click(&mut app, &ctx, l.center + vec2(0.0, -l.ring), egui::PointerButton::Primary);
-        assert_eq!(app.session.log.last().map(String::as_str), Some(NO_TWIST));
         assert!(app.session.pending_window.is_none());
         assert_eq!(view(&app), fitted);
         // A click in the drawing still reaches the drawing.

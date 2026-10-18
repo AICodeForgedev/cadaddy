@@ -1334,3 +1334,27 @@ menu	Modify	Edita
 	Press Space to cycle options	Premere Spazio per cambiare opzione
 	Burst	Esplodi con attributi
 	Convert to Mtext	Converti in testo multilinea
+	View Twist	Rotazione vista
+	Let AI agents control CADaddy	Consenti agli agenti IA di controllare CADaddy
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	Il connettore Claude e gli altri agenti su questo computer potranno aprire, modificare, salvare e chiudere i disegni in questa finestra. Nulla al di fuori di questo computer può collegarsi. Ha effetto al prossimo avvio di CADaddy.
+	Base Point	Punto base
+	Column Spacing	Spaziatura colonne
+	Column Count	Numero di colonne
+	Row Spacing	Spaziatura righe
+	Row Count	Numero di righe
+	Row and Column Count	Numero di righe e colonne
+	Level Spacing	Spaziatura livelli
+	Level Count	Numero di livelli
+	Item Spacing	Spaziatura elementi
+	Item Count	Numero di elementi
+	Total column spacing	Spaziatura totale colonne
+	Total row spacing	Spaziatura totale righe
+	Total row and column spacing	Spaziatura totale righe e colonne
+	Total level spacing	Spaziatura totale livelli
+	Fill angle	Angolo di riempimento
+	Stretch radius	Stira raggio
+	Array Grips	Grip della serie
+	Edit Array with a Grip	Modifica serie con un grip
+	Open Drawings	Disegni aperti
+	Close Drawing	Chiudi disegno
+	Close All Drawings	Chiudi tutti i disegni

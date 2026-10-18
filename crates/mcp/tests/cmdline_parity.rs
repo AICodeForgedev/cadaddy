@@ -4,7 +4,8 @@
 use cadaddy_mcp::{Backend, Headless};
 use serde_json::{Value, json};
 
-const STATE_KEYS: [&str; 7] = ["prompt", "running", "keywords", "accept", "buffer", "history", "historyExpanded"];
+const STATE_KEYS: [&str; 11] =
+    ["prompt", "message", "running", "keywords", "default", "accept", "busy", "closePrompt", "buffer", "history", "historyExpanded"];
 
 fn keys(v: &Value) -> Vec<String> {
     let mut k: Vec<String> = v.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();

@@ -15,6 +15,7 @@
 //! | `saveVersion` | `"2000"` … `"2018"`: the version drawings with no file yet are saved in |
 //! | `SAVETIME` | minutes between automatic saves, 0–600 (0: off) |
 //! | `SAVEFILEPATH` | the folder automatic saves go to |
+//! | `agentControl` | let AI agents (the Claude connector, `cadaddy-cli mcp`) control this window through 127.0.0.1 port 47820 from the next start (default `true`) |
 //! | `timeSensitiveRightClick` | while a command runs, a quick right-click is Enter and holding the button opens the shortcut menu (default); `false`: a right-click always opens the menu |
 //! | `systemCursor` | keep the system cursor visible over the drawing area |
 //! | `historyLines` | command-line history lines, 0–12 |
@@ -142,6 +143,7 @@ struct UiChanges {
     savefilepath: Option<String>,
     time_sensitive_right_click: Option<bool>,
     check_for_updates: Option<bool>,
+    agent_control: Option<bool>,
 }
 
 fn color_param(key: &str, v: &Value) -> Result<Option<Color32>, String> {
@@ -181,6 +183,7 @@ fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
         }
         "timeSensitiveRightClick" => c.time_sensitive_right_click = Some(v.as_bool().ok_or("timeSensitiveRightClick must be true or false")?),
         "checkForUpdates" => c.check_for_updates = Some(v.as_bool().ok_or("checkForUpdates must be true or false")?),
+        "agentControl" => c.agent_control = Some(v.as_bool().ok_or("agentControl must be true or false")?),
         k if k.eq_ignore_ascii_case("SAVETIME") => {
             let max = cadaddy_engine::autosave::MAX_SAVETIME;
             let n = v
@@ -217,6 +220,7 @@ fn ui_json(app: &CadApp) -> Map<String, Value> {
     m.insert("SAVEFILEPATH".into(), json!(cadaddy_engine::autosave::savefilepath()));
     m.insert("timeSensitiveRightClick".into(), json!(o.time_sensitive_right_click));
     m.insert("checkForUpdates".into(), json!(app.update.auto));
+    m.insert("agentControl".into(), json!(app.ui.agent_control));
     m
 }
 
@@ -289,6 +293,9 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
     }
     if let Some(b) = ui.check_for_updates {
         app.update.auto = b;
+    }
+    if let Some(b) = ui.agent_control {
+        app.ui.agent_control = b;
     }
     Ok(report(app))
 }

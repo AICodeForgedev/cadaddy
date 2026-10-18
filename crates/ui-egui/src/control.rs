@@ -192,7 +192,11 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("cmdline.input", "{text}", "Type a line at the command line exactly like a user (commands, prompts, keywords; empty = Enter)."),
     ("cmdline.script", "{text}", "Run a multi-line script, like a .scr file."),
     ("cmdline.key", "{key: \"enter\"|\"escape\"}", "Press Enter or Escape at the command line."),
-    ("cmdline.state", "", "Current prompt, keywords, accepted input kinds and history tail."),
+    (
+        "cmdline.state",
+        "",
+        "Current prompt (text and bare message), keywords, default, accepted input kinds, busy (a drawing still opening), closePrompt and history tail.",
+    ),
     ("engine.execute", "{command, params}", "Run any command with JSON parameters. Never opens a dialog."),
     ("engine.commands", "", "Every command: id, label, menu path, shortcut, aliases, params doc, enabled."),
     ("drawing.inspect", "{entities?, limit?}", "Drawing summary and entities with handles and geometry."),
@@ -218,7 +222,17 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("ui.render", "{path?, width?, height?, fit?}", "Headless render of the drawing; replies pngBase64."),
     ("app.open", "{path}", "Open a drawing."),
     ("app.save", "{path?}", "Save the drawing (Save As with a path)."),
-    ("app.quit", "", "Quit without the unsaved-changes prompt."),
+    (
+        "app.quit",
+        "{save?: bool, discard?: bool}",
+        "Quit without the unsaved-changes prompt: `save` saves every modified drawing that has a file first (refused if one has none), `discard` drops changes; neither keeps the old behaviour (discard).",
+    ),
+    ("app.closePrompt", "", "The drawing a \"Save changes to …?\" question is open for (`{title}`), or `{title: null}`."),
+    (
+        "app.answerClose",
+        "{choice: \"save\"|\"discard\"|\"cancel\"}",
+        "Answer the open \"Save changes to …?\" question as the user would (Save saves first; Save on an unnamed drawing opens Save As).",
+    ),
     ("control.methods", "", "This list."),
     ("ping", "", "Replies \"pong\"."),
 ];
@@ -249,8 +263,13 @@ pub fn cmdline_state(app: &CadApp) -> Value {
     json!({
         "prompt": app.session.prompt_text(),
         "running": app.session.running.as_ref().map(|r| r.id.clone()),
+        "message": p.as_ref().map(|p| p.message.clone()),
         "keywords": p.as_ref().map(|p| p.keywords.clone()).unwrap_or_default(),
+        "default": p.as_ref().and_then(|p| p.default.clone()),
         "accept": p.as_ref().map(|p| p.accept),
+        // A drawing is being read in the background (OPEN returned before it was there).
+        "busy": app.opening.busy(),
+        "closePrompt": app.close_prompt(),
         "buffer": app.cmd.buffer,
         "history": app.session.log.iter().rev().take(20).rev().cloned().collect::<Vec<_>>(),
         "historyExpanded": app.cmd.expanded,
@@ -511,7 +530,7 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             let opts = cadaddy_render::Options {
                 view: window,
                 transparency: app.session.settings.transparency_display,
-                projection: st.projection(),
+                projection: st.list_projection(),
                 ..Default::default()
             };
             let list = cadaddy_render::build(&st.doc, &st.space, &opts);
@@ -539,8 +558,26 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             wrap(app.run("open", json!({"path": path})))
         }
         "app.save" => wrap(app.run(if s("path").is_some() { "saveas" } else { "qsave" }, p.clone())),
+        "app.closePrompt" => ok(json!({ "title": app.close_prompt() })),
+        "app.answerClose" => {
+            let choice = match s("choice").map(str::to_ascii_lowercase).as_deref() {
+                Some("save") => crate::closing::Choice::Save,
+                Some("discard" | "don't save" | "dont save" | "no") => crate::closing::Choice::Discard,
+                Some("cancel") => crate::closing::Choice::Cancel,
+                _ => return err("choice must be \"save\", \"discard\" or \"cancel\""),
+            };
+            let Some(title) = app.close_prompt().map(str::to_string) else { return err("no \"Save changes?\" question is open") };
+            app.answer_close(choice);
+            ok(json!({ "answered": title, "stillAsking": app.close_prompt() }))
+        }
         "app.quit" => {
-            // Programmatic calls never open dialogs: quit without the unsaved-changes prompt.
+            // Programmatic calls never open dialogs: quit without the unsaved-changes prompt. With
+            // `save`, modified drawings are saved first; nothing quits if one can't be.
+            if p.get("save").and_then(Value::as_bool) == Some(true)
+                && let Err(e) = app.session.execute("document.closeall", &json!({ "save": true }))
+            {
+                return err(e.to_string());
+            }
             app.quit_confirmed = true;
             app.quit_requested = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

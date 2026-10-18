@@ -38,7 +38,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
 
 /// The array block reference `h`, its array block and parameters (with the block names its items
 /// use).
-fn array_of(d: &Drawing, h: Handle) -> Result<(Insert, Arc<Block>, ArrayParams)> {
+pub(super) fn array_of(d: &Drawing, h: Handle) -> Result<(Insert, Arc<Block>, ArrayParams)> {
     let e = d.entity(h).ok_or_else(|| other("No such object."))?;
     let p = d.array_params(e).ok_or_else(|| other("The object is not an associative array."))?;
     let EntityKind::Insert(ins) = &e.kind else { return Err(other("The object is not an associative array.")) };
@@ -51,7 +51,7 @@ fn open_edit(d: &Drawing) -> Option<(String, SourceEdit)> {
     d.blocks.iter().find_map(|(n, b)| b.array.as_ref().and_then(|a| a.editing.clone()).map(|e| (n.clone(), e)))
 }
 
-fn refuse_while_editing(s: &Session) -> Result<()> {
+pub(super) fn refuse_while_editing(s: &Session) -> Result<()> {
     if open_edit(s.doc()?).is_some() {
         return Err(other("An array's source objects are being edited; enter ARRAYCLOSE first."));
     }
@@ -112,7 +112,7 @@ fn drop_unused(d: &mut Drawing, names: &[String]) {
 
 /// Rebuild array `h` with parameters `p` (and its block reference moved to `insert` when
 /// given): a new array block for this reference, old blocks removed when unused.
-fn rebuild(s: &mut Session, h: Handle, p: ArrayParams, insert: Option<Vec2>) -> Result<()> {
+pub(super) fn rebuild(s: &mut Session, h: Handle, p: ArrayParams, insert: Option<Vec2>) -> Result<()> {
     if !p.is_valid() {
         return Err(other("The array parameters are not valid."));
     }
@@ -505,6 +505,8 @@ enum Stage {
     Select,
     Main,
     Base,
+    /// Base point: Key point picked on the source objects.
+    KeyBase,
     ColsCount,
     ColsSpace,
     ColsTotal,
@@ -522,6 +524,8 @@ enum Stage {
     /// REPlace: objects, their base point, then the items to replace.
     RepSelect,
     RepBase,
+    /// The replacement objects' base point: a Key point on them.
+    RepKey,
     RepItems,
     /// Source: the item whose objects are placed for editing.
     SourceItem,
@@ -685,6 +689,7 @@ impl Interactive for EditM {
             Rotate => Prompt::new("Rotate arrayed items?", KEYWORDS).kw(&["Yes", "No"]).default(yes(polar.as_ref().is_none_or(|k| k.rotate))),
             RepSelect => Prompt::new("Select replacement objects", Accept::SELECT),
             RepBase => Prompt::new("Select base point of replacement objects", Accept::POINT).kw(&["Key point"]).default("centroid"),
+            KeyBase | RepKey => super::grips::key_prompt(),
             RepItems => Prompt::new("Select an item in array to replace", Accept::POINT).kw(&["Source objects"]),
             SourceItem => Prompt::new("Select item in array", Accept::POINT),
         }
@@ -744,10 +749,22 @@ impl Interactive for EditM {
                 }
                 Main
             }
-            (Base | RepBase, Input::Keyword(_)) => {
-                s.echo("Key points are not available yet; specify a point.");
-                stage
-            }
+            (Base, Input::Keyword(_)) => KeyBase,
+            (RepBase, Input::Keyword(_)) => RepKey,
+            (KeyBase, _) => match super::grips::key_input(&super::grips::source_key_points(s.doc()?, h)?, &i)? {
+                Some(p) => {
+                    rebase(s, h, p)?;
+                    Main
+                }
+                None => KeyBase,
+            },
+            (RepKey, _) => match super::grips::key_input(&super::grips::key_points_of(s.doc()?, &self.rep_objs), &i)? {
+                Some(base) => {
+                    self.rep_block = Some(block_from(s, h, &self.rep_objs.clone(), base)?);
+                    RepItems
+                }
+                None => RepKey,
+            },
             (ColsCount | Items, _) => match count(&i, c64, self.max_for(s, r64.saturating_mul(l64)))? {
                 Some(n) => {
                     let n = super::count32(n);

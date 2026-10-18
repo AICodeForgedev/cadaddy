@@ -40,7 +40,9 @@ impl<'a> Projection<'a> {
         }
         let half = Vec2::new(viewport.width / 2.0, viewport.height / 2.0);
         let paper_clip = Bounds2::new(center - half, center + half);
-        let model_clip = Bounds2::new(viewport.view_center - half / scale, viewport.view_center + half / scale);
+        // The model area seen (turned by the view twist: its extents).
+        let corners = paper_clip.corners().into_iter().map(|c| viewport.to_model(c)).collect::<Option<Vec<_>>>()?;
+        let model_clip = Bounds2::from_points(corners);
         if ![paper_clip.min, paper_clip.max, model_clip.min, model_clip.max].into_iter().all(Vec2::is_finite) {
             return None;
         }
@@ -48,11 +50,11 @@ impl<'a> Projection<'a> {
     }
 
     pub fn to_model(&self, point: Vec2) -> Vec2 {
-        self.viewport.view_center + (point - self.viewport.center.xy()) / self.scale
+        self.viewport.to_model(point).unwrap_or(Vec2::new(f64::NAN, f64::NAN))
     }
 
     fn to_paper(&self, point: Vec2) -> Vec2 {
-        self.viewport.center.xy() + (point - self.viewport.view_center) * self.scale
+        self.viewport.to_paper(point).unwrap_or(Vec2::new(f64::NAN, f64::NAN))
     }
 
     pub fn hit(&self, mut hit: SnapHit) -> Option<SnapHit> {
