@@ -17,7 +17,9 @@ Generated-in-code assets are original and have no file to list:
 - the standard linetype and hatch-pattern libraries (`crates/doc/src/library.rs`; industry-common
   names, our own dash/spacing values);
 - the colour index palette, generated from its structure (`crates/color/src/lib.rs`);
-- the sample drawings (`crates/engine/src/sample.rs`).
+- the sample drawings (`crates/engine/src/sample.rs`);
+- the 3D furniture and fixture library (`crates/doc/src/library/models3d.rs`; built in code from
+  boxes, prisms and cylinders at common real sizes, no outside models).
 
 | Asset | Author | Source | Licence | Notes |
 |---|---|---|---|---|

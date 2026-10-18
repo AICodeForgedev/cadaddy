@@ -32,6 +32,7 @@ mod lisp;
 mod measuregeom;
 mod mleader_content;
 mod mleader_edit;
+mod models3d;
 mod modify;
 mod modify2;
 mod mtext_opts;
@@ -208,6 +209,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(array::specs());
         v.extend(symbol::specs());
         v.extend(express::specs());
+        v.extend(models3d::specs());
         v.extend(underlay::specs());
         v.extend(takeoff::specs());
         v.extend(imageattach::specs());
