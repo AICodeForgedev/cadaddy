@@ -41,6 +41,7 @@ fn insert(block: &str) -> Insert {
         rows: 1,
         col_spacing: 0.0,
         row_spacing: 0.0,
+        clip: None,
     }
 }
 
@@ -238,4 +239,34 @@ fn an_unedited_dimension_keeps_the_block_it_was_read_with() {
         .unwrap();
     let again = cadaddy_io::read_dxf(cadaddy_io::write_dxf(&edited).as_bytes()).unwrap();
     assert_eq!(circles(&again).0, 0);
+}
+
+/// A dimension inside a block definition (model dimensions swept into a block by -BLOCK) gets its
+/// own `*D` geometry block: written with an empty name, readers drop it as invalid.
+#[test]
+fn dimension_inside_a_block_gets_a_geometry_block() {
+    let mut d = Drawing::new_imperial();
+    let mut b = Block::new("DETAIL");
+    b.entities.push(Entity {
+        handle: Handle(0x700),
+        common: Common::default(),
+        kind: EntityKind::Dimension(linear([0.0, 0.0], [10.0, 0.0], [0.0, 3.0])),
+    });
+    d.blocks.insert("DETAIL".into(), Arc::new(b));
+    d.add(&Space::Model, Common::default(), EntityKind::Insert(insert("DETAIL"))).unwrap();
+    let mut f = cadaddy_io::write_dxf(&d);
+    for cycle in 0..3 {
+        let (blocks, refs) = blocks_and_refs(&f);
+        let dims: Vec<&String> = refs.iter().filter(|r| r.starts_with("*D") || r.is_empty()).collect();
+        assert_eq!(dims.len(), 1, "cycle {cycle}: {refs:?}");
+        assert!(dims.iter().all(|r| blocks.contains(r)), "cycle {cycle}: {dims:?} not in {blocks:?}");
+        assert_eq!(dim_blocks(&f).len(), 1, "cycle {cycle}");
+        f = resave(&f);
+    }
+    // DWG too.
+    let dwg = cadaddy_io::write(&d, "x.dwg").unwrap();
+    let back = cadaddy_io::read(&dwg, "x.dwg").unwrap();
+    let inner =
+        back.block("DETAIL").unwrap().entities.iter().find_map(|e| if let EntityKind::Dimension(dm) = &e.kind { dm.block.clone() } else { None });
+    assert!(inner.as_deref().is_some_and(|n| n.starts_with("*D") && back.block(n).is_some_and(|b| !b.entities.is_empty())), "{inner:?}");
 }

@@ -256,6 +256,8 @@ pub struct PolyClip {
     band_h: f64,
     /// The region as triangles (for clipping fills), with each triangle's bounds.
     tris: Vec<([Vec2; 3], Bounds2)>,
+    /// Keep what lies outside the outline instead (an inverted XCLIP).
+    invert: bool,
 }
 
 impl PolyClip {
@@ -266,7 +268,7 @@ impl PolyClip {
         let band_h = bounds.height() / BANDS as f64;
         let mut bands: Vec<Vec<u32>> = vec![Vec::new(); BANDS];
         let n = poly.len();
-        let mut clip = PolyClip { poly: Vec::new(), bounds, bands: Vec::new(), band_h, tris: Vec::new() };
+        let mut clip = PolyClip { poly: Vec::new(), bounds, bands: Vec::new(), band_h, tris: Vec::new(), invert: false };
         for i in 0..n {
             let (Some(a), Some(b)) = (poly.get(i), poly.get((i + 1) % n)) else { continue };
             let (lo, hi) = (clip.band(a.y.min(b.y)), clip.band(a.y.max(b.y)));
@@ -286,6 +288,11 @@ impl PolyClip {
         clip.bands = bands;
         Some(clip)
     }
+    /// The same outline keeping what lies outside it.
+    pub fn inverted(mut self) -> PolyClip {
+        self.invert = true;
+        self
+    }
     /// The outline's vertices.
     pub fn polygon(&self) -> &[Vec2] {
         &self.poly
@@ -301,9 +308,13 @@ impl PolyClip {
         let i = i as usize;
         Some((*self.poly.get(i)?, *self.poly.get((i + 1) % self.poly.len().max(1))?))
     }
-    /// Even-odd point-in-polygon test.
+    /// Whether `p` is kept: inside the outline (even-odd), or outside it when inverted.
     pub fn contains(&self, p: Vec2) -> bool {
-        if !p.is_finite() || !self.bounds.contains(p) {
+        p.is_finite() && self.inside(p) != self.invert
+    }
+    /// Even-odd point-in-polygon test.
+    fn inside(&self, p: Vec2) -> bool {
+        if !self.bounds.contains(p) {
             return false;
         }
         let mut inside = false;
@@ -341,7 +352,13 @@ impl PolyClip {
     }
     /// Clip a segment: the pieces inside the region.
     fn clip_segment(&self, a: Vec2, b: Vec2, out: &mut Vec<(Vec2, Vec2)>) {
-        if !a.is_finite() || !b.is_finite() || clip_segment(a, b, &self.bounds).is_none() {
+        if !a.is_finite() || !b.is_finite() {
+            return;
+        }
+        if clip_segment(a, b, &self.bounds).is_none() {
+            if self.invert {
+                out.push((a, b));
+            }
             return;
         }
         let d = b - a;
@@ -386,7 +403,9 @@ impl PolyClip {
     }
     /// Clip an infinite line (or a ray when `ray`) to the region.
     pub fn clip_infinite(&self, base: Vec2, dir: Vec2, ray: bool) -> Vec<Vec<Vec2>> {
-        match clip_infinite(base, dir, ray, &self.bounds) {
+        // Inverted, the line runs on past the outline: far enough to leave any view of it.
+        let reach = if self.invert { self.bounds.expand((self.bounds.width() + self.bounds.height()) * 1e4) } else { self.bounds };
+        match clip_infinite(base, dir, ray, &reach) {
             Some((a, b)) => self.clip_polyline(&[a, b]),
             None => Vec::new(),
         }
@@ -397,6 +416,30 @@ impl PolyClip {
         for t in tris.as_chunks::<3>().0 {
             let tb = Bounds2::from_points(t.iter().copied());
             if !tb.intersects(&self.bounds) {
+                if self.invert {
+                    out.extend_from_slice(t);
+                }
+                continue;
+            }
+            if self.invert {
+                // The triangle less the region: the even-odd fill of both outlines is their
+                // symmetric difference, and keeping its part inside the triangle leaves the rest.
+                let both = crate::fill::triangulate_evenodd(&[t.to_vec(), self.poly.clone()]);
+                for piece in both.as_chunks::<3>().0 {
+                    let poly = clip_convex(piece, t);
+                    if let Some(first) = poly.first().copied() {
+                        for w in poly.get(1..).unwrap_or(&[]).windows(2) {
+                            if let (Some(b), Some(c)) = (w.first(), w.get(1))
+                                && (*b - first).cross(*c - first).abs() > 1e-18
+                            {
+                                out.extend_from_slice(&[first, *b, *c]);
+                            }
+                        }
+                    }
+                }
+                if out.len() > 6_000_000 {
+                    return out;
+                }
                 continue;
             }
             // Wholly inside: no outline edge crosses it.
@@ -534,5 +577,20 @@ mod tests {
         let t = clip_triangles(&[Vec2::new(-5.0, 0.0), Vec2::new(5.0, 0.0), Vec2::new(5.0, 10.0)], &r());
         assert!(!t.is_empty() && t.len().is_multiple_of(3));
         assert!(t.iter().all(|p| p.x >= -1e-9));
+    }
+
+    #[test]
+    fn inverted_region_keeps_the_outside() {
+        let sq = [Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0), Vec2::new(0.0, 10.0)];
+        let c = PolyClip::new(&sq).unwrap().inverted();
+        assert!(!c.contains(Vec2::new(5.0, 5.0)) && c.contains(Vec2::new(15.0, 5.0)));
+        let pieces = c.clip_polyline(&[Vec2::new(-5.0, 5.0), Vec2::new(15.0, 5.0)]);
+        assert_eq!(pieces.len(), 2);
+        assert!(c.clip_polyline(&[Vec2::new(20.0, 0.0), Vec2::new(30.0, 0.0)]).len() == 1);
+        // A triangle over the corner loses the part inside the square.
+        let tri = [Vec2::new(5.0, 5.0), Vec2::new(25.0, 5.0), Vec2::new(5.0, 25.0)];
+        let t = c.clip_triangles(&tri);
+        let area: f64 = t.as_chunks::<3>().0.iter().map(|t| ((t[1] - t[0]).cross(t[2] - t[0]) / 2.0).abs()).sum();
+        assert!((area - (200.0 - 25.0)).abs() < 1e-6, "{area}");
     }
 }

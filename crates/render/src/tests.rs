@@ -633,6 +633,7 @@ fn hatch_in_a_squashed_block_keeps_lines_that_show() {
         rows: 1,
         col_spacing: 0.0,
         row_spacing: 0.0,
+        clip: None,
     };
     d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).unwrap();
     // One pixel = 1 unit: 0.125 spacing × 100 along x is far more than a pixel.
@@ -677,6 +678,7 @@ fn insert_of(block: &str) -> EntityKind {
         rows: 1,
         col_spacing: 0.0,
         row_spacing: 0.0,
+        clip: None,
     })
 }
 
@@ -965,4 +967,65 @@ fn mtext_background_mask_draws_under_the_text() {
     let mut d = Drawing::new_imperial();
     d.add(&Space::Model, Common::default(), mt(None)).unwrap();
     assert!(!build(&d, &Space::Model, &opts).prims.iter().any(|p| p.kind == Kind::Mask));
+}
+
+/// XCLIP: a clipped block reference draws only what is inside its boundary, which moves with it.
+#[test]
+fn clipped_block_reference_draws_only_inside_its_boundary() {
+    use cadaddy_doc::{Block, Common, Entity, EntityKind, Handle, Insert, Line, Space, XClip};
+    let mut d = Drawing::new_imperial();
+    let mut b = Block::new("GRID");
+    for i in 0..=10 {
+        let x = f64::from(i) * 10.0;
+        b.entities.push(Entity {
+            handle: Handle(0x100 + u64::from(i as u32)),
+            common: Common::default(),
+            kind: EntityKind::Line(Line { a: Vec3::new(x, 0.0, 0.0), b: Vec3::new(x, 100.0, 0.0) }),
+        });
+    }
+    d.blocks.insert("GRID".into(), std::sync::Arc::new(b));
+    let clip = XClip {
+        boundary: vec![Vec2::new(15.0, 20.0), Vec2::new(65.0, 20.0), Vec2::new(65.0, 50.0), Vec2::new(15.0, 50.0)],
+        enabled: true,
+        inverted: false,
+    };
+    let ins = |x: f64, clip: Option<XClip>| {
+        EntityKind::Insert(Insert {
+            block: "GRID".into(),
+            insert: Vec3::new(x, 0.0, 0.0),
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs: Vec::new(),
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+            clip,
+        })
+    };
+    d.add(&Space::Model, Common::default(), ins(150.0, Some(clip.clone()))).unwrap();
+    // XCLIPFRAME 2 (the default): the boundary itself shows, 165..215 × 20..50.
+    let b = build(&d, &Space::Model, &Options::default()).bounds;
+    assert!((b.min.x - 165.0).abs() < 1e-6 && (b.max.x - 215.0).abs() < 1e-6, "{b:?}");
+    d.header.set_i64("XCLIPFRAME", 0);
+    let list = build(&d, &Space::Model, &Options::default());
+    let b = list.bounds;
+    assert!((b.min.x - 170.0).abs() < 1e-6 && (b.max.x - 210.0).abs() < 1e-6, "{b:?}");
+    assert!((b.min.y - 20.0).abs() < 1e-6 && (b.max.y - 50.0).abs() < 1e-6, "{b:?}");
+    // Turned off, the whole block shows.
+    let mut d2 = Drawing::new_imperial();
+    d2.blocks = d.blocks.clone();
+    d2.add(&Space::Model, Common::default(), ins(0.0, Some(XClip { enabled: false, ..clip.clone() }))).unwrap();
+    let b = build(&d2, &Space::Model, &Options::default()).bounds;
+    assert!((b.max.y - 100.0).abs() < 1e-6, "{b:?}");
+    // Inverted, the inside is hidden and the rest shows: the line at x=30 breaks from y=20 to 50.
+    let mut d3 = Drawing::new_imperial();
+    d3.blocks = d.blocks.clone();
+    d3.add(&Space::Model, Common::default(), ins(0.0, Some(XClip { inverted: true, ..clip }))).unwrap();
+    let list = build(&d3, &Space::Model, &Options::default());
+    assert!((list.bounds.max.y - 100.0).abs() < 1e-6 && (list.bounds.max.x - 100.0).abs() < 1e-6, "{:?}", list.bounds);
+    let at30: Vec<Vec<Vec2>> =
+        list.prims.iter().map(|p| list.points(p).to_vec()).filter(|pts| pts.iter().all(|q| (q.x - 30.0).abs() < 1e-6)).collect();
+    assert_eq!(at30.len(), 2, "{at30:?}");
+    assert!(at30.iter().flatten().all(|q| q.y <= 20.0 + 1e-6 || q.y >= 50.0 - 1e-6), "{at30:?}");
 }

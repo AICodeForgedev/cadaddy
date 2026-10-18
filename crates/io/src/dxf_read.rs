@@ -433,6 +433,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 rows: t.i(71).unwrap_or(1).clamp(1, 10_000) as u32,
                 col_spacing,
                 row_spacing: t.fd(45, 0.0),
+                clip: None,
             })
         }
         "DIMENSION" => {
@@ -1888,6 +1889,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     objs.apply(&mut d, &rx);
     crate::dxf_image::resolve(&secs, &mut d);
     crate::dxf_mline::resolve(&secs, &mut d);
+    crate::dxf_xclip::resolve(&secs, &mut d);
     // Keep handles unique against the header's seed.
     let seed = d.header.str("HANDSEED", "");
     if let Some(h) = own_seed.or_else(|| Handle::parse_hex(&seed)) {

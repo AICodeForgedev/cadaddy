@@ -46,6 +46,13 @@ impl Bounds2 {
         }
         Bounds2 { min: self.min.min(o.min), max: self.max.max(o.max) }
     }
+    /// The overlap of two boxes (empty when they do not meet).
+    pub fn intersection(&self, o: &Bounds2) -> Bounds2 {
+        if !self.intersects(o) {
+            return Bounds2::EMPTY;
+        }
+        Bounds2 { min: self.min.max(o.min), max: self.max.min(o.max) }
+    }
     pub fn width(&self) -> f64 {
         if self.is_empty() { 0.0 } else { self.max.x - self.min.x }
     }
