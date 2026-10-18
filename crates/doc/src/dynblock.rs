@@ -20,6 +20,7 @@ use crate::foreign::ForeignObject;
 use crate::{Drawing, Handle, RawTag};
 
 mod apply;
+pub mod author;
 mod grips;
 mod reference;
 pub use apply::{drag_grip, set_property};

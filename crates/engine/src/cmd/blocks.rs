@@ -17,6 +17,7 @@ use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 mod attedit;
+mod dynauthor;
 mod dyngrip;
 pub(crate) mod extract;
 pub(crate) mod refedit;
@@ -86,6 +87,7 @@ pub fn specs() -> Vec<CommandSpec> {
     .chain(xclip::specs())
     .chain(refedit::specs())
     .chain(bedit::specs())
+    .chain(dynauthor::specs())
     .collect()
 }
 
