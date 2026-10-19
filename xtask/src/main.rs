@@ -8,8 +8,10 @@ mod casefs;
 mod ico;
 mod layers;
 mod parity;
+mod secrets;
 mod smoke;
 mod stats;
+mod supplychain;
 mod version;
 
 use std::path::{Path, PathBuf};
@@ -22,7 +24,8 @@ commands:
   assets          check that every icon/image/font/asset is attributed in ATTRIBUTION.md
   layers          enforce the crate dependency layering (plan/architecture.md §3)
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates
-  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm (stops at first failure)
+  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm, supplychain, advisories
+                  (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -35,6 +38,13 @@ commands:
   smoke <CADaddy-Mac.dmg | CADaddy.app | app executable | CADaddy.mcpb | cadaddy-cli> [--version X.Y.Z] [--out DIR] [--keep]
                   release smoke test: version, draw, save DWG/DXF/.cdy, reopen, plot PDF, sheet set
                   publish, Walk on/off and update check (app); report in target/smoke/report.json
+  supplychain     offline: shipped crates' licences (deny.toml; no GPL/AGPL/unknown), sources
+                  (crates.io, the workspace, pinned allowed git), banned crates, and a secrets scan
+  advisories      RustSec advisories: cargo deny check + cargo audit (needs both tools and the network)
+  sbom [--out FILE]
+                  CycloneDX 1.5 SBOM of the shipped crates (default target/sbom/cadaddy-<version>.cdx.json),
+                  to attach to the release
+  secrets         scan the tree for credentials (keys, tokens, private keys); exceptions in .secrets-allow
   fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
                   mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
                   saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
@@ -56,6 +66,10 @@ fn main() -> ExitCode {
         Some("fuzz") => cmd_fuzz(&rest),
         Some("casefs") => casefs::run(&root(), &rest),
         Some("smoke") => smoke::run(&root(), &rest),
+        Some("supplychain") => supplychain::run(&root()),
+        Some("advisories") => supplychain::advisories(&root()),
+        Some("sbom") => supplychain::sbom(&root(), &rest),
+        Some("secrets") => secrets::run(&root()),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -204,6 +218,8 @@ fn cmd_ci() -> Result<(), String> {
         ("assets", Box::new(|| assets::run(&root()))),
         ("layers", Box::new(cmd_layers)),
         ("wasm", Box::new(cmd_wasm)),
+        ("supplychain", Box::new(|| supplychain::run(&root()))),
+        ("advisories", Box::new(|| supplychain::advisories(&root()))),
     ];
     let mut done = Vec::new();
     for (name, f) in &steps {

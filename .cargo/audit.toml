@@ -1,0 +1,7 @@
+# cargo-audit's settings (`cargo xtask advisories`): the same documented exceptions as deny.toml's
+# [advisories] ignore list, each with its reason there.
+[advisories]
+ignore = ["RUSTSEC-2026-0370", "RUSTSEC-2026-0371", "RUSTSEC-2026-0372"]
+
+[yanked]
+enabled = true
