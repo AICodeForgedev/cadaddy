@@ -6,6 +6,7 @@
 //! waits. Each drawing has its own symbols, as in AutoCAD. A run is one undo step.
 
 pub mod builtins;
+mod curve;
 mod drawing;
 pub mod eval;
 pub mod input;
