@@ -1,6 +1,6 @@
 //! Tool Sets (left) and the Layers / Properties palettes (right).
 
-use cadcraft_color::Color;
+use cadcraft_color::{Color, Rgb};
 use cadcraft_doc::EntityKind;
 use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::{Value, json};
@@ -854,7 +854,18 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             _ => "*VARIES*".into(),
         }
     };
-    let color = same(&|e| e.common.color.name());
+    let selected_color = Some(e.common.color).filter(|c| sel.iter().filter_map(|h| d.entity(*h)).all(|e| e.common.color == *c));
+    let color = selected_color.map_or_else(|| "*VARIES*".into(), Color::name);
+    let effective_color = |e: &cadcraft_doc::Entity| {
+        let layer = d.layer(&e.common.layer).map_or(Color::WHITE, |l| l.color);
+        e.common.color.resolve(layer, Color::WHITE)
+    };
+    let resolved_color = sel
+        .first()
+        .and_then(|h| d.entity(*h))
+        .map(|e| effective_color(e))
+        .filter(|c| sel.iter().filter_map(|h| d.entity(*h)).all(|e| effective_color(e) == *c))
+        .unwrap_or(Rgb(255, 255, 255));
     let layer = same(&|e| e.common.layer.clone());
     let linetype = same(&|e| e.common.linetype.clone());
     let lts = same(&|e| format!("{:.4}", e.common.ltscale));
@@ -872,26 +883,18 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     };
     group(ui, "General");
     prop_row(ui, "Color", |ui| {
-        ui.menu_button(format!("■ {}", crate::i18n::t(&color)), |ui| {
-            for (n, c) in [
-                ("ByLayer", 256),
-                ("ByBlock", 0),
-                ("Red", 1),
-                ("Yellow", 2),
-                ("Green", 3),
-                ("Cyan", 4),
-                ("Blue", 5),
-                ("Magenta", 6),
-                ("White", 7),
-                ("Color 8", 8),
-                ("Color 9", 9),
-            ] {
-                if ui.button(crate::i18n::t(n)).clicked() {
-                    set = Some(json!({ "handles": ids, "color": c }));
-                    ui.close();
-                }
-            }
-        });
+        let width = (ui.available_width() - 10.0).max(0.0);
+        if let Some(c) = crate::layers::color_button_resolved(
+            ui,
+            egui::Id::new(("properties_color", &ids)),
+            selected_color.unwrap_or(Color::ByLayer),
+            resolved_color,
+            &color,
+            true,
+            width,
+        ) {
+            set = Some(json!({ "handles": ids, "color": c.name() }));
+        }
     });
     prop_row(ui, "Layer", |ui| {
         ui.menu_button(layer.clone(), |ui| {
@@ -1133,5 +1136,40 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     report_bad(app, bad);
     if let Some(p) = custom_set {
         let _ = app.run("blocks.reference.set", p);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Services;
+    use cadcraft_engine::Session;
+    use egui::{Color32, Shape};
+
+    fn contains_swatch(shape: &Shape, color: Color32) -> bool {
+        match shape {
+            Shape::Rect(r) => r.fill == color && (r.rect.width() - 12.0).abs() < 0.01 && (r.rect.height() - 12.0).abs() < 0.01,
+            Shape::Vec(shapes) => shapes.iter().any(|shape| contains_swatch(shape, color)),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn selected_bylayer_entity_paints_its_layer_color_swatch() {
+        let mut app = CadApp::new(Session::default(), Services::default());
+        app.run("layer.new", json!({ "name": "Blue", "color": 5, "current": true })).unwrap();
+        let line = app.run("line", json!({ "points": [[0, 0], [10, 0]] })).unwrap();
+        app.run("select", json!({ "handles": [line["handles"][0].clone()] })).unwrap();
+
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 1200.0))), ..Default::default() };
+        let mut painted_blue = false;
+        for _ in 0..2 {
+            app.logic(&ctx);
+            let mut output = ctx.run_ui(input.clone(), |ui| properties_section(&mut app, ui));
+            painted_blue = output.shapes.iter().any(|shape| contains_swatch(&shape.shape, Color32::from_rgb(0, 0, 255)));
+            output.textures_delta.clear();
+        }
+        assert!(painted_blue, "a ByLayer entity on a blue layer needs a blue Properties swatch");
     }
 }
