@@ -24,6 +24,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.newtemplate", "New from Template...", &["File", "New from Template..."], None),
     ("ui.convertpdf", "Convert PDF to DWG...", &["File", "Convert PDF to DWG..."], None),
     ("ui.walk", "Walk", &["View", "Walk"], None),
+    ("ui.bench3d", "3D View Benchmark", &[], None),
     ("ui.pdfimport", "PDF Import...", &[], None),
     ("ui.saveas", "Save As...", &[], None),
     ("ui.sample", "Open Sample Drawing", &["Help", "Open Sample Drawing"], None),
@@ -286,6 +287,13 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         "ui.toggle.systemcursor" => {
             toggle(&mut app.ui.system_cursor, params);
+            Ok(Value::Null)
+        }
+        // Orbit the 3D view for `frames` frames (2° each); `ui.inspect` reports the frames per
+        // second in `perf3d.benchFps`.
+        "ui.bench3d" => {
+            let frames = params.get("frames").and_then(Value::as_u64).unwrap_or(240).clamp(1, 100_000) as u32;
+            crate::shaded::bench(app, frames);
             Ok(Value::Null)
         }
         "ui.walk" => {

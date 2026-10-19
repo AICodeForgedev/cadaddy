@@ -1746,7 +1746,15 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let xf = tile_xf(*r, tile);
         (xf.world_bounds(), 1.0 / xf.scale)
     }));
-    ensure_list(app, &xf_paper, &views, ui.ctx());
+    // In a 3D visual style the shaded view draws the model; the plan display list then only
+    // serves highlights, so it is built (for every new view: costly while orbiting a big model)
+    // only while something is hovered or selected.
+    let shaded_only = crate::shaded::active(app).is_some() && app.canvas.hover.is_none() && app.session.selection().is_empty();
+    if shaded_only {
+        app.canvas.list = None;
+    } else {
+        ensure_list(app, &xf_paper, &views, ui.ctx());
+    }
     let sheet = app.canvas.list.as_ref().and_then(|l| l.sheet);
     let bg = match sheet {
         Some(sh) => {

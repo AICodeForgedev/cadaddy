@@ -17,6 +17,7 @@ mod linetype;
 mod linetype_text;
 pub mod materials;
 mod mline;
+pub mod model3;
 mod outline;
 pub mod paper;
 pub mod pen;
