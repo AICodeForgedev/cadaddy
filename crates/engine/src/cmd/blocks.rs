@@ -358,7 +358,7 @@ fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
     let hooks = super::file::io().ok_or_else(|| bad("wblock", "file formats are not available in this build"))?;
     let bytes = (hooks.write)(&d, &path).map_err(|e| bad("wblock", e))?;
     #[cfg(not(target_arch = "wasm32"))]
-    std::fs::write(&path, &bytes).map_err(|e| bad("wblock", format!("{path}: {e}")))?;
+    crate::writefile::write(&path, &bytes).map_err(|e| bad("wblock", format!("{path}: {e}")))?;
     Ok(json!({ "path": path, "entities": d.model.len(), "bytes": bytes.len() }))
 }
 

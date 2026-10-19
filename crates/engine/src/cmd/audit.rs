@@ -120,7 +120,7 @@ fn write_log(s: &mut Session, r: &mut Value, report: &crate::audit::Report, comm
 
 #[cfg(not(target_arch = "wasm32"))]
 fn write_text(path: &str, text: &str) -> std::result::Result<(), String> {
-    std::fs::write(path, text).map_err(|e| e.to_string())
+    crate::writefile::write(path, text).map_err(|e| e.to_string())
 }
 
 #[cfg(target_arch = "wasm32")]

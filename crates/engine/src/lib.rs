@@ -8,6 +8,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod agent;
 pub mod assoc;
 pub mod audit;
 pub mod autosave;
@@ -37,6 +38,7 @@ pub mod sysvars;
 pub mod ucs;
 pub mod undoctl;
 pub mod units;
+pub mod writefile;
 
 use std::sync::Arc;
 
@@ -971,6 +973,8 @@ pub struct Session {
     lisp_last: Option<std::result::Result<lisp::value::Value, String>>,
     /// What the last HATCHPICK kept (the Hatch and Gradient dialog's picks).
     pub hatch_picks: Option<cmd::hatch::HatchPicks>,
+    /// Safety rails for agents: requests, dry run, confirmations, the change journal.
+    pub agent: agent::AgentGuard,
 }
 
 impl Default for Session {
@@ -1033,6 +1037,7 @@ impl Session {
             lisp: lisp::LispState::default(),
             lisp_last: None,
             hatch_picks: None,
+            agent: agent::AgentGuard::default(),
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {
@@ -1188,6 +1193,12 @@ impl Session {
 
     /// Run a command with JSON parameters (no dialogs). Records undo when the drawing changes.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        // An agent's outermost call: a dry run or a confirmation first ([`agent`]).
+        if self.journal.is_outer()
+            && let Some(r) = self.guard_call(id, params)
+        {
+            return r;
+        }
         let outer = self.journal.enter();
         let r = self.execute_inner(id, params);
         self.journal.leave();

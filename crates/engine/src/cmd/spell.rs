@@ -476,6 +476,7 @@ pub fn add_word(word: &str) -> Result<()> {
         if let Some(dir) = std::path::Path::new(&path).parent() {
             let _ = std::fs::create_dir_all(dir);
         }
+        crate::writefile::check(std::path::Path::new(&path)).map_err(|e| EngineError::Other(e.to_string()))?;
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
         writeln!(f, "{w}").map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     }

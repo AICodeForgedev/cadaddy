@@ -264,6 +264,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(stairs::specs());
         v.extend(autospec::specs());
         v.extend(verify::specs());
+        v.extend(crate::agent::specs());
         v.extend(tours::specs());
         v.extend(walkpub::specs());
         v.extend(imageclip::specs());

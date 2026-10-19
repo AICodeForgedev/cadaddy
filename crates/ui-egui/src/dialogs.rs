@@ -11,6 +11,7 @@ use crate::theme::Tokens;
 pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     crate::mtext_editor::show(app, ctx);
     crate::quick::quick_properties(app, ctx);
+    crate::agentdlg::confirm_prompt(app, ctx);
     let Some(d) = app.ui.dialog.clone() else { return };
     let mut open = true;
     match d.as_str() {
@@ -55,6 +56,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "sheetset" => crate::sheetsets::dialog(app, ctx, &mut open),
         "publish" => crate::publishdlg::dialog(app, ctx, &mut open),
         crate::roomsdlg::DIALOG => crate::roomsdlg::dialog(app, ctx, &mut open),
+        crate::agentdlg::DIALOG => crate::agentdlg::dialog(app, ctx, &mut open),
         o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }

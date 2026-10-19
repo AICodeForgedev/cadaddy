@@ -597,7 +597,7 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     let (page, rows) = report(c, &st.doc, &st.title);
     let Some(path) = str_param(p, "path") else { return Ok(json!({ "html": page, "rows": rows })) };
     #[cfg(not(target_arch = "wasm32"))]
-    std::fs::write(path, page.as_bytes()).map_err(|e| bad("compareexport", format!("{path}: {e}")))?;
+    crate::writefile::write(path, page.as_bytes()).map_err(|e| bad("compareexport", format!("{path}: {e}")))?;
     #[cfg(target_arch = "wasm32")]
     return Err(bad("compareexport", format!("{path}: paths are not available on the web; leave out `path` to get the report")));
     #[cfg(not(target_arch = "wasm32"))]

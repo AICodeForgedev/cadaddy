@@ -426,7 +426,11 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
             let params = if params.is_null() { json!({}) } else { params };
-            wrap(app.run(id, params))
+            // An agent's call: dry run, request journal and the user's confirmation apply.
+            let was = std::mem::replace(&mut app.session.agent.from_agent, true);
+            let r = app.run(id, params);
+            app.session.agent.from_agent = was;
+            wrap(r)
         }
         "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
@@ -699,7 +703,12 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             let Some(path) = s("path") else { return err("missing path") };
             wrap(app.run("open", json!({"path": path})))
         }
-        "app.save" => wrap(app.run(if s("path").is_some() { "saveas" } else { "qsave" }, p.clone())),
+        "app.save" => {
+            let was = std::mem::replace(&mut app.session.agent.from_agent, true);
+            let r = app.run(if s("path").is_some() { "saveas" } else { "qsave" }, p.clone());
+            app.session.agent.from_agent = was;
+            wrap(r)
+        }
         "app.closePrompt" => ok(json!({ "title": app.close_prompt() })),
         "app.answerClose" => {
             let choice = match s("choice").map(str::to_ascii_lowercase).as_deref() {

@@ -255,6 +255,8 @@ impl Default for Headless {
     fn default() -> Self {
         let mut session = Session::empty();
         session.new_drawing_with_viewports(false);
+        // No one to ask here: the agent runs the session (dry run and the journal still apply).
+        session.agent.confirm = false;
         Headless { session }
     }
 }
@@ -286,7 +288,7 @@ impl Backend for Headless {
             "engine.execute" | "command" => {
                 let id = str_p("command").ok_or("missing `command`")?;
                 let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
-                s.execute(&id, &params).map_err(|e| e.to_string())
+                s.execute_agent(&id, &params).map_err(|e| e.to_string())
             }
             "cmdline.input" => {
                 let before = s.log.len();
@@ -381,7 +383,7 @@ impl Backend for Headless {
             }
             "app.save" => {
                 let id = if p.get("path").is_some() { "saveas" } else { "qsave" };
-                s.execute(id, &p).map_err(|e| e.to_string())
+                s.execute_agent(id, &p).map_err(|e| e.to_string())
             }
             "ui.screenshot" => Err("no UI in headless mode; use render".into()),
             "control.methods" => Ok(HEADLESS_METHODS

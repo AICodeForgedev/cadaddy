@@ -117,6 +117,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.language", "Language", &[], None),
     ("ui.noop", "", &[], None),
     ("ui.quit", "Quit CADaddy", &[], Some("Cmd+Q")),
+    ("ui.agentlog", "Agent Activity", &["Window", "Agent Activity"], None),
 ];
 
 /// Typed commands that open a dialog only when typed alone: with more on the line (`color 1`,
@@ -291,6 +292,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 Err(e) => e.clone(),
             });
             r
+        }
+        "ui.agentlog" => {
+            app.ui.dialog = Some(crate::agentdlg::DIALOG.into());
+            Ok(Value::Null)
         }
         "ui.sample" => {
             let d = cadaddy_engine::sample::default_sample();
