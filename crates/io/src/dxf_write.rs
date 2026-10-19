@@ -1441,8 +1441,11 @@ fn table_size(t: &Table) -> (usize, usize) {
 
 /// The anonymous `*T` block of a table: cell fills, borders and texts as its cell styles draw
 /// them, for readers that only draw the block.
-fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
-    let g = cadcraft_render::table_geometry(d, t);
+///
+/// The block is relative to its own origin: the ACAD_TABLE reference adds the insertion point.
+pub(crate) fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
+    let at_origin = Table { insert: Vec3::ZERO, ..t.clone() };
+    let g = cadcraft_render::table_geometry(d, &at_origin);
     let c = Common { layer: layer.into(), color: Color::ByBlock, ..Common::default() };
     let mut out = Vec::new();
     for f in &g.fills {
