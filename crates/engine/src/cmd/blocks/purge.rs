@@ -9,6 +9,8 @@ use std::collections::{HashSet, VecDeque};
 use cadaddy_doc::{Drawing, EntityKind, Handle, STANDARD_MLINE_STYLE};
 use serde_json::{Map, Value, json};
 
+mod reasons;
+
 use super::super::qselect::wildcard;
 use super::super::{bad, find_command, str_param};
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
@@ -158,7 +160,10 @@ fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
     let lower = |it: &mut dyn Iterator<Item = String>| it.map(|n| n.to_ascii_lowercase()).collect::<HashSet<String>>();
     match kind {
         Kind::Blocks => {
-            let used = used_blocks(d);
+            let mut used = used_blocks(d);
+            // Arrowheads and multileader content blocks the styles name.
+            used.extend(d.dim_styles.iter().map(|s| s.arrow_block.to_ascii_uppercase()));
+            used.extend(d.mleader_styles.iter().map(|s| s.block.to_ascii_uppercase()));
             d.blocks.values().filter(|b| !used.contains(&b.name.to_ascii_uppercase())).map(|b| b.name.clone()).collect()
         }
         Kind::Layers => {
@@ -333,11 +338,12 @@ impl Report {
 }
 
 /// Purge everything matching `names` for one kind (zero-length and empty text ignore names).
-fn purge_kind(s: &mut Session, kind: Kind, names: &str, r: &mut Report) -> Result<()> {
+/// `exact`: only these names (each as it is, no wildcards; the Purge dialog's check boxes).
+fn purge_kind(s: &mut Session, kind: Kind, names: &str, exact: Option<&[String]>, r: &mut Report) -> Result<()> {
     match kind {
         Kind::All => {
             for k in ALL {
-                purge_kind(s, *k, names, r)?;
+                purge_kind(s, *k, names, exact, r)?;
             }
             return Ok(());
         }
@@ -354,7 +360,11 @@ fn purge_kind(s: &mut Session, kind: Kind, names: &str, r: &mut Report) -> Resul
             }
         }
         _ => {
-            for n in matching(s.doc()?, kind, names) {
+            let mut found = matching(s.doc()?, kind, names);
+            if let Some(ex) = exact {
+                found.retain(|n| ex.iter().any(|x| x.eq_ignore_ascii_case(n)));
+            }
+            for n in found {
                 if purge_one(s, kind, &n)? {
                     r.add(kind, &n);
                 }
@@ -370,23 +380,63 @@ pub(in crate::cmd) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let (_, kind) = kind_of(ty).ok_or_else(|| bad("purge", format!("unknown type `{ty}`")))?;
     let names = str_param(p, "names").unwrap_or("*");
     if p.get("list").and_then(Value::as_bool) == Some(true) {
-        return list(s.doc()?, names);
+        return list(s.doc()?, names, p.get("reasons").and_then(Value::as_bool) == Some(true));
     }
+    let exact: Option<Vec<String>> =
+        p.get("exact").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).take(100_000).map(str::to_string).collect());
     let mut r = Report::default();
-    purge_kind(s, kind, names, &mut r)?;
+    purge_kind(s, kind, names, exact.as_deref(), &mut r)?;
+    // Purge nested items: again while a pass frees more (a block's layers once the block went).
+    if p.get("nested").and_then(Value::as_bool) == Some(true) {
+        for _ in 0..cadaddy_doc::MAX_BLOCK_DEPTH {
+            let mut again = Report::default();
+            purge_kind(s, kind, names, exact.as_deref(), &mut again)?;
+            let more = again.purged.values().filter_map(Value::as_array).map(Vec::len).sum::<usize>();
+            if more == 0 {
+                break;
+            }
+            for (k, v) in again.purged {
+                if let (Value::Array(add), Value::Array(to)) = (v, r.purged.entry(k).or_insert_with(|| Value::Array(Vec::new()))) {
+                    to.extend(add);
+                }
+            }
+            r.lines.extend(again.lines.into_iter().filter(|l| l.starts_with("Deleting")));
+        }
+    }
     s.set_selection(Vec::new());
     Ok(r.json())
 }
 
 /// What PURGE would remove, purging nothing: the unused names of every named kind, and the counts
 /// of zero-length geometry and empty text (the Purge dialog's tree).
-fn list(d: &Drawing, names: &str) -> Result<Value> {
+fn list(d: &Drawing, names: &str, with_reasons: bool) -> Result<Value> {
     let mut out = Map::new();
+    let mut held = Map::new();
     for &kind in ALL {
-        out.insert(json_key(kind).into(), json!(matching(d, kind, names)));
+        let purgeable = matching(d, kind, names);
+        if with_reasons {
+            // Find Non-Purgeable Items: every other name, with why it stays.
+            let items: Vec<Value> = reasons::all_names(d, kind)
+                .into_iter()
+                .filter(|n| !purgeable.iter().any(|p| p.eq_ignore_ascii_case(n)))
+                .take(100_000)
+                .map(|n| {
+                    let mut why = reasons::why(d, kind, &n);
+                    if why.is_empty() {
+                        why.push(json!({ "text": "In use", "handles": [] }));
+                    }
+                    json!({ "name": n, "reasons": why })
+                })
+                .collect();
+            held.insert(json_key(kind).into(), Value::Array(items));
+        }
+        out.insert(json_key(kind).into(), json!(purgeable));
     }
     for kind in [Kind::ZeroLength, Kind::EmptyText] {
         out.insert(json_key(kind).into(), json!(degenerate(d, kind).len()));
+    }
+    if with_reasons {
+        out.insert("nonPurgeable".into(), Value::Object(held));
     }
     Ok(Value::Object(out))
 }
@@ -481,11 +531,11 @@ impl Interactive for PurgeM {
                 // Zero-length geometry, empty text and orphaned data take no names.
                 match kind {
                     Kind::ZeroLength | Kind::EmptyText => {
-                        purge_kind(s, kind, "*", &mut self.report)?;
+                        purge_kind(s, kind, "*", None, &mut self.report)?;
                         self.finish(s)
                     }
                     Kind::Absent if k == "Orphaned data" => {
-                        purge_kind(s, kind, "*", &mut self.report)?;
+                        purge_kind(s, kind, "*", None, &mut self.report)?;
                         self.finish(s)
                     }
                     _ => {
@@ -504,7 +554,7 @@ impl Interactive for PurgeM {
             }
             Stage::Verify(kind, names) => match &i {
                 Input::Keyword(k) if k == "No" => {
-                    purge_kind(s, kind, &names, &mut self.report)?;
+                    purge_kind(s, kind, &names, None, &mut self.report)?;
                     self.finish(s)
                 }
                 Input::Keyword(_) | Input::Enter => {

@@ -73,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(has_doc),
         CommandSpec::new("purge", "Purge", purge::run)
             .alias(&["pu", "-purge"])
-            .params("{type?: all|blocks|dimstyles|groups|layers|linetypes|mleaderstyles|mlinestyles|tablestyles|textstyles|zerolength|emptytext (default all: every named type), names?: \"A*,B\" (default *), list?: true (report what would be purged, purge nothing: {blocks: [names], …, zeroLength: n, emptyText: n})} → purged")
+            .params("{type?: all|blocks|dimstyles|groups|layers|linetypes|mleaderstyles|mlinestyles|tablestyles|textstyles|zerolength|emptytext (default all: every named type), names?: \"A*,B\" (default *), list?: true (report what would be purged, purge nothing: {blocks: [names], …, zeroLength: n, emptyText: n}), reasons?: true (with list: also nonPurgeable: {blocks: [{name, reasons: [{text, handles}]}], …}), nested?: true (purge again while a pass frees more), exact?: [names] (only these, no wildcards)} → purged")
             .interactive(|_| Ok(Box::new(purge::PurgeM::default()))),
         CommandSpec::new("blocks.list", "List Blocks", run_list).enabled(has_doc).noundo(),
         battman::battman_spec(),

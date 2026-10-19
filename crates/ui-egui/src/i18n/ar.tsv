@@ -2109,3 +2109,13 @@ menu	View	عرض
 	Every drawing in a folder to its own PDF, in a PDF folder inside it	كل رسم في المجلد إلى ملف PDF خاص به، داخل مجلد PDF فيه
 	Plot stamp	ختم الطباعة
 	Quick Properties Lists	قوائم الخصائص السريعة
+	Purgeable Items	العناصر القابلة للحذف
+	Find Non-Purgeable Items	البحث عن العناصر غير القابلة للحذف
+	Purge {kind} "{name}"?	حذف {kind} "{name}"؟
+	Yes to All	نعم للكل
+	Items that can't be purged, and why	العناصر التي لا يمكن حذفها والسبب
+	Select and Zoom	تحديد وتكبير
+	Pick an item to see why it can't be purged.	اختر عنصرًا لمعرفة سبب تعذر حذفه.
+	Confirm each item to be purged	تأكيد كل عنصر قبل حذفه
+	Purge nested items	حذف العناصر المتداخلة
+	Text Align	محاذاة النص

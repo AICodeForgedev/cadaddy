@@ -2114,3 +2114,13 @@ menu	Modify	수정
 	Every drawing in a folder to its own PDF, in a PDF folder inside it	폴더의 각 도면을 개별 PDF로(그 안의 PDF 폴더에)
 	Plot stamp	플롯 스탬프
 	Quick Properties Lists	빠른 특성 목록
+	Purgeable Items	소거 가능한 항목
+	Find Non-Purgeable Items	소거할 수 없는 항목 찾기
+	Purge {kind} "{name}"?	{kind} "{name}"을(를) 소거하시겠습니까?
+	Yes to All	모두 예
+	Items that can't be purged, and why	소거할 수 없는 항목과 그 이유
+	Select and Zoom	선택 및 줌
+	Pick an item to see why it can't be purged.	항목을 선택하면 소거할 수 없는 이유가 표시됩니다.
+	Confirm each item to be purged	소거할 각 항목 확인
+	Purge nested items	중첩된 항목 소거
+	Text Align	문자 정렬

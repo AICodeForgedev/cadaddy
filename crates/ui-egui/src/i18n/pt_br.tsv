@@ -2120,3 +2120,13 @@
 	Every drawing in a folder to its own PDF, in a PDF folder inside it	Cada desenho de uma pasta em seu próprio PDF, em uma pasta PDF dentro dela
 	Plot stamp	Carimbo de plotagem
 	Quick Properties Lists	Listas de propriedades rápidas
+	Purgeable Items	Itens que podem ser removidos
+	Find Non-Purgeable Items	Localizar itens que não podem ser removidos
+	Purge {kind} "{name}"?	Remover {kind} "{name}"?
+	Yes to All	Sim para todos
+	Items that can't be purged, and why	Itens que não podem ser removidos e o motivo
+	Select and Zoom	Selecionar e aplicar zoom
+	Pick an item to see why it can't be purged.	Escolha um item para ver por que não pode ser removido.
+	Confirm each item to be purged	Confirmar cada item a ser removido
+	Purge nested items	Remover itens aninhados
+	Text Align	Alinhar texto

@@ -1996,3 +1996,13 @@
 	Every drawing in a folder to its own PDF, in a PDF folder inside it	将文件夹中的每个图形输出为单独的 PDF，放在其中的 PDF 文件夹里
 	Plot stamp	打印戳记
 	Quick Properties Lists	快捷特性列表
+	Purgeable Items	可清理项目
+	Find Non-Purgeable Items	查找不可清理项目
+	Purge {kind} "{name}"?	清理{kind}“{name}”？
+	Yes to All	全部是
+	Items that can't be purged, and why	不可清理的项目及原因
+	Select and Zoom	选择并缩放
+	Pick an item to see why it can't be purged.	选择一个项目以查看其不可清理的原因。
+	Confirm each item to be purged	确认要清理的每个项目
+	Purge nested items	清理嵌套项目
+	Text Align	文字对齐

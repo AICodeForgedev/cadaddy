@@ -2119,3 +2119,13 @@
 	Every drawing in a folder to its own PDF, in a PDF folder inside it	Cada dibujo de una carpeta a su propio PDF, en una carpeta PDF dentro de ella
 	Plot stamp	Sello de trazado
 	Quick Properties Lists	Listas de propiedades rápidas
+	Purgeable Items	Elementos que se pueden limpiar
+	Find Non-Purgeable Items	Buscar elementos que no se pueden limpiar
+	Purge {kind} "{name}"?	¿Limpiar {kind} "{name}"?
+	Yes to All	Sí a todo
+	Items that can't be purged, and why	Elementos que no se pueden limpiar y por qué
+	Select and Zoom	Seleccionar y ampliar
+	Pick an item to see why it can't be purged.	Elija un elemento para ver por qué no se puede limpiar.
+	Confirm each item to be purged	Confirmar cada elemento que se va a limpiar
+	Purge nested items	Limpiar elementos anidados
+	Text Align	Alinear texto
