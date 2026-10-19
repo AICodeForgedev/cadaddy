@@ -134,7 +134,7 @@ Detail: [localization-parity.md](localization-parity.md).
 | # | Gap | Est. |
 |---|---|---|
 | E1 | AutoLISP beyond the core (#758 landed the language, `command`, entity lists, selection sets, `get…` input, APPLOAD, `(load)`, `c:` commands and `acad.lsp`/`acaddoc.lsp` at startup): Visual LISP ActiveX (`vlax-`, `vla-`), DCL dialogs, reactors, an APPLOAD dialog with a Startup Suite, UCS-aware `trans` | 30–50 |
-| E3 | Express Tools equivalents (TXT2MTXT, BREAKLINE, BURST, NCOPY exists, SUPERHATCH, Move/Copy/Rotate) | 30–50 |
+| E3 | Express Tools equivalents (TXT2MTXT, BURST, SUPERHATCH, Move/Copy/Rotate; NCOPY and BREAKLINE exist, BREAKLINE's Block option takes a block of the drawing, not a `.dwg` file) | 28–47 |
 | E4 | Plug-in API (owner decision: Rust/WASM plug-ins rather than ObjectARX/.NET) | 30–50 |
 | E5 | CUI customisation and alias (`.pgp`) editor | 15–25 |
 
@@ -153,6 +153,7 @@ Detail: [localization-parity.md](localization-parity.md).
 | 2026-10-13 | minor | Stabilized filled-object highlight dash anchors by canonicalizing boundary traversal order; renderer, CPU pointer-frame and GPU rebuild tests cover the fix (U6) |
 | 2026-10-14 | minor | HATCHEDIT adds boundary loops from internal points or closed objects and removes selected loops, in the dialog, command line and JSON command: F13 narrowed |
 | 2026-10-15 | minor | `entities` / MCP `query_entities` accept `selected:true`, combined with existing filters and paging; selection, drawing and undo/redo stay unchanged. No parity estimate change. |
+| 2026-10-15 | minor | BREAKLINE (Tools ▸ Express Tools ▸ Break-line Symbol): one polyline between two points with a break symbol, Block/Size/Extension options, size times DIMSCALE: E3 narrowed |
 | 2026-10-13 | minor | Selection window gesture preference (PICKDRAG 0/2) added to Options ▸ Selection and saved in the profile (U6), with Portuguese and Ukrainian labels |
 | 2026-10-12 | minor | Object transparency (entity, ByLayer, ByBlock) is drawn: on screen (TRANSPARENCYDISPLAY, on by default), in PNG/SVG exports, and in plots when the page setup's "Plot transparency" is on (PDF alpha, PNG blending, SVG opacity; PLOTTRANSPARENCYOVERRIDE): F14 narrowed |
 | 2026-10-12 | minor | Hatch and Gradient dialog (HATCH, GRADIENT; HPDLGMODE) and Hatch Edit dialog (HATCHEDIT, right-click, double-click a hatch): F13 narrowed to Preview, Inherit Properties and boundary add/remove in edit mode |

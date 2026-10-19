@@ -554,6 +554,8 @@ pub struct LastUsed {
     pub mleader: MLeaderOptions,
     /// MLEADER's block content name (Options > Content type > Block).
     pub mleader_block: String,
+    /// BREAKLINE's Block, Size and Extension.
+    pub breakline: cmd::BreaklineOptions,
 }
 
 impl Default for LastUsed {
@@ -566,6 +568,7 @@ impl Default for LastUsed {
             matchprop: cmd::MatchProps::default(),
             mleader: MLeaderOptions::default(),
             mleader_block: String::new(),
+            breakline: cmd::BreaklineOptions::default(),
         }
     }
 }

@@ -106,6 +106,7 @@
 	Box	Паралелепіпед
 	Break	Розірвати
 	Break At Point	Розірвати в точці
+	Break-line Symbol	Символ лінії розриву
 	Bring Above Objects	Над об'єктами
 	Bring Annotations to Front	Анотації на передній план
 	Bring to Front	На передній план
@@ -328,6 +329,7 @@
 	Export Table	Експортувати таблицю
 	Export to PDF...	Експортувати в PDF...
 	Expression	Вираз
+	Express Tools	Інструменти Express
 	Extend	Подовжити
 	Extension	Продовження
 	Extents	За межами об'єктів
