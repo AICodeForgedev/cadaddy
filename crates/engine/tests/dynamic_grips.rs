@@ -127,3 +127,21 @@ fn a_state_that_lists_a_parameter_shows_its_grips() {
     s.execute("blocks.reference.set", &json!({ "handle": h.hex(), "name": "Visibility1", "value": "Closed" })).unwrap();
     assert_eq!(parts(&mut s, h), [(1, "at".to_string())]);
 }
+
+#[test]
+fn a_grip_drag_previews_the_reference_in_its_own_colours() {
+    // The reference on layer Doors: the preview's block objects (on layer 0 in the block) draw on
+    // Doors as the reference does, not in the preview colour; the rubber band is the current
+    // layer's.
+    let (mut s, h) = session();
+    s.doc_mut().unwrap().modify_entity(h, |e| e.common.layer = "Doors".into()).unwrap();
+    s.start_dyn_grip(h, 2, GripPart::End).unwrap();
+    let preview = s.preview(Vec2::new(132.0, 0.0));
+    // The block's objects first, then the rubber band (and any ticks) on the current layer, in
+    // the grip blue so they show over the block's fills.
+    let layers: Vec<&str> = preview.iter().map(|e| e.common.layer.as_str()).collect();
+    let n = layers.iter().take_while(|l| **l == "Doors").count();
+    assert!(n > 0 && n < layers.len() && layers[n..].iter().all(|l| *l == "0"), "{layers:?}");
+    let blue = cadcraft_engine::doc::color::Color::True(cadcraft_engine::doc::color::Rgb(0x2f, 0x6b, 0xff));
+    assert!(preview[n..].iter().all(|e| e.common.color == blue));
+}

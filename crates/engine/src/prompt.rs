@@ -219,6 +219,12 @@ pub trait Interactive: Send {
     fn preview(&self, _s: &Session, _cursor: Vec2) -> Vec<EntityKind> {
         Vec::new()
     }
+    /// Preview objects drawn with their own properties (colour, layer, linetype) rather than
+    /// the current layer's, as [`Interactive::preview`]'s are: a block reference re-evaluated
+    /// under the cursor, drawn as it will look. Drawn under the rubber band.
+    fn preview_objects(&self, _s: &Session, _cursor: Vec2) -> Vec<cadcraft_doc::Entity> {
+        Vec::new()
+    }
     /// The preview as existing objects under one transform, when it is that (MOVE, COPY,
     /// ROTATE, SCALE). The UI then draws them from geometry uploaded once instead of rebuilding
     /// the transformed copies every frame; `None` falls back to [`Interactive::preview`].
