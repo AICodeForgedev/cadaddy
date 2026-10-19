@@ -1140,6 +1140,8 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     if sel.len() == 1 {
         group(ui, "Geometry");
         let real = |v: f64| format!("{v:.4}");
+        // Rotations show as the drawing measures directions (ANGBASE, ANGDIR).
+        let angles = app.session.angle_settings();
         let num = |ui: &mut egui::Ui, label: &str, key: &str, shown: String, set: &mut Option<Value>, bad: &mut Option<String>, ids: &Vec<String>| {
             prop_row(ui, label, |ui| {
                 if let Some(f) = number(edit_field(ui, ui.id().with((key, ids)), shown), bad) {
@@ -1206,7 +1208,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                     }
                 });
                 num(ui, "Height", "height", len(tx.height), &mut set, &mut bad, &ids);
-                num(ui, "Rotation", "rotation", real(tx.rotation.to_degrees()), &mut set, &mut bad, &ids);
+                num(ui, "Rotation", "rotation", real(angles.shown(tx.rotation).to_degrees()), &mut set, &mut bad, &ids);
                 num(ui, "Width factor", "widthFactor", real(tx.width_factor), &mut set, &mut bad, &ids);
             }
             EntityKind::MText(tx) => {
@@ -1309,7 +1311,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 prop_row(ui, "Position X", |ui| read_only(ui, &len(i.insert.x)));
                 prop_row(ui, "Position Y", |ui| read_only(ui, &len(i.insert.y)));
                 prop_row(ui, "Position Z", |ui| read_only(ui, &len(i.insert.z)));
-                num(ui, "Rotation", "rotation", real(i.rotation.to_degrees()), &mut set, &mut bad, &ids);
+                num(ui, "Rotation", "rotation", real(angles.shown(i.rotation).to_degrees()), &mut set, &mut bad, &ids);
                 num(ui, "Scale", "scale", real(i.scale.x), &mut set, &mut bad, &ids);
                 if let Some((_, props)) = custom.filter(|(_, p)| !p.is_empty()) {
                     group(ui, "Custom");
@@ -1382,7 +1384,14 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
     }
-    if let Some(p) = set {
+    if let Some(mut p) = set {
+        // A rotation is typed as shown (from ANGBASE, in the ANGDIR sense); properties.set takes it
+        // from +X counterclockwise.
+        if let Some(r) = p.get_mut("rotation")
+            && let Some(v) = r.as_f64()
+        {
+            *r = json!(app.session.angle_settings().unshown(v.to_radians()).to_degrees());
+        }
         let _ = app.run("properties.set", p);
     }
     report_bad(app, bad);

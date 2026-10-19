@@ -325,6 +325,8 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
     let block_name = cadaddy_engine::doc::dynblock::custom_properties(d, first.handle).map(|(n, _)| n);
     let ids: Vec<String> = shown_sel.iter().map(|h| h.hex()).collect();
     let mut set: Option<(String, Value)> = None;
+    // Rotations show as the drawing measures directions (ANGBASE, ANGDIR).
+    let angles = app.session.angle_settings();
     let mut close = false;
     egui::Window::new(title)
         .id(egui::Id::new(("quick_properties", &st.sel)))
@@ -448,7 +450,7 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
                         crate::rtl::trail(ui, RichText::new(crate::tl!("Contents")).color(Tokens::get().text_dim));
                         ui.end_row();
                         num_row(ui, "Height", id("h"), tx.height, &mut set, "height");
-                        num_row(ui, "Rotation", id("rot"), tx.rotation.to_degrees(), &mut set, "rotation");
+                        num_row(ui, "Rotation", id("rot"), angles.shown(tx.rotation).to_degrees(), &mut set, "rotation");
                     }
                     Some(EntityKind::MText(tx)) => {
                         crate::rtl::lead(ui, RichText::new(crate::tl!("Contents")).color(Tokens::get().text_dim));
