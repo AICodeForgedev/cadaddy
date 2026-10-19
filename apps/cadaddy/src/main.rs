@@ -162,6 +162,7 @@ fn services() -> Services {
                 .add_filter(i18n::t("SVG drawings (SVG, SVGZ)"), &["svg", "svgz"])
                 .add_filter(i18n::t("PDF (converted to CAD objects)"), &["pdf"])
                 .add_filter(i18n::t("3D models (glTF, OBJ, STL)"), &["glb", "gltf", "obj", "stl"])
+                .add_filter(i18n::t("Walkthroughs (CDYWALK)"), &["cdywalk"])
                 .add_filter(i18n::t("All files"), &["*"])
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())

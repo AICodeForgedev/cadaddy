@@ -244,6 +244,8 @@ pub struct DocState {
     pub lightmap_rev: u64,
     /// The lightmap beside the drawing's file was looked for.
     pub lightmap_tried: bool,
+    /// Opened from a walkthrough package (`.cdywalk`, `walk.publish`): the app shows it in Walk.
+    pub walkthrough: bool,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -285,6 +287,7 @@ impl DocState {
             lightmap: None,
             lightmap_rev: 0,
             lightmap_tried: false,
+            walkthrough: false,
         }
     }
     /// The drawing has changes not saved to its file, or the Block Editor has changes not yet

@@ -448,6 +448,19 @@ pub fn open(app: &mut CadApp) -> Result<(), String> {
     Ok(())
 }
 
+/// A drawing opened from a walkthrough package (`.cdywalk`) opens in Walk, once: Esc goes back to
+/// the drawing and it stays there.
+pub fn open_walkthrough(app: &mut CadApp) {
+    let Ok(st) = app.session.state() else { return };
+    if !st.walkthrough || app.walk.is_some() || app.walked.contains(&st.uid) {
+        return;
+    }
+    app.walked.insert(st.uid);
+    if let Err(e) = open(app) {
+        app.set_status(format!("Walk: {e}"));
+    }
+}
+
 /// Close walk mode and free its GPU resources.
 pub fn close(app: &mut CadApp) {
     if let Some(w) = app.walk.take()

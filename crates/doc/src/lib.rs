@@ -94,6 +94,9 @@ impl Space {
     }
 }
 
+/// The name an embedded texture image is kept under in [`Drawing::embedded`]: this, then its path.
+pub const TEXTURE_PREFIX: &str = "texture:";
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Drawing {
     pub header: Header,
@@ -146,6 +149,11 @@ pub struct Drawing {
     /// Saved viewpoints and camera tours (`cadaddy-walk3d`'s `Tours` as JSON text, `tour.*`).
     /// Kept in the named-object dictionary (`CADADDY_TOURS`).
     pub tours: Option<String>,
+    /// Files the drawing carries inside itself, by name: texture images its materials name
+    /// (`texture:<path>`, see [`Drawing::embedded_texture`]) and the baked lightmap
+    /// (`lightmap.png`, `lightmap.json`). Kept in .cdy files, so a walkthrough model opens on
+    /// another machine as it was.
+    pub embedded: BTreeMap<String, std::sync::Arc<Vec<u8>>>,
     /// What reading the file left out (a DWG's object records the reader couldn't decode), told
     /// to the user when the drawing opens. Never written to a file.
     pub read_notes: Vec<String>,
@@ -241,12 +249,19 @@ impl Drawing {
             sun: lighting::Sun::default(),
             building_spec: None,
             tours: None,
+            embedded: BTreeMap::new(),
             read_notes: Vec::new(),
             refedit: None,
             skipped_records: BTreeMap::new(),
             field_values: BTreeMap::new(),
             kept_handles: BTreeMap::new(),
         }
+    }
+
+    /// The embedded copy of the texture image file `path` (as a material names it), if the
+    /// drawing carries one.
+    pub fn embedded_texture(&self, path: &str) -> Option<&std::sync::Arc<Vec<u8>>> {
+        self.embedded.get(&format!("{TEXTURE_PREFIX}{path}"))
     }
 
     /// Allocate a fresh handle.

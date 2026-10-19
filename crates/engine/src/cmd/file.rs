@@ -483,6 +483,8 @@ pub struct ReadFile {
     path: Option<String>,
     /// For a .cdy file: what it holds, for incremental saves.
     cdy: Option<CdyState>,
+    /// Read from a walkthrough package (`.cdywalk`): its baked lightmap, if it has one.
+    walkthrough: Option<Option<cadaddy_render::lightmap::Lightmap>>,
 }
 
 impl ReadFile {
@@ -540,11 +542,12 @@ pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
 
 /// Add a [`read_file`] result to the session as the active drawing: the fast half of OPEN.
 pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
-    let ReadFile { drawing, binary_dxf, name, path, cdy } = f;
+    let ReadFile { drawing, binary_dxf, name, path, cdy, walkthrough } = f;
     if let Some(i) = path.as_deref().and_then(|p| already_open(s, p)) {
         return Ok(switch_to_open(s, i));
     }
     let i = add_read(s, drawing, binary_dxf, &name, path, cdy);
+    mark_walkthrough(s, i, walkthrough);
     super::blocks::xref::after_open(s, i);
     Ok(opened(s, i, true))
 }
@@ -556,7 +559,28 @@ fn read_bytes(bytes: &[u8], name: &str, path: Option<String>) -> Result<ReadFile
     // asks where to save instead of exporting over the original.
     let path = path.filter(|p| is_drawing_file(p));
     let cdy = path.as_ref().filter(|p| is_cdy(p)).and_then(|_| cdy_hooks()).and_then(|h| (h.seed)(&drawing, bytes));
-    Ok(ReadFile { drawing, binary_dxf: cadaddy_dxf::is_binary(bytes), name: name.to_string(), path, cdy })
+    let walkthrough = cadaddy_walk3d::package::is_package(bytes).then(|| package_lightmap(bytes));
+    Ok(ReadFile { drawing, binary_dxf: cadaddy_dxf::is_binary(bytes), name: name.to_string(), path, cdy, walkthrough })
+}
+
+/// The baked lightmap in a walkthrough package, when it has a whole one.
+fn package_lightmap(bytes: &[u8]) -> Option<cadaddy_render::lightmap::Lightmap> {
+    use cadaddy_walk3d::package::{LIGHTMAP_JSON, LIGHTMAP_PNG, Package};
+    let p = Package::decode(bytes).ok()?;
+    super::lightbake::read_lightmap(p.get(LIGHTMAP_PNG)?, std::str::from_utf8(p.get(LIGHTMAP_JSON)?).ok()?)
+}
+
+/// A drawing opened from a walkthrough package: Walk opens on it, with the package's lightmap.
+fn mark_walkthrough(s: &mut Session, i: usize, w: Option<Option<cadaddy_render::lightmap::Lightmap>>) {
+    let Some(lm) = w else { return };
+    if let Some(st) = s.docs.get_mut(i) {
+        st.walkthrough = true;
+        if let Some(lm) = lm {
+            st.lightmap = Some(std::sync::Arc::new(lm));
+            st.lightmap_rev += 1;
+        }
+        st.lightmap_tried = true;
+    }
 }
 
 fn add_read(s: &mut Session, mut drawing: Drawing, binary_dxf: bool, name: &str, path: Option<String>, cdy: Option<CdyState>) -> usize {
@@ -630,8 +654,10 @@ fn switch_to_open(s: &mut Session, i: usize) -> Value {
 }
 
 pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option<String>) -> Result<usize> {
-    let ReadFile { drawing, binary_dxf, name, path, cdy } = read_bytes(bytes, name, path)?;
-    Ok(add_read(s, drawing, binary_dxf, &name, path, cdy))
+    let ReadFile { drawing, binary_dxf, name, path, cdy, walkthrough } = read_bytes(bytes, name, path)?;
+    let i = add_read(s, drawing, binary_dxf, &name, path, cdy);
+    mark_walkthrough(s, i, walkthrough);
+    Ok(i)
 }
 
 /// OPEN's reply: the drawing's index and what reading it left out.
@@ -867,7 +893,7 @@ pub(crate) fn store(path: &str, bytes: &[u8]) -> Result<()> {
 
 /// [`store`], keeping the previous drawing file as `.bak` only when `keep_bak`: a DWG copy
 /// (DWGCOPY) keeps none, as its `.bak` would replace the drawing's own.
-fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<()> {
+pub(crate) fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         // The file being replaced, if any: a read-only one is left alone (as AutoCAD does: save

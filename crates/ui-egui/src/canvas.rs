@@ -76,6 +76,8 @@ fn same_content(a: &ListKey, b: &ListKey) -> bool {
 
 #[derive(Default)]
 pub struct CanvasState {
+    /// Fingers and pens on a touch screen ([`crate::touch`]).
+    pub touch: crate::touch::Tracker,
     /// The Model tab in a 3D visual style (VSCURRENT).
     pub shade: crate::shaded::State,
     pub list: Option<DisplayList>,
@@ -162,7 +164,7 @@ pub struct CanvasState {
     /// A selection window opened by a press-and-drag, to close where the button is let go.
     drag_window: bool,
     /// The path of that drag, which becomes a lasso once it encloses an area ([`lasso`]).
-    lasso: Option<lasso::Lasso>,
+    pub(crate) lasso: Option<lasso::Lasso>,
     /// Selection cycling: Shift+Space stepping through the objects under the cursor, or the list
     /// of them a click opened (SELECTIONCYCLING 2).
     cycle: Option<lasso::Cycle>,
@@ -1367,6 +1369,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     app.canvas.xf = Some(xf);
 
     // ---------- input ----------
+    // Touch: two fingers pan and zoom, a long press is a right-click.
+    let gesture = crate::touch::canvas_input(app, ui, rect);
     let (hover_pos, scroll, mods, middle_down, pressed_primary, pressed_secondary, dbl_middle, dbl_primary) = ui.input(|i| {
         (
             i.pointer.hover_pos(),
@@ -1379,6 +1383,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             i.pointer.button_double_clicked(egui::PointerButton::Primary),
         )
     });
+    // Two fingers down: the first one's pointer does nothing else.
+    let pressed_primary = pressed_primary && !gesture.active;
     let inside = hover_pos.is_some_and(|p| rect.contains(p)) && resp.hovered();
     // Which device is scrolling? On macOS, trackpads (and Magic Mouse) report precise point
     // deltas; notched mouse wheels report lines. The answer is sticky because egui spreads a wheel
@@ -1415,7 +1421,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let _ = app.session.zoom_about(f, about);
     }
     let zoom_pinch = ui.input(|i| crate::animation::zoom_delta(i, &opts, app.shows_animations()));
+    // A two-finger pinch was applied about the fingers' midpoint above.
     if inside
+        && !gesture.active
         && (zoom_pinch - 1.0).abs() > 1e-4
         && let Some(hp) = hover_pos
     {
@@ -2047,6 +2055,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // Command line overlay.
     if app.ui.show_command_line {
         crate::cmdline::show(app, ui, full);
+        crate::touch::bar(app, ui, full);
     }
     // Crosshair cursor.
     if inside {

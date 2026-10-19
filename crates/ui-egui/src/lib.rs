@@ -90,6 +90,7 @@ pub mod spelldlg;
 pub mod theme;
 pub mod toldlg;
 pub mod toolpalettes;
+pub mod touch;
 pub mod viewcube;
 pub mod vpscale;
 pub mod walk;
@@ -196,6 +197,8 @@ pub struct UiState {
     pub agent_control: bool,
     /// Drawings opened from a path, newest first (File ▸ Open Recent and the Start page).
     pub recent_files: Vec<String>,
+    /// The touch bar shows once the screen is touched ([`touch`]).
+    pub touch_bar: bool,
     /// Keyboard shortcuts the user changed ([`aliasdlg`]).
     pub shortcuts: Vec<aliasdlg::Binding>,
     /// The ribbon tabs shown (the current workspace's); empty shows them all.
@@ -297,6 +300,7 @@ impl Default for UiState {
             save_version: SaveVersion::default().year().to_string(),
             agent_control: true,
             recent_files: Vec::new(),
+            touch_bar: true,
             shortcuts: Vec::new(),
             ribbon_tabs: Vec::new(),
             user_workspaces: Vec::new(),
@@ -439,6 +443,8 @@ pub struct CadApp {
     pub bedit: bedit::State,
     /// Walk mode, while it is open: the drawing in 3D in place of the canvas ([`walk`]).
     pub walk: Option<walk::Walk>,
+    /// Drawings opened from walkthrough packages that Walk has been opened on (once each).
+    pub walked: std::collections::BTreeSet<u64>,
     /// The app's wgpu render state (walk mode draws its 3D with it).
     pub wgpu_rs: Option<egui_wgpu::RenderState>,
     /// What the GPU can do for the 3D views ([`gpucaps::GpuCaps`]); no GPU: the CPU draws.
@@ -509,6 +515,7 @@ impl CadApp {
             layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
+            walked: std::collections::BTreeSet::new(),
             wgpu_rs: None,
             gpu_caps: gpucaps::GpuCaps::default(),
         }
@@ -918,6 +925,7 @@ impl CadApp {
         }
         self.last_frame_start = Some(t0);
         self.track_documents();
+        walk::open_walkthrough(self);
         cadaddy_engine::cmd::file::set_default_ext(self.ui.save_format.as_str());
         // A long LISP routine runs a slice per frame, so the window stays live (and Esc stops it).
         self.session.lisp_tick();

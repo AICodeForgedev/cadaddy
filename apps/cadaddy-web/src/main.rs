@@ -6,7 +6,8 @@
 //! with egui shapes instead of the GPU canvas, `?sample` opens the sample drawing. Saving downloads
 //! the drawing through the browser (`download.rs`). With `?host=parent` (inside an `<iframe>`), a
 //! same-origin parent page sends the drawing to open and stores what CADaddy saves instead
-//! (`host.rs`).
+//! (`host.rs`). `?walk=URL` fetches a walkthrough package (`.cdywalk`, PUBLISH WALKTHROUGH) and
+//! opens it in Walk, so a link is all someone needs to walk a building.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_arch = "wasm32")]
@@ -123,7 +124,9 @@ mod web {
                     options,
                     Box::new(move |cc| {
                         // Embedded, the parent sends the drawing: start on the Start tab, not Drawing1.
-                        let session = if app_bridge.is_some() { Session::empty() } else { Session::new() };
+                        // A walkthrough link opens its package instead of Drawing1 too.
+                        let walk_url = query_param("walk").filter(|u| !u.trim().is_empty());
+                        let session = if app_bridge.is_some() || walk_url.is_some() { Session::empty() } else { Session::new() };
                         let mut app = CadApp::new(session, services());
                         app.system_languages =
                             web_sys::window().map(|w| w.navigator().languages().iter().filter_map(|v| v.as_string()).collect()).unwrap_or_default();
@@ -151,6 +154,9 @@ mod web {
                         // No paths on the web: OPEN asks the browser's file picker, which reads the
                         // chosen file in the background (`upload.rs`), so the picker returns none.
                         let inbox = crate::upload::Inbox::new(&cc.egui_ctx);
+                        if let Some(url) = walk_url {
+                            inbox.fetch(url);
+                        }
                         let picker = inbox.clone();
                         app.services.pick_open = Some(Box::new(move || {
                             picker.pick();
@@ -185,6 +191,19 @@ fn wants_cpu(query: &str) -> bool {
     query.trim_start_matches('?').split('&').any(|p| p == "cpu" || p.starts_with("cpu="))
 }
 
+/// The file name a fetched URL opens under: its last path segment (no query or fragment), as a
+/// walkthrough package when it has no extension.
+#[cfg(any(target_arch = "wasm32", test))]
+fn file_name_of(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or_default();
+    let last = path.rsplit('/').next().unwrap_or_default().trim();
+    match last {
+        "" => "walkthrough.cdywalk".to_string(),
+        n if !n.contains('.') => format!("{n}.cdywalk"),
+        n => n.chars().take(200).collect(),
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod upload;
 
@@ -200,7 +219,15 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::wants_cpu;
+    use super::{file_name_of, wants_cpu};
+
+    #[test]
+    fn a_walk_link_opens_under_its_file_name() {
+        assert_eq!(file_name_of("https://example.org/share/Lobby.cdywalk?v=2#x"), "Lobby.cdywalk");
+        assert_eq!(file_name_of("walks/lobby"), "lobby.cdywalk");
+        assert_eq!(file_name_of("https://example.org/"), "walkthrough.cdywalk");
+        assert_eq!(file_name_of(""), "walkthrough.cdywalk");
+    }
 
     #[test]
     fn cpu_flag_is_detected() {

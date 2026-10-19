@@ -12,8 +12,8 @@ use web_sys::js_sys;
 
 /// The hidden file input (one at a time; a cancelled pick leaves it until the next one).
 const INPUT_ID: &str = "cadaddy_open_input";
-/// What the picker offers: the formats OPEN reads.
-const ACCEPT: &str = ".dxf,.dwg";
+/// What the picker offers: the formats OPEN reads (and walkthrough packages, opened in Walk).
+const ACCEPT: &str = ".dxf,.dwg,.cdy,.cdywalk";
 
 /// A file read in the browser (name, contents), or why it couldn't be read.
 type Upload = Result<(String, Vec<u8>), String>;
@@ -103,6 +103,30 @@ impl Inbox {
             Some(e) => self.push(Err(e)),
             None => self.push(Ok((name, bytes))),
         }
+    }
+
+    /// Fetch the walkthrough package (or drawing) at `url` (this site, or one that allows it) and
+    /// open it on a later frame: `?walk=URL` links straight to a walk.
+    pub fn fetch(&self, url: String) {
+        let inbox = self.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let name = crate::file_name_of(&url);
+            let r = async {
+                let window = web_sys::window().ok_or("no browser window")?;
+                let resp = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(&url)).await.map_err(js_error)?;
+                let resp: web_sys::Response = resp.dyn_into().map_err(|_| "not a response".to_string())?;
+                if !resp.ok() {
+                    return Err(format!("HTTP {}", resp.status()));
+                }
+                let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(js_error)?).await.map_err(js_error)?;
+                Ok::<_, String>(js_sys::Uint8Array::new(&buf).to_vec())
+            }
+            .await;
+            match r {
+                Ok(bytes) => inbox.receive(name, bytes),
+                Err(e) => inbox.refuse(format!("Open: could not fetch {url}: {e}")),
+            }
+        });
     }
 
     /// A file from elsewhere refused before it was read (`error` says why).

@@ -730,6 +730,7 @@ dependencies = [
  "cadaddy-fonts",
  "cadaddy-geom",
  "cadaddy-render",
+ "cadaddy-walk3d",
  "crc32fast",
  "getrandom 0.4.3",
  "lopdf",

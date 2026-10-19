@@ -4,6 +4,7 @@
 //! `docs/cdy-format.md`.
 
 mod container;
+mod meshbuf;
 mod model;
 mod save;
 mod tokens;

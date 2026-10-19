@@ -23,6 +23,9 @@ pub fn specs() -> Vec<CommandSpec> {
             "{library?: id (a library material, sized for the drawing's units), name? (default: the library material's), description?, color?: \"#rrggbb\", roughness?, metallic?, opacity?, refraction?, colorMap?: path, roughnessMap?: path, normalMap?: path, normalStrength?, mapping?: {projection?, sizeU?, sizeV?, offsetU?, offsetV?, rotation?}} → {name}",
         ),
         CommandSpec::new("material.edit", "Edit Material", run_edit).params("{name, rename?, …the fields of material.new (a map \"\" removes it)} → {name}"),
+        CommandSpec::new("material.embed", "Embed Textures", run_embed).params(
+            "{remove?: bool} → {embedded: [path], missing: [path], bytes} (the image files the drawing's materials name, copied into the drawing: a .cdy file then carries them; relative paths are from the drawing's folder; remove: drop the copies)",
+        ),
         CommandSpec::new("material.delete", "Delete Material", run_delete).params("{name} → {name, layers, objects} (layers and objects that used it go back to Global / ByLayer)"),
         CommandSpec::new("materialattach", "Attach by Layer", run_attach)
             .menu(&["View", "Render", "Attach by Layer"])
@@ -36,6 +39,57 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handles?, projection: planar|box|cylindrical|spherical, sizeU?, sizeV?, offsetU?, offsetV?, rotation? (radians)} | {handles?, reset: true} → {changed} (typed: option, then objects)")
             .interactive(|_| Ok(Box::new(MapM::default()))),
     ]
+}
+
+/// Largest texture image file copied into a drawing.
+const MAX_EMBED_BYTES: u64 = 64 << 20;
+
+fn run_embed(s: &mut Session, p: &Value) -> Result<Value> {
+    let d = s.doc()?;
+    if p.get("remove").and_then(Value::as_bool) == Some(true) {
+        let names: Vec<String> = d.embedded.keys().filter(|k| k.starts_with(cadaddy_doc::TEXTURE_PREFIX)).cloned().collect();
+        let d = s.doc_mut()?;
+        for n in &names {
+            d.embedded.remove(n);
+        }
+        let removed: Vec<&str> = names.iter().filter_map(|n| n.strip_prefix(cadaddy_doc::TEXTURE_PREFIX)).collect();
+        return Ok(json!({ "removed": removed }));
+    }
+    let mut paths: Vec<String> = d
+        .materials
+        .iter()
+        .flat_map(|m| [&m.color_map, &m.roughness_map, &m.normal_map])
+        .filter_map(|t| if let Some(Texture::File(p)) = t { Some(p.clone()) } else { None })
+        .collect();
+    paths.sort();
+    paths.dedup();
+    let folder = s.state()?.path.as_deref().and_then(|p| std::path::Path::new(p).parent().map(std::path::Path::to_path_buf));
+    let (mut embedded, mut missing, mut bytes) = (Vec::new(), Vec::new(), 0usize);
+    for path in paths {
+        let file = std::path::Path::new(&path);
+        let file = if file.is_absolute() { Some(file.to_path_buf()) } else { folder.as_ref().map(|f| f.join(file)) };
+        #[cfg(not(target_arch = "wasm32"))]
+        let data = file.filter(|f| std::fs::metadata(f).is_ok_and(|m| m.len() <= MAX_EMBED_BYTES)).and_then(|f| crate::readfile::read(f).ok());
+        #[cfg(target_arch = "wasm32")]
+        let data: Option<Vec<u8>> = file.and(None);
+        match data {
+            Some(b) => {
+                bytes += b.len();
+                let key = format!("{}{path}", cadaddy_doc::TEXTURE_PREFIX);
+                let d = s.doc_mut()?;
+                // The same bytes keep the same copy (an incremental save then leaves it be).
+                if d.embedded.get(&key).is_none_or(|old| old.as_slice() != b.as_slice()) {
+                    d.embedded.insert(key, std::sync::Arc::new(b));
+                }
+                embedded.push(path);
+            }
+            None => missing.push(path),
+        }
+    }
+    if !missing.is_empty() {
+        s.echo(format!("Texture files not found: {}.", missing.join(", ")));
+    }
+    Ok(json!({ "embedded": embedded, "missing": missing, "bytes": bytes }))
 }
 
 fn list_json(m: &Material) -> Value {
