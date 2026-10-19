@@ -106,7 +106,11 @@ pub const DRAFTING: &[(&str, &[Tool], &[Tool])] = &[
     ("Table", &[(Icon::Table, "table", "Table")], &[]),
     (
         "Parametric",
-        &[(Icon::Constraint, "autoconstrain", "Auto Constrain")],
+        &[
+            (Icon::Constraint, "autoconstrain", "Auto Constrain"),
+            (Icon::DelConstraint, "delconstraint", "Delete Constraints"),
+            (Icon::Parameters, "parameters", "Parameters Manager"),
+        ],
         &[
             (Icon::Coincident, "gccoincident", "Coincident"),
             (Icon::Parallel, "gcparallel", "Parallel"),
@@ -116,6 +120,15 @@ pub const DRAFTING: &[(&str, &[Tool], &[Tool])] = &[
             (Icon::Tangent, "gctangent", "Tangent"),
             (Icon::Concentric, "gcconcentric", "Concentric"),
             (Icon::Equal, "gcequal", "Equal"),
+            (Icon::Collinear, "gccollinear", "Collinear"),
+            (Icon::Smooth, "gcsmooth", "Smooth"),
+            (Icon::Symmetric, "gcsymmetric", "Symmetric"),
+            (Icon::Fix, "gcfix", "Fix"),
+            (Icon::DimLinear, "dclinear", "Linear"),
+            (Icon::DimAligned, "dcaligned", "Aligned"),
+            (Icon::DimAngular, "dcangular", "Angular"),
+            (Icon::DimRadius, "dcradius", "Radius"),
+            (Icon::DimDiameter, "dcdiameter", "Diameter"),
         ],
     ),
 ];
