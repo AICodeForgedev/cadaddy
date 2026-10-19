@@ -4,6 +4,7 @@
 
 /// What a DXF file holds that CADaddy doesn't model, kept and written back (#528).
 pub mod cdy;
+mod dwg_keep;
 mod dxf_raw;
 /// 3D model exchange: glTF/GLB, OBJ+MTL and STL.
 pub mod mesh3d_io;
@@ -101,6 +102,8 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
     }
     if cadaddy_dwg::is_dwg(bytes) {
         let (dxf, notes) = cadaddy_dwg::dwg_to_dxf_noted(bytes, cadaddy_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
+        // Custom records CADaddy kept through the DWG (`dwg_keep`), back where they were.
+        let dxf = dwg_keep::unstash(&dxf).unwrap_or(dxf);
         let mut d = dxf_read::read(&dxf).map_err(|e| IoError::Format(format!("{e} (in the DXF converted from this DWG)")))?;
         d.read_notes = notes;
         return Ok(d);

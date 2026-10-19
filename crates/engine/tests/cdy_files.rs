@@ -18,6 +18,9 @@ fn hooks() {
         plot: None,
         read_pdf: None,
     });
+    cadaddy_engine::cmd::file::set_write_as(|d, n, o| {
+        cadaddy_io::write_with(d, n, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
+    });
 }
 
 /// A fresh folder for one test.
@@ -120,19 +123,30 @@ fn dxf(src: &str) -> String {
 fn saving_into_dwg_says_once_what_the_file_would_not_keep() {
     hooks();
     let dir = folder("notkept");
-    // Another program's object type, which DWG doesn't keep (DXF does, and .cdy does).
+    // Another program's object type: DXF keeps it, and so does DWG (in CADaddy's kept records,
+    // dwgkeep; this test expected it dropped before).
     let src = dxf("0 SECTION\n2 ENTITIES\n0 LINE\n8 0\n10 0\n20 0\n11 1\n21 1\n0 ACME_WIDGET\n8 0\n5 3A0\n10 1\n20 1\n0 ENDSEC\n0 EOF");
+    for name in ["a.dxf", "a.dwg"] {
+        let mut s = Session::new();
+        s.execute("open", &json!({"data": base64_encode(src.as_bytes()), "name": "in.dxf"})).unwrap();
+        let r = s.execute("saveas", &json!({"path": path(&dir, name)})).unwrap();
+        assert!(r.get("notKept").is_none(), "{name} keeps it: {r}");
+    }
+    // What a DWG does lose: a Release 2000 DWG has no transparency.
     let mut s = Session::new();
-    s.execute("open", &json!({"data": base64_encode(src.as_bytes()), "name": "in.dxf"})).unwrap();
-    let r = s.execute("saveas", &json!({"path": path(&dir, "a.dxf")})).unwrap();
-    assert!(r.get("notKept").is_none(), "DXF keeps it: {r}");
-    let mut s = Session::new();
-    s.execute("open", &json!({"data": base64_encode(src.as_bytes()), "name": "in.dxf"})).unwrap();
-    let r = s.execute("saveas", &json!({"path": path(&dir, "a.dwg")})).unwrap();
-    assert_eq!(r["notKept"], json!(["objects"]), "{r}");
+    let line = s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap()["handles"][0].as_str().unwrap().to_string();
+    s.execute("chprop", &json!({"handles": [line], "transparency": 50})).unwrap();
+    let r = s.execute("saveas", &json!({"path": path(&dir, "c.dwg"), "version": 2000})).unwrap();
+    // (Nor fixed extension lines, which came with AutoCAD 2007: the dimension style is listed too.)
+    assert!(r["notKept"].as_array().unwrap().contains(&json!("object properties")), "{r}");
     // Feature by feature, with the objects concerned (exchangeloss: the line used to name only "objects").
-    assert_eq!(r["notKeptDetail"], json!([{"feature": "acme_widget objects", "what": "dropped", "count": 1, "handles": ["3A0"]}]), "{r}");
-    assert!(s.log.iter().any(|l| l.contains("Not kept in the DWG file: 1 acme_widget objects dropped") && l.contains(".cdy")), "{:?}", s.log);
+    let detail = r["notKeptDetail"].as_array().unwrap();
+    assert!(detail.contains(&json!({"feature": "object transparency", "what": "changed", "count": 1, "handles": [line]})), "{r}");
+    assert!(
+        s.log.iter().any(|l| l.starts_with("Not kept in the DWG file: ") && l.contains("1 object transparency changed") && l.contains(".cdy")),
+        "{:?}",
+        s.log
+    );
     // Once per drawing.
     let r = s.execute("qsave", &json!({})).unwrap();
     assert!(r.get("notKept").is_none(), "{r}");

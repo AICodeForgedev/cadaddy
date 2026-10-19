@@ -1172,7 +1172,9 @@ pub fn not_saved(d: &Drawing) -> std::collections::BTreeMap<String, usize> {
 const MODELER_TYPES: [&str; 3] = ["3DSOLID", "REGION", "BODY"];
 
 /// [`not_saved`] for a file saved as `version`. From 2013 on, a 3D solid, region or body the data
-/// store has a record for keeps its geometry and is not counted.
+/// store has a record for keeps its geometry and is not counted; other programs' custom entities
+/// (types outside the DXF Reference's, [`cadaddy_dxf::is_entity_type`]) are kept and not counted
+/// either: a DWG keeps them as they were read (cadaddy-io's `dwg_keep`).
 pub fn not_saved_as(d: &Drawing, version: Version) -> std::collections::BTreeMap<String, usize> {
     let mut out: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     let stored = if version >= Version::R2013 { d.foreign.data_store_entities() } else { Default::default() };
@@ -1180,6 +1182,9 @@ pub fn not_saved_as(d: &Drawing, version: Version) -> std::collections::BTreeMap
     for e in stores.flat_map(|s| s.iter()) {
         if let cadaddy_doc::EntityKind::Unknown(u) = &e.kind {
             if MODELER_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t)) && stored.contains(&e.handle) {
+                continue;
+            }
+            if !cadaddy_dxf::is_entity_type(&u.dxf_type) {
                 continue;
             }
             let n = out.entry(u.dxf_type.clone()).or_insert(0);
@@ -1198,8 +1203,8 @@ pub fn not_saved_message(lost: &std::collections::BTreeMap<String, usize>) -> Op
     Some(format!("Not saved in the DWG file (its writer can't write these object types yet; DXF keeps them): {}", list.join(", ")))
 }
 
-/// Whether saving to `path` leaves out the entities [`not_saved`] counts: DWG does (the DWG
-/// bridge drops types it doesn't know); DXF writes them back as read.
+/// Whether saving to `path` may leave out the entities [`not_saved`] counts: DWG (the DWG writer
+/// reads them its own way); DXF writes them back as read.
 pub fn drops_unknown(path: &str) -> bool {
     // Templates (.dwt) are written as DWG too.
     std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("dwg") || e.eq_ignore_ascii_case("dwt"))
