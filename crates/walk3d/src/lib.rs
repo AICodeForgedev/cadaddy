@@ -15,6 +15,7 @@ mod measure;
 mod openings;
 mod pick;
 mod rules;
+mod spec;
 mod walker;
 
 pub use derive::{DeviceInfo, LevelInfo, Owner, Part, Scene, Seg, Vertex, derive, derive_set};
@@ -22,4 +23,5 @@ pub use math::{Mat4, V3};
 pub use measure::{Dim, DimKind, measure};
 pub use pick::{Hit, pick};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules};
+pub use spec::{BuildingSpec, Family, FamilyKind, Issue, LayerRole, Role, Room, SPEC_VERSION, Site, Surfaces, WallFrom, WallType, level_at, merge};
 pub use walker::Walker;

@@ -242,7 +242,7 @@ impl Rules {
 }
 
 /// `*` anywhere matches any run of characters; case-insensitive.
-fn layer_match(pattern: &str, name: &str) -> bool {
+pub(crate) fn layer_match(pattern: &str, name: &str) -> bool {
     let p = pattern.to_ascii_uppercase();
     let n = name.to_ascii_uppercase();
     let parts: Vec<&str> = p.split('*').collect();

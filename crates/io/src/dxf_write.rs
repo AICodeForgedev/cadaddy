@@ -2201,6 +2201,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     if let Some(chunks) = dxf_ext::layer_state_chunks(&d.layer_states) {
         xrecords.push((dxf_ext::LAYER_STATES_KEY, w.h(), chunks));
     }
+    if let Some(chunks) = dxf_ext::building_spec_chunks(d) {
+        xrecords.push((dxf_ext::BUILDING_SPEC_KEY, w.h(), chunks));
+    }
     if let Some(chunks) = dxf_ext::hidden_object_chunks(d) {
         xrecords.push((dxf_ext::HIDDEN_OBJECTS_KEY, w.h(), chunks));
     }

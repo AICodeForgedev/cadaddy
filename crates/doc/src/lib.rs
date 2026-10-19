@@ -122,6 +122,9 @@ pub struct Drawing {
     /// The hidden objects are saved with the drawing (OBJECTISOLATIONMODE 1, or read from a file
     /// that saved them).
     pub hidden_saved: bool,
+    /// The building spec (`cadaddy-walk3d`'s `BuildingSpec` as JSON text, `bspec.set`): what the
+    /// plan means as a 3D building. Kept in the named-object dictionary (`CADADDY_BSPEC`).
+    pub building_spec: Option<String>,
     /// What reading the file left out (a DWG's object records the reader couldn't decode), told
     /// to the user when the drawing opens. Never written to a file.
     pub read_notes: Vec<String>,
@@ -205,6 +208,7 @@ impl Drawing {
             handseed: 0x100,
             hidden_objects: BTreeSet::new(),
             hidden_saved: false,
+            building_spec: None,
             read_notes: Vec::new(),
             refedit: None,
             skipped_records: BTreeMap::new(),
