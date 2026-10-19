@@ -473,10 +473,14 @@ fn an_entsel_prompt_picks_objects_whatever_its_message_says() {
     assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
     s.cancel();
 
-    // A point prompt is not a pick, and keeps its point modifiers.
-    s.cmdline("(getpoint \"\nSpecify a point: \")").unwrap();
-    assert!(!s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
-    s.cancel();
+    // A point prompt is not a pick, and keeps its point modifiers -- including one whose own
+    // message happens to begin with the word the built-in commands are read by. `picks_one` says
+    // which calls pick, so the wording is only ever read where the engine wrote it (#1635 review).
+    for point in ["(getpoint \"\nSpecify a point: \")", "(getpoint \"\nSelect a point: \")", "(getpoint \"Select a point: \")"] {
+        s.cmdline(point).unwrap();
+        assert!(!s.current_prompt().unwrap().picks_objects(), "{point}: {}", s.prompt_text());
+        s.cancel();
+    }
 }
 
 #[test]

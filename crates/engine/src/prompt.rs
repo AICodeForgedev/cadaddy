@@ -135,10 +135,11 @@ impl Prompt {
     /// The prompt picks objects: a "Select objects" prompt, one that says it picks a single object
     /// ([`Prompt::picks_one`]), or a point prompt whose click selects one ("Select object to
     /// offset", "Select first line"…, the commands that pick a single object themselves). The UI
-    /// shows the pick box there. A routine's own prompt usually begins with a newline, so the
-    /// wording is read past the leading whitespace.
+    /// shows the pick box there. The wording is only read where the engine wrote it: a routine
+    /// writes its own message (`raw`), which may open with "Select" and still ask for a point,
+    /// and says through `picks_one` when it picks instead (#1635 review).
     pub fn picks_objects(&self) -> bool {
-        self.picks_one || self.accept.select || (self.accept.point && self.message.trim_start().starts_with("Select"))
+        self.picks_one || self.accept.select || (self.accept.point && !self.raw && self.message.starts_with("Select"))
     }
     /// "Specify next point or [Undo/Close] <default>:".
     pub fn display(&self) -> String {
