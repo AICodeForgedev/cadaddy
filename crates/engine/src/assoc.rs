@@ -291,6 +291,23 @@ pub fn recompute(dm: &Dimension, prev: Option<&Dimension>, before: &Drawing, aft
     nd
 }
 
+/// DIMREGEN: an associative dimension's definition points put back on its objects as they are
+/// now, whatever happened to them meanwhile (unlike [`recompute`], which follows a change and
+/// lets go of points that had been moved off their objects). Attachments whose object is gone
+/// are dropped; the dimension's graphics are rebuilt.
+pub fn regen(dm: &Dimension, d: &Drawing) -> Dimension {
+    let mut nd = dm.clone();
+    nd.assoc.retain(|a| snap_point(d, a).is_some());
+    for a in nd.assoc.clone() {
+        if let (Some(p), Some(slot)) = (snap_point(d, &a), def_point_mut(&mut nd, &a.point)) {
+            slot.x = p.x;
+            slot.y = p.y;
+        }
+    }
+    nd.block = None;
+    nd
+}
+
 /// After a change: update every associative dimension whose objects changed.
 /// Returns the number of dimensions updated.
 pub fn update(after: &mut Arc<Drawing>, before: &Drawing) -> usize {

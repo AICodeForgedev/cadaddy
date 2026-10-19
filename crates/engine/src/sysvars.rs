@@ -341,6 +341,8 @@ fn header_default(n: &str) -> Option<Value> {
         "LAYEREVAL" => Some(json!(1)),
         "LAYERNOTIFY" => Some(json!(15)),
         "RENDEREXPOSURE" => Some(json!(0.0)),
+        // The layer new dimensions go on ("." the current layer); the DIM command's Layer option.
+        "DIMLAYER" => Some(json!(".")),
         _ => None,
     }
 }

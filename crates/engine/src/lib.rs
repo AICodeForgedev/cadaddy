@@ -1177,6 +1177,13 @@ impl Session {
         if d.annotative_by_style(&kind) {
             common.anno_scales = vec![d.current_anno_scale()];
         }
+        // DIMLAYER: new dimensions on their own layer (".": the current one).
+        let dim_layer =
+            matches!(kind, EntityKind::Dimension(_)).then(|| d.header.str("DIMLAYER", ".")).filter(|l| !l.trim().is_empty() && l.trim() != ".");
+        if let Some(l) = dim_layer {
+            self.doc_mut()?.ensure_layer(l.trim());
+            common.layer = l.trim().to_string();
+        }
         let h = self.doc_mut()?.add(&space, common, kind)?;
         Ok(h)
     }

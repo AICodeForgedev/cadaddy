@@ -47,6 +47,7 @@ pub mod schedules;
 pub use layer::filters::layers_of as layer_filter_layers;
 pub use layer::notify::unreconciled as unreconciled_layers;
 pub use qselect::wildcard;
+pub mod dimmodes;
 pub mod furnish;
 pub(crate) mod layout;
 pub mod lightbake;
@@ -267,6 +268,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(stairs::specs());
         v.extend(autospec::specs());
         v.extend(verify::specs());
+        v.extend(dimmodes::specs());
         v.extend(tours::specs());
         v.extend(walkpub::specs());
         v.extend(imageclip::specs());
