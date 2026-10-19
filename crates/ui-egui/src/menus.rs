@@ -25,6 +25,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.newtemplate", "New from Template...", &["File", "New from Template..."], None),
     ("ui.convertpdf", "Convert PDF to DWG...", &["File", "Convert PDF to DWG..."], None),
     ("ui.walk", "Walk", &["View", "Walk"], None),
+    ("ui.gpu", "3D Graphics Limits", &[], None),
     ("ui.bench3d", "3D View Benchmark", &[], None),
     ("ui.pdfimport", "PDF Import...", &[], None),
     ("ui.saveas", "Save As...", &[], None),
@@ -366,6 +367,19 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::shaded::bench(app, frames);
             Ok(Value::Null)
         }
+        "ui.gpu" => {
+            // The 3D views' GPU limits; forced ones for tests and machines that misreport.
+            if params.get("reset").and_then(Value::as_bool) == Some(true) {
+                app.gpu_caps = app.wgpu_rs.as_ref().map_or_else(crate::gpucaps::GpuCaps::default, crate::gpucaps::GpuCaps::detect);
+            } else if params.is_object() {
+                app.gpu_caps.force(params);
+            }
+            app.canvas.shade.reset_gpu();
+            if let Some(w) = app.walk.as_mut() {
+                w.gpu = None;
+            }
+            Ok(app.gpu_caps.json())
+        }
         "ui.walk" => {
             // Toggles: opens walk mode on the active drawing, or goes back to the canvas.
             if app.walk.is_some() {
@@ -617,6 +631,14 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some("adcenter".into());
             Ok(Value::Null)
         }
+        // From the menu or typed: the scan file from the file dialog.
+        "pointcloudattach" | "pcattach" if params.is_null() => match app.services.pick_open.as_ref().map(|p| p()) {
+            Some(Some(path)) => app.run("pointcloudattach", json!({ "path": path })),
+            Some(None) => Ok(Value::Null),
+            None => {
+                Err("POINTCLOUDATTACH: there is no file dialog here; run it with parameters, e.g. pointcloudattach {\"path\": \"scan.las\"}".into())
+            }
+        },
         "etransmit" if params.is_null() => {
             app.ui.dialog = Some("etransmit".into());
             Ok(Value::Null)

@@ -16,7 +16,6 @@
 
 mod control_server;
 mod desktop_theme;
-#[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
@@ -122,6 +121,7 @@ pub fn install_io() {
         plot: Some(|d, space, opts| cadaddy_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
         read_pdf: Some(cadaddy_io::pdf_read::read_json),
     });
+    cadaddy_engine::cmd::pointcloud::set_reader(cadaddy_io::pointcloud_io::read);
     cadaddy_engine::cmd::file::set_print(cadaddy_engine::cmd::file::PrintHooks { list: printing::list, print: printing::print });
     // .cdy saves append only what changed to the file a drawing was saved to or read from.
     cadaddy_engine::cmd::file::set_cdy_hooks(cadaddy_engine::cmd::file::CdyHooks {
@@ -334,141 +334,162 @@ fn main() -> eframe::Result {
     }
     install_io();
     let surface = cadaddy_ui_egui::gpu::surface_config(std::env::var("CADADDY_VSYNC").ok().as_deref(), cfg!(all(unix, not(target_os = "macos"))));
-    let mut options = eframe::NativeOptions {
-        // The crosshair is drawn by the app: present without a queue on Linux/BSD, where X11
-        // swapchains hold two frames back under vsync (`CADADDY_VSYNC=1` restores vsync).
-        wgpu_options: eframe::egui_wgpu::WgpuConfiguration::default().with_surface_config(surface),
-        viewport: egui::ViewportBuilder::default()
-            .with_title("CADaddy")
-            .with_inner_size([1600.0, 1000.0])
-            .with_min_inner_size([900.0, 560.0])
-            .with_drag_and_drop(true)
-            .with_fullsize_content_view(true)
-            .with_titlebar_shown(false)
-            .with_title_shown(false)
-            .with_app_id(APP_ID),
-        persist_window: false,
-        // A stencil buffer clips the contents of clipped layout viewports on the GPU.
-        stencil_buffer: STENCIL_BITS,
-        ..Default::default()
+    let make_options = |attempt: graphics::Attempt| {
+        let mut options = eframe::NativeOptions {
+            // The crosshair is drawn by the app: present without a queue on Linux/BSD, where X11
+            // swapchains hold two frames back under vsync (`CADADDY_VSYNC=1` restores vsync).
+            wgpu_options: eframe::egui_wgpu::WgpuConfiguration::default().with_surface_config(surface),
+            viewport: egui::ViewportBuilder::default()
+                .with_title("CADaddy")
+                .with_inner_size([1600.0, 1000.0])
+                .with_min_inner_size([900.0, 560.0])
+                .with_drag_and_drop(true)
+                .with_fullsize_content_view(true)
+                .with_titlebar_shown(false)
+                .with_title_shown(false)
+                .with_app_id(APP_ID),
+            persist_window: false,
+            // A stencil buffer clips the contents of clipped layout viewports on the GPU.
+            stencil_buffer: STENCIL_BITS,
+            ..Default::default()
+        };
+        if let Some(icon) = app_icon() {
+            options.viewport = options.viewport.with_icon(icon);
+        }
+        // Before eframe creates the wgpu instance: default Windows to DirectX 12 with FXC (see graphics.rs).
+        #[cfg(target_os = "windows")]
+        graphics::configure(&mut options, eframe::wgpu::Backends::from_env(), eframe::wgpu::Dx12Compiler::from_env());
+        // Command previews (COPY, MOVE...) of large selections are tessellated by egui, whose index
+        // buffer outgrew wgpu's default 256 MiB cap; the validation error is fatal. Ask for what the
+        // adapter actually supports.
+        if let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
+            let base = std::sync::Arc::clone(&create.device_descriptor);
+            create.device_descriptor = std::sync::Arc::new(move |adapter| {
+                let mut d = base(adapter);
+                d.required_limits.max_buffer_size = d.required_limits.max_buffer_size.max(adapter.limits().max_buffer_size);
+                d
+            });
+        }
+        // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
+        // manager showed a "no" cursor. Run through XWayland when it's there; CADADDY_WAYLAND=1
+        // keeps the native Wayland backend.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if std::env::var_os("DISPLAY").is_some() && std::env::var_os("CADADDY_WAYLAND").is_none() {
+            options.event_loop_builder = Some(Box::new(|b| {
+                use winit::platform::x11::EventLoopBuilderExtX11;
+                b.with_x11();
+            }));
+        }
+        graphics::apply(&mut options, attempt);
+        options
     };
-    if let Some(icon) = app_icon() {
-        options.viewport = options.viewport.with_icon(icon);
-    }
-    // Before eframe creates the wgpu instance: default Windows to DirectX 12 with FXC (see graphics.rs).
-    #[cfg(target_os = "windows")]
-    graphics::configure(&mut options, eframe::wgpu::Backends::from_env(), eframe::wgpu::Dx12Compiler::from_env());
-    // Command previews (COPY, MOVE...) of large selections are tessellated by egui, whose index
-    // buffer outgrew wgpu's default 256 MiB cap; the validation error is fatal. Ask for what the
-    // adapter actually supports.
-    if let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
-        let base = std::sync::Arc::clone(&create.device_descriptor);
-        create.device_descriptor = std::sync::Arc::new(move |adapter| {
-            let mut d = base(adapter);
-            d.required_limits.max_buffer_size = d.required_limits.max_buffer_size.max(adapter.limits().max_buffer_size);
-            d
-        });
-    }
-    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; CADADDY_WAYLAND=1
-    // keeps the native Wayland backend.
-    #[cfg(all(unix, not(target_os = "macos")))]
-    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("CADADDY_WAYLAND").is_none() {
-        options.event_loop_builder = Some(Box::new(|b| {
-            use winit::platform::x11::EventLoopBuilderExtX11;
-            b.with_x11();
-        }));
-    }
-    eframe::run_native(
-        "CADaddy",
-        options,
-        Box::new(move |cc| {
-            let mut app = CadApp::new(Session::empty(), services());
-            app.donate.enabled = true;
-            if std::env::var_os("CADADDY_NO_UPDATES").is_none() {
-                app.updater = Some(Box::new(updater::DesktopUpdater::default()));
-            }
-            let (workspace, restored, workspace_error) = workspace::Workspace::load();
-            if let Some(ui) = restored {
-                app.ui = ui;
-            }
-            if let Some(error) = &workspace_error {
-                eprintln!("CADaddy workspace: {error}");
-                app.set_status(error);
-            }
-            app.system_languages = std::env::var("CADADDY_LOCALE").map(|s| vec![s]).unwrap_or_else(|_| sys_locale::get_locales().collect());
-            // The user profile (Options): drafting settings, selection sizes, drawing-area colours.
-            if let Some(profile) = cc.storage.and_then(|s| s.get_string(cadaddy_ui_egui::options::PROFILE_KEY)) {
-                app.load_profile(&profile);
-            }
-            if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadaddy_ui_egui::PREFS_KEY)) {
-                app.load_prefs(&prefs);
-            }
-            if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadaddy_ui_egui::autosave::PREFS_KEY)) {
-                cadaddy_ui_egui::autosave::load_prefs(&prefs);
-            }
-            // Autosave files (SAVEFILEPATH) default to `<settings dir>/autosave`.
-            if let Some(dir) = config_dir() {
-                app.enable_autosave(&dir.join("autosave"));
-                // Startup LISP (acad.lsp, acaddoc.lsp) is read from `<settings>/support`; the
-                // folder is made so it is there to put them in.
-                let support = dir.join("support");
-                if let Err(e) = std::fs::create_dir_all(&support) {
-                    log::warn!("no LISP support folder {}: {e}", support.display());
+    // The window's graphics: the default, then the fallbacks (graphics.rs) when it can't start.
+    let attempts = graphics::attempts(eframe::wgpu::Backends::from_env());
+    let mut result = Ok(());
+    for (n, attempt) in attempts.iter().copied().enumerate() {
+        let options = make_options(attempt);
+        let files = files.clone();
+        let fallback = graphics::note(attempt);
+        result = eframe::run_native(
+            "CADaddy",
+            options,
+            Box::new(move |cc| {
+                let mut app = CadApp::new(Session::empty(), services());
+                if let Some(note) = fallback {
+                    log::warn!("{note}");
+                    app.set_status(note);
                 }
-                app.session.set_lisp_support_dir(Some(support));
-            }
-            app.integrated_titlebar = cfg!(target_os = "macos");
-            if surface.present_mode == eframe::wgpu::PresentMode::AutoNoVsync {
-                app.frame_cap = Some(cadaddy_ui_egui::gpu::FrameCap::new(240));
-            }
-            if let Some(rs) = &cc.wgpu_render_state {
-                app.set_wgpu(rs, eframe::egui_wgpu::depth_format_from_bits(0, STENCIL_BITS));
-            }
-            // Help ▸ Report a Problem: what the bundle says about this computer, and the watchdog
-            // that logs UI stalls.
-            let gpu = cc.wgpu_render_state.as_ref().map(|rs| {
-                let i = rs.adapter.get_info();
-                format!("{} ({:?}, {:?}; driver {} {})", i.name, i.backend, i.device_type, i.driver, i.driver_info)
-            });
-            cadaddy_ui_egui::diag::set_host(cadaddy_ui_egui::diag::HostInfo {
-                version: version_string(),
-                gpu: gpu.unwrap_or_default(),
-                log_dir: config_dir().map(|d| d.join(logging::LOG_DIR)),
-            });
-            cadaddy_ui_egui::diag::start_watchdog();
-            // An explicit --control port, and the agent port unless the user turned that off in
-            // Options: both serve the same window.
-            let ports: Vec<u16> = control_port.into_iter().chain(app.ui.agent_control.then_some(cadaddy_engine::AGENT_PORT)).collect();
-            if !ports.is_empty() {
-                let rx = control_server::start_ports(&ports, cc.egui_ctx.clone());
-                app = app.with_control(rx);
-            }
-            if sample {
-                let _ = app.run("ui.sample", serde_json::json!({}));
-            }
-            for f in &files {
-                app.open_path(f);
-            }
-            if app.session.docs.is_empty() {
-                app.session.new_drawing_with_viewports(false);
-            }
-            let ctx = cc.egui_ctx.clone();
-            let desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());
-            let ctx = cc.egui_ctx.clone();
-            let system_animations = system_animations::SystemAnimations::start(move || ctx.request_repaint());
-            Ok(Box::new(App {
-                desktop_theme,
-                system_animations,
-                cad: app,
-                spacemouse: spacemouse::SpaceMouse::start(cc.egui_ctx.clone()),
-                workspace,
-                workspace_error,
-                #[cfg(target_os = "macos")]
-                native_menu: None,
-            }))
-        }),
-    )
+                app.donate.enabled = true;
+                if std::env::var_os("CADADDY_NO_UPDATES").is_none() {
+                    app.updater = Some(Box::new(updater::DesktopUpdater::default()));
+                }
+                let (workspace, restored, workspace_error) = workspace::Workspace::load();
+                if let Some(ui) = restored {
+                    app.ui = ui;
+                }
+                if let Some(error) = &workspace_error {
+                    eprintln!("CADaddy workspace: {error}");
+                    app.set_status(error);
+                }
+                app.system_languages = std::env::var("CADADDY_LOCALE").map(|s| vec![s]).unwrap_or_else(|_| sys_locale::get_locales().collect());
+                // The user profile (Options): drafting settings, selection sizes, drawing-area colours.
+                if let Some(profile) = cc.storage.and_then(|s| s.get_string(cadaddy_ui_egui::options::PROFILE_KEY)) {
+                    app.load_profile(&profile);
+                }
+                if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadaddy_ui_egui::PREFS_KEY)) {
+                    app.load_prefs(&prefs);
+                }
+                if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadaddy_ui_egui::autosave::PREFS_KEY)) {
+                    cadaddy_ui_egui::autosave::load_prefs(&prefs);
+                }
+                // Autosave files (SAVEFILEPATH) default to `<settings dir>/autosave`.
+                if let Some(dir) = config_dir() {
+                    app.enable_autosave(&dir.join("autosave"));
+                    // Startup LISP (acad.lsp, acaddoc.lsp) is read from `<settings>/support`; the
+                    // folder is made so it is there to put them in.
+                    let support = dir.join("support");
+                    if let Err(e) = std::fs::create_dir_all(&support) {
+                        log::warn!("no LISP support folder {}: {e}", support.display());
+                    }
+                    app.session.set_lisp_support_dir(Some(support));
+                }
+                app.integrated_titlebar = cfg!(target_os = "macos");
+                if surface.present_mode == eframe::wgpu::PresentMode::AutoNoVsync {
+                    app.frame_cap = Some(cadaddy_ui_egui::gpu::FrameCap::new(240));
+                }
+                if let Some(rs) = &cc.wgpu_render_state {
+                    app.set_wgpu(rs, eframe::egui_wgpu::depth_format_from_bits(0, STENCIL_BITS));
+                }
+                // Help ▸ Report a Problem: what the bundle says about this computer, and the watchdog
+                // that logs UI stalls.
+                let gpu = cc.wgpu_render_state.as_ref().map(|rs| {
+                    let i = rs.adapter.get_info();
+                    format!("{} ({:?}, {:?}; driver {} {})", i.name, i.backend, i.device_type, i.driver, i.driver_info)
+                });
+                cadaddy_ui_egui::diag::set_host(cadaddy_ui_egui::diag::HostInfo {
+                    version: version_string(),
+                    gpu: gpu.unwrap_or_default(),
+                    log_dir: config_dir().map(|d| d.join(logging::LOG_DIR)),
+                });
+                cadaddy_ui_egui::diag::start_watchdog();
+                // An explicit --control port, and the agent port unless the user turned that off in
+                // Options: both serve the same window.
+                let ports: Vec<u16> = control_port.into_iter().chain(app.ui.agent_control.then_some(cadaddy_engine::AGENT_PORT)).collect();
+                if !ports.is_empty() {
+                    let rx = control_server::start_ports(&ports, cc.egui_ctx.clone());
+                    app = app.with_control(rx);
+                }
+                if sample {
+                    let _ = app.run("ui.sample", serde_json::json!({}));
+                }
+                for f in &files {
+                    app.open_path(f);
+                }
+                if app.session.docs.is_empty() {
+                    app.session.new_drawing_with_viewports(false);
+                }
+                let ctx = cc.egui_ctx.clone();
+                let desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());
+                let ctx = cc.egui_ctx.clone();
+                let system_animations = system_animations::SystemAnimations::start(move || ctx.request_repaint());
+                Ok(Box::new(App {
+                    desktop_theme,
+                    system_animations,
+                    cad: app,
+                    spacemouse: spacemouse::SpaceMouse::start(cc.egui_ctx.clone()),
+                    workspace,
+                    workspace_error,
+                    #[cfg(target_os = "macos")]
+                    native_menu: None,
+                }))
+            }),
+        );
+        match &result {
+            Err(e) if n + 1 < attempts.len() => log::warn!("graphics didn't start ({e}); trying {:?}", attempts.get(n + 1)),
+            _ => break,
+        }
+    }
+    result
 }
 
 #[cfg(test)]

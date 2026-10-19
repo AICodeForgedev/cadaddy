@@ -144,6 +144,15 @@ impl CadApp {
     /// session may not survive it) and show [`gpu_notice`].
     pub fn gpu_fault_tick(&mut self, ctx: &egui::Context) {
         let Some(fault) = self.gpu_faults.take() else { return };
+        // The 3D views move to the CPU: the GPU may not draw them again.
+        if !self.gpu_caps.cpu {
+            self.gpu_caps.cpu = true;
+            self.gpu_caps.notes.push("after a GPU error, 3D views are drawn by the CPU".into());
+            self.canvas.shade.reset_gpu();
+            if let Some(w) = self.walk.as_mut() {
+                w.gpu = None;
+            }
+        }
         #[cfg(not(target_arch = "wasm32"))]
         let saved = self.autosave.as_mut().map_or(0, |a| a.save_now(&self.session));
         #[cfg(target_arch = "wasm32")]

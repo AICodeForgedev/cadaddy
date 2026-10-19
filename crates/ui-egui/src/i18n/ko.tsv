@@ -2056,3 +2056,16 @@ menu	Modify	수정
 	Plans to Model Benchmark	도면에서 모델로 벤치마크
 	Plans to Model Case	도면에서 모델로 사례
 	Plans to Model Score	도면에서 모델로 점수
+	Save Viewpoint	시점 저장
+	Viewpoints for Every Room	모든 방의 시점
+	Camera Tour	카메라 투어
+	Tours and Viewpoints	투어 및 시점
+	Tour Timing	투어 타이밍
+	3D Graphics Limits	3D 그래픽 제한
+	Drawn by the CPU (no usable GPU)	CPU로 그림(사용 가능한 GPU 없음)
+	Point Cloud...	점 구름...
+	Point Cloud	점 구름
+	Attach Point Cloud	점 구름 부착
+	Clip Point Cloud	점 구름 자르기
+	Point Cloud Color Map	점 구름 색상 매핑
+	Point Cloud Information	점 구름 정보

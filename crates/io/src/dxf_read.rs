@@ -278,7 +278,10 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             Some(sp) => EntityKind::SectionPlane(sp),
             None => EntityKind::Line(Line { a: t.p(10), b: t.p(11) }),
         },
-        "POINT" => EntityKind::Point(Point { p: t.p(10), angle: t.fd(50, 0.0).to_radians() }),
+        "POINT" => match point_cloud(tags) {
+            Some(pc) => EntityKind::PointCloud(Box::new(pc)),
+            None => EntityKind::Point(Point { p: t.p(10), angle: t.fd(50, 0.0).to_radians() }),
+        },
         "CIRCLE" => EntityKind::Circle(Circle { center: ocs(&c, t.p(10)), radius: t.fd(40, 1.0).abs() }),
         "ARC" => {
             let mut a =
@@ -949,6 +952,15 @@ fn pattern_definition(tags: &[Tag], scale: f64, angle: f64, origin: Vec2) -> Vec
             }
         })
         .collect()
+}
+
+/// A point cloud written by CADaddy as a POINT with `CADADDY` xdata: `1000 POINTCLOUD` then its
+/// JSON in 1000 strings.
+fn point_cloud(tags: &[Tag]) -> Option<cadaddy_doc::pointcloud::PointCloud> {
+    let x = crate::dxf_ext::xdata(tags, crate::dxf_ext::APP);
+    let at = x.iter().position(|t| t.code == 1000 && t.str() == "POINTCLOUD")?;
+    let json: String = x.iter().skip(at + 1).take_while(|t| t.code == 1000).map(|t| t.str()).collect();
+    serde_json::from_str(&json).ok()
 }
 
 /// Hatch origin and background colour from `CADADDY` xdata: `1000 HATCH`, `1011` origin,
@@ -2313,6 +2325,9 @@ impl Objects {
         // Saved layer states.
         if let Some(spec) = self.xrecord_text(crate::dxf_ext::BUILDING_SPEC_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
             d.building_spec = Some(spec);
+        }
+        if let Some(tours) = self.xrecord_text(crate::dxf_ext::TOURS_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
+            d.tours = Some(tours);
         }
         if let Some(states) = self.xrecord_text(crate::dxf_ext::LAYER_STATES_KEY).and_then(|t| crate::dxf_ext::parse_layer_states(&t)) {
             d.layer_states = states;

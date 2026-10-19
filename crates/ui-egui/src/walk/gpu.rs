@@ -1,4 +1,5 @@
-//! Walk mode's offscreen 3D renderer: the scene is drawn into a texture (4× MSAA, depth), which
+//! Walk mode's offscreen 3D renderer: the scene is drawn into a texture (4× MSAA where the GPU
+//! has it, see `gpucaps`; depth), which
 //! the walk view shows as an egui image and the headless `cadaddy-walk --shot` copies to a PNG.
 
 use cadaddy_walk3d::{Scene, Vertex};
@@ -7,7 +8,6 @@ use egui_wgpu::wgpu::util::DeviceExt;
 
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const SAMPLES: u32 = 4;
 /// Position (3 × f32) + normal (3 × f32) + sRGB colour (4 × u8).
 const VERTEX_SIZE: u64 = 28;
 const UNIFORM_SIZE: u64 = 112;
@@ -25,7 +25,8 @@ pub struct Frame {
 
 struct Target {
     size: (u32, u32),
-    msaa: wgpu::TextureView,
+    /// The multisampled colour (none without MSAA: the frame is drawn into directly).
+    msaa: Option<wgpu::TextureView>,
     depth: wgpu::TextureView,
     // Read back by headless screenshots, which the web build has none of.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -46,10 +47,16 @@ pub struct Gpu {
     tris: Option<Mesh>,
     edges: Option<Mesh>,
     target: Option<Target>,
+    samples: u32,
 }
 
 impl Gpu {
-    pub fn new(device: &wgpu::Device) -> Gpu {
+    /// Samples per pixel the pipelines draw with.
+    pub fn samples(&self) -> u32 {
+        self.samples
+    }
+
+    pub fn new(device: &wgpu::Device, samples: u32) -> Gpu {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("walk"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
@@ -102,7 +109,7 @@ impl Gpu {
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
                 }),
-                multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+                multisample: wgpu::MultisampleState { count: samples, mask: !0, alpha_to_coverage_enabled: false },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
                     entry_point: Some(fs),
@@ -121,6 +128,7 @@ impl Gpu {
             tris: None,
             edges: None,
             target: None,
+            samples,
         }
     }
 
@@ -133,7 +141,7 @@ impl Gpu {
     pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, size: (u32, u32), f: &Frame) {
         let size = (size.0.clamp(1, MAX_SIDE), size.1.clamp(1, MAX_SIDE));
         if self.target.as_ref().is_none_or(|t| t.size != size) {
-            self.target = Some(target(device, size));
+            self.target = Some(target(device, size, self.samples));
         }
         let Some(t) = &self.target else { return };
         let mut u: Vec<u8> = Vec::with_capacity(UNIFORM_SIZE as usize);
@@ -151,12 +159,12 @@ impl Gpu {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("walk"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &t.msaa,
+                    view: t.msaa.as_ref().unwrap_or(&t.view),
                     depth_slice: None,
-                    resolve_target: Some(&t.view),
+                    resolve_target: t.msaa.as_ref().map(|_| &t.view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.63, g: 0.69, b: 0.76, a: 1.0 }),
-                        store: wgpu::StoreOp::Discard,
+                        store: if t.msaa.is_some() { wgpu::StoreOp::Discard } else { wgpu::StoreOp::Store },
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -238,7 +246,7 @@ fn mesh(device: &wgpu::Device, label: &str, verts: &[Vertex]) -> Option<Mesh> {
     Some(Mesh { buffer, count: u32::try_from(verts.len()).unwrap_or(u32::MAX) })
 }
 
-fn target(device: &wgpu::Device, size: (u32, u32)) -> Target {
+fn target(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Target {
     let extent = wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 };
     let tex = |label: &str, format, samples, usage| {
         device.create_texture(&wgpu::TextureDescriptor {
@@ -252,14 +260,14 @@ fn target(device: &wgpu::Device, size: (u32, u32)) -> Target {
             view_formats: &[],
         })
     };
-    let msaa = tex("walk_msaa", FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
-    let depth = tex("walk_depth", DEPTH, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
+    let msaa = (samples > 1).then(|| tex("walk_msaa", FORMAT, samples, wgpu::TextureUsages::RENDER_ATTACHMENT));
+    let depth = tex("walk_depth", DEPTH, samples, wgpu::TextureUsages::RENDER_ATTACHMENT);
     let resolve =
         tex("walk_frame", FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC);
     let view = resolve.create_view(&wgpu::TextureViewDescriptor::default());
     Target {
         size,
-        msaa: msaa.create_view(&wgpu::TextureViewDescriptor::default()),
+        msaa: msaa.map(|m| m.create_view(&wgpu::TextureViewDescriptor::default())),
         depth: depth.create_view(&wgpu::TextureViewDescriptor::default()),
         resolve,
         view,

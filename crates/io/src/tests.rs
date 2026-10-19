@@ -1232,6 +1232,24 @@ fn building_spec_roundtrips_in_dxf_and_dwg() {
     assert_eq!(read_dxf(write_dxf(&d).as_bytes()).unwrap().building_spec, None);
 }
 
+#[test]
+fn tours_roundtrip_in_dxf_dwg_and_cdy() {
+    let mut d = Drawing::new_imperial();
+    let tours = r#"{"version":1,"views":[{"name":"Lobby","room":"Lobby","level":0,"eye":[10.5,20,5.5],"yaw":90,"pitch":-5}],"tours":[{"name":"In","stops":["Lobby"],"speed":4.5,"look":"path","pause":1}]}"#;
+    d.tours = Some(tours.into());
+    d.building_spec = Some(r#"{"version":1,"levels":[]}"#.into());
+    let same = |text: Option<String>| text.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let text = write_dxf(&d);
+    assert!(text.contains("CADADDY_TOURS"));
+    assert_eq!(same(read_dxf(text.as_bytes()).unwrap().tours), same(Some(tours.into())));
+    #[cfg(not(target_arch = "wasm32"))]
+    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().tours), same(Some(tours.into())));
+    let cdy = read(&write(&d, "x.cdy").unwrap(), "x.cdy").unwrap();
+    assert_eq!(same(cdy.tours), same(Some(tours.into())));
+    assert_eq!(same(cdy.building_spec), same(d.building_spec.clone()), "the building spec is kept in .cdy too");
+    assert!(!write_dxf(&Drawing::new_imperial()).contains("CADADDY_TOURS"));
+}
+
 fn table_sample() -> Table {
     let cell = |t: &str| TableCell { text: t.into(), ..Default::default() };
     let mut rows = vec![

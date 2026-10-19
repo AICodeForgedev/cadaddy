@@ -1702,6 +1702,19 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(280, 1);
         }
         // Entity types CADaddy doesn't model aren't written; the save command reports them.
+        // A point cloud has no DXF form CADaddy writes: a POINT at its insertion point carrying the
+        // object as `CADADDY` xdata (`1000 POINTCLOUD`, then its JSON in 1000 strings), which
+        // CADaddy reads back as the point cloud and other programs show as a point.
+        EntityKind::PointCloud(pc) => {
+            w.s(0, "POINT");
+            common(w, e, owner, paper, "AcDbPoint");
+            w.p(10, pc.insert);
+            w.s(1001, dxf_ext::APP);
+            w.s(1000, "POINTCLOUD");
+            for chunk in serde_json::to_string(pc).map(|j| dxf_ext::json_chunks(&j)).unwrap_or_default() {
+                w.s(1000, chunk);
+            }
+        }
         EntityKind::Unknown(_) => {}
     }
 }
@@ -2490,6 +2503,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     if let Some(chunks) = dxf_ext::building_spec_chunks(d) {
         xrecords.push((dxf_ext::BUILDING_SPEC_KEY, w.h(), chunks));
+    }
+    if let Some(chunks) = dxf_ext::tours_chunks(d) {
+        xrecords.push((dxf_ext::TOURS_KEY, w.h(), chunks));
     }
     if let Some(chunks) = dxf_ext::hidden_object_chunks(d) {
         xrecords.push((dxf_ext::HIDDEN_OBJECTS_KEY, w.h(), chunks));

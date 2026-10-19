@@ -27,6 +27,7 @@ pub(crate) mod pdf_image;
 pub mod pdf_merge;
 pub mod pdf_read;
 pub mod plotter;
+pub mod pointcloud_io;
 pub mod svg;
 mod svg_read;
 mod svg_style;

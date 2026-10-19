@@ -1610,6 +1610,7 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
             u.u.z = 0.0;
             u.v.z = 0.0;
         }
+        EntityKind::PointCloud(pc) => z(&mut pc.insert),
         EntityKind::Table(t) => z(&mut t.insert),
         EntityKind::Tolerance(t) => {
             z(&mut t.insert);

@@ -83,6 +83,7 @@ impl EntityKind {
             EntityKind::Mesh(m) => m.vertices.iter_mut().for_each(z),
             EntityKind::Image(i) => z(&mut i.insert),
             EntityKind::Underlay(u) => z(&mut u.insert),
+            EntityKind::PointCloud(pc) => z(&mut pc.insert),
             EntityKind::Table(t) => z(&mut t.insert),
             EntityKind::Tolerance(t) => z(&mut t.insert),
             EntityKind::Light(l) => {

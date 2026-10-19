@@ -110,6 +110,7 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
         | EntityKind::AttDef(_)
         | EntityKind::Image(_)
         | EntityKind::Underlay(_)
+        | EntityKind::PointCloud(_)
         | EntityKind::Table(_) => {
             return Some(translated(kind, delta));
         }
