@@ -323,6 +323,8 @@ pub struct Services {
     pub thumbnail: Option<Box<dyn Fn(&str) -> Option<Vec<u8>>>>,
     /// Where to save an image (the Render window's Save), given a suggested name.
     pub pick_save_image: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// A folder (Publish's batch plot).
+    pub pick_folder: Option<Box<dyn Fn() -> Option<String>>>,
 }
 
 pub struct CadApp {

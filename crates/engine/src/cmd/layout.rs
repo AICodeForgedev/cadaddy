@@ -931,6 +931,8 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         }
         None => None,
     };
+    // What the plot stamp says that the plotter can't know (used when a sheet carries it).
+    super::plotstamp::facts(s, &mut opts);
     let bytes = hook(s.doc()?, &space, &opts).map_err(|e| bad(cmd, e))?;
     if let (Some(name), Some(h)) = (&printer, print) {
         let title = s.state().map(|st| st.title.clone()).unwrap_or_default();

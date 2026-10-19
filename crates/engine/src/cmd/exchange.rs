@@ -59,7 +59,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("publish", "Batch Publish...", run_publish)
             .menu(&["File", "Batch Publish..."])
-            .params("{path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf per sheet, or with `single` that one PDF; else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order), sheets?: [{drawing?: path (default this drawing), layout, title?, page?: {paper?, landscape?, plotStyleTable?, fit?, scale?, lineweights?, plotTransparency?}}] | list?: a publish list file (PUBLISHLIST), single?: bool (one PDF, a bookmark per sheet)} → {sheets: [{layout, bytes, path? | data}]} | {path | data, pages}")
+            .params("{path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf per sheet, or with `single` that one PDF; else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order), sheets?: [{drawing?: path (default this drawing), layout, title?, page?: {paper?, landscape?, plotStyleTable?, fit?, scale?, lineweights?, plotTransparency?}}] | list?: a publish list file (PUBLISHLIST), single?: bool (one PDF, a bookmark per sheet)} → {sheets: [{layout, bytes, path? | data}]} | {path | data, pages}; or batch plot {folder: DIR (every .dwg/.dxf/.cdy in it), out?: DIR (default the folder), layouts?: [names], stamp?: bool} → {drawings: [{drawing, path, pages}], failed: [{drawing, error}]}: one PDF per drawing")
             .noundo(),
         publish::spec(),
         CommandSpec::new("pdfbook", "Sheet Books to PDF...", run_pdfbook)
@@ -711,6 +711,28 @@ fn file_part(name: &str) -> String {
 }
 
 fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
+    // A folder of drawings, one PDF each (needs no open drawing).
+    if let Some(dir) = str_param(p, "folder") {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let layouts: Option<Vec<String>> = match p.get("layouts") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(
+                    v.as_array()
+                        .ok_or_else(|| bad("publish", "`layouts` must be a list of layout names"))?
+                        .iter()
+                        .map(|n| n.as_str().map(str::to_string).ok_or_else(|| bad("publish", "`layouts` must be a list of layout names")))
+                        .collect::<Result<_>>()?,
+                ),
+            };
+            return publish::folder(dir, str_param(p, "out"), layouts.as_deref(), p.get("stamp").and_then(Value::as_bool));
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = dir;
+            return Err(bad("publish", "folders are not available on the web"));
+        }
+    }
     let d = s.doc()?;
     let sheets: Vec<String> = match p.get("layouts") {
         Some(v) => {

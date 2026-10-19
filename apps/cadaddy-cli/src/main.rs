@@ -4,6 +4,7 @@
 //! cadaddy-cli info FILE.dxf                       summary as JSON
 //! cadaddy-cli convert IN.dxf OUT.(dxf|svg|png) [--window x0,y0,x1,y1 | --view extents|current]
 //! cadaddy-cli run [FILE|--sample|--metric] [--script TEXT|--script-file F.scr] [--cmd 'id {json}']... [--save OUT] [--export OUT.png] [--window ... | --view ...]
+//! cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]   batch plot: one PDF per drawing
 //! cadaddy-cli commands [FILTER]                   command catalog (JSON)
 //! cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--launch]]  MCP server on stdio (the open app on the agent port, else headless; or bridged to a given app)
 //! cadaddy-cli perf [N]                            timing table on a synthetic N-entity drawing
@@ -59,6 +60,7 @@ const USAGE: &str = "usage:
   cadaddy-cli info FILE.dxf
   cadaddy-cli convert IN.dxf OUT.(dxf|dwg|svg|png|pdf) [FRAMING]
   cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
+  cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]
   cadaddy-cli commands [FILTER]
   cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--launch]]
   cadaddy-cli perf [N | FILE]
@@ -303,6 +305,35 @@ fn convert(args: &[String]) -> Result<(), String> {
     }
     let window = export_window(&s, framing, None)?;
     export_framed(&s, o, window)
+}
+
+/// `plot IN_FOLDER OUT_FOLDER`: every drawing in a folder plotted to one PDF each (PUBLISH's batch
+/// plot). The summary is printed as JSON; the exit status is 1 when any drawing failed.
+fn plot(args: &[String]) -> Result<(), String> {
+    let mut dirs = Vec::new();
+    let mut p = json!({});
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--layouts" => {
+                let list = it.next().ok_or("--layouts needs names, separated by commas (Model for model space)")?;
+                p["layouts"] = json!(list.split(',').map(str::trim).filter(|n| !n.is_empty()).collect::<Vec<_>>());
+            }
+            "--stamp" => p["stamp"] = json!(true),
+            "--no-stamp" => p["stamp"] = json!(false),
+            o if o.starts_with("--") => return Err(format!("plot: unknown option {o}")),
+            d => dirs.push(d),
+        }
+    }
+    let [input, output] = dirs.as_slice() else { return Err(USAGE.into()) };
+    p["folder"] = json!(input);
+    p["out"] = json!(output);
+    // PUBLISH runs with a drawing open; the folder's drawings are read on their own.
+    let mut s = Session::new();
+    let r = s.execute("publish", &p).map_err(|e| e.to_string())?;
+    outln!("{}", serde_json::to_string_pretty(&json!({ "plotted": r["drawings"], "failed": r["failed"] })).unwrap_or_default());
+    let failed = r["failed"].as_array().map_or(0, Vec::len);
+    if failed == 0 { Ok(()) } else { Err(format!("{failed} drawing(s) could not be plotted")) }
 }
 
 /// The warning for the records of `path` the reader could not place, or `None` when there are none.
@@ -723,6 +754,7 @@ fn cli() -> ExitCode {
     let r = match args.first().map(String::as_str) {
         Some("info") => validate_options("info", &rest, NO_OPTIONS).and_then(|_| rest.first().ok_or_else(|| USAGE.to_string())).and_then(|p| info(p)),
         Some("convert") => convert(&rest),
+        Some("plot") => plot(&rest),
         Some("run") => run(&rest),
         Some("perf") => validate_options("perf", &rest, NO_OPTIONS).and_then(|_| perf(&rest)),
         Some("sample") => validate_options("sample", &rest, NO_OPTIONS).and_then(|_| sample(&rest)),

@@ -72,6 +72,9 @@ struct Tables {
     /// as defaults from .cdy).
     #[serde(default)]
     sun: Value,
+    /// The plot stamp's settings (a layout's page setup says whether it plots it).
+    #[serde(default)]
+    plot_stamp: Value,
     /// (object handle, its field values) in handle order.
     #[serde(default)]
     field_values: Vec<(u64, Vec<String>)>,
@@ -244,6 +247,7 @@ pub(super) fn tables(d: &Drawing) -> Result<Vec<u8>, String> {
         layer_filters: value(&d.layer_filters)?,
         materials: value(&d.materials)?,
         sun: value(&d.sun)?,
+        plot_stamp: value(&d.plot_stamp)?,
         field_values: d.field_values.iter().map(|(h, v)| (h.0, v.clone())).collect(),
         kept_handles: d.kept_handles.iter().map(|(k, h)| (k.clone(), *h)).collect(),
         building_spec: d.building_spec.clone(),
@@ -383,6 +387,9 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 }
                 if !t.sun.is_null() {
                     field!(sun, "the sun");
+                }
+                if !t.plot_stamp.is_null() {
+                    field!(plot_stamp, "the plot stamp");
                 }
                 d.field_values = t.field_values.iter().map(|(h, v)| (cadaddy_doc::Handle(*h), v.clone())).collect();
                 d.kept_handles = t.kept_handles.iter().take(10_000_000).map(|(k, h)| (k.clone(), *h)).collect();

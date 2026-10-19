@@ -46,6 +46,9 @@ pub(crate) const MLEADER_STYLE_KEY: &str = "CADADDY_MLEADERSTYLE";
 /// Named-object-dictionary key of the XRECORD holding the building spec (JSON).
 pub(crate) const BUILDING_SPEC_KEY: &str = "CADADDY_BSPEC";
 pub(crate) const TOURS_KEY: &str = "CADADDY_TOURS";
+/// Named-object-dictionary key of the XRECORD holding the plot stamp's settings and the layouts
+/// whose page setups plot it.
+pub(crate) const PLOT_STAMP_KEY: &str = "CADADDY_PLOTSTAMP";
 /// Named-object-dictionary key of the XRECORD listing the objects hidden by ISOLATEOBJECTS /
 /// HIDEOBJECTS when OBJECTISOLATIONMODE 1 saves them with the drawing.
 pub(crate) const HIDDEN_OBJECTS_KEY: &str = "CADADDY_HIDDENOBJECTS";
@@ -834,6 +837,42 @@ pub(crate) fn parse_building_spec(text: &str) -> Option<String> {
     }
     let v: Value = serde_json::from_str(text).ok()?;
     v.is_object().then(|| text.to_string())
+}
+
+/// The plot stamp XRECORD's payload.
+#[derive(Serialize, Deserialize)]
+struct PlotStampPayload {
+    version: u32,
+    #[serde(default)]
+    settings: Option<cadaddy_doc::plotstamp::PlotStamp>,
+    #[serde(default)]
+    layouts: Vec<String>,
+}
+
+/// JSON chunks for the plot stamp XRECORD, or `None` when no settings were made and no layout
+/// plots the stamp.
+pub(crate) fn plot_stamp_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    let layouts: Vec<String> = d.layouts.iter().filter(|l| l.page.plot_stamp).map(|l| l.name.clone()).collect();
+    if d.plot_stamp.is_none() && layouts.is_empty() {
+        return None;
+    }
+    let json = serde_json::to_string(&PlotStampPayload { version: 1, settings: d.plot_stamp.clone(), layouts }).ok()?;
+    Some(json_chunks(&json))
+}
+
+/// The plot stamp read back into the drawing: its settings, and each named layout's page setup
+/// set to plot it.
+pub(crate) fn apply_plot_stamp(d: &mut cadaddy_doc::Drawing, text: &str) {
+    if text.len() > MAX_PAYLOAD {
+        return;
+    }
+    let Ok(p) = serde_json::from_str::<PlotStampPayload>(text) else { return };
+    d.plot_stamp = p.settings.map(|s| s.sanitized());
+    for name in p.layouts.iter().take(10_000) {
+        if let Some(l) = d.layouts.iter_mut().find(|l| l.name.eq_ignore_ascii_case(name)) {
+            l.page.plot_stamp = true;
+        }
+    }
 }
 
 /// JSON chunks for the tours XRECORD, or `None` without saved viewpoints or tours.

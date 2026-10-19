@@ -197,6 +197,12 @@ fn services() -> Services {
                 .save_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
+        pick_folder: Some(Box::new(|| {
+            if !cadaddy_ui_egui::file_dialogs_allowed() {
+                return None;
+            }
+            rfd::FileDialog::new().pick_folder().map(|p| p.to_string_lossy().to_string())
+        })),
         pick_save: Some(Box::new(|name: &str| {
             if !cadaddy_ui_egui::file_dialogs_allowed() {
                 return None;

@@ -49,6 +49,7 @@ pub mod hyperlink;
 pub mod lighting;
 pub mod markup;
 pub mod material;
+pub mod plotstamp;
 pub mod pointcloud;
 
 #[derive(Debug, thiserror::Error)]
@@ -146,6 +147,9 @@ pub struct Drawing {
     /// Saved viewpoints and camera tours (`cadaddy-walk3d`'s `Tours` as JSON text, `tour.*`).
     /// Kept in the named-object dictionary (`CADADDY_TOURS`).
     pub tours: Option<String>,
+    /// The plot stamp's settings (PLOTSTAMP); `None` until set. Each layout's page setup says
+    /// whether its plots carry it.
+    pub plot_stamp: Option<plotstamp::PlotStamp>,
     /// What reading the file left out (a DWG's object records the reader couldn't decode), told
     /// to the user when the drawing opens. Never written to a file.
     pub read_notes: Vec<String>,
@@ -241,6 +245,7 @@ impl Drawing {
             sun: lighting::Sun::default(),
             building_spec: None,
             tours: None,
+            plot_stamp: None,
             read_notes: Vec::new(),
             refedit: None,
             skipped_records: BTreeMap::new(),

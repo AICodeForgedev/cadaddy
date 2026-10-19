@@ -2507,6 +2507,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     if let Some(chunks) = dxf_ext::tours_chunks(d) {
         xrecords.push((dxf_ext::TOURS_KEY, w.h(), chunks));
     }
+    if let Some(chunks) = dxf_ext::plot_stamp_chunks(d) {
+        xrecords.push((dxf_ext::PLOT_STAMP_KEY, w.h(), chunks));
+    }
     if let Some(chunks) = dxf_ext::hidden_object_chunks(d) {
         xrecords.push((dxf_ext::HIDDEN_OBJECTS_KEY, w.h(), chunks));
     }

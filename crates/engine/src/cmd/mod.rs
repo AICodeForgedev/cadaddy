@@ -64,6 +64,7 @@ pub mod p2meval;
 pub mod pdfplans;
 mod perceive;
 mod pline_opts;
+pub(crate) mod plotstamp;
 pub mod plotters;
 mod props;
 pub mod revise3d;
@@ -289,6 +290,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(file::compare::specs());
         v.extend(layer::specs());
         v.extend(layout::specs());
+        v.extend(plotstamp::specs());
         v.extend(exchange::specs());
         v.extend(props::specs());
         v.extend(inquiry::specs());

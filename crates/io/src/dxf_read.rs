@@ -2329,6 +2329,9 @@ impl Objects {
         if let Some(tours) = self.xrecord_text(crate::dxf_ext::TOURS_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
             d.tours = Some(tours);
         }
+        if let Some(text) = self.xrecord_text(crate::dxf_ext::PLOT_STAMP_KEY) {
+            crate::dxf_ext::apply_plot_stamp(d, &text);
+        }
         if let Some(states) = self.xrecord_text(crate::dxf_ext::LAYER_STATES_KEY).and_then(|t| crate::dxf_ext::parse_layer_states(&t)) {
             d.layer_states = states;
         }
