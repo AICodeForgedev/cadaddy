@@ -9,6 +9,8 @@ use crate::CadApp;
 use crate::icons::{self, Icon};
 use crate::theme::Tokens;
 
+#[cfg(test)]
+mod layer_menu_tests;
 /// The hatch pattern picker.
 pub mod patterns;
 /// The QuickCalc palette.
@@ -898,12 +900,14 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     });
     prop_row(ui, "Layer", |ui| {
         ui.menu_button(layer.clone(), |ui| {
-            for l in &layers {
-                if ui.button(l).clicked() {
-                    set = Some(json!({ "handles": ids, "layer": l }));
-                    ui.close();
+            egui::ScrollArea::vertical().id_salt("properties_layer_menu").max_height(300.0).show(ui, |ui| {
+                for l in &layers {
+                    if ui.button(l).clicked() {
+                        set = Some(json!({ "handles": ids, "layer": l }));
+                        ui.close();
+                    }
                 }
-            }
+            });
         });
     });
     prop_row(ui, "Linetype", |ui| {
