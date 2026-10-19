@@ -9,6 +9,7 @@ mod audit;
 pub mod autospec;
 pub(crate) mod blocks;
 pub mod bspec;
+pub mod ceilings;
 pub(crate) mod clip_partners;
 pub mod clipboard;
 pub mod constraints;
@@ -213,6 +214,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(draworder::specs());
         v.extend(wallgen::specs());
         v.extend(bspec::specs());
+        v.extend(ceilings::specs());
         v.extend(exterior::specs());
         v.extend(stairs::specs());
         v.extend(autospec::specs());
