@@ -666,6 +666,15 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         // From the menu or typed: the reviewed PDF from the file dialog.
+        // From the menu: pick the reviewed PDF, then its markups go on a layer per reviewer.
+        "redline.import" if params.is_null() => match app.services.pick_pdf.as_ref().or(app.services.pick_open.as_ref()).map(|p| p()) {
+            Some(Some(path)) => app.run("redline.import", json!({ "path": path })).inspect(|_| app.ui.dialog = Some("markups".into())),
+            Some(None) => Ok(Value::Null),
+            None => {
+                Err("IMPORT REDLINE MARKUPS: there is no file dialog here; run it with parameters, e.g. redline.import {\"path\": \"review.pdf\"}"
+                    .into())
+            }
+        },
         "markupimport" if params.is_null() => match app.services.pick_pdf.as_ref().or(app.services.pick_open.as_ref()).map(|p| p()) {
             Some(Some(path)) => app.run("markupimport", json!({ "path": path })).inspect(|_| app.ui.dialog = Some("markups".into())),
             Some(None) => Ok(Value::Null),

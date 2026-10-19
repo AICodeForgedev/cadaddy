@@ -23,6 +23,7 @@ const DIALOG_OR_STATE: &[&str] = &[
     "sheetset",
     "pointcloudattach",
     "markupimport",
+    "redline.import",
     "adcenter",
     "checkstandards",
     "style",

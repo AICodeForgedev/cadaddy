@@ -69,6 +69,7 @@ mod pline_opts;
 pub(crate) mod plotstamp;
 pub mod plotters;
 mod props;
+pub mod redline;
 pub mod revise3d;
 pub mod rooms3d;
 pub mod spell;
@@ -267,6 +268,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(stairs::specs());
         v.extend(autospec::specs());
         v.extend(verify::specs());
+        v.extend(redline::specs());
         v.extend(tours::specs());
         v.extend(walkpub::specs());
         v.extend(imageclip::specs());

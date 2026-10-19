@@ -123,6 +123,7 @@ pub fn install_io() {
     });
     cadaddy_engine::cmd::pointcloud::set_reader(cadaddy_io::pointcloud_io::read);
     cadaddy_engine::cmd::markup::set_reader(cadaddy_io::pdf_markups::read);
+    cadaddy_engine::cmd::redline::set_opener(open_in_redline);
     cadaddy_engine::cmd::file::set_print(cadaddy_engine::cmd::file::PrintHooks { list: printing::list, print: printing::print });
     // .cdy saves append only what changed to the file a drawing was saved to or read from.
     cadaddy_engine::cmd::file::set_cdy_hooks(cadaddy_engine::cmd::file::CdyHooks {
@@ -306,6 +307,43 @@ fn control_flag(current: Option<u16>, value: Option<String>) -> Option<u16> {
         None => log::warn!("--control: no port given; the control channel is off"),
     }
     current
+}
+
+/// Open a PDF in Redline (AICodeForge's free PDF editor) when it is installed: `Ok(false)` when it
+/// isn't (SEND TO REDLINE then just saves the PDF).
+fn open_in_redline(path: &str) -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        // By its bundle identifier: fails (without opening anything else) when it isn't installed.
+        let ok = std::process::Command::new("open")
+            .args(["-b", "dev.aicodeforge.redline", path])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_err(|e| e.to_string())?
+            .success();
+        Ok(ok)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Where its installer puts it for the current user.
+        let Some(exe) = std::env::var_os("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("Programs").join("Redline").join("Redline.exe"))
+        else {
+            return Ok(false);
+        };
+        if !exe.is_file() {
+            return Ok(false);
+        }
+        std::process::Command::new(exe).arg(path).spawn().map(|_| true).map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        match std::process::Command::new("redline").arg(path).spawn() {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e.to_string()),
+        }
+    }
 }
 
 fn main() -> eframe::Result {
