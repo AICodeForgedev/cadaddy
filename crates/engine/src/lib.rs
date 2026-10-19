@@ -14,6 +14,7 @@ pub mod autosave;
 pub mod blockedit;
 pub mod cmd;
 pub mod doc_path;
+pub mod events;
 pub mod fields;
 mod finite;
 pub mod grip_dims;
@@ -974,6 +975,8 @@ pub struct Session {
     lisp_last: Option<std::result::Result<lisp::value::Value, String>>,
     /// What the last HATCHPICK kept (the Hatch and Gradient dialog's picks).
     pub hatch_picks: Option<cmd::hatch::HatchPicks>,
+    /// What happened, for agents watching (`events.subscribe` / `events.poll`).
+    pub events: events::EventLog,
 }
 
 impl Default for Session {
@@ -1036,6 +1039,7 @@ impl Session {
             lisp: lisp::LispState::default(),
             lisp_last: None,
             hatch_picks: None,
+            events: events::EventLog::default(),
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {
@@ -1197,6 +1201,10 @@ impl Session {
         if outer && r.is_ok() {
             self.journal.call(id, params);
         }
+        // Events reads (and subscribing) aren't news themselves.
+        if outer && !id.starts_with("events.") {
+            self.event("command.run", serde_json::json!({ "command": id, "ok": r.is_ok() }));
+        }
         r
     }
 
@@ -1273,6 +1281,10 @@ impl Session {
         if outer && self.running.is_none() {
             // Done at once (or refused): nothing more of it to cancel.
             self.journal.ended(r.is_ok());
+        }
+        if outer && r.is_ok() {
+            let id = self.running.as_ref().map_or_else(|| name.trim().to_ascii_lowercase(), |run| run.id.clone());
+            self.event("command.started", serde_json::json!({ "command": id, "running": self.running.is_some() }));
         }
         r
     }
@@ -1673,6 +1685,7 @@ impl Session {
     }
 
     fn finish(&mut self, run: Running, cancelled: bool) {
+        self.event("command.ended", serde_json::json!({ "command": run.id, "cancelled": cancelled }));
         // A typed selection mode or SIngle never outlives its command.
         self.select_mode = None;
         self.select_single = false;

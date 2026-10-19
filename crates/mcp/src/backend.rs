@@ -231,6 +231,12 @@ const HEADLESS_METHODS: &[(&str, &str, &str)] = &[
         "Current prompt (text and bare message), keywords, default, accepted input kinds, busy (a drawing still opening), closePrompt and history tail.",
     ),
     ("engine.execute", "{command, params}", "Run any command with JSON parameters. Never opens a dialog."),
+    ("events.subscribe", "{on?}", "Start (or stop) recording events for events.poll."),
+    (
+        "events.poll",
+        "{since?}",
+        "Events after `since`: drawing changed (handles), selection, commands, prompt, documents, dialogs; `next` is the next since.",
+    ),
     (
         "engine.commands",
         "{filter?}",
@@ -288,6 +294,8 @@ impl Backend for Headless {
                 let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
                 s.execute(&id, &params).map_err(|e| e.to_string())
             }
+            "events.subscribe" => Ok(s.events_subscribe(p.get("on").and_then(Value::as_bool).unwrap_or(true))),
+            "events.poll" => Ok(s.events_poll(p.get("since").and_then(Value::as_u64).unwrap_or(0))),
             "cmdline.input" => {
                 let before = s.log.len();
                 let r = s.cmdline(&str_p("text").unwrap_or_default());

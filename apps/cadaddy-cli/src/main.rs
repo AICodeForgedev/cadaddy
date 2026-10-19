@@ -772,19 +772,88 @@ fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
     }
 }
 
+/// Standard output shared by the MCP server and the event watcher: what one writes is held until
+/// it flushes, then written whole under the lock, so their lines never interleave.
+#[derive(Clone)]
+struct SharedOut {
+    out: std::sync::Arc<std::sync::Mutex<std::io::Stdout>>,
+    buf: Vec<u8>,
+}
+
+impl std::io::Write for SharedOut {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.buf.extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.buf.is_empty() {
+            return Ok(());
+        }
+        let mut out = self.out.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        out.write_all(&self.buf)?;
+        self.buf.clear();
+        out.flush()
+    }
+}
+
+/// How often the event watcher asks the app for events.
+const EVENT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Send the app's events (once the client subscribed with `watch_events`) as they happen, read on
+/// a connection of its own.
+fn watch_events(addr: String, mut out: SharedOut) {
+    let _ = std::thread::Builder::new().name("mcp-events".into()).spawn(move || {
+        use std::io::Write;
+        let mut since = 0u64;
+        let mut conn: Option<cadaddy_mcp::Remote> = None;
+        loop {
+            std::thread::sleep(EVENT_POLL);
+            if conn.is_none() {
+                conn = cadaddy_mcp::Remote::connect(&addr).ok();
+            }
+            let Some(c) = conn.as_mut() else { continue };
+            let (lines, next) = cadaddy_mcp::event_notifications(c, since);
+            if next < since {
+                // The app restarted or unsubscribed: start over.
+                since = 0;
+                continue;
+            }
+            since = next;
+            for l in lines {
+                let _ = out.write_all(l.as_bytes()).and_then(|()| out.write_all(b"\n"));
+            }
+            if out.flush().is_err() {
+                return;
+            }
+        }
+    });
+}
+
 fn mcp(args: &[String]) -> Result<(), String> {
+    let mut watch: Option<String> = None;
     let backend: Box<dyn cadaddy_mcp::Backend> = match parse_mcp_args(args)? {
-        McpTarget::Connect { addr, lazy: true, launch } => Box::new(cadaddy_mcp::Remote::lazy(&addr, launch)),
+        McpTarget::Connect { addr, lazy: true, launch } => {
+            watch = Some(addr.clone());
+            Box::new(cadaddy_mcp::Remote::lazy(&addr, launch))
+        }
         McpTarget::Connect { addr, .. } => match cadaddy_mcp::Remote::connect(&addr) {
-            Ok(r) => Box::new(r),
+            Ok(r) => {
+                watch = Some(addr.clone());
+                Box::new(r)
+            }
             Err(e) => return Err(format!("cadaddy-cli: cannot connect to {addr}: {e}")),
         },
         McpTarget::Headless => Box::new(cadaddy_mcp::Headless::default()),
         McpTarget::Auto => Box::new(cadaddy_mcp::Auto::default()),
     };
     let stdin = std::io::stdin();
-    let stdout = std::io::stdout();
-    cadaddy_mcp::Server::new(backend).serve(stdin.lock(), stdout.lock()).map_err(|e| e.to_string())
+    let out = SharedOut { out: std::sync::Arc::new(std::sync::Mutex::new(std::io::stdout())), buf: Vec::new() };
+    let mut server = cadaddy_mcp::Server::new(backend);
+    if let Some(addr) = watch {
+        watch_events(addr, out.clone());
+        server = server.with_event_watcher();
+    }
+    server.serve(stdin.lock(), out).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

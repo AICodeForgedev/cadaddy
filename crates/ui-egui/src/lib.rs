@@ -454,6 +454,8 @@ pub struct CadApp {
     pub bedit: bedit::State,
     /// Walk mode, while it is open: the drawing in 3D in place of the canvas ([`walk`]).
     pub walk: Option<walk::Walk>,
+    /// The dialog open at the last frame (for `dialog.opened` events).
+    last_dialog: Option<String>,
     /// Drawings opened from walkthrough packages that Walk has been opened on (once each).
     pub walked: std::collections::BTreeSet<u64>,
     /// What the last DWG/DXF save didn't keep, while its notice is open ([`exchangeloss`]).
@@ -533,6 +535,7 @@ impl CadApp {
             layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
+            last_dialog: None,
             walked: std::collections::BTreeSet::new(),
             exchange_notice: None,
             torn: Vec::new(),
@@ -1153,6 +1156,13 @@ impl CadApp {
         }
         if let Some(url) = self.pending_url.take() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+        }
+        // An agent watching hears of dialogs opened.
+        if self.session.events.on && self.ui.dialog != self.last_dialog {
+            if let Some(d) = self.ui.dialog.clone() {
+                self.session.event("dialog.opened", json!({ "dialog": d }));
+            }
+            self.last_dialog = self.ui.dialog.clone();
         }
         control::observe_drawn(ui.ctx());
         self.frame_ms = now_ms() - t0;

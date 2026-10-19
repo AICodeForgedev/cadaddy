@@ -291,6 +291,12 @@ const METHODS: &[(&str, &str, &str)] = &[
         "Current prompt (text and bare message), keywords, default, accepted input kinds, busy (a drawing still opening), closePrompt and history tail.",
     ),
     ("engine.execute", "{command, params}", "Run any command with JSON parameters. Never opens a dialog."),
+    ("events.subscribe", "{on?}", "Start (or stop) recording events for events.poll."),
+    (
+        "events.poll",
+        "{since?}",
+        "Events after `since`: drawing changed (handles), selection, commands, prompt, documents, dialogs; `next` is the next since.",
+    ),
     (
         "engine.commands",
         "{filter?}",
@@ -428,6 +434,8 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             let params = if params.is_null() { json!({}) } else { params };
             wrap(app.run(id, params))
         }
+        "events.subscribe" => ok(app.session.events_subscribe(p.get("on").and_then(Value::as_bool).unwrap_or(true))),
+        "events.poll" => ok(app.session.events_poll(p.get("since").and_then(Value::as_u64).unwrap_or(0))),
         "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             crate::menus::activate(app, id);

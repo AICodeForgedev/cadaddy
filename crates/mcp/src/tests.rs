@@ -485,3 +485,25 @@ fn rooms_tool_lists_gets_and_builds() {
     assert_eq!(tool(&mut s, "rooms", json!({"action": "build"}))["built"], 1);
     tool_err(&mut s, "rooms", json!({"action": "get", "name": "none"}));
 }
+
+#[test]
+fn watched_events_follow_tool_calls_as_notifications() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}));
+    assert!(s.handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+    tool(&mut s, "watch_events", json!({}));
+    let _ = s.take_notifications();
+    tool(&mut s, "execute", json!({"command": "circle", "params": {"center": [0, 0], "radius": 2}}));
+    let notes: Vec<Value> = s.take_notifications().iter().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let events: Vec<&Value> = notes.iter().filter(|n| n["method"] == "notifications/cadaddy/event").collect();
+    let kinds: Vec<&str> = events.iter().map(|n| n["params"]["type"].as_str().unwrap()).collect();
+    assert!(kinds.contains(&"command.run") && kinds.contains(&"drawing.changed"), "{kinds:?}");
+    // Not sent again after the next call.
+    tool(&mut s, "inspect_drawing", json!({"entities": false}));
+    let again: Vec<String> = s.take_notifications();
+    assert!(!again.iter().any(|l| l.contains("drawing.changed")), "{again:?}");
+    // Off: no more.
+    tool(&mut s, "watch_events", json!({"on": false}));
+    tool(&mut s, "execute", json!({"command": "circle", "params": {"center": [9, 0], "radius": 2}}));
+    assert!(!s.take_notifications().iter().any(|l| l.contains("cadaddy/event")));
+}
