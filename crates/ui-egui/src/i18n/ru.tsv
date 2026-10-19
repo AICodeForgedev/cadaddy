@@ -1,6 +1,6 @@
-# CADCraft Russian interface catalog — original translations by @pechnikov2026-star.
+# CADaddy Russian interface catalog — original translations by @pechnikov2026-star.
 # License: MIT OR Apache-2.0 (the repository LICENSE-MIT and LICENSE-APACHE).
-# Written from CADCraft's English strings; no proprietary translations were copied.
+# Written from CADaddy's English strings; no proprietary translations were copied.
 # UTF-8: context<TAB>English source<TAB>Russian translation.
 # Empty context = ordinary label; @plural = one|few|many forms with {n}.
 # Command IDs, typed keywords, technology/product names and user data stay unchanged.
@@ -3057,3 +3057,4 @@
 	Clash Navigate	Переход по коллизиям
 	Colour By Status/Level	Цвет по статусу/уровню
 	Inspect Element	Просмотреть элемент
+	Analyze Shapes	Анализ фигур
