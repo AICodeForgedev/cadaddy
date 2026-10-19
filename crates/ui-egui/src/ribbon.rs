@@ -637,6 +637,11 @@ struct Clicks {
     layer_current: Option<String>,
     layer_toggle: Option<(String, &'static str, bool)>,
     tab: Option<String>,
+    /// The active tab's buttons as drawn (rectangle, label, command), for the key tips.
+    buttons: Vec<(Rect, &'static str, &'static str)>,
+    /// The tab row's and the Quick Access buttons' rectangles (name or command).
+    tab_rects: Vec<(Rect, &'static str)>,
+    qat_rects: Vec<Rect>,
 }
 
 fn recent_variant(app: &CadApp, btn: &Btn) -> Btn {
@@ -706,6 +711,9 @@ fn large_button(app: &CadApp, ui: &mut egui::Ui, rect: Rect, btn: &Btn, clicks: 
     }
     let tip = if split { variant_label(&shown) } else { btn.label };
     icons::describe_control(ui, &resp, tip, None, false);
+    if enabled {
+        clicks.buttons.push((top, tip, shown.cmd));
+    }
     if resp.on_hover_text(crate::i18n::t(tip)).clicked() && enabled {
         clicks.cmd = Some(shown.cmd.to_string());
     }
@@ -750,6 +758,9 @@ fn small_button(app: &CadApp, ui: &mut egui::Ui, rect: Rect, btn: &Btn, fit: Fit
         btn.label
     };
     icons::describe_control(ui, &resp, tip, None, false);
+    if enabled {
+        clicks.buttons.push((main, tip, shown.cmd));
+    }
     if resp.on_hover_text(crate::i18n::t(tip)).clicked() && enabled {
         clicks.cmd = Some(shown.cmd.to_string());
     }
@@ -977,6 +988,7 @@ fn title_row(app: &mut CadApp, ui: &mut egui::Ui, row: Rect, left: f32, clicks: 
         }
         icons::paint(ui.painter(), br.shrink(3.0), *icon, false);
         icons::describe_control(ui, &resp, tip, None, false);
+        clicks.qat_rects.push(br);
         if resp.on_hover_text(crate::i18n::t(tip)).clicked() {
             clicks.cmd = Some((*cmd).to_string());
         }
@@ -1061,6 +1073,7 @@ fn tabs_and_body(app: &mut CadApp, ui: &mut egui::Ui, area: Rect, clicks: &mut C
             if on { t.accent } else { t.text },
         );
         icons::describe_control(ui, &resp, tab.name, Some(on), true);
+        clicks.tab_rects.push((tr, tab.name));
         if resp.clicked() {
             clicks.tab = Some(tab.name.to_string());
         }
@@ -1128,6 +1141,34 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, title_h: f32, content_left: f32
         }
         title_row(app, ui, row, r.left() + content_left, &mut clicks);
         tabs_and_body(app, ui, Rect::from_min_max(pos2(r.left(), row.bottom()), r.max), &mut clicks);
+        // Key tips (Alt): letters over the tabs and Quick Access buttons, then over the buttons.
+        let names: Vec<&str> = TABS.iter().map(|t| t.name).collect();
+        let qat: Vec<&str> = QAT.iter().map(|(_, c, _)| *c).collect();
+        let buttons: Vec<(&str, &str)> = clicks.buttons.iter().map(|(_, l, c)| (*l, *c)).collect();
+        let asked = crate::keytips::input(ui.ctx(), &names, &qat, &buttons);
+        match crate::keytips::level(ui.ctx()) {
+            crate::keytips::Level::Tabs => {
+                for (r, name) in &clicks.tab_rects {
+                    crate::keytips::badge(ui.painter(), *r, &crate::keytips::tab_tip(name));
+                }
+                for (i, r) in clicks.qat_rects.iter().enumerate().take(9) {
+                    crate::keytips::badge(ui.painter(), *r, &(i + 1).to_string());
+                }
+            }
+            crate::keytips::Level::Buttons => {
+                let labels: Vec<&str> = clicks.buttons.iter().map(|(_, l, _)| *l).collect();
+                for ((r, _, _), tip) in clicks.buttons.iter().zip(crate::keytips::assign(&labels)) {
+                    crate::keytips::badge(ui.painter(), *r, &tip);
+                }
+            }
+            crate::keytips::Level::Off => {}
+        }
+        if asked.tab.is_some() {
+            clicks.tab = asked.tab;
+        }
+        if asked.cmd.is_some() {
+            clicks.cmd = asked.cmd;
+        }
         if let Some(tab) = clicks.tab {
             app.ui.ribbon_tab = tab;
         }

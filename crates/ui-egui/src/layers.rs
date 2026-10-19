@@ -76,6 +76,7 @@ pub fn swatch(p: &egui::Painter, r: Rect, c: Color) {
 pub fn color_button(ui: &mut egui::Ui, id: egui::Id, current: Color, by: bool, width: f32) -> Option<Color> {
     let t = Tokens::get();
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click());
+    crate::icons::describe_control(ui, &resp, &format!("{}: {}", crate::i18n::t("Color"), crate::i18n::t(&current.name())), None, false);
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, 2.0, t.control_hover.gamma_multiply(0.5));
@@ -112,6 +113,7 @@ pub fn color_palette(ui: &mut egui::Ui, id: egui::Id, current: Color, by: bool) 
         let c = aci_rgb(i);
         ui.painter().rect_filled(r.shrink(0.5), 0.0, Color32::from_rgb(c.0, c.1, c.2));
         let sel = current == Color::Index(i);
+        crate::icons::describe_control(ui, &resp, &format!("{} {i}", crate::i18n::t("Color")), Some(sel), false);
         if sel || resp.hovered() {
             ui.painter().rect_stroke(r, 0.0, Stroke::new(if sel { 2.0 } else { 1.0 }, Color32::WHITE), egui::StrokeKind::Inside);
         }
@@ -717,6 +719,7 @@ fn row(
     let selected = st.selected.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(&name));
     // Status.
     let (sr, sresp) = ui.allocate_exact_size(vec2(22.0, 20.0), Sense::click());
+    crate::icons::describe_control(ui, &sresp, &format!("{}: {name}", crate::i18n::t("Status")), Some(current), false);
     if selected {
         ui.painter().rect_filled(sr, 2.0, t.accent.gamma_multiply(0.35));
     }
@@ -751,8 +754,7 @@ fn row(
         }
         _ => {
             let (nr, r) = ui.allocate_exact_size(vec2(150.0, 20.0), Sense::click());
-            // Painted text: name the cell for screen readers (and tests) too.
-            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &name));
+            crate::icons::describe_control(ui, &r, &name, Some(selected), false);
             if selected {
                 ui.painter().rect_filled(nr, 2.0, t.accent.gamma_multiply(0.45));
             } else if r.hovered() {
@@ -807,6 +809,7 @@ fn row(
     let lt_resp = ui
         .allocate_ui(vec2(130.0, 20.0), |ui| {
             let (r, resp) = ui.allocate_exact_size(vec2(130.0, 20.0), Sense::click());
+            crate::icons::describe_control(ui, &resp, &format!("{}: {}", crate::i18n::t("Linetype"), l.linetype), None, false);
             if resp.hovered() {
                 ui.painter().rect_filled(r, 2.0, t.control_hover.gamma_multiply(0.5));
             }
@@ -828,6 +831,7 @@ fn row(
             ui.label(RichText::new(crate::tl!("Loaded linetypes")).small().color(t.text_dim));
             for lt in linetypes.iter().filter(|x| !["bylayer", "byblock"].contains(&x.name.to_ascii_lowercase().as_str())) {
                 let (r, resp) = ui.allocate_exact_size(vec2(230.0, 20.0), Sense::click());
+                crate::icons::describe_control(ui, &resp, &lt.name, Some(lt.name.eq_ignore_ascii_case(&l.linetype)), false);
                 if resp.hovered() || lt.name.eq_ignore_ascii_case(&l.linetype) {
                     ui.painter().rect_filled(r, 2.0, t.accent.gamma_multiply(if resp.hovered() { 0.6 } else { 0.3 }));
                 }
@@ -862,6 +866,13 @@ fn row(
     let lw_resp = ui
         .allocate_ui(vec2(100.0, 20.0), |ui| {
             let (r, resp) = ui.allocate_exact_size(vec2(100.0, 20.0), Sense::click());
+            crate::icons::describe_control(
+                ui,
+                &resp,
+                &format!("{}: {}", crate::i18n::t("Lineweight"), crate::i18n::t(&l.lineweight.name())),
+                None,
+                false,
+            );
             if resp.hovered() {
                 ui.painter().rect_filled(r, 2.0, t.control_hover.gamma_multiply(0.5));
             }
@@ -885,6 +896,7 @@ fn row(
                 let opts = std::iter::once(Lineweight::Default).chain(Lineweight::STANDARD.iter().map(|v| Lineweight::Mm100(*v)));
                 for lw in opts {
                     let (r, resp) = ui.allocate_exact_size(vec2(160.0, 20.0), Sense::click());
+                    crate::icons::describe_control(ui, &resp, crate::i18n::t(&lw.name()), Some(lw == l.lineweight), false);
                     if resp.hovered() || lw == l.lineweight {
                         ui.painter().rect_filled(r, 2.0, t.accent.gamma_multiply(if resp.hovered() { 0.6 } else { 0.3 }));
                     }

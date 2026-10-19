@@ -7,6 +7,7 @@ pub mod array;
 pub(crate) mod ask;
 mod audit;
 pub(crate) mod blocks;
+pub mod bspec;
 pub(crate) mod clip_partners;
 pub mod clipboard;
 pub mod colorbook;
@@ -224,6 +225,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(lights::specs());
         v.extend(materials::specs());
         v.extend(wallgen::specs());
+        v.extend(bspec::specs());
         v.extend(imageclip::specs());
         v.extend(array::specs());
         v.extend(symbol::specs());

@@ -1351,6 +1351,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let tiles = tile_rects(app, full);
     let rect = tiles.iter().find(|(_, tile)| tile.active).map_or(full, |(r, _)| *r);
     let resp = ui.interact(full, ui.id().with("canvas"), Sense::click_and_drag());
+    crate::icons::describe_area(&resp, "Drawing area");
     let painter = ui.painter_at(rect);
     app.canvas.rect = Some(rect);
     app.session.viewport_px = (f64::from(rect.width()).max(1.0), f64::from(rect.height()).max(1.0));
@@ -2527,6 +2528,7 @@ fn viewport_controls(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect, model: boo
         return;
     }
     let sresp = ui.interact(style_r.expand(3.0), ui.id().with("vp_style_menu"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    crate::icons::describe_control(ui, &sresp, "Visual style", None, false);
     if sresp.hovered() {
         p.rect_stroke(style_r.expand(3.0), 2.0, Stroke::new(1.0, t.canvas_ink), egui::StrokeKind::Outside);
     }
@@ -2543,6 +2545,7 @@ fn viewport_controls(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect, model: boo
         let _ = app.run("vscurrent", serde_json::json!({ "style": vs.name() }));
     }
     let resp = ui.interact(view_r.expand(3.0), ui.id().with("vp_view_menu"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    crate::icons::describe_control(ui, &resp, "Viewport controls", None, false);
     if resp.hovered() {
         p.rect_stroke(view_r.expand(3.0), 2.0, Stroke::new(1.0, t.canvas_ink), egui::StrokeKind::Outside);
     }

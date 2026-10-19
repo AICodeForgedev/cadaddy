@@ -17,6 +17,7 @@ mod measure;
 mod openings;
 mod pick;
 mod rules;
+mod spec;
 mod walker;
 
 pub use derive::{DeviceInfo, LevelInfo, Owner, Part, Room, Scene, Seg, Vertex, derive, derive_set, rooms};
@@ -26,4 +27,8 @@ pub use math::{Mat4, V3};
 pub use measure::{Dim, DimKind, measure};
 pub use pick::{Hit, pick};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules};
+// A room of the building spec (`derive::Room` is a room found in the plan).
+pub use spec::{
+    BuildingSpec, Family, FamilyKind, Issue, LayerRole, Role, Room as SpecRoom, SPEC_VERSION, Site, Surfaces, WallFrom, WallType, level_at, merge,
+};
 pub use walker::Walker;

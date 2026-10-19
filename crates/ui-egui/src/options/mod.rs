@@ -129,6 +129,7 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
 #[derive(Default)]
 struct UiChanges {
     theme: Option<ThemePref>,
+    ui_scale: Option<f32>,
     animations: Option<AnimationPref>,
     language: Option<crate::i18n::Preference>,
     save_format: Option<crate::SaveFormat>,
@@ -157,8 +158,12 @@ fn color_param(key: &str, v: &Value) -> Result<Option<Color32>, String> {
 fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
     let text = || v.as_str().ok_or_else(|| format!("{key} must be text"));
     match key {
-        "theme" => c.theme = Some(ThemePref::parse(text()?).ok_or("theme must be system, light or dark")?),
+        "theme" => c.theme = Some(ThemePref::parse(text()?).ok_or("theme must be system, light, dark or high-contrast")?),
         "animations" => c.animations = Some(AnimationPref::parse(text()?).ok_or("animations must be system, on or off")?),
+        "uiScale" => {
+            let s = v.as_f64().filter(|s| (0.5..=3.0).contains(s)).ok_or("uiScale must be a number from 0.5 to 3")?;
+            c.ui_scale = Some(s as f32);
+        }
         "interfaceLanguage" => {
             c.language = Some(
                 crate::i18n::Preference::parse(text()?).ok_or_else(|| format!("interfaceLanguage must be {}", crate::i18n::Preference::codes()))?,
@@ -206,6 +211,7 @@ fn ui_json(app: &CadApp) -> Map<String, Value> {
     let o = &app.options;
     let mut m = Map::new();
     m.insert("theme".into(), json!(app.ui.theme.as_str()));
+    m.insert("uiScale".into(), json!(app.ui.ui_scale));
     m.insert("animations".into(), json!(app.ui.animations.as_str()));
     m.insert("interfaceLanguage".into(), json!(app.ui.interface_language.code()));
     m.insert("saveFormat".into(), json!(app.ui.save_format.as_str()));
@@ -251,6 +257,9 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
     }
     if let Some(t) = ui.theme {
         app.ui.theme = t;
+    }
+    if let Some(s) = ui.ui_scale {
+        app.ui.ui_scale = s;
     }
     if let Some(a) = ui.animations {
         app.ui.animations = a;
@@ -304,6 +313,7 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
 fn reset_ui(app: &mut CadApp) {
     let d = crate::UiState::default();
     app.ui.theme = d.theme;
+    app.ui.ui_scale = d.ui_scale;
     app.ui.animations = d.animations;
     app.ui.save_format = d.save_format;
     app.ui.save_version = d.save_version;

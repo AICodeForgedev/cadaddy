@@ -154,13 +154,21 @@ fn window(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                             }
                             if let Some(c) = st.color {
                                 let mut rgb = [c.0, c.1, c.2];
-                                if ui.color_edit_button_srgb(&mut rgb).changed() {
+                                let resp = ui.color_edit_button_srgb(&mut rgb);
+                                resp.widget_info(|| {
+                                    egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, true, format!("{} {}", st.name, crate::i18n::t("Color")))
+                                });
+                                if resp.changed() {
                                     action = set(&table.name, style("color", json!(cadaddy_color::Rgb(rgb[0], rgb[1], rgb[2]).hex())));
                                 }
                             }
                         });
                         let mut gray = st.grayscale;
-                        if ui.checkbox(&mut gray, "").changed() {
+                        let resp = ui.checkbox(&mut gray, "");
+                        resp.widget_info(|| {
+                            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, gray, format!("{} {}", st.name, crate::i18n::t("Grayscale")))
+                        });
+                        if resp.changed() {
                             action = set(&table.name, style("grayscale", json!(gray)));
                         }
                         let mut screen = st.screening.min(100);

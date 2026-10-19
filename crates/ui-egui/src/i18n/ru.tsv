@@ -1626,3 +1626,20 @@
 	Preparing the 3D view…	Подготовка 3D-вида…
 	Viewpoint	Точка зрения
 	3D View Benchmark	Тест производительности 3D-вида
+	Drawing area	Область рисования
+	Command line	Командная строка
+	Viewport controls	Элементы управления видовым экраном
+	Coordinate system menu	Меню системы координат
+	UCS icon X axis	Ось X знака ПСК
+	UCS icon Y axis	Ось Y знака ПСК
+	High Contrast	Высокая контрастность
+	Interface size	Размер интерфейса
+	Interface Size	Размер интерфейса
+	100%	100 %
+	125%	125 %
+	150%	150 %
+	200%	200 %
+	Building Spec	Спецификация здания
+	Set Building Spec	Задать спецификацию здания
+	Validate Building Spec	Проверить спецификацию здания
+	Build Model from Spec	Построить модель по спецификации
