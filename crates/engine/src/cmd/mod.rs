@@ -6,6 +6,7 @@ pub(crate) mod annotate;
 pub mod array;
 pub(crate) mod ask;
 mod audit;
+pub mod blockdetect;
 pub(crate) mod blocks;
 pub(crate) mod clip_partners;
 pub mod clipboard;
@@ -217,6 +218,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(hatch::specs());
         v.extend(overkill::specs());
         v.extend(blocks::specs());
+        v.extend(blockdetect::specs());
         v.extend(modify::specs());
         v.extend(draworder::specs());
         v.extend(hyperlink::specs());
