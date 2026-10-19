@@ -1745,3 +1745,7 @@
 	Issues ({n})	問題 ({n})
 	The drawing changed since; check again.	その後図面が変更されました。もう一度チェックしてください。
 	No issues found.	問題は見つかりませんでした。
+	Draft Building Spec	建物仕様を下書き
+	Draft from Plan	図面から下書き
+	Read the plan's layers, walls, doors, rooms and notes; guesses are marked.	図面の画層、壁、ドア、部屋、注記を読み取ります。推測には印が付きます。
+	guess	推測
