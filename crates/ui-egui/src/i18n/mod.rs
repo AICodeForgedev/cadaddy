@@ -258,7 +258,66 @@ pub fn tr<'a>(language: &str, source: &'a str) -> &'a str {
 }
 
 pub fn t(source: &str) -> &str {
-    CURRENT.with(|l| tr(l.get(), source))
+    CURRENT.with(|l| shown(tr(l.get(), source)))
+}
+
+/// Languages written right to left: their interface is mirrored ([`crate::rtl`]).
+pub fn is_rtl(language: &str) -> bool {
+    language == "ar"
+}
+
+/// The interface language being drawn is right-to-left.
+pub fn rtl() -> bool {
+    CURRENT.with(|l| is_rtl(l.get()))
+}
+
+/// Right-to-left text in display order for a left-to-right text layout (egui's): Arabic letters
+/// in their joined forms, each line's runs in visual order with brackets mirrored, the line read
+/// as right-to-left. Text with no right-to-left letters comes back as it is.
+pub fn rtl_display(s: &str) -> String {
+    if !cadaddy_fonts::bidi::has_rtl(s) {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() + 8);
+    for (i, line) in s.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let logical: Vec<char> = line.chars().collect();
+        let joined: Vec<char> = cadaddy_fonts::bidi::presentation_forms(&logical, |_| true).into_iter().map(|(c, _)| c).collect();
+        for (r, rtl) in cadaddy_fonts::bidi::visual_runs(&joined, Some(true)) {
+            let run = joined.get(r).unwrap_or_default();
+            if rtl {
+                out.extend(run.iter().rev().map(|c| cadaddy_fonts::bidi::mirror(*c)));
+            } else {
+                out.extend(run.iter());
+            }
+        }
+    }
+    out
+}
+
+/// Most distinct right-to-left texts kept in display order (the catalogs hold a few thousand).
+const MAX_SHOWN: usize = 20_000;
+
+/// `text` as drawn: in a right-to-left interface its display order ([`rtl_display`]), made once
+/// per text and kept.
+fn shown(text: &str) -> &str {
+    if !rtl() || !cadaddy_fonts::bidi::has_rtl(text) {
+        return text;
+    }
+    static SHOWN: std::sync::Mutex<Option<HashMap<String, &'static str>>> = std::sync::Mutex::new(None);
+    let mut cache = SHOWN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let map = cache.get_or_insert_with(HashMap::new);
+    if let Some(s) = map.get(text) {
+        return s;
+    }
+    if map.len() >= MAX_SHOWN {
+        return text;
+    }
+    let s: &'static str = Box::leak(rtl_display(text).into_boxed_str());
+    map.insert(text.to_string(), s);
+    s
 }
 
 /// Text the engine wrote (a prompt, a command-line message, an error) in the interface language:
@@ -269,7 +328,8 @@ pub fn t_engine(source: &str) -> std::borrow::Cow<'_, str> {
     if ui != source {
         return std::borrow::Cow::Borrowed(ui);
     }
-    CURRENT.with(|l| cadaddy_engine::i18n::tr(l.get(), source))
+    let text = CURRENT.with(|l| cadaddy_engine::i18n::tr(l.get(), source));
+    if rtl() && cadaddy_fonts::bidi::has_rtl(&text) { std::borrow::Cow::Owned(rtl_display(&text)) } else { text }
 }
 
 /// Menu headings can differ from command or object labels (e.g. Czech Kótování / Kóta).
@@ -279,13 +339,14 @@ pub fn tr_menu<'a>(language: &str, source: &'a str) -> &'a str {
 }
 
 pub fn menu(source: &str) -> &str {
-    CURRENT.with(|l| tr_menu(l.get(), source))
+    CURRENT.with(|l| shown(tr_menu(l.get(), source)))
 }
 
 /// Named placeholders allow translations to reorder values. Inserted values are never looked up
 /// or substituted again, so a user's name containing `{n}` is preserved verbatim.
 pub fn format(source: &str, values: &[(&str, String)]) -> String {
-    let text = t(source);
+    // The values go into the logical text; the whole is put in display order after.
+    let text = CURRENT.with(|l| tr(l.get(), source));
     let mut result = String::with_capacity(text.len());
     let mut rest = text;
     while let Some((before, tail)) = rest.split_once('{') {
@@ -305,7 +366,7 @@ pub fn format(source: &str, values: &[(&str, String)]) -> String {
         rest = after;
     }
     result.push_str(rest);
-    result
+    if rtl() { rtl_display(&result) } else { result }
 }
 
 /// Ukrainian integer plurals: one (1, 21), few (2–4, 22–24), many (0, 5–20, 25…).

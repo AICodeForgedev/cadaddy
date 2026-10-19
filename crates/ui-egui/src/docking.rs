@@ -79,6 +79,22 @@ fn split(axis: SplitAxis, size: SplitSize, first: Node<Panel>, second: Node<Pane
     Node::Split { axis, size, first: Box::new(first), second: Box::new(second) }
 }
 
+/// `n` mirrored left to right: every side-by-side split swaps its sides and keeps each side's size.
+fn mirror(n: Node<Panel>) -> Node<Panel> {
+    match n {
+        Node::Split { axis: SplitAxis::Horizontal, size, first, second } => {
+            let size = match size {
+                SplitSize::Ratio(r) => SplitSize::Ratio(1.0 - r),
+                SplitSize::FixedFirst(v) => SplitSize::FixedSecond(v),
+                SplitSize::FixedSecond(v) => SplitSize::FixedFirst(v),
+            };
+            Node::Split { axis: SplitAxis::Horizontal, size, first: Box::new(mirror(*second)), second: Box::new(mirror(*first)) }
+        }
+        Node::Split { axis, size, first, second } => Node::Split { axis, size, first: Box::new(mirror(*first)), second: Box::new(mirror(*second)) },
+        other => other,
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Workspace {
@@ -141,6 +157,14 @@ impl Default for Workspace {
 }
 
 impl Workspace {
+    /// The layout mirrored for a right-to-left interface (and back): palettes docked on the right
+    /// go to the left and the other way round, with their sizes.
+    pub fn mirrored(&self) -> Workspace {
+        let mut w = self.clone();
+        w.layout.root = w.layout.root.take().map(mirror);
+        w
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         self.layout.validate().map_err(|error| error.to_string())?;
         let mut own = std::collections::HashSet::new();

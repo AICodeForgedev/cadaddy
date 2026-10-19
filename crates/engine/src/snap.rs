@@ -174,6 +174,29 @@ pub fn osnap_object(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osm
         .map(|(m, p)| SnapHit { point: p, mode: m, name: name_of(m), viewport: None, deferred: None })
 }
 
+/// Every object snap point under the aperture — each mode's every hit, not only the closest of
+/// each — best first (as [`osnap`] ranks them), each point and mode once. Tab cycles them.
+pub fn osnap_all(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osmode: u32) -> Vec<SnapHit> {
+    const MAX: usize = 64;
+    if osmode == 0 || osmode & mode::OFF != 0 || !cursor.is_finite() || !(aperture.is_finite() && aperture > 0.0) {
+        return Vec::new();
+    }
+    let ix = crate::spatial::index(d, space);
+    let Some((cands, _)) = gather_in(d, space, &ix, cursor, aperture, osmode, &[]) else { return Vec::new() };
+    let mut hits: Vec<(u32, Vec2)> = cands.into_iter().filter(|(m, p)| p.is_finite() && osmode & m != 0 && p.dist(cursor) <= aperture).collect();
+    hits.sort_by(|a, b| snap_score(a.0, a.1, cursor, aperture).total_cmp(&snap_score(b.0, b.1, cursor, aperture)));
+    let mut out: Vec<SnapHit> = Vec::new();
+    for (m, p) in hits {
+        if out.len() >= MAX {
+            break;
+        }
+        if !out.iter().any(|h| h.mode == m && h.point.near(p, aperture * 1e-6)) {
+            out.push(SnapHit { point: p, mode: m, name: name_of(m), viewport: None, deferred: None });
+        }
+    }
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn osnap_with(
     d: &Drawing,

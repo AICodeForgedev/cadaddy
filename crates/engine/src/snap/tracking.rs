@@ -321,6 +321,10 @@ pub struct Track {
     /// object's extension.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub object: Option<&'static str>,
+    /// Other acquired points' paths that pass through the point too (shown with it; the cursor
+    /// still slides on `paths`).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub also: Vec<Path>,
 }
 
 impl Track {
@@ -480,7 +484,21 @@ impl Tracker {
         cfg: &TrackConfig,
         base: Option<Vec2>,
     ) -> Option<Track> {
-        let t = self.find(d, space, cursor, aperture, tol, cfg, base);
+        let mut t = self.find(d, space, cursor, aperture, tol, cfg, base);
+        // Every other acquired point whose path passes through the point shows its path too.
+        if let Some(tr) = t.as_mut() {
+            let froms: Vec<Vec2> = tr.paths.iter().map(|p| p.from).collect();
+            for p in self.paths(cfg, base) {
+                if tr.also.len() >= 8 {
+                    break;
+                }
+                let through = p.shape.foot(tr.point).is_some_and(|f| f.dist(tr.point) <= tol);
+                let new_source = !froms.iter().chain(tr.also.iter().map(|a| &a.from)).any(|f| f.dist(p.from) <= cadaddy_geom::EPS);
+                if through && new_source && p.from.dist(tr.point) > tol && p.kind != PathKind::Polar {
+                    tr.also.push(p);
+                }
+            }
+        }
         self.last = t.clone();
         t
     }
@@ -523,7 +541,7 @@ impl Tracker {
                             let dd = x.dist(cursor);
                             if dd <= aperture && a.shape.holds(&sa, x) && b.shape.holds(&sb, x) {
                                 let object = (a.kind == PathKind::Apparent && b.kind == PathKind::Apparent).then_some("Apparent Intersection");
-                                offer(dd, Track { point: x, paths: vec![*a, *b], object }, &mut best);
+                                offer(dd, Track { point: x, paths: vec![*a, *b], object, also: Vec::new() }, &mut best);
                             }
                         }
                     }
@@ -557,7 +575,7 @@ impl Tracker {
                                 continue;
                             }
                             let object = if apparent { "Apparent Intersection" } else { "Intersection" };
-                            offer(dd, Track { point: x, paths: vec![*p], object: Some(object) }, &mut best);
+                            offer(dd, Track { point: x, paths: vec![*p], object: Some(object), also: Vec::new() }, &mut best);
                         }
                     }
                 }
@@ -571,6 +589,7 @@ impl Tracker {
             point: *f,
             paths: vec![*p],
             object: None,
+            also: Vec::new(),
         })
     }
 }

@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
             .noundo(),
         CommandSpec::new("model.build", "Build Model from Spec", run_build).params(
-            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, roofs, parapets, crickets, equipment, facadeGlass, levels, removed, notes, warnings}",
+            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, levels, removed, notes, warnings}",
         ),
     ]
 }
@@ -443,6 +443,9 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     let (stairs, ramps, railings) = super::stairs::build(d, &sp);
     // The outside: roofs, parapets, crickets, rooftop equipment, facade glass and materials.
     let outside = super::exterior::build(d, &sp);
+    // The reflected ceiling plans' ceilings (replacing the level's and rooms'), grids, soffits,
+    // lights and diffusers.
+    let rcp = super::ceilings::build(d, &sp);
     // Materials: the room's for its ceiling, else the building's for the part.
     let made: Vec<(Handle, String)> = d.model.iter().filter_map(|e| wallgen::made_as(e).map(|p| (e.handle, p))).collect();
     for (h, part) in made {
@@ -464,7 +467,9 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     if let Some(n) = r["notes"].as_array_mut() {
         n.extend(notes.into_iter().map(Value::from));
     }
-    r["ceilings"] = json!(ceilings_now);
+    // RCP ceilings replace those of their levels.
+    let replaced = rcp["replacedCeilings"].as_u64().unwrap_or(0);
+    r["ceilings"] = json!(ceilings_now.saturating_sub(replaced) + rcp["rcpCeilings"].as_u64().unwrap_or(0));
     r["rooms"] = json!(rooms.len());
     r["columns"] = json!(columns);
     r["curtainWalls"] = json!(curtain);
@@ -473,6 +478,9 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     r["ramps"] = json!(ramps);
     r["railings"] = json!(railings);
     if let (Some(o), Some(x)) = (r.as_object_mut(), outside.as_object()) {
+        o.extend(x.clone());
+    }
+    if let (Some(o), Some(x)) = (r.as_object_mut(), rcp.as_object()) {
         o.extend(x.clone());
     }
     r["removed"] = json!(removed);
