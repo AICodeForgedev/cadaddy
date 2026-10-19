@@ -1,4 +1,4 @@
-//! Modify menu depth (M2): PEDIT, LENGTHEN, ALIGN, BLEND, REVERSE, SPLINEDIT, NCOPY, CHSPACE,
+//! Modify menu depth (M2): PEDIT, LENGTHEN, ALIGN, BLEND, REVERSE, SPLINEDIT, NCOPY, MOCORO, CHSPACE,
 //! FLATTEN, plus the fillet/trim/extend extensions used by modify.rs (arcs, polylines,
 //! ellipses and splines).
 
@@ -16,6 +16,7 @@ use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, St
 
 mod curve_edits;
 mod fillet_pline;
+mod mocoro;
 pub(crate) use curve_edits::{closed_kind, join_close, join_curves};
 pub(crate) use fillet_pline::{ChamferDistances, fillet_pline};
 
@@ -61,6 +62,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Modify", "Copy Nested Objects"])
             .params("{handle (block reference), pick?: [x,y] (nearest nested object; default all), delta? | from,to}")
             .interactive(|_| Ok(Box::new(NcopyM::default()))),
+        CommandSpec::new("mocoro", "Move/Copy/Rotate", mocoro::run_mocoro)
+            .menu(&["Tools", "Express Tools", "Move/Copy/Rotate"])
+            .params("{handles?, base: [x,y], ops: [{move: [x,y]} | {copy: [x,y]} | {rotate: degrees} | {scale: factor} | {base: [x,y]}]} → {handles (copies)}")
+            .interactive(|_| Ok(Box::new(mocoro::MocoroM::default()))),
         CommandSpec::new("chspace", "Change Space", run_chspace)
             .menu(&["Modify", "Change Space"])
             .params("{handles?, to?: \"model\" | layout name, viewport?: handle}")
