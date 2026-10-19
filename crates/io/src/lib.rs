@@ -2,8 +2,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-/// What a DXF file holds that CADaddy doesn't model, kept and written back (#528).
 mod dxf_raw;
+/// What a DXF file holds that CADaddy doesn't model, kept and written back (#528).
+pub mod mesh3d_io;
 
 mod dxf_ext;
 mod dxf_image;
@@ -82,6 +83,9 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
             Ok(d)
         }
         "dxf" | "" => dxf_read::read(bytes),
+        "obj" => mesh3d_io::read_obj(bytes, name),
+        "stl" => mesh3d_io::read_stl(bytes),
+        "glb" | "gltf" => mesh3d_io::read_gltf(bytes, name),
         e if bytes.len() > 4 => dxf_read::read(bytes).map_err(|_| IoError::Unsupported(e.to_string())),
         e => Err(IoError::Unsupported(e.to_string())),
     }
@@ -115,6 +119,19 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
             cadaddy_dwg::dxf_to_dwg_as(dxf_write::dwg_bridge(d, version).as_bytes(), version.code()).map_err(IoError::Format)
         }
         e if opts.binary => Err(IoError::Format(format!("binary output is for DXF files, not `{e}`"))),
+        "bundle" if name.to_ascii_lowercase().ends_with(".obj.bundle") => {
+            let stem = name.get(..name.len() - ".obj.bundle".len()).unwrap_or("export");
+            let stem = std::path::Path::new(stem).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "export".into());
+            Ok(mesh3d_io::obj_bundle(d, &stem))
+        }
+        "glb" => Ok(mesh3d_io::write_glb(d)),
+        "gltf" => Ok(mesh3d_io::write_gltf(d)),
+        "stl" => Ok(mesh3d_io::write_stl(d)),
+        // The OBJ text; its MTL and textures come from `mesh3d_io::write_obj`.
+        "obj" => {
+            let stem = std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "export".into());
+            Ok(mesh3d_io::write_obj(d, &format!("{stem}.mtl")).obj.into_bytes())
+        }
         _ => write_framed(d, name, None),
     }
 }
@@ -134,7 +151,7 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
         check_window(w)?;
     }
     match ext(name).as_str() {
-        "dxf" | "" | "dwg" => write_with(d, name, &SaveOptions::default()),
+        "dxf" | "" | "dwg" | "glb" | "gltf" | "stl" | "obj" | "bundle" => write_with(d, name, &SaveOptions::default()),
         "svg" => Ok(svg::export_window(d, &Space::Model, window).into_bytes()),
         "png" => png_framed(d, &Space::Model, 2400, 1600, window),
         "pdf" => pdf::pdf(d, &Space::Model, &PdfOptions { compress: true, window, ..PdfOptions::default() }),

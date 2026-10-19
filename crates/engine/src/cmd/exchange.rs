@@ -22,7 +22,7 @@ use super::*;
 use crate::{EngineError, Result, Session};
 
 /// Formats EXPORT writes (the io layer picks the writer from the extension).
-pub const EXPORT_FORMATS: &[&str] = &["dxf", "dwg", "svg", "png", "pdf"];
+pub const EXPORT_FORMATS: &[&str] = &["dxf", "dwg", "svg", "png", "pdf", "glb", "gltf", "obj", "stl"];
 /// Default and largest plot preview width, in pixels.
 const PREVIEW_PX: u64 = 1200;
 const MAX_PREVIEW_PX: u64 = 4096;
@@ -37,11 +37,17 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("import", "Import...", run_import)
             .menu(&["File", "Import..."])
             .alias(&["imp"])
-            .params("{path | data: base64, name?: \"x.dwg\"} (DXF or DWG), at?: [x,y] (default 0,0), scale?: (default 1) → {imported, handles, layers, styles, blocks}"),
+            .params("{path | data: base64, name?: \"x.dwg\"} (DXF, DWG, OBJ, STL, glTF/GLB), at?: [x,y] (default 0,0), scale?: (default 1) → {imported, handles, layers, styles, blocks, materials}"),
+        CommandSpec::new("stlout", "STL Out", run_stlout)
+            .menu(&["File", "Export STL..."])
+            .params("{handles?, path? (else returns base64 `data`)} → binary STL of the selected objects' surfaces (Z up, drawing units)")
+            .noundo()
+            .interactive(|_| Ok(Box::new(super::machines::SelectRun::new("stlout.pick", "STLOUT")))),
+        CommandSpec::new("stlout.pick", "STL Out", run_stlout_picked).noundo(),
         CommandSpec::new("export", "Export...", run_export)
             .menu(&["File", "Export..."])
             .alias(&["exp"])
-            .params("{path? (else returns base64 `data`), format?: dxf|dwg|svg|png|pdf (default: the path's extension)} → {format, bytes, path? | data}")
+            .params("{path? (else returns base64 `data`), format?: dxf|dwg|svg|png|pdf|glb|gltf|obj|stl (default: the path's extension)} → {format, bytes, path? | data} (OBJ writes its .mtl and textures beside it)")
             .noundo(),
         CommandSpec::new("preview", "Plot Preview", run_preview)
             .menu(&["File", "Plot Preview"])
@@ -180,9 +186,24 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         None => path.map(extension).unwrap_or_default(),
     };
     if !EXPORT_FORMATS.contains(&format.as_str()) {
-        return Err(bad("export", "`format` must be dxf, dwg, svg, png or pdf (or give a `path` with one of those extensions)"));
+        return Err(bad("export", "`format` must be dxf, dwg, svg, png, pdf, glb, gltf, obj or stl (or give a `path` with one of those extensions)"));
     }
     // A PNG of model space shown in 3D or in a visual style: the shaded view, fitted.
+    // OBJ: the OBJ, its MTL and textures, written side by side.
+    if format == "obj"
+        && let Some(path) = path
+    {
+        let stem = std::path::Path::new(path).file_stem().map(|x| x.to_string_lossy().into_owned()).unwrap_or_else(|| "export".into());
+        let bundle = (hooks.write)(s.doc()?, &format!("{stem}.obj.bundle")).map_err(|e| bad("export", e))?;
+        let dir = std::path::Path::new(path).parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+        let mut files = Vec::new();
+        for (i, (name, data)) in unbundle(&bundle).into_iter().enumerate() {
+            let target = if i == 0 { path.to_string() } else { dir.join(&name).to_string_lossy().into_owned() };
+            write_file("export", &target, &data)?;
+            files.push(target);
+        }
+        return Ok(json!({ "path": path, "format": format, "files": files, "message": format!("Exported to {path}") }));
+    }
     let shaded = if format == "png" { super::view::view3d::shaded_png(s, 2400, 1600) } else { None };
     let bytes = match shaded {
         Some(b) => b,
@@ -195,6 +216,66 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         }
         None => Ok(json!({ "data": base64_encode(&bytes), "format": format, "bytes": bytes.len() })),
     }
+}
+
+/// The files of an OBJ bundle (see `io::mesh3d_io::obj_bundle`): names without folders.
+fn unbundle(b: &[u8]) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    let u32_at = |o: usize| b.get(o..o + 4).map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]) as usize);
+    while let Some(nl) = u32_at(at) {
+        let Some(name) = b.get(at + 4..at + 4 + nl).map(|n| String::from_utf8_lossy(n).into_owned()) else { break };
+        let Some(dl) = u32_at(at + 4 + nl) else { break };
+        let Some(data) = b.get(at + 8 + nl..at + 8 + nl + dl) else { break };
+        let name = std::path::Path::new(&name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if !name.is_empty() {
+            out.push((name, data.to_vec()));
+        }
+        at += 8 + nl + dl;
+    }
+    out
+}
+
+// ---------- STLOUT ----------
+
+fn run_stlout(s: &mut Session, p: &Value) -> Result<Value> {
+    let hooks = io().ok_or_else(|| bad("stlout", "file formats are not available in this build"))?;
+    let hs = super::targets(s, p)?;
+    let d = s.doc()?;
+    let mut only = d.clone();
+    let mut store = cadaddy_doc::EntityStore::new();
+    for h in &hs {
+        if let Some(e) = d.entity(*h) {
+            store.push((**e).clone());
+        }
+    }
+    if store.iter().next().is_none() {
+        return Err(bad("stlout", "select the objects to write"));
+    }
+    only.model = store;
+    let bytes = (hooks.write)(&only, "stlout.stl").map_err(|e| bad("stlout", e))?;
+    // 84 header bytes and nothing after: no surfaces among them.
+    if bytes.len() <= 84 {
+        return Err(bad("stlout", "the selected objects have no surfaces (3D solids, meshes, 3D faces)"));
+    }
+    match str_param(p, "path") {
+        Some(path) => {
+            write_file("stlout", path, &bytes)?;
+            Ok(json!({ "path": path, "bytes": bytes.len(), "triangles": (bytes.len() - 84) / 50, "message": format!("Exported to {path}") }))
+        }
+        None => Ok(json!({ "data": base64_encode(&bytes), "bytes": bytes.len(), "triangles": (bytes.len() - 84) / 50 })),
+    }
+}
+
+/// STLOUT at the prompts: the picked objects into a file named after the drawing.
+fn run_stlout_picked(s: &mut Session, p: &Value) -> Result<Value> {
+    let base = s.state()?.path.clone().unwrap_or_else(|| s.state().map(|st| st.title.clone()).unwrap_or_default());
+    let path = std::path::Path::new(&base).with_extension("stl").to_string_lossy().into_owned();
+    let mut q = p.clone();
+    if let Some(o) = q.as_object_mut() {
+        o.insert("path".into(), json!(path));
+    }
+    run_stlout(s, &q)
 }
 
 // ---------- IMPORT ----------
@@ -280,6 +361,14 @@ fn import_drawing(s: &mut Session, src: &Drawing, at: Vec2, scale: f64, file: &s
     let space = s.space();
     let d = s.doc_mut()?;
     let (layers, styles) = merge_tables(d, src);
+    // Materials the objects use that the drawing doesn't have yet.
+    let mut materials = 0usize;
+    for m in &src.materials {
+        if !d.materials.iter().any(|x| x.name.eq_ignore_ascii_case(&m.name)) {
+            d.materials.push(m.clone());
+            materials += 1;
+        }
+    }
     let renames = block_names(d, src);
     for (from, to) in &renames {
         let Some(b) = src.blocks.get(from) else { continue };
@@ -309,6 +398,7 @@ fn import_drawing(s: &mut Session, src: &Drawing, at: Vec2, scale: f64, file: &s
         "imported": handles.len(),
         "handles": handles.iter().map(|h| h.hex()).collect::<Vec<_>>(),
         "layers": layers,
+        "materials": materials,
         "styles": styles,
         "blocks": renames.len(),
         "message": format!("{} objects imported from {file}", handles.len()),
