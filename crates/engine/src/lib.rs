@@ -1214,12 +1214,44 @@ impl Session {
             return r;
         }
         let outer = self.journal.enter();
+        // A call from outside while a command runs (an agent's `engine.execute` while the user
+        // is in TEXT): the command's work so far, the call's and the command's rest are undo
+        // steps of their own, so U never takes the call's work away with the command's.
+        let uid = if outer && self.running.is_some() { self.split_running_undo() } else { None };
         let r = self.execute_inner(id, params);
+        if let Some(uid) = uid {
+            self.rebase_running(uid);
+        }
         self.journal.leave();
         if outer && r.is_ok() {
             self.journal.call(id, params);
         }
         r
+    }
+
+    /// What the running command (or the one a transparent command interrupted) changed so far
+    /// becomes an undo step, and it goes on from here. The drawing's uid, for [`Self::rebase_running`].
+    fn split_running_undo(&mut self) -> Option<u64> {
+        let active = self.active;
+        let owner = self.suspended.as_mut().or(self.running.as_mut())?;
+        let st = self.docs.get_mut(active)?;
+        let undoable = find_command(&owner.id).is_some_and(|c| c.undoable);
+        if undoable && !Arc::ptr_eq(&owner.before, &st.doc) {
+            let label = find_command(&owner.id).map_or("Command", |c| c.label);
+            st.push_undo(Snapshot { label: label.to_string(), doc: Arc::clone(&owner.before), selection: owner.selection_before.clone(), bytes: 0 });
+            st.revision += 1;
+        }
+        owner.before = Arc::clone(&st.doc);
+        Some(st.uid)
+    }
+
+    /// After a call from outside: the running command's step starts from the drawing the call
+    /// left, so it holds only the command's own work.
+    fn rebase_running(&mut self, uid: u64) {
+        let Some(doc) = self.docs.iter().find(|d| d.uid == uid).map(|d| Arc::clone(&d.doc)) else { return };
+        for run in [self.running.as_mut(), self.suspended.as_mut()].into_iter().flatten() {
+            run.before = Arc::clone(&doc);
+        }
     }
 
     fn execute_inner(&mut self, id: &str, params: &Value) -> Result<Value> {
