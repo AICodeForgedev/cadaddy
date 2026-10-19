@@ -427,7 +427,7 @@ fn run_texts(s: &mut Session, p: &Value) -> Result<Value> {
 mod count;
 
 #[derive(Default)]
-struct DistM {
+pub(super) struct DistM {
     first: Option<Vec2>,
     first_source: Option<crate::snap::ViewportPoint>,
     /// Multiple points: the points so far, the first included.
@@ -662,7 +662,7 @@ enum AreaMode {
 }
 
 #[derive(Default)]
-struct AreaM {
+pub(super) struct AreaM {
     pts: Vec<Vec2>,
     mode: AreaMode,
     total: f64,
