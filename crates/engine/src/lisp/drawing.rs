@@ -4,7 +4,8 @@
 //! `angtof`).
 //!
 //! Entity lists use the DXF groups the file reader and writer use (through
-//! [`crate::cmd::file::entity_codec`]), so what `entget` shows is what a DXF file holds.
+//! [`crate::cmd::file::entity_codec`]), so what `entget` shows is what a DXF file holds, except
+//! for angles, which are radians in a list and degrees in a file.
 
 use std::sync::{Arc, Mutex};
 
@@ -207,6 +208,27 @@ pub fn setvar(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
 /// higher.
 fn point_group(code: i32) -> bool {
     (10..=18).contains(&code) || (110..=112).contains(&code) || code == 210 || (1010..=1013).contains(&code)
+}
+
+/// Groups 50–58 are angles: degrees in a DXF file, radians in entity lists (DXF Reference,
+/// group code value types). `f` converts each one; an MTEXT's 50 after its column type (75) is
+/// a column height.
+fn convert_angles(kind: &str, tags: &mut [Tag], f: fn(f64) -> f64) {
+    let mtext = kind.eq_ignore_ascii_case("MTEXT");
+    for t in tags {
+        if mtext && t.code == 75 {
+            break;
+        }
+        if !(50..=58).contains(&t.code) {
+            continue;
+        }
+        let v = match t.value {
+            cadaddy_dxf::Value::Real(r) => r,
+            cadaddy_dxf::Value::Int(i) => i as f64,
+            _ => continue,
+        };
+        t.value = cadaddy_dxf::Value::Real(f(v));
+    }
 }
 
 fn tag_value(t: &Tag) -> Value {
@@ -464,7 +486,8 @@ pub fn entget(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     }
     let Ok(d) = ctx.s.doc() else { return Ok(Flow::Value(Value::Nil)) };
     let Some(e) = d.entity(h) else { return Ok(Flow::Value(Value::Nil)) };
-    let (kind, tags) = (codec()?.groups)(d, e);
+    let (kind, mut tags) = (codec()?.groups)(d, e);
+    convert_angles(&kind, &mut tags, f64::to_radians);
     let layout = match space_of(d, h) {
         Some(Space::Paper(name)) => name,
         _ => "Model".into(),
@@ -493,6 +516,7 @@ pub fn entget(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
 /// The entity a list describes, as the reader makes it; a missing layer (8) is the current one.
 fn entity_from_list(ctx: &Ctx<'_>, list: &Value) -> Result<(String, cadaddy_doc::Common, cadaddy_doc::EntityKind), LispError> {
     let (kind, mut tags) = list_to_groups(list)?;
+    convert_angles(&kind, &mut tags, f64::to_degrees);
     if !tags.iter().any(|t| t.code == 8) {
         let layer = crate::sysvars::get(ctx.s, "CLAYER").and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "0".into());
         tags.insert(0, Tag::s(8, layer));
@@ -934,7 +958,8 @@ fn parse_filter_item(items: &[Value], i: &mut usize, depth: usize) -> Result<Fil
 fn matches_filter(d: &cadaddy_doc::Drawing, e: &Entity, f: &Filter) -> bool {
     let groups = || match crate::cmd::file::entity_codec() {
         Some(c) => {
-            let (kind, tags) = (c.groups)(d, e);
+            let (kind, mut tags) = (c.groups)(d, e);
+            convert_angles(&kind, &mut tags, f64::to_radians);
             let mut l = vec![Value::cons(Value::Int(0), Value::str(&kind))];
             l.extend(groups_to_list(&tags));
             l
