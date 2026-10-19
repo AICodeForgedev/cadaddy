@@ -73,6 +73,10 @@ struct Tables {
     /// (object handle, its field values) in handle order.
     #[serde(default)]
     field_values: Vec<(u64, Vec<String>)>,
+    /// Handles another program's file gave its table records and objects (`KIND/NAME`, handle),
+    /// kept for when the drawing is saved as DXF or DWG again.
+    #[serde(default)]
+    kept_handles: Vec<(String, u64)>,
 }
 
 /// The unmodelled file data, as a stable mirror of [`Foreign`] (its tuple-keyed maps as lists).
@@ -234,6 +238,7 @@ pub(super) fn tables(d: &Drawing) -> Result<Vec<u8>, String> {
         materials: value(&d.materials)?,
         sun: value(&d.sun)?,
         field_values: d.field_values.iter().map(|(h, v)| (h.0, v.clone())).collect(),
+        kept_handles: d.kept_handles.iter().map(|(k, h)| (k.clone(), *h)).collect(),
     };
     Ok(tokens::encode(&value(&tables)?))
 }
@@ -371,6 +376,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                     field!(sun, "the sun");
                 }
                 d.field_values = t.field_values.iter().map(|(h, v)| (cadaddy_doc::Handle(*h), v.clone())).collect();
+                d.kept_handles = t.kept_handles.iter().take(10_000_000).map(|(k, h)| (k.clone(), *h)).collect();
                 d.handseed = t.handseed;
                 d.hidden_saved = t.hidden_saved;
                 d.hidden_objects = t.hidden.into_iter().map(Handle).collect();
