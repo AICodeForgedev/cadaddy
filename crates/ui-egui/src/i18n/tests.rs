@@ -271,6 +271,36 @@ fn live_switch_to_brazilian_portuguese_translates_the_shell() {
     assert!(render(&mut app, &ctx).contains("Properties"));
 }
 
+#[test]
+fn the_wcs_pill_draws_its_arrow_instead_of_a_glyph_a_font_may_lack() {
+    // #1541: "WCS ⌄" showed a box where the UI font had no "⌄"; the chevron is now drawn as
+    // lines, so no catalog and no language paints the glyph.
+    for (name, catalog) in [
+        ("ar", include_str!("ar.tsv")),
+        ("cs", include_str!("cs.tsv")),
+        ("de", include_str!("de.tsv")),
+        ("es", include_str!("es.tsv")),
+        ("fr", include_str!("fr.tsv")),
+        ("it", include_str!("it.tsv")),
+        ("ko", include_str!("ko.tsv")),
+        ("pt_br", include_str!("pt_br.tsv")),
+        ("ru", include_str!("ru.tsv")),
+        ("sv", include_str!("sv.tsv")),
+        ("uk", include_str!("uk.tsv")),
+        ("zh", include_str!("zh.tsv")),
+    ] {
+        assert!(!catalog.contains('\u{2304}'), "{name}.tsv still has the \u{2304} glyph");
+    }
+    let ctx = egui::Context::default();
+    let mut app = CadApp::new(Session::new(), Services::default());
+    for (lang, label) in [("en", "WCS"), ("de", "WKS"), ("ru", "МСК")] {
+        app.run("ui.language", json!({ "lang": lang })).unwrap();
+        let text = render(&mut app, &ctx);
+        assert!(text.lines().any(|l| l == label), "{lang}: the pill reads {label}");
+        assert!(!text.contains('\u{2304}'), "{lang}: no \u{2304} glyph is painted");
+    }
+}
+
 fn painted_text(shapes: &[egui::epaint::ClippedShape]) -> String {
     fn collect(shape: &egui::Shape, text: &mut String) {
         match shape {
@@ -621,7 +651,7 @@ fn korean_representative_translations_remain_available() {
         ("", "Properties", "특성"),
         ("", "Degree", "도 기호"),
         ("", "Style: Standard", "스타일: Standard"),
-        ("", "WCS ⌄", "WCS 선택"),
+        ("", "WCS", "WCS"),
         ("@plural", "{n} contributor", "기여자 {n}명"),
         ("@plural", "{n} commit", "커밋 {n}개"),
     ] {

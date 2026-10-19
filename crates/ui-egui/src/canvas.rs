@@ -2281,10 +2281,18 @@ fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
     let (c, ring) = (l.center, l.ring);
     let p = ui.painter_at(rect);
     crate::viewcube::show(app, ui, &l);
-    // WCS pill.
+    // WCS pill: the label and a down chevron, drawn as lines rather than a "⌄" glyph that a UI
+    // font may lack (it showed as a box, #1541).
     let pill = Rect::from_center_size(c + vec2(0.0, ring + 26.0), vec2(56.0, 16.0));
     p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
-    p.text(pill.center(), egui::Align2::CENTER_CENTER, crate::tl!("WCS ⌄"), crate::theme::small(), Tokens::DARK.canvas_ink);
+    let ink = Tokens::DARK.canvas_ink;
+    let label = p.layout_no_wrap(crate::tl!("WCS").to_string(), crate::theme::small(), ink);
+    let (gap, chevron) = (4.0, 6.0);
+    let left = pill.center().x - (label.size().x + gap + chevron) / 2.0;
+    let mid = pill.center().y;
+    p.galley(pos2(left, mid - label.size().y / 2.0), label.clone(), ink);
+    let x = left + label.size().x + gap;
+    p.line(vec![pos2(x, mid - 1.5), pos2(x + chevron / 2.0, mid + 1.5), pos2(x + chevron, mid - 1.5)], Stroke::new(1.2, ink));
 }
 
 /// A click on grip `g` (idle): Shift+click makes it hot or cold again; a plain click starts
