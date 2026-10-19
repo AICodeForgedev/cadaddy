@@ -2502,3 +2502,23 @@ fn foreign_table_reads_cell_text_height_and_keeps_style_scale() {
     assert_eq!(t2.cells[0][0].text_height, Some(150.0));
     assert_eq!(t2.cells[0][1].text_height, None);
 }
+
+/// Issue #1209: a file that declares no units ($INSUNITS absent or 0) stays unitless when written
+/// again; only a new drawing takes its template's units.
+#[test]
+fn drawing_without_insunits_stays_unitless() {
+    let r12 = |extra: &str| {
+        format!(
+            "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1009\n{extra}0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDSEC\n0\nEOF\n"
+        )
+    };
+    let insunits = |text: &str| {
+        text.lines().map(str::trim).collect::<Vec<_>>().windows(3).find(|w| w[0] == "$INSUNITS" && w[1] == "70").map(|w| w[2].to_string())
+    };
+    let rewritten = |extra: &str| insunits(&write_dxf(&read_dxf(r12(extra).as_bytes()).unwrap()));
+    assert_eq!(rewritten(""), Some("0".into()), "absent");
+    assert_eq!(rewritten("9\n$INSUNITS\n70\n0\n"), Some("0".into()), "declared unitless");
+    assert_eq!(rewritten("9\n$INSUNITS\n70\n6\n"), Some("6".into()), "declared metres");
+    assert_eq!(insunits(&write_dxf(&Drawing::new_metric())), Some("4".into()));
+    assert_eq!(insunits(&write_dxf(&Drawing::new_imperial())), Some("1".into()));
+}
