@@ -629,6 +629,9 @@ impl CadApp {
             chrome::file_tabs(self, ui);
         }
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
+        if has_doc && !self.ui.show_toolsets {
+            palettes::toolsets_strip(self, ui);
+        }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             if has_doc {
                 docking::show(self, ui);
