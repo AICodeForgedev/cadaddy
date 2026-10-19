@@ -31,3 +31,19 @@ pub(crate) fn read_solid(tags: &[Tag]) -> Option<Solid3d> {
     let saved: Saved = serde_json::from_str(&json).ok()?;
     (saved.v == SOLID_V && saved.solid.is_valid()).then_some(saved.solid)
 }
+
+/// The xdata marker before a section plane's definition.
+pub(crate) const SECTION_MARK: &str = "SECTIONPLANE";
+
+/// The `1000` strings of a section plane's xdata, marker first.
+pub(crate) fn section_xdata(sp: &cadaddy_doc::SectionPlane) -> Vec<String> {
+    let Ok(json) = serde_json::to_string(sp) else { return Vec::new() };
+    std::iter::once(SECTION_MARK.to_string()).chain(crate::dxf_table::chunks(&json)).collect()
+}
+
+/// The section plane a LINE carries in its xdata, if it is one of ours and usable.
+pub(crate) fn read_section(tags: &[Tag]) -> Option<cadaddy_doc::SectionPlane> {
+    let json = crate::dxf_table::payload(tags, SECTION_MARK)?;
+    let sp: cadaddy_doc::SectionPlane = serde_json::from_str(&json).ok()?;
+    sp.is_valid().then_some(sp)
+}

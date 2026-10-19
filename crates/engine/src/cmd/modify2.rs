@@ -1597,7 +1597,7 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
         EntityKind::Face3d(f) => f.corners.iter_mut().for_each(z),
         EntityKind::Mesh(m) => m.vertices.iter_mut().for_each(z),
         // A solid keeps its shape (EXPLODE it to a mesh first to flatten that).
-        EntityKind::Region(_) | EntityKind::Solid3d(_) => {}
+        EntityKind::Region(_) | EntityKind::Solid3d(_) | EntityKind::SectionPlane(_) => {}
         EntityKind::Image(i) => {
             z(&mut i.insert);
             i.u.z = 0.0;

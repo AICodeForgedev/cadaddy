@@ -11,9 +11,11 @@ pub mod clip;
 mod dim;
 mod fill;
 mod hatch;
+pub mod hlr;
 pub mod images;
 mod linetype;
 mod linetype_text;
+pub mod live;
 mod mline;
 mod outline;
 pub mod paper;
@@ -1052,7 +1054,10 @@ fn top_entity(b: &mut Builder, d: &Drawing, e: &Entity) {
     // A solid: its display curves onto the view plane.
     if let EntityKind::Solid3d(so) = &e.kind {
         let ctx = top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]);
-        for w in so.wires(b.opts.tolerance) {
+        // A live section shows what it leaves.
+        let cut = live::cut_solid(so, &live::live_sections(d, &Space::Model)).map(|(c, _)| c);
+        let shown = cut.as_ref().unwrap_or(so);
+        for w in shown.wires(b.opts.tolerance) {
             let vertices = w.iter().map(|q| cadaddy_geom::PolyVertex { p: p.project(*q), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
             let flat = Entity {
                 kind: EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: false, const_width: 0.0, elevation: 0.0, plinegen: true }),

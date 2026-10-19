@@ -308,6 +308,102 @@ pub fn feature_edges(polys: &[Poly]) -> Vec<[Vec3; 2]> {
     out
 }
 
+/// The edges a drawing of the polygons shows from `view_dir` (towards the viewer), each with
+/// whether it is drawn: edges between flat faces, a curved face's edges where it meets another
+/// at more than 20°, and curved faces' outlines (where they turn away from the viewer). Smooth
+/// joins (a fillet's tangent edges, a cylinder's isolines) are given as not drawn.
+pub fn drawing_edges(polys: &[Poly], view_dir: Vec3) -> Vec<([Vec3; 2], bool)> {
+    use std::collections::HashMap;
+    let scale = polys.iter().flat_map(|p| p.pts.iter()).fold(1.0f64, |m, p| m.max(p.x.abs()).max(p.y.abs()).max(p.z.abs()));
+    let eps = scale * 1e-7;
+    let mut planar: HashMap<u64, Option<Vec3>> = HashMap::new();
+    for p in polys {
+        let e = planar.entry(p.tag).or_insert(Some(p.plane.n));
+        if let Some(n) = *e
+            && n.dot(p.plane.n) < 1.0 - 1e-9
+        {
+            *e = None;
+        }
+    }
+    let flat = |t: u64| planar.get(&t).copied().flatten().is_some();
+    let d = view_dir.normalized();
+    let cos20 = 20f64.to_radians().cos();
+    let mut out = Vec::new();
+    // Polygons by grid cell of their bounds, to find those along an edge.
+    let cell = (scale * 0.02).max(eps);
+    let key = |p: Vec3| [(p.x / cell).floor() as i64, (p.y / cell).floor() as i64, (p.z / cell).floor() as i64];
+    let mut near: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
+    for (i, p) in polys.iter().enumerate() {
+        let (mut lo, mut hi) = ([i64::MAX; 3], [i64::MIN; 3]);
+        for v in &p.pts {
+            let k = key(*v);
+            for a in 0..3 {
+                lo[a] = lo[a].min(k[a]);
+                hi[a] = hi[a].max(k[a]);
+            }
+        }
+        let cells = (hi[0] - lo[0] + 1).saturating_mul(hi[1] - lo[1] + 1).saturating_mul(hi[2] - lo[2] + 1);
+        if cells > 4096 {
+            near.entry([i64::MIN; 3]).or_default().push(i);
+            continue;
+        }
+        for x in lo[0]..=hi[0] {
+            for y in lo[1]..=hi[1] {
+                for z in lo[2]..=hi[2] {
+                    near.entry([x, y, z]).or_default().push(i);
+                }
+            }
+        }
+    }
+    let on_edge = |p: &Poly, m: Vec3| {
+        let n = p.pts.len();
+        (0..n).any(|i| {
+            let (a, b) = (p.pts[i], p.pts[(i + 1) % n]);
+            let ab = b - a;
+            let l2 = ab.dot(ab);
+            let t = if l2 > 0.0 { ((m - a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+            (a + ab * t - m).len() <= eps * 10.0
+        })
+    };
+    for seg in feature_edges(polys) {
+        let m = (seg[0] + seg[1]) * 0.5;
+        let mut sides: Vec<(u64, Vec3)> = Vec::new();
+        let big = near.get(&[i64::MIN; 3]).map(Vec::as_slice).unwrap_or(&[]);
+        for &i in near.get(&key(m)).map(Vec::as_slice).unwrap_or(&[]).iter().chain(big) {
+            let p = &polys[i];
+            if on_edge(p, m) && !sides.iter().any(|(t, n)| *t == p.tag && n.dot(p.plane.n) > 1.0 - 1e-9) {
+                sides.push((p.tag, p.plane.n));
+            }
+        }
+        let sharp = match sides.as_slice() {
+            [(ta, na), (tb, nb), ..] => (flat(*ta) && flat(*tb)) || na.dot(*nb) < cos20 || na.dot(d) * nb.dot(d) < 0.0,
+            _ => true,
+        };
+        out.push((seg, sharp));
+    }
+    // Outlines inside curved faces: edges between two of the face's polygons, one facing the
+    // viewer and one facing away.
+    let q = |p: Vec3| [(p.x / eps).round() as i64, (p.y / eps).round() as i64, (p.z / eps).round() as i64];
+    let mut edges: HashMap<([i64; 3], [i64; 3], u64), Vec<(Vec3, [Vec3; 2])>> = HashMap::new();
+    for p in polys.iter().filter(|p| !flat(p.tag)) {
+        let n = p.pts.len();
+        for i in 0..n {
+            let (a, b) = (p.pts[i], p.pts[(i + 1) % n]);
+            let (ka, kb) = (q(a), q(b));
+            let k = if ka <= kb { (ka, kb, p.tag) } else { (kb, ka, p.tag) };
+            edges.entry(k).or_default().push((p.plane.n, [a, b]));
+        }
+    }
+    for (_, faces) in edges {
+        if let [(na, seg), (nb, _)] = faces.as_slice()
+            && na.dot(d) * nb.dot(d) < 0.0
+        {
+            out.push((*seg, true));
+        }
+    }
+    out
+}
+
 type CacheEntry = (u64, Arc<Vec<Poly>>);
 
 fn cache() -> &'static Mutex<Vec<CacheEntry>> {

@@ -112,3 +112,22 @@ fn composites_round_trip_and_save_their_result_as_the_mesh() {
     let dwg = cadaddy_io::write(&d, "x.dwg").unwrap();
     assert_eq!(back(&cadaddy_io::read(&dwg, "x.dwg").unwrap()), vec![holed]);
 }
+
+#[test]
+fn section_planes_round_trip_and_others_see_a_line() {
+    let sp =
+        SectionPlane { origin: Vec3::new(5.0, 2.0, 3.0), normal: Vec3::new(1.0, 0.0, 0.0), width: 12.0, height: 8.0, live: true, name: "A".into() };
+    let mut d = Drawing::new_metric();
+    d.add(&Space::Model, Common::default(), EntityKind::SectionPlane(sp.clone())).unwrap();
+    let bytes = write_with(&d, "x.dxf", &SaveOptions { version: Some(Version::R2018), binary: false }).unwrap();
+    let back: Vec<SectionPlane> = read_dxf(&bytes)
+        .unwrap()
+        .model
+        .iter()
+        .filter_map(|e| if let EntityKind::SectionPlane(p) = &e.kind { Some(p.clone()) } else { None })
+        .collect();
+    assert_eq!(back, vec![sp]);
+    let text = String::from_utf8_lossy(&bytes).replace("SECTIONPLANE", "SOMETHING");
+    let d = read_dxf(text.as_bytes()).unwrap();
+    assert!(d.model.iter().any(|e| matches!(e.kind, EntityKind::Line(_))));
+}

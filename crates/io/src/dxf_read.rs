@@ -274,7 +274,10 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
     let t = T(tags);
     let c = common(&t);
     let k = match kind {
-        "LINE" => EntityKind::Line(Line { a: t.p(10), b: t.p(11) }),
+        "LINE" => match crate::dxf_solid::read_section(tags) {
+            Some(sp) => EntityKind::SectionPlane(sp),
+            None => EntityKind::Line(Line { a: t.p(10), b: t.p(11) }),
+        },
         "POINT" => EntityKind::Point(Point { p: t.p(10), angle: t.fd(50, 0.0).to_radians() }),
         "CIRCLE" => EntityKind::Circle(Circle { center: ocs(&c, t.p(10)), radius: t.fd(40, 1.0).abs() }),
         "ARC" => {

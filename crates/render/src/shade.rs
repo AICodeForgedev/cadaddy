@@ -101,6 +101,9 @@ pub struct Scene {
 /// Most triangles and lines a scene holds (beyond them the rest is left out).
 pub const MAX_SCENE: usize = 20_000_000;
 
+/// The colour of faces a live section cuts.
+pub const CUT_COLOR: Rgb = Rgb(214, 96, 77);
+
 /// The scene of `space`: surfaces and lines in world coordinates, curves tessellated to `tol`
 /// world units, colour 7 as it shows on `bg`.
 pub fn scene(d: &Drawing, space: &Space, tol: f64, bg: Rgb) -> Scene {
@@ -116,6 +119,23 @@ pub fn scene(d: &Drawing, space: &Space, tol: f64, bg: Rgb) -> Scene {
     let mut out = Scene::default();
     let mut native: std::collections::HashSet<Handle> = std::collections::HashSet::new();
     let mut elevation: std::collections::HashMap<Handle, f64> = std::collections::HashMap::new();
+    let planes = crate::live::live_sections(d, space);
+    // Clipped by the live sections, if any.
+    let tri = |out: &mut Scene, t: [Vec3; 3], color: Rgb| {
+        if planes.is_empty() {
+            push_tri(out, Tri { p: t, color });
+            return;
+        }
+        let pts = crate::live::clip_polygon(t.to_vec(), &planes);
+        for k in 1..pts.len().saturating_sub(1) {
+            push_tri(out, Tri { p: [pts[0], pts[k], pts[k + 1]], color });
+        }
+    };
+    let line = |out: &mut Scene, a: Vec3, b: Vec3, color: Rgb, edge: bool| {
+        if let Some((a, b)) = crate::live::clip_segment(a, b, &planes) {
+            push_line(out, Line3 { a, b, color, edge });
+        }
+    };
     for e in store.iter() {
         if !d.is_visible(e) {
             continue;
@@ -125,11 +145,27 @@ pub fn scene(d: &Drawing, space: &Space, tol: f64, bg: Rgb) -> Scene {
             EntityKind::Mesh(m) => {
                 native.insert(e.handle);
                 for t in m.triangles() {
-                    push_tri(&mut out, Tri { p: t, color: surface });
+                    tri(&mut out, t, surface);
                 }
                 for (a, b) in m.edges() {
                     if let (Some(a), Some(b)) = (m.vertices.get(a as usize), m.vertices.get(b as usize)) {
-                        push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true });
+                        line(&mut out, *a, *b, color, true);
+                    }
+                }
+            }
+            EntityKind::Solid3d(so) if let Some((cut, first)) = crate::live::cut_solid(so, &planes) => {
+                native.insert(e.handle);
+                for p in cut.polys(tol).iter() {
+                    let c = if cadaddy_doc::tag_leaf(p.tag) >= first { CUT_COLOR } else { surface };
+                    for k in 1..p.pts.len().saturating_sub(1) {
+                        push_tri(&mut out, Tri { p: [p.pts[0], p.pts[k], p.pts[k + 1]], color: c });
+                    }
+                }
+                for w in cut.wires(tol) {
+                    for seg in w.windows(2) {
+                        if let [a, b] = seg {
+                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true });
+                        }
                     }
                 }
             }
@@ -149,9 +185,9 @@ pub fn scene(d: &Drawing, space: &Space, tol: f64, bg: Rgb) -> Scene {
             EntityKind::Face3d(f) => {
                 native.insert(e.handle);
                 let [a, b, c, dd] = f.corners;
-                push_tri(&mut out, Tri { p: [a, b, c], color: surface });
+                tri(&mut out, [a, b, c], surface);
                 if c != dd {
-                    push_tri(&mut out, Tri { p: [a, c, dd], color: surface });
+                    tri(&mut out, [a, c, dd], surface);
                 }
                 let corners = if c == dd { vec![a, b, c] } else { vec![a, b, c, dd] };
                 let n = corners.len();
@@ -159,7 +195,7 @@ pub fn scene(d: &Drawing, space: &Space, tol: f64, bg: Rgb) -> Scene {
                     if f.hidden_edges & (1 << i) == 0
                         && let (Some(p), Some(q)) = (corners.get(i), corners.get((i + 1) % n))
                     {
-                        push_line(&mut out, Line3 { a: *p, b: *q, color, edge: true });
+                        line(&mut out, *p, *q, color, true);
                     }
                 }
             }
@@ -170,7 +206,12 @@ pub fn scene(d: &Drawing, space: &Space, tol: f64, bg: Rgb) -> Scene {
                     let segs = if closed { n } else { n.saturating_sub(1) };
                     for i in 0..segs {
                         if let (Some(p), Some(q)) = (pts.get(i), pts.get((i + 1) % n)) {
-                            push_line(&mut out, Line3 { a: *p, b: *q, color, edge: false });
+                            // A section plane's own outline isn't cut.
+                            if matches!(k, EntityKind::SectionPlane(_)) {
+                                push_line(&mut out, Line3 { a: *p, b: *q, color, edge: false });
+                            } else {
+                                line(&mut out, *p, *q, color, false);
+                            }
                         }
                     }
                 } else {

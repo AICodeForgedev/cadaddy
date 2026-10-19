@@ -44,6 +44,7 @@ mod takeoff;
 pub(crate) mod underlay;
 pub use props::MatchProps;
 pub(crate) mod qselect;
+mod sections;
 mod selecttools;
 mod settings;
 mod solids;
@@ -230,6 +231,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(constraints::specs());
         v.extend(lisp::specs());
         v.extend(solids::specs());
+        v.extend(sections::specs());
         v
     })
 }

@@ -1309,6 +1309,18 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             thickness(w, e);
         }
         EntityKind::Mesh(m) => mesh(w, e, m, owner, paper, cx.target, &[]),
+        EntityKind::SectionPlane(sp) => {
+            // Other programs see the plane's lower edge; CADaddy reads the plane from the xdata.
+            let c = sp.corners();
+            w.s(0, "LINE");
+            common(w, e, owner, paper, "AcDbLine");
+            w.p(10, c[0]);
+            w.p(11, c[1]);
+            w.s(1001, dxf_ext::APP);
+            for x in crate::dxf_solid::section_xdata(sp) {
+                w.s(1000, x);
+            }
+        }
         EntityKind::Solid3d(so) => {
             let m = cadaddy_render::solid_mesh(so, so.mesh_tol());
             mesh(w, e, &m, owner, paper, cx.target, &crate::dxf_solid::solid_xdata(so));

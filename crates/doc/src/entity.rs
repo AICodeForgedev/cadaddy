@@ -1417,6 +1417,8 @@ pub enum EntityKind {
     Mesh(Mesh),
     /// A 3D solid (BOX, EXTRUDE, REVOLVE…): our own exact definition, tessellated for display.
     Solid3d(Box<crate::Solid3d>),
+    /// A section plane (SECTIONPLANE).
+    SectionPlane(crate::SectionPlane),
     Region(Region),
     Viewport(Viewport),
     Image(Image),
@@ -1478,6 +1480,7 @@ impl EntityKind {
                 MeshKind::Polygon { .. } => "Polygon Mesh",
             },
             EntityKind::Solid3d(_) => "3D Solid",
+            EntityKind::SectionPlane(_) => "Section Plane",
             EntityKind::Region(_) => "Region",
             EntityKind::Viewport(_) => "Viewport",
             EntityKind::Image(_) => "Raster Image",
@@ -1520,6 +1523,8 @@ impl EntityKind {
             },
             // Saved as a mesh other programs can show (see `io::dxf_solid`).
             EntityKind::Solid3d(_) => "MESH",
+            // Saved as a line other programs show (see `io::dxf_solid`).
+            EntityKind::SectionPlane(_) => "LINE",
             EntityKind::Region(_) => "REGION",
             EntityKind::Viewport(_) => "VIEWPORT",
             EntityKind::Image(_) => "IMAGE",
@@ -1569,6 +1574,7 @@ impl EntityKind {
                 // A triangle repeats its third corner.
                 Some((if c == d { vec![a, b, c] } else { vec![a, b, c, d] }, true))
             }
+            EntityKind::SectionPlane(sp) if sp.normal.z.abs() < 0.999 => Some((sp.corners().to_vec(), true)),
             _ => None,
         }
     }
@@ -1620,6 +1626,21 @@ impl EntityKind {
                     Some(Prim::Seg(Segment::Line(GLine::new(p, q))))
                 })
                 .collect(),
+            // Its outline as seen from above, and an arrow the way it looks.
+            EntityKind::SectionPlane(sp) => {
+                let c = sp.corners();
+                let mut segs: Vec<(Vec2, Vec2)> = (0..4).map(|i| (c[i].xy(), c[(i + 1) % 4].xy())).collect();
+                let (h, _) = sp.axes();
+                let size = sp.width.max(sp.height).max(1e-9) * 0.08;
+                let o = sp.origin.xy();
+                let n = sp.normal.xy().normalized();
+                if n.len() > 0.5 {
+                    let tip = o + n * (size * 2.0);
+                    let side = h.xy().normalized() * size;
+                    segs.extend([(o, tip), (tip, tip - n * size + side), (tip, tip - n * size - side)]);
+                }
+                segs.into_iter().filter(|(a, b)| !a.near(*b, 1e-12)).map(|(a, b)| Prim::Seg(Segment::Line(GLine::new(a, b)))).collect()
+            }
             // Its display curves, seen from above.
             EntityKind::Solid3d(so) => so
                 .wires(crate::SOLID_PRIM_TOL)
@@ -1852,6 +1873,11 @@ impl EntityKind {
             EntityKind::Solid(so) | EntityKind::Trace(so) => so.corners.iter_mut().for_each(t3),
             EntityKind::Face3d(f) => f.corners.iter_mut().for_each(t3),
             EntityKind::Mesh(me) => me.vertices.iter_mut().for_each(t3),
+            EntityKind::SectionPlane(sp) => {
+                let mut m4 = Mat4::from_mat3(m);
+                m4.m[2][2] = s;
+                sp.transform(&m4);
+            }
             EntityKind::Solid3d(so) => {
                 // Heights scale with the plan so the solid keeps its proportions.
                 let mut m4 = Mat4::from_mat3(m);
@@ -1961,6 +1987,10 @@ impl EntityKind {
             EntityKind::Face3d(f) => f.corners.iter().map(|c| c.xy()).collect(),
             // Its vertices (a large mesh: the first thousand).
             EntityKind::Mesh(m) => m.vertices.iter().take(1000).map(|c| c.xy()).collect(),
+            EntityKind::SectionPlane(sp) => {
+                let c = sp.corners();
+                vec![sp.origin.xy(), ((c[0] + c[3]) * 0.5).xy(), ((c[1] + c[2]) * 0.5).xy()]
+            }
             // Its base point and dimension grips.
             EntityKind::Solid3d(so) => so.grip_points().into_iter().map(|c| c.xy()).collect(),
             EntityKind::Region(r) => vec![r.bounds().center()],
