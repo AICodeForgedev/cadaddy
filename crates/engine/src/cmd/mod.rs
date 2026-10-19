@@ -184,6 +184,8 @@ pub use table::xlsx;
 pub mod tolerance;
 mod trimextend;
 mod ucs;
+mod txt2mtxt;
+pub use txt2mtxt::Txt2MtxtOptions;
 mod utility;
 pub(crate) mod view;
 /// The steering wheel's wedges and the quick views' thumbnails, for the app.
@@ -869,6 +871,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(history::specs());
         v.extend(standards::specs());
         v.extend(colorbook::specs());
+        v.extend(txt2mtxt::specs());
         v.extend(constraints::specs());
         v.extend(paramconv::specs());
         v.extend(lisp::specs());
