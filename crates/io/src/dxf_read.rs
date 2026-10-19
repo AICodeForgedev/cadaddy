@@ -2314,6 +2314,9 @@ impl Objects {
         if let Some(spec) = self.xrecord_text(crate::dxf_ext::BUILDING_SPEC_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
             d.building_spec = Some(spec);
         }
+        if let Some(tours) = self.xrecord_text(crate::dxf_ext::TOURS_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
+            d.tours = Some(tours);
+        }
         if let Some(states) = self.xrecord_text(crate::dxf_ext::LAYER_STATES_KEY).and_then(|t| crate::dxf_ext::parse_layer_states(&t)) {
             d.layer_states = states;
         }

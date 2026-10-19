@@ -27,6 +27,8 @@ use super::tokens;
 pub const ENTITY_CHUNK: usize = 1024;
 /// The schema version of each chunk type this reader and writer know.
 const V1: u16 = 1;
+/// Longest building spec or tours text kept (hostile files).
+const MAX_TEXT: usize = 64 << 20;
 const KNOWN: [&[u8; 4]; 8] = [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"THMB"];
 
 /// What the file was read with besides the drawing: notes about damaged or unread parts.
@@ -77,6 +79,11 @@ struct Tables {
     /// kept for when the drawing is saved as DXF or DWG again.
     #[serde(default)]
     kept_handles: Vec<(String, u64)>,
+    /// The building spec and the saved viewpoints and tours (JSON text).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    building_spec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tours: Option<String>,
 }
 
 /// The unmodelled file data, as a stable mirror of [`Foreign`] (its tuple-keyed maps as lists).
@@ -239,6 +246,8 @@ pub(super) fn tables(d: &Drawing) -> Result<Vec<u8>, String> {
         sun: value(&d.sun)?,
         field_values: d.field_values.iter().map(|(h, v)| (h.0, v.clone())).collect(),
         kept_handles: d.kept_handles.iter().map(|(k, h)| (k.clone(), *h)).collect(),
+        building_spec: d.building_spec.clone(),
+        tours: d.tours.clone(),
     };
     Ok(tokens::encode(&value(&tables)?))
 }
@@ -377,6 +386,8 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 }
                 d.field_values = t.field_values.iter().map(|(h, v)| (cadaddy_doc::Handle(*h), v.clone())).collect();
                 d.kept_handles = t.kept_handles.iter().take(10_000_000).map(|(k, h)| (k.clone(), *h)).collect();
+                d.building_spec = t.building_spec.filter(|s| s.len() <= MAX_TEXT);
+                d.tours = t.tours.filter(|s| s.len() <= MAX_TEXT);
                 d.handseed = t.handseed;
                 d.hidden_saved = t.hidden_saved;
                 d.hidden_objects = t.hidden.into_iter().map(Handle).collect();

@@ -10,11 +10,12 @@
 //! this drawing as one floor's sheet (then every floor of the building is walked). Nothing is
 //! computed until Walk is opened, and all of it is dropped when Walk closes.
 
+pub mod export;
 pub mod gpu;
 
 use crate::CadApp;
 use cadaddy_doc::{Drawing, EntityKind, Handle};
-use cadaddy_walk3d::{DeviceInfo, DimKind, Ground, Owner, Room, Rules, Scene, Walker, derive_set, measure, pick, rooms};
+use cadaddy_walk3d::{DeviceInfo, DimKind, Ground, Owner, Pose, Room, Rules, Scene, TourPath, Tours, Walker, derive_set, measure, pick, rooms};
 use egui_wgpu::wgpu;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -188,6 +189,23 @@ pub struct Walk {
     pub minimap: bool,
     /// Walking speed, feet per second (flying is four times faster; Shift runs).
     pub speed_ft: f64,
+    /// The open drawing's saved viewpoints and camera tours.
+    pub tours: Tours,
+    /// The tour playing.
+    pub playing: Option<Playing>,
+    view_name: String,
+    /// A command the panel asked for; it runs on the drawing after the panel is drawn.
+    pending: Option<(&'static str, serde_json::Value)>,
+}
+
+/// A camera tour being played in Walk.
+pub struct Playing {
+    pub name: String,
+    pub path: TourPath,
+    /// Seconds played.
+    pub t: f64,
+    /// Flying before the tour started (restored when it stops).
+    was_flying: bool,
 }
 
 /// Walking pace when the drawing doesn't set STEPSIZE and STEPSPERSEC, feet per second.
@@ -227,6 +245,10 @@ impl Walk {
             room_query: String::new(),
             minimap: true,
             speed_ft: WALK_PACE_FT,
+            tours: Tours::default(),
+            playing: None,
+            view_name: String::new(),
+            pending: None,
         };
         w.rebuild_view();
         w.rebuild_ground();
@@ -241,6 +263,64 @@ impl Walk {
         self.rooms = rooms(&srcs, &b.rules);
         self.rooms.sort_by(|a, b| a.level.cmp(&b.level).then_with(|| a.name.cmp(&b.name)));
         self.speed_ft = speed_of(b);
+        self.tours = Tours::from_json(b.drawings.first().and_then(|d| d.tours.as_deref())).unwrap_or_default();
+    }
+
+    /// Play the tour `name` from its start.
+    pub fn play(&mut self, name: &str) -> Result<(), String> {
+        let tour = self.tours.tour(name).ok_or_else(|| format!("no tour named {name}"))?;
+        let path = self.tours.path(tour)?;
+        let name = tour.name.clone();
+        let was_flying = self.playing.as_ref().map_or(self.walker.fly, |p| p.was_flying);
+        self.walker.fly = true;
+        self.playing = Some(Playing { name, path, t: 0.0, was_flying });
+        self.advance(0.0);
+        Ok(())
+    }
+
+    /// Stop the tour playing, the camera staying where it is (walking again).
+    pub fn stop(&mut self) {
+        if let Some(p) = self.playing.take() {
+            self.walker.fly = p.was_flying;
+            self.walker.vz = 0.0;
+        }
+    }
+
+    /// Move the tour on by `dt` seconds; it stops at its end.
+    pub fn advance(&mut self, dt: f64) {
+        let Some(p) = self.playing.as_mut() else { return };
+        p.t += if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+        let pose = p.path.pose(p.t);
+        let done = p.t >= p.path.duration();
+        put_pose(&mut self.walker, &self.building.scene, pose);
+        if done {
+            self.stop();
+        }
+    }
+
+    /// Stand at saved viewpoint `name`.
+    pub fn go_to_view(&mut self, name: &str) {
+        let Some(v) = self.tours.view(name) else { return };
+        let pose = Pose {
+            eye: cadaddy_walk3d::V3 { x: v.eye[0], y: v.eye[1], z: v.eye[2] },
+            yaw: v.yaw.to_radians(),
+            pitch: v.pitch.to_radians(),
+            level: v.level,
+        };
+        self.stop();
+        put_pose(&mut self.walker, &self.building.scene, pose);
+    }
+
+    /// The room on the walker's level nearest to it (within 40 feet), for a viewpoint saved here.
+    fn room_here(&self) -> Option<&str> {
+        let w = &self.walker;
+        self.rooms
+            .iter()
+            .filter(|r| r.level == w.level)
+            .map(|r| (r, (r.at.x - w.eye.x).hypot(r.at.y - w.eye.y)))
+            .filter(|(_, d)| *d < 40.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(r, _)| r.name.as_str())
     }
 
     /// Stand at room `i`: its level, its place, on the floor there.
@@ -304,6 +384,15 @@ impl Walk {
 }
 
 /// A device's type: its type attribute (as the rules name it), else its block name.
+/// Put the camera at a tour pose (on a level the scene has).
+fn put_pose(w: &mut Walker, scene: &Scene, pose: Pose) {
+    w.eye = pose.eye;
+    w.yaw = pose.yaw;
+    w.pitch = pose.pitch;
+    w.level = pose.level.min(scene.levels.len().saturating_sub(1));
+    w.vz = 0.0;
+}
+
 fn device_type(b: &Building, d: &DeviceInfo) -> String {
     d.attrs.iter().find(|(t, _)| t.eq_ignore_ascii_case(&b.rules.devices.type_attr)).map(|(_, v)| v.clone()).unwrap_or_else(|| d.block.clone())
 }
@@ -393,6 +482,19 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             close_now |= esc;
             select = sel;
         });
+    }
+    // What the panel asked for: saved in the drawing (the scene is derived again next frame).
+    if let Some((id, params)) = app.walk.as_mut().and_then(|w| w.pending.take()) {
+        match app.run(id, params) {
+            Ok(r) => app.set_status(match id {
+                "tour.view" if r.get("deleted").is_some() => "Viewpoint deleted.".to_string(),
+                "tour.view" => format!("Viewpoint saved ({} saved).", r["views"]),
+                "tour.rooms" => format!("{} viewpoints saved, one per room.", r["added"].as_array().map_or(0, Vec::len)),
+                "tour.create" if r.get("deleted").is_some() => "Tour deleted.".to_string(),
+                _ => format!("Tour saved: {:.1} s.", r["duration"].as_f64().unwrap_or(0.0)),
+            }),
+            Err(e) => app.set_status(format!("Walk: {e}")),
+        }
     }
     // A wall or device of the open drawing picked in 3D is selected in 2D too.
     if let Some(h) = select
@@ -485,6 +587,8 @@ fn side_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
     if let Some(i) = go {
         walk.go_to_room(i);
     }
+    ui.separator();
+    tours_panel(walk, ui);
     let b = &walk.building;
     let s = &b.scene;
     ui.separator();
@@ -550,6 +654,86 @@ fn side_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
     back
 }
 
+/// Saved viewpoints and camera tours: save one here, go to one, make and play tours.
+fn tours_panel(walk: &mut Walk, ui: &mut egui::Ui) {
+    ui.strong("Viewpoints and tours");
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut walk.view_name).hint_text("Viewpoint name").desired_width(150.0));
+        if ui.button("Save here").clicked() {
+            let w = &walk.walker;
+            let name = match walk.view_name.trim() {
+                "" => format!("View {}", walk.tours.views.len() + 1),
+                n => n.to_string(),
+            };
+            let room = walk.room_here().unwrap_or("").to_string();
+            walk.pending = Some((
+                "tour.view",
+                serde_json::json!({"name": name, "eye": [w.eye.x, w.eye.y, w.eye.z], "yaw": w.yaw.to_degrees(), "pitch": w.pitch.to_degrees(), "level": w.level, "room": room}),
+            ));
+            walk.view_name.clear();
+        }
+    });
+    let mut go: Option<String> = None;
+    egui::ScrollArea::vertical().id_salt("walk_views").max_height(110.0).show(ui, |ui| {
+        for v in walk.tours.views.iter().take(200) {
+            ui.horizontal(|ui| {
+                let label =
+                    if v.room.is_empty() || v.room.eq_ignore_ascii_case(&v.name) { v.name.clone() } else { format!("{}  ·  {}", v.name, v.room) };
+                if ui.selectable_label(false, label).clicked() {
+                    go = Some(v.name.clone());
+                }
+                if ui.small_button("×").on_hover_text("Delete this viewpoint").clicked() {
+                    walk.pending = Some(("tour.view", serde_json::json!({"name": v.name, "delete": true})));
+                }
+            });
+        }
+        if walk.tours.views.is_empty() {
+            ui.small("No viewpoints saved.");
+        }
+    });
+    if let Some(n) = go {
+        walk.go_to_view(&n);
+    }
+    ui.horizontal_wrapped(|ui| {
+        if !walk.rooms.is_empty() && ui.button("One per room").on_hover_text("Save a viewpoint in every named room").clicked() {
+            walk.pending = Some(("tour.rooms", serde_json::json!({})));
+        }
+        if walk.tours.views.len() >= 2 && ui.button("Tour through them").on_hover_text("A tour through every viewpoint, in order").clicked() {
+            let stops: Vec<&str> = walk.tours.views.iter().map(|v| v.name.as_str()).collect();
+            let name = format!("Tour {}", walk.tours.tours.len() + 1);
+            walk.pending = Some(("tour.create", serde_json::json!({"name": name, "stops": stops, "speed": walk.speed_ft, "pause": 1.0})));
+        }
+    });
+    let mut play: Option<String> = None;
+    let mut stop = false;
+    for t in walk.tours.tours.iter().take(100) {
+        let secs = walk.tours.path(t).map_or(0.0, |p| p.duration());
+        ui.horizontal(|ui| {
+            let on = walk.playing.as_ref().is_some_and(|p| p.name == t.name);
+            if on {
+                if ui.small_button("■").on_hover_text("Stop").clicked() {
+                    stop = true;
+                }
+            } else if ui.small_button("▶").on_hover_text("Play").clicked() {
+                play = Some(t.name.clone());
+            }
+            ui.label(format!("{}  ({secs:.1} s, {} stops)", t.name, t.stops.len()));
+            if ui.small_button("×").on_hover_text("Delete this tour").clicked() {
+                walk.pending = Some(("tour.create", serde_json::json!({"name": t.name, "delete": true})));
+            }
+        });
+    }
+    if let Some(p) = &walk.playing {
+        ui.small(format!("Playing {}: {:.1} / {:.1} s (move or Esc to stop)", p.name, p.t.min(p.path.duration()), p.path.duration()));
+    }
+    if stop {
+        walk.stop();
+    }
+    if let Some(n) = play {
+        let _ = walk.play(&n);
+    }
+}
+
 /// The 3D view: look, move, pick, draw. Returns (Esc pressed, a handle of the open drawing to
 /// select).
 fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderState>) -> (bool, Option<Handle>) {
@@ -566,6 +750,35 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
         );
         return (ctx.input(|i| i.key_pressed(egui::Key::Escape)), None);
     };
+    let frame_dt = ctx.input(|i| f64::from(i.stable_dt).min(0.1));
+    // A tour playing moves the camera; looking, moving or Esc takes it back.
+    let mut tour_esc = false;
+    if walk.playing.is_some() {
+        let took_over = resp.dragged()
+            || (!ctx.egui_wants_keyboard_input()
+                && ctx.input(|i| {
+                    tour_esc = i.key_pressed(egui::Key::Escape);
+                    tour_esc
+                        || [
+                            egui::Key::W,
+                            egui::Key::A,
+                            egui::Key::S,
+                            egui::Key::D,
+                            egui::Key::ArrowUp,
+                            egui::Key::ArrowDown,
+                            egui::Key::ArrowLeft,
+                            egui::Key::ArrowRight,
+                        ]
+                        .iter()
+                        .any(|k| i.key_down(*k))
+                }));
+        if took_over {
+            walk.stop();
+        } else {
+            walk.advance(frame_dt);
+        }
+    }
+    let playing = walk.playing.is_some();
     let s = &walk.building.scene;
     let ground = &walk.ground;
     let w = &mut walk.walker;
@@ -574,8 +787,9 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
         w.look(-f64::from(d.x) * 0.005, -f64::from(d.y) * 0.005);
     }
     // Gravity: off an edge, the walker comes down.
-    let frame_dt = ctx.input(|i| f64::from(i.stable_dt).min(0.1));
-    w.fall(s, Some(ground), frame_dt);
+    if !playing {
+        w.fall(s, Some(ground), frame_dt);
+    }
     let mut esc = false;
     let mut minimap_key = false;
     if !ctx.egui_wants_keyboard_input() {
@@ -616,7 +830,7 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
         if pgdn && w.level > 0 {
             w.go_to_level(s, w.level - 1);
         }
-        esc = escape;
+        esc = escape && !tour_esc;
     }
     if minimap_key {
         walk.minimap = !walk.minimap;

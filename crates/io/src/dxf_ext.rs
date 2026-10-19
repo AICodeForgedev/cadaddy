@@ -6,7 +6,7 @@
 //!
 //! CADaddy's own data lives under the registered application `CADADDY` (xdata) and the
 //! named-object-dictionary entries `CADADDY_CONSTRAINTS`, `CADADDY_LAYERSTATES`,
-//! `CADADDY_PLOTSTYLES`, `CADADDY_HANDSEED`, `CADADDY_MLEADERSTYLE`, `CADADDY_BSPEC` and
+//! `CADADDY_PLOTSTYLES`, `CADADDY_HANDSEED`, `CADADDY_MLEADERSTYLE`, `CADADDY_BSPEC`, `CADADDY_TOURS` and
 //! `CADADDY_STANDARDS` (XRECORDs). Other
 //! readers keep or ignore them.
 
@@ -45,6 +45,7 @@ pub(crate) const STANDARDS_KEY: &str = "CADADDY_STANDARDS";
 pub(crate) const MLEADER_STYLE_KEY: &str = "CADADDY_MLEADERSTYLE";
 /// Named-object-dictionary key of the XRECORD holding the building spec (JSON).
 pub(crate) const BUILDING_SPEC_KEY: &str = "CADADDY_BSPEC";
+pub(crate) const TOURS_KEY: &str = "CADADDY_TOURS";
 /// Named-object-dictionary key of the XRECORD listing the objects hidden by ISOLATEOBJECTS /
 /// HIDEOBJECTS when OBJECTISOLATIONMODE 1 saves them with the drawing.
 pub(crate) const HIDDEN_OBJECTS_KEY: &str = "CADADDY_HIDDENOBJECTS";
@@ -833,6 +834,11 @@ pub(crate) fn parse_building_spec(text: &str) -> Option<String> {
     }
     let v: Value = serde_json::from_str(text).ok()?;
     v.is_object().then(|| text.to_string())
+}
+
+/// JSON chunks for the tours XRECORD, or `None` without saved viewpoints or tours.
+pub(crate) fn tours_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    d.tours.as_deref().filter(|s| !s.trim().is_empty()).map(json_chunks)
 }
 
 /// The hidden objects stored in the `CADADDY_HIDDENOBJECTS` XRECORD (hex handles).

@@ -59,6 +59,7 @@ pub mod spell;
 pub mod stairs;
 pub mod symbol;
 mod takeoff;
+pub mod tours;
 pub(crate) mod underlay;
 pub mod verify;
 pub mod wallgen;
@@ -241,6 +242,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(stairs::specs());
         v.extend(autospec::specs());
         v.extend(verify::specs());
+        v.extend(tours::specs());
         v.extend(imageclip::specs());
         v.extend(array::specs());
         v.extend(symbol::specs());
