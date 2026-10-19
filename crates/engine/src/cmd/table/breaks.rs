@@ -243,7 +243,8 @@ fn read_link(id: &str, file: &std::path::Path) -> Result<String> {
             return Err(bad(id, format!("{path}: larger than {} MB", MAX_LINK_BYTES >> 20)));
         }
         let bytes = std::fs::read(file).map_err(|e| bad(id, format!("{path}: {e}")))?;
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
+        let text = String::from_utf8_lossy(&bytes);
+        Ok(text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned())
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -380,5 +381,19 @@ mod tests {
         assert_eq!(parse_csv(&tall, ',').len(), MAX_ROWS);
         assert_eq!(separator("a.tsv", "x,y"), '\t');
         assert_eq!(separator("a.csv", "x;y"), ';');
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn link_strips_utf8_bom() {
+        let path = std::env::temp_dir().join(format!("cadcraft_bom_link_{}.csv", std::process::id()));
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(b"\"Item, name\",Qty\r\nBolt,4\r\n");
+        std::fs::write(&path, bytes).expect("write temp csv");
+        let text = read_link("datalink", &path);
+        let _ = std::fs::remove_file(&path);
+        let text = text.expect("read link");
+        let rows = parse_csv(&text, separator("bom.csv", &text));
+        assert_eq!(rows, vec![vec!["Item, name", "Qty"], vec!["Bolt", "4"]]);
     }
 }
