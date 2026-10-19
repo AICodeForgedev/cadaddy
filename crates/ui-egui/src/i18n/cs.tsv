@@ -1,6 +1,6 @@
-# CADCraft Czech interface catalog — original translations by @Losminek (AI-assisted).
+# CADaddy Czech interface catalog — original translations by @Losminek (AI-assisted).
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# Written from the meaning of CADCraft English strings; no proprietary translations copied.
+# Written from the meaning of CADaddy English strings; no proprietary translations copied.
 # UTF-8: context<TAB>English source<TAB>Czech translation.
 # @plural = one|few|other forms for integer counts.
 	Adjust...	Upravit...
@@ -3248,3 +3248,4 @@ menu	Modify	Modifikace
 	Clash Navigate	Procházet kolize
 	Colour By Status/Level	Barva podle stavu/podlaží
 	Inspect Element	Prohlédnout prvek
+	Analyze Shapes	Analyzovat tvary
