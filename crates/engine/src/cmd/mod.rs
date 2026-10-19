@@ -1,6 +1,7 @@
 //! The command registry. Ids are AutoCAD command names in lower case; menu paths follow
 //! AutoCAD's menu bar so the catalog doubles as the parity metric.
 
+pub mod adcenter;
 pub(crate) mod annoscale;
 pub(crate) mod annotate;
 pub mod array;
@@ -270,6 +271,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(field::specs());
         v.extend(ucs::specs());
         v.extend(tolerance::specs());
+        v.extend(adcenter::specs());
         v.extend(standards::specs());
         v.extend(colorbook::specs());
         v.extend(constraints::specs());

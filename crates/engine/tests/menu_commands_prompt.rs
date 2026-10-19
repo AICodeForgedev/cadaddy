@@ -21,6 +21,7 @@ const DIALOG_OR_STATE: &[&str] = &[
     "pdfbook",
     "etransmit",
     "sheetset",
+    "adcenter",
     "checkstandards",
     "style",
     "dimstyle",

@@ -552,6 +552,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         // Typed or menu-invoked (no parameters) these open their dialogs; JSON calls run the command.
+        "adcenter" | "dc" | "adc" | "dcenter" if params.is_null() => {
+            app.ui.dialog = Some("adcenter".into());
+            Ok(Value::Null)
+        }
         "etransmit" if params.is_null() => {
             app.ui.dialog = Some("etransmit".into());
             Ok(Value::Null)
@@ -864,6 +868,7 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(cmd_shift, Key::V), "pasteblock"),
         (sc(cmd, Key::V), "pasteclip"),
         (sc(cmd, Key::Num1), "ui.panel.properties"),
+        (sc(cmd, Key::Num2), "adcenter"),
         (sc(cmd, Key::Num3), "ui.toggle.toolsets"),
         (sc(cmd, Key::Num9), "ui.toggle.cmdline"),
         (sc(Modifiers::NONE, Key::F1), "ui.dialog.commands"),

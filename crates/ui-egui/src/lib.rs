@@ -88,6 +88,7 @@ pub mod vpscale;
 pub mod walk;
 
 pub mod autocomplete;
+pub mod designcenter;
 pub mod diag;
 pub mod etransmit;
 pub mod exchange;

@@ -41,6 +41,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "stylesmanager" => crate::plotstyles::dialog(app, ctx, &mut open),
         "etransmit" => crate::etransmit::dialog(app, ctx, &mut open),
         "diag" => crate::diag::dialog(app, ctx, &mut open),
+        "adcenter" => crate::designcenter::dialog(app, ctx, &mut open),
         "standards" => crate::standardsdlg::configure(app, ctx, &mut open),
         "checkstandards" => crate::standardsdlg::check(app, ctx, &mut open),
         "laytrans" => crate::standardsdlg::laytrans(app, ctx, &mut open),
