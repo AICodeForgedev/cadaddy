@@ -1445,6 +1445,11 @@ fn table(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::Table, rgb: Ink, lw: f32)
     table::draw(b, ctx, t, rgb, lw);
 }
 
+/// A TEXT's justification as the fonts' alignment (used where text is placed outside a build).
+pub fn text_align(h: cadcraft_doc::HAlign, v: cadcraft_doc::VAlign) -> (cadcraft_fonts::Align, cadcraft_fonts::VAlign) {
+    align(h, v)
+}
+
 fn align(h: cadcraft_doc::HAlign, v: cadcraft_doc::VAlign) -> (cadcraft_fonts::Align, cadcraft_fonts::VAlign) {
     use cadcraft_fonts::{Align as A, VAlign as V};
     let ha = match h {

@@ -291,6 +291,50 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("PSLTSCALE", 70),
 ];
 
+/// The current dimension style's variables as header variables (`$DIMTXT`, `$DIMDEC`…), after
+/// `$DIMSTYLE`: AutoCAD draws new and updated dimensions with the header's DIM* values, which
+/// otherwise stay its defaults (0.18 text, 4 decimals) whatever the current style says (#1051).
+/// `$DIMSCALE` is a header variable of its own.
+fn dim_header_vars(w: &mut W, d: &Drawing) {
+    let name = d.header.str("DIMSTYLE", "Standard");
+    let Some(style) = d.dim_styles.iter().find(|s| s.name.eq_ignore_ascii_case(&name)) else { return };
+    let v = serde_json::to_value(style).unwrap_or_default();
+    let none = |_: &str| None;
+    for (var, field) in cadcraft_doc::DIMVARS {
+        if *var == "DIMSCALE" {
+            continue;
+        }
+        let (Some(value), Some((_, _, kind))) = (v.get(*field), dxf_ext::DIM_CODES.iter().find(|(f, _, _)| f == field)) else { continue };
+        match kind {
+            // Names, not handles, in the header.
+            K::TextStyle | K::Block => {
+                let Some(n) = value.as_str() else { continue };
+                if *kind == K::TextStyle && n.trim().is_empty() {
+                    continue;
+                }
+                w.s(9, format!("${var}"));
+                w.s(if *kind == K::TextStyle { 7 } else { 1 }, n);
+            }
+            K::Linetype => {}
+            _ => match dxf_ext::encode(*kind, value, &none, &none, &none) {
+                Some(DimVal::Real(x)) => {
+                    w.s(9, format!("${var}"));
+                    w.f(40, x);
+                }
+                Some(DimVal::Int(i)) if i16::try_from(i).is_ok() => {
+                    w.s(9, format!("${var}"));
+                    w.i(70, i);
+                }
+                Some(DimVal::Str(t)) => {
+                    w.s(9, format!("${var}"));
+                    w.s(1, t);
+                }
+                _ => {}
+            },
+        }
+    }
+}
+
 fn header_vars(w: &mut W, d: &Drawing) {
     for (name, code) in HEADER_VARS {
         let Some(v) = d.header.get(name) else { continue };
@@ -329,6 +373,7 @@ fn header_vars(w: &mut W, d: &Drawing) {
             }
         }
     }
+    dim_header_vars(w, d);
 }
 
 /// An entity's group 440 (DXF Reference): ByBlock is `0x01000000`, a fixed transparency its alpha
@@ -458,8 +503,61 @@ fn attrib_flags(a: &Attrib) -> i64 {
 /// A TEXT's groups, or an attribute's (`attrib`, in a file of version `target`) with its
 /// subclass: the subclass version (`280 0`, 2010 and later), prompt, tag, flags and alignment,
 /// then Lock position (`280`, 2007 and later; readers take the 280 after the tag as it).
-fn text_tags(w: &mut W, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
-    w.p(10, t.insert);
+/// The insertion point (group 10) to write for `t`. A justified text is placed by its alignment
+/// point (group 11), and its insertion point is the start of its baseline, which AutoCAD reads
+/// from DWG as is (it recomputes it only for DXF): writing the alignment point there drew centred
+/// and right-aligned text from the wrong end in AutoCAD (#1050).
+///
+/// The stored point is kept when it is close to where CADCraft's font puts the baseline start:
+/// then it is AutoCAD's own (exact for its fonts). It is replaced when it is clearly stale: the
+/// alignment point itself (text made here) or a text whose length changed since. Close means
+/// along the baseline within a tenth of the text's width plus half its height (AutoCAD's fonts,
+/// or the ones CADCraft substitutes for them, differ most in width, and most on short texts) and
+/// across it within a fifth of its height: Left Middle and Left Bottom text made here, whose
+/// alignment point is only half or a third of a height from the baseline start, must not pass
+/// for AutoCAD's.
+fn text_insert(d: &Drawing, t: &Text) -> Vec3 {
+    let computed = computed_text_insert(d, t);
+    if t.align_pt.is_some_and(|a| a.xy() == t.insert.xy()) {
+        return computed;
+    }
+    let h = t.height.abs();
+    let off = (t.insert.xy() - computed.xy()).rotate(-t.rotation);
+    let close = if t.value.contains('\n') {
+        // A multiline attribute's lines are placed by its embedded MTEXT: a one-line baseline
+        // start says little about them, so only the distance counts.
+        let width = t.align_pt.map_or(0.0, |a| 2.0 * a.xy().dist(computed.xy()));
+        off.len() <= 0.1 * width + 0.5 * h
+    } else {
+        let width = cadcraft_fonts::line_width(&t.value, h, t.width_factor.abs());
+        off.x.abs() <= 0.1 * width + 0.5 * h && off.y.abs() <= 0.2 * h
+    };
+    if close { t.insert } else { computed }
+}
+
+fn computed_text_insert(d: &Drawing, t: &Text) -> Vec3 {
+    let justified = !matches!((t.halign, t.valign), (HAlign::Left, VAlign::Baseline) | (HAlign::Aligned | HAlign::Fit, _));
+    let Some(a) = t.align_pt.filter(|_| justified) else { return t.insert };
+    let ts = d.text_style(&t.style).cloned().unwrap_or_default();
+    let (h, v) = cadcraft_render::text_align(t.halign, t.valign);
+    let p = cadcraft_fonts::TextParams {
+        insert: t.insert.xy(),
+        align_pt: Some(a.xy()),
+        height: t.height,
+        rotation: t.rotation,
+        width_factor: t.width_factor,
+        oblique: t.oblique,
+        h,
+        v,
+        backwards: ts.backwards,
+        upside_down: ts.upside_down,
+    };
+    let q = cadcraft_fonts::baseline_start(&cadcraft_fonts::TextFont::resolve(&ts.font), &t.value, &p);
+    if q.is_finite() { Vec3::new(q.x, q.y, a.z) } else { t.insert }
+}
+
+fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
+    w.p(10, text_insert(d, t));
     w.f(40, t.height);
     w.s(1, &t.value);
     if t.rotation != 0.0 {
@@ -692,7 +790,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.s(0, "TEXT");
             common(w, e, owner, paper, "AcDbText");
             thickness(w, e);
-            text_tags(w, t, None, None);
+            text_tags(w, d, t, None, None);
         }
         // Closed polylines, one per loop (`dxf_region`): REGION's own data is ACIS.
         EntityKind::Region(r) => {
@@ -712,7 +810,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
         EntityKind::AttDef(a) => {
             w.s(0, "ATTDEF");
             common(w, e, owner, paper, "AcDbText");
-            text_tags(w, &a.text, Some((a, cx.target)), Some(&a.prompt));
+            text_tags(w, d, &a.text, Some((a, cx.target)), Some(&a.prompt));
             if cx.target >= Version::R2007 {
                 multiline_tags(w, a, true);
             }
@@ -776,7 +874,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                         w.i(60, 1);
                     }
                     w.s(100, "AcDbText");
-                    text_tags(w, &a.text, Some((a, cx.target)), None);
+                    text_tags(w, d, &a.text, Some((a, cx.target)), None);
                     if cx.target >= Version::R2007 {
                         multiline_tags(w, a, false);
                     }
@@ -1285,8 +1383,16 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
     let style = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
     let g = cadcraft_render::dimension_in(d, dm);
     let mut out = Vec::new();
-    let c = Common { layer: layer.into(), color: Color::ByBlock, ..Common::default() };
-    for l in &g.lines {
+    // Each part in its style colour (DIMCLRD, DIMCLRE, DIMCLRT), ByBlock when the style says so,
+    // as AutoCAD writes them: readers that draw the block drew every part ByBlock, i.e. in the
+    // dimension's own colour (#1052).
+    let in_color = |color: Color| Common { layer: layer.into(), color, ..Common::default() };
+    let (dim_c, ext_c, text_c) = (in_color(style.dim_line_color), in_color(style.ext_line_color), in_color(style.text_color));
+    for (i, l) in g.lines.iter().enumerate() {
+        let c = match g.line_roles.get(i) {
+            Some(cadcraft_render::LineRole::Ext) => &ext_c,
+            _ => &dim_c,
+        };
         for seg in l.windows(2) {
             if let [a, b] = seg {
                 out.push(Entity { handle: Handle(0), common: c.clone(), kind: EntityKind::Line(Line { a: a.to3(0.0), b: b.to3(0.0) }) });
@@ -1297,7 +1403,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
         if let [a, b, cc] = t.as_slice() {
             out.push(Entity {
                 handle: Handle(0),
-                common: c.clone(),
+                common: dim_c.clone(),
                 kind: EntityKind::Solid(Solid { corners: [a.to3(0.0), b.to3(0.0), cc.to3(0.0), cc.to3(0.0)] }),
             });
         }
@@ -1305,7 +1411,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
     if !g.value.is_empty() {
         out.push(Entity {
             handle: Handle(0),
-            common: c,
+            common: text_c,
             kind: EntityKind::MText(MText {
                 insert: g.text_pos.to3(0.0),
                 height: g.text_height,
@@ -2057,6 +2163,16 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
+            // DIMPOST is written even when empty: a reader that defaults a missing one to "<>"
+            // (the DWG bridge's) would otherwise give radius and diameter dimensions no "R" or
+            // "Ø" in AutoCAD (#1053).
+            if *code == dxf_ext::DIMPOST
+                && let DimVal::Str(t) = &enc
+                && t.is_empty()
+            {
+                w.s(*code, "");
+                continue;
+            }
             if !dxf_ext::NEWER_CODES.contains(code) {
                 w.dimval(*code, enc, false);
                 continue;

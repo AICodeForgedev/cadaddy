@@ -85,6 +85,7 @@ mod native {
         }
         let notes = read_notes(&outcome.stats);
         let mut doc = outcome.document;
+        current_style_names(&mut doc);
         table_merges(&mut doc);
         table_style_rows(&mut doc, false);
         let mut out = CappedWriter { buf: Vec::new(), limit: limits.max_dxf_bytes, exceeded: false };
@@ -385,6 +386,30 @@ mod native {
         convert(dxf, Some(v))
     }
 
+    /// The current dimension and text styles' names from their handles: a DWG stores the
+    /// handles, and the reader leaves the names at "Standard", so a drawing reopened from DWG
+    /// lost its current dimension style (#1051).
+    fn current_style_names(doc: &mut acadrust::CadDocument) {
+        let h = doc.header.current_dimstyle_handle;
+        if let Some(n) = doc.dim_styles.iter().find(|ds| ds.handle == h && !h.is_null()).map(|ds| ds.name.clone()) {
+            doc.header.current_dimstyle_name = n;
+        }
+        let h = doc.header.current_text_style_handle;
+        if let Some(n) = doc.text_styles.iter().find(|ts| ts.handle == h && !h.is_null()).map(|ts| ts.name.clone()) {
+            doc.header.current_text_style_name = n;
+        }
+    }
+
+    /// The current dimension style (`$DIMSTYLE`) by its name: the DXF gives the name, and the
+    /// handle read with it needn't be the style's in the document, in which case the DWG writer
+    /// fell back to Standard and AutoCAD opened the drawing with Standard current (#1051).
+    fn current_dimstyle(doc: &mut acadrust::CadDocument) {
+        let name = doc.header.current_dimstyle_name.clone();
+        if let Some(h) = doc.dim_styles.iter().find(|ds| ds.name.eq_ignore_ascii_case(&name)).map(|ds| ds.handle) {
+            doc.header.current_dimstyle_handle = h;
+        }
+    }
+
     fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>) -> Result<Vec<u8>, String> {
         let data = dxf.to_vec();
         let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
@@ -400,6 +425,7 @@ mod native {
         }
         table_style_rows(&mut doc, true);
         drop_unwritable(&mut doc);
+        current_dimstyle(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
             .map_err(|e| format!("DWG write: {e}"))
