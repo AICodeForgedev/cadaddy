@@ -90,6 +90,7 @@ pub mod etransmit;
 pub mod exchange;
 pub mod publishdlg;
 pub mod sheetsets;
+pub mod standardsdlg;
 
 use std::sync::mpsc::Receiver;
 
