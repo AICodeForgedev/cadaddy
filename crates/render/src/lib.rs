@@ -14,6 +14,7 @@ mod hatch;
 pub mod hlr;
 pub mod images;
 pub mod light;
+pub mod lightmap;
 mod linetype;
 mod linetype_text;
 pub mod live;

@@ -129,6 +129,12 @@ pub struct Scene {
     pub textures: Vec<std::sync::Arc<Raster>>,
     /// What lights the scene (the Realistic style).
     pub lighting: Option<crate::light::Lighting>,
+    /// The object each triangle belongs to (as [`scene`] builds it; parallel to `tris`).
+    pub owners: Vec<Handle>,
+    /// Baked indirect light ([`crate::lightmap`]) for the triangles that have it.
+    pub baked: Option<crate::lightmap::Baked>,
+    /// The object whose triangles are being added.
+    pub(crate) owner_now: Handle,
 }
 
 /// Texture size generated for a library material, pixels.
@@ -246,6 +252,7 @@ pub fn scene(d: &Drawing, space: &Space, tol: f64, bg: Rgb) -> Scene {
             continue;
         }
         let (color, surface) = colors.get(&e.handle).copied().unwrap_or((ink, Rgb(255, 255, 255)));
+        out.owner_now = e.handle;
         match &e.kind {
             EntityKind::Mesh(m) => {
                 native.insert(e.handle);
@@ -341,6 +348,7 @@ pub fn scene(d: &Drawing, space: &Space, tol: f64, bg: Rgb) -> Scene {
         }
         let z = elevation.get(&p.handle).copied().unwrap_or(0.0);
         let color = p.display_rgb(bg);
+        out.owner_now = p.handle;
         let pts = list.points(p);
         let lift = |q: &Vec2| Vec3::new(q.x, q.y, z);
         match p.kind {
@@ -365,6 +373,7 @@ pub fn scene(d: &Drawing, space: &Space, tol: f64, bg: Rgb) -> Scene {
 fn push_tri(s: &mut Scene, t: Tri) {
     if s.tris.len() < MAX_SCENE && t.p.iter().all(|p| p.is_finite()) {
         s.tris.push(t);
+        s.owners.push(s.owner_now);
     }
 }
 
@@ -670,7 +679,7 @@ pub(crate) fn sample(r: &Raster, uv: [f32; 2]) -> [f32; 3] {
 /// sky, the sun (with its shadows) and the lights, through its material and texture; glass and
 /// other see-through surfaces over what lies behind; line objects on top; the sky behind.
 fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Raster {
-    use crate::light::{Surface, background, shade, tonemap};
+    use crate::light::{Surface, background, shade_baked, tonemap};
     let (w, h) = (v.width_px as usize, v.height_px as usize);
     // The sky behind: the view direction tilted with the image row.
     let mut color: Vec<[u8; 4]> = Vec::with_capacity(w * h);
@@ -714,7 +723,7 @@ fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Rast
         .collect();
     let lin = |c: u8| (f32::from(c) / 255.0).powf(2.2);
     // Colour of triangle `tri` at barycentric weights `b`: material, texture, light.
-    let pixel = |tri: &Tri, n: Vec3, b: [f64; 3]| -> ([u8; 3], f32) {
+    let pixel = |ti: usize, tri: &Tri, n: Vec3, b: [f64; 3]| -> ([u8; 3], f32) {
         let p = tri.p[0] * b[0] + tri.p[1] * b[1] + tri.p[2] * b[2];
         let (surface, opacity) = match scene.surfaces.get(tri.mat as usize) {
             Some(m) => {
@@ -730,7 +739,10 @@ fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Rast
             None => (Surface { base: [lin(tri.color.0), lin(tri.color.1), lin(tri.color.2)], roughness: 0.6, metallic: 0.0 }, 1.0),
         };
         let sun = shadows.as_ref().map_or(1.0, |m| m.lit(p + n * f64::from(m.bias) * 0.5));
-        (tonemap(shade(lit, p, n, view_dir, &surface, sun), lit.exposure), opacity)
+        // Its back is the side seen when the corners turn clockwise from here.
+        let back = (tri.p[1] - tri.p[0]).cross(tri.p[2] - tri.p[0]).dot(n) < 0.0;
+        let baked = scene.baked.as_ref().and_then(|bk| bk.at(ti, b[1], b[2], back));
+        (tonemap(shade_baked(lit, p, n, view_dir, &surface, sun, baked), lit.exposure), opacity)
     };
     let bands = h.div_ceil(BAND).max(1);
     let mut binned: Vec<Vec<usize>> = vec![Vec::new(); bands];
@@ -779,7 +791,7 @@ fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Rast
                         if z <= *d {
                             continue;
                         }
-                        let (rgb, opacity) = pixel(tri, t.n, [w0, w1, w2]);
+                        let (rgb, opacity) = pixel(t.tri, tri, t.n, [w0, w1, w2]);
                         if pass == 0 {
                             *d = z;
                             *c = [rgb[0], rgb[1], rgb[2], 255];

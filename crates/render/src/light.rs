@@ -188,7 +188,12 @@ pub fn ambient(lit: &Lighting, n: Vec3, s: &Surface) -> [f32; 3] {
     let env = mix3(lit.sky.ground, sky_part, up * 0.5 + 0.5);
     // Light bounced off the surroundings: the sky's colour softened towards grey.
     let grey = (env[0] + env[1] + env[2]) / 3.0;
-    let env = mix3(env, [grey; 3], 0.5);
+    surround(mix3(env, [grey; 3], 0.5), s)
+}
+
+/// What light `env` arriving from all around (radiance: baked, or the sky's) does on surface
+/// `s`: diffuse, plus a rough specular share for metals.
+pub fn surround(env: [f32; 3], s: &Surface) -> [f32; 3] {
     let kd = (1.0 - s.metallic) * 0.96;
     let spec = mix3([0.04; 3], s.base, s.metallic);
     let gloss = (1.0 - s.roughness).clamp(0.0, 1.0) * 0.5;
@@ -198,7 +203,15 @@ pub fn ambient(lit: &Lighting, n: Vec3, s: &Surface) -> [f32; 3] {
 /// The light leaving point `p` (normal `n`, `v` towards the viewer) of surface `s`: the sky, the
 /// sun (`sun_shadow` 0 = in its shadow … 1 = lit) and every light. Linear, before exposure.
 pub fn shade(lit: &Lighting, p: Vec3, n: Vec3, v: Vec3, s: &Surface, sun_shadow: f32) -> [f32; 3] {
-    let mut c = ambient(lit, n, s);
+    shade_baked(lit, p, n, v, s, sun_shadow, None)
+}
+
+/// [`shade`] with the light baked onto the surface (LIGHTBAKE) in place of the sky's ambient.
+pub fn shade_baked(lit: &Lighting, p: Vec3, n: Vec3, v: Vec3, s: &Surface, sun_shadow: f32, baked: Option<[f32; 3]>) -> [f32; 3] {
+    let mut c = match baked {
+        Some(env) => surround(env, s),
+        None => ambient(lit, n, s),
+    };
     let mut add = |rgb: [f32; 3], f: [f32; 3]| {
         for i in 0..3 {
             c[i] += rgb[i] * f[i];

@@ -35,6 +35,7 @@ mod layer;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
 pub(crate) mod layout;
+pub mod lightbake;
 pub mod lights;
 mod lisp;
 pub mod materials;
@@ -223,6 +224,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(draworder::specs());
         v.extend(hyperlink::specs());
         v.extend(lights::specs());
+        v.extend(lightbake::specs());
         v.extend(materials::specs());
         v.extend(wallgen::specs());
         v.extend(bspec::specs());
