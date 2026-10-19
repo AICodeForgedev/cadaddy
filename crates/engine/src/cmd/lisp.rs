@@ -4,6 +4,7 @@
 use serde_json::{Value, json};
 
 use super::{bad, str_param};
+use crate::lisp::dialog::Event;
 use crate::lisp::value::{Value as Lv, to_text};
 use crate::{Accept, CommandSpec, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
@@ -17,8 +18,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(ApploadM))),
         CommandSpec::new("lisp", "Evaluate LISP", run_lisp)
             .params(
-                "{code: LISP source, inputs?: [answers to get… calls: numbers, strings, [x,y] points]} → {value (printed as prin1), output: lines printed, error?}",
+                "{code: LISP source, inputs?: [answers to get… calls: numbers, strings, [x,y] points], dialog?: [tile actions for start_dialog, in turn: {key, value?, reason?}]} → {value (printed as prin1), output: lines printed, error?}",
             )
+            .noundo(),
+        CommandSpec::new("lisp.dialog", "Dialog State", run_dcl_state).params("{} → {dialog, tile: {type, key?, value?, items?, disabled?, tiles?, …attributes}} | {dialog: null}").noundo(),
+        CommandSpec::new("lisp.tile", "Dialog Action", run_dcl_action)
+            .params("{key, value?, reason?: 1} | {cancel: true} — act on a tile of the dialog a LISP routine waits in → {dialog: state after, or null when it closed}")
             .noundo(),
     ]
 }
@@ -62,15 +67,59 @@ fn input_value(v: &Value) -> Lv {
     }
 }
 
+/// A tile action from JSON: `{key, value?, reason?}`.
+fn dialog_event(cmd: &str, v: &Value) -> Result<Event> {
+    let key = str_param(v, "key").ok_or_else(|| bad(cmd, "each tile action needs a `key`"))?;
+    let value = match v.get("value") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(other) => Some(other.to_string()),
+    };
+    let reason = v.get("reason").and_then(Value::as_i64).and_then(|r| i32::try_from(r).ok()).unwrap_or(1);
+    Ok(Event { key: key.to_string(), value, reason })
+}
+
 fn run_lisp(s: &mut Session, p: &Value) -> Result<Value> {
     let code = str_param(p, "code").ok_or_else(|| bad("lisp", "`code` is required"))?;
     let inputs = p.get("inputs").and_then(Value::as_array).map(|a| a.iter().map(input_value).collect()).unwrap_or_default();
+    let dialog = match p.get("dialog") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(a)) if a.len() <= MAX_SCRIPT => a.iter().map(|v| dialog_event("lisp", v)).collect::<Result<_>>()?,
+        Some(Value::Array(_)) => return Err(bad("lisp", format!("`dialog` holds at most {MAX_SCRIPT} tile actions"))),
+        Some(_) => return Err(bad("lisp", "`dialog` must be an array of {key, value?}")),
+    };
     let from = s.log.len();
-    let r = s.lisp_eval(code, false, true, inputs).map_err(|e| match e {
+    let r = s.lisp_eval_scripted(code, inputs, dialog).map_err(|e| match e {
         EngineError::Other(m) => bad("lisp", m),
         e => e,
     })?;
     Ok(report(s, from, r))
+}
+
+/// Tile actions one `lisp` call may script, at most.
+const MAX_SCRIPT: usize = 10_000;
+
+fn dialog_state(s: &Session) -> Value {
+    match s.lisp_dialog() {
+        Some(d) => crate::lisp::dialog::to_json(d),
+        None => json!({ "dialog": null }),
+    }
+}
+
+fn run_dcl_state(s: &mut Session, _p: &Value) -> Result<Value> {
+    Ok(dialog_state(s))
+}
+
+fn run_dcl_action(s: &mut Session, p: &Value) -> Result<Value> {
+    if s.lisp_dialog().is_none() {
+        return Err(bad("lisp.tile", "no LISP dialog is waiting"));
+    }
+    if p.get("cancel").and_then(Value::as_bool) == Some(true) {
+        s.dcl_cancel();
+    } else {
+        s.dcl_event(dialog_event("lisp.tile", p)?).map_err(|m| bad("lisp.tile", m))?;
+    }
+    Ok(dialog_state(s))
 }
 
 /// APPLOAD typed or chosen from the menu: asks for the file by name.

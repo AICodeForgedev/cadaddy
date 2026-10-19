@@ -1214,8 +1214,18 @@ impl Session {
             return r;
         }
         let outer = self.journal.enter();
+        // An agent's or script's call of a command that edits the drawing sets off reactors, as
+        // the same command typed does (`start`).
+        let react = outer && find_command(id).is_some_and(|c| c.undoable);
+        if react {
+            self.lisp_command_event(lisp::reactor::CommandEvent::WillStart, id);
+        }
         let r = self.execute_inner(id, params);
         self.journal.leave();
+        if react {
+            let event = if r.is_ok() { lisp::reactor::CommandEvent::Ended } else { lisp::reactor::CommandEvent::Failed };
+            self.lisp_command_event(event, id);
+        }
         if outer && r.is_ok() {
             self.journal.call(id, params);
         }
@@ -1360,6 +1370,9 @@ impl Session {
             self.last_command = Some(spec.id.to_string());
             self.echo(format!("Command: {}", spec.id.to_ascii_uppercase()));
         }
+        if !nested {
+            self.lisp_command_event(lisp::reactor::CommandEvent::WillStart, spec.id);
+        }
         match spec.interactive {
             Some(factory) => {
                 let machine = guard::Guarded::create(spec.id, factory, self)?;
@@ -1376,7 +1389,10 @@ impl Session {
                 Ok(())
             }
             None => {
-                let r = self.execute(spec.id, &Value::Null)?;
+                let r = self.execute(spec.id, &Value::Null);
+                let event = if r.is_ok() { lisp::reactor::CommandEvent::Ended } else { lisp::reactor::CommandEvent::Failed };
+                self.lisp_command_event(event, spec.id);
+                let r = r?;
                 if let Some(s) = r.as_str() {
                     self.echo(s.to_string());
                 } else if !r.is_null()
@@ -1695,6 +1711,14 @@ impl Session {
     }
 
     fn finish(&mut self, run: Running, cancelled: bool) {
+        let id = run.id.clone();
+        self.finish_steps(run, cancelled);
+        // Reactors react once the command's undo step is in place.
+        let event = if cancelled { lisp::reactor::CommandEvent::Cancelled } else { lisp::reactor::CommandEvent::Ended };
+        self.lisp_command_event(event, &id);
+    }
+
+    fn finish_steps(&mut self, run: Running, cancelled: bool) {
         // A typed selection mode or SIngle never outlives its command.
         self.select_mode = None;
         self.select_single = false;

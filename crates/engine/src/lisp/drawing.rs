@@ -66,6 +66,10 @@ fn items(p: &PickSet) -> Vec<Handle> {
 /// selection set picks objects, and `pause` waits for the user. A command not finished by the
 /// arguments stays active for the next `command` call. No arguments: cancel the active command.
 pub fn command(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
+    // A reactor's callback runs between commands: one it started would set off reactors itself.
+    if ctx.s.lisp.in_reactor {
+        return Err(LispError::new("command: not allowed in a reactor callback"));
+    }
     if a.is_empty() {
         if ctx.s.running.is_some() {
             ctx.s.cancel();

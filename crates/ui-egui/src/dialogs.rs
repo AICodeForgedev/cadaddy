@@ -16,6 +16,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         app.ui.dialog = Some("color".into());
     }
     crate::agentdlg::confirm_prompt(app, ctx);
+    crate::lispdlg::show(app, ctx);
     let Some(d) = app.ui.dialog.clone() else { return };
     let mut open = true;
     match d.as_str() {

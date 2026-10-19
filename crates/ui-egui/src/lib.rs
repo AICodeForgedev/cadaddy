@@ -77,6 +77,7 @@ pub mod layers;
 pub mod layerstates;
 pub mod layouttabs;
 pub mod laywalkdlg;
+pub mod lispdlg;
 pub mod managers;
 pub mod markuppalette;
 pub mod matchpropdlg;
@@ -968,6 +969,8 @@ impl CadApp {
         if self.session.lisp_busy() {
             ctx.request_repaint();
         }
+        // Esc in a LISP routine's dialog is its Cancel, not the end of the routine.
+        crate::lispdlg::escape(self, ctx);
         // Esc in a dialog is Cancel: it closes the dialog, and the command line doesn't also
         // get it (cancelling a command waiting behind the dialog).
         if self.ui.dialog.is_some() && self.closing.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
