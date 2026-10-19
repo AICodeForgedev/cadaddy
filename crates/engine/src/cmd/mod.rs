@@ -316,6 +316,11 @@ pub(crate) fn points_param(p: &Value, key: &str) -> Option<Vec<Vec2>> {
 }
 /// Handles from `handles` (hex strings or numbers), `handle`, or else the current selection. A
 /// `handle`/`handles` that can't be read is an error, never a silent fall back to the selection.
+/// Evaluate a DIESEL expression (as RTEXT does).
+pub fn express_diesel(s: &Session, expr: &str) -> String {
+    express::rtext::diesel(s, expr)
+}
+
 pub(crate) fn targets(s: &Session, p: &Value) -> Result<Vec<Handle>> {
     let handle = |v: &Value| v.as_str().and_then(Handle::parse_hex).or_else(|| v.as_u64().map(Handle));
     let not_handle = |key: &str, v: &Value| EngineError::Other(format!("`{key}`: {v} is not an object handle (a hex string such as \"1A2\")"));

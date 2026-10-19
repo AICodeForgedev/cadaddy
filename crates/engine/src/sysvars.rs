@@ -325,7 +325,7 @@ fn as_f64(v: &Value) -> Option<f64> {
     v.as_f64().or_else(|| v.as_str().and_then(crate::units::parse_distance)).filter(|f| f.is_finite())
 }
 /// DWGPREFIX: everything up to the last path separator of `path`, or the current folder.
-fn dwg_prefix(path: Option<&str>) -> String {
+pub(crate) fn dwg_prefix(path: Option<&str>) -> String {
     if let Some(p) = path
         && let Some(i) = p.rfind(['/', '\\'])
     {

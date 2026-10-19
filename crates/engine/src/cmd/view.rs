@@ -74,6 +74,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("regen", "Regen", |s, _| {
             // Table formulas are recalculated (as on UPDATEFIELD), and image files looked up again.
             super::table::recalc(s, None)?;
+            super::express::rtext::refresh(s, None)?;
             cadaddy_render::images::revalidate();
             s.touch();
             Ok(json!({"message": "Regenerating model."}))
@@ -82,6 +83,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .alias(&["re"])
         .noundo(),
         CommandSpec::new("regenall", "Regen All", |s, _| {
+            super::express::rtext::refresh(s, None)?;
             cadaddy_render::images::revalidate();
             s.touch();
             Ok(json!({"message": "Regenerating all viewports."}))

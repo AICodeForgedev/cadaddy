@@ -13,9 +13,12 @@ use cadaddy_doc::{Common, Entity, EntityKind, HAlign, Handle, Lineweight, MText,
 use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
 
+pub mod attio;
 mod blockreplace;
 mod breakline;
 mod mocoro;
+pub mod rtext;
+pub mod texttools;
 
 use super::machines::{SelOutcome, SelectPhase, SelectRun};
 use super::*;
@@ -44,6 +47,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handles? (default the selection), base, steps: [{move: [x, y]} | {copy: [x, y]} | {rotate: degrees} | {scale: factor} | {base: [x, y]}, …]} → {handles, base}: one undo step")
             .interactive(|_| Ok(Box::new(mocoro::MocoroM::new()))),
     ]
+    .into_iter()
+    .chain(texttools::specs())
+    .chain(attio::specs())
+    .chain(rtext::specs())
+    .collect()
 }
 
 // ---------- BURST ----------
