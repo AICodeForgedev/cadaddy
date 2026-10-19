@@ -144,7 +144,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                         if ui.add_enabled(i + 1 < n, egui::Button::new("▼")).clicked() {
                             swap = Some((i, i + 1));
                         }
-                        if ui.button("✕").on_hover_text(crate::tl!("Remove Sheet")).clicked() {
+                        if crate::icons::button(ui, crate::icons::Icon::Close, 18.0, "Remove Sheet", false).clicked() {
                             remove = Some(i);
                         }
                     });
