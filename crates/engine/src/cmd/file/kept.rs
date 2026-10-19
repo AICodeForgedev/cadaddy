@@ -115,9 +115,242 @@ pub fn not_kept(
 ) -> Vec<&'static str> {
     let Ok(bytes) = write(d, name) else { return Vec::new() };
     let Ok(back) = read(&bytes, name) else { return Vec::new() };
-    let lost: Vec<&'static str> = parts(d).into_iter().zip(parts(&back)).filter(|((_, a), (_, b))| !kept(a, b, 0)).map(|((n, _), _)| n).collect();
+    lost_parts(d, &back)
+}
+
+/// The parts of `d` that `back` (`d` written and read back) no longer holds.
+fn lost_parts(d: &Drawing, back: &Drawing) -> Vec<&'static str> {
+    let lost: Vec<&'static str> = parts(d).into_iter().zip(parts(back)).filter(|((_, a), (_, b))| !kept(a, b, 0)).map(|((n, _), _)| n).collect();
     // Properties are compared object by object: with objects missing they no longer line up.
     if d.model.len() != back.model.len() { lost.into_iter().filter(|n| *n != "object properties").collect() } else { lost }
+}
+
+/// One thing a DWG or DXF file wouldn't keep, as the exchange notice lists it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Loss {
+    /// What is lost, in words: "mesh objects", "line thickness", "object transparency", "layers".
+    pub feature: String,
+    /// `dropped` (gone from the file) or `changed` (in it, but not as it was).
+    pub what: &'static str,
+    /// How many objects or records.
+    pub count: usize,
+    /// The objects concerned (hex handles), at most [`MAX_LISTED`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub handles: Vec<String>,
+    /// The table records or blocks concerned, at most [`MAX_LISTED`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
+}
+
+/// Handles or names listed per loss.
+pub const MAX_LISTED: usize = 50;
+/// Objects compared one by one per space or block for the detailed list (past it, spread evenly).
+const DETAIL_SAMPLE: usize = 50_000;
+
+/// Losses gathered by feature.
+#[derive(Default)]
+struct Losses(std::collections::BTreeMap<(String, &'static str), Loss>);
+
+impl Losses {
+    fn add(&mut self, feature: String, what: &'static str, handle: Option<String>, name: Option<String>) {
+        let l = self.0.entry((feature.clone(), what)).or_insert_with(|| Loss { feature, what, count: 0, handles: Vec::new(), names: Vec::new() });
+        l.count = l.count.saturating_add(1);
+        if let Some(h) = handle.filter(|_| l.handles.len() < MAX_LISTED) {
+            l.handles.push(h);
+        }
+        if let Some(n) = name.filter(|n| l.names.len() < MAX_LISTED && !l.names.contains(n)) {
+            l.names.push(n);
+        }
+    }
+}
+
+/// The type an object is listed under: its kind (`line`, `mesh`), or the file's type name for
+/// objects CADaddy keeps as raw data.
+fn kind_name(kind: &serde_json::Value) -> String {
+    match kind.get("type").and_then(serde_json::Value::as_str) {
+        Some("unknown") => {
+            kind.get("dxf_type").or_else(|| kind.get("dxfType")).and_then(serde_json::Value::as_str).unwrap_or("unknown").to_ascii_lowercase()
+        }
+        Some(t) => t.to_ascii_lowercase(),
+        None => "object".into(),
+    }
+}
+
+/// Words for a field name: `plotStyle` → "plot style", `anno_scales` → "anno scales".
+fn words(key: &str) -> String {
+    let mut out = String::new();
+    for c in key.chars() {
+        if c == '_' {
+            out.push(' ');
+        } else if c.is_uppercase() {
+            out.push(' ');
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out.trim().to_string()
+}
+
+/// The top-level fields of `a` that `b` no longer holds.
+fn changed_fields(a: &serde_json::Value, b: &serde_json::Value) -> Vec<String> {
+    match (a.as_object(), b.as_object()) {
+        (Some(x), Some(y)) => x
+            .iter()
+            .filter(|(k, v)| k.as_str() != "type" && !y.get(k.as_str()).map_or_else(|| kept(v, &serde_json::Value::Null, 1), |w| kept(v, w, 1)))
+            .map(|(k, _)| k.clone())
+            .collect(),
+        _ => vec![String::new()],
+    }
+}
+
+/// The objects of one space or block compared one by one, matched by handle.
+fn compare_objects(a: &cadaddy_doc::EntityStore, b: &cadaddy_doc::EntityStore, block: Option<&str>, out: &mut Losses) {
+    fn v<T: Serialize>(t: &T) -> serde_json::Value {
+        serde_json::to_value(t).unwrap_or_default()
+    }
+    let back: std::collections::HashMap<cadaddy_doc::Handle, &std::sync::Arc<cadaddy_doc::Entity>> = b.iter().map(|e| (e.handle, e)).collect();
+    let step = a.len().div_ceil(DETAIL_SAMPLE).max(1);
+    for e in a.iter().step_by(step) {
+        let ka = content(v(&e.kind));
+        let kind = kind_name(&ka);
+        let (h, name) = (Some(e.handle.hex()), block.map(str::to_string));
+        let Some(f) = back.get(&e.handle) else {
+            out.add(format!("{kind} objects"), "dropped", h, name);
+            continue;
+        };
+        let kb = content(v(&f.kind));
+        if kind_name(&kb) != kind {
+            out.add(format!("{kind} objects (written as {})", kind_name(&kb)), "changed", h, name);
+            continue;
+        }
+        for field in changed_fields(&ka, &kb) {
+            let feature = if field.is_empty() { format!("{kind} objects") } else { format!("{kind} {}", words(&field)) };
+            out.add(feature, "changed", h.clone(), name.clone());
+        }
+        for field in changed_fields(&v(&e.common), &v(&f.common)) {
+            out.add(format!("object {}", words(&field)), "changed", h.clone(), name.clone());
+        }
+    }
+}
+
+/// The records of one table compared by name.
+fn compare_table(table: &str, a: &serde_json::Value, b: &serde_json::Value, out: &mut Losses) {
+    let by_name = |v: &serde_json::Value| -> Vec<(String, serde_json::Value)> {
+        v.as_array()
+            .map(|a| a.iter().map(|r| (r.get("name").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(), r.clone())).collect())
+            .unwrap_or_default()
+    };
+    let back: std::collections::HashMap<String, serde_json::Value> = by_name(b).into_iter().map(|(n, r)| (n.to_ascii_lowercase(), r)).collect();
+    for (name, rec) in by_name(a) {
+        match back.get(&name.to_ascii_lowercase()) {
+            None => out.add(table.to_string(), "dropped", None, Some(name)),
+            Some(r) => {
+                // Names are matched without regard to case (Release 12 upper-cases them).
+                for field in changed_fields(&rec, r).into_iter().filter(|f| f != "name") {
+                    let feature = if field.is_empty() { table.to_string() } else { format!("{table}: {}", words(&field)) };
+                    out.add(feature, "changed", None, Some(name.clone()));
+                }
+            }
+        }
+    }
+}
+
+/// What a DWG or DXF file named `name` wouldn't keep of `d`, feature by feature with counts and
+/// the objects or records concerned: `d` written with `write`, read back with `read` and compared
+/// object by object (by handle) and record by record (by name). An error when the file can't be
+/// written or read back.
+pub fn losses(
+    d: &Drawing,
+    name: &str,
+    write: fn(&Drawing, &str) -> Result<Vec<u8>, String>,
+    read: fn(&[u8], &str) -> Result<Drawing, String>,
+) -> Result<Vec<Loss>, String> {
+    let bytes = write(d, name)?;
+    let back = read(&bytes, name)?;
+    Ok(losses_of(d, &back))
+}
+
+/// [`not_kept`] and [`losses`] of `d` against `bytes` (`d` written as `name`), read back with `read`.
+pub fn check_written(
+    d: &Drawing,
+    name: &str,
+    bytes: &[u8],
+    read: fn(&[u8], &str) -> Result<Drawing, String>,
+) -> Result<(Vec<&'static str>, Vec<Loss>), String> {
+    let back = read(bytes, name)?;
+    Ok((lost_parts(d, &back), losses_of(d, &back)))
+}
+
+/// [`losses`] of `d` against `back`, a copy of it written and read back by the caller.
+pub fn losses_between(d: &Drawing, back: &Drawing) -> Vec<Loss> {
+    losses_of(d, back)
+}
+
+fn losses_of(d: &Drawing, back: &Drawing) -> Vec<Loss> {
+    fn v<T: Serialize>(t: &T) -> serde_json::Value {
+        serde_json::to_value(t).unwrap_or_default()
+    }
+    let mut out = Losses::default();
+    compare_objects(&d.model, &back.model, None, &mut out);
+    for l in &d.layouts {
+        match back.layouts.iter().find(|x| x.name.eq_ignore_ascii_case(&l.name)) {
+            Some(m) => compare_objects(&l.entities, &m.entities, Some(&l.name), &mut out),
+            None => out.add("layouts".into(), "dropped", None, Some(l.name.clone())),
+        }
+    }
+    for (n, b) in d.blocks.iter().filter(|(_, b)| !b.anonymous) {
+        match back.blocks.get(n) {
+            Some(m) => compare_objects(&b.entities, &m.entities, Some(n), &mut out),
+            None => out.add("blocks".into(), "dropped", None, Some(n.clone())),
+        }
+    }
+    let tables: [(&str, serde_json::Value, serde_json::Value); 7] = [
+        ("layers", v(&d.layers), v(&back.layers)),
+        ("linetypes", v(&d.linetypes), v(&back.linetypes)),
+        ("text styles", v(&d.text_styles), v(&back.text_styles)),
+        ("dimension styles", v(&d.dim_styles), v(&back.dim_styles)),
+        ("multileader styles", v(&d.mleader_styles), v(&back.mleader_styles)),
+        ("table styles", v(&d.table_styles), v(&back.table_styles)),
+        ("multiline styles", v(&d.mline_styles), v(&back.mline_styles)),
+    ];
+    for (t, a, b) in &tables {
+        compare_table(t, a, b, &mut out);
+    }
+    // The rest as whole parts (counted by their items).
+    let whole: [(&str, serde_json::Value, serde_json::Value); 10] = [
+        ("named views", v(&d.views), v(&back.views)),
+        ("viewport configurations", v(&d.vports), v(&back.vports)),
+        ("UCSs", v(&d.ucss), v(&back.ucss)),
+        ("layer states", v(&d.layer_states), v(&back.layer_states)),
+        ("groups", v(&d.groups), v(&back.groups)),
+        ("plot style tables", v(&d.plot_style_tables), v(&back.plot_style_tables)),
+        ("geometric and dimensional constraints", v(&d.constraints), v(&back.constraints)),
+        ("parameters", v(&d.parametric), v(&back.parametric)),
+        ("the scale list", v(&d.scales), v(&back.scales)),
+        ("materials", v(&d.materials), v(&back.materials)),
+    ];
+    for (part, a, b) in whole {
+        if !kept(&a, &b, 0) {
+            let count = a.as_array().map_or(1, Vec::len);
+            let l = out.0.entry((part.to_string(), "changed")).or_insert_with(|| Loss {
+                feature: part.into(),
+                what: "changed",
+                count: 0,
+                handles: Vec::new(),
+                names: Vec::new(),
+            });
+            l.count = count;
+        }
+    }
+    let mut list: Vec<Loss> = out.0.into_values().collect();
+    list.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.feature.cmp(&b.feature)));
+    list
+}
+
+/// The losses in a line for the command line: "12 mesh objects dropped, 3 line thickness changed".
+pub fn losses_line(list: &[Loss]) -> String {
+    list.iter().map(|l| format!("{} {} {}", l.count, l.feature, l.what)).collect::<Vec<_>>().join(", ")
 }
 
 #[cfg(test)]

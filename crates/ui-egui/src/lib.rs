@@ -59,6 +59,7 @@ pub mod xrefs;
 
 pub mod dyngrips;
 pub mod dyninput;
+pub mod exchangeloss;
 pub mod extractdlg;
 pub mod finddlg;
 pub mod gpu;
@@ -432,6 +433,8 @@ pub struct CadApp {
     pub bedit: bedit::State,
     /// Walk mode, while it is open: the drawing in 3D in place of the canvas ([`walk`]).
     pub walk: Option<walk::Walk>,
+    /// What the last DWG/DXF save didn't keep, while its notice is open ([`exchangeloss`]).
+    pub exchange_notice: Option<Value>,
     /// The app's wgpu render state (walk mode draws its 3D with it).
     pub wgpu_rs: Option<egui_wgpu::RenderState>,
 }
@@ -499,6 +502,7 @@ impl CadApp {
             layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
+            exchange_notice: None,
             wgpu_rs: None,
         }
     }
@@ -557,17 +561,21 @@ impl CadApp {
         if let Err(e) = &r {
             self.session.echo(e.user_message());
         }
+        // A programmatic save reports what the file didn't keep in its reply, not in a dialog.
+        exchangeloss::take(self, false);
         r.map_err(|e| e.to_string())
     }
 
     /// Start a command as if typed (interactive when it has prompts).
     pub fn start(&mut self, name: &str) {
         if menus::run_ui_command(self, name, &Value::Null).is_some() {
+            exchangeloss::take(self, true);
             return;
         }
         if let Err(e) = self.session.start(name) {
             self.session.echo(e.user_message());
         }
+        exchangeloss::take(self, true);
     }
 
     /// Submit a line of command-line text. A refused line is echoed to the history; the error is
@@ -584,10 +592,13 @@ impl CadApp {
                 && (!more || !menus::DIALOG_WHEN_ALONE.contains(&word.as_str()))
                 && menus::run_ui_command(self, &word, &Value::Null).is_some()
             {
+                exchangeloss::take(self, true);
                 return None;
             }
         }
-        let e = self.session.cmdline(text).err()?.to_string();
+        let r = self.session.cmdline(text);
+        exchangeloss::take(self, true);
+        let e = r.err()?.to_string();
         self.session.echo(e.clone());
         Some(e)
     }

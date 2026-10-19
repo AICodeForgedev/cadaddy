@@ -228,6 +228,9 @@ pub struct DocState {
     /// Saving into DWG or DXF has checked what that file wouldn't keep of the drawing (and said
     /// so, when anything): it is checked once per drawing.
     pub kept_checked: bool,
+    /// What the first DWG or DXF save of the drawing couldn't keep, feature by feature
+    /// (`{path, format, losses}`), for the app to show once in a dialog; taken by the app.
+    pub exchange_notice: Option<serde_json::Value>,
     /// The .cdy file this drawing was last saved to or read from, and what it holds: the next
     /// save there appends only what changed ([`cmd::file::CdySaved`]).
     pub cdy_saved: Option<cmd::file::CdySaved>,
@@ -277,6 +280,7 @@ impl DocState {
             read_loss: None,
             loss_warned: false,
             kept_checked: false,
+            exchange_notice: None,
             cdy_saved: None,
             wallgen: None,
             model_record: None,

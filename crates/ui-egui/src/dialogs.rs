@@ -54,6 +54,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "sheetset" => crate::sheetsets::dialog(app, ctx, &mut open),
         "publish" => crate::publishdlg::dialog(app, ctx, &mut open),
         crate::roomsdlg::DIALOG => crate::roomsdlg::dialog(app, ctx, &mut open),
+        crate::exchangeloss::DIALOG => crate::exchangeloss::dialog(app, ctx, &mut open),
         o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }
