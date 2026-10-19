@@ -2086,6 +2086,11 @@ fn table(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::Table, rgb: Ink, lw: f32) 
     table::draw(b, ctx, t, rgb, lw);
 }
 
+/// A TEXT's justification as the fonts' alignment (used where text is placed outside a build).
+pub fn text_align(h: cadaddy_doc::HAlign, v: cadaddy_doc::VAlign) -> (cadaddy_fonts::Align, cadaddy_fonts::VAlign) {
+    align(h, v)
+}
+
 fn align(h: cadaddy_doc::HAlign, v: cadaddy_doc::VAlign) -> (cadaddy_fonts::Align, cadaddy_fonts::VAlign) {
     use cadaddy_fonts::{Align as A, VAlign as V};
     let ha = match h {

@@ -935,8 +935,61 @@ fn seqend(w: &mut W, e: &Entity) {
     w.s(8, e.common.layer.as_str());
 }
 
-fn text_tags(w: &mut W, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
-    w.p(10, t.insert);
+/// The insertion point (group 10) to write for `t`. A justified text is placed by its alignment
+/// point (group 11), and its insertion point is the start of its baseline, which AutoCAD reads
+/// from DWG as is (it recomputes it only for DXF): writing the alignment point there drew centred
+/// and right-aligned text from the wrong end in AutoCAD (#1050).
+///
+/// The stored point is kept when it is close to where CADaddy's font puts the baseline start:
+/// then it is AutoCAD's own (exact for its fonts). It is replaced when it is clearly stale: the
+/// alignment point itself (text made here) or a text whose length changed since. Close means
+/// along the baseline within a tenth of the text's width plus half its height (AutoCAD's fonts,
+/// or the ones CADaddy substitutes for them, differ most in width, and most on short texts) and
+/// across it within a fifth of its height: Left Middle and Left Bottom text made here, whose
+/// alignment point is only half or a third of a height from the baseline start, must not pass
+/// for AutoCAD's.
+fn text_insert(d: &Drawing, t: &Text) -> Vec3 {
+    let computed = computed_text_insert(d, t);
+    if t.align_pt.is_some_and(|a| a.xy() == t.insert.xy()) {
+        return computed;
+    }
+    let h = t.height.abs();
+    let off = (t.insert.xy() - computed.xy()).rotate(-t.rotation);
+    let close = if t.value.contains('\n') {
+        // A multiline attribute's lines are placed by its embedded MTEXT: a one-line baseline
+        // start says little about them, so only the distance counts.
+        let width = t.align_pt.map_or(0.0, |a| 2.0 * a.xy().dist(computed.xy()));
+        off.len() <= 0.1 * width + 0.5 * h
+    } else {
+        let width = cadaddy_fonts::line_width(&t.value, h, t.width_factor.abs());
+        off.x.abs() <= 0.1 * width + 0.5 * h && off.y.abs() <= 0.2 * h
+    };
+    if close { t.insert } else { computed }
+}
+
+fn computed_text_insert(d: &Drawing, t: &Text) -> Vec3 {
+    let justified = !matches!((t.halign, t.valign), (HAlign::Left, VAlign::Baseline) | (HAlign::Aligned | HAlign::Fit, _));
+    let Some(a) = t.align_pt.filter(|_| justified) else { return t.insert };
+    let ts = d.text_style(&t.style).cloned().unwrap_or_default();
+    let (h, v) = cadaddy_render::text_align(t.halign, t.valign);
+    let p = cadaddy_fonts::TextParams {
+        insert: t.insert.xy(),
+        align_pt: Some(a.xy()),
+        height: t.height,
+        rotation: t.rotation,
+        width_factor: t.width_factor,
+        oblique: t.oblique,
+        h,
+        v,
+        backwards: ts.backwards,
+        upside_down: ts.upside_down,
+    };
+    let q = cadaddy_fonts::baseline_start(&cadaddy_fonts::TextFont::resolve(&ts.font), &t.value, &p);
+    if q.is_finite() { Vec3::new(q.x, q.y, a.z) } else { t.insert }
+}
+
+fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
+    w.p(10, text_insert(d, t));
     w.f(40, t.height);
     w.s(1, &t.value);
     if t.rotation != 0.0 {
@@ -1181,8 +1234,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             common_x(w, e, owner, paper, "AcDbText", None, f.as_ref().map(|f| f.1.as_str()));
             thickness(w, e);
             match &f {
-                Some((shown, _)) => text_tags(w, &Text { value: shown.clone(), ..t.clone() }, None, None),
-                None => text_tags(w, t, None, None),
+                Some((shown, _)) => text_tags(w, d, &Text { value: shown.clone(), ..t.clone() }, None, None),
+                None => text_tags(w, d, t, None, None),
             }
         }
         // Closed polylines, one per loop (`dxf_region`): REGION's own data is ACIS.
@@ -1205,8 +1258,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             let f = plan_fields(w, d, cx, &e.handle.hex(), e, 0, &a.text.value);
             common_x(w, e, owner, paper, "AcDbText", None, f.as_ref().map(|f| f.1.as_str()));
             match &f {
-                Some((shown, _)) => text_tags(w, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), Some(&a.prompt)),
-                None => text_tags(w, &a.text, Some((a, cx.target)), Some(&a.prompt)),
+                Some((shown, _)) => text_tags(w, d, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), Some(&a.prompt)),
+                None => text_tags(w, d, &a.text, Some((a, cx.target)), Some(&a.prompt)),
             }
             if cx.target >= Version::R2007 {
                 multiline_tags(w, a, true);
@@ -1293,8 +1346,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     }
                     w.s(100, "AcDbText");
                     match &f {
-                        Some((shown, _)) => text_tags(w, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), None),
-                        None => text_tags(w, &a.text, Some((a, cx.target)), None),
+                        Some((shown, _)) => text_tags(w, d, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), None),
+                        None => text_tags(w, d, &a.text, Some((a, cx.target)), None),
                     }
                     if cx.target >= Version::R2007 {
                         multiline_tags(w, a, false);
@@ -1962,8 +2015,16 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
     let style = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
     let g = cadaddy_render::dimension_in(d, dm);
     let mut out = Vec::new();
-    let c = Common { layer: layer.into(), color: Color::ByBlock, ..Common::default() };
-    for l in &g.lines {
+    // Each part in its style colour (DIMCLRD, DIMCLRE, DIMCLRT), ByBlock when the style says so,
+    // as AutoCAD writes them: readers that draw the block drew every part ByBlock, i.e. in the
+    // dimension's own colour (#1052).
+    let in_color = |color: Color| Common { layer: layer.into(), color, ..Common::default() };
+    let (dim_c, ext_c, text_c) = (in_color(style.dim_line_color), in_color(style.ext_line_color), in_color(style.text_color));
+    for (i, l) in g.lines.iter().enumerate() {
+        let c = match g.line_roles.get(i) {
+            Some(cadaddy_render::LineRole::Ext) => &ext_c,
+            _ => &dim_c,
+        };
         for seg in l.windows(2) {
             if let [a, b] = seg {
                 out.push(Entity { handle: Handle(0), common: c.clone(), kind: EntityKind::Line(Line { a: a.to3(0.0), b: b.to3(0.0) }) });
@@ -1974,7 +2035,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
         if let [a, b, cc] = t.as_slice() {
             out.push(Entity {
                 handle: Handle(0),
-                common: c.clone(),
+                common: dim_c.clone(),
                 kind: EntityKind::Solid(Solid { corners: [a.to3(0.0), b.to3(0.0), cc.to3(0.0), cc.to3(0.0)] }),
             });
         }
@@ -1982,7 +2043,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
     if !g.value.is_empty() {
         out.push(Entity {
             handle: Handle(0),
-            common: c,
+            common: text_c,
             kind: EntityKind::MText(MText {
                 background: None,
                 insert: g.text_pos.to3(0.0),
@@ -2734,6 +2795,16 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
     let scale_dict = w.h_kept("DICT/ACAD_SCALELIST");
     let scales: Vec<(&cadaddy_doc::AnnoScale, String)> = d.scales.iter().filter(|s| s.is_valid()).map(|s| (s, w.h())).collect();
     // Plot style names used by layers and objects (Normal always), each a placeholder object.
+            // DIMPOST is written even when empty: a reader that defaults a missing one to "<>"
+            // (the DWG bridge's) would otherwise give radius and diameter dimensions no "R" or
+            // "Ø" in AutoCAD (#1053).
+            if *code == dxf_ext::DIMPOST
+                && let DimVal::Str(t) = &enc
+                && t.is_empty()
+            {
+                w.s(*code, "");
+                continue;
+            }
     let pstyle_dict = w.h_kept("DICT/ACAD_PLOTSTYLENAME");
     let mut pstyle_names: Vec<String> = vec![cadaddy_doc::NORMAL_STYLE.to_string()];
     let named = d.layers.iter().map(|l| l.plot_style.as_str()).chain(every.iter().map(|e| e.common.plot_style.as_str()));
