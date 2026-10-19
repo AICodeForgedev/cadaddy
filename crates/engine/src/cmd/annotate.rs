@@ -260,18 +260,16 @@ fn radial(s: &mut Session, p: &Value, diameter: bool) -> Result<Value> {
         dim(s, DimKind::Radius, c, Vec2::ZERO, Vec2::ZERO, pt, Vec2::ZERO, "")
     };
     let k = match at {
-        Some(at) => text_inside(k, c, c.dist(pt), at),
+        Some(at) => text_at(k, at),
         None => k,
     };
     Ok(json!({ "handle": add_dim(s, k)?.hex() }))
 }
 
-/// A radius/diameter dimension line location picked inside the circle puts the text there, on
-/// the dimension line (outside, the text keeps its default place beyond the arrowhead).
-fn text_inside(mut k: EntityKind, c: Vec2, r: f64, at: Vec2) -> EntityKind {
-    if let EntityKind::Dimension(d) = &mut k
-        && at.dist(c) < r
-    {
+/// The dimension line location of a radius/diameter dimension puts the text there, inside or
+/// outside the circle, as a user-positioned text (DXF flag 70 bit 128), like AutoCAD.
+fn text_at(mut k: EntityKind, at: Vec2) -> EntityKind {
+    if let EntityKind::Dimension(d) = &mut k {
         d.text_mid = v3(at);
         d.user_text_pos = true;
     }
@@ -1106,7 +1104,7 @@ impl RadialM {
         } else {
             dim(s, DimKind::Radius, c, Vec2::ZERO, Vec2::ZERO, pt, Vec2::ZERO, "")
         });
-        text_inside(k, c, r, at)
+        text_at(k, at)
     }
 }
 
