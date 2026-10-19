@@ -9,6 +9,7 @@ mod ico;
 mod layers;
 mod parity;
 mod smoke;
+mod soak;
 mod stats;
 mod version;
 
@@ -22,7 +23,8 @@ commands:
   assets          check that every icon/image/font/asset is attributed in ATTRIBUTION.md
   layers          enforce the crate dependency layering (plan/architecture.md §3)
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates
-  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm (stops at first failure)
+  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm, soak (2 min headless)
+                  (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -35,6 +37,10 @@ commands:
   smoke <CADaddy-Mac.dmg | CADaddy.app | app executable | CADaddy.mcpb | cadaddy-cli> [--version X.Y.Z] [--out DIR] [--keep]
                   release smoke test: version, draw, save DWG/DXF/.cdy, reopen, plot PDF, sheet set
                   publish, Walk on/off and update check (app); report in target/smoke/report.json
+  soak [--minutes N] [--mode headless|window|both] [--app PATH] [--cli PATH] [--out DIR] [--profile release|dev]
+                  long-session soak: a mixed workload for N minutes (default 2, headless); memory,
+                  handles, GPU buffers and frame times sampled; fails on a leak or a stall;
+                  report in target/soak/report.md
   fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
                   mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
                   saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
@@ -56,6 +62,7 @@ fn main() -> ExitCode {
         Some("fuzz") => cmd_fuzz(&rest),
         Some("casefs") => casefs::run(&root(), &rest),
         Some("smoke") => smoke::run(&root(), &rest),
+        Some("soak") => soak::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -204,6 +211,8 @@ fn cmd_ci() -> Result<(), String> {
         ("assets", Box::new(|| assets::run(&root()))),
         ("layers", Box::new(cmd_layers)),
         ("wasm", Box::new(cmd_wasm)),
+        // Two minutes of the headless app under a mixed workload: a leak or a stall fails.
+        ("soak", Box::new(|| soak::run(&root(), &["--minutes", "2", "--profile", "dev"]))),
     ];
     let mut done = Vec::new();
     for (name, f) in &steps {
