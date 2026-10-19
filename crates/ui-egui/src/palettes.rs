@@ -1093,6 +1093,18 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                         set = Some(json!({ "handles": ids, "dimStyle": n }));
                     }
                 });
+                // The style's values with this dimension's own overrides; editing one overrides
+                // it for the selected dimensions, as AutoCAD's Properties palette does.
+                let st = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
+                num(ui, "Text height", "textHeight", len(st.text_height), &mut set, &mut bad, &ids);
+                num(ui, "Arrow size", "arrowSize", len(st.arrow_size), &mut set, &mut bad, &ids);
+                num(ui, "Dim scale overall", "dimScale", real(st.scale), &mut set, &mut bad, &ids);
+                prop_row(ui, "Precision", |ui| {
+                    let cur = st.decimals.to_string();
+                    if let Some(n) = pick_menu(ui, &cur, (0..=8).map(|n: u8| n.to_string())).and_then(|n| n.parse::<u8>().ok()) {
+                        set = Some(json!({ "handles": ids, "precision": n }));
+                    }
+                });
             }
             EntityKind::Insert(i) => {
                 // A dynamic block reference shows its dynamic block's name, not its anonymous

@@ -16,7 +16,7 @@ use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
-        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>}"),
+        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>; dimensions: textOverride, dimStyle, textHeight, arrowSize, dimScale, precision (per-dimension overrides)}"),
         CommandSpec::new("matchprop", "Match Properties", matchprop::run_matchprop)
             .menu(&["Modify", "Match Properties"])
             .alias(&["ma", "painter"])
@@ -203,6 +203,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let dim_style = str_param(p, "dimStyle")
         .map(|n| d.dim_style(n).map(|st| st.name.clone()).ok_or_else(|| bad("properties.set", format!("dimension style `{n}` not found"))))
         .transpose()?;
+    let dim_over = dim_overrides(p)?;
     let anno_scale = d.current_anno_scale();
     for h in &hs {
         d.modify_entity(*h, |e| {
@@ -372,6 +373,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                     }
                     if let Some(st) = &dim_style {
                         dm.style.clone_from(st);
+                        dm.block = None;
+                    }
+                    if !dim_over.is_empty() {
+                        dm.overrides.extend(dim_over.clone());
                         dm.block = None;
                     }
                 }
@@ -862,6 +867,26 @@ fn run_dimstyle_delete(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("dimstyle.delete", format!("no dimension style `{name}`")));
     }
     Ok(dimstyles_json(d))
+}
+
+/// A dimension's text height, arrow size, overall scale (DIMSCALE) and precision as Properties
+/// sets them: per-dimension overrides, as in AutoCAD's Properties palette.
+fn dim_overrides(p: &Value) -> Result<serde_json::Map<String, Value>> {
+    let mut o = serde_json::Map::new();
+    for (key, field, zero_ok) in [("textHeight", "textHeight", false), ("arrowSize", "arrowSize", true), ("dimScale", "scale", false)] {
+        if let Some(v) = p.get(key).filter(|v| !v.is_null()) {
+            let x = v
+                .as_f64()
+                .filter(|x| x.is_finite() && (*x > 0.0 || (zero_ok && *x == 0.0)))
+                .ok_or_else(|| bad("properties.set", format!("`{key}` must be a positive number")))?;
+            o.insert(field.into(), json!(x));
+        }
+    }
+    if let Some(v) = p.get("precision").filter(|v| !v.is_null()) {
+        let n = v.as_u64().filter(|n| *n <= 8).ok_or_else(|| bad("properties.set", "`precision` must be 0 to 8 decimal places"))?;
+        o.insert("decimals".into(), json!(n));
+    }
+    Ok(o)
 }
 
 /// Per-dimension style overrides (DIMOVERRIDE): merge fields, or `clear` them.
