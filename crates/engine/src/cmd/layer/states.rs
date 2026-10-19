@@ -204,7 +204,7 @@ fn read(path: &str) -> Result<String> {
         if meta.len() > MAX_FILE {
             return Err(EngineError::Other(format!("{path}: the file is too large")));
         }
-        std::fs::read_to_string(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+        crate::readfile::read_string(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))
     }
     #[cfg(target_arch = "wasm32")]
     {

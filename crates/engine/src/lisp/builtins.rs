@@ -1000,7 +1000,10 @@ fn write_line(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
 fn findfile(a: &[Value]) -> R {
     arity(a, 1, 1)?;
     let p = string(&a[0])?;
-    Ok(if file_exists(&p) { Value::Str(p) } else { Value::Nil })
+    Ok(match found_file(&p) {
+        Some(f) => Value::str(&f),
+        None => Value::Nil,
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1034,13 +1037,16 @@ fn write_text_file(path: &str, text: &str, append: bool) {
 }
 #[cfg(target_arch = "wasm32")]
 fn write_text_file(_path: &str, _text: &str, _append: bool) {}
+/// The file `path` names, its name matched ignoring case (as on Windows), as the routine wrote
+/// it when that names the file.
 #[cfg(not(target_arch = "wasm32"))]
-fn file_exists(path: &str) -> bool {
-    std::path::Path::new(path).is_file()
+fn found_file(path: &str) -> Option<String> {
+    let f = cadaddy_geom::filename::find_file(path)?;
+    Some(if std::path::Path::new(path).is_file() { path.to_string() } else { f.to_string_lossy().into_owned() })
 }
 #[cfg(target_arch = "wasm32")]
-fn file_exists(_path: &str) -> bool {
-    false
+fn found_file(_path: &str) -> Option<String> {
+    None
 }
 
 // ---------------- functions of functions ----------------

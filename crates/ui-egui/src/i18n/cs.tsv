@@ -2064,3 +2064,32 @@ menu	Modify	Modifikace
 	Embed Textures	Vložit textury
 	Publish Walkthrough	Publikovat procházku
 	Walkthroughs (CDYWALK)	Procházky (CDYWALK)
+	Check Exchange	Kontrola výměny
+	Not kept in the {format} file	Nezachováno v souboru {format}
+	The drawing was saved. This file format can't keep everything in it:	Výkres byl uložen. Tento formát souboru v něm nedokáže zachovat vše:
+	What	Co
+	left out	vynecháno
+	changed	změněno
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	Výkres CADaddy (.cdy) zachová vše. Kontrola výměny to znovu vypíše bez uložení.
+	VP Linetype	Typ čáry ve výřezu
+	VP Lineweight	Tloušťka čáry ve výřezu
+	Unreconciled New Layers ({n})	Nové neodsouhlasené hladiny ({n})
+	Reconcile All	Odsouhlasit vše
+	Reconcile Layer	Odsouhlasit hladinu
+	LayerWalk	Procházení hladin
+	Layers: {n}	Hladiny: {n}
+	Restore on exit	Obnovit při ukončení
+	Filter:	Filtr:
+	Layer Walk...	Procházení hladin...
+	Layer Walk	Procházení hladin
+	Isolate Layer to Current Viewport	Izolovat hladinu do aktuálního výřezu
+	Unreconciled New Layers	Nové neodsouhlasené hladiny
+	Move to New Window	Přesunout do nového okna
+	Dock All Windows	Ukotvit všechna okna
+	Every drawing is in a window of its own.	Každý výkres je ve vlastním okně.
+	Back among the drawing tabs	Zpět mezi karty výkresů
+	Plot Stamp...	Razítko tisku...
+	Plot a Folder of Drawings...	Vytisknout složku výkresů...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	Každý výkres ve složce do vlastního PDF, do složky PDF uvnitř
+	Plot stamp	Razítko tisku
+	Quick Properties Lists	Seznamy rychlých vlastností

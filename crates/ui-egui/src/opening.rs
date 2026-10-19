@@ -113,6 +113,7 @@ mod tests {
         let mut app = CadApp::new(
             Session::new(),
             Services {
+                pick_folder: None,
                 pick_open: None,
                 pick_save: None,
                 pick_pdf: None,

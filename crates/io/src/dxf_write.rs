@@ -1627,7 +1627,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 }
             }
             // One CADaddy xdata group holds both lists: readers stop at the first group of an app.
-            if !v.frozen_layers.is_empty() || !v.layer_colors.is_empty() {
+            if !v.frozen_layers.is_empty() || !v.layer_colors.is_empty() || !v.layer_linetypes.is_empty() || !v.layer_lineweights.is_empty() {
                 w.s(1001, dxf_ext::APP);
                 if !v.frozen_layers.is_empty() {
                     w.xdata(dxf_ext::frozen_xdata(&v.frozen_layers));
@@ -1635,6 +1635,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 if !v.layer_colors.is_empty() {
                     w.xdata(dxf_ext::layer_colors_xdata(&v.layer_colors));
                 }
+                w.xdata(dxf_ext::layer_style_xdata(&v.layer_linetypes, &v.layer_lineweights));
             }
         }
         EntityKind::Wipeout(wo) => {
@@ -2492,6 +2493,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     if let Some(files) = d.header.get(dxf_ext::STANDARDS_KEY).and_then(HVal::as_str).filter(|s| !s.is_empty()) {
         xrecords.push((dxf_ext::STANDARDS_KEY, w.h(), dxf_ext::json_chunks(files)));
     }
+    if let Some(json) = dxf_ext::layer_eval_json(d) {
+        xrecords.push((dxf_ext::LAYER_EVAL_KEY, w.h(), dxf_ext::json_chunks(&json)));
+    }
     if let Some(chunks) = dxf_ext::constraint_chunks(&d.constraints, &d.parametric) {
         xrecords.push((dxf_ext::CONSTRAINTS_KEY, w.h(), chunks));
     }
@@ -2506,6 +2510,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     if let Some(chunks) = dxf_ext::tours_chunks(d) {
         xrecords.push((dxf_ext::TOURS_KEY, w.h(), chunks));
+    }
+    if let Some(chunks) = dxf_ext::plot_stamp_chunks(d) {
+        xrecords.push((dxf_ext::PLOT_STAMP_KEY, w.h(), chunks));
     }
     if let Some(chunks) = dxf_ext::hidden_object_chunks(d) {
         xrecords.push((dxf_ext::HIDDEN_OBJECTS_KEY, w.h(), chunks));

@@ -1,0 +1,58 @@
+# Coverage-guided fuzz targets for the file readers (cargo-fuzz, nightly):
+#   cargo install cargo-fuzz && cargo +nightly fuzz run dxf
+# On stable, `cargo xtask fuzz` runs the mutation fuzzer in crates/io/examples/fuzz.rs instead.
+[package]
+name = "cadaddy-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "FSL-1.1-ALv2"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: not part of the main build or CI.
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+cadaddy-io = { path = "../crates/io" }
+cadaddy-dwg = { path = "../crates/dwg" }
+cadaddy-render = { path = "../crates/render" }
+
+[[bin]]
+name = "dxf"
+path = "fuzz_targets/dxf.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "dwg"
+path = "fuzz_targets/dwg.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "pdf"
+path = "fuzz_targets/pdf.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "svg"
+path = "fuzz_targets/svg.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "image"
+path = "fuzz_targets/image.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "cdy"
+path = "fuzz_targets/cdy.rs"
+test = false
+doc = false

@@ -807,6 +807,8 @@ pub struct PageSetup {
     /// Paper units of the layout: millimetres (`Some(true)`, DXF plot paper units 72 = 1) or
     /// inches (`Some(false)`); `None` follows the drawing's MEASUREMENT.
     pub mm_units: Option<bool>,
+    /// Plots of this page setup carry the drawing's plot stamp ([`crate::plotstamp`]).
+    pub plot_stamp: bool,
 }
 
 impl Default for PageSetup {
@@ -827,6 +829,7 @@ impl Default for PageSetup {
             show_plot_styles: false,
             plot_transparency: false,
             mm_units: None,
+            plot_stamp: false,
         }
     }
 }

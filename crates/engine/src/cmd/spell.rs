@@ -95,7 +95,7 @@ fn read_custom(path: &str) -> HashSet<String> {
         if path.is_empty() || std::fs::metadata(path).map_or(true, |m| m.len() > MAX_CUSTOM_BYTES) {
             return HashSet::new();
         }
-        std::fs::read_to_string(path)
+        crate::readfile::read_string(path)
             .map(|t| t.lines().map(|l| l.trim().to_lowercase()).filter(|l| !l.is_empty() && !l.starts_with('#')).collect())
             .unwrap_or_default()
     }

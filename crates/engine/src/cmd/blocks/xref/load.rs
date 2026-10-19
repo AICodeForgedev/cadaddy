@@ -208,7 +208,7 @@ pub(crate) fn find(path: &str, host: Option<&Path>, chosen: bool) -> Result<Path
     }
     let (files, refused) = candidates(path, host, chosen);
     #[cfg(not(target_arch = "wasm32"))]
-    let found = files.into_iter().find(|p| p.is_file());
+    let found = files.into_iter().find_map(cadaddy_geom::filename::find_file);
     #[cfg(target_arch = "wasm32")]
     let found: Option<PathBuf> = {
         let _ = files;
@@ -225,7 +225,7 @@ fn read(file: &Path, cx: &mut Ctx) -> Result<Drawing, String> {
         use std::io::Read;
         let left = MAX_XREF_TOTAL_BYTES.saturating_sub(cx.bytes);
         let limit = MAX_XREF_BYTES.min(left);
-        let mut f = std::fs::File::open(file).map_err(|e| e.to_string())?;
+        let mut f = crate::readfile::open(file).map_err(|e| e.to_string())?;
         let meta = f.metadata().map_err(|e| e.to_string())?;
         // Only a regular file: a device or pipe (/dev/zero) never ends or blocks the read.
         if !meta.is_file() {

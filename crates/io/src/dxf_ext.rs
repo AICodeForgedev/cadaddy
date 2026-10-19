@@ -41,11 +41,45 @@ pub(crate) const HANDSEED_KEY: &str = "CADADDY_HANDSEED";
 /// Named-object-dictionary key of the XRECORD holding the standards files associated with the
 /// drawing (STANDARDS): the `CADADDY_STANDARDS` header variable, a JSON list of paths.
 pub(crate) const STANDARDS_KEY: &str = "CADADDY_STANDARDS";
+/// Named-object-dictionary key of the XRECORD holding layer notification (LAYEREVAL): JSON
+/// `{known: [reconciled layer names], eval, notify}`.
+pub(crate) const LAYER_EVAL_KEY: &str = "CADADDY_LAYEREVAL";
+/// The header variable holding the reconciled layer names (a JSON list; the engine's own key).
+pub(crate) const KNOWN_LAYERS_VAR: &str = "CADADDY_KNOWNLAYERS";
+
+/// The layer-notification XRECORD's JSON, when the drawing carries any of it.
+pub(crate) fn layer_eval_json(d: &cadaddy_doc::Drawing) -> Option<String> {
+    let known = d.header.get(KNOWN_LAYERS_VAR).and_then(cadaddy_doc::HVal::as_str).and_then(|t| serde_json::from_str::<Vec<String>>(t).ok());
+    let eval = d.header.get("LAYEREVAL").and_then(cadaddy_doc::HVal::as_f64);
+    let notify = d.header.get("LAYERNOTIFY").and_then(cadaddy_doc::HVal::as_f64);
+    if known.is_none() && eval.is_none() && notify.is_none() {
+        return None;
+    }
+    serde_json::to_string(&serde_json::json!({ "known": known, "eval": eval.map(|f| f as i64), "notify": notify.map(|f| f as i64) })).ok()
+}
+
+/// Back into the header: the reconciled names and the two variables (each only when present).
+pub(crate) fn apply_layer_eval(d: &mut cadaddy_doc::Drawing, json: &str) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
+    if let Some(a) = v.get("known").and_then(serde_json::Value::as_array) {
+        let names: Vec<&str> = a.iter().filter_map(serde_json::Value::as_str).take(1_000_000).collect();
+        d.header.set_str(KNOWN_LAYERS_VAR, &serde_json::to_string(&names).unwrap_or_default());
+    }
+    if let Some(e) = v.get("eval").and_then(serde_json::Value::as_i64) {
+        d.header.set_i64("LAYEREVAL", e.clamp(0, 2));
+    }
+    if let Some(n) = v.get("notify").and_then(serde_json::Value::as_i64) {
+        d.header.set_i64("LAYERNOTIFY", n.clamp(0, 63));
+    }
+}
 /// Named-object-dictionary key of the XRECORD holding the current multileader style.
 pub(crate) const MLEADER_STYLE_KEY: &str = "CADADDY_MLEADERSTYLE";
 /// Named-object-dictionary key of the XRECORD holding the building spec (JSON).
 pub(crate) const BUILDING_SPEC_KEY: &str = "CADADDY_BSPEC";
 pub(crate) const TOURS_KEY: &str = "CADADDY_TOURS";
+/// Named-object-dictionary key of the XRECORD holding the plot stamp's settings and the layouts
+/// whose page setups plot it.
+pub(crate) const PLOT_STAMP_KEY: &str = "CADADDY_PLOTSTAMP";
 /// Named-object-dictionary key of the XRECORD listing the objects hidden by ISOLATEOBJECTS /
 /// HIDEOBJECTS when OBJECTISOLATIONMODE 1 saves them with the drawing.
 pub(crate) const HIDDEN_OBJECTS_KEY: &str = "CADADDY_HIDDENOBJECTS";
@@ -637,6 +671,48 @@ pub(crate) fn read_layer_colors(tags: &[Tag]) -> Vec<(String, Color)> {
     names.as_chunks::<2>().0.iter().filter_map(|[name, color]| Some((name.clone(), Color::parse(color)?))).collect()
 }
 
+/// A viewport's layer linetype and lineweight overrides as CADaddy xdata: `1000 VPLTYPES` /
+/// `1000 VPLWEIGHTS`, `1002 {`, then per override `1000 layer` and `1000 linetype` or
+/// `1070 lineweight` (DXF lineweight code), `1002 }`.
+pub(crate) fn layer_style_xdata(linetypes: &[(String, String)], lineweights: &[(String, cadaddy_doc::Lineweight)]) -> Vec<Tag> {
+    let mut v = Vec::new();
+    if !linetypes.is_empty() {
+        v.extend([Tag::s(1000, "VPLTYPES"), Tag::s(1002, "{")]);
+        for (layer, lt) in linetypes {
+            v.extend([Tag::s(1000, layer.clone()), Tag::s(1000, lt.clone())]);
+        }
+        v.push(Tag::s(1002, "}"));
+    }
+    if !lineweights.is_empty() {
+        v.extend([Tag::s(1000, "VPLWEIGHTS"), Tag::s(1002, "{")]);
+        for (layer, lw) in lineweights {
+            v.extend([Tag::s(1000, layer.clone()), Tag::i(1070, i64::from(lw.to_dxf()))]);
+        }
+        v.push(Tag::s(1002, "}"));
+    }
+    v
+}
+
+/// The linetype overrides written by [`layer_style_xdata`].
+pub(crate) fn read_layer_linetypes(tags: &[Tag]) -> Vec<(String, String)> {
+    let list = xdata_list(xdata(tags, APP), "VPLTYPES");
+    let names: Vec<String> = list.iter().take(MAX_XDATA_ITEMS * 2).filter(|t| t.code == 1000).map(Tag::str).collect();
+    names.as_chunks::<2>().0.iter().map(|[l, t]| (l.clone(), t.clone())).collect()
+}
+
+/// The lineweight overrides written by [`layer_style_xdata`].
+pub(crate) fn read_layer_lineweights(tags: &[Tag]) -> Vec<(String, cadaddy_doc::Lineweight)> {
+    let list = xdata_list(xdata(tags, APP), "VPLWEIGHTS");
+    let mut out = Vec::new();
+    let mut it = list.iter().take(MAX_XDATA_ITEMS * 2);
+    while let (Some(l), Some(w)) = (it.next(), it.next()) {
+        if l.code == 1000 && w.code == 1070 {
+            out.push((l.str(), cadaddy_doc::Lineweight::from_dxf(w.i64().clamp(-3, 211) as i16)));
+        }
+    }
+    out
+}
+
 const POINT_NAMES: [&str; 5] = ["defpt", "p13", "p14", "p15", "p16"];
 
 /// Associativity links from CADaddy xdata; malformed links are skipped.
@@ -834,6 +910,42 @@ pub(crate) fn parse_building_spec(text: &str) -> Option<String> {
     }
     let v: Value = serde_json::from_str(text).ok()?;
     v.is_object().then(|| text.to_string())
+}
+
+/// The plot stamp XRECORD's payload.
+#[derive(Serialize, Deserialize)]
+struct PlotStampPayload {
+    version: u32,
+    #[serde(default)]
+    settings: Option<cadaddy_doc::plotstamp::PlotStamp>,
+    #[serde(default)]
+    layouts: Vec<String>,
+}
+
+/// JSON chunks for the plot stamp XRECORD, or `None` when no settings were made and no layout
+/// plots the stamp.
+pub(crate) fn plot_stamp_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    let layouts: Vec<String> = d.layouts.iter().filter(|l| l.page.plot_stamp).map(|l| l.name.clone()).collect();
+    if d.plot_stamp.is_none() && layouts.is_empty() {
+        return None;
+    }
+    let json = serde_json::to_string(&PlotStampPayload { version: 1, settings: d.plot_stamp.clone(), layouts }).ok()?;
+    Some(json_chunks(&json))
+}
+
+/// The plot stamp read back into the drawing: its settings, and each named layout's page setup
+/// set to plot it.
+pub(crate) fn apply_plot_stamp(d: &mut cadaddy_doc::Drawing, text: &str) {
+    if text.len() > MAX_PAYLOAD {
+        return;
+    }
+    let Ok(p) = serde_json::from_str::<PlotStampPayload>(text) else { return };
+    d.plot_stamp = p.settings.map(|s| s.sanitized());
+    for name in p.layouts.iter().take(10_000) {
+        if let Some(l) = d.layouts.iter_mut().find(|l| l.name.eq_ignore_ascii_case(name)) {
+            l.page.plot_stamp = true;
+        }
+    }
 }
 
 /// JSON chunks for the tours XRECORD, or `None` without saved viewpoints or tours.

@@ -265,6 +265,9 @@ fn mirror_text(t: &mut Text, align: Option<Vec3>, insert: Vec3) {
     }
 }
 
+/// Records from which a section's objects are parsed on all cores.
+const PARALLEL_RECORDS: usize = 4096;
+
 /// Parse one entity record. POLYLINE/INSERT followers are handled by the caller.
 fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
     // The paper-space viewport our writer adds (dxf_write::paper_view) stays implicit.
@@ -532,6 +535,8 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             locked: t.i(90).unwrap_or(0) & 16384 != 0,
             frozen_layers: crate::dxf_ext::read_frozen(tags),
             layer_colors: crate::dxf_ext::read_layer_colors(tags),
+            layer_linetypes: crate::dxf_ext::read_layer_linetypes(tags),
+            layer_lineweights: crate::dxf_ext::read_layer_lineweights(tags),
             // Status flags: 65536 = non-rectangular clipping (by the 340 entity), 131072 = off.
             clip: t.s(340).and_then(|h| Handle::parse_hex(&h)).filter(|h| h.0 != 0 && t.i(90).unwrap_or(0) & 65536 != 0),
             on: t.i(90).unwrap_or(0) & 131072 == 0,
@@ -1233,13 +1238,20 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
 /// can't be placed are counted in `skipped`.
 fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipped: &mut usize) -> Vec<(Option<String>, bool, Entity)> {
     let mut out = Vec::new();
+    // Each record's object on all cores first (most of reading a large file); the records that
+    // belong to another (vertices, attributes) are then merged in order below.
+    let mut pre: Vec<Option<Option<(Common, EntityKind)>>> =
+        if recs.len() >= PARALLEL_RECORDS { crate::par_map(recs, |(kind, tags)| Some(entity(kind, tags))) } else { Vec::new() };
     let mut i = 0;
     while let Some((kind, tags)) = recs.get(i) {
         let t = T(tags);
         let owner = crate::dxf_ext::owner(tags);
         let paper = t.i(67) == Some(1);
         let handle = t.s(5).and_then(|h| Handle::parse_hex(&h));
-        let mut kindent = entity(kind, tags);
+        let mut kindent = match pre.get_mut(i).and_then(Option::take) {
+            Some(done) => done,
+            None => entity(kind, tags),
+        };
         if let Some((c, _)) = kindent.as_mut()
             && let Some(n) = entity_plot_style(tags, rx)
         {
@@ -2264,6 +2276,9 @@ impl Objects {
         if let Some(files) = self.xrecord_text(crate::dxf_ext::STANDARDS_KEY).filter(|s| serde_json::from_str::<Vec<String>>(s).is_ok()) {
             d.header.set_str(crate::dxf_ext::STANDARDS_KEY, &files);
         }
+        if let Some(json) = self.xrecord_text(crate::dxf_ext::LAYER_EVAL_KEY) {
+            crate::dxf_ext::apply_layer_eval(d, &json);
+        }
         // Table styles (named by their ACAD_TABLESTYLE dictionary entries).
         for (h, tags) in &self.table_styles {
             let Some(name) = self.names.get(h).filter(|n| !n.is_empty()) else { continue };
@@ -2328,6 +2343,9 @@ impl Objects {
         }
         if let Some(tours) = self.xrecord_text(crate::dxf_ext::TOURS_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
             d.tours = Some(tours);
+        }
+        if let Some(text) = self.xrecord_text(crate::dxf_ext::PLOT_STAMP_KEY) {
+            crate::dxf_ext::apply_plot_stamp(d, &text);
         }
         if let Some(states) = self.xrecord_text(crate::dxf_ext::LAYER_STATES_KEY).and_then(|t| crate::dxf_ext::parse_layer_states(&t)) {
             d.layer_states = states;

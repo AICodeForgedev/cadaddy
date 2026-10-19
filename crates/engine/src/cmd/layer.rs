@@ -1,8 +1,10 @@
 //! Layers: LAYER (programmatic sub-ids, -LAYER prompts), layer tools (LAYMCUR, LAYISO, LAYOFF, LAYFRZ…).
 
 pub mod filters;
+pub mod notify;
 mod prompts;
 mod states;
+mod walk;
 
 use cadaddy_color::Color;
 use cadaddy_doc::{Layer, Lineweight};
@@ -97,6 +99,18 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layer.filter.layers", "Layers in Filter", filters::run_layers).params("{name? (default All), invert?: bool} → layers").noundo(),
         CommandSpec::new("layerstate.delete", "Delete Layer State", run_state_delete).params("{name}"),
         CommandSpec::new("layerstate.rename", "Rename Layer State", run_state_rename).params("{from, to}"),
+        CommandSpec::new("laywalk", "Layer Walk", walk::run_laywalk)
+            .menu(&["Format", "Layer Tools", "Layer Walk..."])
+            .params("{show?: [layer names or wildcards] (only these are on; the first call remembers the layers' On/Freeze), end?: bool (stop walking), restore?: bool (default true: put On/Freeze back when ending)} → {walking, shown} (the app opens the LayerWalk dialog)"),
+        CommandSpec::new("layvpi", "Isolate Layer to Current Viewport", walk::run_layvpi)
+            .menu(&["Format", "Layer Tools", "Isolate Layer to Current Viewport"])
+            .params("{handles? | layers?: [names], viewport?: handle (default: the current viewport), allLayouts?: bool} (frozen in the other viewports, thawed in this one)")
+            .interactive(|_| Ok(Box::new(SelectRun::new("layvpi", "LAYVPI")))),
+        CommandSpec::new("layer.unreconciled", "Unreconciled New Layers", notify::run_list)
+            .params("{} → {layers: [names] (new layers not reviewed yet; LAYEREVAL picks xref layers only or all), layereval, evaluated}")
+            .noundo(),
+        CommandSpec::new("layer.reconcile", "Reconcile Layer", notify::run_reconcile)
+            .params("{names?: [layer] (default: every unreconciled layer)} → {reconciled}"),
         CommandSpec::new("laymrg", "Layer Merge", merge::run_laymrg)
             .menu(&["Format", "Layer Tools", "Layer Merge"])
             .params("{from: [names], to} (the from layers' objects move to `to`, then the from layers are deleted)")
@@ -238,6 +252,7 @@ fn run_new(s: &mut Session, p: &Value) -> Result<Value> {
         l.linetype = lt;
     }
     d.layers.push(l);
+    notify::reconcile_names(d, std::slice::from_ref(&name));
     if bool_or(p, "current", false) {
         d.header.set_str("CLAYER", &name);
     }
@@ -290,6 +305,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         if cur.eq_ignore_ascii_case(&old) {
             d.header.set_str("CLAYER", &nn);
         }
+        notify::reconcile_names(d, &[nn]);
     }
     ok()
 }

@@ -1173,6 +1173,12 @@ pub struct Viewport {
     /// Per-viewport layer colour overrides (VP Color in the Layer Properties Manager).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layer_colors: Vec<(String, Color)>,
+    /// Per-viewport layer linetype overrides (VP Linetype).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layer_linetypes: Vec<(String, String)>,
+    /// Per-viewport layer lineweight overrides (VP Lineweight).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layer_lineweights: Vec<(String, Lineweight)>,
     /// The paper-space entity whose outline clips the viewport (a closed polyline, circle,
     /// ellipse or spline; DXF group 340). `None`: the rectangle `center`/`width`/`height`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1215,6 +1221,8 @@ impl Default for Viewport {
             locked: false,
             frozen_layers: Vec::new(),
             layer_colors: Vec::new(),
+            layer_linetypes: Vec::new(),
+            layer_lineweights: Vec::new(),
             clip: None,
             on: true,
             twist: 0.0,

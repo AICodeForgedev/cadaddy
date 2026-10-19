@@ -11,6 +11,7 @@ pub mod boolean;
 mod bounds;
 mod curve;
 mod edges;
+pub mod filename;
 mod fillet;
 mod intersect;
 mod mat;

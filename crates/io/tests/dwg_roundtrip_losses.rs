@@ -26,6 +26,8 @@ fn viewport(id: u32) -> EntityKind {
         locked: false,
         frozen_layers: vec![],
         layer_colors: vec![],
+        layer_linetypes: Vec::new(),
+        layer_lineweights: Vec::new(),
         clip: None,
         on: true,
         twist: 0.0,

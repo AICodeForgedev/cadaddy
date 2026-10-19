@@ -117,6 +117,9 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.language", "Language", &[], None),
     ("ui.noop", "", &[], None),
     ("ui.quit", "Quit CADaddy", &[], Some("Cmd+Q")),
+    ("ui.window.new", "Move to New Window", &["Window", "Move to New Window"], None),
+    ("ui.window.dockall", "Dock All Windows", &["Window", "Dock All Windows"], None),
+    ("ui.quickprops", "Quick Properties Lists", &[], None),
 ];
 
 /// Typed commands that open a dialog only when typed alone: with more on the line (`color 1`,
@@ -168,6 +171,9 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     }
     if id == "ui.properties" {
         return Some(crate::palettes::my_properties_command(app, params));
+    }
+    if id == "ui.quickprops" {
+        return Some(crate::quick::lists_command(app, params));
     }
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", params));
@@ -291,6 +297,17 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 Err(e) => e.clone(),
             });
             r
+        }
+        // The current drawing (or `{index}`) into a window of its own; all of them back.
+        "ui.window.new" => {
+            let index = params.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).unwrap_or(app.session.active);
+            crate::tearoff::tear_off(app, index, None).map(|()| json!({ "windows": app.torn.len() }))
+        }
+        "ui.window.dockall" => {
+            for uid in app.torn.iter().map(|w| w.uid).collect::<Vec<_>>() {
+                crate::tearoff::dock(app, uid);
+            }
+            Ok(json!({ "windows": 0 }))
         }
         "ui.sample" => {
             let d = cadaddy_engine::sample::default_sample();
@@ -737,6 +754,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some("purge".into());
             Ok(Value::Null)
         }
+        "laywalk" if params.is_null() && app.session.state().is_ok() => {
+            app.ui.dialog = Some(crate::laywalkdlg::DIALOG.into());
+            Ok(Value::Null)
+        }
         "find" if params.is_null() && app.session.state().is_ok() => {
             app.ui.dialog = Some("find".into());
             Ok(Value::Null)
@@ -1052,6 +1073,7 @@ mod tests {
         let asked = Rc::new(RefCell::new(Vec::new()));
         let log = Rc::clone(&asked);
         let services = Services {
+            pick_folder: None,
             pick_save_image: None,
             pick_pdf: None,
             read_clipboard: None,

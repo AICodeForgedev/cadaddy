@@ -557,6 +557,7 @@ pub fn find(name: &str) -> Option<Arc<ShxFont>> {
 #[cfg(not(target_arch = "wasm32"))]
 fn load(name: &str) -> Option<Arc<ShxFont>> {
     let file = if name.to_ascii_lowercase().ends_with(".shx") { name.to_string() } else { format!("{name}.shx") };
+    let file = cadaddy_geom::filename::native(&file);
     let p = std::path::Path::new(&file);
     let mut candidates: Vec<std::path::PathBuf> = vec![p.to_path_buf()];
     if let Some(base) = p.file_name() {
@@ -564,7 +565,7 @@ fn load(name: &str) -> Option<Arc<ShxFont>> {
     }
     for c in candidates {
         // Font names ignore case, as on Windows: `ROMANS` finds `romans.shx` on Linux too.
-        let Some(c) = existing_ignoring_case(&c) else { continue };
+        let Some(c) = cadaddy_geom::filename::find(&c) else { continue };
         let Ok(meta) = std::fs::metadata(&c) else { continue };
         if !meta.is_file() || meta.len() > MAX_FILE {
             continue;
@@ -574,26 +575,6 @@ fn load(name: &str) -> Option<Arc<ShxFont>> {
         }
     }
     None
-}
-
-/// `path` if it exists, else the file in its folder whose name differs only in case.
-#[cfg(not(target_arch = "wasm32"))]
-fn existing_ignoring_case(path: &std::path::Path) -> Option<std::path::PathBuf> {
-    if path.exists() {
-        return Some(path.to_path_buf());
-    }
-    let name = path.file_name()?.to_str()?;
-    let dir = match path.parent() {
-        Some(d) if !d.as_os_str().is_empty() => d,
-        _ => std::path::Path::new("."),
-    };
-    // Bounded: a font folder, not a whole disk.
-    std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .take(10_000)
-        .map(|e| e.path())
-        .find(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case(name)))
 }
 
 #[cfg(target_arch = "wasm32")]

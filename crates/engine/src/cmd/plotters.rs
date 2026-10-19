@@ -105,7 +105,7 @@ impl PlotterStore {
                 if len > cadaddy_doc::MAX_PLOTTER_FILE as u64 {
                     return Err(format!("{n}: the plotter configuration file is too large"));
                 }
-                std::fs::read_to_string(&p).map_err(|e| format!("{n}: {e}"))
+                crate::readfile::read_string(&p).map_err(|e| format!("{n}: {e}"))
             },
             write: |n, t| {
                 let p = file(n)?;

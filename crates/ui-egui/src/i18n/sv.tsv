@@ -2092,3 +2092,32 @@ menu	Modify	Ändra
 	Embed Textures	Bädda in texturer
 	Publish Walkthrough	Publicera genomgång
 	Walkthroughs (CDYWALK)	Genomgångar (CDYWALK)
+	Check Exchange	Kontrollera utbyte
+	Not kept in the {format} file	Inte bevarat i {format}-filen
+	The drawing was saved. This file format can't keep everything in it:	Ritningen sparades. Det här filformatet kan inte bevara allt i den:
+	What	Vad
+	left out	utelämnat
+	changed	ändrat
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	En CADaddy-ritning (.cdy) bevarar allt. Kontrollera utbyte visar detta igen utan att spara.
+	VP Linetype	Linjetyp i visningsfönster
+	VP Lineweight	Linjetjocklek i visningsfönster
+	Unreconciled New Layers ({n})	Oavstämda nya lager ({n})
+	Reconcile All	Stäm av alla
+	Reconcile Layer	Stäm av lager
+	LayerWalk	Lagervandring
+	Layers: {n}	Lager: {n}
+	Restore on exit	Återställ vid avslut
+	Filter:	Filter:
+	Layer Walk...	Lagervandring...
+	Layer Walk	Lagervandring
+	Isolate Layer to Current Viewport	Isolera lager i aktuellt visningsfönster
+	Unreconciled New Layers	Oavstämda nya lager
+	Move to New Window	Flytta till nytt fönster
+	Dock All Windows	Docka alla fönster
+	Every drawing is in a window of its own.	Varje ritning är i ett eget fönster.
+	Back among the drawing tabs	Tillbaka bland ritningsflikarna
+	Plot Stamp...	Plottstämpel...
+	Plot a Folder of Drawings...	Plotta en mapp med ritningar...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	Varje ritning i en mapp till en egen PDF, i en PDF-mapp i den
+	Plot stamp	Plottstämpel
+	Quick Properties Lists	Listor för snabbegenskaper

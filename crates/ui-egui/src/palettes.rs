@@ -622,6 +622,11 @@ fn edit_field(ui: &mut egui::Ui, id: egui::Id, value: String) -> Option<String> 
     out
 }
 
+/// An editable number (a distance in any format) for other panels: the value once committed.
+pub(crate) fn edit_number(ui: &mut egui::Ui, id: egui::Id, shown: &str) -> Option<f64> {
+    edit_field(ui, id, shown.to_string()).and_then(|t| cadaddy_engine::units::parse_distance(&t))
+}
+
 /// A committed numeric field read as the command line reads numbers (`36`, `3'`, `3'-6 1/2"`,
 /// `6 1/2`). Text it can't read goes to `bad`, to be reported rather than dropped.
 fn number(typed: Option<String>, bad: &mut Option<String>) -> Option<f64> {
@@ -722,12 +727,19 @@ fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     }
     let count: usize = types.iter().map(|(_, hs)| hs.len()).sum();
-    let header = match (count, types.as_slice()) {
-        (0, _) => crate::tl!("No selection").to_string(),
-        (1, [(n, _)]) => crate::i18n::t(n).to_string(),
-        (n, [(ty, _)]) => format!("{} ({n})", crate::i18n::t(ty)),
-        (n, _) => format!("{} ({n})", crate::tl!("All")),
+    // The type the palette is narrowed to (the selection itself stays as it is).
+    let (_, narrowed) = crate::multiprops::filtered(ui.ctx(), "palette", &sel, d);
+    let header = match (count, types.as_slice(), &narrowed) {
+        (0, _, _) => crate::tl!("No selection").to_string(),
+        (n, _, Some(ty)) if types.len() > 1 => {
+            let k = types.iter().find(|(t, _)| t == ty).map_or(0, |(_, hs)| hs.len());
+            format!("{} ({k}/{n})", crate::i18n::t(ty))
+        }
+        (1, [(n, _)], _) => crate::i18n::t(n).to_string(),
+        (n, [(ty, _)], _) => format!("{} ({n})", crate::i18n::t(ty)),
+        (n, _, _) => format!("{} ({n})", crate::tl!("All")),
     };
+    let mut narrow: Option<Option<&'static str>> = None;
     let mut run: Option<(&str, Value)> = None;
     let mut start: Option<&str> = None;
     ui.horizontal(|ui| {
@@ -736,11 +748,14 @@ fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
         let w = (ui.available_width() - 80.0).max(60.0);
         let resp = ui.allocate_ui(vec2(w, 20.0), |ui| value_box(ui, &header, true, count > 0)).inner;
         if count > 0 {
-            // Narrow the selection to one object type.
+            // Show and edit one object type of the selection (AutoCAD's list: the selection stays).
             egui::Popup::from_toggle_button_response(&resp).width(w - 10.0).close_behavior(egui::PopupCloseBehavior::CloseOnClick).show(|ui| {
+                if types.len() > 1 && ui.button(format!("{} ({count})", crate::tl!("All"))).clicked() {
+                    narrow = Some(None);
+                }
                 for (ty, hs) in &types {
                     if ui.button(format!("{} ({})", crate::i18n::t(ty), hs.len())).clicked() {
-                        run = Some(("select", json!({ "handles": hs })));
+                        narrow = Some(Some(ty));
                     }
                 }
             });
@@ -760,6 +775,9 @@ fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
             start = Some("ui.dialog.qselect");
         }
     });
+    if let Some(ty) = narrow {
+        crate::multiprops::set_filter(ui.ctx(), "palette", &sel, ty);
+    }
     if let Some((c, p)) = run {
         let _ = app.run(c, p);
     }
@@ -782,6 +800,8 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     let sel = app.session.selection();
     let Ok(d) = app.session.doc() else { return };
+    // Narrowed to one type (the list at the top): only those objects are shown and changed.
+    let (sel, _) = crate::multiprops::filtered(ui.ctx(), "palette", &sel, d);
     ui.add_space(4.0);
     let h = &d.header;
     // Lengths are shown as the drawing's units say (UNITS), and read back in any format.
@@ -1043,6 +1063,35 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             });
         });
     });
+    // Several objects of one type: the values they share (or *VARIES*), each set on all of them.
+    let one_type = sel.iter().filter_map(|h| d.entity(*h)).map(|e| e.kind.type_name()).try_fold(None, |acc: Option<&str>, t| match acc {
+        None => Some(Some(t)),
+        Some(a) if a == t => Some(Some(a)),
+        Some(_) => None,
+    });
+    if sel.len() > 1
+        && let Some(Some(ty)) = one_type
+    {
+        let fields = crate::multiprops::fields(ty);
+        if !fields.is_empty() {
+            group(ui, "Geometry");
+            let ents: Vec<&cadaddy_doc::Entity> = sel.iter().filter_map(|h| d.entity(*h)).map(|e| e.as_ref()).collect();
+            for fd in &fields {
+                let shown = match crate::multiprops::shared(fd, &ents) {
+                    Some(v) if fd.length => len(v),
+                    Some(v) => format!("{v:.4}"),
+                    None => "*VARIES*".to_string(),
+                };
+                prop_row(ui, fd.label, |ui| {
+                    if !fd.edit {
+                        read_only(ui, &shown);
+                    } else if let Some(x) = number(edit_field(ui, ui.id().with(("multi", fd.key, &ids)), shown.clone()), &mut bad) {
+                        set = Some(json!({ "handles": ids, "type": ty, fd.key: x }));
+                    }
+                });
+            }
+        }
+    }
     if sel.len() == 1 {
         group(ui, "Geometry");
         let real = |v: f64| format!("{v:.4}");

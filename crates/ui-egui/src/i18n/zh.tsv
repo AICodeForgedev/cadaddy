@@ -1967,3 +1967,32 @@
 	Embed Textures	嵌入纹理
 	Publish Walkthrough	发布漫游
 	Walkthroughs (CDYWALK)	漫游 (CDYWALK)
+	Check Exchange	检查交换
+	Not kept in the {format} file	未保留在 {format} 文件中
+	The drawing was saved. This file format can't keep everything in it:	图形已保存。此文件格式无法保留其中的全部内容:
+	What	内容
+	left out	已省略
+	changed	已更改
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	CADaddy 图形 (.cdy) 会保留全部内容。“检查交换”可在不保存的情况下再次列出这些内容。
+	VP Linetype	视口线型
+	VP Lineweight	视口线宽
+	Unreconciled New Layers ({n})	未协调的新图层 ({n})
+	Reconcile All	全部协调
+	Reconcile Layer	协调图层
+	LayerWalk	图层漫游
+	Layers: {n}	图层: {n}
+	Restore on exit	退出时恢复
+	Filter:	过滤器:
+	Layer Walk...	图层漫游...
+	Layer Walk	图层漫游
+	Isolate Layer to Current Viewport	将图层隔离到当前视口
+	Unreconciled New Layers	未协调的新图层
+	Move to New Window	移到新窗口
+	Dock All Windows	停靠所有窗口
+	Every drawing is in a window of its own.	每个图形都在各自的窗口中。
+	Back among the drawing tabs	返回图形选项卡
+	Plot Stamp...	打印戳记...
+	Plot a Folder of Drawings...	打印文件夹中的图形...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	将文件夹中的每个图形输出为单独的 PDF，放在其中的 PDF 文件夹里
+	Plot stamp	打印戳记
+	Quick Properties Lists	快捷特性列表

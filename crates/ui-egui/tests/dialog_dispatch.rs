@@ -13,6 +13,7 @@ fn app() -> (CadApp, Rc<Cell<u32>>) {
     let (a, b) = (picks.clone(), picks.clone());
     let services = Services {
         pick_save_image: None,
+        pick_folder: None,
         pick_pdf: None,
         read_clipboard: None,
         thumbnail: None,

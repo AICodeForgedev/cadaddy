@@ -17,7 +17,7 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
-        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, background?: true | false | {color?, scale?} (MTEXT mask), <geometry fields: radius, center, start, end, text, height, rotation…>}"),
+        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, type?: object type (only the selected objects of that type change: line, circle, text…), layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, background?: true | false | {color?, scale?} (MTEXT mask), <geometry fields: radius, center, centerX, centerY, start, end, startX, startY, endX, endY, text, height, rotation…>}"),
         CommandSpec::new("chprop", "Change Properties", run_set)
             .params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?} (typed: AutoCAD's property prompts)")
             .interactive(|_| Ok(Box::new(chprop::ChpropM::new(false)))),
@@ -222,6 +222,14 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     if hs.is_empty() {
         return Err(bad("properties.set", "nothing selected"));
     }
+    // Only the objects of one type (the Properties palette's and Quick Properties' type list).
+    if let Some(ty) = str_param(p, "type").map(str::trim).filter(|t| !t.is_empty() && !t.eq_ignore_ascii_case("all")) {
+        let d = s.doc()?;
+        hs.retain(|h| d.entity(*h).is_some_and(|e| e.kind.type_name().eq_ignore_ascii_case(ty)));
+        if hs.is_empty() {
+            return Err(crate::EngineError::Other(format!("No {ty} objects are selected.")));
+        }
+    }
     // Objects on a locked layer can't be changed, from the Properties palette either (AutoCAD).
     let before = hs.len();
     {
@@ -320,6 +328,12 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                     if let Some(v) = p.get("end") {
                         set_xy(&mut l.b, v);
                     }
+                    // One coordinate, each object keeping its other one (several objects at once).
+                    for (k, c) in [("startX", &mut l.a.x), ("startY", &mut l.a.y), ("endX", &mut l.b.x), ("endY", &mut l.b.y)] {
+                        if let Some(x) = num(k) {
+                            *c = x;
+                        }
+                    }
                     // Length / angle keep the start point and move the end point.
                     let (a, b) = (l.a.xy(), l.b.xy());
                     let len = num("length").filter(|x| *x > 0.0 && *x < 1e15).unwrap_or_else(|| a.dist(b));
@@ -337,6 +351,12 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                     if let Some(v) = p.get("center") {
                         set_xy(&mut c.center, v);
                     }
+                    if let Some(x) = num("centerX") {
+                        c.center.x = x;
+                    }
+                    if let Some(y) = num("centerY") {
+                        c.center.y = y;
+                    }
                     if let Some(r) = num("radius").filter(|r| *r > 0.0) {
                         c.radius = r;
                     }
@@ -353,6 +373,12 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                 EntityKind::Arc(a) => {
                     if let Some(v) = p.get("center") {
                         set_xy(&mut a.center, v);
+                    }
+                    if let Some(x) = num("centerX") {
+                        a.center.x = x;
+                    }
+                    if let Some(y) = num("centerY") {
+                        a.center.y = y;
                     }
                     if let Some(r) = num("radius").filter(|r| *r > 0.0) {
                         a.radius = r;

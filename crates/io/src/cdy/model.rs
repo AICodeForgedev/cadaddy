@@ -84,6 +84,9 @@ struct Tables {
     /// as defaults from .cdy).
     #[serde(default)]
     sun: Value,
+    /// The plot stamp's settings (a layout's page setup says whether it plots it).
+    #[serde(default)]
+    plot_stamp: Value,
     /// (object handle, its field values) in handle order.
     #[serde(default)]
     field_values: Vec<(u64, Vec<String>)>,
@@ -259,6 +262,7 @@ pub(super) fn tables(d: &Drawing) -> Result<Vec<u8>, String> {
         layer_filters: value(&d.layer_filters)?,
         materials: value(&d.materials)?,
         sun: value(&d.sun)?,
+        plot_stamp: value(&d.plot_stamp)?,
         field_values: d.field_values.iter().map(|(h, v)| (h.0, v.clone())).collect(),
         kept_handles: d.kept_handles.iter().map(|(k, h)| (k.clone(), *h)).collect(),
         // The BSPC and TOUR chunks hold these now (so a new tour appends only its chunk); the
@@ -322,6 +326,30 @@ fn tag_name(tag: &[u8; 4]) -> String {
     if tag.iter().all(u8::is_ascii_alphanumeric) { String::from_utf8_lossy(tag).into_owned() } else { "damaged".into() }
 }
 
+/// A model space chunk's objects, with notes about the ones that couldn't be read; `None` when
+/// the chunk doesn't decode to a list.
+fn entity_list(data: &[u8], version: u16) -> Option<(Vec<Entity>, Vec<String>)> {
+    // Version 2 keeps mesh geometry in binary buffers after the objects (`meshbuf`).
+    let (list, mut meshes) = if version == 2 {
+        let (v, meshes) = super::meshbuf::decode(data)?;
+        (v, meshes)
+    } else {
+        (tokens::decode(data)?, Default::default())
+    };
+    let Value::Array(list) = list else { return None };
+    let mut notes = Vec::new();
+    let mut items = Vec::with_capacity(list.len());
+    for (i, item) in list.into_iter().enumerate() {
+        if let Some(mut e) = take::<Entity>(item, "an object", &mut notes) {
+            if let Some(m) = meshes.remove(&i) {
+                super::meshbuf::fill(&mut e, m);
+            }
+            items.push(e);
+        }
+    }
+    Some((items, notes))
+}
+
 /// The drawing in a .cdy file, with notes about anything damaged that was left out. Errors only
 /// when the file isn't a .cdy file this version can read.
 pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
@@ -334,7 +362,12 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
     d.layouts.clear();
     let mut model = EntityStore::new();
     let mut have_tables = false;
-    for c in chunks {
+    // The model space parts decoded into objects on all cores first (in order).
+    let decoded = crate::par_map(&chunks, |c| match c {
+        Read::Ok(c) if &c.tag == b"ENTS" && c.version <= max_version(b"ENTS") => Some(entity_list(&c.data, c.version)),
+        _ => None,
+    });
+    for (c, pre) in chunks.into_iter().zip(decoded) {
         let c = match c {
             Read::Ok(c) => c,
             Read::Damaged { tag, why, salvage } => {
@@ -407,24 +440,19 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 }
                 continue;
             }
-            b"ENTS" if c.version == 2 => {
-                let Some((Value::Array(list), mut meshes)) = super::meshbuf::decode(&c.data) else {
-                    rep.notes.push("a model space part was damaged and left out".into());
-                    continue;
-                };
-                let mut items = Vec::with_capacity(list.len());
-                for (i, item) in list.into_iter().enumerate() {
-                    if let Some(mut e) = take::<Entity>(item, "an object", &mut rep.notes) {
-                        if let Some(m) = meshes.remove(&i) {
-                            super::meshbuf::fill(&mut e, m);
-                        }
-                        items.push(e);
-                    }
-                }
-                model.push_chunk(items);
-                continue;
-            }
             _ => {}
+        }
+        if let Some(pre) = pre {
+            // One chunk of the store per chunk of the file, as it was saved (an incremental save
+            // then finds them unchanged).
+            match pre {
+                Some((items, notes)) => {
+                    rep.notes.extend(notes);
+                    model.push_chunk(items);
+                }
+                None => rep.notes.push("a model space part was damaged".into()),
+            }
+            continue;
         }
         let Some(v) = tokens::decode(&c.data) else {
             rep.notes.push(format!("a {what} part couldn't be decoded and was left out"));
@@ -471,6 +499,9 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 if !t.sun.is_null() {
                     field!(sun, "the sun");
                 }
+                if !t.plot_stamp.is_null() {
+                    field!(plot_stamp, "the plot stamp");
+                }
                 d.field_values = t.field_values.iter().map(|(h, v)| (cadaddy_doc::Handle(*h), v.clone())).collect();
                 d.kept_handles = t.kept_handles.iter().take(10_000_000).map(|(k, h)| (k.clone(), *h)).collect();
                 if let Some(spec) = t.building_spec.filter(|s| s.len() <= MAX_TEXT) {
@@ -501,16 +532,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                     d.blocks.insert(name, Arc::new(b));
                 }
             }
-            b"ENTS" => {
-                let Value::Array(list) = v else {
-                    rep.notes.push("a model space part was damaged".into());
-                    continue;
-                };
-                // One chunk of the store per chunk of the file, as it was saved (an incremental
-                // save then finds them unchanged).
-                let items: Vec<Entity> = list.into_iter().filter_map(|item| take::<Entity>(item, "an object", &mut rep.notes)).collect();
-                model.push_chunk(items);
-            }
+
             b"LAYO" => {
                 let Some([l, objs]) = parts::<2>(v) else {
                     rep.notes.push("a layout was damaged and left out".into());

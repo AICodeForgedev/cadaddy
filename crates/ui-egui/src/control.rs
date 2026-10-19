@@ -516,6 +516,7 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             ok(v)
         }
         "ui.elements" => ok(elements(ctx, p)),
+        "ui.startup" => ok(crate::startup::report()),
         "ui.focus" => {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ok(Value::Null)

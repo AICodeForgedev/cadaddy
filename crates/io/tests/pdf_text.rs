@@ -331,6 +331,8 @@ fn text_seen_through_a_viewport_and_on_layers() {
         locked: false,
         frozen_layers: Vec::new(),
         layer_colors: Vec::new(),
+        layer_linetypes: Vec::new(),
+        layer_lineweights: Vec::new(),
         clip: None,
         on: true,
         twist: 0.0,

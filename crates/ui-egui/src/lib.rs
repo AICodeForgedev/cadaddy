@@ -52,6 +52,7 @@ mod shaded;
 pub mod snap3ui;
 pub mod spacemouse;
 // Report a Bug, Request a Feature, Donate.
+pub mod startup;
 pub mod support;
 pub mod update;
 // The External References palette.
@@ -59,6 +60,7 @@ pub mod xrefs;
 
 pub mod dyngrips;
 pub mod dyninput;
+pub mod exchangeloss;
 pub mod extractdlg;
 pub mod finddlg;
 pub mod gpu;
@@ -71,10 +73,12 @@ pub mod icons;
 pub mod layers;
 pub mod layerstates;
 pub mod layouttabs;
+pub mod laywalkdlg;
 pub mod managers;
 pub mod markuppalette;
 pub mod matchpropdlg;
 pub mod menus;
+pub mod multiprops;
 pub mod opening;
 pub mod options;
 pub mod palettes;
@@ -87,6 +91,7 @@ pub mod renderwin;
 pub mod ribbon;
 pub mod shortcut_menus;
 pub mod spelldlg;
+pub mod tearoff;
 pub mod theme;
 pub mod toldlg;
 pub mod toolpalettes;
@@ -165,6 +170,9 @@ pub struct UiState {
     pub properties_all: bool,
     /// The properties shown in the Properties palette's "My" view (row names, in English).
     pub my_properties: Vec<String>,
+    /// Quick Properties' rows per object type (type name → field keys: color, layer, linetype and
+    /// the type's own, as [`multiprops::fields`] names them); a type not listed shows all.
+    pub quick_properties: std::collections::BTreeMap<String, Vec<String>>,
     /// The sheet set file the Sheet Set Manager shows.
     pub sheet_set: Option<String>,
     /// Show an in-window menu bar (platforms without a native menu bar, or on request).
@@ -283,6 +291,7 @@ impl Default for UiState {
             hidden_tools: Vec::new(),
             properties_all: true,
             my_properties: Vec::new(),
+            quick_properties: std::collections::BTreeMap::new(),
             sheet_set: None,
             // AutoCAD hides the menu bar under the ribbon (MENUBAR 0).
             in_window_menu: false,
@@ -327,6 +336,8 @@ pub struct Services {
     pub thumbnail: Option<Box<dyn Fn(&str) -> Option<Vec<u8>>>>,
     /// Where to save an image (the Render window's Save), given a suggested name.
     pub pick_save_image: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// A folder (Publish's batch plot).
+    pub pick_folder: Option<Box<dyn Fn() -> Option<String>>>,
 }
 
 pub struct CadApp {
@@ -445,6 +456,13 @@ pub struct CadApp {
     pub walk: Option<walk::Walk>,
     /// Drawings opened from walkthrough packages that Walk has been opened on (once each).
     pub walked: std::collections::BTreeSet<u64>,
+    /// What the last DWG/DXF save didn't keep, while its notice is open ([`exchangeloss`]).
+    pub exchange_notice: Option<Value>,
+    /// Drawings in windows of their own ([`tearoff`]), the drawing the main window last showed,
+    /// and where its tab bar is.
+    pub torn: Vec<tearoff::TornWindow>,
+    pub main_uid: Option<u64>,
+    pub tab_bar: Option<egui::Rect>,
     /// The app's wgpu render state (walk mode draws its 3D with it).
     pub wgpu_rs: Option<egui_wgpu::RenderState>,
     /// What the GPU can do for the 3D views ([`gpucaps::GpuCaps`]); no GPU: the CPU draws.
@@ -516,6 +534,10 @@ impl CadApp {
             bedit: bedit::State::default(),
             walk: None,
             walked: std::collections::BTreeSet::new(),
+            exchange_notice: None,
+            torn: Vec::new(),
+            main_uid: None,
+            tab_bar: None,
             wgpu_rs: None,
             gpu_caps: gpucaps::GpuCaps::default(),
         }
@@ -602,17 +624,21 @@ impl CadApp {
         if let Err(e) = &r {
             self.session.echo(e.user_message());
         }
+        // A programmatic save reports what the file didn't keep in its reply, not in a dialog.
+        exchangeloss::take(self, false);
         r.map_err(|e| e.to_string())
     }
 
     /// Start a command as if typed (interactive when it has prompts).
     pub fn start(&mut self, name: &str) {
         if menus::run_ui_command(self, name, &Value::Null).is_some() {
+            exchangeloss::take(self, true);
             return;
         }
         if let Err(e) = self.session.start(name) {
             self.session.echo(e.user_message());
         }
+        exchangeloss::take(self, true);
     }
 
     /// Submit a line of command-line text. A refused line is echoed to the history; the error is
@@ -629,10 +655,13 @@ impl CadApp {
                 && (!more || !menus::DIALOG_WHEN_ALONE.contains(&word.as_str()))
                 && menus::run_ui_command(self, &word, &Value::Null).is_some()
             {
+                exchangeloss::take(self, true);
                 return None;
             }
         }
-        let e = self.session.cmdline(text).err()?.to_string();
+        let r = self.session.cmdline(text);
+        exchangeloss::take(self, true);
+        let e = r.err()?.to_string();
         self.session.echo(e.clone());
         Some(e)
     }
@@ -755,6 +784,7 @@ impl CadApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
+            startup::open_started();
             self.opening.start(path);
         }
         #[cfg(target_arch = "wasm32")]
@@ -767,11 +797,14 @@ impl CadApp {
     /// Add the files whose background read has finished; report the ones that failed as a failed
     /// OPEN is reported. Called every frame.
     pub fn finish_opening(&mut self) {
-        for (_, outcome) in self.opening.poll() {
+        for (path, outcome) in self.opening.poll() {
+            let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            startup::mark(&format!("read {name}"));
             let r = match outcome {
                 Ok(f) => self.session.finish_open(f).map_err(|e| e.to_string()),
                 Err(e) => Err(e),
             };
+            startup::open_finished(&format!("added {name}"));
             if let Err(e) = &r {
                 self.session.echo(e.clone());
             }
@@ -1103,6 +1136,7 @@ impl CadApp {
                 chrome::start_page(self, ui);
             }
         });
+        tearoff::show_windows(self, ui.ctx());
         dialogs::show(self, ui.ctx());
         layers::off_prompt(self, ui.ctx());
         palettes::patterns::prompt_picker(self, ui.ctx());
@@ -1123,6 +1157,19 @@ impl CadApp {
         control::observe_drawn(ui.ctx());
         self.frame_ms = now_ms() - t0;
         self.note_time("draw", self.frame_ms);
+        if startup::frame(self.frame_ms) {
+            let report = startup::report();
+            log::info!(
+                "started: first frame {} ms, interactive {} ms, drawings on screen {} ms",
+                report["firstFrameMs"],
+                report["interactiveMs"],
+                report["drawingsShownMs"]
+            );
+            if startup::exit_when_interactive() {
+                eprintln!("{report}");
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {

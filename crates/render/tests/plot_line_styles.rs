@@ -163,6 +163,8 @@ fn viewport_contents_get_their_pens() {
         locked: false,
         frozen_layers: Vec::new(),
         layer_colors: Vec::new(),
+        layer_linetypes: Vec::new(),
+        layer_lineweights: Vec::new(),
         clip: None,
         on: true,
         twist: 0.0,

@@ -1795,3 +1795,19 @@
 	Embed Textures	テクスチャを埋め込む
 	Publish Walkthrough	ウォークスルーを公開
 	Walkthroughs (CDYWALK)	ウォークスルー (CDYWALK)
+	Check Exchange	交換チェック
+	Not kept in the {format} file	{format} ファイルに保持されないもの
+	The drawing was saved. This file format can't keep everything in it:	図面を保存しました。このファイル形式では次の内容を保持できません:
+	What	内容
+	left out	除外
+	changed	変更
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	CADaddy 図面 (.cdy) はすべてを保持します。交換チェックで保存せずに再表示できます。
+	Move to New Window	新しいウィンドウに移動
+	Dock All Windows	すべてのウィンドウをドッキング
+	Every drawing is in a window of its own.	すべての図面がそれぞれのウィンドウに表示されています。
+	Back among the drawing tabs	図面タブに戻す
+	Plot Stamp...	印刷スタンプ...
+	Plot a Folder of Drawings...	フォルダー内の図面を印刷...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	フォルダー内の各図面をそれぞれの PDF に（中の PDF フォルダーへ）
+	Plot stamp	印刷スタンプ
+	Quick Properties Lists	クイック プロパティのリスト

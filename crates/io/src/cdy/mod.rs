@@ -49,6 +49,65 @@ pub fn manifest(bytes: &[u8]) -> Option<serde_json::Value> {
     serde_json::from_slice(&container::find(bytes, b"MANI")?.data).ok()
 }
 
+/// A check of a .cdy file: every chunk's checksum and compression (each save's, the superseded
+/// ones too), the index and trailer, and whether the drawing reads without leaving anything out.
+/// `ok` is true only when all of that is sound. Errors when it isn't a .cdy file at all.
+///
+/// ```json
+/// {"ok", "format", "bytes", "index": "sound"|"damaged", "chunks": [{tag, version, offset, stored,
+///  raw, deflated, live, damage?}], "unreadable": [[from, to]], "sizes": {TAG: {count, stored, raw}},
+///  "waste": bytes of superseded chunks, "notes": [what reading left out]}
+/// ```
+pub fn verify(bytes: &[u8]) -> std::result::Result<serde_json::Value, String> {
+    use serde_json::{Map, json};
+    let format = container::header(bytes)?;
+    let index = container::index(bytes);
+    let live: std::collections::HashSet<u64> = index.iter().flatten().map(|e| e.offset).collect();
+    let (walked, lost) = container::walk(bytes);
+    let mut sizes = Map::new();
+    let (mut waste, mut damaged) = (0u64, 0usize);
+    let chunks: Vec<_> = walked
+        .iter()
+        .filter(|w| &w.tag != b"INDX")
+        .map(|w| {
+            let tag = String::from_utf8_lossy(&w.tag).into_owned();
+            let is_live = live.contains(&w.offset) || index.is_none();
+            if is_live {
+                let e = sizes.entry(tag.clone()).or_insert_with(|| json!({"count": 0, "stored": 0, "raw": 0}));
+                for (k, n) in [("count", 1), ("stored", w.stored), ("raw", w.raw)] {
+                    e[k] = json!(e[k].as_u64().unwrap_or(0).saturating_add(n));
+                }
+            } else {
+                waste = waste.saturating_add(w.stored).saturating_add(container::CHUNK_HEADER_LEN as u64);
+            }
+            if w.damage.is_some() && is_live {
+                damaged += 1;
+            }
+            let mut c = json!({"tag": tag, "version": w.version, "offset": w.offset, "stored": w.stored, "raw": w.raw, "deflated": w.deflated, "live": is_live});
+            if let Some(why) = &w.damage {
+                c["damage"] = json!(why);
+            }
+            c
+        })
+        .collect();
+    let notes = match model::read(bytes) {
+        Ok((_, rep)) => rep.notes,
+        Err(e) => vec![e],
+    };
+    let ok = index.is_some() && damaged == 0 && lost.is_empty() && notes.is_empty();
+    Ok(json!({
+        "ok": ok,
+        "format": format,
+        "bytes": bytes.len(),
+        "index": if index.is_some() { "sound" } else { "damaged" },
+        "chunks": chunks,
+        "unreadable": lost,
+        "sizes": sizes,
+        "waste": waste,
+        "notes": notes,
+    }))
+}
+
 /// The PNG preview of a .cdy file (for file browsers and the Start page), read without reading
 /// the drawing; `None` when there is none.
 pub fn thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {

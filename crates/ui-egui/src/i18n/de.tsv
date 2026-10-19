@@ -1892,3 +1892,32 @@
 	Embed Textures	Texturen einbetten
 	Publish Walkthrough	Begehung veröffentlichen
 	Walkthroughs (CDYWALK)	Begehungen (CDYWALK)
+	Check Exchange	Austausch prüfen
+	Not kept in the {format} file	Nicht in der {format}-Datei erhalten
+	The drawing was saved. This file format can't keep everything in it:	Die Zeichnung wurde gespeichert. Dieses Dateiformat kann nicht alles darin erhalten:
+	What	Was
+	left out	ausgelassen
+	changed	geändert
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	Eine CADaddy-Zeichnung (.cdy) erhält alles. „Austausch prüfen“ listet dies ohne Speichern erneut auf.
+	VP Linetype	AF-Linientyp
+	VP Lineweight	AF-Linienstärke
+	Unreconciled New Layers ({n})	Nicht abgeglichene neue Layer ({n})
+	Reconcile All	Alle abgleichen
+	Reconcile Layer	Layer abgleichen
+	LayerWalk	Layer-Durchgang
+	Layers: {n}	Layer: {n}
+	Restore on exit	Beim Beenden wiederherstellen
+	Filter:	Filter:
+	Layer Walk...	Layer-Durchgang...
+	Layer Walk	Layer-Durchgang
+	Isolate Layer to Current Viewport	Layer im aktuellen Ansichtsfenster isolieren
+	Unreconciled New Layers	Nicht abgeglichene neue Layer
+	Move to New Window	In neues Fenster verschieben
+	Dock All Windows	Alle Fenster andocken
+	Every drawing is in a window of its own.	Jede Zeichnung ist in einem eigenen Fenster.
+	Back among the drawing tabs	Zurück zu den Zeichnungsregisterkarten
+	Plot Stamp...	Plotstempel...
+	Plot a Folder of Drawings...	Ordner mit Zeichnungen plotten...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	Jede Zeichnung eines Ordners als eigene PDF, in einen PDF-Ordner darin
+	Plot stamp	Plotstempel
+	Quick Properties Lists	Schnelleigenschaften-Listen

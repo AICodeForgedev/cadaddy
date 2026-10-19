@@ -306,7 +306,7 @@ fn run_stylesmanager(s: &mut Session, p: &Value) -> Result<Value> {
                         if meta.len() > cadaddy_doc::MAX_TABLE_FILE as u64 {
                             return Err(bad(cmd, format!("{_path}: the plot style table file is too large")));
                         }
-                        std::fs::read(_path).map_err(|e| bad(cmd, format!("{_path}: {e}")))?
+                        crate::readfile::read(_path).map_err(|e| bad(cmd, format!("{_path}: {e}")))?
                     }
                     #[cfg(target_arch = "wasm32")]
                     return Err(bad(cmd, "files can't be read here: pass `text` or `data`"));

@@ -116,7 +116,10 @@ pub fn drawing_tab_entries(app: &CadApp, index: usize) -> Vec<Vec<Entry>> {
         action("Close All Other Drawings", format!("drawing:closeothers:{index}"), others),
     ];
     push(&mut groups, close);
-    groups.push(vec![action("Copy Full File Path", format!("drawing:copypath:{index}"), path.is_some())]);
+    groups.push(vec![
+        action("Copy Full File Path", format!("drawing:copypath:{index}"), path.is_some()),
+        action("Move to New Window", format!("drawing:tearoff:{index}"), true),
+    ]);
     groups
 }
 
@@ -294,6 +297,11 @@ fn drawing_action(app: &mut CadApp, ctx: &egui::Context, op: &str, index: usize)
     match op {
         "close" => app.request_close(Some(index)),
         "closeothers" => app.request_close_others(index),
+        "tearoff" => {
+            if let Err(e) = crate::tearoff::tear_off(app, index, None) {
+                app.set_status(format!("New window: {e}"));
+            }
+        }
         "copypath" => {
             if let Some(p) = app.session.docs.get(index).and_then(|d| d.path.clone()) {
                 ctx.copy_text(p);

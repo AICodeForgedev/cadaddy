@@ -116,7 +116,7 @@ fn write_file(cmd: &str, _path: &str, _text: &str) -> Result<()> {
 #[cfg(not(target_arch = "wasm32"))]
 fn read_file(cmd: &str, path: &str) -> Result<String> {
     use std::io::Read;
-    let f = std::fs::File::open(path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+    let f = crate::readfile::open(path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
     let mut bytes = Vec::new();
     f.take(MAX_FILE + 1).read_to_end(&mut bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
     if bytes.len() as u64 > MAX_FILE {

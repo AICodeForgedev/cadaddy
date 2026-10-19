@@ -14,6 +14,7 @@
 use std::fmt::Write as _;
 
 use cadaddy_color::Rgb;
+use cadaddy_doc::plotstamp::{PlotStamp, StampCorner, StampFacts};
 use cadaddy_doc::{Drawing, Handle, PageSetup, Space};
 use cadaddy_geom::{Bounds2, Vec2};
 use cadaddy_render::{Kind, Sheet, clip, paper};
@@ -85,6 +86,14 @@ pub struct PdfOptions {
     pub plot_transparency: Option<bool>,
     /// Turn the sheet half a turn ("Plot upside down").
     pub upside_down: bool,
+    /// The plot stamp: `Some(true/false)` forces it on or off; `None` follows each sheet's page
+    /// setup (a layout's `plotStamp`, model space's [`PlotStamp::model`]).
+    pub stamp: Option<bool>,
+    /// Stamp settings for this plot instead of the drawing's.
+    pub stamp_settings: Option<PlotStamp>,
+    /// What the stamp says that the plotter can't know: the drawing's name and the date and time.
+    pub stamp_drawing: String,
+    pub stamp_date: String,
 }
 
 impl Default for PdfOptions {
@@ -110,6 +119,10 @@ impl Default for PdfOptions {
             hyperlinks: true,
             plot_transparency: None,
             upside_down: false,
+            stamp: None,
+            stamp_settings: None,
+            stamp_drawing: String::new(),
+            stamp_date: String::new(),
         }
     }
 }
@@ -158,6 +171,16 @@ impl PdfOptions {
             hyperlinks: v.get("hyperlinks").and_then(Value::as_bool).unwrap_or(true),
             plot_transparency: v.get("plotTransparency").and_then(Value::as_bool),
             upside_down: v.get("upsideDown").and_then(Value::as_bool).unwrap_or(false),
+            // `stamp?: bool | {settings}` (an object turns it on with those settings),
+            // `stampDrawing?`, `stampDate?`.
+            stamp: match v.get("stamp") {
+                Some(Value::Bool(b)) => Some(*b),
+                Some(Value::Object(_)) => Some(true),
+                _ => None,
+            },
+            stamp_settings: v.get("stamp").filter(|s| s.is_object()).and_then(|s| serde_json::from_value(s.clone()).ok()),
+            stamp_drawing: v.get("stampDrawing").and_then(Value::as_str).map(|t| t.chars().take(260).collect()).unwrap_or_default(),
+            stamp_date: v.get("stampDate").and_then(Value::as_str).map(|t| t.chars().take(64).collect()).unwrap_or_default(),
         }
     }
 }
@@ -233,6 +256,7 @@ pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
                     "paper": pg.get("paper"), "landscape": pg.get("landscape"), "scale": pg.get("scale"),
                     "plotStyleTable": opts.get("plotStyleTable"), "lineweights": opts.get("lineweights"),
                     "margins": opts.get("margins"), "text": opts.get("text"),
+                    "stamp": opts.get("stamp"), "stampDrawing": opts.get("stampDrawing"), "stampDate": opts.get("stampDate"),
                 }));
                 po.window = Some(w);
                 po.fit = Some(true);
@@ -404,6 +428,8 @@ struct SheetPage {
     links: Vec<(Bounds2, String)>,
     /// Page label: the layout name.
     label: String,
+    /// The plot stamp's content and its standard font, when the sheet carries one.
+    stamp: Option<(String, &'static str)>,
 }
 
 /// Plot one space.
@@ -468,7 +494,96 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
         }
     }
     let links = links(&list, &map, &clip_pt, links_to);
-    Ok(SheetPage { media, list, map, clip_pt, layers, links, label: sheet_name(space) })
+    let label = sheet_name(space);
+    let stamp = stamp(d, space, o, &page, &sheet, k, fit, map.s, &label);
+    Ok(SheetPage { media, list, map, clip_pt, layers, links, label, stamp })
+}
+
+/// The plot scale as a stamp says it: `1:48`, `4:1`; `Fit 1:37.5` when fitted.
+fn scale_text(s: f64, fit: bool) -> String {
+    let short = |v: f64| {
+        let t = format!("{v:.3}");
+        t.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    let ratio = if !(s.is_finite() && s > 0.0) {
+        "?".to_string()
+    } else if s >= 1.0 {
+        format!("{}:1", short(s))
+    } else {
+        format!("1:{}", short(1.0 / s))
+    };
+    if fit { format!("Fit {ratio}") } else { ratio }
+}
+
+/// The PDF standard font of a stamp font name.
+fn stamp_font(name: &str) -> (&'static str, f64) {
+    // (base font, average glyph width in ems: to right-align without the font's metrics)
+    match name {
+        "Times" => ("Times-Roman", 0.47),
+        "Courier" => ("Courier", 0.6),
+        _ => ("Helvetica", 0.53),
+    }
+}
+
+/// The plot stamp of one sheet, as page content in points, when it carries one.
+#[allow(clippy::too_many_arguments)]
+fn stamp(
+    d: &Drawing,
+    space: &Space,
+    o: &PdfOptions,
+    page: &PageSetup,
+    sheet: &Sheet,
+    k: f64,
+    fit: bool,
+    s: f64,
+    label: &str,
+) -> Option<(String, &'static str)> {
+    let settings = o.stamp_settings.clone().or_else(|| d.plot_stamp.clone()).unwrap_or_default().sanitized();
+    let on = o.stamp.unwrap_or(if space.is_paper() { page.plot_stamp } else { settings.model });
+    if !on {
+        return None;
+    }
+    let facts = StampFacts {
+        drawing: o.stamp_drawing.clone(),
+        layout: label.to_string(),
+        date_time: o.stamp_date.clone(),
+        device: page.device.clone(),
+        paper: page.paper.clone(),
+        scale: scale_text(s, fit),
+    };
+    let lines = settings.lines(&facts);
+    if lines.is_empty() {
+        return None;
+    }
+    let (font, avg) = stamp_font(&settings.font);
+    let h = settings.height_mm * PT_PER_MM;
+    let gap = h * 1.4;
+    let rect = if settings.from_paper_edge {
+        Bounds2::new(Vec2::ZERO, sheet.size * k)
+    } else {
+        Bounds2::new(sheet.printable.min * k, sheet.printable.max * k)
+    };
+    let off = Vec2::new(settings.offset_mm[0], settings.offset_mm[1]) * PT_PER_MM;
+    let mut c = String::from("q 0 g\n");
+    let n = lines.len();
+    for (i, line) in lines.iter().enumerate() {
+        let width = line.chars().count() as f64 * h * avg;
+        let x = match settings.corner {
+            StampCorner::BottomLeft | StampCorner::TopLeft => rect.min.x + off.x,
+            StampCorner::BottomRight | StampCorner::TopRight => rect.max.x - off.x - width,
+        };
+        let y = match settings.corner {
+            StampCorner::BottomLeft | StampCorner::BottomRight => rect.min.y + off.y + (n - 1 - i) as f64 * gap,
+            StampCorner::TopLeft | StampCorner::TopRight => rect.max.y - off.y - h - i as f64 * gap,
+        };
+        c.push_str("BT /FS ");
+        num(&mut c, h);
+        c.push_str(" Tf ");
+        pt(&mut c, Vec2::new(x, y));
+        let _ = writeln!(c, " Td {} Tj ET", latin_string(line));
+    }
+    c.push_str("Q\n");
+    Some((c, font))
 }
 
 /// Paper-space position of the sheet a layout plots (zero for model space).
@@ -876,21 +991,7 @@ fn hidden_words(list: &cadaddy_render::DisplayList, map: &Map) -> String {
         if !(size.is_finite() && size > 0.0 && w.dir.is_finite() && w.origin.is_finite()) {
             continue;
         }
-        let latin: String = w.text.chars().map(|ch| if (ch as u32) < 256 && !ch.is_control() { ch } else { '?' }).collect();
-        let mut esc = String::from("(");
-        for ch in latin.chars() {
-            match ch {
-                '(' | ')' | '\\' => {
-                    esc.push('\\');
-                    esc.push(ch);
-                }
-                ch if ch.is_ascii() => esc.push(ch),
-                ch => {
-                    let _ = write!(esc, "\\{:03o}", ch as u32);
-                }
-            }
-        }
-        esc.push(')');
+        let esc = latin_string(&w.text);
         c.push_str("BT 3 Tr /FW ");
         num(&mut c, size);
         c.push_str(" Tf ");
@@ -902,6 +1003,26 @@ fn hidden_words(list: &cadaddy_render::DisplayList, map: &Map) -> String {
         let _ = writeln!(c, " Tm {esc} Tj ET");
     }
     c
+}
+
+/// A literal string in a standard font's WinAnsi encoding: Latin-1 characters (others become
+/// `?`), `(`, `)` and `\` escaped, the rest of 128–255 as octal escapes.
+fn latin_string(text: &str) -> String {
+    let mut esc = String::from("(");
+    for ch in text.chars().take(1000).map(|ch| if (ch as u32) < 256 && !ch.is_control() { ch } else { '?' }) {
+        match ch {
+            '(' | ')' | '\\' => {
+                esc.push('\\');
+                esc.push(ch);
+            }
+            ch if ch.is_ascii() => esc.push(ch),
+            ch => {
+                let _ = write!(esc, "\\{:03o}", ch as u32);
+            }
+        }
+    }
+    esc.push(')');
+    esc
 }
 
 /// Write one glyph as text: opens a text object and sets the font when needed, then places the
@@ -1091,7 +1212,7 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
     let mut ocgs: Vec<(u32, usize)> = Vec::new();
     let mut kids = Vec::new();
     // Page dictionaries are completed once the fonts are written: (page, its fonts, the rest).
-    let mut page_dicts: Vec<(usize, Vec<usize>, String, String, String, bool)> = Vec::new();
+    let mut page_dicts: Vec<(usize, Vec<usize>, String, String, String, bool, Option<&'static str>)> = Vec::new();
     // Image XObjects shared by all pages, by the pixels they hold.
     let mut image_ids: Vec<(std::sync::Arc<cadaddy_render::images::Raster>, usize)> = Vec::new();
     for p in pages {
@@ -1101,6 +1222,9 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
         // Stroke-font lettering also as invisible text, so the page can be searched and read.
         let hidden = hidden_words(&p.list, &p.map);
         marks.push_str(&hidden);
+        if let Some((stamp, _)) = &p.stamp {
+            marks.push_str(stamp);
+        }
         let mut xobjects = String::new();
         for (k, r) in images.iter().enumerate() {
             let id = match image_ids.iter().find(|(q, _)| std::sync::Arc::ptr_eq(q, r)) {
@@ -1156,6 +1280,7 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
             ext_gstates(&alphas) + &xobjects,
             format!("/MediaBox [0 0 {mb}]{turn} /Contents {content}{annots}"),
             !hidden.is_empty(),
+            p.stamp.as_ref().map(|(_, f)| *f),
         ));
         kids.push(page);
     }
@@ -1165,7 +1290,9 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
         .iter()
         .any(|p| p.5)
         .then(|| objs.add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string()));
-    for (page, used, props, gstates, rest, words) in page_dicts {
+    // The plot stamps' standard fonts, one object each.
+    let mut stamp_fonts: Vec<(&'static str, usize)> = Vec::new();
+    for (page, used, props, gstates, rest, words, stamp_font) in page_dicts {
         let mut res = String::new();
         if !props.is_empty() {
             let _ = write!(res, " /Properties <<{props} >>");
@@ -1175,6 +1302,17 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
         let mut f: Vec<String> = used.iter().filter_map(|i| Some(format!("/F{i} {} 0 R", font_ids.get(*i)?))).collect();
         if let Some(id) = words_font.filter(|_| words) {
             f.push(format!("/FW {id} 0 R"));
+        }
+        if let Some(base) = stamp_font {
+            let id = match stamp_fonts.iter().find(|(b, _)| *b == base) {
+                Some((_, id)) => *id,
+                None => {
+                    let id = objs.add(format!("<< /Type /Font /Subtype /Type1 /BaseFont /{base} /Encoding /WinAnsiEncoding >>"));
+                    stamp_fonts.push((base, id));
+                    id
+                }
+            };
+            f.push(format!("/FS {id} 0 R"));
         }
         if !f.is_empty() {
             let _ = write!(res, " /Font << {} >>", f.join(" "));

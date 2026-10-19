@@ -16,6 +16,8 @@ fn viewport(id: u32, frozen_layers: Vec<String>, layer_colors: Vec<(String, Colo
         locked: false,
         frozen_layers,
         layer_colors,
+        layer_linetypes: Vec::new(),
+        layer_lineweights: Vec::new(),
         clip: None,
         on: true,
         twist: 0.0,

@@ -74,7 +74,7 @@ fn set_path(p: &Value) -> Result<PathBuf> {
 #[cfg(not(target_arch = "wasm32"))]
 fn load(path: &Path) -> Result<SheetSet> {
     use std::io::Read;
-    let f = std::fs::File::open(path).map_err(|e| bad(CMD, format!("{}: {e}", path.display())))?;
+    let f = crate::readfile::open(path).map_err(|e| bad(CMD, format!("{}: {e}", path.display())))?;
     let mut text = String::new();
     f.take(MAX_FILE + 1).read_to_string(&mut text).map_err(|e| bad(CMD, format!("{}: {e}", path.display())))?;
     if text.len() as u64 > MAX_FILE {
@@ -130,7 +130,7 @@ fn read_drawing(file: &Path) -> Result<cadaddy_doc::Drawing> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use std::io::Read;
-        let f = std::fs::File::open(file).map_err(|e| bad(CMD, format!("{}: {e}", file.display())))?;
+        let f = crate::readfile::open(file).map_err(|e| bad(CMD, format!("{}: {e}", file.display())))?;
         let mut bytes = Vec::new();
         f.take((512 << 20) + 1).read_to_end(&mut bytes).map_err(|e| bad(CMD, format!("{}: {e}", file.display())))?;
         if bytes.len() > 512 << 20 {
@@ -165,7 +165,7 @@ fn listing(path: &Path, set: &SheetSet) -> Value {
         .iter()
         .enumerate()
         .map(|(i, sh)| {
-            let found = drawing_file(path, &sh.drawing).is_ok_and(|f| f.is_file());
+            let found = drawing_file(path, &sh.drawing).is_ok_and(|f| cadaddy_geom::filename::find_file(f).is_some());
             json!({ "index": i, "number": sh.number, "title": sh.title, "drawing": sh.drawing, "layout": sh.layout, "subset": sh.subset, "found": found })
         })
         .collect();

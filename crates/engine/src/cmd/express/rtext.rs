@@ -329,7 +329,7 @@ pub fn source_of(c: &Common) -> Option<Source> {
 #[cfg(not(target_arch = "wasm32"))]
 fn file_text(path: &str) -> String {
     use std::io::Read;
-    let Ok(f) = std::fs::File::open(path) else { return format!("(file not found: {path})") };
+    let Ok(f) = crate::readfile::open(path) else { return format!("(file not found: {path})") };
     let mut bytes = Vec::new();
     if f.take(MAX_FILE).read_to_end(&mut bytes).is_err() {
         return format!("(file not readable: {path})");

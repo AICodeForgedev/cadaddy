@@ -336,6 +336,10 @@ fn header_default(n: &str) -> Option<Value> {
         "CMATERIAL" => Some(json!("ByLayer")),
         // Rendered views' sun on/off and exposure, kept with the drawing's sun.
         "SUNSTATUS" => Some(json!(1)),
+        // Layer notification: evaluate new xref layers; report them on plot, open, xref load and
+        // layer state restore.
+        "LAYEREVAL" => Some(json!(1)),
+        "LAYERNOTIFY" => Some(json!(15)),
         "RENDEREXPOSURE" => Some(json!(0.0)),
         _ => None,
     }

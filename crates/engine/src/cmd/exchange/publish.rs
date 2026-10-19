@@ -76,7 +76,7 @@ fn sheet_json(s: &Sheet) -> Value {
 #[cfg(not(target_arch = "wasm32"))]
 fn read_text(cmd: &str, path: &str, max: u64) -> Result<Vec<u8>> {
     use std::io::Read;
-    let f = std::fs::File::open(path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+    let f = crate::readfile::open(path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
     let mut b = Vec::new();
     f.take(max + 1).read_to_end(&mut b).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
     if b.len() as u64 > max {
@@ -114,6 +114,72 @@ fn read_drawing(cmd: &str, path: &str) -> Result<cadaddy_doc::Drawing> {
     let hooks = io().ok_or_else(|| bad(cmd, "file formats are not available in this build"))?;
     let bytes = read_text(cmd, path, 512 << 20)?;
     (hooks.read)(&bytes, path).map_err(|e| bad(cmd, format!("{path}: {e}")))
+}
+
+/// Extensions of the drawings a folder is published from.
+const FOLDER_DRAWINGS: [&str; 3] = ["dwg", "dxf", "cdy"];
+/// Most drawings one folder publish takes.
+const MAX_FOLDER: usize = 10_000;
+
+/// Batch plot: every drawing (.dwg, .dxf, .cdy) directly in `folder` to one PDF each,
+/// `<out>/<name>.pdf` (`out` defaults to the folder), with the sheets `layouts` names (each
+/// drawing's that exist) or else its usual ones (Model if it has objects, then the layouts in tab
+/// order). `stamp` forces the plot stamp on or off. A drawing that fails is reported and the rest
+/// go on.
+pub(super) fn folder(folder: &str, out: Option<&str>, layouts: Option<&[String]>, stamp: Option<bool>) -> Result<Value> {
+    let cmd = "publish";
+    let hook = io().and_then(|h| h.plot).ok_or_else(|| bad(cmd, "plotting is not available in this build"))?;
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(folder)
+        .map_err(|e| bad(cmd, format!("{folder}: {e}")))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file() && p.extension().and_then(|x| x.to_str()).is_some_and(|x| FOLDER_DRAWINGS.contains(&x.to_ascii_lowercase().as_str())))
+        .take(MAX_FOLDER)
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        return Err(bad(cmd, format!("{folder}: no drawings (.dwg, .dxf, .cdy) in this folder")));
+    }
+    let out_dir = Path::new(out.unwrap_or(folder));
+    std::fs::create_dir_all(out_dir).map_err(|e| bad(cmd, format!("{}: {e}", out_dir.display())))?;
+    let (mut done, mut failed) = (Vec::new(), Vec::new());
+    for f in &files {
+        let file = f.to_string_lossy().into_owned();
+        let stem = f.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Drawing".into());
+        let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let target = out_dir.join(format!("{stem}.pdf")).to_string_lossy().into_owned();
+        let r = (|| -> Result<usize> {
+            let d = read_drawing(cmd, &file)?;
+            let mut sheets: Vec<String> = match layouts {
+                Some(names) => names
+                    .iter()
+                    .filter_map(|n| if n.eq_ignore_ascii_case("model") { Some("Model".to_string()) } else { d.layout(n).map(|l| l.name.clone()) })
+                    .collect(),
+                None => {
+                    let mut ls: Vec<_> = d.layouts.iter().filter(|l| !l.entities.is_empty()).collect();
+                    ls.sort_by_key(|l| l.tab_order);
+                    (!d.model.is_empty()).then(|| "Model".to_string()).into_iter().chain(ls.iter().map(|l| l.name.clone())).collect()
+                }
+            };
+            sheets.truncate(MAX_SHEETS);
+            if sheets.is_empty() {
+                return Err(bad(cmd, "nothing to plot (no objects, or none of the named layouts)"));
+            }
+            let mut opts = json!({ "layouts": sheets });
+            if let Some(on) = stamp {
+                opts["stamp"] = json!(on);
+            }
+            crate::cmd::plotstamp::facts_for(&name, &mut opts);
+            let bytes = hook(&d, &cadaddy_doc::Space::Model, &opts).map_err(|e| bad(cmd, e))?;
+            store(&target, &bytes)?;
+            Ok(sheets.len())
+        })();
+        match r {
+            Ok(pages) => done.push(json!({ "drawing": file, "path": target, "pages": pages })),
+            Err(e) => failed.push(json!({ "drawing": file, "error": e.to_string() })),
+        }
+    }
+    let message = format!("Plotted {} of {} drawings to PDF in {}", done.len(), files.len(), out_dir.display());
+    Ok(json!({ "drawings": done, "failed": failed, "message": message }))
 }
 
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
@@ -193,6 +259,8 @@ pub(super) fn publish(s: &mut Session, list: &[Sheet], path: Option<&str>, singl
                 {
                     opts["scale"] = json!(k);
                 }
+                let name = Path::new(file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                crate::cmd::plotstamp::facts_for(&name, &mut opts);
                 hook(d, &space, &opts).map_err(|e| bad(cmd, format!("{file} {}: {e}", sh.layout)))?
             }
         };
