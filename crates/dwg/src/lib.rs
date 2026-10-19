@@ -88,6 +88,7 @@ mod native {
         current_style_names(&mut doc);
         table_merges(&mut doc);
         table_style_rows(&mut doc, false);
+        dimension_flags(&mut doc, false);
         let mut out = CappedWriter { buf: Vec::new(), limit: limits.max_dxf_bytes, exceeded: false };
         let written = std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DxfWriter::new(&doc).write_to_writer(&mut out)))
             .map_err(|_| "the DWG→DXF conversion failed on this file".to_string())?;
@@ -266,6 +267,27 @@ mod native {
         }
     }
 
+    /// The DWG dimension flags byte. Its bit 0 is the opposite of DXF group 70's bit 128 (set: the
+    /// text is at its default position) and its bit 1 is group 70's bit 32 (ODA DWG
+    /// specification, common dimension data), while acadrust 0.6.4 reads and writes bit 0 as
+    /// `text_user_positioned` itself and keeps no bit 32 from DXF. Without this, every dimension
+    /// of a DWG CADCraft writes is user-positioned for AutoCAD (#1094), and every dimension of an
+    /// AutoCAD DWG is read as user-positioned. `to_dwg` sets the fields up for the writer:
+    /// bit 32 as CADCraft's DXF writer always sets it, and bit 0 through the inverted field;
+    /// otherwise the field is read from bit 0 after a DWG is read.
+    fn dimension_flags(doc: &mut acadrust::CadDocument, to_dwg: bool) {
+        for e in doc.entities_mut() {
+            let acadrust::entities::EntityType::Dimension(d) = e else { continue };
+            let b = d.base_mut();
+            if to_dwg {
+                b.dwg_flags_byte |= 0x02;
+                b.text_user_positioned = !b.text_user_positioned;
+            } else {
+                b.text_user_positioned = b.dwg_flags_byte & 0x01 == 0;
+            }
+        }
+    }
+
     /// Leave out what acadrust can't write as this DWG version: other programs' custom entities
     /// and objects without raw DWG data of that version. acadrust 0.6.4 refuses the whole file
     /// for one of them (0.6.3 left them out); CADCraft already tells the user which entity types
@@ -425,6 +447,7 @@ mod native {
         }
         other_layout_owners(&mut doc);
         table_style_rows(&mut doc, true);
+        dimension_flags(&mut doc, true);
         drop_unwritable(&mut doc);
         current_dimstyle(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
@@ -504,5 +527,69 @@ mod tests {
     fn garbage_is_an_error_not_a_crash() {
         assert!(dwg_to_dxf(b"AC1032 this is not a dwg file at all").is_err());
         assert!(dwg_to_dxf(b"").is_err());
+    }
+
+    /// A DXF with one DIMENSION per (text, group 70, subclass, points) row.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn dims_dxf(dims: &[(&str, i64, &str, &[(i32, [f64; 2])])]) -> String {
+        let mut s = String::from("  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1032\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n");
+        for (text, flags, sub, pts) in dims {
+            s += "  0\nDIMENSION\n  8\n0\n100\nAcDbEntity\n100\nAcDbDimension\n 10\n0\n 20\n0\n 30\n0\n";
+            s += &format!(" 11\n50\n 21\n-20\n 31\n0\n 70\n{flags}\n  1\n{text}\n  3\nStandard\n100\n{sub}\n");
+            for (code, [x, y]) in pts.iter() {
+                s += &format!("{code:>3}\n{x}\n{:>3}\n{y}\n{:>3}\n0\n", code + 10, code + 20);
+            }
+        }
+        s + "  0\nENDSEC\n  0\nEOF\n"
+    }
+
+    /// DWG stores DXF group 70's bit 128 inverted, in bit 0 of the dimension flags byte (set:
+    /// the text is at its default position), and bit 32 in bit 1 (ODA DWG specification, common
+    /// dimension data). The bytes are read back raw, so a reader that inverts bit 0 the same way
+    /// as the writer can't hide a wrong byte.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dimension_text_position_flags_reach_the_dwg_as_autocad_reads_them() {
+        let linear: &[(i32, [f64; 2])] = &[(13, [0.0, 0.0]), (14, [100.0, 0.0])];
+        let radius: &[(i32, [f64; 2])] = &[(15, [10.0, 0.0])];
+        let angular: &[(i32, [f64; 2])] = &[(13, [0.0, 0.0]), (14, [10.0, 0.0]), (15, [0.0, 0.0]), (16, [0.0, 10.0])];
+        let kinds = [
+            (0, "AcDbAlignedDimension", linear),
+            (1, "AcDbAlignedDimension", linear),
+            (4, "AcDbRadialDimension", radius),
+            (2, "AcDb2LineAngularDimension", angular),
+        ];
+        let mut dims = Vec::new();
+        for (ty, sub, pts) in kinds {
+            dims.push(("HOME", ty | 32, sub, pts));
+            dims.push(("MOVED", ty | 32 | 128, sub, pts));
+        }
+        let dwg = dxf_to_dwg(dims_dxf(&dims).as_bytes()).unwrap();
+        let doc = acadrust::DwgReader::from_stream(std::io::Cursor::new(&dwg)).read().unwrap();
+        let mut seen = Vec::new();
+        for e in doc.entities() {
+            let acadrust::entities::EntityType::Dimension(d) = e else { continue };
+            let (text, byte) = (d.base().text_override().unwrap_or_default(), d.base().dwg_flags_byte);
+            seen.push((text.to_string(), byte & 0x03));
+            assert_eq!(byte & 0x02, 0x02, "{text} {:?}: bit 32 of group 70 is lost (flags byte {byte:#04x})", d.base().dimension_type);
+            let default_pos = text == "HOME";
+            assert_eq!(byte & 0x01 != 0, default_pos, "{text} {:?}: flags byte {byte:#04x}", d.base().dimension_type);
+        }
+        for text in ["HOME", "MOVED"] {
+            assert_eq!(seen.iter().filter(|(t, _)| t == text).count(), 4, "{seen:?}");
+        }
+
+        // And CADCraft reads its own DWG back as it wrote it: 128 only on the moved texts.
+        let dxf = String::from_utf8(dwg_to_dxf(&dwg).unwrap()).unwrap();
+        let lines: Vec<&str> = dxf.lines().map(str::trim).collect();
+        let mut flags = Vec::new();
+        for rec in lines.chunks(2).collect::<Vec<_>>().split(|p| p.first() == Some(&"0")) {
+            let value = |code: &str| rec.iter().find(|p| p.first() == Some(&code)).and_then(|p| p.get(1).copied());
+            if let (Some(text @ ("HOME" | "MOVED")), Some(v)) = (value("1"), value("70")) {
+                flags.push((text, v.parse::<i64>().unwrap_or(-1) & 128));
+            }
+        }
+        assert_eq!(flags.len(), 8, "{flags:?}");
+        assert!(flags.iter().all(|(l, f)| (*f == 128) == (*l == "MOVED")), "{flags:?}");
     }
 }
