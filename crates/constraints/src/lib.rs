@@ -699,6 +699,33 @@ pub fn set_parameter(d: &mut Drawing, name: &str, expr_text: &str, opts: &SolveO
     Ok(report)
 }
 
+/// Rename a parameter (dimensional constraint name or user parameter) and every expression that
+/// uses it. Geometry doesn't change. On error the drawing is unchanged.
+pub fn rename_parameter(d: &mut Drawing, old: &str, new: &str) -> Result<(), SolveError> {
+    if !name_in_use(d, old) {
+        return Err(SolveError::Other(format!("no parameter `{old}`")));
+    }
+    if !expr::valid_name(new) {
+        return Err(SolveError::Other(format!("invalid parameter name `{new}`")));
+    }
+    if new != old && name_in_use(d, new) {
+        return Err(SolveError::Other(format!("`{new}` is already in use")));
+    }
+    for c in d.constraints.iter_mut().filter(|c| c.kind.is_dimensional()) {
+        if c.name == old {
+            c.name = new.to_string();
+        }
+        c.expr = expr::rename(&c.expr, old, new);
+    }
+    for p in &mut d.parametric.parameters {
+        if p.name == old {
+            p.name = new.to_string();
+        }
+        p.expr = expr::rename(&p.expr, old, new);
+    }
+    Ok(())
+}
+
 /// Where to draw a constraint's glyphs (one anchor per reference).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

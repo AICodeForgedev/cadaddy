@@ -57,6 +57,42 @@ fn json_geometric_and_dimensional_constraints() {
 }
 
 #[test]
+fn renaming_a_parameter_rewrites_the_expressions_that_use_it() {
+    let mut s = Session::new();
+    let a = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+    let b = line(&mut s, [0.0, 5.0], [10.0, 5.0]);
+    s.execute("parameters", &json!({ "name": "user1", "expr": "4" })).unwrap();
+    s.execute("dcaligned", &json!({ "h1": a, "expr": "user1*2" })).unwrap();
+    s.execute("dcaligned", &json!({ "h1": b, "expr": "d1+1" })).unwrap();
+    let names = |s: &Session| -> Vec<(String, String)> {
+        cadcraft_constraints::parameter_table(s.doc().unwrap()).into_iter().map(|r| (r.name, r.expr)).collect()
+    };
+
+    s.execute("parameters", &json!({ "name": "user1", "rename": "width" })).unwrap();
+    assert_eq!(names(&s), vec![("d1".into(), "width*2".into()), ("d2".into(), "d1+1".into()), ("width".into(), "4".into())]);
+    assert!((ends(&s, &a).0.dist(ends(&s, &a).1) - 8.0).abs() < 1e-6);
+
+    // A dimensional constraint's name too, and only the whole name: d1 is not part of d10.
+    s.execute("parameters", &json!({ "name": "d10", "expr": "3" })).unwrap();
+    s.execute("parameters", &json!({ "name": "d2", "expr": "d1+d10" })).unwrap();
+    s.execute("parameters", &json!({ "name": "d1", "rename": "base" })).unwrap();
+    assert_eq!(
+        names(&s),
+        vec![("base".into(), "width*2".into()), ("d2".into(), "base+d10".into()), ("width".into(), "4".into()), ("d10".into(), "3".into())]
+    );
+
+    // Taken and invalid names are refused and change nothing; undo takes a rename back.
+    let before = s.doc().unwrap().clone();
+    for to in ["width", "d10", "1x", "pi", ""] {
+        assert!(s.execute("parameters", &json!({ "name": "base", "rename": to })).is_err(), "{to}");
+    }
+    assert!(s.execute("parameters", &json!({ "name": "nothing", "rename": "x" })).is_err());
+    assert_eq!(*s.doc().unwrap(), before);
+    s.undo().unwrap();
+    assert_eq!(names(&s)[0], ("d1".into(), "width*2".into()));
+}
+
+#[test]
 fn edits_are_resolved_and_erase_purges() {
     let mut s = Session::new();
     let a = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
