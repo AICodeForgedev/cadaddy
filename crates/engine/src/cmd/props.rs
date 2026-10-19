@@ -11,7 +11,7 @@ use cadcraft_geom::Vec3;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{Result, Session};
+use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("-linetype", "Linetype", run_linetype).params("{current?, load?, file? | text?, reload?} (as LINETYPE)").interactive(|_| Ok(Box::new(linfile::DashLinetype::new()))),
         CommandSpec::new("lweight", "Lineweight...", run_lweight).menu(&["Format", "Lineweight..."]).alias(&["lw", "lineweight"]).params("{lineweight: mm | ByLayer}"),
-        CommandSpec::new("ltscale", "Linetype Scale", run_ltscale).alias(&["lts"]).params("{scale}"),
+        CommandSpec::new("ltscale", "Linetype Scale", run_ltscale).alias(&["lts"]).params("{scale}").interactive(|_| Ok(Box::new(LtscaleM))),
         CommandSpec::new("units", "Units...", run_units).menu(&["Format", "Units..."]).alias(&["un"]).params("{lunits?: 1..5, luprec?: 0..8, aunits?: 0..4, auprec?: 0..8, insunits?}"),
         CommandSpec::new("limits", "Drawing Limits", run_limits).menu(&["Format", "Drawing Limits"]).params("{min: [x,y], max: [x,y]}"),
         CommandSpec::new("style", "Text Style...", run_style)
@@ -469,6 +469,39 @@ fn run_ltscale(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.doc_mut()?.header.set_f64("LTSCALE", v);
     Ok(json!({ "message": "Regenerating model." }))
+}
+
+/// Typed LTSCALE: "Enter new linetype scale factor <1.0000>:".
+struct LtscaleM;
+
+impl Interactive for LtscaleM {
+    fn name(&self) -> &'static str {
+        "LTSCALE"
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        let cur = s.doc().map(|d| d.header.f64("LTSCALE", 1.0)).unwrap_or(1.0);
+        Prompt::new("Enter new linetype scale factor", Accept::NUMBER).default(format!("{cur:.4}"))
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        let text = match i {
+            Input::Enter | Input::Cancel => return Ok(Step::Done),
+            Input::Text(t) => t,
+            _ => return Ok(Step::Continue),
+        };
+        let scale = text.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0);
+        match scale.map(|v| run_ltscale(s, &json!({ "scale": v }))) {
+            Some(Ok(r)) => {
+                if let Some(m) = r.get("message").and_then(Value::as_str) {
+                    s.echo(m.to_string());
+                }
+                Ok(Step::Done)
+            }
+            _ => {
+                s.echo("Requires a positive number.");
+                Ok(Step::Continue)
+            }
+        }
+    }
 }
 
 fn run_units(s: &mut Session, p: &Value) -> Result<Value> {
