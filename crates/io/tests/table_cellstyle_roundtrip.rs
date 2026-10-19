@@ -114,7 +114,7 @@ fn breaks_and_data_links_roundtrip_and_the_block_draws_the_parts() {
     let (mut d, mut t) = sample();
     t.breaks =
         Some(TableBreak { enabled: true, height: 1.5, spacing: 0.5, offsets: vec![cadaddy_geom::Vec2::new(0.0, -1.0)], ..TableBreak::default() });
-    t.data_link = Some(DataLink { path: "costs.csv".into(), start_row: 1 });
+    t.data_link = Some(DataLink { path: "costs.csv".into(), start_row: 1, ..Default::default() });
     let h = d.model.iter().next().unwrap().handle;
     d.modify_entity(h, |e| e.kind = EntityKind::Table(t.clone())).unwrap();
     let bytes = cadaddy_io::write(&d, "t.dxf").unwrap();

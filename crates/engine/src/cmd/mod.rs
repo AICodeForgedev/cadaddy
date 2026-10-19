@@ -79,6 +79,8 @@ mod solids;
 mod spline_opts;
 pub mod standards;
 pub(crate) mod table;
+/// Excel workbooks for data links and table export.
+pub use table::xlsx;
 pub mod tolerance;
 mod trimextend;
 mod ucs;

@@ -155,7 +155,7 @@ fn data_links_saved_in_a_drawing_are_read_beside_it_or_on_this_computer_only() {
             .unwrap()
             .modify_entity(h, |e| {
                 if let EntityKind::Table(t) = &mut e.kind {
-                    t.data_link = Some(cadaddy_engine::doc::DataLink { path: link.clone(), start_row: 0 });
+                    t.data_link = Some(cadaddy_engine::doc::DataLink { path: link.clone(), start_row: 0, ..Default::default() });
                 }
             })
             .unwrap();

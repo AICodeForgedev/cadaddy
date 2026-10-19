@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handle?, at: [x,y] | row+col, text (=… for a formula)}")
             .interactive(|_| Ok(Box::new(TableEditM::default()))),
         CommandSpec::new("tableexport", "Export Table", run_export)
-            .params("{handle, path? (.csv), separator?: \",\" | \"\\t\"} → {csv, rows, cols, path?}")
+            .params("{handle, path? (.csv, or .xlsx for an Excel workbook), separator?: \",\" | \"\\t\"} → {csv, rows, cols, path?}")
             .interactive(|_| Ok(Box::new(ExportM::default()))),
     ]
 }
@@ -548,6 +548,17 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let csv = table_csv(&t, sep);
     let mut r = json!({ "handle": h.hex(), "rows": t.cells.len(), "cols": t.col_widths.len(), "csv": csv });
+    if let Some(path) = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty())
+        && std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("xlsx"))
+    {
+        // An Excel workbook of one sheet: the cells as shown (merged cells' covered parts empty).
+        let rows = super::breaks::parse_csv(&table_csv(&t, '\t'), '\t');
+        let bytes = super::xlsx::write(&rows, "Table").map_err(|e| bad(id, e))?;
+        crate::cmd::file::store(path, &bytes)?;
+        r["path"] = json!(path);
+        r["message"] = json!(format!("Table exported to {path}."));
+        return Ok(r);
+    }
     if let Some(path) = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()) {
         write_text(path, &csv)?;
         r["path"] = json!(path);
