@@ -31,6 +31,19 @@ fn ok(s: &mut Session, code: &str) -> String {
 }
 
 #[test]
+fn real_print_subnormal_and_rounding() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "1e-310"), "1.0e-310");
+    assert_eq!(ok(&mut s, "5e-324"), "4.94066e-324");
+    assert_eq!(ok(&mut s, "9.9999996e10"), "1.0e+011");
+    assert_eq!(ok(&mut s, "9.9999996e-7"), "1.0e-006");
+    assert_eq!(super::value::real_text(-1e-310), "-1.0e-310");
+    assert_eq!(super::value::real_text(1e308), "1.0e+308");
+    assert_eq!(super::value::real_text(999999.5), "1.0e+006");
+    assert_eq!(super::value::real_text(0.000009999996), "0.00001");
+}
+
+#[test]
 fn arithmetic_follows_autolisp() {
     let mut s = session();
     assert_eq!(ok(&mut s, "(+ 1 2 3)"), "6");
