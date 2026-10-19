@@ -62,6 +62,12 @@ pub fn unicode_escape(chars: &[char], i: usize) -> Option<(char, usize)> {
     }
 }
 
+/// Marks the start of a field's value in text handed to the layout (a Unicode noncharacter,
+/// which real text never holds; never drawn): the value is shaded on screen.
+pub const FIELD_ON: char = '\u{FDD0}';
+/// Marks the end of a field's value.
+pub const FIELD_OFF: char = '\u{FDD1}';
+
 /// A field code at `chars[i]` (`%<\AcVar Date>%`, title-block fields): its length, so it shows
 /// as `####` (AutoCAD's look for a field without a value) instead of being read as formatting.
 pub fn field_code(chars: &[char], i: usize) -> Option<usize> {
@@ -100,6 +106,10 @@ pub fn decode_controls(s: &str) -> Vec<(char, bool, bool)> {
     let mut i = 0;
     while i < chars.len() {
         let c = chars.get(i).copied().unwrap_or(' ');
+        if c == FIELD_ON || c == FIELD_OFF {
+            i += 1;
+            continue;
+        }
         if let Some((u, n)) = unicode_escape(&chars, i) {
             out.push((u, under, over));
             i += n;

@@ -100,7 +100,7 @@ mod native {
             ));
         }
         written.map_err(|e| format!("DWG→DXF: {e}"))?;
-        Ok((add_header_vars(out.buf, &doc.header), notes))
+        Ok((add_materials(add_header_vars(out.buf, &doc.header), &doc), notes))
     }
 
     /// Most record types named in the skipped-records note.
@@ -318,7 +318,7 @@ mod native {
         ]
     }
 
-    /// Add the [`unwritten_header_vars`] to the HEADER section of acadrust's DXF text, before its
+    /// Add the [`unwritten_header_vars`] (and HYPERLINKBASE) to the HEADER section of acadrust's DXF text, before its
     /// ENDSEC; a variable the writer already wrote is left alone. Text of another layout than
     /// acadrust's (`  0\r\nSECTION\r\n  2\r\nHEADER\r\n` … `  0\r\nENDSEC\r\n`) is returned unchanged.
     fn add_header_vars(mut dxf: Vec<u8>, h: &acadrust::document::HeaderVariables) -> Vec<u8> {
@@ -330,11 +330,16 @@ mod native {
         let Some(end) = dxf.windows(END.len()).position(|w| w == END).map(|p| p + 2) else { return dxf };
         let section = dxf.get(..end).unwrap_or_default();
         let mut add = String::new();
+        let written = |name: &str| section.windows(name.len() + 2).any(|w| w.starts_with(name.as_bytes()) && w.ends_with(b"\r\n"));
         for (name, code, value) in unwritten_header_vars(h) {
-            let written = section.windows(name.len() + 2).any(|w| w.starts_with(name.as_bytes()) && w.ends_with(b"\r\n"));
-            if !written && value.parse::<f64>().is_ok_and(f64::is_finite) {
+            if !written(name) && value.parse::<f64>().is_ok_and(f64::is_finite) {
                 add.push_str(&format!("  9\r\n{name}\r\n{code:>3}\r\n{value}\r\n"));
             }
+        }
+        // HYPERLINKBASE, text: when set, on one line.
+        let base = h.hyperlink_base.as_str();
+        if !written("$HYPERLINKBASE") && !base.is_empty() && !base.contains(['\r', '\n']) {
+            add.push_str(&format!("  9\r\n$HYPERLINKBASE\r\n  1\r\n{base}\r\n"));
         }
         dxf.splice(end..end, add.into_bytes());
         dxf
@@ -381,18 +386,21 @@ mod native {
     /// The names of the LTYPE records in DXF text (group 2 of each `0 LTYPE`).
     fn dxf_linetype_names(dxf: &[u8]) -> Vec<String> {
         let text = String::from_utf8_lossy(dxf);
-        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let mut lines = text.lines().map(str::trim);
         let mut names = Vec::new();
         let mut in_ltype = false;
-        for pair in lines.chunks(2) {
-            let [code, value] = pair else { break };
-            match *code {
-                "0" => in_ltype = *value == "LTYPE",
+        while let (Some(code), Some(value)) = (lines.next(), lines.next()) {
+            match code {
+                "0" => in_ltype = value == "LTYPE",
                 "2" if in_ltype => {
                     names.push(value.to_string());
                     in_ltype = false;
                 }
                 _ => {}
+            }
+            // The LTYPE table is in TABLES: nothing after the entities can add to it.
+            if code == "2" && matches!(value, "BLOCKS" | "ENTITIES" | "OBJECTS") {
+                break;
             }
         }
         names
@@ -401,13 +409,117 @@ mod native {
     /// acadrust's tables match names regardless of case and start with their own "Continuous",
     /// so a drawing's "CONTINUOUS" (older files spell it so) came back renamed: keep the
     /// drawing's spelling.
-    fn keep_linetype_case(doc: &mut acadrust::CadDocument, dxf: &[u8]) {
-        let names = dxf_linetype_names(dxf);
+    fn keep_linetype_case(doc: &mut acadrust::CadDocument, names: &[String]) {
         for lt in doc.line_types.iter_mut() {
             if let Some(n) = names.iter().find(|n| n.eq_ignore_ascii_case(&lt.name) && **n != lt.name) {
                 lt.name.clone_from(n);
             }
         }
+    }
+
+    /// The materials a DXF's objects and layers point at (group 347): by entity handle, and by
+    /// layer name (upper case). acadrust's DXF reader doesn't read them, its DWG writer writes them.
+    fn dxf_materials(dxf: &[u8]) -> (std::collections::HashMap<u64, u64>, std::collections::HashMap<String, u64>) {
+        let text = String::from_utf8_lossy(dxf);
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let (mut ents, mut layers) = (std::collections::HashMap::new(), std::collections::HashMap::new());
+        let (mut kind, mut handle, mut name, mut in_entity) = ("", None::<u64>, String::new(), false);
+        for pair in lines.chunks(2) {
+            let [code, value] = pair else { break };
+            match *code {
+                "0" => {
+                    (kind, handle, in_entity) = (value, None, false);
+                    name.clear();
+                }
+                "5" if handle.is_none() => handle = u64::from_str_radix(value, 16).ok(),
+                "2" if kind == "LAYER" && name.is_empty() => name = value.to_ascii_uppercase(),
+                "100" => in_entity = *value == "AcDbEntity",
+                "347" => {
+                    let Ok(m) = u64::from_str_radix(value, 16) else { continue };
+                    if kind == "LAYER" && !name.is_empty() {
+                        layers.insert(name.clone(), m);
+                    } else if in_entity && let Some(h) = handle {
+                        ents.insert(h, m);
+                    }
+                }
+                _ => {}
+            }
+        }
+        (ents, layers)
+    }
+
+    /// Give acadrust's document the materials of the DXF it read ([`dxf_materials`]).
+    fn put_materials(doc: &mut acadrust::CadDocument, dxf: &[u8]) {
+        let (ents, layers) = dxf_materials(dxf);
+        if ents.is_empty() && layers.is_empty() {
+            return;
+        }
+        for e in doc.entities_mut() {
+            let c = e.common_mut();
+            if let Some(m) = ents.get(&u64::from(c.handle)) {
+                c.material_flags = 0b11;
+                c.material_handle = Some(acadrust::types::Handle::from(*m));
+            }
+        }
+        for l in doc.layers.iter_mut() {
+            if let Some(m) = layers.get(&l.name.to_ascii_uppercase()) {
+                l.material = acadrust::types::Handle::from(*m);
+            }
+        }
+    }
+
+    /// The reverse of [`put_materials`] for reading: the materials acadrust read from the DWG
+    /// (entities' and layers'), added to its DXF text, whose writer leaves them out.
+    fn add_materials(dxf: Vec<u8>, doc: &acadrust::CadDocument) -> Vec<u8> {
+        let ents: std::collections::HashMap<u64, u64> = doc
+            .entities()
+            .filter_map(|e| {
+                let c = e.common();
+                c.material_handle.filter(|_| c.material_flags == 0b11).map(|m| (u64::from(c.handle), u64::from(m)))
+            })
+            .collect();
+        let layers: std::collections::HashMap<String, u64> =
+            doc.layers.iter().filter(|l| u64::from(l.material) != 0).map(|l| (l.name.to_ascii_uppercase(), u64::from(l.material))).collect();
+        if ents.is_empty() && layers.is_empty() {
+            return dxf;
+        }
+        let Ok(text) = String::from_utf8(dxf.clone()) else { return dxf };
+        let lines: Vec<&str> = text.split("\r\n").collect();
+        let mut out = String::with_capacity(text.len() + 64 * (ents.len() + layers.len()));
+        let (mut kind, mut handle, mut name) = (String::new(), None::<u64>, String::new());
+        let mut i = 0;
+        while let (Some(code), Some(value)) = (lines.get(i), lines.get(i + 1)) {
+            out.push_str(code);
+            out.push_str("\r\n");
+            out.push_str(value);
+            out.push_str("\r\n");
+            match code.trim() {
+                "0" => {
+                    kind = value.trim().to_string();
+                    handle = None;
+                    name.clear();
+                }
+                "5" if handle.is_none() => handle = u64::from_str_radix(value.trim(), 16).ok(),
+                "2" if kind == "LAYER" && name.is_empty() => name = value.trim().to_ascii_uppercase(),
+                "100" if value.trim() == "AcDbEntity" => {
+                    if let Some(m) = handle.and_then(|h| ents.get(&h)) {
+                        out.push_str(&format!("347\r\n{m:X}\r\n"));
+                    }
+                }
+                "70" if kind == "LAYER" => {
+                    if let Some(m) = layers.get(&name) {
+                        out.push_str(&format!("347\r\n{m:X}\r\n"));
+                    }
+                }
+                _ => {}
+            }
+            i += 2;
+        }
+        // Whatever is left (an odd last line) as it was.
+        for l in lines.get(i..).unwrap_or_default() {
+            out.push_str(l);
+        }
+        out.into_bytes()
     }
 
     /// Collects the DXF text and fails the write once it would grow past `limit`.
@@ -438,7 +550,7 @@ mod native {
     /// Convert DXF bytes into a DWG file of the DXF's version, and at least AutoCAD 2004
     /// (AC1018).
     pub fn dxf_to_dwg(dxf: &[u8]) -> Result<Vec<u8>, String> {
-        convert(dxf, None)
+        convert(dxf, None, None)
     }
 
     /// Convert DXF bytes into a DWG file of `version`, a code from [`super::VERSIONS`] ("AC1032"),
@@ -453,10 +565,28 @@ mod native {
             "AC1032" => acadrust::DxfVersion::AC1032,
             _ => return Err(super::unsupported(version)),
         };
-        convert(dxf, Some(v))
+        convert(dxf, Some(v), None)
     }
 
-    fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>) -> Result<Vec<u8>, String> {
+    /// [`dxf_to_dwg_as`] for DXF of any form (ASCII or binary) whose linetype names the caller
+    /// gives (`linetypes`: the LTYPE table's names, as written), so they need not be read back
+    /// from the DXF.
+    pub fn dxf_to_dwg_named(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<Vec<u8>, String> {
+        let v = match version.trim().to_ascii_uppercase().as_str() {
+            "AC1015" => acadrust::DxfVersion::AC1015,
+            "AC1018" => acadrust::DxfVersion::AC1018,
+            "AC1021" => acadrust::DxfVersion::AC1021,
+            "AC1024" => acadrust::DxfVersion::AC1024,
+            "AC1027" => acadrust::DxfVersion::AC1027,
+            "AC1032" => acadrust::DxfVersion::AC1032,
+            _ => return Err(super::unsupported(version)),
+        };
+        convert(dxf, Some(v), Some(linetypes))
+    }
+
+    /// `linetypes`: the DXF's linetype names when the caller knows them; otherwise they are read
+    /// from the (ASCII) DXF.
+    fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>, linetypes: Option<&[String]>) -> Result<Vec<u8>, String> {
         let data = dxf.to_vec();
         let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
             .map_err(|_| "the DXF→DWG conversion failed".to_string())?
@@ -471,7 +601,11 @@ mod native {
         }
         table_style_rows(&mut doc, true);
         current_by_name(&mut doc);
-        keep_linetype_case(&mut doc, dxf);
+        match linetypes {
+            Some(names) => keep_linetype_case(&mut doc, names),
+            None => keep_linetype_case(&mut doc, &dxf_linetype_names(dxf)),
+        }
+        put_materials(&mut doc, dxf);
         drop_unwritable(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
@@ -480,7 +614,7 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as};
+pub use native::{dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named};
 
 /// The error for a DWG version CADaddy can't write.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -507,6 +641,10 @@ pub fn dxf_to_dwg(_dxf: &[u8]) -> Result<Vec<u8>, String> {
 }
 #[cfg(target_arch = "wasm32")]
 pub fn dxf_to_dwg_as(_dxf: &[u8], _version: &str) -> Result<Vec<u8>, String> {
+    Err("DWG files can't be written in the web build yet; save as DXF".into())
+}
+#[cfg(target_arch = "wasm32")]
+pub fn dxf_to_dwg_named(_dxf: &[u8], _version: &str, _linetypes: &[String]) -> Result<Vec<u8>, String> {
     Err("DWG files can't be written in the web build yet; save as DXF".into())
 }
 

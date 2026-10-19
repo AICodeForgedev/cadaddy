@@ -305,31 +305,53 @@ fn dwg_and_dxf(_: &cadaddy_engine::doc::Drawing, name: &str) -> Result<Vec<u8>, 
     Ok(name.as_bytes().to_vec())
 }
 
+fn dwg_and_dxf_only(d: &cadaddy_engine::doc::Drawing, name: &str) -> Result<Vec<u8>, String> {
+    if name.ends_with(".cdy") { Err("no .cdy writer".into()) } else { dwg_and_dxf(d, name) }
+}
+
 fn dxf_only(_: &cadaddy_engine::doc::Drawing, name: &str) -> Result<Vec<u8>, String> {
-    if name.ends_with(".dwg") { Err("no DWG writer".into()) } else { Ok(b"0\nEOF\n".to_vec()) }
+    if name.ends_with(".dwg") || name.ends_with(".cdy") { Err("no DWG writer".into()) } else { Ok(b"0\nEOF\n".to_vec()) }
 }
 
 fn empty_dwg(_: &cadaddy_engine::doc::Drawing, name: &str) -> Result<Vec<u8>, String> {
-    if name.ends_with(".dwg") { Ok(Vec::new()) } else { Ok(b"0\nEOF\n".to_vec()) }
+    if name.ends_with(".dwg") || name.ends_with(".cdy") { Ok(Vec::new()) } else { Ok(b"0\nEOF\n".to_vec()) }
 }
 
 #[test]
-fn autosave_files_are_dwg_with_dxf_when_dwg_writing_fails() {
+fn autosave_files_are_cdy_then_dwg_then_dxf_when_writers_fail() {
     let d = cadaddy_engine::doc::Drawing::new_imperial();
-    assert_eq!(autosave::encode(dwg_and_dxf, &d).unwrap(), (b"autosave.dwg".to_vec(), "dwg"));
+    assert_eq!(autosave::encode(dwg_and_dxf, &d).unwrap(), (b"autosave.cdy".to_vec(), "cdy"));
+    assert_eq!(autosave::encode(dwg_and_dxf_only, &d).unwrap(), (b"autosave.dwg".to_vec(), "dwg"));
     assert_eq!(autosave::encode(dxf_only, &d).unwrap(), (b"0\nEOF\n".to_vec(), "dxf"));
     assert_eq!(autosave::encode(empty_dwg, &d).unwrap().1, "dxf", "an empty DWG is no file");
 }
 
 #[test]
-fn a_dwg_autosave_is_recovered_with_its_objects() {
-    // The real writer and reader: the .sv$ holds DWG content, and reading it back (as Drawing
-    // Recovery does, by its first bytes whatever the extension) gives the drawing again.
+fn a_cdy_autosave_is_recovered_exactly() {
+    // The real writer and reader: the .sv$ holds .cdy content, and reading it back (as Drawing
+    // Recovery does, by its first bytes whatever the extension) gives exactly the drawing again.
     let mut s = Session::new();
     draw(&mut s);
     s.execute("circle", &json!({"center": [3, 3], "radius": 1})).unwrap();
     let doc = s.doc().unwrap().clone();
     let (bytes, format) = autosave::encode(|d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()), &doc).unwrap();
+    assert_eq!(format, "cdy");
+    assert!(cadaddy_io::cdy::is_cdy(&bytes), ".cdy content");
+    let back = cadaddy_io::read(&bytes, "Plan.dwg_1-a_2.sv$").unwrap();
+    assert_eq!(back, doc);
+}
+
+#[test]
+fn a_dwg_autosave_is_recovered_with_its_objects() {
+    // Without a .cdy writer the .sv$ holds DWG content, read back by its first bytes.
+    let mut s = Session::new();
+    draw(&mut s);
+    s.execute("circle", &json!({"center": [3, 3], "radius": 1})).unwrap();
+    let doc = s.doc().unwrap().clone();
+    let w = |d: &cadaddy_engine::doc::Drawing, n: &str| {
+        if n.ends_with(".cdy") { Err("off".into()) } else { cadaddy_io::write(d, n).map_err(|e| e.to_string()) }
+    };
+    let (bytes, format) = autosave::encode(w, &doc).unwrap();
     assert_eq!(format, "dwg");
     assert!(bytes.starts_with(b"AC10"), "DWG content");
     let back = cadaddy_io::read(&bytes, "Plan.dwg_1-a_2.sv$").unwrap();

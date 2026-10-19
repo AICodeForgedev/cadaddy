@@ -60,7 +60,9 @@ fn xref_opens_the_palette_and_its_buttons_manage_the_xref() {
     h.get_by_label("Reload").click();
     h.run_steps(3);
     assert_eq!(status(h.state()), Some(XrefStatus::Loaded));
-    h.get_by_label("Overlay").click();
+    // The palette below Properties is short (tester 0.7.7e) and its Type row sits below the
+    // scrolled view; the radio is pressed through accessibility, which doesn't depend on scrolling.
+    h.get_by_label("Overlay").click_accesskit();
     h.run_steps(3);
     assert!(h.state().session.doc().unwrap().block("site").unwrap().xref_overlay);
     h.get_by_label("Detach").click();

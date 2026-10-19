@@ -23,6 +23,7 @@ fn params(source: &str) -> ArrayParams {
         levels: 2,
         level_spacing: 4.0,
         replaced: vec![ReplacedItem { i: 1, j: 0, level: 0, block: "Größe".into() }],
+        removed: Vec::new(),
         editing: None,
     }
 }

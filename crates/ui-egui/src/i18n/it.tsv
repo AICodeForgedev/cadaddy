@@ -1420,3 +1420,336 @@ menu	Modify	Edita
 	Clip PDF Underlay	Ritaglia sottoposto PDF
 	Adjust PDF Underlay	Regola sottoposto PDF
 	PDF Underlay Layers	Layer del sottoposto PDF
+	Unused items in this drawing	Elementi inutilizzati in questo disegno
+	Purge Checked Items	Elimina elementi selezionati
+	Purge All	Elimina tutto
+	Items purged: {count}	Elementi eliminati: {count}
+	Find what:	Trova:
+	Replace with:	Sostituisci con:
+	Match case	Maiuscole/minuscole
+	Find whole words only	Solo parole intere
+	Find	Trova
+	Replace All	Sostituisci tutto
+	Matches replaced: {count} (objects: {objects})	Occorrenze sostituite: {count} (oggetti: {objects})
+	Matches found and selected: {count} (objects: {objects})	Occorrenze trovate e selezionate: {count} (oggetti: {objects})
+	Select Color	Seleziona colore
+	Dimension styles	Stili di quota
+	Linetypes	Tipi di linea
+	Multileader styles	Stili di multidirettrice
+	Multiline styles	Stili di multilinea
+	Table styles	Stili di tabella
+	Text styles	Stili di testo
+	Zero-length geometry	Geometria di lunghezza zero
+	Empty text objects	Oggetti testo vuoti
+	Palette Windows	Finestre tavolozze
+	Dock	Ancora
+	Back into the main window	Torna nella finestra principale
+	Dock Palette	Ancora tavolozza
+	Float in Own Window	Mobile in finestra propria
+	Drawings (CDY, DWG, DXF)	Disegni (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	Disegno CADaddy (CDY)
+	CADaddy drawing (.cdy)	Disegno CADaddy (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	Salva anche una copia DWG quando salvi un disegno CADaddy (.cdy)
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	Un disegno CADaddy conserva tutto; i file DWG e DXF potrebbero non conservare tutto (salvando in quei formati viene indicato cosa).
+	Field...	Campo...
+	Update Fields	Aggiorna campi
+	Change Text Case	Cambia maiuscole/minuscole
+	Auto Number	Numerazione automatica
+	Explode Text	Esplodi testo
+	Arc Aligned Text	Testo allineato all'arco
+	Data Extraction	Estrazione dati
+	Data source	Origine dati
+	Objects	Oggetti
+	Output	Output
+	Other drawings:	Altri disegni:
+	Add Drawings...	Aggiungi disegni...
+	Open Settings...	Apri impostazioni...
+	Start from a saved .dxe settings file	Inizia da un file di impostazioni .dxe salvato
+	Block names	Nomi dei blocchi
+	Include blocks inside blocks	Includi blocchi nidificati
+	Other objects:	Altri oggetti:
+	The drawing has no other objects.	Il disegno non contiene altri oggetti.
+	Properties to extract:	Proprietà da estrarre:
+	Attribute tags	Etichette attributo
+	Combine identical rows	Combina righe identiche
+	Insert a table	Inserisci una tabella
+	Insertion point	Punto di inserimento
+	Title	Titolo
+	Write a file (.csv for spreadsheets, .txt tab-separated)	Scrivi un file (.csv per fogli di calcolo, .txt separato da tabulazioni)
+	Browse...	Sfoglia...
+	Save Settings...	Salva impostazioni...
+	Save these choices to a .dxe file to use again	Salva queste scelte in un file .dxe per riutilizzarle
+	< Back	< Indietro
+	Next >	Avanti >
+	Finish	Fine
+	This drawing	Questo disegno
+	Preview	Anteprima
+	UCS	UCS
+	Plan View (World)	Vista in pianta (globale)
+	New UCS	Nuovo UCS
+	World	Globale
+	Current UCS	UCS corrente
+	World (WCS)	Globale (WCS)
+	Unnamed	Senza nome
+	Hide UCS Icon	Nascondi icona UCS
+	WCS	WCS
+	Spelling	Controllo ortografico
+	Check Spelling	Controlla ortografia
+	Where to check	Dove controllare
+	Selected objects	Oggetti selezionati
+	Not in dictionary:	Non nel dizionario:
+	Suggestions:	Suggerimenti:
+	Ignore	Ignora
+	Ignore All	Ignora tutto
+	Change All	Cambia tutto
+	Add to Dictionary	Aggiungi al dizionario
+	Main dictionary:	Dizionario principale:
+	American English	Inglese americano
+	Custom dictionary:	Dizionario personalizzato:
+	Spelling check complete.	Controllo ortografico completato.
+	Hyperlink...	Collegamento ipertestuale...
+	Select Objects for a Hyperlink	Seleziona oggetti per un collegamento
+	Open Hyperlink	Apri collegamento ipertestuale
+	Insert Hyperlink	Inserisci collegamento ipertestuale
+	Edit Hyperlink	Modifica collegamento ipertestuale
+	Text to display	Testo da visualizzare
+	File or web page	File o pagina web
+	Named location	Posizione con nome
+	A named location with no file or web page is a layout or view of this drawing.	Una posizione con nome senza file o pagina web è un layout o una vista di questo disegno.
+	Remove Link	Rimuovi collegamento
+	⌘-click to follow the link	⌘-clic per seguire il collegamento
+	Ctrl+click to follow the link	Ctrl+clic per seguire il collegamento
+	Materials Browser...	Browser materiali...
+	Attach by Layer	Associa per layer
+	Material Mapping	Mappatura materiale
+	New Material	Nuovo materiale
+	Edit Material	Modifica materiale
+	Delete Material	Elimina materiale
+	Assign Material	Assegna materiale
+	Materials Browser	Browser materiali
+	Search	Cerca
+	Library	Libreria
+	Add to drawing	Aggiungi al disegno
+	In this drawing	In questo disegno
+	No materials yet: add one from the library.	Ancora nessun materiale: aggiungine uno dalla libreria.
+	Colour	Colore
+	Roughness	Rugosità
+	Metallic	Metallicità
+	Opacity	Opacità
+	Mapping	Mappatura
+	Tile size	Dimensione piastrella
+	Assign to selection ({n})	Assegna alla selezione ({n})
+	Attach to layer	Associa al layer
+	Render	Rendering
+	Edit Layer State	Modifica stato layer
+	Export Layer State	Esporta stato layer
+	Import Layer State	Importa stato layer
+	New Layer Filter	Nuovo filtro layer
+	Edit Layer Filter	Modifica filtro layer
+	Delete Layer Filter	Elimina filtro layer
+	List Layer Filters	Elenca filtri layer
+	Layers in Filter	Layer nel filtro
+	Layer States Manager	Gestione stati layer
+	Invert filter	Inverti filtro
+	New Property Filter...	Nuovo filtro proprietà...
+	New Group Filter	Nuovo filtro gruppo
+	Add Layer	Aggiungi layer
+	Remove Layer	Rimuovi layer
+	Layer Filter Properties	Proprietà filtro layer
+	Filter name	Nome filtro
+	Within	All'interno di
+	Any	Qualsiasi
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	Modelli: * qualsiasi, ? un carattere, # una cifra; separare con virgole; ~ esclude.
+	Layer states	Stati layer
+	Turn off layers not found in layer state	Disattiva i layer non presenti nello stato layer
+	Layer properties to restore	Proprietà layer da ripristinare
+	On / Off	Attivato / Disattivato
+	Frozen / Thawed	Congelato / Scongelato
+	Locked / Unlocked	Bloccato / Sbloccato
+	Plot / No Plot	Stampa / Non stampare
+	Layers in "{name}"	Layer in "{name}"
+	Remove from the layer state	Rimuovi dallo stato layer
+	New...	Nuovo...
+	Save the layers as they are now in this state	Salva i layer così come sono ora in questo stato
+	Edit...	Modifica...
+	Rename	Rinomina
+	New layer state name	Nome nuovo stato layer
+	New name	Nuovo nome
+	Visual Style	Stile di visualizzazione
+	Visual Styles	Stili di visualizzazione
+	Wireframe	Wireframe
+	Hidden	Nascosto
+	Shaded	Ombreggiato
+	Shaded with Edges	Ombreggiato con spigoli
+	Realistic	Realistico
+	Mesh	Mesh
+	Polyface Mesh	Mesh poliface
+	Polygon Mesh	Mesh poligonale
+	Fly	Volo
+	Walk and Fly	Cammina e vola
+	3D Library...	Libreria 3D...
+	Add 3D Twins to Symbols	Aggiungi gemelli 3D ai simboli
+	List 3D Models	Elenca modelli 3D
+	Add 3D Twins	Aggiungi gemelli 3D
+	Plan Layers	Layer della pianta
+	Plan Walls	Muri della pianta
+	Plan Openings	Aperture della pianta
+	Plan Rooms	Locali della pianta
+	Plan Notes	Note della pianta
+	Plan Sheets	Tavole della pianta
+	3D Building from Plan	Edificio 3D dalla pianta
+	Wedge	Cuneo
+	Presspull	Premi/tira
+	3D Solid	Solido 3D
+	Specify center	Specificare il centro
+	Specify length	Specificare la lunghezza
+	Specify width	Specificare la larghezza
+	Specify other corner	Specificare l'altro angolo
+	Specify center point	Specificare il punto centrale
+	Specify base radius	Specificare il raggio della base
+	Specify radius	Specificare il raggio
+	Specify diameter	Specificare il diametro
+	Specify top radius	Specificare il raggio superiore
+	Specify tube radius	Specificare il raggio del tubo
+	Select objects to extrude	Selezionare gli oggetti da estrudere
+	Select extrusion path	Selezionare il percorso di estrusione
+	Specify angle of taper for extrusion	Specificare l'angolo di rastremazione dell'estrusione
+	Specify height of extrusion	Specificare l'altezza di estrusione
+	Select objects to revolve	Selezionare gli oggetti da rivoluzionare
+	Specify axis start point or define axis by	Specificare il punto iniziale dell'asse o definire l'asse mediante
+	Specify axis endpoint	Specificare il punto finale dell'asse
+	Specify angle of revolution	Specificare l'angolo di rivoluzione
+	Select objects to sweep	Selezionare gli oggetti da sweep
+	Select sweep path	Selezionare il percorso di sweep
+	Select cross sections in lofting order	Selezionare le sezioni trasversali nell'ordine di loft
+	Click inside bounded areas to press or pull	Fare clic all'interno delle aree delimitate per premere o tirare
+	Specify extrusion height	Specificare l'altezza di estrusione
+	Cube	Cubo
+	Sides	Lati
+	Top radius	Raggio superiore
+	Path	Percorso
+	Taper angle	Angolo di rastremazione
+	Select one or more regions or 3D solids.	Selezionare una o più regioni o solidi 3D.
+	No closed area found there.	Nessuna area chiusa trovata in quel punto.
+	Slice	Sezione
+	Thicken	Ispessisci
+	Fillet Edge	Raccorda spigolo
+	Chamfer Edge	Cima spigolo
+	Fillet Edges	Raccorda spigoli
+	Chamfer Edges	Cima spigoli
+	Move Faces	Sposta facce
+	Offset Faces	Offset facce
+	Delete Faces	Elimina facce
+	Shell	Guscio
+	Composite	Composito
+	Select objects to slice	Selezionare gli oggetti da sezionare
+	Specify a point on desired side or [keep Both sides]	Specificare un punto sul lato desiderato o [mantieni Entrambi i lati]
+	Both	Entrambi
+	Specify start point of slicing plane or	Specificare il punto iniziale del piano di sezione o
+	Specify second point on plane	Specificare il secondo punto sul piano
+	Specify the Z of the XY-plane	Specificare la Z del piano XY
+	Specify the X of the YZ-plane	Specificare la X del piano YZ
+	Specify the Y of the ZX-plane	Specificare la Y del piano ZX
+	Select surfaces to thicken	Selezionare le superfici da ispessire
+	Select a 3D solid	Selezionare un solido 3D
+	Select an edge	Selezionare uno spigolo
+	Remove faces	Rimuovi facce
+	Select faces	Selezionare le facce
+	Specify thickness	Specificare lo spessore
+	Enter fillet radius	Immettere il raggio di raccordo
+	Enter distance	Immettere la distanza
+	Specify a base point or displacement	Specificare un punto base o uno spostamento
+	Specify a second point of displacement	Specificare il secondo punto dello spostamento
+	Specify the offset distance	Specificare la distanza di offset
+	Enter the shell offset distance	Immettere la distanza di offset del guscio
+	Select solids, surfaces, and regions to subtract from ..	Selezionare solidi, superfici e regioni da cui sottrarre ..
+	Select solids, surfaces, and regions to subtract ..	Selezionare solidi, superfici e regioni da sottrarre ..
+	Select two or more solids.	Selezionare due o più solidi.
+	The solids don't overlap; nothing was changed.	I solidi non si sovrappongono; nulla è stato modificato.
+	Nothing would remain; nothing was changed.	Non resterebbe nulla; nulla è stato modificato.
+	The result would not be a solid; nothing was changed.	Il risultato non sarebbe un solido; nulla è stato modificato.
+	No straight edge between two flat faces there.	Nessuno spigolo retto tra due facce piane in quel punto.
+	No face of the solid there.	Nessuna faccia del solido in quel punto.
+	Only outside (convex) edges can be filleted or chamfered.	Solo gli spigoli esterni (convessi) possono essere raccordati o cimati.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	Il guscio funziona su parallelepipedi, cilindri, sfere ed estrusioni dritte.
+	The walls are too thick for this solid.	Le pareti sono troppo spesse per questo solido.
+	Select solids to subtract from.	Selezionare i solidi da cui sottrarre.
+	A solid can't be subtracted from itself.	Un solido non può essere sottratto da se stesso.
+	The solid would have too many operations; nothing was changed.	Il solido avrebbe troppe operazioni; nulla è stato modificato.
+	That face can't be moved (only flat faces, holes and added parts).	Questa faccia non può essere spostata (solo facce piane, fori e parti aggiunte).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	Questa faccia non può essere eliminata (solo fori, raccordi, cimature e parti aggiunte).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	Questa faccia non può essere sottoposta a offset (lati di parallelepipedi, estremità di cilindri, coni ed estrusioni, pareti di cilindri e sfere).
+	The thickness must be more than zero.	Lo spessore deve essere maggiore di zero.
+	The radius must be more than zero.	Il raggio deve essere maggiore di zero.
+	The distance must be more than zero.	La distanza deve essere maggiore di zero.
+	Requires a number.	Richiede un numero.
+	Parameter	Parametro
+	Action	Azione
+	Visibility States	Stati di visibilità
+	Remove Parameter or Action	Rimuovi parametro o azione
+	Edit Reference	Modifica riferimento
+	Discard Reference Edits	Ignora modifiche al riferimento
+	Nested References	Riferimenti nidificati
+	Light List	Elenco luci
+	Sun Properties	Proprietà del sole
+	Render Exposure	Esposizione rendering
+	Point Light	Luce puntiforme
+	Spotlight	Faretto
+	Distant Light	Luce distante
+	Change Lights	Modifica luci
+	Section Plane	Piano di sezione
+	Live Section	Sezione dinamica
+	Generate Section Block	Genera blocco di sezione
+	Generate Section	Genera sezione
+	Flatshot	Vista piana
+	Base View	Vista di base
+	Section View	Vista in sezione
+	Drawing Views	Viste disegno
+	Select face or any point to locate section line or	Selezionare una faccia o un punto per posizionare la linea di sezione o
+	Orthographic	Ortogonale
+	Select section object	Selezionare l'oggetto sezione
+	Specify location of base view	Specificare la posizione della vista di base
+	Select parent view	Selezionare la vista principale
+	Specify end point	Specificare il punto finale
+	Specify location of section view	Specificare la posizione della vista in sezione
+	There is nothing to draw: no 3D objects were found.	Niente da disegnare: nessun oggetto 3D trovato.
+	The section plane doesn't cut any solid.	Il piano di sezione non taglia alcun solido.
+	The view needs a direction.	La vista necessita di una direzione.
+	The drawing has no layout.	Il disegno non ha layout.
+	That is not a section plane.	Non è un piano di sezione.
+	Requires a point.	Richiede un punto.
+	The view is [dx, dy, dz].	La vista è [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	Crea pacchetto di trasmissione
+	Files in the package	File nel pacchetto
+	Not included	Non incluso
+	Organized folders	Cartelle organizzate
+	One folder	Una cartella
+	Include a transmittal report	Includi un rapporto di trasmissione
+	Create ZIP...	Crea ZIP...
+	Create Folder...	Crea cartella...
+	STL Out	Uscita STL
+	Export STL...	Esporta STL...
+	3D models (glTF, OBJ, STL)	Modelli 3D (glTF, OBJ, STL)
+	3D model (glTF binary)	Modello 3D (glTF binario)
+	3D model (glTF)	Modello 3D (glTF)
+	3D model (OBJ)	Modello 3D (OBJ)
+	3D model (STL)	Modello 3D (STL)
+	Render Region	Rendering area
+	samples	campioni
+	a sample	per campione
+	Pick crop window to render	Selezionare la finestra da sottoporre a rendering
+	Nothing has been rendered yet.	Non è stato ancora eseguito alcun rendering.
+	There is nothing to render: no surfaces in the view.	Niente da sottoporre a rendering: nessuna superficie nella vista.
+	The image couldn't be encoded.	Impossibile codificare l'immagine.
+	Saving images isn't available in the browser.	Il salvataggio di immagini non è disponibile nel browser.
+	PNG image	Immagine PNG
+	JPEG image	Immagine JPEG
+	Save Image	Salva immagine
+	My Properties	Le mie proprietà
+	Add to My Properties	Aggiungi alle mie proprietà
+	Remove from My Properties	Rimuovi dalle mie proprietà
+	All properties	Tutte le proprietà
+	My properties: the ones you added (right-click a property's name to add it)	Le mie proprietà: quelle che hai aggiunto (fai clic con il pulsante destro sul nome di una proprietà per aggiungerla)
+	Right-click a property's name and choose Add to My Properties.	Fai clic con il pulsante destro sul nome di una proprietà e scegli Aggiungi alle mie proprietà.
+	Color Books	Album colori

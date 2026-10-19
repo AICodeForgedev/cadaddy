@@ -1055,6 +1055,16 @@ pub fn ortho(base: Vec2, p: Vec2) -> Vec2 {
     if d.x.abs() >= d.y.abs() { Vec2::new(p.x, base.y) } else { Vec2::new(base.x, p.y) }
 }
 
+/// [`ortho`] along axes turned `angle` radians (the current UCS's).
+pub fn ortho_at(base: Vec2, p: Vec2, angle: f64) -> Vec2 {
+    if angle == 0.0 || !angle.is_finite() {
+        return ortho(base, p);
+    }
+    let local = ortho(Vec2::ZERO, (p - base).rotate(-angle));
+    let r = base + local.rotate(angle);
+    if r.is_finite() { r } else { p }
+}
+
 /// Polar tracking: if the direction base→p is within `tol` radians of a multiple of `inc`,
 /// return the point projected onto that ray and the angle.
 pub fn polar(base: Vec2, p: Vec2, inc: f64, tol: f64) -> Option<(Vec2, f64)> {
@@ -1088,10 +1098,12 @@ pub fn grid_snap(p: Vec2, unit: Vec2, origin: Vec2, angle: f64) -> Vec2 {
     if s.is_finite() { s } else { p }
 }
 
-/// The snap grid's origin (SNAPBASE) and rotation in radians (SNAPANG, in degrees) of a drawing.
+/// The snap grid's origin and rotation in radians of a drawing: SNAPBASE and SNAPANG (in
+/// degrees), both in the current UCS.
 pub fn grid_frame(d: &Drawing) -> (Vec2, f64) {
     let base = d.header.point("SNAPBASE").map(|p| p.xy()).filter(|p| p.is_finite()).unwrap_or(Vec2::ZERO);
-    (base, d.header.f64("SNAPANG", 0.0).to_radians())
+    let ucs = crate::ucs::Frame::current(d);
+    (ucs.to_wcs(base), ucs.angle + d.header.f64("SNAPANG", 0.0).to_radians())
 }
 
 #[cfg(test)]

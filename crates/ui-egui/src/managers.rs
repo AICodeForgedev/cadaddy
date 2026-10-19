@@ -95,9 +95,15 @@ fn set_temp<T: Clone + Send + Sync + 'static>(ctx: &egui::Context, id: &str, v: 
 }
 
 fn no_drawing(ctx: &egui::Context, title: &str, open: &mut bool) {
-    egui::Window::new(title).open(open).collapsible(false).resizable(false).show(ctx, |ui| {
-        ui.label("Open a drawing first.");
-    });
+    egui::Window::new(title)
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            ui.label("Open a drawing first.");
+        });
 }
 
 // ---------- Linetype Manager ----------
@@ -121,71 +127,77 @@ fn linetype(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
     let library: Vec<String> = cadaddy_doc::library::standard_linetypes().into_iter().map(|l| l.name).filter(|n| d.linetype(n).is_none()).collect();
     let mut sel = temp::<String>(ctx, "ltmgr_sel").filter(|s| rows.iter().any(|r| r.0.eq_ignore_ascii_case(s))).unwrap_or_else(|| current.clone());
     let mut action = None;
-    egui::Window::new("Linetype Manager").open(open).default_size(vec2(520.0, 360.0)).resizable(true).show(ctx, |ui| {
-        ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("ltmgr_load").selected_text("Load...").width(110.0).show_ui(ui, |ui| {
-                if library.is_empty() {
-                    ui.label("Every library linetype is loaded.");
-                } else if ui.selectable_label(false, "All").clicked() {
-                    action = Some(("linetype", json!({ "load": "*" })));
-                }
-                for n in &library {
-                    if ui.selectable_label(false, n).clicked() {
-                        action = Some(("linetype", json!({ "load": n })));
+    egui::Window::new("Linetype Manager")
+        .open(open)
+        .default_size(vec2(520.0, 360.0))
+        .resizable(true)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("ltmgr_load").selected_text("Load...").width(110.0).show_ui(ui, |ui| {
+                    if library.is_empty() {
+                        ui.label("Every library linetype is loaded.");
+                    } else if ui.selectable_label(false, "All").clicked() {
+                        action = Some(("linetype", json!({ "load": "*" })));
                     }
-                }
-                // The user's own .lin file (where the host has a file picker).
-                if let Some(pick) = app.services.pick_open.as_ref() {
-                    ui.separator();
-                    if ui.selectable_label(false, "From File...").clicked()
-                        && let Some(path) = pick()
-                    {
-                        action = Some(("linetype", json!({ "load": "*", "file": path })));
+                    for n in &library {
+                        if ui.selectable_label(false, n).clicked() {
+                            action = Some(("linetype", json!({ "load": n })));
+                        }
                     }
+                    // The user's own .lin file (where the host has a file picker).
+                    if let Some(pick) = app.services.pick_open.as_ref() {
+                        ui.separator();
+                        if ui.selectable_label(false, "From File...").clicked()
+                            && let Some(path) = pick()
+                        {
+                            action = Some(("linetype", json!({ "load": "*", "file": path })));
+                        }
+                    }
+                });
+                let is_current = sel.eq_ignore_ascii_case(&current);
+                if ui.add_enabled(!is_current, egui::Button::new("Current")).on_hover_text("Draw new objects with the selected linetype").clicked() {
+                    action = Some(("linetype", json!({ "current": sel })));
                 }
             });
-            let is_current = sel.eq_ignore_ascii_case(&current);
-            if ui.add_enabled(!is_current, egui::Button::new("Current")).on_hover_text("Draw new objects with the selected linetype").clicked() {
-                action = Some(("linetype", json!({ "current": sel })));
-            }
-        });
-        ui.label(RichText::new(format!("Current linetype: {current}")).color(t.text_dim));
-        ui.separator();
-        egui::ScrollArea::vertical().max_height(240.0).auto_shrink([false, true]).show(ui, |ui| {
-            egui::Grid::new("ltmgr_grid").striped(true).num_columns(3).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
-                for h in ["Linetype", "Appearance", "Description"] {
-                    ui.label(RichText::new(h).strong());
-                }
-                ui.end_row();
-                for (name, desc, pattern) in &rows {
-                    let mut label = RichText::new(name);
-                    if name.eq_ignore_ascii_case(&current) {
-                        label = label.strong();
+            ui.label(RichText::new(format!("Current linetype: {current}")).color(t.text_dim));
+            ui.separator();
+            egui::ScrollArea::vertical().max_height(240.0).auto_shrink([false, true]).show(ui, |ui| {
+                egui::Grid::new("ltmgr_grid").striped(true).num_columns(3).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
+                    for h in ["Linetype", "Appearance", "Description"] {
+                        ui.label(RichText::new(h).strong());
                     }
-                    let r = ui.selectable_label(sel.eq_ignore_ascii_case(name), label);
-                    if r.clicked() {
-                        sel = name.clone();
-                    }
-                    if r.double_clicked() {
-                        action = Some(("linetype", json!({ "current": name })));
-                    }
-                    let (rect, _) = ui.allocate_exact_size(vec2(120.0, 14.0), Sense::hover());
-                    if !matches!(name.as_str(), "ByLayer" | "ByBlock") {
-                        draw_pattern(ui.painter(), rect, pattern, Stroke::new(1.5, t.text));
-                    }
-                    ui.label(RichText::new(desc).color(t.text_dim));
                     ui.end_row();
+                    for (name, desc, pattern) in &rows {
+                        let mut label = RichText::new(name);
+                        if name.eq_ignore_ascii_case(&current) {
+                            label = label.strong();
+                        }
+                        let r = ui.selectable_label(sel.eq_ignore_ascii_case(name), label);
+                        if r.clicked() {
+                            sel = name.clone();
+                        }
+                        if r.double_clicked() {
+                            action = Some(("linetype", json!({ "current": name })));
+                        }
+                        let (rect, _) = ui.allocate_exact_size(vec2(120.0, 14.0), Sense::hover());
+                        if !matches!(name.as_str(), "ByLayer" | "ByBlock") {
+                            draw_pattern(ui.painter(), rect, pattern, Stroke::new(1.5, t.text));
+                        }
+                        ui.label(RichText::new(desc).color(t.text_dim));
+                        ui.end_row();
+                    }
+                });
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("Global scale factor");
+                if let Some(v) = num_field(ui, "ltmgr_scale", ltscale).filter(|v| *v > 0.0) {
+                    action = Some(("ltscale", json!({ "scale": v })));
                 }
             });
         });
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label("Global scale factor");
-            if let Some(v) = num_field(ui, "ltmgr_scale", ltscale).filter(|v| *v > 0.0) {
-                action = Some(("ltscale", json!({ "scale": v })));
-            }
-        });
-    });
     set_temp(ctx, "ltmgr_sel", sel);
     action
 }
@@ -260,42 +272,48 @@ fn point_style(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action
     let size = if pdsize == 0.0 { 5.0 } else { pdsize.abs() };
     let set = |m: i64, size: f64, rel: bool| Some(("ddptype", json!({ "pdmode": m, "pdsize": if rel { -size } else { size } })));
     let mut action = None;
-    egui::Window::new("Point Style").open(open).collapsible(false).resizable(false).show(ctx, |ui| {
-        egui::Grid::new("ptype_grid").spacing(vec2(6.0, 6.0)).show(ui, |ui| {
-            for (i, v) in PDMODES.iter().enumerate() {
-                let (rect, r) = ui.allocate_exact_size(vec2(44.0, 36.0), Sense::click());
-                let fill = if *v == mode {
-                    t.accent
-                } else if r.hovered() {
-                    t.control_hover
-                } else {
-                    t.control
-                };
-                ui.painter().rect_filled(rect, 3.0, fill);
-                draw_point(ui.painter(), rect.center(), 9.0, *v, Stroke::new(1.5, t.text));
-                if r.on_hover_text(format!("PDMODE {v}")).clicked() && *v != mode {
-                    action = set(*v, size, rel);
+    egui::Window::new("Point Style")
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            egui::Grid::new("ptype_grid").spacing(vec2(6.0, 6.0)).show(ui, |ui| {
+                for (i, v) in PDMODES.iter().enumerate() {
+                    let (rect, r) = ui.allocate_exact_size(vec2(44.0, 36.0), Sense::click());
+                    let fill = if *v == mode {
+                        t.accent
+                    } else if r.hovered() {
+                        t.control_hover
+                    } else {
+                        t.control
+                    };
+                    ui.painter().rect_filled(rect, 3.0, fill);
+                    draw_point(ui.painter(), rect.center(), 9.0, *v, Stroke::new(1.5, t.text));
+                    if r.on_hover_text(format!("PDMODE {v}")).clicked() && *v != mode {
+                        action = set(*v, size, rel);
+                    }
+                    if i % 5 == 4 {
+                        ui.end_row();
+                    }
                 }
-                if i % 5 == 4 {
-                    ui.end_row();
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Point Size");
+                if let Some(v) = num_field(ui, "ptype_size", size).filter(|v| *v > 0.0) {
+                    action = set(mode, v, rel);
                 }
+                ui.label(if rel { "%" } else { "units" });
+            });
+            if ui.radio(rel, "Set Size Relative to Screen").clicked() && !rel {
+                action = set(mode, size, true);
+            }
+            if ui.radio(!rel, "Set Size in Absolute Units").clicked() && rel {
+                action = set(mode, size, false);
             }
         });
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.label("Point Size");
-            if let Some(v) = num_field(ui, "ptype_size", size).filter(|v| *v > 0.0) {
-                action = set(mode, v, rel);
-            }
-            ui.label(if rel { "%" } else { "units" });
-        });
-        if ui.radio(rel, "Set Size Relative to Screen").clicked() && !rel {
-            action = set(mode, size, true);
-        }
-        if ui.radio(!rel, "Set Size in Absolute Units").clicked() && rel {
-            action = set(mode, size, false);
-        }
-    });
     action
 }
 
@@ -471,84 +489,91 @@ fn style_manager(ctx: &egui::Context, open: &mut bool, title: &str, cmd: &'stati
     let mut sel = temp::<String>(ctx, &sel_key).filter(|s| styles.iter().any(|x| x.name == *s)).unwrap_or_else(|| current.to_string());
     let mut new_name = temp::<String>(ctx, &new_key).unwrap_or_default();
     let mut action = None;
-    egui::Window::new(title).open(open).default_size(vec2(520.0, 280.0)).resizable(true).show(ctx, |ui| {
-        ui.label(RichText::new(format!("Current style: {current}")).color(t.text_dim));
-        ui.separator();
-        ui.columns(2, |cols| {
-            let [left, right] = cols else { return };
-            left.label(RichText::new("Styles").strong());
-            egui::ScrollArea::vertical().id_salt((cmd, "list")).max_height(160.0).auto_shrink([false, true]).show(left, |ui| {
-                for s in styles {
-                    let mut label = RichText::new(&s.name);
-                    if s.name.eq_ignore_ascii_case(current) {
-                        label = label.strong();
-                    }
-                    if ui.selectable_label(s.name == sel, label).clicked() {
-                        sel = s.name.clone();
-                    }
-                }
-            });
-            if left.add_enabled(!sel.eq_ignore_ascii_case(current), egui::Button::new("Set Current")).clicked() {
-                action = Some((cmd, json!({ "name": sel })));
-            }
-            left.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut new_name).hint_text("New style name").desired_width(120.0));
-                let name = new_name.trim().to_string();
-                let ok = !name.is_empty() && !styles.iter().any(|s| s.name.eq_ignore_ascii_case(&name));
-                if ui.add_enabled(ok, egui::Button::new("New")).clicked() {
-                    action = Some((cmd, json!({ "name": name, "current": false })));
-                    sel = name;
-                    new_name.clear();
-                }
-            });
-            right.label(RichText::new(format!("Properties of {sel}")).strong());
-            let Some(style) = styles.iter().find(|s| s.name == sel) else { return };
-            egui::Grid::new((cmd, "props")).num_columns(2).spacing(vec2(10.0, 6.0)).show(right, |ui| {
-                for f in &style.fields {
-                    let change = match f {
-                        Field::Num(key, label, v) => {
-                            ui.label(*label);
-                            num_field(ui, (cmd, &style.name, *key), *v).filter(|v| *v >= 0.0).map(|v| (*key, json!(v)))
+    egui::Window::new(title)
+        .open(open)
+        .default_size(vec2(520.0, 280.0))
+        .resizable(true)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            ui.label(RichText::new(format!("Current style: {current}")).color(t.text_dim));
+            ui.separator();
+            ui.columns(2, |cols| {
+                let [left, right] = cols else { return };
+                left.label(RichText::new("Styles").strong());
+                egui::ScrollArea::vertical().id_salt((cmd, "list")).max_height(160.0).auto_shrink([false, true]).show(left, |ui| {
+                    for s in styles {
+                        let mut label = RichText::new(&s.name);
+                        if s.name.eq_ignore_ascii_case(current) {
+                            label = label.strong();
                         }
-                        Field::Bool(key, label, v) => {
-                            ui.label("");
-                            let mut b = *v;
-                            ui.checkbox(&mut b, *label).changed().then(|| (*key, json!(b)))
+                        if ui.selectable_label(s.name == sel, label).clicked() {
+                            sel = s.name.clone();
                         }
-                        Field::Pick(key, label, v, choices) => {
-                            ui.label(*label);
-                            let shown = choices.iter().find(|(_, n)| n == v).map_or_else(|| v.to_string(), |(l, _)| crate::i18n::t(l).to_string());
-                            let mut picked = None;
-                            egui::ComboBox::from_id_salt((cmd, *key)).selected_text(shown).show_ui(ui, |ui| {
-                                for (l, n) in *choices {
-                                    if ui.selectable_label(n == v, crate::i18n::t(l)).clicked() && n != v {
-                                        picked = Some(*n);
+                    }
+                });
+                if left.add_enabled(!sel.eq_ignore_ascii_case(current), egui::Button::new("Set Current")).clicked() {
+                    action = Some((cmd, json!({ "name": sel })));
+                }
+                left.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut new_name).hint_text("New style name").desired_width(120.0));
+                    let name = new_name.trim().to_string();
+                    let ok = !name.is_empty() && !styles.iter().any(|s| s.name.eq_ignore_ascii_case(&name));
+                    if ui.add_enabled(ok, egui::Button::new("New")).clicked() {
+                        action = Some((cmd, json!({ "name": name, "current": false })));
+                        sel = name;
+                        new_name.clear();
+                    }
+                });
+                right.label(RichText::new(format!("Properties of {sel}")).strong());
+                let Some(style) = styles.iter().find(|s| s.name == sel) else { return };
+                egui::Grid::new((cmd, "props")).num_columns(2).spacing(vec2(10.0, 6.0)).show(right, |ui| {
+                    for f in &style.fields {
+                        let change = match f {
+                            Field::Num(key, label, v) => {
+                                ui.label(*label);
+                                num_field(ui, (cmd, &style.name, *key), *v).filter(|v| *v >= 0.0).map(|v| (*key, json!(v)))
+                            }
+                            Field::Bool(key, label, v) => {
+                                ui.label("");
+                                let mut b = *v;
+                                ui.checkbox(&mut b, *label).changed().then(|| (*key, json!(b)))
+                            }
+                            Field::Pick(key, label, v, choices) => {
+                                ui.label(*label);
+                                let shown =
+                                    choices.iter().find(|(_, n)| n == v).map_or_else(|| v.to_string(), |(l, _)| crate::i18n::t(l).to_string());
+                                let mut picked = None;
+                                egui::ComboBox::from_id_salt((cmd, *key)).selected_text(shown).show_ui(ui, |ui| {
+                                    for (l, n) in *choices {
+                                        if ui.selectable_label(n == v, crate::i18n::t(l)).clicked() && n != v {
+                                            picked = Some(*n);
+                                        }
                                     }
-                                }
-                            });
-                            picked.map(|n| (*key, json!(n)))
-                        }
-                        Field::Choice(key, label, v, choices) => {
-                            ui.label(*label);
-                            let mut picked = None;
-                            egui::ComboBox::from_id_salt((cmd, *key)).selected_text(v.as_str()).show_ui(ui, |ui| {
-                                for c in choices {
-                                    if ui.selectable_label(c == v, c).clicked() && c != v {
-                                        picked = Some(c.clone());
+                                });
+                                picked.map(|n| (*key, json!(n)))
+                            }
+                            Field::Choice(key, label, v, choices) => {
+                                ui.label(*label);
+                                let mut picked = None;
+                                egui::ComboBox::from_id_salt((cmd, *key)).selected_text(v.as_str()).show_ui(ui, |ui| {
+                                    for c in choices {
+                                        if ui.selectable_label(c == v, c).clicked() && c != v {
+                                            picked = Some(c.clone());
+                                        }
                                     }
-                                }
-                            });
-                            picked.map(|c| (*key, json!(c)))
+                                });
+                                picked.map(|c| (*key, json!(c)))
+                            }
+                        };
+                        if let Some((key, v)) = change {
+                            action = Some((cmd, json!({ "name": style.name, key: v, "current": false })));
                         }
-                    };
-                    if let Some((key, v)) = change {
-                        action = Some((cmd, json!({ "name": style.name, key: v, "current": false })));
+                        ui.end_row();
                     }
-                    ui.end_row();
-                }
+                });
             });
         });
-    });
     set_temp(ctx, &sel_key, sel);
     set_temp(ctx, &new_key, new_name);
     action
@@ -572,34 +597,40 @@ fn page_setup(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action 
         .unwrap_or_default();
     let mut action = None;
     let choices = PageChoices::new(ctx, d);
-    egui::Window::new("Page Setup Manager").open(open).default_size(vec2(560.0, 300.0)).resizable(true).show(ctx, |ui| {
-        if layouts.is_empty() {
-            ui.label("This drawing has no layouts.");
-            return;
-        }
-        ui.columns(2, |cols| {
-            let [left, right] = cols else { return };
-            left.label(RichText::new("Layouts").strong());
-            egui::ScrollArea::vertical().id_salt("pagesetup_list").max_height(200.0).auto_shrink([false, true]).show(left, |ui| {
-                for (_, name, _) in &layouts {
-                    if ui.selectable_label(*name == sel, name).clicked() {
-                        sel = name.clone();
+    egui::Window::new("Page Setup Manager")
+        .open(open)
+        .default_size(vec2(560.0, 300.0))
+        .resizable(true)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            if layouts.is_empty() {
+                ui.label("This drawing has no layouts.");
+                return;
+            }
+            ui.columns(2, |cols| {
+                let [left, right] = cols else { return };
+                left.label(RichText::new("Layouts").strong());
+                egui::ScrollArea::vertical().id_salt("pagesetup_list").max_height(200.0).auto_shrink([false, true]).show(left, |ui| {
+                    for (_, name, _) in &layouts {
+                        if ui.selectable_label(*name == sel, name).clicked() {
+                            sel = name.clone();
+                        }
                     }
-                }
+                });
+                let Some((_, name, page)) = layouts.iter().find(|l| l.1 == sel) else { return };
+                right.label(RichText::new(format!("Page setup of {name}")).strong());
+                // Layout plotting always prints the whole sheet, so only that area is offered.
+                let rows = PageRows { areas: &["layout"], scale: true, center: true };
+                egui::Grid::new("pagesetup_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(right, |ui| {
+                    if let Some((k, v)) = page_rows(ui, egui::Id::new(("pagesetup", name)), page, &rows, &choices, None) {
+                        action = Some(("pagesetup", json!({ "layout": name, k: v })));
+                    }
+                });
+                let (w, h) = if page.landscape { (page.height_mm, page.width_mm) } else { (page.width_mm, page.height_mm) };
+                right.label(RichText::new(format!("{w:.1} × {h:.1} mm")).color(t.text_dim));
             });
-            let Some((_, name, page)) = layouts.iter().find(|l| l.1 == sel) else { return };
-            right.label(RichText::new(format!("Page setup of {name}")).strong());
-            // Layout plotting always prints the whole sheet, so only that area is offered.
-            let rows = PageRows { areas: &["layout"], scale: true, center: true };
-            egui::Grid::new("pagesetup_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(right, |ui| {
-                if let Some((k, v)) = page_rows(ui, egui::Id::new(("pagesetup", name)), page, &rows, &choices, None) {
-                    action = Some(("pagesetup", json!({ "layout": name, k: v })));
-                }
-            });
-            let (w, h) = if page.landscape { (page.height_mm, page.width_mm) } else { (page.width_mm, page.height_mm) };
-            right.label(RichText::new(format!("{w:.1} × {h:.1} mm")).color(t.text_dim));
         });
-    });
     set_temp(ctx, "pagesetup_sel", sel);
     action
 }
@@ -1175,57 +1206,63 @@ fn constraint_settings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -
     let types = cadaddy_doc::ParametricSettings::default().auto_types;
     let mut action = None;
     let set = |k: &str, v: Value| Some(("constraintsettings", json!({ k: v })));
-    egui::Window::new("Constraint Settings").open(open).collapsible(false).resizable(false).show(ctx, |ui| {
-        ui.heading("Geometric");
-        let mut infer = s.infer;
-        if ui.checkbox(&mut infer, "Infer geometric constraints").changed() {
-            action = set("infer", json!(infer));
-        }
-        let mut bars = s.bars_visible;
-        if ui.checkbox(&mut bars, "Show constraint bars").changed() {
-            action = set("barsVisible", json!(bars));
-        }
-        ui.horizontal(|ui| {
-            ui.label("Constraint bar transparency (%)");
-            if let Some(v) = num_field(ui, "csettings_transp", f64::from(s.bar_transparency)) {
-                action = set("barTransparency", json!(v));
+    egui::Window::new("Constraint Settings")
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            ui.heading("Geometric");
+            let mut infer = s.infer;
+            if ui.checkbox(&mut infer, "Infer geometric constraints").changed() {
+                action = set("infer", json!(infer));
             }
-        });
-        ui.separator();
-        ui.heading("Dimensional");
-        let mut dims = s.dims_visible;
-        if ui.checkbox(&mut dims, "Show dynamic constraints").changed() {
-            action = set("dimsVisible", json!(dims));
-        }
-        ui.separator();
-        ui.heading("AutoConstrain");
-        ui.label(RichText::new("Constraint types AUTOCONSTRAIN applies").color(t.text_dim));
-        egui::Grid::new("csettings_types").num_columns(3).show(ui, |ui| {
-            for (i, ty) in types.iter().enumerate() {
-                let mut on = s.auto_types.iter().any(|a| a.eq_ignore_ascii_case(ty));
-                if ui.checkbox(&mut on, ty.as_str()).changed() {
-                    let list: Vec<&String> =
-                        types.iter().filter(|x| if *x == ty { on } else { s.auto_types.iter().any(|a| a.eq_ignore_ascii_case(x)) }).collect();
-                    action = set("autoTypes", json!(list));
+            let mut bars = s.bars_visible;
+            if ui.checkbox(&mut bars, "Show constraint bars").changed() {
+                action = set("barsVisible", json!(bars));
+            }
+            ui.horizontal(|ui| {
+                ui.label("Constraint bar transparency (%)");
+                if let Some(v) = num_field(ui, "csettings_transp", f64::from(s.bar_transparency)) {
+                    action = set("barTransparency", json!(v));
                 }
-                if i % 3 == 2 {
-                    ui.end_row();
+            });
+            ui.separator();
+            ui.heading("Dimensional");
+            let mut dims = s.dims_visible;
+            if ui.checkbox(&mut dims, "Show dynamic constraints").changed() {
+                action = set("dimsVisible", json!(dims));
+            }
+            ui.separator();
+            ui.heading("AutoConstrain");
+            ui.label(RichText::new("Constraint types AUTOCONSTRAIN applies").color(t.text_dim));
+            egui::Grid::new("csettings_types").num_columns(3).show(ui, |ui| {
+                for (i, ty) in types.iter().enumerate() {
+                    let mut on = s.auto_types.iter().any(|a| a.eq_ignore_ascii_case(ty));
+                    if ui.checkbox(&mut on, ty.as_str()).changed() {
+                        let list: Vec<&String> =
+                            types.iter().filter(|x| if *x == ty { on } else { s.auto_types.iter().any(|a| a.eq_ignore_ascii_case(x)) }).collect();
+                        action = set("autoTypes", json!(list));
+                    }
+                    if i % 3 == 2 {
+                        ui.end_row();
+                    }
                 }
-            }
+            });
+            egui::Grid::new("csettings_tol").num_columns(2).show(ui, |ui| {
+                ui.label("Distance tolerance");
+                if let Some(v) = num_field(ui, "csettings_dist", s.distance_tolerance) {
+                    action = set("distanceTolerance", json!(v));
+                }
+                ui.end_row();
+                ui.label("Angle tolerance (degrees)");
+                if let Some(v) = num_field(ui, "csettings_angle", s.angle_tolerance) {
+                    action = set("angleTolerance", json!(v));
+                }
+                ui.end_row();
+            });
         });
-        egui::Grid::new("csettings_tol").num_columns(2).show(ui, |ui| {
-            ui.label("Distance tolerance");
-            if let Some(v) = num_field(ui, "csettings_dist", s.distance_tolerance) {
-                action = set("distanceTolerance", json!(v));
-            }
-            ui.end_row();
-            ui.label("Angle tolerance (degrees)");
-            if let Some(v) = num_field(ui, "csettings_angle", s.angle_tolerance) {
-                action = set("angleTolerance", json!(v));
-            }
-            ui.end_row();
-        });
-    });
     action
 }
 

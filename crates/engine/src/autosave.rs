@@ -1,9 +1,9 @@
 //! Autosave (SAVETIME, SAVEFILEPATH) and the files Drawing Recovery offers after a crash.
 //!
 //! Every SAVETIME minutes after a change, each drawing with unsaved changes made since its last
-//! autosave is written to `<SAVEFILEPATH>/<drawing>_<instance>_<uid>.sv$`: DWG content, as AutoCAD
-//! writes them, or DXF when the DWG writer fails (readers tell them apart by their first bytes, so
-//! Drawing Recovery opens either). The file goes
+//! autosave is written to `<SAVEFILEPATH>/<drawing>_<instance>_<uid>.sv$`: a CADaddy drawing (.cdy
+//! content, which keeps everything the drawing holds), else DWG, else DXF when those writers fail
+//! (readers tell them apart by their first bytes, so Drawing Recovery opens any). The file goes
 //! away when the drawing is saved or closed and when the app exits normally, so a file left behind
 //! means the app (or the machine) went down; the next start offers it for recovery. A running app
 //! keeps a lock file (`<instance>.lock`) fresh, so another copy running at the same time doesn't
@@ -31,13 +31,18 @@ pub const EXT: &str = "sv$";
 /// The writer the io hooks provide: a drawing and a file name (its extension picks the format).
 pub type WriteHook = fn(&Drawing, &str) -> std::result::Result<Vec<u8>, String>;
 
-/// An autosave file's contents: DWG, else DXF when writing DWG fails. Returns the bytes and the
-/// format used ("dwg" or "dxf").
+/// An autosave file's contents: a CADaddy drawing (.cdy, lossless), else DWG, else DXF, each tried
+/// when the one before fails or writes nothing. Returns the bytes and the format used ("cdy",
+/// "dwg" or "dxf").
 pub fn encode(write: WriteHook, doc: &Drawing) -> std::result::Result<(Vec<u8>, &'static str), String> {
-    match write(doc, "autosave.dwg") {
-        Ok(bytes) if !bytes.is_empty() => Ok((bytes, "dwg")),
-        _ => write(doc, "autosave.dxf").map(|bytes| (bytes, "dxf")),
+    for format in ["cdy", "dwg"] {
+        if let Ok(bytes) = write(doc, &format!("autosave.{format}"))
+            && !bytes.is_empty()
+        {
+            return Ok((bytes, format));
+        }
     }
+    write(doc, "autosave.dxf").map(|bytes| (bytes, "dxf"))
 }
 /// SAVETIME's default, in minutes.
 pub const DEFAULT_SAVETIME: u32 = 10;

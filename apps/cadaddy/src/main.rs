@@ -121,6 +121,20 @@ pub fn install_io() {
         plot: Some(|d, space, opts| cadaddy_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
         read_pdf: Some(cadaddy_io::pdf_read::read_json),
     });
+    // .cdy saves append only what changed to the file a drawing was saved to or read from.
+    cadaddy_engine::cmd::file::set_cdy_hooks(cadaddy_engine::cmd::file::CdyHooks {
+        save: |d, prev| {
+            use cadaddy_engine::cmd::file::CdyWrite;
+            let prev = prev.and_then(|p| p.as_ref().downcast_ref::<cadaddy_io::cdy::SaveState>());
+            let (out, state) = cadaddy_io::cdy::save(d, prev, &|| cadaddy_io::cdy::preview(d))?;
+            let out = match out {
+                cadaddy_io::cdy::Output::Full(bytes) => CdyWrite::Full(bytes),
+                cadaddy_io::cdy::Output::Append { from, bytes, index_at } => CdyWrite::Append { from, bytes, index_at },
+            };
+            Ok((out, std::sync::Arc::new(state)))
+        },
+        seed: |d, bytes| cadaddy_io::cdy::seed(d, bytes).map(|s| std::sync::Arc::new(s) as cadaddy_engine::cmd::file::CdyState),
+    });
     cadaddy_engine::cmd::file::set_write_as(|d, name, o| {
         cadaddy_io::write_with(d, name, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
@@ -136,23 +150,53 @@ pub fn install_io() {
 fn services() -> Services {
     Services {
         pick_open: Some(Box::new(|| {
+            if !cadaddy_ui_egui::file_dialogs_allowed() {
+                return None;
+            }
             rfd::FileDialog::new()
-                .add_filter(i18n::t("Drawings (DWG, DXF)"), &["dwg", "dxf", "dwt"])
+                .add_filter(i18n::t("Drawings (CDY, DWG, DXF)"), &["cdy", "dwg", "dxf", "dwt"])
                 .add_filter(i18n::t("SVG drawings (SVG, SVGZ)"), &["svg", "svgz"])
                 .add_filter(i18n::t("PDF (converted to CAD objects)"), &["pdf"])
+                .add_filter(i18n::t("3D models (glTF, OBJ, STL)"), &["glb", "gltf", "obj", "stl"])
                 .add_filter(i18n::t("All files"), &["*"])
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
         read_clipboard: Some(Box::new(|| arboard::Clipboard::new().ok()?.get_text().ok())),
-        pick_pdf: Some(Box::new(|| rfd::FileDialog::new().add_filter(i18n::t("PDF"), &["pdf"]).pick_file().map(|p| p.to_string_lossy().to_string()))),
+        // Only .cdy files carry a preview; reading one is cheap (the preview chunk alone).
+        thumbnail: Some(Box::new(|path: &str| {
+            if !path.to_ascii_lowercase().ends_with(".cdy") {
+                return None;
+            }
+            cadaddy_io::cdy::thumbnail(&std::fs::read(path).ok()?)
+        })),
+        pick_pdf: Some(Box::new(|| {
+            if !cadaddy_ui_egui::file_dialogs_allowed() {
+                return None;
+            }
+            rfd::FileDialog::new().add_filter(i18n::t("PDF"), &["pdf"]).pick_file().map(|p| p.to_string_lossy().to_string())
+        })),
         pick_image: Some(Box::new(|| {
+            if !cadaddy_ui_egui::file_dialogs_allowed() {
+                return None;
+            }
             rfd::FileDialog::new()
                 .add_filter(i18n::t("Images (PNG, JPEG)"), &["png", "jpg", "jpeg"])
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
+        pick_save_image: Some(Box::new(|name: &str| {
+            rfd::FileDialog::new()
+                .set_file_name(name)
+                .add_filter(i18n::t("PNG image"), &["png"])
+                .add_filter(i18n::t("JPEG image"), &["jpg", "jpeg"])
+                .save_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
         pick_save: Some(Box::new(|name: &str| {
+            if !cadaddy_ui_egui::file_dialogs_allowed() {
+                return None;
+            }
             filters_for_save(name)
                 .iter()
                 .fold(rfd::FileDialog::new().set_file_name(name), |d, (label, ext)| d.add_filter(i18n::t(label), &[*ext]))
@@ -165,11 +209,22 @@ fn services() -> Services {
 /// File types for the Save dialog, the suggested name's type first: Windows adds the first
 /// filter's extension, and macOS accepts only listed extensions, replacing any other with the
 /// first one. DWG must be listed for a `.dwg` name to survive, and a drawing opened from DWG
-/// then defaults to DWG; other names keep DXF first.
-fn filters_for_save(name: &str) -> [(&'static str, &'static str); 6] {
-    let mut filters =
-        [("Drawing (DXF)", "dxf"), ("Drawing (DWG)", "dwg"), ("Drawing Template (DWT)", "dwt"), ("SVG", "svg"), ("PNG", "png"), ("PDF", "pdf")];
+/// then defaults to DWG; other names keep CADaddy's own format (.cdy) first.
+fn filters_for_save(name: &str) -> Vec<(&'static str, &'static str)> {
+    let mut filters = vec![
+        ("CADaddy Drawing (CDY)", "cdy"),
+        ("Drawing (DXF)", "dxf"),
+        ("Drawing (DWG)", "dwg"),
+        ("Drawing Template (DWT)", "dwt"),
+        ("SVG", "svg"),
+        ("PNG", "png"),
+        ("PDF", "pdf"),
+    ];
     let lower = name.to_ascii_lowercase();
+    // Exporting (an image or PDF suggested): the 3D model formats too.
+    if [".svg", ".png", ".pdf"].iter().any(|e| lower.ends_with(e)) {
+        filters.extend([("3D model (glTF binary)", "glb"), ("3D model (glTF)", "gltf"), ("3D model (OBJ)", "obj"), ("3D model (STL)", "stl")]);
+    }
     filters.sort_by_key(|(_, ext)| !lower.ends_with(&format!(".{ext}")));
     filters
 }
@@ -416,14 +471,15 @@ mod tests {
         let first = |name: &str| filters_for_save(name)[0].1;
         assert_eq!(first("Sample Floor Plan.dwg"), "dwg");
         assert_eq!(first("FLOORPLAN.DWG"), "dwg");
-        // New drawings and DXF files keep DXF first.
+        // DXF files keep DXF first; new drawings get CADaddy's own format.
         assert_eq!(first("Drawing1.dxf"), "dxf");
-        assert_eq!(first("Drawing1"), "dxf");
+        assert_eq!(first("Drawing1.cdy"), "cdy");
+        assert_eq!(first("Drawing1"), "cdy");
         assert_eq!(first("plan.pdf"), "pdf");
         assert_eq!(first("office.dwt"), "dwt");
-        for name in ["a.dwg", "b.dxf", "c"] {
+        for name in ["a.dwg", "b.dxf", "c", "d.cdy"] {
             let exts: Vec<_> = filters_for_save(name).iter().map(|(_, e)| *e).collect();
-            assert!(exts.contains(&"dwg") && exts.contains(&"dxf"), "{name}");
+            assert!(exts.contains(&"dwg") && exts.contains(&"dxf") && exts.contains(&"cdy"), "{name}");
         }
     }
 

@@ -18,6 +18,26 @@ struct Chunk {
     items: Vec<Arc<Entity>>,
 }
 
+/// One chunk of an [`EntityStore`], compared by identity: while it is held, an edit to the store
+/// copies the chunk it touches, so [`ChunkRef::same`] says exactly whether a chunk is unchanged.
+#[derive(Clone, Debug)]
+pub struct ChunkRef(Arc<Chunk>);
+
+impl ChunkRef {
+    /// Its entities, in draw order.
+    pub fn items(&self) -> &[Arc<Entity>] {
+        &self.0.items
+    }
+    pub fn same(&self, other: &ChunkRef) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+    /// A number naming this chunk while it is held (two held chunks never share one): for
+    /// looking a chunk up among many.
+    pub fn key(&self) -> usize {
+        Arc::as_ptr(&self.0) as usize
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EntityStore {
     chunks: Vec<Arc<Chunk>>,
@@ -36,6 +56,17 @@ impl PartialEq for EntityStore {
     fn eq(&self, other: &Self) -> bool {
         self.len == other.len && self.iter().zip(other.iter()).all(|(a, b)| a == b)
     }
+}
+
+/// Where `h` is in a chunk's objects. They are usually in handle order (new objects get higher
+/// handles and go on top): a binary search, checked, else a walk (an object moved in the draw
+/// order, or a file's own handle order).
+fn item_pos(items: &[Arc<Entity>], h: Handle) -> Option<usize> {
+    let i = items.partition_point(|e| e.handle < h);
+    if items.get(i).is_some_and(|e| e.handle == h) {
+        return Some(i);
+    }
+    items.iter().position(|e| e.handle == h)
 }
 
 fn shard_of(h: Handle) -> usize {
@@ -90,12 +121,21 @@ impl EntityStore {
     fn chunk_id(&self, h: Handle) -> Option<u32> {
         self.shards.get(shard_of(h)).and_then(|s| s.get(&h).copied())
     }
+    /// The position of chunk `id`. Chunks are made in draw order, so their ids usually rise
+    /// along it: a binary search finds the chunk without walking them all (a store of 500 000
+    /// objects has about 500 chunks, and every lookup walked half of them). Chunks put in front
+    /// (send to back) break that order; the search then misses and the walk finds it.
     fn chunk_pos(&self, id: u32) -> Option<usize> {
+        let i = self.chunks.partition_point(|c| c.id < id);
+        if self.chunks.get(i).is_some_and(|c| c.id == id) {
+            return Some(i);
+        }
         self.chunks.iter().position(|c| c.id == id)
     }
     pub fn get(&self, h: Handle) -> Option<&Arc<Entity>> {
         let pos = self.chunk_pos(self.chunk_id(h)?)?;
-        self.chunks.get(pos)?.items.iter().find(|e| e.handle == h)
+        let items = &self.chunks.get(pos)?.items;
+        items.get(item_pos(items, h)?)
     }
     fn set_index(&mut self, h: Handle, chunk: Option<u32>) {
         if let Some(shard) = self.shards.get_mut(shard_of(h)) {
@@ -159,11 +199,12 @@ impl EntityStore {
         let Some(pos) = self.chunk_pos(id) else { return false };
         let Some(c) = self.chunks.get_mut(pos) else { return false };
         let chunk = Arc::make_mut(c);
-        if let Some(slot) = chunk.items.iter_mut().find(|x| x.handle == e.handle) {
-            *slot = Arc::new(e);
-            true
-        } else {
-            false
+        match item_pos(&chunk.items, e.handle).and_then(|i| chunk.items.get_mut(i)) {
+            Some(slot) => {
+                *slot = Arc::new(e);
+                true
+            }
+            None => false,
         }
     }
     pub fn remove(&mut self, h: Handle) -> Option<Arc<Entity>> {
@@ -171,7 +212,7 @@ impl EntityStore {
         let pos = self.chunk_pos(id)?;
         let c = self.chunks.get_mut(pos)?;
         let chunk = Arc::make_mut(c);
-        let i = chunk.items.iter().position(|x| x.handle == h)?;
+        let i = item_pos(&chunk.items, h)?;
         let e = chunk.items.remove(i);
         let empty = chunk.items.is_empty();
         if empty {
@@ -187,7 +228,7 @@ impl EntityStore {
         let Some(pos) = self.chunk_pos(id) else { return false };
         let Some(c) = self.chunks.get_mut(pos) else { return false };
         let chunk = Arc::make_mut(c);
-        match chunk.items.iter_mut().find(|x| x.handle == h) {
+        match item_pos(&chunk.items, h).and_then(|i| chunk.items.get_mut(i)) {
             Some(slot) => {
                 f(Arc::make_mut(slot));
                 true
@@ -277,6 +318,39 @@ impl EntityStore {
             self.len += 1;
         }
     }
+    /// The store's chunks in draw order, as handles that compare by identity (a saved file's
+    /// incremental save rewrites only the chunks that are no longer the same).
+    pub fn chunk_refs(&self) -> Vec<ChunkRef> {
+        self.chunks.iter().cloned().map(ChunkRef).collect()
+    }
+    /// Append `items` on top of the draw order as chunks of their own (split at the chunk size),
+    /// so a file read back has the chunks it was saved with. An entity whose handle is already
+    /// present replaces it in place, as [`EntityStore::push`] does.
+    pub fn push_chunk(&mut self, items: Vec<Entity>) {
+        let mut fresh: Option<Arc<Chunk>> = None;
+        for e in items {
+            if self.contains(e.handle) {
+                self.replace(e);
+                continue;
+            }
+            if fresh.as_ref().is_none_or(|c| c.items.len() >= CHUNK_MAX) {
+                if let Some(done) = fresh.take() {
+                    self.chunks.push(done);
+                }
+                fresh = Some(self.new_chunk());
+            }
+            let Some(c) = fresh.as_mut() else { return };
+            let chunk = Arc::make_mut(c);
+            let h = e.handle;
+            chunk.items.push(Arc::new(e));
+            let id = chunk.id;
+            self.set_index(h, Some(id));
+            self.len += 1;
+        }
+        if let Some(done) = fresh {
+            self.chunks.push(done);
+        }
+    }
     /// True when `other` shares every chunk with `self` (same draw order, same entities). Holding
     /// a clone of a store makes this exact: any edit to the original copies the touched chunk.
     pub fn same_as(&self, other: &EntityStore) -> bool {
@@ -302,6 +376,28 @@ mod tests {
 
     fn ent(h: u64) -> Entity {
         Entity::new(Handle(h), EntityKind::Point(Point { p: Vec2::new(h as f64, 0.0).to3(0.0), angle: 0.0 }))
+    }
+
+    #[test]
+    fn chunks_compare_by_identity_and_push_chunk_keeps_boundaries() {
+        let mut s = EntityStore::new();
+        s.push_chunk((1..=10).map(ent).collect());
+        s.push_chunk((11..=13).map(ent).collect());
+        s.push_chunk(Vec::new());
+        s.push_chunk((1..=CHUNK_MAX as u64 + 5).map(|h| ent(h + 100)).collect());
+        let sizes: Vec<usize> = s.chunk_refs().iter().map(|c| c.items().len()).collect();
+        assert_eq!(sizes, [10, 3, CHUNK_MAX, 5], "the chunks pushed, split at the chunk size");
+        assert_eq!(s.len(), 13 + CHUNK_MAX + 5);
+        assert!(s.get(Handle(12)).is_some());
+        // A duplicate handle replaces in place.
+        s.push_chunk(vec![ent(12)]);
+        assert_eq!(s.chunk_refs().len(), 4);
+        // Holding the chunks, an edit copies only the touched one.
+        let before = s.chunk_refs();
+        s.modify(Handle(12), |e| e.common.layer = "A".into());
+        let after = s.chunk_refs();
+        let same: Vec<bool> = before.iter().zip(&after).map(|(a, b)| a.same(b)).collect();
+        assert_eq!(same, [true, false, true, true]);
     }
 
     #[test]

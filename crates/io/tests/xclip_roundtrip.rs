@@ -41,6 +41,8 @@ fn square() -> XClip {
         boundary: vec![Vec2::new(20.0, 20.0), Vec2::new(60.0, 20.0), Vec2::new(60.0, 50.0), Vec2::new(20.0, 50.0)],
         enabled: true,
         inverted: false,
+        front: None,
+        back: None,
     }
 }
 

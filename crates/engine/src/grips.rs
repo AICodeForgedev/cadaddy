@@ -287,6 +287,26 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
         }
         EntityKind::Solid(s) | EntityKind::Trace(s) => set_xy(s.corners.get_mut(index)?, to),
         EntityKind::Face3d(f) => set_xy(f.corners.get_mut(index)?, to),
+        // A vertex grip moves that vertex (and every face using it).
+        EntityKind::Mesh(m) => set_xy(m.vertices.get_mut(index)?, to),
+        // The base grip moves the solid; the others set a dimension.
+        EntityKind::Solid3d(_) if index == 0 => return Some(translated(kind, delta)),
+        EntityKind::Solid3d(so) => **so = so.grip_moved(index, delta)?,
+        EntityKind::Light(l) => match index {
+            0 => set_xy(&mut l.position, to),
+            1 => set_xy(&mut l.target, to),
+            _ => return None,
+        },
+        // The middle moves the plane; an end sets its width (it stays centred).
+        EntityKind::SectionPlane(_) if index == 0 => return Some(translated(kind, delta)),
+        EntityKind::SectionPlane(sp) => {
+            let (h, _) = sp.axes();
+            let reach = (to - sp.origin.xy()).dot(h.xy()).abs();
+            if !(reach.is_finite() && reach > EPS) {
+                return None;
+            }
+            sp.width = 2.0 * reach;
+        }
         EntityKind::Region(_) => return Some(translated(kind, delta)),
         EntityKind::Viewport(v) => {
             let opposite = *grips.get((index + 2) % 4)?;

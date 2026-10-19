@@ -8,6 +8,7 @@
 
 mod bind;
 pub(crate) mod load;
+pub(crate) mod writeback;
 
 use std::sync::Arc;
 

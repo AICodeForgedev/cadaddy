@@ -1,14 +1,21 @@
-//! CADaddy file formats: DXF/DWG read, SVG and SVGZ import, SVG/PNG/PDF export (plotting).
+//! CADaddy file formats: the native .cdy format, DXF/DWG read, SVG and SVGZ import, SVG/PNG/PDF export (plotting).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 /// What a DXF file holds that CADaddy doesn't model, kept and written back (#528).
+pub mod cdy;
 mod dxf_raw;
+/// 3D model exchange: glTF/GLB, OBJ+MTL and STL.
+pub mod mesh3d_io;
 
 mod dxf_ext;
+mod dxf_field;
 mod dxf_image;
+mod dxf_material;
+mod dxf_mesh;
 mod dxf_mleader;
 mod dxf_read;
+mod dxf_solid;
 mod dxf_table;
 mod dxf_underlay;
 mod dxf_write;
@@ -63,8 +70,11 @@ fn ext(name: &str) -> String {
 }
 
 /// Read a drawing; the format comes from the content (DXF ASCII/binary, DWG) or the name
-/// (SVG and gzip-compressed SVGZ).
+/// (SVG and gzip-compressed SVGZ); a .cdy file is known by its content.
 pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
+    if cdy::is_cdy(bytes) {
+        return cdy::read_cdy(bytes);
+    }
     if cadaddy_dwg::is_dwg(bytes) {
         let (dxf, notes) = cadaddy_dwg::dwg_to_dxf_noted(bytes, cadaddy_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
         let mut d = dxf_read::read(&dxf).map_err(|e| IoError::Format(format!("{e} (in the DXF converted from this DWG)")))?;
@@ -80,6 +90,9 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
             Ok(d)
         }
         "dxf" | "" => dxf_read::read(bytes),
+        "obj" => mesh3d_io::read_obj(bytes, name),
+        "stl" => mesh3d_io::read_stl(bytes),
+        "glb" | "gltf" => mesh3d_io::read_gltf(bytes, name),
         e if bytes.len() > 4 => dxf_read::read(bytes).map_err(|_| IoError::Unsupported(e.to_string())),
         e => Err(IoError::Unsupported(e.to_string())),
     }
@@ -97,6 +110,7 @@ pub fn write(d: &Drawing, name: &str) -> Result<Vec<u8>> {
 pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>> {
     let version = opts.version.unwrap_or_else(|| save_version(d));
     match ext(name).as_str() {
+        "cdy" if !opts.binary => cdy::write_cdy(d),
         "dxf" | "" => {
             let tags = dxf_write::tags(d, version);
             Ok(if opts.binary {
@@ -110,9 +124,23 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
         // gradients, so a drawing from an R2000 DXF doesn't lose them by default.
         "dwg" if !opts.binary => {
             let version = opts.version.unwrap_or_else(|| version.max(Version::R2004));
-            cadaddy_dwg::dxf_to_dwg_as(dxf_write::dwg_bridge(d, version).as_bytes(), version.code()).map_err(IoError::Format)
+            let (dxf, linetypes) = dxf_write::dwg_bridge(d, version);
+            cadaddy_dwg::dxf_to_dwg_named(&dxf, version.code(), &linetypes).map_err(IoError::Format)
         }
         e if opts.binary => Err(IoError::Format(format!("binary output is for DXF files, not `{e}`"))),
+        "bundle" if name.to_ascii_lowercase().ends_with(".obj.bundle") => {
+            let stem = name.get(..name.len() - ".obj.bundle".len()).unwrap_or("export");
+            let stem = std::path::Path::new(stem).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "export".into());
+            Ok(mesh3d_io::obj_bundle(d, &stem))
+        }
+        "glb" => Ok(mesh3d_io::write_glb(d)),
+        "gltf" => Ok(mesh3d_io::write_gltf(d)),
+        "stl" => Ok(mesh3d_io::write_stl(d)),
+        // The OBJ text; its MTL and textures come from `mesh3d_io::write_obj`.
+        "obj" => {
+            let stem = std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "export".into());
+            Ok(mesh3d_io::write_obj(d, &format!("{stem}.mtl")).obj.into_bytes())
+        }
         _ => write_framed(d, name, None),
     }
 }
@@ -132,7 +160,7 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
         check_window(w)?;
     }
     match ext(name).as_str() {
-        "dxf" | "" | "dwg" => write_with(d, name, &SaveOptions::default()),
+        "dxf" | "" | "dwg" | "cdy" | "glb" | "gltf" | "stl" | "obj" | "bundle" => write_with(d, name, &SaveOptions::default()),
         "svg" => Ok(svg::export_window(d, &Space::Model, window).into_bytes()),
         "png" => png_framed(d, &Space::Model, 2400, 1600, window),
         "pdf" => pdf::pdf(d, &Space::Model, &PdfOptions { compress: true, window, ..PdfOptions::default() }),

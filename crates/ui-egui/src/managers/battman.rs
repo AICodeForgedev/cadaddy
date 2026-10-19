@@ -49,9 +49,15 @@ fn fmt_num(v: f64) -> String {
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Option<(&'static str, Value)> {
     let t = Tokens::get();
     let Ok(d) = app.session.doc() else {
-        egui::Window::new("Block Attribute Manager").open(open).collapsible(false).resizable(false).show(ctx, |ui| {
-            ui.label("Open a drawing first.");
-        });
+        egui::Window::new("Block Attribute Manager")
+            .open(open)
+            .collapsible(false)
+            .resizable(false)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
+            .show(ctx, |ui| {
+                ui.label("Open a drawing first.");
+            });
         return None;
     };
     let mut blocks: Vec<String> = d
@@ -94,112 +100,118 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Option<
         }
         Some(("battman", p))
     };
-    egui::Window::new("Block Attribute Manager").open(open).default_width(460.0).resizable(false).show(ctx, |ui| {
-        if blocks.is_empty() {
-            ui.label("This drawing has no blocks with attributes.");
-            return;
-        }
-        ui.horizontal(|ui| {
-            ui.label("Block:");
-            egui::ComboBox::from_id_salt("battman_blocks").selected_text(block.as_str()).width(180.0).show_ui(ui, |ui| {
-                for b in &blocks {
-                    if ui.selectable_label(*b == block, b).clicked() {
-                        block = b.clone();
-                        sel = None;
+    egui::Window::new("Block Attribute Manager")
+        .open(open)
+        .default_width(460.0)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            if blocks.is_empty() {
+                ui.label("This drawing has no blocks with attributes.");
+                return;
+            }
+            ui.horizontal(|ui| {
+                ui.label("Block:");
+                egui::ComboBox::from_id_salt("battman_blocks").selected_text(block.as_str()).width(180.0).show_ui(ui, |ui| {
+                    for b in &blocks {
+                        if ui.selectable_label(*b == block, b).clicked() {
+                            block = b.clone();
+                            sel = None;
+                        }
                     }
-                }
+                });
+                ui.label(RichText::new(format!("Found in drawing: {refs}")).color(t.text_dim));
             });
-            ui.label(RichText::new(format!("Found in drawing: {refs}")).color(t.text_dim));
-        });
-        ui.separator();
-        {
-            egui::ScrollArea::vertical().max_height(180.0).auto_shrink([false, true]).show(ui, |ui| {
-                egui::Grid::new("battman_grid").striped(true).num_columns(4).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
-                    for h in ["Tag", "Prompt", "Default", "Modes"] {
-                        ui.label(RichText::new(h).strong());
+            ui.separator();
+            {
+                egui::ScrollArea::vertical().max_height(180.0).auto_shrink([false, true]).show(ui, |ui| {
+                    egui::Grid::new("battman_grid").striped(true).num_columns(4).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
+                        for h in ["Tag", "Prompt", "Default", "Modes"] {
+                            ui.label(RichText::new(h).strong());
+                        }
+                        ui.end_row();
+                        for r in &rows {
+                            if ui.selectable_label(sel.as_deref() == Some(r.tag.as_str()), &r.tag).clicked() {
+                                sel = Some(r.tag.clone());
+                            }
+                            ui.label(&r.prompt);
+                            ui.label(&r.default);
+                            let modes = [(r.invisible, "I"), (r.constant, "C")].iter().filter(|(on, _)| *on).map(|(_, m)| *m).collect::<String>();
+                            ui.label(RichText::new(modes).color(t.text_dim));
+                            ui.end_row();
+                        }
+                    });
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Sync").on_hover_text("Bring every reference in line with these definitions").clicked() {
+                        action = act(json!({ "name": block, "action": "sync" }), true);
+                    }
+                    let picked = sel.clone().unwrap_or_default();
+                    let i = rows.iter().position(|r| r.tag == picked);
+                    if ui.add_enabled(i.is_some_and(|i| i > 0), egui::Button::new("Move Up")).clicked() {
+                        action = act(json!({ "name": block, "action": "up", "tag": picked }), apply);
+                    }
+                    if ui.add_enabled(i.is_some_and(|i| i + 1 < rows.len()), egui::Button::new("Move Down")).clicked() {
+                        action = act(json!({ "name": block, "action": "down", "tag": picked }), apply);
+                    }
+                    if ui.add_enabled(i.is_some(), egui::Button::new("Remove")).clicked() {
+                        action = act(json!({ "name": block, "action": "remove", "tag": picked }), apply);
+                    }
+                });
+            }
+            ui.separator();
+            if let Some(r) = sel.as_ref().and_then(|s| rows.iter().find(|r| r.tag == *s)) {
+                ui.label(RichText::new(format!("Edit attribute {}", r.tag)).strong());
+                let edit = |key: &str, v: Value| json!({ "name": block, "action": "edit", "tag": r.tag, key: v });
+                egui::Grid::new("battman_edit").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                    ui.label("Tag");
+                    if let Some(v) = text_field(ui, egui::Id::new(("battman_tag", &block, &r.tag)), &r.tag) {
+                        action = act(edit("newTag", json!(v)), apply);
+                        sel = Some(v.trim().to_ascii_uppercase());
                     }
                     ui.end_row();
-                    for r in &rows {
-                        if ui.selectable_label(sel.as_deref() == Some(r.tag.as_str()), &r.tag).clicked() {
-                            sel = Some(r.tag.clone());
+                    ui.label("Prompt");
+                    if let Some(v) = text_field(ui, egui::Id::new(("battman_prompt", &block, &r.tag)), &r.prompt) {
+                        action = act(edit("prompt", json!(v)), apply);
+                    }
+                    ui.end_row();
+                    ui.label("Default");
+                    if let Some(v) = text_field(ui, egui::Id::new(("battman_default", &block, &r.tag)), &r.default) {
+                        action = act(edit("default", json!(v)), apply);
+                    }
+                    ui.end_row();
+                    ui.label("Mode");
+                    ui.horizontal(|ui| {
+                        let (mut inv, mut con) = (r.invisible, r.constant);
+                        if ui.checkbox(&mut inv, "Invisible").changed() {
+                            action = act(edit("invisible", json!(inv)), apply);
                         }
-                        ui.label(&r.prompt);
-                        ui.label(&r.default);
-                        let modes = [(r.invisible, "I"), (r.constant, "C")].iter().filter(|(on, _)| *on).map(|(_, m)| *m).collect::<String>();
-                        ui.label(RichText::new(modes).color(t.text_dim));
-                        ui.end_row();
-                    }
-                });
-            });
-            ui.horizontal(|ui| {
-                if ui.button("Sync").on_hover_text("Bring every reference in line with these definitions").clicked() {
-                    action = act(json!({ "name": block, "action": "sync" }), true);
-                }
-                let picked = sel.clone().unwrap_or_default();
-                let i = rows.iter().position(|r| r.tag == picked);
-                if ui.add_enabled(i.is_some_and(|i| i > 0), egui::Button::new("Move Up")).clicked() {
-                    action = act(json!({ "name": block, "action": "up", "tag": picked }), apply);
-                }
-                if ui.add_enabled(i.is_some_and(|i| i + 1 < rows.len()), egui::Button::new("Move Down")).clicked() {
-                    action = act(json!({ "name": block, "action": "down", "tag": picked }), apply);
-                }
-                if ui.add_enabled(i.is_some(), egui::Button::new("Remove")).clicked() {
-                    action = act(json!({ "name": block, "action": "remove", "tag": picked }), apply);
-                }
-            });
-        }
-        ui.separator();
-        if let Some(r) = sel.as_ref().and_then(|s| rows.iter().find(|r| r.tag == *s)) {
-            ui.label(RichText::new(format!("Edit attribute {}", r.tag)).strong());
-            let edit = |key: &str, v: Value| json!({ "name": block, "action": "edit", "tag": r.tag, key: v });
-            egui::Grid::new("battman_edit").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-                ui.label("Tag");
-                if let Some(v) = text_field(ui, egui::Id::new(("battman_tag", &block, &r.tag)), &r.tag) {
-                    action = act(edit("newTag", json!(v)), apply);
-                    sel = Some(v.trim().to_ascii_uppercase());
-                }
-                ui.end_row();
-                ui.label("Prompt");
-                if let Some(v) = text_field(ui, egui::Id::new(("battman_prompt", &block, &r.tag)), &r.prompt) {
-                    action = act(edit("prompt", json!(v)), apply);
-                }
-                ui.end_row();
-                ui.label("Default");
-                if let Some(v) = text_field(ui, egui::Id::new(("battman_default", &block, &r.tag)), &r.default) {
-                    action = act(edit("default", json!(v)), apply);
-                }
-                ui.end_row();
-                ui.label("Mode");
-                ui.horizontal(|ui| {
-                    let (mut inv, mut con) = (r.invisible, r.constant);
-                    if ui.checkbox(&mut inv, "Invisible").changed() {
-                        action = act(edit("invisible", json!(inv)), apply);
-                    }
-                    if ui.checkbox(&mut con, "Constant").changed() {
-                        action = act(edit("constant", json!(con)), apply);
-                    }
-                });
-                ui.end_row();
-                ui.label("Height");
-                let height = text_field(ui, egui::Id::new(("battman_height", &block, &r.tag)), &fmt_num(r.height));
-                if let Some(h) = height.and_then(|v| v.trim().parse::<f64>().ok()).filter(|h| h.is_finite() && *h > 0.0) {
-                    action = act(edit("height", json!(h)), apply);
-                }
-                ui.end_row();
-                ui.label("Layer");
-                egui::ComboBox::from_id_salt("battman_layer").selected_text(r.layer.as_str()).show_ui(ui, |ui| {
-                    for l in &layers {
-                        if ui.selectable_label(*l == r.layer, l).clicked() && *l != r.layer {
-                            action = act(edit("layer", json!(l)), apply);
+                        if ui.checkbox(&mut con, "Constant").changed() {
+                            action = act(edit("constant", json!(con)), apply);
                         }
+                    });
+                    ui.end_row();
+                    ui.label("Height");
+                    let height = text_field(ui, egui::Id::new(("battman_height", &block, &r.tag)), &fmt_num(r.height));
+                    if let Some(h) = height.and_then(|v| v.trim().parse::<f64>().ok()).filter(|h| h.is_finite() && *h > 0.0) {
+                        action = act(edit("height", json!(h)), apply);
                     }
+                    ui.end_row();
+                    ui.label("Layer");
+                    egui::ComboBox::from_id_salt("battman_layer").selected_text(r.layer.as_str()).show_ui(ui, |ui| {
+                        for l in &layers {
+                            if ui.selectable_label(*l == r.layer, l).clicked() && *l != r.layer {
+                                action = act(edit("layer", json!(l)), apply);
+                            }
+                        }
+                    });
+                    ui.end_row();
                 });
-                ui.end_row();
-            });
-        }
-        ui.separator();
-        ui.checkbox(&mut apply, "Apply changes to existing references");
-    });
+            }
+            ui.separator();
+            ui.checkbox(&mut apply, "Apply changes to existing references");
+        });
     set_temp(ctx, "battman_block", block);
     if let Some(s) = sel {
         set_temp(ctx, "battman_sel", s);

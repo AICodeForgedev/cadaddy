@@ -157,12 +157,12 @@ fn xref_and_property_row_menus() {
     let (id, _) = find(&sm::xref_entries(&app, "BASE", "Loaded"), "Detach").unwrap();
     assert!(id.starts_with("run:-xref:") && id.contains("detach"));
     // Properties rows: Select Similar by the row's property, with objects selected.
-    let g = sm::property_row_entries("Layer", true);
+    let g = sm::property_row_entries("Layer", true, false);
     let (id, _) = find(&g, "Select Similar").unwrap();
     assert!(id.contains("\"mode\":2"), "{id}");
-    assert!(find(&sm::property_row_entries("Layer", false), "Select Similar").is_none());
-    assert!(find(&sm::property_row_entries("Radius", true), "Select Similar").is_none());
-    assert!(find(&sm::property_row_entries("Radius", true), "Quick Select...").is_some());
+    assert!(find(&sm::property_row_entries("Layer", false, false), "Select Similar").is_none());
+    assert!(find(&sm::property_row_entries("Radius", true, false), "Select Similar").is_none());
+    assert!(find(&sm::property_row_entries("Radius", true, false), "Quick Select...").is_some());
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn every_label_has_a_ukrainian_translation_and_every_id_a_command() {
     all.extend(flatten(&sm::layer_entries(&app, "0")));
     all.extend(flatten(&sm::properties_entries(&app)));
     all.extend(flatten(&sm::xref_entries(&app, "X", "Loaded")));
-    all.extend(flatten(&sm::property_row_entries("Color", true)));
+    all.extend(flatten(&sm::property_row_entries("Color", true, false)));
     let mut missing = Vec::new();
     for (label, id, _) in &all {
         let segments: Vec<&str> = label.split('/').collect();

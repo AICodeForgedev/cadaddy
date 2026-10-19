@@ -103,6 +103,9 @@ enum Stage {
     RenameTo(String),
     Color,
     TrueColor,
+    /// COlorbook: the book's name, then the colour's.
+    Book,
+    BookColor(String),
     Ltype,
     Lweight,
     Transparency,
@@ -207,9 +210,16 @@ impl LayerM {
             "Unlock" => Stage::Layers(Change::Unlock),
             "Description" => Stage::Description,
             "stAte" => Stage::State,
+            "MATerial" => {
+                s.echo("-LAYER MATerial needs material definitions, which this drawing model doesn't keep yet (MATERIALS).");
+                Stage::Option
+            }
+            "rEconcile" => {
+                s.echo("-LAYER rEconcile: CADaddy doesn't track unreconciled layers (LAYEREVAL, LAYERNOTIFY), so every layer counts as reconciled.");
+                Stage::Option
+            }
             other => {
-                // MATerial, rEconcile: report and stay at the option prompt.
-                s.echo(format!("-LAYER {other} is not available yet."));
+                s.echo(format!("Invalid option keyword: {other}."));
                 Stage::Option
             }
         };
@@ -408,10 +418,7 @@ impl LayerM {
             }
             Stage::Color => match (&i, text) {
                 (Input::Keyword(k), _) if k == "Truecolor" => back(self, Stage::TrueColor),
-                (Input::Keyword(_), _) => {
-                    s.echo("Color books are not available yet.");
-                    Ok(Step::Continue)
-                }
+                (Input::Keyword(_), _) => back(self, Stage::Book),
                 (_, None) => Ok(Step::Continue),
                 (_, Some(t)) => match Color::parse(&t) {
                     Some(Color::Index(c)) => back(self, Stage::Layers(Change::Color(c.to_string()))),
@@ -419,6 +426,28 @@ impl LayerM {
                     _ => {
                         self.stage = Stage::Color;
                         Err(retry("Enter a color name or a number from 1 to 255."))
+                    }
+                },
+            },
+            Stage::Book => match text {
+                None if i == Input::Enter => back(self, Stage::Option),
+                None => Ok(Step::Continue),
+                Some(b) => match crate::cmd::colorbook::book(&b) {
+                    Some(b) => back(self, Stage::BookColor(b.name)),
+                    None => {
+                        self.stage = Stage::Book;
+                        Err(retry(format!("Color book \"{b}\" not found.")))
+                    }
+                },
+            },
+            Stage::BookColor(book) => match text {
+                None if i == Input::Enter => back(self, Stage::Option),
+                None => back(self, Stage::BookColor(book)),
+                Some(c) => match crate::cmd::colorbook::lookup(&book, &c) {
+                    Ok(rgb) => back(self, Stage::Layers(Change::Color(format!("{},{},{}", rgb.0, rgb.1, rgb.2)))),
+                    Err(e) => {
+                        self.stage = Stage::BookColor(book);
+                        Err(retry(e))
                     }
                 },
             },
@@ -514,6 +543,8 @@ impl Interactive for LayerM {
             Stage::RenameTo(_) => Prompt::new("Enter new layer name", NAME),
             Stage::Color => Prompt::new("Enter color name or number (1-255)", NAME).kw(&["Truecolor", "COlorbook"]),
             Stage::TrueColor => Prompt::new("Red, Green, Blue", NAME),
+            Stage::Book => Prompt::new("Enter Color Book name", Accept::TEXT),
+            Stage::BookColor(b) => Prompt::new(format!("Enter color name of book {b}"), Accept::TEXT),
             Stage::Ltype => Prompt::new("Enter a loaded linetype name", NAME).kw(&["?"]).default("Continuous"),
             Stage::Lweight => Prompt::new("Enter lineweight (0.0mm - 2.11mm)", NAME),
             Stage::Transparency => Prompt::new("Enter transparency value (0-90)", NAME).default("0"),

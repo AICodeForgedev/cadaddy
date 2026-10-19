@@ -275,6 +275,26 @@ fn properties_typed_in_rendered_command_line_reopens_and_selects_actual_workspac
     assert_eq!(h.state().session.doc().unwrap(), &drawing);
 }
 
+/// The layout without Properties' height in its stack: that one follows the window's height
+/// (tester 0.7.7e), so a layout after a frame differs from `Workspace::default()` only there.
+fn sans_auto_heights(mut layout: craft_ui::docking::Layout<Panel>) -> craft_ui::docking::Layout<Panel> {
+    use craft_ui::docking::Node;
+    fn walk(node: &mut Node<Panel>) {
+        match node {
+            Node::Split { first, second, .. } => {
+                walk(first);
+                walk(second);
+            }
+            Node::Stack { entries } => entries.iter_mut().filter(|e| e.panel == Panel::Properties).for_each(|e| e.height = None),
+            Node::Tabs { .. } => {}
+        }
+    }
+    if let Some(root) = layout.root.as_mut() {
+        walk(root);
+    }
+    layout
+}
+
 #[test]
 fn reset_typed_in_canvas_preserves_authoritative_workspace_replacement() {
     let mut h = harness(None, 1280.0, 1.0);
@@ -283,7 +303,7 @@ fn reset_typed_in_canvas_preserves_authoritative_workspace_replacement() {
     let drawing = h.state().session.doc().unwrap().clone();
     type_command(&mut h, "ui.dock.reset");
     let expected = cadaddy_ui_egui::docking::Workspace::default();
-    assert_eq!(h.state().ui.docking.layout, expected.layout);
+    assert_eq!(sans_auto_heights(h.state().ui.docking.layout.clone()), sans_auto_heights(expected.layout.clone()));
     assert_eq!(h.state().ui.docking.hidden, expected.hidden);
     assert_eq!(h.state().session.doc().unwrap(), &drawing);
 }
@@ -325,16 +345,24 @@ fn canvas_reset_during_splitter_drag_discards_old_resize_and_ends_gesture() {
     h.run_steps(1);
     let expected = cadaddy_ui_egui::docking::Workspace::default();
     assert!(h.state().cmd.buffer.is_empty(), "Canvas submitted the actual reset command");
-    assert_eq!(h.state().ui.docking.layout, expected.layout, "old-frame resize must not modify Reset's tree");
+    assert_eq!(
+        sans_auto_heights(h.state().ui.docking.layout.clone()),
+        sans_auto_heights(expected.layout.clone()),
+        "old-frame resize must not modify Reset's tree"
+    );
     assert_eq!(h.state().ui.docking.hidden, expected.hidden);
     // Keep the physical button down: replacement must terminate the old divider gesture,
     // rather than letting its stable root ID continue resizing the new workspace.
     let later = to + vec2(24.0, 0.0);
     h.event(Event::PointerMoved(later));
     h.run_steps(2);
-    assert_eq!(h.state().ui.docking.layout, expected.layout, "continued old drag must leave the replacement unchanged");
+    assert_eq!(
+        sans_auto_heights(h.state().ui.docking.layout.clone()),
+        sans_auto_heights(expected.layout.clone()),
+        "continued old drag must leave the replacement unchanged"
+    );
     h.event(Event::PointerButton { pos: later, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(3);
-    assert_eq!(h.state().ui.docking.layout, expected.layout);
+    assert_eq!(sans_auto_heights(h.state().ui.docking.layout.clone()), sans_auto_heights(expected.layout.clone()));
     assert_eq!(h.state().session.doc().unwrap(), &drawing);
 }

@@ -24,6 +24,9 @@ struct Filter {
     enabled: bool,
     /// The inverse block transform: x' = m0·x + m1·y + m3, y' = m4·x + m5·y + m7.
     inverse: Option<[f64; 12]>,
+    /// Clipping planes (XCLIP Clipdepth).
+    front: Option<f64>,
+    back: Option<f64>,
 }
 
 fn key(s: &str) -> String {
@@ -52,6 +55,8 @@ fn parse_filter(tags: &[Tag]) -> Option<Filter> {
     let (mut ox, mut oy) = (0.0, 0.0);
     let mut enabled = true;
     let mut after_flags = false;
+    let (mut front_on, mut back_on) = (false, false);
+    let (mut front, mut back) = (None, None);
     let mut m: Vec<f64> = Vec::new();
     for t in body {
         match t.code {
@@ -68,13 +73,19 @@ fn parse_filter(tags: &[Tag]) -> Option<Filter> {
             71 => enabled = t.i64() != 0,
             // The front (40) and back (41) clip distances come before 73's flag is passed; the
             // matrices' 40s after it.
-            73 => after_flags = true,
+            72 => front_on = t.i64() != 0,
+            73 => {
+                after_flags = true;
+                back_on = t.i64() != 0;
+            }
+            40 if !after_flags && front_on => front = Some(t.f64()).filter(|v| v.is_finite()),
+            41 if after_flags && back_on && back.is_none() => back = Some(t.f64()).filter(|v| v.is_finite()),
             40 if after_flags => m.push(t.f64()),
             _ => {}
         }
     }
     let inverse = <[f64; 12]>::try_from(m.get(..12)?).ok().filter(|v| v.iter().all(|f| f.is_finite()));
-    Some(Filter { owner: owner(tags)?, points, origin: Vec2::new(ox, oy), enabled, inverse })
+    Some(Filter { owner: owner(tags)?, points, origin: Vec2::new(ox, oy), enabled, inverse, front, back })
 }
 
 fn apply(m: &[f64; 12], p: Vec2) -> Vec2 {
@@ -169,7 +180,7 @@ pub(crate) fn resolve(secs: &[Section], d: &mut Drawing) {
             Some(m) if overlap(&m, content) > overlap(&poly, content) => m,
             _ => poly,
         };
-        let clip = XClip { boundary, enabled: f.enabled, inverted: inverted.contains(&fh) };
+        let clip = XClip { boundary, enabled: f.enabled, inverted: inverted.contains(&fh), front: f.front, back: f.back };
         set_clip(d, ih, clip);
     }
 }

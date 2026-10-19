@@ -505,21 +505,27 @@ fn entity_from_list(ctx: &Ctx<'_>, list: &Value) -> Result<(String, cadaddy_doc:
 pub fn entmake(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 0, 1)?;
     let Some(list) = a.first().filter(|v| !v.is_nil()) else { return Ok(Flow::Value(Value::Nil)) };
-    let (_, common, kind) = match entity_from_list(ctx, list) {
-        Ok(x) => x,
-        Err(_) => return Ok(Flow::Value(Value::Nil)),
-    };
+    Ok(Flow::Value(if make(ctx, list).is_some() { list.clone() } else { Value::Nil }))
+}
+
+/// ENTMAKEX: as ENTMAKE, giving the new object's entity name (AutoCAD makes it without an owner;
+/// here it goes into the current space as ENTMAKE's does).
+pub fn entmakex(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
+    arity(&a, 0, 1)?;
+    let Some(list) = a.first().filter(|v| !v.is_nil()) else { return Ok(Flow::Value(Value::Nil)) };
+    Ok(Flow::Value(make(ctx, list).map_or(Value::Nil, Value::Ename)))
+}
+
+/// The object an entity list describes, added to the current space: its handle.
+fn make(ctx: &mut Ctx<'_>, list: &Value) -> Option<cadaddy_doc::Handle> {
+    let (_, common, kind) = entity_from_list(ctx, list).ok()?;
     let space = ctx.s.space();
-    let Ok(d) = ctx.s.doc_mut() else { return Ok(Flow::Value(Value::Nil)) };
+    let d = ctx.s.doc_mut().ok()?;
     // A layer entmake names that doesn't exist yet is created.
     d.ensure_layer(&common.layer);
-    match d.add(&space, common, kind) {
-        Ok(_) => {
-            ctx.s.touch();
-            Ok(Flow::Value(list.clone()))
-        }
-        Err(_) => Ok(Flow::Value(Value::Nil)),
-    }
+    let h = d.add(&space, common, kind).ok()?;
+    ctx.s.touch();
+    Some(h)
 }
 
 pub fn entmod(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {

@@ -1,4 +1,8 @@
-//! Walk mode: the open drawing turned into 3D and walked first-person, inside CADaddy.
+//! Walk mode (View ▸ Walk, 3DWALK and 3DFLY): the open drawing turned into 3D and walked
+//! first-person in the drawing's own tab, the palettes beside it. Walking stays on what is
+//! underfoot (stairs and ramps, gravity off edges), walls and shut doors stop it; a click on a door
+//! swings it; a minimap shows where you are, and a room name takes you there. The speed is
+//! STEPSIZE × STEPSPERSEC drawing units a second when the drawing sets them.
 //!
 //! The 3D is derived ([`cadaddy_walk3d`]), never modelled: walls stand up from the plan's wall
 //! layers, devices hang at their mounting heights, floors stack at their elevations. The rules sit
@@ -10,7 +14,7 @@ pub mod gpu;
 
 use crate::CadApp;
 use cadaddy_doc::{Drawing, EntityKind, Handle};
-use cadaddy_walk3d::{DeviceInfo, DimKind, Owner, Rules, Scene, Walker, derive_set, measure, pick};
+use cadaddy_walk3d::{DeviceInfo, DimKind, Ground, Owner, Room, Rules, Scene, Walker, derive_set, measure, pick, rooms};
 use egui_wgpu::wgpu;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -169,6 +173,30 @@ pub struct Walk {
     view: Scene,
     /// Device types with their counts and colours, most common first.
     types: Vec<(String, usize, [u8; 3])>,
+    /// What the walker stands on.
+    ground: Ground,
+    /// Room names on the plans, and the filter typed to find one.
+    pub rooms: Vec<Room>,
+    room_query: String,
+    /// The plan of the walker's level with its position, in a corner of the view.
+    pub minimap: bool,
+    /// Walking speed, feet per second (flying is four times faster; Shift runs).
+    pub speed_ft: f64,
+}
+
+/// Walking pace when the drawing doesn't set STEPSIZE and STEPSPERSEC, feet per second.
+const WALK_PACE_FT: f64 = 4.5;
+
+/// The walking speed for `b`: STEPSIZE × STEPSPERSEC drawing units a second when the drawing sets
+/// STEPSIZE, else a walking pace.
+fn speed_of(b: &Building) -> f64 {
+    let Some(d) = b.drawings.first() else { return WALK_PACE_FT };
+    if d.header.get("STEPSIZE").is_none() && d.header.get("STEPSPERSEC").is_none() {
+        return WALK_PACE_FT;
+    }
+    let upf = if b.rules.units_per_foot.is_finite() && b.rules.units_per_foot > 0.0 { b.rules.units_per_foot } else { 12.0 };
+    let v = d.header.f64("STEPSIZE", 6.0).clamp(1e-6, 1e6) * d.header.f64("STEPSPERSEC", 2.0).clamp(1.0, 30.0) / upf;
+    if v.is_finite() { v.clamp(0.05, 500.0) } else { WALK_PACE_FT }
 }
 
 impl Walk {
@@ -188,9 +216,63 @@ impl Walk {
             walls_on: true,
             view: Scene::default(),
             types: Vec::new(),
+            ground: Ground::default(),
+            rooms: Vec::new(),
+            room_query: String::new(),
+            minimap: true,
+            speed_ft: WALK_PACE_FT,
         };
         w.rebuild_view();
+        w.rebuild_ground();
         w
+    }
+
+    /// The ground, the room names and the speed, after the building is derived again.
+    fn rebuild_ground(&mut self) {
+        let b = &self.building;
+        self.ground = Ground::new(&b.scene);
+        let srcs: Vec<&Drawing> = b.drawings.iter().map(|d| d.as_ref()).collect();
+        self.rooms = rooms(&srcs, &b.rules);
+        self.rooms.sort_by(|a, b| a.level.cmp(&b.level).then_with(|| a.name.cmp(&b.name)));
+        self.speed_ft = speed_of(b);
+    }
+
+    /// Stand at room `i`: its level, its place, on the floor there.
+    pub fn go_to_room(&mut self, i: usize) {
+        let Some(r) = self.rooms.get(i).cloned() else { return };
+        let s = &self.building.scene;
+        self.walker.go_to_level(s, r.level);
+        let floor = s.levels.get(r.level).map_or(0.0, |l| l.elevation_ft);
+        let z = self.ground.below(r.at, floor + self.walker.max_step).unwrap_or(floor);
+        self.walker.eye = cadaddy_walk3d::V3 { x: r.at.x, y: r.at.y, z: z + self.walker.eye_height };
+        self.walker.vz = 0.0;
+    }
+
+    /// Swing the door the pick `hit` landed on (its leaf nearest the point). True when one swung.
+    fn toggle_door_at(&mut self, owner: Owner, point: cadaddy_walk3d::V3) -> bool {
+        let s = &self.building.scene;
+        let p = cadaddy_doc::geom::Vec2 { x: point.x, y: point.y };
+        let best = s
+            .door_leaves
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.owner == owner)
+            .map(|(i, d)| {
+                let (a, b) = d.line();
+                let ab = b - a;
+                let l2 = ab.x * ab.x + ab.y * ab.y;
+                let t = if l2 > 1e-12 { (((p - a).x * ab.x + (p - a).y * ab.y) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                (i, (a + ab * t - p).len())
+            })
+            .min_by(|x, y| x.1.total_cmp(&y.1));
+        match best {
+            Some((i, dist)) if dist < 1.0 => {
+                self.building.scene.toggle_door(i);
+                self.rebuild_view();
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Recount the device types and redo the drawn scene after a layer toggle or a rebuild.
@@ -333,6 +415,7 @@ fn refresh_if_edited(app: &mut CadApp) {
             walk.building = b;
             walk.picked = None;
             walk.rebuild_view();
+            walk.rebuild_ground();
         }
         Err(e) => app.set_status(format!("Walk: {e}")),
     }
@@ -369,12 +452,35 @@ fn side_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
         w.go_to_level(s, w.level);
     }
     ui.checkbox(&mut walk.cut, "Cut away levels above (H)");
+    ui.checkbox(&mut walk.minimap, "Plan in the corner (M)");
+    ui.small(format!("Speed {}/s{}", ft_in(walk.speed_ft), if w.fly { " (×4 flying)" } else { "" }));
     ui.label(format!(
         "Eye {} , {} , {} AFF",
         ft_in(w.eye.x),
         ft_in(w.eye.y),
         ft_in(w.eye.z - s.levels.get(w.level).map(|v| v.elevation_ft).unwrap_or(0.0))
     ));
+    ui.separator();
+    ui.strong("Go to room");
+    ui.add(egui::TextEdit::singleline(&mut walk.room_query).hint_text("Room name").desired_width(f32::INFINITY));
+    let q = walk.room_query.to_lowercase();
+    let mut go: Option<usize> = None;
+    egui::ScrollArea::vertical().id_salt("walk_rooms").max_height(120.0).show(ui, |ui| {
+        for (i, r) in walk.rooms.iter().enumerate().filter(|(_, r)| q.is_empty() || r.name.to_lowercase().contains(&q)).take(60) {
+            let lv = s.levels.get(r.level).map(|l| l.name.as_str()).unwrap_or("?");
+            if ui.selectable_label(false, format!("{}  ·  {lv}", r.name)).clicked() {
+                go = Some(i);
+            }
+        }
+        if walk.rooms.is_empty() {
+            ui.small("No room names on the plans.");
+        }
+    });
+    if let Some(i) = go {
+        walk.go_to_room(i);
+    }
+    let b = &walk.building;
+    let s = &b.scene;
     ui.separator();
     ui.strong("Picked");
     match &walk.picked {
@@ -434,7 +540,7 @@ fn side_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
         walk.rebuild_view();
     }
     ui.separator();
-    ui.small("Drag: look · WASD/arrows: move · Shift: run\nQ/E: down/up (fly) · PgUp/PgDn: level\nF: fly · H: cut above · click: pick · Esc: back");
+    ui.small("Drag: look · WASD/arrows: move · Shift: run\nQ/E: down/up (fly) · PgUp/PgDn: level\nF: fly · H: cut above · M: plan\nclick: pick, or swing a door · Esc: back");
     back
 }
 
@@ -455,12 +561,17 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
         return (ctx.input(|i| i.key_pressed(egui::Key::Escape)), None);
     };
     let s = &walk.building.scene;
+    let ground = &walk.ground;
     let w = &mut walk.walker;
     let d = resp.drag_delta();
     if resp.dragged() {
         w.look(-f64::from(d.x) * 0.005, -f64::from(d.y) * 0.005);
     }
+    // Gravity: off an edge, the walker comes down.
+    let frame_dt = ctx.input(|i| f64::from(i.stable_dt).min(0.1));
+    w.fall(s, Some(ground), frame_dt);
     let mut esc = false;
+    let mut minimap_key = false;
     if !ctx.egui_wants_keyboard_input() {
         let (dt, keys) = ctx.input(|i| {
             let k = |a: egui::Key, b: egui::Key| f64::from(u8::from(i.key_down(a) || i.key_down(b)));
@@ -474,13 +585,15 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
                 i.key_pressed(egui::Key::PageUp),
                 i.key_pressed(egui::Key::PageDown),
                 i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::M),
             );
             (f64::from(i.stable_dt).min(0.1), (fwd, right, up, run, toggles))
         });
-        let (fwd, right, up, run, (f, h, pgup, pgdn, escape)) = keys;
-        let speed = if w.fly { 25.0 } else { 6.0 } * run * dt;
+        let (fwd, right, up, run, (f, h, pgup, pgdn, escape, m)) = keys;
+        minimap_key = m;
+        let speed = walk.speed_ft * if w.fly { 4.0 } else { 1.0 } * run * dt;
         if fwd != 0.0 || right != 0.0 || up != 0.0 {
-            w.step(s, fwd * speed, right * speed, up * speed);
+            w.step_on(s, Some(ground), fwd * speed, right * speed, up * speed);
         }
         if f {
             w.fly = !w.fly;
@@ -499,19 +612,46 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
         }
         esc = escape;
     }
+    if minimap_key {
+        walk.minimap = !walk.minimap;
+    }
+    let map_rect = walk.minimap.then(|| minimap_rect(rect));
     let aspect = f64::from(rect.width() / rect.height().max(1.0));
     let mut select = None;
-    if resp.clicked()
-        && let Some(p) = resp.interact_pointer_pos()
+    let clicked_at = resp.clicked().then(|| resp.interact_pointer_pos()).flatten();
+    // A click on the plan in the corner takes the walker there.
+    if let (Some(p), Some(mr)) = (clicked_at, map_rect)
+        && mr.contains(p)
     {
+        if let Some(to) = minimap_to_plan(&walk.building.scene, walk.walker.level, mr, p) {
+            let w = &mut walk.walker;
+            w.eye.x = to.x;
+            w.eye.y = to.y;
+            let floor = walk.building.scene.levels.get(w.level).map_or(0.0, |l| l.elevation_ft);
+            let z = walk.ground.below(to, floor + w.max_step).unwrap_or(floor);
+            w.eye.z = z + w.eye_height;
+            w.vz = 0.0;
+        }
+    } else if let Some(p) = clicked_at {
+        let w = &walk.walker;
+        let s = &walk.building.scene;
         let nx = f64::from((p.x - rect.left()) / rect.width() * 2.0 - 1.0);
         let ny = f64::from(1.0 - (p.y - rect.top()) / rect.height() * 2.0);
         let dir = w.ray(nx, ny, aspect);
-        walk.picked =
-            pick(&walk.view, w.eye, dir).map(|hit| match s.devices.iter().position(|d| d.handle == hit.owner.handle && d.src == hit.owner.src) {
+        let hit = pick(&walk.view, w.eye, dir);
+        let door = hit.as_ref().is_some_and(|h| s.door_leaves.iter().any(|d| d.owner == h.owner));
+        if let Some(h) = hit.as_ref().filter(|_| door)
+            && walk.toggle_door_at(h.owner, h.point)
+        {
+            walk.picked = None;
+        } else {
+            let s = &walk.building.scene;
+            walk.picked = hit.map(|hit| match s.devices.iter().position(|d| d.handle == hit.owner.handle && d.src == hit.owner.src) {
                 Some(i) => Picked::Device(i),
                 None => Picked::Entity(hit.owner),
             });
+        }
+        let s = &walk.building.scene;
         // The open drawing is source 0, and any sheet that is the same drawing.
         if let Some(o) = match &walk.picked {
             Some(Picked::Device(i)) => s.devices.get(*i).map(|d| Owner { src: d.src, handle: d.handle }),
@@ -522,7 +662,8 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
             select = Some(o.handle);
         }
     }
-    // Draw.
+    // Draw (a door may have swung: the scene is looked at again).
+    let s = &walk.building.scene;
     let ppp = ctx.pixels_per_point();
     let size = ((rect.width() * ppp).round().max(1.0) as u32, (rect.height() * ppp).round().max(1.0) as u32);
     let g = walk.gpu.get_or_insert_with(|| gpu::Gpu::new(&rs.device));
@@ -545,6 +686,9 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
         draw_dims(ui.painter(), rect, &walk.walker.view_proj(aspect), &measure(&walk.building.scene, *i));
     }
     ui.painter().circle_filled(rect.center(), 2.5, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200));
+    if let Some(mr) = map_rect {
+        draw_minimap(ui.painter(), mr, &walk.building.scene, &walk.walker);
+    }
     if let Some(lv) = s.levels.get(walk.walker.level) {
         ui.painter().text(
             rect.left_top() + egui::vec2(10.0, 8.0),
@@ -556,6 +700,50 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
     }
     ctx.request_repaint();
     (esc, select)
+}
+
+/// Where the plan sits in the view: the lower-left corner.
+fn minimap_rect(view: egui::Rect) -> egui::Rect {
+    let side = (view.width().min(view.height()) * 0.3).clamp(120.0, 240.0);
+    egui::Rect::from_min_size(egui::pos2(view.left() + 10.0, view.bottom() - side - 10.0), egui::vec2(side, side))
+}
+
+/// The plan of `level` fitted into `r`: (scale, offset) mapping feet to screen.
+fn minimap_fit(scene: &Scene, level: usize, r: egui::Rect) -> Option<(f64, cadaddy_doc::geom::Vec2)> {
+    let l = scene.levels.get(level)?;
+    let (w, h) = (l.max.x - l.min.x, l.max.y - l.min.y);
+    if !(w.is_finite() && h.is_finite()) || w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let pad = 8.0;
+    let k = ((f64::from(r.width()) - 2.0 * pad) / w).min((f64::from(r.height()) - 2.0 * pad) / h);
+    let off = cadaddy_doc::geom::Vec2 { x: f64::from(r.left()) + pad - l.min.x * k, y: f64::from(r.bottom()) - pad + l.min.y * k };
+    Some((k, off))
+}
+
+/// The plan point under screen point `p` of the minimap.
+fn minimap_to_plan(scene: &Scene, level: usize, r: egui::Rect, p: egui::Pos2) -> Option<cadaddy_doc::geom::Vec2> {
+    let (k, off) = minimap_fit(scene, level, r)?;
+    Some(cadaddy_doc::geom::Vec2 { x: (f64::from(p.x) - off.x) / k, y: (off.y - f64::from(p.y)) / k })
+}
+
+fn draw_minimap(painter: &egui::Painter, r: egui::Rect, scene: &Scene, w: &Walker) {
+    painter.rect_filled(r, 4.0, egui::Color32::from_rgba_unmultiplied(20, 22, 26, 200));
+    let Some((k, off)) = minimap_fit(scene, w.level, r) else { return };
+    let to = |p: cadaddy_doc::geom::Vec2| egui::pos2((off.x + p.x * k) as f32, (off.y - p.y * k) as f32);
+    let pen = egui::Stroke::new(1.0, egui::Color32::from_gray(210));
+    for seg in scene.walls.iter().filter(|s| s.level == w.level).take(50_000) {
+        painter.line_segment([to(seg.a), to(seg.b)], pen);
+    }
+    let door = egui::Stroke::new(1.5, egui::Color32::from_rgb(200, 150, 100));
+    for d in scene.door_leaves.iter().filter(|d| d.level == w.level) {
+        let (a, b) = d.line();
+        painter.line_segment([to(a), to(b)], door);
+    }
+    let me = to(cadaddy_doc::geom::Vec2 { x: w.eye.x, y: w.eye.y });
+    let ahead = egui::vec2(w.yaw.cos() as f32, -(w.yaw.sin() as f32)) * 12.0;
+    painter.line_segment([me, me + ahead], egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 200, 60)));
+    painter.circle_filled(me, 4.0, egui::Color32::from_rgb(255, 200, 60));
 }
 
 /// The Layers list: walls, then each device type with its colour and count (right-click a type to

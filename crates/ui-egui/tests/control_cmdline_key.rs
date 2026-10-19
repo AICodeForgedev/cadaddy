@@ -47,7 +47,8 @@ fn refused_enter_is_echoed_and_reported_in_error() {
 fn accepted_keys_have_output_and_no_error() {
     let mut app = CadApp::new(Session::new(), Services::default());
     for key in ["enter", "escape"] {
-        app.session.cmdline("circle").unwrap();
+        // Started by the agent: Enter into a command the user started is refused (users_command).
+        assert_eq!(call(&mut app, "cmdline.input", json!({ "text": "circle" }))["ok"], true);
         let v = call(&mut app, "cmdline.key", json!({ "key": key }));
         let r = &v["result"];
         assert_eq!(keys(r), want(&mut app, &["output"]), "{key}: {r}");

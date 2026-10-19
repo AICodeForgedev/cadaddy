@@ -205,18 +205,13 @@ fn face(idx: [&'static str; 4]) -> Vec<(i32, &'static str)> {
     vec![(0, "VERTEX"), (8, "0"), (10, "0"), (20, "0"), (30, "0"), (70, "128"), (71, idx[0]), (72, idx[1]), (73, idx[2]), (74, idx[3])]
 }
 
-fn faces(d: &Drawing) -> Vec<Face3d> {
-    d.model
-        .iter()
-        .map(|e| match &e.kind {
-            EntityKind::Face3d(f) => f.clone(),
-            k => panic!("expected only 3D faces, got {k:?}"),
-        })
-        .collect()
+/// The faces of the drawing's meshes, as 3D faces.
+fn mesh_faces(d: &Drawing) -> Vec<Face3d> {
+    d.model.iter().flat_map(|e| if let EntityKind::Mesh(m) = &e.kind { m.to_faces() } else { Vec::new() }).collect()
 }
 
 #[test]
-fn polyface_and_polygon_mesh_polylines_become_faces_not_bogus_vertices() {
+fn polyface_and_polygon_mesh_polylines_become_meshes_not_bogus_vertices() {
     let p = |x: f64, y: f64, z: f64| Vec3::new(x, y, z);
     // Polyface: four vertices, a quad, a triangle whose third edge is hidden, and faces with an
     // out-of-range index or only two vertices (skipped).
@@ -232,14 +227,17 @@ fn polyface_and_polygon_mesh_polylines_become_faces_not_bogus_vertices() {
     recs.push(vec![(0, "SEQEND"), (8, "0")]);
     let refs: Vec<&[(i32, &str)]> = recs.iter().map(Vec::as_slice).collect();
     let d = read_dxf(dxf(&refs).as_bytes()).expect("read polyface");
-    let fs = faces(&d);
+    let fs = mesh_faces(&d);
     assert_eq!(fs.len(), 2, "{fs:?}");
     assert_eq!(fs[0].corners, [p(0.0, 0.0, 2.0), p(1.0, 0.0, 2.0), p(1.0, 1.0, 2.0), p(0.0, 1.0, 2.0)]);
     assert_eq!(fs[0].hidden_edges, 0);
     assert_eq!(fs[1].corners, [p(0.0, 0.0, 2.0), p(1.0, 1.0, 2.0), p(0.0, 1.0, 2.0), p(0.0, 1.0, 2.0)]);
     assert_eq!(fs[1].hidden_edges, 4 | 8, "the triangle's closing edge is hidden");
-    // The faces survive a save and reopen as 3DFACEs.
-    assert_eq!(faces(&roundtrip(&d)), fs);
+    // One mesh, a polyface, which survives a save and reopen as one.
+    let back = roundtrip(&d);
+    assert_eq!(back.model.len(), 1);
+    assert!(back.model.iter().all(|e| matches!(&e.kind, EntityKind::Mesh(m) if m.kind == cadaddy_doc::MeshKind::Polyface)));
+    assert_eq!(mesh_faces(&back), fs);
 
     // 3×2 polygon mesh: two quads.
     let mut recs: Vec<Vec<(i32, &str)>> =
@@ -250,9 +248,15 @@ fn polyface_and_polygon_mesh_polylines_become_faces_not_bogus_vertices() {
     recs.push(vec![(0, "SEQEND"), (8, "0")]);
     let refs: Vec<&[(i32, &str)]> = recs.iter().map(Vec::as_slice).collect();
     let d = read_dxf(dxf(&refs).as_bytes()).expect("read mesh");
-    let fs = faces(&d);
+    let fs = mesh_faces(&d);
     assert_eq!(fs.len(), 2);
     assert_eq!(fs[1].corners, [p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0), p(2.0, 1.0, 0.0), p(2.0, 0.0, 0.0)]);
+    // A polygon mesh it stays, 3 × 2.
+    let back = roundtrip(&d);
+    assert!(back.model.iter().all(
+        |e| matches!(&e.kind, EntityKind::Mesh(m) if m.kind == cadaddy_doc::MeshKind::Polygon { m: 3, n: 2, closed_m: false, closed_n: false })
+    ));
+    assert_eq!(mesh_faces(&back), fs);
 
     // Hostile counts: a mesh claiming more vertices than it has yields nothing, without panicking.
     let recs: Vec<Vec<(i32, &str)>> = vec![

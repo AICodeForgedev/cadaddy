@@ -588,15 +588,15 @@ fn arraypath_json_and_command_line() {
     let mut s = Session::new();
     let dot = h(&s.execute("circle", &json!({"center": [0, 1], "radius": 0.25})).unwrap());
     let path = h(&s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap());
-    let r = s.execute("arraypath", &json!({"handles": [dot], "path": path, "count": 6})).unwrap();
+    let r = s.execute("arraypath", &json!({"handles": [dot], "path": path, "count": 6, "associative": false})).unwrap();
     assert_eq!(r["handles"].as_array().unwrap().len(), 5);
     assert!(matches!(last(&s), EntityKind::Circle(c) if near(c.center.xy(), 10.0, 1.0)));
-    let r = s.execute("arraypath", &json!({"handles": [dot], "path": path, "spacing": 4})).unwrap();
+    let r = s.execute("arraypath", &json!({"handles": [dot], "path": path, "spacing": 4, "associative": false})).unwrap();
     assert_eq!(r["handles"].as_array().unwrap().len(), 2);
     // Aligned along an arc: the copy turns with the tangent.
     let arc = h(&s.execute("arc", &json!({"center": [0, 20], "radius": 5, "start": 0, "end": 180})).unwrap());
     let tick = h(&s.execute("line", &json!({"points": [[5, 20], [6, 20]]})).unwrap());
-    s.execute("arraypath", &json!({"handles": [tick], "path": arc, "count": 2})).unwrap();
+    s.execute("arraypath", &json!({"handles": [tick], "path": arc, "count": 2, "associative": false})).unwrap();
     assert!(matches!(last(&s), EntityKind::Line(l) if near(l.a.xy(), -5.0, 20.0) && near(l.b.xy(), -6.0, 20.0)));
     assert!(s.execute("arraypath", &json!({"handles": [dot], "path": dot})).is_err());
 
@@ -607,7 +607,10 @@ fn arraypath_json_and_command_line() {
     s.cmdline("").unwrap();
     s.cmdline("5,0 3").unwrap();
     assert!(s.running.is_none(), "{}", s.prompt_text());
-    assert_eq!(s.doc().unwrap().model.len(), 4);
+    // Associative (ARRAYASSOCIATIVITY on): the path and one array of 3 items.
+    let d = s.doc().unwrap();
+    assert_eq!(d.model.len(), 2);
+    assert!(d.model.iter().any(|e| d.array_params(e).is_some_and(|p| p.items().map_or(0, |v| v.len()) == 3)));
 }
 
 #[test]
@@ -672,7 +675,8 @@ fn editing_commands_leave_locked_layer_objects_alone() {
     assert_eq!(s.execute("erase.selection", &json!({})).unwrap()["erased"], 0);
     assert_eq!(s.execute("cutclip", &json!({"handles": [a]})).unwrap()["cut"], 0);
     assert_eq!(s.execute("stretch", &json!({"window": [[-1, -1], [11, 1]], "delta": [10, 0]})).unwrap()["stretched"], 0);
-    s.execute("explode", &json!({"handles": [r]})).unwrap();
+    // Nothing explodable is an error ("1 was not able to be exploded."), so no empty undo step.
+    assert!(s.execute("explode", &json!({"handles": [r]})).is_err());
     // The interactive STRETCH (crossing window, base point, second point) too.
     s.start("stretch").unwrap();
     for (x, y) in [(-1.0, -1.0), (11.0, 1.0), (0.0, 0.0), (10.0, 0.0)] {

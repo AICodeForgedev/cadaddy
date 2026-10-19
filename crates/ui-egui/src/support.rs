@@ -117,7 +117,7 @@ pub fn banner(app: &mut CadApp, ctx: &egui::Context) {
                             app.pending_url = Some(donate_url());
                             close = true;
                         }
-                        if ui.add(egui::Button::new("✕").frame(false)).on_hover_text(crate::tl!("Close")).clicked() {
+                        if ui.add(egui::Button::new("×").frame(false)).on_hover_text(crate::tl!("Close")).clicked() {
                             close = true;
                         }
                     });

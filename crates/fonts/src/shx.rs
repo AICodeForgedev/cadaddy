@@ -475,13 +475,54 @@ pub fn set_search_path(dirs: Vec<String>) {
     }
 }
 
-fn search_path() -> Vec<String> {
-    if let Ok(s) = SEARCH.read()
-        && let Some(v) = s.as_ref()
-    {
-        return v.clone();
+/// The current drawing's folder: searched first, as AutoCAD does ([`set_drawing_dir`]).
+static DRAWING_DIR: RwLock<Option<String>> = RwLock::new(None);
+
+/// The folder of the drawing being shown; a font a style names is looked for there first. A
+/// change forgets the fonts not found so far, so they are looked for again.
+pub fn set_drawing_dir(dir: &str) {
+    if let Ok(mut d) = DRAWING_DIR.write() {
+        if d.as_deref() == Some(dir) {
+            return;
+        }
+        *d = Some(dir.to_string());
     }
-    std::env::var("CADADDY_FONT_PATH").map(|p| p.split([';', ':']).filter(|d| !d.trim().is_empty()).map(str::to_string).collect()).unwrap_or_default()
+    if let Ok(mut c) = CACHE.lock()
+        && let Some(m) = c.as_mut()
+    {
+        m.retain(|_, f| f.is_some());
+    }
+}
+
+/// Where shape fonts are looked for: the drawing's folder, then the folders set by
+/// [`set_search_path`] (else `CADADDY_FONT_PATH`), then the user's CADaddy fonts folder and the
+/// system fonts folder (the Windows app set no path, so only full paths were found).
+fn search_path() -> Vec<String> {
+    let mut dirs: Vec<String> = DRAWING_DIR.read().ok().and_then(|d| d.clone()).into_iter().collect();
+    match SEARCH.read().ok().and_then(|s| s.clone()) {
+        Some(v) => dirs.extend(v),
+        None => dirs.extend(
+            std::env::var("CADADDY_FONT_PATH")
+                .map(|p| p.split([';', ':']).filter(|d| !d.trim().is_empty()).map(str::to_string).collect::<Vec<_>>())
+                .unwrap_or_default(),
+        ),
+    }
+    dirs.extend(default_font_dirs());
+    dirs
+}
+
+/// The user's CADaddy fonts folder and the system fonts folder.
+fn default_font_dirs() -> Vec<String> {
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+    if cfg!(windows) {
+        let mut v: Vec<String> = env("LOCALAPPDATA").map(|l| format!("{l}\\CADaddy\\Fonts")).into_iter().collect();
+        v.extend(env("WINDIR").map(|w| format!("{w}\\Fonts")));
+        v
+    } else if cfg!(target_os = "macos") {
+        env("HOME").map(|h| vec![format!("{h}/Library/Fonts/CADaddy"), format!("{h}/Library/Fonts")]).unwrap_or_default()
+    } else {
+        env("HOME").map(|h| vec![format!("{h}/.local/share/fonts/cadaddy"), format!("{h}/.local/share/fonts")]).unwrap_or_default()
+    }
 }
 
 /// Whether a style's font name names a shape font (`romans.shx`, `txt`).

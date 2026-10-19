@@ -487,37 +487,44 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     };
     let title = if st.edit.is_empty() { crate::tl!("Hatch and Gradient") } else { crate::tl!("Hatch Edit") };
     let mut action = Action::None;
-    egui::Window::new(title).id(egui::Id::new("hatch_dialog")).open(open).collapsible(false).resizable(false).show(ctx, |ui| {
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                ui.set_width(340.0);
-                fill_ui(ui, &mut st.fill, &mut action);
+    egui::Window::new(title)
+        .id(egui::Id::new("hatch_dialog"))
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(340.0);
+                    fill_ui(ui, &mut st.fill, &mut action);
+                });
+                // Space, not a vertical separator: a separator takes the height available, and the
+                // window grew by it every frame until the buttons left the screen.
+                ui.add_space(16.0);
+                ui.vertical(|ui| {
+                    ui.set_width(230.0);
+                    options_ui(ui, &mut st, &mut action);
+                });
             });
-            // Space, not a vertical separator: a separator takes the height available, and the
-            // window grew by it every frame until the buttons left the screen.
-            ui.add_space(16.0);
-            ui.vertical(|ui| {
-                ui.set_width(230.0);
-                options_ui(ui, &mut st, &mut action);
+            if let Some(e) = &st.error {
+                ui.colored_label(Tokens::get().warn, e);
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                let ready = !(st.edit.is_empty() && st.points.is_empty() && st.handles.is_empty());
+                if ui.add_enabled(ready, egui::Button::new(crate::tl!("Preview"))).clicked() {
+                    action = Action::Preview;
+                }
+                if ui.add_enabled(ready, egui::Button::new(crate::tl!("OK"))).clicked() {
+                    action = Action::Ok;
+                }
+                if ui.button(crate::tl!("Cancel")).clicked() {
+                    action = Action::Cancel;
+                }
             });
         });
-        if let Some(e) = &st.error {
-            ui.colored_label(Tokens::get().warn, e);
-        }
-        ui.separator();
-        ui.horizontal(|ui| {
-            let ready = !(st.edit.is_empty() && st.points.is_empty() && st.handles.is_empty());
-            if ui.add_enabled(ready, egui::Button::new(crate::tl!("Preview"))).clicked() {
-                action = Action::Preview;
-            }
-            if ui.add_enabled(ready, egui::Button::new(crate::tl!("OK"))).clicked() {
-                action = Action::Ok;
-            }
-            if ui.button(crate::tl!("Cancel")).clicked() {
-                action = Action::Cancel;
-            }
-        });
-    });
     app.hatch_dlg = Some(st);
     match action {
         Action::Ok => {

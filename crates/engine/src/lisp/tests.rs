@@ -88,6 +88,14 @@ fn lists_and_strings() {
     assert_eq!(ok(&mut s, "(strlen \"abc\" \"de\")"), "5");
     assert_eq!(ok(&mut s, "(itoa 42)"), "\"42\"");
     assert_eq!(ok(&mut s, "(atoi \"12abc\")"), "12");
+    assert_eq!(ok(&mut s, "(atoi \"99999999999999999999\")"), "2147483647");
+    assert_eq!(ok(&mut s, "(atoi \"-3000000000\")"), "-2147483648");
+    assert_eq!(ok(&mut s, "(atoi \"-\")"), "0");
+    assert_eq!(ok(&mut s, "(setenv \"CdyTestVar\" \"42\")"), "\"42\"");
+    assert_eq!(ok(&mut s, "(getenv \"CdyTestVar\")"), "\"42\"");
+    assert_eq!(ok(&mut s, "(getenv \"NO_SUCH_VAR_CADADDY\")"), "nil");
+    assert_eq!(ok(&mut s, "(menucmd \"P1=+POP1\")"), "nil");
+    assert_eq!(ok(&mut s, "(type (entmakex '((0 . \"LINE\") (10 0 0 0) (11 1 0 0))))"), "ENAME");
     assert_eq!(ok(&mut s, "(atof \"2.5mm\")"), "2.5");
     assert_eq!(ok(&mut s, "(atof \"x\")"), "0.0");
     assert_eq!(ok(&mut s, "(wcmatch \"Name\" \"N*\")"), "T");

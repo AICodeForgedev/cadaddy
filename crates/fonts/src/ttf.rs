@@ -75,6 +75,26 @@ impl Face {
     pub fn has_glyph(&self, c: char) -> bool {
         self.font().is_some_and(|f| f.charmap().map(c).is_some())
     }
+    /// Whether the face's own licence entries (OpenType `name` IDs 13 and 14) say it is under
+    /// the SIL Open Font License, which lets it be passed on with a drawing (eTransmit).
+    pub fn is_ofl(&self) -> bool {
+        let Some(f) = self.font() else { return false };
+        [skrifa::string::StringId::LICENSE_DESCRIPTION, skrifa::string::StringId::LICENSE_URL].into_iter().any(|id| {
+            f.localized_strings(id).any(|s| {
+                let t = s.to_string().to_ascii_lowercase();
+                t.contains("open font license") || t.contains("scripts.sil.org/ofl") || t.contains("openfontlicense.org")
+            })
+        })
+    }
+    /// The file name extension for the face's file: `ttc` for a collection, `otf` for CFF
+    /// outlines, else `ttf`.
+    pub fn file_extension(&self) -> &'static str {
+        match self.bytes.get(..4) {
+            Some(b"ttcf") => "ttc",
+            Some(b"OTTO") => "otf",
+            _ => "ttf",
+        }
+    }
     fn names(&self) -> Vec<String> {
         let Some(f) = self.font() else { return Vec::new() };
         [skrifa::string::StringId::FAMILY_NAME, skrifa::string::StringId::TYPOGRAPHIC_FAMILY_NAME, skrifa::string::StringId::FULL_NAME]

@@ -9,7 +9,7 @@ use std::process::Command;
 
 const ASSET_EXT: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "ico", "icns", "svg", "pdf", "ai", "eps", "psd", "icc", "icm", "ttf", "otf", "woff",
-    "woff2", "ase", "indd", "idml", "aco", "abr", "dxf", "dwg", "mp4", "wav", "mp3",
+    "woff2", "ase", "indd", "idml", "aco", "abr", "dxf", "dwg", "cdy", "mp4", "wav", "mp3",
 ];
 const ASSET_DIRS: &[&str] = &["assets/", "docs/images/", "examples/"];
 

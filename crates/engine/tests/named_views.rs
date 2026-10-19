@@ -180,3 +180,139 @@ fn zoomfactor_scales_the_wheel() {
     assert!(close(s.wheel_zoom_factor(-50.0), 1.0 / at3));
     assert_eq!(s.wheel_zoom_factor(f64::INFINITY), 1.0);
 }
+
+// ---- Views II (gaps U11): orthographic presets, UCS and background kept with a view ----
+
+use cadaddy_engine::doc::color::{Color, Rgb};
+use cadaddy_engine::doc::{HVal, Ucs, ViewUcs};
+use cadaddy_engine::geom::Vec3;
+use cadaddy_engine::geom::view3;
+
+fn saved(s: &Session, name: &str) -> cadaddy_engine::doc::NamedView {
+    s.doc().unwrap().views.iter().find(|v| v.name == name).cloned().unwrap()
+}
+
+fn current_ucs(s: &Session) -> ViewUcs {
+    ViewUcs::current(&s.doc().unwrap().header)
+}
+
+#[test]
+fn orthographic_views_are_saved_and_restored() {
+    let mut s = session();
+    let front = view3::preset("front").unwrap();
+    // A preset view shown, then saved: it keeps its direction.
+    s.execute("view.front", &json!({})).unwrap();
+    s.execute("view", &json!({ "option": "save", "name": "F" })).unwrap();
+    let f = saved(&s, "F");
+    assert!(f.dir.is_some_and(|d| (d - front.normalized()).len() < 1e-9), "{:?}", f.dir);
+    s.execute("plan", &json!({})).unwrap();
+    s.execute("view", &json!({ "option": "save", "name": "P" })).unwrap();
+    assert_eq!(saved(&s, "P").dir, None, "the plan view keeps no direction");
+    // A preset saved without leaving the plan view: the preset's view of the extents.
+    let before = view(&s);
+    s.execute("view", &json!({ "option": "save", "name": "Iso", "orthographic": "swiso" })).unwrap();
+    assert_eq!(view(&s), before, "saving doesn't change what is shown");
+    assert!(s.state().unwrap().projection().is_none());
+    let iso = saved(&s, "Iso");
+    assert!(iso.dir.is_some_and(|d| view3::preset_label(d) == Some("SW Isometric")), "{:?}", iso.dir);
+    assert!(iso.height > 0.0 && iso.width > 0.0);
+    // Restoring turns the view; restoring a plan view turns it back.
+    s.execute("view", &json!({ "option": "restore", "name": "F" })).unwrap();
+    assert!((s.state().unwrap().view_dir - front.normalized()).len() < 1e-9);
+    assert!(close(view(&s).center.x, f.center.x) && close(view(&s).center.y, f.center.y));
+    s.execute("view", &json!({ "option": "restore", "name": "P" })).unwrap();
+    assert_eq!(s.state().unwrap().view_dir, Vec3::Z);
+    // The list names the direction.
+    let r = s.execute("view", &json!({ "option": "list" })).unwrap();
+    let dirs: Vec<_> = r["views"].as_array().unwrap().iter().map(|v| v["direction"].clone()).collect();
+    assert_eq!(dirs, [json!("Front"), json!(null), json!("SW Isometric")]);
+    assert!(s.execute("view", &json!({ "option": "save", "name": "X", "orthographic": "sideways" })).is_err());
+}
+
+#[test]
+fn orthographic_presets_round_trip_through_dxf() {
+    let mut s = session();
+    s.execute(
+        "view",
+        &json!({ "option": "save", "name": "Iso", "orthographic": "neiso", "ucs": { "origin": [5, 6], "angle": 90 }, "background": "#336699" }),
+    )
+    .unwrap();
+    let text = cadaddy_io::write_dxf(s.doc().unwrap());
+    let back = cadaddy_io::read_dxf(text.as_bytes()).unwrap();
+    let (a, b) = (saved(&s, "Iso"), back.views.iter().find(|v| v.name == "Iso").cloned().unwrap());
+    assert!(a.dir.zip(b.dir).is_some_and(|(x, y)| (x - y).len() < 1e-9), "{:?} {:?}", a.dir, b.dir);
+    let (ua, ub) = (a.ucs.unwrap(), b.ucs.unwrap());
+    assert!((ua.origin - ub.origin).len() < 1e-9 && (ua.x_axis - ub.x_axis).len() < 1e-9 && (ua.y_axis - ub.y_axis).len() < 1e-9);
+    assert_eq!(b.background, Some(Color::True(Rgb(0x33, 0x66, 0x99))));
+}
+
+#[test]
+fn a_ucs_is_saved_and_restored_with_a_view() {
+    let mut s = session();
+    // A UCS given with the view: restoring makes it current.
+    s.execute("view", &json!({ "option": "save", "name": "A", "ucs": { "origin": [5, 5], "angle": 30 } })).unwrap();
+    assert!(current_ucs(&s).is_world(), "saving doesn't change the UCS");
+    s.execute("view", &json!({ "option": "restore", "name": "A" })).unwrap();
+    let u = current_ucs(&s);
+    assert!((u.origin - Vec3::new(5.0, 5.0, 0.0)).len() < 1e-9 && (u.angle().to_degrees() - 30.0).abs() < 1e-9, "{u:?}");
+    // UCSVIEW (1 by default): a view saved now keeps the current UCS…
+    s.execute("view", &json!({ "option": "save", "name": "B" })).unwrap();
+    assert!(saved(&s, "B").ucs.is_some_and(|b| (b.angle().to_degrees() - 30.0).abs() < 1e-9));
+    // …and none with UCSVIEW 0, or with `ucs: none`.
+    std::sync::Arc::make_mut(&mut s.state_mut().unwrap().doc).header.set("UCSVIEW", HVal::Int(0));
+    s.execute("view", &json!({ "option": "save", "name": "C" })).unwrap();
+    s.execute("view", &json!({ "option": "save", "name": "D", "ucs": "none" })).unwrap();
+    assert!(saved(&s, "C").ucs.is_none() && saved(&s, "D").ucs.is_none());
+    // A view without a UCS leaves the current one; a World view restores the world.
+    s.execute("view", &json!({ "option": "restore", "name": "C" })).unwrap();
+    assert!(!current_ucs(&s).is_world());
+    s.execute("view", &json!({ "option": "save", "name": "W", "ucs": "world" })).unwrap();
+    s.execute("view", &json!({ "option": "restore", "name": "W" })).unwrap();
+    assert!(current_ucs(&s).is_world());
+    // A named UCS keeps its name; restoring is one undo step.
+    std::sync::Arc::make_mut(&mut s.state_mut().unwrap().doc).ucss.push(Ucs {
+        name: "Site".into(),
+        origin: Vec3::new(100.0, 0.0, 0.0),
+        x_axis: Vec3::new(0.0, 1.0, 0.0),
+        y_axis: Vec3::new(-1.0, 0.0, 0.0),
+    });
+    s.execute("view", &json!({ "option": "settings", "name": "C", "ucs": "site" })).unwrap();
+    assert_eq!(saved(&s, "C").ucs.unwrap().name, "Site");
+    s.execute("view", &json!({ "option": "restore", "name": "C" })).unwrap();
+    assert_eq!(current_ucs(&s).name, "Site");
+    s.undo().unwrap();
+    assert!(current_ucs(&s).is_world());
+    // Typed: -VIEW sEttings Ucs <view> World.
+    typed(&mut s, &["-view", "e", "u", "C", "w"]);
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert!(saved(&s, "C").ucs.unwrap().is_world());
+    for bad in [json!({ "option": "save", "name": "Z", "ucs": "nope" }), json!({ "option": "save", "name": "Z", "ucs": { "origin": [1] } })] {
+        assert!(s.execute("view", &bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_view_shows_its_background() {
+    let mut s = session();
+    s.execute("view", &json!({ "option": "save", "name": "Blue", "background": "0,0,128" })).unwrap();
+    s.execute("view", &json!({ "option": "save", "name": "Plain" })).unwrap();
+    assert_eq!(s.state().unwrap().view_background, None, "saving doesn't show it");
+    s.execute("view", &json!({ "option": "restore", "name": "Blue" })).unwrap();
+    assert_eq!(s.state().unwrap().view_background, Some(Color::True(Rgb(0, 0, 128))));
+    // It stays through zooming, and a view without one takes it away.
+    set_view(&mut s, 1.0, 1.0, 10.0);
+    assert!(s.state().unwrap().view_background.is_some());
+    s.execute("view", &json!({ "option": "restore", "name": "Plain" })).unwrap();
+    assert_eq!(s.state().unwrap().view_background, None);
+    // Typed: -VIEW sEttings Background <view> <colour>; None clears it.
+    typed(&mut s, &["-view", "e", "b", "Plain", "3"]);
+    assert_eq!(saved(&s, "Plain").background, Some(Color::Index(3)));
+    typed(&mut s, &["-view", "e", "b", "Plain", "none"]);
+    assert_eq!(saved(&s, "Plain").background, None);
+    let r = s.execute("view", &json!({ "option": "list" })).unwrap();
+    assert_eq!(r["views"][0]["background"], "0,0,128");
+    for bad in ["bylayer", "plaid", "300"] {
+        assert!(s.execute("view", &json!({ "option": "settings", "name": "Plain", "background": bad })).is_err(), "{bad}");
+    }
+    assert!(s.execute("view", &json!({ "option": "settings", "name": "Nope", "background": "red" })).is_err());
+}

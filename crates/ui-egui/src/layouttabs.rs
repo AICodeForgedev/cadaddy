@@ -153,9 +153,14 @@ pub fn move_copy_dialog(app: &mut CadApp, ctx: &egui::Context) {
     }
     let mut open = true;
     let (mut ok, mut cancel) = (false, false);
-    egui::Window::new(crate::tl!("Move or Copy")).id(egui::Id::new("layout_move_copy")).open(&mut open).collapsible(false).resizable(false).show(
-        ctx,
-        |ui| {
+    egui::Window::new(crate::tl!("Move or Copy"))
+        .id(egui::Id::new("layout_move_copy"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
             ui.label(crate::tf!("Move or copy layout \"{name}\"", name = mc.name));
             ui.label(crate::tl!("Before layout:"));
             egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
@@ -173,8 +178,7 @@ pub fn move_copy_dialog(app: &mut CadApp, ctx: &egui::Context) {
                 ok = ui.button(crate::tl!("OK")).clicked();
                 cancel = ui.button(crate::tl!("Cancel")).clicked();
             });
-        },
-    );
+        });
     app.layout_tabs.move_copy = Some(mc);
     if ok {
         move_copy_ok(app);

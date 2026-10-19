@@ -14,6 +14,7 @@ pub mod autosave;
 pub mod blockedit;
 pub mod cmd;
 pub mod doc_path;
+pub mod fields;
 mod finite;
 pub mod grip_dims;
 pub mod grips;
@@ -30,6 +31,7 @@ pub mod select;
 pub mod snap;
 pub mod spatial;
 pub mod sysvars;
+pub mod ucs;
 pub mod undoctl;
 pub mod units;
 
@@ -47,7 +49,10 @@ pub use cadaddy_doc as doc;
 pub const AGENT_PORT: u16 = 47_820;
 pub use cadaddy_geom as geom;
 pub use cadaddy_render as render;
+pub use cmd::blocks::extract::EXTRACT_PROPERTIES;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
+/// A shaded or 3D view of model space as a PNG (exports; see the function).
+pub use cmd::view::view3d::shaded_png;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use prompt::{Accept, Drag, Input, Interactive, Picker, Prompt, Step};
 
@@ -197,6 +202,13 @@ pub struct DocState {
     /// Model space's view twist (VIEWTWIST, radians counterclockwise) in the plan view; a
     /// twisted plan view is drawn through [`DocState::projection`] like a 3D view.
     pub view_twist: f64,
+    /// The solid background colour of the named view last restored in model space (`None`:
+    /// the drawing area's own colour).
+    pub view_background: Option<cadaddy_color::Color>,
+    /// The UCSs UCS Previous goes back to, the latest last.
+    pub ucs_previous: Vec<ucs::Frame>,
+    /// Model space's visual style (VSCURRENT): how 3D objects show on the Model tab.
+    pub visual_style: cadaddy_render::shade::VisualStyle,
     pub uid: u64,
     /// The drawing is saved as binary DXF (it was opened from one, or last saved as one).
     pub binary_dxf: bool,
@@ -209,6 +221,14 @@ pub struct DocState {
     /// The user was told that saving over the file would lose what reading left out: saving
     /// again overwrites it.
     pub loss_warned: bool,
+    /// Saving into DWG or DXF has checked what that file wouldn't keep of the drawing (and said
+    /// so, when anything): it is checked once per drawing.
+    pub kept_checked: bool,
+    /// The .cdy file this drawing was last saved to or read from, and what it holds: the next
+    /// save there appends only what changed ([`cmd::file::CdySaved`]).
+    pub cdy_saved: Option<cmd::file::CdySaved>,
+    /// The drawing's associative 3D building (WALLGEN): what it builds again from.
+    pub wallgen: Option<cmd::wallgen::WallGen>,
     /// What opening the drawing changed and told the user (missing current styles reset): the
     /// OPEN reply lists them with its warnings, for agents that see no command-line history.
     pub open_notes: Vec<String>,
@@ -237,10 +257,16 @@ impl DocState {
             view_history: Vec::new(),
             view_dir: cadaddy_geom::Vec3::Z,
             view_twist: 0.0,
+            view_background: None,
+            ucs_previous: Vec::new(),
+            visual_style: cadaddy_render::shade::VisualStyle::Wireframe2d,
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             binary_dxf: false,
             read_loss: None,
             loss_warned: false,
+            kept_checked: false,
+            cdy_saved: None,
+            wallgen: None,
             open_notes: Vec::new(),
             block_edit: None,
         }
@@ -667,6 +693,58 @@ pub struct Running {
     pub selection_before: Vec<Handle>,
 }
 
+/// The names a command's parameter documentation mentions (`{center, radius?: …}`): every word
+/// followed by `:`, `?` or a closing `,` `}` — nested ones too, so it errs towards fewer warnings.
+fn documented_params(doc: &str) -> Vec<&str> {
+    let b = doc.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i].is_ascii_alphabetic() || b[i] == b'_' {
+            let start = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                i += 1;
+            }
+            let prev = doc[..start].trim_end().chars().last();
+            let next = doc[i..].trim_start().chars().next();
+            // `{name (e.g. …), at: …}`: a name with a note in brackets counts too (models3d.place
+            // warned that its own `name` was ignored; tester 0.7.7f).
+            if matches!(prev, Some('{' | ',' | '|')) && matches!(next, Some(':' | '?' | ',' | '}' | '(')) {
+                out.push(&doc[start..i]);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// A command's JSON result with `warnings` naming parameters it doesn't take (a misspelt
+/// `raduis` was silently ignored; tester 0.7.7e). It still ran: they only warn.
+fn with_unknown_param_warnings(mut v: Value, spec: &CommandSpec, params: &Value) -> Value {
+    let Some(given) = params.as_object() else { return v };
+    let known = documented_params(spec.params);
+    if known.is_empty() {
+        return v;
+    }
+    let unknown: Vec<&String> = given.keys().filter(|k| !known.contains(&k.as_str()) && !matches!(k.as_str(), "handle" | "handles")).collect();
+    if unknown.is_empty() {
+        return v;
+    }
+    let msg = |k: &String| format!("`{k}` is not a parameter of {} (it was ignored); see list_commands for its parameters", spec.id);
+    match &mut v {
+        Value::Object(o) => {
+            let w = o.entry("warnings").or_insert_with(|| Value::Array(Vec::new()));
+            if let Value::Array(a) = w {
+                a.extend(unknown.iter().map(|k| Value::String(msg(k))));
+            }
+        }
+        Value::Null => v = serde_json::json!({ "warnings": unknown.iter().map(|k| msg(k)).collect::<Vec<_>>() }),
+        _ => {}
+    }
+    v
+}
+
 /// A pending window/crossing selection started by a click on empty space.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct PendingWindow {
@@ -702,6 +780,8 @@ pub struct LastUsed {
     pub area: f64,
     pub perimeter: f64,
     pub distance: f64,
+    /// The last height a solid command (BOX, EXTRUDE…) used: its next `<default>`.
+    pub solid_height: Option<f64>,
 }
 
 impl Default for LastUsed {
@@ -718,6 +798,7 @@ impl Default for LastUsed {
             area: 0.0,
             perimeter: 0.0,
             distance: 0.0,
+            solid_height: None,
         }
     }
 }
@@ -775,12 +856,25 @@ impl Default for MLeaderOptions {
     }
 }
 
+/// A finished render (RENDER, RENDERCROP).
+#[derive(Clone, Debug)]
+pub struct RenderResult {
+    pub image: Arc<cadaddy_render::images::Raster>,
+    pub samples: u32,
+    pub seconds: f64,
+    pub seconds_per_sample: f64,
+    /// Bumped by every render, so a viewer knows to reload.
+    pub serial: u64,
+}
+
 /// The editor session: open drawings, settings, the running command and the command log.
 pub struct Session {
     pub docs: Vec<DocState>,
     pub active: usize,
     pub settings: Settings,
     pub running: Option<Running>,
+    /// See [`Session::keep_undo_step`].
+    keep_undo_step: bool,
     /// A script is running ([`Session::script`]); a SCRIPT command inside it is refused.
     in_script: bool,
     /// The command suspended while a transparent command (`'ZOOM`, `'PAN`…) prompts inside it;
@@ -826,6 +920,8 @@ pub struct Session {
     pub last_dim: Option<Handle>,
     /// Options remembered between invocations of interactive commands.
     pub last_used: LastUsed,
+    /// The last RENDER's image and what it took (the Render window shows it).
+    pub last_render: Option<RenderResult>,
     /// Where `clipboard` came from and the layers, styles and blocks its objects need.
     pub clipboard_source: Option<cmd::clipboard::ClipSource>,
     /// The window last picked with PLOTWINDOW (the Plot dialog's "Window <").
@@ -844,6 +940,16 @@ impl Default for Session {
     }
 }
 
+/// CMATERIAL as an object's material: `None` for ByLayer, and for a value that names no material
+/// of the drawing (files keep CMATERIAL as a handle).
+fn current_material(d: &Drawing) -> Option<String> {
+    let m = d.header.str("CMATERIAL", cadaddy_doc::material::BY_LAYER);
+    if m.eq_ignore_ascii_case(cadaddy_doc::material::BY_BLOCK) {
+        return Some(cadaddy_doc::material::BY_BLOCK.into());
+    }
+    d.material(&m).map(|x| x.name.clone())
+}
+
 impl Session {
     pub fn new() -> Self {
         let mut s = Session::empty();
@@ -857,6 +963,7 @@ impl Session {
             active: 0,
             settings: Settings::default(),
             running: None,
+            keep_undo_step: false,
             in_script: false,
             suspended: None,
             log: Vec::new(),
@@ -879,6 +986,7 @@ impl Session {
             untitled_counter: 0,
             last_dim: None,
             last_used: LastUsed::default(),
+            last_render: None,
             clipboard_source: None,
             plot_window: None,
             lisp: lisp::LispState::default(),
@@ -993,7 +1101,8 @@ impl Session {
         }
     }
 
-    /// Common properties for new objects (CLAYER, CECOLOR, CELTYPE, CELWEIGHT, CELTSCALE).
+    /// Common properties for new objects (CLAYER, CECOLOR, CELTYPE, CELWEIGHT, CELTSCALE,
+    /// CMATERIAL).
     pub fn current_common(&self) -> Common {
         let Ok(d) = self.doc() else { return Common::default() };
         let h = &d.header;
@@ -1004,6 +1113,7 @@ impl Session {
             lineweight: cadaddy_doc::Lineweight::from_dxf(h.i64("CELWEIGHT", -1) as i16),
             ltscale: h.f64("CELTSCALE", 1.0),
             plot_style: h.str("CPLOTSTYLE", "ByLayer"),
+            material: current_material(d),
             ..Common::default()
         }
     }
@@ -1086,7 +1196,7 @@ impl Session {
             }
             st.revision += 1;
         }
-        result
+        result.map(|v| with_unknown_param_warnings(v, spec, params))
     }
 
     /// Bump the revision without an undo step (view-only or settings changes that redraw).
@@ -1488,12 +1598,22 @@ impl Session {
             }
             return;
         }
+        // A command that changed nothing but asked for its step ([`Session::keep_undo_step`]) gets
+        // one, as AutoCAD records every command: U then undoes it, not the command before.
+        let keep = std::mem::take(&mut self.keep_undo_step) && !cancelled;
         if let Ok(st) = self.state_mut()
-            && !Arc::ptr_eq(&run.before, &st.doc)
+            && (keep || !Arc::ptr_eq(&run.before, &st.doc))
         {
             st.push_undo(Snapshot { label: label.to_string(), doc: run.before, selection: run.selection_before, bytes: 0 });
             st.revision += 1;
         }
+    }
+
+    /// The running command changed nothing but is still an undo step of its own (EXPLODE of an
+    /// object that can't be exploded: U after it used to undo the command before; battle test
+    /// 0.7.7e).
+    pub fn keep_undo_step(&mut self) {
+        self.keep_undo_step = true;
     }
 
     /// The post-command passes, in order, run after every command — by [`Session::execute`] and
@@ -1511,6 +1631,8 @@ impl Session {
         cmd::clip_partners::after_command(self, before);
         cmd::table::after_command(self, before);
         cmd::annotate::dimbreak_after_command(self, before);
+        fields::after_command(self, before);
+        cmd::wallgen::after_command(self, before);
     }
 
     fn resume_suspended(&mut self) {
@@ -1746,7 +1868,7 @@ impl Session {
             return self.input(Input::Keyword(k));
         }
         if prompt.accept.point {
-            if let Some(p) = prompt::parse_point_with(tt, self.last_point, &self.angle_settings()) {
+            if let Some(p) = prompt::parse_point_in(tt, self.last_point, &self.angle_settings(), &self.ucs()) {
                 self.last_polar = prompt::parse_polar_text(tt, &self.angle_settings());
                 return self.input(Input::Point(p));
             }
@@ -1763,7 +1885,7 @@ impl Session {
             {
                 let mut c = self.cursor;
                 if self.settings.orthomode && !prompt.corner {
-                    c = snap::iso::constrain(&self.drafting_settings(), base, c);
+                    c = snap::iso::constrain(&self.drafting_settings(), base, c, self.ucs().angle);
                 }
                 let dir = (c - base).normalized();
                 let dir = if dir == Vec2::ZERO { Vec2::X } else { dir };
@@ -1797,6 +1919,9 @@ impl Session {
                 continue;
             }
             self.input_line(line, true)?;
+            // A script's next line waits for a LISP routine it started, as in AutoCAD (in the
+            // app too: the script itself already holds the interface).
+            self.lisp_finish(std::time::Duration::from_secs(30));
         }
         Ok(())
     }

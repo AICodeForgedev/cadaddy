@@ -34,10 +34,12 @@ fn area_object_add_and_subtract_keep_a_running_total() {
 }
 
 #[test]
-fn area_unsupported_keywords_say_so_and_length_extends_the_last_segment() {
-    let (s, log) = run(&["area", "0,0", "a"]);
-    assert!(has(&log, "not available yet"), "{log:?}");
-    assert!(s.running.is_some());
+fn area_arcs_and_length_extends_the_last_segment() {
+    // 0,0 -> 10,0, an arc tangent to it to 10,10 (a half circle of radius 5 bulging out), then a
+    // line to 0,10: a 10 x 10 square plus half a circle.
+    let (s, log) = run(&["area", "0,0", "10,0", "a", "10,10", "l", "0,10", ""]);
+    assert!(has(&log, "Area = 139.2699, Perimeter = 45.7080"), "{log:?}");
+    assert!(s.running.is_none());
     // Length continues along the previous segment: 0,0 -> 4,0 -> +6 -> 10,0, then 10,10.
     let (_, log) = run(&["area", "0,0", "4,0", "l", "6", "10,10", ""]);
     assert!(has(&log, "Area = 50.0000"), "{log:?}");

@@ -148,7 +148,15 @@ mod tests {
         for (a, b) in [(p(0., 0.), p(20., 0.)), (p(20., 0.), p(20., 10.)), (p(20., 10.), p(0., 10.)), (p(0., 10.), p(0., 0.))] {
             s.walls.push(Seg { a, b, level: 0 });
         }
-        s.levels.push(LevelInfo { name: "L2".into(), elevation_ft: 12.0, height_ft: 10.0, ceiling_ft: 8.0, min: p(0., 0.), max: p(20., 10.) });
+        s.levels.push(LevelInfo {
+            name: "L2".into(),
+            elevation_ft: 12.0,
+            height_ft: 10.0,
+            ceiling_ft: 8.0,
+            min: p(0., 0.),
+            max: p(20., 10.),
+            base: p(0., 0.),
+        });
         let dev = |x: f64, y: f64, z: f64, ceiling: bool| DeviceInfo {
             handle: Handle(1),
             src: 0,

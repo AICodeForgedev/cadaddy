@@ -17,6 +17,7 @@ use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 mod attedit;
+mod dynauthor;
 mod dyngrip;
 pub(crate) mod extract;
 pub(crate) mod refedit;
@@ -72,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(has_doc),
         CommandSpec::new("purge", "Purge", purge::run)
             .alias(&["pu", "-purge"])
-            .params("{type?: all|blocks|dimstyles|groups|layers|linetypes|mleaderstyles|mlinestyles|tablestyles|textstyles|zerolength|emptytext (default all: every named type), names?: \"A*,B\" (default *)} → purged")
+            .params("{type?: all|blocks|dimstyles|groups|layers|linetypes|mleaderstyles|mlinestyles|tablestyles|textstyles|zerolength|emptytext (default all: every named type), names?: \"A*,B\" (default *), list?: true (report what would be purged, purge nothing: {blocks: [names], …, zeroLength: n, emptyText: n})} → purged")
             .interactive(|_| Ok(Box::new(purge::PurgeM::default()))),
         CommandSpec::new("blocks.list", "List Blocks", run_list).enabled(has_doc).noundo(),
         battman::battman_spec(),
@@ -86,6 +87,7 @@ pub fn specs() -> Vec<CommandSpec> {
     .chain(xclip::specs())
     .chain(refedit::specs())
     .chain(bedit::specs())
+    .chain(dynauthor::specs())
     .collect()
 }
 

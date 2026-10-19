@@ -81,7 +81,7 @@ impl LayoutM {
             "Template" => Stage::TemplateFile,
             "SAveas" => Stage::SaveLayout,
             other => {
-                s.echo(format!("LAYOUT {other} is not available yet."));
+                s.echo(format!("Invalid option keyword: {other}."));
                 return Ok(Step::Done);
             }
         };

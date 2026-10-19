@@ -92,7 +92,7 @@ fn writes_csv_and_tab_separated_files() {
     let csv = dir.join("out.csv");
     let r = s.execute("dataextraction", &json!({"blocks": "VALVE", "file": csv.to_str().unwrap()})).unwrap();
     assert_eq!(r["file"], csv.to_str().unwrap());
-    assert_eq!(std::fs::read_to_string(&csv).unwrap(), "Count,Name,PART,QTY\r\n2,VALVE,V-1,2\r\n1,VALVE,\"V-2, large\",\r\n");
+    assert_eq!(std::fs::read_to_string(&csv).unwrap(), "\u{feff}Count,Name,PART,QTY\r\n2,VALVE,V-1,2\r\n1,VALVE,\"V-2, large\",\r\n");
     let txt = dir.join("out.txt");
     s.execute("dataextraction", &json!({"blocks": "VALVE", "file": txt.to_str().unwrap()})).unwrap();
     assert_eq!(std::fs::read_to_string(&txt).unwrap(), "Count\tName\tPART\tQTY\r\n2\tVALVE\tV-1\t2\r\n1\tVALVE\tV-2, large\t\r\n");
@@ -138,7 +138,7 @@ fn too_many_rows_for_a_table_are_refused_before_anything_changes() {
 fn dataextraction_at_the_command_line_inserts_a_table() {
     let mut s = drawing();
     s.cmdline("dataextraction").unwrap();
-    assert!(s.prompt_text().contains("Enter block names to extract <*>:"), "{}", s.prompt_text());
+    assert!(s.prompt_text().contains("Enter block names to extract or [UPdate tables] <*>:"), "{}", s.prompt_text());
     s.cmdline("pump,plain").unwrap();
     assert!(s.prompt_text().contains("Combine identical rows? [Yes/No] <Yes>:"), "{}", s.prompt_text());
     s.cmdline("").unwrap();
@@ -162,7 +162,7 @@ fn eattext_at_the_command_line_writes_a_file() {
     }
     assert!(s.running.is_none());
     let text = std::fs::read_to_string(&csv).unwrap();
-    assert!(text.starts_with("Name,Handle,Layer,Position X,Position Y,Rotation,PART,QTY\r\nVALVE,"), "{text}");
+    assert!(text.starts_with("\u{feff}Name,Handle,Layer,Position X,Position Y,Rotation,PART,QTY\r\nVALVE,"), "{text}");
     assert_eq!(text.lines().count(), 4);
     let _ = std::fs::remove_dir_all(&dir);
 }

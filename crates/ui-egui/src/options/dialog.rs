@@ -197,6 +197,7 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         ui.horizontal(|ui| {
             for f in crate::SaveFormat::ALL {
                 let label = match f {
+                    crate::SaveFormat::Cdy => crate::tl!("CADaddy drawing (.cdy)"),
                     crate::SaveFormat::Dxf => crate::tl!("DXF"),
                     crate::SaveFormat::Dwg => crate::tl!("DWG"),
                 };
@@ -205,6 +206,13 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
                 }
             }
         });
+        ui.end_row();
+
+        ui.label("");
+        let mut copy = cadaddy_engine::cmd::file::dwg_copy();
+        if ui.checkbox(&mut copy, crate::tl!("Also save a DWG copy when saving a CADaddy drawing (.cdy)")).changed() {
+            changes.insert("DWGCOPY".into(), json!(i32::from(copy)));
+        }
         ui.end_row();
 
         ui.label(crate::tl!("Default save version"));
@@ -246,6 +254,7 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         ui.end_row();
     });
     hint(ui, crate::tl!("A drawing opened from a file keeps that file's format."));
+    hint(ui, crate::tl!("A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what)."));
     hint(ui, crate::tl!("Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off."));
 }
 

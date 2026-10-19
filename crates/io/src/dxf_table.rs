@@ -40,7 +40,7 @@ pub(crate) fn chunks(text: &str) -> Vec<String> {
 }
 
 /// The `1000` strings after `marker` in our xdata, joined; `None` without the marker.
-fn payload(tags: &[Tag], marker: &str) -> Option<String> {
+pub(crate) fn payload(tags: &[Tag], marker: &str) -> Option<String> {
     let x = xdata(tags, APP);
     let at = x.iter().position(|t| t.code == 1000 && t.str().trim() == marker)?;
     let mut out = String::new();

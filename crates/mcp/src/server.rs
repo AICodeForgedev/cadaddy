@@ -1,4 +1,6 @@
-//! JSON-RPC 2.0 framing and the MCP lifecycle / tools / resources methods.
+//! JSON-RPC 2.0 framing and the MCP lifecycle / tools / resources / prompts methods. After a
+//! tool call that opened or closed a drawing, `notifications/resources/list_changed` is queued
+//! ([`Server::take_notifications`]; [`Server::serve`] writes them after the reply).
 
 use std::io::{BufRead, Write};
 
@@ -6,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::backend::Backend;
 use crate::tools::{call_tool, tool_definitions};
+use crate::{prompts, resources};
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 const SUPPORTED: &[&str] = &[PROTOCOL_VERSION, "2025-03-26", "2024-11-05"];
@@ -23,6 +26,10 @@ Verify with inspect_drawing / query_entities and look with render.";
 pub struct Server {
     backend: Box<dyn Backend>,
     initialized: bool,
+    /// The open drawings when last looked at, to notice opening and closing.
+    drawings: Option<Vec<(String, String)>>,
+    /// Notifications to send after the current reply.
+    pending: Vec<Value>,
 }
 
 fn response(id: Value, result: Value) -> Value {
@@ -34,13 +41,30 @@ fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
 
 impl Server {
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false }
+        Self { backend, initialized: false, drawings: None, pending: Vec::new() }
     }
     pub fn backend(&mut self) -> &mut dyn Backend {
         self.backend.as_mut()
     }
     pub fn is_initialized(&self) -> bool {
         self.initialized
+    }
+
+    /// Notifications queued since the last call (JSON-RPC lines), to send after the reply.
+    pub fn take_notifications(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending).into_iter().map(|n| n.to_string()).collect()
+    }
+
+    /// After a tool call: when drawings were opened or closed since the client last listed the
+    /// resources (or since the first tool call), tell it the list changed. The backend is asked
+    /// only after a call, so nothing reaches it ahead of the client's own requests.
+    fn notice_drawings(&mut self) {
+        let now = resources::signature(self.backend.as_mut());
+        let changed = self.drawings.as_ref().is_some_and(|d| *d != now);
+        self.drawings = Some(now);
+        if changed && self.initialized {
+            self.pending.push(json!({"jsonrpc": "2.0", "method": "notifications/resources/list_changed"}));
+        }
     }
 
     /// Serve newline-delimited JSON-RPC until `input` closes (logs to stderr only).
@@ -56,8 +80,12 @@ impl Server {
             if let Some(reply) = reply {
                 output.write_all(reply.as_bytes())?;
                 output.write_all(b"\n")?;
-                output.flush()?;
             }
+            for n in self.take_notifications() {
+                output.write_all(n.as_bytes())?;
+                output.write_all(b"\n")?;
+            }
+            output.flush()?;
         }
         Ok(())
     }
@@ -109,7 +137,7 @@ impl Server {
                 let version = if SUPPORTED.contains(&asked) { asked } else { PROTOCOL_VERSION };
                 Ok(json!({
                     "protocolVersion": version,
-                    "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false}},
+                    "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": true, "subscribe": false}, "prompts": {"listChanged": false}},
                     "serverInfo": {"name": "cadaddy", "title": "CADaddy", "version": env!("CARGO_PKG_VERSION")},
                     "instructions": format!("{INSTRUCTIONS} Backend: {}.", self.backend.describe()),
                 }))
@@ -119,21 +147,25 @@ impl Server {
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing tool `name`".to_string()))?;
                 let args = params.get("arguments").unwrap_or(&Value::Null);
-                call_tool(self.backend.as_mut(), name, args).map_err(|m| (INVALID_PARAMS, m))
+                let r = call_tool(self.backend.as_mut(), name, args).map_err(|m| (INVALID_PARAMS, m));
+                self.notice_drawings();
+                r
             }
-            "resources/list" => Ok(json!({"resources": [
-                {"uri": "cadaddy://drawing", "name": "Active drawing", "mimeType": "application/json"},
-                {"uri": "cadaddy://commands", "name": "Command catalog", "mimeType": "application/json"},
-            ]})),
+            "resources/list" => {
+                // The list the client now knows: later changes to it are notified.
+                let (list, sig) = resources::list(self.backend.as_mut());
+                self.drawings = Some(sig);
+                Ok(list)
+            }
+            "resources/templates/list" => Ok(resources::templates()),
             "resources/read" => {
-                let uri = params.get("uri").and_then(Value::as_str).unwrap_or("");
-                let v = match uri {
-                    "cadaddy://drawing" => self.backend.call("drawing.inspect", json!({})),
-                    "cadaddy://commands" => self.backend.call("engine.commands", json!({})),
-                    _ => return Err((-32002, format!("unknown resource `{uri}`"))),
-                }
-                .map_err(|e| (-32603, e))?;
-                Ok(json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": v.to_string()}]}))
+                let uri = params.get("uri").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing resource `uri`".to_string()))?;
+                resources::read(self.backend.as_mut(), uri)
+            }
+            "prompts/list" => Ok(prompts::list()),
+            "prompts/get" => {
+                let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing prompt `name`".to_string()))?;
+                prompts::get(name, params.get("arguments").unwrap_or(&Value::Null)).map_err(|m| (INVALID_PARAMS, m))
             }
             _ => Err((METHOD_NOT_FOUND, format!("method `{method}` not found"))),
         }

@@ -1,12 +1,17 @@
 //! Named views: VIEW / -VIEW (Save, Window, Restore, Delete, ? list, sEttings > Layer snapshot).
 //!
 //! A named view keeps the centre and size of what was shown, in model space or a layout, and
-//! optionally a layer snapshot (a layer state restored with it). Views are stored in the drawing
-//! and round-trip through the DXF VIEW table. Restoring one is a view change like ZOOM: it goes
-//! into the view history, not the undo stack (a layer snapshot it restores is an undo step).
+//! optionally a layer snapshot (a layer state restored with it). A model space view also keeps
+//! its direction (a preset such as Front or SW Isometric, or any 3D direction), and a view can
+//! keep a UCS (made current when it is restored; saved with it while UCSVIEW is 1) and a solid
+//! background colour. Views are stored in the drawing and round-trip through the DXF VIEW table.
+//! Restoring one is a view change like ZOOM: it goes into the view history, not the undo stack
+//! (a layer snapshot or UCS it restores is an undo step).
 
-use cadaddy_doc::{LayerState, NamedView, Space};
-use cadaddy_geom::{Bounds2, Vec2};
+use cadaddy_color::Color;
+use cadaddy_doc::{HVal, LayerState, NamedView, Space, ViewUcs};
+use cadaddy_geom::view3::{self, Projection};
+use cadaddy_geom::{Bounds2, Vec2, Vec3};
 use serde_json::{Value, json};
 
 use super::super::qselect::wildcard;
@@ -22,7 +27,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["View", "Named Views..."])
             .alias(&["v"])
             .params(
-                "{option: save|window|restore|delete|list|settings, name? (save/window/restore), names?: \"a,b*\" | [names] (delete/list; wildcards), p1?, p2? (window), layerSnapshot?: bool (save: default the Layer snapshot setting; settings: change it)} (typed VIEW / -VIEW: option prompts)",
+                "{option: save|window|restore|delete|list|settings, name? (save/window/restore; settings: the view to change), names?: \"a,b*\" | [names] (delete/list; wildcards), p1?, p2? (window), layerSnapshot?: bool (save: default the Layer snapshot setting; settings: change it), orthographic?: top|bottom|front|back|left|right|swiso|seiso|neiso|nwiso (save: that view of the extents instead of the current one), ucs?: \"current\"|\"world\"|\"none\"|a named UCS|{origin: [x,y(,z)], angle?: degrees} (save, settings: the UCS restored with the view; default on save: the current UCS when UCSVIEW is 1 and it isn't the world), background?: colour|\"none\" (save, settings: a solid background)} (typed VIEW / -VIEW: option prompts)",
             )
             .interactive(|_| Ok(Box::new(ViewM::default()))),
     ]
@@ -72,7 +77,19 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
                 _ => None,
             };
             let snapshot = p.get("layerSnapshot").and_then(Value::as_bool).unwrap_or(s.settings.view_layer_snapshot);
-            save(s, name, window, snapshot)
+            let ortho = match str_param(p, "orthographic") {
+                Some(o) => Some(view3::preset(o).ok_or_else(|| bad("view", format!("unknown orthographic view \"{o}\"")))?),
+                None => None,
+            };
+            let ucs = match p.get("ucs") {
+                Some(u) => ucs_param(s, u)?,
+                None => default_ucs(s)?,
+            };
+            let background = match p.get("background") {
+                Some(b) => background_param(b)?,
+                None => None,
+            };
+            save(s, name, window, snapshot, &Extra { ortho, ucs, background })
         }
         "restore" | "r" => {
             let name = str_param(p, "name").ok_or_else(|| bad("view", "`name` is required"))?;
@@ -89,7 +106,10 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(b) = p.get("layerSnapshot").and_then(Value::as_bool) {
                 s.settings.view_layer_snapshot = b;
             }
-            Ok(json!({ "layerSnapshot": s.settings.view_layer_snapshot }))
+            match str_param(p, "name") {
+                Some(name) => change(s, name, p),
+                None => Ok(json!({ "layerSnapshot": s.settings.view_layer_snapshot })),
+            }
         }
         "orthographic" | "o" => {
             let name = str_param(p, "name").ok_or_else(|| bad("view", "`name` (top, bottom, front, back, left or right) is required"))?;
@@ -101,8 +121,109 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
+/// What a saved view keeps besides its area: a preset direction to save instead of the current
+/// one, its UCS and its background.
+#[derive(Default)]
+struct Extra {
+    ortho: Option<Vec3>,
+    ucs: Option<ViewUcs>,
+    background: Option<Color>,
+}
+
+/// The UCS a view takes by default: the current one while UCSVIEW is 1 (the default), unless it
+/// is the world.
+fn default_ucs(s: &Session) -> Result<Option<ViewUcs>> {
+    let h = &s.doc()?.header;
+    if h.get("UCSVIEW").and_then(HVal::as_i64).unwrap_or(1) == 0 {
+        return Ok(None);
+    }
+    let u = ViewUcs::current(h);
+    Ok((!u.is_world()).then_some(u))
+}
+
+/// `ucs`: "current", "world", "none", a named UCS, or `{origin, angle?}` (a UCS in the plan).
+fn ucs_param(s: &Session, v: &Value) -> Result<Option<ViewUcs>> {
+    if let Some(t) = v.as_str() {
+        return match t.trim().to_ascii_lowercase().as_str() {
+            "none" | "" => Ok(None),
+            "current" => Ok(Some(ViewUcs::current(&s.doc()?.header))),
+            "world" => Ok(Some(ViewUcs { name: String::new(), ..ViewUcs::plan(Vec3::ZERO, 0.0) })),
+            _ => {
+                let u = s
+                    .doc()?
+                    .ucss
+                    .iter()
+                    .find(|u| u.name.eq_ignore_ascii_case(t.trim()))
+                    .ok_or_else(|| bad("view", format!("no UCS named \"{}\"", t.trim())))?;
+                Ok(Some(ViewUcs { name: u.name.clone(), origin: u.origin, x_axis: u.x_axis, y_axis: u.y_axis }))
+            }
+        };
+    }
+    let origin = v
+        .get("origin")
+        .and_then(Value::as_array)
+        .and_then(|a| {
+            let n: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
+            match n.as_slice() {
+                [x, y] => Some(Vec3::new(*x, *y, 0.0)),
+                [x, y, z] => Some(Vec3::new(*x, *y, *z)),
+                _ => None,
+            }
+        })
+        .filter(|o| o.is_finite() && o.len() <= 1e15)
+        .ok_or_else(|| bad("view", "`ucs` must be current, world, none, a UCS name or {origin: [x,y], angle?}"))?;
+    let angle = match v.get("angle") {
+        None => 0.0,
+        Some(a) => a.as_f64().filter(|a| a.is_finite() && a.abs() <= 1e6).ok_or_else(|| bad("view", "`ucs.angle` must be a number of degrees"))?,
+    };
+    Ok(Some(ViewUcs::plan(origin, angle.to_radians())))
+}
+
+/// `background`: a colour (an index, a name, "r,g,b" or "#rrggbb") or "none".
+fn background_param(v: &Value) -> Result<Option<Color>> {
+    if v.is_null() || v.as_str().is_some_and(|t| t.trim().eq_ignore_ascii_case("none")) {
+        return Ok(None);
+    }
+    let c = v.as_str().and_then(Color::parse).or_else(|| v.as_i64().and_then(|i| i16::try_from(i).ok()).map(Color::from_aci));
+    match c {
+        Some(c @ (Color::Index(_) | Color::True(_))) => Ok(Some(c)),
+        _ => Err(bad("view", "`background` must be a colour (1-255, a name, \"r,g,b\" or \"#rrggbb\") or \"none\"")),
+    }
+}
+
+/// VIEW settings for one saved view: its UCS and background.
+fn change(s: &mut Session, name: &str, p: &Value) -> Result<Value> {
+    let ucs = p.get("ucs").map(|u| ucs_param(s, u)).transpose()?;
+    let background = p.get("background").map(background_param).transpose()?;
+    let d = s.doc_mut()?;
+    let v = d
+        .views
+        .iter_mut()
+        .find(|v| v.name.eq_ignore_ascii_case(name.trim()))
+        .ok_or_else(|| EngineError::Other(format!("Could not find view \"{}\".", name.trim())))?;
+    if let Some(u) = ucs {
+        v.ucs = u;
+    }
+    if let Some(b) = background {
+        v.background = b;
+    }
+    let v = v.clone();
+    Ok(
+        json!({ "name": v.name, "ucs": ucs_label(&v), "background": v.background.map(Color::name), "message": format!("View \"{}\" changed.", v.name) }),
+    )
+}
+
+fn ucs_label(v: &NamedView) -> Value {
+    match &v.ucs {
+        None => Value::Null,
+        Some(u) if !u.name.is_empty() => json!(u.name),
+        Some(u) if u.is_world() => json!("World"),
+        Some(u) => json!({ "origin": [u.origin.x, u.origin.y, u.origin.z], "angle": u.angle().to_degrees() }),
+    }
+}
+
 /// Save the current view (or `window`) as `name`, replacing a view of that name.
-fn save(s: &mut Session, name: &str, window: Option<Bounds2>, snapshot: bool) -> Result<Value> {
+fn save(s: &mut Session, name: &str, window: Option<Bounds2>, snapshot: bool, extra: &Extra) -> Result<Value> {
     if !valid_name(name) {
         return Err(EngineError::Other(format!("\"{name}\" is not a valid view name.")));
     }
@@ -114,7 +235,30 @@ fn save(s: &mut Session, name: &str, window: Option<Bounds2>, snapshot: bool) ->
         (Space::Paper(l), false) => Some(l.clone()),
         _ => None,
     };
+    if extra.ortho.is_some() && (layout.is_some() || in_viewport) {
+        return Err(EngineError::Other("Orthographic views are saved from model space.".into()));
+    }
+    // The direction: the preset asked for, else the current one in model space.
+    let dir = match extra.ortho {
+        Some(d) => (!view3::is_plan(d)).then(|| d.normalized()),
+        None if layout.is_none() && !in_viewport && window.is_none() && !view3::is_plan(st.view_dir) => Some(st.view_dir),
+        None => None,
+    };
     let (center, height, width) = match window {
+        _ if extra.ortho.is_some() => {
+            // The preset's view of the extents (as choosing the preset shows them).
+            let p = match dir {
+                Some(d) => Projection::new(d),
+                None => Projection::plan_twist(0.0),
+            };
+            let b = p.map_or(Bounds2::EMPTY, |p| super::view3d::projected_extents(&st.doc, &p));
+            if b.is_empty() || !(b.width().is_finite() && b.height().is_finite()) {
+                let f = st.view();
+                (Vec2::ZERO, f.height, f.height * w / h.max(1.0))
+            } else {
+                (b.center(), b.height().max(1e-9) * 1.1, b.width().max(1e-9) * 1.1)
+            }
+        }
         Some(b) => {
             if !(b.width() > 1e-12 && b.height() > 1e-12 && b.min.is_finite() && b.max.is_finite()) {
                 return Err(EngineError::Other("The window has no area.".into()));
@@ -129,12 +273,12 @@ fn save(s: &mut Session, name: &str, window: Option<Bounds2>, snapshot: bool) ->
     };
     let replaced = find(&st.doc.views, name).map(|v| v.name.clone());
     // The centre is on the view plane (display coordinates), which the twist turns.
-    let twist = if layout.is_some() || window.is_some() { 0.0 } else { st.twist() };
+    let twist = if layout.is_some() || window.is_some() || extra.ortho.is_some() { 0.0 } else { st.twist() };
     let d = s.doc_mut()?;
     let layer_state = snapshot.then(|| {
         let state = snapshot_name(name);
         d.layer_states.retain(|l| !l.name.eq_ignore_ascii_case(&state));
-        d.layer_states.push(LayerState { name: state.clone(), layers: d.layers.clone() });
+        d.layer_states.push(LayerState::new(&state, d.layers.clone()));
         state
     });
     if let Some(old) = &replaced {
@@ -145,7 +289,18 @@ fn save(s: &mut Session, name: &str, window: Option<Bounds2>, snapshot: bool) ->
         }
         d.views.retain(|v| !v.name.eq_ignore_ascii_case(old));
     }
-    d.views.push(NamedView { name: name.to_string(), center, height, width, layer_state, twist, layout });
+    d.views.push(NamedView {
+        name: name.to_string(),
+        center,
+        height,
+        width,
+        layer_state,
+        twist,
+        layout,
+        dir,
+        ucs: extra.ucs.clone(),
+        background: extra.background,
+    });
     let msg = if replaced.is_some() { format!("View \"{name}\" replaced.") } else { format!("View \"{name}\" saved.") };
     Ok(json!({ "name": name, "center": [center.x, center.y], "height": height, "width": width, "message": msg }))
 }
@@ -183,14 +338,22 @@ fn restore(s: &mut Session, name: &str) -> Result<Value> {
             }
             let (w, h) = s.viewport_px;
             let st = s.state_mut()?;
-            // Its twist first: the centre is on its (turned) view plane. In a 3D view there is
-            // none to set.
+            // Its direction (on the Model tab; a layout viewport shows the plan) and twist
+            // first: the centre is on its view plane.
+            if st.mspace.is_none() {
+                st.view_dir = v.dir.filter(|d| d.is_finite() && d.len() > 1e-12).map_or(Vec3::Z, Vec3::normalized);
+                st.view_twist = 0.0;
+                st.view_background = v.background;
+            }
             st.set_twist(v.twist);
             let aspect = st.zoom_aspect(w / h.max(1.0)).max(1e-9);
             st.set_zoom_frame(View { center: v.center, height: v.height.max(v.width / aspect) });
         }
     }
     let mut msg = format!("View \"{}\" restored.", v.name);
+    if let Some(u) = &v.ucs {
+        u.make_current(&mut s.doc_mut()?.header);
+    }
     if let Some(state) = &v.layer_state {
         let d = s.doc_mut()?;
         match d.layer_states.iter().find(|l| l.name.eq_ignore_ascii_case(state)).cloned() {
@@ -236,6 +399,8 @@ fn list(s: &mut Session, pats: &[String]) -> Result<Value> {
             json!({
                 "name": v.name, "space": space_label(v), "center": [v.center.x, v.center.y], "height": v.height,
                 "width": v.width, "layerSnapshot": v.layer_state.is_some(),
+                "direction": v.dir.map(|d| view3::preset_label(d).map_or_else(|| json!([d.x, d.y, d.z]), |l| json!(l))),
+                "ucs": ucs_label(v), "background": v.background.map(Color::name),
             })
         })
         .collect();
@@ -258,6 +423,15 @@ enum Stage {
     Settings,
     Snapshot,
     Ortho,
+    /// sEttings > Background or Ucs: the view to change, then its new value.
+    SettingName(Setting),
+    SettingValue(Setting),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Setting {
+    Background,
+    Ucs,
 }
 
 /// -VIEW: "Enter an option [?/Delete/Orthographic/Restore/Save/sEttings/Window]:".
@@ -291,7 +465,10 @@ impl Interactive for ViewM {
             Stage::Save | Stage::WindowName => Prompt::new("Enter view name to save", Accept::TEXT),
             Stage::WindowFirst => Prompt::new("Specify first corner", Accept::POINT),
             Stage::WindowSecond(a) => Prompt::new("Specify opposite corner", Accept::POINT).base(a),
-            Stage::Settings => Prompt::new("Enter an option", Accept::TEXT).kw(&["Layer snapshot"]),
+            Stage::Settings => Prompt::new("Enter an option", Accept::TEXT).kw(&["Background", "Layer snapshot", "Ucs"]),
+            Stage::SettingName(_) => Prompt::new("Enter view name", Accept::TEXT),
+            Stage::SettingValue(Setting::Background) => Prompt::new("Enter a background color", Accept::TEXT).kw(&["None"]),
+            Stage::SettingValue(Setting::Ucs) => Prompt::new("Enter a UCS name", Accept::TEXT).kw(&["Current", "World", "None"]).default("Current"),
             Stage::Ortho => Prompt::new("Enter an option", Accept::TEXT).kw(&["Top", "Bottom", "Front", "BAck", "Left", "Right"]).default("Top"),
             Stage::Snapshot => {
                 let on = if s.settings.view_layer_snapshot { "Yes" } else { "No" };
@@ -360,7 +537,8 @@ impl Interactive for ViewM {
                     return Ok(Step::Continue);
                 }
                 let snapshot = s.settings.view_layer_snapshot;
-                report(s, |s| save(s, &name, None, snapshot))
+                let extra = Extra { ucs: default_ucs(s)?, ..Extra::default() };
+                report(s, |s| save(s, &name, None, snapshot, &extra))
             }
             Stage::WindowFirst => match i {
                 Input::Point(a) => {
@@ -374,7 +552,8 @@ impl Interactive for ViewM {
                 Input::Point(b) => {
                     let snapshot = s.settings.view_layer_snapshot;
                     let name = std::mem::take(&mut self.name);
-                    report(s, |s| save(s, &name, Some(Bounds2::new(a, b)), snapshot))
+                    let extra = Extra { ucs: default_ucs(s)?, ..Extra::default() };
+                    report(s, |s| save(s, &name, Some(Bounds2::new(a, b)), snapshot, &extra))
                 }
                 Input::Enter => Ok(Step::Done),
                 _ => Err(EngineError::Other("Requires a point.".into())),
@@ -384,9 +563,34 @@ impl Interactive for ViewM {
                     self.stage = Stage::Snapshot;
                     Ok(Step::Continue)
                 }
+                Some(t) if !t.is_empty() && ("background".starts_with(t.as_str()) || "ucs".starts_with(t.as_str())) => {
+                    self.stage = Stage::SettingName(if t.starts_with('b') { Setting::Background } else { Setting::Ucs });
+                    Ok(Step::Continue)
+                }
                 None if i == Input::Enter => Ok(Step::Done),
                 _ => Err(EngineError::Other("Invalid option keyword.".into())),
             },
+            Stage::SettingName(k) => match text.filter(|t| !t.is_empty()) {
+                Some(name) => {
+                    if find(&s.doc()?.views, &name).is_none() {
+                        return Err(EngineError::Other(format!("Could not find view \"{name}\".")));
+                    }
+                    self.name = name;
+                    self.stage = Stage::SettingValue(k);
+                    Ok(Step::Continue)
+                }
+                None => Ok(Step::Done),
+            },
+            Stage::SettingValue(k) => {
+                let value = match (k, text.filter(|t| !t.is_empty())) {
+                    (Setting::Ucs, None) => "current".to_string(),
+                    (Setting::Background, None) => return Ok(Step::Done),
+                    (_, Some(t)) => t,
+                };
+                let key = if k == Setting::Background { "background" } else { "ucs" };
+                let name = self.name.clone();
+                report(s, |s| change(s, &name, &json!({ key: value })))
+            }
             Stage::Snapshot => {
                 let on = match text.map(|t| t.to_ascii_lowercase()) {
                     None if i == Input::Enter => s.settings.view_layer_snapshot,

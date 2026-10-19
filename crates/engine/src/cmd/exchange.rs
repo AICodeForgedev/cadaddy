@@ -22,7 +22,7 @@ use super::*;
 use crate::{EngineError, Result, Session};
 
 /// Formats EXPORT writes (the io layer picks the writer from the extension).
-pub const EXPORT_FORMATS: &[&str] = &["dxf", "dwg", "svg", "png", "pdf"];
+pub const EXPORT_FORMATS: &[&str] = &["cdy", "dxf", "dwg", "svg", "png", "pdf", "glb", "gltf", "obj", "stl"];
 /// Default and largest plot preview width, in pixels.
 const PREVIEW_PX: u64 = 1200;
 const MAX_PREVIEW_PX: u64 = 4096;
@@ -33,15 +33,22 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("pdfimport", "PDF Import", run_pdfimport)
             .menu(&["Insert", "PDF Import..."])
-            .params("{path | data (base64) + name, page? (1-based, default 1), scale?: number (drawing units per sheet inch: 96 = 1/8 in = 1 ft in an inch drawing) | a scale note (1/8\" = 1'-0\") | auto (default: the sheet's own scale note, else 1), layers?: pdf|pen|object (pdf: the PDF's layers, else one per colour and line weight; object: PDF_Geometry, PDF_Solid Fills, PDF_Text), whiteFills?: bool (default false), text?: bool, join?: bool (join touching pieces, round loops to circles; default true), layout?: bool (a layout showing the sheet at the scale; default true), markups?: bool (annotations on PDF-MARKUP; default true), images?: bool (raster images as IMAGE objects; default true), imageFolder?: folder for the image PNG files (default \"<PDF name> images\" next to the PDF), imagePrefix?: file name start (default \"<PDF name>-p<page>\"), newDrawing?: bool (open as a new drawing), at?: [x,y]} -> {entities, scale, scaleSource, sheet, pages, stats, notes, layers, imageFiles, imageFolder}"),
+            .params("{path | data (base64) + name, page? (1-based, default 1), scale?: number (drawing units per sheet inch: 96 = 1/8 in = 1 ft in an inch drawing) | a scale note (1/8\" = 1'-0\") | auto (default: the sheet's own scale note, else 1), layers?: pdf|pen|object (pdf: the PDF's layers, else one per colour and line weight; object: PDF_Geometry, PDF_Solid Fills, PDF_Text), whiteFills?: bool (default false), text?: bool, join?: bool (join touching pieces, round loops to circles; default true), layout?: bool (a layout showing the sheet at the scale; default true), markups?: bool (annotations on PDF-MARKUP; default true), images?: bool (raster images as IMAGE objects; default true), imageFolder?: folder for the image PNG files (default \"<PDF name> images\" next to the PDF), imagePrefix?: file name start (default \"<PDF name>-p<page>\"), newDrawing?: bool (open as a new drawing), at?: [x,y]} -> {entities, scale, scaleSource, sheet, pages, stats, notes, layers, imageFiles, imageFolder}")
+            .interactive(|_| Ok(Box::new(PdfImportM::default()))),
         CommandSpec::new("import", "Import...", run_import)
             .menu(&["File", "Import..."])
             .alias(&["imp"])
-            .params("{path | data: base64, name?: \"x.dwg\"} (DXF or DWG), at?: [x,y] (default 0,0), scale?: (default 1) → {imported, handles, layers, styles, blocks}"),
+            .params("{path | data: base64, name?: \"x.dwg\"} (DXF, DWG, OBJ, STL, glTF/GLB), at?: [x,y] (default 0,0), scale?: (default 1) → {imported, handles, layers, styles, blocks, materials}"),
+        CommandSpec::new("stlout", "STL Out", run_stlout)
+            .menu(&["File", "Export STL..."])
+            .params("{handles?, path? (else returns base64 `data`)} → binary STL of the selected objects' surfaces (Z up, drawing units)")
+            .noundo()
+            .interactive(|_| Ok(Box::new(super::machines::SelectRun::new("stlout.pick", "STLOUT")))),
+        CommandSpec::new("stlout.pick", "STL Out", run_stlout_picked).noundo(),
         CommandSpec::new("export", "Export...", run_export)
             .menu(&["File", "Export..."])
             .alias(&["exp"])
-            .params("{path? (else returns base64 `data`), format?: dxf|dwg|svg|png|pdf (default: the path's extension)} → {format, bytes, path? | data}")
+            .params("{path? (else returns base64 `data`), format?: cdy|dxf|dwg|svg|png|pdf|glb|gltf|obj|stl (default: the path's extension)} → {format, bytes, path? | data} (OBJ writes its .mtl and textures beside it)")
             .noundo(),
         CommandSpec::new("preview", "Plot Preview", run_preview)
             .menu(&["File", "Plot Preview"])
@@ -59,17 +66,17 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("attach", "Attach", run_attach)
             .params(
-                "{path: an image (PNG, JPEG: as IMAGEATTACH) or a drawing (DWG, DXF: as XATTACH), and that command's other parameters} → its reply. PDF, DWF and DGN underlays are not available yet (PDFIMPORT converts a PDF)",
+                "{path: an image (PNG, JPEG: as IMAGEATTACH) or a drawing (DWG, DXF: as XATTACH), and that command's other parameters} → its reply. A PDF attaches as an underlay (PDFATTACH); DWF and DGN files need readers CADaddy doesn't have",
             )
             .interactive(|_| Ok(Box::new(AttachM::default()))),
         CommandSpec::new("share", "Share", |_, _| {
-            Err(EngineError::Other("SHARE is not available yet: there is no online service to share through; EXPORT or PUBLISH the drawing and send the file".into()))
+            Err(EngineError::Other("SHARE needs an online sharing service, which CADaddy doesn't use; EXPORT or PUBLISH the drawing and send the file".into()))
         })
-        .params("not available yet")
+        .params("{} (refused: no online sharing service; EXPORT or PUBLISH and send the file)")
         .noundo(),
         CommandSpec::new("3dorbit", "Orbit", |_, _| Err(EngineError::Other("3DORBIT: hold Shift and drag with the middle mouse button to orbit, or click the ViewCube (View ▸ 3D Views for the preset views).".into())))
             .alias(&["3do", "orbit"])
-            .params("not available yet")
+            .params("{} (interactive only: Shift + middle-button drag, or the ViewCube)")
             .noundo(),
     ]
 }
@@ -85,10 +92,17 @@ fn run_attach(s: &mut Session, p: &Value) -> Result<Value> {
 fn attach_spec(path: &str) -> Result<&'static CommandSpec> {
     let id = match extension(path).as_str() {
         "png" | "jpg" | "jpeg" => "imageattach",
-        "dwg" | "dxf" => "xattach",
+        "cdy" | "dwg" | "dxf" => "xattach",
         "pdf" => "pdfattach",
-        "dwf" | "dwfx" | "dgn" => return Err(bad("attach", "DWF and DGN underlays are not available yet")),
-        other => return Err(bad("attach", format!("files of type .{other} can't be attached; choose an image (PNG, JPEG) or a drawing (DWG, DXF)"))),
+        "dwf" | "dwfx" | "dgn" => {
+            return Err(bad(
+                "attach",
+                "DWF and DGN underlays need DWF/DGN readers, which CADaddy doesn't have; attach a PDF, image or drawing instead",
+            ));
+        }
+        other => {
+            return Err(bad("attach", format!("files of type .{other} can't be attached; choose an image (PNG, JPEG) or a drawing (CDY, DWG, DXF)")));
+        }
     };
     command_specs().iter().find(|c| c.id == id).ok_or_else(|| bad("attach", format!("{id} is missing")))
 }
@@ -150,6 +164,76 @@ impl crate::Interactive for AttachM {
     }
 }
 
+/// Typed PDFIMPORT (FILEDIA 0, or no file picker): the file, the page and the insertion point on
+/// the command line (tester 0.7.7g: it returned to "Command:" and the path ran as a command).
+#[derive(Default)]
+struct PdfImportM {
+    path: Option<String>,
+    page: Option<u64>,
+}
+
+impl crate::Interactive for PdfImportM {
+    fn name(&self) -> &'static str {
+        "PDFIMPORT"
+    }
+    fn prompt(&self, _s: &Session) -> crate::Prompt {
+        use crate::{Accept, Prompt};
+        match (&self.path, self.page) {
+            (None, _) => Prompt::new("Enter name of PDF file to import", Accept::TEXT),
+            (Some(_), None) => Prompt::new("Enter page number", Accept::NUMBER).default("1"),
+            (Some(_), Some(_)) => Prompt::new("Specify insertion point", Accept::POINT).default("0,0"),
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: crate::Input) -> Result<crate::Step> {
+        use crate::{Input, Step};
+        if matches!(i, Input::Cancel) {
+            return Ok(Step::Cancel);
+        }
+        let Some(path) = self.path.clone() else {
+            let (Input::Text(t) | Input::Keyword(t)) = i else { return Ok(Step::Cancel) };
+            let path = t.trim().trim_matches('"').to_string();
+            if path.is_empty() {
+                return Ok(Step::Cancel);
+            }
+            if !std::path::Path::new(&path).is_file() {
+                s.echo(format!("Can't find the file {path}"));
+                return Ok(Step::Continue);
+            }
+            self.path = Some(path);
+            return Ok(Step::Continue);
+        };
+        let Some(page) = self.page else {
+            let page = match i {
+                Input::Enter => 1,
+                Input::Text(t) | Input::Keyword(t) => match t.trim().parse::<u64>() {
+                    Ok(n) if n >= 1 => n,
+                    _ => {
+                        s.echo("Requires a page number of 1 or more.".to_string());
+                        return Ok(Step::Continue);
+                    }
+                },
+                _ => return Ok(Step::Continue),
+            };
+            self.page = Some(page);
+            return Ok(Step::Continue);
+        };
+        let at = match i {
+            Input::Point(p) => p,
+            Input::Enter => Vec2::ZERO,
+            Input::Text(t) => match crate::prompt::parse_point(&t, Vec2::ZERO) {
+                Some(p) => p,
+                None => {
+                    s.echo("Requires a point.".to_string());
+                    return Ok(Step::Continue);
+                }
+            },
+            _ => return Ok(Step::Continue),
+        };
+        run_pdfimport(s, &json!({"path": path, "page": page, "at": [at.x, at.y]}))?;
+        Ok(Step::Done)
+    }
+}
+
 fn extension(path: &str) -> String {
     std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
@@ -180,9 +264,32 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         None => path.map(extension).unwrap_or_default(),
     };
     if !EXPORT_FORMATS.contains(&format.as_str()) {
-        return Err(bad("export", "`format` must be dxf, dwg, svg, png or pdf (or give a `path` with one of those extensions)"));
+        return Err(bad(
+            "export",
+            "`format` must be cdy, dxf, dwg, svg, png, pdf, glb, gltf, obj or stl (or give a `path` with one of those extensions)",
+        ));
     }
-    let bytes = (hooks.write)(s.doc()?, &format!("export.{format}")).map_err(|e| bad("export", e))?;
+    // A PNG of model space shown in 3D or in a visual style: the shaded view, fitted.
+    // OBJ: the OBJ, its MTL and textures, written side by side.
+    if format == "obj"
+        && let Some(path) = path
+    {
+        let stem = std::path::Path::new(path).file_stem().map(|x| x.to_string_lossy().into_owned()).unwrap_or_else(|| "export".into());
+        let bundle = (hooks.write)(s.doc()?, &format!("{stem}.obj.bundle")).map_err(|e| bad("export", e))?;
+        let dir = std::path::Path::new(path).parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+        let mut files = Vec::new();
+        for (i, (name, data)) in unbundle(&bundle).into_iter().enumerate() {
+            let target = if i == 0 { path.to_string() } else { dir.join(&name).to_string_lossy().into_owned() };
+            write_file("export", &target, &data)?;
+            files.push(target);
+        }
+        return Ok(json!({ "path": path, "format": format, "files": files, "message": format!("Exported to {path}") }));
+    }
+    let shaded = if format == "png" { super::view::view3d::shaded_png(s, 2400, 1600) } else { None };
+    let bytes = match shaded {
+        Some(b) => b,
+        None => (hooks.write)(s.doc()?, &format!("export.{format}")).map_err(|e| bad("export", e))?,
+    };
     match path {
         Some(path) => {
             write_file("export", path, &bytes)?;
@@ -190,6 +297,66 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         }
         None => Ok(json!({ "data": base64_encode(&bytes), "format": format, "bytes": bytes.len() })),
     }
+}
+
+/// The files of an OBJ bundle (see `io::mesh3d_io::obj_bundle`): names without folders.
+fn unbundle(b: &[u8]) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    let u32_at = |o: usize| b.get(o..o + 4).map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]) as usize);
+    while let Some(nl) = u32_at(at) {
+        let Some(name) = b.get(at + 4..at + 4 + nl).map(|n| String::from_utf8_lossy(n).into_owned()) else { break };
+        let Some(dl) = u32_at(at + 4 + nl) else { break };
+        let Some(data) = b.get(at + 8 + nl..at + 8 + nl + dl) else { break };
+        let name = std::path::Path::new(&name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if !name.is_empty() {
+            out.push((name, data.to_vec()));
+        }
+        at += 8 + nl + dl;
+    }
+    out
+}
+
+// ---------- STLOUT ----------
+
+fn run_stlout(s: &mut Session, p: &Value) -> Result<Value> {
+    let hooks = io().ok_or_else(|| bad("stlout", "file formats are not available in this build"))?;
+    let hs = super::targets(s, p)?;
+    let d = s.doc()?;
+    let mut only = d.clone();
+    let mut store = cadaddy_doc::EntityStore::new();
+    for h in &hs {
+        if let Some(e) = d.entity(*h) {
+            store.push((**e).clone());
+        }
+    }
+    if store.iter().next().is_none() {
+        return Err(bad("stlout", "select the objects to write"));
+    }
+    only.model = store;
+    let bytes = (hooks.write)(&only, "stlout.stl").map_err(|e| bad("stlout", e))?;
+    // 84 header bytes and nothing after: no surfaces among them.
+    if bytes.len() <= 84 {
+        return Err(bad("stlout", "the selected objects have no surfaces (3D solids, meshes, 3D faces)"));
+    }
+    match str_param(p, "path") {
+        Some(path) => {
+            write_file("stlout", path, &bytes)?;
+            Ok(json!({ "path": path, "bytes": bytes.len(), "triangles": (bytes.len() - 84) / 50, "message": format!("Exported to {path}") }))
+        }
+        None => Ok(json!({ "data": base64_encode(&bytes), "bytes": bytes.len(), "triangles": (bytes.len() - 84) / 50 })),
+    }
+}
+
+/// STLOUT at the prompts: the picked objects into a file named after the drawing.
+fn run_stlout_picked(s: &mut Session, p: &Value) -> Result<Value> {
+    let base = s.state()?.path.clone().unwrap_or_else(|| s.state().map(|st| st.title.clone()).unwrap_or_default());
+    let path = std::path::Path::new(&base).with_extension("stl").to_string_lossy().into_owned();
+    let mut q = p.clone();
+    if let Some(o) = q.as_object_mut() {
+        o.insert("path".into(), json!(path));
+    }
+    run_stlout(s, &q)
 }
 
 // ---------- IMPORT ----------
@@ -275,6 +442,14 @@ fn import_drawing(s: &mut Session, src: &Drawing, at: Vec2, scale: f64, file: &s
     let space = s.space();
     let d = s.doc_mut()?;
     let (layers, styles) = merge_tables(d, src);
+    // Materials the objects use that the drawing doesn't have yet.
+    let mut materials = 0usize;
+    for m in &src.materials {
+        if !d.materials.iter().any(|x| x.name.eq_ignore_ascii_case(&m.name)) {
+            d.materials.push(m.clone());
+            materials += 1;
+        }
+    }
     let renames = block_names(d, src);
     for (from, to) in &renames {
         let Some(b) = src.blocks.get(from) else { continue };
@@ -304,6 +479,7 @@ fn import_drawing(s: &mut Session, src: &Drawing, at: Vec2, scale: f64, file: &s
         "imported": handles.len(),
         "handles": handles.iter().map(|h| h.hex()).collect::<Vec<_>>(),
         "layers": layers,
+        "materials": materials,
         "styles": styles,
         "blocks": renames.len(),
         "message": format!("{} objects imported from {file}", handles.len()),
@@ -447,7 +623,10 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     let sheet = Sheet::from_page(&page, paper::page_unit_mm(d, &page));
     let lineweights = p.get("lineweights").and_then(Value::as_bool).unwrap_or(if space.is_paper() { page.lineweights } else { true });
     let transparency = super::plotters::plot_transparency(s, p).unwrap_or(page.plot_transparency);
-    let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(matches!(space, Space::Model));
+    // A scale given means that scale: Fit is the default only without one (tester 0.7.7e: 1:20
+    // and 1:40 plotted the same, fitted, unless `fit: false` came too).
+    let scale_given = p.get("scale").is_some_and(|v| !v.is_null());
+    let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(matches!(space, Space::Model) && !scale_given);
     let scale = p.get("scale").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0);
     let width = p.get("width").and_then(Value::as_u64).unwrap_or(PREVIEW_PX).clamp(16, MAX_PREVIEW_PX);
     let height = ((width as f64) * sheet.size.y / sheet.size.x).round();
@@ -895,10 +1074,10 @@ mod tests {
     }
 
     #[test]
-    fn share_says_it_is_not_available_yet() {
+    fn share_says_what_it_needs() {
         let mut s = session();
         let e = s.execute(&resolve_alias("share"), &Value::Null).unwrap_err().to_string();
-        assert!(e.contains("not available yet"), "{e}");
+        assert!(e.contains("online sharing service"), "{e}");
     }
 
     #[test]
@@ -916,7 +1095,7 @@ mod tests {
         // 8 units wide, 4 high (square pixels), lower-left corner at the point.
         assert!((im.u.x * im.size.x - 8.0).abs() < 1e-9 && (im.v.y * im.size.y - 4.0).abs() < 1e-9, "{im:?}");
         assert_eq!((im.insert.x, im.insert.y, im.name.as_str()), (10.0, 5.0, "photo"));
-        for (p, says) in [("plan.pdf", "pdfattach"), ("a.dgn", "not available yet"), ("notes.txt", "can't be attached")] {
+        for (p, says) in [("plan.pdf", "pdfattach"), ("a.dgn", "DWF/DGN readers"), ("notes.txt", "can't be attached")] {
             let e = s.execute("attach", &json!({ "path": p })).unwrap_err().to_string();
             assert!(e.contains(says), "{p}: {e}");
         }

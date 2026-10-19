@@ -40,7 +40,7 @@ modules:
       - install -Dm755 bin/cadaddy /app/bin/cadaddy
       - install -Dm755 bin/cadaddy-cli /app/bin/cadaddy-cli
       - install -Dm644 share/applications/dev.aicodeforge.cadaddy.desktop /app/share/applications/dev.aicodeforge.cadaddy.desktop
-      # .dxf and .dwg.
+      # .cdy, .dxf and .dwg.
       - install -Dm644 share/mime/packages/dev.aicodeforge.cadaddy.xml /app/share/mime/packages/dev.aicodeforge.cadaddy.xml
       # Already has the release's version and date substituted by package.sh.
       - install -Dm644 share/metainfo/dev.aicodeforge.cadaddy.metainfo.xml /app/share/metainfo/dev.aicodeforge.cadaddy.metainfo.xml

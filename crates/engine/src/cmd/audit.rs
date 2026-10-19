@@ -148,6 +148,14 @@ fn run_recover(s: &mut Session, p: &Value) -> Result<Value> {
         None => std::path::Path::new(&name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| name.clone()),
     };
     let copy = bool_or(p, "copy", false);
+    // The file is open already: recovering it replaces that drawing instead of opening a second
+    // copy (two tabs saving to one file); with unsaved changes there, it asks to close it first.
+    if let Some(i) = path.as_deref().filter(|_| !copy).and_then(|p| file::already_open(s, p)) {
+        if s.docs.get(i).is_some_and(|d| d.is_dirty()) {
+            return Err(bad("recover", format!("{title} is open with unsaved changes. Save or close it, then recover it.")));
+        }
+        file::run_close(s, &json!({ "index": i }))?;
+    }
     let log_for = path.clone().filter(|_| !copy);
     let i = s.open_drawing(d, &title, if copy { None } else { path });
     let st = s.state_mut()?;

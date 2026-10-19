@@ -7,6 +7,7 @@
 use crate::{DashElement, Drawing, Linetype};
 
 pub mod files;
+pub mod models3d;
 pub mod symbols;
 
 /// The standard linetype library, defined in inches. Load it into a drawing with

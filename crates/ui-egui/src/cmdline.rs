@@ -310,8 +310,14 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
             egui::Event::Key { key, pressed: true, repeat, modifiers, .. } => match key {
                 Key::Enter => submit(app),
                 Key::Escape => {
+                    // With nothing to cancel, Esc leaves walk mode: the 3D view doesn't get keys
+                    // while the command line has them.
+                    let idle = app.cmd.buffer.is_empty() && !app.session.prompting();
                     app.cmd.buffer.clear();
                     app.session.cancel();
+                    if idle && app.walk.is_some() {
+                        crate::walk::close(app);
+                    }
                 }
                 Key::Backspace => {
                     let press = KeyPress { repeat, plain: !(modifiers.alt || modifiers.ctrl || modifiers.command) };
@@ -424,7 +430,19 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     p.rect_stroke(bar, 3.0, Stroke::new(1.0, t.cmd_border), egui::StrokeKind::Inside);
     // Prompt glyph.
     p.text(pos2(bar.left() + 8.0, bar.center().y), egui::Align2::LEFT_CENTER, ">_", crate::theme::mono(), t.text_dim);
-    let mut x = bar.left() + 30.0;
+    // The prompt and what's typed scroll left inside the bar, like a text field, when they don't
+    // fit (PURGE's keyword list ran past the bar over the drawing); the bar shows the whole
+    // prompt on hover then.
+    let text_left = bar.left() + 30.0;
+    let text_right = bar.right() - 26.0;
+    let full = format!("{}{}", app.session.prompt_text(), app.cmd.buffer);
+    let full_w = p.layout_no_wrap(full.clone(), crate::theme::body(), t.text).size().x + 8.0;
+    let overflow = (full_w - (text_right - text_left)).max(0.0);
+    let pt = p.with_clip_rect(Rect::from_x_y_ranges(text_left..=text_right, bar.y_range()));
+    if overflow > 0.0 {
+        ui.interact(bar, ui.id().with("cmd_bar_hover"), Sense::hover()).on_hover_text(full);
+    }
+    let mut x = text_left - overflow;
     let prompt = app.session.current_prompt();
     let font = crate::theme::body();
     match &prompt {
@@ -433,55 +451,57 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
             let name = app.session.running.as_ref().filter(|r| r.id != "grip").map(|r| r.id.to_ascii_uppercase() + " ").unwrap_or_default();
             let g = p.layout_no_wrap(name, font.clone(), t.text_faint);
             let gw = g.size().x;
-            p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text_faint);
+            pt.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text_faint);
             x += gw;
             // A LISP `get…` prompt shows as the routine wrote it (no keywords, default or colon added).
             let message = if pr.raw { pr.display() } else { crate::i18n::t(&pr.message).to_string() };
             let g = p.layout_no_wrap(message, font.clone(), t.text);
             let gw = g.size().x;
-            p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
+            pt.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
             x += gw;
             if !pr.raw && !pr.keywords.is_empty() {
                 let g = p.layout_no_wrap(if pr.message.is_empty() { " [".into() } else { crate::tl!(" or [").into() }, font.clone(), t.text);
                 let gw = g.size().x;
-                p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
+                pt.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
                 x += gw;
                 let kws = pr.keywords.clone();
                 for (i, k) in kws.iter().enumerate() {
                     let g = p.layout_no_wrap(k.clone(), font.clone(), t.cmd_keyword);
                     let r = Rect::from_min_size(pos2(x, bar.top() + 3.0), vec2(g.size().x, h - 6.0));
-                    let resp = ui.interact(r, ui.id().with(("kw", i)), Sense::click());
-                    if resp.hovered() {
-                        p.rect_filled(r, 2.0, t.cmd_keyword_hover);
+                    // Only a keyword inside the bar takes the pointer: one scrolled out of it would
+                    // sit over the drawing and swallow its clicks.
+                    let resp = (r.left() >= text_left && r.right() <= text_right).then(|| ui.interact(r, ui.id().with(("kw", i)), Sense::click()));
+                    if resp.as_ref().is_some_and(egui::Response::hovered) {
+                        pt.rect_filled(r, 2.0, t.cmd_keyword_hover);
                     }
                     let gw = g.size().x;
-                    p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.cmd_keyword);
+                    pt.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.cmd_keyword);
                     x += gw;
-                    if resp.clicked() {
+                    if resp.as_ref().is_some_and(egui::Response::clicked) {
                         let _ = app.session.input(Input::Keyword(k.clone()));
                     }
                     if i + 1 < kws.len() {
                         let g = p.layout_no_wrap("/".into(), font.clone(), t.text);
                         let gw = g.size().x;
-                        p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
+                        pt.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
                         x += gw;
                     }
                 }
                 let g = p.layout_no_wrap("]".into(), font.clone(), t.text);
                 let gw = g.size().x;
-                p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
+                pt.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
                 x += gw;
             }
             if let Some(d) = pr.default.as_ref().filter(|_| !pr.raw) {
                 let g = p.layout_no_wrap(format!(" <{d}>"), font.clone(), t.text);
                 let gw = g.size().x;
-                p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
+                pt.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
                 x += gw;
             }
             if !pr.raw {
                 let g = p.layout_no_wrap(": ".into(), font.clone(), t.text);
                 let gw = g.size().x;
-                p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
+                pt.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
                 x += gw;
             } else if !pr.message.ends_with(' ') {
                 x += 4.0;
@@ -489,7 +509,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
         }
         None => {
             if app.cmd.buffer.is_empty() {
-                p.text(
+                pt.text(
                     pos2(x, bar.center().y),
                     egui::Align2::LEFT_CENTER,
                     crate::tl!("Type a command"),
@@ -501,11 +521,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     }
     let g = p.layout_no_wrap(app.cmd.buffer.clone(), font, t.text);
     let gw = g.size().x;
-    p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
+    pt.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
     // Caret.
     let blink = (ui.input(|i| i.time) * 2.0).floor() as i64 % 2 == 0;
     if blink {
-        p.line_segment([pos2(x + gw + 1.0, bar.top() + 5.0), pos2(x + gw + 1.0, bar.bottom() - 5.0)], Stroke::new(1.0, t.text));
+        pt.line_segment([pos2(x + gw + 1.0, bar.top() + 5.0), pos2(x + gw + 1.0, bar.bottom() - 5.0)], Stroke::new(1.0, t.text));
     }
     // History chevron.
     crate::icons::paint(

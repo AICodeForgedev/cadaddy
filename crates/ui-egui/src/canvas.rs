@@ -76,6 +76,8 @@ fn same_content(a: &ListKey, b: &ListKey) -> bool {
 
 #[derive(Default)]
 pub struct CanvasState {
+    /// The Model tab in a 3D visual style (VSCURRENT).
+    pub shade: crate::shaded::State,
     pub list: Option<DisplayList>,
     key: ListKey,
     /// The area `list` was built for (hatch patterns exist only inside it); a view leaving it
@@ -367,13 +369,15 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         skip_viewport: split,
         cancel: None,
         projection: st.list_projection(),
+        // FIELDDISPLAY: fields on a grey background (on screen only).
+        field_shading: st.doc.header.i64("FIELDDISPLAY", 1) != 0,
     };
     if view_only {
         let t = Tokens::get();
         let mesh = app.canvas.gpu.is_some().then(|| rebuild::MeshRequest {
             view_center: xf.center,
             view_height: f64::from(xf.rect.height()) / xf.scale.max(1e-300),
-            model_bg: Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b()),
+            model_bg: view_background(app).unwrap_or(Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b())),
             paper_bg: Rgb(t.paper.r(), t.paper.g(), t.paper.b()),
             lwdisplay,
             device: app.canvas.gpu_device.clone(),
@@ -527,6 +531,7 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
             transparency,
             cancel: None,
             projection: None,
+            field_shading: st.doc.header.i64("FIELDDISPLAY", 1) != 0,
         };
         c.list = cadaddy_render::viewport_content(&st.doc, &st.space, h, area, &opts);
         c.key = Some(key);
@@ -1612,7 +1617,16 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.session.pending_window = None;
         app.canvas.drag_window = false;
     }
-    let pressed_primary = pressed_primary && !picked && !hatch_dialog && !idle_dbl;
+    // Hyperlinks: the tooltip over a linked object; Ctrl+click (⌘-click) follows its link.
+    let link_pick = if inside && pressed_primary && mods.command {
+        raw_world
+            .zip(app.session.state().ok())
+            .and_then(|(w, st)| cadaddy_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale))
+    } else {
+        app.canvas.hover
+    };
+    let followed = inside && crate::hyperlinks::hover_and_follow(app, ui.ctx(), &resp, link_pick, pressed_primary, mods.command);
+    let pressed_primary = pressed_primary && !picked && !hatch_dialog && !idle_dbl && !followed;
     // Clicks.
     if inside
         && pressed_primary
@@ -1765,9 +1779,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             Rgb(t.paper.r(), t.paper.g(), t.paper.b())
         }
         None => {
+            // A restored named view's background colour, else the drawing area's.
+            let bg = view_background(app);
+            if let Some(Rgb(r, g, b)) = bg {
+                painter.rect_filled(rect, 0.0, Color32::from_rgb(r, g, b));
+            }
             blockedit::wash(app, &painter, rect);
             draw_grid(app, &painter, &xf);
-            Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b())
+            bg.unwrap_or(Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b()))
         }
     };
     let sel = app.session.selection();
@@ -1783,7 +1802,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         draw_vp_content(&mut app.canvas.vp, gpu, &clipped, &f, &xf_paper, bg, app.session.settings.lwdisplay);
         masked = gpu && f.outline.is_some();
     }
-    if app.canvas.gpu.is_some() {
+    if sheet.is_none() && crate::shaded::paint(app, ui, &painter, &xf, bg) {
+        // The Model tab in a 3D visual style: the shaded view stands for the display list.
+    } else if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);
     } else if let Some(list) = &app.canvas.list {
         draw_list(&painter, &xf_paper, list, bg, app.session.settings.lwdisplay);
@@ -1870,6 +1891,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     app.canvas.draw_ms = crate::now_ms() - t0;
     compare::paint(app, ui.ctx(), &painter, &xf_paper, rect);
     blockedit::paint(app, ui.ctx(), &painter, &xf_paper, rect);
+    refedit::paint(app, ui.ctx(), rect);
     // Constraint bars and dynamic dimensional constraints (model space, or inside a viewport).
     if sheet.is_none() || active_vp.is_some() {
         let clip = match &active_vp {
@@ -1979,8 +2001,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     draw_tiles(app, ui, &tiles);
     // UCS icon, ViewCube and viewport label.
-    if app.ui.show_ucs_icon {
-        draw_ucs_icon(&painter, rect, xf.proj);
+    // UCSICON 1: shown; 2: at the UCS origin when that is on screen (model space).
+    let ucsicon = app.session.doc().map_or(3, |d| d.header.i64("UCSICON", 3));
+    if app.ui.show_ucs_icon && ucsicon & 1 != 0 {
+        let ucs = if sheet.is_none() { app.session.ucs() } else { cadaddy_engine::ucs::Frame::WORLD };
+        let at = (ucsicon & 2 != 0 && sheet.is_none()).then(|| xf.w2s(ucs.origin)).filter(|o| rect.shrink(48.0).contains(*o));
+        draw_ucs_icon(&painter, rect, xf.proj, &ucs, at);
         crate::viewcube::ucs_icon(app, ui, rect);
     }
     if app.ui.show_viewcube && sheet.is_none() {
@@ -2404,26 +2430,32 @@ fn draw_lock(p: &egui::Painter, c: Pos2, color: Color32) {
     ));
 }
 
-/// The UCS icon: the WCS axes as the view shows them (X and Y in the plan view; X, Y and Z in a
-/// 3D view, an axis pointing at the viewer drawn short).
-fn draw_ucs_icon(p: &egui::Painter, rect: Rect, proj: Option<cadaddy_geom::view3::Projection>) {
+/// The UCS icon: the current UCS's axes as the view shows them (X and Y in the plan view, with
+/// the square at the corner for the world; X, Y and Z in a 3D view, an axis pointing at the
+/// viewer drawn short), at the lower-left corner or at `at` (the UCS origin on screen).
+fn draw_ucs_icon(p: &egui::Painter, rect: Rect, proj: Option<cadaddy_geom::view3::Projection>, ucs: &cadaddy_engine::ucs::Frame, at: Option<Pos2>) {
     let t = Tokens::get();
-    let o = pos2(rect.left() + 36.0, rect.bottom() - 34.0);
+    let o = at.unwrap_or(pos2(rect.left() + 36.0, rect.bottom() - 34.0));
     let st = Stroke::new(1.0, t.canvas_ink);
     let f = egui::FontId::proportional(13.0);
+    let (ux, uy) = ucs.axes();
     let Some(pr) = proj else {
-        p.line_segment([o, o + vec2(60.0, 0.0)], st);
-        p.line_segment([o, o + vec2(0.0, -60.0)], st);
-        p.rect_stroke(Rect::from_center_size(o, vec2(9.0, 9.0)), 0.0, st, egui::StrokeKind::Middle);
-        p.text(o + vec2(70.0, 0.0), egui::Align2::LEFT_CENTER, crate::tl!("X"), f.clone(), t.canvas_ink);
-        p.text(o + vec2(0.0, -70.0), egui::Align2::CENTER_BOTTOM, crate::tl!("Y"), f, t.canvas_ink);
+        // Screen y points down.
+        let (x, y) = (vec2(ux.x as f32, -ux.y as f32), vec2(uy.x as f32, -uy.y as f32));
+        p.line_segment([o, o + x * 60.0], st);
+        p.line_segment([o, o + y * 60.0], st);
+        if ucs.is_world() {
+            p.rect_stroke(Rect::from_center_size(o, vec2(9.0, 9.0)), 0.0, st, egui::StrokeKind::Middle);
+        }
+        p.text(o + x * 72.0, egui::Align2::CENTER_CENTER, crate::tl!("X"), f.clone(), t.canvas_ink);
+        p.text(o + y * 72.0, egui::Align2::CENTER_CENTER, crate::tl!("Y"), f, t.canvas_ink);
         return;
     };
     // Up the icon a little so a downward axis stays on screen.
-    let o = o + vec2(18.0, -18.0);
+    let o = if at.is_some() { o } else { o + vec2(18.0, -18.0) };
     for (axis, name, col) in [
-        (cadaddy_geom::Vec3::new(1.0, 0.0, 0.0), "X", Color32::from_rgb(0xe0, 0x5a, 0x4f)),
-        (cadaddy_geom::Vec3::new(0.0, 1.0, 0.0), "Y", Color32::from_rgb(0x6c, 0xc0, 0x5a)),
+        (ux.to3(0.0), "X", Color32::from_rgb(0xe0, 0x5a, 0x4f)),
+        (uy.to3(0.0), "Y", Color32::from_rgb(0x6c, 0xc0, 0x5a)),
         (cadaddy_geom::Vec3::Z, "Z", Color32::from_rgb(0x4d, 0x9c, 0xf5)),
     ] {
         let d = vec2(axis.dot(pr.right) as f32, -(axis.dot(pr.up) as f32));
@@ -2464,9 +2496,29 @@ fn viewport_controls(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect, model: boo
     };
     piece("+  |  ");
     let view_r = piece(crate::i18n::t(view));
-    piece(&format!("  |  {}", crate::tl!("2D Wireframe")));
+    piece("  |  ");
+    // The visual style (layouts show their sheet as 2D Wireframe).
+    let style =
+        if model { app.session.state().map(|st| st.visual_style).unwrap_or_default() } else { cadaddy_render::shade::VisualStyle::Wireframe2d };
+    let style_r = piece(crate::i18n::t(style.name()));
     if !model {
         return;
+    }
+    let sresp = ui.interact(style_r.expand(3.0), ui.id().with("vp_style_menu"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    if sresp.hovered() {
+        p.rect_stroke(style_r.expand(3.0), 2.0, Stroke::new(1.0, t.canvas_ink), egui::StrokeKind::Outside);
+    }
+    let mut pick_style = None;
+    egui::Popup::menu(&sresp).show(|ui| {
+        for vs in cadaddy_render::shade::VisualStyle::ALL {
+            if ui.radio(style == vs, crate::i18n::t(vs.name())).clicked() {
+                pick_style = Some(vs);
+                ui.close();
+            }
+        }
+    });
+    if let Some(vs) = pick_style {
+        let _ = app.run("vscurrent", serde_json::json!({ "style": vs.name() }));
     }
     let resp = ui.interact(view_r.expand(3.0), ui.id().with("vp_view_menu"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     if resp.hovered() {
@@ -2505,7 +2557,22 @@ fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
     // WCS pill.
     let pill = Rect::from_center_size(c + vec2(0.0, ring + 26.0), vec2(56.0, 16.0));
     p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
-    p.text(pill.center(), egui::Align2::CENTER_CENTER, crate::tl!("WCS ⌄"), crate::theme::small(), Tokens::DARK.canvas_ink);
+    // The current UCS: WCS, its name, or Unnamed.
+    let ucs = app.session.ucs();
+    let label = if ucs.is_world() && ucs.name.is_empty() {
+        format!("{} ⌄", crate::tl!("WCS"))
+    } else if ucs.name.is_empty() {
+        format!("{} ⌄", crate::tl!("Unnamed"))
+    } else {
+        format!("{} ⌄", ucs.name)
+    };
+    let pill = if label.chars().count() > 6 {
+        Rect::from_center_size(pill.center(), vec2(56f32.max(label.chars().count() as f32 * 7.0 + 8.0), 16.0))
+    } else {
+        pill
+    };
+    p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
+    p.text(pill.center(), egui::Align2::CENTER_CENTER, label, crate::theme::small(), Tokens::DARK.canvas_ink);
 }
 
 /// A click on grip `g` (idle): Shift+click makes it hot or cold again; a plain click starts
@@ -2908,6 +2975,7 @@ mod blockedit;
 mod compare;
 /// Lasso selection and selection cycling.
 mod lasso;
+mod refedit;
 
 /// Background rebuilds of the display list for a new view.
 mod rebuild;
@@ -2957,5 +3025,18 @@ mod hatch_pick_tests {
         assert_eq!(app.hatch_dlg.as_ref().map(|s| s.edit.iter().map(|h| h.hex()).collect::<Vec<_>>()), Some(vec![hx]));
         // The double-click (at the hatch's centre grip) only opens the dialog: no grip edit.
         assert!(app.session.running.is_none(), "{:?}", app.session.running.as_ref().map(|r| r.machine.name()));
+    }
+}
+
+/// The background colour of the named view last restored on the Model tab, if it has one.
+fn view_background(app: &CadApp) -> Option<Rgb> {
+    let st = app.session.state().ok()?;
+    if st.space != cadaddy_engine::doc::Space::Model {
+        return None;
+    }
+    match st.view_background? {
+        cadaddy_color::Color::Index(i) => Some(cadaddy_color::aci_rgb(i)),
+        cadaddy_color::Color::True(c) => Some(c),
+        _ => None,
     }
 }

@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(AreaM::default()))),
         CommandSpec::new("time", "Time", run_time).menu(&["Tools", "Inquiry", "Time"]).noundo(),
         CommandSpec::new("status", "Status", run_status).menu(&["Tools", "Inquiry", "Status"]).noundo(),
-        CommandSpec::new("drawing.inspect", "Inspect Drawing", run_inspect).params("{entities?: bool, limit?: n}").noundo(),
+        CommandSpec::new("drawing.inspect", "Inspect Drawing", run_inspect).params("{entities?: bool, limit?: n, index? (another open drawing, as DOCUMENT.LIST numbers them)}").noundo(),
         CommandSpec::new("entities", "Query Entities", run_entities)
             .params("{type?, layer?, window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
             .noundo(),
@@ -62,7 +62,7 @@ pub fn specs() -> Vec<CommandSpec> {
     v
 }
 
-fn fmt_d(s: &Session, v: f64) -> String {
+pub(crate) fn fmt_d(s: &Session, v: f64) -> String {
     let h = s.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
     format_distance(v, h.0, h.1)
 }
@@ -106,7 +106,11 @@ fn run_dist(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_id(s: &mut Session, p: &Value) -> Result<Value> {
     let a = point_req("id", p, "at")?;
     s.last_point = a;
-    Ok(json!({ "x": a.x, "y": a.y, "message": format!("X = {}     Y = {}     Z = {}", fmt_d(s, a.x), fmt_d(s, a.y), fmt_d(s, 0.0)) }))
+    // Reported in the current UCS, as AutoCAD does; `x`, `y` stay the world point.
+    let u = s.ucs().to_ucs(a);
+    Ok(
+        json!({ "x": a.x, "y": a.y, "ucs": [u.x, u.y], "message": format!("X = {}     Y = {}     Z = {}", fmt_d(s, u.x), fmt_d(s, u.y), fmt_d(s, 0.0)) }),
+    )
 }
 
 fn list_text(s: &Session, h: Handle) -> String {
@@ -182,13 +186,49 @@ fn list_text(s: &Session, h: Handle) -> String {
                 fmt_a(s, tx.rotation)
             ));
         }
+        EntityKind::Dimension(dm) => {
+            let st = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
+            let g = cadaddy_render::dimension_geometry(dm, &st, 1.0);
+            t.push_str(&format!(
+                "\n            Style = \"{}\"\n             Type = {}\n      Measurement = {}\n             Text = {}\n  Definition point, X={}  Y={}",
+                dm.style,
+                dim_type(&dm.kind),
+                g.value,
+                if dm.text.is_empty() { "<>".to_string() } else { dm.text.clone() },
+                fmt_d(s, dm.defpt.x),
+                fmt_d(s, dm.defpt.y),
+            ));
+        }
+        // Other objects: their properties one per line (LIST printed them as raw JSON).
         other => {
-            if let Ok(js) = serde_json::to_string(other) {
-                t.push_str(&format!("\n          {js}"));
+            if let Ok(serde_json::Value::Object(m)) = serde_json::to_value(other) {
+                for (k, v) in m.iter().filter(|(k, _)| k.as_str() != "type").take(40) {
+                    t.push_str(&format!("\n          {k} = {}", list_value(v)));
+                }
             }
         }
     }
     t
+}
+
+/// A dimension's type as LIST names it.
+fn dim_type(k: &cadaddy_doc::DimKind) -> String {
+    let name = format!("{k:?}");
+    name.split([' ', '{', '(']).next().unwrap_or("").to_string()
+}
+
+/// A property value on one LIST line: a point as X, Y, Z; a list by its length.
+fn list_value(v: &Value) -> String {
+    match v {
+        Value::Object(o) if o.contains_key("x") && o.contains_key("y") => {
+            let n = |k: &str| o.get(k).and_then(Value::as_f64).map(|x| format!("{x}")).unwrap_or_default();
+            if o.contains_key("z") { format!("X={}  Y={}  Z={}", n("x"), n("y"), n("z")) } else { format!("X={}  Y={}", n("x"), n("y")) }
+        }
+        Value::Array(a) => format!("({} items)", a.len()),
+        Value::Object(o) => format!("({} values)", o.len()),
+        Value::String(s) => format!("\"{s}\""),
+        other => other.to_string(),
+    }
 }
 
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
@@ -293,7 +333,14 @@ fn entity_summary(e: &cadaddy_doc::Entity) -> Value {
 }
 
 fn run_inspect(s: &mut Session, p: &Value) -> Result<Value> {
-    let st = s.state()?;
+    // Another open drawing (by its place in DOCUMENT.LIST), without switching to it.
+    let st = match p.get("index").filter(|v| !v.is_null()) {
+        Some(i) => {
+            let i = i.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad("drawing.inspect", "`index` is a drawing number"))?;
+            s.docs.get(i).ok_or_else(|| bad("drawing.inspect", format!("there is no open drawing {i}")))?
+        }
+        None => s.state()?,
+    };
     let d = &st.doc;
     let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
     let space = st.space.clone();
@@ -471,29 +518,81 @@ struct DistM {
     sources: Vec<Option<crate::snap::ViewportPoint>>,
     /// Asking for the length of a segment (the Length option).
     length: bool,
+    /// Multiple points: the bulge of the segment from each point to the next (arcs).
+    bulges: Vec<f64>,
+    /// The Arc option: the next points end arcs.
+    arc: bool,
 }
 
-/// Total length of the segments through `pts`.
-fn path_len(pts: &[Vec2]) -> f64 {
-    pts.windows(2)
-        .map(|w| match w {
-            [a, b] => a.dist(*b),
-            _ => 0.0,
-        })
-        .sum()
+/// The path through `pts` with the bulge of the segment from each point to the next.
+fn path(pts: &[Vec2], bulges: &[f64], closed: bool) -> Polyline {
+    let vertices = pts.iter().enumerate().map(|(i, p)| cadaddy_geom::PolyVertex::with_bulge(*p, bulges.get(i).copied().unwrap_or(0.0))).collect();
+    Polyline { vertices, closed }
 }
 
-/// The point `len` beyond the last of `pts`, continuing the last segment (along X after a single
+/// Total length of the segments (lines and arcs) through `pts`.
+fn path_len(pts: &[Vec2], bulges: &[f64]) -> f64 {
+    path(pts, bulges, false).len()
+}
+
+/// The direction the path through `pts` ends in: along its last segment (the end tangent of an
+/// arc), along X after a single point.
+fn end_dir(pts: &[Vec2], bulges: &[f64]) -> Vec2 {
+    let n = pts.len();
+    let (Some(prev), Some(last)) = (n.checked_sub(2).and_then(|i| pts.get(i)), pts.last()) else { return Vec2::X };
+    let chord = (*last - *prev).normalized();
+    let b = n.checked_sub(2).and_then(|i| bulges.get(i)).copied().unwrap_or(0.0);
+    let d = if b.is_finite() { chord.rotate(2.0 * b.atan()) } else { chord };
+    if d == Vec2::ZERO || !d.is_finite() { Vec2::X } else { d }
+}
+
+/// The bulge of an arc from the last of `pts` to `to`, tangent to the path's end (the Arc option).
+fn tangent_bulge(pts: &[Vec2], bulges: &[f64], to: Vec2) -> f64 {
+    let Some(last) = pts.last() else { return 0.0 };
+    let chord = to - *last;
+    if chord.len() < 1e-12 {
+        return 0.0;
+    }
+    let t = end_dir(pts, bulges);
+    // Half the arc's sweep is the turn from the tangent to the chord.
+    let phi = t.cross(chord).atan2(t.dot(chord));
+    let b = (phi / 2.0).tan();
+    if b.is_finite() && b.abs() < 1e6 { b } else { 0.0 }
+}
+
+/// The point `len` beyond the last of `pts`, continuing the path's end (along X after a single
 /// point): the Length option of AREA and DIST's point sequences.
-fn extend_last(pts: &[Vec2], len: f64) -> Option<Vec2> {
+fn extend_last(pts: &[Vec2], bulges: &[f64], len: f64) -> Option<Vec2> {
     let last = *pts.last()?;
-    let dir = match pts.len().checked_sub(2).and_then(|i| pts.get(i)) {
-        Some(prev) => (last - *prev).normalized(),
-        None => Vec2::X,
-    };
-    let dir = if dir == Vec2::ZERO { Vec2::X } else { dir };
-    let p = last + dir * len;
+    let p = last + end_dir(pts, bulges) * len;
     p.is_finite().then_some(p)
+}
+
+/// Add `p` to the path through `pts`: a line, or with the Arc option an arc tangent to its end.
+fn push_point(pts: &mut Vec<Vec2>, bulges: &mut Vec<f64>, p: Vec2, arc: bool) {
+    bulges.resize(pts.len(), 0.0);
+    if arc {
+        let b = tangent_bulge(pts, bulges, p);
+        if let Some(last) = bulges.last_mut() {
+            *last = b;
+        }
+    }
+    pts.push(p);
+    bulges.push(0.0);
+}
+
+/// Take back the last point of the path (its segment's bulge goes with it).
+fn pop_point(pts: &mut Vec<Vec2>, bulges: &mut Vec<f64>) {
+    pts.pop();
+    bulges.truncate(pts.len());
+    if let Some(b) = bulges.last_mut() {
+        *b = 0.0;
+    }
+}
+
+fn arc_prompt(total: bool) -> Prompt {
+    let p = Prompt::new("Specify endpoint of arc or", Accept::POINT);
+    if total { p.kw(&["Line", "Undo", "Total"]).default("Total") } else { p.kw(&["Line", "Undo"]) }
 }
 
 fn length_prompt() -> Prompt {
@@ -501,13 +600,13 @@ fn length_prompt() -> Prompt {
 }
 
 /// Feed the Length option's answer: the next point, or `None` when the option was dismissed (Enter).
-fn length_input(pts: &[Vec2], i: Input) -> Result<Option<Vec2>> {
+fn length_input(pts: &[Vec2], bulges: &[f64], i: Input) -> Result<Option<Vec2>> {
     let t = match i {
         Input::Text(t) => t,
         _ => return Ok(None),
     };
     let len = crate::units::parse_distance(&t).filter(|v| v.is_finite()).ok_or_else(|| crate::EngineError::Other("Requires a distance.".into()))?;
-    Ok(extend_last(pts, len))
+    Ok(extend_last(pts, bulges, len))
 }
 
 /// Model units apply only when every point was snapped through one and the same viewport.
@@ -525,6 +624,7 @@ impl Interactive for DistM {
             return length_prompt();
         }
         match (&self.multi, self.first) {
+            (Some(pts), _) if self.arc => arc_prompt(pts.len() >= 2).base_opt(pts.last().copied()),
             (Some(pts), _) if pts.len() < 2 => {
                 Prompt::new("Specify second point", Accept::POINT).kw(&["Arc", "Length", "Undo"]).base_opt(pts.last().copied())
             }
@@ -540,7 +640,7 @@ impl Interactive for DistM {
         if let Some(pts) = &mut self.multi {
             if self.length {
                 let model = model_points(&self.sources);
-                if let Some(p) = length_input(model.as_deref().unwrap_or(pts), i)? {
+                if let Some(p) = length_input(model.as_deref().unwrap_or(pts), &self.bulges, i)? {
                     let source = model.as_ref().and_then(|_| self.sources.last().copied().flatten());
                     let paper = match (source, pts.last()) {
                         (Some(source), Some(last)) => *last + (p - source.point) * source.scale,
@@ -549,30 +649,32 @@ impl Interactive for DistM {
                     if !paper.is_finite() {
                         return Err(bad("dist", "the next point is too large"));
                     }
-                    pts.push(paper);
+                    push_point(pts, &mut self.bulges, paper, false);
                     self.sources.push(source.map(|source| crate::snap::ViewportPoint { point: p, ..source }));
                     let model = model_points(&self.sources);
-                    s.echo(format!("Distance = {}", fmt_d(s, path_len(model.as_deref().unwrap_or(pts)))));
+                    s.echo(format!("Distance = {}", fmt_d(s, path_len(model.as_deref().unwrap_or(pts), &self.bulges))));
                 }
                 self.length = false;
                 return Ok(Step::Continue);
             }
             match i {
                 Input::Point(p) => {
-                    pts.push(p);
+                    push_point(pts, &mut self.bulges, p, self.arc);
                     self.sources.push(s.picked_viewport);
                     let model = model_points(&self.sources);
-                    s.echo(format!("Distance = {}", fmt_d(s, path_len(model.as_deref().unwrap_or(pts)))));
+                    s.echo(format!("Distance = {}", fmt_d(s, path_len(model.as_deref().unwrap_or(pts), &self.bulges))));
                 }
                 Input::Keyword(k) if k == "Undo" => {
                     if pts.len() > 1 {
-                        pts.pop();
+                        pop_point(pts, &mut self.bulges);
                         self.sources.pop();
                     }
                 }
                 Input::Keyword(k) if k == "Length" => self.length = true,
+                Input::Keyword(k) if k == "Arc" => self.arc = true,
+                Input::Keyword(k) if k == "Line" => self.arc = false,
                 Input::Keyword(k) if k == "Total" => return self.total(s),
-                Input::Keyword(k) => s.echo(format!("{k}: not available yet")),
+                Input::Keyword(k) => s.echo(format!("{k}: invalid option keyword")),
                 Input::Enter => return self.total(s),
                 _ => {}
             }
@@ -598,6 +700,7 @@ impl Interactive for DistM {
             }
             (Some(a), Input::Keyword(k)) if k == "Multiple points" => {
                 self.multi = Some(vec![a]);
+                self.bulges = vec![0.0];
                 self.sources = vec![self.first_source];
                 Ok(Step::Continue)
             }
@@ -608,9 +711,9 @@ impl Interactive for DistM {
     fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
         match &self.multi {
             Some(pts) => {
-                let mut v: Vec<cadaddy_geom::PolyVertex> = pts.iter().map(|p| cadaddy_geom::PolyVertex::new(*p)).collect();
-                v.push(cadaddy_geom::PolyVertex::new(c));
-                vec![super::helpers::lwpoly(v, false)]
+                let (mut pts, mut bulges) = (pts.clone(), self.bulges.clone());
+                push_point(&mut pts, &mut bulges, c, self.arc);
+                vec![super::helpers::lwpoly(path(&pts, &bulges, false).vertices, false)]
             }
             None => self.first.map(|a| vec![super::helpers::line(a, c)]).unwrap_or_default(),
         }
@@ -620,7 +723,7 @@ impl Interactive for DistM {
 impl DistM {
     fn total(&self, s: &mut Session) -> Result<Step> {
         let model = model_points(&self.sources);
-        let d = model.as_deref().or(self.multi.as_deref()).map_or(0.0, path_len);
+        let d = model.as_deref().or(self.multi.as_deref()).map_or(0.0, |p| path_len(p, &self.bulges));
         s.echo(format!("Distance = {}", fmt_d(s, d)));
         Ok(Step::Done)
     }
@@ -637,6 +740,7 @@ impl Interactive for IdM {
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Input::Point(p) = i {
+            let p = s.ucs().to_ucs(p);
             let m = format!("X = {}     Y = {}     Z = {}", fmt_d(s, p.x), fmt_d(s, p.y), fmt_d(s, 0.0));
             s.echo(m);
         }
@@ -707,6 +811,10 @@ struct AreaM {
     object: bool,
     /// Asking for the length of a segment (the Length option).
     length: bool,
+    /// The bulge of the segment from each point to the next (arcs).
+    bulges: Vec<f64>,
+    /// The Arc option: the next points end arcs.
+    arc: bool,
 }
 
 impl AreaM {
@@ -732,10 +840,14 @@ impl AreaM {
     /// Close the boundary picked so far (Enter or Total at the next-point prompt).
     fn close(&mut self, s: &mut Session) -> Step {
         let pts = std::mem::take(&mut self.pts);
-        if pts.len() < 3 {
+        let bulges = std::mem::take(&mut self.bulges);
+        self.arc = false;
+        // Two points with an arc between them enclose an area too.
+        if pts.len() < 3 && !(pts.len() == 2 && bulges.iter().any(|b| *b != 0.0)) {
             return if self.mode == AreaMode::Single { Step::Done } else { Step::Continue };
         }
-        let (a, per) = area_of(&pts);
+        let g = path(&pts, &bulges, true);
+        let (a, per) = (g.area().abs(), g.len());
         self.measured(s, a, per)
     }
 }
@@ -758,6 +870,10 @@ impl Interactive for AreaM {
             }
             (0, AreaMode::Add) => Prompt::new("Specify first corner point", Accept::POINT).kw(&["Object", "Subtract area"]),
             (0, AreaMode::Subtract) => Prompt::new("Specify first corner point", Accept::POINT).kw(&["Object", "Add area"]),
+            (n, _) if self.arc => {
+                let p = arc_prompt(n >= 2).base_opt(self.pts.last().copied());
+                Prompt { message: format!("{}{}", self.mode_prefix(), p.message), ..p }
+            }
             (1, _) => Prompt::new(next, Accept::POINT).kw(&["Arc", "Length", "Undo"]).base_opt(self.pts.last().copied()),
             _ => Prompt::new(next, Accept::POINT).kw(&["Arc", "Length", "Undo", "Total"]).default("Total").base_opt(self.pts.last().copied()),
         }
@@ -789,24 +905,24 @@ impl Interactive for AreaM {
             return Ok(Step::Continue);
         }
         if self.length {
-            if let Some(p) = length_input(&self.pts, i)? {
-                self.pts.push(p);
+            if let Some(p) = length_input(&self.pts, &self.bulges, i)? {
+                push_point(&mut self.pts, &mut self.bulges, p, false);
             }
             self.length = false;
             return Ok(Step::Continue);
         }
         match i {
-            Input::Point(p) => self.pts.push(p),
+            Input::Point(p) => push_point(&mut self.pts, &mut self.bulges, p, self.arc),
             Input::Keyword(k) => match k.as_str() {
                 "Object" => self.object = true,
                 "Add area" => self.mode = AreaMode::Add,
                 "Subtract area" => self.mode = AreaMode::Subtract,
-                "Undo" => {
-                    self.pts.pop();
-                }
+                "Undo" => pop_point(&mut self.pts, &mut self.bulges),
                 "Length" => self.length = true,
+                "Arc" => self.arc = true,
+                "Line" => self.arc = false,
                 "Total" => return Ok(self.close(s)),
-                _ => s.echo(format!("{k}: not available yet")),
+                _ => s.echo(format!("{k}: invalid option keyword")),
             },
             Input::Enter if self.pts.is_empty() => match self.mode {
                 // Enter takes the default, Object; in add/subtract mode it ends the command.
@@ -822,8 +938,8 @@ impl Interactive for AreaM {
         if self.pts.is_empty() || self.object || self.length {
             return Vec::new();
         }
-        let mut v: Vec<cadaddy_geom::PolyVertex> = self.pts.iter().map(|p| cadaddy_geom::PolyVertex::new(*p)).collect();
-        v.push(cadaddy_geom::PolyVertex::new(c));
-        vec![super::helpers::lwpoly(v, true)]
+        let (mut pts, mut bulges) = (self.pts.clone(), self.bulges.clone());
+        push_point(&mut pts, &mut bulges, c, self.arc);
+        vec![super::helpers::lwpoly(path(&pts, &bulges, true).vertices, true)]
     }
 }

@@ -10,5 +10,5 @@ Terminal=false
 StartupNotify=true
 StartupWMClass=dev.aicodeforge.cadaddy
 Categories=Graphics;Engineering;VectorGraphics;
-MimeType=image/vnd.dxf;image/vnd.dwg;application/x-dxf;application/acad;
+MimeType=application/x-cadaddy-drawing;image/vnd.dxf;image/vnd.dwg;application/x-dxf;application/acad;
 Keywords=cad;drafting;dxf;dwg;drawing;engineering;architecture;mechanical;

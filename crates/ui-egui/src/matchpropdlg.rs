@@ -66,32 +66,38 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     }
     let mut draft: MatchProps = ctx.data_mut(|d| d.get_temp(draft_id())).unwrap_or(app.session.last_used.matchprop);
     let mut choice = None;
-    egui::Window::new(crate::tl!("Property Settings")).id(egui::Id::new("matchprop_settings")).collapsible(false).resizable(false).show(ctx, |ui| {
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                ui.strong(crate::tl!("Basic Properties"));
-                for (label, f) in BASIC {
-                    ui.checkbox(f(&mut draft), crate::i18n::t(label));
-                }
+    egui::Window::new(crate::tl!("Property Settings"))
+        .id(egui::Id::new("matchprop_settings"))
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.vertical(|ui| {
+                    ui.strong(crate::tl!("Basic Properties"));
+                    for (label, f) in BASIC {
+                        ui.checkbox(f(&mut draft), crate::i18n::t(label));
+                    }
+                });
+                ui.add_space(16.0);
+                ui.vertical(|ui| {
+                    ui.strong(crate::tl!("Special Properties"));
+                    for (label, f) in SPECIAL {
+                        ui.checkbox(f(&mut draft), crate::i18n::t(label));
+                    }
+                });
             });
-            ui.add_space(16.0);
-            ui.vertical(|ui| {
-                ui.strong(crate::tl!("Special Properties"));
-                for (label, f) in SPECIAL {
-                    ui.checkbox(f(&mut draft), crate::i18n::t(label));
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button(crate::tl!("OK")).clicked() {
+                    choice = Some(Choice::Ok);
+                }
+                if ui.button(crate::tl!("Cancel")).clicked() {
+                    choice = Some(Choice::Cancel);
                 }
             });
         });
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button(crate::tl!("OK")).clicked() {
-                choice = Some(Choice::Ok);
-            }
-            if ui.button(crate::tl!("Cancel")).clicked() {
-                choice = Some(Choice::Cancel);
-            }
-        });
-    });
     if let Some(c) = choice {
         ctx.data_mut(|d| {
             d.remove::<MatchProps>(draft_id());

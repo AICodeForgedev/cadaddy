@@ -83,6 +83,8 @@ pub struct PdfOptions {
     /// Plot objects with their transparency (PDF alpha). `None` = the page setup's "Plot
     /// transparency" (off for model space).
     pub plot_transparency: Option<bool>,
+    /// Turn the sheet half a turn ("Plot upside down").
+    pub upside_down: bool,
 }
 
 impl Default for PdfOptions {
@@ -107,14 +109,24 @@ impl Default for PdfOptions {
             margins: None,
             hyperlinks: true,
             plot_transparency: None,
+            upside_down: false,
         }
     }
+}
+
+/// A plot scale written as AutoCAD lists them: "1:20" or "1=20" (paper : drawing), or a number.
+fn ratio(t: &str) -> Option<f64> {
+    let t = t.trim();
+    let (a, b) = t.split_once([':', '=']).unwrap_or((t, "1"));
+    let (a, b) = (a.trim().parse::<f64>().ok()?, b.trim().parse::<f64>().ok()?);
+    let r = a / b;
+    (r.is_finite() && r > 0.0).then_some(r)
 }
 
 impl PdfOptions {
     /// Parse `{paper?, width?, height?, landscape?, fit?, scale?, center?, offset?: [x,y] mm,
     /// lineweights?, compress?, title?, window?: [[x1, y1], [x2, y2]], margins?: [l, b, r, t] (mm),
-    /// hyperlinks?: bool, plotTransparency?: bool}`.
+    /// hyperlinks?: bool, plotTransparency?: bool, upsideDown?: bool}`.
     pub fn from_json(v: &Value) -> PdfOptions {
         let num = |k: &str| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite());
         let paper_mm = match (num("width"), num("height")) {
@@ -132,8 +144,10 @@ impl PdfOptions {
             paper: v.get("paper").and_then(Value::as_str).map(str::to_string),
             paper_mm,
             landscape: v.get("landscape").and_then(Value::as_bool),
-            fit: v.get("fit").and_then(Value::as_bool),
-            scale: num("scale").filter(|s| *s > 0.0),
+            // A scale given without `fit` means that scale (tester 0.7.7e: 1:20 and 1:40 plotted
+            // the same, fitted, unless `fit: false` came too).
+            fit: v.get("fit").and_then(Value::as_bool).or_else(|| v.get("scale").filter(|s| !s.is_null()).map(|_| false)),
+            scale: num("scale").or_else(|| v.get("scale").and_then(Value::as_str).and_then(ratio)).filter(|s| *s > 0.0),
             center: v.get("center").and_then(Value::as_bool),
             offset: offset(v.get("offset")),
             lineweights: v.get("lineweights").and_then(Value::as_bool),
@@ -143,6 +157,7 @@ impl PdfOptions {
             margins: margins(v.get("margins")),
             hyperlinks: v.get("hyperlinks").and_then(Value::as_bool).unwrap_or(true),
             plot_transparency: v.get("plotTransparency").and_then(Value::as_bool),
+            upside_down: v.get("upsideDown").and_then(Value::as_bool).unwrap_or(false),
         }
     }
 }
@@ -411,6 +426,8 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
         skip_viewport: None,
         cancel: None,
         projection: None,
+        // Fields' grey backgrounds are for the screen; plots don't show them.
+        field_shading: false,
     };
     let k = unit_mm * PT_PER_MM;
     let window = o.window.filter(|w| matches!(space, Space::Model) && !w.is_empty());
@@ -494,12 +511,13 @@ fn all_links(d: &Drawing, o: &PdfOptions) -> Vec<(Handle, String)> {
         return out;
     }
     let given: std::collections::HashSet<Handle> = out.iter().map(|(h, _)| *h).collect();
+    let base = d.header.str("HYPERLINKBASE", "");
     let mut read: Vec<(Handle, String)> = std::iter::once(&d.model)
         .chain(d.layouts.iter().map(|l| &l.entities))
         .chain(d.blocks.values().map(|b| &b.entities))
         .flat_map(|s| s.iter())
         .filter(|e| !given.contains(&e.handle))
-        .filter_map(|e| Some((e.handle, pe_url(&e.common.xdata)?)))
+        .filter_map(|e| Some((e.handle, pe_url(&e.common.xdata, &base)?)))
         .collect();
     read.sort_by_key(|(h, _)| *h);
     read.dedup_by_key(|(h, _)| *h);
@@ -507,12 +525,11 @@ fn all_links(d: &Drawing, o: &PdfOptions) -> Vec<(Handle, String)> {
     out
 }
 
-/// The link target of `PE_URL` extended data: the first string (group 1000) after
-/// `1001 PE_URL`, before the next application's data.
-fn pe_url(xdata: &[cadaddy_doc::RawTag]) -> Option<String> {
-    let start = xdata.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case("PE_URL"))?;
-    let url = xdata.get(start + 1..)?.iter().take_while(|t| t.code != 1001).find(|t| t.code == 1000)?.value.trim();
-    (!url.is_empty() && url.len() <= MAX_URL).then(|| url.to_string())
+/// The link target of a hyperlink (`PE_URL` extended data), relative links resolved against
+/// HYPERLINKBASE (`base`). A link into the drawing itself (only a named location) has none.
+fn pe_url(xdata: &[cadaddy_doc::RawTag], base: &str) -> Option<String> {
+    let url = cadaddy_doc::hyperlink::resolve(&cadaddy_doc::hyperlink::read(xdata)?, base, None)?;
+    (!url.is_empty() && url.len() <= MAX_URL).then_some(url)
 }
 
 /// Link annotation rectangles: the area (in points) each linked entity covers on the sheet,
@@ -918,6 +935,74 @@ fn uri_string(url: &str) -> Option<String> {
     Some(out)
 }
 
+/// Page content larger than this is written as several streams (PDF concatenates a page's
+/// /Contents array), compressed side by side.
+const CONTENT_PIECE: usize = 1 << 20;
+
+/// A page's content as stream object bodies: one, or for large compressed content pieces of
+/// about [`CONTENT_PIECE`] bytes split at line ends (between operators, as PDF requires),
+/// compressed on all cores.
+fn content_streams(data: &[u8], compress: bool) -> Vec<Vec<u8>> {
+    if !compress || data.len() <= CONTENT_PIECE {
+        return vec![stream(data, compress, "")];
+    }
+    let mut pieces: Vec<&[u8]> = Vec::new();
+    let mut rest = data;
+    while rest.len() > CONTENT_PIECE {
+        let cut = rest.get(CONTENT_PIECE..).and_then(|r| r.iter().position(|b| *b == b'\n')).map_or(rest.len(), |i| CONTENT_PIECE + i + 1);
+        let (a, b) = rest.split_at(cut.min(rest.len()));
+        pieces.push(a);
+        rest = b;
+    }
+    if !rest.is_empty() {
+        pieces.push(rest);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        pieces.par_iter().map(|p| stream(p, true, "")).collect()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        pieces.iter().map(|p| stream(p, true, "")).collect()
+    }
+}
+
+/// A one-page PDF of `media` points showing a raster in `place` (x, y, width, height in
+/// points): a shaded plot.
+pub(crate) fn raster_page(r: &cadaddy_render::images::Raster, media: (f64, f64), place: (f64, f64, f64, f64)) -> Vec<u8> {
+    let rgb: Vec<u8> = r.rgba.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+    let mut objs = Objects::default();
+    let catalog = objs.add("<< /Type /Catalog /Pages 2 0 R >>");
+    let _pages = objs.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    let (mw, mh) = media;
+    let (x, y, w, h) = place;
+    let _page = objs
+        .add(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {mw:.3} {mh:.3}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>"));
+    let content = format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q");
+    let _content = objs.add(stream(content.as_bytes(), true, ""));
+    let _image = objs.add(stream(
+        &rgb,
+        true,
+        &format!(" /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8", r.width, r.height),
+    ));
+    let mut out: Vec<u8> = b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec();
+    let mut offsets = Vec::with_capacity(objs.bodies.len());
+    for (i, body) in objs.bodies.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
+    for o in &offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root {catalog} 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1).as_bytes());
+    out
+}
+
 /// A stream object body, Flate-compressed when asked.
 fn stream(data: &[u8], compress: bool, extra: &str) -> Vec<u8> {
     let (data, filter) = if compress { (miniz_oxide::deflate::compress_to_vec_zlib(data, 6), " /Filter /FlateDecode") } else { (data.to_vec(), "") };
@@ -988,7 +1073,11 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
             let _ = write!(xobjects, " /Im{k} {id} 0 R");
         }
         let xobjects = if xobjects.is_empty() { String::new() } else { format!(" /XObject <<{xobjects} >>") };
-        let content = objs.add(stream(marks.as_bytes(), o.compress, ""));
+        let parts: Vec<usize> = content_streams(marks.as_bytes(), o.compress).into_iter().map(|b| objs.add(b)).collect();
+        let content = match parts.as_slice() {
+            [one] => format!("{one} 0 R"),
+            many => format!("[{}]", refs(many.iter().copied())),
+        };
         let mut used: Vec<usize> = texts.values().map(|(f, _)| *f).collect();
         used.sort_unstable();
         used.dedup();
@@ -1018,7 +1107,8 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
         let mut mb = String::new();
         pt(&mut mb, p.media);
         let annots = if annots.is_empty() { String::new() } else { format!(" /Annots [{}]", refs(annots)) };
-        page_dicts.push((page, used, props, ext_gstates(&alphas) + &xobjects, format!("/MediaBox [0 0 {mb}] /Contents {content} 0 R{annots}")));
+        let turn = if o.upside_down { " /Rotate 180" } else { "" };
+        page_dicts.push((page, used, props, ext_gstates(&alphas) + &xobjects, format!("/MediaBox [0 0 {mb}]{turn} /Contents {content}{annots}")));
         kids.push(page);
     }
     let font_ids = if fonts.is_empty() { Vec::new() } else { fonts.write(&mut objs, o.compress) };
@@ -1067,4 +1157,22 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
     let _ = write!(x, "trailer\n<< /Size {} /Root {catalog} 0 R /Info {info} 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1);
     out.extend_from_slice(x.as_bytes());
     out
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    /// A scale given means that scale, not Fit (tester 0.7.7e: 1:20 and 1:40 plotted the same).
+    #[test]
+    fn a_scale_turns_fit_off() {
+        let o = PdfOptions::from_json(&serde_json::json!({ "scale": "1:20" }));
+        assert_eq!(o.fit, Some(false));
+        assert_eq!(o.scale, Some(0.05));
+        assert_eq!(PdfOptions::from_json(&serde_json::json!({ "scale": 0.025 })).fit, Some(false));
+        assert_eq!(PdfOptions::from_json(&serde_json::json!({ "scale": "1:20", "fit": true })).fit, Some(true));
+        assert_eq!(PdfOptions::from_json(&serde_json::json!({})).fit, None);
+        assert_eq!(ratio("1=40"), Some(0.025));
+        assert_eq!(ratio("1:0"), None);
+    }
 }

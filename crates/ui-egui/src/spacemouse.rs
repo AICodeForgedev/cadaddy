@@ -133,30 +133,36 @@ fn navigate(app: &mut CadApp, params: &Value) -> Result<Value, String> {
 }
 
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
-    egui::Window::new(crate::tl!("3D Mouse")).id(egui::Id::new("spacemouse")).open(open).resizable(false).show(ctx, |ui| {
-        ui.label(crate::i18n::t(app.spacemouse.status.message()));
-        if let Some(device) = &app.spacemouse.device {
-            ui.label(device);
-        }
-        if let Some(detail) = &app.spacemouse.detail {
-            ui.label(detail);
-        }
-        ui.separator();
-        let mut settings = app.spacemouse.settings;
-        let mut changed = ui.checkbox(&mut settings.enabled, crate::tl!("Enable 3D mouse navigation")).changed();
-        changed |= ui.add(egui::Slider::new(&mut settings.pan_speed, 0.1..=3.0).text(crate::tl!("Pan sensitivity"))).changed();
-        changed |= ui.add(egui::Slider::new(&mut settings.zoom_speed, 0.1..=3.0).text(crate::tl!("Zoom sensitivity"))).changed();
-        changed |= ui.checkbox(&mut settings.reverse_zoom, crate::tl!("Reverse zoom direction")).changed();
-        if changed {
-            let _ = app.run("ui.spacemouse", json!({"settings": settings}));
-        }
-        if ui
-            .add_enabled(matches!(app.spacemouse.status, Status::Connected | Status::Calibrating), egui::Button::new(crate::tl!("Calibrate")))
-            .clicked()
-        {
-            let _ = app.run("ui.spacemouse.calibrate", Value::Null);
-        }
-        ui.label(crate::tl!("Move sideways to pan; push/pull or twist to zoom."));
-        ui.label(crate::tl!("Left device button: zoom extents. Right device button: calibrate."));
-    });
+    egui::Window::new(crate::tl!("3D Mouse"))
+        .id(egui::Id::new("spacemouse"))
+        .open(open)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            ui.label(crate::i18n::t(app.spacemouse.status.message()));
+            if let Some(device) = &app.spacemouse.device {
+                ui.label(device);
+            }
+            if let Some(detail) = &app.spacemouse.detail {
+                ui.label(detail);
+            }
+            ui.separator();
+            let mut settings = app.spacemouse.settings;
+            let mut changed = ui.checkbox(&mut settings.enabled, crate::tl!("Enable 3D mouse navigation")).changed();
+            changed |= ui.add(egui::Slider::new(&mut settings.pan_speed, 0.1..=3.0).text(crate::tl!("Pan sensitivity"))).changed();
+            changed |= ui.add(egui::Slider::new(&mut settings.zoom_speed, 0.1..=3.0).text(crate::tl!("Zoom sensitivity"))).changed();
+            changed |= ui.checkbox(&mut settings.reverse_zoom, crate::tl!("Reverse zoom direction")).changed();
+            if changed {
+                let _ = app.run("ui.spacemouse", json!({"settings": settings}));
+            }
+            if ui
+                .add_enabled(matches!(app.spacemouse.status, Status::Connected | Status::Calibrating), egui::Button::new(crate::tl!("Calibrate")))
+                .clicked()
+            {
+                let _ = app.run("ui.spacemouse.calibrate", Value::Null);
+            }
+            ui.label(crate::tl!("Move sideways to pan; push/pull or twist to zoom."));
+            ui.label(crate::tl!("Left device button: zoom extents. Right device button: calibrate."));
+        });
 }

@@ -1415,3 +1415,337 @@ menu	View	عرض
 	Clip PDF Underlay	قص مرجع PDF السفلي
 	Adjust PDF Underlay	ضبط مرجع PDF السفلي
 	PDF Underlay Layers	طبقات مرجع PDF السفلي
+	Unused items in this drawing	العناصر غير المستخدمة في هذا الرسم
+	Purge Checked Items	تنظيف العناصر المحددة
+	Purge All	تنظيف الكل
+	Items purged: {count}	العناصر التي تم تنظيفها: {count}
+	Find what:	البحث عن:
+	Replace with:	الاستبدال بـ:
+	Match case	مطابقة حالة الأحرف
+	Find whole words only	الكلمات الكاملة فقط
+	Find	بحث
+	Replace All	استبدال الكل
+	Matches replaced: {count} (objects: {objects})	التطابقات المستبدلة: {count} (الكائنات: {objects})
+	Matches found and selected: {count} (objects: {objects})	التطابقات التي تم العثور عليها وتحديدها: {count} (الكائنات: {objects})
+	Select Color	تحديد اللون
+	Dimension styles	أنماط الأبعاد
+	Linetypes	أنواع الخطوط
+	Multileader styles	أنماط الخطوط الدليلية المتعددة
+	Multiline styles	أنماط الخطوط المتعددة
+	Table styles	أنماط الجداول
+	Text styles	أنماط النص
+	Zero-length geometry	هندسة بطول صفري
+	Empty text objects	كائنات نصية فارغة
+	Palette Windows	نوافذ اللوحات
+	Dock	إرساء
+	Back into the main window	العودة إلى النافذة الرئيسية
+	Dock Palette	إرساء اللوحة
+	Float in Own Window	تعويم في نافذة مستقلة
+	Drawings (CDY, DWG, DXF)	الرسومات (CDY وDWG وDXF)
+	CADaddy Drawing (CDY)	رسم CADaddy ‏(CDY)
+	CADaddy drawing (.cdy)	رسم CADaddy ‏(.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	احفظ أيضًا نسخة DWG عند حفظ رسم CADaddy ‏(.cdy)
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	يحتفظ رسم CADaddy بكل شيء؛ وقد لا تحتفظ ملفات DWG وDXF بكل ذلك (يُذكر ما لا يُحفظ عند الحفظ بها).
+	Field...	حقل...
+	Update Fields	تحديث الحقول
+	Change Text Case	تغيير حالة أحرف النص
+	Auto Number	ترقيم تلقائي
+	Explode Text	تفجير النص
+	Arc Aligned Text	نص على قوس
+	Data Extraction	استخراج البيانات
+	Data source	مصدر البيانات
+	Objects	الكائنات
+	Output	الإخراج
+	Other drawings:	رسومات أخرى:
+	Add Drawings...	إضافة رسومات...
+	Open Settings...	فتح الإعدادات...
+	Start from a saved .dxe settings file	البدء من ملف إعدادات .dxe محفوظ
+	Block names	أسماء الكتل
+	Include blocks inside blocks	تضمين الكتل داخل الكتل
+	Other objects:	كائنات أخرى:
+	The drawing has no other objects.	لا يحتوي الرسم على كائنات أخرى.
+	Properties to extract:	الخصائص المراد استخراجها:
+	Attribute tags	علامات السمات
+	Combine identical rows	دمج الصفوف المتطابقة
+	Insert a table	إدراج جدول
+	Insertion point	نقطة الإدراج
+	Title	العنوان
+	Write a file (.csv for spreadsheets, .txt tab-separated)	كتابة ملف (.csv لجداول البيانات، .txt مفصول بعلامات جدولة)
+	Browse...	استعراض...
+	Save Settings...	حفظ الإعدادات...
+	Save these choices to a .dxe file to use again	حفظ هذه الخيارات في ملف .dxe لاستخدامها مرة أخرى
+	< Back	< السابق
+	Next >	التالي >
+	Finish	إنهاء
+	This drawing	هذا الرسم
+	Preview	معاينة
+	UCS	نظام إحداثيات المستخدم
+	Plan View (World)	عرض المسقط (العالمي)
+	New UCS	نظام إحداثيات مستخدم جديد
+	World	العالمي
+	Current UCS	نظام إحداثيات المستخدم الحالي
+	World (WCS)	العالمي (WCS)
+	Unnamed	بلا اسم
+	Hide UCS Icon	إخفاء رمز نظام الإحداثيات
+	WCS	WCS
+	Spelling	التدقيق الإملائي
+	Check Spelling	التحقق من الإملاء
+	Where to check	مكان التحقق
+	Selected objects	الكائنات المحددة
+	Not in dictionary:	غير موجود في القاموس:
+	Suggestions:	الاقتراحات:
+	Ignore	تجاهل
+	Ignore All	تجاهل الكل
+	Change All	تغيير الكل
+	Add to Dictionary	إضافة إلى القاموس
+	Main dictionary:	القاموس الرئيسي:
+	American English	الإنجليزية الأمريكية
+	Custom dictionary:	القاموس المخصص:
+	Spelling check complete.	اكتمل التدقيق الإملائي.
+	Hyperlink...	ارتباط تشعبي...
+	Select Objects for a Hyperlink	تحديد كائنات لارتباط تشعبي
+	Open Hyperlink	فتح الارتباط التشعبي
+	Insert Hyperlink	إدراج ارتباط تشعبي
+	Edit Hyperlink	تحرير الارتباط التشعبي
+	Text to display	النص المعروض
+	File or web page	ملف أو صفحة ويب
+	Named location	موقع مسمى
+	A named location with no file or web page is a layout or view of this drawing.	الموقع المسمى بلا ملف أو صفحة ويب هو مخطط أو عرض في هذا الرسم.
+	Remove Link	إزالة الارتباط
+	⌘-click to follow the link	انقر مع ⌘ لفتح الارتباط
+	Ctrl+click to follow the link	انقر مع Ctrl لفتح الارتباط
+	Materials Browser...	مستعرض المواد...
+	Attach by Layer	إرفاق حسب الطبقة
+	Material Mapping	تعيين خريطة المادة
+	New Material	مادة جديدة
+	Edit Material	تحرير المادة
+	Delete Material	حذف المادة
+	Assign Material	تعيين مادة
+	Materials Browser	مستعرض المواد
+	Search	بحث
+	Library	المكتبة
+	Add to drawing	إضافة إلى الرسم
+	In this drawing	في هذا الرسم
+	No materials yet: add one from the library.	لا توجد مواد بعد: أضف واحدة من المكتبة.
+	Colour	اللون
+	Roughness	الخشونة
+	Metallic	معدني
+	Opacity	العتامة
+	Mapping	التعيين
+	Tile size	حجم البلاطة
+	Assign to selection ({n})	تعيين للتحديد ({n})
+	Attach to layer	إرفاق بالطبقة
+	Render	العرض
+	Edit Layer State	تحرير حالة الطبقة
+	Export Layer State	تصدير حالة الطبقة
+	Import Layer State	استيراد حالة الطبقة
+	New Layer Filter	مرشح طبقات جديد
+	Edit Layer Filter	تحرير مرشح الطبقات
+	Delete Layer Filter	حذف مرشح الطبقات
+	List Layer Filters	سرد مرشحات الطبقات
+	Layers in Filter	الطبقات في المرشح
+	Layer States Manager	مدير حالات الطبقات
+	Invert filter	عكس المرشح
+	New Property Filter...	مرشح خصائص جديد...
+	New Group Filter	مرشح مجموعة جديد
+	Add Layer	إضافة طبقة
+	Remove Layer	إزالة الطبقة
+	Layer Filter Properties	خصائص مرشح الطبقات
+	Filter name	اسم المرشح
+	Within	ضمن
+	Any	أي
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	الأنماط: * أي أحرف، ? حرف واحد، # رقم واحد؛ افصل بفواصل؛ ~ للاستبعاد.
+	Layer states	حالات الطبقات
+	Turn off layers not found in layer state	إيقاف تشغيل الطبقات غير الموجودة في حالة الطبقة
+	Layer properties to restore	خصائص الطبقات المراد استعادتها
+	On / Off	تشغيل / إيقاف
+	Frozen / Thawed	مجمدة / غير مجمدة
+	Locked / Unlocked	مقفلة / غير مقفلة
+	Plot / No Plot	طباعة / عدم طباعة
+	Layers in "{name}"	الطبقات في "{name}"
+	Remove from the layer state	إزالة من حالة الطبقة
+	New...	جديد...
+	Save the layers as they are now in this state	حفظ الطبقات بوضعها الحالي في هذه الحالة
+	Edit...	تحرير...
+	Rename	إعادة تسمية
+	New layer state name	اسم حالة الطبقة الجديدة
+	New name	الاسم الجديد
+	Visual Style	النمط المرئي
+	Visual Styles	الأنماط المرئية
+	Wireframe	إطار سلكي
+	Hidden	مخفي
+	Shaded	مظلل
+	Shaded with Edges	مظلل مع الحواف
+	Realistic	واقعي
+	Mesh	شبكة
+	Polyface Mesh	شبكة متعددة الأوجه
+	Polygon Mesh	شبكة مضلعة
+	Walk	سير
+	Fly	طيران
+	Walk and Fly	السير والطيران
+	3D Library...	مكتبة ثلاثية الأبعاد...
+	Add 3D Twins to Symbols	إضافة نظائر ثلاثية الأبعاد للرموز
+	List 3D Models	قائمة النماذج ثلاثية الأبعاد
+	Add 3D Twins	إضافة نظائر ثلاثية الأبعاد
+	Plan Layers	طبقات المخطط
+	Plan Walls	جدران المخطط
+	Plan Openings	فتحات المخطط
+	Plan Rooms	غرف المخطط
+	Plan Notes	ملاحظات المخطط
+	Plan Sheets	أوراق المخطط
+	3D Building from Plan	مبنى ثلاثي الأبعاد من المسقط
+	Wedge	إسفين
+	Presspull	ضغط/سحب
+	3D Solid	مجسم ثلاثي الأبعاد
+	Specify center	حدد المركز
+	Specify length	حدد الطول
+	Specify width	حدد العرض
+	Specify other corner	حدد الركن الآخر
+	Specify center point	حدد نقطة المركز
+	Specify base radius	حدد نصف قطر القاعدة
+	Specify radius	حدد نصف القطر
+	Specify diameter	حدد القطر
+	Specify top radius	حدد نصف القطر العلوي
+	Specify tube radius	حدد نصف قطر الأنبوب
+	Select objects to extrude	حدد الكائنات المراد بثقها
+	Select extrusion path	حدد مسار البثق
+	Specify angle of taper for extrusion	حدد زاوية الاستدقاق للبثق
+	Specify height of extrusion	حدد ارتفاع البثق
+	Select objects to revolve	حدد الكائنات المراد تدويرها
+	Specify axis start point or define axis by	حدد نقطة بداية المحور أو عرّف المحور بواسطة
+	Specify axis endpoint	حدد نقطة نهاية المحور
+	Specify angle of revolution	حدد زاوية الدوران
+	Select objects to sweep	حدد الكائنات المراد مسحها
+	Select sweep path	حدد مسار المسح
+	Select cross sections in lofting order	حدد المقاطع العرضية بترتيب التشكيل
+	Click inside bounded areas to press or pull	انقر داخل المناطق المحدودة للضغط أو السحب
+	Specify extrusion height	حدد ارتفاع البثق
+	Cube	مكعب
+	Sides	الأضلاع
+	Top radius	نصف القطر العلوي
+	Path	مسار
+	Taper angle	زاوية الاستدقاق
+	Select one or more regions or 3D solids.	حدد منطقة واحدة أو أكثر أو مجسمات ثلاثية الأبعاد.
+	No closed area found there.	لم يتم العثور على منطقة مغلقة هناك.
+	Slice	شريحة
+	Thicken	تثخين
+	Fillet Edge	تقريب الحافة
+	Chamfer Edge	شطف الحافة
+	Fillet Edges	تقريب الحواف
+	Chamfer Edges	شطف الحواف
+	Move Faces	نقل الأوجه
+	Offset Faces	إزاحة الأوجه
+	Delete Faces	حذف الأوجه
+	Shell	قشرة
+	Composite	مركّب
+	Select objects to slice	حدد الكائنات المراد تقسيمها
+	Specify a point on desired side or [keep Both sides]	حدد نقطة على الجانب المطلوب أو [الاحتفاظ بكلا الجانبين]
+	Both	كلاهما
+	Specify start point of slicing plane or	حدد نقطة بداية مستوى التقسيم أو
+	Specify second point on plane	حدد النقطة الثانية على المستوى
+	Specify the Z of the XY-plane	حدد قيمة Z للمستوى XY
+	Specify the X of the YZ-plane	حدد قيمة X للمستوى YZ
+	Specify the Y of the ZX-plane	حدد قيمة Y للمستوى ZX
+	Select surfaces to thicken	حدد الأسطح المراد تثخينها
+	Select a 3D solid	حدد مجسمًا ثلاثي الأبعاد
+	Select an edge	حدد حافة
+	Remove faces	إزالة الأوجه
+	Select faces	حدد الأوجه
+	Specify thickness	حدد السماكة
+	Enter fillet radius	أدخل نصف قطر التقريب
+	Enter distance	أدخل المسافة
+	Specify a base point or displacement	حدد نقطة أساس أو إزاحة
+	Specify a second point of displacement	حدد النقطة الثانية للإزاحة
+	Specify the offset distance	حدد مسافة الإزاحة
+	Enter the shell offset distance	أدخل مسافة إزاحة القشرة
+	Select solids, surfaces, and regions to subtract from ..	حدد المجسمات والأسطح والمناطق المراد الطرح منها ..
+	Select solids, surfaces, and regions to subtract ..	حدد المجسمات والأسطح والمناطق المراد طرحها ..
+	Select two or more solids.	حدد مجسمين أو أكثر.
+	The solids don't overlap; nothing was changed.	المجسمات لا تتداخل؛ لم يتم تغيير شيء.
+	Nothing would remain; nothing was changed.	لن يتبقى شيء؛ لم يتم تغيير شيء.
+	The result would not be a solid; nothing was changed.	لن تكون النتيجة مجسمًا؛ لم يتم تغيير شيء.
+	No straight edge between two flat faces there.	لا توجد حافة مستقيمة بين وجهين مستويين هناك.
+	No face of the solid there.	لا يوجد وجه للمجسم هناك.
+	Only outside (convex) edges can be filleted or chamfered.	يمكن تقريب أو شطف الحواف الخارجية (المحدبة) فقط.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	تعمل القشرة على الصناديق والأسطوانات والكرات والبثق المستقيم.
+	The walls are too thick for this solid.	الجدران سميكة جدًا لهذا المجسم.
+	Select solids to subtract from.	حدد المجسمات المراد الطرح منها.
+	A solid can't be subtracted from itself.	لا يمكن طرح مجسم من نفسه.
+	The solid would have too many operations; nothing was changed.	سيحتوي المجسم على عدد كبير جدًا من العمليات؛ لم يتم تغيير شيء.
+	That face can't be moved (only flat faces, holes and added parts).	لا يمكن نقل هذا الوجه (الأوجه المستوية والثقوب والأجزاء المضافة فقط).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	لا يمكن حذف هذا الوجه (الثقوب والتقريبات والشطفات والأجزاء المضافة فقط).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	لا يمكن إزاحة هذا الوجه (جوانب الصناديق ونهايات الأسطوانات والمخاريط والبثق وجدران الأسطوانات والكرات).
+	The thickness must be more than zero.	يجب أن تكون السماكة أكبر من صفر.
+	The radius must be more than zero.	يجب أن يكون نصف القطر أكبر من صفر.
+	The distance must be more than zero.	يجب أن تكون المسافة أكبر من صفر.
+	Requires a number.	يتطلب رقمًا.
+	Parameter	معامل
+	Action	إجراء
+	Visibility States	حالات الرؤية
+	Remove Parameter or Action	إزالة معامل أو إجراء
+	Edit Reference	تحرير المرجع
+	Discard Reference Edits	تجاهل تعديلات المرجع
+	Nested References	المراجع المتداخلة
+	Light List	قائمة الأضواء
+	Sun Properties	خصائص الشمس
+	Render Exposure	تعريض العرض
+	Point Light	ضوء نقطي
+	Spotlight	ضوء موجه
+	Distant Light	ضوء بعيد
+	Change Lights	تغيير الأضواء
+	Section Plane	مستوى المقطع
+	Live Section	مقطع مباشر
+	Generate Section Block	إنشاء كتلة مقطع
+	Generate Section	إنشاء مقطع
+	Flatshot	لقطة مسطحة
+	Base View	العرض الأساسي
+	Section View	عرض المقطع
+	Drawing Views	عروض الرسم
+	Select face or any point to locate section line or	حدد وجهًا أو أي نقطة لتحديد خط المقطع أو
+	Orthographic	متعامد
+	Select section object	حدد كائن المقطع
+	Specify location of base view	حدد موقع العرض الأساسي
+	Select parent view	حدد العرض الأصلي
+	Specify end point	حدد نقطة النهاية
+	Specify location of section view	حدد موقع عرض المقطع
+	There is nothing to draw: no 3D objects were found.	لا يوجد شيء للرسم: لم يتم العثور على كائنات ثلاثية الأبعاد.
+	The section plane doesn't cut any solid.	مستوى المقطع لا يقطع أي مجسم.
+	The view needs a direction.	يحتاج العرض إلى اتجاه.
+	The drawing has no layout.	الرسم لا يحتوي على تخطيط.
+	That is not a section plane.	هذا ليس مستوى مقطع.
+	Requires a point.	يتطلب نقطة.
+	The view is [dx, dy, dz].	العرض هو [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	إنشاء حزمة إرسال
+	Files in the package	الملفات في الحزمة
+	Not included	غير مضمّن
+	Organized folders	مجلدات منظمة
+	One folder	مجلد واحد
+	Include a transmittal report	تضمين تقرير الإرسال
+	Create ZIP...	إنشاء ZIP...
+	Create Folder...	إنشاء مجلد...
+	STL Out	إخراج STL
+	Export STL...	تصدير STL...
+	3D models (glTF, OBJ, STL)	نماذج ثلاثية الأبعاد (glTF وOBJ وSTL)
+	3D model (glTF binary)	نموذج ثلاثي الأبعاد (glTF ثنائي)
+	3D model (glTF)	نموذج ثلاثي الأبعاد (glTF)
+	3D model (OBJ)	نموذج ثلاثي الأبعاد (OBJ)
+	3D model (STL)	نموذج ثلاثي الأبعاد (STL)
+	Render Region	عرض منطقة
+	samples	عينات
+	a sample	لكل عينة
+	Pick crop window to render	حدد نافذة الاقتصاص للعرض
+	Nothing has been rendered yet.	لم يتم عرض أي شيء بعد.
+	There is nothing to render: no surfaces in the view.	لا يوجد شيء للعرض: لا توجد أسطح في العرض.
+	The image couldn't be encoded.	تعذر ترميز الصورة.
+	Saving images isn't available in the browser.	حفظ الصور غير متاح في المتصفح.
+	PNG image	صورة PNG
+	JPEG image	صورة JPEG
+	Save Image	حفظ الصورة
+	My Properties	خصائصي
+	Add to My Properties	إضافة إلى خصائصي
+	Remove from My Properties	إزالة من خصائصي
+	All properties	كل الخصائص
+	My properties: the ones you added (right-click a property's name to add it)	خصائصي: التي أضفتها (انقر بزر الماوس الأيمن على اسم خاصية لإضافتها)
+	Right-click a property's name and choose Add to My Properties.	انقر بزر الماوس الأيمن على اسم خاصية واختر «إضافة إلى خصائصي».
+	Color Books	دفاتر الألوان

@@ -6,7 +6,8 @@
     wix build cadaddy.wxs -arch x64 -ext WixToolset.UI.wixext -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
 
   Per-user install (no administrator needed) into %LOCALAPPDATA%\Programs\CADaddy, a Start Menu
-  shortcut, an optional desktop shortcut, and CADaddy registered for .dwg and .dxf drawings:
+  shortcut, an optional desktop shortcut, CADaddy as the app for its own .cdy drawings, and
+  CADaddy registered for .dwg and .dxf drawings:
   - the default app for them where the user hasn't chosen one (a user's own choice, such as
     AutoCAD, is theirs: Windows lets only the user change it, in Settings > Default apps, where
     CADaddy is listed);
@@ -82,6 +83,7 @@
 
         <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\cadaddy.exe" Value="[#CadaddyExe]" Type="string" />
         <RegistryValue Root="HKCU" Key="Software\Classes\Applications\cadaddy.exe\shell\open\command" Value="&quot;[#CadaddyExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\Applications\cadaddy.exe\SupportedTypes" Name=".cdy" Value="" Type="string" />
         <RegistryValue Root="HKCU" Key="Software\Classes\Applications\cadaddy.exe\SupportedTypes" Name=".dwg" Value="" Type="string" />
         <RegistryValue Root="HKCU" Key="Software\Classes\Applications\cadaddy.exe\SupportedTypes" Name=".dxf" Value="" Type="string" />
 
@@ -89,6 +91,11 @@
         <RegistryValue Root="HKCU" Key="Software\Classes\CADaddy.Drawing" Value="CADaddy Drawing" Type="string" />
         <RegistryValue Root="HKCU" Key="Software\Classes\CADaddy.Drawing\DefaultIcon" Value="&quot;[#CadaddyExe]&quot;,0" Type="string" />
         <RegistryValue Root="HKCU" Key="Software\Classes\CADaddy.Drawing\shell\open\command" Value="&quot;[#CadaddyExe]&quot; &quot;%1&quot;" Type="string" />
+
+        <!-- .cdy: CADaddy's own drawings. -->
+        <RegistryValue Root="HKCU" Key="Software\Classes\.cdy" Value="CADaddy.Drawing" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\.cdy" Name="Content Type" Value="application/x-cadaddy-drawing" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\.cdy\OpenWithProgids" Name="CADaddy.Drawing" Value="" Type="string" />
 
         <!-- .dwg and .dxf: CADaddy by default (where the user hasn't picked an app) and under Open with. -->
         <RegistryValue Root="HKCU" Key="Software\Classes\.dwg" Value="CADaddy.Drawing" Type="string" />
@@ -99,6 +106,7 @@
         <!-- Listed in Settings > Default apps. -->
         <RegistryValue Root="HKCU" Key="Software\AICodeForge\CADaddy\Capabilities" Name="ApplicationName" Value="CADaddy" Type="string" />
         <RegistryValue Root="HKCU" Key="Software\AICodeForge\CADaddy\Capabilities" Name="ApplicationDescription" Value="CADaddy computer-aided design" Type="string" />
+        <RegistryValue Root="HKCU" Key="Software\AICodeForge\CADaddy\Capabilities\FileAssociations" Name=".cdy" Value="CADaddy.Drawing" Type="string" />
         <RegistryValue Root="HKCU" Key="Software\AICodeForge\CADaddy\Capabilities\FileAssociations" Name=".dwg" Value="CADaddy.Drawing" Type="string" />
         <RegistryValue Root="HKCU" Key="Software\AICodeForge\CADaddy\Capabilities\FileAssociations" Name=".dxf" Value="CADaddy.Drawing" Type="string" />
         <RegistryValue Root="HKCU" Key="Software\RegisteredApplications" Name="CADaddy" Value="Software\AICodeForge\CADaddy\Capabilities" Type="string" />

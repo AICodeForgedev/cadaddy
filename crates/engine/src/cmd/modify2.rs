@@ -71,7 +71,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(SelOp::new(SelKind::Flatten)))),
         CommandSpec::new("arraypath", "Path Array", run_arraypath)
             .menu(&["Modify", "Array", "Path Array"])
-            .params("{handles?, path (handle), count? (default 6) | spacing?, align?: bool (default true)}")
+            .params("{handles?, path (handle), count? (default 6, spread over the path) | spacing? (items every spacing), align?: bool (default true), associative?: bool (default ARRAYASSOCIATIVITY, on)} → associative: {handle, items, created}; else {handles} (copies)")
             .interactive(|_| Ok(Box::new(PathArrayM::default()))),
         CommandSpec::new("textedit", "Edit Text...", run_textedit)
             .menu(&["Modify", "Object", "Edit Text..."])
@@ -1595,7 +1595,11 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
         EntityKind::Hatch(h) => h.elevation = 0.0,
         EntityKind::Solid(so) | EntityKind::Trace(so) => so.corners.iter_mut().for_each(z),
         EntityKind::Face3d(f) => f.corners.iter_mut().for_each(z),
-        EntityKind::Region(_) => {}
+        EntityKind::Mesh(m) => m.vertices.iter_mut().for_each(z),
+        // A solid keeps its shape (EXPLODE it to a mesh first to flatten that).
+        EntityKind::Region(_) | EntityKind::Solid3d(_) | EntityKind::SectionPlane(_) => {}
+        // A light keeps its height: FLATTEN is for drawing geometry.
+        EntityKind::Light(_) => {}
         EntityKind::Image(i) => {
             z(&mut i.insert);
             i.u.z = 0.0;
@@ -2334,7 +2338,11 @@ fn run_arraypath(s: &mut Session, p: &Value) -> Result<Value> {
     let path = curves::handle_param(p, "path").ok_or_else(|| bad("arraypath", "`path` (handle) is required"))?;
     let count = p.get("count").and_then(Value::as_u64).map(|n| usize::try_from(n).unwrap_or(usize::MAX));
     let spacing = p.get("spacing").and_then(Value::as_f64);
-    let r = arraypath(s, &hs, path, count, spacing, bool_or(p, "align", true))?;
+    let align = bool_or(p, "align", true);
+    if p.get("associative").and_then(Value::as_bool).unwrap_or_else(|| super::array::assoc_default(s)) {
+        return super::array::path::make_path(s, &hs, path, count, spacing, align);
+    }
+    let r = arraypath(s, &hs, path, count, spacing, align)?;
     Ok(json!({ "handles": r.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
 }
 
@@ -2395,9 +2403,14 @@ impl Interactive for PathArrayM {
                     Input::Text(t) => number(t).filter(|n| *n >= 1.0).ok_or_else(|| other("Requires a count of 1 or more."))? as usize,
                     _ => 6,
                 };
-                arraypath(s, &self.objs, path, Some(n), None, true)?;
+                let assoc = super::array::assoc_default(s);
+                if assoc {
+                    super::array::path::make_path(s, &self.objs, path, Some(n), None, true)?;
+                } else {
+                    arraypath(s, &self.objs, path, Some(n), None, true)?;
+                }
                 s.set_selection(Vec::new());
-                s.echo(format!("Type = Path  Associative = No ({n} items)"));
+                s.echo(format!("Type = Path  Associative = {} ({n} items)", if assoc { "Yes" } else { "No" }));
                 Ok(Step::Done)
             }
             (None, Input::Enter) => Ok(Step::Cancel),

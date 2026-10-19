@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-cadaddy-drawing">
+    <comment>CADaddy drawing</comment>
+    <magic priority="80"><match type="string" value="CADDY\x1a\r\n" offset="0"/></magic>
+    <glob pattern="*.cdy"/>
+  </mime-type>
   <mime-type type="image/vnd.dxf">
     <comment>DXF drawing</comment>
     <glob pattern="*.dxf"/>

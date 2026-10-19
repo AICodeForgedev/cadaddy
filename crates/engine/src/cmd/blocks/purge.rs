@@ -369,10 +369,26 @@ pub(in crate::cmd) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let ty = str_param(p, "type").unwrap_or("all");
     let (_, kind) = kind_of(ty).ok_or_else(|| bad("purge", format!("unknown type `{ty}`")))?;
     let names = str_param(p, "names").unwrap_or("*");
+    if p.get("list").and_then(Value::as_bool) == Some(true) {
+        return list(s.doc()?, names);
+    }
     let mut r = Report::default();
     purge_kind(s, kind, names, &mut r)?;
     s.set_selection(Vec::new());
     Ok(r.json())
+}
+
+/// What PURGE would remove, purging nothing: the unused names of every named kind, and the counts
+/// of zero-length geometry and empty text (the Purge dialog's tree).
+fn list(d: &Drawing, names: &str) -> Result<Value> {
+    let mut out = Map::new();
+    for &kind in ALL {
+        out.insert(json_key(kind).into(), json!(matching(d, kind, names)));
+    }
+    for kind in [Kind::ZeroLength, Kind::EmptyText] {
+        out.insert(json_key(kind).into(), json!(degenerate(d, kind).len()));
+    }
+    Ok(Value::Object(out))
 }
 
 // ---------------- -PURGE prompts ----------------

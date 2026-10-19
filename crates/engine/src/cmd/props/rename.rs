@@ -121,9 +121,95 @@ pub(super) fn simple(s: &mut Session, table: &str, from: &str, to: &str) -> Resu
     repoint(d, &uses, &fix)
 }
 
+/// Why renaming a material isn't possible: the drawing model keeps no material definitions.
+pub(super) const NO_MATERIALS: &str =
+    "Materials can't be renamed: this drawing model keeps no material definitions yet (renaming needs the material library that MATERIALS manages).";
+
+/// Rename a named plot style: in the named plot style tables kept with the drawing, and on every
+/// object, layer and CPLOTSTYLE that uses it.
+pub(super) fn plotstyle(s: &mut Session, from: &str, to: &str) -> Result<()> {
+    let to = to.trim().to_string();
+    if !valid_name(&to) {
+        return Err(bad("rename", "invalid plot style name"));
+    }
+    if ["ByLayer", "ByBlock", "Normal"].iter().any(|n| from.eq_ignore_ascii_case(n) || to.eq_ignore_ascii_case(n)) {
+        return Err(bad("rename", "ByLayer, ByBlock and Normal are not renamed"));
+    }
+    let d = s.doc_mut()?;
+    let named = |d: &Drawing, n: &str| {
+        d.plot_style_tables
+            .iter()
+            .filter(|t| t.kind == cadaddy_doc::PlotStyleKind::Named)
+            .any(|t| t.styles.iter().any(|st| st.name.eq_ignore_ascii_case(n)))
+    };
+    let used = |d: &Drawing, n: &str| {
+        let on = |st: &EntityStore| st.iter().any(|e| e.common.plot_style.eq_ignore_ascii_case(n));
+        on(&d.model)
+            || d.layouts.iter().any(|l| on(&l.entities))
+            || d.blocks.values().any(|b| on(&b.entities))
+            || d.layers.iter().any(|l| l.plot_style.eq_ignore_ascii_case(n))
+    };
+    if !named(d, from) && !used(d, from) {
+        return Err(bad("rename", format!("no plot style `{from}`")));
+    }
+    if !to.eq_ignore_ascii_case(from) && named(d, &to) {
+        return Err(bad("rename", format!("a plot style `{to}` already exists")));
+    }
+    for t in d.plot_style_tables.iter_mut().filter(|t| t.kind == cadaddy_doc::PlotStyleKind::Named) {
+        for st in t.styles.iter_mut().filter(|st| st.name.eq_ignore_ascii_case(from)) {
+            st.name = to.clone();
+        }
+    }
+    for l in d.layers.iter_mut().filter(|l| l.plot_style.eq_ignore_ascii_case(from)) {
+        l.plot_style = to.clone();
+    }
+    let users =
+        |st: &EntityStore| -> Vec<Handle> { st.iter().filter(|e| e.common.plot_style.eq_ignore_ascii_case(from)).map(|e| e.handle).collect() };
+    let mut hs = users(&d.model);
+    hs.extend(d.layouts.iter().flat_map(|l| users(&l.entities)));
+    for h in hs {
+        d.modify_entity(h, |e| e.common.plot_style = to.clone())?;
+    }
+    for block in d.blocks.values_mut() {
+        let hs = users(&block.entities);
+        if !hs.is_empty() {
+            let b = Arc::make_mut(block);
+            for h in hs {
+                b.entities.modify(h, |e| e.common.plot_style = to.clone());
+            }
+        }
+    }
+    if d.header.str("CPLOTSTYLE", "ByLayer").eq_ignore_ascii_case(from) {
+        d.header.set_str("CPLOTSTYLE", &to);
+    }
+    Ok(())
+}
+
+/// Rename a named viewport configuration (VPORTS); the one shown, *Active, keeps its name.
+pub(super) fn vport(s: &mut Session, from: &str, to: &str) -> Result<()> {
+    let to = to.trim().to_string();
+    if !valid_name(&to) {
+        return Err(bad("rename", "invalid viewport configuration name"));
+    }
+    if from.eq_ignore_ascii_case(cadaddy_doc::VportConfig::ACTIVE) {
+        return Err(bad("rename", "the active viewport configuration (*Active) cannot be renamed"));
+    }
+    let d = s.doc_mut()?;
+    if !to.eq_ignore_ascii_case(from) && d.vports.iter().any(|v| v.name.eq_ignore_ascii_case(&to)) {
+        return Err(bad("rename", format!("a viewport configuration `{to}` already exists")));
+    }
+    let v = d
+        .vports
+        .iter_mut()
+        .find(|v| !v.is_active() && v.name.eq_ignore_ascii_case(from))
+        .ok_or_else(|| bad("rename", format!("no viewport configuration `{from}`")))?;
+    v.name = to;
+    Ok(())
+}
+
 // ---------------- -RENAME prompts ----------------
 
-/// Prompt keyword, `rename` table (None: not available yet), noun.
+/// Prompt keyword, `rename` table (None: can't be renamed, see [`NO_MATERIALS`]), noun.
 const TYPES: &[(&str, Option<&str>, &str)] = &[
     ("Block", Some("block"), "block"),
     ("Dimstyle", Some("dimstyle"), "dimension style"),
@@ -131,12 +217,12 @@ const TYPES: &[(&str, Option<&str>, &str)] = &[
     ("LType", Some("linetype"), "linetype"),
     ("Material", None, "material"),
     ("multileadeRstyle", Some("mleaderstyle"), "multileader style"),
-    ("Plotstyle", None, "plot style"),
+    ("Plotstyle", Some("plotstyle"), "plot style"),
     ("textStyle", Some("style"), "text style"),
     ("Tablestyle", Some("tablestyle"), "table style"),
     ("Ucs", Some("ucs"), "UCS"),
     ("VIew", Some("view"), "view"),
-    ("VPort", None, "viewport configuration"),
+    ("VPort", Some("vport"), "viewport configuration"),
 ];
 
 /// Keyword-only: spaces separate inputs.
@@ -159,6 +245,7 @@ fn exists(d: &Drawing, table: &str, name: &str) -> bool {
         "tablestyle" => any_named(d.table_styles.iter().map(|t| &t.name), name),
         "view" => any_named(d.views.iter().map(|t| &t.name), name),
         "ucs" => any_named(d.ucss.iter().map(|t| &t.name), name),
+        "vport" => d.vports.iter().any(|v| !v.is_active() && v.name.eq_ignore_ascii_case(name)),
         _ => true,
     }
 }
@@ -209,6 +296,10 @@ impl Interactive for RenameM {
                     _ => None,
                 };
                 let Some(t) = t else { return Err(EngineError::Other("Invalid option keyword.".into())) };
+                if TYPES.get(t).is_some_and(|(_, table, _)| table.is_none()) {
+                    s.echo(NO_MATERIALS);
+                    return Ok(Step::Done);
+                }
                 self.stage = Stage::Old(t);
                 Ok(Step::Continue)
             }
@@ -232,7 +323,8 @@ impl Interactive for RenameM {
                     return Ok(Step::Continue);
                 };
                 let Some(table) = table else {
-                    s.echo(format!("Renaming a {noun} is not available yet."));
+                    let _ = noun;
+                    s.echo(NO_MATERIALS);
                     return Ok(Step::Done);
                 };
                 match super::run_rename(s, &json!({ "table": table, "from": old, "to": name })) {

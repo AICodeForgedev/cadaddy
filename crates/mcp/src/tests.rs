@@ -191,7 +191,9 @@ fn a_lazy_bridge_starts_without_the_app_and_says_how_to_open_it() {
     let init = call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
     assert_eq!(init["result"]["serverInfo"]["name"], "cadaddy");
     let tools = call(&mut s, 2, "tools/list", json!({}));
-    assert!(tools["result"]["tools"].as_array().unwrap().iter().any(|t| t["name"] == "screenshot"));
+    for name in ["screenshot", "ui_elements"] {
+        assert!(tools["result"]["tools"].as_array().unwrap().iter().any(|t| t["name"] == name), "{name}");
+    }
     let r = call(&mut s, 3, "tools/call", json!({"name": "command_line", "arguments": {"text": "line 0,0 1,1"}}));
     assert_eq!(r["result"]["isError"], json!(true));
     let msg = r["result"]["content"][0]["text"].as_str().unwrap();
@@ -270,6 +272,12 @@ fn agent_manages_drawings_without_losing_work() {
     assert!(tool(&mut s, "get_variable", json!({"name": "LTSCALE"})).to_string().contains('2'));
     let l = tool(&mut s, "run_lisp", json!({"code": "(+ 1 2)"}));
     assert_eq!(l["value"], json!("3"), "{l}");
+    // Saving as CADaddy's own format names the drawing after the .cdy file.
+    let cdy = dir.join("own.cdy").to_string_lossy().into_owned();
+    let r = tool(&mut s, "save", json!({"path": cdy}));
+    assert_eq!(r["path"], json!(cdy), "{r}");
+    assert!(std::path::Path::new(&cdy).is_file());
+    assert!(tool(&mut s, "list_drawings", json!({}))["drawings"][1]["title"] == json!("own.cdy"));
     let r = tool(&mut s, "close_all", json!({"discard": true}));
     assert_eq!(r["closed"].as_array().map(Vec::len), Some(2), "{r}");
     std::fs::remove_dir_all(&dir).ok();
@@ -314,4 +322,121 @@ fn lisp_errors_are_tool_errors() {
         assert!(!v.to_string().contains("null"), "{name}: {v}");
     }
     assert_eq!(tool(&mut s, "get_variable", json!({"name": "ATTREQ"}))["value"], json!(1));
+}
+
+fn read(s: &mut Server, uri: &str) -> Value {
+    let r = call(s, 50, "resources/read", json!({"uri": uri}));
+    let text = r["result"]["contents"][0]["text"].as_str().unwrap_or_else(|| panic!("{uri}: {r}"));
+    serde_json::from_str(text).unwrap()
+}
+
+#[test]
+fn resources_list_and_read_the_open_drawings_layers_blocks_and_layouts() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let init = call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    assert_eq!(init["result"]["capabilities"]["resources"]["listChanged"], true);
+    assert!(init["result"]["capabilities"]["prompts"].is_object());
+    tool(&mut s, "command_line", json!({"text": "-layer m WALLS c 1 WALLS "}));
+    tool(&mut s, "command_line", json!({"text": "rectang 0,0 10,5"}));
+    let list = call(&mut s, 2, "resources/list", json!({}));
+    let uris: Vec<&str> = list["result"]["resources"].as_array().unwrap().iter().filter_map(|r| r["uri"].as_str()).collect();
+    for u in ["cadaddy://drawing", "cadaddy://layers", "cadaddy://blocks", "cadaddy://layouts", "cadaddy://commands", "cadaddy://drawing/0"] {
+        assert!(uris.contains(&u), "{u} in {uris:?}");
+    }
+    let t = call(&mut s, 3, "resources/templates/list", json!({}));
+    assert_eq!(t["result"]["resourceTemplates"][0]["uriTemplate"], "cadaddy://drawing/{index}");
+
+    let layers = read(&mut s, "cadaddy://layers");
+    assert!(layers["layers"].as_array().unwrap().iter().any(|l| l["name"] == "WALLS"), "{layers}");
+    assert_eq!(layers["current"], "WALLS");
+    assert!(read(&mut s, "cadaddy://layouts").as_array().is_some_and(|l| !l.is_empty()));
+    assert!(read(&mut s, "cadaddy://blocks").is_object() || read(&mut s, "cadaddy://blocks").is_array());
+    assert!(read(&mut s, "cadaddy://commands").as_array().is_some_and(|c| c.len() > 100));
+    let d0 = read(&mut s, "cadaddy://drawing/0");
+    assert_eq!(d0["counts"]["Polyline"], 1, "{d0}");
+
+    // A second drawing: listed as drawing/1, read without switching away from it.
+    tool(&mut s, "new_drawing", json!({}));
+    tool(&mut s, "command_line", json!({"text": "circle 0,0 1"}));
+    tool(&mut s, "command_line", json!({"text": "circle 5,0 1"}));
+    let list = call(&mut s, 4, "resources/list", json!({}));
+    assert!(list["result"]["resources"].as_array().unwrap().iter().any(|r| r["uri"] == "cadaddy://drawing/1"));
+    assert_eq!(read(&mut s, "cadaddy://drawing/0")["counts"]["Polyline"], 1, "the first drawing, read by number");
+    assert_eq!(read(&mut s, "cadaddy://drawing/1")["counts"]["Circle"], 2);
+    assert_eq!(read(&mut s, "cadaddy://drawing")["counts"]["Circle"], 2, "the active one is still the second");
+
+    // Unknown resources.
+    for u in ["cadaddy://drawing/7", "cadaddy://drawing/x", "cadaddy://nope", "file:///etc/passwd"] {
+        let r = call(&mut s, 5, "resources/read", json!({"uri": u}));
+        assert_eq!(r["error"]["code"], -32002, "{u}: {r}");
+    }
+    assert_eq!(call(&mut s, 6, "resources/read", json!({}))["error"]["code"], -32602);
+}
+
+#[test]
+fn opening_and_closing_drawings_notifies_the_client() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    assert!(s.handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+    call(&mut s, 2, "resources/list", json!({}));
+    // Drawing in the same drawing: no change to the list.
+    tool(&mut s, "command_line", json!({"text": "line 0,0 1,1"}));
+    assert!(s.take_notifications().is_empty());
+    tool(&mut s, "new_drawing", json!({}));
+    let n = s.take_notifications();
+    assert_eq!(n.len(), 1);
+    let v: Value = serde_json::from_str(&n[0]).unwrap();
+    assert_eq!(v["method"], "notifications/resources/list_changed");
+    assert!(v.get("id").is_none(), "a notification has no id");
+    assert!(s.take_notifications().is_empty(), "sent once");
+    tool(&mut s, "execute", json!({"command": "document.close", "params": {"discard": true}}));
+    assert_eq!(s.take_notifications().len(), 1);
+
+    // Through serve(): the notification follows the reply on its own line.
+    let mut out = Vec::new();
+    let input = format!("{}\n", json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "new_drawing", "arguments": {}}}));
+    s.serve(input.as_bytes(), &mut out).unwrap();
+    let lines: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["id"], 9);
+    assert_eq!(lines[1]["method"], "notifications/resources/list_changed");
+}
+
+#[test]
+fn prompts_list_and_get_the_agent_recipes() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let list = call(&mut s, 1, "prompts/list", json!({}));
+    let names: Vec<&str> = list["result"]["prompts"].as_array().unwrap().iter().filter_map(|p| p["name"].as_str()).collect();
+    assert_eq!(names, ["floor_plan_from_sketch", "schedule_blocks", "audit_report"]);
+    let plan = call(
+        &mut s,
+        2,
+        "prompts/get",
+        json!({"name": "floor_plan_from_sketch", "arguments": {"sketch": "Two rooms, 12x10 and 10x10, a door between them", "units": "feet"}}),
+    );
+    let text = plan["result"]["messages"][0]["content"]["text"].as_str().unwrap();
+    assert!(text.contains("Two rooms, 12x10") && text.contains("feet") && text.contains("command_line"), "{text}");
+    assert_eq!(plan["result"]["messages"][0]["role"], "user");
+    let sched = call(&mut s, 3, "prompts/get", json!({"name": "schedule_blocks", "arguments": {"blocks": "DOOR*"}}));
+    assert!(sched["result"]["messages"][0]["content"]["text"].as_str().unwrap().contains("\"blocks\": \"DOOR*\""));
+    let audit = call(&mut s, 4, "prompts/get", json!({"name": "audit_report"}));
+    assert!(audit["result"]["messages"][0]["content"]["text"].as_str().unwrap().contains("report only"));
+    // Errors: a required argument missing, an unknown prompt, no name, a huge argument.
+    assert_eq!(call(&mut s, 5, "prompts/get", json!({"name": "floor_plan_from_sketch"}))["error"]["code"], -32602);
+    assert_eq!(call(&mut s, 6, "prompts/get", json!({"name": "nope"}))["error"]["code"], -32602);
+    assert_eq!(call(&mut s, 7, "prompts/get", json!({}))["error"]["code"], -32602);
+    let huge = "x".repeat(30_000);
+    assert_eq!(call(&mut s, 8, "prompts/get", json!({"name": "floor_plan_from_sketch", "arguments": {"sketch": huge}}))["error"]["code"], -32602);
+}
+
+/// Typed LISP longer than one slice finishes without an interface ticking it (battle test
+/// 0.7.7c: it never did, and every later LISP line said a routine was already running).
+#[test]
+fn headless_typed_lisp_runs_to_its_end() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let r = tool(&mut s, "command_line", json!({"text": "(progn (setq n 0) (repeat 300000 (setq n (1+ n))) (princ n))"}));
+    assert!(r.to_string().contains("300000"), "{r}");
+    let r = tool(&mut s, "command_line", json!({"text": "(princ (+ 1 2))"}));
+    assert!(!r.to_string().contains("already running"), "{r}");
+    assert!(r.to_string().contains('3'), "{r}");
 }

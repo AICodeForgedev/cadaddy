@@ -20,12 +20,20 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 miniz_oxide = "0.8"
+# The .cdy native format: postcard (MIT OR Apache-2.0) encodes its bulk chunks, crc32fast (MIT OR
+# Apache-2.0) checks them.
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+crc32fast = "1"
 # PDF reading for PDFIMPORT (MIT); no optional extras (parallelism, dates, images).
 lopdf = { version = "0.45", default-features = false }
 quick-xml = { workspace = true }
 
 [dev-dependencies]
 tiny-skia = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Large PDF page content is compressed on all cores (already a dependency of cadaddy-render).
+rayon = { workspace = true }
 
 # lopdf needs randomness (rand → getrandom); in the browser it comes from crypto.getRandomValues.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

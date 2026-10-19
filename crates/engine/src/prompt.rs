@@ -247,10 +247,10 @@ pub struct Drag {
 }
 
 /// Parse a typed point: `x,y[,z]`, `@dx,dy`, `@dist<angle`, `dist<angle`, `#x,y` (absolute),
-/// `*x,y` and `*@dx,dy`/`@*dx,dy` (world coordinates: the same as the plain forms, as there is no
-/// UCS yet).
+/// `*x,y` and `*@dx,dy`/`@*dx,dy` (world coordinates).
 /// Relative forms use `last`. Polar angles read the default angle settings (degrees from +X,
-/// counterclockwise); `parse_point_with` reads a drawing's.
+/// counterclockwise); `parse_point_with` reads a drawing's, and `parse_point_in` reads the
+/// coordinates in a UCS.
 pub fn parse_point(text: &str, last: Vec2) -> Option<Vec2> {
     parse_point_with(text, last, &crate::units::AngleSettings::default())
 }
@@ -258,13 +258,22 @@ pub fn parse_point(text: &str, last: Vec2) -> Option<Vec2> {
 /// `parse_point` with polar angles read per `angles` (AUNITS, ANGBASE, ANGDIR); `d<<a` and
 /// `d<<<a` measure from +X counterclockwise (in degrees and in AUNITS).
 pub fn parse_point_with(text: &str, last: Vec2, angles: &crate::units::AngleSettings) -> Option<Vec2> {
+    parse_point_in(text, last, angles, &crate::ucs::Frame::WORLD)
+}
+
+/// `parse_point_with` in the UCS `frame`: absolute coordinates are the UCS's, relative ones and
+/// polar angles follow its axes; a `*` prefix gives world coordinates. The point returned is in
+/// world coordinates.
+pub fn parse_point_in(text: &str, last: Vec2, angles: &crate::units::AngleSettings, frame: &crate::ucs::Frame) -> Option<Vec2> {
     let t = text.trim();
     if t.is_empty() {
         return None;
     }
+    let mut world = t.starts_with('*');
     let t = t.strip_prefix('*').map_or(t, str::trim_start);
     let (rel, body) = if let Some(b) = t.strip_prefix('@') {
         let b = b.trim();
+        world |= b.starts_with('*');
         (true, b.strip_prefix('*').map_or(b, str::trim_start))
     } else if let Some(b) = t.strip_prefix('#') {
         (false, b.trim())
@@ -291,7 +300,8 @@ pub fn parse_point_with(text: &str, last: Vec2, angles: &crate::units::AngleSett
         }
         Vec2::new(x, y)
     };
-    let r = if rel { last + p } else { p };
+    let f = if world { &crate::ucs::Frame::WORLD } else { frame };
+    let r = if rel { last + f.dir_to_wcs(p) } else { f.to_wcs(p) };
     r.is_finite().then_some(r)
 }
 

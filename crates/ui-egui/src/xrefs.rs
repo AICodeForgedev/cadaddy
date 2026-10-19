@@ -127,6 +127,7 @@ fn rows(app: &CadApp, ui: &egui::Ui) -> Vec<Row> {
 enum Act {
     Start(&'static str),
     Run(&'static str, Value),
+    ClosePanel,
 }
 
 /// The palette body.
@@ -149,6 +150,13 @@ pub fn section(app: &mut CadApp, ui: &mut egui::Ui) {
         if ui.add_enabled(!rows.is_empty(), egui::Button::new(crate::tl!("Reload All"))).clicked() {
             act = Some(Act::Run("-xref", json!({ "option": "reload", "names": "*" })));
         }
+        // A visible way to close the panel (its tab's right-click menu was the only one).
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(6.0);
+            if ui.add(egui::Button::new("×").frame(false)).on_hover_text(crate::tl!("Close")).clicked() {
+                act = Some(Act::ClosePanel);
+            }
+        });
     });
     ui.add_space(6.0);
     if rows.is_empty() {
@@ -159,26 +167,30 @@ pub fn section(app: &mut CadApp, ui: &mut egui::Ui) {
     } else {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            egui::Grid::new("xref-grid").num_columns(4).striped(true).spacing([10.0, 4.0]).show(ui, |ui| {
-                for h in [crate::tl!("Reference Name"), crate::tl!("Status"), crate::tl!("Type"), crate::tl!("Saved Path")] {
-                    ui.label(RichText::new(h).color(t.text_dim));
-                }
-                ui.end_row();
-                for r in &rows {
-                    let on = selected.as_deref() == Some(r.name.as_str());
-                    let resp = ui.selectable_label(on, &r.name);
-                    if resp.clicked() || resp.secondary_clicked() {
-                        selected = Some(r.name.clone());
-                        ui.data_mut(|d| d.remove::<String>(path_id));
+            // Long saved paths scroll sideways here instead of widening the palette, which pushed
+            // the buttons below past its edge (UI review 0.7.7c).
+            egui::ScrollArea::horizontal().id_salt("xref-grid-scroll").auto_shrink([false, true]).show(ui, |ui| {
+                egui::Grid::new("xref-grid").num_columns(4).striped(true).spacing([10.0, 4.0]).show(ui, |ui| {
+                    for h in [crate::tl!("Reference Name"), crate::tl!("Status"), crate::tl!("Type"), crate::tl!("Saved Path")] {
+                        ui.label(RichText::new(h).color(t.text_dim));
                     }
-                    let (name, status) = (r.name.clone(), r.status.clone());
-                    crate::shortcut_menus::attach(app, &resp, |app| crate::shortcut_menus::xref_entries(app, &name, &status));
-                    let bad = matches!(r.status.as_str(), "Not Found" | "Unresolved");
-                    ui.label(RichText::new(crate::i18n::t(&r.status)).color(if bad { t.warn } else { t.text }));
-                    ui.label(crate::i18n::t(if r.overlay { "Overlay" } else { "Attach" }));
-                    ui.label(&r.path).on_hover_text(crate::tf!("References: {n}", n = r.references));
                     ui.end_row();
-                }
+                    for r in &rows {
+                        let on = selected.as_deref() == Some(r.name.as_str());
+                        let resp = ui.selectable_label(on, &r.name);
+                        if resp.clicked() || resp.secondary_clicked() {
+                            selected = Some(r.name.clone());
+                            ui.data_mut(|d| d.remove::<String>(path_id));
+                        }
+                        let (name, status) = (r.name.clone(), r.status.clone());
+                        crate::shortcut_menus::attach(app, &resp, |app| crate::shortcut_menus::xref_entries(app, &name, &status));
+                        let bad = matches!(r.status.as_str(), "Not Found" | "Unresolved");
+                        ui.label(RichText::new(crate::i18n::t(&r.status)).color(if bad { t.warn } else { t.text }));
+                        ui.label(crate::i18n::t(if r.overlay { "Overlay" } else { "Attach" }));
+                        ui.label(&r.path).on_hover_text(crate::tf!("References: {n}", n = r.references));
+                        ui.end_row();
+                    }
+                });
             });
         });
     }
@@ -197,6 +209,11 @@ pub fn section(app: &mut CadApp, ui: &mut egui::Ui) {
         Some(Act::Start(id)) => app.start(id),
         Some(Act::Run(id, p)) => {
             if let Err(e) = app.run(id, p) {
+                app.set_status(e);
+            }
+        }
+        Some(Act::ClosePanel) => {
+            if let Err(e) = crate::docking::command(app, false, &json!({ "operation": "close", "panel": Panel::ExternalRefs.id() })) {
                 app.set_status(e);
             }
         }

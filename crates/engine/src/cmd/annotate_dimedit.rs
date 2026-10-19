@@ -535,9 +535,20 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<cada
         _ => true,
     };
     let mut updates: Vec<(Handle, Vec<DimBreak>, Vec<Handle>)> = Vec::new();
+    // Changed dimensions' measured values (DXF group 42), as their geometry measures them: it
+    // stayed 0 until a DWG save worked it out, so agents reading `measurement` got 0 (battle
+    // test 0.7.7c).
+    let mut measured: Vec<(Handle, f64)> = Vec::new();
     for store in std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)) {
         for e in store.iter() {
             let EntityKind::Dimension(dm) = &e.kind else { continue };
+            if changed(e.handle) && measured.len() < MAX_FOLLOW {
+                let st = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
+                let m = cadaddy_render::dimension_geometry(dm, &st, 1.0).measurement;
+                if m.is_finite() && (m - dm.measurement).abs() > 1e-12 * (1.0 + m.abs()) {
+                    measured.push((e.handle, m));
+                }
+            }
             if dm.marks.break_objects.is_empty() || updates.len() >= MAX_FOLLOW {
                 continue;
             }
@@ -560,10 +571,17 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<cada
             }
         }
     }
-    if updates.is_empty() {
+    if updates.is_empty() && measured.is_empty() {
         return;
     }
     let d = std::sync::Arc::make_mut(&mut st.doc);
+    for (h, m) in measured {
+        let _ = d.modify_entity(h, |e| {
+            if let EntityKind::Dimension(dm) = &mut e.kind {
+                dm.measurement = m;
+            }
+        });
+    }
     for (h, breaks, objs) in updates {
         let _ = d.modify_entity(h, |e| {
             if let EntityKind::Dimension(dm) = &mut e.kind {

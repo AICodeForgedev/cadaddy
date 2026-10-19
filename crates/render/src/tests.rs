@@ -990,6 +990,8 @@ fn clipped_block_reference_draws_only_inside_its_boundary() {
         boundary: vec![Vec2::new(15.0, 20.0), Vec2::new(65.0, 20.0), Vec2::new(65.0, 50.0), Vec2::new(15.0, 50.0)],
         enabled: true,
         inverted: false,
+        front: None,
+        back: None,
     };
     let ins = |x: f64, clip: Option<XClip>| {
         EntityKind::Insert(Insert {
@@ -1030,4 +1032,37 @@ fn clipped_block_reference_draws_only_inside_its_boundary() {
         list.prims.iter().map(|p| list.points(p).to_vec()).filter(|pts| pts.iter().all(|q| (q.x - 30.0).abs() < 1e-6)).collect();
     assert_eq!(at30.len(), 2, "{at30:?}");
     assert!(at30.iter().flatten().all(|q| q.y <= 20.0 + 1e-6 || q.y >= 50.0 - 1e-6), "{at30:?}");
+}
+
+#[test]
+fn the_rest_of_the_drawing_is_faded_while_a_reference_is_edited_in_place() {
+    let mut d = Drawing::new_imperial();
+    let (c, k) = line_common(Common::default());
+    let kept = d.add(&Space::Model, c, k).unwrap();
+    let (c, k) = line_common(Common::default());
+    let other = d.add(&Space::Model, c, k).unwrap();
+    d.refedit = Some(cadaddy_doc::RefEdit {
+        block: "B".into(),
+        insert: Handle(0xFFFF),
+        insert_was_visible: true,
+        space: Space::Model,
+        to_world: Mat3::IDENTITY,
+        items: vec![cadaddy_doc::WorkItem { copy: kept, source: None }],
+        ghosts: Vec::new(),
+        released: Vec::new(),
+        context: Vec::new(),
+    });
+    let fade = |d: &Drawing| {
+        let l = build(d, &Space::Model, &Options::default());
+        let of = |h: Handle| l.prims.iter().filter(|p| p.handle == h).map(|p| p.transparency).max();
+        (of(kept), of(other))
+    };
+    assert_eq!(fade(&d), (Some(0), Some(50)), "XFADECTL defaults to 50");
+    d.header.set_i64("XFADECTL", 200);
+    assert_eq!(fade(&d), (Some(0), Some(90)), "at most 90");
+    // Plots never fade.
+    let l = build_plot(&d, &Space::Model, &Options::default());
+    assert!(l.prims.iter().all(|p| p.transparency == 0));
+    d.refedit = None;
+    assert_eq!(fade(&d), (Some(0), Some(0)));
 }

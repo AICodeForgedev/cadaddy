@@ -1298,3 +1298,338 @@
 	Clip PDF Underlay	剪裁 PDF 参考底图
 	Adjust PDF Underlay	调整 PDF 参考底图
 	PDF Underlay Layers	PDF 参考底图图层
+	Unused items in this drawing	此图形中未使用的项目
+	Purge Checked Items	清理选中的项目
+	Purge All	全部清理
+	Items purged: {count}	已清理项目: {count}
+	Find what:	查找内容:
+	Replace with:	替换为:
+	Match case	区分大小写
+	Find whole words only	全字匹配
+	Find	查找
+	Replace All	全部替换
+	Matches replaced: {count} (objects: {objects})	已替换的匹配项: {count} (对象: {objects})
+	Matches found and selected: {count} (objects: {objects})	已找到并选择的匹配项: {count} (对象: {objects})
+	Select Color	选择颜色
+	Dimension styles	标注样式
+	Linetypes	线型
+	Multileader styles	多重引线样式
+	Multiline styles	多线样式
+	Table styles	表格样式
+	Text styles	文字样式
+	Zero-length geometry	零长度几何图形
+	Empty text objects	空文字对象
+	Palette Windows	选项板窗口
+	Dock	停靠
+	Back into the main window	返回主窗口
+	Dock Palette	停靠选项板
+	Float in Own Window	在独立窗口中浮动
+	Drawings (CDY, DWG, DXF)	图形 (CDY、DWG、DXF)
+	CADaddy Drawing (CDY)	CADaddy 图形 (CDY)
+	CADaddy drawing (.cdy)	CADaddy 图形 (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	保存 CADaddy 图形 (.cdy) 时同时保存 DWG 副本
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	CADaddy 图形会保留所有内容；DWG 和 DXF 文件可能无法全部保留（保存为这些格式时会说明缺少什么）。
+	Field...	字段...
+	Update Fields	更新字段
+	Change Text Case	更改文字大小写
+	Auto Number	自动编号
+	Explode Text	分解文字
+	Arc Aligned Text	弧形对齐文字
+	Data Extraction	数据提取
+	Data source	数据源
+	Objects	对象
+	Output	输出
+	Other drawings:	其他图形：
+	Add Drawings...	添加图形...
+	Open Settings...	打开设置...
+	Start from a saved .dxe settings file	从已保存的 .dxe 设置文件开始
+	Block names	块名称
+	Include blocks inside blocks	包括块中的块
+	Other objects:	其他对象：
+	The drawing has no other objects.	该图形中没有其他对象。
+	Properties to extract:	要提取的特性：
+	Attribute tags	属性标记
+	Combine identical rows	合并相同的行
+	Insert a table	插入表格
+	Insertion point	插入点
+	Title	标题
+	Write a file (.csv for spreadsheets, .txt tab-separated)	写入文件（.csv 用于电子表格，.txt 为制表符分隔）
+	Browse...	浏览...
+	Save Settings...	保存设置...
+	Save these choices to a .dxe file to use again	将这些选择保存到 .dxe 文件以便再次使用
+	< Back	< 上一步
+	Next >	下一步 >
+	Finish	完成
+	This drawing	此图形
+	Preview	预览
+	UCS	UCS
+	Plan View (World)	平面视图 (世界)
+	New UCS	新建 UCS
+	World	世界
+	Current UCS	当前 UCS
+	World (WCS)	世界 (WCS)
+	Unnamed	未命名
+	Hide UCS Icon	隐藏 UCS 图标
+	WCS	WCS
+	Spelling	拼写检查
+	Check Spelling	检查拼写
+	Where to check	检查位置
+	Selected objects	选定的对象
+	Not in dictionary:	不在词典中:
+	Suggestions:	建议:
+	Ignore	忽略
+	Ignore All	全部忽略
+	Change All	全部更改
+	Add to Dictionary	添加到词典
+	Main dictionary:	主词典:
+	American English	美国英语
+	Custom dictionary:	自定义词典:
+	Spelling check complete.	拼写检查完成。
+	Hyperlink...	超链接...
+	Select Objects for a Hyperlink	为超链接选择对象
+	Open Hyperlink	打开超链接
+	Insert Hyperlink	插入超链接
+	Edit Hyperlink	编辑超链接
+	Text to display	显示的文字
+	File or web page	文件或网页
+	Named location	命名位置
+	A named location with no file or web page is a layout or view of this drawing.	没有文件或网页的命名位置是此图形的布局或视图。
+	Remove Link	删除链接
+	⌘-click to follow the link	按住 ⌘ 单击以打开链接
+	Ctrl+click to follow the link	按住 Ctrl 单击以打开链接
+	Materials Browser...	材质浏览器...
+	Attach by Layer	按图层附着
+	Material Mapping	材质贴图
+	New Material	新建材质
+	Edit Material	编辑材质
+	Delete Material	删除材质
+	Assign Material	指定材质
+	Materials Browser	材质浏览器
+	Search	搜索
+	Library	库
+	Add to drawing	添加到图形
+	In this drawing	此图形中
+	No materials yet: add one from the library.	还没有材质：从库中添加一个。
+	Colour	颜色
+	Roughness	粗糙度
+	Metallic	金属度
+	Opacity	不透明度
+	Mapping	贴图
+	Tile size	平铺尺寸
+	Apply	应用
+	Assign to selection ({n})	指定给选择集 ({n})
+	Attach to layer	附着到图层
+	Render	渲染
+	Edit Layer State	编辑图层状态
+	Export Layer State	导出图层状态
+	Import Layer State	导入图层状态
+	New Layer Filter	新建图层过滤器
+	Edit Layer Filter	编辑图层过滤器
+	Delete Layer Filter	删除图层过滤器
+	List Layer Filters	列出图层过滤器
+	Layers in Filter	过滤器中的图层
+	Layer States Manager	图层状态管理器
+	Invert filter	反转过滤器
+	New Property Filter...	新建特性过滤器...
+	New Group Filter	新建组过滤器
+	Add Layer	添加图层
+	Remove Layer	移除图层
+	Layer Filter Properties	图层过滤器特性
+	Filter name	过滤器名称
+	Within	范围
+	Any	任意
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	模式：* 任意字符，? 单个字符，# 单个数字；用逗号分隔；~ 表示排除。
+	Layer states	图层状态
+	Turn off layers not found in layer state	关闭图层状态中未找到的图层
+	Layer properties to restore	要恢复的图层特性
+	On / Off	开 / 关
+	Frozen / Thawed	冻结 / 解冻
+	Locked / Unlocked	锁定 / 解锁
+	Plot / No Plot	打印 / 不打印
+	Layers in "{name}"	“{name}”中的图层
+	Remove from the layer state	从图层状态中移除
+	New...	新建...
+	Save the layers as they are now in this state	将图层的当前设置保存到此状态
+	Edit...	编辑...
+	Rename	重命名
+	New layer state name	新图层状态名称
+	New name	新名称
+	Visual Style	视觉样式
+	Visual Styles	视觉样式
+	Wireframe	线框
+	Hidden	隐藏
+	Shaded	着色
+	Shaded with Edges	带边缘着色
+	Realistic	真实
+	Mesh	网格
+	Polyface Mesh	多面网格
+	Polygon Mesh	多边形网格
+	Walk	漫游
+	Fly	飞行
+	Walk and Fly	漫游和飞行
+	3D Library...	三维库...
+	Add 3D Twins to Symbols	为符号添加三维对应模型
+	List 3D Models	列出三维模型
+	Add 3D Twins	添加三维对应模型
+	Plan Layers	平面图层
+	Plan Walls	平面墙体
+	Plan Openings	平面洞口
+	Plan Rooms	平面房间
+	Plan Notes	平面注释
+	Plan Sheets	平面图纸
+	3D Building from Plan	从平面图生成三维建筑
+	Wedge	楔体
+	Presspull	按住并拖动
+	3D Solid	三维实体
+	Specify center	指定中心
+	Specify length	指定长度
+	Specify width	指定宽度
+	Specify other corner	指定其他角点
+	Specify center point	指定中心点
+	Specify base radius	指定底面半径
+	Specify radius	指定半径
+	Specify diameter	指定直径
+	Specify top radius	指定顶面半径
+	Specify tube radius	指定圆管半径
+	Select objects to extrude	选择要拉伸的对象
+	Select extrusion path	选择拉伸路径
+	Specify angle of taper for extrusion	指定拉伸的倾斜角度
+	Specify height of extrusion	指定拉伸的高度
+	Select objects to revolve	选择要旋转的对象
+	Specify axis start point or define axis by	指定轴起点或根据以下选项之一定义轴
+	Specify axis endpoint	指定轴端点
+	Specify angle of revolution	指定旋转角度
+	Select objects to sweep	选择要扫掠的对象
+	Select sweep path	选择扫掠路径
+	Select cross sections in lofting order	按放样次序选择横截面
+	Click inside bounded areas to press or pull	在有边界区域内单击以按住或拖动
+	Specify extrusion height	指定拉伸高度
+	Cube	立方体
+	Sides	侧面
+	Top radius	顶面半径
+	Path	路径
+	Taper angle	倾斜角
+	Select one or more regions or 3D solids.	选择一个或多个面域或三维实体。
+	No closed area found there.	在该位置未找到闭合区域。
+	Slice	剖切
+	Thicken	加厚
+	Fillet Edge	圆角边
+	Chamfer Edge	倒角边
+	Fillet Edges	圆角边
+	Chamfer Edges	倒角边
+	Move Faces	移动面
+	Offset Faces	偏移面
+	Delete Faces	删除面
+	Shell	抽壳
+	Composite	复合
+	Select objects to slice	选择要剖切的对象
+	Specify a point on desired side or [keep Both sides]	在所需的侧面上指定点或 [保留两个侧面]
+	Both	两个
+	Specify start point of slicing plane or	指定剖切平面的起点或
+	Specify second point on plane	指定平面上的第二个点
+	Specify the Z of the XY-plane	指定 XY 平面的 Z
+	Specify the X of the YZ-plane	指定 YZ 平面的 X
+	Specify the Y of the ZX-plane	指定 ZX 平面的 Y
+	Select surfaces to thicken	选择要加厚的曲面
+	Select a 3D solid	选择三维实体
+	Select an edge	选择边
+	Remove faces	删除面
+	Select faces	选择面
+	Specify thickness	指定厚度
+	Enter fillet radius	输入圆角半径
+	Enter distance	输入距离
+	Specify a base point or displacement	指定基点或位移
+	Specify a second point of displacement	指定位移的第二点
+	Specify the offset distance	指定偏移距离
+	Enter the shell offset distance	输入抽壳偏移距离
+	Select solids, surfaces, and regions to subtract from ..	选择要从中减去的实体、曲面和面域 ..
+	Select solids, surfaces, and regions to subtract ..	选择要减去的实体、曲面和面域 ..
+	Select two or more solids.	选择两个或更多实体。
+	The solids don't overlap; nothing was changed.	实体不重叠；未作任何更改。
+	Nothing would remain; nothing was changed.	将不会剩余任何内容；未作任何更改。
+	The result would not be a solid; nothing was changed.	结果将不是实体；未作任何更改。
+	No straight edge between two flat faces there.	此处没有两个平面之间的直边。
+	No face of the solid there.	此处没有实体的面。
+	Only outside (convex) edges can be filleted or chamfered.	只能对外部（凸）边进行圆角或倒角。
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	抽壳适用于长方体、圆柱体、球体和直拉伸体。
+	The walls are too thick for this solid.	对于此实体，壁太厚。
+	Select solids to subtract from.	选择要从中减去的实体。
+	A solid can't be subtracted from itself.	实体不能从自身减去。
+	The solid would have too many operations; nothing was changed.	实体的操作过多；未作任何更改。
+	That face can't be moved (only flat faces, holes and added parts).	无法移动该面（仅限平面、孔和添加的部分）。
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	无法删除该面（仅限孔、圆角、倒角和添加的部分）。
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	无法偏移该面（长方体侧面、圆柱体、圆锥体和拉伸体的端面、圆柱壁和球体）。
+	The thickness must be more than zero.	厚度必须大于零。
+	The radius must be more than zero.	半径必须大于零。
+	The distance must be more than zero.	距离必须大于零。
+	Requires a number.	需要数字。
+	Parameter	参数
+	Action	动作
+	Visibility States	可见性状态
+	Remove Parameter or Action	删除参数或动作
+	Edit Reference	编辑参照
+	Discard Reference Edits	放弃参照修改
+	Nested References	嵌套参照
+	Light List	光源列表
+	Sun Properties	阳光特性
+	Render Exposure	渲染曝光
+	Point Light	点光源
+	Spotlight	聚光灯
+	Distant Light	平行光
+	Change Lights	更改光源
+	Section Plane	截面平面
+	Live Section	活动截面
+	Generate Section Block	生成截面块
+	Generate Section	生成截面
+	Flatshot	平面摄影
+	Base View	基础视图
+	Section View	截面视图
+	Drawing Views	工程视图
+	Select face or any point to locate section line or	选择面或任意点以定位截面线或
+	Orthographic	正交
+	Select section object	选择截面对象
+	Specify location of base view	指定基础视图的位置
+	Select parent view	选择父视图
+	Specify end point	指定端点
+	Specify location of section view	指定截面视图的位置
+	There is nothing to draw: no 3D objects were found.	没有可绘制的内容：未找到三维对象。
+	The section plane doesn't cut any solid.	截面平面未剖切任何实体。
+	The view needs a direction.	视图需要方向。
+	The drawing has no layout.	图形没有布局。
+	That is not a section plane.	这不是截面平面。
+	Requires a point.	需要点。
+	The view is [dx, dy, dz].	视图为 [dx, dy, dz]。
+	eTransmit...	电子传递...
+	Create Transmittal	创建传递
+	Files in the package	包中的文件
+	Not included	未包含
+	Organized folders	组织好的文件夹
+	One folder	一个文件夹
+	Include a transmittal report	包含传递报告
+	Create ZIP...	创建 ZIP...
+	Create Folder...	创建文件夹...
+	STL Out	STL 输出
+	Export STL...	输出 STL...
+	3D models (glTF, OBJ, STL)	三维模型 (glTF、OBJ、STL)
+	3D model (glTF binary)	三维模型 (glTF 二进制)
+	3D model (glTF)	三维模型 (glTF)
+	3D model (OBJ)	三维模型 (OBJ)
+	3D model (STL)	三维模型 (STL)
+	Render Region	渲染面域
+	samples	采样
+	a sample	每次采样
+	Pick crop window to render	拾取要渲染的裁剪窗口
+	Nothing has been rendered yet.	尚未渲染任何内容。
+	There is nothing to render: no surfaces in the view.	没有可渲染的内容：视图中没有曲面。
+	The image couldn't be encoded.	无法编码图像。
+	Saving images isn't available in the browser.	浏览器中无法保存图像。
+	PNG image	PNG 图像
+	JPEG image	JPEG 图像
+	Save Image	保存图像
+	My Properties	我的特性
+	Add to My Properties	添加到我的特性
+	Remove from My Properties	从我的特性中删除
+	All properties	所有特性
+	My properties: the ones you added (right-click a property's name to add it)	我的特性：您添加的特性（右键单击特性名称即可添加）
+	Right-click a property's name and choose Add to My Properties.	右键单击特性名称，然后选择“添加到我的特性”。
+	Color Books	配色系统

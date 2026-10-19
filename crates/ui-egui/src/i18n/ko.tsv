@@ -1420,3 +1420,337 @@ menu	Modify	수정
 	Clip PDF Underlay	PDF 언더레이 자르기
 	Adjust PDF Underlay	PDF 언더레이 조정
 	PDF Underlay Layers	PDF 언더레이 도면층
+	Unused items in this drawing	이 도면에서 사용하지 않는 항목
+	Purge Checked Items	선택한 항목 소거
+	Purge All	모두 소거
+	Items purged: {count}	소거한 항목: {count}
+	Find what:	찾을 내용:
+	Replace with:	바꿀 내용:
+	Match case	대소문자 구분
+	Find whole words only	전체 단어만
+	Find	찾기
+	Replace All	모두 바꾸기
+	Matches replaced: {count} (objects: {objects})	바꾼 항목: {count} (객체: {objects})
+	Matches found and selected: {count} (objects: {objects})	찾아서 선택한 항목: {count} (객체: {objects})
+	Select Color	색상 선택
+	Dimension styles	치수 스타일
+	Linetypes	선종류
+	Multileader styles	다중 지시선 스타일
+	Multiline styles	여러 줄 스타일
+	Table styles	표 스타일
+	Text styles	문자 스타일
+	Zero-length geometry	길이가 0인 형상
+	Empty text objects	빈 문자 객체
+	Palette Windows	팔레트 창
+	Dock	도킹
+	Back into the main window	기본 창으로 되돌리기
+	Dock Palette	팔레트 도킹
+	Float in Own Window	별도 창으로 띄우기
+	Drawings (CDY, DWG, DXF)	도면 (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	CADaddy 도면 (CDY)
+	CADaddy drawing (.cdy)	CADaddy 도면 (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	CADaddy 도면(.cdy)을 저장할 때 DWG 사본도 저장
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	CADaddy 도면은 모든 것을 보존합니다. DWG 및 DXF 파일은 일부를 보존하지 못할 수 있습니다(저장할 때 무엇인지 알려 줍니다).
+	Field...	필드...
+	Update Fields	필드 업데이트
+	Change Text Case	문자 대/소문자 변경
+	Auto Number	자동 번호
+	Explode Text	문자 분해
+	Arc Aligned Text	호에 정렬된 문자
+	Data Extraction	데이터 추출
+	Data source	데이터 원본
+	Objects	객체
+	Output	출력
+	Other drawings:	기타 도면:
+	Add Drawings...	도면 추가...
+	Open Settings...	설정 열기...
+	Start from a saved .dxe settings file	저장된 .dxe 설정 파일에서 시작
+	Block names	블록 이름
+	Include blocks inside blocks	블록 내부의 블록 포함
+	Other objects:	기타 객체:
+	The drawing has no other objects.	도면에 다른 객체가 없습니다.
+	Properties to extract:	추출할 특성:
+	Attribute tags	속성 태그
+	Combine identical rows	동일한 행 결합
+	Insert a table	테이블 삽입
+	Insertion point	삽입점
+	Title	제목
+	Write a file (.csv for spreadsheets, .txt tab-separated)	파일 쓰기(스프레드시트용 .csv, 탭으로 구분된 .txt)
+	Browse...	찾아보기...
+	Save Settings...	설정 저장...
+	Save these choices to a .dxe file to use again	다시 사용할 수 있도록 이 선택 사항을 .dxe 파일에 저장
+	< Back	< 뒤로
+	Next >	다음 >
+	Finish	마침
+	This drawing	이 도면
+	Preview	미리 보기
+	UCS	UCS
+	Plan View (World)	평면도 (표준)
+	New UCS	새 UCS
+	World	표준
+	Current UCS	현재 UCS
+	World (WCS)	표준 (WCS)
+	Unnamed	이름 없음
+	Hide UCS Icon	UCS 아이콘 숨기기
+	WCS	WCS
+	Spelling	맞춤법
+	Check Spelling	맞춤법 검사
+	Where to check	검사 위치
+	Selected objects	선택한 객체
+	Not in dictionary:	사전에 없음:
+	Suggestions:	추천 단어:
+	Ignore	무시
+	Ignore All	모두 무시
+	Change All	모두 변경
+	Add to Dictionary	사전에 추가
+	Main dictionary:	기본 사전:
+	American English	미국 영어
+	Custom dictionary:	사용자 사전:
+	Spelling check complete.	맞춤법 검사를 완료했습니다.
+	Hyperlink...	하이퍼링크...
+	Select Objects for a Hyperlink	하이퍼링크할 객체 선택
+	Open Hyperlink	하이퍼링크 열기
+	Insert Hyperlink	하이퍼링크 삽입
+	Edit Hyperlink	하이퍼링크 편집
+	Text to display	표시할 텍스트
+	File or web page	파일 또는 웹 페이지
+	Named location	이름 있는 위치
+	A named location with no file or web page is a layout or view of this drawing.	파일이나 웹 페이지가 없는 이름 있는 위치는 이 도면의 배치 또는 뷰입니다.
+	Remove Link	링크 제거
+	⌘-click to follow the link	⌘-클릭하여 링크 열기
+	Ctrl+click to follow the link	Ctrl+클릭하여 링크 열기
+	Materials Browser...	재료 탐색기...
+	Attach by Layer	도면층별 부착
+	Material Mapping	재료 매핑
+	New Material	새 재료
+	Edit Material	재료 편집
+	Delete Material	재료 삭제
+	Assign Material	재료 지정
+	Materials Browser	재료 탐색기
+	Search	검색
+	Library	라이브러리
+	Add to drawing	도면에 추가
+	In this drawing	이 도면
+	No materials yet: add one from the library.	아직 재료가 없습니다: 라이브러리에서 추가하세요.
+	Colour	색상
+	Roughness	거칠기
+	Metallic	금속성
+	Opacity	불투명도
+	Mapping	매핑
+	Tile size	타일 크기
+	Assign to selection ({n})	선택 항목에 지정 ({n})
+	Attach to layer	도면층에 부착
+	Render	렌더링
+	Edit Layer State	도면층 상태 편집
+	Export Layer State	도면층 상태 내보내기
+	Import Layer State	도면층 상태 가져오기
+	New Layer Filter	새 도면층 필터
+	Edit Layer Filter	도면층 필터 편집
+	Delete Layer Filter	도면층 필터 삭제
+	List Layer Filters	도면층 필터 나열
+	Layers in Filter	필터의 도면층
+	Layer States Manager	도면층 상태 관리자
+	Invert filter	필터 반전
+	New Property Filter...	새 특성 필터...
+	New Group Filter	새 그룹 필터
+	Add Layer	도면층 추가
+	Remove Layer	도면층 제거
+	Layer Filter Properties	도면층 필터 특성
+	Filter name	필터 이름
+	Within	범위
+	Any	임의
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	패턴: * 임의 문자열, ? 문자 하나, # 숫자 하나; 쉼표로 구분; ~ 제외.
+	Layer states	도면층 상태
+	Turn off layers not found in layer state	도면층 상태에 없는 도면층 끄기
+	Layer properties to restore	복원할 도면층 특성
+	On / Off	켜기 / 끄기
+	Frozen / Thawed	동결 / 동결 해제
+	Locked / Unlocked	잠금 / 잠금 해제
+	Plot / No Plot	플롯 / 플롯 안 함
+	Layers in "{name}"	"{name}"의 도면층
+	Remove from the layer state	도면층 상태에서 제거
+	New...	새로 만들기...
+	Save the layers as they are now in this state	현재 도면층 설정을 이 상태에 저장
+	Edit...	편집...
+	Rename	이름 바꾸기
+	New layer state name	새 도면층 상태 이름
+	New name	새 이름
+	Visual Style	비주얼 스타일
+	Visual Styles	비주얼 스타일
+	Wireframe	와이어프레임
+	Hidden	숨기기
+	Shaded	음영처리
+	Shaded with Edges	모서리로 음영처리
+	Realistic	사실적
+	Mesh	메쉬
+	Polyface Mesh	다면 메쉬
+	Polygon Mesh	폴리곤 메쉬
+	Walk	걷기
+	Fly	비행
+	Walk and Fly	걷기 및 비행
+	3D Library...	3D 라이브러리...
+	Add 3D Twins to Symbols	기호에 3D 짝 추가
+	List 3D Models	3D 모델 목록
+	Add 3D Twins	3D 짝 추가
+	Plan Layers	평면 도면층
+	Plan Walls	평면 벽체
+	Plan Openings	평면 개구부
+	Plan Rooms	평면 실
+	Plan Notes	평면 주석
+	Plan Sheets	평면 시트
+	3D Building from Plan	평면도에서 3D 건물
+	Wedge	쐐기
+	Presspull	누르기/당기기
+	3D Solid	3D 솔리드
+	Specify center	중심 지정
+	Specify length	길이 지정
+	Specify width	폭 지정
+	Specify other corner	다른 구석 지정
+	Specify center point	중심점 지정
+	Specify base radius	밑면 반지름 지정
+	Specify radius	반지름 지정
+	Specify diameter	지름 지정
+	Specify top radius	윗면 반지름 지정
+	Specify tube radius	튜브 반지름 지정
+	Select objects to extrude	돌출할 객체 선택
+	Select extrusion path	돌출 경로 선택
+	Specify angle of taper for extrusion	돌출 테이퍼 각도 지정
+	Specify height of extrusion	돌출 높이 지정
+	Select objects to revolve	회전할 객체 선택
+	Specify axis start point or define axis by	축 시작점 지정 또는 축 정의 방법
+	Specify axis endpoint	축 끝점 지정
+	Specify angle of revolution	회전 각도 지정
+	Select objects to sweep	스윕할 객체 선택
+	Select sweep path	스윕 경로 선택
+	Select cross sections in lofting order	로프트 순서대로 단면 선택
+	Click inside bounded areas to press or pull	경계 영역 내부를 클릭하여 누르거나 당기기
+	Specify extrusion height	돌출 높이 지정
+	Cube	정육면체
+	Sides	면
+	Top radius	윗면 반지름
+	Path	경로
+	Taper angle	테이퍼 각도
+	Select one or more regions or 3D solids.	하나 이상의 영역 또는 3D 솔리드를 선택하십시오.
+	No closed area found there.	해당 위치에 닫힌 영역이 없습니다.
+	Slice	슬라이스
+	Thicken	두껍게 하기
+	Fillet Edge	모서리 모깎기
+	Chamfer Edge	모서리 모따기
+	Fillet Edges	모서리 모깎기
+	Chamfer Edges	모서리 모따기
+	Move Faces	면 이동
+	Offset Faces	면 간격띄우기
+	Delete Faces	면 삭제
+	Shell	쉘
+	Composite	복합
+	Select objects to slice	슬라이스할 객체 선택
+	Specify a point on desired side or [keep Both sides]	원하는 쪽의 점 지정 또는 [양쪽 유지]
+	Both	양쪽
+	Specify start point of slicing plane or	슬라이스 평면의 시작점 지정 또는
+	Specify second point on plane	평면 위의 두 번째 점 지정
+	Specify the Z of the XY-plane	XY 평면의 Z 지정
+	Specify the X of the YZ-plane	YZ 평면의 X 지정
+	Specify the Y of the ZX-plane	ZX 평면의 Y 지정
+	Select surfaces to thicken	두껍게 할 표면 선택
+	Select a 3D solid	3D 솔리드 선택
+	Select an edge	모서리 선택
+	Remove faces	면 제거
+	Select faces	면 선택
+	Specify thickness	두께 지정
+	Enter fillet radius	모깎기 반지름 입력
+	Enter distance	거리 입력
+	Specify a base point or displacement	기준점 또는 변위 지정
+	Specify a second point of displacement	변위의 두 번째 점 지정
+	Specify the offset distance	간격띄우기 거리 지정
+	Enter the shell offset distance	쉘 간격띄우기 거리 입력
+	Select solids, surfaces, and regions to subtract from ..	뺄 대상 솔리드, 표면 및 영역 선택 ..
+	Select solids, surfaces, and regions to subtract ..	뺄 솔리드, 표면 및 영역 선택 ..
+	Select two or more solids.	두 개 이상의 솔리드를 선택하십시오.
+	The solids don't overlap; nothing was changed.	솔리드가 겹치지 않습니다. 변경된 내용이 없습니다.
+	Nothing would remain; nothing was changed.	남는 것이 없습니다. 변경된 내용이 없습니다.
+	The result would not be a solid; nothing was changed.	결과가 솔리드가 아닙니다. 변경된 내용이 없습니다.
+	No straight edge between two flat faces there.	해당 위치에 두 평면 사이의 직선 모서리가 없습니다.
+	No face of the solid there.	해당 위치에 솔리드 면이 없습니다.
+	Only outside (convex) edges can be filleted or chamfered.	바깥쪽(볼록) 모서리만 모깎기 또는 모따기할 수 있습니다.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	쉘은 상자, 원통, 구 및 곧은 돌출에서 작동합니다.
+	The walls are too thick for this solid.	이 솔리드에 비해 벽이 너무 두껍습니다.
+	Select solids to subtract from.	뺄 대상 솔리드를 선택하십시오.
+	A solid can't be subtracted from itself.	솔리드를 자기 자신에서 뺄 수 없습니다.
+	The solid would have too many operations; nothing was changed.	솔리드의 작업이 너무 많습니다. 변경된 내용이 없습니다.
+	That face can't be moved (only flat faces, holes and added parts).	해당 면은 이동할 수 없습니다(평면, 구멍 및 추가된 부분만).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	해당 면은 삭제할 수 없습니다(구멍, 모깎기, 모따기 및 추가된 부분만).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	해당 면은 간격띄우기할 수 없습니다(상자 측면, 원통·원뿔·돌출의 끝면, 원통 벽 및 구).
+	The thickness must be more than zero.	두께는 0보다 커야 합니다.
+	The radius must be more than zero.	반지름은 0보다 커야 합니다.
+	The distance must be more than zero.	거리는 0보다 커야 합니다.
+	Requires a number.	숫자가 필요합니다.
+	Parameter	매개변수
+	Action	동작
+	Visibility States	가시성 상태
+	Remove Parameter or Action	매개변수 또는 동작 제거
+	Edit Reference	참조 편집
+	Discard Reference Edits	참조 편집 취소
+	Nested References	중첩된 참조
+	Light List	조명 목록
+	Sun Properties	태양 특성
+	Render Exposure	렌더 노출
+	Point Light	점 조명
+	Spotlight	스포트라이트
+	Distant Light	원거리 조명
+	Change Lights	조명 변경
+	Section Plane	단면 평면
+	Live Section	실시간 단면
+	Generate Section Block	단면 블록 생성
+	Generate Section	단면 생성
+	Flatshot	평면 스냅샷
+	Base View	기준 뷰
+	Section View	단면 뷰
+	Drawing Views	도면 뷰
+	Select face or any point to locate section line or	면 또는 점을 선택하여 단면선 배치 또는
+	Orthographic	직교
+	Select section object	단면 객체 선택
+	Specify location of base view	기준 뷰의 위치 지정
+	Select parent view	상위 뷰 선택
+	Specify end point	끝점 지정
+	Specify location of section view	단면 뷰의 위치 지정
+	There is nothing to draw: no 3D objects were found.	그릴 것이 없습니다. 3D 객체가 없습니다.
+	The section plane doesn't cut any solid.	단면 평면이 솔리드를 자르지 않습니다.
+	The view needs a direction.	뷰에 방향이 필요합니다.
+	The drawing has no layout.	도면에 배치가 없습니다.
+	That is not a section plane.	단면 평면이 아닙니다.
+	Requires a point.	점이 필요합니다.
+	The view is [dx, dy, dz].	뷰는 [dx, dy, dz]입니다.
+	eTransmit...	eTransmit...
+	Create Transmittal	전송 패키지 작성
+	Files in the package	패키지의 파일
+	Not included	포함되지 않음
+	Organized folders	정리된 폴더
+	One folder	하나의 폴더
+	Include a transmittal report	전송 보고서 포함
+	Create ZIP...	ZIP 작성...
+	Create Folder...	폴더 작성...
+	STL Out	STL 출력
+	Export STL...	STL 내보내기...
+	3D models (glTF, OBJ, STL)	3D 모델(glTF, OBJ, STL)
+	3D model (glTF binary)	3D 모델(glTF 바이너리)
+	3D model (glTF)	3D 모델(glTF)
+	3D model (OBJ)	3D 모델(OBJ)
+	3D model (STL)	3D 모델(STL)
+	Render Region	영역 렌더링
+	samples	샘플
+	a sample	샘플당
+	Pick crop window to render	렌더링할 자르기 창 선택
+	Nothing has been rendered yet.	아직 렌더링된 것이 없습니다.
+	There is nothing to render: no surfaces in the view.	렌더링할 것이 없습니다. 뷰에 표면이 없습니다.
+	The image couldn't be encoded.	이미지를 인코딩할 수 없습니다.
+	Saving images isn't available in the browser.	브라우저에서는 이미지를 저장할 수 없습니다.
+	PNG image	PNG 이미지
+	JPEG image	JPEG 이미지
+	Save Image	이미지 저장
+	My Properties	내 특성
+	Add to My Properties	내 특성에 추가
+	Remove from My Properties	내 특성에서 제거
+	All properties	모든 특성
+	My properties: the ones you added (right-click a property's name to add it)	내 특성: 추가한 특성(특성 이름을 마우스 오른쪽 버튼으로 클릭하여 추가)
+	Right-click a property's name and choose Add to My Properties.	특성 이름을 마우스 오른쪽 버튼으로 클릭하고 내 특성에 추가를 선택하십시오.
+	Color Books	색상표

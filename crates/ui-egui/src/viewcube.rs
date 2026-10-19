@@ -48,6 +48,8 @@ pub struct Layout {
     pub pill: Rect,
     /// Everything that belongs to the cube (the area kept away from the canvas).
     pub bounds: Rect,
+    /// Half a cube face on screen: smaller on small canvases.
+    half: f32,
 }
 
 /// The view's screen axes in world terms: the plan view's when there is no projection.
@@ -60,22 +62,27 @@ fn axes(proj: Option<Projection>) -> (Vec3, Vec3, Vec3) {
 
 impl Layout {
     pub fn new(canvas: Rect) -> Self {
-        let center = pos2(canvas.right() - 92.0, canvas.top() + 82.0);
-        let ring = 58.0;
+        // Full size on canvases 700 px and up, down to 60% on small windows (at 1024×640 the
+        // full-size cube covered about a quarter of the canvas width).
+        let k = (canvas.width().min(canvas.height()) / 700.0).clamp(0.6, 1.0);
+        let center = pos2(canvas.right() - 92.0 * k, canvas.top() + 82.0 * k);
+        let ring = 58.0 * k;
+        let half = HALF * k;
         Layout {
             center,
             ring,
-            face: Rect::from_center_size(center, vec2(2.0 * HALF, 2.0 * HALF)),
-            home: Rect::from_center_size(center + vec2(-ring + 2.0, -ring + 2.0), vec2(20.0, 20.0)),
-            pill: Rect::from_center_size(center + vec2(0.0, ring + 26.0), vec2(56.0, 16.0)),
+            face: Rect::from_center_size(center, vec2(2.0 * half, 2.0 * half)),
+            home: Rect::from_center_size(center + vec2(-ring + 2.0 * k, -ring + 2.0 * k), vec2(20.0 * k, 20.0 * k)),
+            pill: Rect::from_center_size(center + vec2(0.0, ring + 26.0 * k), vec2(56.0, 16.0)),
             bounds: Rect::from_center_size(center, vec2(2.0 * (ring + 10.0), 2.0 * (ring + 10.0))),
+            half,
         }
     }
 
     /// A point of the unit cube on screen.
     fn at(&self, proj: Option<Projection>, p: Vec3) -> Pos2 {
         let (r, u, _) = axes(proj);
-        self.center + vec2(p.dot(r) as f32, -(p.dot(u) as f32)) * HALF
+        self.center + vec2(p.dot(r) as f32, -(p.dot(u) as f32)) * self.half
     }
 
     /// The faces facing the viewer: (normal, label, preset, screen corners, how squarely it
@@ -311,17 +318,40 @@ pub fn ucs_icon(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     ucs_menu(app, egui::Popup::menu(&resp).open_memory(open).at_pointer_fixed());
 }
 
-/// The coordinate-system menu: the WCS (the only coordinate system so far) and the icon switch.
+/// The coordinate-system menu: World, the named UCSs (the current one checked; an unnamed
+/// current UCS listed as Unnamed), New UCS from the command line, and the icon switch.
 fn ucs_menu(app: &mut CadApp, popup: egui::Popup<'_>) {
     let mut hide = false;
+    let mut run: Option<(&'static str, serde_json::Value)> = None;
+    let cur = app.session.ucs();
+    let names: Vec<String> = app.session.doc().map(|d| d.ucss.iter().map(|u| u.name.clone()).take(50).collect()).unwrap_or_default();
     popup.show(|ui| {
-        ui.radio(true, "World (WCS)").on_hover_text("CADaddy draws in the World Coordinate System; user coordinate systems aren't available yet.");
+        if ui.radio(cur.is_world() && cur.name.is_empty(), crate::tl!("World (WCS)")).clicked() {
+            run = Some(("ucs", json!({"option": "world"})));
+            ui.close();
+        }
+        for n in &names {
+            if ui.radio(cur.name.eq_ignore_ascii_case(n), n.as_str()).clicked() {
+                run = Some(("ucs", json!({"option": "restore", "name": n})));
+                ui.close();
+            }
+        }
+        if !cur.is_world() && cur.name.is_empty() {
+            let _ = ui.radio(true, crate::tl!("Unnamed"));
+        }
         ui.separator();
-        if ui.button("Hide UCS Icon").clicked() {
+        if ui.button(crate::tl!("New UCS")).clicked() {
+            app.start("ucs");
+            ui.close();
+        }
+        if ui.button(crate::tl!("Hide UCS Icon")).clicked() {
             hide = true;
             ui.close();
         }
     });
+    if let Some((id, p)) = run {
+        let _ = app.run(id, p);
+    }
     if hide {
         let _ = app.run("ui.toggle.ucsicon", json!({"on": false}));
     }

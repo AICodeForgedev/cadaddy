@@ -302,6 +302,9 @@ enum Stage {
     Layer,
     Color,
     TrueColor,
+    /// COlorbook: the book's name, then the colour's (`book`).
+    Book,
+    BookColor,
     Find,
     Replace,
     Position,
@@ -321,6 +324,8 @@ struct DashAtteditM {
     /// The attribute being edited one at a time (index into `items`).
     cur: usize,
     find: String,
+    /// The colour book chosen (COlorbook).
+    book: String,
 }
 
 /// A colour name, number or `r,g,b` (typed numbers are answers, not distances).
@@ -405,6 +410,8 @@ impl Interactive for DashAtteditM {
                 }
             }
             Stage::TrueColor => Prompt::new("Red, Green, Blue", NAME),
+            Stage::Book => Prompt::new("Enter Color Book name", Accept::TEXT),
+            Stage::BookColor => Prompt::new(format!("Enter color name of book {}", self.book), Accept::TEXT),
             Stage::Find => Prompt::new("Enter string to change", Accept::TEXT),
             Stage::Replace => Prompt::new("Enter new string", Accept::TEXT),
         }
@@ -562,7 +569,8 @@ impl Interactive for DashAtteditM {
                         self.stage = Stage::TrueColor;
                         return Ok(Step::Continue);
                     }
-                    return Err(EngineError::Other("Color books are not available yet.".into()));
+                    self.stage = Stage::Book;
+                    return Ok(Step::Continue);
                 }
                 let Some(t) = text else { return Ok(Step::Continue) };
                 if !t.trim().is_empty() {
@@ -574,6 +582,29 @@ impl Interactive for DashAtteditM {
                     if let Some(it) = self.items.get(self.cur).copied() {
                         set_props(s, it, |p| p.color = Some(c))?;
                     }
+                }
+                self.stage = Stage::Option;
+            }
+            Stage::Book => {
+                let Some(t) = text else { return Ok(Step::Continue) };
+                // Enter: no book, back to the options.
+                if t.trim().is_empty() {
+                    self.stage = Stage::Option;
+                    return Ok(Step::Continue);
+                }
+                let b = crate::cmd::colorbook::book(&t).ok_or_else(|| EngineError::Other(format!("Color book \"{}\" not found.", t.trim())))?;
+                self.book = b.name;
+                self.stage = Stage::BookColor;
+            }
+            Stage::BookColor => {
+                let Some(t) = text else { return Ok(Step::Continue) };
+                if t.trim().is_empty() {
+                    self.stage = Stage::Option;
+                    return Ok(Step::Continue);
+                }
+                let rgb = crate::cmd::colorbook::lookup(&self.book, &t).map_err(EngineError::Other)?;
+                if let Some(it) = self.items.get(self.cur).copied() {
+                    set_props(s, it, |p| p.color = Some(Color::True(rgb)))?;
                 }
                 self.stage = Stage::Option;
             }

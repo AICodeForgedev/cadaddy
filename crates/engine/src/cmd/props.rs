@@ -104,7 +104,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("rename", "Rename...", run_rename)
             .menu(&["Format", "Rename..."])
             .alias(&["ren", "-rename"])
-            .params("{table: layer|linetype|style|dimstyle|block|mleaderstyle|tablestyle|view|ucs, from, to}")
+            .params("{table: layer|linetype|style|dimstyle|block|mleaderstyle|tablestyle|view|ucs|plotstyle|vport, from, to} (materials: refused, the drawing keeps none)")
             .interactive(|_| Ok(Box::new(rename::RenameM::default()))),
     ]
 }
@@ -147,6 +147,11 @@ pub(super) fn entity_props(d: &cadaddy_doc::Drawing, e: &cadaddy_doc::Entity) ->
             EntityKind::Arc(a) => {
                 o.insert("arcLength".into(), json!(a.radius * cadaddy_geom::ccw_sweep(a.start, a.end)));
                 o.insert("totalAngle".into(), json!(cadaddy_geom::ccw_sweep(a.start, a.end).to_degrees()));
+            }
+            EntityKind::Solid3d(so) => {
+                if let Some(x) = super::solids::solid_props_json(so).as_object() {
+                    o.extend(x.clone());
+                }
             }
             EntityKind::LwPolyline(p) => {
                 let pl = cadaddy_geom::Polyline { vertices: p.vertices.clone(), closed: p.closed };
@@ -327,6 +332,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                         }
                     }
                 }
+                EntityKind::Solid3d(so) => super::solids::set_solid_props(so, p),
                 EntityKind::Circle(c) => {
                     if let Some(v) = p.get("center") {
                         set_xy(&mut c.center, v);
@@ -1078,6 +1084,9 @@ fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
             (set.run)(s, &json!({ "name": from, "newName": to }))?;
         }
         "block" => rename::block(s, &from, &to)?,
+        "plotstyle" => rename::plotstyle(s, &from, &to)?,
+        "vport" | "viewport" => rename::vport(s, &from, &to)?,
+        "material" => return Err(bad("rename", rename::NO_MATERIALS)),
         "mleaderstyle" | "multileaderstyle" => rename::simple(s, "mleaderstyle", &from, &to)?,
         "tablestyle" | "view" | "ucs" => rename::simple(s, &table, &from, &to)?,
         "style" | "textstyle" => {

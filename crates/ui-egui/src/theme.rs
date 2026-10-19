@@ -372,8 +372,10 @@ pub fn install_fonts(ctx: &egui::Context, language: &str, cjk: bool) {
     // A sans-serif face reads best in the interface.
     embedded.sort_by_key(|f| !f.family.contains("Gothic") && !f.family.contains("Sans"));
     added.extend(embedded.first().map(|f| (format!("craft-{}", f.stem()), std::sync::Arc::new(egui::FontData::from_static(f.bytes)))));
-    // Korean: Noto Sans CJK and most CJK fonts above already cover Hangul; else a Hangul font.
-    if language == "ko"
+    // Korean: Noto Sans CJK and some CJK fonts above already cover Hangul; else a Hangul font
+    // (Malgun Gothic on Windows), in the Korean interface and wherever CJK fonts load (the
+    // language pickers name 한국어).
+    if (language == "ko" || cjk)
         && !cjk_covers_hangul()
         && let Some(face) = korean_font()
     {
@@ -666,9 +668,9 @@ pub fn shows_japanese() -> bool {
 }
 
 /// Whether the interface in `language` shows Hangul (the Korean name in the language picker):
-/// in every language when the CJK fonts cover it, in a Korean interface with [`korean_font`].
-pub fn shows_hangul(language: &str) -> bool {
-    cjk_covers_hangul() || (language == "ko" && korean_font().is_some())
+/// when the CJK fonts cover it or a Korean font is installed ([`korean_font`], loaded with them).
+pub fn shows_hangul(_language: &str) -> bool {
+    cjk_covers_hangul() || korean_font().is_some()
 }
 
 /// Whether the interface can show `language` without missing-glyph boxes: Chinese needs an

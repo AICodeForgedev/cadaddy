@@ -23,6 +23,7 @@ use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, St
 mod classic;
 mod edit;
 pub mod grips;
+pub(crate) mod path;
 
 /// Most preview entities drawn while the array is edited.
 const PREVIEW_LIMIT: usize = 2000;
@@ -64,7 +65,15 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// Array parameters around `kind` (the source block is named when the array is made).
 fn params(kind: ArrayKind, levels: u64, level_spacing: f64) -> ArrayParams {
-    ArrayParams { source: "*".into(), kind, levels: u32::try_from(levels).unwrap_or(u32::MAX), level_spacing, replaced: Vec::new(), editing: None }
+    ArrayParams {
+        source: "*".into(),
+        kind,
+        levels: u32::try_from(levels).unwrap_or(u32::MAX),
+        level_spacing,
+        replaced: Vec::new(),
+        removed: Vec::new(),
+        editing: None,
+    }
 }
 
 fn count32(n: u64) -> u32 {
@@ -106,7 +115,7 @@ fn nesting(d: &Drawing, ents: &[&Entity], memo: &mut HashMap<String, usize>, dep
 }
 
 /// ARRAYASSOCIATIVITY: whether new arrays start associative (on unless set to 0).
-fn assoc_default(s: &Session) -> bool {
+pub(crate) fn assoc_default(s: &Session) -> bool {
     s.doc().map(|d| d.header.i64("ARRAYASSOCIATIVITY", 1) != 0).unwrap_or(true)
 }
 
@@ -1137,7 +1146,7 @@ impl Interactive for PolarM {
             }
             (Center, Input::Keyword(k)) if k == "Base point" => CenterBase,
             (Center, Input::Keyword(_)) => {
-                s.echo("A rotation axis (3D) is not available yet; specify the center point.");
+                s.echo("A rotation axis in space needs 3D polar arrays, which CADaddy doesn't make; specify the center point.");
                 Center
             }
             (Center, _) => return Err(other("Requires a point or an option keyword.")),

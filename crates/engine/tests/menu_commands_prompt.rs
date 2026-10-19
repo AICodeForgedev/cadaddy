@@ -15,11 +15,11 @@ const DIALOG_OR_STATE: &[&str] = &[
     "exportpdf",
     "mspace",
     "pspace",
-    "pdfimport",
     "import",
     "export",
     "publish",
     "pdfbook",
+    "etransmit",
     "style",
     "dimstyle",
     "dimstyle.dimension",
@@ -43,4 +43,18 @@ fn menu_commands_never_demand_parameters() {
         s.cancel();
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// Typed PDFIMPORT asks for the file on the command line (tester 0.7.7g: it returned to
+/// "Command:" and the path typed next ran as an unknown command); a missing file asks again.
+#[test]
+fn typed_pdfimport_asks_for_the_file() {
+    let mut s = Session::new();
+    s.start("pdfimport").unwrap();
+    assert!(s.prompt_text().contains("PDF file"), "{}", s.prompt_text());
+    s.input(cadaddy_engine::Input::Text("C:/no/such/file.pdf".into())).unwrap();
+    assert_eq!(s.running.as_ref().map(|r| r.id.as_str()), Some("pdfimport"));
+    assert!(s.prompt_text().contains("PDF file"), "{}", s.prompt_text());
+    s.cancel();
+    assert!(s.running.is_none());
 }

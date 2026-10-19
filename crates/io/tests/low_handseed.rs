@@ -1,6 +1,7 @@
 //! Another program's file can name a $HANDSEED below handles it uses. Entities CADaddy makes
-//! while reading (the faces a polyface mesh becomes) must not take handles that records further
-//! on still have: a DWG keeps one object per handle, so the duplicates were lost on save.
+//! while reading must not take handles that records further on still have: a DWG keeps one
+//! object per handle, so the duplicates were lost on save. (A polyface mesh is one mesh now, its
+//! faces with it.)
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::HashSet;
@@ -35,7 +36,16 @@ fn dxf() -> String {
 }
 
 fn counts(d: &Drawing) -> (usize, usize) {
-    let faces = d.block("MESH").map_or(0, |b| b.entities.iter().filter(|e| matches!(e.kind, EntityKind::Face3d(_))).count());
+    let faces = d.block("MESH").map_or(0, |b| {
+        b.entities
+            .iter()
+            .map(|e| match &e.kind {
+                EntityKind::Face3d(_) => 1,
+                EntityKind::Mesh(m) => m.faces.len(),
+                _ => 0,
+            })
+            .sum()
+    });
     let lines = d.model.iter().filter(|e| matches!(e.kind, EntityKind::Line(_))).count();
     (faces, lines)
 }

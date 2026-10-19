@@ -8,6 +8,26 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+/// FILEDIA is 0: native file dialogs stay closed ([`file_dialogs_allowed`]).
+static FILE_DIALOGS_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// An agent's control request is being handled ([`file_dialogs_allowed`]).
+static AGENT_CALL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// A file dialog was refused during the agent request being handled.
+static DIALOG_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a native file dialog may open now: not with FILEDIA 0, and never for an agent's
+/// request, where it opened on the user's screen and blocked the whole app, every later agent
+/// call timing out, until someone answered it (menu sweep 0.7.7e: Insert ▸ PDF Import…).
+/// The host's pickers ([`Services`]) check it first.
+pub fn file_dialogs_allowed() -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    if AGENT_CALL.load(Relaxed) {
+        DIALOG_REFUSED.store(true, Relaxed);
+        return false;
+    }
+    !FILE_DIALOGS_OFF.load(Relaxed)
+}
+
 pub mod animation;
 pub mod autosave;
 pub mod bedit;
@@ -15,6 +35,7 @@ pub mod canvas;
 pub mod chrome;
 pub mod clipboard;
 pub mod closing;
+pub mod cmddlgs;
 pub mod cmdline;
 pub mod context_menu;
 pub mod control;
@@ -22,7 +43,10 @@ pub mod credits;
 pub mod dialogs;
 pub mod docking;
 pub mod hatchdlg;
+pub mod hyperlinks;
+pub mod materials;
 mod mtext_editor;
+mod shaded;
 pub mod spacemouse;
 // Report a Bug, Request a Feature, Donate.
 pub mod support;
@@ -32,12 +56,14 @@ pub mod xrefs;
 
 pub mod dyngrips;
 pub mod dyninput;
+pub mod extractdlg;
 pub mod gpu;
 pub mod grip_dyn;
 mod groupgrips;
 pub mod i18n;
 pub mod icons;
 pub mod layers;
+pub mod layerstates;
 pub mod layouttabs;
 pub mod managers;
 pub mod matchpropdlg;
@@ -49,14 +75,17 @@ pub mod parametric;
 pub mod pdfdlg;
 pub mod plotstyles;
 pub mod quick;
+pub mod renderwin;
 pub mod ribbon;
 pub mod shortcut_menus;
+pub mod spelldlg;
 pub mod theme;
 pub mod toldlg;
 pub mod viewcube;
 pub mod vpscale;
 pub mod walk;
 
+pub mod etransmit;
 pub mod exchange;
 
 use std::sync::mpsc::Receiver;
@@ -107,6 +136,8 @@ pub struct UiState {
     /// menu puts them back.
     pub hidden_tools: Vec<String>,
     pub properties_all: bool,
+    /// The properties shown in the Properties palette's "My" view (row names, in English).
+    pub my_properties: Vec<String>,
     /// Show an in-window menu bar (platforms without a native menu bar, or on request).
     pub in_window_menu: bool,
     pub start_tab: bool,
@@ -117,7 +148,7 @@ pub struct UiState {
     /// Animation effects (dialog and menu fades, smoothed scrolling): "system" (follow the OS
     /// setting), "on" or "off".
     pub animations: animation::AnimationPref,
-    /// The format Save As suggests for a drawing that has no file yet: "dxf" or "dwg".
+    /// The format Save As suggests for a drawing that has no file yet: "cdy", "dxf" or "dwg".
     pub save_format: SaveFormat,
     /// The version Save As writes for a drawing that has no file yet ("2000" … "2018"); a
     /// drawing opened from a file keeps that file's version.
@@ -137,18 +168,24 @@ pub use cadaddy_engine::cmd::file::Version as SaveVersion;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SaveFormat {
-    /// CADaddy's native format, and the default.
+    /// CADaddy's native format (.cdy: keeps everything the drawing holds), and the default.
     #[default]
+    Cdy,
     Dxf,
     Dwg,
 }
 
-impl SaveFormat {
-    pub const ALL: [SaveFormat; 2] = [SaveFormat::Dxf, SaveFormat::Dwg];
+/// Which save formats preferences were written with (2: with .cdy), so [`CadApp::load_prefs`]
+/// tells a chosen DXF from the old default.
+const SAVE_FORMATS_PREFS: u64 = 2;
 
-    /// The file extension, which is also the saved name ("dxf" or "dwg").
+impl SaveFormat {
+    pub const ALL: [SaveFormat; 3] = [SaveFormat::Cdy, SaveFormat::Dxf, SaveFormat::Dwg];
+
+    /// The file extension, which is also the saved name ("cdy", "dxf" or "dwg").
     pub fn as_str(self) -> &'static str {
         match self {
+            SaveFormat::Cdy => "cdy",
             SaveFormat::Dxf => "dxf",
             SaveFormat::Dwg => "dwg",
         }
@@ -192,6 +229,7 @@ impl Default for UiState {
             collapsed_groups: Vec::new(),
             hidden_tools: Vec::new(),
             properties_all: true,
+            my_properties: Vec::new(),
             // AutoCAD hides the menu bar under the ribbon (MENUBAR 0).
             in_window_menu: false,
             start_tab: false,
@@ -218,6 +256,11 @@ pub struct Services {
     pub pick_image: Option<Box<dyn Fn() -> Option<String>>>,
     /// The system clipboard's text (Paste to Command Line).
     pub read_clipboard: Option<Box<dyn Fn() -> Option<String>>>,
+    /// A drawing file's preview as PNG bytes (a .cdy file's embedded thumbnail), for the Start
+    /// page's recent files; `None` when the file has none.
+    pub thumbnail: Option<Box<dyn Fn(&str) -> Option<Vec<u8>>>>,
+    /// Where to save an image (the Render window's Save), given a suggested name.
+    pub pick_save_image: Option<Box<dyn Fn(&str) -> Option<String>>>,
 }
 
 pub struct CadApp {
@@ -242,6 +285,8 @@ pub struct CadApp {
     /// Drawings being read on worker threads ([`opening`]).
     pub opening: opening::Opening,
     pub integrated_titlebar: bool,
+    /// The window title last sent to the OS ("CADaddy - name*"), so it is only sent on a change.
+    os_title: String,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
     queued_shots: Vec<(u64, f64, u32)>,
@@ -258,6 +303,19 @@ pub struct CadApp {
     cjk_scanned: std::collections::HashSet<u64>,
     /// An open drawing had CJK names: the CJK fonts stay installed from then on.
     needs_cjk: bool,
+    /// Each open drawing's file as last seen ([`CadApp::track_documents`]).
+    seen_docs: std::collections::HashMap<u64, Option<String>>,
+    /// The slowest time of each part of a frame since `ui.inspect` last reported them (ms).
+    pub slowest: std::collections::BTreeMap<&'static str, f64>,
+    /// When the last frame started (for the gap between frames, which includes painting and
+    /// presenting).
+    last_frame_start: Option<f64>,
+    /// Until when (ms) an agent counts as active: the app then looks for control requests every
+    /// few milliseconds instead of sleeping until something repaints it.
+    control_active_until: f64,
+    /// The command an agent started from the control channel and may go on typing into (see
+    /// `control::users_command`).
+    pub(crate) agent_run: Option<usize>,
     /// The theme last installed into egui (`None` until the first frame).
     shown_theme: Option<egui::Theme>,
     /// Whether the last applied theme was handed to egui as the System preference.
@@ -293,6 +351,14 @@ pub struct CadApp {
     pub gpu_notice: Option<autosave::GpuNotice>,
     /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
+    /// The Data Extraction wizard while open ([`extractdlg`]).
+    pub extract_dlg: Option<extractdlg::State>,
+    /// The Check Spelling dialog while open ([`spelldlg`]).
+    pub spell_dlg: Option<spelldlg::State>,
+    /// HYPERLINK is selecting objects; its dialog opens once that ends ([`hyperlinks::resume`]).
+    pub hyperlink_pick: bool,
+    /// The Layer States Manager while open ([`layerstates`]).
+    pub layer_states_dlg: Option<layerstates::State>,
     /// The layout tabs' rename, selection and Move or Copy dialog ([`layouttabs`]).
     pub layout_tabs: layouttabs::LayoutTabs,
     /// The Edit Block Definition dialog ([`bedit`]).
@@ -320,6 +386,7 @@ impl CadApp {
             status: None,
             opening: opening::Opening::default(),
             integrated_titlebar: false,
+            os_title: String::new(),
             control_rx: None,
             pending_shots: Vec::new(),
             queued_shots: Vec::new(),
@@ -331,6 +398,11 @@ impl CadApp {
             fonts_cjk: false,
             cjk_scanned: std::collections::HashSet::new(),
             needs_cjk: false,
+            seen_docs: std::collections::HashMap::new(),
+            slowest: std::collections::BTreeMap::new(),
+            last_frame_start: None,
+            control_active_until: 0.0,
+            agent_run: None,
             shown_theme: None,
             shown_follows_system: false,
             shown_animations: None,
@@ -349,6 +421,10 @@ impl CadApp {
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
             hatch_dlg: None,
+            extract_dlg: None,
+            spell_dlg: None,
+            hyperlink_pick: false,
+            layer_states_dlg: None,
             layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
@@ -414,7 +490,13 @@ impl CadApp {
             let first = text.split_whitespace().next().unwrap_or("");
             // `cmd {json}` is a programmatic call: the engine runs it with those parameters.
             let json_form = text.trim_start().get(first.len()..).is_some_and(|rest| rest.trim_start().starts_with('{'));
-            if !first.is_empty() && !json_form && menus::run_ui_command(self, &first.to_ascii_lowercase(), &Value::Null).is_some() {
+            let word = first.to_ascii_lowercase();
+            let more = text.split_whitespace().nth(1).is_some();
+            if !first.is_empty()
+                && !json_form
+                && (!more || !menus::DIALOG_WHEN_ALONE.contains(&word.as_str()))
+                && menus::run_ui_command(self, &word, &Value::Null).is_some()
+            {
                 return None;
             }
         }
@@ -441,6 +523,7 @@ impl CadApp {
             "animations": self.ui.animations.as_str(),
             "interfaceLanguage": self.ui.interface_language.code(),
             "saveFormat": self.ui.save_format.as_str(),
+            "saveFormats": SAVE_FORMATS_PREFS,
             "saveVersion": self.ui.save_version,
         });
         if self.spacemouse.settings != spacemouse::Settings::default() {
@@ -486,7 +569,10 @@ impl CadApp {
             self.ui.interface_language = l;
         }
         if let Some(f) = v.get("saveFormat").and_then(Value::as_str).and_then(SaveFormat::parse) {
-            self.ui.save_format = f;
+            // Preferences from before .cdy always held DXF, then the default: that is no choice,
+            // so new drawings get the new default (a chosen DWG stays).
+            let before_cdy = v.get("saveFormats").and_then(Value::as_u64).is_none_or(|n| n < SAVE_FORMATS_PREFS);
+            self.ui.save_format = if before_cdy && f == SaveFormat::Dxf { SaveFormat::default() } else { f };
         }
         if let Some(v) = v.get("saveVersion").and_then(Value::as_str).and_then(SaveVersion::parse) {
             self.ui.save_version = v.year().to_string();
@@ -614,8 +700,13 @@ impl CadApp {
             Ok(v) => {
                 self.ui.start_tab = false;
                 self.canvas.zoom_pending = true;
-                let doc = v.get("index").and_then(Value::as_u64).and_then(|i| self.session.docs.get(usize::try_from(i).ok()?));
-                if let Some(path) = doc.and_then(|d| d.path.clone()) {
+                // Recent files and replacing an untouched Drawing1: [`CadApp::track_documents`].
+                self.track_documents();
+                // A file that was already open switches to its tab; it still goes to the top of the
+                // recent files, though no new drawing appeared for track_documents to see.
+                if v.get("alreadyOpen").and_then(Value::as_bool) == Some(true)
+                    && let Some(path) = self.session.docs.get(self.session.active).and_then(|d| d.path.clone())
+                {
                     self.remember_recent(path);
                 }
                 // A partial read (DWG records left out) shows in the status bar too, not only on
@@ -632,6 +723,45 @@ impl CadApp {
     }
 
     /// Put `path` first in File ▸ Open Recent and on the Start page.
+    /// Every way a drawing gets a file (the Open dialog, typed OPEN, SAVEAS, an agent's open):
+    /// the file goes to the top of the recent files, and a newly opened file replaces untouched
+    /// new drawings (never saved, no changes, nothing to undo), as in AutoCAD.
+    fn track_documents(&mut self) {
+        let mut opened = None;
+        let mut recent = Vec::new();
+        for d in &self.session.docs {
+            let before = self.seen_docs.get(&d.uid);
+            if d.path.is_some() && before != Some(&d.path) {
+                recent.extend(d.path.clone());
+                if before.is_none() {
+                    opened = Some(d.uid);
+                }
+            }
+        }
+        for path in recent {
+            self.remember_recent(path);
+        }
+        if let Some(uid) = opened {
+            // An agent's open shows the drawing, not the Start page it was opened from.
+            self.ui.start_tab = false;
+            let pristine: Vec<usize> = self
+                .session
+                .docs
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.uid != uid && d.path.is_none() && !d.is_dirty() && d.undo.is_empty() && d.redo.is_empty())
+                .map(|(i, _)| i)
+                .collect();
+            for i in pristine.into_iter().rev() {
+                let _ = self.session.execute("close", &json!({ "index": i }));
+            }
+            if let Some(i) = self.session.docs.iter().position(|d| d.uid == uid) {
+                self.session.active = i;
+            }
+        }
+        self.seen_docs = self.session.docs.iter().map(|d| (d.uid, d.path.clone())).collect();
+    }
+
     fn remember_recent(&mut self, path: String) {
         let recent = &mut self.ui.recent_files;
         recent.retain(|p| *p != path);
@@ -640,7 +770,25 @@ impl CadApp {
     }
 
     /// Per-frame logic before layout.
+    /// Record `ms` for the frame part `name` if it is its slowest yet ([`CadApp::slowest`]).
+    fn note_time(&mut self, name: &'static str, ms: f64) {
+        let e = self.slowest.entry(name).or_insert(0.0);
+        if ms > *e {
+            *e = ms;
+        }
+    }
+
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // FILEDIA 0: no native file dialogs (the commands ask on the command line).
+        FILE_DIALOGS_OFF
+            .store(cadaddy_engine::sysvars::get(&self.session, "FILEDIA").and_then(|v| v.as_i64()) == Some(0), std::sync::atomic::Ordering::Relaxed);
+        let t0 = now_ms();
+        if let Some(last) = self.last_frame_start {
+            self.note_time("betweenFrames", t0 - last);
+        }
+        self.last_frame_start = Some(t0);
+        self.track_documents();
+        cadaddy_engine::cmd::file::set_default_ext(self.ui.save_format.as_str());
         // A long LISP routine runs a slice per frame, so the window stays live (and Esc stops it).
         self.session.lisp_tick();
         if self.session.lisp_busy() {
@@ -649,11 +797,28 @@ impl CadApp {
         // Esc in a dialog is Cancel: it closes the dialog, and the command line doesn't also
         // get it (cancelling a command waiting behind the dialog).
         if self.ui.dialog.is_some() && self.closing.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-            self.ui.dialog = None;
+            // As the dialog's Cancel does: what it was editing goes with it.
+            match self.ui.dialog.take().as_deref() {
+                Some("hatch") => self.hatch_dlg = None,
+                Some("tolerance") => self.tol_dlg = None,
+                Some("pdfimport") => self.pdf = None,
+                // The Layer States Manager goes back to where it was opened from, as its Close does.
+                Some("layerstates") => self.ui.dialog = self.layer_states_dlg.take().and_then(|s| s.back()),
+                _ => {}
+            }
         }
         // Closing the window (title bar, File ▸ Exit, Cmd+Q) with unsaved changes asks first.
         if ctx.input(|i| i.viewport().close_requested()) && self.request_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+        // The OS window title names the current drawing, `*` when it has unsaved changes.
+        let os_title = match self.session.state() {
+            Ok(st) if !self.ui.start_tab => format!("CADaddy - {}{}", st.title, if st.is_dirty() { "*" } else { "" }),
+            _ => "CADaddy".to_string(),
+        };
+        if os_title != self.os_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(os_title.clone()));
+            self.os_title = os_title;
         }
         let language = self.language();
         // Drawings opened since the last frame: do their names need a CJK font in the interface?
@@ -695,7 +860,18 @@ impl CadApp {
         if !animate {
             animation::unsmooth_scroll(ctx);
         }
+        let t1 = now_ms();
+        self.note_time("logicBeforeControl", t1 - t0);
         self.drain_control(ctx);
+        let t2 = now_ms();
+        self.note_time("control", t2 - t1);
+        // While an agent is sending requests, look for the next one every few milliseconds. The
+        // control thread's wake-up can be lost on Windows (it arrives while a frame is drawn),
+        // and an idle window then took its next request only at the next timed repaint, 0.1 to
+        // 0.35 s later (UI review 0.7.7c: the "stalls" after edits).
+        if t2 < self.control_active_until {
+            ctx.request_repaint_after(std::time::Duration::from_millis(5));
+        }
         self.finish_opening();
         cadaddy_engine::cmd::file::sync_image_folder(&self.session);
         self.opening.show(ctx);
@@ -707,7 +883,10 @@ impl CadApp {
         self.gpu_fault_tick(ctx);
         managers::plot_window_resume(self, ctx);
         hatchdlg::resume(self);
+        hyperlinks::resume(self);
+        let t3 = now_ms();
         self.autosave_tick(ctx);
+        self.note_time("autosave", now_ms() - t3);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
         for f in ctx.input(|i| i.raw.dropped_files.clone()) {
@@ -716,6 +895,7 @@ impl CadApp {
                 self.open_path(&p);
             }
         }
+        self.note_time("logicAfterControl", now_ms() - t2);
     }
 
     /// Wait for the frame cap (if any), then inject synthetic events (one pointer event per frame).
@@ -769,9 +949,8 @@ impl CadApp {
         }
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
-            if self.walk.is_some() && has_doc {
-                walk::show(self, ui);
-            } else if has_doc {
+            // Walk mode shows in the drawing's own tab (docking), the palettes beside it.
+            if has_doc {
                 docking::show(self, ui);
             } else {
                 chrome::start_page(self, ui);
@@ -782,6 +961,7 @@ impl CadApp {
         palettes::patterns::prompt_picker(self, ui.ctx());
         layouttabs::move_copy_dialog(self, ui.ctx());
         matchpropdlg::show(self, ui.ctx());
+        renderwin::show(self, ui.ctx());
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
@@ -793,7 +973,9 @@ impl CadApp {
         if let Some(url) = self.pending_url.take() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }
+        control::observe_drawn(ui.ctx());
         self.frame_ms = now_ms() - t0;
+        self.note_time("draw", self.frame_ms);
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {
@@ -819,14 +1001,32 @@ impl CadApp {
         self.control_rx = Some(rx);
     }
 
+    /// Handle one control request as the app does between frames (an agent's call: no file
+    /// dialogs, see [`file_dialogs_allowed`]); the reply goes to the request's sender.
+    pub fn serve_control_request(&mut self, ctx: &egui::Context, req: control::ControlRequest) {
+        self.handle_control_request(ctx, req);
+    }
+
     fn handle_control_request(&mut self, ctx: &egui::Context, req: control::ControlRequest) {
+        self.control_active_until = now_ms() + 2000.0;
         // Timed out while queued: the client was told it did not run (#345).
         if !req.begin() {
             return;
         }
         let reply = req.reply.clone();
-        match control::handle(self, ctx, &req) {
-            control::Outcome::Done(v) => {
+        AGENT_CALL.store(true, std::sync::atomic::Ordering::Relaxed);
+        let outcome = control::handle(self, ctx, &req);
+        AGENT_CALL.store(false, std::sync::atomic::Ordering::Relaxed);
+        match outcome {
+            control::Outcome::Done(mut v) => {
+                if DIALOG_REFUSED.swap(false, std::sync::atomic::Ordering::Relaxed)
+                    && let Some(o) = v.as_object_mut()
+                {
+                    o.insert(
+                        "warning".into(),
+                        json!("a file dialog was not opened for this agent request (it would block the app until someone answers it): give the file as a parameter, e.g. engine.execute with `path`"),
+                    );
+                }
                 let _ = reply.send(v);
             }
             control::Outcome::Screenshot { path } => {
@@ -970,7 +1170,10 @@ mod tests {
         frame(&mut a, &ctx, None);
         assert_eq!(Tokens::get(), Tokens::of(theme::SYSTEM_FALLBACK), "no OS appearance: the documented fallback");
         assert_eq!(a.ui.theme, ThemePref::System);
-        assert_eq!(a.prefs_json(), r#"{"animations":"system","interfaceLanguage":"auto","saveFormat":"dxf","saveVersion":"2018","theme":"system"}"#);
+        assert_eq!(
+            a.prefs_json(),
+            r#"{"animations":"system","interfaceLanguage":"auto","saveFormat":"cdy","saveFormats":2,"saveVersion":"2018","theme":"system"}"#
+        );
     }
 
     #[test]
@@ -992,7 +1195,8 @@ mod tests {
     #[test]
     fn default_save_format_persists_and_names_new_drawings() {
         let mut a = app();
-        assert_eq!(a.ui.save_format, SaveFormat::Dxf, "default keeps DXF, CADaddy's native format");
+        assert_eq!(a.ui.save_format, SaveFormat::Cdy, "new drawings default to .cdy, CADaddy's native format");
+        assert_eq!(SaveFormat::Cdy.suggested_name(Some("Drawing1")), "Drawing1.cdy");
         assert!(a.run("ui.saveformat", json!({ "format": "pdf" })).is_err());
         assert_eq!(a.run("ui.saveformat", json!({ "format": "DWG" })).ok(), Some(json!({ "saveFormat": "dwg" })));
         assert_eq!(a.run("ui.saveformat", json!({})).ok(), Some(json!({ "saveFormat": "dwg" })), "no format: report it");
@@ -1002,9 +1206,19 @@ mod tests {
         assert_eq!(b.ui.save_format, SaveFormat::Dwg);
         b.load_prefs(r#"{"saveFormat": "svg"}"#);
         assert_eq!(b.ui.save_format, SaveFormat::Dwg);
+        // DXF in preferences from before .cdy was the old default, not a choice; a DXF chosen since
+        // stays, and so does a DWG chosen before.
+        b.load_prefs(r#"{"saveFormat": "dxf"}"#);
+        assert_eq!(b.ui.save_format, SaveFormat::Cdy);
+        b.load_prefs(r#"{"saveFormat": "dxf", "saveFormats": 2}"#);
+        assert_eq!(b.ui.save_format, SaveFormat::Dxf);
+        b.load_prefs(r#"{"saveFormat": "dwg"}"#);
+        assert_eq!(b.ui.save_format, SaveFormat::Dwg);
         // The menu items reach the same setting, and resetting the palettes keeps it.
         b.start("ui.saveformat.dxf");
         assert_eq!(b.ui.save_format, SaveFormat::Dxf);
+        b.start("ui.saveformat.cdy");
+        assert_eq!(b.ui.save_format, SaveFormat::Cdy);
         b.start("ui.saveformat.dwg");
         b.start("ui.resetpalettes");
         assert_eq!(b.ui.save_format, SaveFormat::Dwg);

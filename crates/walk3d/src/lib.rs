@@ -10,6 +10,8 @@
 #![forbid(unsafe_code)]
 
 mod derive;
+mod doors;
+mod ground;
 mod math;
 mod measure;
 mod openings;
@@ -17,7 +19,9 @@ mod pick;
 mod rules;
 mod walker;
 
-pub use derive::{DeviceInfo, LevelInfo, Owner, Scene, Seg, Vertex, derive, derive_set};
+pub use derive::{DeviceInfo, LevelInfo, Owner, Part, Room, Scene, Seg, Vertex, derive, derive_set, rooms};
+pub use doors::DoorLeaf;
+pub use ground::Ground;
 pub use math::{Mat4, V3};
 pub use measure::{Dim, DimKind, measure};
 pub use pick::{Hit, pick};

@@ -152,49 +152,56 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let title = if d.convert { crate::tl!("Convert PDF to DWG") } else { crate::tl!("PDF Import") };
     let mut go = false;
     let mut cancel = false;
-    egui::Window::new(title).id(egui::Id::new("pdf_import_dialog")).collapsible(false).resizable(false).open(open).show(ctx, |ui| {
-        let file = std::path::Path::new(&d.path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-        ui.label(egui::RichText::new(file).strong());
-        ui.add_space(6.0);
-        egui::Grid::new("pdf_import_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            ui.label(crate::tl!("Page"));
-            ui.add(egui::DragValue::new(&mut d.page).range(1..=9999));
-            ui.end_row();
-            ui.label(crate::tl!("Scale"));
-            let shown = SCALES.get(d.scale).map_or("", |s| s.0);
-            egui::ComboBox::from_id_salt("pdf_scale").selected_text(crate::i18n::t(shown)).width(230.0).show_ui(ui, |ui| {
-                for (i, (label, _)) in SCALES.iter().enumerate() {
-                    ui.selectable_value(&mut d.scale, i, crate::i18n::t(label));
+    egui::Window::new(title)
+        .id(egui::Id::new("pdf_import_dialog"))
+        .collapsible(false)
+        .resizable(false)
+        .open(open)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            let file = std::path::Path::new(&d.path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+            ui.label(egui::RichText::new(file).strong());
+            ui.add_space(6.0);
+            egui::Grid::new("pdf_import_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                ui.label(crate::tl!("Page"));
+                ui.add(egui::DragValue::new(&mut d.page).range(1..=9999));
+                ui.end_row();
+                ui.label(crate::tl!("Scale"));
+                let shown = SCALES.get(d.scale).map_or("", |s| s.0);
+                egui::ComboBox::from_id_salt("pdf_scale").selected_text(crate::i18n::t(shown)).width(230.0).show_ui(ui, |ui| {
+                    for (i, (label, _)) in SCALES.iter().enumerate() {
+                        ui.selectable_value(&mut d.scale, i, crate::i18n::t(label));
+                    }
+                });
+                ui.end_row();
+                ui.label(crate::tl!("Layers"));
+                ui.vertical(|ui| {
+                    ui.radio_value(&mut d.layers, Layers::Pdf, crate::tl!("PDF layers (else by colour and line weight)"));
+                    ui.radio_value(&mut d.layers, Layers::Pen, crate::tl!("By colour and line weight"));
+                    ui.radio_value(&mut d.layers, Layers::Object, crate::tl!("Object layers (PDF_Geometry, PDF_Text, …)"));
+                });
+                ui.end_row();
+            });
+            ui.add_space(4.0);
+            ui.checkbox(&mut d.text, crate::tl!("Import text"));
+            ui.checkbox(&mut d.join, crate::tl!("Join line pieces and make circles"));
+            ui.checkbox(&mut d.white_fills, crate::tl!("Keep white fills (masks)"));
+            ui.checkbox(&mut d.images, crate::tl!("Import raster images (saved as PNG files)"));
+            if d.convert {
+                ui.checkbox(&mut d.layout, crate::tl!("Add a layout that plots like the sheet"));
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let label = if d.convert { crate::tl!("Convert and Save as DWG…") } else { crate::tl!("Import") };
+                if ui.button(label).clicked() {
+                    go = true;
+                }
+                if ui.button(crate::tl!("Cancel")).clicked() {
+                    cancel = true;
                 }
             });
-            ui.end_row();
-            ui.label(crate::tl!("Layers"));
-            ui.vertical(|ui| {
-                ui.radio_value(&mut d.layers, Layers::Pdf, crate::tl!("PDF layers (else by colour and line weight)"));
-                ui.radio_value(&mut d.layers, Layers::Pen, crate::tl!("By colour and line weight"));
-                ui.radio_value(&mut d.layers, Layers::Object, crate::tl!("Object layers (PDF_Geometry, PDF_Text, …)"));
-            });
-            ui.end_row();
         });
-        ui.add_space(4.0);
-        ui.checkbox(&mut d.text, crate::tl!("Import text"));
-        ui.checkbox(&mut d.join, crate::tl!("Join line pieces and make circles"));
-        ui.checkbox(&mut d.white_fills, crate::tl!("Keep white fills (masks)"));
-        ui.checkbox(&mut d.images, crate::tl!("Import raster images (saved as PNG files)"));
-        if d.convert {
-            ui.checkbox(&mut d.layout, crate::tl!("Add a layout that plots like the sheet"));
-        }
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            let label = if d.convert { crate::tl!("Convert and Save as DWG…") } else { crate::tl!("Import") };
-            if ui.button(label).clicked() {
-                go = true;
-            }
-            if ui.button(crate::tl!("Cancel")).clicked() {
-                cancel = true;
-            }
-        });
-    });
     if go {
         *open = false;
         app.pdf = None;

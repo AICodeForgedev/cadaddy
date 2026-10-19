@@ -233,6 +233,13 @@ impl Interactive for DashStyle {
                         s.echo(format!("Text styles: {}", names.join(", ")));
                         return Ok(Step::Continue);
                     }
+                    // As STYLE checks it (at most 255 characters), asked again here: a bad name
+                    // used to be refused only after the last prompt, which then looped (battle
+                    // test 0.7.7c).
+                    Some(t) if t.len() > 255 => {
+                        s.echo("Bad style name.");
+                        return Ok(Step::Continue);
+                    }
                     Some(t) => t,
                     None => s.doc()?.header.str("TEXTSTYLE", "Standard"),
                 };
@@ -293,7 +300,12 @@ impl Interactive for DashStyle {
                 }
                 self.p.insert("current".into(), json!(true));
                 let name = self.p.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-                call(s, "style", Value::Object(std::mem::take(&mut self.p)))?;
+                // Refused (whatever the reason): the command ends with the message instead of
+                // asking its last question again without its answers.
+                if let Err(e) = call(s, "style", Value::Object(std::mem::take(&mut self.p))) {
+                    s.echo(e.user_message());
+                    return Ok(Step::Cancel);
+                }
                 s.echo(format!("\"{name}\" is now the current text style."));
                 return Ok(Step::Done);
             }

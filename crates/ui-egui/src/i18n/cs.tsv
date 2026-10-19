@@ -1399,3 +1399,337 @@ menu	Modify	Modifikace
 	Clip PDF Underlay	Oříznout podložku PDF
 	Adjust PDF Underlay	Upravit podložku PDF
 	PDF Underlay Layers	Hladiny podložky PDF
+	Unused items in this drawing	Nepoužité položky v tomto výkresu
+	Purge Checked Items	Vyčistit označené
+	Purge All	Vyčistit vše
+	Items purged: {count}	Vyčištěno položek: {count}
+	Find what:	Najít:
+	Replace with:	Nahradit čím:
+	Match case	Rozlišovat velikost písmen
+	Find whole words only	Pouze celá slova
+	Find	Najít
+	Replace All	Nahradit vše
+	Matches replaced: {count} (objects: {objects})	Nahrazeno shod: {count} (objektů: {objects})
+	Matches found and selected: {count} (objects: {objects})	Nalezeno a vybráno shod: {count} (objektů: {objects})
+	Select Color	Vybrat barvu
+	Dimension styles	Kótovací styly
+	Linetypes	Typy čar
+	Multileader styles	Styly multiodkazů
+	Multiline styles	Styly multičar
+	Table styles	Styly tabulek
+	Text styles	Styly textu
+	Zero-length geometry	Geometrie nulové délky
+	Empty text objects	Prázdné textové objekty
+	Palette Windows	Okna palet
+	Dock	Ukotvit
+	Back into the main window	Zpět do hlavního okna
+	Dock Palette	Ukotvit paletu
+	Float in Own Window	Plovoucí ve vlastním okně
+	Drawings (CDY, DWG, DXF)	Výkresy (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	Výkres CADaddy (CDY)
+	CADaddy drawing (.cdy)	Výkres CADaddy (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	Při ukládání výkresu CADaddy (.cdy) uložit také kopii DWG
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	Výkres CADaddy uchová vše; soubory DWG a DXF nemusí uchovat všechno (při uložení do nich se dozvíte co).
+	Field...	Pole...
+	Update Fields	Aktualizovat pole
+	Change Text Case	Změnit velikost písmen textu
+	Auto Number	Automatické číslování
+	Explode Text	Rozložit text
+	Arc Aligned Text	Text podél oblouku
+	Data Extraction	Extrakce dat
+	Data source	Zdroj dat
+	Objects	Objekty
+	Output	Výstup
+	Other drawings:	Jiné výkresy:
+	Add Drawings...	Přidat výkresy...
+	Open Settings...	Otevřít nastavení...
+	Start from a saved .dxe settings file	Začít z uloženého souboru nastavení .dxe
+	Block names	Názvy bloků
+	Include blocks inside blocks	Zahrnout bloky uvnitř bloků
+	Other objects:	Jiné objekty:
+	The drawing has no other objects.	Výkres neobsahuje žádné další objekty.
+	Properties to extract:	Vlastnosti k extrakci:
+	Attribute tags	Identifikátory atributů
+	Combine identical rows	Sloučit shodné řádky
+	Insert a table	Vložit tabulku
+	Insertion point	Bod vložení
+	Title	Název
+	Write a file (.csv for spreadsheets, .txt tab-separated)	Zapsat soubor (.csv pro tabulkové procesory, .txt oddělený tabulátory)
+	Browse...	Procházet...
+	Save Settings...	Uložit nastavení...
+	Save these choices to a .dxe file to use again	Uložit tyto volby do souboru .dxe pro opakované použití
+	< Back	< Zpět
+	Next >	Další >
+	Finish	Dokončit
+	This drawing	Tento výkres
+	Preview	Náhled
+	UCS	USS
+	Plan View (World)	Půdorys (globální)
+	New UCS	Nový USS
+	World	Globální
+	Current UCS	Aktuální USS
+	World (WCS)	Globální (GSS)
+	Unnamed	Bez názvu
+	Hide UCS Icon	Skrýt ikonu USS
+	WCS	GSS
+	Spelling	Kontrola pravopisu
+	Check Spelling	Zkontrolovat pravopis
+	Where to check	Kde kontrolovat
+	Selected objects	Vybrané objekty
+	Not in dictionary:	Není ve slovníku:
+	Suggestions:	Návrhy:
+	Ignore	Ignorovat
+	Ignore All	Ignorovat vše
+	Change All	Změnit vše
+	Add to Dictionary	Přidat do slovníku
+	Main dictionary:	Hlavní slovník:
+	American English	Americká angličtina
+	Custom dictionary:	Vlastní slovník:
+	Spelling check complete.	Kontrola pravopisu je dokončena.
+	Hyperlink...	Hypertextový odkaz...
+	Select Objects for a Hyperlink	Vybrat objekty pro hypertextový odkaz
+	Open Hyperlink	Otevřít hypertextový odkaz
+	Insert Hyperlink	Vložit hypertextový odkaz
+	Edit Hyperlink	Upravit hypertextový odkaz
+	Text to display	Zobrazený text
+	File or web page	Soubor nebo webová stránka
+	Named location	Pojmenované umístění
+	A named location with no file or web page is a layout or view of this drawing.	Pojmenované umístění bez souboru či webové stránky je rozvržení nebo pohled tohoto výkresu.
+	Remove Link	Odebrat odkaz
+	⌘-click to follow the link	Kliknutím s ⌘ otevřete odkaz
+	Ctrl+click to follow the link	Kliknutím s Ctrl otevřete odkaz
+	Materials Browser...	Prohlížeč materiálů...
+	Attach by Layer	Připojit podle hladiny
+	Material Mapping	Mapování materiálu
+	New Material	Nový materiál
+	Edit Material	Upravit materiál
+	Delete Material	Odstranit materiál
+	Assign Material	Přiřadit materiál
+	Materials Browser	Prohlížeč materiálů
+	Search	Hledat
+	Library	Knihovna
+	Add to drawing	Přidat do výkresu
+	In this drawing	V tomto výkresu
+	No materials yet: add one from the library.	Zatím žádné materiály: přidejte některý z knihovny.
+	Colour	Barva
+	Roughness	Drsnost
+	Metallic	Kovovost
+	Opacity	Neprůhlednost
+	Mapping	Mapování
+	Tile size	Velikost dlaždice
+	Assign to selection ({n})	Přiřadit výběru ({n})
+	Attach to layer	Připojit k hladině
+	Render	Vykreslení
+	Edit Layer State	Upravit stav hladin
+	Export Layer State	Exportovat stav hladin
+	Import Layer State	Importovat stav hladin
+	New Layer Filter	Nový filtr hladin
+	Edit Layer Filter	Upravit filtr hladin
+	Delete Layer Filter	Odstranit filtr hladin
+	List Layer Filters	Seznam filtrů hladin
+	Layers in Filter	Hladiny ve filtru
+	Layer States Manager	Správce stavů hladin
+	Invert filter	Invertovat filtr
+	New Property Filter...	Nový filtr vlastností...
+	New Group Filter	Nový skupinový filtr
+	Add Layer	Přidat hladinu
+	Remove Layer	Odebrat hladinu
+	Layer Filter Properties	Vlastnosti filtru hladin
+	Filter name	Název filtru
+	Within	V rámci
+	Any	Libovolné
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	Vzory: * cokoli, ? jeden znak, # jedna číslice; oddělujte čárkami; ~ vylučuje.
+	Layer states	Stavy hladin
+	Turn off layers not found in layer state	Vypnout hladiny, které nejsou ve stavu hladin
+	Layer properties to restore	Vlastnosti hladin k obnovení
+	On / Off	Zapnuto / Vypnuto
+	Frozen / Thawed	Zmrazeno / Rozmrazeno
+	Locked / Unlocked	Zamčeno / Odemčeno
+	Plot / No Plot	Tisknout / Netisknout
+	Layers in "{name}"	Hladiny v „{name}“
+	Remove from the layer state	Odebrat ze stavu hladin
+	New...	Nový...
+	Save the layers as they are now in this state	Uložit aktuální nastavení hladin do tohoto stavu
+	Edit...	Upravit...
+	Rename	Přejmenovat
+	New layer state name	Název nového stavu hladin
+	New name	Nový název
+	Visual Style	Vizuální styl
+	Visual Styles	Vizuální styly
+	Wireframe	Drátový model
+	Hidden	Skryté
+	Shaded	Stínovaný
+	Shaded with Edges	Stínovaný s hranami
+	Realistic	Realistický
+	Mesh	Síť
+	Polyface Mesh	Mnohostěnná síť
+	Polygon Mesh	Polygonová síť
+	Walk	Chůze
+	Fly	Let
+	Walk and Fly	Chůze a let
+	3D Library...	3D knihovna...
+	Add 3D Twins to Symbols	Přidat 3D protějšky ke značkám
+	List 3D Models	Seznam 3D modelů
+	Add 3D Twins	Přidat 3D protějšky
+	Plan Layers	Hladiny výkresu
+	Plan Walls	Stěny výkresu
+	Plan Openings	Otvory výkresu
+	Plan Rooms	Místnosti výkresu
+	Plan Notes	Poznámky výkresu
+	Plan Sheets	Listy výkresu
+	3D Building from Plan	3D budova z půdorysu
+	Wedge	Klín
+	Presspull	Vytáhnout/vtlačit
+	3D Solid	3D těleso
+	Specify center	Zadejte střed
+	Specify length	Zadejte délku
+	Specify width	Zadejte šířku
+	Specify other corner	Zadejte druhý roh
+	Specify center point	Zadejte středový bod
+	Specify base radius	Zadejte poloměr podstavy
+	Specify radius	Zadejte poloměr
+	Specify diameter	Zadejte průměr
+	Specify top radius	Zadejte horní poloměr
+	Specify tube radius	Zadejte poloměr trubice
+	Select objects to extrude	Vyberte objekty k vysunutí
+	Select extrusion path	Vyberte trajektorii vysunutí
+	Specify angle of taper for extrusion	Zadejte úhel zúžení vysunutí
+	Specify height of extrusion	Zadejte výšku vysunutí
+	Select objects to revolve	Vyberte objekty k rotaci
+	Specify axis start point or define axis by	Zadejte počáteční bod osy nebo definujte osu pomocí
+	Specify axis endpoint	Zadejte koncový bod osy
+	Specify angle of revolution	Zadejte úhel rotace
+	Select objects to sweep	Vyberte objekty k tažení
+	Select sweep path	Vyberte trajektorii tažení
+	Select cross sections in lofting order	Vyberte příčné řezy v pořadí šablonování
+	Click inside bounded areas to press or pull	Klepněte dovnitř ohraničených oblastí pro vtlačení nebo vytažení
+	Specify extrusion height	Zadejte výšku vysunutí
+	Cube	Krychle
+	Sides	Strany
+	Top radius	Horní poloměr
+	Path	Trajektorie
+	Taper angle	Úhel zúžení
+	Select one or more regions or 3D solids.	Vyberte jednu nebo více oblastí nebo 3D těles.
+	No closed area found there.	Nebyla tam nalezena žádná uzavřená oblast.
+	Slice	Řez
+	Thicken	Zesílit
+	Fillet Edge	Zaoblit hranu
+	Chamfer Edge	Zkosit hranu
+	Fillet Edges	Zaoblit hrany
+	Chamfer Edges	Zkosit hrany
+	Move Faces	Přesunout plochy
+	Offset Faces	Odsadit plochy
+	Delete Faces	Odstranit plochy
+	Shell	Skořepina
+	Composite	Složené
+	Select objects to slice	Vyberte objekty k řezu
+	Specify a point on desired side or [keep Both sides]	Zadejte bod na požadované straně nebo [ponechat Obě strany]
+	Both	Obě
+	Specify start point of slicing plane or	Zadejte počáteční bod roviny řezu nebo
+	Specify second point on plane	Zadejte druhý bod v rovině
+	Specify the Z of the XY-plane	Zadejte Z roviny XY
+	Specify the X of the YZ-plane	Zadejte X roviny YZ
+	Specify the Y of the ZX-plane	Zadejte Y roviny ZX
+	Select surfaces to thicken	Vyberte plochy k zesílení
+	Select a 3D solid	Vyberte 3D těleso
+	Select an edge	Vyberte hranu
+	Remove faces	Odebrat plochy
+	Select faces	Vyberte plochy
+	Specify thickness	Zadejte tloušťku
+	Enter fillet radius	Zadejte poloměr zaoblení
+	Enter distance	Zadejte vzdálenost
+	Specify a base point or displacement	Zadejte základní bod nebo posunutí
+	Specify a second point of displacement	Zadejte druhý bod posunutí
+	Specify the offset distance	Zadejte vzdálenost odsazení
+	Enter the shell offset distance	Zadejte tloušťku skořepiny
+	Select solids, surfaces, and regions to subtract from ..	Vyberte tělesa, plochy a oblasti, od kterých se odečítá ..
+	Select solids, surfaces, and regions to subtract ..	Vyberte tělesa, plochy a oblasti k odečtení ..
+	Select two or more solids.	Vyberte dvě nebo více těles.
+	The solids don't overlap; nothing was changed.	Tělesa se nepřekrývají; nic nebylo změněno.
+	Nothing would remain; nothing was changed.	Nic by nezůstalo; nic nebylo změněno.
+	The result would not be a solid; nothing was changed.	Výsledek by nebyl těleso; nic nebylo změněno.
+	No straight edge between two flat faces there.	Není tam žádná přímá hrana mezi dvěma rovinnými plochami.
+	No face of the solid there.	Není tam žádná plocha tělesa.
+	Only outside (convex) edges can be filleted or chamfered.	Zaoblit nebo zkosit lze jen vnější (konvexní) hrany.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	Skořepina funguje u kvádrů, válců, koulí a přímých vysunutí.
+	The walls are too thick for this solid.	Stěny jsou pro toto těleso příliš silné.
+	Select solids to subtract from.	Vyberte tělesa, od kterých se odečítá.
+	A solid can't be subtracted from itself.	Těleso nelze odečíst samo od sebe.
+	The solid would have too many operations; nothing was changed.	Těleso by mělo příliš mnoho operací; nic nebylo změněno.
+	That face can't be moved (only flat faces, holes and added parts).	Tuto plochu nelze přesunout (jen rovinné plochy, otvory a přidané části).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	Tuto plochu nelze odstranit (jen otvory, zaoblení, zkosení a přidané části).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	Tuto plochu nelze odsadit (strany kvádrů, konce válců, kuželů a vysunutí, pláště válců a koule).
+	The thickness must be more than zero.	Tloušťka musí být větší než nula.
+	The radius must be more than zero.	Poloměr musí být větší než nula.
+	The distance must be more than zero.	Vzdálenost musí být větší než nula.
+	Requires a number.	Vyžaduje číslo.
+	Parameter	Parametr
+	Action	Akce
+	Visibility States	Stavy viditelnosti
+	Remove Parameter or Action	Odebrat parametr nebo akci
+	Edit Reference	Upravit referenci
+	Discard Reference Edits	Zahodit úpravy reference
+	Nested References	Vnořené reference
+	Light List	Seznam světel
+	Sun Properties	Vlastnosti slunce
+	Render Exposure	Expozice renderu
+	Point Light	Bodové světlo
+	Spotlight	Reflektor
+	Distant Light	Vzdálené světlo
+	Change Lights	Změnit světla
+	Section Plane	Rovina řezu
+	Live Section	Živý řez
+	Generate Section Block	Vytvořit blok řezu
+	Generate Section	Vytvořit řez
+	Flatshot	Plochý snímek
+	Base View	Základní pohled
+	Section View	Pohled v řezu
+	Drawing Views	Výkresové pohledy
+	Select face or any point to locate section line or	Vyberte plochu nebo libovolný bod pro umístění čáry řezu nebo
+	Orthographic	Ortogonální
+	Select section object	Vyberte objekt řezu
+	Specify location of base view	Zadejte umístění základního pohledu
+	Select parent view	Vyberte nadřazený pohled
+	Specify end point	Zadejte koncový bod
+	Specify location of section view	Zadejte umístění pohledu v řezu
+	There is nothing to draw: no 3D objects were found.	Není co kreslit: nebyly nalezeny žádné 3D objekty.
+	The section plane doesn't cut any solid.	Rovina řezu neprotíná žádné těleso.
+	The view needs a direction.	Pohled potřebuje směr.
+	The drawing has no layout.	Výkres nemá žádné rozvržení.
+	That is not a section plane.	To není rovina řezu.
+	Requires a point.	Vyžaduje bod.
+	The view is [dx, dy, dz].	Pohled je [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	Vytvořit přenosový balíček
+	Files in the package	Soubory v balíčku
+	Not included	Nezahrnuto
+	Organized folders	Uspořádané složky
+	One folder	Jedna složka
+	Include a transmittal report	Přiložit zprávu o přenosu
+	Create ZIP...	Vytvořit ZIP...
+	Create Folder...	Vytvořit složku...
+	STL Out	Výstup STL
+	Export STL...	Exportovat STL...
+	3D models (glTF, OBJ, STL)	3D modely (glTF, OBJ, STL)
+	3D model (glTF binary)	3D model (binární glTF)
+	3D model (glTF)	3D model (glTF)
+	3D model (OBJ)	3D model (OBJ)
+	3D model (STL)	3D model (STL)
+	Render Region	Renderovat oblast
+	samples	vzorků
+	a sample	na vzorek
+	Pick crop window to render	Vyberte oblast k renderování
+	Nothing has been rendered yet.	Zatím nebylo nic renderováno.
+	There is nothing to render: no surfaces in the view.	Není co renderovat: v pohledu nejsou žádné plochy.
+	The image couldn't be encoded.	Obrázek nelze zakódovat.
+	Saving images isn't available in the browser.	Ukládání obrázků není v prohlížeči k dispozici.
+	PNG image	Obrázek PNG
+	JPEG image	Obrázek JPEG
+	Save Image	Uložit obrázek
+	My Properties	Moje vlastnosti
+	Add to My Properties	Přidat do mých vlastností
+	Remove from My Properties	Odebrat z mých vlastností
+	All properties	Všechny vlastnosti
+	My properties: the ones you added (right-click a property's name to add it)	Moje vlastnosti: ty, které jste přidali (vlastnost přidáte kliknutím pravým tlačítkem na její název)
+	Right-click a property's name and choose Add to My Properties.	Klikněte pravým tlačítkem na název vlastnosti a zvolte Přidat do mých vlastností.
+	Color Books	Vzorníky barev

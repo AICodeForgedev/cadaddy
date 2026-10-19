@@ -1,6 +1,8 @@
 //! Layers: LAYER (programmatic sub-ids, -LAYER prompts), layer tools (LAYMCUR, LAYISO, LAYOFF, LAYFRZ…).
 
+pub mod filters;
 mod prompts;
+mod states;
 
 use cadaddy_color::Color;
 use cadaddy_doc::{Layer, Lineweight};
@@ -72,9 +74,27 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layon", "Turn All Layers On", |s, _| all_layers(s, |l| l.on = true)),
         CommandSpec::new("laythw", "Thaw All Layers", |s, _| all_layers(s, |l| l.frozen = false)),
         CommandSpec::new("layerp", "Previous Layer", run_layerp).menu(&["Format", "Layer Tools", "Previous Layer"]),
-        CommandSpec::new("layerstate.save", "Save Layer State", run_state_save).menu(&["Format", "Layer States Manager..."]).params("{name}"),
-        CommandSpec::new("layerstate.restore", "Restore Layer State", run_state_restore).params("{name}"),
-        CommandSpec::new("layerstate.list", "List Layer States", run_state_list).params("{} → states").noundo(),
+        CommandSpec::new("layerstate", "Layer States Manager...", run_state_list)
+            .menu(&["Format", "Layer States Manager..."])
+            .alias(&["las"])
+            .params("{} → states (from a menu or typed: the Layer States Manager)")
+            .noundo(),
+        CommandSpec::new("layerstate.save", "Save Layer State", run_state_save)
+            .params("{name, description?, restore?: {on, frozen, locked, plot, vpFreezeNew, color, linetype, lineweight, transparency, plotStyle} (the properties restoring sets; default all, or the state's own when saving it again), offOthers?: bool (restoring turns off layers not in the state)}"),
+        CommandSpec::new("layerstate.restore", "Restore Layer State", run_state_restore).params("{name, restore?, offOthers? (default the state's own)}"),
+        CommandSpec::new("layerstate.list", "List Layer States", run_state_list).params("{} → states: [{name, description, layers, restore, offOthers}]").noundo(),
+        CommandSpec::new("layerstate.edit", "Edit Layer State", states::run_edit).params(
+            "{name, description?, restore?, offOthers?, layers?: [{name, on?, frozen?, locked?, plot?, color?, linetype?, lineweight? (mm), transparency?, plotStyle?}] (change the state's entries), addLayers?: [names] (as they are now), removeLayers?: [names]} → the state",
+        ),
+        CommandSpec::new("layerstate.export", "Export Layer State", states::run_export).params("{name, path (.las)} → {path}"),
+        CommandSpec::new("layerstate.import", "Import Layer State", states::run_import).params("{path (.las), name? (save under this name), replace?: bool} → {name}"),
+        CommandSpec::new("layer.filter.new", "New Layer Filter", filters::run_new).params(
+            "{name, type?: \"property\" (default) | \"group\", parent? (nest in this filter), rules?: {name?, color?, linetype?, description? (comma-separated patterns with * ? #; ~ excludes), on?, frozen?, locked?, plot?: bool}, layers?: [names] (group)}",
+        ),
+        CommandSpec::new("layer.filter.edit", "Edit Layer Filter", filters::run_edit).params("{name, newName?, rules?, layers?, addLayers?, removeLayers?}"),
+        CommandSpec::new("layer.filter.delete", "Delete Layer Filter", filters::run_delete).params("{name} (and the filters nested in it)"),
+        CommandSpec::new("layer.filter.list", "List Layer Filters", filters::run_list).params("{} → filters: [{name, type, parent, rules | members, layers (count)}]").noundo(),
+        CommandSpec::new("layer.filter.layers", "Layers in Filter", filters::run_layers).params("{name? (default All), invert?: bool} → layers").noundo(),
         CommandSpec::new("layerstate.delete", "Delete Layer State", run_state_delete).params("{name}"),
         CommandSpec::new("layerstate.rename", "Rename Layer State", run_state_rename).params("{from, to}"),
         CommandSpec::new("laymrg", "Layer Merge", merge::run_laymrg)
@@ -413,21 +433,48 @@ fn all_layers(s: &mut Session, f: fn(&mut Layer)) -> Result<Value> {
 }
 
 fn run_state_save(s: &mut Session, p: &Value) -> Result<Value> {
-    let name = str_param(p, "name").ok_or_else(|| bad("layerstate.save", "`name` is required"))?.to_string();
+    let name = str_param(p, "name").map(str::trim).ok_or_else(|| bad("layerstate.save", "`name` is required"))?.to_string();
+    if !valid_name(&name) {
+        return Err(bad("layerstate.save", "invalid name"));
+    }
+    let restore = states::mask_param(p)?;
     let d = s.doc_mut()?;
     let layers = d.layers.clone();
-    d.layer_states.retain(|st| st.name != name);
-    d.layer_states.push(cadaddy_doc::LayerState { name, layers });
+    let mut st = d.layer_states.iter().find(|st| st.name == name).cloned().unwrap_or_else(|| cadaddy_doc::LayerState::new(&name, Vec::new()));
+    st.layers = layers;
+    if let Some(desc) = str_param(p, "description") {
+        st.description = desc.chars().take(2048).collect();
+    }
+    if let Some(m) = restore {
+        st.restore = m;
+    }
+    if let Some(o) = p.get("offOthers").and_then(Value::as_bool) {
+        st.off_others = o;
+    }
+    match d.layer_states.iter_mut().find(|x| x.name == name) {
+        Some(x) => *x = st,
+        None => d.layer_states.push(st),
+    }
     ok()
 }
 
 fn run_state_restore(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad("layerstate.restore", "`name` is required"))?;
+    let mask = states::mask_param(p)?;
     let d = s.doc_mut()?;
     let st = d.layer_states.iter().find(|st| st.name == name).cloned().ok_or_else(|| bad("layerstate.restore", "no such layer state"))?;
-    for saved in st.layers {
+    let mask = mask.unwrap_or(st.restore);
+    let off_others = p.get("offOthers").and_then(Value::as_bool).unwrap_or(st.off_others);
+    for saved in &st.layers {
         if let Some(l) = d.layer_mut(&saved.name) {
-            *l = saved;
+            mask.apply(saved, l);
+        }
+    }
+    if off_others {
+        for l in &mut d.layers {
+            if !st.layers.iter().any(|x| x.name.eq_ignore_ascii_case(&l.name)) {
+                l.on = false;
+            }
         }
     }
     ok()
@@ -435,7 +482,7 @@ fn run_state_restore(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_state_list(s: &mut Session, _p: &Value) -> Result<Value> {
     let d = s.doc()?;
-    let states: Vec<Value> = d.layer_states.iter().map(|st| json!({ "name": st.name, "layers": st.layers.len() })).collect();
+    let states: Vec<Value> = d.layer_states.iter().map(states::state_json).collect();
     let msg = if states.is_empty() {
         "No saved layer states.".to_string()
     } else {

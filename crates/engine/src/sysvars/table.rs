@@ -103,6 +103,10 @@ const HEADER: &[(&str, Kind, Def)] = &[
     ("CMLSTYLE", Kind::MlineStyle, Def::Str("STANDARD")),
     // The drawing's code page (set when a file is read).
     ("DWGCODEPAGE", Kind::ReadOnlyStr, Def::Str("ANSI_1252")),
+    // When fields are worked out: 1 open, 2 save, 4 plot, 8 eTransmit, 16 regen.
+    ("FIELDEVAL", Kind::Int(0, 31), Def::Int(31)),
+    // 1: fields show on a grey background on screen (never plotted).
+    ("FIELDDISPLAY", Kind::Choice(&[0, 1]), Def::Int(1)),
 ];
 
 /// Variables scripts commonly set that CADaddy keeps without the behaviour behind them (yet):
@@ -119,8 +123,6 @@ const STORED: &[(&str, Kind, Def)] = &[
     ("DRAWORDERCTL", Kind::Int(0, 3), Def::Int(3)),
     ("EXPLMODE", Kind::Choice(&[0, 1]), Def::Int(1)),
     ("FACETRES", Kind::RealIn(0.01, 10.0), Def::Real(0.5)),
-    ("FIELDDISPLAY", Kind::Choice(&[0, 1]), Def::Int(1)),
-    ("FIELDEVAL", Kind::Int(0, 31), Def::Int(31)),
     ("GRIDDISPLAY", Kind::Int(0, 15), Def::Int(2)),
     ("GRIPBLOCK", Kind::Choice(&[0, 1]), Def::Int(0)),
     ("GRIPCOLOR", Kind::Int(1, 255), Def::Int(150)),
@@ -269,18 +271,33 @@ const COMPUTED: &[Computed] = &[
     ("PROGRAM", |_| json!("cadaddy")),
     ("LOCALE", |_| json!("ENU")),
     ("SYSCODEPAGE", |_| json!("ANSI_1252")),
-    // No user coordinate systems yet: the world one.
-    ("WORLDUCS", |_| json!(1)),
-    ("UCSNAME", |_| json!("")),
-    ("UCSORG", |_| json!([0.0, 0.0, 0.0])),
-    ("UCSXDIR", |_| json!([1.0, 0.0, 0.0])),
-    ("UCSYDIR", |_| json!([0.0, 1.0, 0.0])),
+    // The current UCS, from the drawing's header (UCS, PLAN, a restored named view). These
+    // said "world" always, from before CADaddy had a UCS (UI review 0.7.7c).
+    ("WORLDUCS", |s| json!(i32::from(s.doc().map_or(true, |d| ucs_now(d).is_world())))),
+    ("UCSNAME", |s| json!(s.doc().map(|d| ucs_now(d).name).unwrap_or_default())),
+    ("UCSORG", |s| {
+        let o = s.doc().map(|d| ucs_now(d).origin).unwrap_or(cadaddy_geom::Vec3::ZERO);
+        json!([o.x, o.y, o.z])
+    }),
+    ("UCSXDIR", |s| {
+        let x = s.doc().map(|d| ucs_now(d).x_axis).unwrap_or(cadaddy_geom::Vec3::new(1.0, 0.0, 0.0));
+        json!([x.x, x.y, x.z])
+    }),
+    ("UCSYDIR", |s| {
+        let y = s.doc().map(|d| ucs_now(d).y_axis).unwrap_or(cadaddy_geom::Vec3::new(0.0, 1.0, 0.0));
+        json!([y.x, y.y, y.z])
+    }),
     ("TARGET", |_| json!([0.0, 0.0, 0.0])),
     ("VIEWDIR", |s| {
         let d = s.state().map(|st| st.view_dir).unwrap_or(cadaddy_geom::Vec3::Z);
         json!([d.x, d.y, d.z])
     }),
 ];
+
+/// The drawing's current UCS as its header holds it.
+fn ucs_now(d: &cadaddy_doc::Drawing) -> cadaddy_doc::ViewUcs {
+    cadaddy_doc::ViewUcs::current(&d.header)
+}
 
 fn computed(name: &str) -> Option<&'static Computed> {
     COMPUTED.iter().find(|(n, _)| *n == name)

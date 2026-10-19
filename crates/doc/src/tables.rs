@@ -27,6 +27,9 @@ pub struct Layer {
     pub plot_style: String,
     /// Frozen in viewports created from now on (New VP Freeze; DXF layer flag 2).
     pub vp_freeze_new: bool,
+    /// The material attached to the layer (MATERIALATTACH); `None`: Global.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
 }
 
 impl Default for Layer {
@@ -44,6 +47,7 @@ impl Default for Layer {
             description: String::new(),
             plot_style: "Normal".into(),
             vp_freeze_new: false,
+            material: None,
         }
     }
 }
@@ -868,6 +872,69 @@ pub struct NamedView {
     /// paper space view whose layout is not known).
     #[serde(default)]
     pub layout: Option<String>,
+    /// The view direction, from the target towards the viewer (DXF group 11; `None`: the plan
+    /// view). A model space view seen from a preset direction (Front, SW Isometric…) keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<Vec3>,
+    /// The UCS restored with the view (DXF groups 72, 110–112, 146, 79; `None`: the view leaves
+    /// the current UCS as it is).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ucs: Option<ViewUcs>,
+    /// A solid background colour shown behind the view (`None`: the drawing area's own).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<Color>,
+}
+
+/// A UCS kept with a named view: its origin and axes, and the named UCS it was (empty when it
+/// had no name).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewUcs {
+    #[serde(default)]
+    pub name: String,
+    pub origin: Vec3,
+    pub x_axis: Vec3,
+    pub y_axis: Vec3,
+}
+
+impl ViewUcs {
+    /// A UCS in the plan: `origin`, its X axis turned `angle` radians from the world's.
+    pub fn plan(origin: Vec3, angle: f64) -> ViewUcs {
+        let (s, c) = angle.sin_cos();
+        ViewUcs { name: String::new(), origin, x_axis: Vec3::new(c, s, 0.0), y_axis: Vec3::new(-s, c, 0.0) }
+    }
+
+    /// The world coordinate system (origin at 0,0,0, world axes).
+    pub fn is_world(&self) -> bool {
+        self.origin.len() <= 1e-12 && (self.x_axis - Vec3::new(1.0, 0.0, 0.0)).len() <= 1e-9 && (self.y_axis - Vec3::new(0.0, 1.0, 0.0)).len() <= 1e-9
+    }
+
+    /// The rotation of the X axis in the plan (radians, counterclockwise).
+    pub fn angle(&self) -> f64 {
+        self.x_axis.y.atan2(self.x_axis.x)
+    }
+
+    /// The current UCS a drawing's header holds ($UCSORG, $UCSXDIR, $UCSYDIR, $UCSNAME); the
+    /// world when it holds none or they are unusable.
+    pub fn current(h: &crate::Header) -> ViewUcs {
+        let pt = |k: &str| match h.get(k) {
+            Some(crate::HVal::Point(p)) if p.is_finite() => Some(*p),
+            _ => None,
+        };
+        let name = h.get("UCSNAME").and_then(crate::HVal::as_str).unwrap_or_default().to_string();
+        match (pt("UCSORG"), pt("UCSXDIR"), pt("UCSYDIR")) {
+            (Some(o), Some(x), Some(y)) if x.len() > 1e-9 && y.len() > 1e-9 => ViewUcs { name, origin: o, x_axis: x, y_axis: y },
+            _ => ViewUcs { name, ..ViewUcs::plan(Vec3::ZERO, 0.0) },
+        }
+    }
+
+    /// Make this the drawing's current UCS.
+    pub fn make_current(&self, h: &mut crate::Header) {
+        h.set("UCSORG", crate::HVal::Point(self.origin));
+        h.set("UCSXDIR", crate::HVal::Point(self.x_axis));
+        h.set("UCSYDIR", crate::HVal::Point(self.y_axis));
+        h.set("UCSNAME", crate::HVal::Str(self.name.clone()));
+    }
 }
 
 /// One tiled model space viewport of a [`VportConfig`] (a VPORT table record): its corners as
@@ -914,6 +981,148 @@ pub struct Ucs {
 pub struct LayerState {
     pub name: String,
     pub layers: Vec<Layer>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// The layer properties restoring the state sets.
+    #[serde(default)]
+    pub restore: LayerStateMask,
+    /// Restoring turns off the layers that are not in the state.
+    #[serde(default)]
+    pub off_others: bool,
+}
+
+impl LayerState {
+    pub fn new(name: &str, layers: Vec<Layer>) -> Self {
+        LayerState { name: name.into(), layers, description: String::new(), restore: LayerStateMask::default(), off_others: false }
+    }
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Which layer properties restoring a layer state sets ("Layer properties to restore"); all of
+/// them unless a state says otherwise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerStateMask {
+    #[serde(default = "yes")]
+    pub on: bool,
+    #[serde(default = "yes")]
+    pub frozen: bool,
+    #[serde(default = "yes")]
+    pub locked: bool,
+    #[serde(default = "yes")]
+    pub plot: bool,
+    #[serde(default = "yes")]
+    pub vp_freeze_new: bool,
+    #[serde(default = "yes")]
+    pub color: bool,
+    #[serde(default = "yes")]
+    pub linetype: bool,
+    #[serde(default = "yes")]
+    pub lineweight: bool,
+    #[serde(default = "yes")]
+    pub transparency: bool,
+    #[serde(default = "yes")]
+    pub plot_style: bool,
+}
+
+impl Default for LayerStateMask {
+    fn default() -> Self {
+        LayerStateMask {
+            on: true,
+            frozen: true,
+            locked: true,
+            plot: true,
+            vp_freeze_new: true,
+            color: true,
+            linetype: true,
+            lineweight: true,
+            transparency: true,
+            plot_style: true,
+        }
+    }
+}
+
+impl LayerStateMask {
+    /// `to` with the properties this mask covers taken from `saved`.
+    pub fn apply(&self, saved: &Layer, to: &mut Layer) {
+        if self.on {
+            to.on = saved.on;
+        }
+        if self.frozen {
+            to.frozen = saved.frozen;
+        }
+        if self.locked {
+            to.locked = saved.locked;
+        }
+        if self.plot {
+            to.plot = saved.plot;
+        }
+        if self.vp_freeze_new {
+            to.vp_freeze_new = saved.vp_freeze_new;
+        }
+        if self.color {
+            to.color = saved.color;
+        }
+        if self.linetype {
+            to.linetype.clone_from(&saved.linetype);
+        }
+        if self.lineweight {
+            to.lineweight = saved.lineweight;
+        }
+        if self.transparency {
+            to.transparency = saved.transparency;
+        }
+        if self.plot_style {
+            to.plot_style.clone_from(&saved.plot_style);
+        }
+    }
+}
+
+/// A layer filter in the Layer Properties Manager's tree: property rules or a fixed group of
+/// layers, optionally nested under another filter (a layer then has to pass that one too).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerFilter {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    pub kind: LayerFilterKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum LayerFilterKind {
+    /// Layers whose properties pass every rule given.
+    Property(LayerRules),
+    /// These layers (by name).
+    Group { layers: Vec<String> },
+}
+
+/// Property filter rules; a rule left out passes every layer. Text rules are comma-separated
+/// wildcard patterns (`*`, `?`, `#`; `~` in front excludes).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerRules {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Colour names or numbers (`red`, `1`, `250,0,0`), comma-separated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linetype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot: Option<bool>,
 }
 
 /// A named group of entities (GROUP).

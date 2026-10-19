@@ -15,6 +15,7 @@
 //! Infinite lines (xline/ray) and all overlays stay egui shapes (see `canvas.rs`), and the
 //! canvas falls back to the CPU path when no wgpu render state was handed to the app.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use cadaddy_color::Rgb;
@@ -412,6 +413,7 @@ fn translucent(c: [u8; 4], alpha: f32) -> [u8; 4] {
 }
 pub const IDENTITY_XFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
+#[derive(Clone)]
 struct Batch {
     buffer: wgpu::Buffer,
     count: u32,
@@ -768,15 +770,69 @@ impl Resources {
     }
 }
 
-fn upload(device: &wgpu::Device, label: &str, bytes: &[u8], stride: usize, usage: wgpu::BufferUsages) -> Vec<Batch> {
-    bytes
-        .chunks(CHUNK * stride)
+/// The slowest GPU preparation (uploading a changed drawing) since [`take_slowest_prepare`], in
+/// hundredths of a millisecond: it runs while the frame is painted, outside the app's own frame
+/// timing, so `ui.inspect` reports it apart.
+static SLOWEST_PREPARE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Records how long a `prepare` took when it ends.
+struct PrepareTimer(std::time::Instant);
+
+impl Drop for PrepareTimer {
+    fn drop(&mut self) {
+        let t = (self.0.elapsed().as_secs_f64() * 100_000.0) as u64;
+        SLOWEST_PREPARE.fetch_max(t, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The slowest GPU preparation since the last call (ms), and start again.
+pub fn take_slowest_prepare() -> f64 {
+    SLOWEST_PREPARE.swap(0, std::sync::atomic::Ordering::Relaxed) as f64 / 100.0
+}
+
+/// Vertices (or instances) per uploaded piece: small, so that after an edit only the pieces whose
+/// bytes changed are made again ([`upload`]).
+const PIECE: usize = 65_536;
+
+/// The pieces the last upload made, by kind and content: an unchanged piece is used again
+/// instead of re-created. Every edit used to upload the whole drawing into new buffers; freeing
+/// tens of megabytes of them each time stalled the window about 0.35 s every few edits on a
+/// 167k-object drawing (UI review 0.7.7c). Cleared when the GPU is set up ([`install`]).
+#[allow(clippy::type_complexity)]
+static REUSE: Mutex<Option<HashMap<(&'static str, usize, u64), Batch>>> = Mutex::new(None);
+
+/// A piece's content key: its length and two checksums (its halves), so a different piece
+/// matching by chance is out of the question in practice.
+fn piece_key(label: &'static str, c: &[u8]) -> (&'static str, usize, u64) {
+    let (a, b) = c.split_at(c.len() / 2);
+    (label, c.len(), (u64::from(crc32fast::hash(a)) << 32) | u64::from(crc32fast::hash(b)))
+}
+
+fn upload(device: &wgpu::Device, label: &'static str, bytes: &[u8], stride: usize, usage: wgpu::BufferUsages) -> Vec<Batch> {
+    let mut reuse = REUSE.lock().ok();
+    let mut previous = reuse.as_mut().and_then(|r| r.as_mut()).map(|m| {
+        let keys: Vec<_> = m.keys().filter(|k| k.0 == label).copied().collect();
+        keys.into_iter().filter_map(|k| m.remove(&k).map(|b| (k, b))).collect::<HashMap<_, _>>()
+    });
+    let mut made = Vec::new();
+    let batches = bytes
+        .chunks(PIECE.min(CHUNK) * stride)
         .filter(|c| c.len() >= stride)
-        .map(|c| Batch {
-            buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: c, usage }),
-            count: u32::try_from(c.len() / stride).unwrap_or(0),
+        .map(|c| {
+            let key = piece_key(label, c);
+            let batch = previous.as_mut().and_then(|p| p.remove(&key)).unwrap_or_else(|| Batch {
+                buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: c, usage }),
+                count: u32::try_from(c.len() / stride).unwrap_or(0),
+            });
+            made.push((key, batch.clone()));
+            batch
         })
-        .collect()
+        .collect();
+    // Keep this upload's pieces for the next; the ones it didn't use are let go.
+    if let Some(r) = reuse.as_mut() {
+        r.get_or_insert_with(HashMap::new).extend(made);
+    }
+    batches
 }
 
 /// GPU trouble wgpu reported: uncaptured errors (validation, out of memory) and the device being
@@ -849,6 +905,10 @@ impl GpuFaults {
 /// `CreationContext::wgpu_render_state`) and the format of its render pass's stencil buffer,
 /// if it has one (eframe `NativeOptions::stencil_buffer`).
 pub fn install(rs: &egui_wgpu::RenderState, faults: &Arc<GpuFaults>, stencil: Option<wgpu::TextureFormat>) -> GpuTarget {
+    // Pieces kept for reuse belong to the device they were made on.
+    if let Ok(mut r) = REUSE.lock() {
+        *r = None;
+    }
     let f = Arc::clone(faults);
     rs.device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| f.error(e.to_string())));
     let f = Arc::clone(faults);
@@ -869,6 +929,8 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         _encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        let t0 = std::time::Instant::now();
+        let _timed = PrepareTimer(t0);
         let Some(shared) = resources.get_mut::<Resources>() else { return Vec::new() };
         let linear_out = shared.linear_out;
         let Some(res) = shared.layers.get_mut(self.layer) else { return Vec::new() };

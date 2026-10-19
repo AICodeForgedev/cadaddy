@@ -27,6 +27,7 @@ use cadaddy_dxf::{Section, Tag};
 const MODELLED_KEYS: &[&str] = &[
     "ACAD_GROUP",
     "ACAD_LAYOUT",
+    "ACAD_MATERIAL",
     "ACAD_MLEADERSTYLE",
     "ACAD_MLINESTYLE",
     "ACAD_PLOTSTYLENAME",
@@ -37,11 +38,11 @@ const MODELLED_KEYS: &[&str] = &[
     "ACAD_PDFDEFINITIONS",
 ];
 
-/// Extension dictionary entries not kept raw: dimension associativity and XCLIP boundaries
-/// (`ACAD_FILTER`; CADaddy reads and rewrites both), draw order and annotation scale contexts
+/// Extension dictionary entries not kept raw: dimension associativity, fields and XCLIP
+/// boundaries (`ACAD_FILTER`; CADaddy reads and rewrites all three), draw order and annotation scale contexts
 /// (written from their own models by the changes that model them; stale copies would contradict
 /// the drawing).
-const MODELLED_XDICT_KEYS: &[&str] = &["ACAD_DIMASSOC", "ACAD_FILTER", "ACAD_SORTENTS", "ACDBCONTEXTDATAMANAGER"];
+const MODELLED_XDICT_KEYS: &[&str] = &["ACAD_DIMASSOC", "ACAD_FIELD", "ACAD_FILTER", "ACAD_SORTENTS", "ACDBCONTEXTDATAMANAGER"];
 
 /// Applications whose xdata CADaddy reads and writes itself. `ACAD` holds dimension overrides
 /// (DSTYLE) on dimensions and dimension styles; elsewhere it is kept.
@@ -280,7 +281,7 @@ fn extra(kind: &str, tags: &[Tag], entity: bool, unknown: bool, kept: &HashSet<S
         ..ForeignExtra::default()
     };
     // An unknown entity's own groups are written as they are; of table records, layers have a
-    // colour book colour and a material.
+    // colour book colour. (Materials, group 347, are modelled: read and written by the model.)
     if !unknown && (entity || kind == "LAYER") {
         let props =
             if entity { entity_groups(tags) } else { tags.get(..tags.iter().position(|t| t.code >= 1000).unwrap_or(tags.len())).unwrap_or(&[]) };
@@ -291,7 +292,7 @@ fn extra(kind: &str, tags: &[Tag], entity: bool, unknown: bool, kept: &HashSet<S
         {
             x.color_book = Some((rgb, book));
         }
-        x.props = props.iter().filter(|t| matches!(t.code, 347 | 284)).map(raw).collect();
+        x.props = props.iter().filter(|t| t.code == 284).map(raw).collect();
     }
     x
 }

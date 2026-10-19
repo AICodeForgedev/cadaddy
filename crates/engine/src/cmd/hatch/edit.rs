@@ -412,13 +412,11 @@ pub(super) fn run_hatchedit(s: &mut Session, p: &Value) -> Result<Value> {
         None => None,
     };
     let recreate = match p.get("recreate") {
-        None | Some(Value::Null) | Some(Value::Bool(false)) => false,
-        Some(Value::Bool(true)) => true,
-        Some(Value::String(t)) if t.eq_ignore_ascii_case("polyline") => true,
-        Some(Value::String(t)) if t.eq_ignore_ascii_case("region") => {
-            return Err(bad("hatchedit", "region boundaries are not available yet; use \"polyline\""));
-        }
-        Some(_) => return Err(bad("hatchedit", "`recreate` is \"polyline\"")),
+        None | Some(Value::Null) | Some(Value::Bool(false)) => None,
+        Some(Value::Bool(true)) => Some(Boundary::Polyline),
+        Some(Value::String(t)) if t.eq_ignore_ascii_case("polyline") => Some(Boundary::Polyline),
+        Some(Value::String(t)) if t.eq_ignore_ascii_case("region") => Some(Boundary::Region),
+        Some(_) => return Err(bad("hatchedit", "`recreate` is \"polyline\" or \"region\"")),
     };
     let grad = gradient_edit(p)?;
     if grad.is_some() && str_param(p, "pattern").map(|v| v.trim().to_ascii_uppercase()).is_some_and(|v| !v.is_empty() && v != "SOLID") {
@@ -490,18 +488,44 @@ pub(super) fn run_hatchedit(s: &mut Session, p: &Value) -> Result<Value> {
             }
             None => {}
         }
-        if recreate {
-            let mut new = Vec::new();
-            for l in &h.loops {
-                new.push(s.add_entity(lwpoly(l.vertices.clone(), true))?);
-            }
-            if associate {
-                for (l, n) in h.loops.iter_mut().zip(&new) {
-                    l.sources = vec![*n];
+        match recreate {
+            Some(Boundary::Polyline) => {
+                let mut new = Vec::new();
+                for l in &h.loops {
+                    new.push(s.add_entity(lwpoly(l.vertices.clone(), true))?);
                 }
-                h.associative = true;
+                if associate {
+                    for (l, n) in h.loops.iter_mut().zip(&new) {
+                        l.sources = vec![*n];
+                    }
+                    h.associative = true;
+                }
+                created.extend(new);
             }
-            created.extend(new);
+            Some(Boundary::Region) => {
+                // One region per outer loop, with the islands directly inside it.
+                let mut owner: Vec<Option<Handle>> = vec![None; h.loops.len()];
+                for group in region_groups(&h.loops) {
+                    let loops: Vec<cadaddy_doc::HatchLoop> = group
+                        .iter()
+                        .filter_map(|(i, outer)| h.loops.get(*i).map(|l| cadaddy_doc::HatchLoop { outer: *outer, sources: Vec::new(), ..l.clone() }))
+                        .collect();
+                    let n = s.add_entity(EntityKind::Region(cadaddy_doc::Region { loops }))?;
+                    for (i, _) in &group {
+                        if let Some(o) = owner.get_mut(*i) {
+                            *o = Some(n);
+                        }
+                    }
+                    created.push(n);
+                }
+                if associate {
+                    for (l, n) in h.loops.iter_mut().zip(&owner) {
+                        l.sources = n.iter().copied().collect();
+                    }
+                    h.associative = true;
+                }
+            }
+            None => {}
         }
         s.doc_mut()?.modify_entity(*handle, |e| e.kind = EntityKind::Hatch(h))?;
         if bool_or(p, "separate", false) {
@@ -512,6 +536,47 @@ pub(super) fn run_hatchedit(s: &mut Session, p: &Value) -> Result<Value> {
         s.echo(n.clone());
     }
     Ok(json!({ "changed": hs.len(), "handles": created.iter().map(|h| h.hex()).collect::<Vec<_>>(), "messages": notes }))
+}
+
+/// The kind of object HATCHEDIT's recreate Boundary makes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Boundary {
+    Polyline,
+    Region,
+}
+
+/// Most loops nesting is worked out for (pairwise containment tests).
+const MAX_REGION_LOOPS: usize = 2_000;
+
+/// The loops of a hatch grouped into regions: each outer loop (inside an even number of others)
+/// with the islands directly inside it, as (loop index, outer).
+fn region_groups(loops: &[cadaddy_doc::HatchLoop]) -> Vec<Vec<(usize, bool)>> {
+    let polys: Vec<Vec<Vec2>> =
+        loops.iter().take(MAX_REGION_LOOPS).map(|l| Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(1e-3)).collect();
+    // A point of each loop (the middle of its first edge), tested against the others.
+    let probe = |p: &[Vec2]| match p {
+        [a, b, ..] => Some(a.mid(*b)),
+        [a] => Some(*a),
+        [] => None,
+    };
+    let inside = |i: usize, j: usize| {
+        i != j
+            && match (polys.get(i).and_then(|p| probe(p)), polys.get(j)) {
+                (Some(q), Some(pj)) => pj.len() >= 3 && point_in_polygon(pj, q),
+                _ => false,
+            }
+    };
+    let n = polys.len();
+    let depth: Vec<usize> = (0..n).map(|i| (0..n).filter(|j| inside(i, *j)).count()).collect();
+    let depth_of = |i: usize| depth.get(i).copied().unwrap_or(0);
+    let mut groups: Vec<(usize, Vec<(usize, bool)>)> = (0..n).filter(|i| depth_of(*i).is_multiple_of(2)).map(|i| (i, vec![(i, true)])).collect();
+    for i in (0..n).filter(|i| !depth_of(*i).is_multiple_of(2)) {
+        // The outer loop one level up that holds it.
+        if let Some(g) = groups.iter_mut().find(|(o, _)| depth_of(*o) + 1 == depth_of(i) && inside(i, *o)) {
+            g.1.push((i, false));
+        }
+    }
+    groups.into_iter().map(|(_, g)| g).collect()
 }
 
 /// What a -HATCHEDIT prompt asks for.
@@ -545,6 +610,8 @@ pub(crate) struct HatchEditM {
     props: serde_json::Map<String, Value>,
     /// Internal points (ADd boundaries) or points on loops (Remove boundaries) picked so far.
     points: Vec<Vec2>,
+    /// recreate Boundary makes regions (else polylines).
+    region: bool,
 }
 
 impl HatchEditM {
@@ -553,7 +620,7 @@ impl HatchEditM {
             .doc()
             .map(|d| s.selection().into_iter().filter(|h| matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Hatch(_)))).collect())
             .unwrap_or_default();
-        HatchEditM { hatches, ask: Ask::Option, props: serde_json::Map::new(), points: Vec::new() }
+        HatchEditM { hatches, ask: Ask::Option, props: serde_json::Map::new(), points: Vec::new(), region: false }
     }
     fn first(&self, s: &Session) -> Option<Hatch> {
         let d = s.doc().ok()?;
@@ -606,7 +673,7 @@ impl Interactive for HatchEditM {
                 .default(format!("{:.0}", h.map_or(0.0, |h| h.angle.to_degrees()))),
             Ask::Origin => Prompt::new("Specify the pattern origin", Accept::POINT).kw(&ORIGIN_KW).default("Use current"),
             // Region boundaries come with REGION objects; polylines until then.
-            Ask::Recreate => Prompt::new("Type of boundary object", Accept::TEXT).kw(&["Polyline"]).default("Polyline"),
+            Ask::Recreate => Prompt::new("Type of boundary object", Accept::TEXT).kw(&["Region", "Polyline"]).default("Polyline"),
             Ask::RecreateLink => Prompt::new("Associate the hatch with the new boundary?", Accept::TEXT).kw(&["Yes", "No"]).default("No"),
             Ask::Link => Prompt::new("Select boundary objects (Enter finds them)", Accept::SELECT),
             Ask::AddHow => Prompt::new("Add boundaries by", Accept::TEXT).kw(&["Internal point", "Select objects"]).default("Internal point"),
@@ -722,10 +789,14 @@ impl Interactive for HatchEditM {
                 self.apply(s, json!({ "originMode": mode }))
             }
             (Ask::Recreate, _) => {
+                self.region = text.as_deref() == Some("Region");
                 self.ask = Ask::RecreateLink;
                 Ok(Step::Continue)
             }
-            (Ask::RecreateLink, _) => self.apply(s, json!({ "recreate": "polyline", "associate": text.as_deref() == Some("Yes") })),
+            (Ask::RecreateLink, _) => {
+                let kind = if self.region { "region" } else { "polyline" };
+                self.apply(s, json!({ "recreate": kind, "associate": text.as_deref() == Some("Yes") }))
+            }
             (Ask::Link, Input::Pick(hs)) => self.apply(s, json!({ "associative": true, "boundary": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() })),
             (Ask::Link, Input::Enter) => self.apply(s, json!({ "associative": true })),
             (Ask::Link, _) => Ok(Step::Continue),

@@ -27,6 +27,9 @@ pub struct Remote {
 
 /// How long a launched app has to open its control port.
 const LAUNCH_WAIT: Duration = Duration::from_secs(30);
+/// Longest a headless call runs a LISP routine typed on the command line before answering (it
+/// keeps running at the next call; `cancel` stops it).
+const HEADLESS_LISP_LIMIT: Duration = Duration::from_secs(30);
 
 impl Remote {
     pub fn connect(addr: &str) -> std::io::Result<Self> {
@@ -88,7 +91,11 @@ impl Remote {
             self.reach().map_err(|e| (e, false))?;
         }
         let Some((reader, writer)) = self.conn.as_mut() else { return Err((std::io::Error::other("not connected"), false)) };
-        let sent = writer.write_all(line.as_bytes()).and_then(|()| writer.write_all(b"\n")).and_then(|()| writer.flush());
+        // One write per line (two small ones can wait on a delayed acknowledgement).
+        let mut buf = String::with_capacity(line.len() + 1);
+        buf.push_str(line);
+        buf.push('\n');
+        let sent = writer.write_all(buf.as_bytes()).and_then(|()| writer.flush());
         if let Err(e) = sent {
             self.conn = None;
             return Err((e, false));
@@ -284,6 +291,7 @@ impl Backend for Headless {
             "cmdline.input" => {
                 let before = s.log.len();
                 let r = s.cmdline(&str_p("text").unwrap_or_default());
+                s.lisp_finish(HEADLESS_LISP_LIMIT);
                 // Like the app: a refused line is echoed to the history (and `output`), and also
                 // reported in `error`.
                 if let Err(e) = &r {
@@ -302,6 +310,7 @@ impl Backend for Headless {
             "cmdline.script" => {
                 let before = s.log.len();
                 s.script(&str_p("text").unwrap_or_default()).map_err(|e| e.to_string())?;
+                s.lisp_finish(HEADLESS_LISP_LIMIT);
                 let out: Vec<String> = s.log.iter().skip(before).cloned().collect();
                 Ok(json!({"output": out, "state": state(s)}))
             }
@@ -313,6 +322,7 @@ impl Backend for Headless {
                 } else {
                     s.input(cadaddy_engine::Input::Enter)
                 };
+                s.lisp_finish(HEADLESS_LISP_LIMIT);
                 // Like the app: a refused Enter is echoed to the history (and `output`), and also
                 // reported in `error`; the call itself succeeds.
                 if let Err(e) = &r {
