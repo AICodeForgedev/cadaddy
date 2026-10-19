@@ -66,3 +66,6 @@ sync_github_name = true
 real_name = "Antoine Boxho"
 display_name = "Antoine Boxho"
 sync_github_name = true
+
+[people.gurparvez]
+real_name = "Gurparvez"
