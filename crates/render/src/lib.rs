@@ -26,6 +26,7 @@ pub mod raster;
 pub mod shade;
 mod text;
 mod tolerance;
+pub mod trace;
 pub mod units;
 mod wide;
 

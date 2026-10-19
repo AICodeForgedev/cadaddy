@@ -780,6 +780,17 @@ impl Default for MLeaderOptions {
     }
 }
 
+/// A finished render (RENDER, RENDERCROP).
+#[derive(Clone, Debug)]
+pub struct RenderResult {
+    pub image: Arc<cadaddy_render::images::Raster>,
+    pub samples: u32,
+    pub seconds: f64,
+    pub seconds_per_sample: f64,
+    /// Bumped by every render, so a viewer knows to reload.
+    pub serial: u64,
+}
+
 /// The editor session: open drawings, settings, the running command and the command log.
 pub struct Session {
     pub docs: Vec<DocState>,
@@ -831,6 +842,8 @@ pub struct Session {
     pub last_dim: Option<Handle>,
     /// Options remembered between invocations of interactive commands.
     pub last_used: LastUsed,
+    /// The last RENDER's image and what it took (the Render window shows it).
+    pub last_render: Option<RenderResult>,
     /// Where `clipboard` came from and the layers, styles and blocks its objects need.
     pub clipboard_source: Option<cmd::clipboard::ClipSource>,
     /// The window last picked with PLOTWINDOW (the Plot dialog's "Window <").
@@ -894,6 +907,7 @@ impl Session {
             untitled_counter: 0,
             last_dim: None,
             last_used: LastUsed::default(),
+            last_render: None,
             clipboard_source: None,
             plot_window: None,
             lisp: lisp::LispState::default(),

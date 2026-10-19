@@ -168,6 +168,7 @@ mod tests {
         let asked = Rc::new(RefCell::new(Vec::new()));
         let (a, b) = (asked.clone(), asked.clone());
         let services = Services {
+            pick_save_image: None,
             pick_pdf: None,
             read_clipboard: None,
             pick_image: None,

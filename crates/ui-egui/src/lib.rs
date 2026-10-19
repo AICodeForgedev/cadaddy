@@ -51,6 +51,7 @@ pub mod parametric;
 pub mod pdfdlg;
 pub mod plotstyles;
 pub mod quick;
+pub mod renderwin;
 pub mod ribbon;
 pub mod shortcut_menus;
 pub mod theme;
@@ -220,6 +221,8 @@ pub struct Services {
     pub pick_image: Option<Box<dyn Fn() -> Option<String>>>,
     /// The system clipboard's text (Paste to Command Line).
     pub read_clipboard: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Where to save an image (the Render window's Save), given a suggested name.
+    pub pick_save_image: Option<Box<dyn Fn(&str) -> Option<String>>>,
 }
 
 pub struct CadApp {
@@ -784,6 +787,7 @@ impl CadApp {
         palettes::patterns::prompt_picker(self, ui.ctx());
         layouttabs::move_copy_dialog(self, ui.ctx());
         matchpropdlg::show(self, ui.ctx());
+        renderwin::show(self, ui.ctx());
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());

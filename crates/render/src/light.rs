@@ -210,34 +210,51 @@ pub fn shade(lit: &Lighting, p: Vec3, n: Vec3, v: Vec3, s: &Surface, sun_shadow:
         add(scale3(rgb, sun_shadow), brdf_cos(n, v, dir, s));
     }
     for l in &lit.lights {
-        match l.kind {
-            LightKind::Distant => add(l.rgb, brdf_cos(n, v, l.pos, s)),
-            LightKind::Point | LightKind::Spot => {
-                let to = l.pos - p;
-                let dist = to.len();
-                if !(dist.is_finite() && dist > 1e-9) {
-                    continue;
-                }
-                let ldir = to * (1.0 / dist);
-                let dm = (dist * lit.unit_m).max(0.05) as f32;
-                let fall = match l.attenuation {
-                    Attenuation::None => 1.0,
-                    Attenuation::InverseLinear => 1.0 / dm,
-                    Attenuation::InverseSquare => 1.0 / (dm * dm),
-                };
-                let cone = if l.kind == LightKind::Spot {
-                    let c = dot(-ldir, l.dir);
-                    ((c - l.cos_outer) / (l.cos_inner - l.cos_outer).max(1e-4)).clamp(0.0, 1.0)
-                } else {
-                    1.0
-                };
-                if fall * cone > 0.0 {
-                    add(scale3(l.rgb, fall * cone), brdf_cos(n, v, ldir, s));
-                }
-            }
+        if let Some((ldir, rgb, _)) = incoming(l, p, lit.unit_m) {
+            add(rgb, brdf_cos(n, v, ldir, s));
         }
     }
     c
+}
+
+/// The light `l` sends to point `p`: the direction towards it, its colour times irradiance there
+/// (falloff and spot cone applied), and its distance (infinite for a distant light). `None` where
+/// it gives nothing.
+pub fn incoming(l: &PointLight, p: Vec3, unit_m: f64) -> Option<(Vec3, [f32; 3], f64)> {
+    match l.kind {
+        LightKind::Distant => Some((l.pos, l.rgb, f64::INFINITY)),
+        LightKind::Point | LightKind::Spot => {
+            let to = l.pos - p;
+            let dist = to.len();
+            if !(dist.is_finite() && dist > 1e-9) {
+                return None;
+            }
+            let ldir = to * (1.0 / dist);
+            let dm = (dist * unit_m).max(0.05) as f32;
+            let fall = match l.attenuation {
+                Attenuation::None => 1.0,
+                Attenuation::InverseLinear => 1.0 / dm,
+                Attenuation::InverseSquare => 1.0 / (dm * dm),
+            };
+            let cone = if l.kind == LightKind::Spot {
+                let c = dot(-ldir, l.dir);
+                ((c - l.cos_outer) / (l.cos_inner - l.cos_outer).max(1e-4)).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            (fall * cone > 0.0).then(|| (ldir, scale3(l.rgb, fall * cone), dist))
+        }
+    }
+}
+
+/// The sky seen in direction `d` without the sun's disc (rays that leave the scene: the sun
+/// itself is sampled directly), linear.
+pub fn sky_only(lit: &Lighting, d: Vec3) -> [f32; 3] {
+    let up = (d.z as f32).clamp(-1.0, 1.0);
+    if up < 0.0 {
+        return mix3(lit.sky.horizon, lit.sky.ground, (-up * 4.0).min(1.0));
+    }
+    mix3(lit.sky.horizon, lit.sky.zenith, up.powf(0.6))
 }
 
 /// A filmic tone curve (the ACES fitted curve), exposure applied, then sRGB-encoded bytes.

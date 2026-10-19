@@ -46,6 +46,7 @@ mod takeoff;
 pub(crate) mod underlay;
 pub use props::MatchProps;
 pub(crate) mod qselect;
+mod render;
 mod selecttools;
 mod settings;
 mod spline_opts;
@@ -232,6 +233,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(tolerance::specs());
         v.extend(constraints::specs());
         v.extend(lisp::specs());
+        v.extend(render::specs());
         v
     })
 }

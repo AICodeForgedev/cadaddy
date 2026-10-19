@@ -591,7 +591,7 @@ fn raster_depth(s: [(f64, f64, f64); 3], depth: &mut [f32], n: usize) {
 }
 
 /// A texture's colour at `uv` (tiles; wrapping, bilinear), linear.
-fn sample(r: &Raster, uv: [f32; 2]) -> [f32; 3] {
+pub(crate) fn sample(r: &Raster, uv: [f32; 2]) -> [f32; 3] {
     let (w, h) = (r.width.max(1) as usize, r.height.max(1) as usize);
     let x = uv[0].rem_euclid(1.0) * w as f32 - 0.5;
     let y = (1.0 - uv[1].rem_euclid(1.0)) * h as f32 - 0.5;

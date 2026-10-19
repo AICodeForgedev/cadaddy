@@ -775,6 +775,7 @@ mod tests {
         let asked = Rc::new(RefCell::new(Vec::new()));
         let log = Rc::clone(&asked);
         let services = Services {
+            pick_save_image: None,
             pick_pdf: None,
             read_clipboard: None,
             pick_image: None,
