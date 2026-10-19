@@ -245,6 +245,61 @@ fn entity_lists_round_trip() {
 }
 
 #[test]
+fn entity_lists_hold_angles_in_radians() {
+    let mut s = session();
+    let near = |s: &mut Session, expr: &str, want: &str| {
+        let code = format!("(equal {expr} {want} 1e-9)");
+        assert_eq!(ok(s, &code), "T", "{expr} is {}, not {want}", ok(s, expr));
+    };
+    // A DXF file holds an ARC's 50 and 51 in degrees; entget gives radians (#1165).
+    s.script("ARC\nC\n0,0\n10,0\n0,10\n").unwrap();
+    near(&mut s, "(cdr (assoc 50 (entget (entlast))))", "0.0");
+    near(&mut s, "(cdr (assoc 51 (entget (entlast))))", "(/ pi 2)");
+    // ssget filters compare against the values entget shows.
+    assert_eq!(ok(&mut s, "(sslength (ssget \"X\" '((0 . \"ARC\") (-4 . \"<\") (51 . 2.0))))"), "1");
+    // entmod takes radians.
+    ok(&mut s, "(setq d (entget (entlast))) (entmod (subst (cons 51 pi) (assoc 51 d) d))");
+    let end = s.doc().unwrap().model.iter().find_map(|e| match &e.kind {
+        cadcraft_doc::EntityKind::Arc(a) => Some(a.end),
+        _ => None,
+    });
+    assert!(end.is_some_and(|a| (a - std::f64::consts::PI).abs() < 1e-9), "{end:?}");
+
+    // TEXT rotation (50) and oblique angle (51), through entmake.
+    ok(&mut s, "(entmake (list '(0 . \"TEXT\") '(10 0.0 0.0 0.0) '(40 . 2.5) '(1 . \"abc\") (cons 50 (/ pi 6)) '(51 . 0.25)))");
+    let text = s.doc().unwrap().model.iter().find_map(|e| match &e.kind {
+        cadcraft_doc::EntityKind::Text(t) => Some((t.rotation, t.oblique)),
+        _ => None,
+    });
+    assert!(text.is_some_and(|(r, o)| (r - std::f64::consts::FRAC_PI_6).abs() < 1e-9 && (o - 0.25).abs() < 1e-9), "{text:?}");
+    near(&mut s, "(cdr (assoc 50 (entget (entlast))))", "(/ pi 6)");
+    near(&mut s, "(cdr (assoc 51 (entget (entlast))))", "0.25");
+
+    // HATCH pattern angle (52) and pattern line angle (53): ANSI31 at 0 has its lines at 45°.
+    s.script("CIRCLE\n0,0\n10\n-HATCH\nP\nANSI31\n1\n0\n0,0\n\n").unwrap();
+    assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget (entlast))))"), "\"HATCH\"");
+    near(&mut s, "(cdr (assoc 52 (entget (entlast))))", "0.0");
+    near(&mut s, "(cdr (assoc 53 (entget (entlast))))", "(/ pi 4)");
+
+    // MTEXT: 50 before the column type (75) is the rotation, after it a column height.
+    ok(
+        &mut s,
+        "(entmake (list '(0 . \"MTEXT\") '(10 0.0 0.0 0.0) '(40 . 2.5) '(41 . 10.0) '(1 . \"abc\") (cons 50 (/ pi 3)) '(75 . 2) '(76 . 2) '(79 . 0) '(48 . 10.0) '(49 . 1.0) '(50 . 30.0) '(50 . 20.0)))",
+    );
+    let mtext = s.doc().unwrap().model.iter().find_map(|e| match &e.kind {
+        cadcraft_doc::EntityKind::MText(t) => Some((t.rotation, t.columns.as_ref().map(|c| c.heights.clone()))),
+        _ => None,
+    });
+    assert!(
+        mtext.as_ref().is_some_and(|(r, h)| (r - std::f64::consts::FRAC_PI_3).abs() < 1e-9 && h.as_deref() == Some(&[30.0, 20.0][..])),
+        "{mtext:?}"
+    );
+    near(&mut s, "(cdr (assoc 50 (entget (entlast))))", "(/ pi 3)");
+    let d = ok(&mut s, "(entget (entlast))");
+    assert!(d.contains("(50 . 30.0) (50 . 20.0)"), "{d}");
+}
+
+#[test]
 fn selection_sets_and_filters() {
     let mut s = session();
     ok(&mut s, "(command \"_.CIRCLE\" '(0 0) 1) (command \"_.CIRCLE\" '(10 0) 2) (command \"_.LINE\" '(0 5) '(20 5) \"\")");
