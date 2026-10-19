@@ -94,6 +94,9 @@ struct AssocObj {
 struct OsnapRef {
     osnap: i64,
     main: Handle,
+    /// The 1-based segment of a polyline the point is an end of (group 91, with subentity type
+    /// 73 = 2, edge); 0 for an object made of one curve.
+    segment: i64,
     param: f64,
     point: Vec3,
     other: Option<Handle>,
@@ -1506,9 +1509,43 @@ fn arrow_block_entities(kind: cadcraft_render::Arrowhead) -> Vec<Entity> {
     out
 }
 
+/// Whether a DIMASSOC point reference to `k` names a point of it without naming a segment:
+/// true for objects made of one curve. Polylines are referenced by segment ([`polyline_vertex_ref`]);
+/// 3D polylines and multilines can't be yet, and references to them are left out, as AutoCAD
+/// otherwise resolved them to the first segment and changed the dimension's value (#1049).
+fn whole_object_ref(k: &EntityKind) -> bool {
+    !matches!(k, EntityKind::LwPolyline(_) | EntityKind::Polyline3d(_) | EntityKind::MLine(_))
+}
+
+/// A polyline vertex as AutoCAD references it (#1049): an end of one of its two segments,
+/// which are numbered from 1 (segment k runs from vertex k−1 to vertex k; a closed polyline's
+/// closing segment is the last). Returns (osnap, parameter, segment): the end of the incoming
+/// segment (osnap 1, parameter 1.0), else the start of the outgoing one (osnap 13, 0.0). Only
+/// straight segments are used, whose parameters are 0 and 1; a vertex between two arcs gets no
+/// reference.
+pub(crate) fn polyline_vertex_ref(p: &LwPolyline, index: usize) -> Option<(i64, f64, i64)> {
+    let n = p.vertices.len();
+    if index >= n || n < 2 {
+        return None;
+    }
+    let segments = if p.closed { n } else { n - 1 };
+    // Segment k (1-based) starts at vertex k−1; its bulge is that vertex's.
+    let straight = |k: usize| k >= 1 && k <= segments && p.vertices.get(k - 1).is_some_and(|v| v.bulge == 0.0);
+    let incoming = if index == 0 { if p.closed { Some(n) } else { None } } else { Some(index) };
+    let outgoing = (index < segments).then_some(index + 1);
+    // Vertex 0 as the start of segment 1, the others as the end of the segment before, as
+    // AutoCAD writes them when it can.
+    let preferred = if index == 0 {
+        [outgoing.map(|k| (13, 0.0, k)), incoming.map(|k| (1, 1.0, k))]
+    } else {
+        [incoming.map(|k| (1, 1.0, k)), outgoing.map(|k| (13, 0.0, k))]
+    };
+    preferred.into_iter().flatten().find(|(_, _, k)| straight(*k)).map(|(o, t, k)| (o, t, i64::try_from(k).unwrap_or(0)))
+}
+
 /// Standard DIMASSOC point references of an associative dimension: the extension-line
 /// origins of linear/aligned dimensions and the feature point of ordinate dimensions, linked
-/// to objects that exist. CADCraft's exact links travel in xdata as well.
+/// to objects that exist ([`whole_object_ref`]). CADCraft's exact links travel in xdata as well.
 fn std_assoc_refs(d: &Drawing, dm: &Dimension) -> (i64, Vec<OsnapRef>) {
     let slots: &[&str] = match dm.kind {
         DimKind::Linear { .. } | DimKind::Aligned => &["p13", "p14"],
@@ -1521,20 +1558,35 @@ fn std_assoc_refs(d: &Drawing, dm: &Dimension) -> (i64, Vec<OsnapRef>) {
         let Some(a) = dm.assoc.iter().find(|a| a.point == *name) else { continue };
         let Some(ent) = d.entity(a.handle) else { continue };
         let point = if *name == "p13" { dm.p13 } else { dm.p14 };
+        if let EntityKind::LwPolyline(p) = &ent.kind {
+            let index = match &a.snap {
+                AssocSnap::Vertex { index } => Some(*index),
+                AssocSnap::Start => Some(0),
+                AssocSnap::End => p.vertices.len().checked_sub(1),
+                _ => None,
+            };
+            let Some((osnap, param, segment)) = index.and_then(|i| polyline_vertex_ref(p, i)) else { continue };
+            flags |= 1 << slot;
+            refs.push(OsnapRef { osnap, main: a.handle, segment, param, point, other: None });
+            continue;
+        }
+        if !whole_object_ref(&ent.kind) {
+            continue;
+        }
         let (osnap, param, other) = match &a.snap {
             AssocSnap::Start | AssocSnap::End | AssocSnap::Vertex { .. } => (1, 0.0, None),
             AssocSnap::Mid => (2, 0.0, None),
             AssocSnap::Center => (if matches!(ent.kind, EntityKind::Point(_)) { 4 } else { 3 }, 0.0, None),
             AssocSnap::OnCircle { angle } => (10, *angle, None),
             AssocSnap::Intersection { other } => {
-                if d.entity(*other).is_none() {
+                if !d.entity(*other).is_some_and(|o| whole_object_ref(&o.kind)) {
                     continue;
                 }
                 (6, 0.0, Some(*other))
             }
         };
         flags |= 1 << slot;
-        refs.push(OsnapRef { osnap, main: a.handle, param, point, other });
+        refs.push(OsnapRef { osnap, main: a.handle, segment: 0, param, point, other });
     }
     (flags, refs)
 }
@@ -2450,8 +2502,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
             w.s(1, "AcDbOsnapPointRef");
             w.i(72, r.osnap);
             w.s(331, r.main.hex());
-            w.i(73, 0);
-            w.i(91, 0);
+            w.i(73, if r.segment > 0 { 2 } else { 0 });
+            w.i(91, r.segment);
             w.s(301, "");
             w.f(40, r.param);
             w.p(10, r.point);
