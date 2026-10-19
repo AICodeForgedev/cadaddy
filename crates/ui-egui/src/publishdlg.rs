@@ -95,18 +95,22 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .unwrap_or_else(|| "Drawing".into());
     let mut action: Option<&'static str> = None;
     egui::Window::new(crate::tl!("Publish")).id(egui::Id::new("Publish")).open(open).resizable(true).default_width(640.0).show(ctx, |ui| {
+        // Right to left in Arabic (rtl.rs).
+        let mut body = crate::rtl::Body::new(ui);
+        let ui = &mut *body;
         ui.label(RichText::new(crate::tl!("Sheets to publish, in order")).strong());
         let mut swap: Option<(usize, usize)> = None;
         let mut remove: Option<usize> = None;
         let n = st.rows.len();
         egui::ScrollArea::vertical().id_salt("publish-rows").max_height(320.0).show(ui, |ui| {
-            egui::Grid::new("publish-grid").num_columns(6).striped(true).show(ui, |ui| {
-                ui.label("");
+            crate::rtl::show_grid(egui::Grid::new("publish-grid").num_columns(6).striped(true), ui, |ui| {
+                crate::rtl::lead(ui, "");
                 ui.label(RichText::new(crate::tl!("Sheet")).color(t.text_dim));
                 ui.label(RichText::new(crate::tl!("Bookmark")).color(t.text_dim));
                 ui.label(RichText::new(crate::tl!("Paper")).color(t.text_dim));
                 ui.label(RichText::new(crate::tl!("Orientation")).color(t.text_dim));
                 ui.label("");
+                crate::rtl::trail(ui, "");
                 ui.end_row();
                 for (i, r) in st.rows.iter_mut().enumerate() {
                     ui.checkbox(&mut r.include, "");

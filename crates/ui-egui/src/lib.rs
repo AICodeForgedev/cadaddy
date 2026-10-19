@@ -112,6 +112,7 @@ pub mod exchange;
 pub mod keytips;
 pub mod publishdlg;
 mod roomsdlg;
+pub mod rtl;
 pub mod sheetsets;
 pub mod standardsdlg;
 

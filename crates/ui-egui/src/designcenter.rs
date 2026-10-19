@@ -96,6 +96,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         egui::Window::new(crate::tl!("DesignCenter")).id(egui::Id::new("DesignCenter")).open(open).resizable(true).default_size([640.0, 420.0]).show(
             ctx,
             |ui| {
+                // Right to left in Arabic (rtl.rs).
+                let mut body = crate::rtl::Body::new(ui);
+                let ui = &mut *body;
                 ui.horizontal(|ui| {
                     if ui.button("⬆").on_hover_text(crate::tl!("Up One Level")).clicked()
                         && let Some(parent) = std::path::Path::new(&st.folder).parent()
