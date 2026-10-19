@@ -426,7 +426,9 @@ pub(crate) fn kind_area(k: &EntityKind) -> Result<(f64, f64)> {
             }
             let a = el.major.xy().len();
             let b = a * el.ratio;
-            (cadaddy_geom::PI * a * b, cadaddy_geom::PI * (3.0 * (a + b) - ((3.0 * a + b) * (a + 3.0 * b)).sqrt()))
+            // The perimeter integrated around the ellipse, not a closed-form estimate (those
+            // fall short as the ellipse flattens: 0.3% on a 100:1 one).
+            (cadaddy_geom::PI * a * b, arc.arc_length_from(0.0, cadaddy_geom::TAU))
         }
         EntityKind::Hatch(hh) => {
             // Odd parity, as drawn: a loop nested inside an odd number of other loops is an unfilled island.
