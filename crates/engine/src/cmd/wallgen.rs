@@ -35,6 +35,9 @@ pub struct WallGen {
     pub slab_ft: f64,
     /// Wall layers given to WALLGEN (wildcards, comma-separated) instead of the rules'.
     pub layers: Option<String>,
+    /// The building spec `model.build` built from (its wall types, families and the parts it
+    /// adds); none for a plain WALLGEN.
+    pub spec: Option<cadaddy_walk3d::BuildingSpec>,
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -46,7 +49,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// The layer each part goes on.
-fn layer_of(part: Part) -> &'static str {
+pub(crate) fn layer_of(part: Part) -> &'static str {
     match part {
         Part::Wall => "3D-Walls",
         Part::Floor => "3D-Floors",
@@ -75,14 +78,14 @@ pub fn made_as(e: &Entity) -> Option<String> {
     x.get(at + 1).filter(|t| t.code == 1000).map(|t| t.value.clone())
 }
 
-fn tag(part: Part, level: &str, source: Handle) -> Vec<RawTag> {
+pub(crate) fn tag(part: Part, level: &str, source: Handle) -> Vec<RawTag> {
     let t = |code: i32, v: String| RawTag { code, value: v };
     vec![t(1001, APP.into()), t(1000, part_name(part).into()), t(1000, level.chars().take(255).collect()), t(1000, source.hex())]
 }
 
 /// The rules: given, from a file, beside the drawing, from the last WALLGEN, else Walk mode's
 /// defaults.
-fn rules_for(s: &Session, p: &Value) -> Result<Rules> {
+pub(crate) fn rules_for(s: &Session, p: &Value) -> Result<Rules> {
     if let Some(r) = p.get("rules").filter(|v| !v.is_null()) {
         return Rules::from_json(&r.to_string()).map_err(|e| bad("wallgen", e));
     }
@@ -219,7 +222,7 @@ fn slab(top: &Mesh, t: f64) -> Mesh {
 }
 
 /// Remove what WALLGEN made from model space; how many objects.
-fn remove_made(d: &mut Drawing) -> usize {
+pub(crate) fn remove_made(d: &mut Drawing) -> usize {
     let hs: Vec<Handle> = d.model.iter().filter(|e| made_as(e).is_some()).map(|e| e.handle).collect();
     for h in &hs {
         d.model.remove(*h);
@@ -228,7 +231,7 @@ fn remove_made(d: &mut Drawing) -> usize {
 }
 
 /// Build the drawing's 3D building from `g`; the counts.
-fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
+pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
     let scene = cadaddy_walk3d::derive(s.doc()?, &g.rules);
     let upf = if scene.units_per_foot.is_finite() && scene.units_per_foot > 0.0 { scene.units_per_foot } else { 12.0 };
     let gs = groups(&scene);
@@ -312,7 +315,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let auto = p.get("auto").and_then(Value::as_bool).unwrap_or(true);
     let layers = str_param(p, "layers").filter(|l| !l.trim().is_empty()).map(str::to_string);
-    let g = WallGen { rules, auto, slab_ft, layers };
+    let g = WallGen { rules, auto, slab_ft, layers, spec: None };
     let r = build(s, &g)?;
     s.state_mut()?.wallgen = Some(g);
     s.echo(format!(
@@ -327,8 +330,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The objects on the rules' layers, by handle, as the drawing holds them (shared pointers: an
 /// edit replaces the object's).
-fn plan(d: &Drawing, rules: &Rules) -> Vec<(Handle, *const Entity)> {
-    d.model.iter().filter(|e| made_as(e).is_none() && rules.layer(&e.common.layer).is_some()).map(|e| (e.handle, Arc::as_ptr(e))).collect()
+fn plan(d: &Drawing, g: &WallGen) -> Vec<(Handle, *const Entity)> {
+    let watched = |layer: &str| {
+        g.rules.layer(layer).is_some() || g.spec.as_ref().and_then(|sp| sp.role(layer)).is_some_and(|r| r.role != cadaddy_walk3d::Role::Ignore)
+    };
+    d.model.iter().filter(|e| made_as(e).is_none() && watched(&e.common.layer)).map(|e| (e.handle, Arc::as_ptr(e))).collect()
 }
 
 /// After a command: when the drawing has an associative WALLGEN and an object on its rules'
@@ -337,10 +343,11 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     let Some(before) = before else { return };
     let Ok(st) = s.state() else { return };
     let Some(g) = st.wallgen.clone().filter(|g| g.auto) else { return };
-    if Arc::ptr_eq(before, &st.doc) || plan(before, &g.rules) == plan(&st.doc, &g.rules) {
+    if Arc::ptr_eq(before, &st.doc) || plan(before, &g) == plan(&st.doc, &g) {
         return;
     }
-    if let Err(e) = build(s, &g) {
+    let built = if g.spec.is_some() { super::bspec::build_spec(s, &g) } else { build(s, &g) };
+    if let Err(e) = built {
         s.echo(e.to_string());
     }
 }
@@ -353,6 +360,9 @@ struct Cut {
     s0: f64,
     s1: f64,
     window: bool,
+    /// A family's head and sill above the floor (sheet units); none = the level's.
+    head: Option<f64>,
+    sill: Option<f64>,
 }
 
 /// A wall from a face pair: centreline (sheet units), thickness, the openings cut in it.
@@ -361,6 +371,8 @@ struct PlanWall {
     a: Vec2,
     b: Vec2,
     thickness: f64,
+    /// Top of the wall (sheet units).
+    top: f64,
     source: Handle,
     cuts: Vec<Cut>,
     /// Boxes across the gaps after it (headers, sills): centreline ends, bottom, top.
@@ -375,6 +387,8 @@ struct Leaf {
     /// The wall's thickness (a pane sits in the middle of it).
     thickness: f64,
     source: Handle,
+    head: Option<f64>,
+    sill: Option<f64>,
 }
 
 /// One level built from its plan.
@@ -392,7 +406,7 @@ struct PlanLevel {
 }
 
 /// A box on the centreline `a`–`b`, `t` thick, from `z0` up to `z1`, added to `m`.
-fn add_box(m: &mut Mesh, a: Vec2, b: Vec2, t: f64, z0: f64, z1: f64) {
+pub(crate) fn add_box(m: &mut Mesh, a: Vec2, b: Vec2, t: f64, z0: f64, z1: f64) {
     let len = a.dist(b);
     if !(len > 1e-9 && t > 1e-9 && z1 > z0) {
         return;
@@ -410,7 +424,7 @@ fn add_box(m: &mut Mesh, a: Vec2, b: Vec2, t: f64, z0: f64, z1: f64) {
     m.faces.extend([f([3, 2, 1, 0]), f([4, 5, 6, 7]), f([0, 1, 5, 4]), f([1, 2, 6, 5]), f([2, 3, 7, 6]), f([3, 0, 4, 7])]);
 }
 
-fn empty_mesh() -> Mesh {
+pub(crate) fn empty_mesh() -> Mesh {
     Mesh { vertices: Vec::new(), faces: Vec::new(), kind: MeshKind::Polyface }
 }
 
@@ -428,20 +442,24 @@ impl PlanLevel {
             let at = |s: f64| w.a + u * s;
             let mut m = empty_mesh();
             let mut cuts: Vec<Cut> =
-                w.cuts.iter().map(|c| Cut { s0: c.s0.max(0.0), s1: c.s1.min(len), window: c.window }).filter(|c| c.s1 > c.s0).collect();
+                w.cuts.iter().map(|c| Cut { s0: c.s0.max(0.0), s1: c.s1.min(len), ..c.clone() }).filter(|c| c.s1 > c.s0).collect();
             cuts.sort_by(|x, y| x.s0.total_cmp(&y.s0));
             let mut s = 0.0;
             for c in &cuts {
                 if c.s0 > s {
-                    add_box(&mut m, at(s), at(c.s0), w.thickness, self.z0, self.top);
+                    add_box(&mut m, at(s), at(c.s0), w.thickness, self.z0, w.top);
                 }
-                let (lo, hi) = if c.window { (self.z0 + self.sill, self.z0 + self.head) } else { (self.z0, self.z0 + self.door_head) };
+                let (lo, hi) = if c.window {
+                    (self.z0 + c.sill.unwrap_or(self.sill), self.z0 + c.head.unwrap_or(self.head))
+                } else {
+                    (self.z0, self.z0 + c.head.unwrap_or(self.door_head))
+                };
                 add_box(&mut m, at(c.s0), at(c.s1), w.thickness, self.z0, lo);
-                add_box(&mut m, at(c.s0), at(c.s1), w.thickness, hi.min(self.top), self.top);
+                add_box(&mut m, at(c.s0), at(c.s1), w.thickness, hi.min(w.top), w.top);
                 s = s.max(c.s1);
             }
             if s < len {
-                add_box(&mut m, at(s), at(len), w.thickness, self.z0, self.top);
+                add_box(&mut m, at(s), at(len), w.thickness, self.z0, w.top);
             }
             for (a, b, lo, hi) in &w.extra {
                 add_box(&mut m, *a, *b, w.thickness, *lo, *hi);
@@ -453,10 +471,11 @@ impl PlanLevel {
         for l in &self.leaves {
             let mut m = empty_mesh();
             if l.window {
-                add_box(&mut m, l.a, l.b, (0.5 * self.k).min(l.thickness), self.z0 + self.sill, self.z0 + self.head);
+                let (sill, head) = (l.sill.unwrap_or(self.sill), l.head.unwrap_or(self.head));
+                add_box(&mut m, l.a, l.b, (0.5 * self.k).min(l.thickness), self.z0 + sill, self.z0 + head);
                 out.push((Part::Glass, m, l.source));
             } else {
-                add_box(&mut m, l.a, l.b, 1.75 * self.k, self.z0, self.z0 + self.door_head);
+                add_box(&mut m, l.a, l.b, 1.75 * self.k, self.z0, self.z0 + l.head.unwrap_or(self.door_head));
                 out.push((Part::Door, m, l.source));
             }
         }
@@ -491,6 +510,81 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     p.dist(a + d * t)
 }
 
+/// The spec's wall type of a wall layer.
+fn wall_type<'a>(g: &'a WallGen, layer: &str) -> Option<&'a cadaddy_walk3d::WallType> {
+    let sp = g.spec.as_ref()?;
+    let role = sp.role(layer).filter(|r| matches!(r.role, cadaddy_walk3d::Role::Wall | cadaddy_walk3d::Role::CurtainWall))?;
+    sp.wall_type_of(role)
+}
+
+/// A length in inches from an attribute value: `36`, `3'-0"`, `36"`.
+fn inches(v: &str) -> Option<f64> {
+    v.trim().parse::<f64>().ok().or_else(|| super::perceive::feet_inches(v)).filter(|x| x.is_finite() && *x > 0.0)
+}
+
+/// Door and window blocks by the spec's families (and its door and window layers): their kind,
+/// width (the family's, an attribute's, else as found) and head and sill heights.
+fn fit_families(
+    d: &Drawing,
+    sp: &cadaddy_walk3d::BuildingSpec,
+    ents: &[&Arc<Entity>],
+    ops: &mut Vec<super::perceive::geometry::Opening>,
+    fitted: &mut HashMap<Handle, (Option<f64>, Option<f64>)>,
+    upf: f64,
+) {
+    use cadaddy_walk3d::{FamilyKind, Role};
+    let k = upf / 12.0;
+    for e in ents {
+        let EntityKind::Insert(ins) = &e.kind else { continue };
+        let family = sp.family(&ins.block);
+        let by_layer = sp.role(&e.common.layer).map(|r| r.role).filter(|r| matches!(r, Role::Door | Role::Window));
+        let window = match (family.map(|f| f.kind), by_layer) {
+            (Some(kind), _) => kind == FamilyKind::Window,
+            (None, Some(r)) => r == Role::Window,
+            (None, None) => continue,
+        };
+        let attr = |tag: &Option<String>| {
+            tag.as_ref().and_then(|t| ins.attribs.iter().find(|a| a.tag.eq_ignore_ascii_case(t))).and_then(|a| inches(&a.text.value))
+        };
+        let width = family.and_then(|f| f.width_in.or_else(|| attr(&f.width_attr))).map(|w| w * k);
+        let (head, sill) = match family {
+            Some(f) => {
+                let sill = if window { f.sill_ft.unwrap_or(sp.openings.window_sill_ft) } else { 0.0 };
+                let head = match attr(&f.height_attr) {
+                    Some(h) => sill + h / 12.0,
+                    None => f.head_ft.unwrap_or(if window { sp.openings.window_head_ft } else { sp.openings.door_head_ft }),
+                };
+                (Some(head * upf), window.then_some(sill * upf))
+            }
+            None => (None, None),
+        };
+        let kind = if window { "window" } else { "door" };
+        match ops.iter_mut().find(|o| o.handle == e.handle) {
+            Some(o) => {
+                o.kind = kind;
+                if let Some(w) = width {
+                    o.width = w;
+                }
+            }
+            None => {
+                let b = cadaddy_doc::entity_bounds(d, e, 0);
+                let found = if b.is_empty() { 0.0 } else { b.width().max(b.height()) };
+                ops.push(super::perceive::geometry::Opening {
+                    kind,
+                    at: ins.insert.xy(),
+                    width: width.unwrap_or(found),
+                    layer: e.common.layer.clone(),
+                    handle: e.handle,
+                    swing: None,
+                    block: Some(ins.block.clone()),
+                    confidence: 1.0,
+                });
+            }
+        }
+        fitted.insert(e.handle, (head, sill));
+    }
+}
+
 /// Whether `pattern` (comma-separated wildcards) matches `layer`.
 fn layer_matches(pattern: &str, layer: &str) -> bool {
     pattern.split(',').any(|q| super::qselect::wildcard(q.trim(), layer))
@@ -501,10 +595,12 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     use super::perceive::geometry::{Limits, openings, pairs, segments};
     let k = upf / 12.0;
     let oz = &g.rules.openings;
+    // A spec gives each wall layer its type's height (see `top_of`); the rules, one for all.
     let height_ft = g
         .rules
         .layers
         .iter()
+        .filter(|_| g.spec.is_none())
         .find_map(|r| match r.kind {
             cadaddy_walk3d::LayerKind::Wall { height_ft: Some(h), .. } => Some(h),
             _ => None,
@@ -575,9 +671,12 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         });
         return pl;
     }
-    let segs = segments(&wall_ents);
+    // Layers whose wall type draws the centreline aren't paired: each line is a wall.
+    let (centre_ents, pair_ents): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) =
+        wall_ents.iter().copied().partition(|e| wall_type(g, &e.common.layer).is_some_and(|t| t.from == cadaddy_walk3d::WallFrom::Centerline));
+    let segs = segments(&pair_ents);
     let found = pairs(d, &segs, &lim);
-    if found.is_empty() {
+    if found.is_empty() && centre_ents.is_empty() {
         notes.push(format!(
             "{}: {} objects on the wall layers, but no parallel faces 2½\"–20\" apart (single-line walls are built one per line).",
             level.name,
@@ -587,8 +686,10 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     }
     // Each wall once: the most confident, longest pair of each.
     let source = wall_ents.first().map_or(Handle(0), |e| e.handle);
+    let level_top = pl.top;
+    let top_of = |layer: &str| wall_type(g, layer).and_then(|t| t.height_ft).map_or(level_top, |h| z0 + h * upf);
     for p in &found {
-        let w = PlanWall { a: p.c0, b: p.c1, thickness: p.thickness, source, cuts: Vec::new(), extra: Vec::new() };
+        let w = PlanWall { a: p.c0, b: p.c1, thickness: p.thickness, top: top_of(&p.layer), source, cuts: Vec::new(), extra: Vec::new() };
         if !pl.walls.iter().any(|x| same_wall(x, &w)) {
             pl.walls.push(w);
         }
@@ -605,6 +706,22 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             dx.total_cmp(&dy)
         }) {
             w.source = e.handle;
+        }
+    }
+    for e in &centre_ents {
+        let t = wall_type(g, &e.common.layer).map_or(6.0, |t| t.thickness_in) * k;
+        for sg in segments(&[*e]) {
+            if pl.walls.len() < MAX_OBJECTS {
+                pl.walls.push(PlanWall {
+                    a: sg.a,
+                    b: sg.b,
+                    thickness: t,
+                    top: top_of(&sg.layer),
+                    source: e.handle,
+                    cuts: Vec::new(),
+                    extra: Vec::new(),
+                });
+            }
         }
     }
     // Ends that meet another wall run on into it by its thickness (closing corners and tees).
@@ -629,7 +746,12 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         w.b += u * tb.min(len);
     }
     // Openings: each cuts the wall it lies in.
-    let ops = openings(d, &ents, &segments(&ents), k);
+    let mut ops = openings(d, &ents, &segments(&ents), k);
+    // A family's size and heights for the blocks it covers (sheet units above the floor).
+    let mut fitted: HashMap<Handle, (Option<f64>, Option<f64>)> = HashMap::new();
+    if let Some(sp) = &g.spec {
+        fit_families(d, sp, &ents, &mut ops, &mut fitted, upf);
+    }
     let (mut doors, mut windows) = (0, 0);
     for o in ops.iter().take(MAX_OBJECTS) {
         // The wall it is in: the hinge (or the block) on its centreline within its thickness.
@@ -659,14 +781,15 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 let along = |e: Vec2| u.dot(e - o.at).abs();
                 let (closed, open) = if along(ends[0]) >= along(ends[1]) { (ends[0], ends[1]) } else { (ends[1], ends[0]) };
                 let s_end = u.dot(closed - w.a);
-                w.cuts.push(Cut { s0: s_at.min(s_end), s1: s_at.max(s_end), window: false });
-                pl.leaves.push(Leaf { a: o.at, b: open, window: false, thickness: w.thickness, source: o.handle });
+                w.cuts.push(Cut { s0: s_at.min(s_end), s1: s_at.max(s_end), window: false, head: None, sill: None });
+                pl.leaves.push(Leaf { a: o.at, b: open, window: false, thickness: w.thickness, source: o.handle, head: None, sill: None });
                 doors += 1;
             }
             (kind, _) => {
                 let window = kind == "window";
                 let half = o.width / 2.0;
-                w.cuts.push(Cut { s0: s_at - half, s1: s_at + half, window });
+                let (head, sill) = fitted.get(&o.handle).copied().unwrap_or((None, None));
+                w.cuts.push(Cut { s0: s_at - half, s1: s_at + half, window, head, sill });
                 let on = w.a + u * s_at;
                 let leaf = if window {
                     windows += 1;
@@ -675,7 +798,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     doors += 1;
                     (on - u * half, on + u * half)
                 };
-                pl.leaves.push(Leaf { a: leaf.0, b: leaf.1, window, thickness: w.thickness, source: o.handle });
+                pl.leaves.push(Leaf { a: leaf.0, b: leaf.1, window, thickness: w.thickness, source: o.handle, head, sill });
             }
         }
     }
@@ -762,18 +885,18 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         let Some(w) = pl.walls.get(wi) else { continue };
         let source = w.source;
         let is_outside = outside((g0 + g1) * 0.5, u.perp(), &pl.walls);
-        let (z0, top) = (pl.z0, pl.top);
+        let (z0, top) = (pl.z0, w.top);
         let mut extra = Vec::new();
         if leaf.is_some() || covered {
             extra.push((g0, g1, z0 + pl.door_head, top));
             if let Some((a, b, h)) = leaf.filter(|_| !covered) {
-                pl.leaves.push(Leaf { a, b, window: false, thickness: t, source: h });
+                pl.leaves.push(Leaf { a, b, window: false, thickness: t, source: h, head: None, sill: None });
                 doors += 1;
             }
         } else if is_outside {
             extra.push((g0, g1, z0, z0 + pl.sill));
             extra.push((g0, g1, z0 + pl.head, top));
-            pl.leaves.push(Leaf { a: g0, b: g1, window: true, thickness: t, source });
+            pl.leaves.push(Leaf { a: g0, b: g1, window: true, thickness: t, source, head: None, sill: None });
             windows += 1;
         } else if width <= 8.0 * upf {
             extra.push((g0, g1, z0 + pl.door_head, top));

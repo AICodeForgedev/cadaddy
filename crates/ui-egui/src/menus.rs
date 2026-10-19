@@ -57,6 +57,12 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.theme.system", "Use System Setting", &["View", "Interface Theme", "Use System Setting"], None),
     ("ui.theme.light", "Light", &["View", "Interface Theme", "Light"], None),
     ("ui.theme.dark", "Dark", &["View", "Interface Theme", "Dark"], None),
+    ("ui.theme.high-contrast", "High Contrast", &["View", "Interface Theme", "High Contrast"], None),
+    ("ui.scale", "Interface Size", &[], None),
+    ("ui.scale.100", "100%", &["View", "Interface Size", "100%"], None),
+    ("ui.scale.125", "125%", &["View", "Interface Size", "125%"], None),
+    ("ui.scale.150", "150%", &["View", "Interface Size", "150%"], None),
+    ("ui.scale.200", "200%", &["View", "Interface Size", "200%"], None),
     ("ui.theme", "Interface Theme", &[], None),
     ("ui.saveformat.cdy", "CADaddy Drawing (CDY)", &["File", "Default Save Format", "CADaddy Drawing (CDY)"], None),
     ("ui.saveformat.dxf", "DXF", &["File", "Default Save Format", "DXF"], None),
@@ -361,15 +367,27 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             toggle(&mut app.ui.in_window_menu, params);
             Ok(Value::Null)
         }
-        "ui.theme.system" | "ui.theme.light" | "ui.theme.dark" => {
+        "ui.theme.system" | "ui.theme.light" | "ui.theme.dark" | "ui.theme.high-contrast" => {
             let pref = crate::theme::ThemePref::parse(id.trim_start_matches("ui.theme.")).unwrap_or_default();
             set_theme(app, pref)
         }
         // `{"theme": "system"|"light"|"dark"}` sets the choice; without it, reports it.
+        // Interface size apart from the OS scaling: `{"scale": 1.25}` (or the menu's presets).
+        "ui.scale" | "ui.scale.100" | "ui.scale.125" | "ui.scale.150" | "ui.scale.200" => {
+            let preset = id.strip_prefix("ui.scale.").and_then(|p| p.parse::<f32>().ok()).map(|p| p / 100.0);
+            match preset.or_else(|| params.get("scale").and_then(Value::as_f64).map(|v| v as f32)) {
+                Some(s) if s.is_finite() && (0.5..=3.0).contains(&s) => {
+                    app.ui.ui_scale = s;
+                    Ok(json!({ "scale": s }))
+                }
+                Some(_) => Err("scale must be from 0.5 to 3 (50 % to 300 %)".into()),
+                None => Ok(json!({ "scale": app.ui.ui_scale })),
+            }
+        }
         "ui.theme" => match params.get("theme").and_then(Value::as_str) {
             Some(name) => match crate::theme::ThemePref::parse(name) {
                 Some(pref) => set_theme(app, pref),
-                None => Err(format!("unknown theme \"{name}\" (system, light or dark)")),
+                None => Err(format!("unknown theme \"{name}\" (system, light, dark or high-contrast)")),
             },
             None => Ok(theme_json(app)),
         },

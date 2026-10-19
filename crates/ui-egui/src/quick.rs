@@ -154,7 +154,11 @@ pub fn qselect_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     _ => Vec::new(),
                 };
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut st.value).desired_width(if choices.is_empty() { 220.0 } else { 190.0 }));
+                    ui.add(egui::TextEdit::singleline(&mut st.value).hint_text(crate::i18n::t("Value")).desired_width(if choices.is_empty() {
+                        220.0
+                    } else {
+                        190.0
+                    }));
                     if !choices.is_empty() {
                         ui.menu_button("▼", |ui| {
                             egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {

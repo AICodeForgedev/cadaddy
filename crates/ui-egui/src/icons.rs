@@ -948,6 +948,13 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, size: f32, tooltip: &str, selected:
     resp.on_hover_text(crate::i18n::t(tooltip))
 }
 
+/// A name for a painted area people interact with but that isn't a button (the drawing area,
+/// the command line), so screen readers can announce it.
+pub fn describe_area(response: &egui::Response, label: &str) {
+    let label = crate::i18n::t(label).to_string();
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, response.enabled(), label.clone()));
+}
+
 /// Labels and focus outlines for controls whose existing geometry is painted by the app.
 /// Pointer focus is opt-in for navigation tabs; drafting buttons keep their command-line flow.
 pub fn describe_control(ui: &egui::Ui, response: &egui::Response, label: &str, selected: Option<bool>, tab: bool) {

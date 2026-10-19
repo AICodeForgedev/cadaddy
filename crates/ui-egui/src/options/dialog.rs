@@ -98,6 +98,7 @@ fn theme_label(t: ThemePref) -> &'static str {
         ThemePref::System => crate::tl!("Use System Setting"),
         ThemePref::Light => crate::tl!("Light"),
         ThemePref::Dark => crate::tl!("Dark"),
+        ThemePref::HighContrast => crate::tl!("High Contrast"),
     }
 }
 
@@ -109,12 +110,33 @@ fn animations_label(a: AnimationPref) -> &'static str {
     }
 }
 
+/// A slider named for screen readers after its setting.
+fn named_slider(ui: &mut egui::Ui, slider: egui::Slider<'_>, label: &str) -> egui::Response {
+    let resp = ui.add(slider);
+    let label = crate::i18n::t(label).to_string();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, label.clone()));
+    resp
+}
+
+/// The setting a colour row sets (its row label).
+fn color_label(key: &str) -> &'static str {
+    match key {
+        "paperBackground" => "Layout paper",
+        "modelBackground" => "Model background",
+        _ => "Color",
+    }
+}
+
 /// A colour button, its hex value and a Default button; a change goes into `changes` under `key`.
 fn color_row(ui: &mut egui::Ui, current: Option<Color32>, default: Color32, key: &str, changes: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         let shown = current.unwrap_or(default);
         let mut rgb = [shown.r(), shown.g(), shown.b()];
-        if ui.color_edit_button_srgb(&mut rgb).changed() {
+        let resp = ui.color_edit_button_srgb(&mut rgb);
+        // Named after its setting (the label in the row before it).
+        let name = crate::i18n::t(color_label(key)).to_string();
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, true, name.clone()));
+        if resp.changed() {
             changes.insert(key.into(), json!(super::hex(Color32::from_rgb(rgb[0], rgb[1], rgb[2]))));
         }
         ui.monospace(super::hex(shown));
@@ -149,6 +171,16 @@ fn display(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         }
         ui.end_row();
 
+        // Interface size apart from the operating system's display scaling.
+        ui.label(crate::tl!("Interface size"));
+        let mut pct = (crate::clamp_ui_scale(app.ui.ui_scale) * 100.0).round();
+        let r = named_slider(ui, egui::Slider::new(&mut pct, 50.0..=300.0).step_by(5.0).integer().suffix(" %"), "Interface size");
+        // On release of a drag (the window rescales), or at once from the keyboard.
+        if r.drag_stopped() || (r.changed() && !r.dragged()) {
+            changes.insert("uiScale".into(), json!(pct / 100.0));
+        }
+        ui.end_row();
+
         ui.label(crate::tl!("Animation effects"));
         let mut animations = app.ui.animations;
         egui::ComboBox::from_id_salt("options_animations").selected_text(animations_label(animations)).show_ui(ui, |ui| {
@@ -171,7 +203,7 @@ fn display(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
 
         ui.label(crate::tl!("Crosshair size"));
         let mut size = app.session.settings.cursorsize;
-        if ui.add(egui::Slider::new(&mut size, 1.0..=100.0).integer().suffix(" %")).changed() {
+        if named_slider(ui, egui::Slider::new(&mut size, 1.0..=100.0).integer().suffix(" %"), "Crosshair size").changed() {
             changes.insert("CURSORSIZE".into(), json!(size));
         }
         ui.end_row();
@@ -264,7 +296,7 @@ fn drafting(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>, s
         ui.label(crate::tl!("Object snap marker size"));
         ui.horizontal(|ui| {
             let mut size = app.options.snap_marker_size;
-            if ui.add(egui::Slider::new(&mut size, super::SNAP_MARKER_SIZES).integer()).changed() {
+            if named_slider(ui, egui::Slider::new(&mut size, super::SNAP_MARKER_SIZES).integer(), "Object snap marker size").changed() {
                 changes.insert("snapMarkerSize".into(), json!(size));
             }
             preview_square(ui, size, t.snap);
@@ -274,7 +306,7 @@ fn drafting(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>, s
         ui.label(crate::tl!("Object snap aperture"));
         ui.horizontal(|ui| {
             let mut aperture = app.session.settings.aperture;
-            if ui.add(egui::Slider::new(&mut aperture, 1.0..=50.0).integer().suffix(" px")).changed() {
+            if named_slider(ui, egui::Slider::new(&mut aperture, 1.0..=50.0).integer().suffix(" px"), "Object snap aperture").changed() {
                 changes.insert("APERTURE".into(), json!(aperture));
             }
             preview_square(ui, aperture as f32, t.crosshair);
@@ -301,7 +333,7 @@ fn selection(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) 
         heading(left, crate::tl!("Pickbox size"));
         left.horizontal(|ui| {
             let mut pickbox = st.pickbox;
-            if ui.add(egui::Slider::new(&mut pickbox, 0.0..=50.0).integer().suffix(" px")).changed() {
+            if named_slider(ui, egui::Slider::new(&mut pickbox, 0.0..=50.0).integer().suffix(" px"), "Pickbox size").changed() {
                 changes.insert("PICKBOX".into(), json!(pickbox));
             }
             preview_square(ui, (pickbox * 3.0) as f32, t.crosshair);
@@ -332,7 +364,7 @@ fn selection(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) 
         heading(right, crate::tl!("Grip size"));
         right.horizontal(|ui| {
             let mut grip = st.gripsize;
-            if ui.add(egui::Slider::new(&mut grip, 1.0..=20.0).integer().suffix(" px")).changed() {
+            if named_slider(ui, egui::Slider::new(&mut grip, 1.0..=20.0).integer().suffix(" px"), "Grip size").changed() {
                 changes.insert("GRIPSIZE".into(), json!(grip));
             }
             preview_square(ui, (grip * 2.0) as f32, t.grip);
@@ -402,7 +434,7 @@ fn visual_effects(ctx: &egui::Context, st: &cadaddy_engine::Settings, open: &mut
                     aci_row(ui, st.crossingareacolor, "CROSSINGAREACOLOR", changes);
                     ui.label(crate::tl!("Selection area opacity:"));
                     let mut opacity = st.selectionareaopacity;
-                    if ui.add(egui::Slider::new(&mut opacity, 0..=100)).changed() {
+                    if named_slider(ui, egui::Slider::new(&mut opacity, 0..=100), "Selection area opacity:").changed() {
                         changes.insert("SELECTIONAREAOPACITY".into(), json!(opacity));
                     }
                 });

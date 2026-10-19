@@ -1210,6 +1210,28 @@ fn layer_states_roundtrip_next_to_constraints() {
     assert!(!write_dxf(&Drawing::new_imperial()).contains("CADADDY_LAYERSTATES"));
 }
 
+#[test]
+fn building_spec_roundtrips_in_dxf_and_dwg() {
+    let mut d = Drawing::new_imperial();
+    let spec = format!(
+        r#"{{"version":1,"levels":[{{"name":"Erdgeschoß","elevation_ft":0,"height_ft":10}}],"layers":[{{"layer":"A-WALL","role":"wall"}}],"note":"a \\ b {}"}}"#,
+        "x".repeat(600)
+    );
+    d.building_spec = Some(spec.clone());
+    let same = |text: Option<String>| text.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let text = write_dxf(&d);
+    assert!(text.contains("CADADDY_BSPEC"));
+    let back = read_dxf(text.as_bytes()).unwrap();
+    assert_eq!(same(back.building_spec.clone()), same(Some(spec.clone())));
+    assert_eq!(same(roundtrip(&back).building_spec), same(Some(spec.clone())));
+    #[cfg(not(target_arch = "wasm32"))]
+    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().building_spec), same(Some(spec)));
+    // No spec, no record; a record that isn't a JSON object is dropped.
+    assert!(!write_dxf(&Drawing::new_imperial()).contains("CADADDY_BSPEC"));
+    d.building_spec = Some("[1, 2".into());
+    assert_eq!(read_dxf(write_dxf(&d).as_bytes()).unwrap().building_spec, None);
+}
+
 fn table_sample() -> Table {
     let cell = |t: &str| TableCell { text: t.into(), ..Default::default() };
     let mut rows = vec![

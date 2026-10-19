@@ -22,19 +22,23 @@ pub enum ThemePref {
     /// The default: CADaddy's original look.
     #[default]
     Dark,
+    /// White text and strong outlines on black, with a yellow accent ([`Tokens::HIGH_CONTRAST`]).
+    #[serde(rename = "high-contrast")]
+    HighContrast,
 }
 
 /// The theme `System` uses when the OS (or browser) reports no appearance.
 pub const SYSTEM_FALLBACK: Theme = Theme::Dark;
 
 impl ThemePref {
-    pub const ALL: [ThemePref; 3] = [ThemePref::System, ThemePref::Light, ThemePref::Dark];
+    pub const ALL: [ThemePref; 4] = [ThemePref::System, ThemePref::Light, ThemePref::Dark, ThemePref::HighContrast];
 
     pub fn as_str(self) -> &'static str {
         match self {
             ThemePref::System => "system",
             ThemePref::Light => "light",
             ThemePref::Dark => "dark",
+            ThemePref::HighContrast => "high-contrast",
         }
     }
 
@@ -47,7 +51,7 @@ impl ThemePref {
         match self {
             ThemePref::System => system.unwrap_or(SYSTEM_FALLBACK),
             ThemePref::Light => Theme::Light,
-            ThemePref::Dark => Theme::Dark,
+            ThemePref::Dark | ThemePref::HighContrast => Theme::Dark,
         }
     }
 }
@@ -55,6 +59,17 @@ impl ThemePref {
 thread_local! {
     /// The theme in use on the UI thread (set by [`set_active`] each frame).
     static ACTIVE: Cell<Theme> = const { Cell::new(Theme::Dark) };
+    /// The high-contrast palette replaces the dark one (set by [`set_high_contrast`]).
+    static CONTRAST: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether the high-contrast palette is in use.
+pub fn high_contrast() -> bool {
+    CONTRAST.with(Cell::get)
+}
+
+pub fn set_high_contrast(on: bool) {
+    CONTRAST.with(|c| c.set(on));
 }
 
 /// The theme [`Tokens::get`] returns colours for.
@@ -205,9 +220,46 @@ impl Tokens {
         ..Tokens::DARK
     };
 
-    /// The palette of `theme`.
+    /// White text, icons and outlines on black, a yellow accent and selection, and bright
+    /// command-line keywords: for people who need strong contrast. The drawing area is black.
+    pub const HIGH_CONTRAST: Tokens = Tokens {
+        chrome: Color32::BLACK,
+        chrome_dark: Color32::BLACK,
+        panel: Color32::BLACK,
+        tab_active: Color32::from_rgb(0x00, 0x3d, 0x99),
+        control: Color32::from_rgb(0x1a, 0x1a, 0x1a),
+        control_hover: Color32::from_rgb(0x40, 0x40, 0x40),
+        border: Color32::WHITE,
+        canvas: Color32::BLACK,
+        text: Color32::WHITE,
+        text_dim: Color32::from_rgb(0xf0, 0xf0, 0xf0),
+        text_faint: Color32::from_rgb(0xe0, 0xe0, 0xe0),
+        icon: Color32::WHITE,
+        icon_accent: Color32::from_rgb(0x00, 0xe5, 0xff),
+        icon_point: Color32::from_rgb(0xff, 0xa0, 0x00),
+        accent: Color32::from_rgb(0xff, 0xd4, 0x00),
+        selection: Color32::from_rgb(0xff, 0xd4, 0x00),
+        hover: Color32::from_rgb(0x00, 0xe5, 0xff),
+        cmd_bg: Color32::BLACK,
+        toggle_on: Color32::from_rgb(0xff, 0xd4, 0x00),
+        field: Color32::BLACK,
+        select_bg: Color32::from_rgb(0x00, 0x50, 0xc8),
+        canvas_ink: Color32::WHITE,
+        cmd_history: Color32::from_rgba_unmultiplied_const(0, 0, 0, 230),
+        cmd_border: Color32::WHITE,
+        cmd_keyword: Color32::from_rgb(0xff, 0xd4, 0x00),
+        cmd_keyword_hover: Color32::from_rgb(0x40, 0x40, 0x40),
+        list_bg: Color32::BLACK,
+        list_row: Color32::from_rgb(0x26, 0x26, 0x26),
+        warn: Color32::from_rgb(0xff, 0xff, 0x00),
+        crosshair: Color32::WHITE,
+        ..Tokens::DARK
+    };
+
+    /// The palette of `theme` (the high-contrast one in place of dark while it is chosen).
     pub fn of(theme: Theme) -> Tokens {
         match theme {
+            Theme::Dark if high_contrast() => Tokens::HIGH_CONTRAST,
             Theme::Dark => Tokens::DARK,
             Theme::Light => Tokens::LIGHT,
         }
@@ -714,6 +766,20 @@ fn visuals(theme: Theme) -> Visuals {
     v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 12, spread: 0, color: shadow };
     v.window_corner_radius = egui::CornerRadius::same(6);
     v.menu_corner_radius = egui::CornerRadius::same(5);
+    if theme == Theme::Dark && high_contrast() {
+        // Every control outlined, text and focus marks unmistakable.
+        let white = egui::Stroke::new(1.5, Color32::WHITE);
+        for w in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
+            w.bg_stroke = white;
+            w.fg_stroke = egui::Stroke::new(1.5, Color32::WHITE);
+        }
+        v.widgets.hovered.bg_stroke = egui::Stroke::new(2.0, t.accent);
+        v.widgets.active.fg_stroke = egui::Stroke::new(2.0, Color32::BLACK);
+        v.selection.stroke = egui::Stroke::new(2.0, t.accent);
+        v.window_stroke = egui::Stroke::new(2.0, Color32::WHITE);
+        v.hyperlink_color = t.accent;
+        v.warn_fg_color = t.warn;
+    }
     v
 }
 

@@ -6,7 +6,7 @@
 //!
 //! CADaddy's own data lives under the registered application `CADADDY` (xdata) and the
 //! named-object-dictionary entries `CADADDY_CONSTRAINTS`, `CADADDY_LAYERSTATES`,
-//! `CADADDY_PLOTSTYLES`, `CADADDY_HANDSEED` and `CADADDY_MLEADERSTYLE` (XRECORDs). Other
+//! `CADADDY_PLOTSTYLES`, `CADADDY_HANDSEED`, `CADADDY_MLEADERSTYLE` and `CADADDY_BSPEC` (XRECORDs). Other
 //! readers keep or ignore them.
 
 use std::collections::HashMap;
@@ -39,6 +39,8 @@ pub(crate) const PLOT_STYLE_NAMES_KEY: &str = "ACAD_PLOTSTYLENAME";
 pub(crate) const HANDSEED_KEY: &str = "CADADDY_HANDSEED";
 /// Named-object-dictionary key of the XRECORD holding the current multileader style.
 pub(crate) const MLEADER_STYLE_KEY: &str = "CADADDY_MLEADERSTYLE";
+/// Named-object-dictionary key of the XRECORD holding the building spec (JSON).
+pub(crate) const BUILDING_SPEC_KEY: &str = "CADADDY_BSPEC";
 /// Named-object-dictionary key of the XRECORD listing the objects hidden by ISOLATEOBJECTS /
 /// HIDEOBJECTS when OBJECTISOLATIONMODE 1 saves them with the drawing.
 pub(crate) const HIDDEN_OBJECTS_KEY: &str = "CADADDY_HIDDENOBJECTS";
@@ -813,6 +815,20 @@ pub(crate) fn parse_layer_filters(text: &str) -> Option<Vec<cadaddy_doc::LayerFi
     }
     let p: LayerFiltersPayload = serde_json::from_str(text).ok()?;
     (p.version == 1 && p.filters.len() <= MAX_LAYER_FILTERS).then_some(p.filters)
+}
+
+/// JSON chunks for the building spec XRECORD, or `None` without a spec.
+pub(crate) fn building_spec_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    d.building_spec.as_deref().filter(|s| !s.trim().is_empty()).map(json_chunks)
+}
+
+/// The building spec XRECORD's text, when it is a JSON object (the engine checks the rest).
+pub(crate) fn parse_building_spec(text: &str) -> Option<String> {
+    if text.len() > MAX_PAYLOAD {
+        return None;
+    }
+    let v: Value = serde_json::from_str(text).ok()?;
+    v.is_object().then(|| text.to_string())
 }
 
 /// The hidden objects stored in the `CADADDY_HIDDENOBJECTS` XRECORD (hex handles).

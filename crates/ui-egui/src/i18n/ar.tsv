@@ -1847,3 +1847,20 @@ menu	View	عرض
 	Preparing the 3D view…	جارٍ تجهيز العرض ثلاثي الأبعاد…
 	Viewpoint	نقطة العرض
 	3D View Benchmark	اختبار أداء العرض ثلاثي الأبعاد
+	Drawing area	منطقة الرسم
+	Command line	سطر الأوامر
+	Viewport controls	عناصر تحكم إطار العرض
+	Coordinate system menu	قائمة نظام الإحداثيات
+	UCS icon X axis	المحور X لأيقونة UCS
+	UCS icon Y axis	المحور Y لأيقونة UCS
+	High Contrast	تباين عالٍ
+	Interface size	حجم الواجهة
+	Interface Size	حجم الواجهة
+	100%	100%
+	125%	125%
+	150%	150%
+	200%	200%
+	Building Spec	مواصفات المبنى
+	Set Building Spec	تعيين مواصفات المبنى
+	Validate Building Spec	التحقق من مواصفات المبنى
+	Build Model from Spec	إنشاء النموذج من المواصفات

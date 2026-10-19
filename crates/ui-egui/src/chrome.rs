@@ -632,6 +632,7 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
     for (label, cmd) in [("Open...", "open"), ("New", "new"), ("New (metric)", "new.metric"), ("Open sample drawing", "sample")] {
         let br = Rect::from_min_size(pos2(left.left() + 34.0, y), vec2(220.0, 34.0));
         let resp = ui.interact(br, ui.id().with(("start", cmd)), Sense::click());
+        crate::icons::describe_control(ui, &resp, label, None, false);
         p.rect_stroke(br, 2.0, Stroke::new(1.0, if resp.hovered() { t.text } else { t.text_dim }), egui::StrokeKind::Inside);
         p.text(pos2(br.left() + 16.0, br.center().y), egui::Align2::LEFT_CENTER, crate::i18n::t(label), crate::theme::body(), t.text);
         if resp.clicked() {
@@ -646,6 +647,7 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
     for (i, path) in app.ui.recent_files.iter().enumerate() {
         let row = Rect::from_min_size(pos2(main.left(), y), vec2((r.right() - main.left() - 36.0).clamp(0.0, 640.0), 42.0));
         let resp = ui.interact(row, ui.id().with(("recent", i)), Sense::click());
+        crate::icons::describe_control(ui, &resp, &crate::menus::file_name(path), None, false);
         if resp.hovered() {
             p.rect_filled(row, 2.0, t.control_hover.gamma_multiply(0.5));
         }

@@ -169,6 +169,7 @@ impl Part {
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui, l: &Layout) {
     let proj = app.session.state().ok().and_then(|st| st.projection());
     let resp = ui.interact(l.bounds, ui.id().with("viewcube"), Sense::click_and_drag());
+    crate::icons::describe_control(ui, &resp, "ViewCube", None, false);
     let part = resp.hover_pos().and_then(|p| l.part_at(p, proj));
     let p = ui.painter_at(l.bounds.union(l.pill));
     let ring_col = if part == Some(Part::Ring) { Color32::from_rgb(0x5c, 0x67, 0x7c) } else { Color32::from_rgb(0x48, 0x50, 0x5c) };
@@ -265,6 +266,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, l: &Layout) {
     }
     // The WCS pill (painted by the canvas) opens the coordinate-system menu.
     let pill = ui.interact(l.pill, ui.id().with("viewcube_wcs"), Sense::click_and_drag()).on_hover_cursor(CursorIcon::PointingHand);
+    crate::icons::describe_control(ui, &pill, "Coordinate system menu", None, false);
     let pill = pill.on_hover_text("Coordinate system");
     ucs_menu(app, egui::Popup::menu(&pill));
 }
@@ -305,6 +307,8 @@ pub fn ucs_icon(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     let [x, y] = ucs_arms(canvas);
     let rx = ui.interact(x, ui.id().with("ucs_x"), Sense::click_and_drag());
     let ry = ui.interact(y, ui.id().with("ucs_y"), Sense::click_and_drag());
+    crate::icons::describe_control(ui, &rx, "UCS icon X axis", None, false);
+    crate::icons::describe_control(ui, &ry, "UCS icon Y axis", None, false);
     let resp = (rx | ry).on_hover_cursor(CursorIcon::PointingHand).on_hover_text("UCS icon: World Coordinate System");
     if resp.hovered() {
         let o = pos2(x.left() + 8.0, x.center().y);

@@ -88,6 +88,7 @@ pub mod walk;
 
 pub mod etransmit;
 pub mod exchange;
+pub mod keytips;
 pub mod publishdlg;
 pub mod sheetsets;
 
@@ -98,6 +99,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub use control::{ControlRequest, ControlResponse, PendingReply};
+
+/// Interface sizes the app takes (50 % to 300 %); anything else (or not a number) is 100 %.
+pub fn clamp_ui_scale(s: f32) -> f32 {
+    if s.is_finite() { s.clamp(0.5, 3.0) } else { 1.0 }
+}
 
 /// The host storage key for [`CadApp::prefs_json`].
 pub const PREFS_KEY: &str = "cadaddy.prefs";
@@ -146,6 +152,8 @@ pub struct UiState {
     /// Show an in-window menu bar (platforms without a native menu bar, or on request).
     pub in_window_menu: bool,
     pub start_tab: bool,
+    /// Interface size, on top of the operating system's display scaling (1 = 100 %).
+    pub ui_scale: f32,
     pub dialog: Option<String>,
     pub history_lines: usize,
     /// Interface theme: "system" (follow the OS light/dark appearance), "light" or "dark".
@@ -239,6 +247,7 @@ impl Default for UiState {
             // AutoCAD hides the menu bar under the ribbon (MENUBAR 0).
             in_window_menu: false,
             start_tab: false,
+            ui_scale: 1.0,
             dialog: None,
             history_lines: 3,
             theme: theme::ThemePref::default(),
@@ -326,6 +335,8 @@ pub struct CadApp {
     shown_theme: Option<egui::Theme>,
     /// Whether the last applied theme was handed to egui as the System preference.
     shown_follows_system: bool,
+    /// The high-contrast palette was applied (with `shown_theme`).
+    shown_contrast: bool,
     /// Whether egui was last told to animate (`None` until the first frame).
     shown_animations: Option<bool>,
     pub frame_ms: f64,
@@ -411,6 +422,7 @@ impl CadApp {
             agent_run: None,
             shown_theme: None,
             shown_follows_system: false,
+            shown_contrast: false,
             shown_animations: None,
             frame_ms: 0.0,
             quit_requested: false,
@@ -848,14 +860,22 @@ impl CadApp {
         }
         // Resolved every frame, so a System choice follows the OS appearance live (winit and the
         // browser report changes as input); the saved choice itself never changes here.
+        // Interface size apart from the OS display scaling.
+        let scale = clamp_ui_scale(self.ui.ui_scale);
+        if (ctx.zoom_factor() - scale).abs() > 1e-4 {
+            ctx.set_zoom_factor(scale);
+        }
         let shown = self.ui.theme.resolve(ctx.system_theme());
+        let contrast = self.ui.theme == theme::ThemePref::HighContrast;
         theme::set_active(shown);
+        theme::set_high_contrast(contrast);
         theme::set_canvas(self.options.canvas());
         let follows_system = self.ui.theme == theme::ThemePref::System;
-        if self.shown_theme != Some(shown) || self.shown_follows_system != follows_system {
+        if self.shown_theme != Some(shown) || self.shown_follows_system != follows_system || self.shown_contrast != contrast {
             theme::apply(ctx, shown, follows_system);
             self.shown_theme = Some(shown);
             self.shown_follows_system = follows_system;
+            self.shown_contrast = contrast;
         }
         // Resolved every frame too, so a System choice follows the OS setting live.
         let animate = self.shows_animations();

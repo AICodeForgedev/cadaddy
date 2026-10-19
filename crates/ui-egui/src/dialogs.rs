@@ -205,14 +205,15 @@ fn tracking_options(ui: &mut egui::Ui, s: &mut cadaddy_engine::Settings) {
     }
     let mut additional = s.polar_flags & polarmode::ADDITIONAL != 0;
     ui.horizontal(|ui| {
-        if ui.checkbox(&mut additional, crate::tl!("Additional angles")).changed() {
+        let check = ui.checkbox(&mut additional, crate::tl!("Additional angles"));
+        if check.changed() {
             s.polar_flags ^= polarmode::ADDITIONAL;
         }
         // The list as typed (degrees separated by `;`), kept while it doesn't parse yet.
         let id = ui.id().with("polaraddang");
         let shown = cadaddy_engine::sysvars::format_angle_list(&s.polaraddang);
         let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| shown.clone());
-        let resp = ui.add_enabled(additional, egui::TextEdit::singleline(&mut text).desired_width(140.0));
+        let resp = ui.add_enabled(additional, egui::TextEdit::singleline(&mut text).desired_width(140.0)).labelled_by(check.id);
         if resp.changed()
             && let Some(angles) = cadaddy_engine::sysvars::parse_angle_list(&text)
         {
