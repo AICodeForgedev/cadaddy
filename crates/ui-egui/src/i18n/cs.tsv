@@ -2002,3 +2002,13 @@ menu	Modify	Modifikace
 	Read MEP Runs	Načíst rozvody TZB
 	Model Clashes	Kolize modelu
 	MEP Systems	Systémy TZB
+	Undo History	Historie zpět
+	(Start)	(Začátek)
+	Click a step to undo or redo to it.	Klepnutím na krok se vrátíte nebo přejdete vpřed až k němu.
+	Nothing yet.	Zatím nic.
+	Double-click to run it again	Poklepáním spustíte znovu
+	Copy as Script	Kopírovat jako skript
+	Save Session as Script...	Uložit relaci jako skript...
+	Command History Palette	Paleta historie příkazů
+	Furnish from Plan	Zařídit podle půdorysu
+	Classify Plan	Rozpoznat výkres

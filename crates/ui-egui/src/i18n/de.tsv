@@ -1829,3 +1829,13 @@
 	Read MEP Runs	TGA-Leitungen einlesen
 	Model Clashes	Modellkollisionen
 	MEP Systems	TGA-Systeme
+	Undo History	Rückgängig-Verlauf
+	(Start)	(Anfang)
+	Click a step to undo or redo to it.	Klicken Sie auf einen Schritt, um bis dorthin rückgängig zu machen oder wiederherzustellen.
+	Nothing yet.	Noch nichts.
+	Double-click to run it again	Doppelklicken, um es erneut auszuführen
+	Copy as Script	Als Skript kopieren
+	Save Session as Script...	Sitzung als Skript speichern...
+	Command History Palette	Palette Befehlsverlauf
+	Furnish from Plan	Aus Grundriss möblieren
+	Classify Plan	Plan klassifizieren

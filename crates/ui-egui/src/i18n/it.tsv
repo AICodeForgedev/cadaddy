@@ -2022,3 +2022,13 @@ menu	Modify	Edita
 	Read MEP Runs	Leggi percorsi impiantistici
 	Model Clashes	Interferenze del modello
 	MEP Systems	Impianti
+	Undo History	Cronologia annullamenti
+	(Start)	(Inizio)
+	Click a step to undo or redo to it.	Fai clic su un passaggio per annullare o ripetere fino a esso.
+	Nothing yet.	Ancora niente.
+	Double-click to run it again	Fai doppio clic per eseguirlo di nuovo
+	Copy as Script	Copia come script
+	Save Session as Script...	Salva sessione come script...
+	Command History Palette	Tavolozza cronologia comandi
+	Furnish from Plan	Arreda dalla pianta
+	Classify Plan	Classifica pianta

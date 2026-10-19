@@ -157,6 +157,9 @@ pub struct DisplayList {
     /// Plots: outline-font glyphs that a plotter can write as text instead of drawing the
     /// filled outline primitive they stand for ([`PlotText::prim`]), in drawing order.
     pub texts: Vec<PlotText>,
+    /// Plots: texts drawn in a stroke font (as lines), for a hidden searchable copy (as a PDF
+    /// plotter writes for SHX lettering), in drawing order.
+    pub words: Vec<PlotWords>,
     pub bounds: Bounds2,
     /// The paper sheet when the list was built for a layout (paper space); the UI draws the
     /// white sheet, its shadow and the printable-area outline from it.
@@ -184,6 +187,19 @@ pub struct PlotText {
     pub bounds: Bounds2,
     /// The glyph; its origin and em axes are in world coordinates.
     pub glyph: cadaddy_fonts::TextGlyph,
+}
+
+/// A text drawn as strokes, for plots that add an invisible searchable copy of it: the words,
+/// where they start (the lower left of what was drawn), their direction and height, in world
+/// coordinates, and the first primitive drawn for them (whose layer they are on).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlotWords {
+    pub text: String,
+    pub origin: Vec2,
+    /// Unit vector along the baseline.
+    pub dir: Vec2,
+    pub height: f64,
+    pub prim: u32,
 }
 
 impl PlotText {
@@ -504,6 +520,25 @@ impl Builder<'_> {
         });
     }
     /// Shaped text: strokes as polylines; TrueType glyphs filled (TEXTFILL) or outlined.
+    /// Plots: note a text drawn as strokes from primitive `at` on (see [`DisplayList::words`]).
+    fn words(&mut self, ctx: &Ctx, at: usize, text: &str, rotation: f64, height: f64) {
+        if !self.plotting || text.trim().is_empty() || self.list.prims.len() <= at || self.list.words.len() >= 100_000 {
+            return;
+        }
+        let b =
+            self.list.prims.get(at..).map_or(Bounds2::EMPTY, |ps| {
+                ps.iter().fold(Bounds2::EMPTY, |b, p| b.union(&Bounds2::from_points(self.list.points(p).iter().copied())))
+            });
+        let dir = ctx.xf.apply_vec(Vec2::from_angle(rotation));
+        let len = dir.len();
+        let (Ok(prim), false) = (u32::try_from(at), b.is_empty() || len.is_nan() || len <= 1e-12) else { return };
+        let dir = dir * (1.0 / len);
+        // Upright text starts at the lower left of what was drawn; turned text at its corner on
+        // the baseline side.
+        let origin = if dir.y.abs() < 1e-9 && dir.x > 0.0 { b.min } else { b.center() - dir * (b.width().max(b.height()) / 2.0) };
+        self.list.words.push(PlotWords { text: text.chars().take(1000).collect(), origin, dir, height: height * len, prim });
+    }
+
     fn shaped(&mut self, ctx: &Ctx, color: Ink, lw: f32, sh: &cadaddy_fonts::Shaped) {
         for s in &sh.strokes {
             self.polyline(ctx, color, lw, s);
@@ -1320,17 +1355,18 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 return;
             }
             let mut vals = field_values(ctx.d, e.handle);
-            match with_fields(&t.value, &mut vals, b.opts.field_shading) {
+            let text: String = match with_fields(&t.value, &mut vals, b.opts.field_shading) {
                 Some(marked) => {
                     text_field_boxes(b, ctx, t, &marked);
-                    let plain: String = marked.chars().filter(|c| *c != cadaddy_fonts::FIELD_ON && *c != cadaddy_fonts::FIELD_OFF).collect();
-                    let (sh, _) = place_text_entity(ctx.d, t, &plain);
-                    b.shaped(ctx, rgb, lw, &sh);
+                    marked.chars().filter(|c| *c != cadaddy_fonts::FIELD_ON && *c != cadaddy_fonts::FIELD_OFF).collect()
                 }
-                None => {
-                    let (sh, _) = place_text_entity(ctx.d, t, &t.value);
-                    b.shaped(ctx, rgb, lw, &sh);
-                }
+                None => t.value.clone(),
+            };
+            let (sh, _) = place_text_entity(ctx.d, t, &text);
+            let at = b.list.prims.len();
+            b.shaped(ctx, rgb, lw, &sh);
+            if !sh.strokes.is_empty() {
+                b.words(ctx, at, &text, t.rotation, t.height);
             }
         }
         EntityKind::AttDef(a) => {
@@ -1349,7 +1385,14 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 let layer_color = ctx.layer_color(layer).unwrap_or(Color::Index(7));
                 mtext_mask(b, ctx, t, bg, rgb, layer_color);
             }
+            let at = b.list.prims.len();
+            let glyphs = b.list.texts.len();
             mtext(b, ctx, t, rgb, lw);
+            // Drawn in a stroke font: no glyph of it became text.
+            if b.list.texts.len() == glyphs {
+                let plain = cadaddy_fonts::plain_text(&t.contents).split_whitespace().collect::<Vec<_>>().join(" ");
+                b.words(ctx, at, &plain, t.rotation, t.height);
+            }
         }
         EntityKind::Insert(ins) => insert(b, ctx, e, ins, rgb, lw),
         EntityKind::Dimension(dm) => {

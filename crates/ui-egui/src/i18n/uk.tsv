@@ -2111,3 +2111,13 @@
 	Read MEP Runs	Прочитати траси інженерних мереж
 	Model Clashes	Колізії моделі
 	MEP Systems	Інженерні системи
+	Undo History	Журнал скасування
+	(Start)	(Початок)
+	Click a step to undo or redo to it.	Клацніть крок, щоб скасувати або повернути дії до нього.
+	Nothing yet.	Поки що порожньо.
+	Double-click to run it again	Двічі клацніть, щоб виконати знову
+	Copy as Script	Копіювати як сценарій
+	Save Session as Script...	Зберегти сеанс як сценарій...
+	Command History Palette	Палітра журналу команд
+	Furnish from Plan	Розставити меблі за планом
+	Classify Plan	Розпізнати план
