@@ -1,7 +1,7 @@
 //! Inquiry: DIST, ID, LIST, AREA, drawing inspection for agents.
 
-use cadcraft_doc::{EntityKind, Handle};
-use cadcraft_geom::{Polyline, Vec2};
+use cadcraft_doc::{Entity, EntityKind, Handle};
+use cadcraft_geom::{Polyline, Vec2, Vec3};
 use serde_json::{Value, json};
 
 use super::*;
@@ -9,6 +9,7 @@ use crate::units::{format_angle, format_distance};
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 mod regions;
+mod shapes;
 
 pub fn specs() -> Vec<CommandSpec> {
     let mut v = vec![
@@ -41,8 +42,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("status", "Status", run_status).menu(&["Tools", "Inquiry", "Status"]).noundo(),
         CommandSpec::new("drawing.inspect", "Inspect Drawing", run_inspect).params("{entities?: bool, limit?: n}").noundo(),
         CommandSpec::new("entities", "Query Entities", run_entities)
-            .params("{type?, layer?, window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
+            .params("{type?, layer?, selected?: bool (default false; true = current selection in active space), window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
             .noundo(),
+        CommandSpec::new("shapes", "Analyze Shapes", shapes::run).params(shapes::PARAMS).noundo(),
         CommandSpec::new("texts", "Query Texts", run_texts)
             .params("{contains?: text (any case), layer?, window?: [[x,y],[x,y]] (by insertion point), limit? (default 200), offset?} → {count (all matches), returned, offset, texts: [{handle, type, layer, text, at, height, rotation (degrees), style, tag? (attributes)}]}: the readable text of TEXT, MTEXT (formatting removed), block attributes and multileaders")
             .noundo(),
@@ -71,28 +73,119 @@ fn fmt_a(s: &Session, v: f64) -> String {
     format_angle(v, h.0, h.1)
 }
 
-fn dist_text(s: &Session, a: Vec2, b: Vec2) -> String {
+/// The angle of `d` up from the XY plane.
+fn angle_from_xy(d: Vec3) -> f64 {
+    d.z.atan2(d.xy().len())
+}
+
+fn dist_text(s: &Session, a: Vec3, b: Vec3) -> String {
     let d = b - a;
     format!(
-        "Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0\nDelta X = {},  Delta Y = {},   Delta Z = {}",
-        fmt_d(s, a.dist(b)),
-        fmt_a(s, d.angle()),
+        "Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = {}\nDelta X = {},  Delta Y = {},   Delta Z = {}",
+        fmt_d(s, (b - a).len()),
+        fmt_a(s, d.xy().angle()),
+        fmt_a(s, angle_from_xy(d)),
         fmt_d(s, d.x),
         fmt_d(s, d.y),
-        fmt_d(s, 0.0)
+        fmt_d(s, d.z)
     )
 }
 
+/// A point parameter with its Z: the third number when given, else the Z of what is drawn
+/// there ([`z_at`]).
+fn point3_req(s: &Session, cmd: &str, p: &Value, key: &str) -> Result<Vec3> {
+    let q = point_req(cmd, p, key)?;
+    let z = p.get(key).and_then(|v| v.get(2)).and_then(Value::as_f64).filter(|z| z.is_finite());
+    Ok(Vec3::new(q.x, q.y, z.unwrap_or_else(|| z_at(s, q))))
+}
+
 fn run_dist(s: &mut Session, p: &Value) -> Result<Value> {
-    let a = point_req("dist", p, "p1")?;
-    let b = point_req("dist", p, "p2")?;
-    Ok(json!({ "distance": a.dist(b), "angle": (b - a).angle().to_degrees(), "dx": b.x - a.x, "dy": b.y - a.y, "message": dist_text(s, a, b) }))
+    let a = point3_req(s, "dist", p, "p1")?;
+    let b = point3_req(s, "dist", p, "p2")?;
+    let d = b - a;
+    Ok(json!({
+        "distance": d.len(),
+        "angle": d.xy().angle().to_degrees(),
+        "angleFromXY": angle_from_xy(d).to_degrees(),
+        "dx": d.x,
+        "dy": d.y,
+        "dz": d.z,
+        "message": dist_text(s, a, b),
+    }))
+}
+
+fn id_text(s: &Session, a: Vec3) -> String {
+    format!("X = {}     Y = {}     Z = {}", fmt_d(s, a.x), fmt_d(s, a.y), fmt_d(s, a.z))
 }
 
 fn run_id(s: &mut Session, p: &Value) -> Result<Value> {
-    let a = point_req("id", p, "at")?;
-    s.last_point = a;
-    Ok(json!({ "x": a.x, "y": a.y, "message": format!("X = {}     Y = {}     Z = {}", fmt_d(s, a.x), fmt_d(s, a.y), fmt_d(s, 0.0)) }))
+    let a = point3_req(s, "id", p, "at")?;
+    s.last_point = a.xy();
+    Ok(json!({ "x": a.x, "y": a.y, "z": a.z, "message": id_text(s, a) }))
+}
+
+/// The Z of what is drawn at `p`: the object a pick finds there, at that point, or the current
+/// elevation (ELEVATION) when there is none. Points come from the canvas in 2D; the object
+/// under a snapped point gives its Z back, as AutoCAD's ID and DIST report a snapped point's.
+pub(crate) fn z_at(s: &Session, p: Vec2) -> f64 {
+    let Ok(d) = s.doc() else { return 0.0 };
+    let elevation = d.header.f64("ELEVATION", 0.0);
+    let ap = s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5;
+    let space = s.space();
+    crate::select::pick(d, &space, p, ap)
+        .and_then(|h| d.entity(h))
+        .and_then(|e| entity_z(e, p))
+        .filter(|z| z.is_finite())
+        .unwrap_or(if elevation.is_finite() { elevation } else { 0.0 })
+}
+
+/// The Z of `e` at the point of it nearest `p` (seen from above), when it has one there.
+fn entity_z(e: &Entity, p: Vec2) -> Option<f64> {
+    let on_segment = |a: Vec3, b: Vec3| {
+        let d = b.xy() - a.xy();
+        let l2 = d.dot(d);
+        let t = if l2 > 0.0 { ((p - a.xy()).dot(d) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        (a.z + (b.z - a.z) * t, (a.xy() + d * t).dist(p))
+    };
+    let along = |pts: &[Vec3], closed: bool| {
+        let n = pts.len();
+        let segs = if closed { n } else { n.saturating_sub(1) };
+        (0..segs)
+            .filter_map(|i| Some(on_segment(*pts.get(i)?, *pts.get((i + 1) % n)?)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(z, _)| z)
+            .or_else(|| pts.first().map(|q| q.z))
+    };
+    let n = e.common.extrusion;
+    let plan = n.x.abs() < 1e-9 && n.y.abs() < 1e-9 && n.z != 0.0;
+    match &e.kind {
+        EntityKind::Point(q) => Some(q.p.z),
+        EntityKind::Line(l) => Some(on_segment(l.a, l.b).0),
+        EntityKind::Polyline3d(pl) => along(&pl.points, pl.closed),
+        // Elevation is in the polyline's OCS: down Z for a mirrored one.
+        EntityKind::LwPolyline(pl) if plan => Some(if n.z < 0.0 { -pl.elevation } else { pl.elevation }),
+        // Read in world coordinates already.
+        EntityKind::Circle(c) => Some(c.center.z),
+        EntityKind::Arc(a) => Some(a.center.z),
+        EntityKind::Text(t) | EntityKind::AttDef(cadcraft_doc::Attrib { text: t, .. }) => Some(t.insert.z),
+        EntityKind::MText(t) => Some(t.insert.z),
+        EntityKind::Insert(i) => Some(i.insert.z),
+        EntityKind::Face3d(f) => face_z(&f.corners, p).or_else(|| along(&f.corners, true)),
+        _ => None,
+    }
+}
+
+/// The Z at `p` on a 3D face: on the plane of the triangle of its corners that holds `p`.
+fn face_z(c: &[Vec3; 4], p: Vec2) -> Option<f64> {
+    let tri = |a: Vec3, b: Vec3, d: Vec3| -> Option<f64> {
+        let n = (b - a).cross(d - a);
+        if n.z.abs() < 1e-12 * (1.0 + n.len()) {
+            return None;
+        }
+        let inside = cadcraft_geom::point_in_polygon(&[a.xy(), b.xy(), d.xy()], p);
+        inside.then(|| a.z - (n.x * (p.x - a.x) + n.y * (p.y - a.y)) / n.z)
+    };
+    tri(c[0], c[1], c[2]).or_else(|| if c[3] == c[2] { None } else { tri(c[0], c[2], c[3]) })
 }
 
 fn list_text(s: &Session, h: Handle) -> String {
@@ -112,23 +205,25 @@ fn list_text(s: &Session, h: Handle) -> String {
                 "\n              from point, X={}  Y={}  Z={}\n                to point, X={}  Y={}  Z={}",
                 fmt_d(s, l.a.x),
                 fmt_d(s, l.a.y),
-                fmt_d(s, 0.0),
+                fmt_d(s, l.a.z),
                 fmt_d(s, l.b.x),
                 fmt_d(s, l.b.y),
-                fmt_d(s, 0.0)
+                fmt_d(s, l.b.z)
             ));
             t.push_str(&format!(
                 "\n          Length = {},  Angle in XY Plane = {}",
-                fmt_d(s, l.a.xy().dist(l.b.xy())),
+                fmt_d(s, (l.b - l.a).len()),
                 fmt_a(s, l.a.xy().angle_to(l.b.xy()))
             ));
+            let d = l.b - l.a;
+            t.push_str(&format!("\n          Delta X = {},  Delta Y = {},  Delta Z = {}", fmt_d(s, d.x), fmt_d(s, d.y), fmt_d(s, d.z)));
         }
         EntityKind::Circle(c) => {
             t.push_str(&format!(
                 "\n            center point, X={}  Y={}  Z={}\n            radius {}\n     circumference {}\n             area {}",
                 fmt_d(s, c.center.x),
                 fmt_d(s, c.center.y),
-                fmt_d(s, 0.0),
+                fmt_d(s, c.center.z),
                 fmt_d(s, c.radius),
                 fmt_d(s, c.radius * cadcraft_geom::TAU),
                 fmt_d(s, c.radius * c.radius * cadcraft_geom::PI)
@@ -139,7 +234,7 @@ fn list_text(s: &Session, h: Handle) -> String {
                 "\n            center point, X={}  Y={}  Z={}\n            radius {}\n            start angle {}\n              end angle {}",
                 fmt_d(s, a.center.x),
                 fmt_d(s, a.center.y),
-                fmt_d(s, 0.0),
+                fmt_d(s, a.center.z),
                 fmt_d(s, a.radius),
                 fmt_a(s, a.start),
                 fmt_a(s, a.end)
@@ -153,16 +248,20 @@ fn list_text(s: &Session, h: Handle) -> String {
             } else {
                 t.push_str(&format!("\n           length   {}", fmt_d(s, pl.len())));
             }
+            // The elevation, in world Z (down Z for a mirrored polyline).
+            let z = entity_z(e, Vec2::ZERO).unwrap_or(p.elevation);
+            t.push_str(&format!("\n        elevation   {}", fmt_d(s, z)));
             for v in &p.vertices {
-                t.push_str(&format!("\n          at point  X={}  Y={}  Z={}", fmt_d(s, v.p.x), fmt_d(s, v.p.y), fmt_d(s, 0.0)));
+                t.push_str(&format!("\n          at point  X={}  Y={}  Z={}", fmt_d(s, v.p.x), fmt_d(s, v.p.y), fmt_d(s, z)));
             }
         }
         EntityKind::Text(tx) => {
             t.push_str(&format!(
-                "\n            Style = \"{}\"\n       start point, X={}  Y={}\n          height {}\n           text {}\n        rotation angle {}",
+                "\n            Style = \"{}\"\n       start point, X={}  Y={}  Z={}\n          height {}\n           text {}\n        rotation angle {}",
                 tx.style,
                 fmt_d(s, tx.insert.x),
                 fmt_d(s, tx.insert.y),
+                fmt_d(s, tx.insert.z),
                 fmt_d(s, tx.height),
                 tx.value,
                 fmt_a(s, tx.rotation)
@@ -183,7 +282,7 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "message": texts.join("\n\n") }))
 }
 
-fn area_of(pts: &[Vec2]) -> (f64, f64) {
+pub(super) fn area_of(pts: &[Vec2]) -> (f64, f64) {
     let a = cadcraft_geom::shoelace(pts).abs();
     let n = pts.len();
     let per: f64 = (0..n).filter_map(|i| Some(pts.get(i)?.dist(*pts.get((i + 1) % n)?))).sum();
@@ -205,14 +304,16 @@ fn area_text(s: &Session, a: f64, per: f64) -> String {
 }
 
 /// Area and perimeter of a closed object (AREA's Object option).
-fn object_area(s: &Session, h: Handle) -> Result<(f64, f64)> {
+pub(super) fn object_area(s: &Session, h: Handle) -> Result<(f64, f64)> {
     let d = s.doc()?;
     let e = d.entity(h).ok_or_else(|| bad("area", "no such object"))?;
     Ok(match &e.kind {
         EntityKind::Circle(c) => (c.radius * c.radius * cadcraft_geom::PI, c.radius * cadcraft_geom::TAU),
         EntityKind::LwPolyline(pl) => {
+            // An open polyline is measured as if closed for the area, but its perimeter is its own length (AutoCAD's AREA help).
             let g = Polyline { vertices: pl.vertices.clone(), closed: true };
-            (g.area().abs(), g.len())
+            let drawn = Polyline { vertices: pl.vertices.clone(), closed: pl.closed };
+            (g.area().abs(), drawn.len())
         }
         EntityKind::Ellipse(el) => {
             let arc = cadcraft_geom::Ellipse { center: el.center.xy(), major: el.major.xy(), ratio: el.ratio, start: el.start, end: el.end };
@@ -221,7 +322,9 @@ fn object_area(s: &Session, h: Handle) -> Result<(f64, f64)> {
             }
             let a = el.major.xy().len();
             let b = a * el.ratio;
-            (cadcraft_geom::PI * a * b, cadcraft_geom::PI * (3.0 * (a + b) - ((3.0 * a + b) * (a + 3.0 * b)).sqrt()))
+            // The perimeter integrated around the ellipse, not a closed-form estimate (those
+            // fall short as the ellipse flattens: 0.3% on a 100:1 one).
+            (cadcraft_geom::PI * a * b, arc.arc_length_from(0.0, cadcraft_geom::TAU))
         }
         EntityKind::Hatch(hh) => {
             // Odd parity, as drawn: a loop nested inside an odd number of other loops is an unfilled island.
@@ -335,14 +438,17 @@ fn run_entities(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .transpose()?;
     let crossing = given("crossing").map_or(Ok(true), |v| v.as_bool().ok_or_else(|| bad(CMD, "`crossing` must be true or false")))?;
+    let selected = given("selected").map_or(Ok(false), |v| v.as_bool().ok_or_else(|| bad(CMD, "`selected` must be true or false")))?;
     let limit = count("limit", 500)?;
     let offset = count("offset", 0)?;
     let st = s.state()?;
     let d = &st.doc;
     let Some(store) = d.space(&st.space) else { return Ok(json!({ "count": 0, "returned": 0, "entities": [] })) };
     let tol = window.as_ref().map(crate::select::window_tol).unwrap_or(0.0);
+    let selection: std::collections::HashSet<Handle> = if selected { st.selection.iter().copied().collect() } else { Default::default() };
     let matches: Vec<&std::sync::Arc<cadcraft_doc::Entity>> = store
         .iter()
+        .filter(|e| !selected || selection.contains(&e.handle))
         .filter(|e| ty.as_ref().is_none_or(|t| e.kind.type_name().to_ascii_lowercase() == *t || e.kind.dxf_name().to_ascii_lowercase() == *t))
         .filter(|e| layer.as_ref().is_none_or(|l| e.common.layer.to_ascii_lowercase() == *l))
         .filter(|e| window.as_ref().is_none_or(|w| crate::select::in_window(d, e, None, w, crossing, tol)))
@@ -427,7 +533,7 @@ fn run_texts(s: &mut Session, p: &Value) -> Result<Value> {
 mod count;
 
 #[derive(Default)]
-struct DistM {
+pub(super) struct DistM {
     first: Option<Vec2>,
     first_source: Option<crate::snap::ViewportPoint>,
     /// Multiple points: the points so far, the first included.
@@ -553,7 +659,8 @@ impl Interactive for DistM {
                     (Some(first), Some(second)) if first.viewport == second.viewport => (first.point, second.point),
                     _ => (a, b),
                 };
-                let t = dist_text(s, a, b);
+                let (za, zb) = if self.first_source.is_some() || s.picked_viewport.is_some() { (0.0, 0.0) } else { (z_at(s, a), z_at(s, b)) };
+                let t = dist_text(s, Vec3::new(a.x, a.y, za), Vec3::new(b.x, b.y, zb));
                 for l in t.lines() {
                     s.echo(l.to_string());
                 }
@@ -600,7 +707,7 @@ impl Interactive for IdM {
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Input::Point(p) = i {
-            let m = format!("X = {}     Y = {}     Z = {}", fmt_d(s, p.x), fmt_d(s, p.y), fmt_d(s, 0.0));
+            let m = id_text(s, Vec3::new(p.x, p.y, z_at(s, p)));
             s.echo(m);
         }
         Ok(Step::Done)
@@ -662,7 +769,7 @@ enum AreaMode {
 }
 
 #[derive(Default)]
-struct AreaM {
+pub(super) struct AreaM {
     pts: Vec<Vec2>,
     mode: AreaMode,
     total: f64,

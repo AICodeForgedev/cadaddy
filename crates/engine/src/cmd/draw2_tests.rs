@@ -121,6 +121,28 @@ fn arc_continue_from_last_line() {
     assert!(near(as_arc(&last(&s)).center, 0.0, 1.0));
 }
 
+#[test]
+fn arc_continue_from_last_picked_end_of_three_point_arc() {
+    // (picked points, end of the continuation, its center): both arcs leave their last
+    // picked point heading -Y, so the continuation is a quarter turn on that side.
+    let cases = [
+        // Clockwise: stored CCW, the last picked point (2,0) is the arc's start.
+        ("arc 0,0 1,1 2,0", "3,-1", (3.0, 0.0)),
+        // Counter-clockwise: the last picked point (0,0) is the arc's end.
+        ("arc 2,0 1,1 0,0", "-1,-1", (-1.0, 0.0)),
+    ];
+    for (draw, end, center) in cases {
+        let mut s = Session::new();
+        s.cmdline(draw).unwrap();
+        s.cmdline("arc").unwrap();
+        s.cmdline("").unwrap();
+        s.cmdline(end).unwrap();
+        let a = as_arc(&last(&s));
+        assert!(near(a.center, center.0, center.1), "{draw}: {a:?}");
+        assert!((a.sweep() - std::f64::consts::FRAC_PI_2).abs() < 1e-6, "{draw}: reversed tangent {a:?}");
+    }
+}
+
 // ---------------- CIRCLE ----------------
 
 #[test]
@@ -348,6 +370,118 @@ fn revcloud_command_line() {
     s.cmdline("revcloud o 10,11").unwrap();
     assert!(s.running.is_none());
     assert_eq!(kinds(&s).len(), 4);
+}
+
+// ---------------- BREAKLINE ----------------
+
+fn breakline_points(s: &Session) -> Vec<(f64, f64)> {
+    match last(s) {
+        EntityKind::LwPolyline(p) => {
+            assert!(!p.closed);
+            p.vertices.iter().map(|v| ((v.p.x * 1e9).round() / 1e9, (v.p.y * 1e9).round() / 1e9)).collect()
+        }
+        k => panic!("not a polyline: {k:?}"),
+    }
+}
+
+#[test]
+fn breakline_json_symbol_size_extension_and_location() {
+    let mut s = Session::new();
+    // One polyline: the line to the symbol, the zigzag centred on the midpoint, the rest of the line.
+    s.execute("breakline", &json!({"p1": [0, 0], "p2": [10, 0]})).unwrap();
+    assert_eq!(s.doc().unwrap().model.len(), 1);
+    assert_eq!(breakline_points(&s), vec![(0.0, 0.0), (4.5, 0.0), (4.75, 0.5), (5.25, -0.5), (5.5, 0.0), (10.0, 0.0)]);
+    // Size scales the symbol, Extension runs the line past both points, `at` is projected onto the line.
+    s.execute("breakline", &json!({"p1": [0, 0], "p2": [10, 0], "size": 2, "extension": 1, "at": [2, 3]})).unwrap();
+    assert_eq!(breakline_points(&s), vec![(-1.0, 0.0), (1.0, 0.0), (1.5, 1.0), (2.5, -1.0), (3.0, 0.0), (11.0, 0.0)]);
+    // A location past the end keeps the symbol on the line; its end then is the line's end.
+    s.execute("breakline", &json!({"p1": [0, 0], "p2": [10, 0], "size": 2, "at": [100, 0]})).unwrap();
+    assert_eq!(breakline_points(&s), vec![(0.0, 0.0), (8.0, 0.0), (8.5, 1.0), (9.5, -1.0), (10.0, 0.0)]);
+    // The symbol turns with the line.
+    s.execute("breakline", &json!({"p1": [0, 0], "p2": [0, 10]})).unwrap();
+    assert_eq!(breakline_points(&s), vec![(0.0, 0.0), (0.0, 4.5), (-0.5, 4.75), (0.5, 5.25), (0.0, 5.5), (0.0, 10.0)]);
+    // DIMSCALE scales the size.
+    s.doc_mut().unwrap().header.set_f64("DIMSCALE", 4.0);
+    s.execute("breakline", &json!({"p1": [0, 0], "p2": [10, 0]})).unwrap();
+    assert_eq!(breakline_points(&s), vec![(0.0, 0.0), (3.0, 0.0), (4.0, 2.0), (6.0, -2.0), (7.0, 0.0), (10.0, 0.0)]);
+
+    let n = s.doc().unwrap().model.len();
+    for p in [
+        json!({"p1": [0, 0], "p2": [3, 0]}),
+        json!({"p1": [0, 0], "p2": [0, 0]}),
+        json!({"p1": [0, 0], "p2": [10, 0], "size": 0}),
+        json!({"p1": [0, 0], "p2": [10, 0], "extension": -1}),
+        json!({"p1": [0, 0], "p2": [10, 0], "block": "NOPE"}),
+        json!({"p1": [0, 0], "p2": [1e308, 0], "extension": 1e308}),
+    ] {
+        assert!(s.execute("breakline", &p).is_err(), "{p}");
+    }
+    assert_eq!(s.doc().unwrap().model.len(), n);
+}
+
+#[test]
+fn breakline_block_symbol_runs_between_its_defpoints() {
+    let mut s = Session::new();
+    s.execute("layer.current", &json!({"name": "Defpoints"})).unwrap();
+    s.execute("point", &json!({"at": [0, 0]})).unwrap();
+    s.execute("point", &json!({"at": [2, 0]})).unwrap();
+    s.execute("layer.current", &json!({"name": "0"})).unwrap();
+    // Drawn in pieces, one of them backwards: they are chained from one point to the other.
+    s.execute("line", &json!({"points": [[2, 0], [1, 1]]})).unwrap();
+    s.execute("line", &json!({"points": [[0, 0], [1, 1]]})).unwrap();
+    let hs: Vec<String> = s.doc().unwrap().model.iter().map(|e| e.handle.hex()).collect();
+    s.execute("block", &json!({"name": "PEAK", "base": [0, 0], "handles": hs, "keep": "delete"})).unwrap();
+    s.execute("breakline", &json!({"p1": [0, 0], "p2": [10, 0], "block": "PEAK"})).unwrap();
+    assert_eq!(breakline_points(&s), vec![(0.0, 0.0), (4.0, 0.0), (5.0, 1.0), (6.0, 0.0), (10.0, 0.0)]);
+    // Without two Defpoints points the block is refused.
+    s.execute("line", &json!({"points": [[0, 5], [1, 5]]})).unwrap();
+    let l = s.doc().unwrap().model.last().unwrap().handle.hex();
+    s.execute("block", &json!({"name": "BARE", "base": [0, 0], "handles": [l], "keep": "delete"})).unwrap();
+    assert!(s.execute("breakline", &json!({"p1": [0, 0], "p2": [10, 0], "block": "BARE"})).is_err());
+
+    s.cmdline("breakline b PEAK 0,0 10,0").unwrap();
+    s.cmdline("").unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert_eq!(breakline_points(&s).len(), 5);
+    s.cmdline("breakline b nope").unwrap();
+    assert!(s.prompt_text().contains("block"), "an unknown block asks again: {}", s.prompt_text());
+    s.cmdline(".").unwrap();
+    s.cmdline("0,0 10,0").unwrap();
+    s.cmdline("").unwrap();
+    assert_eq!(breakline_points(&s).len(), 6, "`.` goes back to the built-in symbol");
+}
+
+#[test]
+fn breakline_command_line_prompts_options_and_undo() {
+    let mut s = Session::new();
+    s.start("breakline").unwrap();
+    assert!(s.prompt_text().contains("Specify first point for breakline"), "{}", s.prompt_text());
+    assert!(s.prompt_text().contains("Block") && s.prompt_text().contains("Size") && s.prompt_text().contains("Extension"), "{}", s.prompt_text());
+    s.cmdline("0,0").unwrap();
+    assert!(s.prompt_text().contains("Specify second point for breakline"), "{}", s.prompt_text());
+    // Too short for the symbol: asked again.
+    s.cmdline("0.5,0").unwrap();
+    assert!(s.prompt_text().contains("second point"), "{}", s.prompt_text());
+    s.cmdline("10,0").unwrap();
+    assert!(s.prompt_text().contains("Specify location for break symbol") && s.prompt_text().contains("Midpoint"), "{}", s.prompt_text());
+    assert!(matches!(s.preview(Vec2::new(3.0, 1.0)).first().map(|e| &e.kind), Some(EntityKind::LwPolyline(p)) if p.vertices.len() == 6));
+    s.cmdline("").unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert_eq!(breakline_points(&s), vec![(0.0, 0.0), (4.5, 0.0), (4.75, 0.5), (5.25, -0.5), (5.5, 0.0), (10.0, 0.0)]);
+    assert_eq!(s.state().unwrap().undo.len(), 1, "one undo step");
+
+    // Size and Extension at the first prompt, a picked location; remembered for the next time.
+    s.cmdline("breakline s 2 e 1 0,0 10,0 2,3").unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert_eq!(breakline_points(&s), vec![(-1.0, 0.0), (1.0, 0.0), (1.5, 1.0), (2.5, -1.0), (3.0, 0.0), (11.0, 0.0)]);
+    assert_eq!(s.state().unwrap().undo.len(), 2);
+    s.cmdline("breakline s").unwrap();
+    assert!(s.prompt_text().contains("2.0000"), "{}", s.prompt_text());
+    s.cmdline("0").unwrap();
+    assert!(s.prompt_text().contains("size"), "zero is refused: {}", s.prompt_text());
+    s.cancel();
+    s.undo().unwrap();
+    assert_eq!(s.doc().unwrap().model.len(), 1, "undo removes the whole breakline");
 }
 
 // ---------------- WIPEOUT ----------------
@@ -622,6 +756,7 @@ fn new_draw_commands_survive_garbage_input() {
         "revcloud.polygonal",
         "revcloud.freehand",
         "wipeout",
+        "breakline",
         "3dpoly",
         "mline",
         "helix",

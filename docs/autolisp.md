@@ -78,7 +78,9 @@ reached", malformed source is a reader error, and every built-in checks its argu
 - **No-ops:** `vl-load-com gc redraw`; `ver`
 
 Entity lists use the DXF group codes of CADCraft's DXF files: what `entget` returns is what a
-DXF file holds for the object, plus `-1` (its name) and `410` (its layout).
+DXF file holds for the object, plus `-1` (its name) and `410` (its layout). Angles (groups 50–58)
+are in radians, as in AutoCAD, where the file holds degrees; `entmake`, `entmod` and `ssget`
+filters take radians too.
 
 ## Testing against the corpus
 

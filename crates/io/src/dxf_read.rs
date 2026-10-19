@@ -1341,6 +1341,9 @@ fn header(tags: &[Tag], d: &mut Drawing) {
                 },
                 // $DIMJOGANG is in radians; the variable (like the style) holds degrees.
                 HVal::Real(r) if name == "DIMJOGANG" => HVal::Real((r.to_degrees() * 1e9).round() / 1e9),
+                // $ANGBASE is in degrees (a drawing measured from north has 90.0); the variable
+                // holds radians.
+                HVal::Real(r) if name == "ANGBASE" => HVal::Real(r.to_radians()),
                 hv => hv,
             };
             d.header.set(&name, hv);
@@ -1655,6 +1658,8 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     }
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
+    // A file without $INSUNITS declares no units (#1209); only new drawings take the template's.
+    d.header.set_i64("INSUNITS", 0);
     let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
     let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Entity)>, i64)> = Vec::new();
     let mut layout_objs: Vec<(String, u32, String, PageSetup)> = Vec::new();
@@ -2130,7 +2135,9 @@ fn dimassoc(d: &mut Drawing, tags: &[Tag]) {
         let Some(main) = r.s(331).and_then(|h| Handle::parse_hex(&h)) else { continue };
         let other = r.s(332).and_then(|h| Handle::parse_hex(&h));
         let at = r.p(10).xy();
-        if let Some(snap) = infer_snap(d, r.i(72).unwrap_or(0), main, other, at) {
+        // A polyline's segment (subentity type 73 = 2, edge; 91 its 1-based index).
+        let segment = r.i(91).filter(|k| *k >= 1 && r.i(73) == Some(2));
+        if let Some(snap) = infer_snap(d, r.i(72).unwrap_or(0), main, other, at, segment) {
             links.push(DimAssoc { point: (*point).to_string(), handle: main, snap });
         }
     }
@@ -2143,9 +2150,18 @@ fn dimassoc(d: &mut Drawing, tags: &[Tag]) {
     }
 }
 
-/// A CADCraft snap from a DIMASSOC object snap type and point.
-fn infer_snap(d: &Drawing, osnap: i64, main: Handle, other: Option<Handle>, at: Vec2) -> Option<AssocSnap> {
+/// A CADCraft snap from a DIMASSOC object snap type and point, and for a polyline the segment
+/// the point is an end of: AutoCAD writes no usable point there (10/20 are 0, #1049), the segment
+/// and the osnap (1 its end, 13 its start) name the vertex.
+fn infer_snap(d: &Drawing, osnap: i64, main: Handle, other: Option<Handle>, at: Vec2, segment: Option<i64>) -> Option<AssocSnap> {
     let e = d.entity(main)?;
+    if let (EntityKind::LwPolyline(p), Some(k), 1 | 13) = (&e.kind, segment, osnap) {
+        let n = p.vertices.len();
+        let segments = if p.closed { n } else { n.saturating_sub(1) };
+        let k = usize::try_from(k).ok().filter(|k| *k <= segments)?;
+        let index = if osnap == 13 { k - 1 } else { k % n };
+        return Some(AssocSnap::Vertex { index });
+    }
     Some(match osnap {
         1 | 13 => match &e.kind {
             EntityKind::Line(l) => {
@@ -2193,6 +2209,9 @@ fn page_setup(t: &T) -> PageSetup {
         p.height_mm = w.max(h);
     }
     p.margins_mm = [mm(40, p.margins_mm[0]), mm(41, p.margins_mm[1]), mm(42, p.margins_mm[2]), mm(43, p.margins_mm[3])];
+    // Plot paper units 1: millimetres. 0 (inches) is left to MEASUREMENT: earlier CADCraft
+    // versions wrote 0 for every layout.
+    p.paper_mm = t.i(72) == Some(1);
     // Plot rotation 1 or 3 turns the media a quarter turn; media defined wider than tall is
     // already landscape.
     let rotated = matches!(t.i(73), Some(1 | 3));

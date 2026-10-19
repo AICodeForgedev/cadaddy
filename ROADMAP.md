@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~2 points (38% → 40% ready for real work) and ~125–190 Opus 5.5 hours away (the four failing core workflows of the [alpha gate](docs/roadmap.md#alpha-gate))
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (re-audit against main e707ab4d: why-pre-alpha text, languages, upcoming list and progress log; headline numbers not re-measured) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (HATCHEDIT boundary add/remove progress) · **Target:** Autodesk AutoCAD 2027
 
 CADCraft targets full parity with AutoCAD (2D drafting first, then annotation, layouts and
 plotting, DWG, parametrics and 3D), plus what AutoCAD doesn't have: agent control over MCP, a
@@ -96,8 +96,9 @@ catalogs (Ukrainian, Brazilian Portuguese, German, Spanish, Czech, Russian, Fren
 | Portuguese (Brazilian) | partial | 1,240 catalog rows |
 | Indonesian | none | 0% |
 | Japanese | none | 0% |
-| German | partial | 1,030 catalog rows |
-| Korean | partial | 1,235 catalog rows |
+| Greek | complete current catalog | 1,330 current source keys; independent proofreading pending |
+| German | partial | ≈ 100% of the catalog (989 rows) |
+| Korean | none | 0% |
 | Vietnamese | none | 0% |
 
 Other languages shipped: Ukrainian (1,322 rows, the reference catalog, #36), Czech (1,214), Russian (1,004), Italian (1,231) and Swedish (1,235), counted 2026-10-13; engine messages stay English. Each catalog lags the reference by 86–319 rows added since it landed ([localization-parity.md](docs/localization-parity.md)).
@@ -120,7 +121,7 @@ Ranked; detail and the full beta checklist in [docs/roadmap.md](docs/roadmap.md)
 
 | Date | Entry |
 |---|---|
-| 2026-10-13 | Re-audit against main: 102 PRs merged on 2026-10-13 alone (132 since 2026-10-12), among them REFEDIT, REFSET and REFCLOSE (#818), the Block Editor (#824, #833, #885), dynamic block references (#838, #853, #860, #878, #883), AutoLISP (#855), MLEADEREDIT/ALIGN/COLLECT (#816), the in-place MTEXT editor (#792), object transparency (#764), Hatch and Gradient dialogs (#753), Open Recent (#864), damaged DWGs opened partially (#859), ACIS data kept on save (#781), zoom and pan regenerated in the background (#903) and the Arabic, Swedish, Korean, Italian, Chinese and Spanish catalogs. Headline percentages and hours are from 2026-10-10 and were not re-measured. |
+| 2026-10-14 | HATCHEDIT adds boundaries from internal points or closed objects and removes selected loops in the dialog, command line and JSON command; associative links and undo are covered by tests. |
 | 2026-10-12 | TRIM: a pick after a closed polyline's last cut keeps only the complementary run instead of an extra circuit of the outline (#726) |
 | 2026-10-12 | HATCHEDIT refuses an explicit bad `scale` or `angle` before it edits anything, so a rejected request leaves the drawing, undo and redo as they were (#724) |
 | 2026-10-10 | Merged main: Ukrainian interface (#36, first string catalog), Dynamic Input pointer boxes with Tab and relative entry (#60), press-drag selection windows (#63), WIPEOUT and hatch gradients kept through DXF/DWG save (#147, #162), SETVAR DIM* as style overrides (#129), UNITS dialog (#38), close-window save prompt (#47), DIMANGULAR on circles (#20), cargo fmt fixed on main. UI/UX 40% → 43% (dynamic input 15% → 45%), localization 3% → 5%; ready for real work ≈ 37% → 38% (weighted 37.2% → 37.7%), mainstream 27% → 28%, essentials 45% → 46%. Beta is now ~37 points away; hours unchanged within rounding. |
@@ -136,7 +137,7 @@ Ranked; detail and the full beta checklist in [docs/roadmap.md](docs/roadmap.md)
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-13 | minor | Re-audit against main e707ab4d: why-pre-alpha text, languages table and note (twelve catalogs), upcoming list (items 4–6 struck, 1, 2 and 8 updated), progress-log entry; headline numbers unchanged |
+| 2026-10-14 | minor | Progress log: HATCHEDIT boundary add/remove |
 | 2026-10-12 | trivial | Progress log: closed-polyline TRIM (#726) |
 | 2026-10-12 | trivial | Progress log: HATCHEDIT numeric validation (#724) |
 | 2026-10-10 | minor | Merged main's changes (Ukrainian catalog, dynamic input pointer boxes, DXF fixes); UI/UX and localization numbers updated |

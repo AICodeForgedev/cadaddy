@@ -10,10 +10,13 @@ pub fn format_distance(v: f64, lunits: i64, luprec: i64) -> String {
     }
     let prec = luprec.clamp(0, 8) as usize;
     match lunits {
-        1 => format!("{:.*E}", prec, v),
+        1 => scientific(v, prec),
         3 => {
             let neg = v < 0.0;
-            let a = v.abs();
+            // Round at the displayed precision before splitting, so 11.999 carries to 1'-0.00".
+            let scale = 10f64.powi(prec as i32);
+            let rounded = (v.abs() * scale).round() / scale;
+            let a = if rounded.is_finite() { rounded } else { v.abs() };
             let ft = (a / 12.0).floor();
             let inch = a - ft * 12.0;
             format!("{}{}'-{:.*}\"", if neg { "-" } else { "" }, ft as i64, prec, inch)
@@ -54,6 +57,21 @@ pub fn format_distance(v: f64, lunits: i64, luprec: i64) -> String {
     }
 }
 
+/// Scientific notation with a signed exponent of at least two digits (`1.7500E+01`, `1.00E-05`).
+fn scientific(v: f64, prec: usize) -> String {
+    let s = format!("{:.*E}", prec, v);
+    match s.split_once('E') {
+        Some((mantissa, exp)) => {
+            let (sign, digits) = match exp.strip_prefix('-') {
+                Some(d) => ('-', d),
+                None => ('+', exp),
+            };
+            format!("{mantissa}E{sign}{digits:0>2}")
+        }
+        None => s,
+    }
+}
+
 fn gcd(a: i64, b: i64) -> i64 {
     if b == 0 { a.abs().max(1) } else { gcd(b, a % b) }
 }
@@ -84,8 +102,8 @@ pub fn format_angle(a: f64, aunits: i64, auprec: i64) -> String {
                 }
             }
         }
-        2 => format!("{:.*}g", prec, deg / 0.9),
-        3 => format!("{:.*}r", prec, cadcraft_geom::norm_angle(a)),
+        2 => format!("{:.*}g", prec, wrap_full_turn(deg / 0.9, 400.0, prec)),
+        3 => format!("{:.*}r", prec, wrap_full_turn(cadcraft_geom::norm_angle(a), 2.0 * PI, prec)),
         4 => {
             // N/S <angle from N/S toward E/W> E/W
             let (ns, ew, ang) = if deg <= 90.0 {
@@ -99,8 +117,13 @@ pub fn format_angle(a: f64, aunits: i64, auprec: i64) -> String {
             };
             format!("{ns} {:.*}d {ew}", prec, ang)
         }
-        _ => format!("{:.*}", prec, deg),
+        _ => format!("{:.*}", prec, wrap_full_turn(deg, 360.0, prec)),
     }
+}
+
+/// `v` (in `[0, full)`), or 0 when it rounds at `prec` decimals to the same value as a full turn.
+fn wrap_full_turn(v: f64, full: f64, prec: usize) -> f64 {
+    if format!("{v:.prec$}") == format!("{full:.prec$}") { 0.0 } else { v }
 }
 
 /// Parse a distance typed by the user: decimal, `1'6"`, `1'-6 1/2"`, `6 1/2`, `3/4`, `1e3`.
@@ -118,14 +141,20 @@ pub fn parse_distance(s: &str) -> Option<f64> {
     };
     let mut total = 0.0;
     let mut rest = t;
+    let mut parsed = false;
     if let Some(i) = rest.find('\'') {
         let ft: f64 = rest.get(..i)?.trim().parse().ok()?;
         total += ft * 12.0;
+        parsed = true;
         rest = rest.get(i + 1..)?.trim_start_matches('-').trim();
     }
     let rest = rest.trim_end_matches('"').trim();
     if !rest.is_empty() {
         total += parse_mixed(rest)?;
+        parsed = true;
+    }
+    if !parsed {
+        return None;
     }
     let v = if neg { -total } else { total };
     v.is_finite().then_some(v)
@@ -157,7 +186,7 @@ fn parse_mixed(s: &str) -> Option<f64> {
 pub struct AngleSettings {
     /// AUNITS: 0 decimal degrees, 1 degrees/minutes/seconds, 2 grads, 3 radians, 4 surveyor's.
     pub aunits: i64,
-    /// ANGBASE: the direction of angle 0, in radians counterclockwise from +X (as `$ANGBASE` in DXF).
+    /// ANGBASE: the direction of angle 0, in radians counterclockwise from +X (`$ANGBASE` in DXF is in degrees).
     pub angbase: f64,
     /// ANGDIR 1: positive angles turn clockwise.
     pub clockwise: bool,
@@ -196,6 +225,20 @@ impl AngleSettings {
         }
         let v = self.angbase + if self.clockwise { -a } else { a };
         v.is_finite().then_some(v)
+    }
+
+    /// Direction `dir` (radians counterclockwise from +X) as the drawing shows directions, in
+    /// radians: from ANGBASE in the ANGDIR sense, 0 up to a full turn. (A block turned 2.23°
+    /// shows as 87.77 in a drawing measured clockwise from north, as in AutoCAD's Properties.)
+    pub fn shown(&self, dir: f64) -> f64 {
+        let a = if self.clockwise { self.angbase - dir } else { dir - self.angbase };
+        a.rem_euclid(std::f64::consts::TAU)
+    }
+
+    /// The direction (radians counterclockwise from +X) the drawing shows as `v` (radians): the
+    /// inverse of [`AngleSettings::shown`].
+    pub fn unshown(&self, v: f64) -> f64 {
+        (self.angbase + if self.clockwise { -v } else { v }).rem_euclid(std::f64::consts::TAU)
     }
 }
 
@@ -287,11 +330,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn directions_show_from_angbase_in_the_angdir_sense() {
+        let north_clockwise = AngleSettings { aunits: 0, angbase: 90f64.to_radians(), clockwise: true };
+        // AutoCAD shows a block turned 2.22729505553431° as 87.77 in such a drawing.
+        let shown = north_clockwise.shown(2.22729505553431f64.to_radians()).to_degrees();
+        assert!((shown - 87.77270494446569).abs() < 1e-9, "{shown}");
+        let back = north_clockwise.unshown(87.77270494446569f64.to_radians()).to_degrees();
+        assert!((back - 2.22729505553431).abs() < 1e-9, "{back}");
+        // The defaults show directions as they are.
+        let plain = AngleSettings::default();
+        assert!((plain.shown(0.5) - 0.5).abs() < 1e-12 && (plain.unshown(0.5) - 0.5).abs() < 1e-12);
+        // Counterclockwise from a base of 30°: 45° shows as 15.
+        let based = AngleSettings { aunits: 0, angbase: 30f64.to_radians(), clockwise: false };
+        assert!((based.shown(45f64.to_radians()).to_degrees() - 15.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn decimal_and_arch() {
         assert_eq!(format_distance(28.98524, 2, 4), "28.9852");
         assert_eq!(format_distance(18.5, 4, 4), "1'-6 1/2\"");
         assert_eq!(format_distance(6.25, 5, 2), "6 1/4");
         assert_eq!(format_distance(30.0, 3, 2), "2'-6.00\"");
+    }
+
+    #[test]
+    fn engineering_rounding_carries_to_feet() {
+        assert_eq!(format_distance(11.999, 3, 2), "1'-0.00\"");
+        assert_eq!(format_distance(23.999, 3, 2), "2'-0.00\"");
+        assert_eq!(format_distance(-11.999, 3, 2), "-1'-0.00\"");
+        assert_eq!(format_distance(11.5, 3, 2), "0'-11.50\"");
+        assert_eq!(format_distance(12.0, 3, 2), "1'-0.00\"");
+        assert_eq!(format_distance(11.6, 3, 0), "1'-0\"");
+    }
+
+    #[test]
+    fn scientific_exponent_is_signed_and_padded() {
+        assert_eq!(format_distance(17.5, 1, 4), "1.7500E+01");
+        assert_eq!(format_distance(0.00001, 1, 2), "1.00E-05");
+        assert_eq!(format_distance(1234.5, 1, 3), "1.234E+03");
+        assert_eq!(format_distance(12345678.0, 1, 3), "1.235E+07");
+        assert_eq!(format_distance(-17.5, 1, 4), "-1.7500E+01");
+        assert_eq!(format_distance(0.0, 1, 2), "0.00E+00");
+        assert_eq!(format_distance(1e100, 1, 1), "1.0E+100");
     }
 
     #[test]
@@ -325,6 +405,18 @@ mod tests {
     }
 
     #[test]
+    fn rounding_to_a_full_turn_wraps_to_zero() {
+        let almost_turn = 359.9999_f64.to_radians();
+        assert_eq!(format_angle(almost_turn, 0, 2), "0.00");
+        assert_eq!(format_angle(almost_turn, 2, 2), "0.00g");
+        assert_eq!(format_angle(2.0 * PI - 1e-9, 3, 2), "0.00r");
+        assert_eq!(format_angle(359.99_f64.to_radians(), 0, 1), "0.0");
+        assert_eq!(format_angle(359.9_f64.to_radians(), 0, 1), "359.9");
+        assert_eq!(format_angle(1.0, 3, 2), "1.00r");
+        assert_eq!(format_angle(6.25, 3, 1), "6.2r");
+    }
+
+    #[test]
     fn parse_distances() {
         assert_eq!(parse_distance("12.5"), Some(12.5));
         assert_eq!(parse_distance("1'6\""), Some(18.0));
@@ -333,6 +425,14 @@ mod tests {
         assert_eq!(parse_distance("1/0"), None);
         assert_eq!(parse_distance("abc"), None);
         assert_eq!(parse_distance(""), None);
+    }
+
+    #[test]
+    fn parse_distance_needs_a_number() {
+        assert_eq!(parse_distance("-"), None);
+        assert_eq!(parse_distance("\""), None);
+        assert_eq!(parse_distance("-\""), None);
+        assert_eq!(parse_distance("1'"), Some(12.0));
     }
 
     #[test]

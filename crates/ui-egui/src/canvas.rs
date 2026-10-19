@@ -127,7 +127,21 @@ pub struct CanvasState {
     /// Tab was pressed over a snap marker: show the next candidate ([`SnapCycle`]).
     pub snap_tab: bool,
     pub snap_cycle: Option<SnapCycle>,
+    /// The selection cycling list a click over overlapping objects opened (SELECTIONCYCLING 2).
+    cycle: Option<CycleList>,
+    /// Selection cycling's badge shows beside the cursor, and where it was last worked out.
+    cycle_badge: bool,
+    cycle_badge_at: Option<Pos2>,
+    /// Shift+Space stepping the highlight through the objects under the cursor (selection
+    /// cycling's temporary override): where it started, the objects, which one is highlighted.
+    hover_cycle: Option<(Pos2, Vec<Handle>, usize)>,
+    /// What the cycling list and the Shift+Space highlight were made for (see [`CycleKey`]).
+    cycle_key: Option<CycleKey>,
 }
+
+/// The command, prompt, drawing (and its revision) and view that the objects under the cursor
+/// were listed for: when any of them changes, the list and the Shift+Space highlight are stale.
+type CycleKey = (Option<String>, Option<String>, u64, u64, Vec2, f64);
 
 impl CanvasState {
     /// The active MSPACE viewport's contents when they are drawn apart from the layout's list
@@ -135,6 +149,11 @@ impl CanvasState {
     /// times they have been built.
     pub fn viewport_content(&self) -> Option<(Bounds2, u64)> {
         self.vp.key.and(self.vp.paper_bounds()).map(|b| (b, self.vp.builds))
+    }
+
+    /// The rows of the open selection cycling list (screen rectangle, object), top to bottom.
+    pub fn cycle_rows(&self) -> Vec<(Rect, Handle)> {
+        self.cycle.as_ref().map(|c| c.rows.iter().copied().zip(c.items.iter().map(|(h, _, _)| *h)).collect()).unwrap_or_default()
     }
 
     /// Whether a rebuild for the current view is still running in the background (the canvas
@@ -168,6 +187,22 @@ impl CanvasState {
 pub struct SnapCycle {
     anchor: Vec2,
     index: usize,
+}
+
+/// The objects under a click that selection cycling lets the user choose between: where the click
+/// was, each object with its row's label (type and layer), Shift held, and the rows as drawn.
+#[derive(Clone, Debug)]
+struct CycleList {
+    at: Pos2,
+    items: Vec<(Handle, String, String)>,
+    shift: bool,
+    rows: Vec<Rect>,
+}
+
+impl CycleList {
+    fn row_at(&self, p: Pos2) -> Option<Handle> {
+        self.rows.iter().zip(&self.items).find(|(r, _)| r.contains(p)).map(|(_, (h, _, _))| *h)
+    }
 }
 
 /// Primitives of `list` sorted by entity handle, built on the first highlight after each list
@@ -1041,6 +1076,95 @@ pub(crate) fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, pri
     p.extend(shapes);
 }
 
+#[cfg(test)]
+mod highlight_stability_tests {
+    use super::*;
+
+    fn frame(list: &DisplayList, look: Look, pointer: Pos2) -> Vec<egui::epaint::ClippedShape> {
+        let ctx = egui::Context::default();
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 400.0));
+        let input = egui::RawInput { screen_rect: Some(rect), events: vec![egui::Event::PointerMoved(pointer)], ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            draw_highlight(ui.painter(), &Xf { rect, center: Vec2::ZERO, scale: 11.0 }, list, &[0], Color32::LIGHT_BLUE, look);
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        output.textures_delta.clear();
+        shapes
+    }
+
+    // Compare visible dash segments, not their submission order or endpoint direction.
+    fn dash_positions(shapes: &[egui::epaint::ClippedShape]) -> Vec<((u32, u32), (u32, u32))> {
+        let mut segments: Vec<_> = shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::LineSegment { points: [a, b], stroke } if stroke.color == Color32::LIGHT_BLUE => {
+                    let (a, b) = ((a.x.to_bits(), a.y.to_bits()), (b.x.to_bits(), b.y.to_bits()));
+                    Some(if a < b { (a, b) } else { (b, a) })
+                }
+                _ => None,
+            })
+            .collect();
+        segments.sort_unstable();
+        segments
+    }
+
+    #[test]
+    fn moving_the_pointer_does_not_move_cpu_fill_highlight_dashes() {
+        let p = |x, y| Vec2::new(x, y);
+        let mut list = DisplayList { tris: vec![p(0.0, 0.0), p(7.0, 0.0), p(7.0, 3.0), p(0.0, 0.0), p(7.0, 3.0), p(0.0, 3.0)], ..Default::default() };
+        list.prims.push(cadcraft_render::DPrim {
+            handle: Handle(256),
+            color: Rgb(255, 255, 255),
+            aci7: true,
+            lw: 0.0,
+            transparency: 0,
+            kind: Kind::Tris,
+            start: 0,
+            len: 6,
+        });
+        // Filled glyphs, hatches, solids and arrowheads share the Tris path; wipeouts use Mask.
+        for kind in [Kind::Tris, Kind::Mask] {
+            list.prims.first_mut().unwrap().kind = kind;
+            for width in [1.0, 1.5, 2.0] {
+                let look = Look { width, dashed: true };
+                let expected = dash_positions(&frame(&list, look, pos2(320.0, 190.0)));
+                assert!(!expected.is_empty());
+                for i in 0..32 {
+                    assert_eq!(
+                        dash_positions(&frame(&list, look, pos2(320.0 + i as f32, 190.0))),
+                        expected,
+                        "pointer movement changes only the cursor, not the dashed contour"
+                    );
+                }
+            }
+        }
+        if let Some(dir) = std::env::var_os("CADCRAFT_HIGHLIGHT_SHOTS") {
+            let dir = std::path::PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(600.0, 400.0)).build_ui(|ui| {
+                let xf = Xf { rect: ui.max_rect(), center: Vec2::new(3.5, 1.5), scale: 31.0 };
+                draw_highlight(ui.painter(), &xf, &list, &[0], Color32::LIGHT_BLUE, Look { width: 2.0, dashed: true });
+            });
+            h.run_steps(3);
+            h.event(egui::Event::PointerMoved(pos2(250.0, 190.0)));
+            h.run_steps(2);
+            // Harness::render adds a synthetic cursor; omit it from the pixel comparison.
+            h.remove_cursor();
+            h.run_steps(1);
+            let first = h.render().unwrap();
+            first.save(dir.join("highlight-pointer-a.png")).unwrap();
+            h.event(egui::Event::PointerMoved(pos2(320.0, 190.0)));
+            h.run_steps(2);
+            h.remove_cursor();
+            h.run_steps(1);
+            let second = h.render().unwrap();
+            second.save(dir.join("highlight-pointer-b.png")).unwrap();
+            let changed = first.pixels().zip(second.pixels()).filter(|(a, b)| a != b).count();
+            assert_eq!(changed, 0, "moving the pointer cannot change any highlight pixels");
+        }
+    }
+}
+
 /// The fill of a selection window or crossing area (SELECTIONAREA, WINDOWAREACOLOR,
 /// CROSSINGAREACOLOR, SELECTIONAREAOPACITY); `None` when areas aren't filled.
 fn selection_area_fill(s: &cadcraft_engine::Settings, crossing: bool) -> Option<Color32> {
@@ -1258,6 +1382,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         )
     });
     let inside = hover_pos.is_some_and(|p| rect.contains(p)) && resp.hovered();
+    // Whether Ctrl is held right now. Written every frame (not just while a command prompts), so
+    // previews that read `Session::ctrl_down` always see the current state. The engine
+    // deliberately does not carry modifiers through `Input`, which is UI-agnostic (see PR
+    // #407's Limits note: modifiers used to be dropped on the floor at this point).
+    app.session.ctrl_down = mods.ctrl;
     // Which device is scrolling? On macOS, trackpads (and Magic Mouse) report precise point
     // deltas; notched mouse wheels report lines. The answer is sticky because egui spreads a wheel
     // notch over several frames. Elsewhere (browsers, Wayland smooth-scroll mice) ordinary wheels
@@ -1494,10 +1623,25 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.canvas.drag_window = false;
     }
     let pressed_primary = pressed_primary && !picked && !hatch_dialog && !idle_dbl;
+    let key: CycleKey = (
+        app.session.running.as_ref().map(|r| r.id.clone()),
+        app.session.current_prompt().map(|p| p.message),
+        app.session.state().map_or(0, |st| st.uid),
+        app.session.state().map_or(0, |st| st.revision),
+        xf.center,
+        xf.scale,
+    );
+    if app.canvas.cycle_key.as_ref() != Some(&key) {
+        app.canvas.cycle = None;
+        app.canvas.hover_cycle = None;
+        app.canvas.cycle_key = Some(key);
+    }
+    let cycled = pressed_primary && !middle_down && cycle_click(app, &xf, hover_pos, raw_world.filter(|_| inside), mods.shift);
     // Clicks.
     if inside
         && pressed_primary
         && !middle_down
+        && !cycled
         && let Some(p) = app.canvas.cursor
     {
         if app.session.prompting() {
@@ -1527,11 +1671,16 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             app.session.echo(e.to_string());
         }
     }
-    // Press-and-drag selection window (AutoCAD's PICKDRAG = 2; click-click still works): a drag
+    // Press-and-drag selection window (PICKDRAG = 2; click-click still works): a drag
     // that starts while objects are being selected opens a window where the button went down,
     // and letting go closes it. Drags on grips and drags while drawing are left alone.
-    if resp.drag_started_by(egui::PointerButton::Primary)
+    if !app.session.settings.pickdrag {
+        app.canvas.drag_window = false;
+    }
+    if app.session.settings.pickdrag
+        && resp.drag_started_by(egui::PointerButton::Primary)
         && !middle_down
+        && app.canvas.cycle.is_none()
         && app.session.pending_window.is_none()
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
         && rect.contains(origin)
@@ -1589,6 +1738,22 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     } else {
         app.canvas.hover = None;
         app.canvas.hover_at = None;
+    }
+    // The open selection cycling list highlights the object of the row under the pointer.
+    if app.canvas.cycle.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.canvas.cycle = None;
+    }
+    if let Some(c) = &app.canvas.cycle {
+        app.canvas.hover = hover_pos.and_then(|hp| c.row_at(hp));
+        app.canvas.hover_at = None;
+    }
+    shift_space_cycle(app, ui, hover_pos.filter(|_| inside), raw_world);
+    if inside && hover_pos != app.canvas.cycle_badge_at {
+        app.canvas.cycle_badge = raw_world.is_some_and(|w| app.session.cycling_badge(w));
+        app.canvas.cycle_badge_at = hover_pos;
+    } else if !inside {
+        app.canvas.cycle_badge = false;
+        app.canvas.cycle_badge_at = None;
     }
 
     // ---------- paint ----------
@@ -1846,16 +2011,23 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         ui.ctx().set_cursor_icon(if app.ui.system_cursor { egui::CursorIcon::Crosshair } else { egui::CursorIcon::None });
         if let Some(hp) = hover_pos {
             draw_crosshair(app, &painter, rect, hp, selecting);
+            if app.canvas.cycle_badge && app.canvas.cycle.is_none() {
+                cycle_badge(&painter, hp);
+            }
         }
         if app.session.settings.dynmode
             && let Some(hp) = hover_pos
         {
-            // A stretched grip shows its dimensions instead of the pointer boxes.
-            if !crate::grip_dyn::draw(app, &painter) {
-                dynamic_input(app, &painter, hp);
+            // A stretched grip shows its dimensions instead of the pointer boxes; a prompt asking
+            // for a distance shows its one field and keeps the prompt and its options.
+            let fields = crate::grip_dyn::draw(app, &painter);
+            if !fields || app.session.current_prompt().is_some_and(|p| p.distance) {
+                dynamic_input(app, &painter, hp, fields);
             }
         }
     }
+    // Over the crosshair, so the row under the pointer reads clearly.
+    cycle_list(app, &painter);
     // No continuous repaint while hovering: input events repaint by themselves. Repainting every
     // frame kept a vsync swapchain's queue full (every frame waited behind queued ones) and would
     // spin the CPU with the low-latency present mode (`gpu::surface_config`).
@@ -1913,6 +2085,119 @@ fn draw_tiles(app: &CadApp, ui: &egui::Ui, tiles: &[(Rect, cadcraft_engine::Mode
     for (r, tile) in tiles {
         let (w, c) = if tile.active { (2.0, t.accent) } else { (1.0, t.border) };
         p.rect_stroke(*r, 0.0, Stroke::new(w, c), egui::StrokeKind::Outside);
+    }
+}
+
+/// A click while selection cycling's list is open picks the row under it (anywhere else just
+/// closes the list); otherwise a click over overlapping objects that a pick would choose between
+/// opens the list (SELECTIONCYCLING 2). True when the click was used up here.
+fn cycle_click(app: &mut CadApp, xf: &Xf, hover: Option<Pos2>, world: Option<Vec2>, shift: bool) -> bool {
+    // Only where a click picks objects; a click that places a point goes through.
+    let picks = app.session.click_picks();
+    if let Some((_, hs, i)) = app.canvas.hover_cycle.take()
+        && picks
+        && let Some(h) = hs.get(i % hs.len().max(1))
+    {
+        if let Err(e) = app.session.pick_cycled(*h, shift) {
+            app.session.echo(e.to_string());
+        }
+        return true;
+    }
+    if let Some(list) = app.canvas.cycle.take() {
+        let Some(h) = hover.and_then(|hp| list.row_at(hp)).filter(|_| picks) else { return picks };
+        if let Err(e) = app.session.pick_cycled(h, list.shift) {
+            app.session.echo(e.to_string());
+        }
+        return true;
+    }
+    let (Some(hp), Some(w)) = (hover, world) else { return false };
+    if crate::dyngrips::at(app, xf, hover).is_some() || grip_at(app, xf, hover).is_some() {
+        return false;
+    }
+    let hs = app.session.cycling_candidates(w);
+    let Ok(d) = app.session.doc() else { return false };
+    let items: Vec<_> =
+        hs.into_iter().filter_map(|h| d.entity(h).map(|e| (h, crate::i18n::t(e.kind.type_name()).to_string(), e.common.layer.clone()))).collect();
+    if items.len() < 2 {
+        return false;
+    }
+    app.canvas.cycle = Some(CycleList { at: hp, items, shift, rows: Vec::new() });
+    true
+}
+
+/// Shift+Space over overlapping objects highlights the next one under the cursor, and a click
+/// picks the highlighted one, whether selection cycling is on or not; moving the cursor off the
+/// pick box where it started ends it.
+fn shift_space_cycle(app: &mut CadApp, ui: &egui::Ui, hover: Option<Pos2>, world: Option<Vec2>) {
+    let pick_px = (app.session.settings.pickbox.max(1.0) * 1.5) as f32;
+    let (Some(hp), Some(w)) = (hover, world) else {
+        app.canvas.hover_cycle = None;
+        return;
+    };
+    if app.canvas.hover_cycle.as_ref().is_some_and(|(a, _, _)| a.distance(hp) > pick_px) {
+        app.canvas.hover_cycle = None;
+    }
+    let pressed = ui
+        .input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Space, pressed: true, modifiers, .. } if modifiers.shift)));
+    if pressed {
+        // With the list open Shift+Space does nothing, and isn't Enter either.
+        let next = match app.canvas.hover_cycle.take() {
+            _ if app.canvas.cycle.is_some() => None,
+            Some((a, hs, i)) => Some((a, hs, i + 1)),
+            None => Some((hp, app.session.pick_candidates(w), 1)).filter(|(_, hs, _)| hs.len() > 1),
+        };
+        if next.is_some() || app.canvas.cycle.is_some() {
+            // Space is Enter at the command line; this one only steps the highlight.
+            ui.ctx().input_mut(|i| {
+                i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Space, .. }) && !matches!(e, egui::Event::Text(t) if t == " "))
+            });
+        }
+        app.canvas.hover_cycle = next;
+    }
+    if let Some((_, hs, i)) = &app.canvas.hover_cycle {
+        app.canvas.hover = hs.get(i % hs.len().max(1)).copied();
+        app.canvas.hover_at = None;
+    }
+}
+
+/// Selection cycling's badge beside the cursor: two overlapping squares, objects overlap here.
+fn cycle_badge(p: &egui::Painter, at: Pos2) {
+    let t = Tokens::get();
+    for off in [vec2(14.0, -22.0), vec2(19.0, -17.0)] {
+        let r = Rect::from_min_size(at + off, vec2(9.0, 9.0));
+        p.rect_filled(r, 1.0, t.cmd_bg);
+        p.rect_stroke(r, 1.0, Stroke::new(1.0, t.text), egui::StrokeKind::Inside);
+    }
+}
+
+/// The selection cycling list beside the click that opened it: a row per object, its type and
+/// layer, the row under the pointer highlighted; the rows are kept for clicks.
+fn cycle_list(app: &mut CadApp, p: &egui::Painter) {
+    let Some(list) = app.canvas.cycle.as_mut() else { return };
+    let t = Tokens::get();
+    let font = crate::theme::small();
+    let galleys: Vec<_> = list
+        .items
+        .iter()
+        .map(|(_, ty, layer)| (p.layout_no_wrap(ty.clone(), font.clone(), t.text), p.layout_no_wrap(layer.clone(), font.clone(), t.text_dim)))
+        .collect();
+    let row_h = galleys.iter().map(|(a, _)| a.size().y).fold(12.0, f32::max) + 6.0;
+    let ty_w = galleys.iter().map(|(a, _)| a.size().x).fold(40.0, f32::max);
+    let layer_w = galleys.iter().map(|(_, b)| b.size().x).fold(20.0, f32::max);
+    let w = ty_w + layer_w + 36.0;
+    let m = Rect::from_min_size(list.at + vec2(14.0, 14.0), vec2(w, row_h * galleys.len() as f32 + 4.0));
+    p.rect_filled(m, 3.0, t.cmd_bg);
+    p.rect_stroke(m, 3.0, Stroke::new(1.0, t.cmd_border), egui::StrokeKind::Inside);
+    let hover = app.canvas.hover;
+    list.rows.clear();
+    for (i, ((ty, layer), (h, _, _))) in galleys.into_iter().zip(&list.items).enumerate() {
+        let row = Rect::from_min_size(pos2(m.left() + 2.0, m.top() + 2.0 + row_h * i as f32), vec2(w - 4.0, row_h));
+        if hover == Some(*h) {
+            p.rect_filled(row, 2.0, t.cmd_keyword_hover);
+        }
+        p.galley(pos2(row.left() + 8.0, row.center().y - ty.size().y / 2.0), ty, t.text);
+        p.galley(pos2(row.left() + 20.0 + ty_w, row.center().y - layer.size().y / 2.0), layer, t.text_dim);
+        list.rows.push(row);
     }
 }
 
@@ -2018,8 +2303,9 @@ fn draw_crosshair(app: &CadApp, p: &egui::Painter, rect: Rect, at: Pos2, pickbox
 
 /// The Dynamic Input tooltip beside the cursor, styled like the command line. At a point prompt
 /// it shows the pair of value boxes, a view of the command-line text (see [`crate::dyninput`]);
-/// otherwise the prompt with what is being typed, or the live distance and angle.
-fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
+/// otherwise the prompt with what is being typed, or the live distance and angle. With `fields`
+/// (a distance prompt's field is on show, [`crate::grip_dyn`]) only the prompt and its options.
+fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2, fields: bool) {
     app.cmd.option_rows.clear();
     // While the options menu is open the tooltip stays where it opened, so the menu can be reached.
     let at = match app.cmd.options {
@@ -2033,7 +2319,8 @@ fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
     // DYNPROMPT = 0: no prompt beside the cursor (the value boxes stay).
     let show_prompt = app.session.settings.dynprompt;
     let options = show_prompt && !prompt.keywords.is_empty();
-    if let Some(f) = crate::cmdline::dyn_frame(app)
+    if !fields
+        && let Some(f) = crate::cmdline::dyn_frame(app)
         && let Some(e) = crate::dyninput::parse(&app.cmd.buffer, &f)
         && let Some(c) = app.canvas.cursor
     {
@@ -2046,7 +2333,9 @@ fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
         return;
     }
     let mut text = crate::i18n::t(&prompt.message).to_string();
-    if !app.cmd.buffer.is_empty() {
+    if fields {
+        // The field shows the distance and what is typed.
+    } else if !app.cmd.buffer.is_empty() {
         text = format!("{}: {}", crate::i18n::t(&prompt.message), app.cmd.buffer);
     } else if let (Some(base), Some(c)) = (prompt.base, app.canvas.cursor) {
         text = format!(
@@ -2266,10 +2555,18 @@ fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
     let (c, ring) = (l.center, l.ring);
     let p = ui.painter_at(rect);
     crate::viewcube::show(app, ui, &l);
-    // WCS pill.
+    // WCS pill: the label and a down chevron, drawn as lines rather than a "⌄" glyph that a UI
+    // font may lack (it showed as a box, #1541).
     let pill = Rect::from_center_size(c + vec2(0.0, ring + 26.0), vec2(56.0, 16.0));
     p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
-    p.text(pill.center(), egui::Align2::CENTER_CENTER, crate::tl!("WCS ⌄"), crate::theme::small(), Tokens::DARK.canvas_ink);
+    let ink = Tokens::DARK.canvas_ink;
+    let label = p.layout_no_wrap(crate::tl!("WCS").to_string(), crate::theme::small(), ink);
+    let (gap, chevron) = (4.0, 6.0);
+    let left = pill.center().x - (label.size().x + gap + chevron) / 2.0;
+    let mid = pill.center().y;
+    p.galley(pos2(left, mid - label.size().y / 2.0), label.clone(), ink);
+    let x = left + label.size().x + gap;
+    p.line(vec![pos2(x, mid - 1.5), pos2(x + chevron / 2.0, mid + 1.5), pos2(x + chevron, mid - 1.5)], Stroke::new(1.2, ink));
 }
 
 /// A click on grip `g` (idle): Shift+click makes it hot or cold again; a plain click starts

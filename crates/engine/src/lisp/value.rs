@@ -398,16 +398,20 @@ pub fn real_text(r: f64) -> String {
     if r == 0.0 {
         return "0.0".into();
     }
-    let exp = r.abs().log10().floor() as i32;
+    // Round to six significant digits first so the exponent already includes any carry
+    // (999999.5 -> 1.00000e6) and subnormals never divide by an underflowed power of ten.
+    let sci = format!("{:.5e}", r.abs());
+    let (mantissa, exp) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
+    let exp: i32 = exp.parse().unwrap_or(0);
     // As C's %g with six digits: exponent form outside 1e-5 ..< 1e6.
     if !(-5..6).contains(&exp) {
         // Exponent form: d.ddddde+NNN
-        let m = r / 10f64.powi(exp);
-        let mut s = trim_fraction(&format!("{m:.5}"));
+        let mut s = trim_fraction(mantissa);
         if !s.contains('.') {
             s.push_str(".0");
         }
-        return format!("{s}e{}{:03}", if exp < 0 { '-' } else { '+' }, exp.abs());
+        let sign = if r < 0.0 { "-" } else { "" };
+        return format!("{sign}{s}e{}{:03}", if exp < 0 { '-' } else { '+' }, exp.abs());
     }
     let decimals = (5 - exp).max(0) as usize;
     let mut s = trim_fraction(&format!("{r:.decimals$}"));

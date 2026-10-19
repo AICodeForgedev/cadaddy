@@ -1,10 +1,11 @@
 # Parity checklist
 
-> **Generated:** 2026-10-12 by `cargo xtask parity`. Do not edit by hand.
+> **Generated:** 2026-10-15 by `cargo xtask parity`. Do not edit by hand.
+> **Generated:** 2026-10-16 by `cargo xtask parity`. Do not edit by hand.
 
 Menu-breadth parity: a reference menu item counts as covered when a CADCraft command is registered under the same menu label. It measures breadth, not depth; see [target-app-parity.md](target-app-parity.md) for the weighted assessment.
 
-**Menu breadth: 280 / 491 items (57%)** · 409 registered commands.
+**Menu breadth: 283 / 491 items (58%)** · 427 registered commands.
 
 | Menu | Items | Covered | % |
 |---|---|---|---|
@@ -13,7 +14,7 @@ Menu-breadth parity: a reference menu item counts as covered when a CADCraft com
 | View | 75 | 31 | 41% |
 | Insert | 11 | 5 | 45% |
 | Format | 27 | 25 | 93% |
-| Tools | 85 | 57 | 67% |
+| Tools | 85 | 60 | 71% |
 | Draw | 87 | 55 | 63% |
 | Dimension | 28 | 28 | 100% |
 | Modify | 113 | 52 | 46% |
@@ -88,9 +89,7 @@ Menu-breadth parity: a reference menu item counts as covered when a CADCraft com
 - Tools > Spelling
 - Tools > Inquiry > Volume
 - Tools > Update Fields
-- Tools > Block Editor
 - Tools > Edit Xref in Place
-- Tools > Load Application...
 - Tools > New UCS > World
 - Tools > New UCS > Face
 - Tools > New UCS > View
@@ -107,8 +106,8 @@ Menu-breadth parity: a reference menu item counts as covered when a CADCraft com
 - Tools > Export Settings
 - Tools > Express Tools > Convert Text to Mtext
 - Tools > Express Tools > Break-line Symbol
-- Tools > Express Tools > Explode Attributes to Text
 - Tools > Express Tools > Move/Copy/Rotate
+- Tools > Express Tools > Explode Attributes to Text
 - Tools > Express Tools > Replace Block...
 - Tools > Express Tools > Super Hatch > Image...
 - Tools > Express Tools > Super Hatch > Xref...

@@ -7,6 +7,7 @@ use crate::{EngineError, Result, Session};
 mod table;
 
 const SESSION_VARS: &[&str] = &[
+    "AUDITCTL",
     "OSMODE",
     "OSNAPHATCH",
     "ANNOAUTOSCALE",
@@ -35,6 +36,7 @@ const SESSION_VARS: &[&str] = &[
     "DYNPROMPT",
     "LWDISPLAY",
     "PLOTTRANSPARENCYOVERRIDE",
+    "SELECTIONCYCLING",
     "SELECTSIMILARMODE",
     "OBJECTISOLATIONMODE",
     "QPMODE",
@@ -54,6 +56,7 @@ const SESSION_VARS: &[&str] = &[
     "PICKFIRST",
     "ACADLSPASDOC",
     "PICKADD",
+    "PICKDRAG",
     "PICKSTYLE",
     "GRIPSIZE",
     "CURSORSIZE",
@@ -102,6 +105,11 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "DYNPROMPT" => json!(i32::from(st.dynprompt)),
         "LWDISPLAY" => json!(i32::from(st.lwdisplay)),
         "PLOTTRANSPARENCYOVERRIDE" => json!(st.plot_transparency_override),
+        // Negative while turned off, so the toggle keeps the display it turns back on.
+        "SELECTIONCYCLING" => {
+            let d = i32::from(st.selection_cycling_display);
+            json!(if st.selection_cycling { d } else { -d })
+        }
         "SELECTSIMILARMODE" => json!(st.selectsimilarmode),
         // Isolation is temporary: hidden objects show again when the drawing is reopened.
         "OBJECTISOLATIONMODE" => json!(0),
@@ -122,13 +130,14 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "PICKFIRST" => json!(i32::from(st.pickfirst)),
         "ACADLSPASDOC" => json!(i32::from(st.acadlspasdoc)),
         "PICKADD" => json!(i32::from(st.pickadd)),
+        "PICKDRAG" => json!(i32::from(st.pickdrag) * 2),
         "PICKSTYLE" => json!(st.pickstyle),
         "GRIPSIZE" => json!(st.gripsize),
         "CURSORSIZE" => json!(st.cursorsize),
         "MAXARRAY" => json!(st.maxarray),
         "ZOOMFACTOR" => json!(st.zoomfactor),
         "LASTPOINT" => json!([s.last_point.x, s.last_point.y, 0.0]),
-        // Held in radians (as `$ANGBASE` in DXF); reported in degrees, like POLARANG.
+        // Held in radians (`$ANGBASE` in DXF is in degrees); reported in degrees, like POLARANG.
         "ANGBASE" => json!(s.doc().ok()?.header.f64("ANGBASE", 0.0).to_degrees()),
         "CONSTRAINTINFER" => json!(i32::from(s.doc().ok()?.parametric.settings.infer)),
         // Process-wide font substitution (profile settings, not saved in the drawing).
@@ -266,6 +275,11 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "PLOTTRANSPARENCYOVERRIDE" => {
             st.plot_transparency_override = as_i(v).filter(|i| (0..=2).contains(i)).and_then(|i| u8::try_from(i).ok()).ok_or_else(bad)?
         }
+        "SELECTIONCYCLING" => {
+            let i = as_i(v).filter(|i| (-2..=2).contains(i)).ok_or_else(bad)?;
+            st.selection_cycling = i > 0;
+            st.selection_cycling_display = u8::try_from(i.unsigned_abs()).map_err(|_| bad())?;
+        }
         "SELECTSIMILARMODE" => st.selectsimilarmode = as_i(v).filter(|b| (0..=255).contains(b)).ok_or_else(bad)? as u32,
         "OBJECTISOLATIONMODE" => match as_i(v) {
             Some(0) => {}
@@ -289,6 +303,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "PICKFIRST" => st.pickfirst = as_bool(v).ok_or_else(bad)?,
         "ACADLSPASDOC" => st.acadlspasdoc = as_bool(v).ok_or_else(bad)?,
         "PICKADD" => st.pickadd = as_bool(v).ok_or_else(bad)?,
+        "PICKDRAG" => st.pickdrag = as_i(v).filter(|b| matches!(b, 0 | 2)).map(|b| b == 2).ok_or_else(bad)?,
         "PICKSTYLE" => st.pickstyle = as_i(v).filter(|b| (0..=3).contains(b)).and_then(|b| u8::try_from(b).ok()).ok_or_else(bad)?,
         "GRIPSIZE" => st.gripsize = as_f64(v).ok_or_else(bad)?.clamp(1.0, 255.0),
         "CURSORSIZE" => st.cursorsize = as_f64(v).ok_or_else(bad)?.clamp(1.0, 100.0),

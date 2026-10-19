@@ -334,3 +334,28 @@ fn canvas_reset_during_splitter_drag_discards_old_resize_and_ends_gesture() {
     assert_eq!(h.state().ui.docking.layout, expected.layout);
     assert_eq!(h.state().session.doc().unwrap(), &drawing);
 }
+
+#[test]
+fn collapsed_tool_sets_leave_a_visible_control_that_expands_them() {
+    let mut h = harness(None, 1280.0, 1.0);
+    h.get_by_label("Collapse Tool Sets").click();
+    h.run_steps(4);
+    assert!(!h.state().ui.show_toolsets);
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "Tool Sets").is_none());
+    h.get_by_label("Expand Tool Sets").click();
+    h.run_steps(4);
+    assert!(h.state().ui.show_toolsets);
+    assert!(h.query_by_label("Expand Tool Sets").is_none());
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Tool Sets").click();
+    h.run_steps(3);
+    h.get_by_label("Line").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.running.as_ref().map(|command| command.id.as_str()), Some("line"));
+    h.state_mut().session.cancel();
+    // Window > Tool Sets (Cmd+3) stays the keyboard route back.
+    h.get_by_label("Collapse Tool Sets").click();
+    h.run_steps(4);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Num3);
+    h.run_steps(4);
+    assert!(h.state().ui.show_toolsets);
+}

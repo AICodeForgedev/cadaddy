@@ -13,6 +13,7 @@ pub mod audit;
 pub mod autosave;
 pub mod blockedit;
 pub mod cmd;
+pub mod doc_path;
 mod finite;
 pub mod grip_dims;
 pub mod grips;
@@ -378,7 +379,11 @@ pub struct Settings {
     /// PLOTTRANSPARENCYOVERRIDE: 0 never plots transparency, 1 (default) uses the page setup's or
     /// the Plot dialog's "Plot transparency", 2 always plots it.
     pub plot_transparency_override: u8,
+    /// Selection cycling on (the status-bar toggle, the sign of SELECTIONCYCLING).
     pub selection_cycling: bool,
+    /// What selection cycling shows over overlapping objects (SELECTIONCYCLING's magnitude): 0
+    /// nothing, 1 a badge, 2 (default) the badge and a list to pick from on a click.
+    pub selection_cycling_display: u8,
     /// SELECTSIMILARMODE: what SELECTSIMILAR matches besides the object type (bits: 1 colour,
     /// 2 layer, 4 linetype, 8 linetype scale, 16 lineweight, 32 plot style, 64 object style,
     /// 128 name).
@@ -392,6 +397,9 @@ pub struct Settings {
     /// ACADLSPASDOC: acad.lsp loads into every drawing, not once per session.
     pub acadlspasdoc: bool,
     pub pickadd: bool,
+    /// PICKDRAG: false = two-click windows (0), true = clicks or dragging (2).
+    /// Drag-only mode (1) is not supported yet.
+    pub pickdrag: bool,
     /// PICKSTYLE: bit 1 picks whole selectable groups ([`cmd::groups`]), bit 2 associative hatches
     /// with their boundaries (stored, not used yet).
     pub pickstyle: u8,
@@ -443,6 +451,8 @@ pub struct Settings {
     pub polarsnap: bool,
     /// POLARDIST: the PolarSnap step; 0 uses the snap X spacing.
     pub polardist: f64,
+    /// AUDITCTL: 1 creates an audit report (.adt) file when AUDIT is run (default: 0).
+    pub auditctl: bool,
 }
 
 impl Default for Settings {
@@ -470,6 +480,7 @@ impl Default for Settings {
             transparency_display: true,
             plot_transparency_override: 1,
             selection_cycling: false,
+            selection_cycling_display: 2,
             selectsimilarmode: 130,
             otrack: true,
             pickbox: 3.0,
@@ -477,6 +488,7 @@ impl Default for Settings {
             pickfirst: true,
             acadlspasdoc: false,
             pickadd: true,
+            pickdrag: true,
             pickstyle: 1,
             gripsize: 5.0,
             cursorsize: 5.0,
@@ -501,6 +513,7 @@ impl Default for Settings {
             polaraddang: Vec::new(),
             polarsnap: false,
             polardist: 0.0,
+            auditctl: false,
         }
     }
 }
@@ -535,12 +548,16 @@ pub struct LastUsed {
     pub rotate_angle: f64,
     /// SCALE factor.
     pub scale_factor: f64,
+    /// TXT2MTXT's Settings.
+    pub txt2mtxt: cmd::Txt2MtxtOptions,
     /// MATCHPROP Settings: the properties it copies.
     pub matchprop: cmd::MatchProps,
     /// MLEADER placement order and Options.
     pub mleader: MLeaderOptions,
     /// MLEADER's block content name (Options > Content type > Block).
     pub mleader_block: String,
+    /// BREAKLINE's Block, Size and Extension.
+    pub breakline: cmd::BreaklineOptions,
 }
 
 impl Default for LastUsed {
@@ -550,9 +567,11 @@ impl Default for LastUsed {
             polygon_circumscribed: false,
             rotate_angle: 0.0,
             scale_factor: 1.0,
+            txt2mtxt: cmd::Txt2MtxtOptions::default(),
             matchprop: cmd::MatchProps::default(),
             mleader: MLeaderOptions::default(),
             mleader_block: String::new(),
+            breakline: cmd::BreaklineOptions::default(),
         }
     }
 }
@@ -640,6 +659,10 @@ pub struct Session {
     /// The deferred tangent/perpendicular snap under the cursor, if any (from the UI; lets the
     /// rubber band show the line it resolves to).
     pub cursor_deferred: Option<snap::Deferred>,
+    /// Whether Ctrl is held right now (from the UI, overwritten every frame). Commands that
+    /// change behavior on Ctrl — currently only ARC's "hold Ctrl to switch direction" — read
+    /// this instead of receiving modifiers through `Input`, which stays free of UI state.
+    pub ctrl_down: bool,
     /// Origin of the point currently being fed by `input_snapped`; never reused by typed points.
     picked_viewport: Option<snap::ViewportPoint>,
     /// The last drawing comparison (COMPARE), drawn over the drawing it was made for.
@@ -702,6 +725,7 @@ impl Session {
             point_mods: Vec::new(),
             cursor: Vec2::ZERO,
             cursor_deferred: None,
+            ctrl_down: false,
             picked_viewport: None,
             compare: None,
             tracking: snap::tracking::Tracker::default(),
@@ -1083,6 +1107,11 @@ impl Session {
         if self.select_mode.is_some() {
             return self.select_mode_input(input);
         }
+        // `_L`, `_ALL`, `_W`: the English name of a selection keyword, as scripts write it.
+        let input = match input {
+            Input::Text(t) => Input::Text(t.trim().strip_prefix('_').map(str::to_string).unwrap_or(t)),
+            other => other,
+        };
         if let Input::Text(t) | Input::Keyword(t) = &input
             && let Some(m) = select::SelectMode::from_keyword(t)
         {
@@ -1396,15 +1425,21 @@ impl Session {
         }
     }
 
-    /// Rubber-band preview entities for the cursor.
+    /// Preview entities for the cursor: objects drawn with their own properties
+    /// ([`Interactive::preview_objects`]), then the rubber band with the current properties, in
+    /// the grip blue over such objects (so it shows over their fills, whatever their colour).
     pub fn preview(&self, cursor: Vec2) -> Vec<Entity> {
-        let common = self.current_common();
-        let kinds = match (self.lisp_preview(cursor), &self.running) {
-            (Some(k), _) => k,
-            (None, Some(r)) => r.machine.preview(self, cursor),
-            (None, None) => Vec::new(),
+        let mut common = self.current_common();
+        let (kinds, mut out) = match (self.lisp_preview(cursor), &self.running) {
+            (Some(k), _) => (k, Vec::new()),
+            (None, Some(r)) => (r.machine.preview(self, cursor), r.machine.preview_objects(self, cursor)),
+            (None, None) => (Vec::new(), Vec::new()),
         };
-        kinds.into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }).collect()
+        if !out.is_empty() {
+            common.color = cadcraft_doc::color::Color::True(cadcraft_doc::color::Rgb(0x2f, 0x6b, 0xff));
+        }
+        out.extend(kinds.into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }));
+        out
     }
 
     /// The active command's preview as a transform of existing objects (see
@@ -1526,7 +1561,8 @@ impl Session {
         }
         // At "Select objects" prompts the selection modes (Previous, Last, ALL) win over a command
         // keyword sharing the letter (HATCH's "picK internal point" against `P`).
-        let selection_mode = prompt.accept.select && matches!(tt.to_ascii_lowercase().as_str(), "all" | "l" | "last" | "p" | "previous");
+        let selection_mode = prompt.accept.select
+            && matches!(tt.strip_prefix('_').unwrap_or(tt).to_ascii_lowercase().as_str(), "all" | "l" | "last" | "p" | "previous");
         // A leading underscore asks for a keyword by its English name, whatever the interface
         // language (`_M`, `_Yes`): scripts and LISP routines write them that way. (Snap
         // overrides such as `_cen` were taken above.)
@@ -1625,7 +1661,7 @@ impl Session {
     /// command running, or a command asking for objects. Returns whether a window was opened.
     pub fn begin_window(&mut self, corner: Vec2) -> bool {
         let during_command = self.running.is_some();
-        if !corner.is_finite() || (during_command && !self.current_prompt().is_some_and(|p| p.accept.select)) {
+        if !self.settings.pickdrag || !corner.is_finite() || (during_command && !self.current_prompt().is_some_and(|p| p.accept.select)) {
             return false;
         }
         self.pending_window = Some(PendingWindow { corner, during_command });
@@ -1654,20 +1690,84 @@ impl Session {
         }
         let ap = self.pixel_size() * self.settings.pickbox.max(1.0) * 1.5;
         match select::pick(self.doc()?, &space, p, ap) {
-            Some(h) => {
-                // With group selection the object's selectable groups come (or go) with it.
-                let hs = cmd::groups::expand(self, vec![h]);
-                let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };
-                let had = sel.contains(&h);
-                if shift && (pickadd || had) {
-                    sel.retain(|x| !hs.contains(x));
-                } else if !had {
-                    sel.extend(hs);
-                }
-                self.set_selection(sel);
-            }
+            Some(h) => self.idle_pick(h, shift),
             None => self.pending_window = Some(PendingWindow { corner: p, during_command: false }),
         }
+        Ok(())
+    }
+
+    /// An idle click that picked `h`, with [`Self::idle_click`]'s PICKADD and Shift rules.
+    fn idle_pick(&mut self, h: Handle, shift: bool) {
+        let pickadd = self.settings.pickadd;
+        // With group selection the object's selectable groups come (or go) with it.
+        let hs = cmd::groups::expand(self, vec![h]);
+        let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };
+        let had = sel.contains(&h);
+        if shift && (pickadd || had) {
+            sel.retain(|x| !hs.contains(x));
+        } else if !had {
+            sel.extend(hs);
+        }
+        self.set_selection(sel);
+    }
+
+    /// Whether a click at `p` selects objects by picking: no command running, or a command at
+    /// "Select objects" with no selection window or typed mode under way.
+    pub fn click_picks(&self) -> bool {
+        self.pending_window.is_none()
+            && match self.running.as_ref() {
+                None => self.lisp_prompt().is_none(),
+                Some(r) => self.select_mode.is_none() && r.machine.prompt(self).accept.select,
+            }
+    }
+
+    /// The objects under the pick box at `p` when selection cycling is on and more than one is
+    /// there: what a click at `p` would choose between.
+    fn cycling_hits(&self, p: Vec2) -> Vec<Handle> {
+        if !self.settings.selection_cycling {
+            return Vec::new();
+        }
+        let hs = self.pick_candidates(p);
+        if hs.len() > 1 { hs } else { Vec::new() }
+    }
+
+    /// Every object under the pick box at `p`, nearest first, when a click there picks objects
+    /// (empty otherwise): what Shift+Space steps the highlight through.
+    pub fn pick_candidates(&self, p: Vec2) -> Vec<Handle> {
+        if !self.click_picks() {
+            return Vec::new();
+        }
+        let ap = self.pixel_size() * self.settings.pickbox.max(1.0) * 1.5;
+        self.doc().map(|d| select::pick_all(d, &self.space(), p, ap)).unwrap_or_default()
+    }
+
+    /// Whether selection cycling marks `p` with its badge (SELECTIONCYCLING 1 or 2): overlapping
+    /// objects a click there would choose between.
+    pub fn cycling_badge(&self, p: Vec2) -> bool {
+        self.settings.selection_cycling_display >= 1 && !self.cycling_hits(p).is_empty()
+    }
+
+    /// The objects a click at `p` lists to choose from (SELECTIONCYCLING 2), nearest first; empty
+    /// when the click should pick as usual.
+    pub fn cycling_candidates(&self, p: Vec2) -> Vec<Handle> {
+        if self.settings.selection_cycling_display < 2 {
+            return Vec::new();
+        }
+        self.cycling_hits(p)
+    }
+
+    /// Pick `h` from the selection cycling list, as a click on it alone would have: into the
+    /// command at "Select objects", else into the selection (Shift as for [`Self::idle_click`]).
+    pub fn pick_cycled(&mut self, h: Handle, shift: bool) -> Result<()> {
+        // The list may be older than an undo or an erase.
+        if self.doc()?.entity(h).is_none() {
+            return Ok(());
+        }
+        if self.running.is_some() {
+            let hs = cmd::groups::expand(self, vec![h]);
+            return self.input(Input::Pick(hs));
+        }
+        self.idle_pick(h, shift);
         Ok(())
     }
 

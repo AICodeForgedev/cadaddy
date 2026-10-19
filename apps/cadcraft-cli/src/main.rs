@@ -275,8 +275,32 @@ fn convert(args: &[String]) -> Result<(), String> {
     if let Some(m) = skipped_message(s.doc().map_err(|e| e.to_string())?, i) {
         eprintln!("{m}");
     }
+    if cadcraft_io::is_image(o)
+        && let Some(m) = undrawn_message(s.doc().map_err(|e| e.to_string())?, i)
+    {
+        eprintln!("{m}");
+    }
     let window = export_window(&s, framing, None)?;
     export_framed(&s, o, window)
+}
+
+/// The warning for the model-space entities of `path` an image can't show, by type (those kept
+/// as unknown objects, `Proxy` in `info`), or `None` when there are none.
+fn undrawn_message(d: &cadcraft_engine::doc::Drawing, path: &str) -> Option<String> {
+    let mut types: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for e in d.model.iter() {
+        if let cadcraft_engine::doc::EntityKind::Unknown(u) = &e.kind {
+            let n = types.entry(u.dxf_type.as_str()).or_insert(0);
+            *n = n.saturating_add(1);
+        }
+    }
+    let n = types.values().fold(0usize, |a, n| a.saturating_add(*n));
+    if n == 0 {
+        return None;
+    }
+    let list: Vec<String> = types.iter().map(|(t, n)| format!("{t}: {n}")).collect();
+    let entities = if n == 1 { "entity" } else { "entities" };
+    Some(format!("{path}: {n} {entities} not drawn ({})", list.join(", ")))
 }
 
 /// The warning for the records of `path` the reader could not place, or `None` when there are none.
@@ -664,6 +688,10 @@ fn cli() -> ExitCode {
         Some("mcp") => mcp(&rest),
         Some("--version" | "-V") => {
             outln!("cadcraft-cli {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Some("--help" | "-h" | "help") => {
+            outln!("{USAGE}");
             Ok(())
         }
         _ => Err(USAGE.into()),

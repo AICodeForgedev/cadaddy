@@ -22,6 +22,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "dsettings" => dsettings(app, ctx, &mut open),
         "units" => units(app, ctx, &mut open),
         "hatch" => crate::hatchdlg::dialog(app, ctx, &mut open),
+        "aliasedit" => crate::aliasdlg::dialog(app, ctx, &mut open),
         "about" => about(ctx, &mut open),
         "preview" => crate::exchange::dialog(app, ctx, &mut open),
         "commands" => commands(app, ctx, &mut open),
@@ -78,7 +79,10 @@ fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         ui.separator();
         ui.heading(crate::tl!("Polar Tracking"));
         ui.checkbox(&mut s.polarmode, crate::tl!("Polar Tracking On (F10)"));
-        let mut deg = s.polarang.to_degrees();
+        // POLARANG is held in radians and 15 or 30 come back as 14.999999999999998: round like
+        // the additional angles, and write back only a newly picked angle.
+        let current = (s.polarang.to_degrees() * 1e6).round() / 1e6;
+        let mut deg = current;
         ui.horizontal(|ui| {
             ui.label(crate::tl!("Increment angle"));
             egui::ComboBox::from_id_salt("polarang").selected_text(format!("{deg}")).show_ui(ui, |ui| {
@@ -87,7 +91,9 @@ fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 }
             });
         });
-        s.polarang = deg.to_radians();
+        if deg != current {
+            s.polarang = deg.to_radians();
+        }
         tracking_options(ui, s);
         ui.separator();
         ui.heading(crate::tl!("Object Snap"));

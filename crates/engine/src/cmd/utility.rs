@@ -26,7 +26,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo()
             .interactive(|_| Ok(Box::<PickM>::default())),
         CommandSpec::new("find", "Find...", run_find).menu(&["Edit", "Find..."]).params("{find, replace?, matchCase?: bool, wholeWord?: bool}"),
-        CommandSpec::new("measuregeom", "Measure Geometry", run_measuregeom).params("{mode: distance|radius|angle|area, ...}").noundo(),
+        CommandSpec::new("measuregeom", "Measure Geometry", run_measuregeom)
+            .params("{mode: distance|radius|angle|area, ...}")
+            .noundo()
+            .interactive(|_| Ok(Box::<MeasureM>::default())),
         CommandSpec::new("radius.measure", "Radius", run_radius).menu(&["Tools", "Inquiry", "Radius"]).params("{handle}").noundo(),
         CommandSpec::new("angle.measure", "Angle", run_angle).menu(&["Tools", "Inquiry", "Angle"]).params("{vertex, p1, p2} | {h1, h2}").noundo(),
     ]
@@ -316,6 +319,61 @@ fn run_measuregeom(s: &mut Session, p: &Value) -> Result<Value> {
         "angle" | "a" => run_angle(s, p),
         "area" | "ar" => s.execute("area", p),
         _ => Err(bad("measuregeom", "mode must be distance, radius, angle or area")),
+    }
+}
+
+/// MEASUREGEOM typed or picked: choose what to measure, then continue as DIST, AREA or a radius pick.
+#[derive(Default)]
+struct MeasureM {
+    inner: Option<Box<dyn Interactive>>,
+    /// Waiting for the arc or circle of the Radius option.
+    radius: bool,
+}
+
+impl Interactive for MeasureM {
+    fn name(&self) -> &'static str {
+        "MEASUREGEOM"
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        match &self.inner {
+            Some(m) => m.prompt(s),
+            None if self.radius => Prompt::new("Select arc or circle", Accept::POINT),
+            None => Prompt::new("Enter an option", Accept { point: false, number: false, text: false, select: false, enter: true })
+                .kw(&["Distance", "Radius", "ARea"])
+                .default("Distance"),
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if let Some(m) = &mut self.inner {
+            return m.input(s, i);
+        }
+        if self.radius {
+            let Input::Point(p) = i else { return Ok(Step::Done) };
+            let Some(h) = super::curves::pick_at(s, p) else { return Ok(Step::Continue) };
+            match run_radius(s, &json!({ "handle": h.0 })) {
+                Ok(r) => {
+                    for l in r["message"].as_str().unwrap_or_default().lines() {
+                        s.echo(l.to_string());
+                    }
+                    return Ok(Step::Done);
+                }
+                Err(_) => s.echo("Select an arc or circle."),
+            }
+            return Ok(Step::Continue);
+        }
+        match i {
+            Input::Enter => self.inner = Some(Box::new(super::inquiry::DistM::default())),
+            Input::Keyword(k) => match k.as_str() {
+                "Radius" => self.radius = true,
+                "ARea" => self.inner = Some(Box::new(super::inquiry::AreaM::default())),
+                _ => self.inner = Some(Box::new(super::inquiry::DistM::default())),
+            },
+            _ => {}
+        }
+        Ok(Step::Continue)
+    }
+    fn preview(&self, s: &Session, cursor: Vec2) -> Vec<EntityKind> {
+        self.inner.as_ref().map(|m| m.preview(s, cursor)).unwrap_or_default()
     }
 }
 

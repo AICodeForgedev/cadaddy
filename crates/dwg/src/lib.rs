@@ -83,10 +83,17 @@ mod native {
             let why = outcome.stats.diagnostics.first().map(|d| d.message.trim_start_matches("Failsafe: ").to_string());
             return Err(format!("DWG: {}", why.unwrap_or_else(|| "the file's objects couldn't be read".to_string())));
         }
-        let notes = read_notes(&outcome.stats);
+        let mut notes = read_notes(&outcome.stats);
         let mut doc = outcome.document;
+        current_style_names(&mut doc);
         table_merges(&mut doc);
         table_style_rows(&mut doc, false);
+        dimension_flags(&mut doc, false);
+        let orphans = drop_orphaned_dgn_components(&mut doc);
+        if orphans > 0 {
+            let (s, were) = if orphans == 1 { ("", "was") } else { ("s", "were") };
+            notes.push(format!("DWG: {orphans} DGN line style component{s} that no line style definition uses {were} left out"));
+        }
         let mut out = CappedWriter { buf: Vec::new(), limit: limits.max_dxf_bytes, exceeded: false };
         let written = std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DxfWriter::new(&doc).write_to_writer(&mut out)))
             .map_err(|_| "the DWG→DXF conversion failed on this file".to_string())?;
@@ -265,6 +272,83 @@ mod native {
         }
     }
 
+    /// The DWG dimension flags byte. Its bit 0 is the opposite of DXF group 70's bit 128 (set: the
+    /// text is at its default position) and its bit 1 is group 70's bit 32 (ODA DWG
+    /// specification, common dimension data), while acadrust 0.6.4 reads and writes bit 0 as
+    /// `text_user_positioned` itself and keeps no bit 32 from DXF. Without this, every dimension
+    /// of a DWG CADCraft writes is user-positioned for AutoCAD (#1094), and every dimension of an
+    /// AutoCAD DWG is read as user-positioned. `to_dwg` sets the fields up for the writer:
+    /// bit 32 as CADCraft's DXF writer always sets it, and bit 0 through the inverted field;
+    /// otherwise the field is read from bit 0 after a DWG is read.
+    fn dimension_flags(doc: &mut acadrust::CadDocument, to_dwg: bool) {
+        for e in doc.entities_mut() {
+            let acadrust::entities::EntityType::Dimension(d) = e else { continue };
+            let b = d.base_mut();
+            if to_dwg {
+                b.dwg_flags_byte |= 0x02;
+                b.text_user_positioned = !b.text_user_positioned;
+            } else {
+                b.text_user_positioned = b.dwg_flags_byte & 0x01 == 0;
+            }
+        }
+    }
+
+    /// Leave out DGN line style components (`LS*COMPONENT`) that no line style definition uses
+    /// (#1482). A drawing that once came from MicroStation can carry hundreds of thousands of
+    /// them, orphaned copies piled up by earlier DGN imports and copy-pastes (AutoCAD's PURGE
+    /// removes them as orphaned data): in a real 83 MB site plan they were 888,483 of 889,053
+    /// components and made its DXF rendition 1.2 GB, over [`Limits::DEFAULT`], so the file
+    /// didn't open at all. No definition that was read refers to them (a definition the reader
+    /// skipped can't use them either) and CADCraft doesn't draw DGN line styles, so nothing
+    /// visible is lost.
+    /// Every component a definition reaches (directly, or through compound and point
+    /// components) is kept, as are the definitions; dictionary entries that named a dropped
+    /// component go with it. Returns how many were left out.
+    fn drop_orphaned_dgn_components(doc: &mut acadrust::CadDocument) -> usize {
+        use acadrust::objects::{DgnLineStyleData, ObjectType};
+        use std::collections::{HashMap, HashSet};
+        // Each component's references, and the definitions' root components to start from.
+        let mut refs: HashMap<acadrust::Handle, Vec<acadrust::Handle>> = HashMap::new();
+        let mut stack: Vec<acadrust::Handle> = Vec::new();
+        for (h, o) in &doc.objects {
+            let ObjectType::DgnLineStyle(ls) = o else { continue };
+            match &ls.data {
+                DgnLineStyleData::Definition { root_component, .. } => stack.push(*root_component),
+                DgnLineStyleData::Component { component, .. } => {
+                    refs.insert(*h, component.references());
+                }
+                DgnLineStyleData::Registered { .. } => {}
+            }
+        }
+        if refs.is_empty() {
+            return 0;
+        }
+        // Each component is visited once, so cycles and shared subtrees end.
+        let mut used: HashSet<acadrust::Handle> = HashSet::new();
+        while let Some(h) = stack.pop() {
+            if let Some(r) = refs.get(&h)
+                && used.insert(h)
+            {
+                stack.extend(r.iter().copied());
+            }
+        }
+        let orphans: HashSet<acadrust::Handle> = refs.into_keys().filter(|h| !used.contains(h)).collect();
+        if orphans.is_empty() {
+            return 0;
+        }
+        doc.objects.retain(|h, _| !orphans.contains(h));
+        doc.dgn_ls_components.retain(|h, _| !orphans.contains(h));
+        for o in doc.objects.values_mut() {
+            let ObjectType::Dictionary(d) = o else { continue };
+            if d.entries.iter().any(|(_, e)| orphans.contains(e)) {
+                d.entries.retain(|(_, e)| !orphans.contains(e));
+                let keys: HashSet<&str> = d.entries.iter().map(|(k, _)| k.as_str()).collect();
+                d.hard_owner_entries.retain(|k| keys.contains(k.as_str()));
+            }
+        }
+        orphans.len()
+    }
+
     /// Leave out what acadrust can't write as this DWG version: other programs' custom entities
     /// and objects without raw DWG data of that version. acadrust 0.6.4 refuses the whole file
     /// for one of them (0.6.3 left them out); CADCraft already tells the user which entity types
@@ -307,7 +391,8 @@ mod native {
     /// the HEADER section: (name, group code, value).
     fn unwritten_header_vars(h: &acadrust::document::HeaderVariables) -> [(&'static str, i32, String); 7] {
         [
-            ("$ANGBASE", 50, h.angle_base.to_string()),
+            // DWG holds radians; `$ANGBASE` is in degrees.
+            ("$ANGBASE", 50, h.angle_base.to_degrees().to_string()),
             ("$ANGDIR", 70, h.angle_direction.to_string()),
             ("$FILLETRAD", 40, h.fillet_radius.to_string()),
             ("$CHAMFERA", 40, h.chamfer_distance_a.to_string()),
@@ -385,6 +470,30 @@ mod native {
         convert(dxf, Some(v))
     }
 
+    /// The current dimension and text styles' names from their handles: a DWG stores the
+    /// handles, and the reader leaves the names at "Standard", so a drawing reopened from DWG
+    /// lost its current dimension style (#1051).
+    fn current_style_names(doc: &mut acadrust::CadDocument) {
+        let h = doc.header.current_dimstyle_handle;
+        if let Some(n) = doc.dim_styles.iter().find(|ds| ds.handle == h && !h.is_null()).map(|ds| ds.name.clone()) {
+            doc.header.current_dimstyle_name = n;
+        }
+        let h = doc.header.current_text_style_handle;
+        if let Some(n) = doc.text_styles.iter().find(|ts| ts.handle == h && !h.is_null()).map(|ts| ts.name.clone()) {
+            doc.header.current_text_style_name = n;
+        }
+    }
+
+    /// The current dimension style (`$DIMSTYLE`) by its name: the DXF gives the name, and the
+    /// handle read with it needn't be the style's in the document, in which case the DWG writer
+    /// fell back to Standard and AutoCAD opened the drawing with Standard current (#1051).
+    fn current_dimstyle(doc: &mut acadrust::CadDocument) {
+        let name = doc.header.current_dimstyle_name.clone();
+        if let Some(h) = doc.dim_styles.iter().find(|ds| ds.name.eq_ignore_ascii_case(&name)).map(|ds| ds.handle) {
+            doc.header.current_dimstyle_handle = h;
+        }
+    }
+
     fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>) -> Result<Vec<u8>, String> {
         let data = dxf.to_vec();
         let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
@@ -398,11 +507,39 @@ mod native {
             None if doc.version < MIN_DWG_VERSION => doc.version = MIN_DWG_VERSION,
             None => {}
         }
+        other_layout_owners(&mut doc);
         table_style_rows(&mut doc, true);
+        dimension_flags(&mut doc, true);
         drop_unwritable(&mut doc);
+        current_dimstyle(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
             .map_err(|e| format!("DWG write: {e}"))
+    }
+
+    /// Entities of a layout other than the one in `*Paper_Space` are written owned by their block
+    /// (entity mode 0, with its handle). acadrust writes every paper-space entity with mode 1,
+    /// "paper space", which AutoCAD reads as the `*Paper_Space` block's: everything drawn on a
+    /// second layout landed on the first one, and the second stayed empty (#1057).
+    fn other_layout_owners(doc: &mut acadrust::CadDocument) {
+        let others: std::collections::HashSet<acadrust::Handle> = doc
+            .block_records
+            .iter()
+            .filter(|br| {
+                let n = br.name.to_ascii_uppercase();
+                n.len() > 12 && n.starts_with("*PAPER_SPACE") && n[12..].bytes().all(|b| b.is_ascii_digit())
+            })
+            .map(|br| br.handle)
+            .collect();
+        if others.is_empty() {
+            return;
+        }
+        for e in doc.entities_mut() {
+            let c = e.common_mut();
+            if others.contains(&c.owner_handle) {
+                c.entity_mode = Some(0);
+            }
+        }
     }
 }
 
@@ -452,5 +589,203 @@ mod tests {
     fn garbage_is_an_error_not_a_crash() {
         assert!(dwg_to_dxf(b"AC1032 this is not a dwg file at all").is_err());
         assert!(dwg_to_dxf(b"").is_err());
+    }
+
+    /// A DXF with one DIMENSION per (text, group 70, subclass, points) row.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn dims_dxf(dims: &[(&str, i64, &str, &[(i32, [f64; 2])])]) -> String {
+        let mut s = String::from("  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1032\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n");
+        for (text, flags, sub, pts) in dims {
+            s += "  0\nDIMENSION\n  8\n0\n100\nAcDbEntity\n100\nAcDbDimension\n 10\n0\n 20\n0\n 30\n0\n";
+            s += &format!(" 11\n50\n 21\n-20\n 31\n0\n 70\n{flags}\n  1\n{text}\n  3\nStandard\n100\n{sub}\n");
+            for (code, [x, y]) in pts.iter() {
+                s += &format!("{code:>3}\n{x}\n{:>3}\n{y}\n{:>3}\n0\n", code + 10, code + 20);
+            }
+        }
+        s + "  0\nENDSEC\n  0\nEOF\n"
+    }
+
+    /// DWG stores DXF group 70's bit 128 inverted, in bit 0 of the dimension flags byte (set:
+    /// the text is at its default position), and bit 32 in bit 1 (ODA DWG specification, common
+    /// dimension data). The bytes are read back raw, so a reader that inverts bit 0 the same way
+    /// as the writer can't hide a wrong byte.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dimension_text_position_flags_reach_the_dwg_as_autocad_reads_them() {
+        let linear: &[(i32, [f64; 2])] = &[(13, [0.0, 0.0]), (14, [100.0, 0.0])];
+        let radius: &[(i32, [f64; 2])] = &[(15, [10.0, 0.0])];
+        let angular: &[(i32, [f64; 2])] = &[(13, [0.0, 0.0]), (14, [10.0, 0.0]), (15, [0.0, 0.0]), (16, [0.0, 10.0])];
+        let kinds = [
+            (0, "AcDbAlignedDimension", linear),
+            (1, "AcDbAlignedDimension", linear),
+            (4, "AcDbRadialDimension", radius),
+            (2, "AcDb2LineAngularDimension", angular),
+        ];
+        let mut dims = Vec::new();
+        for (ty, sub, pts) in kinds {
+            dims.push(("HOME", ty | 32, sub, pts));
+            dims.push(("MOVED", ty | 32 | 128, sub, pts));
+        }
+        let dwg = dxf_to_dwg(dims_dxf(&dims).as_bytes()).unwrap();
+        let doc = acadrust::DwgReader::from_stream(std::io::Cursor::new(&dwg)).read().unwrap();
+        let mut seen = Vec::new();
+        for e in doc.entities() {
+            let acadrust::entities::EntityType::Dimension(d) = e else { continue };
+            let (text, byte) = (d.base().text_override().unwrap_or_default(), d.base().dwg_flags_byte);
+            seen.push((text.to_string(), byte & 0x03));
+            assert_eq!(byte & 0x02, 0x02, "{text} {:?}: bit 32 of group 70 is lost (flags byte {byte:#04x})", d.base().dimension_type);
+            let default_pos = text == "HOME";
+            assert_eq!(byte & 0x01 != 0, default_pos, "{text} {:?}: flags byte {byte:#04x}", d.base().dimension_type);
+        }
+        for text in ["HOME", "MOVED"] {
+            assert_eq!(seen.iter().filter(|(t, _)| t == text).count(), 4, "{seen:?}");
+        }
+
+        // And CADCraft reads its own DWG back as it wrote it: 128 only on the moved texts.
+        let dxf = String::from_utf8(dwg_to_dxf(&dwg).unwrap()).unwrap();
+        let lines: Vec<&str> = dxf.lines().map(str::trim).collect();
+        let mut flags = Vec::new();
+        for rec in lines.chunks(2).collect::<Vec<_>>().split(|p| p.first() == Some(&"0")) {
+            let value = |code: &str| rec.iter().find(|p| p.first() == Some(&code)).and_then(|p| p.get(1).copied());
+            if let (Some(text @ ("HOME" | "MOVED")), Some(v)) = (value("1"), value("70")) {
+                flags.push((text, v.parse::<i64>().unwrap_or(-1) & 128));
+            }
+        }
+        assert_eq!(flags.len(), 8, "{flags:?}");
+        assert!(flags.iter().all(|(l, f)| (*f == 128) == (*l == "MOVED")), "{flags:?}");
+    }
+
+    /// The handles a DXF text refers to or gives its records (groups 5, 105 and 330–369).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn dxf_handles(dxf: &str) -> std::collections::HashSet<u64> {
+        let lines: Vec<&str> = dxf.lines().collect();
+        lines
+            .chunks(2)
+            .filter_map(|p| match p {
+                [c, v] if matches!(c.trim().parse::<i32>(), Ok(5 | 105 | 330..=369)) => u64::from_str_radix(v.trim(), 16).ok(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Issue #1482: a DWG that once came from MicroStation can carry hundreds of thousands of DGN
+    /// line style components no definition uses (a real 83 MB site plan: 888,483 of 889,053, a
+    /// 1.2 GB DXF rendition over the limit, so it didn't open). They're left out with a note, and
+    /// their dictionary entries with them; the definition and every component it reaches —
+    /// through compound and point components, around a cycle — are kept.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn orphaned_dgn_line_style_components_are_left_out() {
+        use acadrust::objects::*;
+        let mut doc = acadrust::CadDocument::new();
+        let container = doc.allocate_handle();
+        let nod = doc.header.named_objects_dict_handle;
+        let Some(ObjectType::Dictionary(root)) = doc.objects.get_mut(&nod) else { panic!("no named object dictionary") };
+        root.entries.push(("ACAD_DGNLINESTYLECOMP".into(), container));
+        let pattern = || DgnLsStrokePattern {
+            has_iteration_limit: false,
+            is_single_segment: false,
+            iteration_limit: 0,
+            auto_phase: 0.0,
+            phase: 0.0,
+            phase_mode: DgnLsPhaseMode::Distance,
+            strokes: vec![DgnLsStroke {
+                is_dash: true,
+                bypass_corner: false,
+                can_be_scaled: true,
+                invert_at_origin: false,
+                invert_at_end: false,
+                length: 2.5,
+                start_width: 0.0,
+                end_width: 0.0,
+                width_mode: 0,
+                cap_mode: 0,
+            }],
+        };
+        let kind = |c: &DgnLsComponentData| match c {
+            DgnLsComponentData::Symbol(_) => DgnLsComponentType::Symbol,
+            DgnLsComponentData::Compound(_) => DgnLsComponentType::Compound,
+            DgnLsComponentData::Stroke(_) => DgnLsComponentType::Stroke,
+            DgnLsComponentData::Point(_) => DgnLsComponentType::Point,
+            DgnLsComponentData::Internal(_) => DgnLsComponentType::Internal,
+        };
+        let compound = |of: &[acadrust::Handle]| {
+            DgnLsComponentData::Compound(DgnLsCompoundComponent {
+                entries: of.iter().map(|&component| DgnLsCompoundEntry { component, offset: 0.0 }).collect(),
+            })
+        };
+        let mut entries = Vec::new();
+        let mut put = |doc: &mut acadrust::CadDocument, h: acadrust::Handle, data: DgnLineStyleData| {
+            entries.push((format!("{:X}", h.value()), h));
+            let reactors = vec![container];
+            doc.objects
+                .insert(h, ObjectType::DgnLineStyle(DgnLineStyleObject { handle: h, owner: container, reactors, xdictionary_handle: None, data }));
+        };
+        let component = |c: DgnLsComponentData| DgnLineStyleData::Component {
+            kind: kind(&c),
+            description: "dash".into(),
+            version: 1,
+            component_uid: [7; 16],
+            scale: 1.0,
+            property_flags: 0,
+            component: c,
+            properties: vec![],
+        };
+        let h: Vec<acadrust::Handle> = (0..9).map(|_| doc.allocate_handle()).collect();
+        let [def, root, stroke, point, back, orphan, orphan_cycle, internal, shared] = h[..] else { panic!("nine handles") };
+        put(
+            &mut doc,
+            def,
+            DgnLineStyleData::Definition {
+                description: "{ dash }".into(),
+                version: 1,
+                style_number: 1,
+                component_uid: [1; 16],
+                is_continuous: false,
+                unit_definition: 1.0,
+                unit_scale: 1.0,
+                units_type: 0,
+                is_element: false,
+                is_physical: false,
+                is_scale_independent: false,
+                is_snappable: false,
+                root_component: root,
+                properties: vec![],
+            },
+        );
+        // Used: def → root → {stroke, point → shared, back → root (a cycle)}.
+        put(&mut doc, root, component(compound(&[stroke, point, back])));
+        put(&mut doc, stroke, component(DgnLsComponentData::Stroke(pattern())));
+        put(&mut doc, point, component(DgnLsComponentData::Point(DgnLsPointComponent { stroke_component: shared, symbols: vec![] })));
+        put(&mut doc, back, component(compound(&[root])));
+        put(&mut doc, shared, component(DgnLsComponentData::Stroke(pattern())));
+        // Orphans: an internal component, and two compounds that refer to each other and to a
+        // used component (which stays).
+        let pattern_internal =
+            DgnLsInternalComponent { pattern: pattern(), internal_version: 0, hardware_style: 0, is_hardware_style: false, line_code: 0 };
+        put(&mut doc, internal, component(DgnLsComponentData::Internal(pattern_internal)));
+        put(&mut doc, orphan, component(compound(&[orphan_cycle, shared])));
+        put(&mut doc, orphan_cycle, component(compound(&[orphan])));
+        let mut dict = Dictionary::new();
+        dict.handle = container;
+        dict.owner = nod;
+        dict.entries = entries;
+        doc.objects.insert(container, ObjectType::Dictionary(dict));
+        let dwg = acadrust::DwgWriter::write_to_vec(&doc).unwrap();
+
+        let (dxf, notes) = dwg_to_dxf_noted(&dwg, Limits::DEFAULT).unwrap();
+        let dxf = String::from_utf8(dxf).unwrap();
+        let handles = dxf_handles(&dxf);
+        for kept in [def, root, stroke, point, back, shared] {
+            assert!(handles.contains(&kept.value()), "{:X} was left out", kept.value());
+        }
+        for gone in [internal, orphan, orphan_cycle] {
+            assert!(!handles.contains(&gone.value()), "{:X} was kept or is still referred to", gone.value());
+        }
+        let lines: Vec<&str> = dxf.lines().collect();
+        let ls: Vec<&str> = lines.chunks(2).filter_map(|p| p.get(1).filter(|_| p[0].trim() == "0" && p[1].starts_with("LS")).copied()).collect();
+        assert_eq!(ls.iter().filter(|t| t.ends_with("COMPONENT")).count(), 5, "{ls:?}");
+        assert!(ls.contains(&"LSDEFINITION") && !ls.contains(&"LSINTERNALCOMPONENT"), "{ls:?}");
+        assert_eq!(notes, ["DWG: 3 DGN line style components that no line style definition uses were left out"]);
     }
 }

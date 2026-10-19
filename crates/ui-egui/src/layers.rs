@@ -3,7 +3,7 @@
 //! VP Color columns. Every change runs an engine command (`layer.*`, `layerstate.*`, `vplayer`,
 //! `linetype`).
 
-use cadcraft_color::{Color, aci_rgb};
+use cadcraft_color::{Color, Rgb, aci_rgb};
 use cadcraft_doc::{Handle, Layer, Lineweight};
 use egui::{Color32, Rect, RichText, Sense, Stroke, pos2, vec2};
 use serde_json::{Value, json};
@@ -28,13 +28,16 @@ struct LpmState {
     state_sel: Option<String>,
 }
 
-fn rgb32(c: Color) -> Color32 {
-    let r = c.resolve(Color::Index(7), Color::Index(7));
+fn rgb32(r: Rgb) -> Color32 {
     Color32::from_rgb(r.0, r.1, r.2)
 }
 
 /// A colour swatch.
 pub fn swatch(p: &egui::Painter, r: Rect, c: Color) {
+    swatch_rgb(p, r, c.resolve(Color::WHITE, Color::WHITE));
+}
+
+fn swatch_rgb(p: &egui::Painter, r: Rect, c: Rgb) {
     p.rect_filled(r, 1.0, rgb32(c));
     p.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_gray(25)), egui::StrokeKind::Inside);
 }
@@ -42,14 +45,22 @@ pub fn swatch(p: &egui::Painter, r: Rect, c: Color) {
 /// A colour button (swatch + name) that opens the Select Color popup: the AutoCAD Color Index
 /// palette and a true-colour editor. Returns the picked colour. `by` adds ByLayer/ByBlock.
 pub fn color_button(ui: &mut egui::Ui, id: egui::Id, current: Color, by: bool, width: f32) -> Option<Color> {
+    let label = current.name();
+    color_button_resolved(ui, id, current, current.resolve(Color::WHITE, Color::WHITE), &label, by, width)
+}
+
+/// A colour button whose swatch has already been resolved through its layer/block context.
+/// `current` remains the value selected in the palette and `label` remains its logical name
+/// (for example, a blue swatch can still be labelled `ByLayer`).
+pub fn color_button_resolved(ui: &mut egui::Ui, id: egui::Id, current: Color, resolved: Rgb, label: &str, by: bool, width: f32) -> Option<Color> {
     let t = Tokens::get();
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click());
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, 2.0, t.control_hover.gamma_multiply(0.5));
     }
-    swatch(p, Rect::from_min_size(pos2(rect.left() + 3.0, rect.center().y - 6.0), vec2(12.0, 12.0)), current);
-    p.text(pos2(rect.left() + 20.0, rect.center().y), egui::Align2::LEFT_CENTER, crate::i18n::t(&current.name()), crate::theme::body(), t.text);
+    swatch_rgb(p, Rect::from_min_size(pos2(rect.left() + 3.0, rect.center().y - 6.0), vec2(12.0, 12.0)), resolved);
+    p.text(pos2(rect.left() + 20.0, rect.center().y), egui::Align2::LEFT_CENTER, crate::i18n::t(label), crate::theme::body(), t.text);
     let mut out = None;
     egui::Popup::from_toggle_button_response(&resp).id(id).width(300.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         out = color_palette(ui, id, current, by);

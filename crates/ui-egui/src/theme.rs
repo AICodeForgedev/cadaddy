@@ -360,13 +360,12 @@ pub fn install_fonts(ctx: &egui::Context, language: &str) {
             added.push(("system-arabic".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes))));
         }
     }
-    let mut embedded: Vec<_> = cadcraft_fonts::CRAFT_FONTS
-        .iter()
-        .filter(|f| f.style == "Regular" && f.scripts.iter().any(|s| matches!(*s, "Jpan" | "Hans" | "Hant")))
-        .collect();
-    // A sans-serif face reads best in the interface.
-    embedded.sort_by_key(|f| !f.family.contains("Gothic") && !f.family.contains("Sans"));
-    added.extend(embedded.first().map(|f| (format!("craft-{}", f.stem()), std::sync::Arc::new(egui::FontData::from_static(f.bytes)))));
+    let embedded: Vec<_> = cadcraft_fonts::CRAFT_FONTS.iter().collect();
+    added.extend(
+        embedded_ui_faces(&embedded, language)
+            .into_iter()
+            .map(|f| (format!("craft-{}", f.stem()), std::sync::Arc::new(egui::FontData::from_static(f.bytes)))),
+    );
     // Korean: Noto Sans CJK and most CJK fonts above already cover Hangul; else a Hangul font.
     if language == "ko"
         && !cjk_covers_hangul()
@@ -385,6 +384,25 @@ pub fn install_fonts(ctx: &egui::Context, language: &str) {
         }
     }
     ctx.set_fonts(fonts);
+}
+
+/// The faces `build.rs` embedded from craft-fonts that the interface loads, in order: every CJK
+/// face, because file, layout and layer names can be Japanese or Chinese whatever the interface
+/// shows (#513), with the interface's own face leading. A sans-serif face reads best, and a
+/// Chinese interface takes the face with its own glyphs ahead of a Japanese one — a Japanese face
+/// shares most ideographs but lacks the simplified-only ones (图 园 测), which would be tofu.
+/// العربية adds its Arabic face after those, egui's bundled faces carrying no Arabic glyphs.
+fn embedded_ui_faces<'a>(faces: &[&'a cadcraft_fonts::CraftFont], language: &str) -> Vec<&'a cadcraft_fonts::CraftFont> {
+    let cjk = |f: &&cadcraft_fonts::CraftFont| f.style == "Regular" && f.scripts.iter().any(|s| matches!(*s, "Jpan" | "Hans" | "Hant"));
+    let mut out: Vec<_> = faces.iter().copied().filter(cjk).collect();
+    out.sort_by_key(|f| !f.family.contains("Gothic") && !f.family.contains("Sans"));
+    if language.starts_with("zh") {
+        out.sort_by_key(|f| !f.scripts.contains(&"Hans"));
+    }
+    if language == "ar" {
+        out.extend(faces.iter().copied().filter(|f| f.style == "Regular" && f.scripts.contains(&"Arab")));
+    }
+    out
 }
 
 /// Largest interface font file read or embedded face copied (CJK collections are 15–60 MB).
@@ -616,15 +634,30 @@ pub fn shows_hangul(language: &str) -> bool {
     cjk_covers_hangul() || (language == "ko" && korean_font().is_some())
 }
 
-/// Whether the interface can show `language` without missing-glyph boxes: Chinese needs an
-/// installed CJK font, Korean a font with Hangul, العربية an installed Arabic font.
+/// Whether the interface can show `language` without missing-glyph boxes: Chinese needs a font
+/// with its glyphs (installed, or the CJK face this build embedded from craft-fonts), Korean a
+/// font with Hangul, العربية an installed Arabic font or the embedded Arabic face.
 pub fn can_show(language: &str) -> bool {
     match language {
         "ko" => shows_hangul("ko"),
-        "ar" => arabic_font().is_some(),
-        l if l.starts_with("zh") => cjk_font().is_some(),
+        "ar" => arabic_font().is_some() || embedded_script("Arab"),
+        l if l.starts_with("zh") => cjk_font().is_some() || embedded_script("Hans") || embedded_script("Hant"),
         _ => true,
     }
+}
+
+/// Whether a face this build embedded from craft-fonts carries `script` (ISO 15924). The web
+/// build has no system fonts, so there the interface rides on the embedded faces alone; the
+/// Korean gate already asks this way ([`korean_font`]) and Arabic and Chinese match it. Only a
+/// build made with `CRAFT_FONTS_DIR` embeds any (`build.rs`), so the rest is unchanged.
+fn embedded_script(script: &str) -> bool {
+    any_script(cadcraft_fonts::CRAFT_FONTS, script)
+}
+
+/// Whether any face of `faces` carries `script` (ISO 15924), the question [`embedded_script`]
+/// asks of the table this build embedded.
+fn any_script(faces: &[cadcraft_fonts::CraftFont], script: &str) -> bool {
+    faces.iter().any(|f| f.style == "Regular" && f.scripts.contains(&script))
 }
 
 /// egui's visuals for `theme`, from its tokens.
@@ -681,10 +714,54 @@ pub fn apply(ctx: &egui::Context, theme: Theme, follow_system: bool) {
 
 #[cfg(test)]
 mod tests {
+    use cadcraft_fonts::CraftFont;
+
+    /// A face shaped like `build.rs` writes them, with no font file (as in `cadcraft-fonts`).
+    fn face(family: &'static str, scripts: &'static [&'static str]) -> CraftFont {
+        CraftFont { family, style: "Regular", scripts, bytes: &[] }
+    }
+
+    fn families<'a>(faces: &[&'a CraftFont]) -> Vec<&'a str> {
+        faces.iter().map(|f| f.family).collect()
+    }
+
     #[test]
     fn korean_font_rejects_invalid_or_glyphless_files() {
         for bytes in [vec![], vec![0xff; 32], vec![0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]] {
             assert!(super::korean_face(std::sync::Arc::new(bytes)).is_none());
         }
+    }
+
+    /// The interface's own script leads the embedded faces it loads, and العربية adds its face.
+    #[test]
+    fn embedded_faces_lead_with_the_interfaces_own_script() {
+        let japanese = face("BIZ UDPGothic", &["Jpan", "Latn"]);
+        let chinese = face("Han Test Face", &["Hans", "Latn"]);
+        let arabic = face("Noto Sans Arabic", &["Arab"]);
+        let faces = [&japanese, &chinese, &arabic];
+        // Every interface reads CJK names, so both CJK faces load, the sans-serif face first.
+        assert_eq!(families(&super::embedded_ui_faces(&faces, "en")), ["BIZ UDPGothic", "Han Test Face"]);
+        // A Chinese interface takes the Han face first: a Japanese face lacks 图 园 测.
+        assert_eq!(families(&super::embedded_ui_faces(&faces, "zh")), ["Han Test Face", "BIZ UDPGothic"]);
+        // العربية adds the Arabic face, after the CJK ones egui's bundled faces have no glyphs for.
+        assert_eq!(families(&super::embedded_ui_faces(&faces, "ar")), ["BIZ UDPGothic", "Han Test Face", "Noto Sans Arabic"]);
+        // Another weight is a style of a face, not an interface face of its own.
+        let bold = CraftFont { family: "BIZ UDPGothic", style: "Bold", scripts: &["Jpan"], bytes: &[] };
+        assert!(super::embedded_ui_faces(&[&bold], "en").is_empty());
+    }
+
+    /// What the gate asks of the table: an embedded face of the script stands in for an installed
+    /// font, which the web build never has. The default (no `CRAFT_FONTS_DIR`) table answers no,
+    /// leaving the installed-font answer the gate had before.
+    #[test]
+    fn embedded_faces_answer_for_their_scripts() {
+        let faces = [face("BIZ UDPGothic", &["Jpan", "Latn"]), face("Noto Sans Arabic", &["Arab"])];
+        assert!(super::any_script(&faces, "Jpan") && super::any_script(&faces, "Arab"));
+        assert!(!super::any_script(&faces, "Hans") && !super::any_script(&faces, "Hant"));
+        // A `Bold`-only face is not the interface's, and a script code is matched whole.
+        let bold = CraftFont { family: "Some Han Bold", style: "Bold", scripts: &["Hans"], bytes: &[] };
+        assert!(!super::any_script(&[bold], "Hans") && !super::any_script(&faces, "Ara"));
+        assert!(!super::embedded_script("Hans") || super::can_show("zh"));
+        assert!(super::can_show("en") && super::can_show("uk"));
     }
 }

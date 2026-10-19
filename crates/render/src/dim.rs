@@ -777,7 +777,16 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                         end(&mut g, blk1, start, -u);
                     }
                 }
-                g.dim(vec![tip, tpos]);
+                // Text the user placed: the leader stops short of it by the offset the default
+                // placement leaves between leader end and text.
+                let lead = if !d.user_text_pos {
+                    tpos
+                } else if horizontal {
+                    text_mid - Vec2::new(tw / 2.0 + gap, 0.0) * if u.x >= 0.0 { 1.0 } else { -1.0 }
+                } else {
+                    text_mid - u * (tw / 2.0 + gap)
+                };
+                g.dim(vec![tip, lead]);
             }
             end(&mut g, blk2, tip, u);
             if horizontal {
