@@ -15,6 +15,7 @@ pub mod audit;
 pub mod autosave;
 pub mod blockedit;
 pub mod cmd;
+pub mod control_auth;
 pub mod doc_path;
 pub mod fields;
 mod finite;

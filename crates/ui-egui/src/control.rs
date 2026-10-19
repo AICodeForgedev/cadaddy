@@ -342,6 +342,7 @@ const METHODS: &[(&str, &str, &str)] = &[
     ),
     ("control.methods", "", "This list."),
     ("ping", "", "Replies \"pong\"."),
+    ("auth", "{token}", "Present the control token (checked by the server before anything reaches the app; see docs/control-protocol.md)."),
 ];
 
 fn methods_json() -> Value {
@@ -748,6 +749,8 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
         }
         "control.methods" => ok(methods_json()),
         "ping" => ok(json!("pong")),
+        // The server checks the token before a request gets here.
+        "auth" => ok(json!({ "authenticated": true })),
         other => err(format!("unknown method `{other}`; `control.methods` lists them (docs/control-protocol.md)")),
     }
 }

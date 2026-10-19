@@ -247,22 +247,10 @@ fn config_dir() -> Option<std::path::PathBuf> {
     config_dir_from(|k| std::env::var_os(k))
 }
 
-/// [`config_dir`] with the environment passed in (`var` looks a variable up). An empty variable
-/// counts as unset, so a blank value never means the working directory.
+/// [`config_dir`] with the environment passed in (`var` looks a variable up); shared with the
+/// control-port clients that look for the token file there.
 fn config_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
-    let set = |k: &str| var(k).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
-    if let Some(dir) = set("CADADDY_CONFIG_DIR") {
-        return Some(dir);
-    }
-    if cfg!(target_os = "macos") {
-        set("HOME").map(|h| h.join("Library/Application Support/CADaddy"))
-    } else if cfg!(windows) {
-        set("APPDATA").map(|a| a.join("CADaddy"))
-    } else {
-        // The XDG spec ignores a relative XDG_CONFIG_HOME.
-        let base = set("XDG_CONFIG_HOME").filter(|p| p.is_absolute()).or_else(|| set("HOME").map(|h| h.join(".config")))?;
-        Some(base.join("cadaddy"))
-    }
+    cadaddy_engine::control_auth::config_dir_from(var)
 }
 
 const APP_ID: &str = "dev.aicodeforge.cadaddy";
@@ -469,8 +457,14 @@ fn main() -> eframe::Result {
                 // Options: both serve the same window.
                 let ports: Vec<u16> = control_port.into_iter().chain(app.ui.agent_control.then_some(cadaddy_engine::AGENT_PORT)).collect();
                 if !ports.is_empty() {
-                    let rx = control_server::start_ports(&ports, cc.egui_ctx.clone());
-                    app = app.with_control(rx);
+                    // A fresh token each start unless the user turned it off (Options ▸ System).
+                    let token = app.ui.control_token.then(control_server::new_token);
+                    if token == Some(None) {
+                        log::error!("control server: no system randomness for a token; the control channel stays closed");
+                    } else {
+                        let rx = control_server::start_ports(&ports, cc.egui_ctx.clone(), token.flatten(), config_dir().as_deref());
+                        app = app.with_control(rx);
+                    }
                 }
                 if sample {
                     let _ = app.run("ui.sample", serde_json::json!({}));

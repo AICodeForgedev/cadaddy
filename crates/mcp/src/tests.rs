@@ -567,3 +567,32 @@ fn agent_reads_a_drawing_summary_then_queries_handles() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The MCP client presents the control token first; a refused token is a clear error.
+#[test]
+fn remote_presents_the_control_token_first() {
+    use std::io::{BufRead, BufReader, Write};
+    for (token, answer, ok) in
+        [("good", r#"{"id":0,"ok":true,"result":{"authenticated":true}}"#, true), ("bad", r#"{"id":0,"ok":false,"error":"unauthorized: no"}"#, false)]
+    {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            let mut r = BufReader::new(s.try_clone().unwrap());
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap();
+            let mut w = s;
+            writeln!(w, "{answer}").unwrap();
+            line
+        });
+        let s = std::net::TcpStream::connect(addr).unwrap();
+        let mut reader = BufReader::new(s.try_clone().unwrap());
+        let mut writer = s;
+        let r = crate::backend::authenticate_with(&mut reader, &mut writer, Some(token.to_string()));
+        assert_eq!(r.is_ok(), ok, "{r:?}");
+        let first: serde_json::Value = serde_json::from_str(server.join().unwrap().trim()).unwrap();
+        assert_eq!(first["method"], "auth");
+        assert_eq!(first["params"]["token"], token);
+    }
+}

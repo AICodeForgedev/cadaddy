@@ -609,6 +609,7 @@ dependencies = [
  "cadaddy-ui-egui",
  "eframe",
  "egui",
+ "getrandom 0.4.3",
  "hidapi",
  "log",
  "muda",

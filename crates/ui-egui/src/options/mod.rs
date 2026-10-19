@@ -145,6 +145,7 @@ struct UiChanges {
     time_sensitive_right_click: Option<bool>,
     check_for_updates: Option<bool>,
     agent_control: Option<bool>,
+    control_token: Option<bool>,
 }
 
 fn color_param(key: &str, v: &Value) -> Result<Option<Color32>, String> {
@@ -189,6 +190,7 @@ fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
         "timeSensitiveRightClick" => c.time_sensitive_right_click = Some(v.as_bool().ok_or("timeSensitiveRightClick must be true or false")?),
         "checkForUpdates" => c.check_for_updates = Some(v.as_bool().ok_or("checkForUpdates must be true or false")?),
         "agentControl" => c.agent_control = Some(v.as_bool().ok_or("agentControl must be true or false")?),
+        "controlToken" => c.control_token = Some(v.as_bool().ok_or("controlToken must be true or false")?),
         k if k.eq_ignore_ascii_case("SAVETIME") => {
             let max = cadaddy_engine::autosave::MAX_SAVETIME;
             let n = v
@@ -227,6 +229,7 @@ fn ui_json(app: &CadApp) -> Map<String, Value> {
     m.insert("timeSensitiveRightClick".into(), json!(o.time_sensitive_right_click));
     m.insert("checkForUpdates".into(), json!(app.update.auto));
     m.insert("agentControl".into(), json!(app.ui.agent_control));
+    m.insert("controlToken".into(), json!(app.ui.control_token));
     m
 }
 
@@ -305,6 +308,9 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
     }
     if let Some(b) = ui.agent_control {
         app.ui.agent_control = b;
+    }
+    if let Some(b) = ui.control_token {
+        app.ui.control_token = b;
     }
     Ok(report(app))
 }

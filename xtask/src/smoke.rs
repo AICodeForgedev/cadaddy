@@ -153,13 +153,28 @@ struct Control {
 }
 
 impl Control {
-    fn connect(port: u16, child: &mut Child, wait: Duration) -> Result<Control, String> {
+    /// Connect to the app on `port`, presenting the token it writes under the settings folder
+    /// `cfg` (control/<port>.token) when it has one (builds from before tokens write none).
+    fn connect(port: u16, cfg: &Path, child: &mut Child, wait: Duration) -> Result<Control, String> {
         let start = Instant::now();
         loop {
             if let Ok(s) = TcpStream::connect(("127.0.0.1", port)) {
                 s.set_read_timeout(Some(Duration::from_secs(120))).map_err(|e| e.to_string())?;
                 let writer = s.try_clone().map_err(|e| e.to_string())?;
-                return Ok(Control { reader: BufReader::new(s), writer, id: 0 });
+                let mut c = Control { reader: BufReader::new(s), writer, id: 0 };
+                // The app writes the token just after it starts listening.
+                let file = cfg.join("control").join(format!("{port}.token"));
+                let token = (0..12).find_map(|_| {
+                    let t = std::fs::read_to_string(&file).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+                    if t.is_none() {
+                        std::thread::sleep(Duration::from_millis(250));
+                    }
+                    t
+                });
+                if let Some(token) = token {
+                    c.call("auth", json!({ "token": token }))?;
+                }
+                return Ok(c);
             }
             if let Ok(Some(status)) = child.try_wait() {
                 return Err(format!("the app exited before its control channel opened ({status})"));
@@ -246,7 +261,7 @@ fn run_app(exe: &Path, bundle_ver: Option<String>, want: &str, out: &Path, r: &m
         .spawn()
         .map_err(|e| format!("{}: {e}", exe.display()))?;
     let result = (|| -> Result<(), String> {
-        let mut c = Control::connect(port, &mut child, Duration::from_secs(90))?;
+        let mut c = Control::connect(port, &cfg, &mut child, Duration::from_secs(90))?;
         r.step("launch", || c.call("ping", json!({})).map(|v| format!("control channel on {port}: {v}")));
         r.step("version", || match &bundle_ver {
             Some(v) if v == want => Ok(format!("Info.plist {v}")),

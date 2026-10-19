@@ -206,6 +206,9 @@ pub struct UiState {
     /// "Let AI agents control CADaddy": the app listens on [`cadaddy_engine::AGENT_PORT`]
     /// (this computer only) from its next start. On by default.
     pub agent_control: bool,
+    /// Programs that drive CADaddy through its control port must first present the token it
+    /// writes, each start, to a file only this user can read. On by default.
+    pub control_token: bool,
     /// Drawings opened from a path, newest first (File ▸ Open Recent and the Start page).
     pub recent_files: Vec<String>,
     /// The touch bar shows once the screen is touched ([`touch`]).
@@ -311,6 +314,7 @@ impl Default for UiState {
             save_format: SaveFormat::default(),
             save_version: SaveVersion::default().year().to_string(),
             agent_control: true,
+            control_token: true,
             recent_files: Vec::new(),
             touch_bar: true,
             shortcuts: Vec::new(),
@@ -708,6 +712,9 @@ impl CadApp {
         if !self.ui.agent_control {
             prefs["agentControl"] = json!(false);
         }
+        if !self.ui.control_token {
+            prefs["controlToken"] = json!(false);
+        }
         if self.update.checked_ms > 0.0 {
             prefs["updateChecked"] = json!(self.update.checked_ms);
         }
@@ -752,6 +759,9 @@ impl CadApp {
         }
         if let Some(b) = v.get("agentControl").and_then(Value::as_bool) {
             self.ui.agent_control = b;
+        }
+        if let Some(b) = v.get("controlToken").and_then(Value::as_bool) {
+            self.ui.control_token = b;
         }
         if let Some(ms) = v.get("updateChecked").and_then(Value::as_f64).filter(|ms| ms.is_finite()) {
             self.update.checked_ms = ms;

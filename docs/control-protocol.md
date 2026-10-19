@@ -9,6 +9,25 @@ Start the desktop app with `--control PORT` (or `CADADDY_CONTROL_PORT=PORT`). It
 {"id": 1, "ok": true, "result": {"prompt": "Command:", "output": ["Command: CIRCLE"], ...}}
 ```
 
+## The token
+
+Unless the user turned it off (Options ▸ System ▸ Require a token for control connections), the app
+makes a random token each time it starts and writes it, for each port it listens on, to
+`control/<port>.token` in its settings folder (`CADADDY_CONFIG_DIR`, else
+`~/Library/Application Support/CADaddy` on macOS, `%APPDATA%\CADaddy` on Windows,
+`~/.config/cadaddy` on Linux), readable by the user only. A connection's first request must present
+it, either as
+
+```json
+{"id": 0, "method": "auth", "params": {"token": "…"}}
+{"id": 0, "ok": true, "result": {"authenticated": true}}
+```
+
+or as a top-level `"token"` on the first request. Anything else first is answered
+`{"ok": false, "error": "unauthorized: …"}`, logged, and the connection closed. Until then request
+lines are limited to 64 KiB. `cadaddy-cli mcp` reads the token itself (`CADADDY_CONTROL_TOKEN`
+overrides the file). An app that needs no token answers `auth` with success too.
+
 Errors come back as `{"id": …, "ok": false, "error": "message"}`. An unknown method's error points
 to `control.methods`, which lists the methods the server answers.
 
@@ -18,8 +37,10 @@ after it runs. Blank lines are skipped.
 
 The server bounds what a client can hold: 16 connections at once (more get an error line and are
 closed), 256 MiB per request line (longer closes the connection), 64 queued requests (more are
-answered `{"ok": false, "error": "busy: …", "state": "not-run"}`), and 10 minutes idle or 30 seconds
-per blocked reply write before the socket is closed.
+answered `{"ok": false, "error": "busy: …", "state": "not-run"}`), 500 requests per second per
+connection on average with bursts of 2000 (more are answered `"rate limited: …"`, `state: "not-run"`,
+and the connection stays open), and 10 minutes idle or 30 seconds per blocked reply write before the
+socket is closed. Refused connections are logged.
 
 The server waits up to 60 s for the app to answer a request. After that it replies with a timeout, and
 `state` tells whether sending the request again is safe:
@@ -35,6 +56,7 @@ field. `engine.commands` returns a separate command catalog, not a list of addit
 
 | Method | Params | What it does |
 |---|---|---|
+| `auth` | `{token}` | Present the control token (see above); first on a connection. |
 | `cmdline.input` | `{text}` | Type a line at the command line exactly like a user. Starts commands by name/alias and answers prompts (points `x,y`, `@dx,dy`, `@d<a`, distances, keywords, empty = Enter). Spaces act as Enter except at text prompts. |
 | `cmdline.script` | `{text}` | Run a multi-line script (like `.scr` files). |
 | `cmdline.key` | `{key: "enter"\|"escape"}` | Press Enter or Escape. Replies like `cmdline.input`: the state, `output`, and `error` when Enter was refused. |
