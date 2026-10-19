@@ -82,6 +82,7 @@ mod web {
             plot: Some(|d, space, opts| cadaddy_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
             read_pdf: Some(cadaddy_io::pdf_read::read_json),
         });
+        cadaddy_engine::cmd::file::set_pdf_merge(|parts| cadaddy_io::pdf_merge::merge(parts).map_err(|e| e.to_string()));
         cadaddy_engine::cmd::file::set_write_as(|d, name, o| {
             cadaddy_io::write_with(d, name, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
         });

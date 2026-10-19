@@ -1,0 +1,195 @@
+# CADaddy engine messages in Simplified Chinese: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	输入编组名
+	Pick internal point	拾取内部点
+	Specify the pattern origin	指定图案原点
+	Specify the incrementing elevation between rows	指定行之间的标高增量
+	Specify the angle to fill (+=ccw, -=cw)	指定要填充的角度 (+=逆时针, -=顺时针)
+	Select hatch object	选择图案填充对象
+	Red, Green, Blue	红, 绿, 蓝
+	Enter the number of rows	输入行数
+	Enter the number of levels	输入层数
+	Enter new layer name	输入新图层名
+	Specify width	指定宽度
+	Specify the angle between items	指定项目间的角度
+	Specify text height	指定文字高度
+	Specify start tangent	指定起点切向
+	Specify end tangent	指定端点切向
+	Specify reference length	指定参照长度
+	Specify other corner	指定另一个角点
+	Specify next point or [Undo]	指定下一点或 [Undo]
+	Specify new location	指定新位置
+	Specify new length	指定新长度
+	Specify length of line	指定直线长度
+	Specify displacement	指定位移
+	Specify angle for dimension text	指定标注文字的角度
+	Select viewports	选择视口
+	Select object to break dimension	选择要打断标注的对象
+	Select group	选择编组
+	Select grip to edit array	选择夹点以编辑阵列
+	Select a table	选择表格
+	Select a boundary to remove	选择要删除的边界
+	Rotate arrayed items?	是否旋转阵列项目?
+	Erase polyline?	是否删除多段线?
+	Enter viewport arrangement	输入视口排列
+	Enter transparency value (0-90)	输入透明度值 (0-90)
+	Enter the number of operations to undo	输入要放弃的操作数目
+	Enter the number of columns	输入列数
+	Enter number of items in array	输入阵列中的项目数
+	Enter new layer state name	输入新图层状态名
+	Enter new color	输入新颜色
+	Enter name of new layout	输入新布局名
+	Enter layer name	输入图层名
+	Enter file name	输入文件名
+	Enter color name or number (1-255)	输入颜色名或编号 (1-255)
+	Enter a configuration option	输入配置选项
+	Base point	基点
+	Word-wrap the combined Mtext?	是否对合并的 Mtext 自动换行?
+	Where should the data go?	数据输出到哪里?
+	Verify each name to be purged?	是否确认要清理的每个名称?
+	Use landing	使用基线
+	Type of boundary object	边界对象类型
+	Specify width factor	指定宽度因子
+	Specify tolerance	指定公差
+	Specify the tangent direction for the start point of arc	指定圆弧起点的相切方向
+	Specify the reference angle	指定参照角
+	Specify the new angle	指定新角度
+	Specify text width	指定文字宽度
+	Specify temporary OTRACK point	指定临时 OTRACK 点
+	Invalid option keyword.	选项关键字无效。
+	*Invalid selection*	*选择无效*
+	Requires a valid angle.	需要有效的角度。
+	Nothing to undo.	没有可放弃的操作。
+	Invalid point.	点无效。
+	No viewport found there.	该处未找到视口。
+	*Cancel*	*取消*
+	Requires a positive number.	需要正数。
+	No hatch selected.	未选择图案填充。
+	** Command not allowed in Model Tab ** (switch to a layout first)	** 在“模型”选项卡中不允许使用该命令 ** (请先切换到布局)
+	Select a multileader.	选择多重引线。
+	No line or arc to continue.	没有可继续的直线或圆弧。
+	Revision cloud finished.	修订云线完成。
+	Object selected is not a circle or arc.	选定的对象不是圆或圆弧。
+	Select a linear or aligned dimension.	选择线性或对齐标注。
+	Object selected is not a dimension.	选定的对象不是标注。
+	No dimensions selected.	未选择标注。
+	Requires a number.	需要数值。
+	0 found	找到 0 个
+	The feature control frame is empty.	特征控制框为空。
+	1 was on a locked layer.	1 个位于锁定的图层上。
+	Row elevations need an associative array; the copies stay at the same elevation.	行标高需要关联阵列；副本保持在同一标高。
+	Point or option keyword required.	需要点或选项关键字。
+	Enter Yes or No.	请输入 Yes 或 No。
+	Viewport created, zoomed to the model extents.	已创建视口并缩放到模型范围。
+	No object found.	未找到对象。
+	The object is not a table.	对象不是表格。
+	No table there.	该处没有表格。
+	A transparent command is already in progress.	已有透明命令正在执行。
+	Invalid class name.	类名无效。
+	Invalid group name.	编组名无效。
+	Too many point modifiers.	点修改器太多。
+	No leader to remove.	没有可删除的引线。
+	Requires a non-negative number.	需要非负数。
+	Clipboard is empty.	剪贴板为空。
+	1 object was on a locked layer.	1 个对象位于锁定的图层上。
+	Circle does not exist.	圆不存在。
+	Enter Length or Area.	请输入 Length 或 Area。
+	Enter a percentage from 0 to 1000.	请输入 0 到 1000 之间的百分比。
+	Enter Table, File or None.	请输入 Table、File 或 None。
+	Cannot measure that object.	无法测量该对象。
+	Third pair ignored (2D align).	忽略第三对 (二维对齐)。
+	Insert mode: Copy (nested objects are copied as independent objects).	插入模式: 复制 (嵌套对象作为独立对象复制)。
+	Everything has been undone	已放弃所有操作
+	Everything has been undone.	已放弃所有操作。
+	Requires a non-negative number or Auto.	需要非负数或 Auto。
+	Select a dimension.	选择标注。
+	Object cannot be dimensioned this way.	无法以这种方式标注该对象。
+	Select an arc, circle or line.	选择圆弧、圆或直线。
+	The two points must be different.	两点必须不同。
+	No linear dimension to continue. Create one with DIMLINEAR first.	没有可继续的线性标注。请先用 DIMLINEAR 创建一个。
+	A multileader needs a leader line or content; nothing was drawn.	多重引线需要引线或内容；未绘制任何内容。
+	Requires the name of a block defined in the drawing.	需要图形中已定义的块名称。
+	Invalid option.	选项无效。
+	The boundary encloses none of the image.	边界未包含图像的任何部分。
+	The object is not an image.	对象不是图像。
+	The image has no clipping boundary.	图像没有剪裁边界。
+	No images selected.	未选择图像。
+	Requires an integer between 0 and 100.	需要 0 到 100 之间的整数。
+	The selected object has no area.	选定的对象没有面积。
+	No such object	没有这样的对象
+	Requires a point.	需要点。
+	Requires a distance.	需要距离。
+	The object is on a locked layer.	对象位于锁定的图层上。
+	Value must be positive and nonzero.	值必须为正且非零。
+	Requires an angle.	需要角度。
+	Requires a point or option keyword.	需要点或选项关键字。
+	Object does not intersect a cutting edge.	对象未与剪切边相交。
+	Object does not intersect an edge.	对象未与边相交。
+	Lines are parallel.	直线平行。
+	The Block Editor is not open.	块编辑器未打开。
+	Requires a positive integer.	需要正整数。
+	Answer Yes or No.	请回答 Yes 或 No。
+	Requires a valid point.	需要有效的点。
+	No reference objects	没有参照对象
+	Requires an angle or point.	需要角度或点。
+	Requires a positive distance.	需要正距离。
+	Requires a non-negative distance.	需要非负距离。
+	No such grip	没有这样的夹点
+	Requires a template file name.	需要样板文件名。
+	A hatch needs at least one boundary: erase it instead.	图案填充至少需要一个边界：请改为删除它。
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	放弃已关闭 (UNDO Control None)；UNDO Control All 可将其打开。
+	Enter ON or OFF.	请输入 ON 或 OFF。
+	Not a linear dimension.	不是线性标注。
+	Valid hatch boundary not found.	未找到有效的图案填充边界。
+	No closed boundary objects selected.	未选择闭合边界对象。
+	Requires a name.	需要名称。
+	That option doesn't apply to this grip.	该选项不适用于此夹点。
+	That would make a degenerate object.	这样会生成退化的对象。
+	No tangent or perpendicular from the last point.	从上一点没有切线或垂线。
+	Requires numeric distance or second point.	需要数值距离或第二点。
+	Edge endpoints must differ.	边的端点必须不同。
+	Requires numeric distance or point.	需要数值距离或点。
+	Requires a positive height.	需要正高度。
+	No objects found.	未找到对象。
+	Requires a non-zero number.	需要非零数。
+	Circle must intersect cutting edges at two or more points.	圆必须与剪切边在两个或更多点相交。
+	Arc cannot be full 360 degrees.	圆弧不能为完整的 360 度。
+	Cannot break that object.	无法打断该对象。
+	An object is on a locked layer.	有对象位于锁定的图层上。
+	Objects are not connected.	对象未连接。
+	The two points must differ.	两点必须不同。
+	Mirror line points must differ.	镜像线的点必须不同。
+	No drawing is open.	未打开图形。
+	Command: {}	命令: {}
+	Unknown command "{}". Press F1 for help.	未知命令“{}”。按 F1 查看帮助。
+	{} found	找到 {} 个
+	{} found, {} total	找到 {} 个，总计 {} 个
+	Distance = {}	距离 = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	距离 = {},  XY 平面中的倾角 = {},  与 XY 平面的夹角 = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	X 增量 = {},  Y 增量 = {},   Z 增量 = {}
+	Area = {}, Perimeter = {}	面积 = {}，周长 = {}
+	Total area = {}	总面积 = {}
+	Resuming {} command.	正在恢复执行 {} 命令。
+	Invalid input: {}	输入无效: {}
+	{} were on a locked layer.	{} 个位于锁定的图层上。
+	{} dimension(s) changed.	已更改 {} 个标注。
+	Group {} ungrouped.	已解除编组 {}。
+	{} object(s) flattened.	已展平 {} 个对象。
+	Group {} renamed to {}.	编组 {} 已重命名为 {}。
+	{} object(s) added to group {}.	已将 {} 个对象添加到编组 {}。
+	{} object(s) removed from group {}.	已从编组 {1} 中删除 {0} 个对象。
+	{} lines were chamfered	已倒角 {} 条直线
+	{} lines were filleted	已圆角 {} 条直线
+	{} objects joined into 1 {}	已将 {} 个对象合并为 1 个 {}
+	Current dimension style:  {}	当前标注样式:  {}
+	Wrote {}	已写入 {}
+	{} is already open.	{} 已打开。
+	{} dimension(s) created.	已创建 {} 个标注。
+	BOUNDARY created {} polyline(s)	BOUNDARY 已创建 {} 个多段线
+	Current line-width is {}	当前线宽为 {}
+	Unknown variable {}. Type SETVAR ? to list variables.	未知变量 {}。输入 SETVAR ? 列出变量。
+	{} = {} (read only)	{} = {} (只读)
+	Dimension text = {}	标注文字 = {}
+	{} segments added to polyline	已向多段线添加 {} 条线段

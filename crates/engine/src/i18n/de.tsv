@@ -1,0 +1,195 @@
+# CADaddy engine messages in German: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	Gruppennamen eingeben
+	Pick internal point	Internen Punkt wählen
+	Specify the pattern origin	Musterursprung angeben
+	Specify the incrementing elevation between rows	Höhenzuwachs zwischen Zeilen angeben
+	Specify the angle to fill (+=ccw, -=cw)	Auszufüllenden Winkel angeben (+=gegen Uhrzeigersinn, -=im Uhrzeigersinn)
+	Select hatch object	Schraffurobjekt wählen
+	Red, Green, Blue	Rot, Grün, Blau
+	Enter the number of rows	Anzahl der Zeilen eingeben
+	Enter the number of levels	Anzahl der Ebenen eingeben
+	Enter new layer name	Neuen Layernamen eingeben
+	Specify width	Breite angeben
+	Specify the angle between items	Winkel zwischen Elementen angeben
+	Specify text height	Texthöhe angeben
+	Specify start tangent	Starttangente angeben
+	Specify end tangent	Endtangente angeben
+	Specify reference length	Bezugslänge angeben
+	Specify other corner	Andere Ecke angeben
+	Specify next point or [Undo]	Nächsten Punkt angeben oder [Undo]
+	Specify new location	Neue Position angeben
+	Specify new length	Neue Länge angeben
+	Specify length of line	Linienlänge angeben
+	Specify displacement	Verschiebung angeben
+	Specify angle for dimension text	Winkel für Bemaßungstext angeben
+	Select viewports	Ansichtsfenster wählen
+	Select object to break dimension	Objekt zum Unterbrechen der Bemaßung wählen
+	Select group	Gruppe wählen
+	Select grip to edit array	Griff zum Bearbeiten der Anordnung wählen
+	Select a table	Tabelle wählen
+	Select a boundary to remove	Zu entfernende Umgrenzung wählen
+	Rotate arrayed items?	Angeordnete Elemente drehen?
+	Erase polyline?	Polylinie löschen?
+	Enter viewport arrangement	Ansichtsfensteranordnung eingeben
+	Enter transparency value (0-90)	Transparenzwert eingeben (0-90)
+	Enter the number of operations to undo	Anzahl der rückgängig zu machenden Vorgänge eingeben
+	Enter the number of columns	Anzahl der Spalten eingeben
+	Enter number of items in array	Anzahl der Elemente in der Anordnung eingeben
+	Enter new layer state name	Neuen Layerstatusnamen eingeben
+	Enter new color	Neue Farbe eingeben
+	Enter name of new layout	Name des neuen Layouts eingeben
+	Enter layer name	Layernamen eingeben
+	Enter file name	Dateinamen eingeben
+	Enter color name or number (1-255)	Farbnamen oder -nummer eingeben (1-255)
+	Enter a configuration option	Konfigurationsoption eingeben
+	Base point	Basispunkt
+	Word-wrap the combined Mtext?	Kombinierten Mtext umbrechen?
+	Where should the data go?	Wohin sollen die Daten?
+	Verify each name to be purged?	Jeden zu bereinigenden Namen bestätigen?
+	Use landing	Absatz verwenden
+	Type of boundary object	Typ des Umgrenzungsobjekts
+	Specify width factor	Breitenfaktor angeben
+	Specify tolerance	Toleranz angeben
+	Specify the tangent direction for the start point of arc	Tangentenrichtung für den Startpunkt des Bogens angeben
+	Specify the reference angle	Bezugswinkel angeben
+	Specify the new angle	Neuen Winkel angeben
+	Specify text width	Textbreite angeben
+	Specify temporary OTRACK point	Temporären OTRACK-Punkt angeben
+	Invalid option keyword.	Ungültiges Optionsschlüsselwort.
+	*Invalid selection*	*Ungültige Auswahl*
+	Requires a valid angle.	Erfordert einen gültigen Winkel.
+	Nothing to undo.	Nichts rückgängig zu machen.
+	Invalid point.	Ungültiger Punkt.
+	No viewport found there.	Dort wurde kein Ansichtsfenster gefunden.
+	*Cancel*	*Abbruch*
+	Requires a positive number.	Erfordert eine positive Zahl.
+	No hatch selected.	Keine Schraffur gewählt.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Befehl auf der Registerkarte Modell nicht zulässig ** (zuerst zu einem Layout wechseln)
+	Select a multileader.	Wählen Sie einen Multiführungslinie.
+	No line or arc to continue.	Keine Linie oder kein Bogen zum Fortsetzen.
+	Revision cloud finished.	Revisionswolke abgeschlossen.
+	Object selected is not a circle or arc.	Das gewählte Objekt ist kein Kreis oder Bogen.
+	Select a linear or aligned dimension.	Wählen Sie eine lineare oder ausgerichtete Bemaßung.
+	Object selected is not a dimension.	Das gewählte Objekt ist keine Bemaßung.
+	No dimensions selected.	Keine Bemaßungen gewählt.
+	Requires a number.	Erfordert eine Zahl.
+	0 found	0 gefunden
+	The feature control frame is empty.	Der Form- und Lagetoleranzrahmen ist leer.
+	1 was on a locked layer.	1 befand sich auf einem gesperrten Layer.
+	Row elevations need an associative array; the copies stay at the same elevation.	Zeilenerhebungen erfordern eine assoziative Anordnung; die Kopien bleiben auf derselben Höhe.
+	Point or option keyword required.	Punkt oder Optionsschlüsselwort erforderlich.
+	Enter Yes or No.	Geben Sie Yes oder No ein.
+	Viewport created, zoomed to the model extents.	Ansichtsfenster erstellt, auf Modellgrenzen gezoomt.
+	No object found.	Kein Objekt gefunden.
+	The object is not a table.	Das Objekt ist keine Tabelle.
+	No table there.	Dort ist keine Tabelle.
+	A transparent command is already in progress.	Ein transparenter Befehl wird bereits ausgeführt.
+	Invalid class name.	Ungültiger Klassenname.
+	Invalid group name.	Ungültiger Gruppenname.
+	Too many point modifiers.	Zu viele Punktmodifikatoren.
+	No leader to remove.	Keine Führungslinie zum Entfernen.
+	Requires a non-negative number.	Erfordert eine nicht negative Zahl.
+	Clipboard is empty.	Die Zwischenablage ist leer.
+	1 object was on a locked layer.	1 Objekt befand sich auf einem gesperrten Layer.
+	Circle does not exist.	Kreis existiert nicht.
+	Enter Length or Area.	Geben Sie Length oder Area ein.
+	Enter a percentage from 0 to 1000.	Geben Sie einen Prozentsatz von 0 bis 1000 ein.
+	Enter Table, File or None.	Geben Sie Table, File oder None ein.
+	Cannot measure that object.	Dieses Objekt kann nicht gemessen werden.
+	Third pair ignored (2D align).	Drittes Paar ignoriert (2D-Ausrichtung).
+	Insert mode: Copy (nested objects are copied as independent objects).	Einfügemodus: Kopieren (verschachtelte Objekte werden als unabhängige Objekte kopiert).
+	Everything has been undone	Alles wurde rückgängig gemacht
+	Everything has been undone.	Alles wurde rückgängig gemacht.
+	Requires a non-negative number or Auto.	Erfordert eine nicht negative Zahl oder Auto.
+	Select a dimension.	Wählen Sie eine Bemaßung.
+	Object cannot be dimensioned this way.	Das Objekt kann so nicht bemaßt werden.
+	Select an arc, circle or line.	Wählen Sie einen Bogen, Kreis oder eine Linie.
+	The two points must be different.	Die beiden Punkte müssen verschieden sein.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Keine lineare Bemaßung zum Fortsetzen. Erstellen Sie zuerst eine mit DIMLINEAR.
+	A multileader needs a leader line or content; nothing was drawn.	Eine Multiführungslinie benötigt eine Führungslinie oder Inhalt; es wurde nichts gezeichnet.
+	Requires the name of a block defined in the drawing.	Erfordert den Namen eines in der Zeichnung definierten Blocks.
+	Invalid option.	Ungültige Option.
+	The boundary encloses none of the image.	Die Umgrenzung umschließt keinen Teil des Bildes.
+	The object is not an image.	Das Objekt ist kein Bild.
+	The image has no clipping boundary.	Das Bild hat keine Zuschneidegrenze.
+	No images selected.	Keine Bilder gewählt.
+	Requires an integer between 0 and 100.	Erfordert eine ganze Zahl zwischen 0 und 100.
+	The selected object has no area.	Das gewählte Objekt hat keine Fläche.
+	No such object	Kein solches Objekt
+	Requires a point.	Erfordert einen Punkt.
+	Requires a distance.	Erfordert einen Abstand.
+	The object is on a locked layer.	Das Objekt befindet sich auf einem gesperrten Layer.
+	Value must be positive and nonzero.	Der Wert muss positiv und ungleich null sein.
+	Requires an angle.	Erfordert einen Winkel.
+	Requires a point or option keyword.	Erfordert einen Punkt oder ein Optionsschlüsselwort.
+	Object does not intersect a cutting edge.	Das Objekt schneidet keine Schnittkante.
+	Object does not intersect an edge.	Das Objekt schneidet keine Kante.
+	Lines are parallel.	Die Linien sind parallel.
+	The Block Editor is not open.	Der Blockeditor ist nicht geöffnet.
+	Requires a positive integer.	Erfordert eine positive ganze Zahl.
+	Answer Yes or No.	Antworten Sie mit Yes oder No.
+	Requires a valid point.	Erfordert einen gültigen Punkt.
+	No reference objects	Keine Bezugsobjekte
+	Requires an angle or point.	Erfordert einen Winkel oder Punkt.
+	Requires a positive distance.	Erfordert einen positiven Abstand.
+	Requires a non-negative distance.	Erfordert einen nicht negativen Abstand.
+	No such grip	Kein solcher Griff
+	Requires a template file name.	Erfordert einen Vorlagendateinamen.
+	A hatch needs at least one boundary: erase it instead.	Eine Schraffur benötigt mindestens eine Umgrenzung: löschen Sie sie stattdessen.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Rückgängig ist ausgeschaltet (UNDO Control None); UNDO Control All schaltet es ein.
+	Enter ON or OFF.	Geben Sie ON oder OFF ein.
+	Not a linear dimension.	Keine lineare Bemaßung.
+	Valid hatch boundary not found.	Keine gültige Schraffurumgrenzung gefunden.
+	No closed boundary objects selected.	Keine geschlossenen Umgrenzungsobjekte gewählt.
+	Requires a name.	Erfordert einen Namen.
+	That option doesn't apply to this grip.	Diese Option gilt nicht für diesen Griff.
+	That would make a degenerate object.	Dadurch würde ein entartetes Objekt entstehen.
+	No tangent or perpendicular from the last point.	Keine Tangente oder Senkrechte vom letzten Punkt.
+	Requires numeric distance or second point.	Erfordert einen numerischen Abstand oder einen zweiten Punkt.
+	Edge endpoints must differ.	Die Kantenendpunkte müssen verschieden sein.
+	Requires numeric distance or point.	Erfordert einen numerischen Abstand oder einen Punkt.
+	Requires a positive height.	Erfordert eine positive Höhe.
+	No objects found.	Keine Objekte gefunden.
+	Requires a non-zero number.	Erfordert eine Zahl ungleich null.
+	Circle must intersect cutting edges at two or more points.	Der Kreis muss die Schnittkanten in zwei oder mehr Punkten schneiden.
+	Arc cannot be full 360 degrees.	Der Bogen kann nicht volle 360 Grad haben.
+	Cannot break that object.	Dieses Objekt kann nicht gebrochen werden.
+	An object is on a locked layer.	Ein Objekt befindet sich auf einem gesperrten Layer.
+	Objects are not connected.	Die Objekte sind nicht verbunden.
+	The two points must differ.	Die beiden Punkte müssen sich unterscheiden.
+	Mirror line points must differ.	Die Punkte der Spiegelachse müssen verschieden sein.
+	No drawing is open.	Keine Zeichnung geöffnet.
+	Command: {}	Befehl: {}
+	Unknown command "{}". Press F1 for help.	Unbekannter Befehl „{}“. Drücken Sie F1 für Hilfe.
+	{} found	{} gefunden
+	{} found, {} total	{} gefunden, {} gesamt
+	Distance = {}	Abstand = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Abstand = {},  Winkel in XY-Ebene = {},  Winkel von XY-Ebene = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Delta X = {},  Delta Y = {},   Delta Z = {}
+	Area = {}, Perimeter = {}	Fläche = {}, Umfang = {}
+	Total area = {}	Gesamtfläche = {}
+	Resuming {} command.	Befehl {} wird fortgesetzt.
+	Invalid input: {}	Ungültige Eingabe: {}
+	{} were on a locked layer.	{} befanden sich auf einem gesperrten Layer.
+	{} dimension(s) changed.	{} Bemaßung(en) geändert.
+	Group {} ungrouped.	Gruppe {} aufgelöst.
+	{} object(s) flattened.	{} Objekt(e) abgeflacht.
+	Group {} renamed to {}.	Gruppe {} in {} umbenannt.
+	{} object(s) added to group {}.	{} Objekt(e) zur Gruppe {} hinzugefügt.
+	{} object(s) removed from group {}.	{} Objekt(e) aus Gruppe {} entfernt.
+	{} lines were chamfered	{} Linien wurden gefast
+	{} lines were filleted	{} Linien wurden abgerundet
+	{} objects joined into 1 {}	{} Objekte zu 1 {} verbunden
+	Current dimension style:  {}	Aktueller Bemaßungsstil:  {}
+	Wrote {}	{} geschrieben
+	{} is already open.	{} ist bereits geöffnet.
+	{} dimension(s) created.	{} Bemaßung(en) erstellt.
+	BOUNDARY created {} polyline(s)	BOUNDARY hat {} Polylinie(n) erstellt
+	Current line-width is {}	Aktuelle Linienbreite ist {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Unbekannte Variable {}. Geben Sie SETVAR ? ein, um Variablen aufzulisten.
+	{} = {} (read only)	{} = {} (schreibgeschützt)
+	Dimension text = {}	Bemaßungstext = {}
+	{} segments added to polyline	{} Segmente zur Polylinie hinzugefügt

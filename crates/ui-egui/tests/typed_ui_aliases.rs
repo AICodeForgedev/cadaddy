@@ -10,6 +10,10 @@ fn about_and_quit_are_commands() {
     assert_eq!(app.ui.dialog.as_deref(), Some("about"));
     app.cmdline("quit");
     assert!(app.quit_requested);
+    // QQUIT (Express Tools) quits the same way: every drawing closes, asking about unsaved ones.
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.cmdline("qquit");
+    assert!(app.quit_requested);
 }
 
 /// -DIMSTYLE typed in the app prompts at the command line; it doesn't open the dialog.

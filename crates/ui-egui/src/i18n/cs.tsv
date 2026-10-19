@@ -1733,3 +1733,101 @@ menu	Modify	Modifikace
 	My properties: the ones you added (right-click a property's name to add it)	Moje vlastnosti: ty, které jste přidali (vlastnost přidáte kliknutím pravým tlačítkem na její název)
 	Right-click a property's name and choose Add to My Properties.	Klikněte pravým tlačítkem na název vlastnosti a zvolte Přidat do mých vlastností.
 	Color Books	Vzorníky barev
+	Sheet Set Manager	Správce sad listů
+	Palettes	Palety
+	New Sheet Set...	Nová sada listů...
+	Open Sheet Set...	Otevřít sadu listů...
+	No sheet set is open.	Není otevřena žádná sada listů.
+	Number	Číslo
+	Subset	Podsada
+	Remove Sheet	Odebrat list
+	Add Drawing...	Přidat výkres...
+	Rename Layouts to Match	Přejmenovat rozvržení podle listů
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	Rozvržení každého listu se přejmenuje na „číslo název“, které zobrazují pole čísla a názvu listu
+	Publish to PDF...	Publikovat do PDF...
+	Prefix	Předpona
+	Digits	Číslic
+	Renumber	Přečíslovat
+	Zoom to Fit	Přizpůsobit
+	Drag to pan, scroll to zoom	Tažením posunete, kolečkem zvětšíte
+	Publish	Publikovat
+	Sheets to publish, in order	Listy k publikování v pořadí
+	Sheet	List
+	Bookmark	Záložka
+	Paper	Papír
+	Orientation	Orientace
+	(sheet name)	(název listu)
+	Page setup	Vzhled stránky
+	Landscape	Na šířku
+	Portrait	Na výšku
+	Add Sheets from Drawing...	Přidat listy z výkresu...
+	Load List...	Načíst seznam...
+	Save List...	Uložit seznam...
+	Publish List	Seznam k publikování
+	Enclose Text with Object	Ohraničit text objektem
+	Export Attribute Information	Exportovat informace o atributech
+	Import Attribute Information	Importovat informace o atributech
+	Mask Text	Maskovat text
+	Remote Text	Vzdálený text
+	Rotate Text	Otočit text
+	Text Fit	Přizpůsobit text
+	Toggle Frames	Přepnout rámečky
+	Unmask Text	Zrušit maskování textu
+	Update Remote Text	Aktualizovat vzdálený text
+	Geometric	Geometrické
+	Infer geometric constraints	Odvozovat geometrické vazby
+	Show constraint bars	Zobrazit pruhy vazeb
+	Constraint bar transparency (%)	Průhlednost pruhů vazeb (%)
+	Dimensional	Kótovací
+	Show dynamic constraints	Zobrazit dynamické vazby
+	Dimension name format	Formát názvu kóty
+	Name and Expression	Název a výraz
+	Constraint types AUTOCONSTRAIN applies, in order of priority	Typy vazeb, které AUTOCONSTRAIN použije, v pořadí priority
+	Move Up	Posunout nahoru
+	Move Down	Posunout dolů
+	Tangent objects must share an intersection point	Tečné objekty musí mít společný průsečík
+	Perpendicular objects must share an intersection point	Kolmé objekty musí mít společný průsečík
+	Distance tolerance	Tolerance vzdálenosti
+	Angle tolerance (degrees)	Tolerance úhlu (stupně)
+	3D Move	3D přesun
+	3D Rotate	3D rotace
+	3D Scale	3D měřítko
+	3D Align	3D zarovnání
+	3D Mirror	3D zrcadlení
+	3D Array	3D pole
+	3D Object Snap	3D uchopení objektu
+	Specify second point or distance	Zadejte druhý bod nebo vzdálenost
+	Specify angle	Zadejte úhel
+	Specify source plane: first point	Zadejte zdrojovou rovinu: první bod
+	Specify source plane: second point	Zadejte zdrojovou rovinu: druhý bod
+	Specify source plane: third point	Zadejte zdrojovou rovinu: třetí bod
+	Specify destination plane: first point	Zadejte cílovou rovinu: první bod
+	Specify destination plane: second point	Zadejte cílovou rovinu: druhý bod
+	Specify destination plane: third point	Zadejte cílovou rovinu: třetí bod
+	Delete source objects?	Odstranit zdrojové objekty?
+	Specify point on XY plane	Zadejte bod v rovině XY
+	Specify point on YZ plane	Zadejte bod v rovině YZ
+	Specify point on ZX plane	Zadejte bod v rovině ZX
+	Specify first point of mirror plane (3 points) or	Zadejte první bod roviny zrcadlení (3 body) nebo
+	Specify second point on mirror plane	Zadejte druhý bod roviny zrcadlení
+	Specify third point on mirror plane	Zadejte třetí bod roviny zrcadlení
+	Enter the type of array	Zadejte typ pole
+	Polar	Polární
+	Enter the number of items in the array	Zadejte počet položek pole
+	Specify the angle to fill (+=ccw, -=cw)	Zadejte úhel vyplnění (+=proti směru hodin, -=po směru hodin)
+	Enter the number of rows (---)	Zadejte počet řádků (---)
+	Enter the number of columns (|||)	Zadejte počet sloupců (|||)
+	Enter the number of levels (...)	Zadejte počet úrovní (...)
+	Specify the distance between rows (---)	Zadejte vzdálenost mezi řádky (---)
+	Specify the distance between columns (|||)	Zadejte vzdálenost mezi sloupci (|||)
+	Specify the distance between levels (...)	Zadejte vzdálenost mezi úrovněmi (...)
+	Specify second point on axis of rotation	Zadejte druhý bod osy rotace
+	Select the objects first.	Nejprve vyberte objekty.
+	Requires a point, or a distance along an axis.	Vyžaduje bod nebo vzdálenost podél osy.
+	The points must not coincide or line up.	Body se nesmí shodovat ani ležet na přímce.
+	The three points line up: they make no plane.	Tři body leží na přímce: netvoří rovinu.
+	<3D Object Snap on>	<3D uchopení objektu zapnuto>
+	<3D Object Snap off>	<3D uchopení objektu vypnuto>
+	Preparing the 3D view…	Připravuje se 3D pohled…
+	Viewpoint	Bod pohledu
+	3D View Benchmark	Test výkonu 3D pohledu

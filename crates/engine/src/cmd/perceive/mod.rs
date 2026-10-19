@@ -7,7 +7,7 @@
 //! item carries a confidence from 0 to 1. Distances are drawing units; the wall and door size
 //! limits default to common building sizes in the drawing's units.
 
-mod geometry;
+pub(crate) mod geometry;
 
 use cadaddy_doc::{Drawing, Entity, EntityKind, Space};
 use cadaddy_geom::{Bounds2, Vec2};

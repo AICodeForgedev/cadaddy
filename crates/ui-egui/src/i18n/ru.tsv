@@ -1528,3 +1528,101 @@
 	My properties: the ones you added (right-click a property's name to add it)	Мои свойства: добавленные вами (щёлкните правой кнопкой по имени свойства, чтобы добавить его)
 	Right-click a property's name and choose Add to My Properties.	Щёлкните правой кнопкой по имени свойства и выберите «Добавить в мои свойства».
 	Color Books	Альбомы цветов
+	Sheet Set Manager	Диспетчер подшивок
+	Palettes	Палитры
+	New Sheet Set...	Новая подшивка...
+	Open Sheet Set...	Открыть подшивку...
+	No sheet set is open.	Подшивка не открыта.
+	Number	Номер
+	Subset	Подмножество
+	Remove Sheet	Удалить лист
+	Add Drawing...	Добавить чертёж...
+	Rename Layouts to Match	Переименовать листы по подшивке
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	Каждый лист получает имя «номер название», которое показывают поля номера и названия листа
+	Publish to PDF...	Опубликовать в PDF...
+	Prefix	Префикс
+	Digits	Цифр
+	Renumber	Перенумеровать
+	Zoom to Fit	Показать целиком
+	Drag to pan, scroll to zoom	Перетаскивание — сдвиг, колесо — масштаб
+	Publish	Публикация
+	Sheets to publish, in order	Листы для публикации по порядку
+	Sheet	Лист
+	Bookmark	Закладка
+	Paper	Бумага
+	Orientation	Ориентация
+	(sheet name)	(имя листа)
+	Page setup	Параметры листа
+	Landscape	Альбомная
+	Portrait	Книжная
+	Add Sheets from Drawing...	Добавить листы из чертежа...
+	Load List...	Загрузить список...
+	Save List...	Сохранить список...
+	Publish List	Список публикации
+	Enclose Text with Object	Обвести текст объектом
+	Export Attribute Information	Экспорт сведений об атрибутах
+	Import Attribute Information	Импорт сведений об атрибутах
+	Mask Text	Маскировать текст
+	Remote Text	Удалённый текст
+	Rotate Text	Повернуть текст
+	Text Fit	Вписать текст
+	Toggle Frames	Переключить рамки
+	Unmask Text	Снять маскировку текста
+	Update Remote Text	Обновить удалённый текст
+	Geometric	Геометрические
+	Infer geometric constraints	Выводить геометрические зависимости
+	Show constraint bars	Показывать знаки зависимостей
+	Constraint bar transparency (%)	Прозрачность знаков зависимостей (%)
+	Dimensional	Размерные
+	Show dynamic constraints	Показывать динамические зависимости
+	Dimension name format	Формат имени размера
+	Name and Expression	Имя и выражение
+	Constraint types AUTOCONSTRAIN applies, in order of priority	Типы зависимостей, которые применяет AUTOCONSTRAIN, по приоритету
+	Move Up	Вверх
+	Move Down	Вниз
+	Tangent objects must share an intersection point	Касательные объекты должны иметь общую точку пересечения
+	Perpendicular objects must share an intersection point	Перпендикулярные объекты должны иметь общую точку пересечения
+	Distance tolerance	Допуск расстояния
+	Angle tolerance (degrees)	Допуск угла (градусы)
+	3D Move	3D-перенос
+	3D Rotate	3D-поворот
+	3D Scale	3D-масштаб
+	3D Align	3D-выравнивание
+	3D Mirror	3D-зеркало
+	3D Array	3D-массив
+	3D Object Snap	3D-объектная привязка
+	Specify second point or distance	Укажите вторую точку или расстояние
+	Specify angle	Укажите угол
+	Specify source plane: first point	Укажите исходную плоскость: первая точка
+	Specify source plane: second point	Укажите исходную плоскость: вторая точка
+	Specify source plane: third point	Укажите исходную плоскость: третья точка
+	Specify destination plane: first point	Укажите целевую плоскость: первая точка
+	Specify destination plane: second point	Укажите целевую плоскость: вторая точка
+	Specify destination plane: third point	Укажите целевую плоскость: третья точка
+	Delete source objects?	Удалить исходные объекты?
+	Specify point on XY plane	Укажите точку на плоскости XY
+	Specify point on YZ plane	Укажите точку на плоскости YZ
+	Specify point on ZX plane	Укажите точку на плоскости ZX
+	Specify first point of mirror plane (3 points) or	Укажите первую точку плоскости отражения (3 точки) или
+	Specify second point on mirror plane	Укажите вторую точку плоскости отражения
+	Specify third point on mirror plane	Укажите третью точку плоскости отражения
+	Enter the type of array	Введите тип массива
+	Polar	Круговой
+	Enter the number of items in the array	Введите число элементов массива
+	Specify the angle to fill (+=ccw, -=cw)	Укажите угол заполнения (+=против часовой, -=по часовой)
+	Enter the number of rows (---)	Введите число строк (---)
+	Enter the number of columns (|||)	Введите число столбцов (|||)
+	Enter the number of levels (...)	Введите число уровней (...)
+	Specify the distance between rows (---)	Укажите расстояние между строками (---)
+	Specify the distance between columns (|||)	Укажите расстояние между столбцами (|||)
+	Specify the distance between levels (...)	Укажите расстояние между уровнями (...)
+	Specify second point on axis of rotation	Укажите вторую точку на оси вращения
+	Select the objects first.	Сначала выберите объекты.
+	Requires a point, or a distance along an axis.	Требуется точка или расстояние вдоль оси.
+	The points must not coincide or line up.	Точки не должны совпадать или лежать на одной прямой.
+	The three points line up: they make no plane.	Три точки лежат на одной прямой: плоскости нет.
+	<3D Object Snap on>	<3D-объектная привязка вкл>
+	<3D Object Snap off>	<3D-объектная привязка откл>
+	Preparing the 3D view…	Подготовка 3D-вида…
+	Viewpoint	Точка зрения
+	3D View Benchmark	Тест производительности 3D-вида

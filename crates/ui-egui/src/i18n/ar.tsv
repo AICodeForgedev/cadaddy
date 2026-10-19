@@ -1749,3 +1749,101 @@ menu	View	عرض
 	My properties: the ones you added (right-click a property's name to add it)	خصائصي: التي أضفتها (انقر بزر الماوس الأيمن على اسم خاصية لإضافتها)
 	Right-click a property's name and choose Add to My Properties.	انقر بزر الماوس الأيمن على اسم خاصية واختر «إضافة إلى خصائصي».
 	Color Books	دفاتر الألوان
+	Sheet Set Manager	مدير مجموعة الأوراق
+	Palettes	اللوحات
+	New Sheet Set...	مجموعة أوراق جديدة...
+	Open Sheet Set...	فتح مجموعة أوراق...
+	No sheet set is open.	لا توجد مجموعة أوراق مفتوحة.
+	Number	الرقم
+	Subset	مجموعة فرعية
+	Remove Sheet	إزالة الورقة
+	Add Drawing...	إضافة رسم...
+	Rename Layouts to Match	إعادة تسمية التخطيطات لتطابق
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	يصبح تخطيط كل ورقة «الرقم العنوان»، وهو ما تعرضه حقول رقم الورقة وعنوانها
+	Publish to PDF...	نشر إلى PDF...
+	Prefix	البادئة
+	Digits	الأرقام
+	Renumber	إعادة الترقيم
+	Zoom to Fit	تكبير للملاءمة
+	Drag to pan, scroll to zoom	اسحب للتحريك، ومرّر للتكبير
+	Publish	نشر
+	Sheets to publish, in order	الأوراق المراد نشرها بالترتيب
+	Sheet	الورقة
+	Bookmark	الإشارة المرجعية
+	Paper	الورق
+	Orientation	الاتجاه
+	(sheet name)	(اسم الورقة)
+	Page setup	إعداد الصفحة
+	Landscape	أفقي
+	Portrait	عمودي
+	Add Sheets from Drawing...	إضافة أوراق من رسم...
+	Load List...	تحميل القائمة...
+	Save List...	حفظ القائمة...
+	Publish List	قائمة النشر
+	Enclose Text with Object	إحاطة النص بكائن
+	Export Attribute Information	تصدير معلومات السمات
+	Import Attribute Information	استيراد معلومات السمات
+	Mask Text	إخفاء خلفية النص
+	Remote Text	نص بعيد
+	Rotate Text	تدوير النص
+	Text Fit	ملاءمة النص
+	Toggle Frames	تبديل الإطارات
+	Unmask Text	إلغاء إخفاء خلفية النص
+	Update Remote Text	تحديث النص البعيد
+	Geometric	هندسي
+	Infer geometric constraints	استنتاج القيود الهندسية
+	Show constraint bars	إظهار أشرطة القيود
+	Constraint bar transparency (%)	شفافية شريط القيود (%)
+	Dimensional	بُعدي
+	Show dynamic constraints	إظهار القيود الديناميكية
+	Dimension name format	تنسيق اسم البعد
+	Name and Expression	الاسم والتعبير
+	Constraint types AUTOCONSTRAIN applies, in order of priority	أنواع القيود التي يطبقها AUTOCONSTRAIN حسب الأولوية
+	Move Up	تحريك لأعلى
+	Move Down	تحريك لأسفل
+	Tangent objects must share an intersection point	يجب أن تشترك الكائنات المماسة في نقطة تقاطع
+	Perpendicular objects must share an intersection point	يجب أن تشترك الكائنات المتعامدة في نقطة تقاطع
+	Distance tolerance	تفاوت المسافة
+	Angle tolerance (degrees)	تفاوت الزاوية (بالدرجات)
+	3D Move	نقل ثلاثي الأبعاد
+	3D Rotate	تدوير ثلاثي الأبعاد
+	3D Scale	مقياس ثلاثي الأبعاد
+	3D Align	محاذاة ثلاثية الأبعاد
+	3D Mirror	انعكاس ثلاثي الأبعاد
+	3D Array	مصفوفة ثلاثية الأبعاد
+	3D Object Snap	الالتقاط ثلاثي الأبعاد
+	Specify second point or distance	حدد النقطة الثانية أو المسافة
+	Specify angle	حدد الزاوية
+	Specify source plane: first point	حدد المستوى المصدر: النقطة الأولى
+	Specify source plane: second point	حدد المستوى المصدر: النقطة الثانية
+	Specify source plane: third point	حدد المستوى المصدر: النقطة الثالثة
+	Specify destination plane: first point	حدد المستوى الهدف: النقطة الأولى
+	Specify destination plane: second point	حدد المستوى الهدف: النقطة الثانية
+	Specify destination plane: third point	حدد المستوى الهدف: النقطة الثالثة
+	Delete source objects?	حذف الكائنات المصدر؟
+	Specify point on XY plane	حدد نقطة على المستوى XY
+	Specify point on YZ plane	حدد نقطة على المستوى YZ
+	Specify point on ZX plane	حدد نقطة على المستوى ZX
+	Specify first point of mirror plane (3 points) or	حدد النقطة الأولى لمستوى الانعكاس (3 نقاط) أو
+	Specify second point on mirror plane	حدد النقطة الثانية على مستوى الانعكاس
+	Specify third point on mirror plane	حدد النقطة الثالثة على مستوى الانعكاس
+	Enter the type of array	أدخل نوع المصفوفة
+	Polar	قطبي
+	Enter the number of items in the array	أدخل عدد العناصر في المصفوفة
+	Specify the angle to fill (+=ccw, -=cw)	حدد زاوية الملء (+=عكس عقارب الساعة، -=مع عقارب الساعة)
+	Enter the number of rows (---)	أدخل عدد الصفوف (---)
+	Enter the number of columns (|||)	أدخل عدد الأعمدة (|||)
+	Enter the number of levels (...)	أدخل عدد المستويات (...)
+	Specify the distance between rows (---)	حدد المسافة بين الصفوف (---)
+	Specify the distance between columns (|||)	حدد المسافة بين الأعمدة (|||)
+	Specify the distance between levels (...)	حدد المسافة بين المستويات (...)
+	Specify second point on axis of rotation	حدد النقطة الثانية على محور الدوران
+	Select the objects first.	حدد الكائنات أولاً.
+	Requires a point, or a distance along an axis.	يتطلب نقطة أو مسافة على محور.
+	The points must not coincide or line up.	يجب ألا تتطابق النقاط أو تقع على خط واحد.
+	The three points line up: they make no plane.	النقاط الثلاث على خط واحد: لا تشكل مستوى.
+	<3D Object Snap on>	<الالتقاط ثلاثي الأبعاد مفعّل>
+	<3D Object Snap off>	<الالتقاط ثلاثي الأبعاد معطّل>
+	Preparing the 3D view…	جارٍ تجهيز العرض ثلاثي الأبعاد…
+	Viewpoint	نقطة العرض
+	3D View Benchmark	اختبار أداء العرض ثلاثي الأبعاد

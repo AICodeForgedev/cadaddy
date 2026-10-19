@@ -40,6 +40,12 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             .transparent(),
     ];
     v.push(
+        CommandSpec::new("vpoint", "Viewpoint", vpoint_cmd)
+            .params("{dir: [x, y, z] (from the target towards the viewer)} | {azimuth, elevation} (degrees: from +X in the plan, up from it); fit?: false")
+            .noundo()
+            .transparent(),
+    );
+    v.push(
         CommandSpec::new("plan", "Plan View", run_plan)
             .menu(&["View", "3D Views", "Plan View", "Current UCS"])
             .params("{option?: current|world|ucs (default current), name? (ucs: a named UCS)} — the plan view of that coordinate system (its X axis across the screen), zoomed to the extents")
@@ -139,6 +145,26 @@ fn view_dir_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .filter(|d| d.is_finite() && d.len() > 1e-12)
         .ok_or_else(|| bad("view.dir", "`dir` must be three numbers, not all zero"))?;
+    set_dir(s, dir, p.get("fit").and_then(Value::as_bool).unwrap_or(false))
+}
+
+/// VPOINT: look from a direction (a vector, or an azimuth and elevation).
+fn vpoint_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
+    let dir = match p.get("dir").and_then(Value::as_array) {
+        Some(a) => {
+            let c: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
+            let [x, y, z] = c[..] else { return Err(bad("vpoint", "`dir` is [x, y, z]")) };
+            Vec3::new(x, y, z)
+        }
+        None => match (num("azimuth"), num("elevation")) {
+            (Some(a), Some(e)) => Projection::dir_from_angles(a.to_radians(), e.to_radians()),
+            _ => return Err(bad("vpoint", "give `dir` or `azimuth` and `elevation`")),
+        },
+    };
+    if !(dir.is_finite() && dir.len() > 1e-12) {
+        return Err(bad("vpoint", "the direction needs a length"));
+    }
     set_dir(s, dir, p.get("fit").and_then(Value::as_bool).unwrap_or(false))
 }
 

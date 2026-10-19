@@ -5,6 +5,7 @@
 mod etransmit;
 pub mod kept;
 mod pgp;
+mod sheetset;
 mod template;
 
 use std::sync::OnceLock;
@@ -258,6 +259,20 @@ fn is_exchange_file(path: &str) -> bool {
     !is_cdy(path) && is_drawing_file(path)
 }
 
+/// Merge PDFs into one, each part with a bookmark title and a group ("" for none): a sheet set
+/// published to one file.
+pub type PdfMergeHook = fn(&[(Vec<u8>, String, String)]) -> std::result::Result<Vec<u8>, String>;
+
+static PDF_MERGE: OnceLock<PdfMergeHook> = OnceLock::new();
+
+/// Install the host's PDF merger (builds without one can't publish a sheet set to one PDF).
+pub fn set_pdf_merge(h: PdfMergeHook) {
+    let _ = PDF_MERGE.set(h);
+}
+pub fn pdf_merge() -> Option<PdfMergeHook> {
+    PDF_MERGE.get().copied()
+}
+
 /// The versions a drawing can be saved in, for messages ("2000, 2004, …, 2018").
 fn version_list() -> String {
     Version::ALL.iter().map(|v| v.year()).collect::<Vec<_>>().join(", ")
@@ -361,6 +376,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo()
             .interactive(|_| Ok(Box::new(ScriptM))),
         etransmit::spec(),
+        sheetset::spec(),
     ]
 }
 

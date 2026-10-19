@@ -1556,3 +1556,101 @@
 	My properties: the ones you added (right-click a property's name to add it)	Meine Eigenschaften: die von Ihnen hinzugefügten (Rechtsklick auf den Namen einer Eigenschaft fügt sie hinzu)
 	Right-click a property's name and choose Add to My Properties.	Klicken Sie mit der rechten Maustaste auf den Namen einer Eigenschaft und wählen Sie „Zu meinen Eigenschaften hinzufügen“.
 	Color Books	Farbbücher
+	Sheet Set Manager	Planungssatz-Manager
+	Palettes	Paletten
+	New Sheet Set...	Neuer Planungssatz...
+	Open Sheet Set...	Planungssatz öffnen...
+	No sheet set is open.	Kein Planungssatz geöffnet.
+	Number	Nummer
+	Subset	Teilsatz
+	Remove Sheet	Plan entfernen
+	Add Drawing...	Zeichnung hinzufügen...
+	Rename Layouts to Match	Layouts passend umbenennen
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	Das Layout jedes Plans heißt dann „Nummer Titel“, was die Felder für Plannummer und -titel anzeigen
+	Publish to PDF...	In PDF publizieren...
+	Prefix	Präfix
+	Digits	Stellen
+	Renumber	Neu nummerieren
+	Zoom to Fit	Auf Seitengröße zoomen
+	Drag to pan, scroll to zoom	Ziehen zum Verschieben, Mausrad zum Zoomen
+	Publish	Publizieren
+	Sheets to publish, in order	Zu publizierende Pläne in Reihenfolge
+	Sheet	Plan
+	Bookmark	Lesezeichen
+	Paper	Papier
+	Orientation	Ausrichtung
+	(sheet name)	(Planname)
+	Page setup	Seiteneinrichtung
+	Landscape	Querformat
+	Portrait	Hochformat
+	Add Sheets from Drawing...	Pläne aus Zeichnung hinzufügen...
+	Load List...	Liste laden...
+	Save List...	Liste speichern...
+	Publish List	Publizierliste
+	Enclose Text with Object	Text mit Objekt umschließen
+	Export Attribute Information	Attributinformationen exportieren
+	Import Attribute Information	Attributinformationen importieren
+	Mask Text	Text maskieren
+	Remote Text	Ferntext
+	Rotate Text	Text drehen
+	Text Fit	Text einpassen
+	Toggle Frames	Rahmen umschalten
+	Unmask Text	Textmaskierung aufheben
+	Update Remote Text	Ferntext aktualisieren
+	Geometric	Geometrisch
+	Infer geometric constraints	Geometrische Abhängigkeiten ableiten
+	Show constraint bars	Abhängigkeitsleisten anzeigen
+	Constraint bar transparency (%)	Transparenz der Abhängigkeitsleisten (%)
+	Dimensional	Bemaßung
+	Show dynamic constraints	Dynamische Abhängigkeiten anzeigen
+	Dimension name format	Format des Bemaßungsnamens
+	Name and Expression	Name und Ausdruck
+	Constraint types AUTOCONSTRAIN applies, in order of priority	Abhängigkeitstypen, die AUTOCONSTRAIN anwendet, nach Priorität
+	Move Up	Nach oben
+	Move Down	Nach unten
+	Tangent objects must share an intersection point	Tangentiale Objekte müssen einen Schnittpunkt gemeinsam haben
+	Perpendicular objects must share an intersection point	Senkrechte Objekte müssen einen Schnittpunkt gemeinsam haben
+	Distance tolerance	Abstandstoleranz
+	Angle tolerance (degrees)	Winkeltoleranz (Grad)
+	3D Move	3D-Schieben
+	3D Rotate	3D-Drehen
+	3D Scale	3D-Skalieren
+	3D Align	3D-Ausrichten
+	3D Mirror	3D-Spiegeln
+	3D Array	3D-Reihe
+	3D Object Snap	3D-Objektfang
+	Specify second point or distance	Geben Sie den zweiten Punkt oder den Abstand an
+	Specify angle	Geben Sie den Winkel an
+	Specify source plane: first point	Geben Sie die Ausgangsebene an: erster Punkt
+	Specify source plane: second point	Geben Sie die Ausgangsebene an: zweiter Punkt
+	Specify source plane: third point	Geben Sie die Ausgangsebene an: dritter Punkt
+	Specify destination plane: first point	Geben Sie die Zielebene an: erster Punkt
+	Specify destination plane: second point	Geben Sie die Zielebene an: zweiter Punkt
+	Specify destination plane: third point	Geben Sie die Zielebene an: dritter Punkt
+	Delete source objects?	Quellobjekte löschen?
+	Specify point on XY plane	Geben Sie einen Punkt auf der XY-Ebene an
+	Specify point on YZ plane	Geben Sie einen Punkt auf der YZ-Ebene an
+	Specify point on ZX plane	Geben Sie einen Punkt auf der ZX-Ebene an
+	Specify first point of mirror plane (3 points) or	Geben Sie den ersten Punkt der Spiegelebene an (3 Punkte) oder
+	Specify second point on mirror plane	Geben Sie den zweiten Punkt auf der Spiegelebene an
+	Specify third point on mirror plane	Geben Sie den dritten Punkt auf der Spiegelebene an
+	Enter the type of array	Geben Sie den Reihentyp ein
+	Polar	Polar
+	Enter the number of items in the array	Geben Sie die Anzahl der Elemente der Reihe ein
+	Specify the angle to fill (+=ccw, -=cw)	Geben Sie den Füllwinkel an (+=gegen den Uhrzeigersinn, -=im Uhrzeigersinn)
+	Enter the number of rows (---)	Geben Sie die Anzahl der Zeilen ein (---)
+	Enter the number of columns (|||)	Geben Sie die Anzahl der Spalten ein (|||)
+	Enter the number of levels (...)	Geben Sie die Anzahl der Ebenen ein (...)
+	Specify the distance between rows (---)	Geben Sie den Abstand zwischen den Zeilen an (---)
+	Specify the distance between columns (|||)	Geben Sie den Abstand zwischen den Spalten an (|||)
+	Specify the distance between levels (...)	Geben Sie den Abstand zwischen den Ebenen an (...)
+	Specify second point on axis of rotation	Geben Sie den zweiten Punkt auf der Drehachse an
+	Select the objects first.	Wählen Sie zuerst die Objekte.
+	Requires a point, or a distance along an axis.	Erfordert einen Punkt oder einen Abstand entlang einer Achse.
+	The points must not coincide or line up.	Die Punkte dürfen nicht zusammenfallen oder auf einer Linie liegen.
+	The three points line up: they make no plane.	Die drei Punkte liegen auf einer Linie: sie bilden keine Ebene.
+	<3D Object Snap on>	<3D-Objektfang ein>
+	<3D Object Snap off>	<3D-Objektfang aus>
+	Preparing the 3D view…	3D-Ansicht wird vorbereitet…
+	Viewpoint	Ansichtspunkt
+	3D View Benchmark	3D-Ansicht-Leistungstest

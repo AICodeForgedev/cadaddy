@@ -73,3 +73,24 @@ fn the_sun_and_exposure() {
         assert_eq!((lights[0].name.as_str(), lights[0].kind), ("Desk", LightKind::Spot), "{name}");
     }
 }
+
+#[test]
+fn light_colours_take_every_colour_form() {
+    use cadaddy_doc::color::{Color, Rgb};
+    let mut s = Session::new();
+    let r = s.execute("light", &json!({"position": [0, 0, 10], "color": "255,200,150"})).unwrap();
+    let h = r["handle"].as_str().unwrap().to_string();
+    let col = |s: &Session| s.doc().unwrap().entity(cadaddy_doc::Handle::parse_hex(&h).unwrap()).unwrap().common.color;
+    assert_eq!(col(&s), Color::True(Rgb(255, 200, 150)));
+    for (given, want) in [
+        (json!(3), Color::Index(3)),
+        (json!("red"), Color::Index(1)),
+        (json!("#102030"), Color::True(Rgb(16, 32, 48))),
+        (json!("40,50,60"), Color::True(Rgb(40, 50, 60))),
+    ] {
+        s.execute("light.set", &json!({"handles": [h], "color": given})).unwrap();
+        assert_eq!(col(&s), want, "{given}");
+    }
+    assert!(s.execute("light.set", &json!({"handles": [h], "color": "not a colour"})).is_err());
+    assert!(s.execute("light.set", &json!({"handles": [h], "color": 300})).is_err());
+}

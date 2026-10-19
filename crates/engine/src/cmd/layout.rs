@@ -544,7 +544,7 @@ fn run_mview_n(s: &mut Session, p: &Value, n: usize) -> Result<Value> {
 }
 
 /// A plot scale: a number (paper units per model unit) or `"a:b"` / `"a/b"`.
-fn parse_scale(v: &Value) -> Option<f64> {
+pub(crate) fn parse_scale(v: &Value) -> Option<f64> {
     let s = match v {
         Value::Number(n) => n.as_f64(),
         Value::String(t) => {

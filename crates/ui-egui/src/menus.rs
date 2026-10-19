@@ -25,6 +25,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.newtemplate", "New from Template...", &["File", "New from Template..."], None),
     ("ui.convertpdf", "Convert PDF to DWG...", &["File", "Convert PDF to DWG..."], None),
     ("ui.walk", "Walk", &["View", "Walk"], None),
+    ("ui.bench3d", "3D View Benchmark", &[], None),
     ("ui.pdfimport", "PDF Import...", &[], None),
     ("ui.saveas", "Save As...", &[], None),
     ("ui.sample", "Open Sample Drawing", &["Help", "Open Sample Drawing"], None),
@@ -332,6 +333,13 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             }
             Ok(json!({ "mode": if fly { "fly" } else { "walk" } }))
         }
+        // Orbit the 3D view for `frames` frames (2° each); `ui.inspect` reports the frames per
+        // second in `perf3d.benchFps`.
+        "ui.bench3d" => {
+            let frames = params.get("frames").and_then(Value::as_u64).unwrap_or(240).clamp(1, 100_000) as u32;
+            crate::shaded::bench(app, frames);
+            Ok(Value::Null)
+        }
         "ui.walk" => {
             // Toggles: opens walk mode on the active drawing, or goes back to the canvas.
             if app.walk.is_some() {
@@ -491,6 +499,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // Typed or menu-invoked (no parameters) these open their dialogs; JSON calls run the command.
         "etransmit" if params.is_null() => {
             app.ui.dialog = Some("etransmit".into());
+            Ok(Value::Null)
+        }
+        "sheetset" | "ssm" if params.is_null() => {
+            app.ui.dialog = Some("sheetset".into());
             Ok(Value::Null)
         }
         "qselect" | "qs" if params.is_null() => {

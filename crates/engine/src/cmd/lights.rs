@@ -12,7 +12,7 @@ use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
-    let light_params = "{kind?: point|spot|distant (default point), position: [x, y, z?], target?: [x, y, z?] (spot and distant: where it points; default straight down), intensity? (candela; distant: a factor of the sun), color?: colour index 1–255, name?, on?, shadows?, hotspot?, falloff? (spot, degrees), attenuation?: none|linear|square} → {handle}";
+    let light_params = "{kind?: point|spot|distant (default point), position: [x, y, z?], target?: [x, y, z?] (spot and distant: where it points; default straight down), intensity? (candela; distant: a factor of the sun), color?: 1–255 | \"red\" | \"r,g,b\" | \"#rrggbb\", name?, on?, shadows?, hotspot?, falloff? (spot, degrees), attenuation?: none|linear|square} → {handle}";
     vec![
         CommandSpec::new("light", "Light", run_light)
             .menu(&["View", "Render", "Light"])
@@ -99,14 +99,18 @@ fn apply(l: &mut Light, p: &Value) -> Result<()> {
     Ok(())
 }
 
+/// A light's colour as other commands take one: an index 1–255, a name, "r,g,b", "#rrggbb",
+/// ByLayer or ByBlock.
 fn color(p: &Value) -> Result<Option<cadaddy_doc::color::Color>> {
+    use cadaddy_doc::color::Color;
     match p.get("color") {
         None | Some(Value::Null) => Ok(None),
         Some(v) => v
-            .as_i64()
-            .filter(|c| (1..=255).contains(c))
-            .map(|c| Some(cadaddy_doc::color::Color::Index(c as u8)))
-            .ok_or_else(|| bad("light", "`color` must be a colour index 1–255")),
+            .as_str()
+            .and_then(Color::parse)
+            .or_else(|| v.as_i64().filter(|c| (1..=255).contains(c)).map(|c| Color::Index(c as u8)))
+            .map(Some)
+            .ok_or_else(|| bad("light", "`color` must be a colour index 1–255, a name, \"r,g,b\" or \"#rrggbb\"")),
     }
 }
 

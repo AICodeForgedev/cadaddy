@@ -27,6 +27,8 @@ pub const EXPORT_FORMATS: &[&str] = &["cdy", "dxf", "dwg", "svg", "png", "pdf", 
 const PREVIEW_PX: u64 = 1200;
 const MAX_PREVIEW_PX: u64 = 4096;
 /// Most sheets one PUBLISH plots.
+mod publish;
+
 const MAX_SHEETS: usize = 256;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -53,12 +55,13 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("preview", "Plot Preview", run_preview)
             .menu(&["File", "Plot Preview"])
             .alias(&["pre"])
-            .params("{layout?: current|\"Model\", paper?, landscape?, fit?, scale?, lineweights?, plotTransparency?, width?: pixels (default 1200)} → {data: base64 PNG, width, height, layout, paper}")
+            .params("{layout?: current|\"Model\", paper?, landscape?, fit?, scale?, lineweights?, plotTransparency?, width?: pixels (default 1200)} → {data: base64 PNG, width, height, layout, paper, resolution?}: the plot itself as an image (PLOT output png at `resolution` dpi), plot styles applied")
             .noundo(),
         CommandSpec::new("publish", "Batch Publish...", run_publish)
             .menu(&["File", "Batch Publish..."])
-            .params("{path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf per sheet; else returns base64 `data` per sheet), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order)} → {sheets: [{layout, bytes, path? | data}]}")
+            .params("{path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf per sheet, or with `single` that one PDF; else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order), sheets?: [{drawing?: path (default this drawing), layout, title?, page?: {paper?, landscape?, plotStyleTable?, fit?, scale?, lineweights?, plotTransparency?}}] | list?: a publish list file (PUBLISHLIST), single?: bool (one PDF, a bookmark per sheet)} → {sheets: [{layout, bytes, path? | data}]} | {path | data, pages}")
             .noundo(),
+        publish::spec(),
         CommandSpec::new("pdfbook", "Sheet Books to PDF...", run_pdfbook)
             .menu(&["File", "Sheet Books to PDF..."])
             .alias(&["printpdf", "pdfb"])
@@ -621,6 +624,28 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
         page.landscape = l;
     }
     let sheet = Sheet::from_page(&page, paper::page_unit_mm(d, &page));
+    let width = p.get("width").and_then(Value::as_u64).unwrap_or(PREVIEW_PX).clamp(16, MAX_PREVIEW_PX);
+    // With a plotter the preview is the plot itself (an image at the resolution that makes it
+    // `width` pixels wide): plot style colours, ends and joins, page setup and all.
+    if io().and_then(|h| h.plot).is_some() {
+        let inches = sheet.size.x * sheet.unit_mm / 25.4;
+        let dpi = if inches.is_finite() && inches > 0.0 { (width as f64 / inches).clamp(50.0, 2400.0) } else { 150.0 };
+        let mut q = json!({ "output": "png", "resolution": dpi, "layout": space.tab_name() });
+        for k in ["paper", "landscape", "fit", "scale", "lineweights", "plotTransparency"] {
+            if let Some(v) = p.get(k) {
+                q[k] = v.clone();
+            }
+        }
+        let r = s.execute("plot", &q).map_err(|e| bad("preview", e.to_string()))?;
+        let data = r["data"].as_str().unwrap_or_default().to_string();
+        // A plotter that can't make images: CADaddy's own rendering of the sheet below.
+        if let Some((w, h)) = base64_decode(&data).filter(|b| b.starts_with(b"\x89PNG")).as_deref().and_then(png_size) {
+            return Ok(
+                json!({ "data": data, "width": w, "height": h, "layout": space.tab_name(), "paper": page.paper, "landscape": page.landscape, "resolution": dpi }),
+            );
+        }
+    }
+    let d = s.doc()?;
     let lineweights = p.get("lineweights").and_then(Value::as_bool).unwrap_or(if space.is_paper() { page.lineweights } else { true });
     let transparency = super::plotters::plot_transparency(s, p).unwrap_or(page.plot_transparency);
     // A scale given means that scale: Fit is the default only without one (tester 0.7.7e: 1:20
@@ -628,7 +653,6 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     let scale_given = p.get("scale").is_some_and(|v| !v.is_null());
     let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(matches!(space, Space::Model) && !scale_given);
     let scale = p.get("scale").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0);
-    let width = p.get("width").and_then(Value::as_u64).unwrap_or(PREVIEW_PX).clamp(16, MAX_PREVIEW_PX);
     let height = ((width as f64) * sheet.size.y / sheet.size.x).round();
     let height = if height.is_finite() { (height as u64).clamp(16, MAX_PREVIEW_PX) } else { width };
     let px_per_paper_unit = width as f64 / sheet.size.x;
@@ -672,6 +696,13 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "data": base64_encode(&png), "width": w, "height": h, "layout": layout, "paper": page.paper, "landscape": page.landscape }))
 }
 
+/// The size of a PNG image (its IHDR chunk).
+fn png_size(b: &[u8]) -> Option<(u32, u32)> {
+    let w = u32::from_be_bytes(b.get(16..20)?.try_into().ok()?);
+    let h = u32::from_be_bytes(b.get(20..24)?.try_into().ok()?);
+    Some((w, h))
+}
+
 // ---------- PUBLISH ----------
 
 /// A layout name made safe for a file name.
@@ -701,6 +732,20 @@ fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
             model.into_iter().chain(layouts.iter().map(|l| l.name.clone())).collect()
         }
     };
+    // A sheet list (given, or from a list file) or one PDF for all: sheets from any drawing.
+    let single = p.get("single").and_then(Value::as_bool).unwrap_or(false);
+    let list = match (p.get("sheets"), str_param(p, "list")) {
+        (Some(v), _) => Some(publish::sheets("publish", v)?),
+        (None, Some(f)) => Some(publish::load("publish", f)?),
+        (None, None) => None,
+    };
+    if list.is_some() || single {
+        let list = list.unwrap_or_else(|| {
+            sheets.iter().map(|l| publish::Sheet { drawing: None, layout: l.clone(), title: None, page: serde_json::Map::new() }).collect()
+        });
+        let path = str_param(p, "path").map(str::to_string);
+        return publish::publish(s, &list, path.as_deref(), single);
+    }
     if sheets.is_empty() {
         return Err(bad("publish", "there are no sheets to publish"));
     }

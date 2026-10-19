@@ -184,6 +184,7 @@ fn install_io() {
         },
         seed: |d, bytes| cadaddy_io::cdy::seed(d, bytes).map(|s| std::sync::Arc::new(s) as cadaddy_engine::cmd::file::CdyState),
     });
+    cadaddy_engine::cmd::file::set_pdf_merge(|parts| cadaddy_io::pdf_merge::merge(parts).map_err(|e| e.to_string()));
     cadaddy_engine::cmd::file::set_write_as(|d, name, o| {
         cadaddy_io::write_with(d, name, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });

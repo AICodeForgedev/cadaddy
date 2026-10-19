@@ -24,8 +24,8 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
         return None;
     }
     let dialog = match id {
-        // QUIT and EXIT close CADaddy, asking about unsaved drawings.
-        "quit" | "exit" => {
+        // QUIT, EXIT and QQUIT close CADaddy, asking about each unsaved drawing first.
+        "quit" | "exit" | "qquit" => {
             app.quit_requested = true;
             return Some(Ok(Value::Null));
         }
@@ -1206,57 +1206,102 @@ fn constraint_settings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -
     let types = cadaddy_doc::ParametricSettings::default().auto_types;
     let mut action = None;
     let set = |k: &str, v: Value| Some(("constraintsettings", json!({ k: v })));
-    egui::Window::new("Constraint Settings")
+    egui::Window::new(crate::tl!("Constraint Settings"))
+        .id(egui::Id::new("Constraint Settings"))
         .open(open)
         .collapsible(false)
         .resizable(false)
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
-            ui.heading("Geometric");
+            ui.heading(crate::tl!("Geometric"));
             let mut infer = s.infer;
-            if ui.checkbox(&mut infer, "Infer geometric constraints").changed() {
+            if ui.checkbox(&mut infer, crate::tl!("Infer geometric constraints")).changed() {
                 action = set("infer", json!(infer));
             }
             let mut bars = s.bars_visible;
-            if ui.checkbox(&mut bars, "Show constraint bars").changed() {
+            if ui.checkbox(&mut bars, crate::tl!("Show constraint bars")).changed() {
                 action = set("barsVisible", json!(bars));
             }
             ui.horizontal(|ui| {
-                ui.label("Constraint bar transparency (%)");
+                ui.label(crate::tl!("Constraint bar transparency (%)"));
                 if let Some(v) = num_field(ui, "csettings_transp", f64::from(s.bar_transparency)) {
                     action = set("barTransparency", json!(v));
                 }
             });
             ui.separator();
-            ui.heading("Dimensional");
+            ui.heading(crate::tl!("Dimensional"));
             let mut dims = s.dims_visible;
-            if ui.checkbox(&mut dims, "Show dynamic constraints").changed() {
+            if ui.checkbox(&mut dims, crate::tl!("Show dynamic constraints")).changed() {
                 action = set("dimsVisible", json!(dims));
             }
-            ui.separator();
-            ui.heading("AutoConstrain");
-            ui.label(RichText::new("Constraint types AUTOCONSTRAIN applies").color(t.text_dim));
-            egui::Grid::new("csettings_types").num_columns(3).show(ui, |ui| {
-                for (i, ty) in types.iter().enumerate() {
-                    let mut on = s.auto_types.iter().any(|a| a.eq_ignore_ascii_case(ty));
-                    if ui.checkbox(&mut on, ty.as_str()).changed() {
-                        let list: Vec<&String> =
-                            types.iter().filter(|x| if *x == ty { on } else { s.auto_types.iter().any(|a| a.eq_ignore_ascii_case(x)) }).collect();
-                        action = set("autoTypes", json!(list));
-                    }
-                    if i % 3 == 2 {
-                        ui.end_row();
+            // CONSTRAINTNAMEFORMAT.
+            ui.horizontal(|ui| {
+                ui.label(crate::tl!("Dimension name format"));
+                for (v, label) in [(0u8, crate::tl!("Name")), (1, crate::tl!("Value")), (2, crate::tl!("Name and Expression"))] {
+                    if ui.radio(s.name_format == v, label).clicked() && s.name_format != v {
+                        action = set("nameFormat", json!(v));
                     }
                 }
             });
+            ui.separator();
+            ui.heading(crate::tl!("AutoConstrain"));
+            ui.label(RichText::new(crate::tl!("Constraint types AUTOCONSTRAIN applies, in order of priority")).color(t.text_dim));
+            // The applied types first, in their priority order, then the others.
+            let mut order: Vec<String> = s.auto_types.clone();
+            order.extend(types.iter().filter(|ty| !s.auto_types.iter().any(|a| a.eq_ignore_ascii_case(ty))).cloned());
+            let applied = |ty: &str| s.auto_types.iter().any(|a| a.eq_ignore_ascii_case(ty));
+            egui::Grid::new("csettings_types").num_columns(3).show(ui, |ui| {
+                for ty in &order {
+                    let mut on = applied(ty);
+                    if ui.checkbox(&mut on, crate::i18n::t(ty)).changed() {
+                        let list: Vec<&String> = order.iter().filter(|x| if *x == ty { on } else { applied(x) }).collect();
+                        action = set("autoTypes", json!(list));
+                    }
+                    let pos = s.auto_types.iter().position(|a| a.eq_ignore_ascii_case(ty));
+                    ui.add_enabled_ui(pos.is_some(), |ui| {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(pos.is_some_and(|p| p > 0), egui::Button::new("▲").small())
+                                .on_hover_text(crate::tl!("Move Up"))
+                                .clicked()
+                                && let Some(p) = pos
+                            {
+                                let mut list = s.auto_types.clone();
+                                list.swap(p, p - 1);
+                                action = set("autoTypes", json!(list));
+                            }
+                            if ui
+                                .add_enabled(pos.is_some_and(|p| p + 1 < s.auto_types.len()), egui::Button::new("▼").small())
+                                .on_hover_text(crate::tl!("Move Down"))
+                                .clicked()
+                                && let Some(p) = pos
+                            {
+                                let mut list = s.auto_types.clone();
+                                list.swap(p, p + 1);
+                                action = set("autoTypes", json!(list));
+                            }
+                        });
+                    });
+                    ui.label("");
+                    ui.end_row();
+                }
+            });
+            let mut tangent = s.tangent_intersect;
+            if ui.checkbox(&mut tangent, crate::tl!("Tangent objects must share an intersection point")).changed() {
+                action = set("tangentIntersect", json!(tangent));
+            }
+            let mut perp = s.perpendicular_intersect;
+            if ui.checkbox(&mut perp, crate::tl!("Perpendicular objects must share an intersection point")).changed() {
+                action = set("perpendicularIntersect", json!(perp));
+            }
             egui::Grid::new("csettings_tol").num_columns(2).show(ui, |ui| {
-                ui.label("Distance tolerance");
+                ui.label(crate::tl!("Distance tolerance"));
                 if let Some(v) = num_field(ui, "csettings_dist", s.distance_tolerance) {
                     action = set("distanceTolerance", json!(v));
                 }
                 ui.end_row();
-                ui.label("Angle tolerance (degrees)");
+                ui.label(crate::tl!("Angle tolerance (degrees)"));
                 if let Some(v) = num_field(ui, "csettings_angle", s.angle_tolerance) {
                     action = set("angleTolerance", json!(v));
                 }

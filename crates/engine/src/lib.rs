@@ -19,6 +19,7 @@ mod finite;
 pub mod grip_dims;
 pub mod grips;
 mod guard;
+pub mod i18n;
 pub mod lisp;
 pub mod mtext_edit;
 pub mod pointmod;
@@ -29,6 +30,7 @@ mod recent;
 pub mod sample;
 pub mod select;
 pub mod snap;
+pub mod snap3;
 pub mod spatial;
 pub mod sysvars;
 pub mod ucs;
@@ -494,6 +496,10 @@ impl DocState {
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub osmode: u32,
+    /// 3D object snaps (3DOSMODE, [`snap3::mode`]); 0 is off.
+    pub osmode3: u32,
+    /// Dynamic UCS (UCSDETECT): points drawn in a 3D view land on the face under the cursor.
+    pub ducs: bool,
     pub orthomode: bool,
     pub polarmode: bool,
     /// POLARANG (radians).
@@ -623,6 +629,8 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             osmode: 4133,
+            osmode3: snap3::mode::VERTEX | snap3::mode::MIDPOINT | snap3::mode::CENTER,
+            ducs: true,
             orthomode: false,
             polarmode: true,
             polarang: std::f64::consts::FRAC_PI_2,
@@ -884,6 +892,8 @@ pub struct Session {
     pub last_command: Option<String>,
     /// LASTPOINT.
     pub last_point: Vec2,
+    /// The last point in space given ([`Input::Point3`]): `@dx,dy,dz` is from it.
+    pub last_point3: cadaddy_geom::Vec3,
     /// The last segment given at a point prompt (its base point and the point): polar angles
     /// relative to the last segment (POLARMODE bit 1) are measured from it.
     pub last_segment: Option<(Vec2, Vec2)>,
@@ -969,6 +979,7 @@ impl Session {
             log: Vec::new(),
             last_command: None,
             last_point: Vec2::ZERO,
+            last_point3: cadaddy_geom::Vec3::ZERO,
             last_segment: None,
             last_polar: None,
             point_mods: Vec::new(),
@@ -1314,6 +1325,22 @@ impl Session {
     /// Give an input to the running command. With no command running, `Enter` repeats the last
     /// command (as in AutoCAD) and points do nothing. A LISP routine waiting in a `get…`
     /// function takes the input instead; one paused in `command` carries on after it.
+    /// The 3D object snap under the cursor (`cursor`: the view-plane point in a 3D view, the plan
+    /// point in the plan view) while the prompt takes a point: 3DOSMODE's snaps, and with dynamic
+    /// UCS in a 3D view at a prompt taking points in space, the face under the cursor.
+    pub fn osnap3_at(&self, cursor: Vec2) -> Option<snap3::Snap3> {
+        let prompt = self.current_prompt()?;
+        if !prompt.accept.point {
+            return None;
+        }
+        let st = self.state().ok()?;
+        let proj = st.projection();
+        let ap = self.pixel_size() * self.settings.aperture.max(1.0);
+        let base = prompt.base.map(|_| self.last_point3);
+        let on_face = self.settings.ducs && prompt.point3 && proj.is_some();
+        snap3::osnap3(&st.doc, &st.edit_space(), proj, cursor, ap, self.settings.osmode3, base, on_face)
+    }
+
     pub fn input(&mut self, input: Input) -> Result<()> {
         if self.lisp_input(input.clone()) {
             return Ok(());
@@ -1339,6 +1366,13 @@ impl Session {
         // point it was picked at.
         let input = match input {
             Input::Deferred(d) if !self.current_prompt().is_some_and(|p| p.deferred) => Input::Point(d.at),
+            // A point in space where the prompt takes a plan point: its X and Y.
+            Input::Point3(p) if !self.current_prompt().is_some_and(|q| q.point3) => Input::Point(p.xy()),
+            Input::Point3(p) => {
+                self.last_point3 = p;
+                self.last_point = p.xy();
+                Input::Point3(p)
+            }
             other => other,
         };
         // Generic selection handling during "Select objects:" prompts.
@@ -1866,6 +1900,12 @@ impl Session {
             && !(prompt.accept.number && tt.parse::<f64>().is_ok())
         {
             return self.input(Input::Keyword(k));
+        }
+        // `x,y,z` (or `@dx,dy,dz`) where the prompt takes points in space.
+        if prompt.point3
+            && let Some(p) = prompt::parse_point3(tt, self.last_point3)
+        {
+            return self.input(Input::Point3(p));
         }
         if prompt.accept.point {
             if let Some(p) = prompt::parse_point_in(tt, self.last_point, &self.angle_settings(), &self.ucs()) {

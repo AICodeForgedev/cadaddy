@@ -1,0 +1,195 @@
+# CADaddy engine messages in Arabic: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	أدخل اسم مجموعة
+	Pick internal point	اختر نقطة داخلية
+	Specify the pattern origin	حدد أصل النقش
+	Specify the incrementing elevation between rows	حدد زيادة الارتفاع بين الصفوف
+	Specify the angle to fill (+=ccw, -=cw)	حدد الزاوية المراد ملؤها (+=عكس عقارب الساعة، -=مع عقارب الساعة)
+	Select hatch object	حدد كائن التهشير
+	Red, Green, Blue	أحمر، أخضر، أزرق
+	Enter the number of rows	أدخل عدد الصفوف
+	Enter the number of levels	أدخل عدد المستويات
+	Enter new layer name	أدخل اسم الطبقة الجديد
+	Specify width	حدد العرض
+	Specify the angle between items	حدد الزاوية بين العناصر
+	Specify text height	حدد ارتفاع النص
+	Specify start tangent	حدد مماس البداية
+	Specify end tangent	حدد مماس النهاية
+	Specify reference length	حدد الطول المرجعي
+	Specify other corner	حدد الزاوية الأخرى
+	Specify next point or [Undo]	حدد النقطة التالية أو [Undo]
+	Specify new location	حدد الموقع الجديد
+	Specify new length	حدد الطول الجديد
+	Specify length of line	حدد طول الخط
+	Specify displacement	حدد الإزاحة
+	Specify angle for dimension text	حدد زاوية نص البعد
+	Select viewports	حدد إطارات العرض
+	Select object to break dimension	حدد الكائن لقطع البعد
+	Select group	حدد مجموعة
+	Select grip to edit array	حدد مقبضًا لتحرير المصفوفة
+	Select a table	حدد جدولاً
+	Select a boundary to remove	حدد حدًا لإزالته
+	Rotate arrayed items?	تدوير العناصر المصفوفة؟
+	Erase polyline?	مسح الخط المتعدد؟
+	Enter viewport arrangement	أدخل ترتيب إطارات العرض
+	Enter transparency value (0-90)	أدخل قيمة الشفافية (0-90)
+	Enter the number of operations to undo	أدخل عدد العمليات المراد التراجع عنها
+	Enter the number of columns	أدخل عدد الأعمدة
+	Enter number of items in array	أدخل عدد العناصر في المصفوفة
+	Enter new layer state name	أدخل اسم حالة الطبقة الجديد
+	Enter new color	أدخل اللون الجديد
+	Enter name of new layout	أدخل اسم التخطيط الجديد
+	Enter layer name	أدخل اسم الطبقة
+	Enter file name	أدخل اسم الملف
+	Enter color name or number (1-255)	أدخل اسم اللون أو رقمه (1-255)
+	Enter a configuration option	أدخل خيار التكوين
+	Base point	نقطة الأساس
+	Word-wrap the combined Mtext?	التفاف الكلمات في Mtext المدمج؟
+	Where should the data go?	أين يجب وضع البيانات؟
+	Verify each name to be purged?	التحقق من كل اسم سيتم حذفه؟
+	Use landing	استخدام الهبوط
+	Type of boundary object	نوع كائن الحد
+	Specify width factor	حدد معامل العرض
+	Specify tolerance	حدد التفاوت
+	Specify the tangent direction for the start point of arc	حدد اتجاه المماس لنقطة بداية القوس
+	Specify the reference angle	حدد الزاوية المرجعية
+	Specify the new angle	حدد الزاوية الجديدة
+	Specify text width	حدد عرض النص
+	Specify temporary OTRACK point	حدد نقطة OTRACK مؤقتة
+	Invalid option keyword.	كلمة خيار غير صالحة.
+	*Invalid selection*	*تحديد غير صالح*
+	Requires a valid angle.	يتطلب زاوية صالحة.
+	Nothing to undo.	لا شيء للتراجع عنه.
+	Invalid point.	نقطة غير صالحة.
+	No viewport found there.	لم يتم العثور على إطار عرض هناك.
+	*Cancel*	*إلغاء*
+	Requires a positive number.	يتطلب رقمًا موجبًا.
+	No hatch selected.	لم يتم تحديد تهشير.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** الأمر غير مسموح به في علامة تبويب النموذج ** (انتقل إلى تخطيط أولاً)
+	Select a multileader.	حدد خطًا مرشدًا متعددًا.
+	No line or arc to continue.	لا يوجد خط أو قوس للمتابعة.
+	Revision cloud finished.	اكتملت سحابة المراجعة.
+	Object selected is not a circle or arc.	الكائن المحدد ليس دائرة أو قوسًا.
+	Select a linear or aligned dimension.	حدد بعدًا خطيًا أو محاذيًا.
+	Object selected is not a dimension.	الكائن المحدد ليس بعدًا.
+	No dimensions selected.	لم يتم تحديد أبعاد.
+	Requires a number.	يتطلب رقمًا.
+	0 found	لم يُعثر على شيء
+	The feature control frame is empty.	إطار التحكم في الميزة فارغ.
+	1 was on a locked layer.	كان 1 على طبقة مقفلة.
+	Row elevations need an associative array; the copies stay at the same elevation.	ارتفاعات الصفوف تحتاج إلى مصفوفة ترابطية؛ تبقى النسخ على نفس الارتفاع.
+	Point or option keyword required.	مطلوب نقطة أو كلمة خيار.
+	Enter Yes or No.	أدخل Yes أو No.
+	Viewport created, zoomed to the model extents.	تم إنشاء إطار العرض وتكبيره إلى حدود النموذج.
+	No object found.	لم يتم العثور على كائن.
+	The object is not a table.	الكائن ليس جدولاً.
+	No table there.	لا يوجد جدول هناك.
+	A transparent command is already in progress.	هناك أمر شفاف قيد التنفيذ بالفعل.
+	Invalid class name.	اسم فئة غير صالح.
+	Invalid group name.	اسم مجموعة غير صالح.
+	Too many point modifiers.	عدد كبير جدًا من معدِّلات النقاط.
+	No leader to remove.	لا يوجد خط مرشد لإزالته.
+	Requires a non-negative number.	يتطلب رقمًا غير سالب.
+	Clipboard is empty.	الحافظة فارغة.
+	1 object was on a locked layer.	كان كائن واحد على طبقة مقفلة.
+	Circle does not exist.	الدائرة غير موجودة.
+	Enter Length or Area.	أدخل Length أو Area.
+	Enter a percentage from 0 to 1000.	أدخل نسبة مئوية من 0 إلى 1000.
+	Enter Table, File or None.	أدخل Table أو File أو None.
+	Cannot measure that object.	لا يمكن قياس هذا الكائن.
+	Third pair ignored (2D align).	تم تجاهل الزوج الثالث (محاذاة ثنائية الأبعاد).
+	Insert mode: Copy (nested objects are copied as independent objects).	وضع الإدراج: نسخ (يتم نسخ الكائنات المتداخلة ككائنات مستقلة).
+	Everything has been undone	تم التراجع عن كل شيء
+	Everything has been undone.	تم التراجع عن كل شيء.
+	Requires a non-negative number or Auto.	يتطلب رقمًا غير سالب أو Auto.
+	Select a dimension.	حدد بعدًا.
+	Object cannot be dimensioned this way.	لا يمكن وضع أبعاد للكائن بهذه الطريقة.
+	Select an arc, circle or line.	حدد قوسًا أو دائرة أو خطًا.
+	The two points must be different.	يجب أن تكون النقطتان مختلفتين.
+	No linear dimension to continue. Create one with DIMLINEAR first.	لا يوجد بعد خطي للمتابعة. أنشئ واحدًا باستخدام DIMLINEAR أولاً.
+	A multileader needs a leader line or content; nothing was drawn.	يحتاج الخط المرشد المتعدد إلى خط مرشد أو محتوى؛ لم يتم رسم أي شيء.
+	Requires the name of a block defined in the drawing.	يتطلب اسم كتلة معرّفة في الرسم.
+	Invalid option.	خيار غير صالح.
+	The boundary encloses none of the image.	الحد لا يحيط بأي جزء من الصورة.
+	The object is not an image.	الكائن ليس صورة.
+	The image has no clipping boundary.	الصورة ليس لها حد قص.
+	No images selected.	لم يتم تحديد صور.
+	Requires an integer between 0 and 100.	يتطلب عددًا صحيحًا بين 0 و100.
+	The selected object has no area.	الكائن المحدد ليس له مساحة.
+	No such object	لا يوجد كائن كهذا
+	Requires a point.	يتطلب نقطة.
+	Requires a distance.	يتطلب مسافة.
+	The object is on a locked layer.	الكائن على طبقة مقفلة.
+	Value must be positive and nonzero.	يجب أن تكون القيمة موجبة وغير صفرية.
+	Requires an angle.	يتطلب زاوية.
+	Requires a point or option keyword.	يتطلب نقطة أو كلمة خيار.
+	Object does not intersect a cutting edge.	الكائن لا يتقاطع مع حافة قطع.
+	Object does not intersect an edge.	الكائن لا يتقاطع مع حافة.
+	Lines are parallel.	الخطوط متوازية.
+	The Block Editor is not open.	محرر الكتل غير مفتوح.
+	Requires a positive integer.	يتطلب عددًا صحيحًا موجبًا.
+	Answer Yes or No.	أجب بـ Yes أو No.
+	Requires a valid point.	يتطلب نقطة صالحة.
+	No reference objects	لا توجد كائنات مرجعية
+	Requires an angle or point.	يتطلب زاوية أو نقطة.
+	Requires a positive distance.	يتطلب مسافة موجبة.
+	Requires a non-negative distance.	يتطلب مسافة غير سالبة.
+	No such grip	لا يوجد مقبض كهذا
+	Requires a template file name.	يتطلب اسم ملف قالب.
+	A hatch needs at least one boundary: erase it instead.	يحتاج التهشير إلى حد واحد على الأقل: امسحه بدلاً من ذلك.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	التراجع متوقف (UNDO Control None)؛ يقوم UNDO Control All بتشغيله.
+	Enter ON or OFF.	أدخل ON أو OFF.
+	Not a linear dimension.	ليس بعدًا خطيًا.
+	Valid hatch boundary not found.	لم يتم العثور على حد تهشير صالح.
+	No closed boundary objects selected.	لم يتم تحديد كائنات حد مغلقة.
+	Requires a name.	يتطلب اسمًا.
+	That option doesn't apply to this grip.	هذا الخيار لا ينطبق على هذا المقبض.
+	That would make a degenerate object.	سيؤدي ذلك إلى كائن متحلل.
+	No tangent or perpendicular from the last point.	لا يوجد مماس أو عمودي من النقطة الأخيرة.
+	Requires numeric distance or second point.	يتطلب مسافة رقمية أو نقطة ثانية.
+	Edge endpoints must differ.	يجب أن تختلف نقاط نهاية الحافة.
+	Requires numeric distance or point.	يتطلب مسافة رقمية أو نقطة.
+	Requires a positive height.	يتطلب ارتفاعًا موجبًا.
+	No objects found.	لم يتم العثور على كائنات.
+	Requires a non-zero number.	يتطلب رقمًا غير صفري.
+	Circle must intersect cutting edges at two or more points.	يجب أن تتقاطع الدائرة مع حواف القطع في نقطتين أو أكثر.
+	Arc cannot be full 360 degrees.	لا يمكن أن يكون القوس 360 درجة كاملة.
+	Cannot break that object.	لا يمكن قطع هذا الكائن.
+	An object is on a locked layer.	هناك كائن على طبقة مقفلة.
+	Objects are not connected.	الكائنات غير متصلة.
+	The two points must differ.	يجب أن تختلف النقطتان.
+	Mirror line points must differ.	يجب أن تختلف نقاط خط الانعكاس.
+	No drawing is open.	لا يوجد رسم مفتوح.
+	Command: {}	الأمر: {}
+	Unknown command "{}". Press F1 for help.	أمر غير معروف "{}". اضغط F1 للمساعدة.
+	{} found	تم العثور على {}
+	{} found, {} total	تم العثور على {}، الإجمالي {}
+	Distance = {}	المسافة = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	المسافة = {}،  الزاوية في المستوى XY = {}،  الزاوية من المستوى XY = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	دلتا X = {}،  دلتا Y = {}،   دلتا Z = {}
+	Area = {}, Perimeter = {}	المساحة = {}، المحيط = {}
+	Total area = {}	المساحة الإجمالية = {}
+	Resuming {} command.	استئناف الأمر {}.
+	Invalid input: {}	إدخال غير صالح: {}
+	{} were on a locked layer.	كانت {} على طبقة مقفلة.
+	{} dimension(s) changed.	تم تغيير {} من الأبعاد.
+	Group {} ungrouped.	تم فك تجميع المجموعة {}.
+	{} object(s) flattened.	تم تسطيح {} من الكائنات.
+	Group {} renamed to {}.	تمت إعادة تسمية المجموعة {} إلى {}.
+	{} object(s) added to group {}.	تمت إضافة {} من الكائنات إلى المجموعة {}.
+	{} object(s) removed from group {}.	تمت إزالة {} من الكائنات من المجموعة {}.
+	{} lines were chamfered	تم شطف {} من الخطوط
+	{} lines were filleted	تم تدوير {} من الخطوط
+	{} objects joined into 1 {}	تم ضم {} من الكائنات في {} واحد
+	Current dimension style:  {}	نمط البعد الحالي:  {}
+	Wrote {}	تمت كتابة {}
+	{} is already open.	{} مفتوح بالفعل.
+	{} dimension(s) created.	تم إنشاء {} من الأبعاد.
+	BOUNDARY created {} polyline(s)	أنشأ BOUNDARY {} من الخطوط المتعددة
+	Current line-width is {}	عرض الخط الحالي هو {}
+	Unknown variable {}. Type SETVAR ? to list variables.	متغير غير معروف {}. اكتب SETVAR ? لسرد المتغيرات.
+	{} = {} (read only)	{} = {} (للقراءة فقط)
+	Dimension text = {}	نص البعد = {}
+	{} segments added to polyline	تمت إضافة {} من المقاطع إلى الخط المتعدد

@@ -76,8 +76,8 @@ fn a_room_becomes_walls_a_floor_slab_and_a_ceiling() {
     let r = s.execute("wallgen", &json!({"rules": rules()})).unwrap();
     assert_eq!(
         (r["walls"].clone(), r["floors"].clone(), r["ceilings"].clone(), r["levels"].clone()),
-        (json!(8), json!(1), json!(1), json!(1)),
-        "{r}"
+        (json!(4), json!(1), json!(1), json!(1)),
+        "{r}: one wall per face pair, not one per line"
     );
     // Walls stand from the floor to just under the next floor (9.5' less Walk mode's 0.1' gap for
     // its structure: 112.8").
@@ -100,7 +100,7 @@ fn a_room_becomes_walls_a_floor_slab_and_a_ceiling() {
     assert!(layers.iter().all(|l| l.starts_with("3D-")), "{layers:?}");
     // Again: the old objects are replaced, not doubled.
     let again = s.execute("wallgen", &json!({})).unwrap();
-    assert_eq!((again["walls"].clone(), again["removed"].clone()), (json!(8), json!(10)));
+    assert_eq!((again["walls"].clone(), again["removed"].clone()), (json!(4), json!(6)));
 }
 
 #[test]
@@ -181,7 +181,7 @@ fn the_building_follows_the_plan_while_associative() {
     assert!((wall_x(&s) - 240.0).abs() < 1e-6);
     // Clear removes everything WALLGEN made.
     let r = s.execute("wallgen", &json!({"clear": true})).unwrap();
-    assert_eq!(r["removed"], json!(10));
+    assert_eq!(r["removed"], json!(6));
     assert!(s.doc().unwrap().model.iter().all(|e| made_as(e).is_none()));
 }
 
@@ -193,19 +193,102 @@ fn rules_files_saving_and_bad_input() {
     std::fs::write(&f, rules().to_string()).unwrap();
     let mut s = room();
     let r = s.execute("wallgen", &json!({"rulesFile": f.to_string_lossy()})).unwrap();
-    assert_eq!(r["walls"], json!(8));
+    assert_eq!(r["walls"], json!(4));
     // The tags survive DXF: a reopened drawing still knows what WALLGEN made.
     let d = s.doc().unwrap().clone();
     let back = cadaddy_io::read(&cadaddy_io::write(&d, "p.dxf").unwrap(), "p.dxf").unwrap();
-    assert_eq!(back.model.iter().filter(|e| made_as(e).as_deref() == Some("wall")).count(), 8);
+    assert_eq!(back.model.iter().filter(|e| made_as(e).as_deref() == Some("wall")).count(), 4);
     // Without rules: Walk mode's defaults (layers named *WALL*) find the same walls, and skip
     // what WALLGEN made (its 3D-Walls layer matches the pattern too).
     let mut t = room();
-    assert_eq!(t.execute("wallgen", &json!({})).unwrap()["walls"], json!(8));
-    assert_eq!(t.execute("wallgen", &json!({})).unwrap()["walls"], json!(8));
+    assert_eq!(t.execute("wallgen", &json!({})).unwrap()["walls"], json!(4));
+    assert_eq!(t.execute("wallgen", &json!({})).unwrap()["walls"], json!(4));
     // Errors, not panics.
     assert!(s.execute("wallgen", &json!({"rules": {"levels": "x"}})).is_err());
     assert!(s.execute("wallgen", &json!({"rulesFile": dir.join("missing.json").to_string_lossy()})).is_err());
     assert!(s.execute("wallgen", &json!({"slabThickness": -1})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The tester's plan: a room of two 6" rectangles (closed polylines) with a door drawn over the
+/// south wall — an arc and its leaf line on a DOOR layer, the wall lines unbroken.
+#[test]
+fn a_door_drawn_over_a_whole_wall_cuts_it() {
+    let mut d = Drawing::new_imperial();
+    let rect = |x0: f64, y0: f64, x1: f64, y1: f64| -> LwPolyline {
+        let v = |x: f64, y: f64| json!({"p": {"x": x * 12.0, "y": y * 12.0}, "bulge": 0.0, "start_width": 0.0, "end_width": 0.0});
+        serde_json::from_value(json!({"vertices": [v(x0, y0), v(x1, y0), v(x1, y1), v(x0, y1)], "closed": true})).unwrap()
+    };
+    for r in [rect(0.0, 0.0, 20.0, 10.0), rect(0.5, 0.5, 19.5, 9.5)] {
+        let h = Handle(d.handseed.max(0x100));
+        d.handseed = h.0 + 1;
+        let mut e = Entity::new(h, EntityKind::LwPolyline(r));
+        e.common.layer = "A-WALL".into();
+        d.model.push(e);
+    }
+    // A 3' door hinged at (8', 0.5') swinging into the room: the arc from the closed position
+    // (along the wall, to 11') up to open (8', 3.5'), and the open leaf.
+    let mut add = |kind: EntityKind| {
+        let h = Handle(d.handseed.max(0x100));
+        d.handseed = h.0 + 1;
+        let mut e = Entity::new(h, kind);
+        e.common.layer = "A-DOOR".into();
+        d.model.push(e);
+    };
+    add(EntityKind::Arc(cadaddy_engine::doc::Arc {
+        center: Vec3 { x: 96.0, y: 6.0, z: 0.0 },
+        radius: 36.0,
+        start: 0.0,
+        end: std::f64::consts::FRAC_PI_2,
+    }));
+    add(EntityKind::Line(Line { a: Vec3 { x: 96.0, y: 6.0, z: 0.0 }, b: Vec3 { x: 96.0, y: 42.0, z: 0.0 } }));
+    let mut s = Session::empty();
+    s.open_drawing(d, "Plan", None);
+    let r = s.execute("wallgen", &json!({"rules": rules()})).unwrap();
+    assert_eq!((r["walls"].clone(), r["doors"].clone()), (json!(4), json!(1)), "{r}");
+    // The south wall is open below the 7' head between x 8' and 11', and closed beside it.
+    let walls = made(&s, "wall");
+    let south = walls.iter().find(|m| m.vertices.iter().all(|v| v.y <= 6.0 + 1e-6)).expect("a south wall");
+    let solid_at = |x: f64, z: f64| {
+        // Inside one of the wall's boxes (each 8 vertices).
+        south.vertices.chunks(8).any(|b| {
+            let (lo, hi) =
+                b.iter().fold((Vec3 { x: f64::MAX, y: f64::MAX, z: f64::MAX }, Vec3 { x: f64::MIN, y: f64::MIN, z: f64::MIN }), |(lo, hi), v| {
+                    (Vec3 { x: lo.x.min(v.x), y: lo.y.min(v.y), z: lo.z.min(v.z) }, Vec3 { x: hi.x.max(v.x), y: hi.y.max(v.y), z: hi.z.max(v.z) })
+                });
+            x > lo.x && x < hi.x && z > lo.z && z < hi.z
+        })
+    };
+    assert!(!solid_at(114.0, 40.0), "the doorway is open");
+    assert!(solid_at(114.0, 100.0), "the header above it");
+    assert!(solid_at(60.0, 40.0) && solid_at(200.0, 40.0), "the wall beside it");
+    // The corners are closed: the south wall runs the full 20'.
+    let xs = south.vertices.iter().fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v.x), hi.max(v.x)));
+    assert!(xs.0 <= 1e-6 && xs.1 >= 240.0 - 1e-6, "{xs:?}");
+    // The leaf stands open, the 7' head high.
+    let leaf = made(&s, "door");
+    assert_eq!(leaf.len(), 1);
+    assert!((z_range(leaf.first().unwrap()).1 - 84.0).abs() < 1e-6);
+}
+
+/// A plan with no wall layer says why WALLGEN built no walls, and where the walls seem to be;
+/// `layers` builds them from there.
+#[test]
+fn no_wall_layers_is_reported_and_layers_picks_them() {
+    let mut d = Drawing::new_imperial();
+    for y in [0.0, 6.0] {
+        let h = Handle(d.handseed.max(0x100));
+        d.handseed = h.0 + 1;
+        let mut e = Entity::new(h, EntityKind::Line(Line { a: Vec3 { x: 0.0, y, z: 0.0 }, b: Vec3 { x: 240.0, y, z: 0.0 } }));
+        e.common.layer = "PARTITIONS".into();
+        d.model.push(e);
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Plan", None);
+    let r = s.execute("wallgen", &json!({"rules": rules()})).unwrap();
+    assert_eq!(r["walls"], json!(0));
+    let notes = r["notes"].to_string();
+    assert!(notes.contains("no objects on the wall layers (A-WALL)") && notes.contains("PARTITIONS"), "{notes}");
+    let r = s.execute("wallgen", &json!({"rules": rules(), "layers": "PART*"})).unwrap();
+    assert_eq!(r["walls"], json!(1), "{r}");
 }

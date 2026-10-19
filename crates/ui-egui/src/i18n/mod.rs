@@ -261,6 +261,17 @@ pub fn t(source: &str) -> &str {
     CURRENT.with(|l| tr(l.get(), source))
 }
 
+/// Text the engine wrote (a prompt, a command-line message, an error) in the interface language:
+/// this catalog's translation, else the engine's own catalog's ([`cadaddy_engine::i18n`], which
+/// also fills in values: "Command: {}"). The engine keeps the English for agents and scripts.
+pub fn t_engine(source: &str) -> std::borrow::Cow<'_, str> {
+    let ui = t(source);
+    if ui != source {
+        return std::borrow::Cow::Borrowed(ui);
+    }
+    CURRENT.with(|l| cadaddy_engine::i18n::tr(l.get(), source))
+}
+
 /// Menu headings can differ from command or object labels (e.g. Czech Kótování / Kóta).
 /// Catalogs without a `menu` entry retain their ordinary translation.
 pub fn tr_menu<'a>(language: &str, source: &'a str) -> &'a str {

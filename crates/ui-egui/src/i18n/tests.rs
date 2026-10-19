@@ -922,3 +922,29 @@ fn default_fonts_cover_swedish_letters_and_quotes() {
         }
     });
 }
+
+#[test]
+fn engine_prompts_and_messages_show_in_the_interface_language_and_replies_stay_english() {
+    let mut s = Session::new();
+    s.cmdline("dist").unwrap();
+    let prompt = s.current_prompt().map(|p| p.message).unwrap_or_default();
+    assert_eq!(prompt, "Specify first point");
+    for lang in ["uk", "de", "ja"] {
+        let shown = with_language(lang, || t_engine(&prompt).into_owned());
+        assert_ne!(shown, prompt, "{lang}");
+    }
+    s.cancel();
+    // Messages the command line shows, with their values, from the engine's catalogs.
+    let e = s.cmdline("nosuchcmd").unwrap_err().user_message();
+    assert_eq!(e, "Unknown command \"NOSUCHCMD\". Press F1 for help.");
+    assert_eq!(with_language("uk", || t_engine(&e).into_owned()), "Невідома команда «NOSUCHCMD». Натисніть F1 для довідки.");
+    assert_eq!(with_language("de", || t_engine("Command: LINE").into_owned()), "Befehl: LINE");
+    assert_eq!(with_language("ja", || t_engine("Select hatch object").into_owned()), "ハッチング オブジェクトを選択");
+    assert_eq!(with_language("en", || t_engine("Command: LINE").into_owned()), "Command: LINE");
+    // What the engine records and replies stays English, whatever the interface shows.
+    let r = with_language("uk", || s.execute("dist", &json!({ "p1": [0, 0], "p2": [3, 4] }))).unwrap();
+    assert!(r.to_string().contains("Distance") || r["distance"].as_f64() == Some(5.0), "{r}");
+    s.cmdline("line").unwrap();
+    s.cancel();
+    assert!(s.log.iter().all(|l| !l.contains("Команда")), "{:?}", s.log);
+}

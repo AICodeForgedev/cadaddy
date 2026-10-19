@@ -1759,3 +1759,101 @@
 	My properties: the ones you added (right-click a property's name to add it)	Mis propiedades: las que ha añadido (haga clic con el botón derecho en el nombre de una propiedad para añadirla)
 	Right-click a property's name and choose Add to My Properties.	Haga clic con el botón derecho en el nombre de una propiedad y elija Añadir a mis propiedades.
 	Color Books	Libros de colores
+	Sheet Set Manager	Administrador de conjuntos de planos
+	Palettes	Paletas
+	New Sheet Set...	Nuevo conjunto de planos...
+	Open Sheet Set...	Abrir conjunto de planos...
+	No sheet set is open.	No hay ningún conjunto de planos abierto.
+	Number	Número
+	Subset	Subconjunto
+	Remove Sheet	Quitar plano
+	Add Drawing...	Añadir dibujo...
+	Rename Layouts to Match	Cambiar nombre de presentaciones para que coincidan
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	La presentación de cada plano pasa a llamarse "número título", que muestran los campos de número y título de plano
+	Publish to PDF...	Publicar en PDF...
+	Prefix	Prefijo
+	Digits	Dígitos
+	Renumber	Renumerar
+	Zoom to Fit	Ajustar a la ventana
+	Drag to pan, scroll to zoom	Arrastre para desplazar, use la rueda para ampliar
+	Publish	Publicar
+	Sheets to publish, in order	Planos para publicar, en orden
+	Sheet	Plano
+	Bookmark	Marcador
+	Paper	Papel
+	Orientation	Orientación
+	(sheet name)	(nombre del plano)
+	Page setup	Configuración de página
+	Landscape	Horizontal
+	Portrait	Vertical
+	Add Sheets from Drawing...	Añadir planos de un dibujo...
+	Load List...	Cargar lista...
+	Save List...	Guardar lista...
+	Publish List	Lista de publicación
+	Enclose Text with Object	Encerrar texto con objeto
+	Export Attribute Information	Exportar información de atributos
+	Import Attribute Information	Importar información de atributos
+	Mask Text	Enmascarar texto
+	Remote Text	Texto remoto
+	Rotate Text	Girar texto
+	Text Fit	Ajustar texto
+	Toggle Frames	Activar/desactivar marcos
+	Unmask Text	Desenmascarar texto
+	Update Remote Text	Actualizar texto remoto
+	Geometric	Geométricas
+	Infer geometric constraints	Inferir restricciones geométricas
+	Show constraint bars	Mostrar barras de restricciones
+	Constraint bar transparency (%)	Transparencia de barras de restricciones (%)
+	Dimensional	Por cota
+	Show dynamic constraints	Mostrar restricciones dinámicas
+	Dimension name format	Formato de nombre de cota
+	Name and Expression	Nombre y expresión
+	Constraint types AUTOCONSTRAIN applies, in order of priority	Tipos de restricción que aplica AUTOCONSTRAIN, por orden de prioridad
+	Move Up	Subir
+	Move Down	Bajar
+	Tangent objects must share an intersection point	Los objetos tangentes deben compartir un punto de intersección
+	Perpendicular objects must share an intersection point	Los objetos perpendiculares deben compartir un punto de intersección
+	Distance tolerance	Tolerancia de distancia
+	Angle tolerance (degrees)	Tolerancia de ángulo (grados)
+	3D Move	Desplazamiento 3D
+	3D Rotate	Giro 3D
+	3D Scale	Escala 3D
+	3D Align	Alinear 3D
+	3D Mirror	Simetría 3D
+	3D Array	Matriz 3D
+	3D Object Snap	Referencia a objetos 3D
+	Specify second point or distance	Precise el segundo punto o la distancia
+	Specify angle	Precise el ángulo
+	Specify source plane: first point	Precise el plano de origen: primer punto
+	Specify source plane: second point	Precise el plano de origen: segundo punto
+	Specify source plane: third point	Precise el plano de origen: tercer punto
+	Specify destination plane: first point	Precise el plano de destino: primer punto
+	Specify destination plane: second point	Precise el plano de destino: segundo punto
+	Specify destination plane: third point	Precise el plano de destino: tercer punto
+	Delete source objects?	¿Desea suprimir los objetos de origen?
+	Specify point on XY plane	Precise un punto en el plano XY
+	Specify point on YZ plane	Precise un punto en el plano YZ
+	Specify point on ZX plane	Precise un punto en el plano ZX
+	Specify first point of mirror plane (3 points) or	Precise el primer punto del plano de simetría (3 puntos) o
+	Specify second point on mirror plane	Precise el segundo punto del plano de simetría
+	Specify third point on mirror plane	Precise el tercer punto del plano de simetría
+	Enter the type of array	Indique el tipo de matriz
+	Polar	Polar
+	Enter the number of items in the array	Indique el número de elementos de la matriz
+	Specify the angle to fill (+=ccw, -=cw)	Precise el ángulo que desea rellenar (+=antihorario, -=horario)
+	Enter the number of rows (---)	Indique el número de filas (---)
+	Enter the number of columns (|||)	Indique el número de columnas (|||)
+	Enter the number of levels (...)	Indique el número de niveles (...)
+	Specify the distance between rows (---)	Precise la distancia entre filas (---)
+	Specify the distance between columns (|||)	Precise la distancia entre columnas (|||)
+	Specify the distance between levels (...)	Precise la distancia entre niveles (...)
+	Specify second point on axis of rotation	Precise el segundo punto del eje de rotación
+	Select the objects first.	Seleccione primero los objetos.
+	Requires a point, or a distance along an axis.	Requiere un punto o una distancia a lo largo de un eje.
+	The points must not coincide or line up.	Los puntos no deben coincidir ni estar alineados.
+	The three points line up: they make no plane.	Los tres puntos están alineados: no forman un plano.
+	<3D Object Snap on>	<Referencia a objetos 3D activada>
+	<3D Object Snap off>	<Referencia a objetos 3D desactivada>
+	Preparing the 3D view…	Preparando la vista 3D…
+	Viewpoint	Punto de vista
+	3D View Benchmark	Prueba de rendimiento de la vista 3D

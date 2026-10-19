@@ -57,6 +57,46 @@ pub struct Prompt {
     /// prompt (the routine writes all of it).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub raw: bool,
+    /// The prompt takes points in space ([`Input::Point3`]): 3D snaps and typed `x,y,z` keep
+    /// their height.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub point3: bool,
+    /// The move, turn or scale handles to show at a 3D base point (3DMOVE, 3DROTATE, 3DSCALE).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gizmo: Option<Gizmo>,
+}
+
+/// The handles a 3D edit shows: where, which kind, and the axis it is held to (if any).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Gizmo {
+    pub at: cadaddy_geom::Vec3,
+    pub kind: GizmoKind,
+    /// 0 X, 1 Y, 2 Z.
+    pub axis: Option<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GizmoKind {
+    Move,
+    Rotate,
+    Scale,
+}
+
+/// A point in space typed as `x,y,z`, or `@dx,dy,dz` from `last`; `None` for anything else
+/// (two coordinates are a plan point).
+pub fn parse_point3(text: &str, last: cadaddy_geom::Vec3) -> Option<cadaddy_geom::Vec3> {
+    let t = text.trim();
+    let (rel, body) = match t.strip_prefix('@') {
+        Some(b) => (true, b),
+        None => (false, t.strip_prefix('#').unwrap_or(t)),
+    };
+    let v: Vec<f64> = body.split(',').map(|x| x.trim().parse::<f64>()).collect::<std::result::Result<_, _>>().ok()?;
+    let [x, y, z] = v[..] else { return None };
+    let p = cadaddy_geom::Vec3::new(x, y, z);
+    let p = if rel { last + p } else { p };
+    p.is_finite().then_some(p)
 }
 
 /// Parse `@distance<angle` (relative polar), returning `(distance, angle in radians)`.
@@ -92,6 +132,16 @@ impl Prompt {
     /// The visual chooser the UI can show (the `picker` field).
     pub fn picker(mut self, p: Picker) -> Self {
         self.picker = Some(p);
+        self
+    }
+    /// The prompt takes points in space (the `point3` field).
+    pub fn point3(mut self) -> Self {
+        self.point3 = true;
+        self
+    }
+    /// Show 3D edit handles (the `gizmo` field).
+    pub fn gizmo(mut self, g: Gizmo) -> Self {
+        self.gizmo = Some(g);
         self
     }
     pub fn kw(mut self, k: &[&str]) -> Self {
@@ -188,6 +238,9 @@ impl Prompt {
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 pub enum Input {
     Point(Vec2),
+    /// A point in space: a 3D object snap, a point on a face (dynamic UCS), or `x,y,z` typed at
+    /// a prompt that takes one ([`Prompt::point3`]). Other prompts get its X and Y.
+    Point3(cadaddy_geom::Vec3),
     /// A deferred tangent/perpendicular snap, only sent to prompts that accept it
     /// (`Prompt.deferred`).
     Deferred(crate::snap::Deferred),

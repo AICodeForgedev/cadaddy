@@ -40,6 +40,8 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "authoring" => crate::bedit::authoring_dialog(app, ctx, &mut open),
         "stylesmanager" => crate::plotstyles::dialog(app, ctx, &mut open),
         "etransmit" => crate::etransmit::dialog(app, ctx, &mut open),
+        "sheetset" => crate::sheetsets::dialog(app, ctx, &mut open),
+        "publish" => crate::publishdlg::dialog(app, ctx, &mut open),
         o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }

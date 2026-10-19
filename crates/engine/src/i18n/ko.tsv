@@ -1,0 +1,195 @@
+# CADaddy engine messages in Korean: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	그룹 이름 입력
+	Pick internal point	내부 점 선택
+	Specify the pattern origin	패턴 원점 지정
+	Specify the incrementing elevation between rows	행 사이의 증분 고도 지정
+	Specify the angle to fill (+=ccw, -=cw)	채울 각도 지정 (+=시계 반대 방향, -=시계 방향)
+	Select hatch object	해치 객체 선택
+	Red, Green, Blue	빨강, 초록, 파랑
+	Enter the number of rows	행 수 입력
+	Enter the number of levels	레벨 수 입력
+	Enter new layer name	새 도면층 이름 입력
+	Specify width	폭 지정
+	Specify the angle between items	항목 사이의 각도 지정
+	Specify text height	문자 높이 지정
+	Specify start tangent	시작 접선 지정
+	Specify end tangent	끝 접선 지정
+	Specify reference length	참조 길이 지정
+	Specify other corner	다른 구석 지정
+	Specify next point or [Undo]	다음 점 지정 또는 [Undo]
+	Specify new location	새 위치 지정
+	Specify new length	새 길이 지정
+	Specify length of line	선 길이 지정
+	Specify displacement	변위 지정
+	Specify angle for dimension text	치수 문자의 각도 지정
+	Select viewports	뷰포트 선택
+	Select object to break dimension	치수를 끊을 객체 선택
+	Select group	그룹 선택
+	Select grip to edit array	배열을 편집할 그립 선택
+	Select a table	테이블 선택
+	Select a boundary to remove	제거할 경계 선택
+	Rotate arrayed items?	배열된 항목을 회전하시겠습니까?
+	Erase polyline?	폴리선을 지우시겠습니까?
+	Enter viewport arrangement	뷰포트 배열 입력
+	Enter transparency value (0-90)	투명도 값 입력 (0-90)
+	Enter the number of operations to undo	명령 취소할 작업 수 입력
+	Enter the number of columns	열 수 입력
+	Enter number of items in array	배열의 항목 수 입력
+	Enter new layer state name	새 도면층 상태 이름 입력
+	Enter new color	새 색상 입력
+	Enter name of new layout	새 배치 이름 입력
+	Enter layer name	도면층 이름 입력
+	Enter file name	파일 이름 입력
+	Enter color name or number (1-255)	색상 이름 또는 번호 입력 (1-255)
+	Enter a configuration option	구성 옵션 입력
+	Base point	기준점
+	Word-wrap the combined Mtext?	결합된 Mtext의 줄을 바꾸시겠습니까?
+	Where should the data go?	데이터를 어디에 둘까요?
+	Verify each name to be purged?	소거할 각 이름을 확인하시겠습니까?
+	Use landing	연결선 사용
+	Type of boundary object	경계 객체 유형
+	Specify width factor	폭 비율 지정
+	Specify tolerance	공차 지정
+	Specify the tangent direction for the start point of arc	호 시작점의 접선 방향 지정
+	Specify the reference angle	참조 각도 지정
+	Specify the new angle	새 각도 지정
+	Specify text width	문자 폭 지정
+	Specify temporary OTRACK point	임시 OTRACK 점 지정
+	Invalid option keyword.	옵션 키워드가 잘못되었습니다.
+	*Invalid selection*	*선택이 잘못되었습니다*
+	Requires a valid angle.	유효한 각도가 필요합니다.
+	Nothing to undo.	명령 취소할 것이 없습니다.
+	Invalid point.	점이 잘못되었습니다.
+	No viewport found there.	그곳에서 뷰포트를 찾을 수 없습니다.
+	*Cancel*	*취소*
+	Requires a positive number.	양수가 필요합니다.
+	No hatch selected.	선택된 해치가 없습니다.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** 모형 탭에서 허용되지 않는 명령입니다 ** (먼저 배치로 전환하십시오)
+	Select a multileader.	다중 지시선을 선택하십시오.
+	No line or arc to continue.	계속할 선 또는 호가 없습니다.
+	Revision cloud finished.	구름형 리비전이 완료되었습니다.
+	Object selected is not a circle or arc.	선택한 객체는 원이나 호가 아닙니다.
+	Select a linear or aligned dimension.	선형 또는 정렬 치수를 선택하십시오.
+	Object selected is not a dimension.	선택한 객체는 치수가 아닙니다.
+	No dimensions selected.	선택된 치수가 없습니다.
+	Requires a number.	숫자가 필요합니다.
+	0 found	0개를 찾음
+	The feature control frame is empty.	기능 조정 프레임이 비어 있습니다.
+	1 was on a locked layer.	1개가 잠긴 도면층에 있었습니다.
+	Row elevations need an associative array; the copies stay at the same elevation.	행 고도에는 연관 배열이 필요합니다. 사본은 같은 고도에 남습니다.
+	Point or option keyword required.	점 또는 옵션 키워드가 필요합니다.
+	Enter Yes or No.	Yes 또는 No를 입력하십시오.
+	Viewport created, zoomed to the model extents.	뷰포트를 만들고 모형 범위로 줌했습니다.
+	No object found.	객체를 찾을 수 없습니다.
+	The object is not a table.	객체가 테이블이 아닙니다.
+	No table there.	그곳에 테이블이 없습니다.
+	A transparent command is already in progress.	투명 명령이 이미 진행 중입니다.
+	Invalid class name.	클래스 이름이 잘못되었습니다.
+	Invalid group name.	그룹 이름이 잘못되었습니다.
+	Too many point modifiers.	점 수정자가 너무 많습니다.
+	No leader to remove.	제거할 지시선이 없습니다.
+	Requires a non-negative number.	음수가 아닌 숫자가 필요합니다.
+	Clipboard is empty.	클립보드가 비어 있습니다.
+	1 object was on a locked layer.	1개 객체가 잠긴 도면층에 있었습니다.
+	Circle does not exist.	원이 없습니다.
+	Enter Length or Area.	Length 또는 Area를 입력하십시오.
+	Enter a percentage from 0 to 1000.	0에서 1000 사이의 백분율을 입력하십시오.
+	Enter Table, File or None.	Table, File 또는 None을 입력하십시오.
+	Cannot measure that object.	해당 객체를 측정할 수 없습니다.
+	Third pair ignored (2D align).	세 번째 쌍은 무시됩니다(2D 정렬).
+	Insert mode: Copy (nested objects are copied as independent objects).	삽입 모드: 복사(중첩된 객체는 독립된 객체로 복사됨).
+	Everything has been undone	모두 명령 취소되었습니다
+	Everything has been undone.	모두 명령 취소되었습니다.
+	Requires a non-negative number or Auto.	음수가 아닌 숫자 또는 Auto가 필요합니다.
+	Select a dimension.	치수를 선택하십시오.
+	Object cannot be dimensioned this way.	이 방법으로 객체에 치수를 기입할 수 없습니다.
+	Select an arc, circle or line.	호, 원 또는 선을 선택하십시오.
+	The two points must be different.	두 점은 서로 달라야 합니다.
+	No linear dimension to continue. Create one with DIMLINEAR first.	계속할 선형 치수가 없습니다. 먼저 DIMLINEAR로 만드십시오.
+	A multileader needs a leader line or content; nothing was drawn.	다중 지시선에는 지시선 또는 내용이 필요합니다. 아무것도 그려지지 않았습니다.
+	Requires the name of a block defined in the drawing.	도면에 정의된 블록의 이름이 필요합니다.
+	Invalid option.	옵션이 잘못되었습니다.
+	The boundary encloses none of the image.	경계가 이미지를 전혀 둘러싸지 않습니다.
+	The object is not an image.	객체가 이미지가 아닙니다.
+	The image has no clipping boundary.	이미지에 클리핑 경계가 없습니다.
+	No images selected.	선택된 이미지가 없습니다.
+	Requires an integer between 0 and 100.	0에서 100 사이의 정수가 필요합니다.
+	The selected object has no area.	선택한 객체에 면적이 없습니다.
+	No such object	해당 객체가 없습니다
+	Requires a point.	점이 필요합니다.
+	Requires a distance.	거리가 필요합니다.
+	The object is on a locked layer.	객체가 잠긴 도면층에 있습니다.
+	Value must be positive and nonzero.	값은 0이 아닌 양수여야 합니다.
+	Requires an angle.	각도가 필요합니다.
+	Requires a point or option keyword.	점 또는 옵션 키워드가 필요합니다.
+	Object does not intersect a cutting edge.	객체가 절단 모서리와 교차하지 않습니다.
+	Object does not intersect an edge.	객체가 모서리와 교차하지 않습니다.
+	Lines are parallel.	선이 평행합니다.
+	The Block Editor is not open.	블록 편집기가 열려 있지 않습니다.
+	Requires a positive integer.	양의 정수가 필요합니다.
+	Answer Yes or No.	Yes 또는 No로 답하십시오.
+	Requires a valid point.	유효한 점이 필요합니다.
+	No reference objects	참조 객체가 없습니다
+	Requires an angle or point.	각도 또는 점이 필요합니다.
+	Requires a positive distance.	양의 거리가 필요합니다.
+	Requires a non-negative distance.	음수가 아닌 거리가 필요합니다.
+	No such grip	해당 그립이 없습니다
+	Requires a template file name.	템플릿 파일 이름이 필요합니다.
+	A hatch needs at least one boundary: erase it instead.	해치에는 경계가 하나 이상 필요합니다. 대신 지우십시오.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	명령 취소가 꺼져 있습니다(UNDO Control None). UNDO Control All로 켭니다.
+	Enter ON or OFF.	ON 또는 OFF를 입력하십시오.
+	Not a linear dimension.	선형 치수가 아닙니다.
+	Valid hatch boundary not found.	유효한 해치 경계를 찾을 수 없습니다.
+	No closed boundary objects selected.	선택된 닫힌 경계 객체가 없습니다.
+	Requires a name.	이름이 필요합니다.
+	That option doesn't apply to this grip.	해당 옵션은 이 그립에 적용되지 않습니다.
+	That would make a degenerate object.	그렇게 하면 퇴화된 객체가 됩니다.
+	No tangent or perpendicular from the last point.	마지막 점에서의 접선 또는 직교가 없습니다.
+	Requires numeric distance or second point.	숫자 거리 또는 두 번째 점이 필요합니다.
+	Edge endpoints must differ.	모서리 끝점은 서로 달라야 합니다.
+	Requires numeric distance or point.	숫자 거리 또는 점이 필요합니다.
+	Requires a positive height.	양의 높이가 필요합니다.
+	No objects found.	객체를 찾을 수 없습니다.
+	Requires a non-zero number.	0이 아닌 숫자가 필요합니다.
+	Circle must intersect cutting edges at two or more points.	원은 절단 모서리와 두 점 이상에서 교차해야 합니다.
+	Arc cannot be full 360 degrees.	호는 완전한 360도가 될 수 없습니다.
+	Cannot break that object.	해당 객체를 끊을 수 없습니다.
+	An object is on a locked layer.	객체가 잠긴 도면층에 있습니다.
+	Objects are not connected.	객체가 연결되어 있지 않습니다.
+	The two points must differ.	두 점은 서로 달라야 합니다.
+	Mirror line points must differ.	대칭선의 점은 서로 달라야 합니다.
+	No drawing is open.	열린 도면이 없습니다.
+	Command: {}	명령: {}
+	Unknown command "{}". Press F1 for help.	알 수 없는 명령 "{}"입니다. 도움말을 보려면 F1을 누르십시오.
+	{} found	{}개를 찾음
+	{} found, {} total	{}개를 찾음, 총 {}개
+	Distance = {}	거리 = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	거리 = {},  XY 평면에서의 각도 = {},  XY 평면으로부터의 각도 = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	X 증분 = {},  Y 증분 = {},   Z 증분 = {}
+	Area = {}, Perimeter = {}	면적 = {}, 둘레 = {}
+	Total area = {}	총 면적 = {}
+	Resuming {} command.	{} 명령을 재개합니다.
+	Invalid input: {}	잘못된 입력: {}
+	{} were on a locked layer.	{}개가 잠긴 도면층에 있었습니다.
+	{} dimension(s) changed.	{}개 치수가 변경되었습니다.
+	Group {} ungrouped.	그룹 {}이(가) 해제되었습니다.
+	{} object(s) flattened.	{}개 객체가 평면화되었습니다.
+	Group {} renamed to {}.	그룹 {}의 이름이 {}(으)로 바뀌었습니다.
+	{} object(s) added to group {}.	{}개 객체를 그룹 {}에 추가했습니다.
+	{} object(s) removed from group {}.	{}개 객체를 그룹 {}에서 제거했습니다.
+	{} lines were chamfered	{}개 선이 모따기되었습니다
+	{} lines were filleted	{}개 선이 모깎기되었습니다
+	{} objects joined into 1 {}	{}개 객체가 1개의 {}(으)로 결합되었습니다
+	Current dimension style:  {}	현재 치수 스타일:  {}
+	Wrote {}	{}을(를) 썼습니다
+	{} is already open.	{}은(는) 이미 열려 있습니다.
+	{} dimension(s) created.	{}개 치수가 작성되었습니다.
+	BOUNDARY created {} polyline(s)	BOUNDARY가 {}개 폴리선을 작성했습니다
+	Current line-width is {}	현재 선 폭은 {}입니다
+	Unknown variable {}. Type SETVAR ? to list variables.	알 수 없는 변수 {}입니다. 변수 목록을 보려면 SETVAR ?를 입력하십시오.
+	{} = {} (read only)	{} = {} (읽기 전용)
+	Dimension text = {}	치수 문자 = {}
+	{} segments added to polyline	{}개 세그먼트가 폴리선에 추가되었습니다

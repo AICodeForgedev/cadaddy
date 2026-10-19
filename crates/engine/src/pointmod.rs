@@ -268,6 +268,7 @@ impl Session {
         }
         match input {
             Input::Point(p) => self.modifier_point(p),
+            Input::Point3(p) => self.modifier_point(p.xy()),
             // A deferred tangent/perpendicular picked under a TAN/PER override.
             Input::Deferred(d) if matches!(self.point_mods.as_slice(), [Frame::Snap { .. }]) => {
                 self.point_mods.clear();
