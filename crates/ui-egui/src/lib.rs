@@ -71,6 +71,7 @@ pub mod layers;
 pub mod layerstates;
 pub mod layouttabs;
 pub mod managers;
+pub mod markuppalette;
 pub mod matchpropdlg;
 pub mod menus;
 pub mod opening;
