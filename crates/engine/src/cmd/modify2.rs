@@ -761,7 +761,13 @@ pub(crate) fn lengthen_kind(k: &EntityKind, pick: Option<Vec2>, mode: LenMode) -
                 return Err(too_short());
             }
             let ne = fixed + dir * nl;
-            Ok(if at_b { line(a, ne) } else { line(ne, b) })
+            let mut out = l.clone();
+            if at_b {
+                out.b = ne.to3(l.b.z);
+            } else {
+                out.a = ne.to3(l.a.z);
+            }
+            Ok(EntityKind::Line(out))
         }
         EntityKind::Arc(ar) => {
             let g = Arc::new(ar.center.xy(), ar.radius, ar.start, ar.end);
@@ -782,7 +788,8 @@ pub(crate) fn lengthen_kind(k: &EntityKind, pick: Option<Vec2>, mode: LenMode) -
             if !(ns > 1e-12 && ns < TAU - 1e-9) {
                 return Err(other("The new arc would be zero length or a full circle."));
             }
-            Ok(if at_end { arc(&Arc::new(g.center, g.radius, g.start, g.start + ns)) } else { arc(&Arc::new(g.center, g.radius, g.end - ns, g.end)) })
+            let na = if at_end { Arc::new(g.center, g.radius, g.start, g.start + ns) } else { Arc::new(g.center, g.radius, g.end - ns, g.end) };
+            Ok(EntityKind::Arc(cadcraft_doc::Arc { radius: na.radius, start: na.start, end: na.end, ..ar.clone() }))
         }
         EntityKind::LwPolyline(p) if !p.closed && p.vertices.len() >= 2 => {
             let total = Polyline { vertices: p.vertices.clone(), closed: false }.len();
