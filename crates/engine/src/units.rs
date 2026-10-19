@@ -87,8 +87,8 @@ pub fn format_angle(a: f64, aunits: i64, auprec: i64) -> String {
                 }
             }
         }
-        2 => format!("{:.*}g", prec, deg / 0.9),
-        3 => format!("{:.*}r", prec, cadcraft_geom::norm_angle(a)),
+        2 => format!("{:.*}g", prec, wrap_full_turn(deg / 0.9, 400.0, prec)),
+        3 => format!("{:.*}r", prec, wrap_full_turn(cadcraft_geom::norm_angle(a), 2.0 * PI, prec)),
         4 => {
             // N/S <angle from N/S toward E/W> E/W
             let (ns, ew, ang) = if deg <= 90.0 {
@@ -102,8 +102,13 @@ pub fn format_angle(a: f64, aunits: i64, auprec: i64) -> String {
             };
             format!("{ns} {:.*}d {ew}", prec, ang)
         }
-        _ => format!("{:.*}", prec, deg),
+        _ => format!("{:.*}", prec, wrap_full_turn(deg, 360.0, prec)),
     }
+}
+
+/// `v` (in `[0, full)`), or 0 when it rounds at `prec` decimals to the same value as a full turn.
+fn wrap_full_turn(v: f64, full: f64, prec: usize) -> f64 {
+    if format!("{v:.prec$}") == format!("{full:.prec$}") { 0.0 } else { v }
 }
 
 /// Parse a distance typed by the user: decimal, `1'6"`, `1'-6 1/2"`, `6 1/2`, `3/4`, `1e3`.
@@ -371,6 +376,18 @@ mod tests {
         for (angle, prec, expected) in cases {
             assert_eq!(format_angle(angle, 1, prec), expected, "AUPREC {prec}");
         }
+    }
+
+    #[test]
+    fn rounding_to_a_full_turn_wraps_to_zero() {
+        let almost_turn = 359.9999_f64.to_radians();
+        assert_eq!(format_angle(almost_turn, 0, 2), "0.00");
+        assert_eq!(format_angle(almost_turn, 2, 2), "0.00g");
+        assert_eq!(format_angle(2.0 * PI - 1e-9, 3, 2), "0.00r");
+        assert_eq!(format_angle(359.99_f64.to_radians(), 0, 1), "0.0");
+        assert_eq!(format_angle(359.9_f64.to_radians(), 0, 1), "359.9");
+        assert_eq!(format_angle(1.0, 3, 2), "1.00r");
+        assert_eq!(format_angle(6.25, 3, 1), "6.2r");
     }
 
     #[test]
