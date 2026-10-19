@@ -2248,6 +2248,7 @@ fn page_setup(t: &T) -> PageSetup {
         _ => "layout",
     }
     .into();
+    p.plot_window = [t.fd(48, 0.0), t.fd(49, 0.0), t.fd(140, 0.0), t.fd(141, 0.0)].map(|v| if v.is_finite() { v } else { 0.0 });
     p.plot_style_table = t.s(7).unwrap_or_default();
     p
 }
