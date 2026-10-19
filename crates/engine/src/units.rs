@@ -13,7 +13,10 @@ pub fn format_distance(v: f64, lunits: i64, luprec: i64) -> String {
         1 => format!("{:.*E}", prec, v),
         3 => {
             let neg = v < 0.0;
-            let a = v.abs();
+            // Round at the displayed precision before splitting, so 11.999 carries to 1'-0.00".
+            let scale = 10f64.powi(prec as i32);
+            let rounded = (v.abs() * scale).round() / scale;
+            let a = if rounded.is_finite() { rounded } else { v.abs() };
             let ft = (a / 12.0).floor();
             let inch = a - ft * 12.0;
             format!("{}{}'-{:.*}\"", if neg { "-" } else { "" }, ft as i64, prec, inch)
@@ -292,6 +295,16 @@ mod tests {
         assert_eq!(format_distance(18.5, 4, 4), "1'-6 1/2\"");
         assert_eq!(format_distance(6.25, 5, 2), "6 1/4");
         assert_eq!(format_distance(30.0, 3, 2), "2'-6.00\"");
+    }
+
+    #[test]
+    fn engineering_rounding_carries_to_feet() {
+        assert_eq!(format_distance(11.999, 3, 2), "1'-0.00\"");
+        assert_eq!(format_distance(23.999, 3, 2), "2'-0.00\"");
+        assert_eq!(format_distance(-11.999, 3, 2), "-1'-0.00\"");
+        assert_eq!(format_distance(11.5, 3, 2), "0'-11.50\"");
+        assert_eq!(format_distance(12.0, 3, 2), "1'-0.00\"");
+        assert_eq!(format_distance(11.6, 3, 0), "1'-0\"");
     }
 
     #[test]
