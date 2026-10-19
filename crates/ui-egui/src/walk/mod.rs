@@ -10,6 +10,7 @@
 //! this drawing as one floor's sheet (then every floor of the building is walked). Nothing is
 //! computed until Walk is opened, and all of it is dropped when Walk closes.
 
+mod cpu;
 pub mod gpu;
 
 use crate::CadApp;
@@ -163,8 +164,10 @@ pub enum Picked {
 pub struct Walk {
     pub building: Building,
     pub walker: Walker,
-    gpu: Option<gpu::Gpu>,
+    pub(crate) gpu: Option<gpu::Gpu>,
     texture: Option<egui::TextureId>,
+    /// The CPU's last frame (no usable GPU).
+    cpu_texture: Option<egui::TextureHandle>,
     uploaded: bool,
     pub picked: Option<Picked>,
     /// Cut away everything above the walker's level (a dollhouse view from above).
@@ -206,6 +209,11 @@ fn speed_of(b: &Building) -> f64 {
 }
 
 impl Walk {
+    /// The last frame was drawn by the CPU (no usable GPU).
+    pub fn on_cpu(&self) -> bool {
+        self.cpu_texture.is_some() && self.gpu.is_none()
+    }
+
     fn new(building: Building, revision: u64) -> Walk {
         let walker = Walker::spawn(&building.scene, building.home_level());
         let mut w = Walk {
@@ -213,6 +221,7 @@ impl Walk {
             walker,
             gpu: None,
             texture: None,
+            cpu_texture: None,
             uploaded: false,
             picked: None,
             cut: false,
@@ -375,7 +384,9 @@ pub fn frame_for(scene: &Scene, w: &Walker, size: (u32, u32), cut: bool) -> gpu:
 /// The walk view in place of the drawing canvas: the 3D on the left, its panel on the right.
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     refresh_if_edited(app);
-    let rs = app.wgpu_rs.clone();
+    // The GPU unless it can't draw the 3D views (see `gpucaps`).
+    let rs = app.wgpu_rs.clone().filter(|_| !app.gpu_caps.cpu);
+    let samples = app.gpu_caps.msaa;
     let ctx = ui.ctx().clone();
     let mut close_now = false;
     let mut select: Option<Handle> = None;
@@ -389,7 +400,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             close_now = egui::ScrollArea::vertical().id_salt("walk_side").show(ui, |ui| side_panel(walk, ui)).inner;
         });
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-            let (esc, sel) = viewport(walk, ui, rs.as_ref());
+            let (esc, sel) = viewport(walk, ui, rs.as_ref(), samples);
             close_now |= esc;
             select = sel;
         });
@@ -552,20 +563,11 @@ fn side_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
 
 /// The 3D view: look, move, pick, draw. Returns (Esc pressed, a handle of the open drawing to
 /// select).
-fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderState>) -> (bool, Option<Handle>) {
+/// The walk view: drawn by `rs` (the GPU, with `samples` per pixel), else by the CPU.
+fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderState>, samples: u32) -> (bool, Option<Handle>) {
     let rect = ui.available_rect_before_wrap();
     let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
     let ctx = ui.ctx().clone();
-    let Some(rs) = rs else {
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "Walk needs the GPU renderer.",
-            egui::FontId::proportional(16.0),
-            egui::Color32::WHITE,
-        );
-        return (ctx.input(|i| i.key_pressed(egui::Key::Escape)), None);
-    };
     let s = &walk.building.scene;
     let ground = &walk.ground;
     let w = &mut walk.walker;
@@ -672,21 +674,46 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
     let s = &walk.building.scene;
     let ppp = ctx.pixels_per_point();
     let size = ((rect.width() * ppp).round().max(1.0) as u32, (rect.height() * ppp).round().max(1.0) as u32);
-    let g = walk.gpu.get_or_insert_with(|| gpu::Gpu::new(&rs.device));
-    if !walk.uploaded {
-        g.upload(&rs.device, &walk.view);
-        walk.uploaded = true;
-    }
-    g.render(&rs.device, &rs.queue, size, &frame_for(s, &walk.walker, size, walk.cut));
-    if let Some(view) = g.view() {
-        let mut r = rs.renderer.write();
-        match walk.texture {
-            Some(id) => r.update_egui_texture_from_wgpu_texture(&rs.device, view, wgpu::FilterMode::Linear, id),
-            None => walk.texture = Some(r.register_native_texture(&rs.device, view, wgpu::FilterMode::Linear)),
+    let full = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    if let Some(rs) = rs {
+        if walk.gpu.as_ref().is_some_and(|g| g.samples() != samples) {
+            walk.gpu = None;
+            walk.uploaded = false;
         }
-    }
-    if let Some(id) = walk.texture {
-        ui.painter().image(id, rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+        let g = walk.gpu.get_or_insert_with(|| gpu::Gpu::new(&rs.device, samples));
+        if !walk.uploaded {
+            g.upload(&rs.device, &walk.view);
+            walk.uploaded = true;
+        }
+        g.render(&rs.device, &rs.queue, size, &frame_for(s, &walk.walker, size, walk.cut));
+        if let Some(view) = g.view() {
+            let mut r = rs.renderer.write();
+            match walk.texture {
+                Some(id) => r.update_egui_texture_from_wgpu_texture(&rs.device, view, wgpu::FilterMode::Linear, id),
+                None => walk.texture = Some(r.register_native_texture(&rs.device, view, wgpu::FilterMode::Linear)),
+            }
+        }
+        if let Some(id) = walk.texture {
+            ui.painter().image(id, rect, full, egui::Color32::WHITE);
+        }
+    } else {
+        // No usable GPU: the CPU draws a smaller frame, shown scaled up.
+        let small = cpu::frame_size(size);
+        let img = cpu::render(s, &walk.walker, small, cut_z(s, &walk.walker, walk.cut));
+        match &mut walk.cpu_texture {
+            Some(t) => t.set(img, egui::TextureOptions::LINEAR),
+            None => walk.cpu_texture = Some(ctx.load_texture("walk_cpu", img, egui::TextureOptions::LINEAR)),
+        }
+        if let Some(t) = &walk.cpu_texture {
+            ui.painter().image(t.id(), rect, full, egui::Color32::WHITE);
+        }
+        ui.painter().text(
+            rect.right_bottom() - egui::vec2(10.0, 8.0),
+            egui::Align2::RIGHT_BOTTOM,
+            crate::tl!("Drawn by the CPU (no usable GPU)"),
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 220),
+        );
     }
     if let Some(Picked::Device(i)) = &walk.picked {
         draw_dims(ui.painter(), rect, &walk.walker.view_proj(aspect), &measure(&walk.building.scene, *i));

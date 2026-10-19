@@ -74,7 +74,7 @@ fn run(a: &Args) -> Result<(), String> {
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).map_err(|e| format!("no GPU adapter: {e}"))?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).map_err(|e| format!("GPU device: {e}"))?;
-    let mut g = gpu::Gpu::new(&device);
+    let mut g = gpu::Gpu::new(&device, cadaddy_ui_egui::gpucaps::MSAA_WANTED);
     g.upload(&device, &b.scene);
     g.render(&device, &queue, a.size, &frame_for(&b.scene, &w, a.size, a.cut));
     let (width, height, rgba) = g.read_rgba(&device, &queue)?;
