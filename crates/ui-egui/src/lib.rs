@@ -58,6 +58,7 @@ pub mod vpscale;
 pub mod walk;
 
 pub mod exchange;
+pub mod publishdlg;
 
 use std::sync::mpsc::Receiver;
 
