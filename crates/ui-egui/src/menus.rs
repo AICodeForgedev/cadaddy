@@ -603,6 +603,14 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some("adcenter".into());
             Ok(Value::Null)
         }
+        // From the menu or typed: the scan file from the file dialog.
+        "pointcloudattach" | "pcattach" if params.is_null() => match app.services.pick_open.as_ref().map(|p| p()) {
+            Some(Some(path)) => app.run("pointcloudattach", json!({ "path": path })),
+            Some(None) => Ok(Value::Null),
+            None => {
+                Err("POINTCLOUDATTACH: there is no file dialog here; run it with parameters, e.g. pointcloudattach {\"path\": \"scan.las\"}".into())
+            }
+        },
         "etransmit" if params.is_null() => {
             app.ui.dialog = Some("etransmit".into());
             Ok(Value::Null)

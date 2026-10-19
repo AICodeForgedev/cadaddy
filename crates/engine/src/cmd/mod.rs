@@ -38,6 +38,7 @@ mod imageattach;
 mod imageclip;
 pub(crate) mod inquiry;
 mod layer;
+pub mod pointcloud;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
 pub(crate) mod layout;
@@ -281,6 +282,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(field::specs());
         v.extend(ucs::specs());
         v.extend(tolerance::specs());
+        v.extend(pointcloud::specs());
         v.extend(adcenter::specs());
         v.extend(standards::specs());
         v.extend(colorbook::specs());

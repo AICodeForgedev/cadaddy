@@ -48,6 +48,7 @@ pub mod foreign;
 pub mod hyperlink;
 pub mod lighting;
 pub mod material;
+pub mod pointcloud;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocError {
