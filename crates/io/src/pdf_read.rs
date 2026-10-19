@@ -33,6 +33,8 @@ use crate::{IoError, Result};
 
 /// Content-stream operations read per page (all forms included): a guard against hostile files.
 const MAX_OPS: usize = 20_000_000;
+/// Most bytes one content stream or form inflates to (a small "flate bomb" can't take all memory).
+const MAX_STREAM_BYTES: usize = 256 << 20;
 /// Nesting of form XObjects.
 const MAX_DEPTH: usize = 12;
 /// Objects created.
@@ -404,7 +406,7 @@ fn dict_get<'a>(doc: &'a Document, d: &'a Dictionary, key: &[u8]) -> Option<&'a 
 
 fn stream_bytes(doc: &Document, o: &Object) -> Option<Vec<u8>> {
     match deref(doc, o) {
-        Object::Stream(s) => s.decompressed_content().ok().or_else(|| Some(s.content.clone())),
+        Object::Stream(s) => s.decompressed_content_with_limit(MAX_STREAM_BYTES).ok().or_else(|| Some(s.content.clone())),
         _ => None,
     }
 }
@@ -969,7 +971,7 @@ impl<'a> Interp<'a> {
                             let mut g = gs.clone();
                             g.ctm = m.then(gs.ctm);
                             let res = st.dict.get(b"Resources").ok().and_then(|o| deref(self.doc, o).as_dict().ok()).or(resources);
-                            let data = st.decompressed_content().unwrap_or_else(|_| st.content.clone());
+                            let data = st.decompressed_content_with_limit(MAX_STREAM_BYTES).unwrap_or_else(|_| st.content.clone());
                             self.run(&data, res, g, depth + 1);
                         }
                         Some(b"Image") => {
@@ -1091,7 +1093,7 @@ impl<'a> Interp<'a> {
                 continue;
             }
             let res = st.dict.get(b"Resources").ok().and_then(|o| deref(self.doc, o).as_dict().ok());
-            let data = st.decompressed_content().unwrap_or_else(|_| st.content.clone());
+            let data = st.decompressed_content_with_limit(MAX_STREAM_BYTES).unwrap_or_else(|_| st.content.clone());
             self.force_layer = Some(MARKUP_LAYER.to_string());
             let texts_before = self.out.texts.len();
             self.run(&data, res, g, 1);

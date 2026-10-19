@@ -35,8 +35,9 @@ commands:
   smoke <CADaddy-Mac.dmg | CADaddy.app | app executable | CADaddy.mcpb | cadaddy-cli> [--version X.Y.Z] [--out DIR] [--keep]
                   release smoke test: version, draw, save DWG/DXF/.cdy, reopen, plot PDF, sheet set
                   publish, Walk on/off and update check (app); report in target/smoke/report.json
-  fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
-                  mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
+  fuzz [TARGET|all] [seconds]
+                  mutation-fuzz the readers (default all, 60 s each): dxf dwg pdf svg image cdy shx
+                  las pts xyz cdywalk markups stl obj gltf xlsx zip lisp; crashes and hangs are
                   saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
 ";
 
@@ -99,13 +100,24 @@ pub fn metadata() -> Result<serde_json::Value, String> {
 /// `fuzz [target|all] [seconds]`: the stable mutation fuzzer over the file readers
 /// (crates/io/examples/fuzz.rs); findings land in target/fuzz-findings/<target>/. The
 /// coverage-guided cargo-fuzz targets are in fuzz/ (nightly: `cargo +nightly fuzz run dxf`).
+/// The engine's own readers; every other target is a file format `cadaddy-io` reads.
+const ENGINE_FUZZ: [&str; 3] = ["xlsx", "zip", "lisp"];
+
 fn cmd_fuzz(rest: &[&str]) -> Result<(), String> {
     let target = rest.first().copied().unwrap_or("all");
     let secs = rest.get(1).copied().unwrap_or("60");
     let out = root().join("target").join("fuzz-findings");
-    let mut c = cargo();
-    c.args(["run", "--release", "-p", "cadaddy-io", "--example", "fuzz", "--", target, secs]).arg(&out);
-    run(c, &format!("cargo run --release -p cadaddy-io --example fuzz -- {target} {secs}"))
+    let crates: &[&str] = match target {
+        "all" => &["cadaddy-io", "cadaddy-engine"],
+        t if ENGINE_FUZZ.contains(&t) => &["cadaddy-engine"],
+        _ => &["cadaddy-io"],
+    };
+    for krate in crates {
+        let mut c = cargo();
+        c.args(["run", "--release", "-p", krate, "--example", "fuzz", "--", target, secs]).arg(&out);
+        run(c, &format!("cargo run --release -p {krate} --example fuzz -- {target} {secs}"))?;
+    }
+    Ok(())
 }
 
 fn cmd_layers() -> Result<(), String> {

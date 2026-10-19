@@ -4,6 +4,9 @@
 
 /// Most bytes one entry inflates to when read.
 pub const MAX_ENTRY_BYTES: usize = 1 << 30;
+/// Most bytes all of one archive's entries unpack to together (many entries of a "zip bomb"
+/// stop here, before inflating).
+pub const MAX_READ_BYTES: usize = 2 << 30;
 /// Most entries an archive holds (without ZIP64).
 const MAX_ENTRIES: usize = 0xFFFF;
 
@@ -125,6 +128,22 @@ pub fn read(b: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     let eocd = (start..b.len().saturating_sub(21)).rev().find(|i| get_u32(b, *i) == Some(0x0605_4b50)).ok_or_else(bad)?;
     let n = usize::from(get_u16(b, eocd + 10).ok_or_else(bad)?);
     let mut at = get_u32(b, eocd + 16).ok_or_else(bad)? as usize;
+    // Every entry's size together, as the directory declares them, before anything is inflated.
+    let mut total = 0usize;
+    let mut dir = at;
+    for _ in 0..n {
+        if get_u32(b, dir) != Some(0x0201_4b50) {
+            return Err(bad());
+        }
+        total = total.saturating_add(get_u32(b, dir + 24).ok_or_else(bad)? as usize);
+        let name_len = usize::from(get_u16(b, dir + 28).ok_or_else(bad)?);
+        let extra = usize::from(get_u16(b, dir + 30).ok_or_else(bad)?);
+        let comment = usize::from(get_u16(b, dir + 32).ok_or_else(bad)?);
+        dir += 46 + name_len + extra + comment;
+    }
+    if total > MAX_READ_BYTES {
+        return Err(format!("the archive unpacks to more than {} GB", MAX_READ_BYTES >> 30));
+    }
     let mut out = Vec::with_capacity(n.min(4096));
     for _ in 0..n {
         if get_u32(b, at) != Some(0x0201_4b50) {
@@ -188,5 +207,18 @@ mod tests {
         }
         assert!(read(&bad).is_err());
         assert!(read(b"PK").is_err() && read(&[]).is_err());
+    }
+
+    #[test]
+    fn many_large_entries_are_refused_before_inflating() {
+        // Three entries declaring 1 GB each (their data is tiny and wrong): over the total.
+        let mut z = write(&[("a".to_string(), vec![0; 10]), ("b".to_string(), vec![0; 10]), ("c".to_string(), vec![0; 10])]).unwrap();
+        let mut at = 0;
+        while let Some(i) = z.get(at..).and_then(|w| w.windows(4).position(|x| x == [0x50, 0x4b, 0x01, 0x02])) {
+            let o = at + i;
+            z[o + 24..o + 28].copy_from_slice(&((1u32 << 30) - 1).to_le_bytes());
+            at = o + 4;
+        }
+        assert!(read(&z).unwrap_err().contains("GB"));
     }
 }

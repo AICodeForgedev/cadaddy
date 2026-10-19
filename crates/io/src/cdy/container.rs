@@ -24,6 +24,36 @@ pub const FLAG_DEFLATE: u16 = 1;
 pub const MAX_RAW: u64 = 1 << 31;
 /// Most chunks one file holds.
 pub const MAX_CHUNKS: usize = 1_000_000;
+/// Most bytes all of one file's chunks inflate to together: an index that lists one small,
+/// highly compressed chunk many times can't make a reader allocate without end.
+pub const MAX_TOTAL_RAW: u64 = 4 << 30;
+
+/// The inflated length chunk `at`'s header claims (0 when there is no header there).
+fn raw_len_at(b: &[u8], at: usize) -> u64 {
+    u64_at(b, at + 20).unwrap_or(0).min(MAX_RAW)
+}
+
+/// Whether a chunk header is at `at` with all its stored bytes in the file (nothing inflated).
+fn header_at(b: &[u8], at: usize) -> bool {
+    let Some(len) = u64_at(b, at + 8).and_then(|l| usize::try_from(l).ok()) else { return false };
+    at.checked_add(CHUNK_HEADER_LEN).and_then(|s| s.checked_add(len)).is_some_and(|end| end <= b.len())
+}
+
+/// Whether index `entries` can be read as they are: no offset listed twice, and everything they
+/// point at inflating to at most [`MAX_TOTAL_RAW`] together.
+fn sound(b: &[u8], entries: &[IndexEntry]) -> bool {
+    if entries.len() > MAX_CHUNKS {
+        return false;
+    }
+    let mut offsets: Vec<u64> = entries.iter().map(|e| e.offset).collect();
+    offsets.sort_unstable();
+    if offsets.windows(2).any(|w| w[0] == w[1]) {
+        return false;
+    }
+    let total =
+        entries.iter().map(|e| usize::try_from(e.offset).map_or(0, |o| raw_len_at(b, o)).max(e.raw_len.min(MAX_RAW))).fold(0u64, u64::saturating_add);
+    total <= MAX_TOTAL_RAW
+}
 
 /// One chunk as stored.
 #[derive(Clone, Debug, PartialEq)]
@@ -218,12 +248,17 @@ pub fn chunks(b: &[u8]) -> Result<(Vec<Read>, bool), String> {
     let mut out = Vec::new();
     let mut last_index: Option<Vec<IndexEntry>> = None;
     let mut steps = 0usize;
+    let mut inflated = 0u64;
     while steps < MAX_CHUNKS {
         steps += 1;
         // An earlier save's trailer: skip it.
         if b.get(at + 8..at + TRAILER_LEN) == Some(&TRAILER_MAGIC[..]) {
             at += TRAILER_LEN;
             continue;
+        }
+        inflated = inflated.saturating_add(raw_len_at(b, at));
+        if inflated > MAX_TOTAL_RAW {
+            return Err(format!("the file's parts would take more than {} GB to read", MAX_TOTAL_RAW >> 30));
         }
         let Some((r, next)) = chunk_at(b, at) else {
             // A header that doesn't read: look further on for the next chunk that does (whole and
@@ -239,8 +274,8 @@ pub fn chunks(b: &[u8]) -> Result<(Vec<Read>, bool), String> {
         match r {
             Read::Ok(c) if &c.tag == b"INDX" => {
                 if let Ok(entries) = postcard::from_bytes::<Vec<IndexEntry>>(&c.data)
-                    && entries.len() <= MAX_CHUNKS
-                    && entries.iter().all(|e| usize::try_from(e.offset).ok().and_then(|o| chunk_at(b, o)).is_some())
+                    && sound(b, &entries)
+                    && entries.iter().all(|e| usize::try_from(e.offset).is_ok_and(|o| header_at(b, o)))
                 {
                     last_index = Some(entries);
                 }
@@ -335,7 +370,7 @@ pub(super) fn index(b: &[u8]) -> Option<Vec<IndexEntry>> {
         return None;
     }
     let entries: Vec<IndexEntry> = postcard::from_bytes(&ix.data).ok()?;
-    (entries.len() <= MAX_CHUNKS).then_some(entries)
+    sound(b, &entries).then_some(entries)
 }
 
 /// Where the next readable chunk starts at or after `from`: a header with a tag of letters whose
@@ -405,6 +440,43 @@ mod tests {
         let (list, indexed) = chunks(cut).unwrap();
         assert!(!indexed);
         assert_eq!(list.len(), 2);
+    }
+
+    /// An index listing one small, highly compressed chunk again and again is refused: the file
+    /// is walked instead, so the chunk is inflated once (a "zip bomb" through the index).
+    #[test]
+    fn an_index_that_repeats_a_chunk_is_not_trusted() {
+        let mut w = Writer::new();
+        w.chunk(*b"AAAA", 1, &vec![0u8; 4 << 20], true);
+        let e = w.entries()[0].clone();
+        assert!(e.len < 64 << 10, "compressed small: {}", e.len);
+        for _ in 0..100_000 {
+            w.reuse(&e);
+        }
+        let bytes = w.finish();
+        assert!(index(&bytes).is_none(), "offsets listed twice");
+        let started = std::time::Instant::now();
+        let (list, indexed) = chunks(&bytes).unwrap();
+        assert!(!indexed);
+        assert_eq!(list.len(), 1, "the chunk, once");
+        assert!(started.elapsed().as_secs() < 5);
+    }
+
+    /// Chunks that together claim more than [`MAX_TOTAL_RAW`] stop the read before inflating.
+    #[test]
+    fn chunks_claiming_too_much_in_total_are_refused() {
+        let mut w = Writer::new();
+        let mut at = Vec::new();
+        for t in [*b"AAAA", *b"BBBB", *b"CCCC"] {
+            at.push(HEADER_LEN + w.out.len() - HEADER_LEN);
+            w.chunk(t, 1, b"tiny", false);
+        }
+        let mut bytes = w.finish();
+        for o in at {
+            bytes[o + 20..o + 28].copy_from_slice(&MAX_RAW.to_le_bytes());
+        }
+        let cut = &bytes[..bytes.len() - TRAILER_LEN];
+        assert!(chunks(cut).err().is_some_and(|e| e.contains("GB")));
     }
 
     #[test]

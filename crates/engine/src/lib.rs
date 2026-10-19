@@ -40,6 +40,36 @@ pub mod undoctl;
 pub mod units;
 pub mod writefile;
 
+/// Read `bytes` with one of the engine's own readers, for the fuzzer (`examples/fuzz.rs`):
+/// `xlsx` (TABLE's Excel import), `zip` and `lisp` (the LISP reader, as files are loaded). The
+/// result is dropped; only returning matters.
+#[doc(hidden)]
+pub fn fuzz_read(target: &str, bytes: &[u8]) {
+    match target {
+        "xlsx" => {
+            let _ = cmd::table::xlsx::open(bytes);
+        }
+        "zip" => {
+            let _ = cmd::file::zip::read(bytes);
+        }
+        "lisp" => {
+            let _ = lisp::read::read_all(&String::from_utf8_lossy(bytes));
+        }
+        _ => {}
+    }
+}
+
+/// A small workbook TABLE's xlsx writer made, as the fuzzer's seed.
+#[doc(hidden)]
+pub fn fuzz_xlsx_seed() -> Option<Vec<u8>> {
+    let rows = vec![
+        vec!["Room".to_string(), "Area".into(), "=B2*2".into()],
+        vec!["101".into(), "12.5".into(), "Lobby & Hall <1>".into()],
+        vec![String::new(), "-3e10".into(), "\u{e9}t\u{e9}".into()],
+    ];
+    cmd::table::xlsx::write(&rows, "Sheet1").ok()
+}
+
 use std::sync::Arc;
 
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Space};
