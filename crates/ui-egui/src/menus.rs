@@ -640,6 +640,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 Err("POINTCLOUDATTACH: there is no file dialog here; run it with parameters, e.g. pointcloudattach {\"path\": \"scan.las\"}".into())
             }
         },
+        "countlist" if params.is_null() && app.session.state().is_ok() => {
+            app.ui.dialog = Some(crate::countpalette::DIALOG.into());
+            Ok(Value::Null)
+        }
         "markups" if params.is_null() => {
             app.ui.dialog = Some("markups".into());
             Ok(Value::Null)

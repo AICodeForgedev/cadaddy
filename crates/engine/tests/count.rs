@@ -163,3 +163,75 @@ fn hostile_nesting_is_bounded() {
     assert!(r["blocks"]["LOOP"].as_u64().unwrap() >= 1, "{r}");
     assert!(r["blocks"].get("L16").is_none(), "nesting stops at MAX_BLOCK_DEPTH: {r}");
 }
+
+fn table_rows(s: &Session, h: Handle) -> Vec<Vec<String>> {
+    let EntityKind::Table(t) = &s.doc().unwrap().entity(h).unwrap().kind else { panic!("not a table") };
+    t.cells.iter().map(|row| row.iter().map(|c| c.text.clone()).collect()).collect()
+}
+
+#[test]
+fn a_count_table_follows_copies_and_erasures() {
+    let mut s = plates();
+    let r = s.execute("counttable", &json!({"at": [0, -20]})).unwrap();
+    assert_eq!(r["linked"], true);
+    let h = Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap();
+    assert!(table_rows(&s, h).contains(&vec!["PLATE".to_string(), "2".to_string()]));
+    // Copy a plate and erase the loose bolt: REGEN (like open, save and plot) updates it.
+    let bolt = s.doc().unwrap().model.iter().find(|e| matches!(&e.kind, EntityKind::Insert(i) if i.block == "BOLT")).unwrap().handle;
+    let plate = s.doc().unwrap().model.iter().find(|e| matches!(&e.kind, EntityKind::Insert(i) if i.block == "PLATE")).unwrap().handle;
+    s.execute("copy", &json!({"handles": [plate.hex()], "from": [0, 0], "to": [0, 30]})).unwrap();
+    s.execute("erase", &json!({"handles": [bolt.hex()]})).unwrap();
+    s.execute("regen", &json!({})).unwrap();
+    let rows = table_rows(&s, h);
+    assert!(rows.contains(&vec!["PLATE".to_string(), "3".to_string()]) && rows.contains(&vec!["BOLT".to_string(), "12".to_string()]), "{rows:?}");
+    // Already up to date: nothing to do; an explicit update after another change.
+    assert_eq!(s.execute("counttable", &json!({"update": true})).unwrap()["updated"], 0);
+    let copied = s.doc().unwrap().model.iter().filter(|e| matches!(&e.kind, EntityKind::Insert(i) if i.block == "PLATE")).last().unwrap().handle;
+    s.execute("erase", &json!({"handles": [copied.hex()]})).unwrap();
+    assert_eq!(s.execute("counttable", &json!({"update": true, "handles": [h.hex()]})).unwrap()["updated"], 1);
+    assert!(table_rows(&s, h).contains(&vec!["PLATE".to_string(), "2".to_string()]));
+    // The link survives a DXF round trip.
+    let bytes = cadaddy_io::write(s.doc().unwrap(), "t.dxf").unwrap();
+    let back = cadaddy_io::read(&bytes, "t.dxf").unwrap();
+    let linked =
+        back.model.iter().any(|e| matches!(&e.kind, EntityKind::Table(t) if t.count.as_ref().is_some_and(|c| c.space == "Model" && c.nested)));
+    assert!(linked);
+}
+
+#[test]
+fn counts_in_an_area_and_at_the_prompt() {
+    let mut s = plates();
+    // Plates at x 0 and 50, the bolt at 100: an area around the second plate and the bolt.
+    let r = s.execute("count", &json!({"area": [[40, -10], [110, 10]]})).unwrap();
+    assert_eq!(r["blocks"], json!({"BOLT": 5, "PLATE": 1}));
+    let r = s.execute("count", &json!({"area": [[40, -10], [60, -10], [60, 10]], "block": "BOLT"})).unwrap();
+    assert_eq!(r["count"], 4, "a triangle holding the second plate's insertion point only: {r}");
+    assert!(s.execute("count", &json!({"area": [[0, 0]]})).is_err());
+    s.cmdline("count").unwrap();
+    s.cmdline("a").unwrap();
+    s.input(Input::Point(cadaddy_engine::geom::Vec2::new(90.0, -5.0))).unwrap();
+    s.input(Input::Point(cadaddy_engine::geom::Vec2::new(110.0, 5.0))).unwrap();
+    assert!(s.running.is_none());
+    assert!(s.log.iter().any(|l| l.contains("BOLT: 1")), "{:?}", s.log);
+}
+
+#[test]
+fn similar_flags_scaled_references_and_exploded_copies() {
+    let mut s = Session::new();
+    define(&mut s, "PAIR", vec![circle(0.0, 1.0), circle(3.0, 1.0)]);
+    put(&mut s, &Space::Model, insert("PAIR", 0.0, 1, 1));
+    let mut big = insert("PAIR", 20.0, 1, 1);
+    if let EntityKind::Insert(i) = &mut big {
+        i.scale = Vec3::new(2.0, 2.0, 1.0);
+    }
+    let scaled = put(&mut s, &Space::Model, big);
+    // An exploded PAIR moved to x 40, and a lone circle that only looks like part of one.
+    let a = put(&mut s, &Space::Model, circle(40.0, 1.0));
+    let b = put(&mut s, &Space::Model, circle(43.0, 1.0));
+    put(&mut s, &Space::Model, circle(60.0, 1.0));
+    let r = s.execute("count", &json!({"similar": true})).unwrap();
+    assert_eq!(r["blocks"]["PAIR"], 2);
+    assert_eq!(r["similar"]["PAIR"]["scaled"], json!([scaled.hex()]));
+    assert_eq!(r["similar"]["PAIR"]["exploded"], json!([[a.hex(), b.hex()]]));
+    assert!(s.execute("count", &json!({})).unwrap().get("similar").is_none(), "only when asked");
+}
