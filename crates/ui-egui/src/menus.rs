@@ -24,6 +24,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.open", "Open...", &[], Some("Cmd+O")),
     ("ui.newtemplate", "New from Template...", &["File", "New from Template..."], None),
     ("ui.convertpdf", "Convert PDF to DWG...", &["File", "Convert PDF to DWG..."], None),
+    ("actmanager", "Action Macro Manager...", &["Tools", "Action Recorder", "Action Macro Manager..."], None),
     ("ui.walk", "Walk", &["View", "Walk"], None),
     ("ui.gpu", "3D Graphics Limits", &[], None),
     ("ui.bench3d", "3D View Benchmark", &[], None),
@@ -245,6 +246,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // Convert PDF to DWG (application menu) and PDF Import (Insert tab; PDFIMPORT typed
         // without a path, as AutoCAD asks for the file): pick the PDF, then the options dialog.
         "ui.convertpdf" => crate::pdfdlg::begin(app, true),
+        "actmanager" => {
+            app.ui.dialog = Some(crate::actionsdlg::DIALOG.into());
+            Ok(Value::Null)
+        }
         // FILEDIA 0: PDFIMPORT asks for the file on the command line instead.
         "ui.pdfimport" if file_dialogs_off(app) => {
             app.start("pdfimport");

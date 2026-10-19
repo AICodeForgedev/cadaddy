@@ -927,6 +927,8 @@ pub struct Session {
     /// The session as a script ([`journal`]): each command started, each input and each JSON call
     /// made from outside, one per line, so replaying it with SCRIPT redoes the work.
     pub journal: journal::Journal,
+    /// The Action Recorder's macros and recording ([`cmd::actions`]).
+    pub actions: cmd::actions::Actions,
     pub last_command: Option<String>,
     /// LASTPOINT.
     pub last_point: Vec2,
@@ -1018,6 +1020,7 @@ impl Session {
             suspended: None,
             log: Vec::new(),
             journal: journal::Journal::default(),
+            actions: cmd::actions::Actions::default(),
             last_command: None,
             last_point: Vec2::ZERO,
             last_point3: cadaddy_geom::Vec3::ZERO,
@@ -1319,6 +1322,10 @@ impl Session {
                 self.last_command = Some(lower.clone());
                 self.echo(format!("Command: {}", lower.to_ascii_uppercase()));
                 return self.lisp_run_command(&lower, f);
+            }
+            // An action macro's name plays it.
+            if !transparent && let Some(r) = cmd::actions::start_by_name(self, &lower) {
+                return r;
             }
             // A bare system variable name (ORTHOMODE, GRIDMODE…) acts as SETVAR on that variable.
             let var = lower.to_ascii_uppercase();

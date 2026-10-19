@@ -445,6 +445,8 @@ fn main() -> eframe::Result {
                         log::warn!("no LISP support folder {}: {e}", support.display());
                     }
                     app.session.set_lisp_support_dir(Some(support));
+                    // Action macros (ACTSTOP) are kept in `<settings>/actions`.
+                    app.session.set_action_dir(Some(dir.join("actions")));
                 }
                 app.integrated_titlebar = cfg!(target_os = "macos");
                 if surface.present_mode == eframe::wgpu::PresentMode::AutoNoVsync {

@@ -84,6 +84,7 @@ pub mod verify;
 pub mod walkpub;
 pub mod wallgen;
 pub use props::MatchProps;
+pub mod actions;
 pub(crate) mod qselect;
 mod render;
 mod sections;
@@ -323,6 +324,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(solids::specs());
         v.extend(sections::specs());
         v.extend(render::specs());
+        v.extend(actions::specs());
         v.extend(edit3d::specs());
         v
     })
