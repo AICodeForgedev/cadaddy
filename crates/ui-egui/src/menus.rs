@@ -117,6 +117,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.language", "Language", &[], None),
     ("ui.noop", "", &[], None),
     ("ui.quit", "Quit CADaddy", &[], Some("Cmd+Q")),
+    ("ui.quickprops", "Quick Properties Lists", &[], None),
 ];
 
 /// Typed commands that open a dialog only when typed alone: with more on the line (`color 1`,
@@ -168,6 +169,9 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     }
     if id == "ui.properties" {
         return Some(crate::palettes::my_properties_command(app, params));
+    }
+    if id == "ui.quickprops" {
+        return Some(crate::quick::lists_command(app, params));
     }
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", params));

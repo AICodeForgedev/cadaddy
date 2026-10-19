@@ -75,6 +75,7 @@ pub mod managers;
 pub mod markuppalette;
 pub mod matchpropdlg;
 pub mod menus;
+pub mod multiprops;
 pub mod opening;
 pub mod options;
 pub mod palettes;
@@ -164,6 +165,9 @@ pub struct UiState {
     pub properties_all: bool,
     /// The properties shown in the Properties palette's "My" view (row names, in English).
     pub my_properties: Vec<String>,
+    /// Quick Properties' rows per object type (type name → field keys: color, layer, linetype and
+    /// the type's own, as [`multiprops::fields`] names them); a type not listed shows all.
+    pub quick_properties: std::collections::BTreeMap<String, Vec<String>>,
     /// The sheet set file the Sheet Set Manager shows.
     pub sheet_set: Option<String>,
     /// Show an in-window menu bar (platforms without a native menu bar, or on request).
@@ -280,6 +284,7 @@ impl Default for UiState {
             hidden_tools: Vec::new(),
             properties_all: true,
             my_properties: Vec::new(),
+            quick_properties: std::collections::BTreeMap::new(),
             sheet_set: None,
             // AutoCAD hides the menu bar under the ribbon (MENUBAR 0).
             in_window_menu: false,
