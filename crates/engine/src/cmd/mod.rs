@@ -37,6 +37,7 @@ pub(crate) mod inquiry;
 mod layer;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
+pub mod furnish;
 pub(crate) mod layout;
 pub mod lightbake;
 pub mod lights;
@@ -251,6 +252,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
                 .interactive(|_| Ok(Box::new(spell::SpellM::default()))),
         );
         v.extend(models3d::specs());
+        v.extend(furnish::specs());
         v.extend(perceive::specs());
         v.extend(underlay::specs());
         v.extend(takeoff::specs());
