@@ -25,6 +25,10 @@ commands:
   ci              fmt --check, clippy -D warnings, test, assets, layers, wasm (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
+  corpus synthetic [--sizes 10000,100000] [--seed N] [--out DIR] [--keep]
+                  made-up floor plans of 10k-500k objects (seeded) round-tripped through DXF, DWG
+                  and .cdy: exact differences and save/open/regen times against budgets (warnings);
+                  report in target/corpus/report.md
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   parity          recompute the AutoCAD menu-breadth checklist in docs/parity-checklist.md
   ico <out.ico> <in.png>...
@@ -48,6 +52,7 @@ fn main() -> ExitCode {
         Some("layers") => cmd_layers(),
         Some("wasm") => cmd_wasm(),
         Some("ci") => cmd_ci(),
+        Some("corpus") if rest.first() == Some(&"synthetic") => cmd_corpus_synthetic(rest.get(1..).unwrap_or_default()),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => parity::run(&root()),
@@ -223,6 +228,27 @@ fn cmd_ci() -> Result<(), String> {
     }
     println!("\nCI summary: all {} steps passed ({})", done.len(), done.join(", "));
     Ok(())
+}
+
+/// The synthetic corpus (`crates/engine/examples/corpus.rs`), built and run in release.
+fn cmd_corpus_synthetic(args: &[&str]) -> Result<(), String> {
+    const FLAGS: &[&str] = &["--sizes", "--seed", "--out", "--keep"];
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if !FLAGS.contains(a) {
+            return Err(format!("corpus synthetic: unknown option {a}\n{USAGE}"));
+        }
+        if *a != "--keep" && it.next().is_none() {
+            return Err(format!("corpus synthetic: {a} needs a value"));
+        }
+    }
+    let status = Command::new(env!("CARGO"))
+        .current_dir(root())
+        .args(["run", "--release", "-p", "cadaddy-engine", "--example", "corpus", "--"])
+        .args(args)
+        .status()
+        .map_err(|e| format!("cargo: {e}"))?;
+    if status.success() { Ok(()) } else { Err(format!("corpus synthetic: {status}")) }
 }
 
 fn cmd_corpus(_download: bool) -> Result<(), String> {
