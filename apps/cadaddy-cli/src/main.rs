@@ -61,7 +61,7 @@ fn stdout_failed(e: std::io::Error) {
 const USAGE: &str = "usage:
   cadaddy-cli info FILE.(dwg|dxf|cdy)
   cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|svg|png|pdf) [FRAMING]
-  cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|svg|png|pdf) [FRAMING]
+  cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|svg|png|pdf) [--recurse] [FRAMING]
   cadaddy-cli verify FILE.cdy
   cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
   cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]
@@ -294,21 +294,20 @@ fn check_framed_output(framing: Framing, out: Option<&str>) -> Result<(), String
     }
 }
 
-/// Extensions of the drawings a folder conversion picks up.
-const DRAWINGS: [&str; 3] = ["dwg", "dxf", "cdy"];
 /// Formats a conversion writes.
 const OUTPUTS: [&str; 6] = ["dwg", "dxf", "cdy", "svg", "png", "pdf"];
-/// Most files one folder conversion takes.
-const MAX_BATCH: usize = 100_000;
 
 fn convert(args: &[String]) -> Result<(), String> {
     let mut framing = Framing::Auto;
     let mut files = Vec::new();
     let mut to: Option<String> = None;
+    let mut recurse = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if a == "--to" {
             to = Some(it.next().ok_or("--to needs a format (dwg, dxf, cdy, svg, png, pdf)")?.trim_start_matches('.').to_ascii_lowercase());
+        } else if a == "--recurse" {
+            recurse = true;
         } else if a.starts_with("--") && !framing_option(a, &mut it, &mut framing)? {
             return Err(format!("convert: unknown option {a}"));
         } else if !a.starts_with("--") {
@@ -318,10 +317,10 @@ fn convert(args: &[String]) -> Result<(), String> {
     let [i, o] = files.as_slice() else { return Err(USAGE.into()) };
     if std::path::Path::new(i).is_dir() {
         let to = to.ok_or("converting a folder needs --to FORMAT (dwg, dxf, cdy, svg, png, pdf)")?;
-        return convert_folder(i, o, &to, framing);
+        return convert_folder(i, o, &to, recurse, framing);
     }
-    if to.is_some() {
-        return Err("--to is for converting a folder; give the output file's name instead".into());
+    if to.is_some() || recurse {
+        return Err("--to and --recurse are for converting a folder; give the output file's name instead".into());
     }
     convert_file(i, o, framing)
 }
@@ -337,50 +336,36 @@ fn convert_file(i: &str, o: &str, framing: Framing) -> Result<(), String> {
     export_framed(&s, o, window)
 }
 
-/// Every drawing (.dwg, .dxf, .cdy) directly in folder `i` converted to `to` in folder `o` (made
-/// when missing), each under its own name. A drawing that fails is reported and the rest go on;
-/// the summary is printed as JSON and the exit status is 1 when any failed.
-fn convert_folder(i: &str, o: &str, to: &str, framing: Framing) -> Result<(), String> {
+/// Every drawing (.dwg, .dxf, .cdy) in folder `i` (and its subfolders with `recurse`, kept in the
+/// output) converted to `to` in folder `o` (made when missing), each under its own name: the
+/// engine's DWGCONVERT batch, with the image formats written by [`convert_file`]. A drawing that
+/// fails is reported and the rest go on; the summary is printed as JSON and the exit status is 1
+/// when any failed.
+fn convert_folder(i: &str, o: &str, to: &str, recurse: bool, framing: Framing) -> Result<(), String> {
+    use cadaddy_engine::cmd::file::convert;
     if !OUTPUTS.contains(&to) {
         return Err(format!("--to: unknown format `{to}` (dwg, dxf, cdy, svg, png, pdf)"));
     }
     check_framed_output(framing, Some(&format!("x.{to}")))?;
-    let mut inputs: Vec<std::path::PathBuf> = std::fs::read_dir(i)
-        .map_err(|e| format!("{i}: {e}"))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_file() && p.extension().and_then(|x| x.to_str()).is_some_and(|x| DRAWINGS.contains(&x.to_ascii_lowercase().as_str())))
-        .take(MAX_BATCH)
-        .collect();
-    inputs.sort();
+    let inputs = convert::folder_inputs(std::path::Path::new(i), recurse)?;
     if inputs.is_empty() {
         return Err(format!("{i}: no drawings (.dwg, .dxf, .cdy) in this folder"));
     }
     std::fs::create_dir_all(o).map_err(|e| format!("{o}: {e}"))?;
-    let (mut converted, mut failed) = (Vec::new(), Vec::new());
-    let mut taken = std::collections::HashSet::new();
-    for p in &inputs {
-        let name = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let out = std::path::Path::new(o).join(format!("{name}.{to}"));
-        let (src, dst) = (p.display().to_string(), out.display().to_string());
-        // Two drawings of the same name (plan.dwg and plan.dxf) can't both become plan.cdy; and a
-        // drawing is never written over itself.
-        let r = if !taken.insert(out.clone()) {
-            Err(format!("another drawing in the folder already became {dst}"))
-        } else if std::fs::canonicalize(p).ok() == std::fs::canonicalize(&out).ok() {
-            Err("it would be written over itself".to_string())
-        } else {
-            convert_file(&src, &dst, framing)
-        };
-        match r {
-            Ok(()) => converted.push(json!({ "from": src, "to": dst })),
-            Err(e) => {
-                eprintln!("{src}: {e}");
-                failed.push(json!({ "file": src, "error": e }));
-            }
+    let job =
+        convert::Job { inputs, to: to.to_string(), out: Some(o.into()), exists: convert::Exists::Overwrite, bak: false, ..convert::Job::default() };
+    let image = |from: &std::path::Path, out: &std::path::Path, _: &convert::Job| {
+        convert_file(&from.to_string_lossy(), &out.to_string_lossy(), framing).map(|()| convert::Report::default())
+    };
+    let converter: Option<convert::Converter> = if convert::TARGETS.contains(&to) { None } else { Some(&image) };
+    let sum = convert::run(&job, converter, &std::sync::atomic::AtomicBool::new(false), &mut |_, o| {
+        if o.status != convert::Status::Converted {
+            eprintln!("{}: {}", o.from, o.reason.as_deref().unwrap_or_default());
         }
-    }
-    outln!("{}", serde_json::to_string_pretty(&json!({ "converted": converted, "failed": failed })).unwrap_or_default());
-    if failed.is_empty() { Ok(()) } else { Err(format!("{} of {} drawings could not be converted", failed.len(), inputs.len())) }
+    });
+    outln!("{}", serde_json::to_string_pretty(&sum.to_json()).unwrap_or_default());
+    let failed = sum.count(convert::Status::Failed);
+    if failed == 0 { Ok(()) } else { Err(format!("{failed} of {} drawings could not be converted", sum.total)) }
 }
 
 /// `verify FILE.cdy`: the check as JSON; an error (exit status 1) when the file is damaged.

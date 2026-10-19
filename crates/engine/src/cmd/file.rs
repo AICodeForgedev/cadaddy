@@ -87,6 +87,7 @@ pub fn entity_codec() -> Option<&'static EntityCodec> {
 
 /// COMPARE (drawing comparison).
 pub mod compare;
+pub mod convert;
 mod r12;
 pub mod zip;
 
@@ -331,12 +332,17 @@ fn is_dxf(path: &str) -> bool {
 /// The drawing written to `path` with `opts`: through [`IoHooks::write`] when no option is set,
 /// else through the [`write_as`] hook.
 fn write_bytes(s: &Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Vec<u8>> {
+    // A drawing file is the drawing outside the Block Editor; an image is what is shown.
+    let d: &cadaddy_doc::Drawing = if is_drawing_file(path) { s.state()?.drawing() } else { s.doc()? };
+    write_drawing(d, cmd, path, opts)
+}
+
+/// [`write_bytes`] for a drawing that isn't open (DWGCONVERT's).
+fn write_drawing(d: &cadaddy_doc::Drawing, cmd: &str, path: &str, opts: &SaveAs) -> Result<Vec<u8>> {
     let hooks = io().ok_or_else(|| bad(cmd, "file formats are not available in this build"))?;
     if opts.binary && !is_dxf(path) {
         return Err(bad(cmd, "binary applies to DXF files only"));
     }
-    // A drawing file is the drawing outside the Block Editor; an image is what is shown.
-    let d: &cadaddy_doc::Drawing = if is_drawing_file(path) { s.state()?.drawing() } else { s.doc()? };
     let r = if opts.version == Some(Version::R12) {
         // Release 12 DXF: the drawing brought down to what R12 holds first.
         if !is_dxf(path) {

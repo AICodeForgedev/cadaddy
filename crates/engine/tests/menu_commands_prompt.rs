@@ -20,6 +20,7 @@ const DIALOG_OR_STATE: &[&str] = &[
     "publish",
     "pdfbook",
     "etransmit",
+    "dwgconvert",
     "sheetset",
     "pointcloudattach",
     "markupimport",

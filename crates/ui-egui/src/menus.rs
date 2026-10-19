@@ -680,6 +680,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Some(None) => Ok(Value::Null),
             None => Err("MARKUPIMPORT: there is no file dialog here; run it with parameters, e.g. markupimport {\"path\": \"review.pdf\"}".into()),
         },
+        // From the menu or the Start page: the Convert Drawings window.
+        "dwgconvert" | "cdyconvert" if params.is_null() => {
+            app.ui.dialog = Some(crate::convertdlg::DIALOG.into());
+            Ok(Value::Null)
+        }
         "etransmit" if params.is_null() => {
             app.ui.dialog = Some("etransmit".into());
             Ok(Value::Null)

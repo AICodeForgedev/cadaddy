@@ -60,6 +60,7 @@ pub mod xrefs;
 
 pub mod activitypalette;
 pub mod agentdlg;
+pub mod convertdlg;
 pub mod countpalette;
 pub mod dyngrips;
 pub mod dyninput;
