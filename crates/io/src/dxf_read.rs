@@ -548,7 +548,14 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             let u = t.p(11);
             let v = t.p(12);
             // Clip vertices are in pixel space: origin at the image's top-left corner, y pointing down.
-            let pts: Vec<Vec2> = t.pts(14).into_iter().map(|q| o.xy() + u.xy() * (q.x + 0.5) + v.xy() * (0.5 - q.y)).collect();
+            let mut pts: Vec<Vec2> = t.pts(14).into_iter().map(|q| o.xy() + u.xy() * (q.x + 0.5) + v.xy() * (0.5 - q.y)).collect();
+            // A polygon's closing vertex (the first one repeated, as files write it) isn't a corner.
+            if pts.len() > 3
+                && let (Some(f), Some(l)) = (pts.first(), pts.last())
+                && (*f - *l).len() <= 1e-9 * (1.0 + f.len())
+            {
+                pts.pop();
+            }
             EntityKind::Wipeout(Wipeout { boundary: pts })
         }
         // The file path comes from the IMAGEDEF object (`dxf_image::resolve`).

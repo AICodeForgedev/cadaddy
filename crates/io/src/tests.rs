@@ -1909,10 +1909,9 @@ fn wipeout_survives_dxf_roundtrip() {
     d.add(&Space::Model, Common::default(), EntityKind::Wipeout(Wipeout { boundary: boundary.clone() })).unwrap();
     let back = roundtrip(&d);
     let got = first(&back, |k| if let EntityKind::Wipeout(w) = k { Some(w.boundary.clone()) } else { None });
-    // The DXF polygon is closed, so the first vertex is repeated at the end.
-    assert_eq!(got.len(), 5);
-    assert_eq!(&got[..4], &boundary[..]);
-    assert_eq!(got[4], boundary[0]);
+    // The DXF polygon is closed (the first vertex repeated at the end); reading drops the
+    // repeat, so the boundary comes back as it was.
+    assert_eq!(got, boundary);
 }
 
 #[test]
