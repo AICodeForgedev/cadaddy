@@ -2069,3 +2069,13 @@ menu	Modify	수정
 	Clip Point Cloud	점 구름 자르기
 	Point Cloud Color Map	점 구름 색상 매핑
 	Point Cloud Information	점 구름 정보
+	Markups	마크업
+	{done} of {total} done	{total}개 중 {done}개 완료
+	No markups. Import them from a reviewed PDF.	마크업이 없습니다. 검토된 PDF에서 가져오십시오.
+	Done	완료
+	Import Markups...	마크업 가져오기...
+	Import Markups	마크업 가져오기
+	Markup Import...	마크업 가져오기...
+	Markup Status	마크업 상태
+	Read Door and Window Schedules	문·창호 일람표 읽기
+	Schedules	일람표

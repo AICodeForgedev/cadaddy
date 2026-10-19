@@ -1950,3 +1950,13 @@
 	Clip Point Cloud	剪裁点云
 	Point Cloud Color Map	点云颜色映射
 	Point Cloud Information	点云信息
+	Markups	标记
+	{done} of {total} done	已完成 {done}/{total}
+	No markups. Import them from a reviewed PDF.	没有标记。请从已审阅的 PDF 导入。
+	Done	完成
+	Import Markups...	导入标记...
+	Import Markups	导入标记
+	Markup Import...	标记导入...
+	Markup Status	标记状态
+	Read Door and Window Schedules	读取门窗表
+	Schedules	门窗表

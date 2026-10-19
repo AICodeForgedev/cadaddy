@@ -1846,3 +1846,13 @@
 	Clip Point Cloud	Découper le nuage de points
 	Point Cloud Color Map	Carte de couleurs du nuage de points
 	Point Cloud Information	Informations sur le nuage de points
+	Markups	Annotations de révision
+	{done} of {total} done	{done} sur {total} traitées
+	No markups. Import them from a reviewed PDF.	Aucune annotation. Importez-les d'un PDF révisé.
+	Done	Traité
+	Import Markups...	Importer les annotations...
+	Import Markups	Importer les annotations
+	Markup Import...	Import d'annotations...
+	Markup Status	État de l'annotation
+	Read Door and Window Schedules	Lire les tableaux des portes et fenêtres
+	Schedules	Tableaux

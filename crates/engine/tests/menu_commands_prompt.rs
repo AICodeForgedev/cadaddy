@@ -22,6 +22,7 @@ const DIALOG_OR_STATE: &[&str] = &[
     "etransmit",
     "sheetset",
     "pointcloudattach",
+    "markupimport",
     "adcenter",
     "checkstandards",
     "style",

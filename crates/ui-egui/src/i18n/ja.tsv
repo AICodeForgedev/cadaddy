@@ -1790,3 +1790,5 @@
 	Tour Timing	ツアーのタイミング
 	3D Graphics Limits	3D グラフィックスの制限
 	Drawn by the CPU (no usable GPU)	CPU で描画（使用できる GPU なし）
+	Read Door and Window Schedules	建具表を読み取る
+	Schedules	建具表

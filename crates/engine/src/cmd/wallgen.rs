@@ -767,6 +767,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     let mut fitted: HashMap<Handle, (Option<f64>, Option<f64>)> = HashMap::new();
     if let Some(sp) = &g.spec {
         fit_families(d, sp, &ents, &mut ops, &mut fitted, upf);
+        // Tagged openings take their schedule row's size and heights.
+        super::schedules::size_openings(sp, &mut ops, &mut fitted, upf);
     }
     let (mut doors, mut windows) = (0, 0);
     for o in ops.iter().take(MAX_OBJECTS) {

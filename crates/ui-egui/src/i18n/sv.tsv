@@ -2076,3 +2076,13 @@ menu	Modify	Ändra
 	Clip Point Cloud	Klipp punktmoln
 	Point Cloud Color Map	Färgschema för punktmoln
 	Point Cloud Information	Information om punktmoln
+	Markups	Markeringar
+	{done} of {total} done	{done} av {total} klara
+	No markups. Import them from a reviewed PDF.	Inga markeringar. Importera dem från en granskad PDF.
+	Done	Klar
+	Import Markups...	Importera markeringar...
+	Import Markups	Importera markeringar
+	Markup Import...	Import av markeringar...
+	Markup Status	Markeringsstatus
+	Read Door and Window Schedules	Läs dörr- och fönsterförteckningar
+	Schedules	Förteckningar
