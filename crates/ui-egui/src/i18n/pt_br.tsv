@@ -1,6 +1,6 @@
-# CADCraft Brazilian Portuguese (pt-BR) interface catalog.
+# CADaddy Brazilian Portuguese (pt-BR) interface catalog.
 # License: MIT OR Apache-2.0 (the repository LICENSE-MIT and LICENSE-APACHE).
-# Written from CADCraft's English strings; no proprietary translations were copied.
+# Written from CADaddy's English strings; no proprietary translations were copied.
 # UTF-8: context<TAB>English source<TAB>Portuguese translation.
 # Empty context = ordinary label; @plural = one|other forms with {n}.
 # Keep command IDs, keywords, technology/product names and user data unchanged.
@@ -3274,3 +3274,5 @@
 	Clash Navigate	Navegar pelos conflitos
 	Colour By Status/Level	Cor por status/nível
 	Inspect Element	Inspecionar elemento
+	Select using two clicks only	Selecionar apenas com dois cliques
+	Define each corner of the selection window with a separate click.	Defina cada canto da janela de seleção com um clique separado.
