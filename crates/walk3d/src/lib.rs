@@ -25,7 +25,7 @@ pub use measure::{Dim, DimKind, measure};
 pub use pick::{Hit, pick};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules};
 pub use spec::{
-    BuildingSpec, Described, Family, FamilyKind, Issue, LayerRole, Role, Room, SPEC_VERSION, Site, Stair, Surfaces, WallFrom, WallType, feet, inches,
-    level_at, merge,
+    Band, BandKind, BuildingSpec, Cricket, Described, Equipment, Exterior, Facade, Family, FamilyKind, Issue, LayerRole, Role, Roof, RoofSlope, Room,
+    SPEC_VERSION, Side, Site, Stair, Surfaces, WallFrom, WallType, feet, inches, level_at, merge, pitch_text,
 };
 pub use walker::Walker;

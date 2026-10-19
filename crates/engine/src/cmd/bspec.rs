@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
             .noundo(),
         CommandSpec::new("model.build", "Build Model from Spec", run_build).params(
-            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, levels, removed, notes, warnings}",
+            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, roofs, parapets, crickets, equipment, facadeGlass, levels, removed, notes, warnings}",
         ),
     ]
 }
@@ -441,6 +441,8 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     }
     // Stairs, ramps and their handrails.
     let (stairs, ramps, railings) = super::stairs::build(d, &sp);
+    // The outside: roofs, parapets, crickets, rooftop equipment, facade glass and materials.
+    let outside = super::exterior::build(d, &sp);
     // Materials: the room's for its ceiling, else the building's for the part.
     let made: Vec<(Handle, String)> = d.model.iter().filter_map(|e| wallgen::made_as(e).map(|p| (e.handle, p))).collect();
     for (h, part) in made {
@@ -470,6 +472,9 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     r["stairs"] = json!(stairs);
     r["ramps"] = json!(ramps);
     r["railings"] = json!(railings);
+    if let (Some(o), Some(x)) = (r.as_object_mut(), outside.as_object()) {
+        o.extend(x.clone());
+    }
     r["removed"] = json!(removed);
     Ok(r)
 }
@@ -501,7 +506,7 @@ fn outline_of(e: &Entity) -> Option<Vec<Vec2>> {
 
 /// Triangles of a simple polygon by ear clipping (counter-clockwise result order); indexes into
 /// `poly`.
-fn ear_clip(poly: &[Vec2]) -> Vec<[usize; 3]> {
+pub(crate) fn ear_clip(poly: &[Vec2]) -> Vec<[usize; 3]> {
     let n = poly.len();
     if !(3..=100_000).contains(&n) {
         return Vec::new();
@@ -562,7 +567,7 @@ fn flat(poly: &[Vec2], z: f64) -> Option<Mesh> {
 }
 
 /// A prism over a polygon from `z0` up to `z1`: sides and both caps, faces outward.
-fn prism(poly: &[Vec2], z0: f64, z1: f64) -> Option<Mesh> {
+pub(crate) fn prism(poly: &[Vec2], z0: f64, z1: f64) -> Option<Mesh> {
     let ccw = cadaddy_geom::shoelace(poly) > 0.0;
     let ring: Vec<Vec2> = if ccw { poly.to_vec() } else { poly.iter().rev().copied().collect() };
     let tris = ear_clip(&ring);
