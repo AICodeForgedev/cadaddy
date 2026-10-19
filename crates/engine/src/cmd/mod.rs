@@ -55,6 +55,7 @@ mod perceive;
 mod pline_opts;
 pub mod plotters;
 mod props;
+pub mod revise3d;
 pub mod spell;
 pub mod stairs;
 pub mod symbol;
@@ -235,6 +236,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(lightbake::specs());
         v.extend(materials::specs());
         v.extend(wallgen::specs());
+        v.extend(revise3d::specs());
         v.extend(bspec::specs());
         v.extend(ceilings::specs());
         v.extend(exterior::specs());

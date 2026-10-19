@@ -251,6 +251,7 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     let g = WallGen { rules: sp.to_rules(), auto: bool_or(p, "auto", true), slab_ft, layers: None, spec: Some(sp) };
     let mut r = build_spec(s, &g)?;
     r["warnings"] = json!(issues.iter().filter(|i| !i.error).map(issue_json).collect::<Vec<_>>());
+    super::revise3d::record(s, &g);
     s.state_mut()?.wallgen = Some(g);
     s.echo(format!(
         "3D building from the spec: {} walls, {} doors, {} windows, {} columns, {} curtain walls, {} floors, {} ceilings ({} rooms) on {} level(s).",
