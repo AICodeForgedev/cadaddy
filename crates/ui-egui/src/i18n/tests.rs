@@ -581,19 +581,20 @@ fn italian_locales_plurals_and_accents() {
     });
 }
 
-/// Chinese shows only with an installed CJK font (none is bundled); without one the interface
-/// stays English instead of drawing boxes, and choosing it says why.
+/// Chinese shows only with a font for it: an installed CJK font, or one this build embedded from
+/// craft-fonts (the web build has no system fonts). Without either the interface stays English
+/// instead of drawing boxes, and choosing it says why.
 #[test]
-fn chinese_needs_an_installed_cjk_font() {
+fn chinese_needs_a_cjk_font() {
     assert_eq!(locale_language("zh-CN"), Some("zh"));
     let mut app = CadApp::new(Session::new(), Services::default());
     let r = app.run("ui.language", json!({"lang": "zh"})).unwrap();
     assert_eq!(r["interfaceLanguage"], "zh");
-    let font = crate::theme::cjk_font();
-    assert_eq!(app.language(), if font.is_some() { "zh" } else { "en" });
+    let shown = crate::theme::can_show("zh");
+    assert_eq!(app.language(), if shown { "zh" } else { "en" });
     assert_eq!(r["shown"], app.language());
     assert!(crate::theme::can_show("uk") && crate::theme::can_show("en"));
-    if font.is_none() {
+    if !shown {
         assert!(app.status.as_ref().is_some_and(|(s, _)| s.contains("No Chinese font")));
     }
 }
