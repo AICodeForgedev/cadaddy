@@ -135,6 +135,8 @@ fn vp(center: Vec2, w: f64, h: f64, view_center: Vec2, view_height: f64, id: u32
         locked: false,
         frozen_layers: Vec::new(),
         layer_colors: Vec::new(),
+        layer_linetypes: Vec::new(),
+        layer_lineweights: Vec::new(),
         clip: None,
         on: true,
         twist: 0.0,

@@ -532,6 +532,8 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             locked: t.i(90).unwrap_or(0) & 16384 != 0,
             frozen_layers: crate::dxf_ext::read_frozen(tags),
             layer_colors: crate::dxf_ext::read_layer_colors(tags),
+            layer_linetypes: crate::dxf_ext::read_layer_linetypes(tags),
+            layer_lineweights: crate::dxf_ext::read_layer_lineweights(tags),
             // Status flags: 65536 = non-rectangular clipping (by the 340 entity), 131072 = off.
             clip: t.s(340).and_then(|h| Handle::parse_hex(&h)).filter(|h| h.0 != 0 && t.i(90).unwrap_or(0) & 65536 != 0),
             on: t.i(90).unwrap_or(0) & 131072 == 0,
@@ -2263,6 +2265,9 @@ impl Objects {
         }
         if let Some(files) = self.xrecord_text(crate::dxf_ext::STANDARDS_KEY).filter(|s| serde_json::from_str::<Vec<String>>(s).is_ok()) {
             d.header.set_str(crate::dxf_ext::STANDARDS_KEY, &files);
+        }
+        if let Some(json) = self.xrecord_text(crate::dxf_ext::LAYER_EVAL_KEY) {
+            crate::dxf_ext::apply_layer_eval(d, &json);
         }
         // Table styles (named by their ACAD_TABLESTYLE dictionary entries).
         for (h, tags) in &self.table_styles {

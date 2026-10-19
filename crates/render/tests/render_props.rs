@@ -60,6 +60,8 @@ fn dimensions_take_the_viewport_layer_colour() {
         locked: false,
         frozen_layers: Vec::new(),
         layer_colors: vec![("a".into(), Color::Index(3))],
+        layer_linetypes: Vec::new(),
+        layer_lineweights: Vec::new(),
         clip: None,
         on: true,
         twist: 0.0,

@@ -94,6 +94,8 @@ fn every_kind() -> Drawing {
         frozen_layers: vec!["WALLS".into()],
         anno_scale: Some("1:50".into()),
         layer_colors: Vec::new(),
+        layer_linetypes: Vec::new(),
+        layer_lineweights: Vec::new(),
         clip: None,
         on: true,
         twist: 0.25,

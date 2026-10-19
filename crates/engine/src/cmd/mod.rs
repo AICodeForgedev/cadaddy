@@ -45,6 +45,8 @@ pub mod pointcloud;
 pub mod schedules;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
+pub use layer::notify::unreconciled as unreconciled_layers;
+pub use qselect::wildcard;
 pub mod furnish;
 pub(crate) mod layout;
 pub mod lightbake;

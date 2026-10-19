@@ -60,12 +60,19 @@ pub(crate) fn after_open(s: &mut Session, i: usize) {
     }
     let path = st.path.clone();
     let out = load::load_all(Arc::make_mut(&mut st.doc), path.as_deref());
+    // Layers that came with xrefs changed since the drawing was saved stay unreconciled; a
+    // drawing never evaluated starts its list now.
+    let fresh = crate::cmd::layer::notify::unreconciled(&st.doc);
+    crate::cmd::layer::notify::ensure_baseline(Arc::make_mut(&mut st.doc));
     st.saved = st.doc.clone();
     let ext = st.doc.extents(&cadaddy_doc::Space::Model);
     if !ext.is_empty() {
         st.set_view_quiet(crate::View { center: ext.center(), height: (ext.height().max(ext.width() * px.1 / px.0.max(1.0)) * 1.1).max(1e-6) });
     }
     echo_all(s, &out);
+    if !fresh.is_empty() {
+        crate::cmd::layer::notify::after_event(s, crate::cmd::layer::notify::ON_OPEN);
+    }
 }
 
 /// The open drawing's path (xref paths are relative to its folder).
@@ -148,12 +155,17 @@ fn attach(s: &mut Session, name: &str, path: &str, overlay: bool) -> Result<Stri
     b.xref_path = Some(path.to_string());
     b.xref_overlay = overlay;
     d.blocks.insert(name.to_string(), Arc::new(b));
+    crate::cmd::layer::notify::ensure_baseline(&mut d);
+    let before: Vec<String> = d.layers.iter().map(|l| l.name.clone()).collect();
     let out = load::load(&mut d, name, host.as_deref(), true);
     match out.first() {
         Some(o) if o.status == XrefStatus::Loaded => {}
         Some(o) => return Err(bad("xattach", format!("{path} can't be attached: {}", o.detail))),
         None => return Err(bad("xattach", format!("{path} can't be attached"))),
     }
+    // The layers of an xref just attached are the ones asked for: reconciled from the start.
+    let added: Vec<String> = d.layers.iter().filter(|l| !before.contains(&l.name)).map(|l| l.name.clone()).collect();
+    crate::cmd::layer::notify::reconcile_names(&mut d, &added);
     *s.doc_mut()? = d;
     echo_all(s, &out);
     Ok(name.to_string())
@@ -229,11 +241,14 @@ fn run_dash_xref(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "reload" | "r" => {
             let names = named(s, "-xref", p)?;
+            crate::cmd::layer::notify::ensure_baseline(s.doc_mut()?);
             let out = load::load_each(s.doc_mut()?, &names, host.as_deref(), false);
             echo_all(s, &out);
-            Ok(
-                json!({ "xrefs": out.iter().filter(|o| !o.name.is_empty()).map(|o| json!({"name": o.name, "status": o.status.label(), "detail": o.detail})).collect::<Vec<_>>() }),
-            )
+            let fresh = crate::cmd::layer::notify::after_event(s, crate::cmd::layer::notify::ON_XREF);
+            Ok(json!({
+                "xrefs": out.iter().filter(|o| !o.name.is_empty()).map(|o| json!({"name": o.name, "status": o.status.label(), "detail": o.detail})).collect::<Vec<_>>(),
+                "unreconciledLayers": fresh,
+            }))
         }
         "unload" | "u" => {
             let names = named(s, "-xref", p)?;
