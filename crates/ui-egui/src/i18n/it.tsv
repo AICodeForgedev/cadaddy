@@ -2113,3 +2113,13 @@ menu	Modify	Edita
 	Every drawing in a folder to its own PDF, in a PDF folder inside it	Ogni disegno di una cartella in un proprio PDF, in una cartella PDF al suo interno
 	Plot stamp	Timbro di stampa
 	Quick Properties Lists	Elenchi delle proprietà rapide
+	Purgeable Items	Elementi eliminabili
+	Find Non-Purgeable Items	Trova elementi non eliminabili
+	Purge {kind} "{name}"?	Eliminare {kind} "{name}"?
+	Yes to All	Sì a tutto
+	Items that can't be purged, and why	Elementi non eliminabili e perché
+	Select and Zoom	Seleziona e zoom
+	Pick an item to see why it can't be purged.	Scegli un elemento per vedere perché non può essere eliminato.
+	Confirm each item to be purged	Conferma ogni elemento da eliminare
+	Purge nested items	Elimina elementi nidificati
+	Text Align	Allinea testo

@@ -1921,3 +1921,13 @@
 	Every drawing in a folder to its own PDF, in a PDF folder inside it	Jede Zeichnung eines Ordners als eigene PDF, in einen PDF-Ordner darin
 	Plot stamp	Plotstempel
 	Quick Properties Lists	Schnelleigenschaften-Listen
+	Purgeable Items	Bereinigbare Elemente
+	Find Non-Purgeable Items	Nicht bereinigbare Elemente suchen
+	Purge {kind} "{name}"?	{kind} „{name}“ bereinigen?
+	Yes to All	Ja, alle
+	Items that can't be purged, and why	Nicht bereinigbare Elemente und der Grund
+	Select and Zoom	Auswählen und zoomen
+	Pick an item to see why it can't be purged.	Element wählen, um zu sehen, warum es nicht bereinigt werden kann.
+	Confirm each item to be purged	Jedes zu bereinigende Element bestätigen
+	Purge nested items	Verschachtelte Elemente bereinigen
+	Text Align	Text ausrichten

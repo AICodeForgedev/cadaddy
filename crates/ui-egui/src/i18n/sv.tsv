@@ -2121,3 +2121,13 @@ menu	Modify	Ändra
 	Every drawing in a folder to its own PDF, in a PDF folder inside it	Varje ritning i en mapp till en egen PDF, i en PDF-mapp i den
 	Plot stamp	Plottstämpel
 	Quick Properties Lists	Listor för snabbegenskaper
+	Purgeable Items	Rensningsbara objekt
+	Find Non-Purgeable Items	Hitta objekt som inte kan rensas
+	Purge {kind} "{name}"?	Rensa {kind} "{name}"?
+	Yes to All	Ja till alla
+	Items that can't be purged, and why	Objekt som inte kan rensas, och varför
+	Select and Zoom	Markera och zooma
+	Pick an item to see why it can't be purged.	Välj ett objekt för att se varför det inte kan rensas.
+	Confirm each item to be purged	Bekräfta varje objekt som ska rensas
+	Purge nested items	Rensa kapslade objekt
+	Text Align	Justera text

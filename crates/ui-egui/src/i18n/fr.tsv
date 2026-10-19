@@ -1892,3 +1892,13 @@
 	Every drawing in a folder to its own PDF, in a PDF folder inside it	Chaque dessin d’un dossier dans son propre PDF, dans un dossier PDF à l’intérieur
 	Plot stamp	Tampon de traçage
 	Quick Properties Lists	Listes des propriétés rapides
+	Purgeable Items	Éléments pouvant être purgés
+	Find Non-Purgeable Items	Rechercher les éléments non purgeables
+	Purge {kind} "{name}"?	Purger {kind} « {name} » ?
+	Yes to All	Oui pour tout
+	Items that can't be purged, and why	Éléments non purgeables et pourquoi
+	Select and Zoom	Sélectionner et zoomer
+	Pick an item to see why it can't be purged.	Choisissez un élément pour voir pourquoi il ne peut pas être purgé.
+	Confirm each item to be purged	Confirmer chaque élément à purger
+	Purge nested items	Purger les éléments imbriqués
+	Text Align	Aligner le texte

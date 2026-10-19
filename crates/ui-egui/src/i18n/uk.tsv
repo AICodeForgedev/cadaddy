@@ -2201,3 +2201,13 @@
 	Every drawing in a folder to its own PDF, in a PDF folder inside it	Кожне креслення теки в окремий PDF, у теку PDF усередині неї
 	Plot stamp	Штамп друку
 	Quick Properties Lists	Списки швидких властивостей
+	Purgeable Items	Елементи, які можна очистити
+	Find Non-Purgeable Items	Знайти елементи, які не можна очистити
+	Purge {kind} "{name}"?	Очистити {kind} «{name}»?
+	Yes to All	Так для всіх
+	Items that can't be purged, and why	Елементи, які не можна очистити, і чому
+	Select and Zoom	Вибрати й наблизити
+	Pick an item to see why it can't be purged.	Виберіть елемент, щоб побачити, чому його не можна очистити.
+	Confirm each item to be purged	Підтверджувати кожен елемент для очищення
+	Purge nested items	Очистити вкладені елементи
+	Text Align	Вирівняти текст

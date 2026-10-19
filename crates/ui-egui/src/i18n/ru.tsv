@@ -1893,3 +1893,13 @@
 	Every drawing in a folder to its own PDF, in a PDF folder inside it	Каждый чертёж папки в отдельный PDF, в папку PDF внутри неё
 	Plot stamp	Штамп печати
 	Quick Properties Lists	Списки быстрых свойств
+	Purgeable Items	Удаляемые элементы
+	Find Non-Purgeable Items	Найти неудаляемые элементы
+	Purge {kind} "{name}"?	Удалить {kind} «{name}»?
+	Yes to All	Да для всех
+	Items that can't be purged, and why	Неудаляемые элементы и причина
+	Select and Zoom	Выбрать и показать
+	Pick an item to see why it can't be purged.	Выберите элемент, чтобы узнать, почему его нельзя удалить.
+	Confirm each item to be purged	Подтверждать каждый удаляемый элемент
+	Purge nested items	Удалить вложенные элементы
+	Text Align	Выровнять текст

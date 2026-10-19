@@ -2093,3 +2093,13 @@ menu	Modify	Modifikace
 	Every drawing in a folder to its own PDF, in a PDF folder inside it	Každý výkres ve složce do vlastního PDF, do složky PDF uvnitř
 	Plot stamp	Razítko tisku
 	Quick Properties Lists	Seznamy rychlých vlastností
+	Purgeable Items	Odstranitelné položky
+	Find Non-Purgeable Items	Najít neodstranitelné položky
+	Purge {kind} "{name}"?	Odstranit {kind} „{name}“?
+	Yes to All	Ano pro vše
+	Items that can't be purged, and why	Položky, které nelze odstranit, a proč
+	Select and Zoom	Vybrat a zvětšit
+	Pick an item to see why it can't be purged.	Vyberte položku a zjistěte, proč ji nelze odstranit.
+	Confirm each item to be purged	Potvrdit každou odstraňovanou položku
+	Purge nested items	Odstranit vnořené položky
+	Text Align	Zarovnat text

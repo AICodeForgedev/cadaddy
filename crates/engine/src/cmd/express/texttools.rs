@@ -1,5 +1,6 @@
-//! Text tools: SCALETEXT, JUSTIFYTEXT (and the Express Tools' TJUST), TORIENT, TEXTMASK /
-//! TEXTUNMASK, TCIRCLE, TEXTFIT and TFRAME.
+//! Text tools: TEXTALIGN, SCALETEXT, JUSTIFYTEXT (and the Express Tools' TJUST), TORIENT,
+//! TEXTMASK / TEXTUNMASK, TCIRCLE, TEXTFIT and TFRAME. TEXTALIGN, SCALETEXT, JUSTIFYTEXT and
+//! TORIENT also change the attribute values of the block references selected.
 //!
 //! A single-line text is handled through its frame: the baseline start, the reading direction,
 //! the width the font gives its contents and its height, placed exactly as the renderer places it
@@ -22,6 +23,10 @@ const MAX_TEXTS: usize = 100_000;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec::new("textalign", "Text Align", run_textalign)
+            .menu(&["Modify", "Object", "Text", "Text Align"])
+            .params("{handles? (TEXT, MTEXT, ATTDEF, block references' attributes; default the selection), to?: handle (the text to align to; default the first), angle?: degrees (the alignment line's direction, default 90: a column) | through?: [x,y] (a second point on it), alignment?: left|center|right (default left), mode?: current|distribute|spacing (default current: each keeps its place along the line), end?: [x,y] (distribute: the far end), spacing? (the distance between successive texts; implies mode spacing)} → {changed}")
+            .interactive(|_| Ok(Box::new(Asked::new("textalign", "TEXTALIGN", &[ALIGN_Q, ALIGN_ANGLE_Q, SPACING_Q])))),
         CommandSpec::new("scaletext", "Scale", run_scaletext)
             .menu(&["Modify", "Object", "Text", "Scale"])
             .params("{handles? (TEXT, MTEXT, ATTDEF; default the selection), base?: existing|left|center|middle|right|tl|tc|tr|ml|mc|mr|bl|bc|br (default existing: each keeps its own justification point), height? | factor? | match?: handle (the height of that text)} → {changed}")
@@ -218,35 +223,215 @@ fn mtext_corners(d: &cadaddy_doc::Drawing, m: &MText, pad: f64) -> [Vec2; 4] {
 }
 
 /// The text objects among `hs` (TEXT, MTEXT, attribute definitions), unlocked.
-fn texts(s: &Session, hs: &[Handle]) -> Result<Vec<Handle>> {
+/// The texts among `hs`; with `attribs`, block references with attribute values too.
+fn texts(s: &Session, hs: &[Handle], attribs: bool) -> Result<Vec<Handle>> {
     let d = s.doc()?;
     Ok(hs
         .iter()
         .copied()
-        .filter(|h| matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_))))
+        .filter(|h| match d.entity(*h).map(|e| &e.kind) {
+            Some(EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_)) => true,
+            // A block reference: its attribute values.
+            Some(EntityKind::Insert(i)) => attribs && i.attribs.iter().any(|a| a.multiline.is_none()),
+            _ => false,
+        })
         .filter(|h| !super::super::curves::is_locked(s, *h))
         .take(MAX_TEXTS)
         .collect())
 }
 
 fn text_targets(s: &Session, p: &Value, cmd: &str) -> Result<Vec<Handle>> {
-    let hs = texts(s, &targets(s, p)?)?;
+    let hs = texts(s, &targets(s, p)?, matches!(cmd, "scaletext" | "justifytext" | "torient" | "textalign"))?;
     if hs.is_empty() {
         return Err(bad(cmd, "no text selected"));
     }
     Ok(hs)
 }
 
-fn single_text(kind: &mut EntityKind) -> Option<&mut Text> {
+/// The single-line texts of an object: a TEXT, an attribute definition, or a block reference's
+/// attribute values (multiline attributes are left alone).
+fn single_texts(kind: &mut EntityKind) -> Vec<&mut Text> {
     match kind {
-        EntityKind::Text(t) => Some(t),
-        EntityKind::AttDef(a) => Some(&mut a.text),
-        _ => None,
+        EntityKind::Text(t) => vec![t],
+        EntityKind::AttDef(a) => vec![&mut a.text],
+        EntityKind::Insert(i) => i.attribs.iter_mut().filter(|a| a.multiline.is_none()).map(|a| &mut a.text).collect(),
+        _ => Vec::new(),
     }
 }
 
 fn hexes(hs: &[Handle]) -> Vec<String> {
     hs.iter().map(|h| h.hex()).collect()
+}
+
+// ---------- TEXTALIGN ----------
+
+/// One text TEXTALIGN moves: an object, or one attribute value of a block reference.
+#[derive(Clone, Copy, PartialEq)]
+struct Piece {
+    handle: Handle,
+    attrib: Option<usize>,
+}
+
+/// The point of a text that goes on the alignment line: its left, centre or right end, half way
+/// up (MTEXT: of its box), along its own reading direction.
+fn anchor(d: &cadaddy_doc::Drawing, kind: &EntityKind, attrib: Option<usize>, h: HAlign) -> Option<Vec2> {
+    let at = |lo: Vec2, dir: Vec2, up: Vec2, w: f64, ht: f64| {
+        let x = match h {
+            HAlign::Center | HAlign::Middle => w / 2.0,
+            HAlign::Right => w,
+            _ => 0.0,
+        };
+        lo + dir * x + up * (ht / 2.0)
+    };
+    match (kind, attrib) {
+        (EntityKind::MText(m), None) => {
+            let c = mtext_corners(d, m, 0.0);
+            let dir = Vec2::from_angle(m.rotation);
+            Some(at(c[0], dir, dir.perp(), c[0].dist(c[1]), c[1].dist(c[2])))
+        }
+        (EntityKind::Text(t) | EntityKind::AttDef(cadaddy_doc::Attrib { text: t, .. }), None) => {
+            let f = frame(d, t);
+            Some(at(f.start, f.dir, f.up, f.width, f.height))
+        }
+        (EntityKind::Insert(i), Some(k)) => {
+            let f = frame(d, &i.attribs.get(k)?.text);
+            Some(at(f.start, f.dir, f.up, f.width, f.height))
+        }
+        _ => None,
+    }
+}
+
+/// Move a text (or one attribute value) by `by`.
+fn shift(kind: &mut EntityKind, attrib: Option<usize>, by: Vec2) {
+    let mv = |t: &mut Text| {
+        t.insert = (t.insert.xy() + by).to3(t.insert.z);
+        if let Some(a) = t.align_pt.as_mut() {
+            *a = (a.xy() + by).to3(a.z);
+        }
+    };
+    match (kind, attrib) {
+        (EntityKind::MText(m), None) => m.insert = (m.insert.xy() + by).to3(m.insert.z),
+        (EntityKind::Text(t), None) => mv(t),
+        (EntityKind::AttDef(a), None) => mv(&mut a.text),
+        (EntityKind::Insert(i), Some(k)) => {
+            if let Some(a) = i.attribs.get_mut(k) {
+                mv(&mut a.text);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn point_param(p: &Value, k: &str) -> Option<Vec2> {
+    let a = p.get(k)?.as_array()?;
+    let (x, y) = (a.first()?.as_f64()?, a.get(1)?.as_f64()?);
+    (x.is_finite() && y.is_finite()).then(|| Vec2::new(x, y))
+}
+
+fn run_textalign(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "textalign";
+    let hs = text_targets(s, p, cmd)?;
+    let h = match str_param(p, "alignment").map(str::to_ascii_lowercase).as_deref() {
+        None | Some("left" | "l") => HAlign::Left,
+        Some("center" | "centre" | "c") => HAlign::Center,
+        Some("right" | "r") => HAlign::Right,
+        Some(_) => return Err(bad(cmd, "`alignment` must be left, center or right")),
+    };
+    let d = s.doc()?;
+    // Every text: an object, or each attribute value of a block reference.
+    let mut pieces: Vec<Piece> = Vec::new();
+    for hd in &hs {
+        match d.entity(*hd).map(|e| &e.kind) {
+            Some(EntityKind::Insert(i)) => pieces.extend(
+                i.attribs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, a)| a.multiline.is_none() && !a.invisible)
+                    .map(|(k, _)| Piece { handle: *hd, attrib: Some(k) }),
+            ),
+            Some(_) => pieces.push(Piece { handle: *hd, attrib: None }),
+            None => {}
+        }
+    }
+    let anchors: Vec<(Piece, Vec2)> =
+        pieces.iter().filter_map(|pc| Some((*pc, anchor(d, &d.entity(pc.handle)?.kind, pc.attrib, h)?))).filter(|(_, a)| a.is_finite()).collect();
+    if anchors.is_empty() {
+        return Err(bad(cmd, "no text selected"));
+    }
+    // The text to align to: `to`, else the first.
+    let reference = match p.get("to").and_then(Value::as_str) {
+        Some(t) => {
+            let rh = Handle::parse_hex(t).ok_or_else(|| bad(cmd, "`to` must be a handle"))?;
+            match anchors.iter().find(|(pc, _)| pc.handle == rh) {
+                Some(a) => *a,
+                None => {
+                    let kind = &d.entity(rh).ok_or_else(|| bad(cmd, format!("no object {t}")))?.kind;
+                    let at = if matches!(kind, EntityKind::Insert(_)) { Some(0) } else { None };
+                    let a = anchor(d, kind, at, h).ok_or_else(|| bad(cmd, "`to` must be a text object"))?;
+                    (Piece { handle: rh, attrib: at }, a)
+                }
+            }
+        }
+        None => anchors[0],
+    };
+    let origin = reference.1;
+    let dir = match (point_param(p, "through"), p.get("angle")) {
+        (Some(q), _) => {
+            let v = q - origin;
+            if v.len() < 1e-12 {
+                return Err(bad(cmd, "`through` must be a point away from the text aligned to"));
+            }
+            v * (1.0 / v.len())
+        }
+        (None, None | Some(Value::Null)) => Vec2::new(0.0, 1.0),
+        (None, Some(a)) => {
+            Vec2::from_angle(a.as_f64().filter(|a| a.is_finite()).ok_or_else(|| bad(cmd, "`angle` must be a number of degrees"))?.to_radians())
+        }
+    };
+    let spacing = match p.get("spacing") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_f64().filter(|x| x.is_finite() && x.abs() < 1e12).ok_or_else(|| bad(cmd, "`spacing` must be a distance"))?),
+    };
+    let mode = match str_param(p, "mode").map(str::to_ascii_lowercase).as_deref() {
+        None if spacing.is_some() => "spacing",
+        None | Some("current" | "c") => "current",
+        Some("distribute" | "d") => "distribute",
+        Some("spacing" | "set spacing" | "s") => "spacing",
+        Some(_) => return Err(bad(cmd, "`mode` must be current, distribute or spacing")),
+    };
+    // Each text's place along the line, in order from the one aligned to.
+    let mut along: Vec<(Piece, Vec2, f64)> = anchors.iter().map(|(pc, a)| (*pc, *a, (*a - origin).dot(dir))).collect();
+    along.sort_by(|a, b| a.2.total_cmp(&b.2));
+    let n = along.len();
+    let places: Vec<f64> = match mode {
+        "distribute" => {
+            let end = point_param(p, "end").ok_or_else(|| bad(cmd, "`distribute` needs `end`: the far end of the line"))?;
+            // Evenly from the text aligned to (0) to the end, in the order the texts are along the
+            // line (ascending, whichever way the end lies).
+            let hi = (end - origin).dot(dir);
+            let mut ts: Vec<f64> = (0..n).map(|k| if n > 1 { hi * k as f64 / (n - 1) as f64 } else { 0.0 }).collect();
+            ts.sort_by(f64::total_cmp);
+            ts
+        }
+        "spacing" => {
+            let gap = spacing.ok_or_else(|| bad(cmd, "`spacing` mode needs `spacing`"))?;
+            // Counted from the text aligned to, both ways.
+            let r = along.iter().position(|a| a.0 == reference.0).unwrap_or(0);
+            (0..n).map(|k| (k as f64 - r as f64) * gap).collect()
+        }
+        _ => along.iter().map(|a| a.2).collect(),
+    };
+    // Move each piece so its anchor lands on its place on the line.
+    let mut moves: Vec<(Piece, Vec2)> = along.iter().zip(&places).map(|((pc, a, _), t)| (*pc, origin + dir * *t - *a)).collect();
+    moves.retain(|(_, by)| by.is_finite() && by.len() > 1e-12);
+    let mut changed: Vec<Handle> = Vec::new();
+    for (pc, by) in moves {
+        s.doc_mut()?.modify_entity(pc.handle, |e| shift(&mut e.kind, pc.attrib, by))?;
+        if !changed.contains(&pc.handle) {
+            changed.push(pc.handle);
+        }
+    }
+    Ok(json!({ "changed": hexes(&changed) }))
 }
 
 // ---------- SCALETEXT ----------
@@ -305,17 +490,22 @@ fn run_scaletext(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
             other => {
-                let Some(t) = single_text(other) else { continue };
-                let f = frame(d, t);
-                let k = match target {
-                    Ok(nh) => nh / f.height.max(1e-12),
-                    Err(k) => k,
-                };
-                let pivot = base.map_or_else(|| f.point(t.halign, t.valign), |(hh, vv)| f.point(hh, vv));
-                let nf = Frame { start: pivot + (f.start - pivot) * k, width: f.width * k, height: f.height * k, ..f };
-                t.height *= k;
-                let (hh, vv) = (t.halign, t.valign);
-                place(t, &nf, hh, vv);
+                let ts = single_texts(other);
+                if ts.is_empty() {
+                    continue;
+                }
+                for t in ts {
+                    let f = frame(d, t);
+                    let k = match target {
+                        Ok(nh) => nh / f.height.max(1e-12),
+                        Err(k) => k,
+                    };
+                    let pivot = base.map_or_else(|| f.point(t.halign, t.valign), |(hh, vv)| f.point(hh, vv));
+                    let nf = Frame { start: pivot + (f.start - pivot) * k, width: f.width * k, height: f.height * k, ..f };
+                    t.height *= k;
+                    let (hh, vv) = (t.halign, t.valign);
+                    place(t, &nf, hh, vv);
+                }
             }
         }
         s.doc_mut()?.modify_entity(h, |e| e.kind = kind)?;
@@ -461,9 +651,14 @@ fn run_justifytext(s: &mut Session, p: &Value) -> Result<Value> {
                 m.attach = a;
             }
             other => {
-                let Some(t) = single_text(other) else { continue };
-                let f = frame(d, t);
-                place(t, &f, h, v);
+                let ts = single_texts(other);
+                if ts.is_empty() {
+                    continue;
+                }
+                for t in ts {
+                    let f = frame(d, t);
+                    place(t, &f, h, v);
+                }
             }
         }
         s.doc_mut()?.modify_entity(hd, |e| e.kind = kind)?;
@@ -501,14 +696,19 @@ fn run_torient(s: &mut Session, p: &Value) -> Result<Value> {
                 m.rotation = new;
             }
             other => {
-                let Some(t) = single_text(other) else { continue };
-                let f = frame(d, t);
-                let new = angle.unwrap_or_else(|| readable(f.dir.angle()));
-                let turn = new - f.dir.angle();
-                let c = f.center();
-                let nf = Frame { start: c + (f.start - c).rotate(turn), dir: f.dir.rotate(turn), up: f.up.rotate(turn), ..f };
-                let (hh, vv) = (t.halign, t.valign);
-                place(t, &nf, hh, vv);
+                let ts = single_texts(other);
+                if ts.is_empty() {
+                    continue;
+                }
+                for t in ts {
+                    let f = frame(d, t);
+                    let new = angle.unwrap_or_else(|| readable(f.dir.angle()));
+                    let turn = new - f.dir.angle();
+                    let c = f.center();
+                    let nf = Frame { start: c + (f.start - c).rotate(turn), dir: f.dir.rotate(turn), up: f.up.rotate(turn), ..f };
+                    let (hh, vv) = (t.halign, t.valign);
+                    place(t, &nf, hh, vv);
+                }
             }
         }
         s.doc_mut()?.modify_entity(hd, |e| e.kind = kind)?;
@@ -912,6 +1112,9 @@ const JUSTIFY_Q: Question = Question {
     default: "Existing",
 };
 const TORIENT_Q: Question = Question { key: "angle", message: "New absolute rotation", keywords: &["Most readable"], default: "Most readable" };
+const ALIGN_Q: Question = Question { key: "alignment", message: "Enter alignment", keywords: &["Left", "Center", "Right"], default: "Left" };
+const ALIGN_ANGLE_Q: Question = Question { key: "angle", message: "Alignment line angle", keywords: &[], default: "90" };
+const SPACING_Q: Question = Question { key: "spacing", message: "Spacing between texts", keywords: &[], default: "Current" };
 const OFFSET_Q: Question = Question { key: "offset", message: "Enter distance offset factor [0 - 1]", keywords: &[], default: "0.35" };
 const SHAPE_Q: Question = Question { key: "shape", message: "Enclose text with", keywords: &["Circles", "Slots", "Rectangles"], default: "Circles" };
 const SIZE_Q: Question =
