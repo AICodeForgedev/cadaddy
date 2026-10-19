@@ -423,12 +423,38 @@ mod native {
             None if doc.version < MIN_DWG_VERSION => doc.version = MIN_DWG_VERSION,
             None => {}
         }
+        other_layout_owners(&mut doc);
         table_style_rows(&mut doc, true);
         drop_unwritable(&mut doc);
         current_dimstyle(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
             .map_err(|e| format!("DWG write: {e}"))
+    }
+
+    /// Entities of a layout other than the one in `*Paper_Space` are written owned by their block
+    /// (entity mode 0, with its handle). acadrust writes every paper-space entity with mode 1,
+    /// "paper space", which AutoCAD reads as the `*Paper_Space` block's: everything drawn on a
+    /// second layout landed on the first one, and the second stayed empty (#1057).
+    fn other_layout_owners(doc: &mut acadrust::CadDocument) {
+        let others: std::collections::HashSet<acadrust::Handle> = doc
+            .block_records
+            .iter()
+            .filter(|br| {
+                let n = br.name.to_ascii_uppercase();
+                n.len() > 12 && n.starts_with("*PAPER_SPACE") && n[12..].bytes().all(|b| b.is_ascii_digit())
+            })
+            .map(|br| br.handle)
+            .collect();
+        if others.is_empty() {
+            return;
+        }
+        for e in doc.entities_mut() {
+            let c = e.common_mut();
+            if others.contains(&c.owner_handle) {
+                c.entity_mode = Some(0);
+            }
+        }
     }
 }
 
