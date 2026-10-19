@@ -1757,6 +1757,16 @@ fn run_explode(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+/// Gives a rebuilt arc piece its source centre Z, or a rebuilt polyline piece its source elevation.
+fn with_z(mut k: EntityKind, z: f64) -> EntityKind {
+    match &mut k {
+        EntityKind::Arc(a) => a.center.z = z,
+        EntityKind::LwPolyline(p) => p.elevation = z,
+        _ => {}
+    }
+    k
+}
+
 /// Break `h` between two points (or at one point when p1 == p2).
 pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Result<Vec<Handle>> {
     if super::curves::is_locked(s, h) {
@@ -1770,12 +1780,13 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
             if t1 > t2 {
                 std::mem::swap(&mut t1, &mut t2);
             }
+            let at3 = |t: f64| ln.at(t).to3(l.a.z + (l.b.z - l.a.z) * t);
             let mut v = Vec::new();
             if t1 > 1e-12 {
-                v.push(line(ln.a, ln.at(t1)));
+                v.push(EntityKind::Line(cadaddy_doc::Line { a: l.a, b: at3(t1) }));
             }
             if t2 < 1.0 - 1e-12 {
-                v.push(line(ln.at(t2), ln.b));
+                v.push(EntityKind::Line(cadaddy_doc::Line { a: at3(t2), b: l.b }));
             }
             v
         }
@@ -1786,7 +1797,7 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
             let a1 = c.center.xy().angle_to(p1);
             let a2 = c.center.xy().angle_to(p2);
             // AutoCAD removes the CCW portion from the first to the second point.
-            vec![arc(&Arc::new(c.center.xy(), c.radius, a2, a1))]
+            vec![with_z(arc(&Arc::new(c.center.xy(), c.radius, a2, a1)), c.center.z)]
         }
         EntityKind::Arc(a) => {
             let ga = Arc::new(a.center.xy(), a.radius, a.start, a.end);
@@ -1797,10 +1808,10 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
             }
             let mut v = Vec::new();
             if t1 > 1e-12 {
-                v.push(arc(&Arc::new(ga.center, ga.radius, ga.start, ga.start + t1)));
+                v.push(with_z(arc(&Arc::new(ga.center, ga.radius, ga.start, ga.start + t1)), a.center.z));
             }
             if t2 < ga.sweep() - 1e-12 {
-                v.push(arc(&Arc::new(ga.center, ga.radius, ga.start + t2, ga.end)));
+                v.push(with_z(arc(&Arc::new(ga.center, ga.radius, ga.start + t2, ga.end)), a.center.z));
             }
             v
         }
@@ -1908,10 +1919,10 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
             }
             let mut v = Vec::new();
             if t1 > 1e-12 {
-                v.push(lwpoly(sub_polyline(&segs, 0.0, t1), false));
+                v.push(with_z(lwpoly(sub_polyline(&segs, 0.0, t1), false), p.elevation));
             }
             if t2 < total - 1e-12 {
-                v.push(lwpoly(sub_polyline(&segs, t2, total), false));
+                v.push(with_z(lwpoly(sub_polyline(&segs, t2, total), false), p.elevation));
             }
             v
         }
