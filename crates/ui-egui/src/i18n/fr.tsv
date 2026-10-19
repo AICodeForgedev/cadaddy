@@ -1753,3 +1753,50 @@
 	Display	Affichage
 	Read Ceiling Plan	Lire le plan de plafond
 	Ceilings	Plafonds
+	Current Drawing	Dessin courant
+	Favourites	Favoris
+	Libraries	Bibliothèques
+	No library folder	Aucun dossier de bibliothèque
+	Choose Folder...	Choisir un dossier...
+	No blocks here.	Aucun bloc ici.
+	Remove from Favourites	Retirer des favoris
+	Add to Favourites	Ajouter aux favoris
+	Insertion Options	Options d'insertion
+	Auto-rotate (follow the current UCS)	Rotation automatique (suivre le SCU courant)
+	Repeat Placement	Répéter le placement
+	Tool Palettes	Palettes d'outils
+	Drag objects from the drawing here to make tools.	Faites glisser des objets du dessin ici pour créer des outils.
+	Add Selected	Ajouter la sélection
+	New palette	Nouvelle palette
+	Select objects in the drawing first.	Sélectionnez d'abord des objets dans le dessin.
+	Blocks Palette	Palette des blocs
+	Detect Grids	Détecter les trames
+	Align Levels by Grids	Aligner les niveaux sur les trames
+	Columns at Grids	Poteaux aux trames
+	Columns	Poteaux
+	Build Room Volumes	Créer les volumes des pièces
+	Building	Bâtiment
+	Go to Room	Aller à la pièce
+	List Rooms	Lister les pièces
+	Room	Pièce
+	Build Volumes	Créer les volumes
+	Go to	Aller à
+	{n} rooms	{n} pièces
+	No rooms found: rooms are found from name labels inside closed outlines.	Aucune pièce trouvée : les pièces sont repérées par les étiquettes de nom à l'intérieur de contours fermés.
+	Ceiling	Plafond
+	Volume	Volume
+	DesignCenter	DesignCenter
+	Up One Level	Niveau supérieur
+	Folder	Dossier
+	Text Styles	Styles de texte
+	Dimension Styles	Styles de cote
+	Layouts	Présentations
+	Xrefs	Xréfs
+	Add to Drawing	Ajouter au dessin
+	Choose a drawing to see what it holds.	Choisissez un dessin pour voir son contenu.
+	{name} inserted.	{name} inséré.
+	{name} is already in the drawing; it was kept.	{name} est déjà dans le dessin ; il a été conservé.
+	{name} added.	{name} ajouté.
+	Read MEP Runs	Lire les réseaux techniques
+	Model Clashes	Conflits du modèle
+	MEP Systems	Réseaux techniques

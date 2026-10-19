@@ -1983,3 +1983,49 @@
 	Workspace	Espaço de trabalho
 	Read Ceiling Plan	Ler planta de forro
 	Ceilings	Forros
+	Current Drawing	Desenho atual
+	Favourites	Favoritos
+	Libraries	Bibliotecas
+	No library folder	Nenhuma pasta de biblioteca
+	Choose Folder...	Escolher pasta...
+	No blocks here.	Nenhum bloco aqui.
+	Remove from Favourites	Remover dos favoritos
+	Add to Favourites	Adicionar aos favoritos
+	Insertion Options	Opções de inserção
+	Auto-rotate (follow the current UCS)	Girar automaticamente (seguir o UCS atual)
+	Repeat Placement	Repetir posicionamento
+	Tool Palettes	Paletas de ferramentas
+	Drag objects from the drawing here to make tools.	Arraste objetos do desenho para cá para criar ferramentas.
+	Add Selected	Adicionar selecionados
+	New palette	Nova paleta
+	Select objects in the drawing first.	Selecione primeiro objetos no desenho.
+	Blocks Palette	Paleta de blocos
+	Detect Grids	Detectar eixos
+	Align Levels by Grids	Alinhar níveis pelos eixos
+	Columns at Grids	Pilares nos eixos
+	Columns	Pilares
+	Build Room Volumes	Criar volumes dos cômodos
+	Building	Edifício
+	Go to Room	Ir para o cômodo
+	List Rooms	Listar cômodos
+	Room	Cômodo
+	Build Volumes	Criar volumes
+	Go to	Ir para
+	{n} rooms	{n} cômodos
+	No rooms found: rooms are found from name labels inside closed outlines.	Nenhum cômodo encontrado: os cômodos são detectados por rótulos de nome dentro de contornos fechados.
+	Ceiling	Teto
+	DesignCenter	DesignCenter
+	Up One Level	Subir um nível
+	Folder	Pasta
+	Text Styles	Estilos de texto
+	Dimension Styles	Estilos de cota
+	Layouts	Layouts
+	Xrefs	Xrefs
+	Add to Drawing	Adicionar ao desenho
+	Choose a drawing to see what it holds.	Escolha um desenho para ver o que ele contém.
+	{name} inserted.	{name} inserido.
+	{name} is already in the drawing; it was kept.	{name} já está no desenho; foi mantido.
+	{name} added.	{name} adicionado.
+	Read MEP Runs	Ler traçados MEP
+	Model Clashes	Interferências do modelo
+	MEP Systems	Sistemas MEP

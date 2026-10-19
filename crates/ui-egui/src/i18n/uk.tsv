@@ -2066,3 +2066,48 @@
 	Workspace	Робочий простір
 	Read Ceiling Plan	Прочитати план стель
 	Ceilings	Стелі
+	Current Drawing	Поточне креслення
+	Favourites	Вибране
+	Libraries	Бібліотеки
+	No library folder	Папку бібліотеки не вибрано
+	Choose Folder...	Вибрати папку...
+	No blocks here.	Блоків немає.
+	Remove from Favourites	Вилучити з вибраного
+	Add to Favourites	Додати до вибраного
+	Insertion Options	Параметри вставлення
+	Auto-rotate (follow the current UCS)	Автоповорот (за поточною ПСК)
+	Repeat Placement	Повторювати розміщення
+	Tool Palettes	Інструментальні палітри
+	Drag objects from the drawing here to make tools.	Перетягніть сюди об'єкти з креслення, щоб створити інструменти.
+	Add Selected	Додати вибране
+	New palette	Нова палітра
+	Select objects in the drawing first.	Спершу виберіть об'єкти в кресленні.
+	Blocks Palette	Палітра блоків
+	Detect Grids	Знайти осі
+	Align Levels by Grids	Вирівняти рівні за осями
+	Columns at Grids	Колони на осях
+	Columns	Колони
+	Build Room Volumes	Побудувати об'єми приміщень
+	Building	Будівля
+	Go to Room	Перейти до приміщення
+	List Rooms	Список приміщень
+	Room	Приміщення
+	Build Volumes	Побудувати об'єми
+	Go to	Перейти
+	{n} rooms	Приміщень: {n}
+	No rooms found: rooms are found from name labels inside closed outlines.	Приміщень не знайдено: приміщення визначаються за написами назв усередині замкнених контурів.
+	Ceiling	Стеля
+	DesignCenter	Центр керування
+	Up One Level	На рівень вище
+	Folder	Папка
+	Text Styles	Текстові стилі
+	Dimension Styles	Розмірні стилі
+	Layouts	Аркуші
+	Add to Drawing	Додати до креслення
+	Choose a drawing to see what it holds.	Виберіть креслення, щоб побачити його вміст.
+	{name} inserted.	{name} вставлено.
+	{name} is already in the drawing; it was kept.	{name} уже є в кресленні; його збережено.
+	{name} added.	{name} додано.
+	Read MEP Runs	Прочитати траси інженерних мереж
+	Model Clashes	Колізії моделі
+	MEP Systems	Інженерні системи

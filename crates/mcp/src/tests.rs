@@ -467,3 +467,21 @@ fn stairs_tool_detects_lists_and_confirms() {
     let r = call(&mut s, 7, "tools/call", json!({"name": "stairs", "arguments": {}}));
     assert_eq!(r["error"]["code"], -32602, "action is required: {r}");
 }
+
+#[test]
+fn rooms_tool_lists_gets_and_builds() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    let rect = |a: [f64; 2], b: [f64; 2]| json!({"command": "pline", "params": {"vertices": [a, [b[0], a[1]], b, [a[0], b[1]]], "closed": true}});
+    tool(&mut s, "execute", rect([0.0, 0.0], [300.0, 240.0]));
+    tool(&mut s, "execute", rect([6.0, 6.0], [294.0, 234.0]));
+    tool(&mut s, "execute", json!({"command": "text", "params": {"at": [120, 120], "text": "KITCHEN", "height": 6}}));
+    tool(&mut s, "execute", json!({"command": "text", "params": {"at": [120, 100], "text": "105", "height": 6}}));
+    let list = tool(&mut s, "rooms", json!({"action": "list", "outline": false}));
+    assert_eq!(list["count"], 1, "{list}");
+    assert_eq!(list["rooms"][0]["name"], "KITCHEN");
+    let one = tool(&mut s, "rooms", json!({"action": "get", "number": "105"}));
+    assert_eq!(one["name"], "KITCHEN");
+    assert_eq!(tool(&mut s, "rooms", json!({"action": "build"}))["built"], 1);
+    tool_err(&mut s, "rooms", json!({"action": "get", "name": "none"}));
+}

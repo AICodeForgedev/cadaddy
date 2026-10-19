@@ -208,7 +208,7 @@ pub(crate) fn feet_inches(s: &str) -> Option<f64> {
 }
 
 /// Finish code tokens: 2–4 capital letters, a dash, 1–2 digits (`CPT-1`, `VCT-2`, `ACT-1`).
-fn finish_codes(t: &str) -> Vec<String> {
+pub(crate) fn finish_codes(t: &str) -> Vec<String> {
     t.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')' | '/'))
         .filter(|w| {
             let Some((a, b)) = w.split_once('-') else { return false };

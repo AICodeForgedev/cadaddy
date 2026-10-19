@@ -267,7 +267,23 @@ fn polygon(l: &cadaddy_doc::HatchLoop) -> Vec<Vec2> {
     Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(1e-3)
 }
 
-pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
+/// A room found from its name label: the closed outline around the label (the hatch boundary
+/// search), its number (a number text inside), area and perimeter.
+#[derive(Clone, Debug)]
+pub(crate) struct FoundRoom {
+    pub name: String,
+    pub number: Option<String>,
+    pub at: Vec2,
+    pub label: cadaddy_doc::Handle,
+    pub text_height: f64,
+    pub outline: Vec<Vec2>,
+    pub area: f64,
+    pub perimeter: f64,
+    pub confidence: f64,
+}
+
+/// The rooms of the current space, from its name labels.
+pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
     let (d, ents) = objects(s)?;
     let k = units_per_inch(d);
     let min_area = 16.0 * 144.0 * k * k;
@@ -277,13 +293,12 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
     let names: Vec<_> = all
         .iter()
         .filter(|(_, t, _, _)| t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && t.chars().count() <= 40 && !room_number(t))
+        .cloned()
         .collect();
-    let numbers: Vec<_> = all.iter().filter(|(_, t, _, _)| room_number(t)).collect();
-    let mut items: Vec<Value> = Vec::new();
-    let mut seen: Vec<Vec<Vec2>> = Vec::new();
-    let with_outline = bool_or(p, "outline", true);
+    let numbers: Vec<_> = all.iter().filter(|(_, t, _, _)| room_number(t)).cloned().collect();
+    let mut out: Vec<FoundRoom> = Vec::new();
     for (h, name, at, height) in names.into_iter().take(MAX_ROOMS) {
-        let Ok(loops) = crate::cmd::hatch::loops_at(s, *at) else { continue };
+        let Ok(loops) = crate::cmd::hatch::loops_at(s, at) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let poly = polygon(outer);
         if poly.len() < 3 {
@@ -294,7 +309,7 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         // One room per outline: a second label in the same room is its number or a note.
-        if seen.iter().any(|q| q.len() == poly.len() && q.iter().zip(&poly).all(|(a, b)| a.dist(*b) < 1e-6)) {
+        if out.iter().any(|q| q.outline.len() == poly.len() && q.outline.iter().zip(&poly).all(|(a, b)| a.dist(*b) < 1e-6)) {
             continue;
         }
         let perimeter: f64 = poly.iter().zip(poly.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
@@ -302,22 +317,32 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
         let number = numbers
             .iter()
             .filter(|(_, _, q, _)| cadaddy_geom::point_in_polygon(&poly, *q))
-            .min_by(|a, b| a.2.dist(*at).total_cmp(&b.2.dist(*at)))
+            .min_by(|a, b| a.2.dist(at).total_cmp(&b.2.dist(at)))
             .map(|(_, t, _, _)| t.clone());
         let share = area / sheet;
         let confidence = (0.5 + 0.2 * f64::from(u8::from(number.is_some())) + if share < 0.5 { 0.3 } else { 0.0 }
             - if poly.len() > 200 { 0.1 } else { 0.0 })
         .clamp(0.0, 1.0);
-        let mut v = json!({
-            "name": name, "number": number, "at": pt(*at), "area": round(area), "perimeter": round(perimeter),
-            "label": h.hex(), "textHeight": round(*height), "confidence": round(confidence),
-        });
-        if with_outline {
-            let step = (poly.len() / 64).max(1);
-            v["outline"] = json!(poly.iter().step_by(step).map(|q| pt(*q)).collect::<Vec<_>>());
-        }
-        seen.push(poly);
-        items.push(v);
+        out.push(FoundRoom { name, number, at, label: h, text_height: height, outline: poly, area, perimeter, confidence });
     }
+    Ok(out)
+}
+
+pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
+    let with_outline = bool_or(p, "outline", true);
+    let items: Vec<Value> = rooms_found(s)?
+        .into_iter()
+        .map(|r| {
+            let mut v = json!({
+                "name": r.name, "number": r.number, "at": pt(r.at), "area": round(r.area), "perimeter": round(r.perimeter),
+                "label": r.label.hex(), "textHeight": round(r.text_height), "confidence": round(r.confidence),
+            });
+            if with_outline {
+                let step = (r.outline.len() / 64).max(1);
+                v["outline"] = json!(r.outline.iter().step_by(step).map(|q| pt(*q)).collect::<Vec<_>>());
+            }
+            v
+        })
+        .collect();
     Ok(page(items, p))
 }

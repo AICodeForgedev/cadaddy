@@ -1,6 +1,7 @@
 //! The command registry. Ids are AutoCAD command names in lower case; menu paths follow
 //! AutoCAD's menu bar so the catalog doubles as the parity metric.
 
+pub mod adcenter;
 pub(crate) mod annoscale;
 pub(crate) mod annotate;
 pub mod array;
@@ -27,6 +28,7 @@ mod express;
 pub mod exterior;
 mod field;
 pub mod file;
+pub mod grids;
 mod gripcmds;
 mod griphot;
 pub mod groups;
@@ -44,6 +46,7 @@ pub mod lights;
 mod lisp;
 pub mod materials;
 mod measuregeom;
+pub mod mep;
 mod mleader_content;
 mod mleader_edit;
 mod models3d;
@@ -55,6 +58,7 @@ mod perceive;
 mod pline_opts;
 pub mod plotters;
 mod props;
+pub mod rooms3d;
 pub mod spell;
 pub mod stairs;
 pub mod symbol;
@@ -236,6 +240,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(materials::specs());
         v.extend(wallgen::specs());
         v.extend(bspec::specs());
+        v.extend(grids::specs());
+        v.extend(mep::specs());
         v.extend(ceilings::specs());
         v.extend(exterior::specs());
         v.extend(stairs::specs());
@@ -254,6 +260,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         );
         v.extend(models3d::specs());
         v.extend(perceive::specs());
+        v.extend(rooms3d::specs());
         v.extend(underlay::specs());
         v.extend(takeoff::specs());
         v.extend(imageattach::specs());
@@ -274,6 +281,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(field::specs());
         v.extend(ucs::specs());
         v.extend(tolerance::specs());
+        v.extend(adcenter::specs());
         v.extend(standards::specs());
         v.extend(colorbook::specs());
         v.extend(constraints::specs());

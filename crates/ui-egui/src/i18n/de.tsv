@@ -1782,3 +1782,50 @@
 	Display	Anzeige
 	Read Ceiling Plan	Deckenspiegel einlesen
 	Ceilings	Decken
+	Current Drawing	Aktuelle Zeichnung
+	Favourites	Favoriten
+	Libraries	Bibliotheken
+	No library folder	Kein Bibliotheksordner
+	Choose Folder...	Ordner wählen...
+	No blocks here.	Hier sind keine Blöcke.
+	Remove from Favourites	Aus Favoriten entfernen
+	Add to Favourites	Zu Favoriten hinzufügen
+	Insertion Options	Einfügeoptionen
+	Auto-rotate (follow the current UCS)	Automatisch drehen (dem aktuellen BKS folgen)
+	Repeat Placement	Platzierung wiederholen
+	Tool Palettes	Werkzeugpaletten
+	Drag objects from the drawing here to make tools.	Ziehen Sie Objekte aus der Zeichnung hierher, um Werkzeuge zu erstellen.
+	Add Selected	Auswahl hinzufügen
+	New palette	Neue Palette
+	Select objects in the drawing first.	Wählen Sie zuerst Objekte in der Zeichnung.
+	Blocks Palette	Blockpalette
+	Detect Grids	Raster erkennen
+	Align Levels by Grids	Geschosse am Raster ausrichten
+	Columns at Grids	Stützen an Rasterpunkten
+	Columns	Stützen
+	Build Room Volumes	Raumvolumen erstellen
+	Building	Gebäude
+	Go to Room	Zum Raum
+	List Rooms	Räume auflisten
+	Room	Raum
+	Build Volumes	Volumen erstellen
+	Go to	Gehe zu
+	{n} rooms	{n} Räume
+	No rooms found: rooms are found from name labels inside closed outlines.	Keine Räume gefunden: Räume werden an Namensbeschriftungen innerhalb geschlossener Umrisse erkannt.
+	Ceiling	Decke
+	Volume	Volumen
+	DesignCenter	DesignCenter
+	Up One Level	Eine Ebene nach oben
+	Folder	Ordner
+	Text Styles	Textstile
+	Dimension Styles	Bemaßungsstile
+	Layouts	Layouts
+	Xrefs	Externe Referenzen
+	Add to Drawing	Zur Zeichnung hinzufügen
+	Choose a drawing to see what it holds.	Wählen Sie eine Zeichnung, um ihren Inhalt zu sehen.
+	{name} inserted.	{name} eingefügt.
+	{name} is already in the drawing; it was kept.	{name} ist bereits in der Zeichnung und wurde beibehalten.
+	{name} added.	{name} hinzugefügt.
+	Read MEP Runs	TGA-Leitungen einlesen
+	Model Clashes	Modellkollisionen
+	MEP Systems	TGA-Systeme

@@ -1754,3 +1754,50 @@
 	Display	Отображение
 	Read Ceiling Plan	Прочитать план потолков
 	Ceilings	Потолки
+	Current Drawing	Текущий чертёж
+	Favourites	Избранное
+	Libraries	Библиотеки
+	No library folder	Папка библиотеки не выбрана
+	Choose Folder...	Выбрать папку...
+	No blocks here.	Блоков нет.
+	Remove from Favourites	Удалить из избранного
+	Add to Favourites	Добавить в избранное
+	Insertion Options	Параметры вставки
+	Auto-rotate (follow the current UCS)	Автоповорот (по текущей ПСК)
+	Repeat Placement	Повторять размещение
+	Tool Palettes	Инструментальные палитры
+	Drag objects from the drawing here to make tools.	Перетащите сюда объекты из чертежа, чтобы создать инструменты.
+	Add Selected	Добавить выбранное
+	New palette	Новая палитра
+	Select objects in the drawing first.	Сначала выберите объекты на чертеже.
+	Blocks Palette	Палитра блоков
+	Detect Grids	Найти оси
+	Align Levels by Grids	Выровнять уровни по осям
+	Columns at Grids	Колонны на осях
+	Columns	Колонны
+	Build Room Volumes	Построить объёмы помещений
+	Building	Здание
+	Go to Room	Перейти к помещению
+	List Rooms	Список помещений
+	Room	Помещение
+	Build Volumes	Построить объёмы
+	Go to	Перейти
+	{n} rooms	Помещений: {n}
+	No rooms found: rooms are found from name labels inside closed outlines.	Помещения не найдены: помещения определяются по надписям имён внутри замкнутых контуров.
+	Ceiling	Потолок
+	Volume	Объём
+	DesignCenter	Центр управления
+	Up One Level	На уровень вверх
+	Folder	Папка
+	Text Styles	Текстовые стили
+	Dimension Styles	Размерные стили
+	Layouts	Листы
+	Xrefs	Внешние ссылки
+	Add to Drawing	Добавить в чертёж
+	Choose a drawing to see what it holds.	Выберите чертёж, чтобы увидеть его содержимое.
+	{name} inserted.	{name} вставлен.
+	{name} is already in the drawing; it was kept.	{name} уже есть в чертеже; он сохранён.
+	{name} added.	{name} добавлен.
+	Read MEP Runs	Прочитать трассы инженерных сетей
+	Model Clashes	Коллизии модели
+	MEP Systems	Инженерные системы

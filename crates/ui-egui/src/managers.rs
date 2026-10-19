@@ -30,6 +30,7 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
             return Some(Ok(Value::Null));
         }
         "about" => "about",
+        "rooms" => crate::roomsdlg::DIALOG,
         "battman" => "battman",
         "linetype" | "lt" | "ltype" => "linetype",
         "ddptype" | "ptype" => "ptype",

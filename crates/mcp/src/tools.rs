@@ -31,6 +31,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         json!({"name": "stairs", "description": "Stairs and ramps of the building spec. action \"detect\" finds them in the plan (tread rows between stringers, UP/DN notes, landings, ramp outlines) and with store: true puts them in the spec (confirmed ones stay); \"list\" gives the spec's stairs with risers, riser and tread sizes and code warnings (risers 4\"–7¾\", treads ≥ 10\", ramps ≤ 1:12); \"confirm\" marks names (or all) as checked. model.build then builds them and Walk climbs them.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["detect", "list", "confirm"]}, "store": {"type": "boolean"},
                 "names": {"type": "array", "items": {"type": "string"}}, "all": {"type": "boolean"}, "confirmed": {"type": "boolean"}}, "required": ["action"]}}),
+        json!({"name": "rooms", "description": "The plan's rooms as 3D spaces (found from room name labels inside closed outlines, with their numbers): action \"list\" gives each room's name, number, area (drawing units, sq ft, m²), ceiling height (the building spec's, a ceiling note in the room, the level's, else 9'), volume, finishes (codes written in the room, spec materials) and outline; \"get\" one room by name or number; \"goto\" zooms the view to it; \"build\" puts a see-through volume per room on layer 3D-Rooms (clear: true removes them).",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "get", "goto", "build"]}, "name": {"type": "string"}, "number": {"type": "string"}, "outline": {"type": "boolean"}, "clear": {"type": "boolean"}}, "required": ["action"]}}),
         json!({"name": "new_drawing", "description": "Create a new drawing (imperial by default, or metric).",
             "inputSchema": {"type": "object", "properties": {"metric": {"type": "boolean"}}}}),
         json!({"name": "open", "description": "Open a drawing (CADaddy .cdy, DWG, DXF, DWT; an SVG or PDF is converted) as a new tab that becomes current. Returns its index and any warnings (what reading left out, styles reset). Opening a file that is already open switches to it.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}),
@@ -169,6 +171,19 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 Some("detect") => "stairs.detect",
                 Some("confirm") => "stairs.confirm",
                 _ => "stairs.list",
+            };
+            let mut params = a.clone();
+            if let Some(o) = params.as_object_mut() {
+                o.remove("action");
+            }
+            b.call("engine.execute", json!({"command": command, "params": params}))
+        }
+        "rooms" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("get") => "rooms.get",
+                Some("goto") => "rooms.goto",
+                Some("build") => "rooms.build",
+                _ => "rooms.list",
             };
             let mut params = a.clone();
             if let Some(o) = params.as_object_mut() {

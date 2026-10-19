@@ -32,6 +32,7 @@ pub mod aliasdlg;
 pub mod animation;
 pub mod autosave;
 pub mod bedit;
+pub mod blockspalette;
 pub mod canvas;
 pub mod chrome;
 pub mod clipboard;
@@ -84,17 +85,20 @@ pub mod shortcut_menus;
 pub mod spelldlg;
 pub mod theme;
 pub mod toldlg;
+pub mod toolpalettes;
 pub mod viewcube;
 pub mod vpscale;
 pub mod walk;
 pub mod workspaces;
 
 pub mod autocomplete;
+pub mod designcenter;
 pub mod diag;
 pub mod etransmit;
 pub mod exchange;
 pub mod keytips;
 pub mod publishdlg;
+mod roomsdlg;
 pub mod sheetsets;
 pub mod standardsdlg;
 
@@ -193,6 +197,10 @@ pub struct UiState {
     pub user_workspaces: Vec<workspaces::Def>,
     /// The palette layout is mirrored for a right-to-left interface language ([`CadApp::follow_direction`]).
     pub layout_rtl: bool,
+    /// The Blocks palette's recent and favourite blocks, library folder and insertion options.
+    pub blocks_palette: blockspalette::Settings,
+    /// The user's tool palettes ([`toolpalettes`]).
+    pub tool_palettes: Vec<toolpalettes::Palette>,
 }
 
 /// A DXF/DWG file version (2000 … 2018).
@@ -286,6 +294,8 @@ impl Default for UiState {
             ribbon_tabs: Vec::new(),
             user_workspaces: Vec::new(),
             layout_rtl: false,
+            blocks_palette: blockspalette::Settings::default(),
+            tool_palettes: toolpalettes::default_palettes(),
         }
     }
 }
@@ -332,6 +342,9 @@ pub struct CadApp {
     /// Lay the interface out right to left (`Some(true)`) or left to right whatever the language:
     /// for tests and screenshots on a computer without an Arabic font.
     pub direction_override: Option<bool>,
+    /// A block the Blocks palette is placing, and how many block references there were when it
+    /// started (Repeat Placement; [`blockspalette::follow`]).
+    pub placing: Option<(blockspalette::BlockRef, usize)>,
     /// Drawings being read on worker threads ([`opening`]).
     pub opening: opening::Opening,
     pub integrated_titlebar: bool,
@@ -438,6 +451,7 @@ impl CadApp {
             status: None,
             workspace_applied: None,
             direction_override: None,
+            placing: None,
             opening: opening::Opening::default(),
             integrated_titlebar: false,
             os_title: String::new(),
@@ -853,6 +867,7 @@ impl CadApp {
         let _busy = diag::busy("logic");
         workspaces::follow(self);
         self.follow_direction();
+        blockspalette::follow(self);
         // FILEDIA 0: no native file dialogs (the commands ask on the command line).
         FILE_DIALOGS_OFF
             .store(cadaddy_engine::sysvars::get(&self.session, "FILEDIA").and_then(|v| v.as_i64()) == Some(0), std::sync::atomic::Ordering::Relaxed);

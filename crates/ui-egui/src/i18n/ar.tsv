@@ -1972,3 +1972,49 @@ menu	View	عرض
 	Workspace	مساحة العمل
 	Read Ceiling Plan	قراءة مسقط السقف المنعكس
 	Ceilings	الأسقف
+	Current Drawing	الرسم الحالي
+	Favourites	المفضلة
+	Libraries	المكتبات
+	No library folder	لا يوجد مجلد مكتبة
+	Choose Folder...	اختيار مجلد...
+	No blocks here.	لا توجد كتل هنا.
+	Remove from Favourites	إزالة من المفضلة
+	Add to Favourites	إضافة إلى المفضلة
+	Insertion Options	خيارات الإدراج
+	Auto-rotate (follow the current UCS)	تدوير تلقائي (اتباع نظام الإحداثيات الحالي)
+	Repeat Placement	تكرار الوضع
+	Tool Palettes	لوحات الأدوات
+	Drag objects from the drawing here to make tools.	اسحب كائنات من الرسم إلى هنا لإنشاء أدوات.
+	Add Selected	إضافة المحدد
+	New palette	لوحة جديدة
+	Select objects in the drawing first.	حدد كائنات في الرسم أولاً.
+	Blocks Palette	لوحة الكتل
+	Detect Grids	اكتشاف المحاور
+	Align Levels by Grids	محاذاة المستويات بالمحاور
+	Columns at Grids	أعمدة عند المحاور
+	Columns	الأعمدة
+	Build Room Volumes	إنشاء أحجام الغرف
+	Building	المبنى
+	Go to Room	الانتقال إلى الغرفة
+	List Rooms	قائمة الغرف
+	Room	غرفة
+	Build Volumes	إنشاء الأحجام
+	Go to	انتقال
+	{n} rooms	{n} غرف
+	No rooms found: rooms are found from name labels inside closed outlines.	لم يتم العثور على غرف: تُكتشف الغرف من تسميات الأسماء داخل الحدود المغلقة.
+	Ceiling	السقف
+	DesignCenter	مركز التصميم
+	Up One Level	مستوى واحد لأعلى
+	Folder	المجلد
+	Text Styles	أنماط النص
+	Dimension Styles	أنماط الأبعاد
+	Layouts	التخطيطات
+	Xrefs	المراجع الخارجية
+	Add to Drawing	إضافة إلى الرسم
+	Choose a drawing to see what it holds.	اختر رسمًا لترى ما يحتويه.
+	{name} inserted.	تم إدراج {name}.
+	{name} is already in the drawing; it was kept.	{name} موجود بالفعل في الرسم؛ تم الاحتفاظ به.
+	{name} added.	تمت إضافة {name}.
+	Read MEP Runs	قراءة مسارات الأنظمة الكهروميكانيكية
+	Model Clashes	تعارضات النموذج
+	MEP Systems	الأنظمة الكهروميكانيكية

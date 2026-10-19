@@ -1977,3 +1977,49 @@ menu	Modify	수정
 	Workspace	작업공간
 	Read Ceiling Plan	천장도 읽기
 	Ceilings	천장
+	Current Drawing	현재 도면
+	Favourites	즐겨찾기
+	Libraries	라이브러리
+	No library folder	라이브러리 폴더 없음
+	Choose Folder...	폴더 선택...
+	No blocks here.	블록이 없습니다.
+	Remove from Favourites	즐겨찾기에서 제거
+	Add to Favourites	즐겨찾기에 추가
+	Insertion Options	삽입 옵션
+	Auto-rotate (follow the current UCS)	자동 회전(현재 UCS 따름)
+	Repeat Placement	배치 반복
+	Tool Palettes	도구 팔레트
+	Drag objects from the drawing here to make tools.	도면의 객체를 여기로 끌어 도구를 만드십시오.
+	Add Selected	선택 항목 추가
+	New palette	새 팔레트
+	Select objects in the drawing first.	먼저 도면에서 객체를 선택하십시오.
+	Blocks Palette	블록 팔레트
+	Detect Grids	그리드 감지
+	Align Levels by Grids	그리드로 레벨 정렬
+	Columns at Grids	그리드 교차점 기둥
+	Columns	기둥
+	Build Room Volumes	방 체적 만들기
+	Building	건물
+	Go to Room	방으로 이동
+	List Rooms	방 목록
+	Room	방
+	Build Volumes	체적 만들기
+	Go to	이동
+	{n} rooms	방 {n}개
+	No rooms found: rooms are found from name labels inside closed outlines.	방을 찾을 수 없습니다. 방은 닫힌 윤곽선 안의 이름 레이블로 찾습니다.
+	Ceiling	천장
+	DesignCenter	DesignCenter
+	Up One Level	한 수준 위로
+	Folder	폴더
+	Text Styles	문자 스타일
+	Dimension Styles	치수 스타일
+	Layouts	배치
+	Xrefs	외부 참조
+	Add to Drawing	도면에 추가
+	Choose a drawing to see what it holds.	도면을 선택하면 내용을 볼 수 있습니다.
+	{name} inserted.	{name}을(를) 삽입했습니다.
+	{name} is already in the drawing; it was kept.	{name}이(가) 이미 도면에 있어 그대로 유지했습니다.
+	{name} added.	{name}을(를) 추가했습니다.
+	Read MEP Runs	MEP 경로 읽기
+	Model Clashes	모델 간섭
+	MEP Systems	MEP 시스템

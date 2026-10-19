@@ -1956,3 +1956,49 @@ menu	Modify	Modifikace
 	Workspace	Pracovní prostor
 	Read Ceiling Plan	Načíst výkres podhledů
 	Ceilings	Podhledy
+	Current Drawing	Aktuální výkres
+	Favourites	Oblíbené
+	Libraries	Knihovny
+	No library folder	Žádná složka knihovny
+	Choose Folder...	Vybrat složku...
+	No blocks here.	Žádné bloky.
+	Remove from Favourites	Odebrat z oblíbených
+	Add to Favourites	Přidat do oblíbených
+	Insertion Options	Možnosti vložení
+	Auto-rotate (follow the current UCS)	Automaticky natočit (podle aktuálního USS)
+	Repeat Placement	Opakovat umístění
+	Tool Palettes	Palety nástrojů
+	Drag objects from the drawing here to make tools.	Přetáhněte sem objekty z výkresu a vytvořte z nich nástroje.
+	Add Selected	Přidat vybrané
+	New palette	Nová paleta
+	Select objects in the drawing first.	Nejprve vyberte objekty ve výkresu.
+	Blocks Palette	Paleta bloků
+	Detect Grids	Najít osnovy
+	Align Levels by Grids	Zarovnat podlaží podle osnov
+	Columns at Grids	Sloupy v osnovách
+	Columns	Sloupy
+	Build Room Volumes	Vytvořit objemy místností
+	Building	Budova
+	Go to Room	Přejít na místnost
+	List Rooms	Seznam místností
+	Room	Místnost
+	Build Volumes	Vytvořit objemy
+	Go to	Přejít
+	{n} rooms	{n} místností
+	No rooms found: rooms are found from name labels inside closed outlines.	Nenalezeny žádné místnosti: místnosti se hledají podle popisků názvů uvnitř uzavřených obrysů.
+	Ceiling	Strop
+	DesignCenter	DesignCenter
+	Up One Level	O úroveň výš
+	Folder	Složka
+	Text Styles	Styly textu
+	Dimension Styles	Kótovací styly
+	Layouts	Rozvržení
+	Xrefs	Externí reference
+	Add to Drawing	Přidat do výkresu
+	Choose a drawing to see what it holds.	Vyberte výkres a uvidíte, co obsahuje.
+	{name} inserted.	{name} vloženo.
+	{name} is already in the drawing; it was kept.	{name} již ve výkresu je; byl ponechán.
+	{name} added.	{name} přidáno.
+	Read MEP Runs	Načíst rozvody TZB
+	Model Clashes	Kolize modelu
+	MEP Systems	Systémy TZB
