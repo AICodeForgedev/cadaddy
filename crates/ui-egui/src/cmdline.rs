@@ -451,6 +451,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
                     let g = p.layout_no_wrap(k.clone(), font.clone(), t.cmd_keyword);
                     let r = Rect::from_min_size(pos2(x, bar.top() + 3.0), vec2(g.size().x, h - 6.0));
                     let resp = ui.interact(r, ui.id().with(("kw", i)), Sense::click());
+                    crate::icons::describe_control(ui, &resp, k, None, false);
                     if resp.hovered() {
                         p.rect_filled(r, 2.0, t.cmd_keyword_hover);
                     }
@@ -531,6 +532,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
             for (i, s) in sug.iter().enumerate() {
                 let r = Rect::from_min_size(pos2(lr.left(), lr.top() + rh * i as f32), vec2(lr.width(), rh));
                 let resp = ui.interact(r, ui.id().with(("sug", i)), Sense::click());
+                crate::icons::describe_control(ui, &resp, &s.display, None, false);
                 if resp.hovered() || i == 0 {
                     p.rect_filled(r.shrink(1.0), 2.0, if resp.hovered() { t.cmd_keyword_hover } else { t.list_row });
                 }
@@ -594,6 +596,7 @@ fn zones(app: &CadApp, canvas: Rect, bar: Rect) -> Zones {
 fn history(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect, bar: Rect) {
     let z = zones(app, canvas, bar);
     let resp = ui.interact(z.all, ui.id().with("cmdline"), Sense::click_and_drag());
+    crate::icons::describe_area(&resp, "Command line");
     let at = resp.hover_pos().or(resp.interact_pointer_pos());
     let on_grip = |p: Pos2| z.grip.contains(p) && z.window.is_none();
     let on_toggle = |p: Pos2| z.chevron.contains(p) || z.lines.is_some_and(|r| r.contains(p));

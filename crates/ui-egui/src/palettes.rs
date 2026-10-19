@@ -389,6 +389,8 @@ pub(crate) fn layers_section(app: &mut CadApp, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         let w = ui.available_width() - 10.0;
         let (rect, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
+        let current = cur_info.as_ref().map(|c| c.0.clone()).unwrap_or_default();
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("{} {current}", crate::tl!("Current layer"))));
         let p = ui.painter();
         p.rect_filled(rect, 3.0, t.control);
         if let Some((name, on, frozen, locked, color)) = &cur_info {
@@ -446,6 +448,7 @@ pub(crate) fn layers_section(app: &mut CadApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.add_space(8.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(160.0, 20.0), Sense::click());
+        icons::describe_control(ui, &resp, label, Some(app.ui.show_layer_list), false);
         icons::paint(
             ui.painter(),
             Rect::from_center_size(pos2(rect.left() + 7.0, rect.center().y), vec2(11.0, 11.0)),
@@ -491,6 +494,11 @@ pub(crate) fn layers_section(app: &mut CadApp, ui: &mut egui::Ui) {
 
 /// egui memory: whether objects are selected (for the rows' menus), and the item a row's menu
 /// chose (run on the next frame, when the app is free; see [`properties_section`]).
+/// The name of the Properties row being drawn (its value box is named after it).
+fn row_label_id() -> egui::Id {
+    egui::Id::new("prop_row_label")
+}
+
 fn row_menu_selection_id() -> egui::Id {
     egui::Id::new("prop_row_has_selection")
 }
@@ -505,6 +513,9 @@ fn prop_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
         job.halign = egui::Align::RIGHT;
         let galley = ui.painter().layout_job(job);
         let (lr, lresp) = ui.allocate_exact_size(vec2(118.0, galley.size().y.max(22.0)), Sense::click());
+        icons::describe_area(&lresp, label);
+        // The value box beside it is named after the row.
+        ui.data_mut(|d| d.insert_temp(row_label_id(), crate::i18n::t(label).to_string()));
         // The row's menu (right-click on its name).
         let has_selection = ui.data(|d| d.get_temp::<bool>(row_menu_selection_id())).unwrap_or(false);
         let mut clicked = None;
@@ -523,6 +534,11 @@ fn value_box(ui: &mut egui::Ui, text: &str, combo: bool, enabled: bool) -> egui:
     let t = Tokens::get();
     let w = ui.available_width() - 10.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 20.0), Sense::click());
+    let row = ui.data(|d| d.get_temp::<String>(row_label_id())).unwrap_or_default();
+    let name = if row.is_empty() { text.to_string() } else { format!("{row}: {text}") };
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(if combo { egui::WidgetType::ComboBox } else { egui::WidgetType::TextEdit }, enabled, name.clone())
+    });
     ui.painter().rect_filled(rect, 2.0, if enabled { t.control } else { t.panel });
     if !enabled {
         ui.painter().rect_stroke(rect, 2.0, Stroke::new(1.0, t.control), egui::StrokeKind::Inside);
