@@ -509,8 +509,11 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             }
             rx += size + 4.0;
         }
-        if let Some(c) = toggle_cmd {
-            app.start(c);
+        // The toggles don't cancel the active command (#1108); the dialog buttons start theirs.
+        match toggle_cmd {
+            Some(c) if c.starts_with("ui.") => app.start(c),
+            Some(c) => crate::menus::run_transparent(app, c),
+            None => {}
         }
     });
 }
