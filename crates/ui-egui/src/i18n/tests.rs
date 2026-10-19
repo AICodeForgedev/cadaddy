@@ -39,7 +39,7 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
 /// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
 /// command doesn't require a row in every language.
 const REQUIRED: &[&str] = &["uk"];
-const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar", "hu"];
+const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar", "hu", "tr"];
 
 fn check(language: &str, what: &str, missing: Vec<String>) {
     if REQUIRED.contains(&language) {
@@ -1012,6 +1012,114 @@ fn default_fonts_cover_hungarian_letters_and_quotes() {
     output.textures_delta.clear();
     // Ő ő Ű ű (double acute) are in Latin Extended-A, outside the ranges the other tests check.
     let letters: BTreeSet<_> = "ÁÉÍÓÖŐÚÜŰáéíóöőúüű„”–…".chars().collect();
+    ctx.fonts_mut(|view| {
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let mut font = view.fonts.font(&family);
+            for c in &letters {
+                assert!(font.characters().contains_key(c), "missing {c} in {family:?}");
+            }
+        }
+    });
+}
+
+#[test]
+fn turkish_locales_preferences_and_single_count_form() {
+    for tag in ["tr", "tr-TR", "tr_TR.UTF-8", "TR-tr", " tr-TR ", "tr-CY"] {
+        assert_eq!(locale_language(tag), Some("tr"), "{tag}");
+    }
+    for tag in ["tur", "türkçe"] {
+        assert_eq!(locale_language(tag), None, "{tag}");
+    }
+    assert_eq!(Preference::parse("tr"), Some(Preference::Turkish));
+    assert_eq!(Preference::Turkish.name(), "Türkçe");
+    assert_eq!(Preference::Turkish.resolve(&["en-US".into()]), "tr");
+    assert_eq!(Preference::Auto.resolve(&["pl-PL".into(), "tr-TR".into(), "en-US".into()]), "tr");
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.ui.interface_language = Preference::Turkish;
+    let mut restored = CadApp::new(Session::new(), Services::default());
+    restored.load_prefs(&app.prefs_json());
+    assert_eq!(restored.ui.interface_language, Preference::Turkish);
+    with_language("tr", || {
+        // A Turkish noun stays singular after a number, 1 included.
+        for n in [0, 1, 2, 5, 21, u64::MAX] {
+            assert_eq!(count(n, "{n} contributor", "{n} contributors"), format!("{n} katkıda bulunan"));
+            assert_eq!(count(n, "{n} commit", "{n} commits"), format!("{n} commit"));
+        }
+        assert_eq!(format("Current: {color}", &[("color", "{n} Open".into())]), "Geçerli: {n} Open");
+    });
+}
+
+#[test]
+fn turkish_menu_headings_keep_object_labels_and_prompt_keywords() {
+    with_language("tr", || {
+        assert_eq!(menu("Dimension"), "Ölçülendirme");
+        assert_eq!(t("Dimension"), "Ölçü");
+        assert_eq!(menu("View"), "Görünüm");
+        assert_eq!(menu("Draw"), "Çiz");
+        assert_eq!(menu("Modify"), "Değiştir");
+        assert_eq!(menu("Edit"), "Düzenle");
+        assert_eq!(menu("File"), "Dosya");
+        // Clickable keywords keep the spelling the engine accepts.
+        assert_eq!(t("Enter Top, Zero or Bottom."), "Top, Zero veya Bottom girin.");
+        assert_eq!(t("Specify first point on circle: _tan to"), "Daire üzerindeki ilk noktayı belirtin: _tan to");
+    });
+}
+
+#[test]
+fn live_turkish_switch_preserves_drawing_command_and_saved_choice() {
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.ui.in_window_menu = true;
+    app.session.state_mut().unwrap().title = "Open".into();
+    let ctx = egui::Context::default();
+    app.logic(&ctx);
+    assert!(render(&mut app, &ctx).contains("Properties"));
+    app.start("line");
+    let prompt = crate::control::cmdline_state(&app);
+    let commands = crate::control::all_commands(&app);
+    app.run("ui.language", json!({"lang":"tr"})).unwrap();
+    let text = render(&mut app, &ctx);
+    for label in ["Özellikler", "Dosya", "Görünüm", "Çiz", "Ölçülendirme", "İlk noktayı belirtin"] {
+        assert!(text.contains(label), "missing {label}: {text}");
+    }
+    assert_eq!(app.language(), "tr");
+    assert_eq!(app.session.state().unwrap().title, "Open");
+    assert_eq!(crate::control::cmdline_state(&app), prompt);
+    assert_eq!(crate::control::all_commands(&app), commands);
+    app.run("ui.language", json!({"lang":"en"})).unwrap();
+    assert!(render(&mut app, &ctx).contains("Properties"));
+}
+
+#[test]
+fn turkish_dialogs_render_with_stable_ids() {
+    for (dialog, heading) in [
+        ("dsettings", "Çizim Ayarları"),
+        ("about", "CADCraft Hakkında"),
+        ("blocks", "Bloklar"),
+        ("layers", "Katman Özellikleri Yöneticisi"),
+        ("qselect", "Hızlı Seçim"),
+        ("parameters", "Parametre Yöneticisi"),
+        ("language", "Türkçe"),
+        ("options:preferences", "Kullanıcı Tercihleri"),
+    ] {
+        let mut app = CadApp::new(Session::new(), Services::default());
+        app.ui.interface_language = Preference::Turkish;
+        app.ui.dialog = Some(dialog.into());
+        let ctx = egui::Context::default();
+        app.logic(&ctx);
+        let text = render(&mut app, &ctx);
+        assert!(text.contains(heading), "{dialog}: {text}");
+        assert_eq!(app.ui.dialog.as_deref(), Some(dialog));
+    }
+}
+
+#[test]
+fn default_fonts_cover_every_turkish_letter_in_the_catalog() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    let mut letters: BTreeSet<_> = "ÇĞİÖŞÜçğıöşü".chars().collect();
+    let translations = include_str!("tr.tsv").lines().filter(|l| !l.starts_with('#')).filter_map(|l| l.rsplit('\t').next());
+    letters.extend(translations.flat_map(str::chars).filter(|c| !c.is_ascii() && c.is_alphabetic()));
     ctx.fonts_mut(|view| {
         for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
             let mut font = view.fonts.font(&family);

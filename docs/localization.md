@@ -1,7 +1,7 @@
 # Interface languages
 
 Choose **Edit → Interface Language** and select **Auto (system language)**, **English**,
-**Українська**, **Português (Brasil)**, **Deutsch**, **Español**, **Čeština** (Czech), **Русский**, **Français**, **简体中文**, **Italiano**, **한국어** (Korean), **Svenska** (Swedish), **العربية** (Arabic), or **Magyar** (Hungarian).
+**Українська**, **Português (Brasil)**, **Deutsch**, **Español**, **Čeština** (Czech), **Русский**, **Français**, **简体中文**, **Italiano**, **한국어** (Korean), **Svenska** (Swedish), **العربية** (Arabic), **Magyar** (Hungarian), or **Türkçe** (Turkish).
 The interface updates without restarting, including the native macOS menus.
 The choice is saved with the other interface preferences (`cadcraft.prefs`, beside the theme):
 eframe storage on the desktop, browser local storage on the web. Installations without a saved
@@ -11,7 +11,7 @@ Auto uses the first supported language in the operating system's preferred local
 browser's `navigator.languages` on the web. BCP 47 and POSIX tags select their primary language:
 `uk-UA` → `uk`, `de_AT.UTF-8` → `de`, `es-MX` → `es`, `pt_BR.UTF-8` → `pt-BR`,
 `cs-CZ` and `cs_CZ.UTF-8` → `cs`, `it-IT` and `it_CH.UTF-8` → `it`, `ko-KR` and `ko_KR.UTF-8` → `ko`,
-`sv-SE`, `sv-FI` and `sv_SE.UTF-8` → `sv`, `hu-HU` and `hu_HU.UTF-8` → `hu`. Unsupported languages fall back to English.
+`sv-SE`, `sv-FI` and `sv_SE.UTF-8` → `sv`, `hu-HU` and `hu_HU.UTF-8` → `hu`, `tr-TR` and `tr_TR.UTF-8` → `tr`. Unsupported languages fall back to English.
 Set `CADCRAFT_LOCALE=cs-CZ` to override the desktop's locale for a launch.
 An explicit saved language choice takes precedence over that override.
 
@@ -22,7 +22,7 @@ Automation can select the language through the existing control channel:
 ```
 
 The `ui.set` method also accepts `{"interfaceLanguage":"cs"}`. Supported values are `auto`,
-`en`, `uk`, `pt-BR`, `de`, `es`, `cs`, `ru`, `fr`, `zh`, `it`, `ko`, `sv`, `ar`, and `hu`; invalid values are rejected without changing the current
+`en`, `uk`, `pt-BR`, `de`, `es`, `cs`, `ru`, `fr`, `zh`, `it`, `ko`, `sv`, `ar`, `hu`, and `tr`; invalid values are rejected without changing the current
 selection. Resetting palettes keeps the language choice.
 
 ## Translation coverage
@@ -60,6 +60,17 @@ between the menu heading and the object label. The interface addresses the user 
 a count takes one form because a Hungarian numeral is followed by the singular. The translation
 was written from the meaning of CADCraft's English strings; no other product's localization was
 used as a source. It has not yet been proofread by an independent native speaker.
+
+Turkish has **1,330 rows**: the union of the existing catalogs, four contextual menu headings
+(**Ölçülendirme** for the Dimension menu, **Ölçü** for the object) and two single-form count
+templates, since a Turkish noun stays singular after a number ("3 commit"). No marked UI literal
+falls back to English. Prompts read "… girin" for Enter and "… belirtin" for Specify, and clickable
+keywords (`Top`, `Zero`, `Bottom`, `_tan to`, `nX`/`nXP`) keep the spelling the engine accepts.
+The translation is original, AI-assisted work by @ogzhnklvz, written from the English strings with
+Turkish desktop-CAD vocabulary (Katman, Tarama, Yuvarlatma, Pah, Öteleme, Nesne Kenetleme,
+Görünüm Penceresi); the running app was reviewed by a native speaker, and line-by-line
+proofreading is still to do. The bundled
+egui fonts cover `Ç Ğ İ Ö Ş Ü ç ğ ı ö ş ü`.
 
 Drawing titles, layer/layout/block/style names, parameter names and expressions, text in a
 drawing, and command-line input are user data and retain their original spelling. Clickable
