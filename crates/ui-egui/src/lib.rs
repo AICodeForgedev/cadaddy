@@ -62,6 +62,7 @@ pub mod extractdlg;
 pub mod gpu;
 pub mod grip_dyn;
 mod groupgrips;
+pub mod historypalettes;
 pub mod i18n;
 pub mod icons;
 pub mod layers;

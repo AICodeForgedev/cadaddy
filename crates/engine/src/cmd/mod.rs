@@ -30,6 +30,7 @@ mod gripcmds;
 mod griphot;
 pub mod groups;
 pub(crate) mod hatch;
+pub mod history;
 pub mod hyperlink;
 mod imageattach;
 mod imageclip;
@@ -272,6 +273,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(field::specs());
         v.extend(ucs::specs());
         v.extend(tolerance::specs());
+        v.extend(history::specs());
         v.extend(standards::specs());
         v.extend(colorbook::specs());
         v.extend(constraints::specs());
