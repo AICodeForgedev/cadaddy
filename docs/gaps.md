@@ -81,7 +81,7 @@ Detail: [file-format-parity.md](file-format-parity.md).
 | FF11 | DWF/DWFx, DGN, WMF, EPS, ACIS/STL and other exchange formats | Low-medium | 50–100 |
 | FF12 | DWG in the web build | Medium | 6–10 |
 | FF13 | R12 binary DXF, pre-R13 DWG | Low | 10–20 |
-| FF14 | SVG import leftovers (shapes, paths, groups and Inkscape layers landed, #636): no CSS classes (`<style>`), `use` references, fills and gradients, text or embedded images; rounded rectangle corners (`rx`/`ry`) are ignored | Low-medium | 2–4 |
+| FF14 | SVG import leftovers (shapes, paths, groups and Inkscape layers landed, #636): no CSS classes (`<style>`), `use` references, fills and gradients, text or embedded images; rounded rectangle corners (`rx`/`ry`) are ignored. Opening such a file names what was left out (#627) | Low-medium | 2–4 |
 
 ## Hardware
 

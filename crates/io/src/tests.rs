@@ -2120,6 +2120,28 @@ fn svg_hidden_and_defs_subtrees_are_skipped() {
     assert_eq!(kinds(&d), ["Polyline"]);
 }
 
+/// #627: what the reader doesn't read yet (text, raster images, `<use>` copies, style sheets,
+/// rounded corners) is named in a read note instead of being left out silently; what isn't drawn
+/// (in `<defs>` or hidden) isn't counted.
+#[test]
+fn svg_left_out_content_is_noted() {
+    let svg = format!(
+        "{SVG_PAGE}<defs><style>.a {{ stroke: red }}</style><text>in defs</text><rect id=\"r\" width=\"1\" height=\"1\"/></defs>\
+         <text x=\"0\" y=\"5\">one</text><text x=\"0\" y=\"8\"><tspan>two</tspan></text><text display=\"none\">hidden</text>\
+         <image href=\"a.png\" width=\"2\" height=\"2\"/><use href=\"#r\"/><use href=\"#r\" x=\"3\"></use>\
+         <rect x=\"1\" y=\"1\" width=\"4\" height=\"3\" rx=\"1\"/><rect x=\"6\" y=\"1\" width=\"4\" height=\"3\"/></svg>"
+    );
+    let d = read(svg.as_bytes(), "left-out.svg").unwrap();
+    assert_eq!(kinds(&d), ["Polyline", "Polyline"]);
+    assert_eq!(
+        d.read_notes,
+        ["SVG: CADCraft doesn't read these yet, so they were left out: 2 texts, 1 raster image, 2 `<use>` copies, \
+          1 `<style>` sheet (its class rules aren't applied), 1 rectangle with rounded corners (drawn square)"]
+    );
+    let plain = read(format!("{SVG_PAGE}<rect x=\"1\" y=\"1\" width=\"4\" height=\"3\"/></svg>").as_bytes(), "a.svg").unwrap();
+    assert!(plain.read_notes.is_empty(), "{:?}", plain.read_notes);
+}
+
 #[test]
 fn svgz_gunzips_to_the_same_drawing() {
     let svg = format!("{SVG_PAGE}<rect x=\"1\" y=\"1\" width=\"4\" height=\"3\"/></svg>");

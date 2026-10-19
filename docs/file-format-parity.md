@@ -117,7 +117,7 @@ early (#175), but the throughput problem remains. **DWG ≈ 30% read, ≈ 15% wr
 | Plot styles (`.ctb`, `.stb`), plotter configs (`.pc3`), `.pmp` | yes | plot style tables in our own JSON format ([plot-styles.md](plot-styles.md)) and kept in the drawing; plotter devices with papers and printable areas in our own JSON format ([plotters.md](plotters.md), #564); binary `.ctb`/`.stb`/`.pc3`/`.pmp` not read (no public spec) | 4–8 |
 | Scripts (`.scr`) | SCRIPT | script text through the CLI, MCP and control channel; no SCRIPT command reading a `.scr` file | 1–2 |
 | Aliases (`.pgp`), CUI(x), workspaces | yes | user alias files and ALIASEDIT (#552); no CUI(x) or workspaces | 4–8 |
-| SVG import (`.svg`, `.svgz`) | yes (via scripts) | OPEN reads shapes, paths, groups and Inkscape layers into entities (#636); no CSS classes, `use`, fills, text or images | 2–4 |
+| SVG import (`.svg`, `.svgz`) | yes (via scripts) | OPEN reads shapes, paths, groups and Inkscape layers into entities (#636); no CSS classes, `use`, fills, text or images (what the drawing loses is named in a note on open, #627) | 2–4 |
 | AutoLISP (`.lsp`, `.fas`, `.vlx`), `.dll`/`.arx` plug-ins | yes | `.lsp` loads (APPLOAD, `(load)`, a dropped file; #758); no Visual LISP ActiveX (`vlax-`), DCL dialogs or reactors; `.fas`/`.vlx` are compiled and undocumented; no `.dll`/`.arx` | see [gaps.md](gaps.md) (E1) |
 | Data extraction (`.csv`, `.xls`) and data links | yes | DATAEXTRACTION/EATTEXT to CSV or a table (#433); table data links read CSV (#534); no `.xls`, no `.dxe` templates | 3–5 |
 | eTransmit (`.zip` packages) | yes | no | 4–6 |

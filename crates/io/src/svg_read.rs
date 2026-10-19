@@ -10,9 +10,10 @@
 //! Not read (each is a follow-up): CSS class rules (`<style>`), `use` references, fills,
 //! gradients and hatch patterns, text, embedded raster images, rounded rectangle corners
 //! (`rx`/`ry`), and elliptical arcs under non-uniform transforms (those are flattened into
-//! line segments instead of losing the shape).
+//! line segments instead of losing the shape). What the drawing shows of those (all but fills,
+//! gradients and patterns) is named in a read note, so it is never left out silently.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use cadcraft_color::Color;
 use cadcraft_doc::*;
@@ -127,6 +128,40 @@ struct Parser {
     elements: usize,
     /// > 0 while inside a skipped subtree; counts the starts seen there.
     skip: usize,
+    /// What was left out, by kind ([`LeftOut`]).
+    left_out: BTreeMap<LeftOut, usize>,
+}
+
+/// Drawn content the reader leaves out, named in the drawing's read note.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum LeftOut {
+    Text,
+    Image,
+    Use,
+    Style,
+    RoundedCorners,
+}
+
+impl LeftOut {
+    /// The kind of a skipped element ([`SKIP`]) that the drawing shows.
+    fn of(name: &[u8]) -> Option<Self> {
+        match name {
+            b"text" => Some(Self::Text),
+            b"image" => Some(Self::Image),
+            _ => None,
+        }
+    }
+
+    fn describe(self, n: usize) -> String {
+        let (one, many) = match self {
+            Self::Text => ("text", "texts"),
+            Self::Image => ("raster image", "raster images"),
+            Self::Use => ("`<use>` copy", "`<use>` copies"),
+            Self::Style => ("`<style>` sheet (its class rules aren't applied)", "`<style>` sheets (their class rules aren't applied)"),
+            Self::RoundedCorners => ("rectangle with rounded corners (drawn square)", "rectangles with rounded corners (drawn square)"),
+        };
+        format!("{n} {}", if n == 1 { one } else { many })
+    }
 }
 
 impl Parser {
@@ -139,7 +174,21 @@ impl Parser {
             layer_color: 1,
             elements: 0,
             skip: 0,
+            left_out: BTreeMap::new(),
         }
+    }
+
+    fn left_out(&mut self, kind: LeftOut) {
+        *self.left_out.entry(kind).or_default() += 1;
+    }
+
+    /// The read note on what was left out, if anything was.
+    fn note(&self) -> Option<String> {
+        if self.left_out.is_empty() {
+            return None;
+        }
+        let list: Vec<String> = self.left_out.iter().map(|(k, n)| k.describe(*n)).collect();
+        Some(format!("SVG: CADCraft doesn't read these yet, so they were left out: {}", list.join(", ")))
     }
 
     fn parse(&mut self, text: &str) -> Result<()> {
@@ -163,21 +212,29 @@ impl Parser {
                 _ => {}
             }
         }
+        self.drawing.read_notes.extend(self.note());
         Ok(())
     }
 
     /// A start tag: open a transform frame, descend into a skipped subtree, or treat a
     /// shape written as start+end the same as a self-closed one.
     fn on_start(&mut self, name: &[u8], e: &BytesStart) -> Result<()> {
+        // A style sheet applies wherever it is (Inkscape keeps it in `<defs>`).
+        if name == b"style" {
+            self.left_out(LeftOut::Style);
+        }
         if self.skip > 0 {
             self.skip += 1;
             return Ok(());
         }
-        if SKIP.contains(&name) {
+        if hidden(e) {
             self.skip = 1;
             return Ok(());
         }
-        if hidden(e) {
+        if SKIP.contains(&name) {
+            if let Some(kind) = LeftOut::of(name) {
+                self.left_out(kind);
+            }
             self.skip = 1;
             return Ok(());
         }
@@ -189,9 +246,18 @@ impl Parser {
             return Ok(());
         }
         if SKIP.contains(&name) || hidden(e) {
+            if !hidden(e)
+                && let Some(kind) = LeftOut::of(name)
+            {
+                self.left_out(kind);
+            }
             return Ok(());
         }
         match name {
+            b"use" => {
+                self.left_out(LeftOut::Use);
+                Ok(())
+            }
             b"rect" => self.rect(e),
             b"circle" => self.circle(e),
             b"ellipse" => self.ellipse(e),
@@ -278,6 +344,9 @@ impl Parser {
         let h = num(e, b"height", 0.0);
         if w <= 0.0 || h <= 0.0 {
             return Ok(());
+        }
+        if num(e, b"rx", 0.0) > 0.0 || num(e, b"ry", 0.0) > 0.0 {
+            self.left_out(LeftOut::RoundedCorners);
         }
         let pts = [Vec2::new(x, y), Vec2::new(x + w, y), Vec2::new(x + w, y + h), Vec2::new(x, y + h)];
         self.add_polyline(&pts.map(|p| self.map(p)), true)
