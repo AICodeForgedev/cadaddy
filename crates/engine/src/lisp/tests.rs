@@ -70,6 +70,39 @@ fn arithmetic_follows_autolisp() {
     assert_eq!(eval(&mut s, "(+ 1 nil)"), Err("bad argument type: numberp: nil".into()));
 }
 
+/// `=` answers for the symbols `type` returns, which is how AutoLISP routines test a type:
+/// `(= (type x) 'INT)`. Coercing the symbol to a number failed the whole routine with "bad
+/// argument type" instead, so a routine written for AutoLISP stopped at its first type test
+/// (#1597). The ordering comparisons are still numbers and strings, as AutoLISP has them.
+#[test]
+fn equality_compares_symbols_as_autolisp_does() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "(= (type 1) 'INT)"), "T");
+    assert_eq!(ok(&mut s, "(= (type 1.0) 'INT)"), "nil");
+    assert_eq!(ok(&mut s, "(= (type '(1 2)) 'LIST)"), "T");
+    assert_eq!(ok(&mut s, "(= (type \"a\") 'STR)"), "T");
+    assert_eq!(ok(&mut s, "(/= (type 1) 'REAL)"), "T");
+    assert_eq!(ok(&mut s, "(= 'a 'a 'a)"), "T");
+    assert_eq!(ok(&mut s, "(= 'a 'b)"), "nil");
+
+    // The routine from the report runs.
+    ok(&mut s, "(defun isint (a) (if (= (type a) 'INT) T nil))");
+    assert_eq!(ok(&mut s, "(isint 3)"), "T");
+    assert_eq!(ok(&mut s, "(isint 3.0)"), "nil");
+    assert_eq!(ok(&mut s, "(isint \"3\")"), "nil");
+
+    // A mismatch of kinds is nil, not an error; numbers and strings are unchanged.
+    assert_eq!(ok(&mut s, "(= 1 \"1\")"), "nil");
+    assert_eq!(ok(&mut s, "(= '(1) '(1))"), "nil", "`=` is not `equal`");
+    assert_eq!(ok(&mut s, "(= nil nil)"), "T");
+    assert_eq!(ok(&mut s, "(= 1 1.0)"), "T");
+    assert_eq!(ok(&mut s, "(= \"a\" \"a\" \"a\")"), "T");
+    assert_eq!(ok(&mut s, "(= 1 1 2)"), "nil");
+
+    // Ordering still refuses what AutoLISP refuses.
+    assert_eq!(eval(&mut s, "(< 'a 'b)"), Err("bad argument type: numberp: A".into()));
+}
+
 #[test]
 fn lists_and_strings() {
     let mut s = session();
