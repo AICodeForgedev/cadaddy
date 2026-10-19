@@ -15,6 +15,7 @@ mod ground;
 mod math;
 mod measure;
 mod openings;
+pub mod package;
 mod pick;
 mod rules;
 mod spec;

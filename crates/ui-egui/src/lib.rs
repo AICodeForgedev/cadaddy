@@ -431,6 +431,8 @@ pub struct CadApp {
     pub bedit: bedit::State,
     /// Walk mode, while it is open: the drawing in 3D in place of the canvas ([`walk`]).
     pub walk: Option<walk::Walk>,
+    /// Drawings opened from walkthrough packages that Walk has been opened on (once each).
+    pub walked: std::collections::BTreeSet<u64>,
     /// The app's wgpu render state (walk mode draws its 3D with it).
     pub wgpu_rs: Option<egui_wgpu::RenderState>,
 }
@@ -498,6 +500,7 @@ impl CadApp {
             layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
+            walked: std::collections::BTreeSet::new(),
             wgpu_rs: None,
         }
     }
@@ -878,6 +881,7 @@ impl CadApp {
         }
         self.last_frame_start = Some(t0);
         self.track_documents();
+        walk::open_walkthrough(self);
         cadaddy_engine::cmd::file::set_default_ext(self.ui.save_format.as_str());
         // A long LISP routine runs a slice per frame, so the window stays live (and Esc stops it).
         self.session.lisp_tick();

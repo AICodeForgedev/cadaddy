@@ -68,6 +68,7 @@ pub mod symbol;
 mod takeoff;
 pub(crate) mod underlay;
 pub mod verify;
+pub mod walkpub;
 pub mod wallgen;
 pub use props::MatchProps;
 pub(crate) mod qselect;
@@ -251,6 +252,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(stairs::specs());
         v.extend(autospec::specs());
         v.extend(verify::specs());
+        v.extend(walkpub::specs());
         v.extend(imageclip::specs());
         v.extend(array::specs());
         v.extend(symbol::specs());
