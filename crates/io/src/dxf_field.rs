@@ -100,7 +100,35 @@ fn read_field(tags: &[Tag]) -> Field {
             }
         }
     }
+    if value.is_empty() {
+        value = stored_value(tags);
+    }
     Field { evaluator, code, children, objects, value }
+}
+
+/// The value a field keeps when its formatted copy (301) is empty, as a DWG through the bridge
+/// gives it back: the formatted value (302), else the value data of its `ACFD_FIELD_VALUE` block
+/// (data type 90: 4 text in group 1, 1 a whole number in 91, 2 a number in 140).
+fn stored_value(tags: &[Tag]) -> String {
+    let Some(start) = tags.iter().position(|t| t.code == 7 && t.str().trim() == "ACFD_FIELD_VALUE") else { return String::new() };
+    let block: Vec<&Tag> = tags.get(start + 1..).unwrap_or(&[]).iter().take_while(|t| !(t.code == 304 && t.str().trim() == "ACVALUE_END")).collect();
+    if let Some(t) = block.iter().find(|t| t.code == 302).filter(|t| !t.str().is_empty()) {
+        return t.str().chars().take(MAX_TEXT).collect();
+    }
+    let kind = block.iter().find(|t| t.code == 90).and_then(|t| t.str().trim().parse::<i64>().ok());
+    let group = match kind {
+        Some(4) => 1,
+        Some(1) => 91,
+        Some(2) => 140,
+        _ => return String::new(),
+    };
+    let mut v = String::new();
+    for t in block.iter().skip_while(|t| t.code != group).take_while(|t| t.code == group || (group == 1 && t.code == 3)) {
+        if v.len() < MAX_TEXT {
+            v.push_str(t.str().trim_end_matches('\0'));
+        }
+    }
+    v
 }
 
 /// A field's code with its children's codes put in place of `%<\_FldIdx i>%` and its objects as

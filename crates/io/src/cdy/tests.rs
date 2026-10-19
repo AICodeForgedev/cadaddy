@@ -641,8 +641,8 @@ fn sun_and_exposure_round_trip() {
     d.sun.year = 2026;
     d.sun.month = 6;
     d.sun.day = 21;
-    d.sun.latitude = 32.75;
-    d.sun.longitude = -97.33;
+    d.sun.latitude = 40.0;
+    d.sun.longitude = -99.0;
     d.sun.exposure = 1.5;
     let bytes = model::write(&d, None).unwrap();
     let (back, rep) = model::read(&bytes).unwrap();

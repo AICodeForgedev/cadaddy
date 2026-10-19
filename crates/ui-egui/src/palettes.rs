@@ -836,6 +836,12 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                         ui.close();
                     }
                 }
+                ui.separator();
+                // The Select Color dialog (index, true colour, colour books) for new objects.
+                if ui.button(crate::tl!("More Colors...")).clicked() {
+                    crate::cmddlgs::open_color_dialog(ui.ctx(), None);
+                    ui.close();
+                }
             });
         });
         prop_row(ui, "Layer", |ui| {
@@ -988,6 +994,12 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                     set = Some(json!({ "handles": ids, "color": c }));
                     ui.close();
                 }
+            }
+            ui.separator();
+            // The Select Color dialog for the selected objects.
+            if ui.button(crate::tl!("More Colors...")).clicked() {
+                crate::cmddlgs::open_color_dialog(ui.ctx(), Some(ids.clone()));
+                ui.close();
             }
         });
     });
@@ -1172,6 +1184,49 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 });
                 num(ui, "Text height", "height", len(tx.height), &mut set, &mut bad, &ids);
                 num(ui, "Defined width", "width", len(tx.width), &mut set, &mut bad, &ids);
+                // The background mask (MTEXT's own; TEXTMASK sets it too): on or off, how far it
+                // reaches past the text (a factor of the text height) and its colour.
+                prop_row(ui, "Background mask", |ui| {
+                    let mut on = tx.background.is_some();
+                    let label = crate::i18n::t(if on { "Yes" } else { "No" });
+                    if ui.checkbox(&mut on, label).changed() {
+                        set = Some(json!({ "handles": ids, "background": on }));
+                    }
+                });
+                if let Some(bg) = &tx.background {
+                    let color = bg.color.map_or(Value::String("background".into()), |c| json!(c.name()));
+                    prop_row(ui, "Mask border offset", |ui| {
+                        if let Some(f) = number(edit_field(ui, ui.id().with(("mask_scale", &ids)), format!("{:.4}", bg.scale)), &mut bad) {
+                            set = Some(json!({ "handles": ids, "background": { "scale": f.clamp(1.0, 5.0), "color": color } }));
+                        }
+                    });
+                    prop_row(ui, "Mask color", |ui| {
+                        let shown =
+                            bg.color.map_or_else(|| crate::tl!("Use drawing background").to_string(), |c| crate::i18n::t(&c.name()).to_string());
+                        ui.menu_button(shown, |ui| {
+                            if ui.button(crate::tl!("Use drawing background")).clicked() {
+                                set = Some(json!({ "handles": ids, "background": { "scale": bg.scale, "color": "background" } }));
+                                ui.close();
+                            }
+                            for (n, c) in [
+                                ("Red", 1),
+                                ("Yellow", 2),
+                                ("Green", 3),
+                                ("Cyan", 4),
+                                ("Blue", 5),
+                                ("Magenta", 6),
+                                ("White", 7),
+                                ("Color 8", 8),
+                                ("Color 9", 9),
+                            ] {
+                                if ui.button(crate::i18n::t(n)).clicked() {
+                                    set = Some(json!({ "handles": ids, "background": { "scale": bg.scale, "color": c } }));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    });
+                }
             }
             EntityKind::LwPolyline(pl) => {
                 num(ui, "Global width", "width", len(pl.const_width), &mut set, &mut bad, &ids);
@@ -1283,5 +1338,34 @@ mod my_properties_tests {
             })
             .collect();
         assert!(ids.iter().any(|i| i.contains("ui.properties") && i.contains("remove")), "{ids:?}");
+    }
+}
+
+#[cfg(test)]
+mod mask_row_tests {
+    use super::*;
+    use cadaddy_engine::Session;
+
+    #[test]
+    fn a_masked_mtext_shows_its_mask_rows_and_they_set_it() {
+        let mut app = CadApp::new(Session::new(), crate::Services::default());
+        let t = app.run("mtext", json!({"at": [0, 0], "text": "NOTE", "height": 2})).unwrap()["handle"].as_str().unwrap().to_string();
+        app.run("properties.set", json!({"handles": [t], "background": true})).unwrap();
+        app.run("select", json!({"handles": [t]})).unwrap();
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| properties_section(&mut app, ui)).textures_delta.clear();
+        // What the rows send: a border offset, a colour, and off.
+        app.run("properties.set", json!({"handles": [t], "background": {"scale": 2.5, "color": 3}})).unwrap();
+        let bg = |app: &CadApp| match &app.session.doc().unwrap().entity(cadaddy_doc::Handle::parse_hex(&t).unwrap()).unwrap().kind {
+            cadaddy_doc::EntityKind::MText(m) => m.background.clone(),
+            _ => None,
+        };
+        let b = bg(&app).unwrap();
+        assert_eq!((b.scale, b.color), (2.5, Some(cadaddy_doc::color::Color::Index(3))));
+        app.run("properties.set", json!({"handles": [t], "background": {"scale": 2.5, "color": "background"}})).unwrap();
+        assert_eq!(bg(&app).unwrap().color, None, "the drawing's background");
+        ctx.run_ui(egui::RawInput::default(), |ui| properties_section(&mut app, ui)).textures_delta.clear();
+        app.run("properties.set", json!({"handles": [t], "background": false})).unwrap();
+        assert!(bg(&app).is_none());
     }
 }

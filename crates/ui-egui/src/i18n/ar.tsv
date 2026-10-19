@@ -2119,3 +2119,64 @@ menu	View	عرض
 	Confirm each item to be purged	تأكيد كل عنصر قبل حذفه
 	Purge nested items	حذف العناصر المتداخلة
 	Text Align	محاذاة النص
+	Color model:	نموذج اللون:
+	Hue	تدرج اللون
+	Saturation	التشبع
+	Luminance	الإضاءة
+	Hex	سداسي عشري
+	More Colors...	مزيد من الألوان...
+	Load more books with COLORBOOK (JSON or tab-separated files).	حمّل المزيد من الكتب باستخدام COLORBOOK (ملفات JSON أو مفصولة بعلامات جدولة).
+	All spaces	كل المساحات
+	Total: {n}	الإجمالي: {n}
+	No block references here.	لا توجد مراجع كتل هنا.
+	Highlight and zoom to its references	تمييز مراجعه والتكبير إليها
+	Similar but not identical: {scaled} scaled, {exploded} exploded	متشابهة لكن غير متطابقة: {scaled} بمقياس مختلف، {exploded} مفككة
+	Insert Count Table	إدراج جدول العد
+	Update Count Tables	تحديث جداول العد
+	Count in Area	العد في منطقة
+	{n} reference(s) of {name} selected.	تم تحديد {n} من مراجع {name}.
+	{n} similar object(s) selected.	تم تحديد {n} من الكائنات المتشابهة.
+	Geographic Location...	الموقع الجغرافي...
+	Remove Geographic Location	إزالة الموقع الجغرافي
+	Set Location	تعيين الموقع
+	Remove Location	إزالة الموقع
+	Latitude and Longitude	خط العرض وخط الطول
+	Trace Image to Vectors	تتبع الصورة إلى متجهات
+	Trace Raster Image to Vectors	تتبع الصورة النقطية إلى متجهات
+	Drawing Summary	ملخص الرسم
+	Query Drawing	استعلام الرسم
+	Begin Agent Request	بدء طلب الوكيل
+	End Agent Request	إنهاء طلب الوكيل
+	Agent Dry Run	تشغيل تجريبي للوكيل
+	Agent Confirmations	تأكيدات الوكيل
+	Agent Change Journal	سجل تغييرات الوكيل
+	Agent Activity	نشاط الوكيل
+	An agent asks	وكيل يطلب
+	Allow	السماح
+	Deny	رفض
+	Not allowed: {question}	غير مسموح: {question}
+	Ask me before an agent saves over a file or closes with changes	اسألني قبل أن يحفظ وكيل فوق ملف أو يغلق مع تغييرات
+	Dry run: agents' commands change nothing	تشغيل تجريبي: أوامر الوكلاء لا تغيّر شيئاً
+	No agent requests yet.	لا توجد طلبات من الوكلاء بعد.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} أوامر · {added} مضاف · {removed} محذوف · {changed} معدّل
+	Select what it added and changed	تحديد ما أضافه وغيّره
+	Activity History	سجل النشاط
+	Activity history is off (Options ▸ Open and Save).	سجل النشاط متوقف (خيارات ◂ الفتح والحفظ).
+	command	أمر
+	{n} steps	{n} خطوات
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	تحديد الكائنات التي أضافتها هذه الخطوة أو غيرتها
+	The objects of this step are gone.	كائنات هذه الخطوة لم تعد موجودة.
+	{n} object(s) selected.	تم تحديد {n} من الكائنات.
+	{n} object(s) selected ({gone} since erased).	تم تحديد {n} من الكائنات ({gone} محذوفة منذ ذلك الحين).
+	{n} s ago	قبل {n} ث
+	{n} min ago	قبل {n} د
+	{n} h ago	قبل {n} س
+	{n} d ago	قبل {n} ي
+	Keep an activity history beside each drawing (private, on this computer)	الاحتفاظ بسجل نشاط بجانب كل رسم (خاص، على هذا الكمبيوتر)
+	Background mask	قناع الخلفية
+	Mask border offset	إزاحة حد القناع
+	Mask color	لون القناع
+	Use drawing background	استخدام خلفية الرسم
+	Regenerate Dimensions	إعادة توليد الأبعاد
+	Enter layer name for new dimensions (. for the current layer)	أدخل اسم الطبقة للأبعاد الجديدة (. للطبقة الحالية)

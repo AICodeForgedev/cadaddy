@@ -207,6 +207,7 @@ fn append_cdy(path: &str, from: u64, bytes: &[u8], index_at: usize) -> Result<()
     {
         use std::io::{Seek, SeekFrom, Write};
         let fail = |e: std::io::Error| bad("save", format!("{path}: {e}"));
+        crate::writefile::check(std::path::Path::new(path)).map_err(fail)?;
         let mut f = std::fs::OpenOptions::new().write(true).open(path).map_err(fail)?;
         let m = f.metadata().map_err(fail)?;
         if m.permissions().readonly() {
@@ -553,6 +554,7 @@ pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
     let i = add_read(s, drawing, binary_dxf, &name, path, cdy);
     mark_walkthrough(s, i, walkthrough);
     super::blocks::xref::after_open(s, i);
+    crate::activity::after_open(s, i);
     Ok(opened(s, i, true))
 }
 
@@ -694,6 +696,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
             let bytes = crate::readfile::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
             let i = open_bytes(s, &bytes, path, Some(path.to_string()))?;
             super::blocks::xref::after_open(s, i);
+            crate::activity::after_open(s, i);
             return Ok(opened(s, i, true));
         }
         #[cfg(target_arch = "wasm32")]
@@ -704,6 +707,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").unwrap_or("Drawing.dxf");
     let i = open_bytes(s, &bytes, name, None)?;
     super::blocks::xref::after_open(s, i);
+    crate::activity::after_open(s, i);
     Ok(opened(s, i, false))
 }
 
@@ -832,6 +836,9 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
             st.saved = st.drawing().clone();
         }
     }
+    if is_drawing_file(path) {
+        crate::activity::after_save(s, path);
+    }
     let copy = (is_cdy(path) && dwg_copy()).then(|| save_dwg_copy(s, cmd, path));
     Ok(Saved { bytes: n, copy, incremental })
 }
@@ -898,6 +905,10 @@ pub(crate) fn store(path: &str, bytes: &[u8]) -> Result<()> {
 /// [`store`], keeping the previous drawing file as `.bak` only when `keep_bak`: a DWG copy
 /// (DWGCOPY) keeps none, as its `.bak` would replace the drawing's own.
 pub(crate) fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<()> {
+    // An agent's dry run changes nothing, files included.
+    if !crate::agent::writes_allowed() {
+        return Err(crate::EngineError::Other(format!("Dry run: {path} was not written.")));
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         // The file being replaced, if any: a read-only one is left alone (as AutoCAD does: save
@@ -927,7 +938,7 @@ pub(crate) fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<
             keep().map_err(|e| bad("save", format!("{path}: couldn't keep the previous version as {bak}: {e}")))?;
         }
         let tmp = format!("{path}.cadaddy-tmp");
-        let written = std::fs::write(&tmp, bytes)
+        let written = crate::writefile::write(&tmp, bytes)
             .and_then(|()| before.as_ref().map_or(Ok(()), |m| std::fs::set_permissions(&tmp, m.permissions())))
             .and_then(|()| std::fs::rename(&tmp, path));
         if let Err(e) = written {

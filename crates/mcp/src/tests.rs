@@ -485,3 +485,85 @@ fn rooms_tool_lists_gets_and_builds() {
     assert_eq!(tool(&mut s, "rooms", json!({"action": "build"}))["built"], 1);
     tool_err(&mut s, "rooms", json!({"action": "get", "name": "none"}));
 }
+
+/// DRAWING.SUMMARY and DRAWING.QUERY on the sample drawing, with a title block on a layout, a
+/// missing image and a missing xref added.
+#[test]
+fn agent_reads_a_drawing_summary_then_queries_handles() {
+    let mut h = Headless::default();
+    h.session.open_drawing(cadaddy_engine::sample::default_sample(), "Bracket", None);
+    let dir = std::env::temp_dir().join(format!("cadaddy-mcp-summary-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let d = h.session.doc_mut().unwrap();
+        let mut b = cadaddy_engine::doc::Block::new("site");
+        b.xref_path = Some("missing/site.dxf".into());
+        d.blocks.insert("site".into(), std::sync::Arc::new(b));
+    }
+    let mut s = Server::new(Box::new(h));
+    // A title block with attributes on Layout1.
+    tool(&mut s, "execute", json!({"command": "attdef", "params": {"tag": "SHEET", "default": "A-101", "at": [0, 0], "height": 0.2}}));
+    tool(&mut s, "execute", json!({"command": "attdef", "params": {"tag": "TITLE", "default": "BRACKET", "at": [0, -0.5], "height": 0.2}}));
+    let defs = tool(&mut s, "query_entities", json!({"type": "Attribute Definition"}));
+    let hs: Vec<Value> = defs["entities"].as_array().unwrap().iter().map(|e| e["handle"].clone()).collect();
+    assert_eq!(hs.len(), 2, "{defs}");
+    tool(&mut s, "execute", json!({"command": "block", "params": {"name": "TITLEBLK", "base": [0, 0], "handles": hs, "keep": "delete"}}));
+    tool(&mut s, "execute", json!({"command": "layout", "params": {"option": "set", "name": "Layout1"}}));
+    tool(
+        &mut s,
+        "execute",
+        json!({"command": "insert", "params": {"name": "TITLEBLK", "at": [9, 1], "attribs": {"SHEET": "S-1", "TITLE": "PLATE"}}}),
+    );
+    tool(&mut s, "execute", json!({"command": "layout", "params": {"option": "set", "name": "Model"}}));
+    // An image whose file is gone.
+    let png = dir.join("photo.png");
+    tool(&mut s, "render", json!({"width": 32, "height": 32, "path": png.to_string_lossy()}));
+    tool(&mut s, "execute", json!({"command": "imageattach", "params": {"path": png.to_string_lossy(), "at": [0, 0], "scale": 1}}));
+    std::fs::remove_file(&png).unwrap();
+
+    let sum = tool(&mut s, "drawing_summary", json!({"textLimit": 2}));
+    assert!(sum["units"]["name"].is_string() && sum["extents"]["Model"].is_array(), "{}", sum["units"]);
+    let layers = sum["layers"].as_array().unwrap();
+    let outline = layers.iter().find(|l| l["name"] == "Outline").unwrap();
+    assert!(outline["objects"].as_u64().unwrap() > 0 && outline["current"] == true);
+    assert!(sum["layouts"].as_array().unwrap().iter().any(|l| l["name"] == "Layout1" && l["objects"].as_u64().unwrap() >= 1), "{}", sum["layouts"]);
+    let tb = sum["blocks"].as_array().unwrap().iter().find(|b| b["name"] == "TITLEBLK").unwrap();
+    assert_eq!((tb["references"].as_u64(), tb["definitionObjects"].as_u64()), (Some(1), Some(2)));
+    // Texts: paged, every space.
+    let texts = &sum["texts"];
+    assert_eq!(texts["returned"], 2);
+    assert!(texts["count"].as_u64().unwrap() > 2);
+    let all = tool(&mut s, "drawing_summary", json!({"sections": ["texts"], "textLimit": 5000}));
+    let items = all["texts"]["items"].as_array().unwrap();
+    assert!(items.iter().any(|t| t["space"] == "Layout1" && t["tag"] == "SHEET" && t["text"] == "S-1"), "{items:?}");
+    assert!(all.get("layers").is_none(), "only the sections asked for");
+    let found = tool(&mut s, "drawing_summary", json!({"sections": ["texts"], "textContains": "plate"}));
+    assert!(found["texts"]["items"].as_array().unwrap().iter().all(|t| t["text"].as_str().unwrap().to_lowercase().contains("plate")));
+    // Title block, references and dimension styles.
+    let tbs = sum["titleBlocks"].as_array().unwrap();
+    assert!(tbs.iter().any(|t| t["block"] == "TITLEBLK" && t["attributes"]["TITLE"] == "PLATE" && t["space"] == "Layout1"), "{tbs:?}");
+    let refs = &sum["references"];
+    assert_eq!(refs["xrefs"][0]["name"], "site");
+    assert_eq!(refs["xrefs"][0]["found"], false);
+    assert_eq!(refs["images"][0]["found"], false, "{refs}");
+    assert!(sum["dimStyles"]["used"].as_object().unwrap().values().any(|n| n.as_u64().unwrap() >= 4), "{}", sum["dimStyles"]);
+
+    // Query: by type, layer wildcard, text, block, space and window; paged handles.
+    let dims = tool(&mut s, "drawing_query", json!({"type": "Dimension"}));
+    let n = dims["count"].as_u64().unwrap();
+    assert!(n >= 4 && dims["handles"].as_array().unwrap().len() as u64 == n);
+    assert_eq!(tool(&mut s, "drawing_query", json!({"layer": "dim*"}))["count"].as_u64().unwrap(), n);
+    let page = tool(&mut s, "drawing_query", json!({"layer": "dim*", "limit": 2, "offset": 1}));
+    assert_eq!((page["returned"].as_u64(), page["count"].as_u64()), (Some(2), Some(n)));
+    let tb = tool(&mut s, "drawing_query", json!({"block": "titleblk"}));
+    assert_eq!((tb["count"].as_u64(), tb["objects"][0]["space"].as_str()), (Some(1), Some("Layout1")));
+    assert_eq!(tool(&mut s, "drawing_query", json!({"text": "PLATE", "space": "model"}))["count"], 0, "the title block is on Layout1");
+    assert_eq!(tool(&mut s, "drawing_query", json!({"text": "PLATE", "space": "Layout1"}))["count"], 1);
+    let win = tool(&mut s, "drawing_query", json!({"window": [[-1000, -1000], [1000, 1000]], "space": "model"}));
+    assert!(win["count"].as_u64().unwrap() > n);
+    for bad in [json!({"window": [[0, 0]]}), json!({"space": "NoSuchLayout"}), json!({"limit": -1})] {
+        let r = call(&mut s, 7, "tools/call", json!({"name": "drawing_query", "arguments": bad}));
+        assert!(r["result"]["isError"] == json!(true) || r["error"].is_object(), "{bad} → {r}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}

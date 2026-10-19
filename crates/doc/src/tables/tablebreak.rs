@@ -72,6 +72,20 @@ pub struct DataLink {
     pub modified: Option<u64>,
 }
 
+/// A count table's link (COUNTTABLE): the block counts it shows, worked out again when the
+/// drawing changes.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CountLink {
+    /// "Model", a layout's name, or "*" for every space.
+    pub space: String,
+    /// Count references nested in blocks too.
+    pub nested: bool,
+    /// Only references whose insertion point is inside this polygon (COUNT in an area).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub area: Vec<[f64; 2]>,
+}
+
 /// One part of a (broken) table: the rows it shows, top to bottom, and its insertion point.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TablePart {

@@ -1903,3 +1903,64 @@
 	Confirm each item to be purged	Подтверждать каждый удаляемый элемент
 	Purge nested items	Удалить вложенные элементы
 	Text Align	Выровнять текст
+	Color model:	Цветовая модель:
+	Hue	Тон
+	Saturation	Насыщенность
+	Luminance	Яркость
+	Hex	Hex
+	More Colors...	Другие цвета...
+	Load more books with COLORBOOK (JSON or tab-separated files).	Загрузите другие книги командой COLORBOOK (файлы JSON или с разделителями-табуляциями).
+	All spaces	Все пространства
+	Total: {n}	Всего: {n}
+	No block references here.	Здесь нет вхождений блоков.
+	Highlight and zoom to its references	Выделить вхождения и показать их
+	Similar but not identical: {scaled} scaled, {exploded} exploded	Похожие, но не идентичные: масштабированных {scaled}, расчленённых {exploded}
+	Insert Count Table	Вставить таблицу подсчёта
+	Update Count Tables	Обновить таблицы подсчёта
+	Count in Area	Подсчёт в области
+	{n} reference(s) of {name} selected.	Выбрано вхождений {name}: {n}.
+	{n} similar object(s) selected.	Выбрано похожих объектов: {n}.
+	Geographic Location...	Географическое положение...
+	Remove Geographic Location	Удалить географическое положение
+	Set Location	Задать положение
+	Remove Location	Удалить положение
+	Latitude and Longitude	Широта и долгота
+	Trace Image to Vectors	Векторизовать изображение
+	Trace Raster Image to Vectors	Векторизовать растровое изображение
+	Drawing Summary	Сводка чертежа
+	Query Drawing	Запрос к чертежу
+	Begin Agent Request	Начать запрос агента
+	End Agent Request	Завершить запрос агента
+	Agent Dry Run	Пробный запуск агента
+	Agent Confirmations	Подтверждения агента
+	Agent Change Journal	Журнал изменений агента
+	Agent Activity	Действия агентов
+	An agent asks	Агент спрашивает
+	Allow	Разрешить
+	Deny	Запретить
+	Not allowed: {question}	Не разрешено: {question}
+	Ask me before an agent saves over a file or closes with changes	Спрашивать, прежде чем агент перезапишет файл или закроет чертёж с изменениями
+	Dry run: agents' commands change nothing	Пробный запуск: команды агентов ничего не меняют
+	No agent requests yet.	Запросов агентов пока нет.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	Команд: {commands} · добавлено {added} · удалено {removed} · изменено {changed}
+	Select what it added and changed	Выбрать добавленное и изменённое
+	Activity History	Журнал действий
+	Activity history is off (Options ▸ Open and Save).	Журнал действий выключен (Параметры ▸ Открытие и сохранение).
+	command	команда
+	{n} steps	Шагов: {n}
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	Выбрать объекты, добавленные или изменённые этим шагом
+	The objects of this step are gone.	Объектов этого шага больше нет.
+	{n} object(s) selected.	Выбрано объектов: {n}.
+	{n} object(s) selected ({gone} since erased).	Выбрано объектов: {n} (стёрто с тех пор: {gone}).
+	{n} s ago	{n} с назад
+	{n} min ago	{n} мин назад
+	{n} h ago	{n} ч назад
+	{n} d ago	{n} д назад
+	Keep an activity history beside each drawing (private, on this computer)	Хранить журнал действий рядом с каждым чертежом (только на этом компьютере)
+	Background mask	Маска фона
+	Mask border offset	Отступ границы маски
+	Mask color	Цвет маски
+	Use drawing background	Использовать фон чертежа
+	Regenerate Dimensions	Восстановить размеры
+	Enter layer name for new dimensions (. for the current layer)	Введите имя слоя для новых размеров (. — текущий слой)

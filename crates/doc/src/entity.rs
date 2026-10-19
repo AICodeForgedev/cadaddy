@@ -1404,6 +1404,9 @@ pub struct Table {
     /// The CSV file the cells come from (DATALINK).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_link: Option<crate::DataLink>,
+    /// The block counts the cells show (COUNTTABLE).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<crate::CountLink>,
 }
 fn default_text_h() -> f64 {
     0.18

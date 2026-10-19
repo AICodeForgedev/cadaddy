@@ -297,6 +297,16 @@ const METHODS: &[(&str, &str, &str)] = &[
         "Every command (or those whose id, label or an alias contains `filter`): id, label, menu path, shortcut, aliases, params doc, enabled.",
     ),
     ("drawing.inspect", "{entities?, limit?}", "Drawing summary and entities with handles and geometry."),
+    (
+        "drawing.summary",
+        "{sections?, textOffset?, textLimit?, textContains?}",
+        "What the drawing holds, capped and paged: units, extents, layouts, layers and blocks with object counts, all text with positions, title block attributes, xrefs/images/underlays found or missing, dimension styles in use.",
+    ),
+    (
+        "drawing.query",
+        "{type?, layer?, space?, window?, crossing?, text?, block?, limit?, offset?}",
+        "Objects by type, layer (wildcards), space, region, text or block, as handles (paged).",
+    ),
     ("ui.inspect", "", "UI state, canvas rect, view, cursor and snap, performance, keyboard focus."),
     ("ui.elements", "{label?, role?, focused?}", "Observed visible controls with their egui id, rectangle, state and focus."),
     ("ui.menu.list", "", "The menu tree."),
@@ -426,7 +436,11 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
             let params = if params.is_null() { json!({}) } else { params };
-            wrap(app.run(id, params))
+            // An agent's call: dry run, request journal and the user's confirmation apply.
+            let was = std::mem::replace(&mut app.session.agent.from_agent, true);
+            let r = app.run(id, params);
+            app.session.agent.from_agent = was;
+            wrap(r)
         }
         "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
@@ -504,6 +518,7 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             None => all_commands(app),
         }),
         "drawing.inspect" | "document.inspect" => wrap(app.session.execute("drawing.inspect", p).map_err(|e| e.to_string())),
+        "drawing.summary" | "drawing.query" => wrap(app.session.execute(&req.method, p).map_err(|e| e.to_string())),
         "ui.inspect" => {
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -700,7 +715,12 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             let Some(path) = s("path") else { return err("missing path") };
             wrap(app.run("open", json!({"path": path})))
         }
-        "app.save" => wrap(app.run(if s("path").is_some() { "saveas" } else { "qsave" }, p.clone())),
+        "app.save" => {
+            let was = std::mem::replace(&mut app.session.agent.from_agent, true);
+            let r = app.run(if s("path").is_some() { "saveas" } else { "qsave" }, p.clone());
+            app.session.agent.from_agent = was;
+            wrap(r)
+        }
         "app.closePrompt" => ok(json!({ "title": app.close_prompt() })),
         "app.answerClose" => {
             let choice = match s("choice").map(str::to_ascii_lowercase).as_deref() {

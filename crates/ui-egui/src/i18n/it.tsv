@@ -2123,3 +2123,64 @@ menu	Modify	Edita
 	Confirm each item to be purged	Conferma ogni elemento da eliminare
 	Purge nested items	Elimina elementi nidificati
 	Text Align	Allinea testo
+	Color model:	Modello di colore:
+	Hue	Tonalità
+	Saturation	Saturazione
+	Luminance	Luminanza
+	Hex	Esadecimale
+	More Colors...	Altri colori...
+	Load more books with COLORBOOK (JSON or tab-separated files).	Carica altri libri con COLORBOOK (file JSON o separati da tabulazioni).
+	All spaces	Tutti gli spazi
+	Total: {n}	Totale: {n}
+	No block references here.	Nessun riferimento a blocco qui.
+	Highlight and zoom to its references	Evidenzia e zoom sui riferimenti
+	Similar but not identical: {scaled} scaled, {exploded} exploded	Simili ma non identici: {scaled} scalati, {exploded} esplosi
+	Insert Count Table	Inserisci tabella conteggio
+	Update Count Tables	Aggiorna tabelle conteggio
+	Count in Area	Conta nell'area
+	{n} reference(s) of {name} selected.	{n} riferimenti di {name} selezionati.
+	{n} similar object(s) selected.	{n} oggetti simili selezionati.
+	Geographic Location...	Posizione geografica...
+	Remove Geographic Location	Rimuovi posizione geografica
+	Set Location	Imposta posizione
+	Remove Location	Rimuovi posizione
+	Latitude and Longitude	Latitudine e longitudine
+	Trace Image to Vectors	Vettorizza immagine
+	Trace Raster Image to Vectors	Vettorizza immagine raster
+	Drawing Summary	Riepilogo disegno
+	Query Drawing	Interroga disegno
+	Begin Agent Request	Inizia richiesta dell'agente
+	End Agent Request	Termina richiesta dell'agente
+	Agent Dry Run	Prova a vuoto dell'agente
+	Agent Confirmations	Conferme dell'agente
+	Agent Change Journal	Registro delle modifiche dell'agente
+	Agent Activity	Attività degli agenti
+	An agent asks	Un agente chiede
+	Allow	Consenti
+	Deny	Nega
+	Not allowed: {question}	Non consentito: {question}
+	Ask me before an agent saves over a file or closes with changes	Chiedimi prima che un agente sovrascriva un file o chiuda con modifiche
+	Dry run: agents' commands change nothing	Prova a vuoto: i comandi degli agenti non cambiano nulla
+	No agent requests yet.	Ancora nessuna richiesta degli agenti.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} comandi · {added} aggiunti · {removed} rimossi · {changed} modificati
+	Select what it added and changed	Seleziona ciò che ha aggiunto e modificato
+	Activity History	Cronologia attività
+	Activity history is off (Options ▸ Open and Save).	La cronologia attività è disattivata (Opzioni ▸ Apri e salva).
+	command	comando
+	{n} steps	{n} passaggi
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	Seleziona gli oggetti aggiunti o modificati da questo passaggio
+	The objects of this step are gone.	Gli oggetti di questo passaggio non esistono più.
+	{n} object(s) selected.	{n} oggetti selezionati.
+	{n} object(s) selected ({gone} since erased).	{n} oggetti selezionati ({gone} cancellati da allora).
+	{n} s ago	{n} s fa
+	{n} min ago	{n} min fa
+	{n} h ago	{n} h fa
+	{n} d ago	{n} g fa
+	Keep an activity history beside each drawing (private, on this computer)	Conserva una cronologia attività accanto a ogni disegno (privata, su questo computer)
+	Background mask	Maschera di sfondo
+	Mask border offset	Offset del bordo della maschera
+	Mask color	Colore della maschera
+	Use drawing background	Usa lo sfondo del disegno
+	Regenerate Dimensions	Rigenera quote
+	Enter layer name for new dimensions (. for the current layer)	Immettere il nome del layer per le nuove quote (. per il layer corrente)

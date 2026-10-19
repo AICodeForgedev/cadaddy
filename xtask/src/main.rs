@@ -4,9 +4,11 @@
 //! invoked through `std::process::Command`.
 
 mod assets;
+mod casefs;
 mod ico;
 mod layers;
 mod parity;
+mod smoke;
 mod stats;
 mod version;
 
@@ -27,6 +29,12 @@ commands:
   parity          recompute the AutoCAD menu-breadth checklist in docs/parity-checklist.md
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
+  casefs [--size 8g] [-- <cargo test args>]
+                  run the workspace tests on a case-sensitive disk image (macOS), so Linux-only
+                  failures show up on a Mac; the image is deleted afterwards
+  smoke <CADaddy-Mac.dmg | CADaddy.app | app executable | CADaddy.mcpb | cadaddy-cli> [--version X.Y.Z] [--out DIR] [--keep]
+                  release smoke test: version, draw, save DWG/DXF/.cdy, reopen, plot PDF, sheet set
+                  publish, Walk on/off and update check (app); report in target/smoke/report.json
   fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
                   mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
                   saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
@@ -46,6 +54,8 @@ fn main() -> ExitCode {
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("fuzz") => cmd_fuzz(&rest),
+        Some("casefs") => casefs::run(&root(), &rest),
+        Some("smoke") => smoke::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())

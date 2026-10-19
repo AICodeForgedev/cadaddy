@@ -1,7 +1,8 @@
 //! Point modifiers typed at a point prompt, as in AutoCAD: `FROM` (a base point and an offset),
 //! `M2P`/`MTP` (the midpoint between two points), the point filters `.x`, `.y`, `.z`, `.xy`,
 //! `.xz`, `.yz`, the angle override `<a`, the object snap overrides (`END`, `MID` … `NON`), the
-//! temporary tracking point `TT` and tracking `TK`.
+//! temporary tracking point `TT` and tracking `TK`, and `LATLONG` (a latitude and longitude,
+//! placed by the drawing's geographic location).
 //!
 //! A modifier pushes a [`Frame`] onto [`Session::point_mods`]. While frames are pending the
 //! session shows their prompt ("Base point:", "<Offset>:", "First point of mid:", ".X of",
@@ -83,6 +84,9 @@ pub enum Frame {
     /// `TK` (tracking): a run of points, each straight across or up from the one before; Enter
     /// ends it and hands down the last.
     Track { last: Option<Vec2> },
+    /// `LATLONG` (`LL`): the point typed as `latitude,longitude` in degrees, placed by the
+    /// drawing's geographic location (GEOGRAPHICLOCATION).
+    LatLong,
 }
 
 /// The object snap overrides and the words they are typed as: any start of a word of three
@@ -162,6 +166,7 @@ impl Session {
             Frame::Filter { keep, first: None } => Prompt::new(format!("{} of", keep.name()), point).base_opt(p.base),
             Frame::Filter { keep, first: Some(_) } => Prompt::new(format!("(need {})", keep.need()), point).base_opt(p.base),
             Frame::TempTrack => Prompt::new("Specify temporary OTRACK point", point),
+            Frame::LatLong => Prompt::new("Enter latitude,longitude (degrees)", point),
             Frame::Track { last: None } => Prompt::new("First tracking point", point),
             Frame::Track { last: Some(l) } => Prompt::new("Next point (Press ENTER to end tracking)", point).base(l),
             Frame::Angle { .. } | Frame::Snap { mode: 0 } => p,
@@ -206,6 +211,7 @@ impl Session {
             "from" | "fro" => Some(Frame::From { base: None }),
             "m2p" | "mtp" => Some(Frame::Mid { first: None }),
             "tt" => Some(Frame::TempTrack),
+            "latlong" | "ll" => Some(Frame::LatLong),
             // TK, or TRACKING from three letters (TRA, TRACK).
             "tk" => Some(Frame::Track { last: None }),
             _ if b.len() >= 3 && "tracking".starts_with(&b) => Some(Frame::Track { last: None }),
@@ -218,6 +224,24 @@ impl Session {
     pub(crate) fn typed_modifier(&mut self, prompt: &Prompt, t: &str) -> Option<Result<()>> {
         if !accepts(prompt) {
             return None;
+        }
+        // At LATLONG's prompt: `latitude,longitude` in degrees (never a drawing coordinate).
+        if let Some(Frame::LatLong) = self.point_mods.last() {
+            let nums: Vec<f64> = bare(t).split(',').filter_map(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite()).collect();
+            let [lat, lon] = nums.as_slice() else {
+                self.echo("Enter the latitude and longitude in degrees, as 40.0,-99.0.");
+                return Some(Ok(()));
+            };
+            if !(-90.0..=90.0).contains(lat) || !(-180.0..=180.0).contains(lon) {
+                self.echo("Latitude is -90 to 90 and longitude -180 to 180 degrees.");
+                return Some(Ok(()));
+            }
+            self.point_mods.pop();
+            let Some(g) = self.doc().ok().and_then(|d| d.geo.clone()) else {
+                self.echo("The drawing has no geographic location (GEOGRAPHICLOCATION).");
+                return Some(Ok(()));
+            };
+            return Some(self.modifier_point(g.from_latlong(*lat, *lon)));
         }
         if let Some(f) = self.parse_modifier(prompt, t) {
             if self.point_mods.len() >= MAX_FRAMES {
@@ -322,6 +346,12 @@ impl Session {
                 }
                 Frame::Filter { keep, first: None } => {
                     self.point_mods.push(Frame::Filter { keep, first: Some(p) });
+                    return Ok(());
+                }
+                Frame::LatLong => {
+                    // A picked point is not a latitude and longitude: they are typed.
+                    self.point_mods.push(Frame::LatLong);
+                    self.echo("Type the latitude and longitude, as 40.0,-99.0.");
                     return Ok(());
                 }
                 Frame::TempTrack => {

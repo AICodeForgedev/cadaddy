@@ -58,6 +58,9 @@ pub mod update;
 // The External References palette.
 pub mod xrefs;
 
+pub mod activitypalette;
+pub mod agentdlg;
+pub mod countpalette;
 pub mod dyngrips;
 pub mod dyninput;
 pub mod exchangeloss;

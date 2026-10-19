@@ -1812,3 +1812,34 @@
 	Plot stamp	印刷スタンプ
 	Quick Properties Lists	クイック プロパティのリスト
 	Text Align	文字位置合わせ
+	Color model:	カラー モデル:
+	Hue	色相
+	Saturation	彩度
+	Luminance	輝度
+	Hex	16 進
+	More Colors...	その他の色...
+	Load more books with COLORBOOK (JSON or tab-separated files).	COLORBOOK で他のカラー ブックを読み込めます (JSON またはタブ区切りファイル)。
+	Color Books	カラー ブック
+	Trace Image to Vectors	イメージをベクトルにトレース
+	Trace Raster Image to Vectors	ラスター イメージをベクトルにトレース
+	Begin Agent Request	エージェント要求を開始
+	End Agent Request	エージェント要求を終了
+	Agent Dry Run	エージェントのドライ ラン
+	Agent Confirmations	エージェントの確認
+	Agent Change Journal	エージェントの変更履歴
+	Agent Activity	エージェントのアクティビティ
+	An agent asks	エージェントからの確認
+	Allow	許可
+	Deny	拒否
+	Not allowed: {question}	許可しませんでした: {question}
+	Ask me before an agent saves over a file or closes with changes	エージェントがファイルを上書き保存するとき、変更を残して閉じるときに確認する
+	Dry run: agents' commands change nothing	ドライ ラン: エージェントのコマンドは何も変更しません
+	No agent requests yet.	エージェント要求はまだありません。
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} コマンド · 追加 {added} · 削除 {removed} · 変更 {changed}
+	Select what it added and changed	追加・変更したものを選択
+	Background mask	背景マスク
+	Mask border offset	マスクの境界オフセット
+	Mask color	マスクの色
+	Use drawing background	図面の背景を使用
+	Regenerate Dimensions	寸法を再作成
+	Enter layer name for new dimensions (. for the current layer)	新しい寸法の画層名を入力 (. で現在の画層)

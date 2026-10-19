@@ -63,10 +63,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Dimension", "Quick Dimension"])
             .params(qdim::PARAMS)
             .interactive(|_| Ok(Box::new(qdim::QDimM::new()))),
-        CommandSpec::new("dim", "Dimension", run_linear)
+        CommandSpec::new("dim", "Dimension", super::dimmodes::run_dim)
             .menu(&["Dimension", "Dimension"])
-            .params("{p1, p2, at}")
-            .interactive(|_| Ok(Box::new(LinearM::new(false)))),
+            .params(super::dimmodes::DIM_PARAMS)
+            .interactive(super::dimmodes::DimM::start),
         CommandSpec::new("mleader", "Multileader", run_mleader)
             .menu(&["Dimension", "Multileader"])
             .alias(&["mld"])

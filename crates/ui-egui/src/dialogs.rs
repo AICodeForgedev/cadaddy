@@ -11,6 +11,11 @@ use crate::theme::Tokens;
 pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     crate::mtext_editor::show(app, ctx);
     crate::quick::quick_properties(app, ctx);
+    // "More Colors…" from a palette menu.
+    if ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new("color_dialog_open"))).is_some() {
+        app.ui.dialog = Some("color".into());
+    }
+    crate::agentdlg::confirm_prompt(app, ctx);
     let Some(d) = app.ui.dialog.clone() else { return };
     let mut open = true;
     match d.as_str() {
@@ -23,6 +28,8 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "purge" => crate::cmddlgs::purge(app, ctx, &mut open),
         "find" => crate::finddlg::dialog(app, ctx, &mut open),
         crate::laywalkdlg::DIALOG => crate::laywalkdlg::dialog(app, ctx, &mut open),
+        crate::countpalette::DIALOG => crate::countpalette::dialog(app, ctx, &mut open),
+        crate::activitypalette::DIALOG => crate::activitypalette::dialog(app, ctx, &mut open),
         "color" => crate::cmddlgs::color(app, ctx, &mut open),
         "units" => units(app, ctx, &mut open),
         crate::hyperlinks::DIALOG => crate::hyperlinks::dialog(app, ctx, &mut open),
@@ -57,6 +64,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "publish" => crate::publishdlg::dialog(app, ctx, &mut open),
         crate::roomsdlg::DIALOG => crate::roomsdlg::dialog(app, ctx, &mut open),
         crate::exchangeloss::DIALOG => crate::exchangeloss::dialog(app, ctx, &mut open),
+        crate::agentdlg::DIALOG => crate::agentdlg::dialog(app, ctx, &mut open),
         o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }

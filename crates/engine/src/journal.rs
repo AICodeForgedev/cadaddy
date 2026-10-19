@@ -34,6 +34,11 @@ impl Journal {
         s
     }
 
+    /// No call is running: the next one is the outermost.
+    pub fn is_outer(&self) -> bool {
+        self.depth == 0
+    }
+
     pub fn clear(&mut self) {
         self.lines.clear();
         self.command = None;

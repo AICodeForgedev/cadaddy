@@ -102,7 +102,7 @@ pub fn color_palette(ui: &mut egui::Ui, id: egui::Id, current: Color, by: bool) 
     let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(if matches!(current, Color::True(_)) { 1 } else { 0 });
     let mut out = None;
     ui.horizontal(|ui| {
-        for (i, l) in ["Index Color", "True Color"].iter().enumerate() {
+        for (i, l) in ["Index Color", "True Color", "Color Books"].iter().enumerate() {
             if ui.selectable_label(tab == i as u8, crate::i18n::t(l)).clicked() {
                 tab = i as u8;
             }
@@ -158,27 +158,135 @@ pub fn color_palette(ui: &mut egui::Ui, id: egui::Id, current: Color, by: bool) 
             });
         }
         ui.label(RichText::new(crate::tf!("Current: {color}", color = crate::i18n::t(&current.name()))).small().color(t.text_dim));
+    } else if tab == 1 {
+        out = true_color(ui, id, current);
     } else {
-        let rid = id.with("rgb");
-        let start = current.resolve(Color::Index(7), Color::Index(7));
-        let mut c = ui.data_mut(|d| d.get_temp::<[u8; 3]>(rid)).unwrap_or([start.0, start.1, start.2]);
-        let mut c32 = Color32::from_rgb(c[0], c[1], c[2]);
-        egui::color_picker::color_picker_color32(ui, &mut c32, egui::color_picker::Alpha::Opaque);
-        c = [c32.r(), c32.g(), c32.b()];
-        ui.horizontal(|ui| {
-            for (i, l) in ["R", "G", "B"].iter().enumerate() {
-                ui.label(*l);
-                if let Some(v) = c.get_mut(i) {
-                    ui.add(egui::DragValue::new(v).range(0..=255));
-                }
-            }
-        });
-        ui.data_mut(|d| d.insert_temp(rid, c));
-        if ui.button(crate::tl!("Apply true color")).clicked() {
-            out = Some(Color::True(cadaddy_color::Rgb(c[0], c[1], c[2])));
-            ui.data_mut(|d| d.remove::<[u8; 3]>(rid));
-        }
+        out = color_books(ui, id, current);
     }
+    out
+}
+
+/// The True Color tab: HSL or RGB sliders, a hex field and the colour as stored (r,g,b).
+fn true_color(ui: &mut egui::Ui, id: egui::Id, current: Color) -> Option<Color> {
+    let t = Tokens::get();
+    let (rid, hid, mid, xid) = (id.with("rgb"), id.with("hsl"), id.with("model"), id.with("hex"));
+    let start = current.resolve(Color::Index(7), Color::Index(7));
+    let mut c = ui.data_mut(|d| d.get_temp::<[u8; 3]>(rid)).unwrap_or([start.0, start.1, start.2]);
+    let rgb = |c: [u8; 3]| cadaddy_color::Rgb(c[0], c[1], c[2]);
+    // HSL is kept as typed (a grey has no hue of its own to come back to).
+    let mut hsl = ui.data_mut(|d| d.get_temp::<[f64; 3]>(hid)).unwrap_or_else(|| {
+        let (h, s, l) = rgb(c).to_hsl();
+        [h, s, l]
+    });
+    let mut hsl_model = ui.data_mut(|d| d.get_temp::<bool>(mid)).unwrap_or(true);
+    ui.horizontal(|ui| {
+        ui.label(crate::tl!("Color model:"));
+        ui.radio_value(&mut hsl_model, true, "HSL");
+        ui.radio_value(&mut hsl_model, false, "RGB");
+    });
+    let mut from_rgb = false;
+    egui::Grid::new(id.with("tc_grid")).num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
+        if hsl_model {
+            let mut changed = false;
+            for (i, (label, max)) in [("Hue", 360.0), ("Saturation", 100.0), ("Luminance", 100.0)].iter().enumerate() {
+                ui.label(crate::i18n::t(label));
+                if let Some(v) = hsl.get_mut(i) {
+                    changed |= ui.add(egui::Slider::new(v, 0.0..=*max).fixed_decimals(0)).changed();
+                }
+                ui.end_row();
+            }
+            if changed {
+                let n = cadaddy_color::Rgb::from_hsl(hsl[0], hsl[1], hsl[2]);
+                c = [n.0, n.1, n.2];
+                ui.data_mut(|d| d.remove::<String>(xid));
+            }
+        } else {
+            for (i, label) in ["Red", "Green", "Blue"].iter().enumerate() {
+                ui.label(crate::i18n::t(label));
+                if let Some(v) = c.get_mut(i) {
+                    from_rgb |= ui.add(egui::Slider::new(v, 0..=255)).changed();
+                }
+                ui.end_row();
+            }
+        }
+        // Hex: what is typed is kept until it reads as a colour.
+        ui.label(crate::tl!("Hex"));
+        let mut hex = ui.data_mut(|d| d.get_temp::<String>(xid)).unwrap_or_else(|| rgb(c).hex());
+        if ui.add(egui::TextEdit::singleline(&mut hex).desired_width(90.0).font(egui::TextStyle::Monospace)).changed() {
+            if let Some(n) = cadaddy_color::Rgb::parse_hex(&hex) {
+                c = [n.0, n.1, n.2];
+                from_rgb = true;
+            }
+            ui.data_mut(|d| d.insert_temp(xid, hex));
+        }
+        ui.end_row();
+    });
+    if from_rgb {
+        let (h, s, l) = rgb(c).to_hsl();
+        hsl = [h, s, l];
+    }
+    ui.horizontal(|ui| {
+        let (r, _) = ui.allocate_exact_size(vec2(48.0, 24.0), Sense::hover());
+        ui.painter().rect_filled(r, 2.0, Color32::from_rgb(c[0], c[1], c[2]));
+        ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+        ui.label(RichText::new(format!("{},{},{}", c[0], c[1], c[2])).color(t.text_dim));
+    });
+    ui.data_mut(|d| {
+        d.insert_temp(rid, c);
+        d.insert_temp(hid, hsl);
+        d.insert_temp(mid, hsl_model);
+    });
+    if ui.button(crate::tl!("Apply true color")).clicked() {
+        ui.data_mut(|d| {
+            d.remove::<[u8; 3]>(rid);
+            d.remove::<[f64; 3]>(hid);
+            d.remove::<String>(xid);
+        });
+        return Some(Color::True(rgb(c)));
+    }
+    None
+}
+
+/// The Color Books tab: CADaddy's own book and those loaded (COLORBOOK), page by page; a click
+/// takes the colour as its true colour.
+fn color_books(ui: &mut egui::Ui, id: egui::Id, current: Color) -> Option<Color> {
+    let t = Tokens::get();
+    let books = cadaddy_engine::cmd::colorbook::books();
+    let bid = id.with("book");
+    let mut which = ui.data_mut(|d| d.get_temp::<usize>(bid)).unwrap_or(0).min(books.len().saturating_sub(1));
+    let book = books.get(which)?;
+    egui::ComboBox::from_id_salt(id.with("book_combo")).width(260.0).selected_text(book.name.clone()).show_ui(ui, |ui| {
+        for (i, b) in books.iter().enumerate() {
+            ui.selectable_value(&mut which, i, b.name.clone());
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(bid, which));
+    let book = books.get(which)?;
+    if !book.description.is_empty() {
+        ui.label(RichText::new(&book.description).small().color(t.text_dim));
+    }
+    let mut out = None;
+    egui::ScrollArea::vertical().max_height(260.0).id_salt(id.with("book_scroll")).show(ui, |ui| {
+        for page in &book.pages {
+            ui.label(RichText::new(&page.name).strong());
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                for (name, c) in &page.colors {
+                    let (r, resp) = ui.allocate_exact_size(vec2(34.0, 24.0), Sense::click());
+                    ui.painter().rect_filled(r, 2.0, Color32::from_rgb(c.0, c.1, c.2));
+                    let sel = current == Color::True(*c);
+                    if sel || resp.hovered() {
+                        ui.painter().rect_stroke(r, 2.0, Stroke::new(if sel { 2.0 } else { 1.0 }, Color32::WHITE), egui::StrokeKind::Inside);
+                    }
+                    crate::icons::describe_control(ui, &resp, name, Some(sel), false);
+                    if resp.on_hover_text(format!("{name}  {}", c.hex())).clicked() {
+                        out = Some(Color::True(*c));
+                    }
+                }
+            });
+        }
+    });
+    ui.label(RichText::new(crate::tl!("Load more books with COLORBOOK (JSON or tab-separated files).")).small().color(t.text_dim));
     out
 }
 

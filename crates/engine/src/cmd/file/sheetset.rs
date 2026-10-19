@@ -98,7 +98,7 @@ fn load(_path: &Path) -> Result<SheetSet> {
 fn save(path: &Path, set: &SheetSet) -> Result<()> {
     let text = serde_json::to_string_pretty(set).map_err(|e| bad(CMD, e.to_string()))?;
     let tmp = path.with_extension("cadaddy-tmp");
-    std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| {
+    crate::writefile::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         bad(CMD, format!("{}: {e}", path.display()))
     })

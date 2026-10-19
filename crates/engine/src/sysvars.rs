@@ -76,6 +76,7 @@ const SESSION_VARS: &[&str] = &[
     "SAVEFILEPATH",
     "AUDITCTL",
     "DWGCOPY",
+    "ACTIVITYLOG",
     "DCTMAIN",
     "DCTCUST",
 ];
@@ -165,6 +166,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "AUDITCTL" => json!(i32::from(crate::audit::auditctl())),
         // Saving a .cdy file also writes a DWG copy (a profile setting).
         "DWGCOPY" => json!(i32::from(crate::cmd::file::dwg_copy())),
+        "ACTIVITYLOG" => json!(i32::from(crate::activity::enabled())),
         // Spelling dictionaries: the main one (only American English ships) and the user's file.
         "DCTMAIN" => json!(crate::cmd::spell::MAIN_CODE),
         "DCTCUST" => json!(crate::cmd::spell::dctcust()),
@@ -340,7 +342,11 @@ fn header_default(n: &str) -> Option<Value> {
         // layer state restore.
         "LAYEREVAL" => Some(json!(1)),
         "LAYERNOTIFY" => Some(json!(15)),
+        // The geographic marker and north arrow shown (GEOGRAPHICLOCATION).
+        "GEOMARKERVISIBILITY" => Some(json!(1)),
         "RENDEREXPOSURE" => Some(json!(0.0)),
+        // The layer new dimensions go on ("." the current layer); the DIM command's Layer option.
+        "DIMLAYER" => Some(json!(".")),
         _ => None,
     }
 }
@@ -532,6 +538,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "SAVEFILEPATH" => crate::autosave::set_savefilepath(v.as_str().ok_or_else(bad)?),
         "AUDITCTL" => crate::audit::set_auditctl(as_i(v).filter(|b| (0..=1).contains(b)).ok_or_else(bad)? == 1),
         "DWGCOPY" => crate::cmd::file::set_dwg_copy(as_bool(v).ok_or_else(bad)?),
+        "ACTIVITYLOG" => crate::activity::set_enabled(as_bool(v).ok_or_else(bad)?),
         "DCTMAIN" => {
             let code = v.as_str().ok_or_else(bad)?.trim();
             if !code.eq_ignore_ascii_case(crate::cmd::spell::MAIN_CODE) {

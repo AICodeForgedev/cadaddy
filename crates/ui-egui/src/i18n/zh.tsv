@@ -2006,3 +2006,64 @@
 	Confirm each item to be purged	确认要清理的每个项目
 	Purge nested items	清理嵌套项目
 	Text Align	文字对齐
+	Color model:	颜色模式:
+	Hue	色调
+	Saturation	饱和度
+	Luminance	亮度
+	Hex	十六进制
+	More Colors...	更多颜色...
+	Load more books with COLORBOOK (JSON or tab-separated files).	使用 COLORBOOK 加载更多色板(JSON 或制表符分隔的文件)。
+	All spaces	所有空间
+	Total: {n}	总计: {n}
+	No block references here.	此处没有块参照。
+	Highlight and zoom to its references	亮显并缩放到其参照
+	Similar but not identical: {scaled} scaled, {exploded} exploded	相似但不相同：{scaled} 个已缩放，{exploded} 个已分解
+	Insert Count Table	插入计数表
+	Update Count Tables	更新计数表
+	Count in Area	在区域中计数
+	{n} reference(s) of {name} selected.	已选择 {name} 的 {n} 个参照。
+	{n} similar object(s) selected.	已选择 {n} 个相似对象。
+	Geographic Location...	地理位置...
+	Remove Geographic Location	删除地理位置
+	Set Location	设置位置
+	Remove Location	删除位置
+	Latitude and Longitude	纬度和经度
+	Trace Image to Vectors	将图像描摹为矢量
+	Trace Raster Image to Vectors	将光栅图像描摹为矢量
+	Drawing Summary	图形摘要
+	Query Drawing	查询图形
+	Begin Agent Request	开始代理请求
+	End Agent Request	结束代理请求
+	Agent Dry Run	代理试运行
+	Agent Confirmations	代理确认
+	Agent Change Journal	代理更改日志
+	Agent Activity	代理活动
+	An agent asks	代理请求确认
+	Allow	允许
+	Deny	拒绝
+	Not allowed: {question}	未允许: {question}
+	Ask me before an agent saves over a file or closes with changes	在代理覆盖文件或关闭未保存的图形前询问我
+	Dry run: agents' commands change nothing	试运行: 代理的命令不做任何更改
+	No agent requests yet.	还没有代理请求。
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} 个命令 · 添加 {added} · 删除 {removed} · 更改 {changed}
+	Select what it added and changed	选择其添加和更改的内容
+	Activity History	活动历史
+	Activity history is off (Options ▸ Open and Save).	活动历史已关闭（选项 ▸ 打开和保存）。
+	command	命令
+	{n} steps	{n} 个步骤
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	选择此步骤添加或更改的对象
+	The objects of this step are gone.	此步骤的对象已不存在。
+	{n} object(s) selected.	已选择 {n} 个对象。
+	{n} object(s) selected ({gone} since erased).	已选择 {n} 个对象（{gone} 个已删除）。
+	{n} s ago	{n} 秒前
+	{n} min ago	{n} 分钟前
+	{n} h ago	{n} 小时前
+	{n} d ago	{n} 天前
+	Keep an activity history beside each drawing (private, on this computer)	在每个图形旁保留活动历史（私有，仅限本机）
+	Background mask	背景遮罩
+	Mask border offset	遮罩边界偏移
+	Mask color	遮罩颜色
+	Use drawing background	使用图形背景
+	Regenerate Dimensions	重新生成标注
+	Enter layer name for new dimensions (. for the current layer)	输入新标注的图层名(. 表示当前图层)

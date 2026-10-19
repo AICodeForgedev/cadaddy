@@ -99,6 +99,8 @@ impl DocState {
     /// UNDO Control None records nothing and One keeps just this step; the stack holds at most
     /// [`MAX_UNDO`] steps.
     pub fn push_undo(&mut self, mut snap: Snapshot) {
+        // The activity log records every step, whatever UNDO Control keeps.
+        self.activity.record(&snap.label, &snap.doc, &self.doc);
         drop_later(std::mem::take(&mut self.redo));
         match self.undo_ctl.control {
             Control::None => {

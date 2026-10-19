@@ -169,6 +169,8 @@ fn is_read_only(method: &str) -> bool {
     matches!(
         method,
         "drawing.inspect"
+            | "drawing.summary"
+            | "drawing.query"
             | "document.inspect"
             | "engine.commands"
             | "cmdline.state"
@@ -237,6 +239,16 @@ const HEADLESS_METHODS: &[(&str, &str, &str)] = &[
         "Every command (or those whose id, label or an alias contains `filter`): id, label, menu path, shortcut, aliases, params doc, enabled.",
     ),
     ("drawing.inspect", "{entities?, limit?}", "Drawing summary and entities with handles and geometry."),
+    (
+        "drawing.summary",
+        "{sections?, textOffset?, textLimit?, textContains?}",
+        "What the drawing holds, capped and paged: units, extents, layouts, layers and blocks with object counts, all text with positions, title block attributes, xrefs/images/underlays found or missing, dimension styles in use.",
+    ),
+    (
+        "drawing.query",
+        "{type?, layer?, space?, window?, crossing?, text?, block?, limit?, offset?}",
+        "Objects by type, layer (wildcards), space, region, text or block, as handles (paged).",
+    ),
     ("ui.render", "{path?, width?, height?, fit?}", "Render the drawing; replies pngBase64."),
     ("app.open", "{path}", "Open a drawing."),
     ("app.save", "{path?}", "Save the drawing (Save As with a path)."),
@@ -255,6 +267,8 @@ impl Default for Headless {
     fn default() -> Self {
         let mut session = Session::empty();
         session.new_drawing_with_viewports(false);
+        // No one to ask here: the agent runs the session (dry run and the journal still apply).
+        session.agent.confirm = false;
         Headless { session }
     }
 }
@@ -286,7 +300,7 @@ impl Backend for Headless {
             "engine.execute" | "command" => {
                 let id = str_p("command").ok_or("missing `command`")?;
                 let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
-                s.execute(&id, &params).map_err(|e| e.to_string())
+                s.execute_agent(&id, &params).map_err(|e| e.to_string())
             }
             "cmdline.input" => {
                 let before = s.log.len();
@@ -350,6 +364,7 @@ impl Backend for Headless {
                 ))
             }
             "drawing.inspect" | "document.inspect" => s.execute("drawing.inspect", &p).map_err(|e| e.to_string()),
+            "drawing.summary" | "drawing.query" => s.execute(method, &p).map_err(|e| e.to_string()),
             "ui.render" => {
                 let w = p.get("width").and_then(Value::as_f64).unwrap_or(1600.0).clamp(16.0, 8192.0) as u32;
                 let h = p.get("height").and_then(Value::as_f64).unwrap_or(1000.0).clamp(16.0, 8192.0) as u32;
@@ -381,7 +396,7 @@ impl Backend for Headless {
             }
             "app.save" => {
                 let id = if p.get("path").is_some() { "saveas" } else { "qsave" };
-                s.execute(id, &p).map_err(|e| e.to_string())
+                s.execute_agent(id, &p).map_err(|e| e.to_string())
             }
             "ui.screenshot" => Err("no UI in headless mode; use render".into()),
             "control.methods" => Ok(HEADLESS_METHODS

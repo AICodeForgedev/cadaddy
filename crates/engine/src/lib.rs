@@ -8,6 +8,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod activity;
+pub mod agent;
 pub mod assoc;
 pub mod audit;
 pub mod autosave;
@@ -36,6 +38,7 @@ pub mod sysvars;
 pub mod ucs;
 pub mod undoctl;
 pub mod units;
+pub mod writefile;
 
 use std::sync::Arc;
 
@@ -181,6 +184,8 @@ pub(crate) fn cached_extents(d: &Arc<Drawing>, space: &Space) -> Bounds2 {
 #[derive(Clone, Debug)]
 pub struct DocState {
     pub doc: Arc<Drawing>,
+    /// What changed, step by step ([`activity`]).
+    pub activity: activity::Activity,
     pub undo: Vec<Snapshot>,
     pub redo: Vec<Snapshot>,
     /// UNDO marks, BEgin/End group and Control (see [`undoctl`]).
@@ -256,6 +261,7 @@ impl DocState {
     pub fn new(doc: Drawing, title: &str, path: Option<String>) -> Self {
         let doc = Arc::new(doc);
         DocState {
+            activity: activity::Activity::default(),
             saved: doc.clone(),
             doc,
             undo: Vec::new(),
@@ -974,6 +980,8 @@ pub struct Session {
     lisp_last: Option<std::result::Result<lisp::value::Value, String>>,
     /// What the last HATCHPICK kept (the Hatch and Gradient dialog's picks).
     pub hatch_picks: Option<cmd::hatch::HatchPicks>,
+    /// Safety rails for agents: requests, dry run, confirmations, the change journal.
+    pub agent: agent::AgentGuard,
 }
 
 impl Default for Session {
@@ -1036,6 +1044,7 @@ impl Session {
             lisp: lisp::LispState::default(),
             lisp_last: None,
             hatch_picks: None,
+            agent: agent::AgentGuard::default(),
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {
@@ -1177,6 +1186,13 @@ impl Session {
         if d.annotative_by_style(&kind) {
             common.anno_scales = vec![d.current_anno_scale()];
         }
+        // DIMLAYER: new dimensions on their own layer (".": the current one).
+        let dim_layer =
+            matches!(kind, EntityKind::Dimension(_)).then(|| d.header.str("DIMLAYER", ".")).filter(|l| !l.trim().is_empty() && l.trim() != ".");
+        if let Some(l) = dim_layer {
+            self.doc_mut()?.ensure_layer(l.trim());
+            common.layer = l.trim().to_string();
+        }
         let h = self.doc_mut()?.add(&space, common, kind)?;
         Ok(h)
     }
@@ -1191,6 +1207,12 @@ impl Session {
 
     /// Run a command with JSON parameters (no dialogs). Records undo when the drawing changes.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        // An agent's outermost call: a dry run or a confirmation first ([`agent`]).
+        if self.journal.is_outer()
+            && let Some(r) = self.guard_call(id, params)
+        {
+            return r;
+        }
         let outer = self.journal.enter();
         let r = self.execute_inner(id, params);
         self.journal.leave();

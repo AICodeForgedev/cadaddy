@@ -313,15 +313,59 @@ fn purge_items(app: &mut CadApp, items: &[(String, String, String)], nested: boo
 }
 
 /// COLOR: Select Color for new objects (CECOLOR).
+/// Where the Select Color dialog's choice goes: the objects given (the Properties palette's
+/// "More Colors…" for a selection), else the colour of new objects.
+fn color_target_id() -> egui::Id {
+    egui::Id::new("color_dialog_target")
+}
+
+/// Open the Select Color dialog for `handles` (`None`: the current colour, as COLOR does).
+pub fn open_color_dialog(ctx: &egui::Context, handles: Option<Vec<String>>) {
+    ctx.data_mut(|d| match handles {
+        Some(h) => {
+            d.insert_temp(color_target_id(), h);
+        }
+        None => d.remove::<Vec<String>>(color_target_id()),
+    });
+    // Opened on the next frame ([`crate::dialogs::show`]).
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("color_dialog_open"), true));
+}
+
+/// Give the picked colour to `target`'s objects, else make it the colour of new objects.
+pub fn apply_color(app: &mut CadApp, target: Option<&[String]>, c: Color) {
+    let value = match c {
+        Color::True(Rgb(r, g, b)) => json!(format!("{r},{g},{b}")),
+        Color::ByLayer => json!("ByLayer"),
+        Color::ByBlock => json!("ByBlock"),
+        Color::Index(i) => json!(i),
+    };
+    let _ = match target {
+        Some(hs) => app.run("properties.set", json!({ "handles": hs, "color": value })),
+        None => app.run("color", json!({ "color": value })),
+    };
+}
+
 pub fn color(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
-    let current = app
-        .session
-        .doc()
-        .map(|d| match d.header.get("CECOLOR_RGB").map(|_| d.header.i64("CECOLOR_RGB", 0)) {
-            Some(v) => Color::True(Rgb::from_u32(u32::try_from(v).unwrap_or(0))),
-            None => Color::from_aci(i16::try_from(d.header.i64("CECOLOR", 256)).unwrap_or(256)),
-        })
-        .unwrap_or(Color::ByLayer);
+    let target: Option<Vec<String>> = ctx.data(|d| d.get_temp(color_target_id()));
+    // For objects: the colour they share (else ByLayer to start from).
+    let shared = target.as_ref().and_then(|hs| {
+        let d = app.session.doc().ok()?;
+        let cs: Vec<Color> =
+            hs.iter().filter_map(|h| cadaddy_doc::Handle::parse_hex(h)).filter_map(|h| d.entity(h)).map(|e| e.common.color).collect();
+        cs.first().copied().filter(|c| cs.iter().all(|x| x == c))
+    });
+    let current = match (&target, shared) {
+        (Some(_), Some(c)) => c,
+        (Some(_), None) => Color::ByLayer,
+        (None, _) => app
+            .session
+            .doc()
+            .map(|d| match d.header.get("CECOLOR_RGB").map(|_| d.header.i64("CECOLOR_RGB", 0)) {
+                Some(v) => Color::True(Rgb::from_u32(u32::try_from(v).unwrap_or(0))),
+                None => Color::from_aci(i16::try_from(d.header.i64("CECOLOR", 256)).unwrap_or(256)),
+            })
+            .unwrap_or(Color::ByLayer),
+    };
     let mut picked = None;
     egui::Window::new(crate::tl!("Select Color"))
         .id(egui::Id::new("color_dialog"))
@@ -334,14 +378,49 @@ pub fn color(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             picked = crate::layers::color_palette(ui, egui::Id::new("color_dialog_palette"), current, true);
         });
     if let Some(c) = picked {
-        let value = match c {
-            Color::True(Rgb(r, g, b)) => json!(format!("{r},{g},{b}")),
-            Color::ByLayer => json!("ByLayer"),
-            Color::ByBlock => json!("ByBlock"),
-            Color::Index(i) => json!(i),
-        };
-        let _ = app.run("color", json!({ "color": value }));
+        apply_color(app, target.as_deref(), c);
         *open = false;
+    }
+    if !*open {
+        ctx.data_mut(|d| d.remove::<Vec<String>>(color_target_id()));
+    }
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+    use cadaddy_engine::Session;
+
+    #[test]
+    fn select_color_goes_to_the_objects_it_was_opened_for_and_every_tab_draws() {
+        let mut app = CadApp::new(Session::new(), crate::Services::default());
+        let a = app.run("circle", json!({"center": [0, 0], "radius": 2})).unwrap()["handle"].as_str().unwrap().to_string();
+        let b = app.run("circle", json!({"center": [9, 0], "radius": 2})).unwrap()["handle"].as_str().unwrap().to_string();
+        // For a selection: only those objects; new objects keep their colour.
+        apply_color(&mut app, Some(std::slice::from_ref(&a)), Color::True(Rgb(10, 200, 30)));
+        let colour = |app: &CadApp, h: &str| app.session.doc().unwrap().entity(cadaddy_doc::Handle::parse_hex(h).unwrap()).unwrap().common.color;
+        assert_eq!(colour(&app, &a), Color::True(Rgb(10, 200, 30)));
+        assert_eq!(colour(&app, &b), Color::ByLayer);
+        assert_eq!(app.session.doc().unwrap().header.i64("CECOLOR", 256), 256);
+        // Without: the colour of new objects (COLOR).
+        apply_color(&mut app, None, Color::Index(3));
+        assert_eq!(app.session.doc().unwrap().header.i64("CECOLOR", 256), 3);
+        // A colour from a book is its true colour.
+        let brick = cadaddy_engine::cmd::colorbook::lookup("CADaddy Basics", "brick").unwrap();
+        apply_color(&mut app, Some(std::slice::from_ref(&b)), Color::True(brick));
+        assert_eq!(colour(&app, &b), Color::True(brick));
+        // The dialog with each of its tabs, for objects and for new objects, draws without a crash.
+        let ctx = egui::Context::default();
+        let tab_id = egui::Id::new("color_dialog_palette").with("tab");
+        for target in [Some(vec![a.clone(), b.clone()]), None] {
+            open_color_dialog(&ctx, target);
+            for tab in 0u8..3 {
+                ctx.data_mut(|d| d.insert_temp(tab_id, tab));
+                let mut open = true;
+                ctx.run_ui(egui::RawInput::default(), |ui| color(&mut app, ui.ctx(), &mut open)).textures_delta.clear();
+                assert!(open);
+            }
+        }
     }
 }
 

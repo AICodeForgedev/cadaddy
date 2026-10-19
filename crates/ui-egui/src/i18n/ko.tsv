@@ -2124,3 +2124,64 @@ menu	Modify	수정
 	Confirm each item to be purged	소거할 각 항목 확인
 	Purge nested items	중첩된 항목 소거
 	Text Align	문자 정렬
+	Color model:	색상 모델:
+	Hue	색조
+	Saturation	채도
+	Luminance	광도
+	Hex	16진수
+	More Colors...	추가 색상...
+	Load more books with COLORBOOK (JSON or tab-separated files).	COLORBOOK으로 다른 색상표를 불러올 수 있습니다(JSON 또는 탭으로 구분된 파일).
+	All spaces	모든 공간
+	Total: {n}	합계: {n}
+	No block references here.	여기에 블록 참조가 없습니다.
+	Highlight and zoom to its references	참조 강조 표시 및 줌
+	Similar but not identical: {scaled} scaled, {exploded} exploded	유사하지만 동일하지 않음: 축척 {scaled}개, 분해 {exploded}개
+	Insert Count Table	개수 테이블 삽입
+	Update Count Tables	개수 테이블 업데이트
+	Count in Area	영역에서 개수 세기
+	{n} reference(s) of {name} selected.	{name}의 참조 {n}개가 선택되었습니다.
+	{n} similar object(s) selected.	유사한 객체 {n}개가 선택되었습니다.
+	Geographic Location...	지리적 위치...
+	Remove Geographic Location	지리적 위치 제거
+	Set Location	위치 설정
+	Remove Location	위치 제거
+	Latitude and Longitude	위도 및 경도
+	Trace Image to Vectors	이미지를 벡터로 추적
+	Trace Raster Image to Vectors	래스터 이미지를 벡터로 추적
+	Drawing Summary	도면 요약
+	Query Drawing	도면 쿼리
+	Begin Agent Request	에이전트 요청 시작
+	End Agent Request	에이전트 요청 종료
+	Agent Dry Run	에이전트 시험 실행
+	Agent Confirmations	에이전트 확인
+	Agent Change Journal	에이전트 변경 기록
+	Agent Activity	에이전트 활동
+	An agent asks	에이전트의 요청
+	Allow	허용
+	Deny	거부
+	Not allowed: {question}	허용 안 함: {question}
+	Ask me before an agent saves over a file or closes with changes	에이전트가 파일을 덮어쓰거나 변경 내용이 있는 채로 닫기 전에 묻기
+	Dry run: agents' commands change nothing	시험 실행: 에이전트 명령이 아무것도 바꾸지 않음
+	No agent requests yet.	아직 에이전트 요청이 없습니다.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	명령 {commands}개 · 추가 {added} · 제거 {removed} · 변경 {changed}
+	Select what it added and changed	추가하고 변경한 항목 선택
+	Activity History	작업 기록
+	Activity history is off (Options ▸ Open and Save).	작업 기록이 꺼져 있습니다(옵션 ▸ 열기 및 저장).
+	command	명령
+	{n} steps	{n}개 단계
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	이 단계에서 추가하거나 변경한 객체 선택
+	The objects of this step are gone.	이 단계의 객체가 더 이상 없습니다.
+	{n} object(s) selected.	객체 {n}개가 선택되었습니다.
+	{n} object(s) selected ({gone} since erased).	객체 {n}개 선택됨(이후 {gone}개 지워짐).
+	{n} s ago	{n}초 전
+	{n} min ago	{n}분 전
+	{n} h ago	{n}시간 전
+	{n} d ago	{n}일 전
+	Keep an activity history beside each drawing (private, on this computer)	각 도면 옆에 작업 기록 보관(비공개, 이 컴퓨터에만)
+	Background mask	배경 마스크
+	Mask border offset	마스크 경계 간격띄우기
+	Mask color	마스크 색상
+	Use drawing background	도면 배경 사용
+	Regenerate Dimensions	치수 재생성
+	Enter layer name for new dimensions (. for the current layer)	새 치수의 도면층 이름 입력(. 현재 도면층)

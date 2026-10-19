@@ -2131,3 +2131,64 @@ menu	Modify	Ändra
 	Confirm each item to be purged	Bekräfta varje objekt som ska rensas
 	Purge nested items	Rensa kapslade objekt
 	Text Align	Justera text
+	Color model:	Färgmodell:
+	Hue	Nyans
+	Saturation	Mättnad
+	Luminance	Luminans
+	Hex	Hex
+	More Colors...	Fler färger...
+	Load more books with COLORBOOK (JSON or tab-separated files).	Läs in fler färgböcker med COLORBOOK (JSON- eller tabbseparerade filer).
+	All spaces	Alla rymder
+	Total: {n}	Totalt: {n}
+	No block references here.	Inga blockreferenser här.
+	Highlight and zoom to its references	Markera och zooma till referenserna
+	Similar but not identical: {scaled} scaled, {exploded} exploded	Liknande men inte identiska: {scaled} skalade, {exploded} upplösta
+	Insert Count Table	Infoga antalstabell
+	Update Count Tables	Uppdatera antalstabeller
+	Count in Area	Räkna i område
+	{n} reference(s) of {name} selected.	{n} referens(er) till {name} markerade.
+	{n} similar object(s) selected.	{n} liknande objekt markerade.
+	Geographic Location...	Geografisk plats...
+	Remove Geographic Location	Ta bort geografisk plats
+	Set Location	Ange plats
+	Remove Location	Ta bort plats
+	Latitude and Longitude	Latitud och longitud
+	Trace Image to Vectors	Spåra bild till vektorer
+	Trace Raster Image to Vectors	Spåra rasterbild till vektorer
+	Drawing Summary	Ritningssammanfattning
+	Query Drawing	Fråga ritningen
+	Begin Agent Request	Starta agentbegäran
+	End Agent Request	Avsluta agentbegäran
+	Agent Dry Run	Agentens provkörning
+	Agent Confirmations	Agentbekräftelser
+	Agent Change Journal	Agentens ändringslogg
+	Agent Activity	Agentaktivitet
+	An agent asks	En agent frågar
+	Allow	Tillåt
+	Deny	Neka
+	Not allowed: {question}	Inte tillåtet: {question}
+	Ask me before an agent saves over a file or closes with changes	Fråga innan en agent sparar över en fil eller stänger med ändringar
+	Dry run: agents' commands change nothing	Provkörning: agenternas kommandon ändrar ingenting
+	No agent requests yet.	Inga agentbegäranden ännu.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} kommandon · {added} tillagda · {removed} borttagna · {changed} ändrade
+	Select what it added and changed	Markera det som lades till och ändrades
+	Activity History	Aktivitetshistorik
+	Activity history is off (Options ▸ Open and Save).	Aktivitetshistoriken är av (Alternativ ▸ Öppna och spara).
+	command	kommando
+	{n} steps	{n} steg
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	Markera objekten som det här steget lade till eller ändrade
+	The objects of this step are gone.	Objekten från det här steget finns inte längre.
+	{n} object(s) selected.	{n} objekt markerade.
+	{n} object(s) selected ({gone} since erased).	{n} objekt markerade ({gone} raderade sedan dess).
+	{n} s ago	för {n} s sedan
+	{n} min ago	för {n} min sedan
+	{n} h ago	för {n} h sedan
+	{n} d ago	för {n} d sedan
+	Keep an activity history beside each drawing (private, on this computer)	Spara en aktivitetshistorik bredvid varje ritning (privat, på den här datorn)
+	Background mask	Bakgrundsmask
+	Mask border offset	Maskens kantförskjutning
+	Mask color	Maskfärg
+	Use drawing background	Använd ritningens bakgrund
+	Regenerate Dimensions	Återskapa måttsättningar
+	Enter layer name for new dimensions (. for the current layer)	Ange lagernamn för nya måttsättningar (. för det aktuella lagret)

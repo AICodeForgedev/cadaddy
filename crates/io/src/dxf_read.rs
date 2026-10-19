@@ -2186,6 +2186,8 @@ struct Objects {
     field_dicts: HashMap<String, Vec<Tag>>,
     /// LAYER_FILTER objects: (handle, the layer names they list).
     layer_filters: Vec<(String, Vec<String>)>,
+    /// The first GEODATA object (the drawing's geographic location).
+    geodata: Option<Vec<Tag>>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -2223,6 +2225,7 @@ impl Objects {
             "FIELD" if self.fields.len() < crate::dxf_field::MAX_FIELDS => {
                 self.fields.insert(h, tags.to_vec());
             }
+            "GEODATA" if self.geodata.is_none() => self.geodata = Some(tags.to_vec()),
             "XRECORD" if self.xrecords.len() < MAX_OBJECTS => {
                 self.xrecords.insert(h, tags.to_vec());
             }
@@ -2270,6 +2273,7 @@ impl Objects {
     fn apply(self, d: &mut Drawing, rx: &Rx) {
         // Fields: codes back into their texts, cached values kept.
         crate::dxf_field::apply(d, &rx.text_fields, &self.fields, &self.field_dicts);
+        d.geo = self.geodata.as_deref().and_then(crate::dxf_geo::read);
         if let Some(style) = self.xrecord_text(crate::dxf_ext::MLEADER_STYLE_KEY).filter(|s| !s.trim().is_empty()) {
             d.header.set_str("CMLEADERSTYLE", &style);
         }

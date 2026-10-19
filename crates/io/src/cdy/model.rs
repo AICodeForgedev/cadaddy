@@ -87,6 +87,9 @@ struct Tables {
     /// The plot stamp's settings (a layout's page setup says whether it plots it).
     #[serde(default)]
     plot_stamp: Value,
+    /// The geographic location (GEOGRAPHICLOCATION).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    geo: Option<cadaddy_doc::geo::GeoLocation>,
     /// (object handle, its field values) in handle order.
     #[serde(default)]
     field_values: Vec<(u64, Vec<String>)>,
@@ -263,6 +266,7 @@ pub(super) fn tables(d: &Drawing) -> Result<Vec<u8>, String> {
         materials: value(&d.materials)?,
         sun: value(&d.sun)?,
         plot_stamp: value(&d.plot_stamp)?,
+        geo: d.geo.clone(),
         field_values: d.field_values.iter().map(|(h, v)| (h.0, v.clone())).collect(),
         kept_handles: d.kept_handles.iter().map(|(k, h)| (k.clone(), *h)).collect(),
         // The BSPC and TOUR chunks hold these now (so a new tour appends only its chunk); the
@@ -502,6 +506,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 if !t.plot_stamp.is_null() {
                     field!(plot_stamp, "the plot stamp");
                 }
+                d.geo = t.geo.filter(|g| g.is_valid());
                 d.field_values = t.field_values.iter().map(|(h, v)| (cadaddy_doc::Handle(*h), v.clone())).collect();
                 d.kept_handles = t.kept_handles.iter().take(10_000_000).map(|(k, h)| (k.clone(), *h)).collect();
                 if let Some(spec) = t.building_spec.filter(|s| s.len() <= MAX_TEXT) {

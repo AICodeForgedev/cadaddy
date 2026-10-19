@@ -111,7 +111,7 @@ impl PlotterStore {
                 let p = file(n)?;
                 std::fs::create_dir_all(dir()?).map_err(|e| e.to_string())?;
                 let tmp = p.with_extension("json.cadaddy-tmp");
-                std::fs::write(&tmp, t).map_err(|e| format!("{n}: {e}"))?;
+                crate::writefile::write(&tmp, t).map_err(|e| format!("{n}: {e}"))?;
                 std::fs::rename(&tmp, &p).map_err(|e| format!("{n}: {e}"))
             },
             delete: |n| std::fs::remove_file(file(n)?).map_err(|e| format!("{n}: {e}")),
@@ -608,7 +608,7 @@ fn run_plottermanager(_s: &mut Session, p: &Value) -> Result<Value> {
                 Some(_path) => {
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        std::fs::write(_path, &text).map_err(|e| bad(cmd, format!("{_path}: {e}")))?;
+                        crate::writefile::write(_path, &text).map_err(|e| bad(cmd, format!("{_path}: {e}")))?;
                         Ok(json!({ "name": name, "path": _path }))
                     }
                     #[cfg(target_arch = "wasm32")]
