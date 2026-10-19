@@ -65,6 +65,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         crate::roomsdlg::DIALOG => crate::roomsdlg::dialog(app, ctx, &mut open),
         crate::exchangeloss::DIALOG => crate::exchangeloss::dialog(app, ctx, &mut open),
         crate::agentdlg::DIALOG => crate::agentdlg::dialog(app, ctx, &mut open),
+        crate::secureloaddlg::DIALOG => crate::secureloaddlg::dialog(app, ctx, &mut open),
         o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }

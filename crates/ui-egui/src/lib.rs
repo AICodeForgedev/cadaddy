@@ -112,6 +112,7 @@ pub mod exchange;
 pub mod keytips;
 pub mod publishdlg;
 mod roomsdlg;
+pub mod secureloaddlg;
 pub mod sheetsets;
 pub mod standardsdlg;
 
@@ -461,6 +462,8 @@ pub struct CadApp {
     pub walked: std::collections::BTreeSet<u64>,
     /// What the last DWG/DXF save didn't keep, while its notice is open ([`exchangeloss`]).
     pub exchange_notice: Option<Value>,
+    /// A LISP file or script outside the trusted folders the user is asked about ([`secureloaddlg`]).
+    pub secureload_ask: Option<cadaddy_engine::secureload::Ask>,
     /// Drawings in windows of their own ([`tearoff`]), the drawing the main window last showed,
     /// and where its tab bar is.
     pub torn: Vec<tearoff::TornWindow>,
@@ -538,6 +541,7 @@ impl CadApp {
             walk: None,
             walked: std::collections::BTreeSet::new(),
             exchange_notice: None,
+            secureload_ask: None,
             torn: Vec::new(),
             main_uid: None,
             tab_bar: None,
@@ -627,8 +631,10 @@ impl CadApp {
         if let Err(e) = &r {
             self.session.echo(e.user_message());
         }
-        // A programmatic save reports what the file didn't keep in its reply, not in a dialog.
+        // A programmatic save reports what the file didn't keep in its reply, not in a dialog;
+        // a programmatic load gets the refusal in its reply.
         exchangeloss::take(self, false);
+        secureloaddlg::take(self, false);
         r.map_err(|e| e.to_string())
     }
 
@@ -636,12 +642,14 @@ impl CadApp {
     pub fn start(&mut self, name: &str) {
         if menus::run_ui_command(self, name, &Value::Null).is_some() {
             exchangeloss::take(self, true);
+            secureloaddlg::take(self, true);
             return;
         }
         if let Err(e) = self.session.start(name) {
             self.session.echo(e.user_message());
         }
         exchangeloss::take(self, true);
+        secureloaddlg::take(self, true);
     }
 
     /// Submit a line of command-line text. A refused line is echoed to the history; the error is
@@ -659,11 +667,13 @@ impl CadApp {
                 && menus::run_ui_command(self, &word, &Value::Null).is_some()
             {
                 exchangeloss::take(self, true);
+                secureloaddlg::take(self, true);
                 return None;
             }
         }
         let r = self.session.cmdline(text);
         exchangeloss::take(self, true);
+        secureloaddlg::take(self, true);
         let e = r.err()?.to_string();
         self.session.echo(e.clone());
         Some(e)
@@ -779,6 +789,13 @@ impl CadApp {
     pub fn open_path(&mut self, path: &str) {
         // A LISP file (dropped on the window): loaded as APPLOAD loads it.
         if is_lisp_file(path) {
+            // Only from a trusted folder, or once the user allows it (SECURELOAD).
+            let retry = Some(("appload".to_string(), serde_json::json!({ "path": path })));
+            if let Err(e) = self.session.check_load(std::path::Path::new(path), "APPLOAD", retry) {
+                self.session.echo(e.user_message());
+                secureloaddlg::take(self, true);
+                return;
+            }
             match cadaddy_engine::lisp::builtins::read_text_file(path) {
                 Some(text) => self.load_lisp(path, &text),
                 None => self.open_failed(format!("APPLOAD: can't read {path}")),

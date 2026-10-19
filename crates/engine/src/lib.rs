@@ -30,6 +30,7 @@ pub mod prompt;
 pub mod readfile;
 mod recent;
 pub mod sample;
+pub mod secureload;
 pub mod select;
 pub mod snap;
 pub mod snap3;
@@ -589,6 +590,12 @@ pub struct Settings {
     pub pickfirst: bool,
     /// ACADLSPASDOC: acad.lsp loads into every drawing, not once per session.
     pub acadlspasdoc: bool,
+    /// SECURELOAD: 0 loads LISP and scripts from anywhere, 1 (default) asks about files outside
+    /// the trusted folders, 2 loads only from trusted folders ([`secureload`]).
+    pub secureload: u8,
+    /// TRUSTEDPATHS: folders LISP and scripts load from without asking (`;`-separated; `\...`
+    /// at the end includes subfolders). The support folder is always trusted.
+    pub trustedpaths: String,
     pub pickadd: bool,
     /// FILEDIA: 0 makes file commands ask on the command line instead of opening dialogs. Kept for
     /// the session (AutoCAD keeps it in the registry), not per drawing.
@@ -693,6 +700,8 @@ impl Default for Settings {
             aperture: 10.0,
             pickfirst: true,
             acadlspasdoc: false,
+            secureload: 1,
+            trustedpaths: String::new(),
             pickadd: true,
             filedia: 1,
             cmdecho: 1,
@@ -920,6 +929,11 @@ pub struct Session {
     keep_undo_step: bool,
     /// A script is running ([`Session::script`]); a SCRIPT command inside it is refused.
     in_script: bool,
+    /// A LISP file or script outside the trusted folders that wasn't loaded, for the app to ask
+    /// about ([`secureload`]); taken by the app.
+    pub secureload_ask: Option<secureload::Ask>,
+    /// Files the user allowed to load this session (normalized paths).
+    pub(crate) secureload_once: std::collections::HashSet<String>,
     /// The command suspended while a transparent command (`'ZOOM`, `'PAN`…) prompts inside it;
     /// it resumes when that command ends. One level, as in AutoCAD.
     pub suspended: Option<Running>,
@@ -1015,6 +1029,8 @@ impl Session {
             running: None,
             keep_undo_step: false,
             in_script: false,
+            secureload_ask: None,
+            secureload_once: Default::default(),
             suspended: None,
             log: Vec::new(),
             journal: journal::Journal::default(),

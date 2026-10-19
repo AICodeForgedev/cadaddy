@@ -320,6 +320,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(colorbook::specs());
         v.extend(constraints::specs());
         v.extend(lisp::specs());
+        v.extend(crate::secureload::specs());
         v.extend(solids::specs());
         v.extend(sections::specs());
         v.extend(render::specs());

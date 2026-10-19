@@ -420,6 +420,7 @@ fn run_script(s: &mut Session, p: &Value) -> Result<Value> {
         let path = _path;
         #[cfg(not(target_arch = "wasm32"))]
         {
+            s.check_load(std::path::Path::new(path), "SCRIPT", Some(("script".into(), json!({ "path": path }))))?;
             let bytes = crate::readfile::read(path).map_err(|e| bad("script", format!("{path}: {e}")))?;
             String::from_utf8_lossy(&bytes).into_owned()
         }
@@ -457,7 +458,7 @@ impl Interactive for ScriptM {
         }
         match run_script(s, &json!({ "path": t })) {
             Ok(_) => Ok(Step::Done),
-            Err(EngineError::BadParams { msg, .. }) => {
+            Err(EngineError::BadParams { msg, .. } | EngineError::Other(msg)) => {
                 s.echo(msg);
                 Ok(Step::Done)
             }
@@ -1392,6 +1393,7 @@ mod tests {
     fn script_command_runs_a_scr_file() {
         let path = temp_script("run.scr", "; a comment\ncircle 50,25 20\nrectang 0,0 100,60\n");
         let mut s = Session::new();
+        s.settings.trustedpaths = std::env::temp_dir().to_string_lossy().into_owned();
         let r = s.execute("script", &json!({ "path": path })).unwrap();
         assert_eq!(r["lines"], 3);
         assert_eq!(s.state().unwrap().doc.model.len(), 2, "the comment is skipped, circle and rectang draw");
@@ -1400,6 +1402,7 @@ mod tests {
     #[test]
     fn script_command_reports_a_missing_file() {
         let mut s = Session::new();
+        s.settings.trustedpaths = std::env::temp_dir().to_string_lossy().into_owned();
         let e = s.execute("script", &json!({ "path": "no/such/script.scr" })).unwrap_err().to_string();
         assert!(e.contains("no/such/script.scr"), "{e}");
         assert_eq!(s.state().unwrap().doc.model.len(), 0);
@@ -1411,6 +1414,7 @@ mod tests {
         let inner = temp_script("inner.scr", "circle 0,0 1\n");
         let outer = temp_script("outer.scr", &format!("script {}\ncircle 0,0 2\n", json!({ "path": inner })));
         let mut s = Session::new();
+        s.settings.trustedpaths = std::env::temp_dir().to_string_lossy().into_owned();
         let e = s.execute("script", &json!({ "path": outer })).unwrap_err().to_string();
         assert!(e.contains("already running"), "{e}");
     }
@@ -1419,6 +1423,7 @@ mod tests {
     fn typed_script_prompts_for_the_file_then_runs_or_reports_it() {
         let good = temp_script("typed.scr", "circle 0,0 1\n");
         let mut s = Session::new();
+        s.settings.trustedpaths = std::env::temp_dir().to_string_lossy().into_owned();
         s.cmdline("script").unwrap();
         assert!(s.running.is_some(), "SCRIPT asks for the file name");
         s.cmdline(&good).unwrap();
