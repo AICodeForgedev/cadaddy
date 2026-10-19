@@ -750,6 +750,9 @@ pub struct PageSetup {
     /// Plot objects with their transparency ("Plot transparency"; PLOTTRANSPARENCYOVERRIDE can
     /// override it). The DXF plot layout flags have no bit for it, so it is not saved in DXF.
     pub plot_transparency: bool,
+    /// The layout's paper units are millimetres (plot paper units 1 in DXF) whatever the
+    /// drawing's MEASUREMENT says; otherwise paper units follow MEASUREMENT (#1058).
+    pub paper_mm: bool,
 }
 
 impl Default for PageSetup {
@@ -769,6 +772,7 @@ impl Default for PageSetup {
             lineweights: true,
             show_plot_styles: false,
             plot_transparency: false,
+            paper_mm: false,
         }
     }
 }

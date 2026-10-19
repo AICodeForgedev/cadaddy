@@ -2204,6 +2204,9 @@ fn page_setup(t: &T) -> PageSetup {
         p.height_mm = w.max(h);
     }
     p.margins_mm = [mm(40, p.margins_mm[0]), mm(41, p.margins_mm[1]), mm(42, p.margins_mm[2]), mm(43, p.margins_mm[3])];
+    // Plot paper units 1: millimetres. 0 (inches) is left to MEASUREMENT: earlier CADCraft
+    // versions wrote 0 for every layout.
+    p.paper_mm = t.i(72) == Some(1);
     // Plot rotation 1 or 3 turns the media a quarter turn; media defined wider than tall is
     // already landscape.
     let rotated = matches!(t.i(73), Some(1 | 3));

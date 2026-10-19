@@ -2573,7 +2573,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
             w.f(c, v);
         }
         w.i(70, plot_flags);
-        w.i(72, 0);
+        // Plot paper units: 1 millimetres, 0 inches (#1058).
+        w.i(72, i64::from(cadcraft_render::paper::page_unit_mm(d, page) == 1.0));
         w.i(73, i64::from(page.landscape));
         w.i(74, plot_type);
         w.s(7, &page.plot_style_table);

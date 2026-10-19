@@ -642,11 +642,12 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     if b.opts.skip_viewport == Some(e.handle) {
         return;
     }
+    let unit_mm = paper::unit_mm_of(d, e.handle);
     match &poly {
-        Some(p) => contents(b, d, vp, p.bounds(), &Clip::Poly(p)),
+        Some(p) => contents(b, d, vp, p.bounds(), &Clip::Poly(p), unit_mm),
         None => {
             if let Some(rect) = viewport_rect(vp) {
-                contents(b, d, vp, rect, &Clip::Rect(rect));
+                contents(b, d, vp, rect, &Clip::Rect(rect), unit_mm);
             }
         }
     }
@@ -684,13 +685,13 @@ pub fn viewport_content(d: &Drawing, space: &Space, handle: Handle, area: Bounds
     let styler = style_table(d, space, opts, false).map(|t| plotstyle::Styler::new(d, t));
     let mut b =
         Builder { list: DisplayList::default(), opts, plotting: false, styles: styler.as_ref(), named: None, shared_budget: None, transparency: 0 };
-    contents(&mut b, d, vp, area, &Clip::Rect(area));
+    contents(&mut b, d, vp, area, &Clip::Rect(area), paper::unit_mm_of(d, handle));
     b.list
 }
 
 /// Model space seen through `vp`, in paper units, appended to `b`'s list clipped to `clip`;
 /// `area` (the clip's bounds on paper) picks the model objects to draw.
-fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bounds2, clip: &Clip) {
+fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bounds2, clip: &Clip, unit_mm: f64) {
     if b.list.expanded >= MAX_BLOCK_EXPANSION || !vp.on {
         return;
     }
@@ -784,7 +785,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bou
         }
     }
     // The contents are in paper units now: draw their pens before clipping.
-    pen::apply(&mut sub.list, paper::paper_unit_mm(d));
+    pen::apply(&mut sub.list, unit_mm);
     b.list.expanded = b.list.expanded.saturating_add(sub.list.expanded);
     append_clipped(&mut b.list, &sub.list, clip);
 }
