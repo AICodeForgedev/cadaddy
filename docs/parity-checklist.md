@@ -105,7 +105,6 @@ Menu-breadth parity: a reference menu item counts as covered when a CADCraft com
 - Tools > Export Settings
 - Tools > Express Tools > Convert Text to Mtext
 - Tools > Express Tools > Break-line Symbol
-- Tools > Express Tools > Explode Attributes to Text
 - Tools > Express Tools > Move/Copy/Rotate
 - Tools > Express Tools > Replace Block...
 - Tools > Express Tools > Super Hatch > Image...

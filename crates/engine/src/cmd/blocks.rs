@@ -16,6 +16,7 @@ use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 mod attedit;
+mod burst;
 mod dyngrip;
 mod extract;
 pub(crate) mod refedit;
@@ -72,6 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
         battman::battman_spec(),
         attribs::attdisp_spec(),
         attribs::attsync_spec(),
+        burst::burst_spec(),
         extract::dataextraction_spec(),
         extract::eattext_spec(),
     ]

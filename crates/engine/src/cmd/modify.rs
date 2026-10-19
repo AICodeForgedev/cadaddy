@@ -1403,6 +1403,16 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
 }
 
 fn explode(s: &mut Session, hs: &[Handle]) -> Result<Vec<Handle>> {
+    explode_with(s, hs, explode_kind)
+}
+
+/// Replace each of `hs` (off locked layers) by the pieces `pieces` gives for it; objects it gives
+/// none for are left alone. EXPLODE, and BURST with its own pieces for block references.
+pub(crate) fn explode_with(
+    s: &mut Session,
+    hs: &[Handle],
+    pieces: impl Fn(&cadcraft_doc::Drawing, &Entity) -> Option<Vec<Entity>>,
+) -> Result<Vec<Handle>> {
     let space = s.space();
     let mut out = Vec::new();
     for h in hs {
@@ -1410,7 +1420,7 @@ fn explode(s: &mut Session, hs: &[Handle]) -> Result<Vec<Handle>> {
             continue;
         }
         let Some(e) = s.doc()?.entity(*h).map(|e| (**e).clone()) else { continue };
-        let Some(parts) = explode_kind(s.doc()?, &e) else { continue };
+        let Some(parts) = pieces(s.doc()?, &e) else { continue };
         // The pieces of an object are new objects: its xdata goes with it. A block reference's
         // pieces are copies of the block's objects and keep theirs.
         let own_pieces = !matches!(e.kind, EntityKind::Insert(_));
