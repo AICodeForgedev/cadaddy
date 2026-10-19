@@ -522,6 +522,23 @@ mod native {
         out.into_bytes()
     }
 
+    /// Declare the FIELD and FIELDLIST classes when the document has fields. acadrust's DWG
+    /// writer leaves out an object whose class the drawing doesn't declare, and a DXF from CADaddy
+    /// (or any R2000 DXF) declares none for them: every field was dropped from the DWG and the
+    /// texts came back static (tester 0.7.7f: UPDATEFIELD found 0 after reopening the .dwg).
+    fn field_classes(doc: &mut acadrust::CadDocument) {
+        use acadrust::objects::ObjectType;
+        let (fields, lists) = doc
+            .objects
+            .values()
+            .fold((false, false), |(f, l), o| (f || matches!(o, ObjectType::Field(_)), l || matches!(o, ObjectType::FieldList(_))));
+        for (has, name, cpp) in [(fields, "FIELD", "AcDbField"), (lists, "FIELDLIST", "AcDbFieldList")] {
+            if has && !doc.classes.contains(name) {
+                doc.classes.add_or_update(acadrust::classes::DxfClass::new(name, cpp));
+            }
+        }
+    }
+
     /// Collects the DXF text and fails the write once it would grow past `limit`.
     struct CappedWriter {
         buf: Vec<u8>,
@@ -606,6 +623,7 @@ mod native {
             None => keep_linetype_case(&mut doc, &dxf_linetype_names(dxf)),
         }
         put_materials(&mut doc, dxf);
+        field_classes(&mut doc);
         drop_unwritable(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?

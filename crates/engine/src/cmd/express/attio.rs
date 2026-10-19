@@ -105,7 +105,7 @@ fn run_attout(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn write_file(cmd: &str, path: &str, text: &str) -> Result<()> {
-    std::fs::write(path, text).map_err(|e| bad(cmd, format!("{path}: {e}")))
+    crate::writefile::write(path, text).map_err(|e| bad(cmd, format!("{path}: {e}")))
 }
 
 #[cfg(target_arch = "wasm32")]

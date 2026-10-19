@@ -510,7 +510,7 @@ fn run_case_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             let write = super::file::io().map(|h| h.write).ok_or_else(|| bad("p2m.case", "no file writer in this build"))?;
             let bytes = write(&case.drawing, path).map_err(|e| bad("p2m.case", e))?;
             #[cfg(not(target_arch = "wasm32"))]
-            std::fs::write(path, bytes).map_err(|e| bad("p2m.case", format!("{path}: {e}")))?;
+            crate::writefile::write(path, bytes).map_err(|e| bad("p2m.case", format!("{path}: {e}")))?;
             #[cfg(target_arch = "wasm32")]
             let _ = bytes;
         }

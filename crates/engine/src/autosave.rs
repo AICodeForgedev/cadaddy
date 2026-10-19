@@ -405,7 +405,7 @@ mod native {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let tmp = format!("{path}.tmp");
-        std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+        crate::writefile::write(&tmp, bytes).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, path).map_err(|e| e.to_string())
     }
 
@@ -506,7 +506,8 @@ mod native {
             }
             self.last_beat = Some(now);
             let dir = Path::new(dir);
-            let r = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(lock_path(dir, &self.instance), std::process::id().to_string()));
+            let r =
+                std::fs::create_dir_all(dir).and_then(|()| crate::writefile::write(lock_path(dir, &self.instance), std::process::id().to_string()));
             if let Err(e) = r {
                 log::warn!("autosave: lock file in {}: {e}", dir.display());
             }

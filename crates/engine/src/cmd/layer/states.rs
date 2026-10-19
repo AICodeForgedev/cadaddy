@@ -188,7 +188,7 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
 fn write(path: &str, text: &str) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::fs::write(path, text).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+        crate::writefile::write(path, text).map_err(|e| EngineError::Other(format!("{path}: {e}")))
     }
     #[cfg(target_arch = "wasm32")]
     {

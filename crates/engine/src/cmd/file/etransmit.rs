@@ -495,7 +495,7 @@ fn write_folder(out: &str, items: &[Item]) -> Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| bad(CMD, format!("{}: {e}", dir.display())))?;
         }
-        std::fs::write(&path, &i.bytes).map_err(|e| bad(CMD, format!("{}: {e}", path.display())))?;
+        crate::writefile::write(&path, &i.bytes).map_err(|e| bad(CMD, format!("{}: {e}", path.display())))?;
     }
     Ok(())
 }

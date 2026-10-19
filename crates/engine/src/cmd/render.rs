@@ -164,7 +164,7 @@ fn save(s: &Session, path: &str) -> Result<()> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn write(path: &str, bytes: &[u8]) -> Result<()> {
-    std::fs::write(path, bytes).map_err(|e| bad("saveimg", format!("{path}: {e}")))
+    crate::writefile::write(path, bytes).map_err(|e| bad("saveimg", format!("{path}: {e}")))
 }
 
 #[cfg(target_arch = "wasm32")]

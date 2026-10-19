@@ -148,7 +148,7 @@ fn crop(d: &Drawing, ents: &[&std::sync::Arc<Entity>], layer: &str, ext: Bounds2
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::fs::create_dir_all(dir).map_err(|e| crate::EngineError::Other(format!("{dir}: {e}")))?;
-        std::fs::write(&path, png).map_err(|e| crate::EngineError::Other(format!("{}: {e}", path.display())))?;
+        crate::writefile::write(&path, png).map_err(|e| crate::EngineError::Other(format!("{}: {e}", path.display())))?;
         Ok(Some(path.to_string_lossy().into_owned()))
     }
     #[cfg(target_arch = "wasm32")]

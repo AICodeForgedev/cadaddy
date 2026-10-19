@@ -184,11 +184,21 @@ struct TableExtra {
     /// The data link.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     link: Option<DataLink>,
+    /// A count table's link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    count: Option<cadaddy_doc::CountLink>,
 }
 
 /// The xdata strings of a table's extra data (marker first), or nothing for a plain table.
 pub(crate) fn table_xdata(t: &Table) -> Vec<String> {
-    let mut x = TableExtra { v: 1, rows: t.row_styles.clone(), cells: Vec::new(), breaks: t.breaks.clone(), link: t.data_link.clone() };
+    let mut x = TableExtra {
+        v: 1,
+        rows: t.row_styles.clone(),
+        cells: Vec::new(),
+        breaks: t.breaks.clone(),
+        link: t.data_link.clone(),
+        count: t.count.clone(),
+    };
     for (r, row) in t.cells.iter().enumerate() {
         for (c, cell) in row.iter().enumerate() {
             if !cell.style.is_empty() || cell.formula.is_some() {
@@ -196,7 +206,7 @@ pub(crate) fn table_xdata(t: &Table) -> Vec<String> {
             }
         }
     }
-    if x.rows.is_empty() && x.cells.is_empty() && x.breaks.is_none() && x.link.is_none() {
+    if x.rows.is_empty() && x.cells.is_empty() && x.breaks.is_none() && x.link.is_none() && x.count.is_none() {
         return Vec::new();
     }
     let Ok(json) = serde_json::to_string(&x) else { return Vec::new() };
@@ -220,6 +230,12 @@ pub(crate) fn read_table_xdata(tags: &[Tag], t: &mut Table) {
         b
     });
     t.data_link = x.link.filter(|l| !l.path.trim().is_empty() && l.path.len() <= 4096);
+    t.count = x.count.map(|mut c| {
+        c.space = c.space.chars().take(255).collect();
+        c.area.truncate(10_000);
+        c.area.retain(|p| p.iter().all(|v| v.is_finite()));
+        c
+    });
 }
 
 #[cfg(test)]

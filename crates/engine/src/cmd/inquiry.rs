@@ -40,6 +40,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("time", "Time", run_time).menu(&["Tools", "Inquiry", "Time"]).noundo(),
         CommandSpec::new("status", "Status", run_status).menu(&["Tools", "Inquiry", "Status"]).noundo(),
         CommandSpec::new("drawing.inspect", "Inspect Drawing", run_inspect).params("{entities?: bool, limit?: n, index? (another open drawing, as DOCUMENT.LIST numbers them)}").noundo(),
+        CommandSpec::new("drawing.summary", "Drawing Summary", summary::run_summary).params(summary::SUMMARY_PARAMS).noundo(),
+        CommandSpec::new("drawing.query", "Query Drawing", summary::run_query).params(summary::QUERY_PARAMS).noundo(),
         CommandSpec::new("entities", "Query Entities", run_entities)
             .params("{type?, layer?, window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
             .noundo(),
@@ -50,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{space?: all (default)|current|model|<layout>, nested?: bool} → per-block counts, as COUNT")
             .noundo(),
         CommandSpec::new("counttable", "Count Table", count::run_counttable)
-            .params("{at: [x,y], space?: current (default)|model|all|<layout>, nested?: bool} → {handle}: a table of the block counts")
+            .params("{at: [x,y], space?: current (default)|model|all|<layout>, area?: [[x,y],[x,y]] | polygon, nested?: bool} → {handle, linked}: a table of the block counts, kept up to date (on REGEN, open, save, plot) | {update: true, handles?} → {updated}")
             .interactive(|_| Ok(count::table_machine())),
         CommandSpec::new("count", "Count", count::run_count)
             .menu(&["Tools", "Count"])
@@ -508,6 +510,12 @@ fn run_texts(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 mod count;
+mod summary;
+
+/// Count tables whose counts changed, worked out again (with the drawing's fields).
+pub(crate) fn update_count_tables(s: &mut Session) -> usize {
+    count::update_tables(s, None).unwrap_or(0)
+}
 
 #[derive(Default)]
 struct DistM {

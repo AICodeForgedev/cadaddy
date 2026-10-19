@@ -192,7 +192,7 @@ pub(super) fn run_saveas(s: &mut Session, p: &Value) -> Result<Value> {
     let t = template_of(s.doc()?, &name)?;
     let bytes = (hooks.write)(&t, &path).map_err(|e| bad("layout", format!("{path}: {e}")))?;
     #[cfg(not(target_arch = "wasm32"))]
-    std::fs::write(&path, &bytes).map_err(|e| bad("layout", format!("{path}: {e}")))?;
+    crate::writefile::write(&path, &bytes).map_err(|e| bad("layout", format!("{path}: {e}")))?;
     s.echo(format!("Layout \"{name}\" saved to \"{path}\"."));
     #[cfg(target_arch = "wasm32")]
     return Ok(json!({ "layout": name, "path": path, "bytes": bytes.len(), "data": super::base64_encode(&bytes) }));

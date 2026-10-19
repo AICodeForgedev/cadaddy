@@ -514,7 +514,7 @@ pub(crate) fn table_csv(t: &Table, sep: char) -> String {
 fn write_text(path: &str, text: &str) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::fs::write(path, text).map_err(|e| bad("tableexport", format!("{path}: {e}")))
+        crate::writefile::write(path, text).map_err(|e| bad("tableexport", format!("{path}: {e}")))
     }
     #[cfg(target_arch = "wasm32")]
     {

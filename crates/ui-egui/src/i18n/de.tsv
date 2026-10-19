@@ -1931,3 +1931,64 @@
 	Confirm each item to be purged	Jedes zu bereinigende Element bestätigen
 	Purge nested items	Verschachtelte Elemente bereinigen
 	Text Align	Text ausrichten
+	Color model:	Farbmodell:
+	Hue	Farbton
+	Saturation	Sättigung
+	Luminance	Helligkeit
+	Hex	Hex
+	More Colors...	Weitere Farben...
+	Load more books with COLORBOOK (JSON or tab-separated files).	Weitere Bücher mit COLORBOOK laden (JSON- oder tabulatorgetrennte Dateien).
+	All spaces	Alle Bereiche
+	Total: {n}	Gesamt: {n}
+	No block references here.	Hier gibt es keine Blockreferenzen.
+	Highlight and zoom to its references	Referenzen hervorheben und zoomen
+	Similar but not identical: {scaled} scaled, {exploded} exploded	Ähnlich, aber nicht identisch: {scaled} skaliert, {exploded} aufgelöst
+	Insert Count Table	Zähltabelle einfügen
+	Update Count Tables	Zähltabellen aktualisieren
+	Count in Area	In Bereich zählen
+	{n} reference(s) of {name} selected.	{n} Referenz(en) von {name} ausgewählt.
+	{n} similar object(s) selected.	{n} ähnliche Objekt(e) ausgewählt.
+	Geographic Location...	Geografische Position...
+	Remove Geographic Location	Geografische Position entfernen
+	Set Location	Position festlegen
+	Remove Location	Position entfernen
+	Latitude and Longitude	Breiten- und Längengrad
+	Trace Image to Vectors	Bild in Vektoren umwandeln
+	Trace Raster Image to Vectors	Rasterbild in Vektoren umwandeln
+	Drawing Summary	Zeichnungsübersicht
+	Query Drawing	Zeichnung abfragen
+	Begin Agent Request	Agentenanfrage beginnen
+	End Agent Request	Agentenanfrage beenden
+	Agent Dry Run	Agenten-Probelauf
+	Agent Confirmations	Agentenbestätigungen
+	Agent Change Journal	Änderungsprotokoll der Agenten
+	Agent Activity	Agentenaktivität
+	An agent asks	Ein Agent fragt
+	Allow	Zulassen
+	Deny	Ablehnen
+	Not allowed: {question}	Nicht zugelassen: {question}
+	Ask me before an agent saves over a file or closes with changes	Fragen, bevor ein Agent eine Datei überschreibt oder mit Änderungen schließt
+	Dry run: agents' commands change nothing	Probelauf: Befehle von Agenten ändern nichts
+	No agent requests yet.	Noch keine Agentenanfragen.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} Befehle · {added} hinzugefügt · {removed} entfernt · {changed} geändert
+	Select what it added and changed	Auswählen, was hinzugefügt und geändert wurde
+	Activity History	Aktivitätsverlauf
+	Activity history is off (Options ▸ Open and Save).	Der Aktivitätsverlauf ist aus (Optionen ▸ Öffnen und Speichern).
+	command	Befehl
+	{n} steps	{n} Schritte
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	Die von diesem Schritt hinzugefügten oder geänderten Objekte auswählen
+	The objects of this step are gone.	Die Objekte dieses Schritts gibt es nicht mehr.
+	{n} object(s) selected.	{n} Objekt(e) ausgewählt.
+	{n} object(s) selected ({gone} since erased).	{n} Objekt(e) ausgewählt ({gone} inzwischen gelöscht).
+	{n} s ago	vor {n} s
+	{n} min ago	vor {n} min
+	{n} h ago	vor {n} h
+	{n} d ago	vor {n} T
+	Keep an activity history beside each drawing (private, on this computer)	Aktivitätsverlauf neben jeder Zeichnung speichern (privat, auf diesem Computer)
+	Background mask	Hintergrundmaske
+	Mask border offset	Randabstand der Maske
+	Mask color	Maskenfarbe
+	Use drawing background	Zeichnungshintergrund verwenden
+	Regenerate Dimensions	Bemaßungen regenerieren
+	Enter layer name for new dimensions (. for the current layer)	Layername für neue Bemaßungen eingeben (. für den aktuellen Layer)

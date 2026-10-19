@@ -2103,3 +2103,64 @@ menu	Modify	Modifikace
 	Confirm each item to be purged	Potvrdit každou odstraňovanou položku
 	Purge nested items	Odstranit vnořené položky
 	Text Align	Zarovnat text
+	Color model:	Barevný model:
+	Hue	Odstín
+	Saturation	Sytost
+	Luminance	Jas
+	Hex	Hex
+	More Colors...	Další barvy...
+	Load more books with COLORBOOK (JSON or tab-separated files).	Další knihy načtete příkazem COLORBOOK (soubory JSON nebo oddělené tabulátory).
+	All spaces	Všechny prostory
+	Total: {n}	Celkem: {n}
+	No block references here.	Žádné reference bloků.
+	Highlight and zoom to its references	Zvýraznit a zvětšit na jeho reference
+	Similar but not identical: {scaled} scaled, {exploded} exploded	Podobné, ale ne shodné: {scaled} změněné měřítko, {exploded} rozložené
+	Insert Count Table	Vložit tabulku počtů
+	Update Count Tables	Aktualizovat tabulky počtů
+	Count in Area	Spočítat v oblasti
+	{n} reference(s) of {name} selected.	Vybráno {n} referencí bloku {name}.
+	{n} similar object(s) selected.	Vybráno {n} podobných objektů.
+	Geographic Location...	Zeměpisná poloha...
+	Remove Geographic Location	Odebrat zeměpisnou polohu
+	Set Location	Nastavit polohu
+	Remove Location	Odebrat polohu
+	Latitude and Longitude	Zeměpisná šířka a délka
+	Trace Image to Vectors	Vektorizovat obrázek
+	Trace Raster Image to Vectors	Vektorizovat rastrový obrázek
+	Drawing Summary	Souhrn výkresu
+	Query Drawing	Dotaz na výkres
+	Begin Agent Request	Zahájit požadavek agenta
+	End Agent Request	Ukončit požadavek agenta
+	Agent Dry Run	Zkušební běh agenta
+	Agent Confirmations	Potvrzení agenta
+	Agent Change Journal	Deník změn agenta
+	Agent Activity	Činnost agentů
+	An agent asks	Agent se ptá
+	Allow	Povolit
+	Deny	Zamítnout
+	Not allowed: {question}	Nepovoleno: {question}
+	Ask me before an agent saves over a file or closes with changes	Zeptat se, než agent přepíše soubor nebo zavře výkres s neuloženými změnami
+	Dry run: agents' commands change nothing	Zkušební běh: příkazy agentů nic nemění
+	No agent requests yet.	Zatím žádné požadavky agentů.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} příkazů · {added} přidáno · {removed} odebráno · {changed} změněno
+	Select what it added and changed	Vybrat, co přidal a změnil
+	Activity History	Historie aktivit
+	Activity history is off (Options ▸ Open and Save).	Historie aktivit je vypnutá (Možnosti ▸ Otevřít a uložit).
+	command	příkaz
+	{n} steps	{n} kroků
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	Vybrat objekty, které tento krok přidal nebo změnil
+	The objects of this step are gone.	Objekty tohoto kroku už neexistují.
+	{n} object(s) selected.	Vybráno objektů: {n}.
+	{n} object(s) selected ({gone} since erased).	Vybráno objektů: {n} ({gone} mezitím vymazáno).
+	{n} s ago	před {n} s
+	{n} min ago	před {n} min
+	{n} h ago	před {n} h
+	{n} d ago	před {n} d
+	Keep an activity history beside each drawing (private, on this computer)	Uchovávat historii aktivit u každého výkresu (soukromě, na tomto počítači)
+	Background mask	Maska pozadí
+	Mask border offset	Odsazení okraje masky
+	Mask color	Barva masky
+	Use drawing background	Použít pozadí výkresu
+	Regenerate Dimensions	Regenerovat kóty
+	Enter layer name for new dimensions (. for the current layer)	Zadejte název hladiny pro nové kóty (. pro aktuální hladinu)

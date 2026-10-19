@@ -10,6 +10,7 @@ pub mod mesh3d_io;
 
 mod dxf_ext;
 mod dxf_field;
+mod dxf_geo;
 mod dxf_image;
 mod dxf_material;
 mod dxf_mesh;

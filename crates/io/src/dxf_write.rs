@@ -2279,6 +2279,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
     paper_layouts.sort_by_key(|l| l.tab_order);
     let ms_br = w.h_kept("BLOCK_RECORD/*MODEL_SPACE");
+    // The geographic location: model space's extension dictionary and its GEODATA object.
+    let geo_handles: Option<(String, String)> = d.geo.as_ref().filter(|g| g.is_valid()).map(|_| (w.h(), w.h()));
     // Xrefs are saved as references: without their objects and the symbols that came with them.
     let saved_view = crate::dxf_xref::saved_view(d);
     let d = saved_view.as_ref().unwrap_or(d);
@@ -2616,6 +2618,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         classes.push(("RASTERVARIABLES", "AcDbRasterVariables", 0, false));
     }
     classes.push(("SCALE", "AcDbScale", 0, false));
+    if d.geo.as_ref().is_some_and(|g| g.is_valid()) {
+        classes.push(("GEODATA", "AcDbGeoData", 4095, false));
+    }
     for (dxf_name, cpp, proxy, is_entity) in classes {
         w.s(0, "CLASS");
         w.s(1, dxf_name);
@@ -2904,6 +2909,11 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     let br_rec = |w: &mut W, h: &str, name: &str, layout: Option<&str>, blk: Option<&Block>| {
         w.s(0, "BLOCK_RECORD");
         w.s(5, h);
+        if name == "*Model_Space"
+            && let Some((x, _)) = &geo_handles
+        {
+            w.group("ACAD_XDICTIONARY", 360, &[x]);
+        }
         w.s(330, th.clone());
         w.s(100, "AcDbSymbolTableRecord");
         w.s(100, "AcDbBlockTableRecord");
@@ -3297,6 +3307,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // Raster image definitions.
     w.t.extend(crate::dxf_image::objects(&cx.images, &root_dict));
     w.t.extend(crate::dxf_underlay::objects(&cx.underlays, &root_dict));
+    if let Some((x, g)) = &geo_handles {
+        w.t.extend(crate::dxf_geo::objects(d, x, g, &ms_br));
+    }
     w.s(0, "ENDSEC");
     w.s(0, "EOF");
     let seed = format!("{:X}", w.next);

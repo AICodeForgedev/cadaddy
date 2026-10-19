@@ -253,3 +253,25 @@ fn broken_field_objects_leave_the_text_as_it_was() {
     let EntityKind::Insert(ins) = &d.entity(Handle(0x2B)).unwrap().kind else { panic!() };
     assert_eq!(ins.attribs[0].text.value, "A-1", "a field owning itself is left out");
 }
+
+/// Fields come back from a DWG file (tester 0.7.7f: after a DWG round trip they were static
+/// text: the bridge's DWG writer dropped every FIELD object whose class the drawing didn't
+/// declare). Both ways the drawing goes to the bridge: binary DXF, and text when it has materials.
+#[test]
+fn fields_survive_a_dwg_round_trip() {
+    let d = read_dxf(sample().as_bytes()).unwrap();
+    let mut with_material = d.clone();
+    with_material.materials.push(cadaddy_doc::material::recipe("concrete").unwrap().material(0.0254));
+    for d in [d, with_material] {
+        let dwg = cadaddy_io::write(&d, "x.dwg").unwrap();
+        let back = cadaddy_io::read(&dwg, "x.dwg").unwrap();
+        let EntityKind::MText(t) = &back.entity(Handle(0x2A)).unwrap().kind else { panic!("the MTEXT") };
+        assert_eq!(t.contents, "File: %<\\AcVar Filename \\f \"%fn6\">%  Plotted: %<\\AcVar PlotDate \\f \"M/d/yyyy h:mm:ss tt\">%");
+        assert_eq!(back.field_values, d.field_values, "the cached values too");
+        let EntityKind::Insert(ins) = &back.entity(Handle(0x2B)).unwrap().kind else { panic!("the INSERT") };
+        assert_eq!(ins.attribs[0].text.value, "%<\\AcSm Sheet.Number \\f \"%tc1\">%");
+        // And again: one set of fields, still fields.
+        let again = cadaddy_io::read(&cadaddy_io::write(&back, "x.dwg").unwrap(), "x.dwg").unwrap();
+        assert_eq!(again.field_values, d.field_values);
+    }
+}

@@ -385,7 +385,7 @@ pub(crate) fn csv(columns: &[String], rows: &[Vec<Cell>], sep: char) -> String {
 pub(crate) fn write_file(path: &str, text: &str) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::fs::write(path, text).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+        crate::writefile::write(path, text).map_err(|e| EngineError::Other(format!("{path}: {e}")))
     }
     #[cfg(target_arch = "wasm32")]
     {

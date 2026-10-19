@@ -22,6 +22,7 @@ mod similarity;
 mod spline;
 mod spline_fit;
 mod vec;
+pub mod vectorize;
 pub mod view3;
 
 pub use bounds::Bounds2;

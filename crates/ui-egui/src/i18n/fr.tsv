@@ -1902,3 +1902,64 @@
 	Confirm each item to be purged	Confirmer chaque élément à purger
 	Purge nested items	Purger les éléments imbriqués
 	Text Align	Aligner le texte
+	Color model:	Modèle de couleur :
+	Hue	Teinte
+	Saturation	Saturation
+	Luminance	Luminance
+	Hex	Hex
+	More Colors...	Plus de couleurs...
+	Load more books with COLORBOOK (JSON or tab-separated files).	Chargez d'autres carnets avec COLORBOOK (fichiers JSON ou séparés par des tabulations).
+	All spaces	Tous les espaces
+	Total: {n}	Total : {n}
+	No block references here.	Aucune référence de bloc ici.
+	Highlight and zoom to its references	Mettre en évidence et zoomer sur ses références
+	Similar but not identical: {scaled} scaled, {exploded} exploded	Similaires mais pas identiques : {scaled} mis à l'échelle, {exploded} décomposés
+	Insert Count Table	Insérer une table de comptage
+	Update Count Tables	Mettre à jour les tables de comptage
+	Count in Area	Compter dans une zone
+	{n} reference(s) of {name} selected.	{n} référence(s) de {name} sélectionnée(s).
+	{n} similar object(s) selected.	{n} objet(s) similaire(s) sélectionné(s).
+	Geographic Location...	Emplacement géographique...
+	Remove Geographic Location	Supprimer l'emplacement géographique
+	Set Location	Définir l'emplacement
+	Remove Location	Supprimer l'emplacement
+	Latitude and Longitude	Latitude et longitude
+	Trace Image to Vectors	Vectoriser l'image
+	Trace Raster Image to Vectors	Vectoriser l'image raster
+	Drawing Summary	Résumé du dessin
+	Query Drawing	Interroger le dessin
+	Begin Agent Request	Commencer la demande de l'agent
+	End Agent Request	Terminer la demande de l'agent
+	Agent Dry Run	Essai à blanc de l'agent
+	Agent Confirmations	Confirmations de l'agent
+	Agent Change Journal	Journal des modifications de l'agent
+	Agent Activity	Activité des agents
+	An agent asks	Un agent demande
+	Allow	Autoriser
+	Deny	Refuser
+	Not allowed: {question}	Non autorisé : {question}
+	Ask me before an agent saves over a file or closes with changes	Me demander avant qu'un agent écrase un fichier ou ferme avec des modifications
+	Dry run: agents' commands change nothing	Essai à blanc : les commandes des agents ne modifient rien
+	No agent requests yet.	Aucune demande d'agent pour l'instant.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} commandes · {added} ajoutés · {removed} supprimés · {changed} modifiés
+	Select what it added and changed	Sélectionner ce qu'il a ajouté et modifié
+	Activity History	Historique d'activité
+	Activity history is off (Options ▸ Open and Save).	L'historique d'activité est désactivé (Options ▸ Ouvrir et enregistrer).
+	command	commande
+	{n} steps	{n} étapes
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	Sélectionner les objets ajoutés ou modifiés par cette étape
+	The objects of this step are gone.	Les objets de cette étape n'existent plus.
+	{n} object(s) selected.	{n} objet(s) sélectionné(s).
+	{n} object(s) selected ({gone} since erased).	{n} objet(s) sélectionné(s) ({gone} effacé(s) depuis).
+	{n} s ago	il y a {n} s
+	{n} min ago	il y a {n} min
+	{n} h ago	il y a {n} h
+	{n} d ago	il y a {n} j
+	Keep an activity history beside each drawing (private, on this computer)	Conserver un historique d'activité à côté de chaque dessin (privé, sur cet ordinateur)
+	Background mask	Masque d'arrière-plan
+	Mask border offset	Décalage de la bordure du masque
+	Mask color	Couleur du masque
+	Use drawing background	Utiliser l'arrière-plan du dessin
+	Regenerate Dimensions	Régénérer les cotes
+	Enter layer name for new dimensions (. for the current layer)	Entrez le nom du calque des nouvelles cotes (. pour le calque courant)

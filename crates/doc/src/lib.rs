@@ -45,6 +45,7 @@ pub use transform3::*;
 /// File data CADaddy doesn't model, kept for saving (#528).
 pub mod dynblock;
 pub mod foreign;
+pub mod geo;
 pub mod hyperlink;
 pub mod lighting;
 pub mod markup;
@@ -144,6 +145,8 @@ pub struct Drawing {
     pub materials: Vec<material::Material>,
     /// The sun of rendered views and their exposure (SUNPROPERTIES, RENDEREXPOSURE).
     pub sun: lighting::Sun,
+    /// Where the drawing is on the earth (GEOGRAPHICLOCATION), if set.
+    pub geo: Option<geo::GeoLocation>,
     /// The building spec (`cadaddy-walk3d`'s `BuildingSpec` as JSON text, `bspec.set`): what the
     /// plan means as a 3D building. Kept in the named-object dictionary (`CADADDY_BSPEC`).
     pub building_spec: Option<String>,
@@ -251,6 +254,7 @@ impl Drawing {
             hidden_saved: false,
             materials: Vec::new(),
             sun: lighting::Sun::default(),
+            geo: None,
             building_spec: None,
             tours: None,
             embedded: BTreeMap::new(),

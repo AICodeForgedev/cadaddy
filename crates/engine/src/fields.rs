@@ -151,7 +151,7 @@ pub fn on_event(s: &mut Session, event: Event) -> usize {
     if event.bit().is_some_and(|b| fieldeval(&st.doc) & b == 0) {
         return 0;
     }
-    evaluate(s, event, None)
+    evaluate(s, event, None) + crate::cmd::inquiry::update_count_tables(s)
 }
 
 /// On saving: the save date (TDUPDATE) becomes now, then fields are worked out if FIELDEVAL says

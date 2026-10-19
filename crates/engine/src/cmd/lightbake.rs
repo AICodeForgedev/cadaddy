@@ -185,8 +185,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(path) = s.state()?.path.clone() {
         let (png, idx) = sidecar(&path);
-        std::fs::write(&png, bytes).map_err(|e| bad(cmd, format!("{}: {e}", png.display())))?;
-        std::fs::write(&idx, index).map_err(|e| bad(cmd, format!("{}: {e}", idx.display())))?;
+        crate::writefile::write(&png, bytes).map_err(|e| bad(cmd, format!("{}: {e}", png.display())))?;
+        crate::writefile::write(&idx, index).map_err(|e| bad(cmd, format!("{}: {e}", idx.display())))?;
         if let Some(o) = out.as_object_mut() {
             o.insert("saved".into(), json!(png.display().to_string()));
         }

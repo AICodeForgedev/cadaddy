@@ -2211,3 +2211,64 @@
 	Confirm each item to be purged	Підтверджувати кожен елемент для очищення
 	Purge nested items	Очистити вкладені елементи
 	Text Align	Вирівняти текст
+	Color model:	Колірна модель:
+	Hue	Відтінок
+	Saturation	Насиченість
+	Luminance	Яскравість
+	Hex	Hex
+	More Colors...	Інші кольори...
+	Load more books with COLORBOOK (JSON or tab-separated files).	Завантажте інші книги командою COLORBOOK (файли JSON або з роздільниками-табуляціями).
+	All spaces	Усі простори
+	Total: {n}	Усього: {n}
+	No block references here.	Тут немає вхождень блоків.
+	Highlight and zoom to its references	Виділити вхождення й наблизити
+	Similar but not identical: {scaled} scaled, {exploded} exploded	Схожі, але не ідентичні: масштабованих {scaled}, розчленованих {exploded}
+	Insert Count Table	Вставити таблицю підрахунку
+	Update Count Tables	Оновити таблиці підрахунку
+	Count in Area	Підрахунок в області
+	{n} reference(s) of {name} selected.	Вибрано вхождень {name}: {n}.
+	{n} similar object(s) selected.	Вибрано схожих об'єктів: {n}.
+	Geographic Location...	Географічне розташування...
+	Remove Geographic Location	Видалити географічне розташування
+	Set Location	Задати розташування
+	Remove Location	Видалити розташування
+	Latitude and Longitude	Широта й довгота
+	Trace Image to Vectors	Векторизувати зображення
+	Trace Raster Image to Vectors	Векторизувати растрове зображення
+	Drawing Summary	Зведення креслення
+	Query Drawing	Запит до креслення
+	Begin Agent Request	Почати запит агента
+	End Agent Request	Завершити запит агента
+	Agent Dry Run	Пробний запуск агента
+	Agent Confirmations	Підтвердження агента
+	Agent Change Journal	Журнал змін агента
+	Agent Activity	Дії агентів
+	An agent asks	Агент запитує
+	Allow	Дозволити
+	Deny	Заборонити
+	Not allowed: {question}	Не дозволено: {question}
+	Ask me before an agent saves over a file or closes with changes	Питати, перш ніж агент перезапише файл або закриє креслення зі змінами
+	Dry run: agents' commands change nothing	Пробний запуск: команди агентів нічого не змінюють
+	No agent requests yet.	Запитів агентів ще немає.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	Команд: {commands} · додано {added} · вилучено {removed} · змінено {changed}
+	Select what it added and changed	Вибрати додане та змінене
+	Activity History	Журнал дій
+	Activity history is off (Options ▸ Open and Save).	Журнал дій вимкнено (Параметри ▸ Відкриття і збереження).
+	command	команда
+	{n} steps	Кроків: {n}
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	Вибрати об'єкти, додані або змінені цим кроком
+	The objects of this step are gone.	Об'єктів цього кроку більше немає.
+	{n} object(s) selected.	Вибрано об'єктів: {n}.
+	{n} object(s) selected ({gone} since erased).	Вибрано об'єктів: {n} (відтоді стерто: {gone}).
+	{n} s ago	{n} с тому
+	{n} min ago	{n} хв тому
+	{n} h ago	{n} год тому
+	{n} d ago	{n} дн тому
+	Keep an activity history beside each drawing (private, on this computer)	Зберігати журнал дій поруч із кожним кресленням (приватно, на цьому комп'ютері)
+	Background mask	Маска фону
+	Mask border offset	Відступ межі маски
+	Mask color	Колір маски
+	Use drawing background	Використати фон креслення
+	Regenerate Dimensions	Відновити розміри
+	Enter layer name for new dimensions (. for the current layer)	Введіть ім'я шару для нових розмірів (. — поточний шар)

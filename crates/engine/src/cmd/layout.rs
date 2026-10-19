@@ -1011,7 +1011,7 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             {
                 let path = _path;
                 let tmp = format!("{path}.cadaddy-tmp");
-                std::fs::write(&tmp, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+                crate::writefile::write(&tmp, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
                 std::fs::rename(&tmp, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
                 Ok(json!({ "path": path, "bytes": bytes.len(), "layout": layout, "pages": pages }))
             }

@@ -27,6 +27,58 @@ impl Rgb {
         }
         u32::from_str_radix(s, 16).ok().map(Rgb::from_u32)
     }
+    /// Hue (degrees, 0..360), saturation and lightness (percent, 0..100).
+    pub fn to_hsl(self) -> (f64, f64, f64) {
+        let [r, g, b] = [self.0, self.1, self.2].map(|v| f64::from(v) / 255.0);
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let l = (max + min) / 2.0;
+        let d = max - min;
+        if d <= f64::EPSILON {
+            return (0.0, 0.0, l * 100.0);
+        }
+        let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+        let h = if max == r {
+            (g - b) / d + if g < b { 6.0 } else { 0.0 }
+        } else if max == g {
+            (b - r) / d + 2.0
+        } else {
+            (r - g) / d + 4.0
+        };
+        (h * 60.0, s * 100.0, l * 100.0)
+    }
+
+    /// From hue (degrees, any value: it wraps), saturation and lightness (percent, clamped).
+    pub fn from_hsl(h: f64, s: f64, l: f64) -> Rgb {
+        let h = if h.is_finite() { h.rem_euclid(360.0) / 360.0 } else { 0.0 };
+        let s = if s.is_finite() { (s / 100.0).clamp(0.0, 1.0) } else { 0.0 };
+        let l = if l.is_finite() { (l / 100.0).clamp(0.0, 1.0) } else { 0.0 };
+        let to8 = |v: f64| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+        if s <= f64::EPSILON {
+            let v = to8(l);
+            return Rgb(v, v, v);
+        }
+        let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+        let p = 2.0 * l - q;
+        let hue = |mut t: f64| {
+            if t < 0.0 {
+                t += 1.0;
+            }
+            if t > 1.0 {
+                t -= 1.0;
+            }
+            if t < 1.0 / 6.0 {
+                p + (q - p) * 6.0 * t
+            } else if t < 0.5 {
+                q
+            } else if t < 2.0 / 3.0 {
+                p + (q - p) * (2.0 / 3.0 - t) * 6.0
+            } else {
+                p
+            }
+        };
+        Rgb(to8(hue(h + 1.0 / 3.0)), to8(hue(h)), to8(hue(h - 1.0 / 3.0)))
+    }
+
     /// Relative luminance (0..1) for contrast decisions.
     pub fn luma(self) -> f64 {
         (0.2126 * f64::from(self.0) + 0.7152 * f64::from(self.1) + 0.0722 * f64::from(self.2)) / 255.0
@@ -218,6 +270,29 @@ pub fn display_rgb(c: Rgb, aci7: bool, background: Rgb) -> Rgb {
         Rgb(255, 255, 255)
     } else {
         Rgb(0, 0, 0)
+    }
+}
+
+#[cfg(test)]
+mod hsl_tests {
+    use super::Rgb;
+
+    #[test]
+    fn hex_and_hsl_round_trip_to_the_stored_true_colour() {
+        // Every channel value through hex, and a sweep through HSL, come back exactly.
+        for v in (0..=255u32).step_by(3) {
+            for c in [Rgb(v as u8, 255 - v as u8, (v * 7 % 256) as u8), Rgb(v as u8, v as u8, v as u8)] {
+                assert_eq!(Rgb::parse_hex(&c.hex()), Some(c));
+                let (h, s, l) = c.to_hsl();
+                assert_eq!(Rgb::from_hsl(h, s, l), c, "{c:?} → {h} {s} {l}");
+            }
+        }
+        assert_eq!(Rgb(255, 0, 0).to_hsl(), (0.0, 100.0, 50.0));
+        assert_eq!(Rgb::from_hsl(120.0, 100.0, 25.0), Rgb(0, 128, 0));
+        assert_eq!(Rgb::from_hsl(-240.0, 100.0, 50.0), Rgb(0, 255, 0), "hue wraps");
+        assert_eq!(Rgb::from_hsl(f64::NAN, 500.0, -3.0), Rgb(0, 0, 0), "hostile values are clamped");
+        assert_eq!(Rgb::parse_hex("#FfA500"), Some(Rgb(255, 165, 0)));
+        assert_eq!(Rgb::parse_hex("ffa50"), None);
     }
 }
 

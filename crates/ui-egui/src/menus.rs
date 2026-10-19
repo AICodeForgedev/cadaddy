@@ -120,6 +120,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.window.new", "Move to New Window", &["Window", "Move to New Window"], None),
     ("ui.window.dockall", "Dock All Windows", &["Window", "Dock All Windows"], None),
     ("ui.quickprops", "Quick Properties Lists", &[], None),
+    ("ui.agentlog", "Agent Activity", &["Window", "Agent Activity"], None),
 ];
 
 /// Typed commands that open a dialog only when typed alone: with more on the line (`color 1`,
@@ -308,6 +309,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 crate::tearoff::dock(app, uid);
             }
             Ok(json!({ "windows": 0 }))
+        }
+        "ui.agentlog" => {
+            app.ui.dialog = Some(crate::agentdlg::DIALOG.into());
+            Ok(Value::Null)
         }
         "ui.sample" => {
             let d = cadaddy_engine::sample::default_sample();
@@ -657,6 +662,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 Err("POINTCLOUDATTACH: there is no file dialog here; run it with parameters, e.g. pointcloudattach {\"path\": \"scan.las\"}".into())
             }
         },
+        "countlist" if params.is_null() && app.session.state().is_ok() => {
+            app.ui.dialog = Some(crate::countpalette::DIALOG.into());
+            Ok(Value::Null)
+        }
         "markups" if params.is_null() => {
             app.ui.dialog = Some("markups".into());
             Ok(Value::Null)
@@ -756,6 +765,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         "laywalk" if params.is_null() && app.session.state().is_ok() => {
             app.ui.dialog = Some(crate::laywalkdlg::DIALOG.into());
+            Ok(Value::Null)
+        }
+        "activity" if params.is_null() && app.session.state().is_ok() => {
+            app.ui.dialog = Some(crate::activitypalette::DIALOG.into());
             Ok(Value::Null)
         }
         "find" if params.is_null() && app.session.state().is_ok() => {

@@ -505,7 +505,7 @@ fn deliver(png: Vec<u8>, p: &Value, out: &mut Value) -> Result<()> {
         Some(path) => {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                std::fs::write(path, &png).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))?;
+                crate::writefile::write(path, &png).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))?;
                 out["path"] = json!(path);
             }
             #[cfg(target_arch = "wasm32")]

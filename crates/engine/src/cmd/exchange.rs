@@ -246,7 +246,7 @@ fn write_file(cmd: &str, path: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let tmp = format!("{path}.cadaddy-tmp");
-        std::fs::write(&tmp, bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+        crate::writefile::write(&tmp, bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
         std::fs::rename(&tmp, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
         Ok(())
     }
