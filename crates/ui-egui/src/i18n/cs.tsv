@@ -1861,3 +1861,63 @@ menu	Modify	Modifikace
 	Render Model View	Vykreslit pohled na model
 	Model Overlay	Překrytí modelu
 	Model Counts	Počty v modelu
+	System Printers	Systémové tiskárny
+	Report a Problem...	Nahlásit problém...
+	Report a Problem	Nahlásit problém
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Shromáždí to, co pomůže najít problém, do souboru ZIP v tomto počítači. Nic se neodesílá: chcete-li problém nahlásit, přiložte soubor k e-mailu.
+	Always included	Vždy zahrnuto
+	The log of this run and the two before it	Protokol tohoto spuštění a dvou předchozích
+	The last commands	Poslední příkazy
+	Versions, operating system and graphics adapter	Verze, operační systém a grafický adaptér
+	A summary of the open drawings (counts only, no geometry)	Souhrn otevřených výkresů (pouze počty, bez geometrie)
+	Names: file paths, layer and block names, typed text	Názvy: cesty k souborům, názvy hladin a bloků, zadaný text
+	Names are replaced by placeholders, also in the log.	Názvy se nahradí zástupnými symboly, i v protokolu.
+	Save Report...	Uložit zprávu...
+	Email it to {address}	Pošlete jej e-mailem na {address}
+	Plans to Model	Z výkresů do modelu
+	Build	Sestavit
+	Rebuild	Znovu sestavit
+	Check	Zkontrolovat
+	Kept in the drawing.	Uloženo ve výkresu.
+	Drafted from the walk rules; not saved yet.	Návrh z pravidel procházení; zatím neuloženo.
+	{n} of {total} approved	Schváleno {n} z {total}
+	Save Spec	Uložit specifikaci
+	Approve All	Schválit vše
+	Approved	Schváleno
+	Levels	Podlaží
+	Wall Types	Typy stěn
+	Rooms	Místnosti
+	Door and Window Families	Rodiny dveří a oken
+	Materials	Materiály
+	Site	Pozemek
+	Openings	Otvory
+	Issues ({n})	Problémy ({n})
+	The drawing changed since; check again.	Výkres se mezitím změnil; zkontrolujte znovu.
+	No issues found.	Nenalezeny žádné problémy.
+	Configure Standards	Konfigurovat standardy
+	Standards files associated with the current drawing	Soubory standardů přidružené k aktuálnímu výkresu
+	Add...	Přidat...
+	Check Standards...	Kontrolovat standardy...
+	Check Standards	Kontrolovat standardy
+	No standards violations were found.	Nebyla nalezena žádná porušení standardů.
+	problem(s)	problém(ů)
+	Take the standard's properties	Převzít vlastnosti standardu
+	Replace it with the standard one	Nahradit standardním
+	Fix All	Opravit vše
+	Give everything that differs the standard's properties	Dát všemu, co se liší, vlastnosti standardu
+	Check Again	Zkontrolovat znovu
+	Layer Translator	Převodník hladin
+	Translate From	Převést z
+	Translate To	Převést na
+	Load a drawing whose layers to translate to.	Načtěte výkres, na jehož hladiny se má převádět.
+	Map	Přiřadit
+	Layer Translation Mappings	Přiřazení převodu hladin
+	Load Map...	Načíst přiřazení...
+	Save Map...	Uložit přiřazení...
+	Translate	Převést
+	Not in the standards	Není ve standardech
+	Properties differ from the standards	Vlastnosti se liší od standardů
+	CAD Standards	Standardy CAD
+	Configure...	Konfigurovat...
+	Check...	Kontrolovat...
+	Layer Translator...	Převodník hladin...

@@ -39,6 +39,22 @@ pub type PdfHook = fn(&[u8], &Value) -> std::result::Result<(Drawing, Value), St
 
 static IO: OnceLock<IoHooks> = OnceLock::new();
 
+/// The system's printers (a desktop host): their names, and printing a plot's PDF on one
+/// (`printer`, `pdf`, a job title).
+pub struct PrintHooks {
+    pub list: fn() -> std::result::Result<Vec<String>, String>,
+    pub print: fn(&str, &[u8], &str) -> std::result::Result<(), String>,
+}
+
+static PRINT: OnceLock<PrintHooks> = OnceLock::new();
+
+pub fn set_print(h: PrintHooks) {
+    let _ = PRINT.set(h);
+}
+pub fn print_hooks() -> Option<&'static PrintHooks> {
+    PRINT.get()
+}
+
 pub fn set_io(h: IoHooks) {
     let _ = IO.set(h);
 }

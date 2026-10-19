@@ -1882,3 +1882,63 @@ menu	Modify	수정
 	Render Model View	모델 뷰 렌더링
 	Model Overlay	모델 오버레이
 	Model Counts	모델 개수
+	System Printers	시스템 프린터
+	Report a Problem...	문제 보고...
+	Report a Problem	문제 보고
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	문제를 찾는 데 도움이 되는 정보를 이 컴퓨터의 ZIP 파일로 모읍니다. 아무것도 전송되지 않습니다. 문제를 보고하려면 파일을 이메일에 첨부하십시오.
+	Always included	항상 포함
+	The log of this run and the two before it	이번 실행과 이전 두 번의 실행 로그
+	The last commands	최근 명령
+	Versions, operating system and graphics adapter	버전, 운영 체제 및 그래픽 어댑터
+	A summary of the open drawings (counts only, no geometry)	열린 도면 요약(개수만, 형상 제외)
+	Names: file paths, layer and block names, typed text	이름: 파일 경로, 도면층 및 블록 이름, 입력한 텍스트
+	Names are replaced by placeholders, also in the log.	이름은 로그에서도 자리 표시자로 바뀝니다.
+	Save Report...	보고서 저장...
+	Email it to {address}	{address}(으)로 이메일 보내기
+	Plans to Model	도면에서 모델로
+	Build	작성
+	Rebuild	다시 작성
+	Check	검사
+	Kept in the drawing.	도면에 저장됨.
+	Drafted from the walk rules; not saved yet.	워크 규칙에서 초안 작성됨. 아직 저장되지 않음.
+	{n} of {total} approved	{total}개 중 {n}개 승인됨
+	Save Spec	사양 저장
+	Approve All	모두 승인
+	Approved	승인됨
+	Levels	레벨
+	Wall Types	벽 유형
+	Rooms	실
+	Door and Window Families	문 및 창 패밀리
+	Materials	재료
+	Site	대지
+	Openings	개구부
+	Issues ({n})	문제 ({n})
+	The drawing changed since; check again.	그 후 도면이 변경되었습니다. 다시 검사하십시오.
+	No issues found.	문제가 없습니다.
+	Configure Standards	표준 구성
+	Standards files associated with the current drawing	현재 도면에 연결된 표준 파일
+	Add...	추가...
+	Check Standards...	표준 검사...
+	Check Standards	표준 검사
+	No standards violations were found.	표준 위반이 없습니다.
+	problem(s)	개 문제
+	Take the standard's properties	표준의 특성 적용
+	Replace it with the standard one	표준 항목으로 대체
+	Fix All	모두 수정
+	Give everything that differs the standard's properties	다른 모든 항목에 표준 특성 적용
+	Check Again	다시 검사
+	Layer Translator	도면층 변환기
+	Translate From	변환 원본
+	Translate To	변환 대상
+	Load a drawing whose layers to translate to.	변환 대상 도면층이 있는 도면을 불러오십시오.
+	Map	매핑
+	Layer Translation Mappings	도면층 변환 매핑
+	Load Map...	매핑 불러오기...
+	Save Map...	매핑 저장...
+	Translate	변환
+	Not in the standards	표준에 없음
+	Properties differ from the standards	특성이 표준과 다름
+	CAD Standards	CAD 표준
+	Configure...	구성...
+	Check...	검사...
+	Layer Translator...	도면층 변환기...

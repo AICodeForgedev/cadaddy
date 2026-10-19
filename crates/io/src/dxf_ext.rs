@@ -6,7 +6,8 @@
 //!
 //! CADaddy's own data lives under the registered application `CADADDY` (xdata) and the
 //! named-object-dictionary entries `CADADDY_CONSTRAINTS`, `CADADDY_LAYERSTATES`,
-//! `CADADDY_PLOTSTYLES`, `CADADDY_HANDSEED`, `CADADDY_MLEADERSTYLE` and `CADADDY_BSPEC` (XRECORDs). Other
+//! `CADADDY_PLOTSTYLES`, `CADADDY_HANDSEED`, `CADADDY_MLEADERSTYLE`, `CADADDY_BSPEC` and
+//! `CADADDY_STANDARDS` (XRECORDs). Other
 //! readers keep or ignore them.
 
 use std::collections::HashMap;
@@ -37,6 +38,9 @@ pub(crate) const ANNOTATION_KEY: &str = "CADADDY_ANNOTATION";
 pub(crate) const PLOT_STYLE_NAMES_KEY: &str = "ACAD_PLOTSTYLENAME";
 /// Named-object-dictionary key of the XRECORD holding the drawing's next entity handle (hex).
 pub(crate) const HANDSEED_KEY: &str = "CADADDY_HANDSEED";
+/// Named-object-dictionary key of the XRECORD holding the standards files associated with the
+/// drawing (STANDARDS): the `CADADDY_STANDARDS` header variable, a JSON list of paths.
+pub(crate) const STANDARDS_KEY: &str = "CADADDY_STANDARDS";
 /// Named-object-dictionary key of the XRECORD holding the current multileader style.
 pub(crate) const MLEADER_STYLE_KEY: &str = "CADADDY_MLEADERSTYLE";
 /// Named-object-dictionary key of the XRECORD holding the building spec (JSON).
@@ -701,7 +705,7 @@ pub(crate) fn constraint_chunks(constraints: &[Constraint], parametric: &Paramet
 
 /// JSON text split into XRECORD strings of at most 250 characters. Backslashes are written as
 /// `\u005c` so no chunk contains a DXF `\U+` escape.
-fn json_chunks(json: &str) -> Vec<String> {
+pub(crate) fn json_chunks(json: &str) -> Vec<String> {
     let mut safe = String::with_capacity(json.len());
     let mut it = json.chars().peekable();
     while let Some(c) = it.next() {

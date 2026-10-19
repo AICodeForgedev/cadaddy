@@ -40,6 +40,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.float.externalReferences", "External References", &["Window", "Palette Windows", "External References"], None),
     ("ui.float.symbols", "Symbols", &["Window", "Palette Windows", "Symbols"], None),
     ("ui.float.quickCalc", "QuickCalc", &["Window", "Palette Windows", "QuickCalc"], None),
+    ("ui.panel.planstomodel", "Plans to Model", &["Window", "Plans to Model"], None),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
     ("ui.animations.system", "Use System Setting", &["View", "Accessibility", "Animation Effects", "Use System Setting"], None),
     ("ui.animations.on", "On", &["View", "Accessibility", "Animation Effects", "On"], None),
@@ -89,6 +90,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.dialog.commands", "Command Reference", &["Help", "CADaddy Help"], Some("F1")),
     ("ui.update.check", "Check for Updates...", &["Help", "Check for Updates..."], None),
     ("ui.feedback", "Report a Bug...", &["Help", "Report a Bug..."], None),
+    ("ui.diag", "Report a Problem...", &["Help", "Report a Problem..."], None),
     ("ui.feature", "Request a Feature...", &["Help", "Request a Feature..."], None),
     ("ui.donate", "Support CADaddy...", &["Help", "Support CADaddy..."], None),
     ("ui.toggle.history", "Command History", &["Window", "Command History"], Some("F2")),
@@ -158,6 +160,9 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     if matches!(id, "ui.panel.properties" | "ui.panel.layers") {
         let panel = if id == "ui.panel.properties" { "properties" } else { "layers" };
         return Some(crate::docking::command(app, false, &json!({"operation":"open", "panel":panel})));
+    }
+    if id == "ui.panel.planstomodel" || (id == "planstomodel" && params.is_null()) {
+        return Some(crate::planstomodel::open(app));
     }
     // SYMBOLS typed or from a menu opens the symbol library palette, expanded.
     if id == "ui.panel.symbols" || (id == "symbols" && params.is_null()) {
@@ -520,6 +525,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         // The feedback form and the fundraiser open in the browser ([`crate::support`]).
+        "ui.diag" => {
+            app.ui.dialog = Some("diag".into());
+            Ok(Value::Null)
+        }
         "ui.feedback" | "ui.feature" | "ui.donate" => {
             let url = match id {
                 "ui.feedback" => crate::support::feedback_url("bug"),
@@ -545,6 +554,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // Typed or menu-invoked (no parameters) these open their dialogs; JSON calls run the command.
         "etransmit" if params.is_null() => {
             app.ui.dialog = Some("etransmit".into());
+            Ok(Value::Null)
+        }
+        "standards" | "checkstandards" | "laytrans" if params.is_null() => {
+            app.ui.dialog = Some(id.to_ascii_lowercase());
             Ok(Value::Null)
         }
         "sheetset" | "ssm" if params.is_null() => {

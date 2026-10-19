@@ -764,6 +764,7 @@ dependencies = [
  "cadaddy-geom",
  "image",
  "lyon_tessellation",
+ "miniz_oxide 0.8.9",
  "rayon",
  "serde_json",
  "tiny-skia",

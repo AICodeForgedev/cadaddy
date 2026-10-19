@@ -9,6 +9,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+# Deflate for binary plot style tables (.ctb/.stb); MIT OR Zlib OR Apache-2.0, already used by cadaddy-io.
+miniz_oxide = "0.8"
 cadaddy-geom = { workspace = true }
 cadaddy-color = { workspace = true }
 cadaddy-doc = { workspace = true }

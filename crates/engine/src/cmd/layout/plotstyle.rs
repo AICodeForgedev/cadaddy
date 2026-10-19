@@ -20,7 +20,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("stylesmanager", "Plot Style Manager...", run_stylesmanager)
             .menu(&["File", "Plot Styles..."])
             .params(
-                "{action?: list (default)|get|new|set|delete|load|save, name?: table (\"x.ctb\"/\"x.stb\"), kind?: colorDependent|named (new), from?: table to copy (new), description?, style?: {name, color?: \"#rrggbb\"|null, grayscale?, screening?: 0-100, linetype?: name|null, lineweight?: mm|null, end?, join?, fill?, description?} (set), removeStyle?: name (set, named tables), path? (load/save; save without one returns `text`), text? (load)}",
+                "{action?: list (default)|get|new|set|delete|load|save, name?: table (\"x.ctb\"/\"x.stb\"), kind?: colorDependent|named (new), from?: table to copy (new), description?, style?: {name, color?: \"#rrggbb\"|null, grayscale?, screening?: 0-100, linetype?: name|null, lineweight?: mm|null, end?, join?, fill?, description?} (set), removeStyle?: name (set, named tables), path? (load: .ctb/.stb binary or our JSON, detected; save: binary for a .ctb/.stb path, else JSON; without one returns `text`, or base64 `data` for format binary), text? | data? (base64 binary) (load), format?: binary|json (save)}",
             ),
     ]
 }
@@ -295,23 +295,31 @@ fn run_stylesmanager(s: &mut Session, p: &Value) -> Result<Value> {
             Ok(json!({ "deleted": name }))
         }
         "load" => {
-            let text = match (str_param(p, "text"), str_param(p, "path")) {
-                (Some(t), _) => t.to_string(),
-                (None, Some(_path)) => {
+            // Our JSON tables, or binary .ctb/.stb files (`data`: base64, or a file).
+            let bytes: Vec<u8> = match (str_param(p, "text"), str_param(p, "data"), str_param(p, "path")) {
+                (Some(t), _, _) => t.as_bytes().to_vec(),
+                (None, Some(b64), _) => super::super::file::base64_decode(b64).ok_or_else(|| bad(cmd, "`data` must be base64"))?,
+                (None, None, Some(_path)) => {
                     #[cfg(not(target_arch = "wasm32"))]
                     {
                         let meta = std::fs::metadata(_path).map_err(|e| bad(cmd, format!("{_path}: {e}")))?;
                         if meta.len() > cadaddy_doc::MAX_TABLE_FILE as u64 {
                             return Err(bad(cmd, format!("{_path}: the plot style table file is too large")));
                         }
-                        std::fs::read_to_string(_path).map_err(|e| bad(cmd, format!("{_path}: {e}")))?
+                        std::fs::read(_path).map_err(|e| bad(cmd, format!("{_path}: {e}")))?
                     }
                     #[cfg(target_arch = "wasm32")]
-                    return Err(bad(cmd, "files can't be read here: pass `text`"));
+                    return Err(bad(cmd, "files can't be read here: pass `text` or `data`"));
                 }
-                (None, None) => return Err(bad(cmd, "`path` or `text` is required")),
+                (None, None, None) => return Err(bad(cmd, "`path`, `text` or `data` is required")),
             };
-            let mut t = PlotStyleTable::from_file_text(&text).map_err(|e| bad(cmd, e))?;
+            let mut t = if cadaddy_render::pia::is_pia(&bytes) {
+                // A binary table is named after its file.
+                let file = str_param(p, "path").and_then(|f| std::path::Path::new(f).file_name()?.to_str().map(str::to_string)).unwrap_or_default();
+                cadaddy_render::pia::read(&bytes, &file).map_err(|e| bad(cmd, e))?
+            } else {
+                PlotStyleTable::from_file_text(&String::from_utf8_lossy(&bytes)).map_err(|e| bad(cmd, e))?
+            };
             if let Some(n) = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
                 t.name = n.chars().take(255).collect();
             }
@@ -324,16 +332,29 @@ fn run_stylesmanager(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "save" => {
             let name = table_name(cmd, p)?;
-            let text = find_table(cmd, s.doc()?, &name)?.to_file_text();
+            let table = find_table(cmd, s.doc()?, &name)?;
+            let text = table.to_file_text();
+            // Binary for .ctb/.stb paths (and `format: binary`); our JSON otherwise.
+            let binary = match str_param(p, "format").map(str::to_ascii_lowercase).as_deref() {
+                Some("binary") => true,
+                Some("json") => false,
+                Some(_) => return Err(bad(cmd, "`format` must be binary or json")),
+                None => str_param(p, "path").is_some_and(|f| {
+                    let f = f.to_ascii_lowercase();
+                    f.ends_with(".ctb") || f.ends_with(".stb")
+                }),
+            };
+            let bytes = if binary { cadaddy_render::pia::write(&table) } else { text.clone().into_bytes() };
             match str_param(p, "path") {
+                None if binary => Ok(json!({ "name": name, "data": super::super::file::base64_encode(&bytes) })),
                 None => Ok(json!({ "name": name, "text": text })),
                 Some(_path) => {
                     #[cfg(not(target_arch = "wasm32"))]
                     {
                         let tmp = format!("{_path}.cadaddy-tmp");
-                        std::fs::write(&tmp, text.as_bytes()).map_err(|e| bad(cmd, format!("{_path}: {e}")))?;
+                        std::fs::write(&tmp, &bytes).map_err(|e| bad(cmd, format!("{_path}: {e}")))?;
                         std::fs::rename(&tmp, _path).map_err(|e| bad(cmd, format!("{_path}: {e}")))?;
-                        Ok(json!({ "name": name, "path": _path, "bytes": text.len() }))
+                        Ok(json!({ "name": name, "path": _path, "bytes": bytes.len(), "format": if binary { "binary" } else { "json" } }))
                     }
                     #[cfg(target_arch = "wasm32")]
                     Err(bad(cmd, "files can't be written here: leave out `path` to get `text`"))

@@ -23,6 +23,7 @@ pub mod model3;
 mod outline;
 pub mod paper;
 pub mod pen;
+pub mod pia;
 mod plotstyle;
 mod point;
 pub mod raster;

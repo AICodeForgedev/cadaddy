@@ -1655,3 +1655,63 @@
 	Render Model View	Rendre une vue du modèle
 	Model Overlay	Superposition du modèle
 	Model Counts	Décomptes du modèle
+	System Printers	Imprimantes système
+	Report a Problem...	Signaler un problème...
+	Report a Problem	Signaler un problème
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Rassemble ce qui aide à trouver un problème dans un fichier ZIP sur cet ordinateur. Rien n'est envoyé : joignez le fichier à un e-mail si vous voulez le signaler.
+	Always included	Toujours inclus
+	The log of this run and the two before it	Le journal de cette session et des deux précédentes
+	The last commands	Les dernières commandes
+	Versions, operating system and graphics adapter	Versions, système d'exploitation et carte graphique
+	A summary of the open drawings (counts only, no geometry)	Un résumé des dessins ouverts (nombres uniquement, sans géométrie)
+	Names: file paths, layer and block names, typed text	Noms : chemins de fichiers, noms de calques et de blocs, texte saisi
+	Names are replaced by placeholders, also in the log.	Les noms sont remplacés par des espaces réservés, y compris dans le journal.
+	Save Report...	Enregistrer le rapport...
+	Email it to {address}	Envoyez-le par e-mail à {address}
+	Plans to Model	Des plans au modèle
+	Build	Construire
+	Rebuild	Reconstruire
+	Check	Vérifier
+	Kept in the drawing.	Enregistrée dans le dessin.
+	Drafted from the walk rules; not saved yet.	Ébauche tirée des règles de visite ; pas encore enregistrée.
+	{n} of {total} approved	{n} sur {total} approuvées
+	Save Spec	Enregistrer la spécification
+	Approve All	Tout approuver
+	Approved	Approuvé
+	Levels	Niveaux
+	Wall Types	Types de murs
+	Rooms	Pièces
+	Door and Window Families	Familles de portes et fenêtres
+	Materials	Matériaux
+	Site	Terrain
+	Openings	Ouvertures
+	Issues ({n})	Problèmes ({n})
+	The drawing changed since; check again.	Le dessin a changé depuis ; vérifiez à nouveau.
+	No issues found.	Aucun problème trouvé.
+	Configure Standards	Configurer les normes
+	Standards files associated with the current drawing	Fichiers de normes associés au dessin courant
+	Add...	Ajouter...
+	Check Standards...	Vérifier les normes...
+	Check Standards	Vérifier les normes
+	No standards violations were found.	Aucune violation des normes n'a été trouvée.
+	problem(s)	problème(s)
+	Take the standard's properties	Reprendre les propriétés de la norme
+	Replace it with the standard one	Le remplacer par celui de la norme
+	Fix All	Tout corriger
+	Give everything that differs the standard's properties	Donner à tout ce qui diffère les propriétés de la norme
+	Check Again	Vérifier à nouveau
+	Layer Translator	Convertisseur de calques
+	Translate From	Convertir depuis
+	Translate To	Convertir en
+	Load a drawing whose layers to translate to.	Chargez un dessin dont les calques sont la cible de la conversion.
+	Map	Associer
+	Layer Translation Mappings	Associations de conversion des calques
+	Load Map...	Charger les associations...
+	Save Map...	Enregistrer les associations...
+	Translate	Convertir
+	Not in the standards	Absent des normes
+	Properties differ from the standards	Les propriétés diffèrent des normes
+	CAD Standards	Normes CAO
+	Configure...	Configurer...
+	Check...	Vérifier...
+	Layer Translator...	Convertisseur de calques...

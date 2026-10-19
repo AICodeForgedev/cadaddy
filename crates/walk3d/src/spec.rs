@@ -59,6 +59,21 @@ pub struct BuildingSpec {
     /// Openings found as gaps in walls, and the default door head and window sill and head.
     #[serde(default)]
     pub openings: Openings,
+    /// The parts a person has checked and approved, by key ([`Described::key`]: `levels/L1`,
+    /// `layers/A-WALL`, `materials`…).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approved: Vec<String>,
+}
+
+/// One part of a spec in plain language: its section, key (for approval and editing) and text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Described {
+    pub section: &'static str,
+    /// `levels/L1`, `layers/A-WALL`, `wall_types/Partition`, `rooms/Office`, `families/Door`,
+    /// `materials`, `site`, `openings`.
+    pub key: String,
+    pub text: String,
+    pub approved: bool,
 }
 
 /// What a layer's objects are. `layer` is a pattern: `*` matches any run of characters, case
@@ -67,8 +82,7 @@ pub struct BuildingSpec {
 pub struct LayerRole {
     pub layer: String,
     pub role: Role,
-    /// A wall or curtain wall layer's type ([`WallType::name`]); none = the first wall type, or
-    /// line pairs at floor-to-floor height.
+    /// A wall or curtain wall layer's type ([`WallType::name`]); none = line pairs, floor to floor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wall_type: Option<String>,
     /// A run's height above the floor, feet.
@@ -258,7 +272,131 @@ impl Default for BuildingSpec {
     }
 }
 
+/// Feet as feet and inches to the nearest eighth: `10'-0"`, `-0'-6"`.
+pub fn feet(ft: f64) -> String {
+    if !ft.is_finite() {
+        return "?".into();
+    }
+    let eighths = (ft.abs() * 96.0).round();
+    let sign = if ft < 0.0 && eighths > 0.0 { "-" } else { "" };
+    let whole = (eighths / 96.0).floor();
+    format!("{sign}{whole}'-{}", inches_text(eighths - whole * 96.0))
+}
+
+/// Inches to the nearest eighth: `4 7/8"`, `6"`.
+pub fn inches(inch: f64) -> String {
+    if !inch.is_finite() {
+        return "?".into();
+    }
+    inches_text((inch.abs() * 8.0).round())
+}
+
+fn inches_text(eighths: f64) -> String {
+    let whole = (eighths / 8.0).floor();
+    let mut num = eighths - whole * 8.0;
+    let mut den = 8.0;
+    while num > 0.0 && num % 2.0 == 0.0 {
+        num /= 2.0;
+        den /= 2.0;
+    }
+    if num > 0.0 { format!("{whole} {num}/{den}\"") } else { format!("{whole}\"") }
+}
+
 impl BuildingSpec {
+    /// The spec in plain language, part by part ("L2 = sheet A112 at 10'-0"", "A-WALL = full
+    /// height walls 4 7/8" thick (line pairs)").
+    pub fn describe(&self) -> Vec<Described> {
+        let mut out = Vec::new();
+        let mut put = |section: &'static str, key: String, text: String| {
+            let approved = self.approved.iter().any(|a| a.eq_ignore_ascii_case(&key));
+            out.push(Described { section, key, text, approved });
+        };
+        for l in &self.levels {
+            let place = match &l.sheet {
+                Some(sh) => format!("sheet {sh}"),
+                None if l.region.is_some() => "a region of this sheet".to_string(),
+                None => "this sheet".to_string(),
+            };
+            put(
+                "levels",
+                format!("levels/{}", l.name),
+                format!("{} = {place} at {}; {} floor to floor, {} ceilings", l.name, feet(l.elevation_ft), feet(l.height_ft), feet(l.ceiling_ft)),
+            );
+        }
+        for r in &self.layers {
+            let ty = self.wall_type_of(r);
+            let what = match r.role {
+                Role::Wall | Role::CurtainWall => {
+                    let kind = if r.role == Role::Wall { "walls" } else { "curtain walls" };
+                    let height = match ty.and_then(|t| t.height_ft) {
+                        Some(h) => format!("{kind} {} high", feet(h)),
+                        None => format!("full height {kind}"),
+                    };
+                    match ty {
+                        Some(t) if t.from == WallFrom::Centerline => format!("{height}, {} thick (centrelines)", inches(t.thickness_in)),
+                        Some(t) => format!("{height} {} thick (line pairs)", inches(t.thickness_in)),
+                        None => format!("{height} (line pairs)"),
+                    }
+                }
+                Role::Door => "doors".into(),
+                Role::Window => "windows".into(),
+                Role::Column => "columns, floor to wall top".into(),
+                Role::Stair => "stairs (not built yet)".into(),
+                Role::CeilingGrid => "ceiling grids (not built yet)".into(),
+                Role::Fixture => "fixtures".into(),
+                Role::RoomTag => "room tags".into(),
+                Role::Device => "devices".into(),
+                Role::Run => format!("runs {} above the floor", feet(r.height_ft.unwrap_or(9.0))),
+                Role::Ignore => "not part of the building".into(),
+            };
+            put("layers", format!("layers/{}", r.layer), format!("{} = {what}", r.layer));
+        }
+        for t in &self.wall_types {
+            let height = t.height_ft.map_or("floor to floor".to_string(), |h| format!("{} high", feet(h)));
+            let from = if t.from == WallFrom::Centerline { "drawn as centrelines" } else { "drawn as line pairs" };
+            put("wall_types", format!("wall_types/{}", t.name), format!("{}: {} thick, {height}, {from}", t.name, inches(t.thickness_in)));
+        }
+        for r in &self.rooms {
+            let name = if r.name.trim().is_empty() { r.number.clone().unwrap_or_default() } else { r.name.clone() };
+            let ceiling = r.ceiling_ft.map_or("the level's ceiling".to_string(), |c| format!("ceiling {}", feet(c)));
+            let mats = materials_text(&r.materials);
+            let on = r.level.as_ref().map_or(String::new(), |l| format!(" on {l}"));
+            put(
+                "rooms",
+                format!("rooms/{name}"),
+                format!("{name}{on}: {ceiling}{}", if mats.is_empty() { String::new() } else { format!("; {mats}") }),
+            );
+        }
+        for f in &self.families {
+            let kind = if f.kind == FamilyKind::Door { "doors" } else { "windows" };
+            let width = match (f.width_in, &f.width_attr) {
+                (Some(w), _) => format!("{} wide", inches(w)),
+                (None, Some(a)) => format!("width from {a}"),
+                (None, None) => "width from the block".into(),
+            };
+            let head = f.head_ft.unwrap_or(if f.kind == FamilyKind::Door { self.openings.door_head_ft } else { self.openings.window_head_ft });
+            let heights = match f.kind {
+                FamilyKind::Door => format!("{} high", feet(head)),
+                FamilyKind::Window => format!("{} to {}", feet(f.sill_ft.unwrap_or(self.openings.window_sill_ft)), feet(head)),
+            };
+            put("families", format!("families/{}", f.name), format!("{}: {kind} from blocks {}, {width}, {heights}", f.name, f.block));
+        }
+        let mats = materials_text(&self.materials);
+        if !mats.is_empty() {
+            put("materials", "materials".into(), format!("Materials: {mats}"));
+        }
+        if let Some(site) = &self.site {
+            put("site", "site".into(), format!("Ground at {}, {} round the building", feet(site.elevation_ft), feet(site.margin_ft)));
+        }
+        let o = &self.openings;
+        put(
+            "openings",
+            "openings".into(),
+            format!("Openings in walls: doors {} high, windows {} to {}", feet(o.door_head_ft), feet(o.window_sill_ft), feet(o.window_head_ft)),
+        );
+        out
+    }
+
     /// The spec saying what Walk mode's rules say.
     pub fn from_rules(r: &Rules) -> BuildingSpec {
         let layers = r
@@ -295,6 +433,7 @@ impl BuildingSpec {
             devices: r.devices.clone(),
             device_sheets: r.device_sheets.clone(),
             openings: r.openings.clone(),
+            approved: Vec::new(),
         }
     }
 
@@ -344,12 +483,10 @@ impl BuildingSpec {
         self.layers.iter().find(|r| layer_match(&r.layer, layer))
     }
 
-    /// A wall layer's type: the one it names, else the first.
+    /// A wall layer's type: the one it names (none: line pairs, floor to floor).
     pub fn wall_type_of(&self, role: &LayerRole) -> Option<&WallType> {
-        match &role.wall_type {
-            Some(n) => self.wall_types.iter().find(|t| t.name.eq_ignore_ascii_case(n)),
-            None => self.wall_types.first(),
-        }
+        let n = role.wall_type.as_ref()?;
+        self.wall_types.iter().find(|t| t.name.eq_ignore_ascii_case(n))
     }
 
     /// The family whose block pattern matches a block name.
@@ -527,6 +664,19 @@ impl BuildingSpec {
     }
 }
 
+fn materials_text(m: &Surfaces) -> String {
+    let parts = [
+        ("walls", &m.wall),
+        ("floors", &m.floor),
+        ("ceilings", &m.ceiling),
+        ("doors", &m.door),
+        ("windows", &m.window),
+        ("columns", &m.column),
+        ("ground", &m.ground),
+    ];
+    parts.iter().filter_map(|(k, v)| v.as_ref().map(|v| format!("{k} {v}"))).collect::<Vec<_>>().join(", ")
+}
+
 /// Merge `patch` into `base` (both spec JSON): objects merge key by key, `null` removes a key; a
 /// list of named items (levels, wall types, rooms, families by `name`; layers by `layer`) merges
 /// item by item, an item with `"remove": true` removing it; other lists are replaced.
@@ -609,6 +759,25 @@ mod tests {
         let mut newer = serde_json::to_value(&s).unwrap_or_default();
         newer["version"] = serde_json::json!(SPEC_VERSION + 1);
         assert!(BuildingSpec::from_json(&newer.to_string()).is_err());
+    }
+
+    #[test]
+    fn plain_language() {
+        assert_eq!(feet(10.0), "10'-0\"");
+        assert_eq!(feet(-0.5), "-0'-6\"");
+        assert_eq!(inches(4.875), "4 7/8\"");
+        assert_eq!(inches(6.0), "6\"");
+        let mut s = BuildingSpec::from_rules(&Rules::fallback());
+        s.levels[0].sheet = Some("A112".into());
+        s.levels[0].elevation_ft = 10.0;
+        s.wall_types.push(WallType { name: "W".into(), height_ft: None, thickness_in: 4.875, from: WallFrom::Pairs });
+        s.layers[0].wall_type = Some("w".into());
+        s.approved.push("LEVELS/level 1".into());
+        let d = s.describe();
+        assert_eq!(d[0].text, "Level 1 = sheet A112 at 10'-0\"; 10'-0\" floor to floor, 8'-0\" ceilings");
+        assert!(d[0].approved);
+        assert_eq!(d[1].text, "*WALL* = full height walls 4 7/8\" thick (line pairs)");
+        assert!(!d[1].approved);
     }
 
     #[test]

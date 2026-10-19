@@ -1684,3 +1684,63 @@
 	Render Model View	Modellansicht rendern
 	Model Overlay	Modellüberlagerung
 	Model Counts	Modellzählung
+	System Printers	Systemdrucker
+	Report a Problem...	Problem melden...
+	Report a Problem	Problem melden
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Sammelt, was bei der Fehlersuche hilft, in einer ZIP-Datei auf diesem Computer. Nichts wird gesendet: Hängen Sie die Datei an eine E-Mail an, wenn Sie das Problem melden möchten.
+	Always included	Immer enthalten
+	The log of this run and the two before it	Das Protokoll dieser Sitzung und der zwei vorherigen
+	The last commands	Die letzten Befehle
+	Versions, operating system and graphics adapter	Versionen, Betriebssystem und Grafikkarte
+	A summary of the open drawings (counts only, no geometry)	Eine Übersicht der geöffneten Zeichnungen (nur Anzahlen, keine Geometrie)
+	Names: file paths, layer and block names, typed text	Namen: Dateipfade, Layer- und Blocknamen, eingegebener Text
+	Names are replaced by placeholders, also in the log.	Namen werden durch Platzhalter ersetzt, auch im Protokoll.
+	Save Report...	Bericht speichern...
+	Email it to {address}	Per E-Mail senden an {address}
+	Plans to Model	Vom Plan zum Modell
+	Build	Erstellen
+	Rebuild	Neu erstellen
+	Check	Prüfen
+	Kept in the drawing.	In der Zeichnung gespeichert.
+	Drafted from the walk rules; not saved yet.	Aus den Begehungsregeln entworfen; noch nicht gespeichert.
+	{n} of {total} approved	{n} von {total} genehmigt
+	Save Spec	Spezifikation speichern
+	Approve All	Alle genehmigen
+	Approved	Genehmigt
+	Levels	Geschosse
+	Wall Types	Wandtypen
+	Rooms	Räume
+	Door and Window Families	Tür- und Fensterfamilien
+	Materials	Materialien
+	Site	Gelände
+	Openings	Öffnungen
+	Issues ({n})	Probleme ({n})
+	The drawing changed since; check again.	Die Zeichnung hat sich seitdem geändert; erneut prüfen.
+	No issues found.	Keine Probleme gefunden.
+	Configure Standards	Standards konfigurieren
+	Standards files associated with the current drawing	Der aktuellen Zeichnung zugeordnete Standarddateien
+	Add...	Hinzufügen...
+	Check Standards...	Standards prüfen...
+	Check Standards	Standards prüfen
+	No standards violations were found.	Es wurden keine Standardverletzungen gefunden.
+	problem(s)	Problem(e)
+	Take the standard's properties	Eigenschaften des Standards übernehmen
+	Replace it with the standard one	Durch den Standard ersetzen
+	Fix All	Alle korrigieren
+	Give everything that differs the standard's properties	Allem Abweichenden die Eigenschaften des Standards geben
+	Check Again	Erneut prüfen
+	Layer Translator	Layer-Umsetzer
+	Translate From	Umsetzen von
+	Translate To	Umsetzen in
+	Load a drawing whose layers to translate to.	Laden Sie eine Zeichnung, in deren Layer umgesetzt werden soll.
+	Map	Zuordnen
+	Layer Translation Mappings	Layer-Umsetzungszuordnungen
+	Load Map...	Zuordnung laden...
+	Save Map...	Zuordnung speichern...
+	Translate	Umsetzen
+	Not in the standards	Nicht in den Standards
+	Properties differ from the standards	Eigenschaften weichen von den Standards ab
+	CAD Standards	CAD-Standards
+	Configure...	Konfigurieren...
+	Check...	Prüfen...
+	Layer Translator...	Layer-Umsetzer...
