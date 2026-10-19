@@ -2033,6 +2033,8 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     }
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
+    // A file without $INSUNITS declares no units (#1209); only new drawings take the template's.
+    d.header.set_i64("INSUNITS", 0);
     let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
     if let Some(objects) = secs.iter().find(|s| s.name == "OBJECTS") {
         let (materials, names) = crate::dxf_material::read(&records(&objects.tags));
