@@ -8,6 +8,8 @@ mod table;
 
 const SESSION_VARS: &[&str] = &[
     "OSMODE",
+    "3DOSMODE",
+    "UCSDETECT",
     "OSNAPHATCH",
     "ANNOAUTOSCALE",
     "ORTHOMODE",
@@ -78,6 +80,8 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
     let st = &s.settings;
     let v = match n.as_str() {
         "OSMODE" => json!(st.osmode),
+        "3DOSMODE" => json!(st.osmode3),
+        "UCSDETECT" => json!(i32::from(st.ducs)),
         "OSNAPHATCH" => json!(i32::from(st.osnaphatch)),
         // AutoCAD's values: positive on, negative off (4 = every annotative object).
         "ANNOAUTOSCALE" => json!(if st.annoautoscale { 4 } else { -4 }),
@@ -390,6 +394,10 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     let st = &mut s.settings;
     match n.as_str() {
         "OSMODE" => st.osmode = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & 0x7fff,
+        "3DOSMODE" => {
+            st.osmode3 = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & crate::snap3::mode::MASK
+        }
+        "UCSDETECT" => st.ducs = as_bool(v).ok_or_else(bad)?,
         "OSNAPHATCH" => st.osnaphatch = as_bool(v).ok_or_else(bad)?,
         "ANNOAUTOSCALE" => st.annoautoscale = as_i(v).filter(|i| (-4..=4).contains(i)).ok_or_else(bad)? > 0,
         // A scale of the drawing's list; ANNOAUTOSCALE adds it to the annotative objects.

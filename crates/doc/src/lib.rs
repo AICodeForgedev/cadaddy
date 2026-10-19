@@ -20,6 +20,7 @@ mod section;
 mod solid;
 mod store;
 mod tables;
+mod transform3;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -38,6 +39,7 @@ pub use section::*;
 pub use solid::*;
 pub use store::EntityStore;
 pub use tables::*;
+pub use transform3::*;
 
 /// File data CADaddy doesn't model, kept for saving (#528).
 pub mod dynblock;

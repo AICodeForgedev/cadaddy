@@ -15,6 +15,7 @@ mod draw;
 mod draw2;
 mod draworder;
 mod edit;
+mod edit3d;
 mod exact_ends;
 mod exchange;
 mod express;
@@ -232,6 +233,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(lisp::specs());
         v.extend(solids::specs());
         v.extend(sections::specs());
+        v.extend(edit3d::specs());
         v
     })
 }

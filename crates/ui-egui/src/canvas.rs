@@ -121,6 +121,8 @@ pub struct CanvasState {
     pub xf: Option<Xf>,
     pub hover: Option<Handle>,
     pub snap: Option<SnapHit>,
+    /// The 3D object snap under the cursor ([`crate::snap3ui`]).
+    pub snap3: Option<cadaddy_engine::snap3::Snap3>,
     /// Effective cursor point after snaps/ortho/polar.
     pub cursor: Option<Vec2>,
     /// The polar or object snap tracking path(s) the cursor is on.
@@ -1590,9 +1592,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             app.canvas.snap = None;
             app.session.cursor_deferred = None;
         }
+        crate::snap3ui::update(app, &xf, hover_pos);
     } else {
         app.canvas.cursor = None;
         app.canvas.snap = None;
+        app.canvas.snap3 = None;
         app.session.cursor_deferred = None;
     }
 
@@ -1636,10 +1640,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             {
                 app.cmd.buffer.clear();
             }
+            // A click on a 3D edit's axis handle holds the edit to that axis.
+            let axis = app.session.current_prompt().and_then(|q| q.gizmo).zip(hover_pos).and_then(|(g, h)| crate::snap3ui::handle_at(&xf, &g, h));
             // Preserve a snap's viewport origin for DIST, and its deferred curve where needed.
-            let result = match app.canvas.snap {
-                Some(hit) => app.session.input_snapped(hit),
-                None => app.session.input(Input::Point(p)),
+            let result = match (axis, app.canvas.snap, crate::snap3ui::click_input(app, p)) {
+                (Some(a), _, _) => app.session.input(Input::Keyword(a.into())),
+                (None, Some(hit), _) => app.session.input_snapped(hit),
+                (None, None, Some(i)) => app.session.input(i),
+                (None, None, None) => app.session.input(Input::Point(p)),
             };
             if let Err(e) = result {
                 app.session.echo(e.to_string());
@@ -1980,6 +1988,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     if let (Some(hit), Some(_)) = (app.canvas.snap, app.canvas.cursor) {
         draw_snap_marker(&painter, xf.w2s(hit.point), &hit);
+    }
+    if let (Some(s3), Some(_)) = (app.canvas.snap3, app.canvas.cursor) {
+        crate::snap3ui::draw_marker(&painter, &xf, &s3);
+    }
+    if let Some(g) = app.session.current_prompt().and_then(|q| q.gizmo) {
+        crate::snap3ui::draw_gizmo(&painter, &xf, &g);
     }
     draw_tiles(app, ui, &tiles);
     // UCS icon, ViewCube and viewport label.
