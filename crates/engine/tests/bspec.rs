@@ -261,7 +261,7 @@ fn model_build_follows_the_spec_and_is_deterministic() {
     assert_eq!(r["rooms"], json!(2), "{r}");
     assert_eq!(r["ceilings"], json!(2), "{r}");
     assert_eq!(r["ground"], json!(1), "{r}");
-    assert!(r["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains("stairs aren't built yet")), "{r}");
+    assert!(r["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains("stairs are drawn but the spec has none")), "{r}");
     // Walls: the exterior pair's 4 at floor to floor (less Walk mode's 0.1'), the partition from
     // its centreline at its type's 9' and 4⅞" thick.
     let walls = made(&s, "wall");

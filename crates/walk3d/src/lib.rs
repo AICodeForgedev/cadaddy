@@ -16,6 +16,7 @@ mod openings;
 mod pick;
 mod rules;
 mod spec;
+pub mod stairs;
 mod walker;
 
 pub use derive::{DeviceInfo, LevelInfo, Owner, Part, Scene, Seg, Vertex, derive, derive_set};
@@ -24,7 +25,7 @@ pub use measure::{Dim, DimKind, measure};
 pub use pick::{Hit, pick};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules};
 pub use spec::{
-    BuildingSpec, Described, Family, FamilyKind, Issue, LayerRole, Role, Room, SPEC_VERSION, Site, Surfaces, WallFrom, WallType, feet, inches,
+    BuildingSpec, Described, Family, FamilyKind, Issue, LayerRole, Role, Room, SPEC_VERSION, Site, Stair, Surfaces, WallFrom, WallType, feet, inches,
     level_at, merge,
 };
 pub use walker::Walker;

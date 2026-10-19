@@ -47,6 +47,7 @@ pub use cadaddy_doc as doc;
 pub const AGENT_PORT: u16 = 47_820;
 pub use cadaddy_geom as geom;
 pub use cadaddy_render as render;
+pub use cadaddy_walk3d as walk3d;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
 /// A shaded or 3D view of model space as a PNG (exports; see the function).
 pub use cmd::view::view3d::shaded_png;

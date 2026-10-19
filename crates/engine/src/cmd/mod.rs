@@ -42,6 +42,7 @@ mod perceive;
 mod pline_opts;
 pub mod plotters;
 mod props;
+pub mod stairs;
 pub mod symbol;
 mod takeoff;
 pub(crate) mod underlay;
@@ -211,6 +212,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(draworder::specs());
         v.extend(wallgen::specs());
         v.extend(bspec::specs());
+        v.extend(stairs::specs());
         v.extend(autospec::specs());
         v.extend(verify::specs());
         v.extend(imageclip::specs());
