@@ -690,6 +690,10 @@ fn cli() -> ExitCode {
             outln!("cadcraft-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
+        Some("--help" | "-h" | "help") => {
+            outln!("{USAGE}");
+            Ok(())
+        }
         _ => Err(USAGE.into()),
     };
     match r {
