@@ -86,6 +86,7 @@ pub mod viewcube;
 pub mod vpscale;
 pub mod walk;
 
+pub mod diag;
 pub mod etransmit;
 pub mod exchange;
 pub mod keytips;
@@ -474,6 +475,7 @@ impl CadApp {
 
     /// Run a command programmatically (or a UI command).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        diag::note(&format!("command {id}"));
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             return r;
         }
@@ -797,6 +799,7 @@ impl CadApp {
     }
 
     pub fn logic(&mut self, ctx: &egui::Context) {
+        let _busy = diag::busy("logic");
         // FILEDIA 0: no native file dialogs (the commands ask on the command line).
         FILE_DIALOGS_OFF
             .store(cadaddy_engine::sysvars::get(&self.session, "FILEDIA").and_then(|v| v.as_i64()) == Some(0), std::sync::atomic::Ordering::Relaxed);
@@ -952,6 +955,7 @@ impl CadApp {
 
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        let _busy = diag::busy("draw");
         i18n::with_language(self.language(), || self.draw(ui));
     }
 

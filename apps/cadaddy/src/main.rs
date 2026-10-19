@@ -423,6 +423,18 @@ fn main() -> eframe::Result {
             if let Some(rs) = &cc.wgpu_render_state {
                 app.set_wgpu(rs, eframe::egui_wgpu::depth_format_from_bits(0, STENCIL_BITS));
             }
+            // Help ▸ Report a Problem: what the bundle says about this computer, and the watchdog
+            // that logs UI stalls.
+            let gpu = cc.wgpu_render_state.as_ref().map(|rs| {
+                let i = rs.adapter.get_info();
+                format!("{} ({:?}, {:?}; driver {} {})", i.name, i.backend, i.device_type, i.driver, i.driver_info)
+            });
+            cadaddy_ui_egui::diag::set_host(cadaddy_ui_egui::diag::HostInfo {
+                version: version_string(),
+                gpu: gpu.unwrap_or_default(),
+                log_dir: config_dir().map(|d| d.join(logging::LOG_DIR)),
+            });
+            cadaddy_ui_egui::diag::start_watchdog();
             // An explicit --control port, and the agent port unless the user turned that off in
             // Options: both serve the same window.
             let ports: Vec<u16> = control_port.into_iter().chain(app.ui.agent_control.then_some(cadaddy_engine::AGENT_PORT)).collect();

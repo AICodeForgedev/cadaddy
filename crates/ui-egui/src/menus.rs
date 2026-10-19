@@ -89,6 +89,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.dialog.commands", "Command Reference", &["Help", "CADaddy Help"], Some("F1")),
     ("ui.update.check", "Check for Updates...", &["Help", "Check for Updates..."], None),
     ("ui.feedback", "Report a Bug...", &["Help", "Report a Bug..."], None),
+    ("ui.diag", "Report a Problem...", &["Help", "Report a Problem..."], None),
     ("ui.feature", "Request a Feature...", &["Help", "Request a Feature..."], None),
     ("ui.donate", "Support CADaddy...", &["Help", "Support CADaddy..."], None),
     ("ui.toggle.history", "Command History", &["Window", "Command History"], Some("F2")),
@@ -492,6 +493,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         // The feedback form and the fundraiser open in the browser ([`crate::support`]).
+        "ui.diag" => {
+            app.ui.dialog = Some("diag".into());
+            Ok(Value::Null)
+        }
         "ui.feedback" | "ui.feature" | "ui.donate" => {
             let url = match id {
                 "ui.feedback" => crate::support::feedback_url("bug"),
