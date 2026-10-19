@@ -68,6 +68,11 @@ pub struct Prompt {
     /// The move, turn or scale handles to show at a 3D base point (3DMOVE, 3DROTATE, 3DSCALE).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gizmo: Option<Gizmo>,
+    /// The prompt asks for a distance from `base` (a radius, a diameter, a length), and a point
+    /// answers with its distance from it: Dynamic Input shows one distance field instead of the
+    /// pointer boxes.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub distance: bool,
 }
 
 /// The handles a 3D edit shows: where, which kind, and the axis it is held to (if any).
@@ -169,6 +174,11 @@ impl Prompt {
     pub fn corner(mut self, p: Vec2) -> Self {
         self.base = Some(p);
         self.corner = true;
+        self
+    }
+    /// Asks for a distance from the base (the `distance` field).
+    pub fn distance(mut self) -> Self {
+        self.distance = true;
         self
     }
     /// Accept deferred tangent/perpendicular snaps (the `deferred` field).
