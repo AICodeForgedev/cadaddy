@@ -45,6 +45,10 @@ pub fn write(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
     if entries.len() > MAX_ENTRIES {
         return Err(format!("more than {MAX_ENTRIES} files"));
     }
+    // Archives we make never hold a name that would unpack outside its folder.
+    if let Some((name, _)) = entries.iter().find(|(n, _)| !cadaddy_geom::filename::is_safe_relative(n.trim_end_matches('/'))) {
+        return Err(format!("{name}: not a safe name inside an archive"));
+    }
     let too_big = || "the archive would be larger than 4 GiB".to_string();
     let mut out = Vec::new();
     let mut central = Vec::new();
@@ -163,9 +167,78 @@ pub fn read(b: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     Ok(out)
 }
 
+/// Most bytes one archive unpacks to (a "zip bomb" stops here).
+pub const MAX_TOTAL_BYTES: usize = 4 << 30;
+
+/// Unpack archive `b` into the folder `dest` (made when missing): every entry's name is checked
+/// first ([`cadaddy_geom::filename::is_safe_relative`]: no absolute path, drive or `..`), so
+/// nothing lands outside `dest` (zip-slip), nothing is written into a system folder, existing
+/// files are never replaced, and the total size is capped. Nothing is written when any name is
+/// refused. The files written.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn extract(b: &[u8], dest: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
+    let entries = read(b)?;
+    let total = entries.iter().try_fold(0usize, |t, (_, d)| t.checked_add(d.len())).unwrap_or(usize::MAX);
+    if total > MAX_TOTAL_BYTES {
+        return Err(format!("the archive unpacks to more than {} GB", MAX_TOTAL_BYTES >> 30));
+    }
+    crate::writefile::check(dest).map_err(|e| e.to_string())?;
+    let mut plan = Vec::new();
+    for (name, data) in &entries {
+        if name.ends_with('/') {
+            continue; // a folder entry
+        }
+        if !cadaddy_geom::filename::is_safe_relative(name) {
+            return Err(format!("{name}: a name that leaves the folder it unpacks into; nothing was unpacked"));
+        }
+        let path = name.split(['/', '\\']).filter(|p| !p.is_empty() && *p != ".").fold(dest.to_path_buf(), |p, c| p.join(c));
+        if path.exists() {
+            return Err(format!("{} already exists; nothing was unpacked", path.display()));
+        }
+        plan.push((path, data));
+    }
+    let mut written = Vec::new();
+    for (path, data) in plan {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        crate::writefile::write(&path, data).map_err(|e| format!("{}: {e}", path.display()))?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unpacking_never_leaves_the_folder() {
+        let dest = std::env::temp_dir().join(format!("cadaddy-unzip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dest);
+        for bad in ["../evil.sh", "/tmp/evil.sh", "C:\\Windows\\evil.dll", "ok/../../evil.sh", "a\\..\\..\\evil.sh"] {
+            // A hostile archive (ours refuses such names): written with a same-length safe name,
+            // then the name bytes swapped in both headers.
+            let safe = "x".repeat(bad.len());
+            let mut z = write(&[("good.txt".to_string(), b"fine".to_vec()), (safe.clone(), b"evil".to_vec())]).unwrap();
+            let mut at = 0;
+            while let Some(i) = z.get(at..).and_then(|w| w.windows(safe.len()).position(|x| x == safe.as_bytes())) {
+                z.splice(at + i..at + i + safe.len(), bad.bytes());
+                at += i + safe.len();
+            }
+            let e = extract(&z, &dest).unwrap_err();
+            assert!(e.contains("leaves the folder"), "{bad}: {e}");
+            assert!(!dest.join("good.txt").exists(), "nothing is written when a name is refused");
+        }
+        assert!(write(&[("../x".to_string(), Vec::new())]).is_err(), "never written into an archive either");
+        let z = write(&[("Xrefs/a.dwg".to_string(), b"a".to_vec()), ("b.png".to_string(), b"b".to_vec())]).unwrap();
+        let files = extract(&z, &dest).unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(std::fs::read(dest.join("Xrefs").join("a.dwg")).unwrap(), b"a");
+        // Unpacking again never replaces a file.
+        assert!(extract(&z, &dest).unwrap_err().contains("already exists"));
+        std::fs::remove_dir_all(&dest).ok();
+    }
 
     #[test]
     fn crc_matches_the_standard_check_value() {

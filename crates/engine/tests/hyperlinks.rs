@@ -131,3 +131,27 @@ fn hyperlinks_survive_dxf_and_dwg_and_link_in_pdf() {
     let text = String::from_utf8_lossy(&pdf);
     assert!(text.contains("https://example.com/spec#part2"), "the link annotation");
 }
+
+/// Following a link: web, email and documents open; programs and scripts ask first; other schemes
+/// (javascript:, data:, smb:…) are refused and nothing is returned to open.
+#[test]
+fn links_that_could_be_used_against_the_user_are_refused_or_confirmed() {
+    let mut s = Session::new();
+    let line = Handle::parse_hex(s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap()["handles"][0].as_str().unwrap()).unwrap();
+    let mut follow = |url: &str| {
+        s.execute("hyperlink", &json!({"handles": [line.hex()], "url": url, "description": "Specification"})).unwrap();
+        s.execute("hyperlink.open", &json!({"handle": line.hex()}))
+    };
+    for ok in ["https://example.com/spec", "mailto:office@example.com", "/drawings/spec.pdf"] {
+        let r = follow(ok).unwrap();
+        assert!(r["url"].is_string() && r.get("confirm").is_none(), "{ok}: {r}");
+    }
+    for ask in ["C:\\Temp\\setup.exe", "/tmp/install.sh", "tools/run.bat"] {
+        let r = follow(ask).unwrap();
+        assert!(r["confirm"].as_str().unwrap().contains("program or script"), "{ask}: {r}");
+    }
+    for no in ["javascript:alert(1)", "data:text/html,hi", "smb://server/share/x.dwg", "ms-settings:privacy"] {
+        let e = follow(no).unwrap_err().to_string();
+        assert!(e.contains("wasn't followed"), "{no}: {e}");
+    }
+}

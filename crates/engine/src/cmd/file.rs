@@ -905,6 +905,7 @@ pub(crate) fn store(path: &str, bytes: &[u8]) -> Result<()> {
 /// [`store`], keeping the previous drawing file as `.bak` only when `keep_bak`: a DWG copy
 /// (DWGCOPY) keeps none, as its `.bak` would replace the drawing's own.
 pub(crate) fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<()> {
+    crate::writefile::protected(std::path::Path::new(path)).map_err(|e| bad("save", e.to_string()))?;
     // An agent's dry run changes nothing, files included.
     if !crate::agent::writes_allowed() {
         return Err(crate::EngineError::Other(format!("Dry run: {path} was not written.")));
