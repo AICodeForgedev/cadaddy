@@ -1951,3 +1951,27 @@ menu	Modify	수정
 	Confirm Stairs	계단 확인
 	Stairs and Ramps	계단 및 경사로
 	Bake Lighting	조명 베이크
+	Command Aliases and Shortcuts	명령 별칭 및 바로 가기
+	Keyboard Shortcuts	바로 가기 키
+	replaces {command}	{command} 대체
+	Built-in	기본 제공
+	Alias	별칭
+	Command	명령
+	Add or Change	추가 또는 변경
+	Keys	키
+	Edit Aliases and Shortcuts...	별칭 및 바로 가기 편집...
+	Customize	사용자화
+	Read Elevation	입면도 읽기
+	Read Roof Plan	지붕 평면도 읽기
+	Exterior	외부
+	Drafting & Annotation	제도 및 주석
+	3D Modeling	3D 모델링
+	Electrical	전기
+	Save Current As...	현재 항목을 다른 이름으로 저장...
+	Workspace Settings...	작업공간 설정...
+	Workspace Settings	작업공간 설정
+	Navigation Bar	탐색 막대
+	Save Workspace	작업공간 저장
+	Workspaces	작업공간
+	Close Navigation Bar	탐색 막대 닫기
+	Workspace	작업공간

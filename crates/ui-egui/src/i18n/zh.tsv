@@ -1830,3 +1830,28 @@
 	Confirm Stairs	确认楼梯
 	Stairs and Ramps	楼梯和坡道
 	Bake Lighting	烘焙光照
+	Command Aliases and Shortcuts	命令别名和快捷键
+	Command Aliases	命令别名
+	Keyboard Shortcuts	键盘快捷键
+	replaces {command}	替换 {command}
+	Built-in	内置
+	Alias	别名
+	Command	命令
+	Add or Change	添加或更改
+	Keys	按键
+	Edit Aliases and Shortcuts...	编辑别名和快捷键...
+	Customize	自定义
+	Read Elevation	读取立面图
+	Read Roof Plan	读取屋顶平面图
+	Exterior	外部
+	Drafting & Annotation	草图与注释
+	3D Modeling	三维建模
+	Electrical	电气
+	Save Current As...	将当前项另存为...
+	Workspace Settings...	工作空间设置...
+	Workspace Settings	工作空间设置
+	Navigation Bar	导航栏
+	Save Workspace	保存工作空间
+	Workspaces	工作空间
+	Close Navigation Bar	关闭导航栏
+	Workspace	工作空间

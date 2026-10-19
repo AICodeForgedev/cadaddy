@@ -1054,8 +1054,10 @@ fn tabs_and_body(app: &mut CadApp, ui: &mut egui::Ui, area: Rect, clicks: &mut C
     let t = Tokens::get();
     let tabs_r = Rect::from_min_size(area.min, vec2(area.width(), TAB_H));
     let mut x = tabs_r.left() + 8.0;
-    let Some(active) = TABS.iter().find(|tb| tb.name == app.ui.ribbon_tab).or(TABS.first()) else { return };
-    for tab in TABS {
+    // The current workspace's tabs.
+    let shown: Vec<&Tab> = TABS.iter().filter(|tb| crate::workspaces::tab_shown(app, tb.name)).collect();
+    let Some(active) = shown.iter().copied().find(|tb| tb.name == app.ui.ribbon_tab).or(shown.first().copied()) else { return };
+    for tab in shown {
         let w = label_w(ui, tab.name, crate::theme::body()) + 22.0;
         let tr = Rect::from_min_size(pos2(x, tabs_r.top()), vec2(w, TAB_H));
         let on = std::ptr::eq(tab, active);

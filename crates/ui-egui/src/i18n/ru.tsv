@@ -1725,3 +1725,30 @@
 	Confirm Stairs	Подтвердить лестницы
 	Stairs and Ramps	Лестницы и пандусы
 	Bake Lighting	Запечь освещение
+	Command Aliases and Shortcuts	Псевдонимы команд и сочетания клавиш
+	Command Aliases	Псевдонимы команд
+	Keyboard Shortcuts	Сочетания клавиш
+	replaces {command}	заменяет {command}
+	Built-in	Встроенный
+	Alias	Псевдоним
+	Command	Команда
+	Add or Change	Добавить или изменить
+	Reset to Defaults	Восстановить значения по умолчанию
+	Keys	Клавиши
+	Edit Aliases and Shortcuts...	Изменить псевдонимы и сочетания клавиш...
+	Customize	Адаптация
+	Read Elevation	Прочитать фасад
+	Read Roof Plan	Прочитать план кровли
+	Exterior	Снаружи
+	Drafting & Annotation	Рисование и аннотации
+	3D Modeling	3D-моделирование
+	Electrical	Электрика
+	Save Current As...	Сохранить текущее как...
+	Workspace Settings...	Настройки рабочего пространства...
+	Workspace Settings	Настройки рабочего пространства
+	Navigation Bar	Панель навигации
+	Save Workspace	Сохранить рабочее пространство
+	Workspaces	Рабочие пространства
+	Close Navigation Bar	Закрыть панель навигации
+	Workspace	Рабочее пространство
+	Display	Отображение

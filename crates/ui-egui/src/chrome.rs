@@ -354,7 +354,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             (Icon::Annotation, anno_all, "annovisible.toggle", "Annotation Visibility"),
             // Isolate Objects: a menu (Isolate, Hide, End Object Isolation); lit while objects are hidden.
             (if isolated { Icon::Bulb } else { Icon::BulbOff }, isolated, ISOLATE_MENU, "Isolate Objects"),
-            (Icon::Workspace, false, "ui.noop", "Workspace Switching"),
+            (Icon::Workspace, false, WORKSPACE_MENU, "Workspace Switching"),
             (Icon::Gear, false, "ui.dialog.dsettings", "Drafting Settings"),
         ];
         let size = 20.0;
@@ -540,6 +540,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         let mut toggle_cmd = None;
         let mut isolate_button = None;
+        let mut workspace_button = None;
         for (icon, on, cmd, tip) in toggles {
             let br = Rect::from_min_size(pos2(rx, r.center().y - size / 2.0), vec2(size, size));
             let resp = ui.interact(br, ui.id().with(("tg", tip)), Sense::click());
@@ -557,6 +558,8 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             let resp = resp.on_hover_text(crate::i18n::t(tip));
             if cmd == ISOLATE_MENU {
                 isolate_button = Some(resp);
+            } else if cmd == WORKSPACE_MENU {
+                workspace_button = Some(resp);
             } else if resp.clicked() {
                 toggle_cmd = Some(cmd);
             }
@@ -575,6 +578,12 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
             });
         }
+        if let Some(resp) = workspace_button {
+            egui::Popup::from_toggle_button_response(&resp)
+                .width(220.0)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| crate::workspaces::menu(app, ui));
+        }
         if let Some(c) = toggle_cmd {
             app.start(c);
         }
@@ -583,6 +592,8 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
 
 /// The status bar's Isolate Objects button: it opens a menu instead of running a command.
 const ISOLATE_MENU: &str = "ui.isolate.menu";
+/// The status bar's Workspace Switching button: the workspace menu.
+const WORKSPACE_MENU: &str = "ui.workspace.menu";
 
 /// The size of a recent file's preview on the Start page.
 const THUMB_W: f32 = 52.0;

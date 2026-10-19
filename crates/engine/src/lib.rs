@@ -500,6 +500,9 @@ impl DocState {
     }
 }
 
+/// The workspace a new profile starts in (WSCURRENT).
+pub const DEFAULT_WORKSPACE: &str = "Drafting & Annotation";
+
 /// Session-level drafting settings. [`Session::drafting_settings`] supplies the active drawing's
 /// snap/grid spacing in the corresponding fields for UI and JSON consumers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -554,6 +557,10 @@ pub struct Settings {
     /// 2 also lists them to choose from, 1 doesn't. 0 is off; -1 and -2 are off and remember the
     /// mode the status-bar toggle turns back on.
     pub selectioncycling: i8,
+    /// NAVBARDISPLAY: the navigation bar on the drawing area's right edge.
+    pub navbardisplay: bool,
+    /// WSCURRENT: the current workspace's name (the interface applies it).
+    pub wscurrent: String,
     /// SELECTSIMILARMODE: what SELECTSIMILAR matches besides the object type (bits: 1 colour,
     /// 2 layer, 4 linetype, 8 linetype scale, 16 lineweight, 32 plot style, 64 object style,
     /// 128 name).
@@ -638,6 +645,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
+            navbardisplay: true,
+            wscurrent: DEFAULT_WORKSPACE.into(),
             osmode: 4133,
             osmode3: snap3::mode::VERTEX | snap3::mode::MIDPOINT | snap3::mode::CENTER,
             ducs: true,

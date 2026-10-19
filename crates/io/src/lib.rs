@@ -21,6 +21,7 @@ mod dxf_table;
 mod dxf_underlay;
 mod dxf_write;
 mod dxf_xref;
+pub mod eps;
 pub mod pdf;
 pub(crate) mod pdf_image;
 pub mod pdf_merge;
@@ -29,6 +30,7 @@ pub mod plotter;
 pub mod svg;
 mod svg_read;
 mod svg_style;
+pub mod wmf;
 
 /// Multilines and their styles (MLINE, MLINESTYLE).
 mod dxf_mline;
@@ -169,6 +171,8 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
     match ext(name).as_str() {
         "dxf" | "" | "dwg" | "cdy" | "glb" | "gltf" | "stl" | "obj" | "bundle" => write_with(d, name, &SaveOptions::default()),
         "svg" => Ok(svg::export_window(d, &Space::Model, window).into_bytes()),
+        "eps" => Ok(eps::export(d, &Space::Model, window).into_bytes()),
+        "wmf" => Ok(wmf::export(d, &Space::Model, window)),
         "png" => png_framed(d, &Space::Model, 2400, 1600, window),
         "pdf" => pdf::pdf(d, &Space::Model, &PdfOptions { compress: true, window, ..PdfOptions::default() }),
         e => Err(IoError::Unsupported(e.to_string())),
@@ -177,7 +181,7 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
 
 /// Whether `name` is written as an image (PNG, SVG, PDF), i.e. whether framing applies to it.
 pub fn is_image(name: &str) -> bool {
-    matches!(ext(name).as_str(), "png" | "svg" | "pdf")
+    matches!(ext(name).as_str(), "png" | "svg" | "pdf" | "eps" | "wmf")
 }
 
 /// Largest coordinate magnitude accepted in an export window.
