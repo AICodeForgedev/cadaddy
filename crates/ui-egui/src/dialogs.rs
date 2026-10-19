@@ -11,6 +11,10 @@ use crate::theme::Tokens;
 pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     crate::mtext_editor::show(app, ctx);
     crate::quick::quick_properties(app, ctx);
+    // "More Colors…" from a palette menu.
+    if ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new("color_dialog_open"))).is_some() {
+        app.ui.dialog = Some("color".into());
+    }
     let Some(d) = app.ui.dialog.clone() else { return };
     let mut open = true;
     match d.as_str() {

@@ -816,6 +816,12 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                         ui.close();
                     }
                 }
+                ui.separator();
+                // The Select Color dialog (index, true colour, colour books) for new objects.
+                if ui.button(crate::tl!("More Colors...")).clicked() {
+                    crate::cmddlgs::open_color_dialog(ui.ctx(), None);
+                    ui.close();
+                }
             });
         });
         prop_row(ui, "Layer", |ui| {
@@ -968,6 +974,12 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                     set = Some(json!({ "handles": ids, "color": c }));
                     ui.close();
                 }
+            }
+            ui.separator();
+            // The Select Color dialog for the selected objects.
+            if ui.button(crate::tl!("More Colors...")).clicked() {
+                crate::cmddlgs::open_color_dialog(ui.ctx(), Some(ids.clone()));
+                ui.close();
             }
         });
     });
