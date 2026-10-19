@@ -93,6 +93,7 @@ pub mod etransmit;
 pub mod exchange;
 pub mod keytips;
 pub mod publishdlg;
+mod roomsdlg;
 pub mod sheetsets;
 pub mod standardsdlg;
 

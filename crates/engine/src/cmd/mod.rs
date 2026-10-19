@@ -53,6 +53,7 @@ mod perceive;
 mod pline_opts;
 pub mod plotters;
 mod props;
+pub mod rooms3d;
 pub mod spell;
 pub mod stairs;
 pub mod symbol;
@@ -250,6 +251,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         );
         v.extend(models3d::specs());
         v.extend(perceive::specs());
+        v.extend(rooms3d::specs());
         v.extend(underlay::specs());
         v.extend(takeoff::specs());
         v.extend(imageattach::specs());
