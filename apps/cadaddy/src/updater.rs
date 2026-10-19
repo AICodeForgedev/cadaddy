@@ -78,10 +78,15 @@ fn curl() -> Command {
 
 /// The latest release: its version, page, and this platform's installer (url, sha256).
 fn latest() -> Result<(Release, Option<(String, String)>), String> {
+    latest_from(API)
+}
+
+/// [`latest`] from the release feed at `url` (GitHub's API; a stand-in in tests).
+fn latest_from(url: &str) -> Result<(Release, Option<(String, String)>), String> {
     let out = curl()
         .args(["-fsSL", "--max-time", "20", "-H", "Accept: application/vnd.github+json", "-A"])
         .arg(format!("CADaddy/{VERSION}"))
-        .arg(API)
+        .arg(url)
         .output()
         .map_err(|e| format!("curl isn't available ({e})"))?;
     if !out.status.success() {
@@ -364,6 +369,46 @@ mod tests {
         assert_eq!(parse(&release_json("", good)).unwrap().1, None);
         assert_eq!(parse(&release_json("sha256:abc", good)).unwrap().1, None);
         assert!(parse(b"not json").is_err());
+    }
+
+    /// A stand-in for GitHub's release feed on a local port: answers every request with `body`.
+    fn feed(body: Vec<u8>, status: &'static str) -> String {
+        use std::io::{BufRead, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/repos/AICodeForgedev/cadaddy/releases/latest", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for c in l.incoming().flatten() {
+                let mut r = std::io::BufReader::new(c.try_clone().unwrap());
+                let mut line = String::new();
+                while r.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    line.clear();
+                }
+                let mut w = c;
+                let _ = write!(w, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = w.write_all(&body);
+            }
+        });
+        url
+    }
+
+    /// The version check end to end against a mocked feed (through the system curl, as the app
+    /// does): a newer release is offered with this platform's installer, this version is up to
+    /// date, and a broken or failing feed is an error, never an offer.
+    #[test]
+    fn the_version_check_against_a_mocked_release_feed() {
+        if Command::new("curl").arg("--version").output().is_err() {
+            return;
+        }
+        let url = "https://github.com/AICodeForgedev/cadaddy/releases/download/v0.9.0/x";
+        let (r, asset) = latest_from(&feed(release_json(&format!("sha256:{}", "c".repeat(64)), url), "200 OK")).unwrap();
+        assert_eq!(r.version, "0.9.0");
+        assert!(cadaddy_ui_egui::update::newer(&r.version, VERSION), "0.9.0 is newer than {VERSION}");
+        assert_eq!(asset.is_some(), asset_name().is_some());
+        let same = serde_json::json!({ "tag_name": format!("v{VERSION}"), "assets": [] }).to_string().into_bytes();
+        let (r, _) = latest_from(&feed(same, "200 OK")).unwrap();
+        assert!(!cadaddy_ui_egui::update::newer(&r.version, VERSION), "this version is up to date");
+        assert!(latest_from(&feed(b"<html>rate limited</html>".to_vec(), "200 OK")).is_err());
+        assert!(latest_from(&feed(b"{}".to_vec(), "403 Forbidden")).is_err());
     }
 
     #[test]

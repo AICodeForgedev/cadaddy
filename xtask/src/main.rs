@@ -5,6 +5,7 @@
 
 mod assets;
 mod ico;
+mod installtest;
 mod layers;
 mod parity;
 mod stats;
@@ -27,6 +28,9 @@ commands:
   parity          recompute the AutoCAD menu-breadth checklist in docs/parity-checklist.md
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
+  installtest --new DIR [--old DIR]
+                  install, upgrade and uninstall checks of release files: MSI tables (msitools in
+                  Docker), the DMG (Mac), the .deb and AppImage (Docker); --old for the upgrade
   fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
                   mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
                   saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
@@ -46,6 +50,7 @@ fn main() -> ExitCode {
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("fuzz") => cmd_fuzz(&rest),
+        Some("installtest") => installtest::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
