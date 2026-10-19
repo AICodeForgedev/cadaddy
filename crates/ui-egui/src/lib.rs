@@ -61,6 +61,7 @@ pub mod xrefs;
 pub mod activitypalette;
 pub mod agentdlg;
 pub mod countpalette;
+pub mod customui;
 pub mod dyngrips;
 pub mod dyninput;
 pub mod exchangeloss;
@@ -461,6 +462,8 @@ pub struct CadApp {
     pub walked: std::collections::BTreeSet<u64>,
     /// What the last DWG/DXF save didn't keep, while its notice is open ([`exchangeloss`]).
     pub exchange_notice: Option<Value>,
+    /// The Quick Access Toolbar and ribbon as the user customised them ([`customui`]).
+    pub custom_ui: customui::Custom,
     /// Drawings in windows of their own ([`tearoff`]), the drawing the main window last showed,
     /// and where its tab bar is.
     pub torn: Vec<tearoff::TornWindow>,
@@ -538,6 +541,7 @@ impl CadApp {
             walk: None,
             walked: std::collections::BTreeSet::new(),
             exchange_notice: None,
+            custom_ui: customui::Custom::default(),
             torn: Vec::new(),
             main_uid: None,
             tab_bar: None,
@@ -708,6 +712,9 @@ impl CadApp {
         if !self.ui.agent_control {
             prefs["agentControl"] = json!(false);
         }
+        if !self.custom_ui.is_default() {
+            prefs["customUi"] = self.custom_ui.to_json();
+        }
         if self.update.checked_ms > 0.0 {
             prefs["updateChecked"] = json!(self.update.checked_ms);
         }
@@ -752,6 +759,9 @@ impl CadApp {
         }
         if let Some(b) = v.get("agentControl").and_then(Value::as_bool) {
             self.ui.agent_control = b;
+        }
+        if let Some(c) = v.get("customUi").and_then(|c| customui::Custom::from_json(c).ok()) {
+            self.custom_ui = c;
         }
         if let Some(ms) = v.get("updateChecked").and_then(Value::as_f64).filter(|ms| ms.is_finite()) {
             self.update.checked_ms = ms;
