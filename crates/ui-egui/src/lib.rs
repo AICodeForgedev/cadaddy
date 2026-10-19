@@ -31,6 +31,7 @@ pub fn file_dialogs_allowed() -> bool {
 pub mod animation;
 pub mod autosave;
 pub mod bedit;
+pub mod blockspalette;
 pub mod canvas;
 pub mod chrome;
 pub mod clipboard;
@@ -83,6 +84,7 @@ pub mod shortcut_menus;
 pub mod spelldlg;
 pub mod theme;
 pub mod toldlg;
+pub mod toolpalettes;
 pub mod viewcube;
 pub mod vpscale;
 pub mod walk;
@@ -183,6 +185,10 @@ pub struct UiState {
     pub agent_control: bool,
     /// Drawings opened from a path, newest first (File ▸ Open Recent and the Start page).
     pub recent_files: Vec<String>,
+    /// The Blocks palette's recent and favourite blocks, library folder and insertion options.
+    pub blocks_palette: blockspalette::Settings,
+    /// The user's tool palettes ([`toolpalettes`]).
+    pub tool_palettes: Vec<toolpalettes::Palette>,
 }
 
 /// A DXF/DWG file version (2000 … 2018).
@@ -272,6 +278,8 @@ impl Default for UiState {
             save_version: SaveVersion::default().year().to_string(),
             agent_control: true,
             recent_files: Vec::new(),
+            blocks_palette: blockspalette::Settings::default(),
+            tool_palettes: toolpalettes::default_palettes(),
         }
     }
 }
@@ -313,6 +321,9 @@ pub struct CadApp {
     pub spacemouse: spacemouse::State,
     pub cmd: cmdline::CmdLine,
     pub status: Option<(String, f64)>,
+    /// A block the Blocks palette is placing, and how many block references there were when it
+    /// started (Repeat Placement; [`blockspalette::follow`]).
+    pub placing: Option<(blockspalette::BlockRef, usize)>,
     /// Drawings being read on worker threads ([`opening`]).
     pub opening: opening::Opening,
     pub integrated_titlebar: bool,
@@ -417,6 +428,7 @@ impl CadApp {
             spacemouse: spacemouse::State::default(),
             cmd: cmdline::CmdLine::default(),
             status: None,
+            placing: None,
             opening: opening::Opening::default(),
             integrated_titlebar: false,
             os_title: String::new(),
@@ -815,6 +827,7 @@ impl CadApp {
 
     pub fn logic(&mut self, ctx: &egui::Context) {
         let _busy = diag::busy("logic");
+        blockspalette::follow(self);
         // FILEDIA 0: no native file dialogs (the commands ask on the command line).
         FILE_DIALOGS_OFF
             .store(cadaddy_engine::sysvars::get(&self.session, "FILEDIA").and_then(|v| v.as_i64()) == Some(0), std::sync::atomic::Ordering::Relaxed);
