@@ -1643,3 +1643,16 @@
 	Set Building Spec	Задать спецификацию здания
 	Validate Building Spec	Проверить спецификацию здания
 	Build Model from Spec	Построить модель по спецификации
+	Convert Matches to Block	Преобразовать совпадения в блок
+	Command Line Transparency	Прозрачность командной строки
+	AutoComplete Settings	Настройки автозавершения
+	Input Settings	Настройки ввода
+	AutoComplete	Автозавершение
+	Search System Variables	Искать системные переменные
+	Mid-string Search	Поиск внутри строки
+	System variable	Системная переменная
+	Layer state	Конфигурация слоёв
+	Model Issues	Проблемы модели
+	Render Model View	Визуализировать вид модели
+	Model Overlay	Наложение модели
+	Model Counts	Подсчёт по модели

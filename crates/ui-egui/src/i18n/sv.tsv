@@ -1876,3 +1876,16 @@ menu	Modify	Ändra
 	Set Building Spec	Ange byggnadsspecifikation
 	Validate Building Spec	Validera byggnadsspecifikation
 	Build Model from Spec	Bygg modell från specifikation
+	Convert Matches to Block	Konvertera matchningar till block
+	Command Line Transparency	Kommandoradens transparens
+	AutoComplete Settings	Inställningar för automatisk komplettering
+	Input Settings	Inmatningsinställningar
+	AutoComplete	Automatisk komplettering
+	Search System Variables	Sök systemvariabler
+	Mid-string Search	Sök mitt i strängar
+	System variable	Systemvariabel
+	Layer state	Lagertillstånd
+	Model Issues	Modellproblem
+	Render Model View	Rendera modellvy
+	Model Overlay	Modellöverlägg
+	Model Counts	Modellantal

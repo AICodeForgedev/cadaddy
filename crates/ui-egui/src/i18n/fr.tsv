@@ -1642,3 +1642,16 @@
 	Set Building Spec	Définir la spécification du bâtiment
 	Validate Building Spec	Valider la spécification du bâtiment
 	Build Model from Spec	Construire le modèle depuis la spécification
+	Convert Matches to Block	Convertir les correspondances en bloc
+	Command Line Transparency	Transparence de la ligne de commande
+	AutoComplete Settings	Paramètres de saisie semi-automatique
+	Input Settings	Paramètres de saisie
+	AutoComplete	Saisie semi-automatique
+	Search System Variables	Rechercher les variables système
+	Mid-string Search	Recherche au milieu de la chaîne
+	System variable	Variable système
+	Layer state	État de calques
+	Model Issues	Problèmes du modèle
+	Render Model View	Rendre une vue du modèle
+	Model Overlay	Superposition du modèle
+	Model Counts	Décomptes du modèle

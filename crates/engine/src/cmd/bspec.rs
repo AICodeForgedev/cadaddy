@@ -50,7 +50,7 @@ fn stored(d: &Drawing) -> std::result::Result<Option<BuildingSpec>, String> {
 }
 
 /// The drawing's spec, else one drafted from the walk rules; whether it was stored.
-fn current(s: &Session, cmd: &str) -> Result<(BuildingSpec, bool)> {
+pub(crate) fn current(s: &Session, cmd: &str) -> Result<(BuildingSpec, bool)> {
     match stored(s.doc()?).map_err(|e| bad(cmd, e))? {
         Some(sp) => Ok((sp, true)),
         None => Ok((BuildingSpec::from_rules(&wallgen::rules_for(s, &json!({}))?), false)),
@@ -80,12 +80,12 @@ fn report(issues: &[Issue]) -> Value {
 }
 
 /// The plan's objects (not what a build made), at most [`MAX_OBJECTS`].
-fn plan_objects(d: &Drawing) -> Vec<&Arc<Entity>> {
+pub(crate) fn plan_objects(d: &Drawing) -> Vec<&Arc<Entity>> {
     d.model.iter().filter(|e| wallgen::made_as(e).is_none()).take(MAX_OBJECTS).collect()
 }
 
 /// The centre of an object on the sheet.
-fn centre(d: &Drawing, e: &Entity) -> Option<Vec2> {
+pub(crate) fn centre(d: &Drawing, e: &Entity) -> Option<Vec2> {
     let b = cadaddy_doc::entity_bounds(d, e, 0);
     (!b.is_empty()).then(|| b.center())
 }
@@ -173,7 +173,7 @@ pub(crate) fn validate(d: &Drawing, sp: &BuildingSpec) -> Vec<Issue> {
     out
 }
 
-fn room_label(r: &cadaddy_walk3d::SpecRoom) -> String {
+pub(crate) fn room_label(r: &cadaddy_walk3d::SpecRoom) -> String {
     match &r.number {
         Some(n) if r.name.trim().is_empty() => n.clone(),
         Some(n) => format!("{} or {n}", r.name),
@@ -182,14 +182,14 @@ fn room_label(r: &cadaddy_walk3d::SpecRoom) -> String {
 }
 
 /// Whether a tag text names the room (its name or number, case and spacing aside).
-fn names_room(r: &cadaddy_walk3d::SpecRoom, text: &str) -> bool {
+pub(crate) fn names_room(r: &cadaddy_walk3d::SpecRoom, text: &str) -> bool {
     let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
     let t = norm(text);
     (!r.name.trim().is_empty() && norm(&r.name) == t) || r.number.as_deref().is_some_and(|n| !n.trim().is_empty() && norm(n) == t)
 }
 
 /// The texts that tag rooms: those on room tag layers, else every text.
-fn room_texts(sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> Vec<(Handle, String, Vec2)> {
+pub(crate) fn room_texts(sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> Vec<(Handle, String, Vec2)> {
     let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
     let on: Vec<&Arc<Entity>> =
         ents.iter().copied().filter(|e| !tagged || sp.role(&e.common.layer).is_some_and(|r| r.role == Role::RoomTag)).collect();
@@ -447,7 +447,7 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
 }
 
 /// The level a built object belongs to (its WALLGEN tag).
-fn made_level(e: &Entity) -> Option<String> {
+pub(crate) fn made_level(e: &Entity) -> Option<String> {
     let x = &e.common.xdata;
     let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP))?;
     x.get(at + 2).filter(|t| t.code == 1000).map(|t| t.value.clone())

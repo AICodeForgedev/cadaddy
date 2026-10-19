@@ -86,6 +86,7 @@ pub mod viewcube;
 pub mod vpscale;
 pub mod walk;
 
+pub mod autocomplete;
 pub mod etransmit;
 pub mod exchange;
 pub mod keytips;
@@ -156,6 +157,14 @@ pub struct UiState {
     pub ui_scale: f32,
     pub dialog: Option<String>,
     pub history_lines: usize,
+    /// AutoComplete's settings (Input Settings on the command line's menu).
+    pub autocomplete: autocomplete::Settings,
+    /// How often each command was typed, to rank AutoComplete.
+    pub command_usage: autocomplete::Usage,
+    /// The command line's transparency, percent (0 = opaque as designed).
+    pub cmdline_transparency: u8,
+    /// The command line's width as a fraction of the drawing area, once dragged (None: automatic).
+    pub cmdline_width: Option<f32>,
     /// Interface theme: "system" (follow the OS light/dark appearance), "light" or "dark".
     pub theme: theme::ThemePref,
     /// Animation effects (dialog and menu fades, smoothed scrolling): "system" (follow the OS
@@ -250,6 +259,10 @@ impl Default for UiState {
             ui_scale: 1.0,
             dialog: None,
             history_lines: 3,
+            autocomplete: autocomplete::Settings::default(),
+            command_usage: autocomplete::Usage::default(),
+            cmdline_transparency: 0,
+            cmdline_width: None,
             theme: theme::ThemePref::default(),
             animations: animation::AnimationPref::default(),
             save_format: SaveFormat::default(),

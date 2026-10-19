@@ -1868,3 +1868,16 @@ menu	Modify	Edita
 	Set Building Spec	Imposta specifica edificio
 	Validate Building Spec	Convalida specifica edificio
 	Build Model from Spec	Crea modello da specifica
+	Convert Matches to Block	Converti corrispondenze in blocco
+	Command Line Transparency	Trasparenza della riga di comando
+	AutoComplete Settings	Impostazioni di completamento automatico
+	Input Settings	Impostazioni di input
+	AutoComplete	Completamento automatico
+	Search System Variables	Cerca variabili di sistema
+	Mid-string Search	Ricerca all'interno della stringa
+	System variable	Variabile di sistema
+	Layer state	Stato layer
+	Model Issues	Problemi del modello
+	Render Model View	Rendering vista modello
+	Model Overlay	Sovrapposizione modello
+	Model Counts	Conteggi del modello

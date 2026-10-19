@@ -1748,3 +1748,16 @@
 	Set Building Spec	设置建筑规格
 	Validate Building Spec	验证建筑规格
 	Build Model from Spec	根据规格生成模型
+	Convert Matches to Block	将匹配项转换为块
+	Command Line Transparency	命令行透明度
+	AutoComplete Settings	自动完成设置
+	Input Settings	输入设置
+	AutoComplete	自动完成
+	Search System Variables	搜索系统变量
+	Mid-string Search	字符串中间搜索
+	System variable	系统变量
+	Layer state	图层状态
+	Model Issues	模型问题
+	Render Model View	渲染模型视图
+	Model Overlay	模型叠加
+	Model Counts	模型计数

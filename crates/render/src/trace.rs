@@ -7,6 +7,14 @@
 //!
 //! Triangles sit in a bounding volume hierarchy (binned surface-area heuristic), built and walked
 //! with explicit stacks.
+//!
+//! Implements: the binned SAH build after Wald, "On Fast Construction of SAH-based Bounding Volume
+//! Hierarchies" (IEEE Symposium on Interactive Ray Tracing, 2007); ray/triangle tests after Möller
+//! and Trumbore, "Fast, Minimum Storage Ray/Triangle Intersection" (Journal of Graphics Tools,
+//! 1997); GGX half-vector sampling after Walter et al., "Microfacet Models for Refraction through
+//! Rough Surfaces" (EGSR 2007); path tracing with next-event estimation after Pharr, Jakob and
+//! Humphreys, *Physically Based Rendering*, 4th ed. (2023); the denoiser after Dammertz et al.
+//! (below).
 
 use cadaddy_geom::Vec3;
 

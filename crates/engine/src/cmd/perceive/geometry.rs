@@ -256,7 +256,7 @@ pub(super) fn run_openings(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------------- plan.rooms ----------------
 
 /// A room number: optional letter, 2–4 digits, optional letter (`101`, `B12`, `204A`).
-fn room_number(t: &str) -> bool {
+pub(crate) fn room_number(t: &str) -> bool {
     let t = t.trim();
     let digits = t.chars().filter(char::is_ascii_digit).count();
     let letters = t.chars().filter(char::is_ascii_alphabetic).count();

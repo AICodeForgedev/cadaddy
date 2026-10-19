@@ -1,5 +1,8 @@
 //! Triangles for planar faces with holes: holes are joined to their outer boundary by a bridge,
 //! then ears are clipped. Indices refer to the loops' points numbered one loop after another.
+//!
+//! Implements ear clipping with hole bridging after Eberly, "Triangulation by Ear Clipping"
+//! (Geometric Tools, 2002).
 
 use cadaddy_geom::{Vec2, point_in_polygon};
 
