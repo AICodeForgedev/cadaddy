@@ -317,3 +317,30 @@ fn hostile_field_codes_never_panic() {
     let text = cadaddy_io::write_dxf(d);
     assert!(cadaddy_io::read_dxf(text.as_bytes()).is_ok());
 }
+
+/// Fields stay fields through a DWG file (tester 0.7.7f: after saving as .dwg and opening it
+/// again, UPDATEFIELD found 0 and the texts were static).
+#[test]
+fn fields_survive_a_dwg_round_trip() {
+    let mut s = session();
+    cadaddy_engine::cmd::file::set_io(cadaddy_engine::cmd::file::IoHooks {
+        read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
+        write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
+        plot: None,
+        read_pdf: None,
+    });
+    let (date, shown) = field(&mut s, json!({ "field": "date", "format": "yyyy-MM-dd", "at": [0, 0] }));
+    let (file, _) = field(&mut s, json!({ "field": "filename", "at": [0, 5] }));
+    let dir = std::env::temp_dir().join(format!("cadaddy-fields-dwg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Sheet.dwg");
+    s.execute("saveas", &json!({ "path": path.to_string_lossy() })).unwrap();
+    s.execute("close", &json!({})).unwrap();
+    s.execute("open", &json!({ "path": path.to_string_lossy() })).unwrap();
+    // The values come back, and they are still fields: opening worked the file name out again.
+    assert_eq!(values(&s, date), [shown]);
+    assert_eq!(values(&s, file), ["Sheet.dwg"]);
+    let r = s.execute("updatefield", &json!({})).unwrap();
+    assert_eq!(r["updated"], 2, "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
