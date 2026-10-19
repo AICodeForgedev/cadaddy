@@ -549,6 +549,11 @@ pub(crate) fn ear_clip(poly: &[Vec2]) -> Vec<[usize; 3]> {
                     return false;
                 }
                 let q = p(j);
+                // A point where the outline touches itself (the same place twice) is the ear's
+                // own corner, not inside it.
+                if q.dist(a) < 1e-9 || q.dist(b) < 1e-9 || q.dist(c) < 1e-9 {
+                    return false;
+                }
                 (b - a).cross(q - a) >= 0.0 && (c - b).cross(q - b) >= 0.0 && (a - c).cross(q - c) >= 0.0
             });
             if !inside {
@@ -612,6 +617,10 @@ mod tests {
 
     #[test]
     fn ear_clipping_an_l() {
+        // An outline touching itself at (2, 1): a notch in from the top edge and back.
+        let notch = [(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (2.0, 2.0), (2.0, 1.0), (3.0, 1.5), (2.0, 2.0), (0.0, 2.0)].map(|(x, y)| Vec2::new(x, y));
+        let area: f64 = ear_clip(&notch).iter().map(|t| cadaddy_geom::shoelace(&[notch[t[0]], notch[t[1]], notch[t[2]]])).sum();
+        assert!((area - cadaddy_geom::shoelace(&notch)).abs() < 1e-9, "{area}");
         let l = [(0.0, 0.0), (4.0, 0.0), (4.0, 1.0), (1.0, 1.0), (1.0, 3.0), (0.0, 3.0)].map(|(x, y)| Vec2::new(x, y));
         let tris = ear_clip(&l);
         assert_eq!(tris.len(), 4);
