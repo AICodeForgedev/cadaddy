@@ -44,6 +44,9 @@ struct U {
 @group(0) @binding(2) var tex_sampler: sampler;
 @group(0) @binding(3) var shadow_map: texture_depth_2d;
 @group(0) @binding(4) var shadow_sampler: sampler_comparison;
+// Baked indirect light (LIGHTBAKE), RGBM: colour × alpha × 8.
+@group(0) @binding(5) var lm_tex: texture_2d<f32>;
+@group(0) @binding(6) var lm_sampler: sampler;
 
 struct VI {
     @location(0) p: vec3<f32>,
@@ -52,6 +55,8 @@ struct VI {
     @location(3) uv: vec2<f32>,
     // roughness, metallic, texture layer (−1: none), opacity
     @location(4) m: vec4<f32>,
+    // lightmap coordinates of the front (xy) and back (zw); negative: none
+    @location(8) lm: vec4<f32>,
 };
 // An instance's placement: the rows of a 3 × 4 matrix (block coordinates to the view's, relative
 // to its origin). The base geometry draws with the identity.
@@ -78,6 +83,7 @@ struct VO {
     @location(2) wp: vec3<f32>,
     @location(3) uv: vec2<f32>,
     @location(4) m: vec4<f32>,
+    @location(5) lm: vec4<f32>,
 };
 
 const PI: f32 = 3.14159265;
@@ -110,6 +116,7 @@ fn vs_tri(v: VI, i: II) -> VO {
     o.wp = p;
     o.uv = v.uv;
     o.m = v.m;
+    o.lm = v.lm;
     return o;
 }
 
@@ -125,6 +132,7 @@ fn vs_line(v: VI, i: II) -> VO {
     o.wp = p;
     o.uv = v.uv;
     o.m = v.m;
+    o.lm = v.lm;
     return o;
 }
 
@@ -180,6 +188,11 @@ fn ambient(n: vec3<f32>, base: vec3<f32>, rough: f32, metal: f32) -> vec3<f32> {
     var env = mix(u.ground.rgb, sky, up * 0.5 + 0.5);
     let grey = (env.r + env.g + env.b) / 3.0;
     env = mix(env, vec3<f32>(grey), 0.5);
+    return surround(env, base, rough, metal);
+}
+
+// What light `env` arriving from all around does on a surface (cadaddy_render::light::surround).
+fn surround(env: vec3<f32>, base: vec3<f32>, rough: f32, metal: f32) -> vec3<f32> {
     let kd = (1.0 - metal) * 0.96;
     let spec = mix(vec3<f32>(0.04), base, metal);
     let gloss = clamp(1.0 - rough, 0.0, 1.0) * 0.5;
@@ -206,7 +219,7 @@ fn sun_visibility(wp: vec3<f32>, n: vec3<f32>) -> f32 {
     return sum / 9.0;
 }
 
-fn physical(o: VO, n: vec3<f32>) -> vec4<f32> {
+fn physical(o: VO, n: vec3<f32>, back: bool) -> vec4<f32> {
     var base = o.c.rgb;
     if (o.m.z >= 0.0) {
         base = base * textureSample(tex, tex_sampler, vec2<f32>(o.uv.x, 1.0 - o.uv.y), i32(o.m.z + 0.5)).rgb;
@@ -215,6 +228,10 @@ fn physical(o: VO, n: vec3<f32>) -> vec4<f32> {
     let metal = o.m.y;
     let v = normalize(u.eye.xyz);
     var col = ambient(n, base, rough, metal);
+    if (o.lm.x >= 0.0) {
+        let t = textureSampleLevel(lm_tex, lm_sampler, select(o.lm.xy, o.lm.zw, back), 0.0);
+        col = surround(t.rgb * t.a * 8.0, base, rough, metal);
+    }
     if (u.sun_dir.w > 0.5) {
         col = col + u.sun_rgb.rgb * sun_visibility(o.wp, n) * brdf_cos(n, v, normalize(u.sun_dir.xyz), base, rough, metal);
     }
@@ -256,11 +273,13 @@ fn fs_tri(o: VO) -> @location(0) vec4<f32> {
         return vec4<f32>(u.bg.rgb, 1.0);
     }
     var n = normalize(o.n);
-    if (dot(n, u.eye.xyz) < 0.0) {
+    // Seen from its back (the corners turn clockwise from the eye).
+    let back = dot(n, u.eye.xyz) < 0.0;
+    if (back) {
         n = -n;
     }
     if (u.params.y > 0.5) {
-        return physical(o, n);
+        return physical(o, n, back);
     }
     let d = max(dot(n, normalize(u.light.xyz)), 0.0);
     var col = o.c.rgb * (0.3 + 0.7 * d);

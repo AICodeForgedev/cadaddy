@@ -51,6 +51,7 @@ pub use cadaddy_doc as doc;
 pub const AGENT_PORT: u16 = 47_820;
 pub use cadaddy_geom as geom;
 pub use cadaddy_render as render;
+pub use cadaddy_walk3d as walk3d;
 pub use cmd::blocks::extract::EXTRACT_PROPERTIES;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
 /// A shaded or 3D view of model space as a PNG (exports; see the function).
@@ -234,6 +235,12 @@ pub struct DocState {
     /// What opening the drawing changed and told the user (missing current styles reset): the
     /// OPEN reply lists them with its warnings, for agents that see no command-line history.
     pub open_notes: Vec<String>,
+    /// Baked indirect light (LIGHTBAKE), and how many times it has changed (views cache their
+    /// scene by it).
+    pub lightmap: Option<Arc<cadaddy_render::lightmap::Lightmap>>,
+    pub lightmap_rev: u64,
+    /// The lightmap beside the drawing's file was looked for.
+    pub lightmap_tried: bool,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -271,6 +278,9 @@ impl DocState {
             wallgen: None,
             open_notes: Vec::new(),
             block_edit: None,
+            lightmap: None,
+            lightmap_rev: 0,
+            lightmap_tried: false,
         }
     }
     /// The drawing has changes not saved to its file, or the Block Editor has changes not yet

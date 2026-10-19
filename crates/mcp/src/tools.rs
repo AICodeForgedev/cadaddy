@@ -28,6 +28,9 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "inputSchema": {"type": "object", "properties": {"contains": {"type": "string"}, "layer": {"type": "string"},
                 "window": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}, "minItems": 2, "maxItems": 2},
                 "limit": {"type": "integer", "minimum": 0}, "offset": {"type": "integer", "minimum": 0}}}}),
+        json!({"name": "stairs", "description": "Stairs and ramps of the building spec. action \"detect\" finds them in the plan (tread rows between stringers, UP/DN notes, landings, ramp outlines) and with store: true puts them in the spec (confirmed ones stay); \"list\" gives the spec's stairs with risers, riser and tread sizes and code warnings (risers 4\"–7¾\", treads ≥ 10\", ramps ≤ 1:12); \"confirm\" marks names (or all) as checked. model.build then builds them and Walk climbs them.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["detect", "list", "confirm"]}, "store": {"type": "boolean"},
+                "names": {"type": "array", "items": {"type": "string"}}, "all": {"type": "boolean"}, "confirmed": {"type": "boolean"}}, "required": ["action"]}}),
         json!({"name": "new_drawing", "description": "Create a new drawing (imperial by default, or metric).",
             "inputSchema": {"type": "object", "properties": {"metric": {"type": "boolean"}}}}),
         json!({"name": "open", "description": "Open a drawing (CADaddy .cdy, DWG, DXF, DWT; an SVG or PDF is converted) as a new tab that becomes current. Returns its index and any warnings (what reading left out, styles reset). Opening a file that is already open switches to it.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}),
@@ -161,6 +164,18 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
         "inspect_drawing" => b.call("drawing.inspect", a),
         "query_entities" => b.call("engine.execute", json!({"command": "entities", "params": a})),
         "find_text" => b.call("engine.execute", json!({"command": "texts", "params": a})),
+        "stairs" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("detect") => "stairs.detect",
+                Some("confirm") => "stairs.confirm",
+                _ => "stairs.list",
+            };
+            let mut params = a.clone();
+            if let Some(o) = params.as_object_mut() {
+                o.remove("action");
+            }
+            b.call("engine.execute", json!({"command": command, "params": params}))
+        }
         "new_drawing" => b.call("engine.execute", json!({"command": "new", "params": a})),
         "open" => b.call("app.open", a),
         "save" => b.call("app.save", a),

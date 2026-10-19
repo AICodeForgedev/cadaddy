@@ -57,6 +57,7 @@ pub(crate) fn layer_of(part: Part) -> &'static str {
         Part::Glass => "3D-Windows",
         Part::Door => "3D-Doors",
         Part::Device => "3D-Devices",
+        Part::Stair => "3D-Stairs",
     }
 }
 
@@ -68,6 +69,7 @@ fn part_name(part: Part) -> &'static str {
         Part::Glass => "window",
         Part::Door => "door",
         Part::Device => "device",
+        Part::Stair => "stair",
     }
 }
 
@@ -144,7 +146,8 @@ fn groups(scene: &Scene) -> Vec<Group> {
     let n = scene.owners.len().min(scene.parts.len()).min(scene.tris.len() / 3);
     for t in 0..n {
         let (Some(owner), Some(part)) = (scene.owners.get(t), scene.parts.get(t)) else { continue };
-        if *part == Part::Device {
+        // Devices aren't building elements; stairs are built whole by `model.build`.
+        if matches!(part, Part::Device | Part::Stair) {
             continue;
         }
         let tri = [0, 1, 2].map(|k| scene.tris.get(t * 3 + k).map_or([0.0; 3], |v| v.p));

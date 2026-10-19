@@ -67,9 +67,15 @@ impl Building {
         Ok((Rules::fallback(), None))
     }
 
-    /// Derive the building for `doc` (saved at `path`, if it has been). A sheet that is this
-    /// drawing's own file uses the open drawing, unsaved edits included.
+    /// Derive the building for `doc` (saved at `path`, if it has been): from the drawing's
+    /// building spec when it has one (its stairs and ramps included), else from the rules file.
+    /// A sheet that is this drawing's own file uses the open drawing, unsaved edits included.
     pub fn load(doc: Arc<Drawing>, path: Option<&Path>) -> Result<Building, String> {
+        if let Some(spec) = doc.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok()) {
+            let mut b = Building::with_rules(doc, path, spec.to_rules(), path.map(Path::to_path_buf))?;
+            b.rules_from = "the drawing's building spec".into();
+            return Ok(b);
+        }
         let (rules, from) = Building::find_rules(path)?;
         Building::with_rules(doc, path, rules, from)
     }
@@ -922,5 +928,24 @@ mod tests {
         let other = Building::load(Arc::clone(&doc), Some(&dir.join("E-4.dxf"))).unwrap_or_else(|e| panic!("{e}"));
         assert!(other.rules_from.starts_with("built-in"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_drawing_with_a_building_spec_walks_by_it_and_its_stairs() {
+        let d = Drawing {
+            building_spec: Some(
+            serde_json::json!({
+                "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "base": [0, 0]}, {"name": "L2", "elevation_ft": 12, "height_ft": 12, "region": [5000, 0, 6000, 100]}],
+                "stairs": [{"name": "S1", "level": "L1", "runs": [{"from": [100, 22], "to": [298, 22], "treads": 18}], "width_in": 44}]
+            })
+            .to_string(),
+        ),
+            ..Drawing::default()
+        };
+        let b = Building::load(Arc::new(d), None).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(b.rules_from, "the drawing's building spec");
+        assert_eq!(b.scene.levels.len(), 2);
+        assert_eq!(b.scene.slopes.len(), 1);
+        assert!(b.scene.parts.contains(&cadaddy_walk3d::Part::Stair), "the steps are drawn");
     }
 }

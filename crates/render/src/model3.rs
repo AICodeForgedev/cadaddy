@@ -311,7 +311,15 @@ fn chunked(mut s: Scene) -> (Scene, Vec<Chunk>) {
         let j = (((p.y - b.lo.y) / h * n as f64) as usize).min(n - 1);
         j * n + i
     };
-    let mut tris: Vec<(usize, Tri)> = s.tris.drain(..).map(|t| (cell((t.p[0] + t.p[1] + t.p[2]) * (1.0 / 3.0)), t)).collect();
+    // The triangles' owners (LIGHTBAKE's lookup) move with them.
+    let owners = std::mem::take(&mut s.owners);
+    let keep_owners = owners.len() == s.tris.len();
+    let mut tris: Vec<(usize, Tri, cadaddy_doc::Handle)> = s
+        .tris
+        .drain(..)
+        .enumerate()
+        .map(|(k, t)| (cell((t.p[0] + t.p[1] + t.p[2]) * (1.0 / 3.0)), t, owners.get(k).copied().unwrap_or_default()))
+        .collect();
     tris.sort_by_key(|x| x.0);
     let mut lines: Vec<(usize, Line3)> = s.lines.drain(..).map(|l| (cell((l.a + l.b) * 0.5), l)).collect();
     lines.sort_by_key(|x| x.0);
@@ -333,6 +341,9 @@ fn chunked(mut s: Scene) -> (Scene, Vec<Chunk>) {
             li += 1;
         }
         chunk.lines = start..li;
+    }
+    if keep_owners {
+        s.owners = tris.iter().map(|x| x.2).collect();
     }
     s.tris = tris.into_iter().map(|x| x.1).collect();
     s.lines = lines.into_iter().map(|x| x.1).collect();

@@ -58,6 +58,8 @@ pub enum Part {
     Door,
     /// A device box.
     Device,
+    /// A stair's steps and landings, or a ramp.
+    Stair,
 }
 
 /// Which drawing of the set a triangle or device came from (see [`Rules::sheets`]) and its
@@ -110,6 +112,8 @@ pub struct Scene {
     pub cased: usize,
     /// Door leaves, which open and close ([`Scene::toggle_door`]).
     pub door_leaves: Vec<crate::DoorLeaf>,
+    /// Stairs, ramps and landings Walk climbs (feet).
+    pub slopes: Vec<crate::stairs::Slope>,
 }
 
 /// A room name on a level's plan (TEXT or MTEXT), where it is in the building.
@@ -385,6 +389,38 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
     }
     close_walls(&mut s, &faces);
     crate::openings::build(&mut s, &plans, &rules.openings);
+    // Stairs and ramps: their steps, landings and handrails, and the slopes Walk climbs.
+    s.part = Part::Stair;
+    for st in rules.stairs.iter().take(1_000) {
+        let Some(lv) = rules.levels.iter().position(|l| l.name.eq_ignore_ascii_case(&st.level)) else { continue };
+        let Some(place) = places.get(lv) else { continue };
+        let g = st.geometry(place.base, upf);
+        let owner = Owner { src: 0, handle: Handle(0) };
+        for b in &g.blocks {
+            let len = b.a.dist(b.b);
+            if len > 1e-9 && b.z1 > b.z0 {
+                let dir = (b.b - b.a) * (1.0 / len);
+                let c = (b.a + b.b) * 0.5;
+                boxed(&mut s, v3(c.x, c.y, (b.z0 + b.z1) / 2.0), dir, len, b.width, b.z1 - b.z0, FLOOR, owner);
+            }
+        }
+        for w in &g.wedges {
+            let len = w.a.dist(w.b);
+            if len <= 1e-9 {
+                continue;
+            }
+            let n = Vec2 { x: -(w.b - w.a).y, y: (w.b - w.a).x } * (w.width / 2.0 / len);
+            let (a0, a1, b0, b1) = (w.a - n, w.a + n, w.b - n, w.b + n);
+            let top = [v3(a0.x, a0.y, w.za), v3(b0.x, b0.y, w.zb), v3(b1.x, b1.y, w.zb), v3(a1.x, a1.y, w.za)];
+            quad(&mut s, top, FLOOR, owner);
+            quad(&mut s, [v3(a0.x, a0.y, w.z0), v3(b0.x, b0.y, w.z0), v3(b0.x, b0.y, w.zb), v3(a0.x, a0.y, w.za)], WALL, owner);
+            quad(&mut s, [v3(a1.x, a1.y, w.za), v3(b1.x, b1.y, w.zb), v3(b1.x, b1.y, w.z0), v3(a1.x, a1.y, w.z0)], WALL, owner);
+        }
+        for (a, b) in &g.rails {
+            edge(&mut s, v3(a[0], a[1], a[2]), v3(b[0], b[1], b[2]));
+        }
+        s.slopes.extend(g.slopes);
+    }
     s.part = Part::Device;
 
     // Devices: from the levels' own drawings, and from device sheets (any level, by attribute).
@@ -873,6 +909,7 @@ mod tests {
             devices,
             device_sheets: Vec::new(),
             openings: crate::rules::Openings::default(),
+            stairs: Vec::new(),
         };
         (d, rules)
     }
@@ -960,6 +997,7 @@ mod tests {
             devices: DeviceRules::default(),
             device_sheets: Vec::new(),
             openings: crate::rules::Openings::default(),
+            stairs: Vec::new(),
         };
         assert_eq!(rules.sheets(), ["A111.dxf", "A112.dxf"]);
         assert_eq!((rules.level_source(0), rules.level_source(1), rules.level_source(2)), (1, 2, 2));
