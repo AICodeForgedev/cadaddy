@@ -108,10 +108,133 @@ pub fn specs() -> Vec<CommandSpec> {
 
 // ---------------- core operations ----------------
 
+/// Above this many objects, MOVE / ROTATE / SCALE transform them chunk by chunk in one pass.
+const BATCH_FROM: usize = 64;
+
+/// Transform the objects `wanted` of one store in place, chunk by chunk (in parallel natively):
+/// those on locked layers are left alone, and annotative objects with several scales (whose
+/// current representation alone moves) are returned for the one-by-one path.
+fn transform_batch(
+    store: &mut cadaddy_doc::EntityStore,
+    wanted: &std::collections::HashSet<Handle>,
+    locked: &std::collections::HashSet<String>,
+    m: &Mat3,
+) -> (std::collections::HashSet<Handle>, Vec<Handle>) {
+    let work = |items: &mut [std::sync::Arc<Entity>]| {
+        let (mut done, mut special) = (Vec::new(), Vec::new());
+        for e in items.iter_mut() {
+            if !wanted.contains(&e.handle) || locked.contains(&e.common.layer.to_ascii_lowercase()) {
+                continue;
+            }
+            if e.common.anno_scales.len() >= 2 {
+                special.push(e.handle);
+                continue;
+            }
+            std::sync::Arc::make_mut(e).kind.transform(m);
+            done.push(e.handle);
+        }
+        (done, special)
+    };
+    let slices = store.chunks_mut_where(|h| wanted.contains(&h));
+    #[cfg(not(target_arch = "wasm32"))]
+    let results: Vec<(Vec<Handle>, Vec<Handle>)> = {
+        use rayon::prelude::*;
+        slices.into_par_iter().map(work).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let results: Vec<(Vec<Handle>, Vec<Handle>)> = slices.into_iter().map(work).collect();
+    let mut done = std::collections::HashSet::new();
+    let mut special = Vec::new();
+    for (d, sp) in results {
+        done.extend(d);
+        special.extend(sp);
+    }
+    (done, special)
+}
+
 pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy: bool) -> Result<Vec<Handle>> {
     // A clipped viewport and its boundary move as one.
     let hs = &super::clip_partners::with_partners(s.doc()?, hs);
     let d = s.doc_mut()?;
+    // Many objects moved in place: one pass over the chunks holding them, instead of a lookup
+    // (and a layer search) per object. The same result as one at a time.
+    if !copy && hs.len() >= BATCH_FROM {
+        let wanted: std::collections::HashSet<Handle> = hs.iter().copied().collect();
+        let locked: std::collections::HashSet<String> = d.layers.iter().filter(|l| l.locked).map(|l| l.name.to_ascii_lowercase()).collect();
+        let mut done = std::collections::HashSet::new();
+        let mut special = Vec::new();
+        let layouts = d.layouts.len();
+        for i in 0..=layouts {
+            let store = if i == 0 { Some(&mut d.model) } else { d.layouts.get_mut(i - 1).map(|l| &mut l.entities) };
+            let Some(store) = store else { continue };
+            let (dn, sp) = transform_batch(store, &wanted, &locked, m);
+            done.extend(dn);
+            special.extend(sp);
+        }
+        for h in special {
+            if !super::annoscale::move_current_representation(d, h, m) {
+                d.modify_entity(h, |e| e.kind.transform(m))?;
+            }
+            done.insert(h);
+        }
+        let out: Vec<Handle> = hs.iter().copied().filter(|h| done.contains(h)).collect();
+        let moved: Vec<(Handle, Handle)> = out.iter().map(|h| (*h, *h)).collect();
+        super::clip_partners::after_transform(d, &moved, m, false)?;
+        return Ok(out);
+    }
+    // Many objects copied: found in one pass, copied and transformed side by side, appended in
+    // the order given (as one at a time would).
+    if copy && hs.len() >= BATCH_FROM {
+        let order: std::collections::HashMap<Handle, usize> = hs.iter().enumerate().map(|(i, h)| (*h, i)).collect();
+        let mut sources: Vec<(usize, Option<String>, std::sync::Arc<Entity>)> = Vec::new();
+        let spaces = std::iter::once((None, &d.model)).chain(d.layouts.iter().map(|l| (Some(l.name.clone()), &l.entities)));
+        for (space, store) in spaces {
+            for e in store.iter() {
+                if let Some(i) = order.get(&e.handle) {
+                    sources.push((*i, space.clone(), std::sync::Arc::clone(e)));
+                }
+            }
+        }
+        sources.sort_by_key(|(i, ..)| *i);
+        let handles: Vec<Handle> = sources.iter().map(|_| d.new_handle()).collect();
+        let make = |((_, _, e), nh): (&(usize, Option<String>, std::sync::Arc<Entity>), &Handle)| {
+            let mut ne = Entity { handle: *nh, ..(**e).clone() };
+            ne.kind.transform(m);
+            ne
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let made: Vec<Entity> = {
+            use rayon::prelude::*;
+            sources.par_iter().zip(handles.par_iter()).map(make).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let made: Vec<Entity> = sources.iter().zip(handles.iter()).map(make).collect();
+        // Each space's copies in one go (the order kept).
+        let mut by_space: Vec<(Option<String>, Vec<Entity>)> = Vec::new();
+        for ((_, space, _), ne) in sources.iter().zip(made) {
+            match by_space.last_mut() {
+                Some((sp, list)) if sp == space => list.push(ne),
+                _ => by_space.push((space.clone(), vec![ne])),
+            }
+        }
+        for (space, list) in by_space {
+            let store = match &space {
+                None => Some(&mut d.model),
+                Some(name) => d.layouts.iter_mut().find(|l| &l.name == name).map(|l| &mut l.entities),
+            };
+            if let Some(store) = store {
+                store.push_many(list);
+            }
+        }
+        let moved: Vec<(Handle, Handle)> = sources.iter().map(|(_, _, e)| e.handle).zip(handles.iter().copied()).collect();
+        let copies: std::collections::HashMap<Handle, Handle> = moved.iter().copied().collect();
+        super::clip_partners::after_transform(d, &moved, m, true)?;
+        if !d.groups.is_empty() {
+            let source = d.groups.clone();
+            super::groups::copy_groups(d, &source, &copies);
+        }
+        return Ok(handles);
+    }
     let mut out = Vec::new();
     let mut moved = Vec::new();
     // Original → copy, so a whole group copied becomes a new unnamed group.

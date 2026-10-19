@@ -231,10 +231,14 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     // Objects on a locked layer can't be changed, from the Properties palette either (AutoCAD).
+    // (Looked for only when a layer is locked: a search per object was most of a large CHPROP.)
     let before = hs.len();
     {
         let d = s.doc()?;
-        hs.retain(|h| !d.entity(*h).and_then(|e| d.layer(&e.common.layer)).is_some_and(|l| l.locked));
+        let locked: std::collections::HashSet<String> = d.layers.iter().filter(|l| l.locked).map(|l| l.name.to_ascii_lowercase()).collect();
+        if !locked.is_empty() {
+            hs.retain(|h| !d.entity(*h).is_some_and(|e| locked.contains(&e.common.layer.to_ascii_lowercase())));
+        }
     }
     match before - hs.len() {
         0 => {}
@@ -292,223 +296,253 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad("properties.set", "`background` is true, false or {color?, scale?}")),
     };
     let anno_scale = d.current_anno_scale();
-    for h in &hs {
-        d.modify_entity(*h, |e| {
-            // Annotative: Yes supports the current annotation scale; No drops every scale.
-            if let Some(a) = p.get("annotative").and_then(Value::as_bool) {
-                cadaddy_doc::set_annotative(e, a, &anno_scale);
-            }
-            if let Some(l) = str_param(p, "layer") {
-                e.common.layer = l.to_string();
-            }
-            if let Some(c) = color {
-                e.common.color = c;
-            }
-            if let Some(lt) = &linetype {
-                e.common.linetype.clone_from(lt);
-            }
-            if let Some(w) = lw {
-                e.common.lineweight = w;
-            }
-            if let Some(x) = p.get("ltscale").and_then(Value::as_f64).filter(|x| *x > 0.0) {
-                e.common.ltscale = x;
-            }
-            if let Some(t) = transparency {
-                e.common.transparency = t;
-            }
-            if let Some(v) = p.get("visible").and_then(Value::as_bool) {
-                e.common.visible = v;
-            }
-            let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
-            match &mut e.kind {
-                EntityKind::Line(l) => {
-                    if let Some(v) = p.get("start") {
-                        set_xy(&mut l.a, v);
-                    }
-                    if let Some(v) = p.get("end") {
-                        set_xy(&mut l.b, v);
-                    }
-                    // One coordinate, each object keeping its other one (several objects at once).
-                    for (k, c) in [("startX", &mut l.a.x), ("startY", &mut l.a.y), ("endX", &mut l.b.x), ("endY", &mut l.b.y)] {
-                        if let Some(x) = num(k) {
-                            *c = x;
-                        }
-                    }
-                    // Length / angle keep the start point and move the end point.
-                    let (a, b) = (l.a.xy(), l.b.xy());
-                    let len = num("length").filter(|x| *x > 0.0 && *x < 1e15).unwrap_or_else(|| a.dist(b));
-                    let ang = num("angle").map(f64::to_radians).unwrap_or_else(|| a.angle_to(b));
-                    if num("length").is_some() || num("angle").is_some() {
-                        let e = cadaddy_geom::Vec2::polar(a, len, ang);
-                        if e.is_finite() {
-                            l.b.x = e.x;
-                            l.b.y = e.y;
-                        }
+    let apply = |e: &mut cadaddy_doc::Entity| {
+        // Annotative: Yes supports the current annotation scale; No drops every scale.
+        if let Some(a) = p.get("annotative").and_then(Value::as_bool) {
+            cadaddy_doc::set_annotative(e, a, &anno_scale);
+        }
+        if let Some(l) = str_param(p, "layer") {
+            e.common.layer = l.to_string();
+        }
+        if let Some(c) = color {
+            e.common.color = c;
+        }
+        if let Some(lt) = &linetype {
+            e.common.linetype.clone_from(lt);
+        }
+        if let Some(w) = lw {
+            e.common.lineweight = w;
+        }
+        if let Some(x) = p.get("ltscale").and_then(Value::as_f64).filter(|x| *x > 0.0) {
+            e.common.ltscale = x;
+        }
+        if let Some(t) = transparency {
+            e.common.transparency = t;
+        }
+        if let Some(v) = p.get("visible").and_then(Value::as_bool) {
+            e.common.visible = v;
+        }
+        let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
+        match &mut e.kind {
+            EntityKind::Line(l) => {
+                if let Some(v) = p.get("start") {
+                    set_xy(&mut l.a, v);
+                }
+                if let Some(v) = p.get("end") {
+                    set_xy(&mut l.b, v);
+                }
+                // One coordinate, each object keeping its other one (several objects at once).
+                for (k, c) in [("startX", &mut l.a.x), ("startY", &mut l.a.y), ("endX", &mut l.b.x), ("endY", &mut l.b.y)] {
+                    if let Some(x) = num(k) {
+                        *c = x;
                     }
                 }
-                EntityKind::Solid3d(so) => super::solids::set_solid_props(so, p),
-                EntityKind::Circle(c) => {
-                    if let Some(v) = p.get("center") {
-                        set_xy(&mut c.center, v);
-                    }
-                    if let Some(x) = num("centerX") {
-                        c.center.x = x;
-                    }
-                    if let Some(y) = num("centerY") {
-                        c.center.y = y;
-                    }
-                    if let Some(r) = num("radius").filter(|r| *r > 0.0) {
-                        c.radius = r;
-                    }
-                    if let Some(dm) = num("diameter").filter(|r| *r > 0.0) {
-                        c.radius = dm / 2.0;
-                    }
-                    if let Some(cf) = num("circumference").filter(|x| *x > 0.0) {
-                        c.radius = cf / cadaddy_geom::TAU;
-                    }
-                    if let Some(a) = num("area").filter(|x| *x > 0.0) {
-                        c.radius = (a / cadaddy_geom::PI).sqrt();
+                // Length / angle keep the start point and move the end point.
+                let (a, b) = (l.a.xy(), l.b.xy());
+                let len = num("length").filter(|x| *x > 0.0 && *x < 1e15).unwrap_or_else(|| a.dist(b));
+                let ang = num("angle").map(f64::to_radians).unwrap_or_else(|| a.angle_to(b));
+                if num("length").is_some() || num("angle").is_some() {
+                    let e = cadaddy_geom::Vec2::polar(a, len, ang);
+                    if e.is_finite() {
+                        l.b.x = e.x;
+                        l.b.y = e.y;
                     }
                 }
-                EntityKind::Arc(a) => {
-                    if let Some(v) = p.get("center") {
-                        set_xy(&mut a.center, v);
-                    }
-                    if let Some(x) = num("centerX") {
-                        a.center.x = x;
-                    }
-                    if let Some(y) = num("centerY") {
-                        a.center.y = y;
-                    }
-                    if let Some(r) = num("radius").filter(|r| *r > 0.0) {
-                        a.radius = r;
-                    }
-                    if let Some(x) = num("startAngle") {
-                        a.start = cadaddy_geom::norm_angle(x.to_radians());
-                    }
-                    if let Some(x) = num("endAngle") {
-                        a.end = cadaddy_geom::norm_angle(x.to_radians());
+            }
+            EntityKind::Solid3d(so) => super::solids::set_solid_props(so, p),
+            EntityKind::Circle(c) => {
+                if let Some(v) = p.get("center") {
+                    set_xy(&mut c.center, v);
+                }
+                if let Some(x) = num("centerX") {
+                    c.center.x = x;
+                }
+                if let Some(y) = num("centerY") {
+                    c.center.y = y;
+                }
+                if let Some(r) = num("radius").filter(|r| *r > 0.0) {
+                    c.radius = r;
+                }
+                if let Some(dm) = num("diameter").filter(|r| *r > 0.0) {
+                    c.radius = dm / 2.0;
+                }
+                if let Some(cf) = num("circumference").filter(|x| *x > 0.0) {
+                    c.radius = cf / cadaddy_geom::TAU;
+                }
+                if let Some(a) = num("area").filter(|x| *x > 0.0) {
+                    c.radius = (a / cadaddy_geom::PI).sqrt();
+                }
+            }
+            EntityKind::Arc(a) => {
+                if let Some(v) = p.get("center") {
+                    set_xy(&mut a.center, v);
+                }
+                if let Some(x) = num("centerX") {
+                    a.center.x = x;
+                }
+                if let Some(y) = num("centerY") {
+                    a.center.y = y;
+                }
+                if let Some(r) = num("radius").filter(|r| *r > 0.0) {
+                    a.radius = r;
+                }
+                if let Some(x) = num("startAngle") {
+                    a.start = cadaddy_geom::norm_angle(x.to_radians());
+                }
+                if let Some(x) = num("endAngle") {
+                    a.end = cadaddy_geom::norm_angle(x.to_radians());
+                }
+            }
+            EntityKind::Text(t) => {
+                if let Some(v) = str_param(p, "text") {
+                    t.value = v.to_string();
+                }
+                if let Some(x) = num("height").filter(|x| *x > 0.0) {
+                    t.height = x;
+                }
+                if let Some(x) = num("rotation") {
+                    t.rotation = x.to_radians();
+                }
+                if let Some(x) = num("widthFactor").filter(|x| *x > 0.0) {
+                    t.width_factor = x;
+                }
+                // The position is the point the text is placed by: moving it moves the text.
+                if let Some(to) = p.get("position").and_then(point_value) {
+                    let d = to - t.justify_point();
+                    for q in std::iter::once(&mut t.insert).chain(t.align_pt.as_mut()) {
+                        q.x += d.x;
+                        q.y += d.y;
                     }
                 }
-                EntityKind::Text(t) => {
-                    if let Some(v) = str_param(p, "text") {
-                        t.value = v.to_string();
-                    }
-                    if let Some(x) = num("height").filter(|x| *x > 0.0) {
-                        t.height = x;
-                    }
-                    if let Some(x) = num("rotation") {
-                        t.rotation = x.to_radians();
-                    }
-                    if let Some(x) = num("widthFactor").filter(|x| *x > 0.0) {
-                        t.width_factor = x;
-                    }
-                    // The position is the point the text is placed by: moving it moves the text.
-                    if let Some(to) = p.get("position").and_then(point_value) {
-                        let d = to - t.justify_point();
+            }
+            EntityKind::MText(t) => {
+                if let Some(v) = str_param(p, "text") {
+                    t.contents = v.replace('\n', "\\P");
+                }
+                if let Some(x) = num("height").filter(|x| *x > 0.0) {
+                    t.height = x;
+                }
+                if let Some(x) = num("width").filter(|x| *x >= 0.0) {
+                    t.width = x;
+                }
+                if let Some(x) = num("rotation") {
+                    t.rotation = x.to_radians();
+                }
+                if let Some(bg) = &background {
+                    t.background = bg.clone();
+                }
+            }
+            EntityKind::LwPolyline(pl) => {
+                if let Some(x) = num("width").filter(|x| *x >= 0.0) {
+                    pl.const_width = x;
+                }
+                if let Some(c) = p.get("closed").and_then(Value::as_bool) {
+                    pl.closed = c;
+                }
+            }
+            EntityKind::Insert(i) => {
+                if let Some(x) = num("rotation") {
+                    let turn = x.to_radians() - i.rotation;
+                    i.rotation = x.to_radians();
+                    // The attached text turns with the reference, around its insertion point (as ROTATE does).
+                    let base = i.insert.xy();
+                    for a in &mut i.attribs {
+                        let t = &mut a.text;
                         for q in std::iter::once(&mut t.insert).chain(t.align_pt.as_mut()) {
-                            q.x += d.x;
-                            q.y += d.y;
+                            let r = q.xy().rotate_about(base, turn);
+                            q.x = r.x;
+                            q.y = r.y;
+                        }
+                        t.rotation = cadaddy_geom::norm_angle(t.rotation + turn);
+                        if let Some(ml) = &mut a.multiline {
+                            let r = ml.mtext.insert.xy().rotate_about(base, turn);
+                            ml.mtext.insert.x = r.x;
+                            ml.mtext.insert.y = r.y;
+                            ml.mtext.rotation = cadaddy_geom::norm_angle(ml.mtext.rotation + turn);
                         }
                     }
                 }
-                EntityKind::MText(t) => {
-                    if let Some(v) = str_param(p, "text") {
-                        t.contents = v.replace('\n', "\\P");
-                    }
-                    if let Some(x) = num("height").filter(|x| *x > 0.0) {
-                        t.height = x;
-                    }
-                    if let Some(x) = num("width").filter(|x| *x >= 0.0) {
-                        t.width = x;
-                    }
-                    if let Some(x) = num("rotation") {
-                        t.rotation = x.to_radians();
-                    }
-                    if let Some(bg) = &background {
-                        t.background = bg.clone();
-                    }
-                }
-                EntityKind::LwPolyline(pl) => {
-                    if let Some(x) = num("width").filter(|x| *x >= 0.0) {
-                        pl.const_width = x;
-                    }
-                    if let Some(c) = p.get("closed").and_then(Value::as_bool) {
-                        pl.closed = c;
-                    }
-                }
-                EntityKind::Insert(i) => {
-                    if let Some(x) = num("rotation") {
-                        let turn = x.to_radians() - i.rotation;
-                        i.rotation = x.to_radians();
-                        // The attached text turns with the reference, around its insertion point (as ROTATE does).
-                        let base = i.insert.xy();
+                if let Some(x) = num("scale").filter(|x| *x != 0.0) {
+                    // A new positive scale carries the attached attribute text with it, like SCALE about the insertion point.
+                    if x > 0.0 && i.scale.x > 0.0 {
+                        let m = cadaddy_geom::Mat3::scale_about(i.insert.xy(), x / i.scale.x);
                         for a in &mut i.attribs {
-                            let t = &mut a.text;
-                            for q in std::iter::once(&mut t.insert).chain(t.align_pt.as_mut()) {
-                                let r = q.xy().rotate_about(base, turn);
-                                q.x = r.x;
-                                q.y = r.y;
+                            let mut k = EntityKind::Text(a.text.clone());
+                            k.transform(&m);
+                            if let EntityKind::Text(t) = k {
+                                a.text = t;
                             }
-                            t.rotation = cadaddy_geom::norm_angle(t.rotation + turn);
-                            if let Some(ml) = &mut a.multiline {
-                                let r = ml.mtext.insert.xy().rotate_about(base, turn);
-                                ml.mtext.insert.x = r.x;
-                                ml.mtext.insert.y = r.y;
-                                ml.mtext.rotation = cadaddy_geom::norm_angle(ml.mtext.rotation + turn);
-                            }
+                            a.transform_multiline(&m);
                         }
                     }
-                    if let Some(x) = num("scale").filter(|x| *x != 0.0) {
-                        // A new positive scale carries the attached attribute text with it, like SCALE about the insertion point.
-                        if x > 0.0 && i.scale.x > 0.0 {
-                            let m = cadaddy_geom::Mat3::scale_about(i.insert.xy(), x / i.scale.x);
-                            for a in &mut i.attribs {
-                                let mut k = EntityKind::Text(a.text.clone());
-                                k.transform(&m);
-                                if let EntityKind::Text(t) = k {
-                                    a.text = t;
-                                }
-                                a.transform_multiline(&m);
-                            }
-                        }
-                        i.scale = Vec3::new(x, x, x);
-                    }
+                    i.scale = Vec3::new(x, x, x);
                 }
-                EntityKind::Dimension(dm) => {
-                    if let Some(v) = str_param(p, "textOverride") {
-                        dm.text = v.to_string();
-                        dm.block = None;
-                    }
-                    if let Some(st) = &dim_style {
-                        dm.style.clone_from(st);
-                        dm.block = None;
-                    }
-                }
-                EntityKind::Hatch(h) => {
-                    if let Some(v) = str_param(p, "pattern") {
-                        if !h.pattern.eq_ignore_ascii_case(v) {
-                            h.pattern_lines = super::hatch::lines_for(v);
-                        }
-                        h.pattern = v.to_ascii_uppercase();
-                        // The old pattern's definition lines no longer apply.
-                        h.pattern_lines.clear();
-                        h.solid = h.pattern == "SOLID";
-                        if !h.solid {
-                            // A named pattern replaces the gradient fill; the renderer draws the gradient first when it is set.
-                            h.gradient = None;
-                        }
-                    }
-                    if let Some(x) = num("scale").filter(|x| *x > 0.0) {
-                        h.scale = x;
-                    }
-                    if let Some(x) = num("angle") {
-                        h.angle = x.to_radians();
-                    }
-                }
-                _ => {}
             }
-        })?;
+            EntityKind::Dimension(dm) => {
+                if let Some(v) = str_param(p, "textOverride") {
+                    dm.text = v.to_string();
+                    dm.block = None;
+                }
+                if let Some(st) = &dim_style {
+                    dm.style.clone_from(st);
+                    dm.block = None;
+                }
+            }
+            EntityKind::Hatch(h) => {
+                if let Some(v) = str_param(p, "pattern") {
+                    if !h.pattern.eq_ignore_ascii_case(v) {
+                        h.pattern_lines = super::hatch::lines_for(v);
+                    }
+                    h.pattern = v.to_ascii_uppercase();
+                    // The old pattern's definition lines no longer apply.
+                    h.pattern_lines.clear();
+                    h.solid = h.pattern == "SOLID";
+                    if !h.solid {
+                        // A named pattern replaces the gradient fill; the renderer draws the gradient first when it is set.
+                        h.gradient = None;
+                    }
+                }
+                if let Some(x) = num("scale").filter(|x| *x > 0.0) {
+                    h.scale = x;
+                }
+                if let Some(x) = num("angle") {
+                    h.angle = x.to_radians();
+                }
+            }
+            _ => {}
+        }
+    };
+    // Many objects: one pass over the chunks holding them instead of a lookup each (the same
+    // result; each object's change depends only on it).
+    if hs.len() >= 64 {
+        let set: std::collections::HashSet<Handle> = hs.iter().copied().collect();
+        let mut found = std::collections::HashSet::new();
+        let work = |items: &mut [std::sync::Arc<cadaddy_doc::Entity>]| {
+            let mut done = Vec::new();
+            for e in items.iter_mut().filter(|e| set.contains(&e.handle)) {
+                done.push(e.handle);
+                apply(std::sync::Arc::make_mut(e));
+            }
+            done
+        };
+        for store in std::iter::once(&mut d.model).chain(d.layouts.iter_mut().map(|l| &mut l.entities)) {
+            let slices = store.chunks_mut_where(|h| set.contains(&h));
+            #[cfg(not(target_arch = "wasm32"))]
+            let done: Vec<Vec<Handle>> = {
+                use rayon::prelude::*;
+                slices.into_par_iter().map(work).collect()
+            };
+            #[cfg(target_arch = "wasm32")]
+            let done: Vec<Vec<Handle>> = slices.into_iter().map(work).collect();
+            found.extend(done.into_iter().flatten());
+        }
+        if let Some(missing) = hs.iter().find(|h| !found.contains(h)) {
+            return Err(cadaddy_doc::DocError::NoEntity(*missing).into());
+        }
+    } else {
+        for h in &hs {
+            d.modify_entity(*h, apply)?;
+        }
     }
     Ok(json!({ "changed": hs.len() }))
 }

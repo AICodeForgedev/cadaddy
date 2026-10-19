@@ -57,13 +57,20 @@ fn changed_non_finite(d: &Drawing, before: Option<&EntityStore>, after: &EntityS
         let b = entity_bounds(d, e, 0);
         is_finite(e) && (b.is_empty() || (b.min.is_finite() && b.max.is_finite()))
     };
-    after
-        .chunk_slices()
-        .filter(|(key, _)| !shared.contains(key))
-        .flat_map(|(_, items)| items.iter())
-        .filter(|e| before.and_then(|b| b.get(e.handle)).is_none_or(|old| !Arc::ptr_eq(old, e)))
-        .find(|e| !finite(e))
-        .map(|e| e.handle)
+    let bad_in = |items: &[Arc<Entity>]| {
+        items.iter().filter(|e| before.and_then(|b| b.get(e.handle)).is_none_or(|old| !Arc::ptr_eq(old, e))).find(|e| !finite(e)).map(|e| e.handle)
+    };
+    let changed: Vec<&[Arc<Entity>]> = after.chunk_slices().filter(|(key, _)| !shared.contains(key)).map(|(_, items)| items).collect();
+    // The first such object in drawing order, the chunks looked at side by side.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        changed.par_iter().find_map_first(|items| bad_in(items))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        changed.iter().find_map(|items| bad_in(items))
+    }
 }
 
 /// Whether every number in `v` is finite.
