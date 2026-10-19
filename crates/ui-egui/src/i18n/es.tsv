@@ -1874,3 +1874,16 @@
 	Set Building Spec	Definir especificación del edificio
 	Validate Building Spec	Validar especificación del edificio
 	Build Model from Spec	Crear modelo desde especificación
+	Convert Matches to Block	Convertir coincidencias en bloque
+	Command Line Transparency	Transparencia de la línea de comandos
+	AutoComplete Settings	Parámetros de Autocompletar
+	Input Settings	Parámetros de entrada
+	AutoComplete	Autocompletar
+	Search System Variables	Buscar variables de sistema
+	Mid-string Search	Búsqueda en mitad de cadena
+	System variable	Variable de sistema
+	Layer state	Estado de capas
+	Model Issues	Problemas del modelo
+	Render Model View	Renderizar vista del modelo
+	Model Overlay	Superposición del modelo
+	Model Counts	Recuentos del modelo

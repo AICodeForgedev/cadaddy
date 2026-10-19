@@ -7,6 +7,10 @@
 //! and texture coordinates. glTF is Y-up in metres: the drawing's Z becomes Y and its units become
 //! metres (INSUNITS). A block's surfaces are written once and each reference to it is a node
 //! placing them (instancing). OBJ is written Y-up in drawing units; STL Z-up in drawing units.
+//!
+//! Implements the Khronos Group's glTF 2.0 Specification (2017, rev. 2021) for `.gltf`/`.glb`;
+//! OBJ/MTL after Wavefront's published format notes; binary and ASCII STL after the 3D Systems
+//! StereoLithography Interface Specification (1988).
 
 use cadaddy_color::Rgb;
 use cadaddy_doc::material::{Material, Texture, metres_per_unit};

@@ -1848,3 +1848,16 @@ menu	Modify	Modifikace
 	Set Building Spec	Nastavit specifikaci budovy
 	Validate Building Spec	Ověřit specifikaci budovy
 	Build Model from Spec	Vytvořit model ze specifikace
+	Convert Matches to Block	Převést shody na blok
+	Command Line Transparency	Průhlednost příkazového řádku
+	AutoComplete Settings	Nastavení automatického dokončování
+	Input Settings	Nastavení vstupu
+	AutoComplete	Automatické dokončování
+	Search System Variables	Hledat systémové proměnné
+	Mid-string Search	Hledání uvnitř řetězce
+	System variable	Systémová proměnná
+	Layer state	Stav hladin
+	Model Issues	Problémy modelu
+	Render Model View	Vykreslit pohled na model
+	Model Overlay	Překrytí modelu
+	Model Counts	Počty v modelu

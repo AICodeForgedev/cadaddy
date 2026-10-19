@@ -1719,3 +1719,8 @@
 	Set Building Spec	建物仕様を設定
 	Validate Building Spec	建物仕様を検証
 	Build Model from Spec	仕様からモデルを作成
+	Convert Matches to Block	一致する図形をブロックに変換
+	Model Issues	モデルの問題
+	Render Model View	モデル ビューをレンダリング
+	Model Overlay	モデル オーバーレイ
+	Model Counts	モデルの数量

@@ -524,7 +524,7 @@ fn inches(v: &str) -> Option<f64> {
 
 /// Door and window blocks by the spec's families (and its door and window layers): their kind,
 /// width (the family's, an attribute's, else as found) and head and sill heights.
-fn fit_families(
+pub(crate) fn fit_families(
     d: &Drawing,
     sp: &cadaddy_walk3d::BuildingSpec,
     ents: &[&Arc<Entity>],

@@ -12,6 +12,11 @@
 //!   rejects hidden surfaces early.
 //!
 //! The model is built off the UI thread ([`build`] reports its progress).
+//!
+//! Implements: the simplified level by vertex clustering after Rossignac and Borrel,
+//! "Multi-Resolution 3D Approximations for Rendering Complex Scenes" (Modeling in Computer
+//! Graphics, 1993); view-volume culling of bounding boxes and front-to-back ordering as in
+//! Akenine-Möller, Haines and Hoffman, *Real-Time Rendering*, 4th ed. (2018), chapter 19.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 

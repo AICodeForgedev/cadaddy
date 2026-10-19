@@ -1864,3 +1864,16 @@ menu	View	عرض
 	Set Building Spec	تعيين مواصفات المبنى
 	Validate Building Spec	التحقق من مواصفات المبنى
 	Build Model from Spec	إنشاء النموذج من المواصفات
+	Convert Matches to Block	تحويل المتطابقات إلى كتلة
+	Command Line Transparency	شفافية سطر الأوامر
+	AutoComplete Settings	إعدادات الإكمال التلقائي
+	Input Settings	إعدادات الإدخال
+	AutoComplete	الإكمال التلقائي
+	Search System Variables	البحث في متغيرات النظام
+	Mid-string Search	البحث داخل النص
+	System variable	متغير نظام
+	Layer state	حالة الطبقة
+	Model Issues	مشكلات النموذج
+	Render Model View	عرض منظر النموذج
+	Model Overlay	تراكب النموذج
+	Model Counts	تعدادات النموذج

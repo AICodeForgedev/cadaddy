@@ -57,7 +57,34 @@ pub fn command_line_entries(app: &CadApp) -> Vec<Vec<Entry>> {
     if !recent.is_empty() {
         groups.push(vec![Entry::Sub { label: "Recent Commands".into(), children: recent }]);
     }
+    // While a command asks for input: what was typed at its prompts lately.
+    if app.session.prompting() {
+        let recent: Vec<Entry> = app.cmd.recent_input.iter().rev().take(RECENT).map(|t| action(t, format!("cmdline:input:{t}"), true)).collect();
+        if !recent.is_empty() {
+            groups.push(vec![Entry::Sub { label: "Recent Input".into(), children: recent }]);
+        }
+    }
     push(&mut groups, ["dynmode", "ui.toggle.history"].iter().filter_map(|id| item(app, id, None)).collect());
+    // Input Settings: AutoComplete and what it searches.
+    let a = app.ui.autocomplete;
+    let check = |on: bool, label: &str| if on { format!("✓ {}", crate::i18n::t(label)) } else { crate::i18n::t(label).to_string() };
+    let input: Vec<Entry> =
+        [("enabled", a.enabled, "AutoComplete"), ("sysvars", a.sysvars, "Search System Variables"), ("midString", a.mid_string, "Mid-string Search")]
+            .iter()
+            .filter_map(|(k, on, label)| run(&check(*on, label), "ui.autocomplete", json!({ "toggle": k })))
+            .collect();
+    if !input.is_empty() {
+        groups.push(vec![Entry::Sub { label: "Input Settings".into(), children: input }]);
+    }
+    let transparency: Vec<Entry> = [0u8, 25, 50, 75]
+        .iter()
+        .filter_map(|p| {
+            run(&format!("{}{p} %", if app.ui.cmdline_transparency == *p { "✓ " } else { "" }), "ui.cmdline.transparency", json!({ "percent": p }))
+        })
+        .collect();
+    if !transparency.is_empty() {
+        groups.push(vec![Entry::Sub { label: "Transparency".into(), children: transparency }]);
+    }
     let lines: Vec<Entry> = LINES.iter().filter_map(|n| run(&n.to_string(), "ui.cmdline.lines", json!({ "lines": n }))).collect();
     if !lines.is_empty() {
         groups.push(vec![Entry::Sub { label: "Lines of Command History".into(), children: lines }]);
@@ -239,6 +266,10 @@ pub fn choose(app: &mut CadApp, ctx: &egui::Context, id: &str) {
         if let Err(e) = app.run(command, params) {
             app.session.echo(e);
         }
+    } else if let Some(text) = id.strip_prefix("cmdline:input:") {
+        // Recent Input: given to the running command as if typed.
+        app.cmd.buffer = text.to_string();
+        crate::cmdline::submit(app);
     } else if id == "cmdline:copy" {
         ctx.copy_text(app.session.log.join("\n"));
     } else if id == "cmdline:paste" {

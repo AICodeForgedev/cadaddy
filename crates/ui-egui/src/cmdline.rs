@@ -1,8 +1,6 @@
 //! The floating command line: history, the active prompt with clickable keywords, typed input
 //! (keyboard focus stays on the drawing — typing anywhere goes here) and AutoComplete.
 
-use std::collections::HashSet;
-
 use cadaddy_engine::Input;
 use egui::{Key, Pos2, Rect, Sense, Stroke, pos2, vec2};
 
@@ -25,6 +23,8 @@ pub struct CmdLine {
     pub expanded: bool,
     /// Dragging the history's top edge: (pointer y, line count) when the drag started.
     resize_from: Option<(f32, usize)>,
+    /// Dragging an end of the bar: (pointer x, width, -1 left end / 1 right end) at the start.
+    width_from: Option<(f32, f32, f32)>,
     /// The Dynamic Input options menu at the cursor (Down Arrow at a prompt with keywords).
     pub options: Option<crate::dyninput::OptionsMenu>,
     /// The text whose second Dynamic Input value Tab locked; the lock holds while it is unchanged.
@@ -92,76 +92,37 @@ fn tab(app: &mut CadApp) {
     {
         // Both values typed: Tab locks the second one as well.
         app.cmd.locked_second = Some(app.cmd.buffer.clone());
-    } else if let Some(s) = suggestions(&app.cmd.buffer).first() {
+    } else if let Some(s) = current_suggestions(app).first() {
         app.cmd.buffer = s.id.clone();
     }
 }
 
-/// An AutoComplete suggestion for the command line.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Suggestion {
-    /// Command identifier (uppercase, e.g. "RECTANG"), used for buffer completion and execution.
-    pub id: String,
-    /// Display text shown in the AutoComplete list (e.g. "REC (RECTANG)" or "RECOVER").
-    pub display: String,
-    /// Human-readable command label (e.g. "Rectangle").
-    pub label: &'static str,
+pub use crate::autocomplete::Suggestion;
+
+/// Command names and aliases for `prefix` with the default settings and no usage counts.
+#[cfg(test)]
+fn suggestions(prefix: &str) -> Vec<Suggestion> {
+    crate::autocomplete::complete_commands(prefix, &crate::autocomplete::Settings::default(), &crate::autocomplete::Usage::default(), &[])
 }
 
-/// Matching command names/aliases for AutoComplete.
-fn suggestions(prefix: &str) -> Vec<Suggestion> {
-    if prefix.is_empty() || prefix.contains(' ') {
+/// The AutoComplete list for what is typed now: commands, aliases and system variables at the
+/// command prompt (ranked by how often each command was used); at a prompt asking for a named
+/// object, the drawing's names of that kind.
+pub fn current_suggestions(app: &CadApp) -> Vec<Suggestion> {
+    let set = app.ui.autocomplete;
+    if !set.enabled || app.cmd.buffer.is_empty() {
         return Vec::new();
     }
-    let p = prefix.to_ascii_lowercase();
-
-    let mut out: Vec<Suggestion> = Vec::new();
-    let mut seen_ids: HashSet<&'static str> = HashSet::new();
-
-    // 1. Exact match: alias resolution or exact command name match.
-    let resolved = cadaddy_engine::cmd::resolve_alias(&p);
-    if let Some(spec) = cadaddy_engine::cmd::find_command(&resolved)
-        && !spec.id.contains('.')
-    {
-        let display =
-            if spec.id == p { spec.id.to_ascii_uppercase() } else { format!("{} ({})", p.to_ascii_uppercase(), spec.id.to_ascii_uppercase()) };
-        out.push(Suggestion { id: spec.id.to_ascii_uppercase(), display, label: spec.label });
-        seen_ids.insert(spec.id);
+    if !app.session.prompting() {
+        let vars: Vec<String> = match cadaddy_engine::sysvars::list(&app.session) {
+            serde_json::Value::Object(m) if set.sysvars => m.keys().cloned().collect(),
+            _ => Vec::new(),
+        };
+        return crate::autocomplete::complete_commands(&app.cmd.buffer, &set, &app.ui.command_usage, &vars);
     }
-
-    // 2. Command ID prefix matches (excluding already matched exact command).
-    let mut id_matches: Vec<&'static cadaddy_engine::CommandSpec> =
-        cadaddy_engine::command_specs().iter().filter(|c| !c.id.contains('.') && !seen_ids.contains(c.id) && c.id.starts_with(&p)).collect();
-    id_matches.sort_by_key(|c| (c.id.len(), c.id));
-    for c in id_matches {
-        out.push(Suggestion { id: c.id.to_ascii_uppercase(), display: c.id.to_ascii_uppercase(), label: c.label });
-        seen_ids.insert(c.id);
-    }
-
-    // 3. Command alias prefix matches (for commands not yet added).
-    let mut alias_matches: Vec<(&'static str, &'static cadaddy_engine::CommandSpec)> = Vec::new();
-    for c in cadaddy_engine::command_specs() {
-        if c.id.contains('.') || seen_ids.contains(c.id) {
-            continue;
-        }
-        let matching_alias = c.aliases.iter().copied().filter(|a| a.starts_with(&p)).min_by_key(|a| (a.len(), *a));
-        if let Some(alias) = matching_alias {
-            alias_matches.push((alias, c));
-        }
-    }
-    alias_matches.sort_by_key(|(alias, c)| (alias.len(), *alias, c.id));
-    for (alias, c) in alias_matches {
-        if seen_ids.insert(c.id) {
-            out.push(Suggestion {
-                id: c.id.to_ascii_uppercase(),
-                display: format!("{} ({})", alias.to_ascii_uppercase(), c.id.to_ascii_uppercase()),
-                label: c.label,
-            });
-        }
-    }
-
-    out.truncate(8);
-    out
+    let Some(p) = app.session.current_prompt().filter(|p| p.accept.text) else { return Vec::new() };
+    let (Some(kind), Ok(d)) = (crate::autocomplete::named_kind(&p.message), app.session.doc()) else { return Vec::new() };
+    crate::autocomplete::complete_names(&app.cmd.buffer, kind, &crate::autocomplete::names(d, kind), set.mid_string)
 }
 
 impl CmdLine {
@@ -388,6 +349,11 @@ pub fn submit(app: &mut CadApp) {
     app.cmd.locked_second = None;
     app.cmd.history_pos = None;
     if !text.trim().is_empty() && !app.session.prompting() {
+        // How often each command is typed ranks AutoComplete.
+        let id = cadaddy_engine::cmd::resolve_alias(&text.trim().to_ascii_lowercase());
+        if let Some(c) = cadaddy_engine::cmd::find_command(&id) {
+            app.ui.command_usage.note(c.id);
+        }
         app.cmd.history.push(text.clone());
         if app.cmd.history.len() > 200 {
             app.cmd.history.remove(0);
@@ -403,6 +369,21 @@ pub fn submit(app: &mut CadApp) {
     app.cmdline(&text);
 }
 
+/// The command bar's width in a drawing area `canvas_w` wide: the width it was dragged to (a
+/// fraction of the drawing area, kept with the interface preferences), else about half of it.
+pub fn bar_width(app: &CadApp, canvas_w: f32) -> f32 {
+    let room = (canvas_w - 8.0).max(0.0);
+    match app.ui.cmdline_width.filter(|f| f.is_finite()) {
+        Some(f) => (canvas_w * f.clamp(0.2, 1.0)).clamp(240.0_f32.min(room), room),
+        None => (canvas_w * 0.48).clamp(360.0, 760.0).min(room),
+    }
+}
+
+/// How opaque the command line's backgrounds are (its Transparency setting).
+fn opacity(app: &CadApp) -> f32 {
+    1.0 - f32::from(app.ui.cmdline_transparency.min(80)) / 100.0
+}
+
 fn visible_lines(app: &CadApp, canvas: Rect, bar: Rect) -> usize {
     let available = ((bar.top() - canvas.top() - 8.0).max(0.0) / LINE_H) as usize;
     app.ui.history_lines.min(MAX_LINES).min(available)
@@ -410,7 +391,7 @@ fn visible_lines(app: &CadApp, canvas: Rect, bar: Rect) -> usize {
 
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     let t = Tokens::get();
-    let w = (canvas.width() * 0.48).clamp(360.0, 760.0).min((canvas.width() - 8.0).max(0.0));
+    let w = bar_width(app, canvas.width());
     let h = 24.0;
     let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - h - 10.0), vec2(w, h));
     let p = ui.painter_at(canvas);
@@ -421,7 +402,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     if !lines.is_empty() {
         let lh = 16.0;
         let hr = Rect::from_min_size(pos2(bar.left(), bar.top() - lh * lines.len() as f32 - 4.0), vec2(w, lh * lines.len() as f32 + 2.0));
-        p.rect_filled(hr, 3.0, t.cmd_history);
+        p.rect_filled(hr, 3.0, t.cmd_history.gamma_multiply(opacity(app)));
         for (i, l) in lines.iter().enumerate() {
             p.text(
                 pos2(hr.left() + 8.0, hr.top() + 1.0 + lh * i as f32),
@@ -432,7 +413,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
             );
         }
     }
-    p.rect_filled(bar, 3.0, t.cmd_bg);
+    p.rect_filled(bar, 3.0, t.cmd_bg.gamma_multiply(opacity(app)));
     p.rect_stroke(bar, 3.0, Stroke::new(1.0, t.cmd_border), egui::StrokeKind::Inside);
     // Prompt glyph.
     p.text(pos2(bar.left() + 8.0, bar.center().y), egui::Align2::LEFT_CENTER, ">_", crate::theme::mono(), t.text_dim);
@@ -544,8 +525,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
         false,
     );
     // AutoComplete list.
-    if !app.session.prompting() {
-        let sug = suggestions(&app.cmd.buffer);
+    {
+        let sug = current_suggestions(app);
         if !sug.is_empty() {
             let rh = 20.0;
             let lr = Rect::from_min_size(
@@ -568,13 +549,23 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
                 p.text(
                     Pos2::new(r.right() - 8.0, r.center().y),
                     egui::Align2::RIGHT_CENTER,
-                    crate::i18n::t(s.label),
+                    crate::i18n::t(&s.label),
                     crate::theme::small(),
                     t.text_faint,
                 );
                 if resp.clicked() {
-                    app.cmd.buffer.clear();
-                    app.start(&s.id.to_ascii_lowercase());
+                    match s.kind {
+                        crate::autocomplete::Kind::Command => {
+                            app.cmd.buffer.clear();
+                            app.ui.command_usage.note(&s.id);
+                            app.start(&s.id.to_ascii_lowercase());
+                        }
+                        // A variable or a name: as if typed and entered.
+                        _ => {
+                            app.cmd.buffer = s.id.clone();
+                            submit(app);
+                        }
+                    }
                 }
             }
         }
@@ -607,8 +598,8 @@ fn zones(app: &CadApp, canvas: Rect, bar: Rect) -> Zones {
     let top = window.or(lines).map_or(bar.top(), |r| r.top());
     let grip = Rect::from_min_max(pos2(bar.left(), top - 3.0), pos2(bar.right(), top + 3.0));
     let mut all = bar.union(grip);
-    if !app.session.prompting() {
-        let k = suggestions(&app.cmd.buffer).len();
+    {
+        let k = current_suggestions(app).len();
         if k > 0 {
             let above = if n == 0 { 0.0 } else { LINE_H * n as f32 + 6.0 };
             all = all.union(Rect::from_min_size(pos2(bar.left(), bar.top() - 6.0 - 20.0 * k as f32 - above), vec2(bar.width(), 1.0)));
@@ -627,6 +618,40 @@ fn history(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect, bar: Rect) {
     crate::icons::describe_area(&resp, "Command line");
     let at = resp.hover_pos().or(resp.interact_pointer_pos());
     let on_grip = |p: Pos2| z.grip.contains(p) && z.window.is_none();
+    // The bar's ends: dragging them sets the command line's width (both ends move, it stays
+    // centred).
+    let side = |p: Pos2| -> Option<f32> {
+        let band = bar.y_range();
+        if !band.contains(p.y) {
+            return None;
+        }
+        if (p.x - bar.left()).abs() <= 4.0 {
+            Some(-1.0)
+        } else if (p.x - bar.right()).abs() <= 4.0 {
+            Some(1.0)
+        } else {
+            None
+        }
+    };
+    if app.cmd.width_from.is_some() || at.and_then(side).is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    if resp.drag_started()
+        && let Some(o) = ui.input(|i| i.pointer.press_origin())
+        && let Some(dir) = side(o)
+    {
+        app.cmd.width_from = Some((o.x, bar.width(), dir));
+    }
+    if let Some((x0, w0, dir)) = app.cmd.width_from {
+        if let (true, Some(p)) = (resp.dragged(), resp.interact_pointer_pos()) {
+            let w = w0 + 2.0 * dir * (p.x - x0);
+            if canvas.width() > 0.0 {
+                app.ui.cmdline_width = Some((w / canvas.width()).clamp(0.2, 1.0));
+            }
+        } else {
+            app.cmd.width_from = None;
+        }
+    }
     let on_toggle = |p: Pos2| z.chevron.contains(p) || z.lines.is_some_and(|r| r.contains(p));
     if app.cmd.resize_from.is_some() || at.is_some_and(on_grip) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
@@ -634,6 +659,7 @@ fn history(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect, bar: Rect) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     if resp.drag_started()
+        && app.cmd.width_from.is_none()
         && let Some(o) = ui.input(|i| i.pointer.press_origin())
         && on_grip(o)
     {
@@ -661,7 +687,7 @@ fn history(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect, bar: Rect) {
 /// The expanded history: the whole command log, scrollable, newest at the bottom.
 fn history_window(app: &CadApp, ui: &mut egui::Ui, r: Rect) {
     let t = Tokens::get();
-    ui.painter().rect_filled(r, 3.0, t.cmd_bg);
+    ui.painter().rect_filled(r, 3.0, t.cmd_bg.gamma_multiply(opacity(app)));
     ui.painter().rect_stroke(r, 3.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     let inner = r.shrink2(vec2(8.0, 3.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)));
@@ -695,7 +721,7 @@ mod tests {
             app.session.echo(format!("line {i}"));
         }
         let canvas = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 180.0));
-        let w = (canvas.width() * 0.48).clamp(360.0, 760.0).min((canvas.width() - 8.0).max(0.0));
+        let w = bar_width(&app, canvas.width());
         let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - 34.0), vec2(w, 24.0));
         let z = zones(&app, canvas, bar);
         assert!(canvas.contains_rect(bar));
@@ -729,7 +755,7 @@ mod tests {
         frame(&mut app, &ctx, Vec::new());
         frame(&mut app, &ctx, Vec::new());
         let canvas = app.canvas.rect.unwrap_or(Rect::NOTHING);
-        let w = (canvas.width() * 0.48).clamp(360.0, 760.0).min((canvas.width() - 8.0).max(0.0));
+        let w = bar_width(&app, canvas.width());
         let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - 34.0), vec2(w, 24.0));
         let z = zones(&app, canvas, bar);
         let Some(lines) = z.lines else { panic!("three history lines show by default") };
@@ -851,6 +877,90 @@ mod autocomplete_tests {
         let line = suggestions("line");
         assert_eq!(line[0].id, "LINE");
         assert_eq!(line[0].display, "LINE");
+    }
+
+    fn app() -> CadApp {
+        CadApp::new(cadaddy_engine::Session::new(), crate::Services::default())
+    }
+
+    #[test]
+    fn a_layer_prompt_completes_layer_names() {
+        let mut app = app();
+        for n in ["Walls", "Walkway", "Fire walls", "Doors"] {
+            app.run("layer.new", serde_json::json!({ "name": n })).unwrap();
+        }
+        app.cmdline("-layer");
+        app.cmdline("S");
+        assert!(app.session.prompt_text().contains("layer name"), "{}", app.session.prompt_text());
+        app.cmd.buffer = "wal".into();
+        let ids: Vec<String> = current_suggestions(&app).into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, ["Walls", "Walkway", "Fire walls"]);
+        tab(&mut app);
+        assert_eq!(app.cmd.buffer, "Walls");
+        submit(&mut app);
+        app.cmdline("");
+        assert_eq!(app.session.doc().unwrap().header.str("CLAYER", "0"), "Walls");
+        // Not a naming prompt: nothing offered.
+        app.cmdline("line");
+        app.cmd.buffer = "wal".into();
+        assert!(current_suggestions(&app).is_empty());
+        app.session.cancel();
+    }
+
+    #[test]
+    fn typed_commands_rank_autocomplete_and_settings_apply() {
+        let mut app = app();
+        app.cmd.buffer = "di".into();
+        assert_eq!(current_suggestions(&app)[0].id, "DIST");
+        for _ in 0..3 {
+            app.cmd.buffer = "dimlinear".into();
+            submit(&mut app);
+            app.session.cancel();
+        }
+        assert_eq!(app.ui.command_usage.count("dimlinear"), 3);
+        app.cmd.buffer = "di".into();
+        let ids: Vec<String> = current_suggestions(&app).into_iter().map(|s| s.id).collect();
+        assert_eq!(&ids[..2], ["DIST", "DIMLINEAR"], "{ids:?}");
+        // System variables, then AutoComplete off.
+        app.cmd.buffer = "orthom".into();
+        assert!(current_suggestions(&app).iter().any(|s| s.id == "ORTHOMODE"));
+        app.run("ui.autocomplete", serde_json::json!({ "toggle": "sysvars" })).unwrap();
+        assert!(!current_suggestions(&app).iter().any(|s| s.id == "ORTHOMODE"));
+        app.run("ui.autocomplete", serde_json::json!({ "enabled": false })).unwrap();
+        app.cmd.buffer = "li".into();
+        assert!(current_suggestions(&app).is_empty());
+        assert!(app.run("ui.autocomplete", serde_json::json!({ "toggle": "nope" })).is_err());
+        // Transparency, kept with the preferences.
+        app.run("ui.cmdline.transparency", serde_json::json!({ "percent": 50 })).unwrap();
+        assert!((opacity(&app) - 0.5).abs() < 1e-6);
+        assert!(app.run("ui.cmdline.transparency", serde_json::json!({ "percent": 99 })).is_err());
+        let saved = serde_json::to_value(&app.ui).unwrap();
+        assert_eq!(
+            (saved["cmdlineTransparency"].clone(), saved["autocomplete"]["enabled"].clone()),
+            (serde_json::json!(50), serde_json::json!(false))
+        );
+    }
+
+    #[test]
+    fn recent_input_in_the_command_line_menu_and_bar_width() {
+        let mut app = app();
+        // Typed as at the command line, so the prompts' answers are remembered.
+        for t in ["circle", "0,0", "5", "circle"] {
+            app.cmd.buffer = t.into();
+            submit(&mut app);
+        }
+        let groups = crate::shortcut_menus::command_line_entries(&app);
+        let recent = groups
+            .iter()
+            .flatten()
+            .any(|e| matches!(e, crate::menus::Entry::Sub { label, children } if label == "Recent Input" && !children.is_empty()));
+        assert!(recent, "the inputs typed at prompts are offered");
+        app.session.cancel();
+        assert_eq!(bar_width(&app, 1000.0), 480.0);
+        app.ui.cmdline_width = Some(0.8);
+        assert_eq!(bar_width(&app, 1000.0), 800.0);
+        app.ui.cmdline_width = Some(f32::NAN);
+        assert_eq!(bar_width(&app, 1000.0), 480.0);
     }
 
     #[test]

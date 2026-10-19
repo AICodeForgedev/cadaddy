@@ -1869,3 +1869,16 @@ menu	Modify	수정
 	Set Building Spec	건물 사양 설정
 	Validate Building Spec	건물 사양 검증
 	Build Model from Spec	사양으로 모델 작성
+	Convert Matches to Block	일치 항목을 블록으로 변환
+	Command Line Transparency	명령행 투명도
+	AutoComplete Settings	자동 완성 설정
+	Input Settings	입력 설정
+	AutoComplete	자동 완성
+	Search System Variables	시스템 변수 검색
+	Mid-string Search	중간 문자열 검색
+	System variable	시스템 변수
+	Layer state	도면층 상태
+	Model Issues	모델 문제
+	Render Model View	모델 뷰 렌더링
+	Model Overlay	모델 오버레이
+	Model Counts	모델 개수

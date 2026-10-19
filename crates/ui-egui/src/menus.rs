@@ -93,6 +93,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.donate", "Support CADaddy...", &["Help", "Support CADaddy..."], None),
     ("ui.toggle.history", "Command History", &["Window", "Command History"], Some("F2")),
     ("ui.cmdline.lines", "Command Line History Lines", &[], None),
+    ("ui.cmdline.transparency", "Command Line Transparency", &[], None),
+    ("ui.autocomplete", "AutoComplete Settings", &[], None),
     ("ui.cmdline.clear", "Clear Command History", &[], None),
     ("ui.dialog.language", "Interface Language", &["Edit", "Interface Language"], None),
     ("ui.language", "Language", &[], None),
@@ -462,6 +464,32 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 app.ui.history_lines = n.min(crate::cmdline::MAX_LINES as u64) as usize;
             }
             Ok(json!({ "lines": app.ui.history_lines }))
+        }
+        // `{"percent": 0–80}`: the command line's transparency; without it, reports it.
+        "ui.cmdline.transparency" => match params.get("percent").map(|v| v.as_u64().filter(|p| *p <= 80)) {
+            Some(None) => Err("percent must be 0 to 80".to_string()),
+            Some(Some(p)) => {
+                app.ui.cmdline_transparency = p as u8;
+                Ok(json!({ "percent": p }))
+            }
+            None => Ok(json!({ "percent": app.ui.cmdline_transparency })),
+        },
+        // AutoComplete settings: `{enabled?, sysvars?, midString?}` (booleans), or `{toggle: name}`.
+        "ui.autocomplete" => {
+            let a = &mut app.ui.autocomplete;
+            match params.get("toggle").and_then(Value::as_str) {
+                Some("enabled") => a.enabled = !a.enabled,
+                Some("sysvars") => a.sysvars = !a.sysvars,
+                Some("midString") => a.mid_string = !a.mid_string,
+                Some(other) => return Some(Err(format!("unknown setting \"{other}\" (enabled, sysvars or midString)"))),
+                None => {}
+            }
+            for (k, f) in [("enabled", &mut a.enabled), ("sysvars", &mut a.sysvars), ("midString", &mut a.mid_string)] {
+                if let Some(b) = params.get(k).and_then(Value::as_bool) {
+                    *f = b;
+                }
+            }
+            Ok(json!({ "enabled": a.enabled, "sysvars": a.sysvars, "midString": a.mid_string }))
         }
         "ui.cmdline.clear" => {
             app.session.log.clear();

@@ -2,6 +2,10 @@
 //! views): each edge is cut into short pieces and every piece is tested against the surfaces in
 //! front of it (projected triangles found through a grid), then runs of the same visibility are
 //! joined back into segments.
+//!
+//! Implements point-sampled hidden-line removal in the spirit of Appel, "The Notion of
+//! Quantitative Invisibility and the Machine Rendering of Solids" (ACM National Conference, 1967),
+//! with the visibility of each piece tested against the surfaces rather than tracked along edges.
 
 use cadaddy_doc::{Drawing, EntityKind, Mesh, Solid3d, Space};
 use cadaddy_geom::{Vec2, Vec3};
