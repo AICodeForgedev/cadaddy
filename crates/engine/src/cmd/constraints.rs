@@ -956,6 +956,13 @@ fn run_constraintsettings(s: &mut Session, p: &Value) -> Result<Value> {
     set.angle_tolerance = f64_or(p, "angleTolerance", set.angle_tolerance).clamp(0.0, 45.0);
     set.bars_visible = bool_or(p, "barsVisible", set.bars_visible);
     set.dims_visible = bool_or(p, "dimsVisible", set.dims_visible);
+    // The checkboxes act like Show All / Hide All: exceptions are relative to the old value and would flip.
+    if set.bars_visible != cur.bars_visible {
+        set.bar_exceptions.clear();
+    }
+    if set.dims_visible != cur.dims_visible {
+        set.dim_exceptions.clear();
+    }
     if let Some(t) = p.get("barTransparency").and_then(Value::as_f64).filter(|v| v.is_finite()) {
         set.bar_transparency = t.clamp(0.0, 90.0) as u8;
     }

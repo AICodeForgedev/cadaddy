@@ -296,3 +296,54 @@ fn dcangular_constrains_the_drawn_angle_whichever_way_the_lines_run() {
         assert!((got - 100.0).abs() < 1e-6, "{b_pts:?}: drawn angle {got}");
     }
 }
+
+/// Same rule as the overlay in `ui-egui/src/parametric.rs` that draws dynamic constraints.
+fn dim_shown(s: &Session, h: &str) -> bool {
+    let d = s.doc().unwrap();
+    let set = &d.parametric.settings;
+    let c = d.constraints.iter().find(|c| c.refs.iter().any(|r| r.handle.hex() == h)).unwrap();
+    set.dims_visible != c.refs.iter().any(|r| set.dim_exceptions.contains(&r.handle))
+}
+
+#[test]
+fn settings_dims_checkbox_clears_exceptions() {
+    let mut s = Session::new();
+    let a = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+    s.execute("dclinear", &json!({ "h1": a, "expr": "10" })).unwrap();
+    s.execute("dcdisplay.hideall", &json!({})).unwrap();
+    let b = line(&mut s, [20.0, 0.0], [25.0, 0.0]);
+    s.execute("dclinear", &json!({ "h1": b, "expr": "5" })).unwrap();
+    let r = s.execute("dcdisplay", &json!({ "mode": "show", "handles": [b] })).unwrap();
+    assert_eq!(r["exceptions"], json!([b]));
+    assert!(!dim_shown(&s, &a) && dim_shown(&s, &b));
+    // Re-stating the current value keeps the exceptions.
+    s.execute("constraintsettings", &json!({ "dimsVisible": false })).unwrap();
+    assert_eq!(s.doc().unwrap().parametric.settings.dim_exceptions.len(), 1);
+    // Ticking "Show dynamic constraints" shows all of them, like Show All.
+    s.execute("constraintsettings", &json!({ "dimsVisible": true })).unwrap();
+    assert!(s.doc().unwrap().parametric.settings.dim_exceptions.is_empty());
+    assert!(dim_shown(&s, &a) && dim_shown(&s, &b));
+}
+
+#[test]
+fn settings_bars_checkbox_clears_exceptions() {
+    let mut s = Session::new();
+    let a = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+    s.execute("gchorizontal", &json!({ "h1": a })).unwrap();
+    s.execute("constraintbar.hideall", &json!({})).unwrap();
+    let b = line(&mut s, [0.0, 5.0], [10.0, 5.0]);
+    s.execute("gchorizontal", &json!({ "h1": b })).unwrap();
+    let r = s.execute("constraintbar", &json!({ "mode": "show", "handles": [b] })).unwrap();
+    assert_eq!(r["exceptions"], json!([b]));
+    // Same rule as the bar overlay in `ui-egui/src/parametric.rs`.
+    let bar = |s: &Session, h: &str| {
+        let set = &s.doc().unwrap().parametric.settings;
+        set.bars_visible != set.bar_exceptions.contains(&Handle::parse_hex(h).unwrap())
+    };
+    assert!(!bar(&s, &a) && bar(&s, &b));
+    s.execute("constraintsettings", &json!({ "barsVisible": false })).unwrap();
+    assert_eq!(s.doc().unwrap().parametric.settings.bar_exceptions.len(), 1);
+    s.execute("constraintsettings", &json!({ "barsVisible": true })).unwrap();
+    assert!(s.doc().unwrap().parametric.settings.bar_exceptions.is_empty());
+    assert!(bar(&s, &a) && bar(&s, &b));
+}
