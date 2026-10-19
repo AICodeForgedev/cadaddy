@@ -177,6 +177,13 @@ the JSON control channel and MCP alike. Agent and contributor notes are in [AGEN
 Pull requests are welcome. By contributing you agree your contribution is licensed under the
 project's [license](LICENSE.md).
 
+## Security
+
+Found a security problem? Please email **feedback@aicodeforge.dev** with a subject starting
+**SECURITY:**, not a public issue. [SECURITY.md](SECURITY.md) says which versions get fixes, what to
+include and what to expect (there is no bug bounty). In CADaddy: **Help ▸ About ▸ Report a security
+problem**.
+
 ## Feedback and support
 
 - In CADaddy: **Help ▸ Report a Bug** or **Help ▸ Request a Feature**

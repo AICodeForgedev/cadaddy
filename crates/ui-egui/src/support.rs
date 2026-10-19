@@ -17,6 +17,8 @@ use crate::theme::Tokens;
 pub const DONATIONS: bool = true;
 pub const SITE: &str = "https://aicodeforge.dev/cadaddy";
 pub const FEEDBACK_EMAIL: &str = "feedback@aicodeforge.dev";
+/// How to report a security problem (SECURITY.md): About links to it.
+pub const SECURITY_URL: &str = "https://github.com/AICodeForgedev/cadaddy/blob/main/SECURITY.md";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The feedback form, preset to `kind` ("bug" or "idea").

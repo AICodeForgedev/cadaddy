@@ -408,6 +408,7 @@ fn about(ctx: &egui::Context, open: &mut bool) {
                     ui.add_space(6.0);
                     ui.label(RichText::new(crate::tl!("Includes open-source components: see NOTICE.")).color(t.text_dim));
                     ui.hyperlink_to(crate::tl!("Report a bug or request a feature"), crate::support::feedback_url("bug"));
+                    ui.hyperlink_to(crate::tl!("Report a security problem"), crate::support::SECURITY_URL);
                     if crate::support::DONATIONS {
                         ui.hyperlink_to(crate::tl!("Support CADaddy"), crate::support::donate_url());
                     }
