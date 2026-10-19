@@ -46,6 +46,7 @@ pub mod schedules;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
 pub mod furnish;
+pub mod imagetrace;
 pub(crate) mod layout;
 pub mod lightbake;
 pub mod lights;
@@ -264,6 +265,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(stairs::specs());
         v.extend(autospec::specs());
         v.extend(verify::specs());
+        v.extend(imagetrace::specs());
         v.extend(tours::specs());
         v.extend(walkpub::specs());
         v.extend(imageclip::specs());
