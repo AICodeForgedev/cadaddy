@@ -13,6 +13,7 @@ use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 use viewports::MviewM;
 
+mod plotcli;
 mod plotstyle;
 mod prompts;
 mod template;
@@ -84,6 +85,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["print"])
             .params("{path? (else returns base64 `data`), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?: bool, plotTransparency?: bool (default: the page setup's; PLOTTRANSPARENCYOVERRIDE 0/2 overrides it), plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]]} (typed or from the menu: the Plot dialog)")
             .noundo(),
+        CommandSpec::new("-plot", "Plot", plotcli::run_dash_plot)
+            .params("{…the parameters of plot, device?: plotter name, upsideDown?: bool, plotArea?: …|view (Model), view?: named view, savePageSetup?: bool (a layout's page setup keeps the device, paper, orientation, plot style table, lineweights and fit)} (typed: AutoCAD's command-line plot questions, detailed configuration Yes/No)")
+            .noundo()
+            .interactive(|_| Ok(Box::new(plotcli::DashPlotM::default()))),
         CommandSpec::new("exportpdf", "Export to PDF...", |s, p| run_plot(s, &super::plotters::plot_options(s, p, "exportpdf")?, "exportpdf"))
             .menu(&["File", "Export to PDF..."])
             .params("{path? (else returns base64 `data`), layout?, paper?, landscape?, fit?, scale?, center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?, plotTransparency?, plotArea?, window?} (as PLOT)")
@@ -948,6 +953,13 @@ fn plot_window(s: &Session, p: &Value, cmd: &str, space: &Space) -> Result<Optio
             let hi = d.header.point("LIMMAX").map(|p| p.xy()).unwrap_or(Vec2::new(12.0, 9.0));
             Bounds2::new(lo, hi)
         }
+        (Space::Model, Some("view")) => {
+            let name = str_param(p, "view").ok_or_else(|| bad(cmd, "`plotArea` view needs `view`: a named view"))?;
+            let d = s.doc()?;
+            let v = d.views.iter().find(|v| v.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(cmd, format!("no view `{name}`")))?;
+            let half = Vec2::new(v.width / 2.0, v.height / 2.0);
+            Bounds2::new(v.center - half, v.center + half)
+        }
         (Space::Model, Some("window")) => {
             let corners = p.get("window").and_then(Value::as_array);
             let a = corners.and_then(|c| c.first()).and_then(point_value);
@@ -957,7 +969,7 @@ fn plot_window(s: &Session, p: &Value, cmd: &str, space: &Space) -> Result<Optio
             };
             Bounds2::new(a, b)
         }
-        (Space::Model, Some(_)) => return Err(bad(cmd, "`plotArea` must be extents, display, limits or window (layouts: layout)")),
+        (Space::Model, Some(_)) => return Err(bad(cmd, "`plotArea` must be extents, display, limits, view or window (layouts: layout)")),
     };
     let ok = w.min.is_finite() && w.max.is_finite() && w.width() > 1e-9 && w.height() > 1e-9;
     if ok { Ok(Some(w)) } else { Err(bad(cmd, "the plot area is empty")) }

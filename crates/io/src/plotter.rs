@@ -103,7 +103,7 @@ fn png(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     };
     let px_per_mm = if lineweights { (k / sheet.unit_mm) as f32 } else { 0.0 };
     let ro = raster::RasterOptions { background: Rgb(255, 255, 255), hairline: 1.0, px_per_mm, antialias: true };
-    raster::render_png(&list, &view, &ro).ok_or_else(|| IoError::Format("render failed".into()))
+    raster::render_png_turned(&list, &view, &ro, o.upside_down).ok_or_else(|| IoError::Format("render failed".into()))
 }
 
 fn svg(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
@@ -112,7 +112,7 @@ fn svg(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
         let (sheet, page) = sheet(d, space, &o)?;
         let transparency = o.plot_transparency.unwrap_or(page.plot_transparency);
         let sheet = sheet.at(pdf::layout_origin(d, space));
-        return Ok(crate::svg::export_window_with(d, space, Some(sheet.bounds()), transparency).into_bytes());
+        return Ok(turn_svg(crate::svg::export_window_with(d, space, Some(sheet.bounds()), transparency), o.upside_down).into_bytes());
     };
     // Model space as plotted: the plot style table, lineweights, and the table's ends, joins and
     // fills at the scale that fits the window (or the extents) on the device's paper.
@@ -129,7 +129,25 @@ fn svg(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     let mut list = cadaddy_render::build_plot(d, space, &ropts);
     let s = fit_scale(&window.unwrap_or(list.bounds), &sheet, &o);
     cadaddy_render::pen::apply(&mut list, s * sheet.unit_mm);
-    Ok(crate::svg::export_list(&list, window).into_bytes())
+    Ok(turn_svg(crate::svg::export_list(&list, window), o.upside_down).into_bytes())
+}
+
+/// The SVG turned half a turn about its view box's centre when `upside_down`.
+fn turn_svg(svg: String, upside_down: bool) -> String {
+    if !upside_down {
+        return svg;
+    }
+    let view_box = svg.split_once("viewBox=\"").and_then(|(_, rest)| rest.split_once('"')).map(|(v, _)| v);
+    let nums: Vec<f64> = view_box.map(|v| v.split_ascii_whitespace().filter_map(|n| n.parse().ok()).collect()).unwrap_or_default();
+    let head_end = svg.find("<svg").and_then(|i| Some(i + svg.get(i..)?.find('>')?));
+    let (Some(head_end), Some(tail), &[x, y, w, h]) = (head_end, svg.rfind("</svg>"), nums.as_slice()) else { return svg };
+    if tail <= head_end {
+        return svg;
+    }
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    let (head, rest) = svg.split_at(head_end + 1);
+    let (body, end) = rest.split_at(tail - head_end - 1);
+    format!("{head}<g transform=\"rotate(180 {cx} {cy})\">{body}</g>{end}")
 }
 
 #[cfg(test)]
@@ -167,6 +185,31 @@ mod tests {
         assert!(plot(&d, &layout, &json!({"output": "png", "resolution": f64::NAN, "margins": [1, 2, 3]})).is_ok());
         assert!(plot(&d, &Space::Model, &json!({"output": "dwf"})).is_err());
         assert!(plot(&d, &Space::Model, &json!({})).unwrap().starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn upside_down_turns_every_output_half_a_turn() {
+        let d = drawing();
+        let opts = |output: &str, turn: bool| json!({"output": output, "resolution": 50, "upsideDown": turn});
+        // PNG: the same pixels in reverse order.
+        let pixels = |turn: bool| tiny_skia::Pixmap::decode_png(&plot(&d, &Space::Model, &opts("png", turn)).unwrap()).unwrap().data().to_vec();
+        let (plain, turned) = (pixels(false), pixels(true));
+        assert_ne!(plain, turned, "the line is not symmetric on the sheet");
+        let reversed: Vec<u8> = plain.as_chunks::<4>().0.iter().rev().flatten().copied().collect();
+        assert_eq!(turned, reversed);
+        // PDF: the page turns.
+        let has = |b: &[u8], what: &str| b.windows(what.len()).any(|w| w == what.as_bytes());
+        assert!(has(&plot(&d, &Space::Model, &opts("pdf", true)).unwrap(), "/Rotate 180"));
+        assert!(!has(&plot(&d, &Space::Model, &opts("pdf", false)).unwrap(), "/Rotate"));
+        // SVG (model and layout): the drawing turns about the view box's centre.
+        let layout = Space::Paper(d.layouts[0].name.clone());
+        for space in [Space::Model, layout] {
+            let svg = String::from_utf8(plot(&d, &space, &opts("svg", true)).unwrap()).unwrap();
+            assert!(svg.contains("<g transform=\"rotate(180 ") && svg.trim_end().ends_with("</g></svg>"), "{svg}");
+            let plain = String::from_utf8(plot(&d, &space, &opts("svg", false)).unwrap()).unwrap();
+            assert!(!plain.contains("rotate(180"));
+        }
+        assert_eq!(turn_svg("not svg".into(), true), "not svg");
     }
 
     #[test]

@@ -83,6 +83,8 @@ pub struct PdfOptions {
     /// Plot objects with their transparency (PDF alpha). `None` = the page setup's "Plot
     /// transparency" (off for model space).
     pub plot_transparency: Option<bool>,
+    /// Turn the sheet half a turn ("Plot upside down").
+    pub upside_down: bool,
 }
 
 impl Default for PdfOptions {
@@ -107,6 +109,7 @@ impl Default for PdfOptions {
             margins: None,
             hyperlinks: true,
             plot_transparency: None,
+            upside_down: false,
         }
     }
 }
@@ -114,7 +117,7 @@ impl Default for PdfOptions {
 impl PdfOptions {
     /// Parse `{paper?, width?, height?, landscape?, fit?, scale?, center?, offset?: [x,y] mm,
     /// lineweights?, compress?, title?, window?: [[x1, y1], [x2, y2]], margins?: [l, b, r, t] (mm),
-    /// hyperlinks?: bool, plotTransparency?: bool}`.
+    /// hyperlinks?: bool, plotTransparency?: bool, upsideDown?: bool}`.
     pub fn from_json(v: &Value) -> PdfOptions {
         let num = |k: &str| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite());
         let paper_mm = match (num("width"), num("height")) {
@@ -143,6 +146,7 @@ impl PdfOptions {
             margins: margins(v.get("margins")),
             hyperlinks: v.get("hyperlinks").and_then(Value::as_bool).unwrap_or(true),
             plot_transparency: v.get("plotTransparency").and_then(Value::as_bool),
+            upside_down: v.get("upsideDown").and_then(Value::as_bool).unwrap_or(false),
         }
     }
 }
@@ -1018,7 +1022,8 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
         let mut mb = String::new();
         pt(&mut mb, p.media);
         let annots = if annots.is_empty() { String::new() } else { format!(" /Annots [{}]", refs(annots)) };
-        page_dicts.push((page, used, props, ext_gstates(&alphas) + &xobjects, format!("/MediaBox [0 0 {mb}] /Contents {content} 0 R{annots}")));
+        let turn = if o.upside_down { " /Rotate 180" } else { "" };
+        page_dicts.push((page, used, props, ext_gstates(&alphas) + &xobjects, format!("/MediaBox [0 0 {mb}]{turn} /Contents {content} 0 R{annots}")));
         kids.push(page);
     }
     let font_ids = if fonts.is_empty() { Vec::new() } else { fonts.write(&mut objs, o.compress) };
