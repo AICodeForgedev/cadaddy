@@ -65,6 +65,7 @@ mod selecttools;
 mod settings;
 mod solids;
 mod spline_opts;
+pub mod standards;
 pub(crate) mod table;
 pub mod tolerance;
 mod trimextend;
@@ -263,6 +264,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(field::specs());
         v.extend(ucs::specs());
         v.extend(tolerance::specs());
+        v.extend(standards::specs());
         v.extend(colorbook::specs());
         v.extend(constraints::specs());
         v.extend(lisp::specs());

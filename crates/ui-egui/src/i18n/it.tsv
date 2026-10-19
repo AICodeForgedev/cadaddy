@@ -1881,3 +1881,63 @@ menu	Modify	Edita
 	Render Model View	Rendering vista modello
 	Model Overlay	Sovrapposizione modello
 	Model Counts	Conteggi del modello
+	System Printers	Stampanti di sistema
+	Report a Problem...	Segnala un problema...
+	Report a Problem	Segnala un problema
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Raccoglie ciò che aiuta a trovare un problema in un file ZIP su questo computer. Non viene inviato nulla: allega il file a un'e-mail se vuoi segnalarlo.
+	Always included	Sempre incluso
+	The log of this run and the two before it	Il registro di questa esecuzione e delle due precedenti
+	The last commands	Gli ultimi comandi
+	Versions, operating system and graphics adapter	Versioni, sistema operativo e scheda grafica
+	A summary of the open drawings (counts only, no geometry)	Un riepilogo dei disegni aperti (solo conteggi, nessuna geometria)
+	Names: file paths, layer and block names, typed text	Nomi: percorsi dei file, nomi di layer e blocchi, testo digitato
+	Names are replaced by placeholders, also in the log.	I nomi vengono sostituiti da segnaposto, anche nel registro.
+	Save Report...	Salva rapporto...
+	Email it to {address}	Invialo per e-mail a {address}
+	Plans to Model	Dalle piante al modello
+	Build	Crea
+	Rebuild	Ricrea
+	Check	Verifica
+	Kept in the drawing.	Salvata nel disegno.
+	Drafted from the walk rules; not saved yet.	Bozza dalle regole di visita; non ancora salvata.
+	{n} of {total} approved	{n} di {total} approvate
+	Save Spec	Salva specifica
+	Approve All	Approva tutto
+	Approved	Approvato
+	Levels	Livelli
+	Wall Types	Tipi di muro
+	Rooms	Locali
+	Door and Window Families	Famiglie di porte e finestre
+	Materials	Materiali
+	Site	Sito
+	Openings	Aperture
+	Issues ({n})	Problemi ({n})
+	The drawing changed since; check again.	Il disegno è cambiato nel frattempo; verifica di nuovo.
+	No issues found.	Nessun problema trovato.
+	Configure Standards	Configura standard
+	Standards files associated with the current drawing	File standard associati al disegno corrente
+	Add...	Aggiungi...
+	Check Standards...	Verifica standard...
+	Check Standards	Verifica standard
+	No standards violations were found.	Non sono state trovate violazioni degli standard.
+	problem(s)	problema/i
+	Take the standard's properties	Adotta le proprietà dello standard
+	Replace it with the standard one	Sostituiscilo con quello dello standard
+	Fix All	Correggi tutto
+	Give everything that differs the standard's properties	Assegna a tutto ciò che differisce le proprietà dello standard
+	Check Again	Verifica di nuovo
+	Layer Translator	Convertitore di layer
+	Translate From	Converti da
+	Translate To	Converti in
+	Load a drawing whose layers to translate to.	Carica un disegno nei cui layer convertire.
+	Map	Associa
+	Layer Translation Mappings	Associazioni di conversione dei layer
+	Load Map...	Carica associazioni...
+	Save Map...	Salva associazioni...
+	Translate	Converti
+	Not in the standards	Non presente negli standard
+	Properties differ from the standards	Le proprietà differiscono dagli standard
+	CAD Standards	Standard CAD
+	Configure...	Configura...
+	Check...	Verifica...
+	Layer Translator...	Convertitore di layer...

@@ -1971,3 +1971,63 @@
 	Render Model View	Візуалізувати вигляд моделі
 	Model Overlay	Накладання моделі
 	Model Counts	Підрахунок у моделі
+	System Printers	Системні принтери
+	Report a Problem...	Повідомити про проблему...
+	Report a Problem	Повідомити про проблему
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Збирає відомості, що допомагають знайти проблему, у ZIP-файл на цьому комп'ютері. Нічого не надсилається: щоб повідомити про проблему, додайте файл до листа.
+	Always included	Завжди включається
+	The log of this run and the two before it	Журнал цього та двох попередніх запусків
+	The last commands	Останні команди
+	Versions, operating system and graphics adapter	Версії, операційна система та відеоадаптер
+	A summary of the open drawings (counts only, no geometry)	Зведення відкритих креслень (лише кількості, без геометрії)
+	Names: file paths, layer and block names, typed text	Імена: шляхи до файлів, імена шарів і блоків, введений текст
+	Names are replaced by placeholders, also in the log.	Імена замінюються заповнювачами, зокрема в журналі.
+	Save Report...	Зберегти звіт...
+	Email it to {address}	Надішліть його на адресу {address}
+	Plans to Model	Від планів до моделі
+	Build	Побудувати
+	Rebuild	Перебудувати
+	Check	Перевірити
+	Kept in the drawing.	Зберігається в кресленні.
+	Drafted from the walk rules; not saved yet.	Чернетка за правилами обходу; ще не збережено.
+	{n} of {total} approved	Затверджено {n} з {total}
+	Save Spec	Зберегти специфікацію
+	Approve All	Затвердити все
+	Approved	Затверджено
+	Levels	Рівні
+	Wall Types	Типи стін
+	Rooms	Приміщення
+	Door and Window Families	Сімейства дверей і вікон
+	Materials	Матеріали
+	Site	Ділянка
+	Openings	Отвори
+	Issues ({n})	Проблеми ({n})
+	The drawing changed since; check again.	Відтоді креслення змінилося; перевірте знову.
+	No issues found.	Проблем не знайдено.
+	Configure Standards	Налаштування стандартів
+	Standards files associated with the current drawing	Файли стандартів, пов'язані з поточним кресленням
+	Add...	Додати...
+	Check Standards...	Перевірка стандартів...
+	Check Standards	Перевірка стандартів
+	No standards violations were found.	Порушень стандартів не знайдено.
+	problem(s)	проблем(а)
+	Take the standard's properties	Прийняти властивості стандарту
+	Replace it with the standard one	Замінити стандартним
+	Fix All	Виправити все
+	Give everything that differs the standard's properties	Надати всьому, що відрізняється, властивості стандарту
+	Check Again	Перевірити знову
+	Layer Translator	Перетворювач шарів
+	Translate From	Перетворити з
+	Translate To	Перетворити на
+	Load a drawing whose layers to translate to.	Завантажте креслення, у шари якого виконувати перетворення.
+	Map	Зіставити
+	Layer Translation Mappings	Зіставлення перетворення шарів
+	Load Map...	Завантажити зіставлення...
+	Save Map...	Зберегти зіставлення...
+	Translate	Перетворити
+	Not in the standards	Немає у стандартах
+	Properties differ from the standards	Властивості відрізняються від стандартів
+	CAD Standards	Стандарти САПР
+	Configure...	Налаштувати...
+	Check...	Перевірити...
+	Layer Translator...	Перетворювач шарів...

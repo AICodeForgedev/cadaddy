@@ -1724,3 +1724,24 @@
 	Render Model View	モデル ビューをレンダリング
 	Model Overlay	モデル オーバーレイ
 	Model Counts	モデルの数量
+	System Printers	システム プリンター
+	Plans to Model	図面からモデルへ
+	Build	作成
+	Rebuild	再作成
+	Check	チェック
+	Kept in the drawing.	図面に保存されています。
+	Drafted from the walk rules; not saved yet.	ウォーク ルールから下書き。まだ保存されていません。
+	{n} of {total} approved	{total} 件中 {n} 件承認済み
+	Save Spec	仕様を保存
+	Approve All	すべて承認
+	Approved	承認済み
+	Levels	レベル
+	Wall Types	壁タイプ
+	Rooms	部屋
+	Door and Window Families	ドアと窓のファミリ
+	Materials	マテリアル
+	Site	敷地
+	Openings	開口部
+	Issues ({n})	問題 ({n})
+	The drawing changed since; check again.	その後図面が変更されました。もう一度チェックしてください。
+	No issues found.	問題は見つかりませんでした。

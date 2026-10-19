@@ -1889,3 +1889,63 @@ menu	Modify	Ändra
 	Render Model View	Rendera modellvy
 	Model Overlay	Modellöverlägg
 	Model Counts	Modellantal
+	System Printers	Systemskrivare
+	Report a Problem...	Rapportera ett problem...
+	Report a Problem	Rapportera ett problem
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Samlar det som hjälper att hitta ett problem i en ZIP-fil på den här datorn. Inget skickas: bifoga filen i ett e-postmeddelande om du vill rapportera problemet.
+	Always included	Ingår alltid
+	The log of this run and the two before it	Loggen för den här körningen och de två föregående
+	The last commands	De senaste kommandona
+	Versions, operating system and graphics adapter	Versioner, operativsystem och grafikkort
+	A summary of the open drawings (counts only, no geometry)	En sammanfattning av de öppna ritningarna (endast antal, ingen geometri)
+	Names: file paths, layer and block names, typed text	Namn: filsökvägar, lager- och blocknamn, inskriven text
+	Names are replaced by placeholders, also in the log.	Namn ersätts med platshållare, även i loggen.
+	Save Report...	Spara rapport...
+	Email it to {address}	Skicka det med e-post till {address}
+	Plans to Model	Från ritningar till modell
+	Build	Bygg
+	Rebuild	Bygg om
+	Check	Kontrollera
+	Kept in the drawing.	Sparad i ritningen.
+	Drafted from the walk rules; not saved yet.	Utkast från gångreglerna; inte sparat än.
+	{n} of {total} approved	{n} av {total} godkända
+	Save Spec	Spara specifikation
+	Approve All	Godkänn alla
+	Approved	Godkänd
+	Levels	Plan
+	Wall Types	Väggtyper
+	Rooms	Rum
+	Door and Window Families	Dörr- och fönsterfamiljer
+	Materials	Material
+	Site	Tomt
+	Openings	Öppningar
+	Issues ({n})	Problem ({n})
+	The drawing changed since; check again.	Ritningen har ändrats sedan dess; kontrollera igen.
+	No issues found.	Inga problem hittades.
+	Configure Standards	Konfigurera standarder
+	Standards files associated with the current drawing	Standardfiler kopplade till den aktuella ritningen
+	Add...	Lägg till...
+	Check Standards...	Kontrollera standarder...
+	Check Standards	Kontrollera standarder
+	No standards violations were found.	Inga standardavvikelser hittades.
+	problem(s)	problem
+	Take the standard's properties	Ta standardens egenskaper
+	Replace it with the standard one	Ersätt med standardens
+	Fix All	Åtgärda alla
+	Give everything that differs the standard's properties	Ge allt som avviker standardens egenskaper
+	Check Again	Kontrollera igen
+	Layer Translator	Lageröversättare
+	Translate From	Översätt från
+	Translate To	Översätt till
+	Load a drawing whose layers to translate to.	Läs in en ritning vars lager det ska översättas till.
+	Map	Mappa
+	Layer Translation Mappings	Mappningar för lageröversättning
+	Load Map...	Läs in mappning...
+	Save Map...	Spara mappning...
+	Translate	Översätt
+	Not in the standards	Finns inte i standarderna
+	Properties differ from the standards	Egenskaperna avviker från standarderna
+	CAD Standards	CAD-standarder
+	Configure...	Konfigurera...
+	Check...	Kontrollera...
+	Layer Translator...	Lageröversättare...

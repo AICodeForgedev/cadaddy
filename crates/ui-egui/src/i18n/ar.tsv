@@ -1877,3 +1877,63 @@ menu	View	عرض
 	Render Model View	عرض منظر النموذج
 	Model Overlay	تراكب النموذج
 	Model Counts	تعدادات النموذج
+	System Printers	طابعات النظام
+	Report a Problem...	الإبلاغ عن مشكلة...
+	Report a Problem	الإبلاغ عن مشكلة
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	يجمع ما يساعد في العثور على المشكلة في ملف ZIP على هذا الكمبيوتر. لا يُرسل أي شيء: أرفق الملف برسالة بريد إلكتروني إذا أردت الإبلاغ عنها.
+	Always included	مضمّن دائمًا
+	The log of this run and the two before it	سجل هذا التشغيل والتشغيلين السابقين
+	The last commands	الأوامر الأخيرة
+	Versions, operating system and graphics adapter	الإصدارات ونظام التشغيل ومحول الرسومات
+	A summary of the open drawings (counts only, no geometry)	ملخص للرسومات المفتوحة (أعداد فقط، بلا هندسة)
+	Names: file paths, layer and block names, typed text	الأسماء: مسارات الملفات وأسماء الطبقات والكتل والنص المكتوب
+	Names are replaced by placeholders, also in the log.	تُستبدل الأسماء بعناصر نائبة، وكذلك في السجل.
+	Save Report...	حفظ التقرير...
+	Email it to {address}	أرسله بالبريد الإلكتروني إلى {address}
+	Plans to Model	من المخططات إلى النموذج
+	Build	بناء
+	Rebuild	إعادة البناء
+	Check	فحص
+	Kept in the drawing.	محفوظة في الرسم.
+	Drafted from the walk rules; not saved yet.	مسودة من قواعد التجوّل؛ لم تُحفظ بعد.
+	{n} of {total} approved	{n} من {total} معتمدة
+	Save Spec	حفظ المواصفات
+	Approve All	اعتماد الكل
+	Approved	معتمد
+	Levels	المستويات
+	Wall Types	أنواع الجدران
+	Rooms	الغرف
+	Door and Window Families	عائلات الأبواب والنوافذ
+	Materials	المواد
+	Site	الموقع
+	Openings	الفتحات
+	Issues ({n})	المشكلات ({n})
+	The drawing changed since; check again.	تغيّر الرسم منذ ذلك الحين؛ افحص مرة أخرى.
+	No issues found.	لم يتم العثور على مشكلات.
+	Configure Standards	تكوين المعايير
+	Standards files associated with the current drawing	ملفات المعايير المرتبطة بالرسم الحالي
+	Add...	إضافة...
+	Check Standards...	فحص المعايير...
+	Check Standards	فحص المعايير
+	No standards violations were found.	لم يتم العثور على أي مخالفات للمعايير.
+	problem(s)	مشكلة (مشكلات)
+	Take the standard's properties	اعتماد خصائص المعيار
+	Replace it with the standard one	استبداله بالعنصر القياسي
+	Fix All	إصلاح الكل
+	Give everything that differs the standard's properties	منح كل ما يختلف خصائص المعيار
+	Check Again	فحص مرة أخرى
+	Layer Translator	مترجم الطبقات
+	Translate From	التحويل من
+	Translate To	التحويل إلى
+	Load a drawing whose layers to translate to.	حمّل رسمًا لتحويل الطبقات إلى طبقاته.
+	Map	تعيين
+	Layer Translation Mappings	تعيينات تحويل الطبقات
+	Load Map...	تحميل التعيين...
+	Save Map...	حفظ التعيين...
+	Translate	تحويل
+	Not in the standards	غير موجود في المعايير
+	Properties differ from the standards	الخصائص تختلف عن المعايير
+	CAD Standards	معايير CAD
+	Configure...	تكوين...
+	Check...	فحص...
+	Layer Translator...	مترجم الطبقات...

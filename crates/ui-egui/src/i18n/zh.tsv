@@ -1761,3 +1761,63 @@
 	Render Model View	渲染模型视图
 	Model Overlay	模型叠加
 	Model Counts	模型计数
+	System Printers	系统打印机
+	Report a Problem...	报告问题...
+	Report a Problem	报告问题
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	将有助于查找问题的信息收集到此计算机上的 ZIP 文件中。不会发送任何内容：如需报告，请将该文件附加到电子邮件中。
+	Always included	始终包含
+	The log of this run and the two before it	本次运行及之前两次运行的日志
+	The last commands	最近的命令
+	Versions, operating system and graphics adapter	版本、操作系统和图形适配器
+	A summary of the open drawings (counts only, no geometry)	打开图形的摘要（仅计数，不含几何图形）
+	Names: file paths, layer and block names, typed text	名称：文件路径、图层和块名称、键入的文字
+	Names are replaced by placeholders, also in the log.	名称会被占位符替换，日志中也是如此。
+	Save Report...	保存报告...
+	Email it to {address}	通过电子邮件发送至 {address}
+	Plans to Model	从图纸到模型
+	Build	生成
+	Rebuild	重新生成
+	Check	检查
+	Kept in the drawing.	保存在图形中。
+	Drafted from the walk rules; not saved yet.	根据漫游规则起草；尚未保存。
+	{n} of {total} approved	已批准 {n}/{total}
+	Save Spec	保存规格
+	Approve All	全部批准
+	Approved	已批准
+	Levels	标高
+	Wall Types	墙类型
+	Rooms	房间
+	Door and Window Families	门窗族
+	Materials	材质
+	Site	场地
+	Openings	洞口
+	Issues ({n})	问题 ({n})
+	The drawing changed since; check again.	图形已更改；请重新检查。
+	No issues found.	未发现问题。
+	Configure Standards	配置标准
+	Standards files associated with the current drawing	与当前图形关联的标准文件
+	Add...	添加...
+	Check Standards...	检查标准...
+	Check Standards	检查标准
+	No standards violations were found.	未发现违反标准的情况。
+	problem(s)	个问题
+	Take the standard's properties	采用标准的特性
+	Replace it with the standard one	替换为标准项
+	Fix All	全部修复
+	Give everything that differs the standard's properties	为所有不同项赋予标准的特性
+	Check Again	再次检查
+	Layer Translator	图层转换器
+	Translate From	转换自
+	Translate To	转换为
+	Load a drawing whose layers to translate to.	加载一个图形，转换为其图层。
+	Map	映射
+	Layer Translation Mappings	图层转换映射
+	Load Map...	加载映射...
+	Save Map...	保存映射...
+	Translate	转换
+	Not in the standards	不在标准中
+	Properties differ from the standards	特性与标准不同
+	CAD Standards	CAD 标准
+	Configure...	配置...
+	Check...	检查...
+	Layer Translator...	图层转换器...

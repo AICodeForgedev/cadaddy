@@ -83,7 +83,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["File", "Print..."])
             .key("Cmd+P")
             .alias(&["print"])
-            .params("{path? (else returns base64 `data`), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?: bool, plotTransparency?: bool (default: the page setup's; PLOTTRANSPARENCYOVERRIDE 0/2 overrides it), plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]]} (typed or from the menu: the Plot dialog)")
+            .params("{path? (else returns base64 `data`), printer?: a system printer (PRINTERS; prints the PDF there), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?: bool, plotTransparency?: bool (default: the page setup's; PLOTTRANSPARENCYOVERRIDE 0/2 overrides it), plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]]} (typed or from the menu: the Plot dialog)")
             .noundo(),
         CommandSpec::new("-plot", "Plot", plotcli::run_dash_plot)
             .params("{…the parameters of plot, device?: plotter name, upsideDown?: bool, plotArea?: …|view (Model), view?: named view, savePageSetup?: bool (a layout's page setup keeps the device, paper, orientation, plot style table, lineweights and fit)} (typed: AutoCAD's command-line plot questions, detailed configuration Yes/No)")
@@ -922,7 +922,21 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     {
         o.remove("shade");
     }
+    // On a system printer: the plot goes to it as a PDF.
+    let printer = str_param(p, "printer").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
+    let print = match &printer {
+        Some(_) => {
+            opts["output"] = json!("pdf");
+            Some(super::file::print_hooks().ok_or_else(|| bad(cmd, "system printers are not available in this build"))?)
+        }
+        None => None,
+    };
     let bytes = hook(s.doc()?, &space, &opts).map_err(|e| bad(cmd, e))?;
+    if let (Some(name), Some(h)) = (&printer, print) {
+        let title = s.state().map(|st| st.title.clone()).unwrap_or_default();
+        (h.print)(name, &bytes, &title).map_err(|e| bad(cmd, format!("printer `{name}`: {e}")))?;
+        return Ok(json!({ "printed": name, "bytes": bytes.len(), "layout": space.tab_name(), "pages": sheets.as_ref().map_or(1, Vec::len) }));
+    }
     let layout = match &sheets {
         Some(names) => names.first().cloned().unwrap_or_default(),
         None => space.tab_name().to_string(),

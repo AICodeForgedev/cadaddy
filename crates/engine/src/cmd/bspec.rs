@@ -30,7 +30,7 @@ const MAX_OBJECTS: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bspec.get", "Building Spec", run_get)
-            .params("{} → {spec, stored: bool (false: drafted from the walk rules — <drawing>.walk.json, the last WALLGEN, else the defaults)}")
+            .params("{} → {spec, stored: bool (false: drafted from the walk rules — <drawing>.walk.json, the last WALLGEN, else the defaults), parts: [{section, key, text (plain language), approved}], built: bool}")
             .noundo(),
         CommandSpec::new("bspec.set", "Set Building Spec", run_set).params(
             "{spec: object (merged into the drawing's spec: objects key by key, null removes; levels, wall_types, rooms, families merge by name and layers by layer, {\"remove\": true} removes one), replace?: bool} → {spec, errors, warnings}",
@@ -198,7 +198,10 @@ pub(crate) fn room_texts(sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> Vec<(Handl
 
 fn run_get(s: &mut Session, _p: &Value) -> Result<Value> {
     let (sp, was) = current(s, "bspec.get")?;
-    Ok(json!({ "spec": serde_json::to_value(&sp).unwrap_or(Value::Null), "stored": was }))
+    let parts: Vec<Value> =
+        sp.describe().iter().map(|d| json!({ "section": d.section, "key": d.key, "text": d.text, "approved": d.approved })).collect();
+    let built = s.doc()?.model.iter().any(|e| wallgen::made_as(e).is_some());
+    Ok(json!({ "spec": serde_json::to_value(&sp).unwrap_or(Value::Null), "stored": was, "parts": parts, "built": built }))
 }
 
 fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
@@ -292,7 +295,16 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
             continue;
         }
         // A name and a number in one room: the first traced keeps it (the spec's room wins).
-        let same = |o: &Traced| o.outline.len() == outline.len() && o.outline.iter().zip(&outline).all(|(a, b)| a.dist(*b) < 1e-6);
+        // The same outline traced from another point may start at another corner: same area and
+        // extents.
+        let area = cadaddy_geom::shoelace(&outline).abs();
+        let bounds = cadaddy_geom::Bounds2::from_points(outline.iter().copied());
+        let same = |o: &Traced| {
+            let b = cadaddy_geom::Bounds2::from_points(o.outline.iter().copied());
+            (cadaddy_geom::shoelace(&o.outline).abs() - area).abs() <= 1e-6 * area.max(1.0)
+                && b.min.dist(bounds.min) < 1e-6
+                && b.max.dist(bounds.max) < 1e-6
+        };
         match out.iter_mut().find(|o| same(o)) {
             Some(o) => {
                 if o.room.is_none() {

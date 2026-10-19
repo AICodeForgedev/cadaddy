@@ -21,6 +21,7 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod printing;
 mod spacemouse;
 mod system_animations;
 mod updater;
@@ -121,6 +122,7 @@ pub fn install_io() {
         plot: Some(|d, space, opts| cadaddy_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
         read_pdf: Some(cadaddy_io::pdf_read::read_json),
     });
+    cadaddy_engine::cmd::file::set_print(cadaddy_engine::cmd::file::PrintHooks { list: printing::list, print: printing::print });
     // .cdy saves append only what changed to the file a drawing was saved to or read from.
     cadaddy_engine::cmd::file::set_cdy_hooks(cadaddy_engine::cmd::file::CdyHooks {
         save: |d, prev| {
@@ -423,6 +425,18 @@ fn main() -> eframe::Result {
             if let Some(rs) = &cc.wgpu_render_state {
                 app.set_wgpu(rs, eframe::egui_wgpu::depth_format_from_bits(0, STENCIL_BITS));
             }
+            // Help ▸ Report a Problem: what the bundle says about this computer, and the watchdog
+            // that logs UI stalls.
+            let gpu = cc.wgpu_render_state.as_ref().map(|rs| {
+                let i = rs.adapter.get_info();
+                format!("{} ({:?}, {:?}; driver {} {})", i.name, i.backend, i.device_type, i.driver, i.driver_info)
+            });
+            cadaddy_ui_egui::diag::set_host(cadaddy_ui_egui::diag::HostInfo {
+                version: version_string(),
+                gpu: gpu.unwrap_or_default(),
+                log_dir: config_dir().map(|d| d.join(logging::LOG_DIR)),
+            });
+            cadaddy_ui_egui::diag::start_watchdog();
             // An explicit --control port, and the agent port unless the user turned that off in
             // Options: both serve the same window.
             let ports: Vec<u16> = control_port.into_iter().chain(app.ui.agent_control.then_some(cadaddy_engine::AGENT_PORT)).collect();

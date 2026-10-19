@@ -1656,3 +1656,63 @@
 	Render Model View	Визуализировать вид модели
 	Model Overlay	Наложение модели
 	Model Counts	Подсчёт по модели
+	System Printers	Системные принтеры
+	Report a Problem...	Сообщить о проблеме...
+	Report a Problem	Сообщить о проблеме
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Собирает сведения, помогающие найти проблему, в ZIP-файл на этом компьютере. Ничего не отправляется: чтобы сообщить о проблеме, приложите файл к письму.
+	Always included	Всегда включается
+	The log of this run and the two before it	Журнал этого и двух предыдущих запусков
+	The last commands	Последние команды
+	Versions, operating system and graphics adapter	Версии, операционная система и видеоадаптер
+	A summary of the open drawings (counts only, no geometry)	Сводка по открытым чертежам (только количества, без геометрии)
+	Names: file paths, layer and block names, typed text	Имена: пути к файлам, имена слоёв и блоков, введённый текст
+	Names are replaced by placeholders, also in the log.	Имена заменяются заполнителями, в том числе в журнале.
+	Save Report...	Сохранить отчёт...
+	Email it to {address}	Отправьте его по адресу {address}
+	Plans to Model	От планов к модели
+	Build	Построить
+	Rebuild	Перестроить
+	Check	Проверить
+	Kept in the drawing.	Хранится в чертеже.
+	Drafted from the walk rules; not saved yet.	Черновик по правилам обхода; ещё не сохранён.
+	{n} of {total} approved	Утверждено {n} из {total}
+	Save Spec	Сохранить спецификацию
+	Approve All	Утвердить все
+	Approved	Утверждено
+	Levels	Уровни
+	Wall Types	Типы стен
+	Rooms	Помещения
+	Door and Window Families	Семейства дверей и окон
+	Materials	Материалы
+	Site	Участок
+	Openings	Проёмы
+	Issues ({n})	Проблемы ({n})
+	The drawing changed since; check again.	С тех пор чертёж изменился; проверьте снова.
+	No issues found.	Проблем не найдено.
+	Configure Standards	Настройка стандартов
+	Standards files associated with the current drawing	Файлы стандартов, связанные с текущим чертежом
+	Add...	Добавить...
+	Check Standards...	Проверка стандартов...
+	Check Standards	Проверка стандартов
+	No standards violations were found.	Нарушений стандартов не найдено.
+	problem(s)	проблем(а)
+	Take the standard's properties	Принять свойства стандарта
+	Replace it with the standard one	Заменить стандартным
+	Fix All	Исправить все
+	Give everything that differs the standard's properties	Присвоить всему отличающемуся свойства стандарта
+	Check Again	Проверить снова
+	Layer Translator	Преобразователь слоёв
+	Translate From	Преобразовать из
+	Translate To	Преобразовать в
+	Load a drawing whose layers to translate to.	Загрузите чертёж, в слои которого выполнять преобразование.
+	Map	Сопоставить
+	Layer Translation Mappings	Сопоставления преобразования слоёв
+	Load Map...	Загрузить сопоставление...
+	Save Map...	Сохранить сопоставление...
+	Translate	Преобразовать
+	Not in the standards	Нет в стандартах
+	Properties differ from the standards	Свойства отличаются от стандартов
+	CAD Standards	Стандарты САПР
+	Configure...	Настроить...
+	Check...	Проверить...
+	Layer Translator...	Преобразователь слоёв...

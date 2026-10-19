@@ -1887,3 +1887,63 @@
 	Render Model View	Renderizar vista del modelo
 	Model Overlay	Superposición del modelo
 	Model Counts	Recuentos del modelo
+	System Printers	Impresoras del sistema
+	Report a Problem...	Informar de un problema...
+	Report a Problem	Informar de un problema
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Reúne lo que ayuda a encontrar un problema en un archivo ZIP en este equipo. No se envía nada: adjunte el archivo a un correo si desea informar del problema.
+	Always included	Siempre incluido
+	The log of this run and the two before it	El registro de esta ejecución y de las dos anteriores
+	The last commands	Los últimos comandos
+	Versions, operating system and graphics adapter	Versiones, sistema operativo y adaptador gráfico
+	A summary of the open drawings (counts only, no geometry)	Un resumen de los dibujos abiertos (solo recuentos, sin geometría)
+	Names: file paths, layer and block names, typed text	Nombres: rutas de archivo, nombres de capas y bloques, texto escrito
+	Names are replaced by placeholders, also in the log.	Los nombres se sustituyen por marcadores, también en el registro.
+	Save Report...	Guardar informe...
+	Email it to {address}	Envíelo por correo a {address}
+	Plans to Model	De planos a modelo
+	Build	Crear
+	Rebuild	Volver a crear
+	Check	Comprobar
+	Kept in the drawing.	Guardada en el dibujo.
+	Drafted from the walk rules; not saved yet.	Borrador a partir de las reglas de recorrido; aún no guardado.
+	{n} of {total} approved	{n} de {total} aprobadas
+	Save Spec	Guardar especificación
+	Approve All	Aprobar todo
+	Approved	Aprobado
+	Levels	Niveles
+	Wall Types	Tipos de muro
+	Rooms	Habitaciones
+	Door and Window Families	Familias de puertas y ventanas
+	Materials	Materiales
+	Site	Emplazamiento
+	Openings	Huecos
+	Issues ({n})	Problemas ({n})
+	The drawing changed since; check again.	El dibujo ha cambiado desde entonces; vuelva a comprobar.
+	No issues found.	No se encontraron problemas.
+	Configure Standards	Configurar normas
+	Standards files associated with the current drawing	Archivos de normas asociados al dibujo actual
+	Add...	Añadir...
+	Check Standards...	Comprobar normas...
+	Check Standards	Comprobar normas
+	No standards violations were found.	No se han encontrado infracciones de las normas.
+	problem(s)	problema(s)
+	Take the standard's properties	Adoptar las propiedades de la norma
+	Replace it with the standard one	Sustituirlo por el de la norma
+	Fix All	Corregir todo
+	Give everything that differs the standard's properties	Dar a todo lo que difiere las propiedades de la norma
+	Check Again	Volver a comprobar
+	Layer Translator	Traductor de capas
+	Translate From	Traducir de
+	Translate To	Traducir a
+	Load a drawing whose layers to translate to.	Cargue un dibujo a cuyas capas traducir.
+	Map	Asignar
+	Layer Translation Mappings	Asignaciones de traducción de capas
+	Load Map...	Cargar asignación...
+	Save Map...	Guardar asignación...
+	Translate	Traducir
+	Not in the standards	No está en las normas
+	Properties differ from the standards	Las propiedades difieren de las normas
+	CAD Standards	Normas CAD
+	Configure...	Configurar...
+	Check...	Comprobar...
+	Layer Translator...	Traductor de capas...
