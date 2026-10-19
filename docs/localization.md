@@ -1,7 +1,7 @@
 # Interface languages
 
 Choose **Edit → Interface Language** and select **Auto (system language)**, **English**,
-**Українська**, **Português (Brasil)**, **Deutsch**, **Español**, **Čeština** (Czech), **Русский**, **Français**, **简体中文**, **Italiano**, **한국어** (Korean), **Svenska** (Swedish), or **العربية** (Arabic).
+**Українська**, **Português (Brasil)**, **Deutsch**, **Español**, **Čeština** (Czech), **Русский**, **Français**, **简体中文**, **Italiano**, **한국어** (Korean), **Svenska** (Swedish), **العربية** (Arabic), or **Magyar** (Hungarian).
 The interface updates without restarting, including the native macOS menus.
 The choice is saved with the other interface preferences (`cadcraft.prefs`, beside the theme):
 eframe storage on the desktop, browser local storage on the web. Installations without a saved
@@ -11,7 +11,7 @@ Auto uses the first supported language in the operating system's preferred local
 browser's `navigator.languages` on the web. BCP 47 and POSIX tags select their primary language:
 `uk-UA` → `uk`, `de_AT.UTF-8` → `de`, `es-MX` → `es`, `pt_BR.UTF-8` → `pt-BR`,
 `cs-CZ` and `cs_CZ.UTF-8` → `cs`, `it-IT` and `it_CH.UTF-8` → `it`, `ko-KR` and `ko_KR.UTF-8` → `ko`,
-`sv-SE`, `sv-FI` and `sv_SE.UTF-8` → `sv`. Unsupported languages fall back to English.
+`sv-SE`, `sv-FI` and `sv_SE.UTF-8` → `sv`, `hu-HU` and `hu_HU.UTF-8` → `hu`. Unsupported languages fall back to English.
 Set `CADCRAFT_LOCALE=cs-CZ` to override the desktop's locale for a launch.
 An explicit saved language choice takes precedence over that override.
 
@@ -22,7 +22,7 @@ Automation can select the language through the existing control channel:
 ```
 
 The `ui.set` method also accepts `{"interfaceLanguage":"cs"}`. Supported values are `auto`,
-`en`, `uk`, `pt-BR`, `de`, `es`, `cs`, `ru`, `fr`, `zh`, `it`, `ko`, `sv`, and `ar`; invalid values are rejected without changing the current
+`en`, `uk`, `pt-BR`, `de`, `es`, `cs`, `ru`, `fr`, `zh`, `it`, `ko`, `sv`, `ar`, and `hu`; invalid values are rejected without changing the current
 selection. Resetting palettes keeps the language choice.
 
 ## Translation coverage
@@ -53,6 +53,14 @@ for `pt`, and the catalog's accented letters (`Á Â Í Ó Ú à á â ã ç é 
 bundled fonts. The original catalog was contributed by @WladmirJunior; the remaining rows were completed
 by @RicSchonfelder with AI assistance and have not yet been proofread by a native speaker.
 
+Hungarian has **1,326 rows**: 1,320 ordinary labels, four contextual menu headings, and two
+single-form count templates. It covers the reference catalog and every marked UI literal,
+including Options, prompts, dialogs, and tooltips; only **Méretezés / Méret** (Dimension) differs
+between the menu heading and the object label. The interface addresses the user informally, and
+a count takes one form because a Hungarian numeral is followed by the singular. The translation
+was written from the meaning of CADCraft's English strings; no other product's localization was
+used as a source. It has not yet been proofread by an independent native speaker.
+
 Drawing titles, layer/layout/block/style names, parameter names and expressions, text in a
 drawing, and command-line input are user data and retain their original spelling. Clickable
 command keywords retain their English spelling so the text shown matches the input accepted
@@ -60,8 +68,9 @@ by the engine. CLI/MCP/control responses, engine diagnostics and command history
 English. Uncatalogued text also falls back to English. Number formatting and the operating
 system's own file-picker controls follow the existing behavior.
 
-The bundled egui fonts cover Ukrainian (`Ґґ Єє Іі Її`), German (`ÄÖÜ äöü ß`), and Czech
-(`ÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ áčďéěíňóřšťúůýž`, including typographic quotes `„…“`).
+The bundled egui fonts cover Ukrainian (`Ґґ Єє Іі Її`), German (`ÄÖÜ äöü ß`), Czech
+(`ÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ áčďéěíňóřšťúůýž`, including typographic quotes `„…“`), and Hungarian
+(`ÁÉÍÓÖŐÚÜŰ áéíóöőúüű`, including `„…”`).
 The translations add no font assets and work on the web without system fonts.
 
 Korean needs a font that covers **every Hangul character in its catalog** and the language
@@ -92,7 +101,7 @@ The implementation follows the display-time catalog pattern used by
 - `@plural` entries hold the language's forms for integer counts: Ukrainian `one|few|many`,
   German and Spanish `one|other`, Brazilian Portuguese `one|other` (0 and 1 are `one`),
   Czech `one|few|other` (1; 2–4; everything else, including 0, 11, 21 and 22).
-  Korean has one form (`other`) for all integer counts.
+  Korean and Hungarian have one form (`other`) for all integer counts.
   The API takes `u64`, so fractional counts are not accepted.
 - Register a new catalog in `i18n::LANGUAGES`, add its preference variant and code/name,
   and set its integer plural rule and form count on the `Language` row.

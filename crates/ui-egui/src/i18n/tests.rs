@@ -39,7 +39,7 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
 /// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
 /// command doesn't require a row in every language.
 const REQUIRED: &[&str] = &["uk"];
-const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar"];
+const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar", "hu"];
 
 fn check(language: &str, what: &str, missing: Vec<String>) {
     if REQUIRED.contains(&language) {
@@ -875,6 +875,111 @@ fn default_fonts_cover_swedish_letters_and_quotes() {
     let mut output = ctx.run_ui(Default::default(), |_| {});
     output.textures_delta.clear();
     let letters: BTreeSet<_> = "ÅÄÖÉåäöé”–".chars().collect();
+    ctx.fonts_mut(|view| {
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let mut font = view.fonts.font(&family);
+            for c in &letters {
+                assert!(font.characters().contains_key(c), "missing {c} in {family:?}");
+            }
+        }
+    });
+}
+
+#[test]
+fn hungarian_locales_preferences_and_plural_forms() {
+    for tag in ["hu", "hu-HU", "hu_HU.UTF-8", "HU-hu", " hu-HU "] {
+        assert_eq!(locale_language(tag), Some("hu"), "{tag}");
+    }
+    // `hun` is the three-letter code; neither it nor the endonym picks Hungarian.
+    for tag in ["hun", "magyar"] {
+        assert_eq!(locale_language(tag), None, "{tag}");
+    }
+    assert_eq!(Preference::parse("hu"), Some(Preference::Hungarian));
+    assert_eq!(Preference::Hungarian.name(), "Magyar");
+    assert_eq!(Preference::Hungarian.resolve(&["en-US".into()]), "hu");
+    assert_eq!(Preference::Auto.resolve(&["pl-PL".into(), "hu-HU".into(), "en-US".into()]), "hu");
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.ui.interface_language = Preference::Hungarian;
+    let mut restored = CadApp::new(Session::new(), Services::default());
+    restored.load_prefs(&app.prefs_json());
+    assert_eq!(restored.ui.interface_language, Preference::Hungarian);
+    with_language("hu", || {
+        for n in [0, 1, 2, 5, 21, u64::MAX] {
+            // A numeral takes the singular noun, so every count has the same form.
+            assert_eq!(count(n, "{n} contributor", "{n} contributors"), format!("{n} közreműködő"));
+            assert_eq!(count(n, "{n} commit", "{n} commits"), format!("{n} commit"));
+        }
+        assert_eq!(format("Current: {color}", &[("color", "{n} Open".into())]), "Aktuális: {n} Open");
+    });
+}
+
+#[test]
+fn hungarian_menu_headings_keep_object_labels() {
+    with_language("hu", || {
+        assert_eq!(menu("Dimension"), "Méretezés");
+        assert_eq!(t("Dimension"), "Méret");
+        assert_eq!(menu("View"), "Nézet");
+        assert_eq!(menu("Draw"), "Rajzolás");
+        assert_eq!(menu("Modify"), "Módosítás");
+        assert_eq!(menu("Edit"), "Szerkesztés");
+        assert_eq!(menu("File"), "Fájl");
+    });
+}
+
+#[test]
+fn live_hungarian_switch_preserves_drawing_command_and_saved_choice() {
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.ui.in_window_menu = true;
+    app.session.state_mut().unwrap().title = "Open".into();
+    let ctx = egui::Context::default();
+    app.logic(&ctx);
+    assert!(render(&mut app, &ctx).contains("Properties"));
+    app.start("line");
+    let prompt = crate::control::cmdline_state(&app);
+    let commands = crate::control::all_commands(&app);
+    app.run("ui.language", json!({"lang":"hu"})).unwrap();
+    let text = render(&mut app, &ctx);
+    for label in ["Tulajdonságok", "Fájl", "Nézet", "Rajzolás", "Méretezés", "Add meg az első pontot"] {
+        assert!(text.contains(label), "missing {label}: {text}");
+    }
+    assert_eq!(app.language(), "hu");
+    assert_eq!(app.session.state().unwrap().title, "Open");
+    assert_eq!(crate::control::cmdline_state(&app), prompt);
+    assert_eq!(crate::control::all_commands(&app), commands);
+    app.run("ui.language", json!({"lang":"en"})).unwrap();
+    assert!(render(&mut app, &ctx).contains("Properties"));
+}
+
+#[test]
+fn hungarian_dialogs_render_with_stable_ids() {
+    for (dialog, heading) in [
+        ("dsettings", "Rajzolási beállítások"),
+        ("about", "A CADCraft névjegye"),
+        ("blocks", "Blokk"),
+        ("layers", "Rétegtulajdonság-kezelő"),
+        ("qselect", "Gyorskijelölés"),
+        ("parameters", "Paraméterkezelő"),
+        ("language", "Magyar"),
+        ("options:preferences", "Felhasználói beállítások"),
+    ] {
+        let mut app = CadApp::new(Session::new(), Services::default());
+        app.ui.interface_language = Preference::Hungarian;
+        app.ui.dialog = Some(dialog.into());
+        let ctx = egui::Context::default();
+        app.logic(&ctx);
+        let text = render(&mut app, &ctx);
+        assert!(text.contains(heading), "{dialog}: {text}");
+        assert_eq!(app.ui.dialog.as_deref(), Some(dialog));
+    }
+}
+
+#[test]
+fn default_fonts_cover_hungarian_letters_and_quotes() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    // Ő ő Ű ű (double acute) are in Latin Extended-A, outside the ranges the other tests check.
+    let letters: BTreeSet<_> = "ÁÉÍÓÖŐÚÜŰáéíóöőúüű„”–…".chars().collect();
     ctx.fonts_mut(|view| {
         for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
             let mut font = view.fonts.font(&family);
