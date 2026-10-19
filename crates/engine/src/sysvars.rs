@@ -36,6 +36,7 @@ const SESSION_VARS: &[&str] = &[
     "DYNPROMPT",
     "LWDISPLAY",
     "PLOTTRANSPARENCYOVERRIDE",
+    "SELECTIONCYCLING",
     "SELECTSIMILARMODE",
     "OBJECTISOLATIONMODE",
     "QPMODE",
@@ -104,6 +105,11 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "DYNPROMPT" => json!(i32::from(st.dynprompt)),
         "LWDISPLAY" => json!(i32::from(st.lwdisplay)),
         "PLOTTRANSPARENCYOVERRIDE" => json!(st.plot_transparency_override),
+        // Negative while turned off, so the toggle keeps the display it turns back on.
+        "SELECTIONCYCLING" => {
+            let d = i32::from(st.selection_cycling_display);
+            json!(if st.selection_cycling { d } else { -d })
+        }
         "SELECTSIMILARMODE" => json!(st.selectsimilarmode),
         // Isolation is temporary: hidden objects show again when the drawing is reopened.
         "OBJECTISOLATIONMODE" => json!(0),
@@ -268,6 +274,11 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "LWDISPLAY" => st.lwdisplay = as_bool(v).ok_or_else(bad)?,
         "PLOTTRANSPARENCYOVERRIDE" => {
             st.plot_transparency_override = as_i(v).filter(|i| (0..=2).contains(i)).and_then(|i| u8::try_from(i).ok()).ok_or_else(bad)?
+        }
+        "SELECTIONCYCLING" => {
+            let i = as_i(v).filter(|i| (-2..=2).contains(i)).ok_or_else(bad)?;
+            st.selection_cycling = i > 0;
+            st.selection_cycling_display = u8::try_from(i.unsigned_abs()).map_err(|_| bad())?;
         }
         "SELECTSIMILARMODE" => st.selectsimilarmode = as_i(v).filter(|b| (0..=255).contains(b)).ok_or_else(bad)? as u32,
         "OBJECTISOLATIONMODE" => match as_i(v) {
