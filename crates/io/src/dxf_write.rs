@@ -358,6 +358,8 @@ fn header_vars(w: &mut W, d: &Drawing) {
             (-2 | -3, _) => {}
             (c @ (40 | 50), v) => {
                 if let Some(f) = v.as_f64() {
+                    // ANGBASE is held in radians; `$ANGBASE` is in degrees.
+                    let f = if *name == "ANGBASE" { f.to_degrees() } else { f };
                     w.s(9, format!("${name}"));
                     w.f(c, f);
                 }

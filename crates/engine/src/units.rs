@@ -157,7 +157,7 @@ fn parse_mixed(s: &str) -> Option<f64> {
 pub struct AngleSettings {
     /// AUNITS: 0 decimal degrees, 1 degrees/minutes/seconds, 2 grads, 3 radians, 4 surveyor's.
     pub aunits: i64,
-    /// ANGBASE: the direction of angle 0, in radians counterclockwise from +X (as `$ANGBASE` in DXF).
+    /// ANGBASE: the direction of angle 0, in radians counterclockwise from +X (`$ANGBASE` in DXF is in degrees).
     pub angbase: f64,
     /// ANGDIR 1: positive angles turn clockwise.
     pub clockwise: bool,

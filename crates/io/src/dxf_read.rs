@@ -1341,6 +1341,9 @@ fn header(tags: &[Tag], d: &mut Drawing) {
                 },
                 // $DIMJOGANG is in radians; the variable (like the style) holds degrees.
                 HVal::Real(r) if name == "DIMJOGANG" => HVal::Real((r.to_degrees() * 1e9).round() / 1e9),
+                // $ANGBASE is in degrees (a drawing measured from north has 90.0); the variable
+                // holds radians.
+                HVal::Real(r) if name == "ANGBASE" => HVal::Real(r.to_radians()),
                 hv => hv,
             };
             d.header.set(&name, hv);

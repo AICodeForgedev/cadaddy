@@ -330,7 +330,8 @@ mod native {
     /// the HEADER section: (name, group code, value).
     fn unwritten_header_vars(h: &acadrust::document::HeaderVariables) -> [(&'static str, i32, String); 7] {
         [
-            ("$ANGBASE", 50, h.angle_base.to_string()),
+            // DWG holds radians; `$ANGBASE` is in degrees.
+            ("$ANGBASE", 50, h.angle_base.to_degrees().to_string()),
             ("$ANGDIR", 70, h.angle_direction.to_string()),
             ("$FILLETRAD", 40, h.fillet_radius.to_string()),
             ("$CHAMFERA", 40, h.chamfer_distance_a.to_string()),
