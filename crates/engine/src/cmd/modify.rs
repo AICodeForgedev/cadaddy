@@ -634,22 +634,9 @@ pub(crate) fn offset_kind(k: &EntityKind, dist: f64, side: Vec2) -> Option<Entit
             cadaddy_geom::offset_spline(&cadaddy_geom::CurveRef::Ellipse(full), ge.start, ge.start + ge.sweep(), d, ge.is_full(), tol)
                 .map(EntityKind::Spline)
         }
-        EntityKind::LwPolyline(p) => {
-            let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
-            // Side: compare with the nearest segment.
-            let segs = pl.segments();
-            let nearest = segs.iter().min_by(|a, b| a.closest(side).dist(side).total_cmp(&b.closest(side).dist(side)))?;
-            let c = nearest.closest(side);
-            let t = nearest.tangent(0.5);
-            let left = t.cross(side - c) > 0.0;
-            let d = if left { dist } else { -dist };
-            offset_polyline(&pl, d).map(|vs| {
-                let mut k = lwpoly(vs, p.closed);
-                if let EntityKind::LwPolyline(n) = &mut k {
-                    n.const_width = p.const_width;
-                }
-                k
-            })
+        EntityKind::LwPolyline(_) => {
+            // The longest piece (an offset inward can split a polyline; OFFSET adds them all).
+            offset_kinds(k, dist, side).into_iter().max_by(|a, b| poly_len(a).total_cmp(&poly_len(b)))
         }
         EntityKind::Spline(sp) => {
             let pts = sp.tessellate(1e-3);
@@ -676,66 +663,49 @@ pub(crate) fn offset_kind(k: &EntityKind, dist: f64, side: Vec2) -> Option<Entit
     }
 }
 
-/// Offset a polyline: offset each segment, then join neighbours at their intersections.
-pub(crate) fn offset_polyline(pl: &Polyline, d: f64) -> Option<Vec<PolyVertex>> {
-    // Each offset segment with the vertex its source segment starts at (for its widths).
-    let (src, segs): (Vec<usize>, Vec<Segment>) = pl.segments().iter().enumerate().filter_map(|(i, s)| Some((i, s.offset(d)?))).unzip();
-    if segs.is_empty() {
-        return None;
-    }
-    let n = segs.len();
-    // Where each offset segment starts after joining it to the previous one.
-    let mut starts: Vec<Vec2> = Vec::with_capacity(n);
-    for i in 0..n {
-        let s = segs.get(i)?;
-        starts.push(if i == 0 && !pl.closed {
-            s.start()
-        } else {
-            let prev = segs.get((i + n - 1) % n)?;
-            join_point(prev, s).unwrap_or(s.start())
-        });
-    }
-    let mut verts: Vec<PolyVertex> = Vec::new();
-    for i in 0..n {
-        let s = segs.get(i)?;
-        let start = *starts.get(i)?;
-        let end = if i + 1 < n {
-            *starts.get(i + 1)?
-        } else if pl.closed {
-            *starts.first()?
-        } else {
-            s.end()
-        };
-        let bulge = match s {
-            Segment::Line(_) => 0.0,
-            Segment::Arc { arc, ccw } => {
-                // The joined endpoints may have moved along the circle: take the sweep between them.
-                let sweep = if start.near(end, 1e-9) {
-                    arc.sweep()
-                } else if *ccw {
-                    ccw_sweep(arc.center.angle_to(start), arc.center.angle_to(end))
-                } else {
-                    ccw_sweep(arc.center.angle_to(end), arc.center.angle_to(start))
-                };
-                cadaddy_geom::arc_to_bulge(if *ccw { sweep } else { -sweep })
+/// The offset of `k` by `dist` towards `side`, in as many pieces as it takes: a polyline offset
+/// inward can split in two (`cadaddy_geom::offset::offset_polyline`, exact and clipped where it
+/// crosses itself); everything else is one piece.
+pub(crate) fn offset_kinds(k: &EntityKind, dist: f64, side: Vec2) -> Vec<EntityKind> {
+    let EntityKind::LwPolyline(p) = k else { return offset_kind(k, dist, side).into_iter().collect() };
+    let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
+    // Side: compare with the nearest segment.
+    let segs = pl.segments();
+    let Some(nearest) = segs.iter().min_by(|a, b| a.closest(side).dist(side).total_cmp(&b.closest(side).dist(side))) else { return Vec::new() };
+    let c = nearest.closest(side);
+    let t = nearest.tangent(0.5);
+    let left = t.cross(side - c) > 0.0;
+    let d = if left { dist } else { -dist };
+    cadaddy_geom::offset::offset_polyline(&pl, d)
+        .into_iter()
+        .map(|piece| {
+            // Segment widths carry over from the segment each piece came from, as AutoCAD keeps them.
+            let vertices: Vec<PolyVertex> = piece
+                .polyline
+                .vertices
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let w =
+                        piece.sources.get(i).copied().flatten().and_then(|j| p.vertices.get(j)).map_or((0.0, 0.0), |v| (v.start_width, v.end_width));
+                    PolyVertex { start_width: w.0, end_width: w.1, ..*v }
+                })
+                .collect();
+            let mut k = lwpoly(vertices, piece.polyline.closed);
+            if let EntityKind::LwPolyline(n) = &mut k {
+                n.const_width = p.const_width;
             }
-        };
-        // Segment widths carry over, as AutoCAD keeps them.
-        let w = src.get(i).and_then(|j| pl.vertices.get(*j)).map_or((0.0, 0.0), |v| (v.start_width, v.end_width));
-        verts.push(PolyVertex { p: start, bulge, start_width: w.0, end_width: w.1 });
-    }
-    if !pl.closed {
-        verts.push(PolyVertex::new(segs.last()?.end()));
-    }
-    Some(verts)
+            k
+        })
+        .collect()
 }
 
-fn join_point(a: &Segment, b: &Segment) -> Option<Vec2> {
-    if a.end().near(b.start(), 1e-9) {
-        return Some(b.start());
+/// A polyline's length (0 for anything else).
+fn poly_len(k: &EntityKind) -> f64 {
+    match k {
+        EntityKind::LwPolyline(p) => Polyline { vertices: p.vertices.clone(), closed: p.closed }.segments().iter().map(Segment::len).sum(),
+        _ => 0.0,
     }
-    let hits = intersect_ext(a, b, true);
-    hits.into_iter().min_by(|x, y| x.dist(a.end()).total_cmp(&y.dist(a.end())))
 }
 
 fn run_offset(s: &mut Session, p: &Value) -> Result<Value> {
@@ -743,14 +713,28 @@ fn run_offset(s: &mut Session, p: &Value) -> Result<Value> {
     let dist = f64_req("offset", p, "distance")?;
     let side = point_req("offset", p, "side")?;
     let e = s.doc()?.entity(h).map(|e| (**e).clone()).ok_or_else(|| bad("offset", "no such object"))?;
-    let k = offset_kind(&e.kind, dist.abs(), side).ok_or_else(|| bad("offset", "cannot offset that object"))?;
+    let ks = offset_kinds(&e.kind, dist.abs(), side);
+    if ks.is_empty() {
+        return Err(bad("offset", "cannot offset that object"));
+    }
     let current_layer = match str_param(p, "layer").map(str::to_ascii_lowercase).as_deref() {
         None | Some("source") => false,
         Some("current") => true,
         Some(_) => return Err(bad("offset", "`layer` is \"source\" or \"current\"")),
     };
-    let nh = add_offset(s, &e, k, current_layer, bool_or(p, "erase", false))?;
-    Ok(json!({ "handle": nh.hex() }))
+    let hs = add_offsets(s, &e, ks, current_layer, bool_or(p, "erase", false))?;
+    // `handle`: the first (the only one, unless the offset split in pieces).
+    Ok(json!({ "handle": hs.first().map(|h| h.hex()), "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
+}
+
+/// Add every piece of an offset of `src` ([`add_offset`]), erasing the source once after them.
+fn add_offsets(s: &mut Session, src: &Entity, ks: Vec<EntityKind>, current_layer: bool, erase: bool) -> Result<Vec<Handle>> {
+    let n = ks.len();
+    let mut out = Vec::with_capacity(n);
+    for (i, k) in ks.into_iter().enumerate() {
+        out.push(add_offset(s, src, k, current_layer, erase && i + 1 == n)?);
+    }
+    Ok(out)
 }
 
 /// Add the offset copy `k` of `src` (on the current layer instead of the source's when
@@ -861,13 +845,24 @@ fn prim_to_segments(p: &Prim) -> Vec<Segment> {
     match p {
         Prim::Seg(s) => vec![*s],
         Prim::Circle(c) => vec![Segment::Arc { arc: Arc { center: c.center, radius: c.radius, start: 0.0, end: TAU - 1e-12 }, ccw: true }],
-        Prim::Infinite { base, dir, .. } => vec![Segment::Line(Line::new(*base - *dir * 1e8, *base + *dir * 1e8))],
+        // Long enough to cross anything in a drawing this far from the origin.
+        Prim::Infinite { base, dir, .. } => {
+            let reach = 1e8_f64.max(base.x.abs().max(base.y.abs()) * 1e3);
+            vec![Segment::Line(Line::new(*base - *dir * reach, *base + *dir * reach))]
+        }
         Prim::Ellipse(e) => {
             let mut pts = Vec::new();
             e.tessellate(e.major.len() * 1e-4, &mut pts);
             pts.windows(2).filter_map(|w| Some(Segment::Line(Line::new(*w.first()?, *w.get(1)?)))).collect()
         }
-        Prim::Spline(sp) => sp.tessellate(1e-4).windows(2).filter_map(|w| Some(Segment::Line(Line::new(*w.first()?, *w.get(1)?)))).collect(),
+        Prim::Spline(sp) => {
+            // As fine as the ellipse's: relative to its size.
+            let b = sp.bounds();
+            sp.tessellate(b.width().hypot(b.height()) * 1e-4)
+                .windows(2)
+                .filter_map(|w| Some(Segment::Line(Line::new(*w.first()?, *w.get(1)?))))
+                .collect()
+        }
         Prim::Fill(f) => {
             let n = f.len();
             (0..n).filter_map(|i| Some(Segment::Line(Line::new(*f.get(i)?, *f.get((i + 1) % n)?)))).collect()
@@ -1670,7 +1665,9 @@ pub(crate) fn join(s: &mut Session, hs: &[Handle]) -> Result<Option<Handle>> {
     // Chain greedily from the first segment.
     let mut chain = vec![segs.remove(0)];
     let mut used = vec![owners.remove(0)];
-    let tol = 1e-6;
+    // Ends that meet: relative to the objects' size (an absolute fuzz joined everything in a tiny
+    // drawing, and could miss in a huge one).
+    let tol = chain.iter().chain(&segs).fold(cadaddy_geom::Bounds2::default(), |b, s| b.union(&s.bounds())).fuzz();
     loop {
         let start = chain.first().map(Segment::start).unwrap_or_default();
         let end = chain.last().map(Segment::end).unwrap_or_default();
@@ -2491,14 +2488,14 @@ impl Interactive for OffsetM {
                                 .fold(f64::INFINITY, f64::min)
                         }
                     };
-                    match offset_kind(&e.kind, dist, p) {
-                        Some(k) => {
-                            let before = s.state()?.doc.clone();
-                            let (erase, current) = offset_options(s);
-                            made = Some(add_offset(s, &e, k, current, erase)?);
-                            self.undo.push((before, Some(h)));
-                        }
-                        None => s.echo("Cannot offset that object."),
+                    let ks = offset_kinds(&e.kind, dist, p);
+                    if ks.is_empty() {
+                        s.echo("Cannot offset that object.");
+                    } else {
+                        let before = s.state()?.doc.clone();
+                        let (erase, current) = offset_options(s);
+                        made = add_offsets(s, &e, ks, current, erase)?.first().copied();
+                        self.undo.push((before, Some(h)));
                     }
                 }
                 // Multiple mode carries on from the new copy.
@@ -2521,7 +2518,7 @@ impl Interactive for OffsetM {
             Some(x) => x,
             None => crate::select::entity_distance(d, e, c, 1e-3),
         };
-        offset_kind(&e.kind, dist, c).into_iter().collect()
+        offset_kinds(&e.kind, dist, c)
     }
 }
 

@@ -407,7 +407,9 @@ impl Segment {
             Segment::Arc { arc, ccw } => {
                 // Left of a CCW arc is toward the center.
                 let r = if ccw { arc.radius - d } else { arc.radius + d };
-                if r <= EPS {
+                // Gone to nothing, relative to its size (an absolute EPS kept arcs a tiny
+                // drawing's offset had collapsed).
+                if r <= EPS * (arc.radius + d.abs()) {
                     return None;
                 }
                 Some(Segment::Arc { arc: Arc { radius: r, ..arc }, ccw })
