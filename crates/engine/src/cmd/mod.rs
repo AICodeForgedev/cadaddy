@@ -42,6 +42,7 @@ mod modify;
 mod modify2;
 mod mtext_opts;
 mod overkill;
+pub mod pdfplans;
 mod perceive;
 mod pline_opts;
 pub mod plotters;
@@ -216,6 +217,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(draworder::specs());
         v.extend(wallgen::specs());
         v.extend(bspec::specs());
+        v.extend(pdfplans::specs());
         v.extend(grids::specs());
         v.extend(mep::specs());
         v.extend(ceilings::specs());

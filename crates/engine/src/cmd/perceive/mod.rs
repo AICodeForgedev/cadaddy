@@ -269,7 +269,7 @@ fn sheet_number(t: &str) -> bool {
         && rest.chars().all(|c| c.is_ascii_digit() || c == '.')
 }
 
-fn run_sheets(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn run_sheets(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc()?;
     let mut spaces: Vec<(String, Space)> = d.layouts.iter().map(|l| (l.name.clone(), Space::Paper(l.name.clone()))).collect();
     spaces.push(("Model".into(), Space::Model));
