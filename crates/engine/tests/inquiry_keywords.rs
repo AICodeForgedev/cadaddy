@@ -34,6 +34,13 @@ fn area_object_add_and_subtract_keep_a_running_total() {
 }
 
 #[test]
+fn area_object_on_an_open_polyline_closes_the_area_but_not_the_perimeter() {
+    // Open, 160 long; the closing side back to 0,0 would add 116.619.
+    let (_, log) = run(&["pline", "0,0", "100,0", "100,60", "", "area", "o", "50,0"]);
+    assert!(has(&log, "Area = 3000.0000, Perimeter = 160.0000"), "{log:?}");
+}
+
+#[test]
 fn area_unsupported_keywords_say_so_and_length_extends_the_last_segment() {
     let (s, log) = run(&["area", "0,0", "a"]);
     assert!(has(&log, "not available yet"), "{log:?}");

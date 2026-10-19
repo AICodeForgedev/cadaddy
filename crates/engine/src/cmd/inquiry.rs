@@ -211,8 +211,10 @@ fn object_area(s: &Session, h: Handle) -> Result<(f64, f64)> {
     Ok(match &e.kind {
         EntityKind::Circle(c) => (c.radius * c.radius * cadcraft_geom::PI, c.radius * cadcraft_geom::TAU),
         EntityKind::LwPolyline(pl) => {
+            // An open polyline is measured as if closed for the area, but its perimeter is its own length (AutoCAD's AREA help).
             let g = Polyline { vertices: pl.vertices.clone(), closed: true };
-            (g.area().abs(), g.len())
+            let drawn = Polyline { vertices: pl.vertices.clone(), closed: pl.closed };
+            (g.area().abs(), drawn.len())
         }
         EntityKind::Ellipse(el) => {
             let arc = cadcraft_geom::Ellipse { center: el.center.xy(), major: el.major.xy(), ratio: el.ratio, start: el.start, end: el.end };
