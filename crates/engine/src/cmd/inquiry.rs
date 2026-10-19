@@ -40,6 +40,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("time", "Time", run_time).menu(&["Tools", "Inquiry", "Time"]).noundo(),
         CommandSpec::new("status", "Status", run_status).menu(&["Tools", "Inquiry", "Status"]).noundo(),
         CommandSpec::new("drawing.inspect", "Inspect Drawing", run_inspect).params("{entities?: bool, limit?: n, index? (another open drawing, as DOCUMENT.LIST numbers them)}").noundo(),
+        CommandSpec::new("drawing.summary", "Drawing Summary", summary::run_summary).params(summary::SUMMARY_PARAMS).noundo(),
+        CommandSpec::new("drawing.query", "Query Drawing", summary::run_query).params(summary::QUERY_PARAMS).noundo(),
         CommandSpec::new("entities", "Query Entities", run_entities)
             .params("{type?, layer?, window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
             .noundo(),
@@ -508,6 +510,7 @@ fn run_texts(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 mod count;
+mod summary;
 
 #[derive(Default)]
 struct DistM {

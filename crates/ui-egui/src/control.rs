@@ -297,6 +297,16 @@ const METHODS: &[(&str, &str, &str)] = &[
         "Every command (or those whose id, label or an alias contains `filter`): id, label, menu path, shortcut, aliases, params doc, enabled.",
     ),
     ("drawing.inspect", "{entities?, limit?}", "Drawing summary and entities with handles and geometry."),
+    (
+        "drawing.summary",
+        "{sections?, textOffset?, textLimit?, textContains?}",
+        "What the drawing holds, capped and paged: units, extents, layouts, layers and blocks with object counts, all text with positions, title block attributes, xrefs/images/underlays found or missing, dimension styles in use.",
+    ),
+    (
+        "drawing.query",
+        "{type?, layer?, space?, window?, crossing?, text?, block?, limit?, offset?}",
+        "Objects by type, layer (wildcards), space, region, text or block, as handles (paged).",
+    ),
     ("ui.inspect", "", "UI state, canvas rect, view, cursor and snap, performance, keyboard focus."),
     ("ui.elements", "{label?, role?, focused?}", "Observed visible controls with their egui id, rectangle, state and focus."),
     ("ui.menu.list", "", "The menu tree."),
@@ -504,6 +514,7 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             None => all_commands(app),
         }),
         "drawing.inspect" | "document.inspect" => wrap(app.session.execute("drawing.inspect", p).map_err(|e| e.to_string())),
+        "drawing.summary" | "drawing.query" => wrap(app.session.execute(&req.method, p).map_err(|e| e.to_string())),
         "ui.inspect" => {
             #[cfg(not(target_arch = "wasm32"))]
             {

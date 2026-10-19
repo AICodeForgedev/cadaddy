@@ -265,6 +265,12 @@ fn list(t: &Tally, scope: &Scope) -> Value {
     json!({ "blocks": t.blocks, "nested": t.nested, "spaces": t.spaces, "total": total, "truncated": t.truncated, "message": message })
 }
 
+/// Every block's references in every space (nested ones included), and the nested part.
+pub(super) fn all_counts(d: &Drawing) -> (BTreeMap<String, u64>, BTreeMap<String, u64>) {
+    let t = tally(d, &Scope::All, true, None);
+    (t.blocks, t.nested)
+}
+
 /// Count block `b` (its references, nested ones included) in `scope`.
 fn count_block(d: &Drawing, scope: &Scope, nested: bool, b: &str) -> Value {
     let t = tally(d, scope, nested, Some(b));
