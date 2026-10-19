@@ -48,6 +48,7 @@ pub mod options;
 pub mod palettes;
 pub mod parametric;
 pub mod pdfdlg;
+pub mod planstomodel;
 pub mod plotstyles;
 pub mod quick;
 pub mod ribbon;

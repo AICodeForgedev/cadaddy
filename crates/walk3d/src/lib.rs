@@ -23,5 +23,8 @@ pub use math::{Mat4, V3};
 pub use measure::{Dim, DimKind, measure};
 pub use pick::{Hit, pick};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules};
-pub use spec::{BuildingSpec, Family, FamilyKind, Issue, LayerRole, Role, Room, SPEC_VERSION, Site, Surfaces, WallFrom, WallType, level_at, merge};
+pub use spec::{
+    BuildingSpec, Described, Family, FamilyKind, Issue, LayerRole, Role, Room, SPEC_VERSION, Site, Surfaces, WallFrom, WallType, feet, inches,
+    level_at, merge,
+};
 pub use walker::Walker;

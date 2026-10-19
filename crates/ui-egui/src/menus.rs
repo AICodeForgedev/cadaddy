@@ -32,6 +32,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
     ("ui.panel.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
     ("ui.panel.symbols", "Symbols", &["Window", "Symbols"], None),
+    ("ui.panel.planstomodel", "Plans to Model", &["Window", "Plans to Model"], None),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
     ("ui.animations.system", "Use System Setting", &["View", "Accessibility", "Animation Effects", "Use System Setting"], None),
     ("ui.animations.on", "On", &["View", "Accessibility", "Animation Effects", "On"], None),
@@ -125,6 +126,9 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     if matches!(id, "ui.panel.properties" | "ui.panel.layers") {
         let panel = if id == "ui.panel.properties" { "properties" } else { "layers" };
         return Some(crate::docking::command(app, false, &json!({"operation":"open", "panel":panel})));
+    }
+    if id == "ui.panel.planstomodel" || (id == "planstomodel" && params.is_null()) {
+        return Some(crate::planstomodel::open(app));
     }
     // SYMBOLS typed or from a menu opens the symbol library palette, expanded.
     if id == "ui.panel.symbols" || (id == "symbols" && params.is_null()) {
