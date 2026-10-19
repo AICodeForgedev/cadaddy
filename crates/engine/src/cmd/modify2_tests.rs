@@ -754,3 +754,18 @@ fn offset_polyline_arc_bulge_follows_joined_endpoints() {
     assert!(near(arc.center, 10.0, 5.0), "arc centre drifted to {:?}", arc.center);
     assert!((arc.radius - 4.0).abs() < 1e-6, "radius {}", arc.radius);
 }
+
+#[test]
+fn offset_elliptical_arc_follows_picked_side() {
+    let max_x = |side: Value| {
+        let mut s = Session::new();
+        let e = h(&s.execute("ellipse", &json!({"center": [0, 0], "major": [10, 0], "ratio": 0.5, "start": 0, "end": 90})).unwrap());
+        s.execute("offset", &json!({"handle": e, "distance": 1, "side": side})).unwrap();
+        let p = poly(&last(&s));
+        p.vertices.iter().map(|v| v.p.x).fold(f64::MIN, f64::max)
+    };
+    let centre = max_x(json!([0, 0]));
+    assert!((centre - 9.0).abs() < 0.05, "centre side went outward: max x = {centre}");
+    let outer = max_x(json!([20, 20]));
+    assert!((outer - 11.0).abs() < 0.05, "outer side went inward: max x = {outer}");
+}

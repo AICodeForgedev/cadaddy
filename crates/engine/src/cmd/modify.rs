@@ -586,10 +586,14 @@ pub(crate) fn offset_kind(k: &EntityKind, dist: f64, side: Vec2) -> Option<Entit
         EntityKind::Ellipse(e) => {
             // Approximate with a polyline offset of the tessellation.
             let ge = cadcraft_geom::Ellipse { center: e.center.xy(), major: e.major.xy(), ratio: e.ratio, start: e.start, end: e.end };
+            // Inside = on the centre side of the full ellipse, even for an open arc.
             let inside = {
-                let mut pts = Vec::new();
-                ge.tessellate(e.major.xy().len() * 1e-3, &mut pts);
-                cadcraft_geom::point_in_polygon(&pts, side)
+                let a = e.major.xy().len();
+                let b = a * e.ratio.abs();
+                let u = e.major.xy().normalized();
+                let d = side - e.center.xy();
+                let (x, y) = (d.dot(u) * b, d.dot(u.perp()) * a);
+                x * x + y * y < (a * b) * (a * b)
             };
             // offset_points shifts along the left normal, which points into a counter-clockwise ellipse.
             let mut pts = Vec::new();
