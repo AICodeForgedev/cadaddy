@@ -26,7 +26,7 @@ pub use pick::{Hit, pick};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules};
 pub use spec::{
     Band, BandKind, BuildingSpec, CeilingArea, CeilingGrid, CeilingItem, Cricket, Described, Equipment, Exterior, Facade, Family, FamilyKind, Issue,
-    ItemKind, LayerRole, Rcp, Role, Roof, RoofSlope, Room, SPEC_VERSION, Side, Site, Soffit, Stair, Surfaces, WallFrom, WallType, feet, inches,
-    level_at, merge, pitch_text,
+    ItemKind, LayerRole, Mep, MepKind, MepRun, MepSystem, Rcp, Role, Roof, RoofSlope, Room, SPEC_VERSION, Side, Site, Soffit, Stair, Surfaces,
+    WallFrom, WallType, feet, inches, level_at, merge, pitch_text,
 };
 pub use walker::Walker;

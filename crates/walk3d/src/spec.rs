@@ -60,6 +60,9 @@ pub struct BuildingSpec {
     /// Ceilings, soffits and what is set in them, from the reflected ceiling plans.
     #[serde(default, skip_serializing_if = "Rcp::is_empty")]
     pub rcp: Rcp,
+    /// Duct, pipe and conduit systems and their runs.
+    #[serde(default, skip_serializing_if = "Mep::is_empty")]
+    pub mep: Mep,
     /// Devices (fixture and device layers): types, mounting heights, attributes.
     #[serde(default)]
     pub devices: DeviceRules,
@@ -334,6 +337,63 @@ pub struct Equipment {
     pub level: String,
     pub outline: Vec<[f64; 2]>,
     pub height_ft: f64,
+}
+
+/// Mechanical, electrical and plumbing runs drawn single-line on the plans.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Mep {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub systems: Vec<MepSystem>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<MepRun>,
+}
+
+impl Mep {
+    pub fn is_empty(&self) -> bool {
+        self.systems.is_empty() && self.runs.is_empty()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MepKind {
+    Duct,
+    Pipe,
+    Conduit,
+}
+
+/// A system: the layers its runs are drawn on, what they are, their usual size and height, and
+/// whether the model shows it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MepSystem {
+    pub name: String,
+    pub layer: String,
+    pub kind: MepKind,
+    /// Width and height, inches (height 0: round, width = diameter).
+    pub size_in: [f64; 2],
+    /// Bottom above the floor, feet.
+    pub bottom_ft: f64,
+    #[serde(default = "yes")]
+    pub show: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// A run: its plan path (sheet units), its size, and the bottom height of each segment (a change
+/// between two is a drop at their corner).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MepRun {
+    pub system: String,
+    pub level: String,
+    pub points: Vec<[f64; 2]>,
+    pub size_in: [f64; 2],
+    pub bottoms_ft: Vec<f64>,
+    /// The plan objects it was read from (hex handles).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objects: Vec<String>,
 }
 
 /// What the reflected ceiling plans say, on the floor plans' coordinates.
@@ -687,6 +747,25 @@ impl BuildingSpec {
                 format!("In the ceilings: {} light fixtures, {} diffusers", n(ItemKind::Fixture), n(ItemKind::Diffuser)),
             );
         }
+        for sy in &self.mep.systems {
+            let n = self.mep.runs.iter().filter(|r| r.system == sy.name).count();
+            let size = if sy.size_in[1] > 0.0 {
+                format!("{}x{}", inches(sy.size_in[0]).trim_end_matches('"'), inches(sy.size_in[1]))
+            } else {
+                format!("{} round", inches(sy.size_in[0]))
+            };
+            let kind = match sy.kind {
+                MepKind::Duct => "duct",
+                MepKind::Pipe => "pipe",
+                MepKind::Conduit => "conduit",
+            };
+            let hidden = if sy.show { "" } else { ", hidden" };
+            put(
+                "mep",
+                format!("systems/{}", sy.name),
+                format!("{}: {kind} on {}, {n} runs, usually {size} with its bottom at {}{hidden}", sy.name, sy.layer, feet(sy.bottom_ft)),
+            );
+        }
         for e in &self.exterior.equipment {
             put("exterior", format!("equipment/{}", e.name), format!("{}: rooftop equipment on {}, {} high", e.name, e.level, feet(e.height_ft)));
         }
@@ -742,6 +821,7 @@ impl BuildingSpec {
             stairs: Vec::new(),
             exterior: Exterior::default(),
             rcp: Rcp::default(),
+            mep: Mep::default(),
             devices: r.devices.clone(),
             device_sheets: r.device_sheets.clone(),
             openings: r.openings.clone(),
@@ -1035,6 +1115,32 @@ impl BuildingSpec {
                 out.push(Issue::error(format!("exterior.equipment[{i}]"), "equipment needs a level, an outline and a height from 0 to 100 feet"));
             }
         }
+        for (i, sy) in self.mep.systems.iter().enumerate().take(MAX_ITEMS) {
+            if sy.name.trim().is_empty()
+                || sy.layer.trim().is_empty()
+                || !(sy.size_in.iter().all(|v| fin(*v) && *v >= 0.0 && *v <= 240.0) && sy.size_in[0] > 0.0)
+                || !fin(sy.bottom_ft)
+            {
+                out.push(Issue::error(format!("mep.systems[{i}]"), "a system needs a name, a layer, a size (0–240\") and a height"));
+            }
+        }
+        for (i, r) in self.mep.runs.iter().enumerate().take(100_000) {
+            let at = format!("mep.runs[{i}]");
+            if !self.mep.systems.iter().any(|s| s.name == r.system) {
+                out.push(Issue::error(format!("{at}.system"), format!("there is no system named {}", r.system)));
+            }
+            if self.level(&r.level).is_none() {
+                out.push(Issue::error(format!("{at}.level"), format!("there is no level named {}", r.level)));
+            }
+            if r.points.len() < 2
+                || r.bottoms_ft.len() + 1 != r.points.len()
+                || !r.points.iter().flatten().chain(r.bottoms_ft.iter()).chain(r.size_in.iter()).all(|v| fin(*v))
+                || r.size_in[0].is_nan()
+                || r.size_in[0] <= 0.0
+            {
+                out.push(Issue::error(at, "a run needs 2 points or more, a size and one bottom height per segment"));
+            }
+        }
         for (i, c) in self.rcp.ceilings.iter().enumerate().take(MAX_ITEMS) {
             let at = format!("rcp.ceilings[{i}]");
             if self.level(&c.level).is_none() || !outline_ok(&c.outline) {
@@ -1176,7 +1282,7 @@ pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
                 }
                 let key = match k.as_str() {
                     "layers" => Some("layer"),
-                    "levels" | "wall_types" | "rooms" | "families" | "stairs" => Some("name"),
+                    "levels" | "wall_types" | "rooms" | "families" | "stairs" | "systems" => Some("name"),
                     _ => None,
                 };
                 match (b.get_mut(k), key, v) {

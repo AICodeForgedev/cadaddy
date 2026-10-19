@@ -34,6 +34,7 @@ mod layer;
 pub(crate) mod layout;
 mod lisp;
 mod measuregeom;
+pub mod mep;
 mod mleader_content;
 mod mleader_edit;
 mod modify;
@@ -214,6 +215,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(draworder::specs());
         v.extend(wallgen::specs());
         v.extend(bspec::specs());
+        v.extend(mep::specs());
         v.extend(ceilings::specs());
         v.extend(exterior::specs());
         v.extend(stairs::specs());
