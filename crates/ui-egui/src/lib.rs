@@ -183,6 +183,8 @@ pub struct UiState {
     pub agent_control: bool,
     /// Drawings opened from a path, newest first (File ▸ Open Recent and the Start page).
     pub recent_files: Vec<String>,
+    /// The palette layout is mirrored for a right-to-left interface language ([`CadApp::follow_direction`]).
+    pub layout_rtl: bool,
 }
 
 /// A DXF/DWG file version (2000 … 2018).
@@ -272,6 +274,7 @@ impl Default for UiState {
             save_version: SaveVersion::default().year().to_string(),
             agent_control: true,
             recent_files: Vec::new(),
+            layout_rtl: false,
         }
     }
 }
@@ -313,6 +316,9 @@ pub struct CadApp {
     pub spacemouse: spacemouse::State,
     pub cmd: cmdline::CmdLine,
     pub status: Option<(String, f64)>,
+    /// Lay the interface out right to left (`Some(true)`) or left to right whatever the language:
+    /// for tests and screenshots on a computer without an Arabic font.
+    pub direction_override: Option<bool>,
     /// Drawings being read on worker threads ([`opening`]).
     pub opening: opening::Opening,
     pub integrated_titlebar: bool,
@@ -417,6 +423,7 @@ impl CadApp {
             spacemouse: spacemouse::State::default(),
             cmd: cmdline::CmdLine::default(),
             status: None,
+            direction_override: None,
             opening: opening::Opening::default(),
             integrated_titlebar: false,
             os_title: String::new(),
@@ -468,6 +475,21 @@ impl CadApp {
 
     /// The interface language shown: the chosen one, or English when this computer has no font
     /// for it (Chinese or Korean without a suitable font would be boxes).
+    /// The interface reads right to left (Arabic): the palettes swap sides, the ribbon, menu bar
+    /// and command line run from the right. The drawing itself stays as drawn.
+    pub fn rtl(&self) -> bool {
+        self.direction_override.unwrap_or_else(|| i18n::is_rtl(self.language()))
+    }
+
+    /// Mirror the palette layout when the interface changes reading direction.
+    pub fn follow_direction(&mut self) {
+        let rtl = self.rtl();
+        if rtl != self.ui.layout_rtl {
+            self.ui.docking = self.ui.docking.mirrored();
+            self.ui.layout_rtl = rtl;
+        }
+    }
+
     pub fn language(&self) -> &'static str {
         let l = self.ui.interface_language.resolve(&self.system_languages);
         if theme::can_show(l) { l } else { "en" }
@@ -815,6 +837,7 @@ impl CadApp {
 
     pub fn logic(&mut self, ctx: &egui::Context) {
         let _busy = diag::busy("logic");
+        self.follow_direction();
         // FILEDIA 0: no native file dialogs (the commands ask on the command line).
         FILE_DIALOGS_OFF
             .store(cadaddy_engine::sysvars::get(&self.session, "FILEDIA").and_then(|v| v.as_i64()) == Some(0), std::sync::atomic::Ordering::Relaxed);
