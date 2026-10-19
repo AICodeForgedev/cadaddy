@@ -384,10 +384,13 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
         "dxf" | "" => {
             let tags = dxf_write::tags(d, version);
             check_reopens("DXF", tags.len(), tag_caps().0)?;
-            Ok(if opts.binary {
-                cadaddy_dxf::write_binary(&tags, version.utf8())
-            } else {
-                cadaddy_dxf::write_ascii_as(&tags, version.utf8()).into_bytes()
+            // Before 2007 the text is in the code page the header declares.
+            let code_page = dxf_write::code_page(d, version);
+            Ok(match (opts.binary, version.utf8()) {
+                (true, true) => cadaddy_dxf::write_binary(&tags, true),
+                (true, false) => cadaddy_dxf::write_binary_in(&tags, &code_page),
+                (false, true) => cadaddy_dxf::write_ascii_as(&tags, true).into_bytes(),
+                (false, false) => cadaddy_dxf::write_ascii_in(&tags, &code_page),
             })
         }
         // The DWG bridge reads our R2000 DXF and writes the DWG at the version asked for. Without
