@@ -151,6 +151,7 @@ fn section_title(s: &str) -> &'static str {
         "families" => "Door and Window Families",
         "materials" => "Materials",
         "site" => "Site",
+        "stairs" => "Stairs and Ramps",
         _ => "Openings",
     }
 }

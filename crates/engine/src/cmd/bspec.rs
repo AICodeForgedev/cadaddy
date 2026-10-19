@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
             .noundo(),
         CommandSpec::new("model.build", "Build Model from Spec", run_build).params(
-            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, levels, removed, notes, warnings}",
+            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, levels, removed, notes, warnings}",
         ),
     ]
 }
@@ -102,16 +102,15 @@ pub(crate) fn validate(d: &Drawing, sp: &BuildingSpec) -> Vec<Issue> {
         } else if !ents.iter().any(|e| sp.role(&e.common.layer).is_some_and(|x| std::ptr::eq(x, r))) {
             out.push(Issue::warning(&at, format!("nothing is drawn on {}", r.layer)));
         }
-        if matches!(r.role, Role::Stair | Role::CeilingGrid) {
+        if (r.role == Role::Stair && sp.stairs.is_empty()) || r.role == Role::CeilingGrid {
             let hs: Vec<Handle> = ents.iter().filter(|e| sp.role(&e.common.layer).is_some_and(|x| std::ptr::eq(x, r))).map(|e| e.handle).collect();
             if !hs.is_empty() {
-                let what = if r.role == Role::Stair { "stairs" } else { "ceiling grids" };
-                out.push(Issue {
-                    error: false,
-                    path: at,
-                    message: format!("{what} aren't built yet ({} objects on {})", hs.len(), r.layer),
-                    handles: hs,
-                });
+                let message = if r.role == Role::Stair {
+                    format!("{} objects on {} but no stairs in the spec (stairs.detect finds them)", hs.len(), r.layer)
+                } else {
+                    format!("ceiling grids aren't built yet ({} objects on {})", hs.len(), r.layer)
+                };
+                out.push(Issue { error: false, path: at, message, handles: hs });
             }
         }
     }
@@ -440,6 +439,8 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
             }
         }
     }
+    // Stairs, ramps and their handrails.
+    let (stairs, ramps, railings) = super::stairs::build(d, &sp);
     // Materials: the room's for its ceiling, else the building's for the part.
     let made: Vec<(Handle, String)> = d.model.iter().filter_map(|e| wallgen::made_as(e).map(|p| (e.handle, p))).collect();
     for (h, part) in made {
@@ -448,9 +449,13 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
         let v = format!("material:{}", mat.chars().take(240).collect::<String>());
         let _ = d.modify_entity(h, |e| e.common.xdata.push(RawTag { code: 1000, value: v }));
     }
-    for role in sp.layers.iter().filter(|r| matches!(r.role, Role::Stair | Role::CeilingGrid)) {
+    for role in sp.layers.iter().filter(|r| (r.role == Role::Stair && sp.stairs.is_empty()) || r.role == Role::CeilingGrid) {
         if plan.iter().any(|e| sp.role(&e.common.layer).is_some_and(|x| std::ptr::eq(x, role))) {
-            notes.push(format!("{}: {} aren't built yet.", role.layer, if role.role == Role::Stair { "stairs" } else { "ceiling grids" }));
+            notes.push(if role.role == Role::Stair {
+                format!("{}: stairs are drawn but the spec has none (stairs.detect finds them).", role.layer)
+            } else {
+                format!("{}: ceiling grids aren't built yet.", role.layer)
+            });
         }
     }
     let ceilings_now = r["ceilings"].as_u64().unwrap_or(0).saturating_sub(level_ceilings.len() as u64) + ceilings;
@@ -462,6 +467,9 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     r["columns"] = json!(columns);
     r["curtainWalls"] = json!(curtain);
     r["ground"] = json!(ground);
+    r["stairs"] = json!(stairs);
+    r["ramps"] = json!(ramps);
+    r["railings"] = json!(railings);
     r["removed"] = json!(removed);
     Ok(r)
 }

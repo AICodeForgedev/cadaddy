@@ -14,6 +14,7 @@ mod dxf_image;
 mod dxf_material;
 mod dxf_mesh;
 mod dxf_mleader;
+mod dxf_r12;
 mod dxf_read;
 mod dxf_solid;
 mod dxf_table;
@@ -112,6 +113,11 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
     let version = opts.version.unwrap_or_else(|| save_version(d));
     match ext(name).as_str() {
         "cdy" if !opts.binary => cdy::write_cdy(d),
+        "dxf" | "" if version == Version::R12 => {
+            let tags = dxf_r12::tags(d);
+            Ok(if opts.binary { cadaddy_dxf::write_binary(&tags, false) } else { cadaddy_dxf::write_ascii_as(&tags, false).into_bytes() })
+        }
+        _ if version == Version::R12 => Err(IoError::Format("Release 12 is a DXF version: save a .dxf file".into())),
         "dxf" | "" => {
             let tags = dxf_write::tags(d, version);
             Ok(if opts.binary {

@@ -60,7 +60,7 @@ pub const MAX_SAMPLES: u32 = 65_536;
 pub const MAX_BOUNCES: u32 = 32;
 
 /// `f` over `range`, in parallel where threads are available (not in the browser).
-fn par_map<T: Send>(range: std::ops::Range<usize>, f: impl Fn(usize) -> T + Sync + Send) -> Vec<T> {
+pub(crate) fn par_map<T: Send>(range: std::ops::Range<usize>, f: impl Fn(usize) -> T + Sync + Send) -> Vec<T> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
@@ -435,7 +435,7 @@ fn basis(n: Vec3) -> (Vec3, Vec3) {
 }
 
 /// A direction around `n` with density cos θ / π.
-fn cosine_dir(n: Vec3, r1: f64, r2: f64) -> Vec3 {
+pub fn cosine_dir(n: Vec3, r1: f64, r2: f64) -> Vec3 {
     let (t, b) = basis(n);
     let phi = std::f64::consts::TAU * r1;
     let r = r2.sqrt();
@@ -500,7 +500,7 @@ impl Render {
     }
 
     /// The light along one path from the pixel's ray.
-    fn path(&self, mut o: Vec3, mut d: Vec3, rng: &mut Rng, row_t: f32) -> PathOut {
+    fn path(&self, mut o: Vec3, mut d: Vec3, rng: &mut Rng, row_t: f32, dome: bool) -> PathOut {
         let mut l = [0.0f32; 3];
         let mut thr = [1.0f32; 3];
         let mut first = None;
@@ -510,7 +510,7 @@ impl Render {
             steps += 1;
             let Some(hit) = self.bvh.intersect(o, d, self.far * 2.0) else {
                 // Leaving: the sky (behind the view, its gradient; elsewhere, the dome).
-                let sky = if bounce == 0 { crate::light::background(&self.lit, row_t) } else { sky_only(&self.lit, d) };
+                let sky = if bounce == 0 && !dome { crate::light::background(&self.lit, row_t) } else { sky_only(&self.lit, d) };
                 for i in 0..3 {
                     l[i] += thr[i] * sky[i];
                 }
@@ -602,6 +602,17 @@ impl Render {
         PathOut { rgb: l.map(|x| if x.is_finite() { x.max(0.0) } else { 0.0 }), first }
     }
 
+    /// The light arriving at `o` from direction `-d` along one path (a ray that leaves sees the
+    /// sky dome, not the view's background): for baking light onto surfaces.
+    pub fn radiance(&self, o: Vec3, d: Vec3, rng: &mut Rng) -> [f32; 3] {
+        self.path(o, d, rng, 0.5, true).rgb
+    }
+
+    /// The scene's size (for offsets off surfaces).
+    pub fn epsilon(&self) -> f64 {
+        self.eps
+    }
+
     /// Add one sample to every pixel (in the crop).
     pub fn pass(&mut self) {
         let start = std::time::Instant::now();
@@ -621,7 +632,7 @@ impl Render {
                     let sx = (x as f64 + jx - w as f64 / 2.0) * px + v.center.x;
                     let sy = (h as f64 / 2.0 - y as f64 - jy) * px + v.center.y;
                     let o = v.right * sx + v.up * sy + v.dir * this.far;
-                    this.path(o, v.dir * -1.0, &mut rng, row_t)
+                    this.path(o, v.dir * -1.0, &mut rng, row_t, false)
                 })
                 .collect();
             (y, outs)

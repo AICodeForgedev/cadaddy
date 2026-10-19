@@ -108,13 +108,14 @@ fn filedia_0_asks_on_the_command_line() {
     app.cmdline("open");
     assert_eq!(picks.get(), 1, "FILEDIA 1: the picker");
     app.cmdline("filedia 0");
-    for (c, ask) in [("open", "Enter name of drawing to open"), ("saveas", "Save drawing as"), ("attach", "Enter name of file to attach")] {
+    for (c, ask) in [("open", "Enter name of drawing to open"), ("saveas", "File format"), ("attach", "Enter name of file to attach")] {
         app.cmdline(c);
         assert!(app.session.prompt_text().contains(ask), "{c}: {}", app.session.prompt_text());
-        app.cmdline("");
+        // Esc: Enter at SAVEAS's format prompt keeps the format and asks on.
+        let _ = app.session.input(cadaddy_engine::Input::Cancel);
         menus::activate(&mut app, c);
         assert!(app.session.prompt_text().contains(ask), "{c} from the menu: {}", app.session.prompt_text());
-        app.cmdline("");
+        let _ = app.session.input(cadaddy_engine::Input::Cancel);
     }
     assert_eq!(picks.get(), 1, "no more pickers");
 }

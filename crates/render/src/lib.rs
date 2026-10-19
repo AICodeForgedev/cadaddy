@@ -14,6 +14,7 @@ mod hatch;
 pub mod hlr;
 pub mod images;
 pub mod light;
+pub mod lightmap;
 mod linetype;
 mod linetype_text;
 pub mod live;
@@ -44,7 +45,7 @@ pub use dim::{
     ArrowGeom, Arrowhead, DimGeometry, DimText, LineRole, arrowhead, dimension_geometry, dimension_geometry_with, format_linear_value, right_to_left,
 };
 pub use fill::triangulate_evenodd;
-pub use hatch::{fill_loops as hatch_fill_loops, pattern_swatch};
+pub use hatch::{fill_loops as hatch_fill_loops, pattern_lines as hatch_pattern_lines, pattern_swatch};
 pub use paper::{PAPER_SIZES, PaperSize, Sheet, paper_size, sheet};
 pub use solid::solid_mesh;
 pub use tolerance::{gdt_points, tolerance_in};

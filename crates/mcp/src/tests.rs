@@ -440,3 +440,30 @@ fn headless_typed_lisp_runs_to_its_end() {
     assert!(!r.to_string().contains("already running"), "{r}");
     assert!(r.to_string().contains('3'), "{r}");
 }
+
+#[test]
+fn stairs_tool_detects_lists_and_confirms() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    tool(&mut s, "execute", json!({"command": "layer.new", "params": {"name": "A-FLOR-STRS", "current": true}}));
+    for i in 0..=18 {
+        let x = 100.0 + 11.0 * f64::from(i);
+        tool(&mut s, "execute", json!({"command": "line", "params": {"points": [[x, 0.0], [x, 44.0]]}}));
+    }
+    tool(&mut s, "execute", json!({"command": "text", "params": {"at": [70, 20], "text": "UP", "height": 6}}));
+    tool(
+        &mut s,
+        "execute",
+        json!({"command": "bspec.set", "params": {"replace": true, "spec": {
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12}, {"name": "L2", "elevation_ft": 12, "height_ft": 12, "region": [5000, 0, 6000, 1000]}],
+        "layers": [{"layer": "A-FLOR-STRS", "role": "stair"}]}}}),
+    );
+    let found = tool(&mut s, "stairs", json!({"action": "detect", "store": true}));
+    assert_eq!(found["stairs"][0]["risers"], 19, "{found}");
+    let listed = tool(&mut s, "stairs", json!({"action": "list"}));
+    assert_eq!(listed["stairs"][0]["confirmed"], false);
+    tool(&mut s, "stairs", json!({"action": "confirm", "all": true}));
+    assert_eq!(tool(&mut s, "stairs", json!({"action": "list"}))["stairs"][0]["confirmed"], true);
+    let r = call(&mut s, 7, "tools/call", json!({"name": "stairs", "arguments": {}}));
+    assert_eq!(r["error"]["code"], -32602, "action is required: {r}");
+}

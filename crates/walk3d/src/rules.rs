@@ -21,6 +21,9 @@ pub struct Rules {
     /// Doors, windows and cased openings found in the walls (see [`Openings`]).
     #[serde(default)]
     pub openings: Openings,
+    /// Stairs and ramps between the levels (the building spec's `stairs`, heights worked out).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stairs: Vec<crate::stairs::StairRule>,
 }
 
 /// How the gaps between two pieces of one wall are filled: a door (a swing arc at a jamb) gets a
@@ -192,6 +195,7 @@ impl Rules {
             devices: DeviceRules::default(),
             device_sheets: Vec::new(),
             openings: Openings::default(),
+            stairs: Vec::new(),
         }
     }
 

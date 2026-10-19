@@ -86,6 +86,7 @@ pub fn entity_codec() -> Option<&'static EntityCodec> {
 
 /// COMPARE (drawing comparison).
 pub mod compare;
+mod r12;
 pub mod zip;
 
 /// Hand finished file bytes to the user where there is no file system (the browser: a download).
@@ -289,9 +290,11 @@ pub fn pdf_merge() -> Option<PdfMergeHook> {
     PDF_MERGE.get().copied()
 }
 
-/// The versions a drawing can be saved in, for messages ("2000, 2004, …, 2018").
+/// The versions a drawing can be saved in, for messages ("2000, 2004, …, 2018, 12 (DXF)").
 fn version_list() -> String {
-    Version::ALL.iter().map(|v| v.year()).collect::<Vec<_>>().join(", ")
+    let mut v: Vec<&str> = Version::ALL.iter().map(|v| v.year()).collect();
+    v.push("12 (DXF)");
+    v.join(", ")
 }
 
 /// The `version` and `binary` parameters of a save: a version is a year (2018 or "2018"), "R2018"
@@ -332,7 +335,14 @@ fn write_bytes(s: &Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Vec<
     }
     // A drawing file is the drawing outside the Block Editor; an image is what is shown.
     let d: &cadaddy_doc::Drawing = if is_drawing_file(path) { s.state()?.drawing() } else { s.doc()? };
-    let r = if *opts == SaveAs::default() {
+    let r = if opts.version == Some(Version::R12) {
+        // Release 12 DXF: the drawing brought down to what R12 holds first.
+        if !is_dxf(path) {
+            return Err(bad(cmd, "Release 12 is a DXF version: save a .dxf file"));
+        }
+        let w = write_as().ok_or_else(|| bad(cmd, "saving at a chosen version or as binary DXF is not available in this build"))?;
+        w(&r12::downgrade(d).0, path, opts)
+    } else if *opts == SaveAs::default() {
         (hooks.write)(d, path)
     } else {
         let w = write_as().ok_or_else(|| bad(cmd, "saving at a chosen version or as binary DXF is not available in this build"))?;
@@ -363,9 +373,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("saveas", "Save As...", run_saveas_reporting)
             .menu(&["File", "Save As..."])
             .key("Cmd+Shift+S")
-            .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), binary?: bool (DXF)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved}")
+            .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), 12 (Release 12 DXF: newer objects converted, some left out), binary?: bool (DXF)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved}")
             .noundo()
-            .interactive(|_| Ok(Box::new(FileM { name: "SAVEAS", message: "Save drawing as", run: run_saveas_reporting }))),
+            .interactive(|_| Ok(Box::new(SaveAsM::default()))),
         CommandSpec::new("document.switch", "Switch Drawing", run_switch)
             .params("{index} | {path} | {title}: the open drawing to make current (path and title in any case)")
             .enabled(always)
@@ -1174,7 +1184,16 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
     let path = str_param(p, "path").map(str::to_string).or_else(|| s.state().ok().and_then(|st| st.path.clone())).unwrap_or_default();
     let version = save_options("save", p).ok().and_then(|o| o.version).unwrap_or_else(|| drawing_version(s, &path));
     let lost = s.doc().map(|d| not_saved_as(d, version)).unwrap_or_default();
+    // Release 12 has no form for some objects (the rest are converted to R12 ones).
+    let r12_lost = if version == Version::R12 { s.doc().map(|d| r12::downgrade(d).1).unwrap_or_default() } else { Default::default() };
     let mut r = run(s, p)?;
+    if !r12_lost.is_empty() && r.get("path").and_then(Value::as_str).is_some_and(is_dxf) {
+        let list: Vec<String> = r12_lost.iter().map(|(t, n)| format!("{n} {t}")).collect();
+        s.echo(format!("Not saved in the Release 12 DXF file (R12 has no such objects): {}", list.join(", ")));
+        if let Some(o) = r.as_object_mut() {
+            o.insert("notSaved".into(), json!(r12_lost));
+        }
+    }
     if r.get("path").and_then(Value::as_str).is_some_and(drops_unknown) {
         report_not_saved(s, &mut r, &lost);
     }
@@ -1368,6 +1387,123 @@ mod pr193_tests {
         assert!(!st.is_dirty());
         assert_eq!((st.path.as_deref(), st.title.as_str()), (Some("a/Owned.dxf"), "Owned.dxf"));
         assert_eq!(saved("a/Owned.dxf", &Saved { bytes: n, copy: None, incremental: false })["bytes"], 6);
+    }
+}
+
+/// SAVEAS typed with FILEDIA 0 (or without a file picker): the file format, its version for
+/// DWG and DXF (Release 12 too, for DXF), then the file name, each with the current one as the
+/// default (Enter keeps it).
+#[derive(Default)]
+pub(crate) struct SaveAsM {
+    /// The format chosen (`cdy`, `dwg`, `dxf`, `dwt`, `dws`); `None` until asked.
+    format: Option<&'static str>,
+    /// The version chosen; asked after a DWG-type format.
+    version: Option<Version>,
+}
+
+/// The formats SAVEAS offers on the command line: (extension, keyword).
+const SAVE_FORMATS: [(&str, &str); 5] = [("cdy", "Cdy"), ("dwg", "Dwg"), ("dxf", "dXf"), ("dwt", "Template"), ("dws", "Standards")];
+
+impl SaveAsM {
+    /// The drawing's current format and version (what Enter keeps).
+    fn current(s: &Session) -> (&'static str, Version) {
+        let path = s.state().ok().and_then(|st| st.path.clone()).unwrap_or_default();
+        let ext = std::path::Path::new(&path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        let fmt = SAVE_FORMATS.iter().map(|(e, _)| *e).find(|e| *e == ext).unwrap_or_else(default_ext);
+        (fmt, drawing_version(s, &format!("x.{fmt}")))
+    }
+
+    /// The suggested file: the drawing's file (or its title) with the chosen extension.
+    fn suggested(s: &Session, fmt: &str) -> String {
+        let base = s.state().ok().map(|st| st.path.clone().unwrap_or_else(|| st.title.clone())).unwrap_or_else(|| "Drawing".into());
+        std::path::Path::new(&base).with_extension(fmt).to_string_lossy().into_owned()
+    }
+
+    fn versions(fmt: &str) -> Vec<&'static str> {
+        let mut v: Vec<&'static str> = Version::ALL.iter().rev().map(|v| v.year()).collect();
+        if fmt == "dxf" {
+            v.push("R12");
+        }
+        v
+    }
+}
+
+impl crate::Interactive for SaveAsM {
+    fn name(&self) -> &'static str {
+        "SAVEAS"
+    }
+    fn prompt(&self, s: &Session) -> crate::Prompt {
+        let (cur_fmt, cur_ver) = Self::current(s);
+        let mut p = match (self.format, self.version) {
+            (None, _) => {
+                crate::Prompt::new(format!("Current format: {} {}. File format", cur_fmt.to_ascii_uppercase(), cur_ver.year()), crate::Accept::TEXT)
+                    .kw(&SAVE_FORMATS.map(|(_, k)| k))
+            }
+            (Some(fmt), None) if fmt != "cdy" => crate::Prompt::new("Version", crate::Accept::TEXT).kw(&Self::versions(fmt)),
+            (Some(fmt), _) => crate::Prompt::new("Save drawing as", crate::Accept::TEXT).default(Self::suggested(s, fmt)),
+        };
+        if p.default.is_none() {
+            p.default = Some(match self.format {
+                None => SAVE_FORMATS.iter().find(|(e, _)| *e == cur_fmt).map_or("Cdy", |(_, k)| *k).to_string(),
+                Some(_) => cur_ver.year().to_string(),
+            });
+        }
+        p
+    }
+    fn input(&mut self, s: &mut Session, i: crate::Input) -> Result<crate::Step> {
+        use crate::{Input, Step};
+        let text = match i {
+            Input::Cancel => return Ok(Step::Cancel),
+            Input::Enter => None,
+            Input::Text(t) | Input::Keyword(t) => Some(t.trim().trim_matches('"').to_string()).filter(|t| !t.is_empty()),
+            _ => return Ok(Step::Continue),
+        };
+        let (cur_fmt, cur_ver) = Self::current(s);
+        match self.format {
+            None => {
+                let t = text.map(|t| t.to_ascii_lowercase());
+                let fmt = match t.as_deref() {
+                    None => Some(cur_fmt),
+                    // The extension or the keyword (the command line expands a keyword's letters).
+                    Some(t) => SAVE_FORMATS.iter().find(|(e, k)| *e == t || k.eq_ignore_ascii_case(t)).map(|(e, _)| *e),
+                };
+                match fmt {
+                    Some(f) => {
+                        self.format = Some(f);
+                        if f == "cdy" {
+                            self.version = Some(cur_ver);
+                        }
+                        Ok(Step::Continue)
+                    }
+                    None => Err(bad("saveas", "choose a file format: CDY, DWG, DXF, Template (DWT) or Standards (DWS)")),
+                }
+            }
+            Some(fmt) if self.version.is_none() => {
+                let v = match &text {
+                    None => Some(if fmt == "dxf" || cur_ver != Version::R12 { cur_ver } else { Version::default() }),
+                    Some(t) => Version::parse(t).filter(|v| *v != Version::R12 || fmt == "dxf"),
+                };
+                match v {
+                    Some(v) => {
+                        self.version = Some(v);
+                        Ok(Step::Continue)
+                    }
+                    None => Err(bad("saveas", format!("choose a version: {}", Self::versions(fmt).join(", ")))),
+                }
+            }
+            Some(fmt) => {
+                let mut path = text.unwrap_or_else(|| Self::suggested(s, fmt));
+                if std::path::Path::new(&path).extension().is_none() {
+                    path = format!("{path}.{fmt}");
+                }
+                let mut p = json!({ "path": path });
+                if let Some(v) = self.version.filter(|_| fmt != "cdy") {
+                    p["version"] = json!(v.year());
+                }
+                run_saveas_reporting(s, &p)?;
+                Ok(Step::Done)
+            }
+        }
     }
 }
 

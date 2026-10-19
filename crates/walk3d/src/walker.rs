@@ -9,6 +9,9 @@ use cadaddy_doc::geom::Vec2;
 
 /// Body radius against walls, feet.
 const RADIUS: f64 = 0.9;
+/// Highest step up the walker takes, and how far it steps down without falling, feet (a
+/// riser is at most 7¾"; a ramp's surface moves less per sub-step).
+const STEP_UP: f64 = 1.5;
 /// Longest move in one step, feet (a stalled frame must not throw the walker across the building).
 const MAX_STRIDE: f64 = 50.0;
 /// Gravity, feet per second².
@@ -171,11 +174,38 @@ impl Walker {
         let n = ((d.len() / (RADIUS * 0.5)).ceil() as usize).clamp(1, 512);
         let part = d * (1.0 / n as f64);
         let mut p = Vec2 { x: self.eye.x, y: self.eye.y };
+        let mut z = self.eye.z - self.eye_height;
+        if !z.is_finite() {
+            z = scene.levels.get(self.level).map(|l| l.elevation_ft).unwrap_or(0.0);
+        }
         for _ in 0..n {
             p = self.collide(scene, p + part);
+            z = self.ground(scene, p, z);
         }
-        let floor = scene.levels.get(self.level).map(|l| l.elevation_ft).unwrap_or(0.0);
-        self.eye = v3(p.x, p.y, floor + self.eye_height);
+        self.eye = v3(p.x, p.y, z + self.eye_height);
+    }
+
+    /// Where the feet go at `p` from height `z`: a stair or ramp within a step up or down (the
+    /// one nearest; a floor has an opening where a stair rises through it), else a level's floor
+    /// within a step, else the highest one below (stepping off a stair's side falls to it). On a
+    /// level's floor the walker is on that level (its walls stop it).
+    fn ground(&mut self, scene: &Scene, p: Vec2, z: f64) -> f64 {
+        let floors = scene.levels.iter().enumerate().map(|(i, l)| (l.elevation_ft, Some(i)));
+        let slopes = scene.slopes.iter().filter_map(|s| s.height_at(p)).map(|h| (h, None));
+        let all: Vec<(f64, Option<usize>)> = slopes.chain(floors).filter(|(h, _)| h.is_finite()).collect();
+        let within = |h: f64| h <= z + STEP_UP && h >= z - STEP_UP;
+        let nearest =
+            |stairs: bool| all.iter().filter(|(h, l)| l.is_none() == stairs && within(*h)).min_by(|a, b| (a.0 - z).abs().total_cmp(&(b.0 - z).abs()));
+        let below = || all.iter().filter(|(h, _)| *h <= z + 1e-9).max_by(|a, b| a.0.total_cmp(&b.0));
+        match nearest(true).or_else(|| nearest(false)).or_else(below) {
+            Some((h, level)) => {
+                if let Some(l) = level {
+                    self.level = *l;
+                }
+                *h
+            }
+            None => z,
+        }
     }
 
     /// Push a body at `p` out of every wall it overlaps on this level.
@@ -250,6 +280,32 @@ mod tests {
             }],
             ..Scene::default()
         }
+    }
+
+    #[test]
+    fn the_walker_climbs_a_stair_to_the_next_level() {
+        let mut s = room();
+        let upper = LevelInfo { name: "L2".into(), elevation_ft: 22.0, ..s.levels[0].clone() };
+        s.levels.push(upper);
+        // A flight from (−8, −8) east 14' up to L2 at 22'.
+        s.slopes.push(crate::stairs::Slope { a: Vec2 { x: -8.0, y: -8.0 }, b: Vec2 { x: 6.0, y: -8.0 }, half_width: 2.0, za: 12.0, zb: 22.0 });
+        let mut w = Walker::spawn(&s, 0);
+        w.eye = v3(-9.0, -8.0, 12.0 + w.eye_height);
+        w.yaw = 0.0;
+        for _ in 0..40 {
+            w.step(&s, 0.5, 0.0, 0.0);
+        }
+        assert!((w.eye.z - (22.0 + w.eye_height)).abs() < 1e-9, "{:?}", w.eye);
+        assert_eq!(w.level, 1);
+        // Halfway back down, then off the side: it lands on L1's floor.
+        w.yaw = std::f64::consts::PI;
+        for _ in 0..16 {
+            w.step(&s, 0.5, 0.0, 0.0);
+        }
+        assert!(w.eye.z > 12.0 + w.eye_height + 1.0 && w.eye.z < 22.0 + w.eye_height);
+        w.step(&s, 0.0, 3.0, 0.0);
+        assert!((w.eye.z - (12.0 + w.eye_height)).abs() < 1e-9, "{:?}", w.eye);
+        assert_eq!(w.level, 0);
     }
 
     #[test]

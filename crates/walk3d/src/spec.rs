@@ -51,6 +51,9 @@ pub struct BuildingSpec {
     pub materials: Surfaces,
     #[serde(default)]
     pub site: Option<Site>,
+    /// Stairs and ramps between the levels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stairs: Vec<Stair>,
     /// Devices (fixture and device layers): types, mounting heights, attributes.
     #[serde(default)]
     pub devices: DeviceRules,
@@ -192,6 +195,32 @@ pub struct Family {
     /// Attribute holding the opening height in inches (head = sill + height).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height_attr: Option<String>,
+}
+
+/// A stair or ramp: the level it starts on, the level it reaches, its runs on the plan (bottom
+/// to top) and its width. `stairs.detect` fills these in from the plan; a person or an agent
+/// confirms them (`stairs.confirm`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Stair {
+    pub name: String,
+    #[serde(default)]
+    pub ramp: bool,
+    pub level: String,
+    /// The level it reaches; none = the next one up (else one floor to floor higher).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_level: Option<String>,
+    pub runs: Vec<crate::stairs::StairRun>,
+    #[serde(default = "forty_four")]
+    pub width_in: f64,
+    #[serde(default)]
+    pub confirmed: bool,
+    /// The plan objects it was found from (hex handles).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objects: Vec<String>,
+}
+
+fn forty_four() -> f64 {
+    44.0
 }
 
 /// Material names by surface; none = the renderer's default for that part.
@@ -349,7 +378,7 @@ impl BuildingSpec {
                 Role::Door => "doors".into(),
                 Role::Window => "windows".into(),
                 Role::Column => "columns, floor to wall top".into(),
-                Role::Stair => "stairs (not built yet)".into(),
+                Role::Stair => "stairs".into(),
                 Role::CeilingGrid => "ceiling grids (not built yet)".into(),
                 Role::Fixture => "fixtures".into(),
                 Role::RoomTag => "room tags".into(),
@@ -388,6 +417,29 @@ impl BuildingSpec {
                 FamilyKind::Window => format!("{} to {}", feet(f.sill_ft.unwrap_or(self.openings.window_sill_ft)), feet(head)),
             };
             put("families", format!("families/{}", f.name), format!("{}: {kind} from blocks {}, {width}, {heights}", f.name, f.block));
+        }
+        for st in &self.stairs {
+            let to = match (&st.to_level, self.stair_heights(st)) {
+                (Some(n), _) => n.clone(),
+                (None, Some((a, b))) => {
+                    self.levels.iter().find(|l| (l.elevation_ft - b).abs() < 1e-6).map_or_else(|| format!("{} up", feet(b - a)), |l| l.name.clone())
+                }
+                (None, None) => "?".into(),
+            };
+            let what = match self.stair_measures(st) {
+                Some((_, _, _, len)) if st.ramp => {
+                    let rise = self.stair_heights(st).map_or(0.0, |(a, b)| b - a);
+                    format!("ramp from {} to {to}, rising {} over {}", st.level, feet(rise), feet(len))
+                }
+                Some((n, r, t, _)) => {
+                    let runs = if st.runs.len() == 1 { "1 run".to_string() } else { format!("{} runs", st.runs.len()) };
+                    let tread = if t.is_finite() { format!(", {} treads", inches(t)) } else { String::new() };
+                    format!("stair from {} to {to}, {runs}, {n} risers of {}{tread}", st.level, inches(r))
+                }
+                None => format!("stair from {}", st.level),
+            };
+            let state = if st.confirmed { "" } else { " (detected; confirm)" };
+            put("stairs", format!("stairs/{}", st.name), format!("{}: {what}, {} wide{state}", st.name, inches(st.width_in)));
         }
         let mats = materials_text(&self.materials);
         if !mats.is_empty() {
@@ -438,6 +490,7 @@ impl BuildingSpec {
             families: Vec::new(),
             materials: Surfaces::default(),
             site: None,
+            stairs: Vec::new(),
             devices: r.devices.clone(),
             device_sheets: r.device_sheets.clone(),
             openings: r.openings.clone(),
@@ -471,7 +524,52 @@ impl BuildingSpec {
             devices: self.devices.clone(),
             device_sheets: self.device_sheets.clone(),
             openings: self.openings.clone(),
+            stairs: self.stairs.iter().filter_map(|st| self.stair_rule(st)).collect(),
         }
+    }
+
+    /// The heights a stair climbs between, feet: its level's floor, and the floor it reaches.
+    pub fn stair_heights(&self, st: &Stair) -> Option<(f64, f64)> {
+        let bottom = self.level(&st.level)?;
+        let top = match &st.to_level {
+            Some(n) => self.level(n)?.elevation_ft,
+            None => self
+                .levels
+                .iter()
+                .map(|l| l.elevation_ft)
+                .filter(|e| e.is_finite() && *e > bottom.elevation_ft + 1e-6)
+                .min_by(f64::total_cmp)
+                .unwrap_or(bottom.elevation_ft + bottom.height_ft),
+        };
+        Some((bottom.elevation_ft, top))
+    }
+
+    /// A stair as Walk mode and the build take it (heights worked out).
+    pub fn stair_rule(&self, st: &Stair) -> Option<crate::stairs::StairRule> {
+        let (z0, z1) = self.stair_heights(st)?;
+        Some(crate::stairs::StairRule {
+            name: st.name.clone(),
+            level: st.level.clone(),
+            runs: st.runs.iter().take(100).cloned().collect(),
+            width: st.width_in / 12.0 * self.units_per_foot,
+            z_bottom_ft: z0,
+            z_top_ft: z1,
+            ramp: st.ramp,
+        })
+    }
+
+    /// A stair's risers (count and inches), tread depth (inches, shallowest run) and run length
+    /// (feet), as built.
+    pub fn stair_measures(&self, st: &Stair) -> Option<(u32, f64, f64, f64)> {
+        let r = self.stair_rule(st)?;
+        let upf = if self.units_per_foot.is_finite() && self.units_per_foot > 0.0 { self.units_per_foot } else { 12.0 };
+        let len_ft = |run: &crate::stairs::StairRun| ((run.to[0] - run.from[0]).powi(2) + (run.to[1] - run.from[1]).powi(2)).sqrt() / upf;
+        let risers = r.risers();
+        let rise = r.z_top_ft - r.z_bottom_ft;
+        let riser_in = if risers > 0 { rise * 12.0 / f64::from(risers) } else { 0.0 };
+        let tread_in = st.runs.iter().filter(|x| x.treads > 0).map(|x| len_ft(x) * 12.0 / f64::from(x.treads)).fold(f64::INFINITY, f64::min);
+        let length: f64 = st.runs.iter().map(len_ft).sum();
+        Some((risers, riser_in, tread_in, length))
     }
 
     pub fn from_json(s: &str) -> Result<BuildingSpec, String> {
@@ -657,6 +755,68 @@ impl BuildingSpec {
                 out.push(Issue::warning(format!("{at}.sill_ft"), "a door has no sill; it is ignored"));
             }
         }
+        for (i, st) in self.stairs.iter().enumerate().take(MAX_ITEMS) {
+            let at = format!("stairs[{i}]");
+            if st.name.trim().is_empty() {
+                out.push(Issue::error(format!("{at}.name"), "a stair needs a name"));
+            } else if self.stairs.iter().take(i).any(|o| o.name.eq_ignore_ascii_case(&st.name)) {
+                out.push(Issue::error(format!("{at}.name"), format!("two stairs are named {}", st.name)));
+            }
+            if self.level(&st.level).is_none() {
+                out.push(Issue::error(format!("{at}.level"), format!("there is no level named {}", st.level)));
+            }
+            if let Some(n) = st.to_level.as_ref().filter(|n| self.level(n).is_none()) {
+                out.push(Issue::error(format!("{at}.to_level"), format!("there is no level named {n}")));
+            }
+            if !(fin(st.width_in) && st.width_in > 0.0 && st.width_in <= 600.0) {
+                out.push(Issue::error(format!("{at}.width_in"), "the width must be more than 0 and at most 600 inches"));
+            }
+            if st.runs.is_empty() || st.runs.len() > 100 {
+                out.push(Issue::error(format!("{at}.runs"), "a stair has 1 to 100 runs"));
+            }
+            for (j, r) in st.runs.iter().enumerate().take(100) {
+                let len = ((r.to[0] - r.from[0]).powi(2) + (r.to[1] - r.from[1]).powi(2)).sqrt();
+                if !(len.is_finite() && len > 0.0) {
+                    out.push(Issue::error(format!("{at}.runs[{j}]"), "a run must go somewhere: `from` and `to` differ"));
+                }
+                if !st.ramp && !(1..=200).contains(&r.treads) {
+                    out.push(Issue::error(format!("{at}.runs[{j}].treads"), "a stair run has 1 to 200 treads"));
+                }
+            }
+            if let Some((z0, z1)) = self.stair_heights(st) {
+                if z1 <= z0 || z1.is_nan() || z0.is_nan() {
+                    out.push(Issue::error(format!("{at}.to_level"), "it must reach a level above the one it starts on"));
+                } else if let Some((n, riser, tread, len)) = self.stair_measures(st) {
+                    if st.ramp {
+                        let slope = (z1 - z0) / len.max(1e-9);
+                        if slope > crate::stairs::RAMP_MAX_SLOPE + 1e-9 {
+                            out.push(Issue::warning(&at, format!("the ramp rises 1:{:.1}, steeper than 1:12 (IBC 1012.2)", 1.0 / slope)));
+                        }
+                    } else if n > 0 {
+                        if riser > crate::stairs::RISER_MAX_IN + 1e-9 {
+                            out.push(Issue::warning(
+                                &at,
+                                format!(
+                                    "{n} risers of {}: above the 7¾\" limit (IRC R311.7.5.1; 7\" under IBC 1011.5.2) — add treads",
+                                    inches(riser)
+                                ),
+                            ));
+                        } else if riser < crate::stairs::RISER_MIN_IN - 1e-9 {
+                            out.push(Issue::warning(
+                                &at,
+                                format!("{n} risers of {}: under the 4\" minimum (IBC 1011.5.2) — fewer treads", inches(riser)),
+                            ));
+                        }
+                        if tread.is_finite() && tread < crate::stairs::TREAD_MIN_IN - 1e-9 {
+                            out.push(Issue::warning(
+                                &at,
+                                format!("treads of {}: under the 10\" minimum (IRC R311.7.5.2; 11\" under IBC)", inches(tread)),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         if let Some(s) = &self.site {
             if !fin(s.elevation_ft) {
                 out.push(Issue::error("site.elevation_ft", "the ground elevation must be a number of feet"));
@@ -700,7 +860,7 @@ pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
                 }
                 let key = match k.as_str() {
                     "layers" => Some("layer"),
-                    "levels" | "wall_types" | "rooms" | "families" => Some("name"),
+                    "levels" | "wall_types" | "rooms" | "families" | "stairs" => Some("name"),
                     _ => None,
                 };
                 match (b.get_mut(k), key, v) {
