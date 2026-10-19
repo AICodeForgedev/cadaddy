@@ -1478,8 +1478,8 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
             }
             v
         }
-        EntityKind::LwPolyline(p) if !p.closed => {
-            let pl = Polyline { vertices: p.vertices.clone(), closed: false };
+        EntityKind::LwPolyline(p) => {
+            let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
             let segs = pl.segments();
             let total: f64 = segs.iter().map(Segment::len).sum();
             let lp = |q: Vec2| {
@@ -1496,17 +1496,28 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
                 best.1
             };
             let (mut t1, mut t2) = (lp(p1), lp(p2));
-            if t1 > t2 {
-                std::mem::swap(&mut t1, &mut t2);
+            if p.closed {
+                if (t1 - t2).abs() < 1e-9 {
+                    return Err(EngineError::Other("Cannot break a closed polyline at a single point.".into()));
+                }
+                // Like a circle: the stretch from the first point to the second, along the
+                // vertices, goes; what is left runs from the second point round to the first.
+                let doubled: Vec<Segment> = segs.iter().chain(segs.iter()).copied().collect();
+                let end = if t1 > t2 { t1 } else { t1 + total };
+                vec![lwpoly(sub_polyline(&doubled, t2, end), false)]
+            } else {
+                if t1 > t2 {
+                    std::mem::swap(&mut t1, &mut t2);
+                }
+                let mut v = Vec::new();
+                if t1 > 1e-12 {
+                    v.push(lwpoly(sub_polyline(&segs, 0.0, t1), false));
+                }
+                if t2 < total - 1e-12 {
+                    v.push(lwpoly(sub_polyline(&segs, t2, total), false));
+                }
+                v
             }
-            let mut v = Vec::new();
-            if t1 > 1e-12 {
-                v.push(lwpoly(sub_polyline(&segs, 0.0, t1), false));
-            }
-            if t2 < total - 1e-12 {
-                v.push(lwpoly(sub_polyline(&segs, t2, total), false));
-            }
-            v
         }
         _ => return Err(EngineError::Other("Cannot break that object.".into())),
     };

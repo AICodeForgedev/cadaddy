@@ -84,7 +84,7 @@ constraints 10%.
 | EXTEND | every open curve | line, arc, polyline, elliptical arc, open spline (runs on along its end tangent, `modify2/curve_edits.rs`) |
 | FILLET | lines, arcs, circles, polylines, ellipses, splines, xlines, rays; Trim/No trim | lines, arcs, circles (TTR circle), polyline mode, Trim/No trim, Multiple; elliptical arcs and splines with any of these (tangent circle from sampled offsets refined by Newton's method, `geom/src/fillet.rs`; arcs trimmed or extended round the ellipse, splines split at the touch point); two straight segments of one polyline (adjacent, or with one between that the corner replaces), a polyline's straight end segment with a line (the line joins it); not polyline arc segments, xlines or rays |
 | CHAMFER | lines, polylines, xlines, rays | lines, Distance/Angle, whole polylines (Polyline option), polyline segments as for FILLET (`modify2/fillet_pline.rs`); refuses arcs, ellipses and splines with a message, as AutoCAD; not xlines or rays |
-| BREAK | every curve | line, arc, circle, polyline |
+| BREAK | every curve | line, arc, circle, polyline; a closed polyline loses the stretch from the first to the second point along its vertices and is left open (#1173) |
 | JOIN | lines, arcs, polylines, ellipses, splines, helixes | line, arc, polyline into a polyline; elliptical arcs on one ellipse into a larger arc or the full ellipse (gaps close); splines with lines, arcs, polylines and elliptical arcs into one exact NURBS (degree elevation, rational arcs; `geom/src/nurbs.rs`); no helixes |
 | LENGTHEN | lines, arcs, polylines, elliptical arcs, splines | line, arc, polyline; elliptical arc (arc length along the ellipse); open spline (cut along the curve, or run on along its end tangent) |
 
