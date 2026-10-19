@@ -1088,6 +1088,11 @@ impl Session {
         if self.select_mode.is_some() {
             return self.select_mode_input(input);
         }
+        // `_L`, `_ALL`, `_W`: the English name of a selection keyword, as scripts write it.
+        let input = match input {
+            Input::Text(t) => Input::Text(t.trim().strip_prefix('_').map(str::to_string).unwrap_or(t)),
+            other => other,
+        };
         if let Input::Text(t) | Input::Keyword(t) = &input
             && let Some(m) = select::SelectMode::from_keyword(t)
         {
@@ -1531,7 +1536,8 @@ impl Session {
         }
         // At "Select objects" prompts the selection modes (Previous, Last, ALL) win over a command
         // keyword sharing the letter (HATCH's "picK internal point" against `P`).
-        let selection_mode = prompt.accept.select && matches!(tt.to_ascii_lowercase().as_str(), "all" | "l" | "last" | "p" | "previous");
+        let selection_mode = prompt.accept.select
+            && matches!(tt.strip_prefix('_').unwrap_or(tt).to_ascii_lowercase().as_str(), "all" | "l" | "last" | "p" | "previous");
         // A leading underscore asks for a keyword by its English name, whatever the interface
         // language (`_M`, `_Yes`): scripts and LISP routines write them that way. (Snap
         // overrides such as `_cen` were taken above.)

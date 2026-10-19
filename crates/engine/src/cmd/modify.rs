@@ -421,6 +421,8 @@ impl StretchM {
                 let d = s.doc()?;
                 let store = d.space(&s.space());
                 let word = t.trim().to_ascii_lowercase();
+                // `_C`, `_L`: the English name, as scripts write it.
+                let word = word.strip_prefix('_').unwrap_or(&word).to_string();
                 if let Some(m) = SelectMode::from_keyword(&word).filter(|m| m.kind != SelectKind::Group) {
                     self.mode = Some(m);
                     return Ok(Step::Continue);
