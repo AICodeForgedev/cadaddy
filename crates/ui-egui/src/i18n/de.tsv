@@ -1839,3 +1839,26 @@
 	Command History Palette	Palette Befehlsverlauf
 	Furnish from Plan	Aus Grundriss möblieren
 	Classify Plan	Plan klassifizieren
+	Text and multiline text	Text und Absatztext
+	Block attribute values	Blockattributwerte
+	Dimension text	Bemaßungstext
+	Tables	Tabellen
+	Multileaders	Multi-Führungslinien
+	Hyperlinks	Hyperlinks
+	Layer and block names	Layer- und Blocknamen
+	Find where:	Suchen in:
+	Current space	Aktueller Bereich
+	Plain text	Reiner Text
+	Use wildcards	Platzhalter verwenden
+	Regular expressions	Reguläre Ausdrücke
+	Look in	Suchen in
+	Zoom To	Zoom auf
+	Replace	Ersetzen
+	Create Selection Set	Auswahlsatz erstellen
+	Matches found: {count} (objects: {objects})	Gefundene Treffer: {count} (Objekte: {objects})
+	Layer name	Layername
+	Block name	Blockname
+	Revise Model from Plans	Modell aus Grundrissen überarbeiten
+	Plans to Model Benchmark	Benchmark Vom Plan zum Modell
+	Plans to Model Case	Testfall Vom Plan zum Modell
+	Plans to Model Score	Bewertung Vom Plan zum Modell

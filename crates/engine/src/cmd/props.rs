@@ -1073,7 +1073,7 @@ fn run_ptype(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
-fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let table = str_param(p, "table").unwrap_or("layer").to_ascii_lowercase();
     let from = str_param(p, "from").ok_or_else(|| bad("rename", "`from` is required"))?.to_string();
     let to = str_param(p, "to").ok_or_else(|| bad("rename", "`to` is required"))?.to_string();

@@ -233,6 +233,8 @@ pub struct DocState {
     pub cdy_saved: Option<cmd::file::CdySaved>,
     /// The drawing's associative 3D building (WALLGEN): what it builds again from.
     pub wallgen: Option<cmd::wallgen::WallGen>,
+    /// The plan the model was last built from and what that build made (`model.revise`).
+    pub model_record: Option<cmd::revise3d::ModelRecord>,
     /// What opening the drawing changed and told the user (missing current styles reset): the
     /// OPEN reply lists them with its warnings, for agents that see no command-line history.
     pub open_notes: Vec<String>,
@@ -277,6 +279,7 @@ impl DocState {
             kept_checked: false,
             cdy_saved: None,
             wallgen: None,
+            model_record: None,
             open_notes: Vec::new(),
             block_edit: None,
             lightmap: None,

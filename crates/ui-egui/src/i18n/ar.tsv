@@ -2028,3 +2028,26 @@ menu	View	عرض
 	Command History Palette	لوحة سجل الأوامر
 	Furnish from Plan	تأثيث من المخطط
 	Classify Plan	تصنيف المخطط
+	Text and multiline text	النص والنص متعدد الأسطر
+	Block attribute values	قيم سمات الكتل
+	Dimension text	نص البعد
+	Tables	الجداول
+	Multileaders	خطوط الإشارة المتعددة
+	Hyperlinks	الارتباطات التشعبية
+	Layer and block names	أسماء الطبقات والكتل
+	Find where:	البحث في:
+	Current space	المساحة الحالية
+	Plain text	نص عادي
+	Use wildcards	استخدام أحرف البدل
+	Regular expressions	التعبيرات النمطية
+	Look in	البحث داخل
+	Zoom To	تكبير إلى
+	Replace	استبدال
+	Create Selection Set	إنشاء مجموعة تحديد
+	Matches found: {count} (objects: {objects})	التطابقات: {count} (الكائنات: {objects})
+	Layer name	اسم الطبقة
+	Block name	اسم الكتلة
+	Revise Model from Plans	مراجعة النموذج من المخططات
+	Plans to Model Benchmark	معيار من المخططات إلى النموذج
+	Plans to Model Case	حالة من المخططات إلى النموذج
+	Plans to Model Score	نتيجة من المخططات إلى النموذج

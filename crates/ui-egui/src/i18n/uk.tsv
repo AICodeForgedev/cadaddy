@@ -2121,3 +2121,25 @@
 	Command History Palette	Палітра журналу команд
 	Furnish from Plan	Розставити меблі за планом
 	Classify Plan	Розпізнати план
+	Text and multiline text	Текст і багаторядковий текст
+	Block attribute values	Значення атрибутів блоків
+	Dimension text	Розмірний текст
+	Multileaders	Мультивиноски
+	Hyperlinks	Гіперпосилання
+	Layer and block names	Імена шарів і блоків
+	Find where:	Де шукати:
+	Current space	Поточний простір
+	Plain text	Звичайний текст
+	Use wildcards	Використовувати символи узагальнення
+	Regular expressions	Регулярні вирази
+	Look in	Шукати в
+	Zoom To	Показати
+	Replace	Замінити
+	Create Selection Set	Створити набір
+	Matches found: {count} (objects: {objects})	Знайдено збігів: {count} (об'єктів: {objects})
+	Layer name	Ім'я шару
+	Block name	Ім'я блоку
+	Revise Model from Plans	Оновити модель за планами
+	Plans to Model Benchmark	Тест «Від планів до моделі»
+	Plans to Model Case	Приклад «Від планів до моделі»
+	Plans to Model Score	Оцінка «Від планів до моделі»

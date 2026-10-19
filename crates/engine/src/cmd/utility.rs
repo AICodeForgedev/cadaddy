@@ -25,9 +25,15 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{mode: point|distance|angle|intersection, points: [[x,y],...]} → {value} | {point}")
             .noundo()
             .interactive(|_| Ok(Box::<PickM>::default())),
-        CommandSpec::new("find", "Find...", run_find)
+        CommandSpec::new("find", "Find...", super::find::run)
             .menu(&["Edit", "Find..."])
-            .params("{find, replace?, matchCase?: bool, wholeWord?: bool}")
+            .params(
+                "{find, replace?, mode?: plain|wildcard|regex (replace may use $0–$9), matchCase?: bool, wholeWord?: bool, \
+                 in?: drawing (default: model space and every layout) | space | selection, \
+                 include?: [text, attributes, dimensions, tables, mleaders, hyperlinks, names] (default all but names), \
+                 handles?: [h] (replace only in these), names?: [layer or block name] (rename only these), select?: bool (default true: the hits in this space selected)} \
+                 → {matches: [{handle | name, space, type, text, count}], total}",
+            )
             .interactive(|_| Ok(super::ask::machine("find", "FIND", [super::ask::ask("find", "Enter text to find", super::ask::Kind::Text)]))),
         CommandSpec::new("measuregeom", "Measure Geometry", run_measuregeom)
             .alias(&["mea"])
@@ -200,6 +206,7 @@ fn run_quickcalc_pick(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------------- FIND ----------------
 
+#[cfg(test)]
 fn replace_in(text: &str, find: &str, rep: &str, case: bool, whole: bool) -> (String, usize) {
     if find.is_empty() {
         return (text.to_string(), 0);
@@ -227,72 +234,6 @@ fn replace_in(text: &str, find: &str, rep: &str, case: bool, whole: bool) -> (St
     }
     out.push_str(text.get(last..).unwrap_or(""));
     (out, n)
-}
-
-fn run_find(s: &mut Session, p: &Value) -> Result<Value> {
-    let find = str_param(p, "find").ok_or_else(|| bad("find", "`find` is required"))?.to_string();
-    let rep = str_param(p, "replace").map(str::to_string);
-    let case = bool_or(p, "matchCase", false);
-    let whole = bool_or(p, "wholeWord", false);
-    let space = s.space();
-    let d = s.doc()?;
-    let hs: Vec<Handle> = d.space(&space).map(|st| st.handles()).unwrap_or_default();
-    let mut found: Vec<Value> = Vec::new();
-    let mut total = 0;
-    let mut edits: Vec<(Handle, EntityKind)> = Vec::new();
-    for h in hs {
-        let Some(e) = d.entity(h) else { continue };
-        let mut k = e.kind.clone();
-        let mut hits = 0;
-        let r = rep.as_deref().unwrap_or(&find);
-        let mut apply = |t: &mut String| {
-            let (nt, n) = replace_in(t, &find, r, case, whole);
-            if n > 0 {
-                hits += n;
-                if rep.is_some() {
-                    *t = nt;
-                }
-            }
-        };
-        match &mut k {
-            EntityKind::Text(t) => apply(&mut t.value),
-            EntityKind::MText(t) => apply(&mut t.contents),
-            EntityKind::Insert(i) => i.attribs.iter_mut().for_each(|a| apply(&mut a.text.value)),
-            EntityKind::Dimension(dm) => apply(&mut dm.text),
-            EntityKind::MLeader(m) => {
-                if let Some(t) = &mut m.text {
-                    apply(&mut t.contents)
-                }
-            }
-            EntityKind::Table(t) => t.cells.iter_mut().flatten().for_each(|c| apply(&mut c.text)),
-            _ => {}
-        }
-        if hits > 0 {
-            total += hits;
-            found.push(json!({ "handle": h.hex(), "type": e.kind.type_name(), "count": hits }));
-            if rep.is_some() {
-                edits.push((h, k));
-            }
-        }
-    }
-    let n = edits.len();
-    if rep.is_some() {
-        let doc = s.doc_mut()?;
-        for (h, k) in edits {
-            doc.modify_entity(h, |e| {
-                e.kind = k;
-                if let EntityKind::Dimension(dm) = &mut e.kind {
-                    dm.block = None;
-                }
-            })?;
-        }
-    } else {
-        let sel: Vec<Handle> = found.iter().filter_map(|v| v["handle"].as_str().and_then(Handle::parse_hex)).collect();
-        s.set_selection(sel);
-    }
-    let msg =
-        if rep.is_some() { format!("{total} replacement(s) in {n} object(s)") } else { format!("{total} match(es) in {} object(s)", found.len()) };
-    Ok(json!({ "matches": found, "total": total, "message": msg }))
 }
 
 // ---------------- MEASUREGEOM ----------------

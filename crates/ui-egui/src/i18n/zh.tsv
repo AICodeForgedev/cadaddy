@@ -1914,3 +1914,26 @@
 	Command History Palette	命令历史记录选项板
 	Furnish from Plan	按平面图布置家具
 	Classify Plan	识别图纸
+	Text and multiline text	文字和多行文字
+	Block attribute values	块属性值
+	Dimension text	标注文字
+	Tables	表格
+	Multileaders	多重引线
+	Hyperlinks	超链接
+	Layer and block names	图层和块名称
+	Find where:	查找位置:
+	Current space	当前空间
+	Plain text	纯文本
+	Use wildcards	使用通配符
+	Regular expressions	正则表达式
+	Look in	查找范围
+	Zoom To	缩放到
+	Replace	替换
+	Create Selection Set	创建选择集
+	Matches found: {count} (objects: {objects})	找到的匹配项: {count} (对象: {objects})
+	Layer name	图层名
+	Block name	块名
+	Revise Model from Plans	根据图纸修订模型
+	Plans to Model Benchmark	从图纸到模型基准测试
+	Plans to Model Case	从图纸到模型用例
+	Plans to Model Score	从图纸到模型评分
