@@ -68,7 +68,7 @@ pub fn surface_config(vsync: Option<&str>, low_latency: bool) -> egui_wgpu::Surf
 #[derive(Clone, Copy, Debug)]
 pub struct FrameCap {
     min: std::time::Duration,
-    next: Option<std::time::Instant>,
+    next: Option<web_time::Instant>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -79,7 +79,7 @@ impl FrameCap {
     }
 
     /// How long a frame starting at `now` waits; records when the following one may start.
-    pub fn wait_at(&mut self, now: std::time::Instant) -> std::time::Duration {
+    pub fn wait_at(&mut self, now: web_time::Instant) -> std::time::Duration {
         let wait = self.next.map_or(std::time::Duration::ZERO, |n| n.saturating_duration_since(now));
         self.next = now.checked_add(wait.saturating_add(self.min));
         wait
@@ -87,7 +87,7 @@ impl FrameCap {
 
     /// Block until this frame may start (call once per frame, at its start).
     pub fn wait(&mut self) {
-        let wait = self.wait_at(std::time::Instant::now());
+        let wait = self.wait_at(web_time::Instant::now());
         if !wait.is_zero() {
             std::thread::sleep(wait);
         }
@@ -805,7 +805,7 @@ impl Resources {
 static SLOWEST_PREPARE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Records how long a `prepare` took when it ends.
-struct PrepareTimer(std::time::Instant);
+struct PrepareTimer(web_time::Instant);
 
 impl Drop for PrepareTimer {
     fn drop(&mut self) {
@@ -958,7 +958,7 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         _encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let _timed = PrepareTimer(t0);
         let Some(shared) = resources.get_mut::<Resources>() else { return Vec::new() };
         // A drawing window's layers are made the first time it draws.

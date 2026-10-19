@@ -10,6 +10,9 @@ rust-version = "1.95"
 workspace = true
 
 [dependencies]
+# std::time::Instant panics in the browser (wasm32-unknown-unknown has no clock); this is the
+# same Instant on native and the page's clock on the web (MIT OR Apache-2.0; egui uses it too).
+web-time = "1.1"
 craft-ui = { workspace = true }
 cadaddy-geom = { workspace = true }
 cadaddy-color = { workspace = true }
