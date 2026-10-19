@@ -92,7 +92,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("join", "Join", run_join)
             .menu(&["Modify", "Join"])
             .alias(&["j"])
-            .params("{handles?}")
+            .params("{handles?, close?: bool (a single arc becomes its circle, an elliptical arc its full ellipse)}")
             .interactive(|_| Ok(Box::new(SelectThen::new(Op::Join)))),
     ]
 }
@@ -1641,6 +1641,10 @@ pub(crate) fn join(s: &mut Session, hs: &[Handle]) -> Result<Option<Handle>> {
 
 fn run_join(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
+    if p.get("close").and_then(Value::as_bool) == Some(true) {
+        let h = super::modify2::join_close(s, &hs)?;
+        return Ok(json!({ "handle": h.hex() }));
+    }
     let r = join(s, &hs)?;
     Ok(json!({ "handle": r.map(|h| h.hex()) }))
 }
@@ -1677,6 +1681,8 @@ struct SelectThen {
     ref_len: Option<f64>,
     copy_mode: bool,
     ask_erase: bool,
+    /// JOIN of a single arc or elliptical arc: the prompt asks for arcs to join to it, or cLose.
+    join_source: Option<Handle>,
 }
 
 impl SelectThen {
@@ -1693,6 +1699,7 @@ impl SelectThen {
             ref_len: None,
             copy_mode: false,
             ask_erase: false,
+            join_source: None,
         }
     }
     fn apply(&mut self, s: &mut Session) -> Result<Step> {
@@ -1708,23 +1715,57 @@ impl SelectThen {
                 Ok(Step::Done)
             }
             Op::Join => {
-                match join(s, &self.objs) {
-                    Ok(h) => {
-                        // Objects outside the joined chain are kept, so count only the ones JOIN consumed
-                        // (and the source object an ellipse or spline join keeps).
-                        let d = s.doc()?;
-                        let n = self.objs.iter().filter(|o| d.entity(**o).is_none() || h == Some(**o)).count();
-                        let what = match h.and_then(|h| d.entity(h)).map(|e| &e.kind) {
-                            Some(EntityKind::Spline(_)) => "spline",
-                            Some(EntityKind::Ellipse(_)) => "ellipse",
-                            _ => "polyline",
-                        };
-                        s.echo(format!("{n} objects joined into 1 {what}"))
-                    }
-                    Err(e) => s.echo(e.to_string()),
+                if let [h] = self.objs[..]
+                    && s.doc()?.entity(h).is_some_and(|e| super::modify2::closed_kind(&e.kind).is_some())
+                {
+                    self.join_source = Some(h);
+                    return Ok(Step::Continue);
                 }
+                self.join_now(s)
+            }
+            _ => Ok(Step::Continue),
+        }
+    }
+
+    /// JOIN the selected objects and report what they became.
+    fn join_now(&mut self, s: &mut Session) -> Result<Step> {
+        match join(s, &self.objs) {
+            Ok(h) => {
+                // Objects outside the joined chain are kept, so count only the ones JOIN consumed
+                // (and the source object an ellipse or spline join keeps).
+                let d = s.doc()?;
+                let n = self.objs.iter().filter(|o| d.entity(**o).is_none() || h == Some(**o)).count();
+                let what = match h.and_then(|h| d.entity(h)).map(|e| &e.kind) {
+                    Some(EntityKind::Spline(_)) => "spline",
+                    Some(EntityKind::Ellipse(_)) => "ellipse",
+                    _ => "polyline",
+                };
+                s.echo(format!("{n} objects joined into 1 {what}"))
+            }
+            Err(e) => s.echo(e.to_string()),
+        }
+        Ok(Step::Done)
+    }
+
+    /// JOIN of a single arc or elliptical arc: more arcs picked join to it on Enter, cLose makes
+    /// it its circle or full ellipse.
+    fn join_source_input(&mut self, s: &mut Session, src: Handle, i: Input) -> Result<Step> {
+        match i {
+            Input::Keyword(k) if k == "cLose" => {
+                let ellipse = matches!(s.doc()?.entity(src).map(|e| &e.kind), Some(EntityKind::Ellipse(_)));
+                super::modify2::join_close(s, &[src])?;
+                s.echo(if ellipse { "The elliptical arc is now an ellipse." } else { "The arc is now a circle." });
                 Ok(Step::Done)
             }
+            Input::Point(p) => {
+                if let Some(h) = super::curves::pick_at(s, p)
+                    && !self.objs.contains(&h)
+                {
+                    self.objs.push(h);
+                }
+                Ok(Step::Continue)
+            }
+            Input::Enter => self.join_now(s),
             _ => Ok(Step::Continue),
         }
     }
@@ -1909,6 +1950,11 @@ impl Interactive for SelectThen {
         if self.ask_erase {
             return Prompt::new("Erase source objects?", Accept::TEXT).kw(&["Yes", "No"]).default("No");
         }
+        if let Some(src) = self.join_source {
+            let ellipse = s.doc().is_ok_and(|d| matches!(d.entity(src).map(|e| &e.kind), Some(EntityKind::Ellipse(_))));
+            let msg = if ellipse { "Select elliptical arcs to join to source" } else { "Select arcs to join to source" };
+            return Prompt::new(msg, Accept::POINT).kw(&["cLose"]);
+        }
         let k = self.pts.len();
         let base = self.pts.first().copied();
         if self.op == Op::Scale && self.reference {
@@ -1955,6 +2001,9 @@ impl Interactive for SelectThen {
                     return self.apply(s);
                 }
             }
+        }
+        if let Some(src) = self.join_source {
+            return self.join_source_input(s, src, i);
         }
         if self.ask_erase {
             let yes = matches!(&i, Input::Keyword(k) if k == "Yes") || matches!(&i, Input::Text(t) if t.trim().to_ascii_lowercase().starts_with('y'));
