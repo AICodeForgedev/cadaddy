@@ -177,7 +177,7 @@ fn clip_convex(subject: &[Vec2], clip: &[Vec2]) -> Vec<Vec2> {
 
 /// A session holding the plan alone (nothing a build made), for tracing rooms around their tags
 /// without the generated walls closing the gaps.
-fn plan_session(s: &Session) -> Result<Session> {
+pub(crate) fn plan_session(s: &Session) -> Result<Session> {
     let mut d = (*s.doc()?).clone();
     let made: Vec<Handle> = d.model.iter().filter(|e| made_as(e).is_some()).map(|e| e.handle).collect();
     for h in made {

@@ -6,6 +6,7 @@ pub(crate) mod annotate;
 pub mod array;
 pub(crate) mod ask;
 mod audit;
+pub mod autospec;
 pub(crate) mod blocks;
 pub mod bspec;
 pub(crate) mod clip_partners;
@@ -210,6 +211,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(draworder::specs());
         v.extend(wallgen::specs());
         v.extend(bspec::specs());
+        v.extend(autospec::specs());
         v.extend(verify::specs());
         v.extend(imageclip::specs());
         v.extend(array::specs());

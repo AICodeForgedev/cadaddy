@@ -205,3 +205,22 @@ fn a_drawing_without_a_spec_offers_to_save_the_draft() {
     h.get_by_label("Kept in the drawing.");
     assert!(h.query_by_label("Save Spec").is_none());
 }
+
+#[test]
+fn draft_from_plan_marks_its_guesses() {
+    let mut app = CadApp::new(Session::new(), Services::default());
+    exec(&mut app, "layer.new", json!({"name": "A-WALL", "current": true}));
+    exec(&mut app, "pline", json!({"vertices": [[0, 0], [240, 0], [240, 120], [0, 120]], "closed": true}));
+    exec(&mut app, "pline", json!({"vertices": [[6, 6], [234, 6], [234, 114], [6, 114]], "closed": true}));
+    let mut h = harness(app);
+    h.get_by_label("Draft from Plan").click();
+    h.run_steps(3);
+    assert_eq!(spec(&mut h)["stored"], json!(true));
+    h.get_by_label("A-WALL = full height walls 6\" thick (line pairs)");
+    let guesses = h.get_all_by_label("guess").count();
+    assert!(guesses >= 3, "{guesses}");
+    // Approving a guessed part takes its mark away.
+    h.get_by_label("Approve All").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("guess").is_none());
+}

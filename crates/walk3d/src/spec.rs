@@ -20,6 +20,7 @@
 //! in `_in`.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::rules::{DeviceRules, LayerKind, LayerRule, Level, Openings, Rules, layer_match};
 
@@ -63,6 +64,10 @@ pub struct BuildingSpec {
     /// `layers/A-WALL`, `materials`…).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approved: Vec<String>,
+    /// Parts whose values were guessed (by `bspec.draft`), by key, with why: what a person or an
+    /// agent should confirm.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub guess: BTreeMap<String, String>,
 }
 
 /// One part of a spec in plain language: its section, key (for approval and editing) and text.
@@ -74,6 +79,8 @@ pub struct Described {
     pub key: String,
     pub text: String,
     pub approved: bool,
+    /// Why its values are a guess, when they are.
+    pub guess: Option<String>,
 }
 
 /// What a layer's objects are. `layer` is a pattern: `*` matches any run of characters, case
@@ -309,7 +316,8 @@ impl BuildingSpec {
         let mut out = Vec::new();
         let mut put = |section: &'static str, key: String, text: String| {
             let approved = self.approved.iter().any(|a| a.eq_ignore_ascii_case(&key));
-            out.push(Described { section, key, text, approved });
+            let guess = self.guess.iter().find(|(k, _)| k.eq_ignore_ascii_case(&key)).map(|(_, why)| why.clone());
+            out.push(Described { section, key, text, approved, guess });
         };
         for l in &self.levels {
             let place = match &l.sheet {
@@ -434,6 +442,7 @@ impl BuildingSpec {
             device_sheets: r.device_sheets.clone(),
             openings: r.openings.clone(),
             approved: Vec::new(),
+            guess: BTreeMap::new(),
         }
     }
 
