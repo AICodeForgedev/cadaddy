@@ -122,6 +122,7 @@ pub fn install_io() {
         read_pdf: Some(cadaddy_io::pdf_read::read_json),
     });
     cadaddy_engine::cmd::pointcloud::set_reader(cadaddy_io::pointcloud_io::read);
+    cadaddy_engine::cmd::markup::set_reader(cadaddy_io::pdf_markups::read);
     cadaddy_engine::cmd::file::set_print(cadaddy_engine::cmd::file::PrintHooks { list: printing::list, print: printing::print });
     // .cdy saves append only what changed to the file a drawing was saved to or read from.
     cadaddy_engine::cmd::file::set_cdy_hooks(cadaddy_engine::cmd::file::CdyHooks {

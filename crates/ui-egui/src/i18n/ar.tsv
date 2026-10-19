@@ -2064,3 +2064,13 @@ menu	View	عرض
 	Clip Point Cloud	قص سحابة النقاط
 	Point Cloud Color Map	خريطة ألوان سحابة النقاط
 	Point Cloud Information	معلومات سحابة النقاط
+	Markups	التعليقات التوضيحية
+	{done} of {total} done	تم {done} من {total}
+	No markups. Import them from a reviewed PDF.	لا توجد تعليقات. استوردها من ملف PDF تمت مراجعته.
+	Done	تم
+	Import Markups...	استيراد التعليقات...
+	Import Markups	استيراد التعليقات
+	Markup Import...	استيراد التعليقات...
+	Markup Status	حالة التعليق
+	Read Door and Window Schedules	قراءة جداول الأبواب والنوافذ
+	Schedules	الجداول

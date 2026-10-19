@@ -156,6 +156,7 @@ fn section_title(s: &str) -> &'static str {
         "rcp" => "Ceilings",
         "mep" => "MEP Systems",
         "columns" => "Columns",
+        "schedule" => "Schedules",
         _ => "Openings",
     }
 }

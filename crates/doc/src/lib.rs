@@ -47,6 +47,7 @@ pub mod dynblock;
 pub mod foreign;
 pub mod hyperlink;
 pub mod lighting;
+pub mod markup;
 pub mod material;
 pub mod pointcloud;
 

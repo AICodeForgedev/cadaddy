@@ -2068,3 +2068,13 @@ menu	Modify	Edita
 	Clip Point Cloud	Ritaglia nuvola di punti
 	Point Cloud Color Map	Mappa colori nuvola di punti
 	Point Cloud Information	Informazioni nuvola di punti
+	Markups	Revisioni
+	{done} of {total} done	{done} di {total} completate
+	No markups. Import them from a reviewed PDF.	Nessuna revisione. Importale da un PDF revisionato.
+	Done	Completato
+	Import Markups...	Importa revisioni...
+	Import Markups	Importa revisioni
+	Markup Import...	Importazione revisioni...
+	Markup Status	Stato revisione
+	Read Door and Window Schedules	Leggi abachi porte e finestre
+	Schedules	Abachi

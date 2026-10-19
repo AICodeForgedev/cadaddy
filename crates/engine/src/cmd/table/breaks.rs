@@ -24,7 +24,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(BreakM::default()))),
         CommandSpec::new("datalink", "Data Link...", run_datalink)
             .menu(&["Insert", "Data Link..."])
-            .params("{handle, path (.csv, .txt/.tsv tab-separated), startRow? (default: below the title), remove?: bool} → {rows, cols}")
+            .params("{handle, path (.csv, .txt/.tsv tab-separated, .xlsx Excel workbook), sheet? (.xlsx: default the first), range? (.xlsx: A1:C5), startRow? (default: below the title), remove?: bool} → {rows, cols}")
             .interactive(|_| {
                 Ok(crate::cmd::ask::machine(
                     "datalink",
@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 ))
             }),
         CommandSpec::new("datalinkupdate", "Update Data Links", run_update)
-            .params("{handles?} (default: every linked table) → {updated}")
+            .params("{handles?, changed?: bool (only links whose file changed since it was read)} (default: every linked table) → {updated}")
             .interactive(|_| Ok(Box::new(SelectRun::new("datalinkupdate", "DATALINKUPDATE")))),
     ]
 }
@@ -243,6 +243,52 @@ fn link_file(id: &str, path: &str, host: Option<&str>, chosen: bool) -> Result<s
     crate::doc_path::resolve(path, host.map(std::path::Path::new)).map_err(|r| bad(id, format!("{path}: not opened, {r}")))
 }
 
+/// When `file` was last changed (seconds since 1970).
+fn modified(file: &std::path::Path) -> Option<u64> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::fs::metadata(file).ok()?.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = file;
+        None
+    }
+}
+
+fn is_xlsx(path: &str) -> bool {
+    std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("xlsx") || e.eq_ignore_ascii_case("xlsm"))
+}
+
+/// The rows a link's file holds: a CSV/TSV file's, or an Excel sheet's (range).
+fn link_rows(id: &str, link: &DataLink, file: &std::path::Path) -> Result<Vec<Vec<String>>> {
+    if is_xlsx(&link.path) {
+        let bytes = read_link_bytes(id, file)?;
+        let wb = super::xlsx::open(&bytes).map_err(|e| bad(id, format!("{}: {e}", file.display())))?;
+        return wb.cells(link.sheet.as_deref(), link.range.as_deref()).map_err(|e| bad(id, format!("{}: {e}", file.display())));
+    }
+    let text = read_link(id, file)?;
+    Ok(parse_csv(&text, separator(&link.path, &text)))
+}
+
+/// A linked file's bytes.
+fn read_link_bytes(id: &str, file: &std::path::Path) -> Result<Vec<u8>> {
+    let path = file.display();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let meta = std::fs::metadata(file).map_err(|e| bad(id, format!("{path}: {e}")))?;
+        if meta.len() > MAX_LINK_BYTES {
+            return Err(bad(id, format!("{path}: larger than {} MB", MAX_LINK_BYTES >> 20)));
+        }
+        crate::readfile::read(file).map_err(|e| bad(id, format!("{path}: {e}")))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        Err(bad(id, "data links can't read files in the browser"))
+    }
+}
+
 /// Read a linked file through the host (natively the file system; not on the web).
 fn read_link(id: &str, file: &std::path::Path) -> Result<String> {
     let path = file.display();
@@ -307,11 +353,14 @@ fn update(s: &mut Session, h: Handle, chosen: bool) -> Result<(usize, usize)> {
     };
     let host = s.state()?.path.clone();
     let file = link_file(id, &link.path, host.as_deref(), chosen)?;
-    let text = read_link(id, &file)?;
-    let data = parse_csv(&text, separator(&link.path, &text));
+    let data = link_rows(id, &link, &file)?;
+    let when = modified(&file);
     let mut size = (0, 0);
     edit(s, &json!({ "handle": h.hex() }), id, |t| {
         fill(t, link.start_row, &data);
+        if let Some(l) = &mut t.data_link {
+            l.modified = when;
+        }
         size = (t.cells.len(), t.col_widths.len());
         Ok(())
     })?;
@@ -327,11 +376,23 @@ fn run_datalink(s: &mut Session, p: &Value) -> Result<Value> {
         })?;
         return Ok(json!({ "removed": true }));
     }
-    let path = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()).ok_or_else(|| bad(id, "`path` of a CSV file is required"))?.to_string();
+    let path = str_param(p, "path")
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .ok_or_else(|| bad(id, "`path` of a CSV file or Excel workbook is required"))?
+        .to_string();
     let start = usize_param(p, "startRow");
+    let sheet = str_param(p, "sheet").map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
+    let range = str_param(p, "range").map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
+    if let Some(r) = &range {
+        let (a, b) = r.split_once(':').unwrap_or((r, r));
+        if super::xlsx::cell_ref(a).is_none() || super::xlsx::cell_ref(b).is_none() {
+            return Err(bad(id, format!("`range` {r} is not like A1:C5")));
+        }
+    }
     let r = edit(s, p, id, |t| {
         let start_row = start.unwrap_or(usize::from(t.title)).min(t.cells.len());
-        t.data_link = Some(DataLink { path: path.clone(), start_row });
+        t.data_link = Some(DataLink { path: path.clone(), start_row, sheet: sheet.clone(), range: range.clone(), modified: None });
         Ok(())
     })?;
     let h = r.get("handle").and_then(Value::as_str).and_then(Handle::parse_hex).ok_or_else(|| bad(id, "no table"))?;
@@ -358,6 +419,23 @@ fn run_update(s: &mut Session, p: &Value) -> Result<Value> {
                 .map(|e| e.handle)
                 .collect(),
         }
+    };
+    // `changed`: only the links whose file changed since it was read (the interface checks now
+    // and then).
+    let only_changed = bool_or(p, "changed", false);
+    let host = s.state()?.path.clone();
+    let hs: Vec<Handle> = if only_changed {
+        let d = s.doc()?;
+        hs.into_iter()
+            .filter(|h| {
+                let Some(EntityKind::Table(t)) = d.entity(*h).map(|e| &e.kind) else { return false };
+                let Some(l) = &t.data_link else { return false };
+                let file = link_file("datalinkupdate", &l.path, host.as_deref(), false).ok();
+                file.and_then(|f| modified(&f)).is_some_and(|m| Some(m) != l.modified)
+            })
+            .collect()
+    } else {
+        hs
     };
     let mut updated = 0;
     let mut errors = Vec::new();

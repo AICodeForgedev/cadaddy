@@ -2048,3 +2048,13 @@ menu	Modify	Modifikace
 	Clip Point Cloud	Oříznout mračno bodů
 	Point Cloud Color Map	Barevná mapa mračna bodů
 	Point Cloud Information	Informace o mračnu bodů
+	Markups	Revize
+	{done} of {total} done	Hotovo {done} z {total}
+	No markups. Import them from a reviewed PDF.	Žádné revize. Importujte je z revidovaného PDF.
+	Done	Hotovo
+	Import Markups...	Importovat revize...
+	Import Markups	Importovat revize
+	Markup Import...	Import revizí...
+	Markup Status	Stav revize
+	Read Door and Window Schedules	Načíst výpisy dveří a oken
+	Schedules	Výpisy

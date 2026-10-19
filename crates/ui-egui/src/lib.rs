@@ -72,6 +72,7 @@ pub mod layers;
 pub mod layerstates;
 pub mod layouttabs;
 pub mod managers;
+pub mod markuppalette;
 pub mod matchpropdlg;
 pub mod menus;
 pub mod opening;
@@ -120,6 +121,9 @@ pub fn clamp_ui_scale(s: f32) -> f32 {
 
 /// The host storage key for [`CadApp::prefs_json`].
 pub const PREFS_KEY: &str = "cadaddy.prefs";
+
+/// How often linked data files are checked for changes.
+const DATALINK_CHECK_MS: f64 = 3000.0;
 
 /// How many recently opened drawings are kept (AutoCAD's default for its file history).
 pub const RECENT_FILES: usize = 9;
@@ -340,6 +344,8 @@ pub struct CadApp {
     pub spacemouse: spacemouse::State,
     pub cmd: cmdline::CmdLine,
     pub status: Option<(String, f64)>,
+    /// When linked data files (DATALINK) were last checked for changes (ms).
+    pub datalink_checked: f64,
     /// The workspace last arranged (WSCURRENT when it was applied; [`workspaces::follow`]).
     pub workspace_applied: Option<String>,
     /// Lay the interface out right to left (`Some(true)`) or left to right whatever the language:
@@ -454,6 +460,7 @@ impl CadApp {
             spacemouse: spacemouse::State::default(),
             cmd: cmdline::CmdLine::default(),
             status: None,
+            datalink_checked: 0.0,
             workspace_applied: None,
             direction_override: None,
             placing: None,
@@ -521,6 +528,28 @@ impl CadApp {
         if rtl != self.ui.layout_rtl {
             self.ui.docking = self.ui.docking.mirrored();
             self.ui.layout_rtl = rtl;
+        }
+    }
+
+    /// Every few seconds, tables linked to a file that changed (DATALINK) read it again, as
+    /// AutoCAD updates data links. Only the files' times are looked at until one changed.
+    fn follow_data_links(&mut self) {
+        let now = now_ms();
+        if now - self.datalink_checked < DATALINK_CHECK_MS || self.session.running.is_some() {
+            return;
+        }
+        self.datalink_checked = now;
+        let linked = self.session.doc().is_ok_and(|d| {
+            std::iter::once(&d.model)
+                .chain(d.layouts.iter().map(|l| &l.entities))
+                .flat_map(|st| st.iter())
+                .any(|e| matches!(&e.kind, cadaddy_engine::doc::EntityKind::Table(t) if t.data_link.is_some()))
+        });
+        if linked
+            && let Ok(r) = self.session.execute("datalinkupdate", &json!({ "changed": true }))
+            && r["updated"].as_u64().unwrap_or(0) > 0
+        {
+            self.session.echo(r["message"].as_str().unwrap_or_default().to_string());
         }
     }
 
@@ -876,6 +905,7 @@ impl CadApp {
 
     pub fn logic(&mut self, ctx: &egui::Context) {
         let _busy = diag::busy("logic");
+        self.follow_data_links();
         workspaces::follow(self);
         self.follow_direction();
         blockspalette::follow(self);

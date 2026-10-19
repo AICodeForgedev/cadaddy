@@ -92,6 +92,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.update.check", "Check for Updates...", &["Help", "Check for Updates..."], None),
     ("ui.feedback", "Report a Bug...", &["Help", "Report a Bug..."], None),
     ("ui.diag", "Report a Problem...", &["Help", "Report a Problem..."], None),
+    ("ui.dialog.markups", "Markups", &["Window", "Markups"], None),
     ("ui.dialog.commandhistory", "Command History Palette", &["Window", "Command History Palette"], None),
     ("ui.savescript", "Save Session as Script...", &["Tools", "Save Session as Script..."], None),
     ("ui.dialog.aliases", "Edit Aliases and Shortcuts...", &["Tools", "Customize", "Edit Aliases and Shortcuts..."], None),
@@ -638,6 +639,20 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             None => {
                 Err("POINTCLOUDATTACH: there is no file dialog here; run it with parameters, e.g. pointcloudattach {\"path\": \"scan.las\"}".into())
             }
+        },
+        "markups" if params.is_null() => {
+            app.ui.dialog = Some("markups".into());
+            Ok(Value::Null)
+        }
+        "ui.dialog.markups" => {
+            app.ui.dialog = Some("markups".into());
+            Ok(Value::Null)
+        }
+        // From the menu or typed: the reviewed PDF from the file dialog.
+        "markupimport" if params.is_null() => match app.services.pick_pdf.as_ref().or(app.services.pick_open.as_ref()).map(|p| p()) {
+            Some(Some(path)) => app.run("markupimport", json!({ "path": path })).inspect(|_| app.ui.dialog = Some("markups".into())),
+            Some(None) => Ok(Value::Null),
+            None => Err("MARKUPIMPORT: there is no file dialog here; run it with parameters, e.g. markupimport {\"path\": \"review.pdf\"}".into()),
         },
         "etransmit" if params.is_null() => {
             app.ui.dialog = Some("etransmit".into());

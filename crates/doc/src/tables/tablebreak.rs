@@ -54,13 +54,22 @@ impl Default for TableBreak {
     }
 }
 
-/// A CSV file the table's cells come from (DATALINK).
+/// A CSV file or Excel workbook the table's cells come from (DATALINK).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DataLink {
     pub path: String,
     /// The first table row the file's rows fill.
     pub start_row: usize,
+    /// An Excel workbook's sheet (default: the first).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<String>,
+    /// An Excel workbook's range (`A1:C5`; default: the sheet's cells).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+    /// When the file was last read (seconds since 1970), to update when it changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified: Option<u64>,
 }
 
 /// One part of a (broken) table: the rows it shows, top to bottom, and its insertion point.

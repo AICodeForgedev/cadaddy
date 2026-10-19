@@ -507,7 +507,7 @@ fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<
     }))
 }
 
-fn run_mleader(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn run_mleader(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = points_param(p, "points").ok_or_else(|| bad("mleader", "`points` (arrow … landing) is required"))?;
     let content = super::mleader_content::json_content(s, p)?;
     // Leader type None places the content at the one point given.

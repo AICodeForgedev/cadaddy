@@ -66,6 +66,9 @@ pub struct BuildingSpec {
     /// Columns at structural grid intersections (`grids.columns`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<GridColumn>,
+    /// Door and window schedules: their rows, and the tags on the plans that name them.
+    #[serde(default, skip_serializing_if = "Schedule::is_empty")]
+    pub schedule: Schedule,
     /// Devices (fixture and device layers): types, mounting heights, attributes.
     #[serde(default)]
     pub devices: DeviceRules,
@@ -340,6 +343,73 @@ pub struct Equipment {
     pub level: String,
     pub outline: Vec<[f64; 2]>,
     pub height_ft: f64,
+}
+
+/// Door and window schedules read from the sheets (`schedules.read`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Schedule {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<ScheduleRow>,
+    /// The tags on the plans (a mark at a place: the opening nearest it is that row's).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<OpeningTag>,
+}
+
+impl Schedule {
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty() && self.tags.is_empty()
+    }
+
+    /// The row a mark names (any case).
+    pub fn row(&self, mark: &str) -> Option<&ScheduleRow> {
+        self.rows.iter().find(|r| r.mark.trim().eq_ignore_ascii_case(mark.trim()))
+    }
+}
+
+/// One row of a door or window schedule.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ScheduleRow {
+    pub kind: FamilyKind,
+    pub mark: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_in: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_in: Option<f64>,
+    /// Window sill and head above the floor, feet (a door's head is its height).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sill_ft: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_ft: Option<f64>,
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire_rating: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware: Option<String>,
+}
+
+impl ScheduleRow {
+    /// Head and sill above the floor, feet: a door from the floor to its height; a window from
+    /// its sill (else `default_sill`) to its head (else sill + height).
+    pub fn heights(&self, default_sill: f64) -> (Option<f64>, Option<f64>) {
+        match self.kind {
+            FamilyKind::Door => (self.head_ft.or(self.height_in.map(|h| h / 12.0)), None),
+            FamilyKind::Window => {
+                let sill = self.sill_ft.unwrap_or(default_sill);
+                (self.head_ft.or(self.height_in.map(|h| sill + h / 12.0)), Some(sill))
+            }
+        }
+    }
+}
+
+/// A door or window tag on a plan: its mark and where it is (sheet units).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OpeningTag {
+    pub mark: String,
+    pub at: [f64; 2],
 }
 
 /// A structural column at a grid intersection: its outline's size and shape, from its level's
@@ -765,6 +835,22 @@ impl BuildingSpec {
                 format!("In the ceilings: {} light fixtures, {} diffusers", n(ItemKind::Fixture), n(ItemKind::Diffuser)),
             );
         }
+        for (kind, label) in [(FamilyKind::Door, "Door"), (FamilyKind::Window, "Window")] {
+            let rows: Vec<&ScheduleRow> = self.schedule.rows.iter().filter(|r| r.kind == kind).collect();
+            if rows.is_empty() {
+                continue;
+            }
+            let list: Vec<String> = rows
+                .iter()
+                .take(12)
+                .map(|r| match (r.width_in, r.height_in) {
+                    (Some(w), Some(h)) => format!("{} {}×{}", r.mark, feet(w / 12.0), feet(h / 12.0)),
+                    _ => r.mark.clone(),
+                })
+                .collect();
+            let more = if rows.len() > 12 { format!(" and {} more", rows.len() - 12) } else { String::new() };
+            put("schedule", format!("schedule/{}s", label.to_ascii_lowercase()), format!("{label} schedule: {}{more}", list.join(", ")));
+        }
         if !self.columns.is_empty() {
             let mut by: Vec<(&str, usize)> = Vec::new();
             for c in &self.columns {
@@ -853,6 +939,7 @@ impl BuildingSpec {
             rcp: Rcp::default(),
             mep: Mep::default(),
             columns: Vec::new(),
+            schedule: Schedule::default(),
             devices: r.devices.clone(),
             device_sheets: r.device_sheets.clone(),
             openings: r.openings.clone(),
@@ -1144,6 +1231,19 @@ impl BuildingSpec {
         for (i, e) in self.exterior.equipment.iter().enumerate().take(MAX_ITEMS) {
             if self.level(&e.level).is_none() || !outline_ok(&e.outline) || !(fin(e.height_ft) && e.height_ft > 0.0 && e.height_ft <= 100.0) {
                 out.push(Issue::error(format!("exterior.equipment[{i}]"), "equipment needs a level, an outline and a height from 0 to 100 feet"));
+            }
+        }
+        for (i, r) in self.schedule.rows.iter().enumerate().take(100_000) {
+            let at = format!("schedule.rows[{i}]");
+            if r.mark.trim().is_empty() {
+                out.push(Issue::error(format!("{at}.mark"), "a schedule row needs a mark"));
+            } else if self.schedule.rows.iter().take(i).any(|o| o.kind == r.kind && o.mark.trim().eq_ignore_ascii_case(r.mark.trim())) {
+                out.push(Issue::warning(format!("{at}.mark"), format!("mark {} is in the schedule twice", r.mark)));
+            }
+            for (name, v) in [("width_in", r.width_in), ("height_in", r.height_in)] {
+                if v.is_some_and(|v| !(fin(v) && v > 0.0 && v <= 1200.0)) {
+                    out.push(Issue::error(format!("{at}.{name}"), "a size must be more than 0 and at most 1200 inches"));
+                }
             }
         }
         for (i, c) in self.columns.iter().enumerate().take(100_000) {

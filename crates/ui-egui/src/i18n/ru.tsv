@@ -1847,3 +1847,13 @@
 	Clip Point Cloud	Подрезать облако точек
 	Point Cloud Color Map	Цветовая схема облака точек
 	Point Cloud Information	Сведения об облаке точек
+	Markups	Пометки
+	{done} of {total} done	Выполнено {done} из {total}
+	No markups. Import them from a reviewed PDF.	Пометок нет. Импортируйте их из проверенного PDF.
+	Done	Выполнено
+	Import Markups...	Импорт пометок...
+	Import Markups	Импорт пометок
+	Markup Import...	Импорт пометок...
+	Markup Status	Состояние пометки
+	Read Door and Window Schedules	Прочитать спецификации дверей и окон
+	Schedules	Спецификации

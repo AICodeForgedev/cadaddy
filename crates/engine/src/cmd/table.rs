@@ -4,6 +4,7 @@
 mod breaks;
 mod cells;
 pub(crate) mod formula;
+pub mod xlsx;
 
 pub(crate) use cells::{recalc, tablestyle_cell_style};
 

@@ -24,6 +24,7 @@ mod dxf_xref;
 pub mod eps;
 pub mod pdf;
 pub(crate) mod pdf_image;
+pub mod pdf_markups;
 pub mod pdf_merge;
 pub mod pdf_read;
 pub mod plotter;

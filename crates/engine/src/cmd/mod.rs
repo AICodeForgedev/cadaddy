@@ -40,7 +40,9 @@ mod imageattach;
 mod imageclip;
 pub(crate) mod inquiry;
 mod layer;
+pub mod markup;
 pub mod pointcloud;
+pub mod schedules;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
 pub mod furnish;
@@ -84,6 +86,8 @@ mod solids;
 mod spline_opts;
 pub mod standards;
 pub(crate) mod table;
+/// Excel workbooks for data links and table export.
+pub use table::xlsx;
 pub mod tolerance;
 mod trimextend;
 mod ucs;
@@ -250,6 +254,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(revise3d::specs());
         v.extend(bspec::specs());
         v.extend(p2meval::specs());
+        v.extend(schedules::specs());
         v.extend(pdfplans::specs());
         v.extend(grids::specs());
         v.extend(mep::specs());
@@ -295,6 +300,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(ucs::specs());
         v.extend(tolerance::specs());
         v.extend(pointcloud::specs());
+        v.extend(markup::specs());
         v.extend(adcenter::specs());
         v.extend(history::specs());
         v.extend(standards::specs());
