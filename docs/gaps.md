@@ -143,7 +143,7 @@ Detail: [localization-parity.md](localization-parity.md).
 | # | Gap | Est. |
 |---|---|---|
 | A1 | Smart Blocks equivalents (placement suggestions, replace, detect and convert, search), using local open models | 25–50 + model licensing |
-| A2 | An in-app assistant (AutoCAD has Autodesk Assistant); CADCraft's MCP server already lets any agent drive it | 10–20 |
+| A2 | An in-app assistant (AutoCAD has Autodesk Assistant); CADCraft's MCP server already lets any agent drive it, including read-only structured queries of the current selection (`query_entities selected:true`) | 10–20 |
 | A3 | Markup Assist (import markups from PDFs/images) | 10–20 |
 
 ## Revision history
@@ -152,6 +152,7 @@ Detail: [localization-parity.md](localization-parity.md).
 |---|---|---|
 | 2026-10-13 | minor | Stabilized filled-object highlight dash anchors by canonicalizing boundary traversal order; renderer, CPU pointer-frame and GPU rebuild tests cover the fix (U6) |
 | 2026-10-14 | minor | HATCHEDIT adds boundary loops from internal points or closed objects and removes selected loops, in the dialog, command line and JSON command: F13 narrowed |
+| 2026-10-15 | minor | `entities` / MCP `query_entities` accept `selected:true`, combined with existing filters and paging; selection, drawing and undo/redo stay unchanged. No parity estimate change. |
 | 2026-10-13 | minor | Selection window gesture preference (PICKDRAG 0/2) added to Options ▸ Selection and saved in the profile (U6), with Portuguese and Ukrainian labels |
 | 2026-10-12 | minor | Object transparency (entity, ByLayer, ByBlock) is drawn: on screen (TRANSPARENCYDISPLAY, on by default), in PNG/SVG exports, and in plots when the page setup's "Plot transparency" is on (PDF alpha, PNG blending, SVG opacity; PLOTTRANSPARENCYOVERRIDE): F14 narrowed |
 | 2026-10-12 | minor | Hatch and Gradient dialog (HATCH, GRADIENT; HPDLGMODE) and Hatch Edit dialog (HATCHEDIT, right-click, double-click a hatch): F13 narrowed to Preview, Inherit Properties and boundary add/remove in edit mode |
