@@ -116,6 +116,36 @@ fn code_page_text_survives_a_round_trip() {
     assert_eq!(names(&back), ("Слой".into(), "Блок".into(), "Привет".into()));
 }
 
+/// Saving a pre-2007 DXF writes the text in the file's code page, as the DXF Reference
+/// describes: a Portuguese drawing keeps `Elétrica`, `Ação` and `Função` as ANSI_1252 bytes
+/// instead of `\U+00E9` escapes, a Cyrillic one its ANSI_1251 bytes, and characters the code
+/// page lacks are still escaped. ASCII and binary, R2000 and R2004, read back the same.
+#[test]
+fn saving_writes_text_in_the_code_page() {
+    use cadcraft_io::{SaveOptions, Version};
+    let pt = ascii_dxf("AC1015", "ANSI_1252", b"El\xE9trica", b"A\xE7\xE3o", b"Fun\xE7\xE3o \\U+56FE");
+    let ru = ascii_dxf("AC1015", "ANSI_1251", b"\xD1\xEB\xEE\xE9", b"\xC1\xEB\xEE\xEA", b"\xCF\xF0\xE8\xE2\xE5\xF2 \\U+00E9");
+    let cases: [(&[u8], (&str, &str, &str), &[&[u8]]); 2] = [
+        (&pt, ("Elétrica", "Ação", "Função 图"), &[b"El\xE9trica", b"A\xE7\xE3o", b"Fun\xE7\xE3o \\U+56FE"]),
+        (&ru, ("Слой", "Блок", "Привет é"), &[b"\xD1\xEB\xEE\xE9", b"\xC1\xEB\xEE\xEA", b"\xCF\xF0\xE8\xE2\xE5\xF2 \\U+00E9"]),
+    ];
+    for (file, want, raw) in cases {
+        let d = cadcraft_io::read_dxf(file).unwrap();
+        assert_eq!(names(&d), (want.0.into(), want.1.into(), want.2.into()));
+        for version in [Version::R2000, Version::R2004] {
+            for binary in [false, true] {
+                let out = cadcraft_io::write_with(&d, "x.dxf", &SaveOptions { version: Some(version), binary }).unwrap();
+                for r in raw {
+                    assert!(out.windows(r.len()).any(|w| w == *r), "{version} binary={binary}: {}", String::from_utf8_lossy(r));
+                }
+                assert!(!out.windows(7).any(|w| w == b"\\U+00E7"), "{version} binary={binary}: ç is written as its byte");
+                let back = cadcraft_io::read_dxf(&out).unwrap();
+                assert_eq!(names(&back), (want.0.into(), want.1.into(), want.2.into()), "{version} binary={binary}");
+            }
+        }
+    }
+}
+
 /// A binary DXF: R2000 strings are in the code page, R2007+ strings UTF-8.
 #[test]
 fn binary_dxf_honours_the_code_page() {

@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (DWG read leaves out orphaned DGN line style components) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (pre-2007 DXF text saved in its code page) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADCraft's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -66,7 +66,7 @@ on read with a note, so such files no longer exceed the DXF limit (#1482). **DWG
 | R12 binary | read, write | **no** (binary parser expects R13+ 2-byte group codes) | no |
 | R13–R2018, ASCII | read, write each of 2000/2004/2007/2010/2013/2018 | yes, one reader for all versions | yes, each of 2000–2018 (#421): R2000 structure (later versions add only optional groups) with that `$ACADVER`; UTF-8 text from 2007; no CLASS instance counts (91) |
 | R13–R2018, binary | read, write | yes | yes, each of 2000–2018 (SAVEAS `binary`; a binary file stays binary on QSAVE) |
-| Code pages (`$DWGCODEPAGE`, ANSI_932/936/949/950/125x) | yes | yes (#505): ASCII and binary DXF before 2007 decode from their code page (ANSI_874/932/936/949/950/1250–1258, DOS437/850/852/866, ISO 8859, Macintosh); a file that is valid UTF-8 reads as UTF-8; Johab and other DOS code pages read as ANSI_1252 (`dxf/src/codepage.rs`) | writes `\U+` escapes (#169), which is correct; declares `ANSI_1252` |
+| Code pages (`$DWGCODEPAGE`, ANSI_932/936/949/950/125x) | yes | yes (#505): ASCII and binary DXF before 2007 decode from their code page (ANSI_874/932/936/949/950/1250–1258, DOS437/850/852/866, ISO 8859, Macintosh); a file that is valid UTF-8 reads as UTF-8; Johab and other DOS code pages read as ANSI_1252 (`dxf/src/codepage.rs`) | before 2007 writes text in the declared code page (the one read from the file, else `ANSI_1252`), characters outside it as `\U+` escapes; an unknown code page gives pure ASCII with escapes (#169) |
 | `\U+`/`\M+` escapes | yes | yes (`\M+` since #505; Johab `\M+4` stays literal) | `\U+` yes |
 
 ### DXF content: read and write by object type
@@ -138,6 +138,7 @@ our output in AutoCAD black-box.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | Pre-2007 DXF saves write text in the file's code page (`Ação` as ANSI_1252 bytes, not `A\U+00E7\U+00E3o`); characters outside it stay `\U+` escapes |
 | 2026-10-17 | minor | DWG read: DGN line style components no line style definition reaches are left out before the DXF bridge, with a read note; an 83 MB site plan with 888,483 of them (1.2 GB of DXF, over the limit) now opens (#1482) |
 | 2026-10-12 | minor | PDF output: object transparency plotted as PDF alpha (`/ExtGState` `/ca` `/CA`) when the page setup's or the plot's "Plot transparency" is on; PNG plots blend it, SVG uses `opacity`; plots without it are unchanged byte for byte |
 | 2026-10-12 | minor | DXF/DWG save: the Model layout's plot settings are written as CADCraft plots model space, drawing extents scaled to fit (PLOTSETTINGS 74 = 1, 75 = 0), instead of plot type 5 "Layout information", which other programs' Plot dialogs can't use for model space |
