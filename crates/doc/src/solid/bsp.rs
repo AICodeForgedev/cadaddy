@@ -1,5 +1,6 @@
-//! Boolean operations on closed polygon meshes with binary space partitioning trees (Naylor,
-//! Amanatides and Thibault, "Merging BSP trees yields polyhedral set operations", 1990): each
+//! Boolean operations on closed polygon meshes with binary space partitioning trees. Implements
+//! BSP set operations after Naylor, Amanatides and Thibault, "Merging BSP Trees Yields Polyhedral
+//! Set Operations" (SIGGRAPH 1990): each
 //! solid's polygons build a tree of their planes; clipping one solid's polygons by the other's
 //! tree keeps the parts outside (or inside) it. Polygons are convex and carry a tag (which face of
 //! which operand they came from) through every split.
