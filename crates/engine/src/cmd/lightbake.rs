@@ -78,11 +78,23 @@ pub fn read_lightmap(png: &[u8], index: &str) -> Option<Lightmap> {
     Some(Lightmap { width, height, texels, objects, lighting: hex(v.get("lighting")?)? })
 }
 
-/// The drawing's lightmap: baked this session, or found beside its file (looked for once).
+/// The names the baked lightmap is kept under in the drawing ([`cadaddy_doc::Drawing::embedded`]).
+pub const EMBEDDED: (&str, &str) = ("lightmap.png", "lightmap.json");
+
+/// The drawing's lightmap: baked this session, carried in the drawing (a .cdy file), or found
+/// beside its file (looked for once).
 pub fn current(s: &mut Session) -> Option<Arc<Lightmap>> {
     let st = s.state_mut().ok()?;
     if st.lightmap.is_none() && !st.lightmap_tried {
         st.lightmap_tried = true;
+        let d = &st.doc;
+        if let (Some(p), Some(i)) = (d.embedded.get(EMBEDDED.0), d.embedded.get(EMBEDDED.1))
+            && let Some(lm) = std::str::from_utf8(i).ok().and_then(|i| read_lightmap(p, i))
+        {
+            st.lightmap = Some(Arc::new(lm));
+            st.lightmap_rev += 1;
+            return st.lightmap.clone();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = st.path.clone() {
             let (png, idx) = sidecar(&path);
@@ -112,8 +124,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         let had = st.lightmap.take().is_some();
         st.lightmap_tried = true;
         st.lightmap_rev += 1;
+        if s.doc()?.embedded.contains_key(EMBEDDED.0) || s.doc()?.embedded.contains_key(EMBEDDED.1) {
+            let d = s.doc_mut()?;
+            d.embedded.remove(EMBEDDED.0);
+            d.embedded.remove(EMBEDDED.1);
+        }
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(path) = st.path.clone() {
+        if let Some(path) = s.state()?.path.clone() {
             let (png, idx) = sidecar(&path);
             let _ = std::fs::remove_file(png);
             let _ = std::fs::remove_file(idx);
@@ -158,12 +175,18 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         "objects": r.objects, "baked": r.baked, "kept": r.kept, "texels": r.texels, "seconds": r.seconds,
         "width": lm.width, "height": lm.height,
     });
+    let bytes = lightmap::to_png(&lm).ok_or_else(|| bad(cmd, "the lightmap could not be encoded"))?;
+    let index = index_json(&lm).to_string();
+    // Carried in the drawing (a .cdy file opens lit, anywhere)…
+    let d = s.doc_mut()?;
+    d.embedded.insert(EMBEDDED.0.into(), Arc::new(bytes.clone()));
+    d.embedded.insert(EMBEDDED.1.into(), Arc::new(index.clone().into_bytes()));
+    // …and beside its file, for a drawing saved as DXF or DWG.
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(path) = s.state()?.path.clone() {
         let (png, idx) = sidecar(&path);
-        let bytes = lightmap::to_png(&lm).ok_or_else(|| bad(cmd, "the lightmap could not be encoded"))?;
         std::fs::write(&png, bytes).map_err(|e| bad(cmd, format!("{}: {e}", png.display())))?;
-        std::fs::write(&idx, index_json(&lm).to_string()).map_err(|e| bad(cmd, format!("{}: {e}", idx.display())))?;
+        std::fs::write(&idx, index).map_err(|e| bad(cmd, format!("{}: {e}", idx.display())))?;
         if let Some(o) = out.as_object_mut() {
             o.insert("saved".into(), json!(png.display().to_string()));
         }

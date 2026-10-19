@@ -183,6 +183,28 @@ pub fn get(path: &str) -> Option<Arc<Raster>> {
     loaded
 }
 
+/// The pixels of an image file a drawing carries inside itself (its bytes), decoded on first use
+/// and cached by content.
+pub fn embedded(bytes: &[u8]) -> Option<Arc<Raster>> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    // Not a path any IMAGE names.
+    let key = format!("\u{1}embedded:{:016x}:{}", h.finish(), bytes.len());
+    if let Some(hit) = cache().lock().ok()?.map.get(&key) {
+        return hit.clone();
+    }
+    let loaded = decode(bytes).map(Arc::new);
+    let mut c = cache().lock().ok()?;
+    let loaded = loaded.filter(|r| c.bytes.saturating_add(r.rgba.len()) <= MAX_CACHE_BYTES);
+    if let Some(r) = &loaded {
+        c.bytes += r.rgba.len();
+        c.generation += 1;
+    }
+    c.map.insert(key, loaded.clone());
+    loaded
+}
+
 /// Register pixels under `path`, replacing what was cached for it.
 pub fn insert(path: &str, raster: impl Into<Arc<Raster>>) {
     let raster = raster.into();

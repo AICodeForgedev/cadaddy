@@ -36,6 +36,8 @@ enum Source {
     /// A block definition, by name.
     Block(String, Arc<Block>),
     Foreign(Arc<Foreign>),
+    /// An embedded file, by name.
+    Embedded(String, Arc<Vec<u8>>),
     /// A small part, by tag and the CRC-32 and length of its payload (the manifest, header,
     /// tables, a layout).
     Bytes([u8; 4], u32, u64),
@@ -83,6 +85,9 @@ enum Part<'a> {
     Objects(ChunkRef),
     Layout(&'a cadaddy_doc::Layout),
     Foreign(&'a Arc<Foreign>),
+    /// The building spec (BSPC) or the camera tours (TOUR).
+    Text([u8; 4], &'a str),
+    Embedded(&'a str, &'a Arc<Vec<u8>>),
 }
 
 fn parts(d: &Drawing) -> Vec<Part<'_>> {
@@ -93,6 +98,13 @@ fn parts(d: &Drawing) -> Vec<Part<'_>> {
     if !d.foreign.is_empty() {
         out.push(Part::Foreign(&d.foreign));
     }
+    if let Some(t) = &d.building_spec {
+        out.push(Part::Text(*b"BSPC", t));
+    }
+    if let Some(t) = &d.tours {
+        out.push(Part::Text(*b"TOUR", t));
+    }
+    out.extend(d.embedded.iter().map(|(n, b)| Part::Embedded(n, b)));
     out
 }
 
@@ -102,6 +114,7 @@ struct Earlier<'a> {
     objects: HashMap<usize, (&'a ChunkRef, &'a IndexEntry)>,
     blocks: HashMap<&'a str, (&'a Arc<Block>, &'a IndexEntry)>,
     foreign: Option<(&'a Arc<Foreign>, &'a IndexEntry)>,
+    embedded: HashMap<&'a str, (&'a Arc<Vec<u8>>, &'a IndexEntry)>,
     bytes: HashMap<([u8; 4], u32, u64), &'a IndexEntry>,
     thumbnail: Option<&'a IndexEntry>,
     other: Vec<&'a IndexEntry>,
@@ -119,6 +132,9 @@ impl<'a> Earlier<'a> {
                     e.blocks.insert(n.as_str(), (b, &x.entry));
                 }
                 Source::Foreign(f) => e.foreign = Some((f, &x.entry)),
+                Source::Embedded(n, b) => {
+                    e.embedded.insert(n.as_str(), (b, &x.entry));
+                }
                 Source::Bytes(tag, crc, len) => {
                     e.bytes.insert((*tag, *crc, *len), &x.entry);
                 }
@@ -137,11 +153,15 @@ fn write_parts(d: &Drawing, w: &mut Writer, earlier: &Earlier<'_>, thumbnail: bo
                    source: Source,
                    reused: Option<&IndexEntry>,
                    tag: [u8; 4],
-                   data: &dyn Fn() -> Result<Vec<u8>, String>|
+                   deflate: bool,
+                   data: &dyn Fn() -> Result<(u16, Vec<u8>), String>|
      -> Result<(), String> {
         match reused {
             Some(e) => w.reuse(e),
-            None => w.chunk(tag, V1, &data()?, true),
+            None => {
+                let (version, bytes) = data()?;
+                w.chunk(tag, version, &bytes, deflate);
+            }
         }
         if let Some(entry) = w.entries().last() {
             saved.push(Saved { source, entry: entry.clone() });
@@ -149,33 +169,38 @@ fn write_parts(d: &Drawing, w: &mut Writer, earlier: &Earlier<'_>, thumbnail: bo
         Ok(())
     };
     // A small part: encoded every save, rewritten only when its bytes changed.
-    let small =
-        |w: &mut Writer,
-         put: &mut dyn FnMut(&mut Writer, Source, Option<&IndexEntry>, [u8; 4], &dyn Fn() -> Result<Vec<u8>, String>) -> Result<(), String>,
-         tag: [u8; 4],
-         bytes: Vec<u8>| {
-            let key = (tag, crc32fast::hash(&bytes), bytes.len() as u64);
-            let reused = earlier.bytes.get(&key).copied();
-            put(w, Source::Bytes(key.0, key.1, key.2), reused, tag, &|| Ok(bytes.clone()))
-        };
+    type Put<'p> =
+        dyn FnMut(&mut Writer, Source, Option<&IndexEntry>, [u8; 4], bool, &dyn Fn() -> Result<(u16, Vec<u8>), String>) -> Result<(), String> + 'p;
+    let small = |w: &mut Writer, put: &mut Put<'_>, tag: [u8; 4], bytes: Vec<u8>| {
+        let key = (tag, crc32fast::hash(&bytes), bytes.len() as u64);
+        let reused = earlier.bytes.get(&key).copied();
+        put(w, Source::Bytes(key.0, key.1, key.2), reused, tag, true, &|| Ok((V1, bytes.clone())))
+    };
     for part in parts(d) {
         match part {
             Part::Manifest => small(w, &mut put, *b"MANI", model::manifest(d, thumbnail))?,
             Part::Header => small(w, &mut put, *b"HEAD", model::header(d)?)?,
             Part::Tables => small(w, &mut put, *b"TABL", model::tables(d)?)?,
             Part::Layout(l) => small(w, &mut put, *b"LAYO", model::layout(l)?)?,
+            Part::Text(tag, t) => small(w, &mut put, tag, t.as_bytes().to_vec())?,
+            Part::Embedded(name, b) => {
+                let reused = earlier.embedded.get(name).filter(|(old, _)| Arc::ptr_eq(old, b)).map(|(_, e)| *e);
+                put(w, Source::Embedded(name.to_string(), b.clone()), reused, *b"EMBD", !model::packed(name), &|| {
+                    Ok((V1, model::embedded(name, b)))
+                })?;
+            }
             Part::Block(name, b) => {
                 let reused = earlier.blocks.get(name).filter(|(old, _)| Arc::ptr_eq(old, b)).map(|(_, e)| *e);
-                put(w, Source::Block(name.to_string(), b.clone()), reused, *b"BLKS", &|| model::block(name, b))?;
+                put(w, Source::Block(name.to_string(), b.clone()), reused, *b"BLKS", true, &|| Ok((V1, model::block(name, b)?)))?;
             }
             Part::Objects(c) => {
                 let reused = earlier.objects.get(&c.key()).filter(|(old, _)| old.same(&c)).map(|(_, e)| *e);
                 let items = c.clone();
-                put(w, Source::Objects(c), reused, *b"ENTS", &|| model::entities(items.items()))?;
+                put(w, Source::Objects(c), reused, *b"ENTS", true, &|| model::entities(items.items()))?;
             }
             Part::Foreign(f) => {
                 let reused = earlier.foreign.filter(|(old, _)| Arc::ptr_eq(old, f)).map(|(_, e)| e);
-                put(w, Source::Foreign(f.clone()), reused, *b"FRGN", &|| model::foreign(f))?;
+                put(w, Source::Foreign(f.clone()), reused, *b"FRGN", true, &|| Ok((V1, model::foreign(f)?)))?;
             }
         }
     }
@@ -240,8 +265,12 @@ pub fn seed(d: &Drawing, bytes: &[u8]) -> Option<SaveState> {
     let blocks: Vec<(&String, &Arc<Block>)> = d.blocks.iter().collect();
     let count = |tag: &[u8; 4]| entries.iter().filter(|e| &e.tag == tag).count();
     // The reader makes one store chunk and one block per chunk: anything else isn't this file.
-    let known = |e: &IndexEntry| [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"THMB"].contains(&&e.tag);
-    if count(b"ENTS") != objects.len() || count(b"BLKS") != blocks.len() || entries.iter().any(|e| known(e) && e.version > V1) {
+    let known = |e: &IndexEntry| model::KNOWN.contains(&&e.tag);
+    if count(b"ENTS") != objects.len()
+        || count(b"BLKS") != blocks.len()
+        || count(b"EMBD") != d.embedded.len()
+        || entries.iter().any(|e| known(e) && e.version > model::max_version(&e.tag))
+    {
         return None;
     }
     let (mut objects, mut blocks) = (objects.into_iter(), blocks.into_iter());
@@ -254,8 +283,14 @@ pub fn seed(d: &Drawing, bytes: &[u8]) -> Option<SaveState> {
                 Source::Block(n.clone(), b.clone())
             }
             b"FRGN" => Source::Foreign(d.foreign.clone()),
+            b"EMBD" => {
+                let (container::Read::Ok(c), _) = container::chunk_at(bytes, usize::try_from(e.offset).ok()?)? else { return None };
+                let (name, _) = model::embedded_from(&c.data)?;
+                let b = d.embedded.get(&name)?.clone();
+                Source::Embedded(name, b)
+            }
             b"THMB" => Source::Thumbnail,
-            b"MANI" | b"HEAD" | b"TABL" | b"LAYO" => {
+            b"MANI" | b"HEAD" | b"TABL" | b"LAYO" | b"BSPC" | b"TOUR" => {
                 let (container::Read::Ok(c), _) = container::chunk_at(bytes, usize::try_from(e.offset).ok()?)? else { return None };
                 Source::Bytes(e.tag, crc32fast::hash(&c.data), c.data.len() as u64)
             }
