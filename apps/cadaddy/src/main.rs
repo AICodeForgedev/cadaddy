@@ -21,6 +21,7 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod printing;
+mod relsig;
 mod spacemouse;
 mod system_animations;
 mod updater;

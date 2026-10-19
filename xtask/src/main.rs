@@ -8,6 +8,7 @@ mod casefs;
 mod ico;
 mod layers;
 mod parity;
+mod release;
 mod smoke;
 mod stats;
 mod version;
@@ -38,6 +39,14 @@ commands:
   fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
                   mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
                   saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
+  release-key --out FILE
+                  make a release signing key: the secret to FILE (keep it off the repository), the
+                  public key line for apps/cadaddy/src/release_keys.txt printed
+  sign-release DIR [--version X.Y.Z]
+                  write SHA256SUMS and SHA256SUMS.sig for the installers in DIR, signed with the key
+                  file named by CADADDY_RELEASE_KEY (the updater refuses unsigned releases)
+  verify-release DIR [--version X.Y.Z]
+                  check DIR's signature and hashes as the updater will
 ";
 
 fn main() -> ExitCode {
@@ -56,6 +65,9 @@ fn main() -> ExitCode {
         Some("fuzz") => cmd_fuzz(&rest),
         Some("casefs") => casefs::run(&root(), &rest),
         Some("smoke") => smoke::run(&root(), &rest),
+        Some("release-key") => release::key_cmd(&rest),
+        Some("sign-release") => release::sign_cmd(&root(), &rest),
+        Some("verify-release") => release::verify_cmd(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
