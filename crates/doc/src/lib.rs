@@ -142,12 +142,14 @@ impl Drawing {
         d.header = Header::imperial();
         d
     }
-    /// An empty metric drawing (millimetres, ISO-25 dimensions).
+    /// An empty metric drawing (millimetres, ISO-25 dimensions, multileaders and tables to match).
     pub fn new_metric() -> Self {
         let mut d = Drawing::bare();
         d.header = Header::metric();
         d.scales = metric_scales();
         d.dim_styles.push(DimStyle::iso25());
+        d.mleader_styles = vec![MLeaderStyle::metric()];
+        d.table_styles = vec![TableStyle::metric()];
         d.header.set_str("DIMSTYLE", "ISO-25");
         d
     }
