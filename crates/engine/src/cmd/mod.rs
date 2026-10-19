@@ -23,6 +23,7 @@ mod exchange;
 mod express;
 pub mod exterior;
 pub mod file;
+pub mod grids;
 mod gripcmds;
 mod griphot;
 pub mod groups;
@@ -215,6 +216,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(draworder::specs());
         v.extend(wallgen::specs());
         v.extend(bspec::specs());
+        v.extend(grids::specs());
         v.extend(mep::specs());
         v.extend(ceilings::specs());
         v.extend(exterior::specs());
