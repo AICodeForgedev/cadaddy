@@ -4,6 +4,7 @@
 //! invoked through `std::process::Command`.
 
 mod assets;
+mod casefs;
 mod ico;
 mod layers;
 mod parity;
@@ -27,6 +28,9 @@ commands:
   parity          recompute the AutoCAD menu-breadth checklist in docs/parity-checklist.md
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
+  casefs [--size 8g] [-- <cargo test args>]
+                  run the workspace tests on a case-sensitive disk image (macOS), so Linux-only
+                  failures show up on a Mac; the image is deleted afterwards
   fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
                   mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
                   saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
@@ -46,6 +50,7 @@ fn main() -> ExitCode {
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("fuzz") => cmd_fuzz(&rest),
+        Some("casefs") => casefs::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
