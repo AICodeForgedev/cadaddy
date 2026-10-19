@@ -1,0 +1,195 @@
+# CADaddy engine messages in Swedish: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	Ange ett gruppnamn
+	Pick internal point	Välj inre punkt
+	Specify the pattern origin	Ange mönstrets origo
+	Specify the incrementing elevation between rows	Ange höjdökningen mellan rader
+	Specify the angle to fill (+=ccw, -=cw)	Ange vinkeln som ska fyllas (+=moturs, -=medurs)
+	Select hatch object	Välj skraffobjekt
+	Red, Green, Blue	Röd, grön, blå
+	Enter the number of rows	Ange antalet rader
+	Enter the number of levels	Ange antalet nivåer
+	Enter new layer name	Ange nytt lagernamn
+	Specify width	Ange bredd
+	Specify the angle between items	Ange vinkeln mellan objekt
+	Specify text height	Ange texthöjd
+	Specify start tangent	Ange starttangent
+	Specify end tangent	Ange sluttangent
+	Specify reference length	Ange referenslängd
+	Specify other corner	Ange andra hörnet
+	Specify next point or [Undo]	Ange nästa punkt eller [Undo]
+	Specify new location	Ange ny plats
+	Specify new length	Ange ny längd
+	Specify length of line	Ange linjens längd
+	Specify displacement	Ange förskjutning
+	Specify angle for dimension text	Ange vinkel för måttext
+	Select viewports	Välj visningsfönster
+	Select object to break dimension	Välj objekt för att bryta måttet
+	Select group	Välj grupp
+	Select grip to edit array	Välj grepp för att redigera fältet
+	Select a table	Välj en tabell
+	Select a boundary to remove	Välj en gräns att ta bort
+	Rotate arrayed items?	Rotera fältobjekt?
+	Erase polyline?	Radera polylinjen?
+	Enter viewport arrangement	Ange arrangemang för visningsfönster
+	Enter transparency value (0-90)	Ange transparensvärde (0-90)
+	Enter the number of operations to undo	Ange antalet åtgärder att ångra
+	Enter the number of columns	Ange antalet kolumner
+	Enter number of items in array	Ange antalet objekt i fältet
+	Enter new layer state name	Ange namn på nytt lagertillstånd
+	Enter new color	Ange ny färg
+	Enter name of new layout	Ange namn på ny layout
+	Enter layer name	Ange lagernamn
+	Enter file name	Ange filnamn
+	Enter color name or number (1-255)	Ange färgnamn eller nummer (1-255)
+	Enter a configuration option	Ange ett konfigurationsalternativ
+	Base point	Baspunkt
+	Word-wrap the combined Mtext?	Radbryta den sammanslagna Mtext?
+	Where should the data go?	Vart ska data hamna?
+	Verify each name to be purged?	Bekräfta varje namn som ska rensas?
+	Use landing	Använd avsats
+	Type of boundary object	Typ av gränsobjekt
+	Specify width factor	Ange breddfaktor
+	Specify tolerance	Ange tolerans
+	Specify the tangent direction for the start point of arc	Ange tangentriktningen för bågens startpunkt
+	Specify the reference angle	Ange referensvinkeln
+	Specify the new angle	Ange den nya vinkeln
+	Specify text width	Ange textbredd
+	Specify temporary OTRACK point	Ange tillfällig OTRACK-punkt
+	Invalid option keyword.	Ogiltigt alternativnyckelord.
+	*Invalid selection*	*Ogiltigt val*
+	Requires a valid angle.	Kräver en giltig vinkel.
+	Nothing to undo.	Inget att ångra.
+	Invalid point.	Ogiltig punkt.
+	No viewport found there.	Inget visningsfönster hittades där.
+	*Cancel*	*Avbryt*
+	Requires a positive number.	Kräver ett positivt tal.
+	No hatch selected.	Ingen skraffering vald.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Kommandot är inte tillåtet på fliken Modell ** (byt först till en layout)
+	Select a multileader.	Välj en multiledare.
+	No line or arc to continue.	Ingen linje eller båge att fortsätta.
+	Revision cloud finished.	Revisionsmolnet är klart.
+	Object selected is not a circle or arc.	Det valda objektet är ingen cirkel eller båge.
+	Select a linear or aligned dimension.	Välj ett linjärt eller justerat mått.
+	Object selected is not a dimension.	Det valda objektet är inget mått.
+	No dimensions selected.	Inga mått valda.
+	Requires a number.	Kräver ett tal.
+	0 found	0 hittades
+	The feature control frame is empty.	Toleransramen är tom.
+	1 was on a locked layer.	1 låg på ett låst lager.
+	Row elevations need an associative array; the copies stay at the same elevation.	Radhöjder kräver ett associativt fält; kopiorna stannar på samma höjd.
+	Point or option keyword required.	Punkt eller alternativnyckelord krävs.
+	Enter Yes or No.	Ange Yes eller No.
+	Viewport created, zoomed to the model extents.	Visningsfönstret skapades och zoomades till modellens utsträckning.
+	No object found.	Inget objekt hittades.
+	The object is not a table.	Objektet är ingen tabell.
+	No table there.	Ingen tabell där.
+	A transparent command is already in progress.	Ett transparent kommando pågår redan.
+	Invalid class name.	Ogiltigt klassnamn.
+	Invalid group name.	Ogiltigt gruppnamn.
+	Too many point modifiers.	För många punktmodifierare.
+	No leader to remove.	Ingen ledare att ta bort.
+	Requires a non-negative number.	Kräver ett icke-negativt tal.
+	Clipboard is empty.	Urklipp är tomt.
+	1 object was on a locked layer.	1 objekt låg på ett låst lager.
+	Circle does not exist.	Cirkeln finns inte.
+	Enter Length or Area.	Ange Length eller Area.
+	Enter a percentage from 0 to 1000.	Ange en procentsats från 0 till 1000.
+	Enter Table, File or None.	Ange Table, File eller None.
+	Cannot measure that object.	Det objektet kan inte mätas.
+	Third pair ignored (2D align).	Tredje paret ignoreras (2D-justering).
+	Insert mode: Copy (nested objects are copied as independent objects).	Infogningsläge: Kopiera (kapslade objekt kopieras som fristående objekt).
+	Everything has been undone	Allt har ångrats
+	Everything has been undone.	Allt har ångrats.
+	Requires a non-negative number or Auto.	Kräver ett icke-negativt tal eller Auto.
+	Select a dimension.	Välj ett mått.
+	Object cannot be dimensioned this way.	Objektet kan inte måttsättas på det här sättet.
+	Select an arc, circle or line.	Välj en båge, cirkel eller linje.
+	The two points must be different.	De två punkterna måste vara olika.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Inget linjärt mått att fortsätta. Skapa ett först med DIMLINEAR.
+	A multileader needs a leader line or content; nothing was drawn.	En multiledare behöver en ledarlinje eller innehåll; inget ritades.
+	Requires the name of a block defined in the drawing.	Kräver namnet på ett block som är definierat i ritningen.
+	Invalid option.	Ogiltigt alternativ.
+	The boundary encloses none of the image.	Gränsen omsluter ingen del av bilden.
+	The object is not an image.	Objektet är ingen bild.
+	The image has no clipping boundary.	Bilden har ingen klippningsgräns.
+	No images selected.	Inga bilder valda.
+	Requires an integer between 0 and 100.	Kräver ett heltal mellan 0 och 100.
+	The selected object has no area.	Det valda objektet har ingen area.
+	No such object	Inget sådant objekt
+	Requires a point.	Kräver en punkt.
+	Requires a distance.	Kräver ett avstånd.
+	The object is on a locked layer.	Objektet ligger på ett låst lager.
+	Value must be positive and nonzero.	Värdet måste vara positivt och skilt från noll.
+	Requires an angle.	Kräver en vinkel.
+	Requires a point or option keyword.	Kräver en punkt eller ett alternativnyckelord.
+	Object does not intersect a cutting edge.	Objektet skär ingen skärkant.
+	Object does not intersect an edge.	Objektet skär ingen kant.
+	Lines are parallel.	Linjerna är parallella.
+	The Block Editor is not open.	Blockredigeraren är inte öppen.
+	Requires a positive integer.	Kräver ett positivt heltal.
+	Answer Yes or No.	Svara Yes eller No.
+	Requires a valid point.	Kräver en giltig punkt.
+	No reference objects	Inga referensobjekt
+	Requires an angle or point.	Kräver en vinkel eller punkt.
+	Requires a positive distance.	Kräver ett positivt avstånd.
+	Requires a non-negative distance.	Kräver ett icke-negativt avstånd.
+	No such grip	Inget sådant grepp
+	Requires a template file name.	Kräver ett mallfilnamn.
+	A hatch needs at least one boundary: erase it instead.	En skraffering behöver minst en gräns: radera den i stället.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Ångra är avstängt (UNDO Control None); UNDO Control All slår på det.
+	Enter ON or OFF.	Ange ON eller OFF.
+	Not a linear dimension.	Inte ett linjärt mått.
+	Valid hatch boundary not found.	Ingen giltig skraffgräns hittades.
+	No closed boundary objects selected.	Inga slutna gränsobjekt valda.
+	Requires a name.	Kräver ett namn.
+	That option doesn't apply to this grip.	Det alternativet gäller inte det här greppet.
+	That would make a degenerate object.	Det skulle ge ett degenererat objekt.
+	No tangent or perpendicular from the last point.	Ingen tangent eller vinkelrät linje från den sista punkten.
+	Requires numeric distance or second point.	Kräver numeriskt avstånd eller en andra punkt.
+	Edge endpoints must differ.	Kantens ändpunkter måste vara olika.
+	Requires numeric distance or point.	Kräver numeriskt avstånd eller en punkt.
+	Requires a positive height.	Kräver en positiv höjd.
+	No objects found.	Inga objekt hittades.
+	Requires a non-zero number.	Kräver ett tal skilt från noll.
+	Circle must intersect cutting edges at two or more points.	Cirkeln måste skära skärkanterna i två eller fler punkter.
+	Arc cannot be full 360 degrees.	Bågen kan inte vara hela 360 grader.
+	Cannot break that object.	Det objektet kan inte brytas.
+	An object is on a locked layer.	Ett objekt ligger på ett låst lager.
+	Objects are not connected.	Objekten är inte sammanbundna.
+	The two points must differ.	De två punkterna måste skilja sig åt.
+	Mirror line points must differ.	Speglingslinjens punkter måste vara olika.
+	No drawing is open.	Ingen ritning är öppen.
+	Command: {}	Kommando: {}
+	Unknown command "{}". Press F1 for help.	Okänt kommando "{}". Tryck på F1 för hjälp.
+	{} found	{} hittades
+	{} found, {} total	{} hittades, {} totalt
+	Distance = {}	Avstånd = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Avstånd = {},  Vinkel i XY-planet = {},  Vinkel från XY-planet = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Delta X = {},  Delta Y = {},   Delta Z = {}
+	Area = {}, Perimeter = {}	Area = {}, Omkrets = {}
+	Total area = {}	Total area = {}
+	Resuming {} command.	Återupptar kommandot {}.
+	Invalid input: {}	Ogiltig inmatning: {}
+	{} were on a locked layer.	{} låg på ett låst lager.
+	{} dimension(s) changed.	{} mått ändrades.
+	Group {} ungrouped.	Gruppen {} har delats upp.
+	{} object(s) flattened.	{} objekt plattades till.
+	Group {} renamed to {}.	Gruppen {} har bytt namn till {}.
+	{} object(s) added to group {}.	{} objekt lades till i gruppen {}.
+	{} object(s) removed from group {}.	{} objekt togs bort från gruppen {}.
+	{} lines were chamfered	{} linjer fasades
+	{} lines were filleted	{} linjer avrundades
+	{} objects joined into 1 {}	{} objekt sammanfogades till 1 {}
+	Current dimension style:  {}	Aktuell måttstil:  {}
+	Wrote {}	Skrev {}
+	{} is already open.	{} är redan öppen.
+	{} dimension(s) created.	{} mått skapades.
+	BOUNDARY created {} polyline(s)	BOUNDARY skapade {} polylinje(r)
+	Current line-width is {}	Aktuell linjebredd är {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Okänd variabel {}. Skriv SETVAR ? för att lista variabler.
+	{} = {} (read only)	{} = {} (skrivskyddad)
+	Dimension text = {}	Måttext = {}
+	{} segments added to polyline	{} segment lades till polylinjen

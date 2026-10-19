@@ -1,0 +1,195 @@
+# CADaddy engine messages in Russian: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	Введите имя группы
+	Pick internal point	Укажите внутреннюю точку
+	Specify the pattern origin	Укажите начало образца
+	Specify the incrementing elevation between rows	Укажите приращение высоты между рядами
+	Specify the angle to fill (+=ccw, -=cw)	Укажите угол заполнения (+=против часовой, -=по часовой)
+	Select hatch object	Выберите объект штриховки
+	Red, Green, Blue	Красный, зелёный, синий
+	Enter the number of rows	Введите число рядов
+	Enter the number of levels	Введите число уровней
+	Enter new layer name	Введите новое имя слоя
+	Specify width	Укажите ширину
+	Specify the angle between items	Укажите угол между элементами
+	Specify text height	Укажите высоту текста
+	Specify start tangent	Укажите начальную касательную
+	Specify end tangent	Укажите конечную касательную
+	Specify reference length	Укажите опорную длину
+	Specify other corner	Укажите другой угол
+	Specify next point or [Undo]	Укажите следующую точку или [Undo]
+	Specify new location	Укажите новое положение
+	Specify new length	Укажите новую длину
+	Specify length of line	Укажите длину отрезка
+	Specify displacement	Укажите смещение
+	Specify angle for dimension text	Укажите угол размерного текста
+	Select viewports	Выберите видовые экраны
+	Select object to break dimension	Выберите объект для разрыва размера
+	Select group	Выберите группу
+	Select grip to edit array	Выберите ручку для редактирования массива
+	Select a table	Выберите таблицу
+	Select a boundary to remove	Выберите удаляемый контур
+	Rotate arrayed items?	Поворачивать элементы массива?
+	Erase polyline?	Удалить полилинию?
+	Enter viewport arrangement	Введите расположение видовых экранов
+	Enter transparency value (0-90)	Введите значение прозрачности (0-90)
+	Enter the number of operations to undo	Введите число отменяемых операций
+	Enter the number of columns	Введите число столбцов
+	Enter number of items in array	Введите число элементов массива
+	Enter new layer state name	Введите имя новой конфигурации слоёв
+	Enter new color	Введите новый цвет
+	Enter name of new layout	Введите имя нового листа
+	Enter layer name	Введите имя слоя
+	Enter file name	Введите имя файла
+	Enter color name or number (1-255)	Введите имя или номер цвета (1-255)
+	Enter a configuration option	Введите параметр конфигурации
+	Base point	Базовая точка
+	Word-wrap the combined Mtext?	Переносить слова в объединённом Mtext?
+	Where should the data go?	Куда поместить данные?
+	Verify each name to be purged?	Подтверждать каждое удаляемое имя?
+	Use landing	Использовать полку
+	Type of boundary object	Тип объекта контура
+	Specify width factor	Укажите коэффициент сжатия
+	Specify tolerance	Укажите допуск
+	Specify the tangent direction for the start point of arc	Укажите направление касательной в начальной точке дуги
+	Specify the reference angle	Укажите опорный угол
+	Specify the new angle	Укажите новый угол
+	Specify text width	Укажите ширину текста
+	Specify temporary OTRACK point	Укажите временную точку OTRACK
+	Invalid option keyword.	Недопустимое ключевое слово.
+	*Invalid selection*	*Недопустимый выбор*
+	Requires a valid angle.	Требуется допустимый угол.
+	Nothing to undo.	Нечего отменять.
+	Invalid point.	Недопустимая точка.
+	No viewport found there.	Там не найден видовой экран.
+	*Cancel*	*Прервано*
+	Requires a positive number.	Требуется положительное число.
+	No hatch selected.	Штриховка не выбрана.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Команда недоступна на вкладке «Модель» ** (сначала перейдите на лист)
+	Select a multileader.	Выберите мультивыноску.
+	No line or arc to continue.	Нет отрезка или дуги для продолжения.
+	Revision cloud finished.	Облако для пометок завершено.
+	Object selected is not a circle or arc.	Выбранный объект не является кругом или дугой.
+	Select a linear or aligned dimension.	Выберите линейный или параллельный размер.
+	Object selected is not a dimension.	Выбранный объект не является размером.
+	No dimensions selected.	Размеры не выбраны.
+	Requires a number.	Требуется число.
+	0 found	Найдено: 0
+	The feature control frame is empty.	Рамка допуска пуста.
+	1 was on a locked layer.	1 находился на заблокированном слое.
+	Row elevations need an associative array; the copies stay at the same elevation.	Высоты рядов требуют ассоциативного массива; копии остаются на той же высоте.
+	Point or option keyword required.	Требуется точка или ключевое слово.
+	Enter Yes or No.	Введите Yes или No.
+	Viewport created, zoomed to the model extents.	Видовой экран создан и показывает границы модели.
+	No object found.	Объект не найден.
+	The object is not a table.	Объект не является таблицей.
+	No table there.	Там нет таблицы.
+	A transparent command is already in progress.	Прозрачная команда уже выполняется.
+	Invalid class name.	Недопустимое имя класса.
+	Invalid group name.	Недопустимое имя группы.
+	Too many point modifiers.	Слишком много модификаторов точки.
+	No leader to remove.	Нет выноски для удаления.
+	Requires a non-negative number.	Требуется неотрицательное число.
+	Clipboard is empty.	Буфер обмена пуст.
+	1 object was on a locked layer.	1 объект находился на заблокированном слое.
+	Circle does not exist.	Круг не существует.
+	Enter Length or Area.	Введите Length или Area.
+	Enter a percentage from 0 to 1000.	Введите процент от 0 до 1000.
+	Enter Table, File or None.	Введите Table, File или None.
+	Cannot measure that object.	Этот объект невозможно измерить.
+	Third pair ignored (2D align).	Третья пара игнорируется (2D-выравнивание).
+	Insert mode: Copy (nested objects are copied as independent objects).	Режим вставки: копирование (вложенные объекты копируются как отдельные объекты).
+	Everything has been undone	Все действия отменены
+	Everything has been undone.	Все действия отменены.
+	Requires a non-negative number or Auto.	Требуется неотрицательное число или Auto.
+	Select a dimension.	Выберите размер.
+	Object cannot be dimensioned this way.	Объект нельзя образмерить таким способом.
+	Select an arc, circle or line.	Выберите дугу, круг или отрезок.
+	The two points must be different.	Две точки должны различаться.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Нет линейного размера для продолжения. Сначала создайте его командой DIMLINEAR.
+	A multileader needs a leader line or content; nothing was drawn.	Мультивыноске нужна линия выноски или содержимое; ничего не нарисовано.
+	Requires the name of a block defined in the drawing.	Требуется имя блока, определённого в чертеже.
+	Invalid option.	Недопустимый параметр.
+	The boundary encloses none of the image.	Контур не охватывает изображение.
+	The object is not an image.	Объект не является изображением.
+	The image has no clipping boundary.	У изображения нет контура подрезки.
+	No images selected.	Изображения не выбраны.
+	Requires an integer between 0 and 100.	Требуется целое число от 0 до 100.
+	The selected object has no area.	У выбранного объекта нет площади.
+	No such object	Нет такого объекта
+	Requires a point.	Требуется точка.
+	Requires a distance.	Требуется расстояние.
+	The object is on a locked layer.	Объект находится на заблокированном слое.
+	Value must be positive and nonzero.	Значение должно быть положительным и ненулевым.
+	Requires an angle.	Требуется угол.
+	Requires a point or option keyword.	Требуется точка или ключевое слово.
+	Object does not intersect a cutting edge.	Объект не пересекает режущую кромку.
+	Object does not intersect an edge.	Объект не пересекает кромку.
+	Lines are parallel.	Отрезки параллельны.
+	The Block Editor is not open.	Редактор блоков не открыт.
+	Requires a positive integer.	Требуется положительное целое число.
+	Answer Yes or No.	Ответьте Yes или No.
+	Requires a valid point.	Требуется допустимая точка.
+	No reference objects	Нет опорных объектов
+	Requires an angle or point.	Требуется угол или точка.
+	Requires a positive distance.	Требуется положительное расстояние.
+	Requires a non-negative distance.	Требуется неотрицательное расстояние.
+	No such grip	Нет такой ручки
+	Requires a template file name.	Требуется имя файла шаблона.
+	A hatch needs at least one boundary: erase it instead.	Штриховке нужен хотя бы один контур: лучше удалите её.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Отмена отключена (UNDO Control None); UNDO Control All включает её.
+	Enter ON or OFF.	Введите ON или OFF.
+	Not a linear dimension.	Это не линейный размер.
+	Valid hatch boundary not found.	Допустимый контур штриховки не найден.
+	No closed boundary objects selected.	Замкнутые объекты контура не выбраны.
+	Requires a name.	Требуется имя.
+	That option doesn't apply to this grip.	Этот параметр не относится к этой ручке.
+	That would make a degenerate object.	Это приведёт к вырожденному объекту.
+	No tangent or perpendicular from the last point.	Нет касательной или перпендикуляра от последней точки.
+	Requires numeric distance or second point.	Требуется числовое расстояние или вторая точка.
+	Edge endpoints must differ.	Концы кромки должны различаться.
+	Requires numeric distance or point.	Требуется числовое расстояние или точка.
+	Requires a positive height.	Требуется положительная высота.
+	No objects found.	Объекты не найдены.
+	Requires a non-zero number.	Требуется ненулевое число.
+	Circle must intersect cutting edges at two or more points.	Круг должен пересекать режущие кромки в двух или более точках.
+	Arc cannot be full 360 degrees.	Дуга не может составлять полные 360 градусов.
+	Cannot break that object.	Этот объект невозможно разорвать.
+	An object is on a locked layer.	Объект находится на заблокированном слое.
+	Objects are not connected.	Объекты не соединены.
+	The two points must differ.	Две точки должны различаться.
+	Mirror line points must differ.	Точки оси отражения должны различаться.
+	No drawing is open.	Нет открытого чертежа.
+	Command: {}	Команда: {}
+	Unknown command "{}". Press F1 for help.	Неизвестная команда «{}». Нажмите F1 для справки.
+	{} found	Найдено: {}
+	{} found, {} total	Найдено: {}, всего: {}
+	Distance = {}	Расстояние = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Расстояние = {},  Угол в плоскости XY = {},  Угол от плоскости XY = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Приращение X = {},  Приращение Y = {},   Приращение Z = {}
+	Area = {}, Perimeter = {}	Площадь = {}, Периметр = {}
+	Total area = {}	Общая площадь = {}
+	Resuming {} command.	Возобновление команды {}.
+	Invalid input: {}	Недопустимый ввод: {}
+	{} were on a locked layer.	{} находились на заблокированном слое.
+	{} dimension(s) changed.	Изменено размеров: {}.
+	Group {} ungrouped.	Группа {} расформирована.
+	{} object(s) flattened.	Сплющено объектов: {}.
+	Group {} renamed to {}.	Группа {} переименована в {}.
+	{} object(s) added to group {}.	В группу {1} добавлено объектов: {0}.
+	{} object(s) removed from group {}.	Из группы {1} удалено объектов: {0}.
+	{} lines were chamfered	Снято фасок у отрезков: {}
+	{} lines were filleted	Сопряжено отрезков: {}
+	{} objects joined into 1 {}	Объединено объектов: {} в 1 {}
+	Current dimension style:  {}	Текущий размерный стиль:  {}
+	Wrote {}	Записан файл {}
+	{} is already open.	{} уже открыт.
+	{} dimension(s) created.	Создано размеров: {}.
+	BOUNDARY created {} polyline(s)	BOUNDARY создала полилиний: {}
+	Current line-width is {}	Текущая ширина линии: {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Неизвестная переменная {}. Введите SETVAR ?, чтобы получить список переменных.
+	{} = {} (read only)	{} = {} (только чтение)
+	Dimension text = {}	Размерный текст = {}
+	{} segments added to polyline	К полилинии добавлено сегментов: {}

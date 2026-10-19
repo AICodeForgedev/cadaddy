@@ -1,0 +1,195 @@
+# CADaddy engine messages in Spanish: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	Introduzca un nombre de grupo
+	Pick internal point	Designe punto interno
+	Specify the pattern origin	Precise el origen del patrón
+	Specify the incrementing elevation between rows	Precise el incremento de elevación entre filas
+	Specify the angle to fill (+=ccw, -=cw)	Precise el ángulo que se va a rellenar (+=antihorario, -=horario)
+	Select hatch object	Seleccione el objeto de sombreado
+	Red, Green, Blue	Rojo, verde, azul
+	Enter the number of rows	Introduzca el número de filas
+	Enter the number of levels	Introduzca el número de niveles
+	Enter new layer name	Introduzca el nuevo nombre de capa
+	Specify width	Precise la anchura
+	Specify the angle between items	Precise el ángulo entre elementos
+	Specify text height	Precise la altura del texto
+	Specify start tangent	Precise la tangente inicial
+	Specify end tangent	Precise la tangente final
+	Specify reference length	Precise la longitud de referencia
+	Specify other corner	Precise la otra esquina
+	Specify next point or [Undo]	Precise el punto siguiente o [Undo]
+	Specify new location	Precise la nueva ubicación
+	Specify new length	Precise la nueva longitud
+	Specify length of line	Precise la longitud de la línea
+	Specify displacement	Precise el desplazamiento
+	Specify angle for dimension text	Precise el ángulo del texto de cota
+	Select viewports	Seleccione ventanas gráficas
+	Select object to break dimension	Seleccione el objeto para partir la cota
+	Select group	Seleccione el grupo
+	Select grip to edit array	Seleccione el pinzamiento para editar la matriz
+	Select a table	Seleccione una tabla
+	Select a boundary to remove	Seleccione un contorno para quitar
+	Rotate arrayed items?	¿Girar los elementos de la matriz?
+	Erase polyline?	¿Borrar la polilínea?
+	Enter viewport arrangement	Introduzca la disposición de ventanas gráficas
+	Enter transparency value (0-90)	Introduzca el valor de transparencia (0-90)
+	Enter the number of operations to undo	Introduzca el número de operaciones que se van a deshacer
+	Enter the number of columns	Introduzca el número de columnas
+	Enter number of items in array	Introduzca el número de elementos de la matriz
+	Enter new layer state name	Introduzca el nombre del nuevo estado de capas
+	Enter new color	Introduzca el nuevo color
+	Enter name of new layout	Introduzca el nombre de la nueva presentación
+	Enter layer name	Introduzca el nombre de capa
+	Enter file name	Introduzca el nombre de archivo
+	Enter color name or number (1-255)	Introduzca el nombre o número de color (1-255)
+	Enter a configuration option	Introduzca una opción de configuración
+	Base point	Punto base
+	Word-wrap the combined Mtext?	¿Ajustar el texto del Mtext combinado?
+	Where should the data go?	¿Dónde deben ir los datos?
+	Verify each name to be purged?	¿Verificar cada nombre que se va a limpiar?
+	Use landing	Usar meseta
+	Type of boundary object	Tipo de objeto de contorno
+	Specify width factor	Precise el factor de anchura
+	Specify tolerance	Precise la tolerancia
+	Specify the tangent direction for the start point of arc	Precise la dirección tangente del punto inicial del arco
+	Specify the reference angle	Precise el ángulo de referencia
+	Specify the new angle	Precise el nuevo ángulo
+	Specify text width	Precise la anchura del texto
+	Specify temporary OTRACK point	Precise un punto OTRACK temporal
+	Invalid option keyword.	Palabra clave de opción no válida.
+	*Invalid selection*	*Designación no válida*
+	Requires a valid angle.	Se requiere un ángulo válido.
+	Nothing to undo.	No hay nada que deshacer.
+	Invalid point.	Punto no válido.
+	No viewport found there.	No se ha encontrado ninguna ventana gráfica ahí.
+	*Cancel*	*Cancelar*
+	Requires a positive number.	Se requiere un número positivo.
+	No hatch selected.	No se ha seleccionado ningún sombreado.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Comando no permitido en la ficha Modelo ** (cambie primero a una presentación)
+	Select a multileader.	Seleccione una directriz múltiple.
+	No line or arc to continue.	No hay ninguna línea o arco que continuar.
+	Revision cloud finished.	Nube de revisión terminada.
+	Object selected is not a circle or arc.	El objeto seleccionado no es un círculo ni un arco.
+	Select a linear or aligned dimension.	Seleccione una cota lineal o alineada.
+	Object selected is not a dimension.	El objeto seleccionado no es una cota.
+	No dimensions selected.	No se ha seleccionado ninguna cota.
+	Requires a number.	Se requiere un número.
+	0 found	0 encontrados
+	The feature control frame is empty.	El marco de control de características está vacío.
+	1 was on a locked layer.	1 estaba en una capa bloqueada.
+	Row elevations need an associative array; the copies stay at the same elevation.	Las elevaciones de fila necesitan una matriz asociativa; las copias se quedan a la misma elevación.
+	Point or option keyword required.	Se requiere un punto o una palabra clave de opción.
+	Enter Yes or No.	Escriba Yes o No.
+	Viewport created, zoomed to the model extents.	Ventana gráfica creada y ampliada a la extensión del modelo.
+	No object found.	No se ha encontrado ningún objeto.
+	The object is not a table.	El objeto no es una tabla.
+	No table there.	No hay ninguna tabla ahí.
+	A transparent command is already in progress.	Ya hay un comando transparente en curso.
+	Invalid class name.	Nombre de clase no válido.
+	Invalid group name.	Nombre de grupo no válido.
+	Too many point modifiers.	Demasiados modificadores de punto.
+	No leader to remove.	No hay ninguna directriz que quitar.
+	Requires a non-negative number.	Se requiere un número no negativo.
+	Clipboard is empty.	El portapapeles está vacío.
+	1 object was on a locked layer.	1 objeto estaba en una capa bloqueada.
+	Circle does not exist.	El círculo no existe.
+	Enter Length or Area.	Escriba Length o Area.
+	Enter a percentage from 0 to 1000.	Escriba un porcentaje de 0 a 1000.
+	Enter Table, File or None.	Escriba Table, File o None.
+	Cannot measure that object.	No se puede medir ese objeto.
+	Third pair ignored (2D align).	Se ha omitido el tercer par (alineación 2D).
+	Insert mode: Copy (nested objects are copied as independent objects).	Modo de inserción: Copiar (los objetos anidados se copian como objetos independientes).
+	Everything has been undone	Se ha deshecho todo
+	Everything has been undone.	Se ha deshecho todo.
+	Requires a non-negative number or Auto.	Se requiere un número no negativo o Auto.
+	Select a dimension.	Seleccione una cota.
+	Object cannot be dimensioned this way.	El objeto no se puede acotar de este modo.
+	Select an arc, circle or line.	Seleccione un arco, círculo o línea.
+	The two points must be different.	Los dos puntos deben ser distintos.
+	No linear dimension to continue. Create one with DIMLINEAR first.	No hay ninguna cota lineal que continuar. Cree una primero con DIMLINEAR.
+	A multileader needs a leader line or content; nothing was drawn.	Una directriz múltiple necesita una línea directriz o contenido; no se ha dibujado nada.
+	Requires the name of a block defined in the drawing.	Se requiere el nombre de un bloque definido en el dibujo.
+	Invalid option.	Opción no válida.
+	The boundary encloses none of the image.	El contorno no abarca ninguna parte de la imagen.
+	The object is not an image.	El objeto no es una imagen.
+	The image has no clipping boundary.	La imagen no tiene contorno de delimitación.
+	No images selected.	No se ha seleccionado ninguna imagen.
+	Requires an integer between 0 and 100.	Se requiere un entero entre 0 y 100.
+	The selected object has no area.	El objeto seleccionado no tiene área.
+	No such object	No existe ese objeto
+	Requires a point.	Se requiere un punto.
+	Requires a distance.	Se requiere una distancia.
+	The object is on a locked layer.	El objeto está en una capa bloqueada.
+	Value must be positive and nonzero.	El valor debe ser positivo y distinto de cero.
+	Requires an angle.	Se requiere un ángulo.
+	Requires a point or option keyword.	Se requiere un punto o una palabra clave de opción.
+	Object does not intersect a cutting edge.	El objeto no corta ninguna arista de corte.
+	Object does not intersect an edge.	El objeto no corta ninguna arista.
+	Lines are parallel.	Las líneas son paralelas.
+	The Block Editor is not open.	El Editor de bloques no está abierto.
+	Requires a positive integer.	Se requiere un entero positivo.
+	Answer Yes or No.	Responda Yes o No.
+	Requires a valid point.	Se requiere un punto válido.
+	No reference objects	No hay objetos de referencia
+	Requires an angle or point.	Se requiere un ángulo o un punto.
+	Requires a positive distance.	Se requiere una distancia positiva.
+	Requires a non-negative distance.	Se requiere una distancia no negativa.
+	No such grip	No existe ese pinzamiento
+	Requires a template file name.	Se requiere un nombre de archivo de plantilla.
+	A hatch needs at least one boundary: erase it instead.	Un sombreado necesita al menos un contorno: bórrelo en su lugar.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Deshacer está desactivado (UNDO Control None); UNDO Control All lo activa.
+	Enter ON or OFF.	Escriba ON u OFF.
+	Not a linear dimension.	No es una cota lineal.
+	Valid hatch boundary not found.	No se ha encontrado un contorno de sombreado válido.
+	No closed boundary objects selected.	No se ha seleccionado ningún objeto de contorno cerrado.
+	Requires a name.	Se requiere un nombre.
+	That option doesn't apply to this grip.	Esa opción no se aplica a este pinzamiento.
+	That would make a degenerate object.	Eso generaría un objeto degenerado.
+	No tangent or perpendicular from the last point.	No hay tangente ni perpendicular desde el último punto.
+	Requires numeric distance or second point.	Se requiere una distancia numérica o un segundo punto.
+	Edge endpoints must differ.	Los puntos finales de la arista deben ser distintos.
+	Requires numeric distance or point.	Se requiere una distancia numérica o un punto.
+	Requires a positive height.	Se requiere una altura positiva.
+	No objects found.	No se ha encontrado ningún objeto.
+	Requires a non-zero number.	Se requiere un número distinto de cero.
+	Circle must intersect cutting edges at two or more points.	El círculo debe cortar las aristas de corte en dos o más puntos.
+	Arc cannot be full 360 degrees.	El arco no puede ser de 360 grados completos.
+	Cannot break that object.	No se puede partir ese objeto.
+	An object is on a locked layer.	Un objeto está en una capa bloqueada.
+	Objects are not connected.	Los objetos no están conectados.
+	The two points must differ.	Los dos puntos deben ser distintos.
+	Mirror line points must differ.	Los puntos de la línea de simetría deben ser distintos.
+	No drawing is open.	No hay ningún dibujo abierto.
+	Command: {}	Comando: {}
+	Unknown command "{}". Press F1 for help.	Comando desconocido "{}". Pulse F1 para obtener ayuda.
+	{} found	{} encontrados
+	{} found, {} total	{} encontrados, {} en total
+	Distance = {}	Distancia = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Distancia = {},  Ángulo en plano XY = {},  Ángulo desde plano XY = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Incremento X = {},  Incremento Y = {},   Incremento Z = {}
+	Area = {}, Perimeter = {}	Área = {}, Perímetro = {}
+	Total area = {}	Área total = {}
+	Resuming {} command.	Reanudando el comando {}.
+	Invalid input: {}	Entrada no válida: {}
+	{} were on a locked layer.	{} estaban en una capa bloqueada.
+	{} dimension(s) changed.	{} cota(s) modificada(s).
+	Group {} ungrouped.	Grupo {} desagrupado.
+	{} object(s) flattened.	{} objeto(s) aplanado(s).
+	Group {} renamed to {}.	Grupo {} renombrado como {}.
+	{} object(s) added to group {}.	{} objeto(s) añadido(s) al grupo {}.
+	{} object(s) removed from group {}.	{} objeto(s) quitado(s) del grupo {}.
+	{} lines were chamfered	Se han achaflanado {} líneas
+	{} lines were filleted	Se han empalmado {} líneas
+	{} objects joined into 1 {}	{} objetos unidos en 1 {}
+	Current dimension style:  {}	Estilo de cota actual:  {}
+	Wrote {}	Se ha escrito {}
+	{} is already open.	{} ya está abierto.
+	{} dimension(s) created.	{} cota(s) creada(s).
+	BOUNDARY created {} polyline(s)	BOUNDARY ha creado {} polilínea(s)
+	Current line-width is {}	La anchura de línea actual es {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Variable desconocida {}. Escriba SETVAR ? para ver las variables.
+	{} = {} (read only)	{} = {} (solo lectura)
+	Dimension text = {}	Texto de cota = {}
+	{} segments added to polyline	{} segmentos añadidos a la polilínea

@@ -1,0 +1,195 @@
+# CADaddy engine messages in Japanese: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	グループ名を入力
+	Pick internal point	内側の点をクリック
+	Specify the pattern origin	パターンの原点を指定
+	Specify the incrementing elevation between rows	行間の高度増分を指定
+	Specify the angle to fill (+=ccw, -=cw)	全体角度を指定 (+=反時計回り、-=時計回り)
+	Select hatch object	ハッチング オブジェクトを選択
+	Red, Green, Blue	赤、緑、青
+	Enter the number of rows	行数を入力
+	Enter the number of levels	レベル数を入力
+	Enter new layer name	新しい画層名を入力
+	Specify width	幅を指定
+	Specify the angle between items	項目間の角度を指定
+	Specify text height	文字の高さを指定
+	Specify start tangent	始点接線を指定
+	Specify end tangent	終点接線を指定
+	Specify reference length	参照長さを指定
+	Specify other corner	もう一方のコーナーを指定
+	Specify next point or [Undo]	次の点を指定 または [Undo]
+	Specify new location	新しい位置を指定
+	Specify new length	新しい長さを指定
+	Specify length of line	線分の長さを指定
+	Specify displacement	移動距離を指定
+	Specify angle for dimension text	寸法値の角度を指定
+	Select viewports	ビューポートを選択
+	Select object to break dimension	寸法を切断するオブジェクトを選択
+	Select group	グループを選択
+	Select grip to edit array	配列を編集するグリップを選択
+	Select a table	表を選択
+	Select a boundary to remove	削除する境界を選択
+	Rotate arrayed items?	配列した項目を回転しますか?
+	Erase polyline?	ポリラインを削除しますか?
+	Enter viewport arrangement	ビューポートの配置を入力
+	Enter transparency value (0-90)	透過性の値を入力 (0-90)
+	Enter the number of operations to undo	元に戻す操作の数を入力
+	Enter the number of columns	列数を入力
+	Enter number of items in array	配列の項目数を入力
+	Enter new layer state name	新しい画層状態名を入力
+	Enter new color	新しい色を入力
+	Enter name of new layout	新しいレイアウトの名前を入力
+	Enter layer name	画層名を入力
+	Enter file name	ファイル名を入力
+	Enter color name or number (1-255)	色名または色番号を入力 (1-255)
+	Enter a configuration option	構成オプションを入力
+	Base point	基点
+	Word-wrap the combined Mtext?	結合した Mtext を折り返しますか?
+	Where should the data go?	データの出力先は?
+	Verify each name to be purged?	各名前を確認して削除しますか?
+	Use landing	ランディングを使用
+	Type of boundary object	境界オブジェクトの種類
+	Specify width factor	幅係数を指定
+	Specify tolerance	許容差を指定
+	Specify the tangent direction for the start point of arc	円弧の始点の接線方向を指定
+	Specify the reference angle	参照角度を指定
+	Specify the new angle	新しい角度を指定
+	Specify text width	文字幅を指定
+	Specify temporary OTRACK point	一時的な OTRACK 点を指定
+	Invalid option keyword.	オプション キーワードが無効です。
+	*Invalid selection*	*選択が無効です*
+	Requires a valid angle.	有効な角度が必要です。
+	Nothing to undo.	元に戻す操作はありません。
+	Invalid point.	無効な点です。
+	No viewport found there.	そこにビューポートは見つかりません。
+	*Cancel*	*キャンセル*
+	Requires a positive number.	正の数値が必要です。
+	No hatch selected.	ハッチングが選択されていません。
+	** Command not allowed in Model Tab ** (switch to a layout first)	** モデル タブでは使用できないコマンドです ** (先にレイアウトに切り替えてください)
+	Select a multileader.	マルチ引出線を選択してください。
+	No line or arc to continue.	続行する線分または円弧がありません。
+	Revision cloud finished.	雲マークが完成しました。
+	Object selected is not a circle or arc.	選択したオブジェクトは円でも円弧でもありません。
+	Select a linear or aligned dimension.	長さ寸法または平行寸法を選択してください。
+	Object selected is not a dimension.	選択したオブジェクトは寸法ではありません。
+	No dimensions selected.	寸法が選択されていません。
+	Requires a number.	数値が必要です。
+	0 found	0 個を検出
+	The feature control frame is empty.	幾何公差記入枠が空です。
+	1 was on a locked layer.	1 個はロックされた画層上にありました。
+	Row elevations need an associative array; the copies stay at the same elevation.	行の高度には自動調整配列が必要です。コピーは同じ高度のままです。
+	Point or option keyword required.	点またはオプション キーワードが必要です。
+	Enter Yes or No.	Yes または No を入力してください。
+	Viewport created, zoomed to the model extents.	ビューポートを作成し、モデルの範囲にズームしました。
+	No object found.	オブジェクトが見つかりません。
+	The object is not a table.	オブジェクトは表ではありません。
+	No table there.	そこに表はありません。
+	A transparent command is already in progress.	透過コマンドは既に実行中です。
+	Invalid class name.	無効なクラス名です。
+	Invalid group name.	無効なグループ名です。
+	Too many point modifiers.	点の修飾子が多すぎます。
+	No leader to remove.	削除する引出線がありません。
+	Requires a non-negative number.	負でない数値が必要です。
+	Clipboard is empty.	クリップボードは空です。
+	1 object was on a locked layer.	1 個のオブジェクトはロックされた画層上にありました。
+	Circle does not exist.	円は存在しません。
+	Enter Length or Area.	Length または Area を入力してください。
+	Enter a percentage from 0 to 1000.	0 から 1000 までのパーセントを入力してください。
+	Enter Table, File or None.	Table、File、None のいずれかを入力してください。
+	Cannot measure that object.	そのオブジェクトは計測できません。
+	Third pair ignored (2D align).	3 番目の組は無視されます (2D 位置合わせ)。
+	Insert mode: Copy (nested objects are copied as independent objects).	挿入モード: コピー (ネストされたオブジェクトは独立したオブジェクトとしてコピーされます)。
+	Everything has been undone	すべて元に戻しました
+	Everything has been undone.	すべて元に戻しました。
+	Requires a non-negative number or Auto.	負でない数値または Auto が必要です。
+	Select a dimension.	寸法を選択してください。
+	Object cannot be dimensioned this way.	このオブジェクトはこの方法で寸法記入できません。
+	Select an arc, circle or line.	円弧、円、線分のいずれかを選択してください。
+	The two points must be different.	2 点は異なっている必要があります。
+	No linear dimension to continue. Create one with DIMLINEAR first.	続行する長さ寸法がありません。先に DIMLINEAR で作成してください。
+	A multileader needs a leader line or content; nothing was drawn.	マルチ引出線には引出線か内容が必要です。何も作図されませんでした。
+	Requires the name of a block defined in the drawing.	図面で定義されているブロックの名前が必要です。
+	Invalid option.	無効なオプションです。
+	The boundary encloses none of the image.	境界はイメージのどの部分も囲んでいません。
+	The object is not an image.	オブジェクトはイメージではありません。
+	The image has no clipping boundary.	イメージにクリップ境界はありません。
+	No images selected.	イメージが選択されていません。
+	Requires an integer between 0 and 100.	0 から 100 までの整数が必要です。
+	The selected object has no area.	選択したオブジェクトには面積がありません。
+	No such object	該当するオブジェクトはありません
+	Requires a point.	点が必要です。
+	Requires a distance.	距離が必要です。
+	The object is on a locked layer.	オブジェクトはロックされた画層上にあります。
+	Value must be positive and nonzero.	値は 0 以外の正の数である必要があります。
+	Requires an angle.	角度が必要です。
+	Requires a point or option keyword.	点またはオプション キーワードが必要です。
+	Object does not intersect a cutting edge.	オブジェクトは切り取りエッジと交差しません。
+	Object does not intersect an edge.	オブジェクトはエッジと交差しません。
+	Lines are parallel.	線分は平行です。
+	The Block Editor is not open.	ブロック エディタは開いていません。
+	Requires a positive integer.	正の整数が必要です。
+	Answer Yes or No.	Yes または No で答えてください。
+	Requires a valid point.	有効な点が必要です。
+	No reference objects	参照オブジェクトがありません
+	Requires an angle or point.	角度または点が必要です。
+	Requires a positive distance.	正の距離が必要です。
+	Requires a non-negative distance.	負でない距離が必要です。
+	No such grip	該当するグリップはありません
+	Requires a template file name.	テンプレート ファイル名が必要です。
+	A hatch needs at least one boundary: erase it instead.	ハッチングには少なくとも 1 つの境界が必要です。代わりに削除してください。
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	元に戻すはオフです (UNDO Control None)。UNDO Control All でオンになります。
+	Enter ON or OFF.	ON または OFF を入力してください。
+	Not a linear dimension.	長さ寸法ではありません。
+	Valid hatch boundary not found.	有効なハッチング境界が見つかりません。
+	No closed boundary objects selected.	閉じた境界オブジェクトが選択されていません。
+	Requires a name.	名前が必要です。
+	That option doesn't apply to this grip.	そのオプションはこのグリップには適用できません。
+	That would make a degenerate object.	それでは縮退したオブジェクトになります。
+	No tangent or perpendicular from the last point.	最後の点からの接線または垂線はありません。
+	Requires numeric distance or second point.	数値の距離または 2 点目が必要です。
+	Edge endpoints must differ.	エッジの端点は異なっている必要があります。
+	Requires numeric distance or point.	数値の距離または点が必要です。
+	Requires a positive height.	正の高さが必要です。
+	No objects found.	オブジェクトが見つかりません。
+	Requires a non-zero number.	0 以外の数値が必要です。
+	Circle must intersect cutting edges at two or more points.	円は 2 点以上で切り取りエッジと交差する必要があります。
+	Arc cannot be full 360 degrees.	円弧を 360 度にすることはできません。
+	Cannot break that object.	そのオブジェクトは部分削除できません。
+	An object is on a locked layer.	オブジェクトがロックされた画層上にあります。
+	Objects are not connected.	オブジェクトは連結していません。
+	The two points must differ.	2 点は異なっている必要があります。
+	Mirror line points must differ.	鏡像線の点は異なっている必要があります。
+	No drawing is open.	図面が開かれていません。
+	Command: {}	コマンド: {}
+	Unknown command "{}". Press F1 for help.	不明なコマンド "{}" です。F1 キーでヘルプを表示します。
+	{} found	{} 個を検出
+	{} found, {} total	{} 個を検出、合計 {} 個
+	Distance = {}	距離 = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	距離 = {},  XY 平面上の角度 = {},  XY 平面からの角度 = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	X 増分 = {},  Y 増分 = {},   Z 増分 = {}
+	Area = {}, Perimeter = {}	面積 = {}, 周長 = {}
+	Total area = {}	合計面積 = {}
+	Resuming {} command.	{} コマンドを再開します。
+	Invalid input: {}	無効な入力: {}
+	{} were on a locked layer.	{} 個はロックされた画層上にありました。
+	{} dimension(s) changed.	{} 個の寸法を変更しました。
+	Group {} ungrouped.	グループ {} を解除しました。
+	{} object(s) flattened.	{} 個のオブジェクトを平坦化しました。
+	Group {} renamed to {}.	グループ {} の名前を {} に変更しました。
+	{} object(s) added to group {}.	{} 個のオブジェクトをグループ {} に追加しました。
+	{} object(s) removed from group {}.	{} 個のオブジェクトをグループ {} から削除しました。
+	{} lines were chamfered	{} 本の線分を面取りしました
+	{} lines were filleted	{} 本の線分をフィレットしました
+	{} objects joined into 1 {}	{} 個のオブジェクトを 1 つの {} に結合しました
+	Current dimension style:  {}	現在の寸法スタイル:  {}
+	Wrote {}	{} を書き出しました
+	{} is already open.	{} は既に開いています。
+	{} dimension(s) created.	{} 個の寸法を作成しました。
+	BOUNDARY created {} polyline(s)	BOUNDARY で {} 個のポリラインを作成しました
+	Current line-width is {}	現在の線分の幅は {} です
+	Unknown variable {}. Type SETVAR ? to list variables.	不明な変数 {} です。変数の一覧は SETVAR ? と入力します。
+	{} = {} (read only)	{} = {} (読み込み専用)
+	Dimension text = {}	寸法値 = {}
+	{} segments added to polyline	{} 個のセグメントをポリラインに追加しました

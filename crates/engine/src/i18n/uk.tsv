@@ -1,0 +1,195 @@
+# CADaddy engine messages in Ukrainian: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	Введіть назву групи
+	Pick internal point	Вкажіть внутрішню точку
+	Specify the pattern origin	Вкажіть початок зразка
+	Specify the incrementing elevation between rows	Вкажіть приріст висоти між рядами
+	Specify the angle to fill (+=ccw, -=cw)	Вкажіть кут заповнення (+=проти годинникової, -=за годинниковою)
+	Select hatch object	Виберіть об'єкт штрихування
+	Red, Green, Blue	Червоний, зелений, синій
+	Enter the number of rows	Введіть кількість рядів
+	Enter the number of levels	Введіть кількість рівнів
+	Enter new layer name	Введіть нову назву шару
+	Specify width	Вкажіть ширину
+	Specify the angle between items	Вкажіть кут між елементами
+	Specify text height	Вкажіть висоту тексту
+	Specify start tangent	Вкажіть початкову дотичну
+	Specify end tangent	Вкажіть кінцеву дотичну
+	Specify reference length	Вкажіть опорну довжину
+	Specify other corner	Вкажіть інший кут
+	Specify next point or [Undo]	Вкажіть наступну точку або [Undo]
+	Specify new location	Вкажіть нове положення
+	Specify new length	Вкажіть нову довжину
+	Specify length of line	Вкажіть довжину відрізка
+	Specify displacement	Вкажіть зміщення
+	Specify angle for dimension text	Вкажіть кут розмірного тексту
+	Select viewports	Виберіть видові екрани
+	Select object to break dimension	Виберіть об'єкт для розриву розміру
+	Select group	Виберіть групу
+	Select grip to edit array	Виберіть ручку для редагування масиву
+	Select a table	Виберіть таблицю
+	Select a boundary to remove	Виберіть контур для вилучення
+	Rotate arrayed items?	Повертати елементи масиву?
+	Erase polyline?	Видалити полілінію?
+	Enter viewport arrangement	Введіть розташування видових екранів
+	Enter transparency value (0-90)	Введіть значення прозорості (0-90)
+	Enter the number of operations to undo	Введіть кількість операцій для скасування
+	Enter the number of columns	Введіть кількість стовпців
+	Enter number of items in array	Введіть кількість елементів масиву
+	Enter new layer state name	Введіть назву нового стану шарів
+	Enter new color	Введіть новий колір
+	Enter name of new layout	Введіть назву нового аркуша
+	Enter layer name	Введіть назву шару
+	Enter file name	Введіть назву файлу
+	Enter color name or number (1-255)	Введіть назву або номер кольору (1-255)
+	Enter a configuration option	Введіть параметр конфігурації
+	Base point	Базова точка
+	Word-wrap the combined Mtext?	Переносити слова в об'єднаному Mtext?
+	Where should the data go?	Куди помістити дані?
+	Verify each name to be purged?	Підтверджувати кожну назву для очищення?
+	Use landing	Використовувати полицю
+	Type of boundary object	Тип об'єкта контуру
+	Specify width factor	Вкажіть коефіцієнт ширини
+	Specify tolerance	Вкажіть допуск
+	Specify the tangent direction for the start point of arc	Вкажіть напрямок дотичної в початковій точці дуги
+	Specify the reference angle	Вкажіть опорний кут
+	Specify the new angle	Вкажіть новий кут
+	Specify text width	Вкажіть ширину тексту
+	Specify temporary OTRACK point	Вкажіть тимчасову точку OTRACK
+	Invalid option keyword.	Неприпустиме ключове слово.
+	*Invalid selection*	*Неприпустимий вибір*
+	Requires a valid angle.	Потрібен допустимий кут.
+	Nothing to undo.	Нічого скасовувати.
+	Invalid point.	Неприпустима точка.
+	No viewport found there.	Там не знайдено видового екрана.
+	*Cancel*	*Скасовано*
+	Requires a positive number.	Потрібне додатне число.
+	No hatch selected.	Штрихування не вибрано.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Команда недоступна на вкладці «Модель» ** (спершу перейдіть на аркуш)
+	Select a multileader.	Виберіть мультивиноску.
+	No line or arc to continue.	Немає відрізка чи дуги для продовження.
+	Revision cloud finished.	Хмару для позначок завершено.
+	Object selected is not a circle or arc.	Вибраний об'єкт не є колом чи дугою.
+	Select a linear or aligned dimension.	Виберіть лінійний чи паралельний розмір.
+	Object selected is not a dimension.	Вибраний об'єкт не є розміром.
+	No dimensions selected.	Розміри не вибрано.
+	Requires a number.	Потрібне число.
+	0 found	Знайдено: 0
+	The feature control frame is empty.	Рамка допуску порожня.
+	1 was on a locked layer.	1 був на заблокованому шарі.
+	Row elevations need an associative array; the copies stay at the same elevation.	Висоти рядів потребують асоціативного масиву; копії залишаються на тій самій висоті.
+	Point or option keyword required.	Потрібна точка або ключове слово.
+	Enter Yes or No.	Введіть Yes або No.
+	Viewport created, zoomed to the model extents.	Видовий екран створено, показано межі моделі.
+	No object found.	Об'єкт не знайдено.
+	The object is not a table.	Об'єкт не є таблицею.
+	No table there.	Там немає таблиці.
+	A transparent command is already in progress.	Прозора команда вже виконується.
+	Invalid class name.	Неприпустима назва класу.
+	Invalid group name.	Неприпустима назва групи.
+	Too many point modifiers.	Забагато модифікаторів точки.
+	No leader to remove.	Немає виноски для вилучення.
+	Requires a non-negative number.	Потрібне невід'ємне число.
+	Clipboard is empty.	Буфер обміну порожній.
+	1 object was on a locked layer.	1 об'єкт був на заблокованому шарі.
+	Circle does not exist.	Коло не існує.
+	Enter Length or Area.	Введіть Length або Area.
+	Enter a percentage from 0 to 1000.	Введіть відсоток від 0 до 1000.
+	Enter Table, File or None.	Введіть Table, File або None.
+	Cannot measure that object.	Цей об'єкт неможливо виміряти.
+	Third pair ignored (2D align).	Третю пару проігноровано (2D-вирівнювання).
+	Insert mode: Copy (nested objects are copied as independent objects).	Режим вставлення: копіювання (вкладені об'єкти копіюються як окремі об'єкти).
+	Everything has been undone	Усі дії скасовано
+	Everything has been undone.	Усі дії скасовано.
+	Requires a non-negative number or Auto.	Потрібне невід'ємне число або Auto.
+	Select a dimension.	Виберіть розмір.
+	Object cannot be dimensioned this way.	Об'єкт не можна образмерити таким способом.
+	Select an arc, circle or line.	Виберіть дугу, коло або відрізок.
+	The two points must be different.	Дві точки мають відрізнятися.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Немає лінійного розміру для продовження. Спершу створіть його командою DIMLINEAR.
+	A multileader needs a leader line or content; nothing was drawn.	Мультивиносці потрібна лінія виноски або вміст; нічого не намальовано.
+	Requires the name of a block defined in the drawing.	Потрібна назва блока, визначеного в кресленні.
+	Invalid option.	Неприпустимий параметр.
+	The boundary encloses none of the image.	Контур не охоплює зображення.
+	The object is not an image.	Об'єкт не є зображенням.
+	The image has no clipping boundary.	Зображення не має контуру обрізки.
+	No images selected.	Зображення не вибрано.
+	Requires an integer between 0 and 100.	Потрібне ціле число від 0 до 100.
+	The selected object has no area.	Вибраний об'єкт не має площі.
+	No such object	Немає такого об'єкта
+	Requires a point.	Потрібна точка.
+	Requires a distance.	Потрібна відстань.
+	The object is on a locked layer.	Об'єкт знаходиться на заблокованому шарі.
+	Value must be positive and nonzero.	Значення має бути додатним і ненульовим.
+	Requires an angle.	Потрібен кут.
+	Requires a point or option keyword.	Потрібна точка або ключове слово.
+	Object does not intersect a cutting edge.	Об'єкт не перетинає ріжучу кромку.
+	Object does not intersect an edge.	Об'єкт не перетинає кромку.
+	Lines are parallel.	Відрізки паралельні.
+	The Block Editor is not open.	Редактор блоків не відкрито.
+	Requires a positive integer.	Потрібне додатне ціле число.
+	Answer Yes or No.	Дайте відповідь Yes або No.
+	Requires a valid point.	Потрібна допустима точка.
+	No reference objects	Немає опорних об'єктів
+	Requires an angle or point.	Потрібен кут або точка.
+	Requires a positive distance.	Потрібна додатна відстань.
+	Requires a non-negative distance.	Потрібна невід'ємна відстань.
+	No such grip	Немає такої ручки
+	Requires a template file name.	Потрібна назва файлу шаблону.
+	A hatch needs at least one boundary: erase it instead.	Штрихуванню потрібен хоча б один контур: краще видаліть його.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Скасування вимкнено (UNDO Control None); UNDO Control All вмикає його.
+	Enter ON or OFF.	Введіть ON або OFF.
+	Not a linear dimension.	Це не лінійний розмір.
+	Valid hatch boundary not found.	Допустимий контур штрихування не знайдено.
+	No closed boundary objects selected.	Замкнені об'єкти контуру не вибрано.
+	Requires a name.	Потрібна назва.
+	That option doesn't apply to this grip.	Цей параметр не стосується цієї ручки.
+	That would make a degenerate object.	Це призведе до виродженого об'єкта.
+	No tangent or perpendicular from the last point.	Немає дотичної чи перпендикуляра від останньої точки.
+	Requires numeric distance or second point.	Потрібна числова відстань або друга точка.
+	Edge endpoints must differ.	Кінці кромки мають відрізнятися.
+	Requires numeric distance or point.	Потрібна числова відстань або точка.
+	Requires a positive height.	Потрібна додатна висота.
+	No objects found.	Об'єкти не знайдено.
+	Requires a non-zero number.	Потрібне ненульове число.
+	Circle must intersect cutting edges at two or more points.	Коло має перетинати ріжучі кромки у двох або більше точках.
+	Arc cannot be full 360 degrees.	Дуга не може становити повні 360 градусів.
+	Cannot break that object.	Цей об'єкт неможливо розірвати.
+	An object is on a locked layer.	Об'єкт знаходиться на заблокованому шарі.
+	Objects are not connected.	Об'єкти не з'єднані.
+	The two points must differ.	Дві точки мають відрізнятися.
+	Mirror line points must differ.	Точки осі віддзеркалення мають відрізнятися.
+	No drawing is open.	Немає відкритого креслення.
+	Command: {}	Команда: {}
+	Unknown command "{}". Press F1 for help.	Невідома команда «{}». Натисніть F1 для довідки.
+	{} found	Знайдено: {}
+	{} found, {} total	Знайдено: {}, усього: {}
+	Distance = {}	Відстань = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Відстань = {},  Кут у площині XY = {},  Кут від площини XY = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Приріст X = {},  Приріст Y = {},   Приріст Z = {}
+	Area = {}, Perimeter = {}	Площа = {}, Периметр = {}
+	Total area = {}	Загальна площа = {}
+	Resuming {} command.	Відновлення команди {}.
+	Invalid input: {}	Неприпустиме введення: {}
+	{} were on a locked layer.	{} були на заблокованому шарі.
+	{} dimension(s) changed.	Змінено розмірів: {}.
+	Group {} ungrouped.	Групу {} розформовано.
+	{} object(s) flattened.	Сплющено об'єктів: {}.
+	Group {} renamed to {}.	Групу {} перейменовано на {}.
+	{} object(s) added to group {}.	До групи {1} додано об'єктів: {0}.
+	{} object(s) removed from group {}.	З групи {1} вилучено об'єктів: {0}.
+	{} lines were chamfered	Знято фаски у відрізків: {}
+	{} lines were filleted	Спряжено відрізків: {}
+	{} objects joined into 1 {}	Об'єднано об'єктів: {} в 1 {}
+	Current dimension style:  {}	Поточний розмірний стиль:  {}
+	Wrote {}	Записано {}
+	{} is already open.	{} уже відкрито.
+	{} dimension(s) created.	Створено розмірів: {}.
+	BOUNDARY created {} polyline(s)	BOUNDARY створила поліліній: {}
+	Current line-width is {}	Поточна ширина лінії: {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Невідома змінна {}. Введіть SETVAR ?, щоб отримати список змінних.
+	{} = {} (read only)	{} = {} (лише читання)
+	Dimension text = {}	Розмірний текст = {}
+	{} segments added to polyline	До полілінії додано сегментів: {}

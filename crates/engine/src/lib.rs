@@ -18,6 +18,7 @@ mod finite;
 pub mod grip_dims;
 pub mod grips;
 mod guard;
+pub mod i18n;
 pub mod lisp;
 pub mod mtext_edit;
 pub mod pointmod;
