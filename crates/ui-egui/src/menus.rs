@@ -91,6 +91,13 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.update.check", "Check for Updates...", &["Help", "Check for Updates..."], None),
     ("ui.feedback", "Report a Bug...", &["Help", "Report a Bug..."], None),
     ("ui.diag", "Report a Problem...", &["Help", "Report a Problem..."], None),
+    ("ui.workspace.drafting", "Drafting & Annotation", &["Tools", "Workspaces", "Drafting & Annotation"], None),
+    ("ui.workspace.modeling", "3D Modeling", &["Tools", "Workspaces", "3D Modeling"], None),
+    ("ui.workspace.electrical", "Electrical", &["Tools", "Workspaces", "Electrical"], None),
+    ("ui.workspace.save", "Save Current As...", &["Tools", "Workspaces", "Save Current As..."], None),
+    ("ui.workspace.settings", "Workspace Settings...", &["Tools", "Workspaces", "Workspace Settings..."], None),
+    ("workspace", "Workspace", &[], None),
+    ("navbar", "Navigation Bar", &["View", "Display", "Navigation Bar"], None),
     ("ui.feature", "Request a Feature...", &["Help", "Request a Feature..."], None),
     ("ui.donate", "Support CADaddy...", &["Help", "Support CADaddy..."], None),
     ("ui.toggle.history", "Command History", &["Window", "Command History"], Some("F2")),
@@ -525,6 +532,24 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         // The feedback form and the fundraiser open in the browser ([`crate::support`]).
+        "ui.workspace.drafting" | "ui.workspace.modeling" | "ui.workspace.electrical" => {
+            let name = match id {
+                "ui.workspace.modeling" => "3D Modeling",
+                "ui.workspace.electrical" => "Electrical",
+                _ => cadaddy_engine::DEFAULT_WORKSPACE,
+            };
+            crate::workspaces::set(app, name).map(|()| json!({ "current": name }))
+        }
+        "ui.workspace.save" => {
+            app.ui.dialog = Some("workspace.save".into());
+            Ok(Value::Null)
+        }
+        "ui.workspace.settings" => {
+            app.ui.dialog = Some("workspace.settings".into());
+            Ok(Value::Null)
+        }
+        "workspace" => crate::workspaces::run(app, params),
+        "navbar" => crate::workspaces::run_navbar(app, params),
         "ui.diag" => {
             app.ui.dialog = Some("diag".into());
             Ok(Value::Null)

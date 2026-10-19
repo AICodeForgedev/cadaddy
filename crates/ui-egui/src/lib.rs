@@ -86,6 +86,7 @@ pub mod toldlg;
 pub mod viewcube;
 pub mod vpscale;
 pub mod walk;
+pub mod workspaces;
 
 pub mod autocomplete;
 pub mod diag;
@@ -183,6 +184,10 @@ pub struct UiState {
     pub agent_control: bool,
     /// Drawings opened from a path, newest first (File ▸ Open Recent and the Start page).
     pub recent_files: Vec<String>,
+    /// The ribbon tabs shown (the current workspace's); empty shows them all.
+    pub ribbon_tabs: Vec<String>,
+    /// Workspaces the user saved ([`workspaces`]).
+    pub user_workspaces: Vec<workspaces::Def>,
 }
 
 /// A DXF/DWG file version (2000 … 2018).
@@ -272,6 +277,8 @@ impl Default for UiState {
             save_version: SaveVersion::default().year().to_string(),
             agent_control: true,
             recent_files: Vec::new(),
+            ribbon_tabs: Vec::new(),
+            user_workspaces: Vec::new(),
         }
     }
 }
@@ -313,6 +320,8 @@ pub struct CadApp {
     pub spacemouse: spacemouse::State,
     pub cmd: cmdline::CmdLine,
     pub status: Option<(String, f64)>,
+    /// The workspace last arranged (WSCURRENT when it was applied; [`workspaces::follow`]).
+    pub workspace_applied: Option<String>,
     /// Drawings being read on worker threads ([`opening`]).
     pub opening: opening::Opening,
     pub integrated_titlebar: bool,
@@ -417,6 +426,7 @@ impl CadApp {
             spacemouse: spacemouse::State::default(),
             cmd: cmdline::CmdLine::default(),
             status: None,
+            workspace_applied: None,
             opening: opening::Opening::default(),
             integrated_titlebar: false,
             os_title: String::new(),
@@ -815,6 +825,7 @@ impl CadApp {
 
     pub fn logic(&mut self, ctx: &egui::Context) {
         let _busy = diag::busy("logic");
+        workspaces::follow(self);
         // FILEDIA 0: no native file dialogs (the commands ask on the command line).
         FILE_DIALOGS_OFF
             .store(cadaddy_engine::sysvars::get(&self.session, "FILEDIA").and_then(|v| v.as_i64()) == Some(0), std::sync::atomic::Ordering::Relaxed);
