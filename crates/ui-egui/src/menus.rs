@@ -1239,8 +1239,11 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
                 // A right-to-left interface starts the menus at the right edge.
                 let layout = if crate::i18n::rtl() { egui::Layout::right_to_left(egui::Align::Center) } else { *ui.layout() };
                 ui.with_layout(layout, |ui| {
-                    for (name, entries) in &tree {
-                        ui.menu_button(crate::i18n::menu(name), |ui| {
+                    // Titles first, so a hovered title can take over before any menu is drawn.
+                    let titles: Vec<egui::Response> = tree.iter().map(|(name, _)| ui.add(egui::Button::new(crate::i18n::menu(name)))).collect();
+                    switch_on_hover(ui.ctx(), &titles);
+                    for ((_, entries), title) in tree.iter().zip(&titles) {
+                        egui::Popup::menu(title).show(|ui| {
                             for e in entries {
                                 entry_ui(ui, e, &mut clicked);
                             }
@@ -1318,6 +1321,18 @@ pub(crate) fn help_line(app: &mut CadApp, line: &str, typed: bool) -> bool {
     app.session.echo(format!("Command: {}", first.to_ascii_uppercase()));
     open_help(app, rest.first().copied());
     true
+}
+
+/// While one menu of the bar is open, pointing at another title opens that menu instead.
+fn switch_on_hover(ctx: &egui::Context, titles: &[egui::Response]) {
+    let is_open = |title: &egui::Response| egui::Popup::is_id_open(ctx, egui::Popup::default_response_id(title));
+    if !titles.iter().any(is_open) {
+        return;
+    }
+    // A click on a title toggles its menu by itself.
+    if let Some(title) = titles.iter().find(|t| t.hovered() && !t.clicked() && !is_open(t)) {
+        egui::Popup::open_id(ctx, egui::Popup::default_response_id(title));
+    }
 }
 
 /// Like choosing a menu item: starts the command interactively.
