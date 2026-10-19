@@ -1449,3 +1449,217 @@
 	Clip PDF Underlay	PDF アンダーレイをクリップ
 	Adjust PDF Underlay	PDF アンダーレイを調整
 	PDF Underlay Layers	PDF アンダーレイのレイヤー
+	Unused items in this drawing	この図面の未使用の項目
+	Purge Checked Items	チェックした項目を名前削除
+	Purge All	すべて名前削除
+	Items purged: {count}	名前削除した項目: {count}
+	Find what:	検索する文字列:
+	Replace with:	置換後の文字列:
+	Match case	大文字と小文字を区別
+	Find whole words only	単語単位で検索
+	Find	検索
+	Replace All	すべて置換
+	Matches replaced: {count} (objects: {objects})	置換した一致: {count} (オブジェクト: {objects})
+	Matches found and selected: {count} (objects: {objects})	検索して選択した一致: {count} (オブジェクト: {objects})
+	Select Color	色を選択
+	Dimension styles	寸法スタイル
+	Linetypes	線種
+	Multileader styles	マルチ引出線スタイル
+	Multiline styles	マルチラインスタイル
+	Table styles	表スタイル
+	Text styles	文字スタイル
+	Zero-length geometry	長さゼロのジオメトリ
+	Empty text objects	空の文字オブジェクト
+	Drawings (CDY, DWG, DXF)	図面 (CDY、DWG、DXF)
+	CADaddy Drawing (CDY)	CADaddy 図面 (CDY)
+	CADaddy drawing (.cdy)	CADaddy 図面 (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	CADaddy 図面 (.cdy) を保存するときに DWG のコピーも保存する
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	CADaddy 図面はすべてを保持します。DWG と DXF ファイルはすべてを保持できない場合があります (保存時に何が失われるかを表示します)。
+	Field...	フィールド...
+	Update Fields	フィールドを更新
+	UCS	UCS
+	Plan View (World)	平面図 (ワールド)
+	New UCS	新規 UCS
+	World	ワールド
+	Current UCS	現在の UCS
+	World (WCS)	ワールド (WCS)
+	Unnamed	名前なし
+	Hide UCS Icon	UCS アイコンを非表示
+	WCS	WCS
+	Hyperlink...	ハイパーリンク...
+	Select Objects for a Hyperlink	ハイパーリンクのオブジェクトを選択
+	Open Hyperlink	ハイパーリンクを開く
+	Insert Hyperlink	ハイパーリンクを挿入
+	Edit Hyperlink	ハイパーリンクを編集
+	Text to display	表示テキスト
+	File or web page	ファイルまたは Web ページ
+	Named location	名前付きの位置
+	A named location with no file or web page is a layout or view of this drawing.	ファイルや Web ページのない名前付きの位置は、この図面のレイアウトまたはビューです。
+	Remove Link	リンクを削除
+	⌘-click to follow the link	⌘ を押しながらクリックでリンクを開く
+	Ctrl+click to follow the link	Ctrl を押しながらクリックでリンクを開く
+	Materials Browser...	マテリアル ブラウザ...
+	Attach by Layer	画層ごとにアタッチ
+	Material Mapping	マテリアル マッピング
+	New Material	新しいマテリアル
+	Edit Material	マテリアルを編集
+	Delete Material	マテリアルを削除
+	Assign Material	マテリアルを割り当て
+	Materials Browser	マテリアル ブラウザ
+	Search	検索
+	Library	ライブラリ
+	Add to drawing	図面に追加
+	In this drawing	この図面
+	No materials yet: add one from the library.	まだマテリアルがありません: ライブラリから追加してください。
+	Colour	色
+	Roughness	粗さ
+	Metallic	金属度
+	Opacity	不透明度
+	Mapping	マッピング
+	Tile size	タイル サイズ
+	Assign to selection ({n})	選択に割り当て ({n})
+	Attach to layer	画層にアタッチ
+	Render	レンダリング
+	Visual Style	表示スタイル
+	Visual Styles	表示スタイル
+	Wireframe	ワイヤフレーム
+	Hidden	隠線処理
+	Shaded	シェーディング
+	Shaded with Edges	エッジ付きシェーディング
+	Realistic	リアリスティック
+	Mesh	メッシュ
+	Polyface Mesh	ポリフェース メッシュ
+	Polygon Mesh	ポリゴン メッシュ
+	3D Building from Plan	平面図から 3D 建物
+	Wedge	くさび
+	Presspull	押し出し/引き込み
+	3D Solid	3D ソリッド
+	Specify center	中心を指定
+	Specify length	長さを指定
+	Specify width	幅を指定
+	Specify other corner	もう一方のコーナーを指定
+	Specify center point	中心点を指定
+	Specify base radius	底面の半径を指定
+	Specify radius	半径を指定
+	Specify diameter	直径を指定
+	Specify top radius	上面の半径を指定
+	Specify tube radius	チューブの半径を指定
+	Select objects to extrude	押し出すオブジェクトを選択
+	Select extrusion path	押し出しパスを選択
+	Specify angle of taper for extrusion	押し出しのテーパー角度を指定
+	Specify height of extrusion	押し出しの高さを指定
+	Select objects to revolve	回転するオブジェクトを選択
+	Specify axis start point or define axis by	軸の始点を指定または軸を定義
+	Specify axis endpoint	軸の終点を指定
+	Specify angle of revolution	回転角度を指定
+	Select objects to sweep	スイープするオブジェクトを選択
+	Select sweep path	スイープ パスを選択
+	Select cross sections in lofting order	ロフト順に断面を選択
+	Click inside bounded areas to press or pull	境界領域の内側をクリックして押し出しまたは引き込み
+	Specify extrusion height	押し出しの高さを指定
+	Cube	立方体
+	Sides	辺
+	Top radius	上面の半径
+	Path	パス
+	Taper angle	テーパー角度
+	Select one or more regions or 3D solids.	1 つ以上のリージョンまたは 3D ソリッドを選択してください。
+	No closed area found there.	閉じた領域が見つかりません。
+	Slice	スライス
+	Thicken	厚みを付ける
+	Fillet Edge	エッジをフィレット
+	Chamfer Edge	エッジを面取り
+	Fillet Edges	エッジをフィレット
+	Chamfer Edges	エッジを面取り
+	Move Faces	面を移動
+	Offset Faces	面をオフセット
+	Delete Faces	面を削除
+	Shell	シェル
+	Composite	複合
+	Select objects to slice	スライスするオブジェクトを選択
+	Specify a point on desired side or [keep Both sides]	残す側の点を指定 または [両側を保持]
+	Both	両側
+	Specify start point of slicing plane or	スライス平面の始点を指定 または
+	Specify second point on plane	平面上の 2 点目を指定
+	Specify the Z of the XY-plane	XY 平面の Z を指定
+	Specify the X of the YZ-plane	YZ 平面の X を指定
+	Specify the Y of the ZX-plane	ZX 平面の Y を指定
+	Select surfaces to thicken	厚みを付けるサーフェスを選択
+	Select a 3D solid	3D ソリッドを選択
+	Select an edge	エッジを選択
+	Remove faces	面を除去
+	Select faces	面を選択
+	Specify thickness	厚さを指定
+	Enter fillet radius	フィレット半径を入力
+	Enter distance	距離を入力
+	Specify a base point or displacement	基点または移動距離を指定
+	Specify a second point of displacement	移動距離の 2 点目を指定
+	Specify the offset distance	オフセット距離を指定
+	Enter the shell offset distance	シェルのオフセット距離を入力
+	Select solids, surfaces, and regions to subtract from ..	差し引かれるソリッド、サーフェス、リージョンを選択 ..
+	Select solids, surfaces, and regions to subtract ..	差し引くソリッド、サーフェス、リージョンを選択 ..
+	Select two or more solids.	2 つ以上のソリッドを選択してください。
+	The solids don't overlap; nothing was changed.	ソリッドは重なっていません。変更はありません。
+	Nothing would remain; nothing was changed.	何も残りません。変更はありません。
+	The result would not be a solid; nothing was changed.	結果はソリッドになりません。変更はありません。
+	No straight edge between two flat faces there.	そこには 2 つの平面間の直線エッジがありません。
+	No face of the solid there.	そこにはソリッドの面がありません。
+	Only outside (convex) edges can be filleted or chamfered.	フィレットまたは面取りできるのは外側 (凸) のエッジのみです。
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	シェルは直方体、円柱、球、まっすぐな押し出しで使えます。
+	The walls are too thick for this solid.	このソリッドには壁が厚すぎます。
+	Select solids to subtract from.	差し引かれるソリッドを選択してください。
+	A solid can't be subtracted from itself.	ソリッドをそれ自身から差し引くことはできません。
+	The solid would have too many operations; nothing was changed.	ソリッドの操作が多すぎます。変更はありません。
+	That face can't be moved (only flat faces, holes and added parts).	その面は移動できません (平面、穴、追加部分のみ)。
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	その面は削除できません (穴、フィレット、面取り、追加部分のみ)。
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	その面はオフセットできません (直方体の側面、円柱・円錐・押し出しの端面、円柱の側面、球)。
+	The thickness must be more than zero.	厚さは 0 より大きくなければなりません。
+	The radius must be more than zero.	半径は 0 より大きくなければなりません。
+	The distance must be more than zero.	距離は 0 より大きくなければなりません。
+	Requires a number.	数値が必要です。
+	Light List	ライト一覧
+	Sun Properties	太陽のプロパティ
+	Render Exposure	レンダリング露出
+	Point Light	点光源
+	Spotlight	スポットライト
+	Distant Light	遠隔光源
+	Change Lights	ライトを変更
+	Section Plane	断面平面
+	Live Section	ライブ断面
+	Generate Section Block	断面ブロックを作成
+	Generate Section	断面を作成
+	Flatshot	フラットショット
+	Base View	基準ビュー
+	Section View	断面ビュー
+	Drawing Views	図面ビュー
+	Select face or any point to locate section line or	面または任意の点を選択して断面線を配置 または
+	Orthographic	正投影
+	Select section object	断面オブジェクトを選択
+	Specify location of base view	基準ビューの位置を指定
+	Select parent view	親ビューを選択
+	Specify end point	終点を指定
+	Specify location of section view	断面ビューの位置を指定
+	There is nothing to draw: no 3D objects were found.	描画するものがありません: 3D オブジェクトが見つかりません。
+	The section plane doesn't cut any solid.	断面平面はソリッドを切断していません。
+	The view needs a direction.	ビューには方向が必要です。
+	The drawing has no layout.	図面にレイアウトがありません。
+	That is not a section plane.	断面平面ではありません。
+	Requires a point.	点が必要です。
+	The view is [dx, dy, dz].	ビューは [dx, dy, dz] です。
+	STL Out	STL 書き出し
+	Export STL...	STL を書き出し...
+	3D models (glTF, OBJ, STL)	3D モデル (glTF、OBJ、STL)
+	3D model (glTF binary)	3D モデル (glTF バイナリ)
+	3D model (glTF)	3D モデル (glTF)
+	3D model (OBJ)	3D モデル (OBJ)
+	3D model (STL)	3D モデル (STL)
+	Render Region	領域をレンダリング
+	samples	サンプル
+	a sample	1 サンプルあたり
+	Pick crop window to render	レンダリングする範囲を選択
+	Nothing has been rendered yet.	まだ何もレンダリングされていません。
+	There is nothing to render: no surfaces in the view.	レンダリングするものがありません: ビューにサーフェスがありません。
+	The image couldn't be encoded.	イメージをエンコードできませんでした。
+	Saving images isn't available in the browser.	ブラウザーではイメージを保存できません。
+	PNG image	PNG イメージ
+	JPEG image	JPEG イメージ
+	Save Image	イメージを保存

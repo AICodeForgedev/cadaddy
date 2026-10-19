@@ -54,6 +54,7 @@ pub const PROFILE_VARS: &[&str] = &[
     "PICKADD",
     "SELECTIONCYCLING",
     "MAXARRAY",
+    "DWGCOPY",
 ];
 
 /// The most profile entries [`restore`] reads (a saved profile is untrusted input).
@@ -91,13 +92,17 @@ pub fn profile(s: &Session) -> Value {
 pub fn apply(s: &mut Session, values: &Value) -> Result<()> {
     let Some(obj) = values.as_object() else { return Err(bad("options", "expected an object of profile variables")) };
     let before = s.settings.clone();
+    // DWGCOPY is process-wide, not in the session settings.
+    let copy_before = crate::cmd::file::dwg_copy();
     for (name, v) in obj {
         if !is_profile_var(name) {
             s.settings = before;
+            crate::cmd::file::set_dwg_copy(copy_before);
             return Err(bad("options", format!("{name} is not a profile setting")));
         }
         if let Err(e) = crate::sysvars::set(s, name, v) {
             s.settings = before;
+            crate::cmd::file::set_dwg_copy(copy_before);
             return Err(bad("options", format!("invalid value for {}: {e}", name.to_ascii_uppercase())));
         }
     }
@@ -120,6 +125,7 @@ pub fn restore(s: &mut Session, saved: &Value) {
 
 /// Put every profile variable back to its default.
 pub fn reset(s: &mut Session) {
+    crate::cmd::file::set_dwg_copy(false);
     let d = Settings::default();
     let st = &mut s.settings;
     st.osmode = d.osmode;

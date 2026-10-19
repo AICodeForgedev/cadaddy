@@ -25,6 +25,18 @@ use crate::theme::Tokens;
 const MIN_PX: f32 = 13.0;
 const MAX_PX: f32 = 36.0;
 /// Families the font list offers besides the one set in the text.
+/// The family a text style's font names: itself, or a font file's name without its folder,
+/// extension and a trailing "Regular" style.
+fn family_of(font: &str) -> String {
+    let file = font.rsplit(['/', '\\']).next().unwrap_or(font);
+    let stem = match file.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && ext.len() <= 4 => stem,
+        _ => file,
+    };
+    let stem = stem.strip_suffix("-Regular").or_else(|| stem.strip_suffix("Regular")).unwrap_or(stem);
+    stem.trim().to_string()
+}
+
 const FAMILIES: [&str; 6] = ["Arial", "Times New Roman", "Courier New", "Verdana", "Georgia", "Calibri"];
 /// The standard colours (ACI 1..=7) of the colour menu.
 const SWATCHES: [u16; 7] = [1, 2, 3, 4, 5, 6, 7];
@@ -88,11 +100,12 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     let mut st = ctx.data_mut(|d| d.get_temp::<State>(state_id())).unwrap_or_else(|| {
         // An existing MTEXT (TEXTEDIT) opens with its text and formatting.
         let mut fmt = if mt.contents.is_empty() { Formatted::default() } else { Formatted::from_contents(&mt.contents) };
-        if let Some(f) = app.session.doc().ok().and_then(|d| d.text_style(&mt.style).map(|s| s.font.clone())) {
-            // A family name, not a font file (`txt.shx`, `arial.ttf`).
-            if !f.is_empty() && !f.contains('.') {
-                fmt.base_font = f;
-            }
+        // The style's font: a family name, or a font file whose name gives the family
+        // (`OpenSans-Regular.ttf` → OpenSans, `txt.shx` → txt). The box showed Arial for those.
+        if let Some(f) = app.session.doc().ok().and_then(|d| d.text_style(&mt.style).map(|s| family_of(&s.font)))
+            && !f.is_empty()
+        {
+            fmt.base_font = f;
         }
         State { fmt, typing: CharFmt::default(), typing_at: 0, top: 70.0, sel: (0, 0), caret: None, focused: false, keep_x: None, anchor: None }
     });
@@ -107,11 +120,14 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         k = max_w / content_w;
     }
     let px = (base_h * k) as f32;
-    let width = ((content_w * k) as f32 + 2.0 * BOX_MARGIN).max(280.0);
+    // The text area is as wide as the box picked (at the readable scale); only the toolbar above
+    // it keeps a minimum width (the editor used to be 280 points wide for any box).
+    let box_w = ((content_w * k) as f32 + 2.0 * BOX_MARGIN).max(80.0);
+    let width = box_w.max(280.0);
     // The box's top-left corner on screen (rotation is ignored while editing).
     let code = usize::from(mt.attach.clamp(1, 9) - 1);
     let (col, row) = ((code % 3) as f64, (code / 3) as f64);
-    let ww = f64::from(width) / scale;
+    let ww = f64::from(box_w) / scale;
     let corner = cadaddy_geom::Vec2::new(mt.insert.x - col * ww / 2.0, mt.insert.y + row * base_h * 2.0);
     let at = app.canvas.xf.map_or(rect.center(), |x| x.w2s(corner));
     let max_x = (rect.right() - width - 8.0).max(rect.left());
@@ -124,9 +140,9 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
             ui.set_width(width);
             let y0 = ui.cursor().top();
             toolbar(ui, &mut st, base_h);
-            ruler(ui, &mut st, px, width, base_h);
+            ruler(ui, &mut st, px, box_w, base_h);
             st.top = ui.cursor().top() - y0;
-            text_box(ui, &mut st, &lay, k, width, &t);
+            text_box(ui, &mut st, &lay, k, box_w, &t);
             ui.horizontal(|ui| {
                 ui.add_space(4.0);
                 if ui.button(crate::tl!("OK")).clicked() {
@@ -265,7 +281,9 @@ fn toolbar(ui: &mut egui::Ui, st: &mut State, base_h: f64) {
         }
         // Colour
         let swatch = cur.color.map_or(ui.visuals().text_color(), color32);
-        ui.menu_button(RichText::new("A▾").color(swatch).strong(), |ui| {
+        // Toolbar glyphs are ones every interface font has (Windows' Segoe UI has no ▾ ⇤ ⇥ ⌀ ✕:
+        // they showed as empty boxes).
+        ui.menu_button(RichText::new("A ↓").color(swatch).strong(), |ui| {
             if ui.button(crate::tl!("ByLayer")).clicked() {
                 change(st, |c| c.color = None);
                 refocus = true;
@@ -297,9 +315,9 @@ fn toolbar(ui: &mut egui::Ui, st: &mut State, base_h: f64) {
         // Paragraph alignment
         let para = st.fmt.para(st.fmt.paragraph_of(range.start));
         for (al, glyph, tip) in [
-            (ParaAlign::Left, "⇤", crate::tl!("Left")),
+            (ParaAlign::Left, "|←", crate::tl!("Left")),
             (ParaAlign::Center, "↔", crate::tl!("Center")),
-            (ParaAlign::Right, "⇥", crate::tl!("Right")),
+            (ParaAlign::Right, "→|", crate::tl!("Right")),
             (ParaAlign::Justify, "≡", crate::tl!("Justify")),
         ] {
             let on = para.align == al;
@@ -319,10 +337,11 @@ fn toolbar(ui: &mut egui::Ui, st: &mut State, base_h: f64) {
             refocus = true;
         }
         for (glyph, tip, code) in [
-            ("⇥|", crate::tl!("Insert tab"), "\t"),
+            ("→|", crate::tl!("Insert tab"), "\t"),
             ("°", crate::tl!("Degree"), "°"),
             ("±", crate::tl!("Plus/minus"), "±"),
-            ("⌀", crate::tl!("Diameter"), "⌀"),
+            // The button shows Ø (in every font); the text gets the diameter sign itself.
+            ("Ø", crate::tl!("Diameter"), "⌀"),
         ] {
             if ui.button(glyph).on_hover_text(tip).clicked() {
                 insert(st, code);
@@ -360,9 +379,13 @@ fn ruler(ui: &mut egui::Ui, st: &mut State, px: f32, width: f32, base_h: f64) {
     let tick = |u: f64| rect.left() + (u as f32) * px;
     let x_of = |v: f64| tick(v / base_h);
     let units = (f64::from(width) / f64::from(px)).floor() as i32;
-    for u in 0..=units.clamp(0, 400) {
+    // Ticks at least 5 points apart and numbered every 5 ticks only where the numbers fit (small
+    // text on screen, e.g. a large drawing, packed a tick per text height into a solid strip).
+    let step = [1, 2, 5, 10, 20, 50, 100].into_iter().find(|s| *s as f32 * px >= 5.0).unwrap_or(100);
+    let label = [5, 10, 20].into_iter().map(|n| n * step).find(|l| *l as f32 * px >= 28.0).unwrap_or(20 * step);
+    for u in (0..=units.clamp(0, 400)).step_by(usize::try_from(step).unwrap_or(1)) {
         let x = tick(f64::from(u));
-        let major = u % 5 == 0;
+        let major = u % label == 0;
         painter.line_segment([pos2(x, rect.bottom() - if major { 7.0 } else { 3.0 }), pos2(x, rect.bottom())], Stroke::new(1.0, t.text_faint));
         if major && u > 0 {
             painter.text(pos2(x + 2.0, rect.top() + 1.0), Align2::LEFT_TOP, u.to_string(), FontId::proportional(8.0), t.text_faint);
@@ -590,6 +613,15 @@ fn text_box(ui: &mut egui::Ui, st: &mut State, lay: &MTextLayout, k: f64, width:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn style_fonts_name_their_family() {
+        assert_eq!(super::family_of("OpenSans-Regular.ttf"), "OpenSans");
+        assert_eq!(super::family_of("Arial"), "Arial");
+        assert_eq!(super::family_of("txt.shx"), "txt");
+        assert_eq!(super::family_of("C:\\Windows\\Fonts\\arial.ttf"), "arial");
+        assert_eq!(super::family_of(""), "");
+    }
+
     use super::*;
     use cadaddy_engine::Session;
 

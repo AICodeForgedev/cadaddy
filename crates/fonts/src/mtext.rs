@@ -14,6 +14,7 @@ pub fn plain_mtext(s: &str) -> String {
     let mut i = 0;
     while let Some(&c) = chars.get(i) {
         match c {
+            crate::FIELD_ON | crate::FIELD_OFF => i += 1,
             '%' if crate::field_code(&chars, i).is_some() => {
                 out.push_str("####");
                 i += crate::field_code(&chars, i).unwrap_or(1);
@@ -153,6 +154,14 @@ pub struct MTextLayout {
     pub lines: Vec<String>,
     /// Where each line's characters are, for an editor's caret, selection and hit-testing.
     pub carets: Vec<CaretLine>,
+    /// The boxes behind field values (four corners each, in world coordinates), for shading
+    /// fields on screen.
+    pub fields: Vec<[Vec2; 4]>,
+}
+
+/// The box behind a piece of field text from `x` to `x + w` on a baseline, in the text's frame.
+pub(crate) fn field_box(x: f64, w: f64, h: f64) -> [Vec2; 4] {
+    [Vec2::new(x, -h * 0.3), Vec2::new(x + w, -h * 0.3), Vec2::new(x + w, h * 1.2), Vec2::new(x, h * 1.2)]
 }
 
 /// A laid-out line as an editor's caret sees it: where each character starts. Positions are in
@@ -203,6 +212,8 @@ struct Fmt {
     color: Option<MTextColor>,
     under: bool,
     over: bool,
+    /// Inside a field's value ([`crate::FIELD_ON`] … [`crate::FIELD_OFF`]): shaded on screen.
+    field: bool,
     wf: f64,
     oblique: f64,
     /// `\A`: vertical alignment of tolerance stacks (`^`) on the line: 0 bottom, 1 centre, 2 top.
@@ -310,6 +321,7 @@ fn parse(contents: &str, base: Fmt) -> (Vec<Atom>, Vec<Fmt>) {
             color: None,
             under: false,
             over: false,
+            field: false,
             wf: 1.0,
             oblique: 0.0,
             valign: 1,
@@ -326,6 +338,10 @@ fn parse(contents: &str, base: Fmt) -> (Vec<Atom>, Vec<Fmt>) {
             break;
         }
         match c {
+            crate::FIELD_ON | crate::FIELD_OFF => {
+                derive(&mut fmts, &mut cur, &|f| f.field = c == crate::FIELD_ON);
+                i += 1;
+            }
             '%' if crate::field_code(&chars, i).is_some() => {
                 for ch in "####".chars() {
                     push_char(&mut word, ch, cur);
@@ -611,7 +627,7 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
     let wf = if p.width_factor.is_finite() && p.width_factor > 0.0 { p.width_factor } else { 1.0 };
     let width = if p.width.is_finite() && p.width > 0.0 { p.width } else { 0.0 };
     let rotation = if p.rotation.is_finite() { p.rotation } else { 0.0 };
-    let base = Fmt { font: p.font.clone(), height: h, color: None, under: false, over: false, wf, oblique: p.oblique, valign: 1 };
+    let base = Fmt { font: p.font.clone(), height: h, color: None, under: false, over: false, field: false, wf, oblique: p.oblique, valign: 1 };
     let (atoms, fmts) = parse(contents, base.clone());
     if para::needed(contents, p) {
         return para::layout(contents, p, &base);
@@ -730,10 +746,13 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
             height: if l.max_h > 0.0 { l.max_h } else { h },
         });
         for it in &l.items {
-            let Some(sg) = &it.seg else { continue };
             let fm = fmt(it.fmt);
-            let mut sh = seg_shape(sg, fm, it.x);
             let off = Vec2::new(x0, top + base_y);
+            if fm.field {
+                out.fields.push(field_box(it.x, it.w, fm.height).map(|q| xf(q + off)));
+            }
+            let Some(sg) = &it.seg else { continue };
+            let mut sh = seg_shape(sg, fm, it.x);
             sh.map(|q| xf(q + off));
             match out.pieces.last_mut() {
                 Some(pc) if pc.color == fm.color => pc.shaped.extend(sh),
@@ -973,5 +992,24 @@ mod tests {
         }
         let long = "word ".repeat(5000);
         assert!(lay(&long, 10.0).lines.len() > 100);
+    }
+}
+
+#[cfg(test)]
+mod field_tests {
+    use super::*;
+
+    #[test]
+    fn field_marks_shade_their_text_and_are_not_drawn() {
+        let marked = format!("A {}12/5{} B", crate::FIELD_ON, crate::FIELD_OFF);
+        let l = layout_mtext(&marked, Vec2::ZERO, 1.0, 0.0, 1, 0.0, 1.0);
+        let plain = layout_mtext("A 12/5 B", Vec2::ZERO, 1.0, 0.0, 1, 0.0, 1.0);
+        assert_eq!(l.strokes, plain.strokes, "the marks draw nothing");
+        assert_eq!(l.fields.len(), 1);
+        let b = Bounds2::from_points(l.fields[0]);
+        // The box covers "12/5" only: right of "A " and left of " B".
+        assert!(b.min.x > crate::line_width("A", 1.0, 1.0) && b.max.x < plain.bounds.max.x - crate::line_width("B", 1.0, 1.0));
+        assert!(plain.fields.is_empty());
+        assert_eq!(plain_mtext(&marked), "A 12/5 B");
     }
 }

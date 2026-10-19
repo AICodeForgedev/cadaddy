@@ -19,6 +19,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.spacemouse.calibrate", "Calibrate 3D Mouse", &[], None),
     ("ui.spacemouse.navigate", "3D Mouse Navigation", &[], None),
     ("ui.dock", "Arrange Panel", &[], None),
+    ("ui.properties", "My Properties", &[], None),
     ("ui.dock.reset", "Reset Panel Layout", &["Window", "Reset Panel Layout"], None),
     ("ui.open", "Open...", &[], Some("Cmd+O")),
     ("ui.newtemplate", "New from Template...", &["File", "New from Template..."], None),
@@ -32,6 +33,12 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
     ("ui.panel.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
     ("ui.panel.symbols", "Symbols", &["Window", "Symbols"], None),
+    ("ui.float.toolSets", "Tool Sets", &["Window", "Palette Windows", "Tool Sets"], None),
+    ("ui.float.properties", "Properties", &["Window", "Palette Windows", "Properties"], None),
+    ("ui.float.layers", "Layers", &["Window", "Palette Windows", "Layers"], None),
+    ("ui.float.externalReferences", "External References", &["Window", "Palette Windows", "External References"], None),
+    ("ui.float.symbols", "Symbols", &["Window", "Palette Windows", "Symbols"], None),
+    ("ui.float.quickCalc", "QuickCalc", &["Window", "Palette Windows", "QuickCalc"], None),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
     ("ui.animations.system", "Use System Setting", &["View", "Accessibility", "Animation Effects", "Use System Setting"], None),
     ("ui.animations.on", "On", &["View", "Accessibility", "Animation Effects", "On"], None),
@@ -50,6 +57,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.theme.light", "Light", &["View", "Interface Theme", "Light"], None),
     ("ui.theme.dark", "Dark", &["View", "Interface Theme", "Dark"], None),
     ("ui.theme", "Interface Theme", &[], None),
+    ("ui.saveformat.cdy", "CADaddy Drawing (CDY)", &["File", "Default Save Format", "CADaddy Drawing (CDY)"], None),
     ("ui.saveformat.dxf", "DXF", &["File", "Default Save Format", "DXF"], None),
     ("ui.saveformat.dwg", "DWG", &["File", "Default Save Format", "DWG"], None),
     ("ui.saveformat", "Default Save Format", &[], None),
@@ -85,6 +93,10 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.quit", "Quit CADaddy", &[], Some("Cmd+Q")),
 ];
 
+/// Typed commands that open a dialog only when typed alone: with more on the line (`color 1`,
+/// a script) the command runs at the command line with that input.
+pub(crate) const DIALOG_WHEN_ALONE: &[&str] = &["purge", "pu", "find", "color", "col", "colour"];
+
 pub fn is_ui_command(id: &str) -> bool {
     UI_COMMANDS.iter().any(|c| c.0 == id)
 }
@@ -118,6 +130,18 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     }
     if let Some(r) = crate::managers::route(app, id, params) {
         return Some(r);
+    }
+    // Window ▸ Palette Windows: a palette into a window of its own, or back.
+    if let Some(panel) = id.strip_prefix("ui.float.") {
+        let operation = match crate::docking::Panel::parse(panel) {
+            Ok(p) if app.ui.docking.is_detached(p) => "dock",
+            Ok(_) => "detach",
+            Err(e) => return Some(Err(e)),
+        };
+        return Some(crate::docking::command(app, false, &json!({"operation": operation, "panel": panel})));
+    }
+    if id == "ui.properties" {
+        return Some(crate::palettes::my_properties_command(app, params));
     }
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", params));
@@ -185,8 +209,13 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // Convert PDF to DWG (application menu) and PDF Import (Insert tab; PDFIMPORT typed
         // without a path, as AutoCAD asks for the file): pick the PDF, then the options dialog.
         "ui.convertpdf" => crate::pdfdlg::begin(app, true),
+        // FILEDIA 0: PDFIMPORT asks for the file on the command line instead.
+        "ui.pdfimport" if file_dialogs_off(app) => {
+            app.start("pdfimport");
+            Ok(Value::Null)
+        }
         "ui.pdfimport" => crate::pdfdlg::begin(app, false),
-        "pdfimport" if no_path && app.services.pick_pdf.is_some() => crate::pdfdlg::begin(app, false),
+        "pdfimport" if no_path && app.services.pick_pdf.is_some() && !file_dialogs_off(app) => crate::pdfdlg::begin(app, false),
         "ui.open" | "open" if no_path => {
             let picked = app.services.pick_open.as_ref().and_then(|f| f());
             if let Some(p) = picked {
@@ -288,6 +317,21 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             toggle(&mut app.ui.system_cursor, params);
             Ok(Value::Null)
         }
+        // 3DWALK and 3DFLY: walk mode in the drawing's tab, walking or flying (switching when it
+        // is already open).
+        "3dwalk" | "3dw" | "3dfly" | "3df" => {
+            let fly = matches!(id, "3dfly" | "3df");
+            if app.walk.is_none()
+                && let Err(e) = crate::walk::open(app)
+            {
+                return Some(Err(e));
+            }
+            if let Some(w) = app.walk.as_mut() {
+                w.walker.fly = fly;
+                w.walker.vz = 0.0;
+            }
+            Ok(json!({ "mode": if fly { "fly" } else { "walk" } }))
+        }
         "ui.walk" => {
             // Toggles: opens walk mode on the active drawing, or goes back to the canvas.
             if app.walk.is_some() {
@@ -333,16 +377,16 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             },
             None => Ok(animations_json(app)),
         },
-        "ui.saveformat.dxf" | "ui.saveformat.dwg" => {
+        "ui.saveformat.cdy" | "ui.saveformat.dxf" | "ui.saveformat.dwg" => {
             let format = crate::SaveFormat::parse(id.trim_start_matches("ui.saveformat.")).unwrap_or_default();
             Ok(set_save_format(app, format))
         }
-        // `{"format": "dxf"|"dwg"}` sets the default save format for new drawings; without it,
+        // `{"format": "cdy"|"dxf"|"dwg"}` sets the default save format for new drawings; without it,
         // reports it.
         "ui.saveformat" => match params.get("format").and_then(Value::as_str) {
             Some(name) => match crate::SaveFormat::parse(name) {
                 Some(format) => Ok(set_save_format(app, format)),
-                None => Err(format!("unknown save format \"{name}\" (dxf or dwg)")),
+                None => Err(format!("unknown save format \"{name}\" (cdy, dxf or dwg)")),
             },
             None => Ok(json!({ "saveFormat": app.ui.save_format.as_str() })),
         },
@@ -445,8 +489,22 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         // Typed or menu-invoked (no parameters) these open their dialogs; JSON calls run the command.
+        "etransmit" if params.is_null() => {
+            app.ui.dialog = Some("etransmit".into());
+            Ok(Value::Null)
+        }
         "qselect" | "qs" if params.is_null() => {
             app.ui.dialog = Some("qselect".into());
+            Ok(Value::Null)
+        }
+        // Typed or from the menu: the Insert Hyperlink dialog (objects selected first).
+        "hyperlink" if params.is_null() => {
+            crate::hyperlinks::start(app);
+            Ok(Value::Null)
+        }
+        // Typed or from the menu: the Materials Browser (its layer row is MATERIALATTACH's dialog).
+        "materials" | "mat" | "rmat" | "materialattach" if params.is_null() => {
+            app.ui.dialog = Some(crate::materials::DIALOG.into());
             Ok(Value::Null)
         }
         "units" | "un" if params.is_null() => {
@@ -479,8 +537,39 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::toldlg::open_new(app);
             Ok(Value::Null)
         }
+        // Typed or from a menu: the Data Extraction wizard. -DATAEXTRACTION and JSON calls keep
+        // the command line and the JSON form.
+        "dataextraction" | "dx" | "eattext" if params.is_null() && app.session.state().is_ok() => {
+            crate::extractdlg::open(app);
+            Ok(Value::Null)
+        }
+        // Typed or from a menu: the Check Spelling dialog. -SPELL and JSON calls keep the command
+        // line and the JSON form.
+        "spell" | "sp" if params.is_null() && app.session.state().is_ok() => {
+            crate::spelldlg::open(app);
+            Ok(Value::Null)
+        }
+        // Typed or from Format ▸ Layer States Manager…: the dialog. JSON calls list the states.
+        "layerstate" | "las" if params.is_null() && app.session.state().is_ok() => {
+            crate::layerstates::open(app, None);
+            Ok(Value::Null)
+        }
         "hatchedit" | "he" if params.is_null() && app.session.state().is_ok() => {
             crate::hatchdlg::open_edit(app);
+            Ok(Value::Null)
+        }
+        // Typed alone or from a menu: the Purge, Find and Replace and Select Color dialogs.
+        // -PURGE and a typed line with more after the command (`color 1`) keep the command line.
+        "purge" | "pu" if params.is_null() && app.session.state().is_ok() => {
+            app.ui.dialog = Some("purge".into());
+            Ok(Value::Null)
+        }
+        "find" if params.is_null() && app.session.state().is_ok() => {
+            app.ui.dialog = Some("find".into());
+            Ok(Value::Null)
+        }
+        "color" | "col" | "colour" if params.is_null() && app.session.state().is_ok() => {
+            app.ui.dialog = Some("color".into());
             Ok(Value::Null)
         }
         "properties" | "pr" | "props" | "ch" if params.is_null() => {
@@ -495,6 +584,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
 /// in the default save version; one opened from a file keeps that file's version.
 pub(crate) fn saveas_params(ui: &crate::UiState, session: &cadaddy_engine::Session, path: &str) -> Value {
     let untitled = session.state().is_ok_and(|s| s.path.is_none());
+    // The version is a DWG/DXF one: a .cdy file has none.
+    if cadaddy_engine::cmd::file::is_cdy(path) {
+        return json!({ "path": path });
+    }
     match crate::SaveVersion::parse(&ui.save_version) {
         Some(v) if untitled => json!({ "path": path, "version": v.year() }),
         _ => json!({ "path": path }),
@@ -615,6 +708,10 @@ pub(crate) fn file_name(path: &str) -> String {
 /// Windows/Linux text ("Ctrl+Shift+Z"). `mac` comes from the runtime OS (`ctx.os()`), so the web build is right too.
 pub(crate) fn shortcut_label(s: &str, mac: bool) -> String {
     if !mac {
+        // Redo is Ctrl+Y on Windows and Linux (Ctrl+Shift+Z works too); macOS keeps ⇧⌘Z.
+        if s == "Cmd+Shift+Z" {
+            return "Ctrl+Y".into();
+        }
         return s.replace("Cmd+", "Ctrl+");
     }
     let shift = if s.contains("Shift+") { "⇧" } else { "" };
@@ -770,8 +867,10 @@ mod tests {
         let asked = Rc::new(RefCell::new(Vec::new()));
         let log = Rc::clone(&asked);
         let services = Services {
+            pick_save_image: None,
             pick_pdf: None,
             read_clipboard: None,
+            thumbnail: None,
             pick_image: None,
             pick_open: None,
             pick_save: Some(Box::new(move |name: &str| {
@@ -838,7 +937,7 @@ mod shortcut_label_tests {
     fn shortcut_label_per_platform() {
         assert_eq!(shortcut_label("Cmd+Shift+Z", true), "⇧⌘Z");
         assert_eq!(shortcut_label("Cmd+Z", true), "⌘Z");
-        assert_eq!(shortcut_label("Cmd+Shift+Z", false), "Ctrl+Shift+Z");
+        assert_eq!(shortcut_label("Cmd+Shift+Z", false), "Ctrl+Y");
         assert_eq!(shortcut_label("Cmd+Z", false), "Ctrl+Z");
         assert_eq!(shortcut_label("Shift+F3", false), "Shift+F3");
         assert_eq!(shortcut_label("Shift+F3", true), "⇧F3");

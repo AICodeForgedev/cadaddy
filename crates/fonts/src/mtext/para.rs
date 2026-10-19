@@ -622,6 +622,9 @@ pub(super) fn layout(contents: &str, p: &MTextParams, base: &Fmt) -> MTextLayout
             let fm = fmt(it.fmt);
             let mut sh = seg_shape(&it.seg, fm, it.x);
             let off = Vec2::new(col_x + shift + per_gap * it.gap as f64, top + base_y);
+            if fm.field {
+                out.fields.push(super::field_box(it.x, seg_width(&it.seg, fm), fm.height).map(|q| xf(q + off)));
+            }
             sh.map(|q| xf(q + off));
             match out.pieces.last_mut() {
                 Some(pc) if pc.color == fm.color => pc.shaped.extend(sh),

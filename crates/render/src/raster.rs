@@ -214,3 +214,13 @@ fn pixmap_of(r: &crate::images::Raster) -> Option<Pixmap> {
 pub fn render_png(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Vec<u8>> {
     render(list, view, o)?.encode_png().ok()
 }
+
+/// [`render_png`], turned 180° when `upside_down` (a plot's "Plot upside down").
+pub fn render_png_turned(list: &DisplayList, view: &View, o: &RasterOptions, upside_down: bool) -> Option<Vec<u8>> {
+    let mut pm = render(list, view, o)?;
+    if upside_down {
+        // Reversing the pixel order turns the image half a turn.
+        pm.data_mut().as_chunks_mut::<4>().0.reverse();
+    }
+    pm.encode_png().ok()
+}

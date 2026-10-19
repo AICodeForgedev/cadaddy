@@ -1,7 +1,8 @@
 //! CADaddy MCP server.
 //!
-//! JSON-RPC 2.0 over stdio (newline-delimited), implementing the MCP lifecycle, tools and
-//! resources. Tools map onto the app's control-channel methods, served either by a headless
+//! JSON-RPC 2.0 over stdio (newline-delimited), implementing the MCP lifecycle, tools,
+//! resources (the open drawings, layers, blocks, layouts, the command catalog) and prompts
+//! (agent recipes). Tools map onto the app's control-channel methods, served either by a headless
 //! [`Headless`] session in-process or by a running app through its loopback control port
 //! ([`Remote`]). Agents can type at the command line exactly like a user (`command_line`), call
 //! any command with JSON (`execute`), inspect the drawing and render it to a PNG.
@@ -9,6 +10,8 @@
 #![forbid(unsafe_code)]
 
 mod backend;
+mod prompts;
+mod resources;
 mod server;
 mod tools;
 

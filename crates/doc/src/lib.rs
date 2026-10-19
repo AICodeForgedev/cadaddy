@@ -10,12 +10,15 @@ mod array;
 mod constraint;
 mod entity;
 mod extents;
+pub mod field;
 mod gdt;
 mod header;
 pub mod library;
 mod plotstyle;
 mod plotter;
 mod refedit;
+mod section;
+mod solid;
 mod store;
 mod tables;
 
@@ -32,12 +35,17 @@ pub use header::{HVal, Header};
 pub use plotstyle::*;
 pub use plotter::*;
 pub use refedit::{RefEdit, WorkItem};
-pub use store::EntityStore;
+pub use section::*;
+pub use solid::*;
+pub use store::{ChunkRef, EntityStore};
 pub use tables::*;
 
 /// File data CADaddy doesn't model, kept for saving (#528).
 pub mod dynblock;
 pub mod foreign;
+pub mod hyperlink;
+pub mod lighting;
+pub mod material;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocError {
@@ -103,6 +111,8 @@ pub struct Drawing {
     pub vports: Vec<VportConfig>,
     pub ucss: Vec<Ucs>,
     pub layer_states: Vec<LayerState>,
+    /// Layer filters of the Layer Properties Manager.
+    pub layer_filters: Vec<LayerFilter>,
     pub groups: Vec<Group>,
     /// Plot style tables kept with the drawing (STYLESMANAGER); they shadow built-in tables of
     /// the same name.
@@ -122,6 +132,10 @@ pub struct Drawing {
     /// The hidden objects are saved with the drawing (OBJECTISOLATIONMODE 1, or read from a file
     /// that saved them).
     pub hidden_saved: bool,
+    /// The drawing's own materials (MATERIALS), by name; Global, ByLayer and ByBlock are implied.
+    pub materials: Vec<material::Material>,
+    /// The sun of rendered views and their exposure (SUNPROPERTIES, RENDEREXPOSURE).
+    pub sun: lighting::Sun,
     /// What reading the file left out (a DWG's object records the reader couldn't decode), told
     /// to the user when the drawing opens. Never written to a file.
     pub read_notes: Vec<String>,
@@ -131,6 +145,9 @@ pub struct Drawing {
     /// Records of the file this drawing was read from that the reader could not place (a damaged
     /// file), counted by the section they came from. Never written to a file.
     pub skipped_records: BTreeMap<String, usize>,
+    /// The values fields last evaluated to ([`field`]): per object, in the order the codes
+    /// appear in its text ([`field::texts`]).
+    pub field_values: BTreeMap<Handle, Vec<String>>,
 }
 
 impl Default for Drawing {
@@ -197,6 +214,7 @@ impl Drawing {
             vports: Vec::new(),
             ucss: Vec::new(),
             layer_states: Vec::new(),
+            layer_filters: Vec::new(),
             groups: Vec::new(),
             plot_style_tables: Vec::new(),
             constraints: Vec::new(),
@@ -205,9 +223,12 @@ impl Drawing {
             handseed: 0x100,
             hidden_objects: BTreeSet::new(),
             hidden_saved: false,
+            materials: Vec::new(),
+            sun: lighting::Sun::default(),
             read_notes: Vec::new(),
             refedit: None,
             skipped_records: BTreeMap::new(),
+            field_values: BTreeMap::new(),
         }
     }
 

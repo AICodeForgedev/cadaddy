@@ -75,8 +75,29 @@ impl PendingReply {
     ///   it may still finish and change the drawing (its late reply is discarded). Inspect before
     ///   sending it again.
     pub fn wait(self, timeout: Duration) -> ControlResponse {
-        if let Ok(r) = self.rx.recv_timeout(timeout) {
-            return r;
+        self.wait_nudging(timeout, || {})
+    }
+
+    /// [`Self::wait`], calling `nudge` every 20 ms while the app hasn't taken the request: a
+    /// repaint request that arrives while a frame is being drawn can be used up by that frame, and
+    /// the request then waited for the next timed repaint, about 0.3 s (one call in every few;
+    /// UI review 0.7.7c, measured as "stalls" after edits).
+    pub fn wait_nudging(self, timeout: Duration, nudge: impl Fn()) -> ControlResponse {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            match self.rx.recv_timeout(left.min(Duration::from_millis(20))) {
+                Ok(r) => return r,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if self.state.load(Ordering::Acquire) == QUEUED {
+                        nudge();
+                    }
+                }
+            }
         }
         if self.state.compare_exchange(QUEUED, CANCELLED, Ordering::AcqRel, Ordering::Acquire).is_ok() {
             return json!({"ok": false, "error": "timeout", "state": "not-run"});
@@ -134,6 +155,59 @@ pub(crate) fn record_widget(ui: &egui::Ui, response: &egui::Response, label: &st
     });
 }
 
+/// After the frame is laid out: the labelled controls egui drew that [`record_widget`] didn't see
+/// (dialogs, menus, context menus), read from its accessibility tree. Built only once an agent
+/// has sent a request, so ordinary sessions pay nothing.
+pub(crate) fn observe_drawn(ctx: &egui::Context) {
+    use egui::accesskit::Role;
+    let found: Vec<Widget> = ctx.viewport(|v| {
+        let Some(state) = v.this_pass.accesskit_state.as_ref() else { return Vec::new() };
+        let mut out = Vec::new();
+        for (id, node) in state.nodes.iter() {
+            let role = match node.role() {
+                Role::Button | Role::DefaultButton => "button",
+                Role::CheckBox => "checkbox",
+                Role::RadioButton => "radio",
+                Role::Tab => "tab",
+                Role::ComboBox => "combobox",
+                Role::TextInput | Role::MultilineTextInput | Role::SearchInput => "textedit",
+                Role::SpinButton | Role::Slider => "value",
+                Role::MenuItem | Role::MenuItemCheckBox | Role::MenuItemRadio => "menuitem",
+                Role::Link => "link",
+                _ => continue,
+            };
+            let (Some(label), Some(w)) = (node.label().or(node.value()), v.this_pass.widgets.get(*id)) else { continue };
+            if label.trim().is_empty() || !w.rect.is_finite() || !w.rect.is_positive() {
+                continue;
+            }
+            out.push(Widget {
+                id: *id,
+                label: label.chars().take(512).collect(),
+                role,
+                rect: [w.rect.left(), w.rect.top(), w.rect.width(), w.rect.height()],
+                enabled: w.enabled,
+                visible: true,
+                selected: node.toggled().map(|t| t == egui::accesskit::Toggled::True).or(node.is_selected()),
+            });
+        }
+        out
+    });
+    if found.is_empty() {
+        return;
+    }
+    ctx.data_mut(|data| {
+        let widgets = data.get_temp_mut_or_default::<Vec<Widget>>(widgets_id());
+        for w in found {
+            if widgets.len() >= 2048 {
+                break;
+            }
+            if !widgets.iter().any(|previous| previous.id == w.id) {
+                widgets.push(w);
+            }
+        }
+    });
+}
+
 fn widgets(ctx: &egui::Context) -> Vec<Widget> {
     ctx.data_mut(|data| data.get_temp::<Vec<Widget>>(widgets_id()).unwrap_or_default())
 }
@@ -171,6 +245,25 @@ fn elements(ctx: &egui::Context, params: &Value) -> Value {
             .map(|widget| widget_json(widget, focused))
             .collect(),
     )
+}
+
+/// The command running now, as an identity that lasts while it runs (its prompt machine).
+fn run_token(app: &CadApp) -> Option<usize> {
+    app.session.running.as_ref().map(|r| std::ptr::from_ref(&*r.machine).cast::<u8>() as usize)
+}
+
+/// Why an agent's typing can't go in now: the person at the window is running a command (one
+/// the agent didn't start), and the text would become that command's input (battle test 0.7.7c:
+/// an agent's `circle 80,80 3` added two segments to the user's LINE).
+fn users_command(app: &CadApp) -> Option<String> {
+    let token = run_token(app)?;
+    if app.agent_run == Some(token) {
+        return None;
+    }
+    let id = app.session.running.as_ref().map(|r| r.id.to_ascii_uppercase()).unwrap_or_default();
+    Some(format!(
+        "the user is running {id} in the app: typing now would answer its prompts. Use the execute tool (engine.execute on the control channel; it doesn't touch the command line), or wait until the command line is idle (wait_until_idle)"
+    ))
 }
 
 fn ok(v: Value) -> Outcome {
@@ -302,7 +395,7 @@ pub fn inspect(app: &CadApp, ctx: &egui::Context) -> Value {
         "snap": app.canvas.snap.map(|s| json!({"point": [s.point.x, s.point.y], "mode": s.name})),
         "session": app.session.summary(),
         "closePrompt": app.close_prompt(),
-        "perf": {"frameMs": app.frame_ms, "buildMs": app.canvas.build_ms, "drawMs": app.canvas.draw_ms, "meshMs": app.canvas.mesh_ms, "building": app.canvas.building(), "renderer": if app.canvas.gpu.is_some() { "gpu" } else { "cpu" }, "prims": app.canvas.list.as_ref().map(|l| l.prims.len())},
+        "perf": {"frameMs": app.frame_ms, "buildMs": app.canvas.build_ms, "drawMs": app.canvas.draw_ms, "meshMs": app.canvas.mesh_ms, "building": app.canvas.building(), "renderer": if app.canvas.gpu.is_some() { "gpu" } else { "cpu" }, "prims": app.canvas.list.as_ref().map(|l| l.prims.len()), "slowest": app.slowest},
     })
 }
 
@@ -319,6 +412,9 @@ fn key_from(name: &str) -> Option<egui::Key> {
 }
 
 pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    // An agent is driving: build egui's accessibility tree from now on, so `ui.elements` can
+    // name the widgets of dialogs and menus too ([`observe_drawn`]).
+    ctx.enable_accesskit();
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let f = |k: &str| p.get(k).and_then(Value::as_f64);
@@ -332,12 +428,21 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
         "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             crate::menus::activate(app, id);
+            // A command the agent started from a menu is the agent's: it can answer and cancel it
+            // (tester 0.7.7g: menu-started CIRCLE refused the agent's own input).
+            if let Some(token) = run_token(app) {
+                app.agent_run = Some(token);
+            }
             ok(cmdline_state(app))
         }
         "cmdline.input" => {
+            if let Some(e) = users_command(app) {
+                return err(e);
+            }
             let text = s("text").unwrap_or("");
             let before = app.session.log.len();
             let error = app.cmdline(text);
+            app.agent_run = run_token(app);
             let out: Vec<String> = app.session.log.iter().skip(before).cloned().collect();
             let mut st = cmdline_state(app);
             if let Some(o) = st.as_object_mut() {
@@ -349,6 +454,9 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             ok(st)
         }
         "cmdline.script" => {
+            if let Some(e) = users_command(app) {
+                return err(e);
+            }
             let before = app.session.log.len();
             let r = app.session.script(s("text").unwrap_or("")).map_err(|e| e.to_string());
             let out: Vec<String> = app.session.log.iter().skip(before).cloned().collect();
@@ -358,8 +466,15 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             }
         }
         "cmdline.key" => {
+            let key = s("key").unwrap_or("enter").to_ascii_lowercase();
+            // Escape is always allowed: it never feeds text into anyone's prompts.
+            if !matches!(key.as_str(), "escape" | "esc")
+                && let Some(e) = users_command(app)
+            {
+                return err(e);
+            }
             let before = app.session.log.len();
-            let error = match s("key").unwrap_or("enter").to_ascii_lowercase().as_str() {
+            let error = match key.as_str() {
                 "escape" | "esc" => {
                     app.session.cancel();
                     None
@@ -386,7 +501,17 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             None => all_commands(app),
         }),
         "drawing.inspect" | "document.inspect" => wrap(app.session.execute("drawing.inspect", p).map_err(|e| e.to_string())),
-        "ui.inspect" => ok(inspect(app, ctx)),
+        "ui.inspect" => {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let gpu = crate::gpu::take_slowest_prepare();
+                app.slowest.insert("gpuPrepare", gpu);
+            }
+            let v = inspect(app, ctx);
+            // `perf.slowest` covers the frames since the last report.
+            app.slowest.clear();
+            ok(v)
+        }
         "ui.elements" => ok(elements(ctx, p)),
         "ui.focus" => {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);

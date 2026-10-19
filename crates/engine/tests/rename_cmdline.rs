@@ -81,8 +81,8 @@ fn rename_prompts_type_old_and_new_name() {
     assert!(s.running.is_none(), "{}", s.prompt_text());
     assert!(s.doc().unwrap().layer("Newer").is_some());
     let n = s.log.len();
-    s.script("-RENAME VP a b\nLINE 0,0 2,0\n\n").unwrap();
+    s.script("-RENAME MAT\nLINE 0,0 2,0\n\n").unwrap();
     assert!(s.running.is_none(), "{}", s.prompt_text());
-    assert!(s.log[n..].iter().any(|l| l.contains("not available yet")), "{:?}", &s.log[n..]);
+    assert!(s.log[n..].iter().any(|l| l.contains("material definitions")), "{:?}", &s.log[n..]);
     assert_eq!(s.doc().unwrap().model.iter().filter(|e| matches!(e.kind, EntityKind::Line(_))).count(), 2);
 }

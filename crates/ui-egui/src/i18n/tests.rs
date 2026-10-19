@@ -793,10 +793,10 @@ fn korean_ui_fonts_cover_catalog_and_language_picker_in_both_families() {
         .chain("한국어".chars())
         .filter(|c| !c.is_ascii())
         .collect();
-    // The picker shows 한국어 in an English interface only when the CJK fonts loaded in every
-    // language cover Hangul; the Korean interface itself always does, with a fallback font.
+    // The picker shows 한국어 in an English interface when a font with Hangul loads with the CJK
+    // fonts (theirs, or a Korean font); the Korean interface itself always does.
     let ctx = egui::Context::default();
-    let english = crate::theme::cjk_covers_hangul();
+    let english = crate::theme::shows_hangul("en");
     assert_eq!(with_language("en", || Preference::Korean.name()), if english { "한국어" } else { "Korean" });
     assert_eq!(with_language("ko", || Preference::Korean.name()), "한국어");
     // CJK fonts load on demand in other languages; showing a language picker is such a demand.

@@ -47,7 +47,7 @@ Example client configuration (Claude Code / Claude Desktop):
 | `render {width?, height?, fit?, window?}` | A PNG image of the drawing, or of just the area `window` `[[x0,y0],[x1,y1]]` (one sheet or room of a large drawing; 1600 px wide with the window's shape unless sized). |
 | `find_text {contains?, layer?, window?, limit?, offset?}` | The readable texts — TEXT, MTEXT without formatting codes, block attributes, multileaders — with text, insertion point, height, rotation, style, layer and handle; filtered by content (any case), layer and a window around the insertion points. Read-only (the `texts` command). |
 | `new_drawing {metric?}`, `open {path}`, `save {path?}`, `cancel` | Files and Escape. `save` to a `.svg`, `.png` or `.pdf` path exports: the drawing keeps its name and unsaved changes. |
-| `screenshot`, `ui_inspect`, `ui_click {x, y}` | Only when connected to the app. |
+| `screenshot`, `ui_inspect`, `ui_elements {label?, role?}`, `ui_click {x, y, space?}` | Only when connected to the app. `ui_elements` lists the controls on screen, dialogs and menus included, so an agent can find a dialog button by its label and click it (`space: "screen"`). |
 | `list_drawings {}` / `switch_drawing {index\|path\|title}` | The open drawings (title, path, unsaved changes, current) and switching between them. |
 | `close_drawing {index?, path?, title?, save?, saveAs?, discard?}` / `close_all {save?, discard?}` | Close drawings; unsaved work is never dropped unless `discard` is given (or it's saved first). |
 | `undo {count?}` / `redo {count?}` | Undo or redo commands. |

@@ -214,7 +214,10 @@ pub fn add_search_dir(dir: &Path) {
     c.dir = Some(dir.to_path_buf());
     let mut freed = 0usize;
     c.map.retain(|k, v| {
-        let keep = v.is_some() && Path::new(k).is_absolute();
+        // Relative paths are looked up again in the new folder; full paths and registered pixels
+        // (`mem://…` and other URL-like keys, no file behind them) stay. Registered pixels were
+        // dropped here, a drawing's in-memory images going with a change of folder.
+        let keep = v.is_some() && (Path::new(k).is_absolute() || k.contains("://"));
         if !keep {
             freed += v.as_ref().map_or(0, |r| r.rgba.len());
         }

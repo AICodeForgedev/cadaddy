@@ -35,7 +35,7 @@ fn options_reach_every_layer_property() {
         "{}",
         s.prompt_text()
     );
-    // MATerial is not available yet and must not swallow the next option.
+    // MATerial (no materials in the drawing model) must not swallow the next option.
     let script =
         "N A,B\nMAT\nS A\nF A\nF B\nLO B\nOFF A\nY\nTR 50 B\nLW 0.3 B\nP N B\nL NOPE\nL DASHED B\nC T 10,20,30 B\nD\nnote here\nB\nR B C\n?\n\n\n";
     s.script(script).unwrap();
@@ -53,7 +53,7 @@ fn options_reach_every_layer_property() {
     assert_eq!(c.linetype, "DASHED", "NOPE is refused and DASHED applied: {:?}", s.log);
     assert_eq!(c.color, cadaddy_color::Color::True(cadaddy_color::Rgb(10, 20, 30)));
     assert_eq!(c.description, "note here");
-    assert!(s.log.iter().any(|l| l.contains("not available yet")));
+    assert!(s.log.iter().any(|l| l.contains("material definitions")));
     assert!(s.log.iter().any(|l| l.contains("NOPE")));
 }
 

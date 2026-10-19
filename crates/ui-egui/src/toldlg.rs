@@ -227,9 +227,14 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         return;
     };
     let (mut ok, mut cancel) = (false, false);
-    egui::Window::new(crate::tl!("Geometric Tolerance")).id(egui::Id::new("tolerance_dialog")).collapsible(false).resizable(false).open(open).show(
-        ctx,
-        |ui| {
+    egui::Window::new(crate::tl!("Geometric Tolerance"))
+        .id(egui::Id::new("tolerance_dialog"))
+        .collapsible(false)
+        .resizable(false)
+        .open(open)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
             egui::Grid::new("tolerance_grid").num_columns(6).spacing([10.0, 6.0]).show(ui, |ui| {
                 for h in ["Sym", "Tolerance 1", "Tolerance 2", "Datum 1", "Datum 2", "Datum 3"] {
                     ui.label(crate::i18n::t(h));
@@ -301,8 +306,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 ok = ui.button(crate::tl!("OK")).clicked();
                 cancel = ui.button(crate::tl!("Cancel")).clicked();
             });
-        },
-    );
+        });
     if ok {
         match apply(app, &d) {
             Ok(()) => {

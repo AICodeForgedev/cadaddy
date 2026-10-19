@@ -74,7 +74,11 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
         let r = ui.max_rect();
         if title_h > 0.0 {
             let title = match app.session.state() {
-                Ok(st) if !app.ui.start_tab => format!("CADaddy      {}{}", st.title, if st.title.contains('.') { "" } else { ".dwg" }),
+                Ok(st) if !app.ui.start_tab => format!(
+                    "CADaddy      {}{}",
+                    st.title,
+                    if st.title.contains('.') { String::new() } else { format!(".{}", app.ui.save_format.as_str()) }
+                ),
                 _ => format!("CADaddy      {}", crate::tl!("Start")),
             };
             // Centred on the traffic lights' centre line (the row's middle): with the system font
@@ -356,7 +360,10 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         let size = 20.0;
         let mut rx = r.right() - 8.0 - toggles.len() as f32 * (size + 4.0);
         // Coordinates.
+        // In the current UCS, as AutoCAD shows them.
+        let ucs = app.session.ucs();
         let coord = app.canvas.cursor.map(|c| {
+            let c = ucs.to_ucs(c);
             let (lu, lp) = app.session.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
             format!(
                 "{}, {}, {}",
@@ -577,6 +584,33 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
 /// The status bar's Isolate Objects button: it opens a menu instead of running a command.
 const ISOLATE_MENU: &str = "ui.isolate.menu";
 
+/// The size of a recent file's preview on the Start page.
+const THUMB_W: f32 = 52.0;
+const THUMB_H: f32 = 39.0;
+
+/// `size` scaled to fit inside `r`, centred.
+fn fit(r: Rect, size: egui::Vec2) -> Rect {
+    let k = (r.width() / size.x.max(1.0)).min(r.height() / size.y.max(1.0));
+    Rect::from_center_size(r.center(), size * k)
+}
+
+/// A recent file's preview (from the host's thumbnail service), loaded once and kept for the
+/// session; `None` when the file has none.
+fn recent_thumbnail(app: &CadApp, ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new(("cc_recent_thumb", path));
+    if let Some(cached) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
+        return cached;
+    }
+    let tex = app.services.thumbnail.as_ref().and_then(|f| f(path)).and_then(|png| {
+        let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png).ok()?.to_rgba8();
+        let size = [usize::try_from(img.width()).ok()?, usize::try_from(img.height()).ok()?];
+        let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+        Some(ctx.load_texture(format!("recent-thumb:{path}"), color, egui::TextureOptions::LINEAR))
+    });
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    tex
+}
+
 /// The Start page (no drawing open, or the Start tab).
 pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
@@ -616,9 +650,21 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
             p.rect_filled(row, 2.0, t.control_hover.gamma_multiply(0.5));
         }
         let dir = std::path::Path::new(path).parent().map(|d| d.display().to_string()).unwrap_or_default();
+        // The drawing's preview (a .cdy file's thumbnail), else the outline of a sheet.
+        let thumb = Rect::from_min_size(pos2(row.left() + 6.0, row.top() + 1.5), vec2(THUMB_W, THUMB_H));
+        match recent_thumbnail(app, ui.ctx(), path) {
+            Some(tex) => {
+                p.rect_filled(thumb, 2.0, egui::Color32::WHITE);
+                p.image(tex.id(), fit(thumb, tex.size_vec2()), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+            }
+            None => {
+                p.rect_stroke(thumb.shrink2(vec2(10.0, 4.0)), 1.0, Stroke::new(1.0, t.text_faint), egui::StrokeKind::Inside);
+            }
+        }
+        let x = thumb.right() + 10.0;
         let clip = p.with_clip_rect(row.shrink(2.0));
-        clip.text(pos2(row.left() + 10.0, row.top() + 13.0), egui::Align2::LEFT_CENTER, crate::menus::file_name(path), crate::theme::body(), t.text);
-        clip.text(pos2(row.left() + 10.0, row.top() + 30.0), egui::Align2::LEFT_CENTER, dir, crate::theme::small(), t.text_faint);
+        clip.text(pos2(x, row.top() + 13.0), egui::Align2::LEFT_CENTER, crate::menus::file_name(path), crate::theme::body(), t.text);
+        clip.text(pos2(x, row.top() + 30.0), egui::Align2::LEFT_CENTER, dir, crate::theme::small(), t.text_faint);
         if resp.on_hover_text(path).clicked() {
             recent = Some(path.clone());
         }

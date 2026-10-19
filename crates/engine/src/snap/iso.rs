@@ -142,10 +142,10 @@ fn nearest_axis(plane: IsoPlane, d: Vec2) -> Vec2 {
 }
 
 /// Ortho without snapping: `p` constrained relative to `base` to the nearest axis of the current
-/// isometric plane (or to horizontal/vertical when isometric drafting is off).
-pub fn constrain(s: &Settings, base: Vec2, p: Vec2) -> Vec2 {
+/// isometric plane (or, when isometric drafting is off, to the axes of the UCS, turned `angle`).
+pub fn constrain(s: &Settings, base: Vec2, p: Vec2, angle: f64) -> Vec2 {
     if !s.isodraft {
-        return super::ortho(base, p);
+        return super::ortho_at(base, p, angle);
     }
     let dir = nearest_axis(s.isoplane, p - base);
     let r = base + dir * (p - base).dot(dir);
@@ -154,8 +154,8 @@ pub fn constrain(s: &Settings, base: Vec2, p: Vec2) -> Vec2 {
 
 /// Ortho at the cursor: [`constrain`], and with isometric snap on, whole snap steps along the
 /// axis from `base`.
-pub fn ortho(s: &Settings, base: Vec2, p: Vec2) -> Vec2 {
-    let r = constrain(s, base, p);
+pub fn ortho(s: &Settings, base: Vec2, p: Vec2, angle: f64) -> Vec2 {
+    let r = constrain(s, base, p, angle);
     match spacing(s.snapunit.y).filter(|_| s.isodraft && s.snapmode) {
         Some(d) => {
             let t = r.dist(base);

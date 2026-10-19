@@ -1,6 +1,9 @@
-//! First-person camera: walks on a level's floor and slides along its walls, or flies freely.
+//! First-person camera: walks on what is underfoot (floors, stair treads, ramps; up a step no
+//! higher than [`Walker::max_step`], falling under gravity off higher edges), slides along walls
+//! and shut doors, or flies freely.
 
-use crate::derive::{Scene, closest};
+use crate::derive::{Scene, Seg, closest};
+use crate::ground::Ground;
 use crate::math::{Mat4, V3, v3};
 use cadaddy_doc::geom::Vec2;
 
@@ -8,6 +11,10 @@ use cadaddy_doc::geom::Vec2;
 const RADIUS: f64 = 0.9;
 /// Longest move in one step, feet (a stalled frame must not throw the walker across the building).
 const MAX_STRIDE: f64 = 50.0;
+/// Gravity, feet per second².
+const GRAVITY: f64 = 32.2;
+/// Falling no faster than this, feet per second.
+const MAX_FALL: f64 = 120.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Walker {
@@ -22,12 +29,16 @@ pub struct Walker {
     pub eye_height: f64,
     /// Fly: no floor, no walls.
     pub fly: bool,
+    /// The highest step walked up without a jump, feet (a stair riser is about ⅝ ft).
+    pub max_step: f64,
+    /// Falling speed, feet per second (0 standing).
+    pub vz: f64,
 }
 
 impl Walker {
     /// Standing in the middle of a level, looking along its long side.
     pub fn spawn(scene: &Scene, level: usize) -> Walker {
-        let mut w = Walker { eye: V3::default(), yaw: 0.0, pitch: 0.0, level: 0, eye_height: 5.5, fly: false };
+        let mut w = Walker { eye: V3::default(), yaw: 0.0, pitch: 0.0, level: 0, eye_height: 5.5, fly: false, max_step: 1.0, vz: 0.0 };
         w.go_to_level(scene, level);
         w
     }
@@ -60,10 +71,94 @@ impl Walker {
     }
 
     /// Move `fwd`/`right`/`up` feet relative to the heading; walls stop a walker, not a flyer.
+    /// The walker stays at its level's floor height (no ground model: [`Walker::step_on`]).
     pub fn step(&mut self, scene: &Scene, fwd: f64, right: f64, up: f64) {
+        self.step_on(scene, None, fwd, right, up);
+    }
+
+    /// The feet: the eye less the eye height.
+    pub fn feet(&self) -> f64 {
+        self.eye.z - self.eye_height
+    }
+
+    /// Move like [`Walker::step`] on `ground`: up steps no higher than [`Walker::max_step`], down
+    /// steps and ramps followed, a higher edge stops the walker like a wall. Off an edge it starts
+    /// falling ([`Walker::fall`]).
+    pub fn step_on(&mut self, scene: &Scene, ground: Option<&Ground>, fwd: f64, right: f64, up: f64) {
         if !(fwd.is_finite() && right.is_finite() && up.is_finite()) {
             return;
         }
+        let Some(ground) = ground.filter(|g| !g.is_empty() && !self.fly) else {
+            return self.step_flat(scene, fwd, right, up);
+        };
+        let (s, c) = self.yaw.sin_cos();
+        let d = Vec2 { x: c * fwd + s * right, y: s * fwd - c * right };
+        let d = if d.len() > MAX_STRIDE { d * (MAX_STRIDE / d.len()) } else { d };
+        let n = ((d.len() / (RADIUS * 0.5)).ceil() as usize).clamp(1, 512);
+        let part = d * (1.0 / n as f64);
+        let mut p = Vec2 { x: self.eye.x, y: self.eye.y };
+        let mut feet = self.feet();
+        for _ in 0..n {
+            let q = self.collide(scene, p + part);
+            // Something higher than a step but below the head (a riser too tall, a low solid)
+            // stops the walker like a wall.
+            if ground.below(q, feet + self.eye_height).is_some_and(|z| z > feet + self.max_step) {
+                break;
+            }
+            // A step up or down, or a ramp: stand on it. A drop (or nothing underfoot): walk off
+            // the edge; [`Walker::fall`] brings the walker down.
+            if let Some(z) = ground.below(q, feet + self.max_step).filter(|z| *z >= feet - self.max_step)
+                && self.vz == 0.0
+            {
+                feet = z;
+            }
+            p = q;
+        }
+        self.eye = v3(p.x, p.y, feet + self.eye_height);
+        self.update_level(scene);
+    }
+
+    /// Fall under gravity for `dt` seconds onto what is below (or the level's floor). Returns
+    /// whether the walker is standing.
+    pub fn fall(&mut self, scene: &Scene, ground: Option<&Ground>, dt: f64) -> bool {
+        if self.fly || !dt.is_finite() || dt <= 0.0 {
+            self.vz = 0.0;
+            return true;
+        }
+        let p = Vec2 { x: self.eye.x, y: self.eye.y };
+        let feet = self.feet();
+        let floor = scene.levels.iter().map(|l| l.elevation_ft).filter(|z| *z <= feet + 1e-6).fold(f64::NEG_INFINITY, f64::max);
+        let below =
+            ground.and_then(|g| g.below(p, feet + 1e-6)).into_iter().chain(floor.is_finite().then_some(floor)).fold(f64::NEG_INFINITY, f64::max);
+        if !below.is_finite() || feet <= below + 1e-6 {
+            self.vz = 0.0;
+            if below.is_finite() {
+                self.eye.z = below + self.eye_height;
+            }
+            return true;
+        }
+        self.vz = (self.vz - GRAVITY * dt.min(0.1)).max(-MAX_FALL);
+        let next = (feet + self.vz * dt.min(0.1)).max(below);
+        if next <= below + 1e-6 {
+            self.vz = 0.0;
+        }
+        self.eye.z = next + self.eye_height;
+        self.update_level(scene);
+        self.vz == 0.0
+    }
+
+    /// The level whose floor the feet are on (stairs lead to the next one).
+    fn update_level(&mut self, scene: &Scene) {
+        let feet = self.feet();
+        if let Some((i, _)) =
+            scene.levels.iter().enumerate().filter(|(_, l)| l.elevation_ft <= feet + 0.5).max_by(|a, b| a.1.elevation_ft.total_cmp(&b.1.elevation_ft))
+        {
+            self.level = i;
+        }
+    }
+
+    /// Walk at the level's floor height, sliding along walls (no ground model).
+    fn step_flat(&mut self, scene: &Scene, fwd: f64, right: f64, up: f64) {
         let (s, c) = self.yaw.sin_cos();
         let d = Vec2 { x: c * fwd + s * right, y: s * fwd - c * right };
         if self.fly {
@@ -85,9 +180,10 @@ impl Walker {
 
     /// Push a body at `p` out of every wall it overlaps on this level.
     fn collide(&self, scene: &Scene, mut p: Vec2) -> Vec2 {
+        let shut: Vec<Seg> = scene.shut_doors().filter(|w| w.level == self.level).collect();
         for _ in 0..4 {
             let mut moved = false;
-            for w in scene.walls.iter().filter(|w| w.level == self.level) {
+            for w in scene.walls.iter().filter(|w| w.level == self.level).chain(shut.iter()) {
                 let (q, dist) = closest(w.a, w.b, p);
                 if dist < RADIUS {
                     let away = if dist > 1e-9 {
@@ -143,7 +239,15 @@ mod tests {
         let walls = [(p(0., 0.), p(20., 0.)), (p(20., 0.), p(20., 10.)), (p(20., 10.), p(0., 10.)), (p(0., 10.), p(0., 0.))];
         Scene {
             walls: walls.iter().map(|(a, b)| Seg { a: *a, b: *b, level: 0 }).collect(),
-            levels: vec![LevelInfo { name: "L1".into(), elevation_ft: 12.0, height_ft: 10.0, ceiling_ft: 8.0, min: p(0., 0.), max: p(20., 10.) }],
+            levels: vec![LevelInfo {
+                name: "L1".into(),
+                elevation_ft: 12.0,
+                height_ft: 10.0,
+                ceiling_ft: 8.0,
+                min: p(0., 0.),
+                max: p(20., 10.),
+                base: p(0., 0.),
+            }],
             ..Scene::default()
         }
     }

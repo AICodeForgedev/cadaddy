@@ -6,6 +6,7 @@
 //! waits. Each drawing has its own symbols, as in AutoCAD. A run is one undo step.
 
 pub mod builtins;
+mod curve;
 mod drawing;
 pub mod eval;
 pub mod input;
@@ -319,6 +320,17 @@ impl Session {
                 r.waiting = None;
             }
             self.lisp_drive();
+        }
+    }
+
+    /// Without an interface (MCP headless, the CLI) nothing ticks between calls: run a routine
+    /// that yields to the interface ([`Session::lisp_tick`]) to its end, or until `limit` passes
+    /// (it is then still running, and later lines say so). Typed LISP longer than one slice never
+    /// finished headless (battle test 0.7.7c).
+    pub fn lisp_finish(&mut self, limit: std::time::Duration) {
+        let start = std::time::Instant::now();
+        while self.lisp_busy() && start.elapsed() < limit {
+            self.lisp_tick();
         }
     }
 

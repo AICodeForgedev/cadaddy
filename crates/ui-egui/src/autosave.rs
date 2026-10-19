@@ -16,7 +16,12 @@ pub const PREFS_KEY: &str = "cadaddy.autosave";
 
 /// SAVETIME, SAVEFILEPATH and AUDITCTL as JSON for the host's storage.
 pub fn prefs_json() -> String {
-    json!({ "savetime": autosave::savetime(), "saveFilePath": autosave::savefilepath(), "auditctl": cadaddy_engine::audit::auditctl() }).to_string()
+    // The default folder is kept as "" (the default), so it follows the settings folder: a
+    // profile moved elsewhere (APPDATA redirected) went on writing autosaves to the old one
+    // (battle test 0.7.7c).
+    let path = autosave::savefilepath();
+    let path = if DEFAULT_DIR.get().is_some_and(|d| *d == path) { String::new() } else { path };
+    json!({ "savetime": autosave::savetime(), "saveFilePath": path, "auditctl": cadaddy_engine::audit::auditctl() }).to_string()
 }
 
 /// Restore what [`prefs_json`] saved; malformed values are ignored.
@@ -41,6 +46,10 @@ pub struct GpuNotice {
     pub autosaved: usize,
 }
 
+/// The default autosave folder of this run (`<settings folder>/autosave`), set by
+/// [`CadApp::enable_autosave`].
+static DEFAULT_DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// Drawing Recovery: autosave files left behind by an app that stopped, listed once at start.
 #[derive(Clone, Debug, Default)]
 pub struct Recovery {
@@ -52,8 +61,16 @@ impl CadApp {
     /// set; files a crashed app left there are listed for Drawing Recovery.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn enable_autosave(&mut self, default_dir: &std::path::Path) {
+        let default = default_dir.to_string_lossy().into_owned();
+        let _ = DEFAULT_DIR.set(default.clone());
+        // Saved before the default was kept as "": a default folder of another settings folder
+        // (it ends in CADaddy/autosave) is this one's default now.
+        let saved = autosave::savefilepath().replace('\\', "/").to_ascii_lowercase();
+        if saved.ends_with("cadaddy/autosave") || saved.ends_with("cadaddy/autosave/") {
+            autosave::set_savefilepath("");
+        }
         if autosave::savefilepath().is_empty() {
-            autosave::set_savefilepath(&default_dir.to_string_lossy());
+            autosave::set_savefilepath(&default);
         }
         let saver = autosave::Autosaver::new(autosave::instance_id());
         let dir = std::path::PathBuf::from(autosave::savefilepath());
@@ -151,8 +168,15 @@ impl CadApp {
     }
 }
 
-/// `secs` since 1970 as `YYYY-MM-DD HH:MM` (UTC).
-fn utc(secs: u64) -> String {
+/// `secs` since 1970 as `YYYY-MM-DD HH:MM` in local time (it showed UTC, battle test 0.7.7c).
+fn local_time(secs: u64) -> String {
+    let utc = i64::try_from(secs).unwrap_or(0);
+    let local = u64::try_from(utc.saturating_add(cadaddy_engine::fields::local_offset(utc))).unwrap_or(secs);
+    calendar(local)
+}
+
+/// `secs` since 1970 as `YYYY-MM-DD HH:MM`.
+fn calendar(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let (h, m) = ((secs % 86_400) / 3600, (secs % 3600) / 60);
     // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
@@ -185,8 +209,9 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         ui.add_space(6.0);
         egui::Grid::new("cc_recovery_list").num_columns(4).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
             for (i, item) in app.recovery.items.iter().enumerate() {
-                ui.label(&item.drawing);
-                ui.label(RichText::new(format!("{} UTC · {} KB", utc(item.modified), item.bytes.div_ceil(1024))).color(t.text_dim));
+                ui.label(&item.drawing).on_hover_text(&item.path);
+                ui.label(RichText::new(format!("{} · {} KB", local_time(item.modified), item.bytes.div_ceil(1024))).color(t.text_dim))
+                    .on_hover_text(&item.path);
                 if ui.button("Open").clicked() {
                     open = Some(i);
                 }
@@ -270,8 +295,8 @@ pub fn gpu_notice(app: &mut CadApp, ctx: &egui::Context) {
 mod tests {
     #[test]
     fn utc_dates() {
-        assert_eq!(super::utc(0), "1970-01-01 00:00");
-        assert_eq!(super::utc(951_782_400 + 3_660), "2000-02-29 01:01");
-        assert_eq!(super::utc(1_791_676_800), "2026-10-11 00:00");
+        assert_eq!(super::calendar(0), "1970-01-01 00:00");
+        assert_eq!(super::calendar(951_782_400 + 3_660), "2000-02-29 01:01");
+        assert_eq!(super::calendar(1_791_676_800), "2026-10-11 00:00");
     }
 }

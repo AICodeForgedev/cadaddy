@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (multiline attributes read, drawn and written) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (CADaddy's own .cdy format) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADaddy's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -26,6 +26,16 @@ below, and ≈ 20–40 h for 3D exchange formats that wait for 3D modelling.
 - No AutoCAD-produced file is committed or used as a fixture. A real-file corpus needs owner
   action (see [gaps.md](gaps.md)): files made by people who license them to us, kept in a
   separate `cadaddy-corpus` repo.
+
+## CADaddy's own format (.cdy)
+
+`.cdy` is CADaddy's native drawing file (public spec: [cdy-format.md](cdy-format.md)): a chunked,
+CRC-checked container with a JSON manifest and the model in a keyed binary encoding, so it keeps
+**everything CADaddy models** (`read(write(d)) == d` for all 30 object kinds, blocks, layouts and
+foreign data) and old readers skip chunks they don't know. New drawings save as .cdy by default;
+DWG and DXF stay for exchange (DWGCOPY writes a DWG beside each .cdy save, and the first DWG/DXF
+save says once what that file won't keep). Tests: `cdy::` in `cadaddy-io` (round trip, deterministic
+bytes, hostile input, damaged chunks skipped).
 
 ## DWG, version by version
 
@@ -137,6 +147,7 @@ our output in AutoCAD black-box.
 |---|---|---|
 | 2026-10-12 | minor | PDF output: object transparency plotted as PDF alpha (`/ExtGState` `/ca` `/CA`) when the page setup's or the plot's "Plot transparency" is on; PNG plots blend it, SVG uses `opacity`; plots without it are unchanged byte for byte |
 | 2026-10-12 | minor | DXF/DWG save: the Model layout's plot settings are written as CADaddy plots model space, drawing extents scaled to fit (PLOTSETTINGS 74 = 1, 75 = 0), instead of plot type 5 "Layout information", which other programs' Plot dialogs can't use for model space |
+| 2026-10-18 | minor | The native .cdy format: lossless round trip of everything CADaddy models, default for new drawings, DWG copy, loss notice on DWG/DXF saves, previews, file associations |
 | 2026-10-12 | minor | VIEWPORT frozen layers also written and read as AutoCAD's group 341 layer handles, so third-party viewers honour per-viewport freezing in DXF (DWG converter gap noted) |
 | 2026-10-12 | minor | HATCH: associative hatches inside blocks keep their source objects; boundaries carry `{ACAD_REACTORS}` |
 | 2026-10-12 | minor | Dynamic block grips: grip objects read by graph id; a drag is saved as AutoCAD saves a Properties change |

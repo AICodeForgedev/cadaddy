@@ -18,21 +18,21 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("union", "Union", run_union)
             .menu(&["Modify", "Solid Editing", "Union"])
             .alias(&["uni"])
-            .params("{handles?} (regions)")
+            .params("{handles?} (regions or 3D solids)")
             .interactive(|_| Ok(Box::new(SelectRun::new("union", "UNION")))),
         CommandSpec::new("subtract", "Subtract", run_subtract)
             .menu(&["Modify", "Solid Editing", "Subtract"])
             .alias(&["su"])
-            .params("{from: [handles], remove: [handles]} (regions)")
+            .params("{from: [handles], remove: [handles]} (regions or 3D solids)")
             .interactive(|_| Ok(Box::new(SubtractM::default()))),
         CommandSpec::new("intersect", "Intersect", run_intersect)
             .menu(&["Modify", "Solid Editing", "Intersect"])
             .alias(&["in"])
-            .params("{handles?} (regions)")
+            .params("{handles?} (regions or 3D solids)")
             .interactive(|_| Ok(Box::new(SelectRun::new("intersect", "INTERSECT")))),
         CommandSpec::new("massprop", "Region/Mass Properties", run_massprop)
             .menu(&["Tools", "Inquiry", "Region/Mass Properties"])
-            .params("{handles?} (regions) → properties of each")
+            .params("{handles?} (regions, 3D solids) → properties of each: regions {area, perimeter, centroid, moments…}, solids {volume, surfaceArea, boundingBox, centroid}")
             .noundo()
             .interactive(|_| Ok(Box::new(SelectRun::new("massprop", "MASSPROP")))),
     ]
@@ -114,11 +114,17 @@ fn fold(s: &mut Session, hs: &[Handle], op: Op) -> Result<Value> {
 
 fn run_union(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
+    if let Some(v) = super::super::solids::solid_boolean(s, &hs, &[], cadaddy_doc::BoolOp::Union)? {
+        return Ok(v);
+    }
     fold(s, &hs, Op::Union)
 }
 
 fn run_intersect(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
+    if let Some(v) = super::super::solids::solid_boolean(s, &hs, &[], cadaddy_doc::BoolOp::Intersect)? {
+        return Ok(v);
+    }
     fold(s, &hs, Op::Intersect)
 }
 
@@ -128,6 +134,9 @@ fn handles(p: &Value, key: &str) -> Result<Vec<Handle>> {
 }
 
 fn subtract(s: &mut Session, from: &[Handle], remove: &[Handle]) -> Result<Value> {
+    if let Some(v) = super::super::solids::solid_boolean(s, from, remove, cadaddy_doc::BoolOp::Subtract)? {
+        return Ok(v);
+    }
     let (a, b) = (regions(s, from)?, regions(s, remove)?);
     let Some(((h0, first), rest)) = a.split_first() else { return Err(other("Select regions to subtract from.")) };
     let mut acc = first.clone();
@@ -164,7 +173,7 @@ impl Interactive for SubtractM {
         "SUBTRACT"
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
-        s.echo("Select regions to subtract from ..");
+        s.echo("Select solids, surfaces, and regions to subtract from ..");
         Ok(Step::Continue)
     }
     fn prompt(&self, _s: &Session) -> Prompt {
@@ -179,7 +188,7 @@ impl Interactive for SubtractM {
                     self.from = Some(hs);
                     self.sel = SelectPhase::default();
                     s.set_selection(Vec::new());
-                    s.echo("Select regions to subtract ..");
+                    s.echo("Select solids, surfaces, and regions to subtract ..");
                     Ok(Step::Continue)
                 }
                 Some(from) => {
@@ -198,8 +207,9 @@ impl Interactive for SubtractM {
 fn run_massprop(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let rs = regions(s, &hs)?;
-    if rs.is_empty() {
-        return Err(other("Select one or more regions."));
+    let (solids, solid_lines) = super::super::solids::massprop_solids(s, &hs)?;
+    if rs.is_empty() && solids.is_empty() {
+        return Err(other("Select one or more regions or 3D solids."));
     }
     let f = |v: f64| super::fmt_d(s, v);
     let mut out = Vec::new();
@@ -244,5 +254,6 @@ fn run_massprop(s: &mut Session, p: &Value) -> Result<Value> {
             ang.cos(),
         ));
     }
-    Ok(json!({ "regions": out, "message": lines.join("\n") }))
+    lines.extend(solid_lines);
+    Ok(json!({ "regions": out, "solids": solids, "message": lines.join("\n") }))
 }

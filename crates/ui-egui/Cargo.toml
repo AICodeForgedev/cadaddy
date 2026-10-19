@@ -18,6 +18,8 @@ cadaddy-render = { workspace = true }
 cadaddy-engine = { workspace = true }
 cadaddy-fonts = { workspace = true }
 cadaddy-walk3d = { path = "../walk3d" }
+# Checksums of uploaded GPU pieces, so unchanged ones are reused (MIT OR Apache-2.0; already used by .cdy).
+crc32fast = "1"
 egui = { workspace = true }
 # GPU canvas paint callback (same egui-wgpu/wgpu eframe uses with its "wgpu" feature).
 egui-wgpu = { workspace = true }

@@ -13,6 +13,7 @@ use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 use viewports::MviewM;
 
+mod plotcli;
 mod plotstyle;
 mod prompts;
 mod template;
@@ -84,6 +85,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["print"])
             .params("{path? (else returns base64 `data`), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?: bool, plotTransparency?: bool (default: the page setup's; PLOTTRANSPARENCYOVERRIDE 0/2 overrides it), plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]]} (typed or from the menu: the Plot dialog)")
             .noundo(),
+        CommandSpec::new("-plot", "Plot", plotcli::run_dash_plot)
+            .params("{…the parameters of plot, device?: plotter name, upsideDown?: bool, plotArea?: …|view (Model), view?: named view, savePageSetup?: bool (a layout's page setup keeps the device, paper, orientation, plot style table, lineweights and fit)} (typed: AutoCAD's command-line plot questions, detailed configuration Yes/No)")
+            .noundo()
+            .interactive(|_| Ok(Box::new(plotcli::DashPlotM::default()))),
         CommandSpec::new("exportpdf", "Export to PDF...", |s, p| run_plot(s, &super::plotters::plot_options(s, p, "exportpdf")?, "exportpdf"))
             .menu(&["File", "Export to PDF..."])
             .params("{path? (else returns base64 `data`), layout?, paper?, landscape?, fit?, scale?, center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?, plotTransparency?, plotArea?, window?} (as PLOT)")
@@ -788,7 +793,12 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
         }
         // Layout plotting always prints the whole sheet; the other areas are only stored for DXF round trips.
         if v != "layout" && v != page.plot_area {
-            return Err(bad(cmd, format!("plot area `{v}` is not available yet; layouts plot the whole sheet (`layout`)")));
+            return Err(bad(
+                cmd,
+                format!(
+                    "plot area `{v}` can't be used for a layout: layout plotting prints the whole sheet (`layout`); plot extents, display, window or limits from model space"
+                ),
+            ));
         }
         page.plot_area = v;
     }
@@ -850,6 +860,8 @@ fn plot_sheets(cmd: &str, d: &cadaddy_doc::Drawing, v: &Value) -> Result<Vec<Str
 /// are off on hidden PDF layers), `links?: [{handle, url}]` (hyperlinks) and `title?`.
 fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let hook = io().and_then(|h| h.plot).ok_or_else(|| bad(cmd, "plotting is not available in this build"))?;
+    // Fields worked out on plotting (FIELDEVAL 4): PlotDate is now.
+    crate::fields::on_event(s, crate::fields::Event::Plot);
     // Checked here for a clear error; the plotter resolves the names the same way.
     let sheets = p.get("layouts").map(|v| plot_sheets(cmd, s.doc()?, v)).transpose()?;
 
@@ -894,6 +906,21 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             Some(t) => o.insert("plotTransparency".into(), json!(t)),
             None => o.remove("plotTransparency"),
         };
+    }
+    // Model space as displayed: a 3D view or a visual style plots shaded (`shade: false` plots
+    // the plan's vectors; a window, pages or several layouts keep the vector plot).
+    if space == Space::Model
+        && opts.get("shade").is_none()
+        && ["window", "pages", "layouts"].iter().all(|k| opts.get(*k).is_none())
+        && s.space() == Space::Model
+        && let Some(shade) = super::view::view3d::shade_options(s)
+    {
+        opts["shade"] = shade;
+    }
+    if opts.get("shade").is_some_and(|v| !v.is_object())
+        && let Some(o) = opts.as_object_mut()
+    {
+        o.remove("shade");
     }
     let bytes = hook(s.doc()?, &space, &opts).map_err(|e| bad(cmd, e))?;
     let layout = match &sheets {
@@ -948,6 +975,13 @@ fn plot_window(s: &Session, p: &Value, cmd: &str, space: &Space) -> Result<Optio
             let hi = d.header.point("LIMMAX").map(|p| p.xy()).unwrap_or(Vec2::new(12.0, 9.0));
             Bounds2::new(lo, hi)
         }
+        (Space::Model, Some("view")) => {
+            let name = str_param(p, "view").ok_or_else(|| bad(cmd, "`plotArea` view needs `view`: a named view"))?;
+            let d = s.doc()?;
+            let v = d.views.iter().find(|v| v.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(cmd, format!("no view `{name}`")))?;
+            let half = Vec2::new(v.width / 2.0, v.height / 2.0);
+            Bounds2::new(v.center - half, v.center + half)
+        }
         (Space::Model, Some("window")) => {
             let corners = p.get("window").and_then(Value::as_array);
             let a = corners.and_then(|c| c.first()).and_then(point_value);
@@ -957,7 +991,7 @@ fn plot_window(s: &Session, p: &Value, cmd: &str, space: &Space) -> Result<Optio
             };
             Bounds2::new(a, b)
         }
-        (Space::Model, Some(_)) => return Err(bad(cmd, "`plotArea` must be extents, display, limits or window (layouts: layout)")),
+        (Space::Model, Some(_)) => return Err(bad(cmd, "`plotArea` must be extents, display, limits, view or window (layouts: layout)")),
     };
     let ok = w.min.is_finite() && w.max.is_finite() && w.width() > 1e-9 && w.height() > 1e-9;
     if ok { Ok(Some(w)) } else { Err(bad(cmd, "the plot area is empty")) }
@@ -1141,7 +1175,7 @@ mod tests {
         assert!(s.execute("pagesetup", &json!({"paper": "A4"})).is_err(), "model tab needs a layout");
         for area in ["extents", "display", "window", "limits"] {
             let e = s.execute("pagesetup", &json!({"layout": "Layout1", "plotArea": area})).unwrap_err();
-            assert!(e.to_string().contains("not available yet"), "{area}: {e}");
+            assert!(e.to_string().contains("whole sheet"), "{area}: {e}");
         }
         let r = s.execute("pagesetup", &json!({"layout": "Layout1", "plotArea": "Layout"})).unwrap();
         assert_eq!(r["page"]["plotArea"], "layout");

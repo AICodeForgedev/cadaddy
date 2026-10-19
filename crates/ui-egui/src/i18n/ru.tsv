@@ -1193,3 +1193,338 @@
 	Clip PDF Underlay	Подрезать PDF-подложку
 	Adjust PDF Underlay	Настроить PDF-подложку
 	PDF Underlay Layers	Слои PDF-подложки
+	Unused items in this drawing	Неиспользуемые элементы этого чертежа
+	Purge Checked Items	Очистить отмеченные
+	Purge All	Очистить все
+	Items purged: {count}	Удалено элементов: {count}
+	Find what:	Найти:
+	Replace with:	Заменить на:
+	Match case	С учётом регистра
+	Find whole words only	Только слова целиком
+	Find	Найти
+	Replace All	Заменить все
+	Matches replaced: {count} (objects: {objects})	Заменено совпадений: {count} (объектов: {objects})
+	Matches found and selected: {count} (objects: {objects})	Найдено и выбрано совпадений: {count} (объектов: {objects})
+	Select Color	Выбор цвета
+	Dimension styles	Размерные стили
+	Linetypes	Типы линий
+	Multileader styles	Стили мультивыносок
+	Multiline styles	Стили мультилиний
+	Table styles	Стили таблиц
+	Text styles	Текстовые стили
+	Zero-length geometry	Геометрия нулевой длины
+	Empty text objects	Пустые текстовые объекты
+	Palette Windows	Окна палитр
+	Dock	Закрепить
+	Back into the main window	Вернуть в главное окно
+	Dock Palette	Закрепить палитру
+	Float in Own Window	В отдельном окне
+	Drawings (CDY, DWG, DXF)	Чертежи (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	Чертёж CADaddy (CDY)
+	CADaddy drawing (.cdy)	Чертёж CADaddy (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	При сохранении чертежа CADaddy (.cdy) также сохранять копию DWG
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	Чертёж CADaddy сохраняет всё; файлы DWG и DXF могут сохранить не всё (при сохранении в них будет сказано, что именно).
+	Field...	Поле...
+	Update Fields	Обновить поля
+	Change Text Case	Изменить регистр текста
+	Auto Number	Автонумерация
+	Explode Text	Расчленить текст
+	Arc Aligned Text	Текст по дуге
+	Data Extraction	Извлечение данных
+	Data source	Источник данных
+	Objects	Объекты
+	Output	Вывод
+	Other drawings:	Другие чертежи:
+	Add Drawings...	Добавить чертежи...
+	Open Settings...	Открыть параметры...
+	Start from a saved .dxe settings file	Начать с сохраненного файла параметров .dxe
+	Block names	Имена блоков
+	Include blocks inside blocks	Включать вложенные блоки
+	Other objects:	Другие объекты:
+	The drawing has no other objects.	В чертеже нет других объектов.
+	Properties to extract:	Извлекаемые свойства:
+	Attribute tags	Теги атрибутов
+	Combine identical rows	Объединять одинаковые строки
+	Insert a table	Вставить таблицу
+	Insertion point	Точка вставки
+	Title	Заголовок
+	Write a file (.csv for spreadsheets, .txt tab-separated)	Записать файл (.csv для электронных таблиц, .txt с разделителями-табуляциями)
+	Browse...	Обзор...
+	Save Settings...	Сохранить параметры...
+	Save these choices to a .dxe file to use again	Сохранить эти параметры в файл .dxe для повторного использования
+	< Back	< Назад
+	Next >	Далее >
+	Finish	Готово
+	This drawing	Этот чертеж
+	Preview	Просмотр
+	UCS	ПСК
+	Plan View (World)	План (МСК)
+	New UCS	Новая ПСК
+	World	Мировая
+	Current UCS	Текущая ПСК
+	World (WCS)	Мировая (МСК)
+	Unnamed	Без имени
+	Hide UCS Icon	Скрыть знак ПСК
+	WCS	МСК
+	Spelling	Орфография
+	Check Spelling	Проверка орфографии
+	Where to check	Где проверять
+	Selected objects	Выбранные объекты
+	Not in dictionary:	Нет в словаре:
+	Suggestions:	Варианты:
+	Ignore	Пропустить
+	Ignore All	Пропустить все
+	Change All	Заменить все
+	Add to Dictionary	Добавить в словарь
+	Main dictionary:	Основной словарь:
+	American English	Американский английский
+	Custom dictionary:	Пользовательский словарь:
+	Spelling check complete.	Проверка орфографии завершена.
+	Hyperlink...	Гиперссылка...
+	Select Objects for a Hyperlink	Выбрать объекты для гиперссылки
+	Open Hyperlink	Открыть гиперссылку
+	Insert Hyperlink	Вставить гиперссылку
+	Edit Hyperlink	Изменить гиперссылку
+	Text to display	Отображаемый текст
+	File or web page	Файл или веб-страница
+	Named location	Именованное место
+	A named location with no file or web page is a layout or view of this drawing.	Именованное место без файла или веб-страницы — это лист или вид этого чертежа.
+	Remove Link	Удалить ссылку
+	⌘-click to follow the link	⌘+щелчок открывает ссылку
+	Ctrl+click to follow the link	Ctrl+щелчок открывает ссылку
+	Materials Browser...	Обозреватель материалов...
+	Attach by Layer	Присоединить по слою
+	Material Mapping	Наложение материала
+	New Material	Новый материал
+	Edit Material	Изменить материал
+	Delete Material	Удалить материал
+	Assign Material	Назначить материал
+	Materials Browser	Обозреватель материалов
+	Search	Поиск
+	Library	Библиотека
+	Add to drawing	Добавить в чертёж
+	In this drawing	В этом чертеже
+	No materials yet: add one from the library.	Пока нет материалов: добавьте из библиотеки.
+	Colour	Цвет
+	Roughness	Шероховатость
+	Metallic	Металличность
+	Opacity	Непрозрачность
+	Mapping	Наложение
+	Tile size	Размер плитки
+	Apply	Применить
+	Assign to selection ({n})	Назначить выбранным ({n})
+	Attach to layer	Присоединить к слою
+	Render	Визуализация
+	Edit Layer State	Редактировать состояние слоёв
+	Export Layer State	Экспортировать состояние слоёв
+	Import Layer State	Импортировать состояние слоёв
+	New Layer Filter	Новый фильтр слоёв
+	Edit Layer Filter	Редактировать фильтр слоёв
+	Delete Layer Filter	Удалить фильтр слоёв
+	List Layer Filters	Список фильтров слоёв
+	Layers in Filter	Слои в фильтре
+	Layer States Manager	Диспетчер состояний слоёв
+	Invert filter	Инвертировать фильтр
+	New Property Filter...	Новый фильтр свойств...
+	New Group Filter	Новый групповой фильтр
+	Add Layer	Добавить слой
+	Remove Layer	Убрать слой
+	Layer Filter Properties	Свойства фильтра слоёв
+	Filter name	Имя фильтра
+	Within	В пределах
+	Any	Любой
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	Шаблоны: * любые символы, ? один символ, # одна цифра; разделяйте запятыми; ~ исключает.
+	Layer states	Состояния слоёв
+	Turn off layers not found in layer state	Отключить слои, отсутствующие в состоянии слоёв
+	Layer properties to restore	Восстанавливаемые свойства слоёв
+	On / Off	Вкл / Откл
+	Frozen / Thawed	Заморожен / Разморожен
+	Locked / Unlocked	Заблокирован / Разблокирован
+	Plot / No Plot	Печать / Без печати
+	Layers in "{name}"	Слои в «{name}»
+	Remove from the layer state	Удалить из состояния слоёв
+	New...	Создать...
+	Save the layers as they are now in this state	Сохранить текущие параметры слоёв в этом состоянии
+	Edit...	Редактировать...
+	Rename	Переименовать
+	New layer state name	Имя нового состояния слоёв
+	New name	Новое имя
+	Visual Style	Визуальный стиль
+	Visual Styles	Визуальные стили
+	Wireframe	Каркас
+	Hidden	Скрытие
+	Shaded	Тонированный
+	Shaded with Edges	Тонированный с кромками
+	Realistic	Реалистичный
+	Mesh	Сеть
+	Polyface Mesh	Многогранная сеть
+	Polygon Mesh	Полигональная сеть
+	Fly	Полет
+	Walk and Fly	Обход и облет
+	3D Library...	3D-библиотека...
+	Add 3D Twins to Symbols	Добавить 3D-двойники к символам
+	List 3D Models	Список 3D-моделей
+	Add 3D Twins	Добавить 3D-двойники
+	Plan Layers	Слои плана
+	Plan Walls	Стены плана
+	Plan Openings	Проемы плана
+	Plan Rooms	Помещения плана
+	Plan Notes	Примечания плана
+	Plan Sheets	Листы плана
+	3D Building from Plan	3D-здание по плану
+	Wedge	Клин
+	Presspull	Вдавить/вытянуть
+	3D Solid	3D-тело
+	Specify center	Укажите центр
+	Specify length	Укажите длину
+	Specify width	Укажите ширину
+	Specify other corner	Укажите другой угол
+	Specify center point	Укажите центральную точку
+	Specify base radius	Укажите радиус основания
+	Specify radius	Укажите радиус
+	Specify diameter	Укажите диаметр
+	Specify top radius	Укажите радиус верха
+	Specify tube radius	Укажите радиус трубы
+	Select objects to extrude	Выберите объекты для выдавливания
+	Select extrusion path	Выберите траекторию выдавливания
+	Specify angle of taper for extrusion	Укажите угол сужения выдавливания
+	Specify height of extrusion	Укажите высоту выдавливания
+	Select objects to revolve	Выберите объекты для вращения
+	Specify axis start point or define axis by	Укажите начальную точку оси или задайте ось
+	Specify axis endpoint	Укажите конечную точку оси
+	Specify angle of revolution	Укажите угол вращения
+	Select objects to sweep	Выберите объекты для сдвига
+	Select sweep path	Выберите траекторию сдвига
+	Select cross sections in lofting order	Выберите поперечные сечения в порядке лофтинга
+	Click inside bounded areas to press or pull	Щелкните внутри замкнутых областей, чтобы вдавить или вытянуть
+	Specify extrusion height	Укажите высоту выдавливания
+	Cube	Куб
+	Sides	Стороны
+	Top radius	Радиус верха
+	Path	Траектория
+	Taper angle	Угол сужения
+	Select one or more regions or 3D solids.	Выберите одну или несколько областей или 3D-тел.
+	No closed area found there.	Замкнутая область не найдена.
+	Slice	Разрез
+	Thicken	Придать толщину
+	Fillet Edge	Сопряжение ребра
+	Chamfer Edge	Фаска ребра
+	Solid Editing	Редактирование тел
+	Fillet Edges	Сопряжение рёбер
+	Chamfer Edges	Фаска рёбер
+	Move Faces	Перенести грани
+	Offset Faces	Сместить грани
+	Delete Faces	Удалить грани
+	Shell	Оболочка
+	Composite	Составное
+	Select objects to slice	Выберите объекты для разреза
+	Specify a point on desired side or [keep Both sides]	Укажите точку на нужной стороне или [сохранить Обе стороны]
+	Both	Обе
+	Specify start point of slicing plane or	Укажите начальную точку секущей плоскости или
+	Specify second point on plane	Укажите вторую точку на плоскости
+	Specify the Z of the XY-plane	Укажите Z плоскости XY
+	Specify the X of the YZ-plane	Укажите X плоскости YZ
+	Specify the Y of the ZX-plane	Укажите Y плоскости ZX
+	Select surfaces to thicken	Выберите поверхности
+	Select a 3D solid	Выберите 3D-тело
+	Select an edge	Выберите ребро
+	Remove faces	Удалить грани
+	Select faces	Выберите грани
+	Specify thickness	Укажите толщину
+	Enter fillet radius	Введите радиус сопряжения
+	Enter distance	Введите расстояние
+	Specify a base point or displacement	Укажите базовую точку или смещение
+	Specify a second point of displacement	Укажите вторую точку смещения
+	Specify the offset distance	Укажите расстояние смещения
+	Enter the shell offset distance	Введите толщину оболочки
+	Select solids, surfaces, and regions to subtract from ..	Выберите тела, поверхности и области, из которых вычитать ..
+	Select solids, surfaces, and regions to subtract ..	Выберите вычитаемые тела, поверхности и области ..
+	Select two or more solids.	Выберите два или более тела.
+	The solids don't overlap; nothing was changed.	Тела не пересекаются; ничего не изменено.
+	Nothing would remain; nothing was changed.	Ничего не останется; ничего не изменено.
+	The result would not be a solid; nothing was changed.	Результат не будет телом; ничего не изменено.
+	No straight edge between two flat faces there.	Там нет прямого ребра между двумя плоскими гранями.
+	No face of the solid there.	Там нет грани тела.
+	Only outside (convex) edges can be filleted or chamfered.	Сопряжение и фаска возможны только для внешних (выпуклых) рёбер.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	Оболочка работает для ящиков, цилиндров, шаров и прямых выдавливаний.
+	The walls are too thick for this solid.	Стенки слишком толстые для этого тела.
+	Select solids to subtract from.	Выберите тела, из которых вычитать.
+	A solid can't be subtracted from itself.	Тело нельзя вычесть из самого себя.
+	The solid would have too many operations; nothing was changed.	У тела было бы слишком много операций; ничего не изменено.
+	That face can't be moved (only flat faces, holes and added parts).	Эту грань нельзя перенести (только плоские грани, отверстия и добавленные части).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	Эту грань нельзя удалить (только отверстия, сопряжения, фаски и добавленные части).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	Эту грань нельзя сместить (стороны ящиков, торцы цилиндров, конусов и выдавливаний, стенки цилиндров и шары).
+	The thickness must be more than zero.	Толщина должна быть больше нуля.
+	The radius must be more than zero.	Радиус должен быть больше нуля.
+	The distance must be more than zero.	Расстояние должно быть больше нуля.
+	Requires a number.	Требуется число.
+	Parameter	Параметр
+	Action	Действие
+	Visibility States	Состояния видимости
+	Remove Parameter or Action	Удалить параметр или действие
+	Edit Reference	Редактировать ссылку
+	Discard Reference Edits	Отменить изменения ссылки
+	Nested References	Вложенные ссылки
+	Light List	Список источников света
+	Sun Properties	Свойства солнца
+	Render Exposure	Экспозиция визуализации
+	Point Light	Точечный источник
+	Spotlight	Прожектор
+	Distant Light	Удалённый источник
+	Change Lights	Изменить источники света
+	Section Plane	Секущая плоскость
+	Live Section	Динамическое сечение
+	Generate Section Block	Создать блок сечения
+	Generate Section	Создать сечение
+	Flatshot	Плоский снимок
+	Base View	Базовый вид
+	Section View	Вид в разрезе
+	Drawing Views	Виды чертежа
+	Select face or any point to locate section line or	Выберите грань или точку для линии сечения или
+	Orthographic	Ортогональный
+	Select section object	Выберите объект сечения
+	Specify location of base view	Укажите положение базового вида
+	Select parent view	Выберите родительский вид
+	Specify end point	Укажите конечную точку
+	Specify location of section view	Укажите положение вида в разрезе
+	There is nothing to draw: no 3D objects were found.	Нечего рисовать: 3D-объекты не найдены.
+	The section plane doesn't cut any solid.	Секущая плоскость не пересекает ни одного тела.
+	The view needs a direction.	Виду нужно направление.
+	The drawing has no layout.	В чертеже нет листа.
+	That is not a section plane.	Это не секущая плоскость.
+	Requires a point.	Требуется точка.
+	The view is [dx, dy, dz].	Вид задаётся как [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	Создать комплект для передачи
+	Files in the package	Файлы в пакете
+	Not included	Не включено
+	Organized folders	Упорядоченные папки
+	One folder	Одна папка
+	Include a transmittal report	Включить отчёт о передаче
+	Create ZIP...	Создать ZIP...
+	Create Folder...	Создать папку...
+	STL Out	Вывод STL
+	Export STL...	Экспорт STL...
+	3D models (glTF, OBJ, STL)	3D-модели (glTF, OBJ, STL)
+	3D model (glTF binary)	3D-модель (двоичный glTF)
+	3D model (glTF)	3D-модель (glTF)
+	3D model (OBJ)	3D-модель (OBJ)
+	3D model (STL)	3D-модель (STL)
+	Render Region	Визуализировать область
+	samples	выборок
+	a sample	на выборку
+	Pick crop window to render	Укажите область визуализации
+	Nothing has been rendered yet.	Ещё ничего не визуализировано.
+	There is nothing to render: no surfaces in the view.	Нечего визуализировать: в виде нет поверхностей.
+	The image couldn't be encoded.	Не удалось закодировать изображение.
+	Saving images isn't available in the browser.	Сохранение изображений недоступно в браузере.
+	PNG image	Изображение PNG
+	JPEG image	Изображение JPEG
+	Save Image	Сохранить изображение
+	My Properties	Мои свойства
+	Add to My Properties	Добавить в мои свойства
+	Remove from My Properties	Удалить из моих свойств
+	All properties	Все свойства
+	My properties: the ones you added (right-click a property's name to add it)	Мои свойства: добавленные вами (щёлкните правой кнопкой по имени свойства, чтобы добавить его)
+	Right-click a property's name and choose Add to My Properties.	Щёлкните правой кнопкой по имени свойства и выберите «Добавить в мои свойства».
+	Color Books	Альбомы цветов

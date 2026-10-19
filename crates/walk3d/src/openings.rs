@@ -225,7 +225,31 @@ pub(crate) fn build(s: &mut Scene, plans: &[Planned], o: &Openings) {
                     let u = u * (1.0 / u.len());
                     let h = o.door_head_ft.min(z1 - z0).max(0.1);
                     let c = *hinge + u * (sw.r / 2.0);
+                    let first_vertex = s.tris.len();
+                    s.part = crate::Part::Door;
                     boxed(s, v3(c.x, c.y, z0 + h / 2.0), u, sw.r, LEAF_FT, h, DOOR, sw.owner);
+                    s.part = crate::Part::Wall;
+                    // Shut, the leaf lies across the opening in the middle of the wall.
+                    let along = g.e1 - g.e0;
+                    let along = if along.len() > 1e-9 { along * (1.0 / along.len()) } else { Vec2 { x: 1.0, y: 0.0 } };
+                    let to_mid = g.centre() - *hinge;
+                    let shut_dir = if to_mid.x * along.x + to_mid.y * along.y < 0.0 { along * -1.0 } else { along };
+                    let depth = (*hinge - g.e0).x * g.n.x + (*hinge - g.e0).y * g.n.y;
+                    s.door_leaves.push(crate::DoorLeaf {
+                        level: g.lv,
+                        hinge: *hinge,
+                        open_dir: u,
+                        shut_dir,
+                        width: sw.r,
+                        thick: LEAF_FT,
+                        height: h,
+                        z0,
+                        shut_offset: g.n * (g.off / 2.0 - depth),
+                        first_vertex,
+                        color: DOOR,
+                        owner: sw.owner,
+                        open: true,
+                    });
                 }
                 s.doors += 1;
             }
@@ -235,7 +259,9 @@ pub(crate) fn build(s: &mut Scene, plans: &[Planned], o: &Openings) {
                 header(s, &g, head, z1);
                 let (m0, m1) = (g.e0 + g.n * (g.off / 2.0), g.e1 + g.n * (g.off / 2.0));
                 if head > sill {
+                    s.part = crate::Part::Glass;
                     quad(s, [v3(m0.x, m0.y, sill), v3(m1.x, m1.y, sill), v3(m1.x, m1.y, head), v3(m0.x, m0.y, head)], GLASS, g.owner);
+                    s.part = crate::Part::Wall;
                 }
                 // Windows stop the walker.
                 s.walls.push(Seg { a: g.e0, b: g.e1, level: g.lv });
@@ -363,6 +389,31 @@ mod tests {
         )
         .unwrap_or_else(|e| panic!("{e}"));
         derive(&d, &rules)
+    }
+
+    #[test]
+    fn doors_open_and_shut_and_a_shut_door_stops_the_walker() {
+        let mut s = two_rooms();
+        assert_eq!(s.door_leaves.len(), 1);
+        let walk_east = |s: &Scene| {
+            let mut w = crate::Walker::spawn(s, 0);
+            w.eye = crate::math::v3(15.0, 4.5, 5.5);
+            w.yaw = 0.0;
+            w.step(s, 10.0, 0.0, 0.0);
+            w.eye.x
+        };
+        assert!(walk_east(&s) > 22.0, "through the open door");
+        // The leaf's triangles belong to the door; shutting it moves them across the opening.
+        let tri = s.door_leaves[0].first_vertex / 3 + 1;
+        assert_eq!(s.door_of_triangle(tri), Some(0));
+        assert_eq!(s.toggle_door(0), Some(false));
+        let leaf = &s.tris[s.door_leaves[0].first_vertex..s.door_leaves[0].first_vertex + crate::doors::LEAF_VERTS];
+        assert!(leaf.iter().all(|v| v.p[0] > 19.8 && v.p[0] < 20.7), "shut in the wall: {:?}", leaf.iter().map(|v| v.p).collect::<Vec<_>>());
+        assert!(walk_east(&s) < 20.0, "a shut door stops the walker");
+        assert_eq!(s.toggle_door(0), Some(true));
+        assert!(walk_east(&s) > 22.0);
+        assert_eq!(s.toggle_door(5), None);
+        assert_eq!(s.door_of_triangle(0), None);
     }
 
     #[test]

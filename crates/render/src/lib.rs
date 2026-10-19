@@ -11,9 +11,13 @@ pub mod clip;
 mod dim;
 mod fill;
 mod hatch;
+pub mod hlr;
 pub mod images;
+pub mod light;
 mod linetype;
 mod linetype_text;
+pub mod live;
+pub mod materials;
 mod mline;
 mod outline;
 pub mod paper;
@@ -21,8 +25,11 @@ pub mod pen;
 mod plotstyle;
 mod point;
 pub mod raster;
+pub mod shade;
+mod solid;
 mod text;
 mod tolerance;
+pub mod trace;
 pub mod units;
 mod wide;
 
@@ -37,6 +44,7 @@ pub use dim::{
 pub use fill::triangulate_evenodd;
 pub use hatch::{fill_loops as hatch_fill_loops, pattern_swatch};
 pub use paper::{PAPER_SIZES, PaperSize, Sheet, paper_size, sheet};
+pub use solid::solid_mesh;
 pub use tolerance::{gdt_points, tolerance_in};
 
 /// Handle carried by model-space geometry drawn inside a paper-space viewport (it belongs to no
@@ -292,6 +300,8 @@ pub struct Options {
     /// A 3D view of model space (`None`: the plan view). The list is then built on the view
     /// plane: planar objects through the map of their plane, 3D objects point by point.
     pub projection: Option<cadaddy_geom::view3::Projection>,
+    /// Shade field values with a grey box (FIELDDISPLAY, on screen only).
+    pub field_shading: bool,
 }
 
 impl Options {
@@ -316,6 +326,7 @@ impl Default for Options {
             transparency: false,
             cancel: None,
             projection: None,
+            field_shading: false,
         }
     }
 }
@@ -1039,6 +1050,29 @@ fn top_entity(b: &mut Builder, d: &Drawing, e: &Entity) {
         entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
         return;
     };
+    // A mesh: its vertices onto the view plane; its edges are drawn from them.
+    if let EntityKind::Mesh(m) = &e.kind {
+        let vertices = m.vertices.iter().map(|q| p.project(*q).to3(0.0)).collect();
+        let flat = Entity { kind: EntityKind::Mesh(cadaddy_doc::Mesh { vertices, ..m.clone() }), ..e.clone() };
+        entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), &flat);
+        return;
+    }
+    // A solid: its display curves onto the view plane.
+    if let EntityKind::Solid3d(so) = &e.kind {
+        let ctx = top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]);
+        // A live section shows what it leaves.
+        let cut = live::cut_solid(so, &live::live_sections(d, &Space::Model)).map(|(c, _)| c);
+        let shown = cut.as_ref().unwrap_or(so);
+        for w in shown.wires(b.opts.tolerance) {
+            let vertices = w.iter().map(|q| cadaddy_geom::PolyVertex { p: p.project(*q), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
+            let flat = Entity {
+                kind: EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: false, const_width: 0.0, elevation: 0.0, plinegen: true }),
+                ..e.clone()
+            };
+            entity(b, &ctx, &flat);
+        }
+        return;
+    }
     if let Some((pts, closed)) = e.kind.points3d() {
         let vertices = pts.iter().map(|q| cadaddy_geom::PolyVertex { p: p.project(*q), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
         let flat = Entity {
@@ -1192,7 +1226,19 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     // draws (block contents set their own).
     let (saved, saved_transparency) = (b.named, b.transparency);
     b.named = b.styles.and_then(|s| s.named_index(ctx, &e.common));
+    let first = b.list.prims.len();
     entity_parts(b, ctx, e);
+    // While a reference is edited in place, the rest of the drawing is faded (XFADECTL).
+    if ctx.depth == 0
+        && !b.plotting
+        && let Some(r) = &ctx.d.refedit
+        && !r.owns(e.handle)
+    {
+        let fade = u8::try_from(ctx.d.header.i64("XFADECTL", 50).clamp(0, i64::from(MAX_TRANSPARENCY))).unwrap_or(50);
+        for p in b.list.prims.iter_mut().skip(first) {
+            p.transparency = p.transparency.max(fade);
+        }
+    }
     b.named = saved;
     b.transparency = saved_transparency;
     if b.plotting && b.list.prim_layers.len() < b.list.prims.len() {
@@ -1270,8 +1316,19 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if !b.opts.text {
                 return;
             }
-            let (sh, _) = place_text_entity(ctx.d, t, &t.value);
-            b.shaped(ctx, rgb, lw, &sh);
+            let mut vals = field_values(ctx.d, e.handle);
+            match with_fields(&t.value, &mut vals, b.opts.field_shading) {
+                Some(marked) => {
+                    text_field_boxes(b, ctx, t, &marked);
+                    let plain: String = marked.chars().filter(|c| *c != cadaddy_fonts::FIELD_ON && *c != cadaddy_fonts::FIELD_OFF).collect();
+                    let (sh, _) = place_text_entity(ctx.d, t, &plain);
+                    b.shaped(ctx, rgb, lw, &sh);
+                }
+                None => {
+                    let (sh, _) = place_text_entity(ctx.d, t, &t.value);
+                    b.shaped(ctx, rgb, lw, &sh);
+                }
+            }
         }
         EntityKind::AttDef(a) => {
             let (sh, _) = place_text_entity(ctx.d, &a.text, &a.tag);
@@ -1281,6 +1338,9 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if !b.opts.text {
                 return;
             }
+            let mut vals = field_values(ctx.d, e.handle);
+            let substituted = with_fields(&t.contents, &mut vals, b.opts.field_shading).map(|contents| cadaddy_doc::MText { contents, ..t.clone() });
+            let t = substituted.as_ref().unwrap_or(t);
             if let Some(bg) = &t.background {
                 let layer = if e.common.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { e.common.layer.as_str() };
                 let layer_color = ctx.layer_color(layer).unwrap_or(Color::Index(7));
@@ -1464,6 +1524,13 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 b.polyline(ctx, rgb, lw, l);
             }
         }
+        // Its display curves, seen from above, to the view's tolerance.
+        EntityKind::Solid3d(so) => {
+            for w in so.wires(tol) {
+                let pts: Vec<Vec2> = w.iter().map(|p| p.xy()).collect();
+                b.polyline(ctx, rgb, lw, &pts);
+            }
+        }
         kind => {
             for prim in kind.prims() {
                 match prim {
@@ -1518,6 +1585,79 @@ pub fn place_text_entity(d: &Drawing, t: &cadaddy_doc::Text, value: &str) -> (ca
         upside_down: ts.upside_down,
     };
     cadaddy_fonts::place(&font, value, &p)
+}
+
+/// The grey behind field values on screen (FIELDDISPLAY).
+const FIELD_INK: Ink = Ink { rgb: Rgb(128, 128, 128), aci7: false, aci: 8 };
+
+/// The values fields of object `h` last evaluated to.
+fn field_values(d: &Drawing, h: Handle) -> std::slice::Iter<'_, String> {
+    d.field_values.get(&h).map_or([].iter(), |v| v.iter())
+}
+
+/// `s` with its fields' values (taken from `vals`) in place of their codes, each value between
+/// [`cadaddy_fonts::FIELD_ON`] and [`cadaddy_fonts::FIELD_OFF`] when `marked`; `None` when `s`
+/// holds no field.
+fn with_fields(s: &str, vals: &mut std::slice::Iter<'_, String>, marked: bool) -> Option<String> {
+    if !cadaddy_doc::field::has_fields(s) {
+        return None;
+    }
+    let marks = marked.then_some((cadaddy_fonts::FIELD_ON, cadaddy_fonts::FIELD_OFF));
+    Some(cadaddy_doc::field::substitute(s, &mut vals.by_ref().map(String::as_str), marks))
+}
+
+/// Grey boxes behind the field values of a single-line text (`marked` holds the values between
+/// field marks), from the widths of the text before and in each value.
+fn text_field_boxes(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::Text, marked: &str) {
+    if !marked.contains(cadaddy_fonts::FIELD_ON) {
+        return;
+    }
+    let ts = text_style(ctx.d, &t.style);
+    if ts.backwards || ts.upside_down {
+        return;
+    }
+    let font = cadaddy_fonts::TextFont::resolve(&ts.font);
+    let h = t.height;
+    let width = |s: &str| cadaddy_fonts::text_width(&font, s, h, t.width_factor);
+    let plain: String = marked.chars().filter(|c| *c != cadaddy_fonts::FIELD_ON && *c != cadaddy_fonts::FIELD_OFF).collect();
+    let total = width(&plain);
+    let align_pt = t.align_pt.unwrap_or(t.insert).xy();
+    use cadaddy_doc::{HAlign, VAlign};
+    let (anchor, x0) = match t.halign {
+        HAlign::Left => (t.insert.xy(), 0.0),
+        HAlign::Center | HAlign::Middle => (align_pt, -total / 2.0),
+        HAlign::Right => (align_pt, -total),
+        HAlign::Aligned | HAlign::Fit => return,
+    };
+    let y0 = match (t.halign, t.valign) {
+        (HAlign::Middle, _) | (_, VAlign::Middle) => -h / 2.0,
+        (_, VAlign::Top) => -h,
+        (_, VAlign::Bottom) => h * 0.3,
+        _ => 0.0,
+    };
+    let (sin, cos) = t.rotation.sin_cos();
+    let world = |q: Vec2| anchor + Vec2::new(q.x * cos - q.y * sin, q.x * sin + q.y * cos);
+    let mut before = String::new();
+    let mut start: Option<f64> = None;
+    for c in marked.chars() {
+        match c {
+            cadaddy_fonts::FIELD_ON => start = Some(width(&before)),
+            cadaddy_fonts::FIELD_OFF => {
+                if let Some(a) = start.take() {
+                    let w = width(&before) - a;
+                    let q = [
+                        Vec2::new(x0 + a, y0 - h * 0.3),
+                        Vec2::new(x0 + a + w, y0 - h * 0.3),
+                        Vec2::new(x0 + a + w, y0 + h * 1.2),
+                        Vec2::new(x0 + a, y0 + h * 1.2),
+                    ]
+                    .map(world);
+                    b.tris(ctx, FIELD_INK, &[q[0], q[1], q[2], q[0], q[2], q[3]]);
+                }
+            }
+            c => before.push(c),
+        }
+    }
 }
 
 /// Lay out an MTEXT with its style's font.
@@ -1599,6 +1739,9 @@ fn mtext_mask(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::MText, bg: &cadaddy_d
 
 fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::MText, rgb: Ink, lw: f32) {
     let l = layout_mtext_entity(ctx.d, t);
+    for q in &l.fields {
+        b.tris(ctx, FIELD_INK, &[q[0], q[1], q[2], q[0], q[2], q[3]]);
+    }
     for p in &l.pieces {
         b.shaped(ctx, mtext_color(p.color, rgb), lw, &p.shaped);
     }
@@ -1884,6 +2027,16 @@ fn image(b: &mut Builder, ctx: &Ctx, i: &cadaddy_doc::Image, rgb: Ink, lw: f32) 
         Some(raster) => {
             let raster = images::adjusted(&raster, i.brightness, i.contrast);
             let tris = triangulate_evenodd(std::slice::from_ref(&boundary));
+            // TRANSPARENCY off (display bit 8 clear, AutoCAD's default): the image is opaque, its
+            // transparent pixels showing the background colour, not what lies under it; on, they
+            // show what is behind (UI review 0.7.7c: the flag changed nothing).
+            if i.display & 8 == 0 && b.opts.fill {
+                let n = b.list.prims.len();
+                b.tris(ctx, rgb, &tris);
+                if let Some(p) = b.list.prims.get_mut(n) {
+                    p.kind = Kind::Mask;
+                }
+            }
             let alpha = (255.0 * (1.0 - f64::from(i.fade.min(100)) / 100.0)).round() as u8;
             let dark_stencil = images::is_dark_stencil(&raster);
             let img = ImageRef { path: i.path.clone(), raster, origin: o + v * h, ex: u * w, ey: v * -h, alpha, dark_stencil };
@@ -1913,6 +2066,8 @@ fn image(b: &mut Builder, ctx: &Ctx, i: &cadaddy_doc::Image, rgb: Ink, lw: f32) 
 
 /// A block reference's contents: every copy (MINSERT rows × columns) of its block's objects.
 fn insert_contents(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, blk: &cadaddy_doc::Block) {
+    // XCLIP Clipdepth: objects beyond the clipping planes are left out.
+    let depth = ins.clip.as_ref().filter(|c| c.active() && (c.front.is_some() || c.back.is_some()));
     let cols = ins.cols.clamp(1, 10_000);
     let rows = ins.rows.clamp(1, 10_000);
     'copies: for r in 0..rows {
@@ -1922,10 +2077,19 @@ fn insert_contents(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::In
             }
             let off = Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
             let m = Mat3::translate(off).then_before(ins.transform(blk.base.xy()));
-            let sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, m) };
+            let mut sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, m) };
+            // In a 3D view a block reference inside a block (an array's items on their levels)
+            // stands at its own elevation; a top-level one is already placed at its elevation.
+            if ctx.depth > 0
+                && let Some(p) = b.opts.projection
+                && ins.insert.z.is_finite()
+                && ins.insert.z != 0.0
+            {
+                sub.xf = Mat3::translate(p.project(cadaddy_geom::Vec3::new(0.0, 0.0, ins.insert.z))).then_before(sub.xf);
+            }
             for be in blk.entities.iter() {
                 // Constant/visible attribute definitions inside blocks are not drawn; attribs are.
-                if matches!(be.kind, EntityKind::AttDef(_)) {
+                if matches!(be.kind, EntityKind::AttDef(_)) || depth.is_some_and(|c| c.beyond_depth(&be.kind)) {
                     continue;
                 }
                 if !b.expand() {
@@ -1990,7 +2154,15 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
         let attmode = ctx.d.header.i64("ATTMODE", 1);
         // The reference's transparency; each attribute draws with its own.
         let reference = b.transparency;
+        let mut vals = field_values(ctx.d, e.handle);
         for a in &ins.attribs {
+            // Field values are counted over every attribute, shown or not.
+            let with = with_fields(&a.text.value, &mut vals, false).map(|value| {
+                let mut a = a.clone();
+                a.text.value = value;
+                a
+            });
+            let a = with.as_ref().unwrap_or(a);
             if attmode == 0 || (a.invisible && attmode != 2) {
                 continue;
             }

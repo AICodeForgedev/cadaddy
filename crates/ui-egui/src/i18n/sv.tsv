@@ -1427,3 +1427,337 @@ menu	Modify	Ändra
 	Clip PDF Underlay	Beskär PDF-underlägg
 	Adjust PDF Underlay	Justera PDF-underlägg
 	PDF Underlay Layers	Lager i PDF-underlägg
+	Unused items in this drawing	Oanvända objekt i den här ritningen
+	Purge Checked Items	Rensa markerade
+	Purge All	Rensa allt
+	Items purged: {count}	Rensade objekt: {count}
+	Find what:	Sök efter:
+	Replace with:	Ersätt med:
+	Match case	Matcha gemener/versaler
+	Find whole words only	Endast hela ord
+	Find	Sök
+	Replace All	Ersätt alla
+	Matches replaced: {count} (objects: {objects})	Ersatta träffar: {count} (objekt: {objects})
+	Matches found and selected: {count} (objects: {objects})	Hittade och valda träffar: {count} (objekt: {objects})
+	Select Color	Välj färg
+	Dimension styles	Måttstilar
+	Linetypes	Linjetyper
+	Multileader styles	Multiledarstilar
+	Multiline styles	Multilinjestilar
+	Table styles	Tabellstilar
+	Text styles	Textstilar
+	Zero-length geometry	Geometri med längden noll
+	Empty text objects	Tomma textobjekt
+	Palette Windows	Palettfönster
+	Dock	Docka
+	Back into the main window	Tillbaka till huvudfönstret
+	Dock Palette	Docka paletten
+	Float in Own Window	Flytande i eget fönster
+	Drawings (CDY, DWG, DXF)	Ritningar (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	CADaddy-ritning (CDY)
+	CADaddy drawing (.cdy)	CADaddy-ritning (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	Spara även en DWG-kopia när en CADaddy-ritning (.cdy) sparas
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	En CADaddy-ritning behåller allt; DWG- och DXF-filer behåller kanske inte allt (när du sparar i dem visas vad).
+	Field...	Fält...
+	Update Fields	Uppdatera fält
+	Change Text Case	Ändra skiftläge för text
+	Auto Number	Automatisk numrering
+	Explode Text	Bryt upp text
+	Arc Aligned Text	Text längs båge
+	Data Extraction	Dataextrahering
+	Data source	Datakälla
+	Objects	Objekt
+	Output	Utdata
+	Other drawings:	Andra ritningar:
+	Add Drawings...	Lägg till ritningar...
+	Open Settings...	Öppna inställningar...
+	Start from a saved .dxe settings file	Börja från en sparad .dxe-inställningsfil
+	Block names	Blocknamn
+	Include blocks inside blocks	Inkludera block i block
+	Other objects:	Andra objekt:
+	The drawing has no other objects.	Ritningen innehåller inga andra objekt.
+	Properties to extract:	Egenskaper att extrahera:
+	Attribute tags	Attributetiketter
+	Combine identical rows	Slå samman identiska rader
+	Insert a table	Infoga en tabell
+	Insertion point	Infogningspunkt
+	Title	Rubrik
+	Write a file (.csv for spreadsheets, .txt tab-separated)	Skriv en fil (.csv för kalkylblad, .txt tabbavgränsad)
+	Browse...	Bläddra...
+	Save Settings...	Spara inställningar...
+	Save these choices to a .dxe file to use again	Spara dessa val i en .dxe-fil för att använda igen
+	< Back	< Bakåt
+	Next >	Nästa >
+	Finish	Slutför
+	This drawing	Den här ritningen
+	Preview	Förhandsgranska
+	UCS	UCS
+	Plan View (World)	Planvy (världen)
+	New UCS	Nytt UCS
+	World	Världen
+	Current UCS	Aktuellt UCS
+	World (WCS)	Världen (WCS)
+	Unnamed	Namnlöst
+	Hide UCS Icon	Dölj UCS-ikonen
+	WCS	WCS
+	Spelling	Stavning
+	Check Spelling	Kontrollera stavning
+	Where to check	Var ska kontrolleras
+	Selected objects	Markerade objekt
+	Not in dictionary:	Finns inte i ordlistan:
+	Suggestions:	Förslag:
+	Ignore	Ignorera
+	Ignore All	Ignorera alla
+	Change All	Ändra alla
+	Add to Dictionary	Lägg till i ordlistan
+	Main dictionary:	Huvudordlista:
+	American English	Amerikansk engelska
+	Custom dictionary:	Egen ordlista:
+	Spelling check complete.	Stavningskontrollen är klar.
+	Hyperlink...	Hyperlänk...
+	Select Objects for a Hyperlink	Välj objekt för en hyperlänk
+	Open Hyperlink	Öppna hyperlänk
+	Insert Hyperlink	Infoga hyperlänk
+	Edit Hyperlink	Redigera hyperlänk
+	Text to display	Text att visa
+	File or web page	Fil eller webbsida
+	Named location	Namngiven plats
+	A named location with no file or web page is a layout or view of this drawing.	En namngiven plats utan fil eller webbsida är en layout eller vy i den här ritningen.
+	Remove Link	Ta bort länk
+	⌘-click to follow the link	⌘-klicka för att följa länken
+	Ctrl+click to follow the link	Ctrl+klicka för att följa länken
+	Materials Browser...	Materialbläddrare...
+	Attach by Layer	Koppla per lager
+	Material Mapping	Materialmappning
+	New Material	Nytt material
+	Edit Material	Redigera material
+	Delete Material	Ta bort material
+	Assign Material	Tilldela material
+	Materials Browser	Materialbläddrare
+	Search	Sök
+	Library	Bibliotek
+	Add to drawing	Lägg till i ritningen
+	In this drawing	I den här ritningen
+	No materials yet: add one from the library.	Inga material än: lägg till ett från biblioteket.
+	Colour	Färg
+	Roughness	Grovhet
+	Metallic	Metallisk
+	Opacity	Opacitet
+	Mapping	Mappning
+	Tile size	Plattstorlek
+	Assign to selection ({n})	Tilldela markeringen ({n})
+	Attach to layer	Koppla till lager
+	Render	Rendering
+	Edit Layer State	Redigera lagertillstånd
+	Export Layer State	Exportera lagertillstånd
+	Import Layer State	Importera lagertillstånd
+	New Layer Filter	Nytt lagerfilter
+	Edit Layer Filter	Redigera lagerfilter
+	Delete Layer Filter	Ta bort lagerfilter
+	List Layer Filters	Lista lagerfilter
+	Layers in Filter	Lager i filtret
+	Layer States Manager	Hanterare för lagertillstånd
+	Invert filter	Invertera filter
+	New Property Filter...	Nytt egenskapsfilter...
+	New Group Filter	Nytt gruppfilter
+	Add Layer	Lägg till lager
+	Remove Layer	Ta bort lager
+	Layer Filter Properties	Egenskaper för lagerfilter
+	Filter name	Filternamn
+	Within	Inom
+	Any	Valfri
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	Mönster: * valfritt, ? ett tecken, # en siffra; separera med kommatecken; ~ exkluderar.
+	Layer states	Lagertillstånd
+	Turn off layers not found in layer state	Släck lager som inte finns i lagertillståndet
+	Layer properties to restore	Lageregenskaper att återställa
+	On / Off	På / Av
+	Frozen / Thawed	Fryst / Tinad
+	Locked / Unlocked	Låst / Olåst
+	Plot / No Plot	Plotta / Plotta inte
+	Layers in "{name}"	Lager i "{name}"
+	Remove from the layer state	Ta bort från lagertillståndet
+	New...	Ny...
+	Save the layers as they are now in this state	Spara lagren som de är nu i detta tillstånd
+	Edit...	Redigera...
+	Rename	Byt namn
+	New layer state name	Namn på nytt lagertillstånd
+	New name	Nytt namn
+	Visual Style	Visuell stil
+	Visual Styles	Visuella stilar
+	Wireframe	Trådmodell
+	Hidden	Dold
+	Shaded	Skuggad
+	Shaded with Edges	Skuggad med kanter
+	Realistic	Realistisk
+	Mesh	Nät
+	Polyface Mesh	Polyfacenät
+	Polygon Mesh	Polygonnät
+	Walk	Gå
+	Fly	Flyg
+	Walk and Fly	Gå och flyg
+	3D Library...	3D-bibliotek...
+	Add 3D Twins to Symbols	Lägg till 3D-motsvarigheter till symboler
+	List 3D Models	Lista 3D-modeller
+	Add 3D Twins	Lägg till 3D-motsvarigheter
+	Plan Layers	Planlager
+	Plan Walls	Planväggar
+	Plan Openings	Planöppningar
+	Plan Rooms	Planrum
+	Plan Notes	Plananteckningar
+	Plan Sheets	Planblad
+	3D Building from Plan	3D-byggnad från plan
+	Wedge	Kil
+	Presspull	Tryck/dra
+	3D Solid	3D-solid
+	Specify center	Ange mittpunkt
+	Specify length	Ange längd
+	Specify width	Ange bredd
+	Specify other corner	Ange andra hörnet
+	Specify center point	Ange mittpunkt
+	Specify base radius	Ange basradie
+	Specify radius	Ange radie
+	Specify diameter	Ange diameter
+	Specify top radius	Ange toppradie
+	Specify tube radius	Ange rörradie
+	Select objects to extrude	Välj objekt att extrudera
+	Select extrusion path	Välj extruderingsbana
+	Specify angle of taper for extrusion	Ange avsmalningsvinkel för extrudering
+	Specify height of extrusion	Ange extruderingshöjd
+	Select objects to revolve	Välj objekt att rotera
+	Specify axis start point or define axis by	Ange axelns startpunkt eller definiera axeln med
+	Specify axis endpoint	Ange axelns slutpunkt
+	Specify angle of revolution	Ange rotationsvinkel
+	Select objects to sweep	Välj objekt att svepa
+	Select sweep path	Välj svepbana
+	Select cross sections in lofting order	Välj tvärsnitt i loftordning
+	Click inside bounded areas to press or pull	Klicka inuti avgränsade områden för att trycka eller dra
+	Specify extrusion height	Ange extruderingshöjd
+	Cube	Kub
+	Sides	Sidor
+	Top radius	Toppradie
+	Path	Bana
+	Taper angle	Avsmalningsvinkel
+	Select one or more regions or 3D solids.	Välj en eller flera regioner eller 3D-solider.
+	No closed area found there.	Inget slutet område hittades där.
+	Slice	Skär
+	Thicken	Förtjocka
+	Fillet Edge	Avrunda kant
+	Chamfer Edge	Fasa kant
+	Fillet Edges	Avrunda kanter
+	Chamfer Edges	Fasa kanter
+	Move Faces	Flytta ytor
+	Offset Faces	Förskjut ytor
+	Delete Faces	Ta bort ytor
+	Shell	Skal
+	Composite	Sammansatt
+	Select objects to slice	Välj objekt att skära
+	Specify a point on desired side or [keep Both sides]	Ange en punkt på önskad sida eller [behåll Båda sidor]
+	Both	Båda
+	Specify start point of slicing plane or	Ange startpunkt för skärplanet eller
+	Specify second point on plane	Ange andra punkten på planet
+	Specify the Z of the XY-plane	Ange Z för XY-planet
+	Specify the X of the YZ-plane	Ange X för YZ-planet
+	Specify the Y of the ZX-plane	Ange Y för ZX-planet
+	Select surfaces to thicken	Välj ytor att förtjocka
+	Select a 3D solid	Välj en 3D-solid
+	Select an edge	Välj en kant
+	Remove faces	Ta bort ytor
+	Select faces	Välj ytor
+	Specify thickness	Ange tjocklek
+	Enter fillet radius	Ange avrundningsradie
+	Enter distance	Ange avstånd
+	Specify a base point or displacement	Ange baspunkt eller förskjutning
+	Specify a second point of displacement	Ange andra punkten för förskjutning
+	Specify the offset distance	Ange förskjutningsavstånd
+	Enter the shell offset distance	Ange skalets förskjutningsavstånd
+	Select solids, surfaces, and regions to subtract from ..	Välj solider, ytor och regioner att subtrahera från ..
+	Select solids, surfaces, and regions to subtract ..	Välj solider, ytor och regioner att subtrahera ..
+	Select two or more solids.	Välj två eller fler solider.
+	The solids don't overlap; nothing was changed.	Soliderna överlappar inte; inget ändrades.
+	Nothing would remain; nothing was changed.	Inget skulle återstå; inget ändrades.
+	The result would not be a solid; nothing was changed.	Resultatet skulle inte bli en solid; inget ändrades.
+	No straight edge between two flat faces there.	Ingen rak kant mellan två plana ytor där.
+	No face of the solid there.	Ingen yta på soliden där.
+	Only outside (convex) edges can be filleted or chamfered.	Endast yttre (konvexa) kanter kan avrundas eller fasas.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	Skal fungerar på lådor, cylindrar, sfärer och raka extruderingar.
+	The walls are too thick for this solid.	Väggarna är för tjocka för denna solid.
+	Select solids to subtract from.	Välj solider att subtrahera från.
+	A solid can't be subtracted from itself.	En solid kan inte subtraheras från sig själv.
+	The solid would have too many operations; nothing was changed.	Soliden skulle ha för många operationer; inget ändrades.
+	That face can't be moved (only flat faces, holes and added parts).	Den ytan kan inte flyttas (endast plana ytor, hål och tillagda delar).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	Den ytan kan inte tas bort (endast hål, avrundningar, fasningar och tillagda delar).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	Den ytan kan inte förskjutas (lådsidor, ändar på cylindrar, koner och extruderingar, cylinderväggar och sfärer).
+	The thickness must be more than zero.	Tjockleken måste vara större än noll.
+	The radius must be more than zero.	Radien måste vara större än noll.
+	The distance must be more than zero.	Avståndet måste vara större än noll.
+	Requires a number.	Kräver ett tal.
+	Parameter	Parameter
+	Action	Åtgärd
+	Visibility States	Synlighetslägen
+	Remove Parameter or Action	Ta bort parameter eller åtgärd
+	Edit Reference	Redigera referens
+	Discard Reference Edits	Ignorera referensändringar
+	Nested References	Kapslade referenser
+	Light List	Ljuslista
+	Sun Properties	Solegenskaper
+	Render Exposure	Renderingsexponering
+	Point Light	Punktljus
+	Spotlight	Spotlight
+	Distant Light	Avlägset ljus
+	Change Lights	Ändra ljus
+	Section Plane	Snittplan
+	Live Section	Levande snitt
+	Generate Section Block	Skapa snittblock
+	Generate Section	Skapa snitt
+	Flatshot	Platt vy
+	Base View	Basvy
+	Section View	Snittvy
+	Drawing Views	Ritningsvyer
+	Select face or any point to locate section line or	Välj en yta eller punkt för snittlinjen eller
+	Orthographic	Ortografisk
+	Select section object	Välj snittobjekt
+	Specify location of base view	Ange basvyns placering
+	Select parent view	Välj överordnad vy
+	Specify end point	Ange slutpunkt
+	Specify location of section view	Ange snittvyns placering
+	There is nothing to draw: no 3D objects were found.	Inget att rita: inga 3D-objekt hittades.
+	The section plane doesn't cut any solid.	Snittplanet skär inte någon solid.
+	The view needs a direction.	Vyn behöver en riktning.
+	The drawing has no layout.	Ritningen har ingen layout.
+	That is not a section plane.	Det är inte ett snittplan.
+	Requires a point.	Kräver en punkt.
+	The view is [dx, dy, dz].	Vyn är [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	Skapa överföringspaket
+	Files in the package	Filer i paketet
+	Not included	Inte med
+	Organized folders	Ordnade mappar
+	One folder	En mapp
+	Include a transmittal report	Ta med en överföringsrapport
+	Create ZIP...	Skapa ZIP...
+	Create Folder...	Skapa mapp...
+	STL Out	STL-utdata
+	Export STL...	Exportera STL...
+	3D models (glTF, OBJ, STL)	3D-modeller (glTF, OBJ, STL)
+	3D model (glTF binary)	3D-modell (binär glTF)
+	3D model (glTF)	3D-modell (glTF)
+	3D model (OBJ)	3D-modell (OBJ)
+	3D model (STL)	3D-modell (STL)
+	Render Region	Rendera område
+	samples	sampel
+	a sample	per sampel
+	Pick crop window to render	Välj område att rendera
+	Nothing has been rendered yet.	Inget har renderats ännu.
+	There is nothing to render: no surfaces in the view.	Inget att rendera: inga ytor i vyn.
+	The image couldn't be encoded.	Bilden kunde inte kodas.
+	Saving images isn't available in the browser.	Det går inte att spara bilder i webbläsaren.
+	PNG image	PNG-bild
+	JPEG image	JPEG-bild
+	Save Image	Spara bild
+	My Properties	Mina egenskaper
+	Add to My Properties	Lägg till i mina egenskaper
+	Remove from My Properties	Ta bort från mina egenskaper
+	All properties	Alla egenskaper
+	My properties: the ones you added (right-click a property's name to add it)	Mina egenskaper: de du har lagt till (högerklicka på en egenskaps namn för att lägga till den)
+	Right-click a property's name and choose Add to My Properties.	Högerklicka på en egenskaps namn och välj Lägg till i mina egenskaper.
+	Color Books	Färgböcker

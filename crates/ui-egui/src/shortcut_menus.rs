@@ -189,8 +189,15 @@ fn similar_bit(label: &str) -> Option<u32> {
 /// A Properties palette row's menu (`label` is the row's property): Select Similar by that
 /// property (with objects selected), Quick Select, Select All and Deselect All. Built without the
 /// app: the rows are drawn while it is borrowed (see [`crate::palettes`]).
-pub fn property_row_entries(label: &str, has_selection: bool) -> Vec<Vec<Entry>> {
+pub fn property_row_entries(label: &str, has_selection: bool, mine: bool) -> Vec<Vec<Entry>> {
     let mut groups = Vec::new();
+    // The palette's "My" view: rows the user picked.
+    let my = if mine {
+        run("Remove from My Properties", "ui.properties", json!({ "remove": label }))
+    } else {
+        run("Add to My Properties", "ui.properties", json!({ "add": label }))
+    };
+    push(&mut groups, my.into_iter().collect());
     if has_selection && let Some(bit) = similar_bit(label) {
         push(&mut groups, run("Select Similar", "selectsimilar", json!({ "mode": bit })).into_iter().collect());
     }
@@ -211,7 +218,17 @@ pub fn properties_entries(app: &CadApp) -> Vec<Vec<Entry>> {
     let mut groups = Vec::new();
     push(&mut groups, ["qselect", "selectall", "ai_deselect"].iter().filter_map(|id| item(app, id, None)).collect());
     push(&mut groups, run("Hide Palette", "ui.dock", json!({ "operation": "close", "panel": "properties" })).into_iter().collect());
+    push(&mut groups, window_entry(app, crate::docking::Panel::Properties).into_iter().collect());
     groups
+}
+
+/// Float a palette in a window of its own (to put it on another screen), or dock it back.
+pub fn window_entry(app: &CadApp, panel: crate::docking::Panel) -> Option<Entry> {
+    if app.ui.docking.is_detached(panel) {
+        run("Dock Palette", "ui.dock", json!({ "operation": "dock", "panel": panel.id() }))
+    } else {
+        run("Float in Own Window", "ui.dock", json!({ "operation": "detach", "panel": panel.id() }))
+    }
 }
 
 /// Run a chosen item. `ctx` is for the items that copy text to the system clipboard.

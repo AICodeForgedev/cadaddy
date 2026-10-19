@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+cadaddy-walk3d = { path = "../walk3d" }
 cadaddy-geom = { workspace = true }
 cadaddy-color = { workspace = true }
 cadaddy-doc = { workspace = true }
@@ -23,6 +24,13 @@ thiserror = { workspace = true }
 log = { workspace = true }
 # R-tree spatial index for picking, window selection and object snaps (MIT OR Apache-2.0).
 rstar = { version = "0.12", default-features = false }
+# Deflate for ETRANSMIT's ZIP archives (MIT OR Zlib OR Apache-2.0; already used by cadaddy-io).
+miniz_oxide = "0.8"
+
+# The local time-zone offset on Windows (no /etc/localtime there): FIELD dates and the Drawing
+# Recovery times were UTC. MIT OR Apache-2.0; only its clock.
+[target.'cfg(windows)'.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
 # Real DXF files for the external reference tests (io is a lower layer).

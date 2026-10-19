@@ -274,7 +274,10 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
     let t = T(tags);
     let c = common(&t);
     let k = match kind {
-        "LINE" => EntityKind::Line(Line { a: t.p(10), b: t.p(11) }),
+        "LINE" => match crate::dxf_solid::read_section(tags) {
+            Some(sp) => EntityKind::SectionPlane(sp),
+            None => EntityKind::Line(Line { a: t.p(10), b: t.p(11) }),
+        },
         "POINT" => EntityKind::Point(Point { p: t.p(10), angle: t.fd(50, 0.0).to_radians() }),
         "CIRCLE" => EntityKind::Circle(Circle { center: ocs(&c, t.p(10)), radius: t.fd(40, 1.0).abs() }),
         "ARC" => {
@@ -488,6 +491,10 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             if kind == "SOLID" { EntityKind::Solid(Solid { corners }) } else { EntityKind::Trace(Solid { corners }) }
         }
         "MLINE" => EntityKind::MLine(crate::dxf_mline::read_entity(tags)),
+        "MESH" => match crate::dxf_solid::read_solid(tags) {
+            Some(so) => EntityKind::Solid3d(Box::new(so)),
+            None => EntityKind::Mesh(crate::dxf_mesh::read_subd(tags)?),
+        },
         "3DFACE" => EntityKind::Face3d(Face3d { corners: [t.p(10), t.p(11), t.p(12), t.p(13)], hidden_edges: t.i(70).unwrap_or(0) as u8 }),
         "HATCH" => {
             let mut k = hatch(tags, &t)?;
@@ -550,6 +557,21 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 text: t.s(1).unwrap_or_default().chars().take(MAX_FRAME_CHARS).collect(),
             })
         }
+        "LIGHT" => EntityKind::Light(
+            cadaddy_doc::lighting::Light {
+                name: t.s(1).unwrap_or_default(),
+                kind: cadaddy_doc::lighting::LightKind::from_dxf(t.i(70).unwrap_or(2)),
+                on: t.i(290).unwrap_or(1) != 0,
+                position: t.p(10),
+                target: t.p(11),
+                intensity: t.fd(40, 1500.0),
+                attenuation: cadaddy_doc::lighting::Attenuation::from_dxf(t.i(72).unwrap_or(2)),
+                hotspot: t.fd(50, 45.0),
+                falloff: t.fd(51, 50.0),
+                shadows: t.i(293).unwrap_or(1) != 0,
+            }
+            .sane(),
+        ),
         other => EntityKind::Unknown(Unknown {
             dxf_type: other.to_string(),
             tags: tags.iter().map(|tg| RawTag { code: tg.code, value: tg.str() }).collect(),
@@ -1011,6 +1033,8 @@ fn native_gradient(tags: &[Tag]) -> Option<Gradient> {
 /// Handle maps and references gathered while reading.
 #[derive(Default)]
 struct Rx {
+    /// MATERIAL object handle (upper case) → material name (group 347 of entities and layers).
+    materials: HashMap<String, String>,
     /// STYLE record handle (upper case) → text style name.
     styles: HashMap<String, String>,
     /// BLOCK_RECORD handle (upper case) → block name.
@@ -1029,6 +1053,12 @@ struct Rx {
     table_fields: Vec<(Handle, usize, String)>,
     /// Multileaders' style handles and block attribute values, resolved with the objects.
     mleader_fix: Vec<(Handle, crate::dxf_mleader::Pending)>,
+    /// Texts, attribute definitions and block references whose extension dictionaries may hold
+    /// fields, resolved with the objects.
+    text_fields: Vec<crate::dxf_field::Pending>,
+    /// The extension dictionaries of the attributes of the block reference being read: (index,
+    /// dictionary handle).
+    attrib_xdicts: Vec<(usize, String)>,
     /// Upper-case xref block name → the external drawing's path (BLOCK group 1).
     xref_paths: HashMap<String, String>,
     /// Plot style name placeholder handle (upper case) → plot style name (`ACAD_PLOTSTYLENAME`).
@@ -1077,6 +1107,23 @@ fn plot_style_names(secs: &[cadaddy_dxf::Section]) -> HashMap<String, String> {
     out
 }
 
+/// The material an entity record points at (group 347 among its AcDbEntity groups): `None` for
+/// ByLayer (or none).
+fn entity_material(tags: &[Tag], rx: &Rx) -> Option<String> {
+    let mut in_entity = false;
+    for t in tags {
+        if t.code == 100 {
+            if in_entity {
+                return None;
+            }
+            in_entity = t.str() == "AcDbEntity";
+        } else if t.code == 347 && in_entity {
+            return rx.materials.get(&t.str().trim().to_ascii_uppercase()).and_then(|n| crate::dxf_material::entity_material(n));
+        }
+    }
+    None
+}
+
 /// The named plot style an entity record points at (group 390 among its AcDbEntity groups).
 fn entity_plot_style(tags: &[Tag], rx: &Rx) -> Option<String> {
     let mut in_entity = false;
@@ -1096,6 +1143,22 @@ fn entity_plot_style(tags: &[Tag], rx: &Rx) -> Option<String> {
 /// Dimension overrides and associativity, table references: data of an entity record that
 /// needs the file's handle maps.
 fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &mut Rx) {
+    // Fields: a text's extension dictionary, or its attributes'.
+    if rx.text_fields.len() < crate::dxf_field::MAX_FIELDS {
+        match kind {
+            "TEXT" | "MTEXT" | "ATTDEF" => {
+                if let Some(x) = crate::dxf_field::xdict_of(tags) {
+                    rx.text_fields.push(crate::dxf_field::Pending { entity: h, slot: crate::dxf_field::Slot::Own, xdict: x });
+                }
+            }
+            "INSERT" => {
+                for (i, x) in std::mem::take(&mut rx.attrib_xdicts) {
+                    rx.text_fields.push(crate::dxf_field::Pending { entity: h, slot: crate::dxf_field::Slot::Attrib(i), xdict: x });
+                }
+            }
+            _ => {}
+        }
+    }
     match (kind, k) {
         ("DIMENSION", EntityKind::Dimension(dm)) => {
             dm.overrides = crate::dxf_ext::read_dstyle(tags, &rx.styles, &rx.brs, &rx.ltypes);
@@ -1170,8 +1233,9 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
         {
             c.plot_style = n;
         }
-        // More entities from this record (the faces of a polyface or polygon mesh).
-        let mut extra: Vec<EntityKind> = Vec::new();
+        if let Some((c, _)) = kindent.as_mut() {
+            c.material = entity_material(tags, rx);
+        }
         i += 1;
         match kind.as_str() {
             "POLYLINE" => {
@@ -1198,18 +1262,21 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
                 }
                 let c = common(&t);
                 let k = if flags & (16 | 64) != 0 {
-                    // Polyface (64) and polygon (16) meshes become 3D faces; the first takes the
-                    // polyline's place.
-                    let verts: Vec<Vec3> = pts.iter().map(|p| p.0).collect();
-                    let mut fs = if flags & 64 != 0 { polyface_faces(&verts, &faces) } else { mesh_faces(&verts, &t, flags) }
-                        .into_iter()
-                        .map(EntityKind::Face3d);
-                    let Some(first) = fs.next() else {
-                        *skipped = skipped.saturating_add(1);
-                        continue;
+                    // Polyface (64) and polygon (16) meshes: one mesh each.
+                    let verts: Vec<Vec3> = pts.iter().map(|p| p.0).take(cadaddy_doc::MAX_MESH_VERTICES).collect();
+                    let mesh = if flags & 64 != 0 {
+                        crate::dxf_mesh::polyface(verts, &faces)
+                    } else {
+                        crate::dxf_mesh::polygon(verts, [t.i(71), t.i(72), t.i(73), t.i(74)], flags)
                     };
-                    extra.extend(fs);
-                    first
+                    match (crate::dxf_solid::read_solid(tags), mesh) {
+                        (Some(so), _) => EntityKind::Solid3d(Box::new(so)),
+                        (None, Some(mesh)) => EntityKind::Mesh(mesh),
+                        (None, None) => {
+                            *skipped = skipped.saturating_add(1);
+                            continue;
+                        }
+                    }
                 } else if flags & 8 != 0 {
                     EntityKind::Polyline3d(Polyline3d { points: pts.iter().map(|p| p.0).collect(), closed: flags & 1 != 0 })
                 } else {
@@ -1229,11 +1296,15 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
                 kindent = Some((c, k));
             }
             "INSERT" => {
+                rx.attrib_xdicts.clear();
                 if t.i(66) == Some(1) {
                     let mut attribs = Vec::new();
                     let ins_layer = kindent.as_ref().map(|(c, _)| c.layer.clone()).unwrap_or_default();
                     while let Some((k2, t2)) = recs.get(i) {
                         if k2 == "ATTRIB" {
+                            if let Some(x) = crate::dxf_field::xdict_of(t2) {
+                                rx.attrib_xdicts.push((attribs.len(), x));
+                            }
                             attribs.push(attrib_from_groups(t2, &ins_layer));
                             i += 1;
                         } else {
@@ -1265,10 +1336,7 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
                 None => d.new_handle(),
             };
             entity_extras(kind, tags, h, &mut k, rx);
-            let more: Vec<_> =
-                extra.into_iter().map(|f| (owner.clone(), paper, Entity { handle: d.new_handle(), common: c.clone(), kind: f })).collect();
             out.push((owner, paper, Entity { handle: h, common: c, kind: k }));
-            out.extend(more);
         } else if kind == "HATCH" {
             // Without boundary data. The other records `entity` returns nothing for are read
             // elsewhere (the writer's paper viewport, the loops of a region).
@@ -1281,59 +1349,6 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
         if !seen.insert(e.handle) {
             e.handle = d.new_handle();
             seen.insert(e.handle);
-        }
-    }
-    out
-}
-
-/// Faces of a polyface mesh: each face record names three or four vertices by 1-based index;
-/// a negative index hides the edge that starts at that vertex. Faces with fewer vertices or
-/// an index outside the vertex list are skipped.
-fn polyface_faces(verts: &[Vec3], faces: &[[i64; 4]]) -> Vec<Face3d> {
-    let mut out = Vec::new();
-    for f in faces {
-        let mut corners: Vec<Vec3> = Vec::with_capacity(4);
-        let mut hidden = 0u8;
-        let mut ok = true;
-        for &ix in f.iter().filter(|&&ix| ix != 0) {
-            let at = usize::try_from(ix.unsigned_abs()).ok().and_then(|n| n.checked_sub(1));
-            let Some(p) = at.and_then(|n| verts.get(n)) else {
-                ok = false;
-                break;
-            };
-            if ix < 0 {
-                hidden |= 1 << corners.len();
-            }
-            corners.push(*p);
-        }
-        match (ok, corners.as_slice()) {
-            // A triangle's closing edge is the 3DFACE's fourth (the third is degenerate).
-            (true, [a, b, c]) => out.push(Face3d { corners: [*a, *b, *c, *c], hidden_edges: hidden | if hidden & 4 != 0 { 8 } else { 0 } }),
-            (true, [a, b, c, d]) => out.push(Face3d { corners: [*a, *b, *c, *d], hidden_edges: hidden }),
-            _ => {}
-        }
-    }
-    out
-}
-
-/// Quads of an M×N polygon mesh (71/72, or the smoothed 73/74 when the vertex count matches
-/// those), closed in M by bit 1 and in N by bit 32. Vertices run row by row.
-fn mesh_faces(verts: &[Vec3], t: &T, flags: i64) -> Vec<Face3d> {
-    let dims = |a: i32, b: i32| Some((usize::try_from(t.i(a)?).ok()?, usize::try_from(t.i(b)?).ok()?));
-    let fits = |(m, n): (usize, usize)| m >= 2 && n >= 2 && m.checked_mul(n).is_some_and(|mn| mn <= verts.len());
-    let exact = |(m, n): (usize, usize)| fits((m, n)) && m * n == verts.len();
-    let Some((m, n)) = [dims(71, 72), dims(73, 74)].into_iter().flatten().find(|d| exact(*d)).or_else(|| dims(71, 72).filter(|d| fits(*d))) else {
-        return Vec::new();
-    };
-    let at = |i: usize, j: usize| verts.get((i % m) * n + j % n).copied();
-    let rows = if flags & 1 != 0 { m } else { m - 1 };
-    let cols = if flags & 32 != 0 { n } else { n - 1 };
-    let mut out = Vec::new();
-    for i in 0..rows {
-        for j in 0..cols {
-            if let (Some(a), Some(b), Some(c), Some(d)) = (at(i, j), at(i, j + 1), at(i + 1, j + 1), at(i + 1, j)) {
-                out.push(Face3d { corners: [a, b, c, d], hidden_edges: 0 });
-            }
         }
     }
     out
@@ -1487,6 +1502,8 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 if let Some(n) = t.s(390).and_then(|h| rx.pstyles.get(&h.trim().to_ascii_uppercase())) {
                     l.plot_style = n.clone();
                 }
+                l.material =
+                    t.s(347).and_then(|h| rx.materials.get(&h.trim().to_ascii_uppercase())).and_then(|n| crate::dxf_material::layer_material(n));
                 let alpha = crate::dxf_ext::xdata(&tg, crate::dxf_ext::LAYER_TRANSPARENCY_APP).iter().find(|x| x.code == 1071);
                 if let Some(pct) = alpha.and_then(|x| crate::dxf_ext::transparency_from_dxf(x.i64())) {
                     l.transparency = pct;
@@ -1582,7 +1599,24 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 // 70 bit 1: a paper space view; its layout is CADaddy xdata.
                 let layout = (t.i(70).unwrap_or(0) & 1 != 0).then(|| field("LAYOUT").unwrap_or_default());
                 let twist = t.f(50).filter(|a| a.is_finite()).map_or(0.0, |a| a.rem_euclid(360.0).to_radians());
-                let v = NamedView { name: name.clone(), center, height: h, width: w, layer_state: field("LAYERSTATE"), twist, layout };
+                // The view direction: the plan view when missing, zero or not a number.
+                let dir = Some(t.p(11)).filter(|d| d.is_finite() && d.len() > 1e-12).map(|d| d.normalized()).filter(|d| (*d - Vec3::Z).len() > 1e-9);
+                let ucs = (t.i(72).unwrap_or(0) == 1)
+                    .then(|| ViewUcs { name: field("UCSNAME").unwrap_or_default(), origin: t.p(110), x_axis: t.p(111), y_axis: t.p(112) })
+                    .filter(|u| [u.origin, u.x_axis, u.y_axis].iter().all(|p| p.is_finite()) && u.x_axis.len() > 1e-9 && u.y_axis.len() > 1e-9);
+                let background = field("BACKGROUND").and_then(|c| cadaddy_color::Color::parse(&c));
+                let v = NamedView {
+                    name: name.clone(),
+                    center,
+                    height: h,
+                    width: w,
+                    layer_state: field("LAYERSTATE"),
+                    twist,
+                    layout,
+                    dir,
+                    ucs,
+                    background,
+                };
                 match d.views.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
                     Some(x) => *x = v,
                     None => d.views.push(v),
@@ -1719,6 +1753,11 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
     let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
+    if let Some(objects) = secs.iter().find(|s| s.name == "OBJECTS") {
+        let (materials, names) = crate::dxf_material::read(&records(&objects.tags));
+        d.materials = materials;
+        rx.materials = names;
+    }
     let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Entity)>, i64)> = Vec::new();
     let mut layout_objs: Vec<(String, u32, String, PageSetup, Option<(Vec2, Vec2)>)> = Vec::new();
     let mut entities = Vec::new();
@@ -2020,8 +2059,12 @@ struct Objects {
     layout_views: Vec<(String, (Vec2, f64))>,
     /// SORTENTSTABLE objects: (owning block record handle, entity handle → sort handle).
     sortents: Vec<(String, HashMap<Handle, u64>)>,
-    /// FIELD objects by handle (table formulas).
+    /// FIELD objects by handle.
     fields: HashMap<String, Vec<Tag>>,
+    /// Dictionaries that lead to fields (an `ACAD_FIELD` or `TEXT` entry) by handle.
+    field_dicts: HashMap<String, Vec<Tag>>,
+    /// LAYER_FILTER objects: (handle, the layer names they list).
+    layer_filters: Vec<(String, Vec<String>)>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -2038,6 +2081,9 @@ impl Objects {
                 }
             }
             "DICTIONARY" => {
+                if self.field_dicts.len() < MAX_OBJECTS && tags.iter().any(|t| t.code == 3 && matches!(t.str().trim(), "ACAD_FIELD" | "TEXT")) {
+                    self.field_dicts.insert(h.clone(), tags.to_vec());
+                }
                 let mut name: Option<String> = None;
                 for t in tags {
                     match t.code {
@@ -2053,6 +2099,9 @@ impl Objects {
                     }
                 }
             }
+            "FIELD" if self.fields.len() < crate::dxf_field::MAX_FIELDS => {
+                self.fields.insert(h, tags.to_vec());
+            }
             "XRECORD" if self.xrecords.len() < MAX_OBJECTS => {
                 self.xrecords.insert(h, tags.to_vec());
             }
@@ -2060,6 +2109,11 @@ impl Objects {
             "DIMASSOC" if self.dimassocs.len() < MAX_OBJECTS => self.dimassocs.push(tags.to_vec()),
             "MLEADERSTYLE" if self.mleader_styles.len() < MAX_OBJECTS => self.mleader_styles.push((h, tags.to_vec())),
             "GROUP" if self.groups.len() < MAX_OBJECTS => self.groups.push((h, tags.to_vec())),
+            "LAYER_FILTER" if self.layer_filters.len() < 10_000 => {
+                let names: Vec<String> =
+                    tags.iter().filter(|t| t.code == 8).take(100_000).map(|t| t.str().trim().to_string()).filter(|n| !n.is_empty()).collect();
+                self.layer_filters.push((h, names));
+            }
             "FIELD" | "ACAD_FIELD" if self.fields.len() < MAX_OBJECTS => {
                 self.fields.insert(h, tags.to_vec());
             }
@@ -2093,6 +2147,8 @@ impl Objects {
     }
 
     fn apply(self, d: &mut Drawing, rx: &Rx) {
+        // Fields: codes back into their texts, cached values kept.
+        crate::dxf_field::apply(d, &rx.text_fields, &self.fields, &self.field_dicts);
         if let Some(style) = self.xrecord_text(crate::dxf_ext::MLEADER_STYLE_KEY).filter(|s| !s.trim().is_empty()) {
             d.header.set_str("CMLEADERSTYLE", &style);
         }
@@ -2158,10 +2214,32 @@ impl Objects {
         if let Some(states) = self.xrecord_text(crate::dxf_ext::LAYER_STATES_KEY).and_then(|t| crate::dxf_ext::parse_layer_states(&t)) {
             d.layer_states = states;
         }
+        // Layer filters: ours, else the group filters of the LAYER_FILTER objects other programs
+        // keep in the layer table's ACAD_LAYERFILTERS dictionary (those stay in the file too).
+        if let Some(filters) = self.xrecord_text(crate::dxf_ext::LAYER_FILTERS_KEY).and_then(|t| crate::dxf_ext::parse_layer_filters(&t)) {
+            d.layer_filters = filters;
+        } else {
+            for (h, layers) in &self.layer_filters {
+                let Some(name) = self.names.get(h).map(|n| n.trim()).filter(|n| !n.is_empty()) else { continue };
+                if d.layer_filters.iter().any(|f| f.name.eq_ignore_ascii_case(name)) {
+                    continue;
+                }
+                let layers: Vec<String> = layers.iter().filter_map(|n| d.layer(n).map(|l| l.name.clone())).collect();
+                d.layer_filters.push(cadaddy_doc::LayerFilter {
+                    name: name.to_string(),
+                    parent: None,
+                    kind: cadaddy_doc::LayerFilterKind::Group { layers },
+                });
+            }
+        }
         // Objects hidden by ISOLATEOBJECTS / HIDEOBJECTS, saved with OBJECTISOLATIONMODE 1.
         if let Some(hs) = self.xrecord_text(crate::dxf_ext::HIDDEN_OBJECTS_KEY).and_then(|t| crate::dxf_ext::parse_hidden_objects(&t)) {
             d.hidden_objects = hs.into_iter().filter(|h| d.entity(*h).is_some()).collect();
             d.hidden_saved = true;
+        }
+        // The sun and exposure of rendered views.
+        if let Some(sun) = self.xrecord_text(crate::dxf_ext::SUN_KEY).and_then(|t| crate::dxf_ext::parse_sun(&t)) {
+            d.sun = sun;
         }
         // The drawing's plot style tables.
         if let Some(tables) = self.xrecord_text(crate::dxf_ext::PLOT_STYLES_KEY).and_then(|t| crate::dxf_ext::parse_plot_styles(&t)) {

@@ -116,8 +116,28 @@ fn distance_within(d: &Drawing, e: &Entity, p: Vec2, tol: f64, reach: Option<f64
     if matches!(e.kind, EntityKind::Solid(_)) && e.kind.prims().iter().any(|prim| matches!(prim, Prim::Fill(poly) if point_in_polygon(poly, p))) {
         best = 0.0;
     }
+    // A mesh is a surface: a pick inside any of its faces (as seen from above) hits it.
+    if let EntityKind::Mesh(m) = &e.kind
+        && best > 0.0
+        && m.face_points().take(MAX_MESH_PICK_FACES).any(|f| point_in_polygon(&f.iter().map(|q| q.xy()).collect::<Vec<_>>(), p))
+    {
+        best = 0.0;
+    }
+    // So is a solid: a pick inside its outline as seen from above.
+    if let EntityKind::Solid3d(so) = &e.kind
+        && best > 0.0
+        && cadaddy_render::solid_mesh(so, so.mesh_tol())
+            .face_points()
+            .take(MAX_MESH_PICK_FACES)
+            .any(|f| point_in_polygon(&f.iter().map(|q| q.xy()).collect::<Vec<_>>(), p))
+    {
+        best = 0.0;
+    }
     best
 }
+
+/// Most faces of one mesh a pick looks inside.
+const MAX_MESH_PICK_FACES: usize = 200_000;
 
 /// Whether `p` is on the text of a dimension or multileader: inside the box around its words,
 /// turned with the text, as plain text is hit anywhere inside its box. Their other geometry is
@@ -493,7 +513,15 @@ pub fn class_name(k: &EntityKind) -> &'static str {
         EntityKind::Hatch(_) => "AcDbHatch",
         EntityKind::Solid(_) | EntityKind::Trace(_) => "AcDbTrace",
         EntityKind::Face3d(_) => "AcDbFace",
+        EntityKind::Mesh(m) => match m.kind {
+            cadaddy_doc::MeshKind::Subd => "AcDbSubDMesh",
+            cadaddy_doc::MeshKind::Polyface => "AcDbPolyFaceMesh",
+            cadaddy_doc::MeshKind::Polygon { .. } => "AcDbPolygonMesh",
+        },
+        EntityKind::Solid3d(_) => "AcDb3dSolid",
+        EntityKind::SectionPlane(_) => "AcDbSection",
         EntityKind::Region(_) => "AcDbRegion",
+        EntityKind::Light(_) => "AcDbLight",
         EntityKind::Viewport(_) => "AcDbViewport",
         EntityKind::Image(_) => "AcDbRasterImage",
         EntityKind::Underlay(_) => "AcDbPdfReference",

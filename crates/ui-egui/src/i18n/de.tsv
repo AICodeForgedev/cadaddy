@@ -1219,3 +1219,340 @@
 	Clip PDF Underlay	PDF-Unterlage zuschneiden
 	Adjust PDF Underlay	PDF-Unterlage anpassen
 	PDF Underlay Layers	Layer der PDF-Unterlage
+	Unused items in this drawing	Nicht verwendete Elemente in dieser Zeichnung
+	Purge Checked Items	Markierte bereinigen
+	Purge All	Alle bereinigen
+	Items purged: {count}	Bereinigte Elemente: {count}
+	Find what:	Suchen nach:
+	Replace with:	Ersetzen durch:
+	Match case	Groß-/Kleinschreibung beachten
+	Find whole words only	Nur ganze Wörter
+	Find	Suchen
+	Replace All	Alle ersetzen
+	Matches replaced: {count} (objects: {objects})	Ersetzte Treffer: {count} (Objekte: {objects})
+	Matches found and selected: {count} (objects: {objects})	Gefundene und gewählte Treffer: {count} (Objekte: {objects})
+	Select Color	Farbe wählen
+	Dimension styles	Bemaßungsstile
+	Linetypes	Linientypen
+	Multileader styles	Multiführungslinienstile
+	Multiline styles	Multilinienstile
+	Table styles	Tabellenstile
+	Text styles	Textstile
+	Zero-length geometry	Geometrie der Länge null
+	Empty text objects	Leere Textobjekte
+	Palette Windows	Palettenfenster
+	Dock	Andocken
+	Back into the main window	Zurück ins Hauptfenster
+	Dock Palette	Palette andocken
+	Float in Own Window	In eigenem Fenster
+	Drawings (CDY, DWG, DXF)	Zeichnungen (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	CADaddy-Zeichnung (CDY)
+	CADaddy drawing (.cdy)	CADaddy-Zeichnung (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	Beim Speichern einer CADaddy-Zeichnung (.cdy) auch eine DWG-Kopie speichern
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	Eine CADaddy-Zeichnung behält alles; DWG- und DXF-Dateien behalten womöglich nicht alles (beim Speichern wird gesagt, was fehlt).
+	Field...	Feld...
+	Update Fields	Felder aktualisieren
+	Change Text Case	Groß-/Kleinschreibung ändern
+	Auto Number	Automatisch nummerieren
+	Explode Text	Text auflösen
+	Arc Aligned Text	Text am Bogen
+	Data Extraction	Datenextraktion
+	Data source	Datenquelle
+	Objects	Objekte
+	Output	Ausgabe
+	Other drawings:	Andere Zeichnungen:
+	Add Drawings...	Zeichnungen hinzufügen...
+	Open Settings...	Einstellungen öffnen...
+	Start from a saved .dxe settings file	Mit gespeicherter .dxe-Einstellungsdatei beginnen
+	Block names	Blocknamen
+	Include blocks inside blocks	Blöcke in Blöcken einbeziehen
+	Other objects:	Andere Objekte:
+	The drawing has no other objects.	Die Zeichnung enthält keine weiteren Objekte.
+	Properties to extract:	Zu extrahierende Eigenschaften:
+	Attribute tags	Attributkennungen
+	Combine identical rows	Identische Zeilen zusammenfassen
+	Insert a table	Tabelle einfügen
+	Insertion point	Einfügepunkt
+	Title	Titel
+	Write a file (.csv for spreadsheets, .txt tab-separated)	Datei schreiben (.csv für Tabellenkalkulationen, .txt tabulatorgetrennt)
+	Browse...	Durchsuchen...
+	Save Settings...	Einstellungen speichern...
+	Save these choices to a .dxe file to use again	Diese Auswahl in einer .dxe-Datei zur erneuten Verwendung speichern
+	< Back	< Zurück
+	Next >	Weiter >
+	Finish	Fertig stellen
+	This drawing	Diese Zeichnung
+	Preview	Vorschau
+	UCS	BKS
+	Plan View (World)	Draufsicht (Welt)
+	New UCS	Neues BKS
+	World	Welt
+	Current UCS	Aktuelles BKS
+	World (WCS)	Welt (WKS)
+	Unnamed	Unbenannt
+	Hide UCS Icon	BKS-Symbol ausblenden
+	WCS	WKS
+	Spelling	Rechtschreibung
+	Check Spelling	Rechtschreibprüfung
+	Where to check	Prüfen in
+	Selected objects	Ausgewählte Objekte
+	Not in dictionary:	Nicht im Wörterbuch:
+	Suggestions:	Vorschläge:
+	Ignore	Ignorieren
+	Ignore All	Alle ignorieren
+	Change All	Alle ändern
+	Add to Dictionary	Zum Wörterbuch hinzufügen
+	Main dictionary:	Hauptwörterbuch:
+	American English	Amerikanisches Englisch
+	Custom dictionary:	Benutzerwörterbuch:
+	Spelling check complete.	Rechtschreibprüfung abgeschlossen.
+	Hyperlink...	Hyperlink...
+	Select Objects for a Hyperlink	Objekte für einen Hyperlink wählen
+	Open Hyperlink	Hyperlink öffnen
+	Insert Hyperlink	Hyperlink einfügen
+	Edit Hyperlink	Hyperlink bearbeiten
+	Text to display	Angezeigter Text
+	File or web page	Datei oder Webseite
+	Named location	Benannte Position
+	A named location with no file or web page is a layout or view of this drawing.	Eine benannte Position ohne Datei oder Webseite ist ein Layout oder eine Ansicht dieser Zeichnung.
+	Remove Link	Link entfernen
+	⌘-click to follow the link	⌘-Klick folgt dem Link
+	Ctrl+click to follow the link	Strg+Klick folgt dem Link
+	Materials Browser...	Materialbrowser...
+	Attach by Layer	Nach Layer zuordnen
+	Material Mapping	Materialzuordnung
+	New Material	Neues Material
+	Edit Material	Material bearbeiten
+	Delete Material	Material löschen
+	Assign Material	Material zuweisen
+	Materials Browser	Materialbrowser
+	Search	Suchen
+	Library	Bibliothek
+	Add to drawing	Zur Zeichnung hinzufügen
+	In this drawing	In dieser Zeichnung
+	No materials yet: add one from the library.	Noch keine Materialien: eins aus der Bibliothek hinzufügen.
+	Colour	Farbe
+	Roughness	Rauheit
+	Metallic	Metallisch
+	Opacity	Deckkraft
+	Mapping	Mapping
+	Tile size	Kachelgröße
+	Apply	Anwenden
+	Assign to selection ({n})	Auswahl zuweisen ({n})
+	Attach to layer	Layer zuordnen
+	Render	Rendern
+	Edit Layer State	Layerstatus bearbeiten
+	Export Layer State	Layerstatus exportieren
+	Import Layer State	Layerstatus importieren
+	New Layer Filter	Neuer Layerfilter
+	Edit Layer Filter	Layerfilter bearbeiten
+	Delete Layer Filter	Layerfilter löschen
+	List Layer Filters	Layerfilter auflisten
+	Layers in Filter	Layer im Filter
+	Layer States Manager	Layerstatus-Manager
+	Invert filter	Filter umkehren
+	New Property Filter...	Neuer Eigenschaftenfilter...
+	New Group Filter	Neuer Gruppenfilter
+	Add Layer	Layer hinzufügen
+	Remove Layer	Layer entfernen
+	Layer Filter Properties	Layerfilter-Eigenschaften
+	Filter name	Filtername
+	Within	Innerhalb
+	Any	Beliebig
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	Muster: * beliebig, ? ein Zeichen, # eine Ziffer; mit Kommas trennen; ~ schließt aus.
+	Layer states	Layerstatus
+	Turn off layers not found in layer state	Layer ausschalten, die nicht im Layerstatus enthalten sind
+	Layer properties to restore	Wiederherzustellende Layereigenschaften
+	On / Off	Ein / Aus
+	Frozen / Thawed	Gefroren / Getaut
+	Locked / Unlocked	Gesperrt / Entsperrt
+	Plot / No Plot	Plotten / Nicht plotten
+	Layers in "{name}"	Layer in „{name}“
+	Remove from the layer state	Aus dem Layerstatus entfernen
+	New...	Neu...
+	Save the layers as they are now in this state	Aktuellen Zustand der Layer in diesem Status speichern
+	Edit...	Bearbeiten...
+	Rename	Umbenennen
+	New layer state name	Name des neuen Layerstatus
+	New name	Neuer Name
+	Import...	Importieren...
+	Export...	Exportieren...
+	Visual Style	Visueller Stil
+	Visual Styles	Visuelle Stile
+	Wireframe	Drahtkörper
+	Hidden	Verdeckt
+	Shaded	Schattiert
+	Shaded with Edges	Schattiert mit Kanten
+	Realistic	Realistisch
+	Mesh	Netz
+	Polyface Mesh	Vielflächennetz
+	Polygon Mesh	Polygonnetz
+	Fly	Fliegen
+	Walk and Fly	Gehen und Fliegen
+	3D Library...	3D-Bibliothek...
+	Add 3D Twins to Symbols	3D-Gegenstücke zu Symbolen hinzufügen
+	List 3D Models	3D-Modelle auflisten
+	Add 3D Twins	3D-Gegenstücke hinzufügen
+	Plan Layers	Planlayer
+	Plan Walls	Planwände
+	Plan Openings	Planöffnungen
+	Plan Rooms	Planräume
+	Plan Notes	Planvermerke
+	Plan Sheets	Planblätter
+	3D Building from Plan	3D-Gebäude aus Grundriss
+	Wedge	Keil
+	Presspull	Drücken/Ziehen
+	3D Solid	3D-Volumenkörper
+	Specify center	Geben Sie den Mittelpunkt an
+	Specify length	Geben Sie die Länge an
+	Specify width	Geben Sie die Breite an
+	Specify other corner	Geben Sie die andere Ecke an
+	Specify center point	Geben Sie den Mittelpunkt an
+	Specify base radius	Geben Sie den Basisradius an
+	Specify radius	Geben Sie den Radius an
+	Specify diameter	Geben Sie den Durchmesser an
+	Specify top radius	Geben Sie den oberen Radius an
+	Specify tube radius	Geben Sie den Rohrradius an
+	Select objects to extrude	Wählen Sie die zu extrudierenden Objekte
+	Select extrusion path	Wählen Sie den Extrusionspfad
+	Specify angle of taper for extrusion	Geben Sie den Verjüngungswinkel der Extrusion an
+	Specify height of extrusion	Geben Sie die Extrusionshöhe an
+	Select objects to revolve	Wählen Sie die zu rotierenden Objekte
+	Specify axis start point or define axis by	Geben Sie den Startpunkt der Achse an oder definieren Sie die Achse durch
+	Specify axis endpoint	Geben Sie den Endpunkt der Achse an
+	Specify angle of revolution	Geben Sie den Rotationswinkel an
+	Select objects to sweep	Wählen Sie die zu sweependen Objekte
+	Select sweep path	Wählen Sie den Sweep-Pfad
+	Select cross sections in lofting order	Wählen Sie die Querschnitte in Erhebungsreihenfolge
+	Click inside bounded areas to press or pull	Klicken Sie in begrenzte Bereiche, um zu drücken oder zu ziehen
+	Specify extrusion height	Geben Sie die Extrusionshöhe an
+	Cube	Würfel
+	Sides	Seiten
+	Top radius	Oberer Radius
+	Path	Pfad
+	Taper angle	Verjüngungswinkel
+	Select one or more regions or 3D solids.	Wählen Sie eine oder mehrere Regionen oder 3D-Volumenkörper.
+	No closed area found there.	Dort wurde kein geschlossener Bereich gefunden.
+	Slice	Kappen
+	Thicken	Verdicken
+	Fillet Edge	Kante abrunden
+	Chamfer Edge	Kante fasen
+	Solid Editing	Volumenkörperbearbeitung
+	Fillet Edges	Kanten abrunden
+	Chamfer Edges	Kanten fasen
+	Move Faces	Flächen verschieben
+	Offset Faces	Flächen versetzen
+	Delete Faces	Flächen löschen
+	Shell	Wandstärke
+	Composite	Verbund
+	Select objects to slice	Wählen Sie die zu kappenden Objekte
+	Specify a point on desired side or [keep Both sides]	Geben Sie einen Punkt auf der gewünschten Seite an oder [Beide Seiten behalten]
+	Both	Beide
+	Specify start point of slicing plane or	Geben Sie den Startpunkt der Schnittebene an oder
+	Specify second point on plane	Geben Sie den zweiten Punkt auf der Ebene an
+	Specify the Z of the XY-plane	Geben Sie Z der XY-Ebene an
+	Specify the X of the YZ-plane	Geben Sie X der YZ-Ebene an
+	Specify the Y of the ZX-plane	Geben Sie Y der ZX-Ebene an
+	Select surfaces to thicken	Wählen Sie die zu verdickenden Flächen
+	Select a 3D solid	Wählen Sie einen 3D-Volumenkörper
+	Select an edge	Wählen Sie eine Kante
+	Remove faces	Flächen entfernen
+	Select faces	Wählen Sie Flächen
+	Specify thickness	Geben Sie die Dicke an
+	Enter fillet radius	Geben Sie den Rundungsradius ein
+	Enter distance	Geben Sie den Abstand ein
+	Specify a base point or displacement	Geben Sie einen Basispunkt oder eine Verschiebung an
+	Specify a second point of displacement	Geben Sie den zweiten Punkt der Verschiebung an
+	Specify the offset distance	Geben Sie den Versatzabstand an
+	Enter the shell offset distance	Geben Sie den Wandabstand ein
+	Select solids, surfaces, and regions to subtract from ..	Wählen Sie Volumenkörper, Flächen und Regionen, von denen subtrahiert wird ..
+	Select solids, surfaces, and regions to subtract ..	Wählen Sie die zu subtrahierenden Volumenkörper, Flächen und Regionen ..
+	Select two or more solids.	Wählen Sie zwei oder mehr Volumenkörper.
+	The solids don't overlap; nothing was changed.	Die Volumenkörper überlappen sich nicht; nichts wurde geändert.
+	Nothing would remain; nothing was changed.	Es bliebe nichts übrig; nichts wurde geändert.
+	The result would not be a solid; nothing was changed.	Das Ergebnis wäre kein Volumenkörper; nichts wurde geändert.
+	No straight edge between two flat faces there.	Dort gibt es keine gerade Kante zwischen zwei ebenen Flächen.
+	No face of the solid there.	Dort gibt es keine Fläche des Volumenkörpers.
+	Only outside (convex) edges can be filleted or chamfered.	Nur äußere (konvexe) Kanten können abgerundet oder gefast werden.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	Wandstärke funktioniert bei Quadern, Zylindern, Kugeln und geraden Extrusionen.
+	The walls are too thick for this solid.	Die Wände sind für diesen Volumenkörper zu dick.
+	Select solids to subtract from.	Wählen Sie die Volumenkörper, von denen subtrahiert wird.
+	A solid can't be subtracted from itself.	Ein Volumenkörper kann nicht von sich selbst subtrahiert werden.
+	The solid would have too many operations; nothing was changed.	Der Volumenkörper hätte zu viele Operationen; nichts wurde geändert.
+	That face can't be moved (only flat faces, holes and added parts).	Diese Fläche kann nicht verschoben werden (nur ebene Flächen, Bohrungen und hinzugefügte Teile).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	Diese Fläche kann nicht gelöscht werden (nur Bohrungen, Rundungen, Fasen und hinzugefügte Teile).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	Diese Fläche kann nicht versetzt werden (Quaderseiten, Enden von Zylindern, Kegeln und Extrusionen, Zylindermäntel und Kugeln).
+	The thickness must be more than zero.	Die Dicke muss größer als null sein.
+	The radius must be more than zero.	Der Radius muss größer als null sein.
+	The distance must be more than zero.	Der Abstand muss größer als null sein.
+	Requires a number.	Erfordert eine Zahl.
+	Parameter	Parameter
+	Action	Aktion
+	Visibility States	Sichtbarkeitszustände
+	Remove Parameter or Action	Parameter oder Aktion entfernen
+	Edit Reference	Referenz bearbeiten
+	Discard Reference Edits	Referenzänderungen verwerfen
+	Nested References	Verschachtelte Referenzen
+	Light List	Lichtliste
+	Sun Properties	Sonneneigenschaften
+	Render Exposure	Render-Belichtung
+	Point Light	Punktlicht
+	Spotlight	Spotlicht
+	Distant Light	Fernlicht
+	Change Lights	Lichter ändern
+	Section Plane	Schnittebene
+	Live Section	Live-Schnitt
+	Generate Section Block	Schnittblock erstellen
+	Generate Section	Schnitt erstellen
+	Flatshot	Flatshot
+	Base View	Erstansicht
+	Section View	Schnittansicht
+	Drawing Views	Zeichnungsansichten
+	Select face or any point to locate section line or	Wählen Sie eine Fläche oder einen Punkt für die Schnittlinie oder
+	Orthographic	Orthogonal
+	Select section object	Wählen Sie das Schnittobjekt
+	Specify location of base view	Geben Sie die Position der Erstansicht an
+	Select parent view	Wählen Sie die übergeordnete Ansicht
+	Specify end point	Geben Sie den Endpunkt an
+	Specify location of section view	Geben Sie die Position der Schnittansicht an
+	There is nothing to draw: no 3D objects were found.	Nichts zu zeichnen: keine 3D-Objekte gefunden.
+	The section plane doesn't cut any solid.	Die Schnittebene schneidet keinen Volumenkörper.
+	The view needs a direction.	Die Ansicht braucht eine Richtung.
+	The drawing has no layout.	Die Zeichnung hat kein Layout.
+	That is not a section plane.	Das ist keine Schnittebene.
+	Requires a point.	Erfordert einen Punkt.
+	The view is [dx, dy, dz].	Die Ansicht ist [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	Übertragungssatz erstellen
+	Files in the package	Dateien im Paket
+	Not included	Nicht enthalten
+	Organized folders	Geordnete Ordner
+	One folder	Ein Ordner
+	Include a transmittal report	Übertragungsbericht beifügen
+	Create ZIP...	ZIP erstellen...
+	Create Folder...	Ordner erstellen...
+	STL Out	STL-Ausgabe
+	Export STL...	STL exportieren...
+	3D models (glTF, OBJ, STL)	3D-Modelle (glTF, OBJ, STL)
+	3D model (glTF binary)	3D-Modell (glTF binär)
+	3D model (glTF)	3D-Modell (glTF)
+	3D model (OBJ)	3D-Modell (OBJ)
+	3D model (STL)	3D-Modell (STL)
+	Render Region	Bereich rendern
+	samples	Samples
+	a sample	pro Sample
+	Pick crop window to render	Wählen Sie den zu rendernden Bereich
+	Nothing has been rendered yet.	Es wurde noch nichts gerendert.
+	There is nothing to render: no surfaces in the view.	Nichts zu rendern: keine Flächen in der Ansicht.
+	The image couldn't be encoded.	Das Bild konnte nicht codiert werden.
+	Saving images isn't available in the browser.	Bilder speichern ist im Browser nicht verfügbar.
+	PNG image	PNG-Bild
+	JPEG image	JPEG-Bild
+	Save Image	Bild speichern
+	My Properties	Meine Eigenschaften
+	Add to My Properties	Zu meinen Eigenschaften hinzufügen
+	Remove from My Properties	Aus meinen Eigenschaften entfernen
+	All properties	Alle Eigenschaften
+	My properties: the ones you added (right-click a property's name to add it)	Meine Eigenschaften: die von Ihnen hinzugefügten (Rechtsklick auf den Namen einer Eigenschaft fügt sie hinzu)
+	Right-click a property's name and choose Add to My Properties.	Klicken Sie mit der rechten Maustaste auf den Namen einer Eigenschaft und wählen Sie „Zu meinen Eigenschaften hinzufügen“.
+	Color Books	Farbbücher

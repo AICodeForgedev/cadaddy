@@ -22,6 +22,8 @@ struct W {
     /// Persistent reactors of boundary objects: each source object of an associative hatch →
     /// the hatches (groups `{ACAD_REACTORS 330 …}`), from [`hatch_reactors`].
     reactors: HashMap<Handle, Vec<String>>,
+    /// Upper-case material name → its MATERIAL object handle (group 347 of layers and objects).
+    materials: HashMap<String, String>,
 }
 
 impl W {
@@ -140,8 +142,17 @@ fn write_xclips(w: &mut W, plan: &HashMap<Handle, XclipObj>, every: &[&Entity]) 
         w.f(21, 0.0);
         w.f(31, 0.0);
         w.i(71, i64::from(clip.enabled));
-        w.i(72, 0);
-        w.i(73, 0);
+        // Clipping planes (XCLIP Clipdepth): front (72 on, 40 distance), back (73 on, 41).
+        let front = clip.front.filter(|v| v.is_finite());
+        let back = clip.back.filter(|v| v.is_finite());
+        w.i(72, i64::from(front.is_some()));
+        if let Some(f) = front {
+            w.f(40, f);
+        }
+        w.i(73, i64::from(back.is_some()));
+        if let Some(b) = back {
+            w.f(41, b);
+        }
         // The inverse block transform, then the clip transform: identities (4×3, column major).
         for _ in 0..2 {
             for v in [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
@@ -193,6 +204,10 @@ struct OsnapRef {
 /// Handles and names the entity writer needs from the rest of the file.
 #[derive(Default)]
 struct Ctx {
+    /// Write texts' fields as FIELD objects (a whole drawing; entity records alone keep the codes).
+    write_fields: bool,
+    /// The FIELD objects of the texts written so far, for the OBJECTS section.
+    field_plans: std::cell::RefCell<Vec<crate::dxf_field::Plan>>,
     /// Multiline styles: MLINESTYLE handles and their dictionary.
     mlines: crate::dxf_mline::Plan,
     /// First viewport of each layout that has no paper-space viewport (id 1) → the layout's index;
@@ -299,7 +314,7 @@ fn annotative_xdata(w: &mut W) {
 
 /// Override (`ACAD` DSTYLE) and associativity (`CADADDY` ASSOC) xdata of a dimension.
 fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
-    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
+    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new(), materials: HashMap::new() };
     let mut sah = false;
     for (k, v) in &dm.overrides {
         let Some(field) = DimStyle::field_name(k) else { continue };
@@ -381,12 +396,22 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("ANGDIR", 70),
     ("PDMODE", 70),
     ("PDSIZE", 40),
+    ("STEPSIZE", 40),
+    ("STEPSPERSEC", 40),
     ("PLINEWID", 40),
     ("CELWEIGHT", 370),
     ("LWDISPLAY", 290),
     ("INSUNITS", 70),
     ("MEASUREMENT", 70),
     ("PSLTSCALE", 70),
+    ("UCSNAME", 2),
+    ("UCSORG", -3),
+    ("UCSXDIR", -3),
+    ("UCSYDIR", -3),
+    ("FIELDEVAL", 70),
+    ("TDCREATE", 40),
+    ("TDUPDATE", 40),
+    ("HYPERLINKBASE", 1),
 ];
 
 fn header_vars(w: &mut W, d: &Drawing) {
@@ -538,6 +563,10 @@ fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, rea
     if let Some(v) = transparency_440(e.common.transparency) {
         w.i(440, v);
     }
+    // A material other than ByLayer: its MATERIAL object.
+    if let Some(h) = e.common.material.as_deref().and_then(|m| w.materials.get(&m.trim().to_ascii_uppercase())).cloned() {
+        w.s(347, h);
+    }
     // A named plot style (not ByLayer/ByBlock): its placeholder object.
     if let Some(h) = w.pstyles.get(&e.common.plot_style.trim().to_ascii_uppercase()).cloned() {
         w.s(390, h);
@@ -625,6 +654,254 @@ fn attrib_flags(a: &Attrib) -> i64 {
 /// A TEXT's groups, or an attribute's (`attrib`, in a file of version `target`) with its
 /// subclass: the subclass version (`280 0`, 2010 and later), prompt, tag, flags and alignment,
 /// then Lock position (`280`, 2007 and later; readers take the 280 after the tag as it).
+/// The field values of text `slot` of `e` (its attributes are slots 0, 1, …).
+fn slot_values(d: &Drawing, e: &Entity, slot: usize) -> Vec<String> {
+    let all = d.field_values.get(&e.handle);
+    let texts = cadaddy_doc::field::texts(&e.kind);
+    let start: usize = texts.iter().take(slot).map(|t| cadaddy_doc::field::codes(t).len()).sum();
+    let n = texts.get(slot).map_or(0, |t| cadaddy_doc::field::codes(t).len());
+    (start..start + n).map(|i| all.and_then(|v| v.get(i)).cloned().unwrap_or_else(|| cadaddy_doc::field::NO_VALUE.into())).collect()
+}
+
+/// The FIELD objects of `text` (text `slot` of `e`, written with handle `owner`), noted for the
+/// OBJECTS section: the text as it shows, and its extension dictionary's handle.
+fn plan_fields(w: &mut W, d: &Drawing, cx: &Ctx, owner: &str, e: &Entity, slot: usize, text: &str) -> Option<(String, String)> {
+    if !cx.write_fields || !cadaddy_doc::field::has_fields(text) {
+        return None;
+    }
+    let values = slot_values(d, e, slot);
+    let (plan, shown) = crate::dxf_field::plan(text, &values, owner.to_string(), || w.h())?;
+    let x = plan.xdict.clone();
+    cx.field_plans.borrow_mut().push(plan);
+    Some((shown, x))
+}
+
+/// One text's field objects (DXF Reference, FIELD), laid out as AutoCAD writes them.
+fn write_fields(w: &mut W, p: &crate::dxf_field::Plan) {
+    let dict = |w: &mut W, h: &str, owner: &str, key: &str, entry: &str| {
+        w.s(0, "DICTIONARY");
+        w.s(5, h);
+        w.group("ACAD_REACTORS", 330, &[owner]);
+        w.s(330, owner);
+        w.s(100, "AcDbDictionary");
+        w.i(280, 1);
+        w.i(281, 1);
+        w.s(3, key);
+        w.s(360, entry);
+    };
+    dict(w, &p.xdict, &p.owner, "ACAD_FIELD", &p.dict);
+    dict(w, &p.dict, &p.xdict, "TEXT", &p.root);
+    let code = |w: &mut W, c: &str| {
+        for (i, part) in crate::dxf_field::chunks(c).into_iter().enumerate() {
+            w.s(if i == 0 { 2 } else { 3 }, part);
+        }
+    };
+    let value = |w: &mut W, flags: i64, data: Option<(&str, &str)>, shown: &str| {
+        w.s(7, "ACFD_FIELD_VALUE");
+        w.i(93, flags);
+        match data {
+            Some((v, fmt)) => {
+                w.i(90, 4);
+                w.s(1, v);
+                w.i(94, 0);
+                w.s(300, fmt);
+                w.s(302, v);
+            }
+            None => {
+                w.i(90, 0);
+                w.i(94, 0);
+                w.s(300, "");
+                w.s(302, "");
+            }
+        }
+        w.s(304, "ACVALUE_END");
+        for (i, part) in crate::dxf_field::chunks(shown).into_iter().enumerate() {
+            w.s(if i == 0 { 301 } else { 9 }, part);
+        }
+        w.i(98, i64::try_from(shown.len()).unwrap_or(0));
+    };
+    // The text, with each field as %<\_FldIdx i>%.
+    w.s(0, "FIELD");
+    w.s(5, &p.root);
+    w.s(330, &p.dict);
+    w.s(100, "AcDbField");
+    w.s(1, "_text");
+    code(w, &p.template);
+    w.i(90, i64::try_from(p.children.len()).unwrap_or(0));
+    for c in &p.children {
+        w.s(360, &c.handle);
+    }
+    w.i(97, 0);
+    w.i(91, 63);
+    w.i(92, 0);
+    w.i(94, 9);
+    w.i(95, 2);
+    w.i(96, 0);
+    w.s(300, "");
+    w.i(93, 0);
+    value(w, 3, None, "");
+    for c in &p.children {
+        w.s(0, "FIELD");
+        w.s(5, &c.handle);
+        w.s(330, &p.root);
+        w.s(100, "AcDbField");
+        w.s(1, &c.evaluator);
+        code(w, &c.code);
+        w.i(90, 0);
+        w.i(97, i64::try_from(c.objects.len()).unwrap_or(0));
+        for o in &c.objects {
+            w.s(331, o.hex());
+        }
+        w.i(91, 63);
+        w.i(92, 0);
+        w.i(94, 59);
+        w.i(95, 2);
+        w.i(96, 0);
+        w.s(300, "");
+        w.i(93, 0);
+        value(w, 4, Some((&c.value, &c.format)), &c.value);
+    }
+}
+
+/// A mesh (DXF Reference, MESH and POLYLINE): a MESH entity from AutoCAD 2010 (its base level,
+/// no creases), else a polyface mesh; an M×N polygon mesh stays one.
+/// A mesh; `ours` is CADaddy xdata to attach (a solid's definition).
+fn mesh(w: &mut W, e: &Entity, m: &Mesh, owner: &str, paper: bool, target: Version, ours: &[String]) {
+    let ours = |w: &mut W| {
+        if !ours.is_empty() {
+            w.s(1001, dxf_ext::APP);
+            for x in ours {
+                w.s(1000, x);
+            }
+        }
+    };
+    let count = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
+    match m.kind {
+        MeshKind::Subd if target >= Version::R2010 => {
+            w.s(0, "MESH");
+            common(w, e, owner, paper, "AcDbSubDMesh");
+            w.i(71, 2);
+            w.i(72, 0);
+            w.i(91, 0);
+            w.i(92, count(m.vertices.len()));
+            for v in &m.vertices {
+                w.p(10, *v);
+            }
+            let faces: Vec<&MeshFace> = m.faces.iter().filter(|f| f.v.len() >= 3 && f.v.iter().all(|i| (*i as usize) < m.vertices.len())).collect();
+            w.i(93, count(faces.iter().map(|f| f.v.len() + 1).sum()));
+            for f in faces {
+                w.i(90, count(f.v.len()));
+                for i in &f.v {
+                    w.i(90, i64::from(*i));
+                }
+            }
+            w.i(94, 0);
+            w.i(95, 0);
+            w.i(90, 0);
+            ours(w);
+        }
+        MeshKind::Polygon { m: rows, n: cols, closed_m, closed_n }
+            if (rows as usize).checked_mul(cols as usize) == Some(m.vertices.len()) && rows >= 2 && cols >= 2 =>
+        {
+            w.s(0, "POLYLINE");
+            common(w, e, owner, paper, "AcDbPolygonMesh");
+            w.i(66, 1);
+            w.p(10, Vec3::ZERO);
+            w.i(70, 16 | i64::from(closed_m) | if closed_n { 32 } else { 0 });
+            w.i(71, i64::from(rows));
+            w.i(72, i64::from(cols));
+            for v in &m.vertices {
+                let vh = w.h();
+                w.s(0, "VERTEX");
+                w.s(5, vh);
+                w.s(330, e.handle.hex());
+                w.s(100, "AcDbEntity");
+                w.s(8, &e.common.layer);
+                w.s(100, "AcDbVertex");
+                w.s(100, "AcDbPolygonMeshVertex");
+                w.p(10, *v);
+                w.i(70, 64);
+            }
+            seqend(w, e);
+        }
+        _ => {
+            // Polyface: faces of three or four vertices; a larger face is fanned, the fan's
+            // inner edges hidden.
+            let mut records: Vec<[i64; 4]> = Vec::new();
+            for f in &m.faces {
+                let n = f.v.len();
+                if n < 3 || f.v.iter().any(|i| (*i as usize) >= m.vertices.len()) {
+                    continue;
+                }
+                let idx = |k: usize, hide: bool| -> i64 {
+                    let i = i64::from(f.v.get(k).copied().unwrap_or(0)) + 1;
+                    if hide { -i } else { i }
+                };
+                let hidden = |k: usize| k < 64 && f.hidden & (1 << k) != 0;
+                if n <= 4 {
+                    let mut r = [0i64; 4];
+                    for (k, slot) in r.iter_mut().enumerate().take(n) {
+                        *slot = idx(k, hidden(k));
+                    }
+                    records.push(r);
+                } else {
+                    for k in 1..n - 1 {
+                        // Triangle 0, k, k+1: its edges 0→k (inner unless k = 1), k→k+1 (the
+                        // face's own), k+1→0 (inner unless k+1 = n-1).
+                        records.push([idx(0, k != 1 || hidden(0)), idx(k, hidden(k)), idx(k + 1, k + 1 != n - 1 || hidden(n - 1)), 0]);
+                    }
+                }
+            }
+            w.s(0, "POLYLINE");
+            common(w, e, owner, paper, "AcDbPolyFaceMesh");
+            w.i(66, 1);
+            w.p(10, Vec3::ZERO);
+            w.i(70, 64);
+            w.i(71, count(m.vertices.len()));
+            w.i(72, count(records.len()));
+            ours(w);
+            for v in &m.vertices {
+                let vh = w.h();
+                w.s(0, "VERTEX");
+                w.s(5, vh);
+                w.s(330, e.handle.hex());
+                w.s(100, "AcDbEntity");
+                w.s(8, &e.common.layer);
+                w.s(100, "AcDbVertex");
+                w.s(100, "AcDbPolyFaceMeshVertex");
+                w.p(10, *v);
+                w.i(70, 192);
+            }
+            for r in records {
+                let vh = w.h();
+                w.s(0, "VERTEX");
+                w.s(5, vh);
+                w.s(330, e.handle.hex());
+                w.s(100, "AcDbEntity");
+                w.s(8, &e.common.layer);
+                w.s(100, "AcDbFaceRecord");
+                w.p(10, Vec3::ZERO);
+                w.i(70, 128);
+                for (k, i) in r.iter().enumerate() {
+                    if *i != 0 {
+                        w.i(71 + k as i32, *i);
+                    }
+                }
+            }
+            seqend(w, e);
+        }
+    }
+}
+
+fn seqend(w: &mut W, e: &Entity) {
+    let sh = w.h();
+    w.s(0, "SEQEND");
+    w.s(5, sh);
+    w.s(330, e.handle.hex());
+    w.s(100, "AcDbEntity");
+    w.s(8, &e.common.layer);
+}
+
 fn text_tags(w: &mut W, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
     w.p(10, t.insert);
     w.f(40, t.height);
@@ -857,9 +1134,13 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
         }
         EntityKind::Text(t) => {
             w.s(0, "TEXT");
-            common(w, e, owner, paper, "AcDbText");
+            let f = plan_fields(w, d, cx, &e.handle.hex(), e, 0, &t.value);
+            common_x(w, e, owner, paper, "AcDbText", None, f.as_ref().map(|f| f.1.as_str()));
             thickness(w, e);
-            text_tags(w, t, None, None);
+            match &f {
+                Some((shown, _)) => text_tags(w, &Text { value: shown.clone(), ..t.clone() }, None, None),
+                None => text_tags(w, t, None, None),
+            }
         }
         // Closed polylines, one per loop (`dxf_region`): REGION's own data is ACIS.
         EntityKind::Region(r) => {
@@ -878,22 +1159,28 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
         }
         EntityKind::AttDef(a) => {
             w.s(0, "ATTDEF");
-            common(w, e, owner, paper, "AcDbText");
-            text_tags(w, &a.text, Some((a, cx.target)), Some(&a.prompt));
+            let f = plan_fields(w, d, cx, &e.handle.hex(), e, 0, &a.text.value);
+            common_x(w, e, owner, paper, "AcDbText", None, f.as_ref().map(|f| f.1.as_str()));
+            match &f {
+                Some((shown, _)) => text_tags(w, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), Some(&a.prompt)),
+                None => text_tags(w, &a.text, Some((a, cx.target)), Some(&a.prompt)),
+            }
             if cx.target >= Version::R2007 {
                 multiline_tags(w, a, true);
             }
         }
         EntityKind::MText(t) => {
             w.s(0, "MTEXT");
-            common(w, e, owner, paper, "AcDbMText");
+            let f = plan_fields(w, d, cx, &e.handle.hex(), e, 0, &t.contents);
+            common_x(w, e, owner, paper, "AcDbMText", None, f.as_ref().map(|f| f.1.as_str()));
             w.p(10, t.insert);
             w.f(40, t.height);
             w.f(41, t.width);
             w.i(71, i64::from(t.attach));
             w.i(72, 1);
-            // Long contents go in 250-char 3-chunks, the remainder in 1.
-            let chunks = crate::dxf_read::mtext_dxf::chunks(&crate::dxf_read::mtext_dxf::encode_contents(&t.contents));
+            // Long contents go in 250-char 3-chunks, the remainder in 1. Fields show their values.
+            let contents = f.as_ref().map_or(t.contents.as_str(), |f| f.0.as_str());
+            let chunks = crate::dxf_read::mtext_dxf::chunks(&crate::dxf_read::mtext_dxf::encode_contents(contents));
             let n = chunks.len();
             for (i, c) in chunks.iter().enumerate() {
                 w.s(if i + 1 == n { 1 } else { 3 }, c.clone());
@@ -945,10 +1232,14 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.f(45, i.row_spacing);
             }
             if !i.attribs.is_empty() {
-                for a in &i.attribs {
+                for (ai, a) in i.attribs.iter().enumerate() {
                     let ah = w.h();
+                    let f = plan_fields(w, d, cx, &ah, e, ai, &a.text.value);
                     w.s(0, "ATTRIB");
                     w.s(5, ah);
+                    if let Some((_, x)) = &f {
+                        w.group("ACAD_XDICTIONARY", 360, &[x]);
+                    }
                     w.s(330, e.handle.hex());
                     w.s(100, "AcDbEntity");
                     let (c, base) = attrib_common(d, e, i, a);
@@ -958,7 +1249,10 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                         w.i(60, 1);
                     }
                     w.s(100, "AcDbText");
-                    text_tags(w, &a.text, Some((a, cx.target)), None);
+                    match &f {
+                        Some((shown, _)) => text_tags(w, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), None),
+                        None => text_tags(w, &a.text, Some((a, cx.target)), None),
+                    }
                     if cx.target >= Version::R2007 {
                         multiline_tags(w, a, false);
                     }
@@ -1169,6 +1463,23 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.p(13, s.corners[3]);
             thickness(w, e);
         }
+        EntityKind::Mesh(m) => mesh(w, e, m, owner, paper, cx.target, &[]),
+        EntityKind::SectionPlane(sp) => {
+            // Other programs see the plane's lower edge; CADaddy reads the plane from the xdata.
+            let c = sp.corners();
+            w.s(0, "LINE");
+            common(w, e, owner, paper, "AcDbLine");
+            w.p(10, c[0]);
+            w.p(11, c[1]);
+            w.s(1001, dxf_ext::APP);
+            for x in crate::dxf_solid::section_xdata(sp) {
+                w.s(1000, x);
+            }
+        }
+        EntityKind::Solid3d(so) => {
+            let m = cadaddy_render::solid_mesh(so, so.mesh_tol());
+            mesh(w, e, &m, owner, paper, cx.target, &crate::dxf_solid::solid_xdata(so));
+        }
         EntityKind::Face3d(f) => {
             w.s(0, "3DFACE");
             common(w, e, owner, paper, "AcDbFace");
@@ -1338,6 +1649,29 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.p(10, t.insert);
             w.s(1, &t.text);
             w.p(11, t.dir);
+        }
+        // LIGHT (DXF Reference): its colour is the entity's (62/420).
+        EntityKind::Light(l) => {
+            w.s(0, "LIGHT");
+            common(w, e, owner, paper, "AcDbLight");
+            w.i(90, 1);
+            w.s(1, dxf_ext::xdata_str(&l.name));
+            w.i(70, l.kind.dxf());
+            w.i(290, i64::from(l.on));
+            w.i(291, 0);
+            w.f(40, l.intensity);
+            w.p(10, l.position);
+            w.p(11, l.target);
+            w.i(72, l.attenuation.dxf());
+            w.i(292, 0);
+            w.f(41, 0.0);
+            w.f(42, 0.0);
+            w.f(50, l.hotspot);
+            w.f(51, l.falloff);
+            w.i(293, i64::from(l.shadows));
+            w.i(73, 1);
+            w.i(91, 1024);
+            w.i(280, 1);
         }
         // Entity types CADaddy doesn't model aren't written; the save command reports them.
         EntityKind::Unknown(_) => {}
@@ -1820,11 +2154,37 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
 }
 
 /// The R2000 DXF the DWG bridge converts to a `dwg` version DWG: its entity types are the DWG
-/// version's (MULTILEADER from 2007).
-pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> String {
+/// version's (MULTILEADER from 2007). Binary DXF (the converter reads it in about two thirds of
+/// the time of ASCII, and it is smaller and quicker to write), with the LTYPE table's names.
+pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>) {
     let mut tags = tags_for(d, Version::R2000, dwg);
     bridge_markers(&mut tags);
-    cadaddy_dxf::write_ascii(&tags)
+    let mut names = Vec::new();
+    let mut in_ltype = false;
+    for t in &tags {
+        match t.code {
+            0 => {
+                // The LTYPE table ends: no more names (the rest is not read).
+                if !names.is_empty() && t.str() == "ENDTAB" {
+                    break;
+                }
+                in_ltype = t.str() == "LTYPE";
+            }
+            2 if in_ltype => {
+                names.push(t.str());
+                in_ltype = false;
+            }
+            _ => {}
+        }
+    }
+    // Binary is faster for the bridge, but the materials it passes on (entities' and layers'
+    // group 347, and the MATERIAL colours) are read from text: a drawing with materials goes as
+    // text (tester 0.7.7e: through DWG the assignments were lost and colours came back white).
+    let uses_materials = !d.materials.is_empty()
+        || d.layers.iter().any(|l| l.material.is_some())
+        || d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())).any(|e| e.common.material.is_some());
+    let dxf = if uses_materials { cadaddy_dxf::write_ascii_as(&tags, false).into_bytes() } else { cadaddy_dxf::write_binary(&tags, false) };
+    (dxf, names)
 }
 
 /// Subclass markers the DWG bridge knows by another spelling (it matches them exactly):
@@ -1852,6 +2212,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         pstyles: HashMap::new(),
         layers: HashMap::new(),
         reactors: hatch_reactors(d),
+        materials: HashMap::new(),
     };
     // Group handles first: each member lists its groups among its persistent reactors.
     let group_handles: Vec<String> = d.groups.iter().filter(|g| !g.name.is_empty()).map(|_| w.h()).collect();
@@ -1885,7 +2246,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         .collect();
     user_blocks.iter_mut().for_each(|b| b.1 = format!("{:X}", 0));
     let user_blocks: Vec<(String, String, &Block)> = user_blocks.into_iter().map(|(n, _, b)| (n, w.h(), b)).collect();
-    let mut cx = Ctx { paper_views: paper_views(d), target, ..Ctx::default() };
+    let mut cx = Ctx { paper_views: paper_views(d), target, write_fields: true, ..Ctx::default() };
     cx.block_records = user_blocks.iter().map(|(n, h, _)| (n.to_ascii_uppercase(), h.clone())).collect();
     // Dimension blocks.
     let mut dim_defs: Vec<(String, String, Vec<Entity>)> = Vec::new(); // filled below
@@ -2072,6 +2433,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     if let Some(chunks) = dxf_ext::layer_state_chunks(&d.layer_states) {
         xrecords.push((dxf_ext::LAYER_STATES_KEY, w.h(), chunks));
     }
+    if let Some(chunks) = dxf_ext::layer_filter_chunks(&d.layer_filters) {
+        xrecords.push((dxf_ext::LAYER_FILTERS_KEY, w.h(), chunks));
+    }
     if let Some(chunks) = dxf_ext::hidden_object_chunks(d) {
         xrecords.push((dxf_ext::HIDDEN_OBJECTS_KEY, w.h(), chunks));
     }
@@ -2080,6 +2444,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     if let Some(chunks) = dxf_ext::anno_chunks(d) {
         xrecords.push((dxf_ext::ANNOTATION_KEY, w.h(), chunks));
+    }
+    if let Some(chunks) = dxf_ext::sun_chunks(&d.sun) {
+        xrecords.push((dxf_ext::SUN_KEY, w.h(), chunks));
     }
     // The annotation scale list: the ACAD_SCALELIST dictionary of SCALE objects.
     let scale_dict = w.h();
@@ -2097,6 +2464,19 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     let pstyles: Vec<(String, String)> = pstyle_names.into_iter().map(|n| (n, w.h())).collect();
     w.pstyles = pstyles.iter().map(|(n, h)| (n.to_ascii_uppercase(), h.clone())).collect();
+    // Materials: Global, ByLayer, ByBlock and the drawing's, each a MATERIAL object.
+    let material_dict = w.h();
+    let material_names = [cadaddy_doc::material::GLOBAL, cadaddy_doc::material::BY_LAYER, cadaddy_doc::material::BY_BLOCK]
+        .into_iter()
+        .chain(d.materials.iter().take(cadaddy_doc::material::MAX_MATERIALS).map(|m| m.name.as_str()))
+        .map(str::to_ascii_uppercase)
+        .collect::<Vec<_>>();
+    for n in material_names {
+        if !w.materials.contains_key(&n) {
+            let h = w.h();
+            w.materials.insert(n, h);
+        }
+    }
     let model_layout = w.h();
     let layout_handles: Vec<String> = ps_brs.iter().map(|_| w.h()).collect();
 
@@ -2240,6 +2620,11 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         if let Some(h) = w.pstyles.get(&l.plot_style.trim().to_ascii_uppercase()).cloned().or(normal) {
             w.s(390, h);
         }
+        // The layer's material, Global when none is attached.
+        let global = w.materials.get(&cadaddy_doc::material::GLOBAL.to_ascii_uppercase()).cloned();
+        if let Some(h) = l.material.as_deref().and_then(|m| w.materials.get(&m.trim().to_ascii_uppercase())).cloned().or(global) {
+            w.s(347, h);
+        }
         if l.transparency > 0 {
             w.s(1001, dxf_ext::LAYER_TRANSPARENCY_APP);
             w.i(1071, dxf_ext::transparency_to_dxf(l.transparency));
@@ -2320,7 +2705,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.f(40, v.height);
         w.p2(10, v.center);
         w.f(41, v.width);
-        w.p(11, Vec3::Z);
+        w.p(11, v.dir.filter(|d| d.is_finite() && d.len() > 1e-12).unwrap_or(Vec3::Z));
         w.p(12, Vec3::ZERO);
         w.f(42, 50.0);
         w.f(43, 0.0);
@@ -2328,8 +2713,23 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.f(50, if v.twist.is_finite() { v.twist.to_degrees() } else { 0.0 });
         w.i(71, 0);
         w.i(281, 0);
-        w.i(72, 0);
-        let xdata = [("LAYERSTATE", v.layer_state.as_deref()), ("LAYOUT", v.layout.as_deref().filter(|l| !l.is_empty()))];
+        // A UCS kept with the view: its origin and axes (a named one also by name, in xdata).
+        w.i(72, i64::from(v.ucs.is_some()));
+        if let Some(u) = &v.ucs {
+            w.p(110, u.origin);
+            w.p(111, u.x_axis);
+            w.p(112, u.y_axis);
+            w.i(79, 0);
+            w.f(146, u.origin.z);
+        }
+        let background = v.background.map(|c| c.name());
+        let ucs_name = v.ucs.as_ref().map(|u| u.name.as_str()).filter(|n| !n.is_empty());
+        let xdata = [
+            ("LAYERSTATE", v.layer_state.as_deref()),
+            ("LAYOUT", v.layout.as_deref().filter(|l| !l.is_empty())),
+            ("BACKGROUND", background.as_deref()),
+            ("UCSNAME", ucs_name),
+        ];
         if xdata.iter().any(|(_, x)| x.is_some()) {
             w.s(1001, dxf_ext::APP);
             for (key, value) in xdata {
@@ -2381,7 +2781,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.i(70, 0);
         let v = serde_json::to_value(s).unwrap_or_default();
         let defaults = serde_json::to_value(DimStyle::default()).unwrap_or_default();
-        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
+        let mut newer =
+            W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new(), materials: HashMap::new() };
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
             let own = dxf_ext::STYLE_XDATA.contains(code);
@@ -2551,6 +2952,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     w.s(3, "ACAD_LAYOUT");
     w.s(350, layout_dict.clone());
+    if !w.materials.is_empty() {
+        w.s(3, "ACAD_MATERIAL");
+        w.s(350, material_dict.clone());
+    }
     w.s(3, "ACAD_MLEADERSTYLE");
     w.s(350, mleader_dict.clone());
     w.s(3, "ACAD_MLINESTYLE");
@@ -2594,6 +2999,11 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     // Multiline styles.
     w.t.extend(crate::dxf_mline::objects(&cx.mlines, &root_dict));
+    // Materials.
+    if !w.materials.is_empty() {
+        let tags = crate::dxf_material::objects(&d.materials, &w.materials, &material_dict, &root_dict);
+        w.t.extend(tags);
+    }
     // Table styles.
     w.s(0, "DICTIONARY");
     w.s(5, table_style_dict.clone());
@@ -2650,6 +3060,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         }
     }
     write_xclips(&mut w, &cx.xclips, &every);
+    // Texts' fields: extension dictionary, ACAD_FIELD dictionary, the `_text` field and its fields.
+    for p in cx.field_plans.take() {
+        write_fields(&mut w, &p);
+    }
     // Dimension associativity: extension dictionary + DIMASSOC per dimension.
     let mut assoc: Vec<(&Handle, &AssocObj)> = cx.assoc.iter().collect();
     assoc.sort_by_key(|(h, _)| **h);
@@ -3037,6 +3451,7 @@ pub fn entity_records(d: &Drawing, e: &Entity) -> Vec<(String, Vec<Tag>)> {
         pstyles: HashMap::new(),
         layers: HashMap::new(),
         reactors: HashMap::new(),
+        materials: HashMap::new(),
     };
     let cx = Ctx { target: Version::R2018, ..Ctx::default() };
     let paper = d.space_of(e.handle).is_some_and(|s| !matches!(s, cadaddy_doc::Space::Model));

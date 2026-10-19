@@ -113,24 +113,30 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         }
     };
     let (mut close, mut print) = (false, false);
-    egui::Window::new("Plot Preview").open(open).collapsible(false).resizable(false).show(ctx, |ui| {
-        match &preview.shown {
-            Ok((tex, info)) => {
-                ui.label(info);
-                let size = tex.size_vec2();
-                let k = (760.0 / size.x).min(540.0 / size.y).min(1.0);
-                ui.image((tex.id(), size * k));
+    egui::Window::new("Plot Preview")
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            match &preview.shown {
+                Ok((tex, info)) => {
+                    ui.label(info);
+                    let size = tex.size_vec2();
+                    let k = (760.0 / size.x).min(540.0 / size.y).min(1.0);
+                    ui.image((tex.id(), size * k));
+                }
+                Err(e) => {
+                    ui.label(e);
+                }
             }
-            Err(e) => {
-                ui.label(e);
-            }
-        }
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            print = ui.button("Print...").clicked();
-            close = ui.button("Close").clicked();
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                print = ui.button("Print...").clicked();
+                close = ui.button("Close").clicked();
+            });
         });
-    });
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         close = true;
     }
@@ -168,8 +174,10 @@ mod tests {
         let asked = Rc::new(RefCell::new(Vec::new()));
         let (a, b) = (asked.clone(), asked.clone());
         let services = Services {
+            pick_save_image: None,
             pick_pdf: None,
             read_clipboard: None,
+            thumbnail: None,
             pick_image: None,
             pick_open: Some(Box::new(move || {
                 a.borrow_mut().push("open".into());
@@ -207,6 +215,6 @@ mod tests {
         assert!(app.ui.dialog.is_none(), "nor the preview window");
 
         let e = app.run("share", json!({})).unwrap_err();
-        assert!(e.contains("not available yet"), "{e}");
+        assert!(e.contains("online sharing service"), "{e}");
     }
 }

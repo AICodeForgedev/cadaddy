@@ -1513,3 +1513,333 @@
 	Clip PDF Underlay	Обрізати PDF-підкладку
 	Adjust PDF Underlay	Налаштувати PDF-підкладку
 	PDF Underlay Layers	Шари PDF-підкладки
+	Unused items in this drawing	Невикористані елементи цього креслення
+	Purge Checked Items	Очистити позначені
+	Purge All	Очистити все
+	Items purged: {count}	Очищено елементів: {count}
+	Find what:	Знайти:
+	Replace with:	Замінити на:
+	Match case	З урахуванням регістру
+	Find whole words only	Лише цілі слова
+	Find	Знайти
+	Replace All	Замінити все
+	Matches replaced: {count} (objects: {objects})	Замінено збігів: {count} (об'єктів: {objects})
+	Matches found and selected: {count} (objects: {objects})	Знайдено й вибрано збігів: {count} (об'єктів: {objects})
+	Select Color	Вибір кольору
+	Dimension styles	Розмірні стилі
+	Linetypes	Типи ліній
+	Multileader styles	Стилі мультивиносок
+	Multiline styles	Стилі мультиліній
+	Table styles	Стилі таблиць
+	Text styles	Текстові стилі
+	Zero-length geometry	Геометрія нульової довжини
+	Empty text objects	Порожні текстові об'єкти
+	Palette Windows	Вікна палітр
+	Dock	Закріпити
+	Back into the main window	Повернути в головне вікно
+	Dock Palette	Закріпити палітру
+	Float in Own Window	В окремому вікні
+	Drawings (CDY, DWG, DXF)	Креслення (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	Креслення CADaddy (CDY)
+	CADaddy drawing (.cdy)	Креслення CADaddy (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	Під час збереження креслення CADaddy (.cdy) також зберігати копію DWG
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	Креслення CADaddy зберігає все; файли DWG і DXF можуть зберегти не все (під час збереження в них буде сказано, що саме).
+	Field...	Поле...
+	Update Fields	Оновити поля
+	Change Text Case	Змінити регістр тексту
+	Auto Number	Автонумерація
+	Explode Text	Розчленувати текст
+	Arc Aligned Text	Текст по дузі
+	Data Extraction	Видобування даних
+	Data source	Джерело даних
+	Objects	Об'єкти
+	Output	Вивід
+	Other drawings:	Інші креслення:
+	Add Drawings...	Додати креслення...
+	Open Settings...	Відкрити параметри...
+	Start from a saved .dxe settings file	Почати зі збереженого файлу параметрів .dxe
+	Block names	Імена блоків
+	Include blocks inside blocks	Включати вкладені блоки
+	Other objects:	Інші об'єкти:
+	The drawing has no other objects.	Креслення не містить інших об'єктів.
+	Properties to extract:	Властивості для видобування:
+	Attribute tags	Теги атрибутів
+	Combine identical rows	Об'єднувати однакові рядки
+	Insert a table	Вставити таблицю
+	Insertion point	Точка вставки
+	Title	Заголовок
+	Write a file (.csv for spreadsheets, .txt tab-separated)	Записати файл (.csv для електронних таблиць, .txt з розділювачами-табуляціями)
+	Browse...	Огляд...
+	Save Settings...	Зберегти параметри...
+	Save these choices to a .dxe file to use again	Зберегти ці параметри у файл .dxe для повторного використання
+	< Back	< Назад
+	Next >	Далі >
+	Finish	Готово
+	UCS	ПСК
+	Plan View (World)	План (СвСК)
+	New UCS	Нова ПСК
+	World	Світова
+	Current UCS	Поточна ПСК
+	World (WCS)	Світова (СвСК)
+	Unnamed	Без назви
+	Hide UCS Icon	Сховати знак ПСК
+	WCS	СвСК
+	Spelling	Орфографія
+	Check Spelling	Перевірка орфографії
+	Where to check	Де перевіряти
+	Selected objects	Вибрані об'єкти
+	Not in dictionary:	Немає в словнику:
+	Suggestions:	Варіанти:
+	Ignore All	Пропустити всі
+	Change All	Замінити всі
+	Add to Dictionary	Додати до словника
+	Main dictionary:	Основний словник:
+	American English	Американська англійська
+	Custom dictionary:	Користувацький словник:
+	Spelling check complete.	Перевірку орфографії завершено.
+	Hyperlink...	Гіперпосилання...
+	Select Objects for a Hyperlink	Вибрати об'єкти для гіперпосилання
+	Open Hyperlink	Відкрити гіперпосилання
+	Insert Hyperlink	Вставити гіперпосилання
+	Edit Hyperlink	Змінити гіперпосилання
+	Text to display	Текст для показу
+	File or web page	Файл або вебсторінка
+	Named location	Іменоване місце
+	A named location with no file or web page is a layout or view of this drawing.	Іменоване місце без файлу чи вебсторінки — це аркуш або вид цього креслення.
+	Remove Link	Видалити посилання
+	⌘-click to follow the link	⌘+клацання відкриває посилання
+	Ctrl+click to follow the link	Ctrl+клацання відкриває посилання
+	Materials Browser...	Оглядач матеріалів...
+	Attach by Layer	Приєднати за шаром
+	Material Mapping	Накладання матеріалу
+	New Material	Новий матеріал
+	Edit Material	Змінити матеріал
+	Delete Material	Видалити матеріал
+	Assign Material	Призначити матеріал
+	Materials Browser	Оглядач матеріалів
+	Search	Пошук
+	Library	Бібліотека
+	Add to drawing	Додати до креслення
+	In this drawing	У цьому кресленні
+	No materials yet: add one from the library.	Поки немає матеріалів: додайте з бібліотеки.
+	Colour	Колір
+	Roughness	Шорсткість
+	Metallic	Металевість
+	Opacity	Непрозорість
+	Mapping	Накладання
+	Tile size	Розмір плитки
+	Assign to selection ({n})	Призначити вибраним ({n})
+	Attach to layer	Приєднати до шару
+	Render	Візуалізація
+	Edit Layer State	Редагувати стан шарів
+	Export Layer State	Експортувати стан шарів
+	Import Layer State	Імпортувати стан шарів
+	New Layer Filter	Новий фільтр шарів
+	Edit Layer Filter	Редагувати фільтр шарів
+	Delete Layer Filter	Видалити фільтр шарів
+	List Layer Filters	Список фільтрів шарів
+	Layers in Filter	Шари у фільтрі
+	Layer States Manager	Диспетчер станів шарів
+	Invert filter	Інвертувати фільтр
+	New Property Filter...	Новий фільтр властивостей...
+	New Group Filter	Новий груповий фільтр
+	Add Layer	Додати шар
+	Remove Layer	Вилучити шар
+	Layer Filter Properties	Властивості фільтра шарів
+	Filter name	Ім'я фільтра
+	Within	У межах
+	Any	Будь-який
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	Шаблони: * будь-які символи, ? один символ, # одна цифра; розділяйте комами; ~ виключає.
+	Layer states	Стани шарів
+	Turn off layers not found in layer state	Вимкнути шари, відсутні у стані шарів
+	Layer properties to restore	Властивості шарів для відновлення
+	On / Off	Увімк / Вимк
+	Frozen / Thawed	Заморожено / Розморожено
+	Locked / Unlocked	Заблоковано / Розблоковано
+	Plot / No Plot	Друк / Без друку
+	Layers in "{name}"	Шари в «{name}»
+	Remove from the layer state	Вилучити зі стану шарів
+	New...	Створити...
+	Save the layers as they are now in this state	Зберегти поточні параметри шарів у цьому стані
+	Edit...	Редагувати...
+	Rename	Перейменувати
+	New layer state name	Ім'я нового стану шарів
+	New name	Нове ім'я
+	Visual Style	Візуальний стиль
+	Visual Styles	Візуальні стилі
+	Wireframe	Каркас
+	Hidden	Приховування
+	Shaded	Тонований
+	Shaded with Edges	Тонований з ребрами
+	Realistic	Реалістичний
+	Mesh	Сітка
+	Polyface Mesh	Багатогранна сітка
+	Polygon Mesh	Полігональна сітка
+	Fly	Політ
+	Walk and Fly	Обхід і обліт
+	3D Library...	3D-бібліотека...
+	Add 3D Twins to Symbols	Додати 3D-двійники до символів
+	List 3D Models	Список 3D-моделей
+	Add 3D Twins	Додати 3D-двійники
+	Plan Layers	Шари плану
+	Plan Walls	Стіни плану
+	Plan Openings	Прорізи плану
+	Plan Rooms	Приміщення плану
+	Plan Notes	Примітки плану
+	Plan Sheets	Аркуші плану
+	3D Building from Plan	3D-будівля з плану
+	Wedge	Клин
+	Presspull	Втиснути/витягнути
+	3D Solid	3D-тіло
+	Specify center	Вкажіть центр
+	Specify length	Вкажіть довжину
+	Specify width	Вкажіть ширину
+	Specify other corner	Вкажіть інший кут
+	Specify center point	Вкажіть центральну точку
+	Specify base radius	Вкажіть радіус основи
+	Specify radius	Вкажіть радіус
+	Specify diameter	Вкажіть діаметр
+	Specify top radius	Вкажіть радіус верху
+	Specify tube radius	Вкажіть радіус труби
+	Select objects to extrude	Виберіть об'єкти для видавлювання
+	Select extrusion path	Виберіть траєкторію видавлювання
+	Specify angle of taper for extrusion	Вкажіть кут звуження видавлювання
+	Specify height of extrusion	Вкажіть висоту видавлювання
+	Select objects to revolve	Виберіть об'єкти для обертання
+	Specify axis start point or define axis by	Вкажіть початкову точку осі або задайте вісь
+	Specify axis endpoint	Вкажіть кінцеву точку осі
+	Specify angle of revolution	Вкажіть кут обертання
+	Select objects to sweep	Виберіть об'єкти для зсуву
+	Select sweep path	Виберіть траєкторію зсуву
+	Select cross sections in lofting order	Виберіть поперечні перерізи в порядку лофтингу
+	Click inside bounded areas to press or pull	Клацніть усередині замкнених областей, щоб втиснути або витягнути
+	Specify extrusion height	Вкажіть висоту видавлювання
+	Cube	Куб
+	Sides	Сторони
+	Top radius	Радіус верху
+	Path	Траєкторія
+	Taper angle	Кут звуження
+	Select one or more regions or 3D solids.	Виберіть одну або кілька областей чи 3D-тіл.
+	No closed area found there.	Замкнену область не знайдено.
+	Slice	Розріз
+	Thicken	Надати товщину
+	Fillet Edge	Спряження ребра
+	Chamfer Edge	Фаска ребра
+	Fillet Edges	Спряження ребер
+	Chamfer Edges	Фаска ребер
+	Move Faces	Перемістити грані
+	Offset Faces	Зсунути грані
+	Delete Faces	Видалити грані
+	Shell	Оболонка
+	Composite	Складене
+	Select objects to slice	Виберіть об'єкти для розрізу
+	Specify a point on desired side or [keep Both sides]	Вкажіть точку на потрібній стороні або [зберегти Обидві сторони]
+	Both	Обидві
+	Specify start point of slicing plane or	Вкажіть початкову точку січної площини або
+	Specify second point on plane	Вкажіть другу точку на площині
+	Specify the Z of the XY-plane	Вкажіть Z площини XY
+	Specify the X of the YZ-plane	Вкажіть X площини YZ
+	Specify the Y of the ZX-plane	Вкажіть Y площини ZX
+	Select surfaces to thicken	Виберіть поверхні
+	Select a 3D solid	Виберіть 3D-тіло
+	Select an edge	Виберіть ребро
+	Remove faces	Вилучити грані
+	Select faces	Виберіть грані
+	Specify thickness	Вкажіть товщину
+	Enter fillet radius	Введіть радіус спряження
+	Enter distance	Введіть відстань
+	Specify a base point or displacement	Вкажіть базову точку або зміщення
+	Specify a second point of displacement	Вкажіть другу точку зміщення
+	Specify the offset distance	Вкажіть відстань зсуву
+	Enter the shell offset distance	Введіть товщину оболонки
+	Select solids, surfaces, and regions to subtract from ..	Виберіть тіла, поверхні та області, з яких віднімати ..
+	Select solids, surfaces, and regions to subtract ..	Виберіть тіла, поверхні та області, які віднімати ..
+	Select two or more solids.	Виберіть два або більше тіл.
+	The solids don't overlap; nothing was changed.	Тіла не перетинаються; нічого не змінено.
+	Nothing would remain; nothing was changed.	Нічого не залишиться; нічого не змінено.
+	The result would not be a solid; nothing was changed.	Результат не буде тілом; нічого не змінено.
+	No straight edge between two flat faces there.	Там немає прямого ребра між двома плоскими гранями.
+	No face of the solid there.	Там немає грані тіла.
+	Only outside (convex) edges can be filleted or chamfered.	Спряження та фаска можливі лише для зовнішніх (опуклих) ребер.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	Оболонка працює для ящиків, циліндрів, куль і прямих видавлювань.
+	The walls are too thick for this solid.	Стінки занадто товсті для цього тіла.
+	Select solids to subtract from.	Виберіть тіла, з яких віднімати.
+	A solid can't be subtracted from itself.	Тіло не можна відняти від самого себе.
+	The solid would have too many operations; nothing was changed.	Тіло мало б забагато операцій; нічого не змінено.
+	That face can't be moved (only flat faces, holes and added parts).	Цю грань не можна перемістити (лише плоскі грані, отвори та додані частини).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	Цю грань не можна видалити (лише отвори, спряження, фаски та додані частини).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	Цю грань не можна зсунути (сторони ящиків, торці циліндрів, конусів і видавлювань, стінки циліндрів і кулі).
+	The thickness must be more than zero.	Товщина має бути більшою за нуль.
+	The radius must be more than zero.	Радіус має бути більшим за нуль.
+	The distance must be more than zero.	Відстань має бути більшою за нуль.
+	Requires a number.	Потрібне число.
+	Parameter	Параметр
+	Action	Дія
+	Visibility States	Стани видимості
+	Remove Parameter or Action	Видалити параметр або дію
+	Edit Reference	Редагувати посилання
+	Discard Reference Edits	Скасувати зміни посилання
+	Nested References	Вкладені посилання
+	Light List	Список джерел світла
+	Sun Properties	Властивості сонця
+	Render Exposure	Експозиція візуалізації
+	Point Light	Точкове джерело
+	Spotlight	Прожектор
+	Distant Light	Віддалене джерело
+	Change Lights	Змінити джерела світла
+	Section Plane	Січна площина
+	Live Section	Динамічний переріз
+	Generate Section Block	Створити блок перерізу
+	Generate Section	Створити переріз
+	Flatshot	Плоский знімок
+	Base View	Базовий вид
+	Section View	Вид у розрізі
+	Drawing Views	Види креслення
+	Select face or any point to locate section line or	Виберіть грань або точку для лінії перерізу або
+	Orthographic	Ортогональний
+	Select section object	Виберіть об'єкт перерізу
+	Specify location of base view	Вкажіть положення базового виду
+	Select parent view	Виберіть батьківський вид
+	Specify end point	Вкажіть кінцеву точку
+	Specify location of section view	Вкажіть положення виду в розрізі
+	There is nothing to draw: no 3D objects were found.	Нічого малювати: 3D-об'єкти не знайдено.
+	The section plane doesn't cut any solid.	Січна площина не перетинає жодного тіла.
+	The view needs a direction.	Виду потрібен напрямок.
+	The drawing has no layout.	У кресленні немає аркуша.
+	That is not a section plane.	Це не січна площина.
+	Requires a point.	Потрібна точка.
+	The view is [dx, dy, dz].	Вид задається як [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	Створити пакет для передавання
+	Files in the package	Файли в пакеті
+	Not included	Не включено
+	Organized folders	Упорядковані теки
+	One folder	Одна тека
+	Include a transmittal report	Додати звіт про передавання
+	Create ZIP...	Створити ZIP...
+	Create Folder...	Створити теку...
+	STL Out	Виведення STL
+	Export STL...	Експорт STL...
+	3D models (glTF, OBJ, STL)	3D-моделі (glTF, OBJ, STL)
+	3D model (glTF binary)	3D-модель (двійковий glTF)
+	3D model (glTF)	3D-модель (glTF)
+	3D model (OBJ)	3D-модель (OBJ)
+	3D model (STL)	3D-модель (STL)
+	Render Region	Візуалізувати область
+	samples	вибірок
+	a sample	на вибірку
+	Pick crop window to render	Вкажіть область візуалізації
+	Nothing has been rendered yet.	Ще нічого не візуалізовано.
+	There is nothing to render: no surfaces in the view.	Нічого візуалізувати: у виді немає поверхонь.
+	The image couldn't be encoded.	Не вдалося закодувати зображення.
+	Saving images isn't available in the browser.	Збереження зображень недоступне в браузері.
+	PNG image	Зображення PNG
+	JPEG image	Зображення JPEG
+	Save Image	Зберегти зображення
+	My Properties	Мої властивості
+	Add to My Properties	Додати до моїх властивостей
+	Remove from My Properties	Вилучити з моїх властивостей
+	All properties	Усі властивості
+	My properties: the ones you added (right-click a property's name to add it)	Мої властивості: додані вами (клацніть правою кнопкою на назві властивості, щоб додати її)
+	Right-click a property's name and choose Add to My Properties.	Клацніть правою кнопкою на назві властивості й виберіть «Додати до моїх властивостей».
+	Color Books	Альбоми кольорів

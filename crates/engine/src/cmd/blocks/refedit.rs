@@ -11,8 +11,13 @@
 //! The state is [`Drawing::refedit`]: it travels with undo, is never written to a file (files
 //! are written from [`Drawing::committed`]) and ends with the drawing it belongs to.
 //!
-//! Not yet: external references (their source drawing would have to be written back), nested
-//! references picked at a depth, annotative scale contexts and attribute synchronisation.
+//! An xref is edited the same way; REFCLOSE Save then writes it back to its source drawing
+//! ([`super::xref::writeback`]) and reloads it. A nested reference is edited by its path of
+//! references (`nested`), the blocks around it shown faded. Saving a block with attribute
+//! definitions synchronises its references' attributes (ATTSYNC). While editing, the rest of the
+//! drawing is drawn faded (XFADECTL).
+//!
+//! Not yet: annotative scale contexts.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -34,9 +39,13 @@ pub(super) fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("refedit", "Edit Reference In-Place", run_refedit)
             .menu(&["Tools", "Xref and Block In-place Editing", "Edit Reference In-Place"])
-            .params("{handle? | handles? | name? (a block reference, default the selection), objects?: [block object handles] (default all)} → {block, insert, working: [handles], faded}")
+            .params("{handle? | handles? | name? (a block reference, default the selection), nested?: [handles of references inside it, outermost first] (edit that nested block), objects?: [block object handles] (default all)} → {block, insert, xref, working: [handles], faded}: an xref is written back to its source drawing by REFCLOSE Save")
             .enabled(has_doc)
             .interactive(|_| Ok(Box::new(SelectRun::single("refedit", "REFEDIT", "Select reference")))),
+        CommandSpec::new("refedit.tree", "Nested References", run_tree)
+            .params("{handle (a block reference)} → {handle, block, xref, editable, nested: [...]}: the references inside it, for REFEDIT's `nested` path")
+            .enabled(has_doc)
+            .noundo(),
         CommandSpec::new("refset", "Working Set", run_refset)
             .menu(&["Tools", "Xref and Block In-place Editing", "Add to Working Set"])
             .params("{add?: [handles], remove?: [handles]} (or {handles, mode?: \"add\"|\"remove\"}); with neither: lists the working set → {working: [handles], added, removed}")
@@ -90,6 +99,31 @@ fn hexes(hs: impl IntoIterator<Item = Handle>) -> Vec<String> {
 
 // ---------------- REFEDIT ----------------
 
+/// Most nesting levels a nested reference may be picked at.
+const MAX_NESTING: usize = 32;
+
+/// Whether `m` keeps shapes (no stretching or flattening): REFEDIT shows the block through it.
+fn conformal(m: &Mat3) -> bool {
+    let finite = [m.a, m.b, m.c, m.d, m.e, m.f].iter().all(|v| v.is_finite());
+    let (sx, sy) = (m.a.hypot(m.b), m.c.hypot(m.d));
+    finite && m.det().abs() > 1e-12 && (sx - sy).abs() <= 1e-9 * sx.max(sy) && (m.a * m.c + m.b * m.d).abs() <= 1e-9 * sx * sy
+}
+
+/// Why block `b` can't be edited in place (`nested`: picked inside another reference), if it can't.
+fn refuse(b: &cadaddy_doc::Block, nested: bool) -> Option<String> {
+    if b.xref_path.is_some() && nested {
+        return Some(format!("\"{}\" is an xref nested in another reference; edit it from a reference of its own", b.name));
+    }
+    if b.name.contains('|') {
+        let owner = b.name.split('|').next().unwrap_or_default();
+        return Some(format!("\"{}\" belongs to xref \"{owner}\"; open that drawing to edit it", b.name));
+    }
+    if b.name.starts_with('*') || b.array.is_some() {
+        return Some(format!("\"{}\" is generated geometry and can't be edited in place", b.name));
+    }
+    None
+}
+
 fn run_refedit(s: &mut Session, p: &Value) -> Result<Value> {
     if s.doc()?.refedit.is_some() {
         return Err(bad("refedit", "a reference is already being edited; finish with REFCLOSE"));
@@ -109,23 +143,48 @@ fn run_refedit(s: &mut Session, p: &Value) -> Result<Value> {
         Some(cadaddy_doc::EntityKind::Insert(i)) => (i.clone(), d.space_of(ih).ok_or_else(|| bad("refedit", "the reference is in no space"))?),
         _ => return Err(bad("refedit", "select a block reference")),
     };
-    let blk = d.block(&ins.block).cloned().ok_or_else(|| bad("refedit", format!("block \"{}\" not found", ins.block)))?;
+    let mut blk = d.block(&ins.block).cloned().ok_or_else(|| bad("refedit", format!("block \"{}\" not found", ins.block)))?;
+    let mut to_world = ins.transform(blk.base.xy());
+    // A nested reference: the path of references from the picked one inward. The objects of the
+    // blocks around it show faded.
+    let path: Vec<Handle> = match p.get("nested") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(a)) if a.len() <= MAX_NESTING => a
+            .iter()
+            .map(|v| handle_value(v).ok_or_else(|| bad("refedit", format!("`nested`: {v} is not an object handle"))))
+            .collect::<Result<_>>()?,
+        Some(_) => {
+            return Err(bad("refedit", format!("`nested` must be an array of at most {MAX_NESTING} handles of references inside the picked one")));
+        }
+    };
+    if !path.is_empty()
+        && let Some(why) = refuse(&blk, false)
+            .or_else(|| blk.xref_path.as_ref().map(|_| format!("\"{}\" is an xref; its nested blocks are edited in its own drawing", blk.name)))
+    {
+        return Err(bad("refedit", why));
+    }
+    let mut context: Vec<(Mat3, Entity)> = Vec::new();
+    for h in &path {
+        let inner = match blk.entities.get(*h).map(|e| &e.kind) {
+            Some(cadaddy_doc::EntityKind::Insert(i)) => i.clone(),
+            _ => return Err(bad("refedit", format!("`nested`: {} is not a block reference in block \"{}\"", h.hex(), blk.name))),
+        };
+        let nb = d.block(&inner.block).cloned().ok_or_else(|| bad("refedit", format!("block \"{}\" not found", inner.block)))?;
+        if let Some(why) = refuse(&nb, true) {
+            return Err(bad("refedit", why));
+        }
+        context.extend(blk.entities.iter().filter(|e| e.handle != *h).map(|e| (to_world, (**e).clone())));
+        to_world = to_world.then_before(inner.transform(nb.base.xy()));
+        blk = nb;
+    }
+    if let Some(why) = refuse(&blk, !path.is_empty()) {
+        return Err(bad("refedit", why));
+    }
     if blk.xref_path.is_some() {
-        return Err(bad(
-            "refedit",
-            format!(
-                "\"{}\" is an external reference: editing it in place would write its source drawing, which is not available yet. Open it with XOPEN, edit and save it, then reload.",
-                blk.name
-            ),
-        ));
+        let host = s.state().ok().and_then(|st| st.path.clone());
+        super::xref::writeback::source(d, &blk.name, host.as_deref()).map_err(|e| bad("refedit", e))?;
     }
-    if blk.name.starts_with('*') || blk.array.is_some() {
-        return Err(bad("refedit", format!("\"{}\" is generated geometry and can't be edited in place", blk.name)));
-    }
-    let to_world = ins.transform(blk.base.xy());
-    let (sx, sy) = (ins.scale.x.abs(), ins.scale.y.abs());
-    let finite = [to_world.a, to_world.b, to_world.c, to_world.d, to_world.e, to_world.f].iter().all(|v| v.is_finite());
-    if !finite || to_world.det().abs() < 1e-12 || (sx - sy).abs() > 1e-9 * sx.max(sy) {
+    if !conformal(&to_world) {
         return Err(bad("refedit", "the reference must be scaled equally in X and Y (and not flat) to be edited in place"));
     }
     let chosen: Option<HashSet<Handle>> = match p.get("objects") {
@@ -157,8 +216,14 @@ fn run_refedit(s: &mut Session, p: &Value) -> Result<Value> {
         items: Vec::new(),
         ghosts: Vec::new(),
         released: Vec::new(),
+        context: Vec::new(),
     };
     let doc = s.doc_mut()?;
+    for (m, e) in &context {
+        let h = doc.new_handle();
+        put(doc, &r, to_host(m, e, h, true))?;
+        r.context.push(h);
+    }
     for e in blk.entities.iter() {
         let working = chosen.as_ref().is_none_or(|c| c.contains(&e.handle));
         let h = doc.new_handle();
@@ -170,11 +235,47 @@ fn run_refedit(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     doc.modify_entity(ih, |e| e.common.visible = false).map_err(|e| bad("refedit", e.to_string()))?;
-    let out = json!({ "block": r.block, "insert": ih.hex(), "working": hexes(r.items.iter().map(|i| i.copy)), "faded": r.ghosts.len() });
+    let out = json!({
+        "block": r.block,
+        "insert": ih.hex(),
+        "xref": blk.xref_path.is_some(),
+        "working": hexes(r.items.iter().map(|i| i.copy)),
+        "faded": r.ghosts.len() + r.context.len(),
+    });
     let sel: Vec<Handle> = r.items.iter().map(|i| i.copy).collect();
     doc.refedit = Some(r);
     s.set_selection(sel);
     Ok(out)
+}
+
+/// The references nested in block reference `handle`, as a tree: {handle, block, xref,
+/// editable, nested: [...]} (what REFEDIT's `nested` path picks from).
+fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
+    let d = s.doc()?;
+    let h = super::super::curves::handle_param(p, "handle").ok_or_else(|| bad("refedit.tree", "`handle` (a block reference) is required"))?;
+    let Some(cadaddy_doc::EntityKind::Insert(i)) = d.entity(h).map(|e| &e.kind) else {
+        return Err(bad("refedit.tree", "`handle` is not a block reference"));
+    };
+    let mut budget = 10_000usize;
+    Ok(tree(d, h, &i.block, 0, &mut budget))
+}
+
+fn tree(d: &Drawing, h: Handle, block: &str, depth: usize, budget: &mut usize) -> Value {
+    let b = d.block(block);
+    let mut nested = Vec::new();
+    if let Some(b) = b.filter(|b| depth < MAX_NESTING && b.xref_path.is_none()) {
+        for e in b.entities.iter() {
+            if let cadaddy_doc::EntityKind::Insert(i) = &e.kind {
+                if *budget == 0 {
+                    break;
+                }
+                *budget -= 1;
+                nested.push(tree(d, e.handle, &i.block, depth + 1, budget));
+            }
+        }
+    }
+    let editable = b.is_some_and(|b| refuse(b, depth > 0).is_none());
+    json!({ "handle": h.hex(), "block": block, "xref": b.is_some_and(|b| b.xref_path.is_some()), "editable": editable, "nested": nested })
 }
 
 // ---------------- REFSET ----------------
@@ -215,6 +316,9 @@ fn apply_refset(s: &mut Session, add: &[Handle], remove: &[Handle]) -> Result<Va
     let blk = d.block(&r.block).cloned().ok_or_else(|| bad("refset", format!("block \"{}\" is gone; REFCLOSE Discard", r.block)))?;
     let (mut added, mut removed) = (0usize, 0usize);
     let doc = s.doc_mut()?;
+    if let Some(h) = add.iter().find(|h| r.context.contains(h)) {
+        return Err(bad("refset", format!("object {} belongs to a block around the edited one", h.hex())));
+    }
     for h in add {
         if *h == r.insert || r.is_working(*h) {
             continue;
@@ -276,13 +380,34 @@ fn close(s: &mut Session, save: bool) -> Result<Value> {
     // Work on a copy: the drawing changes only when everything went through.
     let mut nd: Drawing = s.doc()?.clone();
     let mut objects = 0;
+    let mut out = json!({ "block": r.block, "saved": save });
     if save {
+        let loaded = nd.block(&r.block).cloned();
         objects = commit_block(&mut nd, &r)?;
+        if let Some(loaded) = loaded.filter(|b| b.xref_path.is_some()) {
+            // An xref: its source drawing gets the change (the previous file kept as .bak), then
+            // the xref is loaded again from it.
+            let host = s.state().ok().and_then(|st| st.path.clone());
+            let file = super::xref::writeback::source(&nd, &r.block, host.as_deref()).map_err(|e| bad("refclose", e))?;
+            let edited = nd.block(&r.block).cloned().ok_or_else(|| bad("refclose", "the xref is gone; use REFCLOSE Discard"))?;
+            super::xref::writeback::write_back(&file, &r.block, &loaded, &edited, &nd)
+                .map_err(|e| bad("refclose", format!("{e}. The edit is still open: fix the problem and save again, or discard it")))?;
+            let reload = super::xref::load::load(&mut nd, &r.block, host.as_deref(), false);
+            out["file"] = json!(file.to_string_lossy());
+            out["reloaded"] = json!(reload.first().is_some_and(|o| o.status == cadaddy_doc::XrefStatus::Loaded));
+            objects = nd.block(&r.block).map_or(objects, |b| b.entities.len());
+        }
     }
     nd.end_refedit_discard(&r);
     *s.doc_mut()? = nd;
+    // Other references of a block with attributes follow its definitions (ATTSYNC).
+    if save && super::attribs::has_attdefs(s, &r.block) {
+        let (_, n) = super::attribs::sync(s, &r.block)?;
+        out["synced"] = json!(n);
+    }
     s.set_selection(Vec::new());
-    Ok(json!({ "block": r.block, "saved": save, "objects": objects }))
+    out["objects"] = json!(objects);
+    Ok(out)
 }
 
 /// Replace the block's objects by the working set (and move the drawing objects added to it
@@ -345,7 +470,8 @@ pub(crate) fn after_command(s: &mut Session, before: &Arc<Drawing>, id: &str) ->
         return None;
     }
     let ra = st.doc.refedit.as_ref().filter(|ra| ra.insert == rb.insert)?;
-    let owned: HashSet<Handle> = rb.items.iter().map(|i| i.copy).chain(rb.ghosts.iter().map(|g| g.0)).chain([rb.insert]).collect();
+    let owned: HashSet<Handle> =
+        rb.items.iter().map(|i| i.copy).chain(rb.ghosts.iter().map(|g| g.0)).chain(rb.context.iter().copied()).chain([rb.insert]).collect();
     let stores = |d: &Drawing| std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).cloned().collect::<Vec<_>>();
     let touched = stores(before)
         .iter()

@@ -40,6 +40,24 @@ pub struct LevelInfo {
     /// Plan extents of this level's walls, feet.
     pub min: Vec2,
     pub max: Vec2,
+    /// The sheet point (drawing units) this level's plan places at the building origin: a scene
+    /// point `p` (feet) is at `base + p * units_per_foot` on the sheet.
+    pub base: Vec2,
+}
+
+/// What a triangle of the scene is part of.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Part {
+    #[default]
+    Wall,
+    Floor,
+    Ceiling,
+    /// Window glass.
+    Glass,
+    /// An open door leaf.
+    Door,
+    /// A device box.
+    Device,
 }
 
 /// Which drawing of the set a triangle or device came from (see [`Rules::sheets`]) and its
@@ -71,6 +89,12 @@ pub struct Scene {
     pub tris: Vec<Vertex>,
     /// Owner of each triangle (`tris.len() / 3` entries).
     pub owners: Vec<Owner>,
+    /// What each triangle is part of (as `owners`).
+    pub parts: Vec<Part>,
+    /// What the faces added next are part of.
+    pub(crate) part: Part,
+    /// Drawing units per foot of the sheets (see [`LevelInfo::base`]).
+    pub units_per_foot: f64,
     /// Edge overlay, a line list.
     pub edges: Vec<Vertex>,
     pub walls: Vec<Seg>,
@@ -84,6 +108,80 @@ pub struct Scene {
     pub doors: usize,
     pub windows: usize,
     pub cased: usize,
+    /// Door leaves, which open and close ([`Scene::toggle_door`]).
+    pub door_leaves: Vec<crate::DoorLeaf>,
+}
+
+/// A room name on a level's plan (TEXT or MTEXT), where it is in the building.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Room {
+    pub name: String,
+    pub level: usize,
+    pub at: Vec2,
+}
+
+/// Most room names collected.
+const MAX_ROOMS: usize = 5_000;
+
+/// The room names on the plans: text placed on a level, with letters, at most 40 characters.
+pub fn rooms(sources: &[&Drawing], rules: &Rules) -> Vec<Room> {
+    let upf = if rules.units_per_foot.is_finite() && rules.units_per_foot > 0.0 { rules.units_per_foot } else { 12.0 };
+    let empty = Drawing::default();
+    let src_of: Vec<usize> = (0..rules.levels.len()).map(|i| rules.level_source(i)).collect();
+    let drawing_of = |lv: usize| -> &Drawing { src_of.get(lv).and_then(|s| sources.get(*s)).copied().unwrap_or(&empty) };
+    let places: Vec<Place> =
+        rules.levels.iter().enumerate().map(|(i, l)| Place { region: l.region, base: base_point(drawing_of(i), rules, l) }).collect();
+    let mut out: Vec<Room> = Vec::new();
+    for (lv, place) in places.iter().enumerate() {
+        let d = drawing_of(lv);
+        for e in d.model.iter() {
+            let (text, at) = match &e.kind {
+                EntityKind::Text(t) => (t.value.clone(), t.justify_point()),
+                EntityKind::MText(t) => (cadaddy_fonts_plain(&t.contents), t.insert.xy()),
+                _ => continue,
+            };
+            let name = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if name.chars().count() < 2 || name.chars().count() > 40 || !name.chars().any(char::is_alphabetic) || !place.contains(at) {
+                continue;
+            }
+            if out.iter().any(|r| r.level == lv && r.name == name) {
+                continue;
+            }
+            out.push(Room { name, level: lv, at: to_world(at, place.base, upf) });
+            if out.len() >= MAX_ROOMS {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+/// MTEXT contents as plain text (format codes dropped).
+fn cadaddy_fonts_plain(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' | '}' => {}
+            '\\' => match chars.next() {
+                Some('P' | 'N') => out.push(' '),
+                Some('\\') => out.push('\\'),
+                Some('{') => out.push('{'),
+                Some('}') => out.push('}'),
+                Some(_) => {
+                    // A code with a value runs to `;`.
+                    for x in chars.by_ref() {
+                        if x == ';' {
+                            break;
+                        }
+                    }
+                }
+                None => {}
+            },
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 pub(crate) const WALL: Rgb = Rgb(222, 218, 210);
@@ -137,7 +235,7 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
     let level_at = |src: usize, p: Vec2| -> Option<usize> {
         (0..places.len()).find(|&i| src_of.get(i) == Some(&src) && places.get(i).is_some_and(|pl| pl.contains(p)))
     };
-    let mut s = Scene::default();
+    let mut s = Scene { units_per_foot: upf, ..Scene::default() };
     let mut wall_pieces: Vec<(Vec<Vec2>, usize, f64, Owner, bool)> = Vec::new();
     // Curved runs the wall layers dropped: door swings among them (see [`crate::openings`]).
     let mut curves: Vec<(Vec<Vec2>, usize, Owner)> = Vec::new();
@@ -205,7 +303,16 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
             min = Vec2 { x: 0.0, y: 0.0 };
             max = Vec2 { x: 0.0, y: 0.0 };
         }
-        s.levels.push(LevelInfo { name: l.name.clone(), elevation_ft: l.elevation_ft, height_ft: l.height_ft, ceiling_ft: l.ceiling_ft, min, max });
+        let base = places.get(i).map_or(Vec2 { x: 0.0, y: 0.0 }, |p| p.base);
+        s.levels.push(LevelInfo {
+            name: l.name.clone(),
+            elevation_ft: l.elevation_ft,
+            height_ft: l.height_ft,
+            ceiling_ft: l.ceiling_ft,
+            min,
+            max,
+            base,
+        });
     }
     for li in s.levels.clone() {
         if li.max.x > li.min.x && li.max.y > li.min.y {
@@ -218,10 +325,12 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
                     v3(li.min.x - pad, li.max.y + pad, z),
                 ]
             };
+            s.part = Part::Floor;
             quad(&mut s, rect(li.elevation_ft), FLOOR, Owner::default());
             // The ceiling faces down (drawn from below; a cut at the ceiling line hides it).
             let [a, b, c, d] = rect(li.elevation_ft + li.ceiling_ft);
             if li.ceiling_ft > 0.0 && li.ceiling_ft < li.height_ft {
+                s.part = Part::Ceiling;
                 quad(&mut s, [a, d, c, b], CEILING, Owner::default());
             }
         }
@@ -260,10 +369,11 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
     let face_segs: Vec<Seg> = faces.iter().map(|f| Seg { a: f.a, b: f.b, level: f.lv }).collect();
     let plans = crate::openings::plan(&face_segs, &pair_pieces(&faces), &curves, &rules.openings);
     let faces: Vec<Face> = faces.into_iter().filter(|f| !crate::openings::in_window(&plans, f.lv, f.a, f.b)).collect();
+    s.part = Part::Wall;
     for f in &faces {
         let (a, b, z0, z1) = (f.a, f.b, f.z0, f.z1);
         s.walls.push(Seg { a, b, level: f.lv });
-        quad(&mut s, [v3(a.x, a.y, z0), v3(b.x, b.y, z0), v3(b.x, b.y, z1), v3(a.x, a.y, z1)], WALL, f.owner);
+        quad(&mut s, [v3(a.x, a.y, z0), v3(b.x, b.y, z0), v3(b.x, b.y, z1), v3(a.x, a.y, z1)], wall_rgb(sources, f.owner), f.owner);
         edge(&mut s, v3(a.x, a.y, z1), v3(b.x, b.y, z1));
         edge(&mut s, v3(a.x, a.y, z0), v3(b.x, b.y, z0));
         if f.edge_a {
@@ -275,6 +385,7 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
     }
     close_walls(&mut s, &faces);
     crate::openings::build(&mut s, &plans, &rules.openings);
+    s.part = Part::Device;
 
     // Devices: from the levels' own drawings, and from device sheets (any level, by attribute).
     let device_srcs = rules.device_sources();
@@ -634,6 +745,13 @@ fn to_world(p: Vec2, base: Vec2, upf: f64) -> Vec2 {
     Vec2 { x: (p.x - base.x) / upf, y: (p.y - base.y) / upf }
 }
 
+/// A wall face's colour: the base colour of the material its line shows (its own or its
+/// layer's, MATERIALATTACH), else the plain wall colour.
+fn wall_rgb(sources: &[&Drawing], owner: Owner) -> Rgb {
+    let Some(d) = sources.get(usize::from(owner.src)) else { return WALL };
+    d.entity(owner.handle).and_then(|e| d.material_of(e, None)).map_or(WALL, |m| m.color)
+}
+
 fn entity_rgb(d: &Drawing, e: &Entity) -> Rgb {
     let layer = d.layer(&e.common.layer).map(|l| l.color).unwrap_or(Color::Index(7));
     let c = e.common.color.resolve(layer, Color::Index(7));
@@ -657,6 +775,8 @@ pub(crate) fn quad(s: &mut Scene, q: [V3; 4], c: Rgb, owner: Owner) {
     for p in [a, b, cc, a, cc, d] {
         s.tris.push(vtx(p, n, c));
     }
+    s.parts.push(s.part);
+    s.parts.push(s.part);
     s.owners.push(owner);
     s.owners.push(owner);
 }
@@ -789,6 +909,20 @@ mod tests {
         assert!((rec.pos.x - (20.0 - 0.075)).abs() < 1e-9, "{:?}", rec.pos);
         let up = s.devices.iter().find(|v| v.level == 1).unwrap_or_else(|| panic!("no floor 4 device"));
         assert!((up.pos.z - (30.0 + 8.0 - 0.125)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn walls_show_their_layers_material_colour() {
+        let (mut d, rules) = two_floor_sheet();
+        let plain = derive(&d, &rules);
+        assert!(plain.tris.iter().any(|v| v.c[..3] == [WALL.0, WALL.1, WALL.2]));
+        let concrete = cadaddy_doc::material::recipe("concrete").unwrap().material(0.0254);
+        let c = concrete.color;
+        d.materials.push(concrete.clone());
+        d.layers.retain(|l| l.name != "A-WALL");
+        d.layers.push(cadaddy_doc::Layer { name: "A-WALL".into(), material: Some(concrete.name.clone()), ..cadaddy_doc::Layer::default() });
+        let s = derive(&d, &rules);
+        assert!(s.tris.iter().any(|v| v.c[..3] == [c.0, c.1, c.2]), "walls take the material's colour");
     }
 
     #[test]

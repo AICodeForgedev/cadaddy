@@ -516,13 +516,55 @@ fn itoa(a: &[Value]) -> R {
     arity(a, 1, 1)?;
     Ok(Value::str(&int(&a[0])?.to_string()))
 }
+/// Variables SETENV set in this session (the process environment can't be changed safely).
+static ENV: std::sync::Mutex<Option<std::collections::HashMap<String, String>>> = std::sync::Mutex::new(None);
+
+/// GETENV: what SETENV set, else the environment variable; nil when neither has it.
+fn getenv(a: &[Value]) -> R {
+    arity(a, 1, 1)?;
+    let name = string(&a[0])?;
+    let set = ENV.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(&name.to_ascii_uppercase()).cloned()));
+    Ok(match set.or_else(|| std::env::var(&*name).ok()) {
+        Some(v) => Value::Str(v.into()),
+        None => Value::Nil,
+    })
+}
+
+/// SETENV: a value GETENV gives back for the rest of the session; returns it.
+fn setenv(a: &[Value]) -> R {
+    arity(a, 2, 2)?;
+    let (name, val) = (string(&a[0])?, string(&a[1])?);
+    if let Ok(mut m) = ENV.lock() {
+        let m = m.get_or_insert_with(std::collections::HashMap::new);
+        if m.len() < 10_000 {
+            m.insert(name.to_ascii_uppercase(), val.to_string());
+        }
+    }
+    Ok(Value::Str(val))
+}
+
+/// MENUCMD: CADaddy has no CUI menus to switch; nil, as AutoCAD answers a request it can't do.
+fn menucmd(a: &[Value]) -> R {
+    arity(a, 1, 1)?;
+    string(&a[0])?;
+    Ok(Value::Nil)
+}
+
 /// C's `atoi`: leading blanks, a sign, digits; 0 when there are none.
 fn atoi(a: &[Value]) -> R {
     arity(a, 1, 1)?;
     let s = string(&a[0])?;
     let t = s.trim_start();
     let end = t.char_indices().take_while(|(i, c)| c.is_ascii_digit() || (*i == 0 && (*c == '-' || *c == '+'))).count();
-    Ok(Value::Int(t.get(..end).and_then(|n| n.parse::<i64>().ok()).map(|n| n as i32).unwrap_or(0)))
+    let digits = t.get(..end).unwrap_or("");
+    // Out of range saturates, as AutoCAD's does (it gave 0, and 3000000000 wrapped negative).
+    let n = match digits.parse::<i64>() {
+        Ok(n) => n.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+        Err(_) if digits.trim_start_matches(['+', '-']).is_empty() => 0,
+        Err(_) if digits.starts_with('-') => i32::MIN,
+        Err(_) => i32::MAX,
+    };
+    Ok(Value::Int(n))
 }
 /// C's `atof`: the longest number at the start; 0.0 when there is none.
 fn atof(a: &[Value]) -> R {
@@ -1353,6 +1395,9 @@ static BUILTINS: &[Builtin] = &[
     pure!("STRCASE", strcase),
     pure!("ITOA", itoa),
     pure!("ATOI", atoi),
+    pure!("GETENV", getenv),
+    pure!("SETENV", setenv),
+    pure!("MENUCMD", menucmd),
     pure!("ATOF", atof),
     pure!("CHR", chr),
     pure!("ASCII", ascii),
@@ -1441,6 +1486,7 @@ static BUILTINS: &[Builtin] = &[
     ctx!("SETVAR", drawing::setvar),
     ctx!("ENTGET", drawing::entget),
     ctx!("ENTMAKE", drawing::entmake),
+    ctx!("ENTMAKEX", drawing::entmakex),
     ctx!("ENTMOD", drawing::entmod),
     ctx!("ENTDEL", drawing::entdel),
     ctx!("ENTLAST", drawing::entlast),
@@ -1464,6 +1510,24 @@ static BUILTINS: &[Builtin] = &[
     ctx!("DISTOF", drawing::distof),
     ctx!("ANGTOF", drawing::angtof),
     ctx!("TRANS", drawing::trans),
+    ctx!("VLAX-CURVE-GETSTARTPOINT", super::curve::start_point),
+    ctx!("VLAX-CURVE-GETENDPOINT", super::curve::end_point),
+    ctx!("VLAX-CURVE-GETSTARTPARAM", super::curve::start_param),
+    ctx!("VLAX-CURVE-GETENDPARAM", super::curve::end_param),
+    ctx!("VLAX-CURVE-GETAREA", super::curve::area),
+    ctx!("VLAX-CURVE-GETDISTATPARAM", super::curve::dist_at_param),
+    ctx!("VLAX-CURVE-GETPARAMATDIST", super::curve::param_at_dist),
+    ctx!("VLAX-CURVE-GETPOINTATPARAM", super::curve::point_at_param),
+    ctx!("VLAX-CURVE-GETPOINTATDIST", super::curve::point_at_dist),
+    ctx!("VLAX-CURVE-GETDISTATPOINT", super::curve::dist_at_point),
+    ctx!("VLAX-CURVE-GETPARAMATPOINT", super::curve::param_at_point),
+    ctx!("VLAX-CURVE-GETCLOSESTPOINTTO", super::curve::closest_point_to),
+    ctx!("VLAX-CURVE-GETCLOSESTPOINTTOPROJECTION", super::curve::closest_point_to_projection),
+    ctx!("VLAX-CURVE-GETFIRSTDERIV", super::curve::first_deriv),
+    ctx!("VLAX-CURVE-GETSECONDDERIV", super::curve::second_deriv),
+    ctx!("VLAX-CURVE-ISCLOSED", super::curve::is_closed),
+    ctx!("VLAX-CURVE-ISPERIODIC", super::curve::is_periodic),
+    ctx!("VLAX-CURVE-ISPLANAR", super::curve::is_planar),
 ];
 
 /// Bind the builtins and constants in a new environment.

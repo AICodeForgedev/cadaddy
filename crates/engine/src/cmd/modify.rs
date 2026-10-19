@@ -1373,6 +1373,15 @@ pub(crate) fn explode_kind(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<Vec<E
                 })
                 .collect(),
         ),
+        // A mesh explodes into its faces as 3D faces (larger faces fanned into triangles).
+        EntityKind::Mesh(m) => {
+            Some(m.to_faces().into_iter().map(|f| Entity { handle: Handle(0), common: e.common.clone(), kind: EntityKind::Face3d(f) }).collect())
+        }
+        // A solid explodes into the mesh of its surfaces.
+        EntityKind::Solid3d(so) => {
+            let m = cadaddy_render::solid_mesh(so, so.mesh_tol());
+            (!m.faces.is_empty()).then(|| vec![Entity { handle: Handle(0), common: e.common.clone(), kind: EntityKind::Mesh(m) }])
+        }
         EntityKind::MLine(m) => Some(super::draw2::mline::explode(e, m)),
         EntityKind::MText(m) => Some(
             cadaddy_fonts::plain_mtext(&m.contents)
@@ -1466,15 +1475,22 @@ pub(crate) fn explode_kind(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<Vec<E
     }
 }
 
-fn explode(s: &mut Session, hs: &[Handle]) -> Result<Vec<Handle>> {
+/// Explode `hs`: the new objects, and how many of `hs` couldn't be exploded (a line, a circle,
+/// one on a locked layer).
+fn explode(s: &mut Session, hs: &[Handle]) -> Result<(Vec<Handle>, usize)> {
     let space = s.space();
     let mut out = Vec::new();
+    let mut not = 0;
     for h in hs {
         if super::curves::is_locked(s, *h) {
+            not += 1;
             continue;
         }
         let Some(e) = s.doc()?.entity(*h).map(|e| (**e).clone()) else { continue };
-        let Some(parts) = explode_kind(s.doc()?, &e) else { continue };
+        let Some(parts) = explode_kind(s.doc()?, &e) else {
+            not += 1;
+            continue;
+        };
         // The pieces of an object are new objects: its xdata goes with it. A block reference's
         // pieces are copies of the block's objects and keep theirs.
         let own_pieces = !matches!(e.kind, EntityKind::Insert(_));
@@ -1492,13 +1508,27 @@ fn explode(s: &mut Session, hs: &[Handle]) -> Result<Vec<Handle>> {
         }
     }
     s.set_selection(Vec::new());
-    Ok(out)
+    Ok((out, not))
+}
+
+/// AutoCAD's report of objects EXPLODE left as they were.
+fn not_exploded(n: usize) -> String {
+    if n == 1 { "1 was not able to be exploded.".into() } else { format!("{n} were not able to be exploded.") }
 }
 
 fn run_explode(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
-    let r = explode(s, &hs)?;
-    Ok(json!({ "handles": r.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
+    let (r, not) = explode(s, &hs)?;
+    // Nothing exploded is an error, not a success that changed nothing (battle test 0.7.7c:
+    // it recorded no undo step, so the next U undid the command before it).
+    if r.is_empty() && not > 0 {
+        return Err(EngineError::Other(not_exploded(not)));
+    }
+    let mut out = json!({ "handles": r.iter().map(|h| h.hex()).collect::<Vec<_>>() });
+    if not > 0 {
+        out["message"] = json!(not_exploded(not));
+    }
+    Ok(out)
 }
 
 /// Break `h` between two points (or at one point when p1 == p2).
@@ -1769,7 +1799,13 @@ impl SelectThen {
                 Ok(Step::Done)
             }
             Op::Explode => {
-                explode(s, &self.objs)?;
+                let (made, not) = explode(s, &self.objs)?;
+                if not > 0 {
+                    s.echo(not_exploded(not));
+                }
+                if made.is_empty() {
+                    s.keep_undo_step();
+                }
                 Ok(Step::Done)
             }
             Op::Join => {

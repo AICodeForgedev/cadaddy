@@ -13,10 +13,42 @@ use crate::icons::{self, Icon};
 use crate::theme::Tokens;
 
 /// Dialog-local UI state (kept in egui memory between frames).
+/// The filter chosen in the tree.
+#[derive(Clone, Debug, Default, PartialEq)]
+enum Shown {
+    #[default]
+    All,
+    Used,
+    /// A layer filter of the drawing.
+    Filter(String),
+}
+
+/// The property filter being made or edited.
+#[derive(Clone, Debug, Default)]
+struct FilterForm {
+    /// The filter edited (None: a new one).
+    editing: Option<String>,
+    name: String,
+    /// Nest it in this filter.
+    parent: Option<String>,
+    rule_name: String,
+    color: String,
+    linetype: String,
+    description: String,
+    /// Any / Yes / No for On, Frozen, Locked, Plot.
+    on: Option<bool>,
+    frozen: Option<bool>,
+    locked: Option<bool>,
+    plot: Option<bool>,
+    error: Option<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 struct LpmState {
-    /// 0 = All, 1 = All Used Layers.
-    filter: u8,
+    filter: Shown,
+    /// Show the layers the filter leaves out.
+    invert: bool,
+    form: Option<FilterForm>,
     search: String,
     selected: Option<String>,
     /// (layer, buffer) while renaming.
@@ -221,6 +253,18 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let linetypes: Vec<cadaddy_doc::Linetype> = d.linetypes.clone();
     let library: Vec<String> = cadaddy_doc::library::standard_linetypes().into_iter().map(|l| l.name).filter(|n| d.linetype(n).is_none()).collect();
     let states: Vec<String> = d.layer_states.iter().map(|s| s.name.clone()).collect();
+    let filters: Vec<cadaddy_doc::LayerFilter> = d.layer_filters.clone();
+    if let Shown::Filter(f) = &st.filter
+        && !filters.iter().any(|x| &x.name == f)
+    {
+        st.filter = Shown::All;
+    }
+    let in_filter: Option<std::collections::HashSet<String>> = match &st.filter {
+        Shown::Filter(f) => {
+            cadaddy_engine::cmd::layer_filter_layers(d, f, false).ok().map(|v| v.into_iter().map(|n| n.to_ascii_lowercase()).collect())
+        }
+        _ => None,
+    };
     let mut layers: Vec<Layer> = d.layers.clone();
     layers.sort_by_key(|l| natural_lower(&l.name));
     if st.sort_desc {
@@ -230,7 +274,15 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let q = st.search.to_lowercase();
     let shown: Vec<Layer> = layers
         .into_iter()
-        .filter(|l| st.filter == 0 || used.contains(&l.name.to_ascii_lowercase()))
+        .filter(|l| {
+            let key = l.name.to_ascii_lowercase();
+            let pass = match &st.filter {
+                Shown::All => true,
+                Shown::Used => used.contains(&key),
+                Shown::Filter(_) => in_filter.as_ref().is_some_and(|f| f.contains(&key)),
+            };
+            pass != st.invert
+        })
         .filter(|l| q.is_empty() || crate_wild(&q, &l.name.to_lowercase()))
         .collect();
     let title = match &vp {
@@ -242,7 +294,12 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .open(open)
         .default_size(vec2(1180.0, 440.0))
         .min_width(640.0)
+        // Never wider than the window it sits in: the table scrolls sideways instead of its last
+        // columns being cut off at the screen edge (UI review 0.7.7b).
+        .max_width((ctx.content_rect().width() - 16.0).max(640.0))
         .resizable(true)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
             // ----- tool row -----
             ui.horizontal(|ui| {
@@ -267,6 +324,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     actions.push(("layer.current", json!({ "name": s })));
                 }
                 ui.separator();
+                if ui.button(crate::tl!("Layer States Manager...")).clicked() {
+                    actions.push(("ui.layerstates", json!({})));
+                }
                 // Layer states.
                 ui.label(crate::tl!("Layer State"));
                 let label = st.state_sel.clone().unwrap_or_else(|| crate::tl!("Unsaved Layer State").into());
@@ -317,14 +377,116 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 // resizable window offers its whole previous height, so the window grew every frame (#29).
                 ui.set_max_height(avail);
                 // ----- filter tree -----
-                ui.allocate_ui_with_layout(vec2(150.0, avail), egui::Layout::top_down(egui::Align::Min), |ui| {
-                    ui.set_min_width(150.0);
+                ui.allocate_ui_with_layout(vec2(190.0, avail), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_min_width(190.0);
                     ui.label(RichText::new(crate::tl!("Filters")).small().color(t.text_dim));
-                    for (i, l) in ["All", "All Used Layers"].iter().enumerate() {
+                    egui::ScrollArea::vertical().id_salt("lpm_filters").max_height(avail - 120.0).show(ui, |ui| {
+                        for (f, label, indent) in [(Shown::All, "All", 0.0), (Shown::Used, "All Used Layers", 14.0)] {
+                            ui.horizontal(|ui| {
+                                ui.add_space(indent);
+                                if ui.selectable_label(st.filter == f, crate::i18n::t(label)).clicked() {
+                                    st.filter = f.clone();
+                                }
+                            });
+                        }
+                        // The drawing's filters, nested under their parents.
+                        fn depth(fs: &[cadaddy_doc::LayerFilter], f: &cadaddy_doc::LayerFilter) -> usize {
+                            let mut n = 0;
+                            let mut p = f.parent.clone();
+                            while let Some(name) = p.filter(|_| n < 16) {
+                                n += 1;
+                                p = fs.iter().find(|x| x.name == name).and_then(|x| x.parent.clone());
+                            }
+                            n
+                        }
+                        let mut order: Vec<&cadaddy_doc::LayerFilter> = Vec::new();
+                        fn visit<'a>(
+                            fs: &'a [cadaddy_doc::LayerFilter],
+                            parent: Option<&str>,
+                            out: &mut Vec<&'a cadaddy_doc::LayerFilter>,
+                            guard: usize,
+                        ) {
+                            if guard > 16 {
+                                return;
+                            }
+                            for f in fs.iter().filter(|f| f.parent.as_deref() == parent) {
+                                out.push(f);
+                                visit(fs, Some(&f.name), out, guard + 1);
+                            }
+                        }
+                        visit(&filters, None, &mut order, 0);
+                        for f in order {
+                            let group = matches!(f.kind, cadaddy_doc::LayerFilterKind::Group { .. });
+                            ui.horizontal(|ui| {
+                                ui.add_space(14.0 * (1 + depth(&filters, f)) as f32);
+                                let mark = if group { "▣ " } else { "⚲ " };
+                                let sel = st.filter == Shown::Filter(f.name.clone());
+                                if ui.selectable_label(sel, format!("{mark}{}", f.name)).clicked() {
+                                    st.filter = Shown::Filter(f.name.clone());
+                                }
+                            });
+                        }
+                    });
+                    ui.checkbox(&mut st.invert, crate::tl!("Invert filter"));
+                    if ui.small_button(crate::tl!("New Property Filter...")).clicked() {
+                        let parent = match &st.filter {
+                            Shown::Filter(f) => Some(f.clone()),
+                            _ => None,
+                        };
+                        let mut n = 1;
+                        while filters.iter().any(|f| f.name == format!("Filter{n}")) {
+                            n += 1;
+                        }
+                        st.form = Some(FilterForm { name: format!("Filter{n}"), parent, ..FilterForm::default() });
+                    }
+                    if ui.small_button(crate::tl!("New Group Filter")).clicked() {
+                        let mut n = 1;
+                        while filters.iter().any(|f| f.name == format!("Group{n}")) {
+                            n += 1;
+                        }
+                        let layers: Vec<String> = st.selected.iter().cloned().collect();
+                        actions.push(("layer.filter.new", json!({ "name": format!("Group{n}"), "type": "group", "layers": layers })));
+                        st.filter = Shown::Filter(format!("Group{n}"));
+                    }
+                    if let Shown::Filter(name) = st.filter.clone()
+                        && let Some(f) = filters.iter().find(|f| f.name == name)
+                    {
                         ui.horizontal(|ui| {
-                            ui.add_space(if i == 0 { 0.0 } else { 14.0 });
-                            if ui.selectable_label(st.filter == i as u8, crate::i18n::t(l)).clicked() {
-                                st.filter = i as u8;
+                            match &f.kind {
+                                cadaddy_doc::LayerFilterKind::Property(r) => {
+                                    if ui.small_button(crate::tl!("Edit")).clicked() {
+                                        st.form = Some(FilterForm {
+                                            editing: Some(f.name.clone()),
+                                            name: f.name.clone(),
+                                            parent: f.parent.clone(),
+                                            rule_name: r.name.clone().unwrap_or_default(),
+                                            color: r.color.clone().unwrap_or_default(),
+                                            linetype: r.linetype.clone().unwrap_or_default(),
+                                            description: r.description.clone().unwrap_or_default(),
+                                            on: r.on,
+                                            frozen: r.frozen,
+                                            locked: r.locked,
+                                            plot: r.plot,
+                                            error: None,
+                                        });
+                                    }
+                                }
+                                cadaddy_doc::LayerFilterKind::Group { .. } => {
+                                    if ui.add_enabled(st.selected.is_some(), egui::Button::new(crate::tl!("Add Layer")).small()).clicked()
+                                        && let Some(l) = &st.selected
+                                    {
+                                        actions.push(("layer.filter.edit", json!({ "name": name, "addLayers": [l] })));
+                                    }
+                                    if ui.add_enabled(st.selected.is_some(), egui::Button::new(crate::tl!("Remove Layer")).small()).clicked()
+                                        && let Some(l) = &st.selected
+                                    {
+                                        actions.push(("layer.filter.edit", json!({ "name": name, "removeLayers": [l] })));
+                                    }
+                                }
+                            }
+                            if ui.small_button(crate::tl!("Delete")).clicked() {
+                                actions.push(("layer.filter.delete", json!({ "name": name })));
+                                st.filter = Shown::All;
                             }
                         });
                     }
@@ -336,7 +498,24 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 ui.separator();
                 // ----- the table -----
                 ui.vertical(|ui| {
-                    egui::ScrollArea::both().id_salt("lpm_table").auto_shrink([false, false]).max_height(avail).show(ui, |ui| {
+                    let width = ui.available_width();
+                    // Reopened (not shown last frame): back to the first columns, Status and Name,
+                    // instead of where it was scrolled sideways before.
+                    let pass = ui.ctx().cumulative_pass_nr();
+                    let shown_id = egui::Id::new("lpm_table_shown");
+                    let reopened = ui.data(|d| d.get_temp::<u64>(shown_id)).is_none_or(|last| last + 1 < pass);
+                    ui.data_mut(|d| d.insert_temp(shown_id, pass));
+                    let mut table = egui::ScrollArea::both()
+                        .id_salt("lpm_table")
+                        .auto_shrink([false, false])
+                        .max_height(avail)
+                        .max_width(width)
+                        // Visible without hovering, so the columns past the edge are discoverable.
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
+                    if reopened {
+                        table = table.scroll_offset(vec2(0.0, 0.0));
+                    }
+                    table.show(ui, |ui| {
                         let mut cols: Vec<&str> =
                             vec!["Status", "Name", "On", "Freeze", "Lock", "Plot", "Color", "Linetype", "Lineweight", "Transparency"];
                         if vp.is_some() {
@@ -386,8 +565,34 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 );
             });
         });
+    if let Some(mut form) = st.form.take() {
+        let (done, cancel) = filter_form(ctx, &mut form);
+        if done {
+            let rules = json!({
+                "name": form.rule_name, "color": form.color, "linetype": form.linetype, "description": form.description,
+                "on": form.on, "frozen": form.frozen, "locked": form.locked, "plot": form.plot,
+            });
+            let r = match &form.editing {
+                Some(old) => app.run("layer.filter.edit", json!({ "name": old, "newName": form.name, "rules": rules })),
+                None => app.run("layer.filter.new", json!({ "name": form.name, "type": "property", "parent": form.parent, "rules": rules })),
+            };
+            match r {
+                Ok(_) => st.filter = Shown::Filter(form.name.trim().to_string()),
+                Err(e) => {
+                    form.error = Some(e);
+                    st.form = Some(form);
+                }
+            }
+        } else if !cancel {
+            st.form = Some(form);
+        }
+    }
     ctx.data_mut(|dd| dd.insert_temp(sid, st));
     for (c, p) in actions {
+        if c == "ui.layerstates" {
+            crate::layerstates::open(app, Some("layers"));
+            continue;
+        }
         if c == "layer.set"
             && p.get("on") == Some(&Value::Bool(false))
             && let Some(name) = p.get("name").and_then(Value::as_str)
@@ -397,6 +602,60 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             let _ = app.run(c, p);
         }
     }
+}
+
+/// The Layer Filter Properties window: a property filter's name and rules. Returns (OK, Cancel).
+fn filter_form(ctx: &egui::Context, f: &mut FilterForm) -> (bool, bool) {
+    let (mut ok, mut cancel) = (false, false);
+    let mut open = true;
+    egui::Window::new(crate::tl!("Layer Filter Properties"))
+        .id(egui::Id::new("lpm_filter_form"))
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            egui::Grid::new("lpm_filter_grid").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
+                ui.label(crate::tl!("Filter name"));
+                ui.text_edit_singleline(&mut f.name);
+                ui.end_row();
+                if let Some(p) = &f.parent {
+                    ui.label(crate::tl!("Within"));
+                    ui.label(p);
+                    ui.end_row();
+                }
+                for (label, v) in
+                    [("Name", &mut f.rule_name), ("Color", &mut f.color), ("Linetype", &mut f.linetype), ("Description", &mut f.description)]
+                {
+                    ui.label(crate::i18n::t(label));
+                    ui.add(egui::TextEdit::singleline(v).hint_text("*"));
+                    ui.end_row();
+                }
+                for (label, v) in [("On", &mut f.on), ("Freeze", &mut f.frozen), ("Lock", &mut f.locked), ("Plot", &mut f.plot)] {
+                    ui.label(crate::i18n::t(label));
+                    egui::ComboBox::from_id_salt(("lpm_rule", label))
+                        .selected_text(match v {
+                            None => crate::tl!("Any"),
+                            Some(true) => crate::tl!("Yes"),
+                            Some(false) => crate::tl!("No"),
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(v, None, crate::tl!("Any"));
+                            ui.selectable_value(v, Some(true), crate::tl!("Yes"));
+                            ui.selectable_value(v, Some(false), crate::tl!("No"));
+                        });
+                    ui.end_row();
+                }
+            });
+            ui.label(RichText::new(crate::tl!("Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.")).small().weak());
+            if let Some(e) = &f.error {
+                ui.colored_label(Tokens::get().warn, e);
+            }
+            ui.horizontal(|ui| {
+                ok = ui.button(crate::tl!("OK")).clicked();
+                cancel = ui.button(crate::tl!("Cancel")).clicked();
+            });
+        });
+    (ok, cancel || !open)
 }
 
 /// A layer's On, Frozen or Locked from a palette or the ribbon. Turning the current layer off asks
@@ -492,6 +751,8 @@ fn row(
         }
         _ => {
             let (nr, r) = ui.allocate_exact_size(vec2(150.0, 20.0), Sense::click());
+            // Painted text: name the cell for screen readers (and tests) too.
+            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &name));
             if selected {
                 ui.painter().rect_filled(nr, 2.0, t.accent.gamma_multiply(0.45));
             } else if r.hovered() {

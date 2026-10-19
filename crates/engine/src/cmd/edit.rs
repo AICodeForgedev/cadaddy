@@ -547,6 +547,7 @@ fn run_select(s: &mut Session, p: &Value) -> Result<Value> {
     let space = s.space();
     let add = bool_or(p, "add", false);
     let mut candidates: Option<Vec<Handle>> = None;
+    let mut named = false;
     let picked: Vec<Handle> = if let Some(w) = points_param(p, "window") {
         let (Some(a), Some(b)) = (w.first(), w.get(1)) else { return Err(bad("select", "window needs 2 corners")) };
         crate::select::select_window(s.doc()?, &space, Bounds2::new(*a, *b), bool_or(p, "crossing", false))
@@ -577,8 +578,12 @@ fn run_select(s: &mut Session, p: &Value) -> Result<Value> {
     } else if let Some(f) = points_param(p, "fence") {
         crate::select::select_fence(s.doc()?, &space, &f)
     } else {
+        named = true;
         targets(s, p)?
     };
+    // A pick takes whole groups (PICKSTYLE), as typed picks and clicks do (battle test 0.7.7c);
+    // handles named one by one are taken as named.
+    let picked = if named { picked } else { super::groups::expand(s, picked) };
     let mut sel = if add { s.selection() } else { Vec::new() };
     sel.extend(picked);
     s.set_selection(sel);

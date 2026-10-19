@@ -42,9 +42,11 @@ fn connect_without_address_fails_before_serving() {
     }
 }
 
+/// `--headless`, so an open CADaddy on the agent port doesn't take the session (the automatic
+/// fallback has its own test in the MCP crate).
 #[test]
 fn no_connect_still_serves_headless() {
-    let out = mcp(&[], &format!("{INIT}\n{CIRCLE}\n"));
+    let out = mcp(&["--headless"], &format!("{INIT}\n{CIRCLE}\n"));
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let r = replies(&out);
     let instructions = r.iter().find(|v| v["id"] == 1).and_then(|v| v["result"]["instructions"].as_str()).unwrap_or_default();
@@ -82,11 +84,9 @@ fn connect_with_address_routes_to_that_endpoint() {
 
 #[test]
 fn connect_to_closed_port_fails() {
-    let addr = {
-        let l = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        l.local_addr().expect("local addr").to_string()
-    };
-    let out = mcp(&["--connect", &addr], &format!("{INIT}\n"));
+    // Port 0 never accepts a connection. (A port freed by dropping a listener could be taken by a
+    // test running in parallel before this one connects.)
+    let out = mcp(&["--connect", "127.0.0.1:0"], &format!("{INIT}\n"));
     assert!(!out.status.success());
     assert!(out.stdout.is_empty());
     assert!(String::from_utf8_lossy(&out.stderr).contains("cannot connect to"));

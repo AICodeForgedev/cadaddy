@@ -789,7 +789,12 @@ impl crate::Session {
         }
         // Polar angles relative to the last segment when the base point is where it ends.
         let last = self.last_segment.filter(|(_, b)| q.base.is_some_and(|base| base.near(*b, 1e-9 * (1.0 + b.len())))).map(|(a, b)| a.angle_to(b));
-        let cfg = TrackConfig::relative_to(&s, angbase, last);
+        // Polar angles and the orthogonal tracking paths follow the current UCS's axes.
+        let ucs = crate::ucs::Frame::current(&doc).angle;
+        let mut cfg = TrackConfig::relative_to(&s, angbase + ucs, last);
+        if s.polar_flags & polarmode::TRACK_POLAR == 0 && ucs != 0.0 {
+            cfg.track_angles = cfg.track_angles.iter().map(|a| cadaddy_geom::norm_angle(a + ucs)).collect();
+        }
         let osmode = s.osmode | if s.osnaphatch { mode::HATCH } else { 0 };
         let ix = crate::spatial::index(&doc, &space);
         let (hit, near_prims) = super::osnap_with_neighborhood(&doc, &space, &ix, raw, q.aperture, osmode, q.base, q.deferred);
@@ -825,7 +830,7 @@ impl crate::Session {
             && s.orthomode
             && !q.corner
         {
-            p = super::iso::ortho(&self.settings, b, p);
+            p = super::iso::ortho(&self.settings, b, p, crate::ucs::Frame::current(&doc).angle);
         }
         CursorSnap { point: p, snap: None, track: None, wait }
     }

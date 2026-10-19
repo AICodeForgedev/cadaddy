@@ -170,7 +170,9 @@ pub fn constrain(entry: &Entry<'_>, frame: &Frame, p: Vec2, second_locked: bool)
 /// (nothing split yet: a plain number stays direct distance entry). Empty boxes take the cursor's
 /// value. Entries measured from the last point are sent with `@` when the prompt's base is the
 /// session's last point (`last`, what `@` resolves against); otherwise, and for absolute entries,
-/// the finished point is sent as `#x,y`, so what was previewed is exactly what is placed.
+/// the finished point is sent as `*x,y`, so what was previewed is exactly what is placed. The
+/// preview is in world coordinates, so every form is sent as a world one (`*`), whatever UCS is
+/// current.
 pub fn complete(entry: &Entry<'_>, frame: &Frame, cursor: Vec2, last: Vec2) -> Option<String> {
     if !entry.split {
         return None;
@@ -180,16 +182,16 @@ pub fn complete(entry: &Entry<'_>, frame: &Frame, cursor: Vec2, last: Vec2) -> O
     let second = entry.second_value().unwrap_or(live_second);
     if frame.relative() && frame.base == Some(last) {
         return Some(match entry.format {
-            Format::Cartesian => format!("@{first},{second}"),
+            Format::Cartesian => format!("@*{first},{second}"),
             // `<<`: degrees from +X counterclockwise, as previewed, whatever ANGBASE/ANGDIR say.
-            Format::Polar => format!("@{first}<<{}", second.to_degrees()),
+            Format::Polar => format!("@*{first}<<{}", second.to_degrees()),
         });
     }
     let p = match entry.format {
         Format::Cartesian => frame.origin() + Vec2::new(first, second),
         Format::Polar => frame.origin() + Vec2::from_angle(second) * first,
     };
-    p.is_finite().then(|| format!("#{},{}", p.x, p.y))
+    p.is_finite().then(|| format!("*{},{}", p.x, p.y))
 }
 
 /// The Dynamic Input options menu (DYNPROMPT): Down Arrow at a prompt with keywords lists them
@@ -352,11 +354,11 @@ mod tests {
         let base = Vec2::new(0.0, 60.0);
         let f = second_point(base);
         let e = parse("40,40", &f).unwrap();
-        assert_eq!(complete(&e, &f, Vec2::ZERO, base).as_deref(), Some("@40,40"));
+        assert_eq!(complete(&e, &f, Vec2::ZERO, base).as_deref(), Some("@*40,40"));
         // A prompt whose base is not the last point: send the finished point itself.
         let other_last = Vec2::new(500.0, 500.0);
         let t = complete(&e, &f, Vec2::ZERO, other_last).unwrap();
-        assert!(t.starts_with('#'), "{t}");
+        assert!(t.starts_with('*'), "a world point, whatever the UCS: {t}");
         assert!(close(cadaddy_engine::prompt::parse_point(&t, other_last), Vec2::new(40.0, 100.0)));
         // Polar too.
         let e = parse("40<90", &f).unwrap();

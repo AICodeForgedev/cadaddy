@@ -71,6 +71,9 @@ const SESSION_VARS: &[&str] = &[
     "SAVETIME",
     "SAVEFILEPATH",
     "AUDITCTL",
+    "DWGCOPY",
+    "DCTMAIN",
+    "DCTCUST",
 ];
 
 pub fn get(s: &Session, name: &str) -> Option<Value> {
@@ -151,6 +154,13 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "SAVETIME" => json!(crate::autosave::savetime()),
         "SAVEFILEPATH" => json!(crate::autosave::savefilepath()),
         "AUDITCTL" => json!(i32::from(crate::audit::auditctl())),
+        // Saving a .cdy file also writes a DWG copy (a profile setting).
+        "DWGCOPY" => json!(i32::from(crate::cmd::file::dwg_copy())),
+        // Spelling dictionaries: the main one (only American English ships) and the user's file.
+        "DCTMAIN" => json!(crate::cmd::spell::MAIN_CODE),
+        "DCTCUST" => json!(crate::cmd::spell::dctcust()),
+        "SUNSTATUS" => json!(i32::from(s.doc().ok()?.sun.on)),
+        "RENDEREXPOSURE" => json!(s.doc().ok()?.sun.exposure),
         "CMDNAMES" => json!(s.running.as_ref().map(|r| r.id.to_ascii_uppercase()).unwrap_or_default()),
         // A drawing not saved yet is named as AutoCAD names it, "Drawing1.dwg".
         "DWGNAME" => json!(
@@ -288,6 +298,8 @@ const READ_HEADER_VARS: &[&str] = &[
     "SNAPUNIT",
     "SPLINESEGS",
     "SPLKNOTS",
+    "STEPSIZE",
+    "STEPSPERSEC",
     "TEXTFILL",
     "TEXTSIZE",
     "TEXTSTYLE",
@@ -302,10 +314,20 @@ const READ_HEADER_VARS: &[&str] = &[
 fn header_default(n: &str) -> Option<Value> {
     match n {
         "HPGAPTOL" => Some(json!(0.0)),
+        // 3DWALK / 3DFLY: drawing units a step takes, and steps a second.
+        "STEPSIZE" => Some(json!(6.0)),
+        "STEPSPERSEC" => Some(json!(2.0)),
         "ATTREQ" => Some(json!(1)),
         "USERI1" | "USERI2" | "USERI3" | "USERI4" | "USERI5" => Some(json!(0)),
         "USERR1" | "USERR2" | "USERR3" | "USERR4" | "USERR5" => Some(json!(0.0)),
         "USERS1" | "USERS2" | "USERS3" | "USERS4" | "USERS5" => Some(json!("")),
+        // The base relative hyperlinks resolve against ("": the drawing's folder).
+        "HYPERLINKBASE" => Some(json!("")),
+        // The material new objects get (MATERIALASSIGN's default).
+        "CMATERIAL" => Some(json!("ByLayer")),
+        // Rendered views' sun on/off and exposure, kept with the drawing's sun.
+        "SUNSTATUS" => Some(json!(1)),
+        "RENDEREXPOSURE" => Some(json!(0.0)),
         _ => None,
     }
 }
@@ -325,7 +347,7 @@ fn as_f64(v: &Value) -> Option<f64> {
     v.as_f64().or_else(|| v.as_str().and_then(crate::units::parse_distance)).filter(|f| f.is_finite())
 }
 /// DWGPREFIX: everything up to the last path separator of `path`, or the current folder.
-fn dwg_prefix(path: Option<&str>) -> String {
+pub(crate) fn dwg_prefix(path: Option<&str>) -> String {
     if let Some(p) = path
         && let Some(i) = p.rfind(['/', '\\'])
     {
@@ -482,6 +504,23 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         ),
         "SAVEFILEPATH" => crate::autosave::set_savefilepath(v.as_str().ok_or_else(bad)?),
         "AUDITCTL" => crate::audit::set_auditctl(as_i(v).filter(|b| (0..=1).contains(b)).ok_or_else(bad)? == 1),
+        "DWGCOPY" => crate::cmd::file::set_dwg_copy(as_bool(v).ok_or_else(bad)?),
+        "DCTMAIN" => {
+            let code = v.as_str().ok_or_else(bad)?.trim();
+            if !code.eq_ignore_ascii_case(crate::cmd::spell::MAIN_CODE) {
+                return Err(crate::EngineError::Other(format!(
+                    "Only the American English dictionary (\"{}\") is available.",
+                    crate::cmd::spell::MAIN_CODE
+                )));
+            }
+        }
+        "DCTCUST" => {
+            let path = v.as_str().ok_or_else(bad)?;
+            if path.len() > 4096 {
+                return Err(bad());
+            }
+            crate::cmd::spell::set_dctcust(path);
+        }
         // A number is in degrees; text is an angle typed in AUNITS (SETVAR at the command line).
         "ANGBASE" => {
             let a = match v {
@@ -494,6 +533,30 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         // AutoCAD's range: gaps up to 5000 drawing units close a hatch boundary.
         "HPGAPTOL" => s.doc_mut()?.header.set_f64("HPGAPTOL", as_f64(v).filter(|g| (0.0..=5000.0).contains(g)).ok_or_else(bad)?),
         "CONSTRAINTINFER" => s.doc_mut()?.parametric.settings.infer = as_bool(v).ok_or_else(bad)?,
+        // Text, whatever it looks like (a base such as "2024" stays text).
+        "HYPERLINKBASE" => {
+            let t = match v {
+                Value::String(t) => t.trim().chars().take(cadaddy_doc::hyperlink::MAX_LEN).collect(),
+                Value::Number(x) => x.to_string(),
+                _ => return Err(bad()),
+            };
+            s.doc_mut()?.header.set("HYPERLINKBASE", cadaddy_doc::HVal::Str(t));
+        }
+        "SUNSTATUS" => s.doc_mut()?.sun.on = as_bool(v).ok_or_else(bad)?,
+        "RENDEREXPOSURE" => s.doc_mut()?.sun.exposure = as_f64(v).filter(|e| (-20.0..=20.0).contains(e)).ok_or_else(bad)?,
+        // ByLayer, ByBlock or one of the drawing's materials.
+        "CMATERIAL" => {
+            let t = v.as_str().map(str::trim).ok_or_else(bad)?;
+            let d = s.doc()?;
+            let name = if t.eq_ignore_ascii_case(cadaddy_doc::material::BY_LAYER) || t.is_empty() {
+                cadaddy_doc::material::BY_LAYER.to_string()
+            } else if t.eq_ignore_ascii_case(cadaddy_doc::material::BY_BLOCK) {
+                cadaddy_doc::material::BY_BLOCK.to_string()
+            } else {
+                d.material(t).map(|m| m.name.clone()).ok_or_else(bad)?
+            };
+            s.doc_mut()?.header.set_str("CMATERIAL", &name);
+        }
         _ => {
             if let Some(r) = table::set(s, &n, v) {
                 return r;

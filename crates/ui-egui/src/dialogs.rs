@@ -20,8 +20,16 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "qselect" => crate::quick::qselect_dialog(app, ctx, &mut open),
         "parameters" => crate::parametric::parameters_dialog(app, ctx, &mut open),
         "dsettings" => dsettings(app, ctx, &mut open),
+        "purge" => crate::cmddlgs::purge(app, ctx, &mut open),
+        "find" => crate::cmddlgs::find(app, ctx, &mut open),
+        "color" => crate::cmddlgs::color(app, ctx, &mut open),
         "units" => units(app, ctx, &mut open),
+        crate::hyperlinks::DIALOG => crate::hyperlinks::dialog(app, ctx, &mut open),
+        crate::materials::DIALOG => crate::materials::dialog(app, ctx, &mut open),
         "hatch" => crate::hatchdlg::dialog(app, ctx, &mut open),
+        "dataextraction" => crate::extractdlg::dialog(app, ctx, &mut open),
+        "spell" => crate::spelldlg::dialog(app, ctx, &mut open),
+        "layerstates" => crate::layerstates::dialog(app, ctx, &mut open),
         "about" => about(ctx, &mut open),
         "pdfimport" => crate::pdfdlg::dialog(app, ctx, &mut open),
         "tolerance" => crate::toldlg::dialog(app, ctx, &mut open),
@@ -31,6 +39,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "bedit" => crate::bedit::dialog(app, ctx, &mut open),
         "authoring" => crate::bedit::authoring_dialog(app, ctx, &mut open),
         "stylesmanager" => crate::plotstyles::dialog(app, ctx, &mut open),
+        "etransmit" => crate::etransmit::dialog(app, ctx, &mut open),
         o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }
@@ -43,107 +52,142 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
 fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let settings = app.session.drafting_settings();
     let (mut snapunit, mut gridunit) = (settings.snapunit, settings.gridunit);
-    egui::Window::new(crate::tl!("Drafting Settings")).id(egui::Id::new("Drafting Settings")).open(open).resizable(false).show(ctx, |ui| {
-        let s = &mut app.session.settings;
-        ui.heading(crate::tl!("Snap and Grid"));
-        ui.checkbox(&mut s.snapmode, crate::tl!("Snap On (F9)"));
-        // SNAPSTYL: the isometric snap and grid (ISODRAFT).
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut s.isodraft, false, crate::tl!("Rectangular snap"));
-            ui.radio_value(&mut s.isodraft, true, crate::tl!("Isometric snap"));
-        });
-        ui.horizontal(|ui| {
-            ui.label(crate::tl!("Snap X spacing"));
-            ui.add(egui::DragValue::new(&mut snapunit.x).speed(0.05).range(0.0001..=1e6).clamp_existing_to_range(false));
-            ui.label(crate::tl!("Y"));
-            ui.add(egui::DragValue::new(&mut snapunit.y).speed(0.05).range(0.0001..=1e6).clamp_existing_to_range(false));
-        });
-        // SNAPTYPE and POLARDIST.
-        ui.horizontal(|ui| {
-            ui.label(crate::tl!("Snap type"));
-            ui.radio_value(&mut s.polarsnap, false, crate::tl!("Grid snap"));
-            ui.radio_value(&mut s.polarsnap, true, crate::tl!("PolarSnap"));
-        });
-        ui.add_enabled_ui(s.polarsnap, |ui| {
+    egui::Window::new(crate::tl!("Drafting Settings"))
+        .id(egui::Id::new("Drafting Settings"))
+        .open(open)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            let s = &mut app.session.settings;
+            // Tabs, as in AutoCAD: one tall column clipped on short windows (UI review 0.7.7b).
+            let tab_id = egui::Id::new("dsettings_tab");
+            let mut tab = ui.data(|d| d.get_temp::<usize>(tab_id)).unwrap_or(0);
             ui.horizontal(|ui| {
-                ui.label(crate::tl!("Polar distance"));
-                ui.add(egui::DragValue::new(&mut s.polardist).speed(0.05).range(0.0..=1e6));
-            });
-        });
-        ui.checkbox(&mut s.gridmode, crate::tl!("Grid On (F7)"));
-        ui.horizontal(|ui| {
-            ui.label(crate::tl!("Grid spacing"));
-            ui.add(egui::DragValue::new(&mut gridunit.x).speed(0.05).range(0.0..=1e6).clamp_existing_to_range(false));
-            ui.label(crate::tl!("Major line every"));
-            ui.add(egui::DragValue::new(&mut s.gridmajor).range(1..=100));
-        });
-        ui.separator();
-        ui.heading(crate::tl!("Polar Tracking"));
-        if ui.checkbox(&mut s.polarmode, crate::tl!("Polar Tracking On (F10)")).changed() && s.polarmode {
-            s.orthomode = false;
-        }
-        let mut deg = s.polarang.to_degrees();
-        ui.horizontal(|ui| {
-            ui.label(crate::tl!("Increment angle"));
-            egui::ComboBox::from_id_salt("polarang").selected_text(format!("{deg}")).show_ui(ui, |ui| {
-                for a in [90.0, 45.0, 30.0, 22.5, 18.0, 15.0, 10.0, 5.0] {
-                    ui.selectable_value(&mut deg, a, format!("{a}"));
-                }
-            });
-        });
-        s.polarang = deg.to_radians();
-        tracking_options(ui, s);
-        ui.separator();
-        ui.heading(crate::tl!("Object Snap"));
-        let mut on = s.osmode & cadaddy_engine::snap::mode::OFF == 0;
-        if ui.checkbox(&mut on, crate::tl!("Object Snap On (F3)")).changed() {
-            if on {
-                s.osmode &= !cadaddy_engine::snap::mode::OFF;
-            } else {
-                s.osmode |= cadaddy_engine::snap::mode::OFF;
-            }
-        }
-        egui::Grid::new("osnap_grid").num_columns(2).show(ui, |ui| {
-            for (i, (bit, name)) in cadaddy_engine::snap::mode::ALL.iter().enumerate() {
-                let mut v = s.osmode & bit != 0;
-                if ui.checkbox(&mut v, crate::i18n::t(name)).changed() {
-                    if v {
-                        s.osmode |= bit;
-                    } else {
-                        s.osmode &= !bit;
+                for (i, label) in DSETTINGS_TABS.iter().enumerate() {
+                    if ui.selectable_label(tab == i, crate::i18n::t(label)).clicked() {
+                        tab = i;
                     }
                 }
-                if i % 2 == 1 {
-                    ui.end_row();
-                }
-            }
-        });
-        ui.separator();
-        ui.checkbox(&mut s.dynmode, crate::tl!("Enable Dynamic Input (F12)"));
-        // Pointer input format for second and next points (DYNPIFORMAT, DYNPICOORDS).
-        ui.indent("dynpi", |ui| {
-            ui.add_enabled_ui(s.dynmode, |ui| {
-                ui.label(crate::tl!("Second and next points:"));
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut s.dynpi_cartesian, false, crate::tl!("Polar (distance < angle)"));
-                    ui.radio_value(&mut s.dynpi_cartesian, true, crate::tl!("Cartesian (x, y)"));
-                });
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut s.dynpi_absolute, false, crate::tl!("Relative"));
-                    ui.radio_value(&mut s.dynpi_absolute, true, crate::tl!("Absolute"));
-                });
-                // DYNPROMPT: the prompt and its options (Down Arrow) beside the cursor.
-                ui.checkbox(&mut s.dynprompt, crate::tl!("Show command prompting near the crosshairs"));
             });
+            ui.data_mut(|d| d.insert_temp(tab_id, tab));
+            ui.separator();
+            ui.set_min_width(380.0);
+            match tab {
+                0 => snap_and_grid(ui, s, &mut snapunit, &mut gridunit),
+                1 => polar_tab(ui, s),
+                2 => osnap_tab(ui, s),
+                _ => dynamic_input_tab(ui, s),
+            }
+            ui.separator();
+            ui.checkbox(&mut s.orthomode, crate::tl!("Ortho (F8)"));
         });
-        ui.checkbox(&mut s.orthomode, crate::tl!("Ortho (F8)"));
-    });
     // Drawing edits go through the same command as the CLI, including dirty state and undo.
     for (name, before, after) in [("SNAPUNIT", settings.snapunit, snapunit), ("GRIDUNIT", settings.gridunit, gridunit)] {
         if before != after {
             let _ = app.run("setvar", json!({ "name": name, "value": [after.x, after.y] }));
         }
     }
+}
+
+/// Drafting Settings' tabs.
+const DSETTINGS_TABS: [&str; 4] = ["Snap and Grid", "Polar Tracking", "Object Snap", "Dynamic Input"];
+
+fn snap_and_grid(ui: &mut egui::Ui, s: &mut cadaddy_engine::Settings, snapunit: &mut cadaddy_geom::Vec2, gridunit: &mut cadaddy_geom::Vec2) {
+    ui.checkbox(&mut s.snapmode, crate::tl!("Snap On (F9)"));
+    // SNAPSTYL: the isometric snap and grid (ISODRAFT).
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut s.isodraft, false, crate::tl!("Rectangular snap"));
+        ui.radio_value(&mut s.isodraft, true, crate::tl!("Isometric snap"));
+    });
+    ui.horizontal(|ui| {
+        ui.label(crate::tl!("Snap X spacing"));
+        ui.add(egui::DragValue::new(&mut snapunit.x).speed(0.05).range(0.0001..=1e6).clamp_existing_to_range(false));
+        ui.label(crate::tl!("Y"));
+        ui.add(egui::DragValue::new(&mut snapunit.y).speed(0.05).range(0.0001..=1e6).clamp_existing_to_range(false));
+    });
+    // SNAPTYPE and POLARDIST.
+    ui.horizontal(|ui| {
+        ui.label(crate::tl!("Snap type"));
+        ui.radio_value(&mut s.polarsnap, false, crate::tl!("Grid snap"));
+        ui.radio_value(&mut s.polarsnap, true, crate::tl!("PolarSnap"));
+    });
+    ui.add_enabled_ui(s.polarsnap, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(crate::tl!("Polar distance"));
+            ui.add(egui::DragValue::new(&mut s.polardist).speed(0.05).range(0.0..=1e6));
+        });
+    });
+    ui.checkbox(&mut s.gridmode, crate::tl!("Grid On (F7)"));
+    ui.horizontal(|ui| {
+        ui.label(crate::tl!("Grid spacing"));
+        ui.add(egui::DragValue::new(&mut gridunit.x).speed(0.05).range(0.0..=1e6).clamp_existing_to_range(false));
+        ui.label(crate::tl!("Major line every"));
+        ui.add(egui::DragValue::new(&mut s.gridmajor).range(1..=100));
+    });
+}
+
+fn polar_tab(ui: &mut egui::Ui, s: &mut cadaddy_engine::Settings) {
+    if ui.checkbox(&mut s.polarmode, crate::tl!("Polar Tracking On (F10)")).changed() && s.polarmode {
+        s.orthomode = false;
+    }
+    let mut deg = s.polarang.to_degrees();
+    ui.horizontal(|ui| {
+        ui.label(crate::tl!("Increment angle"));
+        egui::ComboBox::from_id_salt("polarang").selected_text(format!("{deg}")).show_ui(ui, |ui| {
+            for a in [90.0, 45.0, 30.0, 22.5, 18.0, 15.0, 10.0, 5.0] {
+                ui.selectable_value(&mut deg, a, format!("{a}"));
+            }
+        });
+    });
+    s.polarang = deg.to_radians();
+    tracking_options(ui, s);
+}
+
+fn osnap_tab(ui: &mut egui::Ui, s: &mut cadaddy_engine::Settings) {
+    let mut on = s.osmode & cadaddy_engine::snap::mode::OFF == 0;
+    if ui.checkbox(&mut on, crate::tl!("Object Snap On (F3)")).changed() {
+        if on {
+            s.osmode &= !cadaddy_engine::snap::mode::OFF;
+        } else {
+            s.osmode |= cadaddy_engine::snap::mode::OFF;
+        }
+    }
+    egui::Grid::new("osnap_grid").num_columns(2).show(ui, |ui| {
+        for (i, (bit, name)) in cadaddy_engine::snap::mode::ALL.iter().enumerate() {
+            let mut v = s.osmode & bit != 0;
+            if ui.checkbox(&mut v, crate::i18n::t(name)).changed() {
+                if v {
+                    s.osmode |= bit;
+                } else {
+                    s.osmode &= !bit;
+                }
+            }
+            if i % 2 == 1 {
+                ui.end_row();
+            }
+        }
+    });
+}
+
+fn dynamic_input_tab(ui: &mut egui::Ui, s: &mut cadaddy_engine::Settings) {
+    ui.checkbox(&mut s.dynmode, crate::tl!("Enable Dynamic Input (F12)"));
+    // Pointer input format for second and next points (DYNPIFORMAT, DYNPICOORDS).
+    ui.indent("dynpi", |ui| {
+        ui.add_enabled_ui(s.dynmode, |ui| {
+            ui.label(crate::tl!("Second and next points:"));
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut s.dynpi_cartesian, false, crate::tl!("Polar (distance < angle)"));
+                ui.radio_value(&mut s.dynpi_cartesian, true, crate::tl!("Cartesian (x, y)"));
+            });
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut s.dynpi_absolute, false, crate::tl!("Relative"));
+                ui.radio_value(&mut s.dynpi_absolute, true, crate::tl!("Absolute"));
+            });
+            // DYNPROMPT: the prompt and its options (Down Arrow) beside the cursor.
+            ui.checkbox(&mut s.dynprompt, crate::tl!("Show command prompting near the crosshairs"));
+        });
+    });
 }
 
 /// The polar and object snap tracking options of Drafting Settings: additional angles
@@ -248,47 +292,53 @@ fn units(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             .unwrap_or([2, 4, 0, 0, 1])
     });
     let (mut apply, mut cancel) = (false, false);
-    egui::Window::new("Drawing Units").open(open).resizable(false).collapsible(false).show(ctx, |ui| {
-        let [lu, lp, au, ap, ins] = &mut v;
-        let types = |t: &[(i64, &str)]| t.iter().map(|(k, l)| (*k, l.to_string())).collect::<Vec<_>>();
-        egui::Grid::new("units_grid").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
-            ui.strong("Length");
-            ui.end_row();
-            ui.label("Type");
-            pick(ui, "units_lunits", lu, &types(&LENGTH_TYPES));
-            ui.end_row();
-            ui.label("Precision");
-            pick(ui, "units_luprec", lp, &(0..=8).map(|p| (p, format_distance(1.5, *lu, p))).collect::<Vec<_>>());
-            ui.end_row();
-            ui.strong("Angle");
-            ui.end_row();
-            ui.label("Type");
-            pick(ui, "units_aunits", au, &types(&ANGLE_TYPES));
-            ui.end_row();
-            ui.label("Precision");
-            pick(ui, "units_auprec", ap, &(0..=8).map(|p| (p, format_angle(45f64.to_radians(), *au, p))).collect::<Vec<_>>());
-            ui.end_row();
-            ui.strong("Insertion scale");
-            ui.end_row();
-            ui.label("Units to scale inserted content");
-            let names = INSERTION_UNITS.iter().enumerate().map(|(k, l)| (k as i64, l.to_string())).collect::<Vec<_>>();
-            pick(ui, "units_insunits", ins, &names);
-            ui.end_row();
-            ui.strong("Sample output");
-            ui.end_row();
-            ui.label("");
-            ui.label(format!("{},{},{}", format_distance(1.5, *lu, *lp), format_distance(2.0039, *lu, *lp), format_distance(0.0, *lu, *lp)));
-            ui.end_row();
-            ui.label("");
-            ui.label(format_angle(45f64.to_radians(), *au, *ap));
-            ui.end_row();
+    egui::Window::new("Drawing Units")
+        .open(open)
+        .resizable(false)
+        .collapsible(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            let [lu, lp, au, ap, ins] = &mut v;
+            let types = |t: &[(i64, &str)]| t.iter().map(|(k, l)| (*k, l.to_string())).collect::<Vec<_>>();
+            egui::Grid::new("units_grid").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
+                ui.strong("Length");
+                ui.end_row();
+                ui.label("Type");
+                pick(ui, "units_lunits", lu, &types(&LENGTH_TYPES));
+                ui.end_row();
+                ui.label("Precision");
+                pick(ui, "units_luprec", lp, &(0..=8).map(|p| (p, format_distance(1.5, *lu, p))).collect::<Vec<_>>());
+                ui.end_row();
+                ui.strong("Angle");
+                ui.end_row();
+                ui.label("Type");
+                pick(ui, "units_aunits", au, &types(&ANGLE_TYPES));
+                ui.end_row();
+                ui.label("Precision");
+                pick(ui, "units_auprec", ap, &(0..=8).map(|p| (p, format_angle(45f64.to_radians(), *au, p))).collect::<Vec<_>>());
+                ui.end_row();
+                ui.strong("Insertion scale");
+                ui.end_row();
+                ui.label("Units to scale inserted content");
+                let names = INSERTION_UNITS.iter().enumerate().map(|(k, l)| (k as i64, l.to_string())).collect::<Vec<_>>();
+                pick(ui, "units_insunits", ins, &names);
+                ui.end_row();
+                ui.strong("Sample output");
+                ui.end_row();
+                ui.label("");
+                ui.label(format!("{},{},{}", format_distance(1.5, *lu, *lp), format_distance(2.0039, *lu, *lp), format_distance(0.0, *lu, *lp)));
+                ui.end_row();
+                ui.label("");
+                ui.label(format_angle(45f64.to_radians(), *au, *ap));
+                ui.end_row();
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                apply = ui.button("OK").clicked();
+                cancel = ui.button("Cancel").clicked();
+            });
         });
-        ui.separator();
-        ui.horizontal(|ui| {
-            apply = ui.button("OK").clicked();
-            cancel = ui.button("Cancel").clicked();
-        });
-    });
     if apply {
         let [lu, lp, au, ap, ins] = v;
         let _ = app.run("units", json!({ "lunits": lu, "luprec": lp, "aunits": au, "auprec": ap, "insunits": ins }));
@@ -309,6 +359,8 @@ fn about(ctx: &egui::Context, open: &mut bool) {
         .open(open)
         .default_size(vec2(640.0, 420.0))
         .collapsible(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
             let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
             ui.horizontal(|ui| {
@@ -343,9 +395,13 @@ fn about(ctx: &egui::Context, open: &mut bool) {
 
 fn commands(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let mut start = None;
-    egui::Window::new(crate::tl!("Command Reference")).id(egui::Id::new("Command Reference")).open(open).default_size(vec2(640.0, 480.0)).show(
-        ctx,
-        |ui| {
+    egui::Window::new(crate::tl!("Command Reference"))
+        .id(egui::Id::new("Command Reference"))
+        .open(open)
+        .default_size(vec2(640.0, 480.0))
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
             let id = ui.id().with("cmdfilter");
             let mut filter = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_default();
             ui.horizontal(|ui| {
@@ -373,8 +429,7 @@ fn commands(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     }
                 });
             });
-        },
-    );
+        });
     if let Some(c) = start {
         app.ui.dialog = None;
         app.start(c);
@@ -383,18 +438,24 @@ fn commands(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 
 fn blocks(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let mut pick = None;
-    egui::Window::new(crate::tl!("Blocks")).id(egui::Id::new("Blocks")).open(open).default_size(vec2(320.0, 360.0)).show(ctx, |ui| {
-        let Ok(d) = app.session.doc() else { return };
-        let names: Vec<&String> = d.blocks.keys().filter(|k| !k.starts_with('*')).collect();
-        if names.is_empty() {
-            ui.label(crate::tl!("No blocks defined in this drawing."));
-        }
-        for n in names {
-            if ui.button(n).on_hover_text(crate::tl!("Insert this block")).clicked() {
-                pick = Some(n.clone());
+    egui::Window::new(crate::tl!("Blocks"))
+        .id(egui::Id::new("Blocks"))
+        .open(open)
+        .default_size(vec2(320.0, 360.0))
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            let Ok(d) = app.session.doc() else { return };
+            let names: Vec<&String> = d.blocks.keys().filter(|k| !k.starts_with('*')).collect();
+            if names.is_empty() {
+                ui.label(crate::tl!("No blocks defined in this drawing."));
             }
-        }
-    });
+            for n in names {
+                if ui.button(n).on_hover_text(crate::tl!("Insert this block")).clicked() {
+                    pick = Some(n.clone());
+                }
+            }
+        });
     if let Some(n) = pick {
         insert_block(app, &n);
     }
@@ -413,16 +474,22 @@ fn insert_block(app: &mut CadApp, name: &str) {
 }
 
 fn language(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
-    egui::Window::new(crate::tl!("Interface Language")).id(egui::Id::new("interface_language")).open(open).resizable(false).show(ctx, |ui| {
-        egui::ComboBox::from_id_salt("interface_language_choice").selected_text(app.ui.interface_language.name()).show_ui(ui, |ui| {
-            for preference in crate::i18n::Preference::ALL {
-                if ui.selectable_label(app.ui.interface_language == preference, preference.name()).clicked() {
-                    let _ = app.run("ui.language", serde_json::json!({"lang": preference.code()}));
-                    ui.ctx().request_repaint();
+    egui::Window::new(crate::tl!("Interface Language"))
+        .id(egui::Id::new("interface_language"))
+        .open(open)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            egui::ComboBox::from_id_salt("interface_language_choice").selected_text(app.ui.interface_language.name()).show_ui(ui, |ui| {
+                for preference in crate::i18n::Preference::ALL {
+                    if ui.selectable_label(app.ui.interface_language == preference, preference.name()).clicked() {
+                        let _ = app.run("ui.language", serde_json::json!({"lang": preference.code()}));
+                        ui.ctx().request_repaint();
+                    }
                 }
-            }
+            });
         });
-    });
 }
 
 #[cfg(test)]

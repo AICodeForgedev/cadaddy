@@ -9,6 +9,7 @@ mod audit;
 pub(crate) mod blocks;
 pub(crate) mod clip_partners;
 pub mod clipboard;
+pub mod colorbook;
 pub mod constraints;
 mod dash_styles;
 mod draw;
@@ -18,38 +19,52 @@ mod edit;
 mod exact_ends;
 mod exchange;
 mod express;
+mod field;
 pub mod file;
 mod gripcmds;
 mod griphot;
 pub mod groups;
 pub(crate) mod hatch;
+pub mod hyperlink;
 mod imageattach;
 mod imageclip;
-mod inquiry;
+pub(crate) mod inquiry;
 mod layer;
+/// The layers a layer filter shows (the Layer Properties Manager's filter tree).
+pub use layer::filters::layers_of as layer_filter_layers;
 pub(crate) mod layout;
+pub mod lights;
 mod lisp;
+pub mod materials;
 mod measuregeom;
 mod mleader_content;
 mod mleader_edit;
+mod models3d;
 mod modify;
 mod modify2;
 mod mtext_opts;
 mod overkill;
+mod perceive;
 mod pline_opts;
 pub mod plotters;
 mod props;
+pub mod spell;
 pub mod symbol;
 mod takeoff;
 pub(crate) mod underlay;
+pub mod wallgen;
 pub use props::MatchProps;
 pub(crate) mod qselect;
+mod render;
+mod sections;
 mod selecttools;
 mod settings;
+mod solids;
 mod spline_opts;
 pub(crate) mod table;
 pub mod tolerance;
 mod trimextend;
+mod ucs;
 mod utility;
 pub(crate) mod view;
 
@@ -204,10 +219,23 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(blocks::specs());
         v.extend(modify::specs());
         v.extend(draworder::specs());
+        v.extend(hyperlink::specs());
+        v.extend(lights::specs());
+        v.extend(materials::specs());
+        v.extend(wallgen::specs());
         v.extend(imageclip::specs());
         v.extend(array::specs());
         v.extend(symbol::specs());
         v.extend(express::specs());
+        v.push(
+            CommandSpec::new("spell", "Spelling", spell::run)
+                .menu(&["Tools", "Spelling"])
+                .alias(&["sp", "-spell"])
+                .params("{action?: \"check\" (default) | \"suggest\" | \"change\" | \"changeAll\" | \"ignoreAll\" | \"add\", handles? (default every object in the current space), suggestions?: bool (default true), word?, to?, handle? and where? (\"text\" | \"dimension\" | \"multileader\" | {attribute: n} | {cell: [row, col]}) for one change, all?: bool} → check: {misspelled: [{handle, where, word, context, suggestions}], checked}; change: {changed}")
+                .interactive(|_| Ok(Box::new(spell::SpellM::default()))),
+        );
+        v.extend(models3d::specs());
+        v.extend(perceive::specs());
         v.extend(underlay::specs());
         v.extend(takeoff::specs());
         v.extend(imageattach::specs());
@@ -225,9 +253,15 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(options::specs());
         v.extend(utility::specs());
         v.extend(table::specs());
+        v.extend(field::specs());
+        v.extend(ucs::specs());
         v.extend(tolerance::specs());
+        v.extend(colorbook::specs());
         v.extend(constraints::specs());
         v.extend(lisp::specs());
+        v.extend(solids::specs());
+        v.extend(sections::specs());
+        v.extend(render::specs());
         v
     })
 }

@@ -555,6 +555,9 @@ const APP_MENU: &[(Icon, &str, &str)] = &[
     (Icon::Lineweight, "units", "Drawing Utilities: Units"),
     (Icon::Gear, "options", "Options"),
     (Icon::Menu, "ui.toggle.menubar", "Show Menu Bar"),
+    (Icon::Close, "close", "Close"),
+    (Icon::Close, "closeall", "Close All"),
+    (Icon::Close, "ui.quit", "Quit CADaddy"),
 ];
 
 pub const TITLE_H: f32 = 30.0;
@@ -934,8 +937,21 @@ fn title_row(app: &mut CadApp, ui: &mut egui::Ui, row: Rect, left: f32, clicks: 
     ui.painter().rect_filled(ab, 4.0, if aresp.hovered() { t.accent } else { t.accent.gamma_multiply(0.85) });
     icons::paint(ui.painter(), ab.shrink2(vec2(8.0, 5.0)), Icon::Menu, false);
     icons::describe_control(ui, &aresp, "Application menu", None, false);
+    // Recent drawings under the commands, as AutoCAD's application menu lists them.
+    let recent: Vec<String> = app.ui.recent_files.iter().take(8).cloned().collect();
+    let mut open_recent: Option<String> = None;
     egui::Popup::from_toggle_button_response(&aresp).close_behavior(egui::PopupCloseBehavior::CloseOnClick).show(|ui| {
         ui.set_min_width(230.0);
+        if !recent.is_empty() {
+            ui.label(egui::RichText::new(crate::i18n::t("Open Recent")).small().color(t.text_dim));
+            for path in &recent {
+                let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+                if ui.add(egui::Button::new(name).frame(false)).on_hover_text(path).clicked() {
+                    open_recent = Some(path.clone());
+                }
+            }
+            ui.separator();
+        }
         for (icon, cmd, label) in APP_MENU.iter().filter(|(_, c, _)| command_known(c)) {
             let (r, row) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
             if row.hovered() {
@@ -949,6 +965,9 @@ fn title_row(app: &mut CadApp, ui: &mut egui::Ui, row: Rect, left: f32, clicks: 
             }
         }
     });
+    if let Some(path) = open_recent {
+        app.open_path(&path);
+    }
     let mut x = ab.right() + 10.0;
     for (icon, cmd, tip) in QAT {
         let br = Rect::from_min_size(pos2(x, row.center().y - 11.0), vec2(22.0, 22.0));
@@ -966,7 +985,15 @@ fn title_row(app: &mut CadApp, ui: &mut egui::Ui, row: Rect, left: f32, clicks: 
     let heart_left = support_button(ui, row, clicks);
     if !app.integrated_titlebar {
         let title = match app.session.state() {
-            Ok(st) if !app.ui.start_tab => format!("{}{}", st.title, if st.title.contains('.') { "" } else { ".dwg" }),
+            // `*`: unsaved changes, as on the drawing's tab.
+            Ok(st) if !app.ui.start_tab => {
+                format!(
+                    "{}{}{}",
+                    st.title,
+                    if st.title.contains('.') { String::new() } else { format!(".{}", app.ui.save_format.as_str()) },
+                    if st.is_dirty() { "*" } else { "" }
+                )
+            }
             _ => crate::i18n::t("Start").to_string(),
         };
         let g = ui.painter().layout_no_wrap(title, egui::FontId::proportional(13.0), t.text_dim);

@@ -63,3 +63,73 @@ fn open_without_a_path_is_refused_before_the_engine() {
     assert_eq!(call(&mut app, "app.open", json!({})), json!({"ok": false, "error": "missing path"}));
     assert_eq!(call(&mut app, "app.open", json!({"path": 3})), json!({"ok": false, "error": "missing path"}));
 }
+
+/// An agent's typing never becomes input to a command the person at the window is running
+/// (battle test 0.7.7c: `circle 80,80 3` added two segments to the user's LINE); a command the
+/// agent started itself takes its typing as before.
+#[test]
+fn agent_typing_stays_out_of_the_users_command() {
+    let mut app = app();
+    let count = |app: &CadApp| app.session.doc().map(|d| d.model.len()).unwrap_or(0);
+    let before = count(&app);
+    // The user starts LINE in the app.
+    app.cmdline("line");
+    let v = call(&mut app, "cmdline.input", json!({"text": "circle 80,80 3"}));
+    assert_eq!(v["ok"], false, "{v}");
+    assert!(v["error"].as_str().unwrap_or("").contains("LINE"), "{v}");
+    assert_eq!(count(&app), before, "the agent's text went into the user's LINE");
+    assert_eq!(call(&mut app, "cmdline.key", json!({"key": "enter"}))["ok"], false, "the agent's Enter went into the user's LINE");
+    assert_eq!(app.session.running.as_ref().map(|r| r.id.as_str()), Some("line"));
+    // Escape is always allowed (tester 0.7.7g): it feeds nothing into the prompts.
+    assert_eq!(call(&mut app, "cmdline.key", json!({"key": "escape"}))["ok"], true);
+    assert!(app.session.running.is_none());
+    // The agent's own command takes its points.
+    call(&mut app, "cmdline.input", json!({"text": "line"}));
+    let v = call(&mut app, "cmdline.input", json!({"text": "0,0 10,0 "}));
+    assert_eq!(v["ok"], true, "{v}");
+    call(&mut app, "cmdline.key", json!({"key": "enter"}));
+    assert_eq!(count(&app), before + 1);
+}
+
+/// A command an agent starts from a menu is the agent's: its input answers the prompts (tester
+/// 0.7.7g: menu-started CIRCLE refused `5,5` as "the user is running CIRCLE").
+#[test]
+fn a_menu_command_the_agent_started_takes_its_input() {
+    let mut app = app();
+    let count = |app: &CadApp| app.session.doc().map(|d| d.model.len()).unwrap_or(0);
+    let before = count(&app);
+    call(&mut app, "ui.menu.invoke", json!({"command": "circle"}));
+    assert_eq!(app.session.running.as_ref().map(|r| r.id.as_str()), Some("circle"));
+    let v = call(&mut app, "cmdline.input", json!({"text": "5,5"}));
+    assert_eq!(v["ok"], true, "{v}");
+    let v = call(&mut app, "cmdline.input", json!({"text": "2"}));
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(count(&app), before + 1);
+}
+
+/// An agent's request never opens a native file dialog: it opened on the user's screen and
+/// blocked the app, every later agent call timing out (menu sweep 0.7.7e: Insert ▸ PDF Import…).
+/// The reply says why nothing was picked.
+#[test]
+fn agent_requests_never_open_file_dialogs() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static OPENED: AtomicBool = AtomicBool::new(false);
+    let services = cadaddy_ui_egui::Services {
+        pick_pdf: Some(Box::new(|| {
+            if cadaddy_ui_egui::file_dialogs_allowed() {
+                OPENED.store(true, Ordering::Relaxed);
+                Some("x.pdf".into())
+            } else {
+                None
+            }
+        })),
+        ..Default::default()
+    };
+    let mut app = CadApp::new(Session::new(), services);
+    let ctx = egui::Context::default();
+    let (req, reply) = ControlRequest::new("ui.menu.invoke", json!({"command": "ui.pdfimport"}));
+    app.serve_control_request(&ctx, req);
+    let outcome = reply.wait(std::time::Duration::from_secs(2));
+    assert!(!OPENED.load(Ordering::Relaxed), "a file dialog opened for an agent");
+    assert!(outcome["warning"].as_str().unwrap_or("").contains("file dialog"), "{outcome}");
+}

@@ -11,7 +11,7 @@
 //! | `theme` | `"system"`, `"light"` or `"dark"` |
 //! | `animations` | `"system"`, `"on"` or `"off"`: dialog and menu fades and smoothed scrolling |
 //! | `interfaceLanguage` | `"auto"`, `"en"`, `"uk"`, `"pt-BR"`, `"de"`, `"es"`, `"cs"`, `"ru"`, `"fr"`, `"zh"`, `"it"`, `"ko"`, `"sv"`, `"ar"` or `"ja"` |
-//! | `saveFormat` | `"dxf"` or `"dwg"`: the format Save As suggests for new drawings |
+//! | `saveFormat` | `"cdy"`, `"dxf"` or `"dwg"`: the format Save As suggests for new drawings |
 //! | `saveVersion` | `"2000"` … `"2018"`: the version drawings with no file yet are saved in |
 //! | `SAVETIME` | minutes between automatic saves, 0–600 (0: off) |
 //! | `SAVEFILEPATH` | the folder automatic saves go to |
@@ -164,7 +164,7 @@ fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
                 crate::i18n::Preference::parse(text()?).ok_or_else(|| format!("interfaceLanguage must be {}", crate::i18n::Preference::codes()))?,
             )
         }
-        "saveFormat" => c.save_format = Some(crate::SaveFormat::parse(text()?).ok_or("saveFormat must be dxf or dwg")?),
+        "saveFormat" => c.save_format = Some(crate::SaveFormat::parse(text()?).ok_or("saveFormat must be cdy, dxf or dwg")?),
         "systemCursor" => c.system_cursor = Some(v.as_bool().ok_or("systemCursor must be true or false")?),
         "historyLines" => {
             let n = v.as_u64().filter(|n| *n <= crate::cmdline::MAX_LINES as u64).ok_or("historyLines must be a whole number from 0 to 12")?;

@@ -184,7 +184,20 @@ fn is_http_request_line(text: &str) -> bool {
         || text.rsplit_once(' ').is_some_and(|(_, version)| version.starts_with("HTTP/"))
 }
 
+/// A reply line in one write. `writeln!` wrote the JSON and the newline separately, and with
+/// Nagle's algorithm the second waited for the client's delayed acknowledgement: about 0.3 s on
+/// one call in every few on Windows (UI review 0.7.7c/e: the "stalls" agents measured).
+fn send_line(out: &mut impl Write, line: &str) -> std::io::Result<()> {
+    let mut buf = String::with_capacity(line.len() + 1);
+    buf.push_str(line);
+    buf.push('\n');
+    out.write_all(buf.as_bytes())?;
+    out.flush()
+}
+
 fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context, limits: Limits) {
+    // Replies go out at once instead of waiting to be combined with more (Nagle).
+    let _ = stream.set_nodelay(true);
     if stream.set_read_timeout(Some(limits.idle_timeout)).is_err() || stream.set_write_timeout(Some(limits.write_timeout)).is_err() {
         return;
     }
@@ -209,7 +222,7 @@ fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context
                             ctx.request_repaint();
                             // On timeout the request is cancelled if the app hasn't started it, and
                             // the reply's `state` says whether it can still have run.
-                            pending.wait(limits.reply_timeout)
+                            pending.wait_nudging(limits.reply_timeout, || ctx.request_repaint())
                         }
                         Err(TrySendError::Full(_)) => json!({"ok": false, "error": "busy: too many queued requests", "state": "not-run"}),
                         Err(TrySendError::Disconnected(_)) => break,
@@ -217,7 +230,7 @@ fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context
                     if let Some(o) = r.as_object_mut() {
                         o.insert("id".into(), id);
                     }
-                    if writeln!(out, "{r}").is_err() {
+                    if send_line(&mut out, &r.to_string()).is_err() {
                         break;
                     }
                     continue;
@@ -225,7 +238,7 @@ fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context
             },
         };
         // The connection closes either way; a peer that can't read the reason loses nothing.
-        let _ = writeln!(out, "{}", json!({"ok": false, "error": reject}));
+        let _ = send_line(&mut out, &json!({"ok": false, "error": reject}).to_string());
         break;
     }
 }
