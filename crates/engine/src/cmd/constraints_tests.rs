@@ -231,3 +231,32 @@ fn delconstraint_rejects_referenced_dimension() {
     s.execute("delconstraint", &json!({ "ids": ids })).unwrap();
     assert!(s.doc().unwrap().constraints.is_empty());
 }
+
+/// The angle between the two rays from the vertex to the far end of each line: the angle
+/// DCANGULAR draws.
+fn drawn_angle(s: &Session, a: &str, b: &str) -> f64 {
+    let ((a0, a1), (b0, b1)) = (ends(s, a), ends(s, b));
+    let (o, _, _) = cadcraft_geom::line_line_infinite(a0, a1, b0, b1).unwrap();
+    let far = |p: Vec2, q: Vec2| if p.dist(o) > q.dist(o) { p } else { q };
+    let (u, v) = (far(a0, a1) - o, far(b0, b1) - o);
+    u.cross(v).atan2(u.dot(v)).abs().to_degrees()
+}
+
+#[test]
+fn dcangular_constrains_the_drawn_angle_whichever_way_the_lines_run() {
+    // #1134: the second line drawn towards the shared vertex got the supplement of the value.
+    for b_pts in [[[2.0, 10.0], [0.0, 0.0]], [[0.0, 0.0], [2.0, 10.0]]] {
+        let mut s = Session::new();
+        s.viewport_px = (1000.0, 1000.0);
+        let a = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+        let b = line(&mut s, b_pts[0], b_pts[1]);
+        s.cmdline("dcangular").unwrap();
+        s.input(Input::Point(Vec2::new(3.0, 0.0))).unwrap();
+        s.input(Input::Point(Vec2::new(0.6, 3.0))).unwrap();
+        assert!(s.prompt_text().contains("78.69"), "{b_pts:?}: {}", s.prompt_text());
+        s.cmdline("100").unwrap();
+        assert!(s.running.is_none());
+        let got = drawn_angle(&s, &a, &b);
+        assert!((got - 100.0).abs() < 1e-6, "{b_pts:?}: drawn angle {got}");
+    }
+}
