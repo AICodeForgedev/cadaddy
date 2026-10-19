@@ -1984,3 +1984,49 @@ menu	Modify	Ändra
 	Workspace	Arbetsyta
 	Read Ceiling Plan	Läs takplan (undersida)
 	Ceilings	Innertak
+	Current Drawing	Aktuell ritning
+	Favourites	Favoriter
+	Libraries	Bibliotek
+	No library folder	Ingen biblioteksmapp
+	Choose Folder...	Välj mapp...
+	No blocks here.	Inga block här.
+	Remove from Favourites	Ta bort från favoriter
+	Add to Favourites	Lägg till i favoriter
+	Insertion Options	Infogningsalternativ
+	Auto-rotate (follow the current UCS)	Rotera automatiskt (följ aktuellt UCS)
+	Repeat Placement	Upprepa placering
+	Tool Palettes	Verktygspaletter
+	Drag objects from the drawing here to make tools.	Dra objekt från ritningen hit för att skapa verktyg.
+	Add Selected	Lägg till markerade
+	New palette	Ny palett
+	Select objects in the drawing first.	Markera först objekt i ritningen.
+	Blocks Palette	Blockpalett
+	Detect Grids	Hitta modullinjer
+	Align Levels by Grids	Rikta plan efter modullinjer
+	Columns at Grids	Pelare i modulkors
+	Columns	Pelare
+	Build Room Volumes	Skapa rumsvolymer
+	Building	Byggnad
+	Go to Room	Gå till rum
+	List Rooms	Lista rum
+	Room	Rum
+	Build Volumes	Skapa volymer
+	Go to	Gå till
+	{n} rooms	{n} rum
+	No rooms found: rooms are found from name labels inside closed outlines.	Inga rum hittades: rum hittas från namnetiketter inuti slutna konturer.
+	Ceiling	Tak
+	DesignCenter	DesignCenter
+	Up One Level	En nivå upp
+	Folder	Mapp
+	Text Styles	Textstilar
+	Dimension Styles	Måttstilar
+	Layouts	Layouter
+	Xrefs	Xref
+	Add to Drawing	Lägg till i ritningen
+	Choose a drawing to see what it holds.	Välj en ritning för att se vad den innehåller.
+	{name} inserted.	{name} infogades.
+	{name} is already in the drawing; it was kept.	{name} finns redan i ritningen och behölls.
+	{name} added.	{name} lades till.
+	Read MEP Runs	Läs installationsdragningar
+	Model Clashes	Modellkollisioner
+	MEP Systems	Installationssystem

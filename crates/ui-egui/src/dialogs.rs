@@ -35,7 +35,8 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "tolerance" => crate::toldlg::dialog(app, ctx, &mut open),
         "preview" => crate::exchange::dialog(app, ctx, &mut open),
         "commands" => commands(app, ctx, &mut open),
-        "blocks" => blocks(app, ctx, &mut open),
+        "blocks" => crate::blockspalette::dialog(app, ctx, &mut open),
+        "toolpalettes" => crate::toolpalettes::dialog(app, ctx, &mut open),
         "bedit" => crate::bedit::dialog(app, ctx, &mut open),
         "authoring" => crate::bedit::authoring_dialog(app, ctx, &mut open),
         "stylesmanager" => crate::plotstyles::dialog(app, ctx, &mut open),
@@ -44,11 +45,13 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "aliasedit" => crate::aliasdlg::dialog(app, ctx, &mut open),
         "workspace.save" => crate::workspaces::save_dialog(app, ctx, &mut open),
         "workspace.settings" => crate::workspaces::settings_dialog(app, ctx, &mut open),
+        "adcenter" => crate::designcenter::dialog(app, ctx, &mut open),
         "standards" => crate::standardsdlg::configure(app, ctx, &mut open),
         "checkstandards" => crate::standardsdlg::check(app, ctx, &mut open),
         "laytrans" => crate::standardsdlg::laytrans(app, ctx, &mut open),
         "sheetset" => crate::sheetsets::dialog(app, ctx, &mut open),
         "publish" => crate::publishdlg::dialog(app, ctx, &mut open),
+        crate::roomsdlg::DIALOG => crate::roomsdlg::dialog(app, ctx, &mut open),
         o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }
@@ -446,33 +449,9 @@ fn commands(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     }
 }
 
-fn blocks(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
-    let mut pick = None;
-    egui::Window::new(crate::tl!("Blocks"))
-        .id(egui::Id::new("Blocks"))
-        .open(open)
-        .default_size(vec2(320.0, 360.0))
-        .pivot(egui::Align2::CENTER_CENTER)
-        .default_pos(ctx.content_rect().center())
-        .show(ctx, |ui| {
-            let Ok(d) = app.session.doc() else { return };
-            let names: Vec<&String> = d.blocks.keys().filter(|k| !k.starts_with('*')).collect();
-            if names.is_empty() {
-                ui.label(crate::tl!("No blocks defined in this drawing."));
-            }
-            for n in names {
-                if ui.button(n).on_hover_text(crate::tl!("Insert this block")).clicked() {
-                    pick = Some(n.clone());
-                }
-            }
-        });
-    if let Some(n) = pick {
-        insert_block(app, &n);
-    }
-}
-
 /// Start INSERT with `name` already given at its block name prompt, so the next prompt asks for
 /// the insertion point.
+#[cfg(test)]
 fn insert_block(app: &mut CadApp, name: &str) {
     app.start("insert");
     if app.session.running.as_ref().is_none_or(|r| r.id != "insert") {

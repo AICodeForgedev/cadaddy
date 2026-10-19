@@ -30,8 +30,8 @@ pub use pick::{Hit, pick};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules};
 // A room of the building spec (`derive::Room` is a room found in the plan).
 pub use spec::{
-    Band, BandKind, BuildingSpec, CeilingArea, CeilingGrid, CeilingItem, Cricket, Described, Equipment, Exterior, Facade, Family, FamilyKind, Issue,
-    ItemKind, LayerRole, Rcp, Role, Roof, RoofSlope, Room as SpecRoom, SPEC_VERSION, Side, Site, Soffit, Stair, Surfaces, WallFrom, WallType, feet,
-    inches, level_at, merge, pitch_text,
+    Band, BandKind, BuildingSpec, CeilingArea, CeilingGrid, CeilingItem, Cricket, Described, Equipment, Exterior, Facade, Family, FamilyKind,
+    GridColumn, Issue, ItemKind, LayerRole, Mep, MepKind, MepRun, MepSystem, Rcp, Role, Roof, RoofSlope, Room as SpecRoom, SPEC_VERSION, Side, Site,
+    Soffit, Stair, Surfaces, WallFrom, WallType, feet, inches, level_at, merge, pitch_text,
 };
 pub use walker::Walker;

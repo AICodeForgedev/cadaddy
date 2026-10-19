@@ -1976,3 +1976,49 @@ menu	Modify	Edita
 	Workspace	Area di lavoro
 	Read Ceiling Plan	Leggi pianta controsoffitti
 	Ceilings	Controsoffitti
+	Current Drawing	Disegno corrente
+	Favourites	Preferiti
+	Libraries	Librerie
+	No library folder	Nessuna cartella libreria
+	Choose Folder...	Scegli cartella...
+	No blocks here.	Nessun blocco qui.
+	Remove from Favourites	Rimuovi dai preferiti
+	Add to Favourites	Aggiungi ai preferiti
+	Insertion Options	Opzioni di inserimento
+	Auto-rotate (follow the current UCS)	Rotazione automatica (segue l'UCS corrente)
+	Repeat Placement	Ripeti posizionamento
+	Tool Palettes	Tavolozze strumenti
+	Drag objects from the drawing here to make tools.	Trascina qui oggetti dal disegno per creare strumenti.
+	Add Selected	Aggiungi selezionati
+	New palette	Nuova tavolozza
+	Select objects in the drawing first.	Seleziona prima oggetti nel disegno.
+	Blocks Palette	Tavolozza blocchi
+	Detect Grids	Rileva fili fissi
+	Align Levels by Grids	Allinea livelli ai fili fissi
+	Columns at Grids	Pilastri ai fili fissi
+	Columns	Pilastri
+	Build Room Volumes	Crea volumi dei locali
+	Building	Edificio
+	Go to Room	Vai al locale
+	List Rooms	Elenca locali
+	Room	Locale
+	Build Volumes	Crea volumi
+	Go to	Vai a
+	{n} rooms	{n} locali
+	No rooms found: rooms are found from name labels inside closed outlines.	Nessun locale trovato: i locali si riconoscono dalle etichette dei nomi dentro contorni chiusi.
+	Ceiling	Soffitto
+	DesignCenter	DesignCenter
+	Up One Level	Livello superiore
+	Folder	Cartella
+	Text Styles	Stili di testo
+	Dimension Styles	Stili di quota
+	Layouts	Layout
+	Xrefs	Xrif
+	Add to Drawing	Aggiungi al disegno
+	Choose a drawing to see what it holds.	Scegli un disegno per vederne il contenuto.
+	{name} inserted.	{name} inserito.
+	{name} is already in the drawing; it was kept.	{name} è già nel disegno; è stato mantenuto.
+	{name} added.	{name} aggiunto.
+	Read MEP Runs	Leggi percorsi impiantistici
+	Model Clashes	Interferenze del modello
+	MEP Systems	Impianti

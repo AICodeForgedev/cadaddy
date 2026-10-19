@@ -1982,3 +1982,49 @@
 	Workspace	Espacio de trabajo
 	Read Ceiling Plan	Leer plano de techos
 	Ceilings	Techos
+	Current Drawing	Dibujo actual
+	Favourites	Favoritos
+	Libraries	Bibliotecas
+	No library folder	Sin carpeta de biblioteca
+	Choose Folder...	Elegir carpeta...
+	No blocks here.	No hay bloques aquí.
+	Remove from Favourites	Quitar de favoritos
+	Add to Favourites	Añadir a favoritos
+	Insertion Options	Opciones de inserción
+	Auto-rotate (follow the current UCS)	Girar automáticamente (seguir el SCP actual)
+	Repeat Placement	Repetir colocación
+	Tool Palettes	Paletas de herramientas
+	Drag objects from the drawing here to make tools.	Arrastre objetos del dibujo aquí para crear herramientas.
+	Add Selected	Añadir selección
+	New palette	Nueva paleta
+	Select objects in the drawing first.	Seleccione primero objetos del dibujo.
+	Blocks Palette	Paleta de bloques
+	Detect Grids	Detectar ejes
+	Align Levels by Grids	Alinear niveles por ejes
+	Columns at Grids	Pilares en ejes
+	Columns	Pilares
+	Build Room Volumes	Crear volúmenes de habitaciones
+	Building	Edificio
+	Go to Room	Ir a la habitación
+	List Rooms	Listar habitaciones
+	Room	Habitación
+	Build Volumes	Crear volúmenes
+	Go to	Ir a
+	{n} rooms	{n} habitaciones
+	No rooms found: rooms are found from name labels inside closed outlines.	No se encontraron habitaciones: se detectan por etiquetas de nombre dentro de contornos cerrados.
+	Ceiling	Techo
+	DesignCenter	DesignCenter
+	Up One Level	Subir un nivel
+	Folder	Carpeta
+	Text Styles	Estilos de texto
+	Dimension Styles	Estilos de cota
+	Layouts	Presentaciones
+	Xrefs	Refx
+	Add to Drawing	Añadir al dibujo
+	Choose a drawing to see what it holds.	Elija un dibujo para ver lo que contiene.
+	{name} inserted.	{name} insertado.
+	{name} is already in the drawing; it was kept.	{name} ya está en el dibujo; se ha conservado.
+	{name} added.	{name} añadido.
+	Read MEP Runs	Leer recorridos MEP
+	Model Clashes	Interferencias del modelo
+	MEP Systems	Sistemas MEP

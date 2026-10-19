@@ -1759,3 +1759,21 @@
 	Exterior	外装
 	Read Ceiling Plan	天井伏図を読み取る
 	Ceilings	天井
+	Detect Grids	通芯を検出
+	Align Levels by Grids	通芯でレベルを揃える
+	Columns at Grids	通芯交点の柱
+	Columns	柱
+	Build Room Volumes	部屋のボリュームを作成
+	Building	建物
+	Go to Room	部屋へ移動
+	List Rooms	部屋の一覧
+	Room	部屋
+	Build Volumes	ボリュームを作成
+	Go to	移動
+	{n} rooms	{n} 部屋
+	No rooms found: rooms are found from name labels inside closed outlines.	部屋が見つかりません。部屋は閉じた輪郭内の名前ラベルから検出されます。
+	Ceiling	天井
+	Number	番号
+	Read MEP Runs	設備ルートを読み取る
+	Model Clashes	モデルの干渉
+	MEP Systems	設備システム

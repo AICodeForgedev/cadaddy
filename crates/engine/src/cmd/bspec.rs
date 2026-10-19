@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
             .noundo(),
         CommandSpec::new("model.build", "Build Model from Spec", run_build).params(
-            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, levels, removed, notes, warnings}",
+            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, gridColumns, levels, removed, notes, warnings}",
         ),
     ]
 }
@@ -446,6 +446,10 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     // The reflected ceiling plans' ceilings (replacing the level's and rooms'), grids, soffits,
     // lights and diffusers.
     let rcp = super::ceilings::build(d, &sp);
+    // Duct, pipe and conduit runs of the shown systems.
+    let mep = super::mep::build(d, &sp);
+    // Columns at the grid intersections.
+    let grid_columns = super::grids::build(d, &sp);
     // Materials: the room's for its ceiling, else the building's for the part.
     let made: Vec<(Handle, String)> = d.model.iter().filter_map(|e| wallgen::made_as(e).map(|p| (e.handle, p))).collect();
     for (h, part) in made {
@@ -483,6 +487,10 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     if let (Some(o), Some(x)) = (r.as_object_mut(), rcp.as_object()) {
         o.extend(x.clone());
     }
+    if let (Some(o), Some(x)) = (r.as_object_mut(), mep.as_object()) {
+        o.extend(x.clone());
+    }
+    r["gridColumns"] = json!(grid_columns);
     r["removed"] = json!(removed);
     Ok(r)
 }

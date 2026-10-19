@@ -1857,3 +1857,50 @@
 	Workspace	工作空间
 	Read Ceiling Plan	读取天花平面图
 	Ceilings	天花
+	Current Drawing	当前图形
+	Favourites	收藏夹
+	Libraries	库
+	No library folder	无库文件夹
+	Choose Folder...	选择文件夹...
+	No blocks here.	此处没有块。
+	Remove from Favourites	从收藏夹中移除
+	Add to Favourites	添加到收藏夹
+	Insertion Options	插入选项
+	Auto-rotate (follow the current UCS)	自动旋转（跟随当前 UCS）
+	Repeat Placement	重复放置
+	Tool Palettes	工具选项板
+	Drag objects from the drawing here to make tools.	将图形中的对象拖到此处以创建工具。
+	Add Selected	添加选定项
+	New palette	新选项板
+	Select objects in the drawing first.	请先在图形中选择对象。
+	Blocks Palette	块选项板
+	Detect Grids	检测轴网
+	Align Levels by Grids	按轴网对齐楼层
+	Columns at Grids	轴网交点柱
+	Columns	柱
+	Build Room Volumes	创建房间体量
+	Building	建筑
+	Go to Room	转到房间
+	List Rooms	列出房间
+	Room	房间
+	Build Volumes	创建体量
+	Go to	转到
+	{n} rooms	{n} 个房间
+	No rooms found: rooms are found from name labels inside closed outlines.	未找到房间：房间是根据闭合轮廓内的名称标签找到的。
+	Ceiling	天花板
+	Volume	体积
+	DesignCenter	设计中心
+	Up One Level	向上一级
+	Folder	文件夹
+	Text Styles	文字样式
+	Dimension Styles	标注样式
+	Layouts	布局
+	Xrefs	外部参照
+	Add to Drawing	添加到图形
+	Choose a drawing to see what it holds.	选择一个图形以查看其内容。
+	{name} inserted.	已插入 {name}。
+	{name} is already in the drawing; it was kept.	{name} 已在图形中，已保留。
+	{name} added.	已添加 {name}。
+	Read MEP Runs	读取机电管线
+	Model Clashes	模型碰撞
+	MEP Systems	机电系统

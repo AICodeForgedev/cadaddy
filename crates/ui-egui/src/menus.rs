@@ -100,6 +100,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.workspace.settings", "Workspace Settings...", &["Tools", "Workspaces", "Workspace Settings..."], None),
     ("workspace", "Workspace", &[], None),
     ("navbar", "Navigation Bar", &["View", "Display", "Navigation Bar"], None),
+    ("blockspalette", "Blocks Palette", &[], None),
+    ("toolpalettes", "Tool Palettes", &["Tools", "Palettes", "Tool Palettes"], None),
     ("ui.feature", "Request a Feature...", &["Help", "Request a Feature..."], None),
     ("ui.donate", "Support CADaddy...", &["Help", "Support CADaddy..."], None),
     ("ui.toggle.history", "Command History", &["Window", "Command History"], Some("F2")),
@@ -557,6 +559,15 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         "workspace" => crate::workspaces::run(app, params),
         "navbar" => crate::workspaces::run_navbar(app, params),
+        "blockspalette" => {
+            app.ui.dialog = Some("blocks".into());
+            Ok(Value::Null)
+        }
+        "toolpalettes" if params.is_null() => {
+            app.ui.dialog = Some("toolpalettes".into());
+            Ok(Value::Null)
+        }
+        "toolpalettes" => crate::toolpalettes::run(app, params),
         "ui.diag" => {
             app.ui.dialog = Some("diag".into());
             Ok(Value::Null)
@@ -586,6 +597,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // Typed or menu-invoked (no parameters) these open their dialogs; JSON calls run the command.
         "aliasedit" if params.is_null() => {
             app.ui.dialog = Some("aliasedit".into());
+            Ok(Value::Null)
+        }
+        "adcenter" | "dc" | "adc" | "dcenter" if params.is_null() => {
+            app.ui.dialog = Some("adcenter".into());
             Ok(Value::Null)
         }
         "etransmit" if params.is_null() => {
@@ -904,6 +919,7 @@ pub fn default_shortcuts() -> Vec<(egui::KeyboardShortcut, &'static str)> {
         (sc(cmd_shift, Key::V), "pasteblock"),
         (sc(cmd, Key::V), "pasteclip"),
         (sc(cmd, Key::Num1), "ui.panel.properties"),
+        (sc(cmd, Key::Num2), "adcenter"),
         (sc(cmd, Key::Num3), "ui.toggle.toolsets"),
         (sc(cmd, Key::Num9), "ui.toggle.cmdline"),
         (sc(Modifiers::NONE, Key::F1), "ui.dialog.commands"),
