@@ -1,6 +1,6 @@
 # Where CADCraft falls short of AutoCAD
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (BURST landed: E3 narrowed) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (MLEDIT Merged Tee: F21 narrowed) · **Target:** Autodesk AutoCAD 2027
 
 Every known shortfall, one row each, ranked within each section by user impact. This is the work
 list: agents pick from here (top of a section first), and remove or update a row in the same PR
@@ -42,7 +42,7 @@ do them first.
 | F17 | Attributes (ATTSYNC, global -ATTEDIT, BATTMAN editing and DATAEXTRACTION/EATTEXT landed, #433): no verify, preset or lock-position modes, and multiline attributes (read, drawn and saved since 2026-10-12) can't be created or switched in BATTMAN; data extraction covers block references and attribute values (CSV or a table) only — no wizard, nested blocks, other objects' properties, `.dxe` templates or spreadsheet output | `cmd/blocks/battman.rs`, `cmd/blocks/extract.rs` | Low | 4–6 |
 | F19 | MATCHPROP Settings is a keyword prompt (no dialog) and has no material, shadow or centre-object settings; TEXTTOFRONT and HATCHTOBACK act on the current space only; OVERKILL doesn't compare polyline segments with other objects (picker and Settings, DRAWORDER Above/Under, TEXTTOFRONT, HATCHTOBACK, OVERKILL tolerance/ignore/overlap/end-to-end options landed, #439) | `props/matchprop.rs`, `draworder.rs`, `overkill.rs` | Low | 2–4 |
 | F20 | OPTIONS dialog done (#23): Display, Open and Save, Drafting, Selection, User Preferences and Profiles tabs, and the user profile (object snap modes, drafting toggles, Dynamic Input, PICKBOX, APERTURE, GRIPSIZE, CURSORSIZE, PICKFIRST, PICKADD, QPMODE, model and paper background, snap marker size, system cursor) survives restarts. Left: right-click customization, the autosave interval and default save version on Open and Save (the features themselves landed, #406, #421), AutoSnap magnet and tooltip toggles, colours of the other drawing-area elements, named profiles with import and export | `ui-egui/src/options/` | Low | 2–4 |
-| F21 | MLINE, REGION and HELIX are objects since #510, with gaps: MLEDIT has no Merged Tee and tees trim square; UNION/SUBTRACT/INTERSECT only combine regions whose boundaries don't meet; regions are saved as closed polylines (no ACIS data); PURGE skips multiline styles | `draw2/mline.rs`, `inquiry/regions.rs`, `dxf_region.rs` | Low | 6–10 |
+| F21 | MLINE, REGION and HELIX are objects since #510, with gaps: MLEDIT tees trim square; UNION/SUBTRACT/INTERSECT only combine regions whose boundaries don't meet; regions are saved as closed polylines (no ACIS data); PURGE skips multiline styles | `draw2/mline.rs`, `inquiry/regions.rs`, `dxf_region.rs` | Low | 6–10 |
 | F22 | Inquiry leftovers (COUNT across spaces and nested blocks, the QuickCalc palette and COMPARE landed, #563; MASSPROP on regions, #510): COMPARE compares the tab shown, not every layout at once, and has no COMPAREEXPORT report; QuickCalc keeps its history and variables for the session only | `file/compare.rs`, `palettes/quickcalc.rs` | Low | 3–5 |
 | F23 | No Sheet Set Manager, eTransmit, Share, Traces, Markup Import, Activity Insights | menu items uncovered | Low-medium (team workflows) | 40–70 |
 | F24 | No 3D: UCS, 3D views, orbit, solids, surfaces, meshes, sections, visual styles, materials, lights, rendering (150 menu items) | [parity-checklist](parity-checklist.md) | Medium (3D users) | 300–450 |
@@ -150,6 +150,7 @@ Detail: [localization-parity.md](localization-parity.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | MLEDIT Merged Tee (MT): the first multiline's outer elements stop at the second one's near side, which opens, and its inner elements run on to the second one's inner element: F21 narrowed, hours unchanged |
 | 2026-10-15 | minor | BURST (Tools ▸ Express Tools ▸ Explode Attributes to Text): block references explode as EXPLODE does, visible attribute values become text with the attribute's style, height, position, layer and colour, invisible attributes and the definitions go: E3 narrowed |
 | 2026-10-13 | minor | Stabilized filled-object highlight dash anchors by canonicalizing boundary traversal order; renderer, CPU pointer-frame and GPU rebuild tests cover the fix (U6) |
 | 2026-10-14 | minor | HATCHEDIT adds boundary loops from internal points or closed objects and removes selected loops, in the dialog, command line and JSON command: F13 narrowed |
