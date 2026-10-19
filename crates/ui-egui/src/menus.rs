@@ -856,13 +856,17 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         ui,
         |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                for (name, entries) in &tree {
-                    ui.menu_button(crate::i18n::menu(name), |ui| {
-                        for e in entries {
-                            entry_ui(ui, e, &mut clicked);
-                        }
-                    });
-                }
+                // A right-to-left interface starts the menus at the right edge.
+                let layout = if crate::i18n::rtl() { egui::Layout::right_to_left(egui::Align::Center) } else { *ui.layout() };
+                ui.with_layout(layout, |ui| {
+                    for (name, entries) in &tree {
+                        ui.menu_button(crate::i18n::menu(name), |ui| {
+                            for e in entries {
+                                entry_ui(ui, e, &mut clicked);
+                            }
+                        });
+                    }
+                });
             });
         },
     );

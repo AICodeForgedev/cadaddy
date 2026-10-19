@@ -57,6 +57,9 @@ pub struct BuildingSpec {
     /// Facades, roofs and what stands on them, from the elevations and the roof plan.
     #[serde(default, skip_serializing_if = "Exterior::is_empty")]
     pub exterior: Exterior,
+    /// Ceilings, soffits and what is set in them, from the reflected ceiling plans.
+    #[serde(default, skip_serializing_if = "Rcp::is_empty")]
+    pub rcp: Rcp,
     /// Devices (fixture and device layers): types, mounting heights, attributes.
     #[serde(default)]
     pub devices: DeviceRules,
@@ -333,6 +336,75 @@ pub struct Equipment {
     pub height_ft: f64,
 }
 
+/// What the reflected ceiling plans say, on the floor plans' coordinates.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Rcp {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ceilings: Vec<CeilingArea>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub soffits: Vec<Soffit>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<CeilingItem>,
+}
+
+impl Rcp {
+    pub fn is_empty(&self) -> bool {
+        self.ceilings.is_empty() && self.soffits.is_empty() && self.items.is_empty()
+    }
+}
+
+/// A ceiling area: its outline, height above the floor and what it is (a suspended grid with its
+/// layout, or gypsum board).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CeilingArea {
+    pub level: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
+    pub outline: Vec<[f64; 2]>,
+    pub height_ft: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<CeilingGrid>,
+}
+
+/// A suspended ceiling grid: tile size (inches, along and across `angle_deg`) and a line
+/// crossing at `origin`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CeilingGrid {
+    pub spacing_in: [f64; 2],
+    pub origin: [f64; 2],
+    #[serde(default)]
+    pub angle_deg: f64,
+}
+
+/// A gypsum soffit or bulkhead: an area of ceiling dropped to `height_ft`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Soffit {
+    pub level: String,
+    pub outline: Vec<[f64; 2]>,
+    pub height_ft: f64,
+}
+
+/// A light fixture or air diffuser set in the ceiling: its block, centre, size (inches) and
+/// turn.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CeilingItem {
+    pub kind: ItemKind,
+    pub block: String,
+    pub level: String,
+    pub at: [f64; 2],
+    pub size_in: [f64; 2],
+    #[serde(default)]
+    pub rotation_deg: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemKind {
+    Fixture,
+    Diffuser,
+}
+
 /// A fall per foot in words: `1/4"/ft`, `4:12`.
 pub fn pitch_text(rise_per_ft: f64) -> String {
     if rise_per_ft >= 1.0 / 12.0 - 1e-9 {
@@ -596,6 +668,25 @@ impl BuildingSpec {
         for (i, c) in self.exterior.crickets.iter().enumerate() {
             put("exterior", format!("crickets/{}", i + 1), format!("Cricket {} on {}, {} high", i + 1, c.level, feet(c.height_ft)));
         }
+        for (i, c) in self.rcp.ceilings.iter().enumerate() {
+            let what = match c.grid {
+                Some(g) => format!("{}×{} grid", inches(g.spacing_in[0]).trim_end_matches('"'), inches(g.spacing_in[1])),
+                None => "gypsum".into(),
+            };
+            let room = c.room.as_ref().map_or(String::new(), |r| format!(" ({r})"));
+            put("rcp", format!("ceilings/{}", i + 1), format!("Ceiling {}{room} on {}: {what} at {}", i + 1, c.level, feet(c.height_ft)));
+        }
+        for (i, sf) in self.rcp.soffits.iter().enumerate() {
+            put("rcp", format!("soffits/{}", i + 1), format!("Soffit {} on {} at {}", i + 1, sf.level, feet(sf.height_ft)));
+        }
+        if !self.rcp.items.is_empty() {
+            let n = |k: ItemKind| self.rcp.items.iter().filter(|x| x.kind == k).count();
+            put(
+                "rcp",
+                "ceiling_items".into(),
+                format!("In the ceilings: {} light fixtures, {} diffusers", n(ItemKind::Fixture), n(ItemKind::Diffuser)),
+            );
+        }
         for e in &self.exterior.equipment {
             put("exterior", format!("equipment/{}", e.name), format!("{}: rooftop equipment on {}, {} high", e.name, e.level, feet(e.height_ft)));
         }
@@ -650,6 +741,7 @@ impl BuildingSpec {
             site: None,
             stairs: Vec::new(),
             exterior: Exterior::default(),
+            rcp: Rcp::default(),
             devices: r.devices.clone(),
             device_sheets: r.device_sheets.clone(),
             openings: r.openings.clone(),
@@ -941,6 +1033,35 @@ impl BuildingSpec {
         for (i, e) in self.exterior.equipment.iter().enumerate().take(MAX_ITEMS) {
             if self.level(&e.level).is_none() || !outline_ok(&e.outline) || !(fin(e.height_ft) && e.height_ft > 0.0 && e.height_ft <= 100.0) {
                 out.push(Issue::error(format!("exterior.equipment[{i}]"), "equipment needs a level, an outline and a height from 0 to 100 feet"));
+            }
+        }
+        for (i, c) in self.rcp.ceilings.iter().enumerate().take(MAX_ITEMS) {
+            let at = format!("rcp.ceilings[{i}]");
+            if self.level(&c.level).is_none() || !outline_ok(&c.outline) {
+                out.push(Issue::error(at.clone(), "a ceiling needs a level and an outline"));
+            }
+            if !(fin(c.height_ft) && c.height_ft > 0.0 && c.height_ft <= 100.0) {
+                out.push(Issue::error(format!("{at}.height_ft"), "the ceiling height must be more than 0 feet"));
+            } else if let Some(l) = self.level(&c.level).filter(|l| c.height_ft > l.height_ft) {
+                out.push(Issue::warning(
+                    format!("{at}.height_ft"),
+                    format!("the ceiling ({}) is above the next floor ({})", feet(c.height_ft), feet(l.height_ft)),
+                ));
+            }
+            if let Some(g) = c.grid
+                && (!g.spacing_in.iter().all(|v| fin(*v) && *v >= 6.0 && *v <= 120.0) || !g.origin.iter().all(|v| fin(*v)) || !fin(g.angle_deg))
+            {
+                out.push(Issue::error(format!("{at}.grid"), "a grid's tiles are 6\" to 120\""));
+            }
+        }
+        for (i, sf) in self.rcp.soffits.iter().enumerate().take(MAX_ITEMS) {
+            if self.level(&sf.level).is_none() || !outline_ok(&sf.outline) || !(fin(sf.height_ft) && sf.height_ft > 0.0) {
+                out.push(Issue::error(format!("rcp.soffits[{i}]"), "a soffit needs a level, an outline and a height"));
+            }
+        }
+        for (i, it) in self.rcp.items.iter().enumerate().take(100_000) {
+            if self.level(&it.level).is_none() || !it.at.iter().chain(it.size_in.iter()).all(|v| fin(*v)) {
+                out.push(Issue::error(format!("rcp.items[{i}]"), "a ceiling item needs a level, a place and a size"));
             }
         }
         for (i, f) in self.exterior.facades.iter().enumerate().take(MAX_ITEMS) {

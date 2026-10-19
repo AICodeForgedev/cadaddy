@@ -130,7 +130,9 @@ pub fn snap_candidates(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, 
     let mut per_mode: Vec<SnapHit> = mode::ALL.iter().filter(|(b, _)| osmode & b != 0).filter_map(|(b, _)| osnap(*b | extra)).collect();
     per_mode.sort_by(|a, b| a.point.dist(cursor).total_cmp(&b.point.dist(cursor)));
     let mut out: Vec<SnapHit> = osnap(osmode).into_iter().collect();
-    for h in per_mode {
+    // Then every other snap point under the aperture (two endpoints there, both).
+    let rest = crate::snap::osnap_all(d, space, cursor, aperture, osmode & !mode::HATCH | extra);
+    for h in per_mode.into_iter().chain(rest) {
         if !out.iter().any(|o| o.mode == h.mode && o.point.near(h.point, aperture * 1e-6)) {
             out.push(h);
         }

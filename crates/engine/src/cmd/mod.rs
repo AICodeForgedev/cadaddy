@@ -10,6 +10,7 @@ pub mod autospec;
 pub mod blockdetect;
 pub(crate) mod blocks;
 pub mod bspec;
+pub mod ceilings;
 pub(crate) mod clip_partners;
 pub mod clipboard;
 pub mod colorbook;
@@ -235,6 +236,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(materials::specs());
         v.extend(wallgen::specs());
         v.extend(bspec::specs());
+        v.extend(ceilings::specs());
         v.extend(exterior::specs());
         v.extend(stairs::specs());
         v.extend(autospec::specs());

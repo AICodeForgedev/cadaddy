@@ -1250,7 +1250,8 @@ fn draw_tracking(p: &egui::Painter, xf: &Xf, acquired: &[snap::tracking::Acquire
     }
     let Some(tr) = track else { return };
     let mut tips = Vec::new();
-    for path in &tr.paths {
+    // The paths the point slides on, and every other acquired point's path through it.
+    for path in tr.paths.iter().chain(&tr.also) {
         // Around the cursor only (a path's origin may be far off screen).
         let pts: Vec<Pos2> = match path.shape {
             PathShape::Ray { origin, dir } => {
@@ -1283,7 +1284,7 @@ fn draw_tracking(p: &egui::Painter, xf: &Xf, acquired: &[snap::tracking::Acquire
         tips.push(crate::i18n::t(o).to_string());
     }
     let at = xf.w2s(tr.point);
-    if tr.paths.len() > 1 || tr.object.is_some() {
+    if tr.paths.len() + tr.also.len() > 1 || tr.object.is_some() {
         p.line_segment([at + vec2(-4.0, -4.0), at + vec2(4.0, 4.0)], st);
         p.line_segment([at + vec2(4.0, -4.0), at + vec2(-4.0, 4.0)], st);
     }
