@@ -498,8 +498,45 @@ fn row_menu_choice_id() -> egui::Id {
     egui::Id::new("prop_row_menu_choice")
 }
 
+/// The "My" view's rows while it is shown (`None`: all rows).
+fn my_filter_id() -> egui::Id {
+    egui::Id::new("prop_row_my_filter")
+}
+
+/// Most rows the "My" view holds.
+const MAX_MY_PROPERTIES: usize = 200;
+
+/// `ui.properties`: the Properties palette's All / My view and the rows in "My".
+pub(crate) fn my_properties_command(app: &mut CadApp, p: &Value) -> Result<Value, String> {
+    if let Some(v) = p.get("view").and_then(Value::as_str) {
+        app.ui.properties_all = match v.to_ascii_lowercase().as_str() {
+            "all" => true,
+            "my" => false,
+            other => return Err(format!("`view` is \"all\" or \"my\", not \"{other}\"")),
+        };
+    }
+    if let Some(l) = p.get("add").and_then(Value::as_str).map(str::trim).filter(|l| !l.is_empty())
+        && !app.ui.my_properties.iter().any(|m| m == l)
+    {
+        if app.ui.my_properties.len() >= MAX_MY_PROPERTIES {
+            return Err(format!("\"My\" holds at most {MAX_MY_PROPERTIES} properties"));
+        }
+        app.ui.my_properties.push(l.chars().take(100).collect());
+    }
+    if let Some(l) = p.get("remove").and_then(Value::as_str) {
+        app.ui.my_properties.retain(|m| m != l.trim());
+    }
+    Ok(json!({ "view": if app.ui.properties_all { "all" } else { "my" }, "my": app.ui.my_properties }))
+}
+
 fn prop_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
     let t = Tokens::get();
+    // The "My" view shows only the rows the user added.
+    let filter = ui.data(|d| d.get_temp::<std::sync::Arc<(bool, Vec<String>)>>(my_filter_id()));
+    let mine = filter.as_ref().is_some_and(|f| f.1.iter().any(|m| m == label));
+    if filter.as_ref().is_some_and(|f| !f.0) && !mine {
+        return;
+    }
     ui.horizontal(|ui| {
         let mut job = egui::text::LayoutJob::simple(crate::i18n::t(label).to_string(), crate::theme::body(), t.text_dim, 106.0);
         job.halign = egui::Align::RIGHT;
@@ -509,7 +546,7 @@ fn prop_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
         let has_selection = ui.data(|d| d.get_temp::<bool>(row_menu_selection_id())).unwrap_or(false);
         let mut clicked = None;
         lresp.context_menu(|ui| {
-            crate::context_menu::groups_ui(ui, &crate::shortcut_menus::property_row_entries(label, has_selection), &mut clicked);
+            crate::context_menu::groups_ui(ui, &crate::shortcut_menus::property_row_entries(label, has_selection, mine), &mut clicked);
         });
         if let Some(id) = clicked {
             ui.data_mut(|d| d.insert_temp(row_menu_choice_id(), id));
@@ -633,15 +670,27 @@ fn read_only(ui: &mut egui::Ui, text: &str) {
 fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     let hr = section_header(ui, "Properties");
-    // All | My segmented control ("My" property sets don't exist yet).
+    // All | My: every property, or only those the user added (right-click a property's name).
     let seg = Rect::from_min_size(pos2(hr.right() - 120.0, hr.top() + 4.0), vec2(70.0, 18.0));
     ui.painter().rect_filled(seg, 3.0, t.chrome_dark);
     let half = Rect::from_min_size(seg.min, vec2(35.0, 18.0));
     let my = half.translate(vec2(35.0, 0.0));
-    ui.painter().rect_filled(if app.ui.properties_all { half } else { my }, 3.0, t.control);
-    ui.painter().text(half.center(), egui::Align2::CENTER_CENTER, crate::tl!("All"), crate::theme::small(), t.text);
-    ui.painter().text(my.center(), egui::Align2::CENTER_CENTER, crate::tl!("My"), crate::theme::small(), t.text_faint);
-    ui.interact(my, ui.id().with("prop_my"), Sense::hover()).on_hover_text(crate::tl!("My properties: not available yet"));
+    let all = app.ui.properties_all;
+    ui.painter().rect_filled(if all { half } else { my }, 3.0, t.control);
+    ui.painter().text(half.center(), egui::Align2::CENTER_CENTER, crate::tl!("All"), crate::theme::small(), if all { t.text } else { t.text_faint });
+    ui.painter().text(my.center(), egui::Align2::CENTER_CENTER, crate::tl!("My"), crate::theme::small(), if all { t.text_faint } else { t.text });
+    if ui.interact(half, ui.id().with("prop_all"), Sense::click()).on_hover_text(crate::tl!("All properties")).clicked() {
+        app.ui.properties_all = true;
+    }
+    if ui
+        .interact(my, ui.id().with("prop_my"), Sense::click())
+        .on_hover_text(crate::tl!("My properties: the ones you added (right-click a property's name to add it)"))
+        .clicked()
+    {
+        app.ui.properties_all = false;
+    }
+    let filter = std::sync::Arc::new((app.ui.properties_all, app.ui.my_properties.clone()));
+    ui.data_mut(|d| d.insert_temp(my_filter_id(), filter));
     let sel = app.session.selection();
     let pickadd = app.session.settings.pickadd;
     let Ok(d) = app.session.doc() else { return };
@@ -711,6 +760,10 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     ui.data_mut(|d| d.insert_temp(row_menu_selection_id(), !app.session.selection().is_empty()));
     properties_header(app, ui);
+    if !app.ui.properties_all && app.ui.my_properties.is_empty() {
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(crate::tl!("Right-click a property's name and choose Add to My Properties.")).small().color(t.text_dim));
+    }
     let sel = app.session.selection();
     let Ok(d) = app.session.doc() else { return };
     ui.add_space(4.0);
@@ -1133,5 +1186,37 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     report_bad(app, bad);
     if let Some(p) = custom_set {
         let _ = app.run("blocks.reference.set", p);
+    }
+}
+
+#[cfg(test)]
+mod my_properties_tests {
+    use super::*;
+
+    #[test]
+    fn my_properties_are_added_removed_and_shown() {
+        let mut app = CadApp::new(cadaddy_engine::Session::empty(), crate::Services::default());
+        assert!(app.ui.properties_all);
+        let r = app.run("ui.properties", json!({ "add": "Color" })).unwrap();
+        assert_eq!(r["my"], json!(["Color"]));
+        app.run("ui.properties", json!({ "add": "Layer", "view": "my" })).unwrap();
+        // Adding twice keeps one.
+        let r = app.run("ui.properties", json!({ "add": "Color" })).unwrap();
+        assert_eq!((r["view"].clone(), r["my"].clone()), (json!("my"), json!(["Color", "Layer"])));
+        assert!(!app.ui.properties_all);
+        let r = app.run("ui.properties", json!({ "remove": "Color", "view": "all" })).unwrap();
+        assert_eq!((r["view"].clone(), r["my"].clone()), (json!("all"), json!(["Layer"])));
+        assert!(app.run("ui.properties", json!({ "view": "mine" })).is_err());
+        // The row menu offers adding or removing.
+        let entries = crate::shortcut_menus::property_row_entries("Layer", false, true);
+        let ids: Vec<String> = entries
+            .iter()
+            .flatten()
+            .filter_map(|e| match e {
+                crate::menus::Entry::Item { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(ids.iter().any(|i| i.contains("ui.properties") && i.contains("remove")), "{ids:?}");
     }
 }

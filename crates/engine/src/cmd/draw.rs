@@ -1311,7 +1311,7 @@ impl Interactive for SplineM {
             match i {
                 Input::Keyword(k) if k == "CV" => {
                     let Some(factory) = find_command("spline.cv").and_then(|c| c.interactive) else {
-                        return Err(crate::EngineError::Other("CV: not available yet".into()));
+                        return Err(crate::EngineError::Other("CV: this build has no control-vertex spline command (spline.cv)".into()));
                     };
                     let mut m = factory(s)?;
                     self.asking_method = false;

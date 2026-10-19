@@ -9,6 +9,7 @@ mod audit;
 pub(crate) mod blocks;
 pub(crate) mod clip_partners;
 pub mod clipboard;
+pub mod colorbook;
 pub mod constraints;
 mod dash_styles;
 mod draw;
@@ -226,6 +227,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(utility::specs());
         v.extend(table::specs());
         v.extend(tolerance::specs());
+        v.extend(colorbook::specs());
         v.extend(constraints::specs());
         v.extend(lisp::specs());
         v

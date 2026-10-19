@@ -207,6 +207,6 @@ mod tests {
         assert!(app.ui.dialog.is_none(), "nor the preview window");
 
         let e = app.run("share", json!({})).unwrap_err();
-        assert!(e.contains("not available yet"), "{e}");
+        assert!(e.contains("online sharing service"), "{e}");
     }
 }

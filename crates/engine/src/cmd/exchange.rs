@@ -59,17 +59,17 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("attach", "Attach", run_attach)
             .params(
-                "{path: an image (PNG, JPEG: as IMAGEATTACH) or a drawing (DWG, DXF: as XATTACH), and that command's other parameters} → its reply. PDF, DWF and DGN underlays are not available yet (PDFIMPORT converts a PDF)",
+                "{path: an image (PNG, JPEG: as IMAGEATTACH) or a drawing (DWG, DXF: as XATTACH), and that command's other parameters} → its reply. A PDF attaches as an underlay (PDFATTACH); DWF and DGN files need readers CADaddy doesn't have",
             )
             .interactive(|_| Ok(Box::new(AttachM::default()))),
         CommandSpec::new("share", "Share", |_, _| {
-            Err(EngineError::Other("SHARE is not available yet: there is no online service to share through; EXPORT or PUBLISH the drawing and send the file".into()))
+            Err(EngineError::Other("SHARE needs an online sharing service, which CADaddy doesn't use; EXPORT or PUBLISH the drawing and send the file".into()))
         })
-        .params("not available yet")
+        .params("{} (refused: no online sharing service; EXPORT or PUBLISH and send the file)")
         .noundo(),
         CommandSpec::new("3dorbit", "Orbit", |_, _| Err(EngineError::Other("3DORBIT: hold Shift and drag with the middle mouse button to orbit, or click the ViewCube (View ▸ 3D Views for the preset views).".into())))
             .alias(&["3do", "orbit"])
-            .params("not available yet")
+            .params("{} (interactive only: Shift + middle-button drag, or the ViewCube)")
             .noundo(),
     ]
 }
@@ -87,7 +87,12 @@ fn attach_spec(path: &str) -> Result<&'static CommandSpec> {
         "png" | "jpg" | "jpeg" => "imageattach",
         "dwg" | "dxf" => "xattach",
         "pdf" => "pdfattach",
-        "dwf" | "dwfx" | "dgn" => return Err(bad("attach", "DWF and DGN underlays are not available yet")),
+        "dwf" | "dwfx" | "dgn" => {
+            return Err(bad(
+                "attach",
+                "DWF and DGN underlays need DWF/DGN readers, which CADaddy doesn't have; attach a PDF, image or drawing instead",
+            ));
+        }
         other => return Err(bad("attach", format!("files of type .{other} can't be attached; choose an image (PNG, JPEG) or a drawing (DWG, DXF)"))),
     };
     command_specs().iter().find(|c| c.id == id).ok_or_else(|| bad("attach", format!("{id} is missing")))
@@ -895,10 +900,10 @@ mod tests {
     }
 
     #[test]
-    fn share_says_it_is_not_available_yet() {
+    fn share_says_what_it_needs() {
         let mut s = session();
         let e = s.execute(&resolve_alias("share"), &Value::Null).unwrap_err().to_string();
-        assert!(e.contains("not available yet"), "{e}");
+        assert!(e.contains("online sharing service"), "{e}");
     }
 
     #[test]
@@ -916,7 +921,7 @@ mod tests {
         // 8 units wide, 4 high (square pixels), lower-left corner at the point.
         assert!((im.u.x * im.size.x - 8.0).abs() < 1e-9 && (im.v.y * im.size.y - 4.0).abs() < 1e-9, "{im:?}");
         assert_eq!((im.insert.x, im.insert.y, im.name.as_str()), (10.0, 5.0, "photo"));
-        for (p, says) in [("plan.pdf", "pdfattach"), ("a.dgn", "not available yet"), ("notes.txt", "can't be attached")] {
+        for (p, says) in [("plan.pdf", "pdfattach"), ("a.dgn", "DWF/DGN readers"), ("notes.txt", "can't be attached")] {
             let e = s.execute("attach", &json!({ "path": p })).unwrap_err().to_string();
             assert!(e.contains(says), "{p}: {e}");
         }

@@ -189,8 +189,15 @@ fn similar_bit(label: &str) -> Option<u32> {
 /// A Properties palette row's menu (`label` is the row's property): Select Similar by that
 /// property (with objects selected), Quick Select, Select All and Deselect All. Built without the
 /// app: the rows are drawn while it is borrowed (see [`crate::palettes`]).
-pub fn property_row_entries(label: &str, has_selection: bool) -> Vec<Vec<Entry>> {
+pub fn property_row_entries(label: &str, has_selection: bool, mine: bool) -> Vec<Vec<Entry>> {
     let mut groups = Vec::new();
+    // The palette's "My" view: rows the user picked.
+    let my = if mine {
+        run("Remove from My Properties", "ui.properties", json!({ "remove": label }))
+    } else {
+        run("Add to My Properties", "ui.properties", json!({ "add": label }))
+    };
+    push(&mut groups, my.into_iter().collect());
     if has_selection && let Some(bit) = similar_bit(label) {
         push(&mut groups, run("Select Similar", "selectsimilar", json!({ "mode": bit })).into_iter().collect());
     }

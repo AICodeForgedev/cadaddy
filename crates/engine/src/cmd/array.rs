@@ -1137,7 +1137,7 @@ impl Interactive for PolarM {
             }
             (Center, Input::Keyword(k)) if k == "Base point" => CenterBase,
             (Center, Input::Keyword(_)) => {
-                s.echo("A rotation axis (3D) is not available yet; specify the center point.");
+                s.echo("A rotation axis in space needs 3D polar arrays, which CADaddy doesn't make; specify the center point.");
                 Center
             }
             (Center, _) => return Err(other("Requires a point or an option keyword.")),

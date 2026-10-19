@@ -104,7 +104,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("rename", "Rename...", run_rename)
             .menu(&["Format", "Rename..."])
             .alias(&["ren", "-rename"])
-            .params("{table: layer|linetype|style|dimstyle|block|mleaderstyle|tablestyle|view|ucs, from, to}")
+            .params("{table: layer|linetype|style|dimstyle|block|mleaderstyle|tablestyle|view|ucs|plotstyle|vport, from, to} (materials: refused, the drawing keeps none)")
             .interactive(|_| Ok(Box::new(rename::RenameM::default()))),
     ]
 }
@@ -1078,6 +1078,9 @@ fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
             (set.run)(s, &json!({ "name": from, "newName": to }))?;
         }
         "block" => rename::block(s, &from, &to)?,
+        "plotstyle" => rename::plotstyle(s, &from, &to)?,
+        "vport" | "viewport" => rename::vport(s, &from, &to)?,
+        "material" => return Err(bad("rename", rename::NO_MATERIALS)),
         "mleaderstyle" | "multileaderstyle" => rename::simple(s, "mleaderstyle", &from, &to)?,
         "tablestyle" | "view" | "ucs" => rename::simple(s, &table, &from, &to)?,
         "style" | "textstyle" => {

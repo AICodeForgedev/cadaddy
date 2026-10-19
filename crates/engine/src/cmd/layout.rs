@@ -788,7 +788,12 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
         }
         // Layout plotting always prints the whole sheet; the other areas are only stored for DXF round trips.
         if v != "layout" && v != page.plot_area {
-            return Err(bad(cmd, format!("plot area `{v}` is not available yet; layouts plot the whole sheet (`layout`)")));
+            return Err(bad(
+                cmd,
+                format!(
+                    "plot area `{v}` can't be used for a layout: layout plotting prints the whole sheet (`layout`); plot extents, display, window or limits from model space"
+                ),
+            ));
         }
         page.plot_area = v;
     }
@@ -1141,7 +1146,7 @@ mod tests {
         assert!(s.execute("pagesetup", &json!({"paper": "A4"})).is_err(), "model tab needs a layout");
         for area in ["extents", "display", "window", "limits"] {
             let e = s.execute("pagesetup", &json!({"layout": "Layout1", "plotArea": area})).unwrap_err();
-            assert!(e.to_string().contains("not available yet"), "{area}: {e}");
+            assert!(e.to_string().contains("whole sheet"), "{area}: {e}");
         }
         let r = s.execute("pagesetup", &json!({"layout": "Layout1", "plotArea": "Layout"})).unwrap();
         assert_eq!(r["page"]["plotArea"], "layout");
