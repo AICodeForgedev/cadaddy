@@ -20,6 +20,8 @@ struct SceneKey {
     doc: usize,
     revision: u64,
     band: i32,
+    /// The baked lighting's version (LIGHTBAKE).
+    lightmap: u64,
 }
 
 /// The shaded view's caches.
@@ -106,8 +108,10 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
 /// The model's scene at detail `band` (curves to 2^band drawing units), rebuilt when the drawing
 /// changes.
 fn scene(app: &mut CadApp, band: i32) -> Option<Arc<Scene>> {
+    // Looks for a lightmap beside the drawing the first time.
+    let _ = cadaddy_engine::cmd::lightbake::current(&mut app.session);
     let st = app.session.state().ok()?;
-    let key = SceneKey { doc: Arc::as_ptr(&st.doc) as usize, revision: st.revision, band };
+    let key = SceneKey { doc: Arc::as_ptr(&st.doc) as usize, revision: st.revision, band, lightmap: st.lightmap_rev };
     if let Some((k, s)) = &app.canvas.shade.scene
         && *k == key
     {
@@ -115,7 +119,9 @@ fn scene(app: &mut CadApp, band: i32) -> Option<Arc<Scene>> {
     }
     let t = crate::theme::Tokens::get();
     let bg = Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b());
-    let s = Arc::new(shade::scene(&st.doc, &cadaddy_doc::Space::Model, 2f64.powi(band), bg));
+    let mut sc = shade::scene(&st.doc, &cadaddy_doc::Space::Model, 2f64.powi(band), bg);
+    sc.baked = cadaddy_engine::cmd::lightbake::baked_for(&mut app.session, &sc);
+    let s = Arc::new(sc);
     app.canvas.shade.scene = Some((key, Arc::clone(&s)));
     Some(s)
 }
@@ -125,8 +131,9 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const SAMPLES: u32 = 4;
 /// Position (3 × f32, from the scene's origin) + normal (3 × f32) + sRGB colour (4 × u8) +
-/// texture coordinates (2 × f32) + material (roughness, metallic, texture layer, opacity: 4 × f32).
-const VERTEX_SIZE: u64 = 52;
+/// texture coordinates (2 × f32) + material (roughness, metallic, texture layer, opacity: 4 × f32) +
+/// lightmap coordinates of its front and back (4 × f32; negative: none).
+const VERTEX_SIZE: u64 = 68;
 /// The frame's uniform block (see `shader.wgsl`).
 const UNIFORM_SIZE: u64 = 1328;
 /// Texture array layer size and most layers.
@@ -160,6 +167,8 @@ struct Gpu {
     uniform: wgpu::Buffer,
     sampler: wgpu::Sampler,
     shadow_sampler: wgpu::Sampler,
+    /// The lightmap's: linear, clamped (cells have borders).
+    lm_sampler: wgpu::Sampler,
     shadow_view: wgpu::TextureView,
     bind_group: Option<wgpu::BindGroup>,
     tris: Option<Buffer>,
@@ -208,6 +217,15 @@ impl Gpu {
                     },
                 ),
                 entry(4, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison)),
+                entry(
+                    5,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(6, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
             ],
         });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -221,8 +239,8 @@ impl Gpu {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        const ATTRS: [wgpu::VertexAttribute; 5] =
-            wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Float32x2, 4 => Float32x4];
+        const ATTRS: [wgpu::VertexAttribute; 6] =
+            wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Float32x2, 4 => Float32x4, 5 => Float32x4];
         let vb = [Some(wgpu::VertexBufferLayout { array_stride: VERTEX_SIZE, step_mode: wgpu::VertexStepMode::Vertex, attributes: &ATTRS })];
         let pipeline = |label: &str, vs: &str, fs: &str, topology: wgpu::PrimitiveTopology, write_depth: bool, blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -341,6 +359,12 @@ impl Gpu {
             uniform,
             sampler,
             shadow_sampler,
+            lm_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("shaded_lightmap"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
             shadow_view: shadow_tex.create_view(&wgpu::TextureViewDescriptor::default()),
             bind_group: None,
             tris: None,
@@ -372,7 +396,11 @@ impl Gpu {
         let (mut tris, mut clear): (Vec<u8>, Vec<u8>) = (Vec::new(), Vec::new());
         if style != VisualStyle::Wireframe {
             tris.reserve(scene.tris.len() * 3 * VERTEX_SIZE as usize);
-            for t in &scene.tris {
+            for (ti, t) in scene.tris.iter().enumerate() {
+                let lm = match scene.baked.as_ref().filter(|_| physical).and_then(|b| b.corner_uv(ti)) {
+                    Some([f, b]) => [0, 1, 2].map(|k| [f[k][0], f[k][1], b[k][0], b[k][1]]),
+                    None => [[-1.0; 4]; 3],
+                };
                 let n = (t.p[1] - t.p[0]).cross(t.p[2] - t.p[0]).normalized();
                 let n = if n.is_finite() { [n.x as f32, n.y as f32, n.z as f32] } else { [0.0, 0.0, 1.0] };
                 let surface = scene.surfaces.get(t.mat as usize).filter(|_| physical);
@@ -384,8 +412,8 @@ impl Gpu {
                     None => (t.color, [0.6, 0.0, -1.0, 1.0]),
                 };
                 let out = if m[3] < 0.99 { &mut clear } else { &mut tris };
-                for (p, uv) in t.p.iter().zip(t.uv) {
-                    push_vertex(out, rel(*p), n, color, uv, m);
+                for ((p, uv), l) in t.p.iter().zip(t.uv).zip(lm) {
+                    push_vertex(out, rel(*p), n, color, uv, m, l);
                 }
             }
         }
@@ -394,8 +422,8 @@ impl Gpu {
         let mut lines: Vec<u8> = Vec::new();
         for l in scene.lines.iter().filter(|l| !l.edge || edges) {
             let c = if l.edge && style == VisualStyle::ShadedEdges { dark } else { l.color };
-            push_vertex(&mut lines, rel(l.a), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0]);
-            push_vertex(&mut lines, rel(l.b), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0]);
+            push_vertex(&mut lines, rel(l.a), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0], [-1.0; 4]);
+            push_vertex(&mut lines, rel(l.b), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0], [-1.0; 4]);
         }
         self.tris = buffer(device, "shaded_tris", &tris);
         self.clear_tris = buffer(device, "shaded_glass", &clear);
@@ -428,6 +456,30 @@ impl Gpu {
             );
         }
         let tex_view = tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
+        // The baked lighting atlas (RGBM), or one black texel.
+        let (lw, lh, lbytes) = match scene.baked.as_ref().filter(|_| physical) {
+            Some(b) => (b.map.width, b.map.height, cadaddy_render::lightmap::rgbm(&b.map)),
+            None => (1, 1, vec![0, 0, 0, 255]),
+        };
+        let lm_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shaded_lightmap"),
+            size: wgpu::Extent3d { width: lw.max(1), height: lh.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        if lbytes.len() as u64 == u64::from(lw) * u64::from(lh) * 4 {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: &lm_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                &lbytes,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(lw * 4), rows_per_image: Some(lh) },
+                wgpu::Extent3d { width: lw, height: lh, depth_or_array_layers: 1 },
+            );
+        }
+        let lm_view = lm_tex.create_view(&wgpu::TextureViewDescriptor::default());
         self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("shaded"),
             layout: &self.layout,
@@ -437,6 +489,8 @@ impl Gpu {
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.shadow_view) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.shadow_sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&lm_view) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&self.lm_sampler) },
             ],
         }));
     }
@@ -640,12 +694,12 @@ pub(crate) fn edge_ink(_bg: Rgb) -> Rgb {
     Rgb(16, 16, 16)
 }
 
-fn push_vertex(out: &mut Vec<u8>, p: [f32; 3], n: [f32; 3], c: Rgb, uv: [f32; 2], m: [f32; 4]) {
+fn push_vertex(out: &mut Vec<u8>, p: [f32; 3], n: [f32; 3], c: Rgb, uv: [f32; 2], m: [f32; 4], lm: [f32; 4]) {
     for x in p.iter().chain(n.iter()) {
         out.extend_from_slice(&x.to_le_bytes());
     }
     out.extend_from_slice(&[c.0, c.1, c.2, 255]);
-    for x in uv.iter().chain(m.iter()) {
+    for x in uv.iter().chain(m.iter()).chain(lm.iter()) {
         out.extend_from_slice(&x.to_le_bytes());
     }
 }

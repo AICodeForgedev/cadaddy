@@ -13,6 +13,7 @@ mod fill;
 mod hatch;
 pub mod images;
 pub mod light;
+pub mod lightmap;
 mod linetype;
 mod linetype_text;
 pub mod materials;

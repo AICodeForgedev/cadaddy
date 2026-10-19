@@ -28,6 +28,7 @@ mod imageclip;
 mod inquiry;
 mod layer;
 pub(crate) mod layout;
+pub mod lightbake;
 pub mod lights;
 mod lisp;
 pub mod materials;
@@ -208,6 +209,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(modify::specs());
         v.extend(draworder::specs());
         v.extend(lights::specs());
+        v.extend(lightbake::specs());
         v.extend(materials::specs());
         v.extend(imageclip::specs());
         v.extend(array::specs());
