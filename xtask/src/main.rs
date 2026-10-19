@@ -7,6 +7,7 @@ mod assets;
 mod ico;
 mod layers;
 mod parity;
+mod perf;
 mod stats;
 mod version;
 
@@ -20,13 +21,17 @@ commands:
   assets          check that every icon/image/font/asset is attributed in ATTRIBUTION.md
   layers          enforce the crate dependency layering (plan/architecture.md §3)
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates
-  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm (stops at first failure)
+  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm, perf (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   parity          recompute the AutoCAD menu-breadth checklist in docs/parity-checklist.md
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
+  perf [--full] [--update-budget]
+                  performance budgets (perf/budget.json): open/save DWG/DXF/.cdy, regen, select and
+                  move all, zoom extents, 3D build, plot PDF on 1k/10k objects (--full: 100k, 500k
+                  too); warns over budget, fails over 2x; trend in target/perf/history.jsonl
   fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
                   mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
                   saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
@@ -46,6 +51,7 @@ fn main() -> ExitCode {
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("fuzz") => cmd_fuzz(&rest),
+        Some("perf") => perf::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -194,6 +200,7 @@ fn cmd_ci() -> Result<(), String> {
         ("assets", Box::new(|| assets::run(&root()))),
         ("layers", Box::new(cmd_layers)),
         ("wasm", Box::new(cmd_wasm)),
+        ("perf", Box::new(|| perf::run(&root(), &[]))),
     ];
     let mut done = Vec::new();
     for (name, f) in &steps {
