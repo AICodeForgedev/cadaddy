@@ -67,6 +67,12 @@ impl GetRequest {
         let mut p = Prompt::new(message, accept).base_opt(base);
         p.keywords = self.initget.keywords.clone();
         p.raw = true;
+        // `entsel`/`nentsel` pick one object. The routine writes the message, so the prompt says
+        // so itself rather than being read for the word "Select" -- with a message of its own
+        // ("\nSelect the second line: ", or no mention of selecting at all) the pick box went
+        // missing, while the same call without one got it from the default "Select object: "
+        // (#1598).
+        p.picks_one = matches!(self.kind, GetKind::EntSel);
         p
     }
 
