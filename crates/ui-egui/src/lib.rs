@@ -88,6 +88,7 @@ pub mod spelldlg;
 pub mod theme;
 pub mod toldlg;
 pub mod toolpalettes;
+pub mod touch;
 pub mod viewcube;
 pub mod vpscale;
 pub mod walk;
@@ -191,6 +192,8 @@ pub struct UiState {
     pub agent_control: bool,
     /// Drawings opened from a path, newest first (File ▸ Open Recent and the Start page).
     pub recent_files: Vec<String>,
+    /// The touch bar shows once the screen is touched ([`touch`]).
+    pub touch_bar: bool,
     /// Keyboard shortcuts the user changed ([`aliasdlg`]).
     pub shortcuts: Vec<aliasdlg::Binding>,
     /// The ribbon tabs shown (the current workspace's); empty shows them all.
@@ -292,6 +295,7 @@ impl Default for UiState {
             save_version: SaveVersion::default().year().to_string(),
             agent_control: true,
             recent_files: Vec::new(),
+            touch_bar: true,
             shortcuts: Vec::new(),
             ribbon_tabs: Vec::new(),
             user_workspaces: Vec::new(),
