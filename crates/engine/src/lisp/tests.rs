@@ -452,6 +452,33 @@ fn hostile_lisp_never_panics() {
     assert!(!s.lisp_running());
 }
 
+/// `entsel` and `nentsel` pick one object, so the cursor shows the pick box at their prompt. It
+/// was read off the message's first word, and a routine's own message begins with a newline -- so
+/// the same call showed the pick box without a message and lost it with one (#1598).
+#[test]
+fn an_entsel_prompt_picks_objects_whatever_its_message_says() {
+    let mut s = session();
+    // No message: the default "Select object: ".
+    s.cmdline("(nentsel)").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // The reported case: the routine's own message, starting with a newline.
+    s.cmdline("(nentsel \"\nSelect second line or polyline: \")").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // Wording that never says "select" picks an object just the same.
+    s.cmdline("(entsel \"\nPick a line: \")").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // A point prompt is not a pick, and keeps its point modifiers.
+    s.cmdline("(getpoint \"\nSpecify a point: \")").unwrap();
+    assert!(!s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+}
+
 #[test]
 fn a_waiting_routine_is_a_prompt_with_a_rubber_band() {
     let mut s = session();
