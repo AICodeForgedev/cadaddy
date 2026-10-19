@@ -2,7 +2,7 @@
 //!
 //! Scans all git-tracked (and untracked, not ignored) files with an asset extension, plus
 //! everything under `assets/`, `docs/images/` and `examples/`, and fails if a path is not listed
-//! as `` `path` `` in ATTRIBUTION.md. See the asset policy in AGENTS.md.
+//! as `` `path` `` in ATTRIBUTION.md (or under a folder row, `` `dir/` ``). See the asset policy in AGENTS.md.
 
 use std::path::Path;
 use std::process::Command;
@@ -18,9 +18,16 @@ pub fn is_asset(path: &str) -> bool {
     ASSET_DIRS.iter().any(|d| path.starts_with(d)) || ASSET_EXT.contains(&ext.as_str())
 }
 
+/// Folders attributed as a whole: a table row whose first cell is a folder (`` `dir/` ``), for
+/// generated files such as the UI screenshot goldens. A folder named in prose doesn't count.
+fn folder_rows(assets_md: &str) -> Vec<&str> {
+    assets_md.lines().filter_map(|l| l.strip_prefix("| `")?.split_once('`').map(|(p, _)| p)).filter(|p| p.ends_with('/')).collect()
+}
+
 /// Paths that need an ATTRIBUTION.md entry but lack one.
 pub fn missing(files: &[String], assets_md: &str) -> Vec<String> {
-    files.iter().filter(|f| is_asset(f) && !assets_md.contains(&format!("`{f}`"))).cloned().collect()
+    let folders = folder_rows(assets_md);
+    files.iter().filter(|f| is_asset(f) && !assets_md.contains(&format!("`{f}`")) && !folders.iter().any(|d| f.starts_with(d))).cloned().collect()
 }
 
 pub fn run(root: &Path) -> Result<(), String> {
@@ -51,5 +58,12 @@ mod tests {
         assert_eq!(missing(&files, md), vec!["docs/images/b.png".to_string(), "tests/fixture.png".into()]);
         assert!(!is_asset("crates/x/src/lib.rs"));
         assert!(is_asset("assets/fonts/OFL.txt"));
+    }
+
+    #[test]
+    fn a_folder_row_covers_the_files_under_it() {
+        let files = vec!["tests/golden/a/b.png".to_string(), "tests/goldenx/c.png".into(), "docs/images/d.png".into()];
+        let md = "Everything under `docs/images/` needs a row.\n| `tests/golden/` | us | rendered by the tests | MIT |";
+        assert_eq!(missing(&files, md), vec!["tests/goldenx/c.png".to_string(), "docs/images/d.png".into()]);
     }
 }
