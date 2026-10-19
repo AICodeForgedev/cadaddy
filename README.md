@@ -225,6 +225,9 @@ MCP tools include `command_line` (type at the prompt), `execute` (any command wi
 `screenshot` and `ui_click`. The desktop app's JSON control channel is documented in
 [docs/control-protocol.md](docs/control-protocol.md).
 
+To run LISP routines, scripts and alias files, or to drive CADCraft from your own programs, see
+[docs/customization.md](docs/customization.md).
+
 ## Architecture
 
 ```text
