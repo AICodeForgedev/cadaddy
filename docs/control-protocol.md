@@ -40,6 +40,7 @@ field. `engine.commands` returns a separate command catalog, not a list of addit
 | `cmdline.key` | `{key: "enter"\|"escape"}` | Press Enter or Escape. Replies like `cmdline.input`: the state, `output`, and `error` when Enter was refused. |
 | `cmdline.state` | | Current prompt (text and bare message), keywords, default, accepted input kinds, `busy` (a drawing still opening), `closePrompt`, history tail. |
 | `engine.execute` | `{command, params}` | Run any command with JSON parameters. Never opens a dialog. `command` is an alias of this method, with the same parameters and result. |
+| `engine.executeMany` | `{commands: [{command, params}], stopOnError?}` | Run up to 10,000 commands in one request as one undo step; returns `{results, ran}` (a failed command's result is `{error}`). With `stopOnError` the first failure stops the batch and puts every drawing back as it was: `{results, ran, error: {index, command, message}, undone}`. MCP: `execute_many`. |
 | `engine.commands` | `{filter?}` | Every command (or those whose id, label or an alias contains `filter`): id, label, menu path, shortcut, aliases, params doc, enabled. |
 | `drawing.inspect` | `{entities?, limit?}` | Drawing summary (counts, extents, layers, styles, blocks, layouts, selection, undo) and entities with handles and geometry. |
 | `ui.inspect` | | UI state, canvas rect, view, cursor and snap, performance counters; `closePrompt`: the drawing a "Save changes?" prompt is asking about (null when none); and actual egui keyboard focus (`focus.id`, `focus.label`, `focus.role`). |

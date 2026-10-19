@@ -11,6 +11,7 @@
 pub mod assoc;
 pub mod audit;
 pub mod autosave;
+pub mod batch;
 pub mod blockedit;
 pub mod cmd;
 pub mod doc_path;

@@ -485,3 +485,27 @@ fn rooms_tool_lists_gets_and_builds() {
     assert_eq!(tool(&mut s, "rooms", json!({"action": "build"}))["built"], 1);
     tool_err(&mut s, "rooms", json!({"action": "get", "name": "none"}));
 }
+
+#[test]
+fn execute_many_places_many_objects_in_one_call() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let cmds: Vec<Value> = (0..150).map(|i| json!({"command": "circle", "params": {"center": [i * 3, 0], "radius": 1}})).collect();
+    let r = tool(&mut s, "execute_many", json!({"commands": cmds}));
+    assert_eq!(r["ran"], 150, "{r}");
+    let d = tool(&mut s, "inspect_drawing", json!({"entities": false}));
+    assert_eq!(d["counts"]["Circle"], 150);
+    // One undo takes them all away.
+    tool(&mut s, "execute", json!({"command": "undo", "params": {}}));
+    let d = tool(&mut s, "inspect_drawing", json!({"entities": false}));
+    assert!(d["counts"].get("Circle").is_none(), "{d}");
+    // stopOnError: the failure named, nothing kept.
+    let r = tool(
+        &mut s,
+        "execute_many",
+        json!({"commands": [{"command": "circle", "params": {"center": [0, 0], "radius": 1}}, {"command": "nope"}], "stopOnError": true}),
+    );
+    assert_eq!(r["error"]["index"], 1);
+    assert_eq!(r["undone"], 1);
+    let r = call(&mut s, 9, "tools/call", json!({"name": "execute_many", "arguments": {}}));
+    assert!(r["error"].is_object() || r["result"]["isError"] == true, "commands are required: {r}");
+}

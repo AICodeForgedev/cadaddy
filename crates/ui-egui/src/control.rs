@@ -292,6 +292,11 @@ const METHODS: &[(&str, &str, &str)] = &[
     ),
     ("engine.execute", "{command, params}", "Run any command with JSON parameters. Never opens a dialog."),
     (
+        "engine.executeMany",
+        "{commands: [{command, params}], stopOnError?}",
+        "Run up to 10k commands in one request and one undo step; each result returned (stopOnError: the first failure puts everything back).",
+    ),
+    (
         "engine.commands",
         "{filter?}",
         "Every command (or those whose id, label or an alias contains `filter`): id, label, menu path, shortcut, aliases, params doc, enabled.",
@@ -427,6 +432,11 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             let params = p.get("params").cloned().unwrap_or(json!({}));
             let params = if params.is_null() { json!({}) } else { params };
             wrap(app.run(id, params))
+        }
+        "engine.executeMany" => {
+            let Some(list) = p.get("commands").and_then(Value::as_array) else { return err("missing `commands`: [{command, params}]") };
+            let stop = p.get("stopOnError").and_then(Value::as_bool).unwrap_or(false);
+            wrap(app.session.execute_many(list, stop).map_err(|e| e.to_string()))
         }
         "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };

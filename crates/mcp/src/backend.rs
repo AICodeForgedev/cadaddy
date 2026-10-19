@@ -232,6 +232,11 @@ const HEADLESS_METHODS: &[(&str, &str, &str)] = &[
     ),
     ("engine.execute", "{command, params}", "Run any command with JSON parameters. Never opens a dialog."),
     (
+        "engine.executeMany",
+        "{commands: [{command, params}], stopOnError?}",
+        "Run up to 10k commands in one request and one undo step; each result returned (stopOnError: the first failure puts everything back).",
+    ),
+    (
         "engine.commands",
         "{filter?}",
         "Every command (or those whose id, label or an alias contains `filter`): id, label, menu path, shortcut, aliases, params doc, enabled.",
@@ -287,6 +292,11 @@ impl Backend for Headless {
                 let id = str_p("command").ok_or("missing `command`")?;
                 let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
                 s.execute(&id, &params).map_err(|e| e.to_string())
+            }
+            "engine.executeMany" => {
+                let list = p.get("commands").and_then(Value::as_array).ok_or("missing `commands`: [{command, params}]")?;
+                let stop = p.get("stopOnError").and_then(Value::as_bool).unwrap_or(false);
+                s.execute_many(list, stop).map_err(|e| e.to_string())
             }
             "cmdline.input" => {
                 let before = s.log.len();
