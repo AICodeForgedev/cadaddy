@@ -336,6 +336,8 @@ fn header_default(n: &str) -> Option<Value> {
         "CMATERIAL" => Some(json!("ByLayer")),
         // Rendered views' sun on/off and exposure, kept with the drawing's sun.
         "SUNSTATUS" => Some(json!(1)),
+        // The geographic marker and north arrow shown (GEOGRAPHICLOCATION).
+        "GEOMARKERVISIBILITY" => Some(json!(1)),
         "RENDEREXPOSURE" => Some(json!(0.0)),
         _ => None,
     }

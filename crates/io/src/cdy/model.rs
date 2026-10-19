@@ -84,6 +84,9 @@ struct Tables {
     /// as defaults from .cdy).
     #[serde(default)]
     sun: Value,
+    /// The geographic location (GEOGRAPHICLOCATION).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    geo: Option<cadaddy_doc::geo::GeoLocation>,
     /// (object handle, its field values) in handle order.
     #[serde(default)]
     field_values: Vec<(u64, Vec<String>)>,
@@ -259,6 +262,7 @@ pub(super) fn tables(d: &Drawing) -> Result<Vec<u8>, String> {
         layer_filters: value(&d.layer_filters)?,
         materials: value(&d.materials)?,
         sun: value(&d.sun)?,
+        geo: d.geo.clone(),
         field_values: d.field_values.iter().map(|(h, v)| (h.0, v.clone())).collect(),
         kept_handles: d.kept_handles.iter().map(|(k, h)| (k.clone(), *h)).collect(),
         // The BSPC and TOUR chunks hold these now (so a new tour appends only its chunk); the
@@ -471,6 +475,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 if !t.sun.is_null() {
                     field!(sun, "the sun");
                 }
+                d.geo = t.geo.filter(|g| g.is_valid());
                 d.field_values = t.field_values.iter().map(|(h, v)| (cadaddy_doc::Handle(*h), v.clone())).collect();
                 d.kept_handles = t.kept_handles.iter().take(10_000_000).map(|(k, h)| (k.clone(), *h)).collect();
                 if let Some(spec) = t.building_spec.filter(|s| s.len() <= MAX_TEXT) {

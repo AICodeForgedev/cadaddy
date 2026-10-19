@@ -2041,6 +2041,16 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         draw_ucs_icon(&painter, rect, xf.proj, &ucs, at);
         crate::viewcube::ucs_icon(app, ui, rect);
     }
+    // The geographic location: its marker at the design point and a north arrow (plan views of
+    // model space; GEOMARKERVISIBILITY 0 hides them).
+    if sheet.is_none()
+        && xf.proj.is_none()
+        && let Ok(d) = app.session.doc()
+        && let Some(g) = &d.geo
+        && d.header.i64("GEOMARKERVISIBILITY", 1) != 0
+    {
+        draw_geo(&painter, &xf, rect, g);
+    }
     let cube = app.ui.show_viewcube && sheet.is_none();
     if cube {
         draw_viewcube(app, ui, rect);
@@ -2469,6 +2479,34 @@ fn draw_lock(p: &egui::Painter, c: Pos2, color: Color32) {
 /// The UCS icon: the current UCS's axes as the view shows them (X and Y in the plan view, with
 /// the square at the corner for the world; X, Y and Z in a 3D view, an axis pointing at the
 /// viewer drawn short), at the lower-left corner or at `at` (the UCS origin on screen).
+/// The location marker (a pin at the design point) and a north arrow in the lower right corner.
+fn draw_geo(p: &egui::Painter, xf: &Xf, rect: Rect, g: &cadaddy_engine::doc::geo::GeoLocation) {
+    let t = crate::theme::Tokens::get();
+    let dp = Vec2::new(g.design_point.x, g.design_point.y);
+    let at = xf.w2s(dp);
+    if rect.contains(at) {
+        let head = at - egui::vec2(0.0, 14.0);
+        p.line_segment([at, head], Stroke::new(2.0, t.accent));
+        p.circle(head, 5.0, t.accent, Stroke::new(1.0, t.canvas));
+        p.circle_filled(at, 2.0, t.accent);
+    }
+    // North on screen: the drawing's north direction through the view (twist included).
+    let s = xf.w2s(dp + g.north_dir()) - at;
+    let len = s.length();
+    if len < 1e-9 || !len.is_finite() {
+        return;
+    }
+    let dir = s / len;
+    let c = rect.right_bottom() - egui::vec2(36.0, 70.0);
+    let side = egui::vec2(-dir.y, dir.x);
+    let tip = c + dir * 18.0;
+    let tail = c - dir * 14.0;
+    p.circle_stroke(c, 20.0, Stroke::new(1.0, t.text_dim));
+    p.add(egui::Shape::convex_polygon(vec![tip, c + side * 7.0 - dir * 6.0, c, c - side * 7.0 - dir * 6.0], t.text, Stroke::NONE));
+    p.line_segment([c, tail], Stroke::new(1.5, t.text));
+    p.text(tip + dir * 10.0, egui::Align2::CENTER_CENTER, "N", crate::theme::body(), t.text);
+}
+
 fn draw_ucs_icon(p: &egui::Painter, rect: Rect, proj: Option<cadaddy_geom::view3::Projection>, ucs: &cadaddy_engine::ucs::Frame, at: Option<Pos2>) {
     let t = Tokens::get();
     let o = at.unwrap_or(pos2(rect.left() + 36.0, rect.bottom() - 34.0));
