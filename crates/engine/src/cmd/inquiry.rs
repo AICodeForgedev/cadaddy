@@ -45,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("drawing.summary", "Drawing Summary", summary::run_summary).params(summary::SUMMARY_PARAMS).noundo(),
         CommandSpec::new("drawing.query", "Query Drawing", summary::run_query).params(summary::QUERY_PARAMS).noundo(),
         CommandSpec::new("entities", "Query Entities", run_entities)
-            .params("{type?, layer?, window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
+            .params("{type?, layer?, selected?: bool (default false; true = current selection in active space), window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
             .noundo(),
         CommandSpec::new("shapes", "Analyze Shapes", shapes::run).params(shapes::PARAMS).noundo(),
         CommandSpec::new("texts", "Query Texts", run_texts)
@@ -551,14 +551,17 @@ fn run_entities(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .transpose()?;
     let crossing = given("crossing").map_or(Ok(true), |v| v.as_bool().ok_or_else(|| bad(CMD, "`crossing` must be true or false")))?;
+    let selected = given("selected").map_or(Ok(false), |v| v.as_bool().ok_or_else(|| bad(CMD, "`selected` must be true or false")))?;
     let limit = count("limit", 500)?;
     let offset = count("offset", 0)?;
     let st = s.state()?;
     let d = &st.doc;
     let Some(store) = d.space(&st.space) else { return Ok(json!({ "count": 0, "returned": 0, "entities": [] })) };
     let tol = window.as_ref().map(crate::select::window_tol).unwrap_or(0.0);
+    let selection: std::collections::HashSet<Handle> = if selected { st.selection.iter().copied().collect() } else { Default::default() };
     let matches: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = store
         .iter()
+        .filter(|e| !selected || selection.contains(&e.handle))
         .filter(|e| ty.as_ref().is_none_or(|t| e.kind.type_name().to_ascii_lowercase() == *t || e.kind.dxf_name().to_ascii_lowercase() == *t))
         .filter(|e| layer.as_ref().is_none_or(|l| e.common.layer.to_ascii_lowercase() == *l))
         .filter(|e| window.as_ref().is_none_or(|w| crate::select::in_window(d, e, None, w, crossing, tol)))
