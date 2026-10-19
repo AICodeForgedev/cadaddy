@@ -2489,6 +2489,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // The drawing's own next handle: table records and objects are numbered above it, so
     // reading it back (instead of $HANDSEED) keeps their handles across saves (#495).
     xrecords.push((dxf_ext::HANDSEED_KEY, w.h(), vec![format!("{:X}", d.handseed)]));
+    if let Some(json) = crate::dxf_table::all_cell_styles_json(&d.table_styles) {
+        xrecords.push((dxf_ext::CELL_STYLES_KEY, w.h(), dxf_ext::json_chunks(&json)));
+    }
     if let Some(name) = d.header.get("CMLEADERSTYLE").and_then(HVal::as_str) {
         xrecords.push((dxf_ext::MLEADER_STYLE_KEY, w.h(), vec![name.to_string()]));
     }

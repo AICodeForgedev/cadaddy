@@ -599,6 +599,10 @@ fn add_read(s: &mut Session, mut drawing: Drawing, binary_dxf: bool, name: &str,
     let loss = read_loss(&drawing);
     let has_path = path.is_some();
     let cdy_saved = path.as_deref().zip(cdy).and_then(|(p, state)| CdySaved::new(p, state));
+    // Table formulas whose values the file didn't keep (a DWG), worked out: what they show isn't
+    // an edit.
+    let mut drawing = drawing;
+    crate::cmd::table::cells::fill_missing_values(&mut drawing);
     let i = s.open_drawing(drawing, &file_name(name), path);
     if let Some(st) = s.docs.get_mut(i) {
         // QSAVE keeps a binary DXF binary.

@@ -2,7 +2,7 @@
 //! (`formula`), TABLEDIT and TABLEEXPORT (`cells`).
 
 mod breaks;
-mod cells;
+pub(crate) mod cells;
 pub(crate) mod formula;
 pub mod xlsx;
 

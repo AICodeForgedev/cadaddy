@@ -115,7 +115,7 @@ pub fn not_kept(
 ) -> Vec<&'static str> {
     let Ok(bytes) = write(d, name) else { return Vec::new() };
     let Ok(back) = read(&bytes, name) else { return Vec::new() };
-    lost_parts(d, &back)
+    lost_parts(d, &opened(back))
 }
 
 /// The parts of `d` that `back` (`d` written and read back) no longer holds.
@@ -267,7 +267,7 @@ pub fn losses(
     read: fn(&[u8], &str) -> Result<Drawing, String>,
 ) -> Result<Vec<Loss>, String> {
     let bytes = write(d, name)?;
-    let back = read(&bytes, name)?;
+    let back = opened(read(&bytes, name)?);
     Ok(losses_of(d, &back))
 }
 
@@ -278,13 +278,20 @@ pub fn check_written(
     bytes: &[u8],
     read: fn(&[u8], &str) -> Result<Drawing, String>,
 ) -> Result<(Vec<&'static str>, Vec<Loss>), String> {
-    let back = read(bytes, name)?;
+    let back = opened(read(bytes, name)?);
     Ok((lost_parts(d, &back), losses_of(d, &back)))
+}
+
+/// A drawing read back as opening it gives it: table formulas whose values the file didn't keep
+/// worked out again ([`crate::cmd::table::cells::fill_missing_values`]).
+fn opened(mut back: Drawing) -> Drawing {
+    crate::cmd::table::cells::fill_missing_values(&mut back);
+    back
 }
 
 /// [`losses`] of `d` against `back`, a copy of it written and read back by the caller.
 pub fn losses_between(d: &Drawing, back: &Drawing) -> Vec<Loss> {
-    losses_of(d, back)
+    losses_of(d, &opened(back.clone()))
 }
 
 fn losses_of(d: &Drawing, back: &Drawing) -> Vec<Loss> {

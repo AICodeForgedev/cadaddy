@@ -2326,6 +2326,10 @@ impl Objects {
                 }
             });
         }
+        // Table styles' cell styles that came without their xdata (through DWG).
+        if let Some(json) = self.xrecord_text(crate::dxf_ext::CELL_STYLES_KEY) {
+            crate::dxf_table::apply_cell_styles_json(&mut d.table_styles, &json);
+        }
         // Parametric constraints and parameters.
         if let Some((c, p)) = self.xrecord_text(crate::dxf_ext::CONSTRAINTS_KEY).and_then(|t| crate::dxf_ext::parse_constraints(&t)) {
             d.constraints = c;
