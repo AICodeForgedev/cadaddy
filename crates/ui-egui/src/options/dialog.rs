@@ -247,6 +247,13 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         }
         ui.end_row();
 
+        ui.label("");
+        let mut log = cadaddy_engine::activity::enabled();
+        if ui.checkbox(&mut log, crate::tl!("Keep an activity history beside each drawing (private, on this computer)")).changed() {
+            changes.insert("ACTIVITYLOG".into(), json!(i32::from(log)));
+        }
+        ui.end_row();
+
         ui.label(crate::tl!("Default save version"));
         let current = crate::SaveVersion::parse(&app.ui.save_version).unwrap_or_default();
         let mut version = current;

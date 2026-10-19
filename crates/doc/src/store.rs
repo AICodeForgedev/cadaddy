@@ -108,6 +108,32 @@ impl EntityStore {
         }
         bytes
     }
+    /// What changed from this store to `newer`: (added, modified, erased) handles. Chunks both
+    /// share are skipped whole, so the cost follows the change, not the store's size.
+    pub fn changes(&self, newer: &EntityStore) -> (Vec<Handle>, Vec<Handle>, Vec<Handle>) {
+        let theirs: HashMap<u32, &Arc<Chunk>> = newer.chunks.iter().map(|c| (c.id, c)).collect();
+        let mine: HashMap<u32, &Arc<Chunk>> = self.chunks.iter().map(|c| (c.id, c)).collect();
+        let (mut added, mut modified, mut erased) = (Vec::new(), Vec::new(), Vec::new());
+        for c in &self.chunks {
+            if theirs.get(&c.id).is_some_and(|t| Arc::ptr_eq(c, t)) {
+                continue;
+            }
+            for e in &c.items {
+                match newer.get(e.handle) {
+                    Some(n) if Arc::ptr_eq(n, e) => {}
+                    Some(_) => modified.push(e.handle),
+                    None => erased.push(e.handle),
+                }
+            }
+        }
+        for c in &newer.chunks {
+            if mine.get(&c.id).is_some_and(|m| Arc::ptr_eq(c, m)) {
+                continue;
+            }
+            added.extend(c.items.iter().filter(|e| !self.contains(e.handle)).map(|e| e.handle));
+        }
+        (added, modified, erased)
+    }
     /// Iterate in draw order.
     pub fn iter(&self) -> impl Iterator<Item = &Arc<Entity>> + '_ {
         self.chunks.iter().flat_map(|c| c.items.iter())

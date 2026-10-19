@@ -22,6 +22,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "dsettings" => dsettings(app, ctx, &mut open),
         "purge" => crate::cmddlgs::purge(app, ctx, &mut open),
         "find" => crate::finddlg::dialog(app, ctx, &mut open),
+        crate::activitypalette::DIALOG => crate::activitypalette::dialog(app, ctx, &mut open),
         "color" => crate::cmddlgs::color(app, ctx, &mut open),
         "units" => units(app, ctx, &mut open),
         crate::hyperlinks::DIALOG => crate::hyperlinks::dialog(app, ctx, &mut open),

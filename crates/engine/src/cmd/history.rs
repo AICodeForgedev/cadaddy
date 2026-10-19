@@ -21,7 +21,53 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{action?: list (default) | save (path) | clear, filter?: text} → {lines} | {path, lines}")
             .noundo()
             .enabled(always),
+        CommandSpec::new("activity", "Activity History", run_activity)
+            .menu(&["Tools", "Activity History"])
+            .params("{action?: list (default) | show (select the objects step `seq` added or changed that still exist) | clear, command?: filter (any case), limit? (default 500), offset? (newest first)} → {enabled, count, entries: [{seq, time, command, added, modified, erased, blocks}]} | {seq, handles, missing}")
+            .noundo(),
     ]
+}
+
+/// ACTIVITY: the drawing's activity log (newest first), one step's objects selected, or cleared.
+fn run_activity(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "activity";
+    let num = |k: &str, d: usize| p.get(k).and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()).unwrap_or(d);
+    match str_param(p, "action").unwrap_or("list") {
+        "list" => {
+            let filter = str_param(p, "command").map(str::to_lowercase);
+            let st = s.state()?;
+            let hits: Vec<&crate::activity::Entry> =
+                st.activity.entries.iter().rev().filter(|e| filter.as_ref().is_none_or(|f| e.command.to_lowercase().contains(f.as_str()))).collect();
+            let page: Vec<Value> = hits
+                .iter()
+                .skip(num("offset", 0))
+                .take(num("limit", 500).min(10_000))
+                .map(|e| json!({ "seq": e.seq, "time": e.time, "command": e.command, "added": e.added, "modified": e.modified, "erased": e.erased, "blocks": e.blocks, "objects": e.handles.len() }))
+                .collect();
+            Ok(json!({ "enabled": crate::activity::enabled(), "count": hits.len(), "entries": page }))
+        }
+        "show" => {
+            let seq = p.get("seq").and_then(Value::as_u64).ok_or_else(|| bad(CMD, "`seq` (a step's number) is required"))?;
+            let st = s.state()?;
+            let e = st.activity.entries.iter().find(|e| e.seq == seq).ok_or_else(|| bad(CMD, format!("no step {seq} in the activity log")))?;
+            let d = st.drawing();
+            let (live, gone): (Vec<cadaddy_doc::Handle>, Vec<String>) = e.handles.iter().fold((Vec::new(), Vec::new()), |(mut l, mut g), h| {
+                match cadaddy_doc::Handle::parse_hex(h).filter(|h| d.entity(*h).is_some()) {
+                    Some(h) => l.push(h),
+                    None => g.push(h.clone()),
+                }
+                (l, g)
+            });
+            let handles: Vec<String> = live.iter().map(|h| h.hex()).collect();
+            s.set_selection(live);
+            Ok(json!({ "seq": seq, "handles": handles, "missing": gone.len() }))
+        }
+        "clear" => {
+            s.state_mut()?.activity.entries.clear();
+            Ok(json!({ "message": "Activity log cleared." }))
+        }
+        other => Err(bad(CMD, format!("unknown action `{other}` (list, show, clear)"))),
+    }
 }
 
 fn listing(s: &Session) -> Result<Value> {

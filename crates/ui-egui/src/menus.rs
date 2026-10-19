@@ -737,6 +737,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some("purge".into());
             Ok(Value::Null)
         }
+        "activity" if params.is_null() && app.session.state().is_ok() => {
+            app.ui.dialog = Some(crate::activitypalette::DIALOG.into());
+            Ok(Value::Null)
+        }
         "find" if params.is_null() && app.session.state().is_ok() => {
             app.ui.dialog = Some("find".into());
             Ok(Value::Null)

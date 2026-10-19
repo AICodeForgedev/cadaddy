@@ -8,6 +8,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod activity;
 pub mod assoc;
 pub mod audit;
 pub mod autosave;
@@ -182,6 +183,8 @@ pub(crate) fn cached_extents(d: &Arc<Drawing>, space: &Space) -> Bounds2 {
 #[derive(Clone, Debug)]
 pub struct DocState {
     pub doc: Arc<Drawing>,
+    /// What changed, step by step ([`activity`]).
+    pub activity: activity::Activity,
     pub undo: Vec<Snapshot>,
     pub redo: Vec<Snapshot>,
     /// UNDO marks, BEgin/End group and Control (see [`undoctl`]).
@@ -254,6 +257,7 @@ impl DocState {
     pub fn new(doc: Drawing, title: &str, path: Option<String>) -> Self {
         let doc = Arc::new(doc);
         DocState {
+            activity: activity::Activity::default(),
             saved: doc.clone(),
             doc,
             undo: Vec::new(),
