@@ -1,9 +1,12 @@
 //! `cadaddy-cli`: headless CADaddy.
 //!
 //! ```text
-//! cadaddy-cli info FILE.dxf                       summary as JSON
-//! cadaddy-cli convert IN.dxf OUT.(dxf|svg|png) [--window x0,y0,x1,y1 | --view extents|current]
+//! cadaddy-cli info FILE                           summary as JSON (a .cdy file's manifest and chunk sizes first)
+//! cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|pdf|svg|png) [--window x0,y0,x1,y1 | --view extents|current]
+//! cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|pdf|svg|png)   every drawing in a folder
+//! cadaddy-cli verify FILE.cdy                     check every chunk's checksum, the index and the drawing (exit 1 if damaged)
 //! cadaddy-cli run [FILE|--sample|--metric] [--script TEXT|--script-file F.scr] [--cmd 'id {json}']... [--save OUT] [--export OUT.png] [--window ... | --view ...]
+//! cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]   batch plot: one PDF per drawing
 //! cadaddy-cli commands [FILTER]                   command catalog (JSON)
 //! cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--launch]]  MCP server on stdio (the open app on the agent port, else headless; or bridged to a given app)
 //! cadaddy-cli perf [N]                            timing table on a synthetic N-entity drawing
@@ -56,9 +59,12 @@ fn stdout_failed(e: std::io::Error) {
 }
 
 const USAGE: &str = "usage:
-  cadaddy-cli info FILE.dxf
-  cadaddy-cli convert IN.dxf OUT.(dxf|dwg|svg|png|pdf) [FRAMING]
+  cadaddy-cli info FILE.(dwg|dxf|cdy)
+  cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|svg|png|pdf) [FRAMING]
+  cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|svg|png|pdf) [FRAMING]
+  cadaddy-cli verify FILE.cdy
   cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
+  cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]
   cadaddy-cli commands [FILTER]
   cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--launch]]
   cadaddy-cli perf [N | FILE]
@@ -235,7 +241,10 @@ fn info(path: &str) -> Result<(), String> {
     if let Ok(bytes) = std::fs::read(path)
         && let Some(m) = cadaddy_io::cdy::manifest(&bytes)
     {
-        outln!("{}", serde_json::to_string_pretty(&json!({ "manifest": m })).unwrap_or_default());
+        // With what each kind of chunk takes, and the bytes earlier saves left behind.
+        let check = cadaddy_io::cdy::verify(&bytes).unwrap_or_default();
+        let out = json!({ "manifest": m, "chunks": check["sizes"], "waste": check["waste"], "bytes": bytes.len() });
+        outln!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
     }
     let mut s = Session::empty();
     open(&mut s, path)?;
@@ -285,16 +294,39 @@ fn check_framed_output(framing: Framing, out: Option<&str>) -> Result<(), String
     }
 }
 
+/// Extensions of the drawings a folder conversion picks up.
+const DRAWINGS: [&str; 3] = ["dwg", "dxf", "cdy"];
+/// Formats a conversion writes.
+const OUTPUTS: [&str; 6] = ["dwg", "dxf", "cdy", "svg", "png", "pdf"];
+/// Most files one folder conversion takes.
+const MAX_BATCH: usize = 100_000;
+
 fn convert(args: &[String]) -> Result<(), String> {
     let mut framing = Framing::Auto;
     let mut files = Vec::new();
+    let mut to: Option<String> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        if !framing_option(a, &mut it, &mut framing)? {
+        if a == "--to" {
+            to = Some(it.next().ok_or("--to needs a format (dwg, dxf, cdy, svg, png, pdf)")?.trim_start_matches('.').to_ascii_lowercase());
+        } else if a.starts_with("--") && !framing_option(a, &mut it, &mut framing)? {
+            return Err(format!("convert: unknown option {a}"));
+        } else if !a.starts_with("--") {
             files.push(a);
         }
     }
     let [i, o] = files.as_slice() else { return Err(USAGE.into()) };
+    if std::path::Path::new(i).is_dir() {
+        let to = to.ok_or("converting a folder needs --to FORMAT (dwg, dxf, cdy, svg, png, pdf)")?;
+        return convert_folder(i, o, &to, framing);
+    }
+    if to.is_some() {
+        return Err("--to is for converting a folder; give the output file's name instead".into());
+    }
+    convert_file(i, o, framing)
+}
+
+fn convert_file(i: &str, o: &str, framing: Framing) -> Result<(), String> {
     check_framed_output(framing, Some(o))?;
     let mut s = Session::empty();
     open(&mut s, i)?;
@@ -303,6 +335,94 @@ fn convert(args: &[String]) -> Result<(), String> {
     }
     let window = export_window(&s, framing, None)?;
     export_framed(&s, o, window)
+}
+
+/// Every drawing (.dwg, .dxf, .cdy) directly in folder `i` converted to `to` in folder `o` (made
+/// when missing), each under its own name. A drawing that fails is reported and the rest go on;
+/// the summary is printed as JSON and the exit status is 1 when any failed.
+fn convert_folder(i: &str, o: &str, to: &str, framing: Framing) -> Result<(), String> {
+    if !OUTPUTS.contains(&to) {
+        return Err(format!("--to: unknown format `{to}` (dwg, dxf, cdy, svg, png, pdf)"));
+    }
+    check_framed_output(framing, Some(&format!("x.{to}")))?;
+    let mut inputs: Vec<std::path::PathBuf> = std::fs::read_dir(i)
+        .map_err(|e| format!("{i}: {e}"))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file() && p.extension().and_then(|x| x.to_str()).is_some_and(|x| DRAWINGS.contains(&x.to_ascii_lowercase().as_str())))
+        .take(MAX_BATCH)
+        .collect();
+    inputs.sort();
+    if inputs.is_empty() {
+        return Err(format!("{i}: no drawings (.dwg, .dxf, .cdy) in this folder"));
+    }
+    std::fs::create_dir_all(o).map_err(|e| format!("{o}: {e}"))?;
+    let (mut converted, mut failed) = (Vec::new(), Vec::new());
+    let mut taken = std::collections::HashSet::new();
+    for p in &inputs {
+        let name = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let out = std::path::Path::new(o).join(format!("{name}.{to}"));
+        let (src, dst) = (p.display().to_string(), out.display().to_string());
+        // Two drawings of the same name (plan.dwg and plan.dxf) can't both become plan.cdy; and a
+        // drawing is never written over itself.
+        let r = if !taken.insert(out.clone()) {
+            Err(format!("another drawing in the folder already became {dst}"))
+        } else if std::fs::canonicalize(p).ok() == std::fs::canonicalize(&out).ok() {
+            Err("it would be written over itself".to_string())
+        } else {
+            convert_file(&src, &dst, framing)
+        };
+        match r {
+            Ok(()) => converted.push(json!({ "from": src, "to": dst })),
+            Err(e) => {
+                eprintln!("{src}: {e}");
+                failed.push(json!({ "file": src, "error": e }));
+            }
+        }
+    }
+    outln!("{}", serde_json::to_string_pretty(&json!({ "converted": converted, "failed": failed })).unwrap_or_default());
+    if failed.is_empty() { Ok(()) } else { Err(format!("{} of {} drawings could not be converted", failed.len(), inputs.len())) }
+}
+
+/// `verify FILE.cdy`: the check as JSON; an error (exit status 1) when the file is damaged.
+fn verify(path: &str) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let check = cadaddy_io::cdy::verify(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    outln!("{}", serde_json::to_string_pretty(&check).unwrap_or_default());
+    if check["ok"] == json!(true) {
+        Ok(())
+    } else {
+        let bad = check["chunks"].as_array().map_or(0, |c| c.iter().filter(|c| c.get("damage").is_some() && c["live"] == json!(true)).count());
+        Err(format!("{path}: damaged ({bad} damaged parts, index {}; see the report)", check["index"].as_str().unwrap_or("?")))
+    }
+}
+
+/// `plot IN_FOLDER OUT_FOLDER`: every drawing in a folder plotted to one PDF each (PUBLISH's batch
+/// plot). The summary is printed as JSON; the exit status is 1 when any drawing failed.
+fn plot(args: &[String]) -> Result<(), String> {
+    let mut dirs = Vec::new();
+    let mut p = json!({});
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--layouts" => {
+                let list = it.next().ok_or("--layouts needs names, separated by commas (Model for model space)")?;
+                p["layouts"] = json!(list.split(',').map(str::trim).filter(|n| !n.is_empty()).collect::<Vec<_>>());
+            }
+            "--stamp" => p["stamp"] = json!(true),
+            "--no-stamp" => p["stamp"] = json!(false),
+            o if o.starts_with("--") => return Err(format!("plot: unknown option {o}")),
+            d => dirs.push(d),
+        }
+    }
+    let [input, output] = dirs.as_slice() else { return Err(USAGE.into()) };
+    p["folder"] = json!(input);
+    p["out"] = json!(output);
+    // PUBLISH runs with a drawing open; the folder's drawings are read on their own.
+    let mut s = Session::new();
+    let r = s.execute("publish", &p).map_err(|e| e.to_string())?;
+    outln!("{}", serde_json::to_string_pretty(&json!({ "plotted": r["drawings"], "failed": r["failed"] })).unwrap_or_default());
+    let failed = r["failed"].as_array().map_or(0, Vec::len);
+    if failed == 0 { Ok(()) } else { Err(format!("{failed} drawing(s) could not be plotted")) }
 }
 
 /// The warning for the records of `path` the reader could not place, or `None` when there are none.
@@ -723,6 +843,10 @@ fn cli() -> ExitCode {
     let r = match args.first().map(String::as_str) {
         Some("info") => validate_options("info", &rest, NO_OPTIONS).and_then(|_| rest.first().ok_or_else(|| USAGE.to_string())).and_then(|p| info(p)),
         Some("convert") => convert(&rest),
+        Some("verify") => {
+            validate_options("verify", &rest, NO_OPTIONS).and_then(|_| rest.first().ok_or_else(|| USAGE.to_string())).and_then(|p| verify(p))
+        }
+        Some("plot") => plot(&rest),
         Some("run") => run(&rest),
         Some("perf") => validate_options("perf", &rest, NO_OPTIONS).and_then(|_| perf(&rest)),
         Some("sample") => validate_options("sample", &rest, NO_OPTIONS).and_then(|_| sample(&rest)),

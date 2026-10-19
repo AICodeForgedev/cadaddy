@@ -2091,3 +2091,32 @@
 	Embed Textures	Incorporar texturas
 	Publish Walkthrough	Publicar passeio virtual
 	Walkthroughs (CDYWALK)	Passeios virtuais (CDYWALK)
+	Check Exchange	Verificar intercâmbio
+	Not kept in the {format} file	Não mantido no arquivo {format}
+	The drawing was saved. This file format can't keep everything in it:	O desenho foi salvo. Este formato de arquivo não consegue manter tudo:
+	What	O quê
+	left out	omitido
+	changed	alterado
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	Um desenho CADaddy (.cdy) mantém tudo. Verificar intercâmbio lista isto novamente sem salvar.
+	VP Linetype	Tipo de linha da VP
+	VP Lineweight	Espessura de linha da VP
+	Unreconciled New Layers ({n})	Novas camadas não reconciliadas ({n})
+	Reconcile All	Reconciliar todas
+	Reconcile Layer	Reconciliar camada
+	LayerWalk	Percorrer camadas
+	Layers: {n}	Camadas: {n}
+	Restore on exit	Restaurar ao sair
+	Filter:	Filtro:
+	Layer Walk...	Percorrer camadas...
+	Layer Walk	Percorrer camadas
+	Isolate Layer to Current Viewport	Isolar camada na viewport atual
+	Unreconciled New Layers	Novas camadas não reconciliadas
+	Move to New Window	Mover para nova janela
+	Dock All Windows	Encaixar todas as janelas
+	Every drawing is in a window of its own.	Cada desenho está em sua própria janela.
+	Back among the drawing tabs	Voltar para as abas de desenhos
+	Plot Stamp...	Carimbo de plotagem...
+	Plot a Folder of Drawings...	Plotar uma pasta de desenhos...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	Cada desenho de uma pasta em seu próprio PDF, em uma pasta PDF dentro dela
+	Plot stamp	Carimbo de plotagem
+	Quick Properties Lists	Listas de propriedades rápidas

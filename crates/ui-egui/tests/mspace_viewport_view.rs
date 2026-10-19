@@ -35,6 +35,8 @@ fn harness(clipped: bool) -> Harness<'static, CadApp> {
             locked: false,
             frozen_layers: Vec::new(),
             layer_colors: Vec::new(),
+            layer_linetypes: Vec::new(),
+            layer_lineweights: Vec::new(),
             clip,
             on: true,
             twist: 0.0,

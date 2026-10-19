@@ -1863,3 +1863,32 @@
 	Embed Textures	Incorporer les textures
 	Publish Walkthrough	Publier la visite
 	Walkthroughs (CDYWALK)	Visites (CDYWALK)
+	Check Exchange	Vérifier l'échange
+	Not kept in the {format} file	Non conservé dans le fichier {format}
+	The drawing was saved. This file format can't keep everything in it:	Le dessin a été enregistré. Ce format de fichier ne peut pas tout conserver :
+	What	Quoi
+	left out	omis
+	changed	modifié
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	Un dessin CADaddy (.cdy) conserve tout. Vérifier l'échange l'affiche à nouveau sans enregistrer.
+	VP Linetype	Type de ligne de la fenêtre
+	VP Lineweight	Épaisseur de ligne de la fenêtre
+	Unreconciled New Layers ({n})	Nouveaux calques non rapprochés ({n})
+	Reconcile All	Tout rapprocher
+	Reconcile Layer	Rapprocher le calque
+	LayerWalk	Parcours des calques
+	Layers: {n}	Calques : {n}
+	Restore on exit	Restaurer en quittant
+	Filter:	Filtre :
+	Layer Walk...	Parcours des calques...
+	Layer Walk	Parcours des calques
+	Isolate Layer to Current Viewport	Isoler le calque dans la fenêtre courante
+	Unreconciled New Layers	Nouveaux calques non rapprochés
+	Move to New Window	Déplacer vers une nouvelle fenêtre
+	Dock All Windows	Ancrer toutes les fenêtres
+	Every drawing is in a window of its own.	Chaque dessin est dans sa propre fenêtre.
+	Back among the drawing tabs	Revenir parmi les onglets de dessins
+	Plot Stamp...	Tampon de traçage...
+	Plot a Folder of Drawings...	Tracer un dossier de dessins...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	Chaque dessin d’un dossier dans son propre PDF, dans un dossier PDF à l’intérieur
+	Plot stamp	Tampon de traçage
+	Quick Properties Lists	Listes des propriétés rapides

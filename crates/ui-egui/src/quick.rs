@@ -278,10 +278,24 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
     }
     let Some(at) = st.at else { return };
     let Ok(d) = app.session.doc() else { return };
-    let ents: Vec<_> = sel.iter().filter_map(|h| d.entity(*h)).collect();
+    let all_ents: Vec<&cadaddy_doc::Entity> = sel.iter().filter_map(|h| d.entity(*h)).map(|e| e.as_ref()).collect();
+    let types = crate::multiprops::types(&all_ents);
+    // Narrowed to one type of a mixed selection (the list at the top): only those are shown and changed.
+    let (shown_sel, narrowed) = crate::multiprops::filtered(ctx, "quick", &sel, d);
+    let ents: Vec<_> = shown_sel.iter().filter_map(|h| d.entity(*h)).collect();
     let Some(first) = ents.first() else { return };
     let ty = first.kind.type_name();
     let same_type = ents.iter().all(|e| e.kind.type_name() == ty);
+    // The user's rows for this type (`ui.quickprops`); none listed: all of them.
+    let profile = app.ui.quick_properties.get(ty).cloned();
+    let wants = |k: &str| profile.as_ref().is_none_or(|l| l.iter().any(|x| x == k));
+    let multi_fields: Vec<crate::multiprops::Field> = if same_type && (ents.len() > 1 || profile.is_some()) {
+        crate::multiprops::fields(ty).into_iter().filter(|f| wants(f.key)).collect()
+    } else {
+        Vec::new()
+    };
+    let ent_refs: Vec<&cadaddy_doc::Entity> = ents.iter().map(|e| e.as_ref()).collect();
+    let mut narrow: Option<Option<&'static str>> = None;
     let title = if ents.len() == 1 {
         ty.to_string()
     } else if same_type {
@@ -298,10 +312,11 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
     let linetype = same(&|e| e.common.linetype.clone());
     let layers: Vec<String> = d.layers.iter().map(|l| l.name.clone()).collect();
     let linetypes: Vec<String> = d.linetypes.iter().map(|l| l.name.clone()).collect();
-    let kind = if ents.len() == 1 { Some(first.kind.clone()) } else { None };
+    // One object with no list of its own: its full set of rows.
+    let kind = if ents.len() == 1 && profile.is_none() { Some(first.kind.clone()) } else { None };
     // A dynamic block reference goes by its dynamic block's name, not its anonymous block's.
     let block_name = cadaddy_engine::doc::dynblock::custom_properties(d, first.handle).map(|(n, _)| n);
-    let ids: Vec<String> = sel.iter().map(|h| h.hex()).collect();
+    let ids: Vec<String> = shown_sel.iter().map(|h| h.hex()).collect();
     let mut set: Option<(String, Value)> = None;
     let mut close = false;
     egui::Window::new(title)
@@ -312,34 +327,74 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
         .title_bar(true)
         .default_width(250.0)
         .show(ctx, |ui| {
+            // A mixed selection: which type to show and change (the selection stays).
+            if types.len() > 1 {
+                let total: usize = types.iter().map(|(_, n)| n).sum();
+                let label = match &narrowed {
+                    Some(t) => format!("{} ({})", crate::i18n::t(t), ents.len()),
+                    None => format!("{} ({total})", crate::tl!("All")),
+                };
+                egui::ComboBox::from_id_salt("qp_type").width(230.0).selected_text(label).show_ui(ui, |ui| {
+                    if ui.selectable_label(narrowed.is_none(), format!("{} ({total})", crate::tl!("All"))).clicked() {
+                        narrow = Some(None);
+                    }
+                    for (t, n) in &types {
+                        if ui.selectable_label(narrowed.as_deref() == Some(*t), format!("{} ({n})", crate::i18n::t(t))).clicked() {
+                            narrow = Some(Some(t));
+                        }
+                    }
+                });
+            }
             egui::Grid::new("qp_grid").num_columns(2).spacing(vec2(10.0, 4.0)).min_col_width(80.0).show(ui, |ui| {
-                ui.label(RichText::new(crate::tl!("Color")).color(Tokens::get().text_dim));
-                let cur = color.unwrap_or(cadaddy_color::Color::ByLayer);
-                if let Some(c) = crate::layers::color_button(ui, egui::Id::new(("qp_color", &ids)), cur, true, 150.0) {
-                    set = Some(("color".into(), json!(c.name())));
+                if wants("color") {
+                    ui.label(RichText::new(crate::tl!("Color")).color(Tokens::get().text_dim));
+                    let cur = color.unwrap_or(cadaddy_color::Color::ByLayer);
+                    if let Some(c) = crate::layers::color_button(ui, egui::Id::new(("qp_color", &ids)), cur, true, 150.0) {
+                        set = Some(("color".into(), json!(c.name())));
+                    }
+                    ui.end_row();
                 }
-                ui.end_row();
-                ui.label(RichText::new(crate::tl!("Layer")).color(Tokens::get().text_dim));
-                egui::ComboBox::from_id_salt("qp_layer").width(150.0).selected_text(layer.clone()).show_ui(ui, |ui| {
-                    for l in &layers {
-                        if ui.selectable_label(*l == layer, l).clicked() {
-                            set = Some(("layer".into(), json!(l)));
+                if wants("layer") {
+                    ui.label(RichText::new(crate::tl!("Layer")).color(Tokens::get().text_dim));
+                    egui::ComboBox::from_id_salt("qp_layer").width(150.0).selected_text(layer.clone()).show_ui(ui, |ui| {
+                        for l in &layers {
+                            if ui.selectable_label(*l == layer, l).clicked() {
+                                set = Some(("layer".into(), json!(l)));
+                            }
                         }
-                    }
-                });
-                ui.end_row();
-                ui.label(RichText::new(crate::tl!("Linetype")).color(Tokens::get().text_dim));
-                egui::ComboBox::from_id_salt("qp_lt").width(150.0).selected_text(linetype.clone()).show_ui(ui, |ui| {
-                    for l in std::iter::once("ByLayer".to_string())
-                        .chain(std::iter::once("ByBlock".to_string()))
-                        .chain(linetypes.iter().filter(|l| !["ByLayer", "ByBlock"].contains(&l.as_str())).cloned())
-                    {
-                        if ui.selectable_label(l == linetype, &l).clicked() {
-                            set = Some(("linetype".into(), json!(l)));
+                    });
+                    ui.end_row();
+                }
+                // Several objects of one type (or a type with its own list): shared values or *VARIES*.
+                for fd in &multi_fields {
+                    let shown = match crate::multiprops::shared(fd, &ent_refs) {
+                        Some(v) => format!("{v:.4}"),
+                        None => "*VARIES*".to_string(),
+                    };
+                    if fd.edit {
+                        ui.label(RichText::new(crate::i18n::t(fd.label)).color(Tokens::get().text_dim));
+                        if let Some(v) = crate::palettes::edit_number(ui, egui::Id::new(("qp_multi", fd.key, &ids)), &shown) {
+                            set = Some((fd.key.to_string(), json!(v)));
                         }
+                        ui.end_row();
+                    } else {
+                        ro_row(ui, fd.label, shown);
                     }
-                });
-                ui.end_row();
+                }
+                if wants("linetype") {
+                    ui.label(RichText::new(crate::tl!("Linetype")).color(Tokens::get().text_dim));
+                    egui::ComboBox::from_id_salt("qp_lt").width(150.0).selected_text(linetype.clone()).show_ui(ui, |ui| {
+                        for l in std::iter::once("ByLayer".to_string())
+                            .chain(std::iter::once("ByBlock".to_string()))
+                            .chain(linetypes.iter().filter(|l| !["ByLayer", "ByBlock"].contains(&l.as_str())).cloned())
+                        {
+                            if ui.selectable_label(l == linetype, &l).clicked() {
+                                set = Some(("linetype".into(), json!(l)));
+                            }
+                        }
+                    });
+                    ui.end_row();
+                }
                 let id = |k: &str| egui::Id::new(("qp", k, &ids));
                 match &kind {
                     Some(EntityKind::Line(l)) => {
@@ -415,12 +470,56 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
             });
         });
     ctx.data_mut(|dd| dd.insert_temp(sid, st));
+    if let Some(t) = narrow {
+        crate::multiprops::set_filter(ctx, "quick", &sel, t);
+    }
     if let Some((k, v)) = set {
-        let _ = app.run("properties.set", json!({ "handles": ids, k: v }));
+        // With the type, other types in the selection stay as they are.
+        let mut p = json!({ "handles": ids, k: v });
+        if same_type {
+            p["type"] = json!(ty);
+        }
+        let _ = app.run("properties.set", p);
     }
     if close {
         let _ = app.run("qpmode", json!({ "on": false }));
     }
+}
+
+/// Most object types with a Quick Properties list, and rows per list.
+const MAX_LISTS: usize = 200;
+const MAX_ROWS: usize = 50;
+
+/// `ui.quickprops`: Quick Properties' rows per object type. `{type, fields: [keys]}` sets that
+/// type's rows, `{type, fields: null}` puts its full set back; it returns every list and, for
+/// `type`, the keys it can have.
+pub(crate) fn lists_command(app: &mut CadApp, p: &Value) -> Result<Value, String> {
+    let ty = p.get("type").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty());
+    if let (Some(t), Some(f)) = (ty, p.get("fields")) {
+        let known: Vec<&str> = ["color", "layer", "linetype"].into_iter().chain(crate::multiprops::fields(t).iter().map(|f| f.key)).collect();
+        match f {
+            Value::Null => {
+                app.ui.quick_properties.remove(t);
+            }
+            Value::Array(a) => {
+                let keys: Vec<String> = a.iter().filter_map(Value::as_str).map(str::to_string).take(MAX_ROWS).collect();
+                if let Some(bad) = keys.iter().find(|k| !known.contains(&k.as_str())) {
+                    return Err(format!("{t} has no Quick Properties row `{bad}` (rows: {})", known.join(", ")));
+                }
+                if !app.ui.quick_properties.contains_key(t) && app.ui.quick_properties.len() >= MAX_LISTS {
+                    return Err(format!("at most {MAX_LISTS} types have lists of their own"));
+                }
+                app.ui.quick_properties.insert(t.to_string(), keys);
+            }
+            _ => return Err("`fields` is a list of row keys, or null for all of them".into()),
+        }
+    }
+    let mut out = json!({ "lists": app.ui.quick_properties });
+    if let Some(t) = ty {
+        out["available"] =
+            json!(["color", "layer", "linetype"].into_iter().chain(crate::multiprops::fields(t).iter().map(|f| f.key)).collect::<Vec<_>>());
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

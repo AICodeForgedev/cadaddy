@@ -148,7 +148,7 @@ fn read_drawing(path: &str) -> Result<cadaddy_doc::Drawing> {
         if meta.len() > MAX_DRAWING_BYTES {
             return Err(EngineError::Other(format!("{path}: the file is too large.")));
         }
-        let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+        let bytes = crate::readfile::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
         (hooks.read)(&bytes, &name).map_err(|e| EngineError::Other(format!("{path}: {e}")))
     }
@@ -397,7 +397,7 @@ pub(crate) fn write_file(path: &str, text: &str) -> Result<()> {
 fn read_file(path: &str) -> Result<String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::fs::read_to_string(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+        crate::readfile::read_string(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))
     }
     #[cfg(target_arch = "wasm32")]
     {

@@ -215,7 +215,13 @@ impl LayerM {
                 Stage::Option
             }
             "rEconcile" => {
-                s.echo("-LAYER rEconcile: CADaddy doesn't track unreconciled layers (LAYEREVAL, LAYERNOTIFY), so every layer counts as reconciled.");
+                let pending = s.doc().map(super::notify::unreconciled).unwrap_or_default();
+                if pending.is_empty() {
+                    s.echo("No unreconciled layers.");
+                } else {
+                    super::notify::run_reconcile(s, &serde_json::json!({}))?;
+                    s.echo(format!("{} layer(s) reconciled: {}.", pending.len(), pending.join(", ")));
+                }
                 Stage::Option
             }
             other => {

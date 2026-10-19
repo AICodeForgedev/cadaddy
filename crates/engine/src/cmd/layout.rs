@@ -4,7 +4,7 @@
 //! Plotting goes through the host's [`super::file::IoHooks::plot`] hook so the engine stays
 //! I/O-agnostic.
 
-use cadaddy_doc::{Drawing, Entity, EntityKind, EntityStore, Handle, Layout, PageSetup, Space, Viewport};
+use cadaddy_doc::{Drawing, Entity, EntityKind, EntityStore, Handle, Layout, Lineweight, PageSetup, Space, Viewport};
 use cadaddy_geom::{Bounds2, Vec2};
 use serde_json::{Value, json};
 
@@ -69,10 +69,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{p1?, p2?, layout?}")
             .interactive(|s| Ok(super::view::model_vports(s, Some(4)).unwrap_or_else(|| Box::new(MviewM::new(4, false))))),
         CommandSpec::new("viewport.set", "Viewport Properties", run_viewport_set).params(
-            "{handle? (default: selected viewports), scale?: paper units per model unit | \"1:50\", viewHeight?, center?: [x,y], locked?, annoScale?: scale name (the viewport's own annotation scale) | null (follow its scale), freeze?: [layer], thaw?: [layer], colors?: {layer: color | null}}",
+            "{handle? (default: selected viewports), scale?: paper units per model unit | \"1:50\", viewHeight?, center?: [x,y], locked?, annoScale?: scale name (the viewport's own annotation scale) | null (follow its scale), freeze?: [layer], thaw?: [layer], colors?: {layer: color | null}, linetypes?: {layer: linetype | null}, lineweights?: {layer: mm | null}}",
         ),
         CommandSpec::new("vplayer", "Viewport Layer Freeze", run_viewport_set)
-            .params("{handle?, freeze?: [layer], thaw?: [layer], colors?: {layer: color (\"red\" | 1..255 | \"r,g,b\") | null to clear}} (typed: option prompts)")
+            .params("{handle?, freeze?: [layer], thaw?: [layer], colors?: {layer: color (\"red\" | 1..255 | \"r,g,b\") | null to clear}, linetypes?: {layer: linetype | null}, lineweights?: {layer: mm | null}} (typed: option prompts)")
             .interactive(|_| Ok(Box::new(vplayer::VplayerM::default()))),
         CommandSpec::new("pagesetup", "Page Setup Manager...", run_pagesetup)
             .menu(&["File", "Page Setup Manager..."])
@@ -587,6 +587,8 @@ fn viewport_json(h: Handle, v: &Viewport) -> Value {
         "clip": v.clip.map(|h| h.hex()),
         "frozenLayers": v.frozen_layers,
         "layerColors": v.layer_colors.iter().map(|(l, c)| json!({ "layer": l, "color": c.name() })).collect::<Vec<_>>(),
+        "layerLinetypes": v.layer_linetypes.iter().map(|(l, t)| json!({ "layer": l, "linetype": t })).collect::<Vec<_>>(),
+        "layerLineweights": v.layer_lineweights.iter().map(|(l, w)| json!({ "layer": l, "lineweight": w.name() })).collect::<Vec<_>>(),
     })
 }
 
@@ -659,6 +661,46 @@ fn run_viewport_set(s: &mut Session, p: &Value) -> Result<Value> {
             colors.push((layer.clone(), col));
         }
     }
+    // Per-viewport layer linetypes and lineweights (VP Linetype / VP Lineweight).
+    let mut linetypes: Vec<(String, Option<String>)> = Vec::new();
+    if let Some(m) = p.get("linetypes").and_then(Value::as_object) {
+        for (layer, t) in m.iter().take(10_000) {
+            let lt = match t {
+                Value::Null => None,
+                Value::String(n) => {
+                    let n = n.trim();
+                    if n.eq_ignore_ascii_case("bylayer") || n.eq_ignore_ascii_case("byblock") || n.is_empty() {
+                        return Err(bad(cmd, "a viewport layer linetype must be a named linetype"));
+                    }
+                    let d = s.doc()?;
+                    let name = d
+                        .linetypes
+                        .iter()
+                        .find(|l| l.name.eq_ignore_ascii_case(n))
+                        .map(|l| l.name.clone())
+                        .ok_or_else(|| bad(cmd, format!("no linetype `{n}` (LINETYPE loads it)")))?;
+                    Some(name)
+                }
+                _ => return Err(bad(cmd, "`linetypes` values are linetype names or null")),
+            };
+            linetypes.push((layer.clone(), lt));
+        }
+    }
+    let mut lineweights: Vec<(String, Option<Lineweight>)> = Vec::new();
+    if let Some(m) = p.get("lineweights").and_then(Value::as_object) {
+        for (layer, w) in m.iter().take(10_000) {
+            let lw = match w {
+                Value::Null => None,
+                Value::Number(n) => Some(vp_lineweight(n.as_f64()).ok_or_else(|| bad(cmd, "lineweight is 0..2.11 mm"))?),
+                Value::String(t) if t.trim().eq_ignore_ascii_case("default") => Some(Lineweight::Default),
+                Value::String(t) => Some(
+                    vp_lineweight(t.trim().trim_end_matches("mm").trim().parse::<f64>().ok()).ok_or_else(|| bad(cmd, "lineweight is 0..2.11 mm"))?,
+                ),
+                _ => return Err(bad(cmd, "`lineweights` values are mm or null")),
+            };
+            lineweights.push((layer.clone(), lw));
+        }
+    }
     let changes_view = scale.is_some() || view_height.is_some() || center.is_some();
     let mut out = Vec::new();
     for h in hs {
@@ -697,10 +739,29 @@ fn run_viewport_set(s: &mut Session, p: &Value) -> Result<Value> {
                 v.layer_colors.push((layer.clone(), *c));
             }
         }
+        for (layer, t) in &linetypes {
+            v.layer_linetypes.retain(|(n, _)| !n.eq_ignore_ascii_case(layer));
+            if let Some(t) = t {
+                v.layer_linetypes.push((layer.clone(), t.clone()));
+            }
+        }
+        for (layer, w) in &lineweights {
+            v.layer_lineweights.retain(|(n, _)| !n.eq_ignore_ascii_case(layer));
+            if let Some(w) = w {
+                v.layer_lineweights.push((layer.clone(), *w));
+            }
+        }
         out.push(viewport_json(h, &v));
         s.doc_mut()?.modify_entity(h, |e| e.kind = EntityKind::Viewport(v)).map_err(|e| bad(cmd, e.to_string()))?;
     }
     Ok(Value::Array(out))
+}
+
+/// A lineweight in millimetres, snapped to the nearest standard value.
+fn vp_lineweight(mm: Option<f64>) -> Option<Lineweight> {
+    let mm = mm.filter(|x| x.is_finite() && (0.0..=2.115).contains(x))?;
+    let want = mm * 100.0;
+    Lineweight::STANDARD.iter().min_by(|a, b| (f64::from(**a) - want).abs().total_cmp(&(f64::from(**b) - want).abs())).map(|v| Lineweight::Mm100(*v))
 }
 
 // ---------- page setup ----------
@@ -931,6 +992,8 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         }
         None => None,
     };
+    // What the plot stamp says that the plotter can't know (used when a sheet carries it).
+    super::plotstamp::facts(s, &mut opts);
     let bytes = hook(s.doc()?, &space, &opts).map_err(|e| bad(cmd, e))?;
     if let (Some(name), Some(h)) = (&printer, print) {
         let title = s.state().map(|st| st.title.clone()).unwrap_or_default();
@@ -1161,6 +1224,19 @@ mod tests {
         assert_eq!(vv[0].1.layer_colors, vec![("Walls".to_string(), cadaddy_color::Color::Index(1))]);
         s.execute("vplayer", &json!({"handle": h, "colors": {"walls": null}})).unwrap();
         assert!(viewports(&s, "Layout1")[0].1.layer_colors.is_empty());
+        // VP Linetype / VP Lineweight overrides.
+        s.execute("vplayer", &json!({"handle": h, "linetypes": {"Walls": "continuous"}, "lineweights": {"Walls": 0.31}})).unwrap();
+        assert!(s.execute("vplayer", &json!({"handle": h, "linetypes": {"Walls": "NoSuchType"}})).is_err());
+        assert!(s.execute("vplayer", &json!({"handle": h, "linetypes": {"Walls": "ByLayer"}})).is_err());
+        assert!(s.execute("vplayer", &json!({"handle": h, "lineweights": {"Walls": 9}})).is_err());
+        let vv = viewports(&s, "Layout1");
+        assert_eq!(vv[0].1.layer_linetypes, vec![("Walls".to_string(), "Continuous".to_string())]);
+        assert_eq!(vv[0].1.layer_lineweights, vec![("Walls".to_string(), Lineweight::Mm100(30))], "snapped to a standard weight");
+        let j = s.execute("vplayer", &json!({"handle": h, "lineweights": {"walls": "0.50 mm"}})).unwrap();
+        assert_eq!(j[0]["layerLineweights"][0]["lineweight"], "0.50 mm");
+        s.execute("vplayer", &json!({"handle": h, "linetypes": {"walls": null}, "lineweights": {"WALLS": null}})).unwrap();
+        let vv = viewports(&s, "Layout1");
+        assert!(vv[0].1.layer_linetypes.is_empty() && vv[0].1.layer_lineweights.is_empty());
         assert!((v[0].1.view_height - 30.0).abs() < 1e-9);
         // Layer 0 frozen in the viewport: nothing of the model shows.
         let list = cadaddy_render::build(s.doc().unwrap(), &Space::Paper("Layout1".into()), &cadaddy_render::Options::default());

@@ -45,6 +45,8 @@ pub mod pointcloud;
 pub mod schedules;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
+pub use layer::notify::unreconciled as unreconciled_layers;
+pub use qselect::wildcard;
 pub mod furnish;
 pub(crate) mod layout;
 pub mod lightbake;
@@ -64,6 +66,7 @@ pub mod p2meval;
 pub mod pdfplans;
 mod perceive;
 mod pline_opts;
+pub(crate) mod plotstamp;
 pub mod plotters;
 mod props;
 pub mod revise3d;
@@ -291,6 +294,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(file::compare::specs());
         v.extend(layer::specs());
         v.extend(layout::specs());
+        v.extend(plotstamp::specs());
         v.extend(exchange::specs());
         v.extend(props::specs());
         v.extend(inquiry::specs());

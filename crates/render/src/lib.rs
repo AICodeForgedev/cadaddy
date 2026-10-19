@@ -852,6 +852,24 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
     if b.list.expanded >= MAX_BLOCK_EXPANSION || !vp.on {
         return;
     }
+    // VP Linetype and VP Lineweight: the layers as this viewport overrides them (the stores are
+    // shared, only the layer table is copied).
+    let overridden;
+    let d = if vp.layer_linetypes.is_empty() && vp.layer_lineweights.is_empty() {
+        d
+    } else {
+        let mut o = d.clone();
+        for l in &mut o.layers {
+            if let Some((_, lt)) = vp.layer_linetypes.iter().find(|(n, _)| n.eq_ignore_ascii_case(&l.name)) {
+                l.linetype = lt.clone();
+            }
+            if let Some((_, lw)) = vp.layer_lineweights.iter().find(|(n, _)| n.eq_ignore_ascii_case(&l.name)) {
+                l.lineweight = *lw;
+            }
+        }
+        overridden = o;
+        &overridden
+    };
     let center = vp.center.xy();
     let ok = |v: f64| v.is_finite() && v > 0.0;
     if !(ok(vp.width) && ok(vp.height) && ok(vp.view_height) && center.is_finite() && vp.view_center.is_finite()) {

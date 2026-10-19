@@ -49,6 +49,7 @@ pub mod hyperlink;
 pub mod lighting;
 pub mod markup;
 pub mod material;
+pub mod plotstamp;
 pub mod pointcloud;
 
 #[derive(Debug, thiserror::Error)]
@@ -154,6 +155,9 @@ pub struct Drawing {
     /// (`lightmap.png`, `lightmap.json`). Kept in .cdy files, so a walkthrough model opens on
     /// another machine as it was.
     pub embedded: BTreeMap<String, std::sync::Arc<Vec<u8>>>,
+    /// The plot stamp's settings (PLOTSTAMP); `None` until set. Each layout's page setup says
+    /// whether its plots carry it.
+    pub plot_stamp: Option<plotstamp::PlotStamp>,
     /// What reading the file left out (a DWG's object records the reader couldn't decode), told
     /// to the user when the drawing opens. Never written to a file.
     pub read_notes: Vec<String>,
@@ -250,6 +254,7 @@ impl Drawing {
             building_spec: None,
             tours: None,
             embedded: BTreeMap::new(),
+            plot_stamp: None,
             read_notes: Vec::new(),
             refedit: None,
             skipped_records: BTreeMap::new(),

@@ -165,6 +165,8 @@ fn viewport_contents_keep_their_layers() {
         locked: false,
         frozen_layers: vec!["Walls".into()],
         layer_colors: Vec::new(),
+        layer_linetypes: Vec::new(),
+        layer_lineweights: Vec::new(),
         clip: None,
         on: true,
         twist: 0.0,

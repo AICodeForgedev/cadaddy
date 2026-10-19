@@ -19,6 +19,8 @@ enum Shown {
     #[default]
     All,
     Used,
+    /// New layers not reviewed yet (LAYEREVAL).
+    Unreconciled,
     /// A layer filter of the drawing.
     Filter(String),
 }
@@ -256,6 +258,10 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let library: Vec<String> = cadaddy_doc::library::standard_linetypes().into_iter().map(|l| l.name).filter(|n| d.linetype(n).is_none()).collect();
     let states: Vec<String> = d.layer_states.iter().map(|s| s.name.clone()).collect();
     let filters: Vec<cadaddy_doc::LayerFilter> = d.layer_filters.clone();
+    let unreconciled: Vec<String> = cadaddy_engine::cmd::unreconciled_layers(d);
+    if st.filter == Shown::Unreconciled && unreconciled.is_empty() {
+        st.filter = Shown::All;
+    }
     if let Shown::Filter(f) = &st.filter
         && !filters.iter().any(|x| &x.name == f)
     {
@@ -281,6 +287,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             let pass = match &st.filter {
                 Shown::All => true,
                 Shown::Used => used.contains(&key),
+                Shown::Unreconciled => unreconciled.iter().any(|n| n.eq_ignore_ascii_case(&l.name)),
                 Shown::Filter(_) => in_filter.as_ref().is_some_and(|f| f.contains(&key)),
             };
             pass != st.invert
@@ -391,6 +398,16 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                                 }
                             });
                         }
+                        // New layers from xrefs (LAYEREVAL) waiting for review.
+                        if !unreconciled.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.add_space(14.0);
+                                let label = crate::tf!("Unreconciled New Layers ({n})", n = unreconciled.len());
+                                if ui.selectable_label(st.filter == Shown::Unreconciled, RichText::new(label).color(t.warn)).clicked() {
+                                    st.filter = Shown::Unreconciled;
+                                }
+                            });
+                        }
                         // The drawing's filters, nested under their parents.
                         fn depth(fs: &[cadaddy_doc::LayerFilter], f: &cadaddy_doc::LayerFilter) -> usize {
                             let mut n = 0;
@@ -429,6 +446,18 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                             });
                         }
                     });
+                    if st.filter == Shown::Unreconciled {
+                        ui.horizontal(|ui| {
+                            if ui.small_button(crate::tl!("Reconcile All")).clicked() {
+                                actions.push(("layer.reconcile", json!({})));
+                            }
+                            if ui.add_enabled(st.selected.is_some(), egui::Button::new(crate::tl!("Reconcile Layer")).small()).clicked()
+                                && let Some(l) = &st.selected
+                            {
+                                actions.push(("layer.reconcile", json!({ "names": [l] })));
+                            }
+                        });
+                    }
                     ui.checkbox(&mut st.invert, crate::tl!("Invert filter"));
                     if ui.small_button(crate::tl!("New Property Filter...")).clicked() {
                         let parent = match &st.filter {
@@ -521,7 +550,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                         let mut cols: Vec<&str> =
                             vec!["Status", "Name", "On", "Freeze", "Lock", "Plot", "Color", "Linetype", "Lineweight", "Transparency"];
                         if vp.is_some() {
-                            cols.extend(["VP Freeze", "VP Color"]);
+                            cols.extend(["VP Freeze", "VP Color", "VP Linetype", "VP Lineweight"]);
                         }
                         cols.extend(["New VP Freeze", "Description"]);
                         egui::Grid::new("lpm_grid").striped(true).num_columns(cols.len()).spacing(vec2(10.0, 3.0)).min_row_height(22.0).show(
@@ -946,6 +975,45 @@ fn row(
             }
             if vc.is_some() && ui.small_button("×").on_hover_text(crate::tl!("Remove the viewport override")).clicked() {
                 actions.push(("vplayer", json!({ "handle": h.hex(), "colors": { name.clone(): Value::Null } })));
+            }
+        });
+        // VP Linetype: the override, or the layer's own (dimmed).
+        let vlt = v.layer_linetypes.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)).map(|(_, t)| t.clone());
+        ui.horizontal(|ui| {
+            let shown = vlt.clone().unwrap_or_else(|| l.linetype.clone());
+            let text = if vlt.is_some() { RichText::new(&shown) } else { RichText::new(&shown).color(t.text_faint) };
+            egui::ComboBox::from_id_salt(("lpm_vplt", &name)).selected_text(text).width(110.0).show_ui(ui, |ui| {
+                for lt in linetypes.iter().filter(|x| !["bylayer", "byblock"].contains(&x.name.to_ascii_lowercase().as_str())) {
+                    if ui.selectable_label(lt.name.eq_ignore_ascii_case(&shown), &lt.name).clicked() {
+                        actions.push(("vplayer", json!({ "handle": h.hex(), "linetypes": { name.clone(): lt.name } })));
+                    }
+                }
+            });
+            if vlt.is_some() && ui.small_button("×").on_hover_text(crate::tl!("Remove the viewport override")).clicked() {
+                actions.push(("vplayer", json!({ "handle": h.hex(), "linetypes": { name.clone(): Value::Null } })));
+            }
+        });
+        // VP Lineweight.
+        let vlw = v.layer_lineweights.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)).map(|(_, w)| *w);
+        ui.horizontal(|ui| {
+            let shown = vlw.unwrap_or(l.lineweight);
+            let shown_name = shown.name();
+            let label = crate::i18n::t(&shown_name);
+            let text = if vlw.is_some() { RichText::new(label) } else { RichText::new(label).color(t.text_faint) };
+            egui::ComboBox::from_id_salt(("lpm_vplw", &name)).selected_text(text).width(90.0).show_ui(ui, |ui| {
+                let opts = std::iter::once(Lineweight::Default).chain(Lineweight::STANDARD.iter().map(|v| Lineweight::Mm100(*v)));
+                for lw in opts {
+                    if ui.selectable_label(lw == shown, crate::i18n::t(&lw.name())).clicked() {
+                        let v = match lw {
+                            Lineweight::Mm100(v) => json!(f64::from(v) / 100.0),
+                            _ => json!("Default"),
+                        };
+                        actions.push(("vplayer", json!({ "handle": h.hex(), "lineweights": { name.clone(): v } })));
+                    }
+                }
+            });
+            if vlw.is_some() && ui.small_button("×").on_hover_text(crate::tl!("Remove the viewport override")).clicked() {
+                actions.push(("vplayer", json!({ "handle": h.hex(), "lineweights": { name.clone(): Value::Null } })));
             }
         });
     }

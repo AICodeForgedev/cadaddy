@@ -2172,3 +2172,32 @@
 	Embed Textures	Вбудувати текстури
 	Publish Walkthrough	Опублікувати прогулянку
 	Walkthroughs (CDYWALK)	Прогулянки (CDYWALK)
+	Check Exchange	Перевірка обміну
+	Not kept in the {format} file	Не збережено у файлі {format}
+	The drawing was saved. This file format can't keep everything in it:	Креслення збережено. Цей формат файлу не може зберегти все:
+	What	Що
+	left out	пропущено
+	changed	змінено
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	Креслення CADaddy (.cdy) зберігає все. «Перевірка обміну» покаже це знову без збереження.
+	VP Linetype	Тип ліній ВЕ
+	VP Lineweight	Вага ліній ВЕ
+	Unreconciled New Layers ({n})	Неузгоджені нові шари ({n})
+	Reconcile All	Узгодити всі
+	Reconcile Layer	Узгодити шар
+	LayerWalk	Обхід шарів
+	Layers: {n}	Шари: {n}
+	Restore on exit	Відновити при виході
+	Filter:	Фільтр:
+	Layer Walk...	Обхід шарів...
+	Layer Walk	Обхід шарів
+	Isolate Layer to Current Viewport	Ізолювати шар у поточному ВЕ
+	Unreconciled New Layers	Неузгоджені нові шари
+	Move to New Window	Перемістити в нове вікно
+	Dock All Windows	Закріпити всі вікна
+	Every drawing is in a window of its own.	Кожне креслення відкрито в окремому вікні.
+	Back among the drawing tabs	Повернути до вкладок креслень
+	Plot Stamp...	Штамп друку...
+	Plot a Folder of Drawings...	Надрукувати теку креслень...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	Кожне креслення теки в окремий PDF, у теку PDF усередині неї
+	Plot stamp	Штамп друку
+	Quick Properties Lists	Списки швидких властивостей

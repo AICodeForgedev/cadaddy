@@ -304,14 +304,19 @@ pub fn generation() -> u64 {
 /// working folder, which has nothing to do with the drawing (a program started from the Start
 /// menu works in its install or system folder), nor from another drawing's folder.
 fn resolve(path: &str, dir: Option<&Path>) -> Option<PathBuf> {
-    let p = Path::new(path);
-    if p.is_absolute() && p.is_file() {
-        return Some(p.to_path_buf());
+    use cadaddy_geom::filename::{find_file, native};
+    // Names match ignoring case, `\` separating folders, as on Windows.
+    let norm = native(path);
+    let p = Path::new(&norm);
+    if p.is_absolute()
+        && let Some(f) = find_file(p)
+    {
+        return Some(f);
     }
     // A Windows path read on another system: its last component.
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     let d = dir?;
-    [d.join(path), d.join(name)].into_iter().find(|c| c.is_file())
+    [d.join(&norm), d.join(name)].into_iter().find_map(find_file)
 }
 
 /// Whether `dir` is already the folder relative image paths are taken from.

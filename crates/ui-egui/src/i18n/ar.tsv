@@ -2080,3 +2080,32 @@ menu	View	عرض
 	Embed Textures	تضمين الخامات
 	Publish Walkthrough	نشر جولة افتراضية
 	Walkthroughs (CDYWALK)	جولات افتراضية (CDYWALK)
+	Check Exchange	فحص التبادل
+	Not kept in the {format} file	لم يُحفظ في ملف {format}
+	The drawing was saved. This file format can't keep everything in it:	تم حفظ الرسم. لا يمكن لتنسيق الملف هذا الاحتفاظ بكل ما فيه:
+	What	ماذا
+	left out	مُستبعد
+	changed	تغيّر
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	رسم CADaddy (.cdy) يحتفظ بكل شيء. يعرض فحص التبادل هذا مرة أخرى دون حفظ.
+	VP Linetype	نوع خط إطار العرض
+	VP Lineweight	سمك خط إطار العرض
+	Unreconciled New Layers ({n})	طبقات جديدة غير مُسوّاة ({n})
+	Reconcile All	تسوية الكل
+	Reconcile Layer	تسوية الطبقة
+	LayerWalk	تجوال الطبقات
+	Layers: {n}	الطبقات: {n}
+	Restore on exit	الاستعادة عند الخروج
+	Filter:	عامل التصفية:
+	Layer Walk...	تجوال الطبقات...
+	Layer Walk	تجوال الطبقات
+	Isolate Layer to Current Viewport	عزل الطبقة في إطار العرض الحالي
+	Unreconciled New Layers	طبقات جديدة غير مُسوّاة
+	Move to New Window	نقل إلى نافذة جديدة
+	Dock All Windows	إرساء كل النوافذ
+	Every drawing is in a window of its own.	كل رسم في نافذة خاصة به.
+	Back among the drawing tabs	العودة إلى علامات تبويب الرسومات
+	Plot Stamp...	ختم الطباعة...
+	Plot a Folder of Drawings...	طباعة مجلد من الرسومات...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	كل رسم في المجلد إلى ملف PDF خاص به، داخل مجلد PDF فيه
+	Plot stamp	ختم الطباعة
+	Quick Properties Lists	قوائم الخصائص السريعة

@@ -1,7 +1,8 @@
 //! The Publish dialog (PUBLISH typed or from the menu): the sheet list — this drawing's sheets,
 //! and others added from other drawings — with each sheet's bookmark title, paper and
 //! orientation overrides, reorder and remove, the list saved and loaded (PUBLISHLIST), and
-//! Publish to one PDF with a bookmark per sheet.
+//! Publish to one PDF with a bookmark per sheet; and batch plotting a folder of drawings to one
+//! PDF each (into a `PDF` folder inside it), with or without the plot stamp.
 
 use egui::RichText;
 use serde_json::{Value, json};
@@ -25,6 +26,8 @@ struct Row {
 struct State {
     rows: Vec<Row>,
     loaded: bool,
+    /// Batch plot: stamp every sheet.
+    stamp: bool,
 }
 
 fn id() -> egui::Id {
@@ -172,6 +175,17 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         if ui.add_enabled(any, egui::Button::new(RichText::new(crate::tl!("Publish to PDF...")).strong())).clicked() {
             action = Some("publish");
         }
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui
+                .button(crate::tl!("Plot a Folder of Drawings..."))
+                .on_hover_text(crate::tl!("Every drawing in a folder to its own PDF, in a PDF folder inside it"))
+                .clicked()
+            {
+                action = Some("folder");
+            }
+            ui.checkbox(&mut st.stamp, crate::tl!("Plot stamp"));
+        });
     });
     match action {
         Some("add") => {
@@ -191,6 +205,16 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         Some("save") => {
             if let Some(path) = app.services.pick_save.as_ref().and_then(|p| p(&format!("{stem}.publish.json"))) {
                 let _ = app.run("publishlist", json!({ "action": "save", "path": path, "sheets": sheets_json(&st.rows, false) }));
+            }
+        }
+        Some("folder") => {
+            if let Some(dir) = app.services.pick_folder.as_ref().and_then(|p| p()) {
+                let out = std::path::Path::new(&dir).join("PDF").to_string_lossy().into_owned();
+                let mut p = json!({ "folder": dir, "out": out });
+                if st.stamp {
+                    p["stamp"] = json!(true);
+                }
+                let _ = app.run("publish", p);
             }
         }
         Some("publish") => {

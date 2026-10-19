@@ -130,7 +130,9 @@ fn saving_into_dwg_says_once_what_the_file_would_not_keep() {
     s.execute("open", &json!({"data": base64_encode(src.as_bytes()), "name": "in.dxf"})).unwrap();
     let r = s.execute("saveas", &json!({"path": path(&dir, "a.dwg")})).unwrap();
     assert_eq!(r["notKept"], json!(["objects"]), "{r}");
-    assert!(s.log.iter().any(|l| l.contains("Not kept in the DWG file: objects") && l.contains(".cdy")), "{:?}", s.log);
+    // Feature by feature, with the objects concerned (exchangeloss: the line used to name only "objects").
+    assert_eq!(r["notKeptDetail"], json!([{"feature": "acme_widget objects", "what": "dropped", "count": 1, "handles": ["3A0"]}]), "{r}");
+    assert!(s.log.iter().any(|l| l.contains("Not kept in the DWG file: 1 acme_widget objects dropped") && l.contains(".cdy")), "{:?}", s.log);
     // Once per drawing.
     let r = s.execute("qsave", &json!({})).unwrap();
     assert!(r.get("notKept").is_none(), "{r}");

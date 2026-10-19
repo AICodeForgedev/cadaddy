@@ -27,6 +27,9 @@ commands:
   parity          recompute the AutoCAD menu-breadth checklist in docs/parity-checklist.md
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
+  fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
+                  mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
+                  saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
 ";
 
 fn main() -> ExitCode {
@@ -42,6 +45,7 @@ fn main() -> ExitCode {
         Some("parity") => parity::run(&root()),
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
+        Some("fuzz") => cmd_fuzz(&rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -80,6 +84,18 @@ pub fn metadata() -> Result<serde_json::Value, String> {
         return Err(format!("cargo metadata failed:\n{}", String::from_utf8_lossy(&out.stderr)));
     }
     serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata: bad JSON: {e}"))
+}
+
+/// `fuzz [target|all] [seconds]`: the stable mutation fuzzer over the file readers
+/// (crates/io/examples/fuzz.rs); findings land in target/fuzz-findings/<target>/. The
+/// coverage-guided cargo-fuzz targets are in fuzz/ (nightly: `cargo +nightly fuzz run dxf`).
+fn cmd_fuzz(rest: &[&str]) -> Result<(), String> {
+    let target = rest.first().copied().unwrap_or("all");
+    let secs = rest.get(1).copied().unwrap_or("60");
+    let out = root().join("target").join("fuzz-findings");
+    let mut c = cargo();
+    c.args(["run", "--release", "-p", "cadaddy-io", "--example", "fuzz", "--", target, secs]).arg(&out);
+    run(c, &format!("cargo run --release -p cadaddy-io --example fuzz -- {target} {secs}"))
 }
 
 fn cmd_layers() -> Result<(), String> {

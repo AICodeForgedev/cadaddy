@@ -377,6 +377,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), 12 (Release 12 DXF: newer objects converted, some left out), binary?: bool (DXF)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved}")
             .noundo()
             .interactive(|_| Ok(Box::new(SaveAsM::default()))),
+        CommandSpec::new("checkexchange", "Check Exchange", run_checkexchange)
+            .menu(&["File", "Drawing Utilities", "Check Exchange"])
+            .params("{format?: dwg|dxf (default: the drawing's file's, else dwg), version?: 2000|2004|2007|2010|2013|2018} → {format, version, kept: bool, losses: [{feature, what: dropped|changed, count, handles?, names?}], message}: what saving as DWG or DXF wouldn't keep, without saving")
+            .noundo(),
         CommandSpec::new("document.switch", "Switch Drawing", run_switch)
             .params("{index} | {path} | {title}: the open drawing to make current (path and title in any case)")
             .enabled(always)
@@ -1225,29 +1229,86 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
         report_not_saved(s, &mut r, &lost);
     }
     if let Some(path) = r.get("path").and_then(Value::as_str).filter(|p| is_exchange_file(p)).map(str::to_string) {
-        report_not_kept(s, &mut r, &path);
+        let opts = save_options("save", p).unwrap_or_default();
+        report_not_kept(s, &mut r, &path, opts);
     }
     Ok(r)
 }
 
 /// The first save of a drawing into DWG or DXF: say what that file doesn't keep that a .cdy file
 /// would (once per drawing), and list it in the result's `notKept`.
-fn report_not_kept(s: &mut Session, r: &mut Value, path: &str) {
+fn report_not_kept(s: &mut Session, r: &mut Value, path: &str, opts: SaveAs) {
     let Some(hooks) = io() else { return };
     let Ok(st) = s.state_mut() else { return };
     if st.kept_checked {
         return;
     }
     st.kept_checked = true;
-    let lost = kept::not_kept(st.drawing(), path, hooks.write, hooks.read);
-    if lost.is_empty() {
+    let d = st.drawing();
+    // Written as the save wrote it (the version and binary DXF asked for).
+    let bytes = match WRITE_AS.get() {
+        Some(write_as) if opts != SaveAs::default() => write_as(d, path, &opts),
+        _ => (hooks.write)(d, path),
+    };
+    let Ok((lost, detail)) = bytes.and_then(|b| kept::check_written(d, path, &b, hooks.read)) else { return };
+    if lost.is_empty() && detail.is_empty() {
         return;
     }
     let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_uppercase()).unwrap_or_else(|| "DXF".into());
-    s.echo(format!("Not kept in the {ext} file: {}. Save as a CADaddy drawing (.cdy) to keep everything.", lost.join(", ")));
+    st.exchange_notice = Some(json!({ "path": path, "format": ext, "losses": detail }));
+    let what = if detail.is_empty() { lost.join(", ") } else { kept::losses_line(&detail) };
+    s.echo(format!("Not kept in the {ext} file: {what}. Save as a CADaddy drawing (.cdy) to keep everything."));
     if let Some(o) = r.as_object_mut() {
-        o.insert("notKept".into(), json!(lost));
+        if !lost.is_empty() {
+            o.insert("notKept".into(), json!(lost));
+        }
+        o.insert("notKeptDetail".into(), json!(detail));
     }
+}
+
+/// CHECKEXCHANGE: what saving as DWG or DXF wouldn't keep, without saving.
+fn run_checkexchange(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "checkexchange";
+    let hooks = io().ok_or_else(|| crate::EngineError::Other("File formats are not available in this build.".into()))?;
+    let from_path = s
+        .state()?
+        .path
+        .as_deref()
+        .filter(|p| is_exchange_file(p))
+        .and_then(|p| std::path::Path::new(p).extension())
+        .map(|e| e.to_string_lossy().to_ascii_lowercase());
+    let format = match str_param(p, "format").map(str::to_ascii_lowercase) {
+        Some(f) if matches!(f.as_str(), "dwg" | "dxf") => f,
+        Some(f) => return Err(bad(cmd, format!("`format` is dwg or dxf, not {f}"))),
+        None => match from_path.as_deref() {
+            Some("dxf") => "dxf".to_string(),
+            _ => "dwg".to_string(),
+        },
+    };
+    let version = match p.get("version") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(save_options(cmd, &json!({ "version": v }))?.version.ok_or_else(|| bad(cmd, "unknown `version`"))?),
+    };
+    let name = format!("check.{format}");
+    let d = s.state()?.drawing();
+    // The version asked for: written as the save would write it.
+    let lost = match version {
+        Some(v) => {
+            let write_as = WRITE_AS.get().copied().ok_or_else(|| bad(cmd, "saving in another version is not available in this build"))?;
+            let bytes = write_as(d, &name, &SaveAs { version: Some(v), binary: false }).map_err(|e| bad(cmd, e))?;
+            let back = (hooks.read)(&bytes, &name).map_err(|e| bad(cmd, e))?;
+            kept::losses_between(d, &back)
+        }
+        None => kept::losses(d, &name, hooks.write, hooks.read).map_err(|e| bad(cmd, e))?,
+    };
+    let upper = format.to_ascii_uppercase();
+    let message = if lost.is_empty() {
+        format!("A {upper} file keeps everything in this drawing.")
+    } else {
+        format!("Not kept in a {upper} file: {}. A CADaddy drawing (.cdy) keeps everything.", kept::losses_line(&lost))
+    };
+    s.echo(message.clone());
+    Ok(json!({ "format": format, "version": version.map(|v| v.code()), "kept": lost.is_empty(), "losses": lost, "message": message }))
 }
 
 fn run_qsave_reporting(s: &mut Session, p: &Value) -> Result<Value> {

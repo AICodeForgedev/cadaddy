@@ -39,7 +39,7 @@ pub(crate) fn source(d: &Drawing, key: &str, host: Option<&str>) -> Result<std::
 fn read(file: &Path) -> Result<Drawing, String> {
     use std::io::Read;
     let hooks = crate::cmd::file::io().ok_or("file formats are not available in this build")?;
-    let f = std::fs::File::open(file).map_err(|e| e.to_string())?;
+    let f = crate::readfile::open(file).map_err(|e| e.to_string())?;
     if !f.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("not a regular file".into());
     }

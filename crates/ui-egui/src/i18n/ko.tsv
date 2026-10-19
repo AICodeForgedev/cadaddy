@@ -2085,3 +2085,32 @@ menu	Modify	수정
 	Embed Textures	텍스처 포함
 	Publish Walkthrough	워크스루 게시
 	Walkthroughs (CDYWALK)	워크스루 (CDYWALK)
+	Check Exchange	교환 검사
+	Not kept in the {format} file	{format} 파일에 유지되지 않음
+	The drawing was saved. This file format can't keep everything in it:	도면을 저장했습니다. 이 파일 형식은 다음을 모두 유지할 수 없습니다:
+	What	항목
+	left out	제외됨
+	changed	변경됨
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	CADaddy 도면(.cdy)은 모든 것을 유지합니다. 교환 검사로 저장하지 않고 다시 볼 수 있습니다.
+	VP Linetype	뷰포트 선종류
+	VP Lineweight	뷰포트 선가중치
+	Unreconciled New Layers ({n})	조정되지 않은 새 도면층 ({n})
+	Reconcile All	모두 조정
+	Reconcile Layer	도면층 조정
+	LayerWalk	도면층 탐색
+	Layers: {n}	도면층: {n}
+	Restore on exit	종료 시 복원
+	Filter:	필터:
+	Layer Walk...	도면층 탐색...
+	Layer Walk	도면층 탐색
+	Isolate Layer to Current Viewport	현재 뷰포트에 도면층 격리
+	Unreconciled New Layers	조정되지 않은 새 도면층
+	Move to New Window	새 창으로 이동
+	Dock All Windows	모든 창 도킹
+	Every drawing is in a window of its own.	모든 도면이 각자의 창에 있습니다.
+	Back among the drawing tabs	도면 탭으로 되돌리기
+	Plot Stamp...	플롯 스탬프...
+	Plot a Folder of Drawings...	도면 폴더 플롯...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	폴더의 각 도면을 개별 PDF로(그 안의 PDF 폴더에)
+	Plot stamp	플롯 스탬프
+	Quick Properties Lists	빠른 특성 목록

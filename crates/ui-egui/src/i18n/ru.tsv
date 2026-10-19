@@ -1864,3 +1864,32 @@
 	Embed Textures	Внедрить текстуры
 	Publish Walkthrough	Опубликовать прогулку
 	Walkthroughs (CDYWALK)	Прогулки (CDYWALK)
+	Check Exchange	Проверка обмена
+	Not kept in the {format} file	Не сохранено в файле {format}
+	The drawing was saved. This file format can't keep everything in it:	Чертёж сохранён. Этот формат файла не может сохранить всё:
+	What	Что
+	left out	пропущено
+	changed	изменено
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	Чертёж CADaddy (.cdy) сохраняет всё. «Проверка обмена» покажет это снова без сохранения.
+	VP Linetype	Тип линий ВЭ
+	VP Lineweight	Вес линий ВЭ
+	Unreconciled New Layers ({n})	Несогласованные новые слои ({n})
+	Reconcile All	Согласовать все
+	Reconcile Layer	Согласовать слой
+	LayerWalk	Обход слоев
+	Layers: {n}	Слои: {n}
+	Restore on exit	Восстановить при выходе
+	Filter:	Фильтр:
+	Layer Walk...	Обход слоев...
+	Layer Walk	Обход слоев
+	Isolate Layer to Current Viewport	Изолировать слой в текущем ВЭ
+	Unreconciled New Layers	Несогласованные новые слои
+	Move to New Window	Переместить в новое окно
+	Dock All Windows	Закрепить все окна
+	Every drawing is in a window of its own.	Каждый чертёж открыт в отдельном окне.
+	Back among the drawing tabs	Вернуть к вкладкам чертежей
+	Plot Stamp...	Штамп печати...
+	Plot a Folder of Drawings...	Напечатать папку чертежей...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	Каждый чертёж папки в отдельный PDF, в папку PDF внутри неё
+	Plot stamp	Штамп печати
+	Quick Properties Lists	Списки быстрых свойств

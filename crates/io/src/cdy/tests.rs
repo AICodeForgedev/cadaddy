@@ -94,6 +94,8 @@ fn every_kind() -> Drawing {
         frozen_layers: vec!["WALLS".into()],
         anno_scale: Some("1:50".into()),
         layer_colors: Vec::new(),
+        layer_linetypes: Vec::new(),
+        layer_lineweights: Vec::new(),
         clip: None,
         on: true,
         twist: 0.25,
@@ -814,4 +816,35 @@ fn binary_meshes_open_faster_than_tokens() {
         tok.len() / 1024
     );
     assert!(bin.len() < tok.len(), "binary is smaller");
+}
+
+/// `verify` on a file saved twice: sound, the first save's superseded chunk counted as waste and
+/// not as damage; a flipped byte in a superseded chunk is reported but doesn't fail the file.
+#[test]
+fn verify_tells_live_parts_from_superseded_ones() {
+    let mut d = lines(3000);
+    let (out, state) = save(&d, None, &no_thumb).unwrap();
+    let file = stored(&[], &out);
+    let first = verify(&file).unwrap();
+    assert_eq!((first["ok"].clone(), first["waste"].clone()), (serde_json::json!(true), serde_json::json!(0)), "{first}");
+    assert_eq!(first["sizes"]["ENTS"]["count"], 3);
+    let h = d.model.iter().next().map(|e| e.handle).unwrap();
+    d.model.modify(h, |e| e.common.layer = "Edited".into());
+    let (out, _) = save(&d, Some(&state), &no_thumb).unwrap();
+    let file = stored(&file, &out);
+    let v = verify(&file).unwrap();
+    assert_eq!(v["ok"], true, "{v}");
+    assert!(v["waste"].as_u64().unwrap() > 0);
+    assert_eq!(v["sizes"]["ENTS"]["count"], 3, "only the live chunks are sized");
+    let old = v["chunks"].as_array().unwrap().iter().find(|c| c["live"] == false && c["tag"] == "ENTS").unwrap().clone();
+    let mut bad = file.clone();
+    bad[old["offset"].as_u64().unwrap() as usize + CHUNK_HEADER_LEN + 5] ^= 0xff;
+    let v = verify(&bad).unwrap();
+    assert_eq!(v["ok"], true, "{v}");
+    assert!(v["chunks"].as_array().unwrap().iter().any(|c| c.get("damage").is_some() && c["live"] == false));
+    // Hostile input: anything that isn't a .cdy file is an error, cut-short files never panic.
+    assert!(verify(b"hello").is_err());
+    for n in (0..file.len()).step_by(211) {
+        let _ = verify(&file[..n]);
+    }
 }
