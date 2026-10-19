@@ -611,8 +611,11 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .show(|ui| crate::workspaces::menu(app, ui));
         }
-        if let Some(c) = toggle_cmd {
-            app.start(c);
+        // The toggles don't cancel the active command (#1108); the dialog buttons start theirs.
+        match toggle_cmd {
+            Some(c) if c.starts_with("ui.") || matches!(c, "isolateobjects" | "hideobjects" | "unisolateobjects") => app.start(c),
+            Some(c) => crate::menus::run_transparent(app, c),
+            None => {}
         }
     });
 }
