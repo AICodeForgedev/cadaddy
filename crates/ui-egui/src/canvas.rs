@@ -1258,6 +1258,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         )
     });
     let inside = hover_pos.is_some_and(|p| rect.contains(p)) && resp.hovered();
+    // Whether Ctrl is held right now. Written every frame (not just while a command prompts), so
+    // previews that read `Session::ctrl_down` always see the current state. The engine
+    // deliberately does not carry modifiers through `Input`, which is UI-agnostic (see PR
+    // #407's Limits note: modifiers used to be dropped on the floor at this point).
+    app.session.ctrl_down = mods.ctrl;
     // Which device is scrolling? On macOS, trackpads (and Magic Mouse) report precise point
     // deltas; notched mouse wheels report lines. The answer is sticky because egui spreads a wheel
     // notch over several frames. Elsewhere (browsers, Wayland smooth-scroll mice) ordinary wheels
