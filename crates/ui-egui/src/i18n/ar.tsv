@@ -1946,3 +1946,27 @@ menu	View	عرض
 	Confirm Stairs	تأكيد السلالم
 	Stairs and Ramps	السلالم والمنحدرات
 	Bake Lighting	خبز الإضاءة
+	Command Aliases and Shortcuts	الأسماء المستعارة للأوامر والاختصارات
+	Keyboard Shortcuts	اختصارات لوحة المفاتيح
+	replaces {command}	يحل محل {command}
+	Built-in	مضمّن
+	Alias	الاسم المستعار
+	Command	الأمر
+	Add or Change	إضافة أو تغيير
+	Keys	المفاتيح
+	Edit Aliases and Shortcuts...	تحرير الأسماء المستعارة والاختصارات...
+	Customize	تخصيص
+	Read Elevation	قراءة الواجهة
+	Read Roof Plan	قراءة مسقط السقف
+	Exterior	الخارج
+	Drafting & Annotation	الصياغة والتعليقات التوضيحية
+	3D Modeling	النمذجة ثلاثية الأبعاد
+	Electrical	كهربائي
+	Save Current As...	حفظ الحالي باسم...
+	Workspace Settings...	إعدادات مساحة العمل...
+	Workspace Settings	إعدادات مساحة العمل
+	Navigation Bar	شريط التنقل
+	Save Workspace	حفظ مساحة العمل
+	Workspaces	مساحات العمل
+	Close Navigation Bar	إغلاق شريط التنقل
+	Workspace	مساحة العمل

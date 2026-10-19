@@ -54,6 +54,9 @@ pub struct BuildingSpec {
     /// Stairs and ramps between the levels.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stairs: Vec<Stair>,
+    /// Facades, roofs and what stands on them, from the elevations and the roof plan.
+    #[serde(default, skip_serializing_if = "Exterior::is_empty")]
+    pub exterior: Exterior,
     /// Devices (fixture and device layers): types, mounting heights, attributes.
     #[serde(default)]
     pub devices: DeviceRules,
@@ -219,6 +222,127 @@ pub struct Stair {
     pub objects: Vec<String>,
 }
 
+/// The outside of the building: facades read from the elevations, roofs from the roof plan.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Exterior {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub facades: Vec<Facade>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub roofs: Vec<Roof>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub crickets: Vec<Cricket>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub equipment: Vec<Equipment>,
+}
+
+impl Exterior {
+    pub fn is_empty(&self) -> bool {
+        self.facades.is_empty() && self.roofs.is_empty() && self.crickets.is_empty() && self.equipment.is_empty()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    North,
+    South,
+    East,
+    West,
+}
+
+impl Side {
+    pub fn name(self) -> &'static str {
+        match self {
+            Side::North => "North",
+            Side::South => "South",
+            Side::East => "East",
+            Side::West => "West",
+        }
+    }
+}
+
+/// One facade as its elevation shows it: bands of glass (storefront, curtain wall) and of
+/// materials, by height above the ground floor and, for glass, along the facade from its left
+/// end as seen in the elevation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Facade {
+    pub side: Side,
+    #[serde(default)]
+    pub bands: Vec<Band>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Band {
+    /// `glass` (storefront or curtain wall) or `material`.
+    pub kind: BandKind,
+    pub from_ft: f64,
+    pub to_ft: f64,
+    /// Along the facade from its left end as seen, feet; none = the whole facade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_ft: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ft: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BandKind {
+    Glass,
+    Material,
+}
+
+/// A roof area on the roof plan: its outline (sheet units, on its level's plan), the way it
+/// slopes and its parapet.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Roof {
+    pub name: String,
+    pub level: String,
+    pub outline: Vec<[f64; 2]>,
+    /// Downhill direction on the plan and the fall per foot; none = flat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slope: Option<RoofSlope>,
+    /// Parapet height above the roof's high point, feet; none = no parapet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parapet_ft: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RoofSlope {
+    pub down: [f64; 2],
+    /// Rise per foot of run (¼"/ft = 0.0208, 4:12 = 0.333).
+    pub rise_per_ft: f64,
+}
+
+/// A cricket: a raised ridge diverting water, its outline on the roof and its height.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Cricket {
+    pub level: String,
+    pub outline: Vec<[f64; 2]>,
+    pub height_ft: f64,
+}
+
+/// Rooftop equipment (RTU, AHU, exhaust fan) as a box over its outline.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Equipment {
+    pub name: String,
+    pub level: String,
+    pub outline: Vec<[f64; 2]>,
+    pub height_ft: f64,
+}
+
+/// A fall per foot in words: `1/4"/ft`, `4:12`.
+pub fn pitch_text(rise_per_ft: f64) -> String {
+    if rise_per_ft >= 1.0 / 12.0 - 1e-9 {
+        let r = (rise_per_ft * 12.0 * 8.0).round() / 8.0;
+        format!("{}:12", if r.fract() == 0.0 { format!("{r}") } else { format!("{r:.3}").trim_end_matches('0').to_string() })
+    } else {
+        format!("{}/ft", inches(rise_per_ft * 12.0))
+    }
+}
+
 fn forty_four() -> f64 {
     44.0
 }
@@ -335,7 +459,11 @@ fn inches_text(eighths: f64) -> String {
         num /= 2.0;
         den /= 2.0;
     }
-    if num > 0.0 { format!("{whole} {num}/{den}\"") } else { format!("{whole}\"") }
+    match (whole > 0.0, num > 0.0) {
+        (true, true) => format!("{whole} {num}/{den}\""),
+        (false, true) => format!("{num}/{den}\""),
+        _ => format!("{whole}\""),
+    }
 }
 
 impl BuildingSpec {
@@ -441,6 +569,36 @@ impl BuildingSpec {
             let state = if st.confirmed { "" } else { " (detected; confirm)" };
             put("stairs", format!("stairs/{}", st.name), format!("{}: {what}, {} wide{state}", st.name, inches(st.width_in)));
         }
+        for f in &self.exterior.facades {
+            let bands: Vec<String> = f
+                .bands
+                .iter()
+                .map(|b| {
+                    let what = match (b.kind, &b.material) {
+                        (BandKind::Glass, _) => "glass".to_string(),
+                        (BandKind::Material, Some(m)) => m.clone(),
+                        (BandKind::Material, None) => "material".to_string(),
+                    };
+                    format!("{what} {} to {}", feet(b.from_ft), feet(b.to_ft))
+                })
+                .collect();
+            put(
+                "exterior",
+                format!("facades/{}", f.side.name()),
+                format!("{} facade: {}", f.side.name(), if bands.is_empty() { "plain".into() } else { bands.join("; ") }),
+            );
+        }
+        for r in &self.exterior.roofs {
+            let slope = r.slope.map_or("flat".to_string(), |s| format!("sloping {}", pitch_text(s.rise_per_ft)));
+            let parapet = r.parapet_ft.map_or(String::new(), |p| format!(", {} parapet", feet(p)));
+            put("exterior", format!("roofs/{}", r.name), format!("{}: roof on {}, {slope}{parapet}", r.name, r.level));
+        }
+        for (i, c) in self.exterior.crickets.iter().enumerate() {
+            put("exterior", format!("crickets/{}", i + 1), format!("Cricket {} on {}, {} high", i + 1, c.level, feet(c.height_ft)));
+        }
+        for e in &self.exterior.equipment {
+            put("exterior", format!("equipment/{}", e.name), format!("{}: rooftop equipment on {}, {} high", e.name, e.level, feet(e.height_ft)));
+        }
         let mats = materials_text(&self.materials);
         if !mats.is_empty() {
             put("materials", "materials".into(), format!("Materials: {mats}"));
@@ -491,6 +649,7 @@ impl BuildingSpec {
             materials: Surfaces::default(),
             site: None,
             stairs: Vec::new(),
+            exterior: Exterior::default(),
             devices: r.devices.clone(),
             device_sheets: r.device_sheets.clone(),
             openings: r.openings.clone(),
@@ -753,6 +912,42 @@ impl BuildingSpec {
             }
             if f.kind == FamilyKind::Door && f.sill_ft.is_some_and(|s| s != 0.0) {
                 out.push(Issue::warning(format!("{at}.sill_ft"), "a door has no sill; it is ignored"));
+            }
+        }
+        let outline_ok = |o: &[[f64; 2]]| o.len() >= 3 && o.len() <= 100_000 && o.iter().all(|p| fin(p[0]) && fin(p[1]));
+        for (i, r) in self.exterior.roofs.iter().enumerate().take(MAX_ITEMS) {
+            let at = format!("exterior.roofs[{i}]");
+            if self.level(&r.level).is_none() {
+                out.push(Issue::error(format!("{at}.level"), format!("there is no level named {}", r.level)));
+            }
+            if !outline_ok(&r.outline) {
+                out.push(Issue::error(format!("{at}.outline"), "a roof outline needs at least 3 points"));
+            }
+            if let Some(sl) = r.slope {
+                let len = (sl.down[0] * sl.down[0] + sl.down[1] * sl.down[1]).sqrt();
+                if !(fin(sl.rise_per_ft) && (0.0..=3.0).contains(&sl.rise_per_ft) && len.is_finite() && len > 0.0) {
+                    out.push(Issue::error(format!("{at}.slope"), "a slope needs a direction and a rise per foot from 0 to 3"));
+                }
+            }
+            if r.parapet_ft.is_some_and(|p| !(fin(p) && (0.0..=50.0).contains(&p))) {
+                out.push(Issue::error(format!("{at}.parapet_ft"), "the parapet must be from 0 to 50 feet"));
+            }
+        }
+        for (i, c) in self.exterior.crickets.iter().enumerate().take(MAX_ITEMS) {
+            if self.level(&c.level).is_none() || !outline_ok(&c.outline) || !(fin(c.height_ft) && c.height_ft > 0.0 && c.height_ft <= 20.0) {
+                out.push(Issue::error(format!("exterior.crickets[{i}]"), "a cricket needs a level, an outline and a height from 0 to 20 feet"));
+            }
+        }
+        for (i, e) in self.exterior.equipment.iter().enumerate().take(MAX_ITEMS) {
+            if self.level(&e.level).is_none() || !outline_ok(&e.outline) || !(fin(e.height_ft) && e.height_ft > 0.0 && e.height_ft <= 100.0) {
+                out.push(Issue::error(format!("exterior.equipment[{i}]"), "equipment needs a level, an outline and a height from 0 to 100 feet"));
+            }
+        }
+        for (i, f) in self.exterior.facades.iter().enumerate().take(MAX_ITEMS) {
+            for (j, b) in f.bands.iter().enumerate().take(MAX_ITEMS) {
+                if !(fin(b.from_ft) && fin(b.to_ft) && b.to_ft > b.from_ft) {
+                    out.push(Issue::error(format!("exterior.facades[{i}].bands[{j}]"), "a band runs from a height up to a higher one"));
+                }
             }
         }
         for (i, st) in self.stairs.iter().enumerate().take(MAX_ITEMS) {

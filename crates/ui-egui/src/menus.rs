@@ -91,6 +91,15 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.update.check", "Check for Updates...", &["Help", "Check for Updates..."], None),
     ("ui.feedback", "Report a Bug...", &["Help", "Report a Bug..."], None),
     ("ui.diag", "Report a Problem...", &["Help", "Report a Problem..."], None),
+    ("ui.dialog.aliases", "Edit Aliases and Shortcuts...", &["Tools", "Customize", "Edit Aliases and Shortcuts..."], None),
+    ("ui.shortcuts", "Keyboard Shortcuts", &[], None),
+    ("ui.workspace.drafting", "Drafting & Annotation", &["Tools", "Workspaces", "Drafting & Annotation"], None),
+    ("ui.workspace.modeling", "3D Modeling", &["Tools", "Workspaces", "3D Modeling"], None),
+    ("ui.workspace.electrical", "Electrical", &["Tools", "Workspaces", "Electrical"], None),
+    ("ui.workspace.save", "Save Current As...", &["Tools", "Workspaces", "Save Current As..."], None),
+    ("ui.workspace.settings", "Workspace Settings...", &["Tools", "Workspaces", "Workspace Settings..."], None),
+    ("workspace", "Workspace", &[], None),
+    ("navbar", "Navigation Bar", &["View", "Display", "Navigation Bar"], None),
     ("ui.feature", "Request a Feature...", &["Help", "Request a Feature..."], None),
     ("ui.donate", "Support CADaddy...", &["Help", "Support CADaddy..."], None),
     ("ui.toggle.history", "Command History", &["Window", "Command History"], Some("F2")),
@@ -525,6 +534,29 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         // The feedback form and the fundraiser open in the browser ([`crate::support`]).
+        "ui.dialog.aliases" => {
+            app.ui.dialog = Some("aliasedit".into());
+            Ok(Value::Null)
+        }
+        "ui.shortcuts" => crate::aliasdlg::run(app, params),
+        "ui.workspace.drafting" | "ui.workspace.modeling" | "ui.workspace.electrical" => {
+            let name = match id {
+                "ui.workspace.modeling" => "3D Modeling",
+                "ui.workspace.electrical" => "Electrical",
+                _ => cadaddy_engine::DEFAULT_WORKSPACE,
+            };
+            crate::workspaces::set(app, name).map(|()| json!({ "current": name }))
+        }
+        "ui.workspace.save" => {
+            app.ui.dialog = Some("workspace.save".into());
+            Ok(Value::Null)
+        }
+        "ui.workspace.settings" => {
+            app.ui.dialog = Some("workspace.settings".into());
+            Ok(Value::Null)
+        }
+        "workspace" => crate::workspaces::run(app, params),
+        "navbar" => crate::workspaces::run_navbar(app, params),
         "ui.diag" => {
             app.ui.dialog = Some("diag".into());
             Ok(Value::Null)
@@ -552,6 +584,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         // Typed or menu-invoked (no parameters) these open their dialogs; JSON calls run the command.
+        "aliasedit" if params.is_null() => {
+            app.ui.dialog = Some("aliasedit".into());
+            Ok(Value::Null)
+        }
         "etransmit" if params.is_null() => {
             app.ui.dialog = Some("etransmit".into());
             Ok(Value::Null)
@@ -841,13 +877,13 @@ pub fn activate(app: &mut CadApp, id: &str) {
     app.start(id);
 }
 
-/// Keyboard shortcuts and function keys.
-pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
+/// The built-in keyboard shortcuts and function keys: (shortcut, command).
+pub fn default_shortcuts() -> Vec<(egui::KeyboardShortcut, &'static str)> {
     use egui::{Key, KeyboardShortcut, Modifiers};
     let sc = |m: Modifiers, k: Key| KeyboardShortcut::new(m, k);
     let cmd = Modifiers::COMMAND;
     let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
-    let pairs: &[(KeyboardShortcut, &str)] = &[
+    vec![
         (sc(cmd_shift, Key::A), "pickstyle"),
         (sc(cmd_shift, Key::Z), "redo"),
         (sc(cmd, Key::Z), "u"),
@@ -877,21 +913,28 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(Modifiers::NONE, Key::F10), "polar"),
         (sc(Modifiers::NONE, Key::F11), "otrack"),
         (sc(Modifiers::NONE, Key::F12), "dynmode"),
-    ];
+    ]
+}
+
+/// Keyboard shortcuts and function keys: the built-in ones as the user changed them
+/// ([`crate::aliasdlg::effective_shortcuts`]).
+pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
+    let pairs = crate::aliasdlg::effective_shortcuts(app);
     crate::clipboard::mirror(app, ctx);
     if ctx.egui_wants_keyboard_input() || app.closing.is_some() {
         return;
     }
     // Cmd/Ctrl+C, X and V arrive as clipboard events, not key presses.
-    let mut fire = crate::clipboard::shortcut_commands(app, ctx);
+    let mut fire: Vec<String> = crate::clipboard::shortcut_commands(app, ctx).into_iter().map(str::to_string).collect();
     ctx.input_mut(|i| {
-        for (s, id) in pairs {
+        for (s, id) in &pairs {
             if i.consume_shortcut(s) && !fire.contains(id) {
-                fire.push(*id);
+                fire.push(id.clone());
             }
         }
     });
     for id in fire {
+        let id = id.as_str();
         // ISOPLANE (F5, Ctrl+E) switches the plane without cancelling the active command.
         if id == "isoplane" {
             if let Some(m) = app.session.execute(id, &json!({})).ok().and_then(|v| v.get("message").and_then(Value::as_str).map(str::to_string)) {

@@ -22,7 +22,7 @@ use super::*;
 use crate::{EngineError, Result, Session};
 
 /// Formats EXPORT writes (the io layer picks the writer from the extension).
-pub const EXPORT_FORMATS: &[&str] = &["cdy", "dxf", "dwg", "svg", "png", "pdf", "glb", "gltf", "obj", "stl"];
+pub const EXPORT_FORMATS: &[&str] = &["cdy", "dxf", "dwg", "svg", "png", "pdf", "eps", "wmf", "glb", "gltf", "obj", "stl"];
 /// Default and largest plot preview width, in pixels.
 const PREVIEW_PX: u64 = 1200;
 const MAX_PREVIEW_PX: u64 = 4096;
@@ -269,7 +269,7 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     if !EXPORT_FORMATS.contains(&format.as_str()) {
         return Err(bad(
             "export",
-            "`format` must be cdy, dxf, dwg, svg, png, pdf, glb, gltf, obj or stl (or give a `path` with one of those extensions)",
+            "`format` must be cdy, dxf, dwg, svg, png, pdf, eps, wmf, glb, gltf, obj or stl (or give a `path` with one of those extensions)",
         ));
     }
     // A PNG of model space shown in 3D or in a visual style: the shaded view, fitted.

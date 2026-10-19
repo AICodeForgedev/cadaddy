@@ -24,6 +24,11 @@ struct W {
     reactors: HashMap<Handle, Vec<String>>,
     /// Upper-case material name → its MATERIAL object handle (group 347 of layers and objects).
     materials: HashMap<String, String>,
+    /// Handles the drawing's file gave its table records and objects (`Drawing::kept_handles`),
+    /// written again where they are free.
+    kept: std::collections::BTreeMap<String, u64>,
+    /// Handles taken (every object's, and kept ones already written).
+    used: std::collections::HashSet<u64>,
 }
 
 impl W {
@@ -45,10 +50,24 @@ impl W {
         self.f(c, p.x);
         self.f(c + 10, p.y);
     }
+    /// A new handle: one no object or kept handle has, recorded so [`Self::h_kept`] can't give it
+    /// out again (a kept handle equal to one given here made two objects share it).
     fn h(&mut self) -> String {
-        let h = format!("{:X}", self.next);
-        self.next = self.next.saturating_add(1);
-        h
+        while self.used.contains(&self.next) && self.next < u64::MAX {
+            self.next += 1;
+        }
+        let n = self.next;
+        self.used.insert(n);
+        self.next = n.saturating_add(1);
+        format!("{n:X}")
+    }
+    /// The handle the file gave the table record or object `key` (`LAYER/WALLS`, `DICT/ACAD_GROUP`…)
+    /// when it is free, else a new one.
+    fn h_kept(&mut self, key: &str) -> String {
+        match self.kept.get(key).copied() {
+            Some(k) if k > 0 && k < self.next && self.used.insert(k) => format!("{k:X}"),
+            _ => self.h(),
+        }
     }
     /// A `102 {NAME` … `102 }` group of handles.
     fn group(&mut self, name: &str, code: i32, handles: &[&str]) {
@@ -314,7 +333,16 @@ fn annotative_xdata(w: &mut W) {
 
 /// Override (`ACAD` DSTYLE) and associativity (`CADADDY` ASSOC) xdata of a dimension.
 fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
-    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new(), materials: HashMap::new() };
+    let mut ov = W {
+        t: Vec::new(),
+        next: 0,
+        pstyles: HashMap::new(),
+        layers: HashMap::new(),
+        reactors: HashMap::new(),
+        materials: HashMap::new(),
+        kept: std::collections::BTreeMap::new(),
+        used: std::collections::HashSet::new(),
+    };
     let mut sah = false;
     for (k, v) in &dm.overrides {
         let Some(field) = DimStyle::field_name(k) else { continue };
@@ -2101,7 +2129,7 @@ fn vport_table(w: &mut W, d: &Drawing, ext: Bounds2) {
     let th = table_head(w, "VPORT", records.len());
     let finite = |p: Vec2, or: Vec2| if p.is_finite() { p } else { or };
     for (name, t) in records {
-        record_head(w, "VPORT", &th, "AcDbViewportTableRecord");
+        record_head(w, "VPORT", name, &th, "AcDbViewportTableRecord");
         w.s(2, name);
         w.i(70, 0);
         w.p2(10, finite(t.min, Vec2::ZERO));
@@ -2122,7 +2150,7 @@ fn vport_table(w: &mut W, d: &Drawing, ext: Bounds2) {
 }
 
 fn table_head(w: &mut W, name: &str, count: usize) -> String {
-    let h = w.h();
+    let h = w.h_kept(&format!("TABLE/{}", name.to_ascii_uppercase()));
     w.s(0, "TABLE");
     w.s(2, name);
     w.s(5, h.clone());
@@ -2132,8 +2160,10 @@ fn table_head(w: &mut W, name: &str, count: usize) -> String {
     h
 }
 
-fn record_head(w: &mut W, kind: &str, owner: &str, subclass: &str) -> String {
-    let h = w.h();
+/// A table record's first groups; `name` (its name, or a shape style's file) keys the handle the
+/// file gave it.
+fn record_head(w: &mut W, kind: &str, name: &str, owner: &str, subclass: &str) -> String {
+    let h = w.h_kept(&format!("{kind}/{}", name.to_ascii_uppercase()));
     w.s(0, kind);
     w.s(if kind == "DIMSTYLE" { 105 } else { 5 }, h.clone());
     w.s(330, owner);
@@ -2213,9 +2243,16 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         layers: HashMap::new(),
         reactors: hatch_reactors(d),
         materials: HashMap::new(),
+        kept: d.kept_handles.clone(),
+        used: std::iter::once(&d.model)
+            .chain(d.layouts.iter().map(|l| &l.entities))
+            .chain(d.blocks.values().map(|b| &b.entities))
+            .flat_map(|st| st.iter().map(|e| e.handle.0))
+            .collect(),
     };
     // Group handles first: each member lists its groups among its persistent reactors.
-    let group_handles: Vec<String> = d.groups.iter().filter(|g| !g.name.is_empty()).map(|_| w.h()).collect();
+    let group_handles: Vec<String> =
+        d.groups.iter().filter(|g| !g.name.is_empty()).map(|g| w.h_kept(&format!("GROUP/{}", g.name.to_ascii_uppercase()))).collect();
     for (g, h) in d.groups.iter().filter(|g| !g.name.is_empty()).zip(&group_handles) {
         for m in &g.members {
             let r = w.reactors.entry(*m).or_default();
@@ -2227,7 +2264,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // Pre-allocate handles for block records.
     let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
     paper_layouts.sort_by_key(|l| l.tab_order);
-    let ms_br = w.h();
+    let ms_br = w.h_kept("BLOCK_RECORD/*MODEL_SPACE");
     // Xrefs are saved as references: without their objects and the symbols that came with them.
     let saved_view = crate::dxf_xref::saved_view(d);
     let d = saved_view.as_ref().unwrap_or(d);
@@ -2236,7 +2273,13 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         .enumerate()
         .map(|(i, l)| (if i == 0 { "*Paper_Space".to_string() } else { format!("*Paper_Space{}", i - 1) }, String::new(), *l))
         .collect();
-    let ps_brs: Vec<(String, String, &Layout)> = ps_brs.into_iter().map(|(n, _, l)| (n, w.h(), l)).collect();
+    let ps_brs: Vec<(String, String, &Layout)> = ps_brs
+        .into_iter()
+        .map(|(n, _, l)| {
+            let h = w.h_kept(&format!("BLOCK_RECORD/{}", n.to_ascii_uppercase()));
+            (n, h, l)
+        })
+        .collect();
     let dim_plan = dim_block_plan(d);
     let mut user_blocks: Vec<(String, String, &Block)> = d
         .blocks
@@ -2245,7 +2288,13 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         .map(|b| (b.name.clone(), String::new(), b.as_ref()))
         .collect();
     user_blocks.iter_mut().for_each(|b| b.1 = format!("{:X}", 0));
-    let user_blocks: Vec<(String, String, &Block)> = user_blocks.into_iter().map(|(n, _, b)| (n, w.h(), b)).collect();
+    let user_blocks: Vec<(String, String, &Block)> = user_blocks
+        .into_iter()
+        .map(|(n, _, b)| {
+            let h = w.h_kept(&format!("BLOCK_RECORD/{}", n.to_ascii_uppercase()));
+            (n, h, b)
+        })
+        .collect();
     let mut cx = Ctx { paper_views: paper_views(d), target, write_fields: true, ..Ctx::default() };
     cx.block_records = user_blocks.iter().map(|(n, h, _)| (n.to_ascii_uppercase(), h.clone())).collect();
     // Dimension blocks.
@@ -2415,10 +2464,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     let default_mleader_style = [MLeaderStyle::default()];
     let mleader_styles: &[MLeaderStyle] = if d.mleader_styles.is_empty() { &default_mleader_style } else { &d.mleader_styles };
     cx.mleader_styles = mleader_styles.iter().map(|s| (s.name.clone(), w.h())).collect();
-    let root_dict = w.h();
-    let group_dict = w.h();
-    let layout_dict = w.h();
-    let table_style_dict = w.h();
+    let root_dict = w.h_kept("DICT/");
+    let group_dict = w.h_kept("DICT/ACAD_GROUP");
+    let layout_dict = w.h_kept("DICT/ACAD_LAYOUT");
+    let table_style_dict = w.h_kept("DICT/ACAD_TABLESTYLE");
     // CADaddy data in XRECORDs of the named object dictionary: (key, handle, text chunks).
     let mut xrecords: Vec<(&str, String, Vec<String>)> = Vec::new();
     // The drawing's own next handle: table records and objects are numbered above it, so
@@ -2455,10 +2504,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         xrecords.push((dxf_ext::SUN_KEY, w.h(), chunks));
     }
     // The annotation scale list: the ACAD_SCALELIST dictionary of SCALE objects.
-    let scale_dict = w.h();
+    let scale_dict = w.h_kept("DICT/ACAD_SCALELIST");
     let scales: Vec<(&cadaddy_doc::AnnoScale, String)> = d.scales.iter().filter(|s| s.is_valid()).map(|s| (s, w.h())).collect();
     // Plot style names used by layers and objects (Normal always), each a placeholder object.
-    let pstyle_dict = w.h();
+    let pstyle_dict = w.h_kept("DICT/ACAD_PLOTSTYLENAME");
     let mut pstyle_names: Vec<String> = vec![cadaddy_doc::NORMAL_STYLE.to_string()];
     let named = d.layers.iter().map(|l| l.plot_style.as_str()).chain(every.iter().map(|e| e.common.plot_style.as_str()));
     for n in named {
@@ -2471,7 +2520,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     let pstyles: Vec<(String, String)> = pstyle_names.into_iter().map(|n| (n, w.h())).collect();
     w.pstyles = pstyles.iter().map(|(n, h)| (n.to_ascii_uppercase(), h.clone())).collect();
     // Materials: Global, ByLayer, ByBlock and the drawing's, each a MATERIAL object.
-    let material_dict = w.h();
+    let material_dict = w.h_kept("DICT/ACAD_MATERIAL");
     let material_names = [cadaddy_doc::material::GLOBAL, cadaddy_doc::material::BY_LAYER, cadaddy_doc::material::BY_BLOCK]
         .into_iter()
         .chain(d.materials.iter().take(cadaddy_doc::material::MAX_MATERIALS).map(|m| m.name.as_str()))
@@ -2483,8 +2532,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
             w.materials.insert(n, h);
         }
     }
-    let model_layout = w.h();
-    let layout_handles: Vec<String> = ps_brs.iter().map(|_| w.h()).collect();
+    let model_layout = w.h_kept("LAYOUT/MODEL");
+    let layout_handles: Vec<String> = ps_brs.iter().map(|(_, _, l)| w.h_kept(&format!("LAYOUT/{}", l.name.to_ascii_uppercase()))).collect();
 
     // ---------------- HEADER ----------------
     w.s(0, "SECTION");
@@ -2565,7 +2614,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     let mut ltype_style_refs: Vec<(usize, Option<String>, bool)> = Vec::new();
     let th = table_head(&mut w, "LTYPE", d.linetypes.len());
     for lt in &d.linetypes {
-        let h = record_head(&mut w, "LTYPE", &th, "AcDbLinetypeTableRecord");
+        let h = record_head(&mut w, "LTYPE", &lt.name, &th, "AcDbLinetypeTableRecord");
         ltype_handles.entry(lt.name.to_ascii_uppercase()).or_insert(h.clone());
         cx.ltypes.entry(lt.name.to_ascii_uppercase()).or_insert(h);
         w.s(2, &lt.name);
@@ -2603,7 +2652,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // LAYER
     let th = table_head(&mut w, "LAYER", d.layers.len());
     for l in &d.layers {
-        let lh = record_head(&mut w, "LAYER", &th, "AcDbLayerTableRecord");
+        let lh = record_head(&mut w, "LAYER", &l.name, &th, "AcDbLayerTableRecord");
         w.layers.insert(l.name.to_ascii_uppercase(), lh);
         w.s(2, &l.name);
         // 16 | 32: an xref's layer (`xref|name`), externally dependent and resolved.
@@ -2654,7 +2703,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     let th = table_head(&mut w, "STYLE", d.text_styles.len() + shape_files.len());
     for s in &d.text_styles {
-        let h = record_head(&mut w, "STYLE", &th, "AcDbTextStyleTableRecord");
+        let h = record_head(&mut w, "STYLE", &s.name, &th, "AcDbTextStyleTableRecord");
         cx.styles.entry(s.name.to_ascii_uppercase()).or_insert(h);
         w.s(2, &s.name);
         // 70 bit 4: vertical; 71 bits 2/4: backwards / upside down.
@@ -2680,7 +2729,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     let mut shape_handles: HashMap<String, String> = HashMap::new();
     for f in &shape_files {
-        let h = record_head(&mut w, "STYLE", &th, "AcDbTextStyleTableRecord");
+        let h = record_head(&mut w, "STYLE", f, &th, "AcDbTextStyleTableRecord");
         shape_handles.insert(f.to_ascii_uppercase(), h);
         w.s(2, "");
         w.i(70, 1);
@@ -2705,7 +2754,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // VIEW: named views (DXF Reference, VIEW). A view's layer state is CADaddy xdata.
     let th = table_head(&mut w, "VIEW", d.views.len());
     for v in &d.views {
-        record_head(&mut w, "VIEW", &th, "AcDbViewTableRecord");
+        record_head(&mut w, "VIEW", &v.name, &th, "AcDbViewTableRecord");
         w.s(2, &v.name);
         w.i(70, i64::from(v.layout.is_some()));
         w.f(40, v.height);
@@ -2750,7 +2799,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // UCS: named user coordinate systems (DXF Reference, UCS).
     let th = table_head(&mut w, "UCS", d.ucss.len());
     for u in &d.ucss {
-        record_head(&mut w, "UCS", &th, "AcDbUCSTableRecord");
+        record_head(&mut w, "UCS", &u.name, &th, "AcDbUCSTableRecord");
         w.s(2, &u.name);
         w.i(70, 0);
         w.p(10, u.origin);
@@ -2763,7 +2812,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     let apps = ["ACAD", dxf_ext::APP, "AcadAnnotative", dxf_ext::LAYER_TRANSPARENCY_APP, dxf_ext::LAYER_DESCRIPTION_APP];
     let th = table_head(&mut w, "APPID", apps.len());
     for app in apps {
-        record_head(&mut w, "APPID", &th, "AcDbRegAppTableRecord");
+        record_head(&mut w, "APPID", app, &th, "AcDbRegAppTableRecord");
         w.s(2, app);
         w.i(70, 0);
     }
@@ -2782,13 +2831,21 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         h
     };
     for s in &d.dim_styles {
-        record_head(&mut w, "DIMSTYLE", &th, "AcDbDimStyleTableRecord");
+        record_head(&mut w, "DIMSTYLE", &s.name, &th, "AcDbDimStyleTableRecord");
         w.s(2, &s.name);
         w.i(70, 0);
         let v = serde_json::to_value(s).unwrap_or_default();
         let defaults = serde_json::to_value(DimStyle::default()).unwrap_or_default();
-        let mut newer =
-            W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new(), materials: HashMap::new() };
+        let mut newer = W {
+            t: Vec::new(),
+            next: 0,
+            pstyles: HashMap::new(),
+            layers: HashMap::new(),
+            reactors: HashMap::new(),
+            materials: HashMap::new(),
+            kept: std::collections::BTreeMap::new(),
+            used: std::collections::HashSet::new(),
+        };
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
             let own = dxf_ext::STYLE_XDATA.contains(code);
@@ -2856,7 +2913,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     w.s(0, "SECTION");
     w.s(2, "BLOCKS");
     let block = |w: &mut W, name: &str, desc: &str, brh: &str, base: Vec3, flags: i64, ents: &mut dyn Iterator<Item = &Entity>, paper: bool| {
-        let bh = w.h();
+        let bh = w.h_kept(&format!("BLOCK/{}", name.to_ascii_uppercase()));
         w.s(0, "BLOCK");
         w.s(5, bh);
         w.s(330, brh);
@@ -2877,7 +2934,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         for e in ents {
             entity(w, d, e, brh, false, &cx);
         }
-        let eh = w.h();
+        let eh = w.h_kept(&format!("ENDBLK/{}", name.to_ascii_uppercase()));
         w.s(0, "ENDBLK");
         w.s(5, eh);
         w.s(330, brh);
@@ -2935,7 +2992,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     let group_owner = group_dict.clone();
     let written: std::collections::HashSet<String> = w.t.iter().filter(|t| t.code == 5).map(Tag::str).collect();
     let groups: Vec<(&Group, String)> = d.groups.iter().filter(|g| !g.name.is_empty()).zip(group_handles).collect();
-    let mleader_dict = w.h();
+    let mleader_dict = w.h_kept("DICT/ACAD_MLEADERSTYLE");
     let mleader_handles: Vec<String> = cx.mleader_styles.iter().map(|(_, h)| h.clone()).collect();
     w.s(0, "SECTION");
     w.s(2, "OBJECTS");
@@ -3458,6 +3515,8 @@ pub fn entity_records(d: &Drawing, e: &Entity) -> Vec<(String, Vec<Tag>)> {
         layers: HashMap::new(),
         reactors: HashMap::new(),
         materials: HashMap::new(),
+        kept: std::collections::BTreeMap::new(),
+        used: std::collections::HashSet::new(),
     };
     let cx = Ctx { target: Version::R2018, ..Ctx::default() };
     let paper = d.space_of(e.handle).is_some_and(|s| !matches!(s, cadaddy_doc::Space::Model));

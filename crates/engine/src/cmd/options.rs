@@ -53,6 +53,8 @@ pub const PROFILE_VARS: &[&str] = &[
     "PICKFIRST",
     "PICKADD",
     "SELECTIONCYCLING",
+    "NAVBARDISPLAY",
+    "WSCURRENT",
     "MAXARRAY",
     "DWGCOPY",
 ];

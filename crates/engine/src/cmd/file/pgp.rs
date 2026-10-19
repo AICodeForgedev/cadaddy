@@ -1,6 +1,10 @@
 //! The user's command alias file (the publicly documented `.pgp` format: `ALIAS, *COMMAND` lines,
 //! `;` comments): ALIASEDIT and REINIT.
 //!
+//! ALIASEDIT also lists the built-in aliases beside the user's, flags conflicts (a user alias
+//! that takes over a built-in one for another command) and saves the user aliases to a `.pgp`
+//! file: the one loaded last, or `cadaddy.pgp` in the support folder.
+//!
 //! A loaded file adds aliases or overrides the built-in ones for the rest of the session, for
 //! every drawing; command names themselves always win. Lines that define external commands
 //! (programs the file would have the application start) are never run: they are skipped with a
@@ -32,14 +36,19 @@ struct Aliases {
     file: Option<String>,
 }
 
-fn store() -> MutexGuard<'static, Aliases> {
+fn aliases() -> MutexGuard<'static, Aliases> {
     static USER: OnceLock<Mutex<Aliases>> = OnceLock::new();
     USER.get_or_init(|| Mutex::new(Aliases::default())).lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The user's aliases: lower-case alias → command id (kept in the profile by the interface).
+pub fn user_aliases() -> BTreeMap<String, String> {
+    aliases().map.clone()
+}
+
 /// The command a user alias stands for (`name` in lower case).
 pub(crate) fn user_alias(name: &str) -> Option<String> {
-    store().map.get(name).cloned()
+    aliases().map.get(name).cloned()
 }
 
 /// The command id `target` names (`*LINE`, `_.line`, `-LAYER`…), if there is such a command.
@@ -110,29 +119,80 @@ fn parse(text: &str) -> (Vec<(String, String)>, Vec<String>) {
     (out, warnings)
 }
 
+/// The aliases built into the command catalog: (alias, command id), sorted by alias.
+pub fn built_in() -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> =
+        command_specs().iter().flat_map(|c| c.aliases.iter().map(move |a| (a.to_ascii_lowercase(), c.id.to_string()))).collect();
+    v.sort();
+    v.dedup_by(|a, b| a.0 == b.0);
+    v
+}
+
+/// User aliases that take over a built-in alias of another command.
+fn conflicts(map: &BTreeMap<String, String>) -> Vec<Value> {
+    let builtin = built_in();
+    map.iter()
+        .filter_map(|(a, id)| {
+            let (_, was) = builtin.iter().find(|(b, _)| b == a)?;
+            (was != id).then(|| json!({ "alias": a, "command": id, "overrides": was }))
+        })
+        .collect()
+}
+
 fn listing(warnings: &[String], added: usize) -> Value {
-    let st = store();
-    json!({ "aliases": st.map, "file": st.file, "loaded": added, "warnings": warnings })
+    let st = aliases();
+    let builtin: Vec<Value> = built_in().into_iter().map(|(a, id)| json!({ "alias": a, "command": id })).collect();
+    json!({ "aliases": st.map, "file": st.file, "loaded": added, "warnings": warnings, "builtIn": builtin, "conflicts": conflicts(&st.map) })
+}
+
+/// The user aliases as a `.pgp` file.
+pub fn pgp_text() -> String {
+    let st = aliases();
+    let mut t = String::from("; Command aliases (ALIAS, *COMMAND), written by ALIASEDIT.\n");
+    for (a, id) in &st.map {
+        t.push_str(&format!("{}, *{}\n", a.to_ascii_uppercase(), id.to_ascii_uppercase()));
+    }
+    t
+}
+
+/// Where ALIASEDIT saves: `p.save` when it is a path, else the file loaded last, else
+/// `cadaddy.pgp` in the support folder.
+fn save_path(s: &Session, p: &Value) -> Result<Option<String>> {
+    match p.get("save") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => Ok(None),
+        Some(Value::String(path)) if !path.trim().is_empty() => Ok(Some(path.trim().to_string())),
+        Some(Value::Bool(true)) => {
+            if let Some(f) = aliases().file.clone() {
+                return Ok(Some(f));
+            }
+            s.lisp_support_dir()
+                .map(|d| Some(d.join("cadaddy.pgp").to_string_lossy().into_owned()))
+                .ok_or_else(|| bad("aliasedit", "no alias file or support folder to save to; pass save: path"))
+        }
+        Some(_) => Err(bad("aliasedit", "`save` is true or a path")),
+    }
 }
 
 /// Replace the user aliases with a file's (`path` is remembered for REINIT).
 fn load(text: &str, path: Option<String>) -> (usize, Vec<String>) {
-    let (aliases, warnings) = parse(text);
-    let mut st = store();
-    st.map = aliases.into_iter().collect();
+    let (parsed, warnings) = parse(text);
+    let mut st = aliases();
+    st.map = parsed.into_iter().collect();
     if path.is_some() {
         st.file = path;
     }
     (st.map.len(), warnings)
 }
 
-/// ALIASEDIT `{file? | text?, set?: {alias: command}, remove?: [alias], clear?: bool}`: load an
-/// alias file (replacing the user aliases), clear them, or add and remove single aliases.
-fn run_aliasedit(_s: &mut Session, p: &Value) -> Result<Value> {
+/// ALIASEDIT `{file? | text?, set?: {alias: command}, remove?: [alias], clear?: bool, save?: true
+/// | path}`: load an alias file (replacing the user aliases), clear them, add and remove single
+/// aliases, then save them.
+fn run_aliasedit(s: &mut Session, p: &Value) -> Result<Value> {
+    let save_to = save_path(s, p)?;
     let mut warnings = Vec::new();
     let mut added = 0;
     if bool_or(p, "clear", false) {
-        let mut st = store();
+        let mut st = aliases();
         st.map.clear();
         st.file = None;
     }
@@ -147,7 +207,7 @@ fn run_aliasedit(_s: &mut Session, p: &Value) -> Result<Value> {
                 let name = alias_name(alias).map_err(|e| bad("aliasedit", e))?;
                 let target = target.as_str().ok_or_else(|| bad("aliasedit", format!("{alias}: the command must be a name")))?;
                 let id = command_id(target).ok_or_else(|| bad("aliasedit", format!("{alias}: unknown command {target}")))?;
-                let mut st = store();
+                let mut st = aliases();
                 if !st.map.contains_key(&name) && st.map.len() >= MAX_ALIASES {
                     return Err(bad("aliasedit", format!("more than {MAX_ALIASES} aliases")));
                 }
@@ -160,7 +220,7 @@ fn run_aliasedit(_s: &mut Session, p: &Value) -> Result<Value> {
     match p.get("remove") {
         None | Some(Value::Null) => {}
         Some(Value::Array(a)) => {
-            let mut st = store();
+            let mut st = aliases();
             for v in a {
                 if let Some(n) = v.as_str() {
                     st.map.remove(&n.trim().to_ascii_lowercase());
@@ -169,7 +229,14 @@ fn run_aliasedit(_s: &mut Session, p: &Value) -> Result<Value> {
         }
         Some(_) => return Err(bad("aliasedit", "`remove` is a list of aliases")),
     }
-    Ok(listing(&warnings, added))
+    let mut out = listing(&warnings, added);
+    if let Some(path) = save_to {
+        super::store(&path, pgp_text().as_bytes())?;
+        aliases().file = Some(path.clone());
+        out["saved"] = json!(path);
+        out["file"] = json!(path);
+    }
+    Ok(out)
 }
 
 /// REINIT `{file? | text?}`: read the alias file again (the one last loaded, or the given one).
@@ -180,7 +247,7 @@ fn run_reinit(s: &mut Session, p: &Value) -> Result<Value> {
         s.echo(format!("{n} command alias(es) loaded."));
         return Ok(listing(&warnings, n));
     }
-    let Some(path) = store().file.clone() else {
+    let Some(path) = aliases().file.clone() else {
         s.echo("No command alias file is loaded; ALIASEDIT {file} loads one.");
         return Ok(listing(&[], 0));
     };
@@ -193,7 +260,7 @@ fn run_reinit(s: &mut Session, p: &Value) -> Result<Value> {
 pub(crate) fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("aliasedit", "Command Aliases", run_aliasedit)
-            .params("{file?: path to a .pgp alias file | text?: its contents, set?: {alias: command}, remove?: [alias], clear?: bool} → {aliases, file, loaded, warnings}")
+            .params("{file?: path to a .pgp alias file | text?: its contents, set?: {alias: command}, remove?: [alias], clear?: bool (back to the built-in aliases only), save?: true (the file loaded last, or cadaddy.pgp in the support folder) | path} → {aliases, builtIn: [{alias, command}], conflicts: [{alias, command, overrides}], file, loaded, warnings, saved?}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("reinit", "Reinitialize", run_reinit).params("{file? | text?} (default: the alias file loaded last)").enabled(always).noundo(),

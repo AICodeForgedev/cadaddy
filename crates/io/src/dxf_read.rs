@@ -1739,6 +1739,102 @@ fn ltype_pattern(tags: &[Tag], styles: &HashMap<String, String>) -> Vec<DashElem
 /// The read note for a DXF file that stops before its end (no `0 EOF`).
 pub const CUT_OFF_NOTE: &str = "DXF: the file ends early (it has no end marker), so it looks cut off and anything after the cut is missing; saving over the original file would lose it";
 
+/// The handles the file gives its table records and objects, by `KIND/NAME` (see
+/// `Drawing::kept_handles`): table heads, records (a shape style by its file), blocks' BLOCK and
+/// ENDBLK, the root dictionary and its entries, groups and layouts.
+fn kept_handles(secs: &[cadaddy_dxf::Section]) -> std::collections::BTreeMap<String, u64> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut put = |key: String, h: Option<String>| {
+        if let Some(h) = h.and_then(|h| Handle::parse_hex(h.trim())).filter(|h| h.0 > 0) {
+            out.entry(key).or_insert(h.0);
+        }
+    };
+    for sec in secs.iter().take(64) {
+        let recs = cadaddy_dxf::record_slices(&sec.tags);
+        match sec.name.as_str() {
+            "TABLES" => {
+                for (kind, tg) in recs.iter().take(1_000_000) {
+                    let t = T(tg);
+                    let kind = kind.trim().to_ascii_uppercase();
+                    match kind.as_str() {
+                        "ENDTAB" => {}
+                        "TABLE" => put(format!("TABLE/{}", t.s(2).unwrap_or_default().trim().to_ascii_uppercase()), t.s(5)),
+                        _ => {
+                            let name = t.s(2).filter(|n| !n.trim().is_empty()).or_else(|| t.s(3)).unwrap_or_default();
+                            let h = if kind == "DIMSTYLE" { t.s(105).or_else(|| t.s(5)) } else { t.s(5) };
+                            put(format!("{kind}/{}", name.trim().to_ascii_uppercase()), h);
+                        }
+                    }
+                }
+            }
+            "BLOCKS" => {
+                let mut last = String::new();
+                for (kind, tg) in recs.iter().take(1_000_000) {
+                    let t = T(tg);
+                    match kind.trim().to_ascii_uppercase().as_str() {
+                        "BLOCK" => {
+                            last = t.s(2).unwrap_or_default().trim().to_ascii_uppercase();
+                            put(format!("BLOCK/{last}"), t.s(5));
+                        }
+                        "ENDBLK" => put(format!("ENDBLK/{last}"), t.s(5)),
+                        _ => {}
+                    }
+                }
+            }
+            "OBJECTS" => {
+                // A dictionary's entries: (name, handle) pairs of groups 3 and 350/360.
+                let entries = |tg: &[Tag]| {
+                    let mut v = Vec::new();
+                    let mut name: Option<String> = None;
+                    for t in tg {
+                        match t.code {
+                            3 => name = Some(t.str().trim().to_ascii_uppercase()),
+                            350 | 360 => {
+                                if let Some(n) = name.take() {
+                                    v.push((n, t.str().trim().to_string()));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    v
+                };
+                let mut groups_dict: Option<String> = None;
+                if let Some((_, root)) = recs.iter().find(|(k, _)| k.trim().eq_ignore_ascii_case("DICTIONARY")) {
+                    put("DICT/".into(), T(root).s(5));
+                    for (n, h) in entries(root) {
+                        if n == "ACAD_GROUP" {
+                            groups_dict = Some(h.to_ascii_uppercase());
+                        }
+                        put(format!("DICT/{n}"), Some(h));
+                    }
+                }
+                for (kind, tg) in recs.iter().take(1_000_000) {
+                    let t = T(tg);
+                    match kind.trim().to_ascii_uppercase().as_str() {
+                        "DICTIONARY" if groups_dict.is_some() && t.s(5).map(|h| h.trim().to_ascii_uppercase()) == groups_dict => {
+                            for (n, h) in entries(tg) {
+                                put(format!("GROUP/{n}"), Some(h));
+                            }
+                        }
+                        "LAYOUT" => {
+                            // The layout's name is group 1 of its AcDbLayout part.
+                            let at = tg.iter().position(|x| x.code == 100 && x.str().trim() == "AcDbLayout");
+                            let name = at.and_then(|i| tg.get(i..)?.iter().find(|x| x.code == 1).map(|x| x.str().trim().to_ascii_uppercase()));
+                            if let Some(n) = name {
+                                put(format!("LAYOUT/{n}"), t.s(5));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 pub fn read(bytes: &[u8]) -> Result<Drawing> {
     let tags = cadaddy_dxf::parse(bytes).map_err(|e| IoError::Format(e.to_string()))?;
     // Every DXF ends with `0 EOF`: without it the file was cut off (a failed copy or download),
@@ -1773,6 +1869,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
             d.bump_handseed(h);
         }
     }
+    d.kept_handles = kept_handles(&secs);
     let mut skipped = std::collections::BTreeMap::new();
     count_skipped(&mut skipped, "(no section)", outside);
     for s in &secs {

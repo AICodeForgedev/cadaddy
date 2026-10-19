@@ -2032,9 +2032,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         draw_ucs_icon(&painter, rect, xf.proj, &ucs, at);
         crate::viewcube::ucs_icon(app, ui, rect);
     }
-    if app.ui.show_viewcube && sheet.is_none() {
+    let cube = app.ui.show_viewcube && sheet.is_none();
+    if cube {
         draw_viewcube(app, ui, rect);
     }
+    // The navigation bar, under the ViewCube's WCS menu.
+    crate::workspaces::navbar(app, ui, rect, cube.then(|| crate::viewcube::Layout::new(rect).pill.bottom()));
     viewport_controls(app, ui, rect, sheet.is_none());
     // Space while dragging a lasso, Shift+Space for selection cycling and Escape on its list are
     // the drawing area's; typing and Escape reach the command line even when its overlay is hidden.

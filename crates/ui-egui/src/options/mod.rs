@@ -337,6 +337,8 @@ impl CadApp {
             "selectionColor": color_json(self.options.selection_color),
             "snapMarkerSize": self.options.snap_marker_size,
             "timeSensitiveRightClick": self.options.time_sensitive_right_click,
+            // The user's command aliases (ALIASEDIT): kept with the profile as well as in their file.
+            "aliases": cadaddy_engine::cmd::file::user_aliases(),
         })
         .to_string()
     }
@@ -350,6 +352,9 @@ impl CadApp {
         let Ok(v) = serde_json::from_str::<Value>(json) else { return };
         if let Some(vars) = v.get("sysvars") {
             cadaddy_engine::cmd::options::restore(&mut self.session, vars);
+        }
+        if let Some(aliases) = v.get("aliases").filter(|a| a.as_object().is_some_and(|m| !m.is_empty())) {
+            let _ = self.session.execute("aliasedit", &json!({ "set": aliases }));
         }
         let mut c = UiChanges::default();
         for key in ["systemCursor", "modelBackground", "paperBackground", "selectionColor", "snapMarkerSize", "timeSensitiveRightClick"] {

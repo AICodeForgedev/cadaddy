@@ -23,6 +23,7 @@ mod edit3d;
 mod exact_ends;
 mod exchange;
 mod express;
+pub mod exterior;
 mod field;
 pub mod file;
 mod gripcmds;
@@ -234,6 +235,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(materials::specs());
         v.extend(wallgen::specs());
         v.extend(bspec::specs());
+        v.extend(exterior::specs());
         v.extend(stairs::specs());
         v.extend(autospec::specs());
         v.extend(verify::specs());

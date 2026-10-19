@@ -152,6 +152,10 @@ pub struct Drawing {
     pub skipped_records: BTreeMap<String, usize>,
     /// The values fields last evaluated to ([`field`]): per object, in the order the codes
     /// appear in its text ([`field::texts`]).
+    /// Handles another program's file gave its table records and objects, by `KIND/NAME`
+    /// (`LAYER/WALLS`, `TABLE/LAYER`, `BLOCK_RECORD/DOOR`, `DICT/ACAD_GROUP`, `LAYOUT/LAYOUT1`…):
+    /// saving writes them again, so links into the file from outside stay valid.
+    pub kept_handles: BTreeMap<String, u64>,
     pub field_values: BTreeMap<Handle, Vec<String>>,
 }
 
@@ -235,6 +239,7 @@ impl Drawing {
             refedit: None,
             skipped_records: BTreeMap::new(),
             field_values: BTreeMap::new(),
+            kept_handles: BTreeMap::new(),
         }
     }
 
