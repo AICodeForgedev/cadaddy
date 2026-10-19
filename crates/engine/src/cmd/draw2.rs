@@ -217,7 +217,7 @@ impl ArcV {
             ArcV::Sea => &[(S, Ask::Point), (E, Ask::Point), (A, Ask::Angle(0))],
             ArcV::Sed => &[(S, Ask::Point), (E, Ask::Point), ("Specify tangent direction for the start point of arc", Ask::Angle(0))],
             ArcV::Ser => &[(S, Ask::Point), (E, Ask::Point), ("Specify radius of arc", Ask::Dist(1))],
-            ArcV::Cse => &[(C, Ask::Point), (S, Ask::Point), (E, Ask::Point)],
+            ArcV::Cse => &[(C, Ask::Point), (S, Ask::Point), ("Specify end point of arc (hold Ctrl to switch direction)", Ask::Point)],
             ArcV::Csa => &[(C, Ask::Point), (S, Ask::Point), (A, Ask::Sweep(0, 1))],
             ArcV::Csl => &[(C, Ask::Point), (S, Ask::Point), (L, Ask::Dist(1))],
             ArcV::CircleCd => &[("Specify center point for circle", Ask::Point), ("Specify diameter of circle", Ask::Dist(0))],
@@ -231,7 +231,7 @@ impl ArcV {
             ],
         }
     }
-    fn build(self, v: &[Val]) -> Option<EntityKind> {
+    fn build(self, v: &[Val], ctrl: bool) -> Option<EntityKind> {
         let p = |i: usize| v.get(i).and_then(|x| x.p());
         let n = |i: usize| v.get(i).and_then(|x| x.n());
         let a = match self {
@@ -243,7 +243,14 @@ impl ArcV {
             ArcV::Sea => curves::arc_sea(p(0)?, p(1)?, n(2)?),
             ArcV::Sed => curves::arc_sed(p(0)?, p(1)?, Vec2::from_angle(n(2)?)),
             ArcV::Ser => curves::arc_ser(p(0)?, p(1)?, n(2)?),
-            ArcV::Cse => Some(Arc::from_start_center_end(p(1)?, p(0)?, p(2)?)),
+            // Center, Start, End. Ctrl keeps the two endpoints on the circle and walks the
+            // other way around: swapping the start/end angles is the mirror arc through the
+            // same two endpoints. (Continue below flips differently, by negating the start
+            // tangent; both are "reverse", but only here is the chord fixed by the picks.)
+            ArcV::Cse => {
+                let a = Arc::from_start_center_end(p(1)?, p(0)?, p(2)?);
+                Some(if ctrl { Arc::new(a.center, a.radius, a.end, a.start) } else { a })
+            }
             ArcV::Csa => curves::arc_sca(p(1)?, p(0)?, n(2)?),
             ArcV::Csl => curves::arc_scl(p(1)?, p(0)?, n(2)?),
             ArcV::CircleCd => {
@@ -338,6 +345,11 @@ impl Interactive for SeqM {
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Some((st, dir)) = self.cont {
+            // Ctrl flips the arc: negating the start tangent makes `arc_sed` pick the mirror
+            // arc (same two points and center, opposite sweep). `ctrl_down` comes from the
+            // UI's per-frame write on `Session`; the `Input` enum itself stays free of
+            // modifiers so it remains UI-agnostic.
+            let dir = if s.ctrl_down { -dir } else { dir };
             return match i {
                 Input::Point(e) => {
                     let a = curves::arc_sed(st, e, dir).ok_or_else(|| other("Invalid end point."))?;
@@ -380,7 +392,7 @@ impl Interactive for SeqM {
         if self.vals.len() < self.v.steps().len() {
             return Ok(Step::Continue);
         }
-        match self.v.build(&self.vals) {
+        match self.v.build(&self.vals, s.ctrl_down) {
             Some(k) => {
                 if let EntityKind::Circle(c) = &k {
                     let r = c.radius;
@@ -397,8 +409,9 @@ impl Interactive for SeqM {
             }
         }
     }
-    fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
+    fn preview(&self, s: &Session, c: Vec2) -> Vec<EntityKind> {
         if let Some((st, d)) = self.cont {
+            let d = if s.ctrl_down { -d } else { d };
             return curves::arc_sed(st, c, d).map(|a| vec![arc(&a)]).unwrap_or_default();
         }
         let Some((_, ask)) = self.ask() else { return Vec::new() };
@@ -407,7 +420,7 @@ impl Interactive for SeqM {
         vals.push(v);
         let mut out: Vec<EntityKind> = self.base().map(|b| vec![line(b, c)]).unwrap_or_default();
         if vals.len() == self.v.steps().len() {
-            out.extend(self.v.build(&vals));
+            out.extend(self.v.build(&vals, s.ctrl_down));
         }
         out
     }
@@ -488,6 +501,8 @@ impl Interactive for ArcContinueM {
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         let Some((st, dir)) = self.from else { return Ok(Step::Cancel) };
+        // Ctrl flips the direction, exactly as in `SeqM::input`.
+        let dir = if s.ctrl_down { -dir } else { dir };
         match i {
             Input::Point(e) => {
                 let a = curves::arc_sed(st, e, dir).ok_or_else(|| other("Invalid end point."))?;
@@ -498,8 +513,14 @@ impl Interactive for ArcContinueM {
             _ => Err(other("Point required.")),
         }
     }
-    fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
-        self.from.and_then(|(st, d)| curves::arc_sed(st, c, d)).map(|a| vec![arc(&a)]).unwrap_or_default()
+    fn preview(&self, s: &Session, c: Vec2) -> Vec<EntityKind> {
+        self.from
+            .and_then(|(st, dir)| {
+                let dir = if s.ctrl_down { -dir } else { dir };
+                curves::arc_sed(st, c, dir)
+            })
+            .map(|a| vec![arc(&a)])
+            .unwrap_or_default()
     }
 }
 
