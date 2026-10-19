@@ -1761,3 +1761,101 @@ menu	Modify	Ändra
 	My properties: the ones you added (right-click a property's name to add it)	Mina egenskaper: de du har lagt till (högerklicka på en egenskaps namn för att lägga till den)
 	Right-click a property's name and choose Add to My Properties.	Högerklicka på en egenskaps namn och välj Lägg till i mina egenskaper.
 	Color Books	Färgböcker
+	Sheet Set Manager	Hanterare för arkuppsättningar
+	Palettes	Paletter
+	New Sheet Set...	Ny arkuppsättning...
+	Open Sheet Set...	Öppna arkuppsättning...
+	No sheet set is open.	Ingen arkuppsättning är öppen.
+	Number	Nummer
+	Subset	Delmängd
+	Remove Sheet	Ta bort ark
+	Add Drawing...	Lägg till ritning...
+	Rename Layouts to Match	Byt namn på layouter så att de stämmer
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	Varje arks layout får namnet ”nummer titel”, som fälten för arknummer och titel visar
+	Publish to PDF...	Publicera till PDF...
+	Prefix	Prefix
+	Digits	Siffror
+	Renumber	Numrera om
+	Zoom to Fit	Zooma till anpassad
+	Drag to pan, scroll to zoom	Dra för att panorera, rulla för att zooma
+	Publish	Publicera
+	Sheets to publish, in order	Ark att publicera, i ordning
+	Sheet	Ark
+	Bookmark	Bokmärke
+	Paper	Papper
+	Orientation	Orientering
+	(sheet name)	(arkets namn)
+	Page setup	Utskriftsformat
+	Landscape	Liggande
+	Portrait	Stående
+	Add Sheets from Drawing...	Lägg till ark från ritning...
+	Load List...	Läs in lista...
+	Save List...	Spara lista...
+	Publish List	Publiceringslista
+	Enclose Text with Object	Omge text med objekt
+	Export Attribute Information	Exportera attributinformation
+	Import Attribute Information	Importera attributinformation
+	Mask Text	Maskera text
+	Remote Text	Fjärrtext
+	Rotate Text	Rotera text
+	Text Fit	Anpassa text
+	Toggle Frames	Växla ramar
+	Unmask Text	Ta bort textmaskering
+	Update Remote Text	Uppdatera fjärrtext
+	Geometric	Geometriska
+	Infer geometric constraints	Härled geometriska begränsningar
+	Show constraint bars	Visa begränsningsfält
+	Constraint bar transparency (%)	Begränsningsfältens transparens (%)
+	Dimensional	Dimensionella
+	Show dynamic constraints	Visa dynamiska begränsningar
+	Dimension name format	Format för måttnamn
+	Name and Expression	Namn och uttryck
+	Constraint types AUTOCONSTRAIN applies, in order of priority	Begränsningstyper som AUTOCONSTRAIN tillämpar, i prioritetsordning
+	Move Up	Flytta upp
+	Move Down	Flytta ned
+	Tangent objects must share an intersection point	Tangerande objekt måste ha en gemensam skärningspunkt
+	Perpendicular objects must share an intersection point	Vinkelräta objekt måste ha en gemensam skärningspunkt
+	Distance tolerance	Avståndstolerans
+	Angle tolerance (degrees)	Vinkeltolerans (grader)
+	3D Move	3D-flytta
+	3D Rotate	3D-rotera
+	3D Scale	3D-skala
+	3D Align	3D-justera
+	3D Mirror	3D-spegla
+	3D Array	3D-mönster
+	3D Object Snap	3D-objektfäste
+	Specify second point or distance	Ange andra punkten eller avstånd
+	Specify angle	Ange vinkel
+	Specify source plane: first point	Ange källplan: första punkten
+	Specify source plane: second point	Ange källplan: andra punkten
+	Specify source plane: third point	Ange källplan: tredje punkten
+	Specify destination plane: first point	Ange målplan: första punkten
+	Specify destination plane: second point	Ange målplan: andra punkten
+	Specify destination plane: third point	Ange målplan: tredje punkten
+	Delete source objects?	Ta bort källobjekt?
+	Specify point on XY plane	Ange punkt på XY-planet
+	Specify point on YZ plane	Ange punkt på YZ-planet
+	Specify point on ZX plane	Ange punkt på ZX-planet
+	Specify first point of mirror plane (3 points) or	Ange första punkten för spegelplanet (3 punkter) eller
+	Specify second point on mirror plane	Ange andra punkten på spegelplanet
+	Specify third point on mirror plane	Ange tredje punkten på spegelplanet
+	Enter the type of array	Ange typ av mönster
+	Polar	Polär
+	Enter the number of items in the array	Ange antal objekt i mönstret
+	Specify the angle to fill (+=ccw, -=cw)	Ange vinkel att fylla (+=moturs, -=medurs)
+	Enter the number of rows (---)	Ange antal rader (---)
+	Enter the number of columns (|||)	Ange antal kolumner (|||)
+	Enter the number of levels (...)	Ange antal nivåer (...)
+	Specify the distance between rows (---)	Ange avstånd mellan rader (---)
+	Specify the distance between columns (|||)	Ange avstånd mellan kolumner (|||)
+	Specify the distance between levels (...)	Ange avstånd mellan nivåer (...)
+	Specify second point on axis of rotation	Ange andra punkten på rotationsaxeln
+	Select the objects first.	Välj objekten först.
+	Requires a point, or a distance along an axis.	Kräver en punkt eller ett avstånd längs en axel.
+	The points must not coincide or line up.	Punkterna får inte sammanfalla eller ligga på en linje.
+	The three points line up: they make no plane.	De tre punkterna ligger på en linje: de bildar inget plan.
+	<3D Object Snap on>	<3D-objektfäste på>
+	<3D Object Snap off>	<3D-objektfäste av>
+	Preparing the 3D view…	Förbereder 3D-vyn…
+	Viewpoint	Visningspunkt
+	3D View Benchmark	Prestandatest för 3D-vy

@@ -1,0 +1,195 @@
+# CADaddy engine messages in Czech: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	Zadejte název skupiny
+	Pick internal point	Vyberte vnitřní bod
+	Specify the pattern origin	Určete počátek šrafy
+	Specify the incrementing elevation between rows	Určete přírůstek výšky mezi řadami
+	Specify the angle to fill (+=ccw, -=cw)	Určete úhel vyplnění (+=proti směru hodinových ručiček, -=po směru)
+	Select hatch object	Vyberte objekt šrafy
+	Red, Green, Blue	Červená, zelená, modrá
+	Enter the number of rows	Zadejte počet řad
+	Enter the number of levels	Zadejte počet úrovní
+	Enter new layer name	Zadejte nový název hladiny
+	Specify width	Určete šířku
+	Specify the angle between items	Určete úhel mezi položkami
+	Specify text height	Určete výšku textu
+	Specify start tangent	Určete počáteční tečnu
+	Specify end tangent	Určete koncovou tečnu
+	Specify reference length	Určete referenční délku
+	Specify other corner	Určete druhý roh
+	Specify next point or [Undo]	Určete další bod nebo [Undo]
+	Specify new location	Určete nové umístění
+	Specify new length	Určete novou délku
+	Specify length of line	Určete délku čáry
+	Specify displacement	Určete posunutí
+	Specify angle for dimension text	Určete úhel kótovacího textu
+	Select viewports	Vyberte výřezy
+	Select object to break dimension	Vyberte objekt pro přerušení kóty
+	Select group	Vyberte skupinu
+	Select grip to edit array	Vyberte uzel pro úpravu pole
+	Select a table	Vyberte tabulku
+	Select a boundary to remove	Vyberte hranici k odebrání
+	Rotate arrayed items?	Otáčet položky pole?
+	Erase polyline?	Vymazat křivku?
+	Enter viewport arrangement	Zadejte uspořádání výřezů
+	Enter transparency value (0-90)	Zadejte hodnotu průhlednosti (0-90)
+	Enter the number of operations to undo	Zadejte počet operací k vrácení
+	Enter the number of columns	Zadejte počet sloupců
+	Enter number of items in array	Zadejte počet položek pole
+	Enter new layer state name	Zadejte nový název stavu hladin
+	Enter new color	Zadejte novou barvu
+	Enter name of new layout	Zadejte název nového rozvržení
+	Enter layer name	Zadejte název hladiny
+	Enter file name	Zadejte název souboru
+	Enter color name or number (1-255)	Zadejte název nebo číslo barvy (1-255)
+	Enter a configuration option	Zadejte možnost konfigurace
+	Base point	Základní bod
+	Word-wrap the combined Mtext?	Zalamovat sloučený Mtext?
+	Where should the data go?	Kam mají data jít?
+	Verify each name to be purged?	Ověřit každý název k vymazání?
+	Use landing	Použít odsazení
+	Type of boundary object	Typ hraničního objektu
+	Specify width factor	Určete faktor šířky
+	Specify tolerance	Určete toleranci
+	Specify the tangent direction for the start point of arc	Určete směr tečny v počátečním bodě oblouku
+	Specify the reference angle	Určete referenční úhel
+	Specify the new angle	Určete nový úhel
+	Specify text width	Určete šířku textu
+	Specify temporary OTRACK point	Určete dočasný bod OTRACK
+	Invalid option keyword.	Neplatné klíčové slovo možnosti.
+	*Invalid selection*	*Neplatný výběr*
+	Requires a valid angle.	Vyžaduje platný úhel.
+	Nothing to undo.	Není co vrátit.
+	Invalid point.	Neplatný bod.
+	No viewport found there.	Tam nebyl nalezen žádný výřez.
+	*Cancel*	*Zrušit*
+	Requires a positive number.	Vyžaduje kladné číslo.
+	No hatch selected.	Není vybrána žádná šrafa.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Příkaz není povolen na kartě Modelu ** (nejprve přepněte na rozvržení)
+	Select a multileader.	Vyberte multiodkaz.
+	No line or arc to continue.	Žádná čára ani oblouk k pokračování.
+	Revision cloud finished.	Revizní obláček je dokončen.
+	Object selected is not a circle or arc.	Vybraný objekt není kružnice ani oblouk.
+	Select a linear or aligned dimension.	Vyberte lineární nebo zarovnanou kótu.
+	Object selected is not a dimension.	Vybraný objekt není kóta.
+	No dimensions selected.	Nejsou vybrány žádné kóty.
+	Requires a number.	Vyžaduje číslo.
+	0 found	Nalezeno 0
+	The feature control frame is empty.	Rámeček geometrické tolerance je prázdný.
+	1 was on a locked layer.	1 byl na zamčené hladině.
+	Row elevations need an associative array; the copies stay at the same elevation.	Výšky řad vyžadují asociativní pole; kopie zůstanou ve stejné výšce.
+	Point or option keyword required.	Je vyžadován bod nebo klíčové slovo.
+	Enter Yes or No.	Zadejte Yes nebo No.
+	Viewport created, zoomed to the model extents.	Výřez byl vytvořen a zvětšen na rozsah modelu.
+	No object found.	Nebyl nalezen žádný objekt.
+	The object is not a table.	Objekt není tabulka.
+	No table there.	Tam není žádná tabulka.
+	A transparent command is already in progress.	Transparentní příkaz již probíhá.
+	Invalid class name.	Neplatný název třídy.
+	Invalid group name.	Neplatný název skupiny.
+	Too many point modifiers.	Příliš mnoho modifikátorů bodu.
+	No leader to remove.	Žádný odkaz k odebrání.
+	Requires a non-negative number.	Vyžaduje nezáporné číslo.
+	Clipboard is empty.	Schránka je prázdná.
+	1 object was on a locked layer.	1 objekt byl na zamčené hladině.
+	Circle does not exist.	Kružnice neexistuje.
+	Enter Length or Area.	Zadejte Length nebo Area.
+	Enter a percentage from 0 to 1000.	Zadejte procenta od 0 do 1000.
+	Enter Table, File or None.	Zadejte Table, File nebo None.
+	Cannot measure that object.	Tento objekt nelze změřit.
+	Third pair ignored (2D align).	Třetí dvojice ignorována (2D zarovnání).
+	Insert mode: Copy (nested objects are copied as independent objects).	Režim vložení: Kopírovat (vnořené objekty se kopírují jako samostatné objekty).
+	Everything has been undone	Vše bylo vráceno
+	Everything has been undone.	Vše bylo vráceno.
+	Requires a non-negative number or Auto.	Vyžaduje nezáporné číslo nebo Auto.
+	Select a dimension.	Vyberte kótu.
+	Object cannot be dimensioned this way.	Objekt nelze takto okótovat.
+	Select an arc, circle or line.	Vyberte oblouk, kružnici nebo čáru.
+	The two points must be different.	Oba body se musí lišit.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Žádná lineární kóta k pokračování. Nejprve ji vytvořte příkazem DIMLINEAR.
+	A multileader needs a leader line or content; nothing was drawn.	Multiodkaz potřebuje odkazovou čáru nebo obsah; nic nebylo nakresleno.
+	Requires the name of a block defined in the drawing.	Vyžaduje název bloku definovaného ve výkresu.
+	Invalid option.	Neplatná možnost.
+	The boundary encloses none of the image.	Hranice neohraničuje žádnou část obrázku.
+	The object is not an image.	Objekt není obrázek.
+	The image has no clipping boundary.	Obrázek nemá ořezovou hranici.
+	No images selected.	Nejsou vybrány žádné obrázky.
+	Requires an integer between 0 and 100.	Vyžaduje celé číslo mezi 0 a 100.
+	The selected object has no area.	Vybraný objekt nemá žádnou plochu.
+	No such object	Takový objekt neexistuje
+	Requires a point.	Vyžaduje bod.
+	Requires a distance.	Vyžaduje vzdálenost.
+	The object is on a locked layer.	Objekt je na zamčené hladině.
+	Value must be positive and nonzero.	Hodnota musí být kladná a nenulová.
+	Requires an angle.	Vyžaduje úhel.
+	Requires a point or option keyword.	Vyžaduje bod nebo klíčové slovo.
+	Object does not intersect a cutting edge.	Objekt se neprotíná s řeznou hranou.
+	Object does not intersect an edge.	Objekt se neprotíná s hranou.
+	Lines are parallel.	Čáry jsou rovnoběžné.
+	The Block Editor is not open.	Editor bloků není otevřen.
+	Requires a positive integer.	Vyžaduje kladné celé číslo.
+	Answer Yes or No.	Odpovězte Yes nebo No.
+	Requires a valid point.	Vyžaduje platný bod.
+	No reference objects	Žádné referenční objekty
+	Requires an angle or point.	Vyžaduje úhel nebo bod.
+	Requires a positive distance.	Vyžaduje kladnou vzdálenost.
+	Requires a non-negative distance.	Vyžaduje nezápornou vzdálenost.
+	No such grip	Takový uzel neexistuje
+	Requires a template file name.	Vyžaduje název souboru šablony.
+	A hatch needs at least one boundary: erase it instead.	Šrafa potřebuje alespoň jednu hranici: místo toho ji vymažte.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Zpět je vypnuto (UNDO Control None); UNDO Control All jej zapne.
+	Enter ON or OFF.	Zadejte ON nebo OFF.
+	Not a linear dimension.	Není lineární kóta.
+	Valid hatch boundary not found.	Platná hranice šrafy nebyla nalezena.
+	No closed boundary objects selected.	Nejsou vybrány žádné uzavřené hraniční objekty.
+	Requires a name.	Vyžaduje název.
+	That option doesn't apply to this grip.	Tato možnost se na tento uzel nevztahuje.
+	That would make a degenerate object.	Tím by vznikl degenerovaný objekt.
+	No tangent or perpendicular from the last point.	Z posledního bodu neexistuje tečna ani kolmice.
+	Requires numeric distance or second point.	Vyžaduje číselnou vzdálenost nebo druhý bod.
+	Edge endpoints must differ.	Koncové body hrany se musí lišit.
+	Requires numeric distance or point.	Vyžaduje číselnou vzdálenost nebo bod.
+	Requires a positive height.	Vyžaduje kladnou výšku.
+	No objects found.	Nebyly nalezeny žádné objekty.
+	Requires a non-zero number.	Vyžaduje nenulové číslo.
+	Circle must intersect cutting edges at two or more points.	Kružnice musí protínat řezné hrany ve dvou nebo více bodech.
+	Arc cannot be full 360 degrees.	Oblouk nemůže mít celých 360 stupňů.
+	Cannot break that object.	Tento objekt nelze přerušit.
+	An object is on a locked layer.	Objekt je na zamčené hladině.
+	Objects are not connected.	Objekty nejsou spojené.
+	The two points must differ.	Oba body se musí lišit.
+	Mirror line points must differ.	Body osy zrcadlení se musí lišit.
+	No drawing is open.	Není otevřen žádný výkres.
+	Command: {}	Příkaz: {}
+	Unknown command "{}". Press F1 for help.	Neznámý příkaz „{}“. Nápovědu zobrazíte klávesou F1.
+	{} found	Nalezeno: {}
+	{} found, {} total	Nalezeno: {}, celkem: {}
+	Distance = {}	Vzdálenost = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Vzdálenost = {},  Úhel v rovině XY = {},  Úhel od roviny XY = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Delta X = {},  Delta Y = {},   Delta Z = {}
+	Area = {}, Perimeter = {}	Plocha = {}, Obvod = {}
+	Total area = {}	Celková plocha = {}
+	Resuming {} command.	Pokračuje se v příkazu {}.
+	Invalid input: {}	Neplatný vstup: {}
+	{} were on a locked layer.	{} bylo na zamčené hladině.
+	{} dimension(s) changed.	Změněné kóty: {}.
+	Group {} ungrouped.	Skupina {} byla zrušena.
+	{} object(s) flattened.	Zploštěné objekty: {}.
+	Group {} renamed to {}.	Skupina {} byla přejmenována na {}.
+	{} object(s) added to group {}.	Do skupiny {1} přidány objekty: {0}.
+	{} object(s) removed from group {}.	Ze skupiny {1} odebrány objekty: {0}.
+	{} lines were chamfered	Zkosené čáry: {}
+	{} lines were filleted	Zaoblené čáry: {}
+	{} objects joined into 1 {}	{} objektů spojeno do 1 {}
+	Current dimension style:  {}	Aktuální kótovací styl:  {}
+	Wrote {}	Zapsáno: {}
+	{} is already open.	{} je již otevřen.
+	{} dimension(s) created.	Vytvořené kóty: {}.
+	BOUNDARY created {} polyline(s)	BOUNDARY vytvořil křivky: {}
+	Current line-width is {}	Aktuální šířka čáry je {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Neznámá proměnná {}. Seznam proměnných vypíšete zadáním SETVAR ?.
+	{} = {} (read only)	{} = {} (jen ke čtení)
+	Dimension text = {}	Kótovací text = {}
+	{} segments added to polyline	Ke křivce přidány segmenty: {}

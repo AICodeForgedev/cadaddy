@@ -1663,3 +1663,55 @@
 	PNG image	PNG イメージ
 	JPEG image	JPEG イメージ
 	Save Image	イメージを保存
+	Enclose Text with Object	文字を図形で囲む
+	Export Attribute Information	属性情報を書き出し
+	Import Attribute Information	属性情報を読み込み
+	Mask Text	文字をマスク
+	Remote Text	リモート文字
+	Rotate Text	文字を回転
+	Text Fit	文字フィット
+	Toggle Frames	フレームの切り替え
+	Unmask Text	文字のマスクを解除
+	Update Remote Text	リモート文字を更新
+	3D Move	3D 移動
+	3D Rotate	3D 回転
+	3D Scale	3D 尺度変更
+	3D Align	3D 位置合わせ
+	3D Mirror	3D 鏡像
+	3D Array	3D 配列複写
+	3D Object Snap	3D オブジェクト スナップ
+	Specify second point or distance	2 点目または距離を指定
+	Specify angle	角度を指定
+	Specify source plane: first point	元の平面を指定: 1 点目
+	Specify source plane: second point	元の平面を指定: 2 点目
+	Specify source plane: third point	元の平面を指定: 3 点目
+	Specify destination plane: first point	移動先の平面を指定: 1 点目
+	Specify destination plane: second point	移動先の平面を指定: 2 点目
+	Specify destination plane: third point	移動先の平面を指定: 3 点目
+	Delete source objects?	元のオブジェクトを削除しますか?
+	Specify point on XY plane	XY 平面上の点を指定
+	Specify point on YZ plane	YZ 平面上の点を指定
+	Specify point on ZX plane	ZX 平面上の点を指定
+	Specify first point of mirror plane (3 points) or	鏡像面の 1 点目を指定 (3 点) または
+	Specify second point on mirror plane	鏡像面の 2 点目を指定
+	Specify third point on mirror plane	鏡像面の 3 点目を指定
+	Enter the type of array	配列複写のタイプを入力
+	Polar	円形
+	Enter the number of items in the array	配列複写する項目数を入力
+	Specify the angle to fill (+=ccw, -=cw)	配列複写する角度を指定 (+=反時計回り、-=時計回り)
+	Enter the number of rows (---)	行の数を入力 (---)
+	Enter the number of columns (|||)	列の数を入力 (|||)
+	Enter the number of levels (...)	レベルの数を入力 (...)
+	Specify the distance between rows (---)	行の間隔を指定 (---)
+	Specify the distance between columns (|||)	列の間隔を指定 (|||)
+	Specify the distance between levels (...)	レベルの間隔を指定 (...)
+	Specify second point on axis of rotation	回転軸上の 2 点目を指定
+	Select the objects first.	最初にオブジェクトを選択してください。
+	Requires a point, or a distance along an axis.	点または軸に沿った距離が必要です。
+	The points must not coincide or line up.	点が一致したり一直線上に並んだりしてはいけません。
+	The three points line up: they make no plane.	3 点が一直線上にあります: 平面になりません。
+	<3D Object Snap on>	<3D オブジェクト スナップ オン>
+	<3D Object Snap off>	<3D オブジェクト スナップ オフ>
+	Preparing the 3D view…	3D ビューを準備中…
+	Viewpoint	視点
+	3D View Benchmark	3D ビュー ベンチマーク

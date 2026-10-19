@@ -53,6 +53,24 @@ struct VI {
     // roughness, metallic, texture layer (−1: none), opacity
     @location(4) m: vec4<f32>,
 };
+// An instance's placement: the rows of a 3 × 4 matrix (block coordinates to the view's, relative
+// to its origin). The base geometry draws with the identity.
+struct II {
+    @location(5) r0: vec4<f32>,
+    @location(6) r1: vec4<f32>,
+    @location(7) r2: vec4<f32>,
+};
+
+fn place(i: II, p: vec3<f32>) -> vec3<f32> {
+    let q = vec4<f32>(p, 1.0);
+    return vec3<f32>(dot(i.r0, q), dot(i.r1, q), dot(i.r2, q));
+}
+
+fn turn(i: II, n: vec3<f32>) -> vec3<f32> {
+    let t = vec3<f32>(dot(i.r0.xyz, n), dot(i.r1.xyz, n), dot(i.r2.xyz, n));
+    let l = length(t);
+    return select(n, t / l, l > 1e-12);
+}
 struct VO {
     @builtin(position) pos: vec4<f32>,
     @location(0) c: vec4<f32>,
@@ -83,12 +101,13 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
 }
 
 @vertex
-fn vs_tri(v: VI) -> VO {
+fn vs_tri(v: VI, i: II) -> VO {
     var o: VO;
-    o.pos = u.vp * vec4<f32>(v.p, 1.0);
+    let p = place(i, v.p);
+    o.pos = u.vp * vec4<f32>(p, 1.0);
     o.c = vec4<f32>(lin(v.c.rgb), v.c.a);
-    o.n = v.n;
-    o.wp = v.p;
+    o.n = turn(i, v.n);
+    o.wp = p;
     o.uv = v.uv;
     o.m = v.m;
     return o;
@@ -96,13 +115,14 @@ fn vs_tri(v: VI) -> VO {
 
 // Lines sit a little in front of the faces they lie on.
 @vertex
-fn vs_line(v: VI) -> VO {
+fn vs_line(v: VI, i: II) -> VO {
     var o: VO;
-    o.pos = u.vp * vec4<f32>(v.p, 1.0);
+    let p = place(i, v.p);
+    o.pos = u.vp * vec4<f32>(p, 1.0);
     o.pos.z = o.pos.z - 0.002 * o.pos.w;
     o.c = vec4<f32>(lin(v.c.rgb), v.c.a);
-    o.n = v.n;
-    o.wp = v.p;
+    o.n = turn(i, v.n);
+    o.wp = p;
     o.uv = v.uv;
     o.m = v.m;
     return o;
@@ -110,8 +130,8 @@ fn vs_line(v: VI) -> VO {
 
 // The sun's view, for the shadow map.
 @vertex
-fn vs_shadow(v: VI) -> @builtin(position) vec4<f32> {
-    return u.shadow_vp * vec4<f32>(v.p, 1.0);
+fn vs_shadow(v: VI, i: II) -> @builtin(position) vec4<f32> {
+    return u.shadow_vp * vec4<f32>(place(i, v.p), 1.0);
 }
 
 // The sky behind a Realistic view: a full-screen triangle, horizon to zenith.

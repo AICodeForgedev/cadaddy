@@ -31,11 +31,8 @@ pub fn route(app: &mut CadApp, id: &str) -> Result<Value, String> {
             }
         }
         "publish" => {
-            let Some(pick) = app.services.pick_save.as_ref() else { return no_picker(app, "PUBLISH", "publish {}") };
-            match pick(&format!("{stem}.pdf")) {
-                Some(path) => app.run("publish", json!({ "path": path })),
-                None => Ok(Value::Null),
-            }
+            app.ui.dialog = Some("publish".into());
+            Ok(Value::Null)
         }
         _ => {
             let Some(pick) = app.services.pick_save.as_ref() else { return no_picker(app, "EXPORT", r#"export {"format": "svg"}"#) };
@@ -76,6 +73,9 @@ pub(crate) fn preview_plot(app: &mut CadApp, ctx: &egui::Context, params: Value,
     app.ui.dialog = Some("preview".into());
 }
 
+/// Pixels across the preview image: enough to zoom in on details.
+const PREVIEW_WIDTH: u32 = 2400;
+
 /// Render the plot preview of the current layout (or model), or of the Plot dialog's settings,
 /// as a texture.
 fn render(app: &mut CadApp, ctx: &egui::Context) -> Result<(TextureHandle, String), String> {
@@ -87,7 +87,14 @@ fn render(app: &mut CadApp, ctx: &egui::Context) -> Result<(TextureHandle, Strin
         let tex = ctx.load_texture("plot-preview", egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()), egui::TextureOptions::LINEAR);
         return Ok((tex, f.info));
     }
-    let r = app.session.execute("preview", &json!({ "width": 1600 })).map_err(|e| e.to_string())?;
+    // As sharp as the GPU's largest texture allows (a portrait sheet is taller than wide).
+    let max = u32::try_from(ctx.input(|i| i.max_texture_side)).unwrap_or(2048).max(64);
+    let mut r = app.session.execute("preview", &json!({ "width": PREVIEW_WIDTH.min(max) })).map_err(|e| e.to_string())?;
+    let (w, h) = (r["width"].as_u64().unwrap_or(0), r["height"].as_u64().unwrap_or(0));
+    if h > u64::from(max) && h > 0 {
+        let width = (w * u64::from(max) / h).max(16);
+        r = app.session.execute("preview", &json!({ "width": width })).map_err(|e| e.to_string())?;
+    }
     let png = r["data"].as_str().and_then(cadaddy_engine::cmd::file::base64_decode).ok_or("the preview has no image")?;
     let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png).map_err(|e| e.to_string())?.to_rgba8();
     let size = [img.width() as usize, img.height() as usize];
@@ -112,31 +119,47 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             p
         }
     };
-    let (mut close, mut print) = (false, false);
-    egui::Window::new("Plot Preview")
+    let (mut close, mut print, mut fit) = (false, false, false);
+    // Nearly the whole window: the sheet as it plots, panned by dragging and zoomed with the
+    // wheel (or pinch); Fit shows the whole sheet again.
+    let screen = ctx.content_rect();
+    let scene_id = egui::Id::new("cc_plot_preview_scene");
+    let mut scene_rect: egui::Rect = ctx.data(|d| d.get_temp(scene_id)).unwrap_or(egui::Rect::NOTHING);
+    egui::Window::new(crate::tl!("Plot Preview"))
+        .id(egui::Id::new("Plot Preview"))
         .open(open)
         .collapsible(false)
         .resizable(false)
-        .pivot(egui::Align2::CENTER_CENTER)
-        .default_pos(ctx.content_rect().center())
+        .fixed_rect(screen.shrink(24.0))
         .show(ctx, |ui| {
-            match &preview.shown {
-                Ok((tex, info)) => {
+            ui.horizontal(|ui| {
+                print = ui.button(crate::tl!("Print...")).clicked();
+                fit = ui.button(crate::tl!("Zoom to Fit")).clicked();
+                close = ui.button(crate::tl!("Close")).clicked();
+                if let Ok((_, info)) = &preview.shown {
                     ui.label(info);
+                }
+                ui.label(egui::RichText::new(crate::tl!("Drag to pan, scroll to zoom")).small().weak());
+            });
+            ui.separator();
+            match &preview.shown {
+                Ok((tex, _)) => {
                     let size = tex.size_vec2();
-                    let k = (760.0 / size.x).min(540.0 / size.y).min(1.0);
-                    ui.image((tex.id(), size * k));
+                    if fit || !scene_rect.is_finite() || scene_rect.size() == egui::Vec2::ZERO {
+                        scene_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                    }
+                    egui::Frame::new().fill(egui::Color32::from_gray(96)).show(ui, |ui| {
+                        egui::Scene::new().zoom_range(0.05..=16.0).show(ui, &mut scene_rect, |ui| {
+                            ui.add(egui::Image::new((tex.id(), size)).fit_to_exact_size(size));
+                        });
+                    });
                 }
                 Err(e) => {
                     ui.label(e);
                 }
             }
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                print = ui.button("Print...").clicked();
-                close = ui.button("Close").clicked();
-            });
         });
+    ctx.data_mut(|d| d.insert_temp(scene_id, scene_rect));
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         close = true;
     }
@@ -148,6 +171,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         ctx.data_mut(|d| {
             d.remove::<Preview>(id);
             d.remove::<FromPlot>(egui::Id::new(FROM_PLOT));
+            d.remove::<egui::Rect>(scene_id);
         });
     }
     if from_plot && !*open {
@@ -195,9 +219,12 @@ mod tests {
     fn typed_and_menu_commands_ask_json_calls_never_do() {
         let (mut app, asked) = app();
         app.start("export");
+        // PUBLISH opens its dialog (the sheet list); the file is asked for when publishing.
         app.cmdline("PUBLISH");
+        assert_eq!(app.ui.dialog.as_deref(), Some("publish"));
+        app.ui.dialog = None;
         app.start("imp");
-        assert_eq!(*asked.borrow(), ["Drawing1.svg", "Drawing1.pdf", "open"]);
+        assert_eq!(*asked.borrow(), ["Drawing1.svg", "open"]);
         assert!(app.ui.dialog.is_none());
         app.cmdline("pre");
         assert_eq!(app.ui.dialog.as_deref(), Some("preview"));
@@ -211,7 +238,7 @@ mod tests {
         let _ = app.run("publish", json!({ "layouts": [] }));
         let r = app.run("preview", json!({ "width": 64 })).unwrap();
         assert!(r["data"].is_string());
-        assert_eq!(asked.borrow().len(), 3, "JSON calls never open a file dialog");
+        assert_eq!(asked.borrow().len(), 2, "JSON calls never open a file dialog");
         assert!(app.ui.dialog.is_none(), "nor the preview window");
 
         let e = app.run("share", json!({})).unwrap_err();

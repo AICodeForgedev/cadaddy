@@ -1154,6 +1154,9 @@ fn parametric_sample(d: &mut Drawing) -> (Vec<Constraint>, Parametric) {
             dims_visible: false,
             dim_exceptions: vec![l2],
             bar_transparency: 30,
+            tangent_intersect: false,
+            perpendicular_intersect: false,
+            name_format: 1,
         },
     };
     d.constraints = constraints.clone();

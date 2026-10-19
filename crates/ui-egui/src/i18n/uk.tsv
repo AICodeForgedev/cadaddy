@@ -1843,3 +1843,101 @@
 	My properties: the ones you added (right-click a property's name to add it)	Мої властивості: додані вами (клацніть правою кнопкою на назві властивості, щоб додати її)
 	Right-click a property's name and choose Add to My Properties.	Клацніть правою кнопкою на назві властивості й виберіть «Додати до моїх властивостей».
 	Color Books	Альбоми кольорів
+	Sheet Set Manager	Диспетчер підшивок
+	Palettes	Палітри
+	New Sheet Set...	Нова підшивка...
+	Open Sheet Set...	Відкрити підшивку...
+	No sheet set is open.	Жодну підшивку не відкрито.
+	Number	Номер
+	Subset	Підмножина
+	Remove Sheet	Вилучити аркуш
+	Add Drawing...	Додати креслення...
+	Rename Layouts to Match	Перейменувати аркуші відповідно
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	Кожен аркуш отримує назву «номер назва», яку показують поля номера й назви аркуша
+	Publish to PDF...	Опублікувати в PDF...
+	Prefix	Префікс
+	Digits	Цифр
+	Renumber	Перенумерувати
+	Zoom to Fit	Показати повністю
+	Drag to pan, scroll to zoom	Перетягування — зсув, коліщатко — масштаб
+	Publish	Публікація
+	Sheets to publish, in order	Аркуші для публікації за порядком
+	Sheet	Аркуш
+	Bookmark	Закладка
+	Paper	Папір
+	Orientation	Орієнтація
+	(sheet name)	(назва аркуша)
+	Page setup	Параметри аркуша
+	Landscape	Альбомна
+	Portrait	Книжкова
+	Add Sheets from Drawing...	Додати аркуші з креслення...
+	Load List...	Завантажити список...
+	Save List...	Зберегти список...
+	Publish List	Список публікації
+	Enclose Text with Object	Обвести текст об'єктом
+	Export Attribute Information	Експорт відомостей про атрибути
+	Import Attribute Information	Імпорт відомостей про атрибути
+	Mask Text	Маскувати текст
+	Remote Text	Віддалений текст
+	Rotate Text	Повернути текст
+	Text Fit	Вписати текст
+	Toggle Frames	Перемкнути рамки
+	Unmask Text	Зняти маскування тексту
+	Update Remote Text	Оновити віддалений текст
+	Geometric	Геометричні
+	Infer geometric constraints	Виводити геометричні залежності
+	Show constraint bars	Показувати знаки залежностей
+	Constraint bar transparency (%)	Прозорість знаків залежностей (%)
+	Dimensional	Розмірні
+	Show dynamic constraints	Показувати динамічні залежності
+	Dimension name format	Формат імені розміру
+	Name and Expression	Ім'я та вираз
+	Constraint types AUTOCONSTRAIN applies, in order of priority	Типи залежностей, які застосовує AUTOCONSTRAIN, за пріоритетом
+	Move Up	Угору
+	Move Down	Униз
+	Tangent objects must share an intersection point	Дотичні об'єкти мають мати спільну точку перетину
+	Perpendicular objects must share an intersection point	Перпендикулярні об'єкти мають мати спільну точку перетину
+	Distance tolerance	Допуск відстані
+	Angle tolerance (degrees)	Допуск кута (градуси)
+	3D Move	3D-переміщення
+	3D Rotate	3D-поворот
+	3D Scale	3D-масштаб
+	3D Align	3D-вирівнювання
+	3D Mirror	3D-дзеркало
+	3D Array	3D-масив
+	3D Object Snap	3D-об'єктна прив'язка
+	Specify second point or distance	Вкажіть другу точку або відстань
+	Specify angle	Вкажіть кут
+	Specify source plane: first point	Вкажіть вихідну площину: перша точка
+	Specify source plane: second point	Вкажіть вихідну площину: друга точка
+	Specify source plane: third point	Вкажіть вихідну площину: третя точка
+	Specify destination plane: first point	Вкажіть цільову площину: перша точка
+	Specify destination plane: second point	Вкажіть цільову площину: друга точка
+	Specify destination plane: third point	Вкажіть цільову площину: третя точка
+	Delete source objects?	Видалити вихідні об'єкти?
+	Specify point on XY plane	Вкажіть точку на площині XY
+	Specify point on YZ plane	Вкажіть точку на площині YZ
+	Specify point on ZX plane	Вкажіть точку на площині ZX
+	Specify first point of mirror plane (3 points) or	Вкажіть першу точку площини дзеркала (3 точки) або
+	Specify second point on mirror plane	Вкажіть другу точку площини дзеркала
+	Specify third point on mirror plane	Вкажіть третю точку площини дзеркала
+	Enter the type of array	Введіть тип масиву
+	Polar	Круговий
+	Enter the number of items in the array	Введіть кількість елементів масиву
+	Specify the angle to fill (+=ccw, -=cw)	Вкажіть кут заповнення (+=проти годинникової, -=за годинниковою)
+	Enter the number of rows (---)	Введіть кількість рядків (---)
+	Enter the number of columns (|||)	Введіть кількість стовпців (|||)
+	Enter the number of levels (...)	Введіть кількість рівнів (...)
+	Specify the distance between rows (---)	Вкажіть відстань між рядками (---)
+	Specify the distance between columns (|||)	Вкажіть відстань між стовпцями (|||)
+	Specify the distance between levels (...)	Вкажіть відстань між рівнями (...)
+	Specify second point on axis of rotation	Вкажіть другу точку на осі обертання
+	Select the objects first.	Спочатку виберіть об'єкти.
+	Requires a point, or a distance along an axis.	Потрібна точка або відстань уздовж осі.
+	The points must not coincide or line up.	Точки не повинні збігатися або лежати на одній прямій.
+	The three points line up: they make no plane.	Три точки лежать на одній прямій: площини немає.
+	<3D Object Snap on>	<3D-об'єктна прив'язка увімк>
+	<3D Object Snap off>	<3D-об'єктна прив'язка вимк>
+	Preparing the 3D view…	Підготовка 3D-виду…
+	Viewpoint	Точка зору
+	3D View Benchmark	Тест продуктивності 3D-виду

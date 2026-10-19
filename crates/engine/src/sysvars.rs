@@ -8,6 +8,8 @@ mod table;
 
 const SESSION_VARS: &[&str] = &[
     "OSMODE",
+    "3DOSMODE",
+    "UCSDETECT",
     "OSNAPHATCH",
     "ANNOAUTOSCALE",
     "ORTHOMODE",
@@ -81,6 +83,8 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
     let st = &s.settings;
     let v = match n.as_str() {
         "OSMODE" => json!(st.osmode),
+        "3DOSMODE" => json!(st.osmode3),
+        "UCSDETECT" => json!(i32::from(st.ducs)),
         "OSNAPHATCH" => json!(i32::from(st.osnaphatch)),
         // AutoCAD's values: positive on, negative off (4 = every annotative object).
         "ANNOAUTOSCALE" => json!(if st.annoautoscale { 4 } else { -4 }),
@@ -147,6 +151,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         // Held in radians (as `$ANGBASE` in DXF); reported in degrees, like POLARANG.
         "ANGBASE" => json!(s.doc().ok()?.header.f64("ANGBASE", 0.0).to_degrees()),
         "CONSTRAINTINFER" => json!(i32::from(s.doc().ok()?.parametric.settings.infer)),
+        "CONSTRAINTNAMEFORMAT" => json!(s.doc().ok()?.parametric.settings.name_format),
         // Process-wide font substitution (profile settings, not saved in the drawing).
         "FONTALT" => json!(cadaddy_fonts::ttf::font_alt()),
         "FONTFALLBACK" => json!(cadaddy_fonts::ttf::fallback_fonts()),
@@ -412,6 +417,10 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     let st = &mut s.settings;
     match n.as_str() {
         "OSMODE" => st.osmode = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & 0x7fff,
+        "3DOSMODE" => {
+            st.osmode3 = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & crate::snap3::mode::MASK
+        }
+        "UCSDETECT" => st.ducs = as_bool(v).ok_or_else(bad)?,
         "OSNAPHATCH" => st.osnaphatch = as_bool(v).ok_or_else(bad)?,
         "ANNOAUTOSCALE" => st.annoautoscale = as_i(v).filter(|i| (-4..=4).contains(i)).ok_or_else(bad)? > 0,
         // A scale of the drawing's list; ANNOAUTOSCALE adds it to the annotative objects.
@@ -556,6 +565,10 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
                 d.material(t).map(|m| m.name.clone()).ok_or_else(bad)?
             };
             s.doc_mut()?.header.set_str("CMATERIAL", &name);
+        }
+        "CONSTRAINTNAMEFORMAT" => {
+            let f = as_f64(v).filter(|f| [0.0, 1.0, 2.0].contains(f)).ok_or_else(bad)?;
+            s.doc_mut()?.parametric.settings.name_format = f as u8;
         }
         _ => {
             if let Some(r) = table::set(s, &n, v) {

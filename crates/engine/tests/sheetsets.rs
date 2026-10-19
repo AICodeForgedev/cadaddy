@@ -1,0 +1,144 @@
+//! Sheet sets: create one from drawings, renumber, rename layouts for the sheet fields, and
+//! publish the whole set to one PDF with a bookmark per sheet under its subset.
+
+use std::path::{Path, PathBuf};
+
+use cadaddy_engine::Session;
+use cadaddy_engine::cmd::file::{IoHooks, set_io, set_pdf_merge};
+use cadaddy_engine::doc::geom::Vec3;
+use cadaddy_engine::doc::{Drawing, Entity, EntityKind, Layout, Line, Space};
+use serde_json::{Value, json};
+
+fn hooks() {
+    set_io(IoHooks {
+        read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
+        write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
+        plot: Some(|d, space, opts| cadaddy_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
+        read_pdf: None,
+    });
+    set_pdf_merge(|parts| cadaddy_io::pdf_merge::merge(parts).map_err(|e| e.to_string()));
+}
+
+fn folder(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("cadaddy-sheetset-{}-{tag}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// A drawing with a line in each of `layouts`.
+fn drawing(path: &Path, layouts: &[&str]) {
+    let mut d = Drawing::new_metric();
+    d.layouts = layouts.iter().enumerate().map(|(i, n)| Layout::new(n, i as u32 + 1)).collect();
+    for n in layouts {
+        let h = d.new_handle();
+        let e = Entity::new(h, EntityKind::Line(Line { a: Vec3::new(10.0, 10.0, 0.0), b: Vec3::new(100.0, 50.0, 0.0) }));
+        d.space_mut(&Space::Paper((*n).to_string())).unwrap().push(e);
+    }
+    std::fs::write(path, cadaddy_io::write(&d, &path.to_string_lossy()).unwrap()).unwrap();
+}
+
+fn numbers(r: &Value) -> Vec<String> {
+    r["sheets"].as_array().unwrap().iter().map(|s| s["number"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn create_add_renumber_sync_and_publish() {
+    hooks();
+    let dir = folder("full");
+    drawing(&dir.join("arch.dxf"), &["Plan", "Elevations"]);
+    std::fs::create_dir_all(dir.join("struct")).unwrap();
+    drawing(&dir.join("struct/frame.dxf"), &["Framing"]);
+    let set = dir.join("job.sheetset.json");
+    let mut s = Session::new();
+    let ss = |s: &mut Session, p: Value| {
+        let mut p = p;
+        p["set"] = json!(set.to_string_lossy());
+        s.execute("sheetset", &p)
+    };
+    let r = ss(&mut s, json!({ "action": "new", "description": "Test set" })).unwrap();
+    assert_eq!(r["name"], "job");
+    assert!(ss(&mut s, json!({ "action": "new" })).is_err(), "it exists");
+
+    // Every layout of a drawing, then one layout of another in its own subset.
+    ss(&mut s, json!({ "action": "add", "drawing": dir.join("arch.dxf").to_string_lossy(), "subset": "Architectural" })).unwrap();
+    let r = ss(
+        &mut s,
+        json!({ "action": "add", "drawing": dir.join("struct/frame.dxf").to_string_lossy(), "layouts": ["framing"], "subset": "Structural", "title": "Roof framing" }),
+    )
+    .unwrap();
+    let sheets = r["sheets"].as_array().unwrap();
+    assert_eq!(sheets.len(), 3);
+    assert_eq!(sheets[2]["drawing"], "struct/frame.dxf", "stored relative to the set");
+    assert_eq!(sheets[2]["title"], "Roof framing");
+    assert!(sheets.iter().all(|s| s["found"] == true));
+    assert_eq!(r["subsets"], json!(["Architectural", "Structural"]));
+
+    // Renumber, then move the framing sheet first and number it on its own.
+    let r = ss(&mut s, json!({ "action": "renumber", "prefix": "A-", "digits": 3, "start": 101 })).unwrap();
+    assert_eq!(numbers(&r), ["A-101", "A-102", "A-103"]);
+    let r = ss(&mut s, json!({ "action": "set", "sheet": "A-103", "number": "S-1" })).unwrap();
+    assert_eq!(numbers(&r), ["A-101", "A-102", "S-1"]);
+    let r = ss(&mut s, json!({ "action": "move", "sheet": 2, "to": 0 })).unwrap();
+    assert_eq!(numbers(&r), ["S-1", "A-101", "A-102"]);
+    let r = ss(&mut s, json!({ "action": "move", "sheet": "S-1", "to": 9 })).unwrap();
+    assert_eq!(numbers(&r), ["A-101", "A-102", "S-1"]);
+
+    // Layouts take "number title", so the drawings' sheet fields show them.
+    ss(&mut s, json!({ "action": "sync" })).unwrap();
+    let arch = cadaddy_io::read(&std::fs::read(dir.join("arch.dxf")).unwrap(), "arch.dxf").unwrap();
+    let mut names: Vec<String> = arch.layouts.iter().map(|l| l.name.clone()).collect();
+    names.sort();
+    assert_eq!(names, ["A-101 Plan", "A-102 Elevations"]);
+    assert!(dir.join("arch.bak").exists(), "the previous version is kept");
+
+    // One PDF, a page per sheet, bookmarked under the subsets.
+    let out = dir.join("job.pdf");
+    let r = ss(&mut s, json!({ "action": "publish", "path": out.to_string_lossy() })).unwrap();
+    assert_eq!(r["pages"], 3);
+    let marks = cadaddy_io::pdf_merge::bookmarks(&std::fs::read(&out).unwrap()).unwrap();
+    let want: Vec<(String, usize, usize)> = vec![
+        ("Architectural".into(), 0, 0),
+        ("A-101 Plan".into(), 1, 1),
+        ("A-102 Elevations".into(), 1, 2),
+        ("Structural".into(), 0, 0),
+        ("S-1 Roof framing".into(), 1, 3),
+    ];
+    assert_eq!(marks, want);
+
+    // The set file is ours: JSON with its marker.
+    let text = std::fs::read_to_string(&set).unwrap();
+    assert!(text.contains("\"cadaddySheetSet\": 1"), "{text}");
+}
+
+#[test]
+fn subsets_removal_and_refusals() {
+    hooks();
+    let dir = folder("misc");
+    drawing(&dir.join("a.dxf"), &["L1", "L2"]);
+    let set = dir.join("s.sheetset.json").to_string_lossy().into_owned();
+    let mut s = Session::new();
+    s.execute("sheetset", &json!({ "set": set, "action": "new", "name": "Small" })).unwrap();
+    s.execute("sheetset", &json!({ "set": set, "action": "add", "drawings": [dir.join("a.dxf").to_string_lossy()], "subset": "One" })).unwrap();
+    let r = s.execute("sheetset", &json!({ "set": set, "action": "subset", "rename": ["one", "First"] })).unwrap();
+    assert_eq!(r["sheets"][0]["subset"], "First");
+    let r = s.execute("sheetset", &json!({ "set": set, "action": "subset", "remove": "First" })).unwrap();
+    assert_eq!((r["subsets"].as_array().unwrap().len(), r["sheets"][0]["subset"].clone()), (0, json!("")));
+    let r = s.execute("sheetset", &json!({ "set": set, "action": "remove", "sheets": [0, "2"] })).unwrap();
+    assert_eq!(r["sheets"].as_array().unwrap().len(), 0);
+    // Publishing an empty set, AutoCAD's .dst files and bad input are refused.
+    for p in [
+        json!({ "set": set, "action": "publish", "path": dir.join("x.pdf").to_string_lossy() }),
+        json!({ "set": dir.join("old.dst").to_string_lossy(), "action": "list" }),
+        json!({ "set": set, "action": "add", "drawing": dir.join("missing.dxf").to_string_lossy() }),
+        json!({ "set": set, "action": "add", "drawing": dir.join("a.dxf").to_string_lossy(), "layouts": ["Nope"] }),
+        json!({ "set": set, "action": "set", "sheet": 5 }),
+        json!({ "set": set, "action": "wobble" }),
+        json!({ "action": "list" }),
+        json!({ "set": dir.join("none.json").to_string_lossy(), "action": "list" }),
+    ] {
+        assert!(s.execute("sheetset", &p).is_err(), "{p}");
+    }
+    let e = s.execute("sheetset", &json!({ "set": dir.join("old.dst").to_string_lossy() })).unwrap_err();
+    assert!(e.to_string().contains(".dst"), "{e}");
+}

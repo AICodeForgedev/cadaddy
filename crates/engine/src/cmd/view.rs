@@ -76,6 +76,7 @@ pub fn specs() -> Vec<CommandSpec> {
             // files looked up again.
             super::table::recalc(s, None)?;
             crate::fields::on_event(s, crate::fields::Event::Regen);
+            super::express::rtext::refresh(s, None)?;
             cadaddy_render::images::revalidate();
             s.touch();
             Ok(json!({"message": "Regenerating model."}))
@@ -84,6 +85,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .alias(&["re"])
         .noundo(),
         CommandSpec::new("regenall", "Regen All", |s, _| {
+            super::express::rtext::refresh(s, None)?;
             cadaddy_render::images::revalidate();
             s.touch();
             Ok(json!({"message": "Regenerating all viewports."}))

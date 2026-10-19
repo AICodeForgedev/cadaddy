@@ -93,11 +93,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("parameters", "Parameters Manager", run_parameters)
             .menu(&["Tools", "Parametric", "Parameters Manager"])
             .alias(&["par", "parametersclose"])
-            .params("{} lists; {name, expr | value, description?} sets (new name = user parameter) and re-solves; {delete: name}"),
+            .params("{} lists; {name, expr | value, description?} sets (new name = user parameter) and re-solves; {name, description} sets only the description; {rename: [old, new]} (expressions using it follow); {delete: name} (a dimensional constraint's parameter deletes the constraint; refused while another parameter uses it)"),
         CommandSpec::new("constraintsettings", "Constraint Settings", run_constraintsettings)
             .menu(&["Tools", "Parametric", "Constraint Settings"])
             .alias(&["csettings"])
-            .params("{infer?, distanceTolerance?, angleTolerance?, autoTypes?: [names], barsVisible?, barTransparency?, dimsVisible?}"),
+            .params("{infer?, distanceTolerance?, angleTolerance?, autoTypes?: [names, in order of priority], tangentIntersect?, perpendicularIntersect?, barsVisible?, barTransparency?, dimsVisible?, nameFormat?: 0 name | 1 value | 2 name and expression}"),
         CommandSpec::new("constraintinfer", "Infer Constraints", run_constraintinfer)
             .params("{value?: 0|1} sets CONSTRAINTINFER (no value: reports it)")
             .interactive(|_| Ok(Box::new(InferM))),
@@ -813,7 +813,13 @@ fn run_autoconstrain(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("autoconstrain", "select objects (or pass `handles`)"));
     }
     let set = &s.doc()?.parametric.settings;
-    let mut o = cs::InferOptions { distance_tolerance: set.distance_tolerance, angle_tolerance: set.angle_tolerance, types: set.auto_types.clone() };
+    let mut o = cs::InferOptions {
+        distance_tolerance: set.distance_tolerance,
+        angle_tolerance: set.angle_tolerance,
+        types: set.auto_types.clone(),
+        tangent_intersect: set.tangent_intersect,
+        perpendicular_intersect: set.perpendicular_intersect,
+    };
     o.distance_tolerance = f64_or(p, "tolerance", o.distance_tolerance);
     o.angle_tolerance = f64_or(p, "angleTolerance", o.angle_tolerance);
     if let Some(t) = p.get("types").and_then(Value::as_array) {
@@ -858,33 +864,104 @@ fn run_delconstraint(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "removed": n, "message": format!("{n} constraint(s) removed") }))
 }
 
+/// The parameters whose value can't be worked out in `d`.
+fn failing(d: &Drawing) -> std::collections::BTreeSet<String> {
+    cs::parameter_table(d).into_iter().filter(|r| r.error.is_some()).map(|r| r.name).collect()
+}
+
+/// Whether `n` can name a parameter: a letter or `_`, then letters, digits and `_`.
+fn valid_parameter_name(n: &str) -> bool {
+    let mut c = n.chars();
+    c.next().is_some_and(|f| f.is_ascii_alphabetic() || f == '_') && c.all(|x| x.is_ascii_alphanumeric() || x == '_') && n.len() <= 64
+}
+
+/// `expr` with every use of the name `old` replaced by `new` (whole names only).
+fn rename_in(expr: &str, old: &str, new: &str) -> String {
+    let mut out = String::with_capacity(expr.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        out.push_str(if word == old { new } else { word.as_str() });
+        word.clear();
+    };
+    for ch in expr.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            word.push(ch);
+        } else {
+            flush(&mut word, &mut out);
+            out.push(ch);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
 fn run_parameters(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(name) = str_param(p, "delete") {
         let d = s.doc()?;
-        if d.constraints.iter().any(|c| c.name == name) {
-            return Err(EngineError::Other(format!("`{name}` belongs to a dimensional constraint; delete the constraint instead")));
-        }
-        if !d.parametric.parameters.iter().any(|q| q.name == name) {
+        let dimensional = d.constraints.iter().any(|c| c.kind.is_dimensional() && c.name == name);
+        if !dimensional && !d.parametric.parameters.iter().any(|q| q.name == name) {
             return Err(EngineError::Other(format!("no parameter `{name}`")));
         }
-        let mut d = d.clone();
-        d.parametric.parameters.retain(|q| q.name != name);
-        if let Some(row) = cs::parameter_table(&d).into_iter().find(|r| r.error.is_some()) {
-            return Err(EngineError::Other(format!("`{name}` is used by `{}`", row.name)));
+        let before = failing(d);
+        let mut nd = d.clone();
+        if dimensional {
+            nd.constraints.retain(|c| c.name != name);
+        } else {
+            nd.parametric.parameters.retain(|q| q.name != name);
         }
-        *s.doc_mut()? = d;
+        // Refused while another parameter's expression uses it.
+        if let Some(user) = failing(&nd).difference(&before).next() {
+            return Err(EngineError::Other(format!("`{name}` is used by `{user}`; change `{user}` first")));
+        }
+        *s.doc_mut()? = nd;
+    } else if let Some(rename) = p.get("rename").filter(|v| !v.is_null()) {
+        let pair = rename.as_array().map(Vec::as_slice).unwrap_or_default();
+        let (Some(old), Some(new)) = (pair.first().and_then(Value::as_str), pair.get(1).and_then(Value::as_str).map(str::trim)) else {
+            return Err(bad("parameters", "`rename` is [old, new]"));
+        };
+        let d = s.doc()?;
+        if !cs::name_in_use(d, old) {
+            return Err(EngineError::Other(format!("no parameter `{old}`")));
+        }
+        if !valid_parameter_name(new) {
+            return Err(EngineError::Other(format!("`{new}` can't name a parameter: use letters, digits and _, starting with a letter")));
+        }
+        if new != old && cs::name_in_use(d, new) {
+            return Err(EngineError::Other(format!("a parameter `{new}` already exists")));
+        }
+        let mut nd = d.clone();
+        for c in &mut nd.constraints {
+            if c.name == old {
+                c.name = new.to_string();
+            }
+            c.expr = rename_in(&c.expr, old, new);
+        }
+        for q in &mut nd.parametric.parameters {
+            if q.name == old {
+                q.name = new.to_string();
+            }
+            q.expr = rename_in(&q.expr, old, new);
+        }
+        *s.doc_mut()? = nd;
     } else if let Some(name) = str_param(p, "name") {
         let expr = match (str_param(p, "expr"), p.get("value").and_then(Value::as_f64)) {
-            (Some(e), _) => e.to_string(),
-            (None, Some(v)) if v.is_finite() => cs::format_value(v),
-            _ => return Err(bad("parameters", "`expr` or `value` is required")),
+            (Some(e), _) => Some(e.to_string()),
+            (None, Some(v)) if v.is_finite() => Some(cs::format_value(v)),
+            _ => None,
         };
         let mut d = s.doc()?.clone();
-        cs::set_parameter(&mut d, name.trim(), &expr, &cs::SolveOptions::default()).map_err(err)?;
+        match expr {
+            Some(expr) => {
+                cs::set_parameter(&mut d, name.trim(), &expr, &cs::SolveOptions::default()).map_err(err)?;
+            }
+            // Only the description of an existing user parameter.
+            None if str_param(p, "description").is_some() && d.parametric.parameters.iter().any(|q| q.name == name.trim()) => {}
+            None => return Err(bad("parameters", "`expr` or `value` is required")),
+        }
         if let Some(desc) = str_param(p, "description")
             && let Some(q) = d.parametric.parameters.iter_mut().find(|q| q.name == name.trim())
         {
-            q.description = desc.to_string();
+            q.description = desc.chars().take(1000).collect();
         }
         *s.doc_mut()? = d;
     }
@@ -952,6 +1029,14 @@ fn run_constraintsettings(s: &mut Session, p: &Value) -> Result<Value> {
     set.angle_tolerance = f64_or(p, "angleTolerance", set.angle_tolerance).clamp(0.0, 45.0);
     set.bars_visible = bool_or(p, "barsVisible", set.bars_visible);
     set.dims_visible = bool_or(p, "dimsVisible", set.dims_visible);
+    set.tangent_intersect = bool_or(p, "tangentIntersect", set.tangent_intersect);
+    set.perpendicular_intersect = bool_or(p, "perpendicularIntersect", set.perpendicular_intersect);
+    if let Some(f) = p.get("nameFormat").filter(|v| !v.is_null()) {
+        set.name_format =
+            f.as_u64()
+                .filter(|f| *f <= 2)
+                .ok_or_else(|| bad("constraintsettings", "`nameFormat` is 0 (name), 1 (value) or 2 (name and expression)"))? as u8;
+    }
     if let Some(t) = p.get("barTransparency").and_then(Value::as_f64).filter(|v| v.is_finite()) {
         set.bar_transparency = t.clamp(0.0, 90.0) as u8;
     }
@@ -1102,7 +1187,7 @@ fn infer_after(s: &mut Session, before: &Drawing) {
         }
     }
     others.extend(parallel.map(|p| p.1));
-    let o = cs::InferOptions { distance_tolerance: tol, angle_tolerance: 1e-7, types };
+    let o = cs::InferOptions { distance_tolerance: tol, angle_tolerance: 1e-7, types, ..Default::default() };
     let cands = cs::infer_placed(d, &placed, &others, &o);
     if cands.is_empty() {
         return;

@@ -15,11 +15,14 @@ use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
 
 mod arctext;
+pub mod attio;
 mod blockreplace;
 mod breakline;
 mod mocoro;
+pub mod rtext;
 mod tcase;
 mod tcount;
+pub mod texttools;
 mod txtexp;
 
 use super::machines::{SelOutcome, SelectPhase, SelectRun};
@@ -65,6 +68,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{arc (handle), text, height? (the style's, else TEXTSIZE), style? (TEXTSTYLE), widthFactor?, side?: \"convex\" (default, outside, reading clockwise) | \"concave\", align?: \"fit\" (default) | \"left\" | \"right\" | \"center\", offset? (from the arc), spacing? (extra between characters)} → {handles, group}: one TEXT per character, as an unnamed group")
             .interactive(|_| Ok(Box::new(arctext::ArctextM::default()))),
     ]
+    .into_iter()
+    .chain(texttools::specs())
+    .chain(attio::specs())
+    .chain(rtext::specs())
+    .collect()
 }
 
 // ---------- BURST ----------

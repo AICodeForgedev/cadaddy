@@ -328,6 +328,10 @@ impl GripEdit {
                 let m = self.matrix(d.at);
                 self.edit(s, d.at, m)
             }
+            Input::Point3(p) => {
+                let m = self.matrix(p.xy());
+                self.edit(s, p.xy(), m)
+            }
             Input::Text(t) => match self.mode {
                 GripMode::Rotate => {
                     let a = s.angle_settings().rotation(&t).filter(|a| a.is_finite()).ok_or_else(|| other("Requires an angle or point."))?;

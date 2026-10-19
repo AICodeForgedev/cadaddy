@@ -1633,3 +1633,101 @@
 	My properties: the ones you added (right-click a property's name to add it)	我的特性：您添加的特性（右键单击特性名称即可添加）
 	Right-click a property's name and choose Add to My Properties.	右键单击特性名称，然后选择“添加到我的特性”。
 	Color Books	配色系统
+	Sheet Set Manager	图纸集管理器
+	Palettes	选项板
+	New Sheet Set...	新建图纸集...
+	Open Sheet Set...	打开图纸集...
+	No sheet set is open.	未打开图纸集。
+	Number	编号
+	Subset	子集
+	Remove Sheet	删除图纸
+	Add Drawing...	添加图形...
+	Rename Layouts to Match	重命名布局以匹配
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	每张图纸的布局都会变为“编号 标题”，图纸编号和标题字段会显示它们
+	Publish to PDF...	发布为 PDF...
+	Prefix	前缀
+	Digits	位数
+	Renumber	重新编号
+	Zoom to Fit	缩放到合适大小
+	Drag to pan, scroll to zoom	拖动以平移，滚动以缩放
+	Publish	发布
+	Sheets to publish, in order	要发布的图纸（按顺序）
+	Sheet	图纸
+	Bookmark	书签
+	Paper	图纸尺寸
+	Orientation	方向
+	(sheet name)	（图纸名称）
+	Page setup	页面设置
+	Landscape	横向
+	Portrait	纵向
+	Add Sheets from Drawing...	从图形添加图纸...
+	Load List...	加载列表...
+	Save List...	保存列表...
+	Publish List	发布列表
+	Enclose Text with Object	用对象包围文字
+	Export Attribute Information	输出属性信息
+	Import Attribute Information	输入属性信息
+	Mask Text	遮罩文字
+	Remote Text	远程文字
+	Rotate Text	旋转文字
+	Text Fit	文字适配
+	Toggle Frames	切换边框
+	Unmask Text	取消遮罩文字
+	Update Remote Text	更新远程文字
+	Geometric	几何
+	Infer geometric constraints	推断几何约束
+	Show constraint bars	显示约束栏
+	Constraint bar transparency (%)	约束栏透明度 (%)
+	Dimensional	标注
+	Show dynamic constraints	显示动态约束
+	Dimension name format	标注名称格式
+	Name and Expression	名称和表达式
+	Constraint types AUTOCONSTRAIN applies, in order of priority	AUTOCONSTRAIN 应用的约束类型（按优先级排序）
+	Move Up	上移
+	Move Down	下移
+	Tangent objects must share an intersection point	相切对象必须共用同一交点
+	Perpendicular objects must share an intersection point	垂直对象必须共用同一交点
+	Distance tolerance	距离公差
+	Angle tolerance (degrees)	角度公差 (度)
+	3D Move	三维移动
+	3D Rotate	三维旋转
+	3D Scale	三维缩放
+	3D Align	三维对齐
+	3D Mirror	三维镜像
+	3D Array	三维阵列
+	3D Object Snap	三维对象捕捉
+	Specify second point or distance	指定第二个点或距离
+	Specify angle	指定角度
+	Specify source plane: first point	指定源平面：第一个点
+	Specify source plane: second point	指定源平面：第二个点
+	Specify source plane: third point	指定源平面：第三个点
+	Specify destination plane: first point	指定目标平面：第一个点
+	Specify destination plane: second point	指定目标平面：第二个点
+	Specify destination plane: third point	指定目标平面：第三个点
+	Delete source objects?	是否删除源对象？
+	Specify point on XY plane	指定 XY 平面上的点
+	Specify point on YZ plane	指定 YZ 平面上的点
+	Specify point on ZX plane	指定 ZX 平面上的点
+	Specify first point of mirror plane (3 points) or	指定镜像平面的第一个点（三点）或
+	Specify second point on mirror plane	在镜像平面上指定第二点
+	Specify third point on mirror plane	在镜像平面上指定第三点
+	Enter the type of array	输入阵列类型
+	Polar	环形
+	Enter the number of items in the array	输入阵列中的项目数目
+	Specify the angle to fill (+=ccw, -=cw)	指定要填充的角度（+=逆时针，-=顺时针）
+	Enter the number of rows (---)	输入行数 (---)
+	Enter the number of columns (|||)	输入列数 (|||)
+	Enter the number of levels (...)	输入层数 (...)
+	Specify the distance between rows (---)	指定行间距 (---)
+	Specify the distance between columns (|||)	指定列间距 (|||)
+	Specify the distance between levels (...)	指定层间距 (...)
+	Specify second point on axis of rotation	指定旋转轴上的第二点
+	Select the objects first.	请先选择对象。
+	Requires a point, or a distance along an axis.	需要点或沿轴的距离。
+	The points must not coincide or line up.	这些点不得重合或共线。
+	The three points line up: they make no plane.	三点共线：无法构成平面。
+	<3D Object Snap on>	<三维对象捕捉 开>
+	<3D Object Snap off>	<三维对象捕捉 关>
+	Preparing the 3D view…	正在准备三维视图…
+	Viewpoint	视点
+	3D View Benchmark	三维视图基准测试

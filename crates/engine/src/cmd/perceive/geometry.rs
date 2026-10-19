@@ -154,16 +154,27 @@ pub(super) fn run_walls(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------------- plan.openings ----------------
 
-pub(super) fn run_openings(s: &mut Session, p: &Value) -> Result<Value> {
-    let (d, ents) = objects(s)?;
-    let k = units_per_inch(d);
+/// A door or window found in the plan.
+pub(crate) struct Opening {
+    pub kind: &'static str,
+    /// A door swing's hinge (the arc's centre) or a block's insertion point.
+    pub at: Vec2,
+    pub width: f64,
+    pub layer: String,
+    pub handle: cadaddy_doc::Handle,
+    /// A door swing's degrees and the arc's two ends.
+    pub swing: Option<(f64, [Vec2; 2])>,
+    pub block: Option<String>,
+    pub confidence: f64,
+}
+
+/// Door swings (arcs of 60–100° with a door's radius, 16"–54", ideally with a leaf line from the
+/// hinge to an end) and door and window blocks (by name).
+pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Seg], k: f64) -> Vec<Opening> {
     let (rmin, rmax) = (16.0 * k, 54.0 * k);
-    let segs = segments(&ents);
     let mut items = Vec::new();
-    for e in &ents {
+    for e in ents {
         match &e.kind {
-            // A door swing: a quarter-ish arc of a door's width, ideally with its leaf drawn from
-            // the hinge (the arc's centre) to one end.
             EntityKind::Arc(a) => {
                 let mut sweep = (a.end - a.start).rem_euclid(std::f64::consts::TAU);
                 if sweep < 1e-9 {
@@ -182,12 +193,17 @@ pub(super) fn run_openings(s: &mut Session, p: &Value) -> Result<Value> {
                 });
                 let on_door_layer = e.common.layer.to_ascii_uppercase().contains("DOOR");
                 let confidence = (0.5 + 0.3 * f64::from(u8::from(leaf)) + 0.2 * f64::from(u8::from(on_door_layer))).min(1.0);
-                items.push(json!({
-                    "kind": "door", "at": pt(c), "width": round(a.radius), "layer": e.common.layer, "handle": e.handle.hex(),
-                    "swing": round(deg), "confidence": round(confidence),
-                }));
+                items.push(Opening {
+                    kind: "door",
+                    at: c,
+                    width: a.radius,
+                    layer: e.common.layer.clone(),
+                    handle: e.handle,
+                    swing: Some((deg, ends)),
+                    block: None,
+                    confidence,
+                });
             }
-            // Door and window blocks, by name.
             EntityKind::Insert(i) => {
                 let name = i.block.to_ascii_uppercase();
                 let kind = if name.contains("DOOR") || name.starts_with("DR") {
@@ -199,14 +215,41 @@ pub(super) fn run_openings(s: &mut Session, p: &Value) -> Result<Value> {
                 };
                 let b = cadaddy_doc::entity_bounds(d, e, 0);
                 let width = if b.is_empty() { 0.0 } else { b.width().max(b.height()) };
-                items.push(json!({
-                    "kind": kind, "at": pt(i.insert.xy()), "width": round(width), "layer": e.common.layer, "handle": e.handle.hex(),
-                    "block": i.block, "confidence": 0.75,
-                }));
+                items.push(Opening {
+                    kind,
+                    at: i.insert.xy(),
+                    width,
+                    layer: e.common.layer.clone(),
+                    handle: e.handle,
+                    swing: None,
+                    block: Some(i.block.clone()),
+                    confidence: 0.75,
+                });
             }
             _ => {}
         }
     }
+    items
+}
+
+pub(super) fn run_openings(s: &mut Session, p: &Value) -> Result<Value> {
+    let (d, ents) = objects(s)?;
+    let segs = segments(&ents);
+    let items = openings(d, &ents, &segs, units_per_inch(d))
+        .into_iter()
+        .map(|o| {
+            let mut v = json!({"kind": o.kind, "at": pt(o.at), "width": round(o.width), "layer": o.layer, "handle": o.handle.hex(), "confidence": round(o.confidence)});
+            if let Some(obj) = v.as_object_mut() {
+                if let Some((deg, _)) = o.swing {
+                    obj.insert("swing".into(), json!(round(deg)));
+                }
+                if let Some(b) = o.block {
+                    obj.insert("block".into(), json!(b));
+                }
+            }
+            v
+        })
+        .collect();
     Ok(page(items, p))
 }
 

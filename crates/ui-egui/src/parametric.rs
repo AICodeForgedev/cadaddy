@@ -288,7 +288,16 @@ pub fn draw_overlay(app: &mut CadApp, ui: &mut egui::Ui, painter: &egui::Painter
             (true, Some(v)) => cadaddy_engine::units::format_distance(v, lu, lp),
             _ => c.expr.clone(),
         };
-        let label = format!("{}={}", c.name, label_value);
+        // CONSTRAINTNAMEFORMAT: the name, the value, or both.
+        let label = match set.name_format {
+            0 => c.name.clone(),
+            1 => match value {
+                Some(v) if c.kind == ConstraintKind::Angular => format!("{}°", trim_num(v, 2)),
+                Some(v) => cadaddy_engine::units::format_distance(v, lu, lp),
+                None => label_value,
+            },
+            _ => format!("{}={}", c.name, label_value),
+        };
         let ok = g.is_none_or(|g| g.satisfied);
         let col = if ok { dim_c } else { Color32::from_rgb(0xff, 0x8a, 0x6a) };
         let st = Stroke::new(1.0, col);
@@ -561,7 +570,20 @@ struct Row {
     description: String,
 }
 
-/// The Parameters Manager (PARAMETERS): name / expression / value; edit, add, delete.
+/// Which parameters the Parameters Manager lists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Show {
+    #[default]
+    All,
+    Dimensional,
+    User,
+}
+
+/// The Parameters Manager (PARAMETERS): name / expression / value / type or description of the
+/// dimensional constraint parameters and the user parameters, filtered by kind and by name.
+/// Names, expressions and user parameters' descriptions are edited in place; Delete removes a
+/// parameter (a dimensional one with its constraint), refused while another one uses it — the
+/// reason shows in the window.
 pub fn parameters_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = Tokens::get();
     let rows: Vec<Row> = app
@@ -572,12 +594,16 @@ pub fn parameters_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool)
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
     let filter_id = egui::Id::new("par_filter");
+    let show_id = egui::Id::new("par_show");
+    let error_id = egui::Id::new("par_error");
     let mut filter = ctx.data_mut(|d| d.get_temp::<String>(filter_id)).unwrap_or_default();
+    let mut show = ctx.data_mut(|d| d.get_temp::<Show>(show_id)).unwrap_or_default();
+    let mut error = ctx.data_mut(|d| d.get_temp::<String>(error_id)).unwrap_or_default();
     let mut action: Option<Value> = None;
     egui::Window::new(crate::tl!("Parameters Manager"))
         .id(egui::Id::new("Parameters Manager"))
         .open(open)
-        .default_size(vec2(560.0, 300.0))
+        .default_size(vec2(640.0, 320.0))
         .resizable(true)
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
@@ -590,25 +616,46 @@ pub fn parameters_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool)
                     }
                     action = Some(json!({ "name": format!("user{n}"), "expr": "1" }));
                 }
+                egui::ComboBox::from_id_salt("par_show")
+                    .selected_text(match show {
+                        Show::All => crate::tl!("All"),
+                        Show::Dimensional => crate::tl!("Dimensional Constraint Parameters"),
+                        Show::User => crate::tl!("User Parameters"),
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut show, Show::All, crate::tl!("All"));
+                        ui.selectable_value(&mut show, Show::Dimensional, crate::tl!("Dimensional Constraint Parameters"));
+                        ui.selectable_value(&mut show, Show::User, crate::tl!("User Parameters"));
+                    });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add(egui::TextEdit::singleline(&mut filter).hint_text(crate::tl!("Search for parameter")).desired_width(170.0));
                 });
             });
+            if !error.is_empty() {
+                ui.label(egui::RichText::new(&error).color(Color32::from_rgb(0xff, 0x8a, 0x6a)));
+            }
             ui.separator();
             let f = filter.to_ascii_lowercase();
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 egui::Grid::new("par_grid").striped(true).num_columns(5).spacing(vec2(12.0, 4.0)).min_col_width(60.0).show(ui, |ui| {
-                    for h in ["Name", "Expression", "Value", "Type", ""] {
+                    for h in ["Name", "Expression", "Value", "Description", ""] {
                         ui.label(egui::RichText::new(crate::i18n::t(h)).strong());
                     }
                     ui.end_row();
-                    for (kind, title) in [("dimensional", "Dimensional Constraint Parameters"), ("user", "User Parameters")] {
+                    for (kind, title, wanted) in
+                        [("dimensional", "Dimensional Constraint Parameters", Show::Dimensional), ("user", "User Parameters", Show::User)]
+                    {
+                        if show != Show::All && show != wanted {
+                            continue;
+                        }
                         let group: Vec<&Row> =
                             rows.iter().filter(|r| r.kind == kind && (f.is_empty() || r.name.to_ascii_lowercase().contains(&f))).collect();
                         ui.label(egui::RichText::new(crate::i18n::t(title)).color(t.text_dim).small());
                         ui.end_row();
                         for r in group {
-                            ui.label(&r.name);
+                            if let Some(new) = name_field(ui, egui::Id::new(("par_name", &r.name)), &r.name) {
+                                action = Some(json!({ "rename": [r.name, new] }));
+                            }
                             let id = egui::Id::new(("par_expr", &r.name));
                             if let Some(v) = expr_field(ui, id, &r.expr) {
                                 action = Some(json!({ "name": r.name, "expr": v }));
@@ -620,15 +667,15 @@ pub fn parameters_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool)
                                 }
                                 _ => ui.label(""),
                             };
-                            ui.label(
-                                egui::RichText::new(crate::i18n::t(if kind == "user" { "User" } else { r.description.as_str() })).color(t.text_dim),
-                            );
                             if kind == "user" {
-                                if ui.small_button(crate::tl!("Delete")).clicked() {
-                                    action = Some(json!({ "delete": r.name }));
+                                if let Some(d) = name_field(ui, egui::Id::new(("par_desc", &r.name)), &r.description) {
+                                    action = Some(json!({ "name": r.name, "description": d }));
                                 }
                             } else {
-                                ui.label("");
+                                ui.label(egui::RichText::new(crate::i18n::t(r.description.as_str())).color(t.text_dim));
+                            }
+                            if ui.small_button(crate::tl!("Delete")).clicked() {
+                                action = Some(json!({ "delete": r.name }));
                             }
                             ui.end_row();
                         }
@@ -636,10 +683,31 @@ pub fn parameters_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool)
                 });
             });
         });
-    ctx.data_mut(|d| d.insert_temp(filter_id, filter));
     if let Some(p) = action {
-        let _ = app.run("parameters", p);
+        // The reason a change is refused stays in the window (and the command line).
+        error = match app.run("parameters", p) {
+            Ok(_) => String::new(),
+            Err(e) => e.trim_start_matches("invalid parameters for `parameters`: ").to_string(),
+        };
     }
+    ctx.data_mut(|d| {
+        d.insert_temp(filter_id, filter);
+        d.insert_temp(show_id, show);
+        d.insert_temp(error_id, error);
+    });
+}
+
+/// A name or description field committing on Enter / focus loss when changed (empty allowed
+/// for a description; a name never commits empty).
+fn name_field(ui: &mut egui::Ui, id: egui::Id, value: &str) -> Option<String> {
+    let mut buf = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| value.to_string());
+    let resp = ui.add(egui::TextEdit::singleline(&mut buf).id(id.with("te")).desired_width(110.0));
+    if ui.memory(|m| m.has_focus(id.with("te"))) {
+        ui.data_mut(|d| d.insert_temp(id, buf.clone()));
+    } else {
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    (resp.lost_focus() && buf.trim() != value).then(|| buf.trim().to_string())
 }
 
 /// A text field committing on Enter / focus loss when changed.
@@ -665,6 +733,21 @@ mod tests {
         let p = intersect((Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)), (Vec2::new(5.0, -1.0), Vec2::new(5.0, 3.0)));
         assert!(p.is_some_and(|p| (p.x - 5.0).abs() < 1e-9 && p.y.abs() < 1e-9));
         assert!(intersect((Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0)), (Vec2::new(0.0, 1.0), Vec2::new(1.0, 1.0))).is_none());
+    }
+
+    #[test]
+    fn the_parameters_manager_lists_both_kinds() {
+        let mut app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+        app.run("line", json!({ "points": [[0, 0], [10, 0]] })).unwrap();
+        let h = app.session.doc().unwrap().model.iter().last().map(|e| e.handle.hex()).unwrap();
+        app.run("dclinear", json!({ "h1": h, "value": 10, "name": "d1" })).unwrap();
+        app.run("parameters", json!({ "name": "w", "expr": "d1*2" })).unwrap();
+        let ctx = egui::Context::default();
+        let mut open = true;
+        ctx.run_ui(egui::RawInput::default(), |ui| parameters_dialog(&mut app, ui.ctx(), &mut open)).drop_without_applying_deltas();
+        assert!(open);
+        // A refused delete leaves its reason for the window.
+        assert!(app.run("parameters", json!({ "delete": "d1" })).unwrap_err().contains("used by `w`"));
     }
 
     #[test]

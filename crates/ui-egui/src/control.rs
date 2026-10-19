@@ -395,7 +395,10 @@ pub fn inspect(app: &CadApp, ctx: &egui::Context) -> Value {
         "snap": app.canvas.snap.map(|s| json!({"point": [s.point.x, s.point.y], "mode": s.name})),
         "session": app.session.summary(),
         "closePrompt": app.close_prompt(),
-        "perf": {"frameMs": app.frame_ms, "buildMs": app.canvas.build_ms, "drawMs": app.canvas.draw_ms, "meshMs": app.canvas.mesh_ms, "building": app.canvas.building(), "renderer": if app.canvas.gpu.is_some() { "gpu" } else { "cpu" }, "prims": app.canvas.list.as_ref().map(|l| l.prims.len()), "slowest": app.slowest},
+        // The 3D view's numbers (triangles, instances, chunks, bytes, timings, the last
+        // `ui.bench3d` orbit's frames per second).
+        "perf3d": serde_json::to_value(app.canvas.shade.stats).unwrap_or_default(),
+        "perf": {"frameMs": app.frame_ms, "buildMs": app.canvas.build_ms, "drawMs": app.canvas.draw_ms, "meshMs": app.canvas.mesh_ms, "building": app.canvas.building(), "renderer": if app.canvas.gpu.is_some() { "gpu" } else { "cpu" }, "prims": app.canvas.list.as_ref().map(|l| l.prims.len())},
     })
 }
 

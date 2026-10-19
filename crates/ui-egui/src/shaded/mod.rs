@@ -4,9 +4,11 @@
 //! share — and shown under the canvas's overlays (grid, highlights, grips, cursor).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cadaddy_color::Rgb;
 use cadaddy_geom::Vec3;
+use cadaddy_render::model3::{self, Model3};
 use cadaddy_render::shade::{self, Scene, ShadeView, VisualStyle};
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::util::DeviceExt;
@@ -14,7 +16,7 @@ use egui_wgpu::wgpu::util::DeviceExt;
 use crate::CadApp;
 use crate::canvas::Xf;
 
-/// What a scene was built from: the drawing (its allocation and revision) and the detail band.
+/// What a model was built from: the drawing (its allocation and revision) and the detail band.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SceneKey {
     doc: usize,
@@ -22,16 +24,76 @@ struct SceneKey {
     band: i32,
 }
 
+/// A model being built off the UI thread, and how far it has got.
+struct Pending {
+    key: SceneKey,
+    progress: Arc<AtomicUsize>,
+    total: Arc<AtomicUsize>,
+    started: std::time::Instant,
+    #[cfg(not(target_arch = "wasm32"))]
+    handle: std::thread::JoinHandle<Model3>,
+}
+
+/// What the 3D view costs and draws (the control channel's `ui.perf3d`).
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Stats {
+    /// Triangles in the model, instances counted as placed.
+    pub tris_total: usize,
+    /// Triangles the last frame drew (levels of detail and culling applied).
+    pub tris_drawn: usize,
+    pub instances: usize,
+    pub instances_drawn: usize,
+    pub prototypes: usize,
+    pub chunks: usize,
+    pub chunks_drawn: usize,
+    /// Bytes the model takes in memory, and in GPU buffers.
+    pub model_bytes: usize,
+    pub gpu_bytes: usize,
+    /// Milliseconds the last model took to build; the last frame's encoding; the average time
+    /// between frames lately.
+    pub build_ms: f64,
+    pub encode_ms: f64,
+    pub frame_ms: f64,
+    /// A model is being built: the share done (0 … 1).
+    pub building: Option<f64>,
+    /// The last orbit benchmark ([`bench`]): frames per second and frames drawn.
+    pub bench_fps: Option<f64>,
+    pub bench_frames: u32,
+}
+
+/// An orbit benchmark under way: frames left, the azimuth reached, when it started.
+#[derive(Clone, Copy, Debug)]
+struct Bench {
+    left: u32,
+    azimuth: f64,
+    frames: u32,
+    start: std::time::Instant,
+}
+
+/// Start an orbit benchmark of `frames` frames: each turns the view 2° about Z (at 30° up), as
+/// fast as frames are drawn; [`Stats::bench_fps`] holds the result once done.
+pub fn bench(app: &mut CadApp, frames: u32) {
+    app.canvas.shade.bench = Some(Bench { left: frames.clamp(1, 100_000), azimuth: 0.0, frames: 0, start: std::time::Instant::now() });
+    app.canvas.shade.stats.bench_fps = None;
+}
+
 /// The shaded view's caches.
 #[derive(Default)]
 pub struct State {
-    scene: Option<(SceneKey, Arc<Scene>)>,
+    model: Option<(SceneKey, Arc<Model3>)>,
+    pending: Option<Pending>,
+    /// The model as one scene, for the CPU rasterizer.
+    flat: Option<(SceneKey, Arc<Scene>)>,
     gpu: Option<Gpu>,
-    /// What the GPU buffers hold: scene, style and background.
+    /// What the GPU buffers hold: model, style and background.
     uploaded: Option<(SceneKey, VisualStyle, [u8; 3])>,
     texture: Option<egui::TextureId>,
     /// The CPU path's last image and what it showed.
     cpu: Option<(String, egui::TextureHandle)>,
+    pub stats: Stats,
+    last_frame: Option<std::time::Instant>,
+    bench: Option<Bench>,
 }
 
 /// The visual style the Model tab shows in, when it is a 3D one.
@@ -52,19 +114,40 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
     // Curves to about half a pixel, in power-of-two bands so zooming rebuilds rarely.
     let px_world = 1.0 / (xf.scale * f64::from(ppp)).max(1e-300);
     let band = (px_world * 0.5).log2().floor().clamp(-60.0, 60.0) as i32;
-    let Some(scene) = scene(app, band) else { return false };
+    let Some((key, model)) = self::model(app, band) else {
+        // The first model is still being built.
+        building_note(app, ui, painter, xf);
+        return false;
+    };
+    let now = std::time::Instant::now();
+    let st = &mut app.canvas.shade;
+    if let Some(last) = st.last_frame {
+        let dt = now.duration_since(last).as_secs_f64() * 1000.0;
+        // Lately: a running average that forgets a pause.
+        st.stats.frame_ms = if dt > 1000.0 || st.stats.frame_ms == 0.0 { dt.min(1000.0) } else { st.stats.frame_ms * 0.9 + dt * 0.1 };
+    }
+    st.last_frame = Some(now);
     let height = f64::from(xf.rect.height()) / xf.scale.max(1e-300);
     let view = ShadeView::new(xf.proj, xf.center, height, w, h);
+    let mut drawn = false;
     if let Some(rs) = app.wgpu_rs.clone() {
         let st = &mut app.canvas.shade;
         let g = st.gpu.get_or_insert_with(|| Gpu::new(&rs.device));
-        let key = st.scene.as_ref().map(|(k, _)| *k);
-        let up = key.map(|k| (k, style, [bg.0, bg.1, bg.2]));
-        if up.is_some() && st.uploaded != up {
-            g.upload(&rs.device, &rs.queue, &scene, style, bg);
+        let up = Some((key, style, [bg.0, bg.1, bg.2]));
+        if st.uploaded != up {
+            g.upload(&rs.device, &rs.queue, &model, style, bg);
             st.uploaded = up;
         }
-        g.render(&rs.device, &rs.queue, &view, style, bg);
+        let t0 = std::time::Instant::now();
+        let vis = g.render(&rs.device, &rs.queue, &view, style, bg);
+        st.stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        st.stats.tris_drawn = vis.tris;
+        st.stats.instances_drawn = vis.instances.iter().map(|g| g.2.len()).sum();
+        st.stats.chunks_drawn = vis.chunks.len();
+        // Buffers and textures, plus the render targets (4× colour and depth, the resolved image)
+        // and the shadow map.
+        let (tw, th) = (u64::from(w), u64::from(h));
+        st.stats.gpu_bytes = g.bytes + (tw * th * (u64::from(SAMPLES) * 8 + 4)) as usize + (u64::from(SHADOW_PX) * u64::from(SHADOW_PX) * 4) as usize;
         if let Some(tv) = g.view() {
             let mut r = rs.renderer.write();
             match st.texture {
@@ -74,50 +157,140 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
         }
         if let Some(id) = st.texture {
             painter.image(id, xf.rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
-            return true;
+            drawn = true;
         }
     }
-    // The CPU rasterizer, redrawn when the view, scene or style changes.
-    let key = format!(
-        "{:?}|{:?}|{:?}|{}x{}|{:?}|{:?}|{:?}",
-        app.canvas.shade.scene.as_ref().map(|(k, _)| *k),
-        view.center,
-        view.height,
-        w,
-        h,
-        view.dir,
-        view.right,
-        (style, bg)
-    );
-    let fresh = app.canvas.shade.cpu.as_ref().is_some_and(|(k, _)| *k == key);
-    if !fresh {
-        let r = shade::rasterize(&scene, &view, style, bg);
-        let img = egui::ColorImage::from_rgba_unmultiplied([r.width as usize, r.height as usize], &r.rgba);
-        let tex = ui.ctx().load_texture("shaded_view", img, egui::TextureOptions::LINEAR);
-        app.canvas.shade.cpu = Some((key, tex));
+    if !drawn {
+        // The CPU rasterizer, redrawn when the view, model or style changes.
+        let flat = match &app.canvas.shade.flat {
+            Some((k, f)) if *k == key => Arc::clone(f),
+            _ => {
+                let f = Arc::new(model.flatten());
+                app.canvas.shade.flat = Some((key, Arc::clone(&f)));
+                f
+            }
+        };
+        let ck = format!("{:?}|{:?}|{:?}|{}x{}|{:?}|{:?}|{:?}", key, view.center, view.height, w, h, view.dir, view.right, (style, bg));
+        let fresh = app.canvas.shade.cpu.as_ref().is_some_and(|(k, _)| *k == ck);
+        if !fresh {
+            let r = shade::rasterize(&flat, &view, style, bg);
+            let img = egui::ColorImage::from_rgba_unmultiplied([r.width as usize, r.height as usize], &r.rgba);
+            let tex = ui.ctx().load_texture("shaded_view", img, egui::TextureOptions::LINEAR);
+            app.canvas.shade.cpu = Some((ck, tex));
+        }
+        if let Some((_, tex)) = &app.canvas.shade.cpu {
+            painter.image(tex.id(), xf.rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+            drawn = true;
+        }
     }
-    if let Some((_, tex)) = &app.canvas.shade.cpu {
-        painter.image(tex.id(), xf.rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
-        return true;
+    building_note(app, ui, painter, xf);
+    // An orbit benchmark: the next frame's view, and another frame straight away.
+    if let Some(mut b) = app.canvas.shade.bench {
+        b.frames += 1;
+        b.left = b.left.saturating_sub(1);
+        b.azimuth += 2.0;
+        if b.left == 0 {
+            let secs = b.start.elapsed().as_secs_f64().max(1e-9);
+            app.canvas.shade.stats.bench_fps = Some(f64::from(b.frames) / secs);
+            app.canvas.shade.stats.bench_frames = b.frames;
+            app.canvas.shade.bench = None;
+        } else {
+            app.canvas.shade.bench = Some(b);
+            let _ = app.session.execute("vpoint", &serde_json::json!({ "azimuth": b.azimuth, "elevation": 30.0 }));
+            ui.ctx().request_repaint();
+        }
     }
-    false
+    drawn
 }
 
-/// The model's scene at detail `band` (curves to 2^band drawing units), rebuilt when the drawing
-/// changes.
-fn scene(app: &mut CadApp, band: i32) -> Option<Arc<Scene>> {
+/// While a model is built, a note in the view's corner with how far it has got.
+fn building_note(app: &CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf) {
+    let Some(share) = app.canvas.shade.stats.building else { return };
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+    let t = crate::theme::Tokens::get();
+    let text = format!("{} {:.0}%", crate::i18n::t("Preparing the 3D view…"), share * 100.0);
+    let at = egui::pos2(xf.rect.right() - 12.0, xf.rect.bottom() - 12.0);
+    painter.text(at, egui::Align2::RIGHT_BOTTOM, text, egui::FontId::proportional(13.0), t.text);
+}
+
+/// The model at detail `band` (curves to 2^band drawing units). A changed drawing or band starts
+/// a new build off the UI thread; until it is done the last model stays on screen (`None` before
+/// the first is ready).
+fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     let st = app.session.state().ok()?;
     let key = SceneKey { doc: Arc::as_ptr(&st.doc) as usize, revision: st.revision, band };
-    if let Some((k, s)) = &app.canvas.shade.scene
-        && *k == key
-    {
-        return Some(Arc::clone(s));
+    let doc = Arc::clone(&st.doc);
+    let shade_st = &mut app.canvas.shade;
+    if shade_st.model.as_ref().is_some_and(|(k, _)| *k == key) {
+        shade_st.stats.building = None;
+        return shade_st.model.clone();
     }
-    let t = crate::theme::Tokens::get();
-    let bg = Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b());
-    let s = Arc::new(shade::scene(&st.doc, &cadaddy_doc::Space::Model, 2f64.powi(band), bg));
-    app.canvas.shade.scene = Some((key, Arc::clone(&s)));
-    Some(s)
+    let tcol = crate::theme::Tokens::get().canvas;
+    let bg = Rgb(tcol.r(), tcol.g(), tcol.b());
+    let tol = 2f64.powi(band);
+    // A build for another key is dropped (it finishes in the background and is ignored).
+    if shade_st.pending.as_ref().is_some_and(|p| p.key != key) {
+        shade_st.pending = None;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if shade_st.pending.is_none() {
+            let (progress, total) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(1)));
+            let (p2, t2) = (Arc::clone(&progress), Arc::clone(&total));
+            let handle = std::thread::Builder::new()
+                .name("cadaddy-3d-model".into())
+                .spawn(move || model3::build(&doc, &cadaddy_doc::Space::Model, tol, bg, &p2, &t2))
+                .ok();
+            match handle {
+                Some(handle) => shade_st.pending = Some(Pending { key, progress, total, started: std::time::Instant::now(), handle }),
+                // No thread: build here.
+                None => {
+                    let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
+                    let started = std::time::Instant::now();
+                    let m = Arc::new(model3::build(&*st_doc(app)?, &cadaddy_doc::Space::Model, tol, bg, &p, &t));
+                    return Some(finish(app, key, m, started));
+                }
+            }
+        }
+        let done = app.canvas.shade.pending.as_ref().is_some_and(|p| p.handle.is_finished());
+        if done
+            && let Some(p) = app.canvas.shade.pending.take()
+            && let Ok(m) = p.handle.join()
+        {
+            return Some(finish(app, key, Arc::new(m), p.started));
+        }
+        if let Some(p) = &app.canvas.shade.pending {
+            let total = p.total.load(Ordering::Relaxed).max(1);
+            app.canvas.shade.stats.building = Some((p.progress.load(Ordering::Relaxed) as f64 / total as f64).clamp(0.0, 1.0));
+        }
+        app.canvas.shade.model.clone()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
+        let started = std::time::Instant::now();
+        let m = Arc::new(model3::build(&doc, &cadaddy_doc::Space::Model, tol, bg, &p, &t));
+        Some(finish(app, key, m, started))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn st_doc(app: &CadApp) -> Option<Arc<cadaddy_doc::Drawing>> {
+    app.session.state().ok().map(|st| Arc::clone(&st.doc))
+}
+
+/// Keep a finished model and its numbers.
+fn finish(app: &mut CadApp, key: SceneKey, m: Arc<Model3>, started: std::time::Instant) -> (SceneKey, Arc<Model3>) {
+    let st = &mut app.canvas.shade;
+    st.stats.build_ms = started.elapsed().as_secs_f64() * 1000.0;
+    st.stats.tris_total = m.total_tris();
+    st.stats.instances = m.instances.len();
+    st.stats.prototypes = m.protos.len();
+    st.stats.chunks = m.chunks.len();
+    st.stats.model_bytes = m.bytes();
+    st.stats.building = None;
+    st.model = Some((key, Arc::clone(&m)));
+    (key, m)
 }
 
 /// Display values (sRGB-encoded by the shader), as egui shows a texture.
@@ -127,6 +300,8 @@ const SAMPLES: u32 = 4;
 /// Position (3 × f32, from the scene's origin) + normal (3 × f32) + sRGB colour (4 × u8) +
 /// texture coordinates (2 × f32) + material (roughness, metallic, texture layer, opacity: 4 × f32).
 const VERTEX_SIZE: u64 = 52;
+/// An instance's placement: three rows of four f32.
+const INSTANCE_SIZE: u64 = 48;
 /// The frame's uniform block (see `shader.wgsl`).
 const UNIFORM_SIZE: u64 = 1328;
 /// Texture array layer size and most layers.
@@ -144,7 +319,6 @@ struct Target {
 
 struct Buffer {
     buffer: wgpu::Buffer,
-    count: u32,
 }
 
 /// The shaded view's GPU renderer.
@@ -166,6 +340,16 @@ struct Gpu {
     /// See-through triangles (drawn after the others, blended).
     clear_tris: Option<Buffer>,
     lines: Option<Buffer>,
+    /// Vertex ranges in the three buffers (opaque, see-through, lines): each base chunk's, and
+    /// each prototype's at each level of detail.
+    chunk_ranges: Vec<[std::ops::Range<u32>; 3]>,
+    proto_ranges: Vec<[[std::ops::Range<u32>; 3]; 3]>,
+    /// The frame's instance placements (slot 0: the identity, for the base geometry).
+    instances: Option<wgpu::Buffer>,
+    instance_cap: u64,
+    model: Option<Arc<Model3>>,
+    /// Bytes in the GPU buffers.
+    bytes: usize,
     /// The scene's centre (vertices are stored relative to it, keeping f32 precision) and its
     /// extent, for the depth range.
     origin: Vec3,
@@ -223,7 +407,11 @@ impl Gpu {
         });
         const ATTRS: [wgpu::VertexAttribute; 5] =
             wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Float32x2, 4 => Float32x4];
-        let vb = [Some(wgpu::VertexBufferLayout { array_stride: VERTEX_SIZE, step_mode: wgpu::VertexStepMode::Vertex, attributes: &ATTRS })];
+        const INST: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![5 => Float32x4, 6 => Float32x4, 7 => Float32x4];
+        let vb = [
+            Some(wgpu::VertexBufferLayout { array_stride: VERTEX_SIZE, step_mode: wgpu::VertexStepMode::Vertex, attributes: &ATTRS }),
+            Some(wgpu::VertexBufferLayout { array_stride: INSTANCE_SIZE, step_mode: wgpu::VertexStepMode::Instance, attributes: &INST }),
+        ];
         let pipeline = |label: &str, vs: &str, fs: &str, topology: wgpu::PrimitiveTopology, write_depth: bool, blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -346,6 +534,12 @@ impl Gpu {
             tris: None,
             clear_tris: None,
             lines: None,
+            chunk_ranges: Vec::new(),
+            proto_ranges: Vec::new(),
+            instances: None,
+            instance_cap: 0,
+            model: None,
+            bytes: 0,
             origin: Vec3::ZERO,
             radius: 1.0,
             lighting: None,
@@ -353,55 +547,83 @@ impl Gpu {
         }
     }
 
-    /// The scene's triangles (none for Wireframe), the lines `style` shows, and its textures.
-    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &Scene, style: VisualStyle, bg: Rgb) {
-        let pts = scene.tris.iter().flat_map(|t| t.p).chain(scene.lines.iter().flat_map(|l| [l.a, l.b]));
-        let (mut lo, mut hi) = (Vec3::new(f64::MAX, f64::MAX, f64::MAX), Vec3::new(f64::MIN, f64::MIN, f64::MIN));
-        for p in pts {
-            lo = Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
-            hi = Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
-        }
-        self.origin = if lo.x <= hi.x { (lo + hi) * 0.5 } else { Vec3::ZERO };
-        self.radius = if lo.x <= hi.x { ((hi - lo).len() * 0.5).max(1e-9) } else { 1.0 };
-        let physical = style == VisualStyle::Realistic && scene.lighting.is_some();
-        self.lighting = if physical { scene.lighting.clone() } else { None };
-        let o = self.origin;
-        let rel = |p: Vec3| [(p.x - o.x) as f32, (p.y - o.y) as f32, (p.z - o.z) as f32];
-        let srgb = |c: f32| (c.max(0.0).powf(1.0 / 2.2) * 255.0).round().clamp(0.0, 255.0) as u8;
-        let layers = scene.textures.len().min(MAX_LAYERS);
-        let (mut tris, mut clear): (Vec<u8>, Vec<u8>) = (Vec::new(), Vec::new());
-        if style != VisualStyle::Wireframe {
-            tris.reserve(scene.tris.len() * 3 * VERTEX_SIZE as usize);
-            for t in &scene.tris {
-                let n = (t.p[1] - t.p[0]).cross(t.p[2] - t.p[0]).normalized();
-                let n = if n.is_finite() { [n.x as f32, n.y as f32, n.z as f32] } else { [0.0, 0.0, 1.0] };
-                let surface = scene.surfaces.get(t.mat as usize).filter(|_| physical);
-                let (color, m) = match surface {
-                    Some(s) => {
-                        let layer = s.texture.filter(|i| (*i as usize) < layers).map_or(-1.0, |i| i as f32);
-                        (Rgb(srgb(s.base[0]), srgb(s.base[1]), srgb(s.base[2])), [s.roughness, s.metallic, layer, s.opacity])
-                    }
-                    None => (t.color, [0.6, 0.0, -1.0, 1.0]),
-                };
-                let out = if m[3] < 0.99 { &mut clear } else { &mut tris };
-                for (p, uv) in t.p.iter().zip(t.uv) {
-                    push_vertex(out, rel(*p), n, color, uv, m);
-                }
-            }
+    /// The model's triangles (none for Wireframe), the lines `style` shows, and the textures:
+    /// the base chunk by chunk, then each prototype at each level of detail, with the ranges
+    /// each takes.
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, model: &Arc<Model3>, style: VisualStyle, bg: Rgb) {
+        let b = model.bounds;
+        self.origin = if b.is_empty() { Vec3::ZERO } else { b.center() };
+        self.radius = if b.is_empty() { 1.0 } else { (b.diag() * 0.5).max(1e-9) };
+        let physical = style == VisualStyle::Realistic && model.base.lighting.is_some();
+        self.lighting = if physical { model.base.lighting.clone() } else { None };
+        // The textures of every scene, one layer each; each scene's numbering offset.
+        let scenes: Vec<&Scene> = std::iter::once(&model.base).chain(model.protos.iter().flat_map(|p| p.lods.iter())).collect();
+        let mut layers: Vec<&Arc<cadaddy_render::images::Raster>> = Vec::new();
+        let mut offsets = Vec::with_capacity(scenes.len());
+        for sc in &scenes {
+            offsets.push(layers.len());
+            layers.extend(sc.textures.iter().take(MAX_LAYERS.saturating_sub(layers.len())));
         }
         let edges = matches!(style, VisualStyle::Wireframe | VisualStyle::Hidden | VisualStyle::ShadedEdges);
         let dark = edge_ink(bg);
-        let mut lines: Vec<u8> = Vec::new();
-        for l in scene.lines.iter().filter(|l| !l.edge || edges) {
-            let c = if l.edge && style == VisualStyle::ShadedEdges { dark } else { l.color };
-            push_vertex(&mut lines, rel(l.a), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0]);
-            push_vertex(&mut lines, rel(l.b), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0]);
-        }
+        let srgb = |c: f32| (c.max(0.0).powf(1.0 / 2.2) * 255.0).round().clamp(0.0, 255.0) as u8;
+        let (mut tris, mut clear, mut lines): (Vec<u8>, Vec<u8>, Vec<u8>) = (Vec::new(), Vec::new(), Vec::new());
+        let count = |v: &Vec<u8>| (v.len() as u64 / VERTEX_SIZE) as u32;
+        // One scene's triangles and lines in the given ranges into the buffers: their vertex ranges.
+        let mut emit = |sc: &Scene, offset: usize, tr: std::ops::Range<usize>, lr: std::ops::Range<usize>, o: Vec3| -> [std::ops::Range<u32>; 3] {
+            let rel = |p: Vec3| [(p.x - o.x) as f32, (p.y - o.y) as f32, (p.z - o.z) as f32];
+            let (t0, c0, l0) = (count(&tris), count(&clear), count(&lines));
+            if style != VisualStyle::Wireframe {
+                for t in sc.tris.get(tr).unwrap_or(&[]) {
+                    let n = (t.p[1] - t.p[0]).cross(t.p[2] - t.p[0]).normalized();
+                    let n = if n.is_finite() { [n.x as f32, n.y as f32, n.z as f32] } else { [0.0, 0.0, 1.0] };
+                    let surface = sc.surfaces.get(t.mat as usize).filter(|_| physical);
+                    let (color, m) = match surface {
+                        Some(sm) => {
+                            let layer = sm.texture.map(|i| i as usize + offset).filter(|i| *i < layers.len()).map_or(-1.0, |i| i as f32);
+                            (Rgb(srgb(sm.base[0]), srgb(sm.base[1]), srgb(sm.base[2])), [sm.roughness, sm.metallic, layer, sm.opacity])
+                        }
+                        None => (t.color, [0.6, 0.0, -1.0, 1.0]),
+                    };
+                    let out = if m[3] < 0.99 { &mut clear } else { &mut tris };
+                    for (p, uv) in t.p.iter().zip(t.uv) {
+                        push_vertex(out, rel(*p), n, color, uv, m);
+                    }
+                }
+            }
+            for l in sc.lines.get(lr).unwrap_or(&[]).iter().filter(|l| !l.edge || edges) {
+                let c = if l.edge && style == VisualStyle::ShadedEdges { dark } else { l.color };
+                push_vertex(&mut lines, rel(l.a), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0]);
+                push_vertex(&mut lines, rel(l.b), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0]);
+            }
+            [t0..count(&tris), c0..count(&clear), l0..count(&lines)]
+        };
+        let o = self.origin;
+        let chunk_ranges: Vec<[std::ops::Range<u32>; 3]> =
+            model.chunks.iter().map(|c| emit(&model.base, 0, c.tris.clone(), c.lines.clone(), o)).collect();
+        let mut k = 1;
+        let proto_ranges: Vec<[[std::ops::Range<u32>; 3]; 3]> = model
+            .protos
+            .iter()
+            .map(|p| {
+                let r = [0, 1, 2].map(|l| {
+                    let sc = &p.lods[l];
+                    let off = offsets.get(k + l).copied().unwrap_or(0);
+                    emit(sc, off, 0..sc.tris.len(), 0..sc.lines.len(), Vec3::ZERO)
+                });
+                k += 3;
+                r
+            })
+            .collect();
+        self.bytes = tris.len() + clear.len() + lines.len() + layers.len().max(1) * (TEX_PX * TEX_PX * 4) as usize;
         self.tris = buffer(device, "shaded_tris", &tris);
         self.clear_tris = buffer(device, "shaded_glass", &clear);
         self.lines = buffer(device, "shaded_lines", &lines);
+        self.chunk_ranges = chunk_ranges;
+        self.proto_ranges = proto_ranges;
+        self.model = Some(Arc::clone(model));
         // The textures, one layer each, resized to the layer size (at least one layer).
-        let count = layers.max(1) as u32;
+        let count = layers.len().max(1) as u32;
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("shaded_textures"),
             size: wgpu::Extent3d { width: TEX_PX, height: TEX_PX, depth_or_array_layers: count },
@@ -412,7 +634,7 @@ impl Gpu {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        for (i, r) in scene.textures.iter().take(layers).enumerate() {
+        for (i, r) in layers.iter().enumerate() {
             let Some(img) = image::RgbaImage::from_raw(r.width, r.height, r.rgba.clone()) else { continue };
             let px = image::imageops::resize(&img, TEX_PX, TEX_PX, image::imageops::FilterType::Triangle).into_raw();
             queue.write_texture(
@@ -439,6 +661,38 @@ impl Gpu {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.shadow_sampler) },
             ],
         }));
+    }
+
+    /// The frame's placements: the identity, then each visible group's instances in order
+    /// (relative to the origin); the groups' instance ranges.
+    fn placements(&self, model: &Model3, vis: &model3::Visible) -> (Vec<u8>, Vec<std::ops::Range<u32>>) {
+        let o = self.origin;
+        let mut out: Vec<u8> = Vec::with_capacity((1 + vis.instances.iter().map(|g| g.2.len()).sum::<usize>()) * INSTANCE_SIZE as usize);
+        let mut put = |rows: [[f64; 4]; 3]| {
+            for r in rows {
+                for x in r {
+                    out.extend_from_slice(&(x as f32).to_le_bytes());
+                }
+            }
+        };
+        put([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]);
+        let mut ranges = Vec::with_capacity(vis.instances.len());
+        let mut n = 1u32;
+        for (_, _, list) in &vis.instances {
+            let start = n;
+            for i in list {
+                let Some(inst) = model.instances.get(*i as usize) else { continue };
+                let m = &inst.m.m;
+                put([
+                    [m[0][0], m[0][1], m[0][2], m[0][3] - o.x],
+                    [m[1][0], m[1][1], m[1][2], m[1][3] - o.y],
+                    [m[2][0], m[2][1], m[2][2], m[2][3] - o.z],
+                ]);
+                n += 1;
+            }
+            ranges.push(start..n);
+        }
+        (out, ranges)
     }
 
     /// The frame's uniform block, and the sun's view for the shadow map (when it shines).
@@ -560,19 +814,51 @@ impl Gpu {
         (u, sun.is_some())
     }
 
-    /// Draw into the offscreen target sized like the view.
-    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, v: &ShadeView, style: VisualStyle, bg: Rgb) {
+    /// Draw into the offscreen target sized like the view: what it shows, nearest first.
+    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, v: &ShadeView, style: VisualStyle, bg: Rgb) -> model3::Visible {
         let size = (v.width_px, v.height_px);
         if self.target.as_ref().is_none_or(|t| t.size != size) {
             self.target = Some(target(device, size));
         }
-        let (Some(t), Some(group)) = (&self.target, &self.bind_group) else { return };
+        let Some(model) = self.model.clone() else { return model3::Visible::default() };
+        let vis = model.visible(v);
+        let (inst, groups) = self.placements(&model, &vis);
+        let need = inst.len() as u64;
+        if self.instances.is_none() || self.instance_cap < need {
+            let cap = need.next_power_of_two().max(INSTANCE_SIZE * 64);
+            self.instances = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("shaded_instances"),
+                size: cap,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.instance_cap = cap;
+        }
+        let (Some(t), Some(group), Some(ib)) = (&self.target, &self.bind_group, &self.instances) else { return vis };
+        queue.write_buffer(ib, 0, &inst);
         let (u, sun) = self.uniforms(v, style, bg);
         queue.write_buffer(&self.uniform, 0, &u);
         let lin = |c: u8| f64::from(c) / 255.0;
         let physical = self.lighting.is_some();
+        // The draws of one buffer (0 opaque, 1 see-through, 2 lines): the visible chunks with
+        // the identity placement, then each group's prototype with its placements (a group's
+        // lines only at full detail).
+        let draws = |kind: usize| -> Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> {
+            let mut d: Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> =
+                vis.chunks.iter().filter_map(|c| self.chunk_ranges.get(*c)).map(|r| (r[kind].clone(), 0..1)).collect();
+            for ((p, lod, _), ir) in vis.instances.iter().zip(&groups) {
+                if kind == 2 && *lod != 0 {
+                    continue;
+                }
+                if let Some(r) = self.proto_ranges.get(*p as usize).and_then(|l| l.get(*lod as usize)) {
+                    d.push((r[kind].clone(), ir.clone()));
+                }
+            }
+            d.retain(|(r, i)| !r.is_empty() && !i.is_empty());
+            d
+        };
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shaded") });
-        // The sun's shadow map first.
+        // The sun's shadow map first (from what the view shows).
         if physical && sun {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shaded_shadow"),
@@ -590,7 +876,10 @@ impl Gpu {
             if let Some(m) = &self.tris {
                 pass.set_pipeline(&self.shadow_pipeline);
                 pass.set_vertex_buffer(0, m.buffer.slice(..));
-                pass.draw(0..m.count, 0..1);
+                pass.set_vertex_buffer(1, ib.slice(..));
+                for (r, i) in draws(0) {
+                    pass.draw(r, i);
+                }
             }
         }
         {
@@ -619,15 +908,21 @@ impl Gpu {
                 pass.set_pipeline(&self.bg_pipeline);
                 pass.draw(0..3, 0..1);
             }
-            for (pipeline, m) in [(&self.tri_pipeline, &self.tris), (&self.line_pipeline, &self.lines), (&self.clear_pipeline, &self.clear_tris)] {
+            for (kind, pipeline, m) in
+                [(0, &self.tri_pipeline, &self.tris), (2, &self.line_pipeline, &self.lines), (1, &self.clear_pipeline, &self.clear_tris)]
+            {
                 if let Some(m) = m {
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, m.buffer.slice(..));
-                    pass.draw(0..m.count, 0..1);
+                    pass.set_vertex_buffer(1, ib.slice(..));
+                    for (r, i) in draws(kind) {
+                        pass.draw(r, i);
+                    }
                 }
             }
         }
         queue.submit([enc.finish()]);
+        vis
     }
 
     fn view(&self) -> Option<&wgpu::TextureView> {
@@ -654,10 +949,9 @@ fn buffer(device: &wgpu::Device, label: &str, bytes: &[u8]) -> Option<Buffer> {
     if bytes.is_empty() {
         return None;
     }
-    let count = u32::try_from(bytes.len() as u64 / VERTEX_SIZE).unwrap_or(u32::MAX);
     let buffer =
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: bytes, usage: wgpu::BufferUsages::VERTEX });
-    Some(Buffer { buffer, count })
+    Some(Buffer { buffer })
 }
 
 fn target(device: &wgpu::Device, size: (u32, u32)) -> Target {

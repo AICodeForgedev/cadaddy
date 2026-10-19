@@ -47,6 +47,7 @@ pub mod hyperlinks;
 pub mod materials;
 mod mtext_editor;
 mod shaded;
+pub mod snap3ui;
 pub mod spacemouse;
 // Report a Bug, Request a Feature, Donate.
 pub mod support;
@@ -87,6 +88,8 @@ pub mod walk;
 
 pub mod etransmit;
 pub mod exchange;
+pub mod publishdlg;
+pub mod sheetsets;
 
 use std::sync::mpsc::Receiver;
 
@@ -138,6 +141,8 @@ pub struct UiState {
     pub properties_all: bool,
     /// The properties shown in the Properties palette's "My" view (row names, in English).
     pub my_properties: Vec<String>,
+    /// The sheet set file the Sheet Set Manager shows.
+    pub sheet_set: Option<String>,
     /// Show an in-window menu bar (platforms without a native menu bar, or on request).
     pub in_window_menu: bool,
     pub start_tab: bool,
@@ -230,6 +235,7 @@ impl Default for UiState {
             hidden_tools: Vec::new(),
             properties_all: true,
             my_properties: Vec::new(),
+            sheet_set: None,
             // AutoCAD hides the menu bar under the ribbon (MENUBAR 0).
             in_window_menu: false,
             start_tab: false,

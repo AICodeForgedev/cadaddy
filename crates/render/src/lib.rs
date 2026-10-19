@@ -19,6 +19,7 @@ mod linetype_text;
 pub mod live;
 pub mod materials;
 mod mline;
+pub mod model3;
 mod outline;
 pub mod paper;
 pub mod pen;

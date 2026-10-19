@@ -1754,3 +1754,101 @@ menu	Modify	수정
 	My properties: the ones you added (right-click a property's name to add it)	내 특성: 추가한 특성(특성 이름을 마우스 오른쪽 버튼으로 클릭하여 추가)
 	Right-click a property's name and choose Add to My Properties.	특성 이름을 마우스 오른쪽 버튼으로 클릭하고 내 특성에 추가를 선택하십시오.
 	Color Books	색상표
+	Sheet Set Manager	시트 세트 관리자
+	Palettes	팔레트
+	New Sheet Set...	새 시트 세트...
+	Open Sheet Set...	시트 세트 열기...
+	No sheet set is open.	열린 시트 세트가 없습니다.
+	Number	번호
+	Subset	하위 세트
+	Remove Sheet	시트 제거
+	Add Drawing...	도면 추가...
+	Rename Layouts to Match	일치하도록 배치 이름 바꾸기
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	각 시트의 배치 이름이 "번호 제목"이 되며, 시트 번호 및 제목 필드에 표시됩니다
+	Publish to PDF...	PDF로 게시...
+	Prefix	접두사
+	Digits	자릿수
+	Renumber	번호 다시 매기기
+	Zoom to Fit	맞춤 줌
+	Drag to pan, scroll to zoom	드래그하여 초점이동, 스크롤하여 줌
+	Publish	게시
+	Sheets to publish, in order	게시할 시트(순서대로)
+	Sheet	시트
+	Bookmark	책갈피
+	Paper	용지
+	Orientation	방향
+	(sheet name)	(시트 이름)
+	Page setup	페이지 설정
+	Landscape	가로
+	Portrait	세로
+	Add Sheets from Drawing...	도면에서 시트 추가...
+	Load List...	목록 로드...
+	Save List...	목록 저장...
+	Publish List	게시 목록
+	Enclose Text with Object	객체로 문자 둘러싸기
+	Export Attribute Information	속성 정보 내보내기
+	Import Attribute Information	속성 정보 가져오기
+	Mask Text	문자 마스크
+	Remote Text	원격 문자
+	Rotate Text	문자 회전
+	Text Fit	문자 맞춤
+	Toggle Frames	프레임 전환
+	Unmask Text	문자 마스크 해제
+	Update Remote Text	원격 문자 업데이트
+	Geometric	기하학적
+	Infer geometric constraints	기하학적 구속조건 추정
+	Show constraint bars	구속조건 막대 표시
+	Constraint bar transparency (%)	구속조건 막대 투명도(%)
+	Dimensional	치수
+	Show dynamic constraints	동적 구속조건 표시
+	Dimension name format	치수 이름 형식
+	Name and Expression	이름 및 표현식
+	Constraint types AUTOCONSTRAIN applies, in order of priority	AUTOCONSTRAIN이 적용하는 구속조건 유형(우선순위 순)
+	Move Up	위로 이동
+	Move Down	아래로 이동
+	Tangent objects must share an intersection point	접하는 객체는 교차점을 공유해야 함
+	Perpendicular objects must share an intersection point	직교 객체는 교차점을 공유해야 함
+	Distance tolerance	거리 공차
+	Angle tolerance (degrees)	각도 공차(도)
+	3D Move	3D 이동
+	3D Rotate	3D 회전
+	3D Scale	3D 축척
+	3D Align	3D 정렬
+	3D Mirror	3D 대칭
+	3D Array	3D 배열
+	3D Object Snap	3D 객체 스냅
+	Specify second point or distance	두 번째 점 또는 거리 지정
+	Specify angle	각도 지정
+	Specify source plane: first point	원본 평면 지정: 첫 번째 점
+	Specify source plane: second point	원본 평면 지정: 두 번째 점
+	Specify source plane: third point	원본 평면 지정: 세 번째 점
+	Specify destination plane: first point	대상 평면 지정: 첫 번째 점
+	Specify destination plane: second point	대상 평면 지정: 두 번째 점
+	Specify destination plane: third point	대상 평면 지정: 세 번째 점
+	Delete source objects?	원본 객체를 삭제하시겠습니까?
+	Specify point on XY plane	XY 평면 위의 점 지정
+	Specify point on YZ plane	YZ 평면 위의 점 지정
+	Specify point on ZX plane	ZX 평면 위의 점 지정
+	Specify first point of mirror plane (3 points) or	대칭 평면의 첫 번째 점 지정(3점) 또는
+	Specify second point on mirror plane	대칭 평면의 두 번째 점 지정
+	Specify third point on mirror plane	대칭 평면의 세 번째 점 지정
+	Enter the type of array	배열 유형 입력
+	Polar	원형
+	Enter the number of items in the array	배열 항목 수 입력
+	Specify the angle to fill (+=ccw, -=cw)	채울 각도 지정(+=시계 반대 방향, -=시계 방향)
+	Enter the number of rows (---)	행 수 입력(---)
+	Enter the number of columns (|||)	열 수 입력(|||)
+	Enter the number of levels (...)	레벨 수 입력(...)
+	Specify the distance between rows (---)	행 간격 지정(---)
+	Specify the distance between columns (|||)	열 간격 지정(|||)
+	Specify the distance between levels (...)	레벨 간격 지정(...)
+	Specify second point on axis of rotation	회전축 위의 두 번째 점 지정
+	Select the objects first.	먼저 객체를 선택하십시오.
+	Requires a point, or a distance along an axis.	점 또는 축을 따른 거리가 필요합니다.
+	The points must not coincide or line up.	점이 일치하거나 일직선 위에 있으면 안 됩니다.
+	The three points line up: they make no plane.	세 점이 일직선 위에 있어 평면을 이루지 않습니다.
+	<3D Object Snap on>	<3D 객체 스냅 켜기>
+	<3D Object Snap off>	<3D 객체 스냅 끄기>
+	Preparing the 3D view…	3D 뷰 준비 중…
+	Viewpoint	시점
+	3D View Benchmark	3D 뷰 벤치마크
