@@ -112,69 +112,6 @@ pub fn purge(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     }
 }
 
-/// FIND: Find and Replace over the current space's text, dimensions, attributes and tables.
-pub fn find(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
-    let id = egui::Id::new("find_dialog_state");
-    let (mut what, mut with, mut case, mut whole, mut status) =
-        ctx.data_mut(|d| d.get_temp::<(String, String, bool, bool, String)>(id)).unwrap_or_default();
-    let mut action: Option<Value> = None;
-    let mut close = false;
-    egui::Window::new(crate::tl!("Find and Replace"))
-        .id(egui::Id::new("find_dialog"))
-        .open(open)
-        .resizable(false)
-        .collapsible(false)
-        .pivot(egui::Align2::CENTER_CENTER)
-        .default_pos(ctx.content_rect().center())
-        .show(ctx, |ui| {
-            egui::Grid::new("find_grid").num_columns(2).spacing(egui::vec2(10.0, 6.0)).show(ui, |ui| {
-                ui.label(crate::tl!("Find what:"));
-                ui.add(egui::TextEdit::singleline(&mut what).desired_width(240.0));
-                ui.end_row();
-                ui.label(crate::tl!("Replace with:"));
-                ui.add(egui::TextEdit::singleline(&mut with).desired_width(240.0));
-                ui.end_row();
-            });
-            ui.checkbox(&mut case, crate::tl!("Match case"));
-            ui.checkbox(&mut whole, crate::tl!("Find whole words only"));
-            if !status.is_empty() {
-                ui.label(RichText::new(&status).small());
-            }
-            ui.separator();
-            ui.horizontal(|ui| {
-                let some = !what.is_empty();
-                if ui.add_enabled(some, egui::Button::new(crate::tl!("Find"))).clicked() {
-                    action = Some(json!({ "find": what, "matchCase": case, "wholeWord": whole }));
-                }
-                if ui.add_enabled(some, egui::Button::new(crate::tl!("Replace All"))).clicked() {
-                    action = Some(json!({ "find": what, "replace": with, "matchCase": case, "wholeWord": whole }));
-                }
-                if ui.button(crate::tl!("Close")).clicked() {
-                    close = true;
-                }
-            });
-        });
-    if let Some(p) = action {
-        let replacing = p.get("replace").is_some();
-        status = match app.run("find", p) {
-            Ok(r) => {
-                let n = r["total"].as_u64().unwrap_or(0);
-                let objects = r["matches"].as_array().map_or(0, Vec::len);
-                if replacing {
-                    crate::tf!("Matches replaced: {count} (objects: {objects})", count = n, objects = objects)
-                } else {
-                    crate::tf!("Matches found and selected: {count} (objects: {objects})", count = n, objects = objects)
-                }
-            }
-            Err(e) => e.to_string(),
-        };
-    }
-    ctx.data_mut(|d| d.insert_temp(id, (what, with, case, whole, status)));
-    if close {
-        *open = false;
-    }
-}
-
 /// COLOR: Select Color for new objects (CECOLOR).
 pub fn color(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let current = app

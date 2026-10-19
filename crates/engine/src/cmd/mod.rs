@@ -27,6 +27,7 @@ mod express;
 pub mod exterior;
 mod field;
 pub mod file;
+pub mod find;
 mod gripcmds;
 mod griphot;
 pub mod groups;
