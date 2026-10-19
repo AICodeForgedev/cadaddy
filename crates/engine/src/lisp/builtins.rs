@@ -307,11 +307,32 @@ fn chain(a: &[Value], ok: fn(std::cmp::Ordering) -> bool) -> R {
     }
     Ok(Value::t())
 }
+/// `=` and `/=`: numbers and strings compare as [`compare`] does, and any other atom compares by
+/// what it is, as `eq` does. AutoLISP answers `(= (type x) 'LIST)` -- the idiom for a type test,
+/// since `type` returns a symbol -- where coercing that symbol to a number failed the whole
+/// routine with "bad argument type" instead (#1597). A mismatch is `nil`, not an error, so
+/// `(= 1 "1")` and `(= '(1) '(1))` answer too. The ordering comparisons stay numbers and strings
+/// only, as AutoLISP has them.
+fn eq_chain(a: &[Value], want_equal: bool) -> R {
+    arity(a, 1, usize::MAX)?;
+    for w in a.windows(2) {
+        let [x, y] = w else { continue };
+        let same = match (x, y) {
+            (Value::Str(_), Value::Str(_)) => compare(x, y)?.is_eq(),
+            _ if x.as_number().is_some() && y.as_number().is_some() => compare(x, y)?.is_eq(),
+            _ => eq(x, y),
+        };
+        if same != want_equal {
+            return Ok(Value::Nil);
+        }
+    }
+    Ok(Value::t())
+}
 fn num_eq(a: &[Value]) -> R {
-    chain(a, |o| o.is_eq())
+    eq_chain(a, true)
 }
 fn num_ne(a: &[Value]) -> R {
-    chain(a, |o| o.is_ne())
+    eq_chain(a, false)
 }
 fn lt(a: &[Value]) -> R {
     chain(a, |o| o.is_lt())
