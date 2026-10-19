@@ -10,7 +10,7 @@ pub fn format_distance(v: f64, lunits: i64, luprec: i64) -> String {
     }
     let prec = luprec.clamp(0, 8) as usize;
     match lunits {
-        1 => format!("{:.*E}", prec, v),
+        1 => scientific(v, prec),
         3 => {
             let neg = v < 0.0;
             // Round at the displayed precision before splitting, so 11.999 carries to 1'-0.00".
@@ -54,6 +54,21 @@ pub fn format_distance(v: f64, lunits: i64, luprec: i64) -> String {
             format!("{}{}{}", if neg { "-" } else { "" }, whole, fs)
         }
         _ => format!("{:.*}", prec, v),
+    }
+}
+
+/// Scientific notation with a signed exponent of at least two digits (`1.7500E+01`, `1.00E-05`).
+fn scientific(v: f64, prec: usize) -> String {
+    let s = format!("{:.*E}", prec, v);
+    match s.split_once('E') {
+        Some((mantissa, exp)) => {
+            let (sign, digits) = match exp.strip_prefix('-') {
+                Some(d) => ('-', d),
+                None => ('+', exp),
+            };
+            format!("{mantissa}E{sign}{digits:0>2}")
+        }
+        None => s,
     }
 }
 
@@ -346,6 +361,17 @@ mod tests {
         assert_eq!(format_distance(11.5, 3, 2), "0'-11.50\"");
         assert_eq!(format_distance(12.0, 3, 2), "1'-0.00\"");
         assert_eq!(format_distance(11.6, 3, 0), "1'-0\"");
+    }
+
+    #[test]
+    fn scientific_exponent_is_signed_and_padded() {
+        assert_eq!(format_distance(17.5, 1, 4), "1.7500E+01");
+        assert_eq!(format_distance(0.00001, 1, 2), "1.00E-05");
+        assert_eq!(format_distance(1234.5, 1, 3), "1.234E+03");
+        assert_eq!(format_distance(12345678.0, 1, 3), "1.235E+07");
+        assert_eq!(format_distance(-17.5, 1, 4), "-1.7500E+01");
+        assert_eq!(format_distance(0.0, 1, 2), "0.00E+00");
+        assert_eq!(format_distance(1e100, 1, 1), "1.0E+100");
     }
 
     #[test]
