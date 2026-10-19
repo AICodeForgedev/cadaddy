@@ -200,6 +200,20 @@ impl AngleSettings {
         let v = self.angbase + if self.clockwise { -a } else { a };
         v.is_finite().then_some(v)
     }
+
+    /// Direction `dir` (radians counterclockwise from +X) as the drawing shows directions, in
+    /// radians: from ANGBASE in the ANGDIR sense, 0 up to a full turn. (A block turned 2.23°
+    /// shows as 87.77 in a drawing measured clockwise from north, as in AutoCAD's Properties.)
+    pub fn shown(&self, dir: f64) -> f64 {
+        let a = if self.clockwise { self.angbase - dir } else { dir - self.angbase };
+        a.rem_euclid(std::f64::consts::TAU)
+    }
+
+    /// The direction (radians counterclockwise from +X) the drawing shows as `v` (radians): the
+    /// inverse of [`AngleSettings::shown`].
+    pub fn unshown(&self, v: f64) -> f64 {
+        (self.angbase + if self.clockwise { -v } else { v }).rem_euclid(std::f64::consts::TAU)
+    }
 }
 
 /// Parse a direction typed with the default angle settings (degrees, 0 = +X, counterclockwise):
@@ -288,6 +302,22 @@ pub const DEG: f64 = PI / 180.0;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directions_show_from_angbase_in_the_angdir_sense() {
+        let north_clockwise = AngleSettings { aunits: 0, angbase: 90f64.to_radians(), clockwise: true };
+        // AutoCAD shows a block turned 2.22729505553431° as 87.77 in such a drawing.
+        let shown = north_clockwise.shown(2.22729505553431f64.to_radians()).to_degrees();
+        assert!((shown - 87.77270494446569).abs() < 1e-9, "{shown}");
+        let back = north_clockwise.unshown(87.77270494446569f64.to_radians()).to_degrees();
+        assert!((back - 2.22729505553431).abs() < 1e-9, "{back}");
+        // The defaults show directions as they are.
+        let plain = AngleSettings::default();
+        assert!((plain.shown(0.5) - 0.5).abs() < 1e-12 && (plain.unshown(0.5) - 0.5).abs() < 1e-12);
+        // Counterclockwise from a base of 30°: 45° shows as 15.
+        let based = AngleSettings { aunits: 0, angbase: 30f64.to_radians(), clockwise: false };
+        assert!((based.shown(45f64.to_radians()).to_degrees() - 15.0).abs() < 1e-9);
+    }
 
     #[test]
     fn decimal_and_arch() {
