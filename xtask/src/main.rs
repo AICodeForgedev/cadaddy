@@ -6,6 +6,7 @@
 mod assets;
 mod ico;
 mod layers;
+mod mcptest;
 mod parity;
 mod stats;
 mod version;
@@ -27,6 +28,9 @@ commands:
   parity          recompute the AutoCAD menu-breadth checklist in docs/parity-checklist.md
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
+  mcptest [--port 47820] [--cli PATH] [--mcpb PATH]
+                  the MCP suite against the running app (start it with --control 47820): every
+                  tool normal and bad, the app's tools, the agent guard, and the .mcpb's server
   fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
                   mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
                   saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
@@ -46,6 +50,7 @@ fn main() -> ExitCode {
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("fuzz") => cmd_fuzz(&rest),
+        Some("mcptest") => mcptest::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
