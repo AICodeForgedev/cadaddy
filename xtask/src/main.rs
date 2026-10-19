@@ -8,6 +8,7 @@ mod casefs;
 mod ico;
 mod layers;
 mod parity;
+mod signing;
 mod smoke;
 mod stats;
 mod version;
@@ -35,6 +36,10 @@ commands:
   smoke <CADaddy-Mac.dmg | CADaddy.app | app executable | CADaddy.mcpb | cadaddy-cli> [--version X.Y.Z] [--out DIR] [--keep]
                   release smoke test: version, draw, save DWG/DXF/.cdy, reopen, plot PDF, sheet set
                   publish, Walk on/off and update check (app); report in target/smoke/report.json
+  signing [--require]
+                  what a release built now would be signed with on each platform (Windows Authenticode,
+                  macOS Developer ID + notarization, Linux GPG, the updater's SHA256SUMS.sig);
+                  --require fails if any would ship unsigned (docs/code-signing.md)
   fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
                   mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
                   saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
@@ -56,6 +61,7 @@ fn main() -> ExitCode {
         Some("fuzz") => cmd_fuzz(&rest),
         Some("casefs") => casefs::run(&root(), &rest),
         Some("smoke") => smoke::run(&root(), &rest),
+        Some("signing") => signing::run(&rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
