@@ -256,6 +256,56 @@ pub fn chunks(b: &[u8]) -> Result<(Vec<Read>, bool), String> {
     Ok((out, false))
 }
 
+/// A chunk as found walking a file from its header, for checking it (`verify`).
+pub struct Walked {
+    pub offset: u64,
+    pub tag: [u8; 4],
+    pub version: u16,
+    /// Stored length (compressed when deflated) and the payload's own length.
+    pub stored: u64,
+    pub raw: u64,
+    pub deflated: bool,
+    /// Why it is damaged; `None` when its checksum and compression are sound.
+    pub damage: Option<String>,
+}
+
+/// Every chunk of the file walked from its header (each save's chunks, the superseded ones too),
+/// and the spans of bytes where no chunk could be read.
+pub(super) fn walk(b: &[u8]) -> (Vec<Walked>, Vec<(u64, u64)>) {
+    let (mut out, mut lost) = (Vec::new(), Vec::new());
+    let mut at = HEADER_LEN;
+    let mut steps = 0usize;
+    while at < b.len() && steps < MAX_CHUNKS {
+        steps += 1;
+        if b.get(at + 8..at + TRAILER_LEN) == Some(&TRAILER_MAGIC[..]) {
+            at += TRAILER_LEN;
+            continue;
+        }
+        let Some((r, next)) = chunk_at(b, at) else {
+            let n = resync(b, at + 1).unwrap_or(b.len());
+            lost.push((at as u64, n as u64));
+            at = n;
+            continue;
+        };
+        let (version, flags, stored, raw) = (u16_at(b, at + 4), u16_at(b, at + 6), u64_at(b, at + 8), u64_at(b, at + 20));
+        let (tag, damage) = match r {
+            Read::Ok(c) => (c.tag, None),
+            Read::Damaged { tag, why, .. } => (tag, Some(why)),
+        };
+        out.push(Walked {
+            offset: at as u64,
+            tag,
+            version: version.unwrap_or(0),
+            stored: stored.unwrap_or(0),
+            raw: raw.unwrap_or(0),
+            deflated: flags.is_some_and(|f| f & FLAG_DEFLATE != 0),
+            damage,
+        });
+        at = next;
+    }
+    (out, lost)
+}
+
 /// The first chunk tagged `tag`, decoding only that one when the index is sound (a preview or the
 /// manifest without reading the drawing); `None` when there is none or it is damaged.
 pub fn find(b: &[u8], tag: &[u8; 4]) -> Option<Chunk> {
