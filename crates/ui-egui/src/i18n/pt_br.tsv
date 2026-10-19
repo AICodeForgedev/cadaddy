@@ -2029,3 +2029,13 @@
 	Read MEP Runs	Ler traçados MEP
 	Model Clashes	Interferências do modelo
 	MEP Systems	Sistemas MEP
+	Undo History	Histórico de desfazer
+	(Start)	(Início)
+	Click a step to undo or redo to it.	Clique em uma etapa para desfazer ou refazer até ela.
+	Nothing yet.	Nada ainda.
+	Double-click to run it again	Clique duas vezes para executar novamente
+	Copy as Script	Copiar como script
+	Save Session as Script...	Salvar sessão como script...
+	Command History Palette	Paleta de histórico de comandos
+	Furnish from Plan	Mobiliar a partir da planta
+	Classify Plan	Classificar planta

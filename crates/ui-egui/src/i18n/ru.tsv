@@ -1801,3 +1801,13 @@
 	Read MEP Runs	Прочитать трассы инженерных сетей
 	Model Clashes	Коллизии модели
 	MEP Systems	Инженерные системы
+	Undo History	Журнал отмены
+	(Start)	(Начало)
+	Click a step to undo or redo to it.	Щёлкните шаг, чтобы отменить или вернуть действия до него.
+	Nothing yet.	Пока пусто.
+	Double-click to run it again	Дважды щёлкните, чтобы выполнить снова
+	Copy as Script	Копировать как сценарий
+	Save Session as Script...	Сохранить сеанс как сценарий...
+	Command History Palette	Палитра журнала команд
+	Furnish from Plan	Расставить мебель по плану
+	Classify Plan	Распознать план

@@ -1800,3 +1800,13 @@
 	Read MEP Runs	Lire les réseaux techniques
 	Model Clashes	Conflits du modèle
 	MEP Systems	Réseaux techniques
+	Undo History	Historique d'annulation
+	(Start)	(Début)
+	Click a step to undo or redo to it.	Cliquez sur une étape pour annuler ou rétablir jusqu'à elle.
+	Nothing yet.	Rien pour l'instant.
+	Double-click to run it again	Double-cliquez pour l'exécuter à nouveau
+	Copy as Script	Copier comme script
+	Save Session as Script...	Enregistrer la session comme script...
+	Command History Palette	Palette d'historique des commandes
+	Furnish from Plan	Meubler depuis le plan
+	Classify Plan	Classer le plan

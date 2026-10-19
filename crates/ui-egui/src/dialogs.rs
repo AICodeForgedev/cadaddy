@@ -42,6 +42,8 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "stylesmanager" => crate::plotstyles::dialog(app, ctx, &mut open),
         "etransmit" => crate::etransmit::dialog(app, ctx, &mut open),
         "diag" => crate::diag::dialog(app, ctx, &mut open),
+        "undohistory" => crate::historypalettes::undo_dialog(app, ctx, &mut open),
+        "commandhistory" => crate::historypalettes::commands_dialog(app, ctx, &mut open),
         "aliasedit" => crate::aliasdlg::dialog(app, ctx, &mut open),
         "workspace.save" => crate::workspaces::save_dialog(app, ctx, &mut open),
         "workspace.settings" => crate::workspaces::settings_dialog(app, ctx, &mut open),

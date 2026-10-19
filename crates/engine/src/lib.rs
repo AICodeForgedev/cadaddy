@@ -20,6 +20,7 @@ pub mod grip_dims;
 pub mod grips;
 mod guard;
 pub mod i18n;
+pub mod journal;
 pub mod lisp;
 pub mod mtext_edit;
 pub mod pointmod;
@@ -908,6 +909,9 @@ pub struct Session {
     /// it resumes when that command ends. One level, as in AutoCAD.
     pub suspended: Option<Running>,
     pub log: Vec<String>,
+    /// The session as a script ([`journal`]): each command started, each input and each JSON call
+    /// made from outside, one per line, so replaying it with SCRIPT redoes the work.
+    pub journal: journal::Journal,
     pub last_command: Option<String>,
     /// LASTPOINT.
     pub last_point: Vec2,
@@ -996,6 +1000,7 @@ impl Session {
             in_script: false,
             suspended: None,
             log: Vec::new(),
+            journal: journal::Journal::default(),
             last_command: None,
             last_point: Vec2::ZERO,
             last_point3: cadaddy_geom::Vec3::ZERO,
@@ -1177,6 +1182,16 @@ impl Session {
 
     /// Run a command with JSON parameters (no dialogs). Records undo when the drawing changes.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        let outer = self.journal.enter();
+        let r = self.execute_inner(id, params);
+        self.journal.leave();
+        if outer && r.is_ok() {
+            self.journal.call(id, params);
+        }
+        r
+    }
+
+    fn execute_inner(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         (spec.enabled)(self).map_err(|m| EngineError::Disabled(spec.id.into(), m))?;
         if let Some(why) = cmd::blocks::bedit::refused_in_editor(self, spec.id) {
@@ -1240,6 +1255,20 @@ impl Session {
 
     /// Start a command by name or alias as if typed at the command line.
     pub fn start(&mut self, name: &str) -> Result<()> {
+        let outer = self.journal.enter();
+        if outer {
+            self.journal.started(name);
+        }
+        let r = self.start_inner(name);
+        self.journal.leave();
+        if outer && self.running.is_none() {
+            // Done at once (or refused): nothing more of it to cancel.
+            self.journal.ended(r.is_ok());
+        }
+        r
+    }
+
+    fn start_inner(&mut self, name: &str) -> Result<()> {
         self.last_polar = None;
         let name = name.trim();
         let (transparent, name) = match name.strip_prefix('\'') {
@@ -1361,6 +1390,26 @@ impl Session {
     }
 
     pub fn input(&mut self, input: Input) -> Result<()> {
+        let outer = self.journal.enter();
+        let running = self.running.is_some();
+        if outer && running {
+            self.journal.input(&input);
+        }
+        let r = self.input_inner(input.clone());
+        self.journal.leave();
+        if outer
+            && !running
+            && let Some(id) = self.running.as_ref().map(|r| r.id.to_string())
+        {
+            // Enter at `Command:` repeated the last command.
+            self.journal.started(&id);
+        } else if outer && running && self.running.is_none() {
+            self.journal.ended(!matches!(input, Input::Cancel));
+        }
+        r
+    }
+
+    fn input_inner(&mut self, input: Input) -> Result<()> {
         if self.lisp_input(input.clone()) {
             return Ok(());
         }

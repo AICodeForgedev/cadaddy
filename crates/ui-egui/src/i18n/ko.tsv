@@ -2023,3 +2023,13 @@ menu	Modify	수정
 	Read MEP Runs	MEP 경로 읽기
 	Model Clashes	모델 간섭
 	MEP Systems	MEP 시스템
+	Undo History	명령 취소 내역
+	(Start)	(시작)
+	Click a step to undo or redo to it.	단계를 클릭하면 그 단계까지 명령 취소 또는 다시 실행합니다.
+	Nothing yet.	아직 없습니다.
+	Double-click to run it again	두 번 클릭하여 다시 실행
+	Copy as Script	스크립트로 복사
+	Save Session as Script...	세션을 스크립트로 저장...
+	Command History Palette	명령 내역 팔레트
+	Furnish from Plan	평면도에서 가구 배치
+	Classify Plan	도면 분류

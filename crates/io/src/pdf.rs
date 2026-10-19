@@ -866,6 +866,44 @@ fn ext_gstates(alphas: &[u8]) -> String {
     out
 }
 
+/// Texts drawn in a stroke font, as invisible text (rendering mode 3) in the standard Helvetica
+/// over the strokes: the page reads and searches as its lettering, as PDF plotters do for SHX
+/// text. Characters outside Latin-1 are written as `?`.
+fn hidden_words(list: &cadaddy_render::DisplayList, map: &Map) -> String {
+    let mut c = String::new();
+    for w in list.words.iter().take(100_000) {
+        let size = w.height * map.s * map.k;
+        if !(size.is_finite() && size > 0.0 && w.dir.is_finite() && w.origin.is_finite()) {
+            continue;
+        }
+        let latin: String = w.text.chars().map(|ch| if (ch as u32) < 256 && !ch.is_control() { ch } else { '?' }).collect();
+        let mut esc = String::from("(");
+        for ch in latin.chars() {
+            match ch {
+                '(' | ')' | '\\' => {
+                    esc.push('\\');
+                    esc.push(ch);
+                }
+                ch if ch.is_ascii() => esc.push(ch),
+                ch => {
+                    let _ = write!(esc, "\\{:03o}", ch as u32);
+                }
+            }
+        }
+        esc.push(')');
+        c.push_str("BT 3 Tr /FW ");
+        num(&mut c, size);
+        c.push_str(" Tf ");
+        for v in [w.dir.x, w.dir.y, -w.dir.y, w.dir.x] {
+            num(&mut c, v);
+            c.push(' ');
+        }
+        pt(&mut c, map.pt(w.origin));
+        let _ = writeln!(c, " Tm {esc} Tj ET");
+    }
+    c
+}
+
 /// Write one glyph as text: opens a text object and sets the font when needed, then places the
 /// glyph with a text matrix (font size 1: the matrix axes are one em).
 fn glyph(c: &mut String, text_font: &mut Option<Option<usize>>, font: usize, t: &cadaddy_render::PlotText, map: &Map) {
@@ -1053,13 +1091,16 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
     let mut ocgs: Vec<(u32, usize)> = Vec::new();
     let mut kids = Vec::new();
     // Page dictionaries are completed once the fonts are written: (page, its fonts, the rest).
-    let mut page_dicts: Vec<(usize, Vec<usize>, String, String, String)> = Vec::new();
+    let mut page_dicts: Vec<(usize, Vec<usize>, String, String, String, bool)> = Vec::new();
     // Image XObjects shared by all pages, by the pixels they hold.
     let mut image_ids: Vec<(std::sync::Arc<cadaddy_render::images::Raster>, usize)> = Vec::new();
     for p in pages {
         let page = objs.reserve();
         let texts = fonts.texts(&p.list);
-        let (marks, alphas, images) = content_stream(&p.list, &p.map, &p.clip_pt, &p.layers, &texts);
+        let (mut marks, alphas, images) = content_stream(&p.list, &p.map, &p.clip_pt, &p.layers, &texts);
+        // Stroke-font lettering also as invisible text, so the page can be searched and read.
+        let hidden = hidden_words(&p.list, &p.map);
+        marks.push_str(&hidden);
         let mut xobjects = String::new();
         for (k, r) in images.iter().enumerate() {
             let id = match image_ids.iter().find(|(q, _)| std::sync::Arc::ptr_eq(q, r)) {
@@ -1108,17 +1149,33 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
         pt(&mut mb, p.media);
         let annots = if annots.is_empty() { String::new() } else { format!(" /Annots [{}]", refs(annots)) };
         let turn = if o.upside_down { " /Rotate 180" } else { "" };
-        page_dicts.push((page, used, props, ext_gstates(&alphas) + &xobjects, format!("/MediaBox [0 0 {mb}]{turn} /Contents {content}{annots}")));
+        page_dicts.push((
+            page,
+            used,
+            props,
+            ext_gstates(&alphas) + &xobjects,
+            format!("/MediaBox [0 0 {mb}]{turn} /Contents {content}{annots}"),
+            !hidden.is_empty(),
+        ));
         kids.push(page);
     }
     let font_ids = if fonts.is_empty() { Vec::new() } else { fonts.write(&mut objs, o.compress) };
-    for (page, used, props, gstates, rest) in page_dicts {
+    // The standard font the hidden lettering is written in (one object for every page).
+    let words_font = page_dicts
+        .iter()
+        .any(|p| p.5)
+        .then(|| objs.add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string()));
+    for (page, used, props, gstates, rest, words) in page_dicts {
         let mut res = String::new();
         if !props.is_empty() {
             let _ = write!(res, " /Properties <<{props} >>");
         }
         res.push_str(&gstates);
-        let f: Vec<String> = used.iter().filter_map(|i| Some(format!("/F{i} {} 0 R", font_ids.get(*i)?))).collect();
+        // The hidden lettering's standard font.
+        let mut f: Vec<String> = used.iter().filter_map(|i| Some(format!("/F{i} {} 0 R", font_ids.get(*i)?))).collect();
+        if let Some(id) = words_font.filter(|_| words) {
+            f.push(format!("/FW {id} 0 R"));
+        }
         if !f.is_empty() {
             let _ = write!(res, " /Font << {} >>", f.join(" "));
         }

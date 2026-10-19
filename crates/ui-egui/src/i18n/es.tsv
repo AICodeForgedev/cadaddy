@@ -2028,3 +2028,13 @@
 	Read MEP Runs	Leer recorridos MEP
 	Model Clashes	Interferencias del modelo
 	MEP Systems	Sistemas MEP
+	Undo History	Historial de deshacer
+	(Start)	(Inicio)
+	Click a step to undo or redo to it.	Haga clic en un paso para deshacer o rehacer hasta él.
+	Nothing yet.	Nada todavía.
+	Double-click to run it again	Haga doble clic para ejecutarlo de nuevo
+	Copy as Script	Copiar como archivo de comandos
+	Save Session as Script...	Guardar sesión como archivo de comandos...
+	Command History Palette	Paleta de historial de comandos
+	Furnish from Plan	Amueblar desde el plano
+	Classify Plan	Clasificar plano

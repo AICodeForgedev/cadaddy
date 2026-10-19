@@ -1904,3 +1904,13 @@
 	Read MEP Runs	读取机电管线
 	Model Clashes	模型碰撞
 	MEP Systems	机电系统
+	Undo History	放弃历史记录
+	(Start)	(开始)
+	Click a step to undo or redo to it.	单击某一步以放弃或重做到该步。
+	Nothing yet.	暂无内容。
+	Double-click to run it again	双击以再次运行
+	Copy as Script	复制为脚本
+	Save Session as Script...	将会话另存为脚本...
+	Command History Palette	命令历史记录选项板
+	Furnish from Plan	按平面图布置家具
+	Classify Plan	识别图纸

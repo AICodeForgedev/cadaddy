@@ -2420,3 +2420,33 @@ fn foreign_table_reads_cell_text_height_and_keeps_style_scale() {
     assert_eq!(t2.cells[0][0].text_height, Some(150.0));
     assert_eq!(t2.cells[0][1].text_height, None);
 }
+
+#[test]
+fn stroke_font_text_plots_with_a_hidden_searchable_copy() {
+    let mut d = Drawing::new_imperial();
+    let text = Text {
+        insert: Vec3::new(10.0, 10.0, 0.0),
+        align_pt: None,
+        height: 2.5,
+        value: "ROOM (101) \\ ÉTÉ".into(),
+        rotation: 0.0,
+        width_factor: 1.0,
+        oblique: 0.0,
+        style: "Standard".into(),
+        halign: HAlign::Left,
+        valign: VAlign::Baseline,
+    };
+    let _ = d.add(&Space::Model, Common::default(), EntityKind::Text(text));
+    let _ = d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(40.0, 20.0, 0.0) }));
+    let bytes = crate::pdf::plot(&d, &Space::Model, &serde_json::json!({"compress": false})).unwrap();
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(raw.contains("3 Tr /FW") && raw.contains("/BaseFont /Helvetica"), "a hidden copy in the standard font");
+    let (back, _) = crate::pdf_read::read_json(&bytes, &serde_json::json!({})).unwrap();
+    let words: Vec<String> = back
+        .model
+        .iter()
+        .filter(|e| e.common.layer == crate::pdf_read::HIDDEN_TEXT_LAYER)
+        .filter_map(|e| if let EntityKind::Text(t) = &e.kind { Some(t.value.clone()) } else { None })
+        .collect();
+    assert_eq!(words, vec!["ROOM (101) \\ ÉTÉ".to_string()], "read back, escapes and Latin-1 intact");
+}

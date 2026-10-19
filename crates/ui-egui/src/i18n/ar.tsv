@@ -2018,3 +2018,13 @@ menu	View	عرض
 	Read MEP Runs	قراءة مسارات الأنظمة الكهروميكانيكية
 	Model Clashes	تعارضات النموذج
 	MEP Systems	الأنظمة الكهروميكانيكية
+	Undo History	سجل التراجع
+	(Start)	(البداية)
+	Click a step to undo or redo to it.	انقر خطوة للتراجع أو الإعادة حتى تصل إليها.
+	Nothing yet.	لا شيء بعد.
+	Double-click to run it again	انقر نقرًا مزدوجًا لتشغيله مرة أخرى
+	Copy as Script	نسخ كبرنامج نصي
+	Save Session as Script...	حفظ الجلسة كبرنامج نصي...
+	Command History Palette	لوحة سجل الأوامر
+	Furnish from Plan	تأثيث من المخطط
+	Classify Plan	تصنيف المخطط

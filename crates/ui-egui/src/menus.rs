@@ -91,6 +91,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.update.check", "Check for Updates...", &["Help", "Check for Updates..."], None),
     ("ui.feedback", "Report a Bug...", &["Help", "Report a Bug..."], None),
     ("ui.diag", "Report a Problem...", &["Help", "Report a Problem..."], None),
+    ("ui.dialog.commandhistory", "Command History Palette", &["Window", "Command History Palette"], None),
+    ("ui.savescript", "Save Session as Script...", &["Tools", "Save Session as Script..."], None),
     ("ui.dialog.aliases", "Edit Aliases and Shortcuts...", &["Tools", "Customize", "Edit Aliases and Shortcuts..."], None),
     ("ui.shortcuts", "Keyboard Shortcuts", &[], None),
     ("ui.workspace.drafting", "Drafting & Annotation", &["Tools", "Workspaces", "Drafting & Annotation"], None),
@@ -568,6 +570,18 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "toolpalettes" => crate::toolpalettes::run(app, params),
+        "undohistory" | "commandhistory" if params.is_null() => {
+            app.ui.dialog = Some(id.to_string());
+            Ok(Value::Null)
+        }
+        "ui.dialog.commandhistory" => {
+            app.ui.dialog = Some("commandhistory".into());
+            Ok(Value::Null)
+        }
+        "ui.savescript" => {
+            crate::historypalettes::save_script(app);
+            Ok(Value::Null)
+        }
         "ui.diag" => {
             app.ui.dialog = Some("diag".into());
             Ok(Value::Null)

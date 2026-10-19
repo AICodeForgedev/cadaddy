@@ -2030,3 +2030,13 @@ menu	Modify	Ändra
 	Read MEP Runs	Läs installationsdragningar
 	Model Clashes	Modellkollisioner
 	MEP Systems	Installationssystem
+	Undo History	Ångrahistorik
+	(Start)	(Början)
+	Click a step to undo or redo to it.	Klicka på ett steg för att ångra eller göra om fram till det.
+	Nothing yet.	Inget ännu.
+	Double-click to run it again	Dubbelklicka för att köra igen
+	Copy as Script	Kopiera som skript
+	Save Session as Script...	Spara sessionen som skript...
+	Command History Palette	Palett för kommandohistorik
+	Furnish from Plan	Möblera från planritning
+	Classify Plan	Klassificera ritning

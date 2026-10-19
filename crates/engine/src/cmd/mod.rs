@@ -33,6 +33,7 @@ mod gripcmds;
 mod griphot;
 pub mod groups;
 pub(crate) mod hatch;
+pub mod history;
 pub mod hyperlink;
 mod imageattach;
 mod imageclip;
@@ -40,6 +41,7 @@ pub(crate) mod inquiry;
 mod layer;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
+pub mod furnish;
 pub(crate) mod layout;
 pub mod lightbake;
 pub mod lights;
@@ -54,6 +56,7 @@ mod modify;
 mod modify2;
 mod mtext_opts;
 mod overkill;
+pub mod pdfplans;
 mod perceive;
 mod pline_opts;
 pub mod plotters;
@@ -240,6 +243,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(materials::specs());
         v.extend(wallgen::specs());
         v.extend(bspec::specs());
+        v.extend(pdfplans::specs());
         v.extend(grids::specs());
         v.extend(mep::specs());
         v.extend(ceilings::specs());
@@ -259,6 +263,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
                 .interactive(|_| Ok(Box::new(spell::SpellM::default()))),
         );
         v.extend(models3d::specs());
+        v.extend(furnish::specs());
         v.extend(perceive::specs());
         v.extend(rooms3d::specs());
         v.extend(underlay::specs());
@@ -282,6 +287,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(ucs::specs());
         v.extend(tolerance::specs());
         v.extend(adcenter::specs());
+        v.extend(history::specs());
         v.extend(standards::specs());
         v.extend(colorbook::specs());
         v.extend(constraints::specs());
