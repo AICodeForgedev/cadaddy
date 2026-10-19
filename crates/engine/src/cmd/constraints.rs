@@ -1136,8 +1136,9 @@ pub fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>, ok: bool) {
     }
     let mut d = (*st.doc).clone();
     let purged = cs::purge_invalid(&mut d);
+    let restored = cs::restore_fixed(&mut d, before);
     let satisfied = cs::all_satisfied(&d);
-    if purged.is_empty() && satisfied {
+    if purged.is_empty() && !restored && satisfied {
         return;
     }
     let mut msg = Vec::new();

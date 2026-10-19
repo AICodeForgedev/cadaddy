@@ -428,6 +428,46 @@ pub fn residuals(d: &Drawing) -> Vec<(u32, Option<f64>)> {
         .collect()
 }
 
+/// Put back what each Fix locks where `before` had it, and report whether anything moved.
+///
+/// A Fix keeps no position of its own: the solver locks the parameters at their current values.
+/// Without this, an edit that moves a fixed point (a grip drag) would carry the lock along with
+/// it. Only Fixes that already existed in `before`, on objects of the same shape, are restored.
+pub fn restore_fixed(d: &mut Drawing, before: &Drawing) -> bool {
+    let refs: Vec<GeomRef> = d
+        .constraints
+        .iter()
+        .filter(|c| c.kind == ConstraintKind::Fix && before.constraints.contains(c))
+        .flat_map(|c| c.refs.iter().copied())
+        .collect();
+    if refs.is_empty() {
+        return false;
+    }
+    let handles: Vec<Handle> = refs.iter().map(|r| r.handle).collect();
+    let (now, old) = (Model::build(d, &handles), Model::build(before, &handles));
+    let mut x = now.x0.clone();
+    let mut changed = false;
+    for r in &refs {
+        let same_shape = matches!((now.slot(r.handle), old.slot(r.handle)), (Some(a), Some(b)) if a.shape == b.shape);
+        let (Some(i), Some(j)) = (now.lock_indices(r), old.lock_indices(r)) else { continue };
+        if !same_shape {
+            continue;
+        }
+        for (i, j) in i.into_iter().zip(j) {
+            if let (Some(slot), Some(&v)) = (x.get_mut(i), old.x0.get(j))
+                && *slot != v
+            {
+                *slot = v;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        now.write_back(d, &x);
+    }
+    changed
+}
+
 /// True when every interpretable constraint holds at the current geometry.
 pub fn all_satisfied(d: &Drawing) -> bool {
     let handles: Vec<Handle> = d.constraints.iter().flat_map(|c| c.refs.iter().map(|r| r.handle)).collect();
