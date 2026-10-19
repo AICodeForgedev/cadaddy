@@ -1854,9 +1854,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         if app.session.settings.dynmode
             && let Some(hp) = hover_pos
         {
-            // A stretched grip shows its dimensions instead of the pointer boxes.
-            if !crate::grip_dyn::draw(app, &painter) {
-                dynamic_input(app, &painter, hp);
+            // A stretched grip shows its dimensions instead of the pointer boxes; a prompt asking
+            // for a distance shows its one field and keeps the prompt and its options.
+            let fields = crate::grip_dyn::draw(app, &painter);
+            if !fields || app.session.current_prompt().is_some_and(|p| p.distance) {
+                dynamic_input(app, &painter, hp, fields);
             }
         }
     }
@@ -2022,8 +2024,9 @@ fn draw_crosshair(app: &CadApp, p: &egui::Painter, rect: Rect, at: Pos2, pickbox
 
 /// The Dynamic Input tooltip beside the cursor, styled like the command line. At a point prompt
 /// it shows the pair of value boxes, a view of the command-line text (see [`crate::dyninput`]);
-/// otherwise the prompt with what is being typed, or the live distance and angle.
-fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
+/// otherwise the prompt with what is being typed, or the live distance and angle. With `fields`
+/// (a distance prompt's field is on show, [`crate::grip_dyn`]) only the prompt and its options.
+fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2, fields: bool) {
     app.cmd.option_rows.clear();
     // While the options menu is open the tooltip stays where it opened, so the menu can be reached.
     let at = match app.cmd.options {
@@ -2037,7 +2040,8 @@ fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
     // DYNPROMPT = 0: no prompt beside the cursor (the value boxes stay).
     let show_prompt = app.session.settings.dynprompt;
     let options = show_prompt && !prompt.keywords.is_empty();
-    if let Some(f) = crate::cmdline::dyn_frame(app)
+    if !fields
+        && let Some(f) = crate::cmdline::dyn_frame(app)
         && let Some(e) = crate::dyninput::parse(&app.cmd.buffer, &f)
         && let Some(c) = app.canvas.cursor
     {
@@ -2050,7 +2054,9 @@ fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
         return;
     }
     let mut text = crate::i18n::t(&prompt.message).to_string();
-    if !app.cmd.buffer.is_empty() {
+    if fields {
+        // The field shows the distance and what is typed.
+    } else if !app.cmd.buffer.is_empty() {
         text = format!("{}: {}", crate::i18n::t(&prompt.message), app.cmd.buffer);
     } else if let (Some(base), Some(c)) = (prompt.base, app.canvas.cursor) {
         text = format!(

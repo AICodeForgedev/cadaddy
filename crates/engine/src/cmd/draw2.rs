@@ -578,7 +578,7 @@ impl Interactive for TanCircleM {
                 1 => Prompt::new("Specify point on object for second tangent of circle", Accept::POINT),
                 _ => {
                     let r = s.doc().map(|d| d.header.f64("CIRCLERAD", 0.0)).unwrap_or(0.0);
-                    let p = Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).base_opt(self.picks.last().map(|x| x.1));
+                    let p = Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).base_opt(self.picks.last().map(|x| x.1)).distance();
                     if r > 0.0 { p.default(format!("{r:.4}")) } else { p }
                 }
             }
