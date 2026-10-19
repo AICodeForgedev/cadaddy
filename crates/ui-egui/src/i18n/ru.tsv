@@ -1811,3 +1811,26 @@
 	Command History Palette	Палитра журнала команд
 	Furnish from Plan	Расставить мебель по плану
 	Classify Plan	Распознать план
+	Text and multiline text	Текст и многострочный текст
+	Block attribute values	Значения атрибутов блоков
+	Dimension text	Размерный текст
+	Tables	Таблицы
+	Multileaders	Мультивыноски
+	Hyperlinks	Гиперссылки
+	Layer and block names	Имена слоёв и блоков
+	Find where:	Где искать:
+	Current space	Текущее пространство
+	Plain text	Обычный текст
+	Use wildcards	Использовать подстановочные знаки
+	Regular expressions	Регулярные выражения
+	Look in	Искать в
+	Zoom To	Показать
+	Replace	Заменить
+	Create Selection Set	Создать набор
+	Matches found: {count} (objects: {objects})	Найдено совпадений: {count} (объектов: {objects})
+	Layer name	Имя слоя
+	Block name	Имя блока
+	Revise Model from Plans	Обновить модель по планам
+	Plans to Model Benchmark	Тест «От планов к модели»
+	Plans to Model Case	Пример «От планов к модели»
+	Plans to Model Score	Оценка «От планов к модели»

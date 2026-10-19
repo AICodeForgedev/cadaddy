@@ -2032,3 +2032,26 @@ menu	Modify	Edita
 	Command History Palette	Tavolozza cronologia comandi
 	Furnish from Plan	Arreda dalla pianta
 	Classify Plan	Classifica pianta
+	Text and multiline text	Testo e testo multilinea
+	Block attribute values	Valori degli attributi dei blocchi
+	Dimension text	Testo di quota
+	Tables	Tabelle
+	Multileaders	Multidirettrici
+	Hyperlinks	Collegamenti ipertestuali
+	Layer and block names	Nomi di layer e blocchi
+	Find where:	Cerca in:
+	Current space	Spazio corrente
+	Plain text	Testo semplice
+	Use wildcards	Usa caratteri jolly
+	Regular expressions	Espressioni regolari
+	Look in	Cerca in
+	Zoom To	Zoom su
+	Replace	Sostituisci
+	Create Selection Set	Crea gruppo di selezione
+	Matches found: {count} (objects: {objects})	Corrispondenze trovate: {count} (oggetti: {objects})
+	Layer name	Nome layer
+	Block name	Nome blocco
+	Revise Model from Plans	Rivedi modello dalle piante
+	Plans to Model Benchmark	Benchmark Dalle piante al modello
+	Plans to Model Case	Caso Dalle piante al modello
+	Plans to Model Score	Punteggio Dalle piante al modello

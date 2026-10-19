@@ -220,6 +220,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // Swings that came through as chords (a PDF draws arcs as curves, often read back as short
     // straight pieces): points on one circle sweeping 60°–100° with a door's radius, the leaf
     // from its centre.
+    // Chord swings to rebuild as arcs (WALLGEN cuts doors at arcs): handle, centre, radius,
+    // ends, and the leaf joined to an end (hinge → that end).
+    let mut swings: Vec<(Handle, Vec2, f64, Vec2, Vec2, Option<Vec2>)> = Vec::new();
     for (e, (_, segs)) in ents.iter().zip(&segs_by) {
         let EntityKind::LwPolyline(pl) = &e.kind else { continue };
         if pl.closed || pl.vertices.len() < 3 || doors.contains(&e.handle) {
@@ -235,10 +238,16 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let (c, r) = circle3(a, m, b)?;
             let sweep = (a - c).cross(b - c).atan2((a - c).dot(b - c)).abs().to_degrees();
+            let leaf = match (lo, hi) {
+                (1, _) => Some(a),
+                (_, 1) => Some(b),
+                _ => None,
+            };
             ((16.0 * k..=54.0 * k).contains(&r) && pts.iter().all(|p| (p.dist(c) - r).abs() <= 0.03 * r) && (60.0..=100.0).contains(&sweep))
-                .then_some((a, b, c, r))
+                .then_some((a, b, c, r, leaf))
         });
-        let Some((a, b, c, r)) = fit else { continue };
+        let Some((a, b, c, r, leaf)) = fit else { continue };
+        swings.push((e.handle, c, r, a, b, leaf));
         let (a, b) = (&a, &b);
         doors.insert(e.handle);
         walls.remove(&e.handle);
@@ -325,6 +334,23 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let room_set: HashSet<Handle> = rooms.iter().map(|(h, _)| *h).chain(numbers.iter().copied()).collect();
         let m = Mat3::scale(factor, factor);
+        // Chord swings become arcs (and their joined leaves lines) on A-DOOR.
+        for (h, c, r, a, b, leaf) in &swings {
+            let (mut start, mut end) = ((*a - *c).angle(), (*b - *c).angle());
+            if (*a - *c).cross(*b - *c) < 0.0 {
+                std::mem::swap(&mut start, &mut end);
+            }
+            let arc = cadaddy_doc::Arc { center: cadaddy_geom::Vec3::new(c.x, c.y, 0.0), radius: *r, start, end };
+            let _ = dm.modify_entity(*h, |e| e.kind = EntityKind::Arc(arc));
+            if let Some(end) = leaf {
+                let common = cadaddy_doc::Common { layer: "A-DOOR".into(), ..cadaddy_doc::Common::default() };
+                let line =
+                    EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(c.x, c.y, 0.0), b: cadaddy_geom::Vec3::new(end.x, end.y, 0.0) });
+                if let Ok(nh) = dm.add(&cadaddy_doc::Space::Model, common, line) {
+                    doors.insert(nh);
+                }
+            }
+        }
         let hs: Vec<Handle> = dm.model.iter().filter(|e| super::wallgen::made_as(e).is_none()).map(|e| e.handle).collect();
         for h in hs {
             let layer = if walls.contains(&h) {

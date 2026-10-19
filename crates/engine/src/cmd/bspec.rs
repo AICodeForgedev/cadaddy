@@ -251,6 +251,7 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     let g = WallGen { rules: sp.to_rules(), auto: bool_or(p, "auto", true), slab_ft, layers: None, spec: Some(sp) };
     let mut r = build_spec(s, &g)?;
     r["warnings"] = json!(issues.iter().filter(|i| !i.error).map(issue_json).collect::<Vec<_>>());
+    super::revise3d::record(s, &g);
     s.state_mut()?.wallgen = Some(g);
     s.echo(format!(
         "3D building from the spec: {} walls, {} doors, {} windows, {} columns, {} curtain walls, {} floors, {} ceilings ({} rooms) on {} level(s).",
@@ -549,6 +550,11 @@ pub(crate) fn ear_clip(poly: &[Vec2]) -> Vec<[usize; 3]> {
                     return false;
                 }
                 let q = p(j);
+                // A point where the outline touches itself (the same place twice) is the ear's
+                // own corner, not inside it.
+                if q.dist(a) < 1e-9 || q.dist(b) < 1e-9 || q.dist(c) < 1e-9 {
+                    return false;
+                }
                 (b - a).cross(q - a) >= 0.0 && (c - b).cross(q - b) >= 0.0 && (a - c).cross(q - c) >= 0.0
             });
             if !inside {
@@ -612,6 +618,10 @@ mod tests {
 
     #[test]
     fn ear_clipping_an_l() {
+        // An outline touching itself at (2, 1): a notch in from the top edge and back.
+        let notch = [(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (2.0, 2.0), (2.0, 1.0), (3.0, 1.5), (2.0, 2.0), (0.0, 2.0)].map(|(x, y)| Vec2::new(x, y));
+        let area: f64 = ear_clip(&notch).iter().map(|t| cadaddy_geom::shoelace(&[notch[t[0]], notch[t[1]], notch[t[2]]])).sum();
+        assert!((area - cadaddy_geom::shoelace(&notch)).abs() < 1e-9, "{area}");
         let l = [(0.0, 0.0), (4.0, 0.0), (4.0, 1.0), (1.0, 1.0), (1.0, 3.0), (0.0, 3.0)].map(|(x, y)| Vec2::new(x, y));
         let tris = ear_clip(&l);
         assert_eq!(tris.len(), 4);

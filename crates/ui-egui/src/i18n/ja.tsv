@@ -1779,3 +1779,7 @@
 	MEP Systems	設備システム
 	Furnish from Plan	平面図から家具を配置
 	Classify Plan	図面を分類
+	Revise Model from Plans	図面からモデルを改訂
+	Plans to Model Benchmark	図面からモデルへ ベンチマーク
+	Plans to Model Case	図面からモデルへ ケース
+	Plans to Model Score	図面からモデルへ スコア

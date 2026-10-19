@@ -2040,3 +2040,26 @@ menu	Modify	Ändra
 	Command History Palette	Palett för kommandohistorik
 	Furnish from Plan	Möblera från planritning
 	Classify Plan	Klassificera ritning
+	Text and multiline text	Text och flerradstext
+	Block attribute values	Blockattributvärden
+	Dimension text	Måttext
+	Tables	Tabeller
+	Multileaders	Multiledare
+	Hyperlinks	Hyperlänkar
+	Layer and block names	Lager- och blocknamn
+	Find where:	Sök i:
+	Current space	Aktuell rymd
+	Plain text	Oformaterad text
+	Use wildcards	Använd jokertecken
+	Regular expressions	Reguljära uttryck
+	Look in	Leta i
+	Zoom To	Zooma till
+	Replace	Ersätt
+	Create Selection Set	Skapa urvalsuppsättning
+	Matches found: {count} (objects: {objects})	Hittade träffar: {count} (objekt: {objects})
+	Layer name	Lagernamn
+	Block name	Blocknamn
+	Revise Model from Plans	Revidera modell från ritningar
+	Plans to Model Benchmark	Prestandatest Från ritningar till modell
+	Plans to Model Case	Testfall Från ritningar till modell
+	Plans to Model Score	Poäng Från ritningar till modell

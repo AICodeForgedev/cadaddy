@@ -2012,3 +2012,26 @@ menu	Modify	Modifikace
 	Command History Palette	Paleta historie příkazů
 	Furnish from Plan	Zařídit podle půdorysu
 	Classify Plan	Rozpoznat výkres
+	Text and multiline text	Text a víceřádkový text
+	Block attribute values	Hodnoty atributů bloků
+	Dimension text	Text kóty
+	Tables	Tabulky
+	Multileaders	Multiodkazy
+	Hyperlinks	Hypertextové odkazy
+	Layer and block names	Názvy hladin a bloků
+	Find where:	Kde hledat:
+	Current space	Aktuální prostor
+	Plain text	Prostý text
+	Use wildcards	Použít zástupné znaky
+	Regular expressions	Regulární výrazy
+	Look in	Hledat v
+	Zoom To	Zvětšit na
+	Replace	Nahradit
+	Create Selection Set	Vytvořit výběrovou sadu
+	Matches found: {count} (objects: {objects})	Nalezené shody: {count} (objekty: {objects})
+	Layer name	Název hladiny
+	Block name	Název bloku
+	Revise Model from Plans	Revidovat model podle výkresů
+	Plans to Model Benchmark	Test Z výkresů do modelu
+	Plans to Model Case	Případ Z výkresů do modelu
+	Plans to Model Score	Skóre Z výkresů do modelu

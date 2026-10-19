@@ -60,6 +60,7 @@ pub mod xrefs;
 pub mod dyngrips;
 pub mod dyninput;
 pub mod extractdlg;
+pub mod finddlg;
 pub mod gpu;
 pub mod grip_dyn;
 mod groupgrips;

@@ -2033,3 +2033,26 @@ menu	Modify	수정
 	Command History Palette	명령 내역 팔레트
 	Furnish from Plan	평면도에서 가구 배치
 	Classify Plan	도면 분류
+	Text and multiline text	문자 및 여러 줄 문자
+	Block attribute values	블록 속성 값
+	Dimension text	치수 문자
+	Tables	테이블
+	Multileaders	다중 지시선
+	Hyperlinks	하이퍼링크
+	Layer and block names	도면층 및 블록 이름
+	Find where:	찾을 위치:
+	Current space	현재 공간
+	Plain text	일반 텍스트
+	Use wildcards	와일드카드 사용
+	Regular expressions	정규식
+	Look in	찾을 대상
+	Zoom To	줌
+	Replace	바꾸기
+	Create Selection Set	선택 세트 작성
+	Matches found: {count} (objects: {objects})	찾은 항목: {count}(객체: {objects})
+	Layer name	도면층 이름
+	Block name	블록 이름
+	Revise Model from Plans	도면에서 모델 수정
+	Plans to Model Benchmark	도면에서 모델로 벤치마크
+	Plans to Model Case	도면에서 모델로 사례
+	Plans to Model Score	도면에서 모델로 점수

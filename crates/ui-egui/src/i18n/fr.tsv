@@ -1810,3 +1810,26 @@
 	Command History Palette	Palette d'historique des commandes
 	Furnish from Plan	Meubler depuis le plan
 	Classify Plan	Classer le plan
+	Text and multiline text	Texte et texte multiligne
+	Block attribute values	Valeurs des attributs de bloc
+	Dimension text	Texte de cote
+	Tables	Tables
+	Multileaders	Lignes de repère multiples
+	Hyperlinks	Liens hypertexte
+	Layer and block names	Noms de calques et de blocs
+	Find where:	Rechercher dans :
+	Current space	Espace courant
+	Plain text	Texte brut
+	Use wildcards	Utiliser les caractères génériques
+	Regular expressions	Expressions régulières
+	Look in	Rechercher dans
+	Zoom To	Zoom sur
+	Replace	Remplacer
+	Create Selection Set	Créer un jeu de sélection
+	Matches found: {count} (objects: {objects})	Correspondances trouvées : {count} (objets : {objects})
+	Layer name	Nom de calque
+	Block name	Nom de bloc
+	Revise Model from Plans	Réviser le modèle depuis les plans
+	Plans to Model Benchmark	Banc d'essai Des plans au modèle
+	Plans to Model Case	Cas Des plans au modèle
+	Plans to Model Score	Score Des plans au modèle
