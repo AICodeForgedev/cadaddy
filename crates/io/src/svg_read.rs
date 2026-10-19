@@ -905,6 +905,7 @@ impl Parser {
         let decoded = raw.replace("%20", " ");
         let p = std::path::Path::new(&decoded);
         let full = if p.is_absolute() { p.to_path_buf() } else { self.dir.as_ref()?.join(p) };
+        let full = cadaddy_geom::filename::resolve(full);
         let readable = std::fs::metadata(&full).is_ok_and(|m| m.is_file() && m.len() <= MAX_IMAGE_BYTES as u64);
         let Some(raster) = readable.then(|| std::fs::read(&full).ok()).flatten().and_then(|b| cadaddy_render::images::decode(&b)).map(Arc::new)
         else {

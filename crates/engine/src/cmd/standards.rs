@@ -62,7 +62,7 @@ fn read(cmd: &str, path: &str, host: Option<&str>) -> Result<Drawing> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use std::io::Read;
-        let f = std::fs::File::open(&file).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+        let f = crate::readfile::open(&file).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
         let mut bytes = Vec::new();
         f.take(MAX_BYTES + 1).read_to_end(&mut bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
         if bytes.len() as u64 > MAX_BYTES {
@@ -497,7 +497,7 @@ fn run_laytrans(s: &mut Session, p: &Value) -> Result<Value> {
             .collect::<Result<_>>()?,
         (Some(_), _) => return Err(bad(cmd, "`map` is a list of {from, to}")),
         (None, Some(path)) => {
-            let text = std::fs::read_to_string(path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+            let text = crate::readfile::read_string(path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
             let v: Value = serde_json::from_str(&text).map_err(|e| bad(cmd, format!("{path}: not a layer map: {e}")))?;
             v.get("map")
                 .and_then(Value::as_array)

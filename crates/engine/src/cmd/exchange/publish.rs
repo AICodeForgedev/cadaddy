@@ -76,7 +76,7 @@ fn sheet_json(s: &Sheet) -> Value {
 #[cfg(not(target_arch = "wasm32"))]
 fn read_text(cmd: &str, path: &str, max: u64) -> Result<Vec<u8>> {
     use std::io::Read;
-    let f = std::fs::File::open(path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+    let f = crate::readfile::open(path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
     let mut b = Vec::new();
     f.take(max + 1).read_to_end(&mut b).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
     if b.len() as u64 > max {

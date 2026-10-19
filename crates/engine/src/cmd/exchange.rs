@@ -198,11 +198,11 @@ impl crate::Interactive for PdfImportM {
             if path.is_empty() {
                 return Ok(Step::Cancel);
             }
-            if !std::path::Path::new(&path).is_file() {
+            let Some(found) = cadaddy_geom::filename::find_file(&path) else {
                 s.echo(format!("Can't find the file {path}"));
                 return Ok(Step::Continue);
-            }
-            self.path = Some(path);
+            };
+            self.path = Some(found.to_string_lossy().into_owned());
             return Ok(Step::Continue);
         };
         let Some(page) = self.page else {

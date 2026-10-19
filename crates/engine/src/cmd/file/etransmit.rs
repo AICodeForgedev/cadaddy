@@ -350,7 +350,7 @@ impl Pack {
 #[cfg(not(target_arch = "wasm32"))]
 fn read_file(file: &Path) -> std::result::Result<Vec<u8>, String> {
     use std::io::Read;
-    let f = std::fs::File::open(file).map_err(|e| e.to_string())?;
+    let f = crate::readfile::open(file).map_err(|e| e.to_string())?;
     if !f.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("not a regular file".into());
     }

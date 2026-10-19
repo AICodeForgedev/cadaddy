@@ -7,14 +7,25 @@ use std::io::Read;
 pub const MAX_FILE_BYTES: u64 = 2 << 30;
 
 /// Read `path` into memory: an error for anything but a regular file, or a file over
-/// [`MAX_FILE_BYTES`].
+/// [`MAX_FILE_BYTES`]. The name is matched ignoring case, `\` separating folders (as Windows
+/// does), so a drawing made on Windows finds its files anywhere.
 pub fn read(path: impl AsRef<std::path::Path>) -> std::io::Result<Vec<u8>> {
     read_max(path.as_ref(), MAX_FILE_BYTES)
 }
 
+/// [`read`] as UTF-8 text.
+pub fn read_string(path: impl AsRef<std::path::Path>) -> std::io::Result<String> {
+    String::from_utf8(read(path)?).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// Open `path` for reading, its name matched as [`read`] matches it.
+pub fn open(path: impl AsRef<std::path::Path>) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(cadaddy_geom::filename::resolve(path))
+}
+
 fn read_max(path: &std::path::Path, max: u64) -> std::io::Result<Vec<u8>> {
     use std::io::{Error, ErrorKind};
-    let file = std::fs::File::open(path)?;
+    let file = open(path)?;
     let meta = file.metadata()?;
     if !meta.is_file() {
         return Err(Error::new(ErrorKind::InvalidInput, "not a regular file"));
