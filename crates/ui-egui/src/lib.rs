@@ -58,6 +58,7 @@ pub mod vpscale;
 pub mod walk;
 
 pub mod exchange;
+pub mod sheetsets;
 
 use std::sync::mpsc::Receiver;
 
@@ -107,6 +108,8 @@ pub struct UiState {
     /// menu puts them back.
     pub hidden_tools: Vec<String>,
     pub properties_all: bool,
+    /// The sheet set file the Sheet Set Manager shows.
+    pub sheet_set: Option<String>,
     /// Show an in-window menu bar (platforms without a native menu bar, or on request).
     pub in_window_menu: bool,
     pub start_tab: bool,
@@ -192,6 +195,7 @@ impl Default for UiState {
             collapsed_groups: Vec::new(),
             hidden_tools: Vec::new(),
             properties_all: true,
+            sheet_set: None,
             // AutoCAD hides the menu bar under the ribbon (MENUBAR 0).
             in_window_menu: false,
             start_tab: false,

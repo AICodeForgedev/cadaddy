@@ -445,6 +445,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         // Typed or menu-invoked (no parameters) these open their dialogs; JSON calls run the command.
+        "sheetset" | "ssm" if params.is_null() => {
+            app.ui.dialog = Some("sheetset".into());
+            Ok(Value::Null)
+        }
         "qselect" | "qs" if params.is_null() => {
             app.ui.dialog = Some("qselect".into());
             Ok(Value::Null)
