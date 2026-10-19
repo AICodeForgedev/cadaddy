@@ -301,6 +301,7 @@ fn control_flag(current: Option<u16>, value: Option<String>) -> Option<u16> {
 }
 
 fn main() -> eframe::Result {
+    cadaddy_ui_egui::startup::begin();
     // First, so every start-up record is captured; see `logging`.
     let logger = logging::install();
     // lossy, so a value that is not Unicode is reported like any other bad port instead of ignored
@@ -333,6 +334,7 @@ fn main() -> eframe::Result {
         }
     }
     install_io();
+    cadaddy_ui_egui::startup::mark("logging and file formats");
     let surface = cadaddy_ui_egui::gpu::surface_config(std::env::var("CADADDY_VSYNC").ok().as_deref(), cfg!(all(unix, not(target_os = "macos"))));
     let make_options = |attempt: graphics::Attempt| {
         let mut options = eframe::NativeOptions {
@@ -394,7 +396,9 @@ fn main() -> eframe::Result {
             "CADaddy",
             options,
             Box::new(move |cc| {
+                cadaddy_ui_egui::startup::mark("window and graphics");
                 let mut app = CadApp::new(Session::empty(), services());
+                cadaddy_ui_egui::startup::mark("app state");
                 if let Some(note) = fallback {
                     log::warn!("{note}");
                     app.set_status(note);
@@ -404,6 +408,7 @@ fn main() -> eframe::Result {
                     app.updater = Some(Box::new(updater::DesktopUpdater::default()));
                 }
                 let (workspace, restored, workspace_error) = workspace::Workspace::load();
+                cadaddy_ui_egui::startup::mark("workspace");
                 if let Some(ui) = restored {
                     app.ui = ui;
                 }
@@ -468,10 +473,12 @@ fn main() -> eframe::Result {
                 if app.session.docs.is_empty() {
                     app.session.new_drawing_with_viewports(false);
                 }
+                cadaddy_ui_egui::startup::mark("drawings opened");
                 let ctx = cc.egui_ctx.clone();
                 let desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());
                 let ctx = cc.egui_ctx.clone();
                 let system_animations = system_animations::SystemAnimations::start(move || ctx.request_repaint());
+                cadaddy_ui_egui::startup::mark("app ready");
                 Ok(Box::new(App {
                     desktop_theme,
                     system_animations,

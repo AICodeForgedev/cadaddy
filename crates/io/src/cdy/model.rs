@@ -284,6 +284,15 @@ fn tag_name(tag: &[u8; 4]) -> String {
     if tag.iter().all(u8::is_ascii_alphanumeric) { String::from_utf8_lossy(tag).into_owned() } else { "damaged".into() }
 }
 
+/// A model space chunk's objects, with notes about the ones that couldn't be read; `None` when
+/// the chunk doesn't decode to a list.
+fn entity_list(data: &[u8]) -> Option<(Vec<Entity>, Vec<String>)> {
+    let Value::Array(list) = tokens::decode(data)? else { return None };
+    let mut notes = Vec::new();
+    let items = list.into_iter().filter_map(|item| take::<Entity>(item, "an object", &mut notes)).collect();
+    Some((items, notes))
+}
+
 /// The drawing in a .cdy file, with notes about anything damaged that was left out. Errors only
 /// when the file isn't a .cdy file this version can read.
 pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
@@ -296,7 +305,12 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
     d.layouts.clear();
     let mut model = EntityStore::new();
     let mut have_tables = false;
-    for c in chunks {
+    // The model space parts decoded into objects on all cores first (in order).
+    let decoded = crate::par_map(&chunks, |c| match c {
+        Read::Ok(c) if &c.tag == b"ENTS" && c.version <= V1 => Some(entity_list(&c.data)),
+        _ => None,
+    });
+    for (c, pre) in chunks.into_iter().zip(decoded) {
         let c = match c {
             Read::Ok(c) => c,
             Read::Damaged { tag, why, salvage } => {
@@ -337,6 +351,18 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
         }
         if &c.tag == b"MANI" {
             rep.manifest = serde_json::from_slice(&c.data).ok();
+            continue;
+        }
+        if let Some(pre) = pre {
+            // One chunk of the store per chunk of the file, as it was saved (an incremental save
+            // then finds them unchanged).
+            match pre {
+                Some((items, notes)) => {
+                    rep.notes.extend(notes);
+                    model.push_chunk(items);
+                }
+                None => rep.notes.push("a model space part was damaged".into()),
+            }
             continue;
         }
         let Some(v) = tokens::decode(&c.data) else {
@@ -410,16 +436,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                     d.blocks.insert(name, Arc::new(b));
                 }
             }
-            b"ENTS" => {
-                let Value::Array(list) = v else {
-                    rep.notes.push("a model space part was damaged".into());
-                    continue;
-                };
-                // One chunk of the store per chunk of the file, as it was saved (an incremental
-                // save then finds them unchanged).
-                let items: Vec<Entity> = list.into_iter().filter_map(|item| take::<Entity>(item, "an object", &mut rep.notes)).collect();
-                model.push_chunk(items);
-            }
+
             b"LAYO" => {
                 let Some([l, objs]) = parts::<2>(v) else {
                     rep.notes.push("a layout was damaged and left out".into());

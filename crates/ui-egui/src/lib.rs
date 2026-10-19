@@ -52,6 +52,7 @@ mod shaded;
 pub mod snap3ui;
 pub mod spacemouse;
 // Report a Bug, Request a Feature, Donate.
+pub mod startup;
 pub mod support;
 pub mod update;
 // The External References palette.
@@ -719,6 +720,7 @@ impl CadApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
+            startup::open_started();
             self.opening.start(path);
         }
         #[cfg(target_arch = "wasm32")]
@@ -731,11 +733,14 @@ impl CadApp {
     /// Add the files whose background read has finished; report the ones that failed as a failed
     /// OPEN is reported. Called every frame.
     pub fn finish_opening(&mut self) {
-        for (_, outcome) in self.opening.poll() {
+        for (path, outcome) in self.opening.poll() {
+            let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            startup::mark(&format!("read {name}"));
             let r = match outcome {
                 Ok(f) => self.session.finish_open(f).map_err(|e| e.to_string()),
                 Err(e) => Err(e),
             };
+            startup::open_finished(&format!("added {name}"));
             if let Err(e) = &r {
                 self.session.echo(e.clone());
             }
@@ -1085,6 +1090,19 @@ impl CadApp {
         control::observe_drawn(ui.ctx());
         self.frame_ms = now_ms() - t0;
         self.note_time("draw", self.frame_ms);
+        if startup::frame(self.frame_ms) {
+            let report = startup::report();
+            log::info!(
+                "started: first frame {} ms, interactive {} ms, drawings on screen {} ms",
+                report["firstFrameMs"],
+                report["interactiveMs"],
+                report["drawingsShownMs"]
+            );
+            if startup::exit_when_interactive() {
+                eprintln!("{report}");
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {

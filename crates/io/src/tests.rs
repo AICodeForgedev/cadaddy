@@ -2468,3 +2468,26 @@ fn stroke_font_text_plots_with_a_hidden_searchable_copy() {
         .collect();
     assert_eq!(words, vec!["ROOM (101) \\ ÉTÉ".to_string()], "read back, escapes and Latin-1 intact");
 }
+
+/// A large DXF's objects are parsed on all cores (Q112): the result is the same as reading them
+/// one by one — every object, in order, with POLYLINE vertices merged into their polyline.
+#[test]
+fn a_large_dxf_reads_every_object_in_order() {
+    let mut d = Drawing::new_metric();
+    for i in 0..3000 {
+        let x = f64::from(i);
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(x, 0.0, 0.0), b: Vec3::new(x, 5.0, 0.0) })).unwrap();
+        let points = vec![Vec3::new(x, 0.0, 1.0), Vec3::new(x, 1.0, 2.0), Vec3::new(x, 2.0, x)];
+        d.add(&Space::Model, Common::default(), EntityKind::Polyline3d(Polyline3d { points, closed: i % 2 == 0 })).unwrap();
+        d.add(
+            &Space::Model,
+            Common { layer: format!("L{}", i % 7), ..Common::default() },
+            EntityKind::Circle(Circle { center: Vec3::new(x, 9.0, 0.0), radius: 1.0 + x }),
+        )
+        .unwrap();
+    }
+    let back = read_dxf(write_dxf(&d).as_bytes()).unwrap();
+    let kinds = |d: &Drawing| d.model.iter().map(|e| (e.kind.clone(), e.common.layer.clone())).collect::<Vec<_>>();
+    assert_eq!(back.model.len(), 9000);
+    assert_eq!(kinds(&back), kinds(&d));
+}

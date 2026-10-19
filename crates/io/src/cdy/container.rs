@@ -297,19 +297,17 @@ fn resync(b: &[u8], from: usize) -> Option<usize> {
 
 fn by_index(b: &[u8]) -> Option<Vec<Read>> {
     let entries = index(b)?;
-    let mut out = Vec::with_capacity(entries.len());
-    for e in entries {
+    // Checksums and inflating, chunk by chunk on all cores (most of opening a large file).
+    Some(crate::par_map(&entries, |e| {
         // A chunk whose header disagrees with the index (or can't be read) was damaged there:
         // the index still says what and where it is, so it is salvaged as that. One bad header
         // used to drop the index and, walking, every chunk after it (UI review 0.7.7d).
-        let r = match usize::try_from(e.offset).ok().and_then(|o| chunk_at(b, o)) {
+        match usize::try_from(e.offset).ok().and_then(|o| chunk_at(b, o)) {
             Some((Read::Ok(c), _)) if c.tag == e.tag => Read::Ok(c),
             Some((r @ Read::Damaged { tag, .. }, _)) if tag == e.tag => r,
-            _ => from_entry(b, &e),
-        };
-        out.push(r);
-    }
-    Some(out)
+            _ => from_entry(b, e),
+        }
+    }))
 }
 
 /// A chunk read by its index entry alone (its own header is damaged): damaged, with what its
