@@ -6,7 +6,9 @@
 pub mod cdy;
 mod dxf_raw;
 /// 3D model exchange: glTF/GLB, OBJ+MTL and STL.
+pub mod ifc;
 pub mod mesh3d_io;
+pub mod threemf;
 
 mod dxf_ext;
 mod dxf_field;
@@ -117,6 +119,7 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
         "obj" => mesh3d_io::read_obj(bytes, name),
         "stl" => mesh3d_io::read_stl(bytes),
         "glb" | "gltf" => mesh3d_io::read_gltf(bytes, name),
+        "ifc" => ifc::read_ifc(bytes),
         e if bytes.len() > 4 => dxf_read::read(bytes).map_err(|_| IoError::Unsupported(e.to_string())),
         e => Err(IoError::Unsupported(e.to_string())),
     }
@@ -166,6 +169,8 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
         "gltf" => Ok(mesh3d_io::write_gltf(d)),
         "cdywalk" => walkpkg::write(d),
         "stl" => Ok(mesh3d_io::write_stl(d)),
+        "ifc" => ifc::write_ifc(d, name),
+        "3mf" => threemf::write_3mf(d),
         // The OBJ text; its MTL and textures come from `mesh3d_io::write_obj`.
         "obj" => {
             let stem = std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "export".into());
@@ -190,7 +195,9 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
         check_window(w)?;
     }
     match ext(name).as_str() {
-        "dxf" | "" | "dwg" | "cdy" | "glb" | "gltf" | "stl" | "obj" | "bundle" | "cdywalk" => write_with(d, name, &SaveOptions::default()),
+        "dxf" | "" | "dwg" | "cdy" | "glb" | "gltf" | "stl" | "obj" | "bundle" | "cdywalk" | "ifc" | "3mf" => {
+            write_with(d, name, &SaveOptions::default())
+        }
         "svg" => Ok(svg::export_window(d, &Space::Model, window).into_bytes()),
         "eps" => Ok(eps::export(d, &Space::Model, window).into_bytes()),
         "wmf" => Ok(wmf::export(d, &Space::Model, window)),

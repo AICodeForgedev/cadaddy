@@ -459,6 +459,11 @@ fn all_tris(d: &Drawing) -> Vec<Tri> {
     world_scene(d).tris
 }
 
+/// Every surface triangle of the drawing in world coordinates, with its colour (3MF).
+pub(crate) fn scene_tris(d: &Drawing) -> Vec<([Vec3; 3], [u8; 3])> {
+    all_tris(d).into_iter().map(|t| (t.p, [t.color.0, t.color.1, t.color.2])).collect()
+}
+
 /// OBJ output: the OBJ text, its MTL text, and the textures the MTL names (file name, PNG).
 pub struct ObjOut {
     pub obj: String,

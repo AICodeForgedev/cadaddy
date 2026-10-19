@@ -162,6 +162,7 @@ fn services() -> Services {
                 .add_filter(i18n::t("SVG drawings (SVG, SVGZ)"), &["svg", "svgz"])
                 .add_filter(i18n::t("PDF (converted to CAD objects)"), &["pdf"])
                 .add_filter(i18n::t("3D models (glTF, OBJ, STL)"), &["glb", "gltf", "obj", "stl"])
+                .add_filter(i18n::t("Building models (IFC)"), &["ifc"])
                 .add_filter(i18n::t("Walkthroughs (CDYWALK)"), &["cdywalk"])
                 .add_filter(i18n::t("All files"), &["*"])
                 .pick_file()
@@ -234,7 +235,14 @@ fn filters_for_save(name: &str) -> Vec<(&'static str, &'static str)> {
     let lower = name.to_ascii_lowercase();
     // Exporting (an image or PDF suggested): the 3D model formats too.
     if [".svg", ".png", ".pdf"].iter().any(|e| lower.ends_with(e)) {
-        filters.extend([("3D model (glTF binary)", "glb"), ("3D model (glTF)", "gltf"), ("3D model (OBJ)", "obj"), ("3D model (STL)", "stl")]);
+        filters.extend([
+            ("3D model (glTF binary)", "glb"),
+            ("3D model (glTF)", "gltf"),
+            ("3D model (OBJ)", "obj"),
+            ("3D model (STL)", "stl"),
+            ("Building model (IFC4)", "ifc"),
+            ("3D printing (3MF)", "3mf"),
+        ]);
     }
     filters.sort_by_key(|(_, ext)| !lower.ends_with(&format!(".{ext}")));
     filters
