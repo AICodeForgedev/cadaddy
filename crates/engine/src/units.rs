@@ -121,14 +121,20 @@ pub fn parse_distance(s: &str) -> Option<f64> {
     };
     let mut total = 0.0;
     let mut rest = t;
+    let mut parsed = false;
     if let Some(i) = rest.find('\'') {
         let ft: f64 = rest.get(..i)?.trim().parse().ok()?;
         total += ft * 12.0;
+        parsed = true;
         rest = rest.get(i + 1..)?.trim_start_matches('-').trim();
     }
     let rest = rest.trim_end_matches('"').trim();
     if !rest.is_empty() {
         total += parse_mixed(rest)?;
+        parsed = true;
+    }
+    if !parsed {
+        return None;
     }
     let v = if neg { -total } else { total };
     v.is_finite().then_some(v)
@@ -376,6 +382,14 @@ mod tests {
         assert_eq!(parse_distance("1/0"), None);
         assert_eq!(parse_distance("abc"), None);
         assert_eq!(parse_distance(""), None);
+    }
+
+    #[test]
+    fn parse_distance_needs_a_number() {
+        assert_eq!(parse_distance("-"), None);
+        assert_eq!(parse_distance("\""), None);
+        assert_eq!(parse_distance("-\""), None);
+        assert_eq!(parse_distance("1'"), Some(12.0));
     }
 
     #[test]
