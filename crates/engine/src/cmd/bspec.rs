@@ -30,7 +30,7 @@ const MAX_OBJECTS: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bspec.get", "Building Spec", run_get)
-            .params("{} → {spec, stored: bool (false: drafted from the walk rules — <drawing>.walk.json, the last WALLGEN, else the defaults), parts: [{section, key, text (plain language), approved}], built: bool}")
+            .params("{} → {spec, stored: bool (false: drafted from the walk rules — <drawing>.walk.json, the last WALLGEN, else the defaults), parts: [{section, key, text (plain language), approved, guess?: why it was guessed}], built: bool}")
             .noundo(),
         CommandSpec::new("bspec.set", "Set Building Spec", run_set).params(
             "{spec: object (merged into the drawing's spec: objects key by key, null removes; levels, wall_types, rooms, families merge by name and layers by layer, {\"remove\": true} removes one), replace?: bool} → {spec, errors, warnings}",
@@ -196,10 +196,18 @@ pub(crate) fn room_texts(sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> Vec<(Handl
     super::perceive::texts(&on).into_iter().filter(|(_, t, at, _)| !t.is_empty() && at.is_finite()).map(|(h, t, at, _)| (h, t, at)).collect()
 }
 
+/// A described part as `bspec.get` and `bspec.draft` give it.
+pub(crate) fn part_json(d: &cadaddy_walk3d::Described) -> Value {
+    let mut v = json!({ "section": d.section, "key": d.key, "text": d.text, "approved": d.approved });
+    if let Some(why) = &d.guess {
+        v["guess"] = json!(why);
+    }
+    v
+}
+
 fn run_get(s: &mut Session, _p: &Value) -> Result<Value> {
     let (sp, was) = current(s, "bspec.get")?;
-    let parts: Vec<Value> =
-        sp.describe().iter().map(|d| json!({ "section": d.section, "key": d.key, "text": d.text, "approved": d.approved })).collect();
+    let parts: Vec<Value> = sp.describe().iter().map(part_json).collect();
     let built = s.doc()?.model.iter().any(|e| wallgen::made_as(e).is_some());
     Ok(json!({ "spec": serde_json::to_value(&sp).unwrap_or(Value::Null), "stored": was, "parts": parts, "built": built }))
 }

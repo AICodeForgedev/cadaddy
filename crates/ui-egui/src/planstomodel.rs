@@ -42,6 +42,8 @@ struct Part {
     key: String,
     text: String,
     approved: bool,
+    /// Why `bspec.draft` guessed it (shown until approved).
+    guess: Option<String>,
 }
 
 /// The issues last checked (`model.issues`), for the revision they were checked at.
@@ -83,6 +85,7 @@ fn view(app: &mut CadApp, ui: &egui::Ui) -> View {
                     key: p["key"].as_str().unwrap_or_default().to_string(),
                     text: p["text"].as_str().unwrap_or_default().to_string(),
                     approved: p["approved"].as_bool().unwrap_or(false),
+                    guess: p["guess"].as_str().map(str::to_string),
                 })
                 .collect(),
             spec: r["spec"].clone(),
@@ -132,6 +135,7 @@ fn patch(key: &str, old: &Value, edited: Option<Value>) -> Value {
 /// What a click asks for, done once the palette is drawn.
 enum Act {
     Set(Value),
+    Draft,
     Build,
     Walk,
     Check,
@@ -192,6 +196,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         });
         ui.horizontal(|ui| {
             ui.add_space(8.0);
+            if !v.stored
+                && ui
+                    .button(crate::tl!("Draft from Plan"))
+                    .on_hover_text(crate::tl!("Read the plan's layers, walls, doors, rooms and notes; guesses are marked."))
+                    .clicked()
+            {
+                act = Some(Act::Draft);
+            }
             if !v.stored && ui.button(crate::tl!("Save Spec")).clicked() {
                 act = Some(Act::Set(json!({})));
             }
@@ -218,6 +230,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                         list.push(p.key.clone());
                     }
                     act = Some(Act::Set(json!({ "approved": list })));
+                }
+                if let Some(why) = p.guess.as_ref().filter(|_| !p.approved) {
+                    ui.label(RichText::new(crate::tl!("guess")).color(t.warn).small()).on_hover_text(why);
                 }
                 ui.add(egui::Label::new(RichText::new(&p.text).color(if p.approved { t.text } else { t.text_dim })).wrap());
             });
@@ -314,6 +329,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                 app.set_status(e);
             }
         },
+        Some(Act::Draft) => {
+            if let Err(e) = app.run("bspec.draft", json!({ "store": true })) {
+                app.set_status(e);
+            }
+        }
         Some(Act::Build) => match app.run("model.build", json!({})) {
             Ok(_) => check(app, ui),
             Err(e) => app.set_status(e),
