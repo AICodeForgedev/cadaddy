@@ -187,6 +187,7 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     egui::Panel::top("cc_file_tabs").exact_size(26.0).frame(egui::Frame::NONE.fill(t.chrome_dark)).show(ui, |ui| {
         let r = ui.max_rect();
+        crate::tearoff::note_tab_bar(app, r);
         let mut x = r.left() + 4.0;
         let ib = Rect::from_min_size(pos2(x, r.top() + 4.0), vec2(18.0, 18.0));
         icons::paint(ui.painter(), ib.shrink(1.0), Icon::Switcher, false);
@@ -205,7 +206,7 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
         let mut tab =
             |ui: &mut egui::Ui, label: &str, dirty: bool, active: bool, closable: bool, w: f32, id: egui::Id| -> (bool, bool, egui::Response) {
                 let tr = Rect::from_min_size(pos2(x, r.top()), vec2(w, r.height()));
-                let resp = ui.interact(tr, id, Sense::click());
+                let resp = ui.interact(tr, id, if closable { Sense::click_and_drag() } else { Sense::click() });
                 ui.painter().rect_filled(
                     tr,
                     0.0,
@@ -249,8 +250,17 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         let mut switch_to = None;
         let mut close = None;
-        let titles: Vec<(usize, String, bool, bool)> =
-            app.session.docs.iter().enumerate().map(|(i, d)| (i, d.title.clone(), d.is_dirty(), i == app.session.active)).collect();
+        let mut tear = None;
+        // Drawings torn off into windows of their own have no tab here ([`crate::tearoff`]).
+        let shown = crate::tearoff::main_index(app);
+        let titles: Vec<(usize, String, bool, bool)> = app
+            .session
+            .docs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !crate::tearoff::is_torn(app, *i))
+            .map(|(i, d)| (i, d.title.clone(), d.is_dirty(), Some(i) == shown))
+            .collect();
         for (i, title, dirty, active) in titles {
             let (c, x, resp) = tab(ui, &title, dirty, active && !app.ui.start_tab, true, 170.0, ui.id().with(("tab", i)));
             crate::shortcut_menus::attach(app, &resp, |app| crate::shortcut_menus::drawing_tab_entries(app, i));
@@ -260,6 +270,19 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
             if x {
                 close = Some(i);
             }
+            // Dragged well out of the tab bar: into a window of its own, where it was dropped.
+            if resp.drag_stopped()
+                && let Some(p) = ui.ctx().pointer_latest_pos()
+                && !r.expand(48.0).contains(p)
+            {
+                let origin = ui.ctx().input(|i| i.viewport().inner_rect.map(|v| v.min)).unwrap_or_default();
+                tear = Some((i, origin + p.to_vec2() - vec2(80.0, 14.0)));
+            }
+        }
+        if let Some((i, at)) = tear
+            && let Err(e) = crate::tearoff::tear_off(app, i, Some(at))
+        {
+            app.set_status(format!("New window: {e}"));
         }
         if let Some(i) = switch_to {
             let _ = app.run("document.switch", json!({ "index": i }));

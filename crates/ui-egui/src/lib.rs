@@ -87,6 +87,7 @@ pub mod renderwin;
 pub mod ribbon;
 pub mod shortcut_menus;
 pub mod spelldlg;
+pub mod tearoff;
 pub mod theme;
 pub mod toldlg;
 pub mod toolpalettes;
@@ -439,6 +440,11 @@ pub struct CadApp {
     pub bedit: bedit::State,
     /// Walk mode, while it is open: the drawing in 3D in place of the canvas ([`walk`]).
     pub walk: Option<walk::Walk>,
+    /// Drawings in windows of their own ([`tearoff`]), the drawing the main window last showed,
+    /// and where its tab bar is.
+    pub torn: Vec<tearoff::TornWindow>,
+    pub main_uid: Option<u64>,
+    pub tab_bar: Option<egui::Rect>,
     /// The app's wgpu render state (walk mode draws its 3D with it).
     pub wgpu_rs: Option<egui_wgpu::RenderState>,
     /// What the GPU can do for the 3D views ([`gpucaps::GpuCaps`]); no GPU: the CPU draws.
@@ -509,6 +515,9 @@ impl CadApp {
             layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
+            torn: Vec::new(),
+            main_uid: None,
+            tab_bar: None,
             wgpu_rs: None,
             gpu_caps: gpucaps::GpuCaps::default(),
         }
@@ -1095,6 +1104,7 @@ impl CadApp {
                 chrome::start_page(self, ui);
             }
         });
+        tearoff::show_windows(self, ui.ctx());
         dialogs::show(self, ui.ctx());
         layers::off_prompt(self, ui.ctx());
         palettes::patterns::prompt_picker(self, ui.ctx());

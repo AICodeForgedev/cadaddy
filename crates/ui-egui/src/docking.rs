@@ -533,7 +533,8 @@ fn panel_body(app: &mut crate::CadApp, ui: &mut egui::Ui, panel: Panel) {
             if app.walk.is_some() {
                 crate::walk::show(app, ui);
             } else {
-                crate::canvas::show(app, ui);
+                // The drawing in the main window: not one torn off into its own window.
+                crate::tearoff::with_main_doc(app, ui, crate::canvas::show);
             }
         }
         Panel::ToolSets => crate::palettes::toolsets(app, ui),

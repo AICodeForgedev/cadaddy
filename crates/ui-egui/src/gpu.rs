@@ -400,6 +400,29 @@ pub const LAYER_HIGHLIGHT: usize = 2;
 pub const LAYER_VIEWPORT: usize = 3;
 /// The outline of the active viewport when it is clipped (stencil only, see [`Stencil`]).
 pub const LAYER_MASK: usize = 4;
+/// Layers one canvas uses; each drawing window (a torn-off tab) has a set of its own.
+pub const LAYERS_PER_CANVAS: usize = LAYER_MASK + 1;
+/// Drawing windows with GPU layers of their own (the main one included).
+pub const MAX_CANVASES: usize = 16;
+
+thread_local! {
+    /// The first layer of the canvas being drawn: 0 for the main window, then one set per
+    /// torn-off drawing window ([`crate::tearoff`]).
+    static LAYER_BASE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Layer `l` ([`LAYER_DRAWING`]…) of the canvas being drawn.
+pub fn layer(l: usize) -> usize {
+    LAYER_BASE.with(|b| b.get()) + l
+}
+
+/// Draw the canvas of window `slot` (0: the main window) while `f` runs.
+pub fn with_canvas_slot<R>(slot: usize, f: impl FnOnce() -> R) -> R {
+    let before = LAYER_BASE.with(|b| b.replace(slot.min(MAX_CANVASES - 1) * LAYERS_PER_CANVAS));
+    let r = f();
+    LAYER_BASE.with(|b| b.set(before));
+    r
+}
 
 /// Opacity of filled areas in the selection and hover highlight: see-through, so the lines and
 /// text on (and under) a highlighted hatch stay visible, as the reference app's dot pattern does.
@@ -446,6 +469,24 @@ struct Resources {
     clipped: Option<ClipPipelines>,
     linear_out: bool,
     layers: Vec<Layer>,
+    /// For the layers of more drawing windows, made when one first draws.
+    layer_layout: wgpu::BindGroupLayout,
+}
+
+/// One canvas layer's buffers.
+fn new_layer(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> Layer {
+    let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("cad_canvas_view"),
+        size: UNIFORM_SIZE,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("cad_canvas"),
+        layout: bgl,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
+    });
+    Layer { uniform, bind_group, key: None, lines: Vec::new(), tris: Vec::new(), quads: Vec::new(), breaks: Vec::new(), images: Vec::new() }
 }
 
 struct ClipPipelines {
@@ -605,20 +646,7 @@ impl Resources {
             bind_group_layouts: &[Some(&bgl)],
             immediate_size: 0,
         });
-        let layer = || {
-            let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("cad_canvas_view"),
-                size: UNIFORM_SIZE,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("cad_canvas"),
-                layout: &bgl,
-                entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
-            });
-            Layer { uniform, bind_group, key: None, lines: Vec::new(), tris: Vec::new(), quads: Vec::new(), breaks: Vec::new(), images: Vec::new() }
-        };
+        let layer = || new_layer(device, &bgl);
         // A render pass with a stencil buffer needs every pipeline to name its format; only the
         // clipped-viewport pipelines read or write it.
         let face = |compare, pass_op| wgpu::StencilFaceState {
@@ -722,6 +750,7 @@ impl Resources {
             textures: std::collections::HashMap::new(),
             linear_out: target.format.is_srgb(),
             layers: (0..=LAYER_MASK).map(|_| layer()).collect(),
+            layer_layout: bgl,
         }
     }
 }
@@ -932,6 +961,13 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         let t0 = std::time::Instant::now();
         let _timed = PrepareTimer(t0);
         let Some(shared) = resources.get_mut::<Resources>() else { return Vec::new() };
+        // A drawing window's layers are made the first time it draws.
+        if self.layer < MAX_CANVASES * LAYERS_PER_CANVAS {
+            while shared.layers.len() <= self.layer {
+                let l = new_layer(device, &shared.layer_layout);
+                shared.layers.push(l);
+            }
+        }
         let linear_out = shared.linear_out;
         let Some(res) = shared.layers.get_mut(self.layer) else { return Vec::new() };
         if res.key != Some(self.key) {
