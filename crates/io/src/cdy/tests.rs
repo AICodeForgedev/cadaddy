@@ -253,7 +253,7 @@ fn unknown_parts_are_skipped_and_newer_known_parts_refused() {
     // A known part at a newer schema version.
     let mut newer = model::write(&d, None).unwrap();
     let at = offset_of(&newer, b"ENTS");
-    newer[at + 4] = 2;
+    newer[at + 4] = 3;
     let err = model::read(&newer).unwrap_err();
     assert!(err.contains("newer CADaddy"), "{err}");
 }
@@ -645,4 +645,173 @@ fn sun_and_exposure_round_trip() {
     let bytes = model::write(&d, None).unwrap();
     let (back, rep) = model::read(&bytes).unwrap();
     assert_eq!(back.sun, d.sun, "{:?}", rep.notes);
+}
+
+// ---- The 3D model (Q100) ----
+
+/// A box of `n` × `n` × 1 vertices a side: a mesh large enough for binary buffers.
+fn grid_mesh(n: u32, z: f64) -> Mesh {
+    let mut vertices = Vec::new();
+    for j in 0..n {
+        for i in 0..n {
+            vertices.push(Vec3::new(f64::from(i) * 12.0, f64::from(j) * 12.0, z + f64::from(i % 3) * 0.125));
+        }
+    }
+    let mut faces = Vec::new();
+    for j in 0..n - 1 {
+        for i in 0..n - 1 {
+            let a = j * n + i;
+            // Quads and triangles mixed; every 5th face with a hidden edge.
+            let v = if (i + j).is_multiple_of(2) { vec![a, a + 1, a + n + 1, a + n] } else { vec![a, a + 1, a + n] };
+            faces.push(MeshFace { v, hidden: if a.is_multiple_of(5) { 0b10 } else { 0 } });
+        }
+    }
+    Mesh { vertices, faces, kind: MeshKind::default() }
+}
+
+/// A walkthrough model: meshes (one too small for buffers), a solid, a material with an image
+/// texture embedded, a baked lightmap, the building spec and camera tours.
+fn walkthrough() -> Drawing {
+    let mut d = Drawing::new_imperial();
+    let m = Space::Model;
+    let wall = Common { layer: "A-WALL".into(), ..Common::default() };
+    d.add(&m, wall.clone(), EntityKind::Mesh(grid_mesh(40, 0.0))).unwrap();
+    d.add(&m, wall, EntityKind::Mesh(grid_mesh(3, 96.0))).unwrap();
+    d.add(&m, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(10.0, 0.0, 0.0) })).unwrap();
+    d.add(&m, Common::default(), EntityKind::Mesh(grid_mesh(25, 120.0))).unwrap();
+    let solid = Solid3d { shape: SolidShape::Box { length: 24.0, width: 24.0, height: 30.0 }, xf: Default::default() };
+    d.add(&m, Common::default(), EntityKind::Solid3d(Box::new(solid))).unwrap();
+    let mut mat = cadaddy_doc::material::recipe("oak").unwrap().material(0.0254);
+    mat.name = "Floor".into();
+    mat.color_map = Some(cadaddy_doc::material::Texture::File("textures/floor.png".into()));
+    d.materials.push(mat);
+    d.embedded.insert(format!("{TEXTURE_PREFIX}textures/floor.png"), std::sync::Arc::new(b"\x89PNG floor pixels".to_vec()));
+    d.embedded.insert("lightmap.png".into(), std::sync::Arc::new((0..=255u8).cycle().take(70_000).collect()));
+    d.embedded.insert("lightmap.json".into(), std::sync::Arc::new(br#"{"version":1,"width":4,"height":4}"#.to_vec()));
+    d.building_spec = Some(r#"{"levels":[{"name":"L1","elevation_ft":0,"height_ft":10}]}"#.into());
+    d.tours = Some(r#"[{"name":"Lobby","stops":[{"at":[0,0,66],"yaw":0}]}]"#.into());
+    d
+}
+
+#[test]
+fn a_walkthrough_model_round_trips_with_everything() {
+    let d = walkthrough();
+    let bytes = model::write(&d, None).unwrap();
+    let (back, rep) = model::read(&bytes).unwrap();
+    assert!(rep.notes.is_empty(), "{:?}", rep.notes);
+    assert_eq!(back, d);
+    assert_eq!(back.embedded_texture("textures/floor.png").map(|b| b.as_slice()), Some(&b"\x89PNG floor pixels"[..]));
+    // The meshes went as binary buffers: the model space chunk is v2, and its tokens hold no
+    // coordinates of the large meshes.
+    let at = offset_of(&bytes, b"ENTS");
+    assert_eq!(u16::from_le_bytes([bytes[at + 4], bytes[at + 5]]), 2);
+    let ents = container::find(&bytes, b"ENTS").unwrap();
+    let toks_len = u64::from_le_bytes(ents.data[ents.data.len() - 8..].try_into().unwrap()) as usize;
+    assert!(toks_len < 4000, "{toks_len} bytes of tokens");
+    // The manifest says what the file carries.
+    let man = manifest(&bytes).unwrap();
+    assert_eq!((man["buildingSpec"].clone(), man["tours"].clone()), (serde_json::json!(true), serde_json::json!(true)));
+    assert_eq!(man["embedded"], serde_json::json!(["lightmap.json", "lightmap.png", "texture:textures/floor.png"]));
+    // Through the public API too.
+    assert_eq!(read_cdy(&write_cdy(&d).unwrap()).unwrap().embedded, d.embedded);
+    // A drawing without large meshes keeps writing v1 chunks (older CADaddy reads it).
+    let plain = model::write(&lines(10), None).unwrap();
+    assert_eq!(plain[offset_of(&plain, b"ENTS") + 4], 1);
+}
+
+#[test]
+fn walkthrough_parts_save_incrementally() {
+    let mut d = walkthrough();
+    let (out, state) = save(&d, None, &no_thumb).unwrap();
+    let file = stored(&[], &out);
+    // Read back and seeded: nothing changed appends only an index.
+    let (mut opened, _) = model::read(&file).unwrap();
+    let state2 = seed(&opened, &file).expect("seeded");
+    let (out, _) = save(&opened, Some(&state2), &no_thumb).unwrap();
+    let Output::Append { bytes, .. } = &out else { panic!("expected an append") };
+    assert!(bytes.len() < 600, "{} bytes appended for no change", bytes.len());
+    // A new tour and a re-baked lightmap: only those parts are appended, not the meshes.
+    opened.tours = Some("[]".into());
+    opened.embedded.insert("lightmap.json".into(), std::sync::Arc::new(b"{}".to_vec()));
+    let (out, _) = save(&opened, Some(&state2), &no_thumb).unwrap();
+    let Output::Append { bytes, .. } = &out else { panic!("expected an append") };
+    assert!(bytes.len() < 1200, "{} bytes appended", bytes.len());
+    let (back, rep) = model::read(&stored(&file, &out)).unwrap();
+    assert!(rep.notes.is_empty(), "{:?}", rep.notes);
+    assert_eq!(back, opened);
+    // The same in the session that wrote it.
+    d.building_spec = None;
+    let (out, _) = save(&d, Some(&state), &no_thumb).unwrap();
+    let back = model::read(&stored(&file, &out)).unwrap().0;
+    assert_eq!((back.building_spec, back.embedded.len()), (None, 3));
+}
+
+#[test]
+fn damaged_mesh_buffers_never_panic() {
+    let d = walkthrough();
+    let bytes = model::write(&d, None).unwrap();
+    let ents = container::find(&bytes, b"ENTS").unwrap().data;
+    // Every truncation and a sweep of flipped bytes of the v2 payload.
+    for cut in (0..ents.len()).step_by(97) {
+        let _ = super::meshbuf::decode(&ents[..cut]);
+    }
+    for at in (0..ents.len()).step_by(13) {
+        let mut bad = ents.clone();
+        bad[at] ^= 0xff;
+        if let Some((_, meshes)) = super::meshbuf::decode(&bad) {
+            assert!(meshes.len() <= 3);
+        }
+    }
+    // Huge declared counts are refused before allocating.
+    let mut huge = ents.clone();
+    let toks_len = u64::from_le_bytes(ents[ents.len() - 8..].try_into().unwrap()) as usize;
+    huge[toks_len + 4..toks_len + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(super::meshbuf::decode(&huge).is_none());
+    // A damaged model space chunk in a file: the file still opens, the damage noted.
+    let mut file = bytes.clone();
+    let at = offset_of(&file, b"ENTS") + CHUNK_HEADER_LEN + 40;
+    file[at] ^= 0x5a;
+    let (back, rep) = model::read(&file).unwrap();
+    assert!(!rep.notes.is_empty());
+    assert!(back.model.iter().all(|e| !matches!(&e.kind, EntityKind::Mesh(m) if m.vertices.is_empty())), "no empty meshes left in");
+    assert_eq!(back.building_spec, d.building_spec);
+    // An embedded file whose name length runs past its chunk.
+    assert!(model::embedded_from(&[255, 255, 255, 255, b'a']).is_none());
+    assert_eq!(model::embedded_from(&model::embedded("a.png", b"xy")), Some(("a.png".to_string(), &b"xy"[..])));
+}
+
+/// Opening a large walkthrough model: binary buffers against the v1 tokens (`--nocapture`
+/// prints the numbers).
+#[test]
+fn binary_meshes_open_faster_than_tokens() {
+    let mut d = Drawing::new_imperial();
+    for k in 0..8 {
+        d.add(&Space::Model, Common::default(), EntityKind::Mesh(grid_mesh(250, f64::from(k) * 120.0))).unwrap();
+    }
+    let verts: usize = d.model.iter().map(|e| if let EntityKind::Mesh(m) = &e.kind { m.vertices.len() } else { 0 }).sum();
+    let items: Vec<std::sync::Arc<Entity>> = d.model.iter().cloned().collect();
+    let t = std::time::Instant::now();
+    let (v, bin) = super::meshbuf::encode(&items).unwrap();
+    let enc_bin = t.elapsed();
+    assert_eq!(v, 2);
+    let t = std::time::Instant::now();
+    let tok = super::tokens::encode(&serde_json::Value::Array(items.iter().map(|e| serde_json::to_value(e.as_ref()).unwrap()).collect()));
+    let enc_tok = t.elapsed();
+    let t = std::time::Instant::now();
+    let (list, meshes) = super::meshbuf::decode(&bin).unwrap();
+    let mut got: Vec<Entity> = serde_json::from_value(list).unwrap();
+    for (i, m) in meshes {
+        super::meshbuf::fill(&mut got[i], m);
+    }
+    let dec_bin = t.elapsed();
+    let t = std::time::Instant::now();
+    let back: Vec<Entity> = serde_json::from_value(super::tokens::decode(&tok).unwrap()).unwrap();
+    let dec_tok = t.elapsed();
+    assert_eq!(got, back);
+    eprintln!(
+        "{verts} vertices: binary {} KB, write {enc_bin:?}, read {dec_bin:?}; tokens {} KB, write {enc_tok:?}, read {dec_tok:?}",
+        bin.len() / 1024,
+        tok.len() / 1024
+    );
+    assert!(bin.len() < tok.len(), "binary is smaller");
 }

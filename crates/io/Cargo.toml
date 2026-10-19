@@ -16,6 +16,8 @@ cadaddy-dxf = { workspace = true }
 cadaddy-dwg = { workspace = true }
 cadaddy-render = { workspace = true }
 cadaddy-fonts = { workspace = true }
+# Walkthrough packages (.cdywalk): the container (walk3d::package).
+cadaddy-walk3d = { path = "../walk3d" }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }

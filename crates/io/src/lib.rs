@@ -32,6 +32,7 @@ pub mod pointcloud_io;
 pub mod svg;
 mod svg_read;
 mod svg_style;
+pub mod walkpkg;
 pub mod wmf;
 
 /// Multilines and their styles (MLINE, MLINESTYLE).
@@ -78,6 +79,9 @@ fn ext(name: &str) -> String {
 /// Read a drawing; the format comes from the content (DXF ASCII/binary, DWG) or the name
 /// (SVG and gzip-compressed SVGZ); a .cdy file is known by its content.
 pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
+    if cadaddy_walk3d::package::is_package(bytes) {
+        return walkpkg::read(bytes);
+    }
     if cdy::is_cdy(bytes) {
         return cdy::read_cdy(bytes);
     }
@@ -146,6 +150,7 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
         }
         "glb" => Ok(mesh3d_io::write_glb(d)),
         "gltf" => Ok(mesh3d_io::write_gltf(d)),
+        "cdywalk" => walkpkg::write(d),
         "stl" => Ok(mesh3d_io::write_stl(d)),
         // The OBJ text; its MTL and textures come from `mesh3d_io::write_obj`.
         "obj" => {
@@ -171,7 +176,7 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
         check_window(w)?;
     }
     match ext(name).as_str() {
-        "dxf" | "" | "dwg" | "cdy" | "glb" | "gltf" | "stl" | "obj" | "bundle" => write_with(d, name, &SaveOptions::default()),
+        "dxf" | "" | "dwg" | "cdy" | "glb" | "gltf" | "stl" | "obj" | "bundle" | "cdywalk" => write_with(d, name, &SaveOptions::default()),
         "svg" => Ok(svg::export_window(d, &Space::Model, window).into_bytes()),
         "eps" => Ok(eps::export(d, &Space::Model, window).into_bytes()),
         "wmf" => Ok(wmf::export(d, &Space::Model, window)),

@@ -9,7 +9,12 @@
 //! | ENTS | model space objects, a chunk of the drawing's object store (up to [`ENTITY_CHUNK`]) each, in draw order | tokens |
 //! | LAYO | one layout with its paper space objects, `[layout, objects]` | tokens |
 //! | FRGN | file data CADaddy keeps without modelling it | tokens |
+//! | BSPC | the building spec | JSON text |
+//! | TOUR | the camera tours | JSON text |
+//! | EMBD | one embedded file (a texture image, the baked lightmap): `name length u32, name, bytes` | raw |
 //! | THMB | a PNG preview | raw |
+//!
+//! ENTS is schema v2 when it holds a mesh large enough for binary buffers ([`super::meshbuf`]).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -29,7 +34,14 @@ pub const ENTITY_CHUNK: usize = 1024;
 const V1: u16 = 1;
 /// Longest building spec or tours text kept (hostile files).
 const MAX_TEXT: usize = 64 << 20;
-const KNOWN: [&[u8; 4]; 8] = [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"THMB"];
+pub(super) const KNOWN: [&[u8; 4]; 11] = [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"EMBD", b"THMB"];
+/// Most files one drawing embeds.
+const MAX_EMBEDDED: usize = 100_000;
+
+/// The newest schema of a chunk type this version reads.
+pub(super) fn max_version(tag: &[u8; 4]) -> u16 {
+    if tag == b"ENTS" { 2 } else { V1 }
+}
 
 /// What the file was read with besides the drawing: notes about damaged or unread parts.
 #[derive(Clone, Debug, Default)]
@@ -210,6 +222,9 @@ pub(super) fn manifest(d: &Drawing, thumbnail: bool) -> Vec<u8> {
         "blocks": d.blocks.len(),
         "layouts": d.layouts.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
         "thumbnail": thumbnail.then_some("THMB"),
+        "buildingSpec": d.building_spec.is_some(),
+        "tours": d.tours.is_some(),
+        "embedded": d.embedded.keys().collect::<Vec<_>>(),
     });
     serde_json::to_string_pretty(&manifest).unwrap_or_default().into_bytes()
 }
@@ -246,8 +261,10 @@ pub(super) fn tables(d: &Drawing) -> Result<Vec<u8>, String> {
         sun: value(&d.sun)?,
         field_values: d.field_values.iter().map(|(h, v)| (h.0, v.clone())).collect(),
         kept_handles: d.kept_handles.iter().map(|(k, h)| (k.clone(), *h)).collect(),
-        building_spec: d.building_spec.clone(),
-        tours: d.tours.clone(),
+        // The BSPC and TOUR chunks hold these now (so a new tour appends only its chunk); the
+        // fields are still read from files written before.
+        building_spec: None,
+        tours: None,
     };
     Ok(tokens::encode(&value(&tables)?))
 }
@@ -257,10 +274,31 @@ pub(super) fn block(name: &str, b: &Block) -> Result<Vec<u8>, String> {
     Ok(tokens::encode(&json!([[name, value(b)?, objects(&b.entities)?]])))
 }
 
-/// A model space chunk's payload: one chunk of the store's objects.
-pub(super) fn entities(items: &[Arc<Entity>]) -> Result<Vec<u8>, String> {
-    let list = items.iter().map(|e| value(e.as_ref())).collect::<Result<Vec<_>, _>>()?;
-    Ok(tokens::encode(&Value::Array(list)))
+/// A model space chunk's schema version and payload: one chunk of the store's objects.
+pub(super) fn entities(items: &[Arc<Entity>]) -> Result<(u16, Vec<u8>), String> {
+    super::meshbuf::encode(items)
+}
+
+/// An embedded file's payload.
+pub(super) fn embedded(name: &str, bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + name.len() + bytes.len());
+    out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+    out.extend_from_slice(name.as_bytes());
+    out.extend_from_slice(bytes);
+    out
+}
+
+/// An embedded file's name and bytes; `None` when the payload is damaged.
+pub(super) fn embedded_from(data: &[u8]) -> Option<(String, &[u8])> {
+    let n = usize::try_from(u32::from_le_bytes(data.get(..4)?.try_into().ok()?)).ok()?;
+    let name = std::str::from_utf8(data.get(4..4usize.checked_add(n)?)?).ok()?;
+    Some((name.to_string(), data.get(4 + n..)?))
+}
+
+/// Whether an embedded file is already compressed (an image), so isn't deflated again.
+pub(super) fn packed(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    [".png", ".jpg", ".jpeg", ".webp", ".gif"].iter().any(|x| n.ends_with(x))
 }
 
 /// A layout chunk's payload.
@@ -305,7 +343,13 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 if &tag == b"ENTS"
                     && let Some(list) = tokens::salvage_list(&salvage)
                 {
-                    let items: Vec<Entity> = list.into_iter().filter_map(|item| take::<Entity>(item, "an object", &mut rep.notes)).collect();
+                    let mut items: Vec<Entity> = list.into_iter().filter_map(|item| take::<Entity>(item, "an object", &mut rep.notes)).collect();
+                    // A mesh whose binary geometry was past the damage has none left: left out.
+                    let before = items.len();
+                    items.retain(|e| !matches!(&e.kind, cadaddy_doc::EntityKind::Mesh(m) if m.vertices.is_empty() && m.faces.is_empty()));
+                    if items.len() < before {
+                        rep.notes.push(format!("{} meshes whose geometry was in the damaged part were left out", before - items.len()));
+                    }
                     rep.notes.push(format!(
                         "a model space part was damaged ({why}): {} objects before the damage were recovered, the ones after it left out",
                         items.len()
@@ -323,11 +367,12 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
             // A part added by a newer CADaddy: skipped.
             continue;
         }
-        if c.version > V1 {
+        if c.version > max_version(&c.tag) {
             return Err(format!(
-                "made by a newer CADaddy: its {} data is version {} (this one reads version {V1})",
+                "made by a newer CADaddy: its {} data is version {} (this one reads version {})",
                 String::from_utf8_lossy(&c.tag),
-                c.version
+                c.version,
+                max_version(&c.tag)
             ));
         }
         let what = String::from_utf8_lossy(&c.tag).into_owned();
@@ -338,6 +383,48 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
         if &c.tag == b"MANI" {
             rep.manifest = serde_json::from_slice(&c.data).ok();
             continue;
+        }
+        match &c.tag {
+            b"BSPC" | b"TOUR" => {
+                let Ok(text) = String::from_utf8(c.data) else {
+                    rep.notes.push(format!("the {} couldn't be read", if &c.tag == b"BSPC" { "building spec" } else { "camera tours" }));
+                    continue;
+                };
+                if &c.tag == b"BSPC" {
+                    d.building_spec = Some(text);
+                } else {
+                    d.tours = Some(text);
+                }
+                continue;
+            }
+            b"EMBD" => {
+                match embedded_from(&c.data) {
+                    Some(_) if d.embedded.len() >= MAX_EMBEDDED => rep.notes.push("too many embedded files; the rest were left out".into()),
+                    Some((name, bytes)) => {
+                        d.embedded.insert(name, Arc::new(bytes.to_vec()));
+                    }
+                    None => rep.notes.push("an embedded file was damaged and left out".into()),
+                }
+                continue;
+            }
+            b"ENTS" if c.version == 2 => {
+                let Some((Value::Array(list), mut meshes)) = super::meshbuf::decode(&c.data) else {
+                    rep.notes.push("a model space part was damaged and left out".into());
+                    continue;
+                };
+                let mut items = Vec::with_capacity(list.len());
+                for (i, item) in list.into_iter().enumerate() {
+                    if let Some(mut e) = take::<Entity>(item, "an object", &mut rep.notes) {
+                        if let Some(m) = meshes.remove(&i) {
+                            super::meshbuf::fill(&mut e, m);
+                        }
+                        items.push(e);
+                    }
+                }
+                model.push_chunk(items);
+                continue;
+            }
+            _ => {}
         }
         let Some(v) = tokens::decode(&c.data) else {
             rep.notes.push(format!("a {what} part couldn't be decoded and was left out"));
@@ -386,8 +473,12 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 }
                 d.field_values = t.field_values.iter().map(|(h, v)| (cadaddy_doc::Handle(*h), v.clone())).collect();
                 d.kept_handles = t.kept_handles.iter().take(10_000_000).map(|(k, h)| (k.clone(), *h)).collect();
-                d.building_spec = t.building_spec.filter(|s| s.len() <= MAX_TEXT);
-                d.tours = t.tours.filter(|s| s.len() <= MAX_TEXT);
+                if let Some(spec) = t.building_spec.filter(|s| s.len() <= MAX_TEXT) {
+                    d.building_spec = Some(spec);
+                }
+                if let Some(tours) = t.tours.filter(|s| s.len() <= MAX_TEXT) {
+                    d.tours = Some(tours);
+                }
                 d.handseed = t.handseed;
                 d.hidden_saved = t.hidden_saved;
                 d.hidden_objects = t.hidden.into_iter().map(Handle).collect();

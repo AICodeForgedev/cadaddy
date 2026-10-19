@@ -2468,3 +2468,21 @@ fn stroke_font_text_plots_with_a_hidden_searchable_copy() {
         .collect();
     assert_eq!(words, vec!["ROOM (101) \\ ÉTÉ".to_string()], "read back, escapes and Latin-1 intact");
 }
+
+#[test]
+fn walkthrough_packages_open_as_their_drawing() {
+    let mut d = Drawing::new_imperial();
+    d.model.push(Entity::new(Handle(0x200), EntityKind::Line(Line { a: Vec3::default(), b: Vec3 { x: 10.0, y: 0.0, z: 0.0 } })));
+    d.building_spec = Some(r#"{"version":1,"levels":[{"name":"L1","elevation_ft":0,"height_ft":10}]}"#.into());
+    let bytes = write(&d, "tour.cdywalk").unwrap();
+    assert!(cadaddy_walk3d::package::is_package(&bytes));
+    let p = cadaddy_walk3d::package::Package::decode(&bytes).unwrap();
+    assert_eq!(p.files.first().map(|f| f.0.as_str()), Some("manifest.json"));
+    assert!(p.get("model.glb").is_some_and(|g| g.starts_with(b"glTF")));
+    assert!(p.get("spec.json").is_some());
+    let back = read(&bytes, "anything").unwrap();
+    assert_eq!(back.model.len(), 1);
+    assert!(back.building_spec.as_deref().is_some_and(|s| s.contains("\"L1\"")), "the spec comes back");
+    // Damage is an error, not a guess.
+    assert!(read(&bytes[..bytes.len() - 3], "x.cdywalk").is_err());
+}

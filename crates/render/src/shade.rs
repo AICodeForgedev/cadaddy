@@ -149,7 +149,7 @@ struct Surfaces {
 
 impl Surfaces {
     /// The surface index of material `m` (added on first use, with its texture).
-    fn index(&mut self, out: &mut Scene, m: &cadaddy_doc::material::Material) -> u32 {
+    fn index(&mut self, d: &Drawing, out: &mut Scene, m: &cadaddy_doc::material::Material) -> u32 {
         if let Some(i) = self.by_name.get(&m.name) {
             return *i;
         }
@@ -168,7 +168,10 @@ impl Surfaces {
                     let maps = crate::materials::generate(r, TEXTURE_PX);
                     Raster::new(maps.size, maps.size, maps.color).map(std::sync::Arc::new)
                 }),
-                Texture::File(p) => crate::images::get(p).map(|r| r.fit(1024)),
+                // The drawing's own copy first (it travels with a .cdy file), else the file.
+                Texture::File(p) => {
+                    d.embedded_texture(p).and_then(|b| crate::images::embedded(b)).or_else(|| crate::images::get(p)).map(|r| r.fit(1024))
+                }
             };
             let r = raster?;
             let i = u32::try_from(out.textures.len()).ok()?;
@@ -194,7 +197,7 @@ impl Surfaces {
 /// A triangle with object `e`'s material (if it has one) and texture coordinates from its mapping.
 fn material_tri(d: &Drawing, e: &cadaddy_doc::Entity, p: [Vec3; 3], color: Rgb, out: &mut Scene, surfaces: &mut Surfaces) -> Tri {
     let Some(m) = d.material_of(e, None) else { return Tri::plain(p, color) };
-    let mat = surfaces.index(out, m);
+    let mat = surfaces.index(d, out, m);
     let mapping = cadaddy_doc::material::object_mapping(&e.common.xdata).unwrap_or(m.mapping);
     let n = (p[1] - p[0]).cross(p[2] - p[0]).normalized();
     let n = if n.is_finite() { n } else { Vec3::Z };
