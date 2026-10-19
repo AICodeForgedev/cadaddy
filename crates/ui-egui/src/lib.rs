@@ -28,6 +28,7 @@ pub fn file_dialogs_allowed() -> bool {
     !FILE_DIALOGS_OFF.load(Relaxed)
 }
 
+pub mod aliasdlg;
 pub mod animation;
 pub mod autosave;
 pub mod bedit;
@@ -183,6 +184,8 @@ pub struct UiState {
     pub agent_control: bool,
     /// Drawings opened from a path, newest first (File ▸ Open Recent and the Start page).
     pub recent_files: Vec<String>,
+    /// Keyboard shortcuts the user changed ([`aliasdlg`]).
+    pub shortcuts: Vec<aliasdlg::Binding>,
 }
 
 /// A DXF/DWG file version (2000 … 2018).
@@ -272,6 +275,7 @@ impl Default for UiState {
             save_version: SaveVersion::default().year().to_string(),
             agent_control: true,
             recent_files: Vec::new(),
+            shortcuts: Vec::new(),
         }
     }
 }
