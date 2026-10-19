@@ -1704,6 +1704,16 @@ pub(crate) fn explode_kind(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<Vec<E
 /// Explode `hs`: the new objects, and how many of `hs` couldn't be exploded (a line, a circle,
 /// one on a locked layer).
 pub(crate) fn explode(s: &mut Session, hs: &[Handle]) -> Result<(Vec<Handle>, usize)> {
+    explode_with(s, hs, explode_kind)
+}
+
+/// Replace each of `hs` (off locked layers) by the pieces `pieces` gives for it; objects it gives
+/// none for are left alone and counted. EXPLODE, and BURST with its own pieces for block references.
+pub(crate) fn explode_with(
+    s: &mut Session,
+    hs: &[Handle],
+    pieces: impl Fn(&cadaddy_doc::Drawing, &Entity) -> Option<Vec<Entity>>,
+) -> Result<(Vec<Handle>, usize)> {
     let space = s.space();
     let mut out = Vec::new();
     let mut not = 0;
@@ -1713,7 +1723,7 @@ pub(crate) fn explode(s: &mut Session, hs: &[Handle]) -> Result<(Vec<Handle>, us
             continue;
         }
         let Some(e) = s.doc()?.entity(*h).map(|e| (**e).clone()) else { continue };
-        let Some(parts) = explode_kind(s.doc()?, &e) else {
+        let Some(parts) = pieces(s.doc()?, &e) else {
             not += 1;
             continue;
         };

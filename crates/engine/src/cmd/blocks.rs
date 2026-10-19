@@ -20,6 +20,7 @@ mod actionbar;
 pub use actionbar::action_bars;
 mod attedit;
 mod dynauthor;
+mod burst;
 mod dyngrip;
 pub(crate) mod extract;
 pub(crate) mod refedit;
@@ -81,6 +82,7 @@ pub fn specs() -> Vec<CommandSpec> {
         battman::battman_spec(),
         attribs::attdisp_spec(),
         attribs::attsync_spec(),
+        burst::burst_spec(),
         extract::dataextraction_spec(),
         extract::eattext_spec(),
     ]
