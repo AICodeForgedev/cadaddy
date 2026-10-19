@@ -198,6 +198,13 @@ pub struct ParametricSettings {
     pub dim_exceptions: Vec<Handle>,
     /// Constraint bar transparency, percent.
     pub bar_transparency: u8,
+    /// AUTOCONSTRAIN: tangent objects must share an intersection point.
+    pub tangent_intersect: bool,
+    /// AUTOCONSTRAIN: perpendicular objects must share an intersection point.
+    pub perpendicular_intersect: bool,
+    /// CONSTRAINTNAMEFORMAT: dynamic constraints show 0 their name, 1 their value, 2 name and
+    /// expression.
+    pub name_format: u8,
 }
 
 impl Default for ParametricSettings {
@@ -215,6 +222,9 @@ impl Default for ParametricSettings {
             dims_visible: true,
             dim_exceptions: Vec::new(),
             bar_transparency: 50,
+            tangent_intersect: true,
+            perpendicular_intersect: true,
+            name_format: 2,
         }
     }
 }

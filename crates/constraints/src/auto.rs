@@ -15,13 +15,20 @@ pub struct InferOptions {
     pub distance_tolerance: f64,
     /// Degrees.
     pub angle_tolerance: f64,
-    /// Constraint type names allowed (`Coincident`, `Horizontal`, …); empty = all.
+    /// Constraint type names allowed (`Coincident`, `Horizontal`, …); for [`autoconstrain`] also
+    /// their priority: candidates of an earlier type are applied first. Empty = all, in the
+    /// built-in order.
     pub types: Vec<String>,
+    /// A line and a circle or arc are tangent only where they touch (the touching point on the
+    /// line, not on its extension).
+    pub tangent_intersect: bool,
+    /// Two lines are perpendicular only when they meet at an end point.
+    pub perpendicular_intersect: bool,
 }
 
 impl Default for InferOptions {
     fn default() -> Self {
-        InferOptions { distance_tolerance: 0.05, angle_tolerance: 1.0, types: Vec::new() }
+        InferOptions { distance_tolerance: 0.05, angle_tolerance: 1.0, types: Vec::new(), tangent_intersect: true, perpendicular_intersect: true }
     }
 }
 
@@ -135,7 +142,8 @@ pub fn infer(d: &Drawing, handles: &[Handle], o: &InferOptions) -> Vec<Constrain
             }
             let ln = Line::new(*a, *b);
             let t = ln.param_of(*c);
-            if (ln.dist(*c) - r).abs() <= tol && (-1e-9..=1.0 + 1e-9).contains(&t) && Line::new(*a, *b).len() > tol {
+            let on_line = !o.tangent_intersect || (-1e-9..=1.0 + 1e-9).contains(&t);
+            if (ln.dist(*c) - r).abs() <= tol && on_line && Line::new(*a, *b).len() > tol {
                 push(ConstraintKind::Tangent, vec![*rl, *rc]);
             }
         }
@@ -170,7 +178,7 @@ pub fn infer(d: &Drawing, handles: &[Handle], o: &InferOptions) -> Vec<Constrain
             } else {
                 parallel.push((*r1, *r2));
             }
-        } else if (std::f64::consts::FRAC_PI_2 - ang).abs() <= atol && connected(*a1, *b1, *a2, *b2) {
+        } else if (std::f64::consts::FRAC_PI_2 - ang).abs() <= atol && (!o.perpendicular_intersect || connected(*a1, *b1, *a2, *b2)) {
             push(ConstraintKind::Perpendicular, vec![*r1, *r2]);
         }
         if (d1.len() - d2.len()).abs() <= tol {
@@ -304,7 +312,13 @@ fn on_arc(d: &Drawing, h: Handle, c: Vec2, p: Vec2) -> bool {
 /// candidates are skipped.
 pub fn autoconstrain(d: &mut Drawing, handles: &[Handle], o: &InferOptions) -> Vec<u32> {
     let mut added = Vec::new();
-    for c in infer(d, handles, o) {
+    let mut cands = infer(d, handles, o);
+    // The settings' order is the priority (a stable sort keeps the built-in order within a type).
+    if !o.types.is_empty() {
+        let rank = |k: ConstraintKind| o.types.iter().position(|t| t.eq_ignore_ascii_case(k.name())).unwrap_or(usize::MAX);
+        cands.sort_by_key(|c| rank(c.kind));
+    }
+    for c in cands {
         if let Ok(id) = crate::add(d, c, &crate::SolveOptions::default()) {
             added.push(id);
         }

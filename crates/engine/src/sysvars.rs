@@ -144,6 +144,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         // Held in radians (as `$ANGBASE` in DXF); reported in degrees, like POLARANG.
         "ANGBASE" => json!(s.doc().ok()?.header.f64("ANGBASE", 0.0).to_degrees()),
         "CONSTRAINTINFER" => json!(i32::from(s.doc().ok()?.parametric.settings.infer)),
+        "CONSTRAINTNAMEFORMAT" => json!(s.doc().ok()?.parametric.settings.name_format),
         // Process-wide font substitution (profile settings, not saved in the drawing).
         "FONTALT" => json!(cadaddy_fonts::ttf::font_alt()),
         "FONTFALLBACK" => json!(cadaddy_fonts::ttf::fallback_fonts()),
@@ -494,6 +495,10 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         // AutoCAD's range: gaps up to 5000 drawing units close a hatch boundary.
         "HPGAPTOL" => s.doc_mut()?.header.set_f64("HPGAPTOL", as_f64(v).filter(|g| (0.0..=5000.0).contains(g)).ok_or_else(bad)?),
         "CONSTRAINTINFER" => s.doc_mut()?.parametric.settings.infer = as_bool(v).ok_or_else(bad)?,
+        "CONSTRAINTNAMEFORMAT" => {
+            let f = as_f64(v).filter(|f| [0.0, 1.0, 2.0].contains(f)).ok_or_else(bad)?;
+            s.doc_mut()?.parametric.settings.name_format = f as u8;
+        }
         _ => {
             if let Some(r) = table::set(s, &n, v) {
                 return r;
