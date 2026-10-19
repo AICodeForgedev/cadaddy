@@ -399,6 +399,7 @@ impl Interactive for PlotWindowM {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec::new("printers", "System Printers", run_printers).params("{} → {printers: [name]} (PLOT's `printer` prints on one)").noundo(),
         CommandSpec::new("plotwindow", "Plot Window", run_plotwindow)
             .params("{p1: [x,y], p2: [x,y]} (typed: two corners): the window the Plot dialog's \"Window <\" plots, kept in the session")
             .enabled(has_doc)
@@ -746,4 +747,10 @@ impl Interactive for PlotterManagerM {
             }
         }
     }
+}
+
+fn run_printers(_s: &mut Session, _p: &Value) -> Result<Value> {
+    let h = super::file::print_hooks().ok_or_else(|| bad("printers", "system printers are not available in this build"))?;
+    let names = (h.list)().map_err(|e| bad("printers", e))?;
+    Ok(json!({ "printers": names }))
 }
