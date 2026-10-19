@@ -314,8 +314,10 @@ pub(crate) fn kind_area(k: &EntityKind) -> Result<(f64, f64)> {
     Ok(match k {
         EntityKind::Circle(c) => (c.radius * c.radius * cadaddy_geom::PI, c.radius * cadaddy_geom::TAU),
         EntityKind::LwPolyline(pl) => {
+            // An open polyline is measured as if closed for the area, but its perimeter is its own length (AutoCAD's AREA help).
             let g = Polyline { vertices: pl.vertices.clone(), closed: true };
-            (g.area().abs(), g.len())
+            let drawn = Polyline { vertices: pl.vertices.clone(), closed: pl.closed };
+            (g.area().abs(), drawn.len())
         }
         EntityKind::Ellipse(el) => {
             let arc = cadaddy_geom::Ellipse { center: el.center.xy(), major: el.major.xy(), ratio: el.ratio, start: el.start, end: el.end };
