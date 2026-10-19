@@ -100,6 +100,19 @@ pub struct State {
     bench: Option<Bench>,
 }
 
+impl State {
+    /// Drop the GPU renderer (limits changed, or the GPU failed): the next frame starts again.
+    pub(crate) fn reset_gpu(&mut self) {
+        self.gpu = None;
+        self.uploaded = None;
+    }
+
+    /// The size the GPU drew the last frame at (the render target's), if it did.
+    pub fn gpu_size(&self) -> Option<(u32, u32)> {
+        self.gpu.as_ref().and_then(|g| g.target.as_ref()).map(|t| t.size)
+    }
+}
+
 /// The visual style the Model tab shows in, when it is a 3D one.
 pub fn active(app: &CadApp) -> Option<VisualStyle> {
     let st = app.session.state().ok()?;
@@ -134,9 +147,19 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
     let height = f64::from(xf.rect.height()) / xf.scale.max(1e-300);
     let view = ShadeView::new(xf.proj, xf.center, height, w, h);
     let mut drawn = false;
-    if let Some(rs) = app.wgpu_rs.clone() {
+    // On the GPU unless it can't (see `gpucaps`): at most the size its limits and memory allow
+    // (shown scaled up), with its multisampling.
+    let caps = app.gpu_caps.clone();
+    if let Some(rs) = app.wgpu_rs.clone().filter(|_| !caps.cpu) {
+        let (gw, gh) = caps.target_size(w, h);
+        let view = ShadeView::new(xf.proj, xf.center, height, gw, gh);
+        let (w, h) = (gw, gh);
         let st = &mut app.canvas.shade;
-        let g = st.gpu.get_or_insert_with(|| Gpu::new(&rs.device));
+        if st.gpu.as_ref().is_some_and(|g| g.samples != caps.msaa) {
+            st.gpu = None;
+            st.uploaded = None;
+        }
+        let g = st.gpu.get_or_insert_with(|| Gpu::new(&rs.device, caps.msaa));
         let up = Some((key, style, [bg.0, bg.1, bg.2]));
         if st.uploaded != up {
             g.upload(&rs.device, &rs.queue, &model, style, bg);
@@ -151,7 +174,8 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
         // Buffers and textures, plus the render targets (4× colour and depth, the resolved image)
         // and the shadow map.
         let (tw, th) = (u64::from(w), u64::from(h));
-        st.stats.gpu_bytes = g.bytes + (tw * th * (u64::from(SAMPLES) * 8 + 4)) as usize + (u64::from(SHADOW_PX) * u64::from(SHADOW_PX) * 4) as usize;
+        st.stats.gpu_bytes =
+            g.bytes + (tw * th * (u64::from(g.samples) * 8 + 4)) as usize + (u64::from(SHADOW_PX) * u64::from(SHADOW_PX) * 4) as usize;
         if let Some(tv) = g.view() {
             let mut r = rs.renderer.write();
             match st.texture {
@@ -308,7 +332,6 @@ fn finish(app: &mut CadApp, key: SceneKey, m: Arc<Model3>, started: std::time::I
 /// Display values (sRGB-encoded by the shader), as egui shows a texture.
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const SAMPLES: u32 = 4;
 /// Position (3 × f32, from the scene's origin) + normal (3 × f32) + sRGB colour (4 × u8) +
 /// texture coordinates (2 × f32) + material (roughness, metallic, texture layer, opacity: 4 × f32) +
 /// lightmap coordinates of its front and back (4 × f32; negative: none).
@@ -325,7 +348,8 @@ const SHADOW_PX: u32 = 2048;
 
 struct Target {
     size: (u32, u32),
-    msaa: wgpu::TextureView,
+    /// The multisampled colour (none without MSAA: the frame is drawn into directly).
+    msaa: Option<wgpu::TextureView>,
     depth: wgpu::TextureView,
     view: wgpu::TextureView,
 }
@@ -371,10 +395,12 @@ struct Gpu {
     radius: f64,
     lighting: Option<cadaddy_render::light::Lighting>,
     target: Option<Target>,
+    /// Samples per pixel (see [`crate::gpucaps`]).
+    samples: u32,
 }
 
 impl Gpu {
-    fn new(device: &wgpu::Device) -> Gpu {
+    fn new(device: &wgpu::Device, samples: u32) -> Gpu {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shaded"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
@@ -449,7 +475,7 @@ impl Gpu {
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
                 }),
-                multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+                multisample: wgpu::MultisampleState { count: samples, mask: !0, alpha_to_coverage_enabled: false },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
                     entry_point: Some(fs),
@@ -472,7 +498,7 @@ impl Gpu {
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+            multisample: wgpu::MultisampleState { count: samples, mask: !0, alpha_to_coverage_enabled: false },
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs_bg"),
@@ -574,6 +600,7 @@ impl Gpu {
             radius: 1.0,
             lighting: None,
             target: None,
+            samples,
         }
     }
 
@@ -881,7 +908,7 @@ impl Gpu {
     fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, v: &ShadeView, style: VisualStyle, bg: Rgb) -> model3::Visible {
         let size = (v.width_px, v.height_px);
         if self.target.as_ref().is_none_or(|t| t.size != size) {
-            self.target = Some(target(device, size));
+            self.target = Some(target(device, size, self.samples));
         }
         let Some(model) = self.model.clone() else { return model3::Visible::default() };
         let vis = model.visible(v);
@@ -949,12 +976,12 @@ impl Gpu {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shaded"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &t.msaa,
+                    view: t.msaa.as_ref().unwrap_or(&t.view),
                     depth_slice: None,
-                    resolve_target: Some(&t.view),
+                    resolve_target: t.msaa.as_ref().map(|_| &t.view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color { r: lin(bg.0), g: lin(bg.1), b: lin(bg.2), a: 1.0 }),
-                        store: wgpu::StoreOp::Discard,
+                        store: if t.msaa.is_some() { wgpu::StoreOp::Discard } else { wgpu::StoreOp::Store },
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -1017,7 +1044,7 @@ fn buffer(device: &wgpu::Device, label: &str, bytes: &[u8]) -> Option<Buffer> {
     Some(Buffer { buffer })
 }
 
-fn target(device: &wgpu::Device, size: (u32, u32)) -> Target {
+fn target(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Target {
     let extent = wgpu::Extent3d { width: size.0.clamp(1, shade::MAX_SIDE), height: size.1.clamp(1, shade::MAX_SIDE), depth_or_array_layers: 1 };
     let tex = |label: &str, format, samples, usage| {
         device.create_texture(&wgpu::TextureDescriptor {
@@ -1031,12 +1058,12 @@ fn target(device: &wgpu::Device, size: (u32, u32)) -> Target {
             view_formats: &[],
         })
     };
-    let msaa = tex("shaded_msaa", FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
-    let depth = tex("shaded_depth", DEPTH, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
+    let msaa = (samples > 1).then(|| tex("shaded_msaa", FORMAT, samples, wgpu::TextureUsages::RENDER_ATTACHMENT));
+    let depth = tex("shaded_depth", DEPTH, samples, wgpu::TextureUsages::RENDER_ATTACHMENT);
     let resolve = tex("shaded_frame", FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING);
     Target {
         size,
-        msaa: msaa.create_view(&wgpu::TextureViewDescriptor::default()),
+        msaa: msaa.map(|m| m.create_view(&wgpu::TextureViewDescriptor::default())),
         depth: depth.create_view(&wgpu::TextureViewDescriptor::default()),
         view: resolve.create_view(&wgpu::TextureViewDescriptor::default()),
     }

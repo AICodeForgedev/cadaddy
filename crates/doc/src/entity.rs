@@ -1450,6 +1450,8 @@ pub enum EntityKind {
     Viewport(Viewport),
     Image(Image),
     Underlay(Underlay),
+    /// A point cloud: a scan file placed in the drawing (POINTCLOUDATTACH).
+    PointCloud(Box<crate::pointcloud::PointCloud>),
     Wipeout(Wipeout),
     Table(Table),
     Tolerance(crate::Tolerance),
@@ -1514,6 +1516,7 @@ impl EntityKind {
             EntityKind::Viewport(_) => "Viewport",
             EntityKind::Image(_) => "Raster Image",
             EntityKind::Underlay(_) => "PDF Underlay",
+            EntityKind::PointCloud(_) => "Point Cloud",
             EntityKind::Wipeout(_) => "Wipeout",
             EntityKind::Table(_) => "Table",
             EntityKind::Tolerance(_) => "Tolerance",
@@ -1559,6 +1562,7 @@ impl EntityKind {
             EntityKind::Viewport(_) => "VIEWPORT",
             EntityKind::Image(_) => "IMAGE",
             EntityKind::Underlay(_) => "PDFUNDERLAY",
+            EntityKind::PointCloud(_) => "POINTCLOUDEX",
             EntityKind::Wipeout(_) => "WIPEOUT",
             EntityKind::Table(_) => "ACAD_TABLE",
             EntityKind::Tolerance(_) => "TOLERANCE",
@@ -1588,6 +1592,7 @@ impl EntityKind {
             EntityKind::Solid(s) | EntityKind::Trace(s) => s.corners[0].z,
             EntityKind::Image(i) => i.insert.z,
             EntityKind::Underlay(u) => u.insert.z,
+            EntityKind::PointCloud(pc) => pc.insert.z,
             _ => 0.0,
         };
         if z.is_finite() { z } else { 0.0 }
@@ -1725,6 +1730,12 @@ impl EntityKind {
                 (0..4).filter_map(|k| Some(Prim::Seg(Segment::Line(GLine::new(*c.get(k)?, *c.get((k + 1) % 4)?))))).collect()
             }
             EntityKind::Table(t) => vec![Prim::Point(t.insert.xy())],
+            // Its box: picked like a rectangle (the points snap on their own).
+            EntityKind::PointCloud(pc) => {
+                let b = pc.extents();
+                let c = b.corners();
+                (0..4).filter_map(|k| Some(Prim::Seg(Segment::Line(GLine::new(*c.get(k)?, *c.get((k + 1) % 4)?))))).collect()
+            }
             EntityKind::Tolerance(t) => vec![Prim::Point(t.insert.xy())],
             // A light shows as its glyph: a point, and a spot's aim.
             EntityKind::Light(l) => match l.kind {
@@ -1940,6 +1951,11 @@ impl EntityKind {
                 u.u = m.apply_vec(u.u.xy()).to3(0.0);
                 u.v = m.apply_vec(u.v.xy()).to3(0.0);
             }
+            EntityKind::PointCloud(pc) => {
+                t3(&mut pc.insert);
+                pc.rotation += rot;
+                pc.scale *= s;
+            }
             EntityKind::Wipeout(w) => w.boundary.iter_mut().for_each(|p| *p = m.apply(*p)),
             EntityKind::Table(t) => {
                 if let Some(b) = &mut t.breaks {
@@ -2041,6 +2057,7 @@ impl EntityKind {
             }
             EntityKind::Image(i) => vec![i.insert.xy()],
             EntityKind::Underlay(u) => u.corners().to_vec(),
+            EntityKind::PointCloud(pc) => vec![pc.insert.xy()],
             EntityKind::Wipeout(w) => w.boundary.clone(),
             EntityKind::Table(t) => vec![t.insert.xy()],
             EntityKind::Tolerance(t) => vec![t.insert.xy()],

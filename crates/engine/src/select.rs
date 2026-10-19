@@ -525,6 +525,7 @@ pub fn class_name(k: &EntityKind) -> &'static str {
         EntityKind::Viewport(_) => "AcDbViewport",
         EntityKind::Image(_) => "AcDbRasterImage",
         EntityKind::Underlay(_) => "AcDbPdfReference",
+        EntityKind::PointCloud(_) => "AcDbPointCloudEx",
         EntityKind::Wipeout(_) => "AcDbWipeout",
         EntityKind::Table(_) => "AcDbTable",
         EntityKind::Tolerance(_) => "AcDbFcf",

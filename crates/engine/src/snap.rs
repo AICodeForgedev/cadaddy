@@ -118,6 +118,9 @@ pub enum LineEnd {
     Deferred(Deferred),
 }
 
+/// Most points of a point cloud considered for one snap.
+const MAX_CLOUD_SNAPS: usize = 4096;
+
 fn name_of(m: u32) -> &'static str {
     mode::ALL.iter().find(|(b, _)| *b == m).map(|(_, n)| *n).unwrap_or("Snap")
 }
@@ -612,6 +615,21 @@ impl Sink<'_> {
             return;
         }
         let at = |p: Vec2| xf.map_or(p, |m| m.apply(p));
+        // A point cloud's points under the aperture snap as nodes (in a block: not searched).
+        if osmode & mode::NOD != 0
+            && xf.is_none()
+            && let EntityKind::PointCloud(pc) = kind
+            && let Some(cloud) = cadaddy_render::clouds::cloud(&pc.path)
+        {
+            let own = Bounds2::from_points(self.probe.corners().iter().map(|c| pc.unplace(c.to3(0.0)).xy()));
+            for i in cloud.points_in(own.min, own.max, MAX_CLOUD_SNAPS) {
+                let Some(q) = cloud.points.get(i) else { continue };
+                let p = cadaddy_geom::Vec3::new(f64::from(q[0]), f64::from(q[1]), f64::from(q[2]));
+                if pc.shows(p) {
+                    self.cands.push((mode::NOD, pc.place(p).xy()));
+                }
+            }
+        }
         if osmode & mode::END != 0
             && let EntityKind::Solid(s) | EntityKind::Trace(s) = kind
         {

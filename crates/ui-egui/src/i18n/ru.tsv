@@ -1834,3 +1834,16 @@
 	Plans to Model Benchmark	Тест «От планов к модели»
 	Plans to Model Case	Пример «От планов к модели»
 	Plans to Model Score	Оценка «От планов к модели»
+	Save Viewpoint	Сохранить точку обзора
+	Viewpoints for Every Room	Точки обзора для каждой комнаты
+	Camera Tour	Облёт камерой
+	Tours and Viewpoints	Облёты и точки обзора
+	Tour Timing	Хронометраж облёта
+	3D Graphics Limits	Ограничения 3D-графики
+	Drawn by the CPU (no usable GPU)	Рисует процессор (нет подходящего GPU)
+	Point Cloud...	Облако точек...
+	Point Cloud	Облако точек
+	Attach Point Cloud	Вставить облако точек
+	Clip Point Cloud	Подрезать облако точек
+	Point Cloud Color Map	Цветовая схема облака точек
+	Point Cloud Information	Сведения об облаке точек

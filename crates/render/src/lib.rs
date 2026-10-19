@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod clip;
+pub mod clouds;
 mod dim;
 mod fill;
 mod hatch;
@@ -1480,6 +1481,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         }
         EntityKind::Image(i) => image(b, ctx, i, rgb, lw),
         EntityKind::Underlay(u) => underlay(b, ctx, u, rgb, lw),
+        EntityKind::PointCloud(pc) => point_cloud(b, ctx, pc, rgb, lw),
         EntityKind::Table(t) => table(b, ctx, t, rgb, lw),
         EntityKind::Tolerance(t) => tolerance::draw(b, ctx, e, t, lw, tol),
         EntityKind::Leader(l) => {
@@ -1991,6 +1993,35 @@ pub fn set_underlay_loader(f: UnderlayLoader) {
 /// A PDF underlay: the page's objects (its layers turned off left out) placed by the underlay,
 /// faded (as transparency) and in colour 7 when monochrome, inside its clip boundary or, without
 /// one, its page frame. A page that can't be loaded shows as its frame.
+/// A point cloud: about [`clouds::DRAW_BUDGET`] of its points (the octree's level of detail for
+/// what the view shows), in the scan's colours, its intensity, by elevation or the object's
+/// colour; its box when the file can't be read.
+fn point_cloud(b: &mut Builder, ctx: &Ctx, pc: &cadaddy_doc::pointcloud::PointCloud, rgb: Ink, lw: f32) {
+    let cloud = if ctx.depth < cadaddy_doc::MAX_BLOCK_DEPTH { clouds::cloud(&pc.path) } else { None };
+    let Some(cloud) = cloud else {
+        let c = pc.extents().corners();
+        let mut frame: Vec<Vec2> = c.iter().map(|p| ctx.xf.apply(*p)).collect();
+        frame.extend(frame.first().copied());
+        b.polyline(ctx, rgb, lw, &frame);
+        return;
+    };
+    // The view in the cloud's own coordinates (drawn at top level only; in a block, all of it).
+    let view = b.opts.view.filter(|_| ctx.depth == 0).map(|v| {
+        let own = cadaddy_geom::Bounds2::from_points(v.corners().iter().map(|p| pc.unplace(p.to3(0.0)).xy()));
+        (own.min, own.max)
+    });
+    let single = [rgb.rgb.0, rgb.rgb.1, rgb.rgb.2];
+    for i in cloud.lod(clouds::DRAW_BUDGET, view) {
+        let Some(p) = cloud.points.get(i) else { continue };
+        let own = cadaddy_geom::Vec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]));
+        if !pc.shows(own) {
+            continue;
+        }
+        let [r, g, bl] = cloud.color(i, pc.color_mode, single);
+        b.point(ctx, Ink { rgb: Rgb(r, g, bl), aci7: false, aci: 0 }, pc.place(own).xy());
+    }
+}
+
 fn underlay(b: &mut Builder, ctx: &Ctx, u: &cadaddy_doc::Underlay, rgb: Ink, lw: f32) {
     let frame: Vec<Vec2> = u.corners().iter().map(|p| ctx.xf.apply(*p)).collect();
     let content = if ctx.depth < cadaddy_doc::MAX_BLOCK_DEPTH { UNDERLAY_LOADER.get().and_then(|f| f(&u.path, u.page.max(1))) } else { None };

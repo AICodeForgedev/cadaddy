@@ -40,6 +40,7 @@ mod imageattach;
 mod imageclip;
 pub(crate) mod inquiry;
 mod layer;
+pub mod pointcloud;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
 pub mod furnish;
@@ -69,6 +70,7 @@ pub mod spell;
 pub mod stairs;
 pub mod symbol;
 mod takeoff;
+pub mod tours;
 pub(crate) mod underlay;
 pub mod verify;
 pub mod wallgen;
@@ -256,6 +258,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(stairs::specs());
         v.extend(autospec::specs());
         v.extend(verify::specs());
+        v.extend(tours::specs());
         v.extend(imageclip::specs());
         v.extend(array::specs());
         v.extend(symbol::specs());
@@ -291,6 +294,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(field::specs());
         v.extend(ucs::specs());
         v.extend(tolerance::specs());
+        v.extend(pointcloud::specs());
         v.extend(adcenter::specs());
         v.extend(history::specs());
         v.extend(standards::specs());

@@ -1783,3 +1783,10 @@
 	Plans to Model Benchmark	図面からモデルへ ベンチマーク
 	Plans to Model Case	図面からモデルへ ケース
 	Plans to Model Score	図面からモデルへ スコア
+	Save Viewpoint	視点を保存
+	Viewpoints for Every Room	各部屋の視点
+	Camera Tour	カメラツアー
+	Tours and Viewpoints	ツアーと視点
+	Tour Timing	ツアーのタイミング
+	3D Graphics Limits	3D グラフィックスの制限
+	Drawn by the CPU (no usable GPU)	CPU で描画（使用できる GPU なし）

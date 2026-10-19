@@ -48,6 +48,7 @@ pub mod foreign;
 pub mod hyperlink;
 pub mod lighting;
 pub mod material;
+pub mod pointcloud;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocError {
@@ -141,6 +142,9 @@ pub struct Drawing {
     /// The building spec (`cadaddy-walk3d`'s `BuildingSpec` as JSON text, `bspec.set`): what the
     /// plan means as a 3D building. Kept in the named-object dictionary (`CADADDY_BSPEC`).
     pub building_spec: Option<String>,
+    /// Saved viewpoints and camera tours (`cadaddy-walk3d`'s `Tours` as JSON text, `tour.*`).
+    /// Kept in the named-object dictionary (`CADADDY_TOURS`).
+    pub tours: Option<String>,
     /// What reading the file left out (a DWG's object records the reader couldn't decode), told
     /// to the user when the drawing opens. Never written to a file.
     pub read_notes: Vec<String>,
@@ -235,6 +239,7 @@ impl Drawing {
             materials: Vec::new(),
             sun: lighting::Sun::default(),
             building_spec: None,
+            tours: None,
             read_notes: Vec::new(),
             refedit: None,
             skipped_records: BTreeMap::new(),

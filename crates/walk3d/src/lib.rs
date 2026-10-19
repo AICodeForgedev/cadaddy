@@ -19,6 +19,7 @@ mod pick;
 mod rules;
 mod spec;
 pub mod stairs;
+mod tour;
 mod walker;
 
 pub use derive::{DeviceInfo, LevelInfo, Owner, Part, Room, Scene, Seg, Vertex, derive, derive_set, rooms};
@@ -34,4 +35,5 @@ pub use spec::{
     GridColumn, Issue, ItemKind, LayerRole, Mep, MepKind, MepRun, MepSystem, Rcp, Role, Roof, RoofSlope, Room as SpecRoom, SPEC_VERSION, Side, Site,
     Soffit, Stair, Surfaces, WallFrom, WallType, feet, inches, level_at, merge, pitch_text,
 };
+pub use tour::{Look, MAX_FRAMES, MAX_TOUR_STOPS, Pose, TOURS_VERSION, Tour, TourPath, Tours, Viewpoint};
 pub use walker::Walker;

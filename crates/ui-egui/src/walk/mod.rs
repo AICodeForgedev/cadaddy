@@ -10,11 +10,13 @@
 //! this drawing as one floor's sheet (then every floor of the building is walked). Nothing is
 //! computed until Walk is opened, and all of it is dropped when Walk closes.
 
+mod cpu;
+pub mod export;
 pub mod gpu;
 
 use crate::CadApp;
 use cadaddy_doc::{Drawing, EntityKind, Handle};
-use cadaddy_walk3d::{DeviceInfo, DimKind, Ground, Owner, Room, Rules, Scene, Walker, derive_set, measure, pick, rooms};
+use cadaddy_walk3d::{DeviceInfo, DimKind, Ground, Owner, Pose, Room, Rules, Scene, TourPath, Tours, Walker, derive_set, measure, pick, rooms};
 use egui_wgpu::wgpu;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -163,8 +165,10 @@ pub enum Picked {
 pub struct Walk {
     pub building: Building,
     pub walker: Walker,
-    gpu: Option<gpu::Gpu>,
+    pub(crate) gpu: Option<gpu::Gpu>,
     texture: Option<egui::TextureId>,
+    /// The CPU's last frame (no usable GPU).
+    cpu_texture: Option<egui::TextureHandle>,
     uploaded: bool,
     pub picked: Option<Picked>,
     /// Cut away everything above the walker's level (a dollhouse view from above).
@@ -188,6 +192,23 @@ pub struct Walk {
     pub minimap: bool,
     /// Walking speed, feet per second (flying is four times faster; Shift runs).
     pub speed_ft: f64,
+    /// The open drawing's saved viewpoints and camera tours.
+    pub tours: Tours,
+    /// The tour playing.
+    pub playing: Option<Playing>,
+    view_name: String,
+    /// A command the panel asked for; it runs on the drawing after the panel is drawn.
+    pending: Option<(&'static str, serde_json::Value)>,
+}
+
+/// A camera tour being played in Walk.
+pub struct Playing {
+    pub name: String,
+    pub path: TourPath,
+    /// Seconds played.
+    pub t: f64,
+    /// Flying before the tour started (restored when it stops).
+    was_flying: bool,
 }
 
 /// Walking pace when the drawing doesn't set STEPSIZE and STEPSPERSEC, feet per second.
@@ -206,6 +227,11 @@ fn speed_of(b: &Building) -> f64 {
 }
 
 impl Walk {
+    /// The last frame was drawn by the CPU (no usable GPU).
+    pub fn on_cpu(&self) -> bool {
+        self.cpu_texture.is_some() && self.gpu.is_none()
+    }
+
     fn new(building: Building, revision: u64) -> Walk {
         let walker = Walker::spawn(&building.scene, building.home_level());
         let mut w = Walk {
@@ -213,6 +239,7 @@ impl Walk {
             walker,
             gpu: None,
             texture: None,
+            cpu_texture: None,
             uploaded: false,
             picked: None,
             cut: false,
@@ -227,6 +254,10 @@ impl Walk {
             room_query: String::new(),
             minimap: true,
             speed_ft: WALK_PACE_FT,
+            tours: Tours::default(),
+            playing: None,
+            view_name: String::new(),
+            pending: None,
         };
         w.rebuild_view();
         w.rebuild_ground();
@@ -241,6 +272,64 @@ impl Walk {
         self.rooms = rooms(&srcs, &b.rules);
         self.rooms.sort_by(|a, b| a.level.cmp(&b.level).then_with(|| a.name.cmp(&b.name)));
         self.speed_ft = speed_of(b);
+        self.tours = Tours::from_json(b.drawings.first().and_then(|d| d.tours.as_deref())).unwrap_or_default();
+    }
+
+    /// Play the tour `name` from its start.
+    pub fn play(&mut self, name: &str) -> Result<(), String> {
+        let tour = self.tours.tour(name).ok_or_else(|| format!("no tour named {name}"))?;
+        let path = self.tours.path(tour)?;
+        let name = tour.name.clone();
+        let was_flying = self.playing.as_ref().map_or(self.walker.fly, |p| p.was_flying);
+        self.walker.fly = true;
+        self.playing = Some(Playing { name, path, t: 0.0, was_flying });
+        self.advance(0.0);
+        Ok(())
+    }
+
+    /// Stop the tour playing, the camera staying where it is (walking again).
+    pub fn stop(&mut self) {
+        if let Some(p) = self.playing.take() {
+            self.walker.fly = p.was_flying;
+            self.walker.vz = 0.0;
+        }
+    }
+
+    /// Move the tour on by `dt` seconds; it stops at its end.
+    pub fn advance(&mut self, dt: f64) {
+        let Some(p) = self.playing.as_mut() else { return };
+        p.t += if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+        let pose = p.path.pose(p.t);
+        let done = p.t >= p.path.duration();
+        put_pose(&mut self.walker, &self.building.scene, pose);
+        if done {
+            self.stop();
+        }
+    }
+
+    /// Stand at saved viewpoint `name`.
+    pub fn go_to_view(&mut self, name: &str) {
+        let Some(v) = self.tours.view(name) else { return };
+        let pose = Pose {
+            eye: cadaddy_walk3d::V3 { x: v.eye[0], y: v.eye[1], z: v.eye[2] },
+            yaw: v.yaw.to_radians(),
+            pitch: v.pitch.to_radians(),
+            level: v.level,
+        };
+        self.stop();
+        put_pose(&mut self.walker, &self.building.scene, pose);
+    }
+
+    /// The room on the walker's level nearest to it (within 40 feet), for a viewpoint saved here.
+    fn room_here(&self) -> Option<&str> {
+        let w = &self.walker;
+        self.rooms
+            .iter()
+            .filter(|r| r.level == w.level)
+            .map(|r| (r, (r.at.x - w.eye.x).hypot(r.at.y - w.eye.y)))
+            .filter(|(_, d)| *d < 40.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(r, _)| r.name.as_str())
     }
 
     /// Stand at room `i`: its level, its place, on the floor there.
@@ -304,6 +393,15 @@ impl Walk {
 }
 
 /// A device's type: its type attribute (as the rules name it), else its block name.
+/// Put the camera at a tour pose (on a level the scene has).
+fn put_pose(w: &mut Walker, scene: &Scene, pose: Pose) {
+    w.eye = pose.eye;
+    w.yaw = pose.yaw;
+    w.pitch = pose.pitch;
+    w.level = pose.level.min(scene.levels.len().saturating_sub(1));
+    w.vz = 0.0;
+}
+
 fn device_type(b: &Building, d: &DeviceInfo) -> String {
     d.attrs.iter().find(|(t, _)| t.eq_ignore_ascii_case(&b.rules.devices.type_attr)).map(|(_, v)| v.clone()).unwrap_or_else(|| d.block.clone())
 }
@@ -375,7 +473,9 @@ pub fn frame_for(scene: &Scene, w: &Walker, size: (u32, u32), cut: bool) -> gpu:
 /// The walk view in place of the drawing canvas: the 3D on the left, its panel on the right.
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     refresh_if_edited(app);
-    let rs = app.wgpu_rs.clone();
+    // The GPU unless it can't draw the 3D views (see `gpucaps`).
+    let rs = app.wgpu_rs.clone().filter(|_| !app.gpu_caps.cpu);
+    let samples = app.gpu_caps.msaa;
     let ctx = ui.ctx().clone();
     let mut close_now = false;
     let mut select: Option<Handle> = None;
@@ -389,10 +489,23 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             close_now = egui::ScrollArea::vertical().id_salt("walk_side").show(ui, |ui| side_panel(walk, ui)).inner;
         });
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-            let (esc, sel) = viewport(walk, ui, rs.as_ref());
+            let (esc, sel) = viewport(walk, ui, rs.as_ref(), samples);
             close_now |= esc;
             select = sel;
         });
+    }
+    // What the panel asked for: saved in the drawing (the scene is derived again next frame).
+    if let Some((id, params)) = app.walk.as_mut().and_then(|w| w.pending.take()) {
+        match app.run(id, params) {
+            Ok(r) => app.set_status(match id {
+                "tour.view" if r.get("deleted").is_some() => "Viewpoint deleted.".to_string(),
+                "tour.view" => format!("Viewpoint saved ({} saved).", r["views"]),
+                "tour.rooms" => format!("{} viewpoints saved, one per room.", r["added"].as_array().map_or(0, Vec::len)),
+                "tour.create" if r.get("deleted").is_some() => "Tour deleted.".to_string(),
+                _ => format!("Tour saved: {:.1} s.", r["duration"].as_f64().unwrap_or(0.0)),
+            }),
+            Err(e) => app.set_status(format!("Walk: {e}")),
+        }
     }
     // A wall or device of the open drawing picked in 3D is selected in 2D too.
     if let Some(h) = select
@@ -485,6 +598,8 @@ fn side_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
     if let Some(i) = go {
         walk.go_to_room(i);
     }
+    ui.separator();
+    tours_panel(walk, ui);
     let b = &walk.building;
     let s = &b.scene;
     ui.separator();
@@ -550,22 +665,122 @@ fn side_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
     back
 }
 
+/// Saved viewpoints and camera tours: save one here, go to one, make and play tours.
+fn tours_panel(walk: &mut Walk, ui: &mut egui::Ui) {
+    ui.strong("Viewpoints and tours");
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut walk.view_name).hint_text("Viewpoint name").desired_width(150.0));
+        if ui.button("Save here").clicked() {
+            let w = &walk.walker;
+            let name = match walk.view_name.trim() {
+                "" => format!("View {}", walk.tours.views.len() + 1),
+                n => n.to_string(),
+            };
+            let room = walk.room_here().unwrap_or("").to_string();
+            walk.pending = Some((
+                "tour.view",
+                serde_json::json!({"name": name, "eye": [w.eye.x, w.eye.y, w.eye.z], "yaw": w.yaw.to_degrees(), "pitch": w.pitch.to_degrees(), "level": w.level, "room": room}),
+            ));
+            walk.view_name.clear();
+        }
+    });
+    let mut go: Option<String> = None;
+    egui::ScrollArea::vertical().id_salt("walk_views").max_height(110.0).show(ui, |ui| {
+        for v in walk.tours.views.iter().take(200) {
+            ui.horizontal(|ui| {
+                let label =
+                    if v.room.is_empty() || v.room.eq_ignore_ascii_case(&v.name) { v.name.clone() } else { format!("{}  ·  {}", v.name, v.room) };
+                if ui.selectable_label(false, label).clicked() {
+                    go = Some(v.name.clone());
+                }
+                if ui.small_button("×").on_hover_text("Delete this viewpoint").clicked() {
+                    walk.pending = Some(("tour.view", serde_json::json!({"name": v.name, "delete": true})));
+                }
+            });
+        }
+        if walk.tours.views.is_empty() {
+            ui.small("No viewpoints saved.");
+        }
+    });
+    if let Some(n) = go {
+        walk.go_to_view(&n);
+    }
+    ui.horizontal_wrapped(|ui| {
+        if !walk.rooms.is_empty() && ui.button("One per room").on_hover_text("Save a viewpoint in every named room").clicked() {
+            walk.pending = Some(("tour.rooms", serde_json::json!({})));
+        }
+        if walk.tours.views.len() >= 2 && ui.button("Tour through them").on_hover_text("A tour through every viewpoint, in order").clicked() {
+            let stops: Vec<&str> = walk.tours.views.iter().map(|v| v.name.as_str()).collect();
+            let name = format!("Tour {}", walk.tours.tours.len() + 1);
+            walk.pending = Some(("tour.create", serde_json::json!({"name": name, "stops": stops, "speed": walk.speed_ft, "pause": 1.0})));
+        }
+    });
+    let mut play: Option<String> = None;
+    let mut stop = false;
+    for t in walk.tours.tours.iter().take(100) {
+        let secs = walk.tours.path(t).map_or(0.0, |p| p.duration());
+        ui.horizontal(|ui| {
+            let on = walk.playing.as_ref().is_some_and(|p| p.name == t.name);
+            if on {
+                if ui.small_button("■").on_hover_text("Stop").clicked() {
+                    stop = true;
+                }
+            } else if ui.small_button("▶").on_hover_text("Play").clicked() {
+                play = Some(t.name.clone());
+            }
+            ui.label(format!("{}  ({secs:.1} s, {} stops)", t.name, t.stops.len()));
+            if ui.small_button("×").on_hover_text("Delete this tour").clicked() {
+                walk.pending = Some(("tour.create", serde_json::json!({"name": t.name, "delete": true})));
+            }
+        });
+    }
+    if let Some(p) = &walk.playing {
+        ui.small(format!("Playing {}: {:.1} / {:.1} s (move or Esc to stop)", p.name, p.t.min(p.path.duration()), p.path.duration()));
+    }
+    if stop {
+        walk.stop();
+    }
+    if let Some(n) = play {
+        let _ = walk.play(&n);
+    }
+}
+
 /// The 3D view: look, move, pick, draw. Returns (Esc pressed, a handle of the open drawing to
 /// select).
-fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderState>) -> (bool, Option<Handle>) {
+/// The walk view: drawn by `rs` (the GPU, with `samples` per pixel), else by the CPU.
+fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderState>, samples: u32) -> (bool, Option<Handle>) {
     let rect = ui.available_rect_before_wrap();
     let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
     let ctx = ui.ctx().clone();
-    let Some(rs) = rs else {
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "Walk needs the GPU renderer.",
-            egui::FontId::proportional(16.0),
-            egui::Color32::WHITE,
-        );
-        return (ctx.input(|i| i.key_pressed(egui::Key::Escape)), None);
-    };
+    let frame_dt = ctx.input(|i| f64::from(i.stable_dt).min(0.1));
+    // A tour playing moves the camera; looking, moving or Esc takes it back.
+    let mut tour_esc = false;
+    if walk.playing.is_some() {
+        let took_over = resp.dragged()
+            || (!ctx.egui_wants_keyboard_input()
+                && ctx.input(|i| {
+                    tour_esc = i.key_pressed(egui::Key::Escape);
+                    tour_esc
+                        || [
+                            egui::Key::W,
+                            egui::Key::A,
+                            egui::Key::S,
+                            egui::Key::D,
+                            egui::Key::ArrowUp,
+                            egui::Key::ArrowDown,
+                            egui::Key::ArrowLeft,
+                            egui::Key::ArrowRight,
+                        ]
+                        .iter()
+                        .any(|k| i.key_down(*k))
+                }));
+        if took_over {
+            walk.stop();
+        } else {
+            walk.advance(frame_dt);
+        }
+    }
+    let playing = walk.playing.is_some();
     let s = &walk.building.scene;
     let ground = &walk.ground;
     let w = &mut walk.walker;
@@ -574,8 +789,9 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
         w.look(-f64::from(d.x) * 0.005, -f64::from(d.y) * 0.005);
     }
     // Gravity: off an edge, the walker comes down.
-    let frame_dt = ctx.input(|i| f64::from(i.stable_dt).min(0.1));
-    w.fall(s, Some(ground), frame_dt);
+    if !playing {
+        w.fall(s, Some(ground), frame_dt);
+    }
     let mut esc = false;
     let mut minimap_key = false;
     if !ctx.egui_wants_keyboard_input() {
@@ -616,7 +832,7 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
         if pgdn && w.level > 0 {
             w.go_to_level(s, w.level - 1);
         }
-        esc = escape;
+        esc = escape && !tour_esc;
     }
     if minimap_key {
         walk.minimap = !walk.minimap;
@@ -672,21 +888,46 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
     let s = &walk.building.scene;
     let ppp = ctx.pixels_per_point();
     let size = ((rect.width() * ppp).round().max(1.0) as u32, (rect.height() * ppp).round().max(1.0) as u32);
-    let g = walk.gpu.get_or_insert_with(|| gpu::Gpu::new(&rs.device));
-    if !walk.uploaded {
-        g.upload(&rs.device, &walk.view);
-        walk.uploaded = true;
-    }
-    g.render(&rs.device, &rs.queue, size, &frame_for(s, &walk.walker, size, walk.cut));
-    if let Some(view) = g.view() {
-        let mut r = rs.renderer.write();
-        match walk.texture {
-            Some(id) => r.update_egui_texture_from_wgpu_texture(&rs.device, view, wgpu::FilterMode::Linear, id),
-            None => walk.texture = Some(r.register_native_texture(&rs.device, view, wgpu::FilterMode::Linear)),
+    let full = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    if let Some(rs) = rs {
+        if walk.gpu.as_ref().is_some_and(|g| g.samples() != samples) {
+            walk.gpu = None;
+            walk.uploaded = false;
         }
-    }
-    if let Some(id) = walk.texture {
-        ui.painter().image(id, rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+        let g = walk.gpu.get_or_insert_with(|| gpu::Gpu::new(&rs.device, samples));
+        if !walk.uploaded {
+            g.upload(&rs.device, &walk.view);
+            walk.uploaded = true;
+        }
+        g.render(&rs.device, &rs.queue, size, &frame_for(s, &walk.walker, size, walk.cut));
+        if let Some(view) = g.view() {
+            let mut r = rs.renderer.write();
+            match walk.texture {
+                Some(id) => r.update_egui_texture_from_wgpu_texture(&rs.device, view, wgpu::FilterMode::Linear, id),
+                None => walk.texture = Some(r.register_native_texture(&rs.device, view, wgpu::FilterMode::Linear)),
+            }
+        }
+        if let Some(id) = walk.texture {
+            ui.painter().image(id, rect, full, egui::Color32::WHITE);
+        }
+    } else {
+        // No usable GPU: the CPU draws a smaller frame, shown scaled up.
+        let small = cpu::frame_size(size);
+        let img = cpu::render(s, &walk.walker, small, cut_z(s, &walk.walker, walk.cut));
+        match &mut walk.cpu_texture {
+            Some(t) => t.set(img, egui::TextureOptions::LINEAR),
+            None => walk.cpu_texture = Some(ctx.load_texture("walk_cpu", img, egui::TextureOptions::LINEAR)),
+        }
+        if let Some(t) = &walk.cpu_texture {
+            ui.painter().image(t.id(), rect, full, egui::Color32::WHITE);
+        }
+        ui.painter().text(
+            rect.right_bottom() - egui::vec2(10.0, 8.0),
+            egui::Align2::RIGHT_BOTTOM,
+            crate::tl!("Drawn by the CPU (no usable GPU)"),
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 220),
+        );
     }
     if let Some(Picked::Device(i)) = &walk.picked {
         draw_dims(ui.painter(), rect, &walk.walker.view_proj(aspect), &measure(&walk.building.scene, *i));

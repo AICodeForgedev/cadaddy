@@ -62,6 +62,7 @@ pub mod dyninput;
 pub mod extractdlg;
 pub mod finddlg;
 pub mod gpu;
+pub mod gpucaps;
 pub mod grip_dyn;
 mod groupgrips;
 pub mod historypalettes;
@@ -434,6 +435,8 @@ pub struct CadApp {
     pub walk: Option<walk::Walk>,
     /// The app's wgpu render state (walk mode draws its 3D with it).
     pub wgpu_rs: Option<egui_wgpu::RenderState>,
+    /// What the GPU can do for the 3D views ([`gpucaps::GpuCaps`]); no GPU: the CPU draws.
+    pub gpu_caps: gpucaps::GpuCaps,
 }
 
 impl CadApp {
@@ -500,6 +503,7 @@ impl CadApp {
             bedit: bedit::State::default(),
             walk: None,
             wgpu_rs: None,
+            gpu_caps: gpucaps::GpuCaps::default(),
         }
     }
 
@@ -533,6 +537,11 @@ impl CadApp {
         self.canvas.gpu = Some(gpu::install(rs, &self.gpu_faults, stencil));
         self.canvas.gpu_device = Some(rs.device.clone());
         self.wgpu_rs = Some(rs.clone());
+        self.gpu_caps = gpucaps::GpuCaps::detect(rs);
+        if let Some(n) = self.gpu_caps.notice() {
+            log::warn!("{n}");
+            self.set_status(n);
+        }
     }
 
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
