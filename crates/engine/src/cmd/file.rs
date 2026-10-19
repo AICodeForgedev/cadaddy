@@ -2,6 +2,7 @@
 //! registered by the host (desktop/CLI) via [`crate::cmd::file::set_io`]. On the web, where there is
 //! no file system, saved files reach the user through the host's [`crate::cmd::file::set_deliver`].
 
+mod etransmit;
 mod pgp;
 mod template;
 
@@ -67,6 +68,7 @@ pub fn entity_codec() -> Option<&'static EntityCodec> {
 
 /// COMPARE (drawing comparison).
 pub mod compare;
+pub mod zip;
 
 /// Hand finished file bytes to the user where there is no file system (the browser: a download).
 /// Arguments: file name, MIME type, bytes. `Ok` only once the delivery was actually started.
@@ -206,6 +208,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{path: script (.scr) file} | {data: base64} → {lines}")
             .noundo()
             .interactive(|_| Ok(Box::new(ScriptM))),
+        etransmit::spec(),
     ]
 }
 
@@ -583,7 +586,7 @@ fn bak_path(path: &str) -> String {
     std::path::Path::new(path).with_extension("bak").to_string_lossy().into_owned()
 }
 
-fn store(path: &str, bytes: &[u8]) -> Result<()> {
+pub(crate) fn store(path: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         // The file being replaced, if any: a read-only one is left alone (as AutoCAD does: save

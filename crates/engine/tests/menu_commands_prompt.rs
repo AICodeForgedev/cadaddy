@@ -20,6 +20,7 @@ const DIALOG_OR_STATE: &[&str] = &[
     "export",
     "publish",
     "pdfbook",
+    "etransmit",
     "style",
     "dimstyle",
     "dimstyle.dimension",

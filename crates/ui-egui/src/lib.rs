@@ -57,6 +57,7 @@ pub mod viewcube;
 pub mod vpscale;
 pub mod walk;
 
+pub mod etransmit;
 pub mod exchange;
 
 use std::sync::mpsc::Receiver;

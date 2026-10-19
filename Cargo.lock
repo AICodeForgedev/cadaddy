@@ -692,6 +692,7 @@ dependencies = [
  "cadaddy-render",
  "craft-docpath",
  "log",
+ "miniz_oxide 0.8.9",
  "rstar",
  "serde",
  "serde_json",
