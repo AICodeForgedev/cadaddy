@@ -780,6 +780,7 @@ dependencies = [
  "cadaddy-engine",
  "cadaddy-fonts",
  "cadaddy-geom",
+ "cadaddy-io",
  "cadaddy-render",
  "cadaddy-walk3d",
  "craft-ui",
