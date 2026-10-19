@@ -39,7 +39,7 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
 /// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
 /// command doesn't require a row in every language.
 const REQUIRED: &[&str] = &["uk"];
-const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar", "hu", "tr"];
+const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar", "hu", "tr", "el"];
 
 fn check(language: &str, what: &str, missing: Vec<String>) {
     if REQUIRED.contains(&language) {
@@ -1125,6 +1125,49 @@ fn default_fonts_cover_every_turkish_letter_in_the_catalog() {
             let mut font = view.fonts.font(&family);
             for c in &letters {
                 assert!(font.characters().contains_key(c), "missing {c} in {family:?}");
+            }
+        }
+    });
+}
+
+#[test]
+fn greek_catalog_locale_preferences_and_contexts() {
+    assert_eq!(Preference::parse("el"), Some(Preference::Greek));
+    assert_eq!(Preference::Greek.code(), "el");
+    assert_eq!(Preference::Greek.name(), "Ελληνικά");
+    for locale in ["el", "el-GR", "el_GR.UTF-8", "EL-cy"] {
+        assert_eq!(locale_language(locale), Some("el"));
+    }
+    assert_eq!(locale_language("elvish"), None);
+    assert_eq!(Preference::Greek.resolve(&["en-US".into()]), "el");
+    let saved = serde_json::to_string(&Preference::Greek).unwrap();
+    assert_eq!(saved, "\"el\"");
+    assert_eq!(serde_json::from_str::<Preference>(&saved).unwrap(), Preference::Greek);
+    assert_eq!(tr("el", "Layer"), "Επίπεδο (Layer)");
+    assert_eq!(tr_menu("el", "Dimension"), "Διαστασιολόγηση");
+    assert_eq!(tr("el", "Dimension"), "Διαστασιολόγηση (Dimension)");
+    with_language("el", || {
+        assert_eq!(t("Open"), "Άνοιγμα");
+        assert_eq!(count(1, "{n} contributor", "{n} contributors"), "1 συνεισφέρων");
+        assert_eq!(count(0, "{n} contributor", "{n} contributors"), "0 συνεισφέροντες");
+        assert_eq!(count(2, "{n} contributor", "{n} contributors"), "2 συνεισφέροντες");
+        assert_eq!(count(21, "{n} contributor", "{n} contributors"), "21 συνεισφέροντες");
+    });
+    assert_eq!(t("Open"), "Open", "language must not leak outside a render scope");
+}
+
+#[test]
+fn default_fonts_cover_all_greek_letters_in_the_catalog() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    let letters: BTreeSet<_> =
+        include_str!("el.tsv").chars().filter(|c| ('\u{0370}'..='\u{03ff}').contains(c) || ('\u{1f00}'..='\u{1fff}').contains(c)).collect();
+    ctx.fonts_mut(|view| {
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let mut font = view.fonts.font(&family);
+            for c in &letters {
+                assert!(font.characters().contains_key(c), "missing Greek glyph {c} in {family:?}");
             }
         }
     });

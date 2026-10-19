@@ -1,7 +1,7 @@
 # Interface languages
 
 Choose **Edit → Interface Language** and select **Auto (system language)**, **English**,
-**Українська**, **Português (Brasil)**, **Deutsch**, **Español**, **Čeština** (Czech), **Русский**, **Français**, **简体中文**, **Italiano**, **한국어** (Korean), **Svenska** (Swedish), **العربية** (Arabic), **Magyar** (Hungarian), or **Türkçe** (Turkish).
+**Українська**, **Português (Brasil)**, **Deutsch**, **Español**, **Čeština** (Czech), **Русский**, **Français**, **简体中文**, **Italiano**, **한국어** (Korean), **Svenska** (Swedish), **العربية** (Arabic), **Magyar** (Hungarian), **Türkçe** (Turkish), or **Ελληνικά** (Greek).
 The interface updates without restarting, including the native macOS menus.
 The choice is saved with the other interface preferences (`cadcraft.prefs`, beside the theme):
 eframe storage on the desktop, browser local storage on the web. Installations without a saved
@@ -22,7 +22,7 @@ Automation can select the language through the existing control channel:
 ```
 
 The `ui.set` method also accepts `{"interfaceLanguage":"cs"}`. Supported values are `auto`,
-`en`, `uk`, `pt-BR`, `de`, `es`, `cs`, `ru`, `fr`, `zh`, `it`, `ko`, `sv`, `ar`, `hu`, and `tr`; invalid values are rejected without changing the current
+`en`, `uk`, `pt-BR`, `de`, `es`, `cs`, `ru`, `fr`, `zh`, `it`, `ko`, `sv`, `ar`, `hu`, `tr`, and `el`; invalid values are rejected without changing the current
 selection. Resetting palettes keeps the language choice.
 
 ## Translation coverage
@@ -97,6 +97,23 @@ limits), so the web interface stays English when Korean is chosen. Without a fon
 catalog, the saved `ko` preference is kept but the interface falls back to English; the language
 command reports that a font is needed, and the picker uses the readable label **Korean** wherever
 Hangul can't be shown. This change does not fix platform IME issues or localize engine output.
+
+## Greek (`el`) interface
+
+The Greek translation covers all **1,330** distinct source keys collected from the existing
+language catalogs: **1,324** ordinary interface labels, **4** contextual menu headings and
+**2** integer-count templates. The interface can be selected as **Ελληνικά** under
+Edit → Interface Language, or automatically when the system language is `el-GR` or `el-CY`.
+Greek integer plurals distinguish 1 from all other counts.
+
+The terminology follows native Greek CAD vocabulary; specialist terms retain the English
+name in parentheses when it helps professionals match a known CAD command (for example,
+**Επίπεδο (Layer)**, **Πολυγραμμή (Polyline)** and **Διαγράμμιση (Hatch)**).
+Common actions such as Open and Save appear simply in Greek. Existing command identifiers,
+drawing content, names of user objects and file formats remain unchanged. The translation is
+original AI-assisted work contributed by @Camthalion77 with language review; it is not sourced
+from Autodesk localization files. Independent native proofreading and visual checks remain
+follow-up work.
 
 ## Adding translations
 

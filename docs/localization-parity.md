@@ -62,6 +62,7 @@ plus native review by a human; extending the catalog to the remaining English-on
 | Indonesian | id | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
 | Japanese | ja | 0 (0%) | 0% | CJK glyphs render; IME pending; no vertical text | no | none | 4–6 h |
 | German | de | 989 catalog rows (≈ 100% of the catalog; ≈ 80% of all UI strings, estimated: engine diagnostics and uncatalogued text stay English) | dialogs and tooltips yes; command reference searchable in German | Latin: yes (bundled egui fonts cover ä ö ü Ä Ö Ü ß; long strings will need layout checks) | no native review | partial | 1–2 h |
+| Greek | el | 1,330 catalog rows (all collected existing source keys) | Menus, dialogs, tooltips, drawing prompts, command labels and contextual headings; English fallback for uncatalogued UI | Greek script; bundled egui glyph check added | Original AI-assisted translation by @Camthalion77, independent native review pending | complete current catalog; uncatalogued UI remains English | native proofreading and platform layout review |
 | Korean | ko | 1,235 rows (1,229 ordinary, 4 menu, 2 count); full existing catalog union and marked UI coverage | dialogs, tooltips, Options and translated command-reference labels | UI requires catalog-covering installed or optional craft-fonts Hang/Kore face; English fallback without one; IME fixes still pending | original AI-assisted translation; independent native proofreading pending | complete current catalog; English-only interface gaps remain | native review + platform layout/IME validation |
 | Vietnamese | vi | 0 (0%) | 0% | Latin with stacked diacritics: renders per code point, untested | no | none | 3–5 h |
 | Ukrainian | uk | 989 catalog rows (≈ 100% of the catalog; ≈ 80% of all UI strings, estimated: engine diagnostics and uncatalogued text stay English) | dialogs and tooltips yes; command reference searchable in Ukrainian | Cyrillic: yes (bundled egui fonts) | translated by a contributor; no second review | partial | 2–4 h |
@@ -85,6 +86,7 @@ each language, which needs humans. Translations parallelise fully once the catal
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Greek (`el`) catalog: 1,330 rows, context/plural/locale/font tests; review pending |
 | 2026-10-14 | minor | Swedish completed: 95 rows for strings added since (Hatch and Gradient dialog, Block Editor, REFEDIT, multileader editing, Options selection settings, MTEXT editor, recent files); 1,330 rows, every key of the Ukrainian reference catalog |
 | 2026-10-18 | minor | Turkish added: 1,330 rows (the existing catalog union), single count form, four menu headings, prompt keywords kept in English; locale/preferences/menu/live-switch/dialog/font tests; no gaps in the marked UI literals; AI-assisted, the running app reviewed by a native speaker |
 | 2026-10-13 | minor | Hungarian added: 1,326 rows, a single count form, menu headings, locale/preferences/menu/font/render tests; no gaps in the marked UI literals; native proofreading pending |
