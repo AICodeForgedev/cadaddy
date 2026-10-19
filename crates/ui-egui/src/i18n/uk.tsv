@@ -1,6 +1,6 @@
-# CADCraft Ukrainian interface catalog — original translations by @dmatviichuk.
+# CADaddy Ukrainian interface catalog — original translations by @dmatviichuk.
 # License: MIT OR Apache-2.0 (the repository LICENSE-MIT and LICENSE-APACHE).
-# Written from CADCraft's English strings; no proprietary translations were copied.
+# Written from CADaddy's English strings; no proprietary translations were copied.
 # UTF-8: context<TAB>English source<TAB>Ukrainian translation.
 # Empty context = ordinary label; @plural = one|few|many forms with {n}.
 # Keep command IDs, keywords, technology/product names and user data unchanged.
@@ -3364,3 +3364,5 @@
 	Clash Navigate	Перехід між колізіями
 	Colour By Status/Level	Колір за статусом/рівнем
 	Inspect Element	Переглянути елемент
+	Select using two clicks only	Вибирати лише двома клацаннями
+	Define each corner of the selection window with a separate click.	Задайте кожен кут рамки вибору окремим клацанням.

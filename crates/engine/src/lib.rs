@@ -741,6 +741,9 @@ pub struct Settings {
     pub expert: u8,
     /// ATTDIA: 1 asks for attribute values in a dialog when inserting, 0 on the command line.
     pub attdia: u8,
+    /// PICKDRAG: false = two-click windows (0), true = clicks or dragging (2).
+    /// Drag-only mode (1) is not supported yet.
+    pub pickdrag: bool,
     /// PICKSTYLE: bit 1 picks whole selectable groups ([`cmd::groups`]), bit 2 associative hatches
     /// with their boundaries (stored, not used yet).
     pub pickstyle: u8,
@@ -854,6 +857,7 @@ impl Default for Settings {
             cmdecho: 1,
             expert: 0,
             attdia: 0,
+            pickdrag: true,
             pickstyle: 1,
             groupdisplaymode: 2,
             objectisolationmode: 0,
@@ -2815,7 +2819,7 @@ impl Session {
     /// command running, or a command asking for objects. Returns whether a window was opened.
     pub fn begin_window(&mut self, corner: Vec2) -> bool {
         let during_command = self.running.is_some();
-        if !corner.is_finite() || (during_command && !self.current_prompt().is_some_and(|p| p.accept.select)) {
+        if !self.settings.pickdrag || !corner.is_finite() || (during_command && !self.current_prompt().is_some_and(|p| p.accept.select)) {
             return false;
         }
         self.pending_window = Some(PendingWindow { corner, during_command });
