@@ -61,6 +61,16 @@ pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
     }
 }
 
+/// How long the accepting thread waits after a failed accept. Accepting can keep failing, for
+/// example while the process has no file descriptors left, and retrying at once would keep a
+/// core busy until it recovers.
+const ACCEPT_RETRY: Duration = Duration::from_millis(100);
+
+/// The connections `incoming` accepts, calling `wait` after each failed accept.
+fn accepted<T>(incoming: impl Iterator<Item = std::io::Result<T>>, mut wait: impl FnMut()) -> impl Iterator<Item = T> {
+    incoming.filter_map(move |stream| stream.map_err(|_| wait()).ok())
+}
+
 /// Accept connections on `listener` under `limits`; requests arrive on the returned receiver.
 fn serve_listener(listener: TcpListener, limits: Limits, ctx: egui::Context) -> Receiver<ControlRequest> {
     let (tx, rx) = sync_channel::<ControlRequest>(limits.queue.max(1));
@@ -80,7 +90,7 @@ impl Drop for Slot {
 
 fn accept_loop(listener: TcpListener, tx: SyncSender<ControlRequest>, ctx: egui::Context, limits: Limits) {
     let open = Arc::new(AtomicUsize::new(0));
-    for mut stream in listener.incoming().flatten() {
+    for mut stream in accepted(listener.incoming(), || std::thread::sleep(ACCEPT_RETRY)) {
         let _ = stream.set_write_timeout(Some(limits.write_timeout));
         if open.fetch_add(1, Ordering::SeqCst) >= limits.max_clients {
             open.fetch_sub(1, Ordering::SeqCst);
@@ -221,6 +231,18 @@ fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A failed accept is followed by a wait before the next one, so a listener that keeps
+    /// failing does not spin, and the connections around the failures still come through.
+    #[test]
+    fn a_failed_accept_waits_before_the_next() {
+        let failed = || Err(std::io::Error::other("no file descriptors left"));
+        let incoming = vec![failed(), Ok(1), failed(), failed(), Ok(2)];
+        let mut waits = 0;
+        let connections: Vec<i32> = super::accepted(incoming.into_iter(), || waits += 1).collect();
+        assert_eq!(connections, [1, 2]);
+        assert_eq!(waits, 3, "one wait per failed accept");
+    }
 
     #[test]
     fn lines_are_read_up_to_the_limit() {
