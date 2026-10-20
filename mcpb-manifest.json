@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "cadaddy",
   "display_name": "CADaddy",
-  "version": "0.7.7",
+  "version": "0.7.8",
   "description": "Free AutoCAD-style CAD: let Claude open, draw, query, render and save DWG and DXF drawings.",
   "long_description": "CADaddy is a free 2D CAD and drafting program (a free AutoCAD alternative) for Windows and Mac. This extension runs CADaddy's drawing engine as an MCP server, so an AI assistant can type at the AutoCAD-style command line, run any of CADaddy's 400+ commands with JSON parameters, inspect and query a drawing's entities, layers and text, render it to an image, and save it as DWG or DXF. The full desktop app is a free download at https://aicodeforge.dev.",
   "author": {
