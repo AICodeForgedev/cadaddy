@@ -401,9 +401,10 @@ pub fn eed_groups(eed: &[Eed], names: &Names, unicode: bool) -> Vec<Group> {
                         Group { code: 1000, value: Value::Str(s) }
                     }
                     2 => Group { code: 1002, value: Value::Str(if r.rc()? == 0 { "{".into() } else { "}".into() }) },
+                    // Handles: 8 bytes, high byte first (observed: the spec doesn't say).
                     3 => {
                         let b = r.bytes(8)?;
-                        Group { code: 1003, value: Value::Handle(u64::from_le_bytes(b.try_into().unwrap_or_default())) }
+                        Group { code: 1003, value: Value::Handle(u64::from_be_bytes(b.try_into().unwrap_or_default())) }
                     }
                     4 => {
                         let n = usize::from(r.rc()?);
@@ -414,13 +415,13 @@ pub fn eed_groups(eed: &[Eed], names: &Names, unicode: bool) -> Vec<Group> {
                         let b = r.bytes(8)?;
                         let mut a = [0u8; 8];
                         a.copy_from_slice(&b);
-                        Group { code: 1005, value: Value::Handle(u64::from_le_bytes(a)) }
+                        Group { code: 1005, value: Value::Handle(u64::from_be_bytes(a)) }
                     }
                     10..=13 => {
                         let p = [r.rd()?, r.rd()?, r.rd()?];
                         out.push(Group { code: 1000 + i32::from(code), value: Value::Real(p[0]) });
-                        out.push(Group { code: 1020 + i32::from(code), value: Value::Real(p[1]) });
-                        Group { code: 1030 + i32::from(code), value: Value::Real(p[2]) }
+                        out.push(Group { code: 1010 + i32::from(code), value: Value::Real(p[1]) });
+                        Group { code: 1020 + i32::from(code), value: Value::Real(p[2]) }
                     }
                     40..=42 => Group { code: 1000 + i32::from(code), value: Value::Real(r.rd()?) },
                     70 => Group { code: 1070, value: Value::Int(i64::from(r.rs()? as i16)) },
@@ -521,6 +522,35 @@ pub fn decode(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> 
     kinds::decode(&name, &mut o, &c, names, &mut groups, &mut children)?;
     groups.extend(eed_groups(&c.eed, names, v >= Version::R2007));
     Ok(Some(Entity { name, handle: o.handle, owner, paper: c.entmode == 1, groups, children, next: c.next }))
+}
+
+/// Each block record's entities in their stored order (from R2004 its list; R2000 the chain from
+/// its first entity to its last by each one's next entity). `ents` are the file's entities, as
+/// [`decode_all`] gives them.
+pub fn block_lists(dwg: &Dwg, ents: &[Entity]) -> Result<std::collections::HashMap<u64, Vec<u64>>> {
+    let classes = dwg.classes()?;
+    let names = Names::read(dwg, &classes);
+    let next: std::collections::HashMap<u64, u64> = ents.iter().filter_map(|e| e.next.map(|n| (e.handle, n))).collect();
+    let mut out = std::collections::HashMap::new();
+    for (block, contents) in names.block_contents() {
+        let list = match contents {
+            names::Contents::Owned(list) => list.clone(),
+            names::Contents::Chain(first, last) => {
+                let mut list = Vec::new();
+                let mut at = Some(*first);
+                while let Some(h) = at {
+                    list.push(h);
+                    if h == *last || list.len() > MAX_ITEMS {
+                        break;
+                    }
+                    at = next.get(&h).copied();
+                }
+                list
+            }
+        };
+        out.insert(*block, list);
+    }
+    Ok(out)
 }
 
 /// R2000: an INSERT's attributes and a POLYLINE's vertices are stored as the first and last (0

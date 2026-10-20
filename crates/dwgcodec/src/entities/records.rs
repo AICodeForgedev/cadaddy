@@ -19,6 +19,20 @@ pub struct Record {
     pub handle: u64,
     pub owner: Option<u64>,
     pub groups: Vec<Group>,
+    /// A block record's block: what DXF puts in the BLOCK entity rather than the record.
+    pub block: Option<BlockInfo>,
+}
+
+/// A block record's BLOCK and ENDBLK entities and the BLOCK's DXF data (spec §20.4.49).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlockInfo {
+    pub block_entity: Option<u64>,
+    pub endblk: Option<u64>,
+    pub base: [f64; 3],
+    /// DXF 70: 1 anonymous, 2 has attributes, 4 external reference, 8 overlay.
+    pub flags: i64,
+    pub xref_path: String,
+    pub description: String,
 }
 
 /// Records decoded here.
@@ -44,6 +58,7 @@ const KNOWN: &[&str] = &[
     "DICTIONARYVAR",
     "IMAGEDEF",
     "IMAGEDEF_REACTOR",
+    "MLEADERSTYLE",
 ];
 
 /// The DXF name of a fixed object type that is a table record or object this module decodes.
@@ -97,6 +112,7 @@ pub fn decode(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> 
     if let Some(owner) = c.owner {
         g.h(330, owner);
     }
+    let mut block = None;
     match name.as_str() {
         "LAYER" => layer(&mut o, names, &mut g)?,
         "LTYPE" => ltype(&mut o, &mut g)?,
@@ -109,7 +125,7 @@ pub fn decode(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> 
             g.s(2, n);
             g.i(70, flags);
         }
-        "BLOCK_RECORD" => block_record(&mut o, &mut g)?,
+        "BLOCK_RECORD" => block = Some(block_record(&mut o, &mut g)?),
         "DIMSTYLE" => dimstyle(&mut o, &mut g)?,
         "VPORT" => vport(&mut o, &mut g)?,
         "VIEW" => view(&mut o, &mut g)?,
@@ -159,6 +175,7 @@ pub fn decode(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> 
             g.i(280, i64::from(loaded));
             g.i(281, i64::from(units));
         }
+        "MLEADERSTYLE" => mleaderstyle(&mut o, &mut g)?,
         "IMAGEDEF_REACTOR" => {
             let version = o.d.bl()?;
             g.s(100, "AcDbRasterImageDefReactor");
@@ -167,7 +184,7 @@ pub fn decode(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> 
         _ => return Err(Error::Unsupported(format!("{name} records are not decoded yet"))),
     }
     groups.extend(super::eed_groups(&c.eed, names, v >= Version::R2007));
-    Ok(Some(Record { name, handle, owner: c.owner, groups }))
+    Ok(Some(Record { name, handle, owner: c.owner, groups, block }))
 }
 
 /// The common table data after the object's: name, flags (64 referenced, 16 xref-dependent);
@@ -358,7 +375,7 @@ fn style(o: &mut Obj, g: &mut G) -> Result<()> {
 }
 
 /// BLOCK_HEADER (spec §20.4.49) as the BLOCK_RECORD table record.
-fn block_record(o: &mut Obj, g: &mut G) -> Result<()> {
+fn block_record(o: &mut Obj, g: &mut G) -> Result<BlockInfo> {
     let (name, flags) = table_entry(o)?;
     let anonymous = o.d.b()?;
     let has_attribs = o.d.b()?;
@@ -366,8 +383,8 @@ fn block_record(o: &mut Obj, g: &mut G) -> Result<()> {
     let overlaid = o.d.b()?;
     let _loaded = o.d.b()?;
     let owned = if o.at_least(Version::R2004) && !is_xref && !overlaid { count(o.d.bl()?, "block entities")? } else { 0 };
-    let _base = o.d.bd3()?;
-    let _xref_path = o.text()?;
+    let base = o.d.bd3()?;
+    let xref_path = o.text()?;
     // Insert counts: bytes until a zero.
     let mut inserts = 0usize;
     loop {
@@ -379,15 +396,15 @@ fn block_record(o: &mut Obj, g: &mut G) -> Result<()> {
             return Err(Error::TooLarge("a block's insert count"));
         }
     }
-    let _description = o.text()?;
+    let description = o.text()?;
     let preview = count(o.d.bl()?, "preview bytes")?;
     let preview = o.d.bytes(preview)?;
     let (units, explodable, scaling) =
         if o.at_least(Version::R2007) { (Some(o.d.bs()?), Some(o.d.b()?), Some(o.d.rc()?)) } else { (None, None, None) };
-    let _ = (anonymous, has_attribs, flags);
+    let _ = flags;
     // Handles: the BLOCK entity, the owned entities (R2004+) or first and last (R2000), ENDBLK,
     // the inserts, the layout.
-    o.href()?;
+    let block_entity = o.href()?;
     if o.at_least(Version::R2004) {
         for _ in 0..owned {
             o.href()?;
@@ -396,7 +413,7 @@ fn block_record(o: &mut Obj, g: &mut G) -> Result<()> {
         o.href()?;
         o.href()?;
     }
-    o.href()?;
+    let endblk = o.href()?;
     for _ in 0..inserts {
         o.href()?;
     }
@@ -419,7 +436,13 @@ fn block_record(o: &mut Obj, g: &mut G) -> Result<()> {
             g.0.push(Group { code: 310, value: Value::Str(chunk.iter().map(|b| format!("{b:02X}")).collect()) });
         }
     }
-    Ok(())
+    let mut bflags = 0;
+    for (on, bit) in [(anonymous, 1), (has_attribs, 2), (is_xref, 4), (overlaid, 8)] {
+        if on {
+            bflags |= bit;
+        }
+    }
+    Ok(BlockInfo { block_entity, endblk, base, flags: bflags, xref_path, description })
 }
 
 /// Every table record and object of a file decoded, and those that couldn't be, with why.
@@ -472,7 +495,8 @@ fn dimstyle(o: &mut Obj, g: &mut G) -> Result<()> {
     g.s(2, name);
     g.i(70, flags);
     // A bare "<>" (the measurement alone) is the same as no prefix or suffix.
-    let post = o.text()?.replace("<>", "");
+    let post = o.text()?;
+    let post = if post.trim() == "<>" { String::new() } else { post };
     let apost = o.text()?;
     g.s(3, post);
     g.s(4, apost);
@@ -915,6 +939,77 @@ fn mlinestyle(o: &mut Obj, names: &Names, g: &mut G) -> Result<()> {
         g.f(49, offset);
         g.i(62, color);
         g.s(6, ltype);
+    }
+    Ok(())
+}
+
+/// MLEADERSTYLE (spec §20.4.87; angles in radians, as DXF has them).
+fn mleaderstyle(o: &mut Obj, g: &mut G) -> Result<()> {
+    use super::kinds::cmc;
+    g.s(100, "AcDbMLeaderStyle");
+    if o.at_least(Version::R2010) {
+        g.i(179, i64::from(o.d.bs()?));
+    }
+    g.i(170, i64::from(o.d.bs()?));
+    g.i(171, i64::from(o.d.bs()?));
+    g.i(172, i64::from(o.d.bs()?));
+    g.i(90, i64::from(o.d.bl()?));
+    g.f(40, o.d.bd()?);
+    g.f(41, o.d.bd()?);
+    g.i(173, i64::from(o.d.bs()?));
+    g.i(91, cmc(o)?);
+    let ltype = o.href()?;
+    g.h(340, ltype.unwrap_or(0));
+    g.i(92, i64::from(o.d.bl()?));
+    g.i(290, i64::from(o.d.b()?));
+    g.f(42, o.d.bd()?);
+    g.i(291, i64::from(o.d.b()?));
+    g.f(43, o.d.bd()?);
+    g.s(3, o.text()?);
+    let arrow = o.href()?;
+    if let Some(h) = arrow {
+        g.h(341, h);
+    }
+    g.f(44, o.d.bd()?);
+    g.s(300, o.text()?);
+    let style = o.href()?;
+    g.h(342, style.unwrap_or(0));
+    g.i(174, i64::from(o.d.bs()?));
+    g.i(178, i64::from(o.d.bs()?));
+    g.i(175, i64::from(o.d.bs()?));
+    g.i(176, i64::from(o.d.bs()?));
+    g.i(93, cmc(o)?);
+    g.f(45, o.d.bd()?);
+    g.i(292, i64::from(o.d.b()?));
+    g.i(297, i64::from(o.d.b()?));
+    g.f(46, o.d.bd()?);
+    let block = o.href()?;
+    if let Some(h) = block {
+        g.h(343, h);
+    }
+    g.i(94, cmc(o)?);
+    let scale = o.d.bd3()?;
+    g.f(47, scale[0]);
+    g.f(49, scale[1]);
+    g.f(140, scale[2]);
+    g.i(293, i64::from(o.d.b()?));
+    g.f(141, o.d.bd()?);
+    g.i(294, i64::from(o.d.b()?));
+    g.i(177, i64::from(o.d.bs()?));
+    g.f(142, o.d.bd()?);
+    g.i(295, i64::from(o.d.b()?));
+    g.i(296, i64::from(o.d.b()?));
+    g.f(143, o.d.bd()?);
+    if o.at_least(Version::R2010) {
+        g.i(271, i64::from(o.d.bs()?));
+        let top = o.d.bs()?;
+        let bottom = o.d.bs()?;
+        g.i(272, i64::from(bottom));
+        g.i(273, i64::from(top));
+    }
+    // From R2013 one more bit (observed; not in the spec).
+    if o.at_least(Version::R2013) {
+        o.d.b()?;
     }
     Ok(())
 }

@@ -81,6 +81,13 @@ pub(crate) struct Layout {
     preview_at: u32,
 }
 
+impl Layout {
+    /// The code page number (file header byte 0x13).
+    pub(crate) fn code_page(&self) -> u16 {
+        u16::from_le_bytes([self.head[13], self.head[14]])
+    }
+}
+
 fn rl(bytes: &[u8], at: usize) -> Result<u32> {
     let b = bytes.get(at..at + 4).ok_or(Error::Truncated("the file header"))?;
     Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))

@@ -17,7 +17,7 @@ use cadaddy_dxf::{Kind, Tag, kind_of};
 use crate::{IoError, Result};
 
 /// A group as a DXF tag, typed as the DXF parser types its code.
-fn tag(g: &Group) -> Tag {
+pub(crate) fn tag(g: &Group) -> Tag {
     let text = || match &g.value {
         Value::Str(s) => s.clone(),
         Value::Int(i) => i.to_string(),

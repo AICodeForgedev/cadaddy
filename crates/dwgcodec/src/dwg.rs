@@ -129,6 +129,15 @@ impl Dwg {
         ]
     }
 
+    /// The drawing's code page number (the file header's, byte 0x13; 30 is ANSI 1252).
+    pub fn code_page(&self) -> u16 {
+        match &self.layout {
+            Layout::R2000(l) => l.code_page(),
+            Layout::R2004(l) => l.code_page(),
+            Layout::R2007(l) => l.code_page(),
+        }
+    }
+
     /// The raw section called `name`.
     pub fn section(&self, name: &str) -> Option<&Section> {
         self.sections.iter().find(|s| s.name == name)

@@ -1462,7 +1462,7 @@ fn viewport(o: &mut Obj, g: &mut G) -> Result<()> {
 
 /// A colour of a non-entity kind (spec §2.11 CMC): the index, and from R2004 the raw colour value
 /// (method byte and RGB, as DXF writes it in a multileader's colour groups) and names.
-fn cmc(o: &mut Obj) -> Result<i64> {
+pub(crate) fn cmc(o: &mut Obj) -> Result<i64> {
     let index = o.d.bs()?;
     if !o.at_least(Version::R2004) {
         return Ok(i64::from(index));

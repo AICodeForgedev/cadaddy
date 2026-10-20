@@ -3,9 +3,9 @@
 //! encode_kinds`]), the header variables and classes from the HEADER and CLASSES sections, and a
 //! new file's containers ([`cadaddy_dwgcodec::Dwg::new`]).
 //!
-//! Records whose type isn't encoded yet are left out, and say so in the report.
+//! Records whose type isn't encoded yet are kept in XRECORDs (`dwg_keep`) that reading puts back.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cadaddy_doc::Drawing;
 use cadaddy_dwgcodec::Version;
@@ -141,18 +141,38 @@ fn version(code: &str) -> Option<(Version, crate::Version)> {
 pub struct WriteReport {
     /// Record types not encoded yet, with how many of each were left out.
     pub skipped: Vec<(String, usize)>,
+    /// Records not encoded, kept in the CADADDY_KEEP dictionary instead.
+    pub kept: usize,
 }
 
 /// The drawing as a DWG file of `version_code` (AC1015, AC1018, AC1021, AC1024, AC1027 or AC1032).
 pub fn write(d: &Drawing, version_code: &str) -> Result<(Vec<u8>, WriteReport)> {
     let (v, dv) = version(version_code).ok_or_else(|| IoError::Format(format!("DWG: writing {version_code} files is not supported")))?;
-    let tags = crate::dxf_write::tags(d, dv);
+    let mut tags = crate::dxf_write::tags(d, dv);
+    // Records not encoded are kept in XRECORDs of a CADADDY_KEEP dictionary (`dwg_keep`, as the
+    // DWG bridge keeps what it can't write), which reading puts back.
+    let (_, written) = assemble(v, &sections(&tags), false)?;
+    let take: HashSet<u64> = sections(&tags)
+        .iter()
+        .filter(|(name, _)| matches!(name.as_str(), "BLOCKS" | "ENTITIES" | "OBJECTS"))
+        .flat_map(|(_, recs)| recs.iter())
+        .filter_map(Record::handle)
+        .filter(|h| !written.contains(h))
+        .collect();
+    let mut kept = 0;
+    if let Some((stashed, n)) = crate::dwg_keep::stash_tags(&tags, &take) {
+        tags = stashed;
+        kept = n;
+    }
     let mut secs = sections(&tags);
-    // Twice: the second time without references to the records the first left out (dictionary
-    // entries, reactors, extension dictionaries), so that none points at nothing.
-    let (_, written) = assemble(v, &secs)?;
-    prune(&mut secs, &written);
-    let (bytes, report) = assemble(v, &secs)?.0;
+    let ((mut bytes, mut report), written) = assemble(v, &secs, true)?;
+    // Records still left out: made again without the references to them (dictionary entries,
+    // reactors, extension dictionaries), so that none points at nothing.
+    if !report.skipped.is_empty() {
+        prune(&mut secs, &written);
+        (bytes, report) = assemble(v, &secs, true)?.0;
+    }
+    report.kept = kept;
     Ok((bytes, report))
 }
 
@@ -193,7 +213,7 @@ fn prune(secs: &mut HashMap<String, Vec<Record>>, written: &std::collections::Ha
 type Assembled = ((Vec<u8>, WriteReport), std::collections::HashSet<u64>);
 
 /// The file from the sections' records, and the handles of the objects in it.
-fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>) -> Result<Assembled> {
+fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>, full: bool) -> Result<Assembled> {
     let empty = Vec::new();
     let tables = secs.get("TABLES").unwrap_or(&empty);
     let blocks = secs.get("BLOCKS").unwrap_or(&empty);
@@ -276,7 +296,8 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>) -> Result<Assembled
         let owner = r.owner();
         match table.as_str() {
             "BLOCK_RECORD" => {
-                let (block, endblk, ents, flags, base) = block_parts.remove(h).unwrap_or((None, None, Vec::new(), 0, [0.0; 3]));
+                let (block, endblk, ents, flags, base, xref_path) =
+                    block_parts.remove(h).unwrap_or((None, None, Vec::new(), 0, [0.0; 3], String::new()));
                 out.push(ek::block_header(
                     v,
                     *h,
@@ -288,6 +309,7 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>) -> Result<Assembled
                     layout_of.get(h).copied().or(r.rec().h(340)),
                     flags,
                     base,
+                    &xref_path,
                     &names,
                 ));
             }
@@ -298,6 +320,7 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>) -> Result<Assembled
         }
     }
     let mut control_handles: HashMap<String, u64> = HashMap::new();
+    let encoded_set: HashSet<u64> = out.iter().map(|o| o.handle).collect();
     for (table, h, entries) in &controls {
         let t = match table.as_str() {
             "BLOCK_RECORD" => types::BLOCK_CONTROL,
@@ -314,7 +337,7 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>) -> Result<Assembled
         control_handles.insert(table.clone(), *h);
         // Entries the control keeps apart: the spaces' block records, the ByLayer/ByBlock
         // linetypes; and entries this writer doesn't encode yet.
-        let encoded = |e: &u64| out.iter().any(|o| o.handle == *e);
+        let encoded = |e: &u64| encoded_set.contains(e);
         let (special, list): (Vec<u64>, Vec<u64>) = match table.as_str() {
             "BLOCK_RECORD" => {
                 let sp: Vec<u64> = [model_br, paper_br].into_iter().flatten().collect();
@@ -352,6 +375,12 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>) -> Result<Assembled
     // Dictionary entries that point at objects not written: left out of their dictionaries.
     // (The dictionaries were written with them; readers skip what they can't find.)
 
+    // Only what was written, when that is all that's asked.
+    if !full {
+        let mut skipped: Vec<(String, usize)> = skipped.into_iter().collect();
+        skipped.sort();
+        return Ok(((Vec::new(), WriteReport { skipped, kept: 0 }), out.iter().map(|o| o.handle).collect()));
+    }
     let classes = Classes::new(v, class_list);
 
     // The header variables.
@@ -419,7 +448,7 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>) -> Result<Assembled
     let bytes = cadaddy_dwgcodec::write(&dwg).map_err(|e| IoError::Format(format!("DWG: {e}")))?;
     let mut skipped: Vec<(String, usize)> = skipped.into_iter().collect();
     skipped.sort();
-    Ok(((bytes, WriteReport { skipped }), written))
+    Ok(((bytes, WriteReport { skipped, kept: 0 }), written))
 }
 
 fn handle_value(v: &Value) -> Option<u64> {
@@ -434,7 +463,7 @@ fn handle_value(v: &Value) -> Option<u64> {
 type Links = HashMap<u64, (Option<u64>, Option<u64>)>;
 
 /// What a block record holds: its BLOCK and ENDBLK, its entities, flags and base point.
-type BlockParts = (Option<u64>, Option<u64>, Vec<u64>, i64, [f64; 3]);
+type BlockParts = (Option<u64>, Option<u64>, Vec<u64>, i64, [f64; 3], String);
 
 /// The encoded entities.
 struct EntityPass {
@@ -458,7 +487,7 @@ fn entity_pass(
 ) -> EntityPass {
     let mut p =
         EntityPass { out: Vec::new(), block_parts: HashMap::new(), viewports_of: HashMap::new(), kid_lists: Vec::new(), skipped: HashMap::new() };
-    let new_parts = || (None, None, Vec::new(), 0, [0.0; 3]);
+    let new_parts = || (None, None, Vec::new(), 0, [0.0; 3], String::new());
     let mut owner_now: Option<u64> = None;
     let mut i = 0;
     while let Some(r) = blocks.get(i) {
@@ -477,6 +506,7 @@ fn entity_pass(
                         e.0 = Some(h);
                         e.3 = r.rec().id(70, 0);
                         e.4 = r.rec().p(10);
+                        e.5 = r.rec().s(1).unwrap_or("").to_string();
                     } else {
                         e.1 = Some(h);
                     }

@@ -602,7 +602,8 @@ fn spline(w: &mut ObjWriter, r: &Rec) {
     let ctrls: Vec<[f64; 3]> = points(r, 10);
     let knots: Vec<f64> = r.all(40).filter_map(|g| num(&g.value)).collect();
     let weights: Vec<f64> = r.all(41).filter_map(|g| num(&g.value)).collect();
-    let by_fit = ctrls.is_empty() && !fits.is_empty();
+    // Fit points when there are any (DWG stores one or the other: the curve follows from them).
+    let by_fit = !fits.is_empty();
     let scenario = if by_fit { 2 } else { 1 };
     w.d.bl(scenario);
     if w.at_least(Version::R2013) {
@@ -1767,21 +1768,24 @@ pub fn block_header(
     layout: Option<u64>,
     flags70: i64,
     base: [f64; 3],
+    xref_path: &str,
     names: &Handles,
 ) -> RawObject {
     let mut w = ObjWriter::new(v, types::BLOCK_HEADER, handle);
     object_common(&mut w, owner, &[], None, r, names);
     table_entry(&mut w, r.s(2).unwrap_or(""), 0);
+    let (xref, overlay) = (flags70 & 4 != 0, flags70 & 8 != 0);
     w.d.b(flags70 & 1 != 0);
     w.d.b(flags70 & 2 != 0);
-    w.d.b(false);
-    w.d.b(false);
-    w.d.b(false);
-    if w.at_least(Version::R2004) {
+    w.d.b(xref);
+    w.d.b(overlay);
+    // Loaded (R2000+): an external reference is, as far as the file goes.
+    w.d.b(xref);
+    if w.at_least(Version::R2004) && !xref && !overlay {
         w.d.bl(entities.len() as i32);
     }
     w.d.bd3(base);
-    w.text("");
+    w.text(xref_path);
     // No insert counts.
     w.d.rc(0);
     w.text("");
@@ -1793,7 +1797,9 @@ pub fn block_header(
         w.d.rc(r.id(281, 0) as u8);
     }
     w.href(3, block);
-    if w.at_least(Version::R2004) {
+    if xref || overlay {
+        // An external reference's block holds no entities of this file.
+    } else if w.at_least(Version::R2004) {
         for h in entities {
             w.href(3, Some(*h));
         }
@@ -1910,7 +1916,7 @@ pub fn object(
     Some(w.finish())
 }
 
-/// MLEADERSTYLE (spec §20.4.87) from its groups.
+/// MLEADERSTYLE (spec §20.4.87) from its groups (angles in radians, as DXF has them).
 fn mleaderstyle(w: &mut ObjWriter, r: &Rec) {
     let r2010 = w.at_least(Version::R2010);
     if r2010 {
@@ -1920,8 +1926,8 @@ fn mleaderstyle(w: &mut ObjWriter, r: &Rec) {
     w.d.bs(r.id(171, 1) as i16);
     w.d.bs(r.id(172, 0) as i16);
     w.d.bl(r.id(90, 2) as i32);
-    w.d.bd(rad(r.fd(40, 0.0)));
-    w.d.bd(rad(r.fd(41, 0.0)));
+    w.d.bd(r.fd(40, 0.0));
+    w.d.bd(r.fd(41, 0.0));
     w.d.bs(r.id(173, 1) as i16);
     cmc_raw(w, r.id(91, BYBLOCK));
     w.href(5, r.h(340).filter(|h| *h != 0));
@@ -1948,7 +1954,7 @@ fn mleaderstyle(w: &mut ObjWriter, r: &Rec) {
     cmc_raw(w, r.id(94, BYBLOCK));
     w.d.bd3([r.fd(47, 1.0), r.fd(49, 1.0), r.fd(140, 1.0)]);
     w.d.b(r.id(293, 0) != 0);
-    w.d.bd(rad(r.fd(141, 0.0)));
+    w.d.bd(r.fd(141, 0.0));
     w.d.b(r.id(294, 0) != 0);
     w.d.bs(r.id(177, 0) as i16);
     w.d.bd(r.fd(142, 1.0));
@@ -1957,9 +1963,10 @@ fn mleaderstyle(w: &mut ObjWriter, r: &Rec) {
     w.d.bd(r.fd(143, 0.125));
     if r2010 {
         w.d.bs(r.id(271, 0) as i16);
-        w.d.bs(r.id(272, 9) as i16);
         w.d.bs(r.id(273, 9) as i16);
+        w.d.bs(r.id(272, 9) as i16);
     }
+    // From R2013 one more bit (observed: the spec doesn't list it, but readers expect it).
     if w.at_least(Version::R2013) {
         w.d.b(r.id(298, 0) != 0);
     }

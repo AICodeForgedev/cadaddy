@@ -58,6 +58,13 @@ pub(crate) struct Layout {
     stream: Vec<usize>,
 }
 
+impl Layout {
+    /// The code page number (file header byte 0x13).
+    pub(crate) fn code_page(&self) -> u16 {
+        self.head.get(0x13..0x15).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]))
+    }
+}
+
 fn u64_at(b: &[u8], at: usize) -> Result<u64> {
     let s = b.get(at..at + 8).ok_or(Error::Truncated("the file header"))?;
     let mut a = [0u8; 8];

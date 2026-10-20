@@ -354,9 +354,10 @@ pub fn eed(w: &mut ObjWriter, r: &Rec, names: &Handles) {
                     data.push(2);
                     data.push(u8::from(matches!(&item.value, Value::Str(s) if s.trim() == "}")));
                 }
+                // A handle: 8 bytes, high byte first (as the files we've seen store it).
                 1003 | 1005 => {
                     data.push((item.code - 1000) as u8);
-                    data.extend_from_slice(&hex_handle().to_le_bytes());
+                    data.extend_from_slice(&hex_handle().to_be_bytes());
                 }
                 1004 => {
                     let s = if let Value::Str(s) = &item.value { s.as_str() } else { "" };

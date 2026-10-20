@@ -139,6 +139,11 @@ fn every_decoded_record_matches_acadrusts_dxf_for_it() {
             codes.sort_unstable();
             codes.dedup();
             for code in codes {
+                // acadrust's DXF has no version (179) or bottom attachment (272) for a
+                // multileader style.
+                if r.name == "MLEADERSTYLE" && matches!(code, 179 | 272) {
+                    continue;
+                }
                 // A true colour's nearest index (62) needs the palette: the reader uses 420.
                 if code == 62 && r.groups.iter().any(|g| g.code == 420) {
                     continue;

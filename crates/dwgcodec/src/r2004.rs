@@ -132,6 +132,13 @@ pub(crate) struct Layout {
     starts: [u32; 3],
 }
 
+impl Layout {
+    /// The code page number (file header byte 0x13).
+    pub(crate) fn code_page(&self) -> u16 {
+        self.head.get(0x13..0x15).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]))
+    }
+}
+
 /// Header-variables and classes sections have the second size field from R2010 (maintenance
 /// version above 3) and in R2018 (spec §9, §10.2).
 fn has_hi(version: Version, maintenance: u8) -> bool {

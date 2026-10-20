@@ -369,12 +369,17 @@ pub struct Trip {
 }
 
 pub fn round_trip(d: &Drawing, format: &'static str) -> Result<Trip, String> {
-    let name = format!("corpus.{format}");
+    // "dwg-native": DWG with CADaddy's own codec (Q203); "dwg" is the default engine's.
+    let native = format == "dwg-native";
+    let name = if native { "corpus.dwg".to_string() } else { format!("corpus.{format}") };
     let t = Instant::now();
-    let bytes = cadaddy_io::write(d, &name).map_err(|e| format!("save {format}: {e}"))?;
+    let bytes =
+        if native { cadaddy_io::write_dwg(d, cadaddy_io::Version::R2018, cadaddy_io::DwgEngine::Native) } else { cadaddy_io::write(d, &name) }
+            .map_err(|e| format!("save {format}: {e}"))?;
     let save = t.elapsed().as_secs_f64();
     let t = Instant::now();
-    let back = cadaddy_io::read(&bytes, &name).map_err(|e| format!("open {format}: {e}"))?;
+    let back = if native { cadaddy_io::read_dwg(&bytes, cadaddy_io::DwgEngine::Native) } else { cadaddy_io::read(&bytes, &name) }
+        .map_err(|e| format!("open {format}: {e}"))?;
     let open = t.elapsed().as_secs_f64();
     let t = Instant::now();
     let built = cadaddy_engine::render::build(&back, &Space::Model, &cadaddy_engine::render::Options::default());

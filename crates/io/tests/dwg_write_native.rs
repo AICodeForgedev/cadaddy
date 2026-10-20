@@ -206,7 +206,8 @@ fn tables_and_objects_written_natively_read_back_as_through_the_bridge() {
         let dxf = cadaddy_io::write_dxf(&objects_drawing());
         let lines: Vec<&str> = dxf.lines().map(str::trim).collect();
         let source: std::collections::HashSet<&str> = lines.windows(2).filter(|w| w[0] == "9").filter_map(|w| w[1].strip_prefix('$')).collect();
-        for (k, x) in ha.as_object().into_iter().flatten().filter(|(k, _)| source.contains(k.as_str())) {
+        // HANDSEED: each writer's own next handle (ours counts the records it keeps).
+        for (k, x) in ha.as_object().into_iter().flatten().filter(|(k, _)| source.contains(k.as_str()) && *k != "HANDSEED") {
             if let Some(d) = diff(x, hb.get(k).unwrap_or(&J::Null), &format!("header {k}")) {
                 report.push(format!("{v}: {d}"));
             }
@@ -505,4 +506,90 @@ fn other_versions_are_refused() {
     for v in ["AC1009", "AC1014", "AC9999"] {
         assert!(cadaddy_io::dwg_write::write(&Drawing::new_metric(), v).is_err(), "{v}");
     }
+}
+
+/// Q203: a file read with the codec alone (no bridge) makes the drawing the bridge makes of it:
+/// entities, tables and objects, layouts with their entities, and the source's header variables;
+/// for the bridge's files and ours.
+#[test]
+fn native_reading_matches_the_bridge() {
+    let mut report = Vec::new();
+    let dxf_vars = |d: &Drawing| -> std::collections::HashSet<String> {
+        let dxf = cadaddy_io::write_dxf(d);
+        let lines: Vec<&str> = dxf.lines().map(str::trim).collect();
+        lines.windows(2).filter(|w| w[0] == "9").filter_map(|w| w[1].strip_prefix('$')).map(str::to_string).collect()
+    };
+    for (what, d) in [("entities", entities_drawing()), ("objects", objects_drawing()), ("mleaders", mleader_drawing()), ("misc", misc_drawing())] {
+        let source = dxf_vars(&d);
+        for v in VERSIONS {
+            let mut d = d.clone();
+            d.header.set_str("ACADVER", v);
+            let opts = cadaddy_io::SaveOptions { version: cadaddy_io::Version::for_acadver(v), ..Default::default() };
+            let theirs = cadaddy_io::write_with(&d, "made-up.dwg", &opts).unwrap();
+            let (ours, _) = cadaddy_io::dwg_write::write(&d, v).unwrap();
+            for (file, bytes) in [("bridge's", &theirs), ("ours", &ours)] {
+                let tag = format!("{what} {v} {file}");
+                let Ok(mut a) = cadaddy_io::read(bytes, "x.dwg") else { continue };
+                let (b, rep) = cadaddy_io::dwg_read::read(bytes).unwrap_or_else(|e| panic!("{tag}: {e}"));
+                // The bridge's readings of our files that aren't evidence (see the tests above):
+                // multiline style flags, a ByBlock leader linetype, R2000 viewports with links.
+                // The reference there is the source drawing's.
+                if file == "ours" {
+                    let src = cadaddy_io::read_dxf(cadaddy_io::write_dxf(&d).as_bytes()).unwrap();
+                    for (x, y) in a.mline_styles.iter_mut().zip(&src.mline_styles) {
+                        (x.start_caps, x.end_caps, x.joints, x.fill) = (y.start_caps, y.end_caps, y.joints, y.fill);
+                    }
+                    for h in a.model.handles() {
+                        let from = src.model.get(h).cloned();
+                        a.model.modify(h, |e| match (&mut e.kind, from.as_ref().map(|f| &f.kind)) {
+                            (EntityKind::MLine(m), Some(EntityKind::MLine(f))) => {
+                                (m.def.start_caps, m.def.end_caps, m.def.joints, m.def.fill) =
+                                    (f.def.start_caps, f.def.end_caps, f.def.joints, f.def.fill);
+                            }
+                            (EntityKind::MLeader(m), _) if m.leader_linetype.as_deref() == Some("ByLayer") => m.leader_linetype = None,
+                            _ => {}
+                        });
+                    }
+                    if v == "AC1015" {
+                        a.layouts = b.layouts.clone();
+                    }
+                }
+                if !rep.failed.is_empty() {
+                    report.push(format!("{tag}: undecoded {:?}", rep.failed));
+                }
+                let (mut pa, mut pb) = (parts(&a), parts(&b));
+                // DIMFXL isn't stored before R2007 (the bridge makes it 0, DXF's default is 1).
+                if matches!(v, "AC1015" | "AC1018") {
+                    for j in [&mut pa, &mut pb] {
+                        for st in j["dim_styles"].as_array_mut().into_iter().flatten() {
+                            st.as_object_mut().map(|o| o.remove("fixedExtLength"));
+                        }
+                    }
+                }
+                for (k, x) in pa.as_object().into_iter().flatten() {
+                    if let Some(diff) = diff(x, &pb[k], k) {
+                        report.push(format!("{tag}: {diff}"));
+                    }
+                }
+                compare_entities(&tag, &a, &b, &mut report);
+                for (la, lb) in a.layouts.iter().zip(&b.layouts) {
+                    let ea: Vec<J> = la.entities.iter().map(|e| serde_json::to_value(e).unwrap()).collect();
+                    let eb: Vec<J> = lb.entities.iter().map(|e| serde_json::to_value(e).unwrap()).collect();
+                    if let Some(diff) = diff(&J::Array(ea), &J::Array(eb), &format!("layout {}", la.name)) {
+                        report.push(format!("{tag}: {diff}"));
+                    }
+                }
+                let (ha, hb) = (serde_json::to_value(&a.header).unwrap()["vars"].clone(), serde_json::to_value(&b.header).unwrap()["vars"].clone());
+                // HANDSEED: the bridge reports its own next handle, not the file's.
+                for (k, x) in ha.as_object().into_iter().flatten().filter(|(k, _)| source.contains(k.as_str()) && *k != "HANDSEED") {
+                    if let Some(diff) = diff(x, hb.get(k).unwrap_or(&J::Null), &format!("header {k}")) {
+                        report.push(format!("{tag}: {diff}"));
+                    }
+                }
+            }
+        }
+    }
+    report.sort();
+    report.dedup();
+    assert!(report.is_empty(), "{} differences:\n{}", report.len(), report.join("\n"));
 }
