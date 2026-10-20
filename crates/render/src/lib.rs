@@ -1411,7 +1411,8 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             mtext(b, ctx, t, rgb, lw);
             // Drawn in a stroke font: no glyph of it became text.
             if b.list.texts.len() == glyphs {
-                let plain = cadaddy_fonts::plain_text(&t.contents).split_whitespace().collect::<Vec<_>>().join(" ");
+                // As it reads: formatting codes (\P, {\f…;}, stacking) gone, then %% codes.
+                let plain = cadaddy_fonts::plain_text(&cadaddy_fonts::plain_mtext(&t.contents)).split_whitespace().collect::<Vec<_>>().join(" ");
                 b.words(ctx, at, &plain, t.rotation, t.height);
             }
         }

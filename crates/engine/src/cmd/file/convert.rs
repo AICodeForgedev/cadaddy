@@ -337,8 +337,15 @@ pub fn convert_drawing(from: &Path, to: &Path, job: &Job) -> std::result::Result
     if let Some(l) = read_loss(&d).filter(|l| !notes.contains(l)) {
         notes.push(l);
     }
-    // A .cdy keeps everything whatever version is asked.
-    let opts = SaveAs { version: if job.to == "cdy" { None } else { job.version }, binary: false };
+    // A .cdy keeps everything whatever version is asked. Without a version each drawing keeps its
+    // own, 2000 included (a plain save makes DWG at least 2004; Release 12 is DXF only).
+    let own = || d.header.get("ACADVER").and_then(cadaddy_doc::HVal::as_str).and_then(Version::for_acadver).filter(|v| *v != Version::R12);
+    let version = match (job.to.as_str(), job.version) {
+        ("cdy", _) => None,
+        ("dwg", None) => own(),
+        (_, v) => v,
+    };
+    let opts = SaveAs { version, binary: false };
     let out = write_drawing(&d, "dwgconvert", &dst, &opts).map_err(|e| e.to_string())?;
     let losses = if job.to == "cdy" { Vec::new() } else { check_written(&d, &dst, &out, hooks.read).map(|(_, l)| l).unwrap_or_default() };
     store_keeping(&dst, &out, job.bak).map_err(|e| e.to_string())?;
