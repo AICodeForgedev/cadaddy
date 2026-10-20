@@ -1008,7 +1008,7 @@ impl CadApp {
         }
         // The language pickers (the Language dialog, Options) name languages in their own scripts.
         let picker = self.ui.dialog.as_deref().is_some_and(|d| d == "language" || d.starts_with("options"));
-        let cjk = self.needs_cjk || picker || matches!(language, "zh" | "ja" | "ko");
+        let cjk = self.needs_cjk || picker || language.starts_with("zh") || matches!(language, "ja" | "ko");
         if self.fonts_language != Some(language) || (cjk && !self.fonts_cjk) {
             theme::install_fonts(ctx, language, cjk);
             self.fonts_language = Some(language);
