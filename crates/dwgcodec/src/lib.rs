@@ -16,15 +16,21 @@
 pub mod bits;
 pub mod classes;
 pub mod crc;
+pub mod crc64;
 mod dwg;
+pub mod entities;
 mod error;
 pub mod frame;
 pub mod header;
+pub mod lz21;
 pub mod lz77;
 pub mod objects;
 pub mod objmap;
 mod r2000;
 mod r2004;
+mod r2007;
+pub mod rand21;
+pub mod rs21;
 
 pub use dwg::{Dwg, Section, read, read_with, write};
 pub use error::{Error, Result};
@@ -37,7 +43,7 @@ pub enum Version {
     R2000,
     /// AC1018, AutoCAD 2004–2006.
     R2004,
-    /// AC1021, AutoCAD 2007–2009 (its own container, spec §5: not read yet).
+    /// AC1021, AutoCAD 2007–2009 (its own container, spec §5).
     R2007,
     /// AC1024, AutoCAD 2010–2012.
     R2010,

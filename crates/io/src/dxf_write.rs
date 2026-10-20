@@ -440,6 +440,8 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("TDCREATE", 40),
     ("TDUPDATE", 40),
     ("HYPERLINKBASE", 1),
+    ("FINGERPRINTGUID", 2),
+    ("VERSIONGUID", 2),
 ];
 
 fn header_vars(w: &mut W, d: &Drawing) {
@@ -2553,6 +2555,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     if let Some(name) = d.header.get("CMLEADERSTYLE").and_then(HVal::as_str) {
         xrecords.push((dxf_ext::MLEADER_STYLE_KEY, w.h(), vec![name.to_string()]));
     }
+    if let Some(code) = d.header.get("DCTMAIN").and_then(HVal::as_str).filter(|c| !c.trim().is_empty()) {
+        xrecords.push((dxf_ext::DCTMAIN_KEY, w.h(), vec![code.to_string()]));
+    }
     if let Some(files) = d.header.get(dxf_ext::STANDARDS_KEY).and_then(HVal::as_str).filter(|s| !s.is_empty()) {
         xrecords.push((dxf_ext::STANDARDS_KEY, w.h(), dxf_ext::json_chunks(files)));
     }
@@ -2588,6 +2593,11 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     if let Some(chunks) = dxf_ext::sun_chunks(&d.sun) {
         xrecords.push((dxf_ext::SUN_KEY, w.h(), chunks));
+    }
+    // XRECORDs of other groups than text: drawing properties (DWGPROPS, as AutoCAD keeps them).
+    let mut raw_xrecords: Vec<(&str, String, Vec<cadaddy_doc::RawTag>)> = Vec::new();
+    if !d.properties.is_empty() {
+        raw_xrecords.push((cadaddy_doc::dwgprops::KEY, w.h(), d.properties.to_tags()));
     }
     // The annotation scale list: the ACAD_SCALELIST dictionary of SCALE objects.
     let scale_dict = w.h_kept("DICT/ACAD_SCALELIST");
@@ -3125,6 +3135,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.s(3, *key);
         w.s(350, h);
     }
+    for (key, h, _) in &raw_xrecords {
+        w.s(3, *key);
+        w.s(350, h);
+    }
     w.s(3, "ACAD_SCALELIST");
     w.s(350, scale_dict.clone());
     w.s(0, "DICTIONARY");
@@ -3204,6 +3218,17 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.i(280, 1);
         for c in chunks {
             w.s(1, c.clone());
+        }
+    }
+    for (_, h, tags) in &raw_xrecords {
+        w.s(0, "XRECORD");
+        w.s(5, h);
+        w.group("ACAD_REACTORS", 330, &[&root_dict]);
+        w.s(330, root_dict.clone());
+        w.s(100, "AcDbXrecord");
+        w.i(280, 1);
+        for t in tags {
+            w.s(t.code, t.value.clone());
         }
     }
     scale_list(&mut w, &scales, &scale_dict, &root_dict);

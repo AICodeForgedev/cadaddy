@@ -5,6 +5,9 @@
 /// What a DXF file holds that CADaddy doesn't model, kept and written back (#528).
 pub mod cdy;
 mod dwg_keep;
+pub mod dwg_native;
+pub mod dwg_read;
+pub mod dwg_write;
 mod dxf_raw;
 /// 3D model exchange: glTF/GLB, OBJ+MTL and STL.
 pub mod ifc;
@@ -93,6 +96,75 @@ fn ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
 
+/// Which DWG reader and writer: CADaddy's own codec, or the DWG bridge (acadrust).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DwgEngine {
+    Native,
+    Bridge,
+}
+
+/// The DWG engine for reading (`read`) or writing: the one `CADADDY_DWG_READ` /
+/// `CADADDY_DWG_WRITE` names for that direction, else the one `CADADDY_DWG` names for both
+/// (`native`, or `acadrust`/`bridge`), else [`DEFAULT_DWG_READ`] / [`DEFAULT_DWG_WRITE`].
+pub fn dwg_engine(read: bool) -> DwgEngine {
+    let named = |var: &str| match std::env::var(var).map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Ok("native") => Some(DwgEngine::Native),
+        Ok("acadrust" | "bridge") => Some(DwgEngine::Bridge),
+        _ => None,
+    };
+    named(if read { "CADADDY_DWG_READ" } else { "CADADDY_DWG_WRITE" }).or_else(|| named("CADADDY_DWG")).unwrap_or(if read {
+        DEFAULT_DWG_READ
+    } else {
+        DEFAULT_DWG_WRITE
+    })
+}
+
+/// Reading DWG: the bridge until CADaddy's codec reads what it reads (docs/dwg-parity.md lists
+/// what's left); `CADADDY_DWG=native` reads with the codec.
+pub const DEFAULT_DWG_READ: DwgEngine = DwgEngine::Bridge;
+
+/// Writing DWG: the bridge until CADaddy's files have been opened in AutoCAD and reading has
+/// parity; `CADADDY_DWG=native` writes with the codec.
+pub const DEFAULT_DWG_WRITE: DwgEngine = DwgEngine::Bridge;
+
+/// A DWG read with `engine`. CADaddy's reader hands what it can't read yet (encrypted or damaged
+/// files) to the bridge, and says so in the drawing's read notes.
+pub fn read_dwg(bytes: &[u8], engine: DwgEngine) -> Result<Drawing> {
+    if engine == DwgEngine::Native {
+        match dwg_read::read(bytes) {
+            Ok((d, _)) => return Ok(d),
+            Err(e) => {
+                let mut d = read_dwg_bridge(bytes)?;
+                d.read_notes.insert(0, format!("DWG: read through the DWG bridge (CADaddy's reader: {e})"));
+                return Ok(d);
+            }
+        }
+    }
+    read_dwg_bridge(bytes)
+}
+
+/// A drawing written as DWG of `version` with `engine` (CADaddy's writer hands a version it
+/// doesn't write to the bridge).
+pub fn write_dwg(d: &Drawing, version: Version, engine: DwgEngine) -> Result<Vec<u8>> {
+    if engine == DwgEngine::Native
+        && let Ok((bytes, _)) = dwg_write::write(d, version.code())
+    {
+        return Ok(bytes);
+    }
+    let (dxf, linetypes) = dxf_write::dwg_bridge(d, version);
+    cadaddy_dwg::dxf_to_dwg_named(&dxf, version.code(), &linetypes).map_err(IoError::Format)
+}
+
+/// A DWG read through the bridge (acadrust).
+fn read_dwg_bridge(bytes: &[u8]) -> Result<Drawing> {
+    let (dxf, notes) = cadaddy_dwg::dwg_to_dxf_noted(bytes, cadaddy_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
+    // Custom records CADaddy kept through the DWG (`dwg_keep`), back where they were.
+    let dxf = dwg_keep::unstash(&dxf).unwrap_or(dxf);
+    let mut d = dxf_read::read(&dxf).map_err(|e| IoError::Format(format!("{e} (in the DXF converted from this DWG)")))?;
+    d.read_notes = notes;
+    Ok(d)
+}
+
 /// Read a drawing; the format comes from the content (DXF ASCII/binary, DWG) or the name
 /// (SVG and gzip-compressed SVGZ); a .cdy file is known by its content.
 pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
@@ -103,12 +175,7 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
         return cdy::read_cdy(bytes);
     }
     if cadaddy_dwg::is_dwg(bytes) {
-        let (dxf, notes) = cadaddy_dwg::dwg_to_dxf_noted(bytes, cadaddy_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
-        // Custom records CADaddy kept through the DWG (`dwg_keep`), back where they were.
-        let dxf = dwg_keep::unstash(&dxf).unwrap_or(dxf);
-        let mut d = dxf_read::read(&dxf).map_err(|e| IoError::Format(format!("{e} (in the DXF converted from this DWG)")))?;
-        d.read_notes = notes;
-        return Ok(d);
+        return read_dwg(bytes, dwg_engine(true));
     }
     match ext(name).as_str() {
         "svg" | "svgz" => svg_read::read(bytes, name),
@@ -159,8 +226,7 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
         // gradients, so a drawing from an R2000 DXF doesn't lose them by default.
         "dwg" if !opts.binary => {
             let version = opts.version.unwrap_or_else(|| version.max(Version::R2004));
-            let (dxf, linetypes) = dxf_write::dwg_bridge(d, version);
-            cadaddy_dwg::dxf_to_dwg_named(&dxf, version.code(), &linetypes).map_err(IoError::Format)
+            write_dwg(d, version, dwg_engine(false))
         }
         e if opts.binary => Err(IoError::Format(format!("binary output is for DXF files, not `{e}`"))),
         "bundle" if name.to_ascii_lowercase().ends_with(".obj.bundle") => {

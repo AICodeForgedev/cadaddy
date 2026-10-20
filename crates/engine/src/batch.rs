@@ -40,6 +40,8 @@ impl Session {
             }
             _ => false,
         };
+        // Its commands are one event for a watcher (told below), not thousands.
+        let was_batch = std::mem::replace(&mut self.events.batch, true);
         let mut results = Vec::with_capacity(calls.len());
         let mut failed: Option<(usize, String, String)> = None;
         for (i, (id, params)) in calls.iter().enumerate() {
@@ -51,6 +53,11 @@ impl Session {
                 }
                 Err(e) => results.push(json!({ "error": e.to_string() })),
             }
+        }
+        self.events.batch = was_batch;
+        if !was_batch {
+            let ok = failed.is_none();
+            self.event("command.run", json!({ "command": "executeMany", "ok": ok, "count": results.len() }));
         }
         if let Some((index, command, message)) = failed {
             // Everything as it was before the batch (its undo history too).

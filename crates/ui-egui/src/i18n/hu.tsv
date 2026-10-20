@@ -1,0 +1,2269 @@
+# CADaddy Hungarian interface catalog: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English source<TAB>Hungarian translation.
+# Empty context = ordinary label; @plural = forms separated by | with {n}.
+# Keep command IDs, keywords, technology/product names and user data unchanged.
+	Adjust...	Igazítás...
+	Apply	Alkalmaz
+	Attach DWG...	DWG csatolása...
+	Bind	Bekötés
+	Detach	Leválasztás
+	Image	Kép
+	Loaded	Betöltve
+	Make it a block of this drawing, keeping its layer names	Legyen ennek a rajznak egy blokkja, a fóliák nevének megtartásával
+	Make it a block of this drawing; its layers become NAME$0$LAYER	Legyen ennek a rajznak egy blokkja; a fóliái NAME$0$LAYER nevet kapnak
+	No external references are attached.	Nincs csatolt külső hivatkozás.
+	Not Found	Nem található
+	Not loaded	Nincs betöltve
+	Open	Megnyitás
+	Overlay	Ráhelyezés
+	Reference Manager	Hivatkozáskezelő
+	Reference Name	Hivatkozás neve
+	References: {n}	Hivatkozások: {n}
+	Reload	Újratöltés
+	Reload All	Összes újratöltése
+	Saved Path	Mentett útvonal
+	Unload	Kiürítés
+	Unloaded	Kiürítve
+	Unreferenced	Nem hivatkozott
+	Unresolved	Feloldatlan
+	  Cancel  	  Mégse  
+	  OK  	  OK  
+	 or [	 vagy [
+	% of all commits	Az összes commit %-a
+	* Wildcard Match	* Helyettesítő karakteres egyezés
+	*VARIES*	*VÁLTOZÓ*
+	+  |  Top  |  2D Wireframe	+  |  Felülnézet  |  2D drótváz
+	+Bin	+Bin
+	+LOC	+LOC
+	1 Viewport	1 nézetablak
+	2 Points	2 pont
+	2 Viewports	2 nézetablak
+	2D Solid	2D test
+	3 Points	3 pont
+	3 Viewports	3 nézetablak
+	3D Face	3D lap
+	3D Operations	3D műveletek
+	3D Polyline	3D vonallánc
+	4 Viewports	4 nézetablak
+	< Less than	< Kisebb, mint
+	<> Not Equal	<> Nem egyenlő
+	= Equals	= Egyenlő
+	> Greater than	> Nagyobb, mint
+	A variable name starts with a letter and has only letters, digits and _	A változónév betűvel kezdődik, és csak betűket, számjegyeket és _ jelet tartalmaz
+	About	Névjegy
+	About CADaddy	A CADaddy névjegye
+	Absolute	Abszolút
+	Add Leader	Mutatóvonal hozzáadása
+	Additional angles	További szögek
+	Align	Igazítás
+	Align Text	Szöveg igazítása
+	Aligned	Igazított
+	All	Mind
+	All Annotation Objects	Minden feliratozó objektum
+	All Used Layers	Minden használt fólia
+	All files	Minden fájl
+	Angle	Szög
+	Angular	Szögméret
+	Annotation Visibility	Feliratok láthatósága
+	Annotation scale	Feliratlépték
+	Apparent Intersection	Látszólagos metszéspont
+	Append to current selection set	Hozzáadás az aktuális kijelölési készlethez
+	Apply to:	Alkalmazás erre:
+	Apply true color	Valódi szín alkalmazása
+	Arc	Ív
+	Arc Length	Ívhossz
+	Area	Terület
+	Arrange Panel	Elrendezés panel
+	Array	Tömb
+	Attach	Csatolás
+	Attribute	Attribútum
+	Attribute Definition	Attribútumdefiníció
+	Attribute Display	Attribútumok megjelenítése
+	Audit	Ellenőrzés
+	Auto (system language)	Automatikus (rendszernyelv)
+	Auto Constrain	Automatikus kényszerítés
+	AutoConstrain	Automatikus kényszer
+	Axis, End	Tengely, végpont
+	Base	Bázis
+	Baseline	Alapvonal
+	Batch Publish	Kötegelt közzététel
+	Binary assets added	Hozzáadott bináris elemek
+	Binary assets removed	Eltávolított bináris elemek
+	Bind...	Bekötés...
+	Blend	Átmenet
+	Block	Blokk
+	Block Attribute Manager...	Blokkattribútum-kezelő...
+	Block Editor	Blokkszerkesztő
+	Block Reference	Blokkhivatkozás
+	Block...	Blokk...
+	Blocks	Blokkok
+	Blue	Kék
+	Bold	Félkövér
+	Boolean	Logikai
+	Boundary	Határ
+	Boundary...	Határ...
+	Box	Hasáb
+	Break	Megszakítás
+	Break At Point	Megszakítás pontban
+	Bring Above Objects	Objektumok fölé hozás
+	Bring Annotations to Front	Feliratok előtérbe hozása
+	Bring to Front	Előtérbe hozás
+	Bulleted list	Felsorolásjeles lista
+	ByBlock	BLOKKSZERINT
+	ByColor	SZÍNSZERINT
+	ByLayer	FÓLIASZERINT
+	CADaddy Help	CADaddy súgó
+	Cancel	Mégse
+	Cartesian (x, y)	Derékszögű (x, y)
+	Center	Középpont
+	Center Line	Középvonal
+	Center Mark	Középpontjel
+	Center X	Középpont X
+	Center Y	Középpont Y
+	Center Z	Középpont Z
+	Center, Diameter	Középpont, átmérő
+	Center, Radius	Középpont, sugár
+	Center, Start, Angle	Középpont, kezdőpont, szög
+	Center, Start, End	Középpont, kezdőpont, végpont
+	Center, Start, Length	Középpont, kezdőpont, hossz
+	Chamfer	Letörés
+	Change Space	Tér váltása
+	Change to Current Layer	Áthelyezés az aktuális fóliára
+	Changed: {n}	Módosítva: {n}
+	Circle	Kör
+	Circumference	Kerület
+	Clear History	Előzmények törlése
+	Clear	Törlés
+	Clip	Vágás
+	Clip Viewport	Nézetablak vágása
+	Clipboard	Vágólap
+	Close	Bezárás
+	Close All	Összes bezárása
+	Close All Other Drawings	Összes többi rajz bezárása
+	Closed	Zárt
+	Close Comparison	Összehasonlítás bezárása
+	Coincident	Egybeeső
+	Collapse Palettes	Paletták összecsukása
+	Collapse Tool Sets	Eszközkészletek összecsukása
+	Collinear	Kollineáris
+	Color	Szín
+	Color 8	8-as szín
+	Color 9	9-es szín
+	Color Index	Színindex
+	Color...	Szín...
+	Command Aliases	Parancsaliasok
+	Command History	Parancselőzmények
+	Clear Command History	Parancselőzmények törlése
+	Command Line	Parancssor
+	Command Line History Lines	Parancssori előzmények sorai
+	Command Reference	Parancsreferencia
+	Commits	Commitok
+	Company	Cég
+	Compare Drawings...	Rajzok összehasonlítása...
+	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	Számítógépes tervezés és rajzolás: nyílt forráskódú, tisztaszobás módszerrel készült CAD-alkalmazás, tisztán Rust nyelven írva.
+	Concentric	Koncentrikus
+	Cone	Kúp
+	Constraint Bars	Kényszersávok
+	Constraint Settings	Kényszerbeállítások
+	Construction Line	Szerkesztővonal
+	Contents	Tartalom
+	Continue	Folytatás
+	Contributors	Közreműködők
+	Control Vertices	Vezérlőpontok
+	Convert	Átalakítás
+	Copy	Másolás
+	Copy Full File Path	Teljes fájlútvonal másolása
+	Copy History	Előzmények másolása
+	Copy Layout	Elrendezés másolása
+	Copy Nested Objects	Beágyazott objektumok másolása
+	Copy Selection	Kijelölés másolása
+	Copy with Base Point	Másolás bázisponttal
+	Count	Darabszám
+	Count List	Darabszám-lista
+	Count Table	Darabszám-táblázat
+	Create Block	Blokk létrehozása
+	Creates a user parameter	Felhasználói paramétert hoz létre
+	Ctrl+Enter to finish	Ctrl+Enter a befejezéshez
+	Current layer	Aktuális fólia
+	Current selection	Aktuális kijelölés
+	Current: {color}	Aktuális: {color}
+	Cut	Kivágás
+	Cyan	Ciánkék
+	Cylinder	Henger
+	DWG	DWG
+	DWG Reference...	DWG-hivatkozás...
+	DXF	DXF
+	Dark	Sötét
+	Data Extraction...	Adatkinyerés...
+	Default	Alapértelmezett
+	Data Link...	Adatkapcsolat...
+	Default Save Format	Alapértelmezett mentési formátum
+	Default Save Version	Alapértelmezett mentési verzió
+	Define Attributes	Attribútumok definiálása
+	Define Attributes...	Attribútumok definiálása...
+	Defined width	Megadott szélesség
+	Degree	Fokszám
+	Degrees of Freedom	Szabadságfokok
+	Degrees of freedom: {n}	Szabadságfokok: {n}
+	Delete	Törlés
+	Delete Column	Oszlop törlése
+	Delete Constraints	Kényszerek törlése
+	Delete Dimension Style	Méretstílus törlése
+	Delete Duplicate Objects	Ismétlődő objektumok törlése
+	Delete Layer	Fólia törlése
+	Delete Layer State	Fóliaállapot törlése
+	Delete Layout	Elrendezés törlése
+	Delete Row	Sor törlése
+	Delete Text Style	Szövegstílus törlése
+	Delta X	Delta X
+	Delta Y	Delta Y
+	Description	Leírás
+	Deselect All	Kijelölés megszüntetése
+	Diameter	Átmérő
+	Dim style	Méretstílus
+	Dimension Break	Méret megszakítása
+	Dimension Edit	Méret szerkesztése
+	Dimension	Méret
+	Dimension Objects Only	Csak méretobjektumok
+	Dimension Space	Méretköz
+	Dimension Style Override	Méretstílus felülírása
+	Dimension Style...	Méretstílus...
+	Dimension Text Edit	Méretszöveg szerkesztése
+	Dimension style	Méretstílus
+	Dimensional Constraint	Méretkényszer
+	Dimensional Constraint Parameters	Méretkényszer-paraméterek
+	Dimensional Constraints	Méretkényszerek
+	Disassociate Dimensions	Méretek társításának megszüntetése
+	Display name	Megjelenített név
+	Distance	Távolság
+	Divide	Felosztás
+	Do not plot (click: plot)	Nem nyomtatandó (kattintás: nyomtatandó)
+	Donut	Gyűrű
+	Double-click to edit the description	Kattintson duplán a leírás szerkesztéséhez
+	Down	Le
+	Drafting	Rajzolás
+	Drafting Settings	Rajzolási beállítások
+	Drafting Settings...	Rajzolási beállítások...
+	Draw	Rajzolás
+	Draw Order	Rajzolási sorrend
+	Drawing (DWG)	Rajz (DWG)
+	Drawing (DXF)	Rajz (DXF)
+	Drawing Limits	Rajzhatárok
+	Drawing Template (DWT)	Rajzsablon (DWT)
+	Drawing Utilities	Rajzsegédeszközök
+	Drawings (DWG, DXF)	Rajzok (DWG, DXF)
+	SVG drawings (SVG, SVGZ)	SVG-rajzok (SVG, SVGZ)
+	Dynamic	Dinamikus
+	Dynamic Dimensions	Dinamikus méretek
+	Dynamic Input	Dinamikus bevitel
+	Dynamic Input (F12)	Dinamikus bevitel (F12)
+	E	K
+	Edit	Szerkesztés
+	Edit Attributes...	Attribútumok szerkesztése...
+	Edit Text...	Szöveg szerkesztése...
+	Edit Table Cell	Táblázatcella szerkesztése
+	Elevation	Emelés
+	Ellipse	Ellipszis
+	Elliptical Arc	Ellipszisív
+	Enable Dynamic Input (F12)	Dinamikus bevitel engedélyezése (F12)
+	End Object Isolation	Objektumelkülönítés vége
+	End Width	Végszélesség
+	End X	Végpont X
+	End Y	Végpont Y
+	End angle	Végszög
+	Endpoint	Végpont
+	Enter	Enter
+	Enter Top, Zero or Bottom.	Adja meg: Felül, Nulla vagy Alul.
+	Enter a fit data option	Adjon meg egy illesztési adat opciót
+	Enter a pattern name	Adjon meg egy mintanevet
+	Enter a vertex editing option	Adjon meg egy csúcsszerkesztési opciót
+	Enter an option	Adjon meg egy opciót
+	Enter angle of xline	Adja meg a szerkesztővonal szögét
+	Enter angle of xline (0) or	Adja meg a szerkesztővonal szögét (0) vagy
+	Enter area of rectangle in current units	Adja meg a téglalap területét aktuális egységben
+	Enter attribute prompt	Adja meg az attribútum promptját
+	Enter attribute tag name	Adja meg az attribútum címkéjének nevét
+	Enter attribute value	Adja meg az attribútum értékét
+	Enter block name	Adja meg a blokk nevét
+	Enter constraint type	Adja meg a kényszer típusát
+	Enter continuity	Adja meg a folytonosságot
+	Enter default attribute value	Adja meg az attribútum alapértelmezett értékét
+	Enter degree of spline	Adja meg a spline fokszámát
+	Enter delta angle	Adja meg a szögváltozást
+	Enter delta length or	Adja meg a hosszváltozást vagy
+	Enter dimension text	Adja meg a méretszöveget
+	Enter dimension text (<> = measurement)	Adja meg a méretszöveget (<> = mért érték)
+	Enter dimension value or [name=expression]	Adja meg a méret értékét vagy [név=kifejezés]
+	Enter dimension variable name to override	Adja meg a felülírandó méretváltozó nevét
+	Enter justification type	Adja meg az igazítás típusát
+	Enter leader text	Adja meg a mutatóvonal szövegét
+	Enter mline scale	Adja meg a multivonal léptékét
+	Enter mode	Adja meg a módot
+	Enter name of block to insert	Adja meg a beszúrandó blokk nevét
+	Enter new text	Adja meg az új szöveget
+	Enter next point	Adja meg a következő pontot
+	Enter number of columns	Adja meg az oszlopok számát
+	Enter number of data rows	Adja meg az adatsorok számát
+	Enter number of items	Adja meg az elemek számát
+	Enter number of items along path	Adja meg az útvonal menti elemek számát
+	Enter number of sides	Adja meg az oldalak számát
+	Enter number of turns	Adja meg a menetek számát
+	Enter percentage length	Adja meg a hossz százalékát
+	Enter rectangle length	Adja meg a téglalap hosszát
+	Enter rectangle width	Adja meg a téglalap szélességét
+	Enter scale factor	Adja meg a léptéktényezőt
+	Enter text	Adja meg a szöveget
+	Enter text (use \P for new paragraphs)	Adja meg a szöveget (új bekezdéshez használja a \P jelet)
+	Enter the number of segments	Adja meg a szakaszok számát
+	Enter twist direction of helix	Adja meg a csavarvonal csavarodási irányát
+	Entire drawing	Teljes rajz
+	Equal	Egyenlő
+	Erase	Radírozás
+	Evaluate	Kiértékelés
+	Evaluate LISP	LISP kiértékelése
+	Exclude from new selection set	Kizárás az új kijelölési készletből
+	Explode	Szétvetés
+	Export	Exportálás
+	Export Table	Táblázat exportálása
+	Export to PDF...	Exportálás PDF-be...
+	Expression	Kifejezés
+	Extend	Meghosszabbítás
+	Extension	Meghosszabbítás
+	Extents	Kiterjedés
+	External Reference	Külső hivatkozás
+	External References	Külső hivatkozások
+	Extrude	Kihúzás
+	File	Fájl
+	File Tab	Fájlfül
+	Fillet	Lekerekítés
+	Filter	Szűrő
+	Filters	Szűrők
+	Find and Replace	Keresés és csere
+	Find...	Keresés...
+	First	Első
+	First commit	Első commit
+	Fit Points	Illesztési pontok
+	Fix	Rögzítés
+	Flatten Objects	Objektumok lapítása
+	Format	Formátum
+	Freehand	Szabadkézi
+	Freeze	Fagyasztás
+	Freeze Layer	Fólia fagyasztása
+	Freeze in new viewports	Fagyasztás új nézetablakokban
+	Freeze/Thaw	Fagyasztás/felolvasztás
+	Freeze/Thaw in all viewports	Fagyasztás/felolvasztás minden nézetablakban
+	Freeze/Thaw in the current viewport	Fagyasztás/felolvasztás az aktuális nézetablakban
+	From	Innen
+	From Template...	Sablonból...
+	General	Általános
+	Geometric Center	Geometriai középpont
+	Geometric Constraint	Geometriai kényszer
+	Geometric Constraints	Geometriai kényszerek
+	Geometry	Geometria
+	Get from the Drawing	Átvétel a rajzból
+	Get Variable	Változó lekérdezése
+	Get View	Nézet lekérdezése
+	Global	Globális
+	Global width	Globális szélesség
+	Grab bag	Vegyes
+	Gradient	Színátmenet
+	Gradient...	Színátmenet...
+	Green	Zöld
+	Grid (F7)	Rács (F7)
+	Grid Display	Rács megjelenítése
+	Grid On (F7)	Rács be (F7)
+	Grid snap	Rácsraszter
+	Grid spacing	Rácsköz
+	Grip Edit	Fogó szerkesztése
+	Grip Mirror	Fogóval tükrözés
+	Grip Option	Fogóopció
+	Grip Rotate	Fogóval forgatás
+	Grip Scale	Fogóval léptékezés
+	Grip Stretch	Fogóval nyújtás
+	Group	Csoport
+	Group Edit	Csoport szerkesztése
+	Group Options	Csoportbeállítások
+	Group Selection	Csoportkijelölés
+	Hatch	Sraffozás
+	Hatch Edit	Sraffozás szerkesztése
+	Hatch Patterns	Sraffozásminták
+	Hatch...	Sraffozás...
+	Height	Magasság
+	Height: {height}	Magasság: {height}
+	Helix	Csavarvonal
+	Help	Súgó
+	Hide All	Összes elrejtése
+	Hide All Constraint Bars	Összes kényszersáv elrejtése
+	Hide All Dynamic Dimensions	Összes dinamikus méret elrejtése
+	Hide Layer List	Fólialista elrejtése
+	Hide Objects	Objektumok elrejtése
+	Hide Palettes	Paletták elrejtése
+	History	Előzmények
+	Home	Kezdőlap
+	Horizontal	Vízszintes
+	HorizontalDistance	Vízszintes távolság
+	How to apply:	Alkalmazás módja:
+	ID Point	Pont azonosítása
+	Import	Importálás
+	Align Multileaders	Többes mutatóvonalak igazítása
+	Collect	Összegyűjtés
+	Collect Multileaders	Többes mutatóvonalak összegyűjtése
+	Edit Multileader	Többes mutatóvonal szerkesztése
+	In	Be
+	In-window Menu Bar	Ablakon belüli menüsor
+	Include in new selection set	Felvétel az új kijelölési készletbe
+	Increment angle	Szögnövekmény
+	Index Color	Indexszín
+	Index color: {index}	Indexszín: {index}
+	Infer Constraints	Kényszerek kikövetkeztetése
+	Inquiry	Lekérdezés
+	Insert	Beszúrás
+	Insert Block	Blokk beszúrása
+	Insert Column	Oszlop beszúrása
+	Insert Row	Sor beszúrása
+	Insert tab	Beszúrás lap
+	Insert this block	Blokk beszúrása
+	Insert Table Formula	Táblázatképlet beszúrása
+	Insertion	Beszúrási pont
+	Insertion X	Beszúrási pont X
+	Insertion Y	Beszúrási pont Y
+	Insertion Z	Beszúrási pont Z
+	Inspect Constraints	Kényszerek vizsgálata
+	Inspect Drawing	Rajz vizsgálata
+	Inspection	Vizsgálat
+	Interface Language	Felület nyelve
+	Interface Theme	Felület témája
+	Intersect	Metszet
+	Intersection	Metszéspont
+	Isolate	Elkülönítés
+	Isolate Layer	Fólia elkülönítése
+	Isolate Objects	Objektumok elkülönítése
+	Isometric Drafting	Izometrikus rajzolás
+	Jogged	Megtört
+	Jogged Linear	Megtört lineáris
+	Join	Összekapcsolás
+	Join the ArtCraft Discord…	Csatlakozzon az ArtCraft Discordhoz…
+	Join us on Discord	Csatlakozzon hozzánk a Discordon
+	Isometric Plane	Izometrikus sík
+	Isometric snap	Izometrikus raszter
+	Language	Nyelv
+	Last	Utolsó
+	Last commit	Utolsó commit
+	Layer	Fólia
+	Layer Delete	Fólia törlése
+	Layer Match	Fólia egyeztetése
+	Layer Merge	Fóliák egyesítése
+	Layer Off	Fólia kikapcsolása
+	Layer Properties	Fóliatulajdonságok
+	Layer Properties Manager	Fóliatulajdonság-kezelő
+	Layer Properties Manager — current viewport	Fóliatulajdonság-kezelő — aktuális nézetablak
+	Layer State	Fóliaállapot
+	Layer States Manager...	Fóliaállapot-kezelő...
+	Layer Tools	Fóliaeszközök
+	Layer contains objects (double-click to make current)	A fólia objektumokat tartalmaz (dupla kattintással aktuálissá tehető)
+	Layer is empty (double-click to make current)	A fólia üres (dupla kattintással aktuálissá tehető)
+	Layers	Fóliák
+	Layers Palette	Fóliák paletta
+	Hide Palette	Paletta elrejtése
+	Layers displayed: {shown} of {total}.   Current layer: {layer}	Megjelenített fóliák: {shown} / {total}.   Aktuális fólia: {layer}
+	Layout	Elrendezés
+	Layout list	Elrendezéslista
+	Leader	Mutatóvonal
+	Leaders Only	Csak mutatóvonalak
+	Left	Balra
+	Length	Hossz
+	Length X	Hossz X
+	Length Y	Hossz Y
+	Lengthen	Hosszváltoztatás
+	Light	Világos
+	Line	Vonal
+	Line delta	Sorkülönbség
+	Linear	Lineáris
+	Lines +/−	Sorok +/−
+	Lines added	Hozzáadott sorok
+	Lines deleted	Törölt sorok
+	Lines of Command History	Parancselőzmények sorai
+	Linetype	Vonaltípus
+	Linetype Scale	Vonaltípus-lépték
+	Linetype scale	Vonaltípus-lépték
+	Ltscale	Ltscale
+	Linetype...	Vonaltípus...
+	Lineweight	Vonalvastagság
+	Lineweight...	Vonalvastagság...
+	List	Lista
+	List Blocks	Blokkok listázása
+	List Dimension Styles	Méretstílusok listázása
+	List Groups	Csoportok listázása
+	List Layer States	Fóliaállapotok listázása
+	List Layouts	Elrendezések listázása
+	List System Variables	Rendszerváltozók listázása
+	List Text Styles	Szövegstílusok listázása
+	Load all	Összes betöltése
+	Load...	Betöltés...
+	Load Application...	Alkalmazás betöltése...
+	Loaded linetypes	Betöltött vonaltípusok
+	Lock	Zárolás
+	Lock Layer	Fólia zárolása
+	Lock viewport	Nézetablak zárolása
+	Lock/Unlock	Zárolás/feloldás
+	Loft	Felületátmenet
+	MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.	MIT OR Apache-2.0. Nem áll kapcsolatban az Autodesk, Inc. céggel.
+	MODEL	MODELL
+	MText	MText
+	Magenta	Bíbor
+	Major line every	Fő rácsvonal minden
+	Make Current	Aktuálissá tétel
+	Make Object's Layer Current	Objektum fóliájának aktuálissá tétele
+	Make...	Létrehozás...
+	Match Layer	Fóliaillesztés
+	Match Properties	Tulajdonságok egyeztetése
+	Measure	Bemérés
+	Measure Distance	Távolság mérése
+	Measure Geometry	Geometria mérése
+	Merge Cells	Cellák egyesítése
+	Merged PRs	Egyesített PR-ek
+	Mid Between 2 Points	Két pont közötti felezőpont
+	Midpoint	Felezőpont
+	Mirror	Tükrözés
+	Model	Modell
+	Model Space (in viewport)	Modelltér (nézetablakban)
+	Modeling	Modellezés
+	Models	Modellek
+	Modify	Módosítás
+	Move	Mozgatás
+	Multileader	Többes mutatóvonal
+	Multileader Style...	Többes mutatóvonal stílusa...
+	Multileader style	Többes mutatóvonal stílusa
+	Multiline	Multivonal
+	Multiline Text	Többsoros szöveg
+	Multiline Text...	Többsoros szöveg...
+	Multiple	Többszörös
+	Multiple Point	Több pont
+	My	Saját
+	My properties: not available yet	Saját tulajdonságok: még nem érhető el
+	N	É
+	Name	Név
+	Name (A–Z)	Név (A–Z)
+	Named Views...	Nevesített nézetek...
+	Nearest	Legközelebbi
+	New	Új
+	New (metric)	Új (metrikus)
+	New Drawing	Új rajz
+	New Drawing (⌘N)	Új rajz (⌘N)
+	New Drawing...	Új rajz...
+	New Layer	Új fólia
+	New Layout	Új elrendezés
+	New VP Freeze	Fagyasztás új NA-ban
+	New Viewports...	Új nézetablakok...
+	New from Template...	Új sablonból...
+	New layout	Új elrendezés
+	New state name	Új állapot neve
+	Next Change	Következő változás
+	No	Nem
+	No blocks defined in this drawing.	Ebben a rajzban nincs definiált blokk.
+	No contributor data was built into this copy.	Ebbe a példányba nem kerültek közreműködői adatok.
+	No model credits were built into this copy.	Ebbe a példányba nem kerültek modellkreditek.
+	No saved layer states	Nincs mentett fóliaállapot
+	No selection	Nincs kijelölés
+	Node	Csomópont
+	None	Nincs
+	Not available	Nem érhető el
+	Not available yet	Még nem érhető el
+	Numbered list	Számozott lista
+	OK	OK
+	Object	Objektum
+	Object Snap	Tárgyraszter
+	Object Snap (F3)	Tárgyraszter (F3)
+	Object Snap On (F3)	Tárgyraszter be (F3)
+	Object Snap Tracking	Tárgyraszter-követés
+	Object Snap Tracking (F11)	Tárgyraszter-követés (F11)
+	Object Snap Tracking Settings	Tárgyraszter-követés beállításai
+	Object type:	Objektumtípus:
+	Oblique	Ferde
+	Off	Ki
+	Offset	Eltolás
+	On	Be
+	On/Off	Be/ki
+	One of the Crafting Apps by the ArtCraft team and community.	Az ArtCraft csapat és közösség egyik Crafting alkalmazása.
+	Only in this drawing: {n}	Csak ebben a rajzban: {n}
+	Only in {name}: {n}	Csak ebben: {name}: {n}
+	Open (⌘O)	Megnyitás (⌘O)
+	Open Sample Drawing	Mintarajz megnyitása
+	Open sample drawing	Mintarajz megnyitása
+	Open Xref	Külső hivatkozás megnyitása
+	Open...	Megnyitás...
+	Open Recent	Legutóbbiak megnyitása
+	Clear Recent Files	Legutóbbi fájlok listájának törlése
+	Operator:	Operátor:
+	Orbit	Körbeforgatás
+	Ordinate	Koordináta
+	Ortho (F8)	Orto (F8)
+	Ortho Mode	Orto mód
+	Ortho Mode (F8)	Orto mód (F8)
+	Osnap Settings...	Tárgyraszter-beállítások...
+	Out	Ki
+	Over-constrained	Túlkényszerezett
+	Override	Felülírás
+	PAPER	PAPÍR
+	Percent	Százalék
+	Polar (distance < angle)	Poláris (távolság < szög)
+	PRs	PR-ek
+	Page Setup Manager	Oldalbeállítás-kezelő
+	Page Setup Manager...	Oldalbeállítás-kezelő...
+	Pan	Pásztázás
+	Pan Down	Pásztázás le
+	Pan Left	Pásztázás balra
+	Pan Right	Pásztázás jobbra
+	Pan Up	Pásztázás fel
+	Paper Space	Papírtér
+	Parallel	Párhuzamos
+	Parameters Manager	Paraméterkezelő
+	Parametric	Parametrikus
+	Paste	Beillesztés
+	Paste as Block	Beillesztés blokként
+	Paste to Command Line	Beillesztés a parancssorba
+	Paste to Original Coordinates	Beillesztés az eredeti koordinátákra
+	Path Array	Útvonal menti tömb
+	Pattern	Minta
+	Perpendicular	Merőleges
+	Plot	Nyomtatás
+	Plot (click: do not plot)	Nyomtatandó (kattintás: nem nyomtatandó)
+	Plot Preview	Nyomtatási kép
+	Plot Window	Nyomtatási ablak
+	Plot style	Nyomtatási stílus
+	Plot style attached to	Csatolt nyomtatási stílus
+	Plot style table	Nyomtatásistílus-táblázat
+	Plot Style...	Nyomtatási stílus...
+	Plot Style Manager	Nyomtatásistílus-kezelő
+	Plot Style Manager...	Nyomtatásistílus-kezelő...
+	Plot Styles...	Nyomtatási stílusok...
+	Plotter Manager	Nyomtatókezelő
+	Plotter Manager...	Nyomtatókezelő...
+	New CTB	Új CTB
+	New STB	Új STB
+	New style	Új stílus
+	Reset Panel Layout	Panelelrendezés visszaállítása
+	Send Hatches to Back	Sraffozások hátra küldése
+	Send Under Objects	Objektumok alá küldés
+	Text Objects Only	Csak szövegobjektumok
+	Use for this layout	Használat ehhez az elrendezéshez
+	Display plot styles	Nyomtatási stílusok megjelenítése
+	No plot style tables.	Nincsenek nyomtatásistílus-táblázatok.
+	A built-in table: editing it keeps an edited copy in the drawing.	Beépített táblázat: szerkesztéskor a rajz egy szerkesztett másolatot tárol.
+	Keep an editable copy of this table in the drawing	A táblázat szerkeszthető másolatának megőrzése a rajzban
+	Layout {name}: {table}	{name} elrendezés: {table}
+	Grayscale	Szürkeárnyalatos
+	Screening	Árnyékolás
+	Use object linetype	Objektum vonaltípusának használata
+	Use object lineweight	Objektum vonalvastagságának használata
+	Remove	Eltávolítás
+	Add	Hozzáadás
+	Open a drawing first.	Előbb nyisson meg egy rajzot.
+	Plot table type	Nyomtatási táblázat típusa
+	Color-dependent	Színfüggő
+	Named	Nevesített
+	Plus/minus	Plusz/mínusz
+	Point	Pont
+	Point Filters	Pontszűrők
+	Point Style...	Pontstílus...
+	Polar Array	Poláris tömb
+	Polar Tracking	Poláris követés
+	Polar Tracking (F10)	Poláris követés (F10)
+	Polar Tracking On (F10)	Poláris követés be (F10)
+	Polar angle measurement	Poláris szögmérés
+	Polar distance	Poláris távolság
+	Polar: {distance} < {angle}°	Poláris: {distance} < {angle}°
+	PolarSnap	Poláris raszter
+	Polygon	Sokszög
+	Polygonal	Sokszög alakú
+	Polygonal Viewport	Sokszög alakú nézetablak
+	Polyline	Vonallánc
+	Polyline Edit	Vonallánc szerkesztése
+	Position X	Pozíció X
+	Position Y	Pozíció Y
+	Position Z	Pozíció Z
+	Previous	Előző
+	Previous Change	Előző változás
+	Previous Layer	Előző fóliaállapot
+	Primitives	Alaptestek
+	Print	Nyomtatás
+	Print...	Nyomtatás...
+	Properties	Tulajdonságok
+	Properties Inspector	Tulajdonságfelügyelő
+	Properties:	Tulajdonságok:
+	Proxy	Proxy
+	Purge	Tisztítás
+	Pyramid	Gúla
+	Quadrant	Negyedpont
+	Query Entities	Entitások lekérdezése
+	Quick	Gyors
+	Quick Dimension	Gyorsméretezés
+	Quick Properties	Gyorstulajdonságok
+	Quick Select	Gyorskijelölés
+	Quick Select Properties	Gyorskijelölés tulajdonságai
+	Quick Select...	Gyorskijelölés...
+	QuickCalc	GyorsSzámoló
+	QuickCalc Pick	GyorsSzámoló kijelölés
+	Quit CADaddy	Kilépés a CADaddyből
+	Radius	Sugár
+	Raster Image	Raszterkép
+	Ray	Sugárvonal
+	Read-only	Csak olvasható
+	Real name	Valódi név
+	Realtime	Valós idejű
+	Reassociate Dimensions	Méretek újratársítása
+	Recent	Legutóbbi
+	Recent Commands	Legutóbbi parancsok
+	Recent Input	Legutóbbi bevitel
+	Recover...	Helyreállítás...
+	Rectangle	Téglalap
+	Recalculate Table Formulas	Táblázatképletek újraszámítása
+	Rectangular	Téglalap alakú
+	Rectangular snap	Téglalapos raszter
+	Rectangular Array	Téglalapos tömb
+	Red	Piros
+	Redo	Újra
+	Redo (⇧⌘Z)	Újra (⇧⌘Z)
+	Redraw	Újrarajzolás
+	Regen	Regen
+	Regen All	Összes regenerálása
+	Region	Régió
+	Region/Mass Properties	Régió/tömegtulajdonságok
+	Reinitialize	Újrainicializálás
+	Relative	Relatív
+	Relative to last segment	Az utolsó szakaszhoz viszonyítva
+	Remove Leader	Mutatóvonal eltávolítása
+	Remove the viewport override	Nézetablak-felülírás eltávolítása
+	Rename Dimension Style	Méretstílus átnevezése
+	Rename Layer	Fólia átnevezése
+	Rename Layer State	Fóliaállapot átnevezése
+	Rename Layout	Elrendezés átnevezése
+	Rename Text Style	Szövegstílus átnevezése
+	Rename...	Átnevezés...
+	Repeat {command}	{command} ismétlése
+	Requires a point (x,y, @dx,dy or @d<a).	Egy pont szükséges (x,y, @dx,dy vagy @d<a).
+	Reset Palettes	Paletták visszaállítása
+	Restore	Visszaállítás
+	Restore Layer State	Fóliaállapot visszaállítása
+	Reverse	Megfordítás
+	Reverse the order	Sorrend megfordítása
+	Revision Cloud	Revíziófelhő
+	Revolve	Forgástest
+	Right	Jobbra
+	Rotate	Forgatás
+	Rotation	Elforgatás
+	S	D
+	Save	Mentés
+	Save (⌘S)	Mentés (⌘S)
+	Save As	Mentés másként
+	Save As...	Mentés másként...
+	Save Layer State	Fóliaállapot mentése
+	Save State	Állapot mentése
+	Scale	Léptékezés
+	Search for layer	Fólia keresése
+	Search for parameter	Paraméter keresése
+	Second and next points:	Második és további pontok:
+	Select	Kijelölés
+	Select 2D polyline	2D vonallánc kijelölése
+	Select All	Összes kijelölése
+	Select Objects	Objektumok kijelölése
+	Select Similar	Hasonlók kijelölése
+	Select a 2D polyline.	Jelöljön ki egy 2D vonalláncot.
+	Select a block reference.	Jelöljön ki egy blokkhivatkozást.
+	Select a circle or arc.	Jelöljön ki egy kört vagy ívet.
+	Select a closed polyline	Jelöljön ki egy zárt vonalláncot
+	Select a closed polyline, circle, ellipse or closed spline.	Jelöljön ki egy zárt vonalláncot, kört, ellipszist vagy zárt spline-t.
+	Select a closed polyline.	Jelöljön ki egy zárt vonalláncot.
+	Select a curve as the path.	Jelöljön ki egy görbét útvonalként.
+	Select a dimension constraint type	Válasszon méretkényszertípust
+	Select a line object	Jelöljön ki egy vonalobjektumot
+	Select a line object.	Jelöljön ki egy vonalobjektumot.
+	Select a line or an arc.	Jelöljön ki egy vonalat vagy ívet.
+	Select a line or polyline segment	Jelöljön ki egy vonalat vagy vonalláncszakaszt
+	Select a line, arc or open polyline.	Jelöljön ki egy vonalat, ívet vagy nyitott vonalláncot.
+	Select a line, arc, circle, polyline, ellipse or spline as the path.	Jelöljön ki útvonalként egy vonalat, ívet, kört, vonalláncot, ellipszist vagy spline-t.
+	Select a line, circle, arc or polyline segment.	Jelöljön ki egy vonalat, kört, ívet vagy vonalláncszakaszt.
+	Select a line.	Jelöljön ki egy vonalat.
+	Select a polyline.	Jelöljön ki egy vonalláncot.
+	Select a text, mtext, attribute definition or dimension.	Jelöljön ki egy szöveget, mtextet, attribútumdefiníciót vagy méretet.
+	Select an annotation object	Jelöljön ki egy feliratozó objektumot
+	Select an arc or circle	Jelöljön ki egy ívet vagy kört
+	Select an arc.	Jelöljön ki egy ívet.
+	Select an object	Jelöljön ki egy objektumot
+	Select an object to change or	Jelölje ki a módosítandó objektumot vagy
+	Select an object to measure or	Jelölje ki a mérendő objektumot vagy
+	Select an object.	Jelöljön ki egy objektumot.
+	Select an open curve.	Jelöljön ki egy nyitott görbét.
+	Select an open line, arc, polyline, ellipse arc or spline.	Jelöljön ki egy nyitott vonalat, ívet, vonalláncot, ellipszisívet vagy spline-t.
+	Select arc or circle	Jelöljön ki ívet vagy kört
+	Select arc or polyline arc segment	Jelöljön ki ívet vagy vonallánc-ívszakaszt
+	Select arc style	Válasszon ívstílust
+	Select arc, circle, line	Jelöljön ki ívet, kört, vonalat
+	Select at least two objects to join.	Jelöljön ki legalább két objektumot az összekapcsoláshoz.
+	Select circle or arc to add center mark	Jelölje ki a kört vagy ívet a középpontjel elhelyezéséhez
+	Select closed objects (regions, closed polylines, circles).	Jelöljön ki zárt objektumokat (régiók, zárt vonalláncok, körök).
+	Select first line	Jelölje ki az első vonalat
+	Select first line or arc	Jelölje ki az első vonalat vagy ívet
+	Select first object	Jelölje ki az első objektumot
+	Select first object or	Jelölje ki az első objektumot vagy
+	Select first point	Jelölje ki az első pontot
+	Select nested objects to copy or	Jelölje ki a másolandó beágyazott objektumokat vagy
+	Select object	Jelöljön ki objektumot
+	Select object to dimension	Jelölje ki a méretezendő objektumot
+	Select object to divide	Jelölje ki a felosztandó objektumot
+	Select object to extend or shift-select to trim	Jelölje ki a meghosszabbítandó objektumot, vagy Shifttel jelölje ki a vágáshoz
+	Select object to measure	Jelölje ki a bemérendő objektumot
+	Select object to offset	Jelölje ki az eltolandó objektumot
+	Select object to trim or shift-select to extend	Jelölje ki a vágandó objektumot, vagy Shifttel jelölje ki a meghosszabbításhoz
+	Select objects	Jelöljön ki objektumokat
+	Select objects (crossing window first corner)	Jelöljön ki objektumokat (metsző ablak első sarka)
+	Select objects to array.	Jelölje ki a tömbbe rendezendő objektumokat.
+	Select objects to stretch by crossing-window or crossing-polygon...	Jelölje ki a nyújtandó objektumokat metsző ablakkal vagy metsző sokszöggel...
+	Select objects:	Objektumok kijelölése:
+	Add to Working Set	Hozzáadás a munkakészlethez
+	Edit Reference In-Place	Hivatkozás helyben szerkesztése
+	Save Reference Edits	Hivatkozás-módosítások mentése
+	Working Set	Munkakészlet
+	Xref and Block In-place Editing	Külső hivatkozás és blokk helyben szerkesztése
+	Select one polyline (Multiple is available through the JSON form).	Jelöljön ki egy vonalláncot (a Többszörös opció a JSON-űrlapon érhető el).
+	Select path curve	Jelölje ki az útvonalgörbét
+	Select point or object	Jelöljön ki pontot vagy objektumot
+	Select polyline or	Jelöljön ki vonalláncot vagy
+	Select second line	Jelölje ki a második vonalat
+	Select second line or shift-select to apply corner	Jelölje ki a második vonalat, vagy Shifttel jelölje ki a sarok alkalmazásához
+	Select second object	Jelölje ki a második objektumot
+	Select second object or shift-select to apply corner	Jelölje ki a második objektumot, vagy Shifttel jelölje ki a sarok alkalmazásához
+	Select second point	Jelölje ki a második pontot
+	Select spline	Jelöljön ki spline-t
+	Select symmetry line	Jelölje ki a szimmetriavonalat
+	Select two points	Jelöljön ki két pontot
+	Selection Cycling	Kijelölés léptetése
+	Send to Back	Hátra küldés
+	Set Current	Aktuálissá tétel
+	Set Current Dimension Style	Aktuális méretstílus beállítása
+	Set Current Text Style	Aktuális szövegstílus beállítása
+	Set Current Viewport	Aktuális nézetablak beállítása
+	Set Layer Properties	Fóliatulajdonságok beállítása
+	Set Properties	Tulajdonságok beállítása
+	Set Table Cell	Táblázatcella beállítása
+	Set Table Cell Style	Táblázatcella-stílus beállítása
+	Set Variable	Változó beállítása
+	Set View	Nézet beállítása
+	Share	Megosztás
+	Show	Megjelenítés
+	Show All	Összes megjelenítése
+	Show All Constraint Bars	Összes kényszersáv megjelenítése
+	Show All Dynamic Dimensions	Összes dinamikus méret megjelenítése
+	Show and hide the tools of this category	A kategória eszközeinek megjelenítése és elrejtése
+	Show in Tool Sets	Megjelenítés az eszközkészletekben
+	Show command prompting near the crosshairs	Parancskérések megjelenítése a szálkereszt közelében
+	Show Layer List	Fólialista megjelenítése
+	Show/Hide Lineweight	Vonalvastagság megjelenítése/elrejtése
+	Show/Hide Transparency	Átlátszóság megjelenítése/elrejtése
+	Single Line Text	Egysoros szöveg
+	Single Point	Egy pont
+	Single...	Egyszeri...
+	Smooth	Simítás
+	Snap	Raszter
+	Snap Mode	Raszter mód
+	Snap Mode (F9)	Raszter mód (F9)
+	Snap On (F9)	Raszter be (F9)
+	Snap Overrides	Raszter-felülírások
+	Snap X spacing	Raszter X-köz
+	Snap and Grid	Raszter és rács
+	Snap type	Raszter típusa
+	Solid	Test
+	Sort	Rendezés
+	Specify a point	Adjon meg egy pontot
+	Specify a scale for the hatch pattern	Adja meg a sraffozásminta léptékét
+	Specify a second extension line origin	Adja meg a második méretsegédvonal kezdőpontját
+	Specify an angle for the hatch pattern	Adja meg a sraffozásminta szögét
+	Specify angle end point	Adja meg a szög végpontját
+	Specify angle of dimension line	Adja meg a méretvonal szögét
+	Specify angle of dimension text	Adja meg a méretszöveg szögét
+	Specify angle start point	Adja meg a szög kezdőpontját
+	Specify angle vertex	Adja meg a szög csúcsát
+	Specify angle vertex point	Adja meg a szög csúcspontját
+	Specify arc length dimension location	Adja meg az ívhosszméret helyét
+	Specify axis endpoint of ellipse	Adja meg az ellipszis tengelyének végpontját
+	Specify base diameter	Adja meg az alap átmérőjét
+	Specify base point	Adja meg a bázispontot
+	Specify base point or	Adja meg a bázispontot vagy
+	Specify base point or displacement (drag with the middle mouse button for realtime pan)	Adja meg a bázispontot vagy az elmozdulást (valós idejű pásztázáshoz húzzon a középső egérgombbal)
+	Specify base radius or	Adja meg az alap sugarát vagy
+	Specify center of donut	Adja meg a gyűrű középpontját
+	Specify center of ellipse	Adja meg az ellipszis középpontját
+	Specify center of polygon	Adja meg a sokszög középpontját
+	Specify center point for circle	Adja meg a kör középpontját
+	Specify center point of arc	Adja meg az ív középpontját
+	Specify center point of array	Adja meg a tömb középpontját
+	Specify center point of base	Adja meg az alap középpontját
+	Specify corner of viewport	Adja meg a nézetablak sarkát
+	Specify corner of window, enter a scale factor (nX or nXP)	Adja meg az ablak sarkát, vagy adjon meg léptéktényezőt (nX vagy nXP)
+	Specify diameter of circle	Adja meg a kör átmérőjét
+	Specify dimension arc line location	Adja meg a méretív helyét
+	Specify dimension line location	Adja meg a méretvonal helyét
+	Specify distance between turns	Adja meg a menetek közötti távolságot
+	Specify distance to other axis	Adja meg a távolságot a másik tengelyig
+	Specify end angle	Adja meg a végszöget
+	Specify end point of arc	Adja meg az ív végpontját
+	Specify end point of arc (hold Ctrl to switch direction)	Adja meg az ív végpontját (az irányváltáshoz tartsa lenyomva a Ctrl billentyűt)
+	Specify ending width	Adja meg a végszélességet
+	Specify ending width for next segment	Adja meg a következő szakasz végszélességét
+	Specify endpoint of arc	Adja meg az ív végpontját
+	Specify endpoint of axis	Adja meg a tengely végpontját
+	Specify endpoint of line	Adja meg a vonal végpontját
+	Specify feature location	Adja meg a jellemző helyét
+	Specify fillet radius	Adja meg a lekerekítési sugarat
+	Specify fillet radius for rectangles	Adja meg a téglalapok lekerekítési sugarát
+	Specify first angle endpoint	Adja meg a szög első végpontját
+	Specify first chamfer distance	Adja meg az első letörési távolságot
+	Specify first chamfer distance for rectangles	Adja meg a téglalapok első letörési távolságát
+	Specify first constraint point	Adja meg az első kényszerpontot
+	Specify first corner	Adja meg az első sarkot
+	Specify first corner point	Adja meg az első sarokpontot
+	Specify first destination point	Adja meg az első célpontot
+	Specify first end point of circle's diameter	Adja meg a kör átmérőjének első végpontját
+	Specify first endpoint of edge	Adja meg az él első végpontját
+	Specify first extension line origin	Adja meg az első méretsegédvonal kezdőpontját
+	Specify first point	Adja meg az első pontot
+	Specify first point of mirror line	Adja meg a tükrözési tengely első pontját
+	Specify first point on circle	Adja meg a kör első pontját
+	Specify first point on circle: _tan to	Adja meg a kör első pontját: _tan to
+	Specify first source point	Adja meg az első forráspontot
+	Specify height	Adja meg a magasságot
+	Specify helix height or	Adja meg a csavarvonal magasságát vagy
+	Specify included angle	Adja meg a középponti szöget
+	Specify insertion base point	Adja meg a beszúrási bázispontot
+	Specify insertion point	Adja meg a beszúrási pontot
+	A drawing opened from a file keeps that file's format.	A fájlból megnyitott rajz megtartja a fájl formátumát.
+	An array that would create more objects than this is refused.	Az ennél több objektumot létrehozó tömböt a program elutasítja.
+	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	A CADaddy ezeket a beállításokat, tárgyraszter-módokat és rajzolási kapcsolókat a felhasználói fiókjához menti, és indításkor visszaállítja.
+	Changes apply at once and are kept for next time.	A módosítások azonnal életbe lépnek, és megmaradnak a következő alkalomra.
+	Command line history	Parancssori előzmények
+	Copy as JSON	Másolás JSON-ként
+	Crosshair size	Szálkereszt mérete
+	Crossing selection color:	Metsző kijelölés színe:
+	Display	Megjelenítés
+	Exclude:	Kizárás:
+	Grip size	Fogóméret
+	Grips	Fogók
+	Groups	Csoportok
+	Hatches	Sraffozások
+	Hold Shift to add to the selection	Tartsa lenyomva a Shift billentyűt a kijelöléshez való hozzáadáshoz
+	Indicate selection area	Kijelölési terület jelzése
+	Interface language	Felület nyelve
+	Interface theme	Felület témája
+	Keep the system cursor visible over the drawing area	A rendszerkurzor látható marad a rajzterület fölött
+	Largest array	Legnagyobb tömb
+	Layout paper	Elrendezés papírja
+	Model background	Modell háttere
+	Multiline text	Többsoros szöveg
+	Object grouping	Objektumcsoportosítás
+	Object selection limit for display of grips	Objektumkijelölési korlát a fogók megjelenítéséhez
+	Object snap aperture	Tárgyraszter-apertúra
+	Object snap marker size	Tárgyraszter-jelölő mérete
+	Objects on locked layers	Objektumok zárolt fóliákon
+	Open and Save	Megnyitás és mentés
+	Options	Beállítások
+	Options...	Beállítások...
+	Pickbox size	Kijelölőnégyzet mérete
+	Preview	Előnézet
+	Profiles	Profilok
+	Reset keeps the interface language.	A visszaállítás megtartja a felület nyelvét.
+	Reset to Defaults	Alapértékek visszaállítása
+	Save new drawings as	Új rajzok mentése ebben a formátumban
+	Screen magnifiers, screen readers and recorders follow the system cursor.	A képernyőnagyítók, képernyőolvasók és rögzítők a rendszerkurzort követik.
+	Select objects first, then choose a command	Előbb jelölje ki az objektumokat, majd válasszon parancsot
+	Selection	Kijelölés
+	Selection Area Effect	Kijelölési terület effektusa
+	Selection Preview Filter	Kijelölési előnézet szűrője
+	Selection area opacity:	Kijelölési terület átlátszatlansága:
+	Selection effect color	Kijelölési effektus színe
+	Selection modes	Kijelölési módok
+	Selection preview	Kijelölési előnézet
+	Settings...	Beállítások...
+	Show Quick Properties for selected objects	Gyorstulajdonságok megjelenítése a kijelölt objektumokhoz
+	Show grips	Fogók megjelenítése
+	Snap, grid, polar tracking and Dynamic Input:	Raszter, rács, poláris követés és dinamikus bevitel:
+	Tables	Táblázatok
+	The aperture is how near the cursor must come to a point for an object snap to find it.	Az apertúra azt határozza meg, milyen közel kell a kurzornak egy ponthoz kerülnie, hogy a tárgyraszter megtalálja.
+	User Preferences	Felhasználói beállítások
+	Visual Effect Settings	Vizuális effektusok beállításai
+	Visual Effect Settings...	Vizuális effektusok beállításai...
+	When a command is active	Amikor egy parancs aktív
+	When no command is active	Amikor nincs aktív parancs
+	Window selection color:	Ablakos kijelölés színe:
+	Xrefs	Külső hivatkozások
+	objects	objektum
+	Specify inside diameter of donut	Adja meg a gyűrű belső átmérőjét
+	Specify leader arrowhead location	Adja meg a mutatóvonal nyílhegyének helyét
+	Specify leader endpoint	Adja meg a mutatóvonal végpontját
+	Specify leader landing location	Adja meg a mutatóvonal vállának helyét
+	Specify length for rectangles	Adja meg a téglalapok hosszát
+	Specify length of chord	Adja meg a húr hosszát
+	Specify length of segment	Adja meg a szakasz hosszát
+	Specify line width for rectangles	Adja meg a téglalapok vonalszélességét
+	Specify location for new vertex	Adja meg az új csúcs helyét
+	Specify minimum length of arc	Adja meg az ív minimális hosszát
+	Specify new end point	Adja meg az új végpontot
+	Specify new location for marked vertex	Adja meg a megjelölt csúcs új helyét
+	Specify new width for all segments	Adja meg az összes szakasz új szélességét
+	Specify next point	Adja meg a következő pontot
+	Specify offset distance	Adja meg az eltolási távolságot
+	Specify offset distance or	Adja meg az eltolási távolságot vagy
+	Specify opposite corner	Adja meg az átellenes sarkot
+	Specify other corner point	Adja meg a másik sarokpontot
+	Specify other endpoint of axis	Adja meg a tengely másik végpontját
+	Specify outside diameter of donut	Adja meg a gyűrű külső átmérőjét
+	Specify point	Adja meg a pontot
+	Specify point on object for first tangent of circle	Adja meg az objektum pontját a kör első érintőjéhez
+	Specify point on object for second tangent of circle	Adja meg az objektum pontját a kör második érintőjéhez
+	Specify point on side to offset	Adja meg az eltolás oldalán lévő pontot
+	Specify radius of arc	Adja meg az ív sugarát
+	Specify radius of circle	Adja meg a kör sugarát
+	Specify rotation angle	Adja meg az elforgatási szöget
+	Specify rotation angle of text	Adja meg a szöveg elforgatási szögét
+	Specify rotation angle or	Adja meg az elforgatási szöget vagy
+	Specify scale factor	Adja meg a léptéktényezőt
+	Specify second angle endpoint	Adja meg a szög második végpontját
+	Specify second break point	Adja meg a második megszakítási pontot
+	Specify second chamfer distance for rectangles	Adja meg a téglalapok második letörési távolságát
+	Specify second constraint point	Adja meg a második kényszerpontot
+	Specify second destination point	Adja meg a második célpontot
+	Specify second end point of circle's diameter	Adja meg a kör átmérőjének második végpontját
+	Specify second endpoint of edge	Adja meg az él második végpontját
+	Specify second extension line origin	Adja meg a második méretsegédvonal kezdőpontját
+	Specify second point	Adja meg a második pontot
+	Specify second point of arc	Adja meg az ív második pontját
+	Specify second point of mirror line	Adja meg a tükrözési tengely második pontját
+	Specify second point on circle	Adja meg a kör második pontját
+	Specify second point on circle: _tan to	Adja meg a kör második pontját: _tan to
+	Specify second point or <use first point as displacement>	Adja meg a második pontot vagy <első pont használata elmozdulásként>
+	Specify second source point	Adja meg a második forráspontot
+	Specify side to offset	Adja meg az eltolás oldalát
+	Specify start angle	Adja meg a kezdőszöget
+	Specify start point	Adja meg a kezdőpontot
+	Specify start point of arc	Adja meg az ív kezdőpontját
+	Specify start point of polyline	Adja meg a vonallánc kezdőpontját
+	Specify start point of text	Adja meg a szöveg kezdőpontját
+	Specify starting width	Adja meg a kezdőszélességet
+	Specify starting width for next segment	Adja meg a következő szakasz kezdőszélességét
+	Specify tangent direction for the start point of arc	Adja meg az ív kezdőpontjának érintőirányát
+	Specify the elevation for rectangles	Adja meg a téglalapok emelését
+	Specify thickness for rectangles	Adja meg a téglalapok vastagságát
+	Specify third point on circle	Adja meg a kör harmadik pontját
+	Specify third point on circle: _tan to	Adja meg a kör harmadik pontját: _tan to
+	Specify third source point or <continue>	Adja meg a harmadik forráspontot vagy <folytatás>
+	Specify through point	Adja meg az átmenő pontot
+	Specify top diameter	Adja meg a felső átmérőt
+	Specify top radius or	Adja meg a felső sugarat vagy
+	Specify total angle	Adja meg a teljes szöget
+	Specify total length or	Adja meg a teljes hosszt vagy
+	Specify width for rectangles	Adja meg a téglalapok szélességét
+	Sphere	Gömb
+	Spline	Spline
+	Spline Edit	Spline szerkesztése
+	Stack (type 1/2 then select)	Halmozás (írja be: 1/2, majd jelölje ki)
+	Standard	Standard
+	Start	Kezdés
+	Start Width	Kezdőszélesség
+	Start X	Kezdőpont X
+	Start Y	Kezdőpont Y
+	Start angle	Kezdőszög
+	Start, Center, Angle	Kezdőpont, középpont, szög
+	Start, Center, End	Kezdőpont, középpont, végpont
+	Start, Center, Length	Kezdőpont, középpont, hossz
+	Start, End, Angle	Kezdőpont, végpont, szög
+	Start, End, Direction	Kezdőpont, végpont, irány
+	Start, End, Radius	Kezdőpont, végpont, sugár
+	Status	Állapot
+	Status Bar	Állapotsor
+	Stretch	Nyújtás
+	Style: Standard	Stílus: Standard
+	Subtract	Kivonás
+	Sweep	Pásztázott test
+	Switch Drawing	Rajz váltása
+	Switch Layout	Elrendezés váltása
+	Switch between model space in a viewport and paper space	Váltás a nézetablakbeli modelltér és a papírtér között
+	Symmetric	Szimmetrikus
+	Synchronize Attributes	Attribútumok szinkronizálása
+	To	Ide
+	Toggle PICKADD (off: each pick replaces the selection)	PICKADD kapcsolása (ki: minden kijelölés lecseréli az előzőt)
+	Toggle PICKADD (on: picks add to the selection)	PICKADD kapcsolása (be: a kijelölések hozzáadódnak)
+	TOP	FELÜL
+	Table	Táblázat
+	Table Breaks	Táblázattörések
+	Table Cell Style	Táblázatcella-stílus
+	Table Style...	Táblázatstílus...
+	Table style	Táblázatstílus
+	Table...	Táblázat...
+	Tan, Tan, Radius	Érintő, érintő, sugár
+	Tan, Tan, Tan	Érintő, érintő, érintő
+	Tangent	Érintő
+	Temporary track point	Ideiglenes követési pont
+	Text	Szöveg
+	Text Editor	Szövegszerkesztő
+	Text Height	Szövegmagasság
+	Text Style...	Szövegstílus...
+	Text height	Szövegmagasság
+	Text override	Szöveg felülírása
+	Text style	Szövegstílus
+	Thaw All Layers	Összes fólia felolvasztása
+	Thaw Layer	Fólia felolvasztása
+	There is nothing here yet.	Itt még nincs semmi.
+	Thickness	Vastagság
+	Time	Idő
+	To get started, create or open a drawing.	Kezdésként hozzon létre vagy nyisson meg egy rajzot.
+	Tool Bar	Eszköztár
+	Tool Sets	Eszközkészletek
+	Tools	Eszközök
+	Torus	Tórusz
+	Trace	Nyomvonal
+	Track orthogonally only	Csak ortogonális követés
+	Track using all polar angle settings	Követés az összes poláris szögbeállítással
+	Transparency	Átlátszóság
+	Trim	Vágás
+	True Color	Valódi szín
+	Turn All Layers On	Összes fólia bekapcsolása
+	Turn Off Layer	Fólia kikapcsolása
+	Turn On Layer	Fólia bekapcsolása
+	Turn Quick Properties off (QPMODE)	Gyorstulajdonságok kikapcsolása (QPMODE)
+	Type	Típus
+	Type a command	Írjon be egy parancsot
+	Type text; Enter starts a new paragraph	Írja be a szöveget; az Enter új bekezdést kezd
+	UCS Icon	UCS ikon
+	Undo	Visszavonás
+	Undo (⌘Z)	Visszavonás (⌘Z)
+	Ungroup	Csoport bontása
+	Union	Egyesítés
+	Unisolate Layer	Fólia elkülönítésének megszüntetése
+	Units Conversion	Mértékegység-átváltás
+	Units...	Mértékegységek...
+	Unlock Layer	Fólia feloldása
+	Unlock viewport	Nézetablak feloldása
+	Unmerge Cells	Cellák szétválasztása
+	Unsaved Layer State	Nem mentett fóliaállapot
+	Up	Fel
+	Update Data Links	Adatkapcsolatok frissítése
+	Update	Frissítés
+	Use System Setting	Rendszerbeállítás használata
+	User	Felhasználó
+	User Parameters	Felhasználói paraméterek
+	Username	Felhasználónév
+	Volume	Térfogat
+	VP Color	NA szín
+	VP Freeze	NA fagyasztás
+	Value	Érték
+	Value:	Érték:
+	Variables	Változók
+	Version	Verzió
+	Version 2000	2000-es verzió
+	Version 2004	2004-es verzió
+	Version 2007	2007-es verzió
+	Version 2010	2010-es verzió
+	Version 2013	2013-as verzió
+	Version 2018	2018-as verzió
+	Version {version}	{version} verzió
+	Vertical	Függőleges
+	VerticalDistance	Függőleges távolság
+	View	Nézet
+	ViewCube	ViewCube
+	Viewport	Nézetablak
+	Viewport Layer Freeze	Fólia fagyasztása a nézetablakban
+	Viewport Properties	Nézetablak tulajdonságai
+	Viewport is locked	A nézetablak zárolva van
+	Viewport scale	Nézetablak léptéke
+	Viewport {id}	{id}. nézetablak
+	Viewports	Nézetablakok
+	W	Ny
+	WCS ⌄	WCS ⌄
+	White	Fehér
+	Width factor	Szélességi tényező
+	Window	Ablak
+	Wipeout	Takarás
+	Workspace Switching	Munkaterület váltása
+	Write Block	Blokk kiírása
+	Xline	Szerkesztővonal
+	Yellow	Sárga
+	Yes	Igen
+	Zoom	Nagyítás
+	Zoom All	Teljes nagyítás
+	Zoom Dynamic	Dinamikus nagyítás
+	Zoom Extents	Kiterjedésre nagyítás
+	Zoom In	Nagyítás
+	Zoom Object	Objektumra nagyítás
+	Zoom Out	Kicsinyítés
+	Zoom Previous	Előző nagyítás
+	Zoom Realtime	Valós idejű nagyítás
+	Zoom Window	Ablakos nagyítás
+	error	hiba
+	{contributors} · {commits}	{contributors} · {commits}
+	{kind} (constraint {id})	{kind} ({id}. kényszer)
+	{kind} constraint {name} = {expression}  (double-click to edit)	{kind} kényszer: {name} = {expression}  (szerkesztés dupla kattintással)
+	{name}: {distance} < {angle}°	{name}: {distance} < {angle}°
+	ƒx  New User Parameter	ƒx  Új felhasználói paraméter
+	ΔLOC	ΔLOC
+	−Bin	−Bin
+	−LOC	−LOC
+	⌘↩ to finish	⌘↩ a befejezéshez
+@plural	{n} commit	{n} véglegesítés|{n} véglegesítés
+@plural	{n} contributor	{n} közreműködő|{n} közreműködő
+	Drawing as bytes	Rajz bájtokként
+	Services	Szolgáltatások
+	Hide CADaddy	CADaddy elrejtése
+	Hide Others	Többi elrejtése
+	Accessibility	Kisegítő lehetőségek
+	Show System Cursor	Rendszerkurzor megjelenítése
+	Animation Effects	Animációs effektusok
+	Animation effects	Animációs effektusok
+	Import...	Importálás...
+	Export...	Exportálás...
+	Batch Publish...	Kötegelt közzététel...
+	Scale List...	Léptéklista...
+	Annotative Object Scale	Feliratozó objektum léptéke
+	Add Current Scale	Aktuális lépték hozzáadása
+	Delete Current Scale	Aktuális lépték törlése
+	Add/Delete Scales...	Léptékek hozzáadása/törlése...
+	Synchronize Multiple-scale Positions	Többléptékű pozíciók szinkronizálása
+	Annotative Update	Feliratozás frissítése
+	Show Annotative Objects	Feliratozó objektumok megjelenítése
+	Current Scale Only	Csak az aktuális lépték
+	All Scales	Minden lépték
+	Drawing Recovery Manager...	Rajz-helyreállítás kezelő...
+	Tolerance...	Tűrés...
+	Add Vertex	Csúcspont hozzáadása
+	Remove Vertex	Csúcspont eltávolítása
+	Convert to Arc	Átalakítás ívvé
+	Convert to Line	Átalakítás vonallá
+	Stretch Vertex	Csúcspont nyújtása
+	Edit Array	Tömb szerkesztése
+	Close Array Editing	Tömbszerkesztés bezárása
+	Multiline...	Multivonal...
+	Multiline Style...	Multivonalstílus...
+	Solid Editing	Testszerkesztés
+	3D Mouse...	3D egér...
+	3D Mouse	3D egér
+	Calibrate 3D Mouse	3D egér kalibrálása
+	3D Mouse Navigation	3D egeres navigáció
+	3D mouse input is unavailable on this platform	A 3D egér bemenete ezen a platformon nem érhető el
+	No supported 3D mouse found	Nem található támogatott 3D egér
+	Release the 3D mouse to calibrate its resting position	Engedje el a 3D egeret a nyugalmi helyzet kalibrálásához
+	3D mouse connected	3D egér csatlakoztatva
+	3D mouse busy, possibly 3DxWare or missing device permissions	A 3D egér foglalt; lehet, hogy a 3DxWare használja, vagy hiányzik az eszközengedély
+	3D mouse disconnected	3D egér leválasztva
+	3D mouse input could not be started	A 3D egér bemenete nem indítható el
+	Enable 3D mouse navigation	3D egeres navigáció engedélyezése
+	Pan sensitivity	Pásztázási érzékenység
+	Zoom sensitivity	Nagyítási érzékenység
+	Reverse zoom direction	Fordított nagyítási irány
+	Calibrate	Kalibrálás
+	Move sideways to pan; push/pull or twist to zoom.	Oldalra mozdítva pásztáz; tolva-húzva vagy elforgatva nagyít.
+	Left device button: zoom extents. Right device button: calibrate.	Bal eszközgomb: kiterjedésre nagyítás. Jobb eszközgomb: kalibrálás.
+	More toolbar commands	További eszköztárparancsok
+	Default save version	Alapértelmezett mentési verzió
+	Automatic save every	Automatikus mentés gyakorisága
+	min	perc
+	Automatic save file location	Automatikus mentés helye
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	A még fájl nélküli rajzok az alapértelmezett verzióban mentődnek. 0 perc kikapcsolja az automatikus mentést.
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	Időérzékeny jobb kattintás: rövid kattintás Enter, nyomva tartás megnyitja a menüt
+	Turned off, a right-click while a command runs always opens the shortcut menu.	Kikapcsolva a jobb kattintás parancs futása közben mindig a helyi menüt nyitja meg.
+	Hatch Pattern	Sraffozási minta
+	Search for pattern	Minta keresése
+	Run Script...	Parancsfájl futtatása...
+	Query Texts	Szövegek lekérdezése
+	Hatch Pick	Sraffozás kijelölése
+	Hatch and Gradient	Sraffozás és színátmenet
+	Color 1	1. szín
+	Color 2	2. szín
+	Shape	Alak
+	Curved	Görbült
+	Spherical	Gömb
+	Hemispherical	Félgömb
+	Inverted	Fordított
+	Centered	Középre igazított
+	Hatch origin	Sraffozás origója
+	Use current origin	Aktuális origó használata
+	Specified origin	Megadott origó
+	Click to set new origin	Kattintson az új origó megadásához
+	Default to boundary extents	Alapértelmezés: a határ kiterjedése
+	Bottom left	Bal alsó
+	Bottom right	Jobb alsó
+	Top left	Bal felső
+	Top right	Jobb felső
+	Boundaries	Határok
+	Add: Pick points	Hozzáadás: pontok kijelölése
+	Add: Select objects	Hozzáadás: objektumok kiválasztása
+	Boundaries picked: {n}	Kijelölt határok: {n}
+	Associative	Asszociatív
+	Create separate hatches	Különálló sraffozások létrehozása
+	Island detection	Szigetfelismerés
+	Normal	Normál
+	Outer	Külső
+	Ignore	Figyelmen kívül hagyás
+	Origin: {x}, {y}	Origó: {x}, {y}
+	Sheet Books to PDF...	Lapkönyvek PDF-be...
+	Not a number or distance: {text}	Nem szám vagy távolság: {text}
+	Dynamic Block Data	Dinamikus blokk adatai
+	Custom	Egyéni
+	Dynamic Block Reference	Dinamikus blokkhivatkozás
+	Set Dynamic Property	Dinamikus tulajdonság beállítása
+	Dynamic Block Grips	Dinamikus blokk fogópontjai
+	Drag Dynamic Grip	Dinamikus fogópont húzása
+	Save Block	Blokk mentése
+	Save Block As	Blokk mentése másként
+	Close Block Editor	Blokkszerkesztő bezárása
+	Unsaved changes	Nem mentett módosítások
+	Edit Block Definition	Blokkdefiníció szerkesztése
+	Block to create or edit	Létrehozandó vagy szerkesztendő blokk
+	Open in Block Editor	Megnyitás a Blokkszerkesztőben
+	This drawing	Ez a rajz
+	contains authoring elements. Open in Block Editor?	szerkesztési elemeket tartalmaz. Megnyitja a Blokkszerkesztőben?
+	New block	Új blokk
+	Italic	Dőlt
+	Underline	Aláhúzott
+	Overline	Felülhúzott
+	Justify	Sorkizárt
+	Text color	Szövegszín
+	Click the ruler to add a tab stop, right-click to remove one	Kattintson a vonalzóra tabulátor hozzáadásához, jobb kattintással eltávolíthatja
+	Ribbon	Szalag
+	Close Ribbon	Szalag bezárása
+	Menu Bar	Menüsor
+	Top	Felülnézet
+	Bottom	Alulnézet
+	Front	Elölnézet
+	Back	Hátulnézet
+	SW Isometric	DNy izometrikus
+	SE Isometric	DK izometrikus
+	NE Isometric	ÉK izometrikus
+	NW Isometric	ÉNy izometrikus
+	3D Views	3D nézetek
+	Plan View	Alaprajzi nézet
+	World UCS	Világ FKR
+	View Direction	Nézési irány
+	2D Wireframe	2D drótváz
+	Custom View	Egyéni nézet
+	Convert PDF to DWG...	PDF átalakítása DWG-vé...
+	Convert PDF to DWG	PDF átalakítása DWG-vé
+	PDF Import...	PDF importálása...
+	PDF Import	PDF importálása
+	Page	Oldal
+	PDF layers (else by colour and line weight)	PDF-rétegek (egyébként szín és vonalvastagság szerint)
+	By colour and line weight	Szín és vonalvastagság szerint
+	Object layers (PDF_Geometry, PDF_Text, …)	Objektumfóliák (PDF_Geometry, PDF_Text, …)
+	Import text	Szöveg importálása
+	Join line pieces and make circles	Vonaldarabok összefűzése és körök létrehozása
+	Keep white fills (masks)	Fehér kitöltések (maszkok) megtartása
+	Import raster images (saved as PNG files)	Raszterképek importálása (PNG-fájlokként mentve)
+	Add a layout that plots like the sheet	A laphoz hasonlóan nyomtatódó elrendezés hozzáadása
+	Convert and Save as DWG…	Átalakítás és mentés DWG-ként…
+	Walk	Séta
+	Report a Bug...	Hiba bejelentése...
+	Request a Feature...	Funkció kérése...
+	Donate / Improve	Adományozás / Fejlesztés
+	Improve CADaddy	A CADaddy fejlesztése
+	Or email {address}	Vagy írjon e-mailt: {address}
+	Support CADaddy	A CADaddy támogatása
+	CADaddy is free, and it always will be.	A CADaddy ingyenes, és mindig az is marad.
+	No ads, no subscription. If CADaddy saves you time, a small donation pays for the AI time that builds the next features.	Nincs reklám, nincs előfizetés. Ha a CADaddy időt spórol Önnek, egy kis adomány fedezi a következő funkciókat építő MI költségét.
+	Report a bug or request a feature	Hiba bejelentése vagy funkció kérése
+	Support CADaddy...	A CADaddy támogatása...
+	Array (classic)	Tömb (klasszikus)
+	Change	Módosítás
+	Change Properties	Tulajdonságok módosítása
+	Quick Leader	Gyorsmutató
+	Symbol...	Szimbólum...
+	List Symbols	Szimbólumok listázása
+	Symbols	Szimbólumok
+	Search symbols	Szimbólumok keresése
+	No symbols match.	Nincs egyező szimbólum.
+	Plumbing fixtures	Vízvezeték-szerelvények
+	Plumbing piping	Vízvezetékek
+	Computer-aided design and drafting for Windows, Mac and Linux, written in Rust.	Számítógépes tervezés és rajzolás Windowsra, Macre és Linuxra, Rust nyelven írva.
+	Includes open-source components: see NOTICE.	Nyílt forráskódú összetevőket tartalmaz: lásd NOTICE.
+	Free to use. Not affiliated with Autodesk, Inc.	Ingyenesen használható. Nem áll kapcsolatban az Autodesk, Inc. céggel.
+	Electrical devices	Villamos eszközök
+	Lighting	Világítás
+	Power and distribution	Erősáram és elosztás
+	Low voltage	Gyengeáram
+	Fire alarm	Tűzjelzés
+	Check for Updates...	Frissítések keresése...
+	Check for updates automatically	Frissítések automatikus keresése
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	A CADaddy naponta egyszer lekérdezi a GitHubtól a legújabb verziószámot. Önről és a rajzairól semmi nem kerül elküldésre.
+	Checking for updates...	Frissítések keresése...
+	CADaddy {v} is the latest version.	A CADaddy {v} a legújabb verzió.
+	CADaddy {v} is available	Elérhető a CADaddy {v}
+	You have {v}. Updating keeps your drawings and settings.	Az Ön verziója: {v}. A frissítés megtartja a rajzokat és a beállításokat.
+	Downloading CADaddy {v}...	CADaddy {v} letöltése...
+	CADaddy {v} is ready to install	A CADaddy {v} telepítésre kész
+	It installs when you close CADaddy. Restart now to update right away.	A CADaddy bezárásakor települ. Indítsa újra most az azonnali frissítéshez.
+	Couldn't update CADaddy	A CADaddy nem frissíthető
+	Download	Letöltés
+	What's New	Újdonságok
+	Later	Később
+	Skip This Version	Verzió kihagyása
+	Restart Now	Újraindítás most
+	When I Close CADaddy	A CADaddy bezárásakor
+	Download Page	Letöltési oldal
+	Hide	Elrejtés
+	The current layer is being turned off	Az aktuális fólia kikapcsolásra kerül
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	A(z) „{layer}” fólia az aktuális fólia. Az erre rajzolt objektumok nem látszanak, amíg vissza nem kapcsolja.
+	Keep the Current Layer On	Aktuális fólia bekapcsolva hagyása
+	Turn the Current Layer Off	Aktuális fólia kikapcsolása
+	Quantity Takeoff	Mennyiségkimutatás
+	Dimension Style	Méretstílus
+	Text Style	Szövegstílus
+	Xref	Külső hivatkozás
+	Raster Image Reference...	Raszterkép-hivatkozás...
+	Window Lasso	Ablakos lasszó
+	Crossing Lasso	Metsző lasszó
+	Fence Lasso	Kerítés lasszó
+	Press Space to cycle options	A szóköz lenyomásával válthat a lehetőségek között
+	Burst	Szétrobbantás
+	Convert to Mtext	Átalakítás Mtext-té
+	View Twist	Nézet elforgatása
+	Let AI agents control CADaddy	MI-ügynökök vezérelhetik a CADaddyt
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	A Claude-összekötő és a számítógépen futó más ügynökök ekkor rajzokat nyithatnak meg, szerkeszthetnek, menthetnek és zárhatnak be ebben az ablakban. A számítógépen kívülről semmi nem csatlakozhat. A CADaddy következő indításakor lép érvénybe.
+	Base Point	Bázispont
+	Column Spacing	Oszloptávolság
+	Column Count	Oszlopok száma
+	Row Spacing	Sortávolság
+	Row Count	Sorok száma
+	Row and Column Count	Sorok és oszlopok száma
+	Level Spacing	Szinttávolság
+	Level Count	Szintek száma
+	Item Spacing	Elemtávolság
+	Item Count	Elemek száma
+	Total column spacing	Teljes oszloptávolság
+	Total row spacing	Teljes sortávolság
+	Total row and column spacing	Teljes sor- és oszloptávolság
+	Total level spacing	Teljes szinttávolság
+	Fill angle	Kitöltési szög
+	Stretch radius	Sugár nyújtása
+	Array Grips	Tömb fogópontjai
+	Edit Array with a Grip	Tömb szerkesztése fogóponttal
+	Open Drawings	Megnyitott rajzok
+	Close Drawing	Rajz bezárása
+	Close All Drawings	Minden rajz bezárása
+	Export Comparison Report...	Összehasonlítási jelentés exportálása...
+	Select All Layouts	Minden elrendezés kijelölése
+	Move or Copy...	Áthelyezés vagy másolás...
+	Move or Copy	Áthelyezés vagy másolás
+	Move or copy layout "{name}"	A(z) „{name}” elrendezés áthelyezése vagy másolása
+	Before layout:	Elrendezés elé:
+	(move to end)	(áthelyezés a végére)
+	Create a copy	Másolat létrehozása
+	A drawing keeps at least one layout.	Egy rajzban legalább egy elrendezésnek maradnia kell.
+	Move Layout	Elrendezés áthelyezése
+	Background	Háttér
+	Text fill	Szövegkitöltés
+	Text fill color	Szövegkitöltés színe
+	Text reads right to left	Jobbról balra olvasott szöveg
+	Placing text places the dimension line	A szöveg elhelyezése a méretvonalat is elhelyezi
+	Alternate tolerance precision	Alternatív tűrés pontossága
+	Alternate tolerance zero suppression	Alternatív tűrés nullaelhagyása
+	Linear jog height (× text height)	Lineáris törés magassága (× szövegmagasság)
+	Break size	Megszakítás mérete
+	Express Tools	Express Tools
+	Break-line Symbol	Törésvonal-szimbólum
+	Replace Block...	Blokk cseréje...
+	Move/Copy/Rotate	Áthelyezés/Másolás/Forgatás
+	Remove boundaries	Határok eltávolítása
+	Inherit Properties	Tulajdonságok átvétele
+	Nothing to preview yet.	Még nincs mit előnézetben megjeleníteni.
+	Property Settings	Tulajdonság-beállítások
+	Basic Properties	Alapvető tulajdonságok
+	Special Properties	Speciális tulajdonságok
+	Plot Style	Nyomtatási stílus
+	Material	Anyag
+	Shadow display	Árnyék megjelenítése
+	Center object	Objektum középre
+	Move with Dim Line	Mozgatás a méretvonallal
+	Move Text Only	Csak a szöveg mozgatása
+	Above Dim Line	Méretvonal fölött
+	Center Vertically	Függőlegesen középre
+	Reset Text Position	Szöveghelyzet visszaállítása
+	Continue Dimension	Méret folytatása
+	Baseline Dimension	Bázisvonalas méret
+	Flip Arrow	Nyíl megfordítása
+	Lengthen Landing	Kivezetés meghosszabbítása
+	Origin Point	Kezdőpont
+	Hatch Angle	Sraffozás szöge
+	Hatch Scale	Sraffozás léptéke
+	Edit Tolerance	Tűrés szerkesztése
+	Geometric Tolerance	Geometriai tűrés
+	Geometric characteristic	Geometriai jellemző
+	Material condition	Anyagállapot
+	No symbol	Nincs szimbólum
+	Projected Tolerance Zone	Vetített tűrésmező
+	Datum Identifier	Bázisazonosító
+	Sym	Szim
+	Tolerance 1	1. tűrés
+	Tolerance 2	2. tűrés
+	Datum 1	1. bázis
+	Datum 2	2. bázis
+	Datum 3	3. bázis
+	PDF Underlay...	PDF alátét...
+	Clip PDF Underlay	PDF alátét vágása
+	Adjust PDF Underlay	PDF alátét beállítása
+	PDF Underlay Layers	PDF alátét rétegei
+	Unused items in this drawing	Nem használt elemek ebben a rajzban
+	Purge Checked Items	Bejelölt elemek tisztítása
+	Purge All	Összes tisztítása
+	Items purged: {count}	Tisztított elemek: {count}
+	Find what:	Keresett szöveg:
+	Replace with:	Csere erre:
+	Match case	Kis- és nagybetűk megkülönböztetése
+	Find whole words only	Csak egész szavak keresése
+	Find	Keresés
+	Replace All	Összes cseréje
+	Matches replaced: {count} (objects: {objects})	Lecserélt találatok: {count} (objektumok: {objects})
+	Matches found and selected: {count} (objects: {objects})	Talált és kijelölt egyezések: {count} (objektumok: {objects})
+	Select Color	Szín kiválasztása
+	Dimension styles	Méretstílusok
+	Linetypes	Vonaltípusok
+	Multileader styles	Multimutató-stílusok
+	Multiline styles	Multivonalstílusok
+	Table styles	Táblázatstílusok
+	Text styles	Szövegstílusok
+	Zero-length geometry	Nulla hosszúságú geometria
+	Empty text objects	Üres szövegobjektumok
+	Palette Windows	Palettaablakok
+	Dock	Dokkolás
+	Back into the main window	Vissza a főablakba
+	Dock Palette	Paletta dokkolása
+	Float in Own Window	Lebegtetés saját ablakban
+	Drawings (CDY, DWG, DXF)	Rajzok (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	CADaddy-rajz (CDY)
+	CADaddy drawing (.cdy)	CADaddy-rajz (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	DWG-másolat mentése is CADaddy-rajz (.cdy) mentésekor
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	A CADaddy-rajz mindent megőriz; a DWG- és DXF-fájlok nem feltétlenül (mentéskor jelzi, mi vész el).
+	Field...	Mező...
+	Update Fields	Mezők frissítése
+	Change Text Case	Kis- és nagybetűk módosítása
+	Auto Number	Automatikus számozás
+	Explode Text	Szöveg szétrobbantása
+	Arc Aligned Text	Ívre igazított szöveg
+	Data Extraction	Adatkinyerés
+	Data source	Adatforrás
+	Objects	Objektumok
+	Output	Kimenet
+	Other drawings:	Más rajzok:
+	Add Drawings...	Rajzok hozzáadása...
+	Open Settings...	Beállítások megnyitása...
+	Start from a saved .dxe settings file	Indítás mentett .dxe beállításfájlból
+	Block names	Blokknevek
+	Include blocks inside blocks	Blokkokon belüli blokkok bevonása
+	Other objects:	Egyéb objektumok:
+	The drawing has no other objects.	A rajzban nincsenek egyéb objektumok.
+	Properties to extract:	Kinyerendő tulajdonságok:
+	Attribute tags	Attribútumcímkék
+	Combine identical rows	Azonos sorok összevonása
+	Insert a table	Táblázat beszúrása
+	Insertion point	Beszúrási pont
+	Title	Cím
+	Write a file (.csv for spreadsheets, .txt tab-separated)	Fájl írása (.csv táblázatkezelőhöz, .txt tabulátorral tagolt)
+	Browse...	Tallózás...
+	Save Settings...	Beállítások mentése...
+	Save these choices to a .dxe file to use again	A választások mentése .dxe fájlba későbbi felhasználásra
+	< Back	< Vissza
+	Next >	Tovább >
+	Finish	Befejezés
+	UCS	UCS
+	Plan View (World)	Alaprajzi nézet (Világ)
+	New UCS	Új UCS
+	World	Világ
+	Current UCS	Aktuális UCS
+	World (WCS)	Világ (WCS)
+	Unnamed	Névtelen
+	Hide UCS Icon	UCS-ikon elrejtése
+	WCS	WCS
+	Spelling	Helyesírás
+	Check Spelling	Helyesírás-ellenőrzés
+	Where to check	Ellenőrzés helye
+	Selected objects	Kijelölt objektumok
+	Not in dictionary:	Nincs a szótárban:
+	Suggestions:	Javaslatok:
+	Ignore All	Összes kihagyása
+	Change All	Összes módosítása
+	Add to Dictionary	Hozzáadás a szótárhoz
+	Main dictionary:	Fő szótár:
+	American English	Amerikai angol
+	Custom dictionary:	Egyéni szótár:
+	Spelling check complete.	A helyesírás-ellenőrzés befejeződött.
+	Hyperlink...	Hivatkozás...
+	Select Objects for a Hyperlink	Objektumok kiválasztása hivatkozáshoz
+	Open Hyperlink	Hivatkozás megnyitása
+	Insert Hyperlink	Hivatkozás beszúrása
+	Edit Hyperlink	Hivatkozás szerkesztése
+	Text to display	Megjelenítendő szöveg
+	File or web page	Fájl vagy weboldal
+	Named location	Elnevezett hely
+	A named location with no file or web page is a layout or view of this drawing.	A fájl vagy weboldal nélküli elnevezett hely e rajz egy elrendezése vagy nézete.
+	Remove Link	Hivatkozás eltávolítása
+	⌘-click to follow the link	⌘+kattintás a hivatkozás követéséhez
+	Ctrl+click to follow the link	Ctrl+kattintás a hivatkozás követéséhez
+	Materials Browser...	Anyagböngésző...
+	Attach by Layer	Csatolás fólia szerint
+	Material Mapping	Anyagleképezés
+	New Material	Új anyag
+	Edit Material	Anyag szerkesztése
+	Delete Material	Anyag törlése
+	Assign Material	Anyag hozzárendelése
+	Materials Browser	Anyagböngésző
+	Search	Keresés
+	Library	Könyvtár
+	Add to drawing	Hozzáadás a rajzhoz
+	In this drawing	Ebben a rajzban
+	No materials yet: add one from the library.	Még nincsenek anyagok: adjon hozzá egyet a könyvtárból.
+	Colour	Szín
+	Roughness	Érdesség
+	Metallic	Fémesség
+	Opacity	Átlátszatlanság
+	Mapping	Leképezés
+	Tile size	Csempeméret
+	Assign to selection ({n})	Hozzárendelés a kijelöléshez ({n})
+	Attach to layer	Csatolás fóliához
+	Render	Renderelés
+	Edit Layer State	Fóliaállapot szerkesztése
+	Export Layer State	Fóliaállapot exportálása
+	Import Layer State	Fóliaállapot importálása
+	New Layer Filter	Új fóliaszűrő
+	Edit Layer Filter	Fóliaszűrő szerkesztése
+	Delete Layer Filter	Fóliaszűrő törlése
+	List Layer Filters	Fóliaszűrők listázása
+	Layers in Filter	Fóliák a szűrőben
+	Layer States Manager	Fóliaállapot-kezelő
+	Invert filter	Szűrő megfordítása
+	New Property Filter...	Új tulajdonságszűrő...
+	New Group Filter	Új csoportszűrő
+	Add Layer	Fólia hozzáadása
+	Remove Layer	Fólia eltávolítása
+	Layer Filter Properties	Fóliaszűrő tulajdonságai
+	Filter name	Szűrő neve
+	Within	Belül
+	Any	Bármely
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	Minták: * bármi, ? egy karakter, # egy számjegy; vesszővel elválasztva; ~ kizár.
+	Layer states	Fóliaállapotok
+	Turn off layers not found in layer state	A fóliaállapotban nem szereplő fóliák kikapcsolása
+	Layer properties to restore	Visszaállítandó fóliatulajdonságok
+	On / Off	Be / Ki
+	Frozen / Thawed	Fagyasztott / Felolvasztott
+	Locked / Unlocked	Zárolt / Feloldott
+	Plot / No Plot	Nyomtat / Nem nyomtat
+	Layers in "{name}"	Fóliák itt: „{name}”
+	Remove from the layer state	Eltávolítás a fóliaállapotból
+	New...	Új...
+	Save the layers as they are now in this state	A fóliák jelenlegi állapotának mentése ebbe az állapotba
+	Edit...	Szerkesztés...
+	Rename	Átnevezés
+	New layer state name	Új fóliaállapot neve
+	New name	Új név
+	Visual Style	Vizuális stílus
+	Visual Styles	Vizuális stílusok
+	Wireframe	Drótváz
+	Hidden	Rejtett
+	Shaded	Árnyalt
+	Shaded with Edges	Árnyalt élekkel
+	Realistic	Valósághű
+	Mesh	Háló
+	Polyface Mesh	Sokoldalú háló
+	Polygon Mesh	Sokszögháló
+	Fly	Repülés
+	Walk and Fly	Séta és repülés
+	3D Library...	3D könyvtár...
+	Add 3D Twins to Symbols	3D ikerpárok hozzáadása a szimbólumokhoz
+	List 3D Models	3D modellek listázása
+	Add 3D Twins	3D ikerpárok hozzáadása
+	Plan Layers	Alaprajz fóliái
+	Plan Walls	Alaprajz falai
+	Plan Openings	Alaprajz nyílászárói
+	Plan Rooms	Alaprajz helyiségei
+	Plan Notes	Alaprajz megjegyzései
+	Plan Sheets	Alaprajz lapjai
+	3D Building from Plan	3D épület alaprajzból
+	Wedge	Ék
+	Presspull	Nyomás-húzás
+	3D Solid	3D test
+	Specify center	Adja meg a középpontot
+	Specify length	Adja meg a hosszt
+	Specify width	Adja meg a szélességet
+	Specify other corner	Adja meg a másik sarkot
+	Specify center point	Adja meg a középpontot
+	Specify base radius	Adja meg az alap sugarát
+	Specify radius	Adja meg a sugarat
+	Specify diameter	Adja meg az átmérőt
+	Specify top radius	Adja meg a felső sugarat
+	Specify tube radius	Adja meg a cső sugarát
+	Select objects to extrude	Válassza ki a kihúzandó objektumokat
+	Select extrusion path	Válassza ki a kihúzási útvonalat
+	Specify angle of taper for extrusion	Adja meg a kihúzás kúposságának szögét
+	Specify height of extrusion	Adja meg a kihúzás magasságát
+	Select objects to revolve	Válassza ki a megforgatandó objektumokat
+	Specify axis start point or define axis by	Adja meg a tengely kezdőpontját, vagy határozza meg a tengelyt
+	Specify axis endpoint	Adja meg a tengely végpontját
+	Specify angle of revolution	Adja meg a forgatás szögét
+	Select objects to sweep	Válassza ki a söprendő objektumokat
+	Select sweep path	Válassza ki a söprés útvonalát
+	Select cross sections in lofting order	Válassza ki a keresztmetszeteket az átmenet sorrendjében
+	Click inside bounded areas to press or pull	Kattintson zárt területekbe a nyomáshoz vagy húzáshoz
+	Specify extrusion height	Adja meg a kihúzás magasságát
+	Cube	Kocka
+	Sides	Oldalak
+	Top radius	Felső sugár
+	Path	Útvonal
+	Taper angle	Kúposság szöge
+	Select one or more regions or 3D solids.	Válasszon ki egy vagy több régiót vagy 3D testet.
+	No closed area found there.	Ott nem található zárt terület.
+	Slice	Szeletelés
+	Thicken	Vastagítás
+	Fillet Edge	Él lekerekítése
+	Chamfer Edge	Él letörése
+	Fillet Edges	Élek lekerekítése
+	Chamfer Edges	Élek letörése
+	Move Faces	Lapok mozgatása
+	Offset Faces	Lapok eltolása
+	Delete Faces	Lapok törlése
+	Shell	Héj
+	Composite	Összetett
+	Select objects to slice	Válassza ki a szeletelendő objektumokat
+	Specify a point on desired side or [keep Both sides]	Adjon meg egy pontot a kívánt oldalon, vagy [keep Both sides]
+	Both	Mindkettő
+	Specify start point of slicing plane or	Adja meg a metszősík kezdőpontját, vagy
+	Specify second point on plane	Adja meg a sík második pontját
+	Specify the Z of the XY-plane	Adja meg az XY-sík Z értékét
+	Specify the X of the YZ-plane	Adja meg a YZ-sík X értékét
+	Specify the Y of the ZX-plane	Adja meg a ZX-sík Y értékét
+	Select surfaces to thicken	Válassza ki a vastagítandó felületeket
+	Select a 3D solid	Válasszon ki egy 3D testet
+	Select an edge	Válasszon ki egy élt
+	Remove faces	Lapok eltávolítása
+	Select faces	Lapok kiválasztása
+	Specify thickness	Adja meg a vastagságot
+	Enter fillet radius	Adja meg a lekerekítés sugarát
+	Enter distance	Adja meg a távolságot
+	Specify a base point or displacement	Adjon meg egy bázispontot vagy elmozdulást
+	Specify a second point of displacement	Adja meg az elmozdulás második pontját
+	Specify the offset distance	Adja meg az eltolási távolságot
+	Enter the shell offset distance	Adja meg a héj eltolási távolságát
+	Select solids, surfaces, and regions to subtract from ..	Válassza ki a testeket, felületeket és régiókat, amelyekből kivon ..
+	Select solids, surfaces, and regions to subtract ..	Válassza ki a kivonandó testeket, felületeket és régiókat ..
+	Select two or more solids.	Válasszon ki két vagy több testet.
+	The solids don't overlap; nothing was changed.	A testek nem fedik egymást; semmi sem változott.
+	Nothing would remain; nothing was changed.	Semmi sem maradna; semmi sem változott.
+	The result would not be a solid; nothing was changed.	Az eredmény nem lenne test; semmi sem változott.
+	No straight edge between two flat faces there.	Ott nincs egyenes él két sík lap között.
+	No face of the solid there.	Ott nincs a testnek lapja.
+	Only outside (convex) edges can be filleted or chamfered.	Csak külső (domború) élek kerekíthetők le vagy törhetők le.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	A SHELL dobozokon, hengereken, gömbökön és egyenes kihúzásokon működik.
+	The walls are too thick for this solid.	A falak túl vastagok ehhez a testhez.
+	Select solids to subtract from.	Válassza ki a testeket, amelyekből kivon.
+	A solid can't be subtracted from itself.	Egy test önmagából nem vonható ki.
+	The solid would have too many operations; nothing was changed.	A testnek túl sok művelete lenne; semmi sem változott.
+	That face can't be moved (only flat faces, holes and added parts).	Ez a lap nem mozgatható (csak sík lapok, furatok és hozzáadott részek).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	Ez a lap nem törölhető (csak furatok, lekerekítések, letörések és hozzáadott részek).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	Ez a lap nem tolható el (dobozoldalak, hengerek, kúpok és kihúzások végei, hengerpalástok és gömbök).
+	The thickness must be more than zero.	A vastagságnak nullánál nagyobbnak kell lennie.
+	The radius must be more than zero.	A sugárnak nullánál nagyobbnak kell lennie.
+	The distance must be more than zero.	A távolságnak nullánál nagyobbnak kell lennie.
+	Requires a number.	Számot kell megadni.
+	Parameter	Paraméter
+	Action	Művelet
+	Visibility States	Láthatósági állapotok
+	Remove Parameter or Action	Paraméter vagy művelet eltávolítása
+	Edit Reference	Hivatkozás szerkesztése
+	Discard Reference Edits	Hivatkozásmódosítások elvetése
+	Nested References	Beágyazott hivatkozások
+	Light List	Fényforrások listája
+	Sun Properties	Nap tulajdonságai
+	Render Exposure	Renderelési expozíció
+	Point Light	Pontfény
+	Spotlight	Reflektorfény
+	Distant Light	Távoli fény
+	Change Lights	Fények módosítása
+	Section Plane	Metszősík
+	Live Section	Élő metszet
+	Generate Section Block	Metszetblokk létrehozása
+	Generate Section	Metszet létrehozása
+	Flatshot	Síkvetület
+	Base View	Alapnézet
+	Section View	Metszetnézet
+	Drawing Views	Rajznézetek
+	Select face or any point to locate section line or	Válasszon lapot vagy tetszőleges pontot a metszetvonal elhelyezéséhez, vagy
+	Orthographic	Ortogonális
+	Select section object	Válassza ki a metszetobjektumot
+	Specify location of base view	Adja meg az alapnézet helyét
+	Select parent view	Válassza ki a szülőnézetet
+	Specify end point	Adja meg a végpontot
+	Specify location of section view	Adja meg a metszetnézet helyét
+	There is nothing to draw: no 3D objects were found.	Nincs mit rajzolni: nem találhatók 3D objektumok.
+	The section plane doesn't cut any solid.	A metszősík nem metsz egyetlen testet sem.
+	The view needs a direction.	A nézetnek irány kell.
+	The drawing has no layout.	A rajzban nincs elrendezés.
+	That is not a section plane.	Ez nem metszősík.
+	Requires a point.	Pontot kell megadni.
+	The view is [dx, dy, dz].	A nézet: [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	Továbbítási csomag létrehozása
+	Files in the package	A csomag fájljai
+	Not included	Nem szerepel
+	Organized folders	Rendezett mappák
+	One folder	Egy mappa
+	Include a transmittal report	Továbbítási jelentés hozzáadása
+	Create ZIP...	ZIP létrehozása...
+	Create Folder...	Mappa létrehozása...
+	STL Out	STL kimenet
+	Export STL...	STL exportálása...
+	3D models (glTF, OBJ, STL)	3D modellek (glTF, OBJ, STL)
+	3D model (glTF binary)	3D modell (bináris glTF)
+	3D model (glTF)	3D modell (glTF)
+	3D model (OBJ)	3D modell (OBJ)
+	3D model (STL)	3D modell (STL)
+	Render Region	Régió renderelése
+	samples	minta
+	a sample	egy minta
+	Pick crop window to render	Jelölje ki a renderelendő kivágási ablakot
+	Nothing has been rendered yet.	Még semmi nem lett renderelve.
+	There is nothing to render: no surfaces in the view.	Nincs mit renderelni: a nézetben nincsenek felületek.
+	The image couldn't be encoded.	A kép nem kódolható.
+	Saving images isn't available in the browser.	A képek mentése a böngészőben nem érhető el.
+	PNG image	PNG-kép
+	JPEG image	JPEG-kép
+	Save Image	Kép mentése
+	My Properties	Saját tulajdonságok
+	Add to My Properties	Hozzáadás a saját tulajdonságokhoz
+	Remove from My Properties	Eltávolítás a saját tulajdonságokból
+	All properties	Minden tulajdonság
+	My properties: the ones you added (right-click a property's name to add it)	Saját tulajdonságok: az Ön által hozzáadottak (kattintson jobb gombbal egy tulajdonság nevére a hozzáadáshoz)
+	Right-click a property's name and choose Add to My Properties.	Kattintson jobb gombbal egy tulajdonság nevére, és válassza a Hozzáadás a saját tulajdonságokhoz lehetőséget.
+	Color Books	Színkönyvek
+	Sheet Set Manager	Lapkészlet-kezelő
+	Palettes	Paletták
+	New Sheet Set...	Új lapkészlet...
+	Open Sheet Set...	Lapkészlet megnyitása...
+	No sheet set is open.	Nincs megnyitott lapkészlet.
+	Number	Szám
+	Subset	Részhalmaz
+	Remove Sheet	Lap eltávolítása
+	Add Drawing...	Rajz hozzáadása...
+	Rename Layouts to Match	Elrendezések átnevezése egyezően
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	Minden lap elrendezése „szám cím” lesz, amit a lapszám- és lapcím-mezők megjelenítenek
+	Publish to PDF...	Közzététel PDF-be...
+	Prefix	Előtag
+	Digits	Számjegyek
+	Renumber	Újraszámozás
+	Zoom to Fit	Illesztés az ablakhoz
+	Drag to pan, scroll to zoom	Húzással pásztáz, görgetéssel nagyít
+	Publish	Közzététel
+	Sheets to publish, in order	Közzéteendő lapok, sorrendben
+	Sheet	Lap
+	Bookmark	Könyvjelző
+	Paper	Papír
+	Orientation	Tájolás
+	(sheet name)	(lapnév)
+	Page setup	Oldalbeállítás
+	Landscape	Fekvő
+	Portrait	Álló
+	Add Sheets from Drawing...	Lapok hozzáadása rajzból...
+	Load List...	Lista betöltése...
+	Save List...	Lista mentése...
+	Publish List	Közzétételi lista
+	Enclose Text with Object	Szöveg körülvétele objektummal
+	Export Attribute Information	Attribútumadatok exportálása
+	Import Attribute Information	Attribútumadatok importálása
+	Mask Text	Szöveg maszkolása
+	Remote Text	Távoli szöveg
+	Rotate Text	Szöveg forgatása
+	Text Fit	Szöveg illesztése
+	Toggle Frames	Keretek ki/be
+	Unmask Text	Szövegmaszk eltávolítása
+	Update Remote Text	Távoli szöveg frissítése
+	Geometric	Geometriai
+	Infer geometric constraints	Geometriai kényszerek felismerése
+	Show constraint bars	Kényszersávok megjelenítése
+	Constraint bar transparency (%)	Kényszersávok átlátszósága (%)
+	Dimensional	Méretkényszer
+	Show dynamic constraints	Dinamikus kényszerek megjelenítése
+	Dimension name format	Méretnév formátuma
+	Name and Expression	Név és kifejezés
+	Constraint types AUTOCONSTRAIN applies, in order of priority	Az AUTOCONSTRAIN által alkalmazott kényszertípusok, prioritási sorrendben
+	Move Up	Mozgatás felfelé
+	Move Down	Mozgatás lefelé
+	Tangent objects must share an intersection point	Az érintő objektumoknak közös metszésponttal kell rendelkezniük
+	Perpendicular objects must share an intersection point	A merőleges objektumoknak közös metszésponttal kell rendelkezniük
+	Distance tolerance	Távolságtűrés
+	Angle tolerance (degrees)	Szögtűrés (fok)
+	3D Move	3D mozgatás
+	3D Rotate	3D forgatás
+	3D Scale	3D léptékezés
+	3D Align	3D igazítás
+	3D Mirror	3D tükrözés
+	3D Array	3D tömb
+	3D Object Snap	3D tárgyraszter
+	Specify second point or distance	Adja meg a második pontot vagy a távolságot
+	Specify angle	Adja meg a szöget
+	Specify source plane: first point	Adja meg a forrássíkot: első pont
+	Specify source plane: second point	Adja meg a forrássíkot: második pont
+	Specify source plane: third point	Adja meg a forrássíkot: harmadik pont
+	Specify destination plane: first point	Adja meg a célsíkot: első pont
+	Specify destination plane: second point	Adja meg a célsíkot: második pont
+	Specify destination plane: third point	Adja meg a célsíkot: harmadik pont
+	Delete source objects?	Törli a forrásobjektumokat?
+	Specify point on XY plane	Adjon meg egy pontot az XY-síkon
+	Specify point on YZ plane	Adjon meg egy pontot a YZ-síkon
+	Specify point on ZX plane	Adjon meg egy pontot a ZX-síkon
+	Specify first point of mirror plane (3 points) or	Adja meg a tükörsík első pontját (3 pont), vagy
+	Specify second point on mirror plane	Adja meg a tükörsík második pontját
+	Specify third point on mirror plane	Adja meg a tükörsík harmadik pontját
+	Enter the type of array	Adja meg a tömb típusát
+	Polar	Poláris
+	Enter the number of items in the array	Adja meg a tömb elemeinek számát
+	Specify the angle to fill (+=ccw, -=cw)	Adja meg a kitöltési szöget (+=óramutatóval ellentétes, -=óramutató irányú)
+	Enter the number of rows (---)	Adja meg a sorok számát (---)
+	Enter the number of columns (|||)	Adja meg az oszlopok számát (|||)
+	Enter the number of levels (...)	Adja meg a szintek számát (...)
+	Specify the distance between rows (---)	Adja meg a sorok közötti távolságot (---)
+	Specify the distance between columns (|||)	Adja meg az oszlopok közötti távolságot (|||)
+	Specify the distance between levels (...)	Adja meg a szintek közötti távolságot (...)
+	Specify second point on axis of rotation	Adja meg a forgástengely második pontját
+	Select the objects first.	Először válassza ki az objektumokat.
+	Requires a point, or a distance along an axis.	Pontot vagy egy tengely menti távolságot kell megadni.
+	The points must not coincide or line up.	A pontok nem eshetnek egybe és nem lehetnek egy egyenesen.
+	The three points line up: they make no plane.	A három pont egy egyenesre esik: nem határoznak meg síkot.
+	<3D Object Snap on>	<3D tárgyraszter be>
+	<3D Object Snap off>	<3D tárgyraszter ki>
+	Preparing the 3D view…	A 3D nézet előkészítése…
+	Viewpoint	Nézőpont
+	3D View Benchmark	3D nézet teljesítménymérése
+	Drawing area	Rajzterület
+	Command line	Parancssor
+	Viewport controls	Nézetablak-vezérlők
+	Coordinate system menu	Koordináta-rendszer menü
+	UCS icon X axis	UCS-ikon X tengelye
+	UCS icon Y axis	UCS-ikon Y tengelye
+	High Contrast	Nagy kontraszt
+	Interface size	Felület mérete
+	Interface Size	Felület mérete
+	100%	100%
+	125%	125%
+	150%	150%
+	200%	200%
+	Building Spec	Épületspecifikáció
+	Set Building Spec	Épületspecifikáció beállítása
+	Validate Building Spec	Épületspecifikáció ellenőrzése
+	Build Model from Spec	Modell építése a specifikációból
+	Convert Matches to Block	Egyezések átalakítása blokká
+	Command Line Transparency	Parancssor átlátszósága
+	AutoComplete Settings	Automatikus kiegészítés beállításai
+	Input Settings	Beviteli beállítások
+	AutoComplete	Automatikus kiegészítés
+	Search System Variables	Rendszerváltozók keresése
+	Mid-string Search	Keresés a karakterlánc belsejében
+	System variable	Rendszerváltozó
+	Layer state	Fóliaállapot
+	Model Issues	Modellhibák
+	Render Model View	Modellnézet renderelése
+	Model Overlay	Modellátfedés
+	Model Counts	Modellstatisztika
+	System Printers	Rendszernyomtatók
+	Report a Problem...	Probléma bejelentése...
+	Report a Problem	Probléma bejelentése
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Összegyűjti a hibakereséshez hasznos adatokat egy ZIP-fájlba ezen a számítógépen. Semmi nem kerül elküldésre: a bejelentéshez csatolja a fájlt egy e-mailhez.
+	Always included	Mindig tartalmazza
+	The log of this run and the two before it	Ennek és az előző két futtatásnak a naplója
+	The last commands	Az utolsó parancsok
+	Versions, operating system and graphics adapter	Verziók, operációs rendszer és grafikus adapter
+	A summary of the open drawings (counts only, no geometry)	A megnyitott rajzok összegzése (csak darabszámok, geometria nélkül)
+	Names: file paths, layer and block names, typed text	Nevek: fájlelérési utak, fólia- és blokknevek, begépelt szöveg
+	Names are replaced by placeholders, also in the log.	A nevek helyőrzőkre cserélődnek, a naplóban is.
+	Save Report...	Jelentés mentése...
+	Email it to {address}	Küldje el e-mailben ide: {address}
+	Plans to Model	Alaprajzokból modell
+	Build	Építés
+	Rebuild	Újraépítés
+	Check	Ellenőrzés
+	Kept in the drawing.	A rajzban tárolva.
+	Drafted from the walk rules; not saved yet.	A bejárási szabályokból készült; még nincs mentve.
+	{n} of {total} approved	{n} / {total} jóváhagyva
+	Save Spec	Specifikáció mentése
+	Approve All	Összes jóváhagyása
+	Approved	Jóváhagyva
+	Levels	Szintek
+	Wall Types	Faltípusok
+	Rooms	Helyiségek
+	Door and Window Families	Ajtó- és ablakcsaládok
+	Materials	Anyagok
+	Site	Telek
+	Openings	Nyílászárók
+	Issues ({n})	Problémák ({n})
+	The drawing changed since; check again.	A rajz azóta megváltozott; ellenőrizze újra.
+	No issues found.	Nem található probléma.
+	Configure Standards	Szabványok konfigurálása
+	Standards files associated with the current drawing	Az aktuális rajzhoz társított szabványfájlok
+	Add...	Hozzáadás...
+	Check Standards...	Szabványok ellenőrzése...
+	Check Standards	Szabványok ellenőrzése
+	No standards violations were found.	Nem található szabványsértés.
+	problem(s)	probléma
+	Take the standard's properties	A szabvány tulajdonságainak átvétele
+	Replace it with the standard one	Csere a szabványosra
+	Fix All	Összes javítása
+	Give everything that differs the standard's properties	Minden eltérő elem megkapja a szabvány tulajdonságait
+	Check Again	Újraellenőrzés
+	Layer Translator	Fóliafordító
+	Translate From	Fordítás innen
+	Translate To	Fordítás erre
+	Load a drawing whose layers to translate to.	Töltse be azt a rajzot, amelynek fóliáira fordítani kell.
+	Map	Hozzárendelés
+	Layer Translation Mappings	Fóliafordítási hozzárendelések
+	Load Map...	Hozzárendelés betöltése...
+	Save Map...	Hozzárendelés mentése...
+	Translate	Fordítás
+	Not in the standards	Nem szerepel a szabványokban
+	Properties differ from the standards	A tulajdonságok eltérnek a szabványoktól
+	CAD Standards	CAD-szabványok
+	Configure...	Konfigurálás...
+	Check...	Ellenőrzés...
+	Layer Translator...	Fóliafordító...
+	Draft Building Spec	Épületspecifikáció vázlata
+	Draft from Plan	Vázlat alaprajzból
+	Read the plan's layers, walls, doors, rooms and notes; guesses are marked.	Beolvassa az alaprajz fóliáit, falait, ajtóit, helyiségeit és megjegyzéseit; a feltételezések jelölve vannak.
+	guess	feltételezés
+	Detect Stairs	Lépcsők felismerése
+	List Stairs	Lépcsők listázása
+	Confirm Stairs	Lépcsők megerősítése
+	Stairs and Ramps	Lépcsők és rámpák
+	Bake Lighting	Megvilágítás beégetése
+	Command Aliases and Shortcuts	Parancsaliasok és billentyűparancsok
+	Keyboard Shortcuts	Billentyűparancsok
+	replaces {command}	helyettesíti: {command}
+	Built-in	Beépített
+	Alias	Alias
+	Command	Parancs
+	Add or Change	Hozzáadás vagy módosítás
+	Keys	Billentyűk
+	Edit Aliases and Shortcuts...	Aliasok és billentyűparancsok szerkesztése...
+	Customize	Testreszabás
+	Read Elevation	Homlokzat beolvasása
+	Read Roof Plan	Tetőalaprajz beolvasása
+	Exterior	Külső
+	Drafting & Annotation	Rajzolás és feliratozás
+	3D Modeling	3D modellezés
+	Electrical	Villamos
+	Save Current As...	Aktuális mentése másként...
+	Workspace Settings...	Munkaterület-beállítások...
+	Workspace Settings	Munkaterület-beállítások
+	Navigation Bar	Navigációs sáv
+	Save Workspace	Munkaterület mentése
+	Workspaces	Munkaterületek
+	Close Navigation Bar	Navigációs sáv bezárása
+	Workspace	Munkaterület
+	Read Ceiling Plan	Mennyezeti alaprajz beolvasása
+	Ceilings	Mennyezetek
+	Current Drawing	Aktuális rajz
+	Favourites	Kedvencek
+	Libraries	Könyvtárak
+	No library folder	Nincs könyvtármappa
+	Choose Folder...	Mappa kiválasztása...
+	No blocks here.	Itt nincsenek blokkok.
+	Remove from Favourites	Eltávolítás a kedvencekből
+	Add to Favourites	Hozzáadás a kedvencekhez
+	Insertion Options	Beszúrási beállítások
+	Auto-rotate (follow the current UCS)	Automatikus forgatás (az aktuális UCS követése)
+	Repeat Placement	Elhelyezés ismétlése
+	Tool Palettes	Eszközpaletták
+	Drag objects from the drawing here to make tools.	Húzzon ide objektumokat a rajzból eszközök létrehozásához.
+	Add Selected	Kijelöltek hozzáadása
+	New palette	Új paletta
+	Select objects in the drawing first.	Először jelöljön ki objektumokat a rajzban.
+	Blocks Palette	Blokkpaletta
+	Detect Grids	Raszterhálók felismerése
+	Align Levels by Grids	Szintek igazítása raszterhálók szerint
+	Columns at Grids	Pillérek a raszterpontokban
+	Columns	Pillérek
+	Build Room Volumes	Helyiségtérfogatok létrehozása
+	Building	Épület
+	Go to Room	Ugrás a helyiséghez
+	List Rooms	Helyiségek listázása
+	Room	Helyiség
+	Build Volumes	Térfogatok létrehozása
+	Go to	Ugrás
+	{n} rooms	{n} helyiség
+	No rooms found: rooms are found from name labels inside closed outlines.	Nem találhatók helyiségek: a helyiségeket a zárt körvonalakon belüli névcímkékből ismeri fel.
+	Ceiling	Mennyezet
+	DesignCenter	DesignCenter
+	Up One Level	Egy szinttel feljebb
+	Folder	Mappa
+	Text Styles	Szövegstílusok
+	Dimension Styles	Méretstílusok
+	Layouts	Elrendezések
+	Add to Drawing	Hozzáadás a rajzhoz
+	Choose a drawing to see what it holds.	Válasszon egy rajzot a tartalmának megtekintéséhez.
+	{name} inserted.	{name} beszúrva.
+	{name} is already in the drawing; it was kept.	{name} már szerepel a rajzban; megtartva.
+	{name} added.	{name} hozzáadva.
+	Read MEP Runs	MEP-vezetékek beolvasása
+	Model Clashes	Modellütközések
+	MEP Systems	MEP-rendszerek
+	Undo History	Visszavonási előzmények
+	(Start)	(Kezdet)
+	Click a step to undo or redo to it.	Kattintson egy lépésre a visszavonáshoz vagy újra végrehajtáshoz addig.
+	Nothing yet.	Még semmi.
+	Double-click to run it again	Dupla kattintással újra futtatható
+	Copy as Script	Másolás parancsfájlként
+	Save Session as Script...	Munkamenet mentése parancsfájlként...
+	Command History Palette	Parancselőzmények paletta
+	Furnish from Plan	Berendezés alaprajzból
+	Classify Plan	Alaprajz osztályozása
+	Text and multiline text	Szöveg és többsoros szöveg
+	Block attribute values	Blokkattribútum-értékek
+	Dimension text	Méretszöveg
+	Multileaders	Multimutatók
+	Hyperlinks	Hivatkozások
+	Layer and block names	Fólia- és blokknevek
+	Find where:	Keresés helye:
+	Current space	Aktuális tér
+	Plain text	Egyszerű szöveg
+	Use wildcards	Helyettesítő karakterek használata
+	Regular expressions	Reguláris kifejezések
+	Look in	Keresés itt
+	Zoom To	Nagyítás erre
+	Replace	Csere
+	Create Selection Set	Kijelöléskészlet létrehozása
+	Matches found: {count} (objects: {objects})	Talált egyezések: {count} (objektumok: {objects})
+	Layer name	Fólianév
+	Block name	Blokknév
+	Revise Model from Plans	Modell módosítása alaprajzok alapján
+	Plans to Model Benchmark	Alaprajzokból modell – teljesítménymérés
+	Plans to Model Case	Alaprajzokból modell – eset
+	Plans to Model Score	Alaprajzokból modell – pontszám
+	Save Viewpoint	Nézőpont mentése
+	Viewpoints for Every Room	Nézőpontok minden helyiséghez
+	Camera Tour	Kameratúra
+	Tours and Viewpoints	Túrák és nézőpontok
+	Tour Timing	Túra időzítése
+	3D Graphics Limits	3D grafikai korlátok
+	Drawn by the CPU (no usable GPU)	CPU rajzolja (nincs használható GPU)
+	Point Cloud...	Pontfelhő...
+	Point Cloud	Pontfelhő
+	Attach Point Cloud	Pontfelhő csatolása
+	Clip Point Cloud	Pontfelhő vágása
+	Point Cloud Color Map	Pontfelhő színtérképe
+	Point Cloud Information	Pontfelhő adatai
+	Markups	Jelölések
+	{done} of {total} done	{done} / {total} kész
+	No markups. Import them from a reviewed PDF.	Nincsenek jelölések. Importálja őket egy átnézett PDF-ből.
+	Done	Kész
+	Import Markups...	Jelölések importálása...
+	Import Markups	Jelölések importálása
+	Markup Import...	Jelölésimportálás...
+	Markup Status	Jelölés állapota
+	Read Door and Window Schedules	Ajtó- és ablakjegyzékek beolvasása
+	Schedules	Jegyzékek
+	Esc	Esc
+	Hide the touch bar	Touch Bar elrejtése
+	Type a command or value	Írjon be egy parancsot vagy értéket
+	Embed Textures	Textúrák beágyazása
+	Publish Walkthrough	Bejárás közzététele
+	Walkthroughs (CDYWALK)	Bejárások (CDYWALK)
+	Check Exchange	Csere ellenőrzése
+	Not kept in the {format} file	Nem tárolódik a(z) {format} fájlban
+	The drawing was saved. This file format can't keep everything in it:	A rajz mentve. Ez a fájlformátum nem tud mindent megőrizni belőle:
+	What	Mi
+	left out	kimaradt
+	changed	módosult
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	A CADaddy-rajz (.cdy) mindent megőriz. A Csere ellenőrzése mentés nélkül újra kilistázza ezt.
+	VP Linetype	NA vonaltípus
+	VP Lineweight	NA vonalvastagság
+	Unreconciled New Layers ({n})	Egyeztetetlen új fóliák ({n})
+	Reconcile All	Összes egyeztetése
+	Reconcile Layer	Fólia egyeztetése
+	LayerWalk	LayerWalk
+	Layers: {n}	Fóliák: {n}
+	Restore on exit	Visszaállítás kilépéskor
+	Filter:	Szűrő:
+	Layer Walk...	Fóliabejárás...
+	Layer Walk	Fóliabejárás
+	Isolate Layer to Current Viewport	Fólia elkülönítése az aktuális nézetablakban
+	Unreconciled New Layers	Egyeztetetlen új fóliák
+	Move to New Window	Áthelyezés új ablakba
+	Dock All Windows	Minden ablak dokkolása
+	Every drawing is in a window of its own.	Minden rajz saját ablakban van.
+	Back among the drawing tabs	Vissza a rajzlapok közé
+	Plot Stamp...	Nyomtatási bélyegző...
+	Plot a Folder of Drawings...	Mappányi rajz nyomtatása...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	A mappa minden rajza saját PDF-be, a mappán belüli PDF mappába
+	Plot stamp	Nyomtatási bélyegző
+	Quick Properties Lists	Gyorstulajdonság-listák
+	Purgeable Items	Tisztítható elemek
+	Find Non-Purgeable Items	Nem tisztítható elemek keresése
+	Purge {kind} "{name}"?	Tisztítja ezt: {kind} „{name}”?
+	Yes to All	Igen, mindre
+	Items that can't be purged, and why	Nem tisztítható elemek és az okuk
+	Select and Zoom	Kijelölés és nagyítás
+	Pick an item to see why it can't be purged.	Válasszon ki egy elemet, hogy lássa, miért nem tisztítható.
+	Confirm each item to be purged	Minden tisztítandó elem megerősítése
+	Purge nested items	Beágyazott elemek tisztítása
+	Text Align	Szöveg igazítása
+	Color model:	Színmodell:
+	Hue	Színárnyalat
+	Saturation	Telítettség
+	Luminance	Fényerő
+	Hex	Hex
+	More Colors...	További színek...
+	Load more books with COLORBOOK (JSON or tab-separated files).	További könyvek betöltése a COLORBOOK paranccsal (JSON vagy tabulátorral tagolt fájlok).
+	All spaces	Minden tér
+	Total: {n}	Összesen: {n}
+	No block references here.	Itt nincsenek blokkhivatkozások.
+	Highlight and zoom to its references	Kiemelés és nagyítás a hivatkozásaira
+	Similar but not identical: {scaled} scaled, {exploded} exploded	Hasonló, de nem azonos: {scaled} léptékezett, {exploded} szétrobbantott
+	Insert Count Table	Darabszám-táblázat beszúrása
+	Update Count Tables	Darabszám-táblázatok frissítése
+	Count in Area	Számlálás területen
+	{n} reference(s) of {name} selected.	{n} hivatkozás kijelölve ehhez: {name}.
+	{n} similar object(s) selected.	{n} hasonló objektum kijelölve.
+	Geographic Location...	Földrajzi hely...
+	Remove Geographic Location	Földrajzi hely eltávolítása
+	Set Location	Hely beállítása
+	Remove Location	Hely eltávolítása
+	Latitude and Longitude	Szélesség és hosszúság
+	Trace Image to Vectors	Kép vektorizálása
+	Trace Raster Image to Vectors	Raszterkép vektorizálása
+	Drawing Summary	Rajz összegzése
+	Query Drawing	Rajz lekérdezése
+	Begin Agent Request	Ügynökkérés kezdete
+	End Agent Request	Ügynökkérés vége
+	Agent Dry Run	Ügynök próbafuttatása
+	Agent Confirmations	Ügynök-megerősítések
+	Agent Change Journal	Ügynök változásnaplója
+	Agent Activity	Ügynöktevékenység
+	An agent asks	Egy ügynök kérdezi
+	Allow	Engedélyezés
+	Deny	Elutasítás
+	Not allowed: {question}	Nem engedélyezett: {question}
+	Ask me before an agent saves over a file or closes with changes	Kérdezzen meg, mielőtt egy ügynök felülír egy fájlt vagy módosításokkal zár be
+	Dry run: agents' commands change nothing	Próbafuttatás: az ügynökök parancsai semmit nem módosítanak
+	No agent requests yet.	Még nincsenek ügynökkérések.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} parancs · {added} hozzáadva · {removed} eltávolítva · {changed} módosítva
+	Select what it added and changed	A hozzáadott és módosított elemek kijelölése
+	Activity History	Tevékenységi előzmények
+	Activity history is off (Options ▸ Open and Save).	A tevékenységi előzmények ki vannak kapcsolva (Beállítások ▸ Megnyitás és mentés).
+	command	parancs
+	{n} steps	{n} lépés
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	Az e lépés által hozzáadott vagy módosított objektumok kijelölése
+	The objects of this step are gone.	Ennek a lépésnek az objektumai már nem léteznek.
+	{n} object(s) selected.	{n} objektum kijelölve.
+	{n} object(s) selected ({gone} since erased).	{n} objektum kijelölve ({gone} azóta törölve).
+	{n} s ago	{n} mp-e
+	{n} min ago	{n} perce
+	{n} h ago	{n} órája
+	{n} d ago	{n} napja
+	Keep an activity history beside each drawing (private, on this computer)	Tevékenységi előzmények vezetése minden rajz mellett (privát, ezen a számítógépen)
+	Background mask	Háttérmaszk
+	Mask border offset	Maszkszegély eltolása
+	Mask color	Maszk színe
+	Use drawing background	Rajzháttér használata
+	Regenerate Dimensions	Méretek újragenerálása
+	Enter layer name for new dimensions (. for the current layer)	Adja meg az új méretek fóliájának nevét (. az aktuális fóliához)

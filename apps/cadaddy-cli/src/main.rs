@@ -236,19 +236,20 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
 
 const NO_OPTIONS: &[OptionSpec] = &[];
 
+/// One JSON document: the drawing's summary, and for a .cdy file its container too (manifest,
+/// what each kind of chunk takes, the bytes earlier saves left behind).
 fn info(path: &str) -> Result<(), String> {
-    // A .cdy file's manifest first: what wrote it, and what it holds.
-    if let Ok(bytes) = std::fs::read(path)
-        && let Some(m) = cadaddy_io::cdy::manifest(&bytes)
-    {
-        // With what each kind of chunk takes, and the bytes earlier saves left behind.
+    let container = std::fs::read(path).ok().and_then(|bytes| {
+        let m = cadaddy_io::cdy::manifest(&bytes)?;
         let check = cadaddy_io::cdy::verify(&bytes).unwrap_or_default();
-        let out = json!({ "manifest": m, "chunks": check["sizes"], "waste": check["waste"], "bytes": bytes.len() });
-        outln!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
-    }
+        Some(json!({ "manifest": m, "chunks": check["sizes"], "waste": check["waste"], "bytes": bytes.len() }))
+    });
     let mut s = Session::empty();
     open(&mut s, path)?;
-    let v = s.execute("drawing.inspect", &json!({ "entities": false })).map_err(|e| e.to_string())?;
+    let mut v = s.execute("drawing.inspect", &json!({ "entities": false })).map_err(|e| e.to_string())?;
+    if let (Some(obj), Some(serde_json::Value::Object(c))) = (v.as_object_mut(), container) {
+        obj.extend(c);
+    }
     outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
     Ok(())
 }
@@ -315,6 +316,9 @@ fn convert(args: &[String]) -> Result<(), String> {
         }
     }
     let [i, o] = files.as_slice() else { return Err(USAGE.into()) };
+    if !std::path::Path::new(i).exists() {
+        return Err(format!("{i}: no such file or folder"));
+    }
     if std::path::Path::new(i).is_dir() {
         let to = to.ok_or("converting a folder needs --to FORMAT (dwg, dxf, cdy, svg, png, pdf)")?;
         return convert_folder(i, o, &to, recurse, framing);

@@ -23,7 +23,7 @@ pub mod stairs;
 mod tour;
 mod walker;
 
-pub use derive::{DeviceInfo, LevelInfo, Owner, Part, Room, Scene, Seg, Vertex, derive, derive_set, rooms};
+pub use derive::{DeviceInfo, LevelInfo, Owner, Part, Room, Scene, Seg, Vertex, derive, derive_set, level_bases, rooms};
 pub use doors::DoorLeaf;
 pub use ground::Ground;
 pub use math::{Mat4, V3};

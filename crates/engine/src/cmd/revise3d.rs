@@ -74,14 +74,18 @@ fn fingerprint(e: &Entity) -> u64 {
     fnv(&format!("{:?}|{}|{:?}", e.kind, e.common.layer, e.common.color))
 }
 
+/// Plan signatures round coordinates to this many drawing units.
+const SIGNATURE_STEP: f64 = 1e-6;
+
 fn round_to(v: f64, q: f64) -> i64 {
     (v / q).round() as i64
 }
 
 /// The plan objects of `d` a model is built from, by `g`'s rules.
 pub fn plan_items(d: &Drawing, g: &WallGen) -> Vec<PlanItem> {
-    let ext = d.extents(&cadaddy_doc::Space::Model);
-    let q = (ext.width().max(ext.height()) * 1e-7).max(1e-9);
+    // A fixed step, not one from the drawing's extents: those change with the model and with any
+    // plan object moved past them, and would change every signature with them.
+    let q = SIGNATURE_STEP;
     let wall_layer = |layer: &str| match &g.layers {
         Some(p) => p.split(',').any(|x| super::qselect::wildcard(x.trim(), layer)),
         None => matches!(g.rules.layer(layer), Some(cadaddy_walk3d::LayerKind::Wall { .. })),

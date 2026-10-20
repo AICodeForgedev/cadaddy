@@ -43,7 +43,7 @@ fn last_height(s: &Session) -> f64 {
 }
 
 fn height_prompt(s: &Session, msg: &str, base: Option<Vec2>) -> Prompt {
-    Prompt::new(msg, Accept::POINT_OR_NUMBER).base_opt(base).default(format!("{:.4}", last_height(s)))
+    Prompt::new(msg, Accept::POINT_OR_NUMBER).base_opt(base).default(crate::units::dist(s, last_height(s)))
 }
 
 /// A height: Enter takes the last one; a pick, the distance from the base.

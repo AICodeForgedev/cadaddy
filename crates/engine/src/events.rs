@@ -5,9 +5,8 @@
 //! dialogs opened (told by the app). Nothing is recorded until something subscribes.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 
-use cadaddy_doc::{Entity, Handle};
+use cadaddy_doc::{EntityStore, Handle};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -25,6 +24,8 @@ pub struct EventLog {
     queue: VecDeque<(u64, Value)>,
     dropped: u64,
     seen: Seen,
+    /// A batch is running (`execute_many`): its commands are one `command.run`, told at its end.
+    pub(crate) batch: bool,
 }
 
 /// The state the last read compared against.
@@ -34,12 +35,9 @@ struct Seen {
     active: Option<u64>,
     selection: Vec<Handle>,
     prompt: String,
-    /// Per drawing: its revision and model objects then.
-    drawings: HashMap<u64, (u64, HashMap<Handle, Arc<Entity>>)>,
-}
-
-fn objects(s: &crate::DocState) -> HashMap<Handle, Arc<Entity>> {
-    s.doc.model.iter().map(|e| (e.handle, Arc::clone(e))).collect()
+    /// Per drawing: its revision and model objects then (a copy of the store: it shares the
+    /// objects, and the chunks not edited since tell the changes without visiting each object).
+    drawings: HashMap<u64, (u64, EntityStore)>,
 }
 
 fn listed(v: &[Handle]) -> Vec<String> {
@@ -49,7 +47,7 @@ fn listed(v: &[Handle]) -> Vec<String> {
 impl Session {
     /// Record event `kind` with `data` (when someone is subscribed).
     pub fn event(&mut self, kind: &str, data: Value) {
-        if !self.events.on {
+        if !self.events.on || (self.events.batch && kind == "command.run") {
             return;
         }
         let log = &mut self.events;
@@ -86,7 +84,14 @@ impl Session {
             return json!({ "subscribed": false, "events": [], "next": since });
         }
         self.look();
-        let events: Vec<Value> = self.events.queue.iter().filter(|(s, _)| *s > since).map(|(_, e)| e.clone()).collect();
+        let mut events: Vec<Value> = self.events.queue.iter().filter(|(s, _)| *s > since).map(|(_, e)| e.clone()).collect();
+        // Events the reader missed (more came than are kept): said first, so a reader knows to
+        // look at the drawing again rather than trust the stream.
+        let first = self.events.queue.front().map_or(self.events.seq + 1, |(s, _)| *s);
+        let missed = first.saturating_sub(since.saturating_add(1));
+        if missed > 0 && self.events.dropped > 0 {
+            events.insert(0, json!({ "seq": first - 1, "type": "events.dropped", "count": missed }));
+        }
         json!({ "subscribed": true, "events": events, "next": self.events.seq, "dropped": self.events.dropped })
     }
 
@@ -116,11 +121,8 @@ impl Session {
             let uid = st.uid;
             match drawings.get(&uid) {
                 Some((r, before)) if *r != rev => {
-                    let now = objects(st);
-                    let mut added: Vec<Handle> = now.keys().filter(|h| !before.contains_key(h)).copied().collect();
-                    let mut removed: Vec<Handle> = before.keys().filter(|h| !now.contains_key(h)).copied().collect();
-                    let mut changed: Vec<Handle> =
-                        now.iter().filter(|(h, e)| before.get(h).is_some_and(|b| !Arc::ptr_eq(b, e))).map(|(h, _)| *h).collect();
+                    let now = st.doc.model.clone();
+                    let (mut added, mut changed, mut removed) = before.changes(&now);
                     for v in [&mut added, &mut removed, &mut changed] {
                         v.sort_unstable_by_key(|h| h.0);
                     }
@@ -135,7 +137,7 @@ impl Session {
                 }
                 Some(_) => {}
                 None => {
-                    drawings.insert(uid, (rev, objects(st)));
+                    drawings.insert(uid, (rev, st.doc.model.clone()));
                 }
             }
         }

@@ -91,3 +91,69 @@ fn markups_land_on_the_sheet_and_are_tracked() {
     s.execute("undo", &json!({})).unwrap();
     assert_eq!(s.execute("markups", &json!({})).unwrap()["markups"].as_array().unwrap().len(), before - 4);
 }
+
+/// A PDF of `markups` on an 11×17 sheet, written to a fresh folder.
+fn pdf_of(tag: &str, markups: &[Markup]) -> String {
+    let dir = std::env::temp_dir().join(format!("cadaddy-markup-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("review.pdf");
+    std::fs::write(&p, cadaddy_io::pdf_markups::annotated_pdf(1224.0, 792.0, markups).unwrap()).unwrap();
+    p.to_string_lossy().into_owned()
+}
+
+#[test]
+fn markup_arrows_on_a_sheet_ignore_dimscale() {
+    cadaddy_engine::cmd::markup::set_reader(cadaddy_io::pdf_markups::read);
+    let path = pdf_of(
+        "pspace",
+        &[
+            m(MarkupKind::Arrow, vec![[320.0, 150.0], [380.0, 250.0]], [320.0, 150.0, 380.0, 250.0], ""),
+            m(MarkupKind::Callout, vec![[200.0, 150.0], [250.0, 300.0]], [250.0, 290.0, 400.0, 320.0], "Add outlet"),
+        ],
+    );
+    let mut s = Session::new();
+    s.execute("setvar", &json!({ "name": "DIMSCALE", "value": 48 })).unwrap();
+    s.execute("layout", &json!({ "option": "set", "name": "Layout1" })).unwrap();
+    let r = s.execute("markupimport", &json!({ "path": path })).unwrap();
+    let d = s.doc().unwrap();
+    for p in r["placed"].as_array().unwrap() {
+        let EntityKind::MLeader(ml) = &d.entity(hex(&p["handles"][0])).unwrap().kind else { panic!("a multileader: {p}") };
+        assert!((ml.arrow_size - 0.18).abs() < 1e-9, "the style's size on the sheet, not ×48: {}", ml.arrow_size);
+        if let Some(t) = &ml.text {
+            assert!((t.height - 0.18).abs() < 1e-9, "text {}", t.height);
+            assert!((ml.dogleg - 0.36).abs() < 1e-9);
+        }
+    }
+    // In model space at 48 drawing units per page inch: the page's size there.
+    s.execute("layout", &json!({ "option": "set", "name": "Model" })).unwrap();
+    let r = s.execute("markupimport", &json!({ "path": path, "scale": 48 })).unwrap();
+    let EntityKind::MLeader(ml) = &s.doc().unwrap().entity(hex(&r["placed"][0]["handles"][0])).unwrap().kind else { panic!() };
+    assert!((ml.arrow_size - 0.18 * 48.0).abs() < 1e-9, "{}", ml.arrow_size);
+}
+
+#[test]
+fn sticky_note_text_is_as_wide_as_its_text() {
+    cadaddy_engine::cmd::markup::set_reader(cadaddy_io::pdf_markups::read);
+    let text = "Verify panel P-9 clearance (36 in. working space).";
+    // A 20 pt sticky-note icon, and a text box the reviewer sized.
+    let path = pdf_of(
+        "sticky",
+        &[
+            m(MarkupKind::Note, Vec::new(), [600.0, 600.0, 620.0, 620.0], text),
+            m(MarkupKind::Note, Vec::new(), [100.0, 600.0, 172.0, 640.0], "A boxed note"),
+        ],
+    );
+    let mut s = Session::new();
+    s.execute("layout", &json!({ "option": "set", "name": "Layout1" })).unwrap();
+    let r = s.execute("markupimport", &json!({ "path": path })).unwrap();
+    let d = s.doc().unwrap();
+    let EntityKind::MText(mt) = &d.entity(hex(&r["placed"][0]["handles"][0])).unwrap().kind else { panic!("a note") };
+    assert_eq!(mt.contents, text);
+    // 10 pt text (0.139 in.): every word fits and the 50 characters run on at most two lines.
+    let char_w = 6.0 / 72.0;
+    assert!(mt.width >= 40.0 * char_w - 1e-9, "wide enough for its text, not the 20 pt icon: {}", mt.width);
+    let origin = d.layouts.iter().find(|l| l.name == "Layout1").unwrap().origin;
+    assert!((mt.insert.x - (origin.x + 600.0 / 72.0)).abs() < 1e-9 && (mt.insert.y - (origin.y + 620.0 / 72.0)).abs() < 1e-9, "at the icon");
+    let EntityKind::MText(boxed) = &d.entity(hex(&r["placed"][1]["handles"][0])).unwrap().kind else { panic!() };
+    assert!((boxed.width - 1.0).abs() < 1e-9, "a text box keeps its width: {}", boxed.width);
+}

@@ -533,6 +533,7 @@ fn run_presspull(s: &mut Session, p: &Value) -> Result<Value> {
 pub(crate) fn massprop_solids(s: &Session, hs: &[Handle]) -> Result<(Vec<Value>, Vec<String>)> {
     let d = s.doc()?;
     let f = |v: f64| super::inquiry::fmt_d(s, v);
+    let n = |v: f64| super::inquiry::fmt_n(s, v);
     let mut out = Vec::new();
     let mut lines = Vec::new();
     for h in hs {
@@ -545,9 +546,9 @@ pub(crate) fn massprop_solids(s: &Session, hs: &[Handle]) -> Result<(Vec<Value>,
         }));
         lines.push(format!(
             "----------------   SOLIDS    ----------------\nMass:                    {}\nVolume:                  {}\nSurface area:            {}\nBounding box:         X: {}  --  {}\n                      Y: {}  --  {}\n                      Z: {}  --  {}\nCentroid:             X: {}\n                      Y: {}\n                      Z: {}",
-            f(m.volume),
-            f(m.volume),
-            f(m.area),
+            n(m.volume),
+            n(m.volume),
+            n(m.area),
             f(m.min.x),
             f(m.max.x),
             f(m.min.y),

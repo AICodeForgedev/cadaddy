@@ -2347,3 +2347,97 @@
 	Manage Attributes	Administrar atributos
 	Dialog State	Estado del cuadro de diálogo
 	Dialog Action	Acción del cuadro de diálogo
+	Recover Drawing and Xrefs...	Recuperar dibujo y refX...
+	Count Blocks	Contar bloques
+	Get Selection Set	Obtener conjunto de selección
+	Global Attribute Edit	Edición global de atributos
+	LISP Function Surfer	Explorador de funciones LISP
+	List LISP Symbols	Listar símbolos LISP
+	List Nested Object	Listar objeto anidado
+	List Object Xdata	Listar datos extendidos del objeto
+	Multiple Polyline Edit	Editar varias polilíneas
+	Redefine Path	Redefinir ruta
+	Redefine Path Mode	Modo de redefinición de ruta
+	Restore Dimension Text	Restaurar texto de cota
+	Revert	Revertir
+	Rotate Blocks	Girar bloques
+	Scale Blocks	Escalar bloques
+	Select Similar by Properties	Seleccionar similares por propiedades
+	Show URLs	Mostrar URL
+	Synchronize Viewports	Sincronizar ventanas gráficas
+	Paste Special	Pegado especial
+	Paste Special...	Pegado especial...
+	Paste as	Pegar como
+	Last Measurement	Última medición
+	Perimeter	Perímetro
+	curl isn't available ({error}).	curl no está disponible ({error}).
+	This build has no release key to check updates with.	Esta compilación no tiene una clave de versión para comprobar las actualizaciones.
+	The release's signature files are too large.	Los archivos de firma de la versión son demasiado grandes.
+	The release's signature isn't one CADaddy reads.	La firma de la versión no tiene un formato que CADaddy sepa leer.
+	The release's signature is missing or damaged.	La firma de la versión falta o está dañada.
+	The release's signature is for another version ({version}).	La firma de la versión corresponde a otra versión ({version}).
+	The release is signed with a key this build doesn't trust.	La versión está firmada con una clave en la que esta compilación no confía.
+	This build's release key is damaged.	La clave de versión de esta compilación está dañada.
+	The release's signature doesn't match its files.	La firma de la versión no coincide con sus archivos.
+	Couldn't reach GitHub: {why}	No se pudo conectar con GitHub: {why}
+	GitHub's answer was too large.	La respuesta de GitHub era demasiado grande.
+	GitHub's answer wasn't readable ({error}).	La respuesta de GitHub no se pudo leer ({error}).
+	GitHub's answer has no version.	La respuesta de GitHub no incluye ninguna versión.
+	GitHub's answer has an unreadable version ({version}).	La respuesta de GitHub incluye una versión ilegible ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	No se pudo descargar {name} de la versión, así que no se instaló nada: {why}
+	The release's {name} is too large, so nothing was installed.	{name} de la versión es demasiado grande, así que no se instaló nada.
+	The release's {name} isn't text, so nothing was installed.	{name} de la versión no es texto, así que no se instaló nada.
+	It wasn't downloaded. Download it from the release page instead.	No se descargó. Descárguelo desde la página de la versión.
+	Version {version} isn't newer than this one ({current}).	La versión {version} no es más reciente que esta ({current}).
+	This release isn't signed.	Esta versión no está firmada.
+	The release failed its check.	La versión no superó la comprobación.
+	The signed release doesn't list {name}.	La versión firmada no incluye {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	La huella de GitHub para {name} difiere de la firmada.
+	Couldn't make the folder {folder}: {error}	No se pudo crear la carpeta {folder}: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	La descarga no coincidía con su huella SHA-256 publicada, así que no se instaló.
+	Couldn't read the download: {error}	No se pudo leer la descarga: {error}
+	The download failed: {why}	La descarga falló: {why}
+	This release has no installer for this computer yet.	Esta versión aún no tiene instalador para este equipo.
+	Drawing Properties...	Propiedades del dibujo...
+	System Variable Monitor...	Monitor de variables de sistema...
+	{name} Properties	Propiedades de {name}
+	Summary	Resumen
+	Statistics	Estadísticas
+	Custom	Personalizado
+	Size	Tamaño
+	Subject	Asunto
+	Author	Autor
+	Keywords	Palabras clave
+	Comments	Comentarios
+	Revision number	Número de revisión
+	Hyperlink base	Base de hipervínculo
+	Created	Creado
+	Modified	Modificado
+	Last saved by	Guardado por última vez por
+	Total editing time (minutes)	Tiempo total de edición (minutos)
+	Property	Propiedad
+	System Variable Monitor	Monitor de variables de sistema
+	Variable	Variable
+	Watched value	Valor vigilado
+	Current value	Valor actual
+	Notify when a watched variable changes	Avisar cuando cambie una variable vigilada
+	Reset All	Restablecer todo
+	Delay	Retardo
+	Repeat Script	Repetir script
+	Script Call	Llamar a script
+	Resume Script	Reanudar script
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	Guardar un historial de actividad de cada dibujo (privado, en la carpeta de configuración de CADaddy)
+	Specify insertion point or	Precise punto de inserción o
+	Specify table scale	Precise la escala de la tabla
+	{} dimension(s) updated to the current settings.	{} cota(s) actualizada(s) con la configuración actual.
+	British English (-ise)	Inglés británico (-ise)
+	British English (-ize)	Inglés británico (-ize)
+	Spanish	Español
+	French	Francés
+	German	Alemán
+	Portuguese (Iberian)	Portugués (ibérico)
+	Portuguese (Brazilian)	Portugués (brasileño)
+	(not installed)	(no instalado)
+	Dictionaries are read from:	Los diccionarios se leen de:
+	Published to {path}	Publicado en {path}
+	Sheet Set (.sheetset.json)	Conjunto de planos (.sheetset.json)

@@ -2321,3 +2321,97 @@ menu	Modify	Modifikace
 	Manage Attributes	Spravovat atributy
 	Dialog State	Stav dialogu
 	Dialog Action	Akce dialogu
+	Recover Drawing and Xrefs...	Obnovit výkres a externí reference...
+	Count Blocks	Spočítat bloky
+	Get Selection Set	Získat sadu výběru
+	Global Attribute Edit	Globální úprava atributů
+	LISP Function Surfer	Prohlížeč funkcí LISP
+	List LISP Symbols	Vypsat symboly LISP
+	List Nested Object	Vypsat vnořený objekt
+	List Object Xdata	Vypsat rozšířená data objektu
+	Multiple Polyline Edit	Úprava více křivek
+	Redefine Path	Předefinovat cestu
+	Redefine Path Mode	Režim předefinování cesty
+	Restore Dimension Text	Obnovit text kóty
+	Revert	Vrátit k uložené verzi
+	Rotate Blocks	Otočit bloky
+	Scale Blocks	Změnit měřítko bloků
+	Select Similar by Properties	Vybrat podobné podle vlastností
+	Show URLs	Zobrazit adresy URL
+	Synchronize Viewports	Synchronizovat výřezy
+	Paste Special	Vložit jinak
+	Paste Special...	Vložit jinak...
+	Paste as	Vložit jako
+	Last Measurement	Poslední měření
+	Perimeter	Obvod
+	curl isn't available ({error}).	Nástroj curl není k dispozici ({error}).
+	This build has no release key to check updates with.	Toto sestavení nemá klíč vydání, kterým by ověřilo aktualizace.
+	The release's signature files are too large.	Soubory s podpisem vydání jsou příliš velké.
+	The release's signature isn't one CADaddy reads.	Podpis vydání není ve formátu, který CADaddy umí přečíst.
+	The release's signature is missing or damaged.	Podpis vydání chybí nebo je poškozený.
+	The release's signature is for another version ({version}).	Podpis vydání patří k jiné verzi ({version}).
+	The release is signed with a key this build doesn't trust.	Vydání je podepsáno klíčem, kterému toto sestavení nedůvěřuje.
+	This build's release key is damaged.	Klíč vydání v tomto sestavení je poškozený.
+	The release's signature doesn't match its files.	Podpis vydání neodpovídá jeho souborům.
+	Couldn't reach GitHub: {why}	Nelze se spojit s GitHubem: {why}
+	GitHub's answer was too large.	Odpověď GitHubu byla příliš velká.
+	GitHub's answer wasn't readable ({error}).	Odpověď GitHubu nešla přečíst ({error}).
+	GitHub's answer has no version.	Odpověď GitHubu neobsahuje verzi.
+	GitHub's answer has an unreadable version ({version}).	Odpověď GitHubu obsahuje nečitelnou verzi ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	Soubor {name} z vydání nelze stáhnout, nic nebylo nainstalováno: {why}
+	The release's {name} is too large, so nothing was installed.	Soubor {name} z vydání je příliš velký, nic nebylo nainstalováno.
+	The release's {name} isn't text, so nothing was installed.	Soubor {name} z vydání není text, nic nebylo nainstalováno.
+	It wasn't downloaded. Download it from the release page instead.	Nebylo staženo. Stáhněte je raději ze stránky vydání.
+	Version {version} isn't newer than this one ({current}).	Verze {version} není novější než tato ({current}).
+	This release isn't signed.	Toto vydání není podepsané.
+	The release failed its check.	Vydání neprošlo kontrolou.
+	The signed release doesn't list {name}.	Podepsané vydání neuvádí soubor {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	Otisk souboru {name} na GitHubu se liší od podepsaného.
+	Couldn't make the folder {folder}: {error}	Nelze vytvořit složku {folder}: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	Stažený soubor neodpovídá zveřejněnému otisku SHA-256, proto nebyl nainstalován.
+	Couldn't read the download: {error}	Stažený soubor nelze přečíst: {error}
+	The download failed: {why}	Stahování selhalo: {why}
+	This release has no installer for this computer yet.	Toto vydání zatím nemá instalátor pro tento počítač.
+	Drawing Properties...	Vlastnosti výkresu...
+	System Variable Monitor...	Sledování systémových proměnných...
+	{name} Properties	Vlastnosti {name}
+	Summary	Souhrn
+	Statistics	Statistika
+	Custom	Vlastní
+	Size	Velikost
+	Subject	Předmět
+	Author	Autor
+	Keywords	Klíčová slova
+	Comments	Komentáře
+	Revision number	Číslo revize
+	Hyperlink base	Základ hypertextových odkazů
+	Created	Vytvořeno
+	Modified	Změněno
+	Last saved by	Naposledy uložil
+	Total editing time (minutes)	Celková doba úprav (minuty)
+	Property	Vlastnost
+	System Variable Monitor	Sledování systémových proměnných
+	Variable	Proměnná
+	Watched value	Sledovaná hodnota
+	Current value	Aktuální hodnota
+	Notify when a watched variable changes	Upozornit při změně sledované proměnné
+	Reset All	Obnovit vše
+	Delay	Prodleva
+	Repeat Script	Opakovat skript
+	Script Call	Volání skriptu
+	Resume Script	Pokračovat ve skriptu
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	Uchovávat historii činností každého výkresu (soukromě, ve složce nastavení CADaddy)
+	Specify insertion point or	Zadejte bod vložení nebo
+	Specify table scale	Zadejte měřítko tabulky
+	{} dimension(s) updated to the current settings.	Aktualizováno kót na aktuální nastavení: {}.
+	British English (-ise)	Britská angličtina (-ise)
+	British English (-ize)	Britská angličtina (-ize)
+	Spanish	Španělština
+	French	Francouzština
+	German	Němčina
+	Portuguese (Iberian)	Portugalština (Portugalsko)
+	Portuguese (Brazilian)	Portugalština (Brazílie)
+	(not installed)	(nenainstalováno)
+	Dictionaries are read from:	Slovníky se čtou z:
+	Published to {path}	Publikováno do {path}
+	Sheet Set (.sheetset.json)	Sada výkresů (.sheetset.json)

@@ -227,24 +227,84 @@ pub fn follow_check(url: &str) -> Follow {
     if url.chars().any(char::is_control) {
         return Follow::Refuse("the link holds control characters".into());
     }
-    let path = if has_scheme(url) && !is_absolute_path(url) {
+    let (path, url_form) = if has_scheme(url) && !is_absolute_path(url) {
         let (scheme, rest) = url.split_once(':').unwrap_or_default();
         match scheme.to_ascii_lowercase().as_str() {
             "http" | "https" | "mailto" => return Follow::Open,
-            "file" => rest.trim_start_matches('/').to_string(),
+            "file" => (rest.to_string(), true),
             other => return Follow::Refuse(format!("\"{other}:\" links aren't followed; only web, email and file links are")),
         }
     } else {
-        url.to_string()
+        (url.to_string(), false)
     };
-    // The file's name: no fragment, `%20` and `%23` decoded, either separator.
-    let path = path.split('#').next().unwrap_or_default().replace("%20", " ").replace("%23", "#");
+    // No fragment; every `%xx` decoded (the system decodes them too: `setup%2Eexe` runs `setup.exe`).
+    let path = percent_decode(path.split('#').next().unwrap_or_default());
+    // A file on another computer (`\\server\share\x`, `//server/x`, `file://server/x`): opening it
+    // connects to that computer, which on Windows sends it your sign-in.
+    if let Some(host) = network_host(&path, url_form) {
+        return Follow::Ask(format!("the link opens a file on another computer ({host}): following it connects to that computer"));
+    }
+    // The file's name, either separator; Windows ignores trailing dots and spaces and reads
+    // `name:stream` as the file `name`.
     let name = path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or_default().to_string();
-    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    let bare = name.split(':').next().unwrap_or_default().trim_end_matches(['.', ' ']);
+    let ext = bare.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
     if RUNS.contains(&ext.as_str()) {
         return Follow::Ask(format!("{name} is a program or script: opening it runs it, and it could change your computer"));
     }
     Follow::Open
+}
+
+/// `text` with each `%xx` escape decoded (invalid escapes kept as they are; bytes that don't make
+/// UTF-8 become U+FFFD).
+fn percent_decode(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while let Some(&c) = b.get(i) {
+        let hex = |k: usize| b.get(k).and_then(|h| (*h as char).to_digit(16));
+        match (c, hex(i + 1), hex(i + 2)) {
+            (b'%', Some(h), Some(l)) => {
+                out.push(u8::try_from(h * 16 + l).unwrap_or(b'?'));
+                i += 3;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The other computer a decoded file path or `file:` URL body (`url_form`: what followed
+/// `file:`) names, if it names one: a UNC path (`\\host\share`, `//host/share`, `\\?\UNC\host`)
+/// or a URL with a host (`file://host/x`; `file:///x` and `file://localhost/x` are this computer).
+fn network_host(path: &str, url_form: bool) -> Option<String> {
+    let p = path.replace('\\', "/");
+    let rest = if url_form {
+        // `file://host/x`; `file:////host/x` and `file://///host/x` carry a UNC path.
+        let after = p.strip_prefix("//")?;
+        match after.strip_prefix('/') {
+            Some(abs) => abs.strip_prefix('/')?.trim_start_matches('/'),
+            None => after,
+        }
+    } else {
+        p.strip_prefix("//")?.trim_start_matches('/')
+    };
+    // Win32 namespaces: `//?/UNC/host/share` is a share; `//?/C:/x` and `//./C:/x` are local drives.
+    let rest = match rest.get(..2) {
+        Some("?/") | Some("./") => {
+            let inner = rest.get(2..).unwrap_or_default();
+            match inner.get(..4) {
+                Some(u) if u.eq_ignore_ascii_case("unc/") => inner.get(4..).unwrap_or_default(),
+                _ => return None,
+            }
+        }
+        _ => rest,
+    };
+    let host = rest.split('/').next().unwrap_or_default();
+    (!host.is_empty() && !host.eq_ignore_ascii_case("localhost")).then(|| host.to_string())
 }
 
 #[cfg(test)]
@@ -270,9 +330,28 @@ mod tests {
             "C:\\x\\go.bat",
             "script.ps1",
             "file:///x/a%20b.sh#frag",
+            // Escaped, padded or streamed names still run the program.
+            "file:///C:/Temp/setup%2Eexe",
+            "file:///C:/Temp/setup%2eEXE",
+            "C:\\Temp\\setup.exe.",
+            "C:\\Temp\\setup.exe . ",
+            "C:\\Temp\\setup.exe::$DATA",
+            // Files on other computers: following them connects there.
+            "\\\\192.0.2.1\\share\\plan.pdf",
+            "//192.0.2.1/share/plan.pdf",
+            "file://192.0.2.1/share/plan.pdf",
+            "file:////192.0.2.1/share/plan.pdf",
+            "file://///192.0.2.1/share/plan.pdf",
+            "\\\\?\\UNC\\192.0.2.1\\share\\plan.pdf",
+            "file:%2F%2F192.0.2.1/share/plan.pdf",
         ] {
             assert!(matches!(follow_check(ask), Follow::Ask(_)), "{ask}");
         }
+        // This computer stays this computer.
+        for ok in ["file://localhost/C:/a.pdf", "file:///home/x/a%2Bb.pdf", "\\\\?\\C:\\a.pdf", "/srv/plans/a.pdf"] {
+            assert_eq!(follow_check(ok), Follow::Open, "{ok}");
+        }
+        assert_eq!(percent_decode("a%2Eb%zz%4"), "a.b%zz%4");
         for no in [
             "javascript:alert(1)",
             "data:text/html,<b>x</b>",

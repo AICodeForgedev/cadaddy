@@ -33,9 +33,13 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let metric = cadaddy_engine::sysvars::get(&app.session, "MEASUREMENT").and_then(|v| v.as_i64()) == Some(1);
     let mut action: Option<(&str, Value)> = None;
     let mut refresh = false;
-    egui::Window::new(crate::tl!("Rooms")).id(egui::Id::new("Rooms palette")).open(open).default_size(vec2(520.0, 360.0)).collapsible(false).show(
-        ctx,
-        |ui| {
+    egui::Window::new(crate::tl!("Rooms"))
+        .id(egui::Id::new("Rooms palette"))
+        .default_pos(crate::palette_pos(app))
+        .open(open)
+        .default_size(vec2(520.0, 360.0))
+        .collapsible(false)
+        .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(crate::tf!("{n} rooms", n = rooms.len()));
                 if ui.button(crate::tl!("Refresh")).clicked() {
@@ -77,8 +81,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     }
                 });
             });
-        },
-    );
+        });
     if let Some((id, p)) = action
         && let Err(e) = app.run(id, p)
     {

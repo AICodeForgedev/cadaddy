@@ -96,11 +96,27 @@ impl Session {
     }
 }
 
+/// Refuse an agent's change that loosens what loads routines and scripts (SECURELOAD lowered,
+/// TRUSTEDPATHS changed): like turning agent confirmations off, that is the user's choice. A
+/// drawing's text must not be able to talk an agent into it.
+pub(crate) fn agent_may_not_loosen(s: &Session, secureload: u8, trustedpaths: &str) -> Result<()> {
+    if s.agent.from_agent && (secureload < s.settings.secureload || trustedpaths != s.settings.trustedpaths) {
+        return Err(EngineError::Other(
+            "Only the user can loosen SECURELOAD or change TRUSTEDPATHS (Options, or typed in CADaddy), not an agent.".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// `secureload.allow {path, always?}`: allow a file once this session, or always (its folder
-/// goes into TRUSTEDPATHS). Refused while LISP or a script runs.
+/// goes into TRUSTEDPATHS). Refused while LISP or a script runs, and from agents (the user answers
+/// the app's question).
 fn run_allow(s: &mut Session, p: &Value) -> Result<Value> {
     if s.running_code() {
         return Err(EngineError::Other("secureload.allow can't be used from LISP or a script".into()));
+    }
+    if s.agent.from_agent {
+        return Err(EngineError::Other("Only the user can allow a file outside the trusted folders (CADaddy asks them), not an agent.".into()));
     }
     let path =
         str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()).ok_or_else(|| crate::cmd::bad("secureload.allow", "`path` is required"))?;
@@ -128,7 +144,7 @@ fn run_allow(s: &mut Session, p: &Value) -> Result<Value> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("secureload.allow", "Allow Loading a File", run_allow)
-            .params("{path, always?: bool (add its folder to TRUSTEDPATHS; default: this session only)} → {allowed, trustedpaths} — refused from LISP and scripts")
+            .params("{path, always?: bool (add its folder to TRUSTEDPATHS; default: this session only)} → {allowed, trustedpaths} — refused from LISP, scripts and agents")
             .enabled(always)
             .noundo(),
     ]

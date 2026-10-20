@@ -37,6 +37,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 [dev-dependencies]
 # Real DXF files for the external reference tests (io is a lower layer).
 cadaddy-io = { workspace = true }
+# JPEG artefacts for the IMAGETRACE accuracy tests (already the renderer's image codec).
+image = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Edits of very large selections chunk by chunk on all cores (already used by render and io).

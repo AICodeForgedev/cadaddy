@@ -188,6 +188,11 @@ fn run_options(s: &mut Session, p: &Value) -> Result<Value> {
         s.settings = before;
         return Err(e);
     }
+    // A reset can loosen them too: judged against the settings before the call.
+    let (secureload, trusted) = (s.settings.secureload, s.settings.trustedpaths.clone());
+    let after = std::mem::replace(&mut s.settings, before);
+    crate::secureload::agent_may_not_loosen(s, secureload, &trusted)?;
+    s.settings = after;
     s.touch();
     Ok(profile(s))
 }

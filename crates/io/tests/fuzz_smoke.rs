@@ -1,7 +1,7 @@
 //! A short deterministic burst of the mutation fuzzer (`cargo xtask fuzz` runs it for longer):
-//! damaged DXF (ASCII and binary), SVG, PDF and .cdy files read without a panic. DWG is left
-//! out: its reader can abort on a hostile section size (an allocation failure, not a panic;
-//! see the fuzz task's notes).
+//! damaged DXF (ASCII and binary), DWG, SVG, PDF and .cdy files read without a panic. (DWG was
+//! left out while its reader could abort on a hostile section size; 0.7.8's capped reader took
+//! 80,000 mutated files in `cargo xtask fuzz dwg` without one.)
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -83,9 +83,11 @@ fn damaged_files_read_without_panicking() {
     let svg = cadaddy_io::write(&d, "s.svg").unwrap();
     let pdf = cadaddy_io::write(&d, "s.pdf").unwrap();
     let cdy = cadaddy_io::cdy::write_cdy(&d).unwrap();
+    let dwg = cadaddy_io::write(&d, "s.dwg").unwrap();
     burst("dxf", &ascii, 400, |b| drop(cadaddy_io::read_dxf(b)));
     burst("binary dxf", &binary, 400, |b| drop(cadaddy_io::read_dxf(b)));
     burst("svg", &svg, 300, |b| drop(cadaddy_io::read(b, "x.svg")));
     burst("pdf", &pdf, 200, |b| drop(cadaddy_io::pdf_read::read(b, &cadaddy_io::pdf_read::PdfOptions::default())));
     burst("cdy", &cdy, 400, |b| drop(cadaddy_io::cdy::read_cdy(b)));
+    burst("dwg", &dwg, 300, |b| drop(cadaddy_io::read(b, "x.dwg")));
 }

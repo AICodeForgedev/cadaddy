@@ -229,10 +229,26 @@ impl State {
         let Some(v) = log.get(from..).unwrap_or_default().iter().rev().find_map(|l| l.strip_prefix(PICKED)) else { return };
         let v = v.trim();
         let text = if v.contains(',') { format!("[{v}]") } else { v.to_string() };
+        self.insert(&text);
+    }
+    /// Put a value into the expression: after an operator or an opening bracket it continues the
+    /// expression, otherwise it replaces it.
+    fn insert(&mut self, text: &str) {
         if !self.input.is_empty() && !self.input.ends_with([' ', '(', ',', '+', '-', '*', '/', '^', '[']) {
             self.input.clear();
         }
-        self.input.push_str(&text);
+        self.input.push_str(text);
+    }
+    /// The last distance, area or perimeter measured (DIST, AREA, MEASUREGEOM) into the expression.
+    fn last(&mut self, app: &mut CadApp, which: &str) {
+        match app.run("cal", json!({ "last": which })) {
+            Ok(r) => {
+                let v = r.get("message").and_then(Value::as_str).unwrap_or("0").to_string();
+                self.insert(&v);
+                self.error = None;
+            }
+            Err(e) => self.error = Some(e),
+        }
     }
 }
 
@@ -308,6 +324,19 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             ] {
                 if ui.add_enabled(st.pending.is_none(), egui::Button::new(label)).clicked() {
                     st.pick(app, mode);
+                }
+            }
+        });
+        // The last measurement taken, without picking again.
+        ui.horizontal(|ui| {
+            ui.add_space(6.0);
+            ui.label(RichText::new(crate::tl!("Last Measurement")).color(t.text_dim));
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(6.0);
+            for (which, label) in [("distance", crate::tl!("Distance")), ("area", crate::tl!("Area")), ("perimeter", crate::tl!("Perimeter"))] {
+                if ui.add_enabled(st.pending.is_none(), egui::Button::new(label)).clicked() {
+                    st.last(app, which);
                 }
             }
         });

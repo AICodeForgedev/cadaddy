@@ -119,6 +119,7 @@ mod tests {
                 pick_pdf: None,
                 pick_image: None,
                 read_clipboard: None,
+                system_clipboard: None,
                 thumbnail: None,
                 pick_save_image: None,
             },

@@ -65,42 +65,47 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let mut select: Option<Vec<String>> = None;
     let (mut dry, mut confirm) = (app.session.agent.dry_run, app.session.agent.confirm);
     let mut clear = false;
-    egui::Window::new(crate::tl!("Agent Activity")).id(egui::Id::new("agent_activity")).open(open).default_size(vec2(460.0, 360.0)).show(ctx, |ui| {
-        ui.checkbox(&mut confirm, crate::tl!("Ask me before an agent saves over a file or closes with changes"));
-        ui.checkbox(&mut dry, crate::tl!("Dry run: agents' commands change nothing"));
-        ui.separator();
-        let entries: Vec<_> = app.session.agent.journal.iter().rev().cloned().collect();
-        if entries.is_empty() {
-            ui.label(RichText::new(crate::tl!("No agent requests yet.")).color(t.text_dim));
-        }
-        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-            for e in &entries {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("#{} {}", e.id, e.label)).strong());
-                    ui.label(RichText::new(&e.drawing).color(t.text_dim));
-                });
-                ui.horizontal(|ui| {
-                    ui.label(crate::tf!(
-                        "{commands} commands · {added} added · {removed} removed · {changed} changed",
-                        commands = e.commands,
-                        added = e.counts[0],
-                        removed = e.counts[1],
-                        changed = e.counts[2]
-                    ));
-                    let what: Vec<String> = e.added.iter().chain(&e.changed).cloned().collect();
-                    if !what.is_empty()
-                        && ui.small_button(crate::tl!("Select")).on_hover_text(crate::tl!("Select what it added and changed")).clicked()
-                    {
-                        select = Some(what);
-                    }
-                });
-                ui.separator();
+    egui::Window::new(crate::tl!("Agent Activity"))
+        .id(egui::Id::new("agent_activity"))
+        .default_pos(crate::palette_pos(app))
+        .open(open)
+        .default_size(vec2(460.0, 360.0))
+        .show(ctx, |ui| {
+            ui.checkbox(&mut confirm, crate::tl!("Ask me before an agent saves over a file or closes with changes"));
+            ui.checkbox(&mut dry, crate::tl!("Dry run: agents' commands change nothing"));
+            ui.separator();
+            let entries: Vec<_> = app.session.agent.journal.iter().rev().cloned().collect();
+            if entries.is_empty() {
+                ui.label(RichText::new(crate::tl!("No agent requests yet.")).color(t.text_dim));
+            }
+            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                for e in &entries {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("#{} {}", e.id, e.label)).strong());
+                        ui.label(RichText::new(&e.drawing).color(t.text_dim));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(crate::tf!(
+                            "{commands} commands · {added} added · {removed} removed · {changed} changed",
+                            commands = e.commands,
+                            added = e.counts[0],
+                            removed = e.counts[1],
+                            changed = e.counts[2]
+                        ));
+                        let what: Vec<String> = e.added.iter().chain(&e.changed).cloned().collect();
+                        if !what.is_empty()
+                            && ui.small_button(crate::tl!("Select")).on_hover_text(crate::tl!("Select what it added and changed")).clicked()
+                        {
+                            select = Some(what);
+                        }
+                    });
+                    ui.separator();
+                }
+            });
+            if !entries.is_empty() && ui.button(crate::tl!("Clear")).clicked() {
+                clear = true;
             }
         });
-        if !entries.is_empty() && ui.button(crate::tl!("Clear")).clicked() {
-            clear = true;
-        }
-    });
     // Switches as the user's own commands (an agent can't turn the question off).
     if confirm != app.session.agent.confirm {
         let _ = app.run("agent.confirm", json!({ "on": confirm }));

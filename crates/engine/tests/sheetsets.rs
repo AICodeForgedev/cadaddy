@@ -142,3 +142,106 @@ fn subsets_removal_and_refusals() {
     let e = s.execute("sheetset", &json!({ "set": dir.join("old.dst").to_string_lossy() })).unwrap_err();
     assert!(e.to_string().contains(".dst"), "{e}");
 }
+
+#[test]
+fn a_new_set_is_a_sheetset_json_file_named_without_its_extension() {
+    let dir = folder("names");
+    let mut s = Session::new();
+    // What a Save dialog may hand back: a drawing's `.cdy`, a bare `.json`, no extension.
+    for (given, file) in [
+        ("Riverside Annex.cdy", "Riverside Annex.sheetset.json"),
+        ("Mill Yard.json", "Mill Yard.sheetset.json"),
+        ("North Wing", "North Wing.sheetset.json"),
+        ("Depot.sheetset.json", "Depot.sheetset.json"),
+        ("Kiln.sheetset.json.cdy", "Kiln.sheetset.json"),
+    ] {
+        let r = s.execute("sheetset", &json!({ "set": dir.join(given).to_string_lossy(), "action": "new" })).unwrap();
+        let want = dir.join(file);
+        assert_eq!(r["set"], json!(want.to_string_lossy()), "{given}");
+        assert!(want.exists(), "{given}");
+        assert_eq!(r["name"], file.trim_end_matches(".sheetset.json"), "{given}");
+        let r = s.execute("sheetset", &json!({ "set": want.to_string_lossy() })).unwrap();
+        assert_eq!(r["name"], file.trim_end_matches(".sheetset.json"));
+    }
+    assert!(!dir.join("Riverside Annex.cdy").exists(), "never a .cdy");
+    let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert!(names.iter().all(|n| n.ends_with(".sheetset.json")), "{names:?}");
+    // A given name wins; an existing set isn't replaced unasked.
+    let r = s.execute("sheetset", &json!({ "set": dir.join("Yard 2.cdy").to_string_lossy(), "action": "new", "name": "Yard Two" })).unwrap();
+    assert_eq!(r["name"], "Yard Two");
+    assert!(s.execute("sheetset", &json!({ "set": dir.join("Yard 2").to_string_lossy(), "action": "new" })).is_err());
+}
+
+/// A drawing whose model space holds a plan and whose layouts are empty (as a DWG made elsewhere
+/// often has), or one with nothing drawn at all.
+fn bare_drawing(path: &Path, with_plan: bool) {
+    let mut d = Drawing::new_imperial();
+    for i in 0..if with_plan { 60 } else { 0 } {
+        let (x, y) = (f64::from(i * 37 % 480), f64::from(i * 53 % 360));
+        let h = d.new_handle();
+        d.space_mut(&Space::Model)
+            .unwrap()
+            .push(Entity::new(h, EntityKind::Line(Line { a: Vec3::new(x, 0.0, 0.0), b: Vec3::new(480.0 - y, y, 0.0) })));
+    }
+    assert!(d.layouts.iter().all(|l| l.entities.is_empty()));
+    std::fs::write(path, cadaddy_io::write(&d, &path.to_string_lossy()).unwrap()).unwrap();
+}
+
+fn publish(s: &mut Session, set: &Path, out: &Path) -> Value {
+    s.execute("sheetset", &json!({ "set": set.to_string_lossy(), "action": "publish", "path": out.to_string_lossy() })).unwrap()
+}
+
+#[test]
+fn a_drawings_empty_layouts_are_set_up_for_publishing_and_blank_sheets_warned_about() {
+    hooks();
+    let dir = folder("setup");
+    bare_drawing(&dir.join("plan.dxf"), true);
+    bare_drawing(&dir.join("blank.dxf"), false);
+    let set = dir.join("Orchard Row.sheetset.json");
+    let mut s = Session::new();
+    s.execute("sheetset", &json!({ "set": set.to_string_lossy(), "action": "new" })).unwrap();
+    s.execute("sheetset", &json!({ "set": set.to_string_lossy(), "action": "add", "drawing": dir.join("plan.dxf").to_string_lossy() })).unwrap();
+    // The plan's layouts get a viewport on its extents: nothing to warn about, and the drawing's
+    // own file is left as it was.
+    let before = std::fs::read(dir.join("plan.dxf")).unwrap();
+    let r = publish(&mut s, &set, &dir.join("a.pdf"));
+    assert_eq!(r["pages"], 2);
+    assert_eq!(r["warnings"], json!([]), "{r}");
+    assert_eq!(std::fs::read(dir.join("plan.dxf")).unwrap(), before);
+    // The plan shows on the page (a blank page is much smaller than one with the viewport's plan).
+    let blank_pdf = {
+        let mut t = Session::new();
+        let set2 = dir.join("only-blank.sheetset.json");
+        t.execute("sheetset", &json!({ "set": set2.to_string_lossy(), "action": "new" })).unwrap();
+        t.execute(
+            "sheetset",
+            &json!({ "set": set2.to_string_lossy(), "action": "add", "drawing": dir.join("blank.dxf").to_string_lossy(), "layouts": ["Layout1"] }),
+        )
+        .unwrap();
+        let log = t.log.len();
+        let r = publish(&mut t, &set2, &dir.join("b.pdf"));
+        // A sheet with nothing on it: warned in the result and on the command line.
+        let w = r["warnings"].as_array().unwrap();
+        assert_eq!(w.len(), 1, "{r}");
+        assert!(w[0].as_str().unwrap().contains("nothing on it"), "{r}");
+        assert!(t.log[log..].iter().any(|l| l.starts_with("Warning:") && l.contains("blank.dxf")), "{:?}", &t.log[log..]);
+        std::fs::read(dir.join("b.pdf")).unwrap()
+    };
+    let one = dir.join("one-plan.sheetset.json");
+    s.execute("sheetset", &json!({ "set": one.to_string_lossy(), "action": "new" })).unwrap();
+    s.execute(
+        "sheetset",
+        &json!({ "set": one.to_string_lossy(), "action": "add", "drawing": dir.join("plan.dxf").to_string_lossy(), "layouts": ["Layout1"] }),
+    )
+    .unwrap();
+    publish(&mut s, &one, &dir.join("one.pdf"));
+    let plan_pdf = std::fs::read(dir.join("one.pdf")).unwrap();
+    assert!(plan_pdf.len() > blank_pdf.len() + 400, "the plan is on its page: {} vs {}", plan_pdf.len(), blank_pdf.len());
+    // Mixed: only the blank sheet is named.
+    s.execute("sheetset", &json!({ "set": set.to_string_lossy(), "action": "add", "drawing": dir.join("blank.dxf").to_string_lossy(), "layouts": ["Layout2"], "number": "9", "title": "Spare" })).unwrap();
+    let r = publish(&mut s, &set, &dir.join("c.pdf"));
+    assert_eq!(r["pages"], 3);
+    let w: Vec<&str> = r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].starts_with("Sheet 9 Spare"), "{w:?}");
+}

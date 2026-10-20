@@ -1,13 +1,16 @@
 //! `cargo xtask perf [--full] [--update-budget]`: the performance budgets.
 //!
 //! Runs the engine's `perfbench` example (the dev profile CI builds anyway) over generated
-//! drawings — 1k and 10k objects, and with `--full` also 100k and 500k — timing open and save as
-//! DWG/DXF/.cdy, regen, select all, move all, zoom extents, 3D build and plot to PDF. Each time is
+//! drawings — 1k and 10k objects, and with `--full` also 100k, 500k and a million — timing open
+//! and save as DWG/DXF/.cdy, regen, select all, move all, undo, zoom extents, 3D build, plot to
+//! PDF and close, with each size's peak memory (`peak_mb@size`, MB). Each time is
 //! compared with `perf/budget.json` (today's numbers plus 25 %, from `--update-budget`), under
 //! this machine's platform (`macos-aarch64`, `linux-x86_64`…: each records its own; a platform
 //! with none only gets "no budget" until `--update-budget` runs there): over the budget is a
 //! warning, over twice the budget fails. Times under 5 ms are compared with 5 ms
-//! (timer noise). Every run is appended to `target/perf/history.jsonl` (the trend).
+//! (timer noise). With `--full`, a step whose million-object time is over twice ten times its
+//! 100k time grows faster than the drawing: reported, and a failure. Every run is appended to
+//! `target/perf/history.jsonl` (the trend).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -44,6 +47,25 @@ fn read_json(path: &Path) -> BTreeMap<String, f64> {
     std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<BTreeMap<String, f64>>(&t).ok()).unwrap_or_default()
 }
 
+/// Steps whose time at a million objects is over twice ten times their time at 100k (growing
+/// faster than the drawing does), as (step, ratio of the 1M time to ten times the 100k time).
+/// Times at 100k under the noise floor are compared as the floor.
+pub fn superlinear(results: &BTreeMap<String, f64>) -> Vec<(String, f64)> {
+    let mut out = Vec::new();
+    for (k, big) in results {
+        let Some(op) = k.strip_suffix("@1000000") else { continue };
+        if op.starts_with("peak_mb") {
+            continue;
+        }
+        let Some(small) = results.get(&format!("{op}@100000")) else { continue };
+        let ratio = big / (10.0 * small.max(FLOOR_MS));
+        if ratio > 2.0 {
+            out.push((op.to_string(), (ratio * 100.0).round() / 100.0));
+        }
+    }
+    out
+}
+
 /// This machine's key in the budget file.
 pub fn platform() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
@@ -55,7 +77,7 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     if let Some(bad) = rest.iter().find(|a| !["--full", "--update-budget"].contains(*a)) {
         return Err(format!("unknown option `{bad}` (perf [--full] [--update-budget])"));
     }
-    let sizes = if full { "1000,10000,100000,500000" } else { "1000,10000" };
+    let sizes = if full { "1000,10000,100000,500000,1000000" } else { "1000,10000" };
     let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), std::path::PathBuf::from);
     let dir = target.join("perf");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -119,6 +141,12 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     if !warn.is_empty() {
         println!("warning: over budget: {}", warn.join(", "));
     }
+    // A million against 100k: anything growing more than twice as fast as the drawing.
+    let steep = superlinear(&results);
+    for (op, ratio) in &steep {
+        println!("finding: {op} at 1M takes {ratio}x ten times its 100k time");
+    }
+    fail.extend(steep.into_iter().map(|(op, _)| format!("{op} (grows faster than the drawing)")));
     if fail.is_empty() { Ok(()) } else { Err(format!("over twice the budget: {}", fail.join(", "))) }
 }
 
@@ -135,5 +163,24 @@ mod tests {
         assert_eq!(verdict(9.0, Some(0.5)), Verdict::Warn, "over the floor, under twice it");
         assert_eq!(verdict(11.0, Some(0.5)), Verdict::Fail, "over twice the floor");
         assert_eq!(verdict(1.0, None), Verdict::NoBudget);
+    }
+
+    #[test]
+    fn steps_growing_faster_than_the_drawing_are_found() {
+        let r: BTreeMap<String, f64> = [
+            ("regen@100000", 40.0),
+            ("regen@1000000", 420.0),
+            ("move_all@100000", 100.0),
+            ("move_all@1000000", 2500.0),
+            ("zoom_extents@100000", 0.5),
+            ("zoom_extents@1000000", 60.0),
+            ("peak_mb@100000", 100.0),
+            ("peak_mb@1000000", 5000.0),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        // 2.5x is a finding; 1.05x is not; 60 ms against the 5 ms floor is 1.2x; memory isn't time.
+        assert_eq!(superlinear(&r), [("move_all".to_string(), 2.5)]);
     }
 }

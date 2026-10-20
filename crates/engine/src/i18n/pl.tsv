@@ -1,0 +1,195 @@
+# CADaddy engine messages in Polish: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	Wprowadź nazwę grupy
+	Pick internal point	Wskaż punkt wewnętrzny
+	Specify the pattern origin	Określ początek wzoru
+	Specify the incrementing elevation between rows	Określ przyrost wysokości między wierszami
+	Specify the angle to fill (+=ccw, -=cw)	Określ kąt wypełnienia (+=przeciwnie do ruchu wskazówek, -=zgodnie z ruchem wskazówek)
+	Select hatch object	Wybierz obiekt kreskowania
+	Red, Green, Blue	Czerwony, zielony, niebieski
+	Enter the number of rows	Wprowadź liczbę wierszy
+	Enter the number of levels	Wprowadź liczbę poziomów
+	Enter new layer name	Wprowadź nazwę nowej warstwy
+	Specify width	Określ szerokość
+	Specify the angle between items	Określ kąt między elementami
+	Specify text height	Określ wysokość tekstu
+	Specify start tangent	Określ styczną początkową
+	Specify end tangent	Określ styczną końcową
+	Specify reference length	Określ długość odniesienia
+	Specify other corner	Określ drugi narożnik
+	Specify next point or [Undo]	Określ następny punkt lub [Undo]
+	Specify new location	Określ nowe położenie
+	Specify new length	Określ nową długość
+	Specify length of line	Określ długość linii
+	Specify displacement	Określ przesunięcie
+	Specify angle for dimension text	Określ kąt tekstu wymiaru
+	Select viewports	Wybierz rzutnie
+	Select object to break dimension	Wybierz obiekt, aby przerwać wymiar
+	Select group	Wybierz grupę
+	Select grip to edit array	Wybierz uchwyt, aby edytować szyk
+	Select a table	Wybierz tabelę
+	Select a boundary to remove	Wybierz obwiednię do usunięcia
+	Rotate arrayed items?	Obracać elementy szyku?
+	Erase polyline?	Usunąć polilinię?
+	Enter viewport arrangement	Wprowadź układ rzutni
+	Enter transparency value (0-90)	Wprowadź wartość przezroczystości (0-90)
+	Enter the number of operations to undo	Wprowadź liczbę operacji do cofnięcia
+	Enter the number of columns	Wprowadź liczbę kolumn
+	Enter number of items in array	Wprowadź liczbę elementów w szyku
+	Enter new layer state name	Wprowadź nazwę nowego stanu warstw
+	Enter new color	Wprowadź nowy kolor
+	Enter name of new layout	Wprowadź nazwę nowego arkusza
+	Enter layer name	Wprowadź nazwę warstwy
+	Enter file name	Wprowadź nazwę pliku
+	Enter color name or number (1-255)	Wprowadź nazwę lub numer koloru (1-255)
+	Enter a configuration option	Wprowadź opcję konfiguracji
+	Base point	Punkt bazowy
+	Word-wrap the combined Mtext?	Zawijać wiersze w połączonym tekście wielowierszowym?
+	Where should the data go?	Gdzie umieścić dane?
+	Verify each name to be purged?	Potwierdzać każdą nazwę do oczyszczenia?
+	Use landing	Użyj półki
+	Type of boundary object	Typ obiektu obwiedni
+	Specify width factor	Określ współczynnik szerokości
+	Specify tolerance	Określ tolerancję
+	Specify the tangent direction for the start point of arc	Określ kierunek stycznej w punkcie początkowym łuku
+	Specify the reference angle	Określ kąt odniesienia
+	Specify the new angle	Określ nowy kąt
+	Specify text width	Określ szerokość tekstu
+	Specify temporary OTRACK point	Określ tymczasowy punkt OTRACK
+	Invalid option keyword.	Nieprawidłowe słowo kluczowe opcji.
+	*Invalid selection*	*Nieprawidłowy wybór*
+	Requires a valid angle.	Wymagany jest prawidłowy kąt.
+	Nothing to undo.	Nie ma nic do cofnięcia.
+	Invalid point.	Nieprawidłowy punkt.
+	No viewport found there.	Nie znaleziono tam rzutni.
+	*Cancel*	*Anuluj*
+	Requires a positive number.	Wymagana jest liczba dodatnia.
+	No hatch selected.	Nie wybrano kreskowania.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Polecenie niedozwolone na karcie Model ** (najpierw przejdź do arkusza)
+	Select a multileader.	Wybierz multiodnośnik.
+	No line or arc to continue.	Brak linii lub łuku do kontynuacji.
+	Revision cloud finished.	Chmurka rewizji zakończona.
+	Object selected is not a circle or arc.	Wybrany obiekt nie jest okręgiem ani łukiem.
+	Select a linear or aligned dimension.	Wybierz wymiar liniowy lub wyrównany.
+	Object selected is not a dimension.	Wybrany obiekt nie jest wymiarem.
+	No dimensions selected.	Nie wybrano wymiarów.
+	Requires a number.	Wymagana jest liczba.
+	0 found	Znaleziono 0
+	The feature control frame is empty.	Ramka tolerancji geometrycznej jest pusta.
+	1 was on a locked layer.	1 był na zablokowanej warstwie.
+	Row elevations need an associative array; the copies stay at the same elevation.	Wysokości wierszy wymagają szyku skojarzonego; kopie pozostają na tej samej wysokości.
+	Point or option keyword required.	Wymagany jest punkt lub słowo kluczowe opcji.
+	Enter Yes or No.	Wprowadź Yes lub No.
+	Viewport created, zoomed to the model extents.	Utworzono rzutnię z zoomem do zakresu modelu.
+	No object found.	Nie znaleziono obiektu.
+	The object is not a table.	Obiekt nie jest tabelą.
+	No table there.	Brak tam tabeli.
+	A transparent command is already in progress.	Polecenie przezroczyste jest już w toku.
+	Invalid class name.	Nieprawidłowa nazwa klasy.
+	Invalid group name.	Nieprawidłowa nazwa grupy.
+	Too many point modifiers.	Zbyt wiele modyfikatorów punktu.
+	No leader to remove.	Brak odnośnika do usunięcia.
+	Requires a non-negative number.	Wymagana jest liczba nieujemna.
+	Clipboard is empty.	Schowek jest pusty.
+	1 object was on a locked layer.	1 obiekt był na zablokowanej warstwie.
+	Circle does not exist.	Okrąg nie istnieje.
+	Enter Length or Area.	Wprowadź Length lub Area.
+	Enter a percentage from 0 to 1000.	Wprowadź wartość procentową od 0 do 1000.
+	Enter Table, File or None.	Wprowadź Table, File lub None.
+	Cannot measure that object.	Nie można zmierzyć tego obiektu.
+	Third pair ignored (2D align).	Trzecia para zignorowana (wyrównanie 2D).
+	Insert mode: Copy (nested objects are copied as independent objects).	Tryb wstawiania: kopia (obiekty zagnieżdżone są kopiowane jako niezależne obiekty).
+	Everything has been undone	Wszystko zostało cofnięte
+	Everything has been undone.	Wszystko zostało cofnięte.
+	Requires a non-negative number or Auto.	Wymagana jest liczba nieujemna lub Auto.
+	Select a dimension.	Wybierz wymiar.
+	Object cannot be dimensioned this way.	Tego obiektu nie można zwymiarować w ten sposób.
+	Select an arc, circle or line.	Wybierz łuk, okrąg lub linię.
+	The two points must be different.	Oba punkty muszą być różne.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Brak wymiaru liniowego do kontynuacji. Najpierw utwórz go poleceniem DIMLINEAR.
+	A multileader needs a leader line or content; nothing was drawn.	Multiodnośnik wymaga linii odnośnika lub zawartości; nic nie narysowano.
+	Requires the name of a block defined in the drawing.	Wymagana jest nazwa bloku zdefiniowanego w rysunku.
+	Invalid option.	Nieprawidłowa opcja.
+	The boundary encloses none of the image.	Obwiednia nie obejmuje żadnej części obrazu.
+	The object is not an image.	Obiekt nie jest obrazem.
+	The image has no clipping boundary.	Obraz nie ma obwiedni przycięcia.
+	No images selected.	Nie wybrano obrazów.
+	Requires an integer between 0 and 100.	Wymagana jest liczba całkowita od 0 do 100.
+	The selected object has no area.	Wybrany obiekt nie ma pola powierzchni.
+	No such object	Brak takiego obiektu
+	Requires a point.	Wymagany jest punkt.
+	Requires a distance.	Wymagana jest odległość.
+	The object is on a locked layer.	Obiekt jest na zablokowanej warstwie.
+	Value must be positive and nonzero.	Wartość musi być dodatnia i niezerowa.
+	Requires an angle.	Wymagany jest kąt.
+	Requires a point or option keyword.	Wymagany jest punkt lub słowo kluczowe opcji.
+	Object does not intersect a cutting edge.	Obiekt nie przecina krawędzi tnącej.
+	Object does not intersect an edge.	Obiekt nie przecina krawędzi.
+	Lines are parallel.	Linie są równoległe.
+	The Block Editor is not open.	Edytor bloków nie jest otwarty.
+	Requires a positive integer.	Wymagana jest dodatnia liczba całkowita.
+	Answer Yes or No.	Odpowiedz Yes lub No.
+	Requires a valid point.	Wymagany jest prawidłowy punkt.
+	No reference objects	Brak obiektów odniesienia
+	Requires an angle or point.	Wymagany jest kąt lub punkt.
+	Requires a positive distance.	Wymagana jest odległość dodatnia.
+	Requires a non-negative distance.	Wymagana jest odległość nieujemna.
+	No such grip	Brak takiego uchwytu
+	Requires a template file name.	Wymagana jest nazwa pliku szablonu.
+	A hatch needs at least one boundary: erase it instead.	Kreskowanie wymaga co najmniej jednej obwiedni: zamiast tego je usuń.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Cofanie jest wyłączone (UNDO Control None); UNDO Control All je włącza.
+	Enter ON or OFF.	Wprowadź ON lub OFF.
+	Not a linear dimension.	To nie jest wymiar liniowy.
+	Valid hatch boundary not found.	Nie znaleziono prawidłowej obwiedni kreskowania.
+	No closed boundary objects selected.	Nie wybrano zamkniętych obiektów obwiedni.
+	Requires a name.	Wymagana jest nazwa.
+	That option doesn't apply to this grip.	Ta opcja nie dotyczy tego uchwytu.
+	That would make a degenerate object.	Powstałby zdegenerowany obiekt.
+	No tangent or perpendicular from the last point.	Brak stycznej ani prostopadłej z ostatniego punktu.
+	Requires numeric distance or second point.	Wymagana jest odległość liczbowa lub drugi punkt.
+	Edge endpoints must differ.	Punkty końcowe krawędzi muszą być różne.
+	Requires numeric distance or point.	Wymagana jest odległość liczbowa lub punkt.
+	Requires a positive height.	Wymagana jest wysokość dodatnia.
+	No objects found.	Nie znaleziono obiektów.
+	Requires a non-zero number.	Wymagana jest liczba niezerowa.
+	Circle must intersect cutting edges at two or more points.	Okrąg musi przecinać krawędzie tnące w co najmniej dwóch punktach.
+	Arc cannot be full 360 degrees.	Łuk nie może mieć pełnych 360 stopni.
+	Cannot break that object.	Nie można przerwać tego obiektu.
+	An object is on a locked layer.	Obiekt jest na zablokowanej warstwie.
+	Objects are not connected.	Obiekty nie są połączone.
+	The two points must differ.	Oba punkty muszą być różne.
+	Mirror line points must differ.	Punkty linii lustra muszą być różne.
+	No drawing is open.	Żaden rysunek nie jest otwarty.
+	Command: {}	Polecenie: {}
+	Unknown command "{}". Press F1 for help.	Nieznane polecenie „{}”. Naciśnij F1, aby uzyskać pomoc.
+	{} found	Znaleziono: {}
+	{} found, {} total	Znaleziono: {}, razem: {}
+	Distance = {}	Odległość = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Odległość = {},  Kąt w płaszczyźnie XY = {},  Kąt od płaszczyzny XY = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Delta X = {},  Delta Y = {},   Delta Z = {}
+	Area = {}, Perimeter = {}	Pole = {}, Obwód = {}
+	Total area = {}	Pole całkowite = {}
+	Resuming {} command.	Wznawianie polecenia {}.
+	Invalid input: {}	Nieprawidłowe dane: {}
+	{} were on a locked layer.	Na zablokowanej warstwie: {}.
+	{} dimension(s) changed.	Zmienione wymiary: {}.
+	Group {} ungrouped.	Rozgrupowano grupę {}.
+	{} object(s) flattened.	Spłaszczone obiekty: {}.
+	Group {} renamed to {}.	Zmieniono nazwę grupy {} na {}.
+	{} object(s) added to group {}.	Obiekty dodane do grupy: {} (grupa {}).
+	{} object(s) removed from group {}.	Obiekty usunięte z grupy: {} (grupa {}).
+	{} lines were chamfered	Sfazowane linie: {}
+	{} lines were filleted	Zaokrąglone linie: {}
+	{} objects joined into 1 {}	Obiekty połączone: {} w 1 {}
+	Current dimension style:  {}	Bieżący styl wymiarowania:  {}
+	Wrote {}	Zapisano {}
+	{} is already open.	{} jest już otwarty.
+	{} dimension(s) created.	Utworzone wymiary: {}.
+	BOUNDARY created {} polyline(s)	BOUNDARY utworzyło polilinie: {}
+	Current line-width is {}	Bieżąca szerokość linii: {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Nieznana zmienna {}. Wpisz SETVAR ?, aby wyświetlić listę zmiennych.
+	{} = {} (read only)	{} = {} (tylko do odczytu)
+	Dimension text = {}	Tekst wymiaru = {}
+	{} segments added to polyline	Do polilinii dodano segmenty: {}

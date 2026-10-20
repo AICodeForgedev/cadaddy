@@ -355,6 +355,7 @@ fn text_style(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action 
                 Field::Num("widthFactor", "Width factor", s.width_factor),
                 Field::Bool("backwards", "Backwards", s.backwards),
                 Field::Bool("upsideDown", "Upside down", s.upside_down),
+                Field::Bool("vertical", "Vertical", s.vertical),
             ],
         })
         .collect();

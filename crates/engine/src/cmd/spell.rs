@@ -3,9 +3,12 @@
 //! English Speller Database, `assets/spell/en_US.txt`) and a user dictionary, and change words,
 //! one or all of them, ignore words or add them to the user dictionary.
 //!
-//! DCTMAIN names the main dictionary (`enu`, American English, the one that ships); DCTCUST is
-//! the user dictionary file (one word per line), by default `custom.cus` in the CADaddy settings
-//! folder. Words with digits are skipped; MTEXT format codes, `%%` codes and fields are not text.
+//! DCTMAIN names the main dictionary, per drawing: `enu` (American English, the one that ships)
+//! or another language's code ([`LANGUAGES`]) whose word list is an optional download kept outside
+//! the repository: `<code>.txt` (one word per line, an optional notice before a `---` line) in
+//! the dictionary folder ([`dictionary_dir`]: `CADADDY_SPELL_DIR`, else `dictionaries` in the
+//! CADaddy settings folder). DCTCUST is the user dictionary file (one word per line), by default
+//! `custom.cus` in the settings folder. Words with digits are skipped; MTEXT format codes, `%%` codes and fields are not text.
 //! A word matches as written, in lower case, or with a capital first letter, so `BRACKET` and
 //! `Bracket` are both right when `bracket` is in the list.
 
@@ -21,8 +24,21 @@ use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, St
 
 /// The word list, with its notice before the `---` line.
 const LIST: &str = include_str!("../../../../assets/spell/en_US.txt");
-/// The main dictionary's code (DCTMAIN).
+/// The dictionary that ships (DCTMAIN's default).
 pub const MAIN_CODE: &str = "enu";
+/// The main dictionaries by DCTMAIN code (AutoCAD's codes), with their languages.
+pub const LANGUAGES: &[(&str, &str)] = &[
+    ("enu", "American English"),
+    ("ens", "British English (-ise)"),
+    ("enz", "British English (-ize)"),
+    ("es", "Spanish"),
+    ("fr", "French"),
+    ("de", "German"),
+    ("pt", "Portuguese (Iberian)"),
+    ("ptb", "Portuguese (Brazilian)"),
+];
+/// Largest dictionary file read.
+const MAX_DICTIONARY_BYTES: u64 = 64 * 1024 * 1024;
 /// Most suggestions offered.
 const MAX_SUGGESTIONS: usize = 8;
 /// Most misspellings one check reports.
@@ -32,12 +48,136 @@ const MAX_WORD: usize = 64;
 /// Largest user dictionary read.
 const MAX_CUSTOM_BYTES: u64 = 8 * 1024 * 1024;
 
-fn main_words() -> &'static HashSet<&'static str> {
-    static MAIN: OnceLock<HashSet<&'static str>> = OnceLock::new();
-    MAIN.get_or_init(|| {
-        let body = LIST.split_once("\n---\n").map_or(LIST, |(_, w)| w);
-        body.lines().map(str::trim).filter(|w| !w.is_empty()).collect()
-    })
+/// A main dictionary's words.
+pub type Words = std::sync::Arc<HashSet<String>>;
+
+/// The words of a word list (after its notice, when it has one).
+fn parse_list(text: &str) -> HashSet<String> {
+    let body = text.split_once("\n---\n").map_or(text, |(_, w)| w);
+    body.lines().map(str::trim).filter(|w| !w.is_empty() && !w.starts_with('#')).map(str::to_string).collect()
+}
+
+/// The dictionary folder a host set ([`set_dictionary_dir`]), over the default.
+static DICTIONARY_DIR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+/// Read other languages' dictionaries from `dir` (empty: the default folder again).
+pub fn set_dictionary_dir(dir: &str) {
+    let d = dir.trim();
+    *DICTIONARY_DIR.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner()) = (!d.is_empty()).then(|| d.to_string());
+}
+
+/// The folder other languages' dictionaries are read from: `CADADDY_SPELL_DIR`, else
+/// `dictionaries` in the settings folder (none in the browser).
+pub fn dictionary_dir() -> String {
+    if let Some(d) = DICTIONARY_DIR.get().and_then(|m| m.lock().unwrap_or_else(|e| e.into_inner()).clone()) {
+        return d;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Some(d) = std::env::var_os("CADADDY_SPELL_DIR").filter(|v| !v.is_empty()) {
+            return d.to_string_lossy().into_owned();
+        }
+        let custom = default_custom();
+        match std::path::Path::new(&custom).parent() {
+            Some(p) if !custom.is_empty() => p.join("dictionaries").to_string_lossy().into_owned(),
+            _ => String::new(),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        String::new()
+    }
+}
+
+/// The language a DCTMAIN code names.
+pub fn language(code: &str) -> Option<&'static str> {
+    LANGUAGES.iter().find(|(c, _)| c.eq_ignore_ascii_case(code.trim())).map(|(_, l)| *l)
+}
+
+/// The file another language's dictionary is read from.
+fn dictionary_file(code: &str) -> String {
+    let dir = dictionary_dir();
+    if dir.is_empty() {
+        String::new()
+    } else {
+        std::path::Path::new(&dir).join(format!("{}.txt", code.to_ascii_lowercase())).to_string_lossy().into_owned()
+    }
+}
+
+/// Whether the dictionary for `code` can be used (the shipped one always).
+pub fn installed(code: &str) -> bool {
+    code.eq_ignore_ascii_case(MAIN_CODE) || {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let f = dictionary_file(code);
+            !f.is_empty() && std::path::Path::new(&f).is_file()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
+    }
+}
+
+/// The main dictionary of `code`: the shipped list, or the language's file (read on first use).
+pub fn dictionary(code: &str) -> Result<Words> {
+    static SHIPPED: OnceLock<Words> = OnceLock::new();
+    static LOADED: OnceLock<Mutex<std::collections::HashMap<String, Words>>> = OnceLock::new();
+    let code = code.trim().to_ascii_lowercase();
+    if code == MAIN_CODE {
+        return Ok(SHIPPED.get_or_init(|| std::sync::Arc::new(parse_list(LIST))).clone());
+    }
+    let lang = language(&code).ok_or_else(|| EngineError::Other(format!("\"{code}\" is not a dictionary code ({}).", codes())))?;
+    // Cached by file (the folder may change).
+    let file = dictionary_file(&code);
+    let loaded = LOADED.get_or_init(Default::default);
+    if let Some(w) = loaded.lock().unwrap_or_else(|e| e.into_inner()).get(&file) {
+        return Ok(w.clone());
+    }
+    let missing =
+        || EngineError::Other(format!("The {lang} dictionary isn't installed: put {code}.txt (one word per line) in {}.", dictionary_dir()));
+    #[cfg(not(target_arch = "wasm32"))]
+    let text = {
+        if file.is_empty() || std::fs::metadata(&file).map_or(true, |m| !m.is_file() || m.len() > MAX_DICTIONARY_BYTES) {
+            return Err(missing());
+        }
+        crate::readfile::read_string(&file).map_err(|_| missing())?
+    };
+    #[cfg(target_arch = "wasm32")]
+    let text: String = {
+        let _ = (&file, MAX_DICTIONARY_BYTES);
+        return Err(missing());
+    };
+    let words: Words = std::sync::Arc::new(parse_list(&text));
+    loaded.lock().unwrap_or_else(|e| e.into_inner()).insert(file, words.clone());
+    Ok(words)
+}
+
+fn codes() -> String {
+    LANGUAGES.iter().map(|(c, _)| *c).collect::<Vec<_>>().join(", ")
+}
+
+/// DCTMAIN of a drawing: its own choice, else American English.
+pub fn main_code(d: &Drawing) -> String {
+    d.header
+        .get("DCTMAIN")
+        .and_then(cadaddy_doc::HVal::as_str)
+        .filter(|c| language(c).is_some())
+        .map_or_else(|| MAIN_CODE.to_string(), str::to_ascii_lowercase)
+}
+
+/// Set a drawing's DCTMAIN (a code from [`LANGUAGES`]; the dictionary may be installed later).
+pub fn set_main_code(d: &mut Drawing, code: &str) -> Result<()> {
+    let c = code.trim().to_ascii_lowercase();
+    if language(&c).is_none() {
+        return Err(EngineError::Other(format!("\"{}\" is not a dictionary code ({}).", code.trim(), codes())));
+    }
+    if c == MAIN_CODE {
+        d.header.vars.remove("DCTMAIN");
+    } else {
+        d.header.set_str("DCTMAIN", &c);
+    }
+    Ok(())
 }
 
 /// The user dictionary path, its words, and the words ignored for this session (Ignore All).
@@ -117,11 +257,10 @@ fn with_user<R>(f: impl FnOnce(&HashSet<String>, &HashSet<String>) -> R) -> R {
     f(u.words.as_ref().unwrap_or(&empty), &u.ignored)
 }
 
-/// Whether `word` is spelled right (or added, or ignored).
-pub fn is_known(word: &str) -> bool {
+/// Whether `word` is spelled right in `main` (or added, or ignored).
+pub fn is_known(main: &HashSet<String>, word: &str) -> bool {
     let w = word.replace('\u{2019}', "'");
     let lower = w.to_lowercase();
-    let main = main_words();
     let title: String = {
         let mut c = lower.chars();
         c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
@@ -131,16 +270,16 @@ pub fn is_known(word: &str) -> bool {
     }
     // A possessive of a known word.
     if let Some(stem) = lower.strip_suffix("'s").or_else(|| lower.strip_suffix('\'')).filter(|s| !s.is_empty())
-        && (main.contains(stem) || is_known_stem(stem, &title))
+        && (main.contains(stem) || is_known_stem(main, stem, &title))
     {
         return true;
     }
     with_user(|custom, ignored| custom.contains(&lower) || ignored.contains(&lower))
 }
 
-fn is_known_stem(stem: &str, title: &str) -> bool {
+fn is_known_stem(main: &HashSet<String>, stem: &str, title: &str) -> bool {
     let t = title.trim_end_matches("'s").trim_end_matches('\'');
-    main_words().contains(t) || with_user(|c, _| c.contains(stem))
+    main.contains(t) || with_user(|c, _| c.contains(stem))
 }
 
 /// Damerau–Levenshtein distance between `a` and `b`, or `None` once it passes `max`.
@@ -175,8 +314,9 @@ fn distance(a: &[char], b: &[char], max: usize) -> Option<usize> {
     (r <= max).then_some(r)
 }
 
-/// Words close to `word`, nearest first, in the word's own case style (UPPER, Title, lower).
-pub fn suggestions(word: &str) -> Vec<String> {
+/// Words of `main` close to `word`, nearest first, in the word's own case style (UPPER, Title,
+/// lower).
+pub fn suggestions(main: &HashSet<String>, word: &str) -> Vec<String> {
     let lower: Vec<char> = word.to_lowercase().chars().collect();
     if lower.is_empty() || lower.len() > MAX_WORD {
         return Vec::new();
@@ -190,10 +330,10 @@ pub fn suggestions(word: &str) -> Vec<String> {
     };
     let own = skeleton(&lower);
     let mut found: Vec<(usize, bool, &str)> = Vec::new();
-    for cand in main_words() {
+    for cand in main {
         let c: Vec<char> = cand.to_lowercase().chars().collect();
         if let Some(d) = distance(&lower, &c, max) {
-            found.push((d, skeleton(&c) != own, cand));
+            found.push((d, skeleton(&c) != own, cand.as_str()));
         }
     }
     found.sort_by(|a, b| {
@@ -403,7 +543,8 @@ fn objects(s: &Session, p: &Value) -> Result<Vec<Handle>> {
     Ok(d.space(&space).map(|st| st.iter().map(|e| e.handle).collect()).unwrap_or_default())
 }
 
-fn check(d: &Drawing, hs: &[Handle]) -> Vec<Miss> {
+fn check(d: &Drawing, hs: &[Handle]) -> Result<Vec<Miss>> {
+    let main = dictionary(&main_code(d))?;
     let mut out = Vec::new();
     for h in hs {
         let Some(e) = d.entity(*h) else { continue };
@@ -411,15 +552,15 @@ fn check(d: &Drawing, hs: &[Handle]) -> Vec<Miss> {
             let plain = cadaddy_fonts::plain_text(&text);
             for (_, w) in words(&text, mtext) {
                 if out.len() >= MAX_FOUND {
-                    return out;
+                    return Ok(out);
                 }
-                if !is_known(&w) {
+                if !is_known(&main, &w) {
                     out.push(Miss { handle: *h, slot: slot.clone(), word: w, context: plain.chars().take(120).collect() });
                 }
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Replace whole-word `from` with `to` in `text` (the first occurrence, or all).
@@ -443,13 +584,13 @@ fn replace_word(text: &str, mtext: bool, from: &str, to: &str, all: bool) -> Opt
     Some(out)
 }
 
-fn misses_json(m: &[Miss], with_suggestions: bool) -> Value {
+fn misses_json(main: &HashSet<String>, m: &[Miss], with_suggestions: bool) -> Value {
     json!(
         m.iter()
             .map(|m| {
                 let mut v = json!({"handle": m.handle.hex(), "where": m.slot.json(), "word": m.word, "context": m.context});
                 if with_suggestions {
-                    v["suggestions"] = json!(suggestions(&m.word));
+                    v["suggestions"] = json!(suggestions(main, &m.word));
                 }
                 v
             })
@@ -533,10 +674,22 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     match action.as_str() {
         "check" => {
             let hs = objects(s, p)?;
-            let found = check(s.doc()?, &hs);
-            Ok(json!({ "misspelled": misses_json(&found, bool_or(p, "suggestions", true)), "checked": hs.len() }))
+            let d = s.doc()?;
+            let found = check(d, &hs)?;
+            let main = dictionary(&main_code(d))?;
+            Ok(json!({ "misspelled": misses_json(&main, &found, bool_or(p, "suggestions", true)), "checked": hs.len(), "dictionary": main_code(d) }))
         }
-        "suggest" => Ok(json!({ "suggestions": suggestions(&word()?) })),
+        "suggest" => {
+            let main = dictionary(&main_code(s.doc()?))?;
+            Ok(json!({ "suggestions": suggestions(&main, &word()?) }))
+        }
+        // The main dictionaries: code, language, whether installed; the current one and the folder
+        // other languages are read from.
+        "dictionaries" => Ok(json!({
+            "dictionaries": LANGUAGES.iter().map(|(c, l)| json!({"code": c, "language": l, "installed": installed(c)})).collect::<Vec<_>>(),
+            "current": main_code(s.doc()?),
+            "folder": dictionary_dir(),
+        })),
         "add" => {
             add_word(&word()?)?;
             Ok(json!({ "added": word()?, "dictionary": dctcust() }))
@@ -564,8 +717,13 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Ok(json!({ "changed": changed.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
         }
-        other => Err(bad("spell", format!("unknown action \"{other}\" (check, suggest, change, changeAll, ignoreAll or add)"))),
+        other => Err(bad("spell", format!("unknown action \"{other}\" (check, suggest, change, changeAll, ignoreAll, add or dictionaries)"))),
     }
+}
+
+/// Suggestions for `word` from the current drawing's main dictionary.
+fn suggest_for(s: &Session, word: &str) -> Vec<String> {
+    s.doc().ok().and_then(|d| dictionary(&main_code(d)).ok()).map(|m| suggestions(&m, word)).unwrap_or_default()
 }
 
 // ---------------- command line ----------------
@@ -587,7 +745,7 @@ impl SpellM {
     /// Check again from the current objects, skipping words ignored this run.
     fn refill(&mut self, s: &Session) -> Result<()> {
         let d = s.doc()?;
-        self.queue = check(d, &self.objs)
+        self.queue = check(d, &self.objs)?
             .into_iter()
             .filter(|m| !self.skipped.contains(&(m.handle, m.word.clone())))
             .map(|m| (m.handle, m.slot, m.word))
@@ -617,16 +775,16 @@ impl Interactive for SpellM {
         }
         Ok(Step::Continue)
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
+    fn prompt(&self, s: &Session) -> Prompt {
         if !self.sel.done {
             return self.sel.prompt();
         }
         let Some((_, _, w)) = self.queue.last() else { return Prompt::new("Spelling check complete", KEYS) };
         if self.changing {
-            let first = suggestions(w).into_iter().next().unwrap_or_else(|| w.clone());
+            let first = suggest_for(s, w).into_iter().next().unwrap_or_else(|| w.clone());
             return Prompt::new(format!("Change \"{w}\" to"), Accept::TEXT).default(first);
         }
-        let sug = suggestions(w);
+        let sug = suggest_for(s, w);
         let msg = if sug.is_empty() {
             format!("\"{w}\" is not in the dictionary")
         } else {
@@ -653,7 +811,7 @@ impl Interactive for SpellM {
         if self.changing {
             let to = match &i {
                 Input::Text(t) if !t.trim().is_empty() => t.trim().to_string(),
-                Input::Text(_) | Input::Enter => suggestions(&w).into_iter().next().unwrap_or_else(|| w.clone()),
+                Input::Text(_) | Input::Enter => suggest_for(s, &w).into_iter().next().unwrap_or_else(|| w.clone()),
                 _ => return Ok(Step::Continue),
             };
             let all = self.all;

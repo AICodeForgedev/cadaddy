@@ -1868,6 +1868,12 @@ fn kept_handles(secs: &[cadaddy_dxf::Section]) -> std::collections::BTreeMap<Str
 
 pub fn read(bytes: &[u8]) -> Result<Drawing> {
     let tags = cadaddy_dxf::parse(bytes).map_err(|e| IoError::Format(e.to_string()))?;
+    read_tags(tags)
+}
+
+/// [`read`] from groups already parsed (or made from another format's data, as the DWG reader
+/// does for the entities it decodes).
+pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     // Every DXF ends with `0 EOF`: without it the file was cut off (a failed copy or download),
     // and whatever came after the cut is missing.
     let cut_off = !tags.iter().rev().take(4).any(|t| t.code == 0 && t.str().trim().eq_ignore_ascii_case("EOF"));
@@ -2284,6 +2290,10 @@ impl Objects {
         if let Some(style) = self.xrecord_text(crate::dxf_ext::MLEADER_STYLE_KEY).filter(|s| !s.trim().is_empty()) {
             d.header.set_str("CMLEADERSTYLE", &style);
         }
+        // The drawing's spelling dictionary (a short code).
+        if let Some(code) = self.xrecord_text(crate::dxf_ext::DCTMAIN_KEY).map(|c| c.trim().to_string()).filter(|c| !c.is_empty() && c.len() <= 8) {
+            d.header.set_str("DCTMAIN", &code);
+        }
         if let Some(files) = self.xrecord_text(crate::dxf_ext::STANDARDS_KEY).filter(|s| serde_json::from_str::<Vec<String>>(s).is_ok()) {
             d.header.set_str(crate::dxf_ext::STANDARDS_KEY, &files);
         }
@@ -2358,6 +2368,15 @@ impl Objects {
         }
         if let Some(tours) = self.xrecord_text(crate::dxf_ext::TOURS_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
             d.tours = Some(tours);
+        }
+        // Drawing properties: AutoCAD's DWGPROPS XRECORD.
+        if let Some(h) = self.names.iter().find(|(_, n)| n.eq_ignore_ascii_case(cadaddy_doc::dwgprops::KEY)).map(|(h, _)| h)
+            && let Some(tags) = self.xrecords.get(h)
+        {
+            let raw: Vec<cadaddy_doc::RawTag> = tags.iter().map(|t| cadaddy_doc::RawTag { code: t.code, value: t.str() }).collect();
+            if let Some(p) = cadaddy_doc::dwgprops::DwgProps::from_tags(&raw) {
+                d.properties = p;
+            }
         }
         if let Some(text) = self.xrecord_text(crate::dxf_ext::PLOT_STAMP_KEY) {
             crate::dxf_ext::apply_plot_stamp(d, &text);

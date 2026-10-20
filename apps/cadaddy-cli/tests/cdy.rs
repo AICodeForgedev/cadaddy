@@ -17,10 +17,6 @@ fn ok(args: &[&str]) -> String {
 }
 
 /// The first JSON document a command printed.
-fn first_json(text: &str) -> Value {
-    serde_json::Deserializer::from_str(text).into_iter::<Value>().next().unwrap().unwrap()
-}
-
 fn folder(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("cadaddy-cli-cdy-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -106,7 +102,10 @@ fn info_shows_a_cdy_files_manifest_and_chunk_sizes() {
     let dir = folder("info");
     ok(&["sample", "floorplan", &p(&dir, "plan.dxf")]);
     ok(&["convert", &p(&dir, "plan.dxf"), &p(&dir, "plan.cdy")]);
-    let v = first_json(&ok(&["info", &p(&dir, "plan.cdy")]));
+    let out = ok(&["info", &p(&dir, "plan.cdy")]);
+    // One JSON document (REPORT-0.7.8-battle #17): the container and the drawing's summary.
+    let v: Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
+    assert!(v["entityCount"].as_u64().unwrap() > 10, "{v}");
     assert!(v["manifest"]["writer"].as_str().unwrap().starts_with("CADaddy"), "{v}");
     for tag in ["MANI", "HEAD", "TABL", "ENTS"] {
         assert!(v["chunks"][tag]["count"].as_u64().unwrap() >= 1, "{tag}: {v}");

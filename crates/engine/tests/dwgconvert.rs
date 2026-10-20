@@ -219,3 +219,29 @@ fn bad_parameters_are_errors_not_panics() {
     // The aliases reach it.
     assert!(s.execute("convert", &json!({ "files": ["/no/such.dwg"], "to": "cdy" })).unwrap()["failed"].as_array().unwrap().len() == 1);
 }
+
+/// A drawing keeps its own DWG version through .cdy when none is asked for, 2000 included
+/// (REPORT-0.7.8-battle #16).
+#[test]
+fn each_drawing_keeps_its_own_dwg_version() {
+    hooks();
+    let dir = folder("ownversion");
+    let input = dir.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    for (name, version) in [("old.dwg", 2000), ("new.dwg", 2018)] {
+        let mut s = Session::new();
+        s.execute("line", &json!({ "points": [[0, 0], [10, 0]] })).unwrap();
+        s.execute("saveas", &json!({ "path": input.join(name).to_string_lossy(), "version": version })).unwrap();
+    }
+    let id = |p: &Path| String::from_utf8_lossy(&std::fs::read(p).unwrap()[..6]).to_string();
+    assert_eq!(id(&input.join("old.dwg")), "AC1015");
+    let mut s = Session::new();
+    let cdy = dir.join("cdy");
+    run(&mut s, json!({ "folder": input, "to": "cdy", "out": cdy }));
+    let back = dir.join("back");
+    let r = run(&mut s, json!({ "folder": cdy, "to": "dwg", "out": back }));
+    assert_eq!(r["converted"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!(id(&back.join("old.dwg")), "AC1015", "{r}");
+    assert_eq!(id(&back.join("new.dwg")), "AC1032", "{r}");
+    std::fs::remove_dir_all(&dir).ok();
+}

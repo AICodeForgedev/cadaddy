@@ -259,6 +259,22 @@ impl Session {
         self.lisp.envs.get(&uid).map(|e| e.get(name)).unwrap_or_default()
     }
 
+    /// The symbols LISP code defined in the active drawing (not the built-in functions and
+    /// variables): each name with its value, sorted by name.
+    pub fn lisp_user_symbols(&self) -> Vec<(String, Value)> {
+        let uid = self.state().map(|s| s.uid).unwrap_or(0);
+        let Some(env) = self.lisp.envs.get(&uid) else { return Vec::new() };
+        let builtin = Env::default();
+        let mut out: Vec<(String, Value)> = env
+            .globals
+            .iter()
+            .filter(|(k, v)| !matches!(v, Value::Subr(_)) && !builtin.globals.contains_key(*k))
+            .map(|(k, v)| (k.name().to_string(), v.clone()))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
     /// Evaluate LISP source (a command-line expression or a file's contents). `print`: show the
     /// value on the command line. `blocking`: run to the end, answering `get…` calls from
     /// `inputs` (nil when they run out), as programmatic calls must; otherwise the routine may

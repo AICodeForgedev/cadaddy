@@ -125,10 +125,20 @@ impl DocState {
             self.undo_ctl.group = Some(depth);
         }
         self.undo.push(snap);
+        // A long UNDO group (an agent's batch of thousands of commands) never loses its first step,
+        // the drawing as it was at BEgin: past the cap its oldest later step goes instead.
+        if let Some(g) = self.undo_ctl.group {
+            while self.undo.len() > MAX_UNDO && self.undo.len() > g + 2 {
+                drop_later(vec![self.undo.remove(g + 1)]);
+            }
+        }
         let mut extra = self.undo.len().saturating_sub(MAX_UNDO);
+        // Steps before an open group's first may go; that one stays.
+        let keep_from = self.undo_ctl.group.unwrap_or(usize::MAX);
+        extra = extra.min(keep_from);
         // The memory budget: drop the oldest steps until the rest fit, keeping the newest.
         let mut total: usize = self.undo.iter().map(|s| s.bytes).fold(0, usize::saturating_add);
-        while total > self.undo_ctl.budget && extra + 1 < self.undo.len() {
+        while total > self.undo_ctl.budget && extra + 1 < self.undo.len() && extra < keep_from {
             total = total.saturating_sub(self.undo.get(extra).map_or(0, |s| s.bytes));
             extra += 1;
         }

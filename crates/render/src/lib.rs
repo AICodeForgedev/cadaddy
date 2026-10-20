@@ -1411,7 +1411,8 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             mtext(b, ctx, t, rgb, lw);
             // Drawn in a stroke font: no glyph of it became text.
             if b.list.texts.len() == glyphs {
-                let plain = cadaddy_fonts::plain_text(&t.contents).split_whitespace().collect::<Vec<_>>().join(" ");
+                // As it reads: formatting codes (\P, {\f…;}, stacking) gone, then %% codes.
+                let plain = cadaddy_fonts::plain_text(&cadaddy_fonts::plain_mtext(&t.contents)).split_whitespace().collect::<Vec<_>>().join(" ");
                 b.words(ctx, at, &plain, t.rotation, t.height);
             }
         }
@@ -1651,6 +1652,7 @@ pub fn place_text_entity(d: &Drawing, t: &cadaddy_doc::Text, value: &str) -> (ca
         v,
         backwards: ts.backwards,
         upside_down: ts.upside_down,
+        vertical: ts.vertical,
     };
     cadaddy_fonts::place(&font, value, &p)
 }
@@ -1681,7 +1683,7 @@ fn text_field_boxes(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::Text, marked: &
         return;
     }
     let ts = text_style(ctx.d, &t.style);
-    if ts.backwards || ts.upside_down {
+    if ts.backwards || ts.upside_down || ts.vertical {
         return;
     }
     let font = cadaddy_fonts::TextFont::resolve(&ts.font);

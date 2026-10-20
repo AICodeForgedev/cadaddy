@@ -71,6 +71,29 @@ fn set_path(p: &Value) -> Result<PathBuf> {
     Ok(PathBuf::from(s))
 }
 
+/// What a new sheet set file is called: `<name>.sheetset.json`, whatever a file dialog added
+/// (a drawing's `.cdy`, a bare `.json`) or left off.
+pub(crate) fn new_set_path(path: &Path) -> PathBuf {
+    let file = path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!("{}{SET_EXT}", set_name(Path::new(&file))))
+}
+
+/// A sheet set's name from its file: the file name without `.sheetset.json` (or the drawing or
+/// JSON extension a file dialog put on it).
+pub(crate) fn set_name(path: &Path) -> String {
+    let mut name = path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    loop {
+        let lower = name.to_ascii_lowercase();
+        let Some(ext) = [".json", ".sheetset", ".cdy", ".dwg", ".dxf", ".dst"].iter().find(|e| lower.ends_with(*e)) else { break };
+        name.truncate(name.len() - ext.len());
+    }
+    let name = name.trim();
+    if name.is_empty() { "Sheets".to_string() } else { name.to_string() }
+}
+
+/// A sheet set file's extension.
+pub(crate) const SET_EXT: &str = ".sheetset.json";
+
 #[cfg(not(target_arch = "wasm32"))]
 fn load(path: &Path) -> Result<SheetSet> {
     use std::io::Read;
@@ -172,17 +195,15 @@ fn listing(path: &Path, set: &SheetSet) -> Value {
     json!({ "set": path.to_string_lossy(), "name": set.name, "description": set.description, "subsets": set.subsets, "sheets": sheets })
 }
 
-fn run(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let path = set_path(p)?;
     let action = str_param(p, "action").unwrap_or("list").to_ascii_lowercase();
     if action == "new" {
+        let path = new_set_path(&path);
         if path.exists() && !bool_or(p, "overwrite", false) {
             return Err(bad(CMD, format!("{} already exists (overwrite: true replaces it)", path.display())));
         }
-        let name = text(p, "name").filter(|n| !n.is_empty()).unwrap_or_else(|| {
-            let f = path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-            f.trim_end_matches(".json").trim_end_matches(".sheetset").to_string()
-        });
+        let name = text(p, "name").filter(|n| !n.is_empty()).unwrap_or_else(|| set_name(&path));
         let set = SheetSet { format: 1, name, description: text(p, "description").unwrap_or_default(), ..Default::default() };
         save(&path, &set)?;
         return Ok(listing(&path, &set));
@@ -268,7 +289,7 @@ fn run(_s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         "sync" => sync(&path, &mut set)?,
-        "publish" => return publish(&path, &set, p),
+        "publish" => return publish(s, &path, &set, p),
         other => return Err(bad(CMD, format!("unknown action \"{other}\" (new, list, add, remove, set, move, renumber, subset, sync, publish)"))),
     }
     save(&path, &set)?;
@@ -356,7 +377,10 @@ fn sync(path: &Path, set: &mut SheetSet) -> Result<()> {
 }
 
 /// Every sheet into one PDF, in order, with a bookmark per sheet ("number title") under its subset.
-fn publish(path: &Path, set: &SheetSet, p: &Value) -> Result<Value> {
+/// A layout not set up yet is set up for the plot (its viewport zoomed to the drawing's extents;
+/// the drawing's file is left as it is), and a sheet that would still plot blank is warned about
+/// on the command line and in the result's `warnings`.
+fn publish(s: &mut Session, path: &Path, set: &SheetSet, p: &Value) -> Result<Value> {
     let out = str_param(p, "path").map(str::trim).filter(|o| !o.is_empty()).ok_or_else(|| bad(CMD, "`path` (the PDF to write) is required"))?;
     let plot = io().and_then(|h| h.plot).ok_or_else(|| bad(CMD, "plotting is not available in this build"))?;
     let merge = pdf_merge().ok_or_else(|| bad(CMD, "publishing to one PDF is not available in this build"))?;
@@ -364,25 +388,36 @@ fn publish(path: &Path, set: &SheetSet, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "the sheet set has no sheets"));
     }
     let mut parts = Vec::with_capacity(set.sheets.len());
+    let mut warnings: Vec<String> = Vec::new();
     let mut cache: Option<(String, cadaddy_doc::Drawing)> = None;
     for sh in &set.sheets {
         if cache.as_ref().is_none_or(|(f, _)| *f != sh.drawing) {
             let file = drawing_file(path, &sh.drawing)?;
-            cache = Some((sh.drawing.clone(), read_drawing(&file)?));
+            let mut d = read_drawing(&file)?;
+            crate::cmd::layout::mark_bare_layouts(&mut d);
+            cache = Some((sh.drawing.clone(), d));
         }
-        let Some((_, d)) = &cache else { continue };
+        let Some((_, d)) = &mut cache else { continue };
         let layout = d
             .layout(&sh.layout)
             .map(|l| l.name.clone())
             .ok_or_else(|| bad(CMD, format!("sheet {}: {} has no layout `{}`", sh.number, sh.drawing, sh.layout)))?;
-        let bytes = plot(d, &cadaddy_doc::Space::Paper(layout), &json!({})).map_err(|e| bad(CMD, format!("sheet {}: {e}", sh.number)))?;
+        crate::cmd::layout::set_up_layout(d, &layout);
         let title = format!("{} {}", sh.number, sh.title).trim().to_string();
+        if crate::cmd::layout::sheet_is_blank(d, &layout) {
+            warnings.push(format!("Sheet {title} ({}, {layout}) has nothing on it: its page is blank.", sh.drawing));
+        }
+        let bytes = plot(d, &cadaddy_doc::Space::Paper(layout), &json!({})).map_err(|e| bad(CMD, format!("sheet {}: {e}", sh.number)))?;
         parts.push((bytes, title, sh.subset.clone()));
+    }
+    for w in &warnings {
+        s.echo(format!("Warning: {w}"));
     }
     let pdf = merge(&parts).map_err(|e| bad(CMD, e))?;
     store(out, &pdf)?;
     let mut r = listing(path, set);
     r["path"] = json!(out);
     r["pages"] = json!(parts.len());
+    r["warnings"] = json!(warnings);
     Ok(r)
 }

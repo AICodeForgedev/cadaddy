@@ -465,14 +465,23 @@ mod leader_cmd;
 #[path = "annotate_qdim.rs"]
 mod qdim;
 
+/// The overall scale of new multileaders of style `st`. Multileaders have their own scale,
+/// MLEADERSCALE, never DIMSCALE: an annotative style's sizes are paper sizes (the annotation
+/// scale applies when drawn), and 0 (scale to the layout) is 1:1 — on a sheet, and in model space
+/// outside a viewport.
+fn mleader_scale(d: &cadaddy_doc::Drawing, st: &cadaddy_doc::MLeaderStyle) -> f64 {
+    let k = d.header.f64("MLEADERSCALE", 1.0);
+    if st.annotative || !k.is_finite() || k <= 0.0 { 1.0 } else { k }
+}
+
 /// A multileader from arrowhead to landing; `landing` false leaves out the landing line (dogleg).
-fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<EntityKind> {
+/// `scale` replaces the style's overall scale (an imported markup's: its page's size).
+fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool, scale: Option<f64>) -> Option<EntityKind> {
     let (landing_pt, arrow_pts) = pts.split_last()?;
     let d = s.doc().ok()?;
     let cur = d.header.str("CMLEADERSTYLE", "Standard");
     let st = d.mleader_styles.iter().find(|m| m.name.eq_ignore_ascii_case(&cur)).or(d.mleader_styles.first()).cloned().unwrap_or_default();
-    // An annotative style's sizes are paper sizes: the annotation scale applies when drawn.
-    let k = if st.annotative { 1.0 } else { d.header.f64("DIMSCALE", 1.0) };
+    let k = scale.filter(|k| k.is_finite() && *k > 0.0).unwrap_or_else(|| mleader_scale(d, &st));
     let th = st.text_height * k;
     let dir = if arrow_pts.first().is_some_and(|a| a.x > landing_pt.x) { -1.0 } else { 1.0 };
     let attach = if dir > 0.0 { 4 } else { 6 };
@@ -508,6 +517,11 @@ fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<
 }
 
 pub(crate) fn run_mleader(s: &mut Session, p: &Value) -> Result<Value> {
+    add_mleader(s, p, None)
+}
+
+/// MLEADER's JSON form, at overall scale `scale` (else the style's).
+pub(crate) fn add_mleader(s: &mut Session, p: &Value, scale: Option<f64>) -> Result<Value> {
     let pts = points_param(p, "points").ok_or_else(|| bad("mleader", "`points` (arrow … landing) is required"))?;
     let content = super::mleader_content::json_content(s, p)?;
     // Leader type None places the content at the one point given.
@@ -515,7 +529,7 @@ pub(crate) fn run_mleader(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("mleader", "need an arrowhead and a landing point"));
     }
     let overrides = super::mleader_content::Overrides::from_json(s, "mleader", p)?;
-    let k = mleader_kind(s, &pts, str_param(p, "text").unwrap_or(""), true).ok_or_else(|| bad("mleader", "bad points"))?;
+    let k = mleader_kind(s, &pts, str_param(p, "text").unwrap_or(""), true, scale).ok_or_else(|| bad("mleader", "bad points"))?;
     let mut k = super::mleader_content::apply(s, k, &content)?;
     if let EntityKind::MLeader(m) = &mut k {
         overrides.apply(m);
@@ -574,21 +588,26 @@ fn run_leader(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "handles": out }))
 }
 
+/// DIMSTYLE Apply (-DIMSTYLE A, DIMSTYLE Update): the chosen dimensions take the current
+/// dimension settings: the current style, and the DIM* variables set apart from it (SETVAR
+/// DIMSCALE 48) as their overrides, as a new dimension would get them.
 fn run_update(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let st = style(s);
+    let overrides = s.doc().map(|d| d.dim_overrides()).unwrap_or_default();
     let d = s.doc_mut()?;
     let mut n = 0;
     for h in hs {
         let _ = d.modify_entity(h, |e| {
             if let EntityKind::Dimension(dm) = &mut e.kind {
                 dm.style = st.clone();
+                dm.overrides = overrides.clone();
                 dm.block = None;
                 n += 1;
             }
         });
     }
-    Ok(json!({ "updated": n }))
+    Ok(json!({ "updated": n, "message": format!("{n} dimension(s) updated to the current settings.") }))
 }
 
 /// DIMOVERRIDE: per-dimension style overrides (`clear` removes them); `text` sets the text.
@@ -1764,7 +1783,7 @@ impl MLeaderM {
             return Ok(Step::Cancel);
         }
         let text = self.text.clone().unwrap_or_default();
-        let k = mleader_kind(s, &self.leader(None), &text, self.landing).ok_or_else(|| EngineError::Other("bad leader".into()))?;
+        let k = mleader_kind(s, &self.leader(None), &text, self.landing, None).ok_or_else(|| EngineError::Other("bad leader".into()))?;
         let k = super::mleader_content::apply(s, k, &self.content_spec())?;
         s.add_entity(k)?;
         Ok(Step::Done)
@@ -1945,7 +1964,7 @@ impl Interactive for MLeaderM {
             return Vec::new();
         }
         let text = self.text.as_deref().unwrap_or("");
-        mleader_kind(s, &self.leader(Some(self.constrained(c))), text, self.landing)
+        mleader_kind(s, &self.leader(Some(self.constrained(c))), text, self.landing, None)
             .and_then(|k| super::mleader_content::apply(s, k, &self.content_spec()).ok())
             .into_iter()
             .collect()

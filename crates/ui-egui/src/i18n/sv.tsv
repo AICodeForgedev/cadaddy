@@ -2348,3 +2348,97 @@ menu	Modify	Ändra
 	Manage Attributes	Hantera attribut
 	Dialog State	Dialogrutans tillstånd
 	Dialog Action	Dialogrutans åtgärd
+	Recover Drawing and Xrefs...	Återställ ritning och externa referenser...
+	Count Blocks	Räkna block
+	Get Selection Set	Hämta urvalsuppsättning
+	Global Attribute Edit	Global attributredigering
+	LISP Function Surfer	LISP-funktionsbläddrare
+	List LISP Symbols	Lista LISP-symboler
+	List Nested Object	Lista kapslat objekt
+	List Object Xdata	Lista objektets utökade data
+	Multiple Polyline Edit	Redigera flera polylinjer
+	Redefine Path	Omdefiniera sökväg
+	Redefine Path Mode	Läge för omdefiniering av sökväg
+	Restore Dimension Text	Återställ måttext
+	Revert	Återgå
+	Rotate Blocks	Rotera block
+	Scale Blocks	Skala block
+	Select Similar by Properties	Välj liknande efter egenskaper
+	Show URLs	Visa URL:er
+	Synchronize Viewports	Synkronisera visningsfönster
+	Paste Special	Klistra in special
+	Paste Special...	Klistra in special...
+	Paste as	Klistra in som
+	Last Measurement	Senaste mätning
+	Perimeter	Omkrets
+	curl isn't available ({error}).	curl är inte tillgängligt ({error}).
+	This build has no release key to check updates with.	Den här versionen saknar en releasenyckel att kontrollera uppdateringar med.
+	The release's signature files are too large.	Releasens signaturfiler är för stora.
+	The release's signature isn't one CADaddy reads.	Releasens signatur har ett format som CADaddy inte kan läsa.
+	The release's signature is missing or damaged.	Releasens signatur saknas eller är skadad.
+	The release's signature is for another version ({version}).	Releasens signatur hör till en annan version ({version}).
+	The release is signed with a key this build doesn't trust.	Releasen är signerad med en nyckel som den här versionen inte litar på.
+	This build's release key is damaged.	Den här versionens releasenyckel är skadad.
+	The release's signature doesn't match its files.	Releasens signatur stämmer inte med dess filer.
+	Couldn't reach GitHub: {why}	Kunde inte nå GitHub: {why}
+	GitHub's answer was too large.	Svaret från GitHub var för stort.
+	GitHub's answer wasn't readable ({error}).	Svaret från GitHub gick inte att läsa ({error}).
+	GitHub's answer has no version.	Svaret från GitHub innehåller ingen version.
+	GitHub's answer has an unreadable version ({version}).	Svaret från GitHub innehåller en oläslig version ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	Kunde inte hämta releasens {name}, så inget installerades: {why}
+	The release's {name} is too large, so nothing was installed.	Releasens {name} är för stor, så inget installerades.
+	The release's {name} isn't text, so nothing was installed.	Releasens {name} är inte text, så inget installerades.
+	It wasn't downloaded. Download it from the release page instead.	Den hämtades inte. Hämta den från releasesidan i stället.
+	Version {version} isn't newer than this one ({current}).	Version {version} är inte nyare än den här ({current}).
+	This release isn't signed.	Den här releasen är inte signerad.
+	The release failed its check.	Releasen klarade inte kontrollen.
+	The signed release doesn't list {name}.	Den signerade releasen listar inte {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	GitHubs fingeravtryck för {name} skiljer sig från det signerade.
+	Couldn't make the folder {folder}: {error}	Kunde inte skapa mappen {folder}: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	Nedladdningen stämde inte med sitt publicerade SHA-256-fingeravtryck, så den installerades inte.
+	Couldn't read the download: {error}	Kunde inte läsa nedladdningen: {error}
+	The download failed: {why}	Nedladdningen misslyckades: {why}
+	This release has no installer for this computer yet.	Den här releasen har ännu inget installationsprogram för den här datorn.
+	Drawing Properties...	Ritningsegenskaper...
+	System Variable Monitor...	Systemvariabelövervakning...
+	{name} Properties	Egenskaper för {name}
+	Summary	Sammanfattning
+	Statistics	Statistik
+	Custom	Anpassat
+	Size	Storlek
+	Subject	Ämne
+	Author	Författare
+	Keywords	Nyckelord
+	Comments	Kommentarer
+	Revision number	Revisionsnummer
+	Hyperlink base	Hyperlänkbas
+	Created	Skapad
+	Modified	Ändrad
+	Last saved by	Senast sparad av
+	Total editing time (minutes)	Total redigeringstid (minuter)
+	Property	Egenskap
+	System Variable Monitor	Systemvariabelövervakning
+	Variable	Variabel
+	Watched value	Övervakat värde
+	Current value	Aktuellt värde
+	Notify when a watched variable changes	Meddela när en övervakad variabel ändras
+	Reset All	Återställ alla
+	Delay	Fördröjning
+	Repeat Script	Upprepa skript
+	Script Call	Skriptanrop
+	Resume Script	Återuppta skript
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	Spara en aktivitetshistorik för varje ritning (privat, i CADaddys inställningsmapp)
+	Specify insertion point or	Ange infogningspunkt eller
+	Specify table scale	Ange tabellskala
+	{} dimension(s) updated to the current settings.	{} mått uppdaterade till de aktuella inställningarna.
+	British English (-ise)	Brittisk engelska (-ise)
+	British English (-ize)	Brittisk engelska (-ize)
+	Spanish	Spanska
+	French	Franska
+	German	Tyska
+	Portuguese (Iberian)	Portugisiska (Portugal)
+	Portuguese (Brazilian)	Portugisiska (Brasilien)
+	(not installed)	(inte installerad)
+	Dictionaries are read from:	Ordlistor läses från:
+	Published to {path}	Publicerat till {path}
+	Sheet Set (.sheetset.json)	Arkuppsättning (.sheetset.json)

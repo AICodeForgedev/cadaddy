@@ -20,6 +20,8 @@ struct State {
     prefix: String,
     start: String,
     digits: String,
+    /// The last publish's outcome: where it went and the sheets warned about.
+    published: Option<(String, Vec<String>)>,
 }
 
 fn id() -> egui::Id {
@@ -43,9 +45,13 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     }
     let mut todo: Option<Value> = None;
     let mut pick: Option<&'static str> = None;
-    egui::Window::new(crate::tl!("Sheet Set Manager")).id(egui::Id::new("Sheet Set Manager")).open(open).resizable(true).default_width(460.0).show(
-        ctx,
-        |ui| {
+    egui::Window::new(crate::tl!("Sheet Set Manager"))
+        .id(egui::Id::new("Sheet Set Manager"))
+        .default_pos(crate::palette_pos(app))
+        .open(open)
+        .resizable(true)
+        .default_width(460.0)
+        .show(ctx, |ui| {
             // Right to left in Arabic (rtl.rs).
             let mut body = crate::rtl::Body::new(ui);
             let ui = &mut *body;
@@ -150,6 +156,12 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     pick = Some("publish");
                 }
             });
+            if let Some((path, warnings)) = &st.published {
+                ui.label(RichText::new(crate::tf!("Published to {path}", path = path)).color(t.text_dim));
+                for w in warnings {
+                    ui.label(RichText::new(format!("⚠ {w}")).color(t.warn));
+                }
+            }
             ui.horizontal(|ui| {
                 ui.label(crate::tl!("Prefix"));
                 ui.add(egui::TextEdit::singleline(&mut st.prefix).desired_width(50.0));
@@ -163,22 +175,17 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     todo = Some(json!({ "action": "renumber", "prefix": st.prefix, "start": start, "digits": digits }));
                 }
             });
-        },
-    );
-    let name = app
-        .ui
-        .sheet_set
-        .as_deref()
-        .and_then(|s| std::path::Path::new(s).file_stem())
-        .map(|s| s.to_string_lossy().trim_end_matches(".sheetset").to_string())
-        .unwrap_or_else(|| "Sheets".into());
+        });
     match pick {
         Some("new") => {
             if let Some(path) = app.services.pick_save.as_ref().and_then(|p| p("Sheets.sheetset.json")) {
-                if app.run("sheetset", json!({ "set": path, "action": "new", "overwrite": true })).is_ok() {
-                    app.ui.sheet_set = Some(path);
+                // The command names the file `<name>.sheetset.json` whatever the dialog added.
+                if let Ok(r) = app.run("sheetset", json!({ "set": path, "action": "new", "overwrite": true })) {
+                    app.ui.sheet_set = Some(r["set"].as_str().map_or(path, str::to_string));
                 }
                 st.listing = None;
+                st.selected = None;
+                st.published = None;
             }
         }
         Some("open") => {
@@ -186,6 +193,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 app.ui.sheet_set = Some(path);
                 st.listing = None;
                 st.selected = None;
+                st.published = None;
             }
         }
         Some("add") => {
@@ -194,10 +202,14 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             }
         }
         Some("publish") => {
-            if let Some(path) = app.services.pick_save.as_ref().and_then(|p| p(&format!("{name}.pdf")))
+            let suggested = app.ui.sheet_set.as_deref().map_or_else(|| "Sheets.pdf".to_string(), publish_suggestion);
+            if let Some(path) = app.services.pick_save.as_ref().and_then(|p| p(&suggested))
                 && let Some(r) = act(app, json!({ "action": "publish", "path": path }))
             {
+                // The sheets that plot blank were warned about on the command line first.
                 app.session.echo(format!("Published {} sheets to {}.", r["pages"], r["path"].as_str().unwrap_or_default()));
+                let warnings = r["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+                st.published = Some((r["path"].as_str().unwrap_or_default().to_string(), warnings));
             }
         }
         _ => {}
@@ -211,6 +223,21 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         ctx.data_mut(|d| d.insert_temp(id(), st));
     } else {
         ctx.data_mut(|d| d.remove::<State>(id()));
+    }
+}
+
+/// The PDF a sheet set is published to by default: named after the set, in the set's own folder.
+fn publish_suggestion(set: &str) -> String {
+    let path = std::path::Path::new(set);
+    let file = path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    let lower = file.to_ascii_lowercase();
+    let stem =
+        [".sheetset.json", ".json"].iter().find(|e| lower.ends_with(*e)).map_or(file.as_str(), |e| file.get(..file.len() - e.len()).unwrap_or(""));
+    let name = format!("{}.pdf", if stem.trim().is_empty() { "Sheets" } else { stem });
+    let dir = std::path::absolute(path).ok().and_then(|p| p.parent().map(std::path::Path::to_path_buf)).filter(|d| !d.as_os_str().is_empty());
+    match dir {
+        Some(d) => d.join(name).to_string_lossy().into_owned(),
+        None => name,
     }
 }
 
@@ -234,5 +261,47 @@ mod tests {
         out.textures_delta.clear();
         let st: State = ctx.data(|d| d.get_temp(id())).unwrap_or_default();
         assert!(matches!(st.listing, Some(Err(_))));
+    }
+
+    /// Every text the frame painted.
+    fn painted(out: &egui::FullOutput) -> Vec<String> {
+        out.shapes.iter().filter_map(|c| if let egui::Shape::Text(t) = &c.shape { Some(t.galley.text().to_string()) } else { None }).collect()
+    }
+
+    #[test]
+    fn the_last_publish_and_its_blank_sheets_show_in_the_manager() {
+        let dir = std::env::temp_dir().join(format!("cadaddy-ssm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let set = dir.join("Quarry Hill.sheetset.json");
+        let mut app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+        app.run("sheetset", json!({ "set": set.to_string_lossy(), "action": "new" })).unwrap();
+        app.ui.sheet_set = Some(set.to_string_lossy().into_owned());
+        let ctx = egui::Context::default();
+        let warning = "Sheet 2 Spare (empty.dxf, Layout1) has nothing on it: its page is blank.";
+        ctx.data_mut(|d| {
+            d.insert_temp(id(), State { published: Some(("out.pdf".into(), vec![warning.into()])), start: "1".into(), ..Default::default() })
+        });
+        let mut open = true;
+        let mut texts = Vec::new();
+        // A window is laid out unseen on its first frame.
+        for _ in 0..3 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| dialog(&mut app, ui.ctx(), &mut open));
+            out.textures_delta.clear();
+            texts = painted(&out);
+        }
+        assert!(texts.iter().any(|t| t.contains(warning)), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "Quarry Hill"), "the set's name: {texts:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn publishing_suggests_the_sheet_sets_own_folder() {
+        let dir = std::env::temp_dir().join("Some Jobs").join("Quarry Hill");
+        let set = dir.join("Quarry Hill.sheetset.json");
+        let want = std::path::absolute(dir.join("Quarry Hill.pdf")).unwrap();
+        assert_eq!(std::path::PathBuf::from(publish_suggestion(&set.to_string_lossy())), want);
+        let odd = dir.join(".sheetset.json");
+        assert!(publish_suggestion(&odd.to_string_lossy()).ends_with("Sheets.pdf"));
     }
 }

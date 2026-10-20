@@ -95,10 +95,6 @@ impl UpdateState {
     pub fn due(&self, now_ms: f64) -> bool {
         self.auto && !self.started && now_ms > 0.0 && (self.checked_ms <= 0.0 || now_ms - self.checked_ms >= CHECK_EVERY_MS)
     }
-    /// The card is up for something to act on (the support banner stays away meanwhile).
-    pub fn busy(&self) -> bool {
-        self.showing
-    }
 }
 
 /// Whether version `a` ("0.7.10", "v1.2") is newer than `b`; text that isn't numbers is never newer.
@@ -152,7 +148,7 @@ pub fn tick(app: &mut CadApp) {
         Event::Latest => {
             app.update.phase = Phase::Idle;
             if manual {
-                app.set_status(crate::i18n::t("CADaddy {v} is the latest version.").replace("{v}", VERSION));
+                app.set_status(crate::tf!("CADaddy {v} is the latest version.", v = VERSION));
             }
         }
         Event::Available(r) => {
@@ -189,8 +185,24 @@ enum Act {
     Page,
 }
 
-/// The update card: bottom-right, non-blocking, never shown to agents on the control channel.
+/// Space between the support banner and the update card stacked on it.
+const STACK_GAP: f32 = 8.0;
+
+/// The bottom-right corner: the support banner, with the update card above it when both are up
+/// (an update to act on never waits behind the banner).
+pub fn corner(app: &mut CadApp, ctx: &egui::Context) {
+    let banner = crate::support::banner(app, ctx);
+    card_above(app, ctx, banner.map_or(0.0, |r| r.height() + STACK_GAP));
+}
+
+/// The update card alone, in the corner.
 pub fn card(app: &mut CadApp, ctx: &egui::Context) {
+    card_above(app, ctx, 0.0);
+}
+
+/// The update card: bottom-right, `lift` points above the corner, non-blocking, never shown to
+/// agents on the control channel.
+fn card_above(app: &mut CadApp, ctx: &egui::Context, lift: f32) {
     if !app.update.showing || app.has_control_channel() {
         return;
     }
@@ -200,18 +212,19 @@ pub fn card(app: &mut CadApp, ctx: &egui::Context) {
     let mut act = None;
     let (title, body): (String, String) = match &app.update.phase {
         Phase::Available(r) => (
-            crate::i18n::t("CADaddy {v} is available").replace("{v}", &r.version),
-            crate::i18n::t("You have {v}. Updating keeps your drawings and settings.").replace("{v}", VERSION),
+            crate::tf!("CADaddy {v} is available", v = r.version),
+            crate::tf!("You have {v}. Updating keeps your drawings and settings.", v = VERSION),
         ),
-        Phase::Downloading(r) => (crate::i18n::t("Downloading CADaddy {v}...").replace("{v}", &r.version), String::new()),
+        Phase::Downloading(r) => (crate::tf!("Downloading CADaddy {v}...", v = r.version), String::new()),
         Phase::Ready(r) => (
-            crate::i18n::t("CADaddy {v} is ready to install").replace("{v}", &r.version),
+            crate::tf!("CADaddy {v} is ready to install", v = r.version),
             crate::tl!("It installs when you close CADaddy. Restart now to update right away.").to_string(),
         ),
         Phase::Failed(e) => (crate::tl!("Couldn't update CADaddy").to_string(), e.clone()),
         Phase::Idle | Phase::Checking { .. } => return,
     };
-    egui::Area::new(egui::Id::new("update_card")).anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -40.0)).order(egui::Order::Foreground).show(ctx, |ui| {
+    let area = egui::Area::new(egui::Id::new("update_card")).anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -40.0 - lift.max(0.0)));
+    area.order(egui::Order::Foreground).show(ctx, |ui| {
         egui::Frame::new()
             .fill(t.panel)
             .stroke(Stroke::new(1.0, blue.gamma_multiply(0.7)))

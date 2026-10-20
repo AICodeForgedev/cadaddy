@@ -85,12 +85,12 @@ fn a_room_becomes_walls_a_floor_slab_and_a_ceiling() {
         let (lo, hi) = z_range(&w);
         assert!(lo.abs() < 1e-3 && (hi - 112.8).abs() < 1e-3, "{lo} {hi}");
     }
-    // The floor slab: Walk mode's floor (the walls' extents padded 2' all round) 6" thick.
+    // The floor slab: the walls' extents (to their outside faces) 6" thick.
     let floor = made(&s, "floor");
     let f = floor.first().unwrap();
     let (lo, hi) = z_range(f);
     assert!((lo + 6.0).abs() < 1e-3 && hi.abs() < 1e-3, "{lo} {hi}");
-    assert!((flat_area(f, 0.0) - 24.0 * 14.0 * 144.0).abs() < 0.5, "{}", flat_area(f, 0.0));
+    assert!((flat_area(f, 0.0) - 20.0 * 10.0 * 144.0).abs() < 0.5, "{}", flat_area(f, 0.0));
     // The ceiling at 8'.
     let c = made(&s, "ceiling");
     let (lo, hi) = c.first().map(z_range).unwrap();
@@ -291,4 +291,166 @@ fn no_wall_layers_is_reported_and_layers_picks_them() {
     assert!(notes.contains("no objects on the wall layers (A-WALL)") && notes.contains("PARTITIONS"), "{notes}");
     let r = s.execute("wallgen", &json!({"rules": rules(), "layers": "PART*"})).unwrap();
     assert_eq!(r["walls"], json!(1), "{r}");
+}
+
+/// A line in inches on `layer`.
+fn line_in(d: &mut Drawing, layer: &str, a: (f64, f64), b: (f64, f64)) {
+    let h = Handle(d.handseed.max(0x100));
+    d.handseed = h.0 + 1;
+    let mut e = Entity::new(h, EntityKind::Line(Line { a: Vec3 { x: a.0, y: a.1, z: 0.0 }, b: Vec3 { x: b.0, y: b.1, z: 0.0 } }));
+    e.common.layer = layer.into();
+    d.model.push(e);
+}
+
+/// A made-up shop plan like the tester's: a 40' × 30' outline of 6" walls on A-WALL and a 6"
+/// partition at x 24'–24'6", the lines broken at four 3'-0" gaps closed by jamb lines. Three
+/// gaps hold a 3' door block (DOOR36: a leaf and a 90° swing, its base point at the hinge and
+/// drawn away from the origin) inserted at the hinge on the inside face; the fourth, in the north
+/// wall, is a plain gap.
+fn shop() -> Session {
+    let mut d = Drawing::new_imperial();
+    let w = |d: &mut Drawing, a: (f64, f64), b: (f64, f64)| line_in(d, "A-WALL", a, b);
+    // South wall, door gap x 96–132.
+    for (a, b) in [((0., 0.), (96., 0.)), ((132., 0.), (480., 0.)), ((6., 6.), (96., 6.)), ((132., 6.), (474., 6.))] {
+        w(&mut d, a, b);
+    }
+    // East wall, door gap y 120–156.
+    for (a, b) in [((480., 0.), (480., 120.)), ((480., 156.), (480., 360.)), ((474., 6.), (474., 120.)), ((474., 156.), (474., 354.))] {
+        w(&mut d, a, b);
+    }
+    // North wall, plain gap x 360–396.
+    for (a, b) in [((480., 360.), (396., 360.)), ((360., 360.), (0., 360.)), ((474., 354.), (396., 354.)), ((360., 354.), (6., 354.))] {
+        w(&mut d, a, b);
+    }
+    // West wall, unbroken.
+    w(&mut d, (0., 360.), (0., 0.));
+    w(&mut d, (6., 354.), (6., 6.));
+    // The partition, door gap y 240–276.
+    for (a, b) in [((288., 6.), (288., 240.)), ((288., 276.), (288., 354.)), ((294., 6.), (294., 240.)), ((294., 276.), (294., 354.))] {
+        w(&mut d, a, b);
+    }
+    // Jamb lines across every gap.
+    for (a, b) in [
+        ((96., 0.), (96., 6.)),
+        ((132., 0.), (132., 6.)),
+        ((474., 120.), (480., 120.)),
+        ((474., 156.), (480., 156.)),
+        ((360., 354.), (360., 360.)),
+        ((396., 354.), (396., 360.)),
+        ((288., 240.), (294., 240.)),
+        ((288., 276.), (294., 276.)),
+    ] {
+        w(&mut d, a, b);
+    }
+    // DOOR36: hinge at the base point (1200, 0), closed along +x, open leaf along +y.
+    let mut entities = cadaddy_engine::doc::EntityStore::new();
+    entities
+        .push(Entity::new(Handle(0x50), EntityKind::Line(Line { a: Vec3 { x: 1200.0, y: 0.0, z: 0.0 }, b: Vec3 { x: 1200.0, y: 36.0, z: 0.0 } })));
+    entities.push(Entity::new(
+        Handle(0x51),
+        EntityKind::Arc(cadaddy_engine::doc::Arc {
+            center: Vec3 { x: 1200.0, y: 0.0, z: 0.0 },
+            radius: 36.0,
+            start: 0.0,
+            end: std::f64::consts::FRAC_PI_2,
+        }),
+    ));
+    let block = cadaddy_engine::doc::Block {
+        xref_overlay: false,
+        xref_status: Default::default(),
+        xref_reason: String::new(),
+        name: "DOOR36".into(),
+        annotative: false,
+        base: Vec3 { x: 1200.0, y: 0.0, z: 0.0 },
+        entities,
+        description: String::new(),
+        anonymous: false,
+        xref_path: None,
+        explodable: true,
+        units: 0,
+        array: None,
+    };
+    d.blocks.insert("DOOR36".into(), std::sync::Arc::new(block));
+    for (x, y, deg) in [(96.0, 6.0, 0.0), (294.0, 240.0, 90.0), (474.0, 120.0, 90.0)] {
+        let ins: cadaddy_engine::doc::Insert =
+            serde_json::from_value(json!({"block": "DOOR36", "insert": {"x": x, "y": y, "z": 0.0}, "rotation": f64::to_radians(deg)})).unwrap();
+        let h = Handle(d.handseed.max(0x100));
+        d.handseed = h.0 + 1;
+        let mut e = Entity::new(h, EntityKind::Insert(ins));
+        e.common.layer = "A-DOOR".into();
+        d.model.push(e);
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Shop", None);
+    s
+}
+
+/// The plan box of a mesh: (x0, y0, x1, y1).
+fn plan_box(m: &Mesh) -> (f64, f64, f64, f64) {
+    m.vertices.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |(x0, y0, x1, y1), v| (x0.min(v.x), y0.min(v.y), x1.max(v.x), y1.max(v.y)))
+}
+
+/// Whether any wall box holds the point (each box is 8 vertices).
+fn wall_at(walls: &[Mesh], x: f64, y: f64, z: f64) -> bool {
+    walls.iter().any(|m| {
+        m.vertices.chunks(8).any(|b| {
+            let lo = b.iter().fold((f64::MAX, f64::MAX, f64::MAX), |a, v| (a.0.min(v.x), a.1.min(v.y), a.2.min(v.z)));
+            let hi = b.iter().fold((f64::MIN, f64::MIN, f64::MIN), |a, v| (a.0.max(v.x), a.1.max(v.y), a.2.max(v.z)));
+            x > lo.0 && x < hi.0 && y > lo.1 && y < hi.1 && z > lo.2 && z < hi.2
+        })
+    })
+}
+
+/// The tester's door openings: the walls stop at each gap (a header above the 7' head), each door
+/// block's leaf hangs from its hinge in its own opening, a gap with a door is never a window, the
+/// plain gap in the outside wall is the one window, and the floor and ceiling end at the walls'
+/// outside faces.
+#[test]
+fn door_blocks_sit_in_their_openings() {
+    let mut s = shop();
+    let r = s.execute("wallgen", &json!({"rules": rules()})).unwrap();
+    assert_eq!((r["doors"].clone(), r["windows"].clone()), (json!(3), json!(1)), "{r}");
+    let walls = made(&s, "wall");
+    // Open below the head in each door gap (the middle and near both jambs), a header above.
+    for (x, y) in
+        [(114.0, 3.0), (98.0, 3.0), (130.0, 3.0), (477.0, 138.0), (477.0, 122.0), (477.0, 154.0), (291.0, 258.0), (291.0, 242.0), (291.0, 274.0)]
+    {
+        assert!(!wall_at(&walls, x, y, 40.0), "the doorway at ({x}, {y}) is open");
+        assert!(wall_at(&walls, x, y, 100.0), "a header over ({x}, {y})");
+    }
+    // Solid right beside each opening.
+    for (x, y) in [(90.0, 3.0), (138.0, 3.0), (477.0, 114.0), (477.0, 162.0), (291.0, 234.0), (291.0, 282.0)] {
+        assert!(wall_at(&walls, x, y, 40.0), "the wall at ({x}, {y})");
+    }
+    // The plain gap: the window's sill and head, open between.
+    assert!(wall_at(&walls, 378.0, 357.0, 12.0) && wall_at(&walls, 378.0, 357.0, 100.0) && !wall_at(&walls, 378.0, 357.0, 50.0));
+    let glass = made(&s, "window");
+    assert_eq!(glass.len(), 1);
+    let (x0, y0, x1, y1) = plan_box(glass.first().unwrap());
+    assert!((x0 - 360.0).abs() < 1e-6 && (x1 - 396.0).abs() < 1e-6 && y0 > 354.0 && y1 < 360.0, "{x0} {y0} {x1} {y1}");
+    // Each leaf: hinged at its jamb on the inside face, inside its opening, standing open 3' into
+    // the room.
+    let mut leaves: Vec<(f64, f64, f64, f64)> = made(&s, "door").iter().map(plan_box).collect();
+    leaves.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert_eq!(leaves.len(), 3, "{leaves:?}");
+    let near = |a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)| {
+        (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6 && (a.2 - b.2).abs() < 1e-6 && (a.3 - b.3).abs() < 1e-6
+    };
+    // South: x 96–97.75 (in the 96–132 opening), y 6–42.
+    assert!(near(leaves[0], (96.0, 6.0, 97.75, 42.0)), "{:?}", leaves[0]);
+    // Partition: hinge (294, 240), open west to x 258, y 240–241.75.
+    assert!(near(leaves[1], (258.0, 240.0, 294.0, 241.75)), "{:?}", leaves[1]);
+    // East: hinge (474, 120), open west to x 438, y 120–121.75.
+    assert!(near(leaves[2], (438.0, 120.0, 474.0, 121.75)), "{:?}", leaves[2]);
+    // The walls run to the outside faces, no farther.
+    let all =
+        walls.iter().map(plan_box).fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)));
+    assert!(near(all, (0.0, 0.0, 480.0, 360.0)), "{all:?}");
+    // The floor slab and the ceiling end at the outside faces (not 2' past).
+    let floor = made(&s, "floor");
+    let f = floor.first().unwrap();
+    assert!(near(plan_box(f), (0.0, 0.0, 480.0, 360.0)), "{:?}", plan_box(f));
+    assert!((flat_area(f, 0.0) - 480.0 * 360.0).abs() < 0.5, "{}", flat_area(f, 0.0));
+    let ceiling = made(&s, "ceiling");
+    assert!(near(plan_box(ceiling.first().unwrap()), (0.0, 0.0, 480.0, 360.0)));
 }

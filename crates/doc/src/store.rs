@@ -5,17 +5,60 @@
 //! only the chunk and shard pointers; an edit copies one chunk and one shard.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use crate::{Entity, Handle};
+use crate::{Entity, EntityKind, Handle};
 
 const CHUNK_MAX: usize = 1024;
 const SHARDS: usize = 64;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 struct Chunk {
     id: u32,
     items: Vec<Arc<Entity>>,
+    /// Which kinds of object it holds ([`kind_bit`]), worked out when first asked and forgotten
+    /// on every change ([`chunk_mut`]).
+    kinds: OnceLock<u32>,
+}
+
+/// Its objects (the kinds cache is a cache: whether it was worked out yet is no difference).
+impl std::fmt::Debug for Chunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Chunk").field("id", &self.id).field("items", &self.items).finish()
+    }
+}
+
+impl Chunk {
+    fn kinds(&self) -> u32 {
+        *self.kinds.get_or_init(|| self.items.iter().fold(0, |m, e| m | kind_bit(&e.kind)))
+    }
+}
+
+/// A chunk to change (copied when shared), its kinds forgotten.
+fn chunk_mut(c: &mut Arc<Chunk>) -> &mut Chunk {
+    let m = Arc::make_mut(c);
+    m.kinds = OnceLock::new();
+    m
+}
+
+/// Kinds of object [`EntityStore::iter_kinds`] can look for without visiting the others: what the
+/// checks after every command look at (tables, block references, dimensions, hatches).
+pub const KIND_TABLE: u32 = 1;
+pub const KIND_INSERT: u32 = 1 << 1;
+pub const KIND_DIMENSION: u32 = 1 << 2;
+pub const KIND_HATCH: u32 = 1 << 3;
+/// Everything else.
+pub const KIND_OTHER: u32 = 1 << 31;
+
+/// The [`KIND_TABLE`]… bit of an object kind.
+pub fn kind_bit(k: &EntityKind) -> u32 {
+    match k {
+        EntityKind::Table(_) => KIND_TABLE,
+        EntityKind::Insert(_) => KIND_INSERT,
+        EntityKind::Dimension(_) => KIND_DIMENSION,
+        EntityKind::Hatch(_) => KIND_HATCH,
+        _ => KIND_OTHER,
+    }
 }
 
 /// One chunk of an [`EntityStore`], compared by identity: while it is held, an edit to the store
@@ -134,6 +177,11 @@ impl EntityStore {
         }
         (added, modified, erased)
     }
+    /// The objects of the kinds in `mask` ([`KIND_TABLE`]…) and maybe others, in draw order:
+    /// chunks holding none of them are skipped without visiting their objects.
+    pub fn iter_kinds(&self, mask: u32) -> impl Iterator<Item = &Arc<Entity>> + '_ {
+        self.chunks.iter().filter(move |c| c.kinds() & mask != 0).flat_map(|c| c.items.iter())
+    }
     /// Iterate in draw order.
     pub fn iter(&self) -> impl Iterator<Item = &Arc<Entity>> + '_ {
         self.chunks.iter().flat_map(|c| c.items.iter())
@@ -179,7 +227,7 @@ impl EntityStore {
     fn new_chunk(&mut self) -> Arc<Chunk> {
         let id = self.next_chunk;
         self.next_chunk = self.next_chunk.wrapping_add(1);
-        Arc::new(Chunk { id, items: Vec::with_capacity(64) })
+        Arc::new(Chunk { id, items: Vec::with_capacity(64), kinds: OnceLock::new() })
     }
     /// Append on top of the draw order. Replaces an entity with the same handle in place.
     pub fn push(&mut self, e: Entity) {
@@ -194,7 +242,7 @@ impl EntityStore {
         }
         let h = e.handle;
         let Some(last) = self.chunks.last_mut() else { return };
-        let chunk = Arc::make_mut(last);
+        let chunk = chunk_mut(last);
         chunk.items.push(Arc::new(e));
         let id = chunk.id;
         self.set_index(h, Some(id));
@@ -218,7 +266,7 @@ impl EntityStore {
                 self.chunks.push(c);
             }
             let Some(last) = self.chunks.last_mut() else { return };
-            let chunk = Arc::make_mut(last);
+            let chunk = chunk_mut(last);
             let h = e.handle;
             chunk.items.push(Arc::new(e));
             if let Some(list) = index.get_mut(shard_of(h)) {
@@ -248,7 +296,7 @@ impl EntityStore {
         }
         let h = e.handle;
         let Some(first) = self.chunks.first_mut() else { return };
-        let chunk = Arc::make_mut(first);
+        let chunk = chunk_mut(first);
         chunk.items.insert(0, Arc::new(e));
         let id = chunk.id;
         self.set_index(h, Some(id));
@@ -259,7 +307,7 @@ impl EntityStore {
         let Some(id) = self.chunk_id(e.handle) else { return false };
         let Some(pos) = self.chunk_pos(id) else { return false };
         let Some(c) = self.chunks.get_mut(pos) else { return false };
-        let chunk = Arc::make_mut(c);
+        let chunk = chunk_mut(c);
         match item_pos(&chunk.items, e.handle).and_then(|i| chunk.items.get_mut(i)) {
             Some(slot) => {
                 *slot = Arc::new(e);
@@ -272,7 +320,7 @@ impl EntityStore {
         let id = self.chunk_id(h)?;
         let pos = self.chunk_pos(id)?;
         let c = self.chunks.get_mut(pos)?;
-        let chunk = Arc::make_mut(c);
+        let chunk = chunk_mut(c);
         let i = item_pos(&chunk.items, h)?;
         let e = chunk.items.remove(i);
         let empty = chunk.items.is_empty();
@@ -288,7 +336,7 @@ impl EntityStore {
         let Some(id) = self.chunk_id(h) else { return false };
         let Some(pos) = self.chunk_pos(id) else { return false };
         let Some(c) = self.chunks.get_mut(pos) else { return false };
-        let chunk = Arc::make_mut(c);
+        let chunk = chunk_mut(c);
         match item_pos(&chunk.items, h).and_then(|i| chunk.items.get_mut(i)) {
             Some(slot) => {
                 f(Arc::make_mut(slot));
@@ -302,7 +350,7 @@ impl EntityStore {
     /// chunk by chunk (on several threads when the caller likes) instead of one lookup each.
     /// Handles and draw order must not change through them.
     pub fn chunks_mut_where(&mut self, wanted: impl Fn(Handle) -> bool) -> Vec<&mut [Arc<Entity>]> {
-        self.chunks.iter_mut().filter(|c| c.items.iter().any(|e| wanted(e.handle))).map(|c| Arc::make_mut(c).items.as_mut_slice()).collect()
+        self.chunks.iter_mut().filter(|c| c.items.iter().any(|e| wanted(e.handle))).map(|c| chunk_mut(c).items.as_mut_slice()).collect()
     }
     pub fn bring_to_front(&mut self, h: Handle) -> bool {
         match self.remove(h) {
@@ -340,7 +388,7 @@ impl EntityStore {
             self.push(Arc::unwrap_or_clone(e));
             return false;
         };
-        let chunk = Arc::make_mut(c);
+        let chunk = chunk_mut(c);
         let i = chunk.items.iter().position(|x| x.handle == anchor).unwrap_or(chunk.items.len());
         let i = if above { (i + 1).min(chunk.items.len()) } else { i };
         chunk.items.insert(i, e);
@@ -356,9 +404,9 @@ impl EntityStore {
     fn split_chunk(&mut self, pos: usize) {
         let mut fresh = self.new_chunk();
         let Some(c) = self.chunks.get_mut(pos) else { return };
-        let chunk = Arc::make_mut(c);
+        let chunk = chunk_mut(c);
         let tail = chunk.items.split_off(chunk.items.len() / 2);
-        let new = Arc::make_mut(&mut fresh);
+        let new = chunk_mut(&mut fresh);
         new.items = tail;
         let (id, moved): (u32, Vec<Handle>) = (new.id, new.items.iter().map(|e| e.handle).collect());
         self.chunks.insert(pos + 1, fresh);
@@ -379,7 +427,7 @@ impl EntityStore {
             }
             let h = e.handle;
             let Some(last) = self.chunks.last_mut() else { return };
-            let chunk = Arc::make_mut(last);
+            let chunk = chunk_mut(last);
             chunk.items.push(e);
             let id = chunk.id;
             self.set_index(h, Some(id));
@@ -408,7 +456,7 @@ impl EntityStore {
                 fresh = Some(self.new_chunk());
             }
             let Some(c) = fresh.as_mut() else { return };
-            let chunk = Arc::make_mut(c);
+            let chunk = chunk_mut(c);
             let h = e.handle;
             chunk.items.push(Arc::new(e));
             let id = chunk.id;
@@ -439,6 +487,44 @@ impl EntityStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kinds_are_found_by_chunk_and_follow_every_change() {
+        // Points stand for everything else; a block reference is a kind looked for.
+        let insert = |h: u64| {
+            let k: crate::Insert = serde_json::from_value(serde_json::json!({"block": "B", "insert": {"x": 0.0, "y": 0.0, "z": 0.0}})).unwrap();
+            Entity::new(Handle(h), EntityKind::Insert(k))
+        };
+        let is_insert = |e: &&Arc<Entity>| matches!(e.kind, EntityKind::Insert(_));
+        let mut s = EntityStore::new();
+        s.push_chunk((1..=3000).map(ent).collect());
+        assert_eq!(s.iter_kinds(KIND_INSERT).count(), 0, "no chunk holds one");
+        assert_eq!(s.iter_kinds(KIND_OTHER).count(), 3000);
+        // One added to the last chunk: only that chunk is visited.
+        s.push(insert(5000));
+        assert_eq!(s.iter_kinds(KIND_INSERT).filter(is_insert).map(|e| e.handle).collect::<Vec<_>>(), [Handle(5000)]);
+        assert!(s.iter_kinds(KIND_INSERT).count() <= CHUNK_MAX + 1);
+        // Changed into a point in place, put back by replace, changed through chunks_mut_where:
+        // the chunk's kinds are worked out again each time; a held copy keeps its own.
+        let held = s.clone();
+        s.modify(Handle(5000), |e| e.kind = ent(5000).kind);
+        assert_eq!(s.iter_kinds(KIND_INSERT).count(), 0);
+        assert_eq!(held.iter_kinds(KIND_INSERT).filter(is_insert).count(), 1);
+        s.replace(insert(7));
+        assert_eq!(s.iter_kinds(KIND_INSERT).filter(is_insert).count(), 1);
+        for chunk in s.chunks_mut_where(|h| h == Handle(7)) {
+            for e in chunk.iter_mut().filter(|e| e.handle == Handle(7)) {
+                Arc::make_mut(e).kind = ent(7).kind;
+            }
+        }
+        assert_eq!(s.iter_kinds(KIND_INSERT).count(), 0);
+        // Removed and moved in the draw order: still right.
+        s.push(insert(9000));
+        s.send_to_back(Handle(9000));
+        assert_eq!(s.iter_kinds(KIND_INSERT).filter(is_insert).count(), 1);
+        s.remove(Handle(9000));
+        assert_eq!(s.iter_kinds(KIND_INSERT).count(), 0);
+    }
     use crate::{EntityKind, Point};
     use cadaddy_geom::Vec2;
 

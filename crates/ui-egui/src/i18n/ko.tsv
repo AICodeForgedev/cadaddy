@@ -2341,3 +2341,97 @@ menu	Modify	수정
 	Manage Attributes	속성 관리
 	Dialog State	대화 상자 상태
 	Dialog Action	대화 상자 동작
+	Recover Drawing and Xrefs...	도면 및 외부 참조 복구...
+	Count Blocks	블록 개수 세기
+	Get Selection Set	선택 세트 가져오기
+	Global Attribute Edit	전역 속성 편집
+	LISP Function Surfer	LISP 함수 탐색기
+	List LISP Symbols	LISP 기호 나열
+	List Nested Object	중첩 객체 나열
+	List Object Xdata	객체 확장 데이터 나열
+	Multiple Polyline Edit	다중 폴리선 편집
+	Redefine Path	경로 재정의
+	Redefine Path Mode	경로 재정의 모드
+	Restore Dimension Text	치수 문자 복원
+	Revert	되돌리기
+	Rotate Blocks	블록 회전
+	Scale Blocks	블록 축척
+	Select Similar by Properties	특성으로 유사 객체 선택
+	Show URLs	URL 표시
+	Synchronize Viewports	뷰포트 동기화
+	Paste Special	선택하여 붙여넣기
+	Paste Special...	선택하여 붙여넣기...
+	Paste as	다음으로 붙여넣기
+	Last Measurement	마지막 측정
+	Perimeter	둘레
+	curl isn't available ({error}).	curl을 사용할 수 없습니다({error}).
+	This build has no release key to check updates with.	이 빌드에는 업데이트를 확인할 릴리스 키가 없습니다.
+	The release's signature files are too large.	릴리스의 서명 파일이 너무 큽니다.
+	The release's signature isn't one CADaddy reads.	릴리스의 서명이 CADaddy가 읽을 수 있는 형식이 아닙니다.
+	The release's signature is missing or damaged.	릴리스의 서명이 없거나 손상되었습니다.
+	The release's signature is for another version ({version}).	릴리스의 서명이 다른 버전({version})의 것입니다.
+	The release is signed with a key this build doesn't trust.	릴리스가 이 빌드가 신뢰하지 않는 키로 서명되었습니다.
+	This build's release key is damaged.	이 빌드의 릴리스 키가 손상되었습니다.
+	The release's signature doesn't match its files.	릴리스의 서명이 파일과 일치하지 않습니다.
+	Couldn't reach GitHub: {why}	GitHub에 연결할 수 없습니다: {why}
+	GitHub's answer was too large.	GitHub의 응답이 너무 큽니다.
+	GitHub's answer wasn't readable ({error}).	GitHub의 응답을 읽을 수 없습니다({error}).
+	GitHub's answer has no version.	GitHub의 응답에 버전이 없습니다.
+	GitHub's answer has an unreadable version ({version}).	GitHub의 응답에 읽을 수 없는 버전이 있습니다({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	릴리스의 {name}을(를) 다운로드할 수 없어 아무것도 설치하지 않았습니다: {why}
+	The release's {name} is too large, so nothing was installed.	릴리스의 {name}이(가) 너무 커서 아무것도 설치하지 않았습니다.
+	The release's {name} isn't text, so nothing was installed.	릴리스의 {name}이(가) 텍스트가 아니어서 아무것도 설치하지 않았습니다.
+	It wasn't downloaded. Download it from the release page instead.	다운로드하지 않았습니다. 대신 릴리스 페이지에서 다운로드하세요.
+	Version {version} isn't newer than this one ({current}).	버전 {version}은(는) 현재 버전({current})보다 새롭지 않습니다.
+	This release isn't signed.	이 릴리스는 서명되지 않았습니다.
+	The release failed its check.	릴리스가 검사를 통과하지 못했습니다.
+	The signed release doesn't list {name}.	서명된 릴리스에 {name}이(가) 없습니다.
+	GitHub's fingerprint for {name} differs from the signed one.	GitHub의 {name} 지문이 서명된 지문과 다릅니다.
+	Couldn't make the folder {folder}: {error}	{folder} 폴더를 만들 수 없습니다: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	다운로드한 파일이 공개된 SHA-256 지문과 일치하지 않아 설치하지 않았습니다.
+	Couldn't read the download: {error}	다운로드한 파일을 읽을 수 없습니다: {error}
+	The download failed: {why}	다운로드하지 못했습니다: {why}
+	This release has no installer for this computer yet.	이 릴리스에는 아직 이 컴퓨터용 설치 프로그램이 없습니다.
+	Drawing Properties...	도면 특성...
+	System Variable Monitor...	시스템 변수 모니터...
+	{name} Properties	{name} 특성
+	Summary	요약
+	Statistics	통계
+	Custom	사용자 정의
+	Size	크기
+	Subject	주제
+	Author	작성자
+	Keywords	키워드
+	Comments	설명
+	Revision number	개정 번호
+	Hyperlink base	하이퍼링크 기준
+	Created	작성 날짜
+	Modified	수정 날짜
+	Last saved by	마지막 저장자
+	Total editing time (minutes)	총 편집 시간(분)
+	Property	특성
+	System Variable Monitor	시스템 변수 모니터
+	Variable	변수
+	Watched value	감시 값
+	Current value	현재 값
+	Notify when a watched variable changes	감시 변수가 바뀌면 알림
+	Reset All	모두 재설정
+	Delay	지연
+	Repeat Script	스크립트 반복
+	Script Call	스크립트 호출
+	Resume Script	스크립트 재개
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	각 도면의 작업 기록 보관(비공개, CADaddy 설정 폴더에 저장)
+	Specify insertion point or	삽입점 지정 또는
+	Specify table scale	표 축척 지정
+	{} dimension(s) updated to the current settings.	치수 {}개를 현재 설정으로 업데이트했습니다.
+	British English (-ise)	영국 영어(-ise)
+	British English (-ize)	영국 영어(-ize)
+	Spanish	스페인어
+	French	프랑스어
+	German	독일어
+	Portuguese (Iberian)	포르투갈어(이베리아)
+	Portuguese (Brazilian)	포르투갈어(브라질)
+	(not installed)	(설치되지 않음)
+	Dictionaries are read from:	사전을 읽는 위치:
+	Published to {path}	{path}(으)로 게시됨
+	Sheet Set (.sheetset.json)	시트 세트(.sheetset.json)

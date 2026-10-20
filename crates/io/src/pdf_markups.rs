@@ -304,6 +304,8 @@ pub fn annotated_pdf(width: f64, height: f64, markups: &[Markup]) -> Result<Vec<
                 d.set("InkList", Object::Array(m.strokes.iter().map(|s| arr(&flat(s))).collect()));
                 b"Ink"
             }
+            // A note no bigger than an icon is a sticky note; others are text boxes.
+            MarkupKind::Note if (m.rect[2] - m.rect[0]).abs() <= 24.0 && (m.rect[3] - m.rect[1]).abs() <= 24.0 => b"Text",
             MarkupKind::Note => b"FreeText",
             MarkupKind::Callout => {
                 d.set("CL", arr(&flat(&m.points)));

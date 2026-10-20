@@ -34,7 +34,8 @@ const MAX_FACES: usize = 10_000_000;
 
 // ---------------- what goes out ----------------
 
-/// What an object is in IFC, from what WALLGEN or ROOMS tagged it as.
+/// What an object is in IFC, from what WALLGEN, model.build or ROOMS tagged it as (or the class
+/// it was read as from an IFC file).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Class {
     Wall,
@@ -45,6 +46,78 @@ enum Class {
     Stair,
     Space,
     Proxy,
+    Column,
+    CurtainWall,
+    Railing,
+    Ramp,
+    Roof,
+    Beam,
+    Terrain,
+    Duct,
+    Pipe,
+    Conduit,
+}
+
+impl Class {
+    /// The IFC4 entity and the predefined type this class is written with.
+    fn ifc(self) -> (&'static str, &'static str) {
+        match self {
+            Class::Wall => ("IfcWall", "STANDARD"),
+            Class::Slab => ("IfcSlab", "FLOOR"),
+            Class::Ceiling => ("IfcCovering", "CEILING"),
+            Class::Door => ("IfcDoor", "DOOR"),
+            Class::Window => ("IfcWindow", "WINDOW"),
+            Class::Stair => ("IfcStair", "NOTDEFINED"),
+            Class::Space => ("IfcSpace", "INTERNAL"),
+            Class::Proxy => ("IfcBuildingElementProxy", "NOTDEFINED"),
+            Class::Column => ("IfcColumn", "COLUMN"),
+            Class::CurtainWall => ("IfcCurtainWall", "NOTDEFINED"),
+            Class::Railing => ("IfcRailing", "HANDRAIL"),
+            Class::Ramp => ("IfcRamp", "NOTDEFINED"),
+            Class::Roof => ("IfcRoof", "NOTDEFINED"),
+            Class::Beam => ("IfcBeam", "BEAM"),
+            Class::Terrain => ("IfcGeographicElement", "TERRAIN"),
+            Class::Duct => ("IfcDuctSegment", "RIGIDSEGMENT"),
+            Class::Pipe => ("IfcPipeSegment", "RIGIDSEGMENT"),
+            Class::Conduit => ("IfcCableCarrierSegment", "CONDUITSEGMENT"),
+        }
+    }
+
+    /// The class an object read from IFC as `name` (the reader's class name) is written back as.
+    fn of_read(name: &str) -> Option<Class> {
+        Some(match name {
+            "Wall" | "WallStandardCase" => Class::Wall,
+            "Slab" => Class::Slab,
+            "Covering" => Class::Ceiling,
+            "Door" => Class::Door,
+            "Window" => Class::Window,
+            "Stair" => Class::Stair,
+            "Space" => Class::Space,
+            "BuildingElementProxy" => Class::Proxy,
+            "Column" => Class::Column,
+            "CurtainWall" => Class::CurtainWall,
+            "Railing" => Class::Railing,
+            "Ramp" => Class::Ramp,
+            "Roof" => Class::Roof,
+            "Beam" => Class::Beam,
+            "GeographicElement" => Class::Terrain,
+            "DuctSegment" => Class::Duct,
+            "PipeSegment" => Class::Pipe,
+            "CableCarrierSegment" => Class::Conduit,
+            _ => return None,
+        })
+    }
+}
+
+/// What an object is written as: its class, predefined type, storey (WALLGEN's level), name,
+/// long name, and the GlobalId it was read with from an IFC file.
+struct Kind {
+    class: Class,
+    predefined: &'static str,
+    level: Option<String>,
+    name: String,
+    long: String,
+    read_id: Option<String>,
 }
 
 /// The tag `app`'s first strings on `e` (WALLGEN: part, level; ROOMS: name, number).
@@ -54,24 +127,79 @@ fn tag_strings(e: &Entity, app: &str) -> Option<Vec<String>> {
     Some(x.iter().skip(at + 1).take_while(|t| t.code != 1001).filter(|t| t.code == 1000).map(|t| t.value.clone()).collect())
 }
 
-fn class_of(e: &Entity) -> (Class, Option<String>, String, String) {
+fn class_of(e: &Entity) -> Kind {
+    let kind =
+        |class: Class, level: Option<String>, name: String, long: String| Kind { class, predefined: class.ifc().1, level, name, long, read_id: None };
     if let Some(t) = tag_strings(e, "CADADDY_WALLGEN") {
         let part = t.first().map(String::as_str).unwrap_or_default();
+        // model.build's MEP runs: `system:<name>` and `kind:duct|pipe|conduit` after the source.
+        let extra = |key: &str| t.iter().skip(3).find_map(|v| v.strip_prefix(key)).map(str::to_string);
         let class = match part {
-            "wall" => Class::Wall,
+            "wall" | "parapet" => Class::Wall,
             "floor" => Class::Slab,
-            "ceiling" => Class::Ceiling,
+            "ceiling" | "soffit" => Class::Ceiling,
             "door" => Class::Door,
             "window" => Class::Window,
             "stair" => Class::Stair,
+            "column" => Class::Column,
+            "curtainwall" => Class::CurtainWall,
+            "railing" => Class::Railing,
+            "ramp" => Class::Ramp,
+            "roof" => Class::Roof,
+            "ground" => Class::Terrain,
+            "mep" => match extra("kind:").as_deref() {
+                Some("duct") => Class::Duct,
+                Some("pipe") => Class::Pipe,
+                Some("conduit") => Class::Conduit,
+                _ => Class::Proxy,
+            },
             _ => Class::Proxy,
         };
-        return (class, t.get(1).cloned(), part.to_string(), String::new());
+        let mut k = kind(class, t.get(1).cloned(), extra("system:").unwrap_or_else(|| part.to_string()), String::new());
+        match part {
+            "parapet" => k.predefined = "PARAPET",
+            "soffit" => k.predefined = "CLADDING",
+            _ => {}
+        }
+        return k;
     }
     if let Some(t) = tag_strings(e, "CADADDY_ROOM") {
-        return (Class::Space, None, t.first().cloned().unwrap_or_default(), t.get(1).cloned().unwrap_or_default());
+        return kind(Class::Space, None, t.first().cloned().unwrap_or_default(), t.get(1).cloned().unwrap_or_default());
     }
-    (Class::Proxy, None, e.common.layer.clone(), String::new())
+    // Read from an IFC file: written back as its class, with its GlobalId and name.
+    if let Some(t) = tag_strings(e, APP)
+        && let Some(class) = t.first().and_then(|c| Class::of_read(c))
+    {
+        let name = t.get(2).cloned().filter(|n| !n.is_empty()).unwrap_or_else(|| e.common.layer.clone());
+        let mut k = kind(class, None, name, String::new());
+        // Its predefined type wasn't read: not defined, rather than a guess.
+        k.predefined = if class == Class::Space { "SPACE" } else { "NOTDEFINED" };
+        k.read_id = t.get(1).filter(|g| is_guid(g)).cloned();
+        return k;
+    }
+    kind(Class::Proxy, None, e.common.layer.clone(), String::new())
+}
+
+/// Whether `g` is an IFC GlobalId: 22 characters of IFC's base-64 alphabet, the first 0–3.
+fn is_guid(g: &str) -> bool {
+    g.len() == 22
+        && g.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$')
+        && g.as_bytes().first().is_some_and(|b| (b'0'..=b'3').contains(b))
+}
+
+/// A number standing for `text` (FNV-1a), for GlobalIds made from names.
+fn hash(text: &str) -> u64 {
+    text.bytes().fold(0xCBF2_9CE4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01B3))
+}
+
+/// What makes this drawing's GlobalIds its own: its FINGERPRINTGUID (every AutoCAD drawing has one,
+/// kept when it is saved), so two drawings with the same handles don't give the same ids; 0 for a
+/// drawing without one (its ids are then the handles' alone, as before).
+fn drawing_seed(d: &Drawing) -> u64 {
+    match d.header.get("FINGERPRINTGUID").and_then(cadaddy_doc::HVal::as_str).map(str::trim) {
+        Some(g) if !g.is_empty() => hash(&g.to_ascii_uppercase()),
+        _ => 0,
+    }
 }
 
 /// An IFC GlobalId: 128 bits from `seed`, in IFC's 22-character base-64 form.
@@ -102,13 +230,12 @@ fn step_str(s: &str) -> String {
             '\'' => out.push_str("''"),
             '\\' => out.push_str("\\\\"),
             ' '..='~' => out.push(c),
+            // ISO 10303-21: \X2\ holds 16-bit characters, \X4\ the ones above U+FFFF.
+            c if u32::from(c) > 0xFFFF => {
+                let _ = write!(out, "\\X4\\{:08X}\\X0\\", u32::from(c));
+            }
             c => {
-                out.push_str("\\X2\\");
-                let mut buf = [0u16; 2];
-                for u in c.encode_utf16(&mut buf) {
-                    let _ = write!(out, "{u:04X}");
-                }
-                out.push_str("\\X0\\");
+                let _ = write!(out, "\\X2\\{:04X}\\X0\\", u32::from(c));
             }
         }
     }
@@ -143,17 +270,78 @@ fn refs(ids: &[usize]) -> String {
     format!("({})", v.join(","))
 }
 
+/// A wall, door or window as written: its class, product and placement instances, storey, and
+/// its extents in the storey's coordinates.
+struct Placed {
+    class: Class,
+    product: usize,
+    place: usize,
+    storey: usize,
+    lo: [f64; 3],
+    hi: [f64; 3],
+    handle: u64,
+}
+
+/// A mesh's measures for the base quantities, in drawing units: its volume (when it is closed),
+/// its footprint (the area of its downward faces seen from above) and its height.
+struct Measures {
+    volume: Option<f64>,
+    footprint: f64,
+    height: f64,
+}
+
+fn measures(m: &Mesh) -> Measures {
+    let p = |i: &u32| m.vertices.get(*i as usize).copied();
+    let mut volume = 0.0;
+    let mut footprint = 0.0;
+    let mut edges: HashMap<(u32, u32), i64> = HashMap::new();
+    let mut closed = true;
+    for f in &m.faces {
+        let pts: Vec<Vec3> = f.v.iter().filter_map(p).collect();
+        if pts.len() < 3 || pts.len() != f.v.len() {
+            closed = false;
+            continue;
+        }
+        // Fan triangles: signed volume against the origin, and the area seen from above.
+        let mut normal_z = 0.0;
+        let mut area_xy = 0.0;
+        if let Some(&a) = pts.first() {
+            for w in pts.get(1..).unwrap_or_default().windows(2) {
+                if let [b, c] = w {
+                    volume += a.dot(b.cross(*c)) / 6.0;
+                    normal_z += (*b - a).cross(*c - a).z;
+                    area_xy += ((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2.0;
+                }
+            }
+        }
+        if normal_z < 0.0 {
+            footprint += area_xy.abs();
+        }
+        // Each edge one way in one face and the other way in another: a closed, oriented surface.
+        for (i, &a) in f.v.iter().enumerate() {
+            let b = f.v.get((i + 1) % f.v.len()).copied().unwrap_or(a);
+            *edges.entry((a.min(b), a.max(b))).or_default() += if a < b { 1 } else { -1 };
+        }
+    }
+    closed &= !edges.is_empty() && edges.values().all(|n| *n == 0);
+    let (lo, hi) = m.vertices.iter().fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v.z), hi.max(v.z)));
+    Measures { volume: closed.then_some(volume.abs()), footprint, height: (hi - lo).max(0.0) }
+}
+
 /// The drawing's model-space meshes as an IFC4 file (`name` goes into the header).
 pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
-    let scale = cadaddy_doc::geo::metres_per_unit(d.header.i64("INSUNITS", 0)).max(1e-9);
-    let unit_scale = if d.header.i64("INSUNITS", 0) == 0 { if d.header.i64("MEASUREMENT", 1) == 1 { 0.001 } else { 0.0254 } } else { scale };
+    let insunits = d.header.i64("INSUNITS", 0);
+    // Metres per drawing unit: a drawing without units is in millimetres if metric, else inches.
+    let unit_scale = match insunits {
+        0 if d.header.i64("MEASUREMENT", 1) == 1 => 0.001,
+        0 => 0.0254,
+        u => cadaddy_doc::geo::metres_per_unit(u).max(1e-9),
+    };
+    let mm = (unit_scale - 0.001).abs() < 1e-12;
     struct Item<'a> {
         e: &'a Entity,
         mesh: &'a Mesh,
-        class: Class,
-        level: Option<String>,
-        name: String,
-        long: String,
+        kind: Kind,
         zmin: f64,
     }
     let mut items: Vec<Item> = Vec::new();
@@ -162,9 +350,8 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         if m.faces.is_empty() || m.vertices.is_empty() {
             continue;
         }
-        let (class, level, name, long) = class_of(e);
         let zmin = m.vertices.iter().map(|v| v.z).fold(f64::MAX, f64::min);
-        items.push(Item { e, mesh: m, class, level, name, long, zmin });
+        items.push(Item { e, mesh: m, kind: class_of(e), zmin });
     }
     if items.is_empty() {
         return Err(IoError::Format("nothing to write to IFC: no meshes in model space (make the building with WALLGEN or ROOMS first)".into()));
@@ -172,8 +359,8 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     // Storeys: WALLGEN's levels, lowest first, at their lowest wall or slab top; one when none.
     let mut levels: Vec<(String, f64)> = Vec::new();
     for it in &items {
-        if let Some(l) = &it.level {
-            let z = if it.class == Class::Slab { it.mesh.vertices.iter().map(|v| v.z).fold(f64::MIN, f64::max) } else { it.zmin };
+        if let Some(l) = &it.kind.level {
+            let z = if it.kind.class == Class::Slab { it.mesh.vertices.iter().map(|v| v.z).fold(f64::MIN, f64::max) } else { it.zmin };
             match levels.iter_mut().find(|(n, _)| n == l) {
                 Some(x) => x.1 = x.1.min(z),
                 None => levels.push((l.clone(), z)),
@@ -184,8 +371,17 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         levels.push(("Level 1".into(), items.iter().map(|i| i.zmin).fold(f64::MAX, f64::min).min(0.0)));
     }
     levels.sort_by(|a, b| a.1.total_cmp(&b.1));
+    // Where each storey's objects are on the sheet: plans drawn side by side (L2's beside L1's)
+    // are built over their own plans, and their building spec's base points stack them.
+    let bases: Vec<(String, cadaddy_geom::Vec2)> = d
+        .building_spec
+        .as_deref()
+        .and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok())
+        .map(|sp| cadaddy_walk3d::level_bases(d, &sp.to_rules()))
+        .unwrap_or_default();
+    let base_of = |level: &str| bases.iter().find(|(n, _)| n == level).map_or(cadaddy_geom::Vec2::ZERO, |(_, b)| *b);
     let storey_of = |it: &Item| -> usize {
-        if let Some(l) = &it.level
+        if let Some(l) = &it.kind.level
             && let Some(i) = levels.iter().position(|(n, _)| n == l)
         {
             return i;
@@ -193,14 +389,29 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         // The highest storey at or below the object's foot.
         levels.iter().rposition(|(_, z)| *z <= it.zmin + 1e-6).unwrap_or(0)
     };
+    // GlobalIds: from the drawing's own seed, so they stay the same each time it is exported (and
+    // differ from another drawing's); an object read from IFC keeps the id it was read with
+    // (the first one, when copies of it carry the same id).
+    let seed = drawing_seed(d);
+    let id = |n: u64, salt: u64| guid(n, salt ^ seed);
+    let mut read_ids: HashMap<&str, u64> = HashMap::new();
+    for it in &items {
+        if let Some(g) = &it.kind.read_id {
+            let h = read_ids.entry(g.as_str()).or_insert(it.e.handle.0);
+            *h = (*h).min(it.e.handle.0);
+        }
+    }
+    let element_id = |it: &Item| -> String {
+        match &it.kind.read_id {
+            Some(g) if read_ids.get(g.as_str()) == Some(&it.e.handle.0) => g.clone(),
+            _ => id(it.e.handle.0, 7),
+        }
+    };
 
     let mut o = Out { lines: Vec::new() };
-    let unit = match unit_scale {
-        s if (s - 0.001).abs() < 1e-12 => o.add("IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.)".into()),
-        _ => o.add("IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.)".into()),
-    };
+    let unit = if mm { o.add("IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.)".into()) } else { o.add("IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.)".into()) };
     // Coordinates go out in the unit declared: millimetres for metric drawings, else metres.
-    let k = if (unit_scale - 0.001).abs() < 1e-12 { 1.0 } else { scale };
+    let k = if mm { 1.0 } else { unit_scale };
     let area = o.add("IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.)".into());
     let volume = o.add("IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.)".into());
     let units = o.add(format!("IFCUNITASSIGNMENT({})", refs(&[unit, area, volume])));
@@ -211,30 +422,39 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     let context = o.add(format!("IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#{world},$)"));
     let body_ctx = o.add(format!("IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#{context},$,.MODEL_VIEW.,$)"));
     let title = std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "CADaddy".into());
-    let project = o.add(format!("IFCPROJECT('{}',$,{},$,$,$,$,(#{context}),#{units})", guid(1, 1), step_str(&title)));
+    let project = o.add(format!("IFCPROJECT('{}',$,{},$,$,$,$,(#{context}),#{units})", id(1, 1), step_str(&title)));
     let site_place = o.add(format!("IFCLOCALPLACEMENT($,#{world})"));
-    let site = o.add(format!("IFCSITE('{}',$,'Site',$,$,#{site_place},$,$,.ELEMENT.,$,$,$,$,$)", guid(1, 2)));
+    let site = o.add(format!("IFCSITE('{}',$,'Site',$,$,#{site_place},$,$,.ELEMENT.,$,$,$,$,$)", id(1, 2)));
     let bldg_place = o.add(format!("IFCLOCALPLACEMENT(#{site_place},#{world})"));
-    let building = o.add(format!("IFCBUILDING('{}',$,'Building',$,$,#{bldg_place},$,$,.ELEMENT.,$,$,$)", guid(1, 3)));
-    o.add(format!("IFCRELAGGREGATES('{}',$,$,$,#{project},(#{site}))", guid(1, 4)));
-    o.add(format!("IFCRELAGGREGATES('{}',$,$,$,#{site},(#{building}))", guid(1, 5)));
+    let building = o.add(format!("IFCBUILDING('{}',$,'Building',$,$,#{bldg_place},$,$,.ELEMENT.,$,$,$)", id(1, 3)));
+    o.add(format!("IFCRELAGGREGATES('{}',$,$,$,#{project},(#{site}))", id(1, 4)));
+    o.add(format!("IFCRELAGGREGATES('{}',$,$,$,#{site},(#{building}))", id(1, 5)));
+    // A storey's ids come from its name, so adding a level doesn't change the others'.
     let mut storeys = Vec::new();
-    for (i, (lname, z)) in levels.iter().enumerate() {
+    for (lname, z) in &levels {
         let p = o.add(format!("IFCCARTESIANPOINT((0.,0.,{}))", real(z * k)));
         let a = o.add(format!("IFCAXIS2PLACEMENT3D(#{p},#{zdir},#{xdir})"));
         let place = o.add(format!("IFCLOCALPLACEMENT(#{bldg_place},#{a})"));
-        let st = o.add(format!("IFCBUILDINGSTOREY('{}',$,{},$,$,#{place},$,$,.ELEMENT.,{})", guid(2, i as u64), step_str(lname), real(z * k)));
-        storeys.push((st, place, *z));
+        let st = o.add(format!("IFCBUILDINGSTOREY('{}',$,{},$,$,#{place},$,$,.ELEMENT.,{})", id(hash(lname), 2), step_str(lname), real(z * k)));
+        storeys.push((st, place, *z, hash(lname), base_of(lname)));
     }
-    o.add(format!("IFCRELAGGREGATES('{}',$,$,$,#{building},{})", guid(1, 6), refs(&storeys.iter().map(|s| s.0).collect::<Vec<_>>())));
+    o.add(format!("IFCRELAGGREGATES('{}',$,$,$,#{building},{})", id(1, 6), refs(&storeys.iter().map(|s| s.0).collect::<Vec<_>>())));
     let mut contained: Vec<Vec<usize>> = vec![Vec::new(); storeys.len()];
     let mut spaces: Vec<Vec<usize>> = vec![Vec::new(); storeys.len()];
-    let mut counts: HashMap<&'static str, usize> = HashMap::new();
+    let mut quantities: Vec<(usize, String, Vec<String>, u64)> = Vec::new();
+    // Walls, doors and windows as written: for the openings the doors and windows fill.
+    let mut placed: Vec<Placed> = Vec::new();
     for it in &items {
         let si = storey_of(it);
-        let (_, place_parent, sz) = storeys[si];
-        // The body in the storey's coordinates (its placement is at the storey's elevation).
-        let pts: Vec<String> = it.mesh.vertices.iter().map(|v| format!("({},{},{})", real(v.x * k), real(v.y * k), real((v.z - sz) * k))).collect();
+        let Some(&(_, place_parent, sz, _, base)) = storeys.get(si) else { continue };
+        // The body in the storey's coordinates (its placement is at the storey's elevation; its
+        // plan's base point at the building origin).
+        let pts: Vec<String> = it
+            .mesh
+            .vertices
+            .iter()
+            .map(|v| format!("({},{},{})", real((v.x - base.x) * k), real((v.y - base.y) * k), real((v.z - sz) * k)))
+            .collect();
         let list = o.add(format!("IFCCARTESIANPOINTLIST3D(({}))", pts.join(",")));
         let nv = it.mesh.vertices.len();
         let mut faces = Vec::new();
@@ -252,35 +472,118 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         let shape = o.add(format!("IFCSHAPEREPRESENTATION(#{body_ctx},'Body','Tessellation',(#{set}))"));
         let pds = o.add(format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape}))"));
         let place = o.add(format!("IFCLOCALPLACEMENT(#{place_parent},#{world})"));
-        let g = guid(it.e.handle.0, 7);
-        let nm = step_str(if it.name.is_empty() { "Element" } else { &it.name });
+        let g = element_id(it);
+        let kd = &it.kind;
+        let nm = step_str(if kd.name.is_empty() { "Element" } else { &kd.name });
         let tag = step_str(&it.e.handle.hex());
-        let (kind, line) = match it.class {
-            Class::Wall => ("IfcWall", format!("IFCWALL('{g}',$,{nm},$,$,#{place},#{pds},{tag},.STANDARD.)")),
-            Class::Slab => ("IfcSlab", format!("IFCSLAB('{g}',$,{nm},$,$,#{place},#{pds},{tag},.FLOOR.)")),
-            Class::Ceiling => ("IfcCovering", format!("IFCCOVERING('{g}',$,{nm},$,$,#{place},#{pds},{tag},.CEILING.)")),
-            Class::Door => ("IfcDoor", format!("IFCDOOR('{g}',$,{nm},$,$,#{place},#{pds},{tag},$,$,.DOOR.,$,$)")),
-            Class::Window => ("IfcWindow", format!("IFCWINDOW('{g}',$,{nm},$,$,#{place},#{pds},{tag},$,$,.WINDOW.,$,$)")),
-            Class::Stair => ("IfcStair", format!("IFCSTAIR('{g}',$,{nm},$,$,#{place},#{pds},{tag},.NOTDEFINED.)")),
-            Class::Space => (
-                "IfcSpace",
-                format!(
-                    "IFCSPACE('{g}',$,{},$,$,#{place},#{pds},{nm},.ELEMENT.,.INTERNAL.,$)",
-                    step_str(if it.long.is_empty() { &it.name } else { &it.long })
-                ),
+        let (entity, _) = kd.class.ifc();
+        let pre = kd.predefined;
+        let upper = entity.to_ascii_uppercase();
+        let line = match kd.class {
+            Class::Door | Class::Window => format!("{upper}('{g}',$,{nm},$,$,#{place},#{pds},{tag},$,$,.{pre}.,$,$)"),
+            Class::Space => format!(
+                "IFCSPACE('{g}',$,{},$,$,#{place},#{pds},{nm},.ELEMENT.,.{pre}.,$)",
+                step_str(if kd.long.is_empty() { &kd.name } else { &kd.long })
             ),
-            Class::Proxy => ("IfcBuildingElementProxy", format!("IFCBUILDINGELEMENTPROXY('{g}',$,{nm},$,$,#{place},#{pds},{tag},.NOTDEFINED.)")),
+            _ => format!("{upper}('{g}',$,{nm},$,$,#{place},#{pds},{tag},.{pre}.)"),
         };
-        let id = o.add(line);
-        *counts.entry(kind).or_default() += 1;
-        if it.class == Class::Space { spaces[si].push(id) } else { contained[si].push(id) }
-    }
-    for (i, (st, _, _)) in storeys.iter().enumerate() {
-        if !contained[i].is_empty() {
-            o.add(format!("IFCRELCONTAINEDINSPATIALSTRUCTURE('{}',$,$,$,{},#{st})", guid(3, i as u64), refs(&contained[i])));
+        let product = o.add(line);
+        if matches!(kd.class, Class::Wall | Class::Door | Class::Window) {
+            let (lo, hi) = it.mesh.vertices.iter().fold(([f64::MAX; 3], [f64::MIN; 3]), |(lo, hi), v| {
+                let p = [(v.x - base.x) * k, (v.y - base.y) * k, (v.z - sz) * k];
+                (std::array::from_fn(|i| lo[i].min(p[i])), std::array::from_fn(|i| hi[i].max(p[i])))
+            });
+            placed.push(Placed { class: kd.class, product, place, storey: si, lo, hi, handle: it.e.handle.0 });
         }
-        if !spaces[i].is_empty() {
-            o.add(format!("IFCRELAGGREGATES('{}',$,$,$,#{st},{})", guid(4, i as u64), refs(&spaces[i])));
+        if let Some(list) = if kd.class == Class::Space { spaces.get_mut(si) } else { contained.get_mut(si) } {
+            list.push(product);
+        }
+        // Base quantities (IFC4's Qto_…BaseQuantities): lengths in the length unit, areas in m², volumes in m³.
+        let m = measures(it.mesh);
+        let (len, a, v) = (|x: f64| real(x * k), |x: f64| real(x * unit_scale * unit_scale), |x: f64| real(x * unit_scale.powi(3)));
+        let q_len = |n: &str, x: f64| format!("IFCQUANTITYLENGTH('{n}',$,$,{},$)", len(x));
+        let q_area = |n: &str, x: f64| format!("IFCQUANTITYAREA('{n}',$,$,{},$)", a(x));
+        let q_vol = |n: &str, x: Option<f64>| x.map(|x| format!("IFCQUANTITYVOLUME('{n}',$,$,{},$)", v(x)));
+        let (set_name, qs): (&str, Vec<String>) = match kd.class {
+            Class::Wall => {
+                ("Qto_WallBaseQuantities", [Some(q_len("Height", m.height)), q_vol("GrossVolume", m.volume)].into_iter().flatten().collect())
+            }
+            Class::Slab => {
+                ("Qto_SlabBaseQuantities", [Some(q_area("GrossArea", m.footprint)), q_vol("GrossVolume", m.volume)].into_iter().flatten().collect())
+            }
+            Class::Ceiling => ("Qto_CoveringBaseQuantities", vec![q_area("GrossArea", m.footprint)]),
+            Class::Column => {
+                ("Qto_ColumnBaseQuantities", [Some(q_len("Length", m.height)), q_vol("GrossVolume", m.volume)].into_iter().flatten().collect())
+            }
+            Class::Door => ("Qto_DoorBaseQuantities", vec![q_len("Height", m.height)]),
+            Class::Window => ("Qto_WindowBaseQuantities", vec![q_len("Height", m.height)]),
+            Class::Space => (
+                "Qto_SpaceBaseQuantities",
+                [
+                    Some(q_len("Height", m.height)),
+                    Some(q_area("GrossFloorArea", m.footprint)),
+                    Some(q_area("NetFloorArea", m.footprint)),
+                    q_vol("GrossVolume", m.volume),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
+            ),
+            _ => ("", Vec::new()),
+        };
+        if !qs.is_empty() {
+            quantities.push((product, set_name.to_string(), qs, it.e.handle.0));
+        }
+    }
+    // Each door and window fills an opening in its wall (IfcOpeningElement, voiding the wall): a
+    // box through the wall's thickness over the door's extents, placed relative to the wall. The
+    // wall's body already has the hole.
+    let near = 0.01 / unit_scale * k;
+    for fill in placed.iter().filter(|p| matches!(p.class, Class::Door | Class::Window)) {
+        let overlap = |w: &Placed| -> f64 { (0..3).map(|i| (fill.hi[i].min(w.hi[i] + near) - fill.lo[i].max(w.lo[i] - near)).max(0.0)).product() };
+        let host = placed
+            .iter()
+            .filter(|w| w.class == Class::Wall && w.storey == fill.storey)
+            .map(|w| (w, overlap(w)))
+            .filter(|(_, v)| *v > 0.0)
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(w, _)| w);
+        let Some(wall) = host else { continue };
+        // The wall's thin side: the opening goes through all of it.
+        let thin = if wall.hi[0] - wall.lo[0] <= wall.hi[1] - wall.lo[1] { 0 } else { 1 };
+        let mut lo = fill.lo;
+        let mut hi = fill.hi;
+        lo[thin] = wall.lo[thin].min(fill.lo[thin]);
+        hi[thin] = wall.hi[thin].max(fill.hi[thin]);
+        let corner = |i: usize| -> String {
+            let pick = |axis: usize, bit: usize| if i >> bit & 1 == 1 { hi[axis] } else { lo[axis] };
+            format!("({},{},{})", real(pick(0, 0)), real(pick(1, 1)), real(pick(2, 2)))
+        };
+        let list = o.add(format!("IFCCARTESIANPOINTLIST3D(({}))", (0..8).map(corner).collect::<Vec<_>>().join(",")));
+        // The box's faces, facing out (corners numbered by their x, y, z bits).
+        let faces: Vec<usize> = [[1, 3, 4, 2], [5, 6, 8, 7], [1, 2, 6, 5], [3, 7, 8, 4], [1, 5, 7, 3], [2, 4, 8, 6]]
+            .iter()
+            .map(|f| o.add(format!("IFCINDEXEDPOLYGONALFACE(({},{},{},{}))", f[0], f[1], f[2], f[3])))
+            .collect();
+        let set = o.add(format!("IFCPOLYGONALFACESET(#{list},.T.,{},$)", refs(&faces)));
+        let shape = o.add(format!("IFCSHAPEREPRESENTATION(#{body_ctx},'Body','Tessellation',(#{set}))"));
+        let pds = o.add(format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape}))"));
+        let place = o.add(format!("IFCLOCALPLACEMENT(#{},#{world})", wall.place));
+        let opening = o.add(format!("IFCOPENINGELEMENT('{}',$,'Opening',$,$,#{place},#{pds},$,.OPENING.)", id(fill.handle, 10)));
+        o.add(format!("IFCRELVOIDSELEMENT('{}',$,$,$,#{},#{opening})", id(fill.handle, 11), wall.product));
+        o.add(format!("IFCRELFILLSELEMENT('{}',$,$,$,#{opening},#{})", id(fill.handle, 12), fill.product));
+    }
+    for (product, set_name, qs, handle) in quantities {
+        let ids: Vec<usize> = qs.into_iter().map(|q| o.add(q)).collect();
+        let set = o.add(format!("IFCELEMENTQUANTITY('{}',$,'{set_name}',$,'BaseQuantities',{})", id(handle, 8), refs(&ids)));
+        o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{set})", id(handle, 9)));
+    }
+    for ((st, _, _, h, _), (inside, rooms)) in storeys.iter().zip(contained.iter().zip(&spaces)) {
+        if !inside.is_empty() {
+            o.add(format!("IFCRELCONTAINEDINSPATIALSTRUCTURE('{}',$,$,$,{},#{st})", id(*h, 3), refs(inside)));
+        }
+        if !rooms.is_empty() {
+            o.add(format!("IFCRELAGGREGATES('{}',$,$,$,#{st},{})", id(*h, 4), refs(rooms)));
         }
     }
     let mut s = String::with_capacity(o.lines.iter().map(|l| l.len() + 10).sum::<usize>() + 512);
@@ -493,6 +796,21 @@ fn decode_step_string(raw: &[u8]) -> String {
             let units: Vec<u16> = (0..end / 4).filter_map(|k| u16::from_str_radix(body.get(k * 4..k * 4 + 4)?, 16).ok()).collect();
             out.push_str(&String::from_utf16_lossy(&units));
             rest = body.get(end + 4..).unwrap_or("");
+        } else if let Some(body) = tail.strip_prefix("\\X4\\") {
+            let end = body.find("\\X0\\").unwrap_or(body.len());
+            let chars = (0..end / 8).filter_map(|k| u32::from_str_radix(body.get(k * 8..k * 8 + 8)?, 16).ok()).filter_map(char::from_u32);
+            out.extend(chars);
+            rest = body.get(end + 4..).unwrap_or("");
+        } else if let Some(body) = tail.strip_prefix("\\S\\") {
+            // ISO 8859's upper half: the next character + 128.
+            let mut cs = body.chars();
+            if let Some(c) = cs.next().and_then(|c| char::from_u32(u32::from(c) + 128)) {
+                out.push(c);
+            }
+            rest = cs.as_str();
+        } else if tail.starts_with("\\P") && tail.get(3..4) == Some("\\") {
+            // A code page directive (\PA\): Latin-1 is read as Latin-1.
+            rest = tail.get(4..).unwrap_or("");
         } else if let Some(body) = tail.strip_prefix("\\X\\") {
             if let Some(b) = body.get(..2).and_then(|h| u8::from_str_radix(h, 16).ok()) {
                 out.push(char::from(b));
@@ -501,8 +819,6 @@ fn decode_step_string(raw: &[u8]) -> String {
         } else if let Some(body) = tail.strip_prefix("\\\\") {
             out.push('\\');
             rest = body;
-        } else if tail.starts_with("\\S\\") || tail.starts_with("\\P") {
-            rest = tail.get(3..).unwrap_or("");
         } else {
             out.push('\\');
             rest = &tail[1..];
@@ -889,7 +1205,7 @@ const NOT_OBJECTS: [&str; 6] = ["IFCPROJECT", "IFCSITE", "IFCBUILDING", "IFCBUIL
 
 /// `IFCWALLSTANDARDCASE` → `WallStandardCase`, as the IFC schema writes it.
 fn class_name(upper: &str) -> String {
-    const KNOWN: [&str; 24] = [
+    const KNOWN: [&str; 28] = [
         "WallStandardCase",
         "Wall",
         "Slab",
@@ -914,6 +1230,10 @@ fn class_name(upper: &str) -> String {
         "FlowTerminal",
         "FlowSegment",
         "DistributionElement",
+        "DuctSegment",
+        "PipeSegment",
+        "CableCarrierSegment",
+        "GeographicElement",
     ];
     let bare = upper.strip_prefix("IFC").unwrap_or(upper);
     KNOWN.iter().find(|k| k.eq_ignore_ascii_case(bare)).map_or_else(
@@ -1044,6 +1364,12 @@ mod tests {
         assert_eq!(real(1.0), "1.");
         assert_eq!(real(-0.0), "0.");
         assert_eq!(real(2.5), "2.5");
+        // Above U+FFFF: \X4\ (ISO 10303-21), not UTF-16 surrogates in \X2\.
+        assert_eq!(step_str("Room \u{1F3E0}"), "'Room \\X4\\0001F3E0\\X0\\'");
+        assert_eq!(decode_step_string(b"Room \\X4\\0001F3E0\\X0\\"), "Room \u{1F3E0}");
+        // \S\ shifts the next character into ISO 8859's upper half; \PA\ picks a code page.
+        assert_eq!(decode_step_string(b"Caf\\S\\i \\PA\\ok"), "Caf\u{e9} ok");
+        assert!(is_guid(&guid(7, 9)) && !is_guid("4zzzzzzzzzzzzzzzzzzzzz") && !is_guid("short"));
         assert_eq!(guid(1, 2).len(), 22);
         assert_eq!(guid(1, 2), guid(1, 2));
         assert_ne!(guid(1, 2), guid(1, 3));

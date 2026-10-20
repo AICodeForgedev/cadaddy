@@ -1,6 +1,6 @@
 # Where CADaddy falls short of AutoCAD
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (refreshed for 0.7.6: REFEDIT, XCLIP, 3D viewing, PDF import and images, 12 languages, Dimension Style Manager) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-19 · **Change:** minor (Q154: IME composition at the command line and in the MTEXT editor; vertical text styles) · **Target:** Autodesk AutoCAD 2027
 
 Every known shortfall, one row each, ranked within each section by user impact. This is the work
 list: agents pick from here (top of a section first), and remove or update a row in the same PR
@@ -104,7 +104,7 @@ Detail: [localization-parity.md](localization-parity.md).
 | L1 | Catalog covers the UI (989 rows, #36) but not engine diagnostics, CLI/MCP replies or command history | 4–6 |
 | L2 | Japanese (AutoCAD for Mac's last missing language), plus hi, id and vi from the standard's list; native review of the catalogs. Landed: ar, cs, de, es, fr, it, ko, pt-BR, ru, sv, uk and zh (1,100–1,400 rows each) | 10–20 + native review |
 | L3 | Complex-script shaping for Devanagari and other Indic scripts in drawing text; RTL (mirrored) UI. Arabic-script shaping and bidi in drawing text landed (#287) | 20–30 |
-| L4 | IME fixes on every platform (PRs #110–#119); vertical text styles | 6–10 |
+| L4 | IME: verified with synthetic input-method events and on Windows through the control channel; still to check by hand with real IMEs on macOS (Korean, emoji picker), X11 and Wayland, and the web build (IME off at the command line there). Landed (Q154): composition at the command line and in the MTEXT editor with the candidate window at the caret, CJK interface fonts on demand, `ui.ime`; vertical text styles for TEXT/ATTRIB/ATTDEF on screen and in plots | 2–4 |
 
 ## Stability
 
@@ -145,6 +145,7 @@ Detail: [localization-parity.md](localization-parity.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | Q154: IME composition (Chinese, Japanese, Korean) at the command line and in the MTEXT editor, candidate window at the caret, CJK interface fonts loaded when CJK is typed, `ui.ime` control method; vertical text styles drawn and plotted top to bottom (L4) |
 | 2026-10-18 | minor | 0.7.7 batch 8: 3D solids (primitives, EXTRUDE, REVOLVE, SWEEP, LOFT, PRESSPULL; UNION/SUBTRACT/INTERSECT, SLICE, THICKEN, FILLETEDGE, CHAMFEREDGE, SOLIDEDIT); sections and drawing views (SECTIONPLANE, LIVESECTION, FLATSHOT, VIEWBASE, VIEWSECTION); lights, sun and physically lit Realistic style; dynamic block authoring (BPARAMETER, BACTIONTOOL, BVSTATE; F3); xrefs edited in place and XCLIP Clipdepth (F2); DWG throughput measured (FF6); 0.7.7f fixes: Layers keeps 120 points in the palette stack, agents' requests never open file dialogs (FILEDIA 0 too), registered images survive a folder change |
 | 2026-10-18 | minor | 0.7.7e review fixes: materials, layer filters and field values kept in .cdy, and materials (colours, assignments) through DWG; Properties gets most of the palette stack; U after an EXPLODE that exploded nothing undoes the EXPLODE; a plot scale means that scale (Fit only without one; "1:20" read); LISP entmakex, getenv, setenv, menucmd; LIST shows dimensions and other objects readably; unknown JSON parameters are reported in `warnings`; agent replies sent at once (Nagle on the control socket caused the 0.3 s "stalls"); WALLGEN builds walls, doors, windows, slabs and ceilings as 3D objects from the plan (F24) |
 | 2026-10-18 | minor | 0.7.7 batch 7 (3D foundation): meshes and visual styles with shaded plots (VSCURRENT; F24 to modelling); walk and fly inside the drawing's tab with ground, gravity, doors, minimap and rooms; a 3D furniture and fixture library; the Layer States Manager and layer filters (U-layers); perception tools for agents (plan layers, walls, openings, rooms, notes, sheets) |

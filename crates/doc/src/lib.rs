@@ -38,10 +38,11 @@ pub use plotter::*;
 pub use refedit::{RefEdit, WorkItem};
 pub use section::*;
 pub use solid::*;
-pub use store::{ChunkRef, EntityStore};
+pub use store::{ChunkRef, EntityStore, KIND_DIMENSION, KIND_HATCH, KIND_INSERT, KIND_OTHER, KIND_TABLE, kind_bit};
 pub use tables::*;
 pub use transform3::*;
 
+pub mod dwgprops;
 /// File data CADaddy doesn't model, kept for saving (#528).
 pub mod dynblock;
 pub mod foreign;
@@ -161,6 +162,8 @@ pub struct Drawing {
     /// The plot stamp's settings (PLOTSTAMP); `None` until set. Each layout's page setup says
     /// whether its plots carry it.
     pub plot_stamp: Option<plotstamp::PlotStamp>,
+    /// Drawing properties (DWGPROPS): summary and custom properties.
+    pub properties: dwgprops::DwgProps,
     /// What reading the file left out (a DWG's object records the reader couldn't decode), told
     /// to the user when the drawing opens. Never written to a file.
     pub read_notes: Vec<String>,
@@ -259,6 +262,7 @@ impl Drawing {
             tours: None,
             embedded: BTreeMap::new(),
             plot_stamp: None,
+            properties: dwgprops::DwgProps::default(),
             read_notes: Vec::new(),
             refedit: None,
             skipped_records: BTreeMap::new(),

@@ -78,6 +78,8 @@ pub(crate) fn apply_layer_eval(d: &mut cadaddy_doc::Drawing, json: &str) {
 }
 /// Named-object-dictionary key of the XRECORD holding the current multileader style.
 pub(crate) const MLEADER_STYLE_KEY: &str = "CADADDY_MLEADERSTYLE";
+/// Named-object-dictionary key of the XRECORD holding the drawing's spelling dictionary (DCTMAIN).
+pub(crate) const DCTMAIN_KEY: &str = "CADADDY_DCTMAIN";
 /// Named-object-dictionary key of the XRECORD holding the building spec (JSON).
 pub(crate) const BUILDING_SPEC_KEY: &str = "CADADDY_BSPEC";
 pub(crate) const TOURS_KEY: &str = "CADADDY_TOURS";

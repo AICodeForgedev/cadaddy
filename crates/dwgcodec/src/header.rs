@@ -435,6 +435,46 @@ fn put_bits(w: &mut BitWriter, b: &Bits) {
 }
 
 impl HeaderVars {
+    /// Every variable `version` stores, each at its type's zero value (a new drawing's header,
+    /// to be filled with [`HeaderVars::set`]); a colour is ByLayer, a handle null.
+    pub fn defaults(version: Version) -> HeaderVars {
+        let vars = VARS
+            .iter()
+            .filter(|(since, _, _)| since.applies(version))
+            .map(|&(_, name, kind)| {
+                let v = match kind {
+                    B => Value::Bool(false),
+                    Bs | Bl | Bll | Rc => Value::Int(0),
+                    Bd => Value::Double(0.0),
+                    Rd2 => Value::Point2([0.0; 2]),
+                    Bd3 => Value::Point3([0.0; 3]),
+                    Tv => Value::Text(Text::Empty),
+                    H | HData => Value::Handle(HandleRef { code: 5, value: 0 }),
+                    HIfPrev3 => Value::Absent,
+                    Cmc => Value::Color(Color { index: 0, rgb: 0xC000_0000, flags: 0, name: Text::Empty, book: Text::Empty }),
+                };
+                (name, v)
+            })
+            .collect();
+        // After the last variable, the files we've seen store four short integers of -1 and two
+        // of 0 (and from R2007 the string stream ends in two more bits); readers expect them.
+        let mut tail = BitWriter::new();
+        for x in [-1, -1, -1, -1, 0, 0] {
+            tail.bs(x);
+        }
+        let mut rest: [Bits; 3] = Default::default();
+        rest[0] = Bits { len: tail.bit_len(), bytes: tail.into_bytes() };
+        if version.unicode() {
+            rest[1] = Bits { bytes: vec![0x80], len: 2 };
+        }
+        HeaderVars { version, vars, rest, strings: version.unicode() }
+    }
+
+    /// The names of the variables `version` stores, in stored order.
+    pub fn names(version: Version) -> Vec<&'static str> {
+        VARS.iter().filter(|(since, _, _)| since.applies(version)).map(|x| x.1).collect()
+    }
+
     /// A variable's value.
     pub fn get(&self, name: &str) -> Option<&Value> {
         self.vars.iter().find(|(n, _)| *n == name).map(|(_, v)| v)

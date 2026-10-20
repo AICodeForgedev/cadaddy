@@ -38,6 +38,12 @@ const KNOWN: &[(&str, &str)] = &[
     ("dwg", "header variable(s) added"),
     // A second layout's viewport is numbered again (ids are per layout in a DWG).
     ("dwg", "Viewport Entity.kind.Viewport"),
+    // CADaddy's own DWG codec (Q203): what the bridge's DWG has.
+    ("dwg-native", "Dimension Entity.kind.Dimension.text_mid"),
+    ("dwg-native", "Hatch Entity.kind.Hatch"),
+    ("dwg-native", "header variable(s) added"),
+    ("dwg-native", "Viewport Entity.kind.Viewport"),
+    ("dwg-native", "layout A-102 Enlarged Plan Layout.entities.chunks.Chunk.items.Entity.kind.Viewport"),
     ("dwg", "layout A-102 Enlarged Plan Layout.entities.chunks.Chunk.items.Entity.kind.Viewport"),
 ];
 
@@ -53,7 +59,7 @@ fn round_trips_report_their_differences() {
     let made = corpus::generate(2_000, 1);
     let mut report = format!("corpus: {} objects, made in {:.2} s\n", made.objects, made.seconds);
     let mut new = Vec::new();
-    for format in ["dxf", "dwg", "cdy"] {
+    for format in ["dxf", "dwg", "dwg-native", "cdy"] {
         let trip = corpus::round_trip(&made.drawing, format).unwrap();
         report.push_str(&format!(
             "{format}: save {:.3} s, {} KB, open {:.3} s, regen {:.3} s, {} difference(s)\n",

@@ -290,6 +290,20 @@ fn run_layout_set(s: &mut Session, p: &Value) -> Result<Value> {
     };
     s.pending_window = None;
     let st = s.state_mut()?;
+    if let Space::Paper(n) = &space {
+        // A layout opened for the first time is set up: its viewport shows the drawing.
+        let bare = st.bare_layouts.iter().position(|b| b == n).map(|i| st.bare_layouts.remove(i)).is_some();
+        if bare || st.doc.layout(n).is_some_and(|l| l.pending_setup) {
+            let mut d = (*st.doc).clone();
+            if bare && let Some(l) = d.layouts.iter_mut().find(|l| l.name == *n) {
+                l.pending_setup = true;
+            }
+            // A new drawing, never changed in place ([`crate::cached_extents`]).
+            if super::layout::set_up_layout(&mut d, n) || st.doc.layout(n).is_some_and(|l| l.pending_setup) {
+                st.doc = std::sync::Arc::new(d);
+            }
+        }
+    }
     st.space = space.clone();
     st.mspace = None;
     st.selection.clear();
@@ -422,7 +436,7 @@ impl Interactive for ZoomM {
             ZoomStage::Center => return Prompt::new("Specify center point", Accept::POINT),
             ZoomStage::CenterHeight(_) => {
                 let h = s.state().map(|st| st.zoom_frame().height).unwrap_or(1.0);
-                return Prompt::new("Enter magnification or height", Accept::NUMBER).default(format!("{h:.4}"));
+                return Prompt::new("Enter magnification or height", Accept::NUMBER).default(crate::units::dist(s, h));
             }
             ZoomStage::Scale => return Prompt::new("Enter a scale factor (nX or nXP)", Accept::NUMBER),
         }

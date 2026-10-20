@@ -117,9 +117,9 @@ fn ignore_all_and_add_to_the_user_dictionary() {
     assert!(file.lines().any(|l| l == "Quixplank"), "{file}");
     assert_eq!(s.execute("getvar", &json!({"name": "DCTCUST"})).unwrap()["value"], dict.to_str().unwrap());
     assert!(s.execute("spell", &json!({"action": "add", "word": "two words"})).is_err());
-    // DCTMAIN: only American English ships.
+    // DCTMAIN: American English unless the drawing chose another; codes not in the list refused.
     assert_eq!(s.execute("getvar", &json!({"name": "DCTMAIN"})).unwrap()["value"], "enu");
-    assert!(s.execute("setvar", &json!({"name": "DCTMAIN", "value": "fra"})).is_err());
+    assert!(s.execute("setvar", &json!({"name": "DCTMAIN", "value": "xx"})).is_err());
 }
 
 #[test]
@@ -163,4 +163,40 @@ fn hostile_spell_requests_are_refused() {
     let long = "a".repeat(5000);
     text(&mut s, 5.0, &format!("{long} ’tis don’t \\U+00e9t\u{e9} %%c ä"));
     assert!(s.execute("spell", &json!({})).is_ok());
+}
+
+/// Other languages (Q146): dictionaries read from the dictionary folder, chosen per drawing by
+/// DCTMAIN; one not installed says where to put it; the list shows what is installed.
+#[test]
+fn other_languages_come_from_the_dictionary_folder() {
+    let mut s = Session::new();
+    let (_dict, _turn) = own_dictionary(&mut s, "langs");
+    let dir = std::env::temp_dir().join(format!("cadaddy-spell-{}-dicts", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    cadaddy_engine::cmd::spell::set_dictionary_dir(dir.to_str().unwrap());
+    let list = s.execute("spell", &json!({"action": "dictionaries"})).unwrap();
+    let installed =
+        |list: &Value, code: &str| list["dictionaries"].as_array().unwrap().iter().find(|d| d["code"] == code).unwrap()["installed"].clone();
+    assert_eq!(list["dictionaries"].as_array().unwrap().len(), 8, "{list}");
+    assert_eq!((installed(&list, "enu"), installed(&list, "fr")), (json!(true), json!(false)), "{list}");
+    assert_eq!(list["current"], "enu");
+    // French chosen for this drawing, not installed yet: checking says where the file goes.
+    text(&mut s, 0.0, "La maisonn est belle hello");
+    s.execute("setvar", &json!({"name": "DCTMAIN", "value": "FR"})).unwrap();
+    assert_eq!(s.execute("getvar", &json!({"name": "DCTMAIN"})).unwrap()["value"], "fr");
+    let e = s.execute("spell", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("French") && e.contains("fr.txt") && e.contains(dir.to_str().unwrap()), "{e}");
+    // Installed (a made-up list with a notice): French words right, English ones not.
+    std::fs::write(dir.join("fr.txt"), "made-up test list\n---\nla\nmaison\nest\nbelle\nélectricité\n").unwrap();
+    let r = s.execute("spell", &json!({})).unwrap();
+    assert_eq!(words(&r), vec!["maisonn".to_string(), "hello".to_string()], "{r}");
+    assert_eq!(r["misspelled"][0]["suggestions"][0], "maison", "{r}");
+    assert_eq!(r["dictionary"], "fr");
+    assert_eq!(installed(&s.execute("spell", &json!({"action": "dictionaries"})).unwrap(), "fr"), json!(true));
+    // Another drawing keeps American English.
+    s.execute("new", &json!({})).unwrap();
+    assert_eq!(s.execute("getvar", &json!({"name": "DCTMAIN"})).unwrap()["value"], "enu");
+    cadaddy_engine::cmd::spell::set_dictionary_dir("");
+    let _ = std::fs::remove_dir_all(&dir);
 }

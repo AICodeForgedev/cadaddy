@@ -63,6 +63,11 @@ struct State {
     keep_x: Option<f64>,
     /// Where a pointer drag in the box started (caret position).
     anchor: Option<usize>,
+    /// An input method's composition is open (Chinese, Japanese, Korean): Esc and Enter are
+    /// the IME's then, never the editor's.
+    composing: bool,
+    /// The caret as last drawn (screen): where the IME's candidate window opens.
+    ime_at: Option<Rect>,
 }
 
 fn state_id() -> egui::Id {
@@ -107,7 +112,19 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         {
             fmt.base_font = f;
         }
-        State { fmt, typing: CharFmt::default(), typing_at: 0, top: 70.0, sel: (0, 0), caret: None, focused: false, keep_x: None, anchor: None }
+        State {
+            fmt,
+            typing: CharFmt::default(),
+            typing_at: 0,
+            top: 70.0,
+            sel: (0, 0),
+            caret: None,
+            focused: false,
+            keep_x: None,
+            anchor: None,
+            composing: false,
+            ime_at: None,
+        }
     });
     let base_h = if mt.height > 0.0 { mt.height } else { 0.2 };
     // The text as the object will lay it out, and the box's scale: a readable size for the text
@@ -132,6 +149,23 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     let at = app.canvas.xf.map_or(rect.center(), |x| x.w2s(corner));
     let max_x = (rect.right() - width - 8.0).max(rect.left());
     let pos = pos2(at.x.clamp(rect.left(), max_x), at.y.clamp(rect.top() + st.top, (rect.bottom() - 120.0).max(rect.top() + st.top)));
+
+    // While an input method composes, Esc (cancel it) and Enter (choose) are the IME's: they
+    // must neither close the editor nor reach the text field.
+    let was_composing = st.composing;
+    for ev in ctx.input(|i| i.events.clone()) {
+        match ev {
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => st.composing = !text.is_empty(),
+            egui::Event::Ime(egui::ImeEvent::Commit(_)) => st.composing = false,
+            _ => {}
+        }
+    }
+    let composing = was_composing || st.composing;
+    if composing {
+        ctx.input_mut(|i| {
+            i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Escape | egui::Key::Enter, .. }));
+        });
+    }
 
     let mut done = Done::No;
     let top_start = pos.y - st.top;
@@ -536,7 +570,9 @@ fn text_box(ui: &mut egui::Ui, st: &mut State, lay: &MTextLayout, k: f64, width:
             egui::TextEdit::multiline(&mut buf)
                 .id(id)
                 .desired_width(200.0)
-                .lock_focus(true)
+                // Tab indents, and Esc stays here: the editor answers it (cancel), and while an
+                // input method composes it must not take the keyboard from the field.
+                .event_filter(egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
                 .char_limit(cadaddy_engine::mtext_edit::MAX_CHARS)
                 .show(ui)
         })
@@ -562,8 +598,14 @@ fn text_box(ui: &mut egui::Ui, st: &mut State, lay: &MTextLayout, k: f64, width:
     let fresh = map.len() == buf.chars().count() + 1;
     if fresh {
         for (x0, x1, base, h) in map.spans(sel.0, sel.1) {
-            let r = Rect::from_two_pos(to_screen(Vec2::new(x0, base + h * 1.25)), to_screen(Vec2::new(x1, base - h * 0.45)));
-            painter.rect_filled(r, 0.0, t.select_bg);
+            if st.composing {
+                // An input method's composition (the field selects it): underlined, as IMEs show it.
+                let y = base - h * 0.3;
+                painter.line_segment([to_screen(Vec2::new(x0, y)), to_screen(Vec2::new(x1, y))], Stroke::new(1.0, t.text));
+            } else {
+                let r = Rect::from_two_pos(to_screen(Vec2::new(x0, base + h * 1.25)), to_screen(Vec2::new(x1, base - h * 0.45)));
+                painter.rect_filled(r, 0.0, t.select_bg);
+            }
         }
     }
     for piece in &lay.pieces {
@@ -595,6 +637,18 @@ fn text_box(ui: &mut egui::Ui, st: &mut State, lay: &MTextLayout, k: f64, width:
         && let Some((x, base, h)) = map.pos(sel.1)
     {
         painter.line_segment([to_screen(Vec2::new(x, base + h * 1.2)), to_screen(Vec2::new(x, base - h * 0.4))], Stroke::new(1.5, t.accent));
+        st.ime_at =
+            Some(Rect::from_two_pos(to_screen(Vec2::new(x, base + h * 1.2)), to_screen(Vec2::new(x, base - h * 0.4))).expand2(vec2(0.5, 0.0)));
+    }
+    // The input method (Chinese, Japanese, Korean) for the text field: egui turns it on only
+    // for a field it sees on screen, and this one is off screen, so the editor turns it on
+    // itself, the candidate window at the caret drawn here.
+    if out.response.has_focus() {
+        let at = st.ime_at.filter(|r| rect.intersects(*r)).unwrap_or_else(|| Rect::from_min_size(origin, vec2(1.0, line_px)));
+        ui.ctx().output_mut(|o| {
+            o.ime =
+                Some(egui::output::IMEOutput { purpose: egui::IMEPurpose::Normal, rect: at, cursor_rect: at, should_interrupt_composition: false });
+        });
     }
     if let Some(r) = out.cursor_range {
         let (a, b) = (r.primary.index.0, r.secondary.index.0);
@@ -686,6 +740,46 @@ mod tests {
             cadaddy_engine::doc::EntityKind::MText(m) => assert!(m.contents.contains("NEW NOTE"), "{}", m.contents),
             k => panic!("{k:?}"),
         }
+    }
+
+    /// Input methods (Chinese, Japanese, Korean) compose in the editor: the candidate window
+    /// opens at the caret on screen, the commit lands in the text, and Esc or Enter while
+    /// composing are the IME's, not the editor's.
+    #[test]
+    fn ime_composes_into_the_editor_at_its_caret() {
+        let ctx = egui::Context::default();
+        let mut app = CadApp::new(Session::new(), Services::default());
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 800.0));
+        let run = |app: &mut CadApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| show(app, ui.ctx()));
+            out.textures_delta.clear();
+            out.platform_output.ime
+        };
+        let preedit = |t: &str| egui::Event::Ime(egui::ImeEvent::Preedit { text: t.into(), active_range_chars: None });
+        let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        app.session.execute("mtext", &serde_json::json!({ "at": [0, 10], "text": "NOTE", "height": 2 })).unwrap();
+        app.start("textedit");
+        app.session.input(cadaddy_engine::Input::Point(cadaddy_geom::Vec2::new(1.0, 9.0))).unwrap();
+        run(&mut app, vec![]);
+        run(&mut app, vec![]);
+        let ime = run(&mut app, vec![]).expect("the editor enables the IME");
+        assert!(screen.contains(ime.rect.center()), "candidate window on screen, not at the hidden field: {:?}", ime.rect);
+        // Composing: Esc and Enter don't close the editor (the IME cancels or chooses).
+        run(&mut app, vec![preedit("bi")]);
+        run(&mut app, vec![key(egui::Key::Escape), key(egui::Key::Enter)]);
+        assert!(is_open(&ctx), "Esc while composing keeps the editor");
+        assert_eq!(app.session.running.as_ref().map(|r| r.id.as_str()), Some("textedit"));
+        run(&mut app, vec![preedit("笔"), preedit(""), egui::Event::Ime(egui::ImeEvent::Commit("笔".into()))]);
+        run(&mut app, vec![]);
+        let st = ctx.data_mut(|d| d.get_temp::<State>(state_id())).expect("editor open");
+        assert_eq!(st.fmt.text(), "NOTE笔");
+        let ime = run(&mut app, vec![]).expect("still enabled");
+        assert!(screen.contains(ime.rect.center()), "{:?}", ime.rect);
+        // With the composition done, Esc is the editor's again.
+        run(&mut app, vec![key(egui::Key::Escape)]);
+        run(&mut app, vec![]);
+        assert!(!is_open(&ctx) && app.session.running.is_none(), "Esc after composing cancels");
     }
 
     /// Opened on existing text, the editor has the keyboard with the caret at the end: typing

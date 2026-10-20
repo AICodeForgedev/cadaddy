@@ -1,6 +1,7 @@
 //! File names stored in drawings or typed by users, resolved the way Windows resolves them:
 //! letter case doesn't matter and `\` separates folders, on every OS. (Here because this is the
-//! lowest crate everything that opens files shares; it only uses `std`.)
+//! lowest crate everything that opens files shares; it uses `std` and the lexical path check of
+//! `craft-docpath`.)
 
 use std::path::{Component, Path, PathBuf};
 
@@ -8,6 +9,20 @@ use std::path::{Component, Path, PathBuf};
 const MAX_DIR_ENTRIES: usize = 20_000;
 /// Folders deep a name may go.
 const MAX_DEPTH: usize = 64;
+
+/// Whether a file path stored in a drawing (an image, a shape font) may be opened: a file on this
+/// computer, or on the network share the drawing's `folder` is on. Paths to other computers
+/// (`\\server\share\x`), devices (`\\.\x`, `NUL`) and URLs are not: opening a drawing must not
+/// make the app connect to a server it names (on Windows that sends the user's sign-in). The
+/// check is lexical and does no I/O.
+pub fn stored_path_allowed(stored: &str, folder: Option<&Path>) -> bool {
+    match craft_docpath::classify(stored.trim()) {
+        craft_docpath::PathKind::Local => true,
+        // The same share as the drawing (resolved against a file in its folder).
+        craft_docpath::PathKind::Network => folder.is_some_and(|d| craft_docpath::resolve(stored.trim(), Some(&d.join("drawing.dwg"))).is_ok()),
+        _ => false,
+    }
+}
 
 /// `name` with `\` read as a folder separator (on Windows it already is).
 pub fn native(name: &str) -> String {
@@ -105,6 +120,29 @@ pub fn find_file(path: impl AsRef<Path>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_paths_stay_on_this_computer_or_the_drawings_share() {
+        for ok in ["C:\\img\\a.png", "/srv/img/a.png", "img/a.png", "a.png", "../img/a.png"] {
+            assert!(stored_path_allowed(ok, None), "{ok}");
+        }
+        for no in [
+            "\\\\192.0.2.1\\s\\a.png",
+            "//192.0.2.1/s/a.png",
+            "\\\\?\\UNC\\192.0.2.1\\s\\a.png",
+            "file://192.0.2.1/s/a.png",
+            "\\\\.\\pipe\\x",
+            "NUL",
+            "https://x/a.png",
+        ] {
+            assert!(!stored_path_allowed(no, None), "{no}");
+            assert!(!stored_path_allowed(no, Some(Path::new("/srv/plans"))), "{no}");
+        }
+        // A drawing opened from a share may use images on that share, not on another.
+        let share = Path::new("//192.0.2.1/s/plans");
+        assert!(stored_path_allowed("\\\\192.0.2.1\\s\\img\\a.png", Some(share)));
+        assert!(!stored_path_allowed("\\\\192.0.2.9\\s\\img\\a.png", Some(share)));
+    }
 
     fn dir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("cadaddy-filename-{}-{tag}", std::process::id()));

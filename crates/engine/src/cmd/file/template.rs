@@ -43,7 +43,9 @@ fn template_for(p: &Value) -> Result<Option<String>> {
 /// NEW from a template, or `None` when the call names none (a blank drawing then).
 pub(super) fn run_new(s: &mut Session, p: &Value) -> Result<Option<Value>> {
     let Some(path) = template_for(p)? else { return Ok(None) };
-    let d = read_template(&path)?;
+    let mut d = read_template(&path)?;
+    // A drawing of its own, not the template's.
+    crate::fresh_fingerprint(&mut d);
     s.untitled_counter = s.untitled_counter.saturating_add(1);
     let title = format!("Drawing{}", s.untitled_counter);
     let i = s.open_drawing(d, &title, None);

@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (Swedish catalog added: complete catalog, menu headings, native-speaker terminology review; previously: complete current Korean catalog with Hangul font coverage) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (IME composition at the command line and in the MTEXT editor; vertical text styles) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How far CADaddy's interface and drawing text are from AutoCAD's languages. Summarised in
 [ROADMAP.md](../ROADMAP.md#languages); work items in [gaps.md](gaps.md#localization).
@@ -36,10 +36,14 @@ shaping and right-to-left text through TrueType, vertical SHX text styles.
   Bidirectional Algorithm and OpenType shaping with `harfrust` (Arabic, Persian and Urdu joining,
   lam-alef, ZWNJ, marks; Hebrew), in TEXT and MTEXT including wrapping (#287). Left-to-right lines
   are still placed one glyph per code point: **no shaping** for Devanagari and other Indic
-  scripts, and **no vertical text**. SHX fonts are not read; our stroke font stands in.
-- **Text input:** egui/winit IME. Several upstream IME fixes are queued as PRs (#110–#119:
-  macOS Korean, emoji picker, Windows caret placement, X11 and Wayland), so CJK input is not yet
-  reliable on every platform.
+  scripts. Text styles marked Vertical stack TEXT, ATTRIB and ATTDEF characters top to bottom,
+  on screen and in plots; SHX fonts with vertical forms place their characters themselves.
+- **Text input:** egui/winit IME. The command line and the MTEXT editor take input-method
+  compositions (shown underlined, committed as typed text, Enter and Esc left to the IME while
+  composing) and place the candidate window at their caret; dialog text boxes use egui's own.
+  Typing or composing CJK in an interface of another language loads the CJK interface fonts.
+  The control channel's `ui.ime` sends compositions for tests and agents. Real-IME checks on
+  macOS, X11 and Wayland are still to do; the web build leaves the IME off at the command line.
 
 ## Languages
 
@@ -52,7 +56,7 @@ plus native review by a human; extending the catalog to the remaining English-on
 | Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Estimate to `full` |
 |---|---|---|---|---|---|---|---|
 | English | en | source (100%) | 100% (help is a command reference, not AutoCAD-sized help) | Latin: yes | n/a | full | — |
-| Simplified Chinese | zh-Hans | 0 (0%) | 0% | CJK glyphs render via fallback; IME fixes pending (#110–#119); no vertical text | no | none | 8–12 h (includes extending the catalog, 4–6 h) |
+| Simplified Chinese | zh-Hans | 0 (0%) | 0% | CJK glyphs render via fallback; IME composition at the command line and MTEXT editor; vertical text styles | no | none | 8–12 h (includes extending the catalog, 4–6 h) |
 | Spanish | es | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
 | Hindi | hi | 0 (0%) | 0% | Devanagari: no shaping | no | none | 3–5 h + 15–25 h shaping (shared with Arabic) |
 | Arabic | ar | 0 (0%) | 0% | Drawing text shaped and laid out right to left (#287); the UI is not mirrored | no | none | 3–5 h + 15–25 h RTL UI |
@@ -60,16 +64,21 @@ plus native review by a human; extending the catalog to the remaining English-on
 | Russian | ru | ≈ 900 catalog rows (gaps reported, English fallback) | partial | Cyrillic: yes (bundled egui fonts) | contributed by @pechnikov2026-star (#624); no native review yet | partial | 2–4 h |
 | Portuguese | pt | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
 | Indonesian | id | 0 (0%) | 0% | Latin: yes | no | none | 3–5 h |
-| Japanese | ja | 0 (0%) | 0% | CJK glyphs render; IME pending; no vertical text | no | none | 4–6 h |
+| Japanese | ja | 0 (0%) | 0% | CJK glyphs render; IME composition at the command line and MTEXT editor; vertical text styles | no | none | 4–6 h |
 | German | de | 989 catalog rows (≈ 100% of the catalog; ≈ 80% of all UI strings, estimated: engine diagnostics and uncatalogued text stay English) | dialogs and tooltips yes; command reference searchable in German | Latin: yes (bundled egui fonts cover ä ö ü Ä Ö Ü ß; long strings will need layout checks) | no native review | partial | 1–2 h |
-| Korean | ko | 1,235 rows (1,229 ordinary, 4 menu, 2 count); full existing catalog union and marked UI coverage | dialogs, tooltips, Options and translated command-reference labels | UI requires catalog-covering installed or optional craft-fonts Hang/Kore face; English fallback without one; IME fixes still pending | original AI-assisted translation; independent native proofreading pending | complete current catalog; English-only interface gaps remain | native review + platform layout/IME validation |
+| Korean | ko | 1,235 rows (1,229 ordinary, 4 menu, 2 count); full existing catalog union and marked UI coverage | dialogs, tooltips, Options and translated command-reference labels | UI requires catalog-covering installed or optional craft-fonts Hang/Kore face; English fallback without one; IME composition landed, real-IME check on macOS pending | original AI-assisted translation; independent native proofreading pending | complete current catalog; English-only interface gaps remain | native review + platform layout/IME validation |
 | Vietnamese | vi | 0 (0%) | 0% | Latin with stacked diacritics: renders per code point, untested | no | none | 3–5 h |
 | Ukrainian | uk | 989 catalog rows (≈ 100% of the catalog; ≈ 80% of all UI strings, estimated: engine diagnostics and uncatalogued text stay English) | dialogs and tooltips yes; command reference searchable in Ukrainian | Cyrillic: yes (bundled egui fonts) | translated by a contributor; no second review | partial | 2–4 h |
 | Czech | cs | 1,202 catalog rows; reference catalog and marked UI literals covered | dialogs and tooltips yes; contextual menu headings; command reference searchable in Czech | Latin: yes (bundled egui proportional and monospace fonts; Czech letters and quotes tested) | AI-assisted by @Losminek; independent review pass; not yet proofread by a native speaker | complete current catalog; English-only interface gaps remain | native review + shared English-only UI work |
 | Swedish | sv | 1,235 catalog rows; reference catalog, marked UI literals and menu headings covered (no gaps reported) | dialogs and tooltips yes; contextual menu headings; command reference searchable in Swedish | Latin: yes (bundled egui proportional and monospace fonts; å ä ö é and Swedish quotes tested) | AI-assisted (Claude Code) by @holmbom; terminology and the running app reviewed by a native speaker | complete current catalog; English-only interface gaps remain | line-by-line proofreading + shared English-only UI work |
 | Italian | it | 1,227 catalog rows; reference catalog and marked UI literals covered | dialogs and tooltips yes; contextual menu headings (Visualizza / Vista, Edita / Modifica); command reference searchable in Italian | Latin: yes (bundled egui fonts; accented letters tested) | AI-assisted by Emanuele Bottelli (Claude), written from the English strings with Italian desktop-CAD vocabulary; no native proofreading pass yet | complete current catalog; English-only interface gaps remain | native review + shared English-only UI work |
+| Traditional Chinese (Taiwan) | zh-TW | 2,264 rows (the whole reference catalog) + 191 engine messages; no gaps reported | dialogs, tooltips, Options, command-line prompts | CJK via an installed font, a Traditional face first (Microsoft JhengHei, Noto Sans CJK TC; PingFang on macOS); `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant` locales pick it | original AI translation (Claude) with Taiwanese CAD vocabulary; no native review | complete current catalog; English-only interface gaps remain | native review + IME validation |
+| Polish | pl | 2,264 rows + 191 engine messages; no gaps reported | dialogs, tooltips, Options, command-line prompts; one/few/many plurals | Latin Extended: yes (bundled egui fonts; every letter in the catalog tested) | original AI translation (Claude); no native review | complete current catalog; English-only interface gaps remain | native review |
+| Hungarian | hu | 2,264 rows + 191 engine messages; no gaps reported | dialogs, tooltips, Options, command-line prompts | Latin Extended: yes (ő ű tested) | original AI translation (Claude), Hungarian AutoCAD vocabulary (fólia, tárgyraszter); no native review | complete current catalog; English-only interface gaps remain | native review |
+| Turkish | tr | 2,264 rows + 191 engine messages; no gaps reported | dialogs, tooltips, Options, command-line prompts | Latin Extended: yes (ğ ş ı İ tested) | original AI translation (Claude); no native review | complete current catalog; English-only interface gaps remain | native review |
 
-Other languages shipped: Ukrainian, Brazilian Portuguese, German, Czech, Russian, French, Italian, Korean and Swedish.
+Other languages shipped: Ukrainian, Brazilian Portuguese, German, Czech, Russian, French, Italian, Korean, Swedish, Traditional Chinese, Polish, Hungarian and Turkish.
+The ribbon's tab and panel names (Annotate, Manage, Annotation, Utilities) aren't in any catalog yet and show in English in every language.
 Czech, Swedish and Brazilian Portuguese cover the reference catalog and every marked UI literal; engine diagnostics and uncatalogued text
 remain English. AutoCAD for Mac ships 7
 non-English languages (zh-Hans, es, fr, ja, de, ko, it); of those, CADaddy now ships German and Korean,
@@ -83,6 +92,7 @@ each language, which needs humans. Translations parallelise fully once the catal
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | IME composition at the command line and in the MTEXT editor (candidate window at the caret, CJK interface fonts on demand, `ui.ime`); vertical text styles |
 | 2026-10-13 | minor | Swedish added: 1,235 rows, one/other plurals, menu headings, locale/preferences/menu/font/render tests; no gaps in the marked UI literals; terminology and the running app reviewed by a native speaker |
 | 2026-10-13 | minor | Korean added: full 1,235-row existing catalog union, single count form, locale/persistence/live-switch tests, and validated Hangul UI fonts; native review and platform verification pending |
 | 2026-10-12 | minor | Italian added: 1,227 rows, one/other plurals, two `menu` headings, locale/preference/plural/font tests; AI-assisted, native proofreading pending |

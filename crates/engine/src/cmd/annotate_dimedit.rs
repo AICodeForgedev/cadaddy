@@ -540,7 +540,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<cada
     // test 0.7.7c).
     let mut measured: Vec<(Handle, f64)> = Vec::new();
     for store in std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)) {
-        for e in store.iter() {
+        for e in store.iter_kinds(cadaddy_doc::KIND_DIMENSION) {
             let EntityKind::Dimension(dm) = &e.kind else { continue };
             if changed(e.handle) && measured.len() < MAX_FOLLOW {
                 let st = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);

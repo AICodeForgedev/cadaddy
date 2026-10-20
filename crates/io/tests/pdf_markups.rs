@@ -65,3 +65,24 @@ fn every_kind_reads_back() {
     assert!(read(&pdf, 2).is_err());
     assert!(read(b"not a pdf", 1).is_err());
 }
+
+#[test]
+fn an_icon_sized_note_is_a_sticky_note() {
+    let note = |rect: [f64; 4]| Markup {
+        kind: MarkupKind::Note,
+        points: Vec::new(),
+        strokes: Vec::new(),
+        rect,
+        text: "Verify the clearance in front of the panel.".into(),
+        author: "Reviewer".into(),
+        subject: String::new(),
+        color: None,
+        date: String::new(),
+    };
+    let pdf = annotated_pdf(612.0, 792.0, &[note([600.0, 600.0, 620.0, 620.0])]).unwrap();
+    assert!(pdf.windows(13).any(|w| w == b"/Subtype/Text") || pdf.windows(14).any(|w| w == b"/Subtype /Text"), "a Text annotation");
+    let page = read(&pdf, 1).unwrap();
+    let m = &page.markups[0];
+    assert_eq!((m.kind, m.rect, m.text.as_str()), (MarkupKind::Note, [600.0, 600.0, 620.0, 620.0], "Verify the clearance in front of the panel."));
+    assert_eq!(m.points, [[600.0, 620.0]], "anchored at the icon's top left");
+}

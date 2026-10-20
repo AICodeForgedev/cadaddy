@@ -1,7 +1,7 @@
 //! File fidelity matrix: a drawing with one of every entity type and the table types (layers,
 //! linetypes, text/dimension/multileader/table/multiline styles, blocks, groups, layouts, views,
-//! UCSs) is written as DWG 2000, 2004, 2007, 2010, 2013 and 2018, as ASCII and binary DXF and as
-//! .cdy, read back, and compared field by field (floats to 1e-6). What changed, per format and
+//! UCSs) is written as DWG 2000, 2004, 2007, 2010, 2013 and 2018 (through the bridge and with
+//! CADaddy's own codec), as ASCII and binary DXF and as .cdy, read back, and compared field by field (floats to 1e-6). What changed, per format and
 //! type, is the matrix (`target/tmp/fidelity.md`, printed with `CADADDY_FIDELITY_REPORT=1`).
 //!
 //! The test fails on any difference not in [`KNOWN`] — the losses the matrix found when it was
@@ -47,6 +47,27 @@ const KNOWN: &[&str] = &[
     "DWG 2010|Viewport|kind.id",
     "DWG 2013|Viewport|kind.id",
     "DWG 2018|Viewport|kind.id",
+    // CADaddy's own DWG reader and writer (Q203): the same version limits (without the bridge's
+    // DIMFXL and 2000 style losses), and viewports numbered by their order in the layout too
+    // (DWG doesn't store the number).
+    "DWG native 2000|Leader|count 1→2",
+    "DWG native 2000|MText|count 2→3",
+    "DWG native 2000|Mesh|count 1→0",
+    "DWG native 2000|Multileader|count 1→0",
+    "DWG native 2000|Polyface Mesh|appeared",
+    "DWG native 2004|Leader|count 1→2",
+    "DWG native 2004|MText|count 2→3",
+    "DWG native 2004|Mesh|count 1→0",
+    "DWG native 2004|Multileader|count 1→0",
+    "DWG native 2004|Polyface Mesh|appeared",
+    "DWG native 2007|Mesh|count 1→0",
+    "DWG native 2007|Polyface Mesh|appeared",
+    "DWG native 2000|Viewport|kind.id",
+    "DWG native 2004|Viewport|kind.id",
+    "DWG native 2007|Viewport|kind.id",
+    "DWG native 2010|Viewport|kind.id",
+    "DWG native 2013|Viewport|kind.id",
+    "DWG native 2018|Viewport|kind.id",
 ];
 
 fn hooks() {
@@ -181,15 +202,20 @@ fn kitchen_sink(dir: &std::path::Path) -> (Drawing, Vec<String>) {
 /// The formats of the matrix: (column name, file name, options).
 fn formats() -> Vec<(String, &'static str, SaveOptions)> {
     let mut v = Vec::new();
-    for (n, ver) in [
+    let dwg = [
         ("2000", Version::R2000),
         ("2004", Version::R2004),
         ("2007", Version::R2007),
         ("2010", Version::R2010),
         ("2013", Version::R2013),
         ("2018", Version::R2018),
-    ] {
+    ];
+    for (n, ver) in dwg {
         v.push((format!("DWG {n}"), "x.dwg", SaveOptions { version: Some(ver), binary: false }));
+    }
+    // CADaddy's own DWG reader and writer (Q203), side by side with the bridge's columns.
+    for (n, ver) in dwg {
+        v.push((format!("DWG native {n}"), "x.dwg", SaveOptions { version: Some(ver), binary: false }));
     }
     v.push(("DXF".into(), "x.dxf", SaveOptions { version: Some(Version::R2018), binary: false }));
     v.push(("DXF binary".into(), "x.dxf", SaveOptions { version: Some(Version::R2018), binary: true }));
@@ -374,13 +400,19 @@ fn fidelity_matrix() {
         let _ = std::fs::write(k.join("manifest.json"), json!({ "model": counts }).to_string());
     }
     for (col, name, opts) in &cols {
-        let bytes = cadaddy_io::write_with(&d, name, opts).map_err(|e| e.to_string());
+        let native = col.starts_with("DWG native");
+        let bytes = match (native, opts.version) {
+            (true, Some(v)) => cadaddy_io::write_dwg(&d, v, cadaddy_io::DwgEngine::Native).map_err(|e| e.to_string()),
+            _ => cadaddy_io::write_with(&d, name, opts).map_err(|e| e.to_string()),
+        };
         if let (Some(k), Ok(b)) = (&keep, &bytes)
             && name.ends_with(".dxf")
         {
             let _ = std::fs::write(k.join(format!("{}.dxf", col.replace(' ', "_"))), b);
         }
-        let back = bytes.and_then(|b| cadaddy_io::read(&b, name).map_err(|e| e.to_string()));
+        let back = bytes.and_then(|b| {
+            if native { cadaddy_io::read_dwg(&b, cadaddy_io::DwgEngine::Native) } else { cadaddy_io::read(&b, name) }.map_err(|e| e.to_string())
+        });
         let back = match back {
             Ok(b) => b,
             Err(e) => {

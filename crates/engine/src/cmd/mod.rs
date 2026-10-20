@@ -25,6 +25,7 @@ mod edit3d;
 mod exact_ends;
 mod exchange;
 mod express;
+mod express4;
 pub mod exterior;
 mod field;
 pub mod file;
@@ -48,6 +49,7 @@ pub use layer::filters::layers_of as layer_filter_layers;
 pub use layer::notify::unreconciled as unreconciled_layers;
 pub use qselect::wildcard;
 pub mod dimmodes;
+pub mod dwgprops;
 pub mod furnish;
 pub mod geo;
 pub mod imagetrace;
@@ -283,6 +285,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(array::specs());
         v.extend(symbol::specs());
         v.extend(express::specs());
+        v.extend(express4::specs());
         v.push(
             CommandSpec::new("spell", "Spelling", spell::run)
                 .menu(&["Tools", "Spelling"])
@@ -306,6 +309,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(layer::specs());
         v.extend(layout::specs());
         v.extend(plotstamp::specs());
+        v.extend(dwgprops::specs());
+        v.extend(crate::script_tools::specs());
         v.extend(exchange::specs());
         v.extend(props::specs());
         v.extend(inquiry::specs());

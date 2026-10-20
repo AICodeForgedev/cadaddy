@@ -45,16 +45,19 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         return;
     }
     let mut save = false;
-    egui::Window::new(crate::tl!("Render")).id(id).open(&mut open).resizable(true).default_width(820.0).show(ctx, |ui| {
-        ui.label(&shown.info);
-        let size = shown.tex.size_vec2();
-        let avail = ui.available_size().max(egui::vec2(200.0, 150.0));
-        let k = (avail.x / size.x).min((avail.y - 40.0).max(100.0) / size.y).min(1.0);
-        ui.image((shown.tex.id(), size * k));
-        ui.horizontal(|ui| {
-            save = ui.button(crate::tl!("Save...")).clicked();
-        });
-    });
+    egui::Window::new(crate::tl!("Render")).id(id).default_pos(crate::palette_pos(app)).open(&mut open).resizable(true).default_width(820.0).show(
+        ctx,
+        |ui| {
+            ui.label(&shown.info);
+            let size = shown.tex.size_vec2();
+            let avail = ui.available_size().max(egui::vec2(200.0, 150.0));
+            let k = (avail.x / size.x).min((avail.y - 40.0).max(100.0) / size.y).min(1.0);
+            ui.image((shown.tex.id(), size * k));
+            ui.horizontal(|ui| {
+                save = ui.button(crate::tl!("Save...")).clicked();
+            });
+        },
+    );
     if save
         && let Some(pick) = &app.services.pick_save_image
         && let Some(path) = pick("render.png")

@@ -10,7 +10,7 @@
 //! |---|---|
 //! | `theme` | `"system"`, `"light"` or `"dark"` |
 //! | `animations` | `"system"`, `"on"` or `"off"`: dialog and menu fades and smoothed scrolling |
-//! | `interfaceLanguage` | `"auto"`, `"en"`, `"uk"`, `"pt-BR"`, `"de"`, `"es"`, `"cs"`, `"ru"`, `"fr"`, `"zh"`, `"it"`, `"ko"`, `"sv"`, `"ar"` or `"ja"` |
+//! | `interfaceLanguage` | `"auto"`, `"en"`, `"uk"`, `"pt-BR"`, `"de"`, `"es"`, `"cs"`, `"ru"`, `"fr"`, `"zh"`, `"it"`, `"ko"`, `"sv"`, `"ar"`, `"ja"`, `"zh-TW"`, `"pl"`, `"hu"` or `"tr"` |
 //! | `saveFormat` | `"cdy"`, `"dxf"` or `"dwg"`: the format Save As suggests for new drawings |
 //! | `saveVersion` | `"2000"` … `"2018"`: the version drawings with no file yet are saved in |
 //! | `SAVETIME` | minutes between automatic saves, 0–600 (0: off) |
@@ -251,6 +251,15 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
         if !parse_ui(k, v, &mut ui)? {
             engine.insert(k.clone(), v.clone());
         }
+    }
+    // Who may drive this window and whether updates come are the user's to change, not an
+    // agent's (turning the token off would let any program on the computer in at the next start).
+    if app.session.agent.from_agent
+        && (ui.control_token.is_some_and(|b| b != app.ui.control_token)
+            || ui.agent_control.is_some_and(|b| b != app.ui.agent_control)
+            || ui.check_for_updates == Some(false))
+    {
+        return Err("Only the user can change agentControl, controlToken or checkForUpdates (Options), not an agent.".into());
     }
     let reset = engine.get("reset").and_then(Value::as_bool) == Some(true);
     // The engine checks its part (and refuses unknown names) before anything here changes.

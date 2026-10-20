@@ -87,6 +87,9 @@ struct Tables {
     /// The plot stamp's settings (a layout's page setup says whether it plots it).
     #[serde(default)]
     plot_stamp: Value,
+    /// Drawing properties (DWGPROPS).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    properties: Option<cadaddy_doc::dwgprops::DwgProps>,
     /// The geographic location (GEOGRAPHICLOCATION).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     geo: Option<cadaddy_doc::geo::GeoLocation>,
@@ -266,6 +269,7 @@ pub(super) fn tables(d: &Drawing) -> Result<Vec<u8>, String> {
         materials: value(&d.materials)?,
         sun: value(&d.sun)?,
         plot_stamp: value(&d.plot_stamp)?,
+        properties: Some(d.properties.clone()).filter(|p| !p.is_empty()),
         geo: d.geo.clone(),
         field_values: d.field_values.iter().map(|(h, v)| (h.0, v.clone())).collect(),
         kept_handles: d.kept_handles.iter().map(|(k, h)| (k.clone(), *h)).collect(),
@@ -505,6 +509,14 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 }
                 if !t.plot_stamp.is_null() {
                     field!(plot_stamp, "the plot stamp");
+                }
+                if let Some(mut p) = t.properties {
+                    // What a file says is checked like any input: the same caps as setting it.
+                    let custom = std::mem::take(&mut p.custom);
+                    for (n, v) in custom.iter().take(cadaddy_doc::dwgprops::MAX_CUSTOM) {
+                        p.set_custom(n, Some(v));
+                    }
+                    d.properties = p;
                 }
                 d.geo = t.geo.filter(|g| g.is_valid());
                 d.field_values = t.field_values.iter().map(|(h, v)| (cadaddy_doc::Handle(*h), v.clone())).collect();

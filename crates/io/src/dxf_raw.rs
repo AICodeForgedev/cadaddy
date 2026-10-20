@@ -36,6 +36,7 @@ const MODELLED_KEYS: &[&str] = &[
     "ACAD_IMAGE_DICT",
     "ACAD_IMAGE_VARS",
     "ACAD_PDFDEFINITIONS",
+    "DWGPROPS",
 ];
 
 /// Extension dictionary entries not kept raw: dimension associativity, fields and XCLIP

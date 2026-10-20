@@ -261,7 +261,7 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
 
         crate::rtl::lead(ui, "");
         let mut log = cadaddy_engine::activity::enabled();
-        if ui.checkbox(&mut log, crate::tl!("Keep an activity history beside each drawing (private, on this computer)")).changed() {
+        if ui.checkbox(&mut log, crate::tl!("Keep an activity history of each drawing (private, in CADaddy's settings folder)")).changed() {
             changes.insert("ACTIVITYLOG".into(), json!(i32::from(log)));
         }
         crate::rtl::trail(ui, "");

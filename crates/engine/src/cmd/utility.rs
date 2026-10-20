@@ -15,7 +15,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(
                 "{expr: \"(3+4)*2^2\" | \"dist([0,0],[3,4])\", vars?: {x: 1, p: [x, y]}} → {value} | {point} | \
                  {convert: {type?: length|area|volume|angle, from, to, value}} → {value} | {units: true} → unit lists | \
-                 {pick: point|distance|angle|intersection, points}",
+                 {pick: point|distance|angle|intersection, points} | {last: distance|area|perimeter} → the last DIST/AREA/MEASUREGEOM value",
             )
             .enabled(always)
             .noundo()
@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(super::ask::machine("find", "FIND", [super::ask::ask("find", "Enter text to find", super::ask::Kind::Text)]))),
         CommandSpec::new("measuregeom", "Measure Geometry", run_measuregeom)
             .alias(&["mea"])
-            .params("{mode: distance|radius|angle|area, ...}")
+            .params("{mode: distance|radius|angle|area|quick, ...} (quick: {at: [x,y], reach?} → distances to the nearest geometry left, right, down, up, and the area around the point)")
             .noundo()
             .interactive(|_| Ok(Box::new(super::measuregeom::MeasureM::default()))),
         CommandSpec::new("radius.measure", "Radius", run_radius).menu(&["Tools", "Inquiry", "Radius"]).params("{handle}").noundo().interactive(
@@ -78,7 +78,16 @@ pub fn eval(expr: &str, vars: &serde_json::Map<String, Value>) -> std::result::R
     }
 }
 
-fn run_cal(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run_cal(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(k) = p.get("last").filter(|v| !v.is_null()) {
+        let v = match k.as_str().map(str::to_ascii_lowercase).as_deref() {
+            Some("distance") => s.last_used.distance,
+            Some("area") => s.last_used.area,
+            Some("perimeter") => s.last_used.perimeter,
+            _ => return Err(bad("cal", "`last` must be distance, area or perimeter")),
+        };
+        return Ok(json!({ "value": v, "message": calc::num_text(v) }));
+    }
     if bool_or(p, "units", false) {
         return Ok(json!({ "units": calc::units_json() }));
     }
@@ -246,7 +255,8 @@ fn run_radius(s: &mut Session, p: &Value) -> Result<Value> {
         Some(EntityKind::Arc(a)) => a.radius,
         _ => return Err(bad("radius.measure", "select an arc or circle")),
     };
-    Ok(json!({ "radius": r, "diameter": 2.0 * r, "message": format!("Radius = {r:.4}\nDiameter = {:.4}", 2.0 * r) }))
+    let f = |v: f64| super::inquiry::fmt_d(s, v);
+    Ok(json!({ "radius": r, "diameter": 2.0 * r, "message": format!("Radius = {}\nDiameter = {}", f(r), f(2.0 * r)) }))
 }
 
 fn run_angle(s: &mut Session, p: &Value) -> Result<Value> {
@@ -270,7 +280,11 @@ fn run_angle(s: &mut Session, p: &Value) -> Result<Value> {
     if ang > 180.0 {
         ang = 360.0 - ang;
     }
-    Ok(json!({ "angle": ang, "message": format!("Angle = {ang:.4}°") }))
+    // Reported per AUNITS/AUPREC, as DIST's angle.
+    let (aunits, auprec) = s.doc().map(|d| (d.header.i64("AUNITS", 0), d.header.i64("AUPREC", 0))).unwrap_or((0, 0));
+    let text = crate::units::format_angle(ang.to_radians(), aunits, auprec);
+    let deg = if aunits == 0 { "°" } else { "" };
+    Ok(json!({ "angle": ang, "message": format!("Angle = {text}{deg}") }))
 }
 
 fn run_measuregeom(s: &mut Session, p: &Value) -> Result<Value> {
@@ -279,7 +293,21 @@ fn run_measuregeom(s: &mut Session, p: &Value) -> Result<Value> {
         "radius" | "r" => run_radius(s, p),
         "angle" | "a" => run_angle(s, p),
         "area" | "ar" => s.execute("area", p),
-        _ => Err(bad("measuregeom", "mode must be distance, radius, angle or area")),
+        "quick" | "q" => {
+            let at = point_req("measuregeom", p, "at")?;
+            let st = s.state()?;
+            let reach = match p.get("reach").filter(|v| !v.is_null()) {
+                Some(v) => {
+                    v.as_f64().filter(|r| r.is_finite() && *r > 0.0).ok_or_else(|| bad("measuregeom", "`reach` must be a positive distance"))?
+                }
+                None => st.view().height.max(1e-9),
+            };
+            let q = super::measuregeom::quick(&st.doc, &st.space, at, reach);
+            let mut r = q.json();
+            r["message"] = json!(q.text(s));
+            Ok(r)
+        }
+        _ => Err(bad("measuregeom", "mode must be distance, radius, angle, area or quick")),
     }
 }
 

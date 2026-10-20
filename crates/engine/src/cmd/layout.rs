@@ -312,7 +312,15 @@ fn run_copy(s: &mut Session, p: &Value) -> Result<Value> {
         let h = d.new_handle();
         store.push(Entity { handle: h, ..Entity::clone(e) });
     }
-    d.layouts.push(Layout { name: to.clone(), tab_order: order, page: src.page, entities: store, view: src.view, origin: src.origin });
+    d.layouts.push(Layout {
+        name: to.clone(),
+        tab_order: order,
+        page: src.page,
+        entities: store,
+        view: src.view,
+        origin: src.origin,
+        pending_setup: false,
+    });
     if let Some(b) = before_param("layout.copy", s.doc()?, p, &to)? {
         place_before(s.doc_mut()?, &to, Some(&b));
     }
@@ -486,8 +494,126 @@ pub(crate) fn default_viewports(d: &mut Drawing) {
         }
         let id = viewports::next_viewport_id(d);
         let vp = viewports::new_viewport(d, rect, id);
-        let _ = d.add(&Space::Paper(name), cadaddy_doc::Common::default(), EntityKind::Viewport(vp));
+        let _ = d.add(&Space::Paper(name.clone()), cadaddy_doc::Common::default(), EntityKind::Viewport(vp));
+        // Zoomed again to what has been drawn by the time the layout is first opened.
+        if let Some(l) = d.layouts.iter_mut().find(|l| l.name == name) {
+            l.pending_setup = true;
+        }
     }
+}
+
+/// Whether a layout has nothing of its own on it (the paper space's overall viewport, id 1,
+/// aside).
+fn layout_is_bare(l: &Layout) -> bool {
+    l.entities.iter().all(|e| matches!(&e.kind, EntityKind::Viewport(v) if v.id == 1))
+}
+
+/// The layouts with nothing on them, of a drawing read from a file: they are set up when they
+/// are first opened or published ([`set_up_layout`]).
+pub(crate) fn bare_layouts(d: &Drawing) -> Vec<String> {
+    d.layouts.iter().filter(|l| layout_is_bare(l)).map(|l| l.name.clone()).collect()
+}
+
+/// Mark the layouts with nothing on them to be set up (a drawing read for publishing).
+pub(crate) fn mark_bare_layouts(d: &mut Drawing) {
+    for l in d.layouts.iter_mut().filter(|l| layout_is_bare(l)) {
+        l.pending_setup = true;
+    }
+}
+
+/// The viewports of a layout that cover `rect` (within a hundredth of a unit): the ones laid
+/// over the printable area.
+fn viewports_over(l: &Layout, rect: Bounds2) -> Vec<Handle> {
+    let tol = 1e-2_f64.max(rect.width().max(rect.height()) * 1e-6);
+    l.entities
+        .iter()
+        .filter(|e| match &e.kind {
+            EntityKind::Viewport(v) if v.id != 1 && v.clip.is_none() => {
+                (v.center.xy() - rect.center()).len() <= tol && (v.width - rect.width()).abs() <= tol && (v.height - rect.height()).abs() <= tol
+            }
+            _ => false,
+        })
+        .map(|e| e.handle)
+        .collect()
+}
+
+/// Lay viewports `hs` of a layout over `rect` and zoom them to the drawing's extents.
+fn fit_viewports(d: &mut Drawing, layout: &str, hs: &[Handle], rect: Bounds2) {
+    let (view_center, view_height) = fit_view(d, rect.width(), rect.height());
+    let Some(l) = d.layouts.iter_mut().find(|l| l.name == layout) else { return };
+    for h in hs {
+        l.entities.modify(*h, |e| {
+            if let EntityKind::Viewport(v) = &mut e.kind {
+                v.center = rect.center().to3(v.center.z);
+                v.width = rect.width();
+                v.height = rect.height();
+                v.view_center = view_center;
+                v.view_height = view_height;
+            }
+        });
+    }
+}
+
+/// Set a layout up the first time it is opened or published (AutoCAD's layout initialisation):
+/// one not set up yet ([`Layout::pending_setup`]) gets its placeholder viewport zoomed to the
+/// drawing's extents, or, with nothing on it, a viewport over the printable area zoomed to
+/// them. Straight on the drawing, without an undo step. Whether anything changed.
+pub(crate) fn set_up_layout(d: &mut Drawing, name: &str) -> bool {
+    let Some(l) = d.layouts.iter_mut().find(|l| l.name == name) else { return false };
+    if !l.pending_setup {
+        return false;
+    }
+    l.pending_setup = false;
+    let bare = layout_is_bare(l);
+    let Some(rect) = cadaddy_render::sheet(d, name).map(|sh| sh.printable) else { return false };
+    if rect.is_empty() || !rect.min.is_finite() || !rect.max.is_finite() || rect.width() < 1e-6 || rect.height() < 1e-6 {
+        return false;
+    }
+    if bare {
+        let id = viewports::next_viewport_id(d);
+        let vp = viewports::new_viewport(d, rect, id);
+        return d.add(&Space::Paper(name.to_string()), cadaddy_doc::Common::default(), EntityKind::Viewport(vp)).is_ok();
+    }
+    let hs = d.layouts.iter().find(|l| l.name == name).map(|l| viewports_over(l, rect)).unwrap_or_default();
+    fit_viewports(d, name, &hs, rect);
+    !hs.is_empty()
+}
+
+/// After a layout's paper changed: the viewports that covered the old printable area cover the
+/// new one, zoomed to the drawing's extents.
+fn refit_to_paper(d: &mut Drawing, name: &str, old: Bounds2) {
+    let Some(new) = cadaddy_render::sheet(d, name).map(|sh| sh.printable) else { return };
+    if new.is_empty() || !new.min.is_finite() || !new.max.is_finite() || new.width() < 1e-6 || new.height() < 1e-6 {
+        return;
+    }
+    if (new.min - old.min).len() < 1e-9 && (new.max - old.max).len() < 1e-9 {
+        return;
+    }
+    let hs = d.layouts.iter().find(|l| l.name == name).map(|l| viewports_over(l, old)).unwrap_or_default();
+    fit_viewports(d, name, &hs, new);
+}
+
+/// Whether a sheet would plot blank: nothing on the layout but viewports, and none of them shows
+/// anything (off, or nothing drawn in model space where it looks).
+pub(crate) fn sheet_is_blank(d: &Drawing, name: &str) -> bool {
+    let Some(l) = d.layout(name) else { return true };
+    let ext = d.extents(&Space::Model);
+    !l.entities.iter().any(|e| match &e.kind {
+        EntityKind::Viewport(v) if v.id == 1 => false,
+        EntityKind::Viewport(v) => {
+            if !v.on || ext.is_empty() {
+                return false;
+            }
+            let half_h = v.view_height / 2.0;
+            let half_w = half_h * v.width / v.height.max(1e-12);
+            let seen = Bounds2::new(v.view_center - Vec2::new(half_w, half_h), v.view_center + Vec2::new(half_w, half_h));
+            // A twisted view sees a turned rectangle; the circle around it is enough to tell.
+            let r = Vec2::new(half_w, half_h).len();
+            let seen = if v.twist == 0.0 { seen } else { Bounds2::new(v.view_center - Vec2::new(r, r), v.view_center + Vec2::new(r, r)) };
+            seen.min.x <= ext.max.x && seen.max.x >= ext.min.x && seen.min.y <= ext.max.y && seen.max.y >= ext.min.y
+        }
+        _ => true,
+    })
 }
 
 /// Add `count` viewports tiling `rect` in a layout, each zoomed to the model extents.
@@ -873,8 +999,13 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
         page.plot_transparency = v;
     }
     if changes {
-        if let Some(l) = s.doc_mut()?.layouts.iter_mut().find(|l| l.name == name) {
+        let d = s.doc_mut()?;
+        let old = cadaddy_render::sheet(d, &name).map(|sh| sh.printable);
+        if let Some(l) = d.layouts.iter_mut().find(|l| l.name == name) {
             l.page = page.clone();
+        }
+        if let Some(old) = old {
+            refit_to_paper(d, &name, old);
         }
         s.touch();
     }

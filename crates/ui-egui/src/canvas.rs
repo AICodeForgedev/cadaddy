@@ -1391,7 +1391,22 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     });
     // Two fingers down: the first one's pointer does nothing else.
     let pressed_primary = pressed_primary && !gesture.active;
-    let inside = hover_pos.is_some_and(|p| rect.contains(p)) && resp.hovered();
+    // A finger lifting: egui-winit sends the release and PointerGone in one frame, so the pointer
+    // has no position and a tap on a touch screen picked nothing. The release's position stands
+    // in, where nothing is drawn over the drawing.
+    let lifted_at = if hover_pos.is_none() {
+        ui.input(|i| {
+            i.raw.events.iter().rev().find_map(|e| match e {
+                egui::Event::PointerButton { pos, pressed: false, .. } => Some(*pos),
+                _ => None,
+            })
+        })
+        .filter(|p| rect.contains(*p) && ui.ctx().layer_id_at(*p) == Some(ui.layer_id()))
+    } else {
+        None
+    };
+    let hover_pos = hover_pos.or(lifted_at);
+    let inside = hover_pos.is_some_and(|p| rect.contains(p)) && (resp.hovered() || lifted_at.is_some());
     // Which device is scrolling? On macOS, trackpads (and Magic Mouse) report precise point
     // deltas; notched mouse wheels report lines. The answer is sticky because egui spreads a wheel
     // notch over several frames. Elsewhere (browsers, Wayland smooth-scroll mice) ordinary wheels

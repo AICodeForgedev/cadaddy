@@ -1284,15 +1284,77 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
     Ok(r)
 }
 
+/// The result of a "not kept" check running on a worker thread: `Some(None)` once it found
+/// nothing (or failed), `Some(Some((notice, line)))` once it found losses.
+#[derive(Clone, Debug, Default)]
+pub struct KeptJob(std::sync::Arc<std::sync::Mutex<Option<Option<(Value, String)>>>>);
+
+impl KeptJob {
+    /// The finished result, taken (`None` while it runs).
+    pub fn take(&self) -> Option<Option<(Value, String)>> {
+        self.0.lock().ok().and_then(|mut r| r.take())
+    }
+}
+
+/// The exchange notice and command-line line for what `path` didn't keep.
+fn kept_notice(path: &str, lost: &[&str], detail: &[kept::Loss]) -> (Value, String) {
+    let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_uppercase()).unwrap_or_else(|| "DXF".into());
+    let what = if detail.is_empty() { lost.join(", ") } else { kept::losses_line(detail) };
+    (
+        json!({ "path": path, "format": ext, "losses": detail }),
+        format!("Not kept in the {ext} file: {what}. Save as a CADaddy drawing (.cdy) to keep everything."),
+    )
+}
+
 /// The first save of a drawing into DWG or DXF: say what that file doesn't keep that a .cdy file
-/// would (once per drawing), and list it in the result's `notKept`.
+/// would (once per drawing), and list it in the result's `notKept`. With background checks on
+/// (the app), the file is read back on a worker thread so the save returns at once: the result
+/// says `notKeptPending`, and the notice comes when the check finishes.
 fn report_not_kept(s: &mut Session, r: &mut Value, path: &str, opts: SaveAs) {
     let Some(hooks) = io() else { return };
+    let background = s.background_checks;
     let Ok(st) = s.state_mut() else { return };
     if st.kept_checked {
         return;
     }
     st.kept_checked = true;
+    // No threads on the web: checked as the save runs.
+    #[cfg(target_arch = "wasm32")]
+    let _ = background;
+    #[cfg(not(target_arch = "wasm32"))]
+    if background {
+        // The drawing as saved (shared, not copied).
+        let d = st.drawing().clone();
+        let written = JUST_WRITTEN.with(|w| w.borrow_mut().take()).filter(|(p, _)| p == path).map(|(_, b)| b);
+        let write_as = WRITE_AS.get().copied().filter(|_| opts != SaveAs::default());
+        let job = KeptJob::default();
+        let (slot, path_owned) = (job.0.clone(), path.to_string());
+        let spawned = std::thread::Builder::new().name("kept-check".into()).spawn(move || {
+            let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let bytes = match written {
+                    Some(b) => Ok(b),
+                    None => match write_as {
+                        Some(w) => w(&d, &path_owned, &opts),
+                        None => (hooks.write)(&d, &path_owned),
+                    },
+                };
+                let (lost, detail) = bytes.and_then(|b| kept::check_written(&d, &path_owned, &b, hooks.read)).ok()?;
+                (!lost.is_empty() || !detail.is_empty()).then(|| kept_notice(&path_owned, &lost, &detail))
+            }))
+            .ok()
+            .flatten();
+            if let Ok(mut r) = slot.lock() {
+                *r = Some(found);
+            }
+        });
+        if spawned.is_ok() {
+            st.kept_job = Some(job);
+            if let Some(o) = r.as_object_mut() {
+                o.insert("notKeptPending".into(), json!(true));
+            }
+            return;
+        }
+    }
     let d = st.drawing();
     // Written as the save wrote it (the version and binary DXF asked for): the bytes it wrote.
     let bytes = match JUST_WRITTEN.with(|w| w.borrow_mut().take()).filter(|(p, _)| p == path) {
@@ -1306,10 +1368,9 @@ fn report_not_kept(s: &mut Session, r: &mut Value, path: &str, opts: SaveAs) {
     if lost.is_empty() && detail.is_empty() {
         return;
     }
-    let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_uppercase()).unwrap_or_else(|| "DXF".into());
-    st.exchange_notice = Some(json!({ "path": path, "format": ext, "losses": detail }));
-    let what = if detail.is_empty() { lost.join(", ") } else { kept::losses_line(&detail) };
-    s.echo(format!("Not kept in the {ext} file: {what}. Save as a CADaddy drawing (.cdy) to keep everything."));
+    let (notice, line) = kept_notice(path, &lost, &detail);
+    st.exchange_notice = Some(notice);
+    s.echo(line);
     if let Some(o) = r.as_object_mut() {
         if !lost.is_empty() {
             o.insert("notKept".into(), json!(lost));

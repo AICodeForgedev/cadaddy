@@ -80,11 +80,12 @@ pub fn paint_heart(painter: &egui::Painter, c: Pos2, size: f32, color: Color32) 
 
 /// The support banner: one small, non-blocking card in the bottom-right corner (clear of the
 /// command line), at most once a month. Agents driving the control channel never see it, so their screenshots stay clean.
-pub fn banner(app: &mut CadApp, ctx: &egui::Context) {
+/// Where it was drawn, when it was (the update card stacks above it).
+pub fn banner(app: &mut CadApp, ctx: &egui::Context) -> Option<egui::Rect> {
     if !app.donate.showing {
         let now = crate::now_ms();
         if !app.donate.enabled || app.has_control_channel() || now <= 0.0 || !app.donate.due(now) {
-            return;
+            return None;
         }
         app.donate.showing = true;
         app.donate.shown_ms = now;
@@ -92,9 +93,10 @@ pub fn banner(app: &mut CadApp, ctx: &egui::Context) {
     let t = Tokens::get();
     let blue = Color32::from_rgb(0x1f, 0x6b, 0xff);
     let mut close = false;
-    egui::Area::new(egui::Id::new("support_banner")).anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -40.0)).order(egui::Order::Foreground).show(
-        ctx,
-        |ui| {
+    let shown = egui::Area::new(egui::Id::new("support_banner"))
+        .anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -40.0))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
             egui::Frame::new()
                 .fill(t.panel)
                 .stroke(Stroke::new(1.0, blue.gamma_multiply(0.7)))
@@ -124,11 +126,12 @@ pub fn banner(app: &mut CadApp, ctx: &egui::Context) {
                         }
                     });
                 });
-        },
-    );
+        });
     if close {
         app.donate.showing = false;
+        return None;
     }
+    Some(shown.response.rect)
 }
 
 #[cfg(test)]

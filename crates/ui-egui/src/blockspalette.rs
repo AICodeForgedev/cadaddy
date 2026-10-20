@@ -215,8 +215,13 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let mut insert: Option<BlockRef> = None;
     let mut fav: Option<BlockRef> = None;
     let mut pick_library = false;
-    let window =
-        egui::Window::new(crate::tl!("Blocks")).id(egui::Id::new("Blocks")).open(open).resizable(true).default_size([360.0, 480.0]).show(ctx, |ui| {
+    let window = egui::Window::new(crate::tl!("Blocks"))
+        .id(egui::Id::new("Blocks"))
+        .default_pos(crate::palette_pos(app))
+        .open(open)
+        .resizable(true)
+        .default_size([360.0, 480.0])
+        .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 for (i, l) in ["Current Drawing", "Recent", "Favourites", "Libraries"].iter().enumerate() {
                     if ui.selectable_label(st.tab == i as u8, crate::i18n::t(l)).clicked() {

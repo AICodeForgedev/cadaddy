@@ -94,103 +94,109 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "Drawing".into());
     let mut action: Option<&'static str> = None;
-    egui::Window::new(crate::tl!("Publish")).id(egui::Id::new("Publish")).open(open).resizable(true).default_width(640.0).show(ctx, |ui| {
-        // Right to left in Arabic (rtl.rs).
-        let mut body = crate::rtl::Body::new(ui);
-        let ui = &mut *body;
-        ui.label(RichText::new(crate::tl!("Sheets to publish, in order")).strong());
-        let mut swap: Option<(usize, usize)> = None;
-        let mut remove: Option<usize> = None;
-        let n = st.rows.len();
-        egui::ScrollArea::vertical().id_salt("publish-rows").max_height(320.0).show(ui, |ui| {
-            crate::rtl::show_grid(egui::Grid::new("publish-grid").num_columns(6).striped(true), ui, |ui| {
-                crate::rtl::lead(ui, "");
-                ui.label(RichText::new(crate::tl!("Sheet")).color(t.text_dim));
-                ui.label(RichText::new(crate::tl!("Bookmark")).color(t.text_dim));
-                ui.label(RichText::new(crate::tl!("Paper")).color(t.text_dim));
-                ui.label(RichText::new(crate::tl!("Orientation")).color(t.text_dim));
-                ui.label("");
-                crate::rtl::trail(ui, "");
-                ui.end_row();
-                for (i, r) in st.rows.iter_mut().enumerate() {
-                    ui.checkbox(&mut r.include, "");
-                    let from = r.drawing.as_deref().and_then(|d| std::path::Path::new(d).file_stem()).map(|f| f.to_string_lossy().into_owned());
-                    let name = match &from {
-                        Some(f) => format!("{f} - {}", r.layout),
-                        None => r.layout.clone(),
-                    };
-                    ui.label(name).on_hover_text(r.drawing.clone().unwrap_or_else(|| crate::tl!("This drawing").to_string()));
-                    ui.add(egui::TextEdit::singleline(&mut r.title).hint_text(crate::tl!("(sheet name)")).desired_width(150.0));
-                    let own = crate::tl!("Page setup").to_string();
-                    egui::ComboBox::from_id_salt(("publish-paper", i))
-                        .width(150.0)
-                        .selected_text(if r.paper.is_empty() { own.clone() } else { r.paper.clone() })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut r.paper, String::new(), own.as_str());
-                            for p in cadaddy_render::PAPER_SIZES {
-                                ui.selectable_value(&mut r.paper, p.name.to_string(), p.name);
+    egui::Window::new(crate::tl!("Publish"))
+        .id(egui::Id::new("Publish"))
+        .default_pos(crate::palette_pos(app))
+        .open(open)
+        .resizable(true)
+        .default_width(640.0)
+        .show(ctx, |ui| {
+            // Right to left in Arabic (rtl.rs).
+            let mut body = crate::rtl::Body::new(ui);
+            let ui = &mut *body;
+            ui.label(RichText::new(crate::tl!("Sheets to publish, in order")).strong());
+            let mut swap: Option<(usize, usize)> = None;
+            let mut remove: Option<usize> = None;
+            let n = st.rows.len();
+            egui::ScrollArea::vertical().id_salt("publish-rows").max_height(320.0).show(ui, |ui| {
+                crate::rtl::show_grid(egui::Grid::new("publish-grid").num_columns(6).striped(true), ui, |ui| {
+                    crate::rtl::lead(ui, "");
+                    ui.label(RichText::new(crate::tl!("Sheet")).color(t.text_dim));
+                    ui.label(RichText::new(crate::tl!("Bookmark")).color(t.text_dim));
+                    ui.label(RichText::new(crate::tl!("Paper")).color(t.text_dim));
+                    ui.label(RichText::new(crate::tl!("Orientation")).color(t.text_dim));
+                    ui.label("");
+                    crate::rtl::trail(ui, "");
+                    ui.end_row();
+                    for (i, r) in st.rows.iter_mut().enumerate() {
+                        ui.checkbox(&mut r.include, "");
+                        let from = r.drawing.as_deref().and_then(|d| std::path::Path::new(d).file_stem()).map(|f| f.to_string_lossy().into_owned());
+                        let name = match &from {
+                            Some(f) => format!("{f} - {}", r.layout),
+                            None => r.layout.clone(),
+                        };
+                        ui.label(name).on_hover_text(r.drawing.clone().unwrap_or_else(|| crate::tl!("This drawing").to_string()));
+                        ui.add(egui::TextEdit::singleline(&mut r.title).hint_text(crate::tl!("(sheet name)")).desired_width(150.0));
+                        let own = crate::tl!("Page setup").to_string();
+                        egui::ComboBox::from_id_salt(("publish-paper", i))
+                            .width(150.0)
+                            .selected_text(if r.paper.is_empty() { own.clone() } else { r.paper.clone() })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut r.paper, String::new(), own.as_str());
+                                for p in cadaddy_render::PAPER_SIZES {
+                                    ui.selectable_value(&mut r.paper, p.name.to_string(), p.name);
+                                }
+                            });
+                        let orient = match r.landscape {
+                            None => crate::tl!("Page setup"),
+                            Some(true) => crate::tl!("Landscape"),
+                            Some(false) => crate::tl!("Portrait"),
+                        };
+                        egui::ComboBox::from_id_salt(("publish-orient", i)).selected_text(orient).show_ui(ui, |ui| {
+                            ui.selectable_value(&mut r.landscape, None, crate::tl!("Page setup"));
+                            ui.selectable_value(&mut r.landscape, Some(false), crate::tl!("Portrait"));
+                            ui.selectable_value(&mut r.landscape, Some(true), crate::tl!("Landscape"));
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.add_enabled(i > 0, egui::Button::new("▲")).clicked() {
+                                swap = Some((i, i - 1));
+                            }
+                            if ui.add_enabled(i + 1 < n, egui::Button::new("▼")).clicked() {
+                                swap = Some((i, i + 1));
+                            }
+                            if crate::icons::button(ui, crate::icons::Icon::Close, 18.0, "Remove Sheet", false).clicked() {
+                                remove = Some(i);
                             }
                         });
-                    let orient = match r.landscape {
-                        None => crate::tl!("Page setup"),
-                        Some(true) => crate::tl!("Landscape"),
-                        Some(false) => crate::tl!("Portrait"),
-                    };
-                    egui::ComboBox::from_id_salt(("publish-orient", i)).selected_text(orient).show_ui(ui, |ui| {
-                        ui.selectable_value(&mut r.landscape, None, crate::tl!("Page setup"));
-                        ui.selectable_value(&mut r.landscape, Some(false), crate::tl!("Portrait"));
-                        ui.selectable_value(&mut r.landscape, Some(true), crate::tl!("Landscape"));
-                    });
-                    ui.horizontal(|ui| {
-                        if ui.add_enabled(i > 0, egui::Button::new("▲")).clicked() {
-                            swap = Some((i, i - 1));
-                        }
-                        if ui.add_enabled(i + 1 < n, egui::Button::new("▼")).clicked() {
-                            swap = Some((i, i + 1));
-                        }
-                        if crate::icons::button(ui, crate::icons::Icon::Close, 18.0, "Remove Sheet", false).clicked() {
-                            remove = Some(i);
-                        }
-                    });
-                    ui.end_row();
+                        ui.end_row();
+                    }
+                });
+            });
+            if let Some((a, b)) = swap {
+                st.rows.swap(a, b);
+            }
+            if let Some(i) = remove.filter(|i| *i < st.rows.len()) {
+                st.rows.remove(i);
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button(crate::tl!("Add Sheets from Drawing...")).clicked() {
+                    action = Some("add");
+                }
+                if ui.button(crate::tl!("Load List...")).clicked() {
+                    action = Some("load");
+                }
+                if ui.button(crate::tl!("Save List...")).clicked() {
+                    action = Some("save");
                 }
             });
+            ui.add_space(4.0);
+            let any = st.rows.iter().any(|r| r.include);
+            if ui.add_enabled(any, egui::Button::new(RichText::new(crate::tl!("Publish to PDF...")).strong())).clicked() {
+                action = Some("publish");
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui
+                    .button(crate::tl!("Plot a Folder of Drawings..."))
+                    .on_hover_text(crate::tl!("Every drawing in a folder to its own PDF, in a PDF folder inside it"))
+                    .clicked()
+                {
+                    action = Some("folder");
+                }
+                ui.checkbox(&mut st.stamp, crate::tl!("Plot stamp"));
+            });
         });
-        if let Some((a, b)) = swap {
-            st.rows.swap(a, b);
-        }
-        if let Some(i) = remove.filter(|i| *i < st.rows.len()) {
-            st.rows.remove(i);
-        }
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button(crate::tl!("Add Sheets from Drawing...")).clicked() {
-                action = Some("add");
-            }
-            if ui.button(crate::tl!("Load List...")).clicked() {
-                action = Some("load");
-            }
-            if ui.button(crate::tl!("Save List...")).clicked() {
-                action = Some("save");
-            }
-        });
-        ui.add_space(4.0);
-        let any = st.rows.iter().any(|r| r.include);
-        if ui.add_enabled(any, egui::Button::new(RichText::new(crate::tl!("Publish to PDF...")).strong())).clicked() {
-            action = Some("publish");
-        }
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui
-                .button(crate::tl!("Plot a Folder of Drawings..."))
-                .on_hover_text(crate::tl!("Every drawing in a folder to its own PDF, in a PDF folder inside it"))
-                .clicked()
-            {
-                action = Some("folder");
-            }
-            ui.checkbox(&mut st.stamp, crate::tl!("Plot stamp"));
-        });
-    });
     match action {
         Some("add") => {
             if let Some(path) = app.services.pick_open.as_ref().and_then(|p| p())

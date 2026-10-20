@@ -355,7 +355,7 @@ fn run_text(s: &mut Session, p: &Value) -> Result<Value> {
     added(s.add_entity(k)?)
 }
 
-fn run_mtext(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn run_mtext(s: &mut Session, p: &Value) -> Result<Value> {
     let at = point_req("mtext", p, "at")?;
     let text = str_param(p, "text").ok_or_else(|| bad("mtext", "`text` is required"))?;
     let height = f64_or(p, "height", s.doc()?.header.f64("TEXTSIZE", 0.2));
@@ -609,7 +609,7 @@ impl Interactive for PlineM {
             let unit = if self.half { "half-width" } else { "width" };
             let (which, w) = if self.asking_width == 1 { ("starting", self.start_w) } else { ("ending", self.end_w) };
             let shown = if self.half { w / 2.0 } else { w };
-            return Prompt::new(format!("Specify {which} {unit}"), Accept::NUMBER).default(format!("{shown:.4}"));
+            return Prompt::new(format!("Specify {which} {unit}"), Accept::NUMBER).default(crate::units::dist(s, shown));
         }
         let base = self.verts.last().map(|v| v.p);
         if let (Some(a), Some(st)) = (self.ask, base) {
@@ -671,7 +671,7 @@ impl Interactive for PlineM {
         match i {
             Input::Point(p) => {
                 if self.verts.is_empty() {
-                    s.echo(format!("Current line-width is {:.4}", self.start_w));
+                    s.echo(format!("Current line-width is {}", crate::units::dist(s, self.start_w)));
                 }
                 self.begin_segment();
                 if self.arc_mode && !self.verts.is_empty() {
@@ -774,7 +774,7 @@ impl Interactive for CircleM {
             (0, _) if self.diameter => Prompt::new("Specify diameter of circle", Accept::POINT_OR_NUMBER).base_opt(self.pts.first().copied()),
             (0, _) => {
                 let p = Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).kw(&["Diameter"]).base_opt(self.pts.first().copied());
-                if last_r > 0.0 { p.default(format!("{last_r:.4}")) } else { p }
+                if last_r > 0.0 { p.default(crate::units::dist(s, last_r)) } else { p }
             }
             (1, k) => Prompt::new(
                 ["Specify first point on circle", "Specify second point on circle", "Specify third point on circle"].get(k).copied().unwrap_or(""),
@@ -1412,8 +1412,8 @@ impl Interactive for DonutM {
         let di = d.map(|d| d.header.f64("DONUTID", 0.5)).unwrap_or(0.5);
         let dout = d.map(|d| d.header.f64("DONUTOD", 1.0)).unwrap_or(1.0);
         match (self.inside, self.outside) {
-            (None, _) => Prompt::new("Specify inside diameter of donut", Accept::NUMBER).default(format!("{di:.4}")),
-            (Some(_), None) => Prompt::new("Specify outside diameter of donut", Accept::NUMBER).default(format!("{dout:.4}")),
+            (None, _) => Prompt::new("Specify inside diameter of donut", Accept::NUMBER).default(crate::units::dist(s, di)),
+            (Some(_), None) => Prompt::new("Specify outside diameter of donut", Accept::NUMBER).default(crate::units::dist(s, dout)),
             _ => Prompt::new("Specify center of donut", Accept::POINT).kw(&[]),
         }
     }
@@ -1485,7 +1485,7 @@ impl Interactive for TextM {
         }
         match (self.at, self.height, self.rotation) {
             (None, _, _) => Prompt::new("Specify start point of text", Accept::POINT).kw(&["Justify", "Style"]),
-            (Some(a), None, _) => Prompt::new("Specify height", Accept::POINT_OR_NUMBER).default(format!("{th:.4}")).base(a),
+            (Some(a), None, _) => Prompt::new("Specify height", Accept::POINT_OR_NUMBER).default(crate::units::dist(s, th)).base(a),
             (Some(a), Some(_), None) => Prompt::new("Specify rotation angle of text", Accept::POINT_OR_NUMBER).default("0").base(a),
             _ => Prompt::new("Enter text", Accept::TEXT),
         }
@@ -1496,7 +1496,8 @@ impl Interactive for TextM {
         let anno = if d.text_style(&style).is_some_and(|st| st.annotative) { "Yes" } else { "No" };
         // A fixed-height style's height is the one TEXT uses.
         let h = d.text_style(&style).map(|st| st.height).filter(|h| h.is_finite() && *h > 0.0).unwrap_or_else(|| d.header.f64("TEXTSIZE", 0.2));
-        let msg = format!("Current text style:  \"{style}\"  Text height:  {h:.4}  Annotative:  {anno}  Justify:  Left");
+        let h = crate::units::dist(s, h);
+        let msg = format!("Current text style:  \"{style}\"  Text height:  {h}  Annotative:  {anno}  Justify:  Left");
         s.echo(msg);
         Ok(Step::Continue)
     }
@@ -1578,9 +1579,9 @@ impl Interactive for MTextM {
         self.opts = super::mtext_opts::MTextOpts::new(s);
         let anno = s.doc()?.text_style(&self.opts.style).is_some_and(|st| st.annotative);
         s.echo(format!(
-            "Current text style:  \"{}\"  Text height:  {:.4}  Annotative:  {}",
+            "Current text style:  \"{}\"  Text height:  {}  Annotative:  {}",
             self.opts.style,
-            self.opts.height,
+            crate::units::dist(s, self.opts.height),
             if anno { "Yes" } else { "No" }
         ));
         Ok(Step::Continue)

@@ -215,6 +215,8 @@ struct Room {
 fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
     let d = plan.doc()?;
     let ents = plan_objects(d);
+    let walls = super::bspec::room_plan(plan)?;
+    let walls = walls.as_ref().unwrap_or(plan);
     let mut out = Vec::new();
     for (h, t, at) in room_texts(sp, &ents) {
         let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
@@ -225,7 +227,7 @@ fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
         if out.len() >= 2_000 {
             break;
         }
-        let outline = super::hatch::loops_at(plan, at)
+        let outline = super::hatch::loops_at(walls, at)
             .ok()
             .and_then(|loops| loops.iter().find(|l| l.outer).or(loops.first()).cloned())
             .map(|l| cadaddy_geom::Polyline { vertices: l.vertices, closed: true }.tessellate(1e-3))

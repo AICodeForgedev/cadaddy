@@ -2336,3 +2336,97 @@ menu	View	عرض
 	Manage Attributes	إدارة السمات
 	Dialog State	حالة مربع الحوار
 	Dialog Action	إجراء مربع الحوار
+	Recover Drawing and Xrefs...	استرداد الرسم والمراجع الخارجية...
+	Count Blocks	عدّ الكتل
+	Get Selection Set	الحصول على مجموعة تحديد
+	Global Attribute Edit	تحرير السمات الشامل
+	LISP Function Surfer	مستعرض دوال LISP
+	List LISP Symbols	سرد رموز LISP
+	List Nested Object	سرد الكائن المتداخل
+	List Object Xdata	سرد البيانات الموسعة للكائن
+	Multiple Polyline Edit	تحرير عدة خطوط متعددة
+	Redefine Path	إعادة تعريف المسار
+	Redefine Path Mode	وضع إعادة تعريف المسار
+	Restore Dimension Text	استعادة نص البُعد
+	Revert	استرجاع
+	Rotate Blocks	تدوير الكتل
+	Scale Blocks	تحجيم الكتل
+	Select Similar by Properties	تحديد المتشابه حسب الخصائص
+	Show URLs	إظهار عناوين URL
+	Synchronize Viewports	مزامنة إطارات العرض
+	Paste Special	لصق خاص
+	Paste Special...	لصق خاص...
+	Paste as	لصق كـ
+	Last Measurement	آخر قياس
+	Perimeter	المحيط
+	curl isn't available ({error}).	الأداة curl غير متاحة ({error}).
+	This build has no release key to check updates with.	لا يحتوي هذا الإصدار على مفتاح إصدار للتحقق من التحديثات.
+	The release's signature files are too large.	ملفات توقيع الإصدار كبيرة جدًا.
+	The release's signature isn't one CADaddy reads.	توقيع الإصدار ليس بصيغة يقرؤها CADaddy.
+	The release's signature is missing or damaged.	توقيع الإصدار مفقود أو تالف.
+	The release's signature is for another version ({version}).	توقيع الإصدار يخص إصدارًا آخر ({version}).
+	The release is signed with a key this build doesn't trust.	الإصدار موقَّع بمفتاح لا يثق به هذا الإصدار.
+	This build's release key is damaged.	مفتاح الإصدار في هذا الإصدار تالف.
+	The release's signature doesn't match its files.	توقيع الإصدار لا يطابق ملفاته.
+	Couldn't reach GitHub: {why}	تعذّر الوصول إلى GitHub: {why}
+	GitHub's answer was too large.	كان رد GitHub كبيرًا جدًا.
+	GitHub's answer wasn't readable ({error}).	تعذّرت قراءة رد GitHub ({error}).
+	GitHub's answer has no version.	لا يتضمن رد GitHub أي إصدار.
+	GitHub's answer has an unreadable version ({version}).	يتضمن رد GitHub إصدارًا لا يمكن قراءته ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	تعذّر تنزيل {name} الخاص بالإصدار، لذا لم يُثبَّت شيء: {why}
+	The release's {name} is too large, so nothing was installed.	الملف {name} الخاص بالإصدار كبير جدًا، لذا لم يُثبَّت شيء.
+	The release's {name} isn't text, so nothing was installed.	الملف {name} الخاص بالإصدار ليس نصًا، لذا لم يُثبَّت شيء.
+	It wasn't downloaded. Download it from the release page instead.	لم يُنزَّل. نزّله من صفحة الإصدار بدلًا من ذلك.
+	Version {version} isn't newer than this one ({current}).	الإصدار {version} ليس أحدث من هذا الإصدار ({current}).
+	This release isn't signed.	هذا الإصدار غير موقَّع.
+	The release failed its check.	فشل الإصدار في التحقق.
+	The signed release doesn't list {name}.	لا يتضمن الإصدار الموقَّع الملف {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	بصمة GitHub للملف {name} تختلف عن البصمة الموقَّعة.
+	Couldn't make the folder {folder}: {error}	تعذّر إنشاء المجلد {folder}: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	لم يطابق التنزيل بصمة SHA-256 المنشورة له، لذا لم يُثبَّت.
+	Couldn't read the download: {error}	تعذّرت قراءة التنزيل: {error}
+	The download failed: {why}	فشل التنزيل: {why}
+	This release has no installer for this computer yet.	لا يتوفر لهذا الإصدار مثبّت لهذا الحاسوب بعد.
+	Drawing Properties...	خصائص الرسم...
+	System Variable Monitor...	مراقب متغيرات النظام...
+	{name} Properties	خصائص {name}
+	Summary	ملخص
+	Statistics	إحصائيات
+	Custom	مخصص
+	Size	الحجم
+	Subject	الموضوع
+	Author	المؤلف
+	Keywords	الكلمات المفتاحية
+	Comments	التعليقات
+	Revision number	رقم المراجعة
+	Hyperlink base	أساس الارتباط التشعبي
+	Created	تاريخ الإنشاء
+	Modified	تاريخ التعديل
+	Last saved by	آخر حفظ بواسطة
+	Total editing time (minutes)	إجمالي وقت التحرير (دقائق)
+	Property	خاصية
+	System Variable Monitor	مراقب متغيرات النظام
+	Variable	المتغير
+	Watched value	القيمة المراقبة
+	Current value	القيمة الحالية
+	Notify when a watched variable changes	الإعلام عند تغير متغير مراقب
+	Reset All	إعادة تعيين الكل
+	Delay	تأخير
+	Repeat Script	تكرار البرنامج النصي
+	Script Call	استدعاء برنامج نصي
+	Resume Script	استئناف البرنامج النصي
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	الاحتفاظ بسجل نشاط لكل رسم (خاص، في مجلد إعدادات CADaddy)
+	Specify insertion point or	حدد نقطة الإدراج أو
+	Specify table scale	حدد مقياس الجدول
+	{} dimension(s) updated to the current settings.	تم تحديث {} من الأبعاد إلى الإعدادات الحالية.
+	British English (-ise)	الإنجليزية البريطانية (-ise)
+	British English (-ize)	الإنجليزية البريطانية (-ize)
+	Spanish	الإسبانية
+	French	الفرنسية
+	German	الألمانية
+	Portuguese (Iberian)	البرتغالية (الأيبيرية)
+	Portuguese (Brazilian)	البرتغالية (البرازيلية)
+	(not installed)	(غير مثبت)
+	Dictionaries are read from:	تُقرأ القواميس من:
+	Published to {path}	نُشر إلى {path}
+	Sheet Set (.sheetset.json)	مجموعة الأوراق (.sheetset.json)

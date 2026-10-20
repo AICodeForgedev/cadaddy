@@ -2,6 +2,13 @@
 
 use std::f64::consts::PI;
 
+/// A distance in the current drawing's units (LUNITS, LUPREC; decimal at 4 places without a
+/// drawing), as prompt defaults and messages show it.
+pub fn dist(s: &crate::Session, v: f64) -> String {
+    let (lunits, luprec) = s.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
+    format_distance(v, lunits, luprec)
+}
+
 /// Format a distance per LUNITS (1 scientific, 2 decimal, 3 engineering, 4 architectural,
 /// 5 fractional) and LUPREC.
 pub fn format_distance(v: f64, lunits: i64, luprec: i64) -> String {

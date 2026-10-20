@@ -1,0 +1,195 @@
+# CADaddy engine messages in Traditional Chinese (Taiwan): original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	輸入群組名稱
+	Pick internal point	點選內部點
+	Specify the pattern origin	指定樣式原點
+	Specify the incrementing elevation between rows	指定列與列之間的遞增高程
+	Specify the angle to fill (+=ccw, -=cw)	指定填滿角度 (+=逆時針, -=順時針)
+	Select hatch object	選取填充線物件
+	Red, Green, Blue	紅, 綠, 藍
+	Enter the number of rows	輸入列數
+	Enter the number of levels	輸入層數
+	Enter new layer name	輸入新圖層名稱
+	Specify width	指定寬度
+	Specify the angle between items	指定項目之間的角度
+	Specify text height	指定文字高度
+	Specify start tangent	指定起點切線
+	Specify end tangent	指定終點切線
+	Specify reference length	指定參考長度
+	Specify other corner	指定對角點
+	Specify next point or [Undo]	指定下一點或 [Undo]
+	Specify new location	指定新位置
+	Specify new length	指定新長度
+	Specify length of line	指定線長度
+	Specify displacement	指定位移
+	Specify angle for dimension text	指定標註文字的角度
+	Select viewports	選取視埠
+	Select object to break dimension	選取要切斷標註的物件
+	Select group	選取群組
+	Select grip to edit array	選取掣點以編輯陣列
+	Select a table	選取表格
+	Select a boundary to remove	選取要移除的邊界
+	Rotate arrayed items?	旋轉陣列項目?
+	Erase polyline?	刪除聚合線?
+	Enter viewport arrangement	輸入視埠排列方式
+	Enter transparency value (0-90)	輸入透明度值 (0-90)
+	Enter the number of operations to undo	輸入要復原的操作數目
+	Enter the number of columns	輸入行數
+	Enter number of items in array	輸入陣列中的項目數
+	Enter new layer state name	輸入新圖層狀態名稱
+	Enter new color	輸入新顏色
+	Enter name of new layout	輸入新配置的名稱
+	Enter layer name	輸入圖層名稱
+	Enter file name	輸入檔案名稱
+	Enter color name or number (1-255)	輸入顏色名稱或編號 (1-255)
+	Enter a configuration option	輸入配置選項
+	Base point	基準點
+	Word-wrap the combined Mtext?	將合併後的多行文字自動換行?
+	Where should the data go?	資料要放在哪裡?
+	Verify each name to be purged?	逐一確認要清除的名稱?
+	Use landing	使用引線折彎
+	Type of boundary object	邊界物件類型
+	Specify width factor	指定寬度係數
+	Specify tolerance	指定公差
+	Specify the tangent direction for the start point of arc	指定弧起點的切線方向
+	Specify the reference angle	指定參考角度
+	Specify the new angle	指定新角度
+	Specify text width	指定文字寬度
+	Specify temporary OTRACK point	指定暫時的 OTRACK 點
+	Invalid option keyword.	無效的選項關鍵字。
+	*Invalid selection*	*無效的選取*
+	Requires a valid angle.	需要有效的角度。
+	Nothing to undo.	沒有可復原的操作。
+	Invalid point.	無效的點。
+	No viewport found there.	該處找不到視埠。
+	*Cancel*	*取消*
+	Requires a positive number.	需要正數。
+	No hatch selected.	未選取填充線。
+	** Command not allowed in Model Tab ** (switch to a layout first)	** 模型頁籤中不允許使用此指令 ** (請先切換到配置)
+	Select a multileader.	請選取多重引線。
+	No line or arc to continue.	沒有可接續的線或弧。
+	Revision cloud finished.	修訂雲形完成。
+	Object selected is not a circle or arc.	選取的物件不是圓或弧。
+	Select a linear or aligned dimension.	請選取線性或對齊式標註。
+	Object selected is not a dimension.	選取的物件不是標註。
+	No dimensions selected.	未選取標註。
+	Requires a number.	需要數字。
+	0 found	找到 0 個
+	The feature control frame is empty.	幾何公差框格是空的。
+	1 was on a locked layer.	1 個位於鎖護的圖層上。
+	Row elevations need an associative array; the copies stay at the same elevation.	列高程需要關聯式陣列；複本會維持相同高程。
+	Point or option keyword required.	需要點或選項關鍵字。
+	Enter Yes or No.	請輸入 Yes 或 No。
+	Viewport created, zoomed to the model extents.	已建立視埠，並縮放至模型實際範圍。
+	No object found.	找不到物件。
+	The object is not a table.	該物件不是表格。
+	No table there.	該處沒有表格。
+	A transparent command is already in progress.	已有透通指令正在執行。
+	Invalid class name.	無效的類別名稱。
+	Invalid group name.	無效的群組名稱。
+	Too many point modifiers.	點修飾詞過多。
+	No leader to remove.	沒有可移除的引線。
+	Requires a non-negative number.	需要非負數。
+	Clipboard is empty.	剪貼簿是空的。
+	1 object was on a locked layer.	1 個物件位於鎖護的圖層上。
+	Circle does not exist.	圓不存在。
+	Enter Length or Area.	請輸入 Length 或 Area。
+	Enter a percentage from 0 to 1000.	請輸入 0 到 1000 之間的百分比。
+	Enter Table, File or None.	請輸入 Table、File 或 None。
+	Cannot measure that object.	無法量測該物件。
+	Third pair ignored (2D align).	已忽略第三對點 (2D 對齊)。
+	Insert mode: Copy (nested objects are copied as independent objects).	插入模式：複製 (巢狀物件會複製為獨立物件)。
+	Everything has been undone	已全部復原
+	Everything has been undone.	已全部復原。
+	Requires a non-negative number or Auto.	需要非負數或 Auto。
+	Select a dimension.	請選取標註。
+	Object cannot be dimensioned this way.	無法以此方式標註該物件。
+	Select an arc, circle or line.	請選取弧、圓或線。
+	The two points must be different.	兩點必須不同。
+	No linear dimension to continue. Create one with DIMLINEAR first.	沒有可接續的線性標註。請先使用 DIMLINEAR 建立一個。
+	A multileader needs a leader line or content; nothing was drawn.	多重引線需要引線或內容；未繪製任何物件。
+	Requires the name of a block defined in the drawing.	需要圖面中已定義的圖塊名稱。
+	Invalid option.	無效的選項。
+	The boundary encloses none of the image.	邊界未包含影像的任何部分。
+	The object is not an image.	該物件不是影像。
+	The image has no clipping boundary.	影像沒有截取邊界。
+	No images selected.	未選取影像。
+	Requires an integer between 0 and 100.	需要 0 到 100 之間的整數。
+	The selected object has no area.	選取的物件沒有面積。
+	No such object	無此物件
+	Requires a point.	需要點。
+	Requires a distance.	需要距離。
+	The object is on a locked layer.	物件位於鎖護的圖層上。
+	Value must be positive and nonzero.	值必須為正數且不為零。
+	Requires an angle.	需要角度。
+	Requires a point or option keyword.	需要點或選項關鍵字。
+	Object does not intersect a cutting edge.	物件未與切割邊相交。
+	Object does not intersect an edge.	物件未與邊相交。
+	Lines are parallel.	線條互相平行。
+	The Block Editor is not open.	圖塊編輯器未開啟。
+	Requires a positive integer.	需要正整數。
+	Answer Yes or No.	請回答 Yes 或 No。
+	Requires a valid point.	需要有效的點。
+	No reference objects	沒有參考物件
+	Requires an angle or point.	需要角度或點。
+	Requires a positive distance.	需要正的距離。
+	Requires a non-negative distance.	需要非負的距離。
+	No such grip	無此掣點
+	Requires a template file name.	需要樣板檔名稱。
+	A hatch needs at least one boundary: erase it instead.	填充線至少需要一個邊界：請改為刪除它。
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	復原已關閉 (UNDO Control None)；UNDO Control All 可將其開啟。
+	Enter ON or OFF.	請輸入 ON 或 OFF。
+	Not a linear dimension.	不是線性標註。
+	Valid hatch boundary not found.	找不到有效的填充線邊界。
+	No closed boundary objects selected.	未選取封閉的邊界物件。
+	Requires a name.	需要名稱。
+	That option doesn't apply to this grip.	該選項不適用於此掣點。
+	That would make a degenerate object.	這會產生退化的物件。
+	No tangent or perpendicular from the last point.	上一點沒有切線或垂直線。
+	Requires numeric distance or second point.	需要數值距離或第二點。
+	Edge endpoints must differ.	邊的端點必須不同。
+	Requires numeric distance or point.	需要數值距離或點。
+	Requires a positive height.	需要正的高度。
+	No objects found.	找不到物件。
+	Requires a non-zero number.	需要非零數字。
+	Circle must intersect cutting edges at two or more points.	圓必須與切割邊相交於兩點以上。
+	Arc cannot be full 360 degrees.	弧不可為完整的 360 度。
+	Cannot break that object.	無法切斷該物件。
+	An object is on a locked layer.	有物件位於鎖護的圖層上。
+	Objects are not connected.	物件未相連。
+	The two points must differ.	兩點必須不同。
+	Mirror line points must differ.	鏡射線的兩點必須不同。
+	No drawing is open.	未開啟任何圖面。
+	Command: {}	指令: {}
+	Unknown command "{}". Press F1 for help.	未知的指令「{}」。按 F1 取得說明。
+	{} found	找到 {} 個
+	{} found, {} total	找到 {} 個，總計 {} 個
+	Distance = {}	距離 = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	距離 = {}，XY 平面中的角度 = {}，與 XY 平面的夾角 = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	X 差量 = {}，Y 差量 = {}，Z 差量 = {}
+	Area = {}, Perimeter = {}	面積 = {}，周長 = {}
+	Total area = {}	總面積 = {}
+	Resuming {} command.	繼續執行 {} 指令。
+	Invalid input: {}	無效的輸入: {}
+	{} were on a locked layer.	{} 個位於鎖護的圖層上。
+	{} dimension(s) changed.	已變更 {} 個標註。
+	Group {} ungrouped.	群組 {} 已解散。
+	{} object(s) flattened.	已平面化 {} 個物件。
+	Group {} renamed to {}.	群組 {} 已更名為 {}。
+	{} object(s) added to group {}.	已將 {} 個物件加入群組 {}。
+	{} object(s) removed from group {}.	{} 個物件已從群組 {} 移除。
+	{} lines were chamfered	{} 條線已倒角
+	{} lines were filleted	{} 條線已圓角
+	{} objects joined into 1 {}	{} 個物件已接合為 1 條 {}
+	Current dimension style:  {}	目前的標註型式:  {}
+	Wrote {}	已寫入 {}
+	{} is already open.	{} 已經開啟。
+	{} dimension(s) created.	已建立 {} 個標註。
+	BOUNDARY created {} polyline(s)	BOUNDARY 已建立 {} 條聚合線
+	Current line-width is {}	目前的線寬為 {}
+	Unknown variable {}. Type SETVAR ? to list variables.	未知的變數 {}。輸入 SETVAR ? 列出變數。
+	{} = {} (read only)	{} = {} (唯讀)
+	Dimension text = {}	標註文字 = {}
+	{} segments added to polyline	已將 {} 個線段加入聚合線

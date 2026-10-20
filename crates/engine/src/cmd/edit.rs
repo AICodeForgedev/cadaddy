@@ -42,8 +42,19 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Edit", "Paste"])
             .key("Cmd+V")
             .params("{at?: [x,y]} (where the base point lands; default: the original coordinates)")
-            .enabled(clipboard::has_clip)
+            .enabled(clipboard::has_paste)
             .interactive(|_| Ok(Box::new(PasteM { mode: PasteMode::Clip }))),
+        CommandSpec::new("pastespec", "Paste Special", run_pastespec)
+            .menu(&["Edit", "Paste Special..."])
+            .alias(&["pa"])
+            .params(
+                "{as?: \"objects\" (CADaddy objects, the default when there are some) | \"image\" (a raster image: the picture copied \
+                 in another program, or the copied objects drawn as one; saved as a PNG beside the drawing) | \"text\" (text copied \
+                 in another program, as multiline text), at?: [x,y] (objects: where the base point lands; image: lower-left corner; \
+                 text: insertion point), width?: the image's width in drawing units (default: half the view tall)}",
+            )
+            .enabled(clipboard::has_paste)
+            .interactive(|_| Ok(Box::new(PasteSpecM::default()))),
         CommandSpec::new("pasteblock", "Paste as Block", run_pasteblock)
             .menu(&["Edit", "Paste as Block"])
             .key("Cmd+Shift+V")
@@ -479,7 +490,11 @@ fn paste(s: &mut Session, offset: Vec2) -> Result<Vec<Handle>> {
 
 fn run_paste(s: &mut Session, p: &Value) -> Result<Value> {
     if s.clipboard.is_empty() {
-        return Err(bad("pasteclip", "the clipboard is empty"));
+        // Copied in another program: an image becomes a raster image, text multiline text.
+        return match PasteKind::fallback(s) {
+            Some(kind) => paste_as(s, kind, point_param(p, "at"), p.get("width").and_then(Value::as_f64)),
+            None => Err(bad("pasteclip", "the clipboard is empty")),
+        };
     }
     let off = match point_param(p, "at") {
         Some(at) => at - s.clipboard_base,
@@ -487,6 +502,174 @@ fn run_paste(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let r = paste(s, off)?;
     Ok(json!({ "handles": r.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
+}
+
+/// What PASTESPEC pastes the clipboard as.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PasteKind {
+    /// CADaddy objects (PASTECLIP).
+    Objects,
+    /// A raster image.
+    Image,
+    /// Multiline text.
+    Text,
+}
+
+impl PasteKind {
+    const KEYWORDS: [&'static str; 3] = ["Objects", "Image", "Text"];
+
+    fn from_name(n: &str) -> Option<PasteKind> {
+        match n.trim().to_ascii_lowercase().as_str() {
+            "objects" | "object" | "o" | "cadaddy" => Some(PasteKind::Objects),
+            "image" | "picture" | "i" | "png" => Some(PasteKind::Image),
+            "text" | "mtext" | "t" => Some(PasteKind::Text),
+            _ => None,
+        }
+    }
+
+    /// Whether the clipboard can paste as this.
+    fn available(self, s: &Session) -> bool {
+        match self {
+            PasteKind::Objects => !s.clipboard.is_empty(),
+            PasteKind::Image => s.system_clipboard.image.is_some() || !s.clipboard.is_empty(),
+            PasteKind::Text => s.system_clipboard.text.as_deref().is_some_and(|t| !t.trim().is_empty()),
+        }
+    }
+
+    /// With no CADaddy objects on the clipboard: what another program's copy pastes as.
+    fn fallback(s: &Session) -> Option<PasteKind> {
+        [PasteKind::Image, PasteKind::Text].into_iter().find(|k| k.available(s))
+    }
+
+    /// The first way the clipboard can paste: objects, then an image, then text.
+    fn first(s: &Session) -> Option<PasteKind> {
+        [PasteKind::Objects, PasteKind::Image, PasteKind::Text].into_iter().find(|k| k.available(s))
+    }
+}
+
+/// Paste the clipboard as `kind` at `at` (objects: where the base point lands, default their
+/// original place; image: lower-left corner; text: insertion point).
+fn paste_as(s: &mut Session, kind: PasteKind, at: Option<Vec2>, width: Option<f64>) -> Result<Value> {
+    if !kind.available(s) {
+        let what = match kind {
+            PasteKind::Objects => "the clipboard holds no CADaddy objects",
+            PasteKind::Image => "the clipboard holds no image or objects to paste as an image",
+            PasteKind::Text => "the clipboard holds no text",
+        };
+        return Err(bad("pastespec", what));
+    }
+    match kind {
+        PasteKind::Objects => {
+            let off = at.map_or(Vec2::ZERO, |a| a - s.clipboard_base);
+            let r = paste(s, off)?;
+            Ok(json!({ "as": "objects", "handles": r.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
+        }
+        PasteKind::Image => {
+            // A picture from another program; else the copied objects drawn as one.
+            let image = match s.system_clipboard.image.clone() {
+                Some(i) => i,
+                None => std::sync::Arc::new(
+                    clipboard::system_image(s, clipboard::IMAGE_SIDE).ok_or_else(|| bad("pastespec", "the objects couldn't be drawn as an image"))?,
+                ),
+            };
+            let mut r = clipboard::paste_image(s, &image, at, width)?;
+            r["as"] = json!("image");
+            Ok(r)
+        }
+        PasteKind::Text => {
+            let text = s.system_clipboard.text.clone().unwrap_or_default();
+            let mut r = clipboard::paste_text(s, &text, at)?;
+            r["as"] = json!("text");
+            Ok(r)
+        }
+    }
+}
+
+fn run_pastespec(s: &mut Session, p: &Value) -> Result<Value> {
+    let kind = match str_param(p, "as") {
+        Some(n) => PasteKind::from_name(n).ok_or_else(|| bad("pastespec", "`as` is \"objects\", \"image\" or \"text\""))?,
+        None => PasteKind::first(s).ok_or_else(|| bad("pastespec", "the clipboard is empty"))?,
+    };
+    paste_as(s, kind, point_param(p, "at"), p.get("width").and_then(Value::as_f64))
+}
+
+/// PASTESPEC at the command line: how to paste (when the clipboard can paste more than one way),
+/// then where.
+#[derive(Default)]
+struct PasteSpecM {
+    kind: Option<PasteKind>,
+}
+
+impl Interactive for PasteSpecM {
+    fn name(&self) -> &'static str {
+        "PASTESPEC"
+    }
+    fn begin(&mut self, s: &mut Session) -> Result<Step> {
+        let ways: Vec<PasteKind> = [PasteKind::Objects, PasteKind::Image, PasteKind::Text].into_iter().filter(|k| k.available(s)).collect();
+        match ways.as_slice() {
+            [] => {
+                s.echo("Clipboard is empty.");
+                Ok(Step::Done)
+            }
+            [one] => {
+                self.kind = Some(*one);
+                Ok(Step::Continue)
+            }
+            _ => Ok(Step::Continue),
+        }
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        match self.kind {
+            None => {
+                let kws: Vec<&str> =
+                    PasteKind::KEYWORDS.into_iter().filter(|k| PasteKind::from_name(k).is_some_and(|kind| kind.available(s))).collect();
+                let first = kws.first().copied().unwrap_or("Objects");
+                Prompt::new("Paste as", Accept { enter: true, ..Accept::TEXT }).kw(&kws).default(first)
+            }
+            Some(_) => Prompt::new("Specify insertion point", Accept::POINT),
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        match (self.kind, i) {
+            (_, Input::Cancel) => Ok(Step::Cancel),
+            (None, Input::Enter) => {
+                self.kind = PasteKind::first(s);
+                Ok(if self.kind.is_some() { Step::Continue } else { Step::Done })
+            }
+            (None, Input::Keyword(k) | Input::Text(k)) => {
+                let k = self.prompt(s).match_keyword(&k);
+                match k.as_deref().and_then(PasteKind::from_name) {
+                    Some(kind) => self.kind = Some(kind),
+                    None => s.echo("Invalid option keyword."),
+                }
+                Ok(Step::Continue)
+            }
+            (Some(kind), Input::Point(p)) => {
+                paste_as(s, kind, Some(p), None)?;
+                Ok(Step::Done)
+            }
+            (Some(kind), Input::Enter) => {
+                paste_as(s, kind, None, None)?;
+                Ok(Step::Done)
+            }
+            _ => Ok(Step::Continue),
+        }
+    }
+    fn preview(&self, s: &Session, c: Vec2) -> Vec<cadaddy_doc::EntityKind> {
+        if self.kind != Some(PasteKind::Objects) {
+            return Vec::new();
+        }
+        let m = Mat3::translate(c - s.clipboard_base);
+        s.clipboard
+            .iter()
+            .take(500)
+            .map(|e| {
+                let mut k = e.kind.clone();
+                k.transform(&m);
+                k
+            })
+            .collect()
+    }
 }
 
 fn run_pasteblock(s: &mut Session, p: &Value) -> Result<Value> {
@@ -618,6 +801,10 @@ impl Interactive for PasteM {
         }
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
+        // PASTECLIP of an image or text copied in another program: placed at a point too.
+        if s.clipboard.is_empty() && self.mode == PasteMode::Clip && PasteKind::fallback(s).is_some() {
+            return Ok(Step::Continue);
+        }
         if s.clipboard.is_empty() {
             s.echo("Clipboard is empty.");
             return Ok(Step::Done);
@@ -635,6 +822,14 @@ impl Interactive for PasteM {
         match i {
             Input::Point(p) if self.mode == PasteMode::Block => {
                 clipboard::paste_block(s, p)?;
+                Ok(Step::Done)
+            }
+            // Another program's copy: at the point, or Enter for the view's centre.
+            i @ (Input::Point(_) | Input::Enter) if s.clipboard.is_empty() => {
+                let at = if let Input::Point(p) = i { Some(p) } else { None };
+                if let Some(kind) = PasteKind::fallback(s) {
+                    paste_as(s, kind, at, None)?;
+                }
                 Ok(Step::Done)
             }
             Input::Point(p) => {

@@ -46,9 +46,13 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .unwrap_or_else(|| "Drawing".into());
     let mut create: Option<bool> = None;
     let mut refresh = false;
-    egui::Window::new(crate::tl!("Create Transmittal")).id(egui::Id::new("Create Transmittal")).open(open).resizable(true).default_width(520.0).show(
-        ctx,
-        |ui| {
+    egui::Window::new(crate::tl!("Create Transmittal"))
+        .id(egui::Id::new("Create Transmittal"))
+        .default_pos(crate::palette_pos(app))
+        .open(open)
+        .resizable(true)
+        .default_width(520.0)
+        .show(ctx, |ui| {
             match &st.listing {
                 Some(Ok(v)) => {
                     let files = v["files"].as_array().cloned().unwrap_or_default();
@@ -135,8 +139,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     create = Some(false);
                 }
             });
-        },
-    );
+        });
     if refresh {
         st.listing = None;
     }

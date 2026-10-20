@@ -32,32 +32,38 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let mut toggle: Option<(String, bool)> = None;
     let mut zoom: Option<Value> = None;
     let mut import = false;
-    egui::Window::new(crate::tl!("Markups")).id(egui::Id::new("Markups")).open(open).resizable(true).default_size([360.0, 400.0]).show(ctx, |ui| {
-        let done = list.iter().filter(|m| m["status"] == "done").count();
-        ui.label(RichText::new(crate::tf!("{done} of {total} done", done = done, total = list.len())).small().color(t.text_dim));
-        egui::ScrollArea::vertical().id_salt("markup-list").max_height(300.0).show(ui, |ui| {
-            if list.is_empty() {
-                ui.label(RichText::new(crate::tl!("No markups. Import them from a reviewed PDF.")).color(t.text_dim));
-            }
-            for m in &list {
-                let id = m["id"].as_str().unwrap_or_default().to_string();
-                ui.horizontal(|ui| {
-                    let mut is_done = m["status"] == "done";
-                    if ui.checkbox(&mut is_done, "").on_hover_text(crate::tl!("Done")).changed() {
-                        toggle = Some((id.clone(), is_done));
-                    }
-                    let text = m["text"].as_str().filter(|s| !s.is_empty()).unwrap_or_else(|| m["kind"].as_str().unwrap_or_default());
-                    let label = format!("{id}  {text}");
-                    let rich = if is_done { RichText::new(label).strikethrough().color(t.text_dim) } else { RichText::new(label) };
-                    if ui.selectable_label(false, rich).on_hover_text(m["author"].as_str().unwrap_or_default()).clicked() {
-                        zoom = Some(m.clone());
-                    }
-                });
-            }
+    egui::Window::new(crate::tl!("Markups"))
+        .id(egui::Id::new("Markups"))
+        .default_pos(crate::palette_pos(app))
+        .open(open)
+        .resizable(true)
+        .default_size([360.0, 400.0])
+        .show(ctx, |ui| {
+            let done = list.iter().filter(|m| m["status"] == "done").count();
+            ui.label(RichText::new(crate::tf!("{done} of {total} done", done = done, total = list.len())).small().color(t.text_dim));
+            egui::ScrollArea::vertical().id_salt("markup-list").max_height(300.0).show(ui, |ui| {
+                if list.is_empty() {
+                    ui.label(RichText::new(crate::tl!("No markups. Import them from a reviewed PDF.")).color(t.text_dim));
+                }
+                for m in &list {
+                    let id = m["id"].as_str().unwrap_or_default().to_string();
+                    ui.horizontal(|ui| {
+                        let mut is_done = m["status"] == "done";
+                        if ui.checkbox(&mut is_done, "").on_hover_text(crate::tl!("Done")).changed() {
+                            toggle = Some((id.clone(), is_done));
+                        }
+                        let text = m["text"].as_str().filter(|s| !s.is_empty()).unwrap_or_else(|| m["kind"].as_str().unwrap_or_default());
+                        let label = format!("{id}  {text}");
+                        let rich = if is_done { RichText::new(label).strikethrough().color(t.text_dim) } else { RichText::new(label) };
+                        if ui.selectable_label(false, rich).on_hover_text(m["author"].as_str().unwrap_or_default()).clicked() {
+                            zoom = Some(m.clone());
+                        }
+                    });
+                }
+            });
+            ui.separator();
+            import = ui.button(crate::tl!("Import Markups...")).clicked();
         });
-        ui.separator();
-        import = ui.button(crate::tl!("Import Markups...")).clicked();
-    });
     if let Some((id, done)) = toggle {
         let _ = app.run("markupstatus", json!({ "id": id, "status": if done { "done" } else { "open" } }));
     }

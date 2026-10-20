@@ -127,6 +127,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let mut scene_rect: egui::Rect = ctx.data(|d| d.get_temp(scene_id)).unwrap_or(egui::Rect::NOTHING);
     egui::Window::new(crate::tl!("Plot Preview"))
         .id(egui::Id::new("Plot Preview"))
+        .default_pos(crate::palette_pos(app))
         .open(open)
         .collapsible(false)
         .resizable(false)
@@ -205,6 +206,7 @@ mod tests {
             pick_save_image: None,
             pick_pdf: None,
             read_clipboard: None,
+            system_clipboard: None,
             thumbnail: None,
             pick_image: None,
             pick_open: Some(Box::new(move || {

@@ -16,6 +16,7 @@ fn app() -> (CadApp, Rc<Cell<u32>>) {
         pick_folder: None,
         pick_pdf: None,
         read_clipboard: None,
+        system_clipboard: None,
         thumbnail: None,
         pick_image: None,
         pick_open: Some(Box::new(move || {

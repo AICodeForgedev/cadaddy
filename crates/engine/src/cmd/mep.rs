@@ -424,6 +424,18 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             t(1000, level.name.clone()),
             t(1000, source.hex()),
             t(1000, format!("system:{}", sy.name)),
+            // What IFC writes it as (a duct, pipe or cable carrier segment).
+            t(
+                1000,
+                format!(
+                    "kind:{}",
+                    match sy.kind {
+                        MepKind::Duct => "duct",
+                        MepKind::Pipe => "pipe",
+                        MepKind::Conduit => "conduit",
+                    }
+                ),
+            ),
         ];
         if !m.faces.is_empty() && d.add(&Space::Model, Common { layer, xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
             runs += 1;

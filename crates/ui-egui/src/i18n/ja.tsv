@@ -2090,3 +2090,25 @@
 	Edit Source	ソースを編集
 	Close Array	配列複写を閉じる
 	Manage Attributes	属性を管理
+	Count Blocks	ブロックをカウント
+	Get Selection Set	選択セットを取得
+	Global Attribute Edit	属性の一括編集
+	LISP Function Surfer	LISP 関数ブラウザ
+	List LISP Symbols	LISP シンボルを一覧表示
+	List Nested Object	ネストされたオブジェクトを一覧表示
+	List Object Xdata	オブジェクトの拡張データを一覧表示
+	Multiple Polyline Edit	複数ポリラインの編集
+	Redefine Path	パスを再定義
+	Redefine Path Mode	パス再定義モード
+	Restore Dimension Text	寸法文字を復元
+	Revert	元に戻す (保存時)
+	Rotate Blocks	ブロックを回転
+	Scale Blocks	ブロックを尺度変更
+	Select Similar by Properties	プロパティで類似オブジェクトを選択
+	Show URLs	URL を表示
+	Synchronize Viewports	ビューポートを同期
+	Last Measurement	最後の計測
+	Perimeter	周長
+	Specify insertion point or	挿入点を指定 または
+	Specify table scale	表の尺度を指定
+	{} dimension(s) updated to the current settings.	{} 個の寸法を現在の設定に更新しました。

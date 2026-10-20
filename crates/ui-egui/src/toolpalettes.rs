@@ -255,6 +255,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let (mut export, mut import) = (false, false);
     let window = egui::Window::new(crate::tl!("Tool Palettes"))
         .id(egui::Id::new("Tool Palettes"))
+        .default_pos(crate::palette_pos(app))
         .open(open)
         .resizable(true)
         .default_size([260.0, 420.0])

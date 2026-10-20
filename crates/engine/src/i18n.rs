@@ -11,22 +11,26 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// The languages with a catalog, by their file names.
-pub const LANGUAGES: [&str; 13] = ["ar", "cs", "de", "es", "fr", "it", "ja", "ko", "pt_br", "ru", "sv", "uk", "zh"];
+pub const LANGUAGES: [&str; 17] = ["ar", "cs", "de", "es", "fr", "hu", "it", "ja", "ko", "pl", "pt_br", "ru", "sv", "tr", "uk", "zh", "zh_tw"];
 
-const SOURCES: [&str; 13] = [
+const SOURCES: [&str; 17] = [
     include_str!("i18n/ar.tsv"),
     include_str!("i18n/cs.tsv"),
     include_str!("i18n/de.tsv"),
     include_str!("i18n/es.tsv"),
     include_str!("i18n/fr.tsv"),
+    include_str!("i18n/hu.tsv"),
     include_str!("i18n/it.tsv"),
     include_str!("i18n/ja.tsv"),
     include_str!("i18n/ko.tsv"),
+    include_str!("i18n/pl.tsv"),
     include_str!("i18n/pt_br.tsv"),
     include_str!("i18n/ru.tsv"),
     include_str!("i18n/sv.tsv"),
+    include_str!("i18n/tr.tsv"),
     include_str!("i18n/uk.tsv"),
     include_str!("i18n/zh.tsv"),
+    include_str!("i18n/zh_tw.tsv"),
 ];
 
 /// Most lines one text is translated in.
@@ -96,7 +100,7 @@ fn placeholders(t: &str) -> usize {
 
 /// The catalog of language `code` ("uk", "pt-BR", "pt_br", …), if there is one.
 pub fn catalog(code: &str) -> Option<&'static Catalog> {
-    static CATALOGS: [OnceLock<Catalog>; 13] = [const { OnceLock::new() }; 13];
+    static CATALOGS: [OnceLock<Catalog>; 17] = [const { OnceLock::new() }; 17];
     let code = code.trim().to_ascii_lowercase().replace('-', "_");
     let i = LANGUAGES.iter().position(|l| *l == code)?;
     let (cell, source) = (CATALOGS.get(i)?, SOURCES.get(i)?);

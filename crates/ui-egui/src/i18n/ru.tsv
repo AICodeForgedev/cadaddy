@@ -2129,3 +2129,97 @@
 	Manage Attributes	Управление атрибутами
 	Dialog State	Состояние диалога
 	Dialog Action	Действие диалога
+	Recover Drawing and Xrefs...	Восстановить чертёж и внешние ссылки...
+	Count Blocks	Подсчёт блоков
+	Get Selection Set	Получить набор выбора
+	Global Attribute Edit	Глобальное редактирование атрибутов
+	LISP Function Surfer	Обзор функций LISP
+	List LISP Symbols	Список символов LISP
+	List Nested Object	Сведения о вложенном объекте
+	List Object Xdata	Расширенные данные объекта
+	Multiple Polyline Edit	Редактирование нескольких полилиний
+	Redefine Path	Переопределить путь
+	Redefine Path Mode	Режим переопределения пути
+	Restore Dimension Text	Восстановить размерный текст
+	Revert	Вернуть сохранённое
+	Rotate Blocks	Повернуть блоки
+	Scale Blocks	Масштабировать блоки
+	Select Similar by Properties	Выбрать подобные по свойствам
+	Show URLs	Показать URL-адреса
+	Synchronize Viewports	Синхронизировать видовые экраны
+	Paste Special	Специальная вставка
+	Paste Special...	Специальная вставка...
+	Paste as	Вставить как
+	Last Measurement	Последнее измерение
+	Perimeter	Периметр
+	curl isn't available ({error}).	curl недоступен ({error}).
+	This build has no release key to check updates with.	В этой сборке нет ключа выпуска для проверки обновлений.
+	The release's signature files are too large.	Файлы подписи выпуска слишком велики.
+	The release's signature isn't one CADaddy reads.	Подпись выпуска имеет формат, который CADaddy не читает.
+	The release's signature is missing or damaged.	Подпись выпуска отсутствует или повреждена.
+	The release's signature is for another version ({version}).	Подпись выпуска относится к другой версии ({version}).
+	The release is signed with a key this build doesn't trust.	Выпуск подписан ключом, которому эта сборка не доверяет.
+	This build's release key is damaged.	Ключ выпуска в этой сборке повреждён.
+	The release's signature doesn't match its files.	Подпись выпуска не соответствует его файлам.
+	Couldn't reach GitHub: {why}	Не удалось связаться с GitHub: {why}
+	GitHub's answer was too large.	Ответ GitHub слишком велик.
+	GitHub's answer wasn't readable ({error}).	Не удалось прочитать ответ GitHub ({error}).
+	GitHub's answer has no version.	В ответе GitHub нет версии.
+	GitHub's answer has an unreadable version ({version}).	В ответе GitHub нечитаемая версия ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	Не удалось скачать файл выпуска {name}, поэтому ничего не установлено: {why}
+	The release's {name} is too large, so nothing was installed.	Файл выпуска {name} слишком велик, поэтому ничего не установлено.
+	The release's {name} isn't text, so nothing was installed.	Файл выпуска {name} не является текстом, поэтому ничего не установлено.
+	It wasn't downloaded. Download it from the release page instead.	Обновление не скачано. Скачайте его со страницы выпуска.
+	Version {version} isn't newer than this one ({current}).	Версия {version} не новее текущей ({current}).
+	This release isn't signed.	Этот выпуск не подписан.
+	The release failed its check.	Выпуск не прошёл проверку.
+	The signed release doesn't list {name}.	В подписанном выпуске нет файла {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	Отпечаток {name} на GitHub отличается от подписанного.
+	Couldn't make the folder {folder}: {error}	Не удалось создать папку {folder}: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	Скачанный файл не совпал с опубликованным отпечатком SHA-256, поэтому не был установлен.
+	Couldn't read the download: {error}	Не удалось прочитать скачанный файл: {error}
+	The download failed: {why}	Не удалось скачать: {why}
+	This release has no installer for this computer yet.	Для этого компьютера у выпуска пока нет установщика.
+	Drawing Properties...	Свойства чертежа...
+	System Variable Monitor...	Монитор системных переменных...
+	{name} Properties	Свойства {name}
+	Summary	Сводка
+	Statistics	Статистика
+	Custom	Пользовательские
+	Size	Размер
+	Subject	Тема
+	Author	Автор
+	Keywords	Ключевые слова
+	Comments	Комментарии
+	Revision number	Номер редакции
+	Hyperlink base	База гиперссылок
+	Created	Создан
+	Modified	Изменён
+	Last saved by	Последнее сохранение
+	Total editing time (minutes)	Общее время редактирования (минуты)
+	Property	Свойство
+	System Variable Monitor	Монитор системных переменных
+	Variable	Переменная
+	Watched value	Отслеживаемое значение
+	Current value	Текущее значение
+	Notify when a watched variable changes	Сообщать об изменении отслеживаемой переменной
+	Reset All	Сбросить всё
+	Delay	Задержка
+	Repeat Script	Повторить сценарий
+	Script Call	Вызов сценария
+	Resume Script	Продолжить сценарий
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	Вести журнал действий для каждого чертежа (личный, в папке настроек CADaddy)
+	Specify insertion point or	Укажите точку вставки или
+	Specify table scale	Укажите масштаб таблицы
+	{} dimension(s) updated to the current settings.	Обновлено размеров по текущим настройкам: {}.
+	British English (-ise)	Британский английский (-ise)
+	British English (-ize)	Британский английский (-ize)
+	Spanish	Испанский
+	French	Французский
+	German	Немецкий
+	Portuguese (Iberian)	Португальский (Португалия)
+	Portuguese (Brazilian)	Португальский (Бразилия)
+	(not installed)	(не установлен)
+	Dictionaries are read from:	Словари читаются из:
+	Published to {path}	Опубликовано в {path}
+	Sheet Set (.sheetset.json)	Подшивка (.sheetset.json)
