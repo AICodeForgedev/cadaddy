@@ -140,6 +140,8 @@ pub(crate) const DIM_CODES: &[(&str, i32, K)] = &[
 
 /// DIMSAH: separate arrow blocks in use.
 pub(crate) const DIMSAH: i32 = 173;
+/// DIMPOST's group in DIMSTYLE records.
+pub(crate) const DIMPOST: i32 = 3;
 
 /// Variables newer than R2000: DIMFXL, DIMJOGANG, DIMARCSYM, DIMFXLON, DIMLTYPE, DIMLTEX1,
 /// DIMLTEX2. Files of [`NEWER_SINCE`] or later get them as DIMSTYLE groups; R2000 files get them

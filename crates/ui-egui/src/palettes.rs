@@ -1,6 +1,6 @@
 //! Tool Sets (left) and the Layers / Properties palettes (right).
 
-use cadcraft_color::Color;
+use cadcraft_color::{Color, Rgb};
 use cadcraft_doc::EntityKind;
 use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::{Value, json};
@@ -9,6 +9,8 @@ use crate::CadApp;
 use crate::icons::{self, Icon};
 use crate::theme::Tokens;
 
+#[cfg(test)]
+mod layer_menu_tests;
 /// The hatch pattern picker.
 pub mod patterns;
 /// The QuickCalc palette.
@@ -106,7 +108,11 @@ pub const DRAFTING: &[(&str, &[Tool], &[Tool])] = &[
     ("Table", &[(Icon::Table, "table", "Table")], &[]),
     (
         "Parametric",
-        &[(Icon::Constraint, "autoconstrain", "Auto Constrain")],
+        &[
+            (Icon::Constraint, "autoconstrain", "Auto Constrain"),
+            (Icon::DelConstraint, "delconstraint", "Delete Constraints"),
+            (Icon::Parameters, "parameters", "Parameters Manager"),
+        ],
         &[
             (Icon::Coincident, "gccoincident", "Coincident"),
             (Icon::Parallel, "gcparallel", "Parallel"),
@@ -116,6 +122,15 @@ pub const DRAFTING: &[(&str, &[Tool], &[Tool])] = &[
             (Icon::Tangent, "gctangent", "Tangent"),
             (Icon::Concentric, "gcconcentric", "Concentric"),
             (Icon::Equal, "gcequal", "Equal"),
+            (Icon::Collinear, "gccollinear", "Collinear"),
+            (Icon::Smooth, "gcsmooth", "Smooth"),
+            (Icon::Symmetric, "gcsymmetric", "Symmetric"),
+            (Icon::Fix, "gcfix", "Fix"),
+            (Icon::DimLinear, "dclinear", "Linear"),
+            (Icon::DimAligned, "dcaligned", "Aligned"),
+            (Icon::DimAngular, "dcangular", "Angular"),
+            (Icon::DimRadius, "dcradius", "Radius"),
+            (Icon::DimDiameter, "dcdiameter", "Diameter"),
         ],
     ),
 ];
@@ -306,6 +321,21 @@ fn swatch(p: &egui::Painter, r: Rect, c: Color) {
     let rgb = c.resolve(Color::Index(7), Color::Index(7));
     p.rect_filled(r, 1.0, Color32::from_rgb(rgb.0, rgb.1, rgb.2));
     p.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_gray(30)), egui::StrokeKind::Inside);
+}
+
+/// The strip collapsed Tool Sets leave on the left edge, like a collapsed palette title bar:
+/// without it the only way back was Window > Tool Sets (#1095). The whole strip expands them.
+pub fn toolsets_strip(app: &mut CadApp, ui: &mut egui::Ui) {
+    let t = Tokens::get();
+    egui::Panel::left("cc_toolsets_strip").exact_size(22.0).resizable(false).frame(egui::Frame::NONE.fill(t.chrome)).show(ui, |ui| {
+        let r = ui.max_rect();
+        let resp = ui.interact(r, ui.id().with("ts_expand"), Sense::click());
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.top() + 14.0), vec2(14.0, 14.0)), Icon::ChevronRight, false);
+        icons::describe_control(ui, &resp, "Expand Tool Sets", None, false);
+        if resp.on_hover_text(crate::tl!("Tool Sets")).clicked() {
+            let _ = app.run("ui.toggle.toolsets", json!({"on": true}));
+        }
+    });
 }
 
 pub fn right_palettes(app: &mut CadApp, ui: &mut egui::Ui) {
@@ -826,7 +856,18 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             _ => "*VARIES*".into(),
         }
     };
-    let color = same(&|e| e.common.color.name());
+    let selected_color = Some(e.common.color).filter(|c| sel.iter().filter_map(|h| d.entity(*h)).all(|e| e.common.color == *c));
+    let color = selected_color.map_or_else(|| "*VARIES*".into(), Color::name);
+    let effective_color = |e: &cadcraft_doc::Entity| {
+        let layer = d.layer(&e.common.layer).map_or(Color::WHITE, |l| l.color);
+        e.common.color.resolve(layer, Color::WHITE)
+    };
+    let resolved_color = sel
+        .first()
+        .and_then(|h| d.entity(*h))
+        .map(|e| effective_color(e))
+        .filter(|c| sel.iter().filter_map(|h| d.entity(*h)).all(|e| effective_color(e) == *c))
+        .unwrap_or(Rgb(255, 255, 255));
     let layer = same(&|e| e.common.layer.clone());
     let linetype = same(&|e| e.common.linetype.clone());
     let lts = same(&|e| format!("{:.4}", e.common.ltscale));
@@ -844,35 +885,29 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     };
     group(ui, "General");
     prop_row(ui, "Color", |ui| {
-        ui.menu_button(format!("■ {}", crate::i18n::t(&color)), |ui| {
-            for (n, c) in [
-                ("ByLayer", 256),
-                ("ByBlock", 0),
-                ("Red", 1),
-                ("Yellow", 2),
-                ("Green", 3),
-                ("Cyan", 4),
-                ("Blue", 5),
-                ("Magenta", 6),
-                ("White", 7),
-                ("Color 8", 8),
-                ("Color 9", 9),
-            ] {
-                if ui.button(crate::i18n::t(n)).clicked() {
-                    set = Some(json!({ "handles": ids, "color": c }));
-                    ui.close();
-                }
-            }
-        });
+        let width = (ui.available_width() - 10.0).max(0.0);
+        if let Some(c) = crate::layers::color_button_resolved(
+            ui,
+            egui::Id::new(("properties_color", &ids)),
+            selected_color.unwrap_or(Color::ByLayer),
+            resolved_color,
+            &color,
+            true,
+            width,
+        ) {
+            set = Some(json!({ "handles": ids, "color": c.name() }));
+        }
     });
     prop_row(ui, "Layer", |ui| {
         ui.menu_button(layer.clone(), |ui| {
-            for l in &layers {
-                if ui.button(l).clicked() {
-                    set = Some(json!({ "handles": ids, "layer": l }));
-                    ui.close();
+            egui::ScrollArea::vertical().id_salt("properties_layer_menu").max_height(300.0).show(ui, |ui| {
+                for l in &layers {
+                    if ui.button(l).clicked() {
+                        set = Some(json!({ "handles": ids, "layer": l }));
+                        ui.close();
+                    }
                 }
-            }
+            });
         });
     });
     prop_row(ui, "Linetype", |ui| {
@@ -940,6 +975,8 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     if sel.len() == 1 {
         group(ui, "Geometry");
         let real = |v: f64| format!("{v:.4}");
+        // Rotations show as the drawing measures directions (ANGBASE, ANGDIR).
+        let angles = app.session.angle_settings();
         let num = |ui: &mut egui::Ui, label: &str, key: &str, shown: String, set: &mut Option<Value>, bad: &mut Option<String>, ids: &Vec<String>| {
             prop_row(ui, label, |ui| {
                 if let Some(f) = number(edit_field(ui, ui.id().with((key, ids)), shown), bad) {
@@ -1006,7 +1043,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                     }
                 });
                 num(ui, "Height", "height", len(tx.height), &mut set, &mut bad, &ids);
-                num(ui, "Rotation", "rotation", real(tx.rotation.to_degrees()), &mut set, &mut bad, &ids);
+                num(ui, "Rotation", "rotation", real(angles.shown(tx.rotation).to_degrees()), &mut set, &mut bad, &ids);
                 num(ui, "Width factor", "widthFactor", real(tx.width_factor), &mut set, &mut bad, &ids);
             }
             EntityKind::MText(tx) => {
@@ -1056,6 +1093,18 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                         set = Some(json!({ "handles": ids, "dimStyle": n }));
                     }
                 });
+                // The style's values with this dimension's own overrides; editing one overrides
+                // it for the selected dimensions, as AutoCAD's Properties palette does.
+                let st = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
+                num(ui, "Text height", "textHeight", len(st.text_height), &mut set, &mut bad, &ids);
+                num(ui, "Arrow size", "arrowSize", len(st.arrow_size), &mut set, &mut bad, &ids);
+                num(ui, "Dim scale overall", "dimScale", real(st.scale), &mut set, &mut bad, &ids);
+                prop_row(ui, "Precision", |ui| {
+                    let cur = st.decimals.to_string();
+                    if let Some(n) = pick_menu(ui, &cur, (0..=8).map(|n: u8| n.to_string())).and_then(|n| n.parse::<u8>().ok()) {
+                        set = Some(json!({ "handles": ids, "precision": n }));
+                    }
+                });
             }
             EntityKind::Insert(i) => {
                 // A dynamic block reference shows its dynamic block's name, not its anonymous
@@ -1066,7 +1115,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 prop_row(ui, "Position X", |ui| read_only(ui, &len(i.insert.x)));
                 prop_row(ui, "Position Y", |ui| read_only(ui, &len(i.insert.y)));
                 prop_row(ui, "Position Z", |ui| read_only(ui, &len(i.insert.z)));
-                num(ui, "Rotation", "rotation", real(i.rotation.to_degrees()), &mut set, &mut bad, &ids);
+                num(ui, "Rotation", "rotation", real(angles.shown(i.rotation).to_degrees()), &mut set, &mut bad, &ids);
                 num(ui, "Scale", "scale", real(i.scale.x), &mut set, &mut bad, &ids);
                 if let Some((_, props)) = custom.filter(|(_, p)| !p.is_empty()) {
                     group(ui, "Custom");
@@ -1090,11 +1139,53 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             _ => {}
         }
     }
-    if let Some(p) = set {
+    if let Some(mut p) = set {
+        // A rotation is typed as shown (from ANGBASE, in the ANGDIR sense); properties.set takes it
+        // from +X counterclockwise.
+        if let Some(r) = p.get_mut("rotation")
+            && let Some(v) = r.as_f64()
+        {
+            *r = json!(app.session.angle_settings().unshown(v.to_radians()).to_degrees());
+        }
         let _ = app.run("properties.set", p);
     }
     report_bad(app, bad);
     if let Some(p) = custom_set {
         let _ = app.run("blocks.reference.set", p);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Services;
+    use cadcraft_engine::Session;
+    use egui::{Color32, Shape};
+
+    fn contains_swatch(shape: &Shape, color: Color32) -> bool {
+        match shape {
+            Shape::Rect(r) => r.fill == color && (r.rect.width() - 12.0).abs() < 0.01 && (r.rect.height() - 12.0).abs() < 0.01,
+            Shape::Vec(shapes) => shapes.iter().any(|shape| contains_swatch(shape, color)),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn selected_bylayer_entity_paints_its_layer_color_swatch() {
+        let mut app = CadApp::new(Session::default(), Services::default());
+        app.run("layer.new", json!({ "name": "Blue", "color": 5, "current": true })).unwrap();
+        let line = app.run("line", json!({ "points": [[0, 0], [10, 0]] })).unwrap();
+        app.run("select", json!({ "handles": [line["handles"][0].clone()] })).unwrap();
+
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 1200.0))), ..Default::default() };
+        let mut painted_blue = false;
+        for _ in 0..2 {
+            app.logic(&ctx);
+            let mut output = ctx.run_ui(input.clone(), |ui| properties_section(&mut app, ui));
+            painted_blue = output.shapes.iter().any(|shape| contains_swatch(&shape.shape, Color32::from_rgb(0, 0, 255)));
+            output.textures_delta.clear();
+        }
+        assert!(painted_blue, "a ByLayer entity on a blue layer needs a blue Properties swatch");
     }
 }

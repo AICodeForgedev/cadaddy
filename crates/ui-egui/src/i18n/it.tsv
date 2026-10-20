@@ -109,6 +109,7 @@ menu	Modify	Edita
 	Box	Parallelepipedo
 	Break	Spezza
 	Break At Point	Spezza in un punto
+	Break-line Symbol	Simbolo linea di interruzione
 	Bring Above Objects	Porta sopra gli oggetti
 	Bring Annotations to Front	Porta le annotazioni in primo piano
 	Bring to Front	Porta in primo piano
@@ -175,6 +176,7 @@ menu	Modify	Edita
 	Contributors	Collaboratori
 	Control Vertices	Vertici di controllo
 	Convert	Converti
+	Convert Text to Mtext	Converti testo in testo multilinea
 	Copy	Copia
 	Copy Full File Path	Copia percorso completo del file
 	Copy History	Copia cronologia
@@ -326,9 +328,11 @@ menu	Modify	Edita
 	Evaluate	Calcola
 	Exclude from new selection set	Escludi dal nuovo gruppo di selezione
 	Explode	Esplodi
+	Explode Attributes to Text	Esplodi attributi in testo
 	Export	Esporta
 	Export Table	Esporta tabella
 	Export to PDF...	Esporta in PDF...
+	Express Tools	Strumenti Express
 	Expression	Espressione
 	Extend	Estendi
 	Extension	Estensione
@@ -529,6 +533,7 @@ menu	Modify	Edita
 	Models	Modelli
 	Modify	Modifica
 	Move	Sposta
+	Move/Copy/Rotate	Sposta/Copia/Ruota
 	Multileader	Multidirettrice
 	Multileader Style...	Stile multidirettrice...
 	Multileader style	Stile multidirettrice
@@ -1142,7 +1147,7 @@ menu	Modify	Edita
 	Viewport {id}	Finestra {id}
 	Viewports	Finestre
 	W	O
-	WCS ⌄	WCS ⌄
+	WCS	WCS
 	White	Bianco
 	Width factor	Fattore di larghezza
 	Window	Finestra
@@ -1237,3 +1242,20 @@ menu	Modify	Edita
 	Search for pattern	Cerca modello
 	Run Script...	Esegui script...
 	Select closed objects (regions, closed polylines, circles).	Selezionare oggetti chiusi (regioni, polilinee chiuse, cerchi).
+	Type an alias name.	Digitare un nome di alias.
+	Choose the command the alias starts.	Scegliere il comando che l'alias avvia.
+	{command} is an unknown command.	{command} è un comando sconosciuto.
+	{alias} is already defined; select it and use Edit.	{alias} è già definito; selezionarlo e usare Modifica.
+	More than {n} aliases.	Più di {n} alias.
+	Alias file: {file}	File degli alias: {file}
+	No alias file loaded. REINIT replaces these aliases with a file's.	Nessun file di alias caricato. REINIT sostituisce questi alias con quelli di un file.
+	Alias	Alias
+	Command	Comando
+	overrides built-in	sostituisce il predefinito
+	built-in	predefinito
+	Add…	Aggiungi…
+	Edit…	Modifica…
+	Save alias	Salva alias
+	Discard	Scarta
+	Customize	Personalizza
+	Edit Command Aliases (PGP)...	Modifica alias dei comandi (PGP)...

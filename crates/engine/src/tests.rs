@@ -1274,6 +1274,25 @@ fn bare_variable_name_runs_setvar() {
     assert!(s.cmdline("-pickadd").is_err());
 }
 
+#[test]
+fn typed_ltscale_asks_for_the_scale() {
+    let mut s = Session::new();
+    s.execute("setvar", &json!({"name": "LTSCALE", "value": 2.5})).unwrap();
+    s.cmdline("ltscale").unwrap();
+    assert!(s.prompt_text().contains("Enter new linetype scale factor <2.5000>"), "{}", s.prompt_text());
+    // A scale that is not positive is refused and asked again.
+    s.cmdline("0").unwrap();
+    assert!(s.current_prompt().is_some(), "asked again");
+    s.cmdline("0.1").unwrap();
+    assert!(s.current_prompt().is_none());
+    assert_eq!(s.doc().unwrap().header.f64("LTSCALE", 0.0), 0.1);
+    // Enter keeps the current scale.
+    s.cmdline("lts").unwrap();
+    s.cmdline("").unwrap();
+    assert!(s.current_prompt().is_none());
+    assert_eq!(s.doc().unwrap().header.f64("LTSCALE", 0.0), 0.1);
+}
+
 fn setvar_prompt_open(s: &Session) -> bool {
     s.running.as_ref().is_some_and(|r| r.id == "setvar")
 }

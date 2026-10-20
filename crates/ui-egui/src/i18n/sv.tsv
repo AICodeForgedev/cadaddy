@@ -1176,7 +1176,7 @@
 	Viewports	Vyfönster
 	Volume	Volym
 	W	V
-	WCS ⌄	WCS ⌄
+	WCS	WCS
 	White	Vit
 	Width factor	Breddfaktor
 	Window	Fönster
@@ -1245,3 +1245,100 @@ menu	View	Visa
 menu	Draw	Rita
 menu	Dimension	Måttsättning
 menu	Modify	Ändra
+
+# Strings added upstream after the first Swedish catalog (Ukrainian reference order, then menus).
+	Hatch and Gradient	Skraffering och toning
+	Color 1	Färg 1
+	Color 2	Färg 2
+	Shape	Form
+	Curved	Krökt
+	Spherical	Sfärisk
+	Hemispherical	Halvsfärisk
+	Inverted	Inverterad
+	Centered	Centrerad
+	Hatch origin	Skrafferingens origo
+	Use current origin	Använd aktuellt origo
+	Specified origin	Angivet origo
+	Click to set new origin	Klicka för att ange nytt origo
+	Default to boundary extents	Utgå från gränsens utsträckning
+	Bottom left	Nere till vänster
+	Bottom right	Nere till höger
+	Top left	Uppe till vänster
+	Top right	Uppe till höger
+	Boundaries	Gränser
+	Add: Pick points	Lägg till: välj punkter
+	Add: Select objects	Lägg till: markera objekt
+	Boundaries picked: {n}	Valda gränser: {n}
+	Associative	Associativ
+	Create separate hatches	Skapa separata skrafferingar
+	Island detection	Identifiering av öar
+	Normal	Normal
+	Outer	Yttre
+	Ignore	Ignorera
+	Origin: {x}, {y}	Origo: {x}, {y}
+	Hatch Pick	Skrafferingsval
+	Query Texts	Textinformation
+	Sheet Books to PDF...	Blad till PDF-böcker...
+	Not a number or distance: {text}	Inte ett tal eller avstånd: {text}
+	Dynamic Block Data	Data för dynamiskt block
+	Custom	Anpassat
+	Dynamic Block Reference	Dynamisk blockreferens
+	Set Dynamic Property	Ange dynamisk egenskap
+	Dynamic Block Grips	Grepp för dynamiskt block
+	Drag Dynamic Grip	Dra dynamiskt grepp
+	Save Block	Spara block
+	Save Block As	Spara block som
+	Close Block Editor	Stäng blockredigeraren
+	Unsaved changes	Osparade ändringar
+	Edit Block Definition	Redigera blockdefinition
+	Block to create or edit	Block att skapa eller redigera
+	Open in Block Editor	Öppna i blockredigeraren
+	This drawing	Den här ritningen
+	contains authoring elements. Open in Block Editor?	innehåller redigeringselement. Öppna i blockredigeraren?
+	New block	Nytt block
+	Preview	Förhandsvisning
+	Italic	Kursiv
+	Underline	Understruken
+	Overline	Linje över
+	Justify	Marginaljustera
+	Text color	Textfärg
+	Click the ruler to add a tab stop, right-click to remove one	Klicka på linjalen för att lägga till ett tabbstopp, högerklicka för att ta bort ett
+	Edit Multileader	Redigera multihänvisningslinje
+	Align Multileaders	Justera multihänvisningslinjer
+	Collect Multileaders	Samla multihänvisningslinjer
+	Collect	Samla
+	Edit Reference In-Place	Redigera referens på plats
+	Working Set	Arbetsuppsättning
+	Add to Working Set	Lägg till i arbetsuppsättningen
+	Save Reference Edits	Spara referensändringar
+	Xref and Block In-place Editing	Redigering av externa referenser och block på plats
+	Load Application...	Läs in program...
+	Evaluate LISP	Utvärdera LISP
+	Open Recent	Öppna senaste
+	Clear Recent Files	Rensa senaste filer
+	Animation Effects	Animeringseffekter
+	Animation effects	Animeringseffekter
+	Selection modes	Markeringslägen
+	Object grouping	Objektgruppering
+	Selection effect color	Färg för markeringseffekt
+	Grips	Grepp
+	Show grips	Visa grepp
+	Object selection limit for display of grips	Högsta antal markerade objekt som visar grepp
+	Selection preview	Förhandsvisning av markering
+	When a command is active	När ett kommando är aktivt
+	When no command is active	När inget kommando är aktivt
+	Visual Effect Settings...	Inställningar för visuella effekter...
+	Visual Effect Settings	Inställningar för visuella effekter
+	Selection Area Effect	Effekt för markeringsområde
+	Indicate selection area	Visa markeringsområdet
+	Window selection color:	Färg för fönstermarkering:
+	Crossing selection color:	Färg för korsande markering:
+	Selection area opacity:	Opacitet för markeringsområde:
+	Selection Preview Filter	Filter för förhandsvisning av markering
+	Exclude:	Uteslut:
+	Objects on locked layers	Objekt på låsta lager
+	Xrefs	Externa referenser
+	Tables	Tabeller
+	Groups	Grupper
+	Multiline text	Flerradstext
+	Hatches	Skrafferingar

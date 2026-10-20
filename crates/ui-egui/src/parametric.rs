@@ -574,6 +574,9 @@ pub fn parameters_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool)
     let filter_id = egui::Id::new("par_filter");
     let mut filter = ctx.data_mut(|d| d.get_temp::<String>(filter_id)).unwrap_or_default();
     let mut action: Option<Value> = None;
+    // The name being renamed in place: (old name, text typed so far).
+    let rename_id = egui::Id::new("par_rename");
+    let mut renaming = ctx.data_mut(|d| d.get_temp::<(String, String)>(rename_id));
     egui::Window::new(crate::tl!("Parameters Manager"))
         .id(egui::Id::new("Parameters Manager"))
         .open(open)
@@ -606,7 +609,16 @@ pub fn parameters_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool)
                         ui.label(egui::RichText::new(crate::i18n::t(title)).color(t.text_dim).small());
                         ui.end_row();
                         for r in group {
-                            ui.label(&r.name);
+                            if let Some((old, buf)) = renaming.as_mut().filter(|(old, _)| *old == r.name) {
+                                if let Some(name) = rename_field(ui, rename_id.with("te"), old, buf) {
+                                    if !name.is_empty() && name != *old {
+                                        action = Some(json!({ "name": old.clone(), "rename": name }));
+                                    }
+                                    renaming = None;
+                                }
+                            } else if ui.add(egui::Label::new(&r.name).selectable(false).sense(egui::Sense::click())).double_clicked() {
+                                renaming = Some((r.name.clone(), r.name.clone()));
+                            }
                             let id = egui::Id::new(("par_expr", &r.name));
                             if let Some(v) = expr_field(ui, id, &r.expr) {
                                 action = Some(json!({ "name": r.name, "expr": v }));
@@ -634,10 +646,37 @@ pub fn parameters_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool)
                 });
             });
         });
-    ctx.data_mut(|d| d.insert_temp(filter_id, filter));
+    ctx.data_mut(|d| {
+        d.insert_temp(filter_id, filter);
+        if let Some(r) = renaming {
+            d.insert_temp(rename_id, r);
+        } else {
+            d.remove_temp::<(String, String)>(rename_id);
+        }
+    });
     if let Some(p) = action {
         let _ = app.run("parameters", p);
     }
+}
+
+/// The in-place name editor: focused with the old name selected when it opens, so typing goes
+/// here and not to the command line. `Some` when it closes: the new name on Enter, `""` otherwise.
+fn rename_field(ui: &mut egui::Ui, id: egui::Id, old: &str, buf: &mut String) -> Option<String> {
+    let opening = egui::TextEdit::load_state(ui.ctx(), id).is_none();
+    let resp = ui.add(egui::TextEdit::singleline(buf).id(id).desired_width(120.0));
+    if opening {
+        resp.request_focus();
+        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
+            let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(old.chars().count()));
+            state.cursor.set_char_range(Some(all));
+            state.store(ui.ctx(), id);
+        }
+    }
+    resp.lost_focus().then(|| {
+        let name = if ui.input(|i| i.key_pressed(egui::Key::Enter)) { buf.trim().to_string() } else { String::new() };
+        ui.ctx().data_mut(|d| d.remove::<egui::text_edit::TextEditState>(id));
+        name
+    })
 }
 
 /// A text field committing on Enter / focus loss when changed.

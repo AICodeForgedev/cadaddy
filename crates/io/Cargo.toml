@@ -23,4 +23,6 @@ miniz_oxide = "0.8"
 quick-xml = { workspace = true }
 
 [dev-dependencies]
+# Reads CADCraft's DWG output as written (tests only; the same version as cadcraft-dwg's).
+acadrust = "0.6.4"
 tiny-skia = { workspace = true }

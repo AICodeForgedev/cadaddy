@@ -161,6 +161,19 @@ fn display(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         }
         ui.end_row();
 
+        ui.label(crate::tl!("Interface scale"));
+        let scale = app.options.interface_scale;
+        let percent = |s: f32| format!("{} %", (s * 100.0).round());
+        egui::ComboBox::from_id_salt("options_interface_scale").selected_text(percent(scale)).show_ui(ui, |ui| {
+            for n in [75u16, 100, 125, 150, 175, 200, 250, 300] {
+                let s = f32::from(n) / 100.0;
+                if ui.selectable_label((scale - s).abs() < 1e-4, format!("{n} %")).clicked() && (scale - s).abs() >= 1e-4 {
+                    changes.insert("interfaceScale".into(), json!(s));
+                }
+            }
+        });
+        ui.end_row();
+
         ui.label(crate::tl!("Model background"));
         color_row(ui, app.options.model_background, Tokens::DARK.canvas, "modelBackground", changes);
         ui.end_row();
@@ -308,6 +321,14 @@ fn selection(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) 
             changes.insert("PICKADD".into(), json!(i32::from(!shift_adds)));
         }
         let mut grouping = st.pickstyle & 1 != 0;
+        let mut two_clicks = !st.pickdrag;
+        if left
+            .checkbox(&mut two_clicks, crate::tl!("Select using two clicks only"))
+            .on_hover_text(crate::tl!("Define each corner of the selection window with a separate click."))
+            .changed()
+        {
+            changes.insert("PICKDRAG".into(), json!(if two_clicks { 0 } else { 2 }));
+        }
         if left.checkbox(&mut grouping, crate::tl!("Object grouping")).changed() {
             changes.insert("PICKSTYLE".into(), json!((st.pickstyle & !1) | u8::from(grouping)));
         }

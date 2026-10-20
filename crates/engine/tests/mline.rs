@@ -155,7 +155,30 @@ fn mledit_tees_and_corner() {
     s.execute("mledit", &json!({"tool": "ot", "first": a.hex(), "p1": [9, 0], "second": b.hex(), "p2": [5, 3]})).unwrap();
     assert_eq!(mline(&s, a).points(), vec![Vec2::new(6.0, 0.0), Vec2::new(10.0, 0.0)]);
     assert_eq!(pieces(&mline(&s, b)), vec![[4.0, -5.0, 4.0, 5.0], [6.0, -5.0, 6.0, -1.0], [6.0, 1.0, 6.0, 5.0]]);
-    assert!(s.execute("mledit", &json!({"tool": "mt", "first": a.hex(), "p1": [9, 0], "second": b.hex(), "p2": [5, 3]})).is_err());
+
+    // Merged tee: the outer elements stop at the second's near side, which opens, and the inner
+    // ones run on to the second's inner element, which runs through.
+    let mut s = Session::new();
+    s.execute("mlstyle", &json!({"name": "C", "elements": [{"offset": 0.5}, {"offset": 0}, {"offset": -0.5}]})).unwrap();
+    let (a, b) = crossing(&mut s);
+    s.execute("mledit", &json!({"tool": "mt", "first": a.hex(), "p1": [9, 0], "second": b.hex(), "p2": [5, 3]})).unwrap();
+    assert_eq!(mline(&s, a).points(), vec![Vec2::new(5.0, 0.0), Vec2::new(10.0, 0.0)]);
+    assert_eq!(pieces(&mline(&s, a)), vec![[5.0, 0.0, 10.0, 0.0], [6.0, -1.0, 10.0, -1.0], [6.0, 1.0, 10.0, 1.0]]);
+    assert_eq!(pieces(&mline(&s, b)), vec![[4.0, -5.0, 4.0, 5.0], [5.0, -5.0, 5.0, 5.0], [6.0, -5.0, 6.0, -1.0], [6.0, 1.0, 6.0, 5.0]]);
+    // Picked on the other side, from the command line.
+    let mut s = Session::new();
+    s.execute("mlstyle", &json!({"name": "C", "elements": [{"offset": 0.5}, {"offset": 0}, {"offset": -0.5}]})).unwrap();
+    let (a, b) = crossing(&mut s);
+    s.cmdline("mledit mt 1,0 5,3").unwrap();
+    s.cmdline("").unwrap();
+    assert_eq!(pieces(&mline(&s, a)), vec![[0.0, -1.0, 4.0, -1.0], [0.0, 0.0, 5.0, 0.0], [0.0, 1.0, 4.0, 1.0]]);
+    assert_eq!(pieces(&mline(&s, b)), vec![[4.0, -5.0, 4.0, -1.0], [4.0, 1.0, 4.0, 5.0], [5.0, -5.0, 5.0, 5.0], [6.0, -5.0, 6.0, 5.0]]);
+    // Two elements have nothing inner to merge: the same as the open tee.
+    let mut s = Session::new();
+    let (a, b) = crossing(&mut s);
+    s.execute("mledit", &json!({"tool": "mt", "first": a.hex(), "p1": [9, 0], "second": b.hex(), "p2": [5, 3]})).unwrap();
+    assert_eq!(mline(&s, a).points(), vec![Vec2::new(6.0, 0.0), Vec2::new(10.0, 0.0)]);
+    assert_eq!(pieces(&mline(&s, b)), vec![[4.0, -5.0, 4.0, 5.0], [6.0, -5.0, 6.0, -1.0], [6.0, 1.0, 6.0, 5.0]]);
 
     // Corner joint: two multilines become one round the corner.
     let mut s = Session::new();

@@ -396,6 +396,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::hatchdlg::open_create(app, matches!(id, "gradient" | "gd"));
             Ok(Value::Null)
         }
+        // Typed or from the Tools menu: the Command Aliases dialog. JSON calls keep the JSON form.
+        "aliasedit" if params.is_null() => {
+            crate::aliasdlg::open(app);
+            Ok(Value::Null)
+        }
         "hatchedit" | "he" if params.is_null() && app.session.state().is_ok() => {
             crate::hatchdlg::open_edit(app);
             Ok(Value::Null)
@@ -569,8 +574,11 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         ui,
         |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                for (name, entries) in &tree {
-                    ui.menu_button(crate::i18n::menu(name), |ui| {
+                // Titles first, so a hovered title can take over before any menu is drawn.
+                let titles: Vec<egui::Response> = tree.iter().map(|(name, _)| ui.add(egui::Button::new(crate::i18n::menu(name)))).collect();
+                switch_on_hover(ui.ctx(), &titles);
+                for ((_, entries), title) in tree.iter().zip(&titles) {
+                    egui::Popup::menu(title).show(|ui| {
                         for e in entries {
                             entry_ui(ui, e, &mut clicked);
                         }
@@ -584,10 +592,37 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
     }
 }
 
+/// While one menu of the bar is open, pointing at another title opens that menu instead.
+fn switch_on_hover(ctx: &egui::Context, titles: &[egui::Response]) {
+    let is_open = |title: &egui::Response| egui::Popup::is_id_open(ctx, egui::Popup::default_response_id(title));
+    if !titles.iter().any(is_open) {
+        return;
+    }
+    // A click on a title toggles its menu by itself.
+    if let Some(title) = titles.iter().find(|t| t.hovered() && !t.clicked() && !is_open(t)) {
+        egui::Popup::open_id(ctx, egui::Popup::default_response_id(title));
+    }
+}
+
 /// Like choosing a menu item: starts the command interactively.
 pub fn activate(app: &mut CadApp, id: &str) {
     app.cmd.buffer.clear();
     app.start(id);
+}
+
+/// Run `id` with default parameters without cancelling the active command, as the drafting
+/// toggles (F3, F7-F12, the status bar buttons) are in AutoCAD.
+pub fn run_transparent(app: &mut CadApp, id: &str) {
+    match app.session.execute(id, &json!({})) {
+        Ok(v) => {
+            if let Some(m) = v.get("message").and_then(Value::as_str) {
+                app.session.echo(m.to_string());
+            }
+        }
+        Err(_) => {
+            let _ = app.run(id, json!({}));
+        }
+    }
 }
 
 /// Keyboard shortcuts and function keys.
@@ -651,16 +686,7 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         // Toggles run transparently (they don't cancel the active command).
         let transparent = ["osnap", "grid", "ortho", "snap", "polar", "otrack", "dynmode", "pickstyle"].contains(&id);
         if transparent || id.starts_with("ui.") {
-            match app.session.execute(id, &json!({})) {
-                Ok(v) => {
-                    if let Some(m) = v.get("message").and_then(Value::as_str) {
-                        app.session.echo(m.to_string());
-                    }
-                }
-                Err(_) => {
-                    let _ = app.run(id, json!({}));
-                }
-            }
+            run_transparent(app, id);
         } else {
             activate(app, id);
         }

@@ -616,6 +616,13 @@ impl Default for MLeaderStyle {
     }
 }
 
+impl MLeaderStyle {
+    /// The Standard style for metric drawings: text and arrows as high as ISO-25's.
+    pub fn metric() -> Self {
+        MLeaderStyle { arrow_size: 2.5, text_height: 2.5, landing_gap: 0.625, dogleg: 5.0, ..Default::default() }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct TableStyle {
@@ -633,6 +640,13 @@ pub struct TableStyle {
 impl Default for TableStyle {
     fn default() -> Self {
         TableStyle { name: "Standard".into(), text_height: 0.18, margin: 0.06, title: true, header: true, cell_styles: Vec::new() }
+    }
+}
+
+impl TableStyle {
+    /// The Standard style for metric drawings: text as high as ISO-25's.
+    pub fn metric() -> Self {
+        TableStyle { text_height: 2.5, margin: 1.0, ..Default::default() }
     }
 }
 
@@ -750,6 +764,9 @@ pub struct PageSetup {
     /// Plot objects with their transparency ("Plot transparency"; PLOTTRANSPARENCYOVERRIDE can
     /// override it). The DXF plot layout flags have no bit for it, so it is not saved in DXF.
     pub plot_transparency: bool,
+    /// The layout's paper units are millimetres (plot paper units 1 in DXF) whatever the
+    /// drawing's MEASUREMENT says; otherwise paper units follow MEASUREMENT (#1058).
+    pub paper_mm: bool,
 }
 
 impl Default for PageSetup {
@@ -769,6 +786,7 @@ impl Default for PageSetup {
             lineweights: true,
             show_plot_styles: false,
             plot_transparency: false,
+            paper_mm: false,
         }
     }
 }

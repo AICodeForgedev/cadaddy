@@ -185,6 +185,43 @@ pub fn names(e: &Expr, out: &mut Vec<String>) {
     }
 }
 
+/// `text` with every whole-name use of `old` replaced by `new`; numbers (`1e3`), other names
+/// (`d10` for `d1`) and spacing are left as written.
+pub fn rename(text: &str, old: &str, new: &str) -> String {
+    let b = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while let Some(&c) = b.get(i) {
+        let start = i;
+        if c.is_ascii_digit() || c == b'.' {
+            while b.get(i).is_some_and(|c| c.is_ascii_digit() || *c == b'.') {
+                i += 1;
+            }
+            if b.get(i).is_some_and(|c| *c == b'e' || *c == b'E') {
+                let mut j = i + 1;
+                if b.get(j).is_some_and(|c| *c == b'+' || *c == b'-') {
+                    j += 1;
+                }
+                if b.get(j).is_some_and(u8::is_ascii_digit) {
+                    i = j;
+                    while b.get(i).is_some_and(u8::is_ascii_digit) {
+                        i += 1;
+                    }
+                }
+            }
+        } else if c.is_ascii_alphabetic() || c == b'_' {
+            while b.get(i).is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_') {
+                i += 1;
+            }
+        } else {
+            i += text.get(i..).and_then(|r| r.chars().next()).map_or(1, char::len_utf8);
+        }
+        let token = text.get(start..i).unwrap_or_default();
+        out.push_str(if token == old { new } else { token });
+    }
+    out
+}
+
 /// Evaluate with a variable lookup.
 pub fn eval_with(e: &Expr, lookup: &mut dyn FnMut(&str) -> Result<f64, ExprError>) -> Result<f64, ExprError> {
     let v = match e {
@@ -312,6 +349,13 @@ mod tests {
             chain.insert(&format!("p{i}"), &format!("p{}+1", i + 1));
         }
         assert!(chain.value("p0").is_err());
+    }
+
+    #[test]
+    fn rename_replaces_whole_names_only() {
+        assert_eq!(rename("d1+d10*d1 / (d1_x+2e1)", "d1", "w"), "w+d10*w / (d1_x+2e1)");
+        assert_eq!(rename("1e2+e", "e", "x"), "1e2+x");
+        assert_eq!(rename("é+a", "a", "b"), "é+b");
     }
 
     #[test]

@@ -11,12 +11,12 @@ use cadcraft_geom::Vec3;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{Result, Session};
+use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
-        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>}"),
+        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>; dimensions: textOverride, dimStyle, textHeight, arrowSize, dimScale, precision (per-dimension overrides)}"),
         CommandSpec::new("matchprop", "Match Properties", matchprop::run_matchprop)
             .menu(&["Modify", "Match Properties"])
             .alias(&["ma", "painter"])
@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("-linetype", "Linetype", run_linetype).params("{current?, load?, file? | text?, reload?} (as LINETYPE)").interactive(|_| Ok(Box::new(linfile::DashLinetype::new()))),
         CommandSpec::new("lweight", "Lineweight...", run_lweight).menu(&["Format", "Lineweight..."]).alias(&["lw", "lineweight"]).params("{lineweight: mm | ByLayer}"),
-        CommandSpec::new("ltscale", "Linetype Scale", run_ltscale).alias(&["lts"]).params("{scale}"),
+        CommandSpec::new("ltscale", "Linetype Scale", run_ltscale).alias(&["lts"]).params("{scale}").interactive(|_| Ok(Box::new(LtscaleM))),
         CommandSpec::new("units", "Units...", run_units).menu(&["Format", "Units..."]).alias(&["un"]).params("{lunits?: 1..5, luprec?: 0..8, aunits?: 0..4, auprec?: 0..8, insunits?}"),
         CommandSpec::new("limits", "Drawing Limits", run_limits).menu(&["Format", "Drawing Limits"]).params("{min: [x,y], max: [x,y]}"),
         CommandSpec::new("style", "Text Style...", run_style)
@@ -203,6 +203,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let dim_style = str_param(p, "dimStyle")
         .map(|n| d.dim_style(n).map(|st| st.name.clone()).ok_or_else(|| bad("properties.set", format!("dimension style `{n}` not found"))))
         .transpose()?;
+    let dim_over = dim_overrides(p)?;
     let anno_scale = d.current_anno_scale();
     for h in &hs {
         d.modify_entity(*h, |e| {
@@ -374,6 +375,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                         dm.style.clone_from(st);
                         dm.block = None;
                     }
+                    if !dim_over.is_empty() {
+                        dm.overrides.extend(dim_over.clone());
+                        dm.block = None;
+                    }
                 }
                 EntityKind::Hatch(h) => {
                     if let Some(v) = str_param(p, "pattern") {
@@ -469,6 +474,39 @@ fn run_ltscale(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.doc_mut()?.header.set_f64("LTSCALE", v);
     Ok(json!({ "message": "Regenerating model." }))
+}
+
+/// Typed LTSCALE: "Enter new linetype scale factor <1.0000>:".
+struct LtscaleM;
+
+impl Interactive for LtscaleM {
+    fn name(&self) -> &'static str {
+        "LTSCALE"
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        let cur = s.doc().map(|d| d.header.f64("LTSCALE", 1.0)).unwrap_or(1.0);
+        Prompt::new("Enter new linetype scale factor", Accept::NUMBER).default(format!("{cur:.4}"))
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        let text = match i {
+            Input::Enter | Input::Cancel => return Ok(Step::Done),
+            Input::Text(t) => t,
+            _ => return Ok(Step::Continue),
+        };
+        let scale = text.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0);
+        match scale.map(|v| run_ltscale(s, &json!({ "scale": v }))) {
+            Some(Ok(r)) => {
+                if let Some(m) = r.get("message").and_then(Value::as_str) {
+                    s.echo(m.to_string());
+                }
+                Ok(Step::Done)
+            }
+            _ => {
+                s.echo("Requires a positive number.");
+                Ok(Step::Continue)
+            }
+        }
+    }
 }
 
 fn run_units(s: &mut Session, p: &Value) -> Result<Value> {
@@ -829,6 +867,26 @@ fn run_dimstyle_delete(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("dimstyle.delete", format!("no dimension style `{name}`")));
     }
     Ok(dimstyles_json(d))
+}
+
+/// A dimension's text height, arrow size, overall scale (DIMSCALE) and precision as Properties
+/// sets them: per-dimension overrides, as in AutoCAD's Properties palette.
+fn dim_overrides(p: &Value) -> Result<serde_json::Map<String, Value>> {
+    let mut o = serde_json::Map::new();
+    for (key, field, zero_ok) in [("textHeight", "textHeight", false), ("arrowSize", "arrowSize", true), ("dimScale", "scale", false)] {
+        if let Some(v) = p.get(key).filter(|v| !v.is_null()) {
+            let x = v
+                .as_f64()
+                .filter(|x| x.is_finite() && (*x > 0.0 || (zero_ok && *x == 0.0)))
+                .ok_or_else(|| bad("properties.set", format!("`{key}` must be a positive number")))?;
+            o.insert(field.into(), json!(x));
+        }
+    }
+    if let Some(v) = p.get("precision").filter(|v| !v.is_null()) {
+        let n = v.as_u64().filter(|n| *n <= 8).ok_or_else(|| bad("properties.set", "`precision` must be 0 to 8 decimal places"))?;
+        o.insert("decimals".into(), json!(n));
+    }
+    Ok(o)
 }
 
 /// Per-dimension style overrides (DIMOVERRIDE): merge fields, or `clear` them.

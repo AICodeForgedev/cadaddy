@@ -963,7 +963,7 @@
 	Viewport {id}	视口 {id}
 	Viewports	视口
 	W	W
-	WCS ⌄	WCS ⌄
+	WCS	WCS
 	White	白色
 	Width factor	宽度因子
 	Window	窗口
@@ -1116,3 +1116,33 @@
 	Polar angle measurement	极轴角测量
 	Relative to last segment	相对于上一线段
 	Show command prompting near the crosshairs	在光标附近显示命令提示
+	Open Recent	打开最近的图形
+	Sheet Books to PDF...	图纸册转 PDF...
+	Drawing Recovery Manager...	图形恢复管理器...
+	Named Views...	命名视图...
+	Polygonal Viewport	多边形视口
+	From Template...	来自模板...
+	Layouts	布局
+	Printer/plotter	打印机/绘图仪
+	Paper size	图纸尺寸
+	Orientation	方向
+	Portrait	纵向
+	Landscape	横向
+	Plot area	打印区域
+	Fit to paper	布满图纸
+	Center the plot	居中打印
+	Plot object lineweights	打印对象线宽
+	Plot transparency	打印透明度
+	Apply to Layout	应用到布局
+	Preview	预览
+	Load Application...	加载应用程序...
+	Enter name of LISP file to load	输入要加载的 LISP 文件名
+	Enter geometric characteristic	输入几何特征
+	Enter block names to extract	输入要提取的块名
+	Limits	边界
+	Plot offset	打印偏移
+	X offset (mm)	X 偏移 (mm)
+	Y offset (mm)	Y 偏移 (mm)
+	First corner	第一角点
+	Opposite corner	对角点
+	Window <	窗口 <
