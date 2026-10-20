@@ -440,6 +440,8 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("TDCREATE", 40),
     ("TDUPDATE", 40),
     ("HYPERLINKBASE", 1),
+    ("FINGERPRINTGUID", 2),
+    ("VERSIONGUID", 2),
 ];
 
 fn header_vars(w: &mut W, d: &Drawing) {

@@ -607,6 +607,7 @@ dependencies = [
  "cadaddy-engine",
  "cadaddy-io",
  "cadaddy-ui-egui",
+ "clipboard-win",
  "ed25519-dalek",
  "eframe",
  "egui",
@@ -702,6 +703,7 @@ dependencies = [
  "cadaddy-walk3d",
  "chrono",
  "craft-docpath",
+ "image",
  "log",
  "miniz_oxide 0.8.9",
  "rayon",
@@ -727,6 +729,7 @@ dependencies = [
 name = "cadaddy-geom"
 version = "0.7.8"
 dependencies = [
+ "craft-docpath",
  "serde",
 ]
 
@@ -737,6 +740,7 @@ dependencies = [
  "cadaddy-color",
  "cadaddy-doc",
  "cadaddy-dwg",
+ "cadaddy-dwgcodec",
  "cadaddy-dxf",
  "cadaddy-fonts",
  "cadaddy-geom",

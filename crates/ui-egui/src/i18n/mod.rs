@@ -41,10 +41,18 @@ pub enum Preference {
     Arabic,
     #[serde(rename = "ja")]
     Japanese,
+    #[serde(rename = "zh-TW")]
+    TraditionalChinese,
+    #[serde(rename = "pl")]
+    Polish,
+    #[serde(rename = "hu")]
+    Hungarian,
+    #[serde(rename = "tr")]
+    Turkish,
 }
 
 impl Preference {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 19] = [
         Self::Auto,
         Self::English,
         Self::Ukrainian,
@@ -60,6 +68,10 @@ impl Preference {
         Self::Swedish,
         Self::Arabic,
         Self::Japanese,
+        Self::TraditionalChinese,
+        Self::Polish,
+        Self::Hungarian,
+        Self::Turkish,
     ];
 
     /// The codes a preference can be given as, for messages ("auto, en or uk").
@@ -88,6 +100,10 @@ impl Preference {
             Self::Swedish => "sv",
             Self::Arabic => "ar",
             Self::Japanese => "ja",
+            Self::TraditionalChinese => "zh-TW",
+            Self::Polish => "pl",
+            Self::Hungarian => "hu",
+            Self::Turkish => "tr",
         }
     }
 
@@ -120,6 +136,10 @@ impl Preference {
                     "Japanese"
                 }
             }
+            Self::TraditionalChinese => "繁體中文",
+            Self::Polish => "Polski",
+            Self::Hungarian => "Magyar",
+            Self::Turkish => "Türkçe",
         }
     }
 
@@ -148,6 +168,10 @@ impl Preference {
             Self::Swedish => "sv",
             Self::Arabic => "ar",
             Self::Japanese => "ja",
+            Self::TraditionalChinese => "zh-TW",
+            Self::Polish => "pl",
+            Self::Hungarian => "hu",
+            Self::Turkish => "tr",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -164,7 +188,7 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 14] = [
+pub static LANGUAGES: [Language; 18] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language {
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
@@ -201,18 +225,37 @@ pub static LANGUAGES: [Language; 14] = [
     Language { code: "ar", name: "العربية", source: include_str!("ar.tsv"), plural: plural_arabic, plural_forms: 6, catalog: OnceLock::new() },
     // Japanese has one integer plural form and needs a font with kana and kanji.
     Language { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_ko, plural_forms: 1, catalog: OnceLock::new() },
+    // Traditional Chinese (Taiwan): like Simplified, no grammatical plural; the glyphs come from
+    // an installed CJK font (a Traditional face first where there is one: `theme::cjk_font`).
+    Language { code: "zh-TW", name: "繁體中文", source: include_str!("zh_tw.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    // Polish integer plurals (CLDR `pl`): one (1), few (2–4, 22–24 …), many (0, 5–21, 25 …).
+    Language { code: "pl", name: "Polski", source: include_str!("pl.tsv"), plural: plural_pl, plural_forms: 3, catalog: OnceLock::new() },
+    // Hungarian and Turkish keep a noun singular after a number: one, other (usually the same).
+    Language { code: "hu", name: "Magyar", source: include_str!("hu.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    Language { code: "tr", name: "Türkçe", source: include_str!("tr.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
 ];
 
 /// BCP 47 and POSIX locale tags, including `uk-UA`, `uk_UA.UTF-8` and `pt_BR.UTF-8`.
-/// A catalog is chosen by the tag's primary language, so any `pt-*` tag selects `pt-BR`.
+/// A catalog is chosen by the tag's primary language, so any `pt-*` tag selects `pt-BR`; Chinese
+/// in Traditional script (`zh-TW`, `zh-HK`, `zh-MO`, `zh-Hant…`) selects `zh-TW`.
 pub fn locale_language(tag: &str) -> Option<&'static str> {
-    let primary = tag.trim().split(['-', '_', '.', '@']).next()?;
+    let mut parts = tag.trim().split(['-', '_', '.', '@']);
+    let primary = parts.next()?;
+    if primary.eq_ignore_ascii_case("zh") && parts.take(2).any(|p| ["tw", "hk", "mo", "hant"].contains(&p.to_ascii_lowercase().as_str())) {
+        return Some("zh-TW");
+    }
     LANGUAGES.iter().find(|l| l.code.split('-').next().is_some_and(|p| p.eq_ignore_ascii_case(primary))).map(|l| l.code)
 }
 
 thread_local! {
     // Scoped to a single app's render. Headless calls and parallel tests default to English.
     static CURRENT: Cell<&'static str> = const { Cell::new("en") };
+}
+
+/// The language being drawn: background work started from the interface takes it along
+/// ([`with_language`]) so its messages read in the same language.
+pub fn current() -> &'static str {
+    CURRENT.get()
 }
 
 pub fn with_language<R>(language: &'static str, draw: impl FnOnce() -> R) -> R {
@@ -404,6 +447,15 @@ pub fn plural_arabic(n: u64) -> usize {
 
 fn plural_en(n: u64) -> usize {
     usize::from(n != 1)
+}
+
+/// Polish integer plurals: one (1), few (2–4, 22–24, 32–34 … but not 12–14), many (the rest).
+pub fn plural_pl(n: u64) -> usize {
+    match (n, n % 10, n % 100) {
+        (1, _, _) => 0,
+        (_, 2..=4, r) if !(12..=14).contains(&r) => 1,
+        _ => 2,
+    }
 }
 
 /// Czech integer plurals: one (1), few (2–4), other (0 and 5 or more).

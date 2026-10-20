@@ -735,6 +735,13 @@ fn split_runs(pts: &[Vec2]) -> (Vec<Vec<Vec2>>, Vec<Vec<Vec2>>) {
     (runs, arcs)
 }
 
+/// Each level's name and base point: the sheet point that maps to the building origin (its
+/// `base`, else the lower-left corner of its walls). Exports place each level's objects by it, so
+/// plans drawn side by side on one sheet stack as storeys.
+pub fn level_bases(d: &Drawing, rules: &Rules) -> Vec<(String, Vec2)> {
+    rules.levels.iter().map(|l| (l.name.clone(), base_point(d, rules, l))).collect()
+}
+
 /// The sheet point mapped to the building origin for a level.
 fn base_point(d: &Drawing, rules: &Rules, l: &Level) -> Vec2 {
     if let Some([x, y]) = l.base {

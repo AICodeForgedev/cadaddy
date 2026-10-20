@@ -269,6 +269,9 @@ pub struct DocState {
     /// What the first DWG or DXF save of the drawing couldn't keep, feature by feature
     /// (`{path, format, losses}`), for the app to show once in a dialog; taken by the app.
     pub exchange_notice: Option<serde_json::Value>,
+    /// That check running in the background ([`Session::background_checks`]): its result, once
+    /// there, becomes the notice ([`Session::poll_background`]).
+    pub kept_job: Option<cmd::file::KeptJob>,
     /// The .cdy file this drawing was last saved to or read from, and what it holds: the next
     /// save there appends only what changed ([`cmd::file::CdySaved`]).
     pub cdy_saved: Option<cmd::file::CdySaved>,
@@ -322,6 +325,7 @@ impl DocState {
             loss_warned: false,
             kept_checked: false,
             exchange_notice: None,
+            kept_job: None,
             cdy_saved: None,
             wallgen: None,
             model_record: None,
@@ -615,6 +619,8 @@ pub struct Settings {
     /// 2 layer, 4 linetype, 8 linetype scale, 16 lineweight, 32 plot style, 64 object style,
     /// 128 name).
     pub selectsimilarmode: u32,
+    /// REDIRMODE: what REDIR changes paths in (any of `styles`, `xrefs`, `images`, `rtext`).
+    pub redirmode: Vec<String>,
     pub otrack: bool,
     /// PICKBOX in pixels.
     pub pickbox: f64,
@@ -728,6 +734,7 @@ impl Default for Settings {
             plot_transparency_override: 1,
             selectioncycling: 2,
             selectsimilarmode: 130,
+            redirmode: ["styles", "xrefs", "images", "rtext"].map(String::from).to_vec(),
             otrack: true,
             pickbox: 3.0,
             aperture: 10.0,
@@ -1021,6 +1028,9 @@ pub struct Session {
     pub last_render: Option<RenderResult>,
     /// Where `clipboard` came from and the layers, styles and blocks its objects need.
     pub clipboard_source: Option<cmd::clipboard::ClipSource>,
+    /// What the operating system's clipboard holds that isn't CADaddy objects (an image or text
+    /// copied in another program), as the front end last read it: PASTESPEC and PASTECLIP paste it.
+    pub system_clipboard: cmd::clipboard::SystemContents,
     /// The window last picked with PLOTWINDOW (the Plot dialog's "Window <").
     pub plot_window: Option<cadaddy_geom::Bounds2>,
     /// AutoLISP: each drawing's symbols and the routine running ([`lisp`]).
@@ -1033,6 +1043,37 @@ pub struct Session {
     pub agent: agent::AgentGuard,
     /// What happened, for agents watching (`events.subscribe` / `events.poll`).
     pub events: events::EventLog,
+    /// Slow checks after a save run on a worker thread (the app turns this on): the first DWG or
+    /// DXF save of a drawing returns once the file is written, and what that file doesn't keep
+    /// comes later ([`Self::poll_background`]). Off (scripts, the CLI, tests), the save's result
+    /// holds it.
+    pub background_checks: bool,
+}
+
+/// Give a new drawing its own FINGERPRINTGUID (as AutoCAD does): kept in DWG, DXF and .cdy, it
+/// tells drawings apart (IFC export seeds its GlobalIds with it, so two drawings' never collide).
+pub fn fresh_fingerprint(d: &mut Drawing) {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |t| t.as_nanos() as u64);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mix = |mut z: u64| {
+        z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    let seed = nanos ^ n.rotate_left(17);
+    let (hi, lo) = (mix(seed), mix(seed ^ 0xA5A5_5A5A_DEAD_BEEF));
+    let g = format!(
+        "{{{:08X}-{:04X}-{:04X}-{:04X}-{:012X}}}",
+        hi >> 32,
+        (hi >> 16) & 0xFFFF,
+        // Version 4 (random) and the RFC 4122 variant.
+        (hi & 0x0FFF) | 0x4000,
+        ((lo >> 48) & 0x3FFF) | 0x8000,
+        lo & 0xFFFF_FFFF_FFFF
+    );
+    d.header.set_str("FINGERPRINTGUID", &g);
 }
 
 impl Default for Session {
@@ -1094,14 +1135,33 @@ impl Session {
             last_used: LastUsed::default(),
             last_render: None,
             clipboard_source: None,
+            system_clipboard: cmd::clipboard::SystemContents::default(),
             plot_window: None,
             lisp: lisp::LispState::default(),
             lisp_last: None,
             hatch_picks: None,
             agent: agent::AgentGuard::default(),
             events: events::EventLog::default(),
+            background_checks: false,
         }
     }
+    /// Take the results of background checks that have finished: what a DWG or DXF save didn't
+    /// keep becomes the drawing's exchange notice and a command-line line. Cheap when none run.
+    pub fn poll_background(&mut self) {
+        let mut lines = Vec::new();
+        for st in &mut self.docs {
+            let Some(done) = st.kept_job.as_ref().and_then(cmd::file::KeptJob::take) else { continue };
+            st.kept_job = None;
+            if let Some((notice, line)) = done {
+                st.exchange_notice = Some(notice);
+                lines.push(line);
+            }
+        }
+        for l in lines {
+            self.echo(l);
+        }
+    }
+
     pub fn new_drawing(&mut self, metric: bool) -> usize {
         self.add_new_drawing(metric, false)
     }
@@ -1113,6 +1173,7 @@ impl Session {
     fn add_new_drawing(&mut self, metric: bool, viewports: bool) -> usize {
         self.untitled_counter += 1;
         let mut d = if metric { Drawing::new_metric() } else { Drawing::new_imperial() };
+        fresh_fingerprint(&mut d);
         if viewports {
             cmd::layout::default_viewports(&mut d);
         }
@@ -1262,6 +1323,7 @@ impl Session {
 
     /// Run a command with JSON parameters (no dialogs). Records undo when the drawing changes.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        self.poll_background();
         // An agent's outermost call: a dry run or a confirmation first ([`agent`]).
         if self.journal.is_outer()
             && let Some(r) = self.guard_call(id, params)

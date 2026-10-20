@@ -1,0 +1,195 @@
+# CADaddy engine messages in Turkish: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	Bir grup adı girin
+	Pick internal point	İç noktayı seçin
+	Specify the pattern origin	Desen başlangıç noktasını belirtin
+	Specify the incrementing elevation between rows	Satırlar arasındaki artan yüksekliği belirtin
+	Specify the angle to fill (+=ccw, -=cw)	Doldurulacak açıyı belirtin (+=saat yönü tersi, -=saat yönü)
+	Select hatch object	Tarama nesnesini seçin
+	Red, Green, Blue	Kırmızı, Yeşil, Mavi
+	Enter the number of rows	Satır sayısını girin
+	Enter the number of levels	Seviye sayısını girin
+	Enter new layer name	Yeni katman adını girin
+	Specify width	Genişliği belirtin
+	Specify the angle between items	Öğeler arasındaki açıyı belirtin
+	Specify text height	Metin yüksekliğini belirtin
+	Specify start tangent	Başlangıç teğetini belirtin
+	Specify end tangent	Bitiş teğetini belirtin
+	Specify reference length	Referans uzunluğunu belirtin
+	Specify other corner	Diğer köşeyi belirtin
+	Specify next point or [Undo]	Sonraki noktayı belirtin veya [Undo]
+	Specify new location	Yeni konumu belirtin
+	Specify new length	Yeni uzunluğu belirtin
+	Specify length of line	Çizgi uzunluğunu belirtin
+	Specify displacement	Yer değiştirmeyi belirtin
+	Specify angle for dimension text	Ölçü metni için açıyı belirtin
+	Select viewports	Görünüm pencerelerini seçin
+	Select object to break dimension	Kesilecek ölçü nesnesini seçin
+	Select group	Grup seçin
+	Select grip to edit array	Diziyi düzenlemek için tutamaç seçin
+	Select a table	Bir tablo seçin
+	Select a boundary to remove	Kaldırılacak sınırı seçin
+	Rotate arrayed items?	Dizi öğeleri döndürülsün mü?
+	Erase polyline?	Çoklu çizgi silinsin mi?
+	Enter viewport arrangement	Görünüm penceresi düzenini girin
+	Enter transparency value (0-90)	Saydamlık değerini girin (0-90)
+	Enter the number of operations to undo	Geri alınacak işlem sayısını girin
+	Enter the number of columns	Sütun sayısını girin
+	Enter number of items in array	Dizideki öğe sayısını girin
+	Enter new layer state name	Yeni katman durumu adını girin
+	Enter new color	Yeni rengi girin
+	Enter name of new layout	Yeni düzenin adını girin
+	Enter layer name	Katman adını girin
+	Enter file name	Dosya adını girin
+	Enter color name or number (1-255)	Renk adını veya numarasını girin (1-255)
+	Enter a configuration option	Bir yapılandırma seçeneği girin
+	Base point	Baz noktası
+	Word-wrap the combined Mtext?	Birleştirilen çok satırlı metin sözcük kaydırmalı olsun mu?
+	Where should the data go?	Veriler nereye gitsin?
+	Verify each name to be purged?	Temizlenecek her ad doğrulansın mı?
+	Use landing	Yatay kısım kullan
+	Type of boundary object	Sınır nesnesinin türü
+	Specify width factor	Genişlik faktörünü belirtin
+	Specify tolerance	Toleransı belirtin
+	Specify the tangent direction for the start point of arc	Yayın başlangıç noktası için teğet yönünü belirtin
+	Specify the reference angle	Referans açısını belirtin
+	Specify the new angle	Yeni açıyı belirtin
+	Specify text width	Metin genişliğini belirtin
+	Specify temporary OTRACK point	Geçici OTRACK noktasını belirtin
+	Invalid option keyword.	Geçersiz seçenek anahtar sözcüğü.
+	*Invalid selection*	*Geçersiz seçim*
+	Requires a valid angle.	Geçerli bir açı gerekli.
+	Nothing to undo.	Geri alınacak bir şey yok.
+	Invalid point.	Geçersiz nokta.
+	No viewport found there.	Orada görünüm penceresi bulunamadı.
+	*Cancel*	*İptal*
+	Requires a positive number.	Pozitif bir sayı gerekli.
+	No hatch selected.	Tarama seçilmedi.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Komuta Model sekmesinde izin verilmez ** (önce bir düzene geçin)
+	Select a multileader.	Bir çoklu kılavuz seçin.
+	No line or arc to continue.	Devam edilecek çizgi veya yay yok.
+	Revision cloud finished.	Revizyon bulutu tamamlandı.
+	Object selected is not a circle or arc.	Seçilen nesne bir daire veya yay değil.
+	Select a linear or aligned dimension.	Doğrusal veya hizalı bir ölçü seçin.
+	Object selected is not a dimension.	Seçilen nesne bir ölçü değil.
+	No dimensions selected.	Ölçü seçilmedi.
+	Requires a number.	Bir sayı gerekli.
+	0 found	0 bulundu
+	The feature control frame is empty.	Geometrik tolerans çerçevesi boş.
+	1 was on a locked layer.	1 tanesi kilitli bir katmandaydı.
+	Row elevations need an associative array; the copies stay at the same elevation.	Satır yükseklikleri ilişkisel bir dizi gerektirir; kopyalar aynı yükseklikte kalır.
+	Point or option keyword required.	Nokta veya seçenek anahtar sözcüğü gerekli.
+	Enter Yes or No.	Yes veya No girin.
+	Viewport created, zoomed to the model extents.	Görünüm penceresi oluşturuldu, model kapsamına yakınlaştırıldı.
+	No object found.	Nesne bulunamadı.
+	The object is not a table.	Nesne bir tablo değil.
+	No table there.	Orada tablo yok.
+	A transparent command is already in progress.	Bir saydam komut zaten devam ediyor.
+	Invalid class name.	Geçersiz sınıf adı.
+	Invalid group name.	Geçersiz grup adı.
+	Too many point modifiers.	Çok fazla nokta değiştiricisi.
+	No leader to remove.	Kaldırılacak kılavuz çizgisi yok.
+	Requires a non-negative number.	Negatif olmayan bir sayı gerekli.
+	Clipboard is empty.	Pano boş.
+	1 object was on a locked layer.	1 nesne kilitli bir katmandaydı.
+	Circle does not exist.	Daire mevcut değil.
+	Enter Length or Area.	Length veya Area girin.
+	Enter a percentage from 0 to 1000.	0 ile 1000 arasında bir yüzde girin.
+	Enter Table, File or None.	Table, File veya None girin.
+	Cannot measure that object.	Bu nesne ölçülemez.
+	Third pair ignored (2D align).	Üçüncü çift yoksayıldı (2D hizalama).
+	Insert mode: Copy (nested objects are copied as independent objects).	Ekleme modu: Kopya (iç içe nesneler bağımsız nesneler olarak kopyalanır).
+	Everything has been undone	Her şey geri alındı
+	Everything has been undone.	Her şey geri alındı.
+	Requires a non-negative number or Auto.	Negatif olmayan bir sayı veya Auto gerekli.
+	Select a dimension.	Bir ölçü seçin.
+	Object cannot be dimensioned this way.	Nesne bu şekilde ölçülendirilemez.
+	Select an arc, circle or line.	Bir yay, daire veya çizgi seçin.
+	The two points must be different.	İki nokta farklı olmalıdır.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Devam edilecek doğrusal ölçü yok. Önce DIMLINEAR ile bir tane oluşturun.
+	A multileader needs a leader line or content; nothing was drawn.	Çoklu kılavuz bir kılavuz çizgisi veya içerik gerektirir; hiçbir şey çizilmedi.
+	Requires the name of a block defined in the drawing.	Çizimde tanımlı bir bloğun adı gerekli.
+	Invalid option.	Geçersiz seçenek.
+	The boundary encloses none of the image.	Sınır görüntünün hiçbir kısmını çevrelemiyor.
+	The object is not an image.	Nesne bir görüntü değil.
+	The image has no clipping boundary.	Görüntünün kırpma sınırı yok.
+	No images selected.	Görüntü seçilmedi.
+	Requires an integer between 0 and 100.	0 ile 100 arasında bir tamsayı gerekli.
+	The selected object has no area.	Seçilen nesnenin alanı yok.
+	No such object	Böyle bir nesne yok
+	Requires a point.	Bir nokta gerekli.
+	Requires a distance.	Bir mesafe gerekli.
+	The object is on a locked layer.	Nesne kilitli bir katmanda.
+	Value must be positive and nonzero.	Değer pozitif ve sıfırdan farklı olmalıdır.
+	Requires an angle.	Bir açı gerekli.
+	Requires a point or option keyword.	Bir nokta veya seçenek anahtar sözcüğü gerekli.
+	Object does not intersect a cutting edge.	Nesne bir kesme kenarıyla kesişmiyor.
+	Object does not intersect an edge.	Nesne bir kenarla kesişmiyor.
+	Lines are parallel.	Çizgiler paralel.
+	The Block Editor is not open.	Blok Düzenleyici açık değil.
+	Requires a positive integer.	Pozitif bir tamsayı gerekli.
+	Answer Yes or No.	Yes veya No yanıtını verin.
+	Requires a valid point.	Geçerli bir nokta gerekli.
+	No reference objects	Referans nesnesi yok
+	Requires an angle or point.	Bir açı veya nokta gerekli.
+	Requires a positive distance.	Pozitif bir mesafe gerekli.
+	Requires a non-negative distance.	Negatif olmayan bir mesafe gerekli.
+	No such grip	Böyle bir tutamaç yok
+	Requires a template file name.	Bir şablon dosya adı gerekli.
+	A hatch needs at least one boundary: erase it instead.	Taramanın en az bir sınırı olmalıdır: bunun yerine taramayı silin.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Geri alma kapalı (UNDO Control None); UNDO Control All bunu açar.
+	Enter ON or OFF.	ON veya OFF girin.
+	Not a linear dimension.	Doğrusal bir ölçü değil.
+	Valid hatch boundary not found.	Geçerli tarama sınırı bulunamadı.
+	No closed boundary objects selected.	Kapalı sınır nesnesi seçilmedi.
+	Requires a name.	Bir ad gerekli.
+	That option doesn't apply to this grip.	Bu seçenek bu tutamaç için geçerli değil.
+	That would make a degenerate object.	Bu, bozuk bir nesne oluşturur.
+	No tangent or perpendicular from the last point.	Son noktadan teğet veya dik yok.
+	Requires numeric distance or second point.	Sayısal mesafe veya ikinci nokta gerekli.
+	Edge endpoints must differ.	Kenar uç noktaları farklı olmalıdır.
+	Requires numeric distance or point.	Sayısal mesafe veya nokta gerekli.
+	Requires a positive height.	Pozitif bir yükseklik gerekli.
+	No objects found.	Nesne bulunamadı.
+	Requires a non-zero number.	Sıfırdan farklı bir sayı gerekli.
+	Circle must intersect cutting edges at two or more points.	Daire kesme kenarlarıyla iki veya daha fazla noktada kesişmelidir.
+	Arc cannot be full 360 degrees.	Yay tam 360 derece olamaz.
+	Cannot break that object.	Bu nesne kesilemez.
+	An object is on a locked layer.	Bir nesne kilitli bir katmanda.
+	Objects are not connected.	Nesneler bağlı değil.
+	The two points must differ.	İki nokta farklı olmalıdır.
+	Mirror line points must differ.	Ayna çizgisi noktaları farklı olmalıdır.
+	No drawing is open.	Açık çizim yok.
+	Command: {}	Komut: {}
+	Unknown command "{}". Press F1 for help.	Bilinmeyen komut "{}". Yardım için F1 tuşuna basın.
+	{} found	{} bulundu
+	{} found, {} total	{} bulundu, toplam {}
+	Distance = {}	Mesafe = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Mesafe = {},  XY Düzlemindeki Açı = {},  XY Düzleminden Açı = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Delta X = {},  Delta Y = {},   Delta Z = {}
+	Area = {}, Perimeter = {}	Alan = {}, Çevre = {}
+	Total area = {}	Toplam alan = {}
+	Resuming {} command.	{} komutuna devam ediliyor.
+	Invalid input: {}	Geçersiz giriş: {}
+	{} were on a locked layer.	{} tanesi kilitli bir katmandaydı.
+	{} dimension(s) changed.	{} ölçü değiştirildi.
+	Group {} ungrouped.	{} grubu çözüldü.
+	{} object(s) flattened.	{} nesne düzleştirildi.
+	Group {} renamed to {}.	{} grubunun adı {} olarak değiştirildi.
+	{} object(s) added to group {}.	{} nesne {} grubuna eklendi.
+	{} object(s) removed from group {}.	{} nesne {} grubundan kaldırıldı.
+	{} lines were chamfered	{} çizgiye pah kırıldı
+	{} lines were filleted	{} çizgi yuvarlatıldı
+	{} objects joined into 1 {}	{} nesne 1 {} olarak birleştirildi
+	Current dimension style:  {}	Geçerli ölçü stili:  {}
+	Wrote {}	{} yazıldı
+	{} is already open.	{} zaten açık.
+	{} dimension(s) created.	{} ölçü oluşturuldu.
+	BOUNDARY created {} polyline(s)	BOUNDARY {} çoklu çizgi oluşturdu
+	Current line-width is {}	Geçerli çizgi genişliği {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Bilinmeyen değişken {}. Değişkenleri listelemek için SETVAR ? yazın.
+	{} = {} (read only)	{} = {} (salt okunur)
+	Dimension text = {}	Ölçü metni = {}
+	{} segments added to polyline	Çoklu çizgiye {} parça eklendi

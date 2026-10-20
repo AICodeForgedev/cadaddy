@@ -1121,6 +1121,7 @@ mod tests {
             pick_save_image: None,
             pick_pdf: None,
             read_clipboard: None,
+            system_clipboard: None,
             thumbnail: None,
             pick_image: None,
             pick_open: None,

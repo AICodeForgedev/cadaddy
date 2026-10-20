@@ -23,6 +23,7 @@ mod native_menu;
 mod printing;
 mod relsig;
 mod spacemouse;
+mod sysclip;
 mod system_animations;
 mod updater;
 mod workspace;
@@ -39,11 +40,32 @@ struct App {
     system_animations: system_animations::SystemAnimations,
     workspace: workspace::Workspace,
     workspace_error: Option<String>,
+    /// Frames left to check that the first window fits its screen ([`too_big_for`]).
+    fit_frames: u8,
     #[cfg(target_os = "macos")]
     native_menu: Option<native_menu::NativeMenu>,
 }
 
 impl App {
+    /// The first window is 1600 × 1000 points; on a smaller screen (a 4K laptop at 250 %, a
+    /// 1366 × 768 one) it reached past the screen, title bar buttons and all. It opens maximised
+    /// there instead. The monitor's size comes in after a frame or two.
+    fn fit_first_window(&mut self, ctx: &egui::Context) {
+        if self.fit_frames == 0 {
+            return;
+        }
+        self.fit_frames -= 1;
+        let (outer, monitor) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().monitor_size));
+        if let (Some(outer), Some(monitor)) = (outer, monitor) {
+            self.fit_frames = 0;
+            if too_big_for(outer.size(), monitor) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
+        } else {
+            ctx.request_repaint();
+        }
+    }
+
     fn persist_workspace(&mut self, final_attempt: bool) {
         let result = if final_attempt { self.workspace.save_on_exit(&self.cad.ui) } else { self.workspace.save_if_changed(&self.cad.ui) };
         if let Err(error) = result {
@@ -56,6 +78,13 @@ impl App {
             self.workspace_error = None;
         }
     }
+}
+
+/// Whether a window of `window` points doesn't fit a monitor of `monitor` points (sizes that
+/// aren't known yet, or aren't numbers, never count as too big).
+fn too_big_for(window: egui::Vec2, monitor: egui::Vec2) -> bool {
+    let known = |v: egui::Vec2| v.x.is_finite() && v.y.is_finite() && v.x > 0.0 && v.y > 0.0;
+    known(window) && known(monitor) && (window.x > monitor.x || window.y > monitor.y)
 }
 
 /// View ▸ Theme ▸ System resolves against `raw.system_theme`, which winit leaves empty on Linux
@@ -78,6 +107,7 @@ impl eframe::App for App {
             }
         }
         self.cad.system_animations = self.system_animations.current();
+        self.fit_first_window(ctx);
         self.cad.logic(ctx);
         self.spacemouse.poll(&mut self.cad, ctx);
         self.persist_workspace(false);
@@ -171,6 +201,7 @@ fn services() -> Services {
                 .map(|p| p.to_string_lossy().to_string())
         })),
         read_clipboard: Some(Box::new(|| arboard::Clipboard::new().ok()?.get_text().ok())),
+        system_clipboard: Some(Box::new(sysclip::HostClipboard)),
         // Only .cdy files carry a preview; reading one is cheap (the preview chunk alone).
         thumbnail: Some(Box::new(|path: &str| {
             if !path.to_ascii_lowercase().ends_with(".cdy") {
@@ -264,6 +295,13 @@ fn config_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<s
 }
 
 const APP_ID: &str = "dev.aicodeforge.cadaddy";
+
+/// Where eframe keeps the preferences (`app.ron`): inside `CADADDY_CONFIG_DIR` when that is set, so
+/// a test or smoke run with its own settings folder never reads or writes the user's; otherwise
+/// eframe's own folder (`None`), where existing installs have theirs.
+fn persistence_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    var("CADADDY_CONFIG_DIR").filter(|v| !v.is_empty()).map(|d| std::path::PathBuf::from(d).join("app-state"))
+}
 
 /// Stencil bits of the window's render pass (see `NativeOptions::stencil_buffer`).
 const STENCIL_BITS: u8 = 8;
@@ -394,6 +432,7 @@ fn main() -> eframe::Result {
                 .with_title_shown(false)
                 .with_app_id(APP_ID),
             persist_window: false,
+            persistence_path: persistence_dir_from(|k| std::env::var_os(k)),
             // A stencil buffer clips the contents of clipped layout viewports on the GPU.
             stencil_buffer: STENCIL_BITS,
             ..Default::default()
@@ -441,6 +480,8 @@ fn main() -> eframe::Result {
             Box::new(move |cc| {
                 cadaddy_ui_egui::startup::mark("window and graphics");
                 let mut app = CadApp::new(Session::empty(), services());
+                // The first DWG save returns once written; its "not kept" check follows.
+                app.session.background_checks = true;
                 cadaddy_ui_egui::startup::mark("app state");
                 if let Some(note) = fallback {
                     log::warn!("{note}");
@@ -512,7 +553,7 @@ fn main() -> eframe::Result {
                         log::error!("control server: no system randomness for a token; the control channel stays closed");
                     } else {
                         let rx = control_server::start_ports(&ports, cc.egui_ctx.clone(), token.flatten(), config_dir().as_deref());
-                        app = app.with_control(rx);
+                        app = app.with_control(rx, control_port.is_some());
                     }
                 }
                 if sample {
@@ -537,6 +578,7 @@ fn main() -> eframe::Result {
                     spacemouse: spacemouse::SpaceMouse::start(cc.egui_ctx.clone()),
                     workspace,
                     workspace_error,
+                    fit_frames: 30,
                     #[cfg(target_os = "macos")]
                     native_menu: None,
                 }))
@@ -552,7 +594,7 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_dir_from, control_flag, control_port_from, filters_for_save, follow_desktop};
+    use super::{config_dir_from, control_flag, control_port_from, filters_for_save, follow_desktop, persistence_dir_from, too_big_for};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -575,6 +617,17 @@ mod tests {
             let exts: Vec<_> = filters_for_save(name).iter().map(|(_, e)| *e).collect();
             assert!(exts.contains(&"dwg") && exts.contains(&"dxf") && exts.contains(&"cdy"), "{name}");
         }
+    }
+
+    #[test]
+    fn a_first_window_bigger_than_its_screen_is_maximised() {
+        let v = egui::vec2;
+        // 1600 × 1000 points with the frame, on a 3840 × 2400 screen at 250 % (1536 × 960 points).
+        assert!(too_big_for(v(1613.0, 1036.0), v(1536.0, 960.0)));
+        assert!(too_big_for(v(1613.0, 1036.0), v(1366.0, 768.0)));
+        assert!(!too_big_for(v(1613.0, 1036.0), v(1920.0, 1080.0)));
+        assert!(!too_big_for(v(1613.0, 1036.0), v(0.0, 0.0)));
+        assert!(!too_big_for(v(f32::NAN, 1036.0), v(1536.0, 960.0)));
     }
 
     #[test]
@@ -604,6 +657,16 @@ mod tests {
         let empty = [("CADADDY_CONFIG_DIR", ""), ("HOME", ""), ("XDG_CONFIG_HOME", ""), ("APPDATA", "")];
         assert_eq!(config_dir_from(env(&empty)), None, "no usable variable means no directory, not the working directory");
         assert_eq!(config_dir_from(env(&[])), None);
+    }
+
+    #[test]
+    fn preferences_follow_the_override_variable_only() {
+        // A run with its own settings folder keeps app.ron there, away from the user's.
+        let p = persistence_dir_from(env(&[("CADADDY_CONFIG_DIR", "/tmp/cc"), ("HOME", "/home/u")]));
+        assert_eq!(p, Some(PathBuf::from("/tmp/cc/app-state")));
+        // Otherwise eframe's own folder, where installs already have their preferences.
+        assert_eq!(persistence_dir_from(env(&[("HOME", "/home/u")])), None);
+        assert_eq!(persistence_dir_from(env(&[("CADADDY_CONFIG_DIR", "")])), None);
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]

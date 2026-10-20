@@ -315,6 +315,9 @@ fn convert(args: &[String]) -> Result<(), String> {
         }
     }
     let [i, o] = files.as_slice() else { return Err(USAGE.into()) };
+    if !std::path::Path::new(i).exists() {
+        return Err(format!("{i}: no such file or folder"));
+    }
     if std::path::Path::new(i).is_dir() {
         let to = to.ok_or("converting a folder needs --to FORMAT (dwg, dxf, cdy, svg, png, pdf)")?;
         return convert_folder(i, o, &to, recurse, framing);

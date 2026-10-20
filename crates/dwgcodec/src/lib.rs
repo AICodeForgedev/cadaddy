@@ -17,6 +17,7 @@ pub mod bits;
 pub mod classes;
 pub mod crc;
 mod dwg;
+pub mod entities;
 mod error;
 pub mod frame;
 pub mod header;

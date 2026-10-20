@@ -145,6 +145,10 @@ pub fn generate(target: usize, seed: u64) -> Made {
     });
     let mut r = Rng::new(seed);
     let mut s = Session::new();
+    // The same seed, the same drawing: its fingerprint from the seed, not the clock.
+    if let Ok(d) = s.doc_mut() {
+        d.header.set_str("FINGERPRINTGUID", &format!("{{00000000-0000-4000-8000-{:012X}}}", seed & 0xFFFF_FFFF_FFFF));
+    }
     for name in LAYERS {
         if let Ok(d) = s.doc_mut() {
             d.ensure_layer(name);

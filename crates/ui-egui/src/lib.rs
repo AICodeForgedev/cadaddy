@@ -345,6 +345,9 @@ pub struct Services {
     pub pick_image: Option<Box<dyn Fn() -> Option<String>>>,
     /// The system clipboard's text (Paste to Command Line).
     pub read_clipboard: Option<Box<dyn Fn() -> Option<String>>>,
+    /// The system clipboard with its formats (copies as objects and picture, pasting pictures and
+    /// text from other programs); `None`: copies go on it as text through egui.
+    pub system_clipboard: Option<Box<dyn clipboard::SystemClipboard>>,
     /// A drawing file's preview as PNG bytes (a .cdy file's embedded thumbnail), for the Start
     /// page's recent files; `None` when the file has none.
     pub thumbnail: Option<Box<dyn Fn(&str) -> Option<Vec<u8>>>>,
@@ -364,6 +367,8 @@ pub struct CadApp {
     /// The interface's own preferences from the Options dialog ([`options`]).
     pub options: options::UiOptions,
     pub services: Services,
+    /// What was last put on the system clipboard ([`clipboard::mirror`]).
+    pub clip_mirror: clipboard::Mirror,
     pub canvas: canvas::CanvasState,
     /// The PDF Import / Convert PDF to DWG dialog's choices while it is open ([`pdfdlg`]).
     pub pdf: Option<pdfdlg::PdfDialog>,
@@ -389,6 +394,9 @@ pub struct CadApp {
     /// The window title last sent to the OS ("CADaddy - name*"), so it is only sent on a change.
     os_title: String,
     control_rx: Option<Receiver<ControlRequest>>,
+    /// The window was started to be driven (`--control PORT`), not just serving the agent port
+    /// that is on by default.
+    control_scripted: bool,
     pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
     queued_shots: Vec<(u64, f64, u32)>,
     shot_token: u64,
@@ -498,6 +506,7 @@ impl CadApp {
             ui: UiState::default(),
             options: options::UiOptions::default(),
             services,
+            clip_mirror: clipboard::Mirror::default(),
             canvas: canvas::CanvasState::default(),
             pdf: None,
             tol_dlg: None,
@@ -512,6 +521,7 @@ impl CadApp {
             integrated_titlebar: false,
             os_title: String::new(),
             control_rx: None,
+            control_scripted: false,
             pending_shots: Vec::new(),
             queued_shots: Vec::new(),
             shot_token: 0,
@@ -625,14 +635,18 @@ impl CadApp {
         }
     }
 
-    pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
+    /// Serve control requests from `rx`; `scripted` when the window was started with
+    /// `--control PORT` (tests and automation), not only the default agent port.
+    pub fn with_control(mut self, rx: Receiver<ControlRequest>, scripted: bool) -> Self {
         self.control_rx = Some(rx);
+        self.control_scripted = scripted;
         self
     }
 
     /// Run a command programmatically (or a UI command).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         diag::note(&format!("command {id}"));
+        clipboard::before_paste(self, id);
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             return r;
         }
@@ -656,6 +670,7 @@ impl CadApp {
 
     /// Start a command as if typed (interactive when it has prompts).
     pub fn start(&mut self, name: &str) {
+        clipboard::before_paste(self, name);
         if menus::run_ui_command(self, name, &Value::Null).is_some() {
             exchangeloss::take(self, true);
             secureloaddlg::take(self, true);
@@ -673,6 +688,7 @@ impl CadApp {
     pub fn cmdline(&mut self, text: &str) -> Option<String> {
         if !self.session.prompting() {
             let first = text.split_whitespace().next().unwrap_or("");
+            clipboard::before_paste(self, first);
             // `cmd {json}` is a programmatic call: the engine runs it with those parameters.
             let json_form = text.trim_start().get(first.len()..).is_some_and(|rest| rest.trim_start().starts_with('{'));
             let word = first.to_ascii_lowercase();
@@ -802,9 +818,12 @@ impl CadApp {
         }
     }
 
-    /// Whether an agent can drive this window over the control channel (`--control PORT`).
+    /// Whether this window was started to be driven over the control channel (`--control PORT`):
+    /// the update card, the automatic update look and the support banner then stay away. The
+    /// agent port alone (Options ▸ agentControl, on by default) doesn't count, or no default
+    /// install would ever be offered an update.
     pub fn has_control_channel(&self) -> bool {
-        self.control_rx.is_some()
+        self.control_scripted && self.control_rx.is_some()
     }
 
     pub fn set_status(&mut self, s: impl Into<String>) {
@@ -993,6 +1012,8 @@ impl CadApp {
 
     pub fn logic(&mut self, ctx: &egui::Context) {
         let _busy = diag::busy("logic");
+        // Checks a save left running (what a DWG or DXF file didn't keep) report when done.
+        self.session.poll_background();
         self.follow_data_links();
         workspaces::follow(self);
         self.follow_direction();
@@ -1053,9 +1074,17 @@ impl CadApp {
                     || d.text_styles.iter().any(|t| theme::has_cjk(&t.name));
             }
         }
+        // Chinese, Japanese or Korean typed or composed (an input method) in an interface of
+        // another language: the command line and text boxes show it, not missing-glyph boxes.
+        self.needs_cjk |= ctx.input(|i| {
+            i.events.iter().any(|e| match e {
+                egui::Event::Text(t) | egui::Event::Ime(egui::ImeEvent::Commit(t) | egui::ImeEvent::Preedit { text: t, .. }) => theme::has_cjk(t),
+                _ => false,
+            })
+        });
         // The language pickers (the Language dialog, Options) name languages in their own scripts.
         let picker = self.ui.dialog.as_deref().is_some_and(|d| d == "language" || d.starts_with("options"));
-        let cjk = self.needs_cjk || picker || matches!(language, "zh" | "ja" | "ko");
+        let cjk = self.needs_cjk || picker || language.starts_with("zh") || matches!(language, "ja" | "ko");
         if self.fonts_language != Some(language) || (cjk && !self.fonts_cjk) {
             theme::install_fonts(ctx, language, cjk);
             self.fonts_language = Some(language);
@@ -1197,10 +1226,7 @@ impl CadApp {
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
         update::tick(self);
-        update::card(self, ui.ctx());
-        if !self.update.busy() {
-            support::banner(self, ui.ctx());
-        }
+        update::corner(self, ui.ctx());
         if let Some(url) = self.pending_url.take() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }

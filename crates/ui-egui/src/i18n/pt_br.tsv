@@ -2347,3 +2347,54 @@
 	Manage Attributes	Gerenciar atributos
 	Dialog State	Estado da caixa de diálogo
 	Dialog Action	Ação da caixa de diálogo
+	Recover Drawing and Xrefs...	Recuperar desenho e xrefs...
+	Count Blocks	Contar blocos
+	Get Selection Set	Obter conjunto de seleção
+	Global Attribute Edit	Edição global de atributos
+	LISP Function Surfer	Navegador de funções LISP
+	List LISP Symbols	Listar símbolos LISP
+	List Nested Object	Listar objeto aninhado
+	List Object Xdata	Listar dados estendidos do objeto
+	Multiple Polyline Edit	Editar várias polilinhas
+	Redefine Path	Redefinir caminho
+	Redefine Path Mode	Modo de redefinição de caminho
+	Restore Dimension Text	Restaurar texto da cota
+	Revert	Reverter
+	Rotate Blocks	Girar blocos
+	Scale Blocks	Escalar blocos
+	Select Similar by Properties	Selecionar semelhantes por propriedades
+	Show URLs	Mostrar URLs
+	Synchronize Viewports	Sincronizar janelas de visualização
+	Paste Special	Colar especial
+	Paste Special...	Colar especial...
+	Paste as	Colar como
+	Last Measurement	Última medição
+	Perimeter	Perímetro
+	curl isn't available ({error}).	O curl não está disponível ({error}).
+	This build has no release key to check updates with.	Esta compilação não tem uma chave de versão para verificar atualizações.
+	The release's signature files are too large.	Os arquivos de assinatura da versão são grandes demais.
+	The release's signature isn't one CADaddy reads.	A assinatura da versão não está em um formato que o CADaddy lê.
+	The release's signature is missing or damaged.	A assinatura da versão está ausente ou danificada.
+	The release's signature is for another version ({version}).	A assinatura da versão é de outra versão ({version}).
+	The release is signed with a key this build doesn't trust.	A versão está assinada com uma chave em que esta compilação não confia.
+	This build's release key is damaged.	A chave de versão desta compilação está danificada.
+	The release's signature doesn't match its files.	A assinatura da versão não corresponde aos seus arquivos.
+	Couldn't reach GitHub: {why}	Não foi possível acessar o GitHub: {why}
+	GitHub's answer was too large.	A resposta do GitHub era grande demais.
+	GitHub's answer wasn't readable ({error}).	A resposta do GitHub não pôde ser lida ({error}).
+	GitHub's answer has no version.	A resposta do GitHub não tem versão.
+	GitHub's answer has an unreadable version ({version}).	A resposta do GitHub tem uma versão ilegível ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	Não foi possível baixar o arquivo {name} da versão, então nada foi instalado: {why}
+	The release's {name} is too large, so nothing was installed.	O arquivo {name} da versão é grande demais, então nada foi instalado.
+	The release's {name} isn't text, so nothing was installed.	O arquivo {name} da versão não é texto, então nada foi instalado.
+	It wasn't downloaded. Download it from the release page instead.	Ela não foi baixada. Baixe-a pela página da versão.
+	Version {version} isn't newer than this one ({current}).	A versão {version} não é mais recente que esta ({current}).
+	This release isn't signed.	Esta versão não está assinada.
+	The release failed its check.	A versão não passou na verificação.
+	The signed release doesn't list {name}.	A versão assinada não lista {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	A impressão digital do GitHub para {name} difere da assinada.
+	Couldn't make the folder {folder}: {error}	Não foi possível criar a pasta {folder}: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	O download não correspondeu à impressão digital SHA-256 publicada, então não foi instalado.
+	Couldn't read the download: {error}	Não foi possível ler o download: {error}
+	The download failed: {why}	O download falhou: {why}
+	This release has no installer for this computer yet.	Esta versão ainda não tem instalador para este computador.

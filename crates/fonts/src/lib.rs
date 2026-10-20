@@ -562,6 +562,8 @@ pub struct TextParams {
     pub backwards: bool,
     /// Mirrored in Y (text style "Upside down").
     pub upside_down: bool,
+    /// Characters stacked top to bottom (text style "Vertical"), see [`shape_vertical`].
+    pub vertical: bool,
 }
 
 impl TextParams {
@@ -577,6 +579,7 @@ impl TextParams {
             v: VAlign::Baseline,
             backwards: false,
             upside_down: false,
+            vertical: false,
         }
     }
     /// Centred on `p` both ways (dimension and table text).
@@ -588,6 +591,9 @@ impl TextParams {
 /// Place a single-line TEXT in world coordinates with any font. Returns the shaped text and its
 /// bounding box.
 pub fn place(font: &TextFont, s: &str, p: &TextParams) -> (Shaped, Bounds2) {
+    if p.vertical {
+        return place_vertical(font, s, p);
+    }
     let mut height = if p.height > 0.0 && p.height.is_finite() { p.height } else { 1.0 };
     let mut wf = p.width_factor;
     let mut rot = if p.rotation.is_finite() { p.rotation } else { 0.0 };
@@ -640,6 +646,69 @@ pub fn place(font: &TextFont, s: &str, p: &TextParams) -> (Shaped, Bounds2) {
     (sh, bb)
 }
 
+/// The distance from one character's top to the next one's down a vertical line, in text
+/// heights: a capital and a descender's room (the cell [`place`] boxes horizontal text in).
+const VERTICAL_PITCH: f64 = 4.0 / 3.0;
+
+/// Shape one line set vertically (text style "Vertical"): the characters stacked top to
+/// bottom, each centred on the column at x = 0, the first one's top at y = 0. A shape font with
+/// vertical forms (shape commands for vertical text only) places its characters itself; other
+/// characters sit in cells [`VERTICAL_PITCH`] heights tall, taller for a glyph that needs it.
+/// `width` holds the column's length.
+pub fn shape_vertical(font: &TextFont, s: &str, height: f64, width_factor: f64, oblique: f64) -> Shaped {
+    let h = if height.is_finite() && height > 0.0 { height } else { 1.0 };
+    let mut out = Shaped::default();
+    let mut y = 0.0;
+    for (c, _, _) in decode_controls(s) {
+        if bidi::is_format_control(c) {
+            continue;
+        }
+        if let TextFont::Shx { main, big } = font
+            && let Some((strokes, step)) = shx::vertical_char(main, big.as_deref(), c, h, width_factor, oblique)
+        {
+            out.strokes.extend(strokes.into_iter().map(|l| l.into_iter().map(|q| Vec2::new(q.x, q.y + y)).collect()));
+            y += step.y;
+            continue;
+        }
+        let mut sh = shape_line(font, &c.to_string(), h, width_factor, oblique);
+        // The cell holds a capital and a descender, or more for a glyph that reaches further
+        // (a TrueType CJK ideograph rises above the cap height): its ink never meets the next.
+        let (lo, hi) = sh.outlines().iter().flatten().fold((0.0_f64, 0.0_f64), |(a, b), q| (a.min(q.y), b.max(q.y)));
+        let (top, bottom) = (hi.max(h), lo.min(h * (1.0 - VERTICAL_PITCH)));
+        let (dx, base) = (-sh.width / 2.0, y - top);
+        sh.map(|q| Vec2::new(q.x + dx, q.y + base));
+        out.extend(sh);
+        y -= (top - bottom).max(h * VERTICAL_PITCH);
+    }
+    out.width = -y;
+    out
+}
+
+/// [`place`] for a vertical style: the column of [`shape_vertical`] hangs from the point
+/// (left justification), is centred on it (center, middle) or stands on it (right), turned by
+/// the rotation and mirrored by the style like horizontal text.
+fn place_vertical(font: &TextFont, s: &str, p: &TextParams) -> (Shaped, Bounds2) {
+    let height = if p.height > 0.0 && p.height.is_finite() { p.height } else { 1.0 };
+    let rot = if p.rotation.is_finite() { p.rotation } else { 0.0 };
+    let mut sh = shape_vertical(font, s, height, p.width_factor, p.oblique);
+    let len = sh.width;
+    let half = sh.outlines().iter().flatten().map(|q| q.x.abs()).fold(height / 2.0, f64::max);
+    let origin = match (p.h, p.v) {
+        (Align::Left, VAlign::Baseline) | (Align::Aligned | Align::Fit, _) => p.insert,
+        _ => p.align_pt.unwrap_or(p.insert),
+    };
+    let dy = match p.h {
+        Align::Left | Align::Aligned | Align::Fit => 0.0,
+        Align::Center | Align::Middle => len / 2.0,
+        Align::Right => len,
+    };
+    let (mx, my) = (if p.backwards { -1.0 } else { 1.0 }, if p.upside_down { -1.0 } else { 1.0 });
+    let xf = |q: Vec2| origin + Vec2::new(q.x * mx, (q.y + dy) * my).rotate(rot);
+    sh.map(xf);
+    let bb = Bounds2::from_points([Vec2::new(-half, -len), Vec2::new(half, -len), Vec2::new(half, 0.0), Vec2::new(-half, 0.0)].map(xf));
+    (sh, bb)
+}
+
 /// Place a single-line TEXT in world coordinates with the stroke font. Returns strokes and the
 /// text's bounding box.
 #[allow(clippy::too_many_arguments)]
@@ -654,7 +723,7 @@ pub fn place_text(
     h: Align,
     v: VAlign,
 ) -> (Vec<Vec<Vec2>>, Bounds2) {
-    let p = TextParams { insert, align_pt, height, rotation, width_factor, oblique, h, v, backwards: false, upside_down: false };
+    let p = TextParams { insert, align_pt, height, rotation, width_factor, oblique, h, v, backwards: false, upside_down: false, vertical: false };
     let (sh, bb) = place(&TextFont::Stroke, s, &p);
     (sh.strokes, bb)
 }
@@ -699,6 +768,80 @@ mod tests {
         let b = layout_line("HELLO", 2.0, 1.0, 0.0);
         assert!((b.width - 2.0 * a.width).abs() < 1e-9);
         assert!((line_width("HELLO", 1.0, 1.0) - a.width).abs() < 1e-9);
+    }
+
+    /// The y range of the ink in `sh`.
+    fn ink_y(sh: &Shaped) -> (f64, f64) {
+        sh.outlines().iter().flatten().fold((f64::MAX, f64::MIN), |(a, b), q| (a.min(q.y), b.max(q.y)))
+    }
+
+    #[test]
+    fn vertical_text_stacks_characters_top_to_bottom() {
+        // Each character one cell (4/3 of the height) below the one before, centred on x = 0.
+        let one = shape_vertical(&TextFont::Stroke, "I", 1.0, 1.0, 0.0);
+        let three = shape_vertical(&TextFont::Stroke, "III", 1.0, 1.0, 0.0);
+        assert!((three.width - 4.0).abs() < 1e-9, "{}", three.width);
+        assert_eq!(three.strokes.len(), 3 * one.strokes.len());
+        let n = one.strokes.len();
+        for (k, chunk) in three.strokes.chunks(n.max(1)).enumerate() {
+            let down = VERTICAL_PITCH * k as f64;
+            let same = chunk.iter().flatten().zip(one.strokes.iter().flatten()).all(|(a, b)| a.dist(Vec2::new(b.x, b.y - down)) < 1e-9);
+            assert!(same, "character {k}: {chunk:?}");
+        }
+        let (lo, hi) = ink_y(&one);
+        assert!(hi <= 1e-9 && lo >= -VERTICAL_PITCH, "{lo}..{hi}");
+        let xs: Vec<f64> = one.outlines().iter().flatten().map(|q| q.x).collect();
+        let mid = (xs.iter().copied().fold(f64::MAX, f64::min) + xs.iter().copied().fold(f64::MIN, f64::max)) / 2.0;
+        assert!(mid.abs() < 0.2, "I centred on the column: {mid}");
+        // Wide characters (CJK) too: the second one lies wholly below the first one's cell.
+        let a = shape_vertical(&TextFont::Stroke, "中", 2.0, 1.0, 0.0);
+        let ab = shape_vertical(&TextFont::Stroke, "中文", 2.0, 1.0, 0.0);
+        assert!((ab.width - 2.0 * a.width).abs() < 1e-9);
+        assert!(ink_y(&ab).0 < ink_y(&a).0 - 2.0, "{:?} {:?}", ink_y(&ab), ink_y(&a));
+    }
+
+    #[test]
+    fn tall_glyphs_get_taller_cells_down_a_vertical_line() {
+        // A TrueType CJK ideograph rises above the text height: its cell grows, so the next
+        // character's ink starts below this one's.
+        let Some(face) =
+            ["MS Gothic", "Yu Gothic", "Microsoft YaHei", "Noto Sans CJK JP", "PingFang SC", "Hiragino Sans"].into_iter().find_map(ttf::find)
+        else {
+            return;
+        };
+        let font = TextFont::Outline(face);
+        let one = shape_vertical(&font, "縦", 1.0, 1.0, 0.0);
+        let two = shape_vertical(&font, "縦縦", 1.0, 1.0, 0.0);
+        let (lo1, _) = ink_y(&one);
+        let second: Vec<Vec2> = two.glyphs.iter().skip(one.glyphs.len()).flatten().flatten().copied().collect();
+        let hi2 = second.iter().map(|q| q.y).fold(f64::MIN, f64::max);
+        assert!(!second.is_empty() && hi2 < lo1, "second glyph top {hi2} below the first's bottom {lo1}");
+        assert!(two.width >= 2.0 * VERTICAL_PITCH - 1e-9);
+    }
+
+    #[test]
+    fn vertical_style_places_the_column_by_its_justification() {
+        let at = Vec2::new(5.0, 10.0);
+        // Left: the column hangs from the insertion point, centred on it.
+        let p = TextParams { vertical: true, ..TextParams::new(at, 1.0) };
+        let (sh, bb) = place(&TextFont::Stroke, "ABC", &p);
+        assert!((bb.max.y - 10.0).abs() < 1e-9 && (bb.min.y - 6.0).abs() < 1e-9, "{bb:?}");
+        assert!((bb.center().x - 5.0).abs() < 1e-9, "{bb:?}");
+        let (lo, hi) = ink_y(&sh);
+        assert!(lo >= 6.0 - 1e-9 && hi <= 10.0 + 1e-9, "{lo}..{hi}");
+        // Right: it stands on the alignment point; middle: centred on it.
+        for (h, top) in [(Align::Right, 4.0), (Align::Middle, 2.0), (Align::Center, 2.0)] {
+            let p = TextParams { vertical: true, h, align_pt: Some(Vec2::ZERO), ..TextParams::new(at, 1.0) };
+            let (_, bb) = place(&TextFont::Stroke, "ABC", &p);
+            assert!((bb.max.y - top).abs() < 1e-9 && (bb.min.y - (top - 4.0)).abs() < 1e-9, "{h:?} {bb:?}");
+        }
+        // Turned a quarter: the column runs along +x from the point.
+        let p = TextParams { vertical: true, rotation: std::f64::consts::FRAC_PI_2, ..TextParams::new(Vec2::ZERO, 1.0) };
+        let (_, bb) = place(&TextFont::Stroke, "ABC", &p);
+        assert!(bb.min.x.abs() < 1e-9 && (bb.max.x - 4.0).abs() < 1e-9, "{bb:?}");
+        // Off, the same text runs left to right as before.
+        let (_, flat) = place(&TextFont::Stroke, "ABC", &TextParams::new(at, 1.0));
+        assert!(flat.width() > flat.height(), "{flat:?}");
     }
 
     #[test]

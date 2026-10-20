@@ -355,7 +355,7 @@ fn run_text(s: &mut Session, p: &Value) -> Result<Value> {
     added(s.add_entity(k)?)
 }
 
-fn run_mtext(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn run_mtext(s: &mut Session, p: &Value) -> Result<Value> {
     let at = point_req("mtext", p, "at")?;
     let text = str_param(p, "text").ok_or_else(|| bad("mtext", "`text` is required"))?;
     let height = f64_or(p, "height", s.doc()?.header.f64("TEXTSIZE", 0.2));

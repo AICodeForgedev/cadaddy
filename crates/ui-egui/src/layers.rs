@@ -191,7 +191,14 @@ fn true_color(ui: &mut egui::Ui, id: egui::Id, current: Color) -> Option<Color> 
             for (i, (label, max)) in [("Hue", 360.0), ("Saturation", 100.0), ("Luminance", 100.0)].iter().enumerate() {
                 ui.label(crate::i18n::t(label));
                 if let Some(v) = hsl.get_mut(i) {
-                    changed |= ui.add(egui::Slider::new(v, 0.0..=*max).fixed_decimals(0)).changed();
+                    // The slider shows whole numbers and rounds what it holds: only a real move
+                    // changes the colour (a hex typed as #3a7bd5 stayed 58,123,213, not 57,122,213).
+                    let before = *v;
+                    if ui.add(egui::Slider::new(v, 0.0..=*max).fixed_decimals(0)).changed() && (*v - before).abs() >= 0.5 {
+                        changed = true;
+                    } else {
+                        *v = before;
+                    }
                 }
                 ui.end_row();
             }

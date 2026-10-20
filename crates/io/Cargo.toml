@@ -14,6 +14,8 @@ cadaddy-color = { workspace = true }
 cadaddy-doc = { workspace = true }
 cadaddy-dxf = { workspace = true }
 cadaddy-dwg = { workspace = true }
+# CADaddy's own DWG codec (entities decoded straight into DXF groups).
+cadaddy-dwgcodec = { workspace = true }
 cadaddy-render = { workspace = true }
 cadaddy-fonts = { workspace = true }
 # Walkthrough packages (.cdywalk): the container (walk3d::package).

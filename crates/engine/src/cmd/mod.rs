@@ -25,6 +25,7 @@ mod edit3d;
 mod exact_ends;
 mod exchange;
 mod express;
+mod express4;
 pub mod exterior;
 mod field;
 pub mod file;
@@ -283,6 +284,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(array::specs());
         v.extend(symbol::specs());
         v.extend(express::specs());
+        v.extend(express4::specs());
         v.push(
             CommandSpec::new("spell", "Spelling", spell::run)
                 .menu(&["Tools", "Spelling"])

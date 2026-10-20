@@ -204,32 +204,143 @@ fn changed_fields(a: &serde_json::Value, b: &serde_json::Value) -> Vec<String> {
     }
 }
 
-/// The objects of one space or block compared one by one, matched by handle.
-fn compare_objects(a: &cadaddy_doc::EntityStore, b: &cadaddy_doc::EntityStore, block: Option<&str>, out: &mut Losses) {
+/// The objects of one space or block (of `da`, and as `db` read them back) compared one by one,
+/// matched by handle. An object the file hasn't under its handle but whose place new objects
+/// took (an older DWG's multileader written as a leader and its text) was written as those.
+fn compare_objects(
+    (da, a): (&Drawing, &cadaddy_doc::EntityStore),
+    (db, b): (&Drawing, &cadaddy_doc::EntityStore),
+    block: Option<&str>,
+    out: &mut Losses,
+) {
     fn v<T: Serialize>(t: &T) -> serde_json::Value {
         serde_json::to_value(t).unwrap_or_default()
     }
     let back: std::collections::HashMap<cadaddy_doc::Handle, &std::sync::Arc<cadaddy_doc::Entity>> = b.iter().map(|e| (e.handle, e)).collect();
     let step = a.len().div_ceil(DETAIL_SAMPLE).max(1);
+    let mut missing = Vec::new();
     for e in a.iter().step_by(step) {
-        let ka = content(v(&e.kind));
-        let kind = kind_name(&ka);
+        let name = block.map(str::to_string);
+        match back.get(&e.handle) {
+            Some(f) => compare_pair(e, f, out, name),
+            None => missing.push(e),
+        }
+    }
+    if missing.is_empty() {
+        return;
+    }
+    // Objects the file holds that the drawing hadn't: what the missing ones were written as.
+    let ours: std::collections::HashSet<cadaddy_doc::Handle> = a.iter().map(|e| e.handle).collect();
+    let mut new: Vec<(cadaddy_geom::Bounds2, String)> =
+        b.iter().filter(|f| !ours.contains(&f.handle)).map(|f| (cadaddy_doc::entity_bounds(db, f, 0), kind_name(&v(&f.kind)))).collect();
+    for e in missing {
+        let kind = kind_name(&content(v(&e.kind)));
         let (h, name) = (Some(e.handle.hex()), block.map(str::to_string));
-        let Some(f) = back.get(&e.handle) else {
+        let area = cadaddy_doc::entity_bounds(da, e, 0);
+        let area = area.expand(area.width().max(area.height()) * 0.01 + 1e-9);
+        let mut became: Vec<String> = Vec::new();
+        if !area.is_empty() {
+            new.retain(|(bounds, k)| {
+                let inside = !bounds.is_empty() && area.contains_box(bounds);
+                if inside {
+                    became.push(k.clone());
+                }
+                !inside
+            });
+        }
+        if became.is_empty() {
             out.add(format!("{kind} objects"), "dropped", h, name);
-            continue;
-        };
-        let kb = content(v(&f.kind));
-        if kind_name(&kb) != kind {
-            out.add(format!("{kind} objects (written as {})", kind_name(&kb)), "changed", h, name);
+        } else {
+            became.sort();
+            became.dedup();
+            out.add(format!("{kind} objects (written as {})", became.join(", ")), "changed", h, name);
+        }
+    }
+}
+
+/// One object against what the file holds for it: its type, fields and properties.
+fn compare_pair(e: &cadaddy_doc::Entity, f: &cadaddy_doc::Entity, out: &mut Losses, name: Option<String>) {
+    fn v<T: Serialize>(t: &T) -> serde_json::Value {
+        serde_json::to_value(t).unwrap_or_default()
+    }
+    let (ka, kb) = (content(v(&e.kind)), content(v(&f.kind)));
+    let (kind, h) = (kind_name(&ka), Some(e.handle.hex()));
+    if kind_name(&kb) != kind {
+        out.add(format!("{kind} objects (written as {})", kind_name(&kb)), "changed", h, name);
+        return;
+    }
+    for field in changed_fields(&ka, &kb) {
+        // A subdivision mesh in a file older than meshes: its faces as a polyface mesh.
+        if kind == "mesh" && field == "kind" {
+            let became = match kb.get("kind") {
+                Some(serde_json::Value::String(k)) => words(k),
+                Some(serde_json::Value::Object(o)) => o
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| o.keys().next().map(String::as_str))
+                    .map_or_else(|| "another".into(), words),
+                _ => "another".into(),
+            };
+            out.add(format!("mesh objects (written as a {became} mesh)"), "changed", h.clone(), name.clone());
             continue;
         }
-        for field in changed_fields(&ka, &kb) {
-            let feature = if field.is_empty() { format!("{kind} objects") } else { format!("{kind} {}", words(&field)) };
-            out.add(feature, "changed", h.clone(), name.clone());
+        let feature = if field.is_empty() { format!("{kind} objects") } else { format!("{kind} {}", words(&field)) };
+        out.add(feature, "changed", h.clone(), name.clone());
+    }
+    for field in changed_fields(&v(&e.common), &v(&f.common)) {
+        out.add(format!("object {}", words(&field)), "changed", h.clone(), name.clone());
+    }
+}
+
+/// Whether `back` was read from a Release 12 DXF file, which has no handles: its objects are
+/// numbered as they are read, so they can't be matched to the drawing's by handle.
+fn is_r12(back: &Drawing) -> bool {
+    back.header.get("ACADVER").and_then(cadaddy_doc::HVal::as_str).is_some_and(|v| v.trim().eq_ignore_ascii_case("AC1009"))
+}
+
+/// [`compare_objects`] for a Release 12 file: each object of `a` matched to what the R12 writer
+/// made of it ([`super::r12::pieces`]), in the order it wrote them. An object R12 has no form for
+/// is dropped; one written as other objects (an ellipse as a polyline, a dimension as lines and
+/// text) is changed; one written as itself is compared field by field. When the file doesn't
+/// hold what the writer made (it left a layout's objects out, or another program wrote it), the
+/// objects written as themselves are counted by type instead: those the file has fewer of are
+/// dropped.
+fn compare_r12(d: &Drawing, a: &cadaddy_doc::EntityStore, b: &cadaddy_doc::EntityStore, block: Option<&str>, out: &mut Losses) {
+    fn v<T: Serialize>(t: &T) -> serde_json::Value {
+        serde_json::to_value(t).unwrap_or_default()
+    }
+    let name = block.map(str::to_string);
+    let kind_of = |e: &cadaddy_doc::Entity| kind_name(&content(v(&e.kind)));
+    let made: Vec<(&std::sync::Arc<cadaddy_doc::Entity>, Vec<cadaddy_doc::Entity>)> = a.iter().map(|e| (e, super::r12::pieces(d, e))).collect();
+    let back: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = b.iter().collect();
+    let aligned = made.iter().map(|(_, p)| p.len()).sum::<usize>() == back.len();
+    let mut in_file = std::collections::BTreeMap::<String, usize>::new();
+    if !aligned {
+        for f in &back {
+            *in_file.entry(kind_of(f)).or_default() += 1;
         }
-        for field in changed_fields(&v(&e.common), &v(&f.common)) {
-            out.add(format!("object {}", words(&field)), "changed", h.clone(), name.clone());
+    }
+    let mut at = 0;
+    for (e, pieces) in &made {
+        let kind = kind_of(e);
+        let h = Some(e.handle.hex());
+        let written: &[&std::sync::Arc<cadaddy_doc::Entity>] = if aligned { back.get(at..at + pieces.len()).unwrap_or_default() } else { &[] };
+        at += pieces.len();
+        match pieces.as_slice() {
+            [] => out.add(format!("{kind} objects"), "dropped", h, name.clone()),
+            [p] if kind_of(p) == kind => match written {
+                [f] => compare_pair(e, f, out, name.clone()),
+                _ => match in_file.get_mut(&kind).filter(|n| **n > 0) {
+                    Some(n) => *n -= 1,
+                    None => out.add(format!("{kind} objects"), "dropped", h, name.clone()),
+                },
+            },
+            many => {
+                let mut kinds: Vec<String> = many.iter().map(kind_of).collect();
+                kinds.sort();
+                kinds.dedup();
+                out.add(format!("{kind} objects (written as {})", kinds.join(", ")), "changed", h, name.clone());
+            }
         }
     }
 }
@@ -299,16 +410,20 @@ fn losses_of(d: &Drawing, back: &Drawing) -> Vec<Loss> {
         serde_json::to_value(t).unwrap_or_default()
     }
     let mut out = Losses::default();
-    compare_objects(&d.model, &back.model, None, &mut out);
+    let r12 = is_r12(back);
+    let objects = |a: &cadaddy_doc::EntityStore, b: &cadaddy_doc::EntityStore, block: Option<&str>, out: &mut Losses| {
+        if r12 { compare_r12(d, a, b, block, out) } else { compare_objects((d, a), (back, b), block, out) }
+    };
+    objects(&d.model, &back.model, None, &mut out);
     for l in &d.layouts {
         match back.layouts.iter().find(|x| x.name.eq_ignore_ascii_case(&l.name)) {
-            Some(m) => compare_objects(&l.entities, &m.entities, Some(&l.name), &mut out),
+            Some(m) => objects(&l.entities, &m.entities, Some(&l.name), &mut out),
             None => out.add("layouts".into(), "dropped", None, Some(l.name.clone())),
         }
     }
     for (n, b) in d.blocks.iter().filter(|(_, b)| !b.anonymous) {
         match back.blocks.get(n) {
-            Some(m) => compare_objects(&b.entities, &m.entities, Some(n), &mut out),
+            Some(m) => objects(&b.entities, &m.entities, Some(n), &mut out),
             None => out.add("blocks".into(), "dropped", None, Some(n.clone())),
         }
     }
