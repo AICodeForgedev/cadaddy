@@ -72,7 +72,7 @@ impl Autosaver {
         for job in jobs {
             match job {
                 Job::Delete { path } => discard_store(&path),
-                Job::Write { uid, path, doc } => {
+                Job::Write { uid, path, doc } | Job::Append { uid, path, doc, .. } => {
                     let title = s.docs.iter().find(|d| d.uid == uid).map(|d| d.title.clone()).unwrap_or_default();
                     if store_write(st, &path, &title, &doc, now) {
                         written += 1;

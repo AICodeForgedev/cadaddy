@@ -202,7 +202,7 @@ impl CdySaved {
 /// Append a .cdy save to `path`: the chunks, made durable, then the index and trailer. A file no
 /// longer `from` bytes long is left alone; a failed append cuts the file back to what it was, so
 /// it still holds the previous save.
-fn append_cdy(path: &str, from: u64, bytes: &[u8], index_at: usize) -> Result<()> {
+pub(crate) fn append_cdy(path: &str, from: u64, bytes: &[u8], index_at: usize) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use std::io::{Seek, SeekFrom, Write};
