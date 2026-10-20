@@ -702,6 +702,7 @@ dependencies = [
  "cadaddy-walk3d",
  "chrono",
  "craft-docpath",
+ "image",
  "log",
  "miniz_oxide 0.8.9",
  "rayon",
