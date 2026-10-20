@@ -28,6 +28,19 @@ pub fn file_dialogs_allowed() -> bool {
     !FILE_DIALOGS_OFF.load(Relaxed)
 }
 
+/// Where a palette or window without a place of its own first opens: inside the drawing area's
+/// top-left corner, clear of the application menu, Quick Access toolbar, ribbon and file tabs
+/// (egui's default, the window's top-left corner, covered them: battle test 0.7.8 #18).
+pub(crate) fn palette_pos(app: &CadApp) -> egui::Pos2 {
+    app.canvas.rect.map_or(egui::pos2(16.0, 160.0), |r| r.min + egui::vec2(12.0, 12.0))
+}
+
+/// Whether a file dialog was refused during the agent request being handled
+/// ([`file_dialogs_allowed`]), so a picker's `None` isn't a cancel.
+pub(crate) fn dialog_refused() -> bool {
+    DIALOG_REFUSED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub mod aliasdlg;
 pub mod animation;
 pub mod autosave;

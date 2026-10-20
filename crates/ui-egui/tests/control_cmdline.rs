@@ -107,11 +107,16 @@ fn a_menu_command_the_agent_started_takes_its_input() {
     assert_eq!(count(&app), before + 1);
 }
 
+/// Held by the tests that serve agent requests touching file dialogs: whether a dialog was
+/// refused is process-wide.
+static FILE_DIALOG_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// An agent's request never opens a native file dialog: it opened on the user's screen and
 /// blocked the app, every later agent call timing out (menu sweep 0.7.7e: Insert ▸ PDF Import…).
 /// The reply says why nothing was picked.
 #[test]
 fn agent_requests_never_open_file_dialogs() {
+    let _one_at_a_time = FILE_DIALOG_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     use std::sync::atomic::{AtomicBool, Ordering};
     static OPENED: AtomicBool = AtomicBool::new(false);
     let services = cadaddy_ui_egui::Services {
@@ -132,4 +137,27 @@ fn agent_requests_never_open_file_dialogs() {
     let outcome = reply.wait(std::time::Duration::from_secs(2));
     assert!(!OPENED.load(Ordering::Relaxed), "a file dialog opened for an agent");
     assert!(outcome["warning"].as_str().unwrap_or("").contains("file dialog"), "{outcome}");
+}
+
+/// MARKUPIMPORT from an agent, typed or from the menu, echoes like a command and says how to
+/// give the PDF, instead of silently doing nothing (battle test 0.7.8 #12).
+#[test]
+fn an_agents_markupimport_says_what_happened() {
+    let _one_at_a_time = FILE_DIALOG_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let services = cadaddy_ui_egui::Services {
+        pick_pdf: Some(Box::new(|| cadaddy_ui_egui::file_dialogs_allowed().then(|| "never.pdf".to_string()))),
+        ..Default::default()
+    };
+    let mut app = CadApp::new(Session::new(), services);
+    let ctx = egui::Context::default();
+    for (method, params) in [("cmdline.input", json!({"text": "markupimport"})), ("ui.menu.invoke", json!({"command": "markupimport"}))] {
+        let before = app.session.log.len();
+        let (req, reply) = ControlRequest::new(method, params);
+        app.serve_control_request(&ctx, req);
+        let outcome = reply.wait(std::time::Duration::from_secs(2));
+        let said = app.session.log[before..].join("\n");
+        assert!(said.contains("Command: MARKUPIMPORT"), "{method}: {said}");
+        assert!(said.contains("markupimport {\"path\": \"review.pdf\"}"), "{method}: {said}");
+        assert!(outcome["warning"].as_str().unwrap_or("").contains("file dialog"), "{outcome}");
+    }
 }

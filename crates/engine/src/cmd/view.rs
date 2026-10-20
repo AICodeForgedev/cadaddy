@@ -422,7 +422,7 @@ impl Interactive for ZoomM {
             ZoomStage::Center => return Prompt::new("Specify center point", Accept::POINT),
             ZoomStage::CenterHeight(_) => {
                 let h = s.state().map(|st| st.zoom_frame().height).unwrap_or(1.0);
-                return Prompt::new("Enter magnification or height", Accept::NUMBER).default(format!("{h:.4}"));
+                return Prompt::new("Enter magnification or height", Accept::NUMBER).default(crate::units::dist(s, h));
             }
             ZoomStage::Scale => return Prompt::new("Enter a scale factor (nX or nXP)", Accept::NUMBER),
         }

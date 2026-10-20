@@ -5,7 +5,7 @@ use cadaddy_geom::{Polyline, Vec2};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::units::{format_angle, format_distance};
+use crate::units::format_angle;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 mod regions;
@@ -49,13 +49,13 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{contains?: text (any case), layer?, window?: [[x,y],[x,y]] (by insertion point), limit? (default 200), offset?} → {count (all matches), returned, offset, texts: [{handle, type, layer, text, at, height, rotation (degrees), style, tag? (attributes)}]}: the readable text of TEXT, MTEXT (formatting removed), block attributes and multileaders")
             .noundo(),
         CommandSpec::new("countlist", "Count List", count::run_countlist)
+            .menu(&["Tools", "Count"])
             .params("{space?: all (default)|current|model|<layout>, nested?: bool} → per-block counts, as COUNT")
             .noundo(),
         CommandSpec::new("counttable", "Count Table", count::run_counttable)
             .params("{at: [x,y], space?: current (default)|model|all|<layout>, area?: [[x,y],[x,y]] | polygon, nested?: bool} → {handle, linked}: a table of the block counts, kept up to date (on REGEN, open, save, plot) | {update: true, handles?} → {updated}")
             .interactive(|_| Ok(count::table_machine())),
         CommandSpec::new("count", "Count", count::run_count)
-            .menu(&["Tools", "Count"])
             .params(count::PARAMS)
             .interactive(|_| Ok(count::machine()))
             .noundo(),
@@ -65,8 +65,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 pub(crate) fn fmt_d(s: &Session, v: f64) -> String {
-    let h = s.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
-    format_distance(v, h.0, h.1)
+    crate::units::dist(s, v)
 }
 /// An area as AutoCAD reports it: square inches with square feet in architectural and engineering
 /// units ("11520.0000 square in. (80.0000 square ft.)"), else a plain number at LUPREC.

@@ -208,7 +208,7 @@ impl Interactive for DashStyle {
                 Prompt::new("Enter name of text style or [?]", WORD).default(current)
             }
             StyleStage::Font => Prompt::new("Specify full font name or font filename", WORD).default(cur.font),
-            StyleStage::Height => Prompt::new("Specify height of text", Accept::NUMBER).default(format!("{:.4}", cur.height)),
+            StyleStage::Height => Prompt::new("Specify height of text", Accept::NUMBER).default(crate::units::dist(s, cur.height)),
             StyleStage::Width => Prompt::new("Specify width factor", Accept::NUMBER).default(format!("{:.4}", cur.width_factor.max(0.01))),
             StyleStage::Oblique => Prompt::new("Specify obliquing angle", Accept::NUMBER).default(format!("{}", cur.oblique)),
             StyleStage::Backwards => yn("Display text backwards?", cur.backwards),

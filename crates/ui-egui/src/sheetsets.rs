@@ -43,9 +43,13 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     }
     let mut todo: Option<Value> = None;
     let mut pick: Option<&'static str> = None;
-    egui::Window::new(crate::tl!("Sheet Set Manager")).id(egui::Id::new("Sheet Set Manager")).open(open).resizable(true).default_width(460.0).show(
-        ctx,
-        |ui| {
+    egui::Window::new(crate::tl!("Sheet Set Manager"))
+        .id(egui::Id::new("Sheet Set Manager"))
+        .default_pos(crate::palette_pos(app))
+        .open(open)
+        .resizable(true)
+        .default_width(460.0)
+        .show(ctx, |ui| {
             // Right to left in Arabic (rtl.rs).
             let mut body = crate::rtl::Body::new(ui);
             let ui = &mut *body;
@@ -163,8 +167,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     todo = Some(json!({ "action": "renumber", "prefix": st.prefix, "start": start, "digits": digits }));
                 }
             });
-        },
-    );
+        });
     let name = app
         .ui
         .sheet_set

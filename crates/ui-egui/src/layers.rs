@@ -408,6 +408,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     };
     egui::Window::new(crate::i18n::t(title))
         .id(egui::Id::new("lpm_window"))
+        .default_pos(crate::palette_pos(app))
         .open(open)
         .default_size(vec2(1180.0, 440.0))
         .min_width(640.0)
@@ -755,6 +756,8 @@ fn filter_form(ctx: &egui::Context, f: &mut FilterForm) -> (bool, bool) {
         .id(egui::Id::new("lpm_filter_form"))
         .collapsible(false)
         .resizable(false)
+        .default_pos(ctx.content_rect().center())
+        .pivot(egui::Align2::CENTER_CENTER)
         .open(&mut open)
         .show(ctx, |ui| {
             // Right to left in Arabic (rtl.rs).

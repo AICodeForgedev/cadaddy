@@ -860,7 +860,7 @@ impl Interactive for AttdefM {
     fn name(&self) -> &'static str {
         "ATTDEF"
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
+    fn prompt(&self, s: &Session) -> Prompt {
         match (&self.tag, &self.prompt, &self.default) {
             (None, ..) => Prompt::new("Enter attribute tag name", Accept::TEXT),
             (Some(_), None, _) => Prompt::new("Enter attribute prompt", Accept::TEXT),
@@ -868,7 +868,7 @@ impl Interactive for AttdefM {
             _ => match (self.at, self.height) {
                 (None, _) => Prompt::new("Specify start point of text", Accept::POINT),
                 (Some(at), None) => Prompt::new("Specify text height", Accept::POINT_OR_NUMBER)
-                    .default(format!("{:.4}", _s.doc().map(|d| d.header.f64("TEXTSIZE", 0.2)).unwrap_or(0.2)))
+                    .default(crate::units::dist(s, s.doc().map(|d| d.header.f64("TEXTSIZE", 0.2)).unwrap_or(0.2)))
                     .base(at),
                 (Some(at), Some(_)) => Prompt::new("Specify rotation angle of text", Accept::POINT_OR_NUMBER).default("0").base(at),
             },

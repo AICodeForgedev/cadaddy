@@ -2477,7 +2477,7 @@ impl Interactive for OffsetM {
             (false, _) => Prompt::new("Specify offset distance", Accept::POINT_OR_NUMBER).kw(&["Through", "Erase", "Layer"]).default(if last < 0.0 {
                 "Through".to_string()
             } else {
-                format!("{last:.4}")
+                crate::units::dist(s, last)
             }),
             (true, None) => Prompt::new("Select object to offset", Accept::POINT).kw(&["Exit", "Undo"]).default("Exit"),
             (true, Some(_)) if self.multiple => {
@@ -2713,12 +2713,20 @@ impl Interactive for FilletM {
             if d.header.i64("CHAMMODE", 0) == 1 {
                 let (au, ap) = (d.header.i64("AUNITS", 0), d.header.i64("AUPREC", 0));
                 let a = crate::units::format_angle(d.header.f64("CHAMFERD", 0.0), au, ap);
-                format!("({mode} mode) Current chamfer Length = {:.4}, Angle = {a}", d.header.f64("CHAMFERC", 0.0))
+                format!("({mode} mode) Current chamfer Length = {}, Angle = {a}", crate::units::dist(s, d.header.f64("CHAMFERC", 0.0)))
             } else {
-                format!("({mode} mode) Current chamfer Dist1 = {:.4}, Dist2 = {:.4}", d.header.f64("CHAMFERA", 0.0), d.header.f64("CHAMFERB", 0.0))
+                format!(
+                    "({mode} mode) Current chamfer Dist1 = {}, Dist2 = {}",
+                    crate::units::dist(s, d.header.f64("CHAMFERA", 0.0)),
+                    crate::units::dist(s, d.header.f64("CHAMFERB", 0.0))
+                )
             }
         } else {
-            format!("Current settings: Mode = {}, Radius = {:.4}", if trim { "TRIM" } else { "NOTRIM" }, d.header.f64("FILLETRAD", 0.0))
+            format!(
+                "Current settings: Mode = {}, Radius = {}",
+                if trim { "TRIM" } else { "NOTRIM" },
+                crate::units::dist(s, d.header.f64("FILLETRAD", 0.0))
+            )
         };
         s.echo(msg);
         Ok(Step::Continue)
@@ -2733,7 +2741,7 @@ impl Interactive for FilletM {
                 (true, 1) => ("Specify first chamfer distance", hdr("CHAMFERA")),
                 (true, _) => ("Specify second chamfer distance", hdr("CHAMFERA")),
             };
-            return Prompt::new(msg, Accept::NUMBER).default(format!("{v:.4}"));
+            return Prompt::new(msg, Accept::NUMBER).default(crate::units::dist(s, v));
         }
         let hdr_i = |k: &str, dflt: i64| s.doc().map(|d| d.header.i64(k, dflt)).unwrap_or(dflt);
         match self.ask {
@@ -2747,7 +2755,7 @@ impl Interactive for FilletM {
             }
             Some(FilletAsk::Length) => {
                 let v = s.doc().map(|d| d.header.f64("CHAMFERC", 0.0)).unwrap_or(0.0);
-                return Prompt::new("Specify chamfer length on the first line", Accept::NUMBER).default(format!("{v:.4}"));
+                return Prompt::new("Specify chamfer length on the first line", Accept::NUMBER).default(crate::units::dist(s, v));
             }
             Some(FilletAsk::Angle) => {
                 let (a, au, ap) =

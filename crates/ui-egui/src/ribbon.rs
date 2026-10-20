@@ -315,7 +315,11 @@ pub const TABS: &[Tab] = &[
                 name: "Import",
                 items: &[
                     Item::Large(b(Icon::Import, "ui.pdfimport", "PDF Import")),
-                    Item::Smalls(&[b(Icon::Import, "import", "Import"), b(Icon::Export, "ui.convertpdf", "PDF to DWG")]),
+                    Item::Smalls(&[
+                        b(Icon::Import, "import", "Import"),
+                        b(Icon::Export, "ui.convertpdf", "PDF to DWG"),
+                        b(Icon::Import, "markupimport", "Import Markups"),
+                    ]),
                 ],
                 more: &[],
             },
@@ -483,6 +487,7 @@ pub const TABS: &[Tab] = &[
                         b(Icon::Blocks, "ui.dialog.blocks", "Blocks"),
                         b(Icon::Measure, "ui.panel.quickcalc", "QuickCalc"),
                     ]),
+                    Item::Smalls(&[b(Icon::List, "countlist", "Count")]),
                 ],
                 more: &[],
             },

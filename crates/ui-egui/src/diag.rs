@@ -566,7 +566,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = crate::theme::Tokens::get();
     let mut st: DialogState = ctx.data(|d| d.get_temp(dialog_id())).unwrap_or_default();
     let mut save = false;
-    egui::Window::new(crate::tl!("Report a Problem")).id(egui::Id::new("Report a Problem")).open(open).resizable(false).default_width(460.0).show(ctx, |ui| {
+    egui::Window::new(crate::tl!("Report a Problem")).id(egui::Id::new("Report a Problem")).default_pos(crate::palette_pos(app)).open(open).resizable(false).default_width(460.0).show(ctx, |ui| {
         ui.label(crate::tl!("Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it."));
         ui.add_space(6.0);
         ui.label(egui::RichText::new(crate::tl!("Always included")).strong());
