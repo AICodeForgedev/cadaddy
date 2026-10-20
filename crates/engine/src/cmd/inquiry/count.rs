@@ -28,7 +28,7 @@ pub(super) fn machine() -> Box<dyn Interactive> {
 }
 
 pub(super) fn table_machine() -> Box<dyn Interactive> {
-    Box::new(CountTableM)
+    Box::new(CountTableM::default())
 }
 
 /// Where COUNT looks.
@@ -515,10 +515,39 @@ pub(super) fn run_counttable(s: &mut Session, p: &Value) -> Result<Value> {
     let header = Some(vec!["Name".to_string(), "Count".to_string()]);
     let mut table = super::super::table::make_table(&table_style(s), at, cells.len(), 2, None, None, Some("Block Count"), header, &cells);
     table.count = scope.link(nested);
+    // Readable at the drawing's scale: the size the style gives, times `scale` (default: the
+    // annotation scale in model space, 1 on a layout).
+    let scale = match p.get("scale").filter(|v| !v.is_null()) {
+        Some(v) => v.as_f64().filter(|k| k.is_finite() && *k > 0.0 && *k <= 1e6).ok_or_else(|| bad(CMD, "`scale` must be a positive number"))?,
+        None => default_scale(s),
+    };
+    scale_table(&mut table, scale);
     let h = s.add_entity(EntityKind::Table(Box::new(table)))?;
     Ok(
         json!({ "handle": h.hex(), "rows": cells.len(), "linked": scope.link(nested).is_some(), "message": format!("Table of {} block(s) inserted.", cells.len()) }),
     )
+}
+
+/// A new count table's scale: the annotation scale (drawing units per paper unit) in model
+/// space, 1 on a layout (paper units already).
+fn default_scale(s: &Session) -> f64 {
+    let Ok(d) = s.doc() else { return 1.0 };
+    if s.space() == cadaddy_doc::Space::Model { d.current_anno_scale().factor() } else { 1.0 }
+}
+
+/// A table's sizes times `k`: columns, rows and text together.
+fn scale_table(t: &mut cadaddy_doc::Table, k: f64) {
+    if !(k.is_finite() && k > 0.0) || (k - 1.0).abs() < 1e-12 {
+        return;
+    }
+    t.col_widths.iter_mut().for_each(|w| *w *= k);
+    t.row_heights.iter_mut().for_each(|h| *h *= k);
+    t.text_height *= k;
+    for c in t.cells.iter_mut().flatten() {
+        if let Some(h) = &mut c.text_height {
+            *h *= k;
+        }
+    }
 }
 
 /// Whether a count table shows other counts than the drawing has now.
@@ -529,6 +558,38 @@ pub(crate) fn stale(d: &Drawing, t: &cadaddy_doc::Table) -> Option<Vec<Vec<Strin
     let skip = usize::from(t.title) + usize::from(t.header);
     let have: Vec<Vec<String>> = t.cells.iter().skip(skip).map(|r| r.iter().map(|c| c.text.clone()).collect()).collect();
     (have != want).then_some(want)
+}
+
+/// `t` with its data rows set to `cells`: the title and header rows, the sizes (a scaled table
+/// stays scaled) and each row's formatting kept; a new row is like the last data row (or, with
+/// none, sized from the table's text height).
+fn refill(t: &cadaddy_doc::Table, cells: &[Vec<String>], style: &cadaddy_doc::TableStyle) -> cadaddy_doc::Table {
+    let mut nt = t.clone();
+    let skip = (usize::from(t.title) + usize::from(t.header)).min(t.cells.len());
+    let cols = t.col_widths.len().max(2);
+    let template_row: Vec<cadaddy_doc::TableCell> =
+        t.cells.get(skip..).and_then(|r| r.last()).cloned().unwrap_or_else(|| vec![cadaddy_doc::TableCell::default(); cols]);
+    let template_h = t.row_heights.get(skip..).and_then(|r| r.last()).copied().unwrap_or(t.text_height * 5.0 / 3.0 + 2.0 * style.margin);
+    let template_style = t.row_styles.get(skip..).and_then(|r| r.last()).cloned();
+    nt.cells.truncate(skip);
+    nt.row_heights.truncate(skip);
+    if nt.row_styles.len() > skip {
+        nt.row_styles.truncate(skip);
+    }
+    for (i, row) in cells.iter().enumerate() {
+        let mut r = t.cells.get(skip + i).cloned().unwrap_or_else(|| template_row.clone());
+        r.resize(cols, cadaddy_doc::TableCell::default());
+        for (c, text) in r.iter_mut().zip(row) {
+            c.text = text.clone();
+            c.formula = None;
+        }
+        nt.cells.push(r);
+        nt.row_heights.push(t.row_heights.get(skip + i).copied().unwrap_or(template_h));
+        if !t.row_styles.is_empty() {
+            nt.row_styles.push(t.row_styles.get(skip + i).cloned().or_else(|| template_style.clone()).unwrap_or_default());
+        }
+    }
+    nt
 }
 
 /// Work out the counts of the linked count tables again (`only` these, else all); how many changed.
@@ -543,14 +604,7 @@ pub(crate) fn update_tables(s: &mut Session, only: Option<Vec<Handle>>) -> Resul
             continue;
         }
         let Some(cells) = stale(d, t) else { continue };
-        let st = d.table_styles.iter().find(|x| x.name.eq_ignore_ascii_case(&t.style)).cloned().unwrap_or_else(|| style.clone());
-        let at = Vec2::new(t.insert.x, t.insert.y);
-        let title = t.title.then(|| t.cells.first().and_then(|r| r.first()).map(|c| c.text.clone()).unwrap_or_default());
-        let header = t.header.then(|| vec!["Name".to_string(), "Count".to_string()]);
-        let mut nt = super::super::table::make_table(&st, at, cells.len().max(1), 2, None, None, title.as_deref(), header, &cells);
-        nt.count = t.count.clone();
-        nt.col_widths = t.col_widths.clone();
-        changes.push((e.handle, nt));
+        changes.push((e.handle, refill(t, &cells, &style)));
     }
     let n = changes.len();
     if n == 0 {
@@ -623,21 +677,59 @@ impl Interactive for CountM {
     }
 }
 
-struct CountTableM;
+/// A scale as typed: up to four decimals, no trailing zeros.
+fn num(k: f64) -> String {
+    let t = format!("{k:.4}");
+    t.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// COUNTTABLE typed: the insertion point, or Scale first (default: the annotation scale).
+#[derive(Default)]
+struct CountTableM {
+    scale: Option<f64>,
+    asking_scale: bool,
+}
 
 impl Interactive for CountTableM {
     fn name(&self) -> &'static str {
         "COUNTTABLE"
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
-        Prompt::new("Specify insertion point", Accept::POINT)
+    fn prompt(&self, s: &Session) -> Prompt {
+        if self.asking_scale {
+            let k = self.scale.unwrap_or_else(|| default_scale(s));
+            return Prompt::new("Specify table scale", Accept::NUMBER).default(num(k));
+        }
+        Prompt::new("Specify insertion point or", Accept::POINT).kw(&["Scale"])
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if self.asking_scale {
+            match i {
+                Input::Text(t) => match t.trim().parse::<f64>() {
+                    Ok(k) if k.is_finite() && k > 0.0 => {
+                        self.scale = Some(k);
+                        self.asking_scale = false;
+                    }
+                    _ => s.echo("Requires a positive number."),
+                },
+                Input::Enter => self.asking_scale = false,
+                Input::Cancel => return Ok(Step::Cancel),
+                _ => {}
+            }
+            return Ok(Step::Continue);
+        }
         match i {
             Input::Point(at) => {
-                let r = run_counttable(s, &json!({ "at": [at.x, at.y] }))?;
+                let mut p = json!({ "at": [at.x, at.y] });
+                if let Some(k) = self.scale {
+                    p["scale"] = json!(k);
+                }
+                let r = run_counttable(s, &p)?;
                 echo_lines(s, &r);
                 Ok(Step::Done)
+            }
+            Input::Keyword(_) => {
+                self.asking_scale = true;
+                Ok(Step::Continue)
             }
             Input::Enter => Ok(Step::Done),
             _ => Ok(Step::Continue),

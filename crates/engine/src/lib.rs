@@ -33,6 +33,7 @@ pub mod prompt;
 pub mod readfile;
 mod recent;
 pub mod sample;
+pub mod script_tools;
 pub mod secureload;
 pub mod select;
 pub mod snap;
@@ -269,6 +270,9 @@ pub struct DocState {
     /// What the first DWG or DXF save of the drawing couldn't keep, feature by feature
     /// (`{path, format, losses}`), for the app to show once in a dialog; taken by the app.
     pub exchange_notice: Option<serde_json::Value>,
+    /// That check running in the background ([`Session::background_checks`]): its result, once
+    /// there, becomes the notice ([`Session::poll_background`]).
+    pub kept_job: Option<cmd::file::KeptJob>,
     /// The .cdy file this drawing was last saved to or read from, and what it holds: the next
     /// save there appends only what changed ([`cmd::file::CdySaved`]).
     pub cdy_saved: Option<cmd::file::CdySaved>,
@@ -287,6 +291,9 @@ pub struct DocState {
     pub lightmap_tried: bool,
     /// Opened from a walkthrough package (`.cdywalk`, `walk.publish`): the app shows it in Walk.
     pub walkthrough: bool,
+    /// The layouts read from the file with nothing on them and not opened since: each gets a
+    /// viewport zoomed to the drawing's extents when it is first opened.
+    pub bare_layouts: Vec<String>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -322,6 +329,7 @@ impl DocState {
             loss_warned: false,
             kept_checked: false,
             exchange_notice: None,
+            kept_job: None,
             cdy_saved: None,
             wallgen: None,
             model_record: None,
@@ -331,6 +339,7 @@ impl DocState {
             lightmap_rev: 0,
             lightmap_tried: false,
             walkthrough: false,
+            bare_layouts: Vec::new(),
         }
     }
     /// The drawing has changes not saved to its file, or the Block Editor has changes not yet
@@ -615,6 +624,8 @@ pub struct Settings {
     /// 2 layer, 4 linetype, 8 linetype scale, 16 lineweight, 32 plot style, 64 object style,
     /// 128 name).
     pub selectsimilarmode: u32,
+    /// REDIRMODE: what REDIR changes paths in (any of `styles`, `xrefs`, `images`, `rtext`).
+    pub redirmode: Vec<String>,
     pub otrack: bool,
     /// PICKBOX in pixels.
     pub pickbox: f64,
@@ -728,6 +739,7 @@ impl Default for Settings {
             plot_transparency_override: 1,
             selectioncycling: 2,
             selectsimilarmode: 130,
+            redirmode: ["styles", "xrefs", "images", "rtext"].map(String::from).to_vec(),
             otrack: true,
             pickbox: 3.0,
             aperture: 10.0,
@@ -962,6 +974,14 @@ pub struct Session {
     keep_undo_step: bool,
     /// A script is running ([`Session::script`]); a SCRIPT command inside it is refused.
     in_script: bool,
+    /// The last script run (RSCRIPT at the command line runs it again).
+    pub script_last: Option<String>,
+    /// The script a failed line stopped: its lines, the next one, how deep it was called.
+    pub script_interrupted: Option<(Vec<String>, usize, usize)>,
+    /// SYSVARMONITOR's watched variables.
+    pub monitor: script_tools::Monitor,
+    /// The watched variables' values at the last look (changes are reported once).
+    pub monitor_seen: std::collections::BTreeMap<String, serde_json::Value>,
     /// A LISP file or script outside the trusted folders that wasn't loaded, for the app to ask
     /// about ([`secureload`]); taken by the app.
     pub secureload_ask: Option<secureload::Ask>,
@@ -1021,6 +1041,9 @@ pub struct Session {
     pub last_render: Option<RenderResult>,
     /// Where `clipboard` came from and the layers, styles and blocks its objects need.
     pub clipboard_source: Option<cmd::clipboard::ClipSource>,
+    /// What the operating system's clipboard holds that isn't CADaddy objects (an image or text
+    /// copied in another program), as the front end last read it: PASTESPEC and PASTECLIP paste it.
+    pub system_clipboard: cmd::clipboard::SystemContents,
     /// The window last picked with PLOTWINDOW (the Plot dialog's "Window <").
     pub plot_window: Option<cadaddy_geom::Bounds2>,
     /// AutoLISP: each drawing's symbols and the routine running ([`lisp`]).
@@ -1033,6 +1056,37 @@ pub struct Session {
     pub agent: agent::AgentGuard,
     /// What happened, for agents watching (`events.subscribe` / `events.poll`).
     pub events: events::EventLog,
+    /// Slow checks after a save run on a worker thread (the app turns this on): the first DWG or
+    /// DXF save of a drawing returns once the file is written, and what that file doesn't keep
+    /// comes later ([`Self::poll_background`]). Off (scripts, the CLI, tests), the save's result
+    /// holds it.
+    pub background_checks: bool,
+}
+
+/// Give a new drawing its own FINGERPRINTGUID (as AutoCAD does): kept in DWG, DXF and .cdy, it
+/// tells drawings apart (IFC export seeds its GlobalIds with it, so two drawings' never collide).
+pub fn fresh_fingerprint(d: &mut Drawing) {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |t| t.as_nanos() as u64);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mix = |mut z: u64| {
+        z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    let seed = nanos ^ n.rotate_left(17);
+    let (hi, lo) = (mix(seed), mix(seed ^ 0xA5A5_5A5A_DEAD_BEEF));
+    let g = format!(
+        "{{{:08X}-{:04X}-{:04X}-{:04X}-{:012X}}}",
+        hi >> 32,
+        (hi >> 16) & 0xFFFF,
+        // Version 4 (random) and the RFC 4122 variant.
+        (hi & 0x0FFF) | 0x4000,
+        ((lo >> 48) & 0x3FFF) | 0x8000,
+        lo & 0xFFFF_FFFF_FFFF
+    );
+    d.header.set_str("FINGERPRINTGUID", &g);
 }
 
 impl Default for Session {
@@ -1066,6 +1120,10 @@ impl Session {
             running: None,
             keep_undo_step: false,
             in_script: false,
+            script_last: None,
+            script_interrupted: None,
+            monitor: script_tools::Monitor::default(),
+            monitor_seen: Default::default(),
             secureload_ask: None,
             secureload_once: Default::default(),
             suspended: None,
@@ -1094,14 +1152,33 @@ impl Session {
             last_used: LastUsed::default(),
             last_render: None,
             clipboard_source: None,
+            system_clipboard: cmd::clipboard::SystemContents::default(),
             plot_window: None,
             lisp: lisp::LispState::default(),
             lisp_last: None,
             hatch_picks: None,
             agent: agent::AgentGuard::default(),
             events: events::EventLog::default(),
+            background_checks: false,
         }
     }
+    /// Take the results of background checks that have finished: what a DWG or DXF save didn't
+    /// keep becomes the drawing's exchange notice and a command-line line. Cheap when none run.
+    pub fn poll_background(&mut self) {
+        let mut lines = Vec::new();
+        for st in &mut self.docs {
+            let Some(done) = st.kept_job.as_ref().and_then(cmd::file::KeptJob::take) else { continue };
+            st.kept_job = None;
+            if let Some((notice, line)) = done {
+                st.exchange_notice = Some(notice);
+                lines.push(line);
+            }
+        }
+        for l in lines {
+            self.echo(l);
+        }
+    }
+
     pub fn new_drawing(&mut self, metric: bool) -> usize {
         self.add_new_drawing(metric, false)
     }
@@ -1113,6 +1190,7 @@ impl Session {
     fn add_new_drawing(&mut self, metric: bool, viewports: bool) -> usize {
         self.untitled_counter += 1;
         let mut d = if metric { Drawing::new_metric() } else { Drawing::new_imperial() };
+        fresh_fingerprint(&mut d);
         if viewports {
             cmd::layout::default_viewports(&mut d);
         }
@@ -1124,7 +1202,10 @@ impl Session {
         self.active
     }
     pub fn open_drawing(&mut self, d: Drawing, title: &str, path: Option<String>) -> usize {
+        // Its layouts with nothing on them get a viewport when they are first opened.
+        let bare = cmd::layout::bare_layouts(&d);
         let mut st = DocState::new(d, title, path);
+        st.bare_layouts = bare;
         let ext = st.doc.extents(&Space::Model);
         if !ext.is_empty() {
             st.set_view_quiet(View {
@@ -1262,6 +1343,7 @@ impl Session {
 
     /// Run a command with JSON parameters (no dialogs). Records undo when the drawing changes.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        self.poll_background();
         // An agent's outermost call: a dry run or a confirmation first ([`agent`]).
         if self.journal.is_outer()
             && let Some(r) = self.guard_call(id, params)
@@ -1291,8 +1373,9 @@ impl Session {
         if outer && r.is_ok() {
             self.journal.call(id, params);
         }
-        // Events reads (and subscribing) aren't news themselves.
-        if outer && !id.starts_with("events.") {
+        // Events reads (and subscribing) aren't news themselves, nor is the list of open drawings
+        // the MCP server reads after every call to notice drawings opened and closed.
+        if outer && !id.starts_with("events.") && id != "document.list" {
             self.event("command.run", serde_json::json!({ "command": id, "ok": r.is_ok() }));
         }
         r
@@ -1890,6 +1973,7 @@ impl Session {
         cmd::annotate::dimbreak_after_command(self, before);
         fields::after_command(self, before);
         cmd::wallgen::after_command(self, before);
+        script_tools::monitor_after(self);
     }
 
     fn resume_suspended(&mut self) {
@@ -2162,26 +2246,77 @@ impl Session {
     /// input (two spaces in a row, a space at the end of a line, an empty line) is Enter. At
     /// free-text prompts spaces are part of the text. Lines starting with `;` are comments.
     ///
-    /// A script cannot run a script: the SCRIPT command (or another `cmd {json}` call) inside a
-    /// running one is refused, so two files that run each other cannot recurse until the stack dies.
+    /// Script lines may control the script ([`script_tools`]): `SCRIPTCALL file` runs another
+    /// script and comes back (at most [`script_tools::MAX_DEPTH`] deep), `RSCRIPT` starts this one
+    /// again (at most [`script_tools::MAX_REPEATS`] times), `DELAY ms` waits. A line that fails
+    /// stops the script; RESUME carries on from the next line. The SCRIPT command (or another
+    /// `cmd {json}` call) inside a running one is refused, so two files that run each other
+    /// cannot recurse until the stack dies.
     pub fn script(&mut self, text: &str) -> Result<()> {
         if self.in_script {
             return Err(EngineError::BadParams { cmd: "script".into(), msg: "a script is already running; nested scripts are not supported".into() });
         }
         self.in_script = true;
-        let r = self.script_lines(text);
+        self.script_last = Some(text.to_string());
+        let lines: Vec<String> = text.lines().map(str::to_string).collect();
+        let r = self.script_lines(&lines, 0, 0);
         self.in_script = false;
         r
     }
 
-    fn script_lines(&mut self, text: &str) -> Result<()> {
-        for line in text.lines() {
+    /// RESUME: the rest of the script a failed line stopped (or `false` when there is none).
+    pub fn script_resume(&mut self) -> Result<bool> {
+        let Some((lines, at, depth)) = self.script_interrupted.take() else { return Ok(false) };
+        if self.in_script {
+            return Ok(true);
+        }
+        self.in_script = true;
+        let r = self.script_lines(&lines, at, depth);
+        self.in_script = false;
+        r.map(|()| true)
+    }
+
+    fn script_lines(&mut self, lines: &[String], start: usize, depth: usize) -> Result<()> {
+        let mut at = start;
+        let mut repeats = 0usize;
+        while let Some(raw) = lines.get(at) {
+            at += 1;
             // Trailing spaces are inputs (Enter); other trailing whitespace (`\r`) is not.
-            let line = line.trim_end_matches(|c: char| c.is_whitespace() && c != ' ');
+            let line = raw.trim_end_matches(|c: char| c.is_whitespace() && c != ' ');
             if line.trim_start().starts_with(';') {
                 continue;
             }
-            self.input_line(line, true)?;
+            // The script's own controls (only with no command waiting for input).
+            if self.running.is_none() {
+                match script_tools::control(line) {
+                    Some(script_tools::Control::Repeat) => {
+                        repeats += 1;
+                        if repeats > script_tools::MAX_REPEATS {
+                            self.echo(format!("RSCRIPT: stopped after {} repeats.", script_tools::MAX_REPEATS));
+                            return Ok(());
+                        }
+                        at = 0;
+                        continue;
+                    }
+                    Some(script_tools::Control::Delay(ms)) => {
+                        script_tools::delay(ms);
+                        continue;
+                    }
+                    Some(script_tools::Control::Call(path)) => {
+                        let text = script_tools::read_called(self, &path, depth)?;
+                        let called: Vec<String> = text.lines().map(str::to_string).collect();
+                        self.script_lines(&called, 0, depth + 1)?;
+                        continue;
+                    }
+                    Some(script_tools::Control::Resume) => continue,
+                    None => {}
+                }
+            }
+            if let Err(e) = self.input_line(line, true) {
+                // RESUME carries on from the next line.
+                self.script_interrupted = Some((lines.to_vec(), at, depth));
+                return Err(e);
+            }
             // A script's next line waits for a LISP routine it started, as in AutoCAD (in the
             // app too: the script itself already holds the interface).
             self.lisp_finish(std::time::Duration::from_secs(30));

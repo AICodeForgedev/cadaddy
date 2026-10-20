@@ -2128,3 +2128,97 @@
 	Manage Attributes	Gérer les attributs
 	Dialog State	État de la boîte de dialogue
 	Dialog Action	Action de la boîte de dialogue
+	Recover Drawing and Xrefs...	Récupérer le dessin et les xréfs...
+	Count Blocks	Compter les blocs
+	Get Selection Set	Obtenir un jeu de sélection
+	Global Attribute Edit	Modification globale d'attributs
+	LISP Function Surfer	Explorateur de fonctions LISP
+	List LISP Symbols	Lister les symboles LISP
+	List Nested Object	Lister l'objet imbriqué
+	List Object Xdata	Lister les données étendues de l'objet
+	Multiple Polyline Edit	Modifier plusieurs polylignes
+	Redefine Path	Redéfinir le chemin
+	Redefine Path Mode	Mode de redéfinition du chemin
+	Restore Dimension Text	Restaurer le texte de cote
+	Revert	Revenir à la version enregistrée
+	Rotate Blocks	Faire pivoter les blocs
+	Scale Blocks	Mettre les blocs à l'échelle
+	Select Similar by Properties	Sélectionner les similaires par propriétés
+	Show URLs	Afficher les URL
+	Synchronize Viewports	Synchroniser les fenêtres
+	Paste Special	Collage spécial
+	Paste Special...	Collage spécial...
+	Paste as	Coller en tant que
+	Last Measurement	Dernière mesure
+	Perimeter	Périmètre
+	curl isn't available ({error}).	curl n'est pas disponible ({error}).
+	This build has no release key to check updates with.	Cette version du logiciel n'a pas de clé de publication pour vérifier les mises à jour.
+	The release's signature files are too large.	Les fichiers de signature de la publication sont trop volumineux.
+	The release's signature isn't one CADaddy reads.	La signature de la publication n'est pas dans un format que CADaddy sait lire.
+	The release's signature is missing or damaged.	La signature de la publication est absente ou endommagée.
+	The release's signature is for another version ({version}).	La signature de la publication concerne une autre version ({version}).
+	The release is signed with a key this build doesn't trust.	La publication est signée avec une clé à laquelle cette version du logiciel ne fait pas confiance.
+	This build's release key is damaged.	La clé de publication de cette version du logiciel est endommagée.
+	The release's signature doesn't match its files.	La signature de la publication ne correspond pas à ses fichiers.
+	Couldn't reach GitHub: {why}	Impossible de joindre GitHub : {why}
+	GitHub's answer was too large.	La réponse de GitHub était trop volumineuse.
+	GitHub's answer wasn't readable ({error}).	La réponse de GitHub était illisible ({error}).
+	GitHub's answer has no version.	La réponse de GitHub ne contient aucune version.
+	GitHub's answer has an unreadable version ({version}).	La réponse de GitHub contient une version illisible ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	Impossible de télécharger le fichier {name} de la publication, rien n'a donc été installé : {why}
+	The release's {name} is too large, so nothing was installed.	Le fichier {name} de la publication est trop volumineux, rien n'a donc été installé.
+	The release's {name} isn't text, so nothing was installed.	Le fichier {name} de la publication n'est pas du texte, rien n'a donc été installé.
+	It wasn't downloaded. Download it from the release page instead.	Elle n'a pas été téléchargée. Téléchargez-la plutôt depuis la page de la publication.
+	Version {version} isn't newer than this one ({current}).	La version {version} n'est pas plus récente que celle-ci ({current}).
+	This release isn't signed.	Cette publication n'est pas signée.
+	The release failed its check.	La publication n'a pas passé la vérification.
+	The signed release doesn't list {name}.	La publication signée ne mentionne pas {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	L'empreinte de {name} indiquée par GitHub diffère de l'empreinte signée.
+	Couldn't make the folder {folder}: {error}	Impossible de créer le dossier {folder} : {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	Le téléchargement ne correspondait pas à son empreinte SHA-256 publiée ; il n'a donc pas été installé.
+	Couldn't read the download: {error}	Impossible de lire le téléchargement : {error}
+	The download failed: {why}	Le téléchargement a échoué : {why}
+	This release has no installer for this computer yet.	Cette publication n'a pas encore de programme d'installation pour cet ordinateur.
+	Drawing Properties...	Propriétés du dessin...
+	System Variable Monitor...	Contrôle des variables système...
+	{name} Properties	Propriétés de {name}
+	Summary	Résumé
+	Statistics	Statistiques
+	Custom	Personnalisé
+	Size	Taille
+	Subject	Sujet
+	Author	Auteur
+	Keywords	Mots-clés
+	Comments	Commentaires
+	Revision number	Numéro de révision
+	Hyperlink base	Base des liens hypertexte
+	Created	Créé le
+	Modified	Modifié le
+	Last saved by	Dernier enregistrement par
+	Total editing time (minutes)	Durée totale d'édition (minutes)
+	Property	Propriété
+	System Variable Monitor	Contrôle des variables système
+	Variable	Variable
+	Watched value	Valeur surveillée
+	Current value	Valeur actuelle
+	Notify when a watched variable changes	Avertir quand une variable surveillée change
+	Reset All	Tout réinitialiser
+	Delay	Délai
+	Repeat Script	Répéter le script
+	Script Call	Appel de script
+	Resume Script	Reprendre le script
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	Conserver un historique d'activité de chaque dessin (privé, dans le dossier de réglages de CADaddy)
+	Specify insertion point or	Spécifiez le point d'insertion ou
+	Specify table scale	Spécifiez l'échelle du tableau
+	{} dimension(s) updated to the current settings.	{} cote(s) mise(s) à jour avec les paramètres actuels.
+	British English (-ise)	Anglais britannique (-ise)
+	British English (-ize)	Anglais britannique (-ize)
+	Spanish	Espagnol
+	French	Français
+	German	Allemand
+	Portuguese (Iberian)	Portugais (ibérique)
+	Portuguese (Brazilian)	Portugais (brésilien)
+	(not installed)	(non installé)
+	Dictionaries are read from:	Les dictionnaires sont lus depuis :
+	Published to {path}	Publié dans {path}
+	Sheet Set (.sheetset.json)	Jeu de feuilles (.sheetset.json)

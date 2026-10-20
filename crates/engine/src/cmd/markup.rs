@@ -163,6 +163,26 @@ fn polyline(s: &mut Session, pts: &[Vec2], closed: bool) -> Option<Handle> {
     s.add_entity(super::helpers::lwpoly(pts.iter().map(|p| PolyVertex::new(*p)).collect(), closed)).ok()
 }
 
+/// Widest a sticky note's text runs before it wraps (characters).
+const NOTE_LINE_CHARS: usize = 40;
+
+/// How wide (page points) a note's text is set: its box, unless the box is a sticky note's icon
+/// (or narrower than the note's longest word), when it is as wide as its text up to
+/// [`NOTE_LINE_CHARS`] characters of 10 pt text, so it doesn't break one word per line.
+fn note_width(m: &Markup, text: &str) -> f64 {
+    // 10 pt text: about 6 pt a character.
+    const CHAR: f64 = 6.0;
+    let boxw = (m.rect[2] - m.rect[0]).abs();
+    let boxw = if boxw.is_finite() { boxw } else { 0.0 };
+    let chars = |s: &str| s.chars().count();
+    let word = text.split_whitespace().map(chars).max().unwrap_or(0);
+    if boxw > 24.0 && boxw >= word as f64 * CHAR {
+        return boxw;
+    }
+    let line = text.lines().map(chars).max().unwrap_or(0).min(NOTE_LINE_CHARS).max(word);
+    boxw.max(line as f64 * CHAR)
+}
+
 /// The objects one markup becomes.
 fn place_one(s: &mut Session, m: &Markup, at: &Place) -> Vec<Handle> {
     let pts: Vec<Vec2> = m.points.iter().map(|p| at.apply(*p)).collect();
@@ -197,7 +217,9 @@ fn place_one(s: &mut Session, m: &Markup, at: &Place) -> Vec<Handle> {
             }
             let points: Vec<[f64; 2]> = leader.iter().map(|p| [p.x, p.y]).collect();
             let text = if m.text.trim().is_empty() { m.subject.clone() } else { m.text.clone() };
-            if let Ok(r) = super::annotate::run_mleader(s, &json!({ "points": points, "text": text }))
+            // At the page's size (an inch of page is `72 · scale` drawing units), never DIMSCALE:
+            // 1:1 on a sheet, the page's scale in model space.
+            if let Ok(r) = super::annotate::add_mleader(s, &json!({ "points": points, "text": text }), Some(72.0 * at.scale()))
                 && let Some(h) = r["handle"].as_str().and_then(Handle::parse_hex)
             {
                 out.push(h);
@@ -210,7 +232,7 @@ fn place_one(s: &mut Session, m: &Markup, at: &Place) -> Vec<Handle> {
             let mt = cadaddy_doc::MText {
                 insert: at_pt.to3(0.0),
                 height,
-                width: (m.rect[2] - m.rect[0]).abs() * at.scale(),
+                width: note_width(m, &text) * at.scale(),
                 attach: 1,
                 rotation: at.b.atan2(at.a),
                 style,

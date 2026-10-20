@@ -59,14 +59,23 @@ fn each_lossy_feature_is_listed_with_its_objects() {
     );
     assert_eq!(loss(&r, "object color").map(|l| &l["handles"]), Some(&json!([circle])), "{r}");
     assert!(loss(&r, "solid3d objects").is_none(), "R2000 DWG keeps solids: {r}");
-    // Release 12 DXF: no solids, multilines or second layouts either.
+    // Release 12 DXF: no solids, multilines or second layouts either (solids and multilines are
+    // written as what R12 has; the line and circle as themselves, not reported).
     let r = s.execute("checkexchange", &json!({"format": "dxf", "version": 12})).unwrap();
-    assert_eq!(loss(&r, "solid3d objects").map(|l| (&l["what"], &l["handles"])), Some((&json!("dropped"), &json!([solid]))), "{r}");
-    assert_eq!(loss(&r, "mline objects").map(|l| &l["handles"]), Some(&json!([mline])), "{r}");
+    assert_eq!(
+        loss(&r, "solid3d objects (written as face3d)").map(|l| (&l["what"], &l["handles"])),
+        Some((&json!("changed"), &json!([solid]))),
+        "{r}"
+    );
+    assert_eq!(loss(&r, "mline objects (written as line)").map(|l| &l["handles"]), Some(&json!([mline])), "{r}");
+    assert_eq!(r["losses"].as_array().unwrap().len(), 3, "{r}");
     assert_eq!(loss(&r, "layouts").map(|l| &l["names"]), Some(&json!(["Layout2"])), "{r}");
     assert!(loss(&r, "linetypes: name").is_none(), "upper-cased names aren't a loss: {r}");
     let msg = r["message"].as_str().unwrap();
-    assert!(msg.starts_with("Not kept in a DXF file: ") && msg.contains("1 solid3d objects dropped") && msg.contains(".cdy"), "{msg}");
+    assert!(
+        msg.starts_with("Not kept in a DXF file: ") && msg.contains("1 solid3d objects (written as face3d) changed") && msg.contains(".cdy"),
+        "{msg}"
+    );
     // Bad options.
     assert!(s.execute("checkexchange", &json!({"format": "pdf"})).is_err());
     assert!(s.execute("checkexchange", &json!({"version": 1999})).is_err());

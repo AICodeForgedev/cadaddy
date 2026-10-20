@@ -61,3 +61,21 @@ fn minus_spell_keeps_the_command_line() {
     assert!(h.state().ui.dialog.is_none());
     assert!(h.state().session.prompt_text().contains("Select objects"), "{}", h.state().session.prompt_text());
 }
+
+/// The main dictionary is chosen in the dialog (Q146): the languages are listed, one not
+/// installed says so, and choosing it sets the drawing's DCTMAIN.
+#[test]
+fn spell_dialog_chooses_the_main_dictionary() {
+    let mut h = harness("Wirring");
+    h.state_mut().cmdline("spell");
+    h.run_steps(3);
+    // The combo box shows the current language as its value.
+    h.get_by(|n| n.value().as_deref() == Some("American English")).click();
+    h.run_steps(3);
+    h.get_by_label("German (not installed)").click();
+    h.run_steps(3);
+    assert_eq!(h.state_mut().run("getvar", json!({"name": "DCTMAIN"})).unwrap()["value"], "de");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Start").click();
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("isn't installed").is_some(), "Start says where the German list goes");
+}

@@ -484,7 +484,7 @@ fn pedit_apply(s: &mut Session, h: Handle, opt: &str, p: &Value) -> Result<Value
     Ok(json!({ "handle": h.hex() }))
 }
 
-fn run_pedit(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn run_pedit(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     if hs.is_empty() {
         return Err(bad("pedit", "`handle` is required"));
@@ -522,6 +522,11 @@ enum PPhase {
 }
 
 mod pedit_vertex;
+
+/// PEDIT started at its Multiple selection (MPEDIT).
+pub(crate) fn pedit_multiple() -> Box<dyn Interactive> {
+    Box::new(PeditM { phase: PPhase::MSelect, ..Default::default() })
+}
 
 #[derive(Default)]
 struct PeditM {
@@ -664,7 +669,7 @@ impl Interactive for PeditM {
             PPhase::VMove => Prompt::new("Specify new location for marked vertex", Accept::POINT),
             PPhase::VInsert => Prompt::new("Specify location for new vertex", Accept::POINT),
             PPhase::VWidthStart => Prompt::new("Specify starting width for next segment", Accept::NUMBER),
-            PPhase::VWidthEnd => Prompt::new("Specify ending width for next segment", Accept::NUMBER).default(format!("{:.4}", self.vwidth)),
+            PPhase::VWidthEnd => Prompt::new("Specify ending width for next segment", Accept::NUMBER).default(crate::units::dist(s, self.vwidth)),
             PPhase::VMark => Prompt::new("Enter an option", curves::KW).kw(&["Next", "Previous", "Go", "eXit"]).default("N"),
             PPhase::VTangent => Prompt::new("Specify direction of vertex tangent", Accept::POINT_OR_NUMBER)
                 .base_opt(self.poly(s).and_then(|p| p.vertices.get(self.vertex).map(|v| v.p))),
@@ -1162,8 +1167,8 @@ impl Interactive for LengthenM {
                 let h = curves::pick_at(s, *p).ok_or_else(|| other("*Invalid selection*"))?;
                 let k = curves::entity(s, h)?.kind;
                 match measure_len(&k) {
-                    Some((l, Some(a))) => s.echo(format!("Current length: {l:.4}, included angle: {:.0}", a.to_degrees())),
-                    Some((l, None)) => s.echo(format!("Current length: {l:.4}")),
+                    Some((l, Some(a))) => s.echo(format!("Current length: {}, included angle: {:.0}", crate::units::dist(s, l), a.to_degrees())),
+                    Some((l, None)) => s.echo(format!("Current length: {}", crate::units::dist(s, l))),
                     None => s.echo("Cannot measure that object."),
                 }
                 Ok(Step::Continue)

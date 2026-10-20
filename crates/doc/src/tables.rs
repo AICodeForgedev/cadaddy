@@ -849,11 +849,28 @@ pub struct Layout {
     /// sheet away from the origin (the layout limits, DXF 10/20); CADaddy's own start at zero.
     #[serde(default)]
     pub origin: Vec2,
+    /// Not set up yet: the first time the layout is opened or published, its viewport is zoomed
+    /// to the drawing's extents (a layout with nothing on it gets one). A new drawing's
+    /// placeholder viewports, and the empty layouts of a drawing read from a file, are marked.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pending_setup: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Layout {
     pub fn new(name: &str, tab_order: u32) -> Self {
-        Layout { name: name.into(), tab_order, page: PageSetup::default(), entities: EntityStore::new(), view: None, origin: Vec2::ZERO }
+        Layout {
+            name: name.into(),
+            tab_order,
+            page: PageSetup::default(),
+            entities: EntityStore::new(),
+            view: None,
+            origin: Vec2::ZERO,
+            pending_setup: false,
+        }
     }
 }
 

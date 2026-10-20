@@ -576,7 +576,7 @@ impl Interactive for TanCircleM {
                 _ => {
                     let r = s.doc().map(|d| d.header.f64("CIRCLERAD", 0.0)).unwrap_or(0.0);
                     let p = Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).base_opt(self.picks.last().map(|x| x.1));
-                    if r > 0.0 { p.default(format!("{r:.4}")) } else { p }
+                    if r > 0.0 { p.default(crate::units::dist(s, r)) } else { p }
                 }
             }
         } else {
@@ -1044,9 +1044,9 @@ impl Interactive for RevcloudM {
         s.echo(format!("Minimum arc length: {0:.4}   Maximum arc length: {0:.4}   Style: Normal   Type: {t}", self.arc_len));
         Ok(Step::Continue)
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
+    fn prompt(&self, s: &Session) -> Prompt {
         if self.asking_arc {
-            return Prompt::new("Specify minimum length of arc", Accept::NUMBER).default(format!("{:.4}", self.arc_len));
+            return Prompt::new("Specify minimum length of arc", Accept::NUMBER).default(crate::units::dist(s, self.arc_len));
         }
         if self.asking_style {
             return Prompt::new("Select arc style", curves::KW).kw(&["Normal", "Calligraphy"]).default("Normal");
@@ -1410,7 +1410,7 @@ impl Interactive for XlineM2 {
                 Prompt::new("Specify offset distance or", Accept::NUMBER).kw(&["Through"]).default(if d < 0.0 {
                     "Through".into()
                 } else {
-                    format!("{d:.4}")
+                    crate::units::dist(s, d)
                 })
             }
             XMode::OffSelect => Prompt::new("Select a line object", Accept::POINT),
@@ -1666,8 +1666,9 @@ impl Interactive for RectM2 {
     fn name(&self) -> &'static str {
         "RECTANG"
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
-        let num = |m: &str, d: f64| Prompt::new(m, Accept::NUMBER).default(format!("{d:.4}"));
+    fn prompt(&self, s: &Session) -> Prompt {
+        // Lengths in the drawing's units; the area as a number.
+        let num = |m: &str, d: f64| Prompt::new(m, Accept::NUMBER).default(crate::units::dist(s, d));
         if let Some(a) = self.asking {
             return match a {
                 RAsk::Chamfer1 => num("Specify first chamfer distance for rectangles", self.chamfer.0),
@@ -1676,7 +1677,8 @@ impl Interactive for RectM2 {
                 RAsk::Width => num("Specify line width for rectangles", self.width),
                 RAsk::Elevation => num("Specify the elevation for rectangles", self.elevation),
                 RAsk::Thickness => num("Specify thickness for rectangles", self.thickness),
-                RAsk::Area => num("Enter area of rectangle in current units", if self.area > 0.0 { self.area } else { 100.0 }),
+                RAsk::Area => Prompt::new("Enter area of rectangle in current units", Accept::NUMBER)
+                    .default(format!("{:.4}", if self.area > 0.0 { self.area } else { 100.0 })),
                 RAsk::AreaBasis => Prompt::new("Calculate rectangle dimensions based on", curves::KW).kw(&["Length", "Width"]).default("Length"),
                 RAsk::AreaLength => num("Enter rectangle length", 10.0),
                 RAsk::AreaWidth => num("Enter rectangle width", 10.0),
@@ -1948,7 +1950,7 @@ impl Interactive for HelixM {
         s.echo(format!("Number of turns = {:.4}     Twist=CCW", self.turns()));
         Ok(Step::Continue)
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
+    fn prompt(&self, s: &Session) -> Prompt {
         match self.asking {
             1 => return Prompt::new("Enter number of turns", Accept::NUMBER).default(format!("{:.4}", self.turns())),
             2 => return Prompt::new("Enter twist direction of helix", curves::KW).kw(&["CW", "CCW"]).default("CCW"),
@@ -1966,7 +1968,7 @@ impl Interactive for HelixM {
             (Some(c), Some(rb), None) => {
                 Prompt::new(if self.diameter { "Specify top diameter" } else { "Specify top radius or" }, Accept::POINT_OR_NUMBER)
                     .kw(if self.diameter { &[] } else { &["Diameter"] })
-                    .default(format!("{rb:.4}"))
+                    .default(crate::units::dist(s, rb))
                     .base(c)
             }
             (Some(c), Some(_), Some(_)) => Prompt::new("Specify helix height or", Accept::POINT_OR_NUMBER)

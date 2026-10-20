@@ -61,6 +61,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let now = now();
     egui::Window::new(crate::tl!("Activity History"))
         .id(egui::Id::new("activity_palette"))
+        .default_pos(crate::palette_pos(app))
         .open(open)
         .resizable(true)
         .default_size([360.0, 420.0])

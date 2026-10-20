@@ -88,16 +88,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["br"])
             .params("{handle, p1, p2}")
             .interactive(|_| Ok(Box::new(BreakM::default()))),
-        CommandSpec::new("breakatpoint", "Break At Point", run_breakat).menu(&["Modify", "Break At Point"]).params("{handle, at}").interactive(|_| {
-            Ok(super::ask::machine(
-                "breakatpoint",
-                "BREAKATPOINT",
-                [
-                    super::ask::ask("handle", "Select object", super::ask::Kind::One),
-                    super::ask::ask("at", "Specify break point", super::ask::Kind::Point),
-                ],
-            ))
-        }),
+        CommandSpec::new("breakatpoint", "Break At Point", run_breakat)
+            .menu(&["Modify", "Break At Point"])
+            .params("{handle, at}")
+            .interactive(|_| Ok(Box::new(BreakM { at_point: true, ..BreakM::default() }))),
         CommandSpec::new("join", "Join", run_join)
             .menu(&["Modify", "Join"])
             .alias(&["j"])
@@ -1696,23 +1690,104 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
             }
             v
         }
-        EntityKind::LwPolyline(p) if !p.closed => {
+        EntityKind::Ellipse(el) => {
+            let ge = cadaddy_geom::Ellipse { center: el.center.xy(), major: el.major.xy(), ratio: el.ratio, start: el.start, end: el.end };
+            if !(ge.major.len() > 1e-12 && ge.ratio.is_finite() && ge.ratio > 0.0) {
+                return Err(EngineError::Other("Cannot break that object.".into()));
+            }
+            let t = |q: Vec2| ge.param_of(ge.closest(q));
+            let piece = |a: f64, b: f64| EntityKind::Ellipse(cadaddy_doc::Ellipse { start: a, end: b, ..el.clone() });
+            if ge.is_full() {
+                if p1.near(p2, 1e-12) {
+                    return Err(EngineError::Other("Arc cannot be full 360 degrees.".into()));
+                }
+                // As a circle: the counter-clockwise part from the first point to the second goes.
+                vec![piece(t(p2), t(p1))]
+            } else {
+                let par = |q: Vec2| norm_angle(t(q) - ge.start).min(ge.sweep());
+                let (mut t1, mut t2) = (par(p1), par(p2));
+                if t1 > t2 {
+                    std::mem::swap(&mut t1, &mut t2);
+                }
+                let mut v = Vec::new();
+                if t1 > 1e-12 {
+                    v.push(piece(ge.start, norm_angle(ge.start + t1)));
+                }
+                if t2 < ge.sweep() - 1e-12 {
+                    v.push(piece(norm_angle(ge.start + t2), ge.end));
+                }
+                v
+            }
+        }
+        EntityKind::Spline(sp) => {
+            let (lo, hi) = sp.domain();
+            if !(lo.is_finite() && hi.is_finite() && hi > lo) {
+                return Err(EngineError::Other("Cannot break that object.".into()));
+            }
+            let cant = || EngineError::Other("Cannot break that object.".into());
+            let (t1, t2) = (super::curves::spline_param_of(sp, p1), super::curves::spline_param_of(sp, p2));
+            if sp.closed {
+                // As a closed polyline: the counter-clockwise part from the first point to the
+                // second goes, the rest stays as one open spline.
+                let pts = sp.tessellate(1e-3);
+                let ccw = Polyline { vertices: pts.iter().map(|q| PolyVertex::new(*q)).collect(), closed: true }.area() >= 0.0;
+                let (from, to) = if ccw { (t1, t2) } else { (t2, t1) };
+                let cl = sp.clamped().ok_or_else(cant)?;
+                let kept = if from > to + 1e-9 {
+                    super::curves::sub_spline(&cl, to, from)
+                } else {
+                    // Round past the start: the run to the end, then on from the start.
+                    let tail = (to < hi - 1e-9).then(|| super::curves::sub_spline(&cl, to, hi)).flatten();
+                    let head = (from > lo + 1e-9).then(|| super::curves::sub_spline(&cl, lo, from)).flatten();
+                    match (tail, head) {
+                        (Some(a), Some(b)) => a.joined(&b),
+                        (a, b) => a.or(b),
+                    }
+                };
+                vec![EntityKind::Spline(kept.ok_or_else(cant)?)]
+            } else {
+                let (t1, t2) = if t1 > t2 { (t2, t1) } else { (t1, t2) };
+                let mut v = Vec::new();
+                if t1 > lo + 1e-9 {
+                    v.push(EntityKind::Spline(super::curves::sub_spline(sp, lo, t1).ok_or_else(cant)?));
+                }
+                if t2 < hi - 1e-9 {
+                    v.push(EntityKind::Spline(super::curves::sub_spline(sp, t2, hi).ok_or_else(cant)?));
+                }
+                v
+            }
+        }
+        EntityKind::LwPolyline(p) if p.closed => {
+            let pl = Polyline { vertices: p.vertices.clone(), closed: true };
+            let segs = pl.segments();
+            let total: f64 = segs.iter().map(Segment::len).sum();
+            if !(total.is_finite() && total > 1e-12) {
+                return Err(EngineError::Other("Cannot break that object.".into()));
+            }
+            // A point at the very end of the outline is its start vertex.
+            let at = |q: Vec2| {
+                let t = length_param(&segs, q);
+                if t >= total - 1e-9 { 0.0 } else { t }
+            };
+            let (t1, t2) = (at(p1), at(p2));
+            // AutoCAD removes the counter-clockwise part from the first point to the second: along
+            // the vertex order when the outline runs counter-clockwise, against it otherwise.
+            let (from, to) = if pl.area() >= 0.0 { (t1, t2) } else { (t2, t1) };
+            // Keep the rest: from the end of the removed part on round to its start (once round
+            // the whole outline when both points are one: BREAKATPOINT opens it there).
+            let b = if from > to + 1e-9 { from } else { from + total };
+            let doubled: Vec<Segment> = segs.iter().chain(segs.iter()).copied().collect();
+            let vs = sub_polyline(&doubled, to, b);
+            if vs.len() < 2 {
+                return Err(EngineError::Other("Cannot break that object.".into()));
+            }
+            vec![EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices: vs, closed: false, ..p.clone() })]
+        }
+        EntityKind::LwPolyline(p) => {
             let pl = Polyline { vertices: p.vertices.clone(), closed: false };
             let segs = pl.segments();
             let total: f64 = segs.iter().map(Segment::len).sum();
-            let lp = |q: Vec2| {
-                let mut acc = 0.0;
-                let mut best = (f64::INFINITY, 0.0);
-                for s in &segs {
-                    let c = s.closest(q);
-                    let dd = c.dist(q);
-                    if dd < best.0 {
-                        best = (dd, acc + param_on(s, c) * s.len());
-                    }
-                    acc += s.len();
-                }
-                best.1
-            };
+            let lp = |q: Vec2| length_param(&segs, q);
             let (mut t1, mut t2) = (lp(p1), lp(p2));
             if t1 > t2 {
                 std::mem::swap(&mut t1, &mut t2);
@@ -1741,6 +1816,21 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
         }
     }
     Ok(out)
+}
+
+/// The distance along `segs` to the point nearest `q`.
+fn length_param(segs: &[Segment], q: Vec2) -> f64 {
+    let mut acc = 0.0;
+    let mut best = (f64::INFINITY, 0.0);
+    for s in segs {
+        let c = s.closest(q);
+        let dd = c.dist(q);
+        if dd < best.0 {
+            best = (dd, acc + param_on(s, c) * s.len());
+        }
+        acc += s.len();
+    }
+    best.1
 }
 
 fn run_break(s: &mut Session, p: &Value) -> Result<Value> {
@@ -2477,7 +2567,7 @@ impl Interactive for OffsetM {
             (false, _) => Prompt::new("Specify offset distance", Accept::POINT_OR_NUMBER).kw(&["Through", "Erase", "Layer"]).default(if last < 0.0 {
                 "Through".to_string()
             } else {
-                format!("{last:.4}")
+                crate::units::dist(s, last)
             }),
             (true, None) => Prompt::new("Select object to offset", Accept::POINT).kw(&["Exit", "Undo"]).default("Exit"),
             (true, Some(_)) if self.multiple => {
@@ -2713,12 +2803,20 @@ impl Interactive for FilletM {
             if d.header.i64("CHAMMODE", 0) == 1 {
                 let (au, ap) = (d.header.i64("AUNITS", 0), d.header.i64("AUPREC", 0));
                 let a = crate::units::format_angle(d.header.f64("CHAMFERD", 0.0), au, ap);
-                format!("({mode} mode) Current chamfer Length = {:.4}, Angle = {a}", d.header.f64("CHAMFERC", 0.0))
+                format!("({mode} mode) Current chamfer Length = {}, Angle = {a}", crate::units::dist(s, d.header.f64("CHAMFERC", 0.0)))
             } else {
-                format!("({mode} mode) Current chamfer Dist1 = {:.4}, Dist2 = {:.4}", d.header.f64("CHAMFERA", 0.0), d.header.f64("CHAMFERB", 0.0))
+                format!(
+                    "({mode} mode) Current chamfer Dist1 = {}, Dist2 = {}",
+                    crate::units::dist(s, d.header.f64("CHAMFERA", 0.0)),
+                    crate::units::dist(s, d.header.f64("CHAMFERB", 0.0))
+                )
             }
         } else {
-            format!("Current settings: Mode = {}, Radius = {:.4}", if trim { "TRIM" } else { "NOTRIM" }, d.header.f64("FILLETRAD", 0.0))
+            format!(
+                "Current settings: Mode = {}, Radius = {}",
+                if trim { "TRIM" } else { "NOTRIM" },
+                crate::units::dist(s, d.header.f64("FILLETRAD", 0.0))
+            )
         };
         s.echo(msg);
         Ok(Step::Continue)
@@ -2733,7 +2831,7 @@ impl Interactive for FilletM {
                 (true, 1) => ("Specify first chamfer distance", hdr("CHAMFERA")),
                 (true, _) => ("Specify second chamfer distance", hdr("CHAMFERA")),
             };
-            return Prompt::new(msg, Accept::NUMBER).default(format!("{v:.4}"));
+            return Prompt::new(msg, Accept::NUMBER).default(crate::units::dist(s, v));
         }
         let hdr_i = |k: &str, dflt: i64| s.doc().map(|d| d.header.i64(k, dflt)).unwrap_or(dflt);
         match self.ask {
@@ -2747,7 +2845,7 @@ impl Interactive for FilletM {
             }
             Some(FilletAsk::Length) => {
                 let v = s.doc().map(|d| d.header.f64("CHAMFERC", 0.0)).unwrap_or(0.0);
-                return Prompt::new("Specify chamfer length on the first line", Accept::NUMBER).default(format!("{v:.4}"));
+                return Prompt::new("Specify chamfer length on the first line", Accept::NUMBER).default(crate::units::dist(s, v));
             }
             Some(FilletAsk::Angle) => {
                 let (a, au, ap) =
@@ -3087,15 +3185,30 @@ struct BreakM {
     obj: Option<(Handle, Vec2)>,
     /// The `First point` option: the next point replaces the selection pick as the first break point.
     first_point: bool,
+    /// BREAKATPOINT: one break point, after the selection.
+    at_point: bool,
+}
+
+impl BreakM {
+    /// Break and end the command: an object that can't be broken ends it with the reason, it
+    /// doesn't ask for the point again (and take whatever is typed next as one).
+    fn finish(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Result<Step> {
+        if let Err(e) = break_entity(s, h, p1, p2) {
+            s.echo(e.user_message());
+        }
+        s.set_selection(Vec::new());
+        Ok(Step::Done)
+    }
 }
 
 impl Interactive for BreakM {
     fn name(&self) -> &'static str {
-        "BREAK"
+        if self.at_point { "BREAKATPOINT" } else { "BREAK" }
     }
     fn prompt(&self, _s: &Session) -> Prompt {
         match self.obj {
             None => Prompt::new("Select object", Accept::POINT),
+            Some(_) if self.at_point => Prompt::new("Specify break point", Accept::POINT),
             Some(_) if self.first_point => Prompt::new("Specify first break point", Accept::POINT),
             Some(_) => Prompt::new("Specify second break point", Accept::POINT).kw(&["First point"]),
         }
@@ -3114,20 +3227,27 @@ impl Interactive for BreakM {
                 }
                 Ok(Step::Continue)
             }
+            // Picked by handle (a script or a selection set): no pick point to break at, so
+            // BREAK asks for the first point, as AutoCAD does after a window selection.
+            (None, Input::Pick(hs)) => {
+                if let Some(h) = hs.first().copied() {
+                    self.obj = Some((h, Vec2::ZERO));
+                    self.first_point = !self.at_point;
+                    s.set_selection(vec![h]);
+                }
+                Ok(Step::Continue)
+            }
+            (Some((h, _)), Input::Point(p)) if self.at_point => Self::finish(s, h, p, p),
             (Some(_), Input::Keyword(k)) if k == "First point" => {
                 self.first_point = true;
                 Ok(Step::Continue)
             }
-            (Some((h, _)), Input::Point(p1)) if self.first_point => {
-                self.obj = Some((h, p1));
+            (Some((h, _)), Input::Point(p)) if self.first_point => {
+                self.obj = Some((h, p));
                 self.first_point = false;
                 Ok(Step::Continue)
             }
-            (Some((h, p1)), Input::Point(p2)) => {
-                break_entity(s, h, p1, p2)?;
-                s.set_selection(Vec::new());
-                Ok(Step::Done)
-            }
+            (Some((h, p1)), Input::Point(p2)) => Self::finish(s, h, p1, p2),
             (_, Input::Enter) => Ok(Step::Done),
             _ => Ok(Step::Continue),
         }

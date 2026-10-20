@@ -501,6 +501,58 @@ mod tests {
         assert!(r.iter().all(|x| x["ok"] == true));
     }
 
+    /// A port nothing listens on now.
+    fn free_port() -> u16 {
+        TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port()
+    }
+
+    /// The first line the server answers to `line` on `port`.
+    fn first_reply(port: u16, line: &str) -> Value {
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        writeln!(c, "{line}").unwrap();
+        let mut reply = String::new();
+        BufReader::new(c).read_line(&mut reply).unwrap();
+        serde_json::from_str(&reply).unwrap()
+    }
+
+    #[test]
+    fn a_token_from_an_earlier_start_is_refused() {
+        // Two starts as the app does them (each with a fresh token written to the settings
+        // folder): the first start's token doesn't open the second's port.
+        let dir = std::env::temp_dir().join(format!("cadaddy-oldtoken-{}", std::process::id()));
+        let (p1, p2) = (free_port(), free_port());
+        let _rx1 = start_ports(&[p1], egui::Context::default(), new_token(), Some(&dir));
+        let _rx2 = start_ports(&[p2], egui::Context::default(), new_token(), Some(&dir));
+        let read = |p: u16| std::fs::read_to_string(cadaddy_engine::control_auth::token_path(&dir, p)).unwrap().trim().to_string();
+        let (old, new) = (read(p1), read(p2));
+        assert_ne!(old, new);
+        let r = first_reply(p2, &json!({ "id": 1, "method": "auth", "params": { "token": old } }).to_string());
+        assert!(r["error"].as_str().is_some_and(|e| e.starts_with("unauthorized")), "{r}");
+        let r = first_reply(p2, &json!({ "id": 2, "method": "auth", "params": { "token": new } }).to_string());
+        assert_eq!(r["result"]["authenticated"], true, "{r}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_port_is_not_reachable_from_another_computer() {
+        // Listening on 127.0.0.1 only: this computer's own network address (what another computer
+        // would connect to) gets no answer.
+        let port = free_port();
+        let _rx = start_ports(&[port], egui::Context::default(), new_token(), None);
+        assert!(TcpStream::connect(("127.0.0.1", port)).is_ok());
+        // The address this computer would send from; no packet is sent.
+        let lan = std::net::UdpSocket::bind(("0.0.0.0", 0)).and_then(|u| u.connect(("192.0.2.1", 9)).and_then(|()| u.local_addr()));
+        match lan.map(|a| a.ip()) {
+            Ok(ip) if !ip.is_loopback() && !ip.is_unspecified() => {
+                let r = TcpStream::connect_timeout(&std::net::SocketAddr::new(ip, port), Duration::from_secs(2));
+                assert!(r.is_err(), "the control port answered on {ip}");
+            }
+            // No network here: nothing else could reach it either.
+            _ => {}
+        }
+    }
+
     #[test]
     fn tokens_are_random() {
         let (a, b) = (new_token().unwrap(), new_token().unwrap());

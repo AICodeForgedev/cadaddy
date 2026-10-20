@@ -101,7 +101,7 @@ pub(crate) fn after_command(s: &mut Session, before: &Arc<Drawing>) {
     let Ok(d) = s.doc() else { return };
     let mut work = Vec::new();
     let spaces = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities));
-    for e in spaces.flat_map(|sp| sp.iter()) {
+    for e in spaces.flat_map(|sp| sp.iter_kinds(cadaddy_doc::KIND_INSERT)) {
         let EntityKind::Insert(ins) = &e.kind else { continue };
         let Some(b) = d.block(&ins.block) else { continue };
         let Some(ArrayKind::Path(pa)) = b.array.as_ref().map(|a| &a.kind) else { continue };

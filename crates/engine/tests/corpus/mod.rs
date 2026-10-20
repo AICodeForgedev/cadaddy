@@ -145,6 +145,10 @@ pub fn generate(target: usize, seed: u64) -> Made {
     });
     let mut r = Rng::new(seed);
     let mut s = Session::new();
+    // The same seed, the same drawing: its fingerprint from the seed, not the clock.
+    if let Ok(d) = s.doc_mut() {
+        d.header.set_str("FINGERPRINTGUID", &format!("{{00000000-0000-4000-8000-{:012X}}}", seed & 0xFFFF_FFFF_FFFF));
+    }
     for name in LAYERS {
         if let Ok(d) = s.doc_mut() {
             d.ensure_layer(name);
@@ -369,12 +373,17 @@ pub struct Trip {
 }
 
 pub fn round_trip(d: &Drawing, format: &'static str) -> Result<Trip, String> {
-    let name = format!("corpus.{format}");
+    // "dwg-native": DWG with CADaddy's own codec (Q203); "dwg" is the default engine's.
+    let native = format == "dwg-native";
+    let name = if native { "corpus.dwg".to_string() } else { format!("corpus.{format}") };
     let t = Instant::now();
-    let bytes = cadaddy_io::write(d, &name).map_err(|e| format!("save {format}: {e}"))?;
+    let bytes =
+        if native { cadaddy_io::write_dwg(d, cadaddy_io::Version::R2018, cadaddy_io::DwgEngine::Native) } else { cadaddy_io::write(d, &name) }
+            .map_err(|e| format!("save {format}: {e}"))?;
     let save = t.elapsed().as_secs_f64();
     let t = Instant::now();
-    let back = cadaddy_io::read(&bytes, &name).map_err(|e| format!("open {format}: {e}"))?;
+    let back = if native { cadaddy_io::read_dwg(&bytes, cadaddy_io::DwgEngine::Native) } else { cadaddy_io::read(&bytes, &name) }
+        .map_err(|e| format!("open {format}: {e}"))?;
     let open = t.elapsed().as_secs_f64();
     let t = Instant::now();
     let built = cadaddy_engine::render::build(&back, &Space::Model, &cadaddy_engine::render::Options::default());

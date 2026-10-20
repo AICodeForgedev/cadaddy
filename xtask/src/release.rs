@@ -164,7 +164,7 @@ pub fn verify_cmd(root: &Path, args: &[&str]) -> Result<(), String> {
 fn verify_dir(dir: &Path, version: &str) -> Result<(), String> {
     let sums = std::fs::read_to_string(dir.join(relsig::SUMS)).map_err(|e| format!("{}: {e}", relsig::SUMS))?;
     let sig = std::fs::read_to_string(dir.join(relsig::SIG)).map_err(|e| format!("{}: {e}", relsig::SIG))?;
-    relsig::verify(version, sums.as_bytes(), &sig, &relsig::trusted_keys())?;
+    relsig::verify(version, sums.as_bytes(), &sig, &relsig::trusted_keys()).map_err(|e| e.to_string())?;
     for f in release_files(dir)? {
         let name = f.file_name().and_then(|n| n.to_str()).unwrap_or_default();
         match relsig::sum_for(&sums, name) {

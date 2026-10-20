@@ -1,8 +1,12 @@
 //! Activity history: a private, local log per drawing of what changed — each undo step's command,
 //! when, and how many objects it added, changed and erased (no user names). Kept in memory with
-//! the drawing, saved beside its file as `<file>.activity.json` when the drawing is saved, and read
-//! back when it is opened. The objects a step changed can be shown while they still exist.
-//! ACTIVITYLOG 0 (Options) turns it off: nothing is recorded, read or written.
+//! the drawing, saved in CADaddy's own settings folder (`activity/`, one file per drawing file,
+//! named by a hash of its path) when the drawing is saved, and read back when it is opened. Never
+//! beside the drawing: a folder of saved or exported files holds only those files (battle test
+//! 0.7.8 #8), so the history doesn't travel with a drawing that is sent on. A log an older
+//! CADaddy wrote beside a drawing (`<file>.activity.json`) is still read; it isn't written again.
+//! The objects a step changed can be shown while they still exist. ACTIVITYLOG 0 (Options) turns
+//! it off: nothing is recorded, read or written.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -16,8 +20,59 @@ use crate::Session;
 pub const MAX_ENTRIES: usize = 10_000;
 /// Changed objects remembered per entry (to show them).
 pub const MAX_HANDLES: usize = 1000;
-/// The largest sidecar read.
+/// The largest log read.
 const MAX_SIDECAR_BYTES: u64 = 64 << 20;
+/// Most drawings' logs kept in the settings folder (the least recently saved go first).
+pub const MAX_LOGS: usize = 2000;
+
+/// Where the logs are kept instead of the settings folder's `activity/` (tests).
+static STORE: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+/// Keep the logs in `dir` instead of the settings folder (`None`: back to it). For tests.
+pub fn set_store_dir(dir: Option<std::path::PathBuf>) {
+    if let Ok(mut s) = STORE.lock() {
+        *s = dir;
+    }
+}
+
+/// The folder the logs are kept in.
+#[cfg(not(target_arch = "wasm32"))]
+fn store_dir() -> Option<std::path::PathBuf> {
+    STORE.lock().ok().and_then(|s| s.clone()).or_else(|| crate::control_auth::config_dir().map(|d| d.join("activity")))
+}
+
+/// The log file of the drawing saved at `path`: named by a hash of the full path (the path itself
+/// isn't a file name), in [`store_dir`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn log_file(path: &str) -> Option<std::path::PathBuf> {
+    let full = std::path::absolute(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
+    let mut key = full.to_string_lossy().into_owned();
+    // Names that differ only in case are one file where the file system ignores case.
+    if cfg!(any(windows, target_os = "macos")) {
+        key = key.to_lowercase();
+    }
+    let h = key.bytes().fold(0xCBF2_9CE4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01B3));
+    Some(store_dir()?.join(format!("{h:016x}.json")))
+}
+
+/// Drop the least recently saved logs past [`MAX_LOGS`].
+#[cfg(not(target_arch = "wasm32"))]
+fn prune(dir: &std::path::Path) {
+    let Ok(read) = std::fs::read_dir(dir) else { return };
+    let mut logs: Vec<(std::time::SystemTime, std::path::PathBuf)> = read
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .take(MAX_LOGS * 4)
+        .collect();
+    if logs.len() <= MAX_LOGS {
+        return;
+    }
+    logs.sort();
+    for (_, p) in logs.iter().take(logs.len() - MAX_LOGS) {
+        let _ = std::fs::remove_file(p);
+    }
+}
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
 
@@ -131,7 +186,8 @@ impl Activity {
     }
 }
 
-/// The sidecar file of the drawing saved at `path`.
+/// The file an older CADaddy kept the log of the drawing at `path` in, beside it (read, never
+/// written).
 pub fn sidecar(path: &str) -> String {
     format!("{path}.activity.json")
 }
@@ -145,20 +201,24 @@ pub fn after_open(s: &mut Session, i: usize) {
     let Some(path) = st.path.clone() else { return };
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let file = sidecar(&path);
-        if std::fs::metadata(&file).is_ok_and(|m| m.is_file() && m.len() <= MAX_SIDECAR_BYTES)
-            && let Ok(text) = std::fs::read_to_string(&file)
-            && let Some(a) = Activity::from_json(&text)
-        {
-            st.activity = a;
+        // The settings folder's log, else one an older CADaddy left beside the drawing.
+        let files = [log_file(&path), Some(std::path::PathBuf::from(sidecar(&path)))];
+        for file in files.into_iter().flatten() {
+            if std::fs::metadata(&file).is_ok_and(|m| m.is_file() && m.len() <= MAX_SIDECAR_BYTES)
+                && let Ok(text) = std::fs::read_to_string(&file)
+                && let Some(a) = Activity::from_json(&text)
+            {
+                st.activity = a;
+                break;
+            }
         }
     }
     #[cfg(target_arch = "wasm32")]
     let _ = path;
 }
 
-/// After saving the active drawing to `path`: write its log beside it. A log that can't be
-/// written is reported, never an error of the save.
+/// After saving the active drawing to `path`: write its log to the settings folder, under that
+/// path's name. A log that can't be written is reported, never an error of the save.
 pub fn after_save(s: &mut Session, path: &str) {
     if !enabled() {
         return;
@@ -170,8 +230,15 @@ pub fn after_save(s: &mut Session, path: &str) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let text = st.activity.to_json();
-        if let Err(e) = std::fs::write(sidecar(path), text) {
-            s.echo(format!("The activity log couldn't be saved beside the drawing: {e}"));
+        let Some(file) = log_file(path) else { return };
+        let written = file.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&file, text));
+        match written {
+            Ok(()) => {
+                if let Some(dir) = file.parent() {
+                    prune(dir);
+                }
+            }
+            Err(e) => s.echo(format!("The activity log couldn't be saved in CADaddy's settings folder: {e}")),
         }
     }
     #[cfg(target_arch = "wasm32")]

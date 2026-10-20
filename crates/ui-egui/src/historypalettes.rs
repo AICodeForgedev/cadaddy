@@ -14,9 +14,13 @@ pub fn undo_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = crate::theme::Tokens::get();
     let list = app.session.execute("undohistory", &json!({})).unwrap_or(Value::Null);
     let mut go: Option<u64> = None;
-    egui::Window::new(crate::tl!("Undo History")).id(egui::Id::new("Undo History")).open(open).resizable(true).default_size([280.0, 360.0]).show(
-        ctx,
-        |ui| {
+    egui::Window::new(crate::tl!("Undo History"))
+        .id(egui::Id::new("Undo History"))
+        .default_pos(crate::palette_pos(app))
+        .open(open)
+        .resizable(true)
+        .default_size([280.0, 360.0])
+        .show(ctx, |ui| {
             let marks: Vec<u64> = list["marks"].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
             let group = list["group"].as_u64();
             let current = list["current"].as_u64().unwrap_or(0);
@@ -42,8 +46,7 @@ pub fn undo_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 }
             });
             ui.label(RichText::new(crate::tl!("Click a step to undo or redo to it.")).small().color(t.text_dim));
-        },
-    );
+        });
     if let Some(step) = go
         && let Err(e) = app.run("undohistory", json!({ "action": "to", "step": step }))
     {
@@ -87,6 +90,7 @@ pub fn commands_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let (mut copy, mut save, mut clear) = (false, false, false);
     egui::Window::new(crate::tl!("Command History"))
         .id(egui::Id::new("Command History"))
+        .default_pos(crate::palette_pos(app))
         .open(open)
         .resizable(true)
         .default_size([360.0, 400.0])

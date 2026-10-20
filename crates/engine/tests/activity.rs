@@ -1,6 +1,8 @@
 //! Activity history (ACTIVITY): every step of a short script logged with its command and how many
-//! objects it added, changed and erased; a step's objects selected; the log saved beside the
-//! drawing and read back; ACTIVITYLOG off records nothing. One test: ACTIVITYLOG is process-wide.
+//! objects it added, changed and erased; a step's objects selected; the log saved in the settings
+//! folder (never beside the drawing: a SAVEAS DWG writes only the DWG) and read back; an older
+//! log beside a drawing still read; ACTIVITYLOG off records nothing. One test: ACTIVITYLOG and the
+//! log folder are process-wide.
 
 use cadaddy_engine::Session;
 use cadaddy_engine::cmd::file::{IoHooks, set_io};
@@ -17,6 +19,9 @@ fn a_short_script_is_logged_saved_and_read_back() {
         write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
         plot: None,
         read_pdf: None,
+    });
+    cadaddy_engine::cmd::file::set_write_as(|d, n, o| {
+        cadaddy_io::write_with(d, n, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
     let mut s = Session::new();
     s.script("LINE 0,0 10,0 10,10\n\nCIRCLE 5,5 2\nCOPY L  0,0 20,0\n\n").unwrap();
@@ -46,18 +51,45 @@ fn a_short_script_is_logged_saved_and_read_back() {
     assert_eq!(entries(&mut s).len(), 4);
     assert!(s.execute("activity", &json!({ "action": "show", "seq": 999 })).is_err());
 
-    // Saved beside the drawing, read back on open.
+    // Saved in the settings folder (here a test folder), never beside the drawing; read back on open.
     let dir = std::env::temp_dir().join(format!("cadaddy-activity-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("plan.dxf");
+    let _ = std::fs::remove_dir_all(&dir);
+    let (out, store) = (dir.join("to send"), dir.join("settings-activity"));
+    std::fs::create_dir_all(&out).unwrap();
+    cadaddy_engine::activity::set_store_dir(Some(store.clone()));
+    let path = out.join("Sample Floor Plan.dxf");
     let p = path.to_string_lossy().to_string();
     s.execute("saveas", &json!({ "path": p })).unwrap();
-    let side = format!("{p}.activity.json");
-    let text = std::fs::read_to_string(&side).unwrap();
+    let names = |d: &std::path::Path| {
+        let mut v: Vec<String> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    };
+    assert_eq!(names(&out), vec!["Sample Floor Plan.dxf"], "only the drawing beside it");
+    let log = cadaddy_engine::activity::log_file(&p).unwrap();
+    assert!(log.starts_with(&store));
+    let text = std::fs::read_to_string(&log).unwrap();
     assert!(text.contains("\"command\"") && !text.to_lowercase().contains("user"), "no user names: {text}");
     let mut t = Session::new();
     t.execute("open", &json!({ "path": p })).unwrap();
     assert_eq!(entries(&mut t).len(), 4);
+    // Save As DWG (every version) and an export: the folder holds only those files.
+    for v in ["2000", "2018"] {
+        t.execute("saveas", &json!({ "path": out.join(format!("plan-R{v}.dwg")), "version": v })).unwrap();
+    }
+    t.execute("export", &json!({ "path": out.join("plan.pdf") })).ok();
+    let got = names(&out);
+    assert!(got.iter().all(|n| !n.contains("activity")), "no history beside the files: {got:?}");
+    assert!(got.contains(&"plan-R2000.dwg".to_string()) && got.contains(&"plan-R2018.dwg".to_string()), "{got:?}");
+    // A log an older CADaddy left beside a drawing is still read.
+    let old = dir.join("old");
+    std::fs::create_dir_all(&old).unwrap();
+    let older = old.join("Project A.dxf");
+    std::fs::copy(&path, &older).unwrap();
+    std::fs::write(format!("{}.activity.json", older.display()), &text).unwrap();
+    let mut u = Session::new();
+    u.execute("open", &json!({ "path": older })).unwrap();
+    assert_eq!(entries(&mut u).len(), 4, "the older sidecar");
     t.execute("activity", &json!({ "action": "clear" })).unwrap();
     assert!(entries(&mut t).is_empty());
 
@@ -69,5 +101,6 @@ fn a_short_script_is_logged_saved_and_read_back() {
     t.execute("setvar", &json!({ "name": "ACTIVITYLOG", "value": 1 })).unwrap();
     t.execute("line", &json!({ "points": [[0, 0], [2, 2]] })).unwrap();
     assert_eq!(entries(&mut t).len(), 1);
+    cadaddy_engine::activity::set_store_dir(None);
     std::fs::remove_dir_all(&dir).ok();
 }

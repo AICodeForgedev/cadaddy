@@ -16,7 +16,7 @@ pub fn configure(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         app.session.execute("standards", &json!({})).ok().and_then(|v| serde_json::from_value(v["files"].clone()).ok()).unwrap_or_default();
     let mut action: Option<Value> = None;
     let mut check = false;
-    egui::Window::new(crate::tl!("Configure Standards")).id(egui::Id::new("Configure Standards")).open(open).resizable(true).default_width(460.0).show(ctx, |ui| {
+    egui::Window::new(crate::tl!("Configure Standards")).id(egui::Id::new("Configure Standards")).default_pos(crate::palette_pos(app)).open(open).resizable(true).default_width(460.0).show(ctx, |ui| {
         ui.label(RichText::new(crate::tl!("Standards files associated with the current drawing")).strong());
         egui::ScrollArea::vertical().id_salt("standards-files").max_height(200.0).show(ui, |ui| {
             if files.is_empty() {
@@ -75,9 +75,13 @@ pub fn check(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     }
     let mut run: Option<Value> = None;
     let mut report = false;
-    egui::Window::new(crate::tl!("Check Standards")).id(egui::Id::new("Check Standards")).open(open).resizable(true).default_width(560.0).show(
-        ctx,
-        |ui| match &st.result {
+    egui::Window::new(crate::tl!("Check Standards"))
+        .id(egui::Id::new("Check Standards"))
+        .default_pos(crate::palette_pos(app))
+        .open(open)
+        .resizable(true)
+        .default_width(560.0)
+        .show(ctx, |ui| match &st.result {
             Some(Ok(v)) => {
                 let problems = v["problems"].as_array().cloned().unwrap_or_default();
                 if problems.is_empty() {
@@ -147,8 +151,7 @@ pub fn check(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 ui.label(RichText::new(e).color(t.warn));
             }
             None => {}
-        },
-    );
+        });
     // A fix that fails is told on the command line; the list stays.
     if let Some(p) = run
         && let Ok(v) = app.run("checkstandards", p)
@@ -201,9 +204,13 @@ pub fn laytrans(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let layers: Vec<String> =
         app.session.doc().map(|d| d.layers.iter().map(|l| l.name.clone()).filter(|n| !n.contains('|')).collect()).unwrap_or_default();
     let (mut load_std, mut load_map, mut save_map, mut translate) = (false, false, false, false);
-    egui::Window::new(crate::tl!("Layer Translator")).id(egui::Id::new("Layer Translator")).open(open).resizable(true).default_width(560.0).show(
-        ctx,
-        |ui| {
+    egui::Window::new(crate::tl!("Layer Translator"))
+        .id(egui::Id::new("Layer Translator"))
+        .default_pos(crate::palette_pos(app))
+        .open(open)
+        .resizable(true)
+        .default_width(560.0)
+        .show(ctx, |ui| {
             ui.columns(2, |cols| {
                 cols[0].label(RichText::new(crate::tl!("Translate From")).strong());
                 egui::ScrollArea::vertical().id_salt("laytrans-from").max_height(220.0).show(&mut cols[0], |ui| {
@@ -263,8 +270,7 @@ pub fn laytrans(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 save_map = ui.add_enabled(!st.map.is_empty(), egui::Button::new(crate::tl!("Save Map..."))).clicked();
                 translate = ui.add_enabled(!st.map.is_empty(), egui::Button::new(crate::tl!("Translate"))).clicked();
             });
-        },
-    );
+        });
     let no_dialog = |app: &mut CadApp| {
         app.session
             .echo("LAYTRANS: there is no file dialog here; run it with parameters, e.g. laytrans {\"map\": [{\"from\": \"A\", \"to\": \"B\"}]}")

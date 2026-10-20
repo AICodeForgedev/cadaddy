@@ -48,9 +48,12 @@ email it. The dialog lists every file in the report before you save it.
 
 ## Files CADaddy keeps
 
-Preferences, the logs, autosaves, the activity log beside a drawing (when ACTIVITYLOG is on) and
-downloaded updates stay in CADaddy's folders on your computer. Uninstalling removes the program;
-your settings folder stays until you delete it.
+Preferences, the logs, autosaves, each drawing's activity history (when ACTIVITYLOG is on) and
+downloaded updates stay in CADaddy's folders on your computer. The activity history (which
+commands changed a drawing, and when) is kept in the settings folder's `activity` folder, never
+beside the drawing: saving or exporting a drawing writes only the files you asked for, so a folder
+you send to someone holds no working history. Uninstalling removes the program; your settings
+folder stays until you delete it.
 
 ## Questions
 

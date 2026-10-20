@@ -156,6 +156,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let mut load = false;
     egui::Window::new(crate::tl!("Command Aliases and Shortcuts"))
         .id(egui::Id::new("Command Aliases and Shortcuts"))
+        .default_pos(crate::palette_pos(app))
         .open(open)
         .resizable(true)
         .default_size([560.0, 480.0])

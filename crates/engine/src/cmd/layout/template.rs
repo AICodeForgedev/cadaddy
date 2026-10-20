@@ -166,7 +166,15 @@ fn copy_layout(d: &mut Drawing, src: &Drawing, l: &Layout) -> String {
         store.push(e);
     }
     let order = d.layouts.iter().map(|x| x.tab_order).max().unwrap_or(0).saturating_add(1);
-    d.layouts.push(Layout { name: name.clone(), tab_order: order, page: l.page.clone(), entities: store, view: l.view, origin: l.origin });
+    d.layouts.push(Layout {
+        name: name.clone(),
+        tab_order: order,
+        page: l.page.clone(),
+        entities: store,
+        view: l.view,
+        origin: l.origin,
+        pending_setup: false,
+    });
     name
 }
 

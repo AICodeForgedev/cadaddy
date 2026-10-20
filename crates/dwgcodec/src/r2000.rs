@@ -23,8 +23,8 @@ use crate::{Error, Limits, Result, Version, objmap};
 /// The sentinel after the file header's CRC (spec §3.2.6).
 const FILE_HEADER_END: [u8; 16] = [0x95, 0xA0, 0x4E, 0x28, 0x99, 0x82, 0x1A, 0xE5, 0x5E, 0x41, 0xE0, 0x5F, 0x9D, 0x3A, 0x4D, 0x00];
 /// The preview's sentinels (spec §14.2).
-const PREVIEW_START: [u8; 16] = [0x1F, 0x25, 0x6D, 0x07, 0xD4, 0x36, 0x28, 0x28, 0x9D, 0x57, 0xCA, 0x3F, 0x9D, 0x44, 0x10, 0x2B];
-const PREVIEW_END: [u8; 16] = [0xE0, 0xDA, 0x92, 0xF8, 0x2B, 0xC9, 0xD7, 0xD7, 0x62, 0xA8, 0x35, 0xC0, 0x62, 0xBB, 0xEF, 0xD4];
+pub(crate) const PREVIEW_START: [u8; 16] = [0x1F, 0x25, 0x6D, 0x07, 0xD4, 0x36, 0x28, 0x28, 0x9D, 0x57, 0xCA, 0x3F, 0x9D, 0x44, 0x10, 0x2B];
+pub(crate) const PREVIEW_END: [u8; 16] = [0xE0, 0xDA, 0x92, 0xF8, 0x2B, 0xC9, 0xD7, 0xD7, 0x62, 0xA8, 0x35, 0xC0, 0x62, 0xBB, 0xEF, 0xD4];
 /// The second file header's sentinels (spec §26).
 const SECOND_START: [u8; 16] = [0xD4, 0x7B, 0x21, 0xCE, 0x28, 0x93, 0x9F, 0xBF, 0x53, 0x24, 0x40, 0x09, 0x12, 0x3C, 0xAA, 0x01];
 const SECOND_END: [u8; 16] = [0x2B, 0x84, 0xDE, 0x31, 0xD7, 0x6C, 0x60, 0x40, 0xAC, 0xDB, 0xBF, 0xF6, 0xED, 0xC3, 0x55, 0xFE];
@@ -79,6 +79,13 @@ pub(crate) struct Layout {
     /// Where the objects started and the preview was, as read.
     objects_start: u32,
     preview_at: u32,
+}
+
+impl Layout {
+    /// The code page number (file header byte 0x13).
+    pub(crate) fn code_page(&self) -> u16 {
+        u16::from_le_bytes([self.head[13], self.head[14]])
+    }
 }
 
 fn rl(bytes: &[u8], at: usize) -> Result<u32> {
@@ -314,3 +321,33 @@ pub(crate) fn write(dwg: &Dwg, l: &Layout) -> Result<Vec<u8>> {
     out[crc_at + 2..crc_at + 18].copy_from_slice(&FILE_HEADER_END);
     Ok(out)
 }
+
+/// A new file's layout: the header variables, classes, object free space, template and auxiliary
+/// header, the objects, the object map and the preview, in that order (as the files we've seen
+/// have them), every address to be filled in when written.
+pub(crate) fn fresh() -> Layout {
+    let mut head = [0u8; 15];
+    // Maintenance version, 1 (spec §3.2.1), code page 30 (ANSI 1252).
+    head[5] = 15;
+    head[6] = 1;
+    head[13] = 30;
+    let records = [0u8, 1, 2, 3, 4, 5].iter().map(|r| (*r, 0, 0)).collect();
+    let regions = [
+        Region::Record(0),
+        Region::Record(1),
+        Region::Record(3),
+        Region::Record(4),
+        Region::Record(5),
+        Region::Objects,
+        Region::Record(2),
+        Region::Preview,
+    ]
+    .into_iter()
+    .map(|r| (r, Vec::new()))
+    .collect();
+    // The free-space data's objects address is filled in where it holds this one.
+    Layout { head, records, regions, tail: Vec::new(), objects_start: FRESH_OBJECTS_START, preview_at: 0 }
+}
+
+/// The objects' address a new file's free-space data holds until it is written.
+pub(crate) const FRESH_OBJECTS_START: u32 = u32::MAX;
