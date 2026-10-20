@@ -65,6 +65,16 @@ Everything lost in the DXF read/write paths below is also lost through DWG, plus
 report #57: a 10 MB DWG failed after about two minutes; limits now stop runaway conversions
 early (#175), but the throughput problem remains. **DWG ≈ 30% read, ≈ 15% write.**
 
+**Damaged DWG files (2004 and later; Q183).** A file cut short, or with pages overwritten, opens
+with what can be read: CADaddy finds the pages itself, decompresses each as far as it is sound,
+names the sections from the section map or (when that is lost with the file's end) from what they
+hold, rebuilds the object map from the object records (each checked by its CRC, so a damaged object
+is left out rather than misread) and reads that. The read notes, RECOVER's report and the save
+warning say the file was damaged. RECOVERALL does the same for a drawing and every drawing it
+references, saving repaired references with a `.bak`. Not yet: 2007 (AC1021, another container)
+and 2000 (AC1015) files; a file cut before its objects start still can't be opened. Tested by
+`dwg_damaged.rs` (cuts and overwrites at every position, three versions) and `recoverall.rs`.
+
 ## DXF, version by version
 
 | DXF version | AutoCAD 2027 | CADaddy read | CADaddy write |
