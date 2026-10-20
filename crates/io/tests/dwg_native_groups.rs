@@ -204,7 +204,9 @@ fn mleader_drawing() -> Drawing {
 fn multileaders_decode_like_the_bridge() {
     let d = mleader_drawing();
     let mut report = Vec::new();
-    // 2004 has no multileaders: the drawing saves LEADER and MTEXT there.
+    // 2004 has no multileaders: the drawing saves LEADER and MTEXT there. 2007 stores no leader
+    // line properties (spec §20.4.86: R2010), so the bridge's DXF has its own defaults there; the
+    // drawing read natively is checked below.
     for v in ["AC1024", "AC1027", "AC1032"] {
         report.extend(differences(&d, v, &["MULTILEADER"]));
     }
@@ -214,7 +216,7 @@ fn multileaders_decode_like_the_bridge() {
 #[test]
 fn multileaders_read_natively_make_the_same_drawing() {
     let d = mleader_drawing();
-    for v in ["AC1024", "AC1027", "AC1032"] {
+    for v in ["AC1021", "AC1024", "AC1027", "AC1032"] {
         let mut d = d.clone();
         d.header.set_str("ACADVER", v);
         let bytes = cadaddy_io::write(&d, "made-up.dwg").unwrap();

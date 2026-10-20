@@ -2,7 +2,7 @@
 
 use crate::frame::Framed;
 use crate::objects::RawObject;
-use crate::{Error, Limits, Result, Version, r2000, r2004};
+use crate::{Error, Limits, Result, Version, r2000, r2004, r2007};
 
 /// A section kept as raw bytes (one this layer does not interpret).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,17 +33,22 @@ pub struct Dwg {
 pub(crate) enum Layout {
     R2000(r2000::Layout),
     R2004(Box<r2004::Layout>),
+    R2007(Box<r2007::Layout>),
 }
 
 impl Dwg {
     /// A new file of `version` (R2004 and later) holding `header`, `classes` and `objects`; the
     /// containers, maps and checks are made by [`write`].
     pub fn new(version: Version, header: &crate::header::HeaderVars, classes: &crate::classes::Classes, objects: Vec<RawObject>) -> Result<Dwg> {
-        if version < Version::R2000 || version == Version::R2007 {
+        if version < Version::R2000 {
             return Err(Error::Unsupported(format!("writing new {} files", version.id())));
         }
-        let hi = (version >= Version::R2004 && r2004::fresh_has_hi(version)).then_some(0);
-        let layout = if version < Version::R2004 { Layout::R2000(r2000::fresh()) } else { Layout::R2004(Box::new(r2004::fresh(version))) };
+        let hi = (version >= Version::R2004 && version != Version::R2007 && r2004::fresh_has_hi(version)).then_some(0);
+        let layout = match version {
+            Version::R2000 => Layout::R2000(r2000::fresh()),
+            Version::R2007 => Layout::R2007(Box::new(r2007::fresh())),
+            _ => Layout::R2004(Box::new(r2004::fresh(version))),
+        };
         // The section after the classes' end sentinel holds 8 more bytes from R2004 (kept as
         // read); a new file writes none.
         Ok(Dwg {
@@ -168,7 +173,7 @@ pub fn read_with(bytes: &[u8], limits: &Limits) -> Result<Dwg> {
     let id = bytes.get(..6).ok_or(Error::NotDwg)?;
     match Version::from_id(id)? {
         Version::R2000 => r2000::read(bytes, limits),
-        Version::R2007 => Err(Error::Unsupported("AutoCAD 2007 (AC1021) DWG files are not read yet".into())),
+        Version::R2007 => r2007::read(bytes, limits),
         v => r2004::read(bytes, v, limits),
     }
 }
@@ -178,5 +183,6 @@ pub fn write(dwg: &Dwg) -> Result<Vec<u8>> {
     match &dwg.layout {
         Layout::R2000(l) => r2000::write(dwg, l),
         Layout::R2004(l) => r2004::write(dwg, l),
+        Layout::R2007(l) => r2007::write(dwg, l),
     }
 }

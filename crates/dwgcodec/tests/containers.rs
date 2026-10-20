@@ -26,10 +26,26 @@ fn r2000_round_trips_byte_for_byte() {
 }
 
 #[test]
-fn every_version_but_r2007_is_read() {
+fn every_version_is_read() {
     assert_eq!(versions_read(), common::VERSIONS);
-    let err = read(b"AC1021\0\0\0\0\0").unwrap_err().to_string();
-    assert!(err.contains("2007"), "{err}");
+}
+
+/// R2007 (Q202): our layout of a file read back holds the same header, classes, objects and
+/// sections; acadrust reads it to the same handles; and our own layout is stable.
+#[test]
+fn r2007_round_trips() {
+    for n in [0, 12, 400, 3000] {
+        let bytes = common::dwg("AC1021", n);
+        let d = read(&bytes).unwrap_or_else(|e| panic!("{n}: {e}"));
+        let again = write(&d).unwrap();
+        let back = read(&again).unwrap_or_else(|e| panic!("{n}: our file: {e}"));
+        assert_eq!((&back.header, &back.classes, &back.objects), (&d.header, &d.classes, &d.objects), "{n}");
+        for s in &d.sections {
+            assert_eq!(back.section(&s.name).map(|x| &x.data), Some(&s.data), "{n}: {}", s.name);
+        }
+        assert_eq!(common::acadrust_handles(&again), common::acadrust_handles(&bytes), "{n}: acadrust reads ours");
+        assert!(write(&back).unwrap() == again, "{n}: our own layout is stable");
+    }
 }
 
 #[test]

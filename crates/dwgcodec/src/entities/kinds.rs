@@ -1485,7 +1485,10 @@ fn mleader(o: &mut Obj, g: &mut G) -> Result<()> {
     let r2010 = o.at_least(Version::R2010);
     let version = if r2010 { o.d.bs()? } else { 2 };
     g.s(100, "AcDbMLeader");
-    g.i(270, i64::from(version));
+    // The version, stored from R2010.
+    if r2010 {
+        g.i(270, i64::from(version));
+    }
     g.s(300, "CONTEXT_DATA{");
     // Leader roots: decoded first (they come first in the data), written after the content.
     let nroots = count(o.d.bl()?, "leader roots")?;

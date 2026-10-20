@@ -128,6 +128,7 @@ fn version(code: &str) -> Option<(Version, crate::Version)> {
     Some(match code {
         "AC1015" => (Version::R2000, crate::Version::R2000),
         "AC1018" => (Version::R2004, crate::Version::R2004),
+        "AC1021" => (Version::R2007, crate::Version::R2007),
         "AC1024" => (Version::R2010, crate::Version::R2010),
         "AC1027" => (Version::R2013, crate::Version::R2013),
         "AC1032" => (Version::R2018, crate::Version::R2018),
@@ -142,7 +143,7 @@ pub struct WriteReport {
     pub skipped: Vec<(String, usize)>,
 }
 
-/// The drawing as a DWG file of `version_code` (AC1018, AC1024, AC1027 or AC1032).
+/// The drawing as a DWG file of `version_code` (AC1015, AC1018, AC1021, AC1024, AC1027 or AC1032).
 pub fn write(d: &Drawing, version_code: &str) -> Result<(Vec<u8>, WriteReport)> {
     let (v, dv) = version(version_code).ok_or_else(|| IoError::Format(format!("DWG: writing {version_code} files is not supported")))?;
     let tags = crate::dxf_write::tags(d, dv);

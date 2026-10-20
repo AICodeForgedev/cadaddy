@@ -69,7 +69,7 @@ mutates sample files and random bytes through read, decode, encode and write.
 | R13, R14 | AC1012, AC1014 | refused | — | — | "not read yet" |
 | R2000 | AC1015 | yes | yes | yes | §3 layout; new files (Q201) |
 | R2004 | AC1018 | yes | yes | yes | §4 layout |
-| R2007 | AC1021 | refused | — | — | own container (§5), Q202 |
+| R2007 | AC1021 | yes | yes | no (laid out anew) | own container (§5), Q202 |
 | R2010 | AC1024 | yes | yes | yes | §4 layout, R2010 object type and stream split |
 | R2013 | AC1027 | yes | yes | yes | adds REQUIREDVERSIONS, AcDs section kept raw |
 | R2018 | AC1032 | yes | yes | yes | as R2013 |
@@ -89,7 +89,7 @@ Tested for every readable version, on files acadrust writes with 0, 12, 400 and 
 
 ## Spec sections used
 
-§2 (bit codes, CRCs), §3 (R13–R15 organization), §4.1–4.7 (R2004 header, page checksum, system
+§2 (bit codes, CRCs), §3 (R13–R15 organization), §5 (R2007 organization, compression, CRCs, Reed–Solomon), §4.1–4.7 (R2004 header, page checksum, system
 pages, page map, section map, masked page headers, compression), §5.8–5.9 (string streams for
 classes and the header), §6–§8 (R2010–R2018), §9 (header variables), §10 (classes), §12 (empty
 section), §14.2 (preview), §20.1 (object records), §21 (free space), §22 (template), §23 (object
@@ -221,10 +221,55 @@ Facts found by observation:
    distinct, so the reader keeps the bridge's names for block records until the names are
    assigned from the layouts here (Q203).
 
+## R2007 (Q202)
+
+AC1021 has its own container (spec §5): 0x80 bytes of meta data, the file header as a
+Reed–Solomon coded page at 0x80 (and again at the end), then pages from 0x480: the data
+sections' pages, the section map and page map (system pages) with a copy of each. `r2007.rs`
+reads and writes it; `lz21.rs` is its compression (§5.10), `rs21.rs` the (255, 251) and
+(255, 239) Reed–Solomon codes (§5.13), `crc64.rs` the normal and mirrored 64-bit CRCs (§5.12),
+`rand21.rs` the CRC random encoding (§5.11). The sections inside are the R2004 ones (§5.5–5.9),
+read by the same code; R2007's bit coding (strings in their own stream, §2) was already handled.
+
+Writing lays the file out anew: the sections in the order read (the spec's §5.1 order for a new
+file), every page stored uncompressed (the spec allows it when compression doesn't help; the
+reader decompresses), the checksums, CRCs, seeds and check data as §5.2–§5.4 give them, random
+values and padding from the random encoding seeded 0. So a file is not rewritten byte for byte,
+but our own layout of a file is stable, and the header variables, classes, objects and other
+sections come back unchanged.
+
+Tested (`dwgcodec/tests/containers.rs` and every other codec test now run on AC1021 too, as do
+`io/tests/dwg_native_*.rs` and `dwg_write_native.rs`): files acadrust writes read to the same
+handles; our layout of them reads back to the same contents and acadrust reads it to the same
+handles; entities, tables and objects decode like the bridge's; the native writer's AC1021 files
+read back through the bridge as the drawing; mutated files never panic.
+
+Facts found by observation (each checked against the values stored in acadrust's files):
+
+1. **The literal copy order of §5.10.1 applies inside each listed block too** (a 2-byte block is
+   reversed, a 16-byte block is 8 [8], 8 [0], …). *Evidence:* only then does the decompressed file
+   header's CRC64 match the stored one.
+2. **The CRC byte order of §5.12 applies inside each block too**: an 8-byte block is taken
+   6, 7, 4, 5, 2, 3, 0, 1. *Evidence:* the same CRC.
+3. **The section map's name length is in bytes, the terminator included** (the spec doubles it).
+4. **Encoding 1 data pages have no Reed–Solomon parity**: the data as is, padded to 0x20.
+   *Evidence:* every encoding 1 page's size in the page map is its data rounded up to 0x20.
+5. **The codes run over the block reversed** (the data bytes last to first, the parity stored
+   last to first); first generator root α¹; field polynomials 0x11D (data) and 0x169 (system).
+   *Evidence:* the parity of every block checks only that way.
+6. **The CRCs and their seeds:** a page's CRC is the mirrored CRC of its stored bytes seeded with
+   UpdateSeed1(0, length), its checksum §5.4.1's with seed 0 over the data; the system pages'
+   CRCs likewise; the file header's stored-data CRC is the normal CRC seeded with
+   UpdateSeed2(0, length), its checking sequence's the normal CRC seeded with UpdateSeed1(0, 16).
+   The random encoding (seed 0) gives, in order: the section map's and page map's encoded seeds,
+   the check data's two random values and encoded seed, CrcSeedEncoded, the checking sequence.
+7. **The page map ends with an empty (0, 0) pair**, and the file header's stored size is 8 bytes
+   at 0x18 (§5.2.1.5's layout; §5.2's table splits it in two).
+
 ## Writing (Q201)
 
-`io::dwg_write::write(drawing, version)` makes a new DWG file (AC1015, AC1018, AC1024, AC1027,
-AC1032) with the codec alone, no bridge:
+`io::dwg_write::write(drawing, version)` makes a new DWG file (AC1015, AC1018, AC1021, AC1024,
+AC1027, AC1032) with the codec alone, no bridge:
 
 1. The drawing's DXF groups as the DXF writer makes them (in memory), split into records by
    section; each record's reactors and extension dictionary (DXF's 102 blocks) are taken apart.
@@ -238,7 +283,7 @@ AC1032) with the codec alone, no bridge:
 4. The header variables: each version's set at a new drawing's defaults (the DXF Reference's),
    the DXF header's values over them, the control objects, dictionaries and spaces as handles,
    FLAGS packed from CELWEIGHT, LWDISPLAY, PSTYLEMODE and the rest.
-5. `Dwg::new` makes a new file's containers (§3 R2000 or §4 R2004+ layout); `Dwg::new_file_sections`
+5. `Dwg::new` makes a new file's containers (§3 R2000, §5 R2007 or §4 R2004+ layout); `Dwg::new_file_sections`
    the template (MEASUREMENT), free-space data, auxiliary header and an empty preview.
 6. Records whose type isn't encoded are left out and listed in the report, and the file is made
    again without the references to them (dictionary entries, reactors), so nothing points at

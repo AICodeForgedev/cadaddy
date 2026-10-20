@@ -6,7 +6,7 @@ use cadaddy_doc::*;
 use cadaddy_geom::{Vec2, Vec3};
 use serde_json::Value as J;
 
-const VERSIONS: [&str; 5] = ["AC1015", "AC1018", "AC1024", "AC1027", "AC1032"];
+const VERSIONS: [&str; 6] = ["AC1015", "AC1018", "AC1021", "AC1024", "AC1027", "AC1032"];
 
 /// A made-up drawing with an example of every entity the codec decodes.
 fn entities_drawing() -> Drawing {
@@ -502,7 +502,7 @@ fn an_empty_drawing_reads_back() {
 /// Versions without a writer say so.
 #[test]
 fn other_versions_are_refused() {
-    for v in ["AC1009", "AC1014", "AC1021", "AC9999"] {
+    for v in ["AC1009", "AC1014", "AC9999"] {
         assert!(cadaddy_io::dwg_write::write(&Drawing::new_metric(), v).is_err(), "{v}");
     }
 }

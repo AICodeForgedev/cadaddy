@@ -80,7 +80,7 @@ fn entities(d: &Drawing) -> Vec<(String, &Entity)> {
 #[test]
 fn native_entities_match_the_bridge_field_by_field() {
     let mut report = Vec::new();
-    for v in ["AC1015", "AC1018", "AC1024", "AC1027", "AC1032"] {
+    for v in ["AC1015", "AC1018", "AC1021", "AC1024", "AC1027", "AC1032"] {
         let mut d = drawing();
         d.header.set_str("ACADVER", v);
         let bytes = cadaddy_io::write(&d, "made-up.dwg").unwrap();
