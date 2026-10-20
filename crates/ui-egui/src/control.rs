@@ -485,7 +485,11 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                     app.cmd.history.remove(0);
                 }
             }
+            // Typed by an agent: the same rails as its `engine.execute` calls (confirmations, what
+            // only the user may loosen).
+            let was = std::mem::replace(&mut app.session.agent.from_agent, true);
             let error = app.cmdline(text);
+            app.session.agent.from_agent = was;
             app.agent_run = run_token(app);
             let out: Vec<String> = app.session.log.iter().skip(before).cloned().collect();
             let mut st = cmdline_state(app);
@@ -524,7 +528,12 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                     None
                 }
                 // As pressing Enter in the command line: a refused Enter is echoed to the history.
-                _ => app.session.input(Input::Enter).err().map(|e| e.to_string()),
+                _ => {
+                    let was = std::mem::replace(&mut app.session.agent.from_agent, true);
+                    let r = app.session.input(Input::Enter).err().map(|e| e.to_string());
+                    app.session.agent.from_agent = was;
+                    r
+                }
             };
             if let Some(e) = &error {
                 app.session.echo(e.clone());

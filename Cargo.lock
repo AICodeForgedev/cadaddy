@@ -727,6 +727,7 @@ dependencies = [
 name = "cadaddy-geom"
 version = "0.7.8"
 dependencies = [
+ "craft-docpath",
  "serde",
 ]
 

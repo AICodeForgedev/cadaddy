@@ -497,6 +497,12 @@ pub fn set_drawing_dir(dir: &str) {
 /// Where shape fonts are looked for: the drawing's folder, then the folders set by
 /// [`set_search_path`] (else `CADADDY_FONT_PATH`), then the user's CADaddy fonts folder and the
 /// system fonts folder (the Windows app set no path, so only full paths were found).
+/// The folder of the drawing being shown, if any.
+#[cfg(not(target_arch = "wasm32"))]
+fn drawing_dir() -> Option<String> {
+    DRAWING_DIR.read().ok().and_then(|d| d.clone())
+}
+
 fn search_path() -> Vec<String> {
     let mut dirs: Vec<String> = DRAWING_DIR.read().ok().and_then(|d| d.clone()).into_iter().collect();
     match SEARCH.read().ok().and_then(|s| s.clone()) {
@@ -559,7 +565,13 @@ fn load(name: &str) -> Option<Arc<ShxFont>> {
     let file = if name.to_ascii_lowercase().ends_with(".shx") { name.to_string() } else { format!("{name}.shx") };
     let file = cadaddy_geom::filename::native(&file);
     let p = std::path::Path::new(&file);
-    let mut candidates: Vec<std::path::PathBuf> = vec![p.to_path_buf()];
+    // The path a style names is opened only when it is on this computer (or the drawing's share);
+    // otherwise its file name is still looked for in the font folders.
+    let drawing_dir = drawing_dir();
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if cadaddy_geom::filename::stored_path_allowed(name, drawing_dir.as_deref().map(std::path::Path::new)) {
+        candidates.push(p.to_path_buf());
+    }
     if let Some(base) = p.file_name() {
         candidates.extend(search_path().iter().map(|d| std::path::Path::new(d).join(base)));
     }
