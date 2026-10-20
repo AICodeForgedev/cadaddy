@@ -17,6 +17,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use cadaddy_ui_egui::update::{Event, Release, Updater, VERSION, newer};
+use cadaddy_ui_egui::{i18n, tf, tl};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -78,6 +79,25 @@ fn curl() -> Command {
     c
 }
 
+fn no_curl(e: std::io::Error) -> String {
+    tf!("curl isn't available ({error}).", error = e)
+}
+
+/// A signature problem in the interface language.
+fn sig_message(e: &crate::relsig::SigError) -> String {
+    use crate::relsig::SigError;
+    match e {
+        SigError::NoKey => tl!("This build has no release key to check updates with.").to_string(),
+        SigError::TooLarge => tl!("The release's signature files are too large.").to_string(),
+        SigError::Unreadable => tl!("The release's signature isn't one CADaddy reads.").to_string(),
+        SigError::Damaged => tl!("The release's signature is missing or damaged.").to_string(),
+        SigError::OtherVersion(v) => tf!("The release's signature is for another version ({version}).", version = v),
+        SigError::UntrustedKey => tl!("The release is signed with a key this build doesn't trust.").to_string(),
+        SigError::BadKey => tl!("This build's release key is damaged.").to_string(),
+        SigError::Mismatch => tl!("The release's signature doesn't match its files.").to_string(),
+    }
+}
+
 /// Where a release's installer for this platform and its signed sums are.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Installer {
@@ -116,13 +136,13 @@ fn latest_from(src: &Source) -> Result<(Release, Option<Installer>), String> {
         .arg(format!("CADaddy/{VERSION}"))
         .arg(&src.api)
         .output()
-        .map_err(|e| format!("curl isn't available ({e})"))?;
+        .map_err(no_curl)?;
     if !out.status.success() {
         let why = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("Couldn't reach GitHub: {}", why.trim()));
+        return Err(tf!("Couldn't reach GitHub: {why}", why = why.trim()));
     }
     if out.stdout.len() > MAX_JSON {
-        return Err("GitHub's answer was too large".into());
+        return Err(tl!("GitHub's answer was too large.").to_string());
     }
     parse(&out.stdout, &src.downloads)
 }
@@ -134,11 +154,11 @@ fn plain_version(v: &str) -> bool {
 }
 
 fn parse(json: &[u8], downloads: &str) -> Result<(Release, Option<Installer>), String> {
-    let v: Value = serde_json::from_slice(json).map_err(|e| format!("GitHub's answer wasn't readable ({e})"))?;
-    let tag = v.get("tag_name").and_then(Value::as_str).ok_or("no version in GitHub's answer")?;
+    let v: Value = serde_json::from_slice(json).map_err(|e| tf!("GitHub's answer wasn't readable ({error}).", error = e))?;
+    let tag = v.get("tag_name").and_then(Value::as_str).ok_or_else(|| tl!("GitHub's answer has no version.").to_string())?;
     let version = tag.trim_start_matches(['v', 'V']).to_string();
     if !plain_version(&version) {
-        return Err(format!("GitHub's answer has an unreadable version ({})", tag.chars().take(40).collect::<String>()));
+        return Err(tf!("GitHub's answer has an unreadable version ({version}).", version = tag.chars().take(40).collect::<String>()));
     }
     let page = v
         .get("html_url")
@@ -168,39 +188,41 @@ fn parse(json: &[u8], downloads: &str) -> Result<(Release, Option<Installer>), S
 /// A small release file (the sums or the signature) as text.
 fn fetch_text(url: &str) -> Result<String, String> {
     let name = url.rsplit('/').next().unwrap_or(url);
-    let out = curl()
-        .args(["-fsSL", "--max-time", "60", "--max-filesize"])
-        .arg(crate::relsig::MAX_FILE.to_string())
-        .arg(url)
-        .output()
-        .map_err(|e| format!("curl isn't available ({e})"))?;
+    let out =
+        curl().args(["-fsSL", "--max-time", "60", "--max-filesize"]).arg(crate::relsig::MAX_FILE.to_string()).arg(url).output().map_err(no_curl)?;
     if !out.status.success() {
-        return Err(format!("Couldn't download the release's {name}, so nothing was installed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(tf!(
+            "Couldn't download the release's {name}, so nothing was installed: {why}",
+            name = name,
+            why = String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     // curl stops at the limit; a server that sends more anyway is refused too.
     if out.stdout.len() > crate::relsig::MAX_FILE {
-        return Err(format!("The release's {name} is too large, so nothing was installed."));
+        return Err(tf!("The release's {name} is too large, so nothing was installed.", name = name));
     }
-    String::from_utf8(out.stdout).map_err(|_| format!("The release's {name} isn't text, so nothing was installed."))
+    String::from_utf8(out.stdout).map_err(|_| tf!("The release's {name} isn't text, so nothing was installed.", name = name))
 }
 
 /// The installer's SHA-256 from the release's signed sums, checked with `keys`: `Err` (nothing
 /// is downloaded) when the release isn't signed, the signature doesn't verify, the sums don't
 /// list the installer or GitHub's digest disagrees, or the release isn't newer than this one.
 fn signed_sha(version: &str, a: &Installer, name: &str, keys: &[[u8; 32]], get: &dyn Fn(&str) -> Result<String, String>) -> Result<String, String> {
-    const NOT: &str = "so it wasn't downloaded. Download it from the release page instead.";
+    // One sentence per line: each is translated (and, right to left, ordered) on its own.
+    let not = |why: String| format!("{why}\n{}", tl!("It wasn't downloaded. Download it from the release page instead."));
     if !newer(version, VERSION) {
-        return Err(format!("Version {version} isn't newer than this one ({VERSION}), {NOT}"));
+        return Err(not(tf!("Version {version} isn't newer than this one ({current}).", version = version, current = VERSION)));
     }
     let (Some(sums_url), Some(sig_url)) = (&a.sums, &a.sig) else {
-        return Err(format!("This release isn't signed, {NOT}"));
+        return Err(not(tl!("This release isn't signed.").to_string()));
     };
     let sums = get(sums_url)?;
     let sig = get(sig_url)?;
-    crate::relsig::verify(version, sums.as_bytes(), &sig, keys).map_err(|e| format!("The release failed its check ({e}), {NOT}"))?;
-    let sha = crate::relsig::sum_for(&sums, name).ok_or_else(|| format!("The signed release doesn't list {name}, {NOT}"))?;
+    crate::relsig::verify(version, sums.as_bytes(), &sig, keys)
+        .map_err(|e| not(format!("{}\n{}", tl!("The release failed its check."), sig_message(&e))))?;
+    let sha = crate::relsig::sum_for(&sums, name).ok_or_else(|| not(tf!("The signed release doesn't list {name}.", name = name)))?;
     if a.digest.as_ref().is_some_and(|d| *d != sha) {
-        return Err(format!("GitHub's fingerprint for {name} differs from the signed one, {NOT}"));
+        return Err(not(tf!("GitHub's fingerprint for {name} differs from the signed one.", name = name)));
     }
     Ok(sha)
 }
@@ -221,7 +243,7 @@ fn sha256_file(p: &Path) -> std::io::Result<String> {
 /// Download `url` to `to` and check it; the file is removed when anything is wrong.
 fn fetch(url: &str, sha: &str, to: &Path) -> Result<(), String> {
     if let Some(dir) = to.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("Couldn't make {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(dir).map_err(|e| tf!("Couldn't make the folder {folder}: {error}", folder = dir.display(), error = e))?;
     }
     let out = curl()
         .args(["-fsSL", "--max-time", "900", "--max-filesize"])
@@ -230,15 +252,15 @@ fn fetch(url: &str, sha: &str, to: &Path) -> Result<(), String> {
         .arg(to)
         .arg(url)
         .output()
-        .map_err(|e| format!("curl isn't available ({e})"))?;
+        .map_err(no_curl)?;
     let checked = if out.status.success() {
         match sha256_file(to) {
             Ok(got) if got == sha => Ok(()),
-            Ok(_) => Err("The download didn't match its published SHA-256 fingerprint, so it wasn't installed.".to_string()),
-            Err(e) => Err(format!("Couldn't read the download: {e}")),
+            Ok(_) => Err(tl!("The download didn't match its published SHA-256 fingerprint, so it wasn't installed.").to_string()),
+            Err(e) => Err(tf!("Couldn't read the download: {error}", error = e)),
         }
     } else {
-        Err(format!("The download failed: {}", String::from_utf8_lossy(&out.stderr).trim()))
+        Err(tf!("The download failed: {why}", why = String::from_utf8_lossy(&out.stderr).trim()))
     };
     if checked.is_err() {
         let _ = std::fs::remove_file(to);
@@ -281,8 +303,9 @@ impl Updater for DesktopUpdater {
         let tx = self.tx.clone();
         let pending = self.pending.clone();
         let source = self.source.clone();
+        let language = i18n::current();
         std::thread::spawn(move || {
-            let event = match latest_from(&source) {
+            let event = i18n::with_language(language, || match latest_from(&source) {
                 Ok((r, asset)) if newer(&r.version, VERSION) => {
                     if let Ok(mut p) = pending.lock() {
                         p.asset = asset;
@@ -291,7 +314,7 @@ impl Updater for DesktopUpdater {
                 }
                 Ok(_) => Event::Latest,
                 Err(e) => Event::Failed(e),
-            };
+            });
             let _ = tx.send(event);
         });
     }
@@ -302,6 +325,7 @@ impl Updater for DesktopUpdater {
         let Some(target) = self.target.clone() else { return };
         let version = release.version.clone();
         let source = self.source.clone();
+        let language = i18n::current();
         std::thread::spawn(move || {
             // An earlier download is dropped: only this one can install (a failed one, nothing).
             let asset = pending.lock().ok().and_then(|mut p| {
@@ -310,7 +334,7 @@ impl Updater for DesktopUpdater {
                 }
                 p.asset.clone()
             });
-            let event = match (asset, asset_name()) {
+            let event = i18n::with_language(language, || match (asset, asset_name()) {
                 (Some(a), Some(name)) => {
                     let to = download_dir(&target).join(format!(".{version}-{name}.download"));
                     let checked = signed_sha(&version, &a, name, &source.keys, &fetch_text);
@@ -324,8 +348,8 @@ impl Updater for DesktopUpdater {
                         Err(e) => Event::Failed(e),
                     }
                 }
-                _ => Event::Failed("This release has no installer for this computer yet.".into()),
-            };
+                _ => Event::Failed(tl!("This release has no installer for this computer yet.").to_string()),
+            });
             let _ = tx.send(event);
         });
     }
@@ -438,6 +462,8 @@ fn detach(c: &mut Command) {
 
 #[cfg(test)]
 mod tests {
+    // The fake release server serves the Linux-only end-to-end tests (AppImage installs).
+    #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
     use super::*;
 
     fn release_json(digest: &str, url: &str) -> Vec<u8> {

@@ -1224,10 +1224,7 @@ impl CadApp {
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
         update::tick(self);
-        update::card(self, ui.ctx());
-        if !self.update.busy() {
-            support::banner(self, ui.ctx());
-        }
+        update::corner(self, ui.ctx());
         if let Some(url) = self.pending_url.take() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }
