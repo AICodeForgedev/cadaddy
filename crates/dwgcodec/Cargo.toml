@@ -1,0 +1,13 @@
+[package]
+name = "cadaddy-dwgcodec"
+description = "CADaddy's own DWG codec: bit streams, file containers, sections and the object map, written from the Open Design Alliance's public DWG specification"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Black box only: writes sample DWG files for the tests to read (MPL-2.0, unmodified).
+acadrust = "0.6.5"

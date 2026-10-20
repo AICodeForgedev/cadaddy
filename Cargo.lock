@@ -672,6 +672,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadaddy-dwgcodec"
+version = "0.7.7"
+dependencies = [
+ "acadrust",
+]
+
+[[package]]
 name = "cadaddy-dxf"
 version = "0.7.7"
 dependencies = [
