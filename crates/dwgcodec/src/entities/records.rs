@@ -898,7 +898,7 @@ fn mlinestyle(o: &mut Obj, names: &Names, g: &mut G) -> Result<()> {
             match o.d.bs()? {
                 32767 => "BYLAYER".to_string(),
                 32766 => "BYBLOCK".to_string(),
-                _ => "CONTINUOUS".to_string(),
+                _ => "Continuous".to_string(),
             }
         };
         lines.push((offset, color, ltype));

@@ -67,7 +67,7 @@ mutates sample files and random bytes through read, decode, encode and write.
 | Version | Id | Read | Write | Byte for byte | Notes |
 |---|---|---|---|---|---|
 | R13, R14 | AC1012, AC1014 | refused | — | — | "not read yet" |
-| R2000 | AC1015 | yes | yes | yes | §3 layout |
+| R2000 | AC1015 | yes | yes | yes | §3 layout; new files (Q201) |
 | R2004 | AC1018 | yes | yes | yes | §4 layout |
 | R2007 | AC1021 | refused | — | — | own container (§5), Q202 |
 | R2010 | AC1024 | yes | yes | yes | §4 layout, R2010 object type and stream split |
@@ -221,11 +221,72 @@ Facts found by observation:
    distinct, so the reader keeps the bridge's names for block records until the names are
    assigned from the layouts here (Q203).
 
+## Writing (Q201)
+
+`io::dwg_write::write(drawing, version)` makes a new DWG file (AC1015, AC1018, AC1024, AC1027,
+AC1032) with the codec alone, no bridge:
+
+1. The drawing's DXF groups as the DXF writer makes them (in memory), split into records by
+   section; each record's reactors and extension dictionary (DXF's 102 blocks) are taken apart.
+2. Names to handles from the TABLES section; the classes from CLASSES, numbered from 500.
+3. Each record encoded (`entities::encode`, `entities::encode_kinds`): the inverse of its decoder,
+   field for field, so `decode(encode(groups))` gives the groups back. The handles are the
+   drawing's own (kept handles stay). INSERTs own their attributes and POLYLINEs their vertices
+   (with their SEQEND); block records list their entities (from R2004 every one; R2000 the first
+   and last, the entities linked to their neighbours); layouts list their viewports. Table
+   controls list their records, the spaces' block records and ByLayer/ByBlock linetypes apart.
+4. The header variables: each version's set at a new drawing's defaults (the DXF Reference's),
+   the DXF header's values over them, the control objects, dictionaries and spaces as handles,
+   FLAGS packed from CELWEIGHT, LWDISPLAY, PSTYLEMODE and the rest.
+5. `Dwg::new` makes a new file's containers (§3 R2000 or §4 R2004+ layout); `Dwg::new_file_sections`
+   the template (MEASUREMENT), free-space data, auxiliary header and an empty preview.
+6. Records whose type isn't encoded are left out and listed in the report, and the file is made
+   again without the references to them (dictionary entries, reactors), so nothing points at
+   nothing.
+
+Encoded: every entity the reader decodes (LINE … MULTILEADER, DIMENSION kinds, HATCH with every
+boundary kind and gradients, MTEXT, INSERT/MINSERT with attributes, the POLYLINE family, SPLINE,
+IMAGE, WIPEOUT, MLINE, VIEWPORT, LEADER, TOLERANCE), every table record, and the objects
+DICTIONARY (with a default too), PLACEHOLDER, LAYOUT, PLOTSETTINGS, GROUP, MLINESTYLE,
+MLEADERSTYLE, XRECORD, SCALE, DICTIONARYVAR, IMAGEDEF and its reactor, RASTERVARIABLES; extended
+data on all of them.
+
+Tested (`io/tests/dwg_write_native.rs`, five versions, four made-up drawings): the file the bridge
+reads back (acadrust, black box) equals what the bridge's own DWG of the same drawing reads back,
+entity by entity, table by table and variable by variable (those the source has), and our reader
+agrees; every reference points at an object in the file; handles are unique; an empty drawing
+reads back; other versions are refused.
+
+Facts found by observation (the files acadrust writes, and what its reader accepts):
+
+1. **From R2010 a record is padded at its end, the padding counted with the handle stream** (the
+   MC size), not between the data and the string stream.
+2. **Table records have the "referenced" bit set from R2004** (readers refuse them without it)
+   and clear in R2000.
+3. **Before R2004 every object stores its extension dictionary handle**, null when there is none
+   (there is no "missing" bit).
+4. **An R2013+ LAYER has one more handle** after its linetype (null).
+5. **An R2018 MTEXT stores its context data** after the background (not annotative: version 4,
+   default flag, attachment, axis, insertion, sizes, no columns) and one more handle (null).
+6. **The header ends in four short integers of -1 and two of 0** (and from R2007 two bits in the
+   string stream); a reader takes the header without them as damaged and uses its defaults.
+7. **An R2000 extended-data string's code page is stored high byte first.**
+8. **The LTYPE control's special entries are ByLayer, then ByBlock.**
+
+Known limits:
+
+- Left out: MATERIAL, TABLESTYLE, VISUALSTYLE, FIELD, SORTENTSTABLE, ACIS solids, proxies and
+  other programs' custom records (the drawing's kept DXF records; raw DWG records kept from a file
+  need the native reader to keep them, Q203).
+- acadrust can't read an R2000 VIEWPORT linked to its neighbours (its own files store none of
+  the links §20.4.1 has there); our files keep the links, our reader reads them.
+- Not yet opened in AutoCAD (not installed on this machine; Q83's acadverify is the check).
+
 ## Not done yet / known limits
 
 - R2000 second file header (§26) is dropped when the addresses it repeats change. acadrust writes
   none, so it is untested.
-- The 4 trailing "type 5/6 only" header shorts (§9) are not named. They stay in the kept bits.
+- The 4 trailing "type 5/6 only" header shorts (§9) are not named. They stay in the kept bits
+  (a new file writes them as observed, Q201).
 - Code-page strings are decoded as Latin-1 (`Text::to_string_lossy`). Code-page mapping belongs
   in the model layer.
-- Objects and entities are raw bytes until Q199/Q200.

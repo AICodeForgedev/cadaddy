@@ -391,11 +391,10 @@ fn insert(name: &str, o: &mut Obj, names: &Names, g: &mut G, children: &mut Vec<
                 }
             }
         } else {
-            // First and last attribute: the ones between come from the object order.
+            // First and last attribute (0 for none): the chain between them is followed in
+            // [`super::decode_all`].
             for _ in 0..2 {
-                if let Some(h) = o.href()? {
-                    children.push(h);
-                }
+                children.push(o.href()?.unwrap_or(0));
             }
         }
         if let Some(h) = o.href()? {
@@ -582,10 +581,16 @@ fn polyline(o: &mut Obj, g: &mut G, children: &mut Vec<u64>) -> Result<()> {
             }
         }
     }
-    let refs = if o.at_least(Version::R2004) { owned } else { 2 };
-    for _ in 0..refs {
-        if let Some(h) = o.href()? {
-            children.push(h);
+    if o.at_least(Version::R2004) {
+        for _ in 0..owned {
+            if let Some(h) = o.href()? {
+                children.push(h);
+            }
+        }
+    } else {
+        // First and last vertex (0 for none), as for INSERT's attributes.
+        for _ in 0..2 {
+            children.push(o.href()?.unwrap_or(0));
         }
     }
     if let Some(h) = o.href()? {

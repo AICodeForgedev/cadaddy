@@ -12,6 +12,8 @@
 //! Names (layer, linetype, text style, block, dimension style…) come from the table records the
 //! entities point at, read by [`Names::read`].
 
+pub mod encode;
+pub mod encode_kinds;
 mod kinds;
 mod names;
 pub mod records;
@@ -295,6 +297,9 @@ pub fn common(o: &mut Obj) -> Result<Common> {
     if !nolinks {
         o.href()?;
         c.next = o.href()?;
+    } else if o.v < Version::R2004 {
+        // No links: the next entity is the next handle (spec §20.4.1).
+        c.next = o.handle.checked_add(1);
     }
     if color_ref {
         c.color_ref = o.href()?;
@@ -518,6 +523,28 @@ pub fn decode(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> 
     Ok(Some(Entity { name, handle: o.handle, owner, paper: c.entmode == 1, groups, children, next: c.next }))
 }
 
+/// R2000: an INSERT's attributes and a POLYLINE's vertices are stored as the first and last (0
+/// for none), the ones between linked by each one's next entity; made the whole list here
+/// (followed by the SEQEND).
+fn chain_children(ents: &mut [Entity]) {
+    let next: std::collections::HashMap<u64, u64> = ents.iter().filter_map(|e| e.next.map(|n| (e.handle, n))).collect();
+    for e in ents.iter_mut().filter(|e| matches!(e.name.as_str(), "INSERT" | "MINSERT" | "POLYLINE")) {
+        let (Some(&first), Some(&last)) = (e.children.first(), e.children.get(1)) else { continue };
+        let rest: Vec<u64> = e.children.iter().skip(2).copied().collect();
+        let mut list = Vec::new();
+        let mut at = (first != 0).then_some(first);
+        while let Some(h) = at {
+            list.push(h);
+            if h == last || list.len() > MAX_ITEMS {
+                break;
+            }
+            at = next.get(&h).copied();
+        }
+        list.extend(rest);
+        e.children = list;
+    }
+}
+
 /// Every entity of a file decoded, with the objects that couldn't be (unknown types, or damaged
 /// data) as errors by handle.
 pub fn decode_all(dwg: &Dwg) -> Result<(Vec<Entity>, Vec<(u64, String)>)> {
@@ -545,6 +572,9 @@ pub fn decode_all(dwg: &Dwg) -> Result<(Vec<Entity>, Vec<(u64, String)>)> {
         _ => None,
     };
     place(&mut out, &names, space("BLOCK_RECORD_MODEL_SPACE"), space("BLOCK_RECORD_PAPER_SPACE"));
+    if dwg.version < Version::R2004 {
+        chain_children(&mut out);
+    }
     Ok((out, failed))
 }
 
