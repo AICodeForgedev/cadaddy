@@ -59,6 +59,21 @@ fn host() -> HostInfo {
     HOST.lock().unwrap_or_else(PoisonError::into_inner).clone().unwrap_or_default()
 }
 
+/// The version with its build as About shows it: "0.7.8 (e760908)" for a release build, the bare
+/// version for a development build or before the host has said.
+pub fn version_with_build() -> String {
+    with_build(env!("CARGO_PKG_VERSION"), &host().version)
+}
+
+/// `version` and the build from the host's version line ("cadaddy 0.7.8 (e760908)").
+fn with_build(version: &str, line: &str) -> String {
+    let build = line.rsplit_once('(').and_then(|(_, b)| b.strip_suffix(')')).filter(|b| !b.is_empty() && *b != "dev" && b.len() <= 40);
+    match build {
+        Some(b) if b.chars().all(|c| c.is_ascii_hexdigit()) => format!("{version} ({b})"),
+        _ => version.to_string(),
+    }
+}
+
 /// What the user chose to include.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Choices {
@@ -619,6 +634,14 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn about_shows_the_release_build() {
+        assert_eq!(with_build("0.7.8", "cadaddy 0.7.8 (e760908)"), "0.7.8 (e760908)");
+        assert_eq!(with_build("0.7.8", "cadaddy 0.7.8 (dev)"), "0.7.8");
+        assert_eq!(with_build("0.7.8", ""), "0.7.8");
+        assert_eq!(with_build("0.7.8", "cadaddy 0.7.8 (<b>x</b>)"), "0.7.8");
+    }
     use serde_json::json;
 
     fn text(entries: &[(String, Vec<u8>)]) -> String {

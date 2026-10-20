@@ -265,6 +265,13 @@ fn config_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<s
 
 const APP_ID: &str = "dev.aicodeforge.cadaddy";
 
+/// Where eframe keeps the preferences (`app.ron`): inside `CADADDY_CONFIG_DIR` when that is set, so
+/// a test or smoke run with its own settings folder never reads or writes the user's; otherwise
+/// eframe's own folder (`None`), where existing installs have theirs.
+fn persistence_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    var("CADADDY_CONFIG_DIR").filter(|v| !v.is_empty()).map(|d| std::path::PathBuf::from(d).join("app-state"))
+}
+
 /// Stencil bits of the window's render pass (see `NativeOptions::stencil_buffer`).
 const STENCIL_BITS: u8 = 8;
 
@@ -394,6 +401,7 @@ fn main() -> eframe::Result {
                 .with_title_shown(false)
                 .with_app_id(APP_ID),
             persist_window: false,
+            persistence_path: persistence_dir_from(|k| std::env::var_os(k)),
             // A stencil buffer clips the contents of clipped layout viewports on the GPU.
             stencil_buffer: STENCIL_BITS,
             ..Default::default()
@@ -512,7 +520,7 @@ fn main() -> eframe::Result {
                         log::error!("control server: no system randomness for a token; the control channel stays closed");
                     } else {
                         let rx = control_server::start_ports(&ports, cc.egui_ctx.clone(), token.flatten(), config_dir().as_deref());
-                        app = app.with_control(rx);
+                        app = app.with_control(rx, control_port.is_some());
                     }
                 }
                 if sample {
@@ -552,7 +560,7 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_dir_from, control_flag, control_port_from, filters_for_save, follow_desktop};
+    use super::{config_dir_from, control_flag, control_port_from, filters_for_save, follow_desktop, persistence_dir_from};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -604,6 +612,16 @@ mod tests {
         let empty = [("CADADDY_CONFIG_DIR", ""), ("HOME", ""), ("XDG_CONFIG_HOME", ""), ("APPDATA", "")];
         assert_eq!(config_dir_from(env(&empty)), None, "no usable variable means no directory, not the working directory");
         assert_eq!(config_dir_from(env(&[])), None);
+    }
+
+    #[test]
+    fn preferences_follow_the_override_variable_only() {
+        // A run with its own settings folder keeps app.ron there, away from the user's.
+        let p = persistence_dir_from(env(&[("CADADDY_CONFIG_DIR", "/tmp/cc"), ("HOME", "/home/u")]));
+        assert_eq!(p, Some(PathBuf::from("/tmp/cc/app-state")));
+        // Otherwise eframe's own folder, where installs already have their preferences.
+        assert_eq!(persistence_dir_from(env(&[("HOME", "/home/u")])), None);
+        assert_eq!(persistence_dir_from(env(&[("CADADDY_CONFIG_DIR", "")])), None);
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]

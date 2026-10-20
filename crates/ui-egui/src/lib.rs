@@ -389,6 +389,9 @@ pub struct CadApp {
     /// The window title last sent to the OS ("CADaddy - name*"), so it is only sent on a change.
     os_title: String,
     control_rx: Option<Receiver<ControlRequest>>,
+    /// The window was started to be driven (`--control PORT`), not just serving the agent port
+    /// that is on by default.
+    control_scripted: bool,
     pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
     queued_shots: Vec<(u64, f64, u32)>,
     shot_token: u64,
@@ -512,6 +515,7 @@ impl CadApp {
             integrated_titlebar: false,
             os_title: String::new(),
             control_rx: None,
+            control_scripted: false,
             pending_shots: Vec::new(),
             queued_shots: Vec::new(),
             shot_token: 0,
@@ -625,8 +629,11 @@ impl CadApp {
         }
     }
 
-    pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
+    /// Serve control requests from `rx`; `scripted` when the window was started with
+    /// `--control PORT` (tests and automation), not only the default agent port.
+    pub fn with_control(mut self, rx: Receiver<ControlRequest>, scripted: bool) -> Self {
         self.control_rx = Some(rx);
+        self.control_scripted = scripted;
         self
     }
 
@@ -802,9 +809,12 @@ impl CadApp {
         }
     }
 
-    /// Whether an agent can drive this window over the control channel (`--control PORT`).
+    /// Whether this window was started to be driven over the control channel (`--control PORT`):
+    /// the update card, the automatic update look and the support banner then stay away. The
+    /// agent port alone (Options ▸ agentControl, on by default) doesn't count, or no default
+    /// install would ever be offered an update.
     pub fn has_control_channel(&self) -> bool {
-        self.control_rx.is_some()
+        self.control_scripted && self.control_rx.is_some()
     }
 
     pub fn set_status(&mut self, s: impl Into<String>) {
