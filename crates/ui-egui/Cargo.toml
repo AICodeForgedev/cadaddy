@@ -29,6 +29,8 @@ log = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]
+# The million-object test opens and saves real DXF and .cdy files.
+cadaddy-io = { workspace = true }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 # Validates the canvas WGSL and its GLSL ES 3.0 (WebGL2) translation in tests (same naga wgpu uses).
 naga = { version = "30", features = ["wgsl-in", "glsl-out"] }

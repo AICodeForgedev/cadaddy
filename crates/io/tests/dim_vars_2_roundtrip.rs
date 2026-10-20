@@ -48,7 +48,7 @@ fn drawing() -> Drawing {
         assoc: Vec::new(),
         marks: Default::default(),
     };
-    d.add(&Space::Model, Common::default(), EntityKind::Dimension(dim)).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Dimension(Box::new(dim))).unwrap();
     d
 }
 

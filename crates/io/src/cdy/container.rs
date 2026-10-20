@@ -18,6 +18,20 @@ pub const CHUNK_HEADER_LEN: usize = 28;
 /// Trailer: index chunk offset (8), then this.
 pub const TRAILER_MAGIC: [u8; 8] = *b"CDYINDEX";
 pub const TRAILER_LEN: usize = 16;
+/// A chunk's payload as stored: deflated when that made it smaller.
+pub struct Packed {
+    pub stored: Vec<u8>,
+    pub deflated: bool,
+}
+
+/// `data` as a chunk stores it: deflated (when `deflate` and that makes it smaller), else as is.
+pub fn pack(data: &[u8], deflate: bool) -> Packed {
+    match deflate.then(|| miniz_oxide::deflate::compress_to_vec(data, 3)) {
+        Some(p) if p.len() < data.len() => Packed { stored: p, deflated: true },
+        _ => Packed { stored: data.to_vec(), deflated: false },
+    }
+}
+
 /// Chunk flag: the payload is deflate-compressed.
 pub const FLAG_DEFLATE: u16 = 1;
 /// Most bytes one chunk inflates to (a hostile file can't ask for more memory than this).
@@ -81,20 +95,24 @@ impl Writer {
     /// Append a chunk; `deflate` compresses its payload (small or already compressed data, like a
     /// PNG, is stored as it is).
     pub fn chunk(&mut self, tag: [u8; 4], version: u16, data: &[u8], deflate: bool) {
-        let packed = if deflate { Some(miniz_oxide::deflate::compress_to_vec(data, 3)) } else { None };
-        let (flags, stored): (u16, &[u8]) = match &packed {
-            Some(p) if p.len() < data.len() => (FLAG_DEFLATE, p),
-            _ => (0, data),
-        };
+        let packed = pack(data, deflate);
+        self.chunk_packed(tag, version, data.len(), &packed);
+    }
+
+    /// Append a chunk [`pack`] made (on another thread, perhaps): `raw_len` is its payload's
+    /// length before compression.
+    pub fn chunk_packed(&mut self, tag: [u8; 4], version: u16, raw_len: usize, packed: &Packed) {
+        let (flags, stored): (u16, &[u8]) = (if packed.deflated { FLAG_DEFLATE } else { 0 }, &packed.stored);
+        let data_len = raw_len;
         let offset = self.base + self.out.len() as u64;
         self.out.extend_from_slice(&tag);
         self.out.extend_from_slice(&version.to_le_bytes());
         self.out.extend_from_slice(&flags.to_le_bytes());
         self.out.extend_from_slice(&(stored.len() as u64).to_le_bytes());
         self.out.extend_from_slice(&crc32fast::hash(stored).to_le_bytes());
-        self.out.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        self.out.extend_from_slice(&(data_len as u64).to_le_bytes());
         self.out.extend_from_slice(stored);
-        self.index.push(IndexEntry { tag, version, offset, len: stored.len() as u64, raw_len: data.len() as u64 });
+        self.index.push(IndexEntry { tag, version, offset, len: stored.len() as u64, raw_len: data_len as u64 });
     }
 
     /// Finish: the index chunk and the trailer.

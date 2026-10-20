@@ -29,7 +29,7 @@ fn harness() -> Harness<'static, CadApp> {
 }
 
 fn tables(app: &CadApp) -> Vec<cadaddy_engine::doc::Table> {
-    app.session.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::Table(t) = &e.kind { Some(t.clone()) } else { None }).collect()
+    app.session.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::Table(t) = &e.kind { Some((**t).clone()) } else { None }).collect()
 }
 
 #[test]

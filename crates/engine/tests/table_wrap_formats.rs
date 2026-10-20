@@ -9,7 +9,7 @@ use serde_json::json;
 
 fn table(s: &Session, h: &str) -> Table {
     match &s.doc().unwrap().entity(Handle::parse_hex(h).unwrap()).unwrap().kind {
-        EntityKind::Table(t) => t.clone(),
+        EntityKind::Table(t) => (**t).clone(),
         _ => panic!("not a table"),
     }
 }

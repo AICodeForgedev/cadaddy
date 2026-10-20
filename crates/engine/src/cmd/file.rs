@@ -816,7 +816,13 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
         Some(r) => r,
         None => {
             let bytes = write_bytes(s, cmd, path, opts)?;
-            (commit_save(s, path, &bytes, store)?, false)
+            let n = commit_save(s, path, &bytes, store)?;
+            // The first DWG/DXF save checks what the file keeps: it reads these bytes back
+            // instead of writing the drawing a second time.
+            if is_exchange_file(path) && KEEP_WRITTEN.get() && s.state().is_ok_and(|st| !st.kept_checked) {
+                JUST_WRITTEN.with(|w| *w.borrow_mut() = Some((path.to_string(), bytes)));
+            }
+            (n, false)
         }
     };
     if is_drawing_file(path)
@@ -1220,6 +1226,14 @@ fn report_not_saved(s: &mut Session, r: &mut Value, lost: &std::collections::BTr
     }
 }
 
+thread_local! {
+    /// The bytes of the DWG/DXF file a save just wrote, for [`report_not_kept`] (taken there, or
+    /// dropped at the end of the save).
+    static JUST_WRITTEN: std::cell::RefCell<Option<(String, Vec<u8>)>> = const { std::cell::RefCell::new(None) };
+    /// A save that reports what the file keeps is running (only it wants [`JUST_WRITTEN`]).
+    static KEEP_WRITTEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Save, then report the entities the file couldn't keep (nothing is dropped silently).
 fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> Result<Value>) -> Result<Value> {
     // What the file will hold depends on the version it is saved as (the data store from 2013).
@@ -1228,7 +1242,13 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
     let lost = s.doc().map(|d| not_saved_as(d, version)).unwrap_or_default();
     // Release 12 has no form for some objects (the rest are converted to R12 ones).
     let r12_lost = if version == Version::R12 { s.doc().map(|d| r12::downgrade(d).1).unwrap_or_default() } else { Default::default() };
-    let mut r = run(s, p)?;
+    KEEP_WRITTEN.set(true);
+    let r = run(s, p);
+    KEEP_WRITTEN.set(false);
+    let Ok(mut r) = r else {
+        JUST_WRITTEN.with(|w| w.borrow_mut().take());
+        return r;
+    };
     if !r12_lost.is_empty() && r.get("path").and_then(Value::as_str).is_some_and(is_dxf) {
         let list: Vec<String> = r12_lost.iter().map(|(t, n)| format!("{n} {t}")).collect();
         s.echo(format!("Not saved in the Release 12 DXF file (R12 has no such objects): {}", list.join(", ")));
@@ -1243,6 +1263,7 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
         let opts = save_options("save", p).unwrap_or_default();
         report_not_kept(s, &mut r, &path, opts);
     }
+    JUST_WRITTEN.with(|w| w.borrow_mut().take());
     Ok(r)
 }
 
@@ -1256,10 +1277,13 @@ fn report_not_kept(s: &mut Session, r: &mut Value, path: &str, opts: SaveAs) {
     }
     st.kept_checked = true;
     let d = st.drawing();
-    // Written as the save wrote it (the version and binary DXF asked for).
-    let bytes = match WRITE_AS.get() {
-        Some(write_as) if opts != SaveAs::default() => write_as(d, path, &opts),
-        _ => (hooks.write)(d, path),
+    // Written as the save wrote it (the version and binary DXF asked for): the bytes it wrote.
+    let bytes = match JUST_WRITTEN.with(|w| w.borrow_mut().take()).filter(|(p, _)| p == path) {
+        Some((_, b)) => Ok(b),
+        None => match WRITE_AS.get() {
+            Some(write_as) if opts != SaveAs::default() => write_as(d, path, &opts),
+            _ => (hooks.write)(d, path),
+        },
     };
     let Ok((lost, detail)) = bytes.and_then(|b| kept::check_written(d, path, &b, hooks.read)) else { return };
     if lost.is_empty() && detail.is_empty() {

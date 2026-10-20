@@ -70,15 +70,15 @@ fn every_kind() -> Drawing {
     }))
     .unwrap();
     for kind in [
-        EntityKind::MLeader(mleader),
-        EntityKind::Table(table),
+        EntityKind::MLeader(Box::new(mleader)),
+        EntityKind::Table(Box::new(table)),
         EntityKind::Region(Region { loops }),
         EntityKind::Image(image),
-        EntityKind::AttDef(Attrib {
+        EntityKind::AttDef(Box::new(Attrib {
             tag: "ROOM".into(),
             prompt: "Room?".into(),
             ..first(&d, |k| if let EntityKind::Insert(i) = k { i.attribs.first().cloned() } else { None })
-        }),
+        })),
     ] {
         d.add(&Space::Model, Common { layer: "WALLS".into(), ..Common::default() }, kind).unwrap();
     }

@@ -237,7 +237,13 @@ pub fn png(d: &Drawing, space: &Space, width: u32, height: u32) -> Result<Vec<u8
 /// extents (5% margin) when `window` is `None`. Objects are drawn with their transparency, as on
 /// screen.
 pub fn png_framed(d: &Drawing, space: &Space, width: u32, height: u32, window: Option<Bounds2>) -> Result<Vec<u8>> {
-    let list = cadaddy_render::build(d, space, &cadaddy_render::Options { transparency: true, ..cadaddy_render::Options::default() });
+    // Curves need be no finer than half a pixel of the image: a thumbnail of a large drawing was
+    // tessellated at plot detail (0.001 units), most of a .cdy save's time at 200k objects.
+    let frame = window.unwrap_or_else(|| d.extents(space));
+    let scale = png_view(&frame, width, height, window).scale;
+    let defaults = cadaddy_render::Options::default();
+    let tolerance = if frame.is_empty() || !(0.5 / scale).is_finite() { defaults.tolerance } else { (0.5 / scale).max(1e-9) };
+    let list = cadaddy_render::build(d, space, &cadaddy_render::Options { transparency: true, tolerance, ..defaults });
     let view = png_view(&list.bounds, width, height, window);
     cadaddy_render::raster::render_png(&list, &view, &cadaddy_render::raster::RasterOptions::default())
         .ok_or_else(|| IoError::Format("render failed".into()))
