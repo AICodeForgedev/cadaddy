@@ -615,6 +615,8 @@ pub struct Settings {
     /// 2 layer, 4 linetype, 8 linetype scale, 16 lineweight, 32 plot style, 64 object style,
     /// 128 name).
     pub selectsimilarmode: u32,
+    /// REDIRMODE: what REDIR changes paths in (any of `styles`, `xrefs`, `images`, `rtext`).
+    pub redirmode: Vec<String>,
     pub otrack: bool,
     /// PICKBOX in pixels.
     pub pickbox: f64,
@@ -728,6 +730,7 @@ impl Default for Settings {
             plot_transparency_override: 1,
             selectioncycling: 2,
             selectsimilarmode: 130,
+            redirmode: ["styles", "xrefs", "images", "rtext"].map(String::from).to_vec(),
             otrack: true,
             pickbox: 3.0,
             aperture: 10.0,
@@ -1021,6 +1024,9 @@ pub struct Session {
     pub last_render: Option<RenderResult>,
     /// Where `clipboard` came from and the layers, styles and blocks its objects need.
     pub clipboard_source: Option<cmd::clipboard::ClipSource>,
+    /// What the operating system's clipboard holds that isn't CADaddy objects (an image or text
+    /// copied in another program), as the front end last read it: PASTESPEC and PASTECLIP paste it.
+    pub system_clipboard: cmd::clipboard::SystemContents,
     /// The window last picked with PLOTWINDOW (the Plot dialog's "Window <").
     pub plot_window: Option<cadaddy_geom::Bounds2>,
     /// AutoLISP: each drawing's symbols and the routine running ([`lisp`]).
@@ -1094,6 +1100,7 @@ impl Session {
             last_used: LastUsed::default(),
             last_render: None,
             clipboard_source: None,
+            system_clipboard: cmd::clipboard::SystemContents::default(),
             plot_window: None,
             lisp: lisp::LispState::default(),
             lisp_last: None,

@@ -1,0 +1,195 @@
+# CADaddy engine messages in Hungarian: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+	Enter a group name	Adja meg a csoport nevét
+	Pick internal point	Jelöljön ki egy belső pontot
+	Specify the pattern origin	Adja meg a minta origóját
+	Specify the incrementing elevation between rows	Adja meg a sorok közötti emelkedő magasságot
+	Specify the angle to fill (+=ccw, -=cw)	Adja meg a kitöltési szöget (+=óramutatóval ellentétes, -=óramutató irányú)
+	Select hatch object	Válassza ki a sraffozásobjektumot
+	Red, Green, Blue	Piros, zöld, kék
+	Enter the number of rows	Adja meg a sorok számát
+	Enter the number of levels	Adja meg a szintek számát
+	Enter new layer name	Adja meg az új fólia nevét
+	Specify width	Adja meg a szélességet
+	Specify the angle between items	Adja meg az elemek közötti szöget
+	Specify text height	Adja meg a szövegmagasságot
+	Specify start tangent	Adja meg a kezdő érintőt
+	Specify end tangent	Adja meg a záró érintőt
+	Specify reference length	Adja meg a referenciahosszt
+	Specify other corner	Adja meg a másik sarkot
+	Specify next point or [Undo]	Adja meg a következő pontot, vagy [Undo]
+	Specify new location	Adja meg az új helyet
+	Specify new length	Adja meg az új hosszt
+	Specify length of line	Adja meg a vonal hosszát
+	Specify displacement	Adja meg az elmozdulást
+	Specify angle for dimension text	Adja meg a méretszöveg szögét
+	Select viewports	Válassza ki a nézetablakokat
+	Select object to break dimension	Válassza ki a megszakítandó méretet
+	Select group	Válassza ki a csoportot
+	Select grip to edit array	Válassza ki a tömb szerkesztéséhez használt fogópontot
+	Select a table	Válasszon ki egy táblázatot
+	Select a boundary to remove	Válassza ki az eltávolítandó határt
+	Rotate arrayed items?	Elforgatja a tömb elemeit?
+	Erase polyline?	Törli a vonalláncot?
+	Enter viewport arrangement	Adja meg a nézetablakok elrendezését
+	Enter transparency value (0-90)	Adja meg az átlátszóság értékét (0-90)
+	Enter the number of operations to undo	Adja meg a visszavonandó műveletek számát
+	Enter the number of columns	Adja meg az oszlopok számát
+	Enter number of items in array	Adja meg a tömb elemeinek számát
+	Enter new layer state name	Adja meg az új fóliaállapot nevét
+	Enter new color	Adja meg az új színt
+	Enter name of new layout	Adja meg az új elrendezés nevét
+	Enter layer name	Adja meg a fólia nevét
+	Enter file name	Adja meg a fájlnevet
+	Enter color name or number (1-255)	Adja meg a szín nevét vagy számát (1-255)
+	Enter a configuration option	Adjon meg egy konfigurációs beállítást
+	Base point	Bázispont
+	Word-wrap the combined Mtext?	Tördeli a sorokat az egyesített Mtextben?
+	Where should the data go?	Hová kerüljenek az adatok?
+	Verify each name to be purged?	Megerősíti az egyes tisztítandó neveket?
+	Use landing	Kivezetés használata
+	Type of boundary object	Határobjektum típusa
+	Specify width factor	Adja meg a szélességi tényezőt
+	Specify tolerance	Adja meg a tűrést
+	Specify the tangent direction for the start point of arc	Adja meg az ív kezdőpontjának érintőirányát
+	Specify the reference angle	Adja meg a referenciaszöget
+	Specify the new angle	Adja meg az új szöget
+	Specify text width	Adja meg a szövegszélességet
+	Specify temporary OTRACK point	Adja meg az ideiglenes OTRACK pontot
+	Invalid option keyword.	Érvénytelen kulcsszó.
+	*Invalid selection*	*Érvénytelen kijelölés*
+	Requires a valid angle.	Érvényes szöget kell megadni.
+	Nothing to undo.	Nincs mit visszavonni.
+	Invalid point.	Érvénytelen pont.
+	No viewport found there.	Ott nem található nézetablak.
+	*Cancel*	*Mégse*
+	Requires a positive number.	Pozitív számot kell megadni.
+	No hatch selected.	Nincs kijelölt sraffozás.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** A parancs a Modell lapon nem engedélyezett ** (előbb váltson elrendezésre)
+	Select a multileader.	Válasszon ki egy multimutatót.
+	No line or arc to continue.	Nincs folytatható vonal vagy ív.
+	Revision cloud finished.	A revíziófelhő elkészült.
+	Object selected is not a circle or arc.	A kijelölt objektum nem kör vagy ív.
+	Select a linear or aligned dimension.	Válasszon ki egy lineáris vagy igazított méretet.
+	Object selected is not a dimension.	A kijelölt objektum nem méret.
+	No dimensions selected.	Nincs kijelölt méret.
+	Requires a number.	Számot kell megadni.
+	0 found	0 található
+	The feature control frame is empty.	A tűréskeret üres.
+	1 was on a locked layer.	1 zárolt fólián volt.
+	Row elevations need an associative array; the copies stay at the same elevation.	A sorok magasságához asszociatív tömb kell; a másolatok ugyanazon a magasságon maradnak.
+	Point or option keyword required.	Pontot vagy kulcsszót kell megadni.
+	Enter Yes or No.	Adja meg: Yes vagy No.
+	Viewport created, zoomed to the model extents.	Nézetablak létrehozva, a modell kiterjedésére nagyítva.
+	No object found.	Nem található objektum.
+	The object is not a table.	Az objektum nem táblázat.
+	No table there.	Ott nincs táblázat.
+	A transparent command is already in progress.	Már folyamatban van egy átlátszó parancs.
+	Invalid class name.	Érvénytelen osztálynév.
+	Invalid group name.	Érvénytelen csoportnév.
+	Too many point modifiers.	Túl sok pontmódosító.
+	No leader to remove.	Nincs eltávolítható mutató.
+	Requires a non-negative number.	Nemnegatív számot kell megadni.
+	Clipboard is empty.	A vágólap üres.
+	1 object was on a locked layer.	1 objektum zárolt fólián volt.
+	Circle does not exist.	A kör nem létezik.
+	Enter Length or Area.	Adja meg: Length vagy Area.
+	Enter a percentage from 0 to 1000.	Adjon meg egy 0 és 1000 közötti százalékot.
+	Enter Table, File or None.	Adja meg: Table, File vagy None.
+	Cannot measure that object.	Az objektum nem mérhető.
+	Third pair ignored (2D align).	A harmadik pár figyelmen kívül hagyva (2D igazítás).
+	Insert mode: Copy (nested objects are copied as independent objects).	Beszúrási mód: Másolás (a beágyazott objektumok önálló objektumként másolódnak).
+	Everything has been undone	Minden vissza lett vonva
+	Everything has been undone.	Minden vissza lett vonva.
+	Requires a non-negative number or Auto.	Nemnegatív számot vagy Auto értéket kell megadni.
+	Select a dimension.	Válasszon ki egy méretet.
+	Object cannot be dimensioned this way.	Az objektum így nem méretezhető.
+	Select an arc, circle or line.	Válasszon ki egy ívet, kört vagy vonalat.
+	The two points must be different.	A két pontnak különböznie kell.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Nincs folytatható lineáris méret. Előbb hozzon létre egyet a DIMLINEAR paranccsal.
+	A multileader needs a leader line or content; nothing was drawn.	A multimutatóhoz mutatóvonal vagy tartalom kell; semmi sem lett rajzolva.
+	Requires the name of a block defined in the drawing.	A rajzban definiált blokk nevét kell megadni.
+	Invalid option.	Érvénytelen beállítás.
+	The boundary encloses none of the image.	A határ a kép egyetlen részét sem fogja körül.
+	The object is not an image.	Az objektum nem kép.
+	The image has no clipping boundary.	A képnek nincs vágási határa.
+	No images selected.	Nincs kijelölt kép.
+	Requires an integer between 0 and 100.	0 és 100 közötti egész számot kell megadni.
+	The selected object has no area.	A kijelölt objektumnak nincs területe.
+	No such object	Nincs ilyen objektum
+	Requires a point.	Pontot kell megadni.
+	Requires a distance.	Távolságot kell megadni.
+	The object is on a locked layer.	Az objektum zárolt fólián van.
+	Value must be positive and nonzero.	Az értéknek pozitívnak és nullától különbözőnek kell lennie.
+	Requires an angle.	Szöget kell megadni.
+	Requires a point or option keyword.	Pontot vagy kulcsszót kell megadni.
+	Object does not intersect a cutting edge.	Az objektum nem metsz vágóélt.
+	Object does not intersect an edge.	Az objektum nem metsz élt.
+	Lines are parallel.	A vonalak párhuzamosak.
+	The Block Editor is not open.	A Blokkszerkesztő nincs megnyitva.
+	Requires a positive integer.	Pozitív egész számot kell megadni.
+	Answer Yes or No.	Válaszoljon: Yes vagy No.
+	Requires a valid point.	Érvényes pontot kell megadni.
+	No reference objects	Nincsenek referenciaobjektumok
+	Requires an angle or point.	Szöget vagy pontot kell megadni.
+	Requires a positive distance.	Pozitív távolságot kell megadni.
+	Requires a non-negative distance.	Nemnegatív távolságot kell megadni.
+	No such grip	Nincs ilyen fogópont
+	Requires a template file name.	Sablonfájl nevét kell megadni.
+	A hatch needs at least one boundary: erase it instead.	A sraffozáshoz legalább egy határ kell: inkább törölje.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	A visszavonás ki van kapcsolva (UNDO Control None); az UNDO Control All bekapcsolja.
+	Enter ON or OFF.	Adja meg: ON vagy OFF.
+	Not a linear dimension.	Nem lineáris méret.
+	Valid hatch boundary not found.	Nem található érvényes sraffozási határ.
+	No closed boundary objects selected.	Nincs kijelölt zárt határobjektum.
+	Requires a name.	Nevet kell megadni.
+	That option doesn't apply to this grip.	Ez a beállítás erre a fogópontra nem vonatkozik.
+	That would make a degenerate object.	Ebből elfajult objektum lenne.
+	No tangent or perpendicular from the last point.	Az utolsó pontból nincs érintő vagy merőleges.
+	Requires numeric distance or second point.	Számszerű távolságot vagy második pontot kell megadni.
+	Edge endpoints must differ.	Az él végpontjainak különbözniük kell.
+	Requires numeric distance or point.	Számszerű távolságot vagy pontot kell megadni.
+	Requires a positive height.	Pozitív magasságot kell megadni.
+	No objects found.	Nem találhatók objektumok.
+	Requires a non-zero number.	Nullától különböző számot kell megadni.
+	Circle must intersect cutting edges at two or more points.	A körnek legalább két pontban kell metszenie a vágóéleket.
+	Arc cannot be full 360 degrees.	Az ív nem lehet teljes 360 fok.
+	Cannot break that object.	Az objektum nem szakítható meg.
+	An object is on a locked layer.	Egy objektum zárolt fólián van.
+	Objects are not connected.	Az objektumok nem kapcsolódnak.
+	The two points must differ.	A két pontnak különböznie kell.
+	Mirror line points must differ.	A tükörtengely pontjainak különbözniük kell.
+	No drawing is open.	Nincs megnyitott rajz.
+	Command: {}	Parancs: {}
+	Unknown command "{}". Press F1 for help.	Ismeretlen parancs: „{}”. Segítségért nyomja meg az F1 billentyűt.
+	{} found	{} található
+	{} found, {} total	{} található, összesen {}
+	Distance = {}	Távolság = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Távolság = {},  Szög az XY-síkban = {},  Szög az XY-síktól = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Delta X = {},  Delta Y = {},   Delta Z = {}
+	Area = {}, Perimeter = {}	Terület = {}, Kerület = {}
+	Total area = {}	Teljes terület = {}
+	Resuming {} command.	A(z) {} parancs folytatása.
+	Invalid input: {}	Érvénytelen bevitel: {}
+	{} were on a locked layer.	{} zárolt fólián volt.
+	{} dimension(s) changed.	{} méret módosítva.
+	Group {} ungrouped.	A(z) {} csoport felbontva.
+	{} object(s) flattened.	{} objektum lelapítva.
+	Group {} renamed to {}.	A(z) {} csoport átnevezve erre: {}.
+	{} object(s) added to group {}.	{} objektum hozzáadva a(z) {} csoporthoz.
+	{} object(s) removed from group {}.	{} objektum eltávolítva a(z) {} csoportból.
+	{} lines were chamfered	{} vonal letörve
+	{} lines were filleted	{} vonal lekerekítve
+	{} objects joined into 1 {}	{} objektum egyesítve 1 {} objektummá
+	Current dimension style:  {}	Aktuális méretstílus:  {}
+	Wrote {}	Kiírva: {}
+	{} is already open.	{} már meg van nyitva.
+	{} dimension(s) created.	{} méret létrehozva.
+	BOUNDARY created {} polyline(s)	A BOUNDARY {} vonalláncot hozott létre
+	Current line-width is {}	Az aktuális vonalszélesség: {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Ismeretlen változó: {}. A változók listázásához írja be: SETVAR ?
+	{} = {} (read only)	{} = {} (csak olvasható)
+	Dimension text = {}	Méretszöveg = {}
+	{} segments added to polyline	{} szakasz hozzáadva a vonallánchoz

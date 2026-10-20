@@ -398,6 +398,10 @@ pub fn install_fonts(ctx: &egui::Context, language: &str, cjk: bool) {
         if cjk && !chinese {
             paths.extend(japanese_font());
         }
+        // 繁體中文: a Traditional face first where the system has its own.
+        if cjk && language == "zh-TW" {
+            paths.extend(traditional_font());
+        }
         if cjk {
             paths.extend(cjk_font());
         }
@@ -468,6 +472,34 @@ fn read_capped(path: &std::path::Path, max: u64) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
     file.take(max.saturating_add(1)).read_to_end(&mut bytes).ok()?;
     (!bytes.is_empty() && bytes.len() as u64 <= max).then_some(bytes)
+}
+
+/// An installed font made for Traditional Chinese (Taiwan), for that interface: Microsoft JhengHei
+/// on Windows, the TC Noto CJK face on Linux. macOS's PingFang (in [`cjk_font`]) covers both
+/// scripts. Checked once.
+pub fn traditional_font() -> Option<&'static std::path::Path> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static FOUND: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+        FOUND
+            .get_or_init(|| {
+                let candidates: &[&str] = if cfg!(windows) {
+                    &["C:\\Windows\\Fonts\\msjh.ttc", "C:\\Windows\\Fonts\\msjh.ttf", "C:\\Windows\\Fonts\\mingliu.ttc"]
+                } else if cfg!(target_os = "macos") {
+                    &[]
+                } else {
+                    &[
+                        "/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf",
+                        "/usr/share/fonts/noto-cjk/NotoSansCJKtc-Regular.otf",
+                        "/usr/share/fonts/truetype/arphic/uming.ttc",
+                    ]
+                };
+                candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
+            })
+            .as_deref()
+    }
+    #[cfg(target_arch = "wasm32")]
+    None
 }
 
 /// An installed font with Chinese characters, for the Chinese interface; fonts are never bundled

@@ -19,7 +19,15 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{path, copy?: bool (an unsaved copy without a file name), title?} | {data: base64, name} → {index, uid, errors, fixed, issues, message}")
             .enabled(always)
             .noundo()
-            .interactive(|_| Ok(Box::new(Recover))),
+            .interactive(|_| Ok(Box::new(Recover { all: false }))),
+        CommandSpec::new("recoverall", "Recover Drawing and Xrefs...", run_recoverall)
+            .menu(&["File", "Drawing Utilities", "Recover Drawing and Xrefs..."])
+            .params(
+                "{path, save?: bool (default true: each repaired xref file is saved, its original kept as .bak)} → {drawing: (as RECOVER), xrefs: [{name, path, errors, fixed, warnings, saved?, error?}], message}",
+            )
+            .enabled(always)
+            .noundo()
+            .interactive(|_| Ok(Box::new(Recover { all: true }))),
         CommandSpec::new("drawingrecovery", "Drawing Recovery Manager...", run_drawingrecovery)
             .menu(&["File", "Drawing Utilities", "Drawing Recovery Manager..."])
             .params("{action?: list|open|discard (default list), path? (one of the listed files)} → {files: [{path, drawing, modified, bytes}]} | (open: as RECOVER)")
@@ -187,6 +195,100 @@ fn run_recover(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
+/// Xrefs RECOVERALL follows, at most, and how deep it nests.
+const MAX_RECOVER_XREFS: usize = 256;
+const MAX_RECOVER_DEPTH: usize = 16;
+
+/// RECOVERALL: RECOVER the drawing, then each drawing it references (nested xrefs too): read as
+/// tolerantly as RECOVER reads, fixed as AUDIT fixes, and — when anything was fixed or left out —
+/// saved back to its file, the original kept beside it as `.bak` (`save: false` only reports).
+fn run_recoverall(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = str_param(p, "path").ok_or_else(|| bad("recoverall", "`path` is required"))?.to_string();
+    let save = bool_or(p, "save", true);
+    let drawing = run_recover(s, &json!({ "path": path }))?;
+    let mut xrefs = Vec::new();
+    let mut seen: std::collections::BTreeSet<std::path::PathBuf> = std::collections::BTreeSet::new();
+    seen.insert(std::path::PathBuf::from(&path));
+    // (block name, xref path as saved, the referencing drawing's file, depth)
+    let mut queue: std::collections::VecDeque<(String, String, String, usize)> = std::collections::VecDeque::new();
+    let refs = |d: &cadaddy_doc::Drawing, host: &str, depth: usize| -> Vec<(String, String, String, usize)> {
+        d.blocks.values().filter_map(|b| b.xref_path.clone().map(|x| (b.name.clone(), x, host.to_string(), depth))).collect()
+    };
+    queue.extend(refs(s.doc()?, &path, 1));
+    while let Some((name, xpath, host, depth)) = queue.pop_front() {
+        if xrefs.len() >= MAX_RECOVER_XREFS {
+            s.echo(format!("RECOVERALL: more than {MAX_RECOVER_XREFS} referenced drawings; the rest were not recovered."));
+            break;
+        }
+        let file = match crate::cmd::blocks::xref::load::find(&xpath, std::path::Path::new(&host).parent(), false) {
+            Ok(f) => f,
+            Err(_) => {
+                xrefs.push(json!({ "name": name, "path": xpath, "error": "file not found" }));
+                continue;
+            }
+        };
+        if !seen.insert(file.clone()) {
+            continue;
+        }
+        let shown = file.to_string_lossy().into_owned();
+        match recover_file(&shown, save) {
+            Ok((r, d)) => {
+                if depth < MAX_RECOVER_DEPTH {
+                    queue.extend(refs(&d, &shown, depth + 1));
+                }
+                let mut r = r;
+                r["name"] = json!(name);
+                xrefs.push(r);
+            }
+            Err(e) => xrefs.push(json!({ "name": name, "path": shown, "error": e })),
+        }
+    }
+    let fixed: usize = xrefs.iter().filter_map(|x| x["errors"].as_u64()).sum::<u64>() as usize;
+    let failed = xrefs.iter().filter(|x| x.get("error").is_some()).count();
+    let message = format!(
+        "{} referenced drawing{} recovered ({fixed} error{} fixed{})",
+        xrefs.len() - failed,
+        if xrefs.len() - failed == 1 { "" } else { "s" },
+        if fixed == 1 { "" } else { "s" },
+        if failed > 0 { format!(", {failed} couldn't be recovered") } else { String::new() }
+    );
+    s.echo(message.clone());
+    Ok(json!({ "drawing": drawing, "xrefs": xrefs, "message": message }))
+}
+
+/// Recover one referenced drawing file: read it, fix it, and with `save` write it back when that
+/// changed anything (the original kept as `.bak`). The report and the drawing (for its own xrefs).
+fn recover_file(path: &str, save: bool) -> std::result::Result<(Value, cadaddy_doc::Drawing), String> {
+    let hooks = file::io().ok_or("file formats are not available in this build")?;
+    let bytes = read_path("recoverall", path).map_err(|e| e.user_message())?;
+    let mut d = (hooks.read)(&bytes, path)?;
+    let report = crate::audit::fix(&mut d);
+    let warnings = d.read_notes.clone();
+    let mut r = report.to_json();
+    r["path"] = json!(path);
+    r["warnings"] = json!(warnings);
+    if save && (!report.issues.is_empty() || !warnings.is_empty()) {
+        d.read_notes.clear();
+        let out = (hooks.write)(&d, path)?;
+        let bak = std::path::Path::new(path).with_extension("bak");
+        write_bytes(&bak.to_string_lossy(), &bytes)?;
+        write_bytes(path, &out)?;
+        r["saved"] = json!(true);
+        r["backup"] = json!(bak.to_string_lossy());
+    }
+    Ok((r, d))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_bytes(path: &str, bytes: &[u8]) -> std::result::Result<(), String> {
+    crate::writefile::write(path, bytes).map_err(|e| format!("{path}: {e}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn write_bytes(_path: &str, _bytes: &[u8]) -> std::result::Result<(), String> {
+    Err("files are not available on the web".into())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn read_path(cmd: &str, path: &str) -> Result<Vec<u8>> {
     crate::readfile::read(path).map_err(|e| bad(cmd, format!("{path}: {e}")))
@@ -237,11 +339,14 @@ impl Interactive for Audit {
 }
 
 /// RECOVER at the command line (no file dialog): the file name is typed.
-struct Recover;
+/// RECOVER (and with `all`, RECOVERALL) at the command line: asks for the file.
+struct Recover {
+    all: bool,
+}
 
 impl Interactive for Recover {
     fn name(&self) -> &'static str {
-        "RECOVER"
+        if self.all { "RECOVERALL" } else { "RECOVER" }
     }
 
     fn prompt(&self, _s: &Session) -> Prompt {
@@ -256,8 +361,13 @@ impl Interactive for Recover {
                 if path.is_empty() {
                     return Ok(Step::Cancel);
                 }
-                let r = run_recover(s, &json!({ "path": path }))?;
-                echo_result(s, &r);
+                if self.all {
+                    let r = run_recoverall(s, &json!({ "path": path }))?;
+                    echo_result(s, &r["drawing"]);
+                } else {
+                    let r = run_recover(s, &json!({ "path": path }))?;
+                    echo_result(s, &r);
+                }
                 Ok(Step::Done)
             }
             _ => Ok(Step::Continue),

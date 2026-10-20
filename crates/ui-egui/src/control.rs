@@ -333,6 +333,7 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("ui.release", "{x, y, button?, shift?}", "Real button release (ends a ui.drag with release: false)."),
     ("ui.key", "{key, cmd?, shift?, alt?}", "Synthetic key press."),
     ("ui.text", "{text}", "Synthetic text input."),
+    ("ui.ime", "{preedit} | {commit}", "Synthetic input method (IME) composition: the pre-edit text, or the committed text."),
     ("ui.set", "UiState fields", "Change UI state: palettes, toolbars, command line, theme…"),
     ("ui.resize", "{width, height}", "Resize the window."),
     ("ui.focus", "", "Activate the native window."),
@@ -485,7 +486,11 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                     app.cmd.history.remove(0);
                 }
             }
+            // Typed by an agent: the same rails as its `engine.execute` calls (confirmations, what
+            // only the user may loosen).
+            let was = std::mem::replace(&mut app.session.agent.from_agent, true);
             let error = app.cmdline(text);
+            app.session.agent.from_agent = was;
             app.agent_run = run_token(app);
             let out: Vec<String> = app.session.log.iter().skip(before).cloned().collect();
             let mut st = cmdline_state(app);
@@ -524,7 +529,12 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                     None
                 }
                 // As pressing Enter in the command line: a refused Enter is echoed to the history.
-                _ => app.session.input(Input::Enter).err().map(|e| e.to_string()),
+                _ => {
+                    let was = std::mem::replace(&mut app.session.agent.from_agent, true);
+                    let r = app.session.input(Input::Enter).err().map(|e| e.to_string());
+                    app.session.agent.from_agent = was;
+                    r
+                }
             };
             if let Some(e) = &error {
                 app.session.echo(e.clone());
@@ -679,6 +689,15 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
         }
         "ui.text" => {
             app.synthetic.push(egui::Event::Text(s("text").unwrap_or("").to_string()));
+            ok(Value::Null)
+        }
+        "ui.ime" => {
+            let ev = match (s("preedit"), s("commit")) {
+                (Some(t), None) => egui::ImeEvent::Preedit { text: t.to_string(), active_range_chars: None },
+                (None, Some(t)) => egui::ImeEvent::Commit(t.to_string()),
+                _ => return err("give preedit or commit"),
+            };
+            app.synthetic.push(egui::Event::Ime(ev));
             ok(Value::Null)
         }
         "ui.set" => {

@@ -155,7 +155,8 @@ impl Session {
         }
         if self.agent.from_agent
             && self.agent.confirm
-            && !bool_or(params, "confirmed", false)
+            // (No way for the agent to say it was confirmed: the user's Allow runs the call as the
+            // user's own, outside these rails.)
             && !self.agent.dry_run
             && let Some(question) = self.needs_confirmation(&cmd, params)
         {

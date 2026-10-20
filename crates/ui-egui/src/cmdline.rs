@@ -33,6 +33,12 @@ pub struct CmdLine {
     pub option_rows: Vec<(Rect, String)>,
     /// Where the Dynamic Input tooltip stays while the options menu is open.
     pub options_anchor: Option<Pos2>,
+    /// An input method's composition (Chinese, Japanese, Korean) not yet committed: shown
+    /// underlined after what's typed; while it is open the IME has the editing keys.
+    pub preedit: String,
+    /// Where the composition sits in the bar as last drawn (screen), for the IME's candidate
+    /// window.
+    ime_area: Option<Rect>,
 }
 
 /// The most history lines the command line shows above its bar.
@@ -208,18 +214,70 @@ pub struct KeyPress {
     pub plain: bool,
 }
 
+/// Whether typing goes to the command line: no text field has focus, the in-place text editor
+/// is closed (an Enter here would answer TEXTEDIT's prompt behind it with the old text) and no
+/// modal dialog is up (the save-changes question when closing: an Enter here would repeat the
+/// last command behind it).
+fn has_keyboard(app: &CadApp, ctx: &egui::Context) -> bool {
+    !ctx.egui_wants_keyboard_input()
+        && !crate::mtext_editor::is_open(ctx)
+        && app.close_prompt().is_none()
+        && ctx.memory(|m| m.top_modal_layer()).is_none()
+}
+
+/// Turn the system input method on for the command line, its candidate window at `area`: egui
+/// enables IMEs only while something says where text goes (its text fields do), so without
+/// this Chinese, Japanese and Korean input never reached the command line. Not on the web,
+/// where it would move the keyboard to the page's hidden text field, away from the drawing.
+fn allow_ime(ctx: &egui::Context, area: Rect) {
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
+    let caret = Rect::from_x_y_ranges(area.right() - 1.0..=area.right(), area.y_range());
+    ctx.output_mut(|o| {
+        o.ime =
+            Some(egui::output::IMEOutput { purpose: egui::IMEPurpose::Normal, rect: area, cursor_rect: caret, should_interrupt_composition: false });
+    });
+}
+
+/// An input method event at the command line: the composition shows as it changes; committed
+/// text is typed (a committed space at a prompt that doesn't take text enters, like Space).
+fn ime_event(app: &mut CadApp, ev: &egui::ImeEvent, text_prompt: bool) {
+    match ev {
+        egui::ImeEvent::Preedit { text, .. } => {
+            if !text.is_empty() {
+                app.cmd.options = None;
+            }
+            app.cmd.preedit.clone_from(text);
+        }
+        egui::ImeEvent::Commit(text) => {
+            app.cmd.preedit.clear();
+            if text.is_empty() {
+                return;
+            }
+            app.cmd.options = None;
+            if text == " " && !text_prompt {
+                submit(app);
+            } else {
+                app.cmd.buffer.push_str(text);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Handle keyboard input destined for the command line (when no text field has focus).
 pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
-    // The in-place text editor owns the keyboard while it is open (an Enter here would answer
-    // TEXTEDIT's prompt behind it with the old text).
-    if ctx.egui_wants_keyboard_input() || crate::mtext_editor::is_open(ctx) {
+    if !has_keyboard(app, ctx) {
+        // A composition left open belongs to whatever has the keyboard now.
+        app.cmd.preedit.clear();
         return;
     }
-    // A modal dialog (the save-changes question when closing) owns the keyboard: an Enter here
-    // would repeat the last command behind it.
-    if app.close_prompt().is_some() || ctx.memory(|m| m.top_modal_layer()).is_some() {
-        return;
-    }
+    let area = app.cmd.ime_area.unwrap_or_else(|| {
+        let r = ctx.content_rect();
+        Rect::from_center_size(pos2(r.center().x, r.bottom() - 22.0), vec2(2.0, 24.0))
+    });
+    allow_ime(ctx, area);
     let events = ctx.input(|i| i.events.clone());
     let selection = app.session.selection();
     app.cmd.watch_selection(&selection);
@@ -227,6 +285,17 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
     let text_prompt = app.session.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && !p.accept.number);
     options_still_fit(app);
     for ev in events {
+        if let egui::Event::Ime(ime) = &ev {
+            ime_event(app, ime, text_prompt);
+            app.cmd.note_typing();
+            continue;
+        }
+        // While a composition is open, Enter, Esc, Backspace, Tab and the arrows are the IME's
+        // (choosing, cancelling, editing it): Windows marks them processed and egui drops them,
+        // and other systems don't send them, but none may run a command or cancel one here.
+        if !app.cmd.preedit.is_empty() && matches!(ev, egui::Event::Key { .. } | egui::Event::Text(_)) {
+            continue;
+        }
         // The options menu takes the arrows, Enter and Escape; typing closes it.
         if app.cmd.options.is_some() {
             let space = matches!(&ev, egui::Event::Text(t) if t == " ") && !text_prompt;
@@ -418,7 +487,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     // prompt on hover then.
     let text_left = bar.left() + 30.0;
     let text_right = bar.right() - 26.0;
-    let full = format!("{}{}", app.session.prompt_text(), app.cmd.buffer);
+    let full = format!("{}{}{}", app.session.prompt_text(), app.cmd.buffer, app.cmd.preedit);
     let full_w = p.layout_no_wrap(full.clone(), crate::theme::body(), t.text).size().x + 8.0;
     let overflow = (full_w - (text_right - text_left)).max(0.0);
     let pt = p.with_clip_rect(Rect::from_x_y_ranges(text_left..=text_right, bar.y_range()));
@@ -494,7 +563,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
             }
         }
         None => {
-            if app.cmd.buffer.is_empty() {
+            if app.cmd.buffer.is_empty() && app.cmd.preedit.is_empty() {
                 pt.text(
                     pos2(x, bar.center().y),
                     egui::Align2::LEFT_CENTER,
@@ -505,9 +574,25 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
             }
         }
     }
-    let g = p.layout_no_wrap(app.cmd.buffer.clone(), font, t.text);
-    let gw = g.size().x;
+    let g = p.layout_no_wrap(app.cmd.buffer.clone(), font.clone(), t.text);
+    let mut gw = g.size().x;
     pt.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
+    // An input method's composition, underlined after what's typed; the IME's candidate window
+    // opens over it.
+    let compose_x = x + gw;
+    if !app.cmd.preedit.is_empty() {
+        let g = p.layout_no_wrap(app.cmd.preedit.clone(), font, t.text);
+        let pw = g.size().x;
+        let y = bar.center().y + g.size().y / 2.0;
+        pt.galley(pos2(compose_x, bar.center().y - g.size().y / 2.0), g, t.text);
+        pt.line_segment([pos2(compose_x, y), pos2(compose_x + pw, y)], Stroke::new(1.0, t.text));
+        gw += pw;
+    }
+    let ime_area = Rect::from_x_y_ranges(compose_x.clamp(text_left, text_right)..=(x + gw + 2.0).clamp(text_left, text_right), bar.y_range());
+    app.cmd.ime_area = Some(ime_area);
+    if has_keyboard(app, ui.ctx()) {
+        allow_ime(ui.ctx(), ime_area);
+    }
     // Caret.
     let blink = (ui.input(|i| i.time) * 2.0).floor() as i64 % 2 == 0;
     if blink {
@@ -733,13 +818,111 @@ mod tests {
         assert_eq!(app.ui.history_lines, 12);
     }
 
-    fn frame(app: &mut CadApp, ctx: &egui::Context, events: Vec<Event>) {
+    fn frame(app: &mut CadApp, ctx: &egui::Context, events: Vec<Event>) -> egui::FullOutput {
         let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0))), events, ..Default::default() };
         let mut out = ctx.run_ui(raw, |ui| {
             app.logic(ui.ctx());
             app.ui(ui);
         });
         out.textures_delta.clear();
+        out
+    }
+
+    fn preedit(text: &str) -> Event {
+        Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: None })
+    }
+
+    fn commit(text: &str) -> Event {
+        Event::Ime(egui::ImeEvent::Commit(text.into()))
+    }
+
+    fn key(key: Key) -> Event {
+        Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+    }
+
+    #[test]
+    fn ime_composition_commits_into_the_command_line() {
+        let mut app = CadApp::new(Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, Vec::new());
+        // The command line turns the IME on, its candidate window at the bar on screen.
+        let out = frame(&mut app, &ctx, Vec::new());
+        let ime = out.platform_output.ime.expect("the command line enables the IME");
+        let bar = app.canvas.rect.unwrap_or(Rect::NOTHING);
+        assert!(bar.contains(ime.rect.center()) && ime.rect.center().y > bar.center().y, "{:?} in {bar:?}", ime.rect);
+        // Preedit shows, isn't typed yet; the commit is.
+        frame(&mut app, &ctx, vec![preedit("ce")]);
+        assert_eq!((app.cmd.preedit.as_str(), app.cmd.buffer.as_str()), ("ce", ""));
+        assert!(!app.needs_cjk, "pinyin letters need no CJK font");
+        let at = frame(&mut app, &ctx, vec![preedit("测试")]).platform_output.ime.map(|i| i.rect);
+        assert!(app.needs_cjk, "a composition in Chinese loads the CJK interface fonts (an English interface showed boxes)");
+        assert!(at.is_some_and(|r| r.width() > 10.0), "the candidate window sits over the composition: {at:?}");
+        frame(&mut app, &ctx, vec![preedit(""), commit("测试")]);
+        assert_eq!((app.cmd.preedit.as_str(), app.cmd.buffer.as_str()), ("", "测试"));
+        // A cancelled composition leaves nothing behind (Windows ends it with an empty commit).
+        frame(&mut app, &ctx, vec![preedit("か")]);
+        frame(&mut app, &ctx, vec![preedit(""), commit("")]);
+        assert_eq!((app.cmd.preedit.as_str(), app.cmd.buffer.as_str()), ("", "测试"));
+        // Committed text is typed text: Enter runs it.
+        app.cmd.buffer.clear();
+        frame(&mut app, &ctx, vec![preedit("circle"), commit("circle"), key(Key::Enter)]);
+        assert_eq!(app.session.running.as_ref().map(|r| r.id.as_str()), Some("circle"));
+        app.session.cancel();
+    }
+
+    #[test]
+    fn a_dialog_text_box_keeps_its_own_ime() {
+        // A dialog's text box (an egui text field) composes for itself: the command line takes
+        // neither the composition nor the IME's position while the box has the keyboard.
+        let mut app = CadApp::new(Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let mut name = String::new();
+        let mut run = |app: &mut CadApp, events: Vec<Event>| {
+            let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0))), events, ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+                egui::Window::new("Layer name").fixed_pos(pos2(200.0, 200.0)).show(ui.ctx(), |ui| {
+                    let r = ui.add(egui::TextEdit::singleline(&mut name).id(egui::Id::new("dialog_name")));
+                    r.request_focus();
+                });
+            });
+            out.textures_delta.clear();
+            out.platform_output.ime
+        };
+        run(&mut app, Vec::new());
+        run(&mut app, Vec::new());
+        run(&mut app, vec![preedit("じ")]);
+        let ime = run(&mut app, vec![preedit("字"), preedit(""), commit("字")]);
+        assert!(app.cmd.preedit.is_empty() && app.cmd.buffer.is_empty(), "nothing reached the command line");
+        // The box is near the dialog's corner (200, 200), the command line at the bottom.
+        assert!(ime.is_some_and(|i| i.rect.top() < 400.0 && i.rect.left() < 700.0), "the box's IME: {ime:?}");
+        assert_eq!(name, "字");
+    }
+
+    #[test]
+    fn keys_during_a_composition_are_the_imes() {
+        let mut app = CadApp::new(Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, Vec::new());
+        app.cmdline("line");
+        assert!(app.session.prompting());
+        // Esc, Enter, Backspace, Tab and arrows while composing neither cancel LINE nor edit.
+        app.cmd.buffer = "1,".into();
+        frame(&mut app, &ctx, vec![preedit("に")]);
+        for k in [Key::Escape, Key::Enter, Key::Backspace, Key::ArrowUp, Key::ArrowDown] {
+            frame(&mut app, &ctx, vec![key(k)]);
+        }
+        // Tab reaches the command line as text (`capture_tab`), as does Space.
+        frame(&mut app, &ctx, vec![Event::Text("	".into()), Event::Text(" ".into())]);
+        assert!(app.session.prompting(), "LINE still running");
+        assert_eq!((app.cmd.preedit.as_str(), app.cmd.buffer.as_str()), ("に", "1,"));
+        // The IME cancels its composition (Esc there); the next Esc is the command line's.
+        frame(&mut app, &ctx, vec![preedit("")]);
+        assert!(app.session.prompting());
+        frame(&mut app, &ctx, vec![key(Key::Escape)]);
+        assert!(!app.session.prompting(), "Esc after the composition cancels LINE");
+        assert!(app.cmd.buffer.is_empty());
     }
 
     fn press(app: &mut CadApp, ctx: &egui::Context, at: Pos2, pressed: bool) {

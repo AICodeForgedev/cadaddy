@@ -2336,3 +2336,26 @@ menu	View	عرض
 	Manage Attributes	إدارة السمات
 	Dialog State	حالة مربع الحوار
 	Dialog Action	إجراء مربع الحوار
+	Recover Drawing and Xrefs...	استرداد الرسم والمراجع الخارجية...
+	Count Blocks	عدّ الكتل
+	Get Selection Set	الحصول على مجموعة تحديد
+	Global Attribute Edit	تحرير السمات الشامل
+	LISP Function Surfer	مستعرض دوال LISP
+	List LISP Symbols	سرد رموز LISP
+	List Nested Object	سرد الكائن المتداخل
+	List Object Xdata	سرد البيانات الموسعة للكائن
+	Multiple Polyline Edit	تحرير عدة خطوط متعددة
+	Redefine Path	إعادة تعريف المسار
+	Redefine Path Mode	وضع إعادة تعريف المسار
+	Restore Dimension Text	استعادة نص البُعد
+	Revert	استرجاع
+	Rotate Blocks	تدوير الكتل
+	Scale Blocks	تحجيم الكتل
+	Select Similar by Properties	تحديد المتشابه حسب الخصائص
+	Show URLs	إظهار عناوين URL
+	Synchronize Viewports	مزامنة إطارات العرض
+	Paste Special	لصق خاص
+	Paste Special...	لصق خاص...
+	Paste as	لصق كـ
+	Last Measurement	آخر قياس
+	Perimeter	المحيط

@@ -2341,3 +2341,26 @@ menu	Modify	수정
 	Manage Attributes	속성 관리
 	Dialog State	대화 상자 상태
 	Dialog Action	대화 상자 동작
+	Recover Drawing and Xrefs...	도면 및 외부 참조 복구...
+	Count Blocks	블록 개수 세기
+	Get Selection Set	선택 세트 가져오기
+	Global Attribute Edit	전역 속성 편집
+	LISP Function Surfer	LISP 함수 탐색기
+	List LISP Symbols	LISP 기호 나열
+	List Nested Object	중첩 객체 나열
+	List Object Xdata	객체 확장 데이터 나열
+	Multiple Polyline Edit	다중 폴리선 편집
+	Redefine Path	경로 재정의
+	Redefine Path Mode	경로 재정의 모드
+	Restore Dimension Text	치수 문자 복원
+	Revert	되돌리기
+	Rotate Blocks	블록 회전
+	Scale Blocks	블록 축척
+	Select Similar by Properties	특성으로 유사 객체 선택
+	Show URLs	URL 표시
+	Synchronize Viewports	뷰포트 동기화
+	Paste Special	선택하여 붙여넣기
+	Paste Special...	선택하여 붙여넣기...
+	Paste as	다음으로 붙여넣기
+	Last Measurement	마지막 측정
+	Perimeter	둘레

@@ -2128,3 +2128,26 @@
 	Manage Attributes	Gérer les attributs
 	Dialog State	État de la boîte de dialogue
 	Dialog Action	Action de la boîte de dialogue
+	Recover Drawing and Xrefs...	Récupérer le dessin et les xréfs...
+	Count Blocks	Compter les blocs
+	Get Selection Set	Obtenir un jeu de sélection
+	Global Attribute Edit	Modification globale d'attributs
+	LISP Function Surfer	Explorateur de fonctions LISP
+	List LISP Symbols	Lister les symboles LISP
+	List Nested Object	Lister l'objet imbriqué
+	List Object Xdata	Lister les données étendues de l'objet
+	Multiple Polyline Edit	Modifier plusieurs polylignes
+	Redefine Path	Redéfinir le chemin
+	Redefine Path Mode	Mode de redéfinition du chemin
+	Restore Dimension Text	Restaurer le texte de cote
+	Revert	Revenir à la version enregistrée
+	Rotate Blocks	Faire pivoter les blocs
+	Scale Blocks	Mettre les blocs à l'échelle
+	Select Similar by Properties	Sélectionner les similaires par propriétés
+	Show URLs	Afficher les URL
+	Synchronize Viewports	Synchroniser les fenêtres
+	Paste Special	Collage spécial
+	Paste Special...	Collage spécial...
+	Paste as	Coller en tant que
+	Last Measurement	Dernière mesure
+	Perimeter	Périmètre

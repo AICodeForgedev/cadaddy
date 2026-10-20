@@ -8,7 +8,10 @@
 //! taken gets a fresh one. Pasted objects get new handles.
 //!
 //! The clipboard can also travel as DXF text ([`system_text`], [`load_system_text`]), so a front
-//! end can put it on the system clipboard and paste it into another CADaddy window.
+//! end can put it on the system clipboard and paste it into another CADaddy window, and as a
+//! picture ([`system_image`]) that pastes into documents and email. What other programs put on
+//! the system clipboard ([`SystemContents`]: an image, text) pastes as a raster image saved beside
+//! the drawing (`paste_image`) or as multiline text (`paste_text`).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
@@ -58,6 +61,13 @@ fn set(s: &mut Session, ents: Vec<Entity>, base: Vec2, defs: Drawing, uid: Optio
 pub(crate) fn has_clip(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     if s.clipboard.is_empty() { Err("the clipboard is empty".into()) } else { Ok(()) }
+}
+
+/// Enabled check of PASTECLIP and PASTESPEC: CADaddy objects, or an image or text copied in
+/// another program.
+pub(crate) fn has_paste(s: &Session) -> std::result::Result<(), String> {
+    has_doc(s)?;
+    if s.clipboard.is_empty() && s.system_clipboard.is_empty() { Err("the clipboard is empty".into()) } else { Ok(()) }
 }
 
 /// Enabled check of PASTEORIG: as in AutoCAD, it pastes objects copied from another drawing.
@@ -138,20 +148,7 @@ pub fn system_text(s: &Session) -> Option<String> {
         return None;
     }
     let hooks = super::file::io()?;
-    let mut d = Drawing::new_imperial();
-    let renames = match &s.clipboard_source {
-        Some(c) => {
-            d.header = c.defs.header.clone();
-            merge(&mut d, &c.defs)
-        }
-        None => BTreeMap::new(),
-    };
-    d.header.set("INSBASE", HVal::Point(s.clipboard_base.to3(0.0)));
-    for e in &s.clipboard {
-        let e = adopt(&mut d, e, &renames);
-        d.ensure_layer(&e.common.layer);
-        d.model.push(e);
-    }
+    let d = clip_drawing(s);
     let bytes = (hooks.write)(&d, "clipboard.dxf").ok()?;
     String::from_utf8(bytes).ok()
 }
@@ -174,6 +171,126 @@ pub fn load_system_text(s: &mut Session, text: &str) -> bool {
     let defs = defs_for(&src, &ents);
     set(s, ents, base, defs, None);
     true
+}
+
+/// What the system clipboard holds that isn't CADaddy objects, as the front end read it.
+#[derive(Clone, Debug, Default)]
+pub struct SystemContents {
+    /// An image copied in another program.
+    pub image: Option<Arc<cadaddy_render::images::Raster>>,
+    /// Text copied in another program (not a CADaddy drawing).
+    pub text: Option<String>,
+}
+
+impl SystemContents {
+    pub fn is_empty(&self) -> bool {
+        self.image.is_none() && self.text.as_deref().is_none_or(|t| t.trim().is_empty())
+    }
+}
+
+/// Longest side of the picture of the clipboard put on the system clipboard, in pixels.
+pub const IMAGE_SIDE: u32 = 1600;
+/// More characters than this don't paste as text.
+const MAX_PASTE_TEXT: usize = 100_000;
+/// Pasted images saved beside one drawing: names tried before giving up.
+const MAX_IMAGE_NAMES: u32 = 10_000;
+
+/// The clipboard as a drawing of its own: its objects in model space with what they reference,
+/// the base point in `$INSBASE`.
+fn clip_drawing(s: &Session) -> Drawing {
+    let mut d = Drawing::new_imperial();
+    let renames = match &s.clipboard_source {
+        Some(c) => {
+            d.header = c.defs.header.clone();
+            merge(&mut d, &c.defs)
+        }
+        None => BTreeMap::new(),
+    };
+    d.header.set("INSBASE", HVal::Point(s.clipboard_base.to3(0.0)));
+    for e in &s.clipboard {
+        let e = adopt(&mut d, e, &renames);
+        d.ensure_layer(&e.common.layer);
+        d.model.push(e);
+    }
+    d
+}
+
+/// The clipboard drawn as a picture on white, its longer side `side` pixels (16 to
+/// [`IMAGE_SIDE`]): what COPYCLIP puts on the system clipboard beside the objects, so they paste
+/// into documents and email. `None` when the clipboard is empty or very large.
+pub fn system_image(s: &Session, side: u32) -> Option<cadaddy_render::images::Raster> {
+    if s.clipboard.is_empty() || s.clipboard.len() > MAX_SYSTEM_OBJECTS {
+        return None;
+    }
+    let d = clip_drawing(s);
+    let list = cadaddy_render::build(&d, &cadaddy_doc::Space::Model, &cadaddy_render::Options::default());
+    let b = list.bounds;
+    if b.is_empty() || !(b.width().is_finite() && b.height().is_finite()) {
+        return None;
+    }
+    let side = side.clamp(16, IMAGE_SIDE);
+    let (bw, bh) = (b.width().max(1e-9), b.height().max(1e-9));
+    let short = |k: f64| ((f64::from(side) * k).round() as u32).clamp(16, side);
+    let (w, h) = if bw >= bh { (side, short(bh / bw)) } else { (short(bw / bh), side) };
+    let view = cadaddy_render::raster::View::fit(&b, w, h, 0.06);
+    let ro = cadaddy_render::raster::RasterOptions { background: cadaddy_color::Rgb(255, 255, 255), hairline: 1.5, px_per_mm: 0.0, antialias: true };
+    let png = cadaddy_render::raster::render_png(&list, &view, &ro)?;
+    cadaddy_render::images::decode(&png)
+}
+
+/// Paste `image` as a raster IMAGE: saved as a PNG beside the (saved) drawing and attached with a
+/// relative path, its lower-left corner at `at` and `width` drawing units wide; by default half
+/// the view tall and centred in it.
+pub(crate) fn paste_image(
+    s: &mut Session,
+    image: &cadaddy_render::images::Raster,
+    at: Option<Vec2>,
+    width: Option<f64>,
+) -> Result<serde_json::Value> {
+    let host = s.state()?.path.clone().ok_or_else(|| bad("pastespec", "save the drawing first: a pasted image is saved as a PNG file beside it"))?;
+    let host = std::path::Path::new(&host);
+    let dir = host.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+    let stem = host.file_stem().map_or_else(|| "drawing".to_string(), |s| s.to_string_lossy().into_owned());
+    let file = (1..=MAX_IMAGE_NAMES)
+        .map(|n| dir.join(format!("{stem}-pasted-{n}.png")))
+        .find(|f| !f.exists())
+        .ok_or_else(|| bad("pastespec", "too many pasted images beside this drawing"))?;
+    let png = image.encode_png().ok_or_else(|| bad("pastespec", "the image couldn't be encoded"))?;
+    std::fs::write(&file, png).map_err(|e| bad("pastespec", format!("the pasted image couldn't be saved beside the drawing: {e}")))?;
+    let view = s.state()?.view();
+    let aspect = f64::from(image.width) / f64::from(image.height.max(1));
+    let width = width.filter(|w| w.is_finite() && *w > 0.0).unwrap_or(view.height * 0.5 * aspect);
+    let at = at.unwrap_or(view.center - Vec2::new(width / 2.0, width / aspect / 2.0));
+    super::imageattach::attach(s, &file.to_string_lossy(), at, width, 0.0)
+}
+
+/// `text` as MTEXT contents: backslashes and braces kept as typed, line breaks as paragraphs.
+fn mtext_contents(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.replace("\r\n", "\n").chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '{' => out.push_str("\\{"),
+            '}' => out.push_str("\\}"),
+            '\n' | '\r' => out.push_str("\\P"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Paste `text` as multiline text at `at` (default: the view's centre) in the current text style
+/// and height.
+pub(crate) fn paste_text(s: &mut Session, text: &str, at: Option<Vec2>) -> Result<serde_json::Value> {
+    let text = text.trim_end();
+    if text.trim().is_empty() {
+        return Err(bad("pastespec", "the clipboard holds no text"));
+    }
+    if text.chars().count() > MAX_PASTE_TEXT {
+        return Err(bad("pastespec", "the clipboard's text is too long to paste as text"));
+    }
+    let at = at.unwrap_or(s.state()?.view().center);
+    super::draw::run_mtext(s, &serde_json::json!({ "at": [at.x, at.y], "text": mtext_contents(text) }))
 }
 
 /// Upper-case names of the table records and blocks some objects use.

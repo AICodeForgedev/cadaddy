@@ -151,6 +151,37 @@ mod tests {
         assert!(verify("0.9.0", SUMS_TEXT.as_bytes(), &sig, &[]).unwrap_err().contains("no release key"));
     }
 
+    /// Q205: signature files edited, cut short or blown up are refused, never read as valid.
+    #[test]
+    fn edited_cut_or_huge_signature_files_are_refused() {
+        let (pk, sig) = signed(7, "1.0.0", SUMS_TEXT);
+        let ok = |sig: &str, sums: &str| verify("99.0.0", sums.as_bytes(), sig, &[pk]);
+        // An old release's signature with its version line rewritten: the signed text still says 1.0.0.
+        let relabelled = sig.replace("version 1.0.0", "version 99.0.0");
+        assert!(ok(&relabelled, SUMS_TEXT).unwrap_err().contains("doesn't match"));
+        // A second version line can't override the one that was signed.
+        let doubled = sig.replace("key ", "version 99.0.0\nkey ");
+        assert!(ok(&doubled, SUMS_TEXT).unwrap_err().contains("doesn't match"));
+        let (pk99, sig99) = signed(7, "99.0.0", SUMS_TEXT);
+        assert_eq!(verify("99.0.0", SUMS_TEXT.as_bytes(), &sig99, &[pk99]), Ok(()));
+        // Cut anywhere, the signature is refused.
+        for n in 0..sig99.len() - 1 {
+            let cut = &sig99[..n];
+            assert!(verify("99.0.0", SUMS_TEXT.as_bytes(), cut, &[pk99]).is_err(), "cut at {n}");
+        }
+        for n in 0..SUMS_TEXT.len() {
+            assert!(verify("99.0.0", &SUMS_TEXT.as_bytes()[..n], &sig99, &[pk99]).is_err(), "sums cut at {n}");
+        }
+        // Too large: refused before anything is parsed.
+        let huge = format!("{sig99}{}", " ".repeat(MAX_FILE));
+        assert!(verify("99.0.0", SUMS_TEXT.as_bytes(), &huge, &[pk99]).unwrap_err().contains("too large"));
+        let huge_sums = vec![b'0'; MAX_FILE + 1];
+        assert!(verify("99.0.0", &huge_sums, &sig99, &[pk99]).unwrap_err().contains("too large"));
+        // An installer listed under a path, or twice, is found only by its exact name.
+        let sums = format!("{}  ../CADaddy-Mac.dmg\n{}  CADaddy-Mac.dmg.old\n", "a".repeat(64), "b".repeat(64));
+        assert_eq!(sum_for(&sums, "CADaddy-Mac.dmg"), None);
+    }
+
     #[test]
     fn the_keys_file_is_read_and_this_build_has_a_key() {
         let k = format!("# comment\n\n{}  # the 2026 key\nnot a key\n", "ab".repeat(32));

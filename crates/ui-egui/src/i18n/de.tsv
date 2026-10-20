@@ -2157,3 +2157,26 @@
 	Manage Attributes	Attribute verwalten
 	Dialog State	Dialogstatus
 	Dialog Action	Dialogaktion
+	Recover Drawing and Xrefs...	Zeichnung und externe Referenzen wiederherstellen...
+	Count Blocks	Blöcke zählen
+	Get Selection Set	Auswahlsatz abrufen
+	Global Attribute Edit	Globale Attributbearbeitung
+	LISP Function Surfer	LISP-Funktionsbrowser
+	List LISP Symbols	LISP-Symbole auflisten
+	List Nested Object	Verschachteltes Objekt auflisten
+	List Object Xdata	Erweiterte Objektdaten auflisten
+	Multiple Polyline Edit	Mehrere Polylinien bearbeiten
+	Redefine Path	Pfad neu definieren
+	Redefine Path Mode	Modus für Pfadneudefinition
+	Restore Dimension Text	Bemaßungstext wiederherstellen
+	Revert	Zurücksetzen
+	Rotate Blocks	Blöcke drehen
+	Scale Blocks	Blöcke skalieren
+	Select Similar by Properties	Ähnliche nach Eigenschaften auswählen
+	Show URLs	URLs anzeigen
+	Synchronize Viewports	Ansichtsfenster synchronisieren
+	Paste Special	Inhalte einfügen
+	Paste Special...	Inhalte einfügen...
+	Paste as	Einfügen als
+	Last Measurement	Letzte Messung
+	Perimeter	Umfang

@@ -31,7 +31,8 @@ pub struct Options {
     pub threshold: Option<u8>,
     /// Largest distance from a traced shape to the stroke's centre, pixels.
     pub tolerance: f64,
-    /// Lines within this many degrees of horizontal or vertical are made exactly so.
+    /// Lines within this many degrees of the drawing's two main directions are made exactly so:
+    /// horizontal and vertical, or the directions a slightly turned scan's walls run in.
     pub ortho_deg: f64,
     /// Thick strokes become wall pairs.
     pub walls: bool,
@@ -39,7 +40,8 @@ pub struct Options {
     pub wall_min_px: Option<f64>,
     /// Small blobs in rows become text boxes.
     pub text: bool,
-    /// Text is at most this tall (pixels); `None`: 2.5% of the image's shorter side.
+    /// Text is at most this tall (pixels); `None`: 2.5% of the image's shorter side, or up to 6%
+    /// for letters with another letter beside them on their row.
     pub text_max_px: Option<f64>,
     /// Shorter chains are dropped (specks), pixels.
     pub min_length: f64,
@@ -262,6 +264,62 @@ fn components(b: &Bits) -> Vec<Vec<usize>> {
     out
 }
 
+/// Scanner specks out: ink blobs of at most `max` pixels removed, and holes of at most `max`
+/// pixels in the ink filled (a speck inside a solid wall would make it a ring). Lines a pixel wide
+/// are long, so they stay.
+fn despeckle(b: &mut Bits, max: usize) {
+    for comp in components(b) {
+        if comp.len() <= max {
+            for i in comp {
+                if let Some(p) = b.on.get_mut(i) {
+                    *p = false;
+                }
+            }
+        }
+    }
+    let paper = Bits { w: b.w, h: b.h, on: b.on.iter().map(|on| !on).collect() };
+    for comp in components(&paper) {
+        if comp.len() <= max {
+            for i in comp {
+                if let Some(p) = b.on.get_mut(i) {
+                    *p = true;
+                }
+            }
+        }
+    }
+}
+
+/// The drawing's main direction (radians, within ±10°): the length-weighted median of how far
+/// the edges near horizontal or vertical (within 10°, folded to a quarter turn) are turned, so a
+/// diagonal doesn't pull it. 0 for too few such edges, or under a quarter of a degree (pixel
+/// rounding alone turns an edge that much, and axis-aligned plans stay exactly so).
+fn main_direction(edges: &[([f64; 2], [f64; 2])], min_len: f64) -> f64 {
+    let lim = 10f64.to_radians();
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let mut turned: Vec<(f64, f64)> = edges
+        .iter()
+        .filter_map(|(a, b)| {
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let len = dx.hypot(dy);
+            // Folded into (-45°, 45°]: how far from the nearest axis.
+            let f = (dy.atan2(dx) + quarter / 2.0).rem_euclid(quarter) - quarter / 2.0;
+            (len >= min_len && f.abs() <= lim).then_some((f, len))
+        })
+        .collect();
+    let total: f64 = turned.iter().map(|t| t.1).sum();
+    if turned.len() < 3 || total <= 0.0 {
+        return 0.0;
+    }
+    turned.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut acc = 0.0;
+    let median = turned.iter().find(|t| {
+        acc += t.1;
+        acc >= total / 2.0
+    });
+    let d = median.map_or(0.0, |t| t.0);
+    if d.abs() < 0.25f64.to_radians() { 0.0 } else { d }
+}
+
 /// Pixel chains of a one-pixel-wide skeleton between its ends and junctions (and closed loops).
 fn chains(b: &Bits) -> Vec<(Vec<(i64, i64)>, bool)> {
     let deg = |x: i64, y: i64| NB.iter().filter(|(dx, dy)| b.get(x + dx, y + dy)).count();
@@ -274,7 +332,12 @@ fn chains(b: &Bits) -> Vec<(Vec<(i64, i64)>, bool)> {
         let p: [bool; 8] = NB.map(|(dx, dy)| b.get(x + dx, y + dy));
         (0..8).filter(|&i| !p[i] && p[(i + 1) % 8]).count()
     };
-    let is_node = |x: i64, y: i64| deg(x, y) <= 1 || crossings(x, y) != 2;
+    // Thinning can leave a 2 × 2 block where strokes cross at a shallow angle; each of its pixels
+    // looks like a curve's on its own, so the block is taken for the junction it is.
+    let in_block = |x: i64, y: i64| {
+        [(-1i64, -1i64), (0, -1), (-1, 0), (0, 0)].iter().any(|(ox, oy)| (0..2).all(|i| (0..2).all(|j| b.get(x + ox + i, y + oy + j))))
+    };
+    let is_node = |x: i64, y: i64| deg(x, y) <= 1 || crossings(x, y) != 2 || in_block(x, y);
     // From each node, walk every unused direction.
     let walk = |sx: i64, sy: i64, used: &mut Vec<bool>, out: &mut Vec<(Vec<(i64, i64)>, bool)>| {
         for (dx, dy) in NB {
@@ -474,13 +537,19 @@ pub fn trace(gray: &[u8], w: usize, h: usize, o: &Options) -> Result<Traced, Str
     }
     let threshold = o.threshold.unwrap_or_else(|| otsu(gray.get(..n).unwrap_or_default()));
     let mut bits = Bits { w, h, on: gray.iter().take(n).map(|&g| g <= threshold).collect() };
+    despeckle(&mut bits, 4);
     let tol = if o.tolerance.is_finite() { o.tolerance.clamp(0.25, 50.0) } else { 1.5 };
     let flip = |x: f64, y: f64| [x + 0.5, h as f64 - y - 0.5];
     let mut shapes = Vec::new();
     // Text: small blobs, grouped in rows, boxed and taken out before tracing lines.
     if o.text {
-        let tmax = o.text_max_px.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.025 * w.min(h) as f64).max(4.0);
-        let mut boxes: Vec<[f64; 4]> = Vec::new();
+        let given = o.text_max_px.filter(|v| v.is_finite() && *v > 0.0);
+        let tmax = given.unwrap_or(0.025 * w.min(h) as f64).max(4.0);
+        // Larger letters (titles, room names on a fine scan) count when they have company on
+        // their row, so a lone column or symbol of that size isn't taken for a letter.
+        let big = given.unwrap_or(0.06 * w.min(h) as f64).max(tmax);
+        // Each group: its box, its blobs, and whether it has a letter of the ordinary size.
+        let mut groups: Vec<([f64; 4], Vec<Vec<usize>>, bool, usize)> = Vec::new();
         for comp in components(&bits) {
             let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
             for &i in &comp {
@@ -489,39 +558,46 @@ pub fn trace(gray: &[u8], w: usize, h: usize, o: &Options) -> Result<Traced, Str
             }
             let (bw, bh) = ((x1 - x0 + 1) as f64, (y1 - y0 + 1) as f64);
             // Letter-sized and not a thin rule (a short line would look like an "l" alone).
-            if bh <= tmax && bw <= tmax * 1.5 && comp.len() >= 3 && !(bw.max(bh) > 4.0 * bw.min(bh).max(1.0) && bw.max(bh) > tmax * 0.6) {
-                boxes.push([x0 as f64, y0 as f64, x1 as f64 + 1.0, y1 as f64 + 1.0]);
-                for &i in &comp {
-                    if let Some(p) = bits.on.get_mut(i) {
-                        *p = false;
-                    }
-                }
+            let letter = |m: f64| bh <= m && bw <= m * 1.5 && comp.len() >= 3 && !(bw.max(bh) > 4.0 * bw.min(bh).max(1.0) && bw.max(bh) > m * 0.6);
+            let small = letter(tmax);
+            if small || letter(big) {
+                groups.push(([x0 as f64, y0 as f64, x1 as f64 + 1.0, y1 as f64 + 1.0], vec![comp], small, 1));
             }
         }
         // Letters within about a letter's height of each other on a row are one box.
         let mut merged = true;
         while merged {
             merged = false;
-            'outer: for i in 0..boxes.len() {
-                for j in i + 1..boxes.len() {
-                    let (a, b) = (boxes[i], boxes[j]);
+            'outer: for i in 0..groups.len() {
+                for j in i + 1..groups.len() {
+                    let (a, b) = (groups[i].0, groups[j].0);
                     let gap = 0.9 * (a[3] - a[1]).max(b[3] - b[1]);
                     let overlap_y = a[1].max(b[1]) < a[3].min(b[3]);
                     let near_x = a[0].max(b[0]) - a[2].min(b[2]) <= gap;
                     if overlap_y && near_x {
-                        boxes[i] = [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])];
-                        boxes.swap_remove(j);
+                        let (_, comps, small, count) = groups.swap_remove(j);
+                        let g = &mut groups[i];
+                        g.0 = [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])];
+                        g.1.extend(comps);
+                        g.2 |= small;
+                        g.3 += count;
                         merged = true;
                         break 'outer;
                     }
                 }
             }
         }
-        for b in boxes {
-            // Lone specks are noise, not text.
-            if (b[2] - b[0]) * (b[3] - b[1]) >= 9.0 {
-                shapes.push(Shape::TextBox { min: [b[0], h as f64 - b[3]], max: [b[2], h as f64 - b[1]] });
+        for (b, comps, small, count) in groups {
+            // Lone specks are noise, not text; a lone large blob is a symbol, not a letter.
+            if (b[2] - b[0]) * (b[3] - b[1]) < 9.0 || (!small && count < 2) {
+                continue;
             }
+            for i in comps.iter().flatten() {
+                if let Some(p) = bits.on.get_mut(*i) {
+                    *p = false;
+                }
+            }
+            shapes.push(Shape::TextBox { min: [b[0], h as f64 - b[3]], max: [b[2], h as f64 - b[1]] });
         }
     }
     let dist = distance(&bits);
@@ -549,9 +625,14 @@ pub fn trace(gray: &[u8], w: usize, h: usize, o: &Options) -> Result<Traced, Str
             continue;
         }
         let keep = rdp(&pts, tol);
+        // The circle is fitted away from the chain's ends: where another line crosses (a grid
+        // line through a column) thinning bends the last few pixels toward the junction.
+        // A shallow crossing merges the two strokes for longer: a sixth of the chain at each end.
+        let trim = if *closed { 0 } else { (width.ceil() as usize + 1).max(pts.len() / 6).min(pts.len() / 4) };
+        let core = pts.get(trim..pts.len() - trim).filter(|c| c.len() >= 8).unwrap_or(&pts);
         // Curved (several RDP pieces) and on a circle: an arc, or a whole circle when closed.
         if keep.len() >= 4
-            && let Some((c, r, rms)) = fit_circle(&pts)
+            && let Some((c, r, rms)) = fit_circle(core)
             && rms <= tol * 0.75
             && r > 2.0 * tol
             && r < 4.0 * (w.max(h) as f64)
@@ -625,6 +706,20 @@ pub fn trace(gray: &[u8], w: usize, h: usize, o: &Options) -> Result<Traced, Str
         }
         i
     }
+    // A slightly turned scan: snap to its own main directions, not the image's axes (that would
+    // bend the walls that are snapped against the lines that aren't).
+    let theta = if snap {
+        let list: Vec<([f64; 2], [f64; 2])> = edges.iter().filter_map(|&(a, b, _)| Some((*nodes.get(a)?, *nodes.get(b)?))).collect();
+        main_direction(&list, 4.0 * tol)
+    } else {
+        0.0
+    };
+    let turn = |q: [f64; 2], t: f64| [q[0] * t.cos() - q[1] * t.sin(), q[0] * t.sin() + q[1] * t.cos()];
+    if theta != 0.0 {
+        for q in nodes.iter_mut() {
+            *q = turn(*q, -theta);
+        }
+    }
     if snap {
         for &(a, b, _) in &edges {
             let (pa, pb) = (nodes.get(a).copied().unwrap_or_default(), nodes.get(b).copied().unwrap_or_default());
@@ -658,6 +753,11 @@ pub fn trace(gray: &[u8], w: usize, h: usize, o: &Options) -> Result<Traced, Str
         let ys = mean(&nodes, &mut py, 1);
         for (i, q) in nodes.iter_mut().enumerate() {
             *q = [xs.get(i).copied().unwrap_or(q[0]), ys.get(i).copied().unwrap_or(q[1])];
+        }
+    }
+    if theta != 0.0 {
+        for q in nodes.iter_mut() {
+            *q = turn(*q, theta);
         }
     }
     // Collinear runs through two-edge nodes become one line (a thinned corner leaves extra nodes).
@@ -768,6 +868,70 @@ mod tests {
 
     fn lines(t: &Traced) -> Vec<([f64; 2], [f64; 2])> {
         t.shapes.iter().filter_map(|s| if let Shape::Line { a, b, .. } = s { Some((*a, *b)) } else { None }).collect()
+    }
+
+    #[test]
+    fn a_turned_room_snaps_to_its_own_directions() {
+        // A room turned 2° with a diagonal brace across it: the walls are made exactly parallel
+        // and square at 2° (not snapped to the image's axes), the brace stays where it is.
+        let mut c = Canvas::new(400, 300);
+        let t = 2f64.to_radians();
+        let turn = |x: f64, y: f64| (200.0 + (x - 200.0) * t.cos() - (y - 150.0) * t.sin(), 150.0 + (x - 200.0) * t.sin() + (y - 150.0) * t.cos());
+        let corners = [turn(60.0, 60.0), turn(340.0, 60.0), turn(340.0, 240.0), turn(60.0, 240.0)];
+        for i in 0..4 {
+            c.line(corners[i], corners[(i + 1) % 4], 2.0);
+        }
+        c.line(turn(100.0, 220.0), turn(300.0, 80.0), 2.0);
+        let tr = c.trace(&Options { text: false, ..Options::default() });
+        let ls = lines(&tr);
+        assert_eq!(ls.len(), 5, "{ls:?}");
+        // Each line's turn from the nearest axis; image y is up in the result and down on the
+        // canvas, so the room is at -2° there.
+        let q = std::f64::consts::FRAC_PI_2;
+        let fold = |(a, b): &([f64; 2], [f64; 2])| ((b[1] - a[1]).atan2(b[0] - a[0]) + q / 2.0).rem_euclid(q) - q / 2.0;
+        let mut turns: Vec<f64> = ls.iter().map(fold).collect();
+        turns.sort_by(|a, b| a.total_cmp(b));
+        // Four walls exactly square to each other at about -2°; the brace (about 35°) apart.
+        let walls: Vec<f64> = turns.iter().copied().filter(|d| (d + t).abs() < 0.2f64.to_radians()).collect();
+        assert_eq!(walls.len(), 4, "{turns:?}");
+        assert!(walls.iter().all(|d| (d - walls[0]).abs() < 1e-9), "exactly square: {walls:?}");
+    }
+
+    #[test]
+    fn specks_in_a_solid_wall_leave_it_a_wall() {
+        // A 14 px band, and thin lines that make it thick by comparison.
+        let mut c = Canvas::new(300, 100);
+        c.line((20.0, 50.0), (280.0, 50.0), 14.0);
+        c.line((20.0, 85.0), (280.0, 85.0), 2.0);
+        c.line((20.0, 92.0), (280.0, 92.0), 2.0);
+        // Paper-white specks inside the band, and ink specks on the paper.
+        for (x, y) in [(60, 48), (61, 52), (130, 50), (200, 47), (201, 47), (250, 53)] {
+            c.px[y * 300 + x] = 255;
+        }
+        for (x, y) in [(40, 20), (150, 70), (151, 70), (220, 15)] {
+            c.px[y * 300 + x] = 0;
+        }
+        let t = c.trace(&Options { text: false, ..Options::default() });
+        let walls = t.shapes.iter().filter(|s| matches!(s, Shape::Wall { .. })).count();
+        assert_eq!((walls, t.shapes.len()), (1, 3), "one wall and the two lines, no rings or specks: {:?}", t.shapes);
+    }
+
+    #[test]
+    fn large_letters_in_a_row_are_text_and_a_lone_blob_of_that_size_is_not() {
+        // 600 × 400: ordinary letters are up to 10 px (2.5%), large ones up to 24 px (6%) with
+        // company. Three 20 px "letters" in a row, and a lone ring of the same size.
+        let mut c = Canvas::new(600, 400);
+        for k in 0..3 {
+            let x = 100.0 + 18.0 * f64::from(k);
+            c.line((x, 100.0), (x, 120.0), 2.0);
+            c.line((x, 100.0), (x + 10.0, 100.0), 2.0);
+            c.line((x, 110.0), (x + 8.0, 110.0), 2.0);
+        }
+        c.circle((400.0, 300.0), 9.0, 2.0, 0.0, std::f64::consts::TAU);
+        let t = c.trace(&Options::default());
+        let boxes: Vec<_> = t.shapes.iter().filter(|s| matches!(s, Shape::TextBox { .. })).collect();
+        assert_eq!(boxes.len(), 1, "{:?}", t.shapes);
+        assert!(t.shapes.iter().any(|s| matches!(s, Shape::Circle { .. })), "the ring is a circle: {:?}", t.shapes);
     }
 
     #[test]

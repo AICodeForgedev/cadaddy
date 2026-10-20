@@ -436,6 +436,14 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         return Err(EngineError::Other(format!("{n} can't be changed from LISP or a script")));
     }
     let bad = || EngineError::BadParams { cmd: "setvar".into(), msg: format!("invalid value for {n}") };
+    match n.as_str() {
+        "SECURELOAD" => crate::secureload::agent_may_not_loosen(s, small(v, 2).ok_or_else(bad)?, &s.settings.trustedpaths.clone())?,
+        "TRUSTEDPATHS" => {
+            let next: String = v.as_str().ok_or_else(bad)?.chars().take(8192).collect();
+            crate::secureload::agent_may_not_loosen(s, s.settings.secureload, &next)?;
+        }
+        _ => {}
+    }
     let st = &mut s.settings;
     match n.as_str() {
         "OSMODE" => st.osmode = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & 0x7fff,

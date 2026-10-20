@@ -2129,3 +2129,26 @@
 	Manage Attributes	Управление атрибутами
 	Dialog State	Состояние диалога
 	Dialog Action	Действие диалога
+	Recover Drawing and Xrefs...	Восстановить чертёж и внешние ссылки...
+	Count Blocks	Подсчёт блоков
+	Get Selection Set	Получить набор выбора
+	Global Attribute Edit	Глобальное редактирование атрибутов
+	LISP Function Surfer	Обзор функций LISP
+	List LISP Symbols	Список символов LISP
+	List Nested Object	Сведения о вложенном объекте
+	List Object Xdata	Расширенные данные объекта
+	Multiple Polyline Edit	Редактирование нескольких полилиний
+	Redefine Path	Переопределить путь
+	Redefine Path Mode	Режим переопределения пути
+	Restore Dimension Text	Восстановить размерный текст
+	Revert	Вернуть сохранённое
+	Rotate Blocks	Повернуть блоки
+	Scale Blocks	Масштабировать блоки
+	Select Similar by Properties	Выбрать подобные по свойствам
+	Show URLs	Показать URL-адреса
+	Synchronize Viewports	Синхронизировать видовые экраны
+	Paste Special	Специальная вставка
+	Paste Special...	Специальная вставка...
+	Paste as	Вставить как
+	Last Measurement	Последнее измерение
+	Perimeter	Периметр

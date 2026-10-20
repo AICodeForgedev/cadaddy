@@ -1868,6 +1868,12 @@ fn kept_handles(secs: &[cadaddy_dxf::Section]) -> std::collections::BTreeMap<Str
 
 pub fn read(bytes: &[u8]) -> Result<Drawing> {
     let tags = cadaddy_dxf::parse(bytes).map_err(|e| IoError::Format(e.to_string()))?;
+    read_tags(tags)
+}
+
+/// [`read`] from groups already parsed (or made from another format's data, as the DWG reader
+/// does for the entities it decodes).
+pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     // Every DXF ends with `0 EOF`: without it the file was cut off (a failed copy or download),
     // and whatever came after the cut is missing.
     let cut_off = !tags.iter().rev().take(4).any(|t| t.code == 0 && t.str().trim().eq_ignore_ascii_case("EOF"));

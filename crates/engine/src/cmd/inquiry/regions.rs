@@ -211,7 +211,9 @@ fn run_massprop(s: &mut Session, p: &Value) -> Result<Value> {
     if rs.is_empty() && solids.is_empty() {
         return Err(other("Select one or more regions or 3D solids."));
     }
+    // Lengths per the units settings; areas and moments as plain numbers.
     let f = |v: f64| super::fmt_d(s, v);
+    let n = |v: f64| super::fmt_n(s, v);
     let mut out = Vec::new();
     let mut lines = Vec::new();
     for (h, r) in &rs {
@@ -233,7 +235,7 @@ fn run_massprop(s: &mut Session, p: &Value) -> Result<Value> {
         }));
         lines.push(format!(
             "----------------   REGIONS   ----------------\nArea:                    {}\nPerimeter:               {}\nBounding box:         X: {}  --  {}\n                      Y: {}  --  {}\nCentroid:             X: {}\n                      Y: {}\nMoments of inertia:   X: {}\n                      Y: {}\nProduct of inertia:  XY: {}\nRadii of gyration:    X: {}\n                      Y: {}\nPrincipal moments and X-Y directions about centroid:\n                      I: {} along [{:.4} {:.4}]\n                      J: {} along [{:.4} {:.4}]",
-            f(m.area),
+            n(m.area),
             f(m.perimeter),
             f(m.bounds.min.x),
             f(m.bounds.max.x),
@@ -241,15 +243,15 @@ fn run_massprop(s: &mut Session, p: &Value) -> Result<Value> {
             f(m.bounds.max.y),
             f(c.x),
             f(c.y),
-            f(m.ixx),
-            f(m.iyy),
-            f(m.ixy),
+            n(m.ixx),
+            n(m.iyy),
+            n(m.ixy),
             f(gyr(m.ixx)),
             f(gyr(m.iyy)),
-            f(i1),
+            n(i1),
             ang.cos(),
             ang.sin(),
-            f(i2),
+            n(i2),
             -ang.sin(),
             ang.cos(),
         ));

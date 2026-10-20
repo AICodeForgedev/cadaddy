@@ -339,9 +339,10 @@ pub fn convert_drawing(from: &Path, to: &Path, job: &Job) -> std::result::Result
     }
     // A .cdy keeps everything whatever version is asked.
     let opts = SaveAs { version: if job.to == "cdy" { None } else { job.version }, binary: false };
-    let out = write_drawing(&d, "dwgconvert", &dst, &opts).map_err(|e| e.to_string())?;
+    // The reason as a person reads it ("…: Permission denied"), not "invalid parameters for `save`".
+    let out = write_drawing(&d, "dwgconvert", &dst, &opts).map_err(|e| e.user_message())?;
     let losses = if job.to == "cdy" { Vec::new() } else { check_written(&d, &dst, &out, hooks.read).map(|(_, l)| l).unwrap_or_default() };
-    store_keeping(&dst, &out, job.bak).map_err(|e| e.to_string())?;
+    store_keeping(&dst, &out, job.bak).map_err(|e| e.user_message())?;
     Ok(Report { notes, losses })
 }
 

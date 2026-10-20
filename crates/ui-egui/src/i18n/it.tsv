@@ -2340,3 +2340,26 @@ menu	Modify	Edita
 	Manage Attributes	Gestisci attributi
 	Dialog State	Stato della finestra di dialogo
 	Dialog Action	Azione della finestra di dialogo
+	Recover Drawing and Xrefs...	Recupera disegno e xrif...
+	Count Blocks	Conta blocchi
+	Get Selection Set	Ottieni gruppo di selezione
+	Global Attribute Edit	Modifica globale attributi
+	LISP Function Surfer	Esplora funzioni LISP
+	List LISP Symbols	Elenca simboli LISP
+	List Nested Object	Elenca oggetto nidificato
+	List Object Xdata	Elenca dati estesi oggetto
+	Multiple Polyline Edit	Modifica più polilinee
+	Redefine Path	Ridefinisci percorso
+	Redefine Path Mode	Modalità ridefinizione percorso
+	Restore Dimension Text	Ripristina testo quota
+	Revert	Ripristina
+	Rotate Blocks	Ruota blocchi
+	Scale Blocks	Scala blocchi
+	Select Similar by Properties	Seleziona simili per proprietà
+	Show URLs	Mostra URL
+	Synchronize Viewports	Sincronizza finestre
+	Paste Special	Incolla speciale
+	Paste Special...	Incolla speciale...
+	Paste as	Incolla come
+	Last Measurement	Ultima misura
+	Perimeter	Perimetro

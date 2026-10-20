@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("area", "Area", run_area)
             .menu(&["Tools", "Inquiry", "Area"])
             .alias(&["aa"])
-            .params("{points: [[x,y],...]} | {handle}")
+            .params("{points: [[x,y],...]} | {handle} | {add: [{points} | {handle}, ...], subtract?: [...]} → running total, as the Add/Subtract area modes")
             .noundo()
             .interactive(|_| Ok(Box::new(AreaM::default()))),
         CommandSpec::new("time", "Time", run_time).menu(&["Tools", "Inquiry", "Time"]).noundo(),
@@ -68,9 +68,17 @@ pub(crate) fn fmt_d(s: &Session, v: f64) -> String {
     let h = s.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
     format_distance(v, h.0, h.1)
 }
+/// A quantity that is not a length (an area, a volume, a moment of inertia) as MASSPROP prints it:
+/// a plain number at LUPREC, with at least 4 decimals in architectural and fractional units whose
+/// precision counts fraction steps.
+pub(crate) fn fmt_n(s: &Session, v: f64) -> String {
+    let (lunits, prec) = s.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
+    let p = if matches!(lunits, 4 | 5) { 4 } else { usize::try_from(prec.clamp(0, 8)).unwrap_or(4) };
+    format!("{v:.p$}")
+}
 /// An area as AutoCAD reports it: square inches with square feet in architectural and engineering
 /// units ("11520.0000 square in. (80.0000 square ft.)"), else a plain number at LUPREC.
-fn fmt_area(s: &Session, v: f64) -> String {
+pub(crate) fn fmt_area(s: &Session, v: f64) -> String {
     let (lunits, prec) = s.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
     let p = usize::try_from(prec.clamp(0, 8)).unwrap_or(4);
     if matches!(lunits, 3 | 4) {
@@ -246,7 +254,40 @@ fn area_of(pts: &[Vec2]) -> (f64, f64) {
     (a, per)
 }
 
+/// One boundary of AREA's add/subtract lists: `{points}` or `{handle}`.
+fn area_item(s: &Session, v: &Value) -> Result<(f64, f64)> {
+    if let Some(pts) = points_param(v, "points") {
+        if pts.len() < 3 {
+            return Err(bad("area", "a boundary needs at least 3 points"));
+        }
+        return Ok(area_of(&pts));
+    }
+    let h =
+        v.get("handle").and_then(Value::as_str).and_then(Handle::parse_hex).ok_or_else(|| bad("area", "each boundary is {points} or {handle}"))?;
+    object_area(s, h)
+}
+
 fn run_area(s: &mut Session, p: &Value) -> Result<Value> {
+    let list = |k: &str| -> Result<Option<&Vec<Value>>> {
+        p.get(k).filter(|v| !v.is_null()).map(|v| v.as_array().ok_or_else(|| bad("area", format!("`{k}` must be a list of boundaries")))).transpose()
+    };
+    let (add, sub) = (list("add")?, list("subtract")?);
+    if add.is_some() || sub.is_some() {
+        // AREA's Add and Subtract modes: each area is reported with the running total.
+        let mut total = 0.0;
+        let mut lines = Vec::new();
+        let mut last = (0.0, 0.0);
+        for (sign, items, mode) in [(1.0, add, "(ADD mode)"), (-1.0, sub, "(SUBTRACT mode)")] {
+            for it in items.into_iter().flatten() {
+                last = area_item(s, it)?;
+                total += sign * last.0;
+                lines.push(format!("{mode} {}", area_text(s, last.0, last.1)));
+                lines.push(format!("Total area = {}", fmt_area(s, total)));
+            }
+        }
+        (s.last_used.area, s.last_used.perimeter) = (total, last.1);
+        return Ok(json!({ "area": total, "message": lines.join("\n") }));
+    }
     let (a, per) = if let Some(pts) = points_param(p, "points") {
         area_of(&pts)
     } else {
@@ -257,7 +298,7 @@ fn run_area(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "area": a, "perimeter": per, "message": area_text(s, a, per) }))
 }
 
-fn area_text(s: &Session, a: f64, per: f64) -> String {
+pub(crate) fn area_text(s: &Session, a: f64, per: f64) -> String {
     format!("Area = {}, Perimeter = {}", fmt_area(s, a), fmt_d(s, per))
 }
 

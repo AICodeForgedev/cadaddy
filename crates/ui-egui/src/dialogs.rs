@@ -410,7 +410,7 @@ fn about(ctx: &egui::Context, open: &mut bool) {
                 2 => crate::credits::models_ui(ui),
                 _ => {
                     ui.heading(crate::tl!("CADaddy"));
-                    ui.label(crate::tf!("Version {version}", version = env!("CARGO_PKG_VERSION")));
+                    ui.label(crate::tf!("Version {version}", version = crate::diag::version_with_build()));
                     ui.label(crate::tl!("Computer-aided design and drafting for Windows, Mac and Linux, written in Rust."));
                     ui.add_space(6.0);
                     ui.label(RichText::new(crate::tl!("Includes open-source components: see NOTICE.")).color(t.text_dim));

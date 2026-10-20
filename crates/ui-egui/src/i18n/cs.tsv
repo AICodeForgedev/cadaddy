@@ -2321,3 +2321,26 @@ menu	Modify	Modifikace
 	Manage Attributes	Spravovat atributy
 	Dialog State	Stav dialogu
 	Dialog Action	Akce dialogu
+	Recover Drawing and Xrefs...	Obnovit výkres a externí reference...
+	Count Blocks	Spočítat bloky
+	Get Selection Set	Získat sadu výběru
+	Global Attribute Edit	Globální úprava atributů
+	LISP Function Surfer	Prohlížeč funkcí LISP
+	List LISP Symbols	Vypsat symboly LISP
+	List Nested Object	Vypsat vnořený objekt
+	List Object Xdata	Vypsat rozšířená data objektu
+	Multiple Polyline Edit	Úprava více křivek
+	Redefine Path	Předefinovat cestu
+	Redefine Path Mode	Režim předefinování cesty
+	Restore Dimension Text	Obnovit text kóty
+	Revert	Vrátit k uložené verzi
+	Rotate Blocks	Otočit bloky
+	Scale Blocks	Změnit měřítko bloků
+	Select Similar by Properties	Vybrat podobné podle vlastností
+	Show URLs	Zobrazit adresy URL
+	Synchronize Viewports	Synchronizovat výřezy
+	Paste Special	Vložit jinak
+	Paste Special...	Vložit jinak...
+	Paste as	Vložit jako
+	Last Measurement	Poslední měření
+	Perimeter	Obvod

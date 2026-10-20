@@ -2348,3 +2348,26 @@ menu	Modify	Ändra
 	Manage Attributes	Hantera attribut
 	Dialog State	Dialogrutans tillstånd
 	Dialog Action	Dialogrutans åtgärd
+	Recover Drawing and Xrefs...	Återställ ritning och externa referenser...
+	Count Blocks	Räkna block
+	Get Selection Set	Hämta urvalsuppsättning
+	Global Attribute Edit	Global attributredigering
+	LISP Function Surfer	LISP-funktionsbläddrare
+	List LISP Symbols	Lista LISP-symboler
+	List Nested Object	Lista kapslat objekt
+	List Object Xdata	Lista objektets utökade data
+	Multiple Polyline Edit	Redigera flera polylinjer
+	Redefine Path	Omdefiniera sökväg
+	Redefine Path Mode	Läge för omdefiniering av sökväg
+	Restore Dimension Text	Återställ måttext
+	Revert	Återgå
+	Rotate Blocks	Rotera block
+	Scale Blocks	Skala block
+	Select Similar by Properties	Välj liknande efter egenskaper
+	Show URLs	Visa URL:er
+	Synchronize Viewports	Synkronisera visningsfönster
+	Paste Special	Klistra in special
+	Paste Special...	Klistra in special...
+	Paste as	Klistra in som
+	Last Measurement	Senaste mätning
+	Perimeter	Omkrets
