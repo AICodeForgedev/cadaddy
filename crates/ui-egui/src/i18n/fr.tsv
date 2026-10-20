@@ -1963,3 +1963,168 @@
 	Use drawing background	Utiliser l'arrière-plan du dessin
 	Regenerate Dimensions	Régénérer les cotes
 	Enter layer name for new dimensions (. for the current layer)	Entrez le nom du calque des nouvelles cotes (. pour le calque courant)
+	{folder} (folder)	{folder} (dossier)
+	Add drawings or a folder of them.	Ajoutez des dessins ou un dossier de dessins.
+	Add Files...	Ajouter des fichiers...
+	Add Folder...	Ajouter un dossier...
+	cancelled	annulé
+	Choose the output folder, or Next to the originals.	Choisissez le dossier de sortie, ou À côté des originaux.
+	Convert Drawings	Convertir des dessins
+	Convert Drawings...	Convertir des dessins...
+	Convert drawings...	Convertir des dessins...
+	Convert to	Convertir en
+	Converted	Converti
+	Converted, not all kept	Converti, pas tout conservé
+	Converting files is not available on the web.	La conversion de fichiers n'est pas disponible sur le web.
+	Drawings to convert	Dessins à convertir
+	Each drawing's own	Celle de chaque dessin
+	Failed	Échec
+	Files already there	Fichiers déjà présents
+	Folder:	Dossier :
+	Include subfolders	Inclure les sous-dossiers
+	Keep a file written over as .bak	Conserver un fichier remplacé en .bak
+	Next to the originals	À côté des originaux
+	Open Log	Ouvrir le journal
+	Or type a file or folder path	Ou saisissez un chemin de fichier ou de dossier
+	Overwrite	Remplacer
+	Save to	Enregistrer dans
+	Skip	Ignorer
+	Skipped	Ignoré
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	Aucun dessin (.dwg, .dxf, .cdy) à convertir.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{converted} convertis, {skipped} ignorés, {failed} en échec sur {total}
+	DWG drawing (.dwg)	Dessin DWG (.dwg)
+	DXF drawing (.dxf)	Dessin DXF (.dxf)
+	Require a token for control connections (recommended)	Exiger un jeton pour les connexions de contrôle (recommandé)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Les programmes doivent d'abord envoyer le jeton que CADaddy écrit dans un fichier lisible par vous seul, afin que les programmes d'autres utilisateurs ne puissent pas le piloter. Le connecteur Claude le lit pour vous. Prend effet au prochain démarrage de CADaddy.
+	Add: Pick points	Ajouter : Choisir des points
+	Add: Select objects	Ajouter : Sélectionner des objets
+	Associative	Associatif
+	Block to create or edit	Bloc à créer ou à modifier
+	Bottom left	En bas à gauche
+	Boundaries	Contours
+	Click to set new origin	Cliquez pour définir une nouvelle origine
+	Create separate hatches	Créer des hachures distinctes
+	Default to boundary extents	Par défaut, étendue du contour
+	Edit Block Definition	Modifier la définition de bloc
+	Grid snap	Accrochage à la grille
+	Hatch and Gradient	Hachures et dégradé
+	Hatch origin	Origine des hachures
+	Island detection	Détection des îlots
+	Isometric snap	Accrochage isométrique
+	Normal	Normal
+	Open in Block Editor	Ouvrir dans l'Éditeur de blocs
+	Options	Options
+	Outer	Extérieur
+	Polar distance	Distance polaire
+	PolarSnap	Accrochage polaire
+	Rectangular snap	Accrochage rectangulaire
+	Reinitialize	Réinitialiser
+	Run Script...	Exécuter un script...
+	Snap type	Type d'accrochage
+	Specified origin	Origine spécifiée
+	Use current origin	Utiliser l'origine courante
+	Building models (IFC)	Maquettes de bâtiment (IFC)
+	Building model (IFC4)	Maquette de bâtiment (IFC4)
+	3D printing (3MF)	Impression 3D (3MF)
+	Include the drawing (the active drawing as a DXF file)	Joindre le dessin (le dessin actif au format DXF)
+	Your account, home folder and computer name are always left out.	Votre compte, votre dossier personnel et le nom de votre ordinateur sont toujours exclus.
+	Files in the report	Fichiers du rapport
+	Send to Redline	Envoyer vers Redline
+	Import Redline Markups	Importer les annotations Redline
+	Import Redline Markups...	Importer les annotations Redline...
+	Open a Program?	Ouvrir un programme ?
+	This link opens a program or script, not a document:	Ce lien ouvre un programme ou un script, pas un document :
+	Open it only if you trust the drawing and know what it runs.	Ne l'ouvrez que si vous faites confiance au dessin et savez ce qu'il exécute.
+	Open Anyway	Ouvrir quand même
+	Report a security problem	Signaler un problème de sécurité
+	Load This File?	Charger ce fichier ?
+	This file isn't in a trusted folder:	Ce fichier ne se trouve pas dans un dossier approuvé :
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	Les routines LISP et les scripts peuvent modifier les dessins et les fichiers. Ne le chargez que si vous faites confiance à sa provenance.
+	Don't Load	Ne pas charger
+	Load Once	Charger une fois
+	Always Load from This Folder	Toujours charger depuis ce dossier
+	Adds {folder} to TRUSTEDPATHS	Ajoute {folder} à TRUSTEDPATHS
+	Allow Loading a File	Autoriser le chargement d'un fichier
+	Plot Stamp	Tampon de tracé
+	Plot stamp fields	Champs du tampon
+	Drawing name	Nom du dessin
+	Layout name	Nom de la présentation
+	Date and Time	Date et heure
+	Device name	Nom du périphérique
+	Paper size	Format de papier
+	Plot scale	Échelle de tracé
+	No login or computer name is ever stamped.	Le nom d'utilisateur et le nom de l'ordinateur ne sont jamais tamponnés.
+	User defined fields	Champs définis par l'utilisateur
+	One per line, up to {n}.	Un par ligne, jusqu'à {n}.
+	Stamp model space plots	Tamponner les tracés de l'espace objet
+	Stamp this layout's plots	Tamponner les tracés de cette présentation
+	Location and offset	Position et décalage
+	Location	Position
+	Bottom right	En bas à droite
+	Top left	En haut à gauche
+	Top right	En haut à droite
+	Upside-down	À l'envers
+	X offset	Décalage X
+	Y offset	Décalage Y
+	Offset relative to	Décalage par rapport à
+	Printable area	Zone imprimable
+	Paper border	Bord du papier
+	Text properties	Propriétés du texte
+	Font	Police
+	Single line plot stamp	Tampon sur une seule ligne
+	Units	Unités
+	Inches	Pouces
+	Millimeters	Millimètres
+	Log file location	Emplacement du fichier journal
+	Create a log file	Créer un fichier journal
+	The log is kept for this session, never saved with the drawing.	Le journal vaut pour cette session et n'est jamais enregistré avec le dessin.
+	Action Macro Manager...	Gestionnaire de macros d'action...
+	Action Macros	Macros d'action
+	Action Recorder	Enregistreur d'actions
+	Insert Base Point	Insérer un point de base
+	Insert Message	Insérer un message
+	Play Action Macro	Lire la macro d'action
+	Play...	Lire...
+	Record	Enregistrer
+	Request User Input	Demander une saisie
+	Stop	Arrêter
+	Action Macro Manager	Gestionnaire de macros d'action
+	Recording…	Enregistrement…
+	No action macros yet: Record, do the work, then Stop.	Aucune macro d'action : Enregistrer, faire le travail, puis Arrêter.
+	Play	Lire
+	Message: {text}	Message : {text}
+	Base point (asked for)	Point de base (demandé)
+	(Enter)	(Entrée)
+	Ask for this input when the macro plays	Demander cette saisie lors de la lecture de la macro
+	Customize Interface	Personnaliser l'interface
+	Customize User Interface...	Personnaliser l'interface utilisateur...
+	Interface...	Interface...
+	Customize User Interface	Personnaliser l'interface utilisateur
+	Quick Access Toolbar	Barre d'outils d'accès rapide
+	Add a command	Ajouter une commande
+	Reset Quick Access Toolbar	Réinitialiser la barre d'accès rapide
+	Built-in panels shown (untick to hide):	Groupes intégrés affichés (décocher pour masquer) :
+	Your panels on built-in tabs:	Vos groupes sur les onglets intégrés :
+	Tab	Onglet
+	New panel name	Nom du nouveau groupe
+	Add Panel	Ajouter un groupe
+	Your tabs:	Vos onglets :
+	Remove Tab	Supprimer l'onglet
+	New tab name	Nom du nouvel onglet
+	Add Tab	Ajouter un onglet
+	Edit Keyboard Shortcuts...	Modifier les raccourcis clavier...
+	Remove Panel	Supprimer le groupe
+	Command or LISP macro, e.g. (command "line")	Commande ou macro LISP, p. ex. (command "line")
+	Hatch Editor	Éditeur de hachures
+	Table Cell	Cellule de tableau
+	Rows & Columns	Lignes et colonnes
+	Merge	Fusionner
+	Open/Save	Ouvrir/Enregistrer
+	Attributes	Attributs
+	Spell Check	Vérifier l'orthographe
+	Formula	Formule
+	Edit Source	Modifier la source
+	Close Array	Fermer le réseau
+	Manage Attributes	Gérer les attributs
+	Dialog State	État de la boîte de dialogue
+	Dialog Action	Action de la boîte de dialogue

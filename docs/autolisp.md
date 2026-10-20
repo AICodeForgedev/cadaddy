@@ -14,10 +14,11 @@ CADaddy runs AutoLISP routines (`.lsp` files). What is here and what is not yet:
 - **At the command line**, `(expression)` evaluates and shows the value, and `!variable` shows a
   variable. Typed at a command's prompt (not a free-text one), an expression's value answers it:
   `CIRCLE 0,0 (* 2 r)`.
-- **Programmatically** (scripts, the control channel, MCP, the CLI): `lisp {code, inputs?}` and
-  `appload {path} | {name, text | data}` run to the end and return `{value, output, error?}`.
-  `inputs` answer `get…` calls in order (numbers, strings, `[x, y]` points); a call with none left
-  gets nil.
+- **Programmatically** (scripts, the control channel, MCP, the CLI): `lisp {code, inputs?,
+  dialog?}` and `appload {path} | {name, text | data}` run to the end and return `{value, output,
+  error?}`. `inputs` answer `get…` calls in order (numbers, strings, `[x, y]` points); a call with
+  none left gets nil. `dialog` answers `start_dialog`: tile actions in order, `{key, value?,
+  reason?}`; a dialog still open when they run out is cancelled (status 0).
 
 ### At startup
 
@@ -39,6 +40,33 @@ Each drawing has its own variables and functions. A routine is one undo step, wh
 it runs. A routine that waits for input (`getpoint`, `pause`) lets the window work meanwhile;
 Esc stops it with "Function cancelled", which `*error*` receives. A long loop runs a slice per
 frame, so the window stays live and Esc stops it too.
+
+### Dialogs (DCL)
+
+`load_dialog` reads a `.dcl` file (by path, from the support folder, or one APPLOAD loaded — on
+the web too), `new_dialog` makes one of its dialogs and `start_dialog` shows it. Each click or
+edit runs the tile's action — `action_tile`, the tile's `action` attribute, else OK ends with 1
+and Cancel with 0 — with `$key`, `$value`, `$reason` and `$data` set, until an action calls
+`done_dialog` (or `term_dialog`, -1). Tiles: `dialog row column boxed_row boxed_column
+radio_row radio_column boxed_radio_row boxed_radio_column concatenation paragraph button
+edit_box toggle radio_button popup_list list_box slider text text_part image image_button
+spacer errtile`, the standard clusters (`ok_only ok_cancel ok_cancel_help
+ok_cancel_help_errtile …`), definitions built on others, and `@include`. Images show
+`fill_image` and `vector_image`; `slide_image` shows the slide's name (slide files are not
+read). Dialogs nest (an action may start another).
+
+An agent drives a dialog a typed routine waits in with `lisp.dialog` (its tiles and values) and
+`lisp.tile {key, value?} | {cancel: true}`.
+
+### Reactors
+
+`vlr-command-reactor` and `vlr-editor-reactor` call their functions on `:vlr-commandWillStart`,
+`:vlr-commandEnded`, `:vlr-commandCancelled` and `:vlr-commandFailed` with `(reactor
+("COMMAND"))`; `vlr-object-reactor` on `:vlr-modified` and `:vlr-erased` of its objects with
+`(object reactor nil)`. Also `vlr-remove vlr-add vlr-added-p vlr-remove-all vlr-reactors
+vlr-data vlr-data-set vlr-type vlr-reactions vlr-owners`. Reactors live in their drawing until
+removed. They react to commands typed or called by an agent, not to those a routine runs, and
+`command` inside a callback is refused.
 
 ## The language
 

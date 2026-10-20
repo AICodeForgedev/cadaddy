@@ -1992,3 +1992,168 @@
 	Use drawing background	Zeichnungshintergrund verwenden
 	Regenerate Dimensions	Bemaßungen regenerieren
 	Enter layer name for new dimensions (. for the current layer)	Layername für neue Bemaßungen eingeben (. für den aktuellen Layer)
+	{folder} (folder)	{folder} (Ordner)
+	Add drawings or a folder of them.	Zeichnungen oder einen Ordner damit hinzufügen.
+	Add Files...	Dateien hinzufügen...
+	Add Folder...	Ordner hinzufügen...
+	cancelled	abgebrochen
+	Choose the output folder, or Next to the originals.	Wählen Sie den Ausgabeordner oder Neben den Originalen.
+	Convert Drawings	Zeichnungen konvertieren
+	Convert Drawings...	Zeichnungen konvertieren...
+	Convert drawings...	Zeichnungen konvertieren...
+	Convert to	Konvertieren in
+	Converted	Konvertiert
+	Converted, not all kept	Konvertiert, nicht alles erhalten
+	Converting files is not available on the web.	Das Konvertieren von Dateien ist im Web nicht verfügbar.
+	Drawings to convert	Zu konvertierende Zeichnungen
+	Each drawing's own	Version der jeweiligen Zeichnung
+	Failed	Fehlgeschlagen
+	Files already there	Bereits vorhandene Dateien
+	Folder:	Ordner:
+	Include subfolders	Unterordner einbeziehen
+	Keep a file written over as .bak	Überschriebene Datei als .bak behalten
+	Next to the originals	Neben den Originalen
+	Open Log	Protokoll öffnen
+	Or type a file or folder path	Oder Datei- bzw. Ordnerpfad eingeben
+	Overwrite	Überschreiben
+	Save to	Speichern in
+	Skip	Überspringen
+	Skipped	Übersprungen
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	Keine Zeichnungen (.dwg, .dxf, .cdy) zum Konvertieren.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{converted} konvertiert, {skipped} übersprungen, {failed} fehlgeschlagen von {total}
+	DWG drawing (.dwg)	DWG-Zeichnung (.dwg)
+	DXF drawing (.dxf)	DXF-Zeichnung (.dxf)
+	Require a token for control connections (recommended)	Token für Steuerverbindungen verlangen (empfohlen)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Programme müssen zuerst das Token senden, das CADaddy in eine nur für Sie lesbare Datei schreibt, damit Programme anderer Benutzer es nicht steuern können. Der Claude-Connector liest es für Sie. Wirkt beim nächsten Start von CADaddy.
+	Add: Pick points	Hinzufügen: Punkte auswählen
+	Add: Select objects	Hinzufügen: Objekte wählen
+	Associative	Assoziativ
+	Block to create or edit	Zu erstellender oder zu bearbeitender Block
+	Bottom left	Unten links
+	Boundaries	Begrenzungen
+	Click to set new origin	Klicken, um neuen Ursprung festzulegen
+	Create separate hatches	Separate Schraffuren erstellen
+	Default to boundary extents	Standardmäßig Begrenzungsausdehnung
+	Edit Block Definition	Blockdefinition bearbeiten
+	Grid snap	Rasterfang
+	Hatch and Gradient	Schraffur und Farbverlauf
+	Hatch origin	Schraffurursprung
+	Island detection	Inselerkennung
+	Isometric snap	Isometrischer Fang
+	Normal	Normal
+	Open in Block Editor	Im Blockeditor öffnen
+	Options	Optionen
+	Outer	Außen
+	Polar distance	Polarabstand
+	PolarSnap	Polarfang
+	Rectangular snap	Rechteckiger Fang
+	Reinitialize	Neu initialisieren
+	Run Script...	Skript ausführen...
+	Snap type	Fangtyp
+	Specified origin	Angegebener Ursprung
+	Use current origin	Aktuellen Ursprung verwenden
+	Building models (IFC)	Gebäudemodelle (IFC)
+	Building model (IFC4)	Gebäudemodell (IFC4)
+	3D printing (3MF)	3D-Druck (3MF)
+	Include the drawing (the active drawing as a DXF file)	Zeichnung beifügen (die aktive Zeichnung als DXF-Datei)
+	Your account, home folder and computer name are always left out.	Ihr Konto, Ihr Benutzerordner und der Name Ihres Computers werden immer weggelassen.
+	Files in the report	Dateien im Bericht
+	Send to Redline	An Redline senden
+	Import Redline Markups	Redline-Markierungen importieren
+	Import Redline Markups...	Redline-Markierungen importieren...
+	Open a Program?	Ein Programm öffnen?
+	This link opens a program or script, not a document:	Dieser Link öffnet ein Programm oder Skript, kein Dokument:
+	Open it only if you trust the drawing and know what it runs.	Öffnen Sie es nur, wenn Sie der Zeichnung vertrauen und wissen, was es ausführt.
+	Open Anyway	Trotzdem öffnen
+	Report a security problem	Sicherheitsproblem melden
+	Load This File?	Diese Datei laden?
+	This file isn't in a trusted folder:	Diese Datei liegt nicht in einem vertrauenswürdigen Ordner:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	LISP-Routinen und Skripte können Zeichnungen und Dateien ändern. Laden Sie sie nur, wenn Sie der Herkunft vertrauen.
+	Don't Load	Nicht laden
+	Load Once	Einmal laden
+	Always Load from This Folder	Aus diesem Ordner immer laden
+	Adds {folder} to TRUSTEDPATHS	Fügt {folder} zu TRUSTEDPATHS hinzu
+	Allow Loading a File	Laden einer Datei erlauben
+	Plot Stamp	Plotstempel
+	Plot stamp fields	Stempelfelder
+	Drawing name	Zeichnungsname
+	Layout name	Layoutname
+	Date and Time	Datum und Uhrzeit
+	Device name	Gerätename
+	Paper size	Papierformat
+	Plot scale	Plotmaßstab
+	No login or computer name is ever stamped.	Anmeldename und Computername werden nie gestempelt.
+	User defined fields	Benutzerdefinierte Felder
+	One per line, up to {n}.	Eines pro Zeile, bis zu {n}.
+	Stamp model space plots	Modellbereich-Plots stempeln
+	Stamp this layout's plots	Plots dieses Layouts stempeln
+	Location and offset	Position und Versatz
+	Location	Position
+	Bottom right	Unten rechts
+	Top left	Oben links
+	Top right	Oben rechts
+	Upside-down	Auf dem Kopf
+	X offset	X-Versatz
+	Y offset	Y-Versatz
+	Offset relative to	Versatz relativ zu
+	Printable area	Druckbarer Bereich
+	Paper border	Papierrand
+	Text properties	Texteigenschaften
+	Font	Schrift
+	Single line plot stamp	Einzeiliger Plotstempel
+	Units	Einheiten
+	Inches	Zoll
+	Millimeters	Millimeter
+	Log file location	Speicherort der Protokolldatei
+	Create a log file	Protokolldatei erstellen
+	The log is kept for this session, never saved with the drawing.	Das Protokoll gilt für diese Sitzung und wird nie mit der Zeichnung gespeichert.
+	Action Macro Manager...	Aktionsmakro-Manager...
+	Action Macros	Aktionsmakros
+	Action Recorder	Aktionsrekorder
+	Insert Base Point	Basispunkt einfügen
+	Insert Message	Meldung einfügen
+	Play Action Macro	Aktionsmakro abspielen
+	Play...	Abspielen...
+	Record	Aufzeichnen
+	Request User Input	Benutzereingabe anfordern
+	Stop	Stopp
+	Action Macro Manager	Aktionsmakro-Manager
+	Recording…	Aufzeichnung…
+	No action macros yet: Record, do the work, then Stop.	Noch keine Aktionsmakros: Aufzeichnen, die Arbeit erledigen, dann Stopp.
+	Play	Abspielen
+	Message: {text}	Meldung: {text}
+	Base point (asked for)	Basispunkt (wird abgefragt)
+	(Enter)	(Eingabe)
+	Ask for this input when the macro plays	Diese Eingabe beim Abspielen des Makros abfragen
+	Customize Interface	Oberfläche anpassen
+	Customize User Interface...	Benutzeroberfläche anpassen...
+	Interface...	Oberfläche...
+	Customize User Interface	Benutzeroberfläche anpassen
+	Quick Access Toolbar	Schnellzugriff-Werkzeugkasten
+	Add a command	Befehl hinzufügen
+	Reset Quick Access Toolbar	Schnellzugriff zurücksetzen
+	Built-in panels shown (untick to hide):	Angezeigte Standardgruppen (zum Ausblenden abwählen):
+	Your panels on built-in tabs:	Ihre Gruppen auf Standardregisterkarten:
+	Tab	Registerkarte
+	New panel name	Name der neuen Gruppe
+	Add Panel	Gruppe hinzufügen
+	Your tabs:	Ihre Registerkarten:
+	Remove Tab	Registerkarte entfernen
+	New tab name	Name der neuen Registerkarte
+	Add Tab	Registerkarte hinzufügen
+	Edit Keyboard Shortcuts...	Tastenkürzel bearbeiten...
+	Remove Panel	Gruppe entfernen
+	Command or LISP macro, e.g. (command "line")	Befehl oder LISP-Makro, z. B. (command "line")
+	Hatch Editor	Schraffur-Editor
+	Table Cell	Tabellenzelle
+	Rows & Columns	Zeilen & Spalten
+	Merge	Verbinden
+	Open/Save	Öffnen/Speichern
+	Attributes	Attribute
+	Spell Check	Rechtschreibprüfung
+	Formula	Formel
+	Edit Source	Quelle bearbeiten
+	Close Array	Reihe schließen
+	Manage Attributes	Attribute verwalten
+	Dialog State	Dialogstatus
+	Dialog Action	Dialogaktion

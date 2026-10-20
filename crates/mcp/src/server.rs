@@ -30,6 +30,24 @@ pub struct Server {
     drawings: Option<Vec<(String, String)>>,
     /// Notifications to send after the current reply.
     pending: Vec<Value>,
+    /// The client asked to watch events (`watch_events`): they follow each tool call as
+    /// `notifications/cadaddy/event`, unless another reader sends them as they happen
+    /// ([`Server::with_event_watcher`]).
+    watching: bool,
+    event_seq: u64,
+    external_events: bool,
+}
+
+/// The events after `since` from `backend` as JSON-RPC notification lines, and the next `since`.
+pub fn event_notifications(backend: &mut dyn Backend, since: u64) -> (Vec<String>, u64) {
+    let Ok(r) = backend.call("events.poll", json!({ "since": since })) else { return (Vec::new(), since) };
+    let next = r.get("next").and_then(Value::as_u64).unwrap_or(since);
+    let lines = r
+        .get("events")
+        .and_then(Value::as_array)
+        .map(|evs| evs.iter().map(|e| json!({"jsonrpc": "2.0", "method": "notifications/cadaddy/event", "params": e}).to_string()).collect())
+        .unwrap_or_default();
+    (lines, next)
 }
 
 fn response(id: Value, result: Value) -> Value {
@@ -41,7 +59,13 @@ fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
 
 impl Server {
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false, drawings: None, pending: Vec::new() }
+        Self { backend, initialized: false, drawings: None, pending: Vec::new(), watching: false, event_seq: 0, external_events: false }
+    }
+    /// Events are sent by a watcher of their own as they happen (the app's events, polled on
+    /// a second connection), not after each tool call.
+    pub fn with_event_watcher(mut self) -> Self {
+        self.external_events = true;
+        self
     }
     pub fn backend(&mut self) -> &mut dyn Backend {
         self.backend.as_mut()
@@ -148,7 +172,16 @@ impl Server {
                 let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing tool `name`".to_string()))?;
                 let args = params.get("arguments").unwrap_or(&Value::Null);
                 let r = call_tool(self.backend.as_mut(), name, args).map_err(|m| (INVALID_PARAMS, m));
+                if name == "watch_events" && r.is_ok() {
+                    self.watching = args.get("on").and_then(Value::as_bool).unwrap_or(true);
+                    self.event_seq = r.as_ref().ok().and_then(|v| v.get("seq")).and_then(Value::as_u64).unwrap_or(0);
+                }
                 self.notice_drawings();
+                if self.watching && !self.external_events && self.initialized {
+                    let (lines, next) = event_notifications(self.backend.as_mut(), self.event_seq);
+                    self.event_seq = next;
+                    self.pending.extend(lines.iter().filter_map(|l| serde_json::from_str::<Value>(l).ok()));
+                }
                 r
             }
             "resources/list" => {

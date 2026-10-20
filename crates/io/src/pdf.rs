@@ -566,6 +566,11 @@ fn stamp(
     let off = Vec2::new(settings.offset_mm[0], settings.offset_mm[1]) * PT_PER_MM;
     let mut c = String::from("q 0 g\n");
     let n = lines.len();
+    if settings.angle_deg() != 0 {
+        stamp_turned(&mut c, &settings, &lines, rect, off, h, avg);
+        c.push_str("Q\n");
+        return Some((c, font));
+    }
     for (i, line) in lines.iter().enumerate() {
         let width = line.chars().count() as f64 * h * avg;
         let x = match settings.corner {
@@ -584,6 +589,47 @@ fn stamp(
     }
     c.push_str("Q\n");
     Some((c, font))
+}
+
+/// A stamp turned a quarter, half or three quarters round: the lines are laid out as a block, the
+/// block turned, then set inside `rect` at the stamp's corner and offset.
+fn stamp_turned(c: &mut String, settings: &PlotStamp, lines: &[String], rect: Bounds2, off: Vec2, h: f64, avg: f64) {
+    let (sin, cos) = match settings.angle_deg() {
+        90 => (1.0, 0.0),
+        180 => (0.0, -1.0),
+        270 => (-1.0, 0.0),
+        _ => (0.0, 1.0),
+    };
+    let turn = |p: Vec2| Vec2::new(p.x * cos - p.y * sin, p.x * sin + p.y * cos);
+    let gap = h * 1.4;
+    let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64 * h * avg;
+    let low = -(lines.len().saturating_sub(1) as f64) * gap;
+    // The unturned block: x along the text, y up; the first line's baseline at y = 0.
+    let corners = [Vec2::new(0.0, low), Vec2::new(longest, low), Vec2::new(0.0, h), Vec2::new(longest, h)].map(turn);
+    let lo = corners.iter().fold(Vec2::new(f64::MAX, f64::MAX), |a, p| a.min(*p));
+    let hi = corners.iter().fold(Vec2::new(f64::MIN, f64::MIN), |a, p| a.max(*p));
+    let size = hi - lo;
+    let x = match settings.corner {
+        StampCorner::BottomLeft | StampCorner::TopLeft => rect.min.x + off.x,
+        StampCorner::BottomRight | StampCorner::TopRight => rect.max.x - off.x - size.x,
+    };
+    let y = match settings.corner {
+        StampCorner::BottomLeft | StampCorner::BottomRight => rect.min.y + off.y,
+        StampCorner::TopLeft | StampCorner::TopRight => rect.max.y - off.y - size.y,
+    };
+    let shift = Vec2::new(x, y) - lo;
+    for (i, line) in lines.iter().enumerate() {
+        let at = shift + turn(Vec2::new(0.0, -(i as f64) * gap));
+        c.push_str("BT /FS ");
+        num(c, h);
+        c.push_str(" Tf ");
+        for v in [cos, sin, -sin, cos] {
+            num(c, v);
+            c.push(' ');
+        }
+        pt(c, at);
+        let _ = writeln!(c, " Tm {} Tj ET", latin_string(line));
+    }
 }
 
 /// Paper-space position of the sheet a layout plots (zero for model space).

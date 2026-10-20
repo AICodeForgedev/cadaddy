@@ -96,8 +96,12 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         egui::Window::new(crate::tl!("DesignCenter")).id(egui::Id::new("DesignCenter")).open(open).resizable(true).default_size([640.0, 420.0]).show(
             ctx,
             |ui| {
+                // Right to left in Arabic (rtl.rs).
+                let mut body = crate::rtl::Body::new(ui);
+                let ui = &mut *body;
                 ui.horizontal(|ui| {
-                    if ui.button("⬆").on_hover_text(crate::tl!("Up One Level")).clicked()
+                    // Icons drawn in code: "⬆" has no glyph in the interface fonts (an empty box).
+                    if crate::icons::button(ui, crate::icons::Icon::ChevronUp, 20.0, "Up One Level", false).clicked()
                         && let Some(parent) = std::path::Path::new(&st.folder).parent()
                     {
                         go = Some(parent.to_string_lossy().into_owned());
@@ -114,7 +118,13 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     egui::ScrollArea::vertical().id_salt("dc-folder").max_height(320.0).show(&mut cols[0], |ui| match &st.entries {
                         Some(Ok(v)) => {
                             for f in names(v, "folders") {
-                                if ui.selectable_label(false, format!("📁 {f}")).clicked() {
+                                let open = ui
+                                    .horizontal(|ui| {
+                                        let icon = crate::icons::button(ui, crate::icons::Icon::Open, 16.0, "Open", false).clicked();
+                                        icon | ui.selectable_label(false, f.as_str()).clicked()
+                                    })
+                                    .inner;
+                                if open {
                                     go = Some(join(&st.folder, &f));
                                 }
                             }

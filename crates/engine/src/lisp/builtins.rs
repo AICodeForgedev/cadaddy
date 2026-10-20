@@ -955,6 +955,16 @@ fn open(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
         "a" => (true, true),
         _ => return Err(LispError::new(format!("bad argument value: file mode {mode}"))),
     };
+    // A routine can't write code that runs later: LISP, menu LISP, scripts or programs (the way
+    // LISP viruses copy themselves into acaddoc.lsp). SECURELOAD 0 lifts this.
+    if writing && ctx.s.settings.secureload > 0 {
+        const CODE: [&str; 18] =
+            ["lsp", "fas", "vlx", "mnl", "scr", "exe", "com", "bat", "cmd", "ps1", "vbs", "js", "wsf", "sh", "command", "app", "reg", "lnk"];
+        let ext = std::path::Path::new(&path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if CODE.contains(&ext.as_str()) {
+            return Err(LispError::new(format!("OPEN: a routine can't write a .{ext} file (SECURELOAD)")));
+        }
+    }
     let mut f = LispFile { path: path.clone(), writing, append, lines: Default::default(), text: String::new() };
     if !writing {
         match read_text_file(&path) {
@@ -1254,7 +1264,15 @@ fn exit(_ctx: &mut Ctx<'_>, _a: Vec<Value>) -> Result<Flow, LispError> {
 fn load(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 1, 2)?;
     let name = string(&a[0])?.to_string();
-    let text = super::load_source(ctx.s, &name);
+    // A file from outside the trusted folders loads only when allowed (SECURELOAD).
+    let text = match super::load_file(ctx.s, &name) {
+        Some((Some(path), text)) => match ctx.s.check_load(&path, "LOAD", None) {
+            Ok(()) => Some(text),
+            Err(e) => return Err(LispError::new(e.to_string())),
+        },
+        Some((None, text)) => Some(text),
+        None => None,
+    };
     match text {
         Some(t) => Ok(Flow::Forms(read::read_all(&t)?)),
         None => match a.get(1) {
@@ -1537,6 +1555,41 @@ static BUILTINS: &[Builtin] = &[
     ctx!("VLAX-CURVE-ISCLOSED", super::curve::is_closed),
     ctx!("VLAX-CURVE-ISPERIODIC", super::curve::is_periodic),
     ctx!("VLAX-CURVE-ISPLANAR", super::curve::is_planar),
+    ctx!("LOAD_DIALOG", super::dialog::load_dialog),
+    ctx!("UNLOAD_DIALOG", super::dialog::unload_dialog),
+    ctx!("NEW_DIALOG", super::dialog::new_dialog),
+    ctx!("START_DIALOG", super::dialog::start_dialog),
+    ctx!("DONE_DIALOG", super::dialog::done_dialog),
+    ctx!("TERM_DIALOG", super::dialog::term_dialog),
+    ctx!("ACTION_TILE", super::dialog::action_tile),
+    ctx!("SET_TILE", super::dialog::set_tile),
+    ctx!("GET_TILE", super::dialog::get_tile),
+    ctx!("GET_ATTR", super::dialog::get_attr),
+    ctx!("MODE_TILE", super::dialog::mode_tile),
+    ctx!("CLIENT_DATA_TILE", super::dialog::client_data_tile),
+    ctx!("START_LIST", super::dialog::start_list),
+    ctx!("ADD_LIST", super::dialog::add_list),
+    ctx!("END_LIST", super::dialog::end_building),
+    ctx!("START_IMAGE", super::dialog::start_image),
+    ctx!("FILL_IMAGE", super::dialog::fill_image),
+    ctx!("VECTOR_IMAGE", super::dialog::vector_image),
+    ctx!("SLIDE_IMAGE", super::dialog::slide_image),
+    ctx!("END_IMAGE", super::dialog::end_building),
+    ctx!("DIMX_TILE", super::dialog::dimx_tile),
+    ctx!("DIMY_TILE", super::dialog::dimy_tile),
+    ctx!("VLR-COMMAND-REACTOR", super::reactor::command_reactor),
+    ctx!("VLR-EDITOR-REACTOR", super::reactor::editor_reactor),
+    ctx!("VLR-OBJECT-REACTOR", super::reactor::object_reactor),
+    ctx!("VLR-REMOVE", super::reactor::remove),
+    ctx!("VLR-ADD", super::reactor::add),
+    ctx!("VLR-ADDED-P", super::reactor::added_p),
+    ctx!("VLR-DATA", super::reactor::data),
+    ctx!("VLR-DATA-SET", super::reactor::data_set),
+    ctx!("VLR-TYPE", super::reactor::type_of),
+    ctx!("VLR-REACTIONS", super::reactor::reactions_of),
+    ctx!("VLR-OWNERS", super::reactor::owners),
+    ctx!("VLR-REACTORS", super::reactor::reactors),
+    ctx!("VLR-REMOVE-ALL", super::reactor::remove_all),
 ];
 
 /// Bind the builtins and constants in a new environment.

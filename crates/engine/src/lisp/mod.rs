@@ -7,9 +7,12 @@
 
 pub mod builtins;
 mod curve;
+pub mod dcl;
+pub mod dialog;
 mod drawing;
 pub mod eval;
 pub mod input;
+pub mod reactor;
 pub mod read;
 mod startup;
 pub mod value;
@@ -96,6 +99,9 @@ pub struct Env {
     /// The command history's length after LISP last printed a line: when something else wrote since
     /// (a prompt, a command's echo), a leading newline only ends that line.
     pub printed_at: Option<usize>,
+    /// Reactors made in this drawing ([`reactor`]).
+    pub reactors: reactor::Reactors,
+    pub next_reactor: u32,
 }
 
 impl Default for Env {
@@ -114,6 +120,8 @@ impl Default for Env {
             sub_names: HashMap::new(),
             apps: Vec::new(),
             printed_at: None,
+            reactors: reactor::Reactors::new(),
+            next_reactor: 0,
         };
         builtins::install(&mut e);
         e
@@ -155,6 +163,12 @@ pub struct LispState {
     acad_loaded: bool,
     /// Memory caps (lowered by tests).
     pub(crate) limits: Limits,
+    /// DCL files loaded and dialogs open.
+    pub(crate) dcl: dialog::DialogState,
+    /// Reactors' callbacks are running ([`reactor`]): they don't set off others.
+    in_reactor: bool,
+    /// Tile actions for the next programmatic run's dialogs ([`Session::lisp_eval_scripted`]).
+    script: Vec<dialog::Event>,
 }
 
 /// What a run may use (see [`value`]'s memory notes).
@@ -203,6 +217,8 @@ struct Run {
     /// Cons cells alive when the run started: cells the drawing's variables already hold don't
     /// stop a run (it can still set them to nil) unless it adds more.
     cells_at_start: usize,
+    /// What a blocking run's dialogs are answered with, in turn: tile actions.
+    dialog_script: std::collections::VecDeque<dialog::Event>,
 }
 
 /// Steps per slice before the interface gets a frame.
@@ -258,6 +274,20 @@ impl Session {
         self.lisp_start(Machine::forms(forms), print, blocking, inputs, "LISP".into())
     }
 
+    /// [`Session::lisp_eval`] run to the end, its dialogs answered by `dialog`: tile actions in
+    /// turn (a dialog still open when they run out is cancelled, status 0).
+    pub fn lisp_eval_scripted(
+        &mut self,
+        src: &str,
+        inputs: Vec<Value>,
+        dialog: Vec<dialog::Event>,
+    ) -> crate::Result<Option<std::result::Result<Value, String>>> {
+        self.lisp.script = dialog;
+        let r = self.lisp_eval(src, false, true, inputs);
+        self.lisp.script.clear();
+        r
+    }
+
     /// Call a LISP function (`c:` commands typed at the command line).
     fn lisp_call(&mut self, f: Value, label: String) -> crate::Result<Option<std::result::Result<Value, String>>> {
         self.lisp_start(Machine::calling(f, Vec::new()), false, false, Vec::new(), label)
@@ -275,6 +305,8 @@ impl Session {
             return Err(crate::EngineError::Other("a LISP routine is already running".into()));
         }
         self.lisp.active = true;
+        // A routine the interface finished (a dialog, a `get…`) left its result: not this one's.
+        self.lisp_last = None;
         let st = self.state()?;
         let before = Some((st.doc.clone(), st.selection.clone()));
         let uid = st.uid;
@@ -291,6 +323,7 @@ impl Session {
             handler: false,
             string_bytes: 0,
             cells_at_start: value::live_cells(),
+            dialog_script: std::mem::take(&mut self.lisp.script).into(),
         }));
         self.lisp_drive();
         if blocking {
@@ -328,7 +361,7 @@ impl Session {
     /// (it is then still running, and later lines say so). Typed LISP longer than one slice never
     /// finished headless (battle test 0.7.7c).
     pub fn lisp_finish(&mut self, limit: std::time::Duration) {
-        let start = std::time::Instant::now();
+        let start = web_time::Instant::now();
         while self.lisp_busy() && start.elapsed() < limit {
             self.lisp_tick();
         }
@@ -420,6 +453,26 @@ impl Session {
                     self.lisp.run = Some(run);
                     return;
                 }
+                Outcome::Wait(Need::Dialog) => {
+                    // A programmatic run takes its scripted tile actions; when they run out
+                    // nobody can answer the dialog: it is cancelled.
+                    if run.blocking {
+                        match run.dialog_script.pop_front() {
+                            Some(ev) => {
+                                if let Err(e) = dialog::queue_event(&mut self.lisp.dcl, ev) {
+                                    self.echo(format!("; dialog: {e}"));
+                                }
+                            }
+                            None => dialog::cancel_unanswered(&mut self.lisp.dcl),
+                        }
+                        run.machine.resume(Value::Nil);
+                        self.lisp.run = Some(run);
+                        continue;
+                    }
+                    run.waiting = Some(Need::Dialog);
+                    self.lisp.run = Some(run);
+                    return;
+                }
                 Outcome::Wait(Need::Get(req)) => {
                     if let Some(v) = run.inputs.pop_front() {
                         run.machine.resume(v);
@@ -464,6 +517,8 @@ impl Session {
     fn lisp_end(&mut self, result: std::result::Result<Value, String>) {
         let Some(run) = self.lisp.run.take() else { return };
         self.lisp.active = false;
+        // Dialogs never outlive their routine.
+        self.lisp.dcl.close_all();
         let mut env = self.lisp.envs.remove(&run.uid).unwrap_or_default();
         self.lisp_flush(&mut env, true);
         self.lisp.envs.insert(run.uid, env);
@@ -629,9 +684,14 @@ impl Session {
 }
 
 pub(crate) use drawing::from_json as drawing_from_json;
-pub(crate) use drawing::load_source;
+pub(crate) use drawing::load_file;
 
 impl Session {
+    /// Whether a LISP routine is running.
+    pub fn lisp_active(&self) -> bool {
+        self.lisp.active
+    }
+
     /// A file APPLOAD loaded, by its name (with or without `.lsp`, any case).
     pub(crate) fn lisp_file(&self, name: &str) -> Option<String> {
         let key = file_key(name);
@@ -643,9 +703,14 @@ impl Session {
     /// the end (programmatic calls).
     pub fn lisp_load(&mut self, name: &str, text: &str, blocking: bool) -> crate::Result<Option<std::result::Result<Value, String>>> {
         self.lisp.files.insert(file_key(name), text.to_string());
+        let shown = std::path::Path::new(name).file_name().and_then(|n| n.to_str()).unwrap_or(name).to_string();
+        // A DCL file is kept for `load_dialog`, not evaluated.
+        if shown.to_ascii_lowercase().ends_with(".dcl") {
+            self.echo(format!("{shown} successfully loaded."));
+            return Ok(Some(Ok(Value::Nil)));
+        }
         let r = self.lisp_eval(text, false, blocking, Vec::new())?;
         if !matches!(r, Some(Err(_))) {
-            let shown = std::path::Path::new(name).file_name().and_then(|n| n.to_str()).unwrap_or(name).to_string();
             self.echo(format!("{shown} successfully loaded."));
         }
         Ok(r)

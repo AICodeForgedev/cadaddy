@@ -9,6 +9,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+# A clock that works in the browser too (std::time::Instant panics on wasm32).
+web-time = "1.1"
 cadaddy-walk3d = { path = "../walk3d" }
 cadaddy-geom = { workspace = true }
 cadaddy-color = { workspace = true }
@@ -35,3 +37,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 [dev-dependencies]
 # Real DXF files for the external reference tests (io is a lower layer).
 cadaddy-io = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Edits of very large selections chunk by chunk on all cores (already used by render and io).
+rayon = { workspace = true }

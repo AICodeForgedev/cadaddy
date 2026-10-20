@@ -87,6 +87,7 @@ pub fn entity_codec() -> Option<&'static EntityCodec> {
 
 /// COMPARE (drawing comparison).
 pub mod compare;
+pub mod convert;
 mod r12;
 pub mod zip;
 
@@ -202,7 +203,7 @@ impl CdySaved {
 /// Append a .cdy save to `path`: the chunks, made durable, then the index and trailer. A file no
 /// longer `from` bytes long is left alone; a failed append cuts the file back to what it was, so
 /// it still holds the previous save.
-fn append_cdy(path: &str, from: u64, bytes: &[u8], index_at: usize) -> Result<()> {
+pub(crate) fn append_cdy(path: &str, from: u64, bytes: &[u8], index_at: usize) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use std::io::{Seek, SeekFrom, Write};
@@ -331,12 +332,17 @@ fn is_dxf(path: &str) -> bool {
 /// The drawing written to `path` with `opts`: through [`IoHooks::write`] when no option is set,
 /// else through the [`write_as`] hook.
 fn write_bytes(s: &Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Vec<u8>> {
+    // A drawing file is the drawing outside the Block Editor; an image is what is shown.
+    let d: &cadaddy_doc::Drawing = if is_drawing_file(path) { s.state()?.drawing() } else { s.doc()? };
+    write_drawing(d, cmd, path, opts)
+}
+
+/// [`write_bytes`] for a drawing that isn't open (DWGCONVERT's).
+fn write_drawing(d: &cadaddy_doc::Drawing, cmd: &str, path: &str, opts: &SaveAs) -> Result<Vec<u8>> {
     let hooks = io().ok_or_else(|| bad(cmd, "file formats are not available in this build"))?;
     if opts.binary && !is_dxf(path) {
         return Err(bad(cmd, "binary applies to DXF files only"));
     }
-    // A drawing file is the drawing outside the Block Editor; an image is what is shown.
-    let d: &cadaddy_doc::Drawing = if is_drawing_file(path) { s.state()?.drawing() } else { s.doc()? };
     let r = if opts.version == Some(Version::R12) {
         // Release 12 DXF: the drawing brought down to what R12 holds first.
         if !is_dxf(path) {
@@ -420,6 +426,7 @@ fn run_script(s: &mut Session, p: &Value) -> Result<Value> {
         let path = _path;
         #[cfg(not(target_arch = "wasm32"))]
         {
+            s.check_load(std::path::Path::new(path), "SCRIPT", Some(("script".into(), json!({ "path": path }))))?;
             let bytes = crate::readfile::read(path).map_err(|e| bad("script", format!("{path}: {e}")))?;
             String::from_utf8_lossy(&bytes).into_owned()
         }
@@ -457,7 +464,7 @@ impl Interactive for ScriptM {
         }
         match run_script(s, &json!({ "path": t })) {
             Ok(_) => Ok(Step::Done),
-            Err(EngineError::BadParams { msg, .. }) => {
+            Err(EngineError::BadParams { msg, .. } | EngineError::Other(msg)) => {
                 s.echo(msg);
                 Ok(Step::Done)
             }
@@ -599,6 +606,10 @@ fn add_read(s: &mut Session, mut drawing: Drawing, binary_dxf: bool, name: &str,
     let loss = read_loss(&drawing);
     let has_path = path.is_some();
     let cdy_saved = path.as_deref().zip(cdy).and_then(|(p, state)| CdySaved::new(p, state));
+    // Table formulas whose values the file didn't keep (a DWG), worked out: what they show isn't
+    // an edit.
+    let mut drawing = drawing;
+    crate::cmd::table::cells::fill_missing_values(&mut drawing);
     let i = s.open_drawing(drawing, &file_name(name), path);
     if let Some(st) = s.docs.get_mut(i) {
         // QSAVE keeps a binary DXF binary.
@@ -816,7 +827,13 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
         Some(r) => r,
         None => {
             let bytes = write_bytes(s, cmd, path, opts)?;
-            (commit_save(s, path, &bytes, store)?, false)
+            let n = commit_save(s, path, &bytes, store)?;
+            // The first DWG/DXF save checks what the file keeps: it reads these bytes back
+            // instead of writing the drawing a second time.
+            if is_exchange_file(path) && KEEP_WRITTEN.get() && s.state().is_ok_and(|st| !st.kept_checked) {
+                JUST_WRITTEN.with(|w| *w.borrow_mut() = Some((path.to_string(), bytes)));
+            }
+            (n, false)
         }
     };
     if is_drawing_file(path)
@@ -905,6 +922,7 @@ pub(crate) fn store(path: &str, bytes: &[u8]) -> Result<()> {
 /// [`store`], keeping the previous drawing file as `.bak` only when `keep_bak`: a DWG copy
 /// (DWGCOPY) keeps none, as its `.bak` would replace the drawing's own.
 pub(crate) fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<()> {
+    crate::writefile::protected(std::path::Path::new(path)).map_err(|e| bad("save", e.to_string()))?;
     // An agent's dry run changes nothing, files included.
     if !crate::agent::writes_allowed() {
         return Err(crate::EngineError::Other(format!("Dry run: {path} was not written.")));
@@ -1172,7 +1190,9 @@ pub fn not_saved(d: &Drawing) -> std::collections::BTreeMap<String, usize> {
 const MODELER_TYPES: [&str; 3] = ["3DSOLID", "REGION", "BODY"];
 
 /// [`not_saved`] for a file saved as `version`. From 2013 on, a 3D solid, region or body the data
-/// store has a record for keeps its geometry and is not counted.
+/// store has a record for keeps its geometry and is not counted; other programs' custom entities
+/// (types outside the DXF Reference's, [`cadaddy_dxf::is_entity_type`]) are kept and not counted
+/// either: a DWG keeps them as they were read (cadaddy-io's `dwg_keep`).
 pub fn not_saved_as(d: &Drawing, version: Version) -> std::collections::BTreeMap<String, usize> {
     let mut out: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     let stored = if version >= Version::R2013 { d.foreign.data_store_entities() } else { Default::default() };
@@ -1180,6 +1200,9 @@ pub fn not_saved_as(d: &Drawing, version: Version) -> std::collections::BTreeMap
     for e in stores.flat_map(|s| s.iter()) {
         if let cadaddy_doc::EntityKind::Unknown(u) = &e.kind {
             if MODELER_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t)) && stored.contains(&e.handle) {
+                continue;
+            }
+            if !cadaddy_dxf::is_entity_type(&u.dxf_type) {
                 continue;
             }
             let n = out.entry(u.dxf_type.clone()).or_insert(0);
@@ -1198,8 +1221,8 @@ pub fn not_saved_message(lost: &std::collections::BTreeMap<String, usize>) -> Op
     Some(format!("Not saved in the DWG file (its writer can't write these object types yet; DXF keeps them): {}", list.join(", ")))
 }
 
-/// Whether saving to `path` leaves out the entities [`not_saved`] counts: DWG does (the DWG
-/// bridge drops types it doesn't know); DXF writes them back as read.
+/// Whether saving to `path` may leave out the entities [`not_saved`] counts: DWG (the DWG writer
+/// reads them its own way); DXF writes them back as read.
 pub fn drops_unknown(path: &str) -> bool {
     // Templates (.dwt) are written as DWG too.
     std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("dwg") || e.eq_ignore_ascii_case("dwt"))
@@ -1220,6 +1243,14 @@ fn report_not_saved(s: &mut Session, r: &mut Value, lost: &std::collections::BTr
     }
 }
 
+thread_local! {
+    /// The bytes of the DWG/DXF file a save just wrote, for [`report_not_kept`] (taken there, or
+    /// dropped at the end of the save).
+    static JUST_WRITTEN: std::cell::RefCell<Option<(String, Vec<u8>)>> = const { std::cell::RefCell::new(None) };
+    /// A save that reports what the file keeps is running (only it wants [`JUST_WRITTEN`]).
+    static KEEP_WRITTEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Save, then report the entities the file couldn't keep (nothing is dropped silently).
 fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> Result<Value>) -> Result<Value> {
     // What the file will hold depends on the version it is saved as (the data store from 2013).
@@ -1228,7 +1259,13 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
     let lost = s.doc().map(|d| not_saved_as(d, version)).unwrap_or_default();
     // Release 12 has no form for some objects (the rest are converted to R12 ones).
     let r12_lost = if version == Version::R12 { s.doc().map(|d| r12::downgrade(d).1).unwrap_or_default() } else { Default::default() };
-    let mut r = run(s, p)?;
+    KEEP_WRITTEN.set(true);
+    let r = run(s, p);
+    KEEP_WRITTEN.set(false);
+    let Ok(mut r) = r else {
+        JUST_WRITTEN.with(|w| w.borrow_mut().take());
+        return r;
+    };
     if !r12_lost.is_empty() && r.get("path").and_then(Value::as_str).is_some_and(is_dxf) {
         let list: Vec<String> = r12_lost.iter().map(|(t, n)| format!("{n} {t}")).collect();
         s.echo(format!("Not saved in the Release 12 DXF file (R12 has no such objects): {}", list.join(", ")));
@@ -1243,6 +1280,7 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
         let opts = save_options("save", p).unwrap_or_default();
         report_not_kept(s, &mut r, &path, opts);
     }
+    JUST_WRITTEN.with(|w| w.borrow_mut().take());
     Ok(r)
 }
 
@@ -1256,10 +1294,13 @@ fn report_not_kept(s: &mut Session, r: &mut Value, path: &str, opts: SaveAs) {
     }
     st.kept_checked = true;
     let d = st.drawing();
-    // Written as the save wrote it (the version and binary DXF asked for).
-    let bytes = match WRITE_AS.get() {
-        Some(write_as) if opts != SaveAs::default() => write_as(d, path, &opts),
-        _ => (hooks.write)(d, path),
+    // Written as the save wrote it (the version and binary DXF asked for): the bytes it wrote.
+    let bytes = match JUST_WRITTEN.with(|w| w.borrow_mut().take()).filter(|(p, _)| p == path) {
+        Some((_, b)) => Ok(b),
+        None => match WRITE_AS.get() {
+            Some(write_as) if opts != SaveAs::default() => write_as(d, path, &opts),
+            _ => (hooks.write)(d, path),
+        },
     };
     let Ok((lost, detail)) = bytes.and_then(|b| kept::check_written(d, path, &b, hooks.read)) else { return };
     if lost.is_empty() && detail.is_empty() {
@@ -1392,6 +1433,7 @@ mod tests {
     fn script_command_runs_a_scr_file() {
         let path = temp_script("run.scr", "; a comment\ncircle 50,25 20\nrectang 0,0 100,60\n");
         let mut s = Session::new();
+        s.settings.trustedpaths = std::env::temp_dir().to_string_lossy().into_owned();
         let r = s.execute("script", &json!({ "path": path })).unwrap();
         assert_eq!(r["lines"], 3);
         assert_eq!(s.state().unwrap().doc.model.len(), 2, "the comment is skipped, circle and rectang draw");
@@ -1400,6 +1442,7 @@ mod tests {
     #[test]
     fn script_command_reports_a_missing_file() {
         let mut s = Session::new();
+        s.settings.trustedpaths = std::env::temp_dir().to_string_lossy().into_owned();
         let e = s.execute("script", &json!({ "path": "no/such/script.scr" })).unwrap_err().to_string();
         assert!(e.contains("no/such/script.scr"), "{e}");
         assert_eq!(s.state().unwrap().doc.model.len(), 0);
@@ -1411,6 +1454,7 @@ mod tests {
         let inner = temp_script("inner.scr", "circle 0,0 1\n");
         let outer = temp_script("outer.scr", &format!("script {}\ncircle 0,0 2\n", json!({ "path": inner })));
         let mut s = Session::new();
+        s.settings.trustedpaths = std::env::temp_dir().to_string_lossy().into_owned();
         let e = s.execute("script", &json!({ "path": outer })).unwrap_err().to_string();
         assert!(e.contains("already running"), "{e}");
     }
@@ -1419,6 +1463,7 @@ mod tests {
     fn typed_script_prompts_for_the_file_then_runs_or_reports_it() {
         let good = temp_script("typed.scr", "circle 0,0 1\n");
         let mut s = Session::new();
+        s.settings.trustedpaths = std::env::temp_dir().to_string_lossy().into_owned();
         s.cmdline("script").unwrap();
         assert!(s.running.is_some(), "SCRIPT asks for the file name");
         s.cmdline(&good).unwrap();

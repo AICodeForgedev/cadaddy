@@ -111,6 +111,9 @@ pub fn purge(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
+            // Right to left in Arabic (rtl.rs).
+            let mut body = crate::rtl::Body::new(ui);
+            let ui = &mut *body;
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut st.held_view, false, crate::tl!("Purgeable Items"));
                 ui.selectable_value(&mut st.held_view, true, crate::tl!("Find Non-Purgeable Items"));
@@ -375,6 +378,9 @@ pub fn color(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
+            // Right to left in Arabic (rtl.rs).
+            let mut body = crate::rtl::Body::new(ui);
+            let ui = &mut *body;
             picked = crate::layers::color_palette(ui, egui::Id::new("color_dialog_palette"), current, true);
         });
     if let Some(c) = picked {

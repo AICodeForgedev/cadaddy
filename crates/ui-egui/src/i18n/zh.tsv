@@ -2067,3 +2067,160 @@
 	Use drawing background	使用图形背景
 	Regenerate Dimensions	重新生成标注
 	Enter layer name for new dimensions (. for the current layer)	输入新标注的图层名(. 表示当前图层)
+	{folder} (folder)	{folder}（文件夹）
+	Add drawings or a folder of them.	请添加图形或包含图形的文件夹。
+	Add Files...	添加文件...
+	Add Folder...	添加文件夹...
+	cancelled	已取消
+	Choose the output folder, or Next to the originals.	请选择输出文件夹，或选择“原文件旁边”。
+	Convert Drawings	转换图形
+	Convert Drawings...	转换图形...
+	Convert drawings...	转换图形...
+	Convert to	转换为
+	Converted	已转换
+	Converted, not all kept	已转换，部分内容未保留
+	Converting files is not available on the web.	网页版无法转换文件。
+	Drawings to convert	要转换的图形
+	Each drawing's own	各图形自身的版本
+	Failed	失败
+	Files already there	已存在的文件
+	Folder:	文件夹：
+	Include subfolders	包括子文件夹
+	Keep a file written over as .bak	将被覆盖的文件保留为 .bak
+	Next to the originals	原文件旁边
+	Open Log	打开日志
+	Or type a file or folder path	或输入文件或文件夹路径
+	Overwrite	覆盖
+	Save to	保存到
+	Skip	跳过
+	Skipped	已跳过
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	没有可转换的图形（.dwg、.dxf、.cdy）。
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	共 {total} 个：已转换 {converted}，已跳过 {skipped}，失败 {failed}
+	DWG drawing (.dwg)	DWG 图形 (.dwg)
+	DXF drawing (.dxf)	DXF 图形 (.dxf)
+	Require a token for control connections (recommended)	控制连接需要令牌（推荐）
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	程序必须先发送 CADaddy 写入仅您可读文件中的令牌，这样其他用户的程序就无法控制它。Claude 连接器会自动读取。下次启动 CADaddy 时生效。
+	Add: Pick points	添加：拾取点
+	Add: Select objects	添加：选择对象
+	Associative	关联
+	Block to create or edit	要创建或编辑的块
+	Bottom left	左下
+	Boundaries	边界
+	Click to set new origin	单击以设置新原点
+	Create separate hatches	创建独立的图案填充
+	Default to boundary extents	默认为边界范围
+	Edit Block Definition	编辑块定义
+	Hatch and Gradient	图案填充和渐变色
+	Hatch origin	图案填充原点
+	Island detection	孤岛检测
+	Normal	普通
+	Open in Block Editor	在块编辑器中打开
+	Outer	外部
+	Reinitialize	重新初始化
+	Specified origin	指定的原点
+	Use current origin	使用当前原点
+	Building models (IFC)	建筑模型 (IFC)
+	Building model (IFC4)	建筑模型 (IFC4)
+	3D printing (3MF)	3D 打印 (3MF)
+	Include the drawing (the active drawing as a DXF file)	包含图形（当前图形，DXF 文件）
+	Your account, home folder and computer name are always left out.	始终不包含您的帐户、主文件夹和计算机名称。
+	Files in the report	报告中的文件
+	Send to Redline	发送到 Redline
+	Import Redline Markups	导入 Redline 批注
+	Import Redline Markups...	导入 Redline 批注...
+	Open a Program?	打开程序？
+	This link opens a program or script, not a document:	此链接打开的是程序或脚本，而不是文档：
+	Open it only if you trust the drawing and know what it runs.	仅当您信任该图形并了解它会运行什么时才打开。
+	Open Anyway	仍然打开
+	Report a security problem	报告安全问题
+	Load This File?	加载此文件？
+	This file isn't in a trusted folder:	此文件不在受信任的文件夹中：
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	LISP 例程和脚本可以更改图形和文件。仅当您信任其来源时才加载。
+	Don't Load	不加载
+	Load Once	加载一次
+	Always Load from This Folder	始终从此文件夹加载
+	Adds {folder} to TRUSTEDPATHS	将 {folder} 添加到 TRUSTEDPATHS
+	Allow Loading a File	允许加载文件
+	Plot Stamp	打印戳记
+	Plot stamp fields	戳记字段
+	Drawing name	图形名称
+	Layout name	布局名称
+	Date and Time	日期和时间
+	Device name	设备名称
+	Paper size	图纸尺寸
+	Plot scale	打印比例
+	No login or computer name is ever stamped.	绝不会打印登录名或计算机名。
+	User defined fields	用户定义的字段
+	One per line, up to {n}.	每行一个，最多 {n} 个。
+	Stamp model space plots	为模型空间打印加戳记
+	Stamp this layout's plots	为此布局的打印加戳记
+	Location and offset	位置和偏移
+	Location	位置
+	Bottom right	右下
+	Top left	左上
+	Top right	右上
+	Upside-down	上下颠倒
+	X offset	X 偏移
+	Y offset	Y 偏移
+	Offset relative to	偏移相对于
+	Printable area	可打印区域
+	Paper border	图纸边界
+	Text properties	文字特性
+	Font	字体
+	Single line plot stamp	单行打印戳记
+	Units	单位
+	Inches	英寸
+	Millimeters	毫米
+	Log file location	日志文件位置
+	Create a log file	创建日志文件
+	The log is kept for this session, never saved with the drawing.	日志仅用于本次会话，绝不会随图形保存。
+	Action Macro Manager...	动作宏管理器...
+	Action Macros	动作宏
+	Action Recorder	动作录制器
+	Insert Base Point	插入基点
+	Insert Message	插入消息
+	Play Action Macro	播放动作宏
+	Play...	播放...
+	Record	录制
+	Request User Input	请求用户输入
+	Stop	停止
+	Action Macro Manager	动作宏管理器
+	Recording…	正在录制…
+	No action macros yet: Record, do the work, then Stop.	还没有动作宏：录制，完成操作，然后停止。
+	Play	播放
+	Message: {text}	消息：{text}
+	Base point (asked for)	基点（播放时询问）
+	(Enter)	（回车）
+	Ask for this input when the macro plays	播放宏时询问此输入
+	Customize Interface	自定义界面
+	Customize User Interface...	自定义用户界面...
+	Interface...	界面...
+	Customize User Interface	自定义用户界面
+	Quick Access Toolbar	快速访问工具栏
+	Add a command	添加命令
+	Reset Quick Access Toolbar	重置快速访问工具栏
+	Built-in panels shown (untick to hide):	显示的内置面板（取消勾选以隐藏）：
+	Your panels on built-in tabs:	内置选项卡上的自定义面板：
+	Tab	选项卡
+	New panel name	新面板名称
+	Add Panel	添加面板
+	Your tabs:	自定义选项卡：
+	Remove Tab	删除选项卡
+	New tab name	新选项卡名称
+	Add Tab	添加选项卡
+	Edit Keyboard Shortcuts...	编辑键盘快捷键...
+	Remove Panel	删除面板
+	Command or LISP macro, e.g. (command "line")	命令或 LISP 宏，例如 (command "line")
+	Hatch Editor	图案填充编辑器
+	Table Cell	表格单元
+	Rows & Columns	行和列
+	Merge	合并
+	Open/Save	打开/保存
+	Attributes	属性
+	Spell Check	拼写检查
+	Formula	公式
+	Edit Source	编辑源
+	Close Array	关闭阵列
+	Manage Attributes	管理属性
+	Dialog State	对话框状态
+	Dialog Action	对话框操作

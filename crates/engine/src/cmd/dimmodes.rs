@@ -31,12 +31,12 @@ fn run_dimregen(s: &mut Session, _p: &Value) -> Result<Value> {
         for e in store.iter() {
             let EntityKind::Dimension(dm) = &e.kind else { continue };
             let nd = if dm.assoc.is_empty() {
-                let mut x = dm.clone();
+                let mut x = (**dm).clone();
                 x.block = None;
                 x
             } else {
                 let x = crate::assoc::regen(dm, &d);
-                let mut was = dm.clone();
+                let mut was = (**dm).clone();
                 was.block = None;
                 if x != was {
                     updated += 1;
@@ -49,7 +49,7 @@ fn run_dimregen(s: &mut Session, _p: &Value) -> Result<Value> {
     }
     let dm = s.doc_mut()?;
     for (h, nd) in changes {
-        dm.modify_entity(h, |e| e.kind = EntityKind::Dimension(nd))?;
+        dm.modify_entity(h, |e| e.kind = EntityKind::Dimension(Box::new(nd)))?;
     }
     s.echo(format!("{regenerated} dimensions regenerated, {updated} put back on their objects."));
     Ok(json!({ "updated": updated, "regenerated": regenerated }))

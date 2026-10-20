@@ -203,6 +203,31 @@ fn recalc_tables_of(d: &mut Drawing, style: &str) {
     }
 }
 
+/// Work out the formulas of the tables whose formula cells came without their values (a DWG's
+/// writer can lose the values it keeps in FIELD objects; the formulas themselves come back), so a
+/// drawing opens showing them. How many tables.
+pub(crate) fn fill_missing_values(d: &mut Drawing) -> usize {
+    let hs: Vec<(Handle, String)> = std::iter::once(&d.model)
+        .chain(d.layouts.iter().map(|l| &l.entities))
+        .flat_map(|st| st.iter())
+        .filter_map(|e| match &e.kind {
+            EntityKind::Table(t) if t.cells.iter().flatten().any(|c| c.formula.is_some() && c.text.trim().is_empty()) => {
+                Some((e.handle, t.style.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    for (h, style) in &hs {
+        let st = d.table_styles.iter().find(|s| s.name.eq_ignore_ascii_case(style)).cloned().unwrap_or_default();
+        let _ = d.modify_entity(*h, |e| {
+            if let EntityKind::Table(t) = &mut e.kind {
+                formula::recalc(t, &st);
+            }
+        });
+    }
+    hs.len()
+}
+
 /// Define, change or delete cell style `p.name` of a table style.
 pub(crate) fn define_cell_style(d: &mut Drawing, p: &Value) -> Result<Value> {
     let id = "tablestyle.cellstyle";

@@ -3,10 +3,13 @@
 //!
 //! The bundle holds the log files (the current run's and the two before it), the last commands,
 //! the versions, the operating system and the graphics adapter, and on request a summary of the
-//! open drawings: counts only (objects by type, layers, blocks…), no geometry. Names (file
-//! paths, layer, block, style and layout names, what was typed after a command) are left out
-//! unless the user asks for them: they are replaced by placeholders wherever they appear,
-//! including in the logs. The home folder and the user's account name are always replaced.
+//! open drawings (counts only: objects by type, layers, blocks…, no geometry) and the drawing
+//! itself (only when the user ticks it). Names (file paths, layer, block, style and layout names,
+//! what was typed after a command) are left out unless the user asks for them: they are replaced
+//! by placeholders wherever they appear, including in the logs. Who the user is — the home
+//! folder (either slash, any case), the account name and the computer's name — is always
+//! replaced, names or not. The dialog lists the report's files before it is saved. See
+//! PRIVACY.md.
 //!
 //! The watchdog notices the UI thread staying inside one frame for more than [`STALL`] and
 //! writes to the log what it was doing (the trail of activities since the frame began: the
@@ -63,18 +66,40 @@ pub struct Choices {
     pub drawing: bool,
     /// Names: file paths, layer, block, style and layout names, typed input.
     pub names: bool,
+    /// The active drawing itself, as a DXF file.
+    pub file: bool,
 }
 
-/// Replaces private text with placeholders, longest first so a path goes before its file name.
+/// Who the user is, as it can show up in a log or a path: always replaced in a report.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Identity {
+    /// Home folders (`HOME`, `USERPROFILE`).
+    pub homes: Vec<String>,
+    /// The account name.
+    pub user: Option<String>,
+    /// The computer's name (often the person's: "Sams-MacBook-Pro").
+    pub host: Option<String>,
+}
+
+impl Identity {
+    /// This computer's.
+    pub fn current() -> Identity {
+        Identity { homes: home_dirs(), user: user_name(), host: host_name() }
+    }
+}
+
+/// Replaces private text with placeholders, longest first so a path goes before its file name;
+/// then the account and computer names wherever they stand as a word, however short.
 struct Redact {
     pairs: Vec<(String, &'static str)>,
+    words: Vec<(String, &'static str)>,
 }
 
 /// Table names every drawing has: not private, and replacing them would garble the log.
 const COMMON: &[&str] = &["standard", "continuous", "bylayer", "byblock", "defpoints", "model", "annotative", "iso-25", "layout1", "layout2"];
 
 impl Redact {
-    fn new(app: &CadApp, names: bool) -> Redact {
+    fn new(app: &CadApp, names: bool, who: &Identity) -> Redact {
         let mut pairs: Vec<(String, &'static str)> = Vec::new();
         let mut add = |s: &str, with: &'static str| {
             let s = s.trim();
@@ -82,15 +107,13 @@ impl Redact {
                 pairs.push((s.to_string(), with));
             }
         };
-        if names {
-            // Only the account is hidden: the paths and names are what the user agreed to show.
-            for home in home_dirs() {
-                add(&home, "~");
+        // Who the user is, always (with names, the paths and names are what they agreed to show).
+        for home in &who.homes {
+            for v in path_forms(home) {
+                add(&v, "~");
             }
-            if let Some(u) = user_name() {
-                add(&u, "<user>");
-            }
-        } else {
+        }
+        if !names {
             let mut paths: Vec<String> = app.session.docs.iter().filter_map(|d| d.path.clone()).collect();
             paths.extend(app.ui.recent_files.iter().cloned());
             for p in &paths {
@@ -112,15 +135,21 @@ impl Redact {
                     add(&n, "<name>");
                 }
             }
-            for home in home_dirs() {
-                add(&home, "~");
-            }
-            if let Some(u) = user_name() {
-                add(&u, "<user>");
-            }
         }
         pairs.sort_by_key(|(p, _)| std::cmp::Reverse(p.len()));
-        Redact { pairs }
+        let mut words: Vec<(String, &'static str)> = Vec::new();
+        if let Some(h) = who.host.as_deref().map(str::trim).filter(|h| !h.is_empty()) {
+            // "sams-macbook-pro.local" and "sams-macbook-pro".
+            words.push((h.to_string(), "<computer>"));
+            if let Some(short) = h.split('.').next().filter(|s| *s != h && !s.is_empty()) {
+                words.push((short.to_string(), "<computer>"));
+            }
+        }
+        if let Some(u) = who.user.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+            words.push((u.to_string(), "<user>"));
+        }
+        words.sort_by_key(|(w, _)| std::cmp::Reverse(w.len()));
+        Redact { pairs, words }
     }
 
     fn apply(&self, text: &str) -> String {
@@ -130,8 +159,52 @@ impl Redact {
                 out = out.replace(p.as_str(), with);
             }
         }
+        for (w, with) in &self.words {
+            out = replace_word(&out, w, with);
+        }
         out
     }
+}
+
+/// A home folder as it may be written: as given, with the other slash, and (Windows paths are
+/// case-blind) in lower and upper case.
+fn path_forms(home: &str) -> Vec<String> {
+    let mut v = vec![home.to_string(), home.replace('\\', "/"), home.replace('/', "\\")];
+    if home.contains('\\') || home.get(1..2) == Some(":") {
+        let more: Vec<String> = v.iter().flat_map(|p| [p.to_lowercase(), p.to_uppercase()]).collect();
+        v.extend(more);
+    }
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// `word` replaced wherever it stands alone (not inside a longer word or name), ignoring case.
+fn replace_word(text: &str, word: &str, with: &str) -> String {
+    let lower = text.to_lowercase();
+    let w = word.to_lowercase();
+    // Lower-casing can change byte lengths (rare letters): then match as written only.
+    let (hay, needle) = if lower.len() == text.len() && w.len() == word.len() { (lower.as_str(), w.as_str()) } else { (text, word) };
+    if needle.is_empty() {
+        return text.to_string();
+    }
+    let part = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    let mut from = 0;
+    while let Some(i) = hay.get(from..).and_then(|h| h.find(needle)).map(|i| i + from) {
+        let end = i + needle.len();
+        let before = text.get(..i).and_then(|t| t.chars().next_back());
+        let after = text.get(end..).and_then(|t| t.chars().next());
+        if !part(before) && !part(after) {
+            out.push_str(text.get(last..i).unwrap_or_default());
+            out.push_str(with);
+            last = end;
+        }
+        from = end;
+    }
+    out.push_str(text.get(last..).unwrap_or_default());
+    out
 }
 
 fn home_dirs() -> Vec<String> {
@@ -140,6 +213,17 @@ fn home_dirs() -> Vec<String> {
 
 fn user_name() -> Option<String> {
     ["USER", "USERNAME", "LOGNAME"].iter().find_map(|k| std::env::var(k).ok()).filter(|u| !u.trim().is_empty())
+}
+
+/// The computer's name: `COMPUTERNAME`/`HOSTNAME`, else what `hostname` prints.
+fn host_name() -> Option<String> {
+    let env = ["COMPUTERNAME", "HOSTNAME"].iter().find_map(|k| std::env::var(k).ok());
+    #[cfg(not(target_arch = "wasm32"))]
+    let env = env.or_else(|| {
+        let out = std::process::Command::new("hostname").output().ok()?;
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    });
+    env.filter(|h| !h.trim().is_empty())
 }
 
 /// The names a drawing holds: its tables, blocks, layouts, views, groups.
@@ -251,8 +335,13 @@ fn log_tail(path: &Path) -> Option<String> {
 
 /// The files of the bundle, by name.
 pub fn entries(app: &CadApp, choices: Choices) -> Vec<(String, Vec<u8>)> {
+    entries_for(app, choices, &Identity::current())
+}
+
+/// The bundle's files with who the user is given (the tests' made-up identity).
+pub fn entries_for(app: &CadApp, choices: Choices, who: &Identity) -> Vec<(String, Vec<u8>)> {
     let host = host();
-    let redact = Redact::new(app, choices.names);
+    let redact = Redact::new(app, choices.names, who);
     let mut out: Vec<(String, String)> = Vec::new();
     let made = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     out.push((
@@ -262,10 +351,11 @@ pub fn entries(app: &CadApp, choices: Choices) -> Vec<(String, Vec<u8>)> {
              To report the problem, attach this file to an email to {} and say what happened.\n\n\
              system.txt   versions, operating system, graphics adapter\n\
              commands.txt the last commands{}\n\
-             logs/        the log of this run and the two before it\n{}{}",
+             logs/        the log of this run and the two before it\n{}{}{}",
             crate::support::FEEDBACK_EMAIL,
             if choices.names { " with what was typed" } else { " (command names only)" },
             if choices.drawing { "drawings.txt what the open drawings hold (counts only)\n" } else { "" },
+            if choices.file { "drawing.dxf  the active drawing, as the user chose to include it\n" } else { "" },
             if choices.names {
                 "\nNames (files, layers, blocks…) are included.\n"
             } else {
@@ -286,14 +376,47 @@ pub fn entries(app: &CadApp, choices: Choices) -> Vec<(String, Vec<u8>)> {
         }
     }
     // What CADaddy wrote itself without names (versions, counts by type) is left as it is: a
-    // layer called "Line" mustn't turn the line count into a placeholder.
+    // layer called "Line" mustn't turn the line count into a placeholder. Who the user is goes
+    // from every file.
     let own = |n: &str| !choices.names && matches!(n, "README.txt" | "system.txt" | "drawings.txt");
-    out.into_iter().map(|(n, t)| if own(&n) { (n, t.into_bytes()) } else { (n, redact.apply(&t).into_bytes()) }).collect()
+    let mut files: Vec<(String, Vec<u8>)> = out
+        .into_iter()
+        .map(|(n, t)| {
+            let t = if own(&n) { Redact { pairs: Vec::new(), words: redact.words.clone() }.apply(&t) } else { redact.apply(&t) };
+            (n, t.into_bytes())
+        })
+        .collect();
+    // The drawing itself, only when ticked: as it is (its contents are what the user chose to send).
+    if choices.file {
+        let dxf = app.session.doc().ok().map(|d| match cadaddy_engine::cmd::file::io() {
+            Some(io) => (io.write)(d, "drawing.dxf").map_err(|e| e.to_string()),
+            None => Err("no file formats in this build".to_string()),
+        });
+        match dxf {
+            Some(Ok(bytes)) => files.push(("drawing.dxf".into(), bytes)),
+            Some(Err(e)) => files.push(("drawing.txt".into(), format!("The drawing couldn't be written: {e}\n").into_bytes())),
+            None => {}
+        }
+    }
+    files
+}
+
+/// The report's files and their sizes, as the dialog lists them before saving.
+pub fn file_list(app: &CadApp, choices: Choices) -> Vec<(String, usize)> {
+    entries(app, choices).into_iter().map(|(n, b)| (n, b.len())).collect()
 }
 
 /// The bundle as a ZIP file.
 pub fn bundle(app: &CadApp, choices: Choices) -> Result<Vec<u8>, String> {
     cadaddy_engine::cmd::file::zip::write(&entries(app, choices))
+}
+
+fn human_size(bytes: usize) -> String {
+    match bytes {
+        0..1024 => format!("{bytes} B"),
+        1024..1_048_576 => format!("{:.1} KB", bytes as f64 / 1024.0),
+        _ => format!("{:.1} MB", bytes as f64 / 1_048_576.0),
+    }
 }
 
 /// The UI thread's frames as the watchdog sees them.
@@ -426,9 +549,12 @@ pub fn start_watchdog() {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct DialogState {
     choices: Choices,
+    /// The report's files for `listed` (worked out again when the choices change).
+    files: Vec<(String, usize)>,
+    listed: Option<Choices>,
 }
 
 fn dialog_id() -> egui::Id {
@@ -452,6 +578,19 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         ui.checkbox(&mut st.choices.names, crate::tl!("Names: file paths, layer and block names, typed text"));
         if !st.choices.names {
             ui.label(egui::RichText::new(crate::tl!("Names are replaced by placeholders, also in the log.")).small().color(t.text_dim));
+        }
+        ui.checkbox(&mut st.choices.file, crate::tl!("Include the drawing (the active drawing as a DXF file)"));
+        ui.label(
+            egui::RichText::new(crate::tl!("Your account, home folder and computer name are always left out.")).small().color(t.text_dim),
+        );
+        ui.add_space(6.0);
+        if st.listed != Some(st.choices) {
+            st.files = file_list(app, st.choices);
+            st.listed = Some(st.choices);
+        }
+        ui.label(egui::RichText::new(crate::tl!("Files in the report")).strong());
+        for (name, size) in &st.files {
+            ui.label(egui::RichText::new(format!("{name}  ({})", human_size(*size))).monospace().small());
         }
         ui.add_space(6.0);
         save = ui.button(crate::tl!("Save Report...")).clicked();
@@ -516,7 +655,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cadaddy-diag-{}", std::process::id()));
         let app = app_with_secrets(&dir.join("logs"));
 
-        let plain = entries(&app, Choices { drawing: true, names: false });
+        let plain = entries(&app, Choices { drawing: true, names: false, file: false });
         let all = text(&plain);
         assert!(!all.contains("SECRET"), "{all}");
         let files: Vec<&str> = plain.iter().map(|(n, _)| n.as_str()).collect();
@@ -526,7 +665,7 @@ mod tests {
         assert!(all.contains("opened <path>") && all.contains("layer <name> has"), "{all}");
         assert!(all.contains("\n-layer\n") && all.contains("\ntext\n"), "command names only: {all}");
 
-        let named = text(&entries(&app, Choices { drawing: true, names: true }));
+        let named = text(&entries(&app, Choices { drawing: true, names: true, file: false }));
         assert!(
             named.contains("SECRETLAYER")
                 && named.contains("SECRETBLOCK")
@@ -537,9 +676,61 @@ mod tests {
         // No drawing summary unless asked; the ZIP reads back.
         let zip = bundle(&app, Choices::default()).unwrap();
         let read = cadaddy_engine::cmd::file::zip::read(&zip).unwrap();
-        assert!(!read.iter().any(|(n, _)| n == "drawings.txt"));
+        assert!(!read.iter().any(|(n, _)| n == "drawings.txt" || n == "drawing.dxf"));
         assert!(!text(&read).contains("SECRET"));
+
+        // The drawing itself only when ticked; the dialog's list is the report's files.
+        cadaddy_engine::cmd::file::set_io(cadaddy_engine::cmd::file::IoHooks {
+            read: |_, _| Err("not in this test".into()),
+            write: |_, _| Ok(b"0\nSECTION\n".to_vec()),
+            plot: None,
+            read_pdf: None,
+        });
+        let with = Choices { file: true, ..Choices::default() };
+        let listed: Vec<String> = file_list(&app, with).into_iter().map(|(n, _)| n).collect();
+        assert!(listed.contains(&"drawing.dxf".to_string()), "{listed:?}");
+        assert_eq!(listed, entries(&app, with).into_iter().map(|(n, _)| n).collect::<Vec<_>>());
         let _ = std::fs::remove_dir_all(&dir);
+
+        // Made in a home folder, by a user with a short name, on a computer named after them: none
+        // of it in the report, names or not; words that merely contain the name stay.
+        let dir = std::env::temp_dir().join(format!("cadaddy-diag-home-{}", std::process::id()));
+        let logs = dir.join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let mut app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+        app.run("line", json!({ "points": [[0, 0], [1, 1]] })).unwrap();
+        app.session.docs[0].path = Some("/Users/jo/Projects/Plan.dxf".into());
+        app.session.docs[0].title = "Plan.dxf".into();
+        app.ui.recent_files = vec!["C:\\Users\\Jo\\Desktop\\Old.dwg".into()];
+        app.cmd.history = vec!["line".into(), "open /Users/jo/Projects/Plan.dxf".into()];
+        std::fs::write(
+            logs.join("cadaddy.log"),
+            "INFO opened /Users/jo/Projects/Plan.dxf on Jos-MBP.local\nINFO started by jo\nWARN settings c:/users/jo/AppData/x.json\nINFO Jos-MBP ready; total 3 jobs, joined\n",
+        )
+        .unwrap();
+        set_host(HostInfo { version: "cadaddy test".into(), gpu: "Test GPU".into(), log_dir: Some(logs) });
+        let who = Identity { homes: vec!["/Users/jo".into(), "C:\\Users\\Jo".into()], user: Some("jo".into()), host: Some("Jos-MBP.local".into()) };
+        for names in [false, true] {
+            let all = text(&entries_for(&app, Choices { drawing: true, names, file: false }, &who));
+            let lower = all.to_lowercase();
+            assert!(!lower.contains("users/jo") && !lower.contains("users\\jo"), "names {names}: {all}");
+            assert!(!lower.contains("jos-mbp"), "the computer's name, names {names}: {all}");
+            assert!(!all.contains(" jo\n") && !all.contains("by jo"), "the account, names {names}: {all}");
+            assert!(all.contains("<user>") && all.contains("<computer>") && all.contains("~/"), "names {names}: {all}");
+            assert!(all.contains("total 3 jobs, joined"), "words containing the name stay: {all}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn whole_words_and_path_forms() {
+        assert_eq!(replace_word("jo, Jo. jobs ajo jo_x jo", "jo", "<user>"), "<user>, <user>. jobs ajo jo_x <user>");
+        assert_eq!(replace_word("", "jo", "<user>"), "");
+        let forms = path_forms("C:\\Users\\Sam");
+        for f in ["C:\\Users\\Sam", "C:/Users/Sam", "c:/users/sam", "c:\\users\\sam"] {
+            assert!(forms.contains(&f.to_string()), "{f}: {forms:?}");
+        }
+        assert!(path_forms("/home/sam").contains(&"\\home\\sam".to_string()));
     }
 
     #[test]
@@ -555,7 +746,7 @@ mod tests {
 
     #[test]
     fn home_and_account_are_always_hidden() {
-        let r = Redact { pairs: vec![("/home/someone".into(), "~"), ("someone".into(), "<user>")] };
+        let r = Redact { pairs: vec![("/home/someone".into(), "~")], words: vec![("someone".into(), "<user>")] };
         assert_eq!(r.apply("log /home/someone/x.dxf by someone"), "log ~/x.dxf by <user>");
     }
 

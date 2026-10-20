@@ -31,7 +31,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(
                 "{mode?: \"length\" (default) | \"area\", handles? | layers?: \"E-*,P-*\" (wildcards; default: every object in the current space), waste?: percent added (default 0; the waste column is left out at 0), nested?: bool (default true: shapes inside block references, arrays and xrefs count, on the layer they are drawn on), clipped?: bool (default true: an XCLIP boundary limits what counts, as drawn; false counts whole blocks), file?: path (.csv; .txt tab-separated), at?: [x,y] (insert a table), title?} → {mode, unit, rows: [{layer, objects, drawing, real, withWaste}], total: {objects, drawing, real, withWaste}, columns, file?, table?}",
             )
-            .noundo()
+            // Undoable: `at` inserts a table, and U must take it away (the waste percentage it
+            // remembers in the header goes back with it).
             .interactive(|_| Ok(Box::new(TakeoffM::default()))),
     ]
 }

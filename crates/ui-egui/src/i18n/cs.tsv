@@ -2164,3 +2164,160 @@ menu	Modify	Modifikace
 	Use drawing background	Použít pozadí výkresu
 	Regenerate Dimensions	Regenerovat kóty
 	Enter layer name for new dimensions (. for the current layer)	Zadejte název hladiny pro nové kóty (. pro aktuální hladinu)
+	{folder} (folder)	{folder} (složka)
+	Add drawings or a folder of them.	Přidejte výkresy nebo složku s nimi.
+	Add Files...	Přidat soubory...
+	Add Folder...	Přidat složku...
+	cancelled	zrušeno
+	Choose the output folder, or Next to the originals.	Vyberte výstupní složku, nebo Vedle originálů.
+	Convert Drawings	Převést výkresy
+	Convert Drawings...	Převést výkresy...
+	Convert drawings...	Převést výkresy...
+	Convert to	Převést na
+	Converted	Převedeno
+	Converted, not all kept	Převedeno, ne vše zachováno
+	Converting files is not available on the web.	Převod souborů není na webu k dispozici.
+	Drawings to convert	Výkresy k převodu
+	Each drawing's own	Verze každého výkresu
+	Failed	Selhalo
+	Files already there	Již existující soubory
+	Folder:	Složka:
+	Include subfolders	Včetně podsložek
+	Keep a file written over as .bak	Přepsaný soubor zachovat jako .bak
+	Next to the originals	Vedle originálů
+	Open Log	Otevřít protokol
+	Or type a file or folder path	Nebo zadejte cestu k souboru či složce
+	Overwrite	Přepsat
+	Save to	Uložit do
+	Skip	Přeskočit
+	Skipped	Přeskočeno
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	Žádné výkresy (.dwg, .dxf, .cdy) k převodu.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{converted} převedeno, {skipped} přeskočeno, {failed} selhalo z {total}
+	DWG drawing (.dwg)	Výkres DWG (.dwg)
+	DXF drawing (.dxf)	Výkres DXF (.dxf)
+	Require a token for control connections (recommended)	Vyžadovat token pro řídicí připojení (doporučeno)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Programy musí nejprve poslat token, který CADaddy zapisuje do souboru čitelného jen pro vás, takže programy jiných uživatelů jej nemohou ovládat. Konektor Claude ho čte za vás. Projeví se při příštím spuštění CADaddy.
+	Add: Pick points	Přidat: Vybrat body
+	Add: Select objects	Přidat: Vybrat objekty
+	Associative	Asociativní
+	Block to create or edit	Blok k vytvoření nebo úpravě
+	Bottom left	Vlevo dole
+	Boundaries	Hranice
+	Click to set new origin	Klepnutím nastavte nový počátek
+	Create separate hatches	Vytvořit samostatné šrafy
+	Default to boundary extents	Výchozí podle rozsahu hranice
+	Edit Block Definition	Upravit definici bloku
+	Hatch and Gradient	Šrafy a přechod
+	Hatch origin	Počátek šraf
+	Island detection	Detekce ostrovů
+	Normal	Normální
+	Open in Block Editor	Otevřít v editoru bloků
+	Outer	Vnější
+	Run Script...	Spustit skript...
+	Specified origin	Zadaný počátek
+	Use current origin	Použít aktuální počátek
+	Building models (IFC)	Modely budov (IFC)
+	Building model (IFC4)	Model budovy (IFC4)
+	3D printing (3MF)	3D tisk (3MF)
+	Include the drawing (the active drawing as a DXF file)	Přiložit výkres (aktivní výkres jako soubor DXF)
+	Your account, home folder and computer name are always left out.	Váš účet, domovská složka a název počítače jsou vždy vynechány.
+	Files in the report	Soubory v hlášení
+	Send to Redline	Odeslat do Redline
+	Import Redline Markups	Importovat poznámky z Redline
+	Import Redline Markups...	Importovat poznámky z Redline...
+	Open a Program?	Otevřít program?
+	This link opens a program or script, not a document:	Tento odkaz otevírá program nebo skript, ne dokument:
+	Open it only if you trust the drawing and know what it runs.	Otevřete jej, jen pokud výkresu důvěřujete a víte, co spouští.
+	Open Anyway	Přesto otevřít
+	Report a security problem	Nahlásit bezpečnostní problém
+	Load This File?	Načíst tento soubor?
+	This file isn't in a trusted folder:	Tento soubor není v důvěryhodné složce:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	Rutiny LISP a skripty mohou měnit výkresy a soubory. Načtěte jej, jen pokud důvěřujete jeho původu.
+	Don't Load	Nenačítat
+	Load Once	Načíst jednou
+	Always Load from This Folder	Vždy načítat z této složky
+	Adds {folder} to TRUSTEDPATHS	Přidá {folder} do TRUSTEDPATHS
+	Allow Loading a File	Povolit načtení souboru
+	Plot Stamp	Razítko tisku
+	Plot stamp fields	Pole razítka
+	Drawing name	Název výkresu
+	Layout name	Název rozvržení
+	Date and Time	Datum a čas
+	Device name	Název zařízení
+	Paper size	Velikost papíru
+	Plot scale	Měřítko tisku
+	No login or computer name is ever stamped.	Přihlašovací jméno ani název počítače se nikdy netiskne.
+	User defined fields	Uživatelská pole
+	One per line, up to {n}.	Jedno na řádek, nejvýše {n}.
+	Stamp model space plots	Razítkovat tisky modelového prostoru
+	Stamp this layout's plots	Razítkovat tisky tohoto rozvržení
+	Location and offset	Umístění a odsazení
+	Location	Umístění
+	Bottom right	Vpravo dole
+	Top left	Vlevo nahoře
+	Top right	Vpravo nahoře
+	Upside-down	Vzhůru nohama
+	X offset	Odsazení X
+	Y offset	Odsazení Y
+	Offset relative to	Odsazení vzhledem k
+	Printable area	Tisknutelná oblast
+	Paper border	Okraj papíru
+	Text properties	Vlastnosti textu
+	Font	Písmo
+	Single line plot stamp	Razítko na jednom řádku
+	Units	Jednotky
+	Inches	Palce
+	Millimeters	Milimetry
+	Log file location	Umístění souboru protokolu
+	Create a log file	Vytvořit soubor protokolu
+	The log is kept for this session, never saved with the drawing.	Protokol platí pro tuto relaci a nikdy se neukládá s výkresem.
+	Action Macro Manager...	Správce akčních maker...
+	Action Macros	Akční makra
+	Action Recorder	Záznamník akcí
+	Insert Base Point	Vložit základní bod
+	Insert Message	Vložit zprávu
+	Play Action Macro	Přehrát akční makro
+	Play...	Přehrát...
+	Record	Zaznamenat
+	Request User Input	Vyžádat vstup uživatele
+	Stop	Zastavit
+	Action Macro Manager	Správce akčních maker
+	Recording…	Záznam…
+	No action macros yet: Record, do the work, then Stop.	Zatím žádná akční makra: Zaznamenat, provést práci, pak Zastavit.
+	Play	Přehrát
+	Message: {text}	Zpráva: {text}
+	Base point (asked for)	Základní bod (vyžádán)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	Při přehrávání makra se zeptat na tento vstup
+	Customize Interface	Přizpůsobit rozhraní
+	Customize User Interface...	Přizpůsobit uživatelské rozhraní...
+	Interface...	Rozhraní...
+	Customize User Interface	Přizpůsobit uživatelské rozhraní
+	Quick Access Toolbar	Panel nástrojů Rychlý přístup
+	Add a command	Přidat příkaz
+	Reset Quick Access Toolbar	Obnovit panel Rychlý přístup
+	Built-in panels shown (untick to hide):	Zobrazené vestavěné panely (zrušením zaškrtnutí skrýt):
+	Your panels on built-in tabs:	Vaše panely na vestavěných kartách:
+	Tab	Karta
+	New panel name	Název nového panelu
+	Add Panel	Přidat panel
+	Your tabs:	Vaše karty:
+	Remove Tab	Odebrat kartu
+	New tab name	Název nové karty
+	Add Tab	Přidat kartu
+	Edit Keyboard Shortcuts...	Upravit klávesové zkratky...
+	Remove Panel	Odebrat panel
+	Command or LISP macro, e.g. (command "line")	Příkaz nebo makro LISP, např. (command "line")
+	Hatch Editor	Editor šraf
+	Table Cell	Buňka tabulky
+	Rows & Columns	Řádky a sloupce
+	Merge	Sloučit
+	Open/Save	Otevřít/Uložit
+	Attributes	Atributy
+	Spell Check	Kontrola pravopisu
+	Formula	Vzorec
+	Edit Source	Upravit zdroj
+	Close Array	Zavřít pole
+	Manage Attributes	Spravovat atributy
+	Dialog State	Stav dialogu
+	Dialog Action	Akce dialogu

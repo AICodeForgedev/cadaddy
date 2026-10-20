@@ -7,7 +7,7 @@ use cadaddy_doc::*;
 use cadaddy_geom::Vec3;
 
 fn mleaders(d: &Drawing) -> Vec<&MLeader> {
-    d.model.iter().filter_map(|e| if let EntityKind::MLeader(m) = &e.kind { Some(m) } else { None }).collect()
+    d.model.iter().filter_map(|e| if let EntityKind::MLeader(m) = &e.kind { Some(&**m) } else { None }).collect()
 }
 
 fn drawing() -> (Drawing, MLeader) {
@@ -56,7 +56,7 @@ fn drawing() -> (Drawing, MLeader) {
         arrow: Some("_DOT".into()),
         text_frame: true,
     };
-    d.add(&Space::Model, Common::default(), EntityKind::MLeader(m.clone())).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::MLeader(Box::new(m.clone()))).unwrap();
     (d, m)
 }
 

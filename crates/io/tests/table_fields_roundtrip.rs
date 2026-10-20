@@ -21,7 +21,7 @@ fn drawing() -> (Drawing, Handle) {
         text_height: 0.18,
         ..Table::default()
     };
-    let h = d.add(&Space::Model, Common::default(), EntityKind::Table(t)).unwrap();
+    let h = d.add(&Space::Model, Common::default(), EntityKind::Table(Box::new(t))).unwrap();
     (d, h)
 }
 
@@ -36,7 +36,7 @@ fn text_of(gs: &[(String, String)]) -> String {
 
 fn table(d: &Drawing, h: Handle) -> Table {
     match d.entity(h).map(|e| e.kind.clone()) {
-        Some(EntityKind::Table(t)) => t,
+        Some(EntityKind::Table(t)) => *t,
         k => panic!("not a table: {k:?}"),
     }
 }

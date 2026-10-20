@@ -71,8 +71,8 @@ fn drawing() -> Drawing {
     part.entities.push(ent(0x51, "0", EntityKind::Circle(Circle { center: Vec3::new(1.0, 1.0, 0.0), radius: 0.5 })));
     part.entities.push(ent(0x52, "FIXED", EntityKind::Line(Line { a: Vec3::new(0.0, 2.0, 0.0), b: Vec3::new(2.0, 2.0, 0.0) })));
     part.entities.push(ent(0x53, "FIXED", EntityKind::Insert(reference("NUT", Vec3::new(2.0, 0.0, 0.0), Vec3::new(1.0, 1.0, 1.0), 0.0))));
-    part.entities.push(ent(0x54, "0", EntityKind::AttDef(attrib("TAG", "?", Vec3::new(0.0, -0.5, 0.0), false))));
-    part.entities.push(ent(0x55, "0", EntityKind::AttDef(attrib("SECRET", "?", Vec3::new(0.0, -1.0, 0.0), true))));
+    part.entities.push(ent(0x54, "0", EntityKind::AttDef(Box::new(attrib("TAG", "?", Vec3::new(0.0, -0.5, 0.0), false)))));
+    part.entities.push(ent(0x55, "0", EntityKind::AttDef(Box::new(attrib("SECRET", "?", Vec3::new(0.0, -1.0, 0.0), true)))));
     d.blocks.insert("PART".into(), Arc::new(part));
     d
 }

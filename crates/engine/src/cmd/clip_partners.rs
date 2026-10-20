@@ -66,9 +66,20 @@ pub(crate) fn with_partners(d: &Drawing, hs: &[Handle]) -> Vec<Handle> {
 /// viewport turned with its boundary turns its view with it (AutoCAD's VPROTATEASSOC default),
 /// so model space stays put inside the boundary. The rectangle follows in [`after_command`].
 pub(crate) fn after_transform(d: &mut Drawing, moved: &[(Handle, Handle)], m: &Mat3, copy: bool) -> Result<()> {
+    // Only viewports matter: found in one pass, not looked up per moved object (a move of
+    // 167k objects spent 23 ms asking each one).
+    let viewports: std::collections::HashSet<Handle> = std::iter::once(&d.model)
+        .chain(d.layouts.iter().map(|l| &l.entities))
+        .flat_map(|s| s.iter())
+        .filter(|e| matches!(e.kind, EntityKind::Viewport(_)))
+        .map(|e| e.handle)
+        .collect();
+    if viewports.is_empty() {
+        return Ok(());
+    }
     let new_of: HashMap<Handle, Handle> = moved.iter().copied().collect();
     let turn = if m.is_mirroring() { 0.0 } else { m.rotation() };
-    for &(old, new) in moved {
+    for &(old, new) in moved.iter().filter(|(_, new)| viewports.contains(new)) {
         let Some(EntityKind::Viewport(v)) = d.entity(new).map(|e| &e.kind) else { continue };
         let boundary = v.clip.filter(|b| *b != old).and_then(|b| new_of.get(&b).copied());
         let id = if copy { Some(next_viewport_id(d)) } else { None };

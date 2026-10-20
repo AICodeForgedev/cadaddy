@@ -20,9 +20,24 @@ use crate::{IoError, Result};
 /// Width and height of the embedded preview, in pixels.
 pub const THUMBNAIL_SIZE: (u32, u32) = (256, 192);
 
-/// The preview a .cdy file embeds: model space as a PNG, `None` when it is empty.
+/// The preview a .cdy file embeds: model space as a PNG, `None` when it is empty. Built at the
+/// preview's own pixel size (as the screen is): sub-pixel hatch lines and dashes are left out, so a
+/// densely hatched plan doesn't spend seconds drawing millions of lines into 256 × 192 pixels.
 pub fn preview(d: &Drawing) -> Option<Vec<u8>> {
-    if d.model.is_empty() { None } else { crate::png(d, &Space::Model, THUMBNAIL_SIZE.0, THUMBNAIL_SIZE.1).ok() }
+    if d.model.is_empty() {
+        return None;
+    }
+    let (w, h) = THUMBNAIL_SIZE;
+    let ext = d.extents(&Space::Model);
+    // One pixel in drawing units at the fitted view (5 % margin); 0 or not finite = full detail.
+    let px = if ext.is_empty() { 0.0 } else { (ext.width() / f64::from(w)).max(ext.height() / f64::from(h)) * 1.1 };
+    let opts = cadaddy_render::Options {
+        transparency: true,
+        tolerance: if px.is_finite() && px > 0.0 { px * 0.5 } else { cadaddy_render::Options::default().tolerance },
+        min_dash: if px.is_finite() && px > 0.0 { px * 2.0 } else { 0.0 },
+        ..cadaddy_render::Options::default()
+    };
+    crate::png_with(d, &Space::Model, w, h, &opts).ok()
 }
 
 /// The drawing as a .cdy file, with a preview of model space.

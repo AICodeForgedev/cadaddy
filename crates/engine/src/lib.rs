@@ -13,9 +13,12 @@ pub mod agent;
 pub mod assoc;
 pub mod audit;
 pub mod autosave;
+pub mod batch;
 pub mod blockedit;
 pub mod cmd;
+pub mod control_auth;
 pub mod doc_path;
+pub mod events;
 pub mod fields;
 mod finite;
 pub mod grip_dims;
@@ -30,6 +33,7 @@ pub mod prompt;
 pub mod readfile;
 mod recent;
 pub mod sample;
+pub mod secureload;
 pub mod select;
 pub mod snap;
 pub mod snap3;
@@ -39,6 +43,36 @@ pub mod ucs;
 pub mod undoctl;
 pub mod units;
 pub mod writefile;
+
+/// Read `bytes` with one of the engine's own readers, for the fuzzer (`examples/fuzz.rs`):
+/// `xlsx` (TABLE's Excel import), `zip` and `lisp` (the LISP reader, as files are loaded). The
+/// result is dropped; only returning matters.
+#[doc(hidden)]
+pub fn fuzz_read(target: &str, bytes: &[u8]) {
+    match target {
+        "xlsx" => {
+            let _ = cmd::table::xlsx::open(bytes);
+        }
+        "zip" => {
+            let _ = cmd::file::zip::read(bytes);
+        }
+        "lisp" => {
+            let _ = lisp::read::read_all(&String::from_utf8_lossy(bytes));
+        }
+        _ => {}
+    }
+}
+
+/// A small workbook TABLE's xlsx writer made, as the fuzzer's seed.
+#[doc(hidden)]
+pub fn fuzz_xlsx_seed() -> Option<Vec<u8>> {
+    let rows = vec![
+        vec!["Room".to_string(), "Area".into(), "=B2*2".into()],
+        vec!["101".into(), "12.5".into(), "Lobby & Hall <1>".into()],
+        vec![String::new(), "-3e10".into(), "\u{e9}t\u{e9}".into()],
+    ];
+    cmd::table::xlsx::write(&rows, "Sheet1").ok()
+}
 
 use std::sync::Arc;
 
@@ -589,6 +623,12 @@ pub struct Settings {
     pub pickfirst: bool,
     /// ACADLSPASDOC: acad.lsp loads into every drawing, not once per session.
     pub acadlspasdoc: bool,
+    /// SECURELOAD: 0 loads LISP and scripts from anywhere, 1 (default) asks about files outside
+    /// the trusted folders, 2 loads only from trusted folders ([`secureload`]).
+    pub secureload: u8,
+    /// TRUSTEDPATHS: folders LISP and scripts load from without asking (`;`-separated; `\...`
+    /// at the end includes subfolders). The support folder is always trusted.
+    pub trustedpaths: String,
     pub pickadd: bool,
     /// FILEDIA: 0 makes file commands ask on the command line instead of opening dialogs. Kept for
     /// the session (AutoCAD keeps it in the registry), not per drawing.
@@ -693,6 +733,8 @@ impl Default for Settings {
             aperture: 10.0,
             pickfirst: true,
             acadlspasdoc: false,
+            secureload: 1,
+            trustedpaths: String::new(),
             pickadd: true,
             filedia: 1,
             cmdecho: 1,
@@ -920,6 +962,11 @@ pub struct Session {
     keep_undo_step: bool,
     /// A script is running ([`Session::script`]); a SCRIPT command inside it is refused.
     in_script: bool,
+    /// A LISP file or script outside the trusted folders that wasn't loaded, for the app to ask
+    /// about ([`secureload`]); taken by the app.
+    pub secureload_ask: Option<secureload::Ask>,
+    /// Files the user allowed to load this session (normalized paths).
+    pub(crate) secureload_once: std::collections::HashSet<String>,
     /// The command suspended while a transparent command (`'ZOOM`, `'PAN`…) prompts inside it;
     /// it resumes when that command ends. One level, as in AutoCAD.
     pub suspended: Option<Running>,
@@ -927,6 +974,8 @@ pub struct Session {
     /// The session as a script ([`journal`]): each command started, each input and each JSON call
     /// made from outside, one per line, so replaying it with SCRIPT redoes the work.
     pub journal: journal::Journal,
+    /// The Action Recorder's macros and recording ([`cmd::actions`]).
+    pub actions: cmd::actions::Actions,
     pub last_command: Option<String>,
     /// LASTPOINT.
     pub last_point: Vec2,
@@ -982,6 +1031,8 @@ pub struct Session {
     pub hatch_picks: Option<cmd::hatch::HatchPicks>,
     /// Safety rails for agents: requests, dry run, confirmations, the change journal.
     pub agent: agent::AgentGuard,
+    /// What happened, for agents watching (`events.subscribe` / `events.poll`).
+    pub events: events::EventLog,
 }
 
 impl Default for Session {
@@ -1015,9 +1066,12 @@ impl Session {
             running: None,
             keep_undo_step: false,
             in_script: false,
+            secureload_ask: None,
+            secureload_once: Default::default(),
             suspended: None,
             log: Vec::new(),
             journal: journal::Journal::default(),
+            actions: cmd::actions::Actions::default(),
             last_command: None,
             last_point: Vec2::ZERO,
             last_point3: cadaddy_geom::Vec3::ZERO,
@@ -1045,6 +1099,7 @@ impl Session {
             lisp_last: None,
             hatch_picks: None,
             agent: agent::AgentGuard::default(),
+            events: events::EventLog::default(),
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {
@@ -1214,12 +1269,58 @@ impl Session {
             return r;
         }
         let outer = self.journal.enter();
+        // A call from outside while a command runs (an agent's `engine.execute` while the user
+        // is in TEXT): the command's work so far, the call's and the command's rest are undo
+        // steps of their own, so U never takes the call's work away with the command's.
+        let uid = if outer && self.running.is_some() { self.split_running_undo() } else { None };
+        // An agent's or script's call of a command that edits the drawing sets off reactors, as
+        // the same command typed does (`start`).
+        let react = outer && find_command(id).is_some_and(|c| c.undoable);
+        if react {
+            self.lisp_command_event(lisp::reactor::CommandEvent::WillStart, id);
+        }
         let r = self.execute_inner(id, params);
+        if let Some(uid) = uid {
+            self.rebase_running(uid);
+        }
         self.journal.leave();
+        if react {
+            let event = if r.is_ok() { lisp::reactor::CommandEvent::Ended } else { lisp::reactor::CommandEvent::Failed };
+            self.lisp_command_event(event, id);
+        }
         if outer && r.is_ok() {
             self.journal.call(id, params);
         }
+        // Events reads (and subscribing) aren't news themselves.
+        if outer && !id.starts_with("events.") {
+            self.event("command.run", serde_json::json!({ "command": id, "ok": r.is_ok() }));
+        }
         r
+    }
+
+    /// What the running command (or the one a transparent command interrupted) changed so far
+    /// becomes an undo step, and it goes on from here. The drawing's uid, for [`Self::rebase_running`].
+    fn split_running_undo(&mut self) -> Option<u64> {
+        let active = self.active;
+        let owner = self.suspended.as_mut().or(self.running.as_mut())?;
+        let st = self.docs.get_mut(active)?;
+        let undoable = find_command(&owner.id).is_some_and(|c| c.undoable);
+        if undoable && !Arc::ptr_eq(&owner.before, &st.doc) {
+            let label = find_command(&owner.id).map_or("Command", |c| c.label);
+            st.push_undo(Snapshot { label: label.to_string(), doc: Arc::clone(&owner.before), selection: owner.selection_before.clone(), bytes: 0 });
+            st.revision += 1;
+        }
+        owner.before = Arc::clone(&st.doc);
+        Some(st.uid)
+    }
+
+    /// After a call from outside: the running command's step starts from the drawing the call
+    /// left, so it holds only the command's own work.
+    fn rebase_running(&mut self, uid: u64) {
+        let Some(doc) = self.docs.iter().find(|d| d.uid == uid).map(|d| Arc::clone(&d.doc)) else { return };
+        for run in [self.running.as_mut(), self.suspended.as_mut()].into_iter().flatten() {
+            run.before = Arc::clone(&doc);
+        }
     }
 
     fn execute_inner(&mut self, id: &str, params: &Value) -> Result<Value> {
@@ -1296,6 +1397,10 @@ impl Session {
             // Done at once (or refused): nothing more of it to cancel.
             self.journal.ended(r.is_ok());
         }
+        if outer && r.is_ok() {
+            let id = self.running.as_ref().map_or_else(|| name.trim().to_ascii_lowercase(), |run| run.id.clone());
+            self.event("command.started", serde_json::json!({ "command": id, "running": self.running.is_some() }));
+        }
         r
     }
 
@@ -1319,6 +1424,10 @@ impl Session {
                 self.last_command = Some(lower.clone());
                 self.echo(format!("Command: {}", lower.to_ascii_uppercase()));
                 return self.lisp_run_command(&lower, f);
+            }
+            // An action macro's name plays it.
+            if !transparent && let Some(r) = cmd::actions::start_by_name(self, &lower) {
+                return r;
             }
             // A bare system variable name (ORTHOMODE, GRIDMODE…) acts as SETVAR on that variable.
             let var = lower.to_ascii_uppercase();
@@ -1360,6 +1469,9 @@ impl Session {
             self.last_command = Some(spec.id.to_string());
             self.echo(format!("Command: {}", spec.id.to_ascii_uppercase()));
         }
+        if !nested {
+            self.lisp_command_event(lisp::reactor::CommandEvent::WillStart, spec.id);
+        }
         match spec.interactive {
             Some(factory) => {
                 let machine = guard::Guarded::create(spec.id, factory, self)?;
@@ -1376,7 +1488,10 @@ impl Session {
                 Ok(())
             }
             None => {
-                let r = self.execute(spec.id, &Value::Null)?;
+                let r = self.execute(spec.id, &Value::Null);
+                let event = if r.is_ok() { lisp::reactor::CommandEvent::Ended } else { lisp::reactor::CommandEvent::Failed };
+                self.lisp_command_event(event, spec.id);
+                let r = r?;
                 if let Some(s) = r.as_str() {
                     self.echo(s.to_string());
                 } else if !r.is_null()
@@ -1695,6 +1810,15 @@ impl Session {
     }
 
     fn finish(&mut self, run: Running, cancelled: bool) {
+        self.event("command.ended", serde_json::json!({ "command": run.id, "cancelled": cancelled }));
+        let id = run.id.clone();
+        self.finish_steps(run, cancelled);
+        // Reactors react once the command's undo step is in place.
+        let event = if cancelled { lisp::reactor::CommandEvent::Cancelled } else { lisp::reactor::CommandEvent::Ended };
+        self.lisp_command_event(event, &id);
+    }
+
+    fn finish_steps(&mut self, run: Running, cancelled: bool) {
         // A typed selection mode or SIngle never outlives its command.
         self.select_mode = None;
         self.select_single = false;

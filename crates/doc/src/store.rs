@@ -200,6 +200,41 @@ impl EntityStore {
         self.set_index(h, Some(id));
         self.len += 1;
     }
+    /// Append many new objects on top of the draw order, in order: the same result as
+    /// [`EntityStore::push`] one at a time (chunks filled the same way), with the handle index
+    /// grown once per shard. An object whose handle is already here makes it fall back to
+    /// `push` (which replaces it in place).
+    pub fn push_many(&mut self, items: Vec<Entity>) {
+        if items.iter().any(|e| self.contains(e.handle)) {
+            for e in items {
+                self.push(e);
+            }
+            return;
+        }
+        let mut index: Vec<Vec<(Handle, u32)>> = (0..SHARDS).map(|_| Vec::new()).collect();
+        for e in items {
+            if self.chunks.last().is_none_or(|c| c.items.len() >= CHUNK_MAX) {
+                let c = self.new_chunk();
+                self.chunks.push(c);
+            }
+            let Some(last) = self.chunks.last_mut() else { return };
+            let chunk = Arc::make_mut(last);
+            let h = e.handle;
+            chunk.items.push(Arc::new(e));
+            if let Some(list) = index.get_mut(shard_of(h)) {
+                list.push((h, chunk.id));
+            }
+            self.len += 1;
+        }
+        for (shard, list) in self.shards.iter_mut().zip(index) {
+            if list.is_empty() {
+                continue;
+            }
+            let m = Arc::make_mut(shard);
+            m.reserve(list.len());
+            m.extend(list);
+        }
+    }
     /// Insert at the bottom of the draw order.
     pub fn push_front(&mut self, e: Entity) {
         if self.contains(e.handle) {
@@ -261,6 +296,13 @@ impl EntityStore {
             }
             None => false,
         }
+    }
+    /// The objects of every chunk holding one `wanted` says yes to, writable (each such chunk
+    /// copied when shared, as [`EntityStore::modify`] does one): edits to many objects at once,
+    /// chunk by chunk (on several threads when the caller likes) instead of one lookup each.
+    /// Handles and draw order must not change through them.
+    pub fn chunks_mut_where(&mut self, wanted: impl Fn(Handle) -> bool) -> Vec<&mut [Arc<Entity>]> {
+        self.chunks.iter_mut().filter(|c| c.items.iter().any(|e| wanted(e.handle))).map(|c| Arc::make_mut(c).items.as_mut_slice()).collect()
     }
     pub fn bring_to_front(&mut self, h: Handle) -> bool {
         match self.remove(h) {

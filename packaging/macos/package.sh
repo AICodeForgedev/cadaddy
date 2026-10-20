@@ -136,12 +136,29 @@ mkdir -p "$STAGE/.background"
 cp "$HERE/dmg/background.tiff" "$STAGE/.background/background.tiff"
 cp "$HERE/dmg/dmg-layout.DS_Store" "$STAGE/.DS_Store"
 rm -f "$DMG" "$WORK/raw.dmg"
-# makehybrid + convert builds the image without attaching a device, unlike `create -srcfolder`,
-# which is flaky on CI runners ("Resource busy") and hangs in sandboxed sessions.
 # The volume name has no version: .DS_Store finds the background through an alias that includes it.
-hdiutil makehybrid -hfs -hfs-volume-name "CADaddy" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
-hdiutil convert "$WORK/raw.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
-rm -f "$WORK/raw.dmg"
+# `create -srcfolder` copies the app as it is. `makehybrid -hfs` gives every file and folder an
+# empty com.apple.FinderInfo attribute, and an app copied from such an image fails
+# `codesign --verify --strict` ("resource fork, Finder information, or similar detritus not
+# allowed"): macOS can call it damaged (0.7.7's DMG did this; `cargo xtask installtest` checks).
+# `create` is flaky on some CI runners ("Resource busy"), so it is tried a few times, and
+# makehybrid stays the last resort, with a warning.
+made=0
+for attempt in 1 2 3; do
+  if hdiutil create -quiet -volname "CADaddy" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG"; then
+    made=1
+    break
+  fi
+  echo "hdiutil create failed (attempt $attempt); retrying" >&2
+  rm -f "$DMG"
+  sleep 5
+done
+if [ "$made" != 1 ]; then
+  echo "WARNING: building the DMG with makehybrid: the app inside will carry Finder information" >&2
+  hdiutil makehybrid -hfs -hfs-volume-name "CADaddy" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
+  hdiutil convert "$WORK/raw.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
+  rm -f "$WORK/raw.dmg"
+fi
 sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 if [ "$NOTARIZE" = 1 ]; then

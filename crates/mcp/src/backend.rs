@@ -77,7 +77,10 @@ impl Remote {
                     s.set_nodelay(true).ok();
                     s.set_read_timeout(Some(Duration::from_secs(90))).ok();
                     let read = s.try_clone()?;
-                    self.conn = Some((BufReader::new(read), s));
+                    let mut reader = BufReader::new(read);
+                    let mut s = s;
+                    authenticate(&mut reader, &mut s, sa.port())?;
+                    self.conn = Some((reader, s));
                     return Ok(());
                 }
                 Err(e) => last = e,
@@ -113,6 +116,31 @@ impl Remote {
             }
         }
     }
+}
+
+/// Present the app's control token, when there is one for `port` (the app writes it each start;
+/// `cadaddy_engine::control_auth`). An app that needs none answers `auth` with success too; one
+/// from before tokens answers with an error for the unknown method, which is ignored.
+fn authenticate(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, port: u16) -> std::io::Result<()> {
+    authenticate_with(reader, writer, cadaddy_engine::control_auth::client_token(port))
+}
+
+/// [`authenticate`] with the token given.
+pub(crate) fn authenticate_with(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, token: Option<String>) -> std::io::Result<()> {
+    let Some(token) = token else { return Ok(()) };
+    let line = format!("{}\n", json!({"id": 0, "method": "auth", "params": {"token": token}}));
+    writer.write_all(line.as_bytes())?;
+    writer.flush()?;
+    let mut reply = String::new();
+    reader.read_line(&mut reply)?;
+    let v: Value = serde_json::from_str(reply.trim()).unwrap_or(Value::Null);
+    if v.get("error").and_then(Value::as_str).is_some_and(|e| e.starts_with("unauthorized")) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "CADaddy refused the control token (it changes each start: is the token file from another CADaddy?)",
+        ));
+    }
+    Ok(())
 }
 
 /// The `window` of a `ui.render` request: two finite corners [[x0, y0], [x1, y1]] around an area
@@ -233,6 +261,17 @@ const HEADLESS_METHODS: &[(&str, &str, &str)] = &[
         "Current prompt (text and bare message), keywords, default, accepted input kinds, busy (a drawing still opening), closePrompt and history tail.",
     ),
     ("engine.execute", "{command, params}", "Run any command with JSON parameters. Never opens a dialog."),
+    ("events.subscribe", "{on?}", "Start (or stop) recording events for events.poll."),
+    (
+        "events.poll",
+        "{since?}",
+        "Events after `since`: drawing changed (handles), selection, commands, prompt, documents, dialogs; `next` is the next since.",
+    ),
+    (
+        "engine.executeMany",
+        "{commands: [{command, params}], stopOnError?}",
+        "Run up to 10k commands in one request and one undo step; each result returned (stopOnError: the first failure puts everything back).",
+    ),
     (
         "engine.commands",
         "{filter?}",
@@ -302,6 +341,13 @@ impl Backend for Headless {
                 let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
                 s.execute_agent(&id, &params).map_err(|e| e.to_string())
             }
+            "engine.executeMany" => {
+                let list = p.get("commands").and_then(Value::as_array).ok_or("missing `commands`: [{command, params}]")?;
+                let stop = p.get("stopOnError").and_then(Value::as_bool).unwrap_or(false);
+                s.execute_many(list, stop).map_err(|e| e.to_string())
+            }
+            "events.subscribe" => Ok(s.events_subscribe(p.get("on").and_then(Value::as_bool).unwrap_or(true))),
+            "events.poll" => Ok(s.events_poll(p.get("since").and_then(Value::as_u64).unwrap_or(0))),
             "cmdline.input" => {
                 let before = s.log.len();
                 let r = s.cmdline(&str_p("text").unwrap_or_default());

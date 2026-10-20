@@ -6,7 +6,8 @@
 //!
 //! CADaddy's own data lives under the registered application `CADADDY` (xdata) and the
 //! named-object-dictionary entries `CADADDY_CONSTRAINTS`, `CADADDY_LAYERSTATES`,
-//! `CADADDY_PLOTSTYLES`, `CADADDY_HANDSEED`, `CADADDY_MLEADERSTYLE`, `CADADDY_BSPEC`, `CADADDY_TOURS` and
+//! `CADADDY_PLOTSTYLES`, `CADADDY_HANDSEED`, `CADADDY_MLEADERSTYLE`, `CADADDY_BSPEC`, `CADADDY_TOURS`,
+//! `CADADDY_CELLSTYLES` and
 //! `CADADDY_STANDARDS` (XRECORDs). Other
 //! readers keep or ignore them.
 
@@ -36,6 +37,9 @@ pub(crate) const ANNOTATION_KEY: &str = "CADADDY_ANNOTATION";
 /// Named-object-dictionary key of the plot style names dictionary (DXF Reference): its entries
 /// name `ACDBPLACEHOLDER` objects, and layers and objects point at them with group 390.
 pub(crate) const PLOT_STYLE_NAMES_KEY: &str = "ACAD_PLOTSTYLENAME";
+/// Named-object-dictionary key of every table style's cell styles (JSON in an XRECORD): the
+/// copy that goes through DWG, whose writer keeps no xdata on a TABLESTYLE.
+pub(crate) const CELL_STYLES_KEY: &str = "CADADDY_CELLSTYLES";
 /// Named-object-dictionary key of the XRECORD holding the drawing's next entity handle (hex).
 pub(crate) const HANDSEED_KEY: &str = "CADADDY_HANDSEED";
 /// Named-object-dictionary key of the XRECORD holding the standards files associated with the

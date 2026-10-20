@@ -87,6 +87,7 @@ fn the_session_saved_as_a_script_replays_to_the_same_drawing() {
     assert_eq!(r["lines"].as_u64().unwrap() as usize, lines.len());
 
     let mut replay = Session::new();
+    replay.settings.trustedpaths = dir.to_string_lossy().into_owned();
     replay.execute("script", &json!({ "path": path.to_string_lossy() })).unwrap();
     assert_eq!(shapes(&replay), shapes(&s));
     assert_eq!(shapes(&s).len(), 4);

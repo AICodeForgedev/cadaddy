@@ -314,7 +314,7 @@ fn annotative_mtext_columns_follow_the_scale() {
         k => panic!("{k:?}"),
     };
     let ml = Entity {
-        kind: EntityKind::MLeader(cadaddy_engine::doc::MLeader {
+        kind: EntityKind::MLeader(Box::new(cadaddy_engine::doc::MLeader {
             leaders: Vec::new(),
             landing: Default::default(),
             dogleg: 1.0,
@@ -328,7 +328,7 @@ fn annotative_mtext_columns_follow_the_scale() {
             leader_linetype: None,
             arrow: None,
             text_frame: false,
-        }),
+        })),
         ..e.clone()
     };
     for e in [e, ml] {

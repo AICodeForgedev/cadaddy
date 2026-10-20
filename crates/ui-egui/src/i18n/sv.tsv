@@ -2192,3 +2192,159 @@ menu	Modify	Ändra
 	Use drawing background	Använd ritningens bakgrund
 	Regenerate Dimensions	Återskapa måttsättningar
 	Enter layer name for new dimensions (. for the current layer)	Ange lagernamn för nya måttsättningar (. för det aktuella lagret)
+	{folder} (folder)	{folder} (mapp)
+	Add drawings or a folder of them.	Lägg till ritningar eller en mapp med ritningar.
+	Add Files...	Lägg till filer...
+	Add Folder...	Lägg till mapp...
+	cancelled	avbrutet
+	Choose the output folder, or Next to the originals.	Välj utdatamapp, eller Bredvid originalen.
+	Convert Drawings	Konvertera ritningar
+	Convert Drawings...	Konvertera ritningar...
+	Convert drawings...	Konvertera ritningar...
+	Convert to	Konvertera till
+	Converted	Konverterad
+	Converted, not all kept	Konverterad, allt behölls inte
+	Converting files is not available on the web.	Att konvertera filer är inte tillgängligt på webben.
+	Drawings to convert	Ritningar att konvertera
+	Each drawing's own	Varje ritnings egen
+	Failed	Misslyckades
+	Files already there	Filer som redan finns
+	Folder:	Mapp:
+	Include subfolders	Inkludera undermappar
+	Keep a file written over as .bak	Behåll en överskriven fil som .bak
+	Next to the originals	Bredvid originalen
+	Open Log	Öppna logg
+	Or type a file or folder path	Eller skriv en fil- eller mappsökväg
+	Overwrite	Skriv över
+	Save to	Spara i
+	Skip	Hoppa över
+	Skipped	Överhoppad
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	Inga ritningar (.dwg, .dxf, .cdy) att konvertera.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{converted} konverterade, {skipped} överhoppade, {failed} misslyckades av {total}
+	DWG drawing (.dwg)	DWG-ritning (.dwg)
+	DXF drawing (.dxf)	DXF-ritning (.dxf)
+	Require a token for control connections (recommended)	Kräv en token för styranslutningar (rekommenderas)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Program måste först skicka den token som CADaddy skriver till en fil som bara du kan läsa, så att andra användares program inte kan styra det. Claude-anslutningen läser den åt dig. Gäller nästa gång CADaddy startar.
+	Add: Pick points	Lägg till: Välj punkter
+	Add: Select objects	Lägg till: Markera objekt
+	Associative	Associativ
+	Block to create or edit	Block att skapa eller redigera
+	Bottom left	Nere till vänster
+	Boundaries	Gränser
+	Click to set new origin	Klicka för att ange ny origo
+	Create separate hatches	Skapa separata skrafferingar
+	Default to boundary extents	Standard: gränsens utsträckning
+	Edit Block Definition	Redigera blockdefinition
+	Hatch and Gradient	Skraffering och toning
+	Hatch origin	Skrafferingens origo
+	Island detection	Ö-identifiering
+	Normal	Normal
+	Open in Block Editor	Öppna i blockredigeraren
+	Outer	Yttre
+	Specified origin	Angiven origo
+	Use current origin	Använd aktuell origo
+	Building models (IFC)	Byggnadsmodeller (IFC)
+	Building model (IFC4)	Byggnadsmodell (IFC4)
+	3D printing (3MF)	3D-utskrift (3MF)
+	Include the drawing (the active drawing as a DXF file)	Bifoga ritningen (den aktiva ritningen som DXF-fil)
+	Your account, home folder and computer name are always left out.	Ditt konto, din hemmapp och datorns namn utelämnas alltid.
+	Files in the report	Filer i rapporten
+	Send to Redline	Skicka till Redline
+	Import Redline Markups	Importera Redline-markeringar
+	Import Redline Markups...	Importera Redline-markeringar...
+	Open a Program?	Öppna ett program?
+	This link opens a program or script, not a document:	Den här länken öppnar ett program eller skript, inte ett dokument:
+	Open it only if you trust the drawing and know what it runs.	Öppna den bara om du litar på ritningen och vet vad den kör.
+	Open Anyway	Öppna ändå
+	Report a security problem	Rapportera ett säkerhetsproblem
+	Load This File?	Läsa in den här filen?
+	This file isn't in a trusted folder:	Den här filen finns inte i en betrodd mapp:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	LISP-rutiner och skript kan ändra ritningar och filer. Läs bara in den om du litar på var den kommer ifrån.
+	Don't Load	Läs inte in
+	Load Once	Läs in en gång
+	Always Load from This Folder	Läs alltid in från den här mappen
+	Adds {folder} to TRUSTEDPATHS	Lägger till {folder} i TRUSTEDPATHS
+	Allow Loading a File	Tillåt inläsning av en fil
+	Plot Stamp	Plottstämpel
+	Plot stamp fields	Stämpelfält
+	Drawing name	Ritningsnamn
+	Layout name	Layoutnamn
+	Date and Time	Datum och tid
+	Device name	Enhetsnamn
+	Paper size	Pappersstorlek
+	Plot scale	Plottskala
+	No login or computer name is ever stamped.	Inloggnings- och datornamn stämplas aldrig.
+	User defined fields	Användardefinierade fält
+	One per line, up to {n}.	Ett per rad, högst {n}.
+	Stamp model space plots	Stämpla plottar av modellrymden
+	Stamp this layout's plots	Stämpla plottar av denna layout
+	Location and offset	Placering och förskjutning
+	Location	Placering
+	Bottom right	Nere till höger
+	Top left	Uppe till vänster
+	Top right	Uppe till höger
+	Upside-down	Upp och ner
+	X offset	X-förskjutning
+	Y offset	Y-förskjutning
+	Offset relative to	Förskjutning relativt
+	Printable area	Utskrivbart område
+	Paper border	Papperskant
+	Text properties	Textegenskaper
+	Font	Teckensnitt
+	Single line plot stamp	Stämpel på en rad
+	Units	Enheter
+	Inches	Tum
+	Millimeters	Millimeter
+	Log file location	Loggfilens plats
+	Create a log file	Skapa en loggfil
+	The log is kept for this session, never saved with the drawing.	Loggen gäller den här sessionen och sparas aldrig med ritningen.
+	Action Macro Manager...	Hanterare för åtgärdsmakron...
+	Action Macros	Åtgärdsmakron
+	Action Recorder	Åtgärdsinspelare
+	Insert Base Point	Infoga baspunkt
+	Insert Message	Infoga meddelande
+	Play Action Macro	Spela upp åtgärdsmakro
+	Play...	Spela upp...
+	Record	Spela in
+	Request User Input	Begär användarinmatning
+	Stop	Stoppa
+	Action Macro Manager	Hanterare för åtgärdsmakron
+	Recording…	Spelar in…
+	No action macros yet: Record, do the work, then Stop.	Inga åtgärdsmakron än: Spela in, gör arbetet och Stoppa sedan.
+	Play	Spela upp
+	Message: {text}	Meddelande: {text}
+	Base point (asked for)	Baspunkt (efterfrågas)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	Fråga efter denna inmatning när makrot spelas upp
+	Customize Interface	Anpassa gränssnittet
+	Customize User Interface...	Anpassa användargränssnittet...
+	Interface...	Gränssnitt...
+	Customize User Interface	Anpassa användargränssnittet
+	Quick Access Toolbar	Verktygsfältet Snabbåtkomst
+	Add a command	Lägg till ett kommando
+	Reset Quick Access Toolbar	Återställ Snabbåtkomst
+	Built-in panels shown (untick to hide):	Inbyggda paneler som visas (avmarkera för att dölja):
+	Your panels on built-in tabs:	Dina paneler på inbyggda flikar:
+	Tab	Flik
+	New panel name	Namn på ny panel
+	Add Panel	Lägg till panel
+	Your tabs:	Dina flikar:
+	Remove Tab	Ta bort flik
+	New tab name	Namn på ny flik
+	Add Tab	Lägg till flik
+	Edit Keyboard Shortcuts...	Redigera kortkommandon...
+	Remove Panel	Ta bort panel
+	Command or LISP macro, e.g. (command "line")	Kommando eller LISP-makro, t.ex. (command "line")
+	Hatch Editor	Skraffyrredigerare
+	Table Cell	Tabellcell
+	Rows & Columns	Rader och kolumner
+	Merge	Sammanfoga
+	Open/Save	Öppna/Spara
+	Attributes	Attribut
+	Spell Check	Stavningskontroll
+	Formula	Formel
+	Edit Source	Redigera källa
+	Close Array	Stäng mönster
+	Manage Attributes	Hantera attribut
+	Dialog State	Dialogrutans tillstånd
+	Dialog Action	Dialogrutans åtgärd

@@ -2,7 +2,7 @@
 //! (`formula`), TABLEDIT and TABLEEXPORT (`cells`).
 
 mod breaks;
-mod cells;
+pub(crate) mod cells;
 pub(crate) mod formula;
 pub mod xlsx;
 
@@ -176,7 +176,7 @@ fn run_table(s: &mut Session, p: &Value) -> Result<Value> {
         p.get("header").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect());
     let st = style_of(s);
     let t = make_table(&st, at, rows, cols, row_height, col_width, str_param(p, "title"), header, &cells);
-    let h = s.add_entity(EntityKind::Table(t))?;
+    let h = s.add_entity(EntityKind::Table(Box::new(t)))?;
     Ok(json!({ "handle": h.hex() }))
 }
 
@@ -532,7 +532,7 @@ impl Interactive for TableM {
             }
             (Some(_), Some(_), Input::Point(p)) => {
                 let t = self.table(*p);
-                s.add_entity(EntityKind::Table(t))?;
+                s.add_entity(EntityKind::Table(Box::new(t)))?;
                 Ok(Step::Done)
             }
             (Some(_), Some(_), Input::Enter) => Ok(Step::Cancel),
@@ -540,6 +540,6 @@ impl Interactive for TableM {
         }
     }
     fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
-        if self.cols.is_some() && self.rows.is_some() { vec![EntityKind::Table(self.table(c))] } else { Vec::new() }
+        if self.cols.is_some() && self.rows.is_some() { vec![EntityKind::Table(Box::new(self.table(c)))] } else { Vec::new() }
     }
 }

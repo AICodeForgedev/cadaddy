@@ -44,6 +44,19 @@ pub struct PlotStamp {
     pub single_line: bool,
     /// Model space plots carry the stamp too.
     pub model: bool,
+    /// The text runs up the sheet (turned a quarter left); otherwise across it.
+    pub vertical: bool,
+    /// The text is turned half round.
+    pub upside_down: bool,
+    /// Offset and height are shown in inches (they are kept in millimetres).
+    pub inches: bool,
+    /// Each stamped plot adds a line to the log file. The log is the user's, not the drawing's:
+    /// never saved with it or read from a file, so no drawing can name a file to write.
+    #[serde(skip)]
+    pub log_file: bool,
+    /// The log file's path (`.log`).
+    #[serde(skip)]
+    pub log_path: String,
 }
 
 impl Default for PlotStamp {
@@ -63,6 +76,11 @@ impl Default for PlotStamp {
             height_mm: 2.0,
             single_line: true,
             model: false,
+            vertical: false,
+            upside_down: false,
+            inches: false,
+            log_file: false,
+            log_path: String::new(),
         }
     }
 }
@@ -76,6 +94,8 @@ pub const MAX_USER_FIELDS: usize = 8;
 pub const MAX_FIELD_CHARS: usize = 200;
 /// Largest offset from the corner, millimetres.
 pub const MAX_STAMP_OFFSET_MM: f64 = 1000.0;
+/// Longest log file path, characters.
+pub const MAX_LOG_PATH_CHARS: usize = 1024;
 
 /// What a stamp says about one plotted sheet.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -104,7 +124,18 @@ impl PlotStamp {
             .filter(|f| !f.trim().is_empty())
             .take(MAX_USER_FIELDS)
             .collect();
+        s.log_path = s.log_path.chars().filter(|c| !c.is_control()).take(MAX_LOG_PATH_CHARS).collect::<String>().trim().to_string();
         s
+    }
+
+    /// The angle the stamp's text runs at, degrees anticlockwise: 0, 90, 180 or 270.
+    pub fn angle_deg(&self) -> u16 {
+        match (self.vertical, self.upside_down) {
+            (false, false) => 0,
+            (true, false) => 90,
+            (false, true) => 180,
+            (true, true) => 270,
+        }
     }
 
     /// The stamp's lines for one sheet (one line, or the fields then the user's own).
@@ -174,5 +205,16 @@ mod tests {
         assert_eq!(s.offset_mm, [0.0, -MAX_STAMP_OFFSET_MM]);
         assert_eq!(s.user_fields, vec!["abc".to_string(), "x".repeat(MAX_FIELD_CHARS)]);
         assert_eq!(PlotStamp { font: "courier".into(), ..PlotStamp::default() }.sanitized().font, "Courier");
+    }
+
+    #[test]
+    fn the_log_never_travels_with_the_drawing() {
+        let s = PlotStamp { log_file: true, log_path: "/tmp/plot.log".into(), vertical: true, ..PlotStamp::default() };
+        let json = serde_json::to_string(&s).unwrap_or_default();
+        assert!(!json.contains("plot.log") && !json.contains("logFile"), "{json}");
+        let back: PlotStamp = serde_json::from_str(r#"{"logFile": true, "logPath": "/etc/x.log", "vertical": true}"#).unwrap_or_default();
+        assert!(!back.log_file && back.log_path.is_empty() && back.vertical);
+        assert_eq!(back.angle_deg(), 90);
+        assert_eq!(PlotStamp { upside_down: true, ..back }.angle_deg(), 270);
     }
 }

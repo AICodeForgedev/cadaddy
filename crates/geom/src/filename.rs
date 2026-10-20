@@ -19,6 +19,36 @@ pub fn same_name(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b) || (!a.is_ascii() && a.to_lowercase() == b.to_lowercase())
 }
 
+/// Whether `name` (a file name inside an archive or package) stays inside the folder it is
+/// unpacked into: relative, no `..` part, no drive (`C:`) or root, `/` or `\` as separators, no
+/// control characters, not empty.
+pub fn is_safe_relative(name: &str) -> bool {
+    if name.is_empty() || name.len() > 1024 || name.chars().any(char::is_control) {
+        return false;
+    }
+    if name.starts_with(['/', '\\']) || name.chars().nth(1) == Some(':') {
+        return false;
+    }
+    name.split(['/', '\\']).all(|part| part != ".." && !part.contains(':')) && name.split(['/', '\\']).any(|part| !part.is_empty() && part != ".")
+}
+
+/// The system folder `path` is in, if any: where nothing CADaddy writes belongs (Windows,
+/// Program Files, ProgramData; /System, /Library, /usr, /bin, /sbin, /etc and the other Unix
+/// system folders). Compared without regard to case or separator.
+pub fn system_folder(path: &Path) -> Option<&'static str> {
+    const UNIX: [&str; 13] =
+        ["/system", "/library", "/usr", "/bin", "/sbin", "/etc", "/private/etc", "/private/var/db", "/boot", "/dev", "/proc", "/sys", "/var/lib"];
+    const WINDOWS: [&str; 4] = ["windows", "program files", "program files (x86)", "programdata"];
+    let text = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    // A drive's root folder: `c:/windows/…` (or `//?/c:/…`).
+    let after_drive = text.trim_start_matches("//?/").get(2..).filter(|_| text.trim_start_matches("//?/").get(1..2) == Some(":"));
+    if let Some(rest) = after_drive {
+        let first = rest.trim_start_matches('/').split('/').next().unwrap_or_default();
+        return WINDOWS.iter().find(|w| **w == first).copied();
+    }
+    UNIX.iter().find(|u| text == **u || text.starts_with(&format!("{u}/"))).copied()
+}
+
 /// The entry of `dir` named `name` ignoring case: the exact name when it exists.
 fn child(dir: &Path, name: &std::ffi::OsStr) -> Option<PathBuf> {
     let exact = dir.join(name);
@@ -102,5 +132,47 @@ mod tests {
         assert!(find("CARGO.TOML").is_some() || find("Cargo.toml").is_some());
         assert!(same_name("Ölwanne", "ÖLWANNE") && !same_name("a", "b"));
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn archive_names_that_leave_the_folder_are_unsafe() {
+        for ok in ["a.dwg", "Xrefs/a.dwg", "Xrefs\\b.png", "./x/y.txt", "d\u{e9}j\u{e0}/vu.dxf"] {
+            assert!(is_safe_relative(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "/etc/passwd",
+            "\\\\server\\share\\x",
+            "C:\\Windows\\x.dll",
+            "c:x",
+            "../x",
+            "a/../../x",
+            "a\\..\\x",
+            "x\u{0}y",
+            "x\ny",
+            ".",
+            "./",
+            "a:b",
+        ] {
+            assert!(!is_safe_relative(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn system_folders_are_known() {
+        for (p, want) in [
+            ("C:\\Windows\\System32\\x.dll", Some("windows")),
+            ("c:/program files/app/x", Some("program files")),
+            ("D:\\ProgramData\\x", Some("programdata")),
+            ("/etc/hosts", Some("/etc")),
+            ("/System/Library/x", Some("/system")),
+            ("/usr/local/bin/x", Some("/usr")),
+            ("/Library/LaunchDaemons/x.plist", Some("/library")),
+        ] {
+            assert_eq!(system_folder(Path::new(p)), want, "{p}");
+        }
+        for p in ["/Users/x/Library/a.dwg", "/home/x/etc/a.dwg", "C:\\Users\\x\\Windows\\a.dwg", "/usrdata/a.dwg", "relative/etc/x"] {
+            assert_eq!(system_folder(Path::new(p)), None, "{p}");
+        }
     }
 }

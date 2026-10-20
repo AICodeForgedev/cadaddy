@@ -72,6 +72,36 @@ pub(crate) fn cell_styles_xdata(s: &TableStyle) -> Vec<String> {
     std::iter::once(CELLSTYLES.to_string()).chain(chunks(&json)).collect()
 }
 
+/// Every table style's cell styles, by style name, for the `CADADDY_CELLSTYLES` XRECORD (the
+/// TABLESTYLE's own xdata doesn't go through DWG); `None` when no style has any.
+pub(crate) fn all_cell_styles_json(styles: &[TableStyle]) -> Option<String> {
+    let by_name: std::collections::BTreeMap<&str, &Vec<CellStyle>> =
+        styles.iter().filter(|s| !s.cell_styles.is_empty()).map(|s| (s.name.as_str(), &s.cell_styles)).collect();
+    if by_name.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&serde_json::json!({ "v": 1, "styles": by_name })).ok()
+}
+
+/// The cell styles of the `CADADDY_CELLSTYLES` XRECORD given to the table styles that came without
+/// their own (read from a DWG); a style that has its own keeps them.
+pub(crate) fn apply_cell_styles_json(styles: &mut [TableStyle], json: &str) {
+    #[derive(Deserialize)]
+    struct Payload {
+        v: u32,
+        styles: std::collections::BTreeMap<String, Vec<CellStyle>>,
+    }
+    if json.len() > MAX_PAYLOAD {
+        return;
+    }
+    let Some(p) = serde_json::from_str::<Payload>(json).ok().filter(|p| p.v == 1) else { return };
+    for s in styles.iter_mut().filter(|s| s.cell_styles.is_empty()) {
+        if let Some(cs) = p.styles.iter().find(|(n, _)| n.eq_ignore_ascii_case(&s.name)).map(|(_, c)| c) {
+            s.cell_styles = cs.iter().take(MAX_CELL_STYLES).cloned().collect();
+        }
+    }
+}
+
 /// A colour from an ACI group value.
 fn aci(v: i64) -> Color {
     Color::from_aci(i16::try_from(v).unwrap_or(256))

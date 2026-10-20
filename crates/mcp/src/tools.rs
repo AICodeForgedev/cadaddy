@@ -12,6 +12,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}),
         json!({"name": "execute", "description": "Run any command with JSON parameters (no prompts or dialogs). Use list_commands to find ids and parameter docs. Examples: line {points:[[0,0],[10,0]]}, circle {center:[0,0], radius:5}, layer.new {name:\"Walls\", color:\"red\", current:true}, move {handles:[\"10A\"], delta:[5,0]}, zoom {mode:\"extents\"}. In the running app, interface commands work too, e.g. ui.dock {operation:\"detach\"|\"dock\"|\"open\"|\"close\", panel:\"properties\"} floats a palette in its own window or docks it back.",
             "inputSchema": {"type": "object", "properties": {"command": {"type": "string"}, "params": {"type": "object"}}, "required": ["command"]}}),
+        json!({"name": "execute_many", "description": "Run many commands in one call and one undo step (up to 10,000): placing hundreds of objects at once instead of a call each. Each result comes back in order; a failed command's result is {error}, or with stopOnError the batch stops there, everything it did is undone, and the reply names the failing command.", "inputSchema": {"type": "object", "properties": {"commands": {"type": "array", "description": "[{command, params}] as for execute"}, "stopOnError": {"type": "boolean"}}, "required": ["commands"]}}),
+        json!({"name": "watch_events", "description": "Watch what the user (or anyone) does in CADaddy: after this, events arrive as notifications/cadaddy/event — drawing changed (with added/removed/changed handles, coalesced), selection changed, command started/ended/run, prompt changed, document opened/closed/switched, dialog opened. on:false stops.", "inputSchema": {"type": "object", "properties": {"on": {"type": "boolean"}}}}),
         json!({"name": "list_commands", "description": "List commands with ids, labels, menu paths, aliases and parameter docs. Optional filter: a substring of the command id, label or an alias.",
             "inputSchema": {"type": "object", "properties": {"filter": {"type": "string"}}}}),
         json!({"name": "inspect_drawing", "description": "Summary of the active drawing: entity counts, extents, layers, styles, blocks, layouts, selection, undo history and (optionally) entities with handles and geometry.",
@@ -163,6 +165,8 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
             "engine.execute",
             json!({"command": a.get("command").cloned().unwrap_or(Value::Null), "params": a.get("params").cloned().unwrap_or(json!({}))}),
         ),
+        "execute_many" => b.call("engine.executeMany", json!({"commands": a.get("commands").cloned().unwrap_or(json!([])), "stopOnError": a.get("stopOnError").cloned().unwrap_or(json!(false))})),
+        "watch_events" => b.call("events.subscribe", json!({"on": a.get("on").and_then(Value::as_bool).unwrap_or(true)})),
         "list_commands" => b.call("engine.commands", json!({"filter": a.get("filter").cloned().unwrap_or(Value::Null)})).map(|v| {
             let f = a.get("filter").and_then(Value::as_str).map(str::to_ascii_lowercase);
             match (v, f) {

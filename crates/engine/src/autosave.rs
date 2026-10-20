@@ -13,6 +13,13 @@
 //! [`Autosaver::plan`] decides what to write and delete (no I/O, so it is testable); on the desktop
 //! [`Autosaver::tick`] carries it out, writing on a background thread. SAVETIME and SAVEFILEPATH
 //! are profile settings: process-wide, not saved in the drawing.
+//!
+//! The journal: where the .cdy saver is installed (the desktop), the autosave file is a .cdy file
+//! written in full at the drawing's first change, and after that each change is appended to it as
+//! a .cdy save appends (only the chunks that changed, then a new index), on the background thread;
+//! every SAVETIME minutes it is written in full again, which keeps it compact. A crash then loses
+//! at most the command being done, not up to SAVETIME minutes; Drawing Recovery opens the file as
+//! any .cdy file (the last whole index is the drawing as of the last finished append).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -113,7 +120,7 @@ pub fn parse_lock_name(name: &str) -> Option<&str> {
 }
 
 /// What to do with the file system.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum Job {
     /// Write `doc` (drawing `uid`) to `path`.
     Write {
@@ -121,12 +128,21 @@ pub enum Job {
         path: String,
         doc: Arc<Drawing>,
     },
+    /// Append `doc`'s changes to the .cdy autosave at `path`, which holds `held` and is `from`
+    /// bytes long (the journal).
+    Append {
+        uid: u64,
+        path: String,
+        doc: Arc<Drawing>,
+        held: crate::cmd::file::CdyState,
+        from: u64,
+    },
     Delete {
         path: String,
     },
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Tracked {
     /// The drawing as last autosaved (a weak pointer: compared, never kept alive).
     written: Option<Weak<Drawing>>,
@@ -137,6 +153,20 @@ struct Tracked {
     file: Option<String>,
     /// When a change not yet autosaved was first seen (seconds).
     since: Option<f64>,
+    /// The journal: what the .cdy autosave file holds and its length, after the last write.
+    held: Option<(crate::cmd::file::CdyState, u64)>,
+    /// When the autosave was last written in full (seconds).
+    full_at: Option<f64>,
+}
+
+impl std::fmt::Debug for Job {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Job::Write { uid, path, .. } => write!(f, "Write {{ uid: {uid}, path: {path:?} }}"),
+            Job::Append { uid, path, from, .. } => write!(f, "Append {{ uid: {uid}, path: {path:?}, from: {from} }}"),
+            Job::Delete { path } => write!(f, "Delete {{ path: {path:?} }}"),
+        }
+    }
 }
 
 /// Autosave state for one running app.
@@ -148,9 +178,9 @@ pub struct Autosaver {
     busy: HashSet<u64>,
     /// Writes in progress; each tells whether its file was written.
     #[cfg(not(target_arch = "wasm32"))]
-    running: Vec<(u64, std::thread::JoinHandle<bool>)>,
+    running: Vec<(u64, std::thread::JoinHandle<Option<native::Held>>)>,
     #[cfg(not(target_arch = "wasm32"))]
-    start: std::time::Instant,
+    start: web_time::Instant,
     #[cfg(not(target_arch = "wasm32"))]
     last_beat: Option<f64>,
     /// When the store lock entry was last refreshed ([`store`]).
@@ -166,7 +196,7 @@ impl Autosaver {
             #[cfg(not(target_arch = "wasm32"))]
             running: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
-            start: std::time::Instant::now(),
+            start: web_time::Instant::now(),
             #[cfg(not(target_arch = "wasm32"))]
             last_beat: None,
             store_beat: None,
@@ -179,7 +209,7 @@ impl Autosaver {
     pub fn adopt(&mut self, s: &Session, uid: u64, path: &str) {
         let st = s.docs.iter().find(|d| d.uid == uid);
         let (written, host) = (st.map(|d| Arc::downgrade(&d.doc)), st.map(|d| Arc::downgrade(d.drawing())));
-        self.docs.insert(uid, Tracked { written, host, file: Some(path.to_string()), since: None });
+        self.docs.insert(uid, Tracked { written, host, file: Some(path.to_string()), since: None, held: None, full_at: None });
     }
 
     /// The autosave files this app has written or adopted.
@@ -229,9 +259,24 @@ impl Autosaver {
                 continue;
             }
             let since = *t.since.get_or_insert(now);
-            if minutes == 0 || dir.trim().is_empty() || (!urgent && now - since < f64::from(minutes) * 60.0) {
+            // The journal (files on disk with the .cdy saver): written at once, appended to after
+            // that, in full again every SAVETIME minutes.
+            let journal = minutes > 0 && !dir.trim().is_empty() && !dir.contains("://") && crate::cmd::file::cdy_hooks().is_some();
+            if journal && let Some(path) = t.file.clone() {
+                let due_full = t.full_at.is_none_or(|f| now - f >= f64::from(minutes) * 60.0);
+                if let (Some((held, from)), false) = (&t.held, due_full) {
+                    t.written = Some(Arc::downgrade(&st.doc));
+                    t.host = Some(Arc::downgrade(st.drawing()));
+                    t.since = None;
+                    jobs.push(Job::Append { uid: st.uid, path, doc: st.recovery_drawing(), held: held.clone(), from: *from });
+                    continue;
+                }
+            }
+            if minutes == 0 || dir.trim().is_empty() || (!journal && !urgent && now - since < f64::from(minutes) * 60.0) {
                 continue;
             }
+            t.held = None;
+            t.full_at = Some(now);
             let path = t
                 .file
                 .clone()
@@ -399,14 +444,39 @@ mod native {
         }
     }
 
-    fn write_file(write: WriteHook, doc: &Drawing, path: &str) -> std::result::Result<(), String> {
-        let (bytes, _) = encode(write, doc)?;
+    /// What a write leaves: for the journal, what the .cdy file holds and its length.
+    pub(super) type Held = Option<(crate::cmd::file::CdyState, u64)>;
+
+    fn write_file(write: WriteHook, doc: &Drawing, path: &str) -> std::result::Result<Held, String> {
+        // Through the .cdy saver when there is one: its state is the journal's start.
+        let (bytes, held) = match crate::cmd::file::cdy_hooks().map(|h| (h.save)(doc, None)) {
+            Some(Ok((crate::cmd::file::CdyWrite::Full(bytes), state))) => {
+                let len = bytes.len() as u64;
+                (bytes, Some((state, len)))
+            }
+            _ => (encode(write, doc)?.0, None),
+        };
         if let Some(dir) = Path::new(path).parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let tmp = format!("{path}.tmp");
         crate::writefile::write(&tmp, bytes).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+        std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+        Ok(held)
+    }
+
+    /// Append `doc`'s changes to the .cdy autosave at `path` (holding `held`, `from` bytes long).
+    fn append_file(write: WriteHook, doc: &Drawing, path: &str, held: &crate::cmd::file::CdyState, from: u64) -> std::result::Result<Held, String> {
+        let hooks = crate::cmd::file::cdy_hooks().ok_or("no .cdy saver")?;
+        let (out, state) = (hooks.save)(doc, Some(held))?;
+        match out {
+            crate::cmd::file::CdyWrite::Append { from: at, bytes, index_at } if at == from => {
+                crate::cmd::file::append_cdy(path, at, &bytes, index_at).map_err(|e| e.to_string())?;
+                Ok(Some((state, at + bytes.len() as u64)))
+            }
+            // The saver wants it whole (or the lengths disagree): a full write.
+            _ => write_file(write, doc, path),
+        }
     }
 
     impl Autosaver {
@@ -444,6 +514,12 @@ mod native {
             writes
         }
 
+        /// No write is in progress (each finished write taken in by [`Autosaver::reap`]).
+        pub fn idle(&mut self) -> bool {
+            self.reap();
+            self.running.is_empty()
+        }
+
         /// Take in the writes that have finished ([`Autosaver::tick`] does this first). A drawing
         /// whose write failed is no longer counted as autosaved: the next plan restarts its clock,
         /// so it is tried again SAVETIME later even if it doesn't change.
@@ -452,8 +528,13 @@ mod native {
             self.running = running;
             for (uid, h) in done {
                 self.busy.remove(&uid);
-                if !h.join().unwrap_or(false) {
-                    self.unwritten(uid);
+                match h.join() {
+                    Ok(Some(held)) => {
+                        if let Some(t) = self.docs.get_mut(&uid) {
+                            t.held = held;
+                        }
+                    }
+                    _ => self.unwritten(uid),
                 }
             }
         }
@@ -461,6 +542,9 @@ mod native {
         fn unwritten(&mut self, uid: u64) {
             if let Some(t) = self.docs.get_mut(&uid) {
                 t.written = None;
+                // The file's state is unknown now: the next write is a whole one.
+                t.held = None;
+                t.full_at = None;
             }
         }
 
@@ -469,19 +553,26 @@ mod native {
             for job in jobs {
                 match job {
                     Job::Delete { path } => discard(&path),
-                    Job::Write { uid, path, doc } => {
+                    Job::Write { uid, .. } | Job::Append { uid, .. } => {
                         let Some(write) = crate::cmd::file::io().map(|h| h.write) else {
                             log::warn!("autosave: file formats are not available in this build");
                             continue;
                         };
-                        let spawned = std::thread::Builder::new().name("autosave".into()).spawn(move || match write_file(write, &doc, &path) {
-                            Ok(()) => {
-                                log::info!("autosaved {path}");
-                                true
-                            }
-                            Err(e) => {
-                                log::warn!("autosave {path}: {e}");
-                                false
+                        let spawned = std::thread::Builder::new().name("autosave".into()).spawn(move || {
+                            let (r, path) = match job {
+                                Job::Write { path, doc, .. } => (write_file(write, &doc, &path), path),
+                                Job::Append { path, doc, held, from, .. } => (append_file(write, &doc, &path, &held, from), path),
+                                Job::Delete { path } => (Ok(None), path),
+                            };
+                            match r {
+                                Ok(held) => {
+                                    log::debug!("autosaved {path}");
+                                    Some(held)
+                                }
+                                Err(e) => {
+                                    log::warn!("autosave {path}: {e}");
+                                    None
+                                }
                             }
                         });
                         match spawned {

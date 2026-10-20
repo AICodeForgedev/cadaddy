@@ -16,6 +16,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         app.ui.dialog = Some("color".into());
     }
     crate::agentdlg::confirm_prompt(app, ctx);
+    crate::lispdlg::show(app, ctx);
     let Some(d) = app.ui.dialog.clone() else { return };
     let mut open = true;
     match d.as_str() {
@@ -28,6 +29,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "purge" => crate::cmddlgs::purge(app, ctx, &mut open),
         "find" => crate::finddlg::dialog(app, ctx, &mut open),
         crate::laywalkdlg::DIALOG => crate::laywalkdlg::dialog(app, ctx, &mut open),
+        crate::plotstampdlg::DIALOG => crate::plotstampdlg::dialog(app, ctx, &mut open),
         crate::countpalette::DIALOG => crate::countpalette::dialog(app, ctx, &mut open),
         crate::activitypalette::DIALOG => crate::activitypalette::dialog(app, ctx, &mut open),
         "color" => crate::cmddlgs::color(app, ctx, &mut open),
@@ -65,6 +67,11 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         crate::roomsdlg::DIALOG => crate::roomsdlg::dialog(app, ctx, &mut open),
         crate::exchangeloss::DIALOG => crate::exchangeloss::dialog(app, ctx, &mut open),
         crate::agentdlg::DIALOG => crate::agentdlg::dialog(app, ctx, &mut open),
+        crate::convertdlg::DIALOG => crate::convertdlg::dialog(app, ctx, &mut open),
+        crate::hyperlinks::CONFIRM => crate::hyperlinks::confirm_dialog(app, ctx, &mut open),
+        crate::secureloaddlg::DIALOG => crate::secureloaddlg::dialog(app, ctx, &mut open),
+        crate::actionsdlg::DIALOG => crate::actionsdlg::dialog(app, ctx, &mut open),
+        crate::customui::DIALOG => crate::customui::dialog(app, ctx, &mut open),
         o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }
@@ -408,6 +415,7 @@ fn about(ctx: &egui::Context, open: &mut bool) {
                     ui.add_space(6.0);
                     ui.label(RichText::new(crate::tl!("Includes open-source components: see NOTICE.")).color(t.text_dim));
                     ui.hyperlink_to(crate::tl!("Report a bug or request a feature"), crate::support::feedback_url("bug"));
+                    ui.hyperlink_to(crate::tl!("Report a security problem"), crate::support::SECURITY_URL);
                     if crate::support::DONATIONS {
                         ui.hyperlink_to(crate::tl!("Support CADaddy"), crate::support::donate_url());
                     }

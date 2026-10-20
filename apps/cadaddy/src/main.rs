@@ -21,6 +21,7 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod printing;
+mod relsig;
 mod spacemouse;
 mod system_animations;
 mod updater;
@@ -123,6 +124,7 @@ pub fn install_io() {
     });
     cadaddy_engine::cmd::pointcloud::set_reader(cadaddy_io::pointcloud_io::read);
     cadaddy_engine::cmd::markup::set_reader(cadaddy_io::pdf_markups::read);
+    cadaddy_engine::cmd::redline::set_opener(open_in_redline);
     cadaddy_engine::cmd::file::set_print(cadaddy_engine::cmd::file::PrintHooks { list: printing::list, print: printing::print });
     // .cdy saves append only what changed to the file a drawing was saved to or read from.
     cadaddy_engine::cmd::file::set_cdy_hooks(cadaddy_engine::cmd::file::CdyHooks {
@@ -162,6 +164,7 @@ fn services() -> Services {
                 .add_filter(i18n::t("SVG drawings (SVG, SVGZ)"), &["svg", "svgz"])
                 .add_filter(i18n::t("PDF (converted to CAD objects)"), &["pdf"])
                 .add_filter(i18n::t("3D models (glTF, OBJ, STL)"), &["glb", "gltf", "obj", "stl"])
+                .add_filter(i18n::t("Building models (IFC)"), &["ifc"])
                 .add_filter(i18n::t("Walkthroughs (CDYWALK)"), &["cdywalk"])
                 .add_filter(i18n::t("All files"), &["*"])
                 .pick_file()
@@ -234,7 +237,14 @@ fn filters_for_save(name: &str) -> Vec<(&'static str, &'static str)> {
     let lower = name.to_ascii_lowercase();
     // Exporting (an image or PDF suggested): the 3D model formats too.
     if [".svg", ".png", ".pdf"].iter().any(|e| lower.ends_with(e)) {
-        filters.extend([("3D model (glTF binary)", "glb"), ("3D model (glTF)", "gltf"), ("3D model (OBJ)", "obj"), ("3D model (STL)", "stl")]);
+        filters.extend([
+            ("3D model (glTF binary)", "glb"),
+            ("3D model (glTF)", "gltf"),
+            ("3D model (OBJ)", "obj"),
+            ("3D model (STL)", "stl"),
+            ("Building model (IFC4)", "ifc"),
+            ("3D printing (3MF)", "3mf"),
+        ]);
     }
     filters.sort_by_key(|(_, ext)| !lower.ends_with(&format!(".{ext}")));
     filters
@@ -247,22 +257,10 @@ fn config_dir() -> Option<std::path::PathBuf> {
     config_dir_from(|k| std::env::var_os(k))
 }
 
-/// [`config_dir`] with the environment passed in (`var` looks a variable up). An empty variable
-/// counts as unset, so a blank value never means the working directory.
+/// [`config_dir`] with the environment passed in (`var` looks a variable up); shared with the
+/// control-port clients that look for the token file there.
 fn config_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
-    let set = |k: &str| var(k).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
-    if let Some(dir) = set("CADADDY_CONFIG_DIR") {
-        return Some(dir);
-    }
-    if cfg!(target_os = "macos") {
-        set("HOME").map(|h| h.join("Library/Application Support/CADaddy"))
-    } else if cfg!(windows) {
-        set("APPDATA").map(|a| a.join("CADaddy"))
-    } else {
-        // The XDG spec ignores a relative XDG_CONFIG_HOME.
-        let base = set("XDG_CONFIG_HOME").filter(|p| p.is_absolute()).or_else(|| set("HOME").map(|h| h.join(".config")))?;
-        Some(base.join("cadaddy"))
-    }
+    cadaddy_engine::control_auth::config_dir_from(var)
 }
 
 const APP_ID: &str = "dev.aicodeforge.cadaddy";
@@ -306,6 +304,43 @@ fn control_flag(current: Option<u16>, value: Option<String>) -> Option<u16> {
         None => log::warn!("--control: no port given; the control channel is off"),
     }
     current
+}
+
+/// Open a PDF in Redline (AICodeForge's free PDF editor) when it is installed: `Ok(false)` when it
+/// isn't (SEND TO REDLINE then just saves the PDF).
+fn open_in_redline(path: &str) -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        // By its bundle identifier: fails (without opening anything else) when it isn't installed.
+        let ok = std::process::Command::new("open")
+            .args(["-b", "dev.aicodeforge.redline", path])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_err(|e| e.to_string())?
+            .success();
+        Ok(ok)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Where its installer puts it for the current user.
+        let Some(exe) = std::env::var_os("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("Programs").join("Redline").join("Redline.exe"))
+        else {
+            return Ok(false);
+        };
+        if !exe.is_file() {
+            return Ok(false);
+        }
+        std::process::Command::new(exe).arg(path).spawn().map(|_| true).map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        match std::process::Command::new("redline").arg(path).spawn() {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e.to_string()),
+        }
+    }
 }
 
 fn main() -> eframe::Result {
@@ -445,6 +480,8 @@ fn main() -> eframe::Result {
                         log::warn!("no LISP support folder {}: {e}", support.display());
                     }
                     app.session.set_lisp_support_dir(Some(support));
+                    // Action macros (ACTSTOP) are kept in `<settings>/actions`.
+                    app.session.set_action_dir(Some(dir.join("actions")));
                 }
                 app.integrated_titlebar = cfg!(target_os = "macos");
                 if surface.present_mode == eframe::wgpu::PresentMode::AutoNoVsync {
@@ -469,8 +506,14 @@ fn main() -> eframe::Result {
                 // Options: both serve the same window.
                 let ports: Vec<u16> = control_port.into_iter().chain(app.ui.agent_control.then_some(cadaddy_engine::AGENT_PORT)).collect();
                 if !ports.is_empty() {
-                    let rx = control_server::start_ports(&ports, cc.egui_ctx.clone());
-                    app = app.with_control(rx);
+                    // A fresh token each start unless the user turned it off (Options ▸ System).
+                    let token = app.ui.control_token.then(control_server::new_token);
+                    if token == Some(None) {
+                        log::error!("control server: no system randomness for a token; the control channel stays closed");
+                    } else {
+                        let rx = control_server::start_ports(&ports, cc.egui_ctx.clone(), token.flatten(), config_dir().as_deref());
+                        app = app.with_control(rx);
+                    }
                 }
                 if sample {
                     let _ = app.run("ui.sample", serde_json::json!({}));

@@ -278,6 +278,12 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
         None => HatchLoop { curves: Vec::new(), vertices: outer.iter().map(|q| PolyVertex::new(*q)).collect(), outer: true, sources },
     };
     let mut loops = vec![first];
+    // Outlines of the islands taken so far: a closed object of the same shape as one of them (a
+    // copy, or a polyline an earlier BOUNDARY traced over it) is the same island, taken once.
+    // Twice would cancel out under even-odd filling, and each BOUNDARY pick would copy every
+    // earlier copy again (a dozen picks on the sample made 1,400 polylines and took seconds).
+    let mut taken: Vec<(Bounds2, f64, Vec<Vec2>)> = Vec::new();
+    let near = |a: f64, b: f64, t: f64| (a - b).abs() <= t;
     // Islands: closed objects entirely inside the outer loop that don't contain the pick point.
     if let Some(store) = d.space(&space) {
         for e in store.iter() {
@@ -293,7 +299,20 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
                 let inside = pts.iter().all(|q| point_in_polygon(&outer, *q) || outer.iter().any(|o| o.near(*q, tol * 10.0)));
                 let same_as_outer = (cadaddy_geom::shoelace(&pts).abs() - cadaddy_geom::shoelace(&outer).abs()).abs() < tol.max(1e-6) * 1000.0;
                 if inside && !same_as_outer && !point_in_polygon(&pts, p) {
-                    loops.push(HatchLoop { curves, vertices: vs, outer: false, sources: vec![e.handle] });
+                    let area = cadaddy_geom::shoelace(&pts).abs();
+                    let close = tol.max(eb.width().max(eb.height()) * 1e-3) * 10.0;
+                    let same = taken.iter().any(|(b, a, q)| {
+                        near(b.min.x, eb.min.x, close)
+                            && near(b.min.y, eb.min.y, close)
+                            && near(b.max.x, eb.max.x, close)
+                            && near(b.max.y, eb.max.y, close)
+                            && near(*a, area, close * (eb.width() + eb.height()))
+                            && pts.iter().all(|x| q.iter().any(|y| x.near(*y, close)) || on_outline(q, *x, close))
+                    });
+                    if !same {
+                        taken.push((eb, area, pts));
+                        loops.push(HatchLoop { curves, vertices: vs, outer: false, sources: vec![e.handle] });
+                    }
                 }
             }
         }
@@ -315,7 +334,16 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
             let pad = eb.height().min(eb.width()) * 0.25;
             let b = eb.expand(pad);
             let corners = b.corners();
-            if corners.iter().all(|q| point_in_polygon(&outer, *q)) {
+            let close = tol.max(b.width().max(b.height()) * 1e-3) * 10.0;
+            // A rectangle an earlier BOUNDARY drew around this text (taken above) is this margin.
+            let dup = taken.iter().any(|(t, _, q)| {
+                near(t.min.x, b.min.x, close)
+                    && near(t.min.y, b.min.y, close)
+                    && near(t.max.x, b.max.x, close)
+                    && near(t.max.y, b.max.y, close)
+                    && corners.iter().all(|x| q.iter().any(|y| x.near(*y, close)) || on_outline(q, *x, close))
+            });
+            if !dup && corners.iter().all(|q| point_in_polygon(&outer, *q)) {
                 loops.push(HatchLoop {
                     curves: Vec::new(),
                     vertices: corners.iter().map(|q| PolyVertex::new(*q)).collect(),
@@ -331,8 +359,25 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
         let open_curves = !island.sources.is_empty()
             && island.sources.iter().all(|&i| owners.get(i).and_then(|h| d.entity(*h)).is_some_and(|e| island_curve(d, e)));
         if open_curves {
-            let sources = handles_of(&owners, &island.sources);
-            loops.push(HatchLoop { curves: Vec::new(), vertices: island.outline.into_iter().map(PolyVertex::new).collect(), outer: false, sources });
+            // The same square traced by an earlier BOUNDARY (a closed polyline, taken above).
+            let ib = Bounds2::from_points(island.outline.iter().copied());
+            let close = tol.max(ib.width().max(ib.height()) * 1e-3) * 10.0;
+            let dup = taken.iter().any(|(b, _, q)| {
+                near(b.min.x, ib.min.x, close)
+                    && near(b.min.y, ib.min.y, close)
+                    && near(b.max.x, ib.max.x, close)
+                    && near(b.max.y, ib.max.y, close)
+                    && island.outline.iter().all(|x| q.iter().any(|y| x.near(*y, close)) || on_outline(q, *x, close))
+            });
+            if !dup {
+                let sources = handles_of(&owners, &island.sources);
+                loops.push(HatchLoop {
+                    curves: Vec::new(),
+                    vertices: island.outline.into_iter().map(PolyVertex::new).collect(),
+                    outer: false,
+                    sources,
+                });
+            }
         }
     }
     Ok(loops)
@@ -645,6 +690,16 @@ fn boundary_at(s: &mut Session, q: Vec2) -> Result<Vec<Handle>> {
         out.push(s.add_entity(lwpoly(l.vertices, true))?);
     }
     Ok(out)
+}
+
+/// Whether `p` lies within `d` of the closed outline `pts` (on one of its edges).
+fn on_outline(pts: &[Vec2], p: Vec2, d: f64) -> bool {
+    pts.iter().zip(pts.iter().cycle().skip(1)).any(|(a, b)| {
+        let ab = *b - *a;
+        let len2 = ab.x * ab.x + ab.y * ab.y;
+        let t = if len2 > 0.0 { (((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / len2).clamp(0.0, 1.0) } else { 0.0 };
+        p.near(*a + ab * t, d)
+    })
 }
 
 /// Most internal points one BOUNDARY call accepts (checked before the list is copied).
