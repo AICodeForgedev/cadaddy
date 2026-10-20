@@ -6,6 +6,7 @@ pub(crate) mod annoscale;
 pub(crate) mod annotate;
 pub mod array;
 pub(crate) mod ask;
+mod attipedit;
 mod audit;
 pub mod autospec;
 pub mod blockdetect;
@@ -29,6 +30,7 @@ pub mod exterior;
 mod field;
 pub mod file;
 pub mod find;
+mod frames;
 pub mod grids;
 mod gripcmds;
 mod griphot;
@@ -43,6 +45,9 @@ mod layer;
 pub mod markup;
 pub mod pointcloud;
 pub mod schedules;
+mod setbylayer;
+mod vpsync;
+mod xplode;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
 pub use layer::notify::unreconciled as unreconciled_layers;
@@ -330,6 +335,11 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(render::specs());
         v.extend(actions::specs());
         v.extend(edit3d::specs());
+        v.extend(setbylayer::specs());
+        v.extend(xplode::specs());
+        v.extend(vpsync::specs());
+        v.extend(attipedit::specs());
+        v.extend(frames::specs());
         v
     })
 }
