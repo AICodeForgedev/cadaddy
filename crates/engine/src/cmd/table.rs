@@ -35,7 +35,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<cada
     let d = &st.doc;
     let mut fits: Vec<(Handle, Vec<f64>)> = Vec::new();
     for store in std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)) {
-        for e in store.iter() {
+        for e in store.iter_kinds(cadaddy_doc::KIND_TABLE) {
             let EntityKind::Table(t) = &e.kind else { continue };
             if before.entity(e.handle).is_some_and(|b| std::sync::Arc::ptr_eq(b, e)) || fits.len() >= MAX_REFIT {
                 continue;

@@ -141,6 +141,15 @@ impl Session {
         r
     }
 
+    /// Run a batch for an agent ([`Session::execute_many`]): each command under the rails, as
+    /// [`Session::execute_agent`] runs one (a save over a file inside a batch waits for the user).
+    pub fn execute_many_agent(&mut self, commands: &[Value], stop_on_error: bool) -> Result<Value> {
+        let was = std::mem::replace(&mut self.agent.from_agent, true);
+        let r = self.execute_many(commands, stop_on_error);
+        self.agent.from_agent = was;
+        r
+    }
+
     /// The rails around [`Session::execute`]'s outermost call: a dry run, or a confirmation
     /// first. `None`: run it normally.
     pub(crate) fn guard_call(&mut self, id: &str, params: &Value) -> Option<Result<Value>> {

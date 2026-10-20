@@ -457,7 +457,8 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
         "engine.executeMany" => {
             let Some(list) = p.get("commands").and_then(Value::as_array) else { return err("missing `commands`: [{command, params}]") };
             let stop = p.get("stopOnError").and_then(Value::as_bool).unwrap_or(false);
-            wrap(app.session.execute_many(list, stop).map_err(|e| e.to_string()))
+            // An agent's batch: each command under the same rails as its single calls.
+            wrap(app.session.execute_many_agent(list, stop).map_err(|e| e.to_string()))
         }
         "events.subscribe" => ok(app.session.events_subscribe(p.get("on").and_then(Value::as_bool).unwrap_or(true))),
         "events.poll" => ok(app.session.events_poll(p.get("since").and_then(Value::as_u64).unwrap_or(0))),

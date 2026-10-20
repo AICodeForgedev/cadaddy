@@ -76,6 +76,15 @@ fn a_flood_of_events_is_capped_and_counted() {
         s.event("dialog.opened", json!({"dialog": format!("d{i}")}));
     }
     let r = s.events_poll(0);
-    assert_eq!(r["events"].as_array().unwrap().len(), 1_000);
+    // The thousand kept, after a notice of the 200 the reader missed.
+    let evs = r["events"].as_array().unwrap();
+    assert_eq!(evs.len(), 1_001);
+    assert_eq!((evs[0]["type"].as_str(), evs[0]["count"].as_u64()), (Some("events.dropped"), Some(200)));
+    assert_eq!(evs[1]["dialog"], "d200");
     assert_eq!(r["dropped"], 200);
+    // Read up to date: nothing missed, no notice.
+    let next = r["next"].as_u64().unwrap();
+    s.event("dialog.opened", json!({"dialog": "late"}));
+    let r = s.events_poll(next);
+    assert_eq!(r["events"].as_array().unwrap().len(), 1, "{r}");
 }

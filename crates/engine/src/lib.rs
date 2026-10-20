@@ -1291,8 +1291,9 @@ impl Session {
         if outer && r.is_ok() {
             self.journal.call(id, params);
         }
-        // Events reads (and subscribing) aren't news themselves.
-        if outer && !id.starts_with("events.") {
+        // Events reads (and subscribing) aren't news themselves, nor is the list of open drawings
+        // the MCP server reads after every call to notice drawings opened and closed.
+        if outer && !id.starts_with("events.") && id != "document.list" {
             self.event("command.run", serde_json::json!({ "command": id, "ok": r.is_ok() }));
         }
         r
