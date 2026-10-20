@@ -418,9 +418,10 @@ pub fn write_ascii_as(tags: &[Tag], utf8: bool) -> String {
 /// Write tags as pre-R2007 ASCII DXF with text in the code page `code_page` names (a
 /// `$DWGCODEPAGE` value such as `ANSI_1252`), as the DXF Reference describes for those versions:
 /// a character the code page has is written as its bytes, any other as a `\U+XXXX` escape. A
-/// code page CADCraft doesn't know gives [`write_ascii`]'s pure ASCII output.
+/// code page CADCraft doesn't know, `ASCII`, and `UTF8`/`UNICODE` (not a pre-2007 code page)
+/// give [`write_ascii`]'s pure ASCII output.
 pub fn write_ascii_in(tags: &[Tag], code_page: &str) -> Vec<u8> {
-    ascii(tags, Strings::Escaped(codepage::decoder(code_page)))
+    ascii(tags, Strings::Escaped(codepage::encoder(code_page)))
 }
 
 /// How a writer stores string values.
@@ -463,7 +464,7 @@ pub fn write_binary(tags: &[Tag], utf8: bool) -> Vec<u8> {
 /// Write tags as pre-R2007 binary DXF with text in the code page `code_page` names, as
 /// [`write_ascii_in`] does.
 pub fn write_binary_in(tags: &[Tag], code_page: &str) -> Vec<u8> {
-    binary(tags, Strings::Escaped(codepage::decoder(code_page)))
+    binary(tags, Strings::Escaped(codepage::encoder(code_page)))
 }
 
 fn binary(tags: &[Tag], strings: Strings) -> Vec<u8> {

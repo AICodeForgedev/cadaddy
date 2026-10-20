@@ -146,6 +146,25 @@ fn saving_writes_text_in_the_code_page() {
     }
 }
 
+/// A file whose header declares `ASCII` keeps that code page and stays ASCII when saved: its
+/// non-ASCII text is written as `\U+` escapes, not as Windows-1252 bytes.
+#[test]
+fn saving_an_ascii_file_keeps_it_ascii() {
+    use cadcraft_io::{SaveOptions, Version};
+    let d = cadcraft_io::read_dxf(&ascii_dxf("AC1015", "ASCII", b"El\\U+00E9trica", b"B", b"Eletrica \\U+00E9")).unwrap();
+    assert_eq!(names(&d), ("Elétrica".into(), "B".into(), "Eletrica é".into()));
+    for version in [Version::R2000, Version::R2004] {
+        let ascii = cadcraft_io::write_with(&d, "x.dxf", &SaveOptions { version: Some(version), binary: false }).unwrap();
+        assert!(ascii.is_ascii(), "{version}");
+        let binary = cadcraft_io::write_with(&d, "x.dxf", &SaveOptions { version: Some(version), binary: true }).unwrap();
+        for out in [&ascii, &binary] {
+            assert!(out.windows(14).any(|w| w == b"El\\U+00E9trica"), "{version}");
+            assert!(out.windows(5).any(|w| w == b"ASCII"), "{version}: the header keeps its code page");
+            assert_eq!(names(&cadcraft_io::read_dxf(out).unwrap()), ("Elétrica".into(), "B".into(), "Eletrica é".into()), "{version}");
+        }
+    }
+}
+
 /// A binary DXF: R2000 strings are in the code page, R2007+ strings UTF-8.
 #[test]
 fn binary_dxf_honours_the_code_page() {
