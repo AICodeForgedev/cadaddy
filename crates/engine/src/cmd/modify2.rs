@@ -484,7 +484,7 @@ fn pedit_apply(s: &mut Session, h: Handle, opt: &str, p: &Value) -> Result<Value
     Ok(json!({ "handle": h.hex() }))
 }
 
-fn run_pedit(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn run_pedit(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     if hs.is_empty() {
         return Err(bad("pedit", "`handle` is required"));
@@ -522,6 +522,11 @@ enum PPhase {
 }
 
 mod pedit_vertex;
+
+/// PEDIT started at its Multiple selection (MPEDIT).
+pub(crate) fn pedit_multiple() -> Box<dyn Interactive> {
+    Box::new(PeditM { phase: PPhase::MSelect, ..Default::default() })
+}
 
 #[derive(Default)]
 struct PeditM {

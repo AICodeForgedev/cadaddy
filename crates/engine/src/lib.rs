@@ -581,6 +581,8 @@ pub struct Settings {
     /// 2 layer, 4 linetype, 8 linetype scale, 16 lineweight, 32 plot style, 64 object style,
     /// 128 name).
     pub selectsimilarmode: u32,
+    /// REDIRMODE: what REDIR changes paths in (any of `styles`, `xrefs`, `images`, `rtext`).
+    pub redirmode: Vec<String>,
     pub otrack: bool,
     /// PICKBOX in pixels.
     pub pickbox: f64,
@@ -688,6 +690,7 @@ impl Default for Settings {
             plot_transparency_override: 1,
             selectioncycling: 2,
             selectsimilarmode: 130,
+            redirmode: ["styles", "xrefs", "images", "rtext"].map(String::from).to_vec(),
             otrack: true,
             pickbox: 3.0,
             aperture: 10.0,
