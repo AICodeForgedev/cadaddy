@@ -58,7 +58,8 @@ enum DimStage {
 #[derive(Default)]
 struct DashDimStyle {
     stage: DimStage,
-    picked: Vec<String>,
+    /// Apply's "Select objects" (found counts, Remove, Undo, as everywhere).
+    sel: super::machines::SelectPhase,
 }
 
 impl Interactive for DashDimStyle {
@@ -77,7 +78,7 @@ impl Interactive for DashDimStyle {
             DimStage::Save => Prompt::new("Enter name for new dimension style or [?]", Accept::TEXT),
             DimStage::Restore => Prompt::new("Enter a dimension style name, [?] or <select dimension>", Accept::TEXT),
             DimStage::Variables => Prompt::new("Enter a dimension style name, [?] or <select dimension>", Accept::TEXT),
-            DimStage::Apply => Prompt::new("Select objects", Accept::SELECT),
+            DimStage::Apply => self.sel.prompt(),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
@@ -143,24 +144,14 @@ impl Interactive for DashDimStyle {
                 }
                 _ => Ok(Step::Done),
             },
-            DimStage::Apply => match i {
-                Input::Pick(hs) => {
-                    let mut have: std::collections::HashSet<String> = self.picked.iter().cloned().collect();
-                    for h in hs {
-                        let h = h.hex();
-                        if have.insert(h.clone()) {
-                            self.picked.push(h);
-                        }
-                    }
-                    Ok(Step::Continue)
-                }
-                Input::Enter => {
-                    if !self.picked.is_empty() {
-                        call(s, "dimstyle.update", json!({ "handles": self.picked }))?;
-                    }
+            DimStage::Apply => match self.sel.feed(s, &i)? {
+                super::machines::SelOutcome::More => Ok(Step::Continue),
+                super::machines::SelOutcome::Done(hs) => {
+                    let handles: Vec<String> = hs.iter().map(|h| h.hex()).collect();
+                    call(s, "dimstyle.update", json!({ "handles": handles }))?;
                     Ok(Step::Done)
                 }
-                _ => Ok(Step::Continue),
+                super::machines::SelOutcome::Empty => Ok(Step::Done),
             },
         }
     }

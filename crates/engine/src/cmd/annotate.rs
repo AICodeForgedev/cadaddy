@@ -574,21 +574,26 @@ fn run_leader(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "handles": out }))
 }
 
+/// DIMSTYLE Apply (-DIMSTYLE A, DIMSTYLE Update): the chosen dimensions take the current
+/// dimension settings: the current style, and the DIM* variables set apart from it (SETVAR
+/// DIMSCALE 48) as their overrides, as a new dimension would get them.
 fn run_update(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let st = style(s);
+    let overrides = s.doc().map(|d| d.dim_overrides()).unwrap_or_default();
     let d = s.doc_mut()?;
     let mut n = 0;
     for h in hs {
         let _ = d.modify_entity(h, |e| {
             if let EntityKind::Dimension(dm) = &mut e.kind {
                 dm.style = st.clone();
+                dm.overrides = overrides.clone();
                 dm.block = None;
                 n += 1;
             }
         });
     }
-    Ok(json!({ "updated": n }))
+    Ok(json!({ "updated": n, "message": format!("{n} dimension(s) updated to the current settings.") }))
 }
 
 /// DIMOVERRIDE: per-dimension style overrides (`clear` removes them); `text` sets the text.
