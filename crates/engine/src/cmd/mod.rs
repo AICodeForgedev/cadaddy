@@ -94,6 +94,7 @@ mod sections;
 mod selecttools;
 mod settings;
 mod solids;
+mod solview;
 mod spline_opts;
 pub mod standards;
 pub(crate) mod table;
@@ -332,6 +333,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(crate::secureload::specs());
         v.extend(solids::specs());
         v.extend(sections::specs());
+        v.extend(solview::specs());
         v.extend(render::specs());
         v.extend(actions::specs());
         v.extend(edit3d::specs());
