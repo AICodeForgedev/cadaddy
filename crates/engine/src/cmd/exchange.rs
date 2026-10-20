@@ -242,7 +242,7 @@ fn extension(path: &str) -> String {
 }
 
 /// Write `bytes` to `path` through a temporary file, so a failed write keeps the old file.
-fn write_file(cmd: &str, path: &str, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_file(cmd: &str, path: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let tmp = format!("{path}.cadaddy-tmp");

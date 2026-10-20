@@ -42,6 +42,7 @@ pub(crate) mod inquiry;
 mod layer;
 pub mod markup;
 pub mod pointcloud;
+mod rasterout;
 pub mod schedules;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
@@ -307,6 +308,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(layout::specs());
         v.extend(plotstamp::specs());
         v.extend(exchange::specs());
+        v.extend(rasterout::specs());
         v.extend(props::specs());
         v.extend(inquiry::specs());
         v.extend(settings::specs());
