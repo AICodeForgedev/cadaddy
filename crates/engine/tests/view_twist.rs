@@ -231,3 +231,33 @@ fn the_model_view_twist_is_kept_through_a_dxf_save() {
     assert!(t.doc().unwrap().vports.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A template's saved view twist is the new drawing's (NEW from a `.dxf` template with nothing
+/// drawn shows its limits, turned).
+#[test]
+fn a_template_keeps_its_view_twist() {
+    cadaddy_engine::cmd::file::set_io(cadaddy_engine::cmd::file::IoHooks {
+        read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
+        write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
+    let dir = std::env::temp_dir().join(format!("cadaddy-vptwist-tpl-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("turned.dxf");
+    let mut s = Session::new();
+    s.new_drawing(true);
+    s.execute("view.twist", &json!({"angle": 90})).unwrap();
+    s.execute("saveas", &json!({ "path": path.to_string_lossy() })).unwrap();
+    let mut t = Session::new();
+    t.viewport_px = (1600.0, 900.0);
+    t.execute("new", &json!({ "template": path.to_string_lossy() })).unwrap();
+    let st = t.state().unwrap();
+    assert!((st.twist().to_degrees() - 90.0).abs() < 1e-9);
+    // The limits' middle is at the centre of the screen.
+    let (lo, hi) = (st.doc.header.point("LIMMIN").unwrap().xy(), st.doc.header.point("LIMMAX").unwrap().xy());
+    assert!(close(model_at(&t, st.view().center), (lo + hi) * 0.5));
+    let _ = std::fs::remove_dir_all(&dir);
+}

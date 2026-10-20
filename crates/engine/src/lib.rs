@@ -563,6 +563,14 @@ impl DocState {
         self.put_paper_view(View { center, height: v.height });
         true
     }
+    /// A model space box as the current view sees it: the centre and width/height of its four
+    /// corners on the view plane (the box itself when the view isn't turned).
+    pub fn seen_box(&self, ext: Bounds2) -> (Vec2, f64, f64) {
+        let Some(p) = self.projection() else { return (ext.center(), ext.width(), ext.height()) };
+        let corners = [ext.min, Vec2::new(ext.max.x, ext.min.y), ext.max, Vec2::new(ext.min.x, ext.max.y)];
+        let seen = Bounds2::from_points(corners.iter().map(|c| p.project(c.to3(0.0))));
+        if seen.is_empty() { (ext.center(), ext.width(), ext.height()) } else { (seen.center(), seen.width(), seen.height()) }
+    }
     /// Keep model space's view twist in the drawing, where files carry it: the twist of the
     /// lone `*Active` VPORT tile when the model view isn't tiled (DXF VPORT group 51), the
     /// current tile's when it is. Changes nothing when the drawing already says so.
@@ -2465,10 +2473,13 @@ impl Session {
         if !ext.is_empty() {
             st.set_view_quiet(framed(ext, self.viewport_px, self.viewport_inset_px, |a| a, 1.1));
         }
-        // The model view's twist the file saved (VPORT group 51 of its `*Active` viewport).
+        // The model view's twist the file saved (VPORT group 51 of its `*Active` viewport), the
+        // extents fitted as the turned view sees them.
         let twist = st.doc.vports.iter().find(|c| c.is_active()).and_then(|c| c.tiles.first()).map_or(0.0, |t| t.twist);
-        if twist != 0.0 && st.space == Space::Model {
-            st.set_twist(twist);
+        if twist != 0.0 && st.space == Space::Model && st.set_twist(twist) && !ext.is_empty() {
+            let (c, w, h) = st.seen_box(ext);
+            let seen = Bounds2::new(c - Vec2::new(w / 2.0, h / 2.0), c + Vec2::new(w / 2.0, h / 2.0));
+            st.set_view_quiet(framed(seen, self.viewport_px, self.viewport_inset_px, |a| a, 1.1));
         }
         self.end_running();
         self.docs.push(st);
