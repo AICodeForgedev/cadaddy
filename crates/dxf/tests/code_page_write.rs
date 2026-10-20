@@ -46,12 +46,16 @@ fn text_is_written_in_the_code_page() {
     }
 }
 
-/// Without a known code page the output is what `write_ascii` writes, line breaks included.
+/// Without a known code page, and for `ASCII`, `UTF8` and `UNICODE` headers, the output is what
+/// `write_ascii` writes (pure ASCII with escapes), line breaks included.
 #[test]
-fn unknown_code_page_is_pure_ascii() {
-    let tags = file("EBCDIC", "Ação\r\nfim");
-    let bytes = write_ascii_in(&tags, "EBCDIC");
-    assert!(bytes.is_ascii());
-    assert_eq!(bytes, write_ascii(&tags).into_bytes());
-    assert!(contains(&bytes, b"A\\U+00E7\\U+00E3o  fim"));
+fn unknown_ascii_and_utf8_code_pages_are_pure_ascii() {
+    for cp in ["EBCDIC", "ASCII", "ascii ", "UTF8", "UNICODE"] {
+        let tags = file(cp, "Ação\r\nfim");
+        let bytes = write_ascii_in(&tags, cp);
+        assert!(bytes.is_ascii(), "{cp}");
+        assert_eq!(bytes, write_ascii(&tags).into_bytes(), "{cp}");
+        assert!(contains(&bytes, b"A\\U+00E7\\U+00E3o  fim"), "{cp}");
+        assert!(write_binary_in(&tags, cp).iter().all(u8::is_ascii), "{cp} binary");
+    }
 }
