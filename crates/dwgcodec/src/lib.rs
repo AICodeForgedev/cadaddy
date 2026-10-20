@@ -15,8 +15,14 @@
 
 pub mod bits;
 pub mod crc;
+mod dwg;
 mod error;
+pub mod frame;
+pub mod objects;
+pub mod objmap;
+mod r2000;
 
+pub use dwg::{Dwg, Section, read, read_with, write};
 pub use error::{Error, Result};
 
 /// The DWG versions this codec knows, by the six-byte version id at the start of a file
