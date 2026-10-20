@@ -203,6 +203,10 @@ impl Interactive for GeoM {
                     return Ok(Step::Done);
                 }
                 let t = text.unwrap_or_default();
+                // Enter with no location to keep ends the command.
+                if t.is_empty() && cur.is_none() && i == Input::Enter {
+                    return Ok(Step::Done);
+                }
                 let v = if t.is_empty() { cur.map(|g| g.latitude) } else { t.parse::<f64>().ok() };
                 match v.filter(|v| v.is_finite() && (-90.0..=90.0).contains(v)) {
                     Some(v) => self.lat = Some(v),
@@ -211,6 +215,9 @@ impl Interactive for GeoM {
             }
             (Some(_), None, _) => {
                 let t = text.unwrap_or_default();
+                if t.is_empty() && cur.is_none() && i == Input::Enter {
+                    return Ok(Step::Done);
+                }
                 let v = if t.is_empty() { cur.map(|g| g.longitude) } else { t.parse::<f64>().ok() };
                 match v.filter(|v| v.is_finite() && (-180.0..=180.0).contains(v)) {
                     Some(v) => self.lon = Some(v),

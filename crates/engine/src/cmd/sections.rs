@@ -584,12 +584,21 @@ impl Interactive for PlaceM {
             }
             return Ok(Step::Continue);
         }
-        let Input::Point(at) = i else { return Ok(Step::Continue) };
-        match self.what {
-            Place::Section => run_sectionplanetoblock(s, &json!({ "handle": self.picked.map(|h| h.hex()), "at": [at.x, at.y] }))?,
-            Place::Flatshot => run_flatshot(s, &json!({ "at": [at.x, at.y] }))?,
-            Place::Base => run_viewbase(s, &json!({ "at": [at.x, at.y] }))?,
+        let at = match i {
+            Input::Point(at) => at,
+            // Enter places nothing and ends the command.
+            Input::Enter => return Ok(Step::Done),
+            _ => return Ok(Step::Continue),
         };
+        let r = match self.what {
+            Place::Section => run_sectionplanetoblock(s, &json!({ "handle": self.picked.map(|h| h.hex()), "at": [at.x, at.y] })),
+            Place::Flatshot => run_flatshot(s, &json!({ "at": [at.x, at.y] })),
+            Place::Base => run_viewbase(s, &json!({ "at": [at.x, at.y] })),
+        };
+        // What can't be drawn here can't be drawn elsewhere either.
+        if let Err(e) = r {
+            return super::machines::end_with(s, &e);
+        }
         s.set_selection(Vec::new());
         Ok(Step::Done)
     }
@@ -633,6 +642,10 @@ impl Interactive for ViewSectionM {
             return Ok(Step::Continue);
         }
         let Input::Point(p) = i else {
+            // Enter ends the command.
+            if i == Input::Enter {
+                return Ok(Step::Done);
+            }
             if let Input::Text(t) = &i
                 && number(t).is_some()
             {
@@ -645,7 +658,11 @@ impl Interactive for ViewSectionM {
             (Some(_), None) => self.to = Some(p),
             (Some(f), Some(t)) => {
                 let base = self.base.map(|h| h.hex());
-                run_viewsection(s, &json!({ "base": base, "from": [f.x, f.y], "to": [t.x, t.y], "at": [p.x, p.y] }))?;
+                // A base that isn't a drawing view, or a cut through nothing, stays so wherever
+                // the view goes.
+                if let Err(e) = run_viewsection(s, &json!({ "base": base, "from": [f.x, f.y], "to": [t.x, t.y], "at": [p.x, p.y] })) {
+                    return super::machines::end_with(s, &e);
+                }
                 s.set_selection(Vec::new());
                 return Ok(Step::Done);
             }

@@ -1090,6 +1090,10 @@ impl Interactive for LinearM {
             return Ok(Step::Continue);
         }
         if self.selecting {
+            // Enter with no object ends the command.
+            if i == Input::Enter {
+                return Ok(Step::Done);
+            }
             if let Input::Point(p) = i {
                 let Some(h) = pick_at(s, p) else {
                     s.echo("*Invalid selection*");

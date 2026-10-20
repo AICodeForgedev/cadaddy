@@ -518,6 +518,10 @@ impl Interactive for XrefM {
             }
             XStage::File { overlay } => {
                 let overlay = *overlay;
+                // Enter with no file ends the command.
+                if i == Input::Enter {
+                    return Ok(Step::Cancel);
+                }
                 let Some(path) = text(&i) else { return Ok(Step::Continue) };
                 let key = match attach(s, &stem(&path), &path, overlay) {
                     Ok(k) => k,
