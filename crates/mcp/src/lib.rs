@@ -16,7 +16,7 @@ mod server;
 mod tools;
 
 pub use backend::{Auto, Backend, Headless, Remote};
-pub use server::{PROTOCOL_VERSION, Server};
+pub use server::{PROTOCOL_VERSION, Server, event_notifications};
 
 #[cfg(test)]
 mod tests;

@@ -87,6 +87,7 @@ pub fn entity_codec() -> Option<&'static EntityCodec> {
 
 /// COMPARE (drawing comparison).
 pub mod compare;
+pub mod convert;
 mod r12;
 pub mod zip;
 
@@ -331,12 +332,17 @@ fn is_dxf(path: &str) -> bool {
 /// The drawing written to `path` with `opts`: through [`IoHooks::write`] when no option is set,
 /// else through the [`write_as`] hook.
 fn write_bytes(s: &Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Vec<u8>> {
+    // A drawing file is the drawing outside the Block Editor; an image is what is shown.
+    let d: &cadaddy_doc::Drawing = if is_drawing_file(path) { s.state()?.drawing() } else { s.doc()? };
+    write_drawing(d, cmd, path, opts)
+}
+
+/// [`write_bytes`] for a drawing that isn't open (DWGCONVERT's).
+fn write_drawing(d: &cadaddy_doc::Drawing, cmd: &str, path: &str, opts: &SaveAs) -> Result<Vec<u8>> {
     let hooks = io().ok_or_else(|| bad(cmd, "file formats are not available in this build"))?;
     if opts.binary && !is_dxf(path) {
         return Err(bad(cmd, "binary applies to DXF files only"));
     }
-    // A drawing file is the drawing outside the Block Editor; an image is what is shown.
-    let d: &cadaddy_doc::Drawing = if is_drawing_file(path) { s.state()?.drawing() } else { s.doc()? };
     let r = if opts.version == Some(Version::R12) {
         // Release 12 DXF: the drawing brought down to what R12 holds first.
         if !is_dxf(path) {
@@ -420,6 +426,7 @@ fn run_script(s: &mut Session, p: &Value) -> Result<Value> {
         let path = _path;
         #[cfg(not(target_arch = "wasm32"))]
         {
+            s.check_load(std::path::Path::new(path), "SCRIPT", Some(("script".into(), json!({ "path": path }))))?;
             let bytes = crate::readfile::read(path).map_err(|e| bad("script", format!("{path}: {e}")))?;
             String::from_utf8_lossy(&bytes).into_owned()
         }
@@ -457,7 +464,7 @@ impl Interactive for ScriptM {
         }
         match run_script(s, &json!({ "path": t })) {
             Ok(_) => Ok(Step::Done),
-            Err(EngineError::BadParams { msg, .. }) => {
+            Err(EngineError::BadParams { msg, .. } | EngineError::Other(msg)) => {
                 s.echo(msg);
                 Ok(Step::Done)
             }
@@ -905,6 +912,7 @@ pub(crate) fn store(path: &str, bytes: &[u8]) -> Result<()> {
 /// [`store`], keeping the previous drawing file as `.bak` only when `keep_bak`: a DWG copy
 /// (DWGCOPY) keeps none, as its `.bak` would replace the drawing's own.
 pub(crate) fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<()> {
+    crate::writefile::protected(std::path::Path::new(path)).map_err(|e| bad("save", e.to_string()))?;
     // An agent's dry run changes nothing, files included.
     if !crate::agent::writes_allowed() {
         return Err(crate::EngineError::Other(format!("Dry run: {path} was not written.")));
@@ -1172,7 +1180,9 @@ pub fn not_saved(d: &Drawing) -> std::collections::BTreeMap<String, usize> {
 const MODELER_TYPES: [&str; 3] = ["3DSOLID", "REGION", "BODY"];
 
 /// [`not_saved`] for a file saved as `version`. From 2013 on, a 3D solid, region or body the data
-/// store has a record for keeps its geometry and is not counted.
+/// store has a record for keeps its geometry and is not counted; other programs' custom entities
+/// (types outside the DXF Reference's, [`cadaddy_dxf::is_entity_type`]) are kept and not counted
+/// either: a DWG keeps them as they were read (cadaddy-io's `dwg_keep`).
 pub fn not_saved_as(d: &Drawing, version: Version) -> std::collections::BTreeMap<String, usize> {
     let mut out: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     let stored = if version >= Version::R2013 { d.foreign.data_store_entities() } else { Default::default() };
@@ -1180,6 +1190,9 @@ pub fn not_saved_as(d: &Drawing, version: Version) -> std::collections::BTreeMap
     for e in stores.flat_map(|s| s.iter()) {
         if let cadaddy_doc::EntityKind::Unknown(u) = &e.kind {
             if MODELER_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t)) && stored.contains(&e.handle) {
+                continue;
+            }
+            if !cadaddy_dxf::is_entity_type(&u.dxf_type) {
                 continue;
             }
             let n = out.entry(u.dxf_type.clone()).or_insert(0);
@@ -1198,8 +1211,8 @@ pub fn not_saved_message(lost: &std::collections::BTreeMap<String, usize>) -> Op
     Some(format!("Not saved in the DWG file (its writer can't write these object types yet; DXF keeps them): {}", list.join(", ")))
 }
 
-/// Whether saving to `path` leaves out the entities [`not_saved`] counts: DWG does (the DWG
-/// bridge drops types it doesn't know); DXF writes them back as read.
+/// Whether saving to `path` may leave out the entities [`not_saved`] counts: DWG (the DWG writer
+/// reads them its own way); DXF writes them back as read.
 pub fn drops_unknown(path: &str) -> bool {
     // Templates (.dwt) are written as DWG too.
     std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("dwg") || e.eq_ignore_ascii_case("dwt"))
@@ -1392,6 +1405,7 @@ mod tests {
     fn script_command_runs_a_scr_file() {
         let path = temp_script("run.scr", "; a comment\ncircle 50,25 20\nrectang 0,0 100,60\n");
         let mut s = Session::new();
+        s.settings.trustedpaths = std::env::temp_dir().to_string_lossy().into_owned();
         let r = s.execute("script", &json!({ "path": path })).unwrap();
         assert_eq!(r["lines"], 3);
         assert_eq!(s.state().unwrap().doc.model.len(), 2, "the comment is skipped, circle and rectang draw");
@@ -1400,6 +1414,7 @@ mod tests {
     #[test]
     fn script_command_reports_a_missing_file() {
         let mut s = Session::new();
+        s.settings.trustedpaths = std::env::temp_dir().to_string_lossy().into_owned();
         let e = s.execute("script", &json!({ "path": "no/such/script.scr" })).unwrap_err().to_string();
         assert!(e.contains("no/such/script.scr"), "{e}");
         assert_eq!(s.state().unwrap().doc.model.len(), 0);
@@ -1411,6 +1426,7 @@ mod tests {
         let inner = temp_script("inner.scr", "circle 0,0 1\n");
         let outer = temp_script("outer.scr", &format!("script {}\ncircle 0,0 2\n", json!({ "path": inner })));
         let mut s = Session::new();
+        s.settings.trustedpaths = std::env::temp_dir().to_string_lossy().into_owned();
         let e = s.execute("script", &json!({ "path": outer })).unwrap_err().to_string();
         assert!(e.contains("already running"), "{e}");
     }
@@ -1419,6 +1435,7 @@ mod tests {
     fn typed_script_prompts_for_the_file_then_runs_or_reports_it() {
         let good = temp_script("typed.scr", "circle 0,0 1\n");
         let mut s = Session::new();
+        s.settings.trustedpaths = std::env::temp_dir().to_string_lossy().into_owned();
         s.cmdline("script").unwrap();
         assert!(s.running.is_some(), "SCRIPT asks for the file name");
         s.cmdline(&good).unwrap();

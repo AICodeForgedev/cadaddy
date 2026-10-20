@@ -615,7 +615,7 @@ impl Render {
 
     /// Add one sample to every pixel (in the crop).
     pub fn pass(&mut self) {
-        let start = std::time::Instant::now();
+        let start = web_time::Instant::now();
         let v = self.view;
         let (w, h) = (v.width_px as usize, v.height_px as usize);
         let (x0, y0, x1, y1) = self.opts.crop.map_or((0, 0, w, h), |(a, b, c, d)| (a as usize, b as usize, (c as usize).min(w), (d as usize).min(h)));

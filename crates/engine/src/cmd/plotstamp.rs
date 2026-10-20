@@ -18,7 +18,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 "{on?: bool (this layout's page setup, or model space's), layout?: name | \"Model\" (default the current one), allLayouts?: bool (on/off for every layout), \
                  drawingName?, layoutName?, dateTime?, deviceName?, paperSize?, plotScale?: bool (the fields), userFields?: [text] (up to 8), \
                  corner?: bottomLeft|bottomRight|topLeft|topRight, offset?: [x, y], units?: mm|inches (of offset and height; default mm), fromPaperEdge?: bool, \
-                 font?: Helvetica|Times|Courier, height?, singleLine?: bool, reset?: bool (the default settings)} → {settings, on, layouts: [names that plot it]}",
+                 font?: Helvetica|Times|Courier, height?, singleLine?: bool, vertical?: bool, upsideDown?: bool, \
+                 logFile?: bool, logPath?: path ending .log (each stamped plot adds a line; kept for this session, never saved with the drawing), \
+                 reset?: bool (the default settings)} → {settings, on, layouts: [names that plot it], logFile, logPath}",
             ),
     ]
 }
@@ -35,7 +37,7 @@ fn state(s: &Session) -> Result<Value> {
         Space::Model => settings.model,
         Space::Paper(n) => d.layout(&n).is_some_and(|l| l.page.plot_stamp),
     };
-    Ok(json!({ "settings": settings, "on": on, "layouts": layouts }))
+    Ok(json!({ "settings": settings, "on": on, "layouts": layouts, "logFile": settings.log_file, "logPath": settings.log_path }))
 }
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
@@ -58,6 +60,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         ("plotScale", &mut st.plot_scale),
         ("fromPaperEdge", &mut st.from_paper_edge),
         ("singleLine", &mut st.single_line),
+        ("vertical", &mut st.vertical),
+        ("upsideDown", &mut st.upside_down),
+        ("logFile", &mut st.log_file),
     ] {
         if let Some(b) = flag(k)? {
             *f = b;
@@ -83,10 +88,30 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         };
     }
     let unit = match str_param(p, "units").map(str::to_ascii_lowercase).as_deref() {
-        None | Some("mm" | "millimeters" | "millimetres") => 1.0,
-        Some("in" | "inch" | "inches") => 25.4,
+        None => 1.0,
+        Some("mm" | "millimeters" | "millimetres") => {
+            st.inches = false;
+            1.0
+        }
+        Some("in" | "inch" | "inches") => {
+            st.inches = true;
+            25.4
+        }
         Some(_) => return Err(bad(cmd, "`units` must be mm or inches")),
     };
+    if let Some(path) = str_param(p, "logPath") {
+        let path = path.trim();
+        if !path.is_empty() && !path.to_ascii_lowercase().ends_with(".log") {
+            return Err(bad(cmd, "`logPath` must be a file ending .log"));
+        }
+        if path.chars().count() > cadaddy_doc::plotstamp::MAX_LOG_PATH_CHARS || path.chars().any(char::is_control) {
+            return Err(bad(cmd, "`logPath` is not a usable path"));
+        }
+        st.log_path = path.to_string();
+    }
+    if st.log_file && st.log_path.is_empty() {
+        return Err(bad(cmd, "the log file needs `logPath`"));
+    }
     if let Some(v) = p.get("offset").filter(|v| !v.is_null()) {
         let a = v.as_array().filter(|a| a.len() == 2).ok_or_else(|| bad(cmd, "`offset` must be [x, y]"))?;
         let mut o = [0.0; 2];
@@ -133,6 +158,34 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         l.page.plot_stamp = on;
     }
     state(s)
+}
+
+/// After a plot to `path` that carries the stamp, a line in the stamp's log file (when it is on):
+/// the date and time, the drawing, the layout, the device, the paper and the plot file. Returns
+/// the log's path, or why it could not be written (the plot itself stands).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn log_plot(s: &Session, space: &Space, opts: &Value, path: &str) -> Option<std::result::Result<String, String>> {
+    let d = s.doc().ok()?;
+    let st = d.plot_stamp.as_ref()?.sanitized();
+    // Model space plots name no device or paper of their own here.
+    let (on, device, paper) = match space {
+        Space::Model => (st.model, String::new(), String::new()),
+        Space::Paper(n) => {
+            let l = d.layout(n)?;
+            (l.page.plot_stamp, l.page.device.clone(), l.page.paper.clone())
+        }
+    };
+    let on = opts.get("stamp").and_then(Value::as_bool).unwrap_or(on);
+    if !(on && st.log_file) || st.log_path.is_empty() {
+        return None;
+    }
+    let text = |k: &str| opts.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let line = [text("stampDate"), text("stampDrawing"), space.tab_name().to_string(), device, paper, path.to_string()]
+        .map(|f| f.replace(['\r', '\n'], " "))
+        .join(", ");
+    use std::io::Write;
+    let wrote = std::fs::OpenOptions::new().create(true).append(true).open(&st.log_path).and_then(|mut f| writeln!(f, "{line}"));
+    Some(wrote.map(|()| st.log_path.clone()).map_err(|e| format!("{}: {e}", st.log_path)))
 }
 
 /// The plot's stamp facts PLOT adds to its options: the drawing's file name (else its title) and

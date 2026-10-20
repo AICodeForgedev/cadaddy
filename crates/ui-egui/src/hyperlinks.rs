@@ -146,7 +146,14 @@ pub fn hover_and_follow(app: &mut CadApp, ctx: &egui::Context, resp: &egui::Resp
     }
     let Some((h, link)) = link_at(app, picked) else { return false };
     if !clicked {
-        let text = format!("{}\n{}", link.label(), crate::i18n::t(follow_hint()));
+        // The real target too, so a description can't disguise where the link goes.
+        let label = link.label();
+        let real = link.link();
+        let text = if real != label {
+            format!("{label}\n{real}\n{}", crate::i18n::t(follow_hint()))
+        } else {
+            format!("{label}\n{}", crate::i18n::t(follow_hint()))
+        };
         resp.clone().on_hover_text_at_pointer(text);
         if command {
             ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -160,16 +167,101 @@ pub fn hover_and_follow(app: &mut CadApp, ctx: &egui::Context, resp: &egui::Resp
     true
 }
 
-/// Follow object `h`'s link: a URL opens through the host, a named location of this drawing is
-/// gone to by the engine.
+/// Follow object `h`'s link: a URL opens through the host (a program or script only after the
+/// user confirms it), a named location of this drawing is gone to by the engine; a link the
+/// engine refuses (javascript:, other schemes) is only reported.
 pub fn follow(app: &mut CadApp, ctx: &egui::Context, h: Handle) {
     match app.run("hyperlink.open", json!({ "handle": h.hex() })) {
         Ok(r) => {
-            if let Some(url) = r.get("url").and_then(serde_json::Value::as_str) {
-                ctx.open_url(egui::OpenUrl::new_tab(url));
-                app.session.echo(format!("Opening {url}"));
+            let Some(url) = r.get("url").and_then(serde_json::Value::as_str) else { return };
+            if let Some(why) = r.get("confirm").and_then(serde_json::Value::as_str) {
+                ctx.data_mut(|d| d.insert_temp(confirm_id(), (url.to_string(), why.to_string())));
+                app.ui.dialog = Some(CONFIRM.into());
+                return;
             }
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+            app.session.echo(format!("Opening {url}"));
         }
         Err(e) => app.session.echo(e),
+    }
+}
+
+/// The dialog that confirms opening a link to a program or script.
+pub const CONFIRM: &str = "hyperlink.confirm";
+
+fn confirm_id() -> egui::Id {
+    egui::Id::new("hyperlink confirm")
+}
+
+/// "Open this program?": Cancel is the default; Open runs it through the system.
+pub fn confirm_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
+    let Some((url, why)) = ctx.data(|d| d.get_temp::<(String, String)>(confirm_id())) else {
+        *open = false;
+        return;
+    };
+    let mut go = false;
+    let mut cancel = false;
+    egui::Window::new(crate::tl!("Open a Program?"))
+        .id(egui::Id::new("hyperlink confirm window"))
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            ui.set_max_width(460.0);
+            ui.label(crate::tl!("This link opens a program or script, not a document:"));
+            ui.add(egui::Label::new(egui::RichText::new(&url).monospace()).wrap());
+            ui.add_space(4.0);
+            ui.label(&why);
+            ui.label(crate::tl!("Open it only if you trust the drawing and know what it runs."));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let c = ui.button(crate::tl!("Cancel"));
+                if !ui.memory(|m| m.has_focus(c.id)) && ui.ctx().memory(|m| m.focused().is_none()) {
+                    c.request_focus();
+                }
+                cancel = c.clicked();
+                go = ui.button(crate::tl!("Open Anyway")).clicked();
+            });
+        });
+    if go {
+        ctx.open_url(egui::OpenUrl::new_tab(&url));
+        app.session.echo(format!("Opening {url}"));
+    }
+    if go || cancel {
+        *open = false;
+    }
+    if !*open {
+        ctx.data_mut(|d| d.remove::<(String, String)>(confirm_id()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadaddy_engine::Session;
+
+    #[test]
+    fn a_program_link_asks_first_and_a_script_scheme_is_never_opened() {
+        let mut app = CadApp::new(Session::new(), crate::Services::default());
+        let h = app.run("line", json!({"points": [[0, 0], [1, 0]]})).unwrap()["handles"][0].as_str().unwrap().to_string();
+        let h = Handle::parse_hex(&h).unwrap();
+        let ctx = egui::Context::default();
+        app.run("hyperlink", json!({"handles": [h.hex()], "url": "C:\\Temp\\setup.exe", "description": "Specification"})).unwrap();
+        follow(&mut app, &ctx, h);
+        assert_eq!(app.ui.dialog.as_deref(), Some(CONFIRM));
+        let mut open = true;
+        ctx.run_ui(egui::RawInput::default(), |ui| confirm_dialog(&mut app, ui.ctx(), &mut open)).textures_delta.clear();
+        assert!(open, "waits for the user");
+        let mut shut = false;
+        ctx.run_ui(egui::RawInput::default(), |ui| confirm_dialog(&mut app, ui.ctx(), &mut shut)).textures_delta.clear();
+        assert!(ctx.data(|d| d.get_temp::<(String, String)>(confirm_id())).is_none(), "closing forgets it");
+
+        app.ui.dialog = None;
+        app.run("hyperlink", json!({"handles": [h.hex()], "url": "javascript:alert(1)"})).unwrap();
+        follow(&mut app, &ctx, h);
+        assert!(app.ui.dialog.is_none());
+        assert!(ctx.output(|o| !o.commands.iter().any(|c| matches!(c, egui::OutputCommand::OpenUrl(_)))), "nothing opened");
     }
 }

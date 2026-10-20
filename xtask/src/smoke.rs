@@ -146,20 +146,35 @@ fn latest_release() -> Result<String, String> {
 // ---------------------------------------------------------------- the app
 
 /// The control channel of a running app.
-struct Control {
+pub(crate) struct Control {
     reader: BufReader<TcpStream>,
     writer: TcpStream,
     id: u64,
 }
 
 impl Control {
-    fn connect(port: u16, child: &mut Child, wait: Duration) -> Result<Control, String> {
+    /// Connect to the app on `port`, presenting the token it writes under the settings folder
+    /// `cfg` (control/<port>.token) when it has one (builds from before tokens write none).
+    pub(crate) fn connect(port: u16, cfg: &Path, child: &mut Child, wait: Duration) -> Result<Control, String> {
         let start = Instant::now();
         loop {
             if let Ok(s) = TcpStream::connect(("127.0.0.1", port)) {
                 s.set_read_timeout(Some(Duration::from_secs(120))).map_err(|e| e.to_string())?;
                 let writer = s.try_clone().map_err(|e| e.to_string())?;
-                return Ok(Control { reader: BufReader::new(s), writer, id: 0 });
+                let mut c = Control { reader: BufReader::new(s), writer, id: 0 };
+                // The app writes the token just after it starts listening.
+                let file = cfg.join("control").join(format!("{port}.token"));
+                let token = (0..12).find_map(|_| {
+                    let t = std::fs::read_to_string(&file).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+                    if t.is_none() {
+                        std::thread::sleep(Duration::from_millis(250));
+                    }
+                    t
+                });
+                if let Some(token) = token {
+                    c.call("auth", json!({ "token": token }))?;
+                }
+                return Ok(c);
             }
             if let Ok(Some(status)) = child.try_wait() {
                 return Err(format!("the app exited before its control channel opened ({status})"));
@@ -170,7 +185,7 @@ impl Control {
             std::thread::sleep(Duration::from_millis(250));
         }
     }
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    pub(crate) fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.id += 1;
         let line = json!({ "id": self.id, "method": method, "params": params }).to_string();
         writeln!(self.writer, "{line}").map_err(|e| format!("{method}: {e}"))?;
@@ -182,7 +197,7 @@ impl Control {
         }
         Ok(v.get("result").cloned().unwrap_or(Value::Null))
     }
-    fn exec(&mut self, command: &str, params: Value) -> Result<Value, String> {
+    pub(crate) fn exec(&mut self, command: &str, params: Value) -> Result<Value, String> {
         self.call("engine.execute", json!({ "command": command, "params": params }))
     }
     fn entities(&mut self) -> Result<u64, String> {
@@ -192,7 +207,7 @@ impl Control {
 }
 
 /// A free local port.
-fn free_port() -> Result<u16, String> {
+pub(crate) fn free_port() -> Result<u16, String> {
     let l = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
     l.local_addr().map(|a| a.port()).map_err(|e| e.to_string())
 }
@@ -246,7 +261,7 @@ fn run_app(exe: &Path, bundle_ver: Option<String>, want: &str, out: &Path, r: &m
         .spawn()
         .map_err(|e| format!("{}: {e}", exe.display()))?;
     let result = (|| -> Result<(), String> {
-        let mut c = Control::connect(port, &mut child, Duration::from_secs(90))?;
+        let mut c = Control::connect(port, &cfg, &mut child, Duration::from_secs(90))?;
         r.step("launch", || c.call("ping", json!({})).map(|v| format!("control channel on {port}: {v}")));
         r.step("version", || match &bundle_ver {
             Some(v) if v == want => Ok(format!("Info.plist {v}")),
@@ -360,14 +375,14 @@ fn run_app(exe: &Path, bundle_ver: Option<String>, want: &str, out: &Path, r: &m
 
 // ---------------------------------------------------------------- the MCP server
 
-struct Mcp {
+pub(crate) struct Mcp {
     child: Child,
     reader: BufReader<std::process::ChildStdout>,
     id: u64,
 }
 
 impl Mcp {
-    fn start(exe: &Path, cfg: &Path) -> Result<Mcp, String> {
+    pub(crate) fn start(exe: &Path, cfg: &Path) -> Result<Mcp, String> {
         let mut child = Command::new(exe)
             .arg("mcp")
             .env("CADADDY_CONFIG_DIR", cfg)
@@ -379,7 +394,7 @@ impl Mcp {
         let out = child.stdout.take().ok_or("no stdout")?;
         Ok(Mcp { child, reader: BufReader::new(out), id: 0 })
     }
-    fn send(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    pub(crate) fn send(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.id += 1;
         let line = json!({ "jsonrpc": "2.0", "id": self.id, "method": method, "params": params }).to_string();
         let stdin = self.child.stdin.as_mut().ok_or("no stdin")?;
@@ -404,7 +419,14 @@ impl Mcp {
             return Ok(v["result"].clone());
         }
     }
-    fn tool(&mut self, name: &str, args: Value) -> Result<Value, String> {
+    pub(crate) fn tool(&mut self, name: &str, args: Value) -> Result<Value, String> {
+        self.tool_inner(name, args)
+    }
+    /// The server's process id.
+    pub(crate) fn pid(&self) -> u32 {
+        self.child.id()
+    }
+    fn tool_inner(&mut self, name: &str, args: Value) -> Result<Value, String> {
         let r = self.send("tools/call", json!({ "name": name, "arguments": args }))?;
         let text = r["content"][0]["text"].as_str().unwrap_or_default().to_string();
         if r["isError"] == true {

@@ -53,7 +53,7 @@
 
 - With Homebrew: `brew install --cask aicodeforgedev/tap/cadaddy`
 - Or download [`CADaddy-Mac.dmg`](https://github.com/AICodeForgedev/cadaddy/releases/latest/download/CADaddy-Mac.dmg) and drag CADaddy to Applications.
-- If macOS says it can't verify CADaddy, open **System Settings ▸ Privacy & Security ▸ Open Anyway**. The app isn't notarized yet.
+- The first time, **right-click CADaddy in Applications ▸ Open ▸ Open** (or, if macOS says it can't verify CADaddy, **System Settings ▸ Privacy & Security ▸ Open Anyway**). The app isn't notarized yet; after the first launch it opens normally.
 
 CADaddy 0.7.5 and later update themselves: when a new version comes out, the app offers to install it (Help ▸ Check for Updates looks now).
 
@@ -176,6 +176,13 @@ the JSON control channel and MCP alike. Agent and contributor notes are in [AGEN
 
 Pull requests are welcome. By contributing you agree your contribution is licensed under the
 project's [license](LICENSE.md).
+
+## Security
+
+Found a security problem? Please email **feedback@aicodeforge.dev** with a subject starting
+**SECURITY:**, not a public issue. [SECURITY.md](SECURITY.md) says which versions get fixes, what to
+include and what to expect (there is no bug bounty). In CADaddy: **Help ▸ About ▸ Report a security
+problem**.
 
 ## Feedback and support
 

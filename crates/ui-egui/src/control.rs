@@ -291,6 +291,17 @@ const METHODS: &[(&str, &str, &str)] = &[
         "Current prompt (text and bare message), keywords, default, accepted input kinds, busy (a drawing still opening), closePrompt and history tail.",
     ),
     ("engine.execute", "{command, params}", "Run any command with JSON parameters. Never opens a dialog."),
+    ("events.subscribe", "{on?}", "Start (or stop) recording events for events.poll."),
+    (
+        "events.poll",
+        "{since?}",
+        "Events after `since`: drawing changed (handles), selection, commands, prompt, documents, dialogs; `next` is the next since.",
+    ),
+    (
+        "engine.executeMany",
+        "{commands: [{command, params}], stopOnError?}",
+        "Run up to 10k commands in one request and one undo step; each result returned (stopOnError: the first failure puts everything back).",
+    ),
     (
         "engine.commands",
         "{filter?}",
@@ -342,6 +353,7 @@ const METHODS: &[(&str, &str, &str)] = &[
     ),
     ("control.methods", "", "This list."),
     ("ping", "", "Replies \"pong\"."),
+    ("auth", "{token}", "Present the control token (checked by the server before anything reaches the app; see docs/control-protocol.md)."),
 ];
 
 fn methods_json() -> Value {
@@ -408,7 +420,7 @@ pub fn inspect(app: &CadApp, ctx: &egui::Context) -> Value {
         // The 3D view's numbers (triangles, instances, chunks, bytes, timings, the last
         // `ui.bench3d` orbit's frames per second).
         "perf3d": serde_json::to_value(app.canvas.shade.stats).unwrap_or_default(),
-        "perf": {"frameMs": app.frame_ms, "buildMs": app.canvas.build_ms, "drawMs": app.canvas.draw_ms, "meshMs": app.canvas.mesh_ms, "building": app.canvas.building(), "renderer": if app.canvas.gpu.is_some() { "gpu" } else { "cpu" }, "prims": app.canvas.list.as_ref().map(|l| l.prims.len())},
+        "perf": {"frameMs": app.frame_ms, "gpuBytes": crate::gpu::gpu_bytes(), "buildMs": app.canvas.build_ms, "drawMs": app.canvas.draw_ms, "meshMs": app.canvas.mesh_ms, "building": app.canvas.building(), "renderer": if app.canvas.gpu.is_some() { "gpu" } else { "cpu" }, "prims": app.canvas.list.as_ref().map(|l| l.prims.len())},
     })
 }
 
@@ -442,6 +454,13 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             app.session.agent.from_agent = was;
             wrap(r)
         }
+        "engine.executeMany" => {
+            let Some(list) = p.get("commands").and_then(Value::as_array) else { return err("missing `commands`: [{command, params}]") };
+            let stop = p.get("stopOnError").and_then(Value::as_bool).unwrap_or(false);
+            wrap(app.session.execute_many(list, stop).map_err(|e| e.to_string()))
+        }
+        "events.subscribe" => ok(app.session.events_subscribe(p.get("on").and_then(Value::as_bool).unwrap_or(true))),
+        "events.poll" => ok(app.session.events_poll(p.get("since").and_then(Value::as_u64).unwrap_or(0))),
         "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             crate::menus::activate(app, id);
@@ -458,6 +477,14 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             }
             let text = s("text").unwrap_or("");
             let before = app.session.log.len();
+            // A command line (not an answer to a prompt) goes in the command history, as typed ones
+            // do, so Report a Problem lists what an agent ran (AutoComplete ranking stays the user's).
+            if !text.trim().is_empty() && !app.session.prompting() {
+                app.cmd.history.push(text.to_string());
+                if app.cmd.history.len() > 200 {
+                    app.cmd.history.remove(0);
+                }
+            }
             let error = app.cmdline(text);
             app.agent_run = run_token(app);
             let out: Vec<String> = app.session.log.iter().skip(before).cloned().collect();
@@ -748,6 +775,8 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
         }
         "control.methods" => ok(methods_json()),
         "ping" => ok(json!("pong")),
+        // The server checks the token before a request gets here.
+        "auth" => ok(json!({ "authenticated": true })),
         other => err(format!("unknown method `{other}`; `control.methods` lists them (docs/control-protocol.md)")),
     }
 }

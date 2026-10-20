@@ -72,6 +72,7 @@ mod pline_opts;
 pub(crate) mod plotstamp;
 pub mod plotters;
 mod props;
+pub mod redline;
 pub mod revise3d;
 pub mod rooms3d;
 pub mod spell;
@@ -274,6 +275,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(imagetrace::specs());
         v.extend(crate::agent::specs());
         v.extend(dimmodes::specs());
+        v.extend(redline::specs());
         v.extend(tours::specs());
         v.extend(walkpub::specs());
         v.extend(imageclip::specs());
@@ -299,6 +301,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(groups::specs());
         v.extend(gripcmds::specs());
         v.extend(file::compare::specs());
+        v.extend(file::convert::specs());
         v.extend(layer::specs());
         v.extend(layout::specs());
         v.extend(plotstamp::specs());
@@ -320,6 +323,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(colorbook::specs());
         v.extend(constraints::specs());
         v.extend(lisp::specs());
+        v.extend(crate::secureload::specs());
         v.extend(solids::specs());
         v.extend(sections::specs());
         v.extend(render::specs());

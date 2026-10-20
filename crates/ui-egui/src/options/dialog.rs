@@ -534,6 +534,17 @@ fn preferences(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>
             "The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts."
         ),
     );
+    ui.add_space(6.0);
+    let mut token = app.ui.control_token;
+    if ui.checkbox(&mut token, crate::tl!("Require a token for control connections (recommended)")).changed() {
+        changes.insert("controlToken".into(), json!(token));
+    }
+    hint(
+        ui,
+        crate::tl!(
+            "Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts."
+        ),
+    );
 }
 
 fn profiles(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {

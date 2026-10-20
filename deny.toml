@@ -1,0 +1,59 @@
+# Supply-chain policy: read by `cargo deny` and by `cargo xtask supplychain` (the same lists, so the
+# offline check and cargo-deny agree). See xtask/src/supplychain.rs.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+# A yanked crate version is a failure: update it (`cargo update -p <crate>`).
+yanked = "deny"
+# Every advisory found is fixed (an upgrade) or listed here with why it doesn't apply to CADaddy.
+ignore = [
+    # zvariant, zbus_names and zvariant_derive are "unmaintained" (informational, no vulnerability):
+    # merged into zbus 6. They reach us only as zbus 5 under accesskit's Linux AT-SPI accessibility
+    # (egui/winit); nothing to patch. Drop these when accesskit moves to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; only via accesskit (Linux accessibility), no vulnerability" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; only via accesskit (Linux accessibility), no vulnerability" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; only via accesskit (Linux accessibility), no vulnerability" },
+]
+
+[licenses]
+version = 2
+# Licences a shipped binary may contain: permissive, file-level copyleft (MPL-2.0) and the fonts'
+# own redistributable licences. No GPL, AGPL, LGPL-only or unknown licences.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "FSL-1.1-ALv2",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+# The C TLS stacks: CADaddy links no TLS crate (the updater runs the system's curl); one of these
+# appearing means a new native dependency nobody chose.
+deny = [
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    { name = "native-tls" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/storytold/craft-libs"]

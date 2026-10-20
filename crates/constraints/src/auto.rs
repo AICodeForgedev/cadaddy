@@ -318,10 +318,81 @@ pub fn autoconstrain(d: &mut Drawing, handles: &[Handle], o: &InferOptions) -> V
         let rank = |k: ConstraintKind| o.types.iter().position(|t| t.eq_ignore_ascii_case(k.name())).unwrap_or(usize::MAX);
         cands.sort_by_key(|c| rank(c.kind));
     }
+    // Candidates already implied by what holds (two horizontal lines are parallel; a chain of
+    // coincident points is one point) are skipped without a solve: the solver would refuse them
+    // as redundant anyway, and solving each of hundreds of them took seconds on a small drawing.
+    let mut implied = Implied::default();
+    for c in &d.constraints {
+        implied.note(c);
+    }
     for c in cands {
+        if implied.holds(&c) {
+            continue;
+        }
+        let noted = c.clone();
         if let Ok(id) = crate::add(d, c, &crate::SolveOptions::default()) {
+            implied.note(&noted);
             added.push(id);
         }
     }
     added
+}
+
+/// Equivalence classes of the transitive constraints (coincident points, parallel lines with
+/// horizontal and vertical as two fixed directions, concentric centres, equal sizes), to tell a
+/// candidate that already holds from one that adds something.
+#[derive(Default)]
+struct Implied {
+    parent: std::collections::HashMap<(u8, Node), (u8, Node)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Node {
+    Ref(GeomRef),
+    /// The horizontal direction (class 1).
+    Horizontal,
+    /// The vertical direction (class 1).
+    Vertical,
+}
+
+impl Implied {
+    fn find(&mut self, k: (u8, Node)) -> (u8, Node) {
+        let mut x = k;
+        while let Some(&p) = self.parent.get(&x) {
+            if p == x {
+                break;
+            }
+            x = p;
+        }
+        // Path halving would need a second walk; the classes here stay small.
+        x
+    }
+    fn union(&mut self, a: (u8, Node), b: (u8, Node)) {
+        let (ra, rb) = (self.find(a), self.find(b));
+        if ra != rb {
+            self.parent.insert(ra, rb);
+        }
+    }
+    /// The class family and the two nodes a constraint links, when it is a transitive kind.
+    fn pair(c: &Constraint) -> Option<((u8, Node), (u8, Node))> {
+        let r = |i: usize| c.refs.get(i).copied().map(Node::Ref);
+        let two = |f: u8| Some(((f, r(0)?), (f, r(1)?)));
+        match c.kind {
+            ConstraintKind::Coincident if c.refs.len() == 2 => two(0),
+            ConstraintKind::Parallel if c.refs.len() == 2 => two(1),
+            ConstraintKind::Horizontal if c.refs.len() == 1 => Some(((1, r(0)?), (1, Node::Horizontal))),
+            ConstraintKind::Vertical if c.refs.len() == 1 => Some(((1, r(0)?), (1, Node::Vertical))),
+            ConstraintKind::Concentric if c.refs.len() == 2 => two(2),
+            ConstraintKind::Equal if c.refs.len() == 2 => two(3),
+            _ => None,
+        }
+    }
+    fn note(&mut self, c: &Constraint) {
+        if let Some((a, b)) = Self::pair(c) {
+            self.union(a, b);
+        }
+    }
+    fn holds(&mut self, c: &Constraint) -> bool {
+        Self::pair(c).is_some_and(|(a, b)| self.find(a) == self.find(b))
+    }
 }

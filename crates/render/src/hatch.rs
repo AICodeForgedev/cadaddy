@@ -607,7 +607,7 @@ mod tests {
             background: None,
             pattern_lines: vec![],
         };
-        let t = std::time::Instant::now();
+        let t = web_time::Instant::now();
         assert_eq!(fill_loops(&hatch, 1e-4).len(), 12_000);
         assert!(t.elapsed().as_secs_f64() < 5.0, "took {:?}", t.elapsed());
     }

@@ -160,9 +160,131 @@ pub fn resolve(h: &Hyperlink, base: &str, folder: Option<&str>) -> Option<String
     }
 }
 
+/// What following a resolved link ([`resolve`]) may do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Follow {
+    /// A web page, an email address or a document: open it.
+    Open,
+    /// A program or script: open it only when the user confirms (why, in words).
+    Ask(String),
+    /// Never followed (why, in words): any scheme but http, https, mailto and file.
+    Refuse(String),
+}
+
+/// File types that run something when opened: links to them are confirmed first.
+const RUNS: [&str; 44] = [
+    "exe",
+    "com",
+    "bat",
+    "cmd",
+    "ps1",
+    "psm1",
+    "psd1",
+    "vbs",
+    "vbe",
+    "js",
+    "jse",
+    "wsf",
+    "wsh",
+    "msi",
+    "msp",
+    "scr",
+    "pif",
+    "cpl",
+    "hta",
+    "jar",
+    "reg",
+    "lnk",
+    "url",
+    "inf",
+    "dll",
+    "sh",
+    "bash",
+    "zsh",
+    "csh",
+    "ksh",
+    "command",
+    "app",
+    "tool",
+    "workflow",
+    "scpt",
+    "applescript",
+    "pkg",
+    "dmg",
+    "desktop",
+    "appimage",
+    "run",
+    "py",
+    "pl",
+    "rb",
+];
+
+/// Whether following the resolved link `url` is allowed: web (http, https) and email (mailto)
+/// links open; a file opens unless it is a program or script (then it is confirmed); every other
+/// scheme (javascript:, data:, smb:, custom app schemes…) is refused.
+pub fn follow_check(url: &str) -> Follow {
+    let url = url.trim();
+    if url.chars().any(char::is_control) {
+        return Follow::Refuse("the link holds control characters".into());
+    }
+    let path = if has_scheme(url) && !is_absolute_path(url) {
+        let (scheme, rest) = url.split_once(':').unwrap_or_default();
+        match scheme.to_ascii_lowercase().as_str() {
+            "http" | "https" | "mailto" => return Follow::Open,
+            "file" => rest.trim_start_matches('/').to_string(),
+            other => return Follow::Refuse(format!("\"{other}:\" links aren't followed; only web, email and file links are")),
+        }
+    } else {
+        url.to_string()
+    };
+    // The file's name: no fragment, `%20` and `%23` decoded, either separator.
+    let path = path.split('#').next().unwrap_or_default().replace("%20", " ").replace("%23", "#");
+    let name = path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or_default().to_string();
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    if RUNS.contains(&ext.as_str()) {
+        return Follow::Ask(format!("{name} is a program or script: opening it runs it, and it could change your computer"));
+    }
+    Follow::Open
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_web_mail_and_documents_open_and_programs_are_confirmed() {
+        for ok in [
+            "https://example.com/a?b#c",
+            "HTTP://x",
+            "mailto:someone@example.com",
+            "file:///C:/Drawings/a.pdf",
+            "file:///home/x/plan.dwg",
+            "notes.txt",
+        ] {
+            assert_eq!(follow_check(ok), Follow::Open, "{ok}");
+        }
+        for ask in [
+            "file:///C:/Temp/setup.EXE",
+            "file:///Users/x/run.command",
+            "file:///Users/x/Thing.app/",
+            "C:\\x\\go.bat",
+            "script.ps1",
+            "file:///x/a%20b.sh#frag",
+        ] {
+            assert!(matches!(follow_check(ask), Follow::Ask(_)), "{ask}");
+        }
+        for no in [
+            "javascript:alert(1)",
+            "data:text/html,<b>x</b>",
+            "smb://server/share",
+            "vbscript:x",
+            "ms-settings:privacy",
+            "ftp://x/y",
+            "https://x/\u{7}y",
+        ] {
+            assert!(matches!(follow_check(no), Follow::Refuse(_)), "{no}");
+        }
+    }
 
     fn tags(list: &[(i32, &str)]) -> Vec<RawTag> {
         list.iter().map(|(c, v)| RawTag { code: *c, value: v.to_string() }).collect()

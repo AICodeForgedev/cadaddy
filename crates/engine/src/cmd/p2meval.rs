@@ -270,7 +270,7 @@ pub fn cases() -> Vec<Case> {
 
 /// One step: run a command, note its result and time.
 fn step(s: &mut Session, steps: &mut Vec<Value>, command: &str, params: Value) -> Option<Value> {
-    let t = std::time::Instant::now();
+    let t = web_time::Instant::now();
     let r = s.execute(command, &params);
     let ms = (t.elapsed().as_secs_f64() * 1e5).round() / 100.0;
     match r {

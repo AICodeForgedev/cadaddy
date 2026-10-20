@@ -161,3 +161,40 @@ fn a_folder_of_drawings_plots_to_one_pdf_each() {
     assert!(s.execute("publish", &json!({"folder": dir.join("empty").to_string_lossy()})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_turned_stamp_and_the_log_file() {
+    let mut s = session();
+    let dir = std::env::temp_dir().join(format!("cadaddy-stamplog-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("plots.log");
+    // The log needs a path, a `.log` one.
+    assert!(s.execute("plotstamp", &json!({"logFile": true})).is_err());
+    assert!(s.execute("plotstamp", &json!({"logFile": true, "logPath": dir.join("x.txt").to_string_lossy()})).is_err());
+    let r =
+        s.execute("plotstamp", &json!({"layout": "Model", "on": true, "vertical": true, "logFile": true, "logPath": log.to_string_lossy()})).unwrap();
+    assert_eq!((r["logFile"].as_bool(), r["settings"]["vertical"].as_bool()), (Some(true), Some(true)), "{r}");
+    // Turned a quarter: the text matrix runs up the sheet.
+    let pdf = plot(&mut s, json!({"layout": "Model"}));
+    assert!(pdf.lines().any(|l| l.contains("/FS") && l.contains(" 0 1 -1 0 ") && l.contains(" Tm (")), "a turned stamp");
+    // A plot to a file adds a line to the log, each plot one more.
+    let out = dir.join("plot.pdf");
+    for _ in 0..2 {
+        let r = s.execute("plot", &json!({"layout": "Model", "path": out.to_string_lossy()})).unwrap();
+        assert_eq!(r["stampLog"].as_str(), Some(log.to_string_lossy().as_ref()), "{r}");
+    }
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(text.lines().count(), 2, "{text}");
+    assert!(text.starts_with("2026-10-19 09:05, ") && text.lines().all(|l| l.contains(", Model, ") && l.ends_with("plot.pdf")), "{text}");
+    // Never saved with the drawing.
+    let d = s.doc().unwrap().clone();
+    for name in ["x.dxf", "x.cdy"] {
+        let bytes = cadaddy_io::write(&d, name).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("plots.log"), "{name}");
+        let back = cadaddy_io::read(&bytes, name).unwrap();
+        let st = back.plot_stamp.unwrap();
+        assert!(st.vertical && !st.log_file && st.log_path.is_empty(), "{name}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

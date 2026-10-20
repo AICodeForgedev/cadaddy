@@ -34,6 +34,10 @@ rfd = { workspace = true }
 sys-locale = "0.3"
 # Checking downloaded updates (updater.rs); already built for DWG reading.
 sha2 = "0.11"
+# The release signature over SHA256SUMS (relsig.rs): pure Rust, BSD-3-Clause; verifying only.
+ed25519-dalek = { version = "3.0.0", default-features = false }
+# The control port's per-start token (control_server.rs). Already in Cargo.lock.
+getrandom = "0.4"
 # Paste to Command Line reads the system clipboard's text. Already in Cargo.lock through
 # egui-winit; pinned to that version so nothing is built twice.
 arboard = { version = "=3.6.1", default-features = false }

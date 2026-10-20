@@ -130,7 +130,7 @@ pub fn now() -> Option<LocalTime> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn system_now() -> Option<LocalTime> {
-    let utc = i64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs()).ok()?;
+    let utc = i64::try_from(web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).ok()?.as_secs()).ok()?;
     Some(LocalTime::from_secs(utc + tz::offset(utc)))
 }
 

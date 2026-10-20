@@ -100,11 +100,12 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
             egui::Grid::new("find_grid").num_columns(2).spacing(egui::vec2(10.0, 6.0)).show(ui, |ui| {
-                ui.label(crate::tl!("Find what:"));
-                ui.add(egui::TextEdit::singleline(&mut st.what).desired_width(280.0));
+                // Each box is named by its label, so screen readers and agents (ui.elements) find it.
+                let what = ui.label(crate::tl!("Find what:"));
+                ui.add(egui::TextEdit::singleline(&mut st.what).desired_width(280.0)).labelled_by(what.id);
                 ui.end_row();
-                ui.label(crate::tl!("Replace with:"));
-                ui.add(egui::TextEdit::singleline(&mut st.with).desired_width(280.0));
+                let with = ui.label(crate::tl!("Replace with:"));
+                ui.add(egui::TextEdit::singleline(&mut st.with).desired_width(280.0)).labelled_by(with.id);
                 ui.end_row();
                 ui.label(crate::tl!("Find where:"));
                 egui::ComboBox::from_id_salt("find_scope")

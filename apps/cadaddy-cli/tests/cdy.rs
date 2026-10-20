@@ -151,3 +151,19 @@ fn verify_passes_a_sound_file_and_finds_damage() {
     assert!(String::from_utf8_lossy(&run.stderr).contains("not a CADaddy drawing"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_folder_with_subfolders_converts_with_recurse() {
+    let dir = folder("recurse");
+    let input = dir.join("in");
+    std::fs::create_dir_all(input.join("level2")).unwrap();
+    ok(&["sample", "floorplan", &p(&input, "plan.dxf")]);
+    ok(&["sample", "bracket", &p(&input.join("level2"), "bracket.dwg")]);
+    let flat: Value = serde_json::from_str(&ok(&["convert", &p(&dir, "in"), &p(&dir, "flat"), "--to", "cdy"])).unwrap();
+    assert_eq!(flat["converted"].as_array().unwrap().len(), 1, "{flat}");
+    let deep: Value = serde_json::from_str(&ok(&["convert", &p(&dir, "in"), &p(&dir, "deep"), "--to", "dwg", "--recurse"])).unwrap();
+    assert_eq!(deep["converted"].as_array().unwrap().len(), 2, "{deep}");
+    assert!(dir.join("deep/plan.dwg").exists() && dir.join("deep/level2/bracket.dwg").exists(), "subfolders kept");
+    let e = cli(&["convert", &p(&input, "plan.dxf"), &p(&dir, "x.cdy"), "--recurse"]);
+    assert!(!e.status.success());
+}

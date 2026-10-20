@@ -328,7 +328,7 @@ impl Session {
     /// (it is then still running, and later lines say so). Typed LISP longer than one slice never
     /// finished headless (battle test 0.7.7c).
     pub fn lisp_finish(&mut self, limit: std::time::Duration) {
-        let start = std::time::Instant::now();
+        let start = web_time::Instant::now();
         while self.lisp_busy() && start.elapsed() < limit {
             self.lisp_tick();
         }
@@ -629,9 +629,14 @@ impl Session {
 }
 
 pub(crate) use drawing::from_json as drawing_from_json;
-pub(crate) use drawing::load_source;
+pub(crate) use drawing::load_file;
 
 impl Session {
+    /// Whether a LISP routine is running.
+    pub fn lisp_active(&self) -> bool {
+        self.lisp.active
+    }
+
     /// A file APPLOAD loaded, by its name (with or without `.lsp`, any case).
     pub(crate) fn lisp_file(&self, name: &str) -> Option<String> {
         let key = file_key(name);

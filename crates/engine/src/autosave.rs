@@ -150,7 +150,7 @@ pub struct Autosaver {
     #[cfg(not(target_arch = "wasm32"))]
     running: Vec<(u64, std::thread::JoinHandle<bool>)>,
     #[cfg(not(target_arch = "wasm32"))]
-    start: std::time::Instant,
+    start: web_time::Instant,
     #[cfg(not(target_arch = "wasm32"))]
     last_beat: Option<f64>,
     /// When the store lock entry was last refreshed ([`store`]).
@@ -166,7 +166,7 @@ impl Autosaver {
             #[cfg(not(target_arch = "wasm32"))]
             running: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
-            start: std::time::Instant::now(),
+            start: web_time::Instant::now(),
             #[cfg(not(target_arch = "wasm32"))]
             last_beat: None,
             store_beat: None,

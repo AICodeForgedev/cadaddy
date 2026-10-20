@@ -60,6 +60,7 @@ pub mod xrefs;
 
 pub mod activitypalette;
 pub mod agentdlg;
+pub mod convertdlg;
 pub mod countpalette;
 pub mod dyngrips;
 pub mod dyninput;
@@ -88,6 +89,7 @@ pub mod palettes;
 pub mod parametric;
 pub mod pdfdlg;
 pub mod planstomodel;
+pub mod plotstampdlg;
 pub mod plotstyles;
 pub mod quick;
 pub mod renderwin;
@@ -112,6 +114,7 @@ pub mod exchange;
 pub mod keytips;
 pub mod publishdlg;
 mod roomsdlg;
+pub mod secureloaddlg;
 pub mod sheetsets;
 pub mod standardsdlg;
 
@@ -206,6 +209,9 @@ pub struct UiState {
     /// "Let AI agents control CADaddy": the app listens on [`cadaddy_engine::AGENT_PORT`]
     /// (this computer only) from its next start. On by default.
     pub agent_control: bool,
+    /// Programs that drive CADaddy through its control port must first present the token it
+    /// writes, each start, to a file only this user can read. On by default.
+    pub control_token: bool,
     /// Drawings opened from a path, newest first (File ▸ Open Recent and the Start page).
     pub recent_files: Vec<String>,
     /// The touch bar shows once the screen is touched ([`touch`]).
@@ -311,6 +317,7 @@ impl Default for UiState {
             save_format: SaveFormat::default(),
             save_version: SaveVersion::default().year().to_string(),
             agent_control: true,
+            control_token: true,
             recent_files: Vec::new(),
             touch_bar: true,
             shortcuts: Vec::new(),
@@ -457,10 +464,14 @@ pub struct CadApp {
     pub bedit: bedit::State,
     /// Walk mode, while it is open: the drawing in 3D in place of the canvas ([`walk`]).
     pub walk: Option<walk::Walk>,
+    /// The dialog open at the last frame (for `dialog.opened` events).
+    last_dialog: Option<String>,
     /// Drawings opened from walkthrough packages that Walk has been opened on (once each).
     pub walked: std::collections::BTreeSet<u64>,
     /// What the last DWG/DXF save didn't keep, while its notice is open ([`exchangeloss`]).
     pub exchange_notice: Option<Value>,
+    /// A LISP file or script outside the trusted folders the user is asked about ([`secureloaddlg`]).
+    pub secureload_ask: Option<cadaddy_engine::secureload::Ask>,
     /// Drawings in windows of their own ([`tearoff`]), the drawing the main window last showed,
     /// and where its tab bar is.
     pub torn: Vec<tearoff::TornWindow>,
@@ -536,8 +547,10 @@ impl CadApp {
             layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
+            last_dialog: None,
             walked: std::collections::BTreeSet::new(),
             exchange_notice: None,
+            secureload_ask: None,
             torn: Vec::new(),
             main_uid: None,
             tab_bar: None,
@@ -627,8 +640,10 @@ impl CadApp {
         if let Err(e) = &r {
             self.session.echo(e.user_message());
         }
-        // A programmatic save reports what the file didn't keep in its reply, not in a dialog.
+        // A programmatic save reports what the file didn't keep in its reply, not in a dialog;
+        // a programmatic load gets the refusal in its reply.
         exchangeloss::take(self, false);
+        secureloaddlg::take(self, false);
         r.map_err(|e| e.to_string())
     }
 
@@ -636,12 +651,14 @@ impl CadApp {
     pub fn start(&mut self, name: &str) {
         if menus::run_ui_command(self, name, &Value::Null).is_some() {
             exchangeloss::take(self, true);
+            secureloaddlg::take(self, true);
             return;
         }
         if let Err(e) = self.session.start(name) {
             self.session.echo(e.user_message());
         }
         exchangeloss::take(self, true);
+        secureloaddlg::take(self, true);
     }
 
     /// Submit a line of command-line text. A refused line is echoed to the history; the error is
@@ -659,11 +676,13 @@ impl CadApp {
                 && menus::run_ui_command(self, &word, &Value::Null).is_some()
             {
                 exchangeloss::take(self, true);
+                secureloaddlg::take(self, true);
                 return None;
             }
         }
         let r = self.session.cmdline(text);
         exchangeloss::take(self, true);
+        secureloaddlg::take(self, true);
         let e = r.err()?.to_string();
         self.session.echo(e.clone());
         Some(e)
@@ -707,6 +726,9 @@ impl CadApp {
         }
         if !self.ui.agent_control {
             prefs["agentControl"] = json!(false);
+        }
+        if !self.ui.control_token {
+            prefs["controlToken"] = json!(false);
         }
         if self.update.checked_ms > 0.0 {
             prefs["updateChecked"] = json!(self.update.checked_ms);
@@ -753,6 +775,9 @@ impl CadApp {
         if let Some(b) = v.get("agentControl").and_then(Value::as_bool) {
             self.ui.agent_control = b;
         }
+        if let Some(b) = v.get("controlToken").and_then(Value::as_bool) {
+            self.ui.control_token = b;
+        }
         if let Some(ms) = v.get("updateChecked").and_then(Value::as_f64).filter(|ms| ms.is_finite()) {
             self.update.checked_ms = ms;
         }
@@ -779,6 +804,13 @@ impl CadApp {
     pub fn open_path(&mut self, path: &str) {
         // A LISP file (dropped on the window): loaded as APPLOAD loads it.
         if is_lisp_file(path) {
+            // Only from a trusted folder, or once the user allows it (SECURELOAD).
+            let retry = Some(("appload".to_string(), serde_json::json!({ "path": path })));
+            if let Err(e) = self.session.check_load(std::path::Path::new(path), "APPLOAD", retry) {
+                self.session.echo(e.user_message());
+                secureloaddlg::take(self, true);
+                return;
+            }
             match cadaddy_engine::lisp::builtins::read_text_file(path) {
                 Some(text) => self.load_lisp(path, &text),
                 None => self.open_failed(format!("APPLOAD: can't read {path}")),
@@ -1156,6 +1188,13 @@ impl CadApp {
         }
         if let Some(url) = self.pending_url.take() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+        }
+        // An agent watching hears of dialogs opened.
+        if self.session.events.on && self.ui.dialog != self.last_dialog {
+            if let Some(d) = self.ui.dialog.clone() {
+                self.session.event("dialog.opened", json!({ "dialog": d }));
+            }
+            self.last_dialog = self.ui.dialog.clone();
         }
         control::observe_drawn(ui.ctx());
         self.frame_ms = now_ms() - t0;
