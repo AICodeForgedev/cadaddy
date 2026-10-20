@@ -2553,6 +2553,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     if let Some(name) = d.header.get("CMLEADERSTYLE").and_then(HVal::as_str) {
         xrecords.push((dxf_ext::MLEADER_STYLE_KEY, w.h(), vec![name.to_string()]));
     }
+    if let Some(code) = d.header.get("DCTMAIN").and_then(HVal::as_str).filter(|c| !c.trim().is_empty()) {
+        xrecords.push((dxf_ext::DCTMAIN_KEY, w.h(), vec![code.to_string()]));
+    }
     if let Some(files) = d.header.get(dxf_ext::STANDARDS_KEY).and_then(HVal::as_str).filter(|s| !s.is_empty()) {
         xrecords.push((dxf_ext::STANDARDS_KEY, w.h(), dxf_ext::json_chunks(files)));
     }

@@ -2284,6 +2284,10 @@ impl Objects {
         if let Some(style) = self.xrecord_text(crate::dxf_ext::MLEADER_STYLE_KEY).filter(|s| !s.trim().is_empty()) {
             d.header.set_str("CMLEADERSTYLE", &style);
         }
+        // The drawing's spelling dictionary (a short code).
+        if let Some(code) = self.xrecord_text(crate::dxf_ext::DCTMAIN_KEY).map(|c| c.trim().to_string()).filter(|c| !c.is_empty() && c.len() <= 8) {
+            d.header.set_str("DCTMAIN", &code);
+        }
         if let Some(files) = self.xrecord_text(crate::dxf_ext::STANDARDS_KEY).filter(|s| serde_json::from_str::<Vec<String>>(s).is_ok()) {
             d.header.set_str(crate::dxf_ext::STANDARDS_KEY, &files);
         }

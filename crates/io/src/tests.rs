@@ -2517,3 +2517,16 @@ fn a_large_dxf_reads_every_object_in_order() {
     assert_eq!(back.model.len(), 9000);
     assert_eq!(kinds(&back), kinds(&d));
 }
+
+/// The drawing's spelling dictionary (DCTMAIN) survives DXF, .cdy and DWG (Q146).
+#[test]
+fn the_spelling_dictionary_choice_survives_saving() {
+    let mut d = Drawing::new_metric();
+    d.header.set_str("DCTMAIN", "de");
+    for name in ["x.dxf", "x.cdy", "x.dwg"] {
+        let back = read(&write(&d, name).unwrap(), name).unwrap();
+        assert_eq!(back.header.get("DCTMAIN").and_then(HVal::as_str), Some("de"), "{name}");
+    }
+    // None chosen: nothing written.
+    assert!(!write_dxf(&Drawing::new_metric()).contains("CADADDY_DCTMAIN"));
+}

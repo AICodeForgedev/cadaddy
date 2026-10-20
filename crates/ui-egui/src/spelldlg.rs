@@ -1,6 +1,7 @@
 //! The Check Spelling dialog (SPELL typed or from a menu; -SPELL keeps the command line): where
 //! to check, each word not in the dictionary with the text around it and suggestions, and
-//! Ignore / Ignore All / Change / Change All / Add to Dictionary. Every action is a `spell` call.
+//! Ignore / Ignore All / Change / Change All / Add to Dictionary; the drawing's main dictionary
+//! (DCTMAIN), from the languages installed or not. Every action is a `spell` or `setvar` call.
 
 use serde_json::{Value, json};
 
@@ -20,11 +21,38 @@ pub struct State {
     to: String,
     started: bool,
     message: Option<String>,
+    /// The main dictionaries: (code, language, installed), the drawing's, and the folder other
+    /// languages are read from.
+    langs: Vec<(String, String, bool)>,
+    main: String,
+    folder: String,
+}
+
+/// The dictionaries as `spell` lists them.
+fn dictionaries(app: &mut CadApp) -> (Vec<(String, String, bool)>, String, String) {
+    let Ok(v) = app.session.execute("spell", &json!({"action": "dictionaries"})) else { return (Vec::new(), "enu".into(), String::new()) };
+    let langs = v["dictionaries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|d| {
+            (
+                d["code"].as_str().unwrap_or_default().to_string(),
+                d["language"].as_str().unwrap_or_default().to_string(),
+                d["installed"].as_bool().unwrap_or(false),
+            )
+        })
+        .collect();
+    (langs, v["current"].as_str().unwrap_or("enu").to_string(), v["folder"].as_str().unwrap_or_default().to_string())
 }
 
 pub fn open(app: &mut CadApp) {
     let selected: Vec<String> = app.session.selection().iter().map(|h| h.hex()).collect();
+    let (langs, main, folder) = dictionaries(app);
     app.spell_dlg = Some(State {
+        langs,
+        main,
+        folder,
         use_selection: !selected.is_empty(),
         selected,
         found: Vec::new(),
@@ -93,6 +121,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         ChangeAll,
         Add,
         Close,
+        Dictionary(String),
     }
     let mut act = Act::None;
     egui::Window::new(crate::tl!("Check Spelling"))
@@ -160,7 +189,24 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 });
             });
             ui.separator();
-            ui.weak(format!("{} {}", crate::tl!("Main dictionary:"), crate::tl!("American English")));
+            ui.horizontal(|ui| {
+                ui.label(crate::tl!("Main dictionary:"));
+                let name = |l: &(String, String, bool)| {
+                    let n = crate::i18n::t(&l.1).to_string();
+                    if l.2 { n } else { format!("{n} {}", crate::tl!("(not installed)")) }
+                };
+                let shown = st.langs.iter().find(|l| l.0 == st.main).map(name).unwrap_or_else(|| st.main.clone());
+                egui::ComboBox::from_id_salt("spell-main").selected_text(shown).show_ui(ui, |ui| {
+                    for l in &st.langs {
+                        if ui.selectable_label(l.0 == st.main, name(l)).clicked() && l.0 != st.main {
+                            act = Act::Dictionary(l.0.clone());
+                        }
+                    }
+                });
+            });
+            if st.langs.iter().any(|l| l.0 == st.main && !l.2) && !st.folder.is_empty() {
+                ui.weak(format!("{} {}", crate::tl!("Dictionaries are read from:"), st.folder));
+            }
             if let Ok(v) = app.session.execute("getvar", &json!({"name": "DCTCUST"})) {
                 ui.weak(format!("{} {}", crate::tl!("Custom dictionary:"), v["value"].as_str().unwrap_or_default()));
             }
@@ -206,6 +252,15 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             }
         }
         Act::Close => *open = false,
+        Act::Dictionary(code) => match app.run("setvar", json!({ "name": "DCTMAIN", "value": code })) {
+            Ok(_) => {
+                st.main = code;
+                st.found.clear();
+                st.started = false;
+                st.message = None;
+            }
+            Err(e) => st.message = Some(e),
+        },
     }
     if *open {
         app.spell_dlg = Some(st);
