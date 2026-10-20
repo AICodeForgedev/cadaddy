@@ -275,6 +275,25 @@ fn text_doc(style_font: &str, value: &str) -> Drawing {
     d
 }
 
+#[test]
+fn vertical_style_draws_text_top_to_bottom() {
+    // The stroke font, and a TrueType font when one is installed: the style's Vertical flag turns
+    // a row of four characters into a column hanging from the insertion point (drawn on screen
+    // and in plots alike, both build through here).
+    for font in std::iter::once("CADaddy Stroke").chain(system_font()) {
+        let mut d = text_doc(font, "ABCD");
+        let row = build(&d, &Space::Model, &Options::default()).bounds;
+        assert!(row.width() > 2.0 * row.height(), "{font}: {row:?}");
+        if let Some(st) = d.text_styles.iter_mut().find(|s| s.name == "TT") {
+            st.vertical = true;
+        }
+        let col = build(&d, &Space::Model, &Options::default()).bounds;
+        assert!(col.height() > 2.0 * col.width(), "{font}: {col:?}");
+        assert!(col.max.y <= 0.1 && col.min.y < -4.0, "{font}: hangs from the point: {col:?}");
+        assert!(col.center().x.abs() < 0.5, "{font}: centred on the point: {col:?}");
+    }
+}
+
 /// The first common system TrueType font, if any is installed (tests skip otherwise).
 fn system_font() -> Option<&'static str> {
     ["Arial", "Helvetica", "DejaVuSans", "Verdana", "LiberationSans-Regular"].into_iter().find(|n| cadaddy_fonts::ttf::find(n).is_some())

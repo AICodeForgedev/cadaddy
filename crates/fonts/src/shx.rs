@@ -616,6 +616,32 @@ pub(crate) fn shape(main: &ShxFont, big: Option<&ShxFont>, s: &str, height: f64,
     out
 }
 
+/// Character `c` as a shape font draws it in vertical text, when the font has a vertical form
+/// for it (shape commands that run only in vertical mode take the pen from the top of the
+/// character's cell, centred on the column, to the top of the next one below): its strokes
+/// from that pen position, scaled to `height`, and the pen's move. `None` for a character
+/// neither font has or one without a vertical form.
+pub(crate) fn vertical_char(
+    main: &ShxFont,
+    big: Option<&ShxFont>,
+    c: char,
+    height: f64,
+    width_factor: f64,
+    oblique: f64,
+) -> Option<(Vec<Vec<Vec2>>, Vec2)> {
+    let (f, code) = main.code_of(c).map(|k| (main, k)).or_else(|| big.and_then(|b| b.code_of(c).map(|k| (b, k))))?;
+    let g = f.glyph(code, true)?;
+    if g.advance.y > -1e-9 {
+        return None;
+    }
+    let h = if height.is_finite() && height > 0.0 { height } else { 1.0 };
+    let wf = if width_factor.is_finite() && width_factor.abs() > 1e-6 { width_factor } else { 1.0 };
+    let shear = if oblique.is_finite() { oblique.tan() } else { 0.0 };
+    let k = h / f.above.max(1e-9);
+    let place = |p: Vec2| Vec2::new((p.x + p.y * shear) * k * wf, p.y * k);
+    Some((g.strokes.iter().map(|l| l.iter().map(|p| place(*p)).collect()).collect(), Vec2::new(g.advance.x * k * wf, g.advance.y * k)))
+}
+
 /// The width of a line in a shape font, as [`shape`] lays it out.
 pub(crate) fn width(main: &ShxFont, big: Option<&ShxFont>, s: &str, height: f64, width_factor: f64) -> f64 {
     shape(main, big, s, height, width_factor, 0.0).width
@@ -695,6 +721,29 @@ mod tests {
             &[(u16::from(b'L'), "L", L), (u16::from(b'Q'), "Q", SQ), (u16::from(b'O'), "O", o), (u16::from(b'X'), "X", x)],
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn vertical_forms_stack_down_the_column() {
+        // V: a 2-wide stroke 4 tall. In vertical text it first moves from the cell's top centre
+        // to its baseline-left corner and ends at the next cell's top centre (5 below).
+        let v: &[u8] = &[2, 14, 8, 0xFF, 0xFC, 1, 0x44, 2, 8, 2, 0xFC, 14, 8, 0xFF, 0xFF, 0];
+        let f = ShxFont::parse(&compile_shapes(4, 1, &[(u16::from(b'V'), "V", v), (u16::from(b'L'), "L", L)])).unwrap();
+        assert_eq!(f.glyph(u32::from(b'V'), false).unwrap().advance, Vec2::new(2.0, 0.0));
+        let (strokes, step) = vertical_char(&f, None, 'V', 4.0, 1.0, 0.0).unwrap();
+        assert_eq!(strokes, vec![vec![Vec2::new(-1.0, -4.0), Vec2::new(-1.0, 0.0)]]);
+        assert_eq!(step, Vec2::new(0.0, -5.0));
+        // L has no vertical form: the caller centres it in a cell.
+        assert!(vertical_char(&f, None, 'L', 4.0, 1.0, 0.0).is_none());
+        // Down the column: the second V one cell (5) below the first; L centred under them.
+        let font = crate::TextFont::Shx { main: std::sync::Arc::new(f), big: None };
+        let sh = crate::shape_vertical(&font, "VVL", 4.0, 1.0, 0.0);
+        assert_eq!(sh.strokes.get(1), Some(&vec![Vec2::new(-1.0, -9.0), Vec2::new(-1.0, -5.0)]));
+        let l = sh.strokes.get(2).unwrap();
+        let top = l.iter().map(|p| p.y).fold(f64::MIN, f64::max);
+        let (x0, x1) = l.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.x), b.max(p.x)));
+        assert!((top + 10.0).abs() < 1e-9, "{l:?}");
+        assert!(x0 < 0.0 && x1 > 0.0 && (x0 + x1).abs() < 1.5, "{l:?}");
     }
 
     #[test]
