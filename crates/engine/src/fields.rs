@@ -304,11 +304,11 @@ fn value(d: &Drawing, env: &Env, code: &str, sheet: &str, prev: Option<&str>) ->
     let c = Code::parse(code);
     let raw = match c.evaluator.to_ascii_lowercase().as_str() {
         "acvar" => var(d, env, &c, sheet, prev),
-        "acsm" => match c.expr.to_ascii_lowercase().as_str() {
+        "acsm" => sheet_set_field(d, &c.expr, sheet).or_else(|| match c.expr.to_ascii_lowercase().as_str() {
             "sheet.number" => Some(sheet_parts(sheet).0),
             "sheet.title" => Some(sheet_parts(sheet).1),
             _ => prev.map(str::to_string),
-        },
+        }),
         "acobjprop" => object_property(d, &c),
         _ => prev.map(str::to_string),
     };
@@ -317,6 +317,30 @@ fn value(d: &Drawing, env: &Env, code: &str, sheet: &str, prev: Option<&str>) ->
         Some(v) => text_case(&v, c.format.as_deref()),
         None => field::NO_VALUE.into(),
     }
+}
+
+/// An `\AcSm` field from the sheet set data SHEETSET sync wrote into the drawing: `SheetSet.Name`,
+/// `.Description` or a custom property of the set, `Sheet.Number`, `.Title`, `.Description` or a
+/// custom property of the sheet whose layout is `sheet`. None when the drawing has no such data.
+fn sheet_set_field(d: &Drawing, expr: &str, sheet: &str) -> Option<String> {
+    let data: serde_json::Value =
+        d.header.get(crate::cmd::file::sheetset::SHEET_SET_VAR).and_then(cadaddy_doc::HVal::as_str).and_then(|t| serde_json::from_str(t).ok())?;
+    let (scope, name) = expr.trim().split_once('.')?;
+    let lookup = |o: &serde_json::Value, keys: &[&str]| -> Option<String> {
+        let found = keys.iter().find_map(|k| o.get(*k).and_then(serde_json::Value::as_str).filter(|_| name.eq_ignore_ascii_case(k)));
+        found.map(str::to_string).or_else(|| {
+            o.get("properties")?.as_object()?.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).and_then(|(_, v)| v.as_str()).map(str::to_string)
+        })
+    };
+    if scope.eq_ignore_ascii_case("sheetset") {
+        return lookup(&data, &["name", "description"]);
+    }
+    if !scope.eq_ignore_ascii_case("sheet") {
+        return None;
+    }
+    let sheets = data.get("sheets")?.as_object()?;
+    let this = sheets.iter().find(|(k, _)| k.eq_ignore_ascii_case(sheet.trim())).map(|(_, v)| v)?;
+    lookup(this, &["number", "title", "description"])
 }
 
 /// A sheet's number and title from its layout name: "A-101 Floor Plan" → ("A-101", "Floor
