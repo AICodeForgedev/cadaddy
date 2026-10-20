@@ -1038,6 +1038,14 @@ impl CadApp {
                     || d.text_styles.iter().any(|t| theme::has_cjk(&t.name));
             }
         }
+        // Chinese, Japanese or Korean typed or composed (an input method) in an interface of
+        // another language: the command line and text boxes show it, not missing-glyph boxes.
+        self.needs_cjk |= ctx.input(|i| {
+            i.events.iter().any(|e| match e {
+                egui::Event::Text(t) | egui::Event::Ime(egui::ImeEvent::Commit(t) | egui::ImeEvent::Preedit { text: t, .. }) => theme::has_cjk(t),
+                _ => false,
+            })
+        });
         // The language pickers (the Language dialog, Options) name languages in their own scripts.
         let picker = self.ui.dialog.as_deref().is_some_and(|d| d == "language" || d.starts_with("options"));
         let cjk = self.needs_cjk || picker || matches!(language, "zh" | "ja" | "ko");

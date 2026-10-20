@@ -853,7 +853,9 @@ mod tests {
         // Preedit shows, isn't typed yet; the commit is.
         frame(&mut app, &ctx, vec![preedit("ce")]);
         assert_eq!((app.cmd.preedit.as_str(), app.cmd.buffer.as_str()), ("ce", ""));
+        assert!(!app.needs_cjk, "pinyin letters need no CJK font");
         let at = frame(&mut app, &ctx, vec![preedit("测试")]).platform_output.ime.map(|i| i.rect);
+        assert!(app.needs_cjk, "a composition in Chinese loads the CJK interface fonts (an English interface showed boxes)");
         assert!(at.is_some_and(|r| r.width() > 10.0), "the candidate window sits over the composition: {at:?}");
         frame(&mut app, &ctx, vec![preedit(""), commit("测试")]);
         assert_eq!((app.cmd.preedit.as_str(), app.cmd.buffer.as_str()), ("", "测试"));

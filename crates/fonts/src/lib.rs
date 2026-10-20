@@ -653,7 +653,8 @@ const VERTICAL_PITCH: f64 = 4.0 / 3.0;
 /// Shape one line set vertically (text style "Vertical"): the characters stacked top to
 /// bottom, each centred on the column at x = 0, the first one's top at y = 0. A shape font with
 /// vertical forms (shape commands for vertical text only) places its characters itself; other
-/// characters sit in cells [`VERTICAL_PITCH`] heights apart. `width` holds the column's length.
+/// characters sit in cells [`VERTICAL_PITCH`] heights tall, taller for a glyph that needs it.
+/// `width` holds the column's length.
 pub fn shape_vertical(font: &TextFont, s: &str, height: f64, width_factor: f64, oblique: f64) -> Shaped {
     let h = if height.is_finite() && height > 0.0 { height } else { 1.0 };
     let mut out = Shaped::default();
@@ -670,10 +671,14 @@ pub fn shape_vertical(font: &TextFont, s: &str, height: f64, width_factor: f64, 
             continue;
         }
         let mut sh = shape_line(font, &c.to_string(), h, width_factor, oblique);
-        let (dx, base) = (-sh.width / 2.0, y - h);
+        // The cell holds a capital and a descender, or more for a glyph that reaches further
+        // (a TrueType CJK ideograph rises above the cap height): its ink never meets the next.
+        let (lo, hi) = sh.outlines().iter().flatten().fold((0.0_f64, 0.0_f64), |(a, b), q| (a.min(q.y), b.max(q.y)));
+        let (top, bottom) = (hi.max(h), lo.min(h * (1.0 - VERTICAL_PITCH)));
+        let (dx, base) = (-sh.width / 2.0, y - top);
         sh.map(|q| Vec2::new(q.x + dx, q.y + base));
         out.extend(sh);
-        y -= h * VERTICAL_PITCH;
+        y -= (top - bottom).max(h * VERTICAL_PITCH);
     }
     out.width = -y;
     out
@@ -793,6 +798,25 @@ mod tests {
         let ab = shape_vertical(&TextFont::Stroke, "中文", 2.0, 1.0, 0.0);
         assert!((ab.width - 2.0 * a.width).abs() < 1e-9);
         assert!(ink_y(&ab).0 < ink_y(&a).0 - 2.0, "{:?} {:?}", ink_y(&ab), ink_y(&a));
+    }
+
+    #[test]
+    fn tall_glyphs_get_taller_cells_down_a_vertical_line() {
+        // A TrueType CJK ideograph rises above the text height: its cell grows, so the next
+        // character's ink starts below this one's.
+        let Some(face) =
+            ["MS Gothic", "Yu Gothic", "Microsoft YaHei", "Noto Sans CJK JP", "PingFang SC", "Hiragino Sans"].into_iter().find_map(ttf::find)
+        else {
+            return;
+        };
+        let font = TextFont::Outline(face);
+        let one = shape_vertical(&font, "縦", 1.0, 1.0, 0.0);
+        let two = shape_vertical(&font, "縦縦", 1.0, 1.0, 0.0);
+        let (lo1, _) = ink_y(&one);
+        let second: Vec<Vec2> = two.glyphs.iter().skip(one.glyphs.len()).flatten().flatten().copied().collect();
+        let hi2 = second.iter().map(|q| q.y).fold(f64::MIN, f64::max);
+        assert!(!second.is_empty() && hi2 < lo1, "second glyph top {hi2} below the first's bottom {lo1}");
+        assert!(two.width >= 2.0 * VERTICAL_PITCH - 1e-9);
     }
 
     #[test]

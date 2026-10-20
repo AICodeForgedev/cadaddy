@@ -598,8 +598,14 @@ fn text_box(ui: &mut egui::Ui, st: &mut State, lay: &MTextLayout, k: f64, width:
     let fresh = map.len() == buf.chars().count() + 1;
     if fresh {
         for (x0, x1, base, h) in map.spans(sel.0, sel.1) {
-            let r = Rect::from_two_pos(to_screen(Vec2::new(x0, base + h * 1.25)), to_screen(Vec2::new(x1, base - h * 0.45)));
-            painter.rect_filled(r, 0.0, t.select_bg);
+            if st.composing {
+                // An input method's composition (the field selects it): underlined, as IMEs show it.
+                let y = base - h * 0.3;
+                painter.line_segment([to_screen(Vec2::new(x0, y)), to_screen(Vec2::new(x1, y))], Stroke::new(1.0, t.text));
+            } else {
+                let r = Rect::from_two_pos(to_screen(Vec2::new(x0, base + h * 1.25)), to_screen(Vec2::new(x1, base - h * 0.45)));
+                painter.rect_filled(r, 0.0, t.select_bg);
+            }
         }
     }
     for piece in &lay.pieces {
