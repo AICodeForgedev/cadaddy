@@ -62,6 +62,11 @@ fn store(d: &Drawing, s: &EntityStore, lost: &mut BTreeMap<String, usize>, next:
     out
 }
 
+/// What `e` becomes in R12, in the order the R12 writer writes it (none: R12 has no form for it).
+pub(crate) fn pieces(d: &Drawing, e: &Entity) -> Vec<Entity> {
+    piece(d, e, &mut BTreeMap::new(), 0)
+}
+
 /// What `e` becomes in R12.
 fn piece(d: &Drawing, e: &Entity, lost: &mut BTreeMap<String, usize>, depth: usize) -> Vec<Entity> {
     let with = |kind: EntityKind| Entity { handle: Handle(0), common: e.common.clone(), kind };

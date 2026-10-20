@@ -139,6 +139,25 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
     crate::i18n::with_language(app.language(), || run_ui_command_inner(app, id, params))
 }
 
+/// MARKUPIMPORT or REDLINE.IMPORT from a menu or typed alone: echoed as a command, then the
+/// reviewed PDF from the file dialog. With no dialog (an agent's request, FILEDIA 0, no picker)
+/// the history says how to give the file, since a UI command's error isn't shown (battle test
+/// 0.7.8 #12: it did nothing, silently).
+fn import_markups(app: &mut CadApp, id: &str, name: &str) -> Result<Value, String> {
+    app.session.echo(format!("Command: {}", id.to_ascii_uppercase()));
+    let off = file_dialogs_off(app);
+    match app.services.pick_pdf.as_ref().or(app.services.pick_open.as_ref()).map(|p| p()) {
+        Some(Some(path)) => app.run(id, json!({ "path": path })).inspect(|_| app.ui.dialog = Some("markups".into())),
+        // Cancelled.
+        Some(None) if !off && !crate::dialog_refused() => Ok(Value::Null),
+        _ => {
+            let msg = format!("{name}: there is no file dialog here; run it with parameters, e.g. {id} {{\"path\": \"review.pdf\"}}");
+            app.session.echo(msg.clone());
+            Err(msg)
+        }
+    }
+}
+
 /// FILEDIA 0: file commands ask for the file name on the command line instead of opening a file
 /// dialog, as scripts expect.
 fn file_dialogs_off(app: &CadApp) -> bool {
@@ -688,19 +707,8 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         // From the menu or typed: the reviewed PDF from the file dialog.
         // From the menu: pick the reviewed PDF, then its markups go on a layer per reviewer.
-        "redline.import" if params.is_null() => match app.services.pick_pdf.as_ref().or(app.services.pick_open.as_ref()).map(|p| p()) {
-            Some(Some(path)) => app.run("redline.import", json!({ "path": path })).inspect(|_| app.ui.dialog = Some("markups".into())),
-            Some(None) => Ok(Value::Null),
-            None => {
-                Err("IMPORT REDLINE MARKUPS: there is no file dialog here; run it with parameters, e.g. redline.import {\"path\": \"review.pdf\"}"
-                    .into())
-            }
-        },
-        "markupimport" if params.is_null() => match app.services.pick_pdf.as_ref().or(app.services.pick_open.as_ref()).map(|p| p()) {
-            Some(Some(path)) => app.run("markupimport", json!({ "path": path })).inspect(|_| app.ui.dialog = Some("markups".into())),
-            Some(None) => Ok(Value::Null),
-            None => Err("MARKUPIMPORT: there is no file dialog here; run it with parameters, e.g. markupimport {\"path\": \"review.pdf\"}".into()),
-        },
+        "redline.import" if params.is_null() => import_markups(app, "redline.import", "IMPORT REDLINE MARKUPS"),
+        "markupimport" if params.is_null() => import_markups(app, "markupimport", "MARKUPIMPORT"),
         // From the menu or the Start page: the Convert Drawings window.
         "dwgconvert" | "cdyconvert" if params.is_null() => {
             app.ui.dialog = Some(crate::convertdlg::DIALOG.into());
@@ -735,6 +743,15 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // Typed or from the menu: the Plot Stamp dialog. JSON calls keep running the command.
         "plotstamp" if params.is_null() && app.session.state().is_ok() => {
             crate::plotstampdlg::open(app);
+            Ok(Value::Null)
+        }
+        // Typed or from the menu: the Drawing Properties dialog and the System Variable Monitor.
+        "dwgprops" if params.is_null() && app.session.state().is_ok() => {
+            crate::dwgpropsdlg::open(app);
+            Ok(Value::Null)
+        }
+        "sysvarmonitor" if params.is_null() => {
+            app.ui.dialog = Some(crate::dwgpropsdlg::MONITOR.into());
             Ok(Value::Null)
         }
         "units" | "un" if params.is_null() => {
@@ -1121,6 +1138,7 @@ mod tests {
             pick_save_image: None,
             pick_pdf: None,
             read_clipboard: None,
+            system_clipboard: None,
             thumbnail: None,
             pick_image: None,
             pick_open: None,

@@ -36,6 +36,8 @@ pub(super) struct MTextOpts {
     pub columns: Option<MTextColumns>,
     /// Static columns: the total width answered, split into columns once the gutter is known.
     pub total_width: f64,
+    /// The drawing's LUNITS and LUPREC, for the defaults the prompts show.
+    pub units: (i64, i64),
 }
 
 impl Default for MTextOpts {
@@ -50,6 +52,7 @@ impl Default for MTextOpts {
             width: None,
             columns: None,
             total_width: 0.0,
+            units: (2, 4),
         }
     }
 }
@@ -58,7 +61,13 @@ impl MTextOpts {
     pub(super) fn new(s: &Session) -> Self {
         let (height, style) =
             s.doc().map(|d| (d.header.f64("TEXTSIZE", 0.2), d.header.str("TEXTSTYLE", "Standard"))).unwrap_or((0.2, "Standard".into()));
-        MTextOpts { height, style, ..MTextOpts::default() }
+        let units = s.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
+        MTextOpts { height, style, units, ..MTextOpts::default() }
+    }
+
+    /// A length as the prompts show it, in the drawing's units.
+    fn dist(&self, v: f64) -> String {
+        crate::units::format_distance(v, self.units.0, self.units.1)
     }
 
     /// The text box from the first corner and either the opposite corner or the Width answer:
@@ -137,7 +146,7 @@ impl MTextAsk {
 
     pub(super) fn prompt(self, o: &MTextOpts, first: Vec2) -> Prompt {
         match self {
-            MTextAsk::Height => Prompt::new("Specify height", Accept::POINT_OR_NUMBER).default(format!("{:.4}", o.height)).base(first),
+            MTextAsk::Height => Prompt::new("Specify height", Accept::POINT_OR_NUMBER).default(o.dist(o.height)).base(first),
             MTextAsk::Justify => Prompt::new("Enter justification", curves::KW)
                 .kw(&JUSTIFY)
                 .default(JUSTIFY.get(usize::from(o.attach.clamp(1, 9) - 1)).copied().unwrap_or("TL")),
@@ -157,7 +166,7 @@ impl MTextAsk {
                 let stat = o.columns.as_ref().is_some_and(|c| c.kind == MTextColumnType::Static);
                 let p = Prompt::new(if stat { "Specify total width" } else { "Specify column width" }, Accept::POINT_OR_NUMBER).base(first);
                 match o.width {
-                    Some(w) if w > 0.0 => p.default(format!("{:.4}", if stat { o.total_width.max(w) } else { w })),
+                    Some(w) if w > 0.0 => p.default(o.dist(if stat { o.total_width.max(w) } else { w })),
                     _ => p,
                 }
             }
@@ -165,12 +174,12 @@ impl MTextAsk {
                 Prompt::new("Specify number of columns", Accept::NUMBER).default(o.columns.as_ref().map_or(2, |c| c.count.max(2)).to_string())
             }
             MTextAsk::ColumnGutter => Prompt::new("Specify gutter width", Accept::POINT_OR_NUMBER)
-                .default(format!("{:.4}", o.columns.as_ref().map_or(o.height, |c| c.gutter)))
+                .default(o.dist(o.columns.as_ref().map_or(o.height, |c| c.gutter)))
                 .base(first),
             MTextAsk::ColumnHeight => {
                 let p = Prompt::new("Specify column height", Accept::POINT_OR_NUMBER).base(first);
                 match o.columns.as_ref().map(|c| c.height).filter(|h| *h > 0.0) {
-                    Some(h) => p.default(format!("{h:.4}")),
+                    Some(h) => p.default(o.dist(h)),
                     None => p,
                 }
             }

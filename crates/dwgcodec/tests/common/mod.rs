@@ -26,7 +26,7 @@ pub fn dxf(entities: usize) -> String {
     s
 }
 
-pub const VERSIONS: [&str; 5] = ["AC1015", "AC1018", "AC1024", "AC1027", "AC1032"];
+pub const VERSIONS: [&str; 6] = ["AC1015", "AC1018", "AC1021", "AC1024", "AC1027", "AC1032"];
 
 fn version(id: &str) -> acadrust::DxfVersion {
     match id {

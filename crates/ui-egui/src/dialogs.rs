@@ -30,6 +30,8 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "find" => crate::finddlg::dialog(app, ctx, &mut open),
         crate::laywalkdlg::DIALOG => crate::laywalkdlg::dialog(app, ctx, &mut open),
         crate::plotstampdlg::DIALOG => crate::plotstampdlg::dialog(app, ctx, &mut open),
+        crate::dwgpropsdlg::DIALOG => crate::dwgpropsdlg::dialog(app, ctx, &mut open),
+        crate::dwgpropsdlg::MONITOR => crate::dwgpropsdlg::monitor(app, ctx, &mut open),
         crate::countpalette::DIALOG => crate::countpalette::dialog(app, ctx, &mut open),
         crate::activitypalette::DIALOG => crate::activitypalette::dialog(app, ctx, &mut open),
         "color" => crate::cmddlgs::color(app, ctx, &mut open),
@@ -310,6 +312,13 @@ fn pick(ui: &mut egui::Ui, salt: &str, value: &mut i64, options: &[(i64, String)
     });
 }
 
+/// The angle precisions of `aunits` as a zero, "0", "0.0", "0d00'"…, as other programs show them
+/// (a sample angle read as a value: battle test 0.7.8 #14); surveyor's zero is due north.
+fn angle_precisions(aunits: i64) -> Vec<(i64, String)> {
+    let zero = if aunits == 4 { std::f64::consts::FRAC_PI_2 } else { 0.0 };
+    (0..=8).map(|p| (p, cadaddy_engine::units::format_angle(zero, aunits, p))).collect()
+}
+
 /// Drawing Units (UNITS): edits a copy of LUNITS/LUPREC/AUNITS/AUPREC/INSUNITS and applies it
 /// through the `units` command on OK.
 fn units(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
@@ -349,7 +358,7 @@ fn units(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 pick(ui, "units_aunits", au, &types(&ANGLE_TYPES));
                 ui.end_row();
                 ui.label("Precision");
-                pick(ui, "units_auprec", ap, &(0..=8).map(|p| (p, format_angle(45f64.to_radians(), *au, p))).collect::<Vec<_>>());
+                pick(ui, "units_auprec", ap, &angle_precisions(*au));
                 ui.end_row();
                 ui.strong("Insertion scale");
                 ui.end_row();
@@ -410,7 +419,7 @@ fn about(ctx: &egui::Context, open: &mut bool) {
                 2 => crate::credits::models_ui(ui),
                 _ => {
                     ui.heading(crate::tl!("CADaddy"));
-                    ui.label(crate::tf!("Version {version}", version = env!("CARGO_PKG_VERSION")));
+                    ui.label(crate::tf!("Version {version}", version = crate::diag::version_with_build()));
                     ui.label(crate::tl!("Computer-aided design and drafting for Windows, Mac and Linux, written in Rust."));
                     ui.add_space(6.0);
                     ui.label(RichText::new(crate::tl!("Includes open-source components: see NOTICE.")).color(t.text_dim));
@@ -510,6 +519,16 @@ mod tests {
     use serde_json::json;
 
     use crate::{CadApp, Services};
+
+    #[test]
+    fn angle_precisions_show_zero() {
+        let labels = |au| super::angle_precisions(au).into_iter().map(|(_, l)| l).collect::<Vec<_>>();
+        assert_eq!(labels(0)[..3], ["0", "0.0", "0.00"]);
+        assert_eq!(labels(1)[..2], ["0d", "0d0'"]);
+        assert_eq!(labels(2)[0], "0g");
+        assert_eq!(labels(3)[1], "0.0r");
+        assert_eq!(labels(4)[0], "N 0d E");
+    }
 
     #[test]
     fn picking_a_block_starts_insert_with_its_name() {

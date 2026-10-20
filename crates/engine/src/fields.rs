@@ -3,7 +3,9 @@
 //! UPDATEFIELD, and for text a command creates or changes. The values are kept in
 //! [`Drawing::field_values`]; what isn't worked out keeps the value it had.
 //!
-//! Fields read: `\AcVar` Date, CreateDate, SaveDate, PlotDate, Filename, Login,
+//! Fields read: `\AcVar` Date, CreateDate, SaveDate, PlotDate, Filename, Login, the drawing
+//! properties (Title, Subject, Author, Keywords, Comments, HyperlinkBase, LastSavedBy,
+//! RevisionNumber, CustomDP.<name>),
 //! CurrentSheetName / CurrentSheetNumber / CurrentSheetTitle (the layout's name, and its two parts
 //! — "A-101 Floor Plan" is sheet A-101, "Floor Plan"), DeviceName and PageSetupName; `\AcSm`
 //! Sheet.Number / Sheet.Title (the same, from layout names); `\AcObjProp` Object(…).Area,
@@ -353,6 +355,10 @@ fn var(d: &Drawing, env: &Env, c: &Code, sheet: &str, prev: Option<&str>) -> Opt
         "currentsheettitle" => Some(sheet_parts(sheet).1),
         "devicename" => Some(page.map(|p| p.device.clone()).unwrap_or_default()),
         "pagesetupname" => Some(String::new()),
+        // Drawing properties (DWGPROPS).
+        "hyperlinkbase" => Some(d.header.str("HYPERLINKBASE", "")),
+        e if d.properties.field(e).is_some() => d.properties.field(e).map(str::to_string),
+        e if e.starts_with("customdp.") => Some(d.properties.custom(c.expr.get(9..).unwrap_or_default().trim()).unwrap_or_default().to_string()),
         _ => prev.map(str::to_string),
     }
 }

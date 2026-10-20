@@ -98,6 +98,11 @@ fn report_dir() -> PathBuf {
 fn render(lang: &str, theme: &str, (w, h): (u32, u32), tab: &str, dialog: Option<&str>) -> RgbaImage {
     let mut app = CadApp::new(Session::new(), Services::default());
     let _ = app.run("ui.sample", json!({}));
+    // DesignCenter starts in the drawing's folder, else the home folder (which is private and
+    // differs from machine to machine): a made-up folder, relative to the crate.
+    if let Ok(st) = app.session.state_mut() {
+        st.path = Some("tests/designcenter/Sample Floor Plan.dxf".into());
+    }
     app.ui.ribbon = true;
     app.ui.show_palettes = true;
     app.ui.ribbon_tab = tab.to_string();

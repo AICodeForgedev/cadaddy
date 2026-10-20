@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-const FORMATS: &[&str] = &["dxf", "dwg", "cdy"];
+const FORMATS: &[&str] = &["dxf", "dwg", "dwg-native", "cdy"];
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

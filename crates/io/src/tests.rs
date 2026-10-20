@@ -2447,6 +2447,36 @@ fn foreign_table_reads_cell_text_height_and_keeps_style_scale() {
     assert_eq!(t2.cells[0][1].text_height, None);
 }
 
+/// MTEXT's searchable copy reads as the text does: no paragraph or formatting codes
+/// (REPORT-0.7.8-battle #15).
+#[test]
+fn mtext_plots_with_a_hidden_copy_without_its_codes() {
+    let mut d = Drawing::new_imperial();
+    let m = MText {
+        background: None,
+        insert: Vec3::new(10.0, 40.0, 0.0),
+        height: 2.5,
+        width: 80.0,
+        attach: 1,
+        rotation: 0.0,
+        style: "Standard".into(),
+        contents: "GENERAL NOTES:\\P1. ALL {\\LRECEPTACLES\\l} \\H1.5x;20%%d\\PSEE \\S1/2;".into(),
+        line_spacing: 1.0,
+        line_spacing_exact: false,
+        columns: None,
+    };
+    let _ = d.add(&Space::Model, Common::default(), EntityKind::MText(m));
+    let bytes = crate::pdf::plot(&d, &Space::Model, &serde_json::json!({"compress": false})).unwrap();
+    let (back, _) = crate::pdf_read::read_json(&bytes, &serde_json::json!({})).unwrap();
+    let words: Vec<String> = back
+        .model
+        .iter()
+        .filter(|e| e.common.layer == crate::pdf_read::HIDDEN_TEXT_LAYER)
+        .filter_map(|e| if let EntityKind::Text(t) = &e.kind { Some(t.value.clone()) } else { None })
+        .collect();
+    assert_eq!(words, vec!["GENERAL NOTES: 1. ALL RECEPTACLES 20° SEE 1/2".to_string()]);
+}
+
 #[test]
 fn stroke_font_text_plots_with_a_hidden_searchable_copy() {
     let mut d = Drawing::new_imperial();
@@ -2516,4 +2546,17 @@ fn a_large_dxf_reads_every_object_in_order() {
     let kinds = |d: &Drawing| d.model.iter().map(|e| (e.kind.clone(), e.common.layer.clone())).collect::<Vec<_>>();
     assert_eq!(back.model.len(), 9000);
     assert_eq!(kinds(&back), kinds(&d));
+}
+
+/// The drawing's spelling dictionary (DCTMAIN) survives DXF, .cdy and DWG (Q146).
+#[test]
+fn the_spelling_dictionary_choice_survives_saving() {
+    let mut d = Drawing::new_metric();
+    d.header.set_str("DCTMAIN", "de");
+    for name in ["x.dxf", "x.cdy", "x.dwg"] {
+        let back = read(&write(&d, name).unwrap(), name).unwrap();
+        assert_eq!(back.header.get("DCTMAIN").and_then(HVal::as_str), Some("de"), "{name}");
+    }
+    // None chosen: nothing written.
+    assert!(!write_dxf(&Drawing::new_metric()).contains("CADADDY_DCTMAIN"));
 }

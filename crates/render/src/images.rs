@@ -304,7 +304,12 @@ pub fn generation() -> u64 {
 /// working folder, which has nothing to do with the drawing (a program started from the Start
 /// menu works in its install or system folder), nor from another drawing's folder.
 fn resolve(path: &str, dir: Option<&Path>) -> Option<PathBuf> {
-    use cadaddy_geom::filename::{find_file, native};
+    use cadaddy_geom::filename::{find_file, native, stored_path_allowed};
+    // A path to another computer or a device isn't opened, nor is its name looked for beside the
+    // drawing (a drawing must not make the app connect to a server it names).
+    if !stored_path_allowed(path, dir) {
+        return None;
+    }
     // Names match ignoring case, `\` separating folders, as on Windows.
     let norm = native(path);
     let p = Path::new(&norm);
@@ -347,6 +352,20 @@ pub fn decode(bytes: &[u8]) -> Option<Raster> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_paths_on_other_computers_are_not_opened() {
+        // A file of the same name beside the drawing isn't taken for a path to another computer
+        // either: the stored path is refused before anything is looked up.
+        let dir = std::env::temp_dir().join(format!("cadaddy-img-unc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.png"), b"x").unwrap();
+        assert_eq!(resolve("a.png", Some(&dir)), Some(dir.join("a.png")));
+        for no in ["\\\\192.0.2.1\\s\\a.png", "//192.0.2.1/s/a.png", "file://192.0.2.1/s/a.png", "\\\\.\\pipe\\a.png"] {
+            assert_eq!(resolve(no, Some(&dir)), None, "{no}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// The image folder is process-wide: tests that set it take turns.
     fn folder_lock() -> std::sync::MutexGuard<'static, ()> {

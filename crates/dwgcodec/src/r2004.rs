@@ -132,6 +132,13 @@ pub(crate) struct Layout {
     starts: [u32; 3],
 }
 
+impl Layout {
+    /// The code page number (file header byte 0x13).
+    pub(crate) fn code_page(&self) -> u16 {
+        self.head.get(0x13..0x15).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]))
+    }
+}
+
 /// Header-variables and classes sections have the second size field from R2010 (maintenance
 /// version above 3) and in R2018 (spec §9, §10.2).
 fn has_hi(version: Version, maintenance: u8) -> bool {
@@ -731,4 +738,66 @@ pub(crate) fn write(dwg: &Dwg, l: &Layout) -> Result<Vec<u8>> {
         out.extend_from_slice(&l.tail);
     }
     Ok(out)
+}
+
+/// The layout of a new file (no pages yet): the plain header, the file header data's constants,
+/// the section map's sections and the two system pages, so [`write`] lays out everything. Every
+/// section counts as changed. The maintenance version is 0 (no second size field in the header
+/// and classes sections up to R2013), and 4 for R2018 (which always has it).
+pub(crate) fn fresh(version: Version) -> Layout {
+    let mut head = vec![0u8; 0x80];
+    head[..6].copy_from_slice(version.id().as_bytes());
+    head[0x0B] = if version >= Version::R2018 { 4 } else { 0 };
+    head[0x0C] = 3;
+    head[0x11] = 0x21;
+    // Code page 30 (ANSI 1252).
+    head[0x13] = 30;
+    put_u32(&mut head, 0x28, 0x80);
+    let mut data = vec![0u8; HEADER_DATA_LEN];
+    data[..12].copy_from_slice(b"AcFssFcAJMB\0");
+    for (at, v) in [(0x10, 0x6C), (0x14, 4), (0x24, 1), (0x44, 0x20), (0x48, 0x80), (0x4C, 0x40), (0x50, 2), (0x5C, 1)] {
+        put_u32(&mut data, at, v);
+    }
+    let sections: [(&str, u32, u32); 8] = [
+        (HEADER, 0x7400, 2),
+        (CLASSES, 0x7400, 2),
+        ("AcDb:AuxHeader", 0x7400, 2),
+        (OBJECTS, 0x7400, 2),
+        ("AcDb:ObjFreeSpace", 0x7400, 2),
+        // The template: its description and the drawing's MEASUREMENT (spec §16).
+        ("AcDb:Template", 0x7400, 2),
+        (HANDLES, 0x7400, 2),
+        // The preview, stored uncompressed (in whole pages: small ones).
+        ("AcDb:Preview", 0x400, 1),
+    ];
+    let descs: Vec<Desc> = sections
+        .iter()
+        .enumerate()
+        .map(|(i, &(name, max_size, compressed))| {
+            let mut n = [0u8; 64];
+            n[..name.len()].copy_from_slice(name.as_bytes());
+            Desc { size: 0, max_size, unknown: 1, compressed, id: i as u32, encrypted: 0, name: n, pages: Vec::new() }
+        })
+        .collect();
+    let count = descs.len() as u32;
+    Layout {
+        version,
+        head,
+        data,
+        pages: vec![Page { id: 1, bytes: Vec::new(), gap: None }, Page { id: 2, bytes: Vec::new(), gap: None }],
+        map_head: [count, 2, 0x7400, 0, count],
+        original: vec![(usize::MAX, 0); descs.len()],
+        descs,
+        page_map_content: Vec::new(),
+        section_map_content: Vec::new(),
+        copy_shift: 0,
+        gap_before_copy: Vec::new(),
+        tail: Vec::new(),
+        starts: [0; 3],
+    }
+}
+
+/// Whether a new file of `version` has the second size field in its header and classes sections.
+pub(crate) fn fresh_has_hi(version: Version) -> bool {
+    has_hi(version, if version >= Version::R2018 { 4 } else { 0 })
 }

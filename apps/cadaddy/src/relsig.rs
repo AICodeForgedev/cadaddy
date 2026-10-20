@@ -68,17 +68,47 @@ pub fn sig_file(version: &str, key: &[u8; 32], sig: &[u8; 64]) -> String {
     format!("{HEADER}\nversion {}\nkey {}\nsig {}\n", plain(version), key_id(key), hex(sig))
 }
 
+/// Why a release's signature didn't check out. The updater shows each in the interface
+/// language; [`std::fmt::Display`] is the English (xtask and logs).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SigError {
+    NoKey,
+    TooLarge,
+    Unreadable,
+    Damaged,
+    /// The signature is for this version ("none" when it names none).
+    OtherVersion(String),
+    UntrustedKey,
+    BadKey,
+    Mismatch,
+}
+
+impl std::fmt::Display for SigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SigError::NoKey => f.write_str("This build has no release key to check updates with."),
+            SigError::TooLarge => f.write_str("The release's signature files are too large."),
+            SigError::Unreadable => f.write_str("The release's signature isn't one CADaddy reads."),
+            SigError::Damaged => f.write_str("The release's signature is missing or damaged."),
+            SigError::OtherVersion(v) => write!(f, "The release's signature is for another version ({v})."),
+            SigError::UntrustedKey => f.write_str("The release is signed with a key this build doesn't trust."),
+            SigError::BadKey => f.write_str("This build's release key is damaged."),
+            SigError::Mismatch => f.write_str("The release's signature doesn't match its files."),
+        }
+    }
+}
+
 /// Check `sig_text` (a [`SIG`] file) over `sums` for release `version` against `keys`.
-pub fn verify(version: &str, sums: &[u8], sig_text: &str, keys: &[[u8; 32]]) -> Result<(), String> {
+pub fn verify(version: &str, sums: &[u8], sig_text: &str, keys: &[[u8; 32]]) -> Result<(), SigError> {
     if keys.is_empty() {
-        return Err("this build has no release key to check updates with".into());
+        return Err(SigError::NoKey);
     }
     if sums.len() > MAX_FILE || sig_text.len() > MAX_FILE {
-        return Err("the release's signature files are too large".into());
+        return Err(SigError::TooLarge);
     }
     let mut lines = sig_text.lines().map(str::trim);
     if lines.next() != Some(HEADER) {
-        return Err("the release's signature isn't one CADaddy reads".into());
+        return Err(SigError::Unreadable);
     }
     let (mut signed_version, mut id, mut sig) = (None, None, None);
     for l in lines {
@@ -89,14 +119,14 @@ pub fn verify(version: &str, sums: &[u8], sig_text: &str, keys: &[[u8; 32]]) -> 
             _ => {}
         }
     }
-    let sig = sig.ok_or("the release's signature is missing or damaged")?;
+    let sig = sig.ok_or(SigError::Damaged)?;
     if signed_version != Some(plain(version)) {
-        return Err(format!("the release's signature is for another version ({})", signed_version.unwrap_or("none")));
+        return Err(SigError::OtherVersion(signed_version.unwrap_or("none").chars().take(40).collect()));
     }
     let id = id.unwrap_or_default();
-    let key = keys.iter().find(|k| key_id(k) == id).ok_or("the release is signed with a key this build doesn't trust")?;
-    let vk = VerifyingKey::from_bytes(key).map_err(|_| "this build's release key is damaged".to_string())?;
-    vk.verify_strict(&message(version, sums), &Signature::from_bytes(&sig)).map_err(|_| "the release's signature doesn't match its files".to_string())
+    let key = keys.iter().find(|k| key_id(k) == id).ok_or(SigError::UntrustedKey)?;
+    let vk = VerifyingKey::from_bytes(key).map_err(|_| SigError::BadKey)?;
+    vk.verify_strict(&message(version, sums), &Signature::from_bytes(&sig)).map_err(|_| SigError::Mismatch)
 }
 
 /// The SHA-256 (lower-case hex) `sums` lists for the file `name`.
@@ -137,18 +167,49 @@ mod tests {
     fn tampered_sums_wrong_key_other_version_or_no_signature_are_refused() {
         let (pk, sig) = signed(7, "0.9.0", SUMS_TEXT);
         let tampered = SUMS_TEXT.replacen("2cf2", "0000", 1);
-        assert!(verify("0.9.0", tampered.as_bytes(), &sig, &[pk]).unwrap_err().contains("doesn't match"));
+        assert!(verify("0.9.0", tampered.as_bytes(), &sig, &[pk]).unwrap_err().to_string().contains("doesn't match"));
         let (other, _) = signed(9, "0.9.0", SUMS_TEXT);
-        assert!(verify("0.9.0", SUMS_TEXT.as_bytes(), &sig, &[other]).unwrap_err().contains("doesn't trust"));
+        assert!(verify("0.9.0", SUMS_TEXT.as_bytes(), &sig, &[other]).unwrap_err().to_string().contains("doesn't trust"));
         // An old release's signed files served as a newer release.
-        assert!(verify("0.9.1", SUMS_TEXT.as_bytes(), &sig, &[pk]).unwrap_err().contains("another version"));
+        assert!(verify("0.9.1", SUMS_TEXT.as_bytes(), &sig, &[pk]).unwrap_err().to_string().contains("another version"));
         // Same key id but a forged signature.
         let forged = sig.replace(&sig[sig.len() - 10..sig.len() - 1], "000000000");
         assert!(verify("0.9.0", SUMS_TEXT.as_bytes(), &forged, &[pk]).is_err());
         for bad in ["", "hello", HEADER, &format!("{HEADER}\nversion 0.9.0\nkey 00\nsig zz\n")] {
             assert!(verify("0.9.0", SUMS_TEXT.as_bytes(), bad, &[pk]).is_err(), "{bad:?}");
         }
-        assert!(verify("0.9.0", SUMS_TEXT.as_bytes(), &sig, &[]).unwrap_err().contains("no release key"));
+        assert!(verify("0.9.0", SUMS_TEXT.as_bytes(), &sig, &[]).unwrap_err().to_string().contains("no release key"));
+    }
+
+    /// Q205: signature files edited, cut short or blown up are refused, never read as valid.
+    #[test]
+    fn edited_cut_or_huge_signature_files_are_refused() {
+        let (pk, sig) = signed(7, "1.0.0", SUMS_TEXT);
+        let ok = |sig: &str, sums: &str| verify("99.0.0", sums.as_bytes(), sig, &[pk]);
+        // An old release's signature with its version line rewritten: the signed text still says 1.0.0.
+        let relabelled = sig.replace("version 1.0.0", "version 99.0.0");
+        assert!(ok(&relabelled, SUMS_TEXT).unwrap_err().to_string().contains("doesn't match"));
+        // A second version line can't override the one that was signed.
+        let doubled = sig.replace("key ", "version 99.0.0\nkey ");
+        assert!(ok(&doubled, SUMS_TEXT).unwrap_err().to_string().contains("doesn't match"));
+        let (pk99, sig99) = signed(7, "99.0.0", SUMS_TEXT);
+        assert_eq!(verify("99.0.0", SUMS_TEXT.as_bytes(), &sig99, &[pk99]), Ok(()));
+        // Cut anywhere, the signature is refused.
+        for n in 0..sig99.len() - 1 {
+            let cut = &sig99[..n];
+            assert!(verify("99.0.0", SUMS_TEXT.as_bytes(), cut, &[pk99]).is_err(), "cut at {n}");
+        }
+        for n in 0..SUMS_TEXT.len() {
+            assert!(verify("99.0.0", &SUMS_TEXT.as_bytes()[..n], &sig99, &[pk99]).is_err(), "sums cut at {n}");
+        }
+        // Too large: refused before anything is parsed.
+        let huge = format!("{sig99}{}", " ".repeat(MAX_FILE));
+        assert!(verify("99.0.0", SUMS_TEXT.as_bytes(), &huge, &[pk99]).unwrap_err().to_string().contains("too large"));
+        let huge_sums = vec![b'0'; MAX_FILE + 1];
+        assert!(verify("99.0.0", &huge_sums, &sig99, &[pk99]).unwrap_err().to_string().contains("too large"));
+        // An installer listed under a path, or twice, is found only by its exact name.
+        let sums = format!("{}  ../CADaddy-Mac.dmg\n{}  CADaddy-Mac.dmg.old\n", "a".repeat(64), "b".repeat(64));
+        assert_eq!(sum_for(&sums, "CADaddy-Mac.dmg"), None);
     }
 
     #[test]

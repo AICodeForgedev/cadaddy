@@ -45,6 +45,8 @@ fn mb(n: u64) -> String {
     if m >= 100.0 { format!("{m:.0} MB") } else { format!("{m:.1} MB") }
 }
 
+pub mod salvage;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use std::io::{Cursor, Write};
@@ -72,11 +74,36 @@ mod native {
         if bytes.len() > limits.max_dwg_bytes {
             return Err(format!("DWG: the file is {}, larger than the {} CADaddy opens", mb(bytes.len() as u64), mb(limits.max_dwg_bytes as u64)));
         }
-        let outcome = std::panic::catch_unwind(|| {
-            acadrust::DwgReader::from_stream_with_options(Cursor::new(bytes), acadrust::DwgReadOptions::failsafe()).read_with_stats()
-        })
-        .map_err(|_| "the DWG reader failed on this file".to_string())?
-        .map_err(|e| format!("DWG: {e}"))?;
+        let read = |bytes: &[u8]| {
+            std::panic::catch_unwind(|| {
+                acadrust::DwgReader::from_stream_with_options(Cursor::new(bytes), acadrust::DwgReadOptions::failsafe()).read_with_stats()
+            })
+            .map_err(|_| "the DWG reader failed on this file".to_string())?
+            .map_err(|e| format!("DWG: {e}"))
+        };
+        // Records read: none when the objects stream itself couldn't be read.
+        let records = |o: &acadrust::ReadOutcome| {
+            if o.stats.record_stream_read { o.stats.source_records.saturating_sub(o.stats.skipped_source_records) + 1 } else { 0 }
+        };
+        let mut outcome = read(bytes);
+        let mut salvaged = Vec::new();
+        // A damaged file (unreadable, or records left out): read what the salvage recovers
+        // instead, when that is more ([`crate::salvage`]).
+        // Damaged objects in a sound-looking stream (a page whose checksum fails) are read as if
+        // sound; the salvage leaves out what its record checksums reject, so it is preferred
+        // unless it reads much less.
+        let pages_damaged = std::panic::catch_unwind(|| crate::salvage::damaged(bytes)).unwrap_or(false);
+        let damaged = pages_damaged || outcome.as_ref().map_or(true, |o| records(o) == 0 || o.stats.skipped_source_records > 0);
+        let before = outcome.as_ref().map_or(0, records);
+        if damaged
+            && let Some(s) = std::panic::catch_unwind(|| crate::salvage::salvage(bytes)).ok().flatten()
+            && let Ok(again) = read(&s.bytes)
+            && (records(&again) > before || (pages_damaged && records(&again) * 10 >= before * 9))
+        {
+            outcome = Ok(again);
+            salvaged = s.notes;
+        }
+        let outcome = outcome?;
         // Failsafe skips records, not whole files: when the objects stream itself couldn't be
         // read (a damaged header or section map, or not a DWG at all), nothing was read.
         if !outcome.stats.record_stream_read {
@@ -84,6 +111,16 @@ mod native {
             return Err(format!("DWG: {}", why.unwrap_or_else(|| "the file's objects couldn't be read".to_string())));
         }
         let mut notes = read_notes(&outcome.stats);
+        if !salvaged.is_empty() {
+            notes.insert(
+                0,
+                format!(
+                    "DWG: the file is damaged; CADaddy opened what could be read ({}). Objects past the damage are lost: \
+                     save under another name to keep the original",
+                    salvaged.join("; ")
+                ),
+            );
+        }
         let mut doc = outcome.document;
         notes.extend(unkept_note(&doc));
         names_by_current(&mut doc);

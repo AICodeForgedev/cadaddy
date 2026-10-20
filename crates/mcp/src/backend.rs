@@ -344,7 +344,7 @@ impl Backend for Headless {
             "engine.executeMany" => {
                 let list = p.get("commands").and_then(Value::as_array).ok_or("missing `commands`: [{command, params}]")?;
                 let stop = p.get("stopOnError").and_then(Value::as_bool).unwrap_or(false);
-                s.execute_many(list, stop).map_err(|e| e.to_string())
+                s.execute_many_agent(list, stop).map_err(|e| e.to_string())
             }
             "events.subscribe" => Ok(s.events_subscribe(p.get("on").and_then(Value::as_bool).unwrap_or(true))),
             "events.poll" => Ok(s.events_poll(p.get("since").and_then(Value::as_u64).unwrap_or(0))),

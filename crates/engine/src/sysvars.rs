@@ -171,8 +171,9 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         // Saving a .cdy file also writes a DWG copy (a profile setting).
         "DWGCOPY" => json!(i32::from(crate::cmd::file::dwg_copy())),
         "ACTIVITYLOG" => json!(i32::from(crate::activity::enabled())),
-        // Spelling dictionaries: the main one (only American English ships) and the user's file.
-        "DCTMAIN" => json!(crate::cmd::spell::MAIN_CODE),
+        // Spelling dictionaries: the drawing's main one (American English ships; other languages
+        // are downloads) and the user's file.
+        "DCTMAIN" => json!(s.doc().map_or_else(|_| crate::cmd::spell::MAIN_CODE.to_string(), crate::cmd::spell::main_code)),
         "DCTCUST" => json!(crate::cmd::spell::dctcust()),
         "SUNSTATUS" => json!(i32::from(s.doc().ok()?.sun.on)),
         "RENDEREXPOSURE" => json!(s.doc().ok()?.sun.exposure),
@@ -436,6 +437,14 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         return Err(EngineError::Other(format!("{n} can't be changed from LISP or a script")));
     }
     let bad = || EngineError::BadParams { cmd: "setvar".into(), msg: format!("invalid value for {n}") };
+    match n.as_str() {
+        "SECURELOAD" => crate::secureload::agent_may_not_loosen(s, small(v, 2).ok_or_else(bad)?, &s.settings.trustedpaths.clone())?,
+        "TRUSTEDPATHS" => {
+            let next: String = v.as_str().ok_or_else(bad)?.chars().take(8192).collect();
+            crate::secureload::agent_may_not_loosen(s, s.settings.secureload, &next)?;
+        }
+        _ => {}
+    }
     let st = &mut s.settings;
     match n.as_str() {
         "OSMODE" => st.osmode = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & 0x7fff,
@@ -551,15 +560,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "AUDITCTL" => crate::audit::set_auditctl(as_i(v).filter(|b| (0..=1).contains(b)).ok_or_else(bad)? == 1),
         "DWGCOPY" => crate::cmd::file::set_dwg_copy(as_bool(v).ok_or_else(bad)?),
         "ACTIVITYLOG" => crate::activity::set_enabled(as_bool(v).ok_or_else(bad)?),
-        "DCTMAIN" => {
-            let code = v.as_str().ok_or_else(bad)?.trim();
-            if !code.eq_ignore_ascii_case(crate::cmd::spell::MAIN_CODE) {
-                return Err(crate::EngineError::Other(format!(
-                    "Only the American English dictionary (\"{}\") is available.",
-                    crate::cmd::spell::MAIN_CODE
-                )));
-            }
-        }
+        "DCTMAIN" => crate::cmd::spell::set_main_code(s.doc_mut()?, v.as_str().ok_or_else(bad)?)?,
         "DCTCUST" => {
             let path = v.as_str().ok_or_else(bad)?;
             if path.len() > 4096 {

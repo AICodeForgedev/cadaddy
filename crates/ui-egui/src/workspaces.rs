@@ -281,9 +281,13 @@ pub fn save_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         if is_built_in(&cur) { String::new() } else { cur }
     });
     let mut done = false;
-    egui::Window::new(crate::tl!("Save Workspace")).id(egui::Id::new("Save Workspace")).open(open).resizable(false).collapsible(false).show(
-        ctx,
-        |ui| {
+    egui::Window::new(crate::tl!("Save Workspace"))
+        .id(egui::Id::new("Save Workspace"))
+        .default_pos(crate::palette_pos(app))
+        .open(open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
             ui.label(crate::tl!("Name"));
             let r = ui.text_edit_singleline(&mut name);
             crate::icons::describe_area(&r, "Name");
@@ -294,8 +298,7 @@ pub fn save_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     Err(e) => app.session.echo(e),
                 }
             }
-        },
-    );
+        });
     if done {
         *open = false;
     }
@@ -310,24 +313,29 @@ pub fn save_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 pub fn settings_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let cur = current(app);
     let mut action: Option<(bool, String)> = None;
-    egui::Window::new(crate::tl!("Workspace Settings")).id(egui::Id::new("Workspace Settings")).open(open).resizable(false).show(ctx, |ui| {
-        ui.label(egui::RichText::new(crate::tl!("Workspaces")).strong());
-        for d in all(app) {
-            ui.horizontal(|ui| {
-                if ui.radio(d.name.eq_ignore_ascii_case(&cur), crate::i18n::t(&d.name)).clicked() {
-                    action = Some((false, d.name.clone()));
-                }
-                if !is_built_in(&d.name) && ui.small_button("✖").on_hover_text(crate::tl!("Delete")).clicked() {
-                    action = Some((true, d.name.clone()));
-                }
-            });
-        }
-        ui.separator();
-        let mut nav = navbar_shown(app);
-        if ui.checkbox(&mut nav, crate::tl!("Navigation Bar")).changed() {
-            let _ = run_navbar(app, &json!({ "on": nav }));
-        }
-    });
+    egui::Window::new(crate::tl!("Workspace Settings"))
+        .id(egui::Id::new("Workspace Settings"))
+        .default_pos(crate::palette_pos(app))
+        .open(open)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.label(egui::RichText::new(crate::tl!("Workspaces")).strong());
+            for d in all(app) {
+                ui.horizontal(|ui| {
+                    if ui.radio(d.name.eq_ignore_ascii_case(&cur), crate::i18n::t(&d.name)).clicked() {
+                        action = Some((false, d.name.clone()));
+                    }
+                    if !is_built_in(&d.name) && ui.small_button("✖").on_hover_text(crate::tl!("Delete")).clicked() {
+                        action = Some((true, d.name.clone()));
+                    }
+                });
+            }
+            ui.separator();
+            let mut nav = navbar_shown(app);
+            if ui.checkbox(&mut nav, crate::tl!("Navigation Bar")).changed() {
+                let _ = run_navbar(app, &json!({ "on": nav }));
+            }
+        });
     match action {
         Some((false, name)) => {
             if let Err(e) = set(app, &name) {

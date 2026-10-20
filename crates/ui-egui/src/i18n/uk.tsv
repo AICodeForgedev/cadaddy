@@ -2407,3 +2407,96 @@
 	Manage Attributes	Керувати атрибутами
 	Dialog State	Стан діалогу
 	Dialog Action	Дія діалогу
+	Recover Drawing and Xrefs...	Відновити креслення та зовнішні посилання...
+	Count Blocks	Підрахунок блоків
+	Get Selection Set	Отримати набір вибору
+	Global Attribute Edit	Глобальне редагування атрибутів
+	LISP Function Surfer	Огляд функцій LISP
+	List LISP Symbols	Список символів LISP
+	List Nested Object	Відомості про вкладений об'єкт
+	List Object Xdata	Розширені дані об'єкта
+	Multiple Polyline Edit	Редагування кількох поліліній
+	Redefine Path	Перевизначити шлях
+	Redefine Path Mode	Режим перевизначення шляху
+	Restore Dimension Text	Відновити розмірний текст
+	Revert	Повернути збережене
+	Rotate Blocks	Повернути блоки
+	Scale Blocks	Масштабувати блоки
+	Select Similar by Properties	Вибрати подібні за властивостями
+	Show URLs	Показати URL-адреси
+	Synchronize Viewports	Синхронізувати видові екрани
+	Paste Special	Спеціальне вставлення
+	Paste Special...	Спеціальне вставлення...
+	Paste as	Вставити як
+	Last Measurement	Останнє вимірювання
+	Perimeter	Периметр
+	curl isn't available ({error}).	curl недоступний ({error}).
+	This build has no release key to check updates with.	У цій збірці немає ключа випуску для перевірки оновлень.
+	The release's signature files are too large.	Файли підпису випуску завеликі.
+	The release's signature isn't one CADaddy reads.	Підпис випуску має формат, який CADaddy не читає.
+	The release's signature is missing or damaged.	Підпис випуску відсутній або пошкоджений.
+	The release's signature is for another version ({version}).	Підпис випуску належить іншій версії ({version}).
+	The release is signed with a key this build doesn't trust.	Випуск підписано ключем, якому ця збірка не довіряє.
+	This build's release key is damaged.	Ключ випуску в цій збірці пошкоджений.
+	The release's signature doesn't match its files.	Підпис випуску не відповідає його файлам.
+	Couldn't reach GitHub: {why}	Не вдалося зв'язатися з GitHub: {why}
+	GitHub's answer was too large.	Відповідь GitHub завелика.
+	GitHub's answer wasn't readable ({error}).	Не вдалося прочитати відповідь GitHub ({error}).
+	GitHub's answer has no version.	У відповіді GitHub немає версії.
+	GitHub's answer has an unreadable version ({version}).	У відповіді GitHub нечитабельна версія ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	Не вдалося завантажити файл випуску {name}, тому нічого не встановлено: {why}
+	The release's {name} is too large, so nothing was installed.	Файл випуску {name} завеликий, тому нічого не встановлено.
+	The release's {name} isn't text, so nothing was installed.	Файл випуску {name} не є текстом, тому нічого не встановлено.
+	It wasn't downloaded. Download it from the release page instead.	Оновлення не завантажено. Завантажте його зі сторінки випуску.
+	Version {version} isn't newer than this one ({current}).	Версія {version} не новіша за поточну ({current}).
+	This release isn't signed.	Цей випуск не підписано.
+	The release failed its check.	Випуск не пройшов перевірку.
+	The signed release doesn't list {name}.	У підписаному випуску немає файлу {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	Відбиток {name} на GitHub відрізняється від підписаного.
+	Couldn't make the folder {folder}: {error}	Не вдалося створити теку {folder}: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	Завантажений файл не збігся з опублікованим відбитком SHA-256, тому його не встановлено.
+	Couldn't read the download: {error}	Не вдалося прочитати завантажений файл: {error}
+	The download failed: {why}	Не вдалося завантажити: {why}
+	This release has no installer for this computer yet.	Для цього комп'ютера у випуску ще немає інсталятора.
+	Drawing Properties...	Властивості креслення...
+	System Variable Monitor...	Монітор системних змінних...
+	{name} Properties	Властивості {name}
+	Summary	Зведення
+	Statistics	Статистика
+	Size	Розмір
+	Subject	Тема
+	Author	Автор
+	Keywords	Ключові слова
+	Comments	Коментарі
+	Revision number	Номер редакції
+	Hyperlink base	База гіперпосилань
+	Created	Створено
+	Modified	Змінено
+	Last saved by	Востаннє збережено
+	Total editing time (minutes)	Загальний час редагування (хвилини)
+	Property	Властивість
+	System Variable Monitor	Монітор системних змінних
+	Variable	Змінна
+	Watched value	Відстежуване значення
+	Current value	Поточне значення
+	Notify when a watched variable changes	Повідомляти про зміну відстежуваної змінної
+	Reset All	Скинути все
+	Delay	Затримка
+	Repeat Script	Повторити сценарій
+	Script Call	Виклик сценарію
+	Resume Script	Продовжити сценарій
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	Вести журнал дій для кожного креслення (приватний, у папці налаштувань CADaddy)
+	Specify insertion point or	Вкажіть точку вставки або
+	Specify table scale	Вкажіть масштаб таблиці
+	{} dimension(s) updated to the current settings.	Оновлено розмірів за поточними налаштуваннями: {}.
+	British English (-ise)	Британська англійська (-ise)
+	British English (-ize)	Британська англійська (-ize)
+	Spanish	Іспанська
+	French	Французька
+	German	Німецька
+	Portuguese (Iberian)	Португальська (Португалія)
+	Portuguese (Brazilian)	Португальська (Бразилія)
+	(not installed)	(не встановлено)
+	Dictionaries are read from:	Словники читаються з:
+	Published to {path}	Опубліковано в {path}
+	Sheet Set (.sheetset.json)	Підшивка (.sheetset.json)

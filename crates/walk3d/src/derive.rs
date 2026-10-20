@@ -145,7 +145,7 @@ pub fn rooms(sources: &[&Drawing], rules: &Rules) -> Vec<Room> {
                 _ => continue,
             };
             let name = text.split_whitespace().collect::<Vec<_>>().join(" ");
-            if name.chars().count() < 2 || name.chars().count() > 40 || !name.chars().any(char::is_alphabetic) || !place.contains(at) {
+            if !room_name(&name) || !place.contains(at) {
                 continue;
             }
             if out.iter().any(|r| r.level == lv && r.name == name) {
@@ -158,6 +158,25 @@ pub fn rooms(sources: &[&Drawing], rules: &Rules) -> Vec<Room> {
         }
     }
     out
+}
+
+/// Whether `name` reads as a room name ("OFFICE 101", "Storage", "101 Lobby"), not a label or
+/// a note ("PANEL LP-1 120/208V 3PH": battle test 0.7.8 #19): 2 to 40 characters with a letter,
+/// at most four words, none of `/ : = " # % @ ;`, and digits in at most one word, the first or
+/// the last (the room number).
+fn room_name(name: &str) -> bool {
+    let n = name.chars().count();
+    if !(2..=40).contains(&n) || !name.chars().any(char::is_alphabetic) || name.contains(['/', ':', '=', '"', '#', '%', '@', ';']) {
+        return false;
+    }
+    let words: Vec<&str> = name.split_whitespace().collect();
+    let numbered: Vec<usize> = words.iter().enumerate().filter(|(_, w)| w.chars().any(|c| c.is_ascii_digit())).map(|(i, _)| i).collect();
+    let number_at_an_end = match numbered[..] {
+        [] => true,
+        [i] => i == 0 || i + 1 == words.len(),
+        _ => false,
+    };
+    words.len() <= 4 && number_at_an_end
 }
 
 /// MTEXT contents as plain text (format codes dropped).
@@ -735,6 +754,13 @@ fn split_runs(pts: &[Vec2]) -> (Vec<Vec<Vec2>>, Vec<Vec<Vec2>>) {
     (runs, arcs)
 }
 
+/// Each level's name and base point: the sheet point that maps to the building origin (its
+/// `base`, else the lower-left corner of its walls). Exports place each level's objects by it, so
+/// plans drawn side by side on one sheet stack as storeys.
+pub fn level_bases(d: &Drawing, rules: &Rules) -> Vec<(String, Vec2)> {
+    rules.levels.iter().map(|l| (l.name.clone(), base_point(d, rules, l))).collect()
+}
+
 /// The sheet point mapped to the building origin for a level.
 fn base_point(d: &Drawing, rules: &Rules, l: &Level) -> Vec2 {
     if let Some([x, y]) = l.base {
@@ -946,6 +972,35 @@ mod tests {
         assert!((rec.pos.x - (20.0 - 0.075)).abs() < 1e-9, "{:?}", rec.pos);
         let up = s.devices.iter().find(|v| v.level == 1).unwrap_or_else(|| panic!("no floor 4 device"));
         assert!((up.pos.z - (30.0 + 8.0 - 0.125)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_built_in_rules_place_blocks_on_electrical_layers() {
+        // A plan with no rules file: receptacles and lights on the layers people name them by,
+        // a door on its architectural layer (battle test 0.7.8 #19: 0 devices).
+        let mut d = Drawing::default();
+        for (a, b) in [((0.0, 0.0), (240.0, 0.0)), ((240.0, 0.0), (240.0, 120.0)), ((240.0, 120.0), (0.0, 120.0)), ((0.0, 120.0), (0.0, 0.0))] {
+            add(&mut d, "A-WALL", line(a.0, a.1, b.0, b.1));
+        }
+        for (i, layer) in ["E-POWR", "E-LITE", "POWER", "LIGHTING", "DEVICES"].iter().enumerate() {
+            add(&mut d, layer, device(20.0 + 40.0 * i as f64, 60.0, "A", "1"));
+        }
+        add(&mut d, "A-DOOR", device(100.0, 0.0, "DOOR", "1"));
+        let s = derive(&d, &Rules::fallback());
+        assert_eq!(s.devices.len(), 5, "{:?}", s.devices.iter().map(|v| &v.block).collect::<Vec<_>>());
+        assert_eq!(s.walls.len(), 4, "a wall layer stays a wall");
+    }
+
+    #[test]
+    fn room_names_not_labels() {
+        for name in ["OFFICE 101", "Storage", "101 Lobby", "MECH & ELEC", "CONF. RM 2", "B12 Stair"] {
+            assert!(room_name(name), "{name}");
+        }
+        for name in
+            ["PANEL LP-1 120/208V 3PH", "10'-0\" AFF", "GENERAL NOTES:", "12", "X", "SEE NOTE #3", "LEVEL 2 CORRIDOR 204", "ONE TWO THREE FOUR FIVE"]
+        {
+            assert!(!room_name(name), "{name}");
+        }
     }
 
     #[test]

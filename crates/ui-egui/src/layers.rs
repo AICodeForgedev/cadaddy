@@ -191,7 +191,14 @@ fn true_color(ui: &mut egui::Ui, id: egui::Id, current: Color) -> Option<Color> 
             for (i, (label, max)) in [("Hue", 360.0), ("Saturation", 100.0), ("Luminance", 100.0)].iter().enumerate() {
                 ui.label(crate::i18n::t(label));
                 if let Some(v) = hsl.get_mut(i) {
-                    changed |= ui.add(egui::Slider::new(v, 0.0..=*max).fixed_decimals(0)).changed();
+                    // The slider shows whole numbers and rounds what it holds: only a real move
+                    // changes the colour (a hex typed as #3a7bd5 stayed 58,123,213, not 57,122,213).
+                    let before = *v;
+                    if ui.add(egui::Slider::new(v, 0.0..=*max).fixed_decimals(0)).changed() && (*v - before).abs() >= 0.5 {
+                        changed = true;
+                    } else {
+                        *v = before;
+                    }
                 }
                 ui.end_row();
             }
@@ -408,6 +415,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     };
     egui::Window::new(crate::i18n::t(title))
         .id(egui::Id::new("lpm_window"))
+        .default_pos(crate::palette_pos(app))
         .open(open)
         .default_size(vec2(1180.0, 440.0))
         .min_width(640.0)
@@ -755,6 +763,8 @@ fn filter_form(ctx: &egui::Context, f: &mut FilterForm) -> (bool, bool) {
         .id(egui::Id::new("lpm_filter_form"))
         .collapsible(false)
         .resizable(false)
+        .default_pos(ctx.content_rect().center())
+        .pivot(egui::Align2::CENTER_CENTER)
         .open(&mut open)
         .show(ctx, |ui| {
             // Right to left in Arabic (rtl.rs).

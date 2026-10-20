@@ -51,6 +51,12 @@ fn rest_bits(r: &mut BitReader, end: usize) -> Result<Vec<bool>> {
 }
 
 impl Classes {
+    /// The classes of a new file.
+    pub fn new(version: Version, classes: Vec<Class>) -> Classes {
+        let max_number = classes.iter().map(|c| i32::from(c.number)).max().unwrap_or(499);
+        Classes { version, max_number, classes, lead: (0, 0, true), rest: (Vec::new(), Vec::new()) }
+    }
+
     /// Decodes the classes section's data (the framed section's body).
     pub fn decode(body: &[u8], version: Version) -> Result<Classes> {
         let unicode = version.unicode();

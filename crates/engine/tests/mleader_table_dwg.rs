@@ -105,8 +105,11 @@ fn older_dwg_gets_leaders_and_text_as_older_dxf_does() {
     let (mut s, _) = drawing();
     for f in ["dwg", "dxf"] {
         let r = s.execute("checkexchange", &json!({"format": f, "version": 2004})).unwrap();
-        let ml = r["losses"].as_array().unwrap().iter().find(|l| l["feature"] == "mleader objects").cloned().unwrap_or_default();
-        assert_eq!((ml["what"].as_str(), ml["count"].as_u64()), (Some("dropped"), Some(3)), "{f} 2004: {r}");
+        // Each is noted by what it was written as (leader and text, a block, text alone), not as dropped.
+        let ml: Vec<&Value> =
+            r["losses"].as_array().unwrap().iter().filter(|l| l["feature"].as_str().is_some_and(|f| f.starts_with("mleader objects"))).collect();
+        assert!(ml.iter().all(|l| l["what"] == "changed" && l["feature"].as_str().is_some_and(|f| f.contains("(written as "))), "{f} 2004: {r}");
+        assert_eq!(ml.iter().filter_map(|l| l["count"].as_u64()).sum::<u64>(), 3, "{f} 2004: {r}");
     }
     // What the file has in their place: the leaders and their text.
     let d = s.doc().unwrap().clone();

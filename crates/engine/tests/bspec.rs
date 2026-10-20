@@ -289,11 +289,12 @@ fn model_build_follows_the_spec_and_is_deterministic() {
     assert!(spans(col, 0.0, 118.8));
     assert!((x_range(col).1 - x_range(col).0 - 24.0).abs() < 1e-6);
     assert!(spans(&made(&s, "curtainwall")[0].0, 0.0, 118.8));
-    // The ground: 10' past the building (its floor slab reaches 2' past the walls) all round,
-    // its top at the site elevation.
+    // The ground: 10' past the building (its floor slab, which ends at the walls' outside faces)
+    // all round, its top at the site elevation.
     let ground = &made(&s, "ground")[0].0;
     assert!(spans(ground, -18.0, -6.0), "{:?}", z_range(ground));
-    assert_eq!(x_range(ground), (-144.0, 504.0));
+    let (gx0, gx1) = x_range(ground);
+    assert!((gx0 + 120.0).abs() < 1e-6 && (gx1 - 480.0).abs() < 1e-6, "{gx0} {gx1}");
     assert!(made(&s, "floor").iter().all(|(_, x)| x.contains(&"material:Concrete".to_string())));
     // Same spec and drawing → the same model: built again here, and in a fresh session.
     let first = model(&s);

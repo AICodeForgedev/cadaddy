@@ -317,6 +317,15 @@ fn source_tags(src: &Source) -> Vec<RawTag> {
     v
 }
 
+/// Make an object's RTEXT source `src` (its other applications' xdata stays).
+pub fn set_source(c: &mut Common, src: &Source) {
+    if let Some(i) = c.xdata.iter().position(|t| t.code == 1001 && t.value == RTEXT_APP) {
+        let end = c.xdata.iter().skip(i + 1).position(|t| t.code == 1001).map_or(c.xdata.len(), |n| i + 1 + n);
+        c.xdata.drain(i..end);
+    }
+    c.xdata.extend(source_tags(src));
+}
+
 /// An object's RTEXT source, from its xdata.
 pub fn source_of(c: &Common) -> Option<Source> {
     let i = c.xdata.iter().position(|t| t.code == 1001 && t.value == RTEXT_APP)?;

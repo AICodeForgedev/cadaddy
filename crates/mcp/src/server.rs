@@ -18,6 +18,12 @@ const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
+/// The longest request line read (`execute_many` with ten thousand commands is a few MB); a longer
+/// one is answered with an error and skipped without being held in memory.
+pub const MAX_REQUEST_BYTES: usize = 32 << 20;
+/// The most requests one batch may hold.
+pub const MAX_BATCH: usize = 1000;
+
 const INSTRUCTIONS: &str = "CADaddy is a 2D/3D CAD drafting app (an AutoCAD clone). Coordinates are drawing units, \
 y up. Fastest path: command_line with AutoCAD syntax, e.g. `line 0,0 10,0 10,5 c`, `circle 5,2.5 1`, \
 `rectang 0,0 4,3`, `offset 1` then pick, `zoom e`. Or execute with JSON (list_commands shows ids and params). \
@@ -92,14 +98,19 @@ impl Server {
     }
 
     /// Serve newline-delimited JSON-RPC until `input` closes (logs to stderr only).
-    pub fn serve(&mut self, input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
+    pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
         // Lines are read as bytes: one that isn't UTF-8 is a parse error, not the end of the
         // session.
-        for line in input.split(b'\n') {
-            let line = line?;
-            let reply = match std::str::from_utf8(&line) {
-                Ok(text) => self.handle_line(text),
-                Err(e) => Some(error(Value::Null, PARSE_ERROR, format!("parse error: invalid UTF-8 ({e})")).to_string()),
+        while let Some(line) = read_line_capped(&mut input, MAX_REQUEST_BYTES)? {
+            let reply = match line {
+                Line::TooLong(n) => Some(
+                    error(Value::Null, INVALID_REQUEST, format!("request too large ({n} bytes or more; the limit is {MAX_REQUEST_BYTES})"))
+                        .to_string(),
+                ),
+                Line::Full(line) => match std::str::from_utf8(&line) {
+                    Ok(text) => self.handle_line(text),
+                    Err(e) => Some(error(Value::Null, PARSE_ERROR, format!("parse error: invalid UTF-8 ({e})")).to_string()),
+                },
             };
             if let Some(reply) = reply {
                 output.write_all(reply.as_bytes())?;
@@ -122,6 +133,9 @@ impl Server {
         let reply = match serde_json::from_str::<Value>(line) {
             // JSON-RPC 2.0: an empty batch is one Invalid Request, not silence.
             Ok(Value::Array(batch)) if batch.is_empty() => Some(error(Value::Null, INVALID_REQUEST, "empty batch")),
+            Ok(Value::Array(batch)) if batch.len() > MAX_BATCH => {
+                Some(error(Value::Null, INVALID_REQUEST, format!("batch too large ({} requests; the limit is {MAX_BATCH})", batch.len())))
+            }
             Ok(Value::Array(batch)) => {
                 let replies: Vec<Value> = batch.into_iter().filter_map(|m| self.handle(m)).collect();
                 (!replies.is_empty()).then_some(Value::Array(replies))
@@ -202,5 +216,75 @@ impl Server {
             }
             _ => Err((METHOD_NOT_FOUND, format!("method `{method}` not found"))),
         }
+    }
+}
+
+/// A request line from [`read_line_capped`].
+enum Line {
+    Full(Vec<u8>),
+    /// Longer than the limit: at least this many bytes, read and dropped up to the newline.
+    TooLong(usize),
+}
+
+/// The next newline-ended line of `input` (the last may lack its newline), holding at most `max`
+/// bytes in memory; `None` at the end of input.
+fn read_line_capped(input: &mut impl BufRead, max: usize) -> std::io::Result<Option<Line>> {
+    let mut line = Vec::new();
+    let mut seen = 0usize;
+    let mut any = false;
+    loop {
+        let buf = match input.fill_buf() {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if buf.is_empty() {
+            break;
+        }
+        any = true;
+        let (chunk, done) = match buf.iter().position(|b| *b == b'\n') {
+            Some(i) => (buf.get(..i).unwrap_or(buf), Some(i + 1)),
+            None => (buf, None),
+        };
+        seen = seen.saturating_add(chunk.len());
+        if seen <= max {
+            line.extend_from_slice(chunk);
+        } else if !line.is_empty() {
+            line = Vec::new();
+        }
+        let used = done.unwrap_or(buf.len());
+        input.consume(used);
+        if done.is_some() {
+            break;
+        }
+    }
+    Ok(match (any, seen > max) {
+        (false, _) => None,
+        (true, true) => Some(Line::TooLong(seen)),
+        (true, false) => Some(Line::Full(line)),
+    })
+}
+
+#[cfg(test)]
+mod capped_tests {
+    use super::*;
+
+    #[test]
+    fn long_lines_are_dropped_without_being_kept() {
+        let mut input: &[u8] = b"short\n0123456789abcdef\nok\nlast";
+        let mut lines = Vec::new();
+        while let Some(l) = read_line_capped(&mut input, 8).unwrap() {
+            lines.push(match l {
+                Line::Full(b) => String::from_utf8(b).unwrap(),
+                Line::TooLong(n) => format!("too long: {n}"),
+            });
+        }
+        assert_eq!(lines, ["short", "too long: 16", "ok", "last"]);
+        // Through a reader with a small buffer too.
+        let data = format!("{}\n{{}}\n", "x".repeat(100));
+        let mut r = std::io::BufReader::with_capacity(7, data.as_bytes());
+        assert!(matches!(read_line_capped(&mut r, 50).unwrap(), Some(Line::TooLong(100))));
+        assert!(matches!(read_line_capped(&mut r, 50).unwrap(), Some(Line::Full(b)) if b == b"{}"));
+        assert!(read_line_capped(&mut r, 50).unwrap().is_none());
     }
 }

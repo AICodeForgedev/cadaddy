@@ -173,8 +173,13 @@ fn aff_tag() -> String {
     "AFF".into()
 }
 
+/// The built-in rules' device layers (after the wall layers, which win).
+const DEVICE_LAYERS: &[&str] = &["E-*", "*POWER*", "*POWR*", "*LIGHT*", "*LITE*", "*DEVICE*", "*DEVC*", "*RECEP*", "*FIXT*"];
+
 impl Rules {
-    /// One level at elevation 0; layers named like walls become walls, `E-DEV*` blocks devices.
+    /// One level at elevation 0; layers named like walls become walls, and blocks on electrical
+    /// layers (`E-*`, or named for power, lighting, devices or fixtures) devices (only `E-DEV*`
+    /// before: 0 devices on a plan with 19: battle test 0.7.8 #19).
     pub fn fallback() -> Rules {
         Rules {
             units_per_foot: 12.0,
@@ -188,10 +193,10 @@ impl Rules {
                 attr: None,
                 sheet: None,
             }],
-            layers: vec![
-                LayerRule { layer: "*WALL*".into(), kind: LayerKind::Wall { height_ft: None, skip_curves: false, paired_only: false } },
-                LayerRule { layer: "E-DEV*".into(), kind: LayerKind::Device },
-            ],
+            layers: vec![LayerRule { layer: "*WALL*".into(), kind: LayerKind::Wall { height_ft: None, skip_curves: false, paired_only: false } }]
+                .into_iter()
+                .chain(DEVICE_LAYERS.iter().map(|l| LayerRule { layer: (*l).into(), kind: LayerKind::Device }))
+                .collect(),
             devices: DeviceRules::default(),
             device_sheets: Vec::new(),
             openings: Openings::default(),

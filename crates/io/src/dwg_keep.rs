@@ -17,7 +17,7 @@
 //! Which records need it the DWG bridge says (`cadaddy_dwg::custom_records`); the drawing's DWG
 //! bridge DXF is binary ([`stash_tags`]), what the bridge reads from a DWG is ASCII ([`unstash`]).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// The dictionary key of the kept records in the named object dictionary.
 pub const KEY: &str = "CADADDY_KEEP";
@@ -282,6 +282,20 @@ fn stash_pairs(pairs: &[(i32, String)], take: &HashSet<u64>) -> Option<(Pairs, u
 pub fn unstash(dxf: &[u8]) -> Option<Vec<u8>> {
     let pairs = parse(dxf)?;
     let crlf = dxf.windows(2).any(|w| w == b"\r\n");
+    Some(write(&unstash_pairs(&pairs)?, crlf))
+}
+
+/// [`unstash`] on a DXF's tags (the DWG read natively).
+pub fn unstash_tags(tags: &[cadaddy_dxf::Tag]) -> Option<Vec<cadaddy_dxf::Tag>> {
+    if !tags.iter().any(|t| t.code == 3 && t.str().trim() == KEY) {
+        return None;
+    }
+    let pairs: Pairs = tags.iter().map(|t| (t.code, t.str())).collect();
+    Some(unstash_pairs(&pairs)?.into_iter().map(|(c, v)| tag(c, v)).collect())
+}
+
+fn unstash_pairs(pairs: &Pairs) -> Option<Pairs> {
+    let pairs = pairs.clone();
     let recs = records(&pairs);
     let places = containers(&pairs, &recs);
     let objects: Vec<usize> = (0..recs.len()).filter(|i| places[*i] == "OBJECTS").collect();
@@ -340,9 +354,10 @@ pub fn unstash(dxf: &[u8]) -> Option<Vec<u8>> {
         base.push(rec);
     }
     // Back into the records they were taken from: dictionary entries and reactors.
+    let by_handle: HashMap<u64, usize> = base.iter().enumerate().filter_map(|(i, r)| handle_of(r).map(|h| (h, i))).collect();
     for k in kept.iter().filter(|k| matches!(k.kind, "entry" | "reactor")) {
         let Ok(owner) = u64::from_str_radix(k.place.trim(), 16) else { continue };
-        let Some(rec) = base.iter_mut().find(|r| handle_of(r) == Some(owner)) else { continue };
+        let Some(rec) = by_handle.get(&owner).and_then(|&i| base.get_mut(i)) else { continue };
         if k.kind == "entry" {
             rec.extend(k.pairs.iter().cloned());
         } else if let Some(open) = rec.iter().position(|(c, v)| *c == 102 && v.trim() == "{ACAD_REACTORS") {
@@ -357,30 +372,68 @@ pub fn unstash(dxf: &[u8]) -> Option<Vec<u8>> {
             rec.splice(after..after, groups);
         }
     }
-    // The records and classes into their places, in the order they had.
+    // The records and classes into their places, in the order they had: the n-th kept record
+    // of a container becomes its n-th record (after the last when there are fewer).
     let flat: Pairs = base.into_iter().flatten().collect();
-    let mut recs_out: Vec<Pairs> = records(&flat).into_iter().map(|r| flat[r].to_vec()).collect();
-    let mut places_out = containers(&flat, &records(&flat));
+    let ranges = records(&flat);
+    let places = containers(&flat, &ranges);
     let mut placed: Vec<&Kept> = kept.iter().filter(|k| matches!(k.kind, "record" | "class")).collect();
     placed.sort_by_key(|k| k.index);
+    let container_of = |k: &Kept| if k.kind == "class" { "CLASSES".to_string() } else { k.place.clone() };
+    let mut pending: HashMap<String, std::collections::VecDeque<&Kept>> = HashMap::new();
     for k in placed {
-        let container = if k.kind == "class" { "CLASSES".to_string() } else { k.place.clone() };
-        let slots: Vec<usize> = (0..recs_out.len()).filter(|i| places_out[*i] == container).collect();
-        let at = match (slots.get(k.index), slots.last()) {
-            (Some(i), _) => *i,
-            (None, Some(last)) => last + 1,
-            // An empty container: right after its opening (the section header, or the block's
-            // BLOCK record); a missing CLASSES section is made before TABLES.
-            (None, None) => match container.strip_prefix("BLOCK:") {
-                Some(name) => match recs_out.iter().position(|r| r.first().is_some_and(|(_, v)| v.trim() == "BLOCK") && value(r, 2) == Some(name)) {
-                    Some(p) => p + 1,
-                    None => continue,
-                },
-                None => match recs_out
-                    .iter()
-                    .position(|r| r.first().is_some_and(|(_, v)| v.trim() == "SECTION") && value(r, 2) == Some(container.as_str()))
-                {
-                    Some(p) => p + 1,
+        pending.entry(container_of(k)).or_default().push_back(k);
+    }
+    // How many records each container has, to know its last.
+    let mut left: HashMap<&str, usize> = HashMap::new();
+    for p in &places {
+        *left.entry(p.as_str()).or_default() += 1;
+    }
+    let mut recs_out: Vec<Pairs> = Vec::with_capacity(ranges.len() + kept.len());
+    let mut places_out: Vec<String> = Vec::with_capacity(ranges.len() + kept.len());
+    let mut count: HashMap<String, usize> = HashMap::new();
+    for (r, place) in ranges.iter().zip(&places) {
+        if let Some(queue) = pending.get_mut(place) {
+            // Kept records whose place comes before this one.
+            let n = count.entry(place.clone()).or_default();
+            while queue.front().is_some_and(|k| k.index <= *n) {
+                if let Some(k) = queue.pop_front() {
+                    recs_out.push(k.pairs.clone());
+                    places_out.push(place.clone());
+                    *n += 1;
+                }
+            }
+        }
+        recs_out.push(flat.get(r.clone()).unwrap_or_default().to_vec());
+        places_out.push(place.clone());
+        *count.entry(place.clone()).or_default() += 1;
+        if let Some(l) = left.get_mut(place.as_str()) {
+            *l -= 1;
+            // After a container's last record, the rest of its kept ones.
+            if *l == 0
+                && !place.is_empty()
+                && let Some(queue) = pending.get_mut(place)
+            {
+                while let Some(k) = queue.pop_front() {
+                    recs_out.push(k.pairs.clone());
+                    places_out.push(place.clone());
+                }
+            }
+        }
+    }
+    // Containers with no records left: right after their opening (the section header, or the
+    // block's BLOCK record); a missing CLASSES section is made before TABLES.
+    let mut rest: Vec<(String, &Kept)> = pending.into_iter().flat_map(|(c, q)| q.into_iter().map(move |k| (c.clone(), k))).collect();
+    rest.sort_by_key(|(_, k)| k.index);
+    for (container, k) in rest {
+        let at = match container.strip_prefix("BLOCK:") {
+            Some(name) => match recs_out.iter().position(|r| r.first().is_some_and(|(_, v)| v.trim() == "BLOCK") && value(r, 2) == Some(name)) {
+                Some(p) => p + 1,
+                None => continue,
+            },
+            None => {
+                match recs_out.iter().position(|r| r.first().is_some_and(|(_, v)| v.trim() == "SECTION") && value(r, 2) == Some(container.as_str())) {
+                    Some(p) => p + 1 + places_out.iter().skip(p + 1).take_while(|c| **c == container).count(),
                     None if container == "CLASSES" => {
                         let before = recs_out
                             .iter()
@@ -392,13 +445,13 @@ pub fn unstash(dxf: &[u8]) -> Option<Vec<u8>> {
                         before + 1
                     }
                     None => continue,
-                },
-            },
+                }
+            }
         };
         recs_out.insert(at, k.pairs.clone());
         places_out.insert(at, container);
     }
-    Some(write(&recs_out.into_iter().flatten().collect::<Vec<_>>(), crlf))
+    Some(recs_out.into_iter().flatten().collect::<Vec<_>>())
 }
 
 #[cfg(test)]

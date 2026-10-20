@@ -2224,3 +2224,97 @@
 	Manage Attributes	管理属性
 	Dialog State	对话框状态
 	Dialog Action	对话框操作
+	Recover Drawing and Xrefs...	恢复图形和外部参照...
+	Count Blocks	块计数
+	Get Selection Set	获取选择集
+	Global Attribute Edit	全局属性编辑
+	LISP Function Surfer	LISP 函数浏览器
+	List LISP Symbols	列出 LISP 符号
+	List Nested Object	列出嵌套对象
+	List Object Xdata	列出对象扩展数据
+	Multiple Polyline Edit	多段线批量编辑
+	Redefine Path	重定义路径
+	Redefine Path Mode	重定义路径模式
+	Restore Dimension Text	恢复标注文字
+	Revert	还原
+	Rotate Blocks	旋转块
+	Scale Blocks	缩放块
+	Select Similar by Properties	按特性选择类似对象
+	Show URLs	显示 URL
+	Synchronize Viewports	同步视口
+	Paste Special	选择性粘贴
+	Paste Special...	选择性粘贴...
+	Paste as	粘贴为
+	Last Measurement	上次测量
+	Perimeter	周长
+	curl isn't available ({error}).	curl 不可用（{error}）。
+	This build has no release key to check updates with.	此版本没有用于检查更新的发布密钥。
+	The release's signature files are too large.	发布的签名文件过大。
+	The release's signature isn't one CADaddy reads.	发布的签名格式 CADaddy 无法读取。
+	The release's signature is missing or damaged.	发布的签名缺失或已损坏。
+	The release's signature is for another version ({version}).	发布的签名属于另一个版本（{version}）。
+	The release is signed with a key this build doesn't trust.	该发布使用了此版本不信任的密钥签名。
+	This build's release key is damaged.	此版本的发布密钥已损坏。
+	The release's signature doesn't match its files.	发布的签名与其文件不符。
+	Couldn't reach GitHub: {why}	无法连接 GitHub：{why}
+	GitHub's answer was too large.	GitHub 的响应过大。
+	GitHub's answer wasn't readable ({error}).	无法读取 GitHub 的响应（{error}）。
+	GitHub's answer has no version.	GitHub 的响应中没有版本号。
+	GitHub's answer has an unreadable version ({version}).	GitHub 的响应中的版本号无法识别（{version}）。
+	Couldn't download the release's {name}, so nothing was installed: {why}	无法下载发布的 {name}，因此未安装任何内容：{why}
+	The release's {name} is too large, so nothing was installed.	发布的 {name} 过大，因此未安装任何内容。
+	The release's {name} isn't text, so nothing was installed.	发布的 {name} 不是文本，因此未安装任何内容。
+	It wasn't downloaded. Download it from the release page instead.	未下载。请改从发布页面下载。
+	Version {version} isn't newer than this one ({current}).	版本 {version} 并不比当前版本（{current}）新。
+	This release isn't signed.	此发布未签名。
+	The release failed its check.	该发布未通过校验。
+	The signed release doesn't list {name}.	已签名的发布中未列出 {name}。
+	GitHub's fingerprint for {name} differs from the signed one.	GitHub 上 {name} 的指纹与已签名的指纹不同。
+	Couldn't make the folder {folder}: {error}	无法创建文件夹 {folder}：{error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	下载的文件与公布的 SHA-256 指纹不符，因此未安装。
+	Couldn't read the download: {error}	无法读取下载的文件：{error}
+	The download failed: {why}	下载失败：{why}
+	This release has no installer for this computer yet.	此发布暂无适用于这台电脑的安装程序。
+	Drawing Properties...	图形特性...
+	System Variable Monitor...	系统变量监视器...
+	{name} Properties	{name} 特性
+	Summary	摘要
+	Statistics	统计信息
+	Custom	自定义
+	Size	大小
+	Subject	主题
+	Author	作者
+	Keywords	关键字
+	Comments	注释
+	Revision number	修订号
+	Hyperlink base	超链接基地址
+	Created	创建时间
+	Modified	修改时间
+	Last saved by	上次保存者
+	Total editing time (minutes)	总编辑时间（分钟）
+	Property	特性
+	System Variable Monitor	系统变量监视器
+	Variable	变量
+	Watched value	监视值
+	Current value	当前值
+	Notify when a watched variable changes	监视的变量更改时通知
+	Reset All	全部重置
+	Delay	延迟
+	Repeat Script	重复脚本
+	Script Call	调用脚本
+	Resume Script	恢复脚本
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	保留每个图形的活动历史记录（私密，保存在 CADaddy 的设置文件夹中）
+	Specify insertion point or	指定插入点或
+	Specify table scale	指定表格比例
+	{} dimension(s) updated to the current settings.	已将 {} 个标注更新为当前设置。
+	British English (-ise)	英式英语 (-ise)
+	British English (-ize)	英式英语 (-ize)
+	Spanish	西班牙语
+	French	法语
+	German	德语
+	Portuguese (Iberian)	葡萄牙语（伊比利亚）
+	Portuguese (Brazilian)	葡萄牙语（巴西）
+	(not installed)	（未安装）
+	Dictionaries are read from:	词典读取位置：
+	Published to {path}	已发布到 {path}
+	Sheet Set (.sheetset.json)	图纸集 (.sheetset.json)
