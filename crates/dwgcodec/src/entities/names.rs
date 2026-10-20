@@ -20,11 +20,20 @@ const APPID: u16 = 67;
 const DIMSTYLE: u16 = 69;
 const MLINESTYLE: u16 = 73;
 
+/// The entities a block record holds (spec §20.4.49): from R2004 their handles, in R2000 the
+/// first and last of a chain the entities' next links make.
+#[derive(Clone, Debug)]
+pub enum Contents {
+    Owned(Vec<u64>),
+    Chain(u64, u64),
+}
+
 /// Names by handle.
 #[derive(Clone, Debug, Default)]
 pub struct Names {
     names: HashMap<u64, String>,
     kinds: HashMap<u64, u16>,
+    blocks: HashMap<u64, Contents>,
 }
 
 impl Names {
@@ -43,6 +52,11 @@ impl Names {
             if let Ok(name) = o.text() {
                 n.kinds.insert(o.handle, raw.type_code);
                 n.names.insert(o.handle, name);
+                if raw.type_code == BLOCK_HEADER
+                    && let Ok(c) = contents(&mut o)
+                {
+                    n.blocks.insert(o.handle, c);
+                }
             }
         }
         n
@@ -58,8 +72,56 @@ impl Names {
         (self.kinds.get(&handle) == Some(&APPID)).then(|| self.name(handle)).flatten()
     }
 
+    /// Every block record's entities.
+    pub fn block_contents(&self) -> impl Iterator<Item = (&u64, &Contents)> {
+        self.blocks.iter()
+    }
+
     /// The name of a block record.
     pub fn block(&self, handle: u64) -> Option<&str> {
         (self.kinds.get(&handle) == Some(&BLOCK_HEADER)).then(|| self.name(handle)).flatten()
+    }
+}
+
+/// A block record's entities, read on from after its name (spec §20.4.49; the same fields as
+/// [`super::records`] decodes for the BLOCK_RECORD).
+fn contents(o: &mut Obj) -> crate::Result<Contents> {
+    use crate::Version;
+    o.d.b()?;
+    if !o.at_least(Version::R2007) {
+        o.d.bs()?;
+    }
+    o.d.b()?;
+    o.href()?;
+    o.d.b()?;
+    o.d.b()?;
+    let is_xref = o.d.b()?;
+    let overlaid = o.d.b()?;
+    o.d.b()?;
+    let owned = if o.at_least(Version::R2004) && !is_xref && !overlaid { super::count(o.d.bl()?, "block entities")? } else { 0 };
+    o.d.bd3()?;
+    o.text()?;
+    let mut inserts = 0usize;
+    while o.d.rc()? != 0 {
+        inserts += 1;
+        if inserts > super::MAX_ITEMS {
+            return Err(crate::Error::TooLarge("a block's insert count"));
+        }
+    }
+    // The BLOCK entity, then the entities.
+    o.href()?;
+    if o.at_least(Version::R2004) {
+        let mut list = Vec::with_capacity(owned.min(1 << 16));
+        for _ in 0..owned {
+            if let Some(h) = o.href()? {
+                list.push(h);
+            }
+        }
+        Ok(Contents::Owned(list))
+    } else {
+        match (o.href()?, o.href()?) {
+            (Some(first), Some(last)) => Ok(Contents::Chain(first, last)),
+            _ => Ok(Contents::Owned(Vec::new())),
+        }
     }
 }

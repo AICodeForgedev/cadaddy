@@ -1,6 +1,6 @@
 # CADaddy's own DWG codec (`crates/dwgcodec`)
 
-Status: containers done (Q198); entities decoded (Q199, the types below). Objects (Q200), the
+Status: containers done (Q198); entities decoded (Q199), table records and the common objects decoded (Q200). Objects (Q200), the
 writer from the drawing model (Q201) and R2007 (Q202) are next.
 
 ## Why
@@ -182,6 +182,44 @@ Entity facts found by observation (files acadrust wrote; to be confirmed on Auto
    text), and the word-break flag is present from R2010.
 4. A DIMENSION's DXF type flag 32 ("block used by this dimension only") isn't stored; the
    codec leaves it out, as the bridge does.
+
+## Table records and objects (Q200)
+
+`entities::records::decode` does for table records and objects what `entities::decode` does for
+entities: the record's DXF groups, in the TABLES or OBJECTS section's form.
+
+Decoded: every table — BLOCK_RECORD (with its preview, units, explodability and scaling), LAYER
+(on/off, frozen, frozen in new viewports, locked, plotting, colour including true colour,
+linetype, lineweight, plot style, material), LTYPE (dashes with shapes and text), STYLE, VIEW,
+UCS, VPORT, APPID, DIMSTYLE (every dimension variable) — and the objects DICTIONARY, the
+dictionary with a default, PLACEHOLDER, LAYOUT with its plot settings, PLOTSETTINGS, GROUP,
+MLINESTYLE, XRECORD (layer states live in them), SCALE, DICTIONARYVAR, IMAGEDEF and its reactor.
+
+An entity's place comes from the block records' lists of their entities (§20.4.49: from R2004
+the owned handles; in R2000 the first and last, the entities' next links between): model space
+and the active paper space are the header's BLOCK_RECORD_MODEL_SPACE and BLOCK_RECORD_PAPER_SPACE;
+any other block — another layout's paper space among them — becomes the entity's owner (330).
+The entity mode alone marks every paper space entity as the active layout's.
+
+Not decoded yet (kept from the bridge): MLEADERSTYLE, TABLESTYLE, TABLECONTENT, FIELD and
+FIELDLIST, MATERIAL, VISUALSTYLE, SUN, dynamic-block data, SORTENTSTABLE, SPATIAL_FILTER,
+proxies and custom classes.
+
+Tested: `dwgcodec/tests/records.rs` (records = acadrust's DXF, group by group, five versions;
+mutated data never panics) and `io/tests/dwg_native_objects.rs` (the drawing read with native
+tables and objects equals the bridge's: layers, linetypes, text and dimension styles, layer
+states, layouts with their viewports, groups, views, UCSs, multiline styles).
+
+Facts found by observation:
+
+1. **From R2007 a table record has no external-reference index** (the BS after the "referenced"
+   bit): an application record's data is exactly the two bits and its byte.
+2. **From R2004 a layer's colour index short is 0**; the colour is the raw value's (method 0xC3
+   an index, 0xC2 a true colour).
+3. **The VPORT's second double is the view width** (aspect ratio × height), not the ratio.
+4. Files from some writers name every layout's block record *Paper_Space; DXF needs them
+   distinct, so the reader keeps the bridge's names for block records until the names are
+   assigned from the layouts here (Q203).
 
 ## Not done yet / known limits
 

@@ -1,7 +1,7 @@
 //! Entity data by type (spec §20.4.2 onward), each written as the DXF Reference's groups for that
 //! entity.
 
-use super::{Common, Group, MAX_ITEMS, Names, Obj, Value, count};
+use super::{Common, G, Group, MAX_ITEMS, Names, Obj, Value, count};
 use crate::error::corrupt;
 use crate::{Error, Result, Version};
 
@@ -74,45 +74,6 @@ pub fn known(name: &str) -> bool {
             | "VIEWPORT"
             | "MULTILEADER"
     )
-}
-
-/// Groups being written.
-struct G<'g>(&'g mut Vec<Group>);
-
-impl G<'_> {
-    fn s(&mut self, code: i32, v: impl Into<String>) {
-        self.0.push(Group { code, value: Value::Str(v.into()) });
-    }
-    fn i(&mut self, code: i32, v: i64) {
-        self.0.push(Group { code, value: Value::Int(v) });
-    }
-    fn f(&mut self, code: i32, v: f64) {
-        self.0.push(Group { code, value: Value::Real(v) });
-    }
-    fn h(&mut self, code: i32, v: u64) {
-        self.0.push(Group { code, value: Value::Handle(v) });
-    }
-    /// A point: `code`, `code + 10`, `code + 20`.
-    fn p(&mut self, code: i32, p: [f64; 3]) {
-        self.f(code, p[0]);
-        self.f(code + 10, p[1]);
-        self.f(code + 20, p[2]);
-    }
-    fn p2(&mut self, code: i32, p: [f64; 2]) {
-        self.f(code, p[0]);
-        self.f(code + 10, p[1]);
-    }
-    /// The extrusion (210), when not the default 0,0,1.
-    fn extrusion(&mut self, e: [f64; 3]) {
-        if e != [0.0, 0.0, 1.0] {
-            self.p(210, e);
-        }
-    }
-    fn thickness(&mut self, t: f64) {
-        if t != 0.0 {
-            self.f(39, t);
-        }
-    }
 }
 
 fn deg(r: f64) -> f64 {

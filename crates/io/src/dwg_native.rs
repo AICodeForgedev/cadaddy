@@ -10,6 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use cadaddy_doc::Drawing;
+use cadaddy_dwgcodec::entities::records::Record;
 use cadaddy_dwgcodec::entities::{Entity, Group, Value, decode_all};
 use cadaddy_dxf::{Kind, Tag, kind_of};
 
@@ -45,8 +46,9 @@ fn record(e: &Entity) -> Vec<Tag> {
 
 /// The entity records of `tags` (sections ENTITIES and BLOCKS) with every entity in `ents` in
 /// place of the record with its handle, followed by the entities it owns.
-fn replace(tags: Vec<Tag>, ents: &[Entity]) -> (Vec<Tag>, usize) {
+fn replace(tags: Vec<Tag>, ents: &[Entity], recs: &[Record]) -> (Vec<Tag>, usize) {
     let by_handle: HashMap<u64, &Entity> = ents.iter().map(|e| (e.handle, e)).collect();
+    let records: HashMap<u64, &Record> = recs.iter().map(|r| (r.handle, r)).collect();
     let owned: HashSet<u64> = ents.iter().flat_map(|e| e.children.iter().copied()).collect();
     let mut out = Vec::with_capacity(tags.len());
     let mut section = String::new();
@@ -67,7 +69,26 @@ fn replace(tags: Vec<Tag>, ents: &[Entity]) -> (Vec<Tag>, usize) {
             section = rec.iter().find(|x| x.code == 2).map(|x| x.str().trim().to_string()).unwrap_or_default();
         }
         let in_entities = section == "ENTITIES" || section == "BLOCKS";
-        let handle = rec.iter().find(|x| x.code == 5).and_then(|x| u64::from_str_radix(x.str().trim(), 16).ok());
+        let handle = rec.iter().find(|x| x.code == 5 || x.code == 105).and_then(|x| u64::from_str_radix(x.str().trim(), 16).ok());
+        // Table records and objects: the codec's in place of the bridge's.
+        if (section == "TABLES" && !matches!(name.as_str(), "TABLE" | "ENDTAB")) || section == "OBJECTS" {
+            match handle.and_then(|h| records.get(&h)) {
+                Some(r) => {
+                    replaced += 1;
+                    out.push(Tag::s(0, r.name.clone()));
+                    // A block record's name: the bridge's (files from some writers call every
+                    // layout's block *Paper_Space; DXF needs them distinct, *Paper_Space0 …).
+                    let bridge_name = (r.name == "BLOCK_RECORD").then(|| rec.iter().find(|x| x.code == 2).cloned()).flatten();
+                    out.extend(r.groups.iter().map(|g| match (&bridge_name, g.code) {
+                        (Some(n), 2) => n.clone(),
+                        _ => tag(g),
+                    }));
+                }
+                None => out.extend_from_slice(rec),
+            }
+            i = end;
+            continue;
+        }
         match handle.filter(|_| in_entities && !matches!(name.as_str(), "BLOCK" | "ENDBLK")) {
             // Written with its owner.
             Some(h) if owned.contains(&h) && by_handle.contains_key(&h) => {}
@@ -105,13 +126,16 @@ pub struct NativeReport {
     pub failed: Vec<(u64, String)>,
 }
 
-/// A DWG file read through the bridge, with its entities as CADaddy's codec decodes them.
+/// A DWG file read through the bridge, with its entities, table records and objects as
+/// CADaddy's codec decodes them.
 pub fn read_with_native_entities(bytes: &[u8]) -> Result<(Drawing, NativeReport)> {
     let (dxf, notes) = cadaddy_dwg::dwg_to_dxf_noted(bytes, cadaddy_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
     let tags = cadaddy_dxf::parse(&dxf).map_err(|e| IoError::Format(e.to_string()))?;
     let dwg = cadaddy_dwgcodec::read(bytes).map_err(|e| IoError::Format(format!("DWG: {e}")))?;
-    let (ents, failed) = decode_all(&dwg).map_err(|e| IoError::Format(format!("DWG: {e}")))?;
-    let (tags, replaced) = replace(tags, &ents);
+    let (ents, mut failed) = decode_all(&dwg).map_err(|e| IoError::Format(format!("DWG: {e}")))?;
+    let (recs, rec_failed) = cadaddy_dwgcodec::entities::records::decode_all(&dwg).map_err(|e| IoError::Format(format!("DWG: {e}")))?;
+    failed.extend(rec_failed);
+    let (tags, replaced) = replace(tags, &ents, &recs);
     let mut d = crate::dxf_read::read_tags(tags)?;
     d.read_notes = notes;
     Ok((d, NativeReport { replaced, failed }))

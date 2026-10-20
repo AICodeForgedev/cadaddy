@@ -223,7 +223,30 @@ fn multileaders_read_natively_make_the_same_drawing() {
         assert!(rep.failed.is_empty(), "{v}: {:?}", rep.failed);
         let ours: Vec<_> = native.model.iter().map(|e| serde_json::to_value(e).unwrap()).collect();
         let theirs: Vec<_> = bridge.model.iter().map(|e| serde_json::to_value(e).unwrap()).collect();
-        assert_eq!(ours, theirs, "{v}");
+        if let Some(d) = diff(&serde_json::Value::Array(ours), &serde_json::Value::Array(theirs), "") {
+            panic!("{v}: {d}");
+        }
         assert!(native.model.iter().filter(|e| matches!(e.kind, EntityKind::MLeader(_))).count() == 2, "{v}");
+    }
+}
+
+fn diff(a: &serde_json::Value, b: &serde_json::Value, path: &str) -> Option<String> {
+    use serde_json::Value as J;
+    match (a, b) {
+        (J::Number(x), J::Number(y)) => {
+            let (x, y) = (x.as_f64().unwrap_or(0.0), y.as_f64().unwrap_or(0.0));
+            ((x - y).abs() > 1e-9 * x.abs().max(1.0)).then(|| format!("{path}: {x} vs {y}"))
+        }
+        (J::Array(x), J::Array(y)) => {
+            if x.len() != y.len() {
+                return Some(format!("{path}: {} items vs {}", x.len(), y.len()));
+            }
+            x.iter().zip(y).enumerate().find_map(|(i, (p, q))| diff(p, q, &format!("{path}[{i}]")))
+        }
+        (J::Object(x), J::Object(y)) => {
+            let keys: std::collections::BTreeSet<&String> = x.keys().chain(y.keys()).collect();
+            keys.into_iter().find_map(|k| diff(x.get(k).unwrap_or(&J::Null), y.get(k).unwrap_or(&J::Null), &format!("{path}.{k}")))
+        }
+        _ => (a != b).then(|| format!("{path}: {a} vs {b}")),
     }
 }

@@ -14,6 +14,7 @@
 
 mod kinds;
 mod names;
+pub mod records;
 
 pub use names::Names;
 
@@ -62,6 +63,8 @@ pub struct Entity {
     /// Objects it owns that follow it in DXF: an INSERT's ATTRIBs and SEQEND, a POLYLINE's
     /// VERTEXes and SEQEND.
     pub children: Vec<u64>,
+    /// R2000: the next entity in its block (see [`Common::next`]).
+    pub next: Option<u64>,
 }
 
 /// The three streams of one object.
@@ -134,6 +137,45 @@ impl<'a> Obj<'a> {
     }
 }
 
+/// Groups being written.
+pub(crate) struct G<'g>(pub(crate) &'g mut Vec<Group>);
+
+impl G<'_> {
+    pub(crate) fn s(&mut self, code: i32, v: impl Into<String>) {
+        self.0.push(Group { code, value: Value::Str(v.into()) });
+    }
+    pub(crate) fn i(&mut self, code: i32, v: i64) {
+        self.0.push(Group { code, value: Value::Int(v) });
+    }
+    pub(crate) fn f(&mut self, code: i32, v: f64) {
+        self.0.push(Group { code, value: Value::Real(v) });
+    }
+    pub(crate) fn h(&mut self, code: i32, v: u64) {
+        self.0.push(Group { code, value: Value::Handle(v) });
+    }
+    /// A point: `code`, `code + 10`, `code + 20`.
+    pub(crate) fn p(&mut self, code: i32, p: [f64; 3]) {
+        self.f(code, p[0]);
+        self.f(code + 10, p[1]);
+        self.f(code + 20, p[2]);
+    }
+    pub(crate) fn p2(&mut self, code: i32, p: [f64; 2]) {
+        self.f(code, p[0]);
+        self.f(code + 10, p[1]);
+    }
+    /// The extrusion (210), when not the default 0,0,1.
+    pub(crate) fn extrusion(&mut self, e: [f64; 3]) {
+        if e != [0.0, 0.0, 1.0] {
+            self.p(210, e);
+        }
+    }
+    pub(crate) fn thickness(&mut self, t: f64) {
+        if t != 0.0 {
+            self.f(39, t);
+        }
+    }
+}
+
 /// Extended data: the application's handle and the raw items (spec §20.4.1).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Eed {
@@ -171,6 +213,9 @@ pub struct Common {
     /// The lineweight index as stored (spec §20.4.1 lineweight table).
     pub lineweight: u8,
     pub layer: Option<u64>,
+    /// R2000: the next entity of the same block (the chain a block record's first and last
+    /// entities bound).
+    pub next: Option<u64>,
 }
 
 /// The DXF lineweight (hundredths of a millimetre) of a stored lineweight index.
@@ -249,7 +294,7 @@ pub fn common(o: &mut Obj) -> Result<Common> {
     }
     if !nolinks {
         o.href()?;
-        o.href()?;
+        c.next = o.href()?;
     }
     if color_ref {
         c.color_ref = o.href()?;
@@ -470,7 +515,7 @@ pub fn decode(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> 
     let mut children = Vec::new();
     kinds::decode(&name, &mut o, &c, names, &mut groups, &mut children)?;
     groups.extend(eed_groups(&c.eed, names, v >= Version::R2007));
-    Ok(Some(Entity { name, handle: o.handle, owner, paper: c.entmode == 1, groups, children }))
+    Ok(Some(Entity { name, handle: o.handle, owner, paper: c.entmode == 1, groups, children, next: c.next }))
 }
 
 /// Every entity of a file decoded, with the objects that couldn't be (unknown types, or damaged
@@ -493,5 +538,65 @@ pub fn decode_all(dwg: &Dwg) -> Result<(Vec<Entity>, Vec<(u64, String)>)> {
             }
         }
     }
+    // Model space and the active paper space by the header's block record handles (names can
+    // repeat: every layout's block may be called *Paper_Space).
+    let space = |name: &str| match dwg.header_vars().ok().and_then(|h| h.get(name).cloned()) {
+        Some(crate::header::Value::Handle(r)) => Some(r.value).filter(|v| *v != 0),
+        _ => None,
+    };
+    place(&mut out, &names, space("BLOCK_RECORD_MODEL_SPACE"), space("BLOCK_RECORD_PAPER_SPACE"));
     Ok((out, failed))
+}
+
+/// Each entity's place from the block records' lists of their entities (the entity mode alone
+/// marks every paper space entity as the active layout's): model space, the active paper space
+/// (67 = 1) or a block — another layout's paper space block among them — as the owner (330).
+fn place(ents: &mut [Entity], names: &Names, model: Option<u64>, paper_space: Option<u64>) {
+    let mut owner_of: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+    let next: std::collections::HashMap<u64, u64> = ents.iter().filter_map(|e| e.next.map(|n| (e.handle, n))).collect();
+    for (block, contents) in names.block_contents() {
+        match contents {
+            names::Contents::Owned(list) => {
+                for h in list {
+                    owner_of.insert(*h, *block);
+                }
+            }
+            names::Contents::Chain(first, last) => {
+                let mut at = Some(*first);
+                let mut steps = 0usize;
+                while let Some(h) = at {
+                    owner_of.insert(h, *block);
+                    steps += 1;
+                    if h == *last || steps > MAX_ITEMS {
+                        break;
+                    }
+                    at = next.get(&h).copied();
+                }
+            }
+        }
+    }
+    for e in ents.iter_mut() {
+        let Some(block) = owner_of.get(&e.handle).copied() else { continue };
+        let name = names.block(block).unwrap_or_default().to_ascii_uppercase();
+        let (owner, paper) = if Some(block) == model || (model.is_none() && name == "*MODEL_SPACE") {
+            (None, false)
+        } else if Some(block) == paper_space || (paper_space.is_none() && name == "*PAPER_SPACE") {
+            (None, true)
+        } else {
+            (Some(block), false)
+        };
+        e.owner = owner;
+        e.paper = paper;
+        e.groups.retain(|g| g.code != 67);
+        if paper && let Some(i) = e.groups.iter().position(|g| g.code == 100) {
+            e.groups.insert(i + 1, Group { code: 67, value: Value::Int(1) });
+        }
+        // The owner group follows the handle (other 330 groups, a multileader's attribute
+        // definitions for one, are left alone).
+        let at = e.groups.iter().position(|g| g.code == 5).map_or(0, |i| i + 1);
+        match e.groups.get_mut(at) {
+            Some(g) if g.code == 330 => g.value = Value::Handle(block),
+            _ => e.groups.insert(at.min(e.groups.len()), Group { code: 330, value: Value::Handle(block) }),
+        }
+    }
 }
