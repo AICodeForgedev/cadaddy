@@ -15,6 +15,7 @@ repository = "https://github.com/AICodeForgedev/cadaddy"
 cadaddy-geom = { path = "crates/geom" }
 cadaddy-dxf = { path = "crates/dxf" }
 cadaddy-dwg = { path = "crates/dwg" }
+cadaddy-dwgcodec = { path = "crates/dwgcodec" }
 cadaddy-color = { path = "crates/color" }
 cadaddy-doc = { path = "crates/doc" }
 cadaddy-constraints = { path = "crates/constraints" }

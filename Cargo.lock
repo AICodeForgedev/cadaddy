@@ -737,6 +737,7 @@ dependencies = [
  "cadaddy-color",
  "cadaddy-doc",
  "cadaddy-dwg",
+ "cadaddy-dwgcodec",
  "cadaddy-dxf",
  "cadaddy-fonts",
  "cadaddy-geom",

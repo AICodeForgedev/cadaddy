@@ -5,6 +5,7 @@
 /// What a DXF file holds that CADaddy doesn't model, kept and written back (#528).
 pub mod cdy;
 mod dwg_keep;
+pub mod dwg_native;
 mod dxf_raw;
 /// 3D model exchange: glTF/GLB, OBJ+MTL and STL.
 pub mod ifc;
