@@ -246,12 +246,15 @@ impl<'a> BitReader<'a> {
         }
     }
 
-    /// BLL: bit long long (spec §2.4): a 3B byte count, then that many bytes, least first.
+    /// BLL: bit long long (spec §2.4): a byte count, then that many bytes, least first. The spec
+    /// says the count is a 3B (one to three bits); in files from other writers it is a plain
+    /// 3-bit number (R2013 header REQUIREDVERSIONS: only then do the values after it read as
+    /// their documented defaults).
     pub fn bll(&mut self) -> Result<u64> {
-        let n = self.b3()?;
+        let n = self.bits(3)?;
         let mut v = 0u64;
         for i in 0..n {
-            v |= u64::from(self.rc()?) << (8 * u32::from(i));
+            v |= u64::from(self.rc()?) << (8 * i as u32);
         }
         Ok(v)
     }
@@ -558,24 +561,11 @@ impl BitWriter {
         }
     }
 
-    /// BLL with the fewest bytes; 3B can count 0, 2, 6 or 7 of them, so the count is the next of
-    /// those that fits.
+    /// BLL with the fewest bytes (at most seven: the count is three bits).
     pub fn bll(&mut self, v: u64) {
-        let need = (8 - v.leading_zeros() / 8) as u8;
-        let n = match need {
-            0 => 0,
-            1 | 2 => 2,
-            3..=6 => 6,
-            _ => 7,
-        };
-        if need > n {
-            // Eight significant bytes cannot be counted by 3B; keep the low seven.
-            self.b3(7);
-            self.bytes(&v.to_le_bytes()[..7]);
-            return;
-        }
-        self.b3(n);
-        self.bytes(&v.to_le_bytes()[..usize::from(n)]);
+        let n = (8 - v.leading_zeros() / 8).min(7);
+        self.bits(u64::from(n), 3);
+        self.bytes(&v.to_le_bytes()[..n as usize]);
     }
 
     pub fn bd(&mut self, v: f64) {
@@ -736,6 +726,53 @@ impl BitWriter {
             self.rs(v);
         }
     }
+}
+
+/// Where an R2007+ string stream lies (spec §20.1): `end_bit` is the end of the data and string
+/// streams. The bit before it says whether there is a string stream; the RS before that bit is
+/// its size in bits, and when that size has its top bit set, the RS before it gives the high
+/// bits (size = low 15 bits | high << 15). Returns (start, end) of the string stream, or `None`
+/// when there is none (the data stream then ends at `end_bit - 1`).
+pub fn string_stream(data: &[u8], end_bit: usize) -> Result<Option<(usize, usize)>> {
+    if end_bit < 1 || end_bit > data.len().saturating_mul(8) {
+        return Err(crate::error::corrupt("a stream end outside its data"));
+    }
+    let mut r = BitReader::new(data);
+    r.set_bit_pos(end_bit - 1)?;
+    if !r.b()? {
+        return Ok(None);
+    }
+    let mut end = end_bit.checked_sub(17).ok_or(Error::Truncated("a string stream size"))?;
+    r.set_bit_pos(end)?;
+    let low = usize::from(r.rs()?);
+    let mut size = low;
+    if low & 0x8000 != 0 {
+        end = end.checked_sub(16).ok_or(Error::Truncated("a string stream size"))?;
+        r.set_bit_pos(end)?;
+        let high = usize::from(r.rs()?);
+        size = (low & 0x7FFF) | (high << 15);
+    }
+    let start = end.checked_sub(size).ok_or_else(|| crate::error::corrupt("a string stream larger than its object"))?;
+    Ok(Some((start, end)))
+}
+
+/// Appends a string stream (`bits` of `strings`) and its size and flag to `w`, as
+/// [`string_stream`] reads them.
+pub fn put_string_stream(w: &mut BitWriter, strings: &[u8], bits: usize) {
+    let present = bits > 0;
+    let mut r = BitReader::new(strings);
+    for _ in 0..bits {
+        w.b(r.b().unwrap_or(false));
+    }
+    if present {
+        if bits >= 0x8000 {
+            w.rs((bits >> 15) as u16);
+            w.rs((bits & 0x7FFF) as u16 | 0x8000);
+        } else {
+            w.rs(bits as u16);
+        }
+    }
+    w.b(present);
 }
 
 #[cfg(test)]

@@ -14,10 +14,12 @@
 #![forbid(unsafe_code)]
 
 pub mod bits;
+pub mod classes;
 pub mod crc;
 mod dwg;
 mod error;
 pub mod frame;
+pub mod header;
 pub mod lz77;
 pub mod objects;
 pub mod objmap;

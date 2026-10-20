@@ -41,6 +41,26 @@ impl Dwg {
         self.sections.iter().find(|s| s.name == name)
     }
 
+    /// The header variables, decoded (spec §9).
+    pub fn header_vars(&self) -> Result<crate::header::HeaderVars> {
+        crate::header::HeaderVars::decode(&self.header.body, self.version)
+    }
+
+    /// Replaces the header variables section's data with `vars` encoded.
+    pub fn set_header_vars(&mut self, vars: &crate::header::HeaderVars) {
+        self.header.body = vars.encode();
+    }
+
+    /// The classes, decoded (spec §10).
+    pub fn classes(&self) -> Result<crate::classes::Classes> {
+        crate::classes::Classes::decode(&self.classes.body, self.version)
+    }
+
+    /// Replaces the classes section's data with `classes` encoded.
+    pub fn set_classes(&mut self, classes: &crate::classes::Classes) {
+        self.classes.body = classes.encode();
+    }
+
     /// The object with `handle`.
     pub fn object(&self, handle: u64) -> Option<&RawObject> {
         self.objects.iter().find(|o| o.handle == handle)
