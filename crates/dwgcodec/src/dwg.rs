@@ -2,7 +2,7 @@
 
 use crate::frame::Framed;
 use crate::objects::RawObject;
-use crate::{Error, Limits, Result, Version, r2000};
+use crate::{Error, Limits, Result, Version, r2000, r2004};
 
 /// A section kept as raw bytes (one this layer does not interpret).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,6 +32,7 @@ pub struct Dwg {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Layout {
     R2000(r2000::Layout),
+    R2004(Box<r2004::Layout>),
 }
 
 impl Dwg {
@@ -60,7 +61,7 @@ pub fn read_with(bytes: &[u8], limits: &Limits) -> Result<Dwg> {
     match Version::from_id(id)? {
         Version::R2000 => r2000::read(bytes, limits),
         Version::R2007 => Err(Error::Unsupported("AutoCAD 2007 (AC1021) DWG files are not read yet".into())),
-        v => Err(Error::Unsupported(format!("{} DWG files are not read yet", v.id()))),
+        v => r2004::read(bytes, v, limits),
     }
 }
 
@@ -68,5 +69,6 @@ pub fn read_with(bytes: &[u8], limits: &Limits) -> Result<Dwg> {
 pub fn write(dwg: &Dwg) -> Result<Vec<u8>> {
     match &dwg.layout {
         Layout::R2000(l) => r2000::write(dwg, l),
+        Layout::R2004(l) => r2004::write(dwg, l),
     }
 }

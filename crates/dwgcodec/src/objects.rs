@@ -1,6 +1,10 @@
 //! Object records (spec §20.1): a modular-short size, that many bytes of bit-coded object data,
 //! and a 16-bit CRC (seed 0xC0C1) over the size and the data. The data starts with the object's
 //! type (spec §2.12), after an MC handle-stream size from R2010.
+//!
+//! From R2010 the size does not count that MC: the record is the size, the MC, `size` bytes of
+//! data, then the CRC over all of them. The spec does not say so; in files from other writers
+//! every record's CRC checks only this way (the bytes left over equal the MC's length, one or two).
 
 use crate::bits::{BitReader, BitWriter};
 use crate::crc::crc8;
@@ -16,7 +20,8 @@ pub struct RawObject {
     pub handle: u64,
     /// The object type (spec §2.12, §20.3: below 500 a fixed type, from 500 a class number).
     pub type_code: u16,
-    /// The record's data: everything between its size and its CRC.
+    /// The record's data: everything between its size and its CRC (from R2010 starting with the
+    /// MC handle-stream size).
     pub data: Vec<u8>,
 }
 
@@ -38,7 +43,13 @@ pub fn read(buf: &[u8], at: usize, r2010_plus: bool, handle: u64) -> Result<(Raw
         return Err(Error::TooLarge("an object"));
     }
     let start = r.byte_pos();
-    let end = start + size as usize;
+    let mc_len = if r2010_plus {
+        r.mc_unsigned()?;
+        r.byte_pos() - start
+    } else {
+        0
+    };
+    let end = start + mc_len + size as usize;
     let data = rest.get(start..end).ok_or(Error::Truncated("an object"))?;
     let crc = rest.get(end..end + 2).ok_or(Error::Truncated("an object"))?;
     let stored = u16::from_le_bytes([crc[0], crc[1]]);
@@ -51,10 +62,16 @@ pub fn read(buf: &[u8], at: usize, r2010_plus: bool, handle: u64) -> Result<(Raw
 }
 
 /// Appends an object's record to `out`.
-pub fn write(out: &mut Vec<u8>, o: &RawObject) {
+pub fn write(out: &mut Vec<u8>, o: &RawObject, r2010_plus: bool) {
     let start = out.len();
+    let mc_len = if r2010_plus {
+        let mut r = BitReader::new(&o.data);
+        r.mc_unsigned().map_or(0, |_| r.byte_pos())
+    } else {
+        0
+    };
     let mut w = BitWriter::new();
-    w.ms(o.data.len() as u64);
+    w.ms(o.data.len().saturating_sub(mc_len) as u64);
     out.extend_from_slice(w.as_bytes());
     out.extend_from_slice(&o.data);
     let crc = crc8(SEED, out.get(start..).unwrap_or_default());
@@ -76,7 +93,7 @@ mod tests {
             w.bytes(&[7; 70_000]);
             let o = RawObject { handle: 0x2A, type_code: 0x1F3, data: w.into_bytes() };
             let mut buf = vec![9, 9];
-            write(&mut buf, &o);
+            write(&mut buf, &o, r2010);
             let (back, len) = read(&buf, 2, r2010, 0x2A).unwrap();
             assert_eq!((back, len), (o.clone(), buf.len() - 2));
             let last = buf.len() - 1;

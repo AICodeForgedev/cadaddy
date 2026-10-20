@@ -26,8 +26,29 @@ fn r2000_round_trips_byte_for_byte() {
 }
 
 #[test]
-fn versions_listed() {
-    assert!(versions_read().contains(&"AC1015"));
+fn every_version_but_r2007_is_read() {
+    assert_eq!(versions_read(), common::VERSIONS);
+    let err = read(b"AC1021\0\0\0\0\0").unwrap_err().to_string();
+    assert!(err.contains("2007"), "{err}");
+}
+
+#[test]
+fn r2004_and_later_round_trip_byte_for_byte() {
+    for v in ["AC1018", "AC1024", "AC1027", "AC1032"] {
+        for n in [0, 12, 3000] {
+            let bytes = common::dwg(v, n);
+            let dwg = read(&bytes).unwrap_or_else(|e| panic!("{v}, {n} entities: {e}"));
+            assert!(dwg.objects.len() > n, "{v}, {n} entities: {} objects", dwg.objects.len());
+            let again = write(&dwg).unwrap();
+            assert!(
+                again == bytes,
+                "{v}, {n} entities: written {} bytes, read {}; first difference at {:?}",
+                again.len(),
+                bytes.len(),
+                again.iter().zip(&bytes).position(|(a, b)| a != b)
+            );
+        }
+    }
 }
 
 /// Object types with no DXF form, so acadrust's DXF can't show them (spec §20.3: 0x46
@@ -70,12 +91,22 @@ fn a_changed_file_is_written_consistently() {
         let back = read(&again).unwrap_or_else(|e| panic!("{v}: {e}"));
         assert_eq!(back.objects, d.objects, "{v}");
         assert_eq!(common::acadrust_handles(&again), before, "{v}: acadrust reads the rewritten file");
+        // A file we laid out ourselves comes back byte for byte too.
+        assert!(write(&back).unwrap() == again, "{v}: our own layout is stable");
+        // Every section our way: header and classes rewritten unchanged keep their bytes.
+        assert_eq!((back.header.clone(), back.classes.clone()), (d.header.clone(), d.classes.clone()), "{v}");
     }
 }
 
 #[test]
 fn arbitrary_bytes_never_panic() {
-    let good = common::dwg("AC1015", 30);
+    for v in common::VERSIONS {
+        fuzz(v);
+    }
+}
+
+fn fuzz(v: &str) {
+    let good = common::dwg(v, 30);
     let mut seed = 0x9E37_79B9u32;
     let mut next = || {
         seed ^= seed << 13;
@@ -83,7 +114,7 @@ fn arbitrary_bytes_never_panic() {
         seed ^= seed << 5;
         seed
     };
-    for i in 0..3000 {
+    for i in 0..1500 {
         let mut b = good.clone();
         match i % 3 {
             // Flip a few bytes anywhere.
@@ -98,7 +129,7 @@ fn arbitrary_bytes_never_panic() {
             // Random bytes behind a DWG id.
             _ => {
                 b = (0..next() % 4000).map(|_| next() as u8).collect();
-                b.splice(0..0, *b"AC1015");
+                b.splice(0..0, v.bytes());
             }
         }
         let _ = read(&b);

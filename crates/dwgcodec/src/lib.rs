@@ -18,9 +18,11 @@ pub mod crc;
 mod dwg;
 mod error;
 pub mod frame;
+pub mod lz77;
 pub mod objects;
 pub mod objmap;
 mod r2000;
+mod r2004;
 
 pub use dwg::{Dwg, Section, read, read_with, write};
 pub use error::{Error, Result};

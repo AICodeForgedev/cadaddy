@@ -262,7 +262,7 @@ pub(crate) fn write(dwg: &Dwg, l: &Layout) -> Result<Vec<u8>> {
                 objects_start = Some(at);
                 for o in &dwg.objects {
                     entries.push(objmap::Entry { handle: o.handle, offset: u64::from(addr(&out)?) });
-                    objects::write(&mut out, o);
+                    objects::write(&mut out, o, false);
                 }
             }
             Region::Preview => {
