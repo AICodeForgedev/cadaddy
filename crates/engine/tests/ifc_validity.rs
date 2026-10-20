@@ -1306,3 +1306,45 @@ fn keep_for_outside_checks() {
     let mut s = building();
     export(&mut s, "Sample Building.ifc");
 }
+
+/// The rooms come from the walls and are named by the room tags alone (Q215): the duct, pipe and
+/// conduit runs, their tags, the stair and the built 3D parts never split or name a room. Each
+/// room ends at the partition's face (4⅞" about its centreline) and the exterior walls' inner face.
+#[test]
+fn rooms_have_their_names_and_areas() {
+    let mut s = building();
+    let half_partition = 4.875 / 24.0;
+    let want = [
+        ("LOBBY", "L1", (39.5 - (16.0 + half_partition)) * 23.0),
+        ("OFFICE", "L1", (16.0 - half_partition - 0.5) * 23.0),
+        ("STUDIO", "L2", 39.0 * 23.0),
+    ];
+    // Twice: rooms.build's volumes are in the drawing the second time.
+    for _ in 0..2 {
+        let rooms = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+        let mut got: Vec<(String, String, f64, f64)> = rooms["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    r["name"].as_str().unwrap().to_string(),
+                    r["level"].as_str().unwrap_or("").to_string(),
+                    r["areaSqFt"].as_f64().unwrap(),
+                    r["areaM2"].as_f64().unwrap(),
+                )
+            })
+            .collect();
+        got.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(got.len(), want.len(), "{got:?}");
+        for ((name, level, sqft, m2), (wname, wlevel, wsqft)) in got.iter().zip(want) {
+            assert_eq!((name.as_str(), level.as_str()), (wname, wlevel), "{got:?}");
+            assert!((sqft - wsqft).abs() < 0.01, "{name}: {sqft} sq ft, want {wsqft}");
+            assert!((m2 - wsqft * 0.092_903_04).abs() < 0.01, "{name}: {m2} m², want {}", wsqft * 0.092_903_04);
+        }
+        s.execute("rooms.build", &json!({})).unwrap();
+    }
+    // The ceilings model.build traced follow the same outlines.
+    let ceilings = s.doc().unwrap().model.iter().filter(|e| e.common.layer == "3D-Ceilings").count();
+    assert_eq!(ceilings, 3);
+}

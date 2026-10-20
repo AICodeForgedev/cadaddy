@@ -282,23 +282,37 @@ pub(crate) struct FoundRoom {
     pub confidence: f64,
 }
 
-/// The rooms of the current space, from its name labels.
+/// The rooms of the current space, from its name labels. With a building spec, the labels on its
+/// room tag layers (else the texts naming its rooms), traced on what bounds rooms
+/// ([`crate::cmd::bspec::room_plan`]).
 pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
     let (d, ents) = objects(s)?;
     let k = units_per_inch(d);
     let min_area = 16.0 * 144.0 * k * k;
     let ext = d.extents(&s.space());
     let sheet = (ext.width() * ext.height()).max(1e-9);
-    let all = texts(&ents);
+    let spec = d.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok());
+    let tagged = spec.as_ref().is_some_and(|sp| sp.layers.iter().any(|r| r.role == cadaddy_walk3d::Role::RoomTag));
+    let on_tags: Vec<_> = ents
+        .iter()
+        .copied()
+        .filter(|e| !tagged || spec.as_ref().and_then(|sp| sp.role(&e.common.layer)).is_some_and(|r| r.role == cadaddy_walk3d::Role::RoomTag))
+        .collect();
+    let all = texts(&on_tags);
+    // Untagged, a spec with rooms names them.
+    let spec_rooms = spec.as_ref().filter(|sp| !tagged && !sp.rooms.is_empty()).map(|sp| sp.rooms.as_slice());
     let names: Vec<_> = all
         .iter()
         .filter(|(_, t, _, _)| t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && t.chars().count() <= 40 && !room_number(t))
+        .filter(|(_, t, _, _)| spec_rooms.is_none_or(|rs| rs.iter().any(|r| crate::cmd::bspec::names_room(r, t))))
         .cloned()
         .collect();
     let numbers: Vec<_> = all.iter().filter(|(_, t, _, _)| room_number(t)).cloned().collect();
+    let plan = crate::cmd::bspec::room_plan(s)?;
+    let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<FoundRoom> = Vec::new();
     for (h, name, at, height) in names.into_iter().take(MAX_ROOMS) {
-        let Ok(loops) = crate::cmd::hatch::loops_at(s, at) else { continue };
+        let Ok(loops) = crate::cmd::hatch::loops_at(plan, at) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let poly = polygon(outer);
         if poly.len() < 3 {

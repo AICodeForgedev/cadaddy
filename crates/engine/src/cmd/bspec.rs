@@ -195,6 +195,75 @@ pub(crate) fn room_texts(sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> Vec<(Handl
     super::perceive::texts(&on).into_iter().filter(|(_, t, at, _)| !t.is_empty() && at.is_finite()).map(|(h, t, at, _)| (h, t, at)).collect()
 }
 
+/// Whether a layer's objects bound rooms: walls, curtain walls, columns, doors and windows.
+pub(crate) fn bounds_rooms(sp: &BuildingSpec, layer: &str) -> bool {
+    sp.role(layer).is_some_and(|r| matches!(r.role, Role::Wall | Role::CurtainWall | Role::Column | Role::Door | Role::Window))
+}
+
+/// A plan to trace rooms on: the model space with only what bounds rooms. Never what a build
+/// made (wall, floor and room volumes: their triangles would cut rooms up). With a spec that
+/// names wall layers, only the objects on room-bounding layers ([`bounds_rooms`]), so
+/// annotation, stair, MEP and dimension lines never split a room, and each centreline wall
+/// drawn as its two faces (a room ends at the partition's face, not its middle). None: nothing
+/// to leave out, or not in model space (trace on the drawing itself).
+pub(crate) fn room_plan(s: &Session) -> Result<Option<Session>> {
+    if s.space().is_paper() {
+        return Ok(None);
+    }
+    let d = s.doc()?;
+    let sp = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok());
+    let sp = sp.filter(|sp| sp.layers.iter().any(|r| matches!(r.role, Role::Wall | Role::CurtainWall)));
+    let generated = |e: &Entity| wallgen::made_as(e).is_some() || super::rooms3d::room_of(&e.common).is_some();
+    let keep = |e: &Entity| !generated(e) && sp.as_ref().is_none_or(|sp| bounds_rooms(sp, &e.common.layer));
+    if d.model.iter().all(|e| keep(e)) && sp.as_ref().is_none_or(|sp| !sp.wall_types.iter().any(|t| t.from == cadaddy_walk3d::WallFrom::Centerline)) {
+        return Ok(None);
+    }
+    let mut wd = d.clone();
+    let mut faces: Vec<(Common, Vec<Vec2>)> = Vec::new();
+    let mut drop: Vec<Handle> = Vec::new();
+    for e in d.model.iter().take(MAX_OBJECTS) {
+        if !keep(e) {
+            drop.push(e.handle);
+            continue;
+        }
+        // A centreline wall: a closed outline its thickness wide around each straight run.
+        let half = sp.as_ref().and_then(|sp| {
+            let t = sp.role(&e.common.layer).and_then(|r| sp.wall_type_of(r)).filter(|t| t.from == cadaddy_walk3d::WallFrom::Centerline)?;
+            let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+            Some(t.thickness_in * upf / 24.0).filter(|h| h.is_finite() && *h > 0.0)
+        });
+        let Some(half) = half else { continue };
+        let runs: Vec<(Vec2, Vec2)> = match &e.kind {
+            EntityKind::Line(l) => vec![(l.a.xy(), l.b.xy())],
+            EntityKind::LwPolyline(p) if p.vertices.iter().all(|v| v.bulge == 0.0) => {
+                let n = p.vertices.len();
+                let ends = if p.closed { n } else { n.saturating_sub(1) };
+                (0..ends).filter_map(|i| Some((p.vertices.get(i)?.p, p.vertices.get((i + 1) % n)?.p))).collect()
+            }
+            _ => continue,
+        };
+        drop.push(e.handle);
+        for (a, b) in runs {
+            let len = a.dist(b);
+            if !(len.is_finite() && len > 0.0) {
+                continue;
+            }
+            let n = Vec2::new(-(b.y - a.y), b.x - a.x) * (half / len);
+            faces.push((e.common.clone(), vec![a + n, b + n, b - n, a - n]));
+        }
+    }
+    for h in drop {
+        wd.model.remove(h);
+    }
+    for (common, q) in faces.into_iter().take(MAX_OBJECTS) {
+        let kind = super::helpers::lwpoly(q.into_iter().map(cadaddy_geom::PolyVertex::new).collect(), true);
+        wd.add(&Space::Model, common, kind)?;
+    }
+    let mut t = Session::empty();
+    t.open_drawing(wd, "Room boundaries", None);
+    Ok(Some(t))
+}
+
 /// A described part as `bspec.get` and `bspec.draft` give it.
 pub(crate) fn part_json(d: &cadaddy_walk3d::Described) -> Value {
     let mut v = json!({ "section": d.section, "key": d.key, "text": d.text, "approved": d.approved });
@@ -281,6 +350,8 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     let d = s.doc()?;
     let ents = plan_objects(d);
     let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
+    let plan = room_plan(s)?;
+    let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<Traced> = Vec::new();
     for (h, text, at) in room_texts(sp, &ents) {
         if out.len() >= MAX_ROOMS {
@@ -296,7 +367,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         else {
             continue;
         };
-        let Ok(loops) = super::hatch::loops_at(s, at) else { continue };
+        let Ok(loops) = super::hatch::loops_at(plan, at) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let outline = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
         if outline.len() < 3 || cadaddy_geom::shoelace(&outline).abs() < 1e-9 {
