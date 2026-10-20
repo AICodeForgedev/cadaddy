@@ -1,7 +1,7 @@
 # CADaddy's own DWG codec (`crates/dwgcodec`)
 
-Status: containers done (Q198). Entities (Q199), objects (Q200), the writer from the drawing model
-(Q201) and R2007 (Q202) are next.
+Status: containers done (Q198); entities decoded (Q199, the types below). Objects (Q200), the
+writer from the drawing model (Q201) and R2007 (Q202) are next.
 
 ## Why
 
@@ -133,6 +133,55 @@ Also confirmed (the spec gives them but leaves the detail to the reader):
   is above 3, and always from R2018.
 - R2007+ string streams of 0x8000 bits or more use the second size short (§20.1) in the classes
   section too (R2013 has ~32 kB of classes).
+
+## Entities (Q199)
+
+`entities::decode` turns an entity object into the groups the DXF Reference gives that entity
+(code and value, in DXF order), so the DXF reader builds the same entity from a DWG as from a DXF
+file, with no DXF text in between. `entities::Obj` opens an object's three streams for every
+version (the data stream after the type, the R2000–R2007 size in bits and the own handle; from
+R2007 the string stream at the data's end; the handle stream), `entities::common` reads what
+every entity starts with (§20.4.1: extended data, proxy graphics, entity mode, reactors, the
+extension dictionary, colour with true colour, colour reference and transparency, linetype,
+plot style, material, shadow, visual styles, visibility, lineweight, and their handles), and
+`entities::Names` reads the names entities point at (block records, layers, text styles,
+linetypes, views, UCSs, viewports, applications, dimension styles, multiline styles).
+
+Decoded (§20.4.x): LINE, CIRCLE, ARC, POINT, ELLIPSE, TEXT, ATTRIB, ATTDEF, INSERT, MINSERT,
+VERTEX (2D, 3D, mesh, polyface, face record), POLYLINE (2D, 3D, mesh, polyface), SEQEND, SOLID,
+TRACE, 3DFACE, RAY, XLINE, SPLINE (control and fit points), MTEXT, LWPOLYLINE, HATCH (polyline and
+edge boundaries — lines, arcs, elliptical arcs, splines — patterns, gradients, seeds, boundary
+objects), DIMENSION (linear, aligned, angular 2-line and 3-point, radius, diameter, ordinate),
+LEADER, TOLERANCE, MLINE, IMAGE, WIPEOUT, VIEWPORT and MULTILEADER (context data, leader roots
+and lines, text or block content, block attribute labels).
+
+Not decoded yet (the reader keeps the bridge's record for them): 3DSOLID, REGION and BODY (their
+ACIS data is in the AcDs section from R2013), ACAD_TABLE (its contents are TABLECONTENT objects,
+Q200), MESH, LIGHT, the underlays, HELIX, ARC_DIMENSION, SHAPE (its name comes from the shape
+file), OLE2FRAME, proxies and custom classes. A VIEWPORT's status (68) and id (69) aren't stored
+in a DWG; they come from the layout's viewport list (Q200), so the bridge's are used meanwhile.
+
+`cadaddy_io::dwg_native::read_with_native_entities` reads a file through the bridge into groups
+and puts the codec's groups in place of every entity it decoded (an entity's VERTEXes, ATTRIBs and
+SEQEND follow it), then builds the drawing from those groups.
+
+Tested: `dwgcodec/tests/entities.rs` (the decoded groups equal acadrust's DXF for the same file,
+group by group, in R2000, R2004, R2010, R2013 and R2018; mutated object data never panics),
+`io/tests/dwg_native_entities.rs` (the drawing read with native entities equals the bridge's,
+entity by entity and field by field, every record from the codec) and
+`io/tests/dwg_native_groups.rs` (multileaders with text and with block content and attributes).
+
+Entity facts found by observation (files acadrust wrote; to be confirmed on AutoCAD's own files):
+
+1. **R2010+ LEADER has no annotation box size.** After the annotation offset only the hookline
+   and arrowhead flags and the three trailing fields remain (the data ends exactly there); up to
+   R2007 the box height and width come first.
+2. **A diameter dimension stores its arc point (15) before its definition point (10)**; a radius
+   dimension the other way round.
+3. **MULTILEADER's block-content flag always follows the text content** (also when there is
+   text), and the word-break flag is present from R2010.
+4. A DIMENSION's DXF type flag 32 ("block used by this dimension only") isn't stored; the
+   codec leaves it out, as the bridge does.
 
 ## Not done yet / known limits
 

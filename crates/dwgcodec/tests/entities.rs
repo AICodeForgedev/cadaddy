@@ -65,6 +65,15 @@ fn rich_dxf() -> String {
         "0\nDIMENSION\n8\n0\n2\n*D6\n10\n80\n20\n120\n30\n0\n11\n82\n21\n125\n31\n0\n70\n102\n3\nStandard\n100\nAcDbOrdinateDimension\n13\n80\n23\n110\n33\n0\n14\n85\n24\n130\n34\n0\n",
     );
     add("0\nLEADER\n8\n0\n3\nStandard\n71\n1\n72\n0\n73\n3\n76\n3\n10\n0\n20\n140\n30\n0\n10\n5\n20\n145\n30\n0\n10\n10\n20\n145\n30\n0\n");
+    add(
+        "0\nMLINE\n8\n0\n2\nSTANDARD\n40\n1\n70\n0\n71\n1\n72\n3\n73\n2\n10\n0\n20\n200\n30\n0\n11\n0\n21\n200\n31\n0\n12\n1\n22\n0\n32\n0\n13\n0\n23\n1\n33\n0\n74\n2\n41\n0.5\n41\n0\n75\n0\n74\n2\n41\n-0.5\n41\n0\n75\n0\n11\n10\n21\n200\n31\n0\n12\n1\n22\n0\n32\n0\n13\n0\n23\n1\n33\n0\n74\n2\n41\n0.5\n41\n0\n75\n0\n74\n2\n41\n-0.5\n41\n0\n75\n0\n11\n20\n21\n210\n31\n0\n12\n0\n22\n1\n32\n0\n13\n-1\n23\n1\n33\n0\n74\n2\n41\n0.5\n41\n0\n75\n0\n74\n2\n41\n-0.5\n41\n0\n75\n0\n",
+    );
+    add(
+        "0\nWIPEOUT\n8\n0\n90\n0\n10\n0\n20\n220\n30\n0\n11\n10\n21\n0\n31\n0\n12\n0\n22\n10\n32\n0\n13\n1\n23\n1\n70\n7\n280\n1\n281\n50\n282\n50\n283\n0\n71\n2\n91\n5\n14\n-0.5\n24\n0.5\n14\n0.5\n24\n0.5\n14\n0.5\n24\n-0.5\n14\n-0.5\n24\n-0.5\n14\n-0.5\n24\n0.5\n",
+    );
+    add(
+        "0\nVIEWPORT\n8\n0\n67\n1\n10\n5\n20\n5\n30\n0\n40\n8\n41\n6\n68\n2\n69\n2\n12\n50\n22\n50\n13\n0\n23\n0\n14\n1\n24\n1\n15\n1\n25\n1\n16\n0\n26\n0\n36\n1\n17\n0\n27\n0\n37\n0\n42\n50\n43\n0\n44\n0\n45\n40\n50\n0\n51\n0\n72\n100\n90\n32864\n1\n\n281\n0\n71\n1\n74\n0\n110\n0\n120\n0\n130\n0\n111\n1\n121\n0\n131\n0\n112\n0\n122\n1\n132\n0\n79\n0\n146\n0\n170\n0\n",
+    );
     add("0\nTOLERANCE\n8\n0\n3\nStandard\n10\n20\n20\n140\n30\n0\n1\n{\\Fgdt;j}%%v0.5\n11\n1\n21\n0\n31\n0\n");
     format!(
         "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n0\nENDSEC\n\
@@ -161,6 +170,8 @@ fn default(name: &str, code: i32) -> Vec<&'static str> {
         ("INSERT" | "MINSERT", 41..=43) => vec!["1"],
         ("DIMENSION", 41) => vec!["1"],
         ("LEADER", 77) => vec!["256"],
+        ("VIEWPORT", 61) => vec!["5"],
+        ("VIEWPORT", 282 | 292) => vec!["0", "1"],
         ("LEADER", 40) => vec!["2.5", "0"],
         (_, 6) => vec!["ByLayer", "BYLAYER"],
         (_, 62) => vec!["256"],
@@ -207,6 +218,11 @@ fn every_decoded_entity_matches_acadrusts_dxf_for_it() {
                 if e.name == "DIMENSION" && code == 2 && tg.iter().any(|g| g.0 == 2 && g.1.trim() == "*U0") {
                     continue;
                 }
+                // A viewport's status (68) and id (69) aren't stored in a DWG: they come from the
+                // layout's list of viewports.
+                if e.name == "VIEWPORT" && matches!(code, 68 | 69) {
+                    continue;
+                }
                 // Vertices: acadrust writes no layer for them.
                 if e.name == "VERTEX" && code == 8 {
                     continue;
@@ -234,4 +250,39 @@ fn every_decoded_entity_matches_acadrusts_dxf_for_it() {
         eprintln!("{v}: checked {checked:?}");
     }
     assert!(report.is_empty(), "{} differences:\n{}", report.len(), report.join("\n"));
+}
+
+/// Damaged object data never makes the entity decoder panic or run away: every object of a real
+/// file, with bytes flipped, cut short or zeroed, decodes or is refused.
+#[test]
+fn hostile_entity_data_never_panics() {
+    use cadaddy_dwgcodec::entities::{Names, decode};
+    for v in ["AC1015", "AC1024"] {
+        let bytes = dwg(v);
+        let d = read(&bytes).unwrap();
+        let classes = d.classes().unwrap();
+        let names = Names::read(&d, &classes);
+        let mut x = 0x2545_f491u32;
+        for raw in &d.objects {
+            for round in 0..24 {
+                let mut o = raw.clone();
+                match round % 3 {
+                    0 => {
+                        for _ in 0..4 {
+                            x ^= x << 13;
+                            x ^= x >> 17;
+                            x ^= x << 5;
+                            if !o.data.is_empty() {
+                                let i = x as usize % o.data.len();
+                                o.data[i] ^= (x >> 8) as u8 | 1;
+                            }
+                        }
+                    }
+                    1 => o.data.truncate(o.data.len() * round / 24),
+                    _ => o.data.iter_mut().skip(round).for_each(|b| *b = 0xff),
+                }
+                let _ = decode(&o, d.version, &classes, &names);
+            }
+        }
+    }
 }

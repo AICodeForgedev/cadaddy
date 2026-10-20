@@ -74,7 +74,13 @@ fn replace(tags: Vec<Tag>, ents: &[Entity]) -> (Vec<Tag>, usize) {
             Some(h) => match by_handle.get(&h) {
                 Some(e) => {
                     replaced += 1;
-                    out.extend(record(e));
+                    let mut r = record(e);
+                    // A viewport's status and id aren't in the DWG data: the bridge's, until the
+                    // layouts are read by the codec too.
+                    if e.name == "VIEWPORT" {
+                        r.extend(rec.iter().filter(|x| matches!(x.code, 68 | 69)).cloned());
+                    }
+                    out.extend(r);
                     for c in &e.children {
                         if let Some(child) = by_handle.get(c) {
                             out.extend(record(child));

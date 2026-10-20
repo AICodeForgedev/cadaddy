@@ -27,7 +27,9 @@ pub fn fixed_name(t: u16) -> Option<&'static str> {
         36 => "SPLINE",
         40 => "RAY",
         41 => "XLINE",
+        34 => "VIEWPORT",
         44 => "MTEXT",
+        47 => "MLINE",
         20..=26 => "DIMENSION",
         45 => "LEADER",
         46 => "TOLERANCE",
@@ -66,6 +68,11 @@ pub fn known(name: &str) -> bool {
             | "DIMENSION"
             | "LEADER"
             | "TOLERANCE"
+            | "MLINE"
+            | "IMAGE"
+            | "WIPEOUT"
+            | "VIEWPORT"
+            | "MULTILEADER"
     )
 }
 
@@ -227,6 +234,10 @@ pub fn decode(name: &str, o: &mut Obj, c: &Common, names: &Names, out: &mut Vec<
         "MTEXT" => mtext(o, names, &mut g),
         "LWPOLYLINE" => lwpolyline(o, &mut g),
         "HATCH" => hatch(o, &mut g),
+        "MLINE" => mline(o, names, &mut g),
+        "IMAGE" | "WIPEOUT" => image(name, o, &mut g),
+        "VIEWPORT" => viewport(o, &mut g),
+        "MULTILEADER" => mleader(o, &mut g),
         "DIMENSION" => dimension(o, names, &mut g),
         "LEADER" => leader(o, names, &mut g),
         "TOLERANCE" => {
@@ -1261,5 +1272,472 @@ fn leader(o: &mut Obj, names: &Names, g: &mut G) -> Result<()> {
     g.p(211, xdir);
     g.p(212, offset_block);
     g.p(213, offset_annot);
+    Ok(())
+}
+
+/// MLINE (spec §20.4.47).
+fn mline(o: &mut Obj, names: &Names, g: &mut G) -> Result<()> {
+    let scale = o.d.bd()?;
+    let just = o.d.rc()?;
+    let base = o.d.bd3()?;
+    let ext = o.d.bd3()?;
+    let open_closed = o.d.bs()?;
+    let lines = usize::from(o.d.rc()?);
+    let nverts = count(i32::from(o.d.bs()?), "multiline vertices")?;
+    if nverts.saturating_mul(lines.max(1)) > MAX_ITEMS {
+        return Err(Error::TooLarge("a multiline"));
+    }
+    type Vertex = ([f64; 3], [f64; 3], [f64; 3], Vec<(Vec<f64>, Vec<f64>)>);
+    let mut verts: Vec<Vertex> = Vec::with_capacity(nverts.min(1 << 12));
+    for _ in 0..nverts {
+        let p = o.d.bd3()?;
+        let dir = o.d.bd3()?;
+        let miter = o.d.bd3()?;
+        let mut elems = Vec::with_capacity(lines);
+        for _ in 0..lines {
+            let n = count(i32::from(o.d.bs()?), "multiline parameters")?;
+            let params: Vec<f64> = (0..n).map(|_| o.d.bd()).collect::<Result<_>>()?;
+            let nf = count(i32::from(o.d.bs()?), "multiline fill parameters")?;
+            let fills: Vec<f64> = (0..nf).map(|_| o.d.bd()).collect::<Result<_>>()?;
+            elems.push((params, fills));
+        }
+        verts.push((p, dir, miter, elems));
+    }
+    let style = o.href()?;
+    g.s(100, "AcDbMline");
+    g.s(2, style.and_then(|h| names.name(h)).unwrap_or("STANDARD"));
+    if let Some(h) = style {
+        g.h(340, h);
+    }
+    g.f(40, scale);
+    g.i(70, i64::from(just));
+    g.i(71, i64::from(open_closed));
+    g.i(72, nverts as i64);
+    g.i(73, lines as i64);
+    g.p(10, base);
+    g.p(210, ext);
+    for (p, dir, miter, elems) in verts {
+        g.p(11, p);
+        g.p(12, dir);
+        g.p(13, miter);
+        for (params, fills) in elems {
+            g.i(74, params.len() as i64);
+            for x in params {
+                g.f(41, x);
+            }
+            g.i(75, fills.len() as i64);
+            for x in fills {
+                g.f(42, x);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// IMAGE and WIPEOUT (spec §20.4.?? IMAGE, WIPEOUT: the same data).
+fn image(name: &str, o: &mut Obj, g: &mut G) -> Result<()> {
+    let version = o.d.bl()?;
+    let at = o.d.bd3()?;
+    let u = o.d.bd3()?;
+    let v = o.d.bd3()?;
+    let size = o.d.rd2()?;
+    let props = o.d.bs()?;
+    let clipping = o.d.b()?;
+    let brightness = o.d.rc()?;
+    let contrast = o.d.rc()?;
+    let fade = o.d.rc()?;
+    let clip_mode = if o.at_least(Version::R2010) { Some(o.d.b()?) } else { None };
+    let clip_type = o.d.bs()?;
+    let clip: Vec<[f64; 2]> = if clip_type == 1 {
+        vec![o.d.rd2()?, o.d.rd2()?]
+    } else {
+        let n = count(o.d.bl()?, "clip vertices")?;
+        (0..n).map(|_| o.d.rd2()).collect::<Result<_>>()?
+    };
+    let def = o.href()?;
+    let reactor = o.href()?;
+    g.s(100, "AcDbRasterImage");
+    g.i(90, i64::from(version));
+    g.p(10, at);
+    g.p(11, u);
+    g.p(12, v);
+    g.p2(13, size);
+    if let Some(h) = def {
+        g.h(340, h);
+    }
+    g.i(70, i64::from(props));
+    g.i(280, i64::from(clipping));
+    g.i(281, i64::from(brightness));
+    g.i(282, i64::from(contrast));
+    g.i(283, i64::from(fade));
+    if let Some(h) = reactor {
+        g.h(360, h);
+    }
+    g.i(71, i64::from(clip_type));
+    g.i(91, clip.len() as i64);
+    for p in clip {
+        g.p2(14, p);
+    }
+    if let Some(m) = clip_mode {
+        g.i(290, i64::from(m));
+    }
+    if name == "WIPEOUT" {
+        g.s(100, "AcDbWipeout");
+    }
+    Ok(())
+}
+
+/// VIEWPORT (spec §20.4.34).
+fn viewport(o: &mut Obj, g: &mut G) -> Result<()> {
+    let center = o.d.bd3()?;
+    let width = o.d.bd()?;
+    let height = o.d.bd()?;
+    let target = o.d.bd3()?;
+    let direction = o.d.bd3()?;
+    let twist = o.d.bd()?;
+    let view_height = o.d.bd()?;
+    let lens = o.d.bd()?;
+    let front = o.d.bd()?;
+    let back = o.d.bd()?;
+    let snap_angle = o.d.bd()?;
+    let view_center = o.d.rd2()?;
+    let snap_base = o.d.rd2()?;
+    let snap_spacing = o.d.rd2()?;
+    let grid_spacing = o.d.rd2()?;
+    let circle_zoom = o.d.bs()?;
+    let grid_major = if o.at_least(Version::R2007) { Some(o.d.bs()?) } else { None };
+    let frozen = count(o.d.bl()?, "frozen layers")?;
+    let status = o.d.bl()?;
+    let style_sheet = o.text()?;
+    let render_mode = o.d.rc()?;
+    let ucs_at_origin = o.d.b()?;
+    let ucs_per_vp = o.d.b()?;
+    let ucs_origin = o.d.bd3()?;
+    let ucs_x = o.d.bd3()?;
+    let ucs_y = o.d.bd3()?;
+    let elevation = o.d.bd()?;
+    let ortho = o.d.bs()?;
+    let shadeplot = if o.at_least(Version::R2004) { Some(o.d.bs()?) } else { None };
+    let mut lights = None;
+    if o.at_least(Version::R2007) {
+        let default_lights = o.d.b()?;
+        let lighting = o.d.rc()?;
+        let brightness = o.d.bd()?;
+        let contrast = o.d.bd()?;
+        let ambient = o.d.bs()?;
+        // The ambient colour's true colour and names (R2004+ CMC).
+        let _rgb = o.d.bl()?;
+        let cflags = o.d.rc()?;
+        if cflags & 1 != 0 {
+            o.text()?;
+        }
+        if cflags & 2 != 0 {
+            o.text()?;
+        }
+        lights = Some((default_lights, lighting, brightness, contrast, ambient));
+    }
+    let mut frozen_handles = Vec::new();
+    for _ in 0..frozen {
+        if let Some(h) = o.href()? {
+            frozen_handles.push(h);
+        }
+    }
+    let clip = o.href()?;
+    g.s(100, "AcDbViewport");
+    g.p(10, center);
+    g.f(40, width);
+    g.f(41, height);
+    g.p2(12, view_center);
+    g.p2(13, snap_base);
+    g.p2(14, snap_spacing);
+    g.p2(15, grid_spacing);
+    g.p(16, direction);
+    g.p(17, target);
+    g.f(42, lens);
+    g.f(43, front);
+    g.f(44, back);
+    g.f(45, view_height);
+    g.f(50, deg(snap_angle));
+    g.f(51, deg(twist));
+    g.i(72, i64::from(circle_zoom));
+    for h in frozen_handles {
+        g.h(331, h);
+    }
+    g.i(90, i64::from(status));
+    if let Some(h) = clip {
+        g.h(340, h);
+    }
+    if !style_sheet.is_empty() {
+        g.s(1, style_sheet);
+    }
+    g.i(281, i64::from(render_mode));
+    g.i(71, i64::from(ucs_per_vp));
+    g.i(74, i64::from(ucs_at_origin));
+    g.p(110, ucs_origin);
+    g.p(111, ucs_x);
+    g.p(112, ucs_y);
+    g.i(79, i64::from(ortho));
+    g.f(146, elevation);
+    if let Some(s) = shadeplot {
+        g.i(170, i64::from(s));
+    }
+    if let Some(m) = grid_major {
+        g.i(61, i64::from(m));
+    }
+    if let Some((dl, lt, b, c, amb)) = lights {
+        g.i(292, i64::from(dl));
+        g.i(282, i64::from(lt));
+        g.f(141, b);
+        g.f(142, c);
+        g.i(63, i64::from(amb));
+    }
+    Ok(())
+}
+
+/// A colour of a non-entity kind (spec §2.11 CMC): the index, and from R2004 the raw colour value
+/// (method byte and RGB, as DXF writes it in a multileader's colour groups) and names.
+fn cmc(o: &mut Obj) -> Result<i64> {
+    let index = o.d.bs()?;
+    if !o.at_least(Version::R2004) {
+        return Ok(i64::from(index));
+    }
+    let raw = o.d.bl()?;
+    let flags = o.d.rc()?;
+    if flags & 1 != 0 {
+        o.text()?;
+    }
+    if flags & 2 != 0 {
+        o.text()?;
+    }
+    Ok(i64::from(raw))
+}
+
+/// MULTILEADER (spec §20.4.86): the context data (leader roots and their lines, the text or
+/// block content) in DXF's CONTEXT_DATA{ LEADER{ LEADER_LINE{ } } } blocks, then the entity's
+/// own properties.
+fn mleader(o: &mut Obj, g: &mut G) -> Result<()> {
+    let r2010 = o.at_least(Version::R2010);
+    let version = if r2010 { o.d.bs()? } else { 2 };
+    g.s(100, "AcDbMLeader");
+    g.i(270, i64::from(version));
+    g.s(300, "CONTEXT_DATA{");
+    // Leader roots: decoded first (they come first in the data), written after the content.
+    let nroots = count(o.d.bl()?, "leader roots")?;
+    let mut roots = Vec::new();
+    for _ in 0..nroots.min(1 << 12) {
+        let mut r = Vec::new();
+        let mut rg = G(&mut r);
+        let valid = o.d.b()?;
+        let unknown = o.d.b()?;
+        let connection = o.d.bd3()?;
+        let direction = o.d.bd3()?;
+        rg.s(302, "LEADER{");
+        rg.i(290, i64::from(valid));
+        rg.i(291, i64::from(unknown));
+        rg.p(10, connection);
+        rg.p(11, direction);
+        let nbreaks = count(o.d.bl()?, "leader breaks")?;
+        for _ in 0..nbreaks {
+            rg.p(12, o.d.bd3()?);
+            rg.p(13, o.d.bd3()?);
+        }
+        let index = o.d.bl()?;
+        let landing = o.d.bd()?;
+        rg.i(90, i64::from(index));
+        rg.f(40, landing);
+        let nlines = count(o.d.bl()?, "leader lines")?;
+        for _ in 0..nlines {
+            rg.s(304, "LEADER_LINE{");
+            let npts = count(o.d.bl()?, "leader line points")?;
+            for _ in 0..npts {
+                rg.p(10, o.d.bd3()?);
+            }
+            let nbreak = count(o.d.bl()?, "leader line breaks")?;
+            if nbreak > 0 {
+                let seg = o.d.bl()?;
+                rg.i(90, i64::from(seg));
+                let pairs = count(o.d.bl()?, "break pairs")?;
+                for _ in 0..pairs {
+                    rg.p(11, o.d.bd3()?);
+                    rg.p(12, o.d.bd3()?);
+                }
+            }
+            let line_index = o.d.bl()?;
+            rg.i(91, i64::from(line_index));
+            if r2010 {
+                let kind = o.d.bs()?;
+                let color = cmc(o)?;
+                let ltype = o.href()?;
+                let weight = o.d.bl()?;
+                let arrow_size = o.d.bd()?;
+                let arrow = o.href()?;
+                let flags = o.d.bl()?;
+                rg.i(170, i64::from(kind));
+                rg.i(92, color);
+                rg.h(340, ltype.unwrap_or(0));
+                rg.i(171, i64::from(weight));
+                rg.f(40, arrow_size);
+                rg.h(341, arrow.unwrap_or(0));
+                rg.i(93, i64::from(flags));
+            }
+            rg.s(305, "}");
+        }
+        if r2010 {
+            rg.i(271, i64::from(o.d.bs()?));
+        }
+        rg.s(303, "}");
+        roots.push(r);
+    }
+    g.f(40, o.d.bd()?);
+    g.p(10, o.d.bd3()?);
+    g.f(41, o.d.bd()?);
+    g.f(140, o.d.bd()?);
+    g.f(145, o.d.bd()?);
+    g.i(174, i64::from(o.d.bs()?));
+    g.i(175, i64::from(o.d.bs()?));
+    g.i(176, i64::from(o.d.bs()?));
+    g.i(177, i64::from(o.d.bs()?));
+    let has_text = o.d.b()?;
+    g.i(290, i64::from(has_text));
+    if has_text {
+        let label = o.text()?;
+        g.s(304, label);
+        g.p(11, o.d.bd3()?);
+        if let Some(h) = o.href()? {
+            g.h(340, h);
+        }
+        g.p(12, o.d.bd3()?);
+        g.p(13, o.d.bd3()?);
+        g.f(42, o.d.bd()?);
+        g.f(43, o.d.bd()?);
+        g.f(44, o.d.bd()?);
+        g.f(45, o.d.bd()?);
+        g.i(170, i64::from(o.d.bs()?));
+        g.i(90, cmc(o)?);
+        g.i(171, i64::from(o.d.bs()?));
+        g.i(172, i64::from(o.d.bs()?));
+        g.i(91, cmc(o)?);
+        g.f(141, o.d.bd()?);
+        g.i(92, i64::from(o.d.bl()?));
+        g.i(291, i64::from(o.d.b()?));
+        g.i(292, i64::from(o.d.b()?));
+        g.i(173, i64::from(o.d.bs()?));
+        g.i(293, i64::from(o.d.b()?));
+        g.f(142, o.d.bd()?);
+        g.f(143, o.d.bd()?);
+        g.i(294, i64::from(o.d.b()?));
+        let ncols = count(o.d.bl()?, "column heights")?;
+        for _ in 0..ncols {
+            g.f(144, o.d.bd()?);
+        }
+        g.i(295, i64::from(o.d.b()?));
+    }
+    // Block content: its flag follows the text content (or its absence).
+    let has_block = o.d.b()?;
+    g.i(296, i64::from(has_block));
+    {
+        if has_block {
+            if let Some(h) = o.href()? {
+                g.h(341, h);
+            }
+            g.p(14, o.d.bd3()?);
+            g.p(15, o.d.bd3()?);
+            g.p(16, o.d.bd3()?);
+            g.f(46, o.d.bd()?);
+            g.i(93, cmc(o)?);
+            for _ in 0..16 {
+                g.f(47, o.d.bd()?);
+            }
+        }
+    }
+    g.p(110, o.d.bd3()?);
+    g.p(111, o.d.bd3()?);
+    g.p(112, o.d.bd3()?);
+    g.i(297, i64::from(o.d.b()?));
+    for r in roots {
+        g.0.extend(r);
+    }
+    if r2010 {
+        let top = o.d.bs()?;
+        let bottom = o.d.bs()?;
+        g.i(272, i64::from(bottom));
+        g.i(273, i64::from(top));
+    }
+    g.s(301, "}");
+    // The entity's own properties.
+    if let Some(h) = o.href()? {
+        g.h(340, h);
+    }
+    g.i(90, i64::from(o.d.bl()?));
+    g.i(170, i64::from(o.d.bs()?));
+    g.i(91, cmc(o)?);
+    if let Some(h) = o.href()? {
+        g.h(341, h);
+    }
+    g.i(171, i64::from(o.d.bl()?));
+    g.i(290, i64::from(o.d.b()?));
+    g.i(291, i64::from(o.d.b()?));
+    g.f(41, o.d.bd()?);
+    if let Some(h) = o.href()? {
+        g.h(342, h);
+    }
+    g.f(42, o.d.bd()?);
+    g.i(172, i64::from(o.d.bs()?));
+    if let Some(h) = o.href()? {
+        g.h(343, h);
+    }
+    g.i(173, i64::from(o.d.bs()?));
+    g.i(95, i64::from(o.d.bs()?));
+    g.i(174, i64::from(o.d.bs()?));
+    g.i(175, i64::from(o.d.bs()?));
+    g.i(92, cmc(o)?);
+    g.i(292, i64::from(o.d.b()?));
+    if let Some(h) = o.href()? {
+        g.h(344, h);
+    }
+    g.i(93, cmc(o)?);
+    g.p(10, o.d.bd3()?);
+    g.f(43, o.d.bd()?);
+    // DXF writes the scale factor (stored near the end) after the block rotation.
+    let scale_at = g.0.len();
+    g.i(176, i64::from(o.d.bs()?));
+    g.i(293, i64::from(o.d.b()?));
+    if !r2010 {
+        let n = count(o.d.bl()?, "arrowheads")?;
+        for _ in 0..n {
+            g.i(94, i64::from(o.d.b()?));
+            if let Some(h) = o.href()? {
+                g.h(345, h);
+            }
+        }
+    }
+    let nlabels = count(o.d.bl()?, "block labels")?;
+    for _ in 0..nlabels {
+        let attdef = o.href()?;
+        let text = o.text()?;
+        let index = o.d.bs()?;
+        let width = o.d.bd()?;
+        if let Some(h) = attdef {
+            g.h(330, h);
+        }
+        g.i(177, i64::from(index));
+        g.f(44, width);
+        g.s(302, text);
+    }
+    g.i(294, i64::from(o.d.b()?));
+    g.i(178, i64::from(o.d.bs()?));
+    g.i(179, i64::from(o.d.bs()?));
+    let scale = o.d.bd()?;
+    g.0.insert(scale_at, Group { code: 45, value: Value::Real(scale) });
+    if r2010 {
+        g.i(271, i64::from(o.d.bs()?));
+        let top = o.d.bs()?;
+        let bottom = o.d.bs()?;
+        g.i(272, i64::from(bottom));
+        g.i(273, i64::from(top));
+    }
+    if o.at_least(Version::R2013) {
+        g.i(295, i64::from(o.d.b()?));
+    }
     Ok(())
 }
